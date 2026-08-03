@@ -15,7 +15,7 @@ import {
 } from '../server/event-loop-monitor.js'
 import { installServeCrashHandlers } from './serve-crash-handlers.js'
 import { runExtensionCommand } from './extension-cli.js'
-import { resolveSharedRuntime, runRuntimeCommand } from './shared-runtime.js'
+import { inspectSharedRuntime, resolveSharedRuntime, runRuntimeCommand } from './shared-runtime.js'
 import { withRuntimeStartLock } from '../server/runtime-discovery.js'
 import { RuntimeBuildIdSchema } from '../contracts/runtime-info.js'
 import { readRuntimeBuildIdForEntry } from '../server/runtime-build-identity.js'
@@ -25,6 +25,7 @@ import { RuntimeFlavorSchema } from '../contracts/runtime-flavor.js'
 import { runtimeDiscoveryDirectory } from './shared-runtime.js'
 import { defaultKunControlDir } from '../manager/manager-discovery.js'
 import {
+  ManagerRuntimeSlotBusyError,
   registerRuntimeWithManager,
   ensureServiceManager,
   resolveServiceManager,
@@ -91,11 +92,19 @@ async function serveMain(argv: readonly string[]): Promise<number> {
     { kind: 'existing'; existing: NonNullable<Awaited<ReturnType<typeof resolveSharedRuntime>>> } |
     { kind: 'started'; server: KunServeHandle }
   > => {
-    const existing = await resolveSharedRuntime(parsed.options.dataDir, fetch, {
+    const inspected = await inspectSharedRuntime(parsed.options.dataDir, fetch, {
       runtimeFlavor,
-      controlDir
+      controlDir,
+      manager
     })
+    const existing = inspected?.connection ?? null
     if (existing) return { kind: 'existing', existing }
+    if (inspected) {
+      throw new Error(
+        `Kun shared runtime process ${inspected.discovery.pid} is still alive but is not responding; ` +
+        'preserving the manager owner instead of starting a second runtime'
+      )
+    }
     return {
       kind: 'started',
       server: await startKunServe({
@@ -142,6 +151,20 @@ async function serveMain(argv: readonly string[]): Promise<number> {
     ...(buildId ? { buildId } : {}),
     ...(process.env.KUN_RUNTIME_LOG_PATH ? { logPath: process.env.KUN_RUNTIME_LOG_PATH } : {})
   }
+  let ownershipShutdownSignaled = false
+  let requestOwnershipShutdown!: () => void
+  const ownershipShutdownRequested = new Promise<void>((resolve) => {
+    requestOwnershipShutdown = resolve
+  })
+  const signalOwnershipShutdown = (ownerInstanceId?: string): void => {
+    if (ownershipShutdownSignaled) return
+    ownershipShutdownSignaled = true
+    process.stderr.write(
+      `kun serve: ${runtimeFlavor} runtime registration is owned by ` +
+      `${ownerInstanceId ?? 'another instance'}; stopping duplicate PID ${process.pid}.\n`
+    )
+    requestOwnershipShutdown()
+  }
   let managerRecovery: Promise<void> | null = null
   const applyManagerConnection = (connection: typeof manager): void => {
     manager.discovery = connection.discovery
@@ -171,12 +194,27 @@ async function serveMain(argv: readonly string[]): Promise<number> {
         flavor: runtimeFlavor,
         instanceId: server.instanceId
       })
-      if (!accepted) throw new Error('runtime registration is no longer current')
-    } catch {
+      if (!accepted) {
+        signalOwnershipShutdown()
+        return
+      }
+    } catch (error) {
+      if (error instanceof ManagerRuntimeSlotBusyError) {
+        signalOwnershipShutdown(error.owner.instanceId)
+        return
+      }
       if (!managerRecovery) {
         managerRecovery = recoverManagerConnection().finally(() => { managerRecovery = null })
       }
-      await managerRecovery
+      try {
+        await managerRecovery
+      } catch (recoveryError) {
+        if (recoveryError instanceof ManagerRuntimeSlotBusyError) {
+          signalOwnershipShutdown(recoveryError.owner.instanceId)
+          return
+        }
+        throw recoveryError
+      }
     }
   }
   try {
@@ -222,15 +260,23 @@ async function serveMain(argv: readonly string[]): Promise<number> {
       stopping = true
       if (managerHeartbeat) clearInterval(managerHeartbeat)
       loopMonitor.stop()
-      void unregisterRuntimeWithManager({
+      // Keep the manager slot owned until the server has closed its stores and
+      // released filesystem handles. A concurrent client must not elect a
+      // replacement in the gap between unregister and process teardown.
+      void server.close().finally(() => unregisterRuntimeWithManager({
         manager,
         flavor: runtimeFlavor,
         instanceId: server.instanceId
-      }).finally(() => server.close()).finally(resolve)
+      })).catch((error) => {
+        process.stderr.write(
+          `kun serve: failed to close runtime cleanly: ${error instanceof Error ? error.message : String(error)}\n`
+        )
+      }).finally(resolve)
     }
     process.once('SIGTERM', stop)
     process.once('SIGINT', stop)
     void server.shutdownRequested.then(stop)
+    void ownershipShutdownRequested.then(stop)
   })
   return ServeExitCode.ok
 }

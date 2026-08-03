@@ -2,7 +2,7 @@ import { app, autoUpdater as nativeAutoUpdater, BrowserWindow, dialog, shell } f
 import type { MessageBoxOptions } from 'electron'
 import { existsSync, readFileSync } from 'node:fs'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { dirname, join, win32 as win32Path } from 'node:path'
 import electronUpdater from 'electron-updater'
 import type { ProgressInfo, UpdateDownloadedEvent, UpdateInfo } from 'electron-updater'
 import type {
@@ -29,9 +29,28 @@ const { autoUpdater } = electronUpdater
 const DEVELOPMENT_APP_FLAVOR = process.env.KUN_APP_FLAVOR === 'development'
 const DEVELOPMENT_UPDATE_MESSAGE =
   'kun-dv is a source/testing application and cannot use the production Kun update channel.'
+const WINDOWS_INSTALLER_UPDATE_SOURCE_ENV = 'KUN_INSTALLER_UPDATE_SOURCE'
 
 function envWithLegacyFallback(kunName: string, legacyName: string): string {
   return process.env[kunName]?.trim() || process.env[legacyName]?.trim() || ''
+}
+
+export function setWindowsInstallerUpdateSource(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+  executablePath: string = process.execPath
+): () => void {
+  if (platform !== 'win32') return () => undefined
+  const hadPrevious = Object.prototype.hasOwnProperty.call(env, WINDOWS_INSTALLER_UPDATE_SOURCE_ENV)
+  const previous = env[WINDOWS_INSTALLER_UPDATE_SOURCE_ENV]
+  env[WINDOWS_INSTALLER_UPDATE_SOURCE_ENV] = win32Path.dirname(executablePath)
+  return () => {
+    if (hadPrevious && previous !== undefined) {
+      env[WINDOWS_INSTALLER_UPDATE_SOURCE_ENV] = previous
+    } else {
+      delete env[WINDOWS_INSTALLER_UPDATE_SOURCE_ENV]
+    }
+  }
 }
 
 let initialized = false
@@ -799,6 +818,7 @@ export async function installGuiUpdate(): Promise<GuiUpdateInstallResult> {
     }
   }
   let updateInstallQuitMarked = false
+  let restoreInstallerUpdateSource = (): void => undefined
   try {
     if (!downloaded) {
       return {
@@ -810,6 +830,7 @@ export async function installGuiUpdate(): Promise<GuiUpdateInstallResult> {
     }
     emitGuiUpdateState({ status: 'installing', info: lastInfo ?? undefined })
     await Promise.all([pendingVersionStateWrite, runBeforeInstallUpdate()])
+    restoreInstallerUpdateSource = setWindowsInstallerUpdateSource()
     markUpdateInstallQuitting(true)
     updateInstallQuitMarked = true
     // In-app updates must stay silent on Windows. The assisted NSIS UI can
@@ -820,6 +841,7 @@ export async function installGuiUpdate(): Promise<GuiUpdateInstallResult> {
     autoUpdater.quitAndInstall(true, true)
     return { ok: true }
   } catch (e) {
+    restoreInstallerUpdateSource()
     if (updateInstallQuitMarked) markUpdateInstallQuitting(false)
     const message = e instanceof Error ? e.message : String(e)
     emitGuiUpdateState({ status: 'error', info: lastInfo ?? undefined, message, code: 'install_failed' })

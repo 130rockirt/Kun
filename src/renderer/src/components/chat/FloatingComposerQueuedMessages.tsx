@@ -18,6 +18,7 @@ import {
 } from 'lucide-react'
 import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
+import { queuedMessageGuidancePayload } from '../../store/queued-message-guidance'
 
 const QUEUED_MENU_WIDTH = 176
 const QUEUED_MENU_HEIGHT = 48
@@ -90,18 +91,7 @@ export type QueuedComposerMessage = {
 
 /** True when the text-only steer contract can preserve the whole queued payload. */
 export function canGuideQueuedComposerMessage(message: QueuedComposerMessage): boolean {
-  return Boolean(
-    message.text.trim() &&
-    !message.attachmentIds?.length &&
-    !message.attachments?.length &&
-    !message.fileReferences?.length &&
-    !message.composerContexts?.length &&
-    !message.guiPlan &&
-    message.guiDesignCanvas !== true &&
-    message.guiDesignMode !== true &&
-    !message.guiDesignArtifact &&
-    !message.writeContext
-  )
+  return queuedMessageGuidancePayload(message) !== null
 }
 
 /** Editing dequeues the item, so only payloads that can be fully restored as text are eligible. */

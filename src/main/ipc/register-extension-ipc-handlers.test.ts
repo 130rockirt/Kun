@@ -2425,6 +2425,38 @@ describe('extension IPC security bridge', () => {
     stop()
   })
 
+  it('backs off and deduplicates repeated secret reveal pump failures', async () => {
+    vi.useFakeTimers()
+    try {
+      const state = fixture()
+      const logError = vi.fn()
+      state.runtimeRequest.mockRejectedValue(new Error('fetch failed'))
+      const stop = startExtensionSecretRevealConsentPump({
+        ...state.options,
+        logError
+      }, 250)
+
+      await vi.advanceTimersByTimeAsync(0)
+      expect(state.runtimeRequest).toHaveBeenCalledTimes(1)
+      expect(logError).toHaveBeenCalledTimes(1)
+
+      await vi.advanceTimersByTimeAsync(499)
+      expect(state.runtimeRequest).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(state.runtimeRequest).toHaveBeenCalledTimes(2)
+      expect(logError).toHaveBeenCalledTimes(1)
+
+      await vi.advanceTimersByTimeAsync(999)
+      expect(state.runtimeRequest).toHaveBeenCalledTimes(2)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(state.runtimeRequest).toHaveBeenCalledTimes(3)
+      expect(logError).toHaveBeenCalledTimes(1)
+      stop()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('waits for a pending Main-owned dialog before opening a secret reveal prompt (#1053)', async () => {
     const state = fixture()
     state.runtimeRequest.mockImplementation(async (path: string, method?: string) => {
@@ -2527,6 +2559,41 @@ describe('extension IPC security bridge', () => {
       state.untrustedEvent,
       { notificationId, actionId: 'retry' }
     )).rejects.toThrow(/trusted workbench frame/)
+  })
+
+  it('resets notification pump backoff after the runtime recovers', async () => {
+    vi.useFakeTimers()
+    try {
+      const state = fixture()
+      const logError = vi.fn()
+      state.runtimeRequest
+        .mockRejectedValueOnce(new Error('fetch failed'))
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          body: JSON.stringify({ schemaVersion: 1, notifications: [] })
+        })
+        .mockRejectedValueOnce(new Error('fetch failed'))
+      const stop = startExtensionNotificationPump({
+        ...state.options,
+        logError
+      }, 250)
+
+      await vi.advanceTimersByTimeAsync(0)
+      expect(state.runtimeRequest).toHaveBeenCalledTimes(1)
+      expect(logError).toHaveBeenCalledTimes(1)
+
+      await vi.advanceTimersByTimeAsync(500)
+      expect(state.runtimeRequest).toHaveBeenCalledTimes(2)
+      expect(logError).toHaveBeenCalledTimes(1)
+
+      await vi.advanceTimersByTimeAsync(250)
+      expect(state.runtimeRequest).toHaveBeenCalledTimes(3)
+      expect(logError).toHaveBeenCalledTimes(2)
+      stop()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('dispatches fire-and-forget guest notifications through the broker route', async () => {

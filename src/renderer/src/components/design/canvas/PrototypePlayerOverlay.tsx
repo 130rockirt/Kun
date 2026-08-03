@@ -101,6 +101,48 @@ html[data-kun-prototype-viewport="app"] *::-webkit-scrollbar {
   `.trim()
 }
 
+export function prototypeViewportFitScale(
+  availableWidth: number,
+  availableHeight: number,
+  viewportWidth: number,
+  viewportHeight: number
+): number {
+  if (
+    !Number.isFinite(availableWidth) ||
+    !Number.isFinite(availableHeight) ||
+    !Number.isFinite(viewportWidth) ||
+    !Number.isFinite(viewportHeight) ||
+    availableWidth <= 0 ||
+    availableHeight <= 0 ||
+    viewportWidth <= 0 ||
+    viewportHeight <= 0
+  ) {
+    return 1
+  }
+  return Math.min(1, availableWidth / viewportWidth, availableHeight / viewportHeight)
+}
+
+export async function openPrototypeHtmlInBrowser(
+  openPrototype: ((payload: { path: string; workspaceRoot: string }) => Promise<{
+    ok: boolean
+    message?: string
+  }>) | undefined,
+  workspaceRoot: string,
+  relativePath: string
+): Promise<{ ok: boolean; message?: string }> {
+  if (!openPrototype || !workspaceRoot.trim() || !relativePath.trim()) {
+    return { ok: false, message: 'Prototype browser opening is unavailable.' }
+  }
+  try {
+    return await openPrototype({ path: relativePath, workspaceRoot })
+  } catch (error) {
+    return {
+      ok: false,
+      message: error instanceof Error ? error.message : String(error)
+    }
+  }
+}
+
 function PrototypePlayerOverlayInner({
   open,
   workspaceRoot,
@@ -114,7 +156,10 @@ function PrototypePlayerOverlayInner({
   const [currentId, setCurrentId] = useState<string | null>(null)
   const [history, setHistory] = useState<string[]>([])
   const [missingHref, setMissingHref] = useState('')
+  const [browserOpenError, setBrowserOpenError] = useState('')
   const [previewTarget, setPreviewTarget] = useState<DesignTarget>(() => normalizeDesignTarget(designTarget))
+  const [viewportScale, setViewportScale] = useState(1)
+  const viewportHostRef = useRef<HTMLDivElement | null>(null)
   const wasOpenRef = useRef(false)
   const lastInitialCurrentIdRef = useRef<string | null>(null)
 
@@ -144,12 +189,21 @@ function PrototypePlayerOverlayInner({
     () => resolvePrototypeViewportFrame(currentArtifact, previewTarget),
     [currentArtifact, previewTarget]
   )
+  const viewportVisualStyle = useMemo<CSSProperties>(
+    () => ({
+      width: viewportFrame.width * viewportScale,
+      height: viewportFrame.height * viewportScale
+    }),
+    [viewportFrame.height, viewportFrame.width, viewportScale]
+  )
   const viewportFrameStyle = useMemo<CSSProperties>(
     () => ({
-      aspectRatio: `${viewportFrame.width} / ${viewportFrame.height}`,
-      ...(viewportFrame.orientation === 'portrait' ? { height: '100%' } : { width: '100%' })
+      width: viewportFrame.width,
+      height: viewportFrame.height,
+      transform: `scale(${viewportScale})`,
+      transformOrigin: 'top left'
     }),
-    [viewportFrame]
+    [viewportFrame.height, viewportFrame.width, viewportScale]
   )
   const webSize = defaultFrameSizeForDesignTarget('web')
   const appSize = defaultFrameSizeForDesignTarget('app')
@@ -165,6 +219,29 @@ function PrototypePlayerOverlayInner({
   })
 
   useEffect(() => {
+    const host = viewportHostRef.current
+    if (!open || !host) return
+    const updateScale = (): void => {
+      const bounds = host.getBoundingClientRect()
+      const next = prototypeViewportFitScale(
+        bounds.width,
+        bounds.height,
+        viewportFrame.width,
+        viewportFrame.height
+      )
+      setViewportScale((current) => Math.abs(current - next) < 0.001 ? current : next)
+    }
+    updateScale()
+    const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(updateScale) : null
+    observer?.observe(host)
+    window.addEventListener('resize', updateScale)
+    return () => {
+      observer?.disconnect()
+      window.removeEventListener('resize', updateScale)
+    }
+  }, [open, viewportFrame.height, viewportFrame.width])
+
+  useEffect(() => {
     if (!open || wasOpenRef.current) return
     setPreviewTarget(normalizeDesignTarget(designTarget))
   }, [designTarget, open])
@@ -173,6 +250,7 @@ function PrototypePlayerOverlayInner({
     if (!open) {
       wasOpenRef.current = false
       lastInitialCurrentIdRef.current = null
+      setBrowserOpenError('')
       return
     }
     if (!shouldInitializePrototypePlayerCurrentId({ open, wasOpen: wasOpenRef.current, currentId })) return
@@ -309,11 +387,31 @@ function PrototypePlayerOverlayInner({
     onClose()
   }, [currentArtifact, missingHref, onClose, onRequestMissingScreen, t])
 
+  const openInBrowser = useCallback((): void => {
+    setBrowserOpenError('')
+    void openPrototypeHtmlInBrowser(
+      typeof window.kunGui?.openWritePrototype === 'function'
+        ? window.kunGui.openWritePrototype
+        : undefined,
+      workspaceRoot,
+      currentArtifactPath
+    ).then((result) => {
+      if (!result.ok) {
+        setBrowserOpenError(result.message || t('designPrototypeOpenBrowserFailed', 'Could not open the prototype in a browser.'))
+      }
+    })
+  }, [currentArtifactPath, t, workspaceRoot])
+
   if (!open) return null
 
   return (
-    <div className="ds-no-drag pointer-events-auto absolute inset-0 z-[70] flex items-center justify-center bg-[#111827]/32 p-5 backdrop-blur-sm">
-      <div className="flex h-[min(960px,calc(100%-2rem))] w-[min(1680px,calc(100%-2rem))] overflow-hidden rounded-[8px] border border-ds-border bg-white text-ds-ink shadow-[0_30px_90px_rgba(15,23,42,0.32)] dark:bg-ds-canvas">
+    <div className="ds-no-drag pointer-events-auto fixed inset-0 z-[200] flex items-center justify-center bg-[#111827]/42 p-2 backdrop-blur-sm">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={t('designPrototypePlay', 'Play prototype')}
+        className="flex h-full w-full overflow-hidden rounded-[10px] border border-ds-border bg-white text-ds-ink shadow-[0_30px_90px_rgba(15,23,42,0.32)] dark:bg-ds-canvas"
+      >
         <main className="flex min-w-0 flex-1 flex-col bg-[#f6f8fb] dark:bg-[#111318]">
           <header className="flex h-12 shrink-0 items-center gap-2 border-b border-ds-border bg-white/82 px-3 dark:bg-ds-card/85">
             <button
@@ -356,6 +454,17 @@ function PrototypePlayerOverlayInner({
             />
             <button
               type="button"
+              onClick={openInBrowser}
+              disabled={!currentArtifactPath}
+              className="flex h-8 shrink-0 items-center gap-1.5 rounded-[8px] px-2.5 text-[12px] font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-not-allowed disabled:opacity-40"
+              title={t('designPrototypeOpenBrowser', 'Open in browser')}
+              aria-label={t('designPrototypeOpenBrowser', 'Open in browser')}
+            >
+              <ExternalLink className="h-4 w-4" strokeWidth={1.9} />
+              <span>{t('designPrototypeOpenBrowser', 'Open in browser')}</span>
+            </button>
+            <button
+              type="button"
               onClick={onClose}
               className="flex h-8 w-8 items-center justify-center rounded-[8px] text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
               title={t('designPrototypeClose', 'Close prototype')}
@@ -364,29 +473,34 @@ function PrototypePlayerOverlayInner({
               <X className="h-4 w-4" strokeWidth={1.9} />
             </button>
           </header>
-          <div className="min-h-0 flex-1 p-4">
-            <div className="flex h-full w-full items-center justify-center overflow-hidden rounded-[8px] bg-[#e7ebf1] p-4 dark:bg-[#0c0f14]">
-              <div
-                className={[
-                  'relative box-border max-h-full max-w-full overflow-hidden bg-white shadow-[0_12px_40px_rgba(15,23,42,0.12)]',
-                  previewTarget === 'app'
-                    ? 'rounded-[30px] border border-[#1f2937]/25 shadow-[0_18px_46px_rgba(15,23,42,0.2)] dark:border-white/12'
-                    : 'rounded-[8px] border border-ds-border'
-                ].join(' ')}
-                style={viewportFrameStyle}
-              >
-                {preview.state.webviewUrl ? (
-                  preview.renderWebview({ className: 'h-full w-full border-0' })
-                ) : (
-                  <div className="flex h-full items-center justify-center text-[13px] text-ds-faint">
-                    {preview.state.error || t('designCanvasLoading')}
-                  </div>
-                )}
-                {preview.state.error && preview.state.webviewUrl ? (
-                  <div className="absolute inset-x-3 top-3 rounded-[8px] border border-red-200 bg-white/92 px-3 py-2 text-[12px] text-red-700 shadow-sm backdrop-blur dark:border-red-400/35 dark:bg-red-950/85 dark:text-red-200">
-                    {preview.state.error}
-                  </div>
-                ) : null}
+          <div className="min-h-0 flex-1 p-3">
+            <div
+              ref={viewportHostRef}
+              className="flex h-full w-full items-center justify-center overflow-hidden rounded-[8px] bg-[#e7ebf1] dark:bg-[#0c0f14]"
+            >
+              <div className="relative shrink-0" style={viewportVisualStyle}>
+                <div
+                  className={[
+                    'absolute left-0 top-0 overflow-hidden bg-white shadow-[0_12px_40px_rgba(15,23,42,0.12)] ring-1 ring-inset',
+                    previewTarget === 'app'
+                      ? 'rounded-[30px] shadow-[0_18px_46px_rgba(15,23,42,0.2)] ring-[#1f2937]/25 dark:ring-white/12'
+                      : 'rounded-[8px] ring-ds-border'
+                  ].join(' ')}
+                  style={viewportFrameStyle}
+                >
+                  {preview.state.webviewUrl ? (
+                    preview.renderWebview({ className: 'h-full w-full border-0' })
+                  ) : (
+                    <div className="flex h-full items-center justify-center text-[13px] text-ds-faint">
+                      {preview.state.error || t('designCanvasLoading')}
+                    </div>
+                  )}
+                  {(browserOpenError || preview.state.error) && preview.state.webviewUrl ? (
+                    <div className="absolute inset-x-3 top-3 rounded-[8px] border border-red-200 bg-white/92 px-3 py-2 text-[12px] text-red-700 shadow-sm backdrop-blur dark:border-red-400/35 dark:bg-red-950/85 dark:text-red-200">
+                      {browserOpenError || preview.state.error}
+                    </div>
+                  ) : null}
+                </div>
               </div>
             </div>
           </div>

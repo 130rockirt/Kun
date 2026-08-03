@@ -26,16 +26,29 @@ function makeTempRoot(): string {
 }
 
 function runHelper(input: {
-  action: 'ResolvePath' | 'ResolveSource' | 'Recover' | 'Prepare' | 'FallbackCleanup' | 'Restore'
+  action: 'ResolvePath' | 'ResolveSource' | 'ResolveUpdateScope' | 'ResolveUninstaller' | 'Recover' | 'Prepare' | 'FallbackCleanup' | 'Restore'
   source?: string
   secondary?: string
+  currentUserSource?: string
+  currentUserUninstallCommand?: string
+  allUsersSource?: string
+  allUsersUninstallCommand?: string
+  updateSource?: string
   candidate?: string
+  candidateExplicit?: boolean
   target?: string
   journal?: string
   resultPath?: string
   uninstallCommand?: string
   scriptPath?: string
   userProfile?: string
+  primarySourceStale?: boolean
+  secondarySourceStale?: boolean
+  installMode?: 'CurrentUser' | 'all'
+  appGuid?: string
+  canonicalLeaf?: string
+  appExecutable?: string
+  productName?: string
 }) {
   const systemRoot = process.env.SystemRoot ?? 'C:\\Windows'
   const powershell = join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
@@ -60,10 +73,23 @@ function runHelper(input: {
         ...(input.userProfile ? { USERPROFILE: input.userProfile } : {}),
         KUN_INSTALLER_SOURCE: input.source ?? '',
         KUN_INSTALLER_SECONDARY_SOURCE: input.secondary ?? '',
+        KUN_INSTALLER_CURRENT_USER_SOURCE: input.currentUserSource ?? '',
+        KUN_INSTALLER_CURRENT_USER_UNINSTALL_STRING: input.currentUserUninstallCommand ?? '',
+        KUN_INSTALLER_ALL_USERS_SOURCE: input.allUsersSource ?? '',
+        KUN_INSTALLER_ALL_USERS_UNINSTALL_STRING: input.allUsersUninstallCommand ?? '',
+        KUN_INSTALLER_UPDATE_SOURCE: input.updateSource ?? '',
         KUN_INSTALLER_CANDIDATE: input.candidate ?? '',
+        KUN_INSTALLER_CANDIDATE_EXPLICIT: input.candidateExplicit ? '1' : '0',
         KUN_INSTALLER_TARGET: input.target ?? '',
         KUN_INSTALLER_JOURNAL: input.journal ?? join(makeTempRoot(), 'journal.json'),
         KUN_INSTALLER_UNINSTALL_STRING: input.uninstallCommand ?? '',
+        KUN_INSTALLER_PRIMARY_SOURCE_STALE: input.primarySourceStale ? '1' : '0',
+        KUN_INSTALLER_SECONDARY_SOURCE_STALE: input.secondarySourceStale ? '1' : '0',
+        KUN_INSTALLER_INSTALL_MODE: input.installMode ?? 'CurrentUser',
+        KUN_INSTALLER_APP_GUID: input.appGuid ?? 'test-kun-app-guid',
+        KUN_INSTALLER_CANONICAL_LEAF: input.canonicalLeaf ?? 'Kun',
+        KUN_INSTALLER_APP_EXECUTABLE: input.appExecutable ?? 'Kun.exe',
+        KUN_INSTALLER_PRODUCT_NAME: input.productName ?? 'Kun',
         KUN_INSTALLER_SELF_PID: String(process.pid)
       }
     }
@@ -72,6 +98,14 @@ function runHelper(input: {
 
 function processError(result: ReturnType<typeof runHelper>): string {
   return String(result.stderr ?? '')
+}
+
+function unavailableDriveTarget(): string {
+  for (let code = 'Z'.charCodeAt(0); code >= 'P'.charCodeAt(0); code -= 1) {
+    const root = `${String.fromCharCode(code)}:\\`
+    if (!existsSync(root)) return `${root}Kun`
+  }
+  throw new Error('No unavailable drive letter was available for the installer helper test.')
 }
 
 function readJournal(path: string): { Records: Array<{ Stash: string }> } {
@@ -106,6 +140,37 @@ windowsOnly('Windows installer migration helper', () => {
     expect(readFileSync(resultPath, 'utf16le')).toBe(expected)
   })
 
+  it('lets an explicit target override a registered legacy branded source', () => {
+    const resultPath = join(makeTempRoot(), 'resolved-path.txt')
+    const result = runHelper({
+      action: 'ResolvePath',
+      source: 'D:\\Legacy\\DeepSeek GUI',
+      candidate: 'E:\\Chosen Apps',
+      candidateExplicit: true,
+      resultPath
+    })
+
+    expect(result.status, processError(result)).toBe(0)
+    expect(readFileSync(resultPath, 'utf16le')).toBe('E:\\Chosen Apps\\Kun')
+  })
+
+  it('uses development-flavor identity without appending or cleaning production Kun', () => {
+    const root = makeTempRoot()
+    const candidate = join(root, 'kun-dv')
+    const resultPath = join(root, 'resolved-path.txt')
+    const result = runHelper({
+      action: 'ResolvePath',
+      candidate,
+      resultPath,
+      canonicalLeaf: 'kun-dv',
+      appExecutable: 'kun-dv.exe',
+      productName: 'kun-dv'
+    })
+
+    expect(result.status, processError(result)).toBe(0)
+    expect(readFileSync(resultPath, 'utf16le')).toBe(candidate)
+  })
+
   it('writes a recovered install source to the explicit result path', () => {
     const root = makeTempRoot()
     const source = join(root, 'DeepSeek GUI')
@@ -121,6 +186,79 @@ windowsOnly('Windows installer migration helper', () => {
     expect(result.status, processError(result)).toBe(0)
     expect(result.stdout).toBe(canonicalSource)
     expect(readFileSync(resultPath, 'utf16le')).toBe(canonicalSource)
+  })
+
+  it('ignores a malformed install location when the uninstall command identifies a verified source', () => {
+    const root = makeTempRoot()
+    const source = join(root, 'Kun')
+    const resultPath = join(root, 'resolved-source.txt')
+    mkdirSync(source, { recursive: true })
+    writeFileSync(join(source, 'Kun.exe'), 'app')
+    writeFileSync(join(source, 'Uninstall Kun.exe'), 'uninstaller')
+
+    const result = runHelper({
+      action: 'ResolveSource',
+      source: 'not-an-absolute-path',
+      uninstallCommand: `"${join(source, 'Uninstall Kun.exe')}" /currentuser`,
+      resultPath
+    })
+
+    expect(result.status, processError(result)).toBe(0)
+    expect(readFileSync(resultPath, 'utf16le')).toBe(realpathSync.native(source))
+  })
+
+  it('selects the automatic-update scope that owns the running executable', () => {
+    const root = makeTempRoot()
+    const current = join(root, 'current', 'Kun')
+    const all = join(root, 'all', 'Kun')
+    const resultPath = join(root, 'scope.txt')
+    mkdirSync(current, { recursive: true })
+    mkdirSync(all, { recursive: true })
+    writeFileSync(join(current, 'Kun.exe'), 'current app')
+    writeFileSync(join(all, 'Kun.exe'), 'all-users app')
+
+    const result = runHelper({
+      action: 'ResolveUpdateScope',
+      currentUserSource: current,
+      allUsersSource: all,
+      updateSource: all,
+      resultPath
+    })
+
+    expect(result.status, processError(result)).toBe(0)
+    expect(readFileSync(resultPath, 'utf16le')).toBe('all')
+  })
+
+  it('rejects an ambiguous automatic-update source', () => {
+    const root = makeTempRoot()
+    const source = join(root, 'Kun')
+    mkdirSync(source, { recursive: true })
+    writeFileSync(join(source, 'Kun.exe'), 'app')
+
+    const result = runHelper({
+      action: 'ResolveUpdateScope',
+      currentUserSource: source,
+      allUsersSource: source,
+      updateSource: source
+    })
+
+    expect(result.status).not.toBe(0)
+    expect(processError(result)).toContain('exactly one verified Kun registration')
+  })
+
+  it('returns only an app-specific uninstaller inside the verified source', () => {
+    const root = makeTempRoot()
+    const source = join(root, 'Kun')
+    const resultPath = join(root, 'trusted-uninstaller.txt')
+    mkdirSync(source, { recursive: true })
+    writeFileSync(join(source, 'Kun.exe'), 'app')
+    writeFileSync(join(source, 'Uninstall Kun.exe'), 'uninstaller')
+
+    const result = runHelper({ action: 'ResolveUninstaller', source, resultPath })
+
+    expect(result.status, processError(result)).toBe(0)
+    expect(readFileSync(resultPath, 'utf16le'))
+      .toBe(realpathSync.native(join(source, 'Uninstall Kun.exe')))
   })
 
   it('writes resolver output beside the helper without cross-process result state', () => {
@@ -141,6 +279,108 @@ windowsOnly('Windows installer migration helper', () => {
     expect(result.status, processError(result)).toBe(0)
     expect(result.stdout).toBe(canonicalSource)
     expect(readFileSync(resultPath, 'utf16le')).toBe(canonicalSource)
+  })
+
+  it('recovers the legacy parent of a falsely nested registered source', () => {
+    const root = makeTempRoot()
+    const source = join(root, 'DeepSeek GUI')
+    const nested = join(source, 'Kun')
+    const resultPath = join(root, 'resolved-source.txt')
+    mkdirSync(nested, { recursive: true })
+    writeFileSync(join(source, 'DeepSeek GUI.exe'), 'app')
+
+    const result = runHelper({
+      action: 'ResolveSource',
+      source: nested,
+      resultPath,
+      uninstallCommand: `"${join(nested, 'Uninstall Kun.exe')}" /currentuser`
+    })
+
+    expect(result.status, processError(result)).toBe(0)
+    expect(readFileSync(resultPath, 'utf16le')).toBe(realpathSync.native(source))
+  })
+
+  it('accepts a partially damaged packaged source with its app-specific uninstaller', () => {
+    const root = makeTempRoot()
+    const source = join(root, 'Kun')
+    const journal = join(root, 'recovery', 'journal.json')
+    const resultPath = join(root, 'prepare-result.txt')
+    mkdirSync(join(source, 'resources'), { recursive: true })
+    writeFileSync(join(source, 'resources', 'app.asar'), 'packaged app')
+    writeFileSync(join(source, 'Uninstall Kun.exe'), 'uninstaller')
+    writeFileSync(join(source, 'personal.txt'), 'keep me')
+
+    const prepared = runHelper({ action: 'Prepare', source, target: source, journal, resultPath })
+
+    expect(prepared.status, processError(prepared)).toBe(0)
+    expect(readFileSync(resultPath, 'utf16le')).toBe('0')
+    expect(existsSync(join(source, 'personal.txt'))).toBe(false)
+    const restored = runHelper({ action: 'Restore', source, target: source, journal })
+    expect(restored.status, processError(restored)).toBe(0)
+    expect(readFileSync(join(source, 'personal.txt'), 'utf8')).toBe('keep me')
+  })
+
+  it.each([
+    ['missing', false],
+    ['empty', true]
+  ])('classifies a %s registered source as stale without changing it', (_label, createSource) => {
+    const root = makeTempRoot()
+    const source = join(root, 'Kun')
+    const journal = join(root, 'recovery', 'journal.json')
+    const resultPath = join(root, 'prepare-result.txt')
+    if (createSource) mkdirSync(source, { recursive: true })
+
+    const prepared = runHelper({ action: 'Prepare', source, target: source, journal, resultPath })
+
+    expect(prepared.status, processError(prepared)).toBe(0)
+    expect(readFileSync(resultPath, 'utf16le')).toBe('1')
+    expect(existsSync(source)).toBe(createSource)
+    expect(existsSync(journal)).toBe(false)
+    if (createSource) {
+      const restored = runHelper({
+        action: 'Restore', source, target: source, journal, primarySourceStale: true
+      })
+      expect(restored.status, processError(restored)).toBe(0)
+      expect(existsSync(source)).toBe(true)
+    }
+  })
+
+  it('leaves an unverified non-empty registered source unchanged', () => {
+    const root = makeTempRoot()
+    const source = join(root, 'Kun')
+    const journal = join(root, 'recovery', 'journal.json')
+    mkdirSync(join(source, 'resources'), { recursive: true })
+    writeFileSync(join(source, 'resources', 'app.asar'), 'ambiguous electron app')
+    writeFileSync(join(source, 'personal.txt'), 'keep me')
+
+    const prepared = runHelper({ action: 'Prepare', source, target: source, journal })
+
+    expect(prepared.status).not.toBe(0)
+    expect(processError(prepared)).toContain('not a verifiable Kun installation')
+    expect(readFileSync(join(source, 'personal.txt'), 'utf8')).toBe('keep me')
+    expect(readFileSync(join(source, 'resources', 'app.asar'), 'utf8')).toBe('ambiguous electron app')
+    expect(existsSync(journal)).toBe(false)
+  })
+
+  it('rejects an unavailable target volume before changing the source', () => {
+    const root = makeTempRoot()
+    const source = join(root, 'Kun')
+    const journal = join(root, 'recovery', 'journal.json')
+    mkdirSync(join(source, 'resources'), { recursive: true })
+    writeFileSync(join(source, 'Kun.exe'), 'app')
+    writeFileSync(join(source, 'personal.txt'), 'keep me')
+
+    const result = runHelper({
+      action: 'Prepare',
+      source,
+      target: unavailableDriveTarget(),
+      journal
+    })
+
+    expect(result.status).not.toBe(0)
+    expect(processError(result)).toContain('target volume is unavailable')
+    expect(readFileSync(join(source, 'personal.txt'), 'utf8')).toBe('keep me')
+    expect(existsSync(journal)).toBe(false)
   })
 
   it('preserves unknown top-level content and restores it after fallback cleanup', () => {
@@ -220,6 +460,63 @@ windowsOnly('Windows installer migration helper', () => {
     expect(readdirSync(source).sort()).toEqual(['Kun.exe', 'personal.txt'])
   })
 
+  it('rejects a recovery journal whose application identity was changed', () => {
+    const root = makeTempRoot()
+    const source = join(root, 'Custom Install')
+    const journal = join(root, 'recovery', 'journal.json')
+    mkdirSync(source, { recursive: true })
+    writeFileSync(join(source, 'Kun.exe'), 'app')
+    writeFileSync(join(source, 'personal.txt'), 'personal')
+
+    const prepared = runHelper({ action: 'Prepare', source, target: source, journal })
+    expect(prepared.status, processError(prepared)).toBe(0)
+    const journalData = JSON.parse(readFileSync(journal, 'utf8').replace(/^\uFEFF/, '')) as {
+      AppGuid: string
+      Records: Array<{ Stash: string }>
+    }
+    journalData.AppGuid = 'other-app-guid'
+    writeFileSync(journal, JSON.stringify(journalData, null, 2), 'utf8')
+
+    const recovery = runHelper({ action: 'Recover', source, target: source, journal })
+
+    expect(recovery.status).not.toBe(0)
+    expect(processError(recovery)).toContain('application identity does not match')
+    expect(existsSync(join(source, 'personal.txt'))).toBe(false)
+    expect(readFileSync(join(journalData.Records[0].Stash, 'content', 'personal.txt'), 'utf8'))
+      .toBe('personal')
+  })
+
+  it('rejects an existing journal under a cross-user-writable directory', () => {
+    const root = makeTempRoot()
+    const source = join(root, 'Kun')
+    const recoveryDirectory = join(root, 'recovery')
+    const journal = join(recoveryDirectory, 'journal.json')
+    mkdirSync(source, { recursive: true })
+    mkdirSync(recoveryDirectory, { recursive: true })
+    writeFileSync(join(source, 'Kun.exe'), 'app')
+    writeFileSync(join(source, 'personal.txt'), 'do not move')
+    writeFileSync(journal, JSON.stringify({
+      SchemaVersion: 3,
+      AppGuid: 'test-kun-app-guid',
+      InstallMode: 'current',
+      Target: source,
+      Records: []
+    }), 'utf8')
+    const systemRoot = process.env.SystemRoot ?? 'C:\\Windows'
+    const icacls = spawnSync(
+      join(systemRoot, 'System32', 'icacls.exe'),
+      [recoveryDirectory, '/inheritance:r', '/grant:r', '*S-1-1-0:(OI)(CI)F'],
+      { encoding: 'utf8' }
+    )
+    expect(icacls.status, String(icacls.stderr ?? '')).toBe(0)
+
+    const recovery = runHelper({ action: 'Recover', source, target: source, journal })
+
+    expect(recovery.status).not.toBe(0)
+    expect(processError(recovery)).toContain('untrusted ACL')
+    expect(readFileSync(join(source, 'personal.txt'), 'utf8')).toBe('do not move')
+  })
+
   it('preserves registered per-user content alongside an all-users source', () => {
     const root = makeTempRoot()
     const source = join(root, 'Machine Kun')
@@ -251,7 +548,37 @@ windowsOnly('Windows installer migration helper', () => {
     expect(readFileSync(join(secondary, 'personal.txt'), 'utf8')).toBe(secondary)
   })
 
-  it('rejects a current-user secondary source outside the current user profile', () => {
+  it('preserves a verified external current-user installation during all-users migration', () => {
+    const root = makeTempRoot()
+    const userProfile = join(root, 'profile')
+    const source = join(root, 'Machine Kun')
+    const secondary = join(root, 'external-drive', 'Kun')
+    const journal = join(root, 'recovery', 'journal.json')
+    mkdirSync(userProfile, { recursive: true })
+    for (const directory of [source, secondary]) {
+      mkdirSync(join(directory, 'resources'), { recursive: true })
+      writeFileSync(join(directory, 'Kun.exe'), 'app')
+    }
+    writeFileSync(join(secondary, 'resources', 'app.asar'), 'packaged app')
+    writeFileSync(join(secondary, 'personal.txt'), 'keep external content')
+
+    const prepared = runHelper({
+      action: 'Prepare', source, target: source, journal, secondary, userProfile
+    })
+
+    expect(prepared.status, processError(prepared)).toBe(0)
+    expect(existsSync(join(secondary, 'personal.txt'))).toBe(false)
+    expect(readFileSync(join(secondary, 'resources', 'app.asar'), 'utf8')).toBe('packaged app')
+
+    const restored = runHelper({
+      action: 'Restore', source, target: source, journal, secondary, userProfile
+    })
+    expect(restored.status, processError(restored)).toBe(0)
+    expect(readFileSync(join(secondary, 'personal.txt'), 'utf8')).toBe('keep external content')
+    expect(existsSync(journal)).toBe(false)
+  })
+
+  it('rejects a misleading external current-user source without packaged payload', () => {
     const root = makeTempRoot()
     const userProfile = join(root, 'profile')
     const source = join(root, 'Machine Kun')
@@ -269,8 +596,58 @@ windowsOnly('Windows installer migration helper', () => {
     })
 
     expect(result.status).not.toBe(0)
-    expect(result.stderr).toContain('outside the current user profile')
+    expect(result.stderr).toContain('not a recognized packaged Kun installation')
     expect(readFileSync(join(secondary, 'resources', 'keep.txt'), 'utf8')).toBe('keep')
+    expect(existsSync(journal)).toBe(false)
+  })
+
+  it('rejects a verified-looking external secondary source reached through a reparse point', () => {
+    const root = makeTempRoot()
+    const userProfile = join(root, 'profile')
+    const source = join(root, 'Machine Kun')
+    const externalBacking = join(root, 'external-backing')
+    const secondary = join(root, 'external-link')
+    const journal = join(root, 'recovery', 'journal.json')
+    mkdirSync(userProfile, { recursive: true })
+    mkdirSync(join(source, 'resources'), { recursive: true })
+    mkdirSync(join(externalBacking, 'resources'), { recursive: true })
+    writeFileSync(join(source, 'Kun.exe'), 'app')
+    writeFileSync(join(externalBacking, 'Kun.exe'), 'app')
+    writeFileSync(join(externalBacking, 'resources', 'app.asar'), 'packaged app')
+    symlinkSync(externalBacking, secondary, 'junction')
+
+    const result = runHelper({
+      action: 'Prepare', source, target: source, journal, secondary, userProfile
+    })
+
+    expect(result.status).not.toBe(0)
+    expect(result.stderr).toContain('path contains a reparse point')
+    expect(readFileSync(join(externalBacking, 'resources', 'app.asar'), 'utf8')).toBe('packaged app')
+    expect(existsSync(journal)).toBe(false)
+  })
+
+  it('ignores a missing stale external current-user source during migration', () => {
+    const root = makeTempRoot()
+    const userProfile = join(root, 'profile')
+    const source = join(root, 'Machine Kun')
+    const secondary = join(root, 'missing-drive', 'Kun')
+    const journal = join(root, 'recovery', 'journal.json')
+    const resultPath = join(root, 'prepare-result.txt')
+    mkdirSync(userProfile, { recursive: true })
+    mkdirSync(join(source, 'resources'), { recursive: true })
+    writeFileSync(join(source, 'Kun.exe'), 'app')
+
+    const prepared = runHelper({
+      action: 'Prepare', source, target: source, journal, secondary, userProfile, resultPath
+    })
+    expect(prepared.status, processError(prepared)).toBe(0)
+    expect(readFileSync(resultPath, 'utf16le')).toBe('2')
+    expect(existsSync(secondary)).toBe(false)
+
+    const restored = runHelper({
+      action: 'Restore', source, target: source, journal, secondary, userProfile
+    })
+    expect(restored.status, processError(restored)).toBe(0)
     expect(existsSync(journal)).toBe(false)
   })
 

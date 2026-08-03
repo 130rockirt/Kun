@@ -203,6 +203,63 @@ describe('checkGuiUpdate feed URL', () => {
 })
 
 describe('installGuiUpdate', () => {
+  it('passes the running Windows install directory to the spawned NSIS updater', async () => {
+    const platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform')
+    const execPathDescriptor = Object.getOwnPropertyDescriptor(process, 'execPath')
+    Object.defineProperty(process, 'platform', {
+      ...platformDescriptor,
+      value: 'win32'
+    })
+    Object.defineProperty(process, 'execPath', {
+      ...execPathDescriptor,
+      value: 'D:\\Apps\\Kun\\Kun.exe'
+    })
+
+    try {
+      const module = await import('./gui-updater')
+      updater.quitAndInstall.mockImplementation(() => {
+        expect(process.env.KUN_INSTALLER_UPDATE_SOURCE).toBe('D:\\Apps\\Kun')
+      })
+      module.initializeGuiUpdater(() => null, () => 'stable')
+      updater.emit('update-downloaded', {
+        version: '0.2.0',
+        releaseDate: '2026-06-06T00:00:00.000Z'
+      })
+
+      await expect(module.installGuiUpdate()).resolves.toEqual({ ok: true })
+      expect(updater.quitAndInstall).toHaveBeenCalledWith(true, true)
+    } finally {
+      if (platformDescriptor) Object.defineProperty(process, 'platform', platformDescriptor)
+      if (execPathDescriptor) Object.defineProperty(process, 'execPath', execPathDescriptor)
+    }
+  })
+
+  it('binds a Windows installer child to the running packaged application directory', async () => {
+    const module = await import('./gui-updater')
+    const env: NodeJS.ProcessEnv = { KUN_INSTALLER_UPDATE_SOURCE: 'C:\\Previous' }
+
+    const restore = module.setWindowsInstallerUpdateSource(
+      env,
+      'win32',
+      'D:\\Apps\\Kun\\Kun.exe'
+    )
+
+    expect(env.KUN_INSTALLER_UPDATE_SOURCE).toBe('D:\\Apps\\Kun')
+    restore()
+    expect(env.KUN_INSTALLER_UPDATE_SOURCE).toBe('C:\\Previous')
+
+    const emptyEnv: NodeJS.ProcessEnv = {}
+    const clear = module.setWindowsInstallerUpdateSource(
+      emptyEnv,
+      'win32',
+      'C:\\Users\\me\\AppData\\Local\\Programs\\Kun\\Kun.exe'
+    )
+    expect(emptyEnv.KUN_INSTALLER_UPDATE_SOURCE)
+      .toBe('C:\\Users\\me\\AppData\\Local\\Programs\\Kun')
+    clear()
+    expect(emptyEnv.KUN_INSTALLER_UPDATE_SOURCE).toBeUndefined()
+  })
+
   it('waits for managed runtime cleanup before asking the updater to quit and install', async () => {
     const module = await import('./gui-updater')
     let finishCleanup = (): void => {

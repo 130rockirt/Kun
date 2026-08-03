@@ -69,6 +69,21 @@ export {
   sortDesignSidebarDocuments
 } from './design-sidebar-model'
 
+export function resolveDesignSidebarNavigationLocks(options: {
+  workspaceSwitching: boolean
+  drawingCreationSubmitting: boolean
+  designAgentRunning: boolean
+}): {
+  modeSwitchLocked: boolean
+  designNavigationLocked: boolean
+} {
+  const preparationLocked = options.workspaceSwitching || options.drawingCreationSubmitting
+  return {
+    modeSwitchLocked: preparationLocked,
+    designNavigationLocked: preparationLocked || options.designAgentRunning
+  }
+}
+
 type Props = {
   onCodeOpen: () => void
   onWriteOpen: () => void
@@ -281,10 +296,18 @@ export function DesignSidebar({
         (threadId === chatActiveThreadId && chatBusy)
     })
   }
-  const navigationLocked = workspaceSwitching || drawingCreationSubmitting || chatThreads.some((thread) =>
+  const designAgentRunning = chatThreads.some((thread) =>
     runningDesignThreadIds.has(thread.id) &&
     (thread.status?.trim().toLowerCase() === 'running' || (thread.id === chatActiveThreadId && chatBusy))
   )
+  const {
+    modeSwitchLocked,
+    designNavigationLocked: navigationLocked
+  } = resolveDesignSidebarNavigationLocks({
+    workspaceSwitching,
+    drawingCreationSubmitting,
+    designAgentRunning
+  })
 
   const persistWorkspaceSelection = async (root: string, options?: { remove?: boolean }): Promise<void> => {
     const settings = await rendererRuntimeClient.getSettings()
@@ -575,7 +598,7 @@ export function DesignSidebar({
             onCodeOpen={onCodeOpen}
             onWriteOpen={onWriteOpen}
             onDesignOpen={onDesignOpen}
-            disabled={navigationLocked}
+            disabled={modeSwitchLocked}
             disabledReason={t('designDrawingPreparing')}
           />
           <SidebarCommandRow

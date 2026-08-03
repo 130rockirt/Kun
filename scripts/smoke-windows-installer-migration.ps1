@@ -16,6 +16,8 @@ if (-not $AllowLocal -and $env:CI -ne 'true') {
 $root = Join-Path ([IO.Path]::GetTempPath()) ('kun-installer-migration-smoke-' + [guid]::NewGuid().ToString('N'))
 $diagnosticPath = Join-Path $root 'installer-helper-diagnostics.log'
 $previousDiagnosticPath = [Environment]::GetEnvironmentVariable('KUN_INSTALLER_DIAGNOSTIC_PATH', 'Process')
+$previousUpdateSource = [Environment]::GetEnvironmentVariable('KUN_INSTALLER_UPDATE_SOURCE', 'Process')
+$previousAttackMarker = [Environment]::GetEnvironmentVariable('KUN_INSTALLER_ATTACK_MARKER', 'Process')
 $markerName = '.kun-installer-migration-smoke-' + [guid]::NewGuid().ToString('N')
 $installRegistryPath = $null
 $uninstallRegistryPath = $null
@@ -23,6 +25,7 @@ $installRegistryPaths = @()
 $uninstallRegistryPaths = @()
 $sentinels = @()
 $currentScenario = 'smoke setup'
+$substDrive = ''
 
 function Assert-True([bool]$Condition, [string]$Message) {
   if (-not $Condition) {
@@ -89,19 +92,63 @@ function Set-RegisteredLocation([string]$Location) {
   Set-ItemProperty -LiteralPath $script:uninstallRegistryPath -Name DisplayIcon -Value ((Join-Path $Location 'Kun.exe') + ',0')
 }
 
-function Move-RegisteredInstall([string]$From, [string]$To) {
+function Move-RegisteredInstall(
+  [string]$From,
+  [string]$To,
+  [string]$RegisteredLocation = ''
+) {
   [IO.Directory]::CreateDirectory((Split-Path -Parent $To)) | Out-Null
   Move-Item -LiteralPath $From -Destination $To
-  Set-RegisteredLocation $To
+  $registeredTarget = if ([string]::IsNullOrWhiteSpace($RegisteredLocation)) {
+    $To
+  } else {
+    $RegisteredLocation
+  }
+  Set-RegisteredLocation $registeredTarget
 
   $fromBin = Join-Path $From 'bin'
-  $toBin = Join-Path $To 'bin'
+  $toBin = Join-Path $registeredTarget 'bin'
   $pathValue = [Environment]::GetEnvironmentVariable('Path', 'User')
   $parts = @($pathValue -split ';' | Where-Object {
     -not [string]::IsNullOrWhiteSpace($_) -and
     -not [string]::Equals($_.TrimEnd('\'), $fromBin.TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase)
   })
   [Environment]::SetEnvironmentVariable('Path', (($parts + $toBin) -join ';'), 'User')
+}
+
+function New-TemporarySubstDrive([string]$BackingDirectory) {
+  [IO.Directory]::CreateDirectory($BackingDirectory) | Out-Null
+  foreach ($code in (90..80)) {
+    $drive = ([char]$code).ToString() + ':'
+    if (Test-Path -LiteralPath ($drive + '\')) {
+      continue
+    }
+    & "$env:SystemRoot\System32\subst.exe" $drive $BackingDirectory | Out-Null
+    if ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath ($drive + '\'))) {
+      return $drive
+    }
+  }
+  throw 'No free drive letter was available for the external-install smoke scenario.'
+}
+
+function New-SmokeMarkerExecutable([string]$PathValue) {
+  $source = @'
+using System;
+using System.IO;
+
+public static class KunInstallerSmokeAttacker
+{
+    public static void Main()
+    {
+        var marker = Environment.GetEnvironmentVariable("KUN_INSTALLER_ATTACK_MARKER");
+        if (!String.IsNullOrWhiteSpace(marker))
+        {
+            File.WriteAllText(marker, "executed");
+        }
+    }
+}
+'@
+  Add-Type -TypeDefinition $source -OutputAssembly $PathValue -OutputType ConsoleApplication
 }
 
 function Assert-RegisteredLocation([string]$ExpectedLocation) {
@@ -176,6 +223,8 @@ function Add-DataSentinel([string]$Directory) {
 try {
   [IO.Directory]::CreateDirectory($root) | Out-Null
   [Environment]::SetEnvironmentVariable('KUN_INSTALLER_DIAGNOSTIC_PATH', $diagnosticPath, 'Process')
+  [Environment]::SetEnvironmentVariable('KUN_INSTALLER_UPDATE_SOURCE', $null, 'Process')
+  [Environment]::SetEnvironmentVariable('KUN_INSTALLER_ATTACK_MARKER', $null, 'Process')
   if ([string]::IsNullOrWhiteSpace($InstallerPath)) {
     $candidate = Get-ChildItem -Path (Join-Path (Get-Location) 'dist') -Filter 'Kun-*-win-x64.exe' |
       Sort-Object LastWriteTimeUtc -Descending |
@@ -224,21 +273,59 @@ try {
   Assert-PathReconciled $legacyTarget @($seed, $legacySource)
   Assert-KunShortcuts 'CurrentUser'
 
+  $falseNestedParent = Join-Path $root 'false-nested\DeepSeek GUI'
+  $falseNestedSource = Join-Path $falseNestedParent 'Kun'
+  $falseNestedTarget = Join-Path $root 'false-nested\Kun'
+  Move-RegisteredInstall $legacyTarget $falseNestedParent $falseNestedSource
+  [IO.Directory]::CreateDirectory($falseNestedSource) | Out-Null
+  Invoke-Installer 'false nested legacy registration recovery' @('/S', '/currentuser')
+  Assert-RegisteredLocation $falseNestedTarget
+  Assert-True (-not (Test-Path -LiteralPath (Join-Path $falseNestedParent 'Kun.exe'))) 'The recovered legacy parent still contains its application executable.'
+  Assert-True (-not (Test-Path -LiteralPath (Join-Path $falseNestedParent 'DeepSeek GUI.exe'))) 'The recovered legacy parent still contains its legacy executable.'
+  Assert-PathReconciled $falseNestedTarget @($legacyTarget, $falseNestedSource, $falseNestedParent)
+
   $nestedSource = Join-Path $root 'nested\DeepSeek GUI\Kun'
   $nestedTarget = Join-Path $root 'nested\Kun'
-  Move-RegisteredInstall $legacyTarget $nestedSource
+  Move-RegisteredInstall $falseNestedTarget $nestedSource
   Set-Content -LiteralPath (Join-Path $nestedSource 'nested-note.txt') -Value 'keep nested note'
   Invoke-Installer 'nested legacy path migration' @('/S', '/currentuser')
   Assert-RegisteredLocation $nestedTarget
   Assert-True (Test-Path -LiteralPath (Join-Path $nestedSource 'nested-note.txt')) 'Nested unknown content was not restored.'
-  Assert-PathReconciled $nestedTarget @($legacyTarget, $nestedSource)
+  Assert-PathReconciled $nestedTarget @($falseNestedTarget, $nestedSource)
+
+  $staleSource = Join-Path $root 'stale-empty\DeepSeek GUI\Kun'
+  $staleTarget = Join-Path $root 'stale-empty\Kun'
+  $orphanedInstall = Join-Path $root 'orphaned-valid-install'
+  Move-RegisteredInstall $nestedTarget $orphanedInstall $staleSource
+  [IO.Directory]::CreateDirectory($staleSource) | Out-Null
+  Invoke-Installer 'empty stale registration recovery' @('/S', '/currentuser')
+  Assert-RegisteredLocation $staleTarget
+  Assert-True (Test-Path -LiteralPath $staleSource -PathType Container) 'Stale empty source directory was modified or removed.'
+  Assert-True (@(Get-ChildItem -LiteralPath $staleSource -Force).Count -eq 0) 'Stale empty source directory received application files.'
+  Assert-PathReconciled $staleTarget @($nestedTarget, $staleSource)
 
   $custom = Join-Path $root 'custom\My AI Tools'
-  Move-RegisteredInstall $nestedTarget $custom
+  Move-RegisteredInstall $staleTarget $custom
   Set-Content -LiteralPath (Join-Path $custom 'custom-note.txt') -Value 'keep custom note'
   Invoke-Installer 'custom path reinstall' @('/S', '/currentuser')
   Assert-RegisteredLocation $custom
   Assert-True (Test-Path -LiteralPath (Join-Path $custom 'custom-note.txt')) 'Custom install content was not restored in place.'
+
+  Move-Item -LiteralPath (Join-Path $custom 'Kun.exe') -Destination (Join-Path $custom 'Kun.exe.partial-missing')
+  Invoke-Installer 'partially damaged packaged source recovery' @('/S', '/currentuser')
+  Assert-RegisteredLocation $custom
+  Assert-True (Test-Path -LiteralPath (Join-Path $custom 'Kun.exe.partial-missing')) 'Partial-source recovery deleted preserved content.'
+
+  Move-Item -LiteralPath (Join-Path $custom 'Kun.exe') -Destination (Join-Path $custom 'Kun.exe.unverified')
+  Move-Item -LiteralPath (Join-Path $custom 'Uninstall Kun.exe') -Destination (Join-Path $custom 'Uninstall Kun.exe.unverified')
+  Move-Item -LiteralPath (Join-Path $custom 'resources\app.asar') -Destination (Join-Path $custom 'resources\app.asar.unverified')
+  Invoke-Installer 'unverified non-empty source rejection' @('/S', '/currentuser') 2
+  Assert-True (Test-Path -LiteralPath (Join-Path $custom 'Kun.exe.unverified')) 'Unverified-source rejection changed the program directory.'
+  $unverifiedRegisteredLocation = Get-ItemPropertyValue -LiteralPath $script:installRegistryPath -Name InstallLocation
+  Assert-True (Test-PathEqual $unverifiedRegisteredLocation $custom) 'Unverified-source rejection retired the existing registration.'
+  Move-Item -LiteralPath (Join-Path $custom 'Kun.exe.unverified') -Destination (Join-Path $custom 'Kun.exe')
+  Move-Item -LiteralPath (Join-Path $custom 'Uninstall Kun.exe.unverified') -Destination (Join-Path $custom 'Uninstall Kun.exe')
+  Move-Item -LiteralPath (Join-Path $custom 'resources\app.asar.unverified') -Destination (Join-Path $custom 'resources\app.asar')
 
   $programsRoot = Join-Path $env:LOCALAPPDATA 'Programs'
   Set-RegisteredLocation $programsRoot
@@ -279,6 +366,14 @@ try {
   Invoke-Installer 'conflict retry migration' @('/S', '/currentuser')
   Assert-RegisteredLocation $conflictTarget
 
+  $externalBacking = Join-Path $root 'external-drive'
+  $script:substDrive = New-TemporarySubstDrive $externalBacking
+  $externalBackingSource = Join-Path $externalBacking 'Kun'
+  $externalSource = $script:substDrive + '\Kun'
+  Move-RegisteredInstall $conflictTarget $externalBackingSource $externalSource
+  Set-Content -LiteralPath (Join-Path $externalSource 'external-note.txt') -Value 'keep external note'
+  Assert-RegisteredLocation $externalSource
+
   foreach ($sentinel in $sentinels) {
     Assert-True (Test-Path -LiteralPath $sentinel) "User-data sentinel was removed: $sentinel"
   }
@@ -290,12 +385,44 @@ try {
   Invoke-Installer 'current-user to all-users migration' @('/S', '/allusers', "/D=$machineParent")
   Assert-True (-not (Test-Path -LiteralPath $previousUserInstallRegistryPath)) 'The current-user install registration remains after all-users migration.'
   Assert-True (-not (Test-Path -LiteralPath $previousUserUninstallRegistryPath)) 'The current-user uninstall registration remains after all-users migration.'
-  Assert-True (-not (Test-Path -LiteralPath (Join-Path $conflictTarget 'Kun.exe'))) 'The current-user application payload remains after all-users migration.'
+  Assert-True (-not (Test-Path -LiteralPath (Join-Path $externalSource 'Kun.exe'))) 'The external current-user application payload remains after all-users migration.'
+  Assert-True ((Get-Content -LiteralPath (Join-Path $externalSource 'external-note.txt') -Raw).Trim() -eq 'keep external note') 'External current-user content was not restored.'
   Assert-NoKunShortcuts 'CurrentUser'
   Find-KunRegistration $machineTarget 'HKLM'
   Assert-RegisteredLocation $machineTarget
-  Assert-PathReconciled $machineTarget @($conflictTarget)
+  Assert-PathReconciled $machineTarget @($conflictTarget, $externalSource)
   Assert-KunShortcuts 'AllUsers'
+
+  $machineInstallRegistryPath = $script:installRegistryPath
+  $machineUninstallRegistryPath = $script:uninstallRegistryPath
+  $otherUserParent = Join-Path $root 'other-current-user'
+  $otherUserTarget = Join-Path $otherUserParent 'Kun'
+  Invoke-Installer 'parallel current-user install' @('/S', '/currentuser', "/D=$otherUserParent")
+  Find-KunRegistration $otherUserTarget 'HKCU'
+  $otherUserInstallRegistryPath = $script:installRegistryPath
+  $otherUserUninstallRegistryPath = $script:uninstallRegistryPath
+  $otherUserUninstallString = Get-ItemPropertyValue -LiteralPath $otherUserUninstallRegistryPath -Name UninstallString
+
+  $attackerPath = Join-Path $root 'tampered-uninstaller.exe'
+  $attackerMarker = Join-Path $root 'tampered-uninstaller-ran.txt'
+  New-SmokeMarkerExecutable $attackerPath
+  Set-ItemProperty -LiteralPath $machineUninstallRegistryPath -Name UninstallString -Value ('"' + $attackerPath + '"')
+  Set-ItemProperty -LiteralPath $machineUninstallRegistryPath -Name QuietUninstallString -Value ('"' + $attackerPath + '" /S')
+  [Environment]::SetEnvironmentVariable('KUN_INSTALLER_ATTACK_MARKER', $attackerMarker, 'Process')
+  [Environment]::SetEnvironmentVariable('KUN_INSTALLER_UPDATE_SOURCE', $machineTarget, 'Process')
+  Invoke-Installer 'in-app all-users automatic update scope' @('--updated', '/S', '--force-run')
+  [Environment]::SetEnvironmentVariable('KUN_INSTALLER_UPDATE_SOURCE', $previousUpdateSource, 'Process')
+  [Environment]::SetEnvironmentVariable('KUN_INSTALLER_ATTACK_MARKER', $previousAttackMarker, 'Process')
+
+  Assert-True (-not (Test-Path -LiteralPath $attackerMarker)) 'The elevated update executed the tampered registry uninstaller.'
+  $machineLocationAfterUpdate = Get-ItemPropertyValue -LiteralPath $machineInstallRegistryPath -Name InstallLocation
+  Assert-True (Test-PathEqual $machineLocationAfterUpdate $machineTarget) 'The automatic update did not retain the all-users registration.'
+  $otherUserLocationAfterUpdate = Get-ItemPropertyValue -LiteralPath $otherUserInstallRegistryPath -Name InstallLocation
+  Assert-True (Test-PathEqual $otherUserLocationAfterUpdate $otherUserTarget) 'The automatic update changed the unrelated current-user registration.'
+  $otherUserUninstallAfterUpdate = Get-ItemPropertyValue -LiteralPath $otherUserUninstallRegistryPath -Name UninstallString
+  Assert-True ($otherUserUninstallAfterUpdate -eq $otherUserUninstallString) 'The automatic update did not restore the unrelated current-user uninstall registration.'
+  $automaticUpdateDiagnostics = Get-Content -LiteralPath $diagnosticPath -Raw
+  Assert-True ($automaticUpdateDiagnostics -match [regex]::Escape("source=$machineTarget")) 'The automatic update did not validate the running all-users source.'
 
   $script:currentScenario = 'all-users uninstall'
   $machineUninstaller = Join-Path $machineTarget 'Uninstall Kun.exe'
@@ -308,6 +435,8 @@ try {
   Write-Host 'Windows installer migration smoke passed.'
 } finally {
   [Environment]::SetEnvironmentVariable('KUN_INSTALLER_DIAGNOSTIC_PATH', $previousDiagnosticPath, 'Process')
+  [Environment]::SetEnvironmentVariable('KUN_INSTALLER_UPDATE_SOURCE', $previousUpdateSource, 'Process')
+  [Environment]::SetEnvironmentVariable('KUN_INSTALLER_ATTACK_MARKER', $previousAttackMarker, 'Process')
   foreach ($sentinel in $sentinels) {
     Remove-Item -LiteralPath $sentinel -Force -ErrorAction SilentlyContinue
   }
@@ -316,6 +445,9 @@ try {
   }
   foreach ($registryPath in $uninstallRegistryPaths) {
     Remove-Item -LiteralPath $registryPath -Recurse -Force -ErrorAction SilentlyContinue
+  }
+  if (-not [string]::IsNullOrWhiteSpace($substDrive)) {
+    & "$env:SystemRoot\System32\subst.exe" $substDrive /D | Out-Null
   }
   Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
 }

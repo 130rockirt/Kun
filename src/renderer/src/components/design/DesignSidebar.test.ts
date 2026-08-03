@@ -6,6 +6,7 @@ import {
   getDesignSidebarDocumentLabel,
   getDesignSidebarDocumentScreenCount,
   getDesignSidebarVisibleArtifacts,
+  resolveDesignSidebarNavigationLocks,
   sortDesignSidebarDocuments
 } from './DesignSidebar'
 
@@ -115,5 +116,27 @@ describe('DesignSidebar helpers', () => {
 
     expect(sortDesignSidebarDocuments(documents, (document) => document.id === 'running').map((document) => document.id))
       .toEqual(['running', 'recent', 'old'])
+  })
+
+  it('allows switching modes while a Design agent keeps running in the background', () => {
+    expect(resolveDesignSidebarNavigationLocks({
+      workspaceSwitching: false,
+      drawingCreationSubmitting: false,
+      designAgentRunning: true
+    })).toEqual({
+      modeSwitchLocked: false,
+      designNavigationLocked: true
+    })
+  })
+
+  it('keeps mode switching locked while a drawing submission is still being prepared', () => {
+    expect(resolveDesignSidebarNavigationLocks({
+      workspaceSwitching: false,
+      drawingCreationSubmitting: true,
+      designAgentRunning: false
+    })).toEqual({
+      modeSwitchLocked: true,
+      designNavigationLocked: true
+    })
   })
 })

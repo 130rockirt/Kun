@@ -38,7 +38,7 @@ import {
   prepareTrayIcon
 } from './app-icon'
 import { buildTrayMenuTemplate, parseTrayThreads, type TrayThreadSummary } from './tray-session-menu'
-import { listProviderQuotas } from './provider-quota'
+import { requestRuntimeProviderQuotas } from './runtime-provider-quota'
 import { registerTrayQuotaIpc } from './tray-quota-ipc'
 import {
   resolveTrayQuotaAnchorBounds,
@@ -2445,7 +2445,12 @@ app.whenReady().then(async () => {
   disposeTrayQuotaIpc = registerTrayQuotaIpc({
     ipcMain,
     getWindow: () => trayQuotaWindow,
-    list: async () => listProviderQuotas(await store.load()),
+    list: async () => {
+      const settings = await store.load()
+      return requestRuntimeProviderQuotas((path, method) =>
+        runtimeRequest(settings, path, { method })
+      )
+    },
     context: async () => {
       const settings = await store.load()
       return {

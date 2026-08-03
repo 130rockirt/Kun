@@ -1,6 +1,6 @@
 param(
   [Parameter(Mandatory = $true)]
-  [ValidateSet('ResolvePath', 'ResolveSource', 'StopProcesses', 'Recover', 'Prepare', 'FallbackCleanup', 'Restore', 'UpdatePath')]
+  [ValidateSet('ResolvePath', 'ResolveSource', 'ResolveUpdateScope', 'ResolveUninstaller', 'StopProcesses', 'Recover', 'Prepare', 'FallbackCleanup', 'Restore', 'UpdatePath')]
   [string]$Action,
   [string]$ResultPath = ''
 )
@@ -10,6 +10,50 @@ Set-StrictMode -Version 2.0
 
 function Get-EnvironmentValue([string]$Name) {
   return [Environment]::GetEnvironmentVariable($Name, 'Process')
+}
+
+function Get-CanonicalLeaf {
+  $value = (Get-EnvironmentValue 'KUN_INSTALLER_CANONICAL_LEAF').Trim()
+  if ([string]::IsNullOrWhiteSpace($value)) {
+    return 'Kun'
+  }
+  if ($value.IndexOfAny([IO.Path]::GetInvalidFileNameChars()) -ge 0 -or
+      $value.Contains('\') -or $value.Contains('/')) {
+    throw "The canonical application directory leaf is invalid: $value"
+  }
+  return $value
+}
+
+function Test-ProductionInstallerIdentity {
+  return [string]::Equals((Get-CanonicalLeaf), 'Kun', [StringComparison]::OrdinalIgnoreCase)
+}
+
+function Get-ApplicationIdentityFiles {
+  $configured = (Get-EnvironmentValue 'KUN_INSTALLER_APP_EXECUTABLE').Trim()
+  $values = @()
+  if (-not [string]::IsNullOrWhiteSpace($configured)) {
+    $values += $configured
+  } else {
+    $values += ((Get-CanonicalLeaf) + '.exe')
+  }
+  if (Test-ProductionInstallerIdentity) {
+    $values += @('Kun.exe', 'DeepSeek GUI.exe')
+  }
+  return @($values | Select-Object -Unique)
+}
+
+function Get-AppSpecificUninstallerFiles {
+  $configured = (Get-EnvironmentValue 'KUN_INSTALLER_PRODUCT_NAME').Trim()
+  $values = @()
+  if (-not [string]::IsNullOrWhiteSpace($configured)) {
+    $values += ('Uninstall ' + $configured + '.exe')
+  } else {
+    $values += ('Uninstall ' + (Get-CanonicalLeaf) + '.exe')
+  }
+  if (Test-ProductionInstallerIdentity) {
+    $values += @('Uninstall Kun.exe', 'Uninstall DeepSeek GUI.exe')
+  }
+  return @($values | Select-Object -Unique)
 }
 
 function Write-InstallerDiagnostic([string]$Message) {
@@ -70,6 +114,9 @@ function Test-PathWithin([string]$PathValue, [string]$RootValue) {
 }
 
 function Test-LegacyLeaf([string]$Leaf) {
+  if (-not (Test-ProductionInstallerIdentity)) {
+    return $false
+  }
   return [string]::Equals($Leaf, 'DeepSeek GUI', [StringComparison]::OrdinalIgnoreCase) -or
     [string]::Equals($Leaf, 'deepseek-gui', [StringComparison]::OrdinalIgnoreCase)
 }
@@ -80,12 +127,13 @@ function Resolve-LegacySourceTarget([string]$Source) {
   }
   $sourceLeaf = Split-Path -Leaf $Source
   $sourceParent = Split-Path -Parent $Source
+  $canonicalLeaf = Get-CanonicalLeaf
   if (Test-LegacyLeaf $sourceLeaf) {
-    return Join-Path $sourceParent 'Kun'
+    return Join-Path $sourceParent $canonicalLeaf
   }
-  if ([string]::Equals($sourceLeaf, 'Kun', [StringComparison]::OrdinalIgnoreCase) -and
+  if ([string]::Equals($sourceLeaf, $canonicalLeaf, [StringComparison]::OrdinalIgnoreCase) -and
       (Test-LegacyLeaf (Split-Path -Leaf $sourceParent))) {
-    return Join-Path (Split-Path -Parent $sourceParent) 'Kun'
+    return Join-Path (Split-Path -Parent $sourceParent) $canonicalLeaf
   }
   return ''
 }
@@ -97,69 +145,193 @@ function Resolve-InstallTarget {
     throw 'The candidate installation path is empty.'
   }
 
-  $legacySourceTarget = Resolve-LegacySourceTarget $source
-  if (-not [string]::IsNullOrWhiteSpace($legacySourceTarget)) {
-    return $legacySourceTarget
+  $candidateIsExplicit = [string]::Equals(
+    (Get-EnvironmentValue 'KUN_INSTALLER_CANDIDATE_EXPLICIT'),
+    '1',
+    [StringComparison]::Ordinal
+  )
+  if (-not $candidateIsExplicit) {
+    $legacySourceTarget = Resolve-LegacySourceTarget $source
+    if (-not [string]::IsNullOrWhiteSpace($legacySourceTarget)) {
+      return $legacySourceTarget
+    }
   }
 
+  $canonicalLeaf = Get-CanonicalLeaf
   $leaf = Split-Path -Leaf $candidate
   $parent = Split-Path -Parent $candidate
 
-  if ([string]::Equals($leaf, 'Kun', [StringComparison]::OrdinalIgnoreCase)) {
+  if ([string]::Equals($leaf, $canonicalLeaf, [StringComparison]::OrdinalIgnoreCase)) {
     $parentLeaf = Split-Path -Leaf $parent
     if (Test-LegacyLeaf $parentLeaf) {
-      return Join-Path (Split-Path -Parent $parent) 'Kun'
+      return Join-Path (Split-Path -Parent $parent) $canonicalLeaf
     }
     return $candidate
   }
 
   if (Test-LegacyLeaf $leaf) {
-    return Join-Path $parent 'Kun'
+    return Join-Path $parent $canonicalLeaf
   }
 
   if (-not [string]::IsNullOrWhiteSpace($source) -and (Test-PathEqual $source $candidate)) {
     return $candidate
   }
 
-  return Join-Path $candidate 'Kun'
+  return Join-Path $candidate $canonicalLeaf
 }
 
-function Resolve-RegisteredInstallSource {
-  $source = Normalize-FullPath (Get-EnvironmentValue 'KUN_INSTALLER_SOURCE')
+function Try-NormalizeRegisteredPath([string]$PathValue, [string]$Label) {
+  if ([string]::IsNullOrWhiteSpace($PathValue)) {
+    return ''
+  }
+  try {
+    return Normalize-FullPath $PathValue
+  } catch {
+    Write-InstallerDiagnostic "Ignoring malformed $Label metadata: $($_.Exception.Message)"
+    return ''
+  }
+}
+
+function Get-UninstallCommandSource([string]$UninstallCommand, [string]$Label) {
+  $uninstallSource = ''
+  if (-not [string]::IsNullOrWhiteSpace($uninstallCommand)) {
+    $match = [Text.RegularExpressions.Regex]::Match(
+      $uninstallCommand.Trim(),
+      '^(?:"(?<path>[^"]+)"|(?<path>.*?\.exe))(?:\s|$)',
+      [Text.RegularExpressions.RegexOptions]::IgnoreCase
+    )
+    if ($match.Success) {
+      $uninstaller = Try-NormalizeRegisteredPath $match.Groups['path'].Value "$Label uninstall command"
+      $leaf = if ([string]::IsNullOrWhiteSpace($uninstaller)) { '' } else { Split-Path -Leaf $uninstaller }
+      if (Get-AppSpecificUninstallerFiles | Where-Object {
+        [string]::Equals($_, $leaf, [StringComparison]::OrdinalIgnoreCase)
+      }) {
+        $uninstallSource = Split-Path -Parent $uninstaller
+      }
+    }
+  }
+  return $uninstallSource
+}
+
+function Resolve-RegisteredInstallSourceValues(
+  [string]$SourceValue,
+  [string]$UninstallCommand,
+  [string]$Label
+) {
+  $source = Try-NormalizeRegisteredPath $SourceValue "$Label install location"
+  $uninstallSource = Get-UninstallCommandSource $UninstallCommand $Label
+
+  $candidates = @()
+  if (-not [string]::IsNullOrWhiteSpace($source)) {
+    $candidates += $source
+    $sourceParent = Split-Path -Parent $source
+    if ([string]::Equals((Split-Path -Leaf $source), (Get-CanonicalLeaf), [StringComparison]::OrdinalIgnoreCase) -and
+        (Test-LegacyLeaf (Split-Path -Leaf $sourceParent))) {
+      $candidates += $sourceParent
+    }
+  }
+  if (-not [string]::IsNullOrWhiteSpace($uninstallSource)) {
+    $candidates += $uninstallSource
+  }
+
+  foreach ($candidate in @($candidates | Select-Object -Unique)) {
+    if (Test-RecoverableApplicationSource $candidate) {
+      return $candidate
+    }
+  }
+
+  # Keep an unverified registered path so Prepare can distinguish an empty or
+  # missing stale registration from a non-empty directory that must fail closed.
   if (-not [string]::IsNullOrWhiteSpace($source)) {
     return $source
   }
-
-  $uninstallCommand = Get-EnvironmentValue 'KUN_INSTALLER_UNINSTALL_STRING'
-  if ([string]::IsNullOrWhiteSpace($uninstallCommand)) {
-    return ''
+  if (-not [string]::IsNullOrWhiteSpace($uninstallSource)) {
+    return $uninstallSource
   }
-
-  $match = [Text.RegularExpressions.Regex]::Match(
-    $uninstallCommand.Trim(),
-    '^(?:"(?<path>[^"]+)"|(?<path>.*?\.exe))(?:\s|$)',
-    [Text.RegularExpressions.RegexOptions]::IgnoreCase
-  )
-  if (-not $match.Success) {
-    return ''
+  if (-not [string]::IsNullOrWhiteSpace($SourceValue) -or
+      -not [string]::IsNullOrWhiteSpace($UninstallCommand)) {
+    throw "The $Label registration contains no valid absolute Kun program directory."
   }
-
-  $uninstaller = Normalize-FullPath $match.Groups['path'].Value
-  $leaf = Split-Path -Leaf $uninstaller
-  if (-not $leaf.StartsWith('Uninstall ', [StringComparison]::OrdinalIgnoreCase) -and
-      -not [string]::Equals($leaf, 'old-uninstaller.exe', [StringComparison]::OrdinalIgnoreCase)) {
-    return ''
-  }
-  return Split-Path -Parent $uninstaller
+  return ''
 }
 
-function Write-ResolvedInstallTarget([string]$Target) {
+function Resolve-RegisteredInstallSource {
+  return Resolve-RegisteredInstallSourceValues `
+    (Get-EnvironmentValue 'KUN_INSTALLER_SOURCE') `
+    (Get-EnvironmentValue 'KUN_INSTALLER_UNINSTALL_STRING') `
+    'selected-scope'
+}
+
+function Resolve-AutomaticUpdateScope {
+  $runningSource = Normalize-FullPath (Get-EnvironmentValue 'KUN_INSTALLER_UPDATE_SOURCE')
+  if ([string]::IsNullOrWhiteSpace($runningSource)) {
+    throw 'The automatic update did not provide its running application directory.'
+  }
+  Assert-SafeInstallRoot $runningSource 'Running application'
+  Assert-RecoverableApplicationSource $runningSource
+
+  $matches = @()
+  foreach ($candidate in @(
+    @{
+      Scope = 'current'
+      Source = Get-EnvironmentValue 'KUN_INSTALLER_CURRENT_USER_SOURCE'
+      Uninstall = Get-EnvironmentValue 'KUN_INSTALLER_CURRENT_USER_UNINSTALL_STRING'
+    },
+    @{
+      Scope = 'all'
+      Source = Get-EnvironmentValue 'KUN_INSTALLER_ALL_USERS_SOURCE'
+      Uninstall = Get-EnvironmentValue 'KUN_INSTALLER_ALL_USERS_UNINSTALL_STRING'
+    }
+  )) {
+    try {
+      $registeredSource = Resolve-RegisteredInstallSourceValues `
+        ([string]$candidate.Source) ([string]$candidate.Uninstall) ($candidate.Scope + '-user')
+      if (-not [string]::IsNullOrWhiteSpace($registeredSource) -and
+          (Test-PathEqual $registeredSource $runningSource) -and
+          (Test-RecoverableApplicationSource $registeredSource)) {
+        $matches += $candidate.Scope
+      }
+    } catch {
+      Write-InstallerDiagnostic "Automatic update ignored invalid $($candidate.Scope) registration: $($_.Exception.Message)"
+    }
+  }
+
+  if ($matches.Count -ne 1) {
+    throw "The automatic update source did not match exactly one verified Kun registration: $runningSource"
+  }
+  return $matches[0]
+}
+
+function Resolve-TrustedAppUninstaller {
+  $source = Normalize-FullPath (Get-EnvironmentValue 'KUN_INSTALLER_SOURCE')
+  if ([string]::IsNullOrWhiteSpace($source)) {
+    return ''
+  }
+  Assert-SafeInstallRoot $source 'Uninstaller source'
+  Assert-RecoverableApplicationSource $source
+  foreach ($name in (Get-AppSpecificUninstallerFiles)) {
+    $candidate = Join-Path $source $name
+    if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+      if (Test-ReparsePoint $candidate) {
+        throw "The app-specific uninstaller is a reparse point: $candidate"
+      }
+      return Normalize-FullPath $candidate
+    }
+  }
+  return ''
+}
+
+function Write-InstallerResult([string]$Value) {
   $resultPath = Normalize-FullPath $ResultPath
   if ([string]::IsNullOrWhiteSpace($resultPath)) {
     $resultPath = Join-Path $PSScriptRoot 'kun-windows-installer-result.txt'
   }
-  [IO.File]::WriteAllBytes($resultPath, [Text.Encoding]::Unicode.GetBytes($Target))
-  [Console]::Out.Write($Target)
+  [IO.File]::WriteAllBytes($resultPath, [Text.Encoding]::Unicode.GetBytes($Value))
+  [Console]::Out.Write($Value)
+}
+
+function Write-ResolvedInstallTarget([string]$Target) {
+  Write-InstallerResult $Target
 }
 
 function Get-JournalPath {
@@ -170,14 +342,196 @@ function Get-JournalPath {
   return $journalPath
 }
 
-function Write-Journal([hashtable]$Journal) {
+function Get-NormalizedInstallMode {
+  $mode = (Get-EnvironmentValue 'KUN_INSTALLER_INSTALL_MODE').Trim()
+  if ([string]::Equals($mode, 'all', [StringComparison]::OrdinalIgnoreCase)) {
+    return 'all'
+  }
+  if ([string]::Equals($mode, 'CurrentUser', [StringComparison]::OrdinalIgnoreCase) -or
+      [string]::Equals($mode, 'current', [StringComparison]::OrdinalIgnoreCase)) {
+    return 'current'
+  }
+  throw "KUN_INSTALLER_INSTALL_MODE is invalid: $mode"
+}
+
+function Get-JournalAppGuid {
+  $appGuid = (Get-EnvironmentValue 'KUN_INSTALLER_APP_GUID').Trim()
+  if ([string]::IsNullOrWhiteSpace($appGuid)) {
+    throw 'KUN_INSTALLER_APP_GUID is required for recovery journal actions.'
+  }
+  return $appGuid
+}
+
+function Get-JournalTarget {
+  $target = Normalize-FullPath (Get-EnvironmentValue 'KUN_INSTALLER_TARGET')
+  if ([string]::IsNullOrWhiteSpace($target)) {
+    throw 'KUN_INSTALLER_TARGET is required for recovery journal actions.'
+  }
+  return $target
+}
+
+function Get-JournalAclOwnerSid([string]$Mode) {
+  if ($Mode -eq 'all') {
+    return [Security.Principal.SecurityIdentifier]::new('S-1-5-32-544')
+  }
+  return [Security.Principal.WindowsIdentity]::GetCurrent().User
+}
+
+function Convert-IdentityToSid([string]$Identity) {
+  if ($Identity -match '^S-\d(?:-\d+)+$') {
+    return [Security.Principal.SecurityIdentifier]::new($Identity)
+  }
+  return [Security.Principal.NTAccount]::new($Identity).Translate(
+    [Security.Principal.SecurityIdentifier]
+  )
+}
+
+function Test-JournalAclSecure([string]$PathValue, [string]$Mode) {
+  try {
+    if (Test-ReparsePoint $PathValue) {
+      return $false
+    }
+    $security = Get-Acl -LiteralPath $PathValue
+    $owner = Convert-IdentityToSid $security.Owner
+    $expectedOwner = Get-JournalAclOwnerSid $Mode
+    $systemSid = [Security.Principal.SecurityIdentifier]::new('S-1-5-18')
+    if (-not $owner.Equals($expectedOwner) -and -not $owner.Equals($systemSid)) {
+      return $false
+    }
+
+    $dangerousSids = @('S-1-1-0', 'S-1-5-11', 'S-1-5-32-545')
+    $writeRights = [Security.AccessControl.FileSystemRights]::Write -bor
+      [Security.AccessControl.FileSystemRights]::Modify -bor
+      [Security.AccessControl.FileSystemRights]::FullControl -bor
+      [Security.AccessControl.FileSystemRights]::ChangePermissions -bor
+      [Security.AccessControl.FileSystemRights]::TakeOwnership
+    foreach ($rule in $security.GetAccessRules(
+      $true,
+      $true,
+      [Security.Principal.SecurityIdentifier]
+    )) {
+      if ($rule.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow -and
+          $dangerousSids -contains $rule.IdentityReference.Value -and
+          (($rule.FileSystemRights -band $writeRights) -ne 0)) {
+        return $false
+      }
+    }
+    return $true
+  } catch {
+    Write-InstallerDiagnostic "Recovery journal ACL validation failed for $PathValue: $($_.Exception.Message)"
+    return $false
+  }
+}
+
+function Set-SecureJournalDirectoryAcl([string]$Directory, [string]$Mode) {
+  $ownerSid = Get-JournalAclOwnerSid $Mode
+  $administratorsSid = [Security.Principal.SecurityIdentifier]::new('S-1-5-32-544')
+  $systemSid = [Security.Principal.SecurityIdentifier]::new('S-1-5-18')
+  $security = [Security.AccessControl.DirectorySecurity]::new()
+  $security.SetAccessRuleProtection($true, $false)
+  $security.SetOwner($ownerSid)
+  $inheritance = [Security.AccessControl.InheritanceFlags]::ContainerInherit -bor
+    [Security.AccessControl.InheritanceFlags]::ObjectInherit
+  $propagation = [Security.AccessControl.PropagationFlags]::None
+  foreach ($sid in @($ownerSid, $administratorsSid, $systemSid) | Select-Object -Unique) {
+    $rule = [Security.AccessControl.FileSystemAccessRule]::new(
+      $sid,
+      [Security.AccessControl.FileSystemRights]::FullControl,
+      $inheritance,
+      $propagation,
+      [Security.AccessControl.AccessControlType]::Allow
+    )
+    [void]$security.AddAccessRule($rule)
+  }
+  Set-Acl -LiteralPath $Directory -AclObject $security
+}
+
+function Set-SecureJournalFileAcl([string]$PathValue, [string]$Mode) {
+  $ownerSid = Get-JournalAclOwnerSid $Mode
+  $administratorsSid = [Security.Principal.SecurityIdentifier]::new('S-1-5-32-544')
+  $systemSid = [Security.Principal.SecurityIdentifier]::new('S-1-5-18')
+  $security = [Security.AccessControl.FileSecurity]::new()
+  $security.SetAccessRuleProtection($true, $false)
+  $security.SetOwner($ownerSid)
+  foreach ($sid in @($ownerSid, $administratorsSid, $systemSid) | Select-Object -Unique) {
+    $rule = [Security.AccessControl.FileSystemAccessRule]::new(
+      $sid,
+      [Security.AccessControl.FileSystemRights]::FullControl,
+      [Security.AccessControl.AccessControlType]::Allow
+    )
+    [void]$security.AddAccessRule($rule)
+  }
+  Set-Acl -LiteralPath $PathValue -AclObject $security
+}
+
+function Assert-JournalStorageTrusted {
   $journalPath = Get-JournalPath
   $journalParent = Split-Path -Parent $journalPath
-  [IO.Directory]::CreateDirectory($journalParent) | Out-Null
+  $mode = Get-NormalizedInstallMode
+  $journalExists = Test-Path -LiteralPath $journalPath -PathType Leaf
+
+  if (Test-Path -LiteralPath $journalParent) {
+    if (-not (Test-Path -LiteralPath $journalParent -PathType Container) -or
+        (Test-ReparsePoint $journalParent)) {
+      throw "The recovery journal directory is not a trusted directory: $journalParent"
+    }
+    if ($journalExists -and -not (Test-JournalAclSecure $journalParent $mode)) {
+      throw "The existing recovery journal directory has an untrusted ACL: $journalParent"
+    }
+  } else {
+    [IO.Directory]::CreateDirectory($journalParent) | Out-Null
+  }
+
+  if (-not (Test-JournalAclSecure $journalParent $mode)) {
+    Set-SecureJournalDirectoryAcl $journalParent $mode
+  }
+  if (-not (Test-JournalAclSecure $journalParent $mode)) {
+    throw "The recovery journal directory ACL could not be secured: $journalParent"
+  }
+
+  if ($journalExists) {
+    if (Test-ReparsePoint $journalPath) {
+      throw "The recovery journal is a reparse point: $journalPath"
+    }
+    if (-not (Test-JournalAclSecure $journalPath $mode)) {
+      throw "The recovery journal file has an untrusted ACL: $journalPath"
+    }
+  }
+}
+
+function Assert-JournalContext($Journal) {
+  $expectedGuid = Get-JournalAppGuid
+  $expectedMode = Get-NormalizedInstallMode
+  $expectedTarget = Get-JournalTarget
+  if ($null -eq $Journal.PSObject.Properties['AppGuid'] -or
+      -not [string]::Equals([string]$Journal.AppGuid, $expectedGuid, [StringComparison]::OrdinalIgnoreCase)) {
+    throw 'The recovery journal application identity does not match this installer.'
+  }
+  if ($null -eq $Journal.PSObject.Properties['InstallMode'] -or
+      -not [string]::Equals([string]$Journal.InstallMode, $expectedMode, [StringComparison]::Ordinal)) {
+    throw 'The recovery journal installation mode does not match this installer transaction.'
+  }
+  if ($null -eq $Journal.PSObject.Properties['Target'] -or
+      -not (Test-PathEqual ([string]$Journal.Target) $expectedTarget)) {
+    throw 'The recovery journal target does not match this installer transaction.'
+  }
+}
+
+function Write-Journal([hashtable]$Journal) {
+  Assert-JournalStorageTrusted
+  $journalPath = Get-JournalPath
   $temporaryPath = "$journalPath.tmp"
+  if (Test-Path -LiteralPath $temporaryPath) {
+    Remove-Item -LiteralPath $temporaryPath -Force
+  }
+  $Journal.SchemaVersion = 3
+  $Journal.AppGuid = Get-JournalAppGuid
+  $Journal.InstallMode = Get-NormalizedInstallMode
+  $Journal.Target = Get-JournalTarget
   $Journal.UpdatedAt = [DateTime]::UtcNow.ToString('o')
   $Journal | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $temporaryPath -Encoding UTF8
   Move-Item -LiteralPath $temporaryPath -Destination $journalPath -Force
+  Set-SecureJournalFileAcl $journalPath (Get-NormalizedInstallMode)
 }
 
 function Read-Journal {
@@ -185,12 +539,16 @@ function Read-Journal {
   if (-not (Test-Path -LiteralPath $journalPath -PathType Leaf)) {
     return $null
   }
-  return Get-Content -LiteralPath $journalPath -Raw | ConvertFrom-Json
+  Assert-JournalStorageTrusted
+  $journal = Get-Content -LiteralPath $journalPath -Raw | ConvertFrom-Json
+  Assert-JournalContext $journal
+  return $journal
 }
 
 function Remove-Journal {
   $journalPath = Get-JournalPath
   if (Test-Path -LiteralPath $journalPath) {
+    Assert-JournalStorageTrusted
     Remove-Item -LiteralPath $journalPath -Force
   }
   $parent = Split-Path -Parent $journalPath
@@ -310,16 +668,63 @@ function Assert-SafeInstallRoot([string]$PathValue, [string]$Label) {
   Assert-NoReparsePathComponents $normalized $Label
 }
 
+function Assert-TargetVolumeReadyAndWritable([string]$Target) {
+  $targetPath = Normalize-FullPath $Target
+  $root = [IO.Path]::GetPathRoot($targetPath)
+  if ([string]::IsNullOrWhiteSpace($root) -or -not (Test-Path -LiteralPath $root -PathType Container)) {
+    throw "The target volume is unavailable: $root"
+  }
+
+  if ($root -match '^[A-Za-z]:\\$') {
+    try {
+      $drive = [IO.DriveInfo]::new($root)
+      if (-not $drive.IsReady) {
+        throw "The target volume is not ready: $root"
+      }
+    } catch {
+      throw "The target volume is not ready: $root. $($_.Exception.Message)"
+    }
+  }
+
+  $probeDirectory = $targetPath
+  while (-not (Test-Path -LiteralPath $probeDirectory)) {
+    $parent = Split-Path -Parent $probeDirectory
+    if ([string]::IsNullOrWhiteSpace($parent) -or (Test-PathEqual $parent $probeDirectory)) {
+      throw "No existing target directory is available for a write probe: $targetPath"
+    }
+    $probeDirectory = $parent
+  }
+  if (-not (Test-Path -LiteralPath $probeDirectory -PathType Container)) {
+    throw "The nearest existing target ancestor is not a directory: $probeDirectory"
+  }
+
+  $probePath = Join-Path $probeDirectory ('.kun-installer-write-probe-' + [Guid]::NewGuid().ToString('N') + '.tmp')
+  try {
+    $stream = [IO.File]::Open(
+      $probePath,
+      [IO.FileMode]::CreateNew,
+      [IO.FileAccess]::Write,
+      [IO.FileShare]::None
+    )
+    $stream.Dispose()
+    Remove-Item -LiteralPath $probePath -Force
+  } catch {
+    if (Test-Path -LiteralPath $probePath) {
+      Remove-Item -LiteralPath $probePath -Force -ErrorAction SilentlyContinue
+    }
+    throw "The target directory is not writable: $probeDirectory. $($_.Exception.Message)"
+  }
+}
+
 function Test-KnownApplicationEntry([IO.FileSystemInfo]$Entry) {
   if ($Entry.PSIsContainer) {
     return @('resources', 'locales', 'bin') -contains $Entry.Name.ToLowerInvariant()
   }
 
-  $knownFiles = @(
-    'kun.exe',
-    'deepseek gui.exe',
-    'uninstall kun.exe',
-    'uninstall deepseek gui.exe',
+  $knownFiles = @(@(
+    Get-ApplicationIdentityFiles
+    Get-AppSpecificUninstallerFiles
+  ) | ForEach-Object { $_.ToLowerInvariant() }) + @(
     'uninstallericon.ico',
     'chrome_100_percent.pak',
     'chrome_200_percent.pak',
@@ -392,7 +797,10 @@ function Test-AppOwnedProcessPath([string]$ExecutablePath, [string[]]$Roots) {
     }
 
     $relativeLower = $relative.ToLowerInvariant()
-    if ($relativeLower -eq 'kun.exe' -or $relativeLower -eq 'deepseek gui.exe' -or
+    $identityMatch = Get-ApplicationIdentityFiles | Where-Object {
+      [string]::Equals($_, $relative, [StringComparison]::OrdinalIgnoreCase)
+    }
+    if ($identityMatch -or
         $relativeLower.StartsWith('resources\') -or $relativeLower.StartsWith('bin\')) {
       return $true
     }
@@ -436,28 +844,94 @@ function Stop-InstallRootProcesses {
   Stop-AppProcesses @($root)
 }
 
-function Assert-ApplicationSourceIdentity([string]$Source) {
-  $identityFiles = @('Kun.exe', 'DeepSeek GUI.exe')
-  if (-not ($identityFiles | Where-Object {
+function Test-ApplicationSourceIdentity([string]$Source) {
+  if ([string]::IsNullOrWhiteSpace($Source) -or
+      -not (Test-Path -LiteralPath $Source -PathType Container)) {
+    return $false
+  }
+  $identityFiles = Get-ApplicationIdentityFiles
+  return [bool]($identityFiles | Where-Object {
     Test-Path -LiteralPath (Join-Path $Source $_) -PathType Leaf
-  })) {
+  })
+}
+
+function Assert-ApplicationSourceIdentity([string]$Source) {
+  if (-not (Test-ApplicationSourceIdentity $Source)) {
     throw "The registered source has no application identity executable: $Source"
+  }
+}
+
+function Test-PackagedApplicationPayload([string]$Source) {
+  if ([string]::IsNullOrWhiteSpace($Source)) {
+    return $false
+  }
+  $packagedPayload = Join-Path (Join-Path $Source 'resources') 'app.asar'
+  return (Test-Path -LiteralPath $packagedPayload -PathType Leaf)
+}
+
+function Assert-PackagedApplicationPayload([string]$Source) {
+  if (-not (Test-PackagedApplicationPayload $Source)) {
+    throw "The external current-user installation source is not a recognized packaged Kun installation: $Source"
+  }
+}
+
+function Test-AppSpecificUninstaller([string]$Source) {
+  if ([string]::IsNullOrWhiteSpace($Source)) {
+    return $false
+  }
+  return [bool](Get-AppSpecificUninstallerFiles | Where-Object {
+    Test-Path -LiteralPath (Join-Path $Source $_) -PathType Leaf
+  })
+}
+
+function Test-RecoverableApplicationSource([string]$Source) {
+  if (Test-ApplicationSourceIdentity $Source) {
+    return $true
+  }
+  return (Test-AppSpecificUninstaller $Source) -and (Test-PackagedApplicationPayload $Source)
+}
+
+function Assert-RecoverableApplicationSource([string]$Source) {
+  if (-not (Test-RecoverableApplicationSource $Source)) {
+    throw (
+      "The registered source contains files but is not a verifiable Kun installation: $Source. " +
+      'No files or registration were changed.'
+    )
   }
 }
 
 function Assert-TrustedSecondarySource([string]$Source) {
   $profile = Normalize-FullPath $env:USERPROFILE
-  if ([string]::IsNullOrWhiteSpace($profile) -or -not (Test-PathWithin $Source $profile) -or
-      (Test-PathEqual $Source $profile)) {
-    throw "The current-user installation source is outside the current user profile: $Source"
+  if (-not [string]::IsNullOrWhiteSpace($profile) -and (Test-PathWithin $Source $profile) -and
+      -not (Test-PathEqual $Source $profile)) {
+    return
   }
+
+  Assert-SafeInstallRoot $Source 'External current-user installation source'
+  if (@(Get-ChildItem -LiteralPath $Source -Force).Count -eq 0) {
+    return
+  }
+  Assert-RecoverableApplicationSource $Source
+  Assert-PackagedApplicationPayload $Source
 }
 
-function Get-InstallSources {
+function Get-InstallSources(
+  [bool]$ValidateSecondary = $true,
+  [bool]$IncludeMissingSecondary = $false
+) {
   $primary = Normalize-FullPath (Get-EnvironmentValue 'KUN_INSTALLER_SOURCE')
   $secondary = Normalize-FullPath (Get-EnvironmentValue 'KUN_INSTALLER_SECONDARY_SOURCE')
   if (-not [string]::IsNullOrWhiteSpace($secondary)) {
-    Assert-TrustedSecondarySource $secondary
+    if (-not (Test-Path -LiteralPath $secondary)) {
+      Write-InstallerDiagnostic "Ignoring missing current-user installation source: $secondary"
+      if (-not $IncludeMissingSecondary) {
+        $secondary = ''
+      }
+    } elseif (-not (Test-Path -LiteralPath $secondary -PathType Container)) {
+      throw "The current-user installation source exists but is not a directory: $secondary"
+    } elseif ($ValidateSecondary) {
+      Assert-TrustedSecondarySource $secondary
+    }
   }
   $sources = @($primary, $secondary)
   $normalizedSources = @()
@@ -495,6 +969,9 @@ function Get-ValidatedJournalRecord($Record) {
 
   Assert-SafeInstallRoot $source 'Journal source'
   Assert-SafeInstallRoot $target 'Journal target'
+  if (-not (Test-PathEqual $target (Get-JournalTarget))) {
+    throw "The preservation journal record target does not match the current transaction: $target"
+  }
   if (-not (Test-PathEqual $stash (Get-PreservationRoot $source))) {
     throw "The preservation journal references an unexpected recovery directory: $stash"
   }
@@ -561,7 +1038,7 @@ function Invoke-RestoreJournal {
 
   if ($remainingRecords.Count -gt 0) {
     $updated = @{
-      SchemaVersion = 2
+      SchemaVersion = 3
       Phase = 'restore-conflict'
       Records = $remainingRecords
     }
@@ -576,7 +1053,11 @@ function Invoke-RestoreJournal {
 function Invoke-Prepare {
   Invoke-RestoreJournal
 
-  $sources = @(Get-InstallSources)
+  $primarySource = Normalize-FullPath (Get-EnvironmentValue 'KUN_INSTALLER_SOURCE')
+  $secondarySource = Normalize-FullPath (Get-EnvironmentValue 'KUN_INSTALLER_SECONDARY_SOURCE')
+  $registeredSources = @(Get-InstallSources $true $true)
+  $sources = @()
+  [int]$staleSourceMask = 0
   $target = Normalize-FullPath (Get-EnvironmentValue 'KUN_INSTALLER_TARGET')
   if ([string]::IsNullOrWhiteSpace($target)) {
     throw 'KUN_INSTALLER_TARGET is required.'
@@ -586,8 +1067,35 @@ function Invoke-Prepare {
   if ((Test-Path -LiteralPath $target) -and -not (Test-Path -LiteralPath $target -PathType Container)) {
     throw "The target exists but is not a directory: $target"
   }
-  foreach ($source in $sources) {
+  Assert-TargetVolumeReadyAndWritable $target
+  foreach ($source in $registeredSources) {
     Assert-SafeInstallRoot $source 'Source'
+    if (-not (Test-Path -LiteralPath $source)) {
+      if (Test-PathEqual $source $primarySource) {
+        $staleSourceMask = $staleSourceMask -bor 1
+      }
+      if (Test-PathEqual $source $secondarySource) {
+        $staleSourceMask = $staleSourceMask -bor 2
+      }
+      continue
+    }
+    if (-not (Test-Path -LiteralPath $source -PathType Container)) {
+      throw "The registered source exists but is not a directory: $source"
+    }
+
+    $entries = @(Get-ChildItem -LiteralPath $source -Force)
+    if ($entries.Count -eq 0) {
+      if (Test-PathEqual $source $primarySource) {
+        $staleSourceMask = $staleSourceMask -bor 1
+      }
+      if (Test-PathEqual $source $secondarySource) {
+        $staleSourceMask = $staleSourceMask -bor 2
+      }
+      continue
+    }
+
+    Assert-RecoverableApplicationSource $source
+    $sources += $source
   }
 
   $targetIsSource = $sources | Where-Object { Test-PathEqual $_ $target }
@@ -600,14 +1108,7 @@ function Invoke-Prepare {
 
   $preparedSources = @()
   foreach ($source in $sources) {
-    if (-not (Test-Path -LiteralPath $source -PathType Container)) {
-      continue
-    }
-    Assert-ApplicationSourceIdentity $source
     $entries = @(Get-ChildItem -LiteralPath $source -Force)
-    if ($entries.Count -eq 0) {
-      continue
-    }
     if (-not ($entries | Where-Object { Test-KnownApplicationEntry $_ })) {
       throw "The registered source has no recognized application payload: $source"
     }
@@ -634,7 +1135,7 @@ function Invoke-Prepare {
   Stop-AppProcesses @($sources + $target)
 
   $journal = @{
-    SchemaVersion = 2
+    SchemaVersion = 3
     Phase = 'preserving'
     Records = @()
   }
@@ -664,6 +1165,7 @@ function Invoke-Prepare {
   if ($journal.Records.Count -gt 0) {
     Write-Journal $journal
   }
+  Write-InstallerResult ([string]$staleSourceMask)
 }
 
 function Assert-FallbackCleanupSource([string]$Source) {
@@ -712,7 +1214,25 @@ function Invoke-FallbackCleanup {
 
 function Remove-EmptyLegacyContainers {
   $candidates = @()
-  foreach ($source in @(Get-InstallSources)) {
+  $primary = Normalize-FullPath (Get-EnvironmentValue 'KUN_INSTALLER_SOURCE')
+  $secondary = Normalize-FullPath (Get-EnvironmentValue 'KUN_INSTALLER_SECONDARY_SOURCE')
+  $primaryIsStale = [string]::Equals(
+    (Get-EnvironmentValue 'KUN_INSTALLER_PRIMARY_SOURCE_STALE'),
+    '1',
+    [StringComparison]::Ordinal
+  )
+  $secondaryIsStale = [string]::Equals(
+    (Get-EnvironmentValue 'KUN_INSTALLER_SECONDARY_SOURCE_STALE'),
+    '1',
+    [StringComparison]::Ordinal
+  )
+  # Prepare performs the positive secondary-source validation before cleanup.
+  # Restore can run after the packaged payload has already been removed.
+  foreach ($source in @(Get-InstallSources $false)) {
+    if (($primaryIsStale -and (Test-PathEqual $source $primary)) -or
+        ($secondaryIsStale -and (Test-PathEqual $source $secondary))) {
+      continue
+    }
     $candidates += $source
     $parent = Split-Path -Parent $source
     if (Test-LegacyLeaf (Split-Path -Leaf $parent)) {
@@ -730,13 +1250,24 @@ function Remove-EmptyLegacyContainers {
 }
 
 function Update-UserPath {
-  $sources = @(Get-InstallSources)
+  # Missing secondary sources do not participate in filesystem migration, but
+  # their stale bin entries should still be removed from the user PATH.
+  $sources = @(Get-InstallSources $false $true)
   $target = Normalize-FullPath (Get-EnvironmentValue 'KUN_INSTALLER_TARGET')
   if ([string]::IsNullOrWhiteSpace($target)) {
     throw 'KUN_INSTALLER_TARGET is required for PATH reconciliation.'
   }
 
-  $sourceBins = @($sources | ForEach-Object { Join-Path $_ 'bin' })
+  $pathSources = @()
+  foreach ($source in $sources) {
+    $pathSources += $source
+    if (Test-LegacyLeaf (Split-Path -Leaf $source)) {
+      # Older assisted installers could register or add PATH for the falsely
+      # nested child even though the application payload lived in the parent.
+      $pathSources += Join-Path $source (Get-CanonicalLeaf)
+    }
+  }
+  $sourceBins = @($pathSources | Select-Object -Unique | ForEach-Object { Join-Path $_ 'bin' })
   $targetBin = Join-Path $target 'bin'
   $current = [Environment]::GetEnvironmentVariable('Path', 'User')
   $parts = @($current -split ';' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
@@ -763,6 +1294,12 @@ try {
     }
     'ResolveSource' {
       Write-ResolvedInstallTarget (Resolve-RegisteredInstallSource)
+    }
+    'ResolveUpdateScope' {
+      Write-InstallerResult (Resolve-AutomaticUpdateScope)
+    }
+    'ResolveUninstaller' {
+      Write-InstallerResult (Resolve-TrustedAppUninstaller)
     }
     'StopProcesses' {
       Stop-InstallRootProcesses

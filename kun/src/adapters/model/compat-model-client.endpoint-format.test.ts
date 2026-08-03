@@ -337,12 +337,17 @@ describe('CompatModelClient per-model endpointFormat', () => {
     }
   })
 
-  it('uses stable thread-scoped prompt cache keys only for Codex Responses', () => {
+  it('uses stable thread-scoped prompt cache keys for Codex and GPT-5.6 Responses', () => {
     const codecs = createCompatRequestCodecs()
-    const buildResponses = (threadId: string, isCodex: boolean, isCodexLite = false) =>
+    const buildResponses = (
+      model: string,
+      threadId: string,
+      isCodex: boolean,
+      isCodexLite = false
+    ) =>
       codecs.build({
-        request: { ...request('gpt-5.6-sol'), threadId },
-        model: 'gpt-5.6-sol',
+        request: { ...request(model), threadId },
+        model,
         messages: [],
         tools: [],
         stream: true,
@@ -355,18 +360,50 @@ describe('CompatModelClient per-model endpointFormat', () => {
         codexNativeImageGeneration: false
       })
 
-    const first = buildResponses('thread-a', true)
-    const repeated = buildResponses('thread-a', true)
-    const isolated = buildResponses('thread-b', true)
-    const lite = buildResponses('thread-a', true, true)
-    const compatible = buildResponses('thread-a', false)
+    const first = buildResponses('gpt-5.5-codex', 'thread-a', true)
+    const repeated = buildResponses('gpt-5.5-codex', 'thread-a', true)
+    const isolated = buildResponses('gpt-5.5-codex', 'thread-b', true)
+    const lite = buildResponses('gpt-5.6-sol', 'thread-a', true, true)
+    const compatibleFirst = buildResponses('gpt-5.6-sol', 'thread-a', false)
+    const compatibleRepeated = buildResponses('gpt-5.6-sol', 'thread-a', false)
+    const compatibleIsolated = buildResponses('gpt-5.6-sol', 'thread-b', false)
+    const providerQualified = buildResponses('openai/gpt-5.6-terra', 'thread-a', false)
 
     expect(first.prompt_cache_key).toBe('thread-a')
     expect(repeated.prompt_cache_key).toBe(first.prompt_cache_key)
     expect(isolated.prompt_cache_key).toBe('thread-b')
     expect(isolated.prompt_cache_key).not.toBe(first.prompt_cache_key)
     expect(lite.prompt_cache_key).toBe('thread-a')
-    expect(compatible).not.toHaveProperty('prompt_cache_key')
+    expect(compatibleFirst.prompt_cache_key).toBe('thread-a')
+    expect(compatibleRepeated.prompt_cache_key).toBe(compatibleFirst.prompt_cache_key)
+    expect(compatibleIsolated.prompt_cache_key).toBe('thread-b')
+    expect(compatibleIsolated.prompt_cache_key).not.toBe(compatibleFirst.prompt_cache_key)
+    expect(providerQualified.prompt_cache_key).toBe('thread-a')
+  })
+
+  it('keeps custom prompt cache routing scoped to GPT-5.6 Responses requests', () => {
+    const codecs = createCompatRequestCodecs()
+    const build = (
+      model: string,
+      endpointFormat: 'chat_completions' | 'responses' | 'messages'
+    ) => codecs.build({
+      request: request(model),
+      model,
+      messages: [],
+      tools: [],
+      stream: true,
+      endpointFormat,
+      baseUrl: 'https://provider.example/v1',
+      isCodex: false,
+      isCodexLite: false,
+      codexNativeImageGeneration: false
+    })
+
+    expect(build('gpt-5.6-sol', 'responses').prompt_cache_key).toBe('t1')
+    expect(build('gpt-5.6-sol', 'chat_completions')).not.toHaveProperty('prompt_cache_key')
+    expect(build('gpt-5.6-sol', 'messages')).not.toHaveProperty('prompt_cache_key')
+    expect(build('gpt-5.5-codex', 'responses')).not.toHaveProperty('prompt_cache_key')
+    expect(build('gpt-5.60-preview', 'responses')).not.toHaveProperty('prompt_cache_key')
   })
 
   it('routes an override model to the Anthropic Messages endpoint while others use chat completions', async () => {

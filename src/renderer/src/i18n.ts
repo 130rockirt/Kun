@@ -10,14 +10,17 @@ const englishGraphResources = Object.fromEntries(
 )
 const englishGraphSettingsResources = Object.fromEntries(
   Object.entries(enSettings).filter(([key]) =>
-    key.startsWith('graphSettings') || key.startsWith('storageRelocation')
+    key.startsWith('graphSettings') ||
+    key.startsWith('storageRelocation') ||
+    key.startsWith('modelRoutes')
   )
 )
 
 /**
  * Graph Mode launches with complete English and Chinese copy. Other active
- * locales receive an explicit English Graph/Storage bundle so controls never
- * render raw translation keys while native translations can be added incrementally.
+ * locales receive an explicit English Graph/Storage/Model Routes bundle so
+ * controls never render raw translation keys while native translations can be
+ * added incrementally.
  */
 export function withGraphCommonFallback<T extends Record<string, unknown>>(locale: T): T {
   return {
@@ -29,10 +32,21 @@ export function withGraphCommonFallback<T extends Record<string, unknown>>(local
 }
 
 export function withGraphSettingsFallback<T extends Record<string, unknown>>(locale: T): T {
-  return {
+  const merged = {
     ...locale,
     ...Object.fromEntries(
       Object.entries(englishGraphSettingsResources).filter(([key]) => !(key in locale))
+    )
+  }
+
+  return {
+    ...Object.fromEntries(
+      Object.keys(enSettings)
+        .filter((key) => key in merged)
+        .map((key) => [key, merged[key]])
+    ),
+    ...Object.fromEntries(
+      Object.entries(merged).filter(([key]) => !(key in enSettings))
     )
   } as T
 }

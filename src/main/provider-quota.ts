@@ -108,14 +108,14 @@ export function classifyProviderQuotaProbe(
       dashboardUrl: 'https://cursor.com/dashboard?tab=usage'
     }
   }
-  if (stableId === 'gemini-subscription' && provider.kind === 'antigravity-cli') {
+  if (provider.kind === 'antigravity-cli') {
     return {
       kind: 'antigravity-subscription',
       source: 'Google Antigravity quota API',
       dashboardUrl: 'https://antigravity.google'
     }
   }
-  if (stableId === 'gemini-cli-subscription' && provider.kind === 'gemini-cli-api') {
+  if (provider.kind === 'gemini-cli-api') {
     return {
       kind: 'gemini-cli-subscription',
       source: 'Google Gemini CLI quota API',

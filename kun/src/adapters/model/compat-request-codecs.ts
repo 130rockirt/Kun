@@ -80,6 +80,12 @@ export type CompatRequestCodecDeps = {
 const DEFAULT_MESSAGES_MAX_TOKENS = 8_192
 const DEFAULT_MESSAGES_REASONING_MAX_TOKENS = 32_768
 
+function isGpt56FamilyModel(model: string): boolean {
+  const normalized = model.trim().toLowerCase()
+  const basename = normalized.split('/').at(-1) ?? normalized
+  return /^gpt-5\.6(?:-|$)/.test(basename)
+}
+
 export class CompatRequestCodecs {
   constructor(private readonly deps: CompatRequestCodecDeps) {}
 
@@ -181,6 +187,7 @@ export class CompatRequestCodecs {
         ]
       : []
     const requiredToolChoice = namedToolChoice(input)
+    const useThreadPromptCacheKey = input.isCodex || isGpt56FamilyModel(input.model)
     const body: Record<string, unknown> = {
       model: input.model,
       stream: input.stream,
@@ -194,7 +201,7 @@ export class CompatRequestCodecs {
             parallel_tool_calls: false
           }
         : input.isCodex ? { instructions: instructions || ' ', store: false } : {}),
-      ...(input.isCodex ? { prompt_cache_key: input.request.threadId } : {})
+      ...(useThreadPromptCacheKey ? { prompt_cache_key: input.request.threadId } : {})
     }
     if (input.maxTokens !== undefined && !input.isCodex) body.max_output_tokens = input.maxTokens
     if (

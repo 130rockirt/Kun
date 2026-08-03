@@ -7,11 +7,13 @@ import { buildRuntimeCapabilityManifest } from '../contracts/capabilities.js'
 import { modelCapabilitiesForModel } from '../loop/model-context-profile.js'
 import {
   ensureSharedRuntime,
+  inspectSharedRuntime,
   probeRuntimeDiscovery,
   resolveSharedRuntime,
   runRuntimeCommand,
   stopSharedRuntime
 } from './shared-runtime.js'
+import type { ServiceManagerConnection } from '../manager/manager-client.js'
 
 function record(overrides: Partial<RuntimeDiscoveryRecord> = {}): RuntimeDiscoveryRecord {
   return {
@@ -27,6 +29,25 @@ function record(overrides: Partial<RuntimeDiscoveryRecord> = {}): RuntimeDiscove
     serviceVersion: '0.1.0',
     launchMode: 'shared',
     ...overrides
+  }
+}
+
+function managerConnection(dataDir: string): ServiceManagerConnection {
+  return {
+    discovery: {
+      version: 1,
+      protocolVersion: 1,
+      instanceId: 'manager-a',
+      pid: process.pid,
+      startedAt: '2026-07-22T00:00:00.000Z',
+      host: '127.0.0.1',
+      port: 18700,
+      baseUrl: 'http://127.0.0.1:18700',
+      managerToken: 'manager-secret',
+      serviceVersion: '0.1.0',
+      dataDir,
+      settingsPath: join(dataDir, 'kun-settings.json')
+    }
   }
 }
 
@@ -104,6 +125,112 @@ describe('shared runtime discovery validation', () => {
         instanceId: discovery.instanceId,
         pid: discovery.pid
       })
+    } finally {
+      await rm(dataDir, { recursive: true, force: true })
+    }
+  })
+
+  it('reuses a healthy manager owner when filesystem discovery is missing', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'kun-manager-runtime-owner-'))
+    const buildId = 'a'.repeat(64)
+    const managed = record({ buildId, flavor: 'production' })
+    const manager = managerConnection(dataDir)
+    const capabilities = buildRuntimeCapabilityManifest({
+      model: modelCapabilitiesForModel('fixture')
+    })
+    const fetchMock = vi.fn(async (url: string | URL | Request) => {
+      const target = String(url)
+      if (target === `${manager.discovery.baseUrl}/v1/runtimes/production`) {
+        return Response.json({ registration: {
+          flavor: 'production',
+          instanceId: managed.instanceId,
+          pid: managed.pid,
+          startedAt: managed.startedAt,
+          host: managed.host,
+          port: managed.port,
+          baseUrl: managed.baseUrl,
+          runtimeToken: managed.runtimeToken,
+          buildId
+        } })
+      }
+      if (target === `${managed.baseUrl}/v1/runtime/info`) {
+        return Response.json({
+          instanceId: managed.instanceId,
+          serviceVersion: managed.serviceVersion,
+          buildId,
+          launchMode: 'shared',
+          host: managed.host,
+          port: managed.port,
+          dataDir,
+          model: 'fixture',
+          approvalPolicy: 'on-request',
+          sandboxMode: 'workspace-write',
+          insecure: false,
+          startedAt: managed.startedAt,
+          pid: managed.pid,
+          capabilities
+        })
+      }
+      return new Response('', { status: 404 })
+    })
+    try {
+      const connection = await ensureSharedRuntime({
+        dataDir,
+        manager,
+        expectedBuildId: buildId,
+        fetch: fetchMock as unknown as typeof fetch,
+        launch: {
+          command: process.execPath,
+          args: ['-e', 'process.exit(99)'],
+          runAsNode: false
+        }
+      })
+
+      expect(connection.discovery).toMatchObject({
+        instanceId: managed.instanceId,
+        pid: managed.pid,
+        buildId
+      })
+      expect(fetchMock).toHaveBeenCalledTimes(2)
+      await expect(readFile(join(dataDir, 'runtime.json'), 'utf8')).rejects.toMatchObject({
+        code: 'ENOENT'
+      })
+    } finally {
+      await rm(dataDir, { recursive: true, force: true })
+    }
+  })
+
+  it('removes an exact dead manager registration before discovery fallback', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'kun-manager-runtime-stale-'))
+    const manager = managerConnection(dataDir)
+    const deadPid = 2_147_483_647
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const target = String(url)
+      if (target === `${manager.discovery.baseUrl}/v1/runtimes/production`) {
+        return Response.json({ registration: {
+          flavor: 'production',
+          instanceId: 'runtime-dead',
+          pid: deadPid,
+          startedAt: '2026-07-22T00:00:00.000Z',
+          host: '127.0.0.1',
+          port: 18899,
+          baseUrl: 'http://127.0.0.1:18899',
+          runtimeToken: 'secret'
+        } })
+      }
+      if (
+        target === `${manager.discovery.baseUrl}/v1/runtimes/production/runtime-dead` &&
+        init?.method === 'DELETE'
+      ) return Response.json({ removed: true })
+      return new Response('', { status: 404 })
+    })
+    try {
+      await expect(inspectSharedRuntime(
+        dataDir,
+        fetchMock as unknown as typeof fetch,
+        { runtimeFlavor: 'production', manager }
+      )).resolves.toBeNull()
+      expect(fetchMock).toHaveBeenCalledTimes(2)
     } finally {
       await rm(dataDir, { recursive: true, force: true })
     }
@@ -188,7 +315,8 @@ const server = http.createServer((req, res) => {
   }
   if (req.url === '/v1/runtime/shutdown' && req.method === 'POST') {
     res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ ok: true }));
-    setTimeout(() => server.close(() => { try { fs.unlinkSync(path.join(dataDir, 'runtime.json')); } catch {} process.exit(0); }), 10);
+    try { fs.unlinkSync(path.join(dataDir, 'runtime.json')); } catch {}
+    setTimeout(() => { server.close(); process.exit(0); }, 250);
     return;
   }
   if (req.url === '/crash' && req.method === 'POST') {
@@ -248,7 +376,9 @@ server.listen(0, '127.0.0.1', () => {
       const recovered = await ensureSharedRuntime(launch)
       expect(recovered.discovery.instanceId).not.toBe(connection.discovery.instanceId)
       expect(recovered.discovery.pid).not.toBe(connection.discovery.pid)
+      const stopStartedAt = Date.now()
       expect(await stopSharedRuntime(dataDir)).toBe(true)
+      expect(Date.now() - stopStartedAt).toBeGreaterThanOrEqual(150)
     } finally {
       await stopSharedRuntime(dataDir).catch(() => undefined)
       await rm(dataDir, { recursive: true, force: true })

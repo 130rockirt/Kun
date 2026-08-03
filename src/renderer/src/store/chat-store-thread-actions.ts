@@ -46,7 +46,7 @@ import type {
   ChatStoreSet,
   WriteAssistantMessageContext
 } from './chat-store-types'
-import { canGuideQueuedMessage } from './queued-message-guidance'
+import { queuedMessageGuidancePayload } from './queued-message-guidance'
 import {
   isPendingQueuedMessage,
   queuedMessagesForThread,
@@ -876,7 +876,8 @@ export function createThreadActions(
     const state = get()
     const message = state.queuedMessages.find((candidate) => candidate.id === id)
     if (!message) return false
-    if (!canGuideQueuedMessage(message)) {
+    const guidance = queuedMessageGuidancePayload(message)
+    if (!guidance) {
       set({ error: i18n.t('common:guideQueuedMessageTextOnly') })
       return false
     }
@@ -911,7 +912,7 @@ export function createThreadActions(
         ? await useGraphStore.getState().steerSourceTurn(
             guidanceThreadId,
             guidanceTurnId,
-            message.text
+            guidance.text
           )
         : false
       if (!graphSteered) {
@@ -922,8 +923,8 @@ export function createThreadActions(
         await provider.steerUserMessage(
           guidanceThreadId,
           guidanceTurnId,
-          message.text,
-          message.displayText ? { displayText: message.displayText } : undefined
+          guidance.text,
+          guidance.displayText ? { displayText: guidance.displayText } : undefined
         )
       }
       const requestCompletedAt = Date.now()
@@ -943,12 +944,12 @@ export function createThreadActions(
         if (!stillQueued) return { error: null }
         const runtimeMessageAlreadyVisible = hasRuntimeUserBlockForGuidance(
           current.blocks,
-          message,
+          guidance,
           guidanceTurnId,
           requestStartedAt,
           requestCompletedAt
         )
-        const displayText = message.displayText ?? message.text
+        const displayText = guidance.displayText ?? guidance.text
         return {
           queuedMessages: current.queuedMessages.filter((candidate) => candidate.id !== id),
           blocks: runtimeMessageAlreadyVisible
@@ -962,8 +963,8 @@ export function createThreadActions(
                   createdAt: new Date(requestCompletedAt).toISOString(),
                   text: displayText,
                   ...(message.modelLabel ? { modelLabel: message.modelLabel } : {}),
-                  ...(message.displayText && message.displayText !== message.text
-                    ? { meta: { displayText: message.displayText } }
+                  ...(guidance.displayText && guidance.displayText !== guidance.text
+                    ? { meta: { displayText: guidance.displayText } }
                     : {})
                 }
               ],

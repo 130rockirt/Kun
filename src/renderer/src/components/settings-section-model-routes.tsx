@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type DragEvent, type ReactElement } from 'react'
+import type { TFunction } from 'i18next'
+import { useTranslation } from 'react-i18next'
 import type { ModelProviderSettingsV1, ModelRoutePoolV1, ModelRouteStrategy } from '@shared/app-settings'
 import type { KunRuntimeSettingsSyncStatusPayload } from '@shared/kun-gui-api'
 import {
@@ -52,28 +54,28 @@ type RoutePoolTestRecord = {
 type RouteTestTarget = { targetId: string; providerId: string; modelId: string }
 type ModelRouteSettingsTab = 'gateway' | 'models' | 'resilience' | 'monitoring'
 
-const strategies: Array<{ id: ModelRouteStrategy; label: string }> = [
-  { id: 'priority', label: '优先级故障转移' },
-  { id: 'round-robin', label: '轮询' },
-  { id: 'weighted-round-robin', label: '加权轮询' },
-  { id: 'least-latency', label: '最低延迟' },
-  { id: 'adaptive', label: '稳定性优先自适应' }
-]
+const strategyTranslationKeys: Record<ModelRouteStrategy, string> = {
+  priority: 'modelRoutes.strategyPriority',
+  'round-robin': 'modelRoutes.strategyRoundRobin',
+  'weighted-round-robin': 'modelRoutes.strategyWeightedRoundRobin',
+  'least-latency': 'modelRoutes.strategyLeastLatency',
+  adaptive: 'modelRoutes.strategyAdaptive'
+}
 
-function EmptyRoutePoolState({ onAdd }: { onAdd: () => void }): ReactElement {
+function EmptyRoutePoolState({ onAdd, t }: { onAdd: () => void; t: TFunction }): ReactElement {
   return (
     <div className="grid min-h-[360px] place-items-center text-center">
       <div>
         <Route className="mx-auto h-10 w-10 text-ds-faint" />
-        <h3 className="mt-3 text-[14px] font-semibold text-ds-ink">添加第一个路由模型</h3>
-        <p className="mt-1 text-[12px] text-ds-faint">一个本地中转供应商可以包含多个公开模型。</p>
+        <h3 className="mt-3 text-[14px] font-semibold text-ds-ink">{t('modelRoutes.emptyTitle')}</h3>
+        <p className="mt-1 text-[12px] text-ds-faint">{t('modelRoutes.gatewayMultipleModelsDesc')}</p>
         <button
           type="button"
           onClick={onAdd}
           className="mt-4 inline-flex h-9 items-center gap-2 rounded-full bg-accent px-4 text-[12px] font-semibold text-white"
         >
           <Plus className="h-3.5 w-3.5" />
-          添加模型
+          {t('modelRoutes.addModel')}
         </button>
       </div>
     </div>
@@ -98,6 +100,7 @@ export function ModelRoutesSettings({
   /** The configured local Kun endpoint; this is also the public gateway origin. */
   publicBaseUrl?: string
 }): ReactElement {
+  const { t, i18n } = useTranslation('settings')
   const [selectedId, setSelectedId] = useState(settings.routePools[0]?.id ?? '')
   const [status, setStatus] = useState<RouteStatus | null>(null)
   const [statusError, setStatusError] = useState('')
@@ -121,7 +124,7 @@ export function ModelRoutesSettings({
   const refreshStatus = useCallback(async (): Promise<void> => {
     try {
       const response = await window.kunGui.runtimeRequest(KUN_MODEL_ROUTES_PATH, 'GET')
-      if (!response.ok) throw new Error(routeStatusError(response.body, response.status))
+      if (!response.ok) throw new Error(routeStatusError(response.body, response.status, t))
       setStatus(JSON.parse(response.body) as RouteStatus)
       setStatusError('')
     } catch (error) {
@@ -129,7 +132,7 @@ export function ModelRoutesSettings({
       setStatus(null)
       setStatusError(error instanceof Error ? error.message : String(error))
     }
-  }, [])
+  }, [t])
   useEffect(() => {
     if (!active) return
     void refreshStatus()
@@ -181,7 +184,7 @@ export function ModelRoutesSettings({
     ]))
     const pool: ModelRoutePoolV1 = {
       id,
-      name: `路由模型 ${ordinal}`,
+      name: t('modelRoutes.defaultRouteName', { index: ordinal }),
       modelId,
       enabled: false,
       strategy: 'priority',
@@ -207,7 +210,7 @@ export function ModelRoutesSettings({
     try {
       const response = await window.kunGui.runtimeRequest(kunModelRouteTestPath(selected.id), 'POST')
       const body = JSON.parse(response.body) as { test?: RoutePoolTestRecord; error?: { message?: string } }
-      if (!response.ok || !body.test) throw new Error(body.error?.message ?? '无法创建链路测试')
+      if (!response.ok || !body.test) throw new Error(body.error?.message ?? t('modelRoutes.testCreateFailed'))
       setStatus((current) => ({
         ...(current ?? {}),
         tests: [body.test!, ...(current?.tests ?? []).filter((test) => test.id !== body.test!.id)]
@@ -237,44 +240,48 @@ export function ModelRoutesSettings({
   const invalidTargetCount = selected?.targets.filter((target) =>
     resolveModelRouteTargetReference(target, settings.providers).status !== 'valid'
   ).length ?? 0
+  const strategies = (Object.keys(strategyTranslationKeys) as ModelRouteStrategy[]).map((id) => ({
+    id,
+    label: t(strategyTranslationKeys[id])
+  }))
   const testButtonLabel = startPending
-    ? '正在创建测试'
+    ? t('modelRoutes.testButtonCreating')
     : activeTest
-      ? '测试进行中'
+      ? t('modelRoutes.testButtonInProgress')
       : saveStatus === 'error'
-        ? '先修复保存失败'
+        ? t('modelRoutes.testButtonFixSave')
         : saveStatus === 'saving'
-          ? '等待本地保存'
+          ? t('modelRoutes.testButtonWaitSave')
           : !selected?.enabled
-        ? '启用后可测试'
+        ? t('modelRoutes.testButtonEnableFirst')
         : !selectedHasExecutableTarget
-          ? '修复无效目标后测试'
+          ? t('modelRoutes.testButtonFixInvalidTargets')
         : !status
-          ? 'Kun Runtime 不可用'
+          ? t('modelRoutes.runtimeUnavailable')
           : !runtimeReady
-            ? '等待配置同步'
-            : '测试完整链路'
+            ? t('modelRoutes.testButtonWaitSync')
+            : t('modelRoutes.testButtonRun')
 
   const localSaveLabel = saveStatus === 'saving'
-    ? '正在保存到本地'
+    ? t('modelRoutes.localSaveSaving')
     : saveStatus === 'error'
-      ? '本地保存失败'
-      : '已保存到本地'
+      ? t('modelRoutes.localSaveFailed')
+      : t('modelRoutes.localSaveComplete')
   const runtimeSyncFailed = Boolean(
     !configurationSynced && runtimeSyncStatus?.state === 'failed'
   )
   const runtimeSyncLabel = configurationSynced
-    ? 'Kun Runtime 已同步'
+    ? t('modelRoutes.runtimeSynced')
     : runtimeSyncFailed
-        ? 'Kun Runtime 同步失败'
+        ? t('modelRoutes.runtimeSyncFailed')
         : !status
-          ? runtimeSyncStatus?.state === 'unavailable' ? 'Kun Runtime 未运行' : 'Kun Runtime 未连接'
+          ? runtimeSyncStatus?.state === 'unavailable' ? t('modelRoutes.runtimeNotRunning') : t('modelRoutes.runtimeNotConnected')
               : runtimeSyncStatus?.state === 'syncing'
-              ? '正在同步到 Kun Runtime'
-              : '等待 Kun Runtime 同步'
+              ? t('modelRoutes.runtimeSyncing')
+              : t('modelRoutes.runtimeWaitingForSync')
   const gatewayBaseUrl = `${publicBaseUrl.replace(/\/$/, '')}/v1`
   const sampleModelId = selected?.modelId || settings.routePools.find((pool) => pool.enabled)?.modelId || 'your-public-model-id'
-  const curlExample = buildGatewayCurlExample(gatewayBaseUrl, sampleModelId)
+  const curlExample = buildGatewayCurlExample(gatewayBaseUrl, sampleModelId, t)
   const copyGatewayText = async (value: string, kind: 'base-url' | 'curl' | 'api-example'): Promise<void> => {
     try {
       await navigator.clipboard.writeText(value)
@@ -290,12 +297,12 @@ export function ModelRoutesSettings({
       <div className="lg:col-span-2">
         <SettingsSubTabs<ModelRouteSettingsTab>
           baseId="model-routes-settings"
-          ariaLabel="模型路由设置"
+          ariaLabel={t('modelRoutes.tabsAria')}
           items={[
-            { id: 'gateway', label: '网关与 API', icon: Server },
-            { id: 'models', label: '模型与目标', icon: Boxes },
-            { id: 'resilience', label: '容错策略', icon: AlertTriangle },
-            { id: 'monitoring', label: '验证与监控', icon: Activity }
+            { id: 'gateway', label: t('modelRoutes.tabGateway'), icon: Server },
+            { id: 'models', label: t('modelRoutes.tabModels'), icon: Boxes },
+            { id: 'resilience', label: t('modelRoutes.tabResilience'), icon: AlertTriangle },
+            { id: 'monitoring', label: t('modelRoutes.tabMonitoring'), icon: Activity }
           ]}
           value={activeSettingsTab}
           onChange={setActiveSettingsTab}
@@ -314,9 +321,12 @@ export function ModelRoutesSettings({
         </span>
         <div className="min-w-[220px] flex-1">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-[11px] font-medium text-ds-faint">本地中转供应商</span>
+            <span className="text-[11px] font-medium text-ds-faint">{t('modelRoutes.localRelayProvider')}</span>
             <span className="rounded-full bg-ds-card px-2 py-0.5 text-[10.5px] text-ds-muted">
-              {settings.routePools.filter((pool) => pool.enabled).length} / {settings.routePools.length} 个模型已启用
+              {t('modelRoutes.enabledModelCount', {
+                enabled: settings.routePools.filter((pool) => pool.enabled).length,
+                total: settings.routePools.length
+              })}
             </span>
           </div>
           <input
@@ -325,15 +335,15 @@ export function ModelRoutesSettings({
               ...settings,
               localGateway: { ...settings.localGateway, name: event.target.value }
             })}
-            aria-label="中转供应商名称"
+            aria-label={t('modelRoutes.providerNameAria')}
             className="mt-1 w-full max-w-md bg-transparent text-[17px] font-semibold text-ds-ink outline-none"
           />
-          <p className="mt-1 text-[11.5px] text-ds-faint">一个供应商统一承载多个公开模型，每个模型可配置独立的路由目标和负载策略。</p>
+          <p className="mt-1 text-[11.5px] text-ds-faint">{t('modelRoutes.providerDesc')}</p>
         </div>
         <div className="flex items-center gap-3 rounded-xl border border-ds-border bg-ds-card px-3 py-2.5">
           <div>
-            <div className="text-[12px] font-medium text-ds-ink">开放本地 API</div>
-            <div className="mt-0.5 text-[10.5px] text-ds-faint">仅本机访问 · 无鉴权</div>
+            <div className="text-[12px] font-medium text-ds-ink">{t('modelRoutes.enableLocalApi')}</div>
+            <div className="mt-0.5 text-[10.5px] text-ds-faint">{t('modelRoutes.localOnlyNoAuth')}</div>
           </div>
           <Toggle
             checked={settings.localGateway.enabled}
@@ -341,7 +351,7 @@ export function ModelRoutesSettings({
               ...settings,
               localGateway: { ...settings.localGateway, enabled }
             })}
-            ariaLabel="开放本地 API"
+            ariaLabel={t('modelRoutes.enableLocalApi')}
           />
         </div>
         <div className="flex basis-full flex-wrap items-center gap-2 border-t border-ds-border-muted pt-3">
@@ -363,29 +373,29 @@ export function ModelRoutesSettings({
           }`}>{runtimeSyncLabel}</span>
           {saveStatus === 'error' && onRetrySave ? (
             <button type="button" onClick={onRetrySave} className="rounded-full border border-red-200 px-2.5 py-1 text-[11px] font-medium text-red-700">
-              重试保存
+              {t('modelRoutes.retrySave')}
             </button>
           ) : null}
           {saveStatus === 'error' && saveError ? <span className="min-w-0 truncate text-[11px] text-red-600" title={saveError}>{saveError}</span> : null}
-          {!status && statusError ? <span className="min-w-0 truncate text-[11px] text-ds-faint" title={statusError}>本地配置不受影响；Kun 启动后会自动同步。</span> : null}
+          {!status && statusError ? <span className="min-w-0 truncate text-[11px] text-ds-faint" title={statusError}>{t('modelRoutes.runtimeUnavailableHint')}</span> : null}
           {runtimeSyncFailed && runtimeSyncStatus?.message ? <span className="min-w-0 truncate text-[11px] text-red-600" title={runtimeSyncStatus.message}>{runtimeSyncStatus.message}</span> : null}
         </div>
 
         <section className="grid basis-full gap-3 rounded-xl border border-ds-border bg-ds-card p-3.5 lg:grid-cols-[minmax(0,1fr)_auto]">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-              <h3 className="flex items-center gap-1.5 text-[13px] font-semibold text-ds-ink"><Code2 className="h-4 w-4 text-accent" />本地 API</h3>
+              <h3 className="flex items-center gap-1.5 text-[13px] font-semibold text-ds-ink"><Code2 className="h-4 w-4 text-accent" />{t('modelRoutes.localApi')}</h3>
               <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10.5px] font-medium ${settings.localGateway.enabled ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-200' : 'bg-ds-main text-ds-muted'}`}>
                 <span className={`h-1.5 w-1.5 rounded-full ${settings.localGateway.enabled ? 'bg-emerald-500' : 'bg-ds-faint'}`} />
-                {settings.localGateway.enabled ? '已启用 · 仅本机访问' : '未启用'}
+                {settings.localGateway.enabled ? t('modelRoutes.localApiEnabledLocalOnly') : t('modelRoutes.disabled')}
               </span>
             </div>
-            <p className="mt-1 text-[11px] text-ds-faint">兼容 OpenAI Chat Completions 与 Responses；公开模型 ID 由下方路由模型决定。</p>
+            <p className="mt-1 text-[11px] text-ds-faint">{t('modelRoutes.apiCompatibilityDesc')}</p>
             <div className="mt-2 flex min-w-0 items-center gap-1.5 rounded-lg border border-ds-border bg-ds-main px-2.5 py-2">
               <span className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-ds-ink" title={gatewayBaseUrl}>{gatewayBaseUrl}</span>
-              <button type="button" onClick={() => void copyGatewayText(gatewayBaseUrl, 'base-url')} className="inline-flex shrink-0 items-center gap-1 rounded-md px-1.5 py-1 text-[11px] font-medium text-ds-muted hover:bg-ds-hover hover:text-ds-ink" aria-label="复制本地 API 地址">
+              <button type="button" onClick={() => void copyGatewayText(gatewayBaseUrl, 'base-url')} className="inline-flex shrink-0 items-center gap-1 rounded-md px-1.5 py-1 text-[11px] font-medium text-ds-muted hover:bg-ds-hover hover:text-ds-ink" aria-label={t('modelRoutes.copyLocalApiAddress')}>
                 {copiedValue === 'base-url' ? <Check className="h-3.5 w-3.5 text-emerald-600" /> : <Clipboard className="h-3.5 w-3.5" />}
-                {copiedValue === 'base-url' ? '已复制' : '复制'}
+                {copiedValue === 'base-url' ? t('modelRoutes.copied') : t('modelRoutes.copy')}
               </button>
             </div>
             <div className="mt-2 flex flex-wrap gap-1.5 text-[10.5px] text-ds-muted">
@@ -397,10 +407,10 @@ export function ModelRoutesSettings({
           <div className="flex items-end gap-2 lg:flex-col lg:items-stretch lg:justify-center">
             <button type="button" onClick={() => void copyGatewayText(curlExample, 'curl')} className="inline-flex h-8 items-center justify-center gap-1.5 rounded-lg bg-accent px-3 text-[11.5px] font-semibold text-white hover:opacity-90">
               {copiedValue === 'curl' ? <Check className="h-3.5 w-3.5" /> : <Clipboard className="h-3.5 w-3.5" />}
-              {copiedValue === 'curl' ? '已复制' : '复制 cURL'}
+              {copiedValue === 'curl' ? t('modelRoutes.copied') : t('modelRoutes.copyCurl')}
             </button>
             <button type="button" onClick={() => setApiDocsOpen((open) => !open)} className="inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-ds-border px-3 text-[11.5px] font-medium text-ds-muted hover:bg-ds-hover hover:text-ds-ink" aria-expanded={apiDocsOpen}>
-              接口说明 <ChevronDown className={`h-3.5 w-3.5 transition-transform ${apiDocsOpen ? 'rotate-180' : ''}`} />
+              {t('modelRoutes.apiDocs')} <ChevronDown className={`h-3.5 w-3.5 transition-transform ${apiDocsOpen ? 'rotate-180' : ''}`} />
             </button>
           </div>
 
@@ -417,12 +427,12 @@ export function ModelRoutesSettings({
       <aside className={`${activeSettingsTab === 'gateway' ? 'hidden' : 'grid'} min-w-0 content-start gap-3 border-b border-ds-border-muted pb-4 lg:border-b-0 lg:border-r lg:pb-0 lg:pr-4`}>
         <div className="flex items-start justify-between gap-2">
           <div>
-            <h3 className="flex items-center gap-2 text-[14px] font-semibold text-ds-ink"><Boxes className="h-4 w-4 text-accent" />路由模型</h3>
-            <p className="mt-1 text-[12px] leading-5 text-ds-faint">选择一个模型配置它的容量池。</p>
+            <h3 className="flex items-center gap-2 text-[14px] font-semibold text-ds-ink"><Boxes className="h-4 w-4 text-accent" />{t('modelRoutes.routedModels')}</h3>
+            <p className="mt-1 text-[12px] leading-5 text-ds-faint">{t('modelRoutes.choosePool')}</p>
           </div>
         </div>
         <button type="button" onClick={addPool} className="inline-flex h-9 items-center justify-center gap-2 rounded-xl bg-accent text-[12.5px] font-semibold text-white">
-          <Plus className="h-4 w-4" /> 添加模型
+          <Plus className="h-4 w-4" /> {t('modelRoutes.addModel')}
         </button>
         <div className="grid gap-2">
           {settings.routePools.map((pool) => {
@@ -436,11 +446,11 @@ export function ModelRoutesSettings({
                   <span className={`h-2 w-2 rounded-full ${executablePool?.enabled ? 'bg-emerald-500' : invalid > 0 ? 'bg-amber-500' : 'bg-ds-faint'}`} />
                 </div>
                 <div className="mt-1 truncate text-[11px] text-ds-faint">{pool.name}</div>
-                <div className="mt-2 flex items-center justify-between text-[11px] text-ds-muted"><span>{available}/{pool.targets.length} 可用{invalid > 0 ? ` · ${invalid} 个待修复` : ''}</span><span>{strategies.find((item) => item.id === pool.strategy)?.label}</span></div>
+                <div className="mt-2 flex items-center justify-between text-[11px] text-ds-muted"><span>{t('modelRoutes.availableTargets', { available, total: pool.targets.length })}{invalid > 0 ? ` · ${t('modelRoutes.invalidTargets', { count: invalid })}` : ''}</span><span>{strategies.find((item) => item.id === pool.strategy)?.label}</span></div>
               </button>
             )
           })}
-          {settings.routePools.length === 0 ? <div className="rounded-xl border border-dashed border-ds-border px-3 py-8 text-center text-[12px] text-ds-faint">还没有路由模型</div> : null}
+          {settings.routePools.length === 0 ? <div className="rounded-xl border border-dashed border-ds-border px-3 py-8 text-center text-[12px] text-ds-faint">{t('modelRoutes.noModels')}</div> : null}
         </div>
       </aside>
 
@@ -455,24 +465,24 @@ export function ModelRoutesSettings({
             <>
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="min-w-0 flex-1">
-              <p className="mb-1 text-[11px] font-medium text-accent">{settings.localGateway.name} / 路由模型</p>
-              <input aria-label="路由模型名称" value={selected.name} onChange={(event) => updatePool({ name: event.target.value })} className="w-full bg-transparent text-[20px] font-semibold text-ds-ink outline-none" />
-              <p className="mt-1 text-[12px] text-ds-faint">配置保存后会热更新到当前 Kun Runtime。</p>
+              <p className="mb-1 text-[11px] font-medium text-accent">{settings.localGateway.name} / {t('modelRoutes.routedModel')}</p>
+              <input aria-label={t('modelRoutes.routeModelNameAria')} value={selected.name} onChange={(event) => updatePool({ name: event.target.value })} className="w-full bg-transparent text-[20px] font-semibold text-ds-ink outline-none" />
+              <p className="mt-1 text-[12px] text-ds-faint">{t('modelRoutes.hotUpdateHint')}</p>
             </div>
-            <div className="flex items-center gap-3"><span className="text-[12px] text-ds-muted">启用</span><Toggle checked={selected.enabled} onChange={(enabled) => updatePool({ enabled })} ariaLabel="启用路由池" /></div>
+            <div className="flex items-center gap-3"><span className="text-[12px] text-ds-muted">{t('modelRoutes.enable')}</span><Toggle checked={selected.enabled} onChange={(enabled) => updatePool({ enabled })} ariaLabel={t('modelRoutes.enablePoolAria')} /></div>
           </div>
 
           <div className="grid gap-3 md:grid-cols-2">
-            <Field label="公开模型 ID"><input value={selected.modelId} onChange={(event) => updatePool({ modelId: event.target.value })} className={inputClass} spellCheck={false} /></Field>
-            <Field label="负载策略"><select value={selected.strategy} onChange={(event) => updatePool({ strategy: event.target.value as ModelRouteStrategy })} className={inputClass}>{strategies.map((strategy) => <option key={strategy.id} value={strategy.id}>{strategy.label}</option>)}</select></Field>
+            <Field label={t('modelRoutes.publicModelId')}><input value={selected.modelId} onChange={(event) => updatePool({ modelId: event.target.value })} className={inputClass} spellCheck={false} /></Field>
+            <Field label={t('modelRoutes.loadStrategy')}><select value={selected.strategy} onChange={(event) => updatePool({ strategy: event.target.value as ModelRouteStrategy })} className={inputClass}>{strategies.map((strategy) => <option key={strategy.id} value={strategy.id}>{strategy.label}</option>)}</select></Field>
           </div>
 
           <section className="grid gap-3">
-            <div className="flex items-center justify-between"><h3 className="text-[13px] font-semibold text-ds-ink">路由目标</h3><button type="button" onClick={() => {
+            <div className="flex items-center justify-between"><h3 className="text-[13px] font-semibold text-ds-ink">{t('modelRoutes.routeTargets')}</h3><button type="button" onClick={() => {
               const provider = settings.providers.find((candidate) => candidate.models.length > 0)
               if (!provider) return
               updatePool({ targets: [...selected.targets, { id: `${selected.id}-target-${Date.now().toString(36)}`, providerId: provider.id, modelId: provider.models[0], enabled: true, weight: 1 }] })
-            }} className="inline-flex items-center gap-1 rounded-full border border-ds-border px-3 py-1.5 text-[12px] text-ds-muted"><Plus className="h-3.5 w-3.5" /> 添加目标</button></div>
+            }} className="inline-flex items-center gap-1 rounded-full border border-ds-border px-3 py-1.5 text-[12px] text-ds-muted"><Plus className="h-3.5 w-3.5" /> {t('modelRoutes.addTarget')}</button></div>
             <div className="grid gap-2">
               {selected.targets.map((target, index) => {
                 const resolution = resolveModelRouteTargetReference(target, settings.providers)
@@ -486,22 +496,22 @@ export function ModelRoutesSettings({
                       const nextProvider = settings.providers.find((candidate) => candidate.id === event.target.value)
                       updatePool({ targets: selected.targets.map((item) => item.id === target.id ? { ...item, providerId: event.target.value, modelId: nextProvider?.models[0] ?? '' } : item) })
                     }} className={compactInputClass}>
-                      {resolution.status === 'provider-missing' ? <option value={target.providerId}>供应商已删除：{target.providerId}</option> : null}
+                      {resolution.status === 'provider-missing' ? <option value={target.providerId}>{t('modelRoutes.providerDeleted', { providerId: target.providerId })}</option> : null}
                       {settings.providers.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
                     </select>
                     <select value={target.modelId} onChange={(event) => updatePool({ targets: selected.targets.map((item) => item.id === target.id ? { ...item, modelId: event.target.value } : item) })} className={compactInputClass}>
-                      {resolution.status !== 'valid' ? <option value={target.modelId}>{resolution.status === 'provider-missing' ? '原模型' : '模型已删除'}：{target.modelId}</option> : null}
+                      {resolution.status !== 'valid' ? <option value={target.modelId}>{resolution.status === 'provider-missing' ? t('modelRoutes.originalModel', { modelId: target.modelId }) : t('modelRoutes.modelDeleted', { modelId: target.modelId })}</option> : null}
                       {(provider?.models ?? []).map((model) => <option key={model} value={model}>{model}</option>)}
                     </select>
-                    <input type="number" min={1} max={100} title="权重" value={target.weight} onChange={(event) => updatePool({ targets: selected.targets.map((item) => item.id === target.id ? { ...item, weight: Number(event.target.value) || 1 } : item) })} className={compactInputClass} />
-                    <div className="text-[11px] text-ds-muted">{metric?.ewmaLatencyMs ? `${Math.round(metric.ewmaLatencyMs)} ms` : '未探测'}<br /><span className="text-ds-faint">{metric ? `${metric.successes}/${metric.successes + metric.failures} 成功` : ''}</span></div>
+                    <input type="number" min={1} max={100} title={t('modelRoutes.weight')} value={target.weight} onChange={(event) => updatePool({ targets: selected.targets.map((item) => item.id === target.id ? { ...item, weight: Number(event.target.value) || 1 } : item) })} className={compactInputClass} />
+                    <div className="text-[11px] text-ds-muted">{metric?.ewmaLatencyMs ? `${Math.round(metric.ewmaLatencyMs)} ms` : t('modelRoutes.notProbed')}<br /><span className="text-ds-faint">{metric ? t('modelRoutes.successCount', { successes: metric.successes, total: metric.successes + metric.failures }) : ''}</span></div>
                     <button type="button" onClick={() => updatePool({ targets: selected.targets.filter((item) => item.id !== target.id) })} className="rounded-full p-1.5 text-ds-faint hover:bg-red-50 hover:text-red-600"><Trash2 className="h-4 w-4" /></button>
                     {resolution.status !== 'valid' ? (
                       <div className="flex items-center gap-1.5 text-[11px] text-amber-700 md:col-span-5 md:col-start-3">
                         <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
                         {resolution.status === 'provider-missing'
-                          ? `供应商 ${target.providerId} 已不存在；引用已保留，请选择替代供应商或删除目标。`
-                          : `模型 ${target.modelId} 已不在 ${target.providerId} 中；引用已保留，请选择替代模型或删除目标。`}
+                          ? t('modelRoutes.providerMissingWarning', { providerId: target.providerId })
+                          : t('modelRoutes.modelMissingWarning', { modelId: target.modelId, providerId: target.providerId })}
                       </div>
                     ) : null}
                   </div>
@@ -513,12 +523,12 @@ export function ModelRoutesSettings({
               <div className="flex justify-end">
                 <button type="button" onClick={removePool} className="inline-flex items-center gap-2 rounded-full border border-red-200 px-3 py-2 text-[12px] text-red-600">
                   <Trash2 className="h-3.5 w-3.5" />
-                  删除模型
+                  {t('modelRoutes.deleteModel')}
                 </button>
               </div>
             </>
           ) : (
-            <EmptyRoutePoolState onAdd={addPool} />
+            <EmptyRoutePoolState onAdd={addPool} t={t} />
           )}
         </SettingsTabPanel>
 
@@ -530,11 +540,27 @@ export function ModelRoutesSettings({
         >
           {selected ? (
             <div className="grid gap-3 xl:grid-cols-2">
-            <section className="rounded-xl border border-ds-border p-4"><h3 className="flex items-center gap-2 text-[13px] font-semibold text-ds-ink"><AlertTriangle className="h-4 w-4 text-amber-500" />故障转移规则</h3><div className="mt-3 grid gap-3 text-[12px] text-ds-muted"><ToggleRow label="网络错误" checked={selected.failurePolicy.failoverOnNetworkError} onChange={(value) => updatePool({ failurePolicy: { ...selected.failurePolicy, failoverOnNetworkError: value } })} /><ToggleRow label="请求超时" checked={selected.failurePolicy.failoverOnTimeout} onChange={(value) => updatePool({ failurePolicy: { ...selected.failurePolicy, failoverOnTimeout: value } })} /><ToggleRow label="401 / 403 凭据错误" checked={selected.failurePolicy.failoverOnAuthError} onChange={(value) => updatePool({ failurePolicy: { ...selected.failurePolicy, failoverOnAuthError: value } })} /><Field label="切换 HTTP 状态码"><input value={selected.failurePolicy.failoverHttpStatusCodes.join(', ')} onChange={(event) => updatePool({ failurePolicy: { ...selected.failurePolicy, failoverHttpStatusCodes: parseCodes(event.target.value) } })} className={compactInputClass} /></Field><p className="text-[11px] text-ds-faint">流式输出开始后固定停止，不会重复请求或执行工具。</p></div></section>
-            <section className="rounded-xl border border-ds-border p-4"><h3 className="flex items-center gap-2 text-[13px] font-semibold text-ds-ink"><Activity className="h-4 w-4 text-emerald-500" />健康与熔断</h3><div className="mt-3 grid grid-cols-3 gap-3"><Field label="连续失败"><input type="number" min={1} max={20} value={selected.healthPolicy.failureThreshold} onChange={(event) => updatePool({ healthPolicy: { ...selected.healthPolicy, failureThreshold: Number(event.target.value) } })} className={compactInputClass} /></Field><Field label="冷却秒数"><input type="number" min={1} value={Math.round(selected.healthPolicy.cooldownMs / 1000)} onChange={(event) => updatePool({ healthPolicy: { ...selected.healthPolicy, cooldownMs: Number(event.target.value) * 1000 } })} className={compactInputClass} /></Field><Field label="半开探测"><input type="number" min={1} max={10} value={selected.healthPolicy.halfOpenMaxAttempts} onChange={(event) => updatePool({ healthPolicy: { ...selected.healthPolicy, halfOpenMaxAttempts: Number(event.target.value) } })} className={compactInputClass} /></Field></div></section>
+              <section className="rounded-xl border border-ds-border p-4">
+                <h3 className="flex items-center gap-2 text-[13px] font-semibold text-ds-ink"><AlertTriangle className="h-4 w-4 text-amber-500" />{t('modelRoutes.failoverRules')}</h3>
+                <div className="mt-3 grid gap-3 text-[12px] text-ds-muted">
+                  <ToggleRow label={t('modelRoutes.networkError')} checked={selected.failurePolicy.failoverOnNetworkError} onChange={(value) => updatePool({ failurePolicy: { ...selected.failurePolicy, failoverOnNetworkError: value } })} />
+                  <ToggleRow label={t('modelRoutes.requestTimeout')} checked={selected.failurePolicy.failoverOnTimeout} onChange={(value) => updatePool({ failurePolicy: { ...selected.failurePolicy, failoverOnTimeout: value } })} />
+                  <ToggleRow label={t('modelRoutes.credentialError')} checked={selected.failurePolicy.failoverOnAuthError} onChange={(value) => updatePool({ failurePolicy: { ...selected.failurePolicy, failoverOnAuthError: value } })} />
+                  <Field label={t('modelRoutes.failoverStatuses')}><input value={selected.failurePolicy.failoverHttpStatusCodes.join(', ')} onChange={(event) => updatePool({ failurePolicy: { ...selected.failurePolicy, failoverHttpStatusCodes: parseCodes(event.target.value) } })} className={compactInputClass} /></Field>
+                  <p className="text-[11px] text-ds-faint">{t('modelRoutes.afterStreamNoRetry')}</p>
+                </div>
+              </section>
+              <section className="rounded-xl border border-ds-border p-4">
+                <h3 className="flex items-center gap-2 text-[13px] font-semibold text-ds-ink"><Activity className="h-4 w-4 text-emerald-500" />{t('modelRoutes.healthCircuit')}</h3>
+                <div className="mt-3 grid grid-cols-3 gap-3">
+                  <Field label={t('modelRoutes.consecutiveFailures')}><input type="number" min={1} max={20} value={selected.healthPolicy.failureThreshold} onChange={(event) => updatePool({ healthPolicy: { ...selected.healthPolicy, failureThreshold: Number(event.target.value) } })} className={compactInputClass} /></Field>
+                  <Field label={t('modelRoutes.cooldownSeconds')}><input type="number" min={1} value={Math.round(selected.healthPolicy.cooldownMs / 1000)} onChange={(event) => updatePool({ healthPolicy: { ...selected.healthPolicy, cooldownMs: Number(event.target.value) * 1000 } })} className={compactInputClass} /></Field>
+                  <Field label={t('modelRoutes.halfOpenProbes')}><input type="number" min={1} max={10} value={selected.healthPolicy.halfOpenMaxAttempts} onChange={(event) => updatePool({ healthPolicy: { ...selected.healthPolicy, halfOpenMaxAttempts: Number(event.target.value) } })} className={compactInputClass} /></Field>
+                </div>
+              </section>
             </div>
           ) : (
-            <EmptyRoutePoolState onAdd={addPool} />
+            <EmptyRoutePoolState onAdd={addPool} t={t} />
           )}
         </SettingsTabPanel>
 
@@ -548,8 +574,8 @@ export function ModelRoutesSettings({
             <section className="grid gap-3">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
-                <h3 className="text-[13px] font-semibold text-ds-ink">路由验证</h3>
-                <p className="mt-1 text-[11px] text-ds-faint">测试由 Kun Runtime 异步执行，离开页面后仍会继续，返回时自动恢复进度和结果。</p>
+                <h3 className="text-[13px] font-semibold text-ds-ink">{t('modelRoutes.routeValidation')}</h3>
+                <p className="mt-1 text-[11px] text-ds-faint">{t('modelRoutes.routeValidationDesc')}</p>
               </div>
               <button
                 type="button"
@@ -565,7 +591,7 @@ export function ModelRoutesSettings({
             {startError ? <div className="rounded-lg bg-red-50 px-3 py-2 text-[12px] text-red-700">{startError}</div> : null}
             {selected.enabled && !runtimeReady ? (
               <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11.5px] text-amber-700">
-                {chainTestBlockedReason({ saveStatus, status, statusError, runtimeSyncStatus, configurationSynced, selectedHasExecutableTarget, invalidTargetCount })}
+                {chainTestBlockedReason({ saveStatus, status, statusError, runtimeSyncStatus, configurationSynced, selectedHasExecutableTarget, invalidTargetCount }, t)}
               </div>
             ) : null}
 
@@ -574,31 +600,31 @@ export function ModelRoutesSettings({
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
                     {activeTest ? <Loader2 className="h-4 w-4 animate-spin text-accent" /> : <Activity className="h-4 w-4 text-accent" />}
-                    <span className={`rounded-full px-2 py-1 text-[11px] font-medium ${testStatusClass(latestTest.status)}`}>{testStatusLabel(latestTest.status)}</span>
-                    <span className="text-[11px] text-ds-faint">{new Date(latestTest.createdAt).toLocaleString()}</span>
+                    <span className={`rounded-full px-2 py-1 text-[11px] font-medium ${testStatusClass(latestTest.status)}`}>{testStatusLabel(latestTest.status, t)}</span>
+                    <span className="text-[11px] text-ds-faint">{new Date(latestTest.createdAt).toLocaleString(i18n.resolvedLanguage)}</span>
                   </div>
-                  <span className="text-[11px] text-ds-muted">已尝试 {latestTest.attemptedTargets} / {latestTest.totalTargets} 个目标</span>
+                  <span className="text-[11px] text-ds-muted">{t('modelRoutes.attemptedTargets', { attempted: latestTest.attemptedTargets, total: latestTest.totalTargets })}</span>
                 </div>
                 <div className="h-1.5 overflow-hidden rounded-full bg-ds-main">
                   <div className="h-full rounded-full bg-accent transition-all" style={{ width: `${testProgress(latestTest)}%` }} />
                 </div>
-                {latestTest.currentTarget ? <p className="text-[12px] text-ds-muted">正在测试：{formatTarget(latestTest.currentTarget)}</p> : null}
-                {latestTest.selectedTarget ? <p className="text-[12px] text-emerald-700">最终目标：{formatTarget(latestTest.selectedTarget)}</p> : null}
-                {latestTest.output ? <div className="rounded-lg bg-ds-main px-3 py-2 text-[12px] text-ds-muted">模型响应：{latestTest.output}</div> : null}
+                {latestTest.currentTarget ? <p className="text-[12px] text-ds-muted">{t('modelRoutes.testingTarget', { target: formatTarget(latestTest.currentTarget) })}</p> : null}
+                {latestTest.selectedTarget ? <p className="text-[12px] text-emerald-700">{t('modelRoutes.finalTargetValue', { target: formatTarget(latestTest.selectedTarget) })}</p> : null}
+                {latestTest.output ? <div className="rounded-lg bg-ds-main px-3 py-2 text-[12px] text-ds-muted">{t('modelRoutes.modelResponse', { response: latestTest.output })}</div> : null}
                 {latestTest.error ? <div className="rounded-lg bg-red-50 px-3 py-2 text-[12px] text-red-700">{latestTest.error.message}{latestTest.error.category ? ` · ${latestTest.error.category}` : ''}</div> : null}
               </div>
-            ) : status ? <div className="rounded-xl border border-dashed border-ds-border px-3 py-6 text-center text-[11px] text-ds-faint">暂无链路测试记录</div> : null}
+            ) : status ? <div className="rounded-xl border border-dashed border-ds-border px-3 py-6 text-center text-[11px] text-ds-faint">{t('modelRoutes.noTests')}</div> : null}
 
             {latestTest?.attempts.length ? (
               <div className="overflow-hidden rounded-xl border border-ds-border">
-                <div className="bg-ds-main px-3 py-2 text-[11px] font-medium text-ds-muted">本次目标进度</div>
+                <div className="bg-ds-main px-3 py-2 text-[11px] font-medium text-ds-muted">{t('modelRoutes.currentTargetProgress')}</div>
                 <table className="w-full text-left text-[11.5px]">
-                  <thead className="text-ds-faint"><tr><th className="px-3 py-2">顺序</th><th className="px-3 py-2">目标</th><th className="px-3 py-2">状态</th><th className="px-3 py-2">延迟 / 错误</th></tr></thead>
+                  <thead className="text-ds-faint"><tr><th className="px-3 py-2">{t('modelRoutes.order')}</th><th className="px-3 py-2">{t('modelRoutes.target')}</th><th className="px-3 py-2">{t('modelRoutes.status')}</th><th className="px-3 py-2">{t('modelRoutes.latencyError')}</th></tr></thead>
                   <tbody>{latestTest.attempts.map((attempt) => (
                     <tr key={`${latestTest.id}-${attempt.targetId}`} className="border-t border-ds-border-muted text-ds-muted">
                       <td className="px-3 py-2">{attempt.index}</td>
                       <td className="px-3 py-2">{attempt.providerId} / {attempt.modelId}</td>
-                      <td className="px-3 py-2">{attemptStatusLabel(attempt.status)}</td>
+                      <td className="px-3 py-2">{attemptStatusLabel(attempt.status, t)}</td>
                       <td className="max-w-[320px] truncate px-3 py-2" title={attempt.message}>{attempt.latencyMs === undefined ? '—' : `${attempt.latencyMs} ms`}{attempt.category ? ` · ${attempt.category}` : ''}{attempt.message ? ` · ${attempt.message}` : ''}</td>
                     </tr>
                   ))}</tbody>
@@ -608,13 +634,13 @@ export function ModelRoutesSettings({
 
             {selectedTests.length ? (
               <div className="overflow-hidden rounded-xl border border-ds-border">
-                <div className="bg-ds-main px-3 py-2 text-[11px] font-medium text-ds-muted">最近测试记录</div>
+                <div className="bg-ds-main px-3 py-2 text-[11px] font-medium text-ds-muted">{t('modelRoutes.recentTests')}</div>
                 <table className="w-full text-left text-[11.5px]">
-                  <thead className="text-ds-faint"><tr><th className="px-3 py-2">时间</th><th className="px-3 py-2">结果</th><th className="px-3 py-2">尝试</th><th className="px-3 py-2">最终目标</th></tr></thead>
+                  <thead className="text-ds-faint"><tr><th className="px-3 py-2">{t('modelRoutes.time')}</th><th className="px-3 py-2">{t('modelRoutes.result')}</th><th className="px-3 py-2">{t('modelRoutes.attempts')}</th><th className="px-3 py-2">{t('modelRoutes.finalTarget')}</th></tr></thead>
                   <tbody>{selectedTests.slice(0, 5).map((test) => (
                     <tr key={test.id} className="border-t border-ds-border-muted text-ds-muted">
-                      <td className="px-3 py-2">{new Date(test.createdAt).toLocaleString()}</td>
-                      <td className="px-3 py-2">{testStatusLabel(test.status)}</td>
+                      <td className="px-3 py-2">{new Date(test.createdAt).toLocaleString(i18n.resolvedLanguage)}</td>
+                      <td className="px-3 py-2">{testStatusLabel(test.status, t)}</td>
                       <td className="px-3 py-2">{test.attemptedTargets} / {test.totalTargets}</td>
                       <td className="px-3 py-2">{test.selectedTarget ? formatTarget(test.selectedTarget) : '—'}</td>
                     </tr>
@@ -624,16 +650,16 @@ export function ModelRoutesSettings({
             ) : null}
 
             <div className="overflow-hidden rounded-xl border border-ds-border">
-              <div className="bg-ds-main px-3 py-2 text-[11px] font-medium text-ds-muted">最近路由事件</div>
+              <div className="bg-ds-main px-3 py-2 text-[11px] font-medium text-ds-muted">{t('modelRoutes.recentEvents')}</div>
               <table className="w-full text-left text-[11.5px]">
-                <thead className="text-ds-faint"><tr><th className="px-3 py-2">时间</th><th className="px-3 py-2">目标</th><th className="px-3 py-2">结果</th><th className="px-3 py-2">延迟</th></tr></thead>
-                <tbody>{events.map((event) => <tr key={`${event.at}-${event.targetId}-${event.result}`} className="border-t border-ds-border-muted text-ds-muted"><td className="px-3 py-2">{new Date(event.at).toLocaleTimeString()}</td><td className="px-3 py-2">{event.providerId} / {event.modelId}</td><td className="px-3 py-2">{event.result}{event.category ? ` · ${event.category}` : ''}</td><td className="px-3 py-2">{event.latencyMs} ms</td></tr>)}</tbody>
+                <thead className="text-ds-faint"><tr><th className="px-3 py-2">{t('modelRoutes.time')}</th><th className="px-3 py-2">{t('modelRoutes.target')}</th><th className="px-3 py-2">{t('modelRoutes.result')}</th><th className="px-3 py-2">{t('modelRoutes.latency')}</th></tr></thead>
+                <tbody>{events.map((event) => <tr key={`${event.at}-${event.targetId}-${event.result}`} className="border-t border-ds-border-muted text-ds-muted"><td className="px-3 py-2">{new Date(event.at).toLocaleTimeString(i18n.resolvedLanguage)}</td><td className="px-3 py-2">{event.providerId} / {event.modelId}</td><td className="px-3 py-2">{event.result}{event.category ? ` · ${event.category}` : ''}</td><td className="px-3 py-2">{event.latencyMs} ms</td></tr>)}</tbody>
               </table>
-              {events.length === 0 ? <div className="px-3 py-6 text-center text-[11px] text-ds-faint">暂无路由事件</div> : null}
+              {events.length === 0 ? <div className="px-3 py-6 text-center text-[11px] text-ds-faint">{t('modelRoutes.noEvents')}</div> : null}
             </div>
             </section>
           ) : (
-            <EmptyRoutePoolState onAdd={addPool} />
+            <EmptyRoutePoolState onAdd={addPool} t={t} />
           )}
         </SettingsTabPanel>
       </main>
@@ -660,6 +686,7 @@ function LocalGatewayApiDialog({
   onClose: () => void
   onCopy: (value: string) => void
 }): ReactElement {
+  const { t } = useTranslation('settings')
   const [tab, setTab] = useState<GatewayApiTab>('chat')
   useEffect(() => {
     if (typeof globalThis.addEventListener !== 'function') return
@@ -670,7 +697,7 @@ function LocalGatewayApiDialog({
     return () => globalThis.removeEventListener('keydown', closeOnEscape)
   }, [onClose])
 
-  const guide = gatewayApiGuide(tab, baseUrl, modelId)
+  const guide = gatewayApiGuide(tab, baseUrl, modelId, t)
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/35 p-4 backdrop-blur-[1px]" onMouseDown={(event) => {
       if (event.target === event.currentTarget) onClose()
@@ -678,23 +705,23 @@ function LocalGatewayApiDialog({
       <section role="dialog" aria-modal="true" aria-labelledby="local-api-dialog-title" className="grid max-h-[min(760px,calc(100vh-32px))] w-full max-w-4xl overflow-hidden rounded-2xl border border-ds-border bg-ds-card shadow-2xl shadow-slate-950/25">
         <header className="flex items-start justify-between gap-4 border-b border-ds-border-muted px-5 py-4">
           <div>
-            <h2 id="local-api-dialog-title" className="flex items-center gap-2 text-[16px] font-semibold text-ds-ink"><Code2 className="h-4 w-4 text-accent" />本地 API 说明</h2>
-            <p className="mt-1 text-[12px] text-ds-muted">OpenAI 兼容接口，仅允许本机进程访问；不需要 Authorization 请求头。</p>
+            <h2 id="local-api-dialog-title" className="flex items-center gap-2 text-[16px] font-semibold text-ds-ink"><Code2 className="h-4 w-4 text-accent" />{t('modelRoutes.apiDialogTitle')}</h2>
+            <p className="mt-1 text-[12px] text-ds-muted">{t('modelRoutes.apiDialogDesc')}</p>
           </div>
-          <button type="button" onClick={onClose} className="rounded-lg p-2 text-ds-muted hover:bg-ds-hover hover:text-ds-ink" aria-label="关闭 API 说明"><X className="h-4 w-4" /></button>
+          <button type="button" onClick={onClose} className="rounded-lg p-2 text-ds-muted hover:bg-ds-hover hover:text-ds-ink" aria-label={t('modelRoutes.closeApiDocs')}><X className="h-4 w-4" /></button>
         </header>
 
         <div className="grid min-h-0 overflow-y-auto md:grid-cols-[196px_minmax(0,1fr)]">
           <aside className="border-b border-ds-border-muted bg-ds-main/35 p-3 md:border-b-0 md:border-r">
-            <p className="px-2 pb-2 text-[10.5px] font-medium uppercase tracking-[0.08em] text-ds-faint">接口</p>
+            <p className="px-2 pb-2 text-[10.5px] font-medium uppercase tracking-[0.08em] text-ds-faint">{t('modelRoutes.endpoints')}</p>
             <div className="grid gap-1">
-              <ApiGuideTab active={tab === 'models'} onClick={() => setTab('models')} method="GET" path="/models">模型列表</ApiGuideTab>
-              <ApiGuideTab active={tab === 'chat'} onClick={() => setTab('chat')} method="POST" path="/chat/completions">Chat Completions</ApiGuideTab>
-              <ApiGuideTab active={tab === 'responses'} onClick={() => setTab('responses')} method="POST" path="/responses">Responses</ApiGuideTab>
+              <ApiGuideTab active={tab === 'models'} onClick={() => setTab('models')} method="GET" path="/models">{t('modelRoutes.modelList')}</ApiGuideTab>
+              <ApiGuideTab active={tab === 'chat'} onClick={() => setTab('chat')} method="POST" path="/chat/completions">{t('modelRoutes.chatCompletions')}</ApiGuideTab>
+              <ApiGuideTab active={tab === 'responses'} onClick={() => setTab('responses')} method="POST" path="/responses">{t('modelRoutes.responses')}</ApiGuideTab>
             </div>
             <div className="mt-4 rounded-lg border border-ds-border bg-ds-card p-2.5 text-[10.5px] leading-4 text-ds-muted">
-              <div className="font-medium text-ds-ink">调用前提</div>
-              <p className="mt-1">先启用本地 API，并至少启用一个路由模型。请求中的 <code className="font-mono">model</code> 使用它的公开模型 ID。</p>
+              <div className="font-medium text-ds-ink">{t('modelRoutes.prerequisites')}</div>
+              <p className="mt-1">{t('modelRoutes.prerequisitesDesc')}</p>
             </div>
           </aside>
 
@@ -704,25 +731,25 @@ function LocalGatewayApiDialog({
                 <div className="flex items-center gap-2"><span className={`rounded-md px-1.5 py-0.5 font-mono text-[10.5px] font-semibold ${guide.method === 'GET' ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-200' : 'bg-blue-50 text-blue-700 dark:bg-blue-500/10 dark:text-blue-200'}`}>{guide.method}</span><h3 className="font-mono text-[14px] font-semibold text-ds-ink">{guide.path}</h3></div>
                 <p className="mt-2 text-[12px] leading-5 text-ds-muted">{guide.description}</p>
               </div>
-              <span className="rounded-full bg-ds-main px-2 py-1 text-[10.5px] text-ds-muted">OpenAI 兼容</span>
+              <span className="rounded-full bg-ds-main px-2 py-1 text-[10.5px] text-ds-muted">{t('modelRoutes.openAiCompatible')}</span>
             </div>
 
             <div className="mt-4 rounded-xl border border-ds-border bg-ds-main/45 p-3">
-              <div className="flex items-center justify-between gap-3"><span className="text-[11px] font-medium text-ds-muted">Base URL</span><button type="button" onClick={() => onCopy(baseUrl)} className="inline-flex items-center gap-1 text-[11px] font-medium text-accent hover:opacity-80">{copied ? <Check className="h-3.5 w-3.5" /> : <Clipboard className="h-3.5 w-3.5" />}{copied ? '已复制' : '复制'}</button></div>
+              <div className="flex items-center justify-between gap-3"><span className="text-[11px] font-medium text-ds-muted">{t('modelRoutes.baseUrlLabel')}</span><button type="button" onClick={() => onCopy(baseUrl)} className="inline-flex items-center gap-1 text-[11px] font-medium text-accent hover:opacity-80">{copied ? <Check className="h-3.5 w-3.5" /> : <Clipboard className="h-3.5 w-3.5" />}{copied ? t('modelRoutes.copied') : t('modelRoutes.copy')}</button></div>
               <code className="mt-1.5 block break-all font-mono text-[12px] text-ds-ink">{baseUrl}</code>
             </div>
 
             <div className="mt-4 grid gap-3 sm:grid-cols-2">
-              <InfoList title="关键字段" items={guide.fields} />
-              <InfoList title="响应与限制" items={guide.notes} />
+              <InfoList title={t('modelRoutes.keyFields')} items={guide.fields} />
+              <InfoList title={t('modelRoutes.responsesAndLimits')} items={guide.notes} />
             </div>
 
             <div className="mt-5 overflow-hidden rounded-xl border border-slate-700 bg-slate-950">
-              <div className="flex items-center justify-between gap-3 border-b border-slate-700 px-3 py-2"><span className="text-[11px] font-medium text-slate-300">cURL 示例</span><button type="button" onClick={() => onCopy(guide.example)} className="inline-flex items-center gap-1 rounded-md bg-white/10 px-2 py-1 text-[10.5px] font-medium text-slate-100 hover:bg-white/15">{copied ? <Check className="h-3.5 w-3.5 text-emerald-300" /> : <Clipboard className="h-3.5 w-3.5" />}{copied ? '已复制' : '复制示例'}</button></div>
+              <div className="flex items-center justify-between gap-3 border-b border-slate-700 px-3 py-2"><span className="text-[11px] font-medium text-slate-300">{t('modelRoutes.curlExample')}</span><button type="button" onClick={() => onCopy(guide.example)} className="inline-flex items-center gap-1 rounded-md bg-white/10 px-2 py-1 text-[10.5px] font-medium text-slate-100 hover:bg-white/15">{copied ? <Check className="h-3.5 w-3.5 text-emerald-300" /> : <Clipboard className="h-3.5 w-3.5" />}{copied ? t('modelRoutes.copied') : t('modelRoutes.copyExample')}</button></div>
               <pre className="overflow-x-auto p-3 font-mono text-[11.5px] leading-5 text-slate-100"><code>{guide.example}</code></pre>
             </div>
 
-            <p className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] leading-4 text-amber-800 dark:border-amber-400/20 dark:bg-amber-500/10 dark:text-amber-100">此中转站不是面向公网的 API 服务：它仅绑定本机回环地址，且目前无鉴权。不要通过端口映射或未受保护的反向代理暴露给局域网或公网。</p>
+            <p className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] leading-4 text-amber-800 dark:border-amber-400/20 dark:bg-amber-500/10 dark:text-amber-100">{t('modelRoutes.apiSecurityWarning')}</p>
           </div>
         </div>
       </section>
@@ -750,7 +777,7 @@ function InfoList({ title, items }: { title: string; items: string[] }): ReactEl
   return <section><h4 className="text-[11px] font-medium text-ds-ink">{title}</h4><ul className="mt-1.5 grid gap-1 text-[11px] leading-4 text-ds-muted">{items.map((item) => <li key={item} className="flex gap-1.5"><span className="mt-[6px] h-1 w-1 shrink-0 rounded-full bg-ds-faint" />{item}</li>)}</ul></section>
 }
 
-function gatewayApiGuide(tab: GatewayApiTab, baseUrl: string, modelId: string): {
+function gatewayApiGuide(tab: GatewayApiTab, baseUrl: string, modelId: string, t: TFunction): {
   method: 'GET' | 'POST'
   path: string
   description: string
@@ -761,47 +788,61 @@ function gatewayApiGuide(tab: GatewayApiTab, baseUrl: string, modelId: string): 
   if (tab === 'models') return {
     method: 'GET',
     path: '/models',
-    description: '列出本地中转站中所有已启用的路由模型。返回的 data[].id 就是后续生成请求使用的公开模型 ID。',
-    fields: ['无需请求体。', '只返回已启用的路由模型；未启用或无效的容量池不会出现。'],
-    notes: ['成功时返回 OpenAI 风格的 object: "list" 与 data 数组。', '本地 API 未启用时返回 404（gateway_disabled）。'],
+    description: t('modelRoutes.guideModelsDesc'),
+    fields: [t('modelRoutes.guideModelsNoBody'), t('modelRoutes.guideModelsEnabledOnly')],
+    notes: [t('modelRoutes.guideModelsResponse'), t('modelRoutes.guideModelsDisabled')],
     example: `curl --request GET ${baseUrl}/models`
   }
   if (tab === 'responses') return {
     method: 'POST',
     path: '/responses',
-    description: '以 OpenAI Responses 风格生成内容，适合使用 input 作为单次输入的客户端。',
-    fields: [`model：必填，使用公开模型 ID，例如 ${modelId}。`, 'input：必填，可传字符串或消息数组。', 'stream：可选；true 时返回 Server-Sent Events。', 'max_output_tokens、tools 与 reasoning_effort 可选。'],
-    notes: ['非流式响应为 object: "response"，文本位于 output 中。', '流式响应依次发送 response.created、response.output_text.delta 与 response.completed。'],
-    example: buildGatewayResponsesCurlExample(baseUrl, modelId)
+    description: t('modelRoutes.guideResponsesDesc'),
+    fields: [
+      t('modelRoutes.guideFieldModel', { modelId }),
+      t('modelRoutes.guideResponsesInput'),
+      t('modelRoutes.guideResponsesStream'),
+      t('modelRoutes.guideResponsesOptional')
+    ],
+    notes: [t('modelRoutes.guideResponsesNonStreaming'), t('modelRoutes.guideResponsesStreaming')],
+    example: buildGatewayResponsesCurlExample(baseUrl, modelId, t)
   }
   return {
     method: 'POST',
     path: '/chat/completions',
-    description: '以 OpenAI Chat Completions 风格生成对话回复，是多数 OpenAI 兼容 SDK 的默认接入方式。',
-    fields: [`model：必填，使用公开模型 ID，例如 ${modelId}。`, 'messages：必填且不能为空，支持 system、developer、user、assistant 与 tool 消息。', 'stream：可选；true 时返回 SSE，false 时返回完整 JSON。', 'tools：可选，使用 OpenAI function 工具定义；图片仅接受 Base64 data URL。'],
-    notes: ['非流式文本位于 choices[0].message.content。', '流式输出以 data: [DONE] 结束。', '模型不存在时返回 404（model_not_found）。'],
-    example: buildGatewayCurlExample(baseUrl, modelId)
+    description: t('modelRoutes.guideChatDesc'),
+    fields: [
+      t('modelRoutes.guideFieldModel', { modelId }),
+      t('modelRoutes.guideChatMessages'),
+      t('modelRoutes.guideChatStream'),
+      t('modelRoutes.guideChatTools')
+    ],
+    notes: [
+      t('modelRoutes.guideChatNonStreaming'),
+      t('modelRoutes.guideChatStreaming'),
+      t('modelRoutes.guideChatModelMissing')
+    ],
+    example: buildGatewayCurlExample(baseUrl, modelId, t)
   }
 }
 
-function buildGatewayCurlExample(baseUrl: string, modelId: string): string {
+function buildGatewayCurlExample(baseUrl: string, modelId: string, t: TFunction): string {
   return `curl --request POST ${baseUrl}/chat/completions \\
   --header 'Content-Type: application/json' \\
   --data '{
     "model": "${modelId}",
     "messages": [
-      { "role": "user", "content": "你好，Kun！" }
+      { "role": "user", "content": ${JSON.stringify(t('modelRoutes.exampleChatPrompt'))} }
     ],
     "stream": false
   }'`
 }
 
-function buildGatewayResponsesCurlExample(baseUrl: string, modelId: string): string {
+function buildGatewayResponsesCurlExample(baseUrl: string, modelId: string, t: TFunction): string {
   return `curl --request POST ${baseUrl}/responses \\
   --header 'Content-Type: application/json' \\
   --data '{
     "model": "${modelId}",
-    "input": "用一句话介绍 Kun 本地中转站",
+    "input": ${JSON.stringify(t('modelRoutes.exampleResponsesPrompt'))},
     "stream": false
   }'`
 }
@@ -852,12 +893,12 @@ function runtimeConfigurationMatches(
   return expectedPools.length === runtimePools.length &&
     expectedPools.every((pool, index) => runtimePoolMatches(pool, runtimePools[index]))
 }
-function routeStatusError(body: string, status: number): string {
+function routeStatusError(body: string, status: number, t: TFunction): string {
   try {
     const parsed = JSON.parse(body) as { error?: { message?: string }; message?: string }
-    return parsed.error?.message?.trim() || parsed.message?.trim() || `Kun Runtime 状态请求失败 (${status})`
+    return parsed.error?.message?.trim() || parsed.message?.trim() || t('modelRoutes.statusRequestFailed', { status })
   } catch {
-    return body.trim() || `Kun Runtime 状态请求失败 (${status})`
+    return body.trim() || t('modelRoutes.statusRequestFailed', { status })
   }
 }
 function chainTestBlockedReason(input: {
@@ -868,24 +909,28 @@ function chainTestBlockedReason(input: {
   configurationSynced: boolean
   selectedHasExecutableTarget: boolean
   invalidTargetCount: number
-}): string {
-  if (input.saveStatus === 'error') return '本地保存失败，请先重试保存；未持久化的配置不会用于链路测试。'
-  if (input.saveStatus === 'saving') return '配置正在保存到本地，保存完成并同步到 Kun Runtime 后即可测试。'
+}, t: TFunction): string {
+  if (input.saveStatus === 'error') return t('modelRoutes.blockedSaveFailed')
+  if (input.saveStatus === 'saving') return t('modelRoutes.blockedSaving')
   if (!input.selectedHasExecutableTarget) {
     return input.invalidTargetCount > 0
-      ? `当前路由有 ${input.invalidTargetCount} 个失效引用且没有可执行目标，请先替换供应商或模型。`
-      : '当前路由没有已启用的有效目标，请先添加或启用一个目标。'
+      ? t('modelRoutes.blockedInvalidTargets', { count: input.invalidTargetCount })
+      : t('modelRoutes.blockedNoTargets')
   }
   if (!input.configurationSynced && input.runtimeSyncStatus?.state === 'failed') {
-    return `本地配置已保存，但 Kun Runtime 同步失败。${input.runtimeSyncStatus.message ? ` ${input.runtimeSyncStatus.message}` : '请检查 Runtime 日志后重试保存。'}`
+    return input.runtimeSyncStatus.message
+      ? t('modelRoutes.blockedSyncFailedWithMessage', { message: input.runtimeSyncStatus.message })
+      : t('modelRoutes.blockedSyncFailed')
   }
-  if (!input.status) return `本地配置已保存，但 Kun Runtime 当前不可用；启动后会自动同步。${input.statusError ? ` ${input.statusError}` : ''}`
-  if (!input.configurationSynced) return '本地配置已保存，正在等待 Kun Runtime 应用相同的路由池和本地 API 状态。'
-  return 'Kun Runtime 尚未准备好执行该路由的完整链路测试。'
+  if (!input.status) return input.statusError
+    ? t('modelRoutes.blockedRuntimeUnavailableWithMessage', { message: input.statusError })
+    : t('modelRoutes.blockedRuntimeUnavailable')
+  if (!input.configurationSynced) return t('modelRoutes.blockedWaitingForSync')
+  return t('modelRoutes.blockedRuntimeNotReady')
 }
-function testStatusLabel(status: RoutePoolTestRecord['status']): string { return ({ queued: '等待执行', running: '测试进行中', succeeded: '链路测试成功', failed: '链路测试失败' })[status] }
+function testStatusLabel(status: RoutePoolTestRecord['status'], t: TFunction): string { return t(`modelRoutes.testStatus.${status}`) }
 function testStatusClass(status: RoutePoolTestRecord['status']): string { return status === 'succeeded' ? 'bg-emerald-50 text-emerald-700' : status === 'failed' ? 'bg-red-50 text-red-700' : 'bg-accent/10 text-accent' }
-function attemptStatusLabel(status: RoutePoolTestAttempt['status']): string { return ({ running: '测试中', succeeded: '成功', failed: '失败，已切换' })[status] }
+function attemptStatusLabel(status: RoutePoolTestAttempt['status'], t: TFunction): string { return t(`modelRoutes.attemptStatus.${status}`) }
 function testProgress(test: RoutePoolTestRecord): number {
   if (test.status === 'succeeded' || test.status === 'failed') return 100
   if (test.status === 'queued' || test.totalTargets === 0) return 4
