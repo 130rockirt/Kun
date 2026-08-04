@@ -48,11 +48,21 @@ function Invoke-Installer(
 ) {
   $script:currentScenario = $Scenario
   $argumentText = $Arguments -join ' '
-  Write-Host "[$Scenario] Starting installer: $argumentText"
-  $stopwatch = [Diagnostics.Stopwatch]::StartNew()
-  $process = Start-Process -FilePath $script:InstallerPath -ArgumentList $Arguments -Wait -PassThru
-  $stopwatch.Stop()
-  Write-Host "[$Scenario] Installer exited with $($process.ExitCode) after $([math]::Round($stopwatch.Elapsed.TotalSeconds, 1))s."
+  $accessViolationExitCode = -1073741819
+  $maximumAttempts = 2
+  $process = $null
+  for ($attempt = 1; $attempt -le $maximumAttempts; $attempt += 1) {
+    Write-Host "[$Scenario] Starting installer (attempt $attempt/$maximumAttempts): $argumentText"
+    $stopwatch = [Diagnostics.Stopwatch]::StartNew()
+    $process = Start-Process -FilePath $script:InstallerPath -ArgumentList $Arguments -Wait -PassThru
+    $stopwatch.Stop()
+    Write-Host "[$Scenario] Installer exited with $($process.ExitCode) after $([math]::Round($stopwatch.Elapsed.TotalSeconds, 1))s."
+    if ($process.ExitCode -ne $accessViolationExitCode -or $attempt -eq $maximumAttempts) {
+      break
+    }
+    Write-Warning "[$Scenario] Installer hit Windows access violation 0xC0000005; retrying once after 2 seconds."
+    Start-Sleep -Seconds 2
+  }
   if ($process.ExitCode -ne $ExpectedExitCode -and (Test-Path -LiteralPath $script:diagnosticPath -PathType Leaf)) {
     Write-Host "[$Scenario] Installer helper diagnostics:"
     Write-Host (Get-Content -LiteralPath $script:diagnosticPath -Raw)

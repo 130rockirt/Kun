@@ -155,6 +155,15 @@ describe('Windows installer migration ACL contract', () => {
     expect(script).toContain('Start-Process -FilePath $copy -ArgumentList $arguments -Wait -PassThru')
     expect(script).not.toMatch(/Start-Process -FilePath \$(?:unicode|machine)Uninstaller/u)
   })
+
+  it('retries only a Windows access violation and never more than once', () => {
+    const script = readFileSync(smokePath, 'utf8')
+
+    expect(script).toContain('$accessViolationExitCode = -1073741819')
+    expect(script).toContain('$maximumAttempts = 2')
+    expect(script).toContain('$process.ExitCode -ne $accessViolationExitCode')
+    expect(script).toContain('retrying once after 2 seconds')
+  })
 })
 
 windowsOnly('Windows installer migration helper', () => {
