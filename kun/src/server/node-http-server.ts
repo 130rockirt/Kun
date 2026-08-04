@@ -76,7 +76,7 @@ async function handleNodeRequest(
     } finally {
       adapted.dispose()
     }
-  } catch {
+  } catch (error) {
     // A streaming body can fail after status/headers were already written, or
     // the peer can disconnect while the response is draining. Sending a
     // second 500 response would throw ERR_HTTP_HEADERS_SENT and crash a
@@ -86,12 +86,37 @@ async function handleNodeRequest(
       if (!outgoing.writableEnded && !outgoing.destroyed) outgoing.destroy()
       return
     }
+    console.error('[kun-http] unexpected request failure', {
+      method: incoming.method ?? 'GET',
+      pathname: safeRequestPathname(incoming.url),
+      error: summarizeRequestError(error)
+    })
     const body = JSON.stringify({
       code: 'internal_error',
       message: 'Internal server error.'
     })
     outgoing.writeHead(500, { 'content-type': 'application/json; charset=utf-8' })
     outgoing.end(body)
+  }
+}
+
+function safeRequestPathname(value: string | undefined): string {
+  try {
+    return new URL(value ?? '/', 'http://127.0.0.1').pathname.slice(0, 2_048)
+  } catch {
+    return '/'
+  }
+}
+
+function summarizeRequestError(error: unknown): { name: string; message: string; code?: string } {
+  if (!(error instanceof Error)) {
+    return { name: 'Error', message: String(error).slice(0, 2_048) }
+  }
+  const code = String((error as NodeJS.ErrnoException).code ?? '').trim()
+  return {
+    name: error.name,
+    message: error.message.slice(0, 2_048),
+    ...(code ? { code: code.slice(0, 128) } : {})
   }
 }
 

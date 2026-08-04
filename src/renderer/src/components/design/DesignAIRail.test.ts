@@ -113,7 +113,14 @@ describe('DesignAIRail target toggle', () => {
     const html = renderToStaticMarkup(createElement(DesignAIRail, props({
       busy: true,
       activeThreadId: 'thread-current-document',
-      queuedMessages: [{ id: 'q-guide', text: 'use a smaller title' }],
+      queuedMessages: [{
+        id: 'q-guide',
+        text: 'Expanded internal Design prompt with canvas state',
+        displayText: 'Use a smaller title',
+        guiDesignCanvas: true,
+        guiDesignMode: true,
+        agentSurface: 'design'
+      }],
       designThreads: [{
         id: 'thread-current-document',
         title: 'Settings',
@@ -124,7 +131,9 @@ describe('DesignAIRail target toggle', () => {
       }]
     })))
 
+    expect(html).toContain('Use a smaller title')
     expect(html).toContain('aria-label="Guide"')
+    expect(html).toMatch(/<button(?=[^>]*aria-label="Guide")(?![^>]*disabled="")[^>]*>/)
     expect(html).toMatch(/<button[^>]*disabled=""[^>]*aria-label="Clear history"/)
   })
 

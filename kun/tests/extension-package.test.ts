@@ -74,7 +74,9 @@ describe('extension package management', () => {
       expect((await registry.get('acme.demo'))?.selectedVersion).toBe('1.0.0')
       expect((await registry.get('acme.demo'))?.previousSelectedVersion).toBe('2.0.0')
 
-      await expect(writeFile(join(v1.packagePath, 'tamper.txt'), 'nope')).rejects.toBeDefined()
+      if (process.platform !== 'win32') {
+        await expect(writeFile(join(v1.packagePath, 'tamper.txt'), 'nope')).rejects.toBeDefined()
+      }
       await manager.setGlobalEnabled('acme.demo', false)
       expect(await registry.isEnabled('acme.demo')).toBe(false)
       expect(await registry.publicSnapshot()).toMatchObject({

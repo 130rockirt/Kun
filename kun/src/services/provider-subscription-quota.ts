@@ -5,7 +5,22 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 import type { ProviderQuotaMetric } from '../contracts/provider-quota.js'
 import { GeminiCliOAuthSource } from '../adapters/model/gemini-cli-oauth.js'
-import { parseStoredCodexOAuthCredentials } from './codex-oauth-credential-refresher.js'
+import {
+  codexCliUserAgent,
+  geminiCliRequestHeaders
+} from '../adapters/model/provider-cli-identity.js'
+import {
+  isStoredCodexCredentialExpired,
+  parseStoredCodexOAuthCredentials,
+  refreshStoredCodexOAuthCredentials,
+  type StoredCodexOAuthCredentials
+} from './codex-oauth-credential-refresher.js'
+import {
+  isStoredGrokCredentialExpired,
+  parseStoredGrokOAuthCredentials,
+  refreshStoredGrokOAuthCredentials,
+  type StoredGrokOAuthCredentials
+} from './grok-oauth-credential-refresher.js'
 import {
   readOpenCodeGoLocalQuota,
   type OpenCodeGoLocalQuotaResult
@@ -14,6 +29,8 @@ import {
 const execFileAsync = promisify(execFile)
 const QUOTA_TIMEOUT_MS = 12_000
 const MAX_RESPONSE_BYTES = 256 * 1024
+const codexQuotaCredentialCache = new Map<string, StoredCodexOAuthCredentials>()
+const grokQuotaCredentialCache = new Map<string, StoredGrokOAuthCredentials>()
 
 export type ProviderQuotaProbeProfile = {
   id: string
@@ -23,6 +40,7 @@ export type ProviderQuotaProbeProfile = {
   baseUrl?: string
   apiKey: string
   headers?: Record<string, string>
+  credentialSourceId?: string
 }
 
 export type SubscriptionQuotaProbeKind =
@@ -66,8 +84,14 @@ type GoogleCredential = {
 
 export type SubscriptionQuotaRuntime = {
   resolveClaudeToken(provider: ProviderQuotaProbeProfile): Promise<string | undefined>
-  resolveCodexCredential(provider: ProviderQuotaProbeProfile): Promise<CodexCredential | undefined>
-  resolveGrokCredential(provider: ProviderQuotaProbeProfile): Promise<GrokCredential | undefined>
+  resolveCodexCredential(
+    provider: ProviderQuotaProbeProfile,
+    rejectedAccessToken?: string
+  ): Promise<CodexCredential | undefined>
+  resolveGrokCredential(
+    provider: ProviderQuotaProbeProfile,
+    rejectedAccessToken?: string
+  ): Promise<GrokCredential | undefined>
   resolveCursorSession(): Promise<CursorSession | undefined>
   resolveAntigravityCredential(context: ProbeContext): Promise<GoogleCredential | undefined>
   resolveGeminiCliToken(context: ProbeContext): Promise<string | undefined>
@@ -78,6 +102,13 @@ export class ProviderQuotaMissingCredentialError extends Error {
   constructor(message: string) {
     super(message)
     this.name = 'ProviderQuotaMissingCredentialError'
+  }
+}
+
+class ProviderQuotaAuthorizationError extends Error {
+  constructor(readonly status: number) {
+    super('The provider did not authorize quota access for the existing login.')
+    this.name = 'ProviderQuotaAuthorizationError'
   }
 }
 
@@ -111,35 +142,51 @@ export async function runSubscriptionQuotaProbe(
     }
   }
   if (kind === 'codex-subscription') {
-    const credential = await runtime.resolveCodexCredential(provider)
+    let credential = await runtime.resolveCodexCredential(provider)
     if (!credential) {
       throw new ProviderQuotaMissingCredentialError(
         'Connect the ChatGPT subscription or sign in with Codex CLI first.'
       )
     }
-    return parseCodexSubscriptionQuota(await requestJson(
-      'https://chatgpt.com/backend-api/wham/usage',
-      {
-        headers: {
-          Accept: 'application/json',
-          Authorization: `Bearer ${credential.accessToken}`,
-          'User-Agent': 'Kun',
-          ...(credential.accountId ? { 'ChatGPT-Account-Id': credential.accountId } : {})
-        }
-      },
-      context
-    ))
+    try {
+      return parseCodexSubscriptionQuota(await requestCodexSubscriptionQuota(credential, context))
+    } catch (error) {
+      if (!(error instanceof ProviderQuotaAuthorizationError)) throw error
+      const refreshed = await runtime.resolveCodexCredential(provider, credential.accessToken)
+      if (!refreshed || refreshed.accessToken === credential.accessToken) {
+        throw new ProviderQuotaMissingCredentialError(
+          'The Codex login expired. Sign in to the ChatGPT subscription or Codex CLI again.'
+        )
+      }
+      credential = refreshed
+      return parseCodexSubscriptionQuota(await requestCodexSubscriptionQuota(credential, context))
+    }
   }
   if (kind === 'grok-subscription') {
-    const credential = await runtime.resolveGrokCredential(provider)
+    let credential = await runtime.resolveGrokCredential(provider)
     if (!credential) {
       throw new ProviderQuotaMissingCredentialError(
         'Connect Grok or run `grok login` before refreshing quota.'
       )
     }
-    return {
-      metrics: await probeGrokSubscriptionQuota(credential, context),
-      ...(credential.email ? { summary: credential.email } : {})
+    try {
+      return {
+        metrics: await probeGrokSubscriptionQuota(credential, context),
+        ...(credential.email ? { summary: credential.email } : {})
+      }
+    } catch (error) {
+      if (!(error instanceof ProviderQuotaAuthorizationError)) throw error
+      const refreshed = await runtime.resolveGrokCredential(provider, credential.accessToken)
+      if (!refreshed || refreshed.accessToken === credential.accessToken) {
+        throw new ProviderQuotaMissingCredentialError(
+          'The Grok login expired. Connect Grok or run `grok login` again.'
+        )
+      }
+      credential = refreshed
+      return {
+        metrics: await probeGrokSubscriptionQuota(credential, context),
+        ...(credential.email ? { summary: credential.email } : {})
+      }
     }
   }
   if (kind === 'cursor-subscription') {
@@ -162,7 +209,7 @@ export async function runSubscriptionQuotaProbe(
         'Sign in to the official Antigravity app before refreshing quota.'
       )
     }
-    return probeGoogleCodeAssistQuota(credential, context)
+    return probeGoogleCodeAssistQuota(credential, context, 'antigravity')
   }
   if (kind === 'opencode-go-local') {
     const quota = await runtime.resolveOpenCodeGoQuota()
@@ -179,7 +226,7 @@ export async function runSubscriptionQuotaProbe(
       'Run Gemini CLI and sign in with Google before refreshing quota.'
     )
   }
-  return probeGoogleCodeAssistQuota({ accessToken }, context)
+  return probeGoogleCodeAssistQuota({ accessToken }, context, 'gemini-cli')
 }
 
 export function parseClaudeSubscriptionQuota(payload: unknown): ProviderQuotaMetric[] {
@@ -390,8 +437,8 @@ export function parseGoogleCodeAssistQuota(payload: unknown): ProviderQuotaMetri
 
 const defaultRuntime: SubscriptionQuotaRuntime = {
   resolveClaudeToken,
-  resolveCodexCredential,
-  resolveGrokCredential,
+  resolveCodexCredential: resolveDefaultCodexQuotaCredential,
+  resolveGrokCredential: resolveDefaultGrokQuotaCredential,
   resolveCursorSession,
   resolveAntigravityCredential,
   resolveOpenCodeGoQuota: readOpenCodeGoLocalQuota,
@@ -441,13 +488,17 @@ async function probeGrokSubscriptionQuota(
 
 async function probeGoogleCodeAssistQuota(
   credential: GoogleCredential,
-  context: ProbeContext
+  context: ProbeContext,
+  client: 'antigravity' | 'gemini-cli'
 ): Promise<{ metrics: ProviderQuotaMetric[]; summary?: string }> {
+  const clientHeaders = client === 'gemini-cli'
+    ? geminiCliRequestHeaders()
+    : { 'User-Agent': 'antigravity' }
   const headers = {
     Accept: 'application/json',
     Authorization: `Bearer ${credential.accessToken}`,
     'Content-Type': 'application/json',
-    'User-Agent': 'antigravity'
+    ...clientHeaders
   }
   const setup = requireRecord(await requestJson(
     'https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist',
@@ -456,7 +507,7 @@ async function probeGoogleCodeAssistQuota(
       headers,
       body: JSON.stringify({
         metadata: {
-          ideType: 'ANTIGRAVITY',
+          ideType: client === 'antigravity' ? 'ANTIGRAVITY' : 'IDE_UNSPECIFIED',
           platform: 'PLATFORM_UNSPECIFIED',
           pluginType: 'GEMINI'
         }
@@ -469,6 +520,18 @@ async function probeGoogleCodeAssistQuota(
     ? projectValue.trim()
     : stringValue(optionalRecord(projectValue)?.id) ||
       stringValue(optionalRecord(projectValue)?.projectId)
+  if (!project) {
+    const reason = Array.isArray(setup.ineligibleTiers)
+      ? setup.ineligibleTiers
+        .map((value) => stringValue(optionalRecord(value)?.reasonMessage))
+        .filter(Boolean)
+        .join('; ')
+      : ''
+    throw new Error(
+      reason ||
+      'Google Code Assist account setup is incomplete. Finish provider onboarding and retry.'
+    )
+  }
   const body = JSON.stringify(project ? { project } : {})
   let quotaPayload: unknown
   try {
@@ -519,11 +582,29 @@ async function resolveClaudeToken(
   }
 }
 
-async function resolveCodexCredential(
-  provider: ProviderQuotaProbeProfile
+export async function resolveDefaultCodexQuotaCredential(
+  provider: ProviderQuotaProbeProfile,
+  rejectedAccessToken?: string
 ): Promise<CodexCredential | undefined> {
-  const stored = parseStoredCodexOAuthCredentials(provider.apiKey)
-  if (stored) return { accessToken: stored.accessToken, accountId: stored.accountId }
+  let stored = parseStoredCodexOAuthCredentials(provider.apiKey)
+  if (stored) {
+    const cached = codexQuotaCredentialCache.get(stored.refreshToken)
+    if (cached) stored = cached
+    const rejectedCurrentToken = Boolean(
+      rejectedAccessToken && stored.accessToken === rejectedAccessToken
+    )
+    if (rejectedCurrentToken || isStoredCodexCredentialExpired(stored)) {
+      const refreshed = await refreshCodexQuotaCredential(stored)
+      if (!refreshed) {
+        if (!rejectedCurrentToken && Date.now() < stored.expiresAt) {
+          return codexCredential(stored)
+        }
+        return undefined
+      }
+      return codexCredential(refreshed)
+    }
+    return codexCredential(stored)
+  }
   if (provider.apiKey.trim()) {
     return {
       accessToken: provider.apiKey.trim(),
@@ -537,7 +618,53 @@ async function resolveCodexCredential(
   const accessToken = stringValue(tokens?.access_token) || stringValue(tokens?.accessToken)
   if (!accessToken) return undefined
   const accountId = stringValue(tokens?.account_id) || stringValue(tokens?.accountId)
+  const refreshToken = stringValue(tokens?.refresh_token) || stringValue(tokens?.refreshToken)
+  if (accountId && refreshToken) {
+    stored = {
+      kind: 'codex-oauth',
+      accessToken,
+      refreshToken,
+      expiresAt: (numberValue(jwtClaims(accessToken)?.exp) ?? 0) * 1_000,
+      accountId
+    }
+    const cached = codexQuotaCredentialCache.get(stored.refreshToken)
+    if (cached) stored = cached
+    const rejectedCurrentToken = Boolean(
+      rejectedAccessToken && stored.accessToken === rejectedAccessToken
+    )
+    if (rejectedCurrentToken || isStoredCodexCredentialExpired(stored)) {
+      const refreshed = await refreshCodexQuotaCredential(stored)
+      if (!refreshed) {
+        if (!rejectedCurrentToken && Date.now() < stored.expiresAt) {
+          return codexCredential(stored)
+        }
+        return undefined
+      }
+      return codexCredential(refreshed)
+    }
+    return codexCredential(stored)
+  }
   return { accessToken, ...(accountId ? { accountId } : {}) }
+}
+
+async function refreshCodexQuotaCredential(
+  credentials: StoredCodexOAuthCredentials
+): Promise<StoredCodexOAuthCredentials | undefined> {
+  try {
+    const refreshed = await refreshStoredCodexOAuthCredentials(credentials)
+    codexQuotaCredentialCache.set(credentials.refreshToken, refreshed)
+    codexQuotaCredentialCache.set(refreshed.refreshToken, refreshed)
+    return refreshed
+  } catch {
+    return undefined
+  }
+}
+
+function codexCredential(credentials: StoredCodexOAuthCredentials): CodexCredential {
+  return {
+    accessToken: credentials.accessToken,
+    accountId: credentials.accountId
+  }
 }
 
 async function resolveCursorSession(): Promise<CursorSession | undefined> {
@@ -617,21 +744,17 @@ export function decodeAntigravityUnifiedOAuth(value: string | undefined): {
   return undefined
 }
 
-async function resolveGrokCredential(
-  provider: ProviderQuotaProbeProfile
+export async function resolveDefaultGrokQuotaCredential(
+  provider: ProviderQuotaProbeProfile,
+  rejectedAccessToken?: string
 ): Promise<GrokCredential | undefined> {
-  const configured = optionalRecord(safeJson(provider.apiKey.trim()))
-  const configuredAccessToken = stringValue(configured?.accessToken)
-  const configuredExpiry = numberValue(configured?.expiresAt)
-  if (
-    configuredAccessToken &&
-    (configuredExpiry === undefined || configuredExpiry > Date.now())
-  ) {
-    const email = stringValue(configured?.email)
-    return {
-      accessToken: configuredAccessToken,
-      ...(email ? { email } : {})
-    }
+  const configured = parseStoredGrokOAuthCredentials(provider.apiKey.trim())
+  if (configured) {
+    return refreshableGrokQuotaCredential(configured, rejectedAccessToken)
+  }
+  const configuredToken = provider.apiKey.trim()
+  if (configuredToken && !configuredToken.startsWith('{') && configuredToken !== rejectedAccessToken) {
+    return { accessToken: configuredToken }
   }
 
   const home = process.env.GROK_HOME?.trim()
@@ -654,13 +777,60 @@ async function resolveGrokCredential(
   for (const [, rawEntry] of candidates) {
     const entry = optionalRecord(rawEntry)
     const accessToken = stringValue(entry?.key)
-    if (!accessToken) continue
+    if (!accessToken || accessToken === rejectedAccessToken) continue
     const expiresAt = isoDateValue(entry?.expires_at)
-    if (expiresAt && new Date(expiresAt).getTime() <= Date.now()) continue
     const email = stringValue(entry?.email)
+    const refreshToken = stringValue(entry?.refresh_token)
+    if (refreshToken) {
+      const credential = await refreshableGrokQuotaCredential({
+        kind: 'grok-oauth',
+        accessToken,
+        refreshToken,
+        expiresAt: expiresAt ? new Date(expiresAt).getTime() : 0,
+        ...(email ? { email } : {}),
+        ...(stringValue(entry?.user_id) ? { userId: stringValue(entry?.user_id) } : {}),
+        ...(stringValue(entry?.oidc_issuer) ? { issuer: stringValue(entry?.oidc_issuer) } : {}),
+        ...(stringValue(entry?.oidc_client_id) ? { clientId: stringValue(entry?.oidc_client_id) } : {})
+      }, rejectedAccessToken)
+      if (credential) return credential
+      continue
+    }
+    if (expiresAt && new Date(expiresAt).getTime() <= Date.now()) continue
     return { accessToken, ...(email ? { email } : {}) }
   }
   return undefined
+}
+
+async function refreshableGrokQuotaCredential(
+  source: StoredGrokOAuthCredentials,
+  rejectedAccessToken?: string
+): Promise<GrokCredential | undefined> {
+  const cached = grokQuotaCredentialCache.get(source.refreshToken)
+  const credential = cached ?? source
+  const rejectedCurrentToken = Boolean(
+    rejectedAccessToken && credential.accessToken === rejectedAccessToken
+  )
+  if (!rejectedCurrentToken && !isStoredGrokCredentialExpired(credential)) {
+    return grokCredential(credential)
+  }
+  try {
+    const refreshed = await refreshStoredGrokOAuthCredentials(credential)
+    grokQuotaCredentialCache.set(source.refreshToken, refreshed)
+    grokQuotaCredentialCache.set(refreshed.refreshToken, refreshed)
+    return grokCredential(refreshed)
+  } catch {
+    if (!rejectedCurrentToken && credential.expiresAt > Date.now()) {
+      return grokCredential(credential)
+    }
+    return undefined
+  }
+}
+
+function grokCredential(credentials: StoredGrokOAuthCredentials): GrokCredential {
+  return {
+    accessToken: credentials.accessToken,
+    ...(credentials.email ? { email: credentials.email } : {})
+  }
 }
 
 async function discoverAntigravityOAuthClient(): Promise<{
@@ -737,7 +907,7 @@ async function requestJson(
   }
   if (!response.ok) {
     if (response.status === 401 || response.status === 403) {
-      throw new Error('The provider did not authorize quota access for the existing login.')
+      throw new ProviderQuotaAuthorizationError(response.status)
     }
     throw new Error(`The provider quota endpoint returned HTTP ${response.status}.`)
   }
@@ -747,6 +917,24 @@ async function requestJson(
   } catch {
     throw new Error('The provider returned malformed quota data.')
   }
+}
+
+function requestCodexSubscriptionQuota(
+  credential: CodexCredential,
+  context: ProbeContext
+): Promise<unknown> {
+  return requestJson(
+    'https://chatgpt.com/backend-api/wham/usage',
+    {
+      headers: {
+        Accept: 'application/json',
+        Authorization: `Bearer ${credential.accessToken}`,
+        'User-Agent': codexCliUserAgent(),
+        ...(credential.accountId ? { 'ChatGPT-Account-Id': credential.accountId } : {})
+      }
+    },
+    context
+  )
 }
 
 async function requestResponse(
@@ -774,7 +962,7 @@ async function requestResponse(
   }
   if (!response.ok) {
     if (response.status === 401 || response.status === 403) {
-      throw new Error('The provider did not authorize quota access for the existing login.')
+      throw new ProviderQuotaAuthorizationError(response.status)
     }
     throw new Error(`The provider quota endpoint returned HTTP ${response.status}.`)
   }
@@ -1181,15 +1369,6 @@ function appStateDbPath(app: 'Cursor' | 'Antigravity'): string {
 async function readJsonFile(path: string): Promise<unknown> {
   try {
     return JSON.parse(await readFile(path, 'utf8')) as unknown
-  } catch {
-    return undefined
-  }
-}
-
-function safeJson(value: string): unknown {
-  if (!value) return undefined
-  try {
-    return JSON.parse(value) as unknown
   } catch {
     return undefined
   }

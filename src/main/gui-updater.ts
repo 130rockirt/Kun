@@ -2,7 +2,7 @@ import { app, autoUpdater as nativeAutoUpdater, BrowserWindow, dialog, shell } f
 import type { MessageBoxOptions } from 'electron'
 import { existsSync, readFileSync } from 'node:fs'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { dirname, join, win32 as win32Path } from 'node:path'
 import electronUpdater from 'electron-updater'
 import type { ProgressInfo, UpdateDownloadedEvent, UpdateInfo } from 'electron-updater'
 import type {
@@ -29,9 +29,28 @@ const { autoUpdater } = electronUpdater
 const DEVELOPMENT_APP_FLAVOR = process.env.KUN_APP_FLAVOR === 'development'
 const DEVELOPMENT_UPDATE_MESSAGE =
   'kun-dv is a source/testing application and cannot use the production Kun update channel.'
+const WINDOWS_INSTALLER_UPDATE_SOURCE_ENV = 'KUN_INSTALLER_UPDATE_SOURCE'
 
 function envWithLegacyFallback(kunName: string, legacyName: string): string {
   return process.env[kunName]?.trim() || process.env[legacyName]?.trim() || ''
+}
+
+export function setWindowsInstallerUpdateSource(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+  executablePath: string = process.execPath
+): () => void {
+  if (platform !== 'win32') return () => undefined
+  const hadPrevious = Object.prototype.hasOwnProperty.call(env, WINDOWS_INSTALLER_UPDATE_SOURCE_ENV)
+  const previous = env[WINDOWS_INSTALLER_UPDATE_SOURCE_ENV]
+  env[WINDOWS_INSTALLER_UPDATE_SOURCE_ENV] = win32Path.dirname(executablePath)
+  return () => {
+    if (hadPrevious && previous !== undefined) {
+      env[WINDOWS_INSTALLER_UPDATE_SOURCE_ENV] = previous
+    } else {
+      delete env[WINDOWS_INSTALLER_UPDATE_SOURCE_ENV]
+    }
+  }
 }
 
 let initialized = false
@@ -48,10 +67,20 @@ let getSelectedChannel: (() => GuiUpdateChannel | Promise<GuiUpdateChannel>) | n
 let getSelectedLocale: (() => AppLocale | Promise<AppLocale>) | null = null
 let beforeInstallUpdate: (() => void | Promise<void>) | null = null
 let beforeInstallUpdatePromise: Promise<void> | null = null
+let beforeInstallUpdatePrepared = false
 let setUpdateInstallQuitting: ((active: boolean) => void) | null = null
 let pendingVersionStateWrite: Promise<void> | null = null
 let backgroundCheckTimer: NodeJS.Timeout | null = null
 let backgroundCheckPromise: Promise<void> | null = null
+let updateInstallQuitting = false
+let installPromise: Promise<GuiUpdateInstallResult> | null = null
+let updateInstallHandoffPending = false
+let updateInstallHandoffStarted = false
+let updateInstallLaunchError: Error | null = null
+let updateInstallAttemptActive = false
+let updateInstallRecoveryNeeded = false
+let updateInstallRecoveryScheduled = false
+let restoreInstallerUpdateSourceAfterFailure: (() => void) | null = null
 
 const GUI_UPDATE_SCHEDULE_FILE = 'gui-update-schedule.json'
 const GUI_VERSION_STATE_FILE = 'gui-version-state.json'
@@ -409,11 +438,14 @@ function emitGuiUpdateState(state: GuiUpdateState): void {
 }
 
 function runBeforeInstallUpdate(): Promise<void> {
+  if (beforeInstallUpdatePrepared) return Promise.resolve()
   if (!beforeInstallUpdate) return Promise.resolve()
   if (!beforeInstallUpdatePromise) {
     beforeInstallUpdatePromise = Promise.resolve()
       .then(() => beforeInstallUpdate?.())
-      .then(() => undefined)
+      .then(() => {
+        beforeInstallUpdatePrepared = true
+      })
       .finally(() => {
         beforeInstallUpdatePromise = null
       })
@@ -422,7 +454,50 @@ function runBeforeInstallUpdate(): Promise<void> {
 }
 
 function markUpdateInstallQuitting(active: boolean): void {
+  if (updateInstallQuitting === active) return
+  updateInstallQuitting = active
   setUpdateInstallQuitting?.(active)
+}
+
+function clearBeforeInstallUpdatePreparation(): void {
+  beforeInstallUpdatePrepared = false
+}
+
+function asError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error))
+}
+
+function relaunchAfterFailedUpdateInstall(): void {
+  try {
+    app.relaunch()
+    app.exit(0)
+  } catch (error) {
+    console.error('[kun-gui updater] failed to relaunch after update install failure:', error)
+  }
+}
+
+function resetFailedUpdateInstallState(): void {
+  restoreInstallerUpdateSourceAfterFailure?.()
+  restoreInstallerUpdateSourceAfterFailure = null
+  updateInstallAttemptActive = false
+  updateInstallHandoffPending = false
+  updateInstallHandoffStarted = false
+  updateInstallLaunchError = null
+  clearBeforeInstallUpdatePreparation()
+  markUpdateInstallQuitting(false)
+}
+
+function scheduleFailedUpdateInstallRecovery(): void {
+  updateInstallRecoveryNeeded = true
+  if (updateInstallRecoveryScheduled) return
+  updateInstallRecoveryScheduled = true
+  queueMicrotask(() => {
+    updateInstallRecoveryScheduled = false
+    if (!updateInstallRecoveryNeeded) return
+    updateInstallRecoveryNeeded = false
+    resetFailedUpdateInstallState()
+    relaunchAfterFailedUpdateInstall()
+  })
 }
 
 function clearBackgroundCheckTimer(): void {
@@ -482,6 +557,8 @@ function configureUpdaterChannel(channel: GuiUpdateChannel, feedUrl = updateFeed
   configuredChannel = normalized
   configuredFeedUrl = feedUrl
   autoUpdater.allowPrerelease = normalized === 'frontier'
+  // Switching from frontier to stable must never install an older build.
+  autoUpdater.allowDowngrade = false
   autoUpdater.setFeedURL({ provider: 'generic', url: feedUrl })
   if (!changed) return
   downloaded = false
@@ -631,12 +708,33 @@ export function initializeGuiUpdater(
 
   autoUpdater.on('error', (error) => {
     const message = error instanceof Error ? error.message : String(error)
-    emitGuiUpdateState({ status: 'error', info: lastInfo ?? undefined, message, code: 'unknown' })
+    const installFailed = updateInstallAttemptActive
+    if (installFailed) {
+      updateInstallLaunchError = asError(error)
+      scheduleFailedUpdateInstallRecovery()
+    }
+    const downloadFailed = !installFailed && (downloadPromise !== null || lastState.status === 'downloading')
+    if (downloadFailed) {
+      downloaded = false
+      downloadPromise = null
+    }
+    emitGuiUpdateState({
+      status: 'error',
+      info: lastInfo ?? undefined,
+      message,
+      code: installFailed ? 'install_failed' : downloadFailed ? 'download_failed' : 'unknown'
+    })
   })
 
   nativeAutoUpdater?.on?.('before-quit-for-update', () => {
+    if (updateInstallHandoffPending) {
+      updateInstallHandoffStarted = true
+      updateInstallHandoffPending = false
+    }
     markUpdateInstallQuitting(true)
     void runBeforeInstallUpdate().catch((error) => {
+      clearBeforeInstallUpdatePreparation()
+      markUpdateInstallQuitting(false)
       console.warn('[kun-gui updater] failed to stop runtimes before update quit:', error)
     })
   })
@@ -771,13 +869,17 @@ export async function downloadGuiUpdate(channel?: GuiUpdateChannel): Promise<Gui
     }
 
     if (!downloadPromise) {
-      downloadPromise = autoUpdater.downloadUpdate().finally(() => {
-        downloadPromise = null
+      let tracked: Promise<string[]>
+      tracked = autoUpdater.downloadUpdate().finally(() => {
+        if (downloadPromise === tracked) downloadPromise = null
       })
+      downloadPromise = tracked
     }
     const paths = await downloadPromise
     return { ok: true, paths }
   } catch (e) {
+    downloaded = false
+    downloadPromise = null
     const message = e instanceof Error ? e.message : String(e)
     emitGuiUpdateState({ status: 'error', info: lastInfo ?? undefined, message, code: 'download_failed' })
     return {
@@ -789,7 +891,25 @@ export async function downloadGuiUpdate(channel?: GuiUpdateChannel): Promise<Gui
   }
 }
 
-export async function installGuiUpdate(): Promise<GuiUpdateInstallResult> {
+export function installGuiUpdate(): Promise<GuiUpdateInstallResult> {
+  if (installPromise) return installPromise
+  if (updateInstallAttemptActive || updateInstallHandoffPending || updateInstallHandoffStarted) {
+    return Promise.resolve({ ok: true })
+  }
+  const operation = installGuiUpdateOnce()
+  installPromise = operation
+  void operation.then(
+    () => {
+      if (installPromise === operation) installPromise = null
+    },
+    () => {
+      if (installPromise === operation) installPromise = null
+    }
+  )
+  return operation
+}
+
+async function installGuiUpdateOnce(): Promise<GuiUpdateInstallResult> {
   if (DEVELOPMENT_APP_FLAVOR) {
     return {
       ok: false,
@@ -799,6 +919,7 @@ export async function installGuiUpdate(): Promise<GuiUpdateInstallResult> {
     }
   }
   let updateInstallQuitMarked = false
+  let restoreInstallerUpdateSource = (): void => undefined
   try {
     if (!downloaded) {
       return {
@@ -809,20 +930,40 @@ export async function installGuiUpdate(): Promise<GuiUpdateInstallResult> {
       }
     }
     emitGuiUpdateState({ status: 'installing', info: lastInfo ?? undefined })
-    await Promise.all([pendingVersionStateWrite, runBeforeInstallUpdate()])
     markUpdateInstallQuitting(true)
     updateInstallQuitMarked = true
+    await Promise.all([pendingVersionStateWrite, runBeforeInstallUpdate()])
+    restoreInstallerUpdateSource = setWindowsInstallerUpdateSource()
+    restoreInstallerUpdateSourceAfterFailure = restoreInstallerUpdateSource
     // In-app updates must stay silent on Windows. The assisted NSIS UI can
     // surface its old-uninstaller retry dialog even though our overwrite
     // fallback can safely continue; silent mode applies that dialog's default
     // cancel action instead of asking the user to make the counter-intuitive
     // choice. Manually launched installers remain interactive.
+    updateInstallLaunchError = null
+    updateInstallAttemptActive = true
+    updateInstallHandoffPending = true
+    updateInstallHandoffStarted = false
     autoUpdater.quitAndInstall(true, true)
+    if (updateInstallLaunchError) throw updateInstallLaunchError
     return { ok: true }
   } catch (e) {
-    if (updateInstallQuitMarked) markUpdateInstallQuitting(false)
+    const relaunchRequired = updateInstallQuitMarked
+    restoreInstallerUpdateSource()
+    if (restoreInstallerUpdateSourceAfterFailure === restoreInstallerUpdateSource) {
+      restoreInstallerUpdateSourceAfterFailure = null
+    }
+    updateInstallAttemptActive = false
+    updateInstallHandoffPending = false
+    updateInstallHandoffStarted = false
+    updateInstallLaunchError = null
+    if (updateInstallQuitMarked) {
+      clearBeforeInstallUpdatePreparation()
+      markUpdateInstallQuitting(false)
+    }
     const message = e instanceof Error ? e.message : String(e)
     emitGuiUpdateState({ status: 'error', info: lastInfo ?? undefined, message, code: 'install_failed' })
+    if (relaunchRequired) scheduleFailedUpdateInstallRecovery()
     return {
       ok: false,
       currentVersion: app.getVersion(),

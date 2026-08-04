@@ -139,6 +139,48 @@ export type ExtensionIpcRegistration = {
   dispose(): void
 }
 
+const EXTENSION_PUMP_MAX_BACKOFF_MS = 30_000
+const EXTENSION_PUMP_LOG_REMINDER_MS = 30_000
+
+function createExtensionPumpBackoff(
+  intervalMs: number,
+  logFailure: (message: string) => void
+): {
+  delayMs(): number
+  fail(error: unknown): void
+  reset(): void
+} {
+  const baseDelayMs = Math.max(250, intervalMs)
+  let consecutiveFailures = 0
+  let lastFailureMessage = ''
+  let lastLoggedAt = 0
+  return {
+    delayMs: () => Math.min(
+      EXTENSION_PUMP_MAX_BACKOFF_MS,
+      baseDelayMs * (2 ** Math.min(consecutiveFailures, 8))
+    ),
+    fail: (error) => {
+      consecutiveFailures += 1
+      const message = error instanceof Error ? error.message : String(error)
+      const now = Date.now()
+      if (
+        message !== lastFailureMessage ||
+        lastLoggedAt === 0 ||
+        now - lastLoggedAt >= EXTENSION_PUMP_LOG_REMINDER_MS
+      ) {
+        logFailure(message)
+        lastFailureMessage = message
+        lastLoggedAt = now
+      }
+    },
+    reset: () => {
+      consecutiveFailures = 0
+      lastFailureMessage = ''
+      lastLoggedAt = 0
+    }
+  }
+}
+
 export function startExtensionSecretRevealConsentPump(
   options: RegisterExtensionIpcHandlersOptions,
   intervalMs = 750
@@ -149,10 +191,13 @@ export function startExtensionSecretRevealConsentPump(
   const handled = new Set<string>()
   const pendingDecisions = new Map<string, 'allow' | 'deny'>()
   const nativeDialogs = options.nativeDialogs ?? new NativeDialogCoordinator()
+  const backoff = createExtensionPumpBackoff(intervalMs, (message) => {
+    options.logError?.('extension-account', 'Secret reveal consent pump failed.', { message })
+  })
 
   const schedule = (): void => {
     if (disposed) return
-    timer = setTimeout(() => void poll(), Math.max(250, intervalMs))
+    timer = setTimeout(() => void poll(), backoff.delayMs())
     timer.unref?.()
   }
   const poll = async (): Promise<void> => {
@@ -162,7 +207,11 @@ export function startExtensionSecretRevealConsentPump(
       const parent = options.getMainWindow()
       if (!parent || parent.isDestroyed()) return
       const result = await options.runtimeRequest('/v1/extensions/secret-reveal-requests', 'GET')
-      if (!result.ok) return
+      if (!result.ok) {
+        backoff.fail(new Error(`runtime request failed with HTTP ${result.status}`))
+        return
+      }
+      backoff.reset()
       const payload = safeJsonParse(result.body)
       if (!isRecord(payload) || !Array.isArray(payload.requests)) return
       const request = payload.requests.find((candidate) => {
@@ -219,9 +268,7 @@ export function startExtensionSecretRevealConsentPump(
         handled.add(requestId)
       }
     } catch (error) {
-      options.logError?.('extension-account', 'Secret reveal consent pump failed.', {
-        message: error instanceof Error ? error.message : String(error)
-      })
+      backoff.fail(error)
     } finally {
       polling = false
       schedule()
@@ -247,9 +294,12 @@ export function startExtensionNotificationPump(
   let polling = false
   let timer: NodeJS.Timeout | undefined
   let hadNotifications = false
+  const backoff = createExtensionPumpBackoff(intervalMs, (message) => {
+    options.logError?.('extension-notification', 'Extension notification pump failed.', { message })
+  })
   const schedule = (): void => {
     if (disposed) return
-    timer = setTimeout(() => void poll(), Math.max(250, intervalMs))
+    timer = setTimeout(() => void poll(), backoff.delayMs())
     timer.unref?.()
   }
   const poll = async (): Promise<void> => {
@@ -262,7 +312,11 @@ export function startExtensionNotificationPump(
         '/v1/extensions/workbench/notifications',
         'GET'
       )
-      if (!result.ok) return
+      if (!result.ok) {
+        backoff.fail(new Error(`runtime request failed with HTTP ${result.status}`))
+        return
+      }
+      backoff.reset()
       const parsed = extensionNotificationSnapshotResponseSchema.safeParse(safeJsonParse(result.body))
       if (!parsed.success) {
         options.logError?.('extension-notification', 'Kun returned an invalid notification snapshot.', {
@@ -280,9 +334,7 @@ export function startExtensionNotificationPump(
       hadNotifications = payload.notifications.length > 0
       parent.webContents.send('extension:notifications', payload)
     } catch (error) {
-      options.logError?.('extension-notification', 'Extension notification pump failed.', {
-        message: error instanceof Error ? error.message : String(error)
-      })
+      backoff.fail(error)
     } finally {
       polling = false
       schedule()

@@ -49,6 +49,28 @@ const hasExplicitMacSigningIdentity = Boolean(
     process.env.MAC_SIGN === '1'
 )
 
+const requireWindowsCodeSigning = process.env.KUN_REQUIRE_WINDOWS_SIGNING === '1'
+const hasWindowsSigningCredential = Boolean(
+  process.env.WIN_CSC_LINK?.trim() ||
+    process.env.CSC_LINK?.trim()
+)
+const windowsPublisherName = (process.env.WIN_CSC_PUBLISHER_NAME || '').trim()
+const windowsTimestampServer = (
+  process.env.WIN_CSC_TIMESTAMP_SERVER || 'http://timestamp.digicert.com'
+).trim() || 'http://timestamp.digicert.com'
+
+if (requireWindowsCodeSigning && !hasWindowsSigningCredential) {
+  throw new Error(
+    'KUN_REQUIRE_WINDOWS_SIGNING=1 requires WIN_CSC_LINK (or CSC_LINK).'
+  )
+}
+
+if (requireWindowsCodeSigning && !windowsPublisherName) {
+  throw new Error(
+    'KUN_REQUIRE_WINDOWS_SIGNING=1 requires WIN_CSC_PUBLISHER_NAME to match the signing certificate subject.'
+  )
+}
+
 const hasNotaryToolCredentials = Boolean(
   process.env.APPLE_API_KEY_ID &&
     process.env.APPLE_API_ISSUER &&
@@ -273,6 +295,22 @@ module.exports = {
     // the desktop render crisp icons at small sizes (#222). Regenerate with:
     // npx --yes png2icons src/asset/img/kun_mac.png build/icon -icowe -bc
     icon: './build/icon.ico',
+    // Release scripts set KUN_REQUIRE_WINDOWS_SIGNING=1. Keep developer and
+    // unsigned CI builds available, but make a release fail before publishing
+    // if the code-signing certificate cannot be used.
+    ...(requireWindowsCodeSigning
+      ? {
+          forceCodeSigning: true,
+          signtoolOptions: {
+            // electron-updater reads publisherName from app-update.yml when it
+            // verifies downloaded installers. The timestamp settings apply to
+            // both modern and legacy Authenticode signatures.
+            publisherName: windowsPublisherName,
+            rfc3161TimeStampServer: windowsTimestampServer,
+            timeStampServer: windowsTimestampServer
+          }
+        }
+      : {}),
     target: [{ target: 'nsis', arch: ['x64'] }]
   },
   nsis: {

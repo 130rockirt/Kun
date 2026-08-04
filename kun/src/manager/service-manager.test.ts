@@ -1,7 +1,13 @@
 import { describe, expect, it, vi } from 'vitest'
 import { dispatchRequest } from '../server/http-server.js'
 import {
+  ManagerRuntimeSlotBusyError,
+  registerRuntimeWithManager,
+  type ServiceManagerConnection
+} from './manager-client.js'
+import {
   buildServiceManagerRouter,
+  RuntimeSlotBusyError,
   ServiceManagerState,
   ThreadLeaseBusyError
 } from './service-manager.js'
@@ -67,6 +73,93 @@ describe('service manager control plane', () => {
     }
     expect(state.registration('production')?.port).toBe(18899)
     expect(state.registration('development')?.port).toBe(18999)
+  })
+
+  it('preserves one owner per flavor until the registered slot expires', async () => {
+    const state = new ServiceManagerState()
+    const started = new Date('2026-08-01T00:00:00.000Z')
+    const owner = registration('production', 'runtime-owner')
+    state.register(owner, started)
+
+    expect(() => state.register(
+      registration('production', 'runtime-contender'),
+      new Date('2026-08-01T00:00:01.000Z')
+    )).toThrow(RuntimeSlotBusyError)
+    expect(state.registration('production')).toMatchObject({ instanceId: owner.instanceId })
+
+    expect(state.register({ ...owner, port: 18901 }, new Date('2026-08-01T00:00:02.000Z')))
+      .toMatchObject({ instanceId: owner.instanceId, port: 18901 })
+
+    state.expireStale(new Date('2026-08-01T00:00:23.000Z'))
+    expect(state.register(
+      registration('production', 'runtime-contender'),
+      new Date('2026-08-01T00:00:23.000Z')
+    )).toMatchObject({ instanceId: 'runtime-contender' })
+  })
+
+  it('returns the current registration when a runtime slot is busy', async () => {
+    const state = new ServiceManagerState()
+    const owner = registration('production', 'runtime-owner')
+    state.register(owner)
+    const router = buildServiceManagerRouter({
+      managerToken: 'manager-secret',
+      instanceId: 'manager-a',
+      startedAt: '2026-08-01T00:00:00.000Z',
+      state
+    })
+
+    const response = await dispatchRequest(router, request('/v1/runtimes/production/register', {
+      method: 'PUT',
+      body: JSON.stringify(registration('production', 'runtime-contender'))
+    }))
+
+    expect(response.status).toBe(409)
+    await expect(response.json()).resolves.toMatchObject({
+      code: 'runtime_slot_busy',
+      owner: { flavor: 'production', instanceId: owner.instanceId }
+    })
+    expect(state.registration('production')).toMatchObject({ instanceId: owner.instanceId })
+  })
+
+  it('parses runtime slot conflicts into a typed manager client error', async () => {
+    const state = new ServiceManagerState()
+    const owner = registration('production', 'runtime-owner')
+    state.register(owner)
+    const router = buildServiceManagerRouter({
+      managerToken: 'manager-secret',
+      instanceId: 'manager-a',
+      startedAt: '2026-08-01T00:00:00.000Z',
+      state
+    })
+    const manager: ServiceManagerConnection = {
+      discovery: {
+        version: 1,
+        protocolVersion: 1,
+        instanceId: 'manager-a',
+        pid: process.pid,
+        startedAt: '2026-08-01T00:00:00.000Z',
+        host: '127.0.0.1',
+        port: 18700,
+        baseUrl: 'http://127.0.0.1:18700',
+        managerToken: 'manager-secret',
+        serviceVersion: '0.1.0',
+        dataDir: '/tmp/kun-data',
+        settingsPath: '/tmp/kun-settings.json'
+      }
+    }
+    const fetchImpl = (async (url: string | URL | Request, init?: RequestInit) =>
+      dispatchRequest(router, new Request(url, init))) as typeof fetch
+
+    const conflict = await registerRuntimeWithManager({
+      manager,
+      registration: registration('production', 'runtime-contender'),
+      fetch: fetchImpl
+    }).catch((error: unknown) => error)
+    expect(conflict).toBeInstanceOf(ManagerRuntimeSlotBusyError)
+    expect(conflict).toMatchObject({
+      name: 'ManagerRuntimeSlotBusyError',
+      owner: { instanceId: owner.instanceId }
+    })
   })
 
   it('rejects unauthenticated registration and stale heartbeats', async () => {

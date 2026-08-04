@@ -6,11 +6,28 @@ describe('SDD assistant model selection', () => {
     expect(buildSddAssistantModelOverrides({
       model: ' gpt-5.6-sol ',
       providerId: ' codex ',
-      reasoningEffort: 'max'
+      reasoningEffort: 'max',
+      fastMode: true,
+      modelGroups: [{
+        providerId: 'codex',
+        presetSource: 'codex',
+        label: 'Codex',
+        modelIds: ['gpt-5.6-sol'],
+        modelProfiles: {
+          'gpt-5.6-sol': {
+            inputModalities: ['text'],
+            outputModalities: ['text'],
+            supportsToolCalling: true,
+            messageParts: ['text'],
+            serviceTiers: ['priority']
+          }
+        }
+      }]
     })).toEqual({
       model: 'gpt-5.6-sol',
       providerId: 'codex',
-      reasoningEffort: 'max'
+      reasoningEffort: 'max',
+      serviceTier: 'priority'
     })
   })
 
@@ -18,7 +35,9 @@ describe('SDD assistant model selection', () => {
     expect(buildSddAssistantModelOverrides({
       model: ' ',
       providerId: '',
-      reasoningEffort: 'auto'
+      reasoningEffort: 'auto',
+      fastMode: false,
+      modelGroups: []
     })).toEqual({
       reasoningEffort: 'auto'
     })

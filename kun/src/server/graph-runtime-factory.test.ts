@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { InMemoryThreadStore } from '../adapters/in-memory-thread-store.js'
 import { InMemoryArtifactStore } from '../artifacts/artifact-store.js'
 import type { GraphRuntimeConfig } from '../config/kun-config.js'
+import { GRAPH_CONTRACT_VERSION, type GraphRunV1 } from '../contracts/graph.js'
 import { createThreadRecord } from '../domain/thread.js'
 import { createTurnRecord } from '../domain/turn.js'
 import { GraphRunConflictError } from '../graph/graph-run-store.js'
@@ -20,6 +21,53 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) =>
     rm(root, { recursive: true, force: true })))
 })
+
+async function transitionRun(
+  runtime: GraphRuntimeComposition,
+  run: GraphRunV1,
+  to: GraphRunV1['status'],
+  commandId: string
+): Promise<GraphRunV1> {
+  return (await runtime.store.append(run.id, {
+    expectedSeq: run.lastEventSeq,
+    graphRevision: run.currentRevision,
+    commandId,
+    idempotencyKey: commandId,
+    event: {
+      type: 'run_status_changed',
+      payload: { from: run.status, to }
+    }
+  })).state
+}
+
+async function recordFinalSummary(
+  runtime: GraphRuntimeComposition,
+  run: GraphRunV1,
+  commandId: string
+): Promise<GraphRunV1> {
+  return (await runtime.store.append(run.id, {
+    expectedSeq: run.lastEventSeq,
+    graphRevision: run.currentRevision,
+    commandId,
+    idempotencyKey: commandId,
+    event: {
+      type: 'run_summary_recorded',
+      payload: {
+        summary: {
+          version: GRAPH_CONTRACT_VERSION,
+          finalAnswer: 'A stale Graph report was persisted before later work.',
+          evidenceRefs: [],
+          unresolvedRisks: [],
+          changedFiles: [],
+          validationResults: [],
+          totalTokens: 0,
+          totalElapsedMs: 0,
+          completedAt: '2026-07-26T00:00:00.000Z'
+        }
+      }
+    }
+  })).state
+}
 
 describe('GraphRuntimeComposition creation authority', () => {
   it('binds HTTP/tool creation inputs to the canonical parent thread and source turn', async () => {
@@ -100,27 +148,53 @@ describe('GraphRuntimeComposition creation authority', () => {
     })).resolves.toMatchObject({ run: { status: 'ready' } })
 
     let completing = await runtime.control.get('run_valid')
-    completing = (await runtime.store.append(completing.id, {
-      expectedSeq: completing.lastEventSeq,
-      graphRevision: completing.currentRevision,
-      commandId: 'start_run_valid',
-      idempotencyKey: 'start_run_valid',
-      event: {
-        type: 'run_status_changed',
-        payload: { from: 'ready', to: 'running' }
-      }
-    })).state
-    await runtime.store.append(completing.id, {
-      expectedSeq: completing.lastEventSeq,
-      graphRevision: completing.currentRevision,
-      commandId: 'complete_run_valid',
-      idempotencyKey: 'complete_run_valid',
-      event: {
-        type: 'run_status_changed',
-        payload: { from: 'running', to: 'completing' }
-      }
-    })
+    completing = await transitionRun(runtime, completing, 'running', 'start_run_valid')
+    completing = await transitionRun(runtime, completing, 'completing', 'complete_run_valid')
     await runtime.handleSourceTurnTerminal(thread.id, 'turn_1', 'aborted')
+    await expect(runtime.control.get('run_valid')).resolves.toMatchObject({
+      status: 'completing'
+    })
+
+    // A stale summary must not fence later unfinished Graph work from a
+    // passive source-turn cancellation.
+    await runtime.control.create({
+      ...base,
+      runId: 'run_summarized',
+      commandId: 'command_create_summarized',
+      idempotencyKey: 'create_summarized'
+    })
+    let summarized = await runtime.control.get('run_summarized')
+    summarized = await transitionRun(runtime, summarized, 'running', 'start_run_summarized')
+    summarized = await transitionRun(runtime, summarized, 'completing', 'complete_run_summarized')
+    summarized = await recordFinalSummary(runtime, summarized, 'summarize_run_summarized')
+    summarized = await transitionRun(
+      runtime,
+      summarized,
+      'awaiting_supervision',
+      'hold_summarized_run_for_recovery'
+    )
+    await runtime.handleSourceTurnTerminal(thread.id, 'turn_1', 'failed')
+    await expect(runtime.control.get('run_summarized')).resolves.toMatchObject({
+      status: 'cancelled',
+      summary: { finalAnswer: 'A stale Graph report was persisted before later work.' }
+    })
+
+    await runtime.control.create({
+      ...base,
+      runId: 'run_active',
+      commandId: 'command_create_active',
+      idempotencyKey: 'create_active'
+    })
+    let active = await runtime.control.get('run_active')
+    active = await transitionRun(runtime, active, 'running', 'start_run_active')
+    await runtime.handleSourceTurnTerminal(thread.id, 'turn_1', 'aborted')
+    await expect(runtime.control.get(active.id)).resolves.toMatchObject({
+      status: 'cancelled'
+    })
+
+    await runtime.handleSourceTurnTerminal(thread.id, 'turn_1', 'aborted', {
+      forceCancel: true
+    })
     await expect(runtime.control.get('run_valid')).resolves.toMatchObject({
       status: 'cancelled'
     })

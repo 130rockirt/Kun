@@ -1,13 +1,14 @@
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { act, create as createRenderer, type ReactTestInstance, type ReactTestRenderer } from 'react-test-renderer'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   defaultModelProviderSettings,
   getModelProviderPreset,
   modelProviderPresetAccountProfile,
   type ModelProviderSettingsV1
 } from '@shared/app-settings'
+import i18n from '../i18n'
 import { ModelRoutesSettings } from './settings-section-model-routes'
 
 function settings(): ModelProviderSettingsV1 {
@@ -17,13 +18,13 @@ function settings(): ModelProviderSettingsV1 {
     localGateway: { enabled: true, name: 'Kun API' },
     routePools: [
       {
-        id: 'kimi-pool', name: 'Kimi 容量池', modelId: 'kimi-auto', enabled: true, strategy: 'adaptive',
+        id: 'kimi-pool', name: 'Kimi pool', modelId: 'kimi-auto', enabled: true, strategy: 'adaptive',
         targets: [{ id: 'target', providerId: defaults.providers[0].id, modelId: defaults.providers[0].models[0], enabled: true, weight: 2 }],
         failurePolicy: { failoverHttpStatusCodes: [429, 503], failoverOnNetworkError: true, failoverOnTimeout: true, failoverOnAuthError: true },
         healthPolicy: { failureThreshold: 3, cooldownMs: 60_000, halfOpenMaxAttempts: 1 }
       },
       {
-        id: 'code-pool', name: 'Coding 容量池', modelId: 'code-auto', enabled: true, strategy: 'priority',
+        id: 'code-pool', name: 'Coding pool', modelId: 'code-auto', enabled: true, strategy: 'priority',
         targets: [{ id: 'code-target', providerId: defaults.providers[0].id, modelId: defaults.providers[0].models[0], enabled: true, weight: 1 }],
         failurePolicy: { failoverHttpStatusCodes: [429, 503], failoverOnNetworkError: true, failoverOnTimeout: true, failoverOnAuthError: true },
         healthPolicy: { failureThreshold: 3, cooldownMs: 60_000, halfOpenMaxAttempts: 1 }
@@ -33,9 +34,14 @@ function settings(): ModelProviderSettingsV1 {
 }
 
 describe('ModelRoutesSettings', () => {
-  afterEach(() => {
+  beforeEach(async () => {
+    await i18n.changeLanguage('en')
+  })
+
+  afterEach(async () => {
     vi.useRealTimers()
     vi.unstubAllGlobals()
+    await i18n.changeLanguage('en')
   })
 
   it('renders four persistent task tabs with matching panels', () => {
@@ -97,24 +103,48 @@ describe('ModelRoutesSettings', () => {
     await act(async () => renderer.unmount())
   })
 
-  it('renders one local provider with multiple routed models and safety policy', () => {
+  it('renders the complete local provider workspace in English', () => {
     const html = renderToStaticMarkup(createElement(ModelRoutesSettings, { settings: settings(), onChange: () => undefined }))
-    expect(html).toContain('本地中转供应商')
+    expect(html).toContain('Local relay provider')
     expect(html).toContain('Kun API')
-    expect(html).toContain('2 / 2 个模型已启用')
-    expect(html).toContain('路由模型')
-    expect(html).toContain('Kimi 容量池')
+    expect(html).toContain('2 / 2 models enabled')
+    expect(html).toContain('Routed models')
+    expect(html).toContain('Kimi pool')
     expect(html).toContain('kimi-auto')
-    expect(html).toContain('Coding 容量池')
+    expect(html).toContain('Coding pool')
     expect(html).toContain('code-auto')
-    expect(html).toContain('添加模型')
-    expect(html).toContain('稳定性优先自适应')
-    expect(html).toContain('流式输出开始后固定停止')
-    expect(html).toContain('仅本机访问 · 无鉴权')
+    expect(html).toContain('Add model')
+    expect(html).toContain('Stability-first adaptive')
+    expect(html).toContain('After streaming output begins')
+    expect(html).toContain('Local access only · No authentication')
     expect(html).toContain('http://127.0.0.1:18899/v1')
     expect(html).toContain('GET /models')
     expect(html).toContain('POST /chat/completions')
     expect(html).toContain('POST /responses')
+    expect(html).not.toMatch(/[\p{Script=Han}]/u)
+  })
+
+  it('reacts to a Simplified Chinese locale change without remounting', async () => {
+    let renderer!: ReactTestRenderer
+    await act(async () => {
+      renderer = createRenderer(createElement(ModelRoutesSettings, {
+        settings: settings(),
+        onChange: () => undefined,
+        active: false
+      }))
+    })
+    expect(textContent(renderer.root)).toContain('Local relay provider')
+
+    await act(async () => {
+      await i18n.changeLanguage('zh')
+    })
+
+    const localized = textContent(renderer.root)
+    expect(localized).toContain('本地中转供应商')
+    expect(localized).toContain('2 / 2 个模型已启用')
+    expect(localized).toContain('稳定性优先自适应')
+    expect(localized).not.toContain('Local relay provider')
+    await act(async () => { renderer.unmount() })
   })
 
   it('opens a detailed local API dialog with endpoint examples', async () => {
@@ -133,16 +163,18 @@ describe('ModelRoutesSettings', () => {
     })
 
     await act(async () => {
-      const button = renderer!.root.findAllByType('button').find((item) => item.children.join('')?.includes('接口说明'))
+      const button = renderer!.root.findAllByType('button').find((item) => item.children.join('')?.includes('API guide'))
       button!.props.onClick()
     })
 
     expect(renderer!.root.findByProps({ role: 'dialog' })).toBeDefined()
     const dialogTree = JSON.stringify(renderer!.toJSON())
-    expect(dialogTree).toContain('本地 API 说明')
+    expect(dialogTree).toContain('Local API guide')
     expect(dialogTree).toContain('Chat Completions')
     expect(dialogTree).toContain('http://127.0.0.1:19999/v1')
     expect(dialogTree).toContain('/chat/completions')
+    expect(dialogTree).toContain('Hello, Kun!')
+    expect(dialogTree).not.toMatch(/[\p{Script=Han}]/u)
 
     await act(async () => { renderer!.unmount() })
   })
@@ -181,14 +213,14 @@ describe('ModelRoutesSettings', () => {
     })
 
     await act(async () => {
-      renderer!.root.findByProps({ 'aria-label': '开放本地 API' }).props.onClick()
+      renderer!.root.findByProps({ 'aria-label': 'Enable local API' }).props.onClick()
     })
     expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({
       localGateway: expect.objectContaining({ enabled: true })
     }))
 
     await act(async () => {
-      renderer!.root.findByProps({ 'aria-label': '启用路由池' }).props.onClick()
+      renderer!.root.findByProps({ 'aria-label': 'Enable route pool' }).props.onClick()
     })
     expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({
       routePools: expect.arrayContaining([expect.objectContaining({ id: 'kimi-pool', enabled: true })])
@@ -217,10 +249,10 @@ describe('ModelRoutesSettings', () => {
     })
 
     const content = textContent(renderer!.root)
-    expect(content).toContain('本地保存失败')
-    expect(content).toContain('Kun Runtime 未连接')
+    expect(content).toContain('Local save failed')
+    expect(content).toContain('Kun Runtime not connected')
     expect(content).toContain('disk write failed')
-    const retry = renderer!.root.findAllByType('button').find((button) => textContent(button).includes('重试保存'))
+    const retry = renderer!.root.findAllByType('button').find((button) => textContent(button).includes('Retry save'))
     await act(async () => { retry!.props.onClick() })
     expect(onRetrySave).toHaveBeenCalledOnce()
 
@@ -243,11 +275,11 @@ describe('ModelRoutesSettings', () => {
     })
 
     const content = textContent(renderer!.root)
-    expect(content).toContain('供应商已删除：removed-provider')
-    expect(content).toContain('原模型：removed-model')
-    expect(content).toContain('引用已保留')
-    expect(content).toContain('修复无效目标后测试')
-    expect(content).toContain('没有可执行目标')
+    expect(content).toContain('Provider deleted: removed-provider')
+    expect(content).toContain('Original model: removed-model')
+    expect(content).toContain('The reference was preserved')
+    expect(content).toContain('Fix invalid targets to test')
+    expect(content).toContain('no executable target')
 
     await act(async () => { renderer!.unmount() })
   })
@@ -268,7 +300,7 @@ describe('ModelRoutesSettings', () => {
     await act(async () => {
       renderer = createRenderer(createElement(ModelRoutesSettings, { settings: draft, onChange: () => undefined }))
     })
-    const testButton = renderer!.root.findAllByType('button').find((button) => textContent(button).includes('测试完整链路'))
+    const testButton = renderer!.root.findAllByType('button').find((button) => textContent(button).includes('Test complete route'))
     expect(testButton).toBeDefined()
 
     await act(async () => {
@@ -278,9 +310,9 @@ describe('ModelRoutesSettings', () => {
     })
 
     expect(runtimeRequest).toHaveBeenCalledWith('/v1/model-routes/kimi-pool/test', 'POST')
-    expect(textContent(renderer!.root)).toContain('测试进行中')
-    expect(textContent(renderer!.root)).toContain('已尝试 2 / 2 个目标')
-    expect(textContent(renderer!.root)).toContain('正在测试：provider-backup / kimi-backup')
+    expect(textContent(renderer!.root)).toContain('Test in progress')
+    expect(textContent(renderer!.root)).toContain('Attempted 2 / 2 targets')
+    expect(textContent(renderer!.root)).toContain('Testing: provider-backup / kimi-backup')
 
     await act(async () => { renderer!.unmount() })
   })
@@ -295,8 +327,8 @@ describe('ModelRoutesSettings', () => {
     await act(async () => {
       renderer = createRenderer(createElement(ModelRoutesSettings, { settings: draft, onChange: () => undefined }))
     })
-    expect(textContent(renderer!.root)).toContain('测试进行中')
-    expect(textContent(renderer!.root)).toContain('正在测试：provider-backup / kimi-backup')
+    expect(textContent(renderer!.root)).toContain('Test in progress')
+    expect(textContent(renderer!.root)).toContain('Testing: provider-backup / kimi-backup')
     await act(async () => { renderer!.unmount() })
 
     statusBody = routeStatus(draft, [testRecord('succeeded')])
@@ -304,10 +336,10 @@ describe('ModelRoutesSettings', () => {
       renderer = createRenderer(createElement(ModelRoutesSettings, { settings: draft, onChange: () => undefined }))
     })
     const restored = textContent(renderer!.root)
-    expect(restored).toContain('链路测试成功')
-    expect(restored).toContain('最终目标：provider-backup / kimi-backup')
-    expect(restored).toContain('模型响应：OK')
-    expect(restored).toContain('最近测试记录')
+    expect(restored).toContain('Route test succeeded')
+    expect(restored).toContain('Final target: provider-backup / kimi-backup')
+    expect(restored).toContain('Model response: OK')
+    expect(restored).toContain('Recent test records')
 
     await act(async () => { renderer!.unmount() })
   })
@@ -321,11 +353,11 @@ describe('ModelRoutesSettings', () => {
       renderer = createRenderer(createElement(ModelRoutesSettings, { settings: draft, onChange: () => undefined }))
     })
 
-    const testButton = renderer!.root.findAllByType('button').find((button) => textContent(button).includes('等待配置同步'))
+    const testButton = renderer!.root.findAllByType('button').find((button) => textContent(button).includes('Waiting for configuration sync'))
     expect(testButton?.props.disabled).toBe(true)
-    expect(textContent(renderer!.root)).toContain('本地配置已保存，正在等待 Kun Runtime')
-    expect(textContent(renderer!.root)).toContain('等待 Kun Runtime 同步')
-    expect(textContent(renderer!.root)).not.toContain('Kun Runtime 同步失败')
+    expect(textContent(renderer!.root)).toContain('Local configuration was saved and is waiting for Kun Runtime')
+    expect(textContent(renderer!.root)).toContain('Waiting for Kun Runtime sync')
+    expect(textContent(renderer!.root)).not.toContain('Kun Runtime sync failed')
     expect(runtimeRequest.mock.calls.some((call) => call[1] === 'POST')).toBe(false)
 
     await act(async () => { renderer!.unmount() })
@@ -361,9 +393,9 @@ describe('ModelRoutesSettings', () => {
     })
 
     const content = textContent(renderer!.root)
-    expect(content).toContain('Kun Runtime 同步失败')
+    expect(content).toContain('Kun Runtime sync failed')
     expect(content).toContain('hot apply rejected the route config')
-    expect(content).toContain('本地配置已保存，但 Kun Runtime 同步失败')
+    expect(content).toContain('Local configuration was saved, but Kun Runtime sync failed')
 
     await act(async () => { renderer!.unmount() })
   })
@@ -421,7 +453,7 @@ describe('ModelRoutesSettings', () => {
       await Promise.resolve()
     })
 
-    expect(textContent(renderer!.root)).toContain('Kun Runtime 同步失败')
+    expect(textContent(renderer!.root)).toContain('Kun Runtime sync failed')
     expect(textContent(renderer!.root)).toContain('latest apply failed')
 
     await act(async () => { renderer!.unmount() })

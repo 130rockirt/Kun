@@ -1,6 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { EventEmitter } from 'node:events'
-import { existsSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  writeFileSync
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -1183,6 +1191,7 @@ describe('registerAppIpcHandlers', () => {
     }, null, 2)
     try {
       await import('node:fs/promises').then(({ mkdir }) => mkdir(workspace))
+      const canonicalWorkspace = realpathSync.native(workspace)
       registerAppIpcHandlers(registerOptions({ onKunProjectConfigChanged }))
 
       const written = await handlers.get('kun:project-config:write')?.({}, {
@@ -1197,7 +1206,7 @@ describe('registerAppIpcHandlers', () => {
         exists: true
       })
       expect(onKunProjectConfigChanged).toHaveBeenCalledWith(
-        expect.stringContaining('/workspace/.kun/project.json'),
+        join(canonicalWorkspace, '.kun', 'project.json'),
         content
       )
       await expect(handlers.get('kun:project-config:read')?.({}, { workspaceRoot: workspace }))
@@ -1223,6 +1232,7 @@ describe('registerAppIpcHandlers', () => {
     })
     try {
       await import('node:fs/promises').then(({ mkdir }) => mkdir(workspace))
+      const canonicalWorkspace = realpathSync.native(workspace)
       registerAppIpcHandlers(registerOptions({ store: store as never, applySettingsPatch }))
       await handlers.get('kun:project-config:write')?.({}, {
         workspaceRoot: workspace,
@@ -1287,7 +1297,7 @@ describe('registerAppIpcHandlers', () => {
         cancelId: 1
       }))
       expect(current.agents.kun.projectConfig.grants).toEqual([
-        expect.objectContaining({ workspaceRoot: expect.stringContaining('/workspace') })
+        expect.objectContaining({ workspaceRoot: canonicalWorkspace })
       ])
 
       writeFileSync(join(workspace, '.kun', 'project.json'), JSON.stringify({

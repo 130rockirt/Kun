@@ -470,6 +470,8 @@
   "designPrototypePlayUnavailable": "Прежде чем играть в прототип, создайте хотя бы один экран.",
   "designPrototypeBack": "Назад",
   "designPrototypeClose": "Закрыть прототип",
+  "designPrototypeOpenBrowser": "Открыть в браузере",
+  "designPrototypeOpenBrowserFailed": "Не удалось открыть прототип в браузере.",
   "designPrototypeViewportMode": "Окно просмотра прототипа",
   "designPrototypeViewportWebDetail": "{{width}} x {{height}} web prototype",
   "designPrototypeViewportAppDetail": "{{width}} x {{height}} phone prototype",

@@ -1,10 +1,12 @@
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { DesignArtifact } from '../../../design/design-types'
 import {
   PrototypePlayerOverlay,
   buildPrototypeViewportModeScript,
+  openPrototypeHtmlInBrowser,
+  prototypeViewportFitScale,
   shouldInjectPrototypeNavigationCapture,
   shouldSyncPrototypePlayerToInitialId
 } from './PrototypePlayerOverlay'
@@ -26,6 +28,27 @@ function htmlArtifact(id: string, title: string, extra: Partial<DesignArtifact> 
 }
 
 describe('PrototypePlayerOverlay', () => {
+  it('fits a fixed prototype viewport without changing its intrinsic dimensions', () => {
+    expect(prototypeViewportFitScale(1280, 800, 1280, 800)).toBe(1)
+    expect(prototypeViewportFitScale(960, 900, 1280, 800)).toBe(0.75)
+    expect(prototypeViewportFitScale(1400, 600, 1280, 800)).toBe(0.75)
+    expect(prototypeViewportFitScale(0, 600, 1280, 800)).toBe(1)
+  })
+
+  it('opens the active HTML artifact through the authorized system-browser bridge', async () => {
+    const openPrototype = vi.fn(async () => ({ ok: true }))
+
+    await expect(openPrototypeHtmlInBrowser(
+      openPrototype,
+      '/workspace',
+      '.kun-design/doc/home/v1.html'
+    )).resolves.toEqual({ ok: true })
+    expect(openPrototype).toHaveBeenCalledWith({
+      path: '.kun-design/doc/home/v1.html',
+      workspaceRoot: '/workspace'
+    })
+  })
+
   it('waits for webview readiness before injecting navigation capture', () => {
     expect(shouldInjectPrototypeNavigationCapture({
       open: true,
@@ -119,11 +142,11 @@ describe('PrototypePlayerOverlay', () => {
       })
     )
 
-    expect(html).toContain('aspect-ratio:390 / 844')
-    expect(html).toContain('height:100%')
+    expect(html).toContain('width:390px;height:844px;transform:scale(1)')
     expect(html).toContain('.kun-design/doc/home/v1.html - App 390 x 844')
     expect(html).toContain('aria-label="Prototype viewport"')
     expect(html).toContain('aria-pressed="true"')
+    expect(html).toContain('aria-label="Open in browser"')
     expect(html).toContain('rounded-[30px]')
     expect(html).not.toContain('ring-[6px]')
     expect(html).toContain('All screens')
@@ -145,10 +168,11 @@ describe('PrototypePlayerOverlay', () => {
       })
     )
 
-    expect(html).toContain('aspect-ratio:1280 / 800')
-    expect(html).toContain('width:100%')
+    expect(html).toContain('width:1280px;height:800px;transform:scale(1)')
     expect(html).toContain('.kun-design/doc/home/v1.html - Web 1280 x 800')
     expect(html).toContain('1280 x 800 web prototype')
+    expect(html).toContain('fixed inset-0')
+    expect(html).not.toContain('max-h-full max-w-full')
   })
 
   it('renders the current version path instead of stale screen paths', () => {

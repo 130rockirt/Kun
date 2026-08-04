@@ -534,6 +534,9 @@ describe('provider quota registry and refresh', () => {
     expect(classifyProviderQuotaProbe(
       subscriptionProvider('gemini-subscription', 'antigravity-cli')
     )?.kind).toBe('antigravity-subscription')
+    expect(classifyProviderQuotaProbe(
+      subscriptionProvider('gemini-subscription-2', 'antigravity-cli')
+    )?.kind).toBe('antigravity-subscription')
     expect(classifyProviderQuotaProbe({
       ...subscriptionProvider('claude-subscription', 'agent-sdk'),
       kind: 'http'
@@ -749,6 +752,157 @@ describe('provider quota registry and refresh', () => {
       ['grok-subscription', 'available', 32]
     ])
     expect(JSON.stringify(result)).not.toMatch(/codex-secret|kimi-secret|grok-secret/)
+  })
+
+  it('refreshes an expired configured Codex login before querying quota', async () => {
+    const refreshFetch = vi.fn(async (url: string | URL) => {
+      expect(String(url)).toBe('https://auth.openai.com/oauth/token')
+      return Response.json({
+        access_token: 'codex-refreshed-access',
+        refresh_token: 'codex-refreshed-refresh',
+        expires_in: 3_600
+      })
+    })
+    vi.stubGlobal('fetch', refreshFetch)
+    const fetcher = vi.fn(async (_url: string | URL, init?: RequestInit) => {
+      const headers = new Headers(init?.headers)
+      expect(headers.get('authorization')).toBe('Bearer codex-refreshed-access')
+      expect(headers.get('chatgpt-account-id')).toBe('acct-refresh')
+      expect(headers.get('user-agent')).toMatch(/^codex_cli_rs\//)
+      return Response.json({
+        plan_type: 'plus',
+        rate_limit: {
+          primary_window: {
+            used_percent: 21,
+            reset_at: 1_900_000_000,
+            limit_window_seconds: 18_000
+          }
+        }
+      })
+    })
+
+    try {
+      const codex = subscriptionProvider('codex', 'http')
+      codex.apiKey = JSON.stringify({
+        kind: 'codex-oauth',
+        accessToken: 'codex-expired-access',
+        refreshToken: 'codex-expired-refresh',
+        expiresAt: Date.now() - 60_000,
+        accountId: 'acct-refresh'
+      })
+      const result = await listProviderQuotas(settings([codex]), fetcher)
+
+      expect(result.entries.find((entry) => entry.providerId === 'codex')).toMatchObject({
+        providerId: 'codex',
+        status: 'available',
+        metrics: [expect.objectContaining({ id: 'primary', usedPercent: 21 })]
+      })
+      expect(refreshFetch).toHaveBeenCalledTimes(1)
+      expect(fetcher).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('refreshes and retries once when Codex rejects a current access token', async () => {
+    const resolveCodexCredential = vi.fn(async (
+      _provider: ModelProviderProfileV1,
+      rejectedAccessToken?: string
+    ) => rejectedAccessToken
+      ? { accessToken: 'codex-retry-access', accountId: 'acct-retry' }
+      : { accessToken: 'codex-rejected-access', accountId: 'acct-retry' })
+    const fetcher = vi.fn(async (_url: string | URL, init?: RequestInit) => {
+      const authorization = new Headers(init?.headers).get('authorization')
+      if (authorization === 'Bearer codex-rejected-access') {
+        return new Response('expired', { status: 401 })
+      }
+      expect(authorization).toBe('Bearer codex-retry-access')
+      return Response.json({
+        plan_type: 'pro',
+        rate_limit: {
+          primary_window: {
+            used_percent: 7,
+            reset_at: 1_900_000_000,
+            limit_window_seconds: 18_000
+          }
+        }
+      })
+    })
+
+    const result = await listProviderQuotas(settings([
+      subscriptionProvider('codex', 'http')
+    ]), fetcher, { resolveCodexCredential })
+
+    expect(result.entries.find((entry) => entry.providerId === 'codex')).toMatchObject({
+      providerId: 'codex',
+      status: 'available',
+      metrics: [expect.objectContaining({ id: 'primary', usedPercent: 7 })]
+    })
+    expect(resolveCodexCredential).toHaveBeenNthCalledWith(2, expect.anything(), 'codex-rejected-access')
+    expect(fetcher).toHaveBeenCalledTimes(2)
+  })
+
+  it('refreshes and retries once when Grok rejects a current access token', async () => {
+    const resolveGrokCredential = vi.fn(async (
+      _provider: ModelProviderProfileV1,
+      rejectedAccessToken?: string
+    ) => rejectedAccessToken
+      ? { accessToken: 'grok-retry-access' }
+      : { accessToken: 'grok-rejected-access' })
+    const fetcher = vi.fn(async (_url: string | URL, init?: RequestInit) => {
+      const authorization = new Headers(init?.headers).get('authorization')
+      if (authorization === 'Bearer grok-rejected-access') {
+        return new Response('expired', { status: 401 })
+      }
+      expect(authorization).toBe('Bearer grok-retry-access')
+      return new Response(grokBillingFrame(18, 1_900_000_000), {
+        headers: { 'Content-Type': 'application/grpc-web+proto' }
+      })
+    })
+
+    const result = await listProviderQuotas(settings([
+      subscriptionProvider('grok-subscription', 'http')
+    ]), fetcher, { resolveGrokCredential })
+
+    expect(result.entries.find((entry) => entry.providerId === 'grok-subscription')).toMatchObject({
+      status: 'available',
+      metrics: [expect.objectContaining({ id: 'credits', usedPercent: 18 })]
+    })
+    expect(resolveGrokCredential).toHaveBeenNthCalledWith(
+      2,
+      expect.anything(),
+      'grok-rejected-access'
+    )
+    expect(fetcher).toHaveBeenCalledTimes(2)
+  })
+
+  it('reports the Gemini CLI migration reason instead of a generic authorization error', async () => {
+    const fetcher = vi.fn(async (url: string | URL, init?: RequestInit) => {
+      expect(String(url)).toContain(':loadCodeAssist')
+      const headers = new Headers(init?.headers)
+      expect(headers.get('user-agent')).toBe('google-gemini-cli')
+      expect(JSON.parse(String(init?.body))).toMatchObject({
+        metadata: { ideType: 'IDE_UNSPECIFIED', pluginType: 'GEMINI' }
+      })
+      return Response.json({
+        allowedTiers: [{ id: 'standard-tier' }],
+        ineligibleTiers: [{
+          reasonMessage: 'This client is no longer supported. Migrate to Antigravity.'
+        }]
+      })
+    })
+
+    const result = await listProviderQuotas(settings([
+      subscriptionProvider('gemini-cli-subscription', 'gemini-cli-api')
+    ]), fetcher, {
+      resolveGeminiCliToken: async () => 'gemini-cli-access'
+    })
+
+    expect(result.entries.find((entry) => entry.providerId === 'gemini-cli-subscription')).toMatchObject({
+      status: 'error',
+      message: 'This client is no longer supported. Migrate to Antigravity.'
+    })
+    expect(fetcher).toHaveBeenCalledTimes(1)
   })
 
   it('reports a missing subscription login without making a request', async () => {

@@ -137,7 +137,8 @@ describe('design_component tool', () => {
       sandboxMode: 'workspace-write',
       security: expect.objectContaining({ memoryEnabled: false })
     })
-    expect(String(prompts[0]?.workspace)).toMatch(/\.kun-design\/component-prototypes\/.+$/)
+    expect(String(prompts[0]?.workspace).replaceAll('\\', '/'))
+      .toMatch(/\.kun-design\/component-prototypes\/.+$/)
     expect(String(prompts[0]?.prompt)).toContain('Required output path: prototype.html')
     expect(String(prompts[0]?.prompt)).toContain('<DatePicker mode="range" />')
     expect(String(prompts[0]?.prompt)).toContain('export function DatePicker')

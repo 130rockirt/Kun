@@ -18,6 +18,7 @@ import {
   composerReasoningEffortRequestValue,
   type ComposerReasoningEffort
 } from '../chat/FloatingComposerModelPicker'
+import { serviceTierForComposerSelection } from '../chat/composer-fast-mode'
 import {
   firstVisionCapableComposerModel
 } from './useWorkbenchComposerCapabilities'
@@ -59,6 +60,7 @@ type PlanTurnOverrides = Pick<
   | 'model'
   | 'providerId'
   | 'reasoningEffort'
+  | 'serviceTier'
 > & {
   workspaceRoot?: string
 }
@@ -72,6 +74,7 @@ type UseWorkbenchSddTurnControllerParams = {
   composerMode: 'plan' | 'agent'
   composerModelGroups: ModelProviderModelGroup[]
   composerReasoningEffort: ComposerReasoningEffort
+  composerFastMode: boolean
   input: string
   resolvedWriteAssistantProviderId: string
   runtimeConnection: RuntimeConnectionStatus
@@ -149,14 +152,23 @@ export function buildSddAssistantModelOverrides(input: {
   model: string
   providerId: string
   reasoningEffort: ComposerReasoningEffort
-}): Pick<SendMessageOverrides, 'model' | 'providerId' | 'reasoningEffort'> {
+  fastMode: boolean
+  modelGroups: readonly ModelProviderModelGroup[]
+}): Pick<SendMessageOverrides, 'model' | 'providerId' | 'reasoningEffort' | 'serviceTier'> {
   const model = input.model.trim()
   const providerId = input.providerId.trim()
   const reasoningEffort = composerReasoningEffortRequestValue(input.reasoningEffort)
+  const serviceTier = serviceTierForComposerSelection(
+    input.fastMode,
+    input.modelGroups,
+    model,
+    providerId
+  )
   return {
     ...(model ? { model } : {}),
     ...(providerId ? { providerId } : {}),
-    ...(reasoningEffort ? { reasoningEffort } : {})
+    ...(reasoningEffort ? { reasoningEffort } : {}),
+    ...(serviceTier ? { serviceTier } : {})
   }
 }
 
@@ -169,6 +181,7 @@ export function useWorkbenchSddTurnController({
   composerMode,
   composerModelGroups,
   composerReasoningEffort,
+  composerFastMode,
   input,
   resolvedWriteAssistantProviderId,
   runtimeConnection,
@@ -309,7 +322,9 @@ export function useWorkbenchSddTurnController({
     const modelOverrides = buildSddAssistantModelOverrides({
       model: writeAssistantModel,
       providerId: resolvedWriteAssistantProviderId,
-      reasoningEffort: composerReasoningEffort
+      reasoningEffort: composerReasoningEffort,
+      fastMode: composerFastMode,
+      modelGroups: composerModelGroups
     })
     const sent = await sendMessage(prompt, composerMode === 'plan' ? 'plan' : 'agent', {
       displayText: v || (documentAttachments.length > 0
@@ -334,6 +349,8 @@ export function useWorkbenchSddTurnController({
     clearComposerAttachments,
     composerAttachments,
     composerMode,
+    composerFastMode,
+    composerModelGroups,
     composerReasoningEffort,
     ensureSddAssistantThreadForDraft,
     getAttachmentScope,
@@ -417,8 +434,13 @@ export function useWorkbenchSddTurnController({
       assistantSelection.assistantProviderId.trim() || providerIdForComposerModel(composerModelGroups, model)
     const sent = await sendMessage(payload.prompt, 'agent', {
       displayText: payload.displayText,
-      ...(model ? { model } : {}),
-      ...(providerId ? { providerId } : {}),
+      ...buildSddAssistantModelOverrides({
+        model,
+        providerId,
+        reasoningEffort: composerReasoningEffort,
+        fastMode: composerFastMode,
+        modelGroups: composerModelGroups
+      }),
       ...(attachmentIds.length ? { attachmentIds } : {})
     })
     if (sent && showSddAssistantThreadInSidebar(threadId)) {
@@ -427,6 +449,8 @@ export function useWorkbenchSddTurnController({
     return sent
   }, [
     composerModelGroups,
+    composerFastMode,
+    composerReasoningEffort,
     ensureSddAssistantThreadForDraft,
     firstVisionCapableModel,
     openSddAssistantPanel,
@@ -539,7 +563,9 @@ export function useWorkbenchSddTurnController({
     const modelOverrides = buildSddAssistantModelOverrides({
       model: writeAssistantModel,
       providerId: resolvedWriteAssistantProviderId,
-      reasoningEffort: composerReasoningEffort
+      reasoningEffort: composerReasoningEffort,
+      fastMode: composerFastMode,
+      modelGroups: composerModelGroups
     })
     const sent = await sendPlanTurn(prompt, {
       displayText: t('sddGeneratePlanAction'),
@@ -579,6 +605,8 @@ export function useWorkbenchSddTurnController({
     }
   }, [
     blocks,
+    composerFastMode,
+    composerModelGroups,
     composerReasoningEffort,
     ensureSddAssistantThreadForDraft,
     resolvedWriteAssistantProviderId,

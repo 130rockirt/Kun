@@ -470,6 +470,8 @@
   "designPrototypePlayUnavailable": "프로토타입을 재생하기 전에 화면을 하나 이상 생성하세요.",
   "designPrototypeBack": "뒤로",
   "designPrototypeClose": "프로토타입 닫기",
+  "designPrototypeOpenBrowser": "브라우저에서 열기",
+  "designPrototypeOpenBrowserFailed": "브라우저에서 프로토타입을 열 수 없습니다.",
   "designPrototypeViewportMode": "프로토타입 뷰포트",
   "designPrototypeViewportWebDetail": "{{width}} x {{height}} web prototype",
   "designPrototypeViewportAppDetail": "{{width}} x {{height}} phone prototype",

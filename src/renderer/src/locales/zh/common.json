@@ -470,6 +470,8 @@
   "designPrototypePlayUnavailable": "先创建至少一个 screen，才能播放原型",
   "designPrototypeBack": "返回",
   "designPrototypeClose": "关闭原型",
+  "designPrototypeOpenBrowser": "浏览器打开",
+  "designPrototypeOpenBrowserFailed": "无法在浏览器中打开原型。",
   "designPrototypeViewportMode": "原型视口",
   "designPrototypeViewportWebDetail": "{{width}} x {{height}} Web 交互稿",
   "designPrototypeViewportAppDetail": "{{width}} x {{height}} 手机交互稿",

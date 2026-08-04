@@ -159,6 +159,10 @@ import { TurnService } from '../services/turn-service.js'
 import { ReviewService } from '../services/review-service.js'
 import { UsageService } from '../services/usage-service.js'
 import { ProviderQuotaService } from '../services/provider-quota-service.js'
+import {
+  resolveDefaultCodexQuotaCredential,
+  resolveDefaultGrokQuotaCredential
+} from '../services/provider-subscription-quota.js'
 import { RoutePoolTestService } from '../services/route-pool-test-service.js'
 import type { UsageEvent } from '../contracts/events.js'
 import type {
@@ -818,12 +822,53 @@ export async function createKunServeRuntime(
           kind: profile.kind,
           ...(profile.baseUrl ? { baseUrl: profile.baseUrl } : {}),
           apiKey,
-          ...(headers ? { headers } : {})
+          ...(headers ? { headers } : {}),
+          ...(config?.credentialSourceId
+            ? { credentialSourceId: config.credentialSourceId }
+            : {})
         }
       }))
       return {
         profiles,
         proxyUrl: snapshot.proxy.enabled ? snapshot.proxy.url : ''
+      }
+    },
+    subscriptionRuntime: {
+      resolveCodexCredential: async (provider, rejectedAccessToken) => {
+        if (!provider.credentialSourceId) {
+          return resolveDefaultCodexQuotaCredential(provider, rejectedAccessToken)
+        }
+        try {
+          const resolved = await resolveLegacyRequestCredentials(
+            provider.credentialSourceId,
+            rejectedAccessToken
+          )
+          const accessToken = resolved.apiKey.trim()
+          if (!accessToken) return undefined
+          const accountId = new Headers(resolved.headers).get('chatgpt-account-id')?.trim()
+          return {
+            accessToken,
+            ...(accountId ? { accountId } : {})
+          }
+        } catch {
+          return undefined
+        }
+      },
+      resolveGrokCredential: async (provider, rejectedAccessToken) => {
+        if (!provider.credentialSourceId) {
+          return resolveDefaultGrokQuotaCredential(provider, rejectedAccessToken)
+        }
+        try {
+          const resolved = await resolveLegacyRequestCredentials(
+            provider.credentialSourceId,
+            rejectedAccessToken
+          )
+          const accessToken = resolved.apiKey.trim()
+          if (!accessToken || accessToken === rejectedAccessToken) return undefined
+          return { accessToken }
+        } catch {
+          return undefined
+        }
       }
     }
   })
@@ -885,7 +930,9 @@ export async function createKunServeRuntime(
 	    transitionGraphPlanningDraft: (input) =>
 	      graphRuntime.transitionPlanningDraft(input),
 	    cancelGraphSourceRuns: ({ threadId, sourceTurnId }) =>
-	      graphRuntime.handleSourceTurnTerminal(threadId, sourceTurnId, 'aborted'),
+	      graphRuntime.handleSourceTurnTerminal(threadId, sourceTurnId, 'aborted', {
+	        forceCancel: true
+	      }),
 	    migrationMaintenance,
 	    ids,
 	    nowIso

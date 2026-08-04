@@ -1,6 +1,6 @@
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { parseExtensionManifest } from '@kun/extension-api'
 import {
@@ -19,6 +19,7 @@ import {
 } from './extension-public.js'
 
 const cleanupRoots: string[] = []
+const WORKSPACE_ROOT = resolve('/workspace')
 
 afterEach(async () => {
   for (const root of cleanupRoots.splice(0)) await rm(root, { recursive: true, force: true })
@@ -192,13 +193,13 @@ describe('extension public routes', () => {
     expect(fixture.manager.activate).toHaveBeenCalledWith(
       'acme.dashboard',
       'onCommand:refresh',
-      { workspaceRoot: '/workspace' }
+      { workspaceRoot: WORKSPACE_ROOT }
     )
     expect(fixture.broker.handlePrincipal).toHaveBeenCalledWith(expect.objectContaining({
       principal: expect.objectContaining({
         extensionId: 'acme.dashboard',
         extensionVersion: '1.0.0',
-        workspaceRoots: ['/workspace']
+        workspaceRoots: [WORKSPACE_ROOT]
       }),
       method: 'commands.execute',
       params: { id: 'refresh', args: { source: 'topbar' } }
@@ -372,15 +373,15 @@ describe('extension public routes', () => {
 
     const created = await dispatchJson(router, 'POST', '/v1/extensions/view-sessions', {
       contributionId: 'extension:acme.dashboard/panel',
-      workspaceRoot: '/workspace'
+      workspaceRoot: WORKSPACE_ROOT
     }, runtimeHeaders())
     expect(created.status).toBe(201)
     const expectedActivationOptions = {
-      workspaceRoot: '/workspace',
+      workspaceRoot: WORKSPACE_ROOT,
       workspaceContext: {
-        id: fixture.paths.workspaceKey('/workspace'),
+        id: fixture.paths.workspaceKey(WORKSPACE_ROOT),
         name: 'workspace',
-        root: '/workspace',
+        root: WORKSPACE_ROOT,
         trusted: true,
         active: true
       }
@@ -684,7 +685,7 @@ describe('extension public routes', () => {
         extensionId: 'acme.dashboard',
         extensionVersion: '1.0.0',
         contributionId: 'extension:acme.dashboard/panel',
-        workspaceRoot: '/workspace',
+        workspaceRoot: WORKSPACE_ROOT,
         senderWebContentsId: 42,
         senderMainFrameProcessId: 7,
         senderMainFrameRoutingId: 11
@@ -734,10 +735,10 @@ describe('extension public routes', () => {
         extensionVersion: '1.0.0',
         viewSessionId: created.body.sessionId,
         viewContributionId: 'extension:acme.dashboard/panel',
-        workspaceRoots: ['/workspace']
+        workspaceRoots: [WORKSPACE_ROOT]
       }),
       {
-        workspaceRoot: '/workspace',
+        workspaceRoot: WORKSPACE_ROOT,
         path: '/private/media/interview.mp4',
         mode: 'read',
         source: 'picker',
@@ -764,7 +765,7 @@ describe('extension public routes', () => {
     const router = buildExtensionPublicRouter(fixture.runtime)
     const created = await dispatchJson(router, 'POST', '/v1/extensions/view-sessions', {
       contributionId: 'extension:acme.dashboard/panel',
-      workspaceRoot: '/workspace'
+      workspaceRoot: WORKSPACE_ROOT
     }, runtimeHeaders())
     const binding = {
       sessionId: created.body.sessionId,
@@ -773,7 +774,7 @@ describe('extension public routes', () => {
       extensionId: 'acme.dashboard',
       extensionVersion: '1.0.0',
       contributionId: 'extension:acme.dashboard/panel',
-      workspaceRoot: '/workspace',
+      workspaceRoot: WORKSPACE_ROOT,
       senderWebContentsId: 42,
       senderMainFrameProcessId: 7,
       senderMainFrameRoutingId: 11
@@ -810,7 +811,7 @@ describe('extension public routes', () => {
     const router = buildExtensionPublicRouter(fixture.runtime)
     const created = await dispatchJson(router, 'POST', '/v1/extensions/view-sessions', {
       contributionId: 'extension:acme.dashboard/panel',
-      workspaceRoot: '/workspace'
+      workspaceRoot: WORKSPACE_ROOT
     }, runtimeHeaders())
     const binding = {
       sessionId: created.body.sessionId,
@@ -819,7 +820,7 @@ describe('extension public routes', () => {
       extensionId: 'acme.dashboard',
       extensionVersion: '1.0.0',
       contributionId: 'extension:acme.dashboard/panel',
-      workspaceRoot: '/workspace',
+      workspaceRoot: WORKSPACE_ROOT,
       senderWebContentsId: 42,
       senderMainFrameProcessId: 7,
       senderMainFrameRoutingId: 11
@@ -847,7 +848,7 @@ describe('extension public routes', () => {
       expect.objectContaining({
         extensionId: 'acme.dashboard',
         viewSessionId: created.body.sessionId,
-        workspaceRoots: ['/workspace']
+        workspaceRoots: [WORKSPACE_ROOT]
       }),
       'media_handle_0000000001',
       'read'
@@ -857,8 +858,8 @@ describe('extension public routes', () => {
       artifactId: 'artifact_1234567890',
       ownerExtensionId: 'acme.dashboard',
       ownerExtensionVersion: '1.0.0',
-      workspaceId: fixture.paths.workspaceKey('/workspace'),
-      workspaceRoot: '/workspace'
+      workspaceId: fixture.paths.workspaceKey(WORKSPACE_ROOT),
+      workspaceRoot: WORKSPACE_ROOT
     }, runtimeHeaders())
     expect(artifact).toMatchObject({
       status: 200,
@@ -873,7 +874,7 @@ describe('extension public routes', () => {
       artifactId: 'artifact_1234567890',
       ownerExtensionId: 'acme.dashboard',
       ownerExtensionVersion: '1.0.0',
-      workspaceId: fixture.paths.workspaceKey('/workspace'),
+      workspaceId: fixture.paths.workspaceKey(WORKSPACE_ROOT),
       workspaceRoot: '/other-workspace'
     }, runtimeHeaders())
     expect(forgedWorkspace.status).toBe(404)
@@ -1085,13 +1086,13 @@ describe('extension public routes', () => {
     expect(fixture.manager.activate).toHaveBeenCalledWith(
       'acme.dashboard',
       'onAuthentication:key-auth',
-      { workspaceRoot: '/workspace' }
+      { workspaceRoot: WORKSPACE_ROOT }
     )
     expect(fixture.broker.handleTrustedManagement).toHaveBeenCalledWith(expect.objectContaining({
       principal: expect.objectContaining({
         extensionId: 'acme.dashboard',
         extensionVersion: '1.0.0',
-        workspaceRoots: ['/workspace']
+        workspaceRoots: [WORKSPACE_ROOT]
       }),
       method: 'authentication.createSession'
     }))
@@ -1503,7 +1504,7 @@ async function createFixture(options: {
   await registry.registerDevelopment('acme.dashboard', development)
   await registry.setWorkspacePermissionGrant(
     'acme.dashboard',
-    paths.workspaceKey('/workspace'),
+    paths.workspaceKey(WORKSPACE_ROOT),
     permissions,
     development.manifest.version
   )
@@ -1643,7 +1644,7 @@ async function createFixture(options: {
       available: true,
       createdAt: '2026-07-13T00:00:00.000Z',
       absolutePath: '/private/media/interview.mp4',
-      workspaceRoot: '/workspace',
+      workspaceRoot: WORKSPACE_ROOT,
       ownerExtensionId: 'acme.dashboard',
       ownerExtensionVersion: '1.0.0',
       identity: { size: 1234, mtimeMs: 1000, device: 2, inode: 3 }
@@ -1655,7 +1656,7 @@ async function createFixture(options: {
       artifactId,
       ownerExtensionId: 'acme.dashboard',
       ownerExtensionVersion: '1.0.0',
-      workspaceId: paths.workspaceKey('/workspace'),
+      workspaceId: paths.workspaceKey(WORKSPACE_ROOT),
       mediaHandleId: 'media_handle_0000000001',
       displayName: 'interview.mp4',
       mediaKind: 'video',

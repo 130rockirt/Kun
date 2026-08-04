@@ -57,8 +57,10 @@ describe('Memory store and recall', () => {
     const memory = await store.create({ content: 'private preference', scope: 'user' })
     const root = join(dir, 'memory')
 
-    expect((await stat(root)).mode & 0o777).toBe(0o700)
-    expect((await stat(join(root, `${memory.id}.json`))).mode & 0o777).toBe(0o600)
+    if (process.platform !== 'win32') {
+      expect((await stat(root)).mode & 0o777).toBe(0o700)
+      expect((await stat(join(root, `${memory.id}.json`))).mode & 0o777).toBe(0o600)
+    }
   })
 
   it('tracks provenance, expiry, confidence decay, and legacy records', async () => {

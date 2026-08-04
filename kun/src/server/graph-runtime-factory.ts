@@ -35,6 +35,7 @@ import type { SessionStore } from '../ports/session-store.js'
 import type { ThreadStore } from '../ports/thread-store.js'
 import type { RuntimeEventRecorder } from '../services/runtime-event-recorder.js'
 import { createGraphCheckVerifier } from '../graph/graph-check-verifier.js'
+import { isGraphRunCompletionFinalizing } from '../graph/graph-run-completion.js'
 import {
   recoverGraphLeadOwnership,
   recoverGraphPlanningCommits
@@ -421,7 +422,8 @@ export class GraphRuntimeComposition {
   async handleSourceTurnTerminal(
     threadId: string,
     sourceTurnId: string,
-    status: 'completed' | 'failed' | 'aborted'
+    status: 'completed' | 'failed' | 'aborted',
+    options: { forceCancel?: boolean } = {}
   ): Promise<void> {
     const runs = await this.store.list({ threadId })
     for (const run of runs) {
@@ -431,6 +433,16 @@ export class GraphRuntimeComposition {
         run.status === 'failed' ||
         run.status === 'cancelled'
       ) {
+        continue
+      }
+      if (
+        options.forceCancel !== true &&
+        isGraphRunCompletionFinalizing(run, this.mailbox)
+      ) {
+        // Scheduler owns idempotent cleanup and completion. Wake it when the
+        // source Lead has just failed so a persisted final summary can finish
+        // without needing another Lead episode.
+        await this.scheduler?.resumeRun(run.id)
         continue
       }
       try {

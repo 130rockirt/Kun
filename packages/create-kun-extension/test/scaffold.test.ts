@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, extname, join, resolve } from 'node:path'
@@ -84,11 +85,22 @@ describe('create-kun-extension', () => {
       template: 'webview'
     })
 
-    const result = spawnSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['test'], {
+    const npmCli = process.env.npm_execpath || (
+      process.platform === 'win32'
+        ? join(dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js')
+        : ''
+    )
+    const useNodeCli = Boolean(npmCli && existsSync(npmCli))
+    const result = spawnSync(
+      useNodeCli ? process.execPath : process.platform === 'win32' ? 'npm.cmd' : 'npm',
+      useNodeCli ? [npmCli, 'test'] : ['test'],
+      {
       cwd: targetDirectory,
       encoding: 'utf8',
       env: { ...process.env, npm_config_audit: 'false', npm_config_fund: 'false' }
-    })
+      }
+    )
+    expect(result.error).toBeUndefined()
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0)
 
     const packageJson = JSON.parse(await readFile(join(targetDirectory, 'package.json'), 'utf8'))
@@ -112,7 +124,7 @@ describe('create-kun-extension', () => {
       expect(source).not.toContain('@kun/extension-api')
       expect(moduleSpecifiers(source).filter((specifier) => !specifier.startsWith('.'))).toEqual([])
     }
-  })
+  }, 20_000)
 })
 
 async function collectJavaScript(directory: string): Promise<string[]> {

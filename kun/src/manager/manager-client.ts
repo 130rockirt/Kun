@@ -62,6 +62,13 @@ export class ManagerRevisionConflictError extends Error {
   }
 }
 
+export class ManagerRuntimeSlotBusyError extends Error {
+  constructor(readonly owner: RuntimeRegistration) {
+    super(`Kun runtime slot ${owner.flavor} is already owned by ${owner.instanceId}`)
+    this.name = 'ManagerRuntimeSlotBusyError'
+  }
+}
+
 export class ManagerRevisionedDocumentClient {
   constructor(
     private readonly manager: ServiceManagerConnection,
@@ -434,12 +441,21 @@ export async function registerRuntimeWithManager(input: {
   registration: RuntimeRegistration
   fetch?: typeof fetch
 }): Promise<RuntimeRegistration> {
-  const response = await requestManagerJson(input.manager, `/v1/runtimes/${input.registration.flavor}/register`, {
+  const response = await requestManagerResponse(input.manager, `/v1/runtimes/${input.registration.flavor}/register`, {
     method: 'PUT',
     body: input.registration,
     fetch: input.fetch
   })
-  const parsed = z.object({ registration: RuntimeRegistrationSchema }).parse(response)
+  if (response.status === 409) {
+    const conflict = z.object({
+      code: z.literal('runtime_slot_busy'),
+      owner: RuntimeRegistrationSchema
+    }).safeParse(await response.json().catch(() => null))
+    if (conflict.success) throw new ManagerRuntimeSlotBusyError(conflict.data.owner)
+  }
+  const parsed = z.object({ registration: RuntimeRegistrationSchema }).parse(
+    await requireManagerJson(response)
+  )
   return parsed.registration
 }
 
@@ -454,7 +470,10 @@ export async function heartbeatRuntimeWithManager(input: {
     body: { instanceId: input.instanceId },
     fetch: input.fetch
   })
-  return response.ok
+  if (response.ok) return true
+  if (response.status === 409) return false
+  await requireManagerJson(response)
+  return false
 }
 
 export async function unregisterRuntimeWithManager(input: {

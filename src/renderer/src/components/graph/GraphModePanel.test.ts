@@ -1,6 +1,11 @@
-import { type ReactElement } from 'react'
+import { createElement, type ReactElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { describe, expect, it } from 'vitest'
+import {
+  act,
+  create as createRenderer,
+  type ReactTestRenderer
+} from 'react-test-renderer'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type {
   GraphAttempt,
   GraphChildRuntime,
@@ -12,9 +17,12 @@ import {
   criticalPathNodeIds,
   filterGraphElementsByPhases,
   graphElements,
+  GRAPH_DASHBOARD_SNAPSHOT_REFRESH_INTERVAL_MS,
+  graphDashboardNeedsSnapshotRefresh,
   plannedAssignmentLabel,
   runProgress,
-  selectGraphPlanningDraft
+  selectGraphPlanningDraft,
+  useGraphDashboardSnapshotRefresh
 } from './GraphModePanel'
 import { reconcileInteractiveGraphNodes } from './graph-canvas-state'
 import { clampGraphInspectorWidth } from './graph-workspace-layout'
@@ -118,7 +126,104 @@ function planningDraft(
   }
 }
 
+function SnapshotRefreshHarness({
+  active,
+  shouldRefresh,
+  refreshThread
+}: {
+  active: boolean
+  shouldRefresh: boolean
+  refreshThread: (threadId: string, options?: { silent?: boolean }) => Promise<void>
+}): null {
+  useGraphDashboardSnapshotRefresh({
+    active,
+    threadId: 'thread_1',
+    shouldRefresh,
+    refreshThread
+  })
+  return null
+}
+
 describe('Graph Mode panel projection', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('reconciles nonterminal Graph work and an active source turn even before a run is visible', () => {
+    const liveRun = graphRun([node('work', 'phase_1')], [])
+    const terminalRun = { ...liveRun, status: 'completed' as const }
+    const pausedRun = { ...liveRun, status: 'paused' as const }
+
+    expect(graphDashboardNeedsSnapshotRefresh([liveRun], [], false)).toBe(true)
+    expect(graphDashboardNeedsSnapshotRefresh([terminalRun], [], false)).toBe(false)
+    expect(graphDashboardNeedsSnapshotRefresh([pausedRun], [], false)).toBe(false)
+    expect(graphDashboardNeedsSnapshotRefresh([], [planningDraft('draft_1', 'planning')], false))
+      .toBe(true)
+    expect(graphDashboardNeedsSnapshotRefresh([], [], true)).toBe(true)
+  })
+
+  it('polls durable Graph snapshots without overlapping requests and stops when hidden', async () => {
+    vi.useFakeTimers()
+    const resolveRefreshes: Array<() => void> = []
+    const refreshThread = vi.fn(() => new Promise<void>((resolve) => {
+      resolveRefreshes.push(resolve)
+    }))
+    let renderer!: ReactTestRenderer
+
+    await act(async () => {
+      renderer = createRenderer(createElement(SnapshotRefreshHarness, {
+        active: true,
+        shouldRefresh: true,
+        refreshThread
+      }))
+    })
+
+    await act(async () => {
+      vi.advanceTimersByTime(GRAPH_DASHBOARD_SNAPSHOT_REFRESH_INTERVAL_MS)
+      await Promise.resolve()
+    })
+    expect(refreshThread).toHaveBeenCalledTimes(1)
+    expect(refreshThread).toHaveBeenLastCalledWith('thread_1', { silent: true })
+
+    await act(async () => {
+      vi.advanceTimersByTime(GRAPH_DASHBOARD_SNAPSHOT_REFRESH_INTERVAL_MS * 3)
+      await Promise.resolve()
+    })
+    expect(refreshThread).toHaveBeenCalledTimes(1)
+
+    await act(async () => {
+      resolveRefreshes.shift()?.()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    await act(async () => {
+      vi.advanceTimersByTime(GRAPH_DASHBOARD_SNAPSHOT_REFRESH_INTERVAL_MS)
+      await Promise.resolve()
+    })
+    expect(refreshThread).toHaveBeenCalledTimes(2)
+
+    await act(async () => {
+      resolveRefreshes.shift()?.()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    await act(async () => {
+      renderer.update(createElement(SnapshotRefreshHarness, {
+        active: false,
+        shouldRefresh: true,
+        refreshThread
+      }))
+    })
+    await act(async () => {
+      vi.advanceTimersByTime(GRAPH_DASHBOARD_SNAPSHOT_REFRESH_INTERVAL_MS * 2)
+      await Promise.resolve()
+    })
+    expect(refreshThread).toHaveBeenCalledTimes(2)
+
+    await act(async () => renderer.unmount())
+  })
+
   it('never lets a terminal host error hide the current run or create a second error surface', () => {
     const hostError = planningDraft('draft_failed', 'host_error')
     const correction = planningDraft('draft_active', 'needs_correction')

@@ -76,8 +76,10 @@ type Props = {
   composerPickList: string[]
   composerModelGroups?: ModelProviderModelGroup[]
   composerReasoningEffort: ComposerReasoningEffort
+  composerFastMode: boolean
   setComposerModel: (modelId: string, providerId?: string) => void
   setComposerReasoningEffort: (effort: ComposerReasoningEffort) => void
+  setComposerFastMode: (enabled: boolean) => void
   queuedMessages: QueuedUserMessage[]
   removeQueuedMessage: (id: string) => void
   guideQueuedMessage: (id: string) => void | Promise<unknown>
@@ -116,8 +118,10 @@ export function SddAssistantPanel({
   composerPickList,
   composerModelGroups = [],
   composerReasoningEffort,
+  composerFastMode,
   setComposerModel,
   setComposerReasoningEffort,
+  setComposerFastMode,
   queuedMessages,
   removeQueuedMessage,
   guideQueuedMessage,
@@ -273,9 +277,13 @@ export function SddAssistantPanel({
           composerPickList={composerPickList}
           composerModelGroups={composerModelGroups}
           composerReasoningEffort={composerReasoningEffort}
+          composerFastMode={composerFastMode}
           onComposerModelChange={setComposerModel}
           onComposerReasoningEffortChange={setComposerReasoningEffort}
+          onComposerFastModeChange={setComposerFastMode}
           modelPickerMode="combobox"
+          modelControlVariant="split"
+          showProviderInModelLabel
           queuedMessages={queuedMessages}
           onRemoveQueuedMessage={removeQueuedMessage}
           onGuideQueuedMessage={guideQueuedMessage}

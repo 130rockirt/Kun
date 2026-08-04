@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { sep } from 'node:path'
 import { normalizeAppSettings, type AppSettingsV1 } from '../../shared/app-settings'
 import {
   applyPortableSettingsMigration,
@@ -87,7 +88,7 @@ describe('application state migration', () => {
       workspaceRoot: 'D:\\Missing',
       threadId: 'not-a-declared-write-thread-field',
       filePaths: [
-        '/Users/bob/Project/drafts/chapter.md',
+        `/Users/bob/Project${sep}drafts${sep}chapter.md`,
         'D:\\Missing\\outside.md'
       ]
     })

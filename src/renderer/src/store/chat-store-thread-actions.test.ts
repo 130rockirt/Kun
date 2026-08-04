@@ -952,6 +952,38 @@ describe('chat-store-thread-actions queued messages', () => {
     expect(state.error).toBeNull()
   })
 
+  it('guides a queued Design canvas message with its visible user text', async () => {
+    const steerUserMessage = vi.fn(async () => undefined)
+    registryMock.getProvider.mockReturnValue({ steerUserMessage })
+    const { actions, state } = buildHarness()
+    state.currentTurnId = 'turn_design_active'
+    state.currentTurnUserId = 'user-design-original'
+    state.queuedMessages = [{
+      id: 'q-design-guide',
+      text: 'Expanded internal Design prompt with canvas state and file instructions',
+      displayText: 'Make the title smaller',
+      guiDesignCanvas: true,
+      guiDesignMode: true,
+      agentSurface: 'design'
+    }]
+
+    await expect(actions.guideQueuedMessage('q-design-guide')).resolves.toBe(true)
+
+    expect(steerUserMessage).toHaveBeenCalledWith(
+      'thr_existing',
+      'turn_design_active',
+      'Make the title smaller',
+      { displayText: 'Make the title smaller' }
+    )
+    expect(state.queuedMessages).toEqual([])
+    expect(state.blocks).toContainEqual(expect.objectContaining({
+      kind: 'user',
+      id: 'q-design-guide',
+      turnId: 'turn_design_active',
+      text: 'Make the title smaller'
+    }))
+  })
+
   it('keeps guidance queued when the active delegated runtime cannot steer live', async () => {
     const steerUserMessage = vi.fn(async () => undefined)
     registryMock.getProvider.mockReturnValue({ steerUserMessage })

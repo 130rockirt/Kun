@@ -328,6 +328,11 @@ jobs:
       DEEPSEEK_GUI_UPDATE_CHANNEL: stable
       RELEASE_CHANNEL: stable
       CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      KUN_REQUIRE_WINDOWS_SIGNING: '1'
+      WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+      WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+      WIN_CSC_PUBLISHER_NAME: ${{ secrets.WIN_CSC_PUBLISHER_NAME }}
+      WIN_CSC_TIMESTAMP_SERVER: 'http://timestamp.digicert.com'
     steps:
       - name: Check out merge commit
         uses: actions/checkout@v4
@@ -357,8 +362,8 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Test Runtime data migration on native Windows
-        run: npx vitest run src/main/kun-data-dir-paths.test.ts src/main/legacy-data-migration.test.ts src/main/runtime-data-dir-migration.test.ts src/main/runtime-data-dir-ownership.test.ts --reporter=dot
+      - name: Test Runtime and installer migration on native Windows
+        run: npx vitest run src/main/kun-data-dir-paths.test.ts src/main/legacy-data-migration.test.ts src/main/runtime-data-dir-migration.test.ts src/main/runtime-data-dir-ownership.test.ts src/main/windows-installer-migration.test.ts --reporter=dot
 
       - name: Test Graph Mode on native Windows
         run: npm run test:graph:platform
@@ -368,6 +373,23 @@ jobs:
 
       - name: Build Windows installer
         run: npm run dist:win
+
+      - name: Verify Windows code signatures
+        shell: pwsh
+        run: |
+          $installer = @(Get-ChildItem -Path dist -Filter 'Kun-*-win-x64.exe' -File)
+          if ($installer.Count -ne 1) {
+            throw "Expected exactly one Windows installer, found $($installer.Count)."
+          }
+          & powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify-windows-signing.ps1 `
+            -FilePath $installer.FullName, (Join-Path $PWD 'dist\win-unpacked\Kun.exe')
+          if ($LASTEXITCODE -ne 0) {
+            throw "Windows code-signing verification failed with exit code $LASTEXITCODE."
+          }
+
+      - name: Smoke Windows installer migration
+        shell: pwsh
+        run: npm run smoke:windows-installer-migration
 
       - name: Smoke packaged Kun terminal command
         run: >-

@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { InMemorySessionStore } from '../adapters/in-memory-session-store.js'
 import { InMemoryThreadStore } from '../adapters/in-memory-thread-store.js'
@@ -252,8 +252,10 @@ describe('RuntimeMigrationImportService', () => {
     expect((await targetAttachments.resolveContent(importedAttachmentId, { threadId: sourceThread.id })).data.toString()).toBe('portable notes')
     const importedArtifactId = ((importedItems.find((item) => item.id === 'item_artifact') as { output?: { artifactId?: string } }).output?.artifactId)!
     expect(await artifacts.get(importedArtifactId)).toBe(artifactContent)
+    const importedWorkspace = resolve('/Users/bob/Project')
     expect((await memories.list({ all: true }))[0]).toMatchObject({
-      workspace: '/Users/bob/Project', sourceThreadId: sourceThread.id
+      workspace: process.platform === 'win32' ? importedWorkspace.toLowerCase() : importedWorkspace,
+      sourceThreadId: sourceThread.id
     })
 
     await service.rollback(preflight.importId)

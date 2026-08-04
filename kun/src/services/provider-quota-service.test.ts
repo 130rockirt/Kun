@@ -24,6 +24,29 @@ const profile = (
   ...overrides
 })
 
+function grokBillingFrame(usedPercent: number, resetEpoch: number): Uint8Array<ArrayBuffer> {
+  const float = Buffer.alloc(4)
+  float.writeFloatLE(usedPercent)
+  const varint: number[] = []
+  let remaining = resetEpoch
+  do {
+    const next = remaining % 128
+    remaining = Math.floor(remaining / 128)
+    varint.push(next | (remaining > 0 ? 0x80 : 0))
+  } while (remaining > 0)
+  const payload = Buffer.concat([
+    Buffer.from([0x0d]),
+    float,
+    Buffer.from([0x10, ...varint])
+  ])
+  const frame = Buffer.alloc(5 + payload.length)
+  frame.writeUInt32BE(payload.length, 1)
+  payload.copy(frame, 5)
+  const output = new Uint8Array(frame.length)
+  output.set(frame)
+  return output
+}
+
 describe('ProviderQuotaService', () => {
   it('classifies only exact supported provider hosts and subscription presets', () => {
     expect(classifyProviderQuotaProbe(profile())?.kind).toBe('deepseek')
@@ -51,6 +74,14 @@ describe('ProviderQuotaService', () => {
       presetId: 'grok-subscription',
       baseUrl: 'https://cli-chat-proxy.grok.com/v1'
     }))?.kind).toBe('grok-subscription')
+    expect(classifyProviderQuotaProbe(profile({
+      id: 'gemini-subscription-2',
+      name: 'Antigravity clone',
+      presetId: 'gemini-subscription-2',
+      kind: 'antigravity-cli',
+      baseUrl: undefined,
+      apiKey: ''
+    }))?.kind).toBe('antigravity-subscription')
     expect(classifyProviderQuotaProbe(profile({
       id: 'kimi-code',
       name: 'Kimi Code',
@@ -171,6 +202,160 @@ describe('ProviderQuotaService', () => {
       }]
     })
     expect(fetcher).not.toHaveBeenCalled()
+  })
+
+  it('refreshes and retries a rejected Codex quota credential', async () => {
+    const resolveCodexCredential = vi.fn(async (
+      _provider: ProviderQuotaProbeProfile,
+      rejectedAccessToken?: string
+    ) => rejectedAccessToken
+      ? { accessToken: 'codex-retry-access', accountId: 'acct-retry' }
+      : { accessToken: 'codex-rejected-access', accountId: 'acct-retry' })
+    const fetcher = vi.fn(async (
+      _input: string | URL,
+      init: RequestInit | undefined
+    ) => {
+      const authorization = new Headers(init?.headers).get('authorization')
+      if (authorization === 'Bearer codex-rejected-access') {
+        return new Response('expired', { status: 403 })
+      }
+      expect(authorization).toBe('Bearer codex-retry-access')
+      expect(new Headers(init?.headers).get('user-agent')).toMatch(/^codex_cli_rs\//)
+      return Response.json({
+        plan_type: 'pro',
+        rate_limit: {
+          primary_window: {
+            used_percent: 9,
+            reset_at: 1_900_000_000,
+            limit_window_seconds: 18_000
+          }
+        }
+      })
+    })
+    const service = new ProviderQuotaService({
+      loadSource: async () => ({
+        profiles: [profile({
+          id: 'codex',
+          name: 'Codex',
+          presetId: 'codex',
+          baseUrl: 'https://chatgpt.com/backend-api/codex/responses',
+          apiKey: ''
+        })],
+        proxyUrl: ''
+      }),
+      fetcher,
+      subscriptionRuntime: { resolveCodexCredential }
+    })
+
+    await expect(service.list()).resolves.toMatchObject({
+      entries: [{
+        providerId: 'codex',
+        status: 'available',
+        metrics: [expect.objectContaining({ id: 'primary', usedPercent: 9 })]
+      }]
+    })
+    expect(resolveCodexCredential).toHaveBeenNthCalledWith(
+      2,
+      expect.anything(),
+      'codex-rejected-access'
+    )
+    expect(fetcher).toHaveBeenCalledTimes(2)
+  })
+
+  it('refreshes and retries a rejected Grok quota credential', async () => {
+    const resolveGrokCredential = vi.fn(async (
+      _provider: ProviderQuotaProbeProfile,
+      rejectedAccessToken?: string
+    ) => rejectedAccessToken
+      ? { accessToken: 'grok-retry-access' }
+      : { accessToken: 'grok-rejected-access' })
+    const fetcher = vi.fn(async (
+      _input: string | URL,
+      init: RequestInit | undefined
+    ) => {
+      const authorization = new Headers(init?.headers).get('authorization')
+      if (authorization === 'Bearer grok-rejected-access') {
+        return new Response('expired', { status: 403 })
+      }
+      expect(authorization).toBe('Bearer grok-retry-access')
+      return new Response(grokBillingFrame(14, 1_900_000_000), {
+        headers: { 'Content-Type': 'application/grpc-web+proto' }
+      })
+    })
+    const service = new ProviderQuotaService({
+      loadSource: async () => ({
+        profiles: [profile({
+          id: 'grok-subscription',
+          name: 'Grok',
+          presetId: 'grok-subscription',
+          baseUrl: 'https://cli-chat-proxy.grok.com/v1',
+          apiKey: ''
+        })],
+        proxyUrl: ''
+      }),
+      fetcher,
+      subscriptionRuntime: { resolveGrokCredential }
+    })
+
+    await expect(service.list()).resolves.toMatchObject({
+      entries: [{
+        providerId: 'grok-subscription',
+        status: 'available',
+        metrics: [expect.objectContaining({ id: 'credits', usedPercent: 14 })]
+      }]
+    })
+    expect(resolveGrokCredential).toHaveBeenNthCalledWith(
+      2,
+      expect.anything(),
+      'grok-rejected-access'
+    )
+    expect(fetcher).toHaveBeenCalledTimes(2)
+  })
+
+  it('reports the Gemini CLI migration reason before requesting quota', async () => {
+    const fetcher = vi.fn(async (
+      input: string | URL,
+      init: RequestInit | undefined
+    ) => {
+      expect(String(input)).toContain(':loadCodeAssist')
+      const headers = new Headers(init?.headers)
+      expect(headers.get('user-agent')).toBe('google-gemini-cli')
+      expect(JSON.parse(String(init?.body))).toMatchObject({
+        metadata: { ideType: 'IDE_UNSPECIFIED', pluginType: 'GEMINI' }
+      })
+      return Response.json({
+        allowedTiers: [{ id: 'standard-tier' }],
+        ineligibleTiers: [{
+          reasonMessage: 'This client is no longer supported. Migrate to Antigravity.'
+        }]
+      })
+    })
+    const service = new ProviderQuotaService({
+      loadSource: async () => ({
+        profiles: [profile({
+          id: 'gemini-cli-subscription',
+          name: 'Gemini CLI',
+          presetId: 'gemini-cli-subscription',
+          kind: 'gemini-cli-api',
+          baseUrl: undefined,
+          apiKey: ''
+        })],
+        proxyUrl: ''
+      }),
+      fetcher,
+      subscriptionRuntime: {
+        resolveGeminiCliToken: async () => 'gemini-cli-access'
+      }
+    })
+
+    await expect(service.list()).resolves.toMatchObject({
+      entries: [{
+        providerId: 'gemini-cli-subscription',
+        status: 'error',
+        message: 'This client is no longer supported. Migrate to Antigravity.'
+      }]
+    })
+    expect(fetcher).toHaveBeenCalledTimes(1)
   })
 })
 

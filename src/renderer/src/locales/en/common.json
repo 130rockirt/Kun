@@ -470,6 +470,8 @@
   "designPrototypePlayUnavailable": "Create at least one screen before playing the prototype",
   "designPrototypeBack": "Back",
   "designPrototypeClose": "Close prototype",
+  "designPrototypeOpenBrowser": "Open in browser",
+  "designPrototypeOpenBrowserFailed": "Could not open the prototype in a browser.",
   "designPrototypeViewportMode": "Prototype viewport",
   "designPrototypeViewportWebDetail": "{{width}} x {{height}} web prototype",
   "designPrototypeViewportAppDetail": "{{width}} x {{height}} phone prototype",

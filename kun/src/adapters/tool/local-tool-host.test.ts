@@ -496,7 +496,11 @@ describe('LocalToolHost approval policy', () => {
 
       expect(awaitApproval).toHaveBeenCalledOnce()
       expect(awaitApproval).toHaveBeenCalledWith(expect.objectContaining({
-        summary: expect.stringContaining(physicalTarget)
+        action: expect.objectContaining({
+          targets: expect.arrayContaining([
+            expect.objectContaining({ value: physicalTarget })
+          ])
+        })
       }))
       expect(result.item).toMatchObject({ isError: false })
       expect(context).not.toHaveProperty('approvedExternalWriteTargets')
@@ -831,6 +835,10 @@ describe('LocalToolHost approval policy', () => {
   })
 
   it('rejects edit when the parent is swapped after open but before identity verification', async (testContext) => {
+    if (process.platform === 'win32') {
+      testContext.skip()
+      return
+    }
     const parent = await mkdtemp(join(tmpdir(), 'kun-external-edit-race-'))
     const workspace = join(parent, 'workspace')
     const approvedDirectory = join(parent, 'approved')

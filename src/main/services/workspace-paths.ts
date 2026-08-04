@@ -195,14 +195,9 @@ export async function resolveTargetPathWithinWorkspace(rawPath: string, workspac
   }
 
   const direct = resolve(expanded)
-  if (isWithinWorkspace(workspacePath, direct)) {
-    return enforceProspectiveWorkspaceBoundary(workspacePath, direct)
-  }
-  if (await pathExists(direct)) {
-    const canonicalTarget = await canonicalPath(direct)
-    if (isWithinWorkspace(workspacePath, canonicalTarget)) {
-      return canonicalTarget
-    }
+  const canonicalTarget = await canonicalPathThroughExistingParent(direct)
+  if (isWithinWorkspace(workspacePath, canonicalTarget)) {
+    return canonicalTarget
   }
   throw new Error('Path must stay within the selected workspace.')
 }

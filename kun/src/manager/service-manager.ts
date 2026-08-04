@@ -113,6 +113,13 @@ export class ThreadLeaseBusyError extends Error {
   }
 }
 
+export class RuntimeSlotBusyError extends Error {
+  constructor(readonly owner: RuntimeRegistration) {
+    super(`runtime_slot_busy: ${owner.flavor} is owned by ${owner.instanceId}`)
+    this.name = 'RuntimeSlotBusyError'
+  }
+}
+
 export class RuntimeRegistrationRequiredError extends Error {}
 
 export class ServiceManagerState {
@@ -147,12 +154,7 @@ export class ServiceManagerState {
     const parsed = RuntimeRegistrationSchema.parse(registration)
     const existing = this.slots.get(parsed.flavor)
     if (existing && existing.registration.instanceId !== parsed.instanceId) {
-      const activeLease = [...this.leases.values()].find((lease) =>
-        lease.ownerFlavor === parsed.flavor &&
-        lease.ownerInstanceId === existing.registration.instanceId &&
-        Date.parse(lease.expiresAt) > now.getTime()
-      )
-      if (activeLease) throw new ThreadLeaseBusyError(activeLease)
+      throw new RuntimeSlotBusyError(existing.registration)
     }
     this.slots.set(parsed.flavor, {
       registration: parsed,
@@ -619,11 +621,11 @@ export function buildServiceManagerRouter(input: {
       try {
         return jsonResponse({ registration: input.state.register(registration.data) })
       } catch (error) {
-        if (error instanceof ThreadLeaseBusyError) {
+        if (error instanceof RuntimeSlotBusyError) {
           return jsonResponse({
             code: 'runtime_slot_busy',
-            message: 'runtime slot owns an active thread lease',
-            owner: error.lease
+            message: error.message,
+            owner: error.owner
           }, 409)
         }
         throw error

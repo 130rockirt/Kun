@@ -76,6 +76,20 @@ function listen(handler: RequestHandler): Promise<number> {
   })
 }
 
+async function reserveUnusedPort(): Promise<number> {
+  const candidate = createServer()
+  const port = await new Promise<number>((resolve, reject) => {
+    candidate.once('error', reject)
+    candidate.listen(0, '127.0.0.1', () => {
+      resolve((candidate.address() as AddressInfo).port)
+    })
+  })
+  await new Promise<void>((resolve, reject) => {
+    candidate.close((error) => error ? reject(error) : resolve())
+  })
+  return port
+}
+
 afterEach(async () => {
   const current = server
   server = null
@@ -173,15 +187,16 @@ describe('runtimeRequestViaHost', () => {
       res.setHeader('Content-Type', 'application/json')
       res.end(JSON.stringify({ ok: true, retried: true }))
     })
+    const stalePort = await reserveUnusedPort()
     let ensureCalls = 0
 
     const response = await runtimeRequestViaHost(
-      settingsForPort(1),
+      settingsForPort(stalePort),
       '/v1/threads',
       { method: 'POST', body: JSON.stringify({ title: 'hello' }) },
       async () => {
         ensureCalls += 1
-        return ensureCalls === 1 ? settingsForPort(1) : settingsForPort(port)
+        return ensureCalls === 1 ? settingsForPort(stalePort) : settingsForPort(port)
       }
     )
 

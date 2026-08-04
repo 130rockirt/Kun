@@ -2,6 +2,7 @@ import { lstat, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { STORAGE_RELOCATION_PROGRESS_MESSAGE_MAX_LENGTH } from '../../shared/storage-relocation'
 
 vi.mock('./paths', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./paths')>()
@@ -152,5 +153,25 @@ describe('storage relocation engine recovery', () => {
     await mkdir(input.destinationD, { recursive: true })
     await writeFile(join(input.destinationD, 'conflict.txt'), 'do not replace')
     await expect(engine(input).preflightMove(input.destinationD)).rejects.toThrow(/empty folder/)
+  })
+
+  it('truncates a persisted failure message before publishing recovery progress', async () => {
+    const relocation = engine(input)
+    const plan = await relocation.preflightMove(input.destinationD)
+    const prepared = await relocation.schedule(plan, false)
+    const longMessage = 'x'.repeat(STORAGE_RELOCATION_PROGRESS_MESSAGE_MAX_LENGTH + 1)
+    await relocation.store.writeJournal({
+      ...prepared,
+      phase: 'failed',
+      error: { code: 'copy_failed', message: longMessage, nextActions: [] }
+    })
+
+    const recovered = await engine(input).status()
+    const expectedMessage = `${longMessage.slice(0, STORAGE_RELOCATION_PROGRESS_MESSAGE_MAX_LENGTH - 3)}...`
+    expect(recovered).toMatchObject({
+      state: 'pending',
+      pending: { phase: 'failed', message: expectedMessage }
+    })
+    expect(recovered.pending?.message).toHaveLength(STORAGE_RELOCATION_PROGRESS_MESSAGE_MAX_LENGTH)
   })
 })

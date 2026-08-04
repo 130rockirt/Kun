@@ -434,10 +434,12 @@ describe('history-preserving Kun Runtime migration', () => {
 
     expect(result.status).toBe('completed')
     expect(await readFile(targetLicense, 'utf8')).toBe('immutable package')
-    expect((await stat(sourcePackage)).mode & 0o777).toBe(0o555)
-    expect((await stat(targetPackage)).mode & 0o777).toBe(0o555)
-    expect((await stat(sourceLicense)).mode & 0o777).toBe(0o444)
-    expect((await stat(targetLicense)).mode & 0o777).toBe(0o444)
+    if (process.platform !== 'win32') {
+      expect((await stat(sourcePackage)).mode & 0o777).toBe(0o555)
+      expect((await stat(targetPackage)).mode & 0o777).toBe(0o555)
+      expect((await stat(sourceLicense)).mode & 0o777).toBe(0o444)
+      expect((await stat(targetLicense)).mode & 0o777).toBe(0o444)
+    }
     await chmod(sourcePackage, 0o755)
     await chmod(targetPackage, 0o755)
   })

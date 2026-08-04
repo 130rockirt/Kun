@@ -832,7 +832,7 @@ export function Workbench(): ReactElement {
     startNewSddAssistantConversation
   } = useWorkbenchSddTurnController({
     activeGuiPlan, attachmentUploadEnabled, blocks, busy, composerAttachments, composerMode,
-    composerModelGroups, composerReasoningEffort, input, resolvedWriteAssistantProviderId,
+    composerModelGroups, composerReasoningEffort, composerFastMode, input, resolvedWriteAssistantProviderId,
     runtimeConnection, runtimeInfo, selectedModelSupportsImageInput, sendMessage, sendPlanTurn,
     setAttachmentUploadError, setComposerMode, setError, setInput, setWriteAssistantModel,
     writeAssistantModel, clearComposerAttachments, ensureSddAssistantThreadForDraft, getAttachmentScope,
@@ -1109,7 +1109,9 @@ export function Workbench(): ReactElement {
       composerModel: writeAssistantModel,
       composerProviderId: resolvedWriteAssistantProviderId,
       composerPickList: writeAssistantPickList,
+      composerFastMode,
       setComposerModel: setWriteAssistantModel,
+      setComposerFastMode,
       onApplyFramework: applySddFramework,
       onNewConversation: () => {
         if (!activeSddDraft) return
