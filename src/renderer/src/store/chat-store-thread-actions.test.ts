@@ -618,7 +618,7 @@ describe('chat-store-thread-actions queued messages', () => {
     expect(state.queuedMessages.map((message) => message.id)).toEqual(['q-1', 'q-2', 'q-3'])
   })
 
-  it('does not queue GUI plan messages while another turn is active', async () => {
+  it('queues GUI plan messages while another turn is active', async () => {
     const { actions, state } = buildHarness()
     const guiPlan: GuiPlanMessageContext = {
       operation: 'draft',
@@ -631,10 +631,16 @@ describe('chat-store-thread-actions queued messages', () => {
     await expect(actions.sendMessage('prompt one', 'plan', {
       displayText: 'Generate implementation plan',
       guiPlan
-    })).resolves.toBe(false)
+    })).resolves.toBe(true)
 
-    expect(state.queuedMessages).toHaveLength(0)
-    expect(state.error).toBeTruthy()
+    expect(state.queuedMessages).toHaveLength(1)
+    expect(state.queuedMessages[0]).toMatchObject({
+      text: 'prompt one',
+      displayText: 'Generate implementation plan',
+      mode: 'plan',
+      guiPlan
+    })
+    expect(state.error).toBeNull()
   })
 
   it('rejects a busy Write send instead of accepting a queue that can lose file identity', async () => {
@@ -836,7 +842,7 @@ describe('chat-store-thread-actions queued messages', () => {
     expect(provider.sendUserMessage).not.toHaveBeenCalled()
   })
 
-  it('removes stale queued GUI plan messages before draining normal queued messages', async () => {
+  it('drains queued GUI plan messages before later normal queued messages', async () => {
     const { actions, state } = buildHarness()
     const sendMessage = vi.fn(async (_text, _mode, overrides) => {
       state.queuedMessages = state.queuedMessages.filter((message) => message.id !== overrides?.queued?.id)
@@ -844,17 +850,18 @@ describe('chat-store-thread-actions queued messages', () => {
     })
     state.busy = false
     state.sendMessage = sendMessage as unknown as ChatState['sendMessage']
+    const guiPlan = {
+      operation: 'draft' as const,
+      workspaceRoot: '/workspace/deepseek-gui',
+      relativePath: '.kunsdd/plan/one.md',
+      planId: 'plan-1'
+    }
     state.queuedMessages = [
       {
         id: 'q-plan',
         text: 'internal plan prompt',
         mode: 'plan',
-        guiPlan: {
-          operation: 'draft',
-          workspaceRoot: '/workspace/deepseek-gui',
-          relativePath: '.kunsdd/plan/one.md',
-          planId: 'plan-1'
-        }
+        guiPlan
       },
       {
         id: 'q-user',
@@ -872,7 +879,14 @@ describe('chat-store-thread-actions queued messages', () => {
     await actions.drainQueuedMessages()
 
     expect(state.queuedMessages).toEqual([])
-    expect(sendMessage).toHaveBeenCalledWith('normal follow-up', 'agent', {
+    expect(sendMessage).toHaveBeenNthCalledWith(1, 'internal plan prompt', 'plan', {
+      queued: expect.objectContaining({
+        id: 'q-plan',
+        mode: 'plan',
+        guiPlan
+      })
+    })
+    expect(sendMessage).toHaveBeenNthCalledWith(2, 'normal follow-up', 'agent', {
       queued: expect.objectContaining({
         id: 'q-user',
         fileReferences: [{

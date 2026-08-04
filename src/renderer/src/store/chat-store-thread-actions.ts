@@ -824,7 +824,7 @@ export function createThreadActions(
           busy: state.busy,
           turnId: state.currentTurnId,
           blocks: state.blocks
-        }).filter((message) => !message.guiPlan)
+        })
         const queueChanged =
           queuedMessages.length !== state.queuedMessages.length ||
           queuedMessages.some((message, index) => message !== state.queuedMessages[index])
@@ -1058,7 +1058,9 @@ export function createThreadActions(
     const hasPendingActiveTurn = threadHasPendingRuntimeWork(get().blocks)
     if (get().busy || hasPendingActiveTurn) {
       const state = get()
-      if (overrides?.guiPlan || writeContext) {
+      // Write keeps a file-identity contract that cannot safely survive a
+      // deferred queue. Plan turns may queue like normal chat messages.
+      if (writeContext) {
         set({ error: i18n.t('common:composerQueuePlaceholder') })
         return false
       }
