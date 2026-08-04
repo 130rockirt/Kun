@@ -19,8 +19,9 @@ import {
 } from '../../tests/graph-scheduler-test-harness.js'
 
 const execFileAsync = promisify(execFile)
-const schedulerWaitTimeoutMs = process.platform === 'win32' ? 30_000 : 15_000
-const schedulerTestTimeoutMs = process.platform === 'win32' ? 60_000 : 30_000
+const usesSlowerSchedulerPersistence = process.platform === 'darwin' || process.platform === 'win32'
+const schedulerWaitTimeoutMs = usesSlowerSchedulerPersistence ? 30_000 : 15_000
+const schedulerTestTimeoutMs = usesSlowerSchedulerPersistence ? 60_000 : 30_000
 
 function task(
   key: string,

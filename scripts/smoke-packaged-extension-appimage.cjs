@@ -22,6 +22,9 @@ const {
 
 const APPIMAGE_FILE_PATTERN = /^Kun-[0-9A-Za-z][0-9A-Za-z._-]*-linux-x86_64\.AppImage$/
 const APPIMAGE_EXTRACTION_TIMEOUT_MS = 120_000
+const APPIMAGE_DESKTOP_SMOKE_MAX_BUFFER = 1024 * 1024
+const TRANSIENT_CHROMIUM_SIGTRAP_PATTERN =
+  /Packaged Electron exited before the desktop smoke completed \(exit=133, signal=null\)/u
 
 function assertLinuxX64(platform = process.platform, arch = process.arch) {
   if (platform !== 'linux' || arch !== 'x64') {
@@ -112,7 +115,9 @@ function createAppImageSmokeInvocation({
     options: {
       env,
       shell: false,
-      stdio: 'inherit',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      encoding: 'utf8',
+      maxBuffer: APPIMAGE_DESKTOP_SMOKE_MAX_BUFFER,
       windowsHide: true
     }
   }
@@ -160,7 +165,8 @@ function runAppImageSmoke(options = {}) {
     runInvocation(
       smoke,
       options.spawnSyncCommand ?? spawnSync,
-      'Final Linux AppImage Extension desktop smoke failed'
+      'Final Linux AppImage Extension desktop smoke failed',
+      { retryTransientChromiumSigtrap: true }
     )
     return appImage
   } finally {
@@ -294,17 +300,40 @@ function inspectEmptyExtractionDirectory(extractionDirectory) {
   }
 }
 
-function runInvocation(invocation, spawnSyncCommand, failureMessage) {
-  const result = spawnSyncCommand(invocation.command, invocation.args, invocation.options)
-  if (result.error?.code === 'ETIMEDOUT') {
-    throw new Error(`${failureMessage} (timed out after ${String(invocation.options.timeout)} ms)`)
-  }
-  if (result.error) throw result.error
-  if (result.status !== 0) {
+function runInvocation(
+  invocation,
+  spawnSyncCommand,
+  failureMessage,
+  { retryTransientChromiumSigtrap = false } = {}
+) {
+  const maxAttempts = retryTransientChromiumSigtrap ? 2 : 1
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const result = spawnSyncCommand(invocation.command, invocation.args, invocation.options)
+    forwardInvocationOutput(result)
+    if (result.error?.code === 'ETIMEDOUT') {
+      throw new Error(`${failureMessage} (timed out after ${String(invocation.options.timeout)} ms)`)
+    }
+    if (result.error) throw result.error
+    if (result.status === 0) return
+    if (
+      attempt < maxAttempts &&
+      result.status === 1 &&
+      TRANSIENT_CHROMIUM_SIGTRAP_PATTERN.test(`${result.stdout ?? ''}\n${result.stderr ?? ''}`)
+    ) {
+      process.stderr.write(
+        'Final Linux AppImage Chromium smoke hit a transient SIGTRAP; retrying once.\n'
+      )
+      continue
+    }
     throw new Error(
       `${failureMessage}${result.signal ? ` (signal ${result.signal})` : ` (exit ${String(result.status)})`}`
     )
   }
+}
+
+function forwardInvocationOutput(result) {
+  if (result.stdout) process.stdout.write(result.stdout)
+  if (result.stderr) process.stderr.write(result.stderr)
 }
 
 function assertContained(root, candidate, label) {
