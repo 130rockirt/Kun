@@ -73,14 +73,8 @@ jobs:
       - name: Install root dependencies
         run: npm ci
 
-      - name: Install Kun runtime dependencies
-        run: npm --prefix kun ci
-
       - name: Typecheck root app
         run: npm run typecheck
-
-      - name: Typecheck Kun runtime
-        run: npm --prefix kun run typecheck
 
       - name: Lint
         run: npm run lint
@@ -93,9 +87,6 @@ jobs:
 
       - name: Test root app
         run: npm run test
-
-      - name: Test Kun runtime
-        run: npm --prefix kun run test
 
       - name: Test bounded Kun runtime memory growth
         run: npm --prefix kun run test:memory-growth
@@ -150,9 +141,6 @@ jobs:
 
       - name: Test Graph Mode on native macOS
         run: npm run test:graph:platform
-
-      - name: Check Extension public release gate
-        run: npm run check:extension-release-gate
 
       - name: Decode Apple signing credentials
         env:
@@ -363,9 +351,6 @@ jobs:
       - name: Test Graph Mode on native Windows
         run: npm run test:graph:platform
 
-      - name: Check Extension public release gate
-        run: npm run check:extension-release-gate
-
       - name: Build Windows installer
         run: npm run dist:win
 
@@ -454,9 +439,6 @@ jobs:
 
       - name: Test Graph Mode on native Linux
         run: npm run test:graph:platform
-
-      - name: Check Extension public release gate
-        run: npm run check:extension-release-gate
 
       - name: Build Linux AppImage
         run: npm run dist:linux

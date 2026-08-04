@@ -82,9 +82,6 @@ jobs:
       - name: Install root dependencies
         run: npm ci
 
-      - name: Install Kun runtime dependencies
-        run: npm --prefix kun ci
-
       - name: Typecheck
         run: npm run typecheck
 
@@ -151,9 +148,6 @@ jobs:
 
       - name: Test Graph Mode on native macOS
         run: npm run test:graph:platform
-
-      - name: Check Extension public release gate
-        run: npm run check:extension-release-gate
 
       - name: Build macOS packages
         run: npm run dist:mac
@@ -326,9 +320,6 @@ jobs:
       - name: Test Graph Mode on native Windows
         run: npm run test:graph:platform
 
-      - name: Check Extension public release gate
-        run: npm run check:extension-release-gate
-
       - name: Build Windows installer
         run: npm run dist:win
 
@@ -413,9 +404,6 @@ jobs:
 
       - name: Test Graph Mode on native Linux
         run: npm run test:graph:platform
-
-      - name: Check Extension public release gate
-        run: npm run check:extension-release-gate
 
       - name: Build Linux AppImage
         run: npm run dist:linux

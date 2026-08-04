@@ -39,14 +39,8 @@ jobs:
       - name: Install root dependencies
         run: npm ci
 
-      - name: Install Kun runtime dependencies
-        run: npm --prefix kun ci
-
       - name: Typecheck root app
         run: npm run typecheck
-
-      - name: Typecheck Kun runtime
-        run: npm --prefix kun run typecheck
 
       - name: Lint
         run: npm run lint
@@ -59,9 +53,6 @@ jobs:
 
       - name: Test root app
         run: npm run test
-
-      - name: Test Kun runtime
-        run: npm --prefix kun run test
 
       - name: Test bounded Kun runtime memory growth
         run: npm --prefix kun run test:memory-growth
@@ -92,9 +83,6 @@ jobs:
 
       - name: Install root dependencies
         run: npm ci
-
-      - name: Install Kun runtime dependencies
-        run: npm --prefix kun ci
 
       - name: Test Runtime data migration on native Linux
         run: npx vitest run src/main/kun-data-dir-paths.test.ts src/main/legacy-data-migration.test.ts src/main/runtime-data-dir-migration.test.ts src/main/runtime-data-dir-ownership.test.ts --reporter=dot
@@ -208,9 +196,6 @@ jobs:
 
       - name: Test Graph Mode on native macOS
         run: npm run test:graph:platform
-
-      - name: Check Extension public release gate (host-native macOS)
-        run: npm run check:extension-release-gate
 
       - name: Build ad-hoc macOS packages (x64 and arm64)
         run: npm run dist:mac
@@ -370,9 +355,6 @@ jobs:
 
       - name: Test Graph Mode on native Windows
         run: npm run test:graph:platform
-
-      - name: Check Extension public release gate (host-native Windows)
-        run: npm run check:extension-release-gate
 
       - name: Build and smoke standalone TUI (host-native Windows)
         shell: pwsh

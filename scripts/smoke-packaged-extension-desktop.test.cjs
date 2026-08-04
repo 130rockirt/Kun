@@ -1182,6 +1182,29 @@ test('every automated and local release path gates uploads behind packaged Exten
   assertPublishDependencies(release, 'stable release')
   assertPublishDependencies(daily, 'daily prerelease')
 
+  // check:extensions includes the complete static Extension release gate. Run
+  // it once in the Linux validation job before native packaging fans out,
+  // rather than rebuilding and rerunning the platform-neutral suite on every
+  // macOS, Windows, and Linux runner.
+  for (const [label, workflow, validationJob, packageJobs] of [
+    ['stable release', release, 'validate', ['build-macos', 'build-windows', 'build-linux']],
+    ['daily prerelease', daily, 'validate', ['build-macos', 'build-windows', 'build-linux']],
+    ['PR', pr, 'test', ['package', 'package-macos', 'package-windows']]
+  ]) {
+    assertOrderedCommands(workflow.jobs[validationJob], ['npm run check:extensions'])
+    for (const jobId of packageJobs) {
+      const needs = Array.isArray(workflow.jobs[jobId].needs)
+        ? workflow.jobs[jobId].needs
+        : [workflow.jobs[jobId].needs]
+      assert.ok(needs.includes(validationJob), `${label} ${jobId} must depend on ${validationJob}`)
+      assert.doesNotMatch(
+        workflow.jobs[jobId].steps.map((step) => step.run ?? '').join('\n'),
+        /npm run check:extension-release-gate/,
+        `${label} ${jobId} must not duplicate the shared Extension release gate`
+      )
+    }
+  }
+
   assertOrderedCommands(release.jobs['build-macos'], [
     'npm run verify:packaged-macos-native -- --resources dist/mac/Kun.app/Contents/Resources --arch x64',
     'npm run verify:packaged-macos-native -- --resources dist/mac-arm64/Kun.app/Contents/Resources --arch arm64',
@@ -1222,7 +1245,6 @@ test('every automated and local release path gates uploads behind packaged Exten
   ])
   assertStepAfter(pr.jobs.package, 'Upload Linux package', nativeEvidenceCommand)
   assertOrderedCommands(pr.jobs['package-macos'], [
-    'npm run check:extension-release-gate',
     'npm run dist:mac',
     'npm run verify:packaged-macos-native -- --resources dist/mac/Kun.app/Contents/Resources --arch x64',
     'npm run verify:packaged-macos-native -- --resources dist/mac-arm64/Kun.app/Contents/Resources --arch arm64',
@@ -1240,7 +1262,6 @@ test('every automated and local release path gates uploads behind packaged Exten
     smokeMacX64DesktopCommand
   ])
   assertOrderedCommands(pr.jobs['package-windows'], [
-    'npm run check:extension-release-gate',
     'npm run dist:win',
     'npm run smoke:packaged-extensions -- --resources dist/win-unpacked/resources',
     desktopCommand,
@@ -1260,7 +1281,6 @@ test('every automated and local release path gates uploads behind packaged Exten
     assert.equal(step?.['timeout-minutes'], 10, `${stepName} must have a bounded timeout`)
   }
   assertOrderedCommands(daily.jobs['build-macos'], [
-    'npm run check:extension-release-gate',
     'npm run dist:mac',
     'npm run verify:packaged-macos-native -- --resources dist/mac/Kun.app/Contents/Resources --arch x64',
     'npm run verify:packaged-macos-native -- --resources dist/mac-arm64/Kun.app/Contents/Resources --arch arm64',
@@ -1278,7 +1298,6 @@ test('every automated and local release path gates uploads behind packaged Exten
     smokeMacX64DesktopCommand
   ])
   assertOrderedCommands(daily.jobs['build-windows'], [
-    'npm run check:extension-release-gate',
     'npm run dist:win',
     'npm run smoke:packaged-extensions -- --resources dist/win-unpacked/resources',
     desktopCommand,
@@ -1286,7 +1305,6 @@ test('every automated and local release path gates uploads behind packaged Exten
   ])
   assertStepAfter(daily.jobs['build-windows'], 'Upload Windows artifacts', nativeEvidenceCommand)
   assertOrderedCommands(daily.jobs['build-linux'], [
-    'npm run check:extension-release-gate',
     'npm run dist:linux',
     'npm run smoke:packaged-extensions -- --resources dist/linux-unpacked/resources',
     'unshare --user --map-root-user /bin/true',
