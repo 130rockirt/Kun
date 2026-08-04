@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { join, win32 } from 'node:path'
 import { promisify } from 'node:util'
 import type { ProviderQuotaMetric } from '../contracts/provider-quota.js'
 import { GeminiCliOAuthSource } from '../adapters/model/gemini-cli-oauth.js'
@@ -25,6 +25,11 @@ import {
   readOpenCodeGoLocalQuota,
   type OpenCodeGoLocalQuotaResult
 } from './opencode-go-local-quota.js'
+import {
+  fetchOpenCodeGoWebQuota as fetchOpenCodeGoWebQuotaImpl,
+  OpenCodeGoWebQuotaError,
+  type OpenCodeGoWebQuotaResult
+} from './opencode-go-web-quota.js'
 
 const execFileAsync = promisify(execFile)
 const QUOTA_TIMEOUT_MS = 12_000
@@ -96,6 +101,11 @@ export type SubscriptionQuotaRuntime = {
   resolveAntigravityCredential(context: ProbeContext): Promise<GoogleCredential | undefined>
   resolveGeminiCliToken(context: ProbeContext): Promise<string | undefined>
   resolveOpenCodeGoQuota(): Promise<OpenCodeGoLocalQuotaResult | undefined>
+  resolveOpenCodeGoCookie(): Promise<string | undefined>
+  fetchOpenCodeGoWebQuota(
+    cookieHeader: string,
+    context: ProbeContext
+  ): Promise<OpenCodeGoWebQuotaResult>
 }
 
 export class ProviderQuotaMissingCredentialError extends Error {
@@ -117,7 +127,7 @@ export async function runSubscriptionQuotaProbe(
   provider: ProviderQuotaProbeProfile,
   context: ProbeContext,
   runtimeOverrides: Partial<SubscriptionQuotaRuntime> = {}
-): Promise<{ metrics: ProviderQuotaMetric[]; summary?: string }> {
+): Promise<{ metrics: ProviderQuotaMetric[]; summary?: string; source?: string }> {
   const runtime = { ...defaultRuntime, ...runtimeOverrides }
   if (kind === 'claude-subscription') {
     const accessToken = await runtime.resolveClaudeToken(provider)
@@ -212,13 +222,33 @@ export async function runSubscriptionQuotaProbe(
     return probeGoogleCodeAssistQuota(credential, context, 'antigravity')
   }
   if (kind === 'opencode-go-local') {
-    const quota = await runtime.resolveOpenCodeGoQuota()
-    if (!quota) {
-      throw new ProviderQuotaMissingCredentialError(
-        'Use OpenCode Go locally first so its local usage database contains history.'
-      )
+    const cookieHeader = await runtime.resolveOpenCodeGoCookie()
+    if (cookieHeader) {
+      try {
+        const web = await runtime.fetchOpenCodeGoWebQuota(cookieHeader, context)
+        if (web.metrics.length > 0) {
+          return {
+            metrics: web.metrics,
+            ...(web.summary ? { summary: web.summary } : {}),
+            source: 'OpenCode Go subscription usage'
+          }
+        }
+      } catch (error) {
+        // Web quota is best-effort: any auth/network/parse failure falls back
+        // to the local usage database estimate.
+        if (!(error instanceof OpenCodeGoWebQuotaError)) throw error
+      }
     }
-    return quota
+    const quota = await runtime.resolveOpenCodeGoQuota()
+    if (quota) {
+      return {
+        ...quota,
+        source: 'OpenCode Go local usage estimate'
+      }
+    }
+    throw new ProviderQuotaMissingCredentialError(
+      'Sign in to opencode.ai in your browser, or use OpenCode Go locally first so its usage history exists.'
+    )
   }
   const accessToken = await runtime.resolveGeminiCliToken(context)
   if (!accessToken) {
@@ -442,6 +472,16 @@ const defaultRuntime: SubscriptionQuotaRuntime = {
   resolveCursorSession,
   resolveAntigravityCredential,
   resolveOpenCodeGoQuota: readOpenCodeGoLocalQuota,
+  resolveOpenCodeGoCookie,
+  async fetchOpenCodeGoWebQuota(cookieHeader, context) {
+    const fetcher = ((input: string | URL | Request, init?: RequestInit) =>
+      context.fetcher(
+        typeof input === 'string' || input instanceof URL ? input : input.url,
+        init,
+        context.proxyUrl
+      )) as typeof fetch
+    return fetchOpenCodeGoWebQuotaImpl({ cookieHeader, fetcher })
+  },
   async resolveGeminiCliToken(context) {
     const fetchImpl = ((input: string | URL | Request, init?: RequestInit) =>
       context.fetcher(
@@ -1364,6 +1404,113 @@ function appStateDbPath(app: 'Cursor' | 'Antigravity'): string {
     return join(homedir(), '.config', app, 'User', 'globalStorage', 'state.vscdb')
   }
   return ''
+}
+
+export type OpenCodeGoCookieResolverOptions = {
+  platform?: NodeJS.Platform
+  environment?: NodeJS.ProcessEnv
+  homeDirectory?: string
+  cookieDatabasePaths?: string[]
+  readCookies?: (databasePath: string) => Promise<Array<{ name: string; value: string }>>
+}
+
+const OPENCODE_COOKIE_NAMES = new Set(['auth', '__host-auth'])
+
+/**
+ * Resolves an OpenCode session cookie header (auth / __Host-auth) from
+ * installed Chromium-family browsers. Any read failure, missing cookie, or
+ * encrypted cookie value returns undefined so callers fall back to the local
+ * usage database instead of surfacing an error.
+ */
+export async function resolveOpenCodeGoCookie(
+  options: OpenCodeGoCookieResolverOptions = {}
+): Promise<string | undefined> {
+  const databasePaths = options.cookieDatabasePaths ??
+    openCodeGoCookieDatabasePaths(options)
+  const readCookies = options.readCookies ?? readChromiumCookies
+  for (const databasePath of databasePaths) {
+    try {
+      const cookies = await readCookies(databasePath)
+      const pairs = cookies
+        .filter((cookie) => OPENCODE_COOKIE_NAMES.has(cookie.name.toLowerCase()))
+        .filter((cookie) => cookie.value.trim().length > 0)
+        // Chrome 137+ encrypts cookie values with a v10 prefix; those cannot be
+        // decrypted with the sqlite3 CLI and are treated as absent.
+        .filter((cookie) => !cookie.value.startsWith('v10'))
+        .map((cookie) => `${cookie.name}=${cookie.value}`)
+      if (pairs.length > 0) return pairs.join('; ')
+    } catch {
+      // Browser cookie databases may be locked or encrypted; try the next candidate.
+    }
+  }
+  return undefined
+}
+
+export function openCodeGoCookieDatabasePaths(
+  options: Omit<OpenCodeGoCookieResolverOptions, 'readCookies'> = {}
+): string[] {
+  const platform = options.platform ?? process.platform
+  const environment = options.environment ?? process.env
+  const userHome = options.homeDirectory ?? homedir()
+  const paths: string[] = []
+  if (platform === 'darwin') {
+    const root = join(userHome, 'Library', 'Application Support')
+    paths.push(
+      join(root, 'Google', 'Chrome'),
+      join(root, 'Microsoft Edge'),
+      join(root, 'BraveSoftware', 'Brave-Browser'),
+      join(root, 'Arc', 'User Data')
+    )
+  } else if (platform === 'linux') {
+    const root = join(userHome, '.config')
+    paths.push(
+      join(root, 'google-chrome'),
+      join(root, 'microsoft-edge'),
+      join(root, 'brave'),
+      join(root, 'arc')
+    )
+  } else if (platform === 'win32') {
+    const localAppData = environment.LOCALAPPDATA?.trim()
+    const root = localAppData || join(userHome, 'AppData', 'Local')
+    const joinPath = win32.join
+    paths.push(
+      joinPath(root, 'Google', 'Chrome', 'User Data'),
+      joinPath(root, 'Microsoft', 'Edge', 'User Data'),
+      joinPath(root, 'BraveSoftware', 'Brave-Browser', 'User Data')
+    )
+  }
+  const joinPath = platform === 'win32' ? win32.join : join
+  return paths.flatMap((browserRoot) => [
+    joinPath(browserRoot, 'Default', 'Network', 'Cookies'),
+    joinPath(browserRoot, 'Default', 'Cookies')
+  ])
+}
+
+async function readChromiumCookies(
+  databasePath: string
+): Promise<Array<{ name: string; value: string }>> {
+  const binary = process.platform === 'darwin' ? '/usr/bin/sqlite3' : 'sqlite3'
+  const { stdout } = await execFileAsync(binary, [
+    databasePath,
+    "SELECT name, value FROM cookies WHERE host_key LIKE '%opencode.ai';"
+  ], {
+    encoding: 'utf8',
+    timeout: 2_000,
+    maxBuffer: 512 * 1024
+  })
+  return stdout
+    .split('\n')
+    .map((line) => {
+      const separator = line.indexOf('|')
+      if (separator <= 0) return undefined
+      return {
+        name: line.slice(0, separator).trim(),
+        value: line.slice(separator + 1)
+      }
+    })
+    .filter((row): row is { name: string; value: string } =>
+      row !== undefined &&
+      row.name.length > 0)
 }
 
 async function readJsonFile(path: string): Promise<unknown> {

@@ -178,6 +178,7 @@ describe('ProviderQuotaService', () => {
       fetcher,
       nowIso: () => '2026-07-28T01:31:00.000Z',
       subscriptionRuntime: {
+        resolveOpenCodeGoCookie: async () => undefined,
         resolveOpenCodeGoQuota: async () => ({
           summary: 'Local estimate · $12 / $30 / $60 plan limits',
           metrics: [{
@@ -202,6 +203,146 @@ describe('ProviderQuotaService', () => {
       }]
     })
     expect(fetcher).not.toHaveBeenCalled()
+  })
+
+  it('shows OpenCode Go subscription usage when the browser cookie resolves', async () => {
+    const fetcher = vi.fn(async (
+      input: string | URL,
+      init: RequestInit | undefined
+    ) => {
+      const url = String(input)
+      if (url.includes('/_server')) {
+        return Response.json({ workspaces: [{ id: 'wrk_web123' }] })
+      }
+      return Response.json({
+        rollingUsage: { usagePercent: 22, resetInSec: 1800 },
+        weeklyUsage: { used: 9, limit: 30, resetInSec: 604800 },
+        monthlyUsage: { used: 11, limit: 60, resetsAt: '2026-08-01T00:00:00.000Z' }
+      })
+    })
+    const service = new ProviderQuotaService({
+      loadSource: async () => ({
+        profiles: [profile({
+          id: 'opencode-go',
+          name: 'OpenCode Go',
+          presetId: 'opencode-go',
+          baseUrl: 'https://opencode.ai/zen/go/v1',
+          apiKey: ''
+        })],
+        proxyUrl: ''
+      }),
+      fetcher,
+      nowIso: () => '2026-07-28T01:31:00.000Z',
+      subscriptionRuntime: {
+        resolveOpenCodeGoCookie: async () => 'auth=session-token',
+        resolveOpenCodeGoQuota: async () => undefined,
+        fetchOpenCodeGoWebQuota: async (cookieHeader, context) => {
+          const wrap = ((input: string | URL | Request, init?: RequestInit) =>
+            context.fetcher(
+              typeof input === 'string' || input instanceof URL ? input : input.url,
+              init,
+              context.proxyUrl
+            )) as typeof fetch
+          const { fetchOpenCodeGoWebQuota } = await import('./opencode-go-web-quota.js')
+          return fetchOpenCodeGoWebQuota({ cookieHeader, fetcher: wrap })
+        }
+      }
+    })
+
+    await expect(service.list()).resolves.toMatchObject({
+      entries: [{
+        providerId: 'opencode-go',
+        status: 'available',
+        source: 'OpenCode Go subscription usage',
+        summary: 'OpenCode Go subscription · wrk_web123',
+        metrics: expect.arrayContaining([
+          expect.objectContaining({ id: 'five-hour', usedPercent: 22 }),
+          expect.objectContaining({ id: 'weekly', usedPercent: 30 })
+        ])
+      }]
+    })
+    expect(fetcher).toHaveBeenCalled()
+  })
+
+  it('falls back to local usage when the web quota request fails', async () => {
+    const fetcher = vi.fn(async () => new Response('denied', { status: 401 }))
+    const service = new ProviderQuotaService({
+      loadSource: async () => ({
+        profiles: [profile({
+          id: 'opencode-go',
+          name: 'OpenCode Go',
+          presetId: 'opencode-go',
+          baseUrl: 'https://opencode.ai/zen/go/v1',
+          apiKey: ''
+        })],
+        proxyUrl: ''
+      }),
+      fetcher,
+      nowIso: () => '2026-07-28T01:31:00.000Z',
+      subscriptionRuntime: {
+        resolveOpenCodeGoCookie: async () => 'auth=session-token',
+        resolveOpenCodeGoQuota: async () => ({
+          summary: 'Local estimate · $12 / $30 / $60 plan limits',
+          metrics: [{
+            id: 'weekly',
+            label: 'Weekly usage',
+            unit: 'USD',
+            used: 9,
+            limit: 30,
+            remaining: 21,
+            usedPercent: 30
+          }]
+        }),
+        fetchOpenCodeGoWebQuota: async (cookieHeader, context) => {
+          const wrap = ((input: string | URL | Request, init?: RequestInit) =>
+            context.fetcher(
+              typeof input === 'string' || input instanceof URL ? input : input.url,
+              init,
+              context.proxyUrl
+            )) as typeof fetch
+          const { fetchOpenCodeGoWebQuota } = await import('./opencode-go-web-quota.js')
+          return fetchOpenCodeGoWebQuota({ cookieHeader, fetcher: wrap })
+        }
+      }
+    })
+
+    await expect(service.list()).resolves.toMatchObject({
+      entries: [{
+        providerId: 'opencode-go',
+        status: 'available',
+        source: 'OpenCode Go local usage estimate',
+        metrics: [expect.objectContaining({ id: 'weekly', usedPercent: 30 })]
+      }]
+    })
+  })
+
+  it('reports missing credentials when neither web nor local usage is available', async () => {
+    const service = new ProviderQuotaService({
+      loadSource: async () => ({
+        profiles: [profile({
+          id: 'opencode-go',
+          name: 'OpenCode Go',
+          presetId: 'opencode-go',
+          baseUrl: 'https://opencode.ai/zen/go/v1',
+          apiKey: ''
+        })],
+        proxyUrl: ''
+      }),
+      fetcher: vi.fn(),
+      nowIso: () => '2026-07-28T01:31:00.000Z',
+      subscriptionRuntime: {
+        resolveOpenCodeGoCookie: async () => undefined,
+        resolveOpenCodeGoQuota: async () => undefined
+      }
+    })
+
+    await expect(service.list()).resolves.toMatchObject({
+      entries: [{
+        providerId: 'opencode-go',
+        status: 'missing_credentials',
+        message: 'Sign in to opencode.ai in your browser, or use OpenCode Go locally first so its usage history exists.'
+      }]
+    })
   })
 
   it('refreshes and retries a rejected Codex quota credential', async () => {

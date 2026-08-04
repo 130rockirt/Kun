@@ -67,6 +67,16 @@ export type OpenCodeGoLocalQuotaResult = {
   summary: string
 }
 
+export class OpenCodeGoLocalQuotaError extends Error {
+  constructor(
+    message: string,
+    readonly causeKind: 'sqlite' | 'native-module' | 'missing-history' = 'sqlite'
+  ) {
+    super(message)
+    this.name = 'OpenCodeGoLocalQuotaError'
+  }
+}
+
 export type OpenCodeGoLocalQuotaOptions = {
   databasePath?: string
   now?: Date
@@ -94,43 +104,68 @@ export async function readOpenCodeGoLocalQuota(
   try {
     await access(databasePath)
   } catch {
+    // No local database yet: OpenCode Go has not recorded usage on this machine.
     return undefined
   }
 
+  let sqliteModule: { default: typeof import('better-sqlite3') }
   try {
-    const sqlite = await import('better-sqlite3')
-    const database = new sqlite.default(databasePath, {
+    sqliteModule = await import('better-sqlite3')
+  } catch (error) {
+    throw new OpenCodeGoLocalQuotaError(
+      `The bundled SQLite driver could not be loaded: ${errorMessage(error)}`,
+      'native-module'
+    )
+  }
+
+  let database: import('better-sqlite3').Database
+  try {
+    database = new sqliteModule.default(databasePath, {
       readonly: true,
       fileMustExist: true
     })
-    try {
-      database.pragma('query_only = ON')
-      database.pragma('busy_timeout = 250')
-      const hasPartTable = database.prepare(
-        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1"
-      ).get('part') !== undefined
-      const rawRows = database.prepare(
-        hasPartTable ? MESSAGE_AND_PART_USAGE_SQL : MESSAGE_USAGE_SQL
-      ).all() as Array<{ createdMs?: unknown; cost?: unknown }>
-      const rows = rawRows.flatMap((row) => {
-        const createdMs = Number(row.createdMs)
-        const cost = Number(row.cost)
-        return Number.isFinite(createdMs) &&
-          createdMs > 0 &&
-          Number.isFinite(cost) &&
-          cost >= 0
-          ? [{ createdMs, cost }]
-          : []
-      })
-      return rows.length > 0
-        ? buildOpenCodeGoLocalQuota(rows, options.now ?? new Date())
-        : undefined
-    } finally {
-      database.close()
-    }
-  } catch {
-    throw new Error('OpenCode Go local usage database could not be read.')
+  } catch (error) {
+    throw new OpenCodeGoLocalQuotaError(
+      `OpenCode Go local usage database could not be opened: ${errorMessage(error)}`,
+      'sqlite'
+    )
   }
+  try {
+    database.pragma('query_only = ON')
+    database.pragma('busy_timeout = 250')
+    const hasPartTable = database.prepare(
+      "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1"
+    ).get('part') !== undefined
+    const rawRows = database.prepare(
+      hasPartTable ? MESSAGE_AND_PART_USAGE_SQL : MESSAGE_USAGE_SQL
+    ).all() as Array<{ createdMs?: unknown; cost?: unknown }>
+    const rows = rawRows.flatMap((row) => {
+      const createdMs = Number(row.createdMs)
+      const cost = Number(row.cost)
+      return Number.isFinite(createdMs) &&
+        createdMs > 0 &&
+        Number.isFinite(cost) &&
+        cost >= 0
+        ? [{ createdMs, cost }]
+        : []
+    })
+    return rows.length > 0
+      ? buildOpenCodeGoLocalQuota(rows, options.now ?? new Date())
+      : undefined
+  } catch (error) {
+    throw new OpenCodeGoLocalQuotaError(
+      `OpenCode Go local usage database could not be read: ${errorMessage(error)}`,
+      'sqlite'
+    )
+  } finally {
+    database.close()
+  }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error && error.message
+    ? error.message.slice(0, 1_024)
+    : String(error).slice(0, 1_024)
 }
 
 export function buildOpenCodeGoLocalQuota(

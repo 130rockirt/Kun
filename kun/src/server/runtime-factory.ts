@@ -161,8 +161,10 @@ import { UsageService } from '../services/usage-service.js'
 import { ProviderQuotaService } from '../services/provider-quota-service.js'
 import {
   resolveDefaultCodexQuotaCredential,
-  resolveDefaultGrokQuotaCredential
+  resolveDefaultGrokQuotaCredential,
+  resolveOpenCodeGoCookie
 } from '../services/provider-subscription-quota.js'
+import { fetchOpenCodeGoWebQuota } from '../services/opencode-go-web-quota.js'
 import { RoutePoolTestService } from '../services/route-pool-test-service.js'
 import type { UsageEvent } from '../contracts/events.js'
 import type {
@@ -869,6 +871,19 @@ export async function createKunServeRuntime(
         } catch {
           return undefined
         }
+      },
+      // OpenCode Go uses the default browser-cookie resolver and the shared
+      // proxy-aware fetcher; explicit wiring keeps GUI/TUI quota behavior
+      // identical to the standalone runtime defaults.
+      resolveOpenCodeGoCookie: async () => resolveOpenCodeGoCookie(),
+      fetchOpenCodeGoWebQuota: async (cookieHeader, context) => {
+        const fetcher = ((input: string | URL | Request, init?: RequestInit) =>
+          context.fetcher(
+            typeof input === 'string' || input instanceof URL ? input : input.url,
+            init,
+            context.proxyUrl
+          )) as typeof fetch
+        return fetchOpenCodeGoWebQuota({ cookieHeader, fetcher })
       }
     }
   })
