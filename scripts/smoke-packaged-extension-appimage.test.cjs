@@ -111,6 +111,9 @@ test('builds FUSE-free validation and verified-AppRun desktop invocations', () =
     resolve('/tmp/kun-appimage-extract/squashfs-root/AppRun')
   ])
   assert.equal(smoke.options.shell, false)
+  assert.deepEqual(smoke.options.stdio, ['ignore', 'pipe', 'pipe'])
+  assert.equal(smoke.options.encoding, 'utf8')
+  assert.equal(smoke.options.maxBuffer, 1024 * 1024)
   assert.equal(smoke.options.timeout, undefined)
   assert.equal(smoke.options.killSignal, undefined)
   assert.equal(smoke.options.env.ELECTRON_RUN_AS_NODE, undefined)
@@ -164,6 +167,46 @@ test('extracts and validates before launching the verified AppRun', {
   assert.equal(desktopInvocation.options.env.APPDIR, extractedRoot)
   assert.equal(desktopInvocation.options.env.APPIMAGE, appImage)
   assert.equal(statSync(appImage).mode & 0o111, 0o111)
+})
+
+test('retries the verified AppRun once after the exact transient Chromium SIGTRAP', {
+  skip: process.platform === 'win32' && 'requires POSIX executable modes'
+}, (t) => {
+  const dist = temporaryDirectory(t)
+  const extractionDirectory = temporaryDirectory(t, 'kun-appimage-sigtrap-test-')
+  const appImage = join(dist, 'Kun-1.2.3-linux-x86_64.AppImage')
+  writeFileSync(appImage, 'appimage')
+  let desktopAttempts = 0
+
+  assert.doesNotThrow(() => runAppImageSmoke({
+    platform: 'linux',
+    arch: 'x64',
+    distDirectory: dist,
+    extractionDirectory,
+    spawnSyncCommand: (command, args, options) => {
+      if (command === appImage) {
+        writeExtractedBundle(options.cwd)
+        return { status: 0, signal: null }
+      }
+      desktopAttempts += 1
+      if (desktopAttempts === 1) {
+        return {
+          status: 1,
+          signal: null,
+          stdout: '',
+          stderr:
+            'Packaged Electron exited before the desktop smoke completed ' +
+            '(exit=133, signal=null)\n'
+        }
+      }
+      assert.deepEqual(args.slice(-2), [
+        '--desktop-executable',
+        join(extractionDirectory, 'squashfs-root', 'AppRun')
+      ])
+      return { status: 0, signal: null, stdout: '', stderr: '' }
+    }
+  }))
+  assert.equal(desktopAttempts, 2)
 })
 
 test('rejects a symlinked extracted AppRun before desktop launch', (t) => {
