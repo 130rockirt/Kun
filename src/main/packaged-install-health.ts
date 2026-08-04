@@ -1,4 +1,5 @@
-import { statSync } from 'node:fs'
+import { statSync as nodeStatSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { join } from 'node:path'
 
 export type PackagedInstallHealth =
@@ -11,10 +12,40 @@ type PackagedInstallHealthInput = {
   resourcesPath: string
 }
 
+type FileStat = {
+  isFile(): boolean
+  size: number | bigint
+}
+
+type FileStatSync = (path: string) => FileStat
+type ModuleLoader = (id: string) => unknown
+
+const requireFromHere = createRequire(import.meta.url)
+
+/**
+ * Electron virtualizes `node:fs` access to an ASAR archive. In a packaged app,
+ * statSync(resources/app.asar) therefore describes the mounted archive root as
+ * a directory instead of the physical archive file. `original-fs` bypasses the
+ * ASAR layer; plain Node (including unit tests) falls back to its already-raw fs.
+ */
+export function resolveInstallHealthFileStat(loadModule: ModuleLoader = requireFromHere): FileStatSync {
+  try {
+    const rawFs = loadModule('original-fs') as { statSync?: FileStatSync }
+    if (typeof rawFs?.statSync === 'function') {
+      return (path) => rawFs.statSync!(path)
+    }
+  } catch {
+    // `original-fs` is an Electron built-in and is unavailable in plain Node.
+  }
+  return (path) => nodeStatSync(path)
+}
+
+const rawStatSync = resolveInstallHealthFileStat()
+
 function isNonEmptyFile(path: string): boolean {
   try {
-    const stat = statSync(path)
-    return stat.isFile() && stat.size > 0
+    const stat = rawStatSync(path)
+    return stat.isFile() && stat.size > 0n
   } catch {
     return false
   }

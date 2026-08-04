@@ -130,9 +130,11 @@ describe('FileArtifactStore streaming reads', () => {
       const store = new FileArtifactStore(dir, () => 't0')
       const result = await store.put({ content: 'sensitive artifact' })
 
-      expect((await stat(dir)).mode & 0o777).toBe(0o700)
-      expect((await stat(join(dir, `${result.meta.id}.bin`))).mode & 0o777).toBe(0o600)
-      expect((await stat(join(dir, `${result.meta.id}.json`))).mode & 0o777).toBe(0o600)
+      if (process.platform !== 'win32') {
+        expect((await stat(dir)).mode & 0o777).toBe(0o700)
+        expect((await stat(join(dir, `${result.meta.id}.bin`))).mode & 0o777).toBe(0o600)
+        expect((await stat(join(dir, `${result.meta.id}.json`))).mode & 0o777).toBe(0o600)
+      }
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

@@ -457,7 +457,7 @@ function validateBundledOfficeCli(context) {
   if (digest !== expected.sha256) {
     throw new Error(`[after-pack] OfficeCLI digest mismatch for ${targetKey}`)
   }
-  if (platform !== 'win32') {
+  if (platform !== 'win32' && process.platform !== 'win32') {
     chmodSync(executablePath, 0o755)
     if ((lstatSync(executablePath).mode & 0o111) === 0) {
       throw new Error(`[after-pack] OfficeCLI is not executable for ${targetKey}`)

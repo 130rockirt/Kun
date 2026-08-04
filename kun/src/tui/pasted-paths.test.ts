@@ -1,13 +1,18 @@
 import { describe, expect, it } from 'vitest'
+import { resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { parsePastedFilePaths } from './pasted-paths.js'
 
 describe('parsePastedFilePaths', () => {
   it('accepts quoted, escaped, relative, file URL, and multi-file path pastes', () => {
+    const fileUrlPath = resolve('/tmp/a b.png')
     expect(parsePastedFilePaths("'/tmp/a b.png'", '/work', '/home/me')).toEqual(['/tmp/a b.png'])
     expect(parsePastedFilePaths('/tmp/a\\ b.png', '/work', '/home/me')).toEqual(['/tmp/a b.png'])
-    expect(parsePastedFilePaths('./shot.png', '/work', '/home/me')).toEqual(['/work/shot.png'])
-    expect(parsePastedFilePaths('~/shot.png', '/work', '/home/me')).toEqual(['/home/me/shot.png'])
-    expect(parsePastedFilePaths('file:///tmp/a%20b.png', '/work', '/home/me')).toEqual(['/tmp/a b.png'])
+    expect(parsePastedFilePaths('./shot.png', '/work', '/home/me')).toEqual([resolve('/work', 'shot.png')])
+    expect(parsePastedFilePaths('~/shot.png', '/work', '/home/me')).toEqual([resolve('/home/me', 'shot.png')])
+    expect(parsePastedFilePaths(pathToFileURL(fileUrlPath).toString(), '/work', '/home/me')).toEqual([
+      fileUrlPath
+    ])
     expect(parsePastedFilePaths('/tmp/a.png\u0000/tmp/b.png', '/work', '/home/me')).toEqual([
       '/tmp/a.png',
       '/tmp/b.png'

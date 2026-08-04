@@ -502,7 +502,15 @@ export abstract class GraphAttemptScheduler {
     // Test/embedded supervisors may synchronously record a Lead review and
     // wake reconciliation; keeping the queue here would deadlock that wake.
     if (submittedSummary !== undefined) {
-      await this.requestSupervision(runId, 'submitted', [nodeId], submittedSummary)
+      try {
+        await this.requestSupervision(runId, 'submitted', [nodeId], submittedSummary)
+      } catch (error) {
+        // The result is already durable; reconciliation can redeliver a
+        // notification conflict without downgrading the submitted attempt.
+        if (!(error instanceof GraphRunConflictError)) throw error
+        console.warn(`[kun] Graph supervision raced durable state for ${attemptId}; ` +
+          'leaving the result reviewable for reconciliation.')
+      }
     }
     const latest = await this.requireRun(runId)
     if (isTerminalRunStatus(latest.status)) {

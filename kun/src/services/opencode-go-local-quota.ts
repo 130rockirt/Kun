@@ -1,6 +1,6 @@
 import { access } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { join, win32 } from 'node:path'
+import { posix, win32 } from 'node:path'
 import type { ProviderQuotaMetric } from '../contracts/provider-quota.js'
 
 const FIVE_HOURS_MS = 5 * 60 * 60 * 1_000
@@ -81,7 +81,7 @@ export function resolveOpenCodeGoDatabasePath(
   const environment = options.environment ?? process.env
   const userHome = options.homeDirectory ?? homedir()
   const platform = options.platform ?? process.platform
-  const joinPath = platform === 'win32' ? win32.join : join
+  const joinPath = platform === 'win32' ? win32.join : posix.join
   const xdgDataHome = environment.XDG_DATA_HOME?.trim()
   const dataRoot = xdgDataHome || joinPath(userHome, '.local', 'share')
   return joinPath(dataRoot, 'opencode', 'opencode.db')

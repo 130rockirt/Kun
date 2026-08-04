@@ -44,8 +44,10 @@ describe('AgentObservabilityRecorder', () => {
       startTimeUnixNano: '0', endTimeUnixNano: '1', durationMs: 1, status: { code: 'OK' }, attributes: {}
     })
 
-    expect((await stat(join(root, 'private'))).mode & 0o777).toBe(0o700)
-    expect((await stat(output)).mode & 0o777).toBe(0o600)
+    if (process.platform !== 'win32') {
+      expect((await stat(join(root, 'private'))).mode & 0o777).toBe(0o700)
+      expect((await stat(output)).mode & 0o777).toBe(0o600)
+    }
   })
 
   it('exports turn usage and TTFT without assistant text payloads', async () => {

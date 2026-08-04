@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { join } from 'node:path'
 
 const setName = vi.fn()
 const setAppUserModelId = vi.fn()
@@ -42,7 +43,7 @@ describe('app identity bootstrap', () => {
       runtimeFlavor: 'development'
     })
     expect(setName).toHaveBeenCalledWith('kun-dv')
-    expect(setPath).toHaveBeenCalledWith('userData', '/app-data/kun-dv')
+    expect(setPath).toHaveBeenCalledWith('userData', join('/app-data', 'kun-dv'))
   })
 
   it('does not call app.setAppUserModelId (caller responsibility on win32)', async () => {

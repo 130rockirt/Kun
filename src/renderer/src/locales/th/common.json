@@ -470,6 +470,8 @@
   "designPrototypePlayUnavailable": "สร้างอย่างน้อยหนึ่งหน้าจอก่อนเล่นต้นแบบ",
   "designPrototypeBack": "กลับ",
   "designPrototypeClose": "ปิดต้นแบบ",
+  "designPrototypeOpenBrowser": "เปิดในเบราว์เซอร์",
+  "designPrototypeOpenBrowserFailed": "ไม่สามารถเปิดต้นแบบในเบราว์เซอร์ได้",
   "designPrototypeViewportMode": "วิวพอร์ตต้นแบบ",
   "designPrototypeViewportWebDetail": "ต้นแบบเว็บ {{width}} x {{height}}",
   "designPrototypeViewportAppDetail": "ต้นแบบโทรศัพท์ {{width}} x {{height}}",

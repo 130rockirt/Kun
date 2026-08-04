@@ -1,10 +1,5 @@
-import {
-  GRAPH_CONTRACT_VERSION,
-  type GraphDomainEventV1,
-  type GraphNodeAttemptV1,
-  type GraphNodeProjectionV1,
-  type GraphRunV1
-} from '../contracts/graph.js'
+import { GRAPH_CONTRACT_VERSION, type GraphDomainEventV1, type GraphNodeAttemptV1,
+  type GraphNodeProjectionV1, type GraphRunV1 } from '../contracts/graph.js'
 import { GraphRunConflictError } from './graph-run-store.js'
 import { GraphAttemptScheduler } from './graph-attempt-scheduler.js'
 import {
@@ -20,26 +15,14 @@ import {
   terminalRequiredFailure,
   validationFailureSummary
 } from './graph-scheduler-policy.js'
-import {
-  loopGateHandlesNodeOutcome,
-  loopGateWaivesIncompleteNode
-} from './graph-loop-policy.js'
+import { loopGateHandlesNodeOutcome, loopGateWaivesIncompleteNode } from './graph-loop-policy.js'
 import { evaluateGraphLoopGates } from './graph-loop-gate-evaluator.js'
-import {
-  finishGraphRun,
-  isGraphRunCompletionFinalizing,
-  tryCompleteGraphRun
-} from './graph-run-completion.js'
+import { finishGraphRun, isGraphRunCompletionFinalizing,
+  tryCompleteGraphRun } from './graph-run-completion.js'
 import { reconcileGraphReadiness } from './graph-readiness-reconciler.js'
-import type {
-  GraphSchedulerOptions,
-  GraphSupervisionPort
-} from './graph-scheduler-types.js'
+import type { GraphSchedulerOptions, GraphSupervisionPort } from './graph-scheduler-types.js'
 import { recordGraphTerminalCleanup } from './graph-terminal-cleanup.js'
-import {
-  deliverNodeSteering,
-  handleNodeAttemptSteering
-} from './graph-steering-delivery.js'
+import { deliverNodeSteering, handleNodeAttemptSteering } from './graph-steering-delivery.js'
 import { GraphPeerReviewCoordinator } from './graph-peer-review-coordinator.js'
 import { enforceGraphBudgets, recordGraphReconcileFailure } from './graph-scheduler-maintenance.js'
 export type {
@@ -47,10 +30,7 @@ export type {
   GraphSchedulerOptions,
   GraphSupervisionPort
 } from './graph-scheduler-types.js'
-export {
-  parseWorkerResult,
-  validateWorkerResult
-} from './graph-scheduler-policy.js'
+export { parseWorkerResult, validateWorkerResult } from './graph-scheduler-policy.js'
 export class GraphScheduler extends GraphAttemptScheduler {
   private readonly runQueues = new Map<string, Promise<unknown>>()
   private readonly cleanupTasks = new Set<Promise<void>>()

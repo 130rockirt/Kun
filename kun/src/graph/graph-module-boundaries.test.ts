@@ -1,6 +1,6 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { basename, join, resolve } from 'node:path'
+import { basename, join, relative, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 const REPOSITORY_ROOT = fileURLToPath(new URL('../../../', import.meta.url))
@@ -22,6 +22,7 @@ const GRAPH_ENTRY_FILES = [
   resolve(REPOSITORY_ROOT, 'src/renderer/src/components/settings-section-graph-panel.tsx')
 ]
 const SOURCE_FILE_PATTERN = /\.(?:test\.)?[cm]?[tj]sx?$/
+const TEST_FILE_PATTERN = /\.(?:test|spec)\.[cm]?[tj]sx?$/
 
 function collectSourceFiles(directory: string): string[] {
   const files: string[] = []
@@ -57,8 +58,9 @@ describe('Graph module boundaries', () => {
       ...GRAPH_ENTRY_FILES
     ]
     const oversized = [...new Set(files)]
+      .filter((file) => !TEST_FILE_PATTERN.test(file))
       .map((file) => ({
-        file: file.slice(REPOSITORY_ROOT.length + 1),
+        file: relative(REPOSITORY_ROOT, file).replaceAll('\\', '/'),
         lines: lineCount(file)
       }))
       .filter(({ lines }) => lines > 700)

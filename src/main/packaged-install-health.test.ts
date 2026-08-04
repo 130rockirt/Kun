@@ -2,7 +2,10 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { inspectPackagedInstallHealth } from './packaged-install-health'
+import {
+  inspectPackagedInstallHealth,
+  resolveInstallHealthFileStat
+} from './packaged-install-health'
 
 describe('inspectPackagedInstallHealth', () => {
   let directory = ''
@@ -50,5 +53,20 @@ describe('inspectPackagedInstallHealth', () => {
       executablePath: 'missing.exe',
       resourcesPath: 'missing-resources'
     })).toEqual({ ok: true })
+  })
+
+  it('uses Electron original-fs so app.asar is checked as a physical file', () => {
+    const rawStat = resolveInstallHealthFileStat((id) => {
+      expect(id).toBe('original-fs')
+      return {
+        statSync: () => ({
+          isFile: () => true,
+          size: 42
+        })
+      }
+    })
+
+    expect(rawStat('resources/app.asar').isFile()).toBe(true)
+    expect(rawStat('resources/app.asar').size).toBe(42)
   })
 })

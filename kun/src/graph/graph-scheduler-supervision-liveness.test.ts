@@ -17,6 +17,7 @@ import {
 
 const supervisors: GraphSupervisor[] = []
 const supervisionLivenessTimeoutMs = 60_000
+const leadReviewConflictTimeoutMs = 5_000
 
 afterEach(async () => {
   await Promise.all(supervisors.splice(0).map((supervisor) => supervisor.stop()))
@@ -24,6 +25,50 @@ afterEach(async () => {
 })
 
 describe('Graph scheduler supervision liveness', () => {
+  it('keeps a submitted result reviewable when its supervision notification conflicts', async () => {
+    const source = testGraphPlan().nodes[0]!
+    const plan = testGraphPlan({
+      nodes: [source],
+      edges: [],
+      completionNodeIds: [source.id],
+      autoStart: true
+    })
+    let submittedSignals = 0
+    const supervision: GraphSupervisionPort = {
+      signal: async (input) => {
+        if (input.reason === 'submitted' && ++submittedSignals === 1) {
+          throw new GraphRunConflictError('simulated concurrent supervision append')
+        }
+      }
+    }
+    const harness = await schedulerHarness(
+      plan,
+      () => completedWorker(() => 1),
+      {},
+      { autoLeadReview: false, supervision: () => supervision }
+    )
+
+    harness.scheduler.start()
+    const reviewing = await waitFor(async () => {
+      const run = await harness.store.get('run_harness')
+      return run?.nodes.research.status === 'reviewing' ? run : null
+    })
+    const attempt = reviewing.nodes.research.attempts.at(-1)!
+    await recordLeadPass(harness, reviewing.id, ['research'])
+    await harness.scheduler.resumeRun(reviewing.id)
+
+    const completed = await waitFor(async () => {
+      const run = await harness.store.get(reviewing.id)
+      return run?.status === 'completed' ? run : null
+    })
+    const lease = (await harness.writes.list()).leases.find((entry) =>
+      entry.attemptId === attempt.id)
+    expect(submittedSignals).toBeGreaterThanOrEqual(1)
+    expect(completed.nodes.research.status).toBe('accepted')
+    expect(lease).toMatchObject({ state: 'released', releaseDisposition: 'accepted' })
+    await harness.scheduler.stop()
+  })
+
   it('redelivers two parked prose-only Lead episodes in-process before review completes the run', async () => {
     let nowMs = Date.now()
     let workerStarts = 0
@@ -115,6 +160,8 @@ describe('Graph scheduler supervision liveness', () => {
       })
     } catch (error) {
       const run = await harness.store.get('run_harness')
+      const writeState = await harness.writes.list()
+      const events = await harness.store.events('run_harness')
       throw new Error(
         `${error instanceof Error ? error.message : String(error)}: ${JSON.stringify({
           leadEpisodes,
@@ -132,7 +179,20 @@ describe('Graph scheduler supervision liveness', () => {
           obligations: run?.supervisionObligations.map((obligation) => ({
             kind: obligation.kind,
             state: obligation.state,
-            noProgressCount: obligation.noProgressCount
+            noProgressCount: obligation.noProgressCount,
+            attemptIds: obligation.attemptIds,
+            digest: obligation.digest
+          })),
+          leases: writeState.leases.map((lease) => ({
+            leaseId: lease.leaseId,
+            attemptId: lease.attemptId,
+            state: lease.state,
+            releaseDisposition: lease.releaseDisposition
+          })),
+          events: events.slice(-20).map((event) => ({
+            seq: event.graphSeq,
+            type: event.event.type,
+            payload: event.event.payload
           }))
         })}`
       )
@@ -346,7 +406,8 @@ async function recordLeadPass(
   nodeIds: readonly string[]
 ): Promise<void> {
   for (const nodeId of nodeIds) {
-    for (let retry = 0; retry < 5; retry += 1) {
+    const conflictDeadline = Date.now() + leadReviewConflictTimeoutMs
+    while (true) {
       const run = await harness.store.get(runId)
       const node = run?.nodes[nodeId]
       const attempt = node?.attempts.at(-1)
@@ -372,7 +433,10 @@ async function recordLeadPass(
         }, 'lead')
         break
       } catch (error) {
-        if (!(error instanceof GraphRunConflictError) || retry === 4) throw error
+        if (!(error instanceof GraphRunConflictError) || Date.now() >= conflictDeadline) throw error
+        // Let the scheduler's in-flight durable write settle before reading the
+        // latest attempt/review projection and retrying the idempotent command.
+        await new Promise((resolve) => setTimeout(resolve, 10))
       }
     }
   }

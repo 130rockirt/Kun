@@ -44,6 +44,8 @@ describe('git checkpoint service', () => {
     execFileSync('git', ['init', '-b', 'main', unbornRepo], { stdio: 'pipe' })
     execFileSync('git', ['-C', unbornRepo, 'config', 'user.email', 'test@example.com'], { stdio: 'pipe' })
     execFileSync('git', ['-C', unbornRepo, 'config', 'user.name', 'Test'], { stdio: 'pipe' })
+    execFileSync('git', ['-C', unbornRepo, 'config', 'core.autocrlf', 'false'], { stdio: 'pipe' })
+    execFileSync('git', ['-C', unbornRepo, 'config', 'core.eol', 'lf'], { stdio: 'pipe' })
 
     await writeFile(join(unbornRepo, 'staged.txt'), 'staged checkpoint\n')
     execFileSync('git', ['-C', unbornRepo, 'add', 'staged.txt'], { stdio: 'pipe' })

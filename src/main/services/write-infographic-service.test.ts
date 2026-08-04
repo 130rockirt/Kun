@@ -1,4 +1,5 @@
 import { mkdtempSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { realpath } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -91,7 +92,7 @@ describe('write infographic service', () => {
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.relativePath).toMatch(/^\.\.\/img\/infographic-\d{14}-[0-9a-f]{4}\.png$/)
-    expect(result.absolutePath).toBe(join(workspace, 'img', result.fileName))
+    expect(result.absolutePath).toBe(await realpath(join(workspace, 'img', result.fileName)))
     expect(existsSync(result.absolutePath)).toBe(true)
     expect(readFileSync(result.absolutePath, 'utf8')).toBe('fake-png-bytes')
 
@@ -114,7 +115,7 @@ describe('write infographic service', () => {
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.relativePath).toMatch(/^img\/infographic-\d{14}-[0-9a-f]{4}\.png$/)
-    expect(result.absolutePath).toBe(join(workspace, 'img', result.fileName))
+    expect(result.absolutePath).toBe(await realpath(join(workspace, 'img', result.fileName)))
   })
 
   it('prefers an explicit defaultSize over the portrait default', async () => {
@@ -298,7 +299,7 @@ describe('write infographic service', () => {
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.relativePath).toMatch(/^\.\.\/\.\.\/img\/design-\d{14}-[0-9a-f]{4}\.png$/)
-    expect(result.absolutePath).toBe(join(workspace, '.kunsdd', 'img', result.fileName))
+    expect(result.absolutePath).toBe(await realpath(join(workspace, '.kunsdd', 'img', result.fileName)))
     expect(existsSync(result.absolutePath)).toBe(true)
   })
 

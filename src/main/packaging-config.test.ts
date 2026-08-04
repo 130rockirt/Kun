@@ -359,7 +359,9 @@ describe('electron-builder Kun packaging', () => {
     }
 
     expect(() => afterPack._internals.validateBundledOfficeCli(context)).not.toThrow()
-    expect(statSync(join(officeRoot, 'officecli')).mode & 0o111).not.toBe(0)
+    if (process.platform !== 'win32') {
+      expect(statSync(join(officeRoot, 'officecli')).mode & 0o111).not.toBe(0)
+    }
 
     writeFileSync(join(officeRoot, 'officecli.exe'), 'wrong architecture')
     expect(() => afterPack._internals.validateBundledOfficeCli(context)).toThrow(
@@ -495,6 +497,15 @@ describe('electron-builder Kun packaging', () => {
     expect(installerScript).toContain('Var /GLOBAL KunInstallerCandidateExplicit')
     expect(installerScript).toContain('Function KunSelectAutomaticUpdateMode')
     expect(installerScript).toContain('!insertmacro kunRunMigrationHelper ResolveUpdateScope')
+    expect(installerScript).toContain(
+      'Automatic update selected the only registered current-user ${PRODUCT_NAME} installation.'
+    )
+    expect(installerScript).toContain(
+      'Automatic update selected the only registered all-users ${PRODUCT_NAME} installation.'
+    )
+    expect(installerScript).toContain(
+      'Automatic update source marker is unavailable with registrations in both scopes; keeping the requested install mode.'
+    )
     expect(installerScript).toContain('KUN_INSTALLER_CURRENT_USER_SOURCE')
     expect(installerScript).toContain('KUN_INSTALLER_ALL_USERS_SOURCE')
     expect(installerScript).toContain('KUN_INSTALLER_CANDIDATE_EXPLICIT')
@@ -509,9 +520,23 @@ describe('electron-builder Kun packaging', () => {
     )
     expect(installerScript).toContain('Function KunReadMigrationResult')
     expect(installerScript).toContain('IfErrors KunMigrationResultMissing')
+    expect(installerScript).toContain('-ResultPath "$KunInstallerResultPath"')
     expect(installerScript).toContain('Function KunResolveRegisteredSource')
     expect(installerScript).toContain('!insertmacro kunRunMigrationHelper ResolveSource')
     expect(installerScript).toContain('KUN_INSTALLER_UNINSTALL_STRING')
+    expect(installerScript).toContain('!macro kunSetEnvironmentFromRegister NAME REGISTER')
+    expect(installerScript).toContain(
+      '!insertmacro kunSetEnvironmentFromRegister "KUN_INSTALLER_UNINSTALL_STRING" $R9'
+    )
+    expect(installerScript).toContain(
+      '!insertmacro kunSetEnvironmentFromRegister "KUN_INSTALLER_CURRENT_USER_UNINSTALL_STRING" $R1'
+    )
+    expect(installerScript).toContain(
+      '!insertmacro kunSetEnvironmentFromRegister "KUN_INSTALLER_ALL_USERS_UNINSTALL_STRING" $R3'
+    )
+    expect(installerScript).not.toContain(
+      'SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_UNINSTALL_STRING", "$R9")'
+    )
     expect(installerScript).toContain('${if} $KunInstallerSnapshotMode != $installMode')
     expect(installerScript).toContain('${andIf} $installMode != "all"')
     expect(installerScript).not.toContain('KUN_INSTALLER_RESULT')
