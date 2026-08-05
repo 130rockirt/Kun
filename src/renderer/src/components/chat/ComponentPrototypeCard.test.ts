@@ -12,30 +12,51 @@ import {
 const actionMocks = vi.hoisted(() => ({
   previewWorkspaceFile: vi.fn(),
   readWorkspaceFile: vi.fn(),
-  writeText: vi.fn()
+  writeText: vi.fn(),
+  openDesign: vi.fn(),
+  importComponentPrototype: vi.fn()
 }))
+
+/** When set, the mocked preview host reports this error after mounting. */
+const hostState = vi.hoisted(() => ({ reportErrorOnMount: '' }))
 
 vi.mock('../../lib/workspace-file-preview', () => ({
   previewWorkspaceFile: actionMocks.previewWorkspaceFile
 }))
 
+vi.mock('../../store/chat-store', () => ({
+  useChatStore: { getState: () => ({ openDesign: actionMocks.openDesign }) }
+}))
+
+vi.mock('../../design/component-prototype-canvas-import', () => ({
+  importComponentPrototypeToDesignCanvas: actionMocks.importComponentPrototype
+}))
+
 vi.mock('../design/DesignHtmlPreviewHost', async () => {
-  const { createElement } = await import('react')
+  const { createElement, useEffect } = await import('react')
   return {
-    DesignHtmlPreviewHost: ({ children, ...props }: Record<string, unknown>) => createElement(
-      'section',
-      { 'data-preview-host': true, ...props },
-      (children as (value: {
-        state: { webviewUrl: string; error: string }
-        renderWebview: (props: Record<string, unknown>) => ReturnType<typeof createElement>
-      }) => ReturnType<typeof createElement>)({
-        state: { webviewUrl: 'file:///workspace/prototype.html', error: '' },
-        renderWebview: (webviewProps) => createElement('div', {
-          ...webviewProps,
-          'data-prototype-webview': true
-        })
+    DesignHtmlPreviewHost: ({ children, onError, ...props }: Record<string, unknown>) => {
+      const reportError = onError as ((message: string) => void) | undefined
+      // No deps: re-run after every update so tests can flip hostState and
+      // re-render the card (the real host re-authorizes on prop changes too).
+      useEffect(() => {
+        if (hostState.reportErrorOnMount) reportError?.(hostState.reportErrorOnMount)
       })
-    )
+      return createElement(
+        'section',
+        { 'data-preview-host': true, ...props },
+        (children as (value: {
+          state: { webviewUrl: string; error: string }
+          renderWebview: (props: Record<string, unknown>) => ReturnType<typeof createElement>
+        }) => ReturnType<typeof createElement>)({
+          state: { webviewUrl: 'file:///workspace/prototype.html', error: '' },
+          renderWebview: (webviewProps) => createElement('div', {
+            ...webviewProps,
+            'data-prototype-webview': true
+          })
+        })
+      )
+    }
   }
 })
 
@@ -47,7 +68,7 @@ vi.mock('react-i18next', () => {
     componentPrototypeDesktop: 'Desktop',
     componentPrototypeMobile: 'Mobile',
     componentPrototypeRefresh: 'Refresh prototype',
-    componentPrototypeResize: 'Resize prototype height',
+    componentPrototypeResize: 'Resize preview',
     componentPrototypeResetSize: 'Reset preview size',
     componentPrototypeCopyCode: 'Copy prototype code',
     componentPrototypeLoadFailed: 'The prototype could not be loaded.',
@@ -58,6 +79,7 @@ vi.mock('react-i18next', () => {
     componentPrototypeViewCode: 'View code',
     componentPrototypeIterate: 'Continue adjusting',
     componentPrototypeAdopt: 'Adopt design',
+    componentPrototypeOpenCanvas: 'Open in canvas',
     browserMore: 'More'
   }
   return {
@@ -96,6 +118,14 @@ function instanceText(instance: ReactTestInstance): string {
   return instance.children.map((child) => typeof child === 'string' ? child : instanceText(child)).join('')
 }
 
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((res) => {
+    resolve = res
+  })
+  return { promise, resolve }
+}
+
 describe('ComponentPrototypeCard metadata helpers', () => {
   it('accepts the versioned component artifact but rejects unsafe paths and viewports', () => {
     expect(componentPrototypeFromBlock(block())).toEqual(metadata)
@@ -121,8 +151,8 @@ describe('ComponentPrototypeCard metadata helpers', () => {
     expect(componentPrototypeFromBlock(block(direct))).toEqual(direct)
   })
 
-  it('clamps desktop/mobile frames and builds follow-up prompts around the artifact', () => {
-    expect(componentPrototypeFrameSize(metadata, 'desktop')).toEqual({ width: '100%', height: 520 })
+  it('derives numeric desktop/mobile frames from the viewport and builds follow-up prompts', () => {
+    expect(componentPrototypeFrameSize(metadata, 'desktop')).toEqual({ width: 760, height: 520 })
     expect(componentPrototypeFrameSize(metadata, 'mobile')).toEqual({ width: 360, height: 520 })
     expect(componentPrototypeFollowUpPrompt(metadata, 'iterate')).toContain(metadata.relativePath)
     expect(componentPrototypeFollowUpPrompt(metadata, 'adopt')).toContain('采纳')
@@ -143,11 +173,29 @@ describe('ComponentPrototypeCard interactions', () => {
     return renderer.root.findAllByType('button').find((button) => instanceText(button).includes(label))!
   }
 
+  const openCanvasButton = (): ReactTestInstance => {
+    return renderer.root.findByProps({ title: 'Open in canvas' })
+  }
+
+  const previewStage = (width: number, height: number): ReactTestInstance[] => {
+    return renderer.root.findAll((node) =>
+      node.props.style?.width === width && node.props.style?.height === height
+    )
+  }
+
   beforeEach(async () => {
     ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
     actionMocks.previewWorkspaceFile.mockReset()
     actionMocks.readWorkspaceFile.mockReset().mockResolvedValue({ ok: true, content: '<html></html>' })
     actionMocks.writeText.mockReset().mockResolvedValue(undefined)
+    actionMocks.openDesign.mockReset()
+    actionMocks.importComponentPrototype.mockReset().mockResolvedValue({
+      artifactId: 'imported',
+      relativePath: '.kun-design/doc/imported/v1.html',
+      documentId: 'doc',
+      reused: false
+    })
+    hostState.reportErrorOnMount = ''
     onPrompt.mockReset()
     sessionValues.clear()
     vi.stubGlobal('window', {
@@ -173,13 +221,14 @@ describe('ComponentPrototypeCard interactions', () => {
     vi.unstubAllGlobals()
   })
 
-  it('renders a centered compact surface and keeps secondary controls in one overflow menu', async () => {
+  it('renders a centered surface with an explicit open-in-canvas action and one overflow menu', async () => {
     const card = renderer.root.findByProps({ 'data-component-prototype-id': metadata.artifactId })
     expect(card.props.className).toContain('mx-auto')
-    expect(card.props.className).toContain('max-w-[900px]')
+    expect(card.props.className).toContain('max-w-full')
+    expect(card.props.style?.width).toBe(760 + 16)
     expect(renderer.root.findByProps({ 'data-prototype-webview': true })).toBeTruthy()
-    expect(renderer.root.findByType('header').props.className).toContain('h-8')
-    expect(renderer.root.findByType('header').findAllByType('button')).toHaveLength(1)
+    expect(renderer.root.findByType('header').findAllByType('button')).toHaveLength(2)
+    expect(openCanvasButton().props.disabled).toBe(false)
     expect(renderer.root.findAllByProps({ 'data-component-prototype-menu': true })).toHaveLength(0)
     const host = renderer.root.findByProps({ 'data-preview-host': true })
     expect(host.props.partition).toBe('kun-component-prototype-tool_component')
@@ -188,7 +237,7 @@ describe('ComponentPrototypeCard interactions', () => {
     await openMenu()
     expect(renderer.root.findByProps({ 'data-component-prototype-menu': true })).toBeTruthy()
     await act(async () => menuButton('Mobile').props.onClick())
-    expect(renderer.root.findAll((node) => node.props.style?.width === 360)).toHaveLength(1)
+    expect(previewStage(360, 520)).toHaveLength(1)
 
     const beforeRefresh = renderer.root.findByProps({ 'data-preview-host': true })
     await openMenu()
@@ -197,7 +246,7 @@ describe('ComponentPrototypeCard interactions', () => {
     expect(afterRefresh).not.toBe(beforeRefresh)
   })
 
-  it('resizes by pointer and keyboard, persists the height, and resets to the viewport default', async () => {
+  it('resizes both dimensions by pointer and keyboard, persists per mode, and resets to defaults', async () => {
     const handle = renderer.root.findByProps({ 'data-component-prototype-resize-handle': true })
     const pointerTarget = {
       setPointerCapture: vi.fn(),
@@ -205,28 +254,57 @@ describe('ComponentPrototypeCard interactions', () => {
     }
     await act(async () => handle.props.onPointerDown({
       pointerId: 7,
+      clientX: 100,
       clientY: 100,
       currentTarget: pointerTarget,
       preventDefault: vi.fn()
     }))
     await act(async () => handle.props.onPointerMove({
       pointerId: 7,
-      clientY: 220,
+      clientX: 140,
+      clientY: 180,
       currentTarget: pointerTarget
     }))
-    expect(renderer.root.findAll((node) => node.props.style?.height === 640)).toHaveLength(1)
-    expect(sessionValues.get(`kun-component-prototype-height:${metadata.artifactId}`)).toBe('640')
+    expect(previewStage(800, 600)).toHaveLength(1)
+    expect(sessionValues.get('kun-component-prototype-size:component_date_picker:desktop'))
+      .toBe(JSON.stringify({ width: 800, height: 600 }))
 
     const resizedHandle = renderer.root.findByProps({ 'data-component-prototype-resize-handle': true })
-    await act(async () => resizedHandle.props.onKeyDown({
-      key: 'ArrowDown',
-      preventDefault: vi.fn()
-    }))
-    expect(renderer.root.findAll((node) => node.props.style?.height === 672)).toHaveLength(1)
+    await act(async () => resizedHandle.props.onKeyDown({ key: 'ArrowRight', preventDefault: vi.fn() }))
+    await act(async () => resizedHandle.props.onKeyDown({ key: 'ArrowDown', preventDefault: vi.fn() }))
+    expect(previewStage(832, 632)).toHaveLength(1)
 
     await openMenu()
     await act(async () => menuButton('Reset preview size').props.onClick())
-    expect(renderer.root.findAll((node) => node.props.style?.height === 520)).toHaveLength(1)
+    expect(previewStage(760, 520)).toHaveLength(1)
+  })
+
+  it('remembers a separate size per view mode', async () => {
+    await openMenu()
+    await act(async () => menuButton('Mobile').props.onClick())
+    expect(previewStage(360, 520)).toHaveLength(1)
+
+    const handle = renderer.root.findByProps({ 'data-component-prototype-resize-handle': true })
+    const pointerTarget = {
+      setPointerCapture: vi.fn(),
+      releasePointerCapture: vi.fn()
+    }
+    await act(async () => handle.props.onPointerDown({
+      pointerId: 8,
+      clientX: 100,
+      clientY: 100,
+      currentTarget: pointerTarget,
+      preventDefault: vi.fn()
+    }))
+    await act(async () => handle.props.onPointerMove({
+      pointerId: 8,
+      clientX: 130,
+      clientY: 150,
+      currentTarget: pointerTarget
+    }))
+    expect(previewStage(390, 570)).toHaveLength(1)
+    expect(sessionValues.get('kun-component-prototype-size:component_date_picker:mobile'))
+      .toBe(JSON.stringify({ width: 390, height: 570 }))
   })
 
   it('copies/views code and prefills the existing composer for iterate/adopt', async () => {
@@ -269,17 +347,94 @@ describe('ComponentPrototypeCard interactions', () => {
     expect(renderer.root.findByProps({ title: 'Published directly by Kun' })).toBeTruthy()
   })
 
-  it('shows a bounded failure state and disables follow-up actions', async () => {
+  it('renders nothing for failed prototypes and never leaks their raw error text', async () => {
     await act(async () => renderer.update(createElement(ComponentPrototypeCard, {
-      block: block({ ...metadata, status: 'failed', error: 'The child returned remote resources.' }),
+      block: block({ ...metadata, status: 'failed', error: '/Users/me/secret/prototype.html' }),
       workspaceRoot: '/workspace',
       onPrompt
     })))
 
-    expect(JSON.stringify(renderer.toJSON())).toContain('The child returned remote resources.')
-    expect(renderer.root.findAllByProps({ 'data-prototype-webview': true })).toHaveLength(0)
-    await openMenu()
-    const followUps = [menuButton('Continue adjusting'), menuButton('Adopt design')]
-    expect(followUps.every((button) => button.props.disabled === true)).toBe(true)
+    expect(renderer.toJSON()).toBeNull()
+    expect(JSON.stringify(renderer.toJSON())).not.toContain('secret')
+
+    await act(async () => renderer.update(createElement(ComponentPrototypeCard, {
+      block: {
+        ...block(),
+        status: 'error' as const
+      },
+      workspaceRoot: '/workspace',
+      onPrompt
+    })))
+    expect(renderer.toJSON()).toBeNull()
+  })
+
+  it('opens the design canvas after a successful import and stays put when the import fails', async () => {
+    await act(async () => {
+      openCanvasButton().props.onClick()
+      await Promise.resolve()
+    })
+    expect(actionMocks.importComponentPrototype).toHaveBeenCalledWith({
+      workspaceRoot: '/workspace',
+      prototype: metadata
+    })
+    expect(actionMocks.openDesign).toHaveBeenCalledTimes(1)
+
+    actionMocks.importComponentPrototype.mockResolvedValueOnce(null)
+    actionMocks.openDesign.mockClear()
+    await act(async () => {
+      openCanvasButton().props.onClick()
+      await Promise.resolve()
+    })
+    expect(actionMocks.openDesign).not.toHaveBeenCalled()
+  })
+
+  it('disables the open-in-canvas action while running or while an import is pending', async () => {
+    await act(async () => renderer.update(createElement(ComponentPrototypeCard, {
+      block: block({ ...metadata, status: 'running' }),
+      workspaceRoot: '/workspace',
+      onPrompt
+    })))
+    expect(openCanvasButton().props.disabled).toBe(true)
+
+    await act(async () => renderer.update(createElement(ComponentPrototypeCard, {
+      block: block(),
+      workspaceRoot: '/workspace',
+      onPrompt
+    })))
+    const pending = deferred<unknown>()
+    actionMocks.importComponentPrototype.mockReturnValueOnce(pending.promise)
+    await act(async () => {
+      openCanvasButton().props.onClick()
+    })
+    expect(openCanvasButton().props.disabled).toBe(true)
+    await act(async () => {
+      pending.resolve(null)
+      await Promise.resolve()
+    })
+    expect(actionMocks.openDesign).not.toHaveBeenCalled()
+  })
+
+  it('hides the whole card when the preview host reports an error for a completed prototype', async () => {
+    hostState.reportErrorOnMount = 'ENOENT /Users/me/secret/prototype.html'
+    await act(async () => renderer.update(createElement(ComponentPrototypeCard, {
+      block: block(),
+      workspaceRoot: '/workspace',
+      onPrompt
+    })))
+    await act(async () => {})
+    expect(renderer.toJSON()).toBeNull()
+    expect(JSON.stringify(renderer.toJSON())).not.toContain('secret')
+  })
+
+  it('keeps the generating placeholder visible while running even when the host reports errors', async () => {
+    hostState.reportErrorOnMount = 'streaming hiccup'
+    await act(async () => renderer.update(createElement(ComponentPrototypeCard, {
+      block: block({ ...metadata, status: 'running' }),
+      workspaceRoot: '/workspace',
+      onPrompt
+    })))
+    await act(async () => {})
+    expect(renderer.toJSON()).not.toBeNull()
+    expect(renderer.root.findByProps({ 'data-preview-host': true })).toBeTruthy()
   })
 })
