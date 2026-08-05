@@ -111,6 +111,25 @@ export const ToolCallTurnItem = TurnItemBase.extend({
   providerMetadata: z.object({
     gemini: z.object({
       thoughtSignature: z.string().min(1).max(131_072)
+    }).strict().optional(),
+    anthropic: z.object({
+      /**
+       * Exact opaque thinking blocks returned before a Messages API tool use.
+       * Anthropic requires the latest assistant tool-use turn to be replayed
+       * byte-for-byte, including signatures. These blocks are used only for
+       * that same Kun turn and are never synthesized for another protocol.
+       */
+      thinkingBlocks: z.array(z.discriminatedUnion('type', [
+        z.object({
+          type: z.literal('thinking'),
+          thinking: z.string().max(262_144),
+          signature: z.string().min(1).max(262_144)
+        }).strict(),
+        z.object({
+          type: z.literal('redacted_thinking'),
+          data: z.string().min(1).max(262_144)
+        }).strict()
+      ])).min(1).max(16)
     }).strict().optional()
   }).strict().optional(),
   summary: z.string().optional()

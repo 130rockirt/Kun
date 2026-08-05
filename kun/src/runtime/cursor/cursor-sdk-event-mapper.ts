@@ -206,6 +206,8 @@ export class CursorSdkEventMapper {
   private reasoningItemId?: string
   private readonly textParts: string[] = []
   private readonly reasoningParts: string[] = []
+  private textUtf16Length = 0
+  private reasoningUtf16Length = 0
   private readonly tools = new Map<string, ToolState>()
   private sawUsage = false
 
@@ -262,8 +264,7 @@ export class CursorSdkEventMapper {
 
   finalize(resultText?: string, usage?: TokenUsage): RuntimeEventDraft[] {
     if (resultText && resultText !== this.text) {
-      this.appendOutput(
-        this.textParts,
+      this.appendText(
         resultText.startsWith(this.text) ? resultText.slice(this.text.length) : (!this.text ? resultText : '')
       )
     }
@@ -331,17 +332,32 @@ export class CursorSdkEventMapper {
     parts.push(text)
   }
 
+  private appendText(text: string): number {
+    const deltaOffset = this.textUtf16Length
+    this.appendOutput(this.textParts, text)
+    this.textUtf16Length += text.length
+    return deltaOffset
+  }
+
+  private appendReasoning(text: string): number {
+    const deltaOffset = this.reasoningUtf16Length
+    this.appendOutput(this.reasoningParts, text)
+    this.reasoningUtf16Length += text.length
+    return deltaOffset
+  }
+
   private mapAssistant(message: Extract<SDKMessage, { type: 'assistant' }>): RuntimeEventDraft[] {
     const events: RuntimeEventDraft[] = []
     for (const block of message.message.content) {
       if (block.type !== 'text' || !block.text) continue
-      this.appendOutput(this.textParts, block.text)
+      const deltaOffset = this.appendText(block.text)
       this.textItemId ||= this.ctx.nextId('item_cursor_text')
       events.push({
         kind: 'assistant_text_delta',
         threadId: this.ctx.threadId,
         turnId: this.ctx.turnId,
         itemId: this.textItemId,
+        deltaOffset,
         item: makeAssistantTextItem({
           id: this.textItemId,
           threadId: this.ctx.threadId,
@@ -356,13 +372,14 @@ export class CursorSdkEventMapper {
 
   private mapThinking(text: string): RuntimeEventDraft[] {
     if (!text) return []
-    this.appendOutput(this.reasoningParts, text)
+    const deltaOffset = this.appendReasoning(text)
     this.reasoningItemId ||= this.ctx.nextId('item_cursor_reasoning')
     return [{
       kind: 'assistant_reasoning_delta',
       threadId: this.ctx.threadId,
       turnId: this.ctx.turnId,
       itemId: this.reasoningItemId,
+      deltaOffset,
       item: makeAssistantReasoningItem({
         id: this.reasoningItemId,
         threadId: this.ctx.threadId,

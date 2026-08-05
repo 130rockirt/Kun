@@ -85,7 +85,7 @@ export function normalizeKunTurnItem(
 }
 
 /** Pure Kun wire-event to normalized projection-action conversion. */
-export function normalizeKunRuntimeEvent(
+function normalizeKunRuntimeEventPayload(
   event: CoreRuntimeEventJson,
   deps: KunEventNormalizerDeps
 ): RuntimeProjectionAction[] {
@@ -100,6 +100,9 @@ export function normalizeKunRuntimeEvent(
               text,
               kind: event.kind === 'assistant_text_delta' ? 'agent_message' : 'agent_reasoning',
               seq: event.seq,
+              ...(typeof event.deltaOffset === 'number'
+                ? { deltaOffset: event.deltaOffset }
+                : {}),
               threadId: event.threadId ?? event.item?.threadId,
               turnId: event.turnId ?? event.item?.turnId,
               itemId: event.itemId ?? event.item?.id,
@@ -234,4 +237,14 @@ export function normalizeKunRuntimeEvent(
     default:
       return []
   }
+}
+
+export function normalizeKunRuntimeEvent(
+  event: CoreRuntimeEventJson,
+  deps: KunEventNormalizerDeps
+): RuntimeProjectionAction[] {
+  const actions = normalizeKunRuntimeEventPayload(event, deps)
+  const seq = event.seq
+  if (typeof seq !== 'number') return actions
+  return actions.map((action) => ({ ...action, seq }))
 }

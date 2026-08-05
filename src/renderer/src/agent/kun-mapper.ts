@@ -1873,8 +1873,15 @@ export async function dispatchKunRuntimeEvents(
     if (pendingDeltas.length === 0) return
     const deltas = pendingDeltas
     pendingDeltas = []
+    const seqs = deltas
+      .map((delta) => delta.seq)
+      .filter((seq): seq is number => typeof seq === 'number')
     await applyRuntimeProjectionAction(
-      { type: 'deltas_received', deltas },
+      {
+        type: 'deltas_received',
+        deltas,
+        ...(seqs.length > 0 ? { seq: Math.max(...seqs) } : {})
+      },
       sink,
       handleApprovalRequest
     )
@@ -1887,6 +1894,9 @@ export async function dispatchKunRuntimeEvents(
           text,
           kind: event.kind === 'assistant_text_delta' ? 'agent_message' : 'agent_reasoning',
           seq: event.seq,
+          ...(typeof event.deltaOffset === 'number'
+            ? { deltaOffset: event.deltaOffset }
+            : {}),
           threadId: event.threadId ?? event.item?.threadId,
           turnId: event.turnId ?? event.item?.turnId,
           itemId: event.itemId ?? event.item?.id,

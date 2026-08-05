@@ -41,6 +41,8 @@ import {
   EMPTY_POST_TOOL_FINAL_ANSWER_RECOVERY_STEP,
   emptyPostToolRecoveryInstruction,
   hasSuccessfulCreatePlanResult,
+  TOOL_SUPPRESSION_FINAL_ANSWER_RECOVERY_STEP,
+  toolSuppressionRecoveryInstruction,
   userInputUnavailableInstruction
 } from './continuation-instructions.js'
 import {
@@ -198,6 +200,9 @@ export class ModelStepService {
       // suppress goal auto-resume so it isn't relaunched straight back into
       // the same exhausted budget.
       this.deps.goalTurns.suppressResume(turnId)
+      if (this.deps.roundOutcome.toolSuppressionRecoverySteps(turnId) > 0) {
+        return this.deps.roundOutcome.failToolSuppressionRecovery(threadId, turnId)
+      }
       if (dedicatedSvgTurn) {
         const persistedCompletion = svgArtifactCompletionState(
           await this.deps.sessionStore.loadItems(threadId),
@@ -307,8 +312,15 @@ export class ModelStepService {
       ...(modelRoute.reasoningEffort ? { reasoningEffort: modelRoute.reasoningEffort } : {})
     })
     const model = modelRoute.model
+    // `default` is the explicit turn pin for the runtime's implicit provider.
+    // Capability resolvers historically receive that provider as `undefined`;
+    // keep that contract while still sending the explicit alias to the model
+    // router so a later thread selection cannot take over this turn.
+    const capabilityProviderId = providerId?.trim().toLowerCase() === 'default'
+      ? undefined
+      : providerId
     const modelCapabilities =
-      this.deps.modelCapabilities?.(model, providerId) ?? modelCapabilitiesForModel(model)
+      this.deps.modelCapabilities?.(model, capabilityProviderId) ?? modelCapabilitiesForModel(model)
     const serviceTier =
       turn?.serviceTier === 'priority' &&
       modelCapabilities.serviceTiers?.includes('priority')
@@ -475,8 +487,17 @@ export class ModelStepService {
       stepIndex
     })
     const emptyPostToolRecoveryStep = this.deps.roundOutcome.emptyPostToolRecoverySteps(turnId)
-    const forceFinalAnswerRecovery =
+    const forceEmptyPostToolFinalAnswerRecovery =
       emptyPostToolRecoveryStep >= EMPTY_POST_TOOL_FINAL_ANSWER_RECOVERY_STEP
+    const toolSuppressionRecoveryStep =
+      this.deps.roundOutcome.toolSuppressionRecoverySteps(turnId)
+    const forceToolSuppressionFinalAnswerRecovery =
+      !hardRequiredToolName &&
+      !softRequiredToolName &&
+      !dedicatedSvgTurn &&
+      toolSuppressionRecoveryStep >= TOOL_SUPPRESSION_FINAL_ANSWER_RECOVERY_STEP
+    const forceFinalAnswerRecovery =
+      forceEmptyPostToolFinalAnswerRecovery || forceToolSuppressionFinalAnswerRecovery
     const planningToolSpecs = turn.orchestration === 'graph' && !graphCreateSatisfied
       ? effectiveToolSpecs.filter((tool) =>
           tool.name === GRAPH_DEFINE_PLAN_TOOL_NAME ||
@@ -560,6 +581,16 @@ export class ModelStepService {
             'model-recovery',
             'runtime',
             emptyPostToolRecoveryInstruction(emptyPostToolRecoveryStep)
+          )]
+        : []),
+      ...(toolSuppressionRecoveryStep > 0
+        ? [kunContextBlock(
+            'tool-loop-recovery',
+            'runtime',
+            toolSuppressionRecoveryInstruction(
+              toolSuppressionRecoveryStep,
+              forceToolSuppressionFinalAnswerRecovery
+            )
           )]
         : []),
       ...imageGenerationReferenceInstructions({
@@ -677,6 +708,9 @@ export class ModelStepService {
     )
     if (postCompactionBudgetGate === 'blocked') {
       this.deps.goalTurns.suppressResume(turnId)
+      if (this.deps.roundOutcome.toolSuppressionRecoverySteps(turnId) > 0) {
+        return this.deps.roundOutcome.failToolSuppressionRecovery(threadId, turnId)
+      }
       if (dedicatedSvgTurn) {
         const persistedCompletion = svgArtifactCompletionState(
           await this.deps.sessionStore.loadItems(threadId),
@@ -973,7 +1007,10 @@ export class ModelStepService {
       turnId,
       streamed,
       ...(request.requiredToolName ? { requiredToolName: request.requiredToolName } : {}),
-      ...(softRequiredToolName ? { softRequiredToolName } : {}),
+      ...(softRequiredToolName && !forceToolSuppressionFinalAnswerRecovery
+        ? { softRequiredToolName }
+        : {}),
+      ...(forceToolSuppressionFinalAnswerRecovery ? { toolCallsDisabled: true } : {}),
       turn,
       prepared: effectivePrepared,
       ...(effectiveActingModelRoute.providerId

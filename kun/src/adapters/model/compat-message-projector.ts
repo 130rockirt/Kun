@@ -4,6 +4,7 @@ import { isToolResultBridgeItem, repairModelHistoryItems } from '../../domain/mo
 import { extractToolResultImages, toolResultTextWithoutImages } from '../../loop/tool-result-image.js'
 import { wrapUntrustedContent } from '../../security/untrusted-content.js'
 import {
+  COMPAT_ANTHROPIC_THINKING,
   COMPAT_HISTORY_CONTEXT,
   type CompatChatMessage,
   type CompatChatMessageContentPart
@@ -43,7 +44,8 @@ class CompatMessageProjector {
     out.push(...this.itemsToMessages(
       repairModelHistoryItems([...request.prefix, ...history]),
       this.options.thinkingMode,
-      this.options.supportsImages
+      this.options.supportsImages,
+      request.turnId
     ))
     for (const instruction of request.contextInstructions ?? []) {
       if (instruction.trim()) out.push({ role: 'system', content: instruction })
@@ -58,7 +60,12 @@ class CompatMessageProjector {
     return normalizeThinkingAssistantMessages(healToolMessagePairs(out), this.options.thinkingMode)
   }
 
-  private itemsToMessages(items: TurnItem[], thinkingMode: boolean, supportsImages: boolean): CompatChatMessage[] {
+  private itemsToMessages(
+    items: TurnItem[],
+    thinkingMode: boolean,
+    supportsImages: boolean,
+    activeTurnId: string
+  ): CompatChatMessage[] {
     const out: CompatChatMessage[] = []
     for (let index = 0; index < items.length; index += 1) {
       const item = items[index]
@@ -67,7 +74,11 @@ class CompatMessageProjector {
       }
       if (thinkingMode && item?.kind === 'assistant_reasoning') {
         const next = items[index + 1]
-        if (next?.kind === 'assistant_text' && next.turnId === item.turnId) {
+        if (
+          item.turnId === activeTurnId &&
+          next?.kind === 'assistant_text' &&
+          next.turnId === item.turnId
+        ) {
           out.push({
             role: 'assistant',
             content: next.text,
@@ -78,7 +89,13 @@ class CompatMessageProjector {
         continue
       }
       if (item?.kind === 'tool_call') {
-        const block = this.toolCallBlockToMessages(items, index, thinkingMode, supportsImages)
+        const block = this.toolCallBlockToMessages(
+          items,
+          index,
+          thinkingMode,
+          supportsImages,
+          activeTurnId
+        )
         if (block) {
           out.push(...block.messages)
           index = block.nextIndex - 1
@@ -86,7 +103,11 @@ class CompatMessageProjector {
         continue
       }
       if (item?.kind === 'tool_result') continue
-      const message = this.itemToMessage(item, thinkingMode, supportsImages)
+      const message = this.itemToMessage(
+        item,
+        thinkingMode && item?.turnId === activeTurnId,
+        supportsImages
+      )
       if (message) out.push(message)
     }
     return out
@@ -96,7 +117,8 @@ class CompatMessageProjector {
     items: TurnItem[],
     startIndex: number,
     thinkingMode: boolean,
-    supportsImages: boolean
+    supportsImages: boolean,
+    activeTurnId: string
   ): { messages: CompatChatMessage[]; nextIndex: number } | null {
     const calls: Extract<TurnItem, { kind: 'tool_call' }>[] = []
     let index = startIndex
@@ -153,12 +175,24 @@ class CompatMessageProjector {
     if (![...expectedCallIds].every((callId) => seenResultIds.has(callId))) {
       return null
     }
+    const anthropicThinking = turnId === activeTurnId
+      ? calls.find((call) => call.providerMetadata?.anthropic)?.providerMetadata?.anthropic
+          ?.thinkingBlocks
+      : undefined
+    const activeTurnThinking = thinkingMode && turnId === activeTurnId
     return {
       messages: [
         {
           role: 'assistant',
           content: assistantText.length > 0 ? assistantText.join('\n') : '',
-          ...(thinkingMode ? { reasoning_content: reasoningContentOrSpace(reasoningText.join('\n')) } : {}),
+          ...(activeTurnThinking
+            ? { reasoning_content: reasoningContentOrSpace(reasoningText.join('\n')) }
+            : {}),
+          ...(anthropicThinking
+            ? {
+                [COMPAT_ANTHROPIC_THINKING]: anthropicThinking.map((block) => ({ ...block }))
+              }
+            : {}),
           tool_calls: calls.map((call) => this.toolCallToWire(call))
         },
         ...resultMessages

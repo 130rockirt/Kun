@@ -186,30 +186,7 @@ export class AntigravityCliRuntime implements DelegatedTurnRuntime {
     if (turn.orchestration === 'graph') {
       const message =
         'Graph mode is unavailable for the Antigravity CLI provider because it cannot execute Kun structured Graph tools. Choose a tool-capable provider and continue the same planning draft.'
-      const itemId = this.deps.ids.next('item_assistant')
-      await this.deps.events.record({
-        kind: 'assistant_text_delta',
-        threadId,
-        turnId,
-        itemId,
-        item: makeAssistantTextItem({
-          id: itemId,
-          threadId,
-          turnId,
-          text: message,
-          status: 'running'
-        })
-      })
-      await this.deps.turns.applyItem(
-        threadId,
-        makeAssistantTextItem({
-          id: itemId,
-          threadId,
-          turnId,
-          text: message,
-          status: 'completed'
-        })
-      )
+      await this.persistAssistantText(threadId, turnId, message)
       const graphCompletion = await parkDelegatedGraphTurnAfterRecovery(
         this.deps.turns,
         { threadId, turnId }
@@ -411,30 +388,7 @@ export class AntigravityCliRuntime implements DelegatedTurnRuntime {
       if (!text) throw new Error('Antigravity CLI returned an empty response')
       await finishAntigravityTrace(trace, { kind: 'completed', text })
       trace = undefined
-      const itemId = this.deps.ids.next('item_assistant')
-      await this.deps.events.record({
-        kind: 'assistant_text_delta',
-        threadId,
-        turnId,
-        itemId,
-        item: makeAssistantTextItem({
-          id: itemId,
-          threadId,
-          turnId,
-          text,
-          status: 'running'
-        })
-      })
-      await this.deps.turns.applyItem(
-        threadId,
-        makeAssistantTextItem({
-          id: itemId,
-          threadId,
-          turnId,
-          text,
-          status: 'completed'
-        })
-      )
+      await this.persistAssistantText(threadId, turnId, text)
       const suspension = await this.deps.turns.suspendGraphLeadTurn?.({ threadId, turnId })
       const outcome: TurnRunOutcome =
         suspension === 'suspended' ||
@@ -475,6 +429,38 @@ export class AntigravityCliRuntime implements DelegatedTurnRuntime {
       })
       return 'failed'
     }
+  }
+
+  private async persistAssistantText(
+    threadId: string,
+    turnId: string,
+    text: string
+  ): Promise<void> {
+    const itemId = this.deps.ids.next('item_assistant')
+    const createdAt = new Date().toISOString()
+    const runningItem = makeAssistantTextItem({
+      id: itemId,
+      threadId,
+      turnId,
+      text,
+      status: 'running',
+      createdAt
+    })
+    // `agy --print` returns one complete fragment. Persist that cumulative
+    // canonical snapshot before exposing the fragment at UTF-16 offset zero,
+    // then publish the final authoritative item as before.
+    await this.deps.turns.applyAssistantDelta(threadId, runningItem, text, 0)
+    await this.deps.turns.applyItem(
+      threadId,
+      makeAssistantTextItem({
+        id: itemId,
+        threadId,
+        turnId,
+        text,
+        status: 'completed',
+        createdAt
+      })
+    )
   }
 }
 

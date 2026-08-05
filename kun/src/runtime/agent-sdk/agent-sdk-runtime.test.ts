@@ -170,6 +170,31 @@ function makeDeps(overrides: Partial<SdkRuntimeDeps> = {}): {
     applyItem: async (_t, item) => {
       items.push(item)
     },
+    applyAssistantDelta: async (threadId, item, deltaText, deltaOffset) => {
+      if (item.kind === 'assistant_text') {
+        events.push({
+          kind: 'assistant_text_delta',
+          threadId,
+          turnId: item.turnId,
+          itemId: item.id,
+          deltaOffset,
+          item: { ...item, text: deltaText }
+        })
+        return
+      }
+      if (item.kind === 'assistant_reasoning') {
+        events.push({
+          kind: 'assistant_reasoning_delta',
+          threadId,
+          turnId: item.turnId,
+          itemId: item.id,
+          deltaOffset,
+          item: { ...item, text: deltaText }
+        })
+        return
+      }
+      throw new TypeError(`unexpected assistant delta item: ${item.kind}`)
+    },
     finishTurn: async (_t, _u, status, error, code) => {
       finished.push({ status, error, code })
     },
@@ -589,6 +614,83 @@ describe('AgentSdkRuntime.runTurn', () => {
     }))
   })
 
+  test('routes provider deltas through cumulative state-first writes with UTF-16 offsets', async () => {
+    const messages: SdkMessage[] = [
+      {
+        type: 'stream_event',
+        event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'Hi ' } }
+      } as SdkMessage,
+      {
+        type: 'stream_event',
+        event: { type: 'content_block_delta', delta: { type: 'thinking_delta', thinking: 'think' } }
+      } as SdkMessage,
+      {
+        type: 'stream_event',
+        event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'there' } }
+      } as SdkMessage,
+      {
+        type: 'assistant', parent_tool_use_id: null,
+        message: {
+          role: 'assistant',
+          content: [
+            { type: 'thinking', thinking: 'think' },
+            { type: 'text', text: 'Hi there' }
+          ]
+        }
+      } as SdkMessage,
+      {
+        type: 'result', subtype: 'success', is_error: false, result: 'Hi there',
+        num_turns: 1, usage: { input_tokens: 1, output_tokens: 1 }
+      } as SdkMessage
+    ]
+    const applyAssistantDelta = vi.fn<SdkRuntimeDeps['applyAssistantDelta']>(async () => undefined)
+    const recordEvent = vi.fn<SdkRuntimeDeps['recordEvent']>(async () => undefined)
+    const { deps, items } = makeDeps({
+      applyAssistantDelta,
+      recordEvent,
+      loadSdk: async () => fakeSdk(messages)
+    })
+
+    await expect(new AgentSdkRuntime(deps).runTurn(
+      'th', 'tn', new AbortController().signal
+    )).resolves.toBe('completed')
+
+    expect(applyAssistantDelta.mock.calls.map(([, item, deltaText, deltaOffset]) => ({
+      kind: item.kind,
+      cumulativeText: 'text' in item ? item.text : '',
+      deltaText,
+      deltaOffset
+    }))).toEqual([
+      {
+        kind: 'assistant_text',
+        cumulativeText: 'Hi ',
+        deltaText: 'Hi ',
+        deltaOffset: 0
+      },
+      {
+        kind: 'assistant_reasoning',
+        cumulativeText: 'think',
+        deltaText: 'think',
+        deltaOffset: 0
+      },
+      {
+        kind: 'assistant_text',
+        cumulativeText: 'Hi there',
+        deltaText: 'there',
+        deltaOffset: 3
+      }
+    ])
+    expect(recordEvent.mock.calls.some(([event]) =>
+      event.kind === 'assistant_text_delta' || event.kind === 'assistant_reasoning_delta'
+    )).toBe(false)
+    expect(items).toContainEqual(expect.objectContaining({
+      kind: 'assistant_text', text: 'Hi there', status: 'completed'
+    }))
+    expect(items).toContainEqual(expect.objectContaining({
+      kind: 'assistant_reasoning', text: 'think', status: 'completed'
+    }))
+  })
+
   test('splits one large SDK delta into replay-safe UTF-8 event blocks', async () => {
     const text = `${'a'.repeat(4_095)}${'💡'.repeat(2_000)}`
     const messages: SdkMessage[] = [
@@ -615,6 +717,12 @@ describe('AgentSdkRuntime.runTurn', () => {
     const retained = deltas.map((event) => (event as { item: { text: string } }).item.text)
     expect(retained.join('')).toBe(text)
     expect(retained.every((value) => Buffer.byteLength(value, 'utf8') <= 4 * 1024)).toBe(true)
+    expect(deltas.map((event) => 'deltaOffset' in event ? event.deltaOffset : undefined)).toEqual(
+      retained.reduce<number[]>((offsets, value) => [
+        ...offsets,
+        (offsets.at(-1) ?? 0) + (offsets.length === 0 ? 0 : retained[offsets.length - 1]!.length)
+      ], [])
+    )
   })
 
   test('flushes a low-volume SDK delta after the live-update delay', async () => {

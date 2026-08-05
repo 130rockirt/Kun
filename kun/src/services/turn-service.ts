@@ -276,14 +276,35 @@ export class TurnService {
                   workspace: thread.workspace
                 })
               : undefined
+          // Snapshot the effective selection at admission. Some clients omit
+          // fields that merely inherit the thread. Without this copy a model
+          // picker change could mutate `thread.model` between tool steps and
+          // silently move an already-running turn onto a different protocol.
+          const turnModel = firstNonBlank(
+            input.request.model,
+            thread.model,
+            this.deps.defaultModel,
+            this.deps.model?.model
+          )
+          const requestedProviderId = firstNonBlank(input.request.providerId)
+          const threadProviderId = firstNonBlank(thread.providerId)
+          // `undefined` means "consult the current thread/default" to older
+          // consumers. Persist the default alias explicitly so a selection
+          // change after admission cannot move this already-running turn.
+          const turnProviderId = requestedProviderId ?? threadProviderId ?? 'default'
+          const turnAccountId = firstNonBlank(input.request.accountId) ?? (
+            !requestedProviderId || requestedProviderId === threadProviderId
+              ? firstNonBlank(thread.accountId)
+              : undefined
+          )
           const turn = createTurnRecord({
             id: turnId,
             threadId: input.threadId,
             prompt: input.request.prompt,
             messageSource: input.request.messageSource,
-            model: input.request.model,
-            providerId: input.request.providerId,
-            accountId: input.request.accountId,
+            model: turnModel,
+            providerId: turnProviderId,
+            accountId: turnAccountId,
             reasoningEffort: input.request.reasoningEffort,
             serviceTier: input.request.serviceTier,
             clientSurface: input.request.clientSurface,
@@ -1616,6 +1637,39 @@ export class TurnService {
     })
   }
 
+  /**
+   * Persist the cumulative assistant item before exposing its next replay
+   * fragment. The ordering closes the hydrate event-before-state window; the
+   * offset makes the opposite state-before-event window safe to replay.
+   */
+  async applyAssistantDelta(
+    threadId: string,
+    item: TurnItem,
+    deltaText: string,
+    deltaOffset: number
+  ): Promise<void> {
+    if (item.kind !== 'assistant_text' && item.kind !== 'assistant_reasoning') {
+      throw new TypeError(`assistant delta requires assistant item: ${item.kind}`)
+    }
+    if (!Number.isSafeInteger(deltaOffset) || deltaOffset < 0) {
+      throw new RangeError(`assistant delta offset must be a non-negative safe integer: ${deltaOffset}`)
+    }
+    // Do not rewrite the full thread mirror for every ~40 ms stream fragment.
+    // The session item stream is the hydration source of truth; applyItem()
+    // publishes the final authoritative item into both stores at round end.
+    await this.deps.sessionStore.appendItem(threadId, item)
+    await this.deps.events.record({
+      kind: item.kind === 'assistant_text'
+        ? 'assistant_text_delta'
+        : 'assistant_reasoning_delta',
+      threadId,
+      turnId: item.turnId,
+      itemId: item.id,
+      deltaOffset,
+      item: { ...item, text: deltaText }
+    })
+  }
+
   async publishTransientItem(threadId: string, item: TurnItem): Promise<void> {
     await this.deps.events.publishTransient({
       kind: 'item_updated',
@@ -1836,6 +1890,14 @@ function threadStatusAfterTurnTransition(currentStatus: ThreadStatus, turns: Tur
 function normalizeMaxConcurrentTurns(value: number | undefined): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) return DEFAULT_MAX_CONCURRENT_TURNS
   return Math.max(1, Math.floor(value))
+}
+
+function firstNonBlank(...values: Array<string | undefined>): string | undefined {
+  for (const value of values) {
+    const normalized = value?.trim()
+    if (normalized) return normalized
+  }
+  return undefined
 }
 
 function modelForManualCompaction(input: {

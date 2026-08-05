@@ -1105,6 +1105,12 @@ export class KunRuntimeProvider implements AgentProvider {
       let settled = false
       let dispatchTail: Promise<void> = Promise.resolve()
       let queuedDispatchBatches = 0
+      // The subscription cursor is also the projection high-water mark.  A
+      // reconnect may replay already persisted non-delta events (tool running,
+      // completion, approval, Graph activity, ...), so filter the whole wire
+      // event before normalization.  This keeps reducer work and side effects
+      // behind the same monotonic gate instead of deduplicating text only.
+      let projectionSeqHighWater = sinceSeq
       const finish = (): void => {
         if (settled) return
         settled = true
@@ -1136,26 +1142,48 @@ export class KunRuntimeProvider implements AgentProvider {
           finish()
           return
         }
-        let maxSeq: number | null = null
-        for (const event of batch) {
-          if (typeof event.seq === 'number') {
-            maxSeq = maxSeq === null ? event.seq : Math.max(maxSeq, event.seq)
-          }
-        }
         // Keep batches strictly ordered. The main process reads no further SSE
         // data until this batch is acknowledged, so dispatch must not fan out
         // into an unbounded renderer-side promise set.
         queuedDispatchBatches += 1
         const task = dispatchTail.then(async () => {
           if (signal.aborted || settled) return
-          await dispatchKunRuntimeEvents(batch, sink, (runtimeEvent, eventSink) =>
-            this.handleApprovalRequest(runtimeEvent, eventSink)
-          )
+          const acceptedBatch: CoreRuntimeEventJson[] = []
+          let acceptedMaxSeq: number | null = null
+          let heartbeatSeq: number | null = null
+          let candidateSeqHighWater = projectionSeqHighWater
+          for (const event of batch) {
+            if (typeof event.seq === 'number') {
+              if (event.seq <= candidateSeqHighWater) {
+                // Heartbeats deliberately reuse the current event cursor. They
+                // are stale for projection purposes, but still prove that the
+                // live stream is healthy and must keep the busy watchdog from
+                // aborting a quiet, long-running tool call.
+                if (event.kind === 'heartbeat') {
+                  heartbeatSeq = Math.max(heartbeatSeq ?? event.seq, event.seq)
+                }
+                continue
+              }
+              candidateSeqHighWater = event.seq
+              acceptedMaxSeq = event.seq
+            }
+            acceptedBatch.push(event)
+          }
+          if (acceptedBatch.length > 0) {
+            await dispatchKunRuntimeEvents(acceptedBatch, sink, (runtimeEvent, eventSink) =>
+              this.handleApprovalRequest(runtimeEvent, eventSink)
+            )
+          }
           if (signal.aborted || settled) return
+          // Commit the local replay gate only after every accepted event was
+          // projected. If a reducer/effect throws, the unadvanced cursor lets
+          // recovery replay the whole unacknowledged batch.
+          projectionSeqHighWater = candidateSeqHighWater
           // Commit the renderer cursor only after the whole ordered batch has
           // been projected. ACK is flow control for the main process and must
           // never precede the renderer's durable in-memory projection.
-          if (maxSeq !== null) sink.onSeq(maxSeq)
+          const observedSeq = acceptedMaxSeq ?? heartbeatSeq
+          if (observedSeq !== null) sink.onSeq(observedSeq)
           if (signal.aborted || settled) return
           if (payload.batchId) {
             await rendererRuntimeClient.ackSse(streamId, payload.batchId)

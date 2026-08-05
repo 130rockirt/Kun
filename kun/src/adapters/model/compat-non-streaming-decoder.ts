@@ -1,5 +1,6 @@
 import type { UsageSnapshot } from '../../contracts/usage.js'
 import type { ModelEndpointFormat } from '../../contracts/model-endpoint-format.js'
+import type { ToolCallProviderMetadata } from '../../contracts/items.js'
 import type { ModelStreamChunk } from '../../ports/model-client.js'
 
 type ModelStopReason = Extract<ModelStreamChunk, { kind: 'completed' }>['stopReason']
@@ -103,7 +104,9 @@ function decodeAnthropicMessages(
 ): ModelStreamChunk[] {
   const chunks: ModelStreamChunk[] = []
   let sawToolCall = false
+  let attachedThinkingMetadata = false
   const content = Array.isArray(payload.content) ? payload.content : []
+  const thinkingBlocks = anthropicThinkingBlocks(content)
   for (const value of content) {
     const block = recordValue(value)
     if (!block) continue
@@ -123,8 +126,16 @@ function decodeAnthropicMessages(
         kind: 'tool_call_complete',
         callId,
         toolName,
-        arguments: recordValue(block, 'input') ?? {}
+        arguments: recordValue(block, 'input') ?? {},
+        ...(!attachedThinkingMetadata && thinkingBlocks.length > 0
+          ? {
+              providerMetadata: {
+                anthropic: { thinkingBlocks }
+              } satisfies ToolCallProviderMetadata
+            }
+          : {})
       })
+      attachedThinkingMetadata ||= thinkingBlocks.length > 0
     }
   }
   const usage = recordValue(payload, 'usage')
@@ -134,6 +145,34 @@ function decodeAnthropicMessages(
     stopReason: anthropicStopReason(payload.stop_reason) ?? (sawToolCall ? 'tool_calls' : 'stop')
   })
   return chunks
+}
+
+function anthropicThinkingBlocks(
+  content: unknown[]
+): NonNullable<NonNullable<ToolCallProviderMetadata['anthropic']>['thinkingBlocks']> {
+  const blocks: NonNullable<NonNullable<ToolCallProviderMetadata['anthropic']>['thinkingBlocks']> = []
+  for (const value of content) {
+    const block = recordValue(value)
+    if (!block) continue
+    const type = recordString(block, 'type')
+    if (type !== 'thinking' && type !== 'redacted_thinking') continue
+    if (blocks.length >= 16) return []
+    if (type === 'thinking') {
+      const signature = recordString(block, 'signature')
+      const thinking = recordString(block, 'thinking')
+      if (!signature || thinking.length > 262_144 || signature.length > 262_144) return []
+      blocks.push({
+        type: 'thinking',
+        thinking,
+        signature
+      })
+    } else if (type === 'redacted_thinking') {
+      const data = recordString(block, 'data')
+      if (!data || data.length > 262_144) return []
+      blocks.push({ type: 'redacted_thinking', data })
+    }
+  }
+  return blocks
 }
 
 function chatStopReason(value: string): ModelStopReason {

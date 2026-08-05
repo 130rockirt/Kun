@@ -165,6 +165,14 @@ export const ItemEvent = RuntimeEventBase.extend({
     'tool_call_started',
     'tool_call_finished'
   ]),
+  /**
+   * UTF-16 string offset of an assistant delta within the complete item text.
+   * New producers persist the cumulative item snapshot before recording the
+   * delta. Consumers can use this offset to make replay idempotent when a
+   * hydration snapshot already contains some or all of the fragment. Legacy
+   * events omit the field and retain append-once semantics.
+   */
+  deltaOffset: z.number().int().nonnegative().optional(),
   item: TurnItem
 })
 export type ItemEvent = z.infer<typeof ItemEvent>

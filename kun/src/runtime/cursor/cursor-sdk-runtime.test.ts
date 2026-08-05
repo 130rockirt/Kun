@@ -9,7 +9,12 @@ import type {
   SDKAgent,
   SDKMessage
 } from '@cursor/sdk'
+import type { RuntimeEvent } from '../../contracts/events.js'
 import type { TurnItem } from '../../contracts/items.js'
+import {
+  applyRuntimeEvent,
+  createRuntimeEventProjection
+} from '../../domain/runtime-event-reducer.js'
 import { LlmDebugRecorder } from '../../services/llm-debug-recorder.js'
 import {
   CursorSdkRuntime,
@@ -102,6 +107,10 @@ function harness(input: {
   const updated: unknown[] = []
   const materialized = new Map<string, TurnItem>()
   const recorded: unknown[] = []
+  const recordedDeltaSnapshots: Array<{
+    event: unknown
+    item: TurnItem
+  }> = []
   const finished: unknown[] = []
   const createOptions: AgentOptions[] = []
   const sentMessages: unknown[] = []
@@ -210,7 +219,20 @@ function harness(input: {
         : {}),
       finishTurn: async (value: unknown) => { finished.push(value) }
     },
-    events: { record: async (value: unknown) => { recorded.push(value) } },
+    events: {
+      record: async (value: unknown) => {
+        recorded.push(value)
+        const event = value as { kind?: unknown; itemId?: unknown }
+        if (
+          (event.kind === 'assistant_text_delta' ||
+            event.kind === 'assistant_reasoning_delta') &&
+          typeof event.itemId === 'string'
+        ) {
+          const item = materialized.get(event.itemId)
+          if (item) recordedDeltaSnapshots.push({ event: value, item: structuredClone(item) })
+        }
+      }
+    },
     ids: { next: (prefix: string) => `${prefix}_1` },
     setThreadTodos: async (threadId: string, request: unknown) => {
       if (input.todoSyncError) throw input.todoSyncError
@@ -245,6 +267,7 @@ function harness(input: {
     updated,
     materialized,
     recorded,
+    recordedDeltaSnapshots,
     finished,
     sentMessages,
     sentOptions,
@@ -590,6 +613,114 @@ describe('CursorSdkRuntime', () => {
     expect(h.kunContextSignals[0]?.aborted).toBe(true)
   })
 
+  test('replays Cursor text and reasoning fragments over cumulative snapshots without duplication', async () => {
+    const h = harness({
+      run: fakeRun({
+        stream: [{
+          type: 'thinking',
+          agent_id: 'agent_1',
+          run_id: 'run_1',
+          text: '思😀'
+        }, {
+          type: 'assistant',
+          agent_id: 'agent_1',
+          run_id: 'run_1',
+          message: {
+            role: 'assistant',
+            content: [
+              { type: 'text', text: 'A😀' },
+              { type: 'text', text: 'B' }
+            ]
+          }
+        }, {
+          type: 'thinking',
+          agent_id: 'agent_1',
+          run_id: 'run_1',
+          text: '考'
+        }, {
+          type: 'assistant',
+          agent_id: 'agent_1',
+          run_id: 'run_1',
+          message: { role: 'assistant', content: [{ type: 'text', text: '猫' }] }
+        }],
+        result: { result: 'A😀B猫' }
+      })
+    })
+
+    await expect(h.runtime.runTurn(
+      'thread_1',
+      'turn_1',
+      new AbortController().signal,
+      'cursor-subscription'
+    )).resolves.toBe('completed')
+
+    const deltas = h.recordedDeltaSnapshots.map(({ event, item }) => {
+      const draft = event as {
+        kind: string
+        deltaOffset?: number
+        item: { text?: string }
+      }
+      return {
+        kind: draft.kind,
+        offset: draft.deltaOffset,
+        fragment: draft.item.text,
+        persistedText: 'text' in item ? item.text : undefined
+      }
+    })
+    expect(deltas).toEqual([
+      {
+        kind: 'assistant_reasoning_delta',
+        offset: 0,
+        fragment: '思😀',
+        persistedText: '思😀'
+      },
+      {
+        kind: 'assistant_text_delta',
+        offset: 0,
+        fragment: 'A😀',
+        persistedText: 'A😀B'
+      },
+      {
+        kind: 'assistant_text_delta',
+        offset: 3,
+        fragment: 'B',
+        persistedText: 'A😀B'
+      },
+      {
+        kind: 'assistant_reasoning_delta',
+        offset: 3,
+        fragment: '考',
+        persistedText: '思😀考'
+      },
+      {
+        kind: 'assistant_text_delta',
+        offset: 4,
+        fragment: '猫',
+        persistedText: 'A😀B猫'
+      }
+    ])
+
+    const latestSnapshots = new Map<string, TurnItem>()
+    for (const snapshot of h.recordedDeltaSnapshots) {
+      latestSnapshots.set(snapshot.item.id, snapshot.item)
+    }
+    let replayed = {
+      ...createRuntimeEventProjection('thread_1'),
+      items: [...latestSnapshots.values()]
+    }
+    for (const [index, snapshot] of h.recordedDeltaSnapshots.entries()) {
+      replayed = applyRuntimeEvent(replayed, {
+        ...(snapshot.event as RuntimeEvent),
+        seq: index + 1,
+        timestamp: `2026-08-05T00:00:0${index}.000Z`
+      })
+    }
+    expect(replayed.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'assistant_text', text: 'A😀B猫' }),
+      expect.objectContaining({ kind: 'assistant_reasoning', text: '思😀考' })
+    ]))
+  })
+
   test('rebuilds the SDK session once and continues an accepted run after authentication expires', async () => {
     const h = harness({
       sendResults: [
@@ -664,6 +795,12 @@ describe('CursorSdkRuntime', () => {
       kind: 'error',
       code: 'cursor_sdk_authentication_failed'
     }))
+    expect(h.recorded.filter((event) => (
+      event as { kind?: unknown }
+    ).kind === 'assistant_text_delta')).toEqual([
+      expect.objectContaining({ deltaOffset: 0 }),
+      expect.objectContaining({ deltaOffset: 'partial result'.length })
+    ])
     expect(h.finished).toContainEqual(expect.objectContaining({ status: 'completed' }))
   })
 
