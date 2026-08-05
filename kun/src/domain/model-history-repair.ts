@@ -56,6 +56,50 @@ export function repairModelHistoryItems(items: TurnItem[]): TurnItem[] {
   return changed ? repaired : items
 }
 
+/**
+ * Builds model-visible history while hiding the legacy Browser Use sentinel
+ * pair. The durable/session repair above intentionally keeps that pair so UI
+ * and audit readers can still see the original records; this projection is
+ * the compatibility boundary for model requests only.
+ */
+export function repairModelHistoryItemsForModel(items: TurnItem[]): TurnItem[] {
+  const repaired = repairModelHistoryItems(items)
+  const legacyInvalidCallIds = new Set(
+    repaired.flatMap((item) =>
+      isLegacyInvalidBrowserUseCall(item) ? [item.callId] : [])
+  )
+  if (legacyInvalidCallIds.size === 0) return repaired
+
+  const legacyInvalidPairs = new Set(
+    repaired.flatMap((item) =>
+      isLegacyInvalidBrowserUseFailure(item) && legacyInvalidCallIds.has(item.callId)
+        ? [item.callId]
+        : [])
+  )
+  if (legacyInvalidPairs.size === 0) return repaired
+
+  return repaired.filter((item) =>
+    (item.kind === 'tool_call' || item.kind === 'tool_result')
+      ? !legacyInvalidPairs.has(item.callId)
+      : true
+  )
+}
+
+function isLegacyInvalidBrowserUseCall(
+  item: TurnItem
+): item is Extract<TurnItem, { kind: 'tool_call' }> {
+  if (item.kind !== 'tool_call' || item.toolName !== 'browser_use') return false
+  const keys = Object.keys(item.arguments)
+  return keys.length === 1 && item.arguments.action === 'invalid'
+}
+
+function isLegacyInvalidBrowserUseFailure(
+  item: TurnItem
+): item is Extract<TurnItem, { kind: 'tool_result' }> {
+  if (item.kind !== 'tool_result' || item.toolName !== 'browser_use') return false
+  return item.isError === true
+}
+
 type ToolCallGroup = {
   valid: boolean
   turnId: string

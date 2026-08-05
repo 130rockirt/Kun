@@ -110,4 +110,82 @@ describe('ToolStormBreaker', () => {
       expect(breaker.inspect({ callId: 'c4', ...inspect })).toEqual({ suppress: false })
     }
   })
+
+  it('suppresses repeated malformed Browser Use calls with actionable guidance', () => {
+    const breaker = new ToolStormBreaker()
+    const call = (callId: string) => ({
+      callId,
+      toolName: 'browser_use',
+      arguments: { action: 'navigate', url: 'https://example.com' }
+    })
+
+    expect(breaker.inspect(call('c1'))).toEqual({ suppress: false })
+    expect(breaker.inspect(call('c2'))).toEqual({ suppress: false })
+    expect(breaker.inspect(call('c3'))).toMatchObject({
+      suppress: true,
+      reason: expect.stringContaining('previous invalid_action guidance')
+    })
+  })
+
+  it('allows a fresh Browser Use snapshot after a state-advancing action', () => {
+    const breaker = new ToolStormBreaker({ threshold: 3 })
+    const snapshot = (callId: string) => ({
+      callId,
+      toolName: 'browser_use',
+      arguments: { action: 'snapshot' }
+    })
+
+    expect(breaker.inspect(snapshot('c1'))).toEqual({ suppress: false })
+    expect(breaker.inspect(snapshot('c2'))).toEqual({ suppress: false })
+    expect(breaker.inspect({
+      callId: 'wait',
+      toolName: 'browser_use',
+      arguments: { action: 'wait', milliseconds: 500 }
+    })).toEqual({ suppress: false })
+    expect(breaker.inspect(snapshot('c3'))).toEqual({ suppress: false })
+  })
+
+  it('allows the normal open-observe-wait-observe-click-observe sequence', () => {
+    const breaker = new ToolStormBreaker()
+    const expectedTarget = {
+      sessionId: 'session-1234567890',
+      tabId: 'tab-1',
+      documentGeneration: 1,
+      origin: 'https://example.com',
+      sanitizedUrl: 'https://example.com/form',
+      role: 'button',
+      name: 'Continue'
+    }
+    const calls = [
+      { toolName: 'browser_use', arguments: { action: 'open', url: 'https://example.com' } },
+      { toolName: 'browser_use', arguments: { action: 'snapshot' } },
+      { toolName: 'browser_use', arguments: { action: 'wait', milliseconds: 500 } },
+      { toolName: 'browser_use', arguments: { action: 'snapshot' } },
+      {
+        toolName: 'browser_use',
+        arguments: { action: 'click', ref: 'opaque-reference-1234', expectedTarget }
+      },
+      { toolName: 'browser_use', arguments: { action: 'snapshot' } }
+    ]
+
+    for (const [index, call] of calls.entries()) {
+      expect(breaker.inspect({ callId: `c${index}`, ...call })).toEqual({ suppress: false })
+    }
+  })
+
+  it('still suppresses an unchanged Browser Use observation loop', () => {
+    const breaker = new ToolStormBreaker({ threshold: 3 })
+    const snapshot = (callId: string) => ({
+      callId,
+      toolName: 'browser_use',
+      arguments: { action: 'snapshot' }
+    })
+
+    expect(breaker.inspect(snapshot('c1'))).toEqual({ suppress: false })
+    expect(breaker.inspect(snapshot('c2'))).toEqual({ suppress: false })
+    expect(breaker.inspect(snapshot('c3'))).toMatchObject({
+      suppress: true,
+      reason: expect.stringContaining('duplicate Browser Use action')
+    })
+  })
 })

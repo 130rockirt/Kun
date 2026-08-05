@@ -1,6 +1,9 @@
 import type { TurnItem } from '../../contracts/items.js'
 import type { ModelRequest } from '../../ports/model-client.js'
-import { isToolResultBridgeItem, repairModelHistoryItems } from '../../domain/model-history-repair.js'
+import {
+  isToolResultBridgeItem,
+  repairModelHistoryItemsForModel
+} from '../../domain/model-history-repair.js'
 import { extractToolResultImages, toolResultTextWithoutImages } from '../../loop/tool-result-image.js'
 import { wrapUntrustedContent } from '../../security/untrusted-content.js'
 import {
@@ -44,7 +47,7 @@ class CompatMessageProjector {
       ? limitHistoryPreservingCompaction(request.history, this.options.historyLimit)
       : request.history
     out.push(...this.itemsToMessages(
-      repairModelHistoryItems([...request.prefix, ...history]),
+      repairModelHistoryItemsForModel([...request.prefix, ...history]),
       this.options.thinkingMode,
       this.options.supportsImages,
       request.turnId,
