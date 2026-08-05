@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest'
 import {
   BrowserUseActionInput,
   BrowserUseBridgeRequest,
+  isBrowserUseStateAdvancingAction,
   redactBrowserUseActionForPersistence,
   redactBrowserUseUrl,
   signBrowserUseKunApprovalGrant,
+  summarizeBrowserUseActionValidation,
   verifyBrowserUseKunApprovalGrant
 } from './browser-use.js'
 import { ToolOperationJournal } from '../reliability/operation-journal.js'
@@ -158,5 +160,55 @@ describe('redactBrowserUseUrl', () => {
       },
       text: '[redacted]'
     })
+  })
+
+  it('preserves only a recognized action when malformed arguments are persisted', () => {
+    expect(redactBrowserUseActionForPersistence({
+      action: 'open',
+      url: 'https://example.com/path?token=secret',
+      unexpected: 'do not persist'
+    })).toEqual({ action: 'open' })
+    expect(redactBrowserUseActionForPersistence({
+      action: 'navigate',
+      url: 'https://example.com/path?token=secret'
+    })).toEqual({})
+    expect(redactBrowserUseActionForPersistence({
+      url: 'https://example.com/path?token=secret'
+    })).toEqual({})
+  })
+
+  it('summarizes malformed actions without echoing raw values or unknown fields', () => {
+    const summary = summarizeBrowserUseActionValidation({
+      action: 'open',
+      url: 'not-a-url',
+      secretField: 'oauth-secret'
+    })
+    expect(summary).toMatchObject({
+      attemptedAction: 'open',
+      requiredFields: ['action', 'url'],
+      allowedFields: ['action', 'url'],
+      issueCodes: expect.arrayContaining(['invalid_field', 'unexpected_field']),
+      issuePaths: ['url']
+    })
+    expect(JSON.stringify(summary)).not.toContain('oauth-secret')
+    expect(JSON.stringify(summary)).not.toContain('secretField')
+
+    const unsupported = summarizeBrowserUseActionValidation({ action: 'navigate' })
+    expect(unsupported).toMatchObject({
+      attemptedAction: 'unsupported',
+      issueCodes: ['unsupported_action'],
+      requiredFields: [],
+      allowedFields: []
+    })
+    expect(unsupported.guidance).toContain('snapshot')
+  })
+
+  it('classifies Browser Use observations and state transitions for loop protection', () => {
+    expect(isBrowserUseStateAdvancingAction({ action: 'snapshot' })).toBe(false)
+    expect(isBrowserUseStateAdvancingAction({ action: 'screenshot' })).toBe(false)
+    expect(isBrowserUseStateAdvancingAction({ action: 'tabs', operation: 'list' })).toBe(false)
+    expect(isBrowserUseStateAdvancingAction({ action: 'wait' })).toBe(true)
+    expect(isBrowserUseStateAdvancingAction({ action: 'tabs', operation: 'switch', tabId: 'tab-1' })).toBe(true)
+    expect(isBrowserUseStateAdvancingAction({ action: 'navigate', url: 'https://example.com' })).toBe(false)
   })
 })

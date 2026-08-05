@@ -1,4 +1,8 @@
 import type { ToolCallLike } from '../ports/tool-host.js'
+import {
+  BrowserUseActionInput,
+  isBrowserUseStateAdvancingAction
+} from '../contracts/browser-use.js'
 
 export type ToolStormBreakerOptions = {
   windowSize?: number
@@ -79,7 +83,7 @@ export class ToolStormBreaker {
         suppress: true,
         reason:
           `${name} was called with identical arguments ${count + 1} times in this turn; ` +
-          'repeat-loop guard suppressed the duplicate. Choose a narrower query or explain why another identical call is needed.'
+          repeatSuppressionGuidance(call)
       }
     }
 
@@ -101,6 +105,9 @@ export class ToolStormBreaker {
 }
 
 function isMutatingToolCall(call: ToolCallLike): boolean {
+  if (call.toolName === 'browser_use') {
+    return isBrowserUseStateAdvancingAction(call.arguments)
+  }
   if (call.toolKind === 'file_change') return true
   if (call.toolName === 'graph_control_run') {
     return graphControlAction(call) !== 'inspect'
@@ -110,6 +117,16 @@ function isMutatingToolCall(call: ToolCallLike): boolean {
   }
   if (GRAPH_MUTATING_TOOL_NAMES.has(call.toolName)) return true
   return MUTATING_TOOL_NAMES.has(call.toolName)
+}
+
+function repeatSuppressionGuidance(call: ToolCallLike): string {
+  if (call.toolName !== 'browser_use') {
+    return 'repeat-loop guard suppressed the duplicate. Choose a narrower query or explain why another identical call is needed.'
+  }
+  if (!BrowserUseActionInput.safeParse(call.arguments).success) {
+    return 'repeat-loop guard suppressed the malformed Browser Use call. Follow the previous invalid_action guidance and send a supported action with its required fields.'
+  }
+  return 'repeat-loop guard suppressed the duplicate Browser Use action. Use a state-advancing action such as wait or a fresh snapshot, or provide a clear final answer.'
 }
 
 function graphControlAction(call: ToolCallLike): string {

@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import type { TurnItem } from '../contracts/items.js'
-import { repairModelHistoryItems } from './model-history-repair.js'
+import {
+  repairModelHistoryItems,
+  repairModelHistoryItemsForModel
+} from './model-history-repair.js'
 
 const CREATED_AT = '2026-08-06T00:00:00.000Z'
 
@@ -85,6 +88,61 @@ describe('repairModelHistoryItems', () => {
     ]
 
     expect(repairModelHistoryItems(items)).toBe(items)
+  })
+
+  it('keeps legacy Browser Use records durable but removes them from model history', () => {
+    const items = [
+      call('browser-call', 'browser-call', {
+        toolName: 'browser_use',
+        arguments: { action: 'invalid' },
+        status: 'failed'
+      }),
+      result('browser-result', 'browser-call', {
+        toolName: 'browser_use',
+        status: 'failed',
+        isError: true,
+        output: {
+          kind: 'browser_action',
+          ok: false,
+          code: 'invalid_action',
+          message: 'malformed arguments'
+        }
+      })
+    ]
+
+    expect(repairModelHistoryItems(items)).toBe(items)
+    const modelHistory = repairModelHistoryItemsForModel(items)
+    expect(modelHistory).toEqual([])
+    expect(JSON.stringify(modelHistory)).not.toContain('action')
+  })
+
+  it('removes only the legacy invalid Browser Use pair from a mixed tool block', () => {
+    const items = [
+      call('browser-call', 'browser-call', {
+        toolName: 'browser_use',
+        arguments: { action: 'invalid' },
+        status: 'failed'
+      }),
+      call('read-call', 'read-call', {
+        toolName: 'read_file',
+        arguments: { path: 'README.md' }
+      }),
+      result('browser-result', 'browser-call', {
+        toolName: 'browser_use',
+        status: 'failed',
+        isError: true,
+        output: { code: 'invalid_action' }
+      }),
+      result('read-result', 'read-call', {
+        toolName: 'read_file',
+        output: 'README'
+      })
+    ]
+
+    expect(repairModelHistoryItemsForModel(items).map((item) => item.id)).toEqual([
+      'read-call',
+      'read-result'
+    ])
   })
 
   it('does not scan through a record after results to rescue a later result', () => {

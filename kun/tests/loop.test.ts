@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { InMemoryEventBus } from '../src/adapters/in-memory-event-bus.js'
 import { LocalToolHost, buildDefaultLocalTools } from '../src/adapters/tool/local-tool-host.js'
 import { CapabilityRegistry } from '../src/adapters/tool/capability-registry.js'
+import { buildBrowserUseToolProviders } from '../src/adapters/tool/browser-use-tool-provider.js'
 import { CREATE_PLAN_TOOL_NAME } from '../src/adapters/tool/create-plan-tool.js'
 import { GET_GOAL_TOOL_NAME, UPDATE_GOAL_TOOL_NAME } from '../src/adapters/tool/goal-tools.js'
 import { FileThreadStore, FileSessionStore } from '../src/adapters/file/index.js'
@@ -34,6 +35,7 @@ import type { SessionStore } from '../src/ports/session-store.js'
 import { TurnService } from '../src/services/turn-service.js'
 import type { TurnItem } from '../src/contracts/items.js'
 import type { ModelRequest, ModelStreamChunk } from '../src/ports/model-client.js'
+import type { BrowserController } from '../src/ports/browser-controller.js'
 import {
   bootstrapThread,
   makeFakeModel,
@@ -1703,6 +1705,121 @@ describe('AgentLoop', () => {
 	      toolName: 'echo'
 	    })
 	  })
+
+  it('recovers from malformed Browser Use arguments without poisoning model history', async () => {
+    const requests: ModelRequest[] = []
+    let calls = 0
+    const browserController: BrowserController = {
+      readiness: () => ({ available: true }),
+      execute: vi.fn(async ({ action }) => ({
+        ok: true,
+        code: action.action === 'snapshot' ? 'snapshot' : 'opened',
+        message: 'ok'
+      }))
+    }
+    const browserProviders = buildBrowserUseToolProviders({
+      enabled: true,
+      mode: 'public',
+      approvalMode: 'auto-safe',
+      maxTabs: 2,
+      maxObservationActionsPerTurn: 3,
+      maxInteractionActionsPerTurn: 1,
+      maxSnapshotNodes: 250,
+      maxSnapshotTextChars: 20_000,
+      maxImageDimension: 1280,
+      idleTimeoutMs: 300_000
+    }, { controller: browserController }).providers
+    const toolHost = new LocalToolHost({
+      registry: new CapabilityRegistry([
+        {
+          id: 'builtin',
+          kind: 'built-in',
+          enabled: true,
+          available: true,
+          tools: buildDefaultLocalTools()
+        },
+        ...browserProviders
+      ])
+    })
+    const h = makeHarness({
+      provider: 'browser-recovery-model',
+      model: 'browser-recovery-model',
+      async *stream(request: ModelRequest): AsyncIterable<ModelStreamChunk> {
+        requests.push(request)
+        calls += 1
+        if (calls === 1) {
+          yield {
+            kind: 'tool_call_complete',
+            callId: 'call-invalid-browser',
+            toolName: 'browser_use',
+            arguments: {
+              action: 'navigate',
+              url: 'https://example.com/path?secret=should-not-persist'
+            }
+          }
+          yield { kind: 'completed', stopReason: 'tool_calls' }
+          return
+        }
+        if (calls === 2) {
+          const previousCall = request.history.find(
+            (item) => item.kind === 'tool_call' && item.callId === 'call-invalid-browser'
+          )
+          expect(previousCall?.kind === 'tool_call' ? previousCall.arguments : undefined).toEqual({})
+          expect(JSON.stringify(request.history)).not.toContain('action":"invalid')
+          expect(JSON.stringify(request.history)).not.toContain('should-not-persist')
+          yield {
+            kind: 'tool_call_complete',
+            callId: 'call-open-browser',
+            toolName: 'browser_use',
+            arguments: { action: 'open', url: 'https://example.com/path' }
+          }
+          yield { kind: 'completed', stopReason: 'tool_calls' }
+          return
+        }
+        if (calls === 3) {
+          yield {
+            kind: 'tool_call_complete',
+            callId: 'call-snapshot-browser',
+            toolName: 'browser_use',
+            arguments: { action: 'snapshot' }
+          }
+          yield { kind: 'completed', stopReason: 'tool_calls' }
+          return
+        }
+        yield { kind: 'assistant_text_delta', text: 'Browser recovery completed.' }
+        yield { kind: 'completed', stopReason: 'stop' }
+      }
+    }, { toolHost })
+    await bootstrapThread(h, {
+      request: {
+        prompt: 'Recover Browser Use',
+        clientSurface: 'gui',
+        approvalPolicy: 'auto',
+        sandboxMode: 'danger-full-access'
+      }
+    })
+
+    await expect(h.loop.runTurn(h.threadId, h.turnId)).resolves.toBe('completed')
+
+    expect(browserController.execute).toHaveBeenCalledTimes(2)
+    expect(browserController.execute).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ action: { action: 'open', url: 'https://example.com/path' } })
+    )
+    expect(browserController.execute).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ action: { action: 'snapshot' } })
+    )
+    const events = await h.sessionStore.loadEventsSince(h.threadId, 0)
+    expect(events.some((event) => event.kind === 'tool_storm_suppressed')).toBe(false)
+    const items = await h.sessionStore.loadItems(h.threadId)
+    const invalidCall = items.find(
+      (item) => item.kind === 'tool_call' && item.callId === 'call-invalid-browser'
+    )
+    expect(invalidCall?.kind === 'tool_call' ? invalidCall.arguments : undefined).toEqual({})
+    expect(JSON.stringify(items)).not.toContain('should-not-persist')
+    expect(JSON.stringify(items)).not.toContain('action":"invalid')
+  })
 
   it('lets a suppressed tool loop recover by using a different tool', async () => {
     const requests: ModelRequest[] = []

@@ -18,7 +18,7 @@ import {
 } from './compaction-history.js'
 import { resolveCompactionModel, summarizeCompactionWithModel } from './compaction-summary.js'
 import { ContextCompactor } from './context-compactor.js'
-import { repairModelHistoryItems } from '../domain/model-history-repair.js'
+import { repairModelHistoryItemsForModel } from '../domain/model-history-repair.js'
 import { recordLifecycleHookWarnings } from './turn-lifecycle-hooks.js'
 import type { ContextCompactionConfig } from './model-context-profile.js'
 import { estimateRequestOverheadTokens } from './model-request-estimator.js'
@@ -149,7 +149,7 @@ export class HistoryCompactionService {
       threadId: input.threadId,
       maxAttempts: 2,
       build: async (snapshot, attempt) => {
-        const currentItems = repairModelHistoryItems(
+        const currentItems = repairModelHistoryItemsForModel(
           effectiveHistoryAfterLatestCompaction(snapshot.items)
         )
         const currentPlan = attempt === 1
@@ -348,7 +348,7 @@ export class HistoryCompactionService {
     // Do not fall back to the stale input after a lost CAS race. The next
     // loop step can retry compaction from this current safe history.
     return {
-      history: repairModelHistoryItems(
+      history: repairModelHistoryItemsForModel(
         effectiveHistoryAfterLatestCompaction(await this.deps.sessionStore.loadItems(input.threadId))
       ),
       triggered: true,

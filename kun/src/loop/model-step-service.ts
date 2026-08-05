@@ -8,7 +8,7 @@ import type { ModelCapabilityMetadata } from '../contracts/capabilities.js'
 import type { TurnItem } from '../contracts/items.js'
 import type { ActingTurnModelRoute } from '../contracts/turns.js'
 import { makeErrorItem } from '../domain/item.js'
-import { repairModelHistoryItems } from '../domain/model-history-repair.js'
+import { repairModelHistoryItemsForModel } from '../domain/model-history-repair.js'
 import { memoryPreview } from '../shared/memory-preview.js'
 import type { IdGenerator } from '../ports/id-generator.js'
 import type { ModelClient, ModelToolSpec } from '../ports/model-client.js'
@@ -287,7 +287,7 @@ export class ModelStepService {
         toolResultCount
       })
     }
-    const items = repairModelHistoryItems(
+    const items = repairModelHistoryItemsForModel(
       effectiveHistoryAfterLatestCompaction(historyItems)
     )
     const inheritedProviderAccount = resolveCoherentProviderAccount({

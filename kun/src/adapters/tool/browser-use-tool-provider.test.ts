@@ -157,6 +157,40 @@ describe('buildBrowserUseToolProviders', () => {
     expect(browserController.execute).not.toHaveBeenCalled()
   })
 
+  it('returns actionable, value-free diagnostics for malformed actions', async () => {
+    const browserController = controller()
+    const host = localToolHost(browserController)
+    const result = await host.execute({
+      callId: 'call-invalid-action',
+      toolName: 'browser_use',
+      arguments: {
+        action: 'open',
+        url: 'not-a-url',
+        unexpected: 'secret-value'
+      }
+    }, context())
+
+    expect(result.item).toMatchObject({
+      kind: 'tool_result',
+      isError: true,
+      output: {
+        kind: 'browser_action',
+        ok: false,
+        code: 'invalid_action',
+        retryable: true,
+        attemptedAction: 'open',
+        allowedActions: expect.arrayContaining(['open', 'snapshot']),
+        requiredFields: ['action', 'url'],
+        allowedFields: ['action', 'url'],
+        issueCodes: expect.arrayContaining(['invalid_field', 'unexpected_field']),
+        issuePaths: ['url'],
+        guidance: expect.stringContaining('open')
+      }
+    })
+    expect(JSON.stringify(result.item)).not.toContain('secret-value')
+    expect(browserController.execute).not.toHaveBeenCalled()
+  })
+
   it.each([
     ['Ask for approval', 'user'],
     ['Approve for me', 'agent']
