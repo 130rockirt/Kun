@@ -303,7 +303,26 @@ export function priorItemsForDelegatedTurn(
   items: readonly TurnItem[],
   currentTurnId: string
 ): TurnItem[] {
-  return items.filter((item) => item.turnId !== currentTurnId)
+  const prior = items.filter((item) => item.turnId !== currentTurnId)
+  const priorGoalKeys = new Set(
+    prior
+      .filter((item): item is Extract<TurnItem, { kind: 'goal_context' }> => item.kind === 'goal_context')
+      .map((item) => item.goalKey ?? item.id)
+  )
+  // A native provider session does not yet contain a newly materialized goal
+  // generation. Include that first current-turn record so prepare() rebases
+  // safely. For later turns of the same generation, the one thread-level
+  // context is already in `prior`; omitting it preserves native resumption.
+  // Other current-turn items remain omitted because the live user request is
+  // sent separately by each delegated runtime.
+  return [
+    ...prior,
+    ...items.filter((item) =>
+      item.turnId === currentTurnId &&
+      item.kind === 'goal_context' &&
+      !priorGoalKeys.has(item.goalKey ?? item.id)
+    )
+  ]
 }
 
 function sameRoute(

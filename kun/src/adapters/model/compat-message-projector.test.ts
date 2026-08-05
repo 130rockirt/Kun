@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { makeUserItem } from '../../domain/item.js'
+import { makeGoalContextItem, makeUserItem } from '../../domain/item.js'
 import type { ModelRequest } from '../../ports/model-client.js'
 import { projectCompatMessages } from './compat-message-projector.js'
+import { COMPAT_HISTORY_CONTEXT } from './compat-request-codecs.js'
 
 const composerContextFixture = {
   schemaVersion: 1 as const,
@@ -85,5 +86,43 @@ describe('compat composer context projection', () => {
       ['system', 'turn-context-preamble'],
       ['system', 'turn-context-block']
     ])
+  })
+
+  it('projects durable goal context as history rather than a per-request instruction', () => {
+    const request: ModelRequest = {
+      threadId: 'thread-goal',
+      turnId: 'turn-goal',
+      model: 'test-model',
+      systemPrompt: 'stable-system-prefix',
+      prefix: [],
+      history: [
+        makeGoalContextItem({
+          id: 'goal-context',
+          threadId: 'thread-goal',
+          turnId: 'turn-goal',
+          text: 'Goal objective stays in append-only history.',
+          createdAt: '2026-08-06T00:00:00.000Z'
+        }),
+        makeUserItem({
+          id: 'goal-user',
+          threadId: 'thread-goal',
+          turnId: 'turn-goal',
+          text: 'Continue.'
+        })
+      ],
+      tools: [],
+      abortSignal: new AbortController().signal
+    }
+
+    const messages = projectCompatMessages(request, {
+      thinkingMode: false,
+      supportsImages: false
+    })
+    const goal = messages[1]
+    expect(goal).toMatchObject({
+      role: 'system',
+      content: 'Goal objective stays in append-only history.'
+    })
+    expect(goal?.[COMPAT_HISTORY_CONTEXT]).toBe(true)
   })
 })

@@ -4,8 +4,13 @@ import type {
   ActingTurnModelRoute,
   TurnReasoningEffort
 } from '../../contracts/turns.js'
+import { goalContextTexts } from '../../contracts/items.js'
 import { userMessageTextWithComposerContexts } from '../../domain/composer-context.js'
 import { makeAssistantTextItem } from '../../domain/item.js'
+import {
+  filterGoalContextsForGoalKey,
+  goalContextKey
+} from '../../loop/continuation-instructions.js'
 import { resolveTurnClientSurface } from '../../loop/turn-context-resolver.js'
 import { normalizeTurnLimits, type TurnLimitsConfig } from '../../loop/turn-limits.js'
 import type { TurnRunOutcome } from '../../loop/turn-execution-types.js'
@@ -170,7 +175,7 @@ export class AntigravityCliRuntime implements DelegatedTurnRuntime {
       })
       return 'failed'
     }
-    const items = await this.deps.sessionStore.loadItems(threadId)
+    let items = await this.deps.sessionStore.loadItems(threadId)
     const userItem = [...items]
       .reverse()
       .find((item) => item.turnId === turnId && item.kind === 'user_message')
@@ -205,6 +210,20 @@ export class AntigravityCliRuntime implements DelegatedTurnRuntime {
       })
       return 'failed'
     }
+    const planMode = this.deps.enforceReadOnly === true || (turn.mode ?? thread.mode) === 'plan'
+    if (!planMode && thread.goal?.status === 'active') {
+      await this.deps.turns.ensureGoalContext(threadId, turnId, signal)
+      items = await this.deps.sessionStore.loadItems(threadId)
+    }
+    if (signal.aborted) {
+      await this.deps.turns.finishTurn({ threadId, turnId, status: 'aborted' })
+      return 'aborted'
+    }
+    const goalForHistory = planMode
+      ? undefined
+      : (await this.deps.threadStore.get(threadId))?.goal
+    const goalContextKeyForHistory = goalContextKey(goalForHistory)
+    items = filterGoalContextsForGoalKey(items, goalContextKeyForHistory)
 
     const instructionBlocks = [
       this.deps.systemPrompt?.trim(),
@@ -263,7 +282,6 @@ export class AntigravityCliRuntime implements DelegatedTurnRuntime {
       await this.deps.turns.updateTurnMetadata(threadId, turnId, { actingModelRoute })
     }
     const effort = normalizeAntigravityEffort(turn.reasoningEffort)
-    const planMode = this.deps.enforceReadOnly === true || (turn.mode ?? thread.mode) === 'plan'
     const approvalPolicy = this.deps.enforceReadOnly === true
       ? 'never'
       : turn.approvalPolicy ?? thread.approvalPolicy
@@ -352,6 +370,7 @@ export class AntigravityCliRuntime implements DelegatedTurnRuntime {
       provider: resolvedProviderId,
       model,
       prompt,
+      redactedRequestValues: goalContextTexts(items),
       effort,
       planMode,
       approvalPolicy,
@@ -402,7 +421,12 @@ export class AntigravityCliRuntime implements DelegatedTurnRuntime {
         try {
           await this.deps.sessionCoordinator.commit({
             preparation,
-            committedItems: await this.deps.sessionStore.loadItems(threadId),
+            // Keep the checkpoint aligned with the goal projection supplied
+            // to this CLI request, even if the goal changes before it exits.
+            committedItems: filterGoalContextsForGoalKey(
+              await this.deps.sessionStore.loadItems(threadId),
+              goalContextKeyForHistory
+            ),
             lastCommittedTurnId: turnId
           })
         } catch {
@@ -570,6 +594,7 @@ async function startAntigravityTrace(
     provider: string
     model: string
     prompt: string
+    redactedRequestValues: readonly string[]
     effort: 'low' | 'medium' | 'high'
     planMode: boolean
     approvalPolicy: string
@@ -584,7 +609,8 @@ async function startAntigravityTrace(
       threadId: input.threadId,
       turnId: input.turnId,
       provider: input.provider,
-      model: input.model
+      model: input.model,
+      redactedRequestValues: input.redactedRequestValues
     })
     if (!round) return undefined
     const record = sink.beginCliInvocation(round, {

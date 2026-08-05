@@ -1,5 +1,5 @@
 import { resolve, relative, isAbsolute } from 'node:path'
-import type { RuntimeEvent } from '../contracts/events.js'
+import { isPublicRuntimeEvent, type RuntimeEvent } from '../contracts/events.js'
 import type {
   ExtensionAgentProfileSnapshot,
   ExtensionRunBudget,
@@ -164,7 +164,14 @@ const MAX_LIVE_EVENTS_DURING_REPLAY = 1_024
 const MAX_LIVE_BYTES_DURING_REPLAY = 512 * 1024
 
 type BufferedAgentEvent = {
-  event: ExtensionAgentEvent
+  /**
+   * The persisted sequence is retained even when the event is internal. A
+   * marker without a projected event advances the subscriber cursor without
+   * disclosing a model-only TurnItem.
+   */
+  seq: number
+  timestamp: string
+  event?: ExtensionAgentEvent
   bytes: number
 }
 
@@ -414,30 +421,34 @@ export class ExtensionAgentService {
     if (!Number.isSafeInteger(afterSeq) || afterSeq < 0) {
       throw new ExtensionBrokerError('validation_error', 'afterSeq must be a non-negative safe integer')
     }
-    const state = new ManagedSubscription(listener, afterSeq)
+    const state = new ManagedSubscription(listener, afterSeq, {
+      runId: input.runId,
+      threadId: thread.id,
+      ownerExtensionId: principal.extensionId
+    })
     let replaying = true
     const live: BufferedAgentEvent[] = []
     const liveSeqs = new Set<number>()
     let liveBytes = 0
     const unsubscribe = this.options.eventBus.subscribe(thread.id, (event) => {
       if (state.closed || state.overflowed || event.turnId !== input.runId || event.seq <= afterSeq) return
-      const projected = projectEvent(principal, input.runId, event)
+      const buffered = bufferEvent(principal, input.runId, event)
       if (!replaying) {
-        state.enqueue(projected)
+        enqueueBufferedEvent(state, buffered)
         return
       }
-      if (liveSeqs.has(projected.seq)) return
-      const bytes = serializedEventBytes(projected)
+      if (liveSeqs.has(buffered.seq)) return
+      const bytes = buffered.bytes
       if (
         bytes > MAX_EVENT_BYTES ||
         liveSeqs.size >= MAX_LIVE_EVENTS_DURING_REPLAY ||
         liveBytes + bytes > MAX_LIVE_BYTES_DURING_REPLAY
       ) {
-        state.overflow(projected, 'extension subscription live replay buffer overflowed')
+        state.overflowBuffered(buffered, 'extension subscription live replay buffer overflowed')
         return
       }
-      live.push({ event: projected, bytes })
-      liveSeqs.add(projected.seq)
+      live.push(buffered)
+      liveSeqs.add(buffered.seq)
       liveBytes += bytes
     })
     state.setUnsubscribe(unsubscribe)
@@ -450,21 +461,21 @@ export class ExtensionAgentService {
       for await (const event of iterateSessionEventsSince(this.options.sessions, thread.id, afterSeq)) {
         if (state.closed || state.overflowed) break
         if (event.turnId !== input.runId || replaySeqs.has(event.seq)) continue
-        const projected = projectEvent(principal, input.runId, event)
-        const bytes = serializedEventBytes(projected)
+        const buffered = bufferEvent(principal, input.runId, event)
+        const bytes = buffered.bytes
         if (bytes > MAX_EVENT_BYTES) {
-          state.overflow(projected, 'persisted extension subscription event exceeds the message limit')
+          state.overflowBuffered(buffered, 'persisted extension subscription event exceeds the message limit')
           break
         }
-        replay.push({ event: projected, bytes })
-        replaySeqs.add(projected.seq)
+        replay.push(buffered)
+        replaySeqs.add(buffered.seq)
         replayBytes += bytes
         while (replay.length - replayStart > replayLimit || replayBytes > MAX_REPLAY_BYTES) {
           const removed = replay[replayStart]
           if (!removed) break
           replay[replayStart] = undefined
           replayStart += 1
-          replaySeqs.delete(removed.event.seq)
+          replaySeqs.delete(removed.seq)
           replayBytes -= removed.bytes
         }
         if (replayStart >= 1_024 && replayStart * 2 >= replay.length) {
@@ -478,7 +489,7 @@ export class ExtensionAgentService {
           .filter((entry): entry is BufferedAgentEvent => entry !== undefined)
           .sort(compareBufferedEvents)
         for (const entry of retainedReplay) {
-          state.enqueue(entry.event, entry.bytes)
+          enqueueBufferedEvent(state, entry)
           await state.flush()
           if (state.closed || state.overflowed) break
         }
@@ -486,9 +497,9 @@ export class ExtensionAgentService {
       while (!state.closed && !state.overflowed && live.length > 0) {
         const batch = live.splice(0).sort(compareBufferedEvents)
         for (const entry of batch) {
-          liveSeqs.delete(entry.event.seq)
+          liveSeqs.delete(entry.seq)
           liveBytes -= entry.bytes
-          state.enqueue(entry.event, entry.bytes)
+          enqueueBufferedEvent(state, entry)
           await state.flush()
           if (state.closed || state.overflowed) break
         }
@@ -818,11 +829,36 @@ function subtractCumulativeUsage(
 }
 
 function compareBufferedEvents(left: BufferedAgentEvent, right: BufferedAgentEvent): number {
-  return left.event.seq - right.event.seq
+  return left.seq - right.seq
 }
 
 function serializedEventBytes(event: ExtensionAgentEvent): number {
   return Buffer.byteLength(JSON.stringify(event), 'utf8')
+}
+
+function bufferEvent(
+  principal: ExtensionPrincipal,
+  runId: string,
+  event: RuntimeEvent
+): BufferedAgentEvent {
+  const projected = projectEvent(principal, runId, event)
+  if (!projected) {
+    return { seq: event.seq, timestamp: event.timestamp, bytes: 0 }
+  }
+  return {
+    seq: projected.seq,
+    timestamp: projected.timestamp,
+    event: projected,
+    bytes: serializedEventBytes(projected)
+  }
+}
+
+function enqueueBufferedEvent(state: ManagedSubscription, entry: BufferedAgentEvent): void {
+  if (entry.event) {
+    state.enqueue(entry.event, entry.bytes)
+  } else {
+    state.advance(entry)
+  }
 }
 
 class ManagedSubscription implements ExtensionAgentSubscription {
@@ -837,7 +873,8 @@ class ManagedSubscription implements ExtensionAgentSubscription {
 
   constructor(
     private readonly listener: (event: ExtensionAgentEvent) => Promise<void> | void,
-    initialSeq: number
+    initialSeq: number,
+    private readonly cursorMetadata: Pick<ExtensionAgentEvent, 'runId' | 'threadId' | 'ownerExtensionId'>
   ) {
     this.lastDeliveredSeq = initialSeq
   }
@@ -852,24 +889,17 @@ class ManagedSubscription implements ExtensionAgentSubscription {
   }
 
   enqueue(event: ExtensionAgentEvent, knownBytes?: number): void {
-    if (this.closed || event.seq <= this.lastDeliveredSeq) return
-    if (this.pendingOverflow || this.queue.some((queued) => queued.event.seq === event.seq)) return
     const bytes = knownBytes ?? serializedEventBytes(event)
-    if (bytes > MAX_EVENT_BYTES) {
-      this.overflow(event, 'event exceeds the extension subscription message limit')
-      return
-    }
-    if (
-      this.queue.length >= MAX_SUBSCRIPTION_QUEUE ||
-      this.queueBytes + bytes > MAX_SUBSCRIPTION_QUEUE_BYTES
-    ) {
-      this.overflow(event, 'extension subscription queue overflowed')
-      return
-    }
-    this.queue.push({ event, bytes })
-    this.queueBytes += bytes
-    this.queue.sort(compareBufferedEvents)
-    void this.startDrain()
+    this.enqueueBuffered({ seq: event.seq, timestamp: event.timestamp, event, bytes })
+  }
+
+  /** Consume a private persisted event without forwarding its payload. */
+  advance(entry: BufferedAgentEvent): void {
+    this.enqueueBuffered(entry)
+  }
+
+  overflowBuffered(entry: BufferedAgentEvent, message: string): void {
+    this.overflow(entry.event ?? this.cursorEvent(entry), message)
   }
 
   overflow(source: ExtensionAgentEvent, message: string): void {
@@ -924,12 +954,42 @@ class ManagedSubscription implements ExtensionAgentSubscription {
         const entry = this.queue.shift()
         if (!entry) break
         this.queueBytes -= entry.bytes
-        if (entry.event.seq <= this.lastDeliveredSeq) continue
-        await this.listener(entry.event)
-        this.lastDeliveredSeq = entry.event.seq
+        if (entry.seq <= this.lastDeliveredSeq) continue
+        if (entry.event) await this.listener(entry.event)
+        this.lastDeliveredSeq = entry.seq
       }
     } catch {
       this.close()
+    }
+  }
+
+  private enqueueBuffered(entry: BufferedAgentEvent): void {
+    if (this.closed || entry.seq <= this.lastDeliveredSeq) return
+    if (this.pendingOverflow || this.queue.some((queued) => queued.seq === entry.seq)) return
+    if (entry.bytes > MAX_EVENT_BYTES) {
+      this.overflowBuffered(entry, 'event exceeds the extension subscription message limit')
+      return
+    }
+    if (
+      this.queue.length >= MAX_SUBSCRIPTION_QUEUE ||
+      this.queueBytes + entry.bytes > MAX_SUBSCRIPTION_QUEUE_BYTES
+    ) {
+      this.overflowBuffered(entry, 'extension subscription queue overflowed')
+      return
+    }
+    this.queue.push(entry)
+    this.queueBytes += entry.bytes
+    this.queue.sort(compareBufferedEvents)
+    void this.startDrain()
+  }
+
+  private cursorEvent(entry: BufferedAgentEvent): ExtensionAgentEvent {
+    return {
+      seq: entry.seq,
+      timestamp: entry.timestamp,
+      type: 'heartbeat',
+      ...this.cursorMetadata,
+      payload: {}
     }
   }
 }
@@ -959,7 +1019,8 @@ function projectEvent(
   principal: ExtensionPrincipal,
   runId: string,
   event: RuntimeEvent
-): ExtensionAgentEvent {
+): ExtensionAgentEvent | undefined {
+  if (!isPublicRuntimeEvent(event)) return undefined
   const { seq, timestamp, kind, threadId, turnId: _turnId, ...raw } = event
   return {
     seq,

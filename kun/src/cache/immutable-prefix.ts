@@ -71,6 +71,7 @@ function fewShotCacheShape(item: TurnItem): unknown {
         output: canonicalize(item.output)
       }
     case 'assistant_reasoning':
+    case 'goal_context':
     case 'approval':
     case 'user_input':
     case 'compaction':

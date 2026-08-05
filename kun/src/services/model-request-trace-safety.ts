@@ -75,6 +75,42 @@ export function boundedModelTraceText(value: string, maxBytes: number): ModelReq
   }
 }
 
+/**
+ * Remove model-only context before a request body reaches the retained trace.
+ * Wire bodies are normally JSON, so redact decoded string values rather than
+ * relying on the escaped newline spelling in JSON.stringify output. The
+ * exact-value fallback also covers non-JSON CLI payloads.
+ */
+export function redactModelTraceValues(
+  value: string,
+  redactedValues: readonly string[]
+): string {
+  const values = [...new Set(redactedValues.filter((candidate) => candidate.length > 0))]
+    .sort((left, right) => right.length - left.length)
+  if (values.length === 0) return value
+  const redactText = (text: string): string => values.reduce(
+    (next, candidate) => next.replaceAll(candidate, MODEL_REQUEST_TRACE_REDACTED_VALUE),
+    text
+  )
+  try {
+    return JSON.stringify(redactTraceValue(JSON.parse(value), redactText))
+  } catch {
+    return redactText(value)
+  }
+}
+
+function redactTraceValue(value: unknown, redactText: (text: string) => string): unknown {
+  if (typeof value === 'string') return redactText(value)
+  if (Array.isArray(value)) return value.map((entry) => redactTraceValue(entry, redactText))
+  if (!value || typeof value !== 'object') return value
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).map(([key, entry]) => [
+      key,
+      redactTraceValue(entry, redactText)
+    ])
+  )
+}
+
 /** Incremental response accumulator that bounds retained bytes while counting the full clone. */
 export class BoundedModelTraceBodyAccumulator {
   private readonly retained: Buffer[] = []

@@ -107,6 +107,11 @@ function transcriptLine(item: TurnItem): string {
   switch (item.kind) {
     case 'user_message':
       return `[user] ${clip(userMessageTextWithComposerContexts(item), 2_000)}`
+    case 'goal_context':
+      // This is a model-only execution instruction. Delegated SDK transcript
+      // assembly handles active goal context explicitly; public session
+      // summaries must never leak the internal instruction text.
+      return ''
     case 'assistant_text':
       return `[assistant] ${clip(item.text, 2_000)}`
     case 'tool_call':

@@ -20,7 +20,7 @@ import type {
   ModelRequestTraceDelegated,
   ModelRequestTraceRecord
 } from '../../contracts/model-request-trace.js'
-import type { TurnItem } from '../../contracts/items.js'
+import { goalContextTexts, type TurnItem } from '../../contracts/items.js'
 import type { ActingTurnModelRoute } from '../../contracts/turns.js'
 import type { SetThreadTodosRequest } from '../../contracts/threads.js'
 import type { UsageSnapshot } from '../../contracts/usage.js'
@@ -43,6 +43,10 @@ import {
   composeSdkPromptText,
   DEFAULT_SDK_HISTORY_TRANSCRIPT_MAX_BYTES
 } from '../agent-sdk/sdk-context-assembler.js'
+import {
+  filterGoalContextsForGoalKey,
+  goalContextKey
+} from '../../loop/continuation-instructions.js'
 import type {
   DelegatedRuntimeCapabilities,
   DelegatedTurnRuntime
@@ -406,11 +410,6 @@ export class CursorSdkRuntime implements DelegatedTurnRuntime {
       await this.deps.turns.updateTurnMetadata(threadId, turnId, { actingModelRoute })
     }
 
-    const historyTranscript = buildHistoryTranscript(
-      items,
-      turnId,
-      DEFAULT_SDK_HISTORY_TRANSCRIPT_MAX_BYTES
-    )
     const userText = userMessageTextWithComposerContexts(userItem)
     let kunContext: CursorKunTurnContext = {
       instructionBlocks: [],
@@ -428,6 +427,10 @@ export class CursorSdkRuntime implements DelegatedTurnRuntime {
           signal
         })
       } catch (error) {
+        if (signal.aborted) {
+          await this.deps.turns.finishTurn({ threadId, turnId, status: 'aborted' })
+          return 'aborted'
+        }
         abortRuntime()
         const message = sanitizeCursorSdkError(error, apiKey)
         await this.deps.events.record({
@@ -449,6 +452,30 @@ export class CursorSdkRuntime implements DelegatedTurnRuntime {
         return 'failed'
       }
     }
+    if (signal.aborted) {
+      await this.deps.turns.finishTurn({ threadId, turnId, status: 'aborted' })
+      return 'aborted'
+    }
+    // loadKunTurnContext materializes an active goal's internal history item.
+    // Re-read canonical items after it returns so the provider prompt and
+    // delegated-session digest use the same stable prefix.
+    const planMode =
+      turn.orchestration === 'graph' ||
+      this.deps.enforceReadOnly === true ||
+      (turn.mode ?? thread.mode) === 'plan'
+    const canonicalHistory = this.deps.loadKunTurnContext
+      ? await this.deps.sessionStore.loadItems(threadId)
+      : items
+    const latestGoal = planMode
+      ? undefined
+      : (await this.deps.threadStore.get(threadId))?.goal
+    const goalContextKeyForHistory = goalContextKey(latestGoal)
+    const historyItems = filterGoalContextsForGoalKey(canonicalHistory, goalContextKeyForHistory)
+    const historyTranscript = buildHistoryTranscript(
+      historyItems,
+      turnId,
+      DEFAULT_SDK_HISTORY_TRANSCRIPT_MAX_BYTES
+    )
     const instructionBlocks = [
       this.deps.systemPrompt?.trim(),
       buildClientSurfaceInstruction(resolveTurnClientSurface(turn)),
@@ -465,10 +492,6 @@ export class CursorSdkRuntime implements DelegatedTurnRuntime {
       threadId,
       workspace: thread.workspace
     })
-    const planMode =
-      turn.orchestration === 'graph' ||
-      this.deps.enforceReadOnly === true ||
-      (turn.mode ?? thread.mode) === 'plan'
     const approvalPolicy = turn.approvalPolicy ?? thread.approvalPolicy
     const sandboxMode = turn.sandboxMode ?? thread.sandboxMode
     let capabilities = cursorSdkCapabilities(Boolean(this.deps.loadKunTurnContext))
@@ -530,7 +553,7 @@ export class CursorSdkRuntime implements DelegatedTurnRuntime {
           }),
           continuationMode: 'native'
         },
-        priorItems: priorItemsForDelegatedTurn(items, turnId)
+        priorItems: priorItemsForDelegatedTurn(historyItems, turnId)
       })
     }
     const buildPrompt = (includeHistory: boolean): string => composeSdkPromptText({
@@ -702,6 +725,7 @@ export class CursorSdkRuntime implements DelegatedTurnRuntime {
           provider: resolvedProviderId,
           model,
           prompt: attemptPrompt,
+          redactedRequestValues: goalContextTexts(historyItems),
           instructions: instructionBlocks,
           tools: kunContext.tools,
           images: recoveryContinuesAcceptedRun ? [] : resolvedImages.summaries,
@@ -864,7 +888,13 @@ export class CursorSdkRuntime implements DelegatedTurnRuntime {
         try {
           await this.deps.sessionCoordinator.commit({
             preparation,
-            committedItems: await this.deps.sessionStore.loadItems(threadId),
+            // Preserve the exact goal generation visible to this request.
+            // A goal mutation during the turn must trigger one rebase on the
+            // next request, not make this checkpoint disagree forever.
+            committedItems: filterGoalContextsForGoalKey(
+              await this.deps.sessionStore.loadItems(threadId),
+              goalContextKeyForHistory
+            ),
             lastCommittedTurnId: turnId,
             nativeSessionId: agent.agentId
           })
@@ -1067,6 +1097,7 @@ async function startCursorTrace(
     provider: string
     model: string
     prompt: string
+    redactedRequestValues: readonly string[]
     instructions: readonly string[]
     tools: readonly CursorBridgeTool[]
     images: readonly CursorSdkImageSummary[]
@@ -1083,6 +1114,7 @@ async function startCursorTrace(
       turnId: input.turnId,
       provider: input.provider,
       model: input.model,
+      redactedRequestValues: input.redactedRequestValues,
       toolCatalog: input.tools.map((tool) => ({
         name: tool.name,
         providerKind: tool.providerKind,

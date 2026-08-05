@@ -3,13 +3,20 @@ import type { ThreadGoal, ThreadTodoList } from '../contracts/threads.js'
 import { CREATE_PLAN_TOOL_NAME } from '../adapters/tool/create-plan-tool.js'
 import { GET_GOAL_TOOL_NAME, UPDATE_GOAL_TOOL_NAME } from '../adapters/tool/goal-tools.js'
 import { TODO_LIST_TOOL_NAME, TODO_WRITE_TOOL_NAME } from '../adapters/tool/todo-tools.js'
+import { computeShortHash } from './compaction-marker.js'
 
 export function goalContinuationInstruction(goal: ThreadGoal | undefined): string | null {
+  return goalContextInstruction(goal)
+}
+
+/**
+ * Stable model history for an active goal. Runtime token/time accounting is
+ * intentionally absent: it changes on every model step and belongs to the
+ * host's budget gate, not a cache-sensitive prompt snapshot.
+ */
+export function goalContextInstruction(goal: ThreadGoal | undefined): string | null {
   if (!goal || goal.status !== 'active') return null
   const tokenBudget = goal.tokenBudget == null ? 'none' : String(goal.tokenBudget)
-  const remainingTokens = goal.tokenBudget == null
-    ? 'none'
-    : String(Math.max(0, goal.tokenBudget - goal.tokensUsed))
   return [
     'Continue working toward the active thread goal.',
     '',
@@ -25,9 +32,8 @@ export function goalContinuationInstruction(goal: ThreadGoal | undefined): strin
     '- Temporary rough edges are acceptable while the work is moving in the right direction. Completion still requires the requested end state to be true and verified.',
     '',
     'Budget:',
-    `- Tokens used: ${goal.tokensUsed}`,
     `- Token budget: ${tokenBudget}`,
-    `- Tokens remaining: ${remainingTokens}`,
+    '- Live token and elapsed-time budgets are enforced by the host. Do not infer their current usage from this context.',
     '',
     'Completion audit:',
     '- Before deciding that the goal is achieved, verify it against the actual current state and every explicit requirement.',
@@ -40,6 +46,55 @@ export function goalContinuationInstruction(goal: ThreadGoal | undefined): strin
     '',
     `Do not call ${UPDATE_GOAL_TOOL_NAME} unless the goal is complete or the strict blocked audit above is satisfied.`
   ].join('\n')
+}
+
+/**
+ * Identifies a goal's cache-stable semantic generation without serializing
+ * changing usage or elapsed-time counters into either the key or prompt.
+ */
+export function goalContextKey(goal: ThreadGoal | undefined): string | null {
+  if (!goal || goal.status !== 'active') return null
+  return `goal_${computeShortHash(JSON.stringify([
+    goal.createdAt,
+    goal.objective,
+    goal.tokenBudget ?? null
+  ]), 32)}`
+}
+
+/**
+ * The session stream retains historical internal records for recovery, but
+ * only the context belonging to the thread's current active goal is model
+ * visible. This prevents a completed, paused, cleared, replaced, or forked
+ * goal from remaining a live system instruction.
+ */
+export function filterGoalContextsForActiveGoal(
+  items: readonly TurnItem[],
+  goal: ThreadGoal | undefined
+): TurnItem[] {
+  return filterGoalContextsForGoalKey(items, goalContextKey(goal))
+}
+
+/**
+ * Applies a previously captured goal generation to a canonical session
+ * stream. Delegated runtimes use this after a request completes: the thread's
+ * live goal may have changed during that request, but its native checkpoint
+ * must describe the exact goal context the provider actually saw.
+ */
+export function filterGoalContextsForGoalKey(
+  items: readonly TurnItem[],
+  activeKey: string | null | undefined
+): TurnItem[] {
+  // A goal generation has one stable system record for the whole thread. Be
+  // defensive when reading older streams that may contain duplicates from an
+  // interrupted pre-rollout writer: retaining all of them would multiply the
+  // same instruction in the cache prefix and force needless native rebases.
+  let retainedActiveContext = false
+  return items.filter((item) => {
+    if (item.kind !== 'goal_context') return true
+    if (!activeKey || item.goalKey !== activeKey || retainedActiveContext) return false
+    retainedActiveContext = true
+    return true
+  })
 }
 
 const GOAL_NO_TOOL_REPEAT_SIMILARITY = 0.85

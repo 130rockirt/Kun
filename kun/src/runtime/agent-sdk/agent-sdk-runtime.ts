@@ -131,6 +131,8 @@ export interface SdkTurnContext {
    * native session. Resumed turns send only their current delta.
    */
   historyTranscript?: string
+  /** Internal context values that must be removed from request diagnostics. */
+  redactedRequestValues?: string[]
   /**
    * Per-turn instruction blocks injected after the history (skill catalog,
    * activated skills, memories, goal/todo continuation, plan instruction).
@@ -169,7 +171,7 @@ export interface SdkRuntimeDeps {
   /** True when this runtime owns the given provider (kind: 'agent-sdk'). */
   handlesProvider(providerId: string | undefined): boolean
   /** Resolve the turn's inputs; null aborts the turn early (e.g. no user text). */
-  loadTurnContext(threadId: string, turnId: string): Promise<SdkTurnContext | null>
+  loadTurnContext(threadId: string, turnId: string, signal?: AbortSignal): Promise<SdkTurnContext | null>
   /** Execute a kun tool in-process (raw — permission/hooks handled by the SDK seam).
    *  `signal` aborts in-flight interactive work (e.g. a pending user_input). */
   executeKunTool(
@@ -377,8 +379,12 @@ export class AgentSdkRuntime {
   ): Promise<TurnRunOutcome> {
     let ctx: SdkTurnContext | null
     try {
-      ctx = await this.deps.loadTurnContext(threadId, turnId)
+      ctx = await this.deps.loadTurnContext(threadId, turnId, signal)
     } catch (error) {
+      if (signal.aborted) {
+        await this.deps.finishTurn(threadId, turnId, 'aborted')
+        return 'aborted'
+      }
       if (!(error instanceof AgentSdkCredentialUnavailableError)) throw error
       await this.deps.recordEvent({
         kind: 'error',
@@ -390,6 +396,10 @@ export class AgentSdkRuntime {
       })
       await this.deps.finishTurn(threadId, turnId, 'failed', error.message, error.code)
       return 'failed'
+    }
+    if (signal.aborted) {
+      await this.deps.finishTurn(threadId, turnId, 'aborted')
+      return 'aborted'
     }
     if (!ctx) {
       await this.deps.finishTurn(threadId, turnId, 'failed', 'no input for subscription turn')
@@ -680,6 +690,7 @@ export class AgentSdkRuntime {
           systemPrompt: this.deps.kunSystemPrompt(),
           threadPersona: ctx.threadPersona,
           contextInstructions: ctx.contextInstructions ?? [],
+          redactedRequestValues: ctx.redactedRequestValues ?? [],
           tools: selectedKunTools,
           images: (ctx.images ?? []).map((image) => ({ mediaType: image.mediaType })),
           approvalPolicy: ctx.approvalPolicy,
@@ -981,6 +992,7 @@ async function startAgentSdkTrace(
     systemPrompt: string
     threadPersona?: string
     contextInstructions: readonly string[]
+    redactedRequestValues: readonly string[]
     tools: readonly BridgeableTool[]
     images: ReadonlyArray<{ mediaType: string }>
     approvalPolicy: ApprovalPolicy
@@ -997,6 +1009,7 @@ async function startAgentSdkTrace(
       turnId: input.turnId,
       provider: input.provider,
       model: input.model,
+      redactedRequestValues: input.redactedRequestValues,
       toolCatalog: input.tools.map((tool) => ({
         name: bridgedToolModelName(tool.name),
         ...(tool.providerId ? { providerId: tool.providerId } : {}),

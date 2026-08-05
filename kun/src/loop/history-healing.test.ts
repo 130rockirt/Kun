@@ -17,6 +17,20 @@ function assistantText(id: string, text = 'hi'): TurnItem {
   }
 }
 
+function goalContext(id: string): TurnItem {
+  return {
+    id,
+    kind: 'goal_context',
+    turnId: 't1',
+    threadId: 'thr1',
+    role: 'system',
+    status: 'completed',
+    createdAt: CREATED_AT,
+    finishedAt: CREATED_AT,
+    text: 'Persist this goal context exactly once.'
+  }
+}
+
 function toolCall(id: string, callId: string): TurnItem {
   return {
     id,
@@ -94,5 +108,14 @@ describe('healLoadedHistoryItems', () => {
     const result = healLoadedHistoryItems(items)
     expect(result.changed).toBe(false)
     expect(result.items).toHaveLength(2)
+  })
+
+  it('keeps a valid internal goal context without rewriting or exposing it as a malformed record', () => {
+    const item = goalContext('goal_1')
+    const result = healLoadedHistoryItems([item])
+
+    expect(result.changed).toBe(false)
+    expect(result.items).toEqual([item])
+    expect(result.items[0]).toBe(item)
   })
 })

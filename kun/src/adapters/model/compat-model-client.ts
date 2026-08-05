@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { ModelClient, ModelRequest, ModelStreamChunk } from '../../ports/model-client.js'
 import type { UsageSnapshot } from '../../contracts/usage.js'
+import { goalContextTexts } from '../../contracts/items.js'
 import type { ModelCapabilityMetadata } from '../../contracts/capabilities.js'
 import {
   startLlmDebugRoundIfEnabled,
@@ -221,7 +222,8 @@ export class CompatModelClient implements ModelClient {
         name: tool.name,
         ...(tool.providerKind ? { providerKind: tool.providerKind } : {}),
         ...(tool.providerId ? { providerId: tool.providerId } : {})
-      }))
+      })),
+      redactedRequestValues: goalContextTexts(request.history)
     }, warnModelTraceFailure)
     if (!round) {
       yield* this.streamInner(request, null)

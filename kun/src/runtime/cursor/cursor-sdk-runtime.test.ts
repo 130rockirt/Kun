@@ -32,6 +32,7 @@ import {
   delegatedCredentialIdentity,
   delegatedHistoryDigest
 } from '../delegated-session-binding.js'
+import { goalContextKey } from '../../loop/continuation-instructions.js'
 
 function messages(values: SDKMessage[]): AsyncGenerator<SDKMessage, void> {
   return (async function* () {
@@ -91,6 +92,7 @@ function harness(input: {
   sessionCoordinator?: CursorSdkRuntimeDeps['sessionCoordinator']
   omitLocalStore?: boolean
   kunContext?: CursorKunTurnContext
+  onLoadKunTurnContext?: () => void | Promise<void>
   contextProfile?: CursorSdkRuntimeDeps['contextProfile']
   streamLimits?: CursorSdkRuntimeDeps['streamLimits']
   todoSyncError?: Error
@@ -119,6 +121,16 @@ function harness(input: {
   const resumedOptions: Array<Partial<AgentOptions> | undefined> = []
   const kunContextSignals: AbortSignal[] = []
   const syncedTodos: unknown[] = []
+  const loadItems = vi.fn(async () => input.items ?? [{
+    id: 'user_1',
+    threadId: 'thread_1',
+    turnId: 'turn_1',
+    role: 'user',
+    status: 'completed',
+    createdAt: new Date().toISOString(),
+    kind: 'user_message',
+    text: 'hi'
+  }])
   const sendResults = input.sendResults ?? [input.run ?? fakeRun()]
   let sendIndex = 0
   const reload = vi.fn(async () => undefined)
@@ -186,16 +198,7 @@ function harness(input: {
     systemPrompt: 'Kun system prompt',
     threadStore: { get: async () => thread },
     sessionStore: {
-      loadItems: async () => input.items ?? [{
-        id: 'user_1',
-        threadId: 'thread_1',
-        turnId: 'turn_1',
-        role: 'user',
-        status: 'completed',
-        createdAt: new Date().toISOString(),
-        kind: 'user_message',
-        text: 'hi'
-      }]
+      loadItems
     },
     turns: {
       applyItem: async (_threadId: string, item: TurnItem) => {
@@ -255,6 +258,7 @@ function harness(input: {
       ? {
           loadKunTurnContext: async ({ signal }: { signal: AbortSignal }) => {
             kunContextSignals.push(signal)
+            await input.onLoadKunTurnContext?.()
             return input.kunContext!
           }
         }
@@ -271,6 +275,7 @@ function harness(input: {
     finished,
     sentMessages,
     sentOptions,
+    loadItems,
     kunContextSignals,
     resumedAgentIds,
     resumedOptions,
@@ -362,6 +367,71 @@ describe('CursorSdkRuntime', () => {
       }
     })
     expect(JSON.stringify(trace)).not.toContain('cursor-secret')
+  })
+
+  test('reloads canonical history after Kun context materializes a goal', async () => {
+    const createdAt = '2026-08-06T00:00:00.000Z'
+    const goal = {
+      threadId: 'thread_1',
+      objective: 'Finish the migration safely.',
+      status: 'active' as const,
+      tokenBudget: 10_000,
+      tokensUsed: 0,
+      timeUsedSeconds: 0,
+      createdAt,
+      updatedAt: createdAt
+    }
+    const items: Array<Record<string, unknown>> = [{
+      id: 'user_1',
+      threadId: 'thread_1',
+      turnId: 'turn_1',
+      role: 'user',
+      status: 'completed',
+      createdAt,
+      kind: 'user_message',
+      text: 'continue the migration'
+    }]
+    const debugSink = new LlmDebugRecorder()
+    const h = harness({
+      items,
+      debugSink,
+      kunContext: {
+        instructionBlocks: [],
+        activeSkillIds: [],
+        tools: [],
+        customTools: {}
+      },
+      thread: { goal },
+      onLoadKunTurnContext: () => {
+        items.push({
+          id: 'item_turn_1_goal_context',
+          threadId: 'thread_1',
+          turnId: 'turn_1',
+          role: 'system',
+          status: 'completed',
+          goalKey: goalContextKey(goal)!,
+          createdAt,
+          kind: 'goal_context',
+          text: 'Finish the migration safely.'
+        })
+      }
+    })
+
+    await expect(h.runtime.runTurn(
+      'thread_1',
+      'turn_1',
+      new AbortController().signal,
+      'cursor-subscription'
+    )).resolves.toBe('completed')
+
+    expect(h.loadItems).toHaveBeenCalledTimes(2)
+    expect(String(h.sentMessages[0])).toContain(
+      '[active goal] Finish the migration safely.'
+    )
+    expect(String(h.sentMessages[0])).toContain('<prior_conversation>')
+    const trace = (await debugSink.listThread('thread_1')).records[0]
+    expect(trace?.request.body.text).not.toContain('Finish the migration safely.')
+    expect(trace?.request.body.text).toContain('[REDACTED]')
   })
 
   test('keeps Graph in plan mode and gives pending review a real second Cursor exchange', async () => {
@@ -1023,6 +1093,111 @@ describe('CursorSdkRuntime', () => {
     ).toContain('provider-state')
     expect(String(h.sentMessages[0])).toContain('current only')
     expect(String(h.sentMessages[0])).not.toContain('portable old context')
+  })
+
+  test('rebases a native session when the current turn introduces active goal context', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-cursor-goal-rebase-'))
+    const coordinator = new DelegatedSessionCoordinator(
+      new FileDelegatedSessionBindingStore(root)
+    )
+    const priorItems = [{
+      id: 'user_old_goal_rebase',
+      threadId: 'thread_1',
+      turnId: 'turn_old',
+      role: 'user',
+      status: 'completed',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      kind: 'user_message',
+      text: 'portable context before the goal'
+    }] as const
+    const route = {
+      providerKind: 'cursor-sdk' as const,
+      providerId: 'cursor-subscription',
+      credentialIdentity: delegatedCredentialIdentity({
+        providerId: 'cursor-subscription',
+        credentialSecret: 'cursor-secret'
+      }),
+      workspace: '/tmp/cursor-workspace',
+      model: 'auto',
+      capabilityFingerprint: delegatedCapabilityFingerprint({
+        systemPrompt: 'Kun system prompt',
+        threadPersona: '',
+        mode: 'agent',
+        sandbox: false,
+        approvalPolicy: 'auto',
+        sandboxMode: 'danger-full-access',
+        settingSources: [],
+        capabilities: cursorSdkCapabilities()
+      }),
+      continuationMode: 'native' as const
+    }
+    const prepared = await coordinator.prepare({
+      threadId: 'thread_1',
+      route,
+      priorItems: []
+    })
+    await coordinator.commit({
+      preparation: prepared,
+      committedItems: priorItems as never,
+      lastCommittedTurnId: 'turn_old',
+      nativeSessionId: 'agent_persisted'
+    })
+    const createdAt = '2026-08-06T00:00:00.000Z'
+    const goal = {
+      threadId: 'thread_1',
+      objective: 'Finish the migration before answering anything else.',
+      status: 'active' as const,
+      tokenBudget: 1_000,
+      tokensUsed: 0,
+      timeUsedSeconds: 0,
+      createdAt,
+      updatedAt: createdAt
+    }
+    const h = harness({
+      sessionCoordinator: coordinator,
+      thread: {
+        goal,
+        turns: [{ id: 'turn_1', model: 'auto', mode: 'agent' }]
+      },
+      items: [
+        ...priorItems,
+        {
+          id: 'user_goal_rebase',
+          threadId: 'thread_1',
+          turnId: 'turn_1',
+          role: 'user',
+          status: 'completed',
+          createdAt,
+          kind: 'user_message',
+          text: 'continue now'
+        },
+        {
+          id: 'goal_context_rebase',
+          threadId: 'thread_1',
+          turnId: 'turn_1',
+          role: 'system',
+          status: 'completed',
+          createdAt,
+          kind: 'goal_context',
+          goalKey: goalContextKey(goal)!,
+          text: 'Finish the migration before answering anything else.'
+        }
+      ]
+    })
+
+    await expect(h.runtime.runTurn(
+      'thread_1',
+      'turn_1',
+      new AbortController().signal,
+      'cursor-subscription'
+    )).resolves.toBe('completed')
+
+    expect(h.resumedAgentIds).toEqual([])
+    expect(String(h.sentMessages[0])).toContain('<prior_conversation>')
+    expect(String(h.sentMessages[0])).toContain('portable context before the goal')
+    expect(String(h.sentMessages[0])).toContain(
+      '[active goal] Finish the migration before answering anything else.'
+    )
   })
 
   test('rotates native continuation when the bridged Kun tool catalog changes', async () => {

@@ -37,6 +37,7 @@ function detectVolatileFewShotItem(item: TurnItem): PrefixVolatilityFinding[] {
 function fewShotText(item: TurnItem): string {
   switch (item.kind) {
     case 'user_message':
+    case 'goal_context':
     case 'assistant_text':
     case 'assistant_reasoning':
       return item.text

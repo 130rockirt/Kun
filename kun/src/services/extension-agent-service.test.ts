@@ -6,6 +6,7 @@ import { InMemoryThreadStore } from '../adapters/in-memory-thread-store.js'
 import { ContextCompactor } from '../loop/context-compactor.js'
 import { InflightTracker } from '../loop/inflight-tracker.js'
 import { SteeringQueue } from '../loop/steering-queue.js'
+import { makeGoalContextItem } from '../domain/item.js'
 import { SequentialIdGenerator } from '../ports/id-generator.js'
 import { RuntimeEventRecorder } from './runtime-event-recorder.js'
 import { ThreadService } from './thread-service.js'
@@ -13,6 +14,7 @@ import { TurnService } from './turn-service.js'
 import {
   ExtensionAgentService,
   ExtensionBrokerError,
+  type ExtensionAgentEvent,
   type ExtensionPrincipal
 } from './extension-agent-service.js'
 import { ExtensionAgentProfileRegistry } from './extension-agent-profile-registry.js'
@@ -223,6 +225,62 @@ describe('ExtensionAgentService', () => {
     )
     expect(received.at(-1)?.payload).not.toHaveProperty('approvalId')
     subscription.close()
+  })
+
+  it('consumes internal goal-context sequence numbers without delivering them to extensions', async () => {
+    const h = createHarness()
+    const run = await h.service.createRun(principal(), { input: 'Keep working toward the goal', workspace })
+    const privateEvent = await h.events.record({
+      kind: 'item_created',
+      threadId: run.threadId,
+      turnId: run.id,
+      item: makeGoalContextItem({
+        id: 'goal_context_private',
+        threadId: run.threadId,
+        turnId: run.id,
+        goalKey: 'goal_private',
+        text: 'Internal objective: do not expose this text',
+        createdAt: '2026-07-11T08:00:01.000Z'
+      })
+    })
+    const received: ExtensionAgentEvent[] = []
+    const subscription = await h.service.subscribe(principal(), { runId: run.id }, (event) => {
+      received.push(event)
+    })
+
+    expect(JSON.stringify(received)).not.toContain('Internal objective: do not expose this text')
+    expect(received.some((event) => event.seq === privateEvent.seq)).toBe(false)
+    expect(subscription.lastDeliveredSeq).toBe(privateEvent.seq)
+
+    const livePrivateEvent = await h.events.record({
+      kind: 'item_created',
+      threadId: run.threadId,
+      turnId: run.id,
+      item: makeGoalContextItem({
+        id: 'goal_context_private_live',
+        threadId: run.threadId,
+        turnId: run.id,
+        goalKey: 'goal_private_live',
+        text: 'Live internal objective: do not expose this text',
+        createdAt: '2026-07-11T08:00:02.000Z'
+      })
+    })
+    await vi.waitFor(() => {
+      expect(subscription.lastDeliveredSeq).toBe(livePrivateEvent.seq)
+    })
+    expect(JSON.stringify(received)).not.toContain('Live internal objective: do not expose this text')
+    expect(received.some((event) => event.seq === livePrivateEvent.seq)).toBe(false)
+
+    const resumed: ExtensionAgentEvent[] = []
+    const replay = await h.service.subscribe(principal(), {
+      runId: run.id,
+      afterSeq: subscription.lastDeliveredSeq
+    }, (event) => {
+      resumed.push(event)
+    })
+    expect(resumed).toEqual([])
+    subscription.close()
+    replay.close()
   })
 
   it('summarizes run status with forward-only event iteration', async () => {

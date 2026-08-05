@@ -1,13 +1,15 @@
 import { describe, expect, it, vi } from 'vitest'
-import { getThread } from './threads.js'
+import { forkThread, getThread, updateThread } from './threads.js'
 import { buildRouter } from './index.js'
 import type { ServerRuntime } from './server-runtime.js'
 import { createThreadRecord } from '../../domain/thread.js'
 import { createTurnRecord } from '../../domain/turn.js'
+import { makeGoalContextItem, makeUserItem } from '../../domain/item.js'
 import { createApprovalRequest } from '../../domain/approval.js'
 import { InMemoryApprovalGate } from '../../adapters/in-memory-approval-gate.js'
 import { InMemoryUserInputGate } from '../../adapters/in-memory-user-input-gate.js'
 import type { ThreadService } from '../../services/thread-service.js'
+import type { JsonResponse } from '../response.js'
 
 function serviceWith(threadId: string): ThreadService {
   const record = createThreadRecord({
@@ -113,6 +115,85 @@ describe('getThread replay snapshot boundary (#1087)', () => {
     expect(durableHighWater).toBe(201)
     expect(body.latestSeq).toBe(200)
     expect(body.status).toBe('idle')
+  })
+})
+
+describe('getThread session-only goal context', () => {
+  it('does not expose durable goal context through the renderer hydration snapshot', async () => {
+    const record = createThreadRecord({
+      id: 'thr_goal_context', title: 'Goal context', workspace: '/tmp', model: 'deepseek-chat'
+    })
+    const turn = createTurnRecord({
+      id: 'turn_goal_context', threadId: record.id, prompt: 'finish the task', status: 'completed'
+    })
+    record.turns = [turn]
+    const user = makeUserItem({
+      id: 'item_goal_user', threadId: record.id, turnId: turn.id, text: 'finish the task'
+    })
+    const context = makeGoalContextItem({
+      id: 'item_goal_context',
+      threadId: record.id,
+      turnId: turn.id,
+      text: 'Active goal: finish the task',
+      createdAt: '2026-08-06T00:00:01.000Z'
+    })
+    const sessionStore = {
+      highestSeq: async () => 7,
+      loadItems: async () => [user, context]
+    }
+    const service = { get: async (id: string) => id === record.id ? record : null } as ThreadService
+
+    const response = await getThread(service, record.id, sessionStore as never)
+    const body = JSON.parse(response.body)
+
+    expect(body.turns[0].items.map((item: { id: string }) => item.id)).toEqual([user.id])
+    expect(body.turns[0].items).not.toContainEqual(expect.objectContaining({ kind: 'goal_context' }))
+  })
+})
+
+describe('ThreadRecord HTTP public-item boundary', () => {
+  function legacyThreadWithGoalContext() {
+    const record = createThreadRecord({
+      id: 'thr_legacy_goal_context', title: 'Legacy goal context', workspace: '/tmp', model: 'm'
+    })
+    const turn = createTurnRecord({
+      id: 'turn_legacy_goal_context', threadId: record.id, prompt: 'finish the task', status: 'completed'
+    })
+    const user = makeUserItem({
+      id: 'item_legacy_user', threadId: record.id, turnId: turn.id, text: 'finish the task'
+    })
+    const context = makeGoalContextItem({
+      id: 'item_legacy_goal_context',
+      threadId: record.id,
+      turnId: turn.id,
+      text: 'internal goal instructions must never be public'
+    })
+    return { ...record, turns: [{ ...turn, items: [user, context] }] }
+  }
+
+  it('does not return a legacy internal item from PATCH or fork responses', async () => {
+    const record = legacyThreadWithGoalContext()
+    const service = {
+      update: async () => record,
+      fork: async () => record
+    } as unknown as ThreadService
+
+    const updated = await updateThread(
+      service,
+      record.id,
+      new Request(`http://kun.local/v1/threads/${record.id}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ title: 'Renamed' })
+      })
+    )
+    const forked = await forkThread(service, record.id)
+
+    for (const response of [updated as JsonResponse, forked]) {
+      const body = JSON.parse(response.body)
+      expect(body.turns[0].items.map((item: { id: string }) => item.id)).toEqual(['item_legacy_user'])
+      expect(JSON.stringify(body)).not.toContain('internal goal instructions')
+    }
   })
 })
 

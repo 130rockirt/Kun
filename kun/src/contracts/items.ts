@@ -85,6 +85,27 @@ export const UserTurnItem = TurnItemBase.extend({
 })
 export type UserTurnItem = z.infer<typeof UserTurnItem>
 
+/**
+ * Durable, model-visible context created once when an active goal starts a
+ * turn. It deliberately lives in the canonical session history rather than
+ * the renderer-facing turn projection: usage and elapsed-time accounting stay
+ * host-owned, while the model receives one stable description in chronological
+ * history for cache continuity.
+ */
+export const GoalContextTurnItem = TurnItemBase.extend({
+  kind: z.literal('goal_context'),
+  role: z.literal('system'),
+  status: z.literal('completed'),
+  /**
+   * Stable identity of the active goal that produced this private item.
+   * Optional only to read an interrupted early rollout safely; new records
+   * always carry it and legacy records are never forwarded as active context.
+   */
+  goalKey: z.string().min(1).optional(),
+  text: z.string()
+})
+export type GoalContextTurnItem = z.infer<typeof GoalContextTurnItem>
+
 export const AssistantTextTurnItem = TurnItemBase.extend({
   kind: z.literal('assistant_text'),
   text: z.string()
@@ -204,6 +225,7 @@ export type ErrorTurnItem = z.infer<typeof ErrorTurnItem>
 
 export const TurnItem = z.discriminatedUnion('kind', [
   UserTurnItem,
+  GoalContextTurnItem,
   AssistantTextTurnItem,
   AssistantReasoningTurnItem,
   ToolCallTurnItem,
@@ -217,3 +239,13 @@ export const TurnItem = z.discriminatedUnion('kind', [
 export type TurnItem = z.infer<typeof TurnItem>
 
 export type TurnItemKind = TurnItem['kind']
+
+/** Internal history records must never be projected through public thread APIs. */
+export function isPublicTurnItem(item: TurnItem): boolean {
+  return item.kind !== 'goal_context'
+}
+
+/** Exact private strings to remove from any diagnostic request capture. */
+export function goalContextTexts(items: readonly TurnItem[]): string[] {
+  return [...new Set(items.flatMap((item) => item.kind === 'goal_context' ? [item.text] : []))]
+}

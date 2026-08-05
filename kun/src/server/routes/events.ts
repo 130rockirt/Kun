@@ -1,7 +1,7 @@
 import { encodeSseEvent } from '../sse.js'
 import type { EventBus } from '../../ports/event-bus.js'
 import type { SessionStore } from '../../ports/session-store.js'
-import type { RuntimeEvent } from '../../contracts/events.js'
+import { isPublicRuntimeEvent, type RuntimeEvent } from '../../contracts/events.js'
 import type { ThreadEventStreamRegistry } from '../thread-event-stream-registry.js'
 
 export const HEARTBEAT_INTERVAL_MS = 15_000
@@ -106,8 +106,15 @@ export function buildEventStreamResponse(input: {
         let lastDeliveredSeq = sinceSeq
         let replaying = true
         const frameFor = (event: RuntimeEvent): Uint8Array => encoder.encode(encodeSseEvent(event))
-        const deliver = (event: RuntimeEvent, frame = frameFor(event)): boolean => {
+        const deliver = (event: RuntimeEvent, frame?: Uint8Array): boolean => {
           if (typeof event.seq === 'number' && event.seq <= lastDeliveredSeq) return false
+          // Consume hidden event sequence numbers without sending their
+          // model-only payload. Otherwise a reconnect would replay the same
+          // private record forever and heartbeat cursors would never advance.
+          if (!isPublicRuntimeEvent(event)) {
+            if (typeof event.seq === 'number') lastDeliveredSeq = event.seq
+            return false
+          }
           // During persisted replay the reader has not necessarily attached yet,
           // so backpressure is not meaningful. Once live, retaining arbitrary
           // events for a stalled client is worse than closing it: the client can
@@ -119,7 +126,7 @@ export function buildEventStreamResponse(input: {
           if (typeof event.seq === 'number') {
             lastDeliveredSeq = event.seq
           }
-          controller.enqueue(frame)
+          controller.enqueue(frame ?? frameFor(event))
           return true
         }
         const liveDuringReplay: Array<{ event: RuntimeEvent; bytes: number }> = []
@@ -128,7 +135,8 @@ export function buildEventStreamResponse(input: {
         unsubscribe = input.eventBus.subscribe(input.threadId, (event: RuntimeEvent) => {
           if (closed) return
           if (replaying) {
-            const bytes = frameFor(event).byteLength
+            const frame = isPublicRuntimeEvent(event) ? frameFor(event) : undefined
+            const bytes = frame?.byteLength ?? 0
             if (
               liveDuringReplay.length >= replayLimits.maxLiveEvents ||
               bytes > replayLimits.maxLiveBytes ||
@@ -157,6 +165,10 @@ export function buildEventStreamResponse(input: {
           replayLimits.maxRecordBytes
         )) {
           if (closed) return
+          if (!isPublicRuntimeEvent(event)) {
+            deliver(event)
+            continue
+          }
           const frame = frameFor(event)
           const bytes = frame.byteLength
           // Permit one bounded record larger than the page byte target, so a

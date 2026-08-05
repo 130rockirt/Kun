@@ -19,6 +19,7 @@ import {
   makeApprovalItem,
   makeAssistantReasoningItem,
   makeAssistantTextItem,
+  makeGoalContextItem,
   makeToolCallItem,
   makeToolResultItem,
   makeUserInputItem,
@@ -2698,7 +2699,7 @@ describe('AgentLoop', () => {
     )).toBe(true)
   })
 
-  it('injects active goal guidance and goal status tools into model requests', async () => {
+  it('persists active goal guidance in model history and includes goal status tools', async () => {
     const observedRequests: ModelRequest[] = []
     const goalTools = [GET_GOAL_TOOL_NAME, UPDATE_GOAL_TOOL_NAME].map((name) =>
       LocalToolHost.defineTool({
@@ -2734,8 +2735,16 @@ describe('AgentLoop', () => {
 
     const [request] = observedRequests
     if (!request) throw new Error('expected model request')
-    expect(request.contextInstructions?.join('\n')).toContain('Continue working toward the active thread goal.')
-    expect(request.contextInstructions?.join('\n')).toContain('check current memory usage')
+    const goalContext = request.history.find((item) => item.kind === 'goal_context')
+    expect(goalContext).toMatchObject({
+      kind: 'goal_context',
+      text: expect.stringContaining('check current memory usage')
+    })
+    if (!goalContext || goalContext.kind !== 'goal_context') {
+      throw new Error('expected durable goal context in model history')
+    }
+    expect(goalContext.text).toContain('Continue working toward the active thread goal.')
+    expect(request.contextInstructions?.join('\n') ?? '').not.toContain('Continue working toward the active thread goal.')
     expect(request.tools.map((tool) => tool.name)).toContain(GET_GOAL_TOOL_NAME)
     expect(request.tools.map((tool) => tool.name)).toContain(UPDATE_GOAL_TOOL_NAME)
   })
@@ -3672,6 +3681,50 @@ describe('AgentLoop', () => {
     expect(effectiveItems[0]?.kind).toBe('compaction')
     expect(effectiveItems.some((item) => item.id === 'hist_0')).toBe(false)
     expect(effectiveItems.length).toBeLessThan(items.length)
+  })
+
+  it('does not reintroduce an ended goal context after compaction reloads canonical history', async () => {
+    const requests: ModelRequest[] = []
+    const h = makeHarness({
+      provider: 'goal-context-compaction',
+      model: 'goal-context-compaction',
+      async *stream(request: ModelRequest): AsyncIterable<ModelStreamChunk> {
+        requests.push(request)
+        yield { kind: 'completed', stopReason: 'stop' }
+      }
+    }, {
+      compactor: new ContextCompactor({ softThreshold: 8, hardThreshold: 16 })
+    })
+    await bootstrapThread(h)
+    await h.threads.setGoal(h.threadId, {
+      objective: 'Old goal that has already ended.',
+      status: 'active'
+    })
+    await h.sessionStore.appendItem(h.threadId, makeGoalContextItem({
+      id: 'old_goal_context',
+      threadId: h.threadId,
+      turnId: h.turnId,
+      goalKey: 'old_goal_key',
+      text: 'STALE GOAL CONTEXT MUST NOT REACH THE MODEL.',
+      createdAt: '2026-08-06T00:00:00.000Z'
+    }))
+    await h.threads.setGoal(h.threadId, { status: 'complete' })
+    for (let index = 0; index < 10; index += 1) {
+      await h.sessionStore.appendItem(h.threadId, makeUserItem({
+        id: `goal_compaction_history_${index}`,
+        threadId: h.threadId,
+        turnId: h.turnId,
+        text: 'x'.repeat(20)
+      }))
+    }
+
+    await expect(h.loop.runTurn(h.threadId, h.turnId)).resolves.toBe('completed')
+
+    const request = requests[0]
+    expect(request).toBeDefined()
+    expect(request?.history.some((item) => item.kind === 'goal_context')).toBe(false)
+    expect(JSON.stringify(request?.history)).not.toContain('STALE GOAL CONTEXT MUST NOT REACH THE MODEL.')
+    expect((await h.sessionStore.loadItems(h.threadId)).some((item) => item.id === 'old_goal_context')).toBe(true)
   })
 
   it('can use a model summary for history compaction while reusing the main prefix', async () => {

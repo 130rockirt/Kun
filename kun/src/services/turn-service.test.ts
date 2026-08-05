@@ -116,6 +116,41 @@ class FailOnceAppendSessionStore extends InMemorySessionStore {
   }
 }
 
+class BlockingGoalContextSessionStore extends InMemorySessionStore {
+  readonly loadItemsStarted: Promise<void>
+  private resolveLoadItemsStarted!: () => void
+  private resolveLoadItems!: () => void
+  private readonly releaseLoadItems: Promise<void>
+  private blockNextLoadItems = false
+
+  constructor() {
+    super()
+    this.loadItemsStarted = new Promise<void>((resolve) => {
+      this.resolveLoadItemsStarted = resolve
+    })
+    this.releaseLoadItems = new Promise<void>((resolve) => {
+      this.resolveLoadItems = resolve
+    })
+  }
+
+  blockNextLoad(): void {
+    this.blockNextLoadItems = true
+  }
+
+  release(): void {
+    this.resolveLoadItems()
+  }
+
+  override async loadItems(threadId: string): Promise<TurnItem[]> {
+    if (this.blockNextLoadItems) {
+      this.blockNextLoadItems = false
+      this.resolveLoadItemsStarted()
+      await this.releaseLoadItems
+    }
+    return super.loadItems(threadId)
+  }
+}
+
 class BlockingDeltaEventSessionStore extends InMemorySessionStore {
   readonly order: string[] = []
   readonly eventAppendStarted: Promise<void>
@@ -226,6 +261,221 @@ describe('TurnService assistant delta persistence (#1087)', () => {
 describe('TurnService startTurn', () => {
   it('defaults to 256 concurrent active turns', () => {
     expect(DEFAULT_MAX_CONCURRENT_TURNS).toBe(256)
+  })
+
+  it('persists one stable goal context in canonical history without publishing it', async () => {
+    const sessionStore = new InMemorySessionStore()
+    const threadStore = new InMemoryThreadStore()
+    const eventBus = new InMemoryEventBus()
+    const nowIso = () => '2026-08-06T00:00:00.000Z'
+    const service = new TurnService({
+      threadStore,
+      sessionStore,
+      events: new RuntimeEventRecorder({
+        eventBus,
+        sessionStore,
+        allocateSeq: (threadId) => eventBus.allocateSeq(threadId),
+        nowIso
+      }),
+      inflight: new InflightTracker(),
+      steering: new SteeringQueue(),
+      compactor: new ContextCompactor(),
+      ids: new SequentialIdGenerator(),
+      nowIso
+    })
+    const threadId = 'thr_goal_context'
+    await threadStore.upsert(createThreadRecord({
+      id: threadId,
+      title: 'Goal context',
+      workspace: '/tmp/workspace',
+      model: 'test-model',
+      goal: {
+        threadId,
+        objective: 'Keep the durable goal context stable.',
+        status: 'active',
+        tokenBudget: 500,
+        tokensUsed: 17,
+        timeUsedSeconds: 3,
+        createdAt: nowIso(),
+        updatedAt: nowIso()
+      }
+    }))
+
+    const started = await service.startTurn({
+      threadId,
+      request: { prompt: 'Make progress.', model: 'test-model' }
+    })
+    await Promise.all([
+      service.ensureGoalContext(threadId, started.turnId),
+      service.ensureGoalContext(threadId, started.turnId)
+    ])
+
+    const items = await sessionStore.loadItems(threadId)
+    expect(items.map((item) => item.kind)).toEqual(['user_message', 'goal_context'])
+    const goalContext = items[1]
+    expect(goalContext).toMatchObject({
+      id: expect.stringMatching(new RegExp(`^item_${started.turnId}_goal_context_goal_`)),
+      kind: 'goal_context',
+      goalKey: expect.stringMatching(/^goal_/),
+      text: expect.stringContaining('Keep the durable goal context stable.')
+    })
+    if (!goalContext || goalContext.kind !== 'goal_context') {
+      throw new Error('expected internal goal context')
+    }
+    expect(goalContext.text).not.toContain('Tokens used')
+    expect(goalContext.text).not.toContain('Tokens remaining')
+
+    const thread = await threadStore.get(threadId)
+    expect(thread?.turns[0]?.items.map((item) => item.kind)).toEqual(['user_message'])
+    expect(JSON.stringify(await sessionStore.loadEventsSince(threadId, 0))).not.toContain('"kind":"goal_context"')
+
+    await threadStore.upsert({
+      ...thread!,
+      goal: {
+        ...thread!.goal!,
+        tokensUsed: 499,
+        timeUsedSeconds: 400,
+        updatedAt: '2026-08-06T00:10:00.000Z'
+      }
+    })
+    await service.ensureGoalContext(threadId, started.turnId)
+    expect(await sessionStore.loadItems(threadId)).toEqual(items)
+
+    await service.finishTurn({ threadId, turnId: started.turnId, status: 'completed' })
+    const second = await service.startTurn({
+      threadId,
+      request: { prompt: 'Continue in a later turn.', model: 'test-model' }
+    })
+    await service.ensureGoalContext(threadId, second.turnId)
+    expect((await sessionStore.loadItems(threadId)).filter((item) => item.kind === 'goal_context'))
+      .toEqual([goalContext])
+
+    const latest = await threadStore.get(threadId)
+    await threadStore.upsert({
+      ...latest!,
+      goal: {
+        ...latest!.goal!,
+        objective: 'Work on the replacement goal generation.',
+        updatedAt: '2026-08-06T00:20:00.000Z'
+      }
+    })
+    await Promise.all([
+      service.ensureGoalContext(threadId, second.turnId),
+      service.ensureGoalContext(threadId, second.turnId)
+    ])
+    const goalContexts = (await sessionStore.loadItems(threadId))
+      .filter((item): item is Extract<TurnItem, { kind: 'goal_context' }> => item.kind === 'goal_context')
+    expect(goalContexts).toHaveLength(2)
+    expect(goalContexts.map((item) => item.goalKey)).toEqual([
+      goalContext.goalKey,
+      expect.stringMatching(/^goal_/)
+    ])
+    expect(goalContexts[1]?.goalKey).not.toBe(goalContext.goalKey)
+
+    await service.interruptTurn({ threadId, turnId: second.turnId })
+  })
+
+  it('does not append goal context after an interrupt or discard has won the turn mutation', async () => {
+    const sessionStore = new InMemorySessionStore()
+    const threadStore = new InMemoryThreadStore()
+    const eventBus = new InMemoryEventBus()
+    const nowIso = () => '2026-08-06T00:00:00.000Z'
+    const service = new TurnService({
+      threadStore,
+      sessionStore,
+      events: new RuntimeEventRecorder({
+        eventBus,
+        sessionStore,
+        allocateSeq: (threadId) => eventBus.allocateSeq(threadId),
+        nowIso
+      }),
+      inflight: new InflightTracker(),
+      steering: new SteeringQueue(),
+      compactor: new ContextCompactor(),
+      ids: new SequentialIdGenerator(),
+      nowIso
+    })
+    const threadId = 'thr_goal_context_interrupted'
+    await threadStore.upsert(createThreadRecord({
+      id: threadId,
+      title: 'Interrupted goal context',
+      workspace: '/tmp/workspace',
+      model: 'test-model',
+      goal: {
+        threadId,
+        objective: 'This goal must not survive a discarded turn context write.',
+        status: 'active',
+        tokenBudget: 100,
+        tokensUsed: 0,
+        timeUsedSeconds: 0,
+        createdAt: nowIso(),
+        updatedAt: nowIso()
+      }
+    }))
+    const started = await service.startTurn({
+      threadId,
+      request: { prompt: 'Start then discard.', model: 'test-model' }
+    })
+
+    await service.interruptTurn({ threadId, turnId: started.turnId, discard: true })
+    await service.ensureGoalContext(threadId, started.turnId)
+
+    expect((await sessionStore.loadItems(threadId)).some((item) => item.kind === 'goal_context'))
+      .toBe(false)
+    expect((await threadStore.get(threadId))?.turns[0]?.status).toBe('aborted')
+  })
+
+  it('does not append goal context when an execution signal aborts while history is loading', async () => {
+    const sessionStore = new BlockingGoalContextSessionStore()
+    const threadStore = new InMemoryThreadStore()
+    const eventBus = new InMemoryEventBus()
+    const nowIso = () => '2026-08-06T00:00:00.000Z'
+    const service = new TurnService({
+      threadStore,
+      sessionStore,
+      events: new RuntimeEventRecorder({
+        eventBus,
+        sessionStore,
+        allocateSeq: (threadId) => eventBus.allocateSeq(threadId),
+        nowIso
+      }),
+      inflight: new InflightTracker(),
+      steering: new SteeringQueue(),
+      compactor: new ContextCompactor(),
+      ids: new SequentialIdGenerator(),
+      nowIso
+    })
+    const threadId = 'thr_goal_context_signal_abort'
+    await threadStore.upsert(createThreadRecord({
+      id: threadId,
+      title: 'Signal-aborted goal context',
+      workspace: '/tmp/workspace',
+      model: 'test-model',
+      goal: {
+        threadId,
+        objective: 'Never append after an execution lease is lost.',
+        status: 'active',
+        tokenBudget: 100,
+        tokensUsed: 0,
+        timeUsedSeconds: 0,
+        createdAt: nowIso(),
+        updatedAt: nowIso()
+      }
+    }))
+    const started = await service.startTurn({
+      threadId,
+      request: { prompt: 'Start then lose the execution lease.', model: 'test-model' }
+    })
+    const controller = new AbortController()
+    sessionStore.blockNextLoad()
+    const pending = service.ensureGoalContext(threadId, started.turnId, controller.signal)
+    await sessionStore.loadItemsStarted
+    controller.abort()
+    sessionStore.release()
+    await pending
+
+    expect((await sessionStore.loadItems(threadId)).some((item) => item.kind === 'goal_context')).toBe(false)
+    expect((await threadStore.get(threadId))?.turns[0]?.status).toBe('running')
   })
 
   it('claims an empty legacy thread on its first surfaced turn without reclassifying existing history', async () => {

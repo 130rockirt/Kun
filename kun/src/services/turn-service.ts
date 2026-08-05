@@ -37,7 +37,7 @@ import {
 } from '../loop/compaction-summary.js'
 import type { ContextCompactionConfig } from '../loop/model-context-profile.js'
 import { reserveExtensionModelRequest } from '../loop/turn-budget-gate.js'
-import { makeUserItem, makeErrorItem } from '../domain/item.js'
+import { makeGoalContextItem, makeUserItem, makeErrorItem } from '../domain/item.js'
 import { appendTurnItem, createTurnRecord, finishTurn, replaceTurnItem, startTurn as startTurnRecord } from '../domain/turn.js'
 import { touchThread } from '../domain/thread.js'
 import type { RuntimeEventRecorder } from './runtime-event-recorder.js'
@@ -48,6 +48,10 @@ import { withThreadStoreMutation } from './thread-mutation-coordinator.js'
 import type { ThreadLifecycleFence } from './thread-lifecycle-fence.js'
 import { ThreadItemProjectionService } from './thread-item-projection.js'
 import { ComposerContextAttachmentSchema } from '../contracts/composer-context.js'
+import {
+  goalContextInstruction,
+  goalContextKey
+} from '../loop/continuation-instructions.js'
 
 export type TurnServiceDeps = {
   threadStore: ThreadStore
@@ -1548,6 +1552,46 @@ export class TurnService {
   async getTurn(threadId: string, turnId: string): Promise<Turn | null> {
     const thread = await this.deps.threadStore.get(threadId)
     return thread?.turns.find((turn) => turn.id === turnId) ?? null
+  }
+
+  /**
+   * Append the stable active-goal context exactly once before a model request.
+   * This deliberately bypasses applyItem(): it is canonical model history,
+   * not renderer content, so it must not create an SSE item event or enter the
+   * renderer-facing thread mirror.
+   */
+  async ensureGoalContext(threadId: string, turnId: string, signal?: AbortSignal): Promise<void> {
+    if (signal?.aborted) return
+    await this.withThreadMutation(threadId, async () => {
+      // The caller can wait behind another mutation while its execution lease
+      // is cancelled. Check again inside the serialized section so an aborted
+      // turn never gains model-only history after that wait.
+      if (signal?.aborted) return
+      const current = await this.deps.threadStore.get(threadId)
+      const turn = current?.turns.find((candidate) => candidate.id === turnId)
+      if (!current || !turn || (turn.status !== 'queued' && turn.status !== 'running')) return
+      const text = goalContextInstruction(current.goal)
+      const goalKey = goalContextKey(current.goal)
+      if (!text || !goalKey) return
+
+      const existing = await this.deps.sessionStore.loadItems(threadId)
+      // The goal record is a thread-level cache prefix, not a per-turn
+      // instruction. One active generation must therefore be represented
+      // exactly once even when the goal spans many user turns.
+      if (existing.some((item) => item.kind === 'goal_context' && item.goalKey === goalKey)) {
+        return
+      }
+      if (signal?.aborted) return
+      const itemId = `item_${turnId}_goal_context_${goalKey}`
+      await this.deps.sessionStore.appendItem(threadId, makeGoalContextItem({
+        id: itemId,
+        threadId,
+        turnId,
+        goalKey,
+        text,
+        createdAt: this.deps.nowIso()
+      }))
+    })
   }
 
   async updateTurnMetadata(

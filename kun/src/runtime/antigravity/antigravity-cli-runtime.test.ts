@@ -161,6 +161,102 @@ describe('AntigravityCliRuntime', () => {
     }))
   })
 
+  it('materializes active goal context before building the Antigravity prompt', async () => {
+    const threadStore = new InMemoryThreadStore()
+    const sessionStore = new InMemorySessionStore()
+    const eventBus = new InMemoryEventBus()
+    const nowIso = () => '2026-08-06T00:00:00.000Z'
+    const events = new RuntimeEventRecorder({
+      eventBus,
+      sessionStore,
+      allocateSeq: (threadId) => eventBus.allocateSeq(threadId),
+      nowIso
+    })
+    const ids = new SequentialIdGenerator()
+    const turns = new TurnService({
+      threadStore,
+      sessionStore,
+      events,
+      inflight: new InflightTracker(),
+      steering: new SteeringQueue(),
+      compactor: new ContextCompactor(),
+      ids,
+      nowIso
+    })
+    const turn = TurnSchema.parse({
+      id: 'turn-antigravity-goal',
+      threadId: 'thread-antigravity-goal',
+      status: 'running',
+      prompt: 'continue the migration',
+      model: 'gemini-3.6-flash',
+      createdAt: nowIso()
+    })
+    await threadStore.upsert({
+      ...createThreadRecord({
+        id: turn.threadId,
+        title: 'Antigravity goal context',
+        workspace: '/tmp',
+        model: turn.model!,
+        providerId: 'gemini-subscription',
+        status: 'running',
+        goal: {
+          threadId: turn.threadId,
+          objective: 'Finish the migration safely before reporting success.',
+          status: 'active',
+          tokenBudget: 500,
+          tokensUsed: 0,
+          timeUsedSeconds: 0,
+          createdAt: nowIso(),
+          updatedAt: nowIso()
+        }
+      }),
+      turns: [turn]
+    })
+    await sessionStore.appendItem(
+      turn.threadId,
+      makeUserItem({
+        id: 'item-antigravity-goal-user',
+        threadId: turn.threadId,
+        turnId: turn.id,
+        text: turn.prompt
+      })
+    )
+    let spawnedArgs: readonly string[] = []
+    const debugSink = new LlmDebugRecorder()
+    const runtime = new AntigravityCliRuntime({
+      providerConfigs: {},
+      providerIds: new Set(['gemini-subscription']),
+      defaultIsAntigravity: false,
+      threadStore,
+      sessionStore,
+      turns,
+      events,
+      ids,
+      debugSink,
+      spawnFn: successfulSpawn('goal-aware answer\n', (args) => {
+        spawnedArgs = args
+      })
+    })
+
+    await expect(runtime.runTurn(
+      turn.threadId,
+      turn.id,
+      new AbortController().signal,
+      'gemini-subscription'
+    )).resolves.toBe('completed')
+
+    expect((await sessionStore.loadItems(turn.threadId)).some((item) =>
+      item.kind === 'goal_context' && item.goalKey
+    )).toBe(true)
+    expect(spawnedArgs[1]).toContain('<prior_conversation>')
+    expect(spawnedArgs[1]).toContain('Finish the migration safely before reporting success.')
+    const trace = (await debugSink.listThread(turn.threadId)).records[0]
+    expect(trace?.request.body.text).not.toContain(
+      'Finish the migration safely before reporting success.'
+    )
+    expect(trace?.request.body.text).toContain('[REDACTED]')
+  })
+
   it('persists the Antigravity canonical text before its offset-addressed replay event', async () => {
     const threadStore = new InMemoryThreadStore()
     const sessionStore = new BlockingAntigravityDeltaSessionStore()

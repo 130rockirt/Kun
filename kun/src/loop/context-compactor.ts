@@ -210,18 +210,27 @@ export class ContextCompactor {
     summaryItem: TurnItem
     replacedTokens: number
   } {
+    // Goal context is durable model history, but it is neither conversation
+    // content nor an instruction that a compaction summary may paraphrase.
+    // Pull it out before calculating frozen/head/tail boundaries so exactly
+    // one original record survives after the newly-created summary.
+    const goalContexts = input.history.filter((item) => item.kind === 'goal_context')
+    const compactableInput = input.history.filter((item) => item.kind !== 'goal_context')
     const frozenMessageCount = normalizeFrozenMessageCount(
       input.frozenMessageCount,
-      input.history.length
+      compactableInput.length
     )
-    const frozen = frozenMessageCount > 0 ? input.history.slice(0, frozenMessageCount) : []
-    const history = trimTrailingToolCalls(input.history.slice(frozenMessageCount))
+    const frozen = frozenMessageCount > 0 ? compactableInput.slice(0, frozenMessageCount) : []
+    const history = trimTrailingToolCalls(compactableInput.slice(frozenMessageCount))
+    // Preserve exact order on no-op paths. It avoids a needless cache miss on
+    // a short goal turn merely because compaction was considered.
+    const unchangedNext = goalContexts.length > 0 ? [...input.history] : [...frozen, ...history]
     const requestedKeepRecent = Math.max(0, input.keepRecent ?? 4)
     const keepRecent =
       history.length <= 1 ? history.length : Math.min(requestedKeepRecent, history.length - 1)
     if (history.length <= 1 || history.length - keepRecent <= 0) {
       return {
-        next: [...frozen, ...history],
+        next: unchangedNext,
         summaryItem: makeCompactionItem({
           id: `compaction_${input.turnId}_noop`,
           turnId: input.turnId,
@@ -239,7 +248,7 @@ export class ContextCompactor {
       : repairTailStartForToolResults(history, history.length - keepRecent)
     if (tailStart === 0) {
       return {
-        next: [...frozen, ...history],
+        next: unchangedNext,
         summaryItem: makeCompactionItem({
           id: `compaction_${input.turnId}_noop`,
           turnId: input.turnId,
@@ -260,7 +269,7 @@ export class ContextCompactor {
     // used to create a fresh compaction item on every following model step.
     if (head.length > 0 && head.every((item) => item.kind === 'compaction')) {
       return {
-        next: [...frozen, ...history],
+        next: unchangedNext,
         summaryItem: makeCompactionItem({
           id: `compaction_${input.turnId}_noop`,
           turnId: input.turnId,
@@ -307,7 +316,7 @@ export class ContextCompactor {
       digestMarker,
       sourceItemIds: head.map((item) => item.id)
     })
-    return { next: [...frozen, summaryItem, ...tail], summaryItem, replacedTokens }
+    return { next: [...frozen, summaryItem, ...goalContexts, ...tail], summaryItem, replacedTokens }
   }
 
   /** Hard cap used by the loop to enforce an upper bound on the conversation. */
@@ -552,6 +561,8 @@ function extractDurableOutlineLines(history: TurnItem[]): string[] {
       case 'user_message':
         lines.push(...durableTextLines('User request', item.text, { fallback: true }))
         break
+      case 'goal_context':
+        break
       case 'assistant_text':
         lines.push(...durableTextLines('Assistant finding', item.text))
         break
@@ -643,6 +654,8 @@ function summarizeItem(item: TurnItem): string {
   switch (item.kind) {
     case 'user_message':
       return `- User: ${clipText(item.text)}`
+    case 'goal_context':
+      return ''
     case 'assistant_text':
       return `- Assistant: ${clipText(item.text)}`
     case 'assistant_reasoning':

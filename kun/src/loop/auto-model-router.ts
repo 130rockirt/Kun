@@ -286,6 +286,7 @@ function routerRoleForItem(item: TurnItem): string {
       return 'user'
     case 'tool_result':
       return 'tool'
+    case 'goal_context':
     case 'compaction':
       return 'system'
     default:
@@ -296,6 +297,7 @@ function routerRoleForItem(item: TurnItem): string {
 function routerTextForItem(item: TurnItem): string {
   switch (item.kind) {
     case 'user_message':
+    case 'goal_context':
     case 'assistant_text':
     case 'assistant_reasoning':
       return item.text

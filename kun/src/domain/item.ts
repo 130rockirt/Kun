@@ -50,6 +50,29 @@ export function makeUserItem(input: {
   }
 }
 
+export function makeGoalContextItem(input: {
+  id: string
+  turnId: string
+  threadId: string
+  goalKey?: string
+  text: string
+  createdAt?: string
+}): TurnItem {
+  const createdAt = input.createdAt ?? new Date().toISOString()
+  return {
+    id: input.id,
+    turnId: input.turnId,
+    threadId: input.threadId,
+    role: 'system',
+    status: 'completed',
+    createdAt,
+    finishedAt: createdAt,
+    kind: 'goal_context',
+    ...(input.goalKey ? { goalKey: input.goalKey } : {}),
+    text: input.text
+  }
+}
+
 export function makeAssistantTextItem(input: {
   id: string
   turnId: string

@@ -53,6 +53,53 @@ describe('UsageCounter.total cross-thread aggregate', () => {
     expect(total.totalInputTokenHitRate).toBe(0.5)
   })
 
+  it('keeps consecutive Responses cache deltas cumulative and isolated by thread', () => {
+    const counter = new UsageCounter()
+    counter.record('thread-a', snapshot({
+      promptTokens: 1_000,
+      completionTokens: 10,
+      cachedTokens: 0,
+      cacheHitTokens: 0,
+      cacheMissTokens: 1_000,
+      turns: 1
+    }))
+    counter.record('thread-a', snapshot({
+      promptTokens: 1_000,
+      completionTokens: 10,
+      cachedTokens: 900,
+      cacheHitTokens: 900,
+      cacheMissTokens: 100,
+      turns: 1
+    }))
+    counter.record('thread-b', snapshot({
+      promptTokens: 1_000,
+      completionTokens: 10,
+      cachedTokens: 0,
+      cacheHitTokens: 0,
+      cacheMissTokens: 1_000,
+      turns: 1
+    }))
+
+    expect(counter.forThread('thread-a')).toMatchObject({
+      promptTokens: 2_000,
+      completionTokens: 20,
+      cachedTokens: 900,
+      cacheHitTokens: 900,
+      cacheMissTokens: 1_100,
+      cacheHitRate: 0.45,
+      turns: 2
+    })
+    expect(counter.forThread('thread-b')).toMatchObject({
+      promptTokens: 1_000,
+      completionTokens: 10,
+      cachedTokens: 0,
+      cacheHitTokens: 0,
+      cacheMissTokens: 1_000,
+      cacheHitRate: 0,
+      turns: 1
+    })
+  })
+
   it('leaves aggregate rates and reasons unset without telemetry', () => {
     const counter = new UsageCounter()
     counter.record('thread-a', snapshot({ promptTokens: 100 }))

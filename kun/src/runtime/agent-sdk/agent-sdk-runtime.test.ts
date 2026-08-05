@@ -356,6 +356,7 @@ describe('AgentSdkRuntime.runTurn', () => {
 
   test('publishes a sanitized Claude SDK trace to Agent Perspective', async () => {
     const debugSink = new LlmDebugRecorder()
+    const internalGoalText = 'Internal active goal must not be exposed through the SDK trace.'
     const { deps } = makeDeps({
       debugSink,
       loadTurnContext: async () => ({
@@ -364,6 +365,8 @@ describe('AgentSdkRuntime.runTurn', () => {
         approvalPolicy: 'auto',
         oauthToken: 'sk-ant-oat01-claude-oauth-secret',
         images: [{ mediaType: 'image/png', base64: 'private-image-bytes' }],
+        historyTranscript: `[active goal] ${internalGoalText}`,
+        redactedRequestValues: [internalGoalText],
         contextInstructions: ['Workspace AGENTS.md instruction'],
         bridgeableTools: [{
           name: 'generate_image',
@@ -420,6 +423,8 @@ describe('AgentSdkRuntime.runTurn', () => {
     expect(serialized).not.toContain('claude-oauth-secret')
     expect(serialized).not.toContain('private-image-bytes')
     expect(serialized).not.toContain('sess_42')
+    expect(serialized).not.toContain(internalGoalText)
+    expect(serialized).toContain('[REDACTED]')
     expect(JSON.parse(trace!.request.body.text)).toMatchObject({
       system: 'You are kun.',
       instructions: ['Workspace AGENTS.md instruction'],

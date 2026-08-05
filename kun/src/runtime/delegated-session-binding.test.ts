@@ -3,12 +3,14 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, test, vi } from 'vitest'
 import type { TurnItem } from '../contracts/items.js'
+import { filterGoalContextsForGoalKey } from '../loop/continuation-instructions.js'
 import {
   DelegatedSessionCoordinator,
   FileDelegatedSessionBindingStore,
   delegatedCapabilityFingerprint,
   delegatedCredentialIdentity,
   delegatedHistoryDigest,
+  priorItemsForDelegatedTurn,
   type DelegatedSessionRoute
 } from './delegated-session-binding.js'
 
@@ -114,6 +116,147 @@ describe('DelegatedSessionCoordinator', () => {
       route: route(),
       priorItems: [user('turn_1', 'changed')]
     })).resolves.toMatchObject({ resumed: false, rebaseReason: 'history_changed' })
+  })
+
+  test('rebases a native session when this turn introduces goal context', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-delegated-goal-rebase-'))
+    const coordinator = new DelegatedSessionCoordinator(
+      new FileDelegatedSessionBindingStore(root)
+    )
+    const committed = [user('turn_1', 'previous native context')]
+    const prepared = await coordinator.prepare({
+      threadId: 'thread_1',
+      route: route(),
+      priorItems: []
+    })
+    await coordinator.commit({
+      preparation: prepared,
+      committedItems: committed,
+      lastCommittedTurnId: 'turn_1',
+      nativeSessionId: 'agent_1'
+    })
+    const currentUser = user('turn_2', 'continue the goal')
+    const currentGoal: TurnItem = {
+      id: 'item_turn_2_goal_context',
+      threadId: 'thread_1',
+      turnId: 'turn_2',
+      role: 'system',
+      status: 'completed',
+      createdAt: '2026-08-06T00:00:00.000Z',
+      kind: 'goal_context',
+      goalKey: 'goal_current',
+      text: 'Continue working toward the active thread goal.'
+    }
+    const priorItems = priorItemsForDelegatedTurn(
+      [...committed, currentUser, currentGoal],
+      'turn_2'
+    )
+
+    expect(priorItems).toEqual([...committed, currentGoal])
+    await expect(coordinator.prepare({
+      threadId: 'thread_1',
+      route: route(),
+      priorItems
+    })).resolves.toMatchObject({ resumed: false, rebaseReason: 'history_changed' })
+  })
+
+  test('resumes a native session on later turns of the same goal generation', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-delegated-goal-resume-'))
+    const coordinator = new DelegatedSessionCoordinator(
+      new FileDelegatedSessionBindingStore(root)
+    )
+    const initialGoal: TurnItem = {
+      id: 'item_turn_1_goal_context',
+      threadId: 'thread_1',
+      turnId: 'turn_1',
+      role: 'system',
+      status: 'completed',
+      createdAt: '2026-08-06T00:00:00.000Z',
+      kind: 'goal_context',
+      goalKey: 'goal_current',
+      text: 'Continue working toward the active thread goal.'
+    }
+    const committed = [user('turn_1', 'start the goal'), initialGoal]
+    const first = await coordinator.prepare({
+      threadId: 'thread_1',
+      route: route(),
+      priorItems: []
+    })
+    await coordinator.commit({
+      preparation: first,
+      committedItems: committed,
+      lastCommittedTurnId: 'turn_1',
+      nativeSessionId: 'agent_1'
+    })
+
+    const laterItems = [...committed, user('turn_2', 'continue the same goal')]
+    const priorItems = priorItemsForDelegatedTurn(laterItems, 'turn_2')
+
+    expect(priorItems).toEqual(committed)
+    await expect(coordinator.prepare({
+      threadId: 'thread_1',
+      route: route(),
+      priorItems
+    })).resolves.toMatchObject({
+      resumed: true,
+      nativeSessionId: 'agent_1'
+    })
+  })
+
+  test('checkpoints the request goal projection so a goal replacement rebases only once', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-delegated-goal-generation-'))
+    const coordinator = new DelegatedSessionCoordinator(
+      new FileDelegatedSessionBindingStore(root)
+    )
+    const oldGoal: TurnItem = {
+      id: 'item_goal_old',
+      threadId: 'thread_1',
+      turnId: 'turn_old',
+      role: 'system',
+      status: 'completed',
+      createdAt: '2026-08-06T00:00:00.000Z',
+      kind: 'goal_context',
+      goalKey: 'goal_old',
+      text: 'Finished old goal.'
+    }
+    const currentGoal: TurnItem = {
+      ...oldGoal,
+      id: 'item_goal_current',
+      turnId: 'turn_current',
+      goalKey: 'goal_current',
+      text: 'Continue the replacement goal.'
+    }
+    const rawCommittedItems = [
+      user('turn_old', 'start'),
+      oldGoal,
+      user('turn_current', 'continue'),
+      currentGoal
+    ]
+    const preparation = await coordinator.prepare({
+      threadId: 'thread_1',
+      route: route(),
+      priorItems: []
+    })
+
+    // The provider only received the current generation. Checkpointing the
+    // raw stream would retain goal_old and make every later native prepare
+    // look like a history mismatch.
+    const requestProjection = filterGoalContextsForGoalKey(rawCommittedItems, 'goal_current')
+    await coordinator.commit({
+      preparation,
+      committedItems: requestProjection,
+      lastCommittedTurnId: 'turn_current',
+      nativeSessionId: 'agent_current'
+    })
+
+    await expect(coordinator.prepare({
+      threadId: 'thread_1',
+      route: route(),
+      priorItems: requestProjection
+    })).resolves.toMatchObject({
+      resumed: true,
+      nativeSessionId: 'agent_current'
+    })
   })
 
   test('does not advance a binding until commit and serializes one thread', async () => {

@@ -252,6 +252,12 @@ class CompatMessageProjector {
     switch (item.kind) {
       case 'user_message':
         return { role: 'user', content: userMessageTextWithComposerContexts(item) }
+      case 'goal_context':
+        return {
+          role: 'system',
+          content: item.text,
+          [COMPAT_HISTORY_CONTEXT]: true
+        }
       case 'assistant_text':
         return {
           role: 'assistant',

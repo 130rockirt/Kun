@@ -49,6 +49,7 @@ import {
   ExtensionBrokerError,
   type ExtensionAgentEvent,
   type ExtensionAgentRun,
+  type ExtensionAgentSubscription,
   type ExtensionOwnedThread,
   type ExtensionPrincipal
 } from '../../services/extension-agent-service.js'
@@ -1815,18 +1816,29 @@ async function agentRunEvents(
   if (acceptsSse(request)) {
     return buildAgentEventStream(platform, principal, request, runId, cursor.cursor, cursor.limit)
   }
+  const afterSeq = Math.max(0, cursor.cursor - 1)
   const events: AgentRunEvent[] = []
   const subscription = await platform.agent.subscribe(principal, {
     runId,
-    afterSeq: Math.max(0, cursor.cursor - 1)
+    afterSeq
   }, (event) => {
-    if (events.length < cursor.limit) events.push(projectAgentEvent(event))
+    if (events.length >= cursor.limit) return
+    const projected = projectAgentEvent(event)
+    if (projected) events.push(projected)
   })
   subscription.close()
   return jsonResponse({
     schemaVersion: 1,
     events,
-    nextCursor: events.at(-1)?.sequence ?? cursor.cursor,
+    // Public agent event sequences are one-based while the runtime cursor is
+    // zero-based. A private event still advances the runtime subscription, so
+    // carry that mapped high-water mark even when there is nothing to emit.
+    // A full public page must resume from its last returned event rather than
+    // the subscription tail: subscribe() drains the replay before this route
+    // can close it, so using that tail would skip unseen public events.
+    nextCursor: events.length === cursor.limit
+      ? events.at(-1)!.sequence
+      : agentCursorAfterSubscription(cursor.cursor, afterSeq, subscription.lastDeliveredSeq),
     hasMore: events.length === cursor.limit
   })
 }
@@ -2286,12 +2298,13 @@ function buildAgentEventStream(
   limit: number
 ): Response {
   const encoder = new TextEncoder()
-  let subscription: { close(): void } | undefined
+  let subscription: ExtensionAgentSubscription | undefined
   let heartbeat: ReturnType<typeof setInterval> | undefined
   let closeStream: (() => void) | undefined
   let closed = false
   let delivered = 0
   let highWater = cursor
+  const afterSeq = Math.max(0, cursor - 1)
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       const close = () => {
@@ -2310,10 +2323,11 @@ function buildAgentEventStream(
       try {
         subscription = await platform.agent.subscribe(principal, {
           runId,
-          afterSeq: Math.max(0, cursor - 1)
+          afterSeq
         }, (internal) => {
           if (closed || delivered >= limit) return
           const event = projectAgentEvent(internal)
+          if (!event) return
           if (event.sequence <= highWater) return
           if (controller.desiredSize !== null && controller.desiredSize <= 0) return close()
           highWater = event.sequence
@@ -2321,6 +2335,10 @@ function buildAgentEventStream(
           controller.enqueue(encoder.encode(encodeSse(event.sequence, event.type, event)))
           if (event.type === 'terminal' || delivered >= limit) close()
         })
+        // ExtensionAgentService consumes private event sequences without
+        // invoking this listener. Preserve that cursor for reconnects and
+        // heartbeat frames without exposing the private event itself.
+        highWater = agentCursorAfterSubscription(highWater, afterSeq, subscription.lastDeliveredSeq)
         if (closed) {
           subscription.close()
           subscription = undefined
@@ -2329,6 +2347,13 @@ function buildAgentEventStream(
         heartbeat = setInterval(() => {
           if (closed) return
           if (controller.desiredSize !== null && controller.desiredSize <= 0) return close()
+          if (subscription) {
+            highWater = agentCursorAfterSubscription(
+              highWater,
+              afterSeq,
+              subscription.lastDeliveredSeq
+            )
+          }
           controller.enqueue(encoder.encode(encodeSse(highWater, 'heartbeat', { cursor: highWater })))
         }, HEARTBEAT_INTERVAL_MS)
         heartbeat.unref?.()
@@ -2499,7 +2524,8 @@ function projectAgentRun(run: ExtensionAgentRun): AgentRun {
   })
 }
 
-function projectAgentEvent(event: ExtensionAgentEvent): AgentRunEvent {
+function projectAgentEvent(event: ExtensionAgentEvent): AgentRunEvent | undefined {
+  if (isInternalGoalContextEvent(event)) return undefined
   const base = {
     runId: event.runId,
     threadId: event.threadId,
@@ -2540,6 +2566,27 @@ function projectAgentEvent(event: ExtensionAgentEvent): AgentRunEvent {
     message: event.type,
     data: safeJson(event.payload)
   })
+}
+
+/**
+ * ExtensionAgentService is the primary boundary, but keep the HTTP/SSE
+ * projection defensive for legacy persisted records and future producers.
+ */
+function isInternalGoalContextEvent(event: ExtensionAgentEvent): boolean {
+  const item = event.payload.item
+  return isObject(item) && item.kind === 'goal_context'
+}
+
+/** Map an internal runtime high-water mark to the one-based public cursor. */
+function agentCursorAfterSubscription(
+  cursor: number,
+  afterSeq: number,
+  lastDeliveredSeq: number
+): number {
+  // `lastDeliveredSeq` starts at `afterSeq`, so only map it when subscribe()
+  // actually consumed another runtime event. This preserves cursor=0 for an
+  // empty stream while still advancing private-only replay to seq + 1.
+  return lastDeliveredSeq > afterSeq ? Math.max(cursor, lastDeliveredSeq + 1) : cursor
 }
 
 function projectOwnedThread(principal: ExtensionPrincipal, thread: ExtensionOwnedThread) {

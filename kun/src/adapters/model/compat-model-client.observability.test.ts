@@ -8,6 +8,7 @@ import {
   MODEL_REQUEST_TRACE_REDACTED_VALUE
 } from '../../contracts/model-request-trace.js'
 import { LlmDebugRecorder, type LlmDebugSink } from '../../services/llm-debug-recorder.js'
+import { makeGoalContextItem, makeUserItem } from '../../domain/item.js'
 import { CompatModelClient } from './compat-model-client.js'
 
 function request(overrides: Partial<ModelRequest> = {}): ModelRequest {
@@ -132,6 +133,47 @@ describe('CompatModelClient request observability', () => {
     expect(trace.decoded?.text).toBe('hello')
     expect(trace.decoded?.stopReason).toBe('stop')
     expect(chunks).toContainEqual({ kind: 'assistant_text_delta', text: 'hello' })
+  })
+
+  it('redacts goal-context history from the retained trace without changing the provider request', async () => {
+    const recorder = new LlmDebugRecorder()
+    let transmittedBody = ''
+    const goalText = 'Internal active-goal context must not be exposed through diagnostics.'
+    const client = new CompatModelClient({
+      baseUrl: 'https://provider.example/v1',
+      apiKey: 'sk-test',
+      model: 'test-model',
+      endpointFormat: 'chat_completions',
+      nonStreaming: true,
+      debugSink: recorder,
+      fetchImpl: (async (_url: string, init: { body: string }) => {
+        transmittedBody = init.body
+        return okJson('done')
+      }) as unknown as typeof fetch
+    })
+    const history = [
+      makeGoalContextItem({
+        id: 'item_goal_context',
+        threadId: 'thread-observe',
+        turnId: 'turn-observe',
+        goalKey: 'goal_debug',
+        text: goalText
+      }),
+      makeUserItem({
+        id: 'item_visible',
+        threadId: 'thread-observe',
+        turnId: 'turn-observe',
+        text: 'visible continuation context'
+      })
+    ]
+
+    await drain(client.stream(request({ history })))
+    const trace = (await recorder.listThread('thread-observe')).records[0]
+
+    expect(transmittedBody).toContain(goalText)
+    expect(trace.request.body.text).not.toContain(goalText)
+    expect(trace.request.body.text).toContain('visible continuation context')
+    expect(trace.request.body.text).toContain(MODEL_REQUEST_TRACE_REDACTED_VALUE)
   })
 
   it('records transient retries as separately ordered HTTP attempts', async () => {
