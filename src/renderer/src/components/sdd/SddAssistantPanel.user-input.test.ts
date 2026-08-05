@@ -9,6 +9,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ChatBlock } from '../../agent/types'
 import i18n from '../../i18n'
 import { useChatStore } from '../../store/chat-store'
+import { FloatingComposer } from '../chat/FloatingComposer'
+import { SubagentReturnBar } from '../chat/message-timeline-empty'
 import { SddAssistantPanel } from './SddAssistantPanel'
 
 function textContent(node: ReactTestInstance): string {
@@ -19,6 +21,7 @@ function textContent(node: ReactTestInstance): string {
 
 describe('SddAssistantPanel structured user input', () => {
   const originalResolveUserInput = useChatStore.getState().resolveUserInput
+  const originalSelectThread = useChatStore.getState().selectThread
 
   beforeEach(async () => {
     await i18n.changeLanguage('en')
@@ -39,7 +42,12 @@ describe('SddAssistantPanel structured user input', () => {
   })
 
   afterEach(() => {
-    useChatStore.setState({ resolveUserInput: originalResolveUserInput })
+    useChatStore.setState({
+      activeThreadRelation: null,
+      activeThreadParentId: null,
+      resolveUserInput: originalResolveUserInput,
+      selectThread: originalSelectThread
+    })
   })
 
   it('renders and submits the live request above the compact composer', async () => {
@@ -137,6 +145,81 @@ describe('SddAssistantPanel structured user input', () => {
       if (renderer) {
         act(() => renderer!.unmount())
       }
+    }
+  })
+
+  it('replaces the composer with a route back to the Requirement AI parent thread', async () => {
+    const selectThread = vi.fn(async () => undefined)
+    useChatStore.setState({
+      activeThreadId: 'sdd-child-thread',
+      activeThreadRelation: 'side',
+      activeThreadParentId: 'sdd-parent-thread',
+      threads: [{
+        id: 'sdd-parent-thread',
+        title: 'Requirement AI parent',
+        updatedAt: '2026-07-30T00:00:00.000Z',
+        model: 'gpt-5.6',
+        mode: 'agent',
+        status: 'idle'
+      }],
+      selectThread
+    })
+
+    let renderer: ReactTestRenderer | undefined
+    try {
+      await act(async () => {
+        renderer = create(createElement(SddAssistantPanel, {
+          draft: {
+            id: 'draft-1',
+            workspaceRoot: '/workspace',
+            relativePath: '.kunsdd/requirements/draft-1/requirement.md',
+            createdAt: '2026-07-30T00:00:00.000Z',
+            updatedAt: '2026-07-30T00:00:00.000Z'
+          },
+          input: '',
+          setInput: vi.fn(),
+          mode: 'agent',
+          setMode: vi.fn(),
+          busy: false,
+          runtimeConnection: 'ready',
+          activeThreadId: 'sdd-child-thread',
+          blocks: [],
+          liveReasoning: '',
+          liveAssistant: '',
+          composerModel: 'gpt-5.6',
+          composerProviderId: 'codex',
+          composerPickList: ['gpt-5.6'],
+          composerReasoningEffort: 'low',
+          composerFastMode: false,
+          setComposerModel: vi.fn(),
+          setComposerReasoningEffort: vi.fn(),
+          setComposerFastMode: vi.fn(),
+          queuedMessages: [],
+          removeQueuedMessage: vi.fn(),
+          guideQueuedMessage: vi.fn(),
+          onSend: vi.fn(),
+          onInterrupt: vi.fn(),
+          onRetryConnection: vi.fn(),
+          onOpenSettings: vi.fn(),
+          onNewConversation: vi.fn(),
+          onApplyFramework: vi.fn(),
+          onCollapse: vi.fn()
+        }))
+      })
+
+      expect(renderer!.root.findAllByType(FloatingComposer)).toHaveLength(0)
+      const returnBar = renderer!.root.findByType(SubagentReturnBar)
+      expect(returnBar.props.parentTitle).toBe('Requirement AI parent')
+      expect(textContent(returnBar)).toContain('Back to parent')
+
+      await act(async () => {
+        returnBar.props.onBack()
+        await Promise.resolve()
+      })
+
+      expect(selectThread).toHaveBeenCalledWith('sdd-parent-thread')
+    } finally {
+      if (renderer) act(() => renderer!.unmount())
     }
   })
 })

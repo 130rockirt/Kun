@@ -34,6 +34,7 @@ import { useChatStore } from '../../store/chat-store'
 import { LazyMessageTimeline } from '../chat/LazyMessageTimeline'
 import { FloatingComposer } from '../chat/FloatingComposer'
 import type { ComposerReasoningEffort } from '../chat/FloatingComposerModelPicker'
+import { SubagentReturnBar } from '../chat/message-timeline-empty'
 import { SidebarTitlebarToggleButton } from '../sidebar/SidebarPrimitives'
 
 const FRAMEWORK_ICONS: Record<string, LucideIcon> = {
@@ -144,9 +145,17 @@ export function SddAssistantPanel({
 }: Props): ReactElement {
   const { t } = useTranslation('common')
   const resolveUserInput = useChatStore((s) => s.resolveUserInput)
+  const activeThreadRelation = useChatStore((s) => s.activeThreadRelation)
+  const activeThreadParentId = useChatStore((s) => s.activeThreadParentId)
+  const parentThreadTitle = useChatStore((s) =>
+    s.threads.find((thread) => thread.id === s.activeThreadParentId)?.title?.trim() ?? ''
+  )
+  const selectThread = useChatStore((s) => s.selectThread)
   const hasTimeline =
     blocks.length > 0 || liveReasoning.trim().length > 0 || liveAssistant.trim().length > 0
   const canCreateConversation = runtimeConnection === 'ready' && !busy
+  const showSubagentReturnBar =
+    activeThreadRelation === 'side' && Boolean(activeThreadParentId)
 
   return (
     <aside
@@ -259,45 +268,54 @@ export function SddAssistantPanel({
       </div>
 
       <div className="sdd-assistant-composer ds-sidebar-surface-chrome shrink-0 border-t border-ds-border-muted px-4 pb-4 pt-3">
-        <FloatingComposer
-          variant="compact"
-          workspaceRootOverride={draft.workspaceRoot}
-          activeThreadIdOverride={activeThreadId}
-          userInputBlocksOverride={blocks}
-          onResolveUserInput={resolveUserInput}
-          input={input}
-          setInput={setInput}
-          mode={mode}
-          setMode={setMode}
-          busy={busy}
-          runtimeReady={runtimeConnection === 'ready'}
-          hasActiveThread={Boolean(activeThreadId)}
-          composerModel={composerModel}
-          composerProviderId={composerProviderId}
-          composerPickList={composerPickList}
-          composerModelGroups={composerModelGroups}
-          composerReasoningEffort={composerReasoningEffort}
-          composerFastMode={composerFastMode}
-          onComposerModelChange={setComposerModel}
-          onComposerReasoningEffortChange={setComposerReasoningEffort}
-          onComposerFastModeChange={setComposerFastMode}
-          modelPickerMode="combobox"
-          modelControlVariant="split"
-          showProviderInModelLabel
-          queuedMessages={queuedMessages}
-          onRemoveQueuedMessage={removeQueuedMessage}
-          onGuideQueuedMessage={guideQueuedMessage}
-          attachments={attachments}
-          attachmentUploadEnabled={attachmentUploadEnabled}
-          attachmentUploadBusy={attachmentUploadBusy}
-          attachmentUploadError={attachmentUploadError}
-          onPickAttachments={onPickAttachments}
-          onPasteClipboardImage={onPasteClipboardImage}
-          onRemoveAttachment={onRemoveAttachment}
-          onSend={onSend}
-          onInterrupt={onInterrupt}
-          onConfigureProviders={onConfigureProviders}
-        />
+        {showSubagentReturnBar ? (
+          <SubagentReturnBar
+            parentTitle={parentThreadTitle}
+            onBack={() => {
+              if (activeThreadParentId) void selectThread(activeThreadParentId)
+            }}
+          />
+        ) : (
+          <FloatingComposer
+            variant="compact"
+            workspaceRootOverride={draft.workspaceRoot}
+            activeThreadIdOverride={activeThreadId}
+            userInputBlocksOverride={blocks}
+            onResolveUserInput={resolveUserInput}
+            input={input}
+            setInput={setInput}
+            mode={mode}
+            setMode={setMode}
+            busy={busy}
+            runtimeReady={runtimeConnection === 'ready'}
+            hasActiveThread={Boolean(activeThreadId)}
+            composerModel={composerModel}
+            composerProviderId={composerProviderId}
+            composerPickList={composerPickList}
+            composerModelGroups={composerModelGroups}
+            composerReasoningEffort={composerReasoningEffort}
+            composerFastMode={composerFastMode}
+            onComposerModelChange={setComposerModel}
+            onComposerReasoningEffortChange={setComposerReasoningEffort}
+            onComposerFastModeChange={setComposerFastMode}
+            modelPickerMode="combobox"
+            modelControlVariant="split"
+            showProviderInModelLabel
+            queuedMessages={queuedMessages}
+            onRemoveQueuedMessage={removeQueuedMessage}
+            onGuideQueuedMessage={guideQueuedMessage}
+            attachments={attachments}
+            attachmentUploadEnabled={attachmentUploadEnabled}
+            attachmentUploadBusy={attachmentUploadBusy}
+            attachmentUploadError={attachmentUploadError}
+            onPickAttachments={onPickAttachments}
+            onPasteClipboardImage={onPasteClipboardImage}
+            onRemoveAttachment={onRemoveAttachment}
+            onSend={onSend}
+            onInterrupt={onInterrupt}
+            onConfigureProviders={onConfigureProviders}
+          />
+        )}
       </div>
     </aside>
   )
