@@ -111,6 +111,7 @@ import {
   flushLiveBlocks,
   forkedMessageCount,
   forkedTurnCount,
+  isCodeSidebarThread,
   isCodeThread,
   latestThread,
   looksLikeActiveTurnError,
@@ -131,6 +132,8 @@ import {
   subscribeThreadEventsWithRecovery
 } from './chat-store-thread-action-helpers'
 import { GitCheckpointAvailabilityCache } from '../lib/git-checkpoint-availability'
+import { readDesignThreadRegistry } from '../design/design-thread-registry'
+import { readSddThreadRegistry } from '../sdd/sdd-thread-registry'
 import type { ComposerContextAttachment } from '@kun/extension-api'
 
 const GUIDED_MESSAGE_RACE_WINDOW_MS = 5_000
@@ -624,6 +627,18 @@ export function createThreadActions(
         ? latestUserMessageId ?? findLatestUserBlockId(blocks)
         : null
       const threadSnap = get().threads.find((thread) => thread.id === id) ?? null
+      // Code 工作台返回记忆:记录最近一次在 chat 路由选中的 Code/需求 AI 会话,
+      // 供从设置、Write/Design 或 Connect Phone 返回时恢复。Write/Design/Claw
+      // 会话以及已归档会话不写入记忆。
+      const remembersCodeThread = threadSnap != null &&
+        threadSnap.archived !== true &&
+        isCodeSidebarThread(
+          threadSnap,
+          get().clawChannels,
+          readWriteThreadRegistry(),
+          readDesignThreadRegistry(),
+          readSddThreadRegistry()
+        )
       const composerSelection = composerSelectionForThread(get(), threadSnap, {
         hasUserMessages: rawBlocks.some((block) => block.kind === 'user'),
         runtimeModel: threadModel
@@ -659,6 +674,7 @@ export function createThreadActions(
         inspectorSelectedId: null,
         queuedMessages,
         composerMode,
+        ...(remembersCodeThread ? { lastCodeThreadId: id } : {}),
         ...(composerSelection
           ? {
               composerModel: composerSelection.model,

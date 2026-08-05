@@ -208,6 +208,14 @@ export function sddAssistantThreadIdForDraft(
   return hiddenThreadIdsForRecord(record).includes(record.threadId) ? record.threadId : ''
 }
 
+export function sddThreadIdsForDraft(
+  draft: Pick<SddDraft, 'id' | 'workspaceRoot' | 'relativePath'>,
+  registry: SddThreadRegistry = readSddThreadRegistry()
+): string[] {
+  const record = registry.drafts[sddDraftKey(draft)]
+  return record ? [...record.threadIds] : []
+}
+
 export function sddThreadIds(registry: SddThreadRegistry = readSddThreadRegistry()): Set<string> {
   const ids = new Set<string>()
   for (const record of Object.values(registry.drafts)) {
