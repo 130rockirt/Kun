@@ -500,6 +500,7 @@
   "canvasLayerShow": "परत दिखाएँ",
   "canvasLayerLock": "लॉक परत",
   "canvasLayerUnlock": "परत अनलॉक करें",
+  "canvasLayerDelete": "परत हटाएं",
   "canvasInspectorArrange": "व्यवस्थित करें",
   "canvasAlignLeft": "बाईं ओर संरेखित करें",
   "canvasAlignHCenter": "क्षैतिज केन्द्रों को संरेखित करें",

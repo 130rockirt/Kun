@@ -500,6 +500,7 @@
   "canvasLayerShow": "레이어 표시",
   "canvasLayerLock": "잠금 레이어",
   "canvasLayerUnlock": "레이어 잠금 해제",
+  "canvasLayerDelete": "레이어 삭제",
   "canvasInspectorArrange": "정렬",
   "canvasAlignLeft": "왼쪽 정렬",
   "canvasAlignHCenter": "수평 중심 정렬",
