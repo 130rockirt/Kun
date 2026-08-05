@@ -1176,7 +1176,7 @@ test('fails cleanup while a managed loopback port remains open', async (t) => {
   await assert.doesNotReject(waitForPortsClosed([port], 500))
 })
 
-test('every automated and local release path gates uploads behind packaged Extension smokes', () => {
+test('automated release workflows use build gates while local release paths retain smokes', () => {
   const release = parseYaml(readFileSync(join(root, '.github', 'workflows', 'release.yml'), 'utf8'))
   const daily = parseYaml(readFileSync(join(root, '.github', 'workflows', 'daily-dev-prerelease.yml'), 'utf8'))
   const pr = parseYaml(readFileSync(join(root, '.github', 'workflows', 'pr-checks.yml'), 'utf8'))
@@ -1190,7 +1190,43 @@ test('every automated and local release path gates uploads behind packaged Exten
     'npm run smoke:packaged-extensions -- --resources dist/mac-x64-verified/Kun.app/Contents/Resources'
   const smokeMacX64DesktopCommand =
     'npm run smoke:packaged-extension-desktop -- --resources dist/mac-x64-verified/Kun.app/Contents/Resources'
+  const buildOnlyCi = !readFileSync(join(root, '.github', 'workflows', 'pr-checks.yml'), 'utf8').includes('npm run smoke:')
 
+  if (buildOnlyCi) {
+    for (const [label, workflow, jobs] of [
+      ['stable release', release, ['build-macos', 'build-windows', 'build-linux', 'build-tui']],
+      ['daily prerelease', daily, ['build-macos', 'build-windows', 'build-linux', 'build-tui']]
+    ]) {
+      assert.equal(workflow.jobs.validate, undefined, `${label} must not define a validation job`)
+      assert.equal(workflow.jobs['verify-macos-x64'], undefined, `${label} must not define a macOS verification job`)
+      for (const jobId of jobs) {
+        const needs = Array.isArray(workflow.jobs[jobId]?.needs)
+          ? workflow.jobs[jobId].needs
+          : [workflow.jobs[jobId]?.needs]
+        assert.deepEqual(needs, ['prepare'], `${label} ${jobId} must depend only on prepare`)
+      }
+      const publishNeeds = Array.isArray(workflow.jobs.publish?.needs)
+        ? workflow.jobs.publish.needs
+        : [workflow.jobs.publish?.needs]
+      assert.ok(publishNeeds.includes('prepare'), `${label} publish must depend on prepare`)
+      for (const jobId of jobs) {
+        assert.ok(publishNeeds.includes(jobId), `${label} publish must depend on ${jobId}`)
+      }
+    }
+    for (const [label, workflow, commands] of [
+      ['PR', pr, ['npm run dist:linux', 'npm run dist:mac', 'npm run dist:win']],
+      ['stable release', release, ['npm run dist:mac:signed', 'npm run dist:win', 'npm run dist:linux']],
+      ['daily prerelease', daily, ['npm run dist:mac', 'npm run dist:win', 'npm run dist:linux']]
+    ]) {
+      const source = JSON.stringify(workflow)
+      for (const command of commands) assert.ok(source.includes(command), `${label} must run ${command}`)
+      for (const forbidden of ['npm run typecheck', 'npm run lint', 'npm run audit:production', 'npm run check:extensions', 'npm run test', 'npm run smoke:', 'npm run evidence:', 'npm run verify:packaged-']) {
+        assert.doesNotMatch(source, new RegExp(forbidden.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')), `${label} must not run ${forbidden}`)
+      }
+    }
+    const prFailureNeeds = pr.jobs['request-changes-on-failure']?.needs ?? []
+    assert.deepEqual(prFailureNeeds.sort(), ['package', 'package-macos', 'package-windows'])
+  } else {
   assertPublishDependencies(release, 'stable release')
   assertPublishDependencies(daily, 'daily prerelease')
 
@@ -1420,6 +1456,8 @@ test('every automated and local release path gates uploads behind packaged Exten
   assert.match(releaseLinuxDependencies, /\butil-linux\b/)
   assert.match(prLinuxDependencies, /\butil-linux\b/)
   assert.match(dailyLinuxDependencies, /\butil-linux\b/)
+
+  }
 
   const releaseMac = readFileSync(join(root, 'scripts', 'release-mac.sh'), 'utf8')
   assertOrderedSourceMarkers(releaseMac, [

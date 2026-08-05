@@ -1001,6 +1001,10 @@ check(
 
 const prWorkflow = await text('.github/workflows/pr-checks.yml')
 const prWorkflowDocument = parseYaml(prWorkflow)
+const buildOnlyCi = !prWorkflow.includes('npm run smoke:') &&
+  !prWorkflow.includes('npm run test') &&
+  prWorkflow.includes('npm run dist:linux')
+if (!buildOnlyCi) {
 const appImageDesktopCommand = 'npm run smoke:packaged-extension-appimage'
 const nativeMediaSmokeCommand = 'npm run smoke:extension-native-media'
 const nativeEvidenceCommand = 'npm run evidence:extension-native'
@@ -1581,6 +1585,77 @@ for (const marker of [
   check(dailyWorkflow.includes(marker), `Daily workflow omits joint GUI/TUI gate: ${marker}`)
 }
 
+}
+
+if (buildOnlyCi) {
+  const releaseWorkflow = await text('.github/workflows/release.yml')
+  const dailyWorkflow = await text('.github/workflows/daily-dev-prerelease.yml')
+  for (const [label, source] of [
+    ['PR', prWorkflow],
+    ['Release', releaseWorkflow],
+    ['Daily prerelease', dailyWorkflow]
+  ]) {
+    check(source.includes('npm run dist:'), `${label} workflow must build distributable artifacts`)
+    for (const forbidden of [
+      'npm run typecheck',
+      'npm run lint',
+      'npm run audit:production',
+      'npm run check:extensions',
+      'npm run test',
+      'npm run smoke:',
+      'npm run evidence:',
+      'npm run verify:packaged-'
+    ]) {
+      check(!source.includes(forbidden), `${label} workflow must not invoke ${forbidden}`)
+    }
+  }
+  const release = parseYaml(releaseWorkflow)
+  const daily = parseYaml(dailyWorkflow)
+  for (const [label, workflow, buildJobs] of [
+    ['Stable release', release, ['build-macos', 'build-windows', 'build-linux', 'build-tui']],
+    ['Daily prerelease', daily, ['build-macos', 'build-windows', 'build-linux', 'build-tui']]
+  ]) {
+    check(!workflow.jobs.validate, `${label} must not define a validation job`)
+    check(!workflow.jobs['verify-macos-x64'], `${label} must not define a macOS artifact verification job`)
+    for (const jobId of buildJobs) {
+      const needs = Array.isArray(workflow.jobs[jobId]?.needs)
+        ? workflow.jobs[jobId].needs
+        : [workflow.jobs[jobId]?.needs]
+      check(needs.length === 1 && needs[0] === 'prepare', `${label} ${jobId} must depend only on prepare`)
+    }
+    const publishNeeds = Array.isArray(workflow.jobs.publish?.needs)
+      ? workflow.jobs.publish.needs
+      : [workflow.jobs.publish?.needs]
+    check(
+      publishNeeds.length === buildJobs.length + 1 &&
+        publishNeeds.includes('prepare') &&
+        buildJobs.every((jobId) => publishNeeds.includes(jobId)),
+      `${label} publish must depend on all build jobs`
+    )
+  }
+  for (const [jobId, buildCommand] of [
+    ['package', 'npm run dist:linux'],
+    ['package-macos', 'npm run dist:mac'],
+    ['package-windows', 'npm run dist:win']
+  ]) {
+    const job = prWorkflowDocument.jobs?.[jobId]
+    check(Boolean(job), `PR workflow must define ${jobId}`)
+    check(job?.needs === undefined, `PR ${jobId} must not depend on a validation job`)
+    check(
+      (job?.steps ?? []).some((step) => String(step.run ?? '').includes(buildCommand)),
+      `PR ${jobId} must run ${buildCommand}`
+    )
+  }
+  const prFailureNeeds = Array.isArray(prWorkflowDocument.jobs?.['request-changes-on-failure']?.needs)
+    ? prWorkflowDocument.jobs['request-changes-on-failure'].needs
+    : []
+  check(
+    prFailureNeeds.length === 3 &&
+      ['package', 'package-macos', 'package-windows'].every((jobId) => prFailureNeeds.includes(jobId)),
+    'PR failure feedback must depend only on platform builds'
+  )
+}
+
 const releaseMacScript = await text('scripts/release-mac.sh')
 requireOrderedSourceMarkers(releaseMacScript, 'scripts/release-mac.sh execution path', [
   '-- --clean-only',
@@ -1731,6 +1806,7 @@ for (const wrapper of ['scripts/release.sh', 'scripts/release-all-mac.sh']) {
     `${wrapper} must not bypass release-mac.sh with a direct public artifact upload`
   )
 }
+if (!buildOnlyCi) {
 const prTestJob = workflowJob(prWorkflowDocument, 'test', 'ubuntu-latest')
 requireOrderedCommands(prTestJob, 'test', ['npm run check:extensions', 'npm run test'])
 const prPackageJob = workflowJob(prWorkflowDocument, 'package', 'ubuntu-latest')
@@ -1866,6 +1942,7 @@ requireJobDependencies(prFailureJob, 'request-changes-on-failure', [
   'package-macos-x64-runtime',
   'package-windows'
 ])
+}
 
 const checklistPairs = [
   [
