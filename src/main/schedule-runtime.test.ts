@@ -135,6 +135,13 @@ function createStore(initial: AppSettingsV1) {
       }
       return current
     }),
+    update: vi.fn(async (
+      mutation: (settings: AppSettingsV1) => AppSettingsV1 | Promise<AppSettingsV1>
+    ) => {
+      current = await mutation(current)
+      return current
+    }),
+    replace: (next: AppSettingsV1) => { current = next },
     read: () => current
   }
 }
@@ -751,6 +758,29 @@ describe('ScheduleRuntime', () => {
     expect(store.read().schedule.tasks[0].lastStatus).toBe('error')
     expect(store.read().schedule.tasks[0].lastMessage).toBe('Task was interrupted before completion.')
     expect(Date.parse(store.read().schedule.tasks[0].nextRunAt)).toBeGreaterThan(0)
+  })
+
+  it('preserves the latest schedule endpoint while reconciling a stale task snapshot', async () => {
+    const task = makeTask({
+      schedule: { kind: 'interval', everyMinutes: 10, timeOfDay: '09:00', atTime: '' },
+      nextRunAt: ''
+    })
+    const initial = settingsWith([task], { internal: { port: 18791, secret: 'old-secret' } })
+    const { runtime, store } = createRuntime(initial)
+    store.replace({
+      ...initial,
+      schedule: {
+        ...initial.schedule,
+        internal: { port: 28791, secret: 'latest-secret' }
+      }
+    })
+
+    await (runtime as unknown as {
+      ensureNextRuns: (settings: AppSettingsV1) => Promise<void>
+    }).ensureNextRuns(initial)
+
+    expect(store.read().schedule.internal).toEqual({ port: 28791, secret: 'latest-secret' })
+    expect(store.read().schedule.tasks[0].nextRunAt).not.toBe('')
   })
 
   it('serializes the concurrency cap so two parallel runTask callers never exceed MAX_CONCURRENT', async () => {

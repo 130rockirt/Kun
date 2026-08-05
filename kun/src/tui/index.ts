@@ -4,7 +4,6 @@ import { TuiController } from './controller.js'
 import { KUN_TUI_USAGE, parseTuiOptions } from './options.js'
 import {
   hasUnpublishedGuiRuntime,
-  projectModelConnectionsToGuiSettings,
   readGuiSharedSettings,
   syncGuiProviderCatalogToConfig,
   type GuiConfigSyncResult
@@ -65,7 +64,7 @@ export async function runTuiCommand(argv: readonly string[], io: TuiCommandIo): 
   let controller: TuiController | undefined
   let app: import('./pi-app.js').PiTuiApplication | undefined
   try {
-    let guiSettings = parsed.options.url
+    const guiSettings = parsed.options.url
       ? null
       : await readGuiSharedSettings({ env: io.env ?? process.env })
     if (parsed.options.dataDirSource === 'default' && guiSettings) {
@@ -135,16 +134,15 @@ export async function runTuiCommand(argv: readonly string[], io: TuiCommandIo): 
         io.stderr.write(`kun tui: ${guiConfigWarning}\n`)
       }
     }
+    // The shared Registry is the sole model-connection authority. Modern TUI
+    // clients must not mirror snapshots directly into the Manager-owned GUI
+    // settings document: concurrent projectors can replay an older Registry
+    // revision over a newer one. Legacy pre-Manager compatibility keeps its
+    // isolated file projection in LegacyModelConnectionTransport.
     controller = new TuiController(
       client,
       parsed.options,
-      connection,
-      guiSettings && matchingGuiDataDir
-        ? async (snapshot) => {
-            if (!guiSettings) return
-            guiSettings = await projectModelConnectionsToGuiSettings(guiSettings, snapshot)
-          }
-        : undefined
+      connection
     )
     const initialModelConnections = await controller.initializeModelConnections()
     if (keymapConfig.warnings.length) {

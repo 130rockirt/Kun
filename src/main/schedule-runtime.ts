@@ -415,54 +415,50 @@ export class ScheduleRuntime {
     }
   }
 
-  private async ensureNextRuns(settings: AppSettingsV1): Promise<void> {
+  private async ensureNextRuns(_settings: AppSettingsV1): Promise<void> {
     if (this.stopped) return
-    if (!settings.schedule.enabled) {
-      this.syncPowerSaveBlocker(settings)
-      return
-    }
-    let changed = false
     const now = new Date()
-    const tasks = settings.schedule.tasks.map((task) => {
-      const wasRunning = task.lastStatus === 'running' && !this.runningTaskIds.has(task.id)
-      const wasQueued = task.lastStatus === 'queued' && !this.queuedTaskIds.has(task.id)
-      if (wasQueued && task.enabled && task.schedule.kind !== 'manual') {
-        this.queuedTaskIds.add(task.id)
-        this.queuedTaskModes.set(task.id, true)
-        return task
-      }
-      const wasInterrupted = wasRunning || wasQueued
-      if (!task.enabled || task.schedule.kind === 'manual' || this.runningTaskIds.has(task.id)) {
-        if (!wasInterrupted) return task
+    const saved = await this.deps.store.update((current) => {
+      if (!current.schedule.enabled) return current
+      let changed = false
+      const tasks = current.schedule.tasks.map((task) => {
+        const wasRunning = task.lastStatus === 'running' && !this.runningTaskIds.has(task.id)
+        const wasQueued = task.lastStatus === 'queued' && !this.queuedTaskIds.has(task.id)
+        if (wasQueued && task.enabled && task.schedule.kind !== 'manual') {
+          this.queuedTaskIds.add(task.id)
+          this.queuedTaskModes.set(task.id, true)
+          return task
+        }
+        const wasInterrupted = wasRunning || wasQueued
+        if (!task.enabled || task.schedule.kind === 'manual' || this.runningTaskIds.has(task.id)) {
+          if (!wasInterrupted) return task
+          changed = true
+          return {
+            ...task,
+            ...(task.schedule.kind === 'at' ? { enabled: false } : {}),
+            nextRunAt: task.schedule.kind === 'at' ? '' : task.nextRunAt,
+            lastStatus: 'error' as const,
+            lastMessage: 'Task was interrupted before completion.',
+            updatedAt: now.toISOString()
+          }
+        }
+        if (task.nextRunAt && !wasInterrupted) return task
         changed = true
         return {
           ...task,
-          ...(task.schedule.kind === 'at' ? { enabled: false } : {}),
-          nextRunAt: task.schedule.kind === 'at' ? '' : task.nextRunAt,
-          lastStatus: 'error' as const,
-          lastMessage: 'Task was interrupted before completion.',
-          updatedAt: now.toISOString()
+          nextRunAt: computeScheduleNextRunAt(task, now),
+          ...(wasInterrupted
+            ? {
+                lastStatus: 'error' as const,
+                lastMessage: 'Task was interrupted before completion.',
+                updatedAt: now.toISOString()
+              }
+            : {})
         }
-      }
-      if (task.nextRunAt && !wasInterrupted) return task
-      changed = true
-      return {
-        ...task,
-        nextRunAt: computeScheduleNextRunAt(task, now),
-        ...(wasInterrupted
-          ? {
-              lastStatus: 'error' as const,
-              lastMessage: 'Task was interrupted before completion.',
-              updatedAt: now.toISOString()
-            }
-          : {})
-      }
+      })
+      if (!changed) return current
+      return { ...current, schedule: { ...current.schedule, tasks } }
     })
-    if (!changed) {
-      this.syncPowerSaveBlocker(settings)
-      return
-    }
-    const saved = await this.deps.store.patch({ schedule: { ...settings.schedule, tasks } })
     this.syncPowerSaveBlocker(saved)
   }
 
@@ -470,9 +466,12 @@ export class ScheduleRuntime {
     taskId: string,
     updater: (task: ScheduledTaskV1, settings: AppSettingsV1) => ScheduledTaskV1
   ): Promise<AppSettingsV1> {
-    const settings = await this.loadSettings()
-    const tasks = settings.schedule.tasks.map((task) => task.id === taskId ? updater(task, settings) : task)
-    const saved = await this.deps.store.patch({ schedule: { ...settings.schedule, tasks } })
+    const saved = await this.deps.store.update((current) => {
+      const tasks = current.schedule.tasks.map((task) =>
+        task.id === taskId ? updater(task, current) : task
+      )
+      return { ...current, schedule: { ...current.schedule, tasks } }
+    })
     this.syncPowerSaveBlocker(saved)
     return saved
   }

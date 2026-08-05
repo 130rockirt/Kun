@@ -13,6 +13,7 @@ import {
 } from '../resolve-kun-binary'
 import {
   isKunChildRunning,
+  getKunServiceManagerBinding,
   reclaimKunPort,
   resolveAvailableKunPort,
   startKunSharedRuntime,
@@ -26,6 +27,7 @@ import {
   stopSharedRuntime
 } from '../../../kun/src/cli/shared-runtime.js'
 import { resolveCliRuntimeFlavor } from '../../../kun/src/cli/runtime-flavor.js'
+import { sameCanonicalPath } from '../../../kun/src/manager/canonical-path.js'
 
 const KUN_RUNTIME_ID = 'kun' as const
 let resolvedConnection: RuntimeDiscoveryRecord | null = null
@@ -81,9 +83,7 @@ export const kunRuntimeAdapter = {
 
   async stopSharedAndWait(settings: AppSettingsV1): Promise<void> {
     const dataDir = expandDataDir(getKunRuntimeSettings(settings).dataDir)
-    await stopSharedRuntime(dataDir, fetch, {
-      runtimeFlavor: resolveCliRuntimeFlavor({ env: process.env })
-    })
+    await stopSharedRuntime(dataDir, fetch, sharedRuntimeScope(dataDir))
     resolvedConnection = null
     await stopKunChildAndWait()
   },
@@ -129,9 +129,8 @@ async function refreshResolvedKunRuntime(settings: AppSettingsV1): Promise<boole
   const expectedBuildId = await resolveKunRuntimeBuildId(
     resolveKunExecutable(runtime.binaryPath.trim() ? '' : appRoot(), runtime.binaryPath)
   )
-  const inspected = await inspectSharedRuntime(dataDir, fetch, {
-    runtimeFlavor: resolveCliRuntimeFlavor({ env: process.env })
-  }).catch(() => null)
+  const inspected = await inspectSharedRuntime(dataDir, fetch, sharedRuntimeScope(dataDir))
+    .catch(() => null)
   if (!inspected) {
     resolvedConnection = null
     return false
@@ -152,6 +151,18 @@ async function refreshResolvedKunRuntime(settings: AppSettingsV1): Promise<boole
   return true
 }
 
+function sharedRuntimeScope(dataDir: string): {
+  runtimeFlavor: ReturnType<typeof resolveCliRuntimeFlavor>
+  manager?: NonNullable<ReturnType<typeof getKunServiceManagerBinding>>
+} {
+  const runtimeFlavor = resolveCliRuntimeFlavor({ env: process.env })
+  const manager = getKunServiceManagerBinding()
+  return {
+    runtimeFlavor,
+    ...(manager && sameCanonicalPath(manager.discovery.dataDir, dataDir) ? { manager } : {})
+  }
+}
+
 function expandDataDir(value: string): string {
   return value.replace(/^~(?=$|[\\/])/, homedir())
 }
@@ -163,6 +174,20 @@ export type RuntimeRequestInit = {
   signal?: AbortSignal
   timeoutMs?: number
 }
+
+/**
+ * Immutable identity for one Main-process HTTP operation.
+ *
+ * The discovery record can be replaced by a concurrent managed-runtime
+ * restart. Callers that bind authorization material to a request (notably
+ * protected approvals) must snapshot the endpoint and token together after
+ * ensure and use that snapshot exactly once.
+ */
+export type RuntimeRequestLease = Readonly<{
+  baseUrl: string
+  runtimeToken: string
+  runtimeInstanceId?: string
+}>
 
 const DEFAULT_RUNTIME_GET_TIMEOUT_MS = 15_000
 const DEFAULT_RUNTIME_POST_TIMEOUT_MS = 60_000
@@ -202,10 +227,10 @@ export async function runtimeRequestViaHost(
   init.signal?.throwIfAborted()
   const requestSettings = ensuredSettings ?? settings
   const method = (init.method ?? 'GET').toUpperCase()
-  const base = getRuntimeBaseUrlForSettings(requestSettings)
+  const lease = snapshotRuntimeRequestLease(requestSettings)
   const pathNorm = pathAndQuery.startsWith('/') ? pathAndQuery : `/${pathAndQuery}`
   try {
-    return await fetchRuntimeRequest(requestSettings, base, pathNorm, method, init)
+    return await fetchRuntimeRequest(lease, pathNorm, method, init)
   } catch (error) {
     if (init.signal?.aborted) throw error
     // A request timeout is local to that operation. Let the watchdog decide
@@ -215,24 +240,67 @@ export async function runtimeRequestViaHost(
     const retrySettings = await ensureRuntime(requestSettings)
     init.signal?.throwIfAborted()
     const nextSettings = retrySettings ?? requestSettings
-    const nextBase = getRuntimeBaseUrlForSettings(nextSettings)
-    const safeToRetry = method === 'GET' || method === 'HEAD' || nextBase !== base
+    const nextLease = snapshotRuntimeRequestLease(nextSettings)
+    const safeToRetry = method === 'GET' || method === 'HEAD' ||
+      nextLease.baseUrl !== lease.baseUrl
     if (!safeToRetry) throw error
-    return fetchRuntimeRequest(nextSettings, nextBase, pathNorm, method, init)
+    return fetchRuntimeRequest(nextLease, pathNorm, method, init)
   }
 }
 
-async function fetchRuntimeRequest(
+/** Acquire one endpoint/token snapshot after the managed runtime is ready. */
+export async function acquireRuntimeRequestLease(
   settings: AppSettingsV1,
-  base: string,
+  ensureRuntime: (settings: AppSettingsV1) => Promise<AppSettingsV1 | void>
+): Promise<RuntimeRequestLease> {
+  const ensuredSettings = await ensureRuntime(settings)
+  return snapshotRuntimeRequestLease(ensuredSettings ?? settings)
+}
+
+/**
+ * Send exactly one request through an already acquired lease.
+ *
+ * This deliberately performs no ensure, endpoint rebinding, or retry. A
+ * non-idempotent request must fail against the runtime identity for which its
+ * authorization material was created.
+ */
+export function runtimeRequestViaLease(
+  lease: RuntimeRequestLease,
+  pathAndQuery: string,
+  init: RuntimeRequestInit
+): Promise<{ ok: boolean; status: number; body: string }> {
+  init.signal?.throwIfAborted()
+  const method = (init.method ?? 'GET').toUpperCase()
+  const pathNorm = pathAndQuery.startsWith('/') ? pathAndQuery : `/${pathAndQuery}`
+  return fetchRuntimeRequest(lease, pathNorm, method, init)
+}
+
+function snapshotRuntimeRequestLease(settings: AppSettingsV1): RuntimeRequestLease {
+  const connection = resolvedConnection
+  return Object.freeze({
+    baseUrl: connection?.baseUrl ?? getRuntimeBaseUrlForSettings(settings),
+    runtimeToken: connection?.runtimeToken ?? getKunRuntimeSettings(settings).runtimeToken.trim(),
+    ...(connection?.instanceId ? { runtimeInstanceId: connection.instanceId } : {})
+  })
+}
+
+async function fetchRuntimeRequest(
+  lease: RuntimeRequestLease,
   pathNorm: string,
   method: string,
   init: RuntimeRequestInit
 ): Promise<{ ok: boolean; status: number; body: string }> {
-  const url = `${base}${pathNorm}`
-  const hdrs = runtimeAuthHeaders(settings)
+  const url = `${lease.baseUrl}${pathNorm}`
+  const hdrs = new Headers()
   for (const [key, value] of Object.entries(init.headers ?? {})) {
     hdrs.set(key, value)
+  }
+  // Runtime identity is owned by Main. A caller-supplied header must never
+  // replace (or synthesize, when absent) the lease authorization.
+  if (lease.runtimeToken) {
+    hdrs.set('Authorization', `Bearer ${lease.runtimeToken}`)
+  } else {
+    hdrs.delete('Authorization')
   }
   hdrs.set('Accept', 'application/json')
   if (init.body && !hdrs.has('Content-Type')) {

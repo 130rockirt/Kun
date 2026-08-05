@@ -17,11 +17,13 @@ import {
   type AppSettingsV1
 } from '../../shared/app-settings'
 import {
+  acquireRuntimeRequestLease,
   getRuntimeAuthToken,
   kunRuntimeAdapter,
   resolveRuntimeRequestTimeoutMs,
   runtimeAuthHeaders,
-  runtimeRequestViaHost
+  runtimeRequestViaHost,
+  runtimeRequestViaLease
 } from './kun-adapter'
 import { buildRuntimeCapabilityManifest } from '../../../kun/src/contracts/capabilities.js'
 import { modelCapabilitiesForModel } from '../../../kun/src/loop/model-context-profile.js'
@@ -158,6 +160,63 @@ describe('runtimeRequestViaHost', () => {
     expect(JSON.parse(response.body)).toEqual(expect.objectContaining({ group_by: 'day' }))
     expect(seenUrl).toBe('/v1/usage?group_by=day&from=2026-06-01&to=2026-06-02&timezone=Asia%2FShanghai')
     expect(seenAuthorization).toBe('Bearer usage-token')
+  })
+
+  it('acquires a cold-start lease after ensure and keeps its endpoint and token immutable', async () => {
+    let seenAuthorization = ''
+    let requestCount = 0
+    const port = await listen((req, res) => {
+      requestCount += 1
+      seenAuthorization = req.headers.authorization ?? ''
+      res.setHeader('Content-Type', 'application/json')
+      res.end(JSON.stringify({ ok: true }))
+    })
+    const cold = settingsForPort(1)
+    cold.agents.kun.runtimeToken = ''
+    const ready = settingsForPort(port)
+    ready.agents.kun.runtimeToken = 'lease-token-a'
+    let ensureCalls = 0
+
+    const lease = await acquireRuntimeRequestLease(cold, async () => {
+      ensureCalls += 1
+      return ready
+    })
+    ready.agents.kun.port = 2
+    ready.agents.kun.runtimeToken = 'lease-token-b'
+
+    const response = await runtimeRequestViaLease(lease, '/v1/approvals/approval-1', {
+      method: 'POST',
+      body: JSON.stringify({ decision: 'allow' }),
+      headers: { Authorization: 'Bearer caller-controlled' }
+    })
+
+    expect(Object.isFrozen(lease)).toBe(true)
+    expect(ensureCalls).toBe(1)
+    expect(requestCount).toBe(1)
+    expect(response.ok).toBe(true)
+    expect(seenAuthorization).toBe('Bearer lease-token-a')
+  })
+
+  it('does not re-ensure or replay a leased non-idempotent request', async () => {
+    let requestCount = 0
+    const port = await listen((_req, res) => {
+      requestCount += 1
+      res.destroy()
+    })
+    const ready = settingsForPort(port)
+    let ensureCalls = 0
+    const lease = await acquireRuntimeRequestLease(ready, async () => {
+      ensureCalls += 1
+      return ready
+    })
+
+    await expect(runtimeRequestViaLease(lease, '/v1/approvals/approval-1', {
+      method: 'POST',
+      body: JSON.stringify({ decision: 'allow' })
+    })).rejects.toBeInstanceOf(Error)
+
+    expect(ensureCalls).toBe(1)
+    expect(requestCount).toBe(1)
   })
 
   it('uses settings returned by ensureRuntime when the managed port changes', async () => {

@@ -13,7 +13,10 @@ import {
   type ModelProviderProfileV1
 } from '../shared/app-settings'
 import {
+  applyRuntimeSettingsRollback,
   kunRuntimeConfigChanged,
+  runtimeRollbackTerminalStatus,
+  runtimeRollbackTargetUnchanged,
   runtimeSettingsApplyMode,
   runtimeSettingsRollbackPatch
 } from './runtime-settings-apply-mode'
@@ -48,6 +51,73 @@ function settings(): AppSettingsV1 {
     disabledSkillIds: []
   }
 }
+
+describe('runtimeRollbackTargetUnchanged', () => {
+  it('ignores unrelated settings but rejects newer Runtime or provider intent', () => {
+    const desired = settings()
+
+    expect(runtimeRollbackTargetUnchanged({ ...desired, theme: 'dark' }, desired)).toBe(true)
+    expect(runtimeRollbackTargetUnchanged({
+      ...desired,
+      agents: {
+        kun: { ...desired.agents.kun, autoStart: !desired.agents.kun.autoStart }
+      }
+    }, desired)).toBe(false)
+    expect(runtimeRollbackTargetUnchanged({
+      ...desired,
+      provider: {
+        ...desired.provider,
+        providers: desired.provider.providers.map((provider, index) => index === 0
+          ? { ...provider, name: `${provider.name}-new` }
+          : provider)
+      }
+    }, desired)).toBe(false)
+  })
+})
+
+describe('runtimeRollbackTerminalStatus', () => {
+  it('always settles stopped and restore-failed rollback work after a newer no-mode save', () => {
+    const stopped = runtimeRollbackTerminalStatus({
+      outcome: { kind: 'stopped' },
+      isCurrent: false,
+      applyFailure: 'new launch failed'
+    })
+    const failed = runtimeRollbackTerminalStatus({
+      outcome: { kind: 'restore_failed', detail: 'old launch timed out' },
+      isCurrent: false,
+      applyFailure: 'new launch failed'
+    })
+
+    expect(stopped).toMatchObject({ state: 'stopped' })
+    expect(stopped).not.toHaveProperty('rolledBack')
+    expect(failed).toMatchObject({ state: 'failed', source: 'settings-apply-rollback' })
+    expect(failed).not.toHaveProperty('rolledBack')
+  })
+
+  it('reports rollback persistence failure as a terminal lifecycle failure', () => {
+    const status = runtimeRollbackTerminalStatus({
+      outcome: { kind: 'commit_failed', detail: 'Manager revision write failed' },
+      isCurrent: false,
+      applyFailure: 'new launch failed'
+    })
+
+    expect(status).toMatchObject({ state: 'failed', source: 'settings-apply-rollback' })
+    expect(status.message).toContain('could not be restored on disk')
+    expect(status).not.toHaveProperty('rolledBack')
+  })
+
+  it('terminalizes a rollback superseded by a newer durable snapshot', () => {
+    const status = runtimeRollbackTerminalStatus({
+      outcome: { kind: 'superseded' },
+      isCurrent: false,
+      applyFailure: 'new launch failed'
+    })
+
+    expect(status).toMatchObject({ state: 'failed', source: 'settings-apply-rollback' })
+    expect(status.message).toContain('pending reconciliation')
+    expect(status).not.toHaveProperty('rolledBack')
+  })
+})
 
 function multiProviderSettings(): AppSettingsV1 {
   const base = settings()
@@ -349,6 +419,16 @@ describe('runtimeSettingsApplyMode', () => {
     expect(patch.provider?.routePools).toEqual(desired.provider.routePools)
     expect(patch.provider?.localGateway).toEqual(desired.provider.localGateway)
     expect(patch.provider?.providers).toEqual(previous.provider.providers)
+
+    const restored = applyRuntimeSettingsRollback(
+      { ...desired, theme: 'dark' },
+      previous,
+      desired
+    )
+    expect(restored.agents.kun.port).toBe(previous.agents.kun.port)
+    expect(restored.theme).toBe('dark')
+    expect(restored.provider.routePools).toEqual(desired.provider.routePools)
+    expect(restored.provider.localGateway).toEqual(desired.provider.localGateway)
   })
 
   it('ignores provider order and display-name-only changes', () => {

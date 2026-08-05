@@ -195,6 +195,7 @@ describe('Manager-owned Main data plane', () => {
       }
     } as Parameters<typeof module.configureKunManagerDataPlaneForCurrentProcess>[0]
     const binding = module.configureKunManagerDataPlaneForCurrentProcess(managerOne)
+    expect(module.getKunServiceManagerBinding()).toBe(binding)
     const existingClient = new ManagerRevisionedDocumentClient(binding, 'settings')
     const existingLeaseClient = new ManagerResourceLeaseClient(
       binding,
@@ -202,6 +203,8 @@ describe('Manager-owned Main data plane', () => {
       'main-one'
     )
     module.configureKunManagerDataPlaneForCurrentProcess(managerTwo)
+    expect(module.getKunServiceManagerBinding()).toBe(binding)
+    expect(module.getKunServiceManagerBinding()?.discovery).toBe(managerTwo.discovery)
     const requests: Array<{ url: string; authorization: string }> = []
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       requests.push({
