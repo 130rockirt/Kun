@@ -2469,6 +2469,8 @@ app.whenReady().then(async () => {
   const credentialMigration = canonicalRuntimeMigration?.status === 'blocked'
     ? undefined
     : new LegacyProviderSettingsMigrationCoordinator()
+  const withRegistryCredentials = (settings: AppSettingsV1): Promise<AppSettingsV1> =>
+    credentialMigration?.withRegistryCredentials(settings) ?? Promise.resolve(settings)
   store = credentialMigration
     ? new JsonSettingsStore(productionSettingsUserDataPath, {
         credentialMigration,
@@ -2616,9 +2618,21 @@ app.whenReady().then(async () => {
     })
     void runCheckpointCleanup(settings, { force: true, reason: 'startup' })
     syncCheckpointCleanupTimer(settings)
-    scheduleRuntime = createScheduleRuntime({ store, runtimeRequest, logError, powerSaveBlocker })
+    scheduleRuntime = createScheduleRuntime({
+      store,
+      withModelCredentials: withRegistryCredentials,
+      runtimeRequest,
+      logError,
+      powerSaveBlocker
+    })
     scheduleRuntime.sync(settings)
-    workflowRuntime = createWorkflowRuntime({ store, runtimeRequest, logError, powerSaveBlocker })
+    workflowRuntime = createWorkflowRuntime({
+      store,
+      withModelCredentials: withRegistryCredentials,
+      runtimeRequest,
+      logError,
+      powerSaveBlocker
+    })
     workflowRuntime.sync(settings)
     telegramRuntime = createTelegramRuntime({
       store,
@@ -2771,7 +2785,7 @@ app.whenReady().then(async () => {
   }
 
   const fetchModels = async () => {
-    const settings = await store.load()
+    const settings = await withRegistryCredentials(await store.load())
     const shared = await runtimeRequest(settings, '/v1/model-connections', { method: 'GET' })
     if (shared.ok) {
       try {
@@ -2803,6 +2817,7 @@ app.whenReady().then(async () => {
 
   registerAppIpcHandlers({
     store,
+    withRegistryCredentials,
     getMainWindow: () => mainWindow,
     applySettingsPatch,
     saveSettingsPatch,

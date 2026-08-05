@@ -9,18 +9,47 @@ import {
   getModelProviderPreset,
   modelProviderPresetAccountProfile,
   modelProviderPresetProfile,
+  resolveWriteInlineCompletionApiKey,
   resolveKunRuntimeSettings,
   type AppSettingsV1
 } from '../shared/app-settings'
 import {
   LEGACY_PROVIDER_SOURCE_PREFIX,
-  LegacyProviderSettingsMigrationCoordinator
+  LegacyProviderSettingsMigrationCoordinator,
+  projectRegistryCredentials
 } from './legacy-provider-settings-migration'
 import { providersConfigForRuntime } from './runtime/kun-runtime-model-config'
 import { syncGuiManagedKunConfig } from './runtime/kun-runtime-config-service'
 import { JsonSettingsStore } from './settings-store'
 
 describe('LegacyProviderSettingsMigrationCoordinator', () => {
+  it('projects the final Registry generation only for Main request consumers', async () => {
+    const defaults = await new JsonSettingsStore(await mkdtemp(join(tmpdir(), 'kun-registry-projection-'))).load()
+    const settings = {
+      ...defaults,
+      provider: {
+        ...defaults.provider,
+        providers: defaults.provider.providers.map((provider) => provider.id === 'deepseek'
+          ? { ...provider, apiKey: 'stale-settings-key' }
+          : provider)
+      },
+      agents: {
+        ...defaults.agents,
+        kun: { ...defaults.agents.kun, providerId: 'deepseek', apiKey: 'stale-runtime-key' }
+      }
+    }
+
+    const projected = await projectRegistryCredentials(settings, async (providerId) => ({
+      authoritative: providerId === 'deepseek',
+      apiKey: providerId === 'deepseek' ? 'final-registry-key' : ''
+    }))
+
+    expect(resolveKunRuntimeSettings(projected).apiKey).toBe('final-registry-key')
+    expect(resolveWriteInlineCompletionApiKey(projected)).toBe('final-registry-key')
+    expect(projected.agents.kun.apiKey).toBe('')
+    expect(settings.provider.providers[0]?.apiKey).toBe('stale-settings-key')
+  })
+
   it('does not initialize protected stores in the canonical legacy directory', async () => {
     const runtimeFactory = vi.fn()
     const coordinator = new LegacyProviderSettingsMigrationCoordinator(runtimeFactory)
@@ -330,6 +359,12 @@ describe('LegacyProviderSettingsMigrationCoordinator', () => {
     expect(await readFile(join(userDataDir, 'kun-settings.json'), 'utf8'))
       .not.toContain('fresh-minimax-secret')
     expect(loaded.provider.apiKey).toBe('')
+    const markers = JSON.parse(await readFile(
+      join(dataDir, 'extensions', 'legacy-credential-migrations.json'),
+      'utf8'
+    )) as { entries: Record<string, unknown> }
+    expect(markers.entries['settings:provider:deepseek']).toBeDefined()
+    expect(markers.entries['settings:provider:minimax']).toBeDefined()
   })
 
   it('recovers OAuth refresh material flattened to its backed-up access token', async () => {

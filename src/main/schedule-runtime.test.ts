@@ -269,6 +269,74 @@ describe('ScheduleRuntime', () => {
     expect(store.read().claw.tasks).toEqual([])
   })
 
+  it('routes reminder detection through the provider resolved from the requested model', async () => {
+    const future = '2099-06-03T09:00:00.000Z'
+    const initial = settingsWith()
+    initial.provider.providers[0] = {
+      ...initial.provider.providers[0],
+      apiKey: 'sk-default',
+      baseUrl: 'https://default.example/v1',
+      endpointFormat: 'chat_completions'
+    }
+    initial.provider.providers.push({
+      ...initial.provider.providers[0],
+      id: 'secondary',
+      name: 'Secondary Provider',
+      apiKey: 'sk-secondary',
+      baseUrl: 'https://secondary.example/v1',
+      endpointFormat: 'messages',
+      models: ['secondary-model'],
+      modelProfiles: {}
+    })
+    const calls: Array<{ url: string; headers: HeadersInit | undefined; body: Record<string, unknown> }> = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit) => {
+      calls.push({
+        url: String(url),
+        headers: init.headers,
+        body: JSON.parse(String(init.body ?? '{}'))
+      })
+      return {
+        ok: true,
+        text: async () => JSON.stringify({
+          content: [{
+            type: 'text',
+            text: JSON.stringify({
+              shouldCreateTask: true,
+              scheduleAt: future,
+              reminderBody: 'ship the review',
+              taskName: 'Ship review'
+            })
+          }]
+        })
+      }
+    }))
+    const { runtime, store } = createRuntime(initial)
+    vi.spyOn(runtime, 'sync').mockImplementation(() => undefined)
+
+    await expect(runtime.createScheduledTaskFromText(
+      'Remind me tomorrow to ship the review.',
+      { modelHint: 'secondary-model' }
+    )).resolves.toMatchObject({
+      kind: 'created',
+      title: 'Ship review reminder',
+      scheduleAt: future
+    })
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toMatchObject({
+      url: 'https://secondary.example/v1/messages',
+      body: { model: 'secondary-model' }
+    })
+    expect(calls[0]?.headers).toMatchObject({
+      Authorization: 'Bearer sk-secondary',
+      'x-api-key': 'sk-secondary'
+    })
+    expect(store.read().schedule.tasks[0]).toMatchObject({
+      providerId: 'secondary',
+      model: 'secondary-model'
+    })
+  })
+
   it('starts a Kun thread with a Schedule title and records running status', async () => {
     const task = makeTask({ reasoningEffort: 'max' })
     const runtimeRequest = vi.fn(async (_settings, path, init) => {

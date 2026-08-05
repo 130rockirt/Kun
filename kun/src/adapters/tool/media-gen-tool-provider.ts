@@ -5,7 +5,11 @@ import type { KunCapabilitiesConfig } from '../../contracts/capabilities.js'
 import { detectImage } from '../../attachments/attachment-store.js'
 import type { ToolExecutionUpdate, ToolHostContext } from '../../ports/tool-host.js'
 import type { CapabilityToolProvider } from './capability-registry.js'
-import { ImageGenHttpError, describeNetworkError } from './image-gen-tool-provider.js'
+import {
+  ImageGenHttpError,
+  describeNetworkError,
+  type ProviderCredentialResolver
+} from './image-gen-tool-provider.js'
 import { resolveWorkspacePath } from './builtin-tool-utils.js'
 import { LocalToolHost } from './local-tool-host.js'
 
@@ -112,6 +116,7 @@ export type MediaGenToolProviderOptions = {
   musicClient?: MusicGenClient
   videoClient?: VideoGenClient
   nowIso?: () => string
+  resolveCredential?: ProviderCredentialResolver
 }
 
 export type SpeechGenToolProviderBuildResult = {
@@ -137,7 +142,7 @@ export function buildSpeechGenToolProviders(
   options: MediaGenToolProviderOptions = {}
 ): SpeechGenToolProviderBuildResult {
   if (!config?.enabled) return { providers: [], diagnostics: [], available: false }
-  const missing = missingProviderFields(config)
+  const missing = missingProviderFields(config, options.resolveCredential)
   if (missing.length > 0) {
     const reason = `speech generation provider is not configured (missing ${missing.join(', ')})`
     return {
@@ -147,7 +152,6 @@ export function buildSpeechGenToolProviders(
     }
   }
 
-  const client = options.speechClient ?? createSpeechGenClient(config)
   const model = config.model!
 
   const tool = LocalToolHost.defineTool({
@@ -177,7 +181,12 @@ export function buildSpeechGenToolProviders(
       const format = normalizeAudioFormat(pickString(args.format) || config.format)
       const voice = pickString(args.voice) || config.voice
       const style = pickString(args.style)
+      let client = options.speechClient
+      const requestTelemetry = () => telemetry(startedAt, client?.id ?? 'speech-provider')
       try {
+        if (!client) {
+          client = createSpeechGenClient(await resolveProviderCredential(config, options.resolveCredential))
+        }
         const media = await client.generate({
           text,
           model,
@@ -202,11 +211,11 @@ export function buildSpeechGenToolProviders(
             model,
             voice,
             format,
-            telemetry: telemetry(startedAt, client.id)
+            telemetry: requestTelemetry()
           }
         }
       } catch (error) {
-        return toolError('generation_failed', providerErrorMessage(error), telemetry(startedAt, client.id))
+        return toolError('generation_failed', providerErrorMessage(error), requestTelemetry())
       }
     }
   })
@@ -223,7 +232,7 @@ export function buildMusicGenToolProviders(
   options: MediaGenToolProviderOptions = {}
 ): MusicGenToolProviderBuildResult {
   if (!config?.enabled) return { providers: [], diagnostics: [], available: false }
-  const missing = missingProviderFields(config)
+  const missing = missingProviderFields(config, options.resolveCredential)
   if (missing.length > 0) {
     const reason = `music generation provider is not configured (missing ${missing.join(', ')})`
     return {
@@ -233,7 +242,6 @@ export function buildMusicGenToolProviders(
     }
   }
 
-  const client = options.musicClient ?? createMusicGenClient(config)
   const model = config.model!
 
   const tool = LocalToolHost.defineTool({
@@ -267,7 +275,12 @@ export function buildMusicGenToolProviders(
         return toolError('invalid_music_request', 'provide prompt, lyrics, or instrumental=true')
       }
       const format = normalizeAudioFormat(pickString(args.format) || config.format)
+      let client = options.musicClient
+      const requestTelemetry = () => telemetry(startedAt, client?.id ?? 'music-provider')
       try {
+        if (!client) {
+          client = createMusicGenClient(await resolveProviderCredential(config, options.resolveCredential))
+        }
         const media = await client.generate({
           ...(prompt ? { prompt } : {}),
           ...(lyrics ? { lyrics } : {}),
@@ -293,11 +306,11 @@ export function buildMusicGenToolProviders(
             files: [file],
             model,
             format,
-            telemetry: telemetry(startedAt, client.id)
+            telemetry: requestTelemetry()
           }
         }
       } catch (error) {
-        return toolError('generation_failed', providerErrorMessage(error), telemetry(startedAt, client.id))
+        return toolError('generation_failed', providerErrorMessage(error), requestTelemetry())
       }
     }
   })
@@ -314,7 +327,7 @@ export function buildVideoGenToolProviders(
   options: MediaGenToolProviderOptions = {}
 ): VideoGenToolProviderBuildResult {
   if (!config?.enabled) return { providers: [], diagnostics: [], available: false }
-  const missing = missingProviderFields(config)
+  const missing = missingProviderFields(config, options.resolveCredential)
   if (missing.length > 0) {
     const reason = `video generation provider is not configured (missing ${missing.join(', ')})`
     return {
@@ -324,7 +337,6 @@ export function buildVideoGenToolProviders(
     }
   }
 
-  const client = options.videoClient ?? createVideoGenClient(config)
   const model = config.model!
   const isGrokImagine = config.protocol === 'grok-imagine-video'
   const isVolcengineArk = config.protocol === 'volcengine-ark-video'
@@ -402,7 +414,12 @@ export function buildVideoGenToolProviders(
           ? normalizeVolcengineVideoResolution(args.resolution, config.defaultResolution)
         : pickString(args.resolution) || config.defaultResolution
       const aspectRatio = pickString(args.aspect_ratio)
+      let client = options.videoClient
+      const requestTelemetry = () => telemetry(startedAt, client?.id ?? 'video-provider')
       try {
+        if (!client) {
+          client = createVideoGenClient(await resolveProviderCredential(config, options.resolveCredential))
+        }
         const media = await client.generate({
           prompt,
           model,
@@ -431,11 +448,11 @@ export function buildVideoGenToolProviders(
             model,
             duration,
             resolution,
-            telemetry: telemetry(startedAt, client.id)
+            telemetry: requestTelemetry()
           }
         }
       } catch (error) {
-        return toolError('generation_failed', providerErrorMessage(error), telemetry(startedAt, client.id))
+        return toolError('generation_failed', providerErrorMessage(error), requestTelemetry())
       }
     }
   })
@@ -1005,12 +1022,32 @@ type MimoSpeechPayload = {
   }>
 }
 
-function missingProviderFields(config: { baseUrl?: string; apiKey?: string; model?: string }): string[] {
+function missingProviderFields(
+  config: { baseUrl?: string; apiKey?: string; providerId?: string; model?: string },
+  resolveCredential?: ProviderCredentialResolver
+): string[] {
   return [
     !config.baseUrl ? 'baseUrl' : undefined,
-    !config.apiKey ? 'apiKey' : undefined,
+    !config.apiKey && !(config.providerId && resolveCredential) ? 'apiKey' : undefined,
     !config.model ? 'model' : undefined
   ].filter((field): field is string => Boolean(field))
+}
+
+async function resolveProviderCredential<T extends {
+  providerId?: string
+  apiKey?: string
+  headers?: Record<string, string>
+}>(config: T, resolveCredential?: ProviderCredentialResolver): Promise<T & {
+  apiKey?: string
+  headers?: Record<string, string>
+}> {
+  if (!config.providerId || !resolveCredential) return config
+  const credential = await resolveCredential(config.providerId)
+  return {
+    ...config,
+    apiKey: credential.apiKey,
+    headers: { ...(config.headers ?? {}), ...(credential.headers ?? {}) }
+  }
 }
 
 async function writeGeneratedMediaFile(input: {

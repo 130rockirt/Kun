@@ -617,9 +617,9 @@ export type KunGuiApi = ExtensionIpcApi & {
   /** Run the official ambient Claude subscription login flow. */
   claudeSubscriptionLogin: () => Promise<ClaudeSubscriptionLoginResult>
   /** Make a bounded real request through the official Claude transport. */
-  claudeSubscriptionProbe: (token?: string) => Promise<ClaudeSubscriptionProbeResult>
+  claudeSubscriptionProbe: (token?: string, providerId?: string) => Promise<ClaudeSubscriptionProbeResult>
   /** List Claude models available to the subscription (via the SDK's supportedModels). */
-  claudeSubscriptionModels: (token?: string) => Promise<string[]>
+  claudeSubscriptionModels: (token?: string, providerId?: string) => Promise<string[]>
   /** Whether the on-demand Claude Code binary is present + any in-flight download. */
   claudeSubscriptionSdkStatus: () => Promise<{
     installed: boolean
@@ -652,7 +652,7 @@ export type KunGuiApi = ExtensionIpcApi & {
   /** Concrete models routed through the Gemini CLI Code Assist API contract. */
   geminiCliSubscriptionModels: () => Promise<string[]>
   /** Validate a Cursor API key and list models visible to that Cursor account. */
-  cursorSubscriptionDiscover: (apiKey: string) => Promise<{
+  cursorSubscriptionDiscover: (apiKey?: string, providerId?: string) => Promise<{
     account: {
       apiKeyName: string
       userEmail?: string

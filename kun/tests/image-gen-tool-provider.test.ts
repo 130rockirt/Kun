@@ -1114,6 +1114,42 @@ describe('Image gen tool provider', () => {
     expect(JSON.parse(requests[0].body).quality).toBeUndefined()
   })
 
+  it('resolves the current Registry credential for every provider-backed image request', async () => {
+    const authorization: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (_url: string | URL, init?: RequestInit) => {
+      authorization.push(new Headers(init?.headers).get('authorization') ?? '')
+      return new Response(JSON.stringify({ data: [{ b64_json: png(8, 8).toString('base64') }] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      })
+    }))
+    let currentCredential = 'generation-a'
+    const resolveCredential = vi.fn(async () => ({ apiKey: currentCredential }))
+    const config = imageGenConfig({
+      providerId: 'registry-images',
+      apiKey: undefined
+    })
+    const built = buildImageGenToolProviders(config, { resolveCredential })
+    const host = new LocalToolHost({ registry: new CapabilityRegistry(built.providers) })
+
+    expect(built.available).toBe(true)
+    await host.execute({
+      callId: 'call_generation_a',
+      toolName: 'generate_image',
+      arguments: { prompt: 'first' }
+    }, buildContext())
+    currentCredential = 'generation-b'
+    await host.execute({
+      callId: 'call_generation_b',
+      toolName: 'generate_image',
+      arguments: { prompt: 'second' }
+    }, buildContext())
+
+    expect(resolveCredential).toHaveBeenNthCalledWith(1, 'registry-images')
+    expect(resolveCredential).toHaveBeenNthCalledWith(2, 'registry-images')
+    expect(authorization).toEqual(['Bearer generation-a', 'Bearer generation-b'])
+  })
+
   it('sends OpenAI-compatible quality when configured and retries without it if rejected', async () => {
     const requests: Array<{ url: string; body: string }> = []
     vi.stubGlobal('fetch', vi.fn(async (url: string | URL, init?: RequestInit) => {

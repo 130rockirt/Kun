@@ -16,16 +16,23 @@ import {
 } from '../contracts/model-connections.js'
 import { materializeLegacyProviderCredential } from './legacy-provider-credential-migration.js'
 import type { ExtensionCredentialStore } from './extension-credential-store.js'
+import { createProxyFetch } from '../adapters/model/proxy-fetch.js'
 
 const StoredProfileSchema = ModelConnectionSnapshotSchema.shape.providers.element.extend({
   credentialRef: z.string().min(1).max(256).optional(),
   credentialSourceId: z.string().min(1).max(256).optional(),
+  legacyCredentialSourceToRetire: z.string().min(1).max(256).optional(),
   headers: z.record(z.string(), z.string()).optional()
 })
+const DeletedProfileTombstoneSchema = z.object({
+  deletedRevision: z.number().int().nonnegative(),
+  legacyCredentialSourceToRetire: z.string().min(1).max(256).optional()
+}).strict()
 const RegistryDocumentSchema = z.object({
   schemaVersion: z.literal(1),
   revision: z.number().int().nonnegative(),
   profiles: z.record(z.string(), StoredProfileSchema),
+  tombstones: z.record(z.string(), DeletedProfileTombstoneSchema).default({}),
   defaultProviderId: z.string().min(1).optional(),
   defaultAccountId: z.string().min(1).optional(),
   defaultModel: z.string().min(1).optional(),
@@ -61,11 +68,11 @@ export function isModelConnectionCredentialSourceId(sourceId: string): boolean {
     sourceId.length > MODEL_CONNECTION_CREDENTIAL_SOURCE_PREFIX.length
 }
 
-function modelConnectionCredentialSourceId(providerId: string): string {
+export function modelConnectionCredentialSourceId(providerId: string): string {
   return `${MODEL_CONNECTION_CREDENTIAL_SOURCE_PREFIX}${providerId}`
 }
 
-function providerIdFromCredentialSource(sourceId: string): string | null {
+export function providerIdFromCredentialSource(sourceId: string): string | null {
   if (!isModelConnectionCredentialSourceId(sourceId)) return null
   return sourceId.slice(MODEL_CONNECTION_CREDENTIAL_SOURCE_PREFIX.length)
 }
@@ -99,6 +106,11 @@ export class ModelConnectionRegistry {
       profile?: Pick<ModelConnectionProfile, 'id' | 'presetSource' | 'baseUrl' | 'kind'>
     ) => ModelCapabilityMetadata
     onChanged?: (connections: MaterializedModelConnections) => Promise<void> | void
+    retireLegacyCredentialSource?: (sourceId: string) => Promise<void>
+    resolveCredentialSource?: (sourceId: string) => Promise<{
+      apiKey: string
+      headers?: Record<string, string>
+    }>
   }) {
     this.file = new AtomicJsonFile(
       join(options.dataDir, 'model-connections.v1.json'),
@@ -115,7 +127,8 @@ export class ModelConnectionRegistry {
     }
   ): Promise<ModelConnectionSnapshot> {
     let current = await this.file.read(emptyDocument)
-    const newRegistry = Object.keys(current.profiles).length === 0
+    const newRegistry = Object.keys(current.profiles).length === 0 &&
+      Object.keys(current.tombstones).length === 0
     if (seed.length > 0) {
       for (const input of seed) {
         const credentialSourceId = input.credentialSourceId?.trim() || undefined
@@ -127,6 +140,13 @@ export class ModelConnectionRegistry {
         })
         const existing = request.id ? current.profiles[request.id] : undefined
         if (!existing) {
+          const requestedId = normalizeProviderId(request.id ?? request.name)
+          if (current.tombstones[requestedId]) {
+            // Durable deletion intent is authoritative over stale AppSettings
+            // seeds across GUI/Runtime restarts. Only an explicit connect API
+            // may clear this tombstone and re-add the same id.
+            continue
+          }
           // A non-empty registry is authoritative for the current default, but
           // GUI-managed providers that were never imported must still become
           // visible to standalone TUI clients.
@@ -136,19 +156,12 @@ export class ModelConnectionRegistry {
             request.kind === 'antigravity-cli' || request.kind === 'gemini-cli-api'
           )
         } else {
-          const preserveSelection = !newRegistry && current.defaultProviderId === existing.id
-          const reconciled = reconcileSeedProfile(existing, request, {
-            preserveSelection,
-            credentialSourceId
-          })
+          const reconciled = reconcileSeedProfile(existing, request)
           if (!sameStoredProfile(existing, reconciled)) {
             current = await this.file.update(emptyDocument, (document) => {
               assertRevision(document, current.revision, this.options.modelCapabilities)
               const profile = requireProfile(document, existing.id)
-              const nextProfile = reconcileSeedProfile(profile, request, {
-                preserveSelection: document.defaultProviderId === profile.id,
-                credentialSourceId
-              })
+              const nextProfile = reconcileSeedProfile(profile, request)
               return {
                 ...document,
                 revision: document.revision + 1,
@@ -183,6 +196,7 @@ export class ModelConnectionRegistry {
         localModelGateway: globals.localModelGateway ?? document.localModelGateway
       }))
     }
+    await this.retryLegacyCredentialSourceRetirements()
     await this.applyLatest()
     return this.project(current)
   }
@@ -270,6 +284,7 @@ export class ModelConnectionRegistry {
         assertRevision(current, input.expectedRevision, this.options.modelCapabilities)
         const id = normalizeProviderId(requestedId)
         const existing = current.profiles[id]
+        const deleted = current.tombstones[id]
         previousRef = nextRef ? existing?.credentialRef : undefined
         const models = uniqueModels(input.models)
         const selectedModel = input.selectedModel ?? models[0]
@@ -300,12 +315,18 @@ export class ModelConnectionRegistry {
           credentialSourceId: nextRef
             ? undefined
             : existing?.credentialSourceId,
+          ...(deleted?.legacyCredentialSourceToRetire && this.options.retireLegacyCredentialSource
+            ? { legacyCredentialSourceToRetire: deleted.legacyCredentialSourceToRetire }
+            : {}),
           headers: existing?.headers
         })
+        const tombstones = { ...current.tombstones }
+        delete tombstones[id]
         return {
           ...current,
           revision: current.revision + 1,
           profiles: { ...current.profiles, [id]: profile },
+          tombstones,
           ...(input.select && selectedModel ? {
             defaultProviderId: id,
             defaultAccountId: accountId,
@@ -319,6 +340,7 @@ export class ModelConnectionRegistry {
     }
     try {
       await this.changed(document)
+      await this.retireLegacyCredentialSource(normalizeProviderId(requestedId))
     } finally {
       if (previousRef && previousRef !== nextRef) {
         await this.options.credentials.delete(previousRef).catch(() => undefined)
@@ -347,6 +369,7 @@ export class ModelConnectionRegistry {
       document = await this.file.update(emptyDocument, (current) => {
         assertRevision(current, input.expectedRevision, this.options.modelCapabilities)
         const id = allocateId(current, input.id ?? input.name)
+        const deleted = current.tombstones[id]
         const accountId = `account:${id}`
         const selectedModel = input.selectedModel ?? models[0]
         const configured = Boolean(credentialRef || credentialSourceId) ||
@@ -368,12 +391,18 @@ export class ModelConnectionRegistry {
             : {}),
           selectedModel,
           credentialRef,
-          credentialSourceId
+          credentialSourceId,
+          ...(deleted?.legacyCredentialSourceToRetire && this.options.retireLegacyCredentialSource
+            ? { legacyCredentialSourceToRetire: deleted.legacyCredentialSourceToRetire }
+            : {})
         })
+        const tombstones = { ...current.tombstones }
+        delete tombstones[id]
         return {
           ...current,
           revision: current.revision + 1,
           profiles: { ...current.profiles, [id]: profile },
+          tombstones,
           ...(input.select && configured && selectedModel ? {
             defaultProviderId: id,
             defaultAccountId: accountId,
@@ -389,6 +418,8 @@ export class ModelConnectionRegistry {
     // retain the referenced secret so a restart or subsequent reconciliation
     // can recover; deleting it here would corrupt the committed registry.
     await this.changed(document)
+    const connectedId = normalizeProviderId(input.id ?? input.name)
+    if (document.profiles[connectedId]) await this.retireLegacyCredentialSource(connectedId)
     return this.project(document)
   }
 
@@ -435,12 +466,16 @@ export class ModelConnectionRegistry {
     const input = ModelConnectionCredentialRequestSchema.parse(raw)
     const nextRef = await this.options.credentials.create({ apiKey: input.credential.trim() })
     let previousRef: string | undefined
+    let legacyCredentialSourceToRetire: string | undefined
     let document: RegistryDocument
     try {
       document = await this.file.update(emptyDocument, (current) => {
         assertRevision(current, input.expectedRevision, this.options.modelCapabilities)
         const profile = requireProfile(current, providerId)
         previousRef = profile.credentialRef
+        legacyCredentialSourceToRetire = this.options.retireLegacyCredentialSource
+          ? profile.legacyCredentialSourceToRetire ?? profile.credentialSourceId
+          : undefined
         return {
           ...current,
           revision: current.revision + 1,
@@ -450,6 +485,9 @@ export class ModelConnectionRegistry {
               ...profile,
               credentialRef: nextRef,
               credentialSourceId: undefined,
+              ...(legacyCredentialSourceToRetire
+                ? { legacyCredentialSourceToRetire }
+                : {}),
               configured: true
             }
           }
@@ -461,7 +499,8 @@ export class ModelConnectionRegistry {
     }
     await this.changed(document)
     if (previousRef) await this.options.credentials.delete(previousRef).catch(() => undefined)
-    return this.project(document)
+    await this.retireLegacyCredentialSource(providerId)
+    return this.project(await this.file.read(emptyDocument))
   }
 
   async clearCredential(
@@ -469,10 +508,14 @@ export class ModelConnectionRegistry {
     expectedRevision: number
   ): Promise<ModelConnectionSnapshot> {
     let previousRef: string | undefined
+    let legacyCredentialSourceToRetire: string | undefined
     const document = await this.file.update(emptyDocument, (current) => {
       assertRevision(current, expectedRevision, this.options.modelCapabilities)
       const profile = requireProfile(current, providerId)
       previousRef = profile.credentialRef
+      legacyCredentialSourceToRetire = this.options.retireLegacyCredentialSource
+        ? profile.legacyCredentialSourceToRetire ?? profile.credentialSourceId
+        : undefined
       const configured =
         profile.kind === 'agent-sdk' ||
         profile.kind === 'antigravity-cli' ||
@@ -483,6 +526,7 @@ export class ModelConnectionRegistry {
           ...profile,
           credentialRef: undefined,
           credentialSourceId: undefined,
+          ...(legacyCredentialSourceToRetire ? { legacyCredentialSourceToRetire } : {}),
           configured
         }
       }
@@ -493,6 +537,7 @@ export class ModelConnectionRegistry {
         schemaVersion: 1,
         revision: current.revision + 1,
         profiles,
+        tombstones: current.tombstones,
         proxy: current.proxy,
         routePools: current.routePools,
         localModelGateway: current.localModelGateway,
@@ -511,15 +556,20 @@ export class ModelConnectionRegistry {
     })
     await this.changed(document)
     if (previousRef) await this.options.credentials.delete(previousRef).catch(() => undefined)
-    return this.project(document)
+    await this.retireLegacyCredentialSource(providerId)
+    return this.project(await this.file.read(emptyDocument))
   }
 
   async delete(providerId: string, expectedRevision: number): Promise<ModelConnectionSnapshot> {
     let credentialRef: string | undefined
+    let legacyCredentialSourceToRetire: string | undefined
     const document = await this.file.update(emptyDocument, (current) => {
       assertRevision(current, expectedRevision, this.options.modelCapabilities)
       const profile = requireProfile(current, providerId)
       credentialRef = profile.credentialRef
+      legacyCredentialSourceToRetire = this.options.retireLegacyCredentialSource
+        ? profile.legacyCredentialSourceToRetire ?? profile.credentialSourceId
+        : undefined
       const profiles = { ...current.profiles }
       delete profiles[providerId]
       const fallback = configuredFallback(Object.values(profiles))
@@ -527,6 +577,13 @@ export class ModelConnectionRegistry {
         schemaVersion: 1,
         revision: current.revision + 1,
         profiles,
+        tombstones: {
+          ...current.tombstones,
+          [providerId]: {
+            deletedRevision: current.revision + 1,
+            ...(legacyCredentialSourceToRetire ? { legacyCredentialSourceToRetire } : {})
+          }
+        },
         proxy: current.proxy,
         routePools: current.routePools,
         localModelGateway: current.localModelGateway,
@@ -545,7 +602,8 @@ export class ModelConnectionRegistry {
     })
     await this.changed(document)
     if (credentialRef) await this.options.credentials.delete(credentialRef).catch(() => undefined)
-    return this.project(document)
+    await this.retireDeletedLegacyCredentialSource(providerId)
+    return this.project(await this.file.read(emptyDocument))
   }
 
   async select(raw: unknown): Promise<ModelConnectionSnapshot> {
@@ -646,10 +704,20 @@ export class ModelConnectionRegistry {
     const credential = profile.credentialRef
       ? await this.options.credentials.get(profile.credentialRef)
       : null
+    const credentialSourceId = profile.credentialRef
+      ? modelConnectionCredentialSourceId(profile.id)
+      : profile.credentialSourceId
+    const resolved = credentialSourceId && this.options.resolveCredentialSource
+      ? await this.options.resolveCredentialSource(credentialSourceId)
+      : materializeLegacyProviderCredential(credential?.apiKey ?? '')
     const models = await probeModels({
+      kind: profile.kind,
       baseUrl: profile.baseUrl,
-      apiKey: credential?.apiKey ?? '',
-      fallbackModels: profile.models
+      endpointFormat: profile.endpointFormat,
+      apiKey: resolved.apiKey,
+      headers: { ...(profile.headers ?? {}), ...(resolved.headers ?? {}) },
+      fallbackModels: profile.models,
+      proxyUrl: document.proxy.enabled ? document.proxy.url : ''
     })
     return { ok: true, models }
   }
@@ -667,6 +735,26 @@ export class ModelConnectionRegistry {
     return credential?.apiKey?.trim() || null
   }
 
+  /**
+   * Main-only bridge for request paths that have not moved into Kun yet. A
+   * Registry profile without a credentialRef is authoritative unless it is
+   * still explicitly bound to a legacy settings source. No HTTP route exposes
+   * this result.
+   */
+  async credentialStateForInternalConsumer(providerId: string): Promise<{
+    authoritative: boolean
+    apiKey: string
+  }> {
+    const document = await this.file.read(emptyDocument)
+    const profile = document.profiles[providerId]
+    if (!profile || (!profile.credentialRef && profile.credentialSourceId)) {
+      return { authoritative: false, apiKey: '' }
+    }
+    if (!profile.credentialRef) return { authoritative: true, apiKey: '' }
+    const credential = await this.options.credentials.get(profile.credentialRef)
+    return { authoritative: true, apiKey: credential?.apiKey?.trim() ?? '' }
+  }
+
   /** Resolves a Registry-owned protected credential for request-time refresh. */
   async resolveApiKey(sourceId: string): Promise<{ apiKey: string } | null> {
     const providerId = providerIdFromCredentialSource(sourceId)
@@ -679,19 +767,21 @@ export class ModelConnectionRegistry {
   }
 
   /** Atomically rotates a Registry-owned protected credential in place. */
-  async updateResolvedApiKey(sourceId: string, apiKey: string): Promise<boolean> {
+  async updateResolvedApiKey(
+    sourceId: string,
+    expectedApiKey: string,
+    apiKey: string
+  ): Promise<boolean> {
     const providerId = providerIdFromCredentialSource(sourceId)
     const trimmed = apiKey.trim()
     if (!providerId || !trimmed) return false
     const profile = (await this.file.read(emptyDocument)).profiles[providerId]
     if (!profile?.credentialRef) return false
-    const credential = await this.options.credentials.get(profile.credentialRef)
-    if (!credential) return false
-    await this.options.credentials.set(profile.credentialRef, {
-      ...credential,
-      apiKey: trimmed
-    })
-    return true
+    return this.options.credentials.compareAndSetApiKey(
+      profile.credentialRef,
+      expectedApiKey,
+      trimmed
+    )
   }
 
   async materialize(): Promise<MaterializedModelConnections> {
@@ -708,12 +798,15 @@ export class ModelConnectionRegistry {
         ? await this.options.credentials.get(profile.credentialRef)
         : null
       const material = materializeLegacyProviderCredential(credential?.apiKey ?? '')
-      const credentialSourceId = profile.credentialSourceId ??
-        (profile.credentialRef ? modelConnectionCredentialSourceId(profile.id) : undefined)
+      const credentialSourceId = profile.credentialRef
+        ? modelConnectionCredentialSourceId(profile.id)
+        : profile.credentialSourceId
       // A managed source is authoritative and may already have rotated beyond
       // the Registry's pre-migration credential copy. Never expose that stale
       // copy as a fallback client key.
-      const usesRequestTimeCredential = profile.kind === 'http' && Boolean(profile.credentialSourceId)
+      const usesRequestTimeCredential = profile.kind === 'http' &&
+        !profile.credentialRef &&
+        Boolean(profile.credentialSourceId)
       const apiKey = usesRequestTimeCredential ? '' : material.apiKey
       const materialHeaders = usesRequestTimeCredential ? undefined : material.headers
       const config: ServeProviderConfig =
@@ -770,14 +863,93 @@ export class ModelConnectionRegistry {
 
   private async probeInput(input: ModelConnectionConnectRequest): Promise<string[]> {
     return probeModels({
+      kind: input.kind,
       baseUrl: input.baseUrl,
+      endpointFormat: input.endpointFormat,
       apiKey: input.credential?.trim() ?? '',
-      fallbackModels: input.models
+      fallbackModels: input.models,
+      proxyUrl: ''
     })
   }
 
   private async apply(document: RegistryDocument): Promise<void> {
     await this.options.onChanged?.(await this.materializeDocument(document))
+  }
+
+  private async retryLegacyCredentialSourceRetirements(): Promise<void> {
+    const document = await this.file.read(emptyDocument)
+    for (const profile of Object.values(document.profiles)) {
+      if (profile.legacyCredentialSourceToRetire) {
+        await this.retireLegacyCredentialSource(profile.id)
+      }
+    }
+    for (const [providerId, tombstone] of Object.entries(document.tombstones)) {
+      if (tombstone.legacyCredentialSourceToRetire) {
+        await this.retireDeletedLegacyCredentialSource(providerId)
+      }
+    }
+  }
+
+  private async retireLegacyCredentialSource(providerId: string): Promise<void> {
+    const retire = this.options.retireLegacyCredentialSource
+    if (!retire) return
+    const profile = (await this.file.read(emptyDocument)).profiles[providerId]
+    const sourceId = profile?.legacyCredentialSourceToRetire
+    if (!sourceId) return
+    try {
+      await retire(sourceId)
+      await this.file.update(emptyDocument, (current) => {
+        const currentProfile = current.profiles[providerId]
+        if (currentProfile?.legacyCredentialSourceToRetire !== sourceId) return current
+        return {
+          ...current,
+          profiles: {
+            ...current.profiles,
+            [providerId]: {
+              ...currentProfile,
+              legacyCredentialSourceToRetire: undefined
+            }
+          }
+        }
+      })
+    } catch (error) {
+      console.warn('[kun] Registry credential replaced, but its legacy source retirement is pending.', {
+        providerId,
+        sourceId,
+        message: error instanceof Error ? error.message : String(error)
+      })
+    }
+  }
+
+  private async retireDeletedLegacyCredentialSource(providerId: string): Promise<void> {
+    const retire = this.options.retireLegacyCredentialSource
+    if (!retire) return
+    const tombstone = (await this.file.read(emptyDocument)).tombstones[providerId]
+    const sourceId = tombstone?.legacyCredentialSourceToRetire
+    if (!sourceId) return
+    try {
+      await retire(sourceId)
+      await this.file.update(emptyDocument, (current) => {
+        const currentTombstone = current.tombstones[providerId]
+        if (currentTombstone?.legacyCredentialSourceToRetire !== sourceId) return current
+        return {
+          ...current,
+          tombstones: {
+            ...current.tombstones,
+            [providerId]: {
+              ...currentTombstone,
+              legacyCredentialSourceToRetire: undefined
+            }
+          }
+        }
+      })
+    } catch (error) {
+      console.warn('[kun] Deleted Registry provider still has a pending legacy source retirement.', {
+        providerId,
+        sourceId,
+        message: error instanceof Error ? error.message : String(error)
+      })
+    }
   }
 
   private async changed(_document: RegistryDocument): Promise<void> {
@@ -824,6 +996,7 @@ function emptyDocument(): RegistryDocument {
     schemaVersion: 1,
     revision: 0,
     profiles: {},
+    tombstones: {},
     proxy: { enabled: false, url: '' },
     routePools: [],
     localModelGateway: { enabled: false }
@@ -843,53 +1016,36 @@ function configuredFallback(
 
 function reconcileSeedProfile(
   existing: StoredProfile,
-  request: ModelConnectionConnectRequest,
-  options: {
-    preserveSelection?: boolean
-    credentialSourceId?: string
-  } = {}
+  request: ModelConnectionConnectRequest
 ): StoredProfile {
   const incomingModels = uniqueModels([
     ...request.models,
     ...(request.selectedModel ? [request.selectedModel] : [])
   ])
-  // Early registry builds seeded every secondary provider with the active
-  // DeepSeek model. Recognize that one-value signature and replace it with the
-  // provider's real GUI catalog; otherwise only add missing models so
-  // registry-owned edits are not discarded.
-  const repairLegacySeed = incomingModels.length > 0 &&
-    request.select === false &&
-    existing.models.length === 1 &&
-    !incomingModels.includes(existing.models[0]!) &&
-    existing.selectedModel === existing.models[0]
-  const models = incomingModels.length === 0
-    ? existing.models
-    : repairLegacySeed
-      ? incomingModels
-      : uniqueModels([...existing.models, ...incomingModels])
-  const selectedModel = repairLegacySeed
-    ? request.selectedModel ?? models[0]
-    : options.preserveSelection
-      ? existing.selectedModel ?? request.selectedModel ?? models[0]
-    : request.select && request.selectedModel
-      ? request.selectedModel
-      : existing.selectedModel ?? request.selectedModel ?? models[0]
-  const modelCapabilities = request.modelCapabilities
-    ? {
-        ...(existing.modelCapabilities ?? {}),
-        ...capabilitiesForModels(request.modelCapabilities, models)
-      }
-    : existing.modelCapabilities
   const migrateGeminiSubscription =
     existing.id === 'gemini-subscription' &&
     existing.kind === 'gemini-code-assist' &&
     request.kind === 'antigravity-cli'
+  // Once a profile exists, the Registry owns its catalog and selection.
+  // AppSettings seeds are a compatibility import, not a union source: using
+  // them to add models would resurrect a user-deleted model after restart.
+  // The one exception is the explicit one-time Gemini transport migration.
+  const models = migrateGeminiSubscription && incomingModels.length > 0
+    ? incomingModels
+    : existing.models
+  const selectedModel = migrateGeminiSubscription
+    ? request.selectedModel ?? models[0]
+    : existing.selectedModel ?? models[0]
+  const modelCapabilities = migrateGeminiSubscription && request.modelCapabilities
+    ? capabilitiesForModels(request.modelCapabilities, models)
+    : existing.modelCapabilities
 
   return StoredProfileSchema.parse({
     ...existing,
-    ...(options.credentialSourceId
-      ? { credentialSourceId: options.credentialSourceId, configured: true }
-      : {}),
+    // Credential ownership is imported only when a profile is first created.
+    // Re-applying GUI/settings seeds must never replace a Registry-owned
+    // credentialRef, resurrect a cleared credential, or switch an existing
+    // profile back to a legacy settings:provider:* source.
     ...(migrateGeminiSubscription
       ? {
           kind: request.kind,
@@ -919,6 +1075,7 @@ function sameStoredProfile(left: StoredProfile, right: StoredProfile): boolean {
     left.selectedModel === right.selectedModel &&
     left.credentialRef === right.credentialRef &&
     left.credentialSourceId === right.credentialSourceId &&
+    left.legacyCredentialSourceToRetire === right.legacyCredentialSourceToRetire &&
     sameModels(left.models, right.models) &&
     sameCapabilities(left.modelCapabilities, right.modelCapabilities)
 }
@@ -937,6 +1094,7 @@ function project(
       .map(({
         credentialRef: _credentialRef,
         credentialSourceId: _credentialSourceId,
+        legacyCredentialSourceToRetire: _legacyCredentialSourceToRetire,
         headers: _headers,
         ...profile
       }) => {
@@ -1058,14 +1216,26 @@ function sameModels(left: readonly string[], right: readonly string[]): boolean 
 }
 
 async function probeModels(input: {
+  kind: ModelConnectionProfile['kind']
   baseUrl?: string
+  endpointFormat?: ModelConnectionProfile['endpointFormat']
   apiKey: string
+  headers?: Record<string, string>
   fallbackModels: readonly string[]
+  proxyUrl: string
 }): Promise<string[]> {
-  if (!input.baseUrl) return uniqueModels(input.fallbackModels)
-  const url = modelsUrl(input.baseUrl)
-  const response = await fetch(url, {
-    headers: input.apiKey ? { authorization: `Bearer ${input.apiKey}` } : {},
+  if (input.kind !== 'http') return uniqueModels(input.fallbackModels)
+  if (!input.baseUrl) throw new Error('provider probe failed: HTTP provider has no base URL')
+  const url = modelsUrl(input.baseUrl, input.endpointFormat)
+  const usesAnthropicHeaders = input.endpointFormat === 'messages'
+  const authHeaders: Record<string, string> = input.apiKey
+    ? usesAnthropicHeaders
+      ? { 'x-api-key': input.apiKey, 'anthropic-version': '2023-06-01' }
+      : { authorization: `Bearer ${input.apiKey}` }
+    : {}
+  const fetchImpl = createProxyFetch(input.proxyUrl) ?? fetch
+  const response = await fetchImpl(url, {
+    headers: { ...(input.headers ?? {}), ...authHeaders },
     signal: AbortSignal.timeout(15_000)
   })
   if (!response.ok) throw new Error(`provider probe failed with HTTP ${response.status}`)
@@ -1078,12 +1248,36 @@ async function probeModels(input: {
   return uniqueModels([...discovered, ...input.fallbackModels])
 }
 
-function modelsUrl(baseUrl: string): string {
+function modelsUrl(
+  baseUrl: string,
+  endpointFormat: ModelConnectionProfile['endpointFormat'] | undefined
+): string {
+  if (endpointFormat === 'custom_endpoint') {
+    throw new Error(
+      'provider probe failed: custom_endpoint does not define a models URL; configure models explicitly with probe disabled'
+    )
+  }
   const url = new URL(baseUrl)
   url.search = ''
   url.hash = ''
-  url.pathname = url.pathname
-    .replace(/\/(chat\/completions|responses|messages)\/?$/u, '')
-    .replace(/\/$/u, '') + '/models'
+  const segments = url.pathname.split('/').filter(Boolean)
+  const last = segments.at(-1)?.toLowerCase()
+  if (last === 'models') {
+    url.pathname = `/${segments.join('/')}`
+    return url.toString()
+  }
+  if (last === 'responses' || last === 'messages') {
+    segments.pop()
+  } else if (last === 'completions' && segments.at(-2)?.toLowerCase() === 'chat') {
+    segments.splice(-2)
+  }
+  const version = segments.at(-1)?.toLowerCase()
+  if (version === 'beta') {
+    segments[segments.length - 1] = 'v1'
+  } else if (!version || !/^v\d+$/u.test(version)) {
+    segments.push('v1')
+  }
+  if (segments.at(-1)?.toLowerCase() !== 'models') segments.push('models')
+  url.pathname = `/${segments.join('/')}`
   return url.toString()
 }

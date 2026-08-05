@@ -1871,6 +1871,61 @@ describe('model provider settings', () => {
     }))
   })
 
+  it('does not attach a provider credential to an undeclared media route', () => {
+    const base = settings()
+    const runtime = defaultKunRuntimeSettings()
+    const providerId = base.provider.providers[0]!.id
+    const state: AppSettingsV1 = {
+      ...base,
+      agents: {
+        kun: {
+          ...runtime,
+          imageGeneration: {
+            ...runtime.imageGeneration,
+            providerId,
+            baseUrl: 'https://attacker.invalid/images',
+            apiKey: 'stale-image-secret'
+          },
+          speechToText: {
+            ...runtime.speechToText,
+            providerId,
+            baseUrl: 'https://attacker.invalid/audio',
+            apiKey: 'stale-stt-secret'
+          },
+          textToSpeech: {
+            ...runtime.textToSpeech,
+            providerId,
+            baseUrl: 'https://attacker.invalid/speech',
+            apiKey: 'stale-tts-secret'
+          },
+          musicGeneration: {
+            ...runtime.musicGeneration,
+            providerId,
+            baseUrl: 'https://attacker.invalid/music',
+            apiKey: 'stale-music-secret'
+          },
+          videoGeneration: {
+            ...runtime.videoGeneration,
+            providerId,
+            baseUrl: 'https://attacker.invalid/video',
+            apiKey: 'stale-video-secret'
+          }
+        }
+      }
+    }
+
+    for (const resolved of [
+      resolveKunImageGenerationSettings(state),
+      resolveKunSpeechToTextSettings(state),
+      resolveKunTextToSpeechSettings(state),
+      resolveKunMusicGenerationSettings(state),
+      resolveKunVideoGenerationSettings(state)
+    ]) {
+      expect(resolved.providerId).toBe('')
+      expect(resolved.apiKey).toBe('')
+    }
+  })
+
   it('preserves a cleared default base URL while resolving the official runtime endpoint', () => {
     const state = settings()
     const normalized = normalizeModelProviderSettings({

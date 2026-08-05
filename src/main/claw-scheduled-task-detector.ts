@@ -6,12 +6,15 @@ import type {
   ScheduledTaskV1
 } from '../shared/app-settings'
 import {
+  DEFAULT_DEEPSEEK_BASE_URL,
   DEFAULT_SCHEDULE_MODEL,
   DEFAULT_SCHEDULE_REASONING_EFFORT,
   getModelProviderProfile,
+  getModelProviderSettings,
   isCustomModelEndpointFormat,
   modelEndpointPath,
   modelProviderModelProfile,
+  normalizeModelProviderId,
   resolveKunRuntimeSettings,
   resolveModelEndpointFormat,
   resolveModelProviderProxyUrl
@@ -322,20 +325,31 @@ export async function detectClawScheduledTaskRequest(
   settings: AppSettingsV1,
   sourceText: string,
   modelHint: string,
-  now = new Date()
+  now = new Date(),
+  providerIdHint?: string | null
 ): Promise<ParsedClawScheduledTaskRequest | null> {
   if (!looksLikeClawScheduledTaskCandidate(sourceText)) return null
   const runtime = resolveKunRuntimeSettings(settings)
-  const apiKey = runtime.apiKey.trim()
+  const requestedProviderId = normalizeModelProviderId(providerIdHint)
+  const runtimeProvider = getModelProviderProfile(settings, runtime.providerId)
+  const provider = requestedProviderId
+    ? getModelProviderSettings(settings).providers.find((item) => item.id === requestedProviderId)
+    : runtimeProvider
+  if (!provider) return null
+  const usesRuntimeRoute = provider.id === runtimeProvider.id
+  const apiKey = usesRuntimeRoute ? runtime.apiKey.trim() : provider.apiKey.trim()
   if (!apiKey) return null
   const model = detectionModel(modelHint)
-  const provider = getModelProviderProfile(settings, runtime.providerId)
   const responsesMode = modelProviderModelProfile(provider, model)?.responsesMode
-  if (!resolveCodexResponsesRequestAuth(runtime.baseUrl, apiKey).apiKey) return null
+  const baseUrl = usesRuntimeRoute
+    ? runtime.baseUrl
+    : provider.baseUrl.trim() || DEFAULT_DEEPSEEK_BASE_URL
+  const endpointFormat = usesRuntimeRoute ? runtime.endpointFormat : provider.endpointFormat
+  if (!resolveCodexResponsesRequestAuth(baseUrl, apiKey).apiKey) return null
   const detectionRequest = buildDetectionRequest({
-    baseUrl: runtime.baseUrl,
+    baseUrl,
     apiKey,
-    endpointFormat: runtime.endpointFormat,
+    endpointFormat,
     model,
     systemPrompt: buildDetectionPrompt(now),
     sourceText,
