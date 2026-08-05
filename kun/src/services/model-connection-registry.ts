@@ -1079,6 +1079,7 @@ export class ModelConnectionRegistry {
     providerId: string,
     expectedRevision: number
   ): Promise<ModelConnectionSnapshot> {
+    const fallbackHealth = await this.inspectCredentialHealth(await this.file.read(emptyDocument))
     let previousRef: string | undefined
     let legacyCredentialSourceToRetire: string | undefined
     let cancelledTransactionToken: string | undefined
@@ -1111,7 +1112,10 @@ export class ModelConnectionRegistry {
         }
       }
       const fallback = !configured && current.defaultProviderId === providerId
-        ? configuredFallback(Object.values(profiles).filter((candidate) => candidate.id !== providerId))
+        ? configuredFallback(
+            Object.values(profiles).filter((candidate) => candidate.id !== providerId),
+            fallbackHealth
+          )
         : undefined
       return {
         schemaVersion: 1,
@@ -1151,6 +1155,7 @@ export class ModelConnectionRegistry {
   }
 
   async delete(providerId: string, expectedRevision: number): Promise<ModelConnectionSnapshot> {
+    const fallbackHealth = await this.inspectCredentialHealth(await this.file.read(emptyDocument))
     let credentialRef: string | undefined
     let legacyCredentialSourceToRetire: string | undefined
     let cancelledTransactionToken: string | undefined
@@ -1170,7 +1175,7 @@ export class ModelConnectionRegistry {
       delete credentialTransactions[providerId]
       const profiles = { ...current.profiles }
       delete profiles[providerId]
-      const fallback = configuredFallback(Object.values(profiles))
+      const fallback = configuredFallback(Object.values(profiles), fallbackHealth)
       return {
         schemaVersion: 1,
         revision: current.revision + 1,
@@ -1217,13 +1222,16 @@ export class ModelConnectionRegistry {
 
   async select(raw: unknown): Promise<ModelConnectionSnapshot> {
     const input = ModelConnectionSelectRequestSchema.parse(raw)
+    const selectionHealth = await this.inspectCredentialHealth(await this.file.read(emptyDocument))
     const document = await this.file.update(emptyDocument, (current) => {
       assertRevision(current, input.expectedRevision, this.options.modelCapabilities, this.credentialHealth)
       const profile = requireProfile(current, input.providerId)
       if (current.credentialTransactions[profile.id]) {
         throw new Error('provider credential replacement is pending')
       }
-      if (!profile.configured) throw new Error('provider is not connected')
+      if (!isProfileUsable(profile, selectionHealth.get(profile.id))) {
+        throw new Error('provider is not connected')
+      }
       if (input.accountId && input.accountId !== profile.accountId) {
         throw new Error('account does not belong to the selected provider')
       }
@@ -1258,13 +1266,16 @@ export class ModelConnectionRegistry {
     const input = ModelConnectionSelectRequestSchema
       .omit({ expectedRevision: true })
       .parse(raw)
+    const selectionHealth = await this.inspectCredentialHealth(await this.file.read(emptyDocument))
     let changed = false
     const document = await this.file.update(emptyDocument, (current) => {
       const profile = requireProfile(current, input.providerId)
       if (current.credentialTransactions[profile.id]) {
         throw new Error('provider credential replacement is pending')
       }
-      if (!profile.configured) throw new Error('provider is not connected')
+      if (!isProfileUsable(profile, selectionHealth.get(profile.id))) {
+        throw new Error('provider is not connected')
+      }
       if (input.accountId && input.accountId !== profile.accountId) {
         throw new Error('account does not belong to the selected provider')
       }
@@ -1521,12 +1532,20 @@ export class ModelConnectionRegistry {
     document: RegistryDocument,
     recoveryProviderId?: string
   ): Promise<MaterializedModelConnections> {
+    const credentialHealth = await this.inspectCredentialHealth(document)
     const providers = new Map<string, ServeProviderConfig>()
     let selected: MaterializedModelConnections['selected']
     for (const profile of Object.values(document.profiles)) {
       const credentialReplacementPending = Boolean(
         document.credentialTransactions[profile.id] && profile.id !== recoveryProviderId
       )
+      const profileUsable = (recoveryProviderId === profile.id && profile.configured) ||
+        isProfileUsable(profile, credentialHealth.get(profile.id))
+      // A pending replacement must remain in the live provider map with an
+      // empty credential so onChanged can retire the old client atomically.
+      // Other unusable profiles stay visible in the Registry snapshot but are
+      // intentionally absent from executable runtime configuration.
+      if (!profileUsable && !credentialReplacementPending) continue
       let credential: Awaited<ReturnType<ExtensionCredentialStore['get']>> = null
       if (profile.credentialRef && !credentialReplacementPending) {
         try {
@@ -1537,7 +1556,7 @@ export class ModelConnectionRegistry {
         }
       }
       const material = materializeLegacyProviderCredential(credential?.apiKey ?? '')
-      const credentialSourceId = credentialReplacementPending
+      const credentialSourceId = credentialReplacementPending || !profileUsable
         ? undefined
         : profile.credentialRef
           ? modelConnectionCredentialSourceId(profile.id)
@@ -1590,7 +1609,7 @@ export class ModelConnectionRegistry {
                 : {})
             }
       providers.set(profile.id, config)
-      if (profile.id === document.defaultProviderId && document.defaultModel) {
+      if (profileUsable && profile.id === document.defaultProviderId && document.defaultModel) {
         selected = { profile, config, model: document.defaultModel }
       }
     }
@@ -2250,10 +2269,11 @@ function emptyDocument(): RegistryDocument {
 }
 
 function configuredFallback(
-  profiles: readonly StoredProfile[]
+  profiles: readonly StoredProfile[],
+  credentialHealth: ReadonlyMap<string, ProjectedCredentialHealth> = new Map()
 ): { profile: StoredProfile; model: string } | undefined {
   for (const profile of profiles) {
-    if (!profile.configured) continue
+    if (!isProfileUsable(profile, credentialHealth.get(profile.id))) continue
     const model = profile.selectedModel ?? profile.models[0]
     if (model) return { profile, model }
   }
@@ -2335,11 +2355,9 @@ function project(
   ) => ModelCapabilityMetadata,
   credentialHealthByProvider: ReadonlyMap<string, ProjectedCredentialHealth> = new Map()
 ): ModelConnectionSnapshot {
-  return ModelConnectionSnapshotSchema.parse({
-    schemaVersion: 1,
-    revision: document.revision,
-    providers: Object.values(document.profiles)
-      .map(({
+  const providers = Object.values(document.profiles)
+    .map((storedProfile) => {
+      const {
         incarnationId: _incarnationId,
         credentialMutationHighWater: _credentialMutationHighWater,
         credentialRef: _credentialRef,
@@ -2347,28 +2365,52 @@ function project(
         legacyCredentialSourceToRetire: _legacyCredentialSourceToRetire,
         headers: _headers,
         ...profile
-      }) => {
-        const modelCapabilities = Object.fromEntries(profile.models.flatMap((model) => {
-          const stored = profile.modelCapabilities?.[model] ??
-            profile.modelCapabilities?.[model.trim().toLowerCase()]
-          const derived = resolveModelCapabilities?.(model, profile)
-          const capability = mergeProjectedCapability(stored, derived, profile, model)
-          return capability ? [[model, { ...capability, id: model }]] : []
-        }))
-        return {
-          ...profile,
-          ...credentialHealthByProvider.get(profile.id),
-          ...(Object.keys(modelCapabilities).length > 0 ? { modelCapabilities } : {})
+      } = storedProfile
+      const credentialHealth = credentialHealthByProvider.get(profile.id)
+      const modelCapabilities = Object.fromEntries(profile.models.flatMap((model) => {
+        const stored = profile.modelCapabilities?.[model] ??
+          profile.modelCapabilities?.[model.trim().toLowerCase()]
+        const derived = resolveModelCapabilities?.(model, profile)
+        const capability = mergeProjectedCapability(stored, derived, profile, model)
+        return capability ? [[model, { ...capability, id: model }]] : []
+      }))
+      return {
+        ...profile,
+        configured: isProfileUsable(storedProfile, credentialHealth),
+        ...credentialHealth,
+        ...(Object.keys(modelCapabilities).length > 0 ? { modelCapabilities } : {})
+      }
+    })
+    .sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id))
+  const selected = document.defaultProviderId
+    ? providers.find((profile) => profile.id === document.defaultProviderId && profile.configured)
+    : undefined
+  return ModelConnectionSnapshotSchema.parse({
+    schemaVersion: 1,
+    revision: document.revision,
+    providers,
+    ...(selected
+      ? {
+          defaultProviderId: document.defaultProviderId,
+          defaultAccountId: document.defaultAccountId,
+          defaultModel: document.defaultModel
         }
-      })
-      .sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id)),
-    defaultProviderId: document.defaultProviderId,
-    defaultAccountId: document.defaultAccountId,
-    defaultModel: document.defaultModel,
+      : {}),
     proxy: document.proxy,
     routePools: document.routePools,
     localModelGateway: document.localModelGateway
   })
+}
+
+function isProfileUsable(
+  profile: Pick<StoredProfile, 'configured' | 'kind' | 'credentialRef' | 'credentialSourceId'>,
+  health?: ProjectedCredentialHealth
+): boolean {
+  if (!profile.configured) return false
+  const requiresCredential = profile.kind === 'http' ||
+    profile.kind === 'gemini-code-assist' ||
+    Boolean(profile.credentialRef || profile.credentialSourceId)
+  return !requiresCredential || health?.credentialStatus === 'ready'
 }
 
 function mergeProjectedCapability(
