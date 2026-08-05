@@ -164,7 +164,6 @@ type CompatPostResult =
     }
 
 export const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 450_000
-const MIN_SAFE_STREAM_RECOVERY_ATTEMPTS = 1
 
 function isCodexEndpoint(baseUrl: string): boolean {
   return baseUrl.includes('chatgpt.com/backend-api/codex')
@@ -769,10 +768,11 @@ export class CompatModelClient implements ModelClient {
     let usedRetryAttempts = input.usedRetryAttempts
     let emittedReasoning = false
     let committedOutput = false
-    const maxRetryAttempts = Math.max(
-      MIN_SAFE_STREAM_RECOVERY_ATTEMPTS,
-      input.retry.maxAttempts
-    )
+    // maxAttempts counts retries after the initial request everywhere, and
+    // `0` is an explicit "no automatic transport retries" setting. Unlike the
+    // older code, this stream-recovery budget must not sneak in a minimum of
+    // one retry when the operator disabled retries.
+    const maxRetryAttempts = input.retry.maxAttempts
 
     while (true) {
       if (!response.body) {
@@ -801,12 +801,27 @@ export class CompatModelClient implements ModelClient {
       }
 
       if (!recoverableError) return
-      if (
-        input.request.abortSignal.aborted ||
-        committedOutput ||
-        usedRetryAttempts >= maxRetryAttempts
-      ) {
+      if (input.request.abortSignal.aborted) {
         yield recoverableError
+        return
+      }
+      if (committedOutput) {
+        // Final assistant text, tool calls, and generated images are commit
+        // points: replaying the identical request could append a different
+        // answer or duplicate a side effect. Surface the transport failure
+        // with an explicit reason (while keeping the original code, which
+        // consumers already map) instead of silently retrying.
+        yield {
+          ...recoverableError,
+          message: `${recoverableError.message} (stream recovery was blocked because final text, a tool call, or generated output had already started)`
+        }
+        return
+      }
+      if (usedRetryAttempts >= maxRetryAttempts) {
+        yield {
+          ...recoverableError,
+          message: `${recoverableError.message} (all ${maxRetryAttempts} configured stream retries were exhausted)`
+        }
         return
       }
 
@@ -835,7 +850,11 @@ export class CompatModelClient implements ModelClient {
             retried.failure.failoverAllowed === false ||
             usedRetryAttempts >= maxRetryAttempts
           ) {
-            yield { kind: 'error', message: retried.message, failure: retried.failure }
+            yield {
+              kind: 'error',
+              message: `${retried.message} (all ${maxRetryAttempts} configured stream retries were exhausted)`,
+              failure: retried.failure
+            }
             return
           }
           const networkRetryAttempt = usedRetryAttempts + 1
