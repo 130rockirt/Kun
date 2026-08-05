@@ -274,7 +274,7 @@ describe('CompatModelClient streaming tool-call finalization', () => {
       { kind: 'assistant_text_delta', text: 'partial' },
       expect.objectContaining({
         kind: 'error',
-        message: 'model stream ended before a terminal frame',
+        message: expect.stringContaining('model stream ended before a terminal frame'),
         code: 'stream_truncated'
       })
     ])

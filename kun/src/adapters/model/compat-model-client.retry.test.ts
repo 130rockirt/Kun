@@ -259,7 +259,7 @@ describe('CompatModelClient interrupted stream retry', () => {
       apiKey: 'sk-test',
       model: 'gpt-5.6-sol',
       endpointFormat: 'responses',
-      retry: { maxAttempts: 0, initialDelayMs: 0, httpStatusCodes: [429, 503] },
+      retry: { maxAttempts: 1, initialDelayMs: 0, httpStatusCodes: [429, 503] },
       fetchImpl
     })
 
@@ -303,10 +303,74 @@ describe('CompatModelClient interrupted stream retry', () => {
 
     expect(calls).toBe(1)
     expect(chunks).toContainEqual({ kind: 'assistant_text_delta', text: 'partial' })
-    expect(chunks.at(-1)).toMatchObject({
+    const lastError = chunks.at(-1)
+    expect(lastError).toMatchObject({
       kind: 'error',
       code: 'stream_read_error',
       failure: { category: 'network', failoverAllowed: true }
+    })
+    expect(lastError?.kind === 'error' ? lastError.message : '').toContain('blocked')
+  })
+
+  it('retries a reasoning-only terminated stream five times and then exhausts the budget', async () => {
+    let calls = 0
+    const fetchImpl = (async () => {
+      calls += 1
+      return interruptedSse(
+        'data: {"type":"response.reasoning_summary_text.delta","delta":"plan"}\n\n'
+      )
+    }) as unknown as typeof fetch
+    const streamClient = new CompatModelClient({
+      baseUrl: 'https://provider.example/v1/responses',
+      apiKey: 'sk-test',
+      model: 'gpt-5.6-sol',
+      endpointFormat: 'responses',
+      retry: { maxAttempts: 5, initialDelayMs: 0, httpStatusCodes: [429, 503] },
+      fetchImpl
+    })
+
+    const chunks = await drain(streamClient.stream({ ...request(), model: 'gpt-5.6-sol' }))
+    const retries = chunks.filter((chunk) => chunk.kind === 'retrying')
+
+    expect(calls).toBe(6)
+    expect(retries).toHaveLength(5)
+    expect(retries.every((chunk) => chunk.kind === 'retrying' && 'reason' in chunk && chunk.reason === 'stream_transport')).toBe(true)
+    expect(chunks.filter((chunk) => chunk.kind === 'assistant_reasoning_delta')).toEqual([
+      { kind: 'assistant_reasoning_delta', text: 'plan' }
+    ])
+    const exhaustedError = chunks.at(-1)
+    expect(exhaustedError).toMatchObject({
+      kind: 'error',
+      code: 'stream_read_error',
+      failure: { category: 'network', failoverAllowed: true }
+    })
+    expect(exhaustedError?.kind === 'error' ? exhaustedError.message : '').toContain('all 5 configured stream retries were exhausted')
+  })
+
+  it('does not retry a reasoning-only terminated stream when maxAttempts is zero', async () => {
+    let calls = 0
+    const fetchImpl = (async () => {
+      calls += 1
+      return interruptedSse(
+        'data: {"type":"response.reasoning_summary_text.delta","delta":"plan"}\n\n'
+      )
+    }) as unknown as typeof fetch
+    const streamClient = new CompatModelClient({
+      baseUrl: 'https://provider.example/v1/responses',
+      apiKey: 'sk-test',
+      model: 'gpt-5.6-sol',
+      endpointFormat: 'responses',
+      retry: { maxAttempts: 0, initialDelayMs: 0, httpStatusCodes: [429, 503] },
+      fetchImpl
+    })
+
+    const chunks = await drain(streamClient.stream({ ...request(), model: 'gpt-5.6-sol' }))
+
+    expect(calls).toBe(1)
+    expect(chunks.some((chunk) => chunk.kind === 'retrying')).toBe(false)
+    expect(chunks.at(-1)).toMatchObject({
+      kind: 'error',
+      code: 'stream_read_error'
     })
   })
 })
