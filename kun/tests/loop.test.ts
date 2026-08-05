@@ -1036,6 +1036,175 @@ describe('AgentLoop', () => {
     ]))
   })
 
+  it('recovers an ordinary turn when the model only announces progress after a tool failure', async () => {
+    let calls = 0
+    let executions = 0
+    const requests: ModelRequest[] = []
+    const fragile = LocalToolHost.defineTool({
+      name: 'fragile',
+      description: 'Fails unless retried with a valid attempt',
+      inputSchema: {
+        type: 'object',
+        properties: { attempt: { type: 'number' } },
+        required: ['attempt']
+      },
+      policy: 'auto',
+      execute: async (args) => {
+        executions += 1
+        return args.attempt === 2
+          ? { output: { ok: true } }
+          : { output: { error: 'simulated failure' }, isError: true }
+      }
+    })
+    const h = makeHarness(
+      {
+        provider: 'progress-after-failure',
+        model: 'progress-after-failure',
+        async *stream(request: ModelRequest): AsyncIterable<ModelStreamChunk> {
+          requests.push(request)
+          calls += 1
+          if (calls === 1) {
+            yield {
+              kind: 'tool_call_complete',
+              callId: 'call_fragile_1',
+              toolName: 'fragile',
+              arguments: { attempt: 1 }
+            }
+            yield { kind: 'completed', stopReason: 'tool_calls' }
+            return
+          }
+          if (calls === 2) {
+            yield { kind: 'assistant_text_delta', text: '接下来我会尝试其他参数' }
+            yield { kind: 'completed', stopReason: 'stop' }
+            return
+          }
+          if (calls === 3) {
+            yield {
+              kind: 'tool_call_complete',
+              callId: 'call_fragile_2',
+              toolName: 'fragile',
+              arguments: { attempt: 2 }
+            }
+            yield { kind: 'completed', stopReason: 'tool_calls' }
+            return
+          }
+          yield { kind: 'assistant_text_delta', text: '成功完成。' }
+          yield { kind: 'completed', stopReason: 'stop' }
+        }
+      },
+      {
+        tools: [fragile],
+        toolStorm: { enabled: false },
+        compactor: new ContextCompactor({ softThreshold: 1_000_000, hardThreshold: 1_100_000 })
+      }
+    )
+    await bootstrapThread(h)
+
+    const status = await h.loop.runTurn(h.threadId, h.turnId)
+    const items = await h.sessionStore.loadItems(h.threadId)
+
+    expect(status).toBe('completed')
+    expect(calls).toBe(4)
+    expect(executions).toBe(2)
+    expect(requests[2]?.contextInstructions?.join('\n')).toContain('Tool failure recovery')
+    const failedResult = requests[2]?.history.find(
+      (item) => item.kind === 'tool_result' && item.toolName === 'fragile'
+    )
+    expect(failedResult?.kind === 'tool_result' ? failedResult.isError : false).toBe(true)
+    expect(items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'tool_result', toolName: 'fragile', isError: false })
+    ]))
+  })
+
+  it('fails visibly when the model keeps announcing progress after a tool failure', async () => {
+    let calls = 0
+    const requests: ModelRequest[] = []
+    const fragile = LocalToolHost.defineTool({
+      name: 'fragile',
+      description: 'Always fails',
+      inputSchema: { type: 'object', properties: {} },
+      policy: 'auto',
+      execute: async () => ({ output: { error: 'simulated failure' }, isError: true })
+    })
+    const h = makeHarness(
+      {
+        provider: 'repeated-progress-after-failure',
+        model: 'repeated-progress-after-failure',
+        async *stream(request: ModelRequest): AsyncIterable<ModelStreamChunk> {
+          requests.push(request)
+          calls += 1
+          if (calls === 1) {
+            yield {
+              kind: 'tool_call_complete',
+              callId: 'call_fragile',
+              toolName: 'fragile',
+              arguments: {}
+            }
+            yield { kind: 'completed', stopReason: 'tool_calls' }
+            return
+          }
+          yield { kind: 'assistant_text_delta', text: '接下来我会继续排查' }
+          yield { kind: 'completed', stopReason: 'stop' }
+        }
+      },
+      { tools: [fragile], toolStorm: { enabled: false } }
+    )
+    await bootstrapThread(h)
+
+    const status = await h.loop.runTurn(h.threadId, h.turnId)
+    const items = await h.sessionStore.loadItems(h.threadId)
+
+    expect(status).toBe('failed')
+    expect(calls).toBe(4)
+    expect(requests[3]?.tools).toEqual([])
+    expect(requests[3]?.contextInstructions?.join('\n'))
+      .toContain('Tool failure final-answer recovery')
+    expect(items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'post_tool_failure_recovery_exhausted' })
+    ]))
+  })
+
+  it('accepts a final answer directly after a tool failure without forcing recovery', async () => {
+    let calls = 0
+    const fragile = LocalToolHost.defineTool({
+      name: 'fragile',
+      description: 'Always fails',
+      inputSchema: { type: 'object', properties: {} },
+      policy: 'auto',
+      execute: async () => ({ output: { error: 'simulated failure' }, isError: true })
+    })
+    const h = makeHarness(
+      {
+        provider: 'final-after-failure',
+        model: 'final-after-failure',
+        async *stream(): AsyncIterable<ModelStreamChunk> {
+          calls += 1
+          if (calls === 1) {
+            yield {
+              kind: 'tool_call_complete',
+              callId: 'call_fragile',
+              toolName: 'fragile',
+              arguments: {}
+            }
+            yield { kind: 'completed', stopReason: 'tool_calls' }
+            return
+          }
+          yield {
+            kind: 'assistant_text_delta',
+            text: 'The fragile tool failed; the task cannot continue until you provide the missing credential.'
+          }
+          yield { kind: 'completed', stopReason: 'stop' }
+        }
+      },
+      { tools: [fragile], toolStorm: { enabled: false } }
+    )
+    await bootstrapThread(h)
+
+    const status = await h.loop.runTurn(h.threadId, h.turnId)
+    expect(status).toBe('completed')
+    expect(calls).toBe(2)
+  })
+
   it('keeps running past the legacy eight-step ceiling until the model stops', async () => {
     let calls = 0
     const noop = LocalToolHost.defineTool({
