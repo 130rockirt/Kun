@@ -167,6 +167,9 @@ import {
 import { createClawRuntime, type ClawRuntime } from './claw-runtime'
 import { createScheduleRuntime, type ScheduleRuntime } from './schedule-runtime'
 import { createWorkflowRuntime, type WorkflowRuntime } from './workflow-runtime'
+import { createDaemonRuntime, type DaemonRuntime } from './daemon-runtime'
+import { createDaemonPushText } from './daemon-push-service'
+import { createPowerSaveController, type PowerSaveController } from './power-save-controller'
 import { StorageRelocationController } from './storage-relocation/controller'
 import { StorageRelocationEngine } from './storage-relocation/engine'
 import { storageRelocationFeatureEnabled } from './storage-relocation/feature-policy'
@@ -476,6 +479,8 @@ let store: JsonSettingsStore
 let logDir = ''
 let clawRuntime: ClawRuntime | null = null
 let scheduleRuntime: ScheduleRuntime | null = null
+let daemonRuntime: DaemonRuntime | null = null
+let powerSaveController: PowerSaveController | null = null
 let telegramRuntime: TelegramRuntime | null = null
 let workflowRuntime: WorkflowRuntime | null = null
 let appBehavior: AppBehaviorConfigV1 = normalizeAppBehaviorSettings()
@@ -3101,7 +3106,7 @@ app.whenReady().then(async () => {
   traceStartup('logger configured')
   let ownsDesktopBackgroundServices = false
   const startDesktopBackgroundServices = async (): Promise<void> => {
-    if (scheduleRuntime || workflowRuntime || clawRuntime || telegramRuntime) return
+    if (scheduleRuntime || workflowRuntime || clawRuntime || telegramRuntime || daemonRuntime) return
     ownsDesktopBackgroundServices = true
     const settings = await store.load()
     await syncClawScheduleMcpConfig(settings, getClawScheduleMcpLaunchConfig()).catch((error) => {
@@ -3109,12 +3114,13 @@ app.whenReady().then(async () => {
     })
     void runCheckpointCleanup(settings, { force: true, reason: 'startup' })
     syncCheckpointCleanupTimer(settings)
+    powerSaveController = createPowerSaveController(powerSaveBlocker)
     scheduleRuntime = createScheduleRuntime({
       store,
       withModelCredentials: withRegistryCredentials,
       runtimeRequest,
       logError,
-      powerSaveBlocker
+      powerSaveController
     })
     scheduleRuntime.sync(settings)
     workflowRuntime = createWorkflowRuntime({
@@ -3143,26 +3149,42 @@ app.whenReady().then(async () => {
     })
     clawRuntime.sync(settings)
     telegramRuntime.sync(settings)
+    daemonRuntime = createDaemonRuntime({
+      store,
+      logError,
+      logDir,
+      powerSaveController: powerSaveController ?? undefined,
+      pushText: createDaemonPushText({
+        store,
+        logError,
+        sendWeixinBridgeMessage
+      })
+    })
+    daemonRuntime.sync(settings)
     syncWeixinBridgeRuntime(settings)
   }
   const stopDesktopBackgroundServices = async (): Promise<void> => {
     ownsDesktopBackgroundServices = false
     stopCheckpointCleanupTimer()
-    const [schedule, workflow, claw, telegram] = [
+    const [schedule, workflow, claw, telegram, daemon] = [
       scheduleRuntime,
       workflowRuntime,
       clawRuntime,
-      telegramRuntime
+      telegramRuntime,
+      daemonRuntime
     ] as const
     scheduleRuntime = null
     workflowRuntime = null
     clawRuntime = null
     telegramRuntime = null
+    daemonRuntime = null
+    powerSaveController = null
     await Promise.allSettled([
       schedule?.stop(),
       workflow?.stop(),
       claw?.stop(),
       telegram?.stop(),
+      daemon?.stop(),
       stopWeixinBridgeRuntime()
     ])
   }
@@ -3251,6 +3273,7 @@ app.whenReady().then(async () => {
     try {
       scheduleRuntime?.sync(saved)
       workflowRuntime?.sync(saved)
+      daemonRuntime?.sync(saved)
       clawRuntime?.sync(saved)
     } catch (error) {
       logError('settings-apply', 'failed to sync schedule/claw runtimes after settings change', {
@@ -3358,6 +3381,7 @@ app.whenReady().then(async () => {
     fetchUpstreamModels: fetchModels,
     getClawRuntime: () => clawRuntime,
     getScheduleRuntime: () => scheduleRuntime,
+    getDaemonRuntime: () => daemonRuntime,
     getWorkflowRuntime: () => workflowRuntime,
     startFeishuInstallQrcode,
     pollFeishuInstall,

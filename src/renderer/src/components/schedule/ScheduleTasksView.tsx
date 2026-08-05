@@ -50,6 +50,7 @@ import {
 import { SidebarTitlebarToggleButton } from '../sidebar/SidebarPrimitives'
 import { ScheduleDefaultsDialog } from './ScheduleDefaultsDialog'
 import { createScheduleRefreshCoordinator } from './schedule-refresh-coordinator'
+import { SessionDaemonsView } from './SessionDaemonsView'
 
 type Props = {
   leftSidebarCollapsed: boolean
@@ -392,6 +393,18 @@ export function ScheduleTasksView({
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [filter, setFilter] = useState<TaskFilter>('all')
+  const [scheduleSection, setScheduleSection] = useState<'tasks' | 'daemons'>('tasks')
+  const mainRef = useRef<HTMLElement | null>(null)
+  const sectionScrollTop = useRef<{ tasks: number; daemons: number }>({ tasks: 0, daemons: 0 })
+  const switchScheduleSection = (next: 'tasks' | 'daemons'): void => {
+    if (mainRef.current) {
+      sectionScrollTop.current[scheduleSection] = mainRef.current.scrollTop
+    }
+    setScheduleSection(next)
+  }
+  useEffect(() => {
+    if (mainRef.current) mainRef.current.scrollTop = sectionScrollTop.current[scheduleSection]
+  }, [scheduleSection])
   const [dialog, setDialog] = useState<TaskDialogState | null>(null)
   const [dialogError, setDialogError] = useState<string | null>(null)
   const [settingsDialogOpen, setSettingsDialogOpen] = useState(false)
@@ -645,8 +658,46 @@ export function ScheduleTasksView({
         </header>
       </div>
 
-      <main className="ds-no-drag min-h-0 flex-1 overflow-y-auto px-6 pb-8 pt-8">
+      <main ref={mainRef} className="ds-no-drag min-h-0 flex-1 overflow-y-auto px-6 pb-8 pt-8">
         <div className="mx-auto flex w-full max-w-[880px] flex-col gap-8">
+          <nav className="flex items-center gap-1 border-b border-ds-border-muted" aria-label={t('schedule')}>
+            <button
+              type="button"
+              onClick={() => switchScheduleSection('tasks')}
+              className={`relative -mb-px border-b-2 px-3 pb-2.5 pt-1 text-[13px] font-semibold transition ${
+                scheduleSection === 'tasks'
+                  ? 'border-ds-ink text-ds-ink'
+                  : 'border-transparent text-ds-muted hover:text-ds-ink'
+              }`}
+            >
+              {t('scheduleTabTasks')}
+            </button>
+            <button
+              type="button"
+              onClick={() => switchScheduleSection('daemons')}
+              className={`relative -mb-px border-b-2 px-3 pb-2.5 pt-1 text-[13px] font-semibold transition ${
+                scheduleSection === 'daemons'
+                  ? 'border-ds-ink text-ds-ink'
+                  : 'border-transparent text-ds-muted hover:text-ds-ink'
+              }`}
+            >
+              {t('scheduleTabDaemons')}
+            </button>
+          </nav>
+          {scheduleSection === 'daemons' ? (
+            schedule ? (
+              <SessionDaemonsView
+                schedule={schedule}
+                clawChannels={clawChannels}
+                defaultWorkspaceRoot={settings?.claw.im.workspaceRoot.trim() || ''}
+                onPatchSchedule={persistSchedule}
+                onOpenThread={onOpenThread}
+              />
+            ) : (
+              <div className="py-20 text-center text-[14px] text-ds-faint">{t('loading')}</div>
+            )
+          ) : (
+          <>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <p className="text-[14px] leading-6 text-ds-faint">
               {t('scheduleSubtitle')}
@@ -844,6 +895,8 @@ export function ScheduleTasksView({
                 )
               })}
             </div>
+          )}
+          </>
           )}
         </div>
       </main>
