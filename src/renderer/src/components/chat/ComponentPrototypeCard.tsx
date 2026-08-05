@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -14,6 +15,7 @@ import {
   Code2,
   Copy,
   Loader2,
+  Maximize2,
   Monitor,
   MoreHorizontal,
   MoveVertical,
@@ -22,6 +24,8 @@ import {
   TriangleAlert
 } from 'lucide-react'
 import type { ComponentPrototypeMetadata, ToolBlock } from '../../agent/types'
+import { useChatStore } from '../../store/chat-store'
+import { importComponentPrototypeToDesignCanvas } from '../../design/component-prototype-canvas-import'
 import { previewWorkspaceFile } from '../../lib/workspace-file-preview'
 import { DesignHtmlPreviewHost } from '../design/DesignHtmlPreviewHost'
 
@@ -32,11 +36,15 @@ type ComponentPrototypeCardProps = {
 }
 
 type PreviewMode = 'desktop' | 'mobile'
+type PreviewSize = { width: number; height: number }
 
+const MIN_PREVIEW_WIDTH = 280
+const MAX_PREVIEW_WIDTH = 1_200
 const MIN_PREVIEW_HEIGHT = 240
 const MAX_PREVIEW_HEIGHT = 900
-const PREVIEW_HEIGHT_STEP = 32
-const PREVIEW_HEIGHT_STORAGE_PREFIX = 'kun-component-prototype-height:'
+const PREVIEW_SIZE_STEP = 32
+const PREVIEW_SIZE_STORAGE_PREFIX = 'kun-component-prototype-size:'
+const LEGACY_PREVIEW_HEIGHT_STORAGE_PREFIX = 'kun-component-prototype-height:'
 
 export function componentPrototypeFromBlock(block: ToolBlock): ComponentPrototypeMetadata | null {
   const value = block.meta?.componentPrototype
@@ -98,17 +106,18 @@ export function componentPrototypeFromBlock(block: ToolBlock): ComponentPrototyp
 export function componentPrototypeFrameSize(
   prototype: ComponentPrototypeMetadata,
   mode: PreviewMode
-): { width: number | '100%'; height: number } {
-  if (mode === 'mobile') {
-    return {
-      width: Math.min(360, prototype.viewport.width),
-      height: clampComponentPrototypeHeight(prototype.viewport.height)
-    }
-  }
+): PreviewSize {
   return {
-    width: '100%',
+    width: mode === 'mobile'
+      ? Math.min(360, clampComponentPrototypeWidth(prototype.viewport.width))
+      : clampComponentPrototypeWidth(prototype.viewport.width),
     height: clampComponentPrototypeHeight(prototype.viewport.height)
   }
+}
+
+export function clampComponentPrototypeWidth(width: number): number {
+  if (!Number.isFinite(width)) return 760
+  return Math.min(MAX_PREVIEW_WIDTH, Math.max(MIN_PREVIEW_WIDTH, Math.round(width)))
 }
 
 export function clampComponentPrototypeHeight(height: number): number {
@@ -116,11 +125,28 @@ export function clampComponentPrototypeHeight(height: number): number {
   return Math.min(MAX_PREVIEW_HEIGHT, Math.max(MIN_PREVIEW_HEIGHT, Math.round(height)))
 }
 
-function storedComponentPrototypeHeight(artifactId: string, fallback: number): number {
+function storedComponentPrototypeSize(
+  artifactId: string,
+  mode: PreviewMode,
+  fallback: PreviewSize
+): PreviewSize {
   if (!artifactId) return fallback
   try {
-    const value = Number(window.sessionStorage?.getItem(`${PREVIEW_HEIGHT_STORAGE_PREFIX}${artifactId}`))
-    return Number.isFinite(value) && value > 0 ? clampComponentPrototypeHeight(value) : fallback
+    const raw = window.sessionStorage?.getItem(`${PREVIEW_SIZE_STORAGE_PREFIX}${artifactId}:${mode}`)
+    if (raw) {
+      const value = JSON.parse(raw) as Partial<PreviewSize>
+      if (Number.isFinite(value.width) && Number.isFinite(value.height)) {
+        return {
+          width: clampComponentPrototypeWidth(value.width!),
+          height: clampComponentPrototypeHeight(value.height!)
+        }
+      }
+    }
+    // Migrate the legacy per-artifact height-only preference.
+    const legacyHeight = Number(window.sessionStorage?.getItem(`${LEGACY_PREVIEW_HEIGHT_STORAGE_PREFIX}${artifactId}`))
+    return Number.isFinite(legacyHeight) && legacyHeight > 0
+      ? { ...fallback, height: clampComponentPrototypeHeight(legacyHeight) }
+      : fallback
   } catch {
     return fallback
   }
@@ -157,31 +183,41 @@ export function ComponentPrototypeCard({
   const prototype = useMemo(() => componentPrototypeFromBlock(block), [block])
   const [mode, setMode] = useState<PreviewMode>('desktop')
   const [mountNonce, setMountNonce] = useState(0)
-  const defaultHeight = prototype ? componentPrototypeFrameSize(prototype, mode).height : 460
-  const [previewHeight, setPreviewHeight] = useState(() =>
-    storedComponentPrototypeHeight(prototype?.artifactId ?? '', defaultHeight)
+  const defaultSize = useMemo(
+    () => prototype ? componentPrototypeFrameSize(prototype, mode) : { width: 760, height: 460 },
+    [mode, prototype]
   )
+  const [previewSize, setPreviewSize] = useState(() =>
+    storedComponentPrototypeSize(prototype?.artifactId ?? '', mode, defaultSize)
+  )
+  const [previewFailed, setPreviewFailed] = useState(false)
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'error'>('idle')
   const [menuOpen, setMenuOpen] = useState(false)
+  const [openingCanvas, setOpeningCanvas] = useState(false)
   const menuRootRef = useRef<HTMLDivElement | null>(null)
-  const resizeStartRef = useRef<{ pointerId: number; y: number; height: number } | null>(null)
+  const resizeStartRef = useRef<{
+    pointerId: number
+    x: number
+    y: number
+    size: PreviewSize
+  } | null>(null)
 
   useEffect(() => {
     if (!prototype) return
-    setPreviewHeight(storedComponentPrototypeHeight(prototype.artifactId, defaultHeight))
-  }, [defaultHeight, prototype])
+    setPreviewSize(storedComponentPrototypeSize(prototype.artifactId, mode, defaultSize))
+  }, [defaultSize, mode, prototype])
 
   useEffect(() => {
-    if (!prototype) return
+    if (!prototype || previewFailed) return
     try {
       window.sessionStorage?.setItem(
-        `${PREVIEW_HEIGHT_STORAGE_PREFIX}${prototype.artifactId}`,
-        String(previewHeight)
+        `${PREVIEW_SIZE_STORAGE_PREFIX}${prototype.artifactId}:${mode}`,
+        JSON.stringify(previewSize)
       )
     } catch {
       // Session persistence is best-effort; resizing remains functional.
     }
-  }, [previewHeight, prototype])
+  }, [mode, previewFailed, previewSize, prototype])
 
   useEffect(() => {
     if (!menuOpen || typeof window === 'undefined' || typeof window.addEventListener !== 'function') return
@@ -200,19 +236,32 @@ export function ComponentPrototypeCard({
     }
   }, [menuOpen])
 
-  if (!prototype) return null
+  const running = prototype?.status === 'preparing' || prototype?.status === 'running'
+  // While generating, errors are expected (file still streaming); keep the
+  // placeholder. A completed prototype that cannot be authorized/loaded is
+  // hidden entirely instead of surfacing the raw host error.
+  const handlePreviewError = useCallback((_message: string): void => {
+    if (running) return
+    setPreviewFailed(true)
+  }, [running])
 
-  const running = prototype.status === 'preparing' || prototype.status === 'running'
-  const failed = prototype.status === 'failed' || block.status === 'error'
-  const frame = componentPrototypeFrameSize(prototype, mode)
-  const resizePreview = (height: number): void => {
-    setPreviewHeight(clampComponentPrototypeHeight(height))
+  const failed = prototype?.status === 'failed' || block.status === 'error'
+  // Failed prototypes are not shown at all: the conversation tool result itself
+  // already reports the failure without leaking local paths into the timeline.
+  if (!prototype || failed || previewFailed) return null
+
+  const resizePreview = (patch: Partial<PreviewSize>): void => {
+    setPreviewSize((current) => ({
+      width: clampComponentPrototypeWidth(patch.width ?? current.width),
+      height: clampComponentPrototypeHeight(patch.height ?? current.height)
+    }))
   }
   const onResizePointerDown = (event: ReactPointerEvent<HTMLDivElement>): void => {
     resizeStartRef.current = {
       pointerId: event.pointerId,
+      x: event.clientX,
       y: event.clientY,
-      height: previewHeight
+      size: previewSize
     }
     event.currentTarget.setPointerCapture?.(event.pointerId)
     event.preventDefault()
@@ -220,7 +269,10 @@ export function ComponentPrototypeCard({
   const onResizePointerMove = (event: ReactPointerEvent<HTMLDivElement>): void => {
     const start = resizeStartRef.current
     if (!start || start.pointerId !== event.pointerId) return
-    resizePreview(start.height + event.clientY - start.y)
+    resizePreview({
+      width: start.size.width + event.clientX - start.x,
+      height: start.size.height + event.clientY - start.y
+    })
   }
   const onResizePointerEnd = (event: ReactPointerEvent<HTMLDivElement>): void => {
     if (resizeStartRef.current?.pointerId !== event.pointerId) return
@@ -228,9 +280,13 @@ export function ComponentPrototypeCard({
     event.currentTarget.releasePointerCapture?.(event.pointerId)
   }
   const onResizeKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>): void => {
-    if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return
+    const delta = PREVIEW_SIZE_STEP
+    if (event.key === 'ArrowUp') resizePreview({ height: previewSize.height - delta })
+    else if (event.key === 'ArrowDown') resizePreview({ height: previewSize.height + delta })
+    else if (event.key === 'ArrowLeft') resizePreview({ width: previewSize.width - delta })
+    else if (event.key === 'ArrowRight') resizePreview({ width: previewSize.width + delta })
+    else return
     event.preventDefault()
-    resizePreview(previewHeight + (event.key === 'ArrowDown' ? PREVIEW_HEIGHT_STEP : -PREVIEW_HEIGHT_STEP))
   }
   const producerLabel = prototype.producer === 'main-agent'
     ? t('componentPrototypeMainAgent')
@@ -238,11 +294,9 @@ export function ComponentPrototypeCard({
   const producerSummary = prototype.producer === 'main-agent'
     ? t('componentPrototypeGeneratedByMainAgent')
     : t('componentPrototypeGeneratedBy')
-  const statusLabel = failed
-    ? t('componentPrototypeFailed')
-    : running
-      ? t('componentPrototypeDesigning')
-      : t('componentPrototypeInteractive')
+  const statusLabel = running
+    ? t('componentPrototypeDesigning')
+    : t('componentPrototypeInteractive')
   const prompt = (action: 'adopt' | 'iterate'): void => {
     setMenuOpen(false)
     onPrompt?.(componentPrototypeFollowUpPrompt(
@@ -254,6 +308,15 @@ export function ComponentPrototypeCard({
   const inspectCode = (): void => {
     setMenuOpen(false)
     previewWorkspaceFile({ path: prototype.relativePath, workspaceRoot })
+  }
+  const openInCanvas = (): void => {
+    if (openingCanvas || !workspaceRoot) return
+    setOpeningCanvas(true)
+    void importComponentPrototypeToDesignCanvas({ workspaceRoot, prototype })
+      .then((imported) => {
+        if (imported) useChatStore.getState().openDesign()
+      })
+      .finally(() => setOpeningCanvas(false))
   }
   const copyCode = async (): Promise<void> => {
     setMenuOpen(false)
@@ -278,7 +341,8 @@ export function ComponentPrototypeCard({
 
   return (
     <article
-      className="ds-component-prototype-card relative mx-auto w-full max-w-[900px] min-w-0 rounded-[11px] border border-ds-border bg-ds-card/95 shadow-[0_5px_18px_rgba(36,68,112,0.06)]"
+      className="ds-component-prototype-card relative mx-auto min-w-0 max-w-full rounded-[11px] border border-ds-border bg-ds-card/95 shadow-[0_5px_18px_rgba(36,68,112,0.06)]"
+      style={{ width: Math.min(MAX_PREVIEW_WIDTH + 16, previewSize.width + 16) }}
       data-component-prototype-id={prototype.artifactId}
     >
       <header className="flex h-8 items-center justify-between gap-2 rounded-t-[11px] border-b border-ds-border-muted px-3">
@@ -286,164 +350,166 @@ export function ComponentPrototypeCard({
           <h3 className="truncate text-[12.5px] font-semibold leading-none text-ds-ink">{prototype.title}</h3>
           <span
             className={`h-1.5 w-1.5 shrink-0 rounded-full ${
-              failed ? 'bg-rose-500' : running ? 'bg-amber-500' : 'bg-emerald-500'
+              running ? 'bg-amber-500' : 'bg-emerald-500'
             }`}
             title={statusLabel}
             aria-label={statusLabel}
           />
         </div>
-        <div ref={menuRootRef} className="relative shrink-0">
+        <div ref={menuRootRef} className="flex shrink-0 items-center gap-1">
           <button
             type="button"
-            className="inline-flex h-6 w-6 items-center justify-center rounded-md text-ds-faint transition hover:bg-ds-hover hover:text-ds-ink"
-            onClick={() => setMenuOpen((open) => !open)}
-            aria-label={t('browserMore')}
-            aria-haspopup="menu"
-            aria-expanded={menuOpen}
+            className="inline-flex h-6 items-center gap-1 rounded-md px-1.5 text-[11px] font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-wait disabled:opacity-60"
+            onClick={openInCanvas}
+            disabled={openingCanvas || running || !workspaceRoot}
+            title={t('componentPrototypeOpenCanvas')}
           >
-            <MoreHorizontal className="h-3.5 w-3.5" />
+            {openingCanvas
+              ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              : <Maximize2 className="h-3.5 w-3.5" />}
+            <span className="hidden sm:inline">{t('componentPrototypeOpenCanvas')}</span>
           </button>
-          {menuOpen ? (
-            <div
-              className="absolute right-0 top-7 z-30 w-48 rounded-[10px] border border-ds-border bg-ds-card p-1.5 shadow-[0_14px_36px_rgba(27,45,76,0.16)]"
-              role="menu"
-              data-component-prototype-menu
+          <div className="relative">
+            <button
+              type="button"
+              className="inline-flex h-6 w-6 items-center justify-center rounded-md text-ds-faint transition hover:bg-ds-hover hover:text-ds-ink"
+              onClick={() => setMenuOpen((open) => !open)}
+              aria-label={t('browserMore')}
+              aria-haspopup="menu"
+              aria-expanded={menuOpen}
             >
-              <p className="truncate px-2 py-1 text-[10.5px] text-ds-faint" title={producerSummary}>{producerLabel}</p>
-              <div className="my-1 h-px bg-ds-border-muted" />
-              <PrototypeMenuButton
-                icon={<Monitor className="h-3.5 w-3.5" />}
-                label={t('componentPrototypeDesktop')}
-                active={mode === 'desktop'}
-                onClick={() => {
-                  setMode('desktop')
-                  setMenuOpen(false)
-                }}
-              />
-              <PrototypeMenuButton
-                icon={<Smartphone className="h-3.5 w-3.5" />}
-                label={t('componentPrototypeMobile')}
-                active={mode === 'mobile'}
-                onClick={() => {
-                  setMode('mobile')
-                  setMenuOpen(false)
-                }}
-              />
-              <PrototypeMenuButton
-                icon={<RefreshCw className="h-3.5 w-3.5" />}
-                label={t('componentPrototypeRefresh')}
-                onClick={() => {
-                  setMountNonce((value) => value + 1)
-                  setMenuOpen(false)
-                }}
-              />
-              <PrototypeMenuButton
-                icon={<MoveVertical className="h-3.5 w-3.5" />}
-                label={t('componentPrototypeResetSize')}
-                onClick={() => {
-                  resizePreview(defaultHeight)
-                  setMenuOpen(false)
-                }}
-              />
-              <div className="my-1 h-px bg-ds-border-muted" />
-              <PrototypeMenuButton
-                icon={<Code2 className="h-3.5 w-3.5" />}
-                label={t('componentPrototypeViewCode')}
-                onClick={inspectCode}
-              />
-              <PrototypeMenuButton
-                icon={copyState === 'copied'
-                  ? <Check className="h-3.5 w-3.5 text-emerald-500" />
-                  : copyState === 'error'
-                    ? <TriangleAlert className="h-3.5 w-3.5 text-rose-500" />
-                    : <Copy className="h-3.5 w-3.5" />}
-                label={t('componentPrototypeCopyCode')}
-                onClick={() => void copyCode()}
-              />
-              {onPrompt ? (
-                <>
-                  <div className="my-1 h-px bg-ds-border-muted" />
-                  <PrototypeMenuButton
-                    icon={<Clipboard className="h-3.5 w-3.5" />}
-                    label={t('componentPrototypeIterate')}
-                    onClick={() => prompt('iterate')}
-                    disabled={running || failed}
-                  />
-                  <PrototypeMenuButton
-                    icon={<Check className="h-3.5 w-3.5" />}
-                    label={t('componentPrototypeAdopt')}
-                    onClick={() => prompt('adopt')}
-                    disabled={running || failed}
-                  />
-                </>
-              ) : null}
-            </div>
-          ) : null}
+              <MoreHorizontal className="h-3.5 w-3.5" />
+            </button>
+            {menuOpen ? (
+              <div
+                className="absolute right-0 top-7 z-30 w-48 rounded-[10px] border border-ds-border bg-ds-card p-1.5 shadow-[0_14px_36px_rgba(27,45,76,0.16)]"
+                role="menu"
+                data-component-prototype-menu
+              >
+                <p className="truncate px-2 py-1 text-[10.5px] text-ds-faint" title={producerSummary}>{producerLabel}</p>
+                <div className="my-1 h-px bg-ds-border-muted" />
+                <PrototypeMenuButton
+                  icon={<Monitor className="h-3.5 w-3.5" />}
+                  label={t('componentPrototypeDesktop')}
+                  active={mode === 'desktop'}
+                  onClick={() => {
+                    setMode('desktop')
+                    setMenuOpen(false)
+                  }}
+                />
+                <PrototypeMenuButton
+                  icon={<Smartphone className="h-3.5 w-3.5" />}
+                  label={t('componentPrototypeMobile')}
+                  active={mode === 'mobile'}
+                  onClick={() => {
+                    setMode('mobile')
+                    setMenuOpen(false)
+                  }}
+                />
+                <PrototypeMenuButton
+                  icon={<RefreshCw className="h-3.5 w-3.5" />}
+                  label={t('componentPrototypeRefresh')}
+                  onClick={() => {
+                    setMountNonce((value) => value + 1)
+                    setMenuOpen(false)
+                  }}
+                />
+                <PrototypeMenuButton
+                  icon={<MoveVertical className="h-3.5 w-3.5" />}
+                  label={t('componentPrototypeResetSize')}
+                  onClick={() => {
+                    setPreviewSize(defaultSize)
+                    setMenuOpen(false)
+                  }}
+                />
+                <div className="my-1 h-px bg-ds-border-muted" />
+                <PrototypeMenuButton
+                  icon={<Code2 className="h-3.5 w-3.5" />}
+                  label={t('componentPrototypeViewCode')}
+                  onClick={inspectCode}
+                />
+                <PrototypeMenuButton
+                  icon={copyState === 'copied'
+                    ? <Check className="h-3.5 w-3.5 text-emerald-500" />
+                    : copyState === 'error'
+                      ? <TriangleAlert className="h-3.5 w-3.5 text-rose-500" />
+                      : <Copy className="h-3.5 w-3.5" />}
+                  label={t('componentPrototypeCopyCode')}
+                  onClick={() => void copyCode()}
+                />
+                {onPrompt ? (
+                  <>
+                    <div className="my-1 h-px bg-ds-border-muted" />
+                    <PrototypeMenuButton
+                      icon={<Clipboard className="h-3.5 w-3.5" />}
+                      label={t('componentPrototypeIterate')}
+                      onClick={() => prompt('iterate')}
+                      disabled={running}
+                    />
+                    <PrototypeMenuButton
+                      icon={<Check className="h-3.5 w-3.5" />}
+                      label={t('componentPrototypeAdopt')}
+                      onClick={() => prompt('adopt')}
+                      disabled={running}
+                    />
+                  </>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
         </div>
       </header>
 
       <div className="flex min-w-0 justify-center overflow-auto bg-ds-subtle/35 p-2 pb-1">
-        {failed ? (
-          <div className="flex min-h-[124px] w-full items-center justify-center px-5 py-4 text-center">
-            <div className="max-w-md">
-              <TriangleAlert className="mx-auto h-4 w-4 text-rose-500" />
-              <p className="mt-2 text-[12px] font-medium text-ds-ink">{t('componentPrototypeFailed')}</p>
-              <p className="mt-1 break-words text-[11px] leading-4 text-ds-muted">{prototype.error || t('componentPrototypeLoadFailed')}</p>
-            </div>
-          </div>
-        ) : (
-          <div
-            className="min-w-0 overflow-auto bg-white"
-            style={{ width: frame.width, height: previewHeight, maxWidth: '100%' }}
-          >
-            <DesignHtmlPreviewHost
-              key={`${block.id}:${mountNonce}`}
-              workspaceRoot={workspaceRoot}
-              relativePath={prototype.relativePath}
-              enabled={Boolean(workspaceRoot)}
-              partition={componentPrototypePartition(block.id)}
-              retryMissingFile={running}
-              mountWhileSkeleton
-            >
-              {({ state, renderWebview }) => {
-                if (!state.webviewUrl) {
-                  return (
-                    <div className="flex h-full w-full items-center justify-center bg-[#f7f9fc] text-[11.5px] text-slate-500">
-                      <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin text-accent" />
-                      {state.error && !running ? state.error : t('componentPrototypeDesigning')}
-                    </div>
-                  )
-                }
-                return renderWebview({
-                  className: 'h-full w-full border-0 bg-white',
-                  style: { height: '100%', width: '100%' },
-                  title: prototype.title
-                })
-              }}
-            </DesignHtmlPreviewHost>
-          </div>
-        )}
-      </div>
-      {!failed ? (
         <div
-          role="separator"
-          aria-orientation="horizontal"
+          className="min-w-0 overflow-auto bg-white"
+          style={{ width: previewSize.width, height: previewSize.height, maxWidth: '100%' }}
+        >
+          <DesignHtmlPreviewHost
+            key={`${block.id}:${mountNonce}`}
+            workspaceRoot={workspaceRoot}
+            relativePath={prototype.relativePath}
+            enabled={Boolean(workspaceRoot)}
+            partition={componentPrototypePartition(block.id)}
+            retryMissingFile={running}
+            mountWhileSkeleton
+            onError={handlePreviewError}
+          >
+            {({ state, renderWebview }) => {
+              if (!state.webviewUrl) {
+                return (
+                  <div className="flex h-full w-full items-center justify-center bg-[#f7f9fc] text-[11.5px] text-slate-500">
+                    <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin text-accent" />
+                    {running ? t('componentPrototypeDesigning') : null}
+                  </div>
+                )
+              }
+              return renderWebview({
+                className: 'h-full w-full border-0 bg-white',
+                style: { height: '100%', width: '100%' },
+                title: prototype.title
+              })
+            }}
+          </DesignHtmlPreviewHost>
+        </div>
+      </div>
+      <div className="flex h-7 items-center justify-end rounded-b-[11px] border-t border-ds-border-muted bg-ds-subtle/35 px-1.5">
+        <div
+          role="button"
           aria-label={t('componentPrototypeResize')}
-          aria-valuemin={MIN_PREVIEW_HEIGHT}
-          aria-valuemax={MAX_PREVIEW_HEIGHT}
-          aria-valuenow={previewHeight}
+          aria-valuetext={`${previewSize.width} × ${previewSize.height}`}
           tabIndex={0}
           data-component-prototype-resize-handle
-          className="group flex h-4 w-full touch-none cursor-ns-resize items-center justify-center rounded-b-[11px] bg-ds-subtle/35 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent"
+          className="group flex h-5 w-6 touch-none cursor-nwse-resize items-center justify-center rounded outline-none hover:bg-ds-hover focus-visible:ring-2 focus-visible:ring-accent"
           onPointerDown={onResizePointerDown}
           onPointerMove={onResizePointerMove}
           onPointerUp={onResizePointerEnd}
           onPointerCancel={onResizePointerEnd}
           onKeyDown={onResizeKeyDown}
         >
-          <span className="h-1 w-10 rounded-full bg-ds-border transition-colors group-hover:bg-ds-muted group-focus-visible:bg-accent" />
+          <Maximize2 className="h-3.5 w-3.5 text-ds-faint transition-colors group-hover:text-ds-muted group-focus-visible:text-accent" />
         </div>
-      ) : null}
+      </div>
     </article>
   )
 }

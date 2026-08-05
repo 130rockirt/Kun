@@ -110,6 +110,12 @@ export type DesignArtifact = {
   /** Hash of design-system.json at implement time (code-drift baseline). */
   implementedDesignSystemHash?: string
   /**
+   * Workspace-relative source of a conversation component prototype that this
+   * artifact was imported from (`.kun-design/component-prototypes/<id>/prototype.html`).
+   * Lets "open in canvas" reuse the same artifact instead of duplicating it.
+   */
+  importedFromPath?: string
+  /**
    * Foundation role in a Stitch-style run: the shared visual style guide or the
    * brand logo. Absent for normal pages. Lets the run reuse them on re-runs and
    * label them in the sibling manifest.

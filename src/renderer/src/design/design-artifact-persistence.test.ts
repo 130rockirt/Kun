@@ -232,6 +232,33 @@ describe('design artifact persistence', () => {
     })
   })
 
+  it('round-trips the imported component prototype source and drops unsafe sources', () => {
+    const createdAt = '2026-06-20T00:00:00.000Z'
+    const imported: DesignArtifact = {
+      id: 'draft',
+      kind: 'html',
+      title: 'Date range picker',
+      relativePath: '.kun-design/doc/draft/v1.html',
+      createdAt,
+      updatedAt: createdAt,
+      versions: [{ id: 'draft-v1', relativePath: '.kun-design/doc/draft/v1.html', createdAt, summary: '' }],
+      importedFromPath: '.kun-design/component-prototypes/date-picker/prototype.html'
+    }
+
+    expect(parseArtifactMeta(serializeArtifactMeta(imported), 'draft')?.importedFromPath)
+      .toBe(imported.importedFromPath)
+
+    expect(parseArtifactMeta(JSON.stringify({
+      ...imported,
+      importedFromPath: '.kun-design/other/screen.html'
+    }), 'draft')?.importedFromPath).toBeUndefined()
+
+    expect(parseArtifactMeta(JSON.stringify({
+      ...imported,
+      importedFromPath: '.kun-design/component-prototypes/../secret/prototype.html'
+    }), 'draft')?.importedFromPath).toBeUndefined()
+  })
+
   it('refuses to delete directories derived from untrusted artifact paths', async () => {
     const deleteWorkspaceEntry = vi.fn(async () => ({ ok: true as const }))
     vi.stubGlobal('window', { kunGui: { deleteWorkspaceEntry } })
