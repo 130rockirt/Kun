@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { appendFile, mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
+import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { InMemoryEventBus } from '../src/adapters/in-memory-event-bus.js'
@@ -440,6 +440,211 @@ describe('AgentLoop', () => {
       message: expect.stringContaining('request exceeds the 425-token context cap')
     }))
     expect(events.some((event) => event.kind === 'context_snapshot')).toBe(false)
+  })
+
+  it('auto-compacts the 725733 + 131072 dead zone before the model transport instead of failing', async () => {
+    const requests: ModelRequest[] = []
+    const h = makeHarness({
+      provider: 'deadzone',
+      model: 'deadzone',
+      async *stream(request): AsyncIterable<ModelStreamChunk> {
+        requests.push(request)
+        yield { kind: 'completed', stopReason: 'stop' }
+      }
+    }, {
+      tools: [],
+      compactor: new ContextCompactor({ softThreshold: 750_000, hardThreshold: 850_000 }),
+      modelCapabilities: (model) => ({
+        id: model,
+        inputModalities: ['text'],
+        outputModalities: ['text'],
+        supportsToolCalling: true,
+        contextWindowTokens: 1_000_000,
+        maxOutputTokens: 131_072,
+        messageParts: ['text']
+      })
+    })
+    await h.threadStore.upsert(
+      createThreadRecord({ id: h.threadId, title: 'demo', workspace: '/tmp', model: 'deadzone' })
+    )
+    // ~725k estimated input tokens: below the 750k soft threshold, but with
+    // the 131072 output budget the full request would exceed the 850k cap.
+    const chunk = '工'.repeat(6_050)
+    for (let index = 0; index < 120; index += 1) {
+      await h.sessionStore.appendItem(h.threadId, makeUserItem({
+        id: `deadzone_old_${index}`,
+        turnId: `deadzone_old_turn_${index}`,
+        threadId: h.threadId,
+        text: chunk
+      }))
+    }
+    const started = await h.turns.startTurn({
+      threadId: h.threadId,
+      request: { prompt: 'keep this current request' }
+    })
+    h.turnId = started.turnId
+
+    await expect(h.loop.runTurn(h.threadId, h.turnId)).resolves.toBe('completed')
+
+    expect(requests).toHaveLength(1)
+    expect(requests[0]?.history[0]).toMatchObject({ kind: 'compaction' })
+    const events = await h.sessionStore.loadEventsSince(h.threadId, 0)
+    expect(events.some((event) =>
+      event.kind === 'error' && event.code === 'context_window_exceeded'
+    )).toBe(false)
+    expect(events).toContainEqual(expect.objectContaining({
+      kind: 'compaction_completed',
+      replacedTokens: expect.any(Number)
+    }))
+    const compressed = events.find((event) =>
+      event.kind === 'pipeline_stage' && event.stage === 'input_compressed'
+    )
+    expect(compressed).toMatchObject({
+      kind: 'pipeline_stage',
+      stage: 'input_compressed',
+      details: expect.objectContaining({
+        outputBudgetTokens: 131_072,
+        requestHardCapTokens: 850_000,
+        fallbackCompactionAttempted: false
+      })
+    })
+  })
+
+  it('fails once with a detailed reason when the current message itself cannot be compacted', async () => {
+    let dispatches = 0
+    const h = makeHarness({
+      provider: 'huge-prompt',
+      model: 'huge-prompt',
+      async *stream(): AsyncIterable<ModelStreamChunk> {
+        dispatches += 1
+        yield { kind: 'completed', stopReason: 'stop' }
+      }
+    }, {
+      tools: [],
+      compactor: new ContextCompactor({ softThreshold: 40_000, hardThreshold: 85_000 }),
+      modelCapabilities: (model) => ({
+        id: model,
+        inputModalities: ['text'],
+        outputModalities: ['text'],
+        supportsToolCalling: true,
+        contextWindowTokens: 100_000,
+        maxOutputTokens: 10_000,
+        messageParts: ['text']
+      })
+    })
+    await bootstrapThread(h, {
+      request: { prompt: `unfoldable current input ${'工'.repeat(80_000)}` }
+    })
+
+    await expect(h.loop.runTurn(h.threadId, h.turnId)).resolves.toBe('failed')
+
+    expect(dispatches).toBe(0)
+    const events = await h.sessionStore.loadEventsSince(h.threadId, 0)
+    const error = events.find((event) => event.kind === 'error' && event.code === 'context_window_exceeded')
+    expect(error).toMatchObject({
+      kind: 'error',
+      code: 'context_window_exceeded',
+      details: expect.objectContaining({
+        fallbackCompactionAttempted: true,
+        fallbackCompactionApplied: false,
+        reason: 'no_compactable_history'
+      })
+    })
+    // The single-attempt rule: nothing was compactable, no compaction was
+    // committed, and the turn failed without ever dispatching a model request.
+    expect(events.some((event) => event.kind === 'compaction_completed')).toBe(false)
+  })
+
+  it('compacts once with the heuristic when forwarded generated-image output blows the final request past the cap', async () => {
+    const requests: ModelRequest[] = []
+    const h = makeHarness({
+      provider: 'image-fallback',
+      model: 'image-fallback',
+      async *stream(request): AsyncIterable<ModelStreamChunk> {
+        requests.push(request)
+        yield { kind: 'completed', stopReason: 'stop' }
+      }
+    }, {
+      tools: [],
+      compactor: new ContextCompactor({ softThreshold: 750_000, hardThreshold: 850_000 }),
+      modelCapabilities: (model) => ({
+        id: model,
+        inputModalities: ['text'],
+        outputModalities: ['text'],
+        supportsToolCalling: true,
+        contextWindowTokens: 1_000_000,
+        maxOutputTokens: 131_072,
+        messageParts: ['text']
+      })
+    })
+    const dataDir = await mkdtemp(join(tmpdir(), 'kun-image-fallback-'))
+    try {
+      await h.threadStore.upsert(
+        createThreadRecord({ id: h.threadId, title: 'demo', workspace: '/tmp', model: 'image-fallback' })
+      )
+      // Preflight lands just below the soft threshold (718,127), while the
+      // rehydrated forwarded image adds a fixed 1,210-token vision allowance
+      // and pushes the final request just past the 718,928 input ceiling.
+      // The send-boundary fallback must compact exactly once (heuristic, no
+      // summary model call) and let the rebuilt request through.
+      for (let index = 0; index < 119; index += 1) {
+        await h.sessionStore.appendItem(h.threadId, makeUserItem({
+          id: `image_old_${index}`,
+          turnId: `image_old_turn_${index}`,
+          threadId: h.threadId,
+          text: '工'.repeat(6_033)
+        }))
+      }
+      const pngPath = join(dataDir, 'generated.png')
+      await writeFile(pngPath, Buffer.from(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+        'base64'
+      ))
+      await h.sessionStore.appendItem(h.threadId, makeToolCallItem({
+        id: 'image_forward_call',
+        threadId: h.threadId,
+        turnId: 'image_old_turn_118',
+        callId: 'call_image_forward',
+        toolName: 'generate_image',
+        arguments: { prompt: 'tiny probe image' },
+        status: 'completed'
+      }))
+      await h.sessionStore.appendItem(h.threadId, makeToolResultItem({
+        id: 'image_forward_result',
+        threadId: h.threadId,
+        turnId: 'image_old_turn_118',
+        callId: 'call_image_forward',
+        toolName: 'generate_image',
+        output: { markdown: '![generated image](.kun/images/generated.png)', files: [{ absolutePath: pngPath }] }
+      }))
+      const started = await h.turns.startTurn({
+        threadId: h.threadId,
+        request: { prompt: 'keep this current request' }
+      })
+      h.turnId = started.turnId
+
+      await expect(h.loop.runTurn(h.threadId, h.turnId)).resolves.toBe('completed')
+
+      expect(requests).toHaveLength(1)
+      expect(requests[0]?.history[0]).toMatchObject({ kind: 'compaction' })
+      const events = await h.sessionStore.loadEventsSince(h.threadId, 0)
+      expect(events.some((event) =>
+        event.kind === 'error' && event.code === 'context_window_exceeded'
+      )).toBe(false)
+      const compressed = events.find((event) =>
+        event.kind === 'pipeline_stage' && event.stage === 'input_compressed'
+      )
+      expect(compressed).toMatchObject({
+        kind: 'pipeline_stage',
+        stage: 'input_compressed',
+        details: expect.objectContaining({
+          fallbackCompactionAttempted: true,
+          fallbackCompactionApplied: true
+        })
+      })
+    } finally {
+      await rm(dataDir, { recursive: true, force: true })
+    }
   })
 
   it('records provider endpoint diagnostics for model send stages', async () => {

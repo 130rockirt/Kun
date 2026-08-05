@@ -74,6 +74,91 @@ function modelCompactionService(
 }
 
 describe('HistoryCompactionService', () => {
+  it('budget-driven force compaction survives request-capacity inputs and commits heuristic history', async () => {
+    const sessionStore = new InMemorySessionStore()
+    for (let index = 0; index < 5; index += 1) {
+      await sessionStore.appendItem(threadId, makeUserItem({
+        id: `capacity_${index}`,
+        threadId,
+        turnId,
+        text: `capacity context ${index} ${'x'.repeat(120)}`
+      }))
+    }
+    const service = new HistoryCompactionService({
+      sessionStore,
+      compactor: new ContextCompactor({ softThreshold: 750_000, hardThreshold: 850_000 }),
+      prefix: createImmutablePrefix({ systemPrompt: 'stable prefix' }),
+      model: silentModel(),
+      usage: new UsageService(),
+      events: createEvents(sessionStore),
+      ids: new SequentialIdGenerator(),
+      telemetry: {
+        hydratePromptPressureIfCold: async () => undefined,
+        consumePromptPressure: () => undefined
+      },
+      recordGoalUsage: async () => undefined,
+      rewriteThreadItemsFromSession: async () => undefined
+    })
+
+    const outcome = await service.compactIfNeeded({
+      items: await sessionStore.loadItems(threadId),
+      model: 'test-model',
+      signal: new AbortController().signal,
+      threadId,
+      turnId,
+      requestInputTokens: 725_733,
+      outputBudgetTokens: 131_072,
+      requestHardCapTokens: 850_000
+    })
+
+    expect(outcome.triggered).toBe(true)
+    expect(outcome.compacted).toBe(true)
+    expect(outcome.replacedTokens).toBeGreaterThan(0)
+    expect(outcome.history[0]).toMatchObject({ kind: 'compaction' })
+    const events = await sessionStore.loadEventsSince(threadId, 0)
+    expect(events).toContainEqual(expect.objectContaining({
+      kind: 'compaction_completed',
+      itemId: expect.any(String)
+    }))
+  })
+
+  it('skips the model-backed summary when allowModelSummary is false', async () => {
+    const sessionStore = new InMemorySessionStore()
+    await seedLongHistory(sessionStore, 'heuristic_only')
+    const requests: ModelRequest[] = []
+    const model: ModelClient = {
+      provider: 'test',
+      model: 'summary-model',
+      async *stream(request) {
+        requests.push(request)
+        yield { kind: 'assistant_text_delta' as const, text: 'model summary must not run' }
+        yield { kind: 'completed' as const, stopReason: 'stop' as const }
+      }
+    }
+    const service = modelCompactionService(sessionStore, model, {
+      summaryMode: 'model',
+      summaryModel: 'summary-model'
+    })
+
+    const outcome = await service.compactIfNeeded({
+      items: await sessionStore.loadItems(threadId),
+      model: 'main-model',
+      signal: new AbortController().signal,
+      threadId,
+      turnId,
+      allowModelSummary: false
+    })
+
+    expect(requests).toHaveLength(0)
+    expect(outcome.compacted).toBe(true)
+    const summary = outcome.history.find((item) => item.kind === 'compaction')
+    expect(summary).toMatchObject({ kind: 'compaction' })
+    const persisted = await sessionStore.loadItems(threadId)
+    expect(persisted.some((item) => item.kind === 'compaction')).toBe(true)
+    const events = await sessionStore.loadEventsSince(threadId, 0)
+    expect(events.filter((event) => event.kind === 'compaction_completed')).toHaveLength(1)
+  })
+
   it('inherits a thread account only when the turn keeps the same provider', () => {
     expect(resolveCoherentProviderAccount({
       turnProviderId: 'ext-other',
@@ -126,13 +211,13 @@ describe('HistoryCompactionService', () => {
       }
     })
 
-    const history = await service.compactIfNeeded({
+    const history = (await service.compactIfNeeded({
       items: await sessionStore.loadItems(threadId),
       model: 'test-model',
       signal: new AbortController().signal,
       threadId,
       turnId
-    })
+    })).history
 
     expect(telemetryCalls).toEqual(['hydrate', 'consume'])
     expect(history[0]).toMatchObject({ kind: 'compaction', id: 'compaction_1' })
@@ -181,9 +266,9 @@ describe('HistoryCompactionService', () => {
       ...request,
       items: await sessionStore.loadItems(threadId)
     })
-    const unchanged = await service.compactIfNeeded({ ...request, items: compacted })
+    const unchanged = await service.compactIfNeeded({ ...request, items: compacted.history })
 
-    expect(unchanged).toEqual(compacted)
+    expect(unchanged.history).toEqual(compacted.history)
     expect(rewriteThreadItemsFromSession).toHaveBeenCalledTimes(1)
     const events = await sessionStore.loadEventsSince(threadId, 0)
     expect(events.filter((event) => event.kind === 'compaction_completed')).toHaveLength(1)
@@ -212,13 +297,13 @@ describe('HistoryCompactionService', () => {
     })
 
     const inputItems = [item]
-    const history = await service.compactIfNeeded({
+    const history = (await service.compactIfNeeded({
       items: inputItems,
       model: 'test-model',
       signal: new AbortController().signal,
       threadId,
       turnId
-    })
+    })).history
 
     expect(history).toBe(inputItems)
     expect(history).toEqual([item])
@@ -254,14 +339,14 @@ describe('HistoryCompactionService', () => {
       rewriteThreadItemsFromSession: async () => undefined
     })
 
-    const history = await service.compactIfNeeded({
+    const history = (await service.compactIfNeeded({
       items: await sessionStore.loadItems(threadId),
       model: 'test-model',
       signal: new AbortController().signal,
       threadId,
       turnId,
       requestOverheadTokens: 120
-    })
+    })).history
 
     expect(history[0]).toMatchObject({ kind: 'compaction' })
     expect(history.at(-1)).toMatchObject({ id: 'overhead_item_4' })
@@ -312,13 +397,13 @@ describe('HistoryCompactionService', () => {
 
     hooks = [{ phase: 'PreCompact', run: seenPreCompact }]
     contextCompaction = { summaryMode: 'model', summaryModel: 'live-summary-model' }
-    const history = await service.compactIfNeeded({
+    const history = (await service.compactIfNeeded({
       items: await sessionStore.loadItems(threadId),
       model: 'main-model',
       signal: new AbortController().signal,
       threadId,
       turnId
-    })
+    })).history
 
     expect(seenPreCompact).toHaveBeenCalledWith(expect.objectContaining({ phase: 'PreCompact' }))
     expect(requests).toHaveLength(1)
@@ -464,7 +549,7 @@ describe('HistoryCompactionService', () => {
       summaryModel: 'extension-summary-model'
     })
 
-    const history = await service.compactIfNeeded({
+    const history = (await service.compactIfNeeded({
       items: await sessionStore.loadItems(threadId),
       model: 'main-extension-model',
       providerId: 'ext-private',
@@ -473,7 +558,7 @@ describe('HistoryCompactionService', () => {
       signal: new AbortController().signal,
       threadId,
       turnId
-    })
+    })).history
 
     expect(defaultRequests).toEqual([])
     expect(extensionRequests).toHaveLength(1)
@@ -518,7 +603,7 @@ describe('HistoryCompactionService', () => {
       summaryProviderId: 'ext-other'
     })
 
-    const history = await service.compactIfNeeded({
+    const history = (await service.compactIfNeeded({
       items: await sessionStore.loadItems(threadId),
       model: 'main-model',
       providerId: 'ext-current',
@@ -526,7 +611,7 @@ describe('HistoryCompactionService', () => {
       signal: new AbortController().signal,
       threadId,
       turnId
-    })
+    })).history
 
     expect(defaultRequests).toEqual([])
     expect(otherProviderRequests).toEqual([])
