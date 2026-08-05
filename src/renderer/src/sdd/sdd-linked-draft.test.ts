@@ -18,7 +18,17 @@ function plan(relativePath: string): GuiPlanArtifact {
 }
 
 describe('resolveLinkedSddDraft', () => {
-  it('resolves a requirement from its active implementation plan', () => {
+  it('prefers the current Session requirement over an SDD implementation plan', () => {
+    expect(resolveLinkedSddDraft({
+      plan: plan(`.kunsdd/plan/sdd-${DRAFT_ID}.md`),
+      threadDraftRef: {
+        workspaceRoot: '/tmp/app',
+        draftRelativePath: '.kunsdd/requirements/draft-1/requirement.md'
+      }
+    })?.relativePath).toBe('.kunsdd/requirements/draft-1/requirement.md')
+  })
+
+  it('resolves a requirement from its active implementation plan when the thread has none', () => {
     expect(resolveLinkedSddDraft({
       plan: plan(`.kunsdd/plan/sdd-${DRAFT_ID}.md`),
       threadDraftRef: null
@@ -43,5 +53,12 @@ describe('resolveLinkedSddDraft', () => {
         draftRelativePath: '.kunsdd/requirements/draft-2/requirement.md'
       }
     })?.relativePath).toBe('.kunsdd/requirements/draft-2/requirement.md')
+  })
+
+  it('returns null when neither the thread nor the plan carries a requirement', () => {
+    expect(resolveLinkedSddDraft({
+      plan: plan('.kun/plans/general.md'),
+      threadDraftRef: null
+    })).toBeNull()
   })
 })

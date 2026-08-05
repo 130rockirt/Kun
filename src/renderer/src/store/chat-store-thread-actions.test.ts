@@ -314,6 +314,45 @@ describe('chat-store-thread-actions queued messages', () => {
     expect(state.blocks).toEqual([])
   })
 
+  it('records a Code thread selection as the last Code session memory', async () => {
+    registryMock.getProvider.mockReturnValue({
+      getThreadDetail: vi.fn(async () => ({ blocks: [], latestSeq: 0, threadStatus: 'idle' })),
+      subscribeThreadEvents: vi.fn(async () => undefined)
+    })
+    const { actions, state } = buildHarness()
+    state.busy = false
+    state.composerPickList = []
+    state.composerModelGroups = []
+    state.threads = [thread('thr_existing'), thread('thr_code')]
+    state.lastCodeThreadId = 'thr_existing'
+
+    await actions.selectThread('thr_code')
+
+    expect(state.activeThreadId).toBe('thr_code')
+    expect(state.lastCodeThreadId).toBe('thr_code')
+  })
+
+  it('does not overwrite Code session memory when selecting a Design thread', async () => {
+    registryMock.getProvider.mockReturnValue({
+      getThreadDetail: vi.fn(async () => ({ blocks: [], latestSeq: 0, threadStatus: 'idle' })),
+      subscribeThreadEvents: vi.fn(async () => undefined)
+    })
+    const { actions, state } = buildHarness()
+    state.busy = false
+    state.composerPickList = []
+    state.composerModelGroups = []
+    state.lastCodeThreadId = 'thr_code_memory'
+    state.threads = [
+      thread('thr_existing'),
+      { ...thread('thr_design'), agentSurface: 'design' as const }
+    ]
+
+    await actions.selectThread('thr_design')
+
+    expect(state.activeThreadId).toBe('thr_design')
+    expect(state.lastCodeThreadId).toBe('thr_code_memory')
+  })
+
   it('snapshots active-turn model and reasoning selections into the next queued input', async () => {
     const { actions, state } = buildHarness()
     state.composerModel = 'deepseek-v4-flash'
