@@ -781,6 +781,33 @@ const scheduledTaskPatchSchema = z.object({
   lastThreadId: z.string().max(MAX_ID_LENGTH).optional()
 }).strict()
 
+const sessionDaemonPushPatchSchema = z.object({
+  enabled: z.boolean().optional(),
+  channelId: z.string().trim().max(MAX_ID_LENGTH).optional(),
+  conversationId: z.string().trim().max(MAX_ID_LENGTH).optional()
+}).strict()
+
+const sessionDaemonPatchSchema = z.object({
+  id: z.string().trim().min(1).max(MAX_ID_LENGTH).optional(),
+  title: z.string().trim().max(128).optional(),
+  enabled: z.boolean().optional(),
+  workspaceRoot: defaultPathSchema.optional(),
+  threadId: z.string().trim().max(MAX_ID_LENGTH).optional(),
+  scriptPath: z.string().trim().max(1024).optional(),
+  interpreter: z.enum(['auto', 'python', 'node']).optional(),
+  heartbeatIntervalSeconds: z.number().int().min(5).max(3600).optional(),
+  silenceTimeoutSeconds: z.number().int().min(15).max(86_400).optional(),
+  restartOnFailure: z.boolean().optional(),
+  push: sessionDaemonPushPatchSchema.optional(),
+  createdAt: z.string().max(128).optional(),
+  updatedAt: z.string().max(128).optional()
+}).strict()
+
+const sessionDaemonSettingsPatchSchema = z.object({
+  enabled: z.boolean().optional(),
+  items: z.array(sessionDaemonPatchSchema).max(256).optional()
+}).strict()
+
 const scheduleSettingsPatchSchema = z.object({
   enabled: z.boolean().optional(),
   defaultWorkspaceRoot: defaultPathSchema,
@@ -791,7 +818,8 @@ const scheduleSettingsPatchSchema = z.object({
   skills: scheduleSkillPatchSchema.optional(),
   keepAwake: z.boolean().optional(),
   internal: scheduleInternalPatchSchema.optional(),
-  tasks: z.array(scheduledTaskPatchSchema).max(512).optional()
+  tasks: z.array(scheduledTaskPatchSchema).max(512).optional(),
+  daemons: sessionDaemonSettingsPatchSchema.optional()
 }).strict()
 
 // --- Workflow (node-based automation) ---

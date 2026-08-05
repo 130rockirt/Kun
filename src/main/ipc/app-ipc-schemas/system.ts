@@ -131,6 +131,14 @@ export const clawImTelegramTokenPayloadSchema = z
 
 export const streamIdSchema = trimmedString(MAX_ID_LENGTH)
 
+export const daemonLogsPayloadSchema = z
+  .object({
+    id: streamIdSchema,
+    cursor: z.string().trim().optional(),
+    limit: z.number().int().min(1).max(2_000).optional()
+  })
+  .strict()
+
 export const sseStartPayloadSchema = z
   .object({
     threadId: trimmedString(MAX_ID_LENGTH),
