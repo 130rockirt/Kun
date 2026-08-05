@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
   buildDesignArtifactSyncKey,
-  removedLinkedArtifactIds,
+  removedLinkedArtifactReferences,
   syncDesignArtifactsToBoardDocument,
   syncDesignArtifactFrameNodesToArtifacts
 } from '../../../../design/design-board-svg'
+import { currentHtmlVersionId } from '../../../../design/design-board'
 import type { DesignTarget } from '../../../../design/design-context'
 import type { DesignArtifact } from '../../../../design/design-types'
 import type { CanvasDocument, Rect } from '../../../../design/canvas/canvas-types'
@@ -213,18 +214,33 @@ export function useCanvasViewportDocumentSync({
       persistCanvasDocument(workspaceRoot, artifactId, state.document, baseDir)
       if (!htmlFrameSyncEnabled) return
 
-      const removedArtifactIds = removedLinkedArtifactIds(prev.document, state.document)
-      if (removedArtifactIds.length > 0) {
+      const removedReferences = removedLinkedArtifactReferences(prev.document, state.document)
+      if (removedReferences.length > 0) {
         const designStore = useDesignWorkspaceStore.getState()
         const fileArtifacts = new Map(
           designStore.artifacts
             .filter((item) => item.kind === 'html' || item.kind === 'svg')
             .map((item) => [item.id, item])
         )
-        for (const removedArtifactId of removedArtifactIds) {
-          const artifact = fileArtifacts.get(removedArtifactId)
-          if (artifact && artifact.node?.boardHidden !== true) {
-            designStore.updateArtifactNode(removedArtifactId, { boardHidden: true })
+        for (const reference of removedReferences) {
+          const artifact = fileArtifacts.get(reference.artifactId)
+          if (!artifact) continue
+          if (reference.kind === 'svg') {
+            // SVG stays one-to-one: hiding the artifact hides its only frame.
+            if (artifact.node?.boardHidden !== true) {
+              designStore.updateArtifactNode(reference.artifactId, { boardHidden: true })
+            }
+            continue
+          }
+          // HTML frames are per-version; tombstone only the deleted version so
+          // the remaining version frames stay and future versions can appear.
+          // Legacy frames without a version stamp map to the current version.
+          const versionId = reference.versionId ?? currentHtmlVersionId(artifact)
+          const hidden = artifact.node?.boardHiddenVersionIds ?? []
+          if (!hidden.includes(versionId)) {
+            designStore.updateArtifactNode(reference.artifactId, {
+              boardHiddenVersionIds: [...hidden, versionId]
+            })
           }
         }
       }

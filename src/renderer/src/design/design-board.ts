@@ -88,7 +88,8 @@ export function buildHtmlArtifactSyncKey(
           node?.height ?? '',
           node?.sizeMode ?? '',
           node?.viewMode ?? '',
-          node?.boardHidden ? 'hidden' : ''
+          node?.boardHidden ? 'hidden' : '',
+          (node?.boardHiddenVersionIds ?? []).join(',')
         ].join(':')
       })
   ].join('|')
@@ -143,7 +144,7 @@ function linkedHtmlFrames(
   return frames
 }
 
-function currentHtmlVersionId(artifact: DesignArtifact): string {
+export function currentHtmlVersionId(artifact: DesignArtifact): string {
   return currentDesignArtifactVersion(artifact)?.id ?? `${artifact.id}-current`
 }
 
@@ -480,6 +481,7 @@ export function syncHtmlArtifactsToBoardDocument(
     const defaultFrameSize = defaultFrameSizeForArtifact(artifact, index, designTarget)
     const defaultDevicePreset = defaultDevicePresetForArtifact(artifact, designTarget)
     if (!existing && isCurrent && artifact.node?.boardHidden) return
+    if (!existing && (artifact.node?.boardHiddenVersionIds ?? []).includes(version.id)) return
     if (existing) {
       const rootHasFrame = root.children.includes(existing.id)
       if (existing.parentId !== workingDoc.rootId || !rootHasFrame || existing.frameId !== null) {
@@ -616,18 +618,52 @@ export function syncHtmlArtifactsToBoardDocument(
 
 export function syncHtmlFrameNodesToArtifacts(doc: CanvasDocument): void {
   const designStore = useDesignWorkspaceStore.getState()
+  const htmlArtifactsById = new Map(
+    designStore.artifacts
+      .filter((item) => item.kind === 'html')
+      .map((item) => [item.id, item])
+  )
+
+  // Drop board-hidden tombstones for any version whose frame is present again
+  // (e.g. after undo restores a deleted frame). This must also cover historical
+  // versions, which the current-version geometry pass below intentionally skips.
+  const presentVersionIdsByArtifact = new Map<string, Set<string>>()
+  for (const id of documentShapeIdsInOrder(doc)) {
+    const shape = doc.objects[id]
+    if (!shape || !isHtmlFrame(shape) || !shape.htmlArtifactId) continue
+    const reference = embeddedArtifactOf(shape)
+    if (!reference?.id) continue
+    const artifact = htmlArtifactsById.get(shape.htmlArtifactId)
+    const versionId = reference.versionId
+      ?? (artifact ? currentHtmlVersionId(artifact) : `${shape.htmlArtifactId}-current`)
+    let versionIds = presentVersionIdsByArtifact.get(shape.htmlArtifactId)
+    if (!versionIds) {
+      versionIds = new Set<string>()
+      presentVersionIdsByArtifact.set(shape.htmlArtifactId, versionIds)
+    }
+    versionIds.add(versionId)
+  }
+  for (const [artifactId, versionIds] of presentVersionIdsByArtifact) {
+    const artifact = htmlArtifactsById.get(artifactId)
+    if (!artifact) continue
+    const hidden = (artifact.node?.boardHiddenVersionIds ?? []).filter((id) => !versionIds.has(id))
+    if (hidden.length !== (artifact.node?.boardHiddenVersionIds ?? []).length) {
+      designStore.updateArtifactNode(artifactId, { boardHiddenVersionIds: hidden })
+    }
+  }
+
   const syncedArtifactIds = new Set<string>()
   for (const id of documentShapeIdsInOrder(doc)) {
     const shape = doc.objects[id]
     if (!shape || !isHtmlFrame(shape) || !shape.htmlArtifactId) continue
-    const artifactIndex = designStore.artifacts.findIndex((item) => item.id === shape.htmlArtifactId)
-    const artifact = artifactIndex >= 0 ? designStore.artifacts[artifactIndex] : undefined
-    if (!artifact || artifact.kind !== 'html') continue
+    const artifact = htmlArtifactsById.get(shape.htmlArtifactId)
+    if (!artifact) continue
     const reference = embeddedArtifactOf(shape)
     const versionId = reference?.versionId
     if (versionId && versionId !== currentHtmlVersionId(artifact)) continue
     if (syncedArtifactIds.has(shape.htmlArtifactId)) continue
     syncedArtifactIds.add(shape.htmlArtifactId)
+    const artifactIndex = designStore.artifacts.findIndex((item) => item.id === shape.htmlArtifactId)
     const patch = frameNodePatch(shape)
     if (!patch) continue
     const nextNode = {
