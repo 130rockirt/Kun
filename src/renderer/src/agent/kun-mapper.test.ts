@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   chatBlockFromItem,
   dispatchKunRuntimeEvent,
+  dispatchKunRuntimeEvents,
   mergeChatBlocks,
   runtimeProjectionActionsFromEvent,
   threadFromCore
@@ -96,6 +97,7 @@ describe('runtime projection action normalization', () => {
 
     expect(started).toEqual([{
       type: 'approval_review_updated',
+      seq: 12,
       payload: {
         reviewId: 'review_1',
         approvalId: 'approval_1',
@@ -108,6 +110,7 @@ describe('runtime projection action normalization', () => {
     }])
     expect(completed).toEqual([{
       type: 'approval_review_updated',
+      seq: 13,
       payload: {
         reviewId: 'review_1',
         approvalId: 'approval_1',
@@ -189,6 +192,7 @@ describe('runtime projection action normalization', () => {
 
     expect(actions).toEqual([{
       type: 'runtime_status_received',
+      seq: 42,
       payload: {
         kind: 'required_tool_gate',
         itemId: 'runtime_status_turn_1_required_tool_graph_create_run',
@@ -226,6 +230,7 @@ describe('runtime projection action normalization', () => {
     expect(replay).toEqual(first)
     expect(first).toEqual([{
       type: 'goal_changed',
+      seq: 9,
       payload: {
         threadId: 'thread_1',
         goal: {
@@ -243,6 +248,22 @@ describe('runtime projection action normalization', () => {
     }])
   })
 
+  it('retains one persisted seq on every action produced by a terminal event', () => {
+    const actions = runtimeProjectionActionsFromEvent({
+      kind: 'turn_failed',
+      seq: 77,
+      threadId: 'thread_1',
+      turnId: 'turn_1',
+      message: 'provider failed'
+    })
+
+    expect(actions.map((action) => action.seq)).toEqual([77, 77])
+    expect(actions.map((action) => action.type)).toEqual([
+      'runtime_error_received',
+      'turn_failed'
+    ])
+  })
+
   it('uses a deterministic fallback identity for legacy user-input events', () => {
     const actions = runtimeProjectionActionsFromEvent({
       kind: 'user_input_resolved',
@@ -256,6 +277,61 @@ describe('runtime projection action normalization', () => {
 })
 
 describe('assistant stream mapping', () => {
+  it('preserves item-relative offsets while coalescing a delta batch', async () => {
+    const onDeltas = vi.fn()
+    const sink: ThreadEventSink = { ...makeSink(), onDeltas }
+
+    await dispatchKunRuntimeEvents([
+      {
+        kind: 'assistant_reasoning_delta',
+        seq: 10,
+        deltaOffset: 0,
+        item: {
+          id: 'item_reasoning',
+          turnId: 'turn_1',
+          threadId: 'thr_1',
+          role: 'assistant',
+          status: 'running',
+          createdAt: '2024-01-01T00:00:00.000Z',
+          kind: 'assistant_reasoning',
+          text: 'think'
+        }
+      },
+      {
+        kind: 'assistant_text_delta',
+        seq: 11,
+        deltaOffset: 5,
+        item: {
+          id: 'item_answer',
+          turnId: 'turn_1',
+          threadId: 'thr_1',
+          role: 'assistant',
+          status: 'running',
+          createdAt: '2024-01-01T00:00:01.000Z',
+          kind: 'assistant_text',
+          text: 'answer'
+        }
+      }
+    ], sink, async () => undefined)
+
+    expect(onDeltas).toHaveBeenCalledWith([
+      expect.objectContaining({
+        kind: 'agent_reasoning',
+        itemId: 'item_reasoning',
+        seq: 10,
+        deltaOffset: 0,
+        text: 'think'
+      }),
+      expect.objectContaining({
+        kind: 'agent_message',
+        itemId: 'item_answer',
+        seq: 11,
+        deltaOffset: 5,
+        text: 'answer'
+      })
+    ])
+  })
+
   it('keeps delta identity and emits the completed assistant snapshot as an authoritative upsert', async () => {
     const deltas: unknown[] = []
     const assistantItems: unknown[] = []
@@ -270,6 +346,7 @@ describe('assistant stream mapping', () => {
     await dispatchKunRuntimeEvent({
       kind: 'assistant_text_delta',
       seq: 1,
+      deltaOffset: 0,
       item: {
         id: 'item_answer',
         turnId: 'turn_1',
@@ -284,6 +361,7 @@ describe('assistant stream mapping', () => {
     await dispatchKunRuntimeEvent({
       kind: 'assistant_text_delta',
       seq: 2,
+      deltaOffset: 2,
       item: {
         id: 'item_answer',
         turnId: 'turn_1',
@@ -315,6 +393,7 @@ describe('assistant stream mapping', () => {
         text: 'he',
         kind: 'agent_message',
         seq: 1,
+        deltaOffset: 0,
         threadId: 'thr_1',
         turnId: 'turn_1',
         itemId: 'item_answer',
@@ -324,6 +403,7 @@ describe('assistant stream mapping', () => {
         text: 'llo',
         kind: 'agent_message',
         seq: 2,
+        deltaOffset: 2,
         threadId: 'thr_1',
         turnId: 'turn_1',
         itemId: 'item_answer',
@@ -2068,6 +2148,7 @@ describe('context snapshot event mapping', () => {
 
     expect(actions).toEqual([{
       type: 'context_snapshot_received',
+      seq: 14,
       payload: {
         threadId: 'thr_1',
         turnId: 'turn_1',

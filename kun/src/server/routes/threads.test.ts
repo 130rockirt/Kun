@@ -68,6 +68,54 @@ describe('getThread pendingUserInputIds (#606)', () => {
   })
 })
 
+describe('getThread replay snapshot boundary (#1087)', () => {
+  it('freezes latestSeq before projection reads so a hydration-window event remains replayable', async () => {
+    const initial = createThreadRecord({
+      id: 'thr_boundary', title: 'Boundary', workspace: '/tmp',
+      model: 'deepseek-chat', status: 'running'
+    })
+    initial.turns = [createTurnRecord({
+      id: 'turn_boundary', threadId: initial.id, prompt: 'wait', status: 'running',
+      createdAt: '2026-08-05T00:00:00.000Z'
+    })]
+    const settled = {
+      ...initial,
+      status: 'idle' as const,
+      turns: initial.turns.map((turn) => ({ ...turn, status: 'completed' as const }))
+    }
+    const order: string[] = []
+    let durableHighWater = 200
+    const service = {
+      get: vi.fn(async () => {
+        order.push('thread')
+        // A terminal event becomes durable after the response's replay floor
+        // was captured but before its state projection is read.
+        return settled
+      })
+    } as unknown as ThreadService
+    const sessionStore = {
+      highestSeq: vi.fn(async () => {
+        order.push('event-boundary')
+        const boundary = durableHighWater
+        durableHighWater = 201
+        return boundary
+      }),
+      loadItems: vi.fn(async () => {
+        order.push('items')
+        return []
+      })
+    }
+
+    const response = await getThread(service, initial.id, sessionStore as never)
+    const body = JSON.parse(response.body)
+
+    expect(order).toEqual(['event-boundary', 'thread', 'items'])
+    expect(durableHighWater).toBe(201)
+    expect(body.latestSeq).toBe(200)
+    expect(body.status).toBe('idle')
+  })
+})
+
 describe('getThread approval recovery snapshots (#1053)', () => {
   it('materializes live approvals without replaying event history', async () => {
     const record = createThreadRecord({

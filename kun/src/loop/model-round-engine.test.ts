@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { ModelRequest, ModelStreamChunk } from '../ports/model-client.js'
 import type { CacheRequestSignature } from '../cache/cache-diagnostics.js'
+import type { TurnItem } from '../contracts/items.js'
 import { ModelRoundEngine, type ModelRoundEngineDeps } from './model-round-engine.js'
 
 const usage = {
@@ -44,7 +45,9 @@ const TOOL_ROUND_TIMELINE_REFERENCE = {
   trace: [
     'stage:pre_send',
     'stage:post_send',
+    'item:assistant_reasoning:delta',
     'event:assistant_reasoning_delta',
+    'item:assistant_text:delta',
     'event:assistant_text_delta',
     'item:assistant_reasoning',
     'item:assistant_text',
@@ -83,6 +86,9 @@ function harness(values: readonly ModelStreamChunk[]) {
   const cacheSignatures: CacheRequestSignature[] = []
   const recordedEvents: Array<Parameters<ModelRoundEngineDeps['events']['record']>[0]> = []
   const appliedItems: Array<Parameters<ModelRoundEngineDeps['turns']['applyItem']>[1]> = []
+  const deltaItems: Array<Extract<TurnItem, {
+    kind: 'assistant_text' | 'assistant_reasoning'
+  }>> = []
   let id = 0
   let streamFactory = (): AsyncIterable<ModelStreamChunk> => chunks(values)
   const deps: ModelRoundEngineDeps = {
@@ -103,6 +109,34 @@ function harness(values: readonly ModelStreamChunk[]) {
       applyItem: async (_threadId, item) => {
         appliedItems.push(item)
         trace.push(`item:${item.kind}`)
+      },
+      applyAssistantDelta: async (threadId, item, deltaText, deltaOffset) => {
+        if (item.kind !== 'assistant_text' && item.kind !== 'assistant_reasoning') {
+          throw new TypeError(`unexpected delta item: ${item.kind}`)
+        }
+        deltaItems.push(item)
+        trace.push(`item:${item.kind}:delta`)
+        if (item.kind === 'assistant_text') {
+          recordedEvents.push({
+            kind: 'assistant_text_delta',
+            threadId,
+            turnId: item.turnId,
+            itemId: item.id,
+            deltaOffset,
+            item: { ...item, text: deltaText }
+          })
+          trace.push('event:assistant_text_delta')
+          return
+        }
+        recordedEvents.push({
+          kind: 'assistant_reasoning_delta',
+          threadId,
+          turnId: item.turnId,
+          itemId: item.id,
+          deltaOffset,
+          item: { ...item, text: deltaText }
+        })
+        trace.push('event:assistant_reasoning_delta')
       }
     },
     usage: {
@@ -131,6 +165,7 @@ function harness(values: readonly ModelStreamChunk[]) {
     cacheSignatures,
     recordedEvents,
     appliedItems,
+    deltaItems,
     controller,
     engine,
     setStream: (next: () => AsyncIterable<ModelStreamChunk>) => { streamFactory = next },
@@ -209,11 +244,13 @@ describe('ModelRoundEngine', () => {
       (event) => event.kind === 'assistant_text_delta'
     )
     expect(liveReasoning).toMatchObject({
+      deltaOffset: 0,
       item: {
         createdAt: test.appliedItems.find((item) => item.kind === 'assistant_reasoning')?.createdAt
       }
     })
     expect(liveText).toMatchObject({
+      deltaOffset: 0,
       item: {
         createdAt: test.appliedItems.find((item) => item.kind === 'assistant_text')?.createdAt
       }
@@ -394,6 +431,10 @@ describe('ModelRoundEngine', () => {
       ['assistant_reasoning', reasoning],
       ['assistant_text', text]
     ])
+    expect(test.deltaItems.map((item) => [item.kind, item.text])).toEqual([
+      ['assistant_reasoning', reasoning],
+      ['assistant_text', text]
+    ])
   })
 
   it('splits one large provider delta into replay-safe UTF-8 event blocks', async () => {
@@ -416,6 +457,12 @@ describe('ModelRoundEngine', () => {
     })
     expect(retained.join('')).toBe(text)
     expect(retained.every((value) => Buffer.byteLength(value, 'utf8') <= 4 * 1024)).toBe(true)
+    expect(deltas.map((event) => 'deltaOffset' in event ? event.deltaOffset : undefined)).toEqual(
+      retained.reduce<number[]>((offsets, value) => [
+        ...offsets,
+        (offsets.at(-1) ?? 0) + (offsets.length === 0 ? 0 : retained[offsets.length - 1]!.length)
+      ], [])
+    )
   })
 
   it('flushes a low-volume delta while the provider is paused and leaves no timer behind', async () => {
@@ -482,6 +529,7 @@ describe('ModelRoundEngine', () => {
     expect(test.trace).toEqual([
       'stage:pre_send',
       'stage:post_send',
+      'item:assistant_text:delta',
       'event:assistant_text_delta',
       'item:assistant_text'
     ])
@@ -498,6 +546,7 @@ describe('ModelRoundEngine', () => {
       'stage:pre_send',
       'stage:post_send',
       'image:write',
+      'item:assistant_text:delta',
       'event:assistant_text_delta',
       'stage:response_received',
       'item:assistant_text'
@@ -515,6 +564,7 @@ describe('ModelRoundEngine', () => {
     expect(test.trace).toEqual([
       'stage:pre_send',
       'stage:post_send',
+      'item:assistant_text:delta',
       'event:assistant_text_delta',
       'failure',
       'event:error',
@@ -535,6 +585,7 @@ describe('ModelRoundEngine', () => {
     expect(test.trace).toEqual([
       'stage:pre_send',
       'stage:post_send',
+      'item:assistant_reasoning:delta',
       'event:assistant_reasoning_delta',
       'item:assistant_reasoning'
     ])

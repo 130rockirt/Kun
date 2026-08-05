@@ -3,6 +3,7 @@ import type { ModelToolSpec } from '../../ports/model-client.js'
 import { isDeepSeekHost } from './model-error-probe.js'
 import { repairToolArguments } from './tool-argument-repair.js'
 import {
+  COMPAT_ANTHROPIC_THINKING,
   CompatRequestCodecs,
   type CompatChatMessage,
   type CompatChatMessageContentPart
@@ -15,7 +16,8 @@ type AnthropicImageSource =
 type AnthropicContentBlock = (
   | { type: 'text'; text: string }
   | { type: 'image'; source: AnthropicImageSource }
-  | { type: 'thinking'; thinking: string }
+  | { type: 'thinking'; thinking: string; signature: string }
+  | { type: 'redacted_thinking'; data: string }
   | { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> }
   | { type: 'tool_result'; tool_use_id: string; content: string }
 ) & { cache_control?: AnthropicCacheControl }
@@ -161,14 +163,16 @@ function messagesToAnthropic(
       continue
     }
     const content = chatContentToAnthropicContent(message.content)
-    const blocks = Array.isArray(content)
+    const blocks: AnthropicContentBlock[] = Array.isArray(content)
       ? [...content]
       : content.trim()
         ? [{ type: 'text' as const, text: content }]
         : []
     if (includeThinkingBlocks && message.role === 'assistant') {
-      const thinking = message.reasoning_content?.trim()
-      if (thinking) blocks.unshift({ type: 'thinking', thinking })
+      const preserved = message[COMPAT_ANTHROPIC_THINKING]
+      if (preserved?.length) {
+        blocks.unshift(...preserved.map((block) => ({ ...block })))
+      }
     }
     for (const call of message.tool_calls ?? []) {
       blocks.push({

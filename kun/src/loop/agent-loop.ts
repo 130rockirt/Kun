@@ -377,6 +377,7 @@ export class AgentLoop {
       events: opts.events,
       ids: opts.ids,
       dispatchToolCalls: (input) => this.dispatchToolCalls(input),
+      suppressToolCalls: (input, reason) => this.toolCallDispatcher.suppressAll(input, reason),
       rememberFailure: (turnId, failure) => this.rememberTurnFailure(turnId, failure),
       hasTurnMadeProgress: (turnId) => this.goalTurns.hasMadeProgress(turnId),
       suppressGoalResume: (turnId) => this.goalTurns.suppressResume(turnId)

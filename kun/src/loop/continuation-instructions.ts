@@ -47,6 +47,7 @@ const GOAL_NO_TOOL_REPEAT_MIN_LENGTH = 12
 export const GOAL_NO_TOOL_REPEAT_MAX_RECOVERY_STEPS = 3
 export const EMPTY_POST_TOOL_FINAL_ANSWER_RECOVERY_STEP = 2
 export const EMPTY_POST_TOOL_MAX_RECOVERY_STEPS = EMPTY_POST_TOOL_FINAL_ANSWER_RECOVERY_STEP
+export const TOOL_SUPPRESSION_FINAL_ANSWER_RECOVERY_STEP = 2
 
 export function goalNoToolRecoveryInstruction(recoveryStep: number): string {
   return [
@@ -73,6 +74,37 @@ export function emptyPostToolRecoveryInstruction(recoveryStep: number): string {
     'Tool continuation recovery:',
     '- The previous model response ended without a final answer after tool execution.',
     '- Continue the task now: inspect the tool result, call additional tools if needed, or provide a clear final answer.',
+    '- Do not stop with an empty response.'
+  ].join('\n')
+}
+
+export function toolSuppressionRecoveryInstruction(
+  recoveryStep: number,
+  toolsDisabled = recoveryStep >= TOOL_SUPPRESSION_FINAL_ANSWER_RECOVERY_STEP
+): string {
+  if (toolsDisabled) {
+    return [
+      'Tool-loop final-answer recovery:',
+      '- Repeated tool calls were suppressed because they would repeat work already attempted in this turn.',
+      '- Tool calling is disabled for this recovery request.',
+      '- Provide a clear, non-empty final answer now using only results that were actually completed.',
+      '- Do not claim that a suppressed tool call ran successfully.'
+    ].join('\n')
+  }
+  if (recoveryStep >= TOOL_SUPPRESSION_FINAL_ANSWER_RECOVERY_STEP) {
+    return [
+      'Required tool-loop recovery:',
+      '- Repeated tool calls were suppressed, but this turn still has an outstanding completion gate.',
+      '- Only tools eligible for that gate remain available.',
+      '- Do not repeat the same tool arguments; make a valid, meaningfully different call that satisfies the gate.',
+      '- Another response containing only suppressed calls will fail the turn.'
+    ].join('\n')
+  }
+  return [
+    'Tool-loop recovery:',
+    '- The previous model response only requested tool calls that the host suppressed as repetitions.',
+    '- Do not repeat the same tool with the same arguments.',
+    '- Either use a meaningfully different available tool or provide a clear, non-empty final answer.',
     '- Do not stop with an empty response.'
   ].join('\n')
 }

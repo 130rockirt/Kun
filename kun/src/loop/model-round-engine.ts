@@ -56,7 +56,7 @@ export type ModelRoundEngineInput = {
 export type ModelRoundEngineDeps = {
   model: Pick<ModelClient, 'stream'>
   events: Pick<RuntimeEventRecorder, 'record'>
-  turns: Pick<TurnService, 'applyItem'>
+  turns: Pick<TurnService, 'applyItem' | 'applyAssistantDelta'>
   usage: Pick<UsageService, 'record'>
   telemetry: Pick<LoopTelemetry, 'recordPromptPressure'>
   ids: Pick<IdGenerator, 'next'>
@@ -80,6 +80,7 @@ type AssistantDeltaEvent = {
   kind: 'assistant_text_delta' | 'assistant_reasoning_delta'
   itemId: string
   text: string
+  textOffset: number
 }
 
 /**
@@ -108,6 +109,10 @@ export class ModelRoundEngine {
     let reasoningCreatedAt = ''
     let persistedReasoningText = ''
     let persistedText = ''
+    let emittedReasoningText = ''
+    let emittedText = ''
+    let queuedReasoningChars = 0
+    let queuedTextChars = 0
     let selectedRoute: ModelRouteTargetMetadata | undefined
     const persistAccumulatedResponse = async (): Promise<void> => {
       if (collector.reasoning && collector.reasoning !== persistedReasoningText) {
@@ -149,36 +154,46 @@ export class ModelRoundEngine {
     }
     const deltaEvents = new AssistantDeltaEventCoalescer(async (delta) => {
       if (delta.kind === 'assistant_text_delta') {
-        await this.deps.events.record({
-          kind: delta.kind,
-          threadId: input.threadId,
-          turnId: input.turnId,
-          itemId: delta.itemId,
-          item: makeAssistantTextItem({
+        if (delta.textOffset !== emittedText.length) {
+          throw new Error(
+            `assistant text delta offset mismatch: expected ${emittedText.length}, got ${delta.textOffset}`
+          )
+        }
+        emittedText += delta.text
+        await this.deps.turns.applyAssistantDelta(
+          input.threadId,
+          makeAssistantTextItem({
             id: delta.itemId,
             turnId: input.turnId,
             threadId: input.threadId,
-            text: delta.text,
+            text: emittedText,
             status: 'running',
             createdAt: textCreatedAt
-          })
-        })
+          }),
+          delta.text,
+          delta.textOffset
+        )
         return
       }
-      await this.deps.events.record({
-        kind: delta.kind,
-        threadId: input.threadId,
-        turnId: input.turnId,
-        itemId: delta.itemId,
-        item: makeAssistantReasoningItem({
+      if (delta.textOffset !== emittedReasoningText.length) {
+        throw new Error(
+          `assistant reasoning delta offset mismatch: expected ${emittedReasoningText.length}, got ${delta.textOffset}`
+        )
+      }
+      emittedReasoningText += delta.text
+      await this.deps.turns.applyAssistantDelta(
+        input.threadId,
+        makeAssistantReasoningItem({
           id: delta.itemId,
           turnId: input.turnId,
           threadId: input.threadId,
-          text: delta.text,
+          text: emittedReasoningText,
           status: 'running',
           createdAt: reasoningCreatedAt
-        })
-      })
+        }),
+        delta.text,
+        delta.textOffset
+      )
     })
 
     await this.deps.recordPipelineStage(
@@ -252,8 +267,10 @@ export class ModelRoundEngine {
               await deltaEvents.append({
                 kind: intent.kind,
                 itemId: textItemId,
-                text: intent.text
+                text: intent.text,
+                textOffset: queuedTextChars
               })
+              queuedTextChars += intent.text.length
               break
             case 'assistant_reasoning_delta':
               if (!reasoningItemId) {
@@ -263,8 +280,10 @@ export class ModelRoundEngine {
               await deltaEvents.append({
                 kind: intent.kind,
                 itemId: reasoningItemId,
-                text: intent.text
+                text: intent.text,
+                textOffset: queuedReasoningChars
               })
+              queuedReasoningChars += intent.text.length
               break
             case 'retrying':
               await this.deps.events.record({
@@ -330,8 +349,10 @@ export class ModelRoundEngine {
               await deltaEvents.append({
                 kind: textIntent.kind,
                 itemId: textItemId,
-                text: textIntent.text
+                text: textIntent.text,
+                textOffset: queuedTextChars
               })
+              queuedTextChars += textIntent.text.length
               break
             }
             case 'usage': {
@@ -503,6 +524,7 @@ class AssistantDeltaEventCoalescer {
         this.pending = {
           kind: event.kind,
           itemId: event.itemId,
+          textOffset: event.textOffset + offset,
           parts: [],
           bytes: 0
         }
@@ -559,6 +581,7 @@ class AssistantDeltaEventCoalescer {
         await this.emit({
           kind: pending.kind,
           itemId: pending.itemId,
+          textOffset: pending.textOffset,
           text: pending.parts.join('')
         })
       } catch (error) {

@@ -564,6 +564,8 @@ export type ThreadDeltaEvent = {
   text: string
   kind: 'agent_message' | 'agent_reasoning'
   seq?: number
+  /** UTF-16 offset of this incremental delta within the identified item. */
+  deltaOffset?: number
   threadId?: string
   turnId?: string
   itemId?: string

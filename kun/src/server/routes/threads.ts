@@ -87,6 +87,15 @@ export async function getThread(
   userInputGate?: UserInputGate,
   approvalGate?: ApprovalGate
 ): Promise<JsonResponse> {
+  // Freeze the replay floor before reading the projection. Runtime writers
+  // persist terminal/tool/goal state before appending the corresponding event,
+  // so those records at or below this boundary are visible to the reads below.
+  // Streaming text deltas follow the same state-first ordering and carry a
+  // text offset, making a fragment replayed from the opposite hydration window
+  // idempotent. Every event appended after this floor therefore remains safely
+  // replayable without creating either an old-state/new-cursor gap or duplicate
+  // assistant text.
+  const latestSeq = sessionStore ? await sessionStore.highestSeq(threadId) : 0
   const thread = await service.get(threadId)
   if (!thread) {
     return jsonResponse(
@@ -95,13 +104,9 @@ export async function getThread(
     )
   }
   const pendingApprovals = approvalGate?.pending(threadId) ?? []
-  let latestSeq = 0
   let sessionItems: TurnItem[] = []
   if (sessionStore) {
-    [latestSeq, sessionItems] = await Promise.all([
-      sessionStore.highestSeq(threadId),
-      sessionStore.loadItems(threadId)
-    ])
+    sessionItems = await sessionStore.loadItems(threadId)
     sessionItems = await healSessionItemsForFinishedTurns(thread, sessionItems, sessionStore)
   } else if (pendingApprovals.length > 0) {
     // Tests and lightweight embedded callers can omit the session store. Use

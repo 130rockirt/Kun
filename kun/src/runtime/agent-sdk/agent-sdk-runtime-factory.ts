@@ -1144,6 +1144,10 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
       await deps.turns.applyItem(threadId, item)
     },
 
+    async applyAssistantDelta(threadId, item, deltaText, deltaOffset): Promise<void> {
+      await deps.turns.applyAssistantDelta(threadId, item, deltaText, deltaOffset)
+    },
+
     async finishTurn(threadId, turnId, status, error, code): Promise<TurnRunOutcome> {
       const key = skillTurnKey(threadId, turnId)
       try {

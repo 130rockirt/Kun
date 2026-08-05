@@ -5,14 +5,21 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PassThrough } from 'node:stream'
 import { describe, expect, it, vi } from 'vitest'
+import { InMemoryEventBus } from '../../adapters/in-memory-event-bus.js'
 import { InMemorySessionStore } from '../../adapters/in-memory-session-store.js'
 import { InMemoryThreadStore } from '../../adapters/in-memory-thread-store.js'
+import type { RuntimeEvent } from '../../contracts/events.js'
 import { TurnSchema } from '../../contracts/turns.js'
+import { createRuntimeEventProjection, replayRuntimeEvents } from '../../domain/runtime-event-reducer.js'
 import { makeUserItem } from '../../domain/item.js'
 import { createThreadRecord } from '../../domain/thread.js'
+import { ContextCompactor } from '../../loop/context-compactor.js'
+import { InflightTracker } from '../../loop/inflight-tracker.js'
+import { SteeringQueue } from '../../loop/steering-queue.js'
+import { SequentialIdGenerator } from '../../ports/id-generator.js'
 import { LlmDebugRecorder } from '../../services/llm-debug-recorder.js'
-import type { RuntimeEventRecorder } from '../../services/runtime-event-recorder.js'
-import type { TurnService } from '../../services/turn-service.js'
+import { RuntimeEventRecorder } from '../../services/runtime-event-recorder.js'
+import { TurnService } from '../../services/turn-service.js'
 import {
   AntigravityCliRuntime,
   antigravityCapabilities,
@@ -25,6 +32,45 @@ import {
   FileDelegatedSessionBindingStore,
   delegatedCapabilityFingerprint
 } from '../delegated-session-binding.js'
+
+class BlockingAntigravityDeltaSessionStore extends InMemorySessionStore {
+  readonly order: string[] = []
+  readonly deltaEventAppendStarted: Promise<void>
+  private releaseDeltaEventAppend!: () => void
+  private markDeltaEventAppendStarted!: () => void
+  private readonly deltaEventAppendRelease: Promise<void>
+
+  constructor() {
+    super()
+    this.deltaEventAppendStarted = new Promise<void>((resolve) => {
+      this.markDeltaEventAppendStarted = resolve
+    })
+    this.deltaEventAppendRelease = new Promise<void>((resolve) => {
+      this.releaseDeltaEventAppend = resolve
+    })
+  }
+
+  releaseDeltaEvent(): void {
+    this.releaseDeltaEventAppend()
+  }
+
+  override async appendItem(threadId: string, item: Parameters<InMemorySessionStore['appendItem']>[1]): Promise<void> {
+    if (item.kind === 'assistant_text') this.order.push(`item:${item.status}`)
+    await super.appendItem(threadId, item)
+  }
+
+  override async appendEvent(threadId: string, event: RuntimeEvent): Promise<void> {
+    if (event.kind !== 'assistant_text_delta') {
+      await super.appendEvent(threadId, event)
+      return
+    }
+    this.order.push(`event-start:${event.deltaOffset ?? 'legacy'}`)
+    this.markDeltaEventAppendStarted()
+    await this.deltaEventAppendRelease
+    await super.appendEvent(threadId, event)
+    this.order.push('event-commit')
+  }
+}
 
 describe('AntigravityCliRuntime', () => {
   it('passes safe mixed-family base model ids and supported effort values to agy', () => {
@@ -93,6 +139,7 @@ describe('AntigravityCliRuntime', () => {
       sessionStore,
       turns: {
         applyItem: vi.fn(async () => undefined),
+        applyAssistantDelta: vi.fn(async () => undefined),
         updateTurnMetadata: vi.fn(async () => undefined),
         finishTurn
       } as unknown as TurnService,
@@ -112,6 +159,123 @@ describe('AntigravityCliRuntime', () => {
       status: 'failed',
       error: expect.stringContaining('Invalid Antigravity model id')
     }))
+  })
+
+  it('persists the Antigravity canonical text before its offset-addressed replay event', async () => {
+    const threadStore = new InMemoryThreadStore()
+    const sessionStore = new BlockingAntigravityDeltaSessionStore()
+    const eventBus = new InMemoryEventBus()
+    const nowIso = () => '2026-08-05T00:00:01.000Z'
+    const events = new RuntimeEventRecorder({
+      eventBus,
+      sessionStore,
+      allocateSeq: (threadId) => eventBus.allocateSeq(threadId),
+      nowIso
+    })
+    const ids = new SequentialIdGenerator()
+    const turns = new TurnService({
+      threadStore,
+      sessionStore,
+      events,
+      inflight: new InflightTracker(),
+      steering: new SteeringQueue(),
+      compactor: new ContextCompactor(),
+      ids,
+      nowIso
+    })
+    const turn = TurnSchema.parse({
+      id: 'turn-delta-order',
+      threadId: 'thread-delta-order',
+      status: 'running',
+      prompt: 'return unicode',
+      model: 'gemini-3.6-flash',
+      createdAt: '2026-08-05T00:00:00.000Z'
+    })
+    await threadStore.upsert({
+      ...createThreadRecord({
+        id: turn.threadId,
+        title: 'Antigravity delta ordering',
+        workspace: '/tmp',
+        model: turn.model!,
+        providerId: 'gemini-subscription',
+        status: 'running'
+      }),
+      turns: [turn]
+    })
+    await sessionStore.appendItem(
+      turn.threadId,
+      makeUserItem({
+        id: 'item-user-delta-order',
+        threadId: turn.threadId,
+        turnId: turn.id,
+        text: turn.prompt
+      })
+    )
+    const text = 'A😀B from Antigravity'
+    const runtime = new AntigravityCliRuntime({
+      providerConfigs: {},
+      providerIds: new Set(['gemini-subscription']),
+      defaultIsAntigravity: false,
+      threadStore,
+      sessionStore,
+      turns,
+      events,
+      ids,
+      spawnFn: successfulSpawn(`${text}\n`)
+    })
+
+    const running = runtime.runTurn(
+      turn.threadId,
+      turn.id,
+      new AbortController().signal,
+      'gemini-subscription'
+    )
+    await sessionStore.deltaEventAppendStarted
+
+    expect(sessionStore.order).toEqual(['item:running', 'event-start:0'])
+    const hydratedItems = await sessionStore.loadItems(turn.threadId)
+    expect(hydratedItems).toContainEqual(expect.objectContaining({
+      kind: 'assistant_text',
+      status: 'running',
+      text
+    }))
+    const hydratedSeq = await sessionStore.highestSeq(turn.threadId)
+    expect(await sessionStore.loadEventsSince(turn.threadId, hydratedSeq)).toEqual([])
+    const hydratedProjection = {
+      ...createRuntimeEventProjection(turn.threadId),
+      lastSeq: hydratedSeq,
+      items: hydratedItems
+    }
+
+    sessionStore.releaseDeltaEvent()
+    await expect(running).resolves.toBe('completed')
+
+    expect(sessionStore.order).toEqual([
+      'item:running',
+      'event-start:0',
+      'event-commit',
+      'item:completed'
+    ])
+    const replayEvents = (await sessionStore.loadEventsSince(turn.threadId, hydratedSeq))
+      .filter((event) => event.kind === 'assistant_text_delta')
+    expect(replayEvents).toEqual([
+      expect.objectContaining({
+        kind: 'assistant_text_delta',
+        deltaOffset: 0,
+        item: expect.objectContaining({ status: 'running', text })
+      })
+    ])
+    const replayed = replayRuntimeEvents(replayEvents, hydratedProjection)
+    expect(replayed.items.find((item) => item.kind === 'assistant_text')).toMatchObject({
+      status: 'running',
+      text
+    })
+    expect((await sessionStore.loadItems(turn.threadId)).find(
+      (item) => item.kind === 'assistant_text'
+    )).toMatchObject({
+      status: 'completed',
+      text
+    })
   })
 
   it('preserves pending Graph supervision without launching the unsupported CLI', async () => {
@@ -154,6 +318,7 @@ describe('AntigravityCliRuntime', () => {
       })
     )
     const applyItem = vi.fn(async () => undefined)
+    const applyAssistantDelta = vi.fn(async () => undefined)
     const suspendGraphLeadTurn = vi.fn()
       .mockResolvedValueOnce('supervision_pending')
       .mockResolvedValueOnce('suspended_pending_supervision')
@@ -167,6 +332,7 @@ describe('AntigravityCliRuntime', () => {
       sessionStore,
       turns: {
         applyItem,
+        applyAssistantDelta,
         updateTurnMetadata: vi.fn(async () => undefined),
         suspendGraphLeadTurn,
         finishTurn
@@ -196,6 +362,19 @@ describe('AntigravityCliRuntime', () => {
       preserveDeliveryCursor: true,
       allowPendingSupervision: true
     })
+    expect(applyAssistantDelta).toHaveBeenCalledWith(
+      turn.threadId,
+      expect.objectContaining({
+        kind: 'assistant_text',
+        status: 'running',
+        text: expect.stringContaining('Graph mode is unavailable')
+      }),
+      expect.stringContaining('Graph mode is unavailable'),
+      0
+    )
+    expect(applyAssistantDelta.mock.invocationCallOrder[0]).toBeLessThan(
+      applyItem.mock.invocationCallOrder[0]!
+    )
     expect(applyItem).toHaveBeenCalledWith(
       turn.threadId,
       expect.objectContaining({
@@ -297,6 +476,7 @@ describe('AntigravityCliRuntime', () => {
         sessionStore,
         turns: {
           applyItem: vi.fn(async () => undefined),
+          applyAssistantDelta: vi.fn(async () => undefined),
           updateTurnMetadata: vi.fn(async () => undefined),
           finishTurn: vi.fn(async () => undefined)
         } as unknown as TurnService,
@@ -396,6 +576,7 @@ describe('AntigravityCliRuntime', () => {
       sessionStore,
       turns: {
         applyItem: vi.fn(async () => undefined),
+        applyAssistantDelta: vi.fn(async () => undefined),
         updateTurnMetadata,
         finishTurn: vi.fn(async () => undefined)
       } as unknown as TurnService,
@@ -493,6 +674,7 @@ describe('AntigravityCliRuntime', () => {
       sessionStore,
       turns: {
         applyItem: vi.fn(async () => undefined),
+        applyAssistantDelta: vi.fn(async () => undefined),
         updateTurnMetadata: vi.fn(async () => undefined),
         finishTurn: vi.fn(async () => undefined)
       } as unknown as TurnService,
@@ -562,6 +744,7 @@ describe('AntigravityCliRuntime', () => {
       sessionStore,
       turns: {
         applyItem: vi.fn(async () => undefined),
+        applyAssistantDelta: vi.fn(async () => undefined),
         updateTurnMetadata: vi.fn(async () => undefined),
         finishTurn: vi.fn(async () => undefined)
       } as unknown as TurnService,
@@ -629,6 +812,7 @@ describe('AntigravityCliRuntime', () => {
       sessionStore,
       turns: {
         applyItem: vi.fn(async () => undefined),
+        applyAssistantDelta: vi.fn(async () => undefined),
         updateTurnMetadata: vi.fn(async () => undefined),
         finishTurn
       } as unknown as TurnService,

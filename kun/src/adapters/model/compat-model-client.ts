@@ -53,7 +53,10 @@ import {
   createResponsesContentTracker,
   decodeResponsesStreamPayload
 } from './responses-stream-decoder.js'
-import { decodeAnthropicMessagesStreamPayload } from './anthropic-messages-stream-decoder.js'
+import {
+  createAnthropicThinkingState,
+  decodeAnthropicMessagesStreamPayload
+} from './anthropic-messages-stream-decoder.js'
 import { decodeCompatNonStreamingResponse } from './compat-non-streaming-decoder.js'
 import { IncrementalSseFrameBuffer } from './incremental-sse-frame-buffer.js'
 
@@ -957,6 +960,7 @@ export class CompatModelClient implements ModelClient {
     const pendingByIndex = new Map<number, string>()
     const completedToolCalls = new Set<string>()
     const responsesContentTracker = createResponsesContentTracker()
+    const anthropicThinkingState = createAnthropicThinkingState()
     let usage: UsageSnapshot | null = null
     // The Responses protocol may repeat final output in response.completed;
     // a boolean is sufficient to suppress that duplicate. Retaining the full
@@ -1046,6 +1050,7 @@ export class CompatModelClient implements ModelClient {
             completedToolCalls,
             sawTextDelta,
             responsesContentTracker,
+            anthropicThinkingState,
             endpointFormat,
             model,
             budget
@@ -1151,6 +1156,7 @@ export class CompatModelClient implements ModelClient {
     completedToolCalls: Set<string>,
     sawTextDelta: boolean,
     responsesContentTracker: import('./responses-stream-decoder.js').ResponsesContentTracker,
+    anthropicThinkingState: import('./anthropic-messages-stream-decoder.js').AnthropicThinkingState,
     endpointFormat: ModelEndpointFormat,
     model: string,
     budget: ModelStreamResourceBudget
@@ -1186,6 +1192,7 @@ export class CompatModelClient implements ModelClient {
         pendingArguments,
         pendingByIndex,
         completedToolCalls,
+        anthropicThinkingState,
         sawTextDelta,
         model,
         budget
@@ -1229,6 +1236,7 @@ export class CompatModelClient implements ModelClient {
     pendingArguments: Map<string, PendingToolCall>,
     pendingByIndex: Map<number, string>,
     completedToolCalls: Set<string>,
+    thinkingState: import('./anthropic-messages-stream-decoder.js').AnthropicThinkingState,
     sawTextDelta: boolean,
     model: string,
     budget: ModelStreamResourceBudget
@@ -1238,6 +1246,7 @@ export class CompatModelClient implements ModelClient {
       pendingArguments,
       pendingByIndex,
       completedToolCalls,
+      thinkingState,
       sawTextDelta,
       budget,
       normalizeUsage: (usage) => this.mapUsage(usage, model),

@@ -18,6 +18,7 @@ import { SequentialIdGenerator } from '../ports/id-generator.js'
 import type { ModelClient, ModelRequest, ModelStreamChunk } from '../ports/model-client.js'
 import { emptyUsageSnapshot } from '../contracts/usage.js'
 import type { TurnItem } from '../contracts/items.js'
+import type { RuntimeEvent } from '../contracts/events.js'
 import type { GraphPlanningLifecycle } from '../contracts/turns.js'
 import { RuntimeEventRecorder } from './runtime-event-recorder.js'
 import {
@@ -115,6 +116,41 @@ class FailOnceAppendSessionStore extends InMemorySessionStore {
   }
 }
 
+class BlockingDeltaEventSessionStore extends InMemorySessionStore {
+  readonly order: string[] = []
+  readonly eventAppendStarted: Promise<void>
+  private releaseEventAppend!: () => void
+  private markEventAppendStarted!: () => void
+  private readonly eventAppendRelease: Promise<void>
+
+  constructor() {
+    super()
+    this.eventAppendStarted = new Promise<void>((resolve) => {
+      this.markEventAppendStarted = resolve
+    })
+    this.eventAppendRelease = new Promise<void>((resolve) => {
+      this.releaseEventAppend = resolve
+    })
+  }
+
+  releaseEvent(): void {
+    this.releaseEventAppend()
+  }
+
+  override async appendItem(threadId: string, item: TurnItem): Promise<void> {
+    this.order.push('item')
+    await super.appendItem(threadId, item)
+  }
+
+  override async appendEvent(threadId: string, event: RuntimeEvent): Promise<void> {
+    this.order.push('event-start')
+    this.markEventAppendStarted()
+    await this.eventAppendRelease
+    await super.appendEvent(threadId, event)
+    this.order.push('event-commit')
+  }
+}
+
 class MetadataCountingThreadStore extends InMemoryThreadStore {
   readonly hydratedGets: string[] = []
   readonly metadataGets: string[] = []
@@ -135,6 +171,57 @@ class MetadataCountingThreadStore extends InMemoryThreadStore {
     return Boolean(await super.get(threadId))
   }
 }
+
+describe('TurnService assistant delta persistence (#1087)', () => {
+  it('persists the cumulative item before committing its offset-addressed replay event', async () => {
+    const sessionStore = new BlockingDeltaEventSessionStore()
+    const threadStore = new InMemoryThreadStore()
+    const eventBus = new InMemoryEventBus()
+    const service = new TurnService({
+      threadStore,
+      sessionStore,
+      events: new RuntimeEventRecorder({
+        eventBus,
+        sessionStore,
+        allocateSeq: (threadId) => eventBus.allocateSeq(threadId),
+        nowIso: () => '2026-08-05T00:00:01.000Z'
+      }),
+      inflight: new InflightTracker(),
+      steering: new SteeringQueue(),
+      compactor: new ContextCompactor(),
+      ids: new SequentialIdGenerator(),
+      nowIso: () => '2026-08-05T00:00:01.000Z'
+    })
+    const item = makeAssistantTextItem({
+      id: 'item_stream',
+      threadId: 'thr_stream',
+      turnId: 'turn_stream',
+      text: 'prefix',
+      status: 'running',
+      createdAt: '2026-08-05T00:00:00.000Z'
+    })
+
+    const recording = service.applyAssistantDelta('thr_stream', item, 'prefix', 0)
+    await sessionStore.eventAppendStarted
+
+    expect(sessionStore.order).toEqual(['item', 'event-start'])
+    expect(await sessionStore.loadItems('thr_stream')).toEqual([item])
+    expect(await sessionStore.highestSeq('thr_stream')).toBe(0)
+
+    sessionStore.releaseEvent()
+    await recording
+
+    expect(sessionStore.order).toEqual(['item', 'event-start', 'event-commit'])
+    expect(await sessionStore.loadEventsSince('thr_stream', 0)).toEqual([
+      expect.objectContaining({
+        kind: 'assistant_text_delta',
+        seq: 1,
+        deltaOffset: 0,
+        item: expect.objectContaining({ id: item.id, text: 'prefix' })
+      })
+    ])
+  })
+})
 
 describe('TurnService startTurn', () => {
   it('defaults to 256 concurrent active turns', () => {
@@ -1570,6 +1657,60 @@ describe('TurnService startTurn', () => {
     })
   })
 
+  it('freezes an omitted provider as default before the thread selection can change', async () => {
+    const sessionStore = new InMemorySessionStore()
+    const threadStore = new InMemoryThreadStore()
+    const eventBus = new InMemoryEventBus()
+    const nowIso = () => '2026-08-05T00:00:00.000Z'
+    const events = new RuntimeEventRecorder({
+      eventBus,
+      sessionStore,
+      allocateSeq: (threadId) => eventBus.allocateSeq(threadId),
+      nowIso
+    })
+    const service = new TurnService({
+      threadStore,
+      sessionStore,
+      events,
+      inflight: new InflightTracker(),
+      steering: new SteeringQueue(),
+      compactor: new ContextCompactor(),
+      defaultModel: 'default-model',
+      ids: new SequentialIdGenerator(),
+      nowIso
+    })
+    const threadId = 'thr_default_provider_snapshot'
+    await threadStore.upsert(createThreadRecord({
+      id: threadId,
+      title: 'Default provider snapshot',
+      workspace: '/tmp/workspace',
+      model: 'default-model'
+    }))
+
+    const started = await service.startTurn({ threadId, request: { prompt: 'run' } })
+    const admitted = await threadStore.get(threadId)
+    expect(admitted?.turns[0]).toMatchObject({
+      id: started.turnId,
+      model: 'default-model',
+      providerId: 'default'
+    })
+    if (!admitted) throw new Error('expected admitted thread')
+
+    // Reproduce the old first-step window: a later thread projection gains a
+    // concrete provider before ModelStepService reads it. The admitted turn's
+    // explicit default alias remains authoritative and blocks that fallback.
+    await threadStore.upsert({
+      ...admitted,
+      providerId: 'provider-after-admission',
+      accountId: 'account-after-admission'
+    })
+    expect((await threadStore.get(threadId))?.turns[0]).toMatchObject({
+      providerId: 'default'
+    })
+
+    await service.interruptTurn({ threadId, turnId: started.turnId })
+  })
+
   it('rejects steering that exceeds the active turn buffer without recording a phantom event', async () => {
     const sessionStore = new InMemorySessionStore()
     const threadStore = new InMemoryThreadStore()
@@ -1597,9 +1738,17 @@ describe('TurnService startTurn', () => {
       id: threadId,
       title: 'Bounded steering',
       workspace: '/tmp/workspace',
-      model: 'deepseek-v4-pro'
+      model: 'deepseek-v4-pro',
+      providerId: 'provider-a',
+      accountId: 'account-a'
     }))
     const started = await service.startTurn({ threadId, request: { prompt: 'run' } })
+
+    expect((await threadStore.get(threadId))?.turns[0]).toMatchObject({
+      model: 'deepseek-v4-pro',
+      providerId: 'provider-a',
+      accountId: 'account-a'
+    })
 
     await service.steerTurn({ threadId, turnId: started.turnId, text: 'first' })
     await expect(service.steerTurn({

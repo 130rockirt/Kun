@@ -191,6 +191,13 @@ export interface SdkRuntimeDeps {
   recordEvent(draft: RuntimeEventDraft): Promise<void>
   /** Upsert a turn item into the item store (turns.applyItem). */
   applyItem(threadId: string, item: TurnItem): Promise<void>
+  /** Persist one cumulative assistant item before publishing its offset delta. */
+  applyAssistantDelta(
+    threadId: string,
+    item: TurnItem,
+    deltaText: string,
+    deltaOffset: number
+  ): Promise<void>
   /** Finish the turn lifecycle (turns.finishTurn). */
   finishTurn(
     threadId: string,
@@ -248,9 +255,12 @@ type SdkAssistantDeltaEvent = {
   kind: 'assistant_text_delta' | 'assistant_reasoning_delta'
   itemId: string
   text: string
+  textOffset: number
 }
 
-function assistantDeltaOf(draft: RuntimeEventDraft): SdkAssistantDeltaEvent | undefined {
+type SdkAssistantDeltaFragment = Omit<SdkAssistantDeltaEvent, 'textOffset'>
+
+function assistantDeltaOf(draft: RuntimeEventDraft): SdkAssistantDeltaFragment | undefined {
   if (draft.kind !== 'assistant_text_delta' && draft.kind !== 'assistant_reasoning_delta') {
     return undefined
   }
@@ -415,28 +425,44 @@ export class AgentSdkRuntime {
         maxPendingToolCalls: sdkStreamLimits?.maxPendingToolCalls ?? limits.maxToolCallsPerStep
       }
     })
+    let emittedText = ''
+    let emittedReasoning = ''
+    let queuedTextChars = 0
+    let queuedReasoningChars = 0
     const deltaEvents = new SdkAssistantDeltaEventCoalescer(async (delta) => {
       if (delta.kind === 'assistant_text_delta') {
-        await this.deps.recordEvent({
-          kind: delta.kind,
+        if (delta.textOffset !== emittedText.length) {
+          throw new Error(
+            `Agent SDK assistant text delta offset mismatch: expected ${emittedText.length}, ` +
+            `got ${delta.textOffset}`
+          )
+        }
+        emittedText += delta.text
+        await this.deps.applyAssistantDelta(
           threadId,
-          turnId,
-          itemId: delta.itemId,
-          item: makeAssistantTextItem({
-            id: delta.itemId, threadId, turnId, text: delta.text, status: 'running'
-          })
-        })
+          makeAssistantTextItem({
+            id: delta.itemId, threadId, turnId, text: emittedText, status: 'running'
+          }),
+          delta.text,
+          delta.textOffset
+        )
         return
       }
-      await this.deps.recordEvent({
-        kind: delta.kind,
+      if (delta.textOffset !== emittedReasoning.length) {
+        throw new Error(
+          `Agent SDK assistant reasoning delta offset mismatch: expected ${emittedReasoning.length}, ` +
+          `got ${delta.textOffset}`
+        )
+      }
+      emittedReasoning += delta.text
+      await this.deps.applyAssistantDelta(
         threadId,
-        turnId,
-        itemId: delta.itemId,
-        item: makeAssistantReasoningItem({
-          id: delta.itemId, threadId, turnId, text: delta.text, status: 'running'
-        })
-      })
+        makeAssistantReasoningItem({
+          id: delta.itemId, threadId, turnId, text: emittedReasoning, status: 'running'
+        }),
+        delta.text,
+        delta.textOffset
+      )
     })
     const abort = new AbortController()
     const maxWallTimeMs = limits.maxWallTimeMs
@@ -692,7 +718,15 @@ export class AgentSdkRuntime {
               captureAgentSdkTraceDraft(trace, draft)
               const delta = assistantDeltaOf(draft)
               if (delta) {
-                await deltaEvents.append(delta)
+                const textOffset = delta.kind === 'assistant_text_delta'
+                  ? queuedTextChars
+                  : queuedReasoningChars
+                await deltaEvents.append({ ...delta, textOffset })
+                if (delta.kind === 'assistant_text_delta') {
+                  queuedTextChars += delta.text.length
+                } else {
+                  queuedReasoningChars += delta.text.length
+                }
                 continue
               }
               // Preserve the mapper's exact event order: milestones, tools,
@@ -1199,7 +1233,13 @@ class SdkAssistantDeltaEventCoalescer {
     let offset = 0
     while (offset < event.text.length) {
       if (!this.pending) {
-        this.pending = { kind: event.kind, itemId: event.itemId, parts: [], bytes: 0 }
+        this.pending = {
+          kind: event.kind,
+          itemId: event.itemId,
+          textOffset: event.textOffset + offset,
+          parts: [],
+          bytes: 0
+        }
         this.scheduleFlush()
       }
       const prefix = utf8PrefixWithinBytes(
@@ -1253,6 +1293,7 @@ class SdkAssistantDeltaEventCoalescer {
         await this.emit({
           kind: pending.kind,
           itemId: pending.itemId,
+          textOffset: pending.textOffset,
           text: pending.parts.join('')
         })
       } catch (error) {

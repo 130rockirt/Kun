@@ -124,6 +124,35 @@ describe('chat projection reducer', () => {
     expect(projected.blocks.some((block) => block.kind === 'assistant')).toBe(false)
   })
 
+  it.each(['success', 'error'] as const)(
+    'does not regress a %s tool to running when historical lifecycle is replayed',
+    (terminalStatus) => {
+      const projected = project({
+        ...state(),
+        blocks: [{
+          kind: 'tool',
+          id: 'tool_1',
+          summary: 'Terminal result',
+          status: terminalStatus
+        }]
+      }, [{
+        type: 'tool_updated',
+        seq: 199,
+        payload: {
+          itemId: 'tool_1',
+          summary: 'Historical start',
+          status: 'running'
+        }
+      }])
+
+      expect(projected.blocks[0]).toMatchObject({
+        kind: 'tool',
+        id: 'tool_1',
+        status: terminalStatus
+      })
+    }
+  )
+
   it('clears current-turn orchestration when a Graph turn completes', () => {
     const projected = project({
       ...state(),
@@ -716,6 +745,154 @@ describe('chat projection reducer', () => {
 
     expect(projected.blocks.filter((block) => block.kind === 'assistant')).toHaveLength(1)
     expect(projected.blocks.find((block) => block.kind === 'assistant')).toMatchObject({ text: 'hello' })
+  })
+
+  it('does not reopen or duplicate an item delta already covered by the hydrated snapshot', () => {
+    const assistant = {
+      kind: 'assistant' as const,
+      id: 'assistant_1',
+      turnId: 'turn_1',
+      text: 'Hydrated answer'
+    }
+    const initial = {
+      ...state(),
+      blocks: [assistant],
+      busy: false,
+      lastSeq: 200,
+      liveDeltaSeqFloor: 200,
+      liveAssistant: ''
+    }
+
+    const projected = project(initial, [{
+      type: 'deltas_received',
+      deltas: [{
+        seq: 201,
+        deltaOffset: 0,
+        threadId: 'thread_1',
+        turnId: 'turn_1',
+        itemId: 'assistant_1',
+        kind: 'agent_message',
+        text: 'Hydrated answer'
+      }]
+    }])
+
+    expect(projected.blocks).toBe(initial.blocks)
+    expect(projected.liveAssistant).toBe('')
+    expect(projected.liveAssistantItemId).toBeUndefined()
+    expect(projected.busy).toBe(false)
+    expect(projected.lastSeq).toBe(201)
+    expect(projected.liveDeltaSeqFloor).toBe(201)
+  })
+
+  it('appends only the unseen suffix when an offset delta partially overlaps hydrated text', () => {
+    const initial = {
+      ...state(),
+      blocks: [{
+        kind: 'assistant' as const,
+        id: 'assistant_1',
+        turnId: 'turn_1',
+        text: 'Hello '
+      }],
+      busy: false,
+      lastSeq: 200,
+      liveDeltaSeqFloor: 200,
+      liveAssistant: ''
+    }
+
+    const projected = project(initial, [{
+      type: 'deltas_received',
+      deltas: [
+        {
+          seq: 201,
+          deltaOffset: 4,
+          threadId: 'thread_1',
+          turnId: 'turn_1',
+          itemId: 'assistant_1',
+          kind: 'agent_message',
+          text: 'o world'
+        },
+        {
+          seq: 202,
+          deltaOffset: 11,
+          threadId: 'thread_1',
+          turnId: 'turn_1',
+          itemId: 'assistant_1',
+          kind: 'agent_message',
+          text: '!'
+        }
+      ]
+    }])
+
+    expect(projected.blocks).toEqual(initial.blocks)
+    expect(projected.liveAssistant).toBe('world!')
+    expect(projected.liveAssistantItemId).toBe('assistant_1')
+    expect(projected.busy).toBe(true)
+    expect(projected.lastSeq).toBe(202)
+  })
+
+  it('appends the complete delta when offset overlap does not match projected text', () => {
+    const initial = {
+      ...state(),
+      blocks: [{
+        kind: 'assistant' as const,
+        id: 'assistant_1',
+        turnId: 'turn_1',
+        text: 'Hello '
+      }],
+      busy: false,
+      lastSeq: 200,
+      liveDeltaSeqFloor: 200,
+      liveAssistant: ''
+    }
+
+    const projected = project(initial, [{
+      type: 'deltas_received',
+      deltas: [{
+        seq: 201,
+        deltaOffset: 4,
+        threadId: 'thread_1',
+        turnId: 'turn_1',
+        itemId: 'assistant_1',
+        kind: 'agent_message',
+        text: 'X world'
+      }]
+    }])
+
+    expect(projected.liveAssistant).toBe('X world')
+    expect(projected.liveAssistantItemId).toBe('assistant_1')
+    expect(projected.busy).toBe(true)
+  })
+
+  it('keeps legacy no-offset deltas on their original append path', () => {
+    const initial = {
+      ...state(),
+      blocks: [{
+        kind: 'assistant' as const,
+        id: 'assistant_1',
+        turnId: 'turn_1',
+        text: 'Hydrated answer'
+      }],
+      busy: false,
+      lastSeq: 200,
+      liveDeltaSeqFloor: 200,
+      liveAssistant: ''
+    }
+
+    const projected = project(initial, [{
+      type: 'deltas_received',
+      deltas: [{
+        seq: 201,
+        threadId: 'thread_1',
+        turnId: 'turn_1',
+        itemId: 'assistant_1',
+        kind: 'agent_message',
+        text: 'Hydrated answer'
+      }]
+    }])
+
+    expect(projected.liveAssistant).toBe('Hydrated answer')
+    expect(projected.liveAssistantItemId).toBe('assistant_1')
+    expect(projected.busy).toBe(true)
   })
 
   it('preserves an unchanged assistant block reference during terminal snapshot reconciliation', () => {
