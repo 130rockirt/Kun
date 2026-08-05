@@ -13,7 +13,7 @@ export type DesignMultiPageGateInput = {
 }
 
 export type DesignMultiPageGateDecision =
-  | { route: 'multi-page'; reason: 'explicit-toggle' }
+  | { route: 'multi-page'; reason: 'explicit-toggle' | 'default-design-pages' }
   | { route: 'single-turn'; reason: string }
 
 export function shouldRouteDesignPromptToMultiPage(
@@ -31,6 +31,9 @@ export function shouldRouteDesignPromptToMultiPage(
 
   const activeArtifact = input.artifacts.find((artifact) => artifact.id === input.activeArtifactId) ?? null
   if (activeArtifact?.kind === 'html') return { route: 'single-turn', reason: 'active-html-artifact' }
+  if (input.artifacts.some((artifact) => artifact.kind === 'html')) {
+    return { route: 'single-turn', reason: 'existing-html-artifacts' }
+  }
 
-  return { route: 'single-turn', reason: 'multi-page-disabled' }
+  return { route: 'multi-page', reason: 'default-design-pages' }
 }

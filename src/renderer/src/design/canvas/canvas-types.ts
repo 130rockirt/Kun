@@ -174,6 +174,8 @@ export type CanvasRunningAppFrame = {
 export type CanvasEmbeddedArtifact = {
   id: string
   kind: 'html' | 'svg'
+  /** Optional immutable version rendered by this canvas frame. */
+  versionId?: string
 }
 
 export type CanvasShape = {
@@ -298,6 +300,10 @@ export function isArtifactFrame(shape: CanvasShape): boolean {
 export function embeddedArtifactOf(shape: CanvasShape): CanvasEmbeddedArtifact | null {
   if (shape.embeddedArtifact?.id) return shape.embeddedArtifact
   return shape.htmlArtifactId ? { id: shape.htmlArtifactId, kind: 'html' } : null
+}
+
+export function htmlFrameVersionId(shape: CanvasShape): string | undefined {
+  return isHtmlFrame(shape) ? embeddedArtifactOf(shape)?.versionId : undefined
 }
 
 export function isRunningAppFrame(shape: CanvasShape): boolean {
@@ -488,7 +494,8 @@ export function createHtmlFrameShape(
   x: number,
   y: number,
   artifactId: string,
-  preset: DevicePreset = 'desktop'
+  preset: DevicePreset = 'desktop',
+  versionId?: string
 ): CanvasShape {
   const dims = DEVICE_DIMENSIONS[preset]
   const shape = createDefaultShape('frame', x, y)
@@ -496,7 +503,11 @@ export function createHtmlFrameShape(
   shape.width = dims.width
   shape.height = dims.height
   shape.htmlArtifactId = artifactId
-  shape.embeddedArtifact = { id: artifactId, kind: 'html' }
+  shape.embeddedArtifact = {
+    id: artifactId,
+    kind: 'html',
+    ...(versionId ? { versionId } : {})
+  }
   shape.devicePreset = preset
   return shape
 }
