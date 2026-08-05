@@ -176,6 +176,7 @@ function buildHarness(overrides: Partial<ChatState> = {}): Harness {
     createWriteThread: async () => null,
     selectWriteThread: async () => undefined,
     openSettings: () => undefined,
+    closeSettings: () => undefined,
     openPlugins: () => undefined,
     openClaw: () => undefined,
     refreshClawChannels: async () => undefined,

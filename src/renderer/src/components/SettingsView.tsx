@@ -172,13 +172,9 @@ const DEFAULT_PROJECT_CONFIG_TEXT = `${JSON.stringify({
 export function SettingsView(): ReactElement {
   const { t, i18n } = useTranslation('settings')
   const { t: tCommon } = useTranslation('common')
-  const setRoute = useChatStore((s) => s.setRoute)
-  const settingsReturnRoute = useChatStore((s) => s.settingsReturnRoute)
+  const closeSettings = useChatStore((s) => s.closeSettings)
   const settingsSection = useChatStore((s) => s.settingsSection)
   const openCode = useChatStore((s) => s.openCode)
-  const openWrite = useChatStore((s) => s.openWrite)
-  const openClaw = useChatStore((s) => s.openClaw)
-  const openSchedule = useChatStore((s) => s.openSchedule)
   const openInitialSetup = useChatStore((s) => s.openInitialSetup)
   const openPlugins = useChatStore((s) => s.openPlugins)
   const applyI18n = useChatStore((s) => s.applyI18nFromSettings)
@@ -1056,23 +1052,7 @@ export function SettingsView(): ReactElement {
     void (async () => {
       await flushPendingSave()
       await reloadUiSettings()
-      if (settingsReturnRoute === 'write') {
-        await openWrite()
-        return
-      }
-      if (settingsReturnRoute === 'claw') {
-        openClaw()
-        return
-      }
-      if (settingsReturnRoute === 'schedule') {
-        openSchedule()
-        return
-      }
-      if (settingsReturnRoute === 'plugins') {
-        setRoute('plugins')
-        return
-      }
-      await openCode()
+      closeSettings()
     })()
   }
 
