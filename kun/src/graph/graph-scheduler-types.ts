@@ -40,6 +40,7 @@ export type GraphSupervisionPort = {
     reason: 'submitted' | 'failure' | 'stall' | 'conflict' | 'budget' | 'help' | 'recovery' | 'completion' | 'user_steering' | 'worker_report' | 'scheduler_error'
     nodeIds: string[]
     digest: string
+    recoveryKey?: string
   }): Promise<void> | void
   review?(input: {
     run: GraphRunV1

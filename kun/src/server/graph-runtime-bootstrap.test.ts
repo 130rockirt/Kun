@@ -4,7 +4,11 @@ import type { GraphRunV1 } from '../contracts/graph.js'
 import type { TurnRunOutcome } from '../loop/turn-execution-types.js'
 import { createGraphRuntimeStartOptions } from './graph-runtime-bootstrap.js'
 
-function runtimeOptions(active = false, isShuttingDown: () => boolean = () => false) {
+function runtimeOptions(
+  active = false,
+  isShuttingDown: () => boolean = () => false,
+  sourceTurnStatus: 'running' | 'completed' | 'failed' | 'aborted' = 'running'
+) {
   const resumeTurn = vi.fn(async () => 'resumed' as const)
   const isTurnExecutionActive = vi.fn(() => active)
   const steerTurn = vi.fn(async () => undefined)
@@ -25,7 +29,7 @@ function runtimeOptions(active = false, isShuttingDown: () => boolean = () => fa
         approvalReviewer: 'agent',
         turns: [{
           id: 'turn_1',
-          status: 'running',
+          status: sourceTurnStatus,
           model: 'auto',
           providerId: 'stale-source-provider',
           approvalPolicy: 'always',
@@ -266,6 +270,24 @@ describe('Graph runtime bootstrap capability boundary', () => {
       expect(runAgentTurn).toHaveBeenCalledOnce()
     }
   )
+
+  it('settles terminal delivery without restarting an already-terminal source turn', async () => {
+    const { options, resumeTurn, steerTurn, runAgentTurn } = runtimeOptions(
+      false,
+      () => false,
+      'completed'
+    )
+
+    await expect(options.leadTurn({
+      run: { ...run, status: 'completed' },
+      reasons: ['completion'],
+      nodeIds: [],
+      digest: 'The source turn already recorded its terminal result.'
+    })).resolves.toEqual({ status: 'terminal' })
+    expect(resumeTurn).not.toHaveBeenCalled()
+    expect(steerTurn).not.toHaveBeenCalled()
+    expect(runAgentTurn).not.toHaveBeenCalled()
+  })
 
   it('starts the continuation that reacquired a lease during a suspension race', async () => {
     const { options, isTurnExecutionActive, runAgentTurn } = runtimeOptions()

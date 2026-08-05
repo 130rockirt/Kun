@@ -35,6 +35,12 @@ export const GraphRunStatusSchema = z.enum([
 ])
 export type GraphRunStatus = z.infer<typeof GraphRunStatusSchema>
 
+export const GraphControlIntentSchema = z.enum(['pause', 'cancel'])
+export type GraphControlIntent = z.infer<typeof GraphControlIntentSchema>
+
+export const GRAPH_CANCELLATION_DISPATCH_FENCE_REASON =
+  'cancellation dispatch fence' as const
+
 export const GraphNodeStatusSchema = z.enum([
   'pending',
   'blocked',

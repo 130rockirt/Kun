@@ -14,6 +14,7 @@ import {
 } from './graph-budget.js'
 import {
   GraphAttemptStatusSchema,
+  GraphControlIntentSchema,
   GraphExecutionStrategyV1Schema,
   GraphNodeStatusSchema,
   GraphReviewOutcomeSchema,
@@ -675,6 +676,7 @@ export const GraphRunV1Schema = z.object({
   threadId: Identifier,
   sourceTurnId: Identifier,
   status: GraphRunStatusSchema,
+  pendingControlIntent: GraphControlIntentSchema.optional(),
   currentRevision: z.number().int().positive(),
   plans: z.array(GraphPlanV1Schema).min(1),
   nodes: z.record(GraphNodeIdSchema, GraphNodeProjectionV1Schema),

@@ -29,6 +29,7 @@ import {
 } from './graph-core.js'
 import {
   GraphAttemptStatusSchema,
+  GraphControlIntentSchema,
   GraphNodeStatusSchema,
   GraphRunStatusSchema
 } from './graph-status.js'
@@ -45,6 +46,12 @@ const GraphPlanValidatedEventPayload = z.object({
 const GraphRunStatusEventPayload = z.object({
   from: GraphRunStatusSchema,
   to: GraphRunStatusSchema,
+  pendingControlIntent: GraphControlIntentSchema.optional(),
+  reason: GraphBoundedSummarySchema.optional()
+}).strict()
+const GraphRunControlIntentEventPayload = z.object({
+  from: z.literal('pause').optional(),
+  to: z.literal('cancel'),
   reason: GraphBoundedSummarySchema.optional()
 }).strict()
 const GraphPlanRevisedEventPayload = z.object({
@@ -152,6 +159,10 @@ export const GraphDomainEventV1Schema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('run_created'), payload: GraphRunCreatedEventPayload }).strict(),
   z.object({ type: z.literal('plan_validated'), payload: GraphPlanValidatedEventPayload }).strict(),
   z.object({ type: z.literal('run_status_changed'), payload: GraphRunStatusEventPayload }).strict(),
+  z.object({
+    type: z.literal('run_control_intent_changed'),
+    payload: GraphRunControlIntentEventPayload
+  }).strict(),
   z.object({ type: z.literal('plan_revised'), payload: GraphPlanRevisedEventPayload }).strict(),
   z.object({ type: z.literal('node_status_changed'), payload: GraphNodeStatusEventPayload }).strict(),
   z.object({ type: z.literal('loop_iteration_advanced'), payload: GraphLoopIterationEventPayload }).strict(),

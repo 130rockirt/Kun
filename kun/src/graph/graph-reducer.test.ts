@@ -5,6 +5,7 @@ import {
   type GraphDomainEventV1
 } from '../contracts/graph.js'
 import { applyGraphEvent, GraphReducerError, replayGraphEvents } from './graph-reducer.js'
+import { graphSupervisionObligationForSignal } from './graph-supervision-obligation.js'
 import {
   TEST_GRAPH_NOW,
   testAssignmentSnapshot,
@@ -60,6 +61,56 @@ describe('GraphRun deterministic reducer', () => {
       type: 'node_status_changed',
       payload: { nodeId: 'research', from: 'pending', to: 'accepted' }
     }))).toThrow(GraphReducerError)
+  })
+
+  it('persists pause and cancel intent, upgrades pause to cancel, and clears terminal intent', () => {
+    const running = replayGraphEvents([
+      testGraphEnvelope(1, created()),
+      testGraphEnvelope(2, {
+        type: 'run_status_changed',
+        payload: { from: 'draft', to: 'validating' }
+      }),
+      testGraphEnvelope(3, {
+        type: 'run_status_changed',
+        payload: { from: 'validating', to: 'ready' }
+      }),
+      testGraphEnvelope(4, {
+        type: 'run_status_changed',
+        payload: { from: 'ready', to: 'running' }
+      })
+    ])
+    const pausing = applyGraphEvent(running, testGraphEnvelope(5, {
+      type: 'run_status_changed',
+      payload: { from: 'running', to: 'pausing', pendingControlIntent: 'pause' }
+    }))
+    expect(pausing).toMatchObject({ status: 'pausing', pendingControlIntent: 'pause' })
+
+    const cancelling = applyGraphEvent(pausing, testGraphEnvelope(6, {
+      type: 'run_control_intent_changed',
+      payload: { from: 'pause', to: 'cancel' }
+    }))
+    expect(cancelling.pendingControlIntent).toBe('cancel')
+    expect(() => applyGraphEvent(pausing, testGraphEnvelope(6, {
+      type: 'run_control_intent_changed',
+      payload: { to: 'cancel' }
+    }))).toThrow(/control intent expected none; current is pause/)
+
+    const cancelled = applyGraphEvent(cancelling, testGraphEnvelope(7, {
+      type: 'run_status_changed',
+      payload: { from: 'pausing', to: 'cancelled' }
+    }))
+    expect(cancelled.status).toBe('cancelled')
+    expect(cancelled.pendingControlIntent).toBeUndefined()
+
+    const legacyFence = applyGraphEvent(running, testGraphEnvelope(5, {
+      type: 'run_status_changed',
+      payload: {
+        from: 'running',
+        to: 'pausing',
+        reason: 'cancellation dispatch fence'
+      }
+    }))
+    expect(legacyFence.pendingControlIntent).toBe('cancel')
   })
 
   it('records immutable attempt snapshots, progress, results, and reviews', () => {
@@ -294,5 +345,70 @@ describe('GraphRun deterministic reducer', () => {
         to: 'delivered'
       }
     }))).toThrow(/steering transition expected/)
+  })
+
+  it('rejects new resolved-to-resolved writes but replays legacy duplicate resolution', () => {
+    const prefix = [
+      testGraphEnvelope(1, created()),
+      testGraphEnvelope(2, {
+        type: 'run_status_changed',
+        payload: { from: 'draft', to: 'validating' }
+      }),
+      testGraphEnvelope(3, {
+        type: 'run_status_changed',
+        payload: { from: 'validating', to: 'ready' }
+      }),
+      testGraphEnvelope(4, {
+        type: 'run_status_changed',
+        payload: { from: 'ready', to: 'running' }
+      })
+    ]
+    const running = replayGraphEvents(prefix)
+    const opened = graphSupervisionObligationForSignal(running, {
+      runId: running.id,
+      reason: 'help',
+      nodeIds: [],
+      digest: 'Resolve this obligation once.'
+    }, '2026-07-26T00:00:05.000Z')
+    const resolved = {
+      ...opened,
+      state: 'resolved' as const,
+      updatedAt: '2026-07-26T00:00:06.000Z',
+      resolvedAt: '2026-07-26T00:00:06.000Z'
+    }
+    const openedEvent = testGraphEnvelope(5, {
+      type: 'supervision_obligation_opened',
+      payload: { obligation: opened }
+    })
+    const resolvedEvent = testGraphEnvelope(6, {
+      type: 'supervision_obligation_resolved',
+      payload: { obligation: resolved }
+    })
+    const legacyDuplicate = testGraphEnvelope(7, {
+      type: 'supervision_obligation_resolved',
+      payload: {
+        obligation: {
+          ...resolved,
+          updatedAt: '2026-07-26T00:00:07.000Z',
+          resolvedAt: '2026-07-26T00:00:07.000Z'
+        }
+      }
+    })
+    const firstResolution = replayGraphEvents([...prefix, openedEvent, resolvedEvent])
+
+    expect(() => applyGraphEvent(firstResolution, legacyDuplicate))
+      .toThrow(/resolved -> resolved/)
+    const replayed = replayGraphEvents([
+      ...prefix,
+      openedEvent,
+      resolvedEvent,
+      legacyDuplicate
+    ])
+    expect(replayed.lastEventSeq).toBe(7)
+    expect(replayed.supervisionObligations[0]).toMatchObject({
+      state: 'resolved',
+      resolvedAt: resolved.resolvedAt,
+      updatedAt: resolved.updatedAt
+    })
   })
 })

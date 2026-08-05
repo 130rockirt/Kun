@@ -1,11 +1,13 @@
 import { isDeepStrictEqual } from 'node:util'
 import {
+  GRAPH_CANCELLATION_DISPATCH_FENCE_REASON,
   GRAPH_CONTRACT_VERSION,
   GraphPatchV1Schema,
   GraphReviewResultV1Schema,
   GraphSteeringV1Schema,
   type GraphCleanupRecordV1,
   type GraphCommandResultV1,
+  type GraphControlIntent,
   type GraphPatchV1,
   type GraphReviewResultV1,
   type GraphRunStatus,
@@ -141,12 +143,18 @@ export class GraphControlService {
         idempotencyKey: `${command.idempotencyKey}:validate`
       })
     }
-    if (run.status === 'running') {
+    if ([
+      'ready',
+      'running',
+      'awaiting_supervision',
+      'awaiting_human',
+      'completing'
+    ].includes(run.status)) {
       run = await this.transitionRun(run, 'pausing', {
         ...command,
         commandId: `${command.commandId}_fence`,
         idempotencyKey: `${command.idempotencyKey}:fence`
-      })
+      }, undefined, 'pause')
     }
     if (![
       'pausing',
@@ -157,12 +165,14 @@ export class GraphControlService {
     ].includes(run.status)) {
       throw new GraphRunConflictError(`cannot pause GraphRun ${runId} from ${run.status}`)
     }
+    this.assertPauseNotSuperseded(run)
     await this.options.pauseActive?.(run)
     run = await this.get(runId)
     if (run.status === 'paused') return run
     if (run.status === 'completed' || run.status === 'failed' || run.status === 'cancelled') {
       return run
     }
+    this.assertPauseNotSuperseded(run)
     return this.transitionRun(run, 'paused', command)
   }
 
@@ -567,7 +577,8 @@ export class GraphControlService {
     run: GraphRunV1,
     to: GraphRunStatus,
     command: Pick<GraphCommandContext, 'commandId' | 'idempotencyKey'>,
-    reason?: string
+    reason?: string,
+    pendingControlIntent?: GraphControlIntent
   ): Promise<GraphRunV1> {
     return (await this.options.store.append(run.id, {
       expectedSeq: run.lastEventSeq,
@@ -576,7 +587,12 @@ export class GraphControlService {
       idempotencyKey: command.idempotencyKey,
       event: {
         type: 'run_status_changed',
-        payload: { from: run.status, to, ...(reason ? { reason } : {}) }
+        payload: {
+          from: run.status,
+          to,
+          ...(pendingControlIntent ? { pendingControlIntent } : {}),
+          ...(reason ? { reason } : {})
+        }
       }
     })).state
   }
@@ -586,12 +602,29 @@ export class GraphControlService {
     command: GraphCommandContext
   ): Promise<GraphRunV1> {
     let run = initialRun
-    while (run.status === 'running') {
+    while (run.status !== 'completed' && run.status !== 'failed' && run.status !== 'cancelled') {
       try {
-        return await this.transitionRun(run, 'pausing', {
-          commandId: `${command.commandId}_fence`,
-          idempotencyKey: `${command.idempotencyKey}:fence`
-        }, 'cancellation dispatch fence')
+        if (run.status !== 'pausing') {
+          return await this.transitionRun(run, 'pausing', {
+            commandId: `${command.commandId}_fence`,
+            idempotencyKey: `${command.idempotencyKey}:fence`
+          }, GRAPH_CANCELLATION_DISPATCH_FENCE_REASON, 'cancel')
+        }
+        if (run.pendingControlIntent === 'cancel') return run
+        return (await this.options.store.append(run.id, {
+          expectedSeq: run.lastEventSeq,
+          graphRevision: run.currentRevision,
+          commandId: `${command.commandId}_intent`,
+          idempotencyKey: `${command.idempotencyKey}:intent`,
+          event: {
+            type: 'run_control_intent_changed',
+            payload: {
+              ...(run.pendingControlIntent === 'pause' ? { from: 'pause' as const } : {}),
+              to: 'cancel',
+              reason: GRAPH_CANCELLATION_DISPATCH_FENCE_REASON
+            }
+          }
+        })).state
       } catch (error) {
         if (!(error instanceof GraphRunConflictError) ||
             command.expectedSeq !== undefined ||
@@ -605,6 +638,14 @@ export class GraphControlService {
       throw new GraphRunConflictError(`cannot cancel terminal GraphRun ${run.id}`)
     }
     return run
+  }
+
+  private assertPauseNotSuperseded(run: GraphRunV1): void {
+    if (run.status === 'pausing' && run.pendingControlIntent !== 'pause') {
+      throw new GraphRunConflictError(
+        `cannot pause GraphRun ${run.id} while cancellation is pending`
+      )
+    }
   }
 
   private assertCommandPreconditions(run: GraphRunV1, command: GraphCommandContext): void {

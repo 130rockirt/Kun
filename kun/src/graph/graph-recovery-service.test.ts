@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
@@ -18,6 +18,7 @@ import {
 } from './graph-test-fixtures.test-support.js'
 import { FileGraphWriteCoordinator } from './graph-write-coordinator.js'
 import { effectiveRunAttemptCount } from './graph-scheduler-policy.js'
+import { checksumJson } from './graph-run-store-support.js'
 
 const roots: string[] = []
 const execFileAsync = promisify(execFile)
@@ -418,6 +419,287 @@ describe('GraphRecoveryService', () => {
     })
     expect(recoveredAttempt.validation).toMatchObject({ valid: true })
     expect(recoveredAttempt.status).toBe('submitted')
+  })
+
+  it('finishes a fenced cancellation before considering a persisted child result', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-graph-recovery-cancel-'))
+    roots.push(root)
+    const config = testGraphConfig()
+    let id = 0
+    const nextId = (prefix: string) => `${prefix}_${++id}`
+    const store = new FileGraphRunStore({
+      rootDir: join(root, 'graphs'),
+      artifactStore: new FileArtifactStore(join(root, 'artifacts')),
+      config: () => config,
+      nextId
+    })
+    const control = new GraphControlService({
+      store,
+      config: () => config,
+      cancelActive: async () => {
+        throw new Error('simulated process exit after cancellation fence')
+      },
+      nextId
+    })
+    await control.create({
+      runId: 'run_cancel_recovery',
+      threadId: 'thread_1',
+      projectId: 'project_1',
+      sourceTurnId: 'turn_1',
+      plan: testGraphPlan(),
+      commandId: 'create_cancel_recovery',
+      idempotencyKey: 'create_cancel_recovery',
+      start: true
+    })
+    let run = (await store.get('run_cancel_recovery'))!
+    run = (await store.append(run.id, {
+      expectedSeq: run.lastEventSeq,
+      graphRevision: run.currentRevision,
+      commandId: 'ready_cancel_recovery',
+      idempotencyKey: 'ready_cancel_recovery',
+      event: {
+        type: 'node_status_changed',
+        payload: { nodeId: 'research', from: 'pending', to: 'ready' }
+      }
+    })).state
+    const attempt = GraphNodeAttemptV1Schema.parse({
+      version: GRAPH_CONTRACT_VERSION,
+      id: 'attempt_cancel_recovery',
+      runId: run.id,
+      nodeId: 'research',
+      revision: run.currentRevision,
+      attemptNumber: 1,
+      iteration: 0,
+      commandId: 'attempt_cancel_recovery',
+      idempotencyKey: 'attempt_cancel_recovery',
+      status: 'queued',
+      assignment: testAssignmentSnapshot(),
+      childThreadId: 'child_cancel_recovery',
+      queuedAt: new Date().toISOString(),
+      tokenUsage: 0,
+      elapsedMs: 0
+    })
+    await store.append(run.id, {
+      expectedSeq: run.lastEventSeq,
+      graphRevision: run.currentRevision,
+      commandId: 'persist_cancel_recovery',
+      idempotencyKey: 'persist_cancel_recovery',
+      event: { type: 'attempt_created', payload: { attempt } }
+    })
+    await expect(control.cancel(run.id, {
+      commandId: 'cancel_recovery',
+      idempotencyKey: 'cancel_recovery'
+    })).rejects.toThrow(/simulated process exit/)
+    expect(await store.get(run.id)).toMatchObject({
+      status: 'pausing',
+      pendingControlIntent: 'cancel'
+    })
+
+    const child = testCompletedChild('child_cancel_recovery', 'Late completed result.')
+    const delegation = {
+      reconcileOrphanedChildRuns: vi.fn(async () => 0),
+      diagnostics: vi.fn(async () => ({
+        enabled: true,
+        active: 0,
+        childRuns: [child],
+        aggregates: []
+      }))
+    } as unknown as DelegationRuntime
+    const signal = vi.fn(async () => undefined)
+    const recovery = new GraphRecoveryService({
+      store,
+      config: () => config,
+      writes: new FileGraphWriteCoordinator({
+        rootDir: join(root, 'writes'),
+        config: () => config,
+        nextId
+      }),
+      delegation: () => delegation,
+      supervision: () => ({ signal }),
+      nextId
+    })
+
+    const first = await recovery.reconcile()
+    const cancelled = (await store.get(run.id))!
+    expect(first).toMatchObject({
+      runsInspected: 1,
+      cancelledRuns: 1,
+      pausedRuns: 0,
+      completedChildrenRecovered: 0,
+      retriedNodes: 0
+    })
+    expect(cancelled).toMatchObject({ status: 'cancelled' })
+    expect(cancelled.pendingControlIntent).toBeUndefined()
+    expect(cancelled.nodes.research).toMatchObject({ status: 'cancelled' })
+    expect(cancelled.nodes.research.attempts[0]?.status).toBe('cancelled')
+    expect(cancelled.nodes.research.attempts[0]?.result).toBeUndefined()
+    expect(cancelled.cleanup).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        resourceKind: 'worker',
+        resourceId: 'child_cancel_recovery',
+        state: 'orphaned'
+      }),
+      expect.objectContaining({
+        resourceKind: 'journal',
+        resourceId: run.id,
+        state: 'completed'
+      })
+    ]))
+    expect(signal).toHaveBeenCalledOnce()
+    expect(signal).toHaveBeenCalledWith(expect.objectContaining({
+      runId: run.id,
+      reason: 'completion'
+    }))
+    await expect(control.resume(run.id, {
+      commandId: 'resume_cancelled',
+      idempotencyKey: 'resume_cancelled'
+    })).rejects.toThrow(/cannot start GraphRun .* from cancelled/)
+
+    const recoveredSeq = cancelled.lastEventSeq
+    const eventCount = (await store.events(run.id)).length
+    const second = await recovery.reconcile()
+    expect(second).toMatchObject({ runsInspected: 0, cancelledRuns: 0 })
+    expect((await store.get(run.id))?.lastEventSeq).toBe(recoveredSeq)
+    expect(await store.events(run.id)).toHaveLength(eventCount)
+    expect(signal).toHaveBeenCalledOnce()
+  })
+
+  it('recovers an interrupted pause as paused and clears its pending intent', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-graph-recovery-pause-'))
+    roots.push(root)
+    const config = testGraphConfig()
+    let id = 0
+    const nextId = (prefix: string) => `${prefix}_${++id}`
+    const store = new FileGraphRunStore({
+      rootDir: join(root, 'graphs'),
+      artifactStore: new FileArtifactStore(join(root, 'artifacts')),
+      config: () => config,
+      nextId
+    })
+    const control = new GraphControlService({
+      store,
+      config: () => config,
+      pauseActive: async () => {
+        throw new Error('simulated process exit after pause fence')
+      },
+      nextId
+    })
+    await control.create({
+      runId: 'run_pause_recovery',
+      threadId: 'thread_1',
+      projectId: 'project_1',
+      sourceTurnId: 'turn_1',
+      plan: testGraphPlan(),
+      commandId: 'create_pause_recovery',
+      idempotencyKey: 'create_pause_recovery',
+      start: true
+    })
+    await expect(control.pause('run_pause_recovery', {
+      commandId: 'pause_recovery',
+      idempotencyKey: 'pause_recovery'
+    })).rejects.toThrow(/simulated process exit/)
+    expect(await store.get('run_pause_recovery')).toMatchObject({
+      status: 'pausing',
+      pendingControlIntent: 'pause'
+    })
+    const recovery = new GraphRecoveryService({
+      store,
+      config: () => config,
+      writes: new FileGraphWriteCoordinator({
+        rootDir: join(root, 'writes'),
+        config: () => config,
+        nextId
+      }),
+      delegation: () => undefined,
+      nextId
+    })
+
+    expect(await recovery.reconcile()).toMatchObject({
+      pausedRuns: 1,
+      cancelledRuns: 0
+    })
+    const paused = (await store.get('run_pause_recovery'))!
+    expect(paused.status).toBe('paused')
+    expect(paused.pendingControlIntent).toBeUndefined()
+  })
+
+  it('recovers a legacy cancellation fence hidden behind an old snapshot high-water mark', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-graph-recovery-legacy-cancel-'))
+    roots.push(root)
+    const graphRoot = join(root, 'graphs')
+    const config = testGraphConfig()
+    let id = 0
+    const nextId = (prefix: string) => `${prefix}_${++id}`
+    const store = new FileGraphRunStore({
+      rootDir: graphRoot,
+      artifactStore: new FileArtifactStore(join(root, 'artifacts')),
+      config: () => config,
+      nextId
+    })
+    const control = new GraphControlService({ store, config: () => config, nextId })
+    const created = await control.create({
+      runId: 'run_legacy_cancel_recovery',
+      threadId: 'thread_1',
+      projectId: 'project_1',
+      sourceTurnId: 'turn_1',
+      plan: testGraphPlan(),
+      commandId: 'create_legacy_cancel_recovery',
+      idempotencyKey: 'create_legacy_cancel_recovery',
+      start: true
+    })
+    await store.append(created.run.id, {
+      expectedSeq: created.run.lastEventSeq,
+      graphRevision: created.run.currentRevision,
+      commandId: 'legacy_cancel_fence',
+      idempotencyKey: 'legacy_cancel_fence',
+      event: {
+        type: 'run_status_changed',
+        payload: {
+          from: 'running',
+          to: 'pausing',
+          reason: 'cancellation dispatch fence'
+        }
+      }
+    })
+    await store.snapshot(created.run.id)
+    const snapshotPath = join(graphRoot, created.run.id, 'snapshot.json')
+    const snapshot = JSON.parse(await readFile(snapshotPath, 'utf8')) as {
+      checksum: string
+      state: Record<string, unknown>
+      recentCommands: unknown[]
+    }
+    delete snapshot.state.pendingControlIntent
+    snapshot.checksum = checksumJson({
+      state: snapshot.state,
+      recentCommands: snapshot.recentCommands
+    })
+    await writeFile(snapshotPath, `${JSON.stringify(snapshot)}\n`)
+
+    const legacyStore = new FileGraphRunStore({
+      rootDir: graphRoot,
+      artifactStore: new FileArtifactStore(join(root, 'artifacts')),
+      config: () => config,
+      nextId
+    })
+    expect(await legacyStore.get(created.run.id)).toMatchObject({ status: 'pausing' })
+    expect((await legacyStore.get(created.run.id))?.pendingControlIntent).toBeUndefined()
+    const recovery = new GraphRecoveryService({
+      store: legacyStore,
+      config: () => config,
+      writes: new FileGraphWriteCoordinator({
+        rootDir: join(root, 'writes'),
+        config: () => config,
+        nextId
+      }),
+      delegation: () => undefined,
+      nextId
+    })
+
+    expect(await recovery.reconcile()).toMatchObject({
+      pausedRuns: 0,
+      cancelledRuns: 1
+    })
+    expect(await legacyStore.get(created.run.id)).toMatchObject({ status: 'cancelled' })
   })
 
   it('preserves completing runs so the scheduler can resume finalization', async () => {
