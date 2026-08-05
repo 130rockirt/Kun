@@ -476,7 +476,7 @@ describe('LegacyProviderSettingsMigrationCoordinator', () => {
     expect(rollback).toHaveBeenCalledOnce()
   })
 
-  it('does not migrate when an existing backup path is not a protected regular file', async () => {
+  it('fails closed when an existing backup path is not a protected regular file', async () => {
     const userDataDir = await mkdtemp(join(tmpdir(), 'kun-settings-credential-backup-'))
     const plainStore = new JsonSettingsStore(userDataDir)
     const settings = await plainStore.load()
@@ -487,12 +487,38 @@ describe('LegacyProviderSettingsMigrationCoordinator', () => {
     await mkdir(join(userDataDir, 'kun-settings.pre-extension-credential-migration.json'))
     const prepare = vi.fn()
 
-    const loaded = await new JsonSettingsStore(userDataDir, {
+    const loading = new JsonSettingsStore(userDataDir, {
       credentialMigration: { prepare }
     }).load()
 
-    expect(loaded.provider.apiKey).toBe('plaintext-must-remain-authoritative')
+    await expect(loading).rejects.toThrow(/protected settings backup could not be written/)
     expect(prepare).not.toHaveBeenCalled()
+  })
+
+  it('never returns or caches plaintext when protected Registry migration is unavailable', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'kun-settings-credential-manager-failure-'))
+    const plainStore = new JsonSettingsStore(userDataDir)
+    const defaults = await plainStore.load()
+    const value = JSON.stringify({
+      ...defaults,
+      provider: { ...defaults.provider, apiKey: 'plaintext-must-not-escape' }
+    })
+    const backend = {
+      read: vi.fn(async () => ({ revision: 1, value })),
+      write: vi.fn(async () => { throw new Error('unexpected write') })
+    }
+    const prepare = vi.fn(async () => {
+      throw new Error('Manager Registry unavailable')
+    })
+    const store = new JsonSettingsStore(userDataDir, {
+      documentBackend: backend,
+      credentialMigration: { prepare }
+    })
+
+    await expect(store.load()).rejects.toThrow(/could not be moved to protected storage/)
+    await expect(store.load()).rejects.toThrow(/could not be moved to protected storage/)
+    expect(prepare).toHaveBeenCalledTimes(2)
+    expect(backend.write).not.toHaveBeenCalled()
   })
 
   it('forgets Grok and Codex OAuth bindings when the user clears the provider apiKey', async () => {

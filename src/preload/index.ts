@@ -76,6 +76,10 @@ const api = {
       return () => ipcRenderer.removeListener('storage-relocation:progress', wrapped)
     }
   },
+  runtimeDataRecovery: {
+    getStatus: () => ipcRenderer.invoke('runtime-data-recovery:status'),
+    execute: (input) => ipcRenderer.invoke('runtime-data-recovery:execute', input)
+  },
   dataMigration: {
     pickExportPackage: (defaultPath) => ipcRenderer.invoke('data-migration:pick-export', { defaultPath }),
     pickImportPackage: (defaultPath) => ipcRenderer.invoke('data-migration:pick-import', { defaultPath }),

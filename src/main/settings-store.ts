@@ -495,9 +495,9 @@ export class JsonSettingsStore {
     if (this.options.credentialMigration && hasLegacyProviderPlaintext(prepared)) {
       const backupPath = await writeLegacyCredentialSettingsBackup(sourcePath, raw)
       if (!backupPath) {
-        console.warn('[kun-gui] Legacy credential migration deferred because the settings backup could not be written.')
-        this.cache = prepared
-        return this.cache
+        throw new Error(
+          'Legacy credential migration was blocked because a protected settings backup could not be written'
+        )
       }
     }
     const migration = await this.prepareCredentialMigration(prepared, false)
@@ -528,11 +528,10 @@ export class JsonSettingsStore {
         await this.persistSettings(migration.persistedSettings)
       } catch (error) {
         await migration.rollback().catch(() => undefined)
-        console.warn('[kun-gui] Legacy credential migration settings commit failed; plaintext settings remain authoritative.', {
-          message: error instanceof Error ? error.message : String(error)
-        })
-        this.cache = prepared
-        return this.cache
+        throw new Error(
+          'Legacy credential migration could not commit secret-free settings',
+          { cause: error }
+        )
       }
     }
     await migration.commit().catch((error) => {
@@ -630,6 +629,12 @@ export class JsonSettingsStore {
       })
     } catch (error) {
       if (replaceCommitted) throw error
+      if (hasLegacyProviderPlaintext(settings)) {
+        throw new Error(
+          'Legacy provider credentials could not be moved to protected storage',
+          { cause: error }
+        )
+      }
       console.warn('[kun-gui] Legacy credential migration is unavailable; retaining compatibility settings.', {
         message: error instanceof Error ? error.message : String(error)
       })

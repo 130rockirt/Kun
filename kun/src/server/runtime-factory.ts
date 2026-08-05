@@ -6,6 +6,7 @@ import { buildRouter } from './routes/index.js'
 import type { ServerRuntime } from './routes/server-runtime.js'
 import { startNodeHttpServer, type NodeHttpServerHandle } from './node-http-server.js'
 import { isLoopbackHost } from './loopback-host.js'
+import { acquireRuntimeDataDirLease, type RuntimeDataDirLease } from './runtime-data-dir-lease.js'
 import {
   KUN_SERVICE_VERSION,
   publishRuntimeDiscovery,
@@ -342,6 +343,20 @@ export type KunServeHandle = NodeHttpServerHandle & {
   shutdownRequested: Promise<void>
 }
 
+async function settleCleanupSteps(
+  steps: readonly (() => void | Promise<void>)[]
+): Promise<void> {
+  let firstError: unknown
+  for (const step of steps) {
+    try {
+      await step()
+    } catch (error) {
+      if (firstError === undefined) firstError = error
+    }
+  }
+  if (firstError !== undefined) throw firstError
+}
+
 /**
  * Composition root for serve mode. This is intentionally the only
  * place that wires concrete adapters to ports; domain, services, loop,
@@ -349,6 +364,25 @@ export type KunServeHandle = NodeHttpServerHandle & {
  */
 export async function createKunServeRuntime(
   options: KunServeRuntimeOptions
+): Promise<ServerRuntime> {
+  // Every composition that owns local persistent stores must publish its
+  // writer claim before constructing any store. This includes direct CLI
+  // run/chat/exec runtimes that never pass through startKunServe(). Managed
+  // runtimes use Manager-owned remote stores, so the Manager owns the lease.
+  const dataDirLease = options.serviceManager
+    ? undefined
+    : await acquireRuntimeDataDirLease(options.dataDir)
+  try {
+    return await createKunServeRuntimeComposition(options, dataDirLease)
+  } catch (error) {
+    await dataDirLease?.release().catch(() => undefined)
+    throw error
+  }
+}
+
+async function createKunServeRuntimeComposition(
+  options: KunServeRuntimeOptions,
+  dataDirLease: RuntimeDataDirLease | undefined
 ): Promise<ServerRuntime> {
   await mkdir(options.dataDir, { recursive: true, mode: 0o700 })
   let activeOptions: KunServeRuntimeOptions = { ...options }
@@ -599,15 +633,28 @@ export async function createKunServeRuntime(
     nowIso
   })
   let modelConnections!: ModelConnectionRegistry
+  const safeCredentialUnavailableMessage = 'protected model credential is unavailable'
   const requestCredentialStore = {
-    resolveApiKey: (sourceId: string) =>
-      isModelConnectionCredentialSourceId(sourceId)
-        ? modelConnections.resolveApiKey(sourceId)
-        : legacyCredentialMigration.resolveApiKey(sourceId),
-    updateResolvedApiKey: (sourceId: string, expectedApiKey: string, apiKey: string) =>
-      isModelConnectionCredentialSourceId(sourceId)
-        ? modelConnections.updateResolvedApiKey(sourceId, expectedApiKey, apiKey)
-        : legacyCredentialMigration.updateResolvedApiKey(sourceId, expectedApiKey, apiKey)
+    resolveApiKey: async (sourceId: string) => {
+      try {
+        return isModelConnectionCredentialSourceId(sourceId)
+          ? await modelConnections.resolveApiKey(sourceId)
+          : await legacyCredentialMigration.resolveApiKey(sourceId)
+      } catch {
+        // Request errors may cross HTTP/SSE boundaries. Never expose protected
+        // source identifiers or keychain/decryption details to those clients.
+        throw new Error(safeCredentialUnavailableMessage)
+      }
+    },
+    updateResolvedApiKey: async (sourceId: string, expectedApiKey: string, apiKey: string) => {
+      try {
+        return isModelConnectionCredentialSourceId(sourceId)
+          ? await modelConnections.updateResolvedApiKey(sourceId, expectedApiKey, apiKey)
+          : await legacyCredentialMigration.updateResolvedApiKey(sourceId, expectedApiKey, apiKey)
+      } catch {
+        throw new Error(safeCredentialUnavailableMessage)
+      }
+    }
   }
   const grokCredentialRefresher = new GrokOAuthCredentialRefresher(
     requestCredentialStore
@@ -621,16 +668,28 @@ export async function createKunServeRuntime(
   ): Promise<{
     apiKey: string
     headers?: Record<string, string>
+    geminiAuth?: GeminiCodeAssistCredential
     refreshable: boolean
   }> => {
-    let resolved = await codexCredentialRefresher.resolve(sourceId, rejectedAccessToken)
-    if (!resolved.refreshable) {
-      resolved = await grokCredentialRefresher.resolve(sourceId, rejectedAccessToken)
-    }
-    const material = materializeLegacyProviderCredential(resolved.rawApiKey)
-    return {
-      ...material,
-      refreshable: resolved.refreshable
+    try {
+      let resolved = await codexCredentialRefresher.resolve(sourceId, rejectedAccessToken)
+      if (!resolved.refreshable) {
+        resolved = await grokCredentialRefresher.resolve(sourceId, rejectedAccessToken)
+      }
+      const material = materializeLegacyProviderCredential(resolved.rawApiKey)
+      return {
+        ...material,
+        refreshable: resolved.refreshable
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : ''
+      if (
+        message === safeCredentialUnavailableMessage ||
+        message.startsWith('protected credential source is unavailable')
+      ) {
+        throw new Error(safeCredentialUnavailableMessage)
+      }
+      throw error
     }
   }
   const migrateLegacyProviderCredentials = async (
@@ -749,6 +808,14 @@ export async function createKunServeRuntime(
     modelCapabilities: registryModelCapabilities,
     retireLegacyCredentialSource: async (sourceId) => {
       await legacyCredentialMigration.forgetSources([sourceId])
+    },
+    inspectCredentialSource: async (sourceId) => {
+      try {
+        const resolved = await requestCredentialStore.resolveApiKey(sourceId)
+        return resolved?.apiKey?.trim() ? 'ready' : 'missing'
+      } catch {
+        return 'unreadable'
+      }
     },
     resolveCredentialSource: resolveLegacyRequestCredentials,
     onChanged: (connections) => {
@@ -1540,6 +1607,11 @@ export async function createKunServeRuntime(
       defaultModel: input.options.model,
       defaultIsAgentSdk,
       defaultToken: input.options.apiKey,
+      defaultCredentialSourceId: input.options.credentialSourceId,
+      resolveCredentialSource: async (sourceId) => {
+        const resolved = await resolveLegacyRequestCredentials(sourceId)
+        return resolved.apiKey.trim() ? { apiKey: resolved.apiKey } : null
+      },
       turnLimits: input.options.runtime?.turnLimits,
       approvalGate,
       approvalReview: approvalReviewService,
@@ -1581,6 +1653,11 @@ export async function createKunServeRuntime(
       providerIds: new Set(cursorSdkProviderIdsForOptions(input.options)),
       defaultIsCursor: defaultIsCursorSdk,
       defaultApiKey: input.options.apiKey,
+      defaultCredentialSourceId: input.options.credentialSourceId,
+      resolveCredentialSource: async (sourceId) => {
+        const resolved = await resolveLegacyRequestCredentials(sourceId)
+        return resolved.apiKey.trim() ? { apiKey: resolved.apiKey } : null
+      },
       defaultModel: input.options.model,
       defaultApprovalPolicy: input.options.approvalPolicy,
       defaultSandboxMode: input.options.sandboxMode,
@@ -2793,44 +2870,49 @@ export async function createKunServeRuntime(
       return result
     },
     shutdown: async () => {
-      try {
-        shuttingDown = true
-        executionLeases?.shutdown()
-        clearInterval(attachmentPruneTimer)
-	        await shutdownGraphExecutionForHost({
-	          graphRuntime,
-	          turnService
-	        })
-        modelConnectionOAuth.close()
-        eventStreamRegistry.closeAll()
-        loop.shutdownGoalResume()
-	        await backgroundShellRuntime.shutdown()
-	        await extensionJobs.handleRuntimeShutdown()
-	        extensionMediaJobs.dispose()
-	        extensionAudioAnalysisJobs.dispose()
-	        extensionMediaArchiveJobs.dispose()
-        await waitForActiveRuns(activeRuntimeRuns)
-	        stopExtensionModelListener()
-	        extensionViewSessions.disposeAll()
-	        await extensionManager.shutdown()
-	        await extensionBroker.dispose()
-	        extensionSecretReveals.dispose()
-	        await extensionAccountAudit.flush()
-	        extensionTools.disposeAll()
-	        await extensionModelProviders.disposeAll()
-	        shutdownAllLspSessions()
-	        await mcpProviders.close()
-	        await migrationService.shutdown()
-	        await migrationImportService.shutdown()
-	        await routeHealth.flush()
-      } finally {
-        try {
-          await llmDebug?.shutdown()
-          await agentObservability?.shutdown()
-        } finally {
-          await stores.shutdown?.()
-        }
-      }
+      await settleCleanupSteps([
+        async () => {
+          try {
+            shuttingDown = true
+            executionLeases?.shutdown()
+            clearInterval(attachmentPruneTimer)
+	          await shutdownGraphExecutionForHost({
+	            graphRuntime,
+	            turnService
+	          })
+            modelConnectionOAuth.close()
+            eventStreamRegistry.closeAll()
+            loop.shutdownGoalResume()
+	          await backgroundShellRuntime.shutdown()
+	          await extensionJobs.handleRuntimeShutdown()
+	          extensionMediaJobs.dispose()
+	          extensionAudioAnalysisJobs.dispose()
+	          extensionMediaArchiveJobs.dispose()
+            await waitForActiveRuns(activeRuntimeRuns)
+	          stopExtensionModelListener()
+	          extensionViewSessions.disposeAll()
+	          await extensionManager.shutdown()
+	          await extensionBroker.dispose()
+	          extensionSecretReveals.dispose()
+	          await extensionAccountAudit.flush()
+	          extensionTools.disposeAll()
+	          await extensionModelProviders.disposeAll()
+	          shutdownAllLspSessions()
+	          await mcpProviders.close()
+	          await migrationService.shutdown()
+	          await migrationImportService.shutdown()
+	          await routeHealth.flush()
+          } finally {
+            try {
+              await llmDebug?.shutdown()
+              await agentObservability?.shutdown()
+            } finally {
+              await stores.shutdown?.()
+            }
+          }
+        },
+        async () => { await dataDirLease?.release() }
+      ])
     }
   }
 }
@@ -2967,6 +3049,7 @@ function buildModelClientRouterInput(
   ) => Promise<{
     apiKey: string
     headers?: Record<string, string>
+    geminiAuth?: GeminiCodeAssistCredential
     refreshable: boolean
   }>
 ): { default: ModelClient; providers: Map<string, ModelClient> } {
@@ -2986,6 +3069,12 @@ function buildModelClientRouterInput(
       ? new GeminiCodeAssistModelClient({
           baseUrl: options.baseUrl,
           auth: options.geminiAuth,
+          ...(options.credentialSourceId && credentialResolver
+            ? {
+                resolveAuth: async () =>
+                  (await credentialResolver(options.credentialSourceId!)).geminiAuth ?? null
+              }
+            : {}),
           modelProxyUrl: options.modelProxyUrl,
           model: options.model,
           modelCapabilities: defaultModelCapabilities
@@ -3030,6 +3119,12 @@ function buildModelClientRouterInput(
       ? new GeminiCodeAssistModelClient({
           baseUrl: provider.baseUrl ?? options.baseUrl,
           auth: provider.geminiAuth,
+          ...(provider.credentialSourceId && credentialResolver
+            ? {
+                resolveAuth: async () =>
+                  (await credentialResolver(provider.credentialSourceId!)).geminiAuth ?? null
+              }
+            : {}),
           modelProxyUrl: provider.modelProxyUrl ?? options.modelProxyUrl,
           model: options.model,
           modelCapabilities: scopedModelCapabilities
@@ -3398,6 +3493,9 @@ export async function startKunServe(
   const instanceId = options.instanceId ?? randomUUID()
   process.env.KUN_RUNTIME_INSTANCE_ID = instanceId
   const serveOptions = { ...options, startedAt, instanceId }
+  // The composition owns the writer lease for all local stores. Keeping lease
+  // ownership below the HTTP layer also covers direct CLI runtimes and avoids
+  // a second claim for serve mode.
   const runtime = await createKunServeRuntime(serveOptions)
   let requestShutdown!: () => void
   const shutdownRequested = new Promise<void>((resolve) => { requestShutdown = resolve })
@@ -3458,15 +3556,22 @@ export async function startKunServe(
       instanceId
     })
   } catch (error) {
-    if (registeredWithManager && options.serviceManager) {
-      await unregisterRuntimeWithManager({
-        manager: options.serviceManager,
-        flavor: runtimeFlavor,
-        instanceId
-      })
-    }
-    await server.close().catch(() => undefined)
-    await runtime.shutdown?.().catch(() => undefined)
+    await settleCleanupSteps([
+      async () => {
+        if (!registeredWithManager || !options.serviceManager) return
+        try {
+          await unregisterRuntimeWithManager({
+            manager: options.serviceManager,
+            flavor: runtimeFlavor,
+            instanceId
+          })
+        } finally {
+          registeredWithManager = false
+        }
+      },
+      () => server.close(),
+      async () => { await runtime.shutdown?.() }
+    ]).catch(() => undefined)
     throw error
   }
   // Background sweep after listen: settle turns orphaned by a crash so
@@ -3507,27 +3612,29 @@ export async function startKunServe(
     instanceId,
     shutdownRequested,
     close: async () => {
-      try {
-        await runtime.shutdown?.()
-      } finally {
-        try {
-          await server.close()
-        } finally {
-          if (registeredWithManager && options.serviceManager) {
+      await settleCleanupSteps([
+        async () => { await runtime.shutdown?.() },
+        () => server.close(),
+        async () => {
+          if (!registeredWithManager || !options.serviceManager) return
+          try {
             await unregisterRuntimeWithManager({
               manager: options.serviceManager,
               flavor: runtimeFlavor,
               instanceId
             })
+          } finally {
             registeredWithManager = false
           }
+        },
+        async () => {
           await removeRuntimeDiscovery(
             options.discoveryDir ?? options.dataDir,
             discovery.instanceId,
             options.runtimeFlavor ?? 'production'
-          ).catch(() => undefined)
+          )
         }
-      }
+      ])
     }
   }
 }

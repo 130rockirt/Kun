@@ -12,6 +12,7 @@ import {
   type ThreadExecutionLease
 } from '../contracts/runtime-flavor.js'
 import { startNodeHttpServer, type NodeHttpServerHandle } from '../server/node-http-server.js'
+import { acquireRuntimeDataDirLease } from '../server/runtime-data-dir-lease.js'
 import { readJsonBody } from '../server/read-json-body.js'
 import { jsonResponse, type JsonResponse } from '../server/response.js'
 import { Router } from '../server/router.js'
@@ -360,8 +361,18 @@ export async function startServiceManager(input: {
   settingsPath: string
   documents?: RevisionedDocumentStore
 }): Promise<ServiceManagerHandle> {
+  // The Manager is the physical owner of canonical stores for every managed
+  // Runtime flavor. Hold the data-directory lease before constructing those
+  // stores so migration and manager election cannot overlap writes.
+  const dataDirLease = await acquireRuntimeDataDirLease(input.dataDir)
   const managerStatePath = join(input.controlDir, 'manager-state.json')
-  const state = input.state ?? await readPersistedManagerState(managerStatePath)
+  let state: ServiceManagerState
+  try {
+    state = input.state ?? await readPersistedManagerState(managerStatePath)
+  } catch (error) {
+    await dataDirLease.release().catch(() => undefined)
+    throw error
+  }
   let statePersistence = Promise.resolve()
   state.onMutation(() => {
     const snapshot = state.durableSnapshot()
@@ -377,20 +388,14 @@ export async function startServiceManager(input: {
         console.warn('[kun-manager] failed to persist manager lease state:', error)
       })
   })
-  const sharedData = input.sharedData ?? await ManagerSharedDataStore.create(input.dataDir)
-  const documents = input.documents ?? new RevisionedDocumentStore({
-    settingsPath: input.settingsPath,
-    clientStatePath: `${input.controlDir}/shared-client-state.json`
-  })
-  const reconciliationTimer = setInterval(() => {
-    const expired = state.expireStale()
-    for (const lease of expired) {
-      void sharedData.reconcileExpiredLease(lease).catch((error) => {
-        console.warn('[kun-manager] failed to reconcile expired thread lease:', error)
-      })
-    }
-  }, 1_000)
-  reconciliationTimer.unref?.()
+  let sharedData: ManagerSharedDataStore
+  try {
+    sharedData = input.sharedData ?? await ManagerSharedDataStore.create(input.dataDir)
+  } catch (error) {
+    state.onMutation(undefined)
+    await dataDirLease.release().catch(() => undefined)
+    throw error
+  }
   let requestShutdown!: () => void
   const shutdownRequested = new Promise<void>((resolve) => { requestShutdown = resolve })
   let shutdownTimer: ReturnType<typeof setTimeout> | undefined
@@ -399,40 +404,59 @@ export async function startServiceManager(input: {
     shutdownTimer = setTimeout(requestShutdown, 25)
     shutdownTimer.unref?.()
   }
-  const router = buildServiceManagerRouter({
-    managerToken: input.managerToken,
-    instanceId: input.instanceId,
-    startedAt: input.startedAt,
-    state,
-    sharedData,
-    documents,
-    requestShutdown: deferShutdown
-  })
-  let server: NodeHttpServerHandle
+  let reconciliationTimer: ReturnType<typeof setInterval> | undefined
+  let server!: NodeHttpServerHandle
+  let discovery!: ManagerDiscoveryRecord
   try {
+    const documents = input.documents ?? new RevisionedDocumentStore({
+      settingsPath: input.settingsPath,
+      clientStatePath: `${input.controlDir}/shared-client-state.json`
+    })
+    reconciliationTimer = setInterval(() => {
+      const expired = state.expireStale()
+      for (const lease of expired) {
+        void sharedData.reconcileExpiredLease(lease).catch((error) => {
+          console.warn('[kun-manager] failed to reconcile expired thread lease:', error)
+        })
+      }
+    }, 1_000)
+    reconciliationTimer.unref?.()
+    const router = buildServiceManagerRouter({
+      managerToken: input.managerToken,
+      instanceId: input.instanceId,
+      startedAt: input.startedAt,
+      state,
+      sharedData,
+      documents,
+      requestShutdown: deferShutdown
+    })
     server = await startNodeHttpServer({
       router,
       host: input.host ?? '127.0.0.1',
       port: input.port ?? 0
     })
+    discovery = await publishManagerDiscovery(input.controlDir, {
+      instanceId: input.instanceId,
+      pid: process.pid,
+      startedAt: input.startedAt,
+      host: server.host,
+      port: server.port,
+      baseUrl: `http://${server.host}:${server.port}`,
+      managerToken: input.managerToken,
+      serviceVersion: KUN_VERSION,
+      dataDir: input.dataDir,
+      settingsPath: input.settingsPath,
+      ...(input.logPath ? { logPath: input.logPath } : {})
+    })
   } catch (error) {
-    clearInterval(reconciliationTimer)
+    if (reconciliationTimer) clearInterval(reconciliationTimer)
+    state.onMutation(undefined)
+    await statePersistence.catch(() => undefined)
+    await server?.close().catch(() => undefined)
     await sharedData.close().catch(() => undefined)
+    await dataDirLease.release().catch(() => undefined)
     throw error
   }
-  const discovery = await publishManagerDiscovery(input.controlDir, {
-    instanceId: input.instanceId,
-    pid: process.pid,
-    startedAt: input.startedAt,
-    host: server.host,
-    port: server.port,
-    baseUrl: `http://${server.host}:${server.port}`,
-    managerToken: input.managerToken,
-    serviceVersion: KUN_VERSION,
-    dataDir: input.dataDir,
-    settingsPath: input.settingsPath,
-    ...(input.logPath ? { logPath: input.logPath } : {})
-  })
   let closed = false
   return {
     ...server,
@@ -444,12 +468,22 @@ export async function startServiceManager(input: {
       if (closed) return
       closed = true
       if (shutdownTimer) clearTimeout(shutdownTimer)
-      clearInterval(reconciliationTimer)
+      if (reconciliationTimer) clearInterval(reconciliationTimer)
       state.onMutation(undefined)
-      await statePersistence
-      await server.close()
-      await sharedData.close()
-      await removeManagerDiscovery(input.controlDir, input.instanceId).catch(() => undefined)
+      let firstError: unknown
+      const settle = async (action: () => Promise<unknown>): Promise<void> => {
+        try {
+          await action()
+        } catch (error) {
+          if (firstError === undefined) firstError = error
+        }
+      }
+      await settle(() => statePersistence)
+      await settle(() => server.close())
+      await settle(() => sharedData.close())
+      await settle(() => removeManagerDiscovery(input.controlDir, input.instanceId))
+      await settle(() => dataDirLease.release())
+      if (firstError !== undefined) throw firstError
     }
   }
 }

@@ -4,6 +4,7 @@
  * keeping the orchestration (and its tests) free of both.
  */
 import {
+  AgentSdkCredentialUnavailableError,
   AgentSdkRuntime,
   agentSdkCapabilities,
   type SdkRuntimeDeps,
@@ -142,6 +143,14 @@ export interface AgentSdkRuntimeFactoryDeps {
   defaultIsAgentSdk?: boolean
   /** Token for the default provider (used when a turn doesn't target a specific provider). */
   defaultToken?: string
+  /** Protected source for the default route; resolved for every turn. */
+  defaultCredentialSourceId?: string
+  /**
+   * Request-time credential authority. A configured source must resolve here;
+   * cached providerConfig.apiKey material is never a fallback because another
+   * Runtime may have installed a durable replacement fence.
+   */
+  resolveCredentialSource?: (sourceId: string) => Promise<{ apiKey: string } | null>
   /** Resolves a turn's image attachments so they can be forwarded to the model. */
   attachmentStore?: AttachmentStore
   /** Skill engine — injects the available-skills catalog + activated skills per turn. */
@@ -652,10 +661,19 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
         deps.defaultApprovalReviewer ??
         DEFAULT_APPROVAL_REVIEWER
       // An explicit Claude provider owns its credential boundary. Empty means
-      // ambient Claude Code login; it must never inherit another provider's key.
-      const token = normalizeClaudeOAuthToken(
-        explicitRouteProviderId ? providerCfg?.apiKey : deps.defaultToken
-      )
+      // ambient Claude Code login only when it has no managed credential
+      // source. Managed sources are re-read for every turn so a fence written
+      // by another Runtime fails closed before the SDK can use cached material.
+      const credentialSourceId = explicitRouteProviderId
+        ? providerCfg?.credentialSourceId
+        : deps.defaultCredentialSourceId
+      let rawToken = explicitRouteProviderId ? providerCfg?.apiKey : deps.defaultToken
+      if (credentialSourceId) {
+        const resolved = await deps.resolveCredentialSource?.(credentialSourceId).catch(() => null)
+        rawToken = resolved?.apiKey ?? ''
+        if (!rawToken.trim()) throw new AgentSdkCredentialUnavailableError()
+      }
+      const token = normalizeClaudeOAuthToken(rawToken)
       // Resolve skills before listing bridgeable tools. Some managed tools
       // (notably PPT Master) are deliberately advertised only for an active
       // skill, and the SDK must see the same per-turn catalog as the native
@@ -1126,7 +1144,7 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
       await deps.turns.applyItem(threadId, item)
     },
 
-    async finishTurn(threadId, turnId, status, error): Promise<TurnRunOutcome> {
+    async finishTurn(threadId, turnId, status, error, code): Promise<TurnRunOutcome> {
       const key = skillTurnKey(threadId, turnId)
       try {
         let outcome: TurnRunOutcome = status
@@ -1141,10 +1159,22 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
           ) {
             outcome = graphCompletion
           } else {
-            await deps.turns.finishTurn({ threadId, turnId, status, ...(error ? { error } : {}) })
+            await deps.turns.finishTurn({
+              threadId,
+              turnId,
+              status,
+              ...(error ? { error } : {}),
+              ...(code ? { code } : {})
+            })
           }
         } else {
-          await deps.turns.finishTurn({ threadId, turnId, status, ...(error ? { error } : {}) })
+          await deps.turns.finishTurn({
+            threadId,
+            turnId,
+            status,
+            ...(error ? { error } : {}),
+            ...(code ? { code } : {})
+          })
         }
         if (
           (

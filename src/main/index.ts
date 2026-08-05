@@ -60,15 +60,29 @@ import { shouldStartHidden, syncLoginItemSettings } from './desktop-behavior'
 import { resolveLogDirectory, resolveNamedPreloadPath, resolvePreloadPath } from './main-paths'
 import {
   HOME_DATA_MIGRATION_MAPPINGS,
+  legacyHomeDataMigrationRequiresExclusiveAccess,
   migrateLegacyHomeDataDirs,
   migrateLegacyUserDataDir,
   rewriteLegacyPathsInSettingsFile
 } from './legacy-data-migration'
 import {
+  canonicalKunRuntimeMigrationRequiresExclusiveAccess,
   markCanonicalKunRuntimeMigrationRuntimeVerified,
-  runCanonicalKunRuntimeDataMigration
+  runCanonicalKunRuntimeDataMigration,
+  type RuntimeDataDirMigrationResult
 } from './runtime-data-dir-migration'
 import { assertNoActiveKunRuntimeUsingDataDir } from './runtime-data-dir-ownership'
+import {
+  acquireCanonicalRuntimeMigrationLock,
+  runtimeMigrationAllowsPostMigrationSettingsWrite,
+  type CanonicalRuntimeMigrationLock
+} from './runtime-data-dir-migration-lock'
+import { RuntimeDataDirRecovery } from './runtime-data-dir-recovery'
+import { RuntimeDataRecoveryController } from './runtime-data-recovery-controller'
+import {
+  canonicalCurrentKunDataDir,
+  canonicalLegacyKunDataDir
+} from './kun-data-dir-paths'
 import {
   LegacyProviderSettingsMigrationCoordinator,
   resolveSettingsDataDir
@@ -126,6 +140,8 @@ import {
   syncGuiManagedKunConfig,
   waitForKunStartupSettled,
   ensureKunServiceManager,
+  configureKunManagerDataPlaneForCurrentProcess,
+  resolveKunManagerDataDirFromSettings,
   type KunUnexpectedExitInfo
 } from './kun-process'
 import { SETTINGS_FILE_NAME } from './settings-file-paths'
@@ -134,8 +150,13 @@ import {
   ManagerRevisionedDocumentClient,
   readManagerRuntime,
   requestManagerJson,
+  resolveServiceManager,
   type ServiceManagerConnection
 } from '../../kun/src/manager/manager-client.js'
+import {
+  defaultKunControlDir,
+  readManagerDiscovery
+} from '../../kun/src/manager/manager-discovery.js'
 import { stopSharedRuntime } from '../../kun/src/cli/shared-runtime.js'
 import { expandHomePath } from './settings-store'
 import { KunRuntimeSupervisor, type KunRuntimeStatus } from './kun-runtime-supervisor'
@@ -483,6 +504,7 @@ let bindExtensionMainWindow: ((window: BrowserWindow) => void) | undefined
 let shutdownDesktopResourceLeases: (() => Promise<void>) | null = null
 let terminalPtyController: TerminalPtyController | null = null
 let activeServiceManager: ServiceManagerConnection | null = null
+let runtimeDataRecoveryMigrationLock: CanonicalRuntimeMigrationLock | null = null
 
 type GuiUpdaterModule = typeof import('./gui-updater')
 
@@ -715,50 +737,12 @@ const storageRelocationRecoveryRequired = Boolean(pendingStorageRelocationId) ||
 const startupMigrationLog = (message: string, detail?: unknown): void => {
   console.warn(`[kun-gui] ${message}`, detail ?? '')
 }
-const canonicalRuntimeMigration = gotSingleInstanceLock &&
-  !runningClawScheduleMcpServer &&
-  !storageRelocationRecoveryRequired &&
-  appIdentity.flavor === 'production'
-  ? runCanonicalKunRuntimeDataMigration({
-      userDataPath: app.getPath('userData'),
-      homeDir: homedir(),
-      log: startupMigrationLog,
-      assertLegacyRuntimeInactive: (sourcePath) =>
-        assertNoActiveKunRuntimeUsingDataDir(sourcePath)
-    })
-  : null
+let canonicalRuntimeMigration: RuntimeDataDirMigrationResult | null = null
 const remainingHomeMappings = HOME_DATA_MIGRATION_MAPPINGS.filter(
   (mapping) => mapping.legacySegments.join('/') !== '.deepseekgui/kun'
 )
-const remainingHomeMigration = gotSingleInstanceLock &&
-  !runningClawScheduleMcpServer &&
-  !storageRelocationRecoveryRequired &&
-  appIdentity.flavor === 'production'
-  ? migrateLegacyHomeDataDirs({
-      homeDir: homedir(),
-      mappings: remainingHomeMappings,
-      log: startupMigrationLog
-    })
-  : []
-const remainingSettingsRewritten = gotSingleInstanceLock &&
-  !runningClawScheduleMcpServer &&
-  !storageRelocationRecoveryRequired &&
-  appIdentity.flavor === 'production'
-  ? rewriteLegacyPathsInSettingsFile({
-      userDataPath: app.getPath('userData'),
-      homeDir: homedir(),
-      mappings: remainingHomeMigration
-        .filter((entry) => entry.rewriteSafe)
-        .map((entry) => entry.mapping),
-      log: startupMigrationLog
-    })
-  : false
-traceStartup('post-lock legacy home migration checked', {
-  runtimeStatus: canonicalRuntimeMigration?.status ?? 'skipped',
-  runtimeBackupPath: canonicalRuntimeMigration?.destinationBackupPath,
-  runtimeMessage: canonicalRuntimeMigration?.message,
-  remainingSettingsRewritten
-})
+let remainingHomeMigration: ReturnType<typeof migrateLegacyHomeDataDirs> = []
+let remainingSettingsRewritten = false
 
 function assertCanonicalRuntimeMigrationReady(): void {
   if (canonicalRuntimeMigration?.status !== 'blocked') return
@@ -1334,7 +1318,8 @@ async function verifyRuntimeMigrationHistory(): Promise<void> {
   )
   const result = markCanonicalKunRuntimeMigrationRuntimeVerified(
     app.getPath('userData'),
-    visibleThreadIds
+    visibleThreadIds,
+    { homeDir: app.getPath('home'), platform: process.platform }
   )
   runtimeMigrationVerificationCompleted = result.status !== 'incomplete'
   if (result.status === 'incomplete') {
@@ -1873,6 +1858,56 @@ function createStorageRelocationWindow(): BrowserWindow {
   return window
 }
 
+function createRuntimeDataRecoveryWindow(): BrowserWindow {
+  const window = new BrowserWindow({
+    width: 820,
+    height: 700,
+    minWidth: 700,
+    minHeight: 560,
+    title: 'Kun Runtime Data Recovery',
+    icon: appIcon.isEmpty() ? undefined : appIcon,
+    autoHideMenuBar: true,
+    show: false,
+    webPreferences: {
+      preload: resolvePreloadPath(__dirname),
+      contextIsolation: true,
+      sandbox: true,
+      webviewTag: false,
+      additionalArguments: [
+        `--kun-home-dir=${homedir()}`,
+        `--kun-app-environment=${encodeURIComponent(JSON.stringify(appEnvironment))}`
+      ]
+    }
+  })
+  mainWindow = window
+  window.setMenu(null)
+  window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+  const trustedRendererUrl = resolveMainRendererUrl()
+  const preventUntrustedNavigation = (event: Electron.Event, targetUrl: string): void => {
+    if (!isTrustedWorkbenchUrl(targetUrl, trustedRendererUrl)) event.preventDefault()
+  }
+  window.webContents.on('will-navigate', preventUntrustedNavigation)
+  window.webContents.on('will-redirect', preventUntrustedNavigation)
+  window.on('closed', () => {
+    if (mainWindow === window) mainWindow = null
+  })
+  window.once('ready-to-show', () => window.show())
+  return window
+}
+
+async function loadRuntimeDataRecoveryWindow(window: BrowserWindow): Promise<void> {
+  const devUrl = developmentRendererUrl()
+  if (devUrl) {
+    const target = new URL(devUrl)
+    target.searchParams.set('runtimeMigrationRecovery', '1')
+    await window.loadURL(target.toString())
+    return
+  }
+  await window.loadFile(join(__dirname, '../renderer/index.html'), {
+    query: { runtimeMigrationRecovery: '1' }
+  })
+}
+
 async function listStorageRelocationActiveWork(
   manager: ServiceManagerConnection
 ): Promise<StorageRelocationActiveWork[]> {
@@ -1998,6 +2033,285 @@ async function shutdownActiveServiceManagerForUpdate(): Promise<void> {
   if (!manager) return
   await shutdownServiceManagerAndWait(manager)
   if (activeServiceManager === manager) activeServiceManager = null
+}
+
+function managerProcessIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return !(
+      typeof error === 'object' &&
+      error !== null &&
+      'code' in error &&
+      (error as NodeJS.ErrnoException).code === 'ESRCH'
+    )
+  }
+}
+
+async function drainCanonicalRuntimeMigrationWriters(): Promise<void> {
+  const manager = await resolveServiceManager(defaultKunControlDir(), fetch)
+  if (manager) {
+    await interruptStorageRelocationWork(manager)
+    await Promise.all((['production', 'development'] as const).map((runtimeFlavor) =>
+      stopSharedRuntime(manager.discovery.dataDir, fetch, { runtimeFlavor, manager })
+    ))
+    await shutdownServiceManagerAndWait(manager)
+  } else {
+    const unresolved = await readManagerDiscovery(defaultKunControlDir()).catch(() => null)
+    if (unresolved && managerProcessIsAlive(unresolved.pid)) {
+      throw new Error(
+        `active_writer: Kun Service Manager ${unresolved.pid} is alive but could not be ` +
+        'authenticated for a safe shutdown.'
+      )
+    }
+  }
+
+  const canonicalDirs = [
+    canonicalLegacyKunDataDir(homedir(), process.platform),
+    canonicalCurrentKunDataDir(homedir(), process.platform)
+  ]
+  for (const dataDir of canonicalDirs) {
+    for (const runtimeFlavor of ['production', 'development'] as const) {
+      await stopSharedRuntime(dataDir, fetch, { runtimeFlavor })
+    }
+  }
+}
+
+async function assertCanonicalRuntimeMigrationWritersStopped(dataDir: string): Promise<void> {
+  assertNoActiveKunRuntimeUsingDataDir(dataDir)
+  const manager = await readManagerDiscovery(defaultKunControlDir()).catch(() => null)
+  if (manager && managerProcessIsAlive(manager.pid)) {
+    throw new Error(
+      `an active Kun Service Manager still owns Runtime storage (pid ${manager.pid})`
+    )
+  }
+}
+
+async function runStartupLegacyMigrations(): Promise<RuntimeDataDirMigrationResult> {
+  const userDataPath = app.getPath('userData')
+  const homeDir = homedir()
+  const sourcePath = canonicalLegacyKunDataDir(homeDir, process.platform)
+  const targetPath = canonicalCurrentKunDataDir(homeDir, process.platform)
+  const runtimeRequiresExclusiveAccess = canonicalKunRuntimeMigrationRequiresExclusiveAccess({
+    userDataPath,
+    homeDir,
+    platform: process.platform
+  })
+  const remainingRequiresExclusiveAccess = legacyHomeDataMigrationRequiresExclusiveAccess({
+    userDataPath,
+    homeDir,
+    mappings: remainingHomeMappings
+  })
+  const requiresExclusiveAccess =
+    runtimeRequiresExclusiveAccess || remainingRequiresExclusiveAccess
+  let lock: ReturnType<typeof acquireCanonicalRuntimeMigrationLock> | undefined
+  try {
+    if (requiresExclusiveAccess) {
+      await drainCanonicalRuntimeMigrationWriters()
+      lock = acquireCanonicalRuntimeMigrationLock([sourcePath, targetPath])
+      await assertCanonicalRuntimeMigrationWritersStopped(sourcePath)
+      await assertCanonicalRuntimeMigrationWritersStopped(targetPath)
+    }
+    canonicalRuntimeMigration = runCanonicalKunRuntimeDataMigration({
+      userDataPath,
+      homeDir,
+      log: startupMigrationLog,
+      // A current Manager cannot pass the data-dir lock. Repeating the process
+      // inventory at every migration fence also covers legacy standalone
+      // Runtime binaries that predate the lock protocol.
+      assertLegacyRuntimeInactive: (dataDir) =>
+        assertNoActiveKunRuntimeUsingDataDir(dataDir)
+    })
+
+    // Settings are Manager-owned. Keep every remaining legacy directory move
+    // and settings rewrite inside the same exclusive writer window whenever
+    // the read-only preflight found work. A permanent compatibility symlink
+    // with already-current settings does not trigger a Manager restart.
+    if (
+      remainingRequiresExclusiveAccess &&
+      lock &&
+      runtimeMigrationAllowsPostMigrationSettingsWrite(canonicalRuntimeMigration.status)
+    ) {
+      remainingHomeMigration = migrateLegacyHomeDataDirs({
+        homeDir,
+        mappings: remainingHomeMappings,
+        log: startupMigrationLog
+      })
+      remainingSettingsRewritten = rewriteLegacyPathsInSettingsFile({
+        userDataPath,
+        homeDir,
+        mappings: remainingHomeMigration
+          .filter((entry) => entry.rewriteSafe)
+          .map((entry) => entry.mapping),
+        log: startupMigrationLog
+      })
+    }
+  } catch (error) {
+    canonicalRuntimeMigration = {
+      status: 'blocked',
+      authority: 'unknown',
+      sourcePath,
+      targetPath,
+      journalPath: join(userDataPath, 'kun-runtime-data-migration-v3.json'),
+      message: error instanceof Error ? error.message : String(error)
+    }
+  } finally {
+    try {
+      lock?.release()
+    } catch (error) {
+      canonicalRuntimeMigration = {
+        status: 'blocked',
+        authority: 'unknown',
+        sourcePath,
+        targetPath,
+        journalPath: join(userDataPath, 'kun-runtime-data-migration-v3.json'),
+        message:
+          `Kun Runtime migration lock cleanup failed: ` +
+          `${error instanceof Error ? error.message : String(error)}`
+      }
+    }
+  }
+
+  const migrationResult = canonicalRuntimeMigration
+  if (!migrationResult) throw new Error('Runtime migration did not produce a result')
+  traceStartup('startup legacy migration checked', {
+    runtimeStatus: migrationResult.status,
+    runtimeBackupPath: migrationResult.destinationBackupPath,
+    runtimeMessage: migrationResult.message,
+    remainingSettingsRewritten
+  })
+  return migrationResult
+}
+
+function releaseRuntimeDataRecoveryMigrationLock(): void {
+  const lock = runtimeDataRecoveryMigrationLock
+  if (!lock) return
+  runtimeDataRecoveryMigrationLock = null
+  lock.release()
+}
+
+function acceptCompletedRuntimeDataRecovery(): RuntimeDataDirMigrationResult {
+  if (!runtimeDataRecoveryMigrationLock) {
+    throw new Error('Runtime data recovery acceptance requires the active migration lock.')
+  }
+  const result = runCanonicalKunRuntimeDataMigration({
+    userDataPath: app.getPath('userData'),
+    homeDir: homedir(),
+    platform: process.platform,
+    log: startupMigrationLog,
+    assertLegacyRuntimeInactive: (dataDir) => assertNoActiveKunRuntimeUsingDataDir(dataDir)
+  })
+  canonicalRuntimeMigration = result
+  if (result.status === 'blocked') {
+    throw new Error(
+      result.message ?? 'Runtime data recovery completed but its authority handoff was blocked.'
+    )
+  }
+  traceStartup('runtime data recovery accepted', {
+    status: result.status,
+    authority: result.authority
+  })
+  return result
+}
+
+async function runRuntimeDataRecoveryMaintenance(): Promise<void> {
+  const homeDir = homedir()
+  const userDataPath = app.getPath('userData')
+  const sourcePath = canonicalLegacyKunDataDir(homeDir, process.platform)
+  const targetPath = canonicalCurrentKunDataDir(homeDir, process.platform)
+  await drainCanonicalRuntimeMigrationWriters()
+  runtimeDataRecoveryMigrationLock = acquireCanonicalRuntimeMigrationLock([
+    sourcePath,
+    targetPath
+  ])
+  try {
+    await assertCanonicalRuntimeMigrationWritersStopped(sourcePath)
+    await assertCanonicalRuntimeMigrationWritersStopped(targetPath)
+    const recovery = new RuntimeDataDirRecovery({
+      homeDir,
+      userDataPath,
+      platform: process.platform,
+      log: startupMigrationLog,
+      assertRuntimeInactive: (dataDir) => assertNoActiveKunRuntimeUsingDataDir(dataDir)
+    })
+    const initialStatus = await recovery.refresh()
+    let relaunchScheduled = false
+    const scheduleRelaunch = (delayMs = 750): void => {
+      if (relaunchScheduled) return
+      releaseRuntimeDataRecoveryMigrationLock()
+      relaunchScheduled = true
+      const relaunch = (): void => {
+        app.relaunch()
+        app.exit(0)
+      }
+      if (delayMs <= 0) relaunch()
+      else setTimeout(relaunch, delayMs).unref?.()
+    }
+    const finishRecovery = (relaunchDelayMs = 750): void => {
+      acceptCompletedRuntimeDataRecovery()
+      scheduleRelaunch(relaunchDelayMs)
+    }
+
+    if (initialStatus.state === 'candidate-ready' && initialStatus.recommendedCandidateId) {
+      const completed = await recovery.execute({
+        action: 'restore',
+        generation: initialStatus.generation,
+        candidateId: initialStatus.recommendedCandidateId
+      })
+      if (completed.state !== 'completed') {
+        throw new Error('Automatic Runtime data recovery did not reach a completed state.')
+      }
+      finishRecovery(0)
+      return
+    }
+    if (initialStatus.state === 'new-install') {
+      const completed = await recovery.execute({
+        action: 'initialize-new-install',
+        generation: initialStatus.generation,
+        confirmation: 'initialize-empty-new-install'
+      })
+      if (completed.state !== 'completed') {
+        throw new Error('Runtime data initialization did not reach a completed state.')
+      }
+      finishRecovery(0)
+      return
+    }
+
+    const window = createRuntimeDataRecoveryWindow()
+    window.on('closed', () => {
+      try {
+        releaseRuntimeDataRecoveryMigrationLock()
+      } catch (error) {
+        console.error('[kun-gui] failed to release Runtime data recovery lock:', error)
+      }
+      if (!relaunchScheduled) app.quit()
+    })
+    new RuntimeDataRecoveryController({
+      recovery,
+      getMainWindow: () => mainWindow,
+      onCompleted: () => finishRecovery()
+    }).registerIpc()
+    app.on('second-instance', () => {
+      if (window.isDestroyed()) return
+      if (window.isMinimized()) window.restore()
+      window.show()
+      window.focus()
+    })
+    app.on('activate', () => {
+      if (window.isDestroyed()) return
+      window.show()
+      window.focus()
+    })
+    await loadRuntimeDataRecoveryWindow(window)
+  } catch (error) {
+    try {
+      releaseRuntimeDataRecoveryMigrationLock()
+    } catch (releaseError) {
+      console.error('[kun-gui] failed to release Runtime data recovery lock:', releaseError)
+    }
+    throw error
+  }
 }
 
 async function runStorageRelocationMaintenance(productionSettingsPath: string): Promise<void> {
@@ -2442,10 +2756,31 @@ app.whenReady().then(async () => {
     await runStorageRelocationMaintenance(productionSettingsPath)
     return
   }
+  if (appIdentity.flavor === 'production') {
+    traceStartup('runtime data migration:start')
+    const migrationResult = await runStartupLegacyMigrations()
+    traceStartup('runtime data migration:done', {
+      status: migrationResult.status
+    })
+    if (migrationResult.status === 'blocked') {
+      traceStartup('runtime data recovery maintenance:start', {
+        message: migrationResult.message
+      })
+      await runRuntimeDataRecoveryMaintenance()
+      return
+    }
+  }
+  const managerDataDir = await resolveKunManagerDataDirFromSettings(productionSettingsPath)
   const serviceManager = await ensureKunServiceManager({
-    settingsPath: productionSettingsPath
+    settingsPath: productionSettingsPath,
+    dataDir: managerDataDir
   })
   activeServiceManager = serviceManager
+  // Main still hosts a handful of legacy model consumers. Point their
+  // Registry/credential projection at the exact Manager-owned data plane used
+  // by both Runtime flavors; a process-local AtomicJson fallback would bypass
+  // durable credential fences and race Runtime OAuth refreshes.
+  configureKunManagerDataPlaneForCurrentProcess(serviceManager)
   const sharedSettingsBackend = new ManagerRevisionedDocumentClient(serviceManager, 'settings')
   const sharedClientStateDocument = new ManagerRevisionedDocumentClient(serviceManager, 'client-state')
   ipcMain.handle('shared-client-state:get', async () => {
@@ -3077,6 +3412,11 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', (event) => {
+  try {
+    releaseRuntimeDataRecoveryMigrationLock()
+  } catch (error) {
+    console.error('[kun-gui] failed to release Runtime data recovery lock during quit:', error)
+  }
   runtimeShutdown.requestQuit()
   protectedCredentialSurface?.dispose()
   stopRuntimeWatchdog()

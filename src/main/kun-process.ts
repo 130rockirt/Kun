@@ -12,6 +12,7 @@ import {
   getModelProviderSettings,
   resolveModelProviderProxyUrl,
   resolveKunRuntimeSettings,
+  normalizeAppSettings,
   type ModelProviderProfileV1,
   type KunRuntimeSettingsV1,
   type AppSettingsV1
@@ -108,7 +109,9 @@ import { syncGuiManagedKunConfig } from './runtime/kun-runtime-config-service'
 import { assertManagedKunDataDirIsCurrent } from './kun-data-dir-paths'
 import {
   ensureSharedRuntime,
+  inspectSharedRuntime,
   resolveSharedRuntime,
+  stopSharedRuntime,
   type SharedRuntimeConnection
 } from '../../kun/src/cli/shared-runtime.js'
 import {
@@ -117,8 +120,12 @@ import {
 } from '../../kun/src/cli/runtime-flavor.js'
 import {
   ensureServiceManager,
+  requestManagerJson,
+  resolveServiceManager,
   type ServiceManagerConnection
 } from '../../kun/src/manager/manager-client.js'
+import { sameCanonicalPath } from '../../kun/src/manager/canonical-path.js'
+import { configureManagerAtomicJsonClient } from '../../kun/src/extensions/atomic-json.js'
 
 export { subagentProfilesForRuntime } from './runtime/kun-runtime-subagent-config'
 export { syncGuiManagedKunConfig } from './runtime/kun-runtime-config-service'
@@ -127,12 +134,91 @@ export type { KunUnexpectedExitInfo } from './runtime/kun-process-controller'
 export { resolveKunStartupTimeoutMs } from './runtime/kun-runtime-health-monitor'
 
 let serviceManagerSettingsPath: string | undefined
+let mainManagerBinding: ServiceManagerConnection | undefined
+
+/** Read-only authority selection performed before the Manager opens settings. */
+export async function resolveKunManagerDataDirFromSettings(
+  settingsPath: string
+): Promise<string> {
+  try {
+    const parsed = JSON.parse(await readFile(settingsPath, 'utf8')) as unknown
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return defaultKunDataDir()
+    const settings = normalizeAppSettings(parsed as AppSettingsV1)
+    return resolveKunDataDir(resolveKunRuntimeSettings(settings))
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === 'ENOENT' || error instanceof SyntaxError) {
+      return defaultKunDataDir()
+    }
+    throw error
+  }
+}
+
+export async function handoffExistingKunServiceManagerForDataDir(
+  existing: ServiceManagerConnection,
+  dataDir: string,
+  settingsPath: string,
+  overrides: {
+    inspect?: typeof inspectSharedRuntime
+    stop?: typeof stopSharedRuntime
+    shutdown?: () => Promise<void>
+    waitForExit?: (pid: number, timeoutMs: number) => Promise<boolean>
+  } = {}
+): Promise<void> {
+  if (
+    sameCanonicalPath(existing.discovery.dataDir, dataDir) &&
+    sameCanonicalPath(existing.discovery.settingsPath, settingsPath)
+  ) return
+  if (!sameCanonicalPath(existing.discovery.settingsPath, settingsPath)) {
+    throw new Error('Kun Service Manager owns a different canonical settings path')
+  }
+  const inspect = overrides.inspect ?? inspectSharedRuntime
+  const stop = overrides.stop ?? stopSharedRuntime
+  for (const runtimeFlavor of ['production', 'development'] as const) {
+    const inspected = await inspect(existing.discovery.dataDir, fetch, {
+      runtimeFlavor,
+      manager: existing
+    })
+    if (!inspected) continue
+    if (!inspected.connection || inspected.connection.activeTurnCount === undefined) {
+      throw new Error(`Kun ${runtimeFlavor} Runtime could not be verified for a safe data-directory handoff`)
+    }
+    if (inspected.connection.activeTurnCount > 0) {
+      throw new Error(`Kun ${runtimeFlavor} Runtime still has active turns; custom data-directory handoff was deferred`)
+    }
+  }
+  await Promise.all((['production', 'development'] as const).map((runtimeFlavor) =>
+    stop(existing.discovery.dataDir, fetch, {
+      runtimeFlavor,
+      manager: existing
+    })
+  ))
+  if (overrides.shutdown) await overrides.shutdown()
+  else await requestManagerJson(existing, '/v1/manager/shutdown', {
+      method: 'POST',
+      body: { instanceId: existing.discovery.instanceId },
+      timeoutMs: 10_000
+    })
+  if (!(await (overrides.waitForExit ?? waitForPidExit)(existing.discovery.pid, 15_000))) {
+    throw new Error('Kun Service Manager did not exit during custom data-directory handoff')
+  }
+}
+
+async function handoffMismatchedKunServiceManager(
+  dataDir: string,
+  settingsPath: string
+): Promise<void> {
+  const existing = await resolveServiceManager()
+  if (!existing) return
+  await handoffExistingKunServiceManagerForDataDir(existing, dataDir, settingsPath)
+}
 
 export async function ensureKunServiceManager(input: {
   dataDir?: string
   settingsPath: string
 }): Promise<ServiceManagerConnection> {
   serviceManagerSettingsPath = input.settingsPath
+  const dataDir = input.dataDir ?? defaultKunDataDir()
+  await handoffMismatchedKunServiceManager(dataDir, input.settingsPath)
   const resolution = resolveKunExecutable(appRoot(), '')
   const serveEntry = resolution.args[0]
   if (!serveEntry || !existsSync(serveEntry)) {
@@ -142,14 +228,14 @@ export async function ensureKunServiceManager(input: {
   }
   const managerEntry = join(dirname(serveEntry), '..', 'manager', 'manager-entry.js')
   const flavor = resolveCliRuntimeFlavor({ env: process.env })
-  return ensureServiceManager({
+  const manager = await ensureServiceManager({
     flavor,
     allowDevelopmentBootstrap: allowsDevelopmentManagerBootstrap({
       flavor,
       env: process.env,
       isPackaged: app.isPackaged
     }),
-    dataDir: input.dataDir ?? defaultKunDataDir(),
+    dataDir,
     settingsPath: input.settingsPath,
     launch: {
       command: resolveNodeScriptCommand(process.execPath),
@@ -157,6 +243,24 @@ export async function ensureKunServiceManager(input: {
       runAsNode: true
     }
   })
+  return configureKunManagerDataPlaneForCurrentProcess(manager)
+}
+
+/**
+ * Makes Main-process AtomicJson consumers join the Manager-owned data plane.
+ * This must run before constructing a Main Registry or credential store.
+ */
+export function configureKunManagerDataPlaneForCurrentProcess(
+  manager: ServiceManagerConnection
+): ServiceManagerConnection {
+  if (mainManagerBinding) mainManagerBinding.discovery = manager.discovery
+  else mainManagerBinding = { discovery: manager.discovery }
+  configureManagerAtomicJsonClient({
+    baseUrl: mainManagerBinding.discovery.baseUrl,
+    token: mainManagerBinding.discovery.managerToken,
+    dataDir: mainManagerBinding.discovery.dataDir
+  })
+  return mainManagerBinding
 }
 
 /**
@@ -358,7 +462,7 @@ export async function startKunSharedRuntime(
   const serveEntry = launch.args.find((argument) => /serve-entry\.js$/u.test(argument))
   if (!serveEntry) throw new Error('Kun service-manager entry could not be resolved from the runtime launch')
   const managerEntry = join(dirname(serveEntry), '..', 'manager', 'manager-entry.js')
-  const manager = await ensureServiceManager({
+  const discoveredManager = await ensureServiceManager({
     flavor: runtimeFlavor,
     allowDevelopmentBootstrap: allowsDevelopmentManagerBootstrap({
       flavor: runtimeFlavor,
@@ -373,6 +477,7 @@ export async function startKunSharedRuntime(
       runAsNode: true
     }
   })
+  const manager = configureKunManagerDataPlaneForCurrentProcess(discoveredManager)
   return ensureSharedRuntime({
     dataDir: launch.dataDir,
     runtimeFlavor,

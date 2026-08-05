@@ -17,7 +17,9 @@ export type PendingSharedProviderCatalog = {
 
 export type PendingSharedProviderCredential = {
   generation: number
+  operationToken: string
   credential: string
+  fence?: Promise<void>
 }
 
 export type PendingSharedProviderDeletion = {
@@ -44,6 +46,7 @@ export const sharedProviderMutationCoordinator = {
 
 let mutationTail: Promise<void> = Promise.resolve()
 const catalogDrains = new Map<string, { generation: number; promise: Promise<unknown> }>()
+const credentialMutationClientId = createCredentialMutationClientId()
 
 export function enqueueSharedModelMutation<T>(operation: () => Promise<T>): Promise<T> {
   const result = mutationTail.then(operation, operation)
@@ -68,31 +71,69 @@ export function drainSharedProviderCatalogMutation<T>(
 
 export function stageSharedProviderCredentialMutation(
   providerId: string,
-  credential: string
+  credential: string,
+  fence?: (operationToken: string) => Promise<void>
 ): PendingSharedProviderCredential {
-  const pending = {
-    generation: sharedProviderMutationCoordinator.credentialGeneration + 1,
+  const generation = sharedProviderMutationCoordinator.credentialGeneration + 1
+  const operationToken = credentialOperationToken(generation)
+  const pending: PendingSharedProviderCredential = {
+    generation,
+    operationToken,
     credential
   }
   sharedProviderMutationCoordinator.credentialGeneration = pending.generation
   sharedProviderMutationCoordinator.pendingCredentials.set(providerId, pending)
+  if (fence) {
+    pending.fence = fence(operationToken)
+    void pending.fence.catch(() => undefined)
+  }
   return pending
 }
 
 export async function drainSharedProviderCredentialMutation<T>(
   providerId: string,
   generation: number,
-  operation: (credential: string) => Promise<T>
+  operation: (
+    credential: string,
+    operationToken: string,
+    isCurrent: () => boolean
+  ) => Promise<T>
 ): Promise<{ value: T; committed: boolean } | null> {
   return enqueueSharedModelMutation(async () => {
     const pending = sharedProviderMutationCoordinator.pendingCredentials.get(providerId)
     if (!pending || pending.generation !== generation) return null
-    const value = await operation(pending.credential)
+    await pending.fence
+    if (sharedProviderMutationCoordinator.pendingCredentials.get(providerId)?.generation !== generation) {
+      return null
+    }
+    const isCurrent = (): boolean =>
+      sharedProviderMutationCoordinator.pendingCredentials.get(providerId)?.generation === generation
+    const value = await operation(pending.credential, pending.operationToken, isCurrent)
     const current = sharedProviderMutationCoordinator.pendingCredentials.get(providerId)
     const committed = current?.generation === generation
     if (committed) sharedProviderMutationCoordinator.pendingCredentials.delete(providerId)
     return { value, committed }
   })
+}
+
+function credentialOperationToken(generation: number): string {
+  return `credential:${credentialMutationClientId}:${generation}`
+}
+
+function createCredentialMutationClientId(): string {
+  if (typeof globalThis.crypto?.randomUUID === 'function') return globalThis.crypto.randomUUID()
+  const bytes = new Uint8Array(16)
+  if (typeof globalThis.crypto?.getRandomValues === 'function') {
+    globalThis.crypto.getRandomValues(bytes)
+  } else {
+    for (let index = 0; index < bytes.length; index += 1) {
+      bytes[index] = Math.floor(Math.random() * 256)
+    }
+  }
+  bytes[6] = (bytes[6]! & 0x0f) | 0x40
+  bytes[8] = (bytes[8]! & 0x3f) | 0x80
+  const hex = [...bytes].map((value) => value.toString(16).padStart(2, '0')).join('')
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
 }
 
 export function replaceMapContents<K, V>(target: Map<K, V>, source: ReadonlyMap<K, V>): void {

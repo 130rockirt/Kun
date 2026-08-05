@@ -73,6 +73,8 @@ function fakeRun(input: {
 
 function harness(input: {
   apiKey?: string
+  credentialSourceId?: string
+  resolveCredentialSource?: CursorSdkRuntimeDeps['resolveCredentialSource']
   run?: Run
   sendResults?: Array<Run | Error>
   thread?: Record<string, unknown>
@@ -165,7 +167,8 @@ function harness(input: {
     providerConfigs: {
       'cursor-subscription': {
         kind: 'cursor-sdk',
-        apiKey: input.apiKey ?? 'cursor-secret'
+        apiKey: input.apiKey ?? 'cursor-secret',
+        ...(input.credentialSourceId ? { credentialSourceId: input.credentialSourceId } : {})
       }
     },
     providerIds: new Set(['cursor-subscription']),
@@ -217,6 +220,9 @@ function harness(input: {
       if (input.loadError) throw input.loadError
       return sdk
     },
+    ...(input.resolveCredentialSource
+      ? { resolveCredentialSource: input.resolveCredentialSource }
+      : {}),
     debugSink: input.debugSink,
     attachmentStore: input.attachmentStore,
     turnLimits: input.turnLimits,
@@ -1193,6 +1199,37 @@ describe('CursorSdkRuntime', () => {
       status: 'failed',
       code: 'cursor_sdk_missing_credential'
     }))
+  })
+
+  test('re-resolves a managed credential for every turn on the same Runtime', async () => {
+    let authoritativeKey = ''
+    const resolveCredentialSource = vi.fn(async () =>
+      authoritativeKey ? { apiKey: authoritativeKey } : null)
+    const h = harness({
+      apiKey: 'stale-constructor-key',
+      credentialSourceId: 'model-connection:cursor-subscription',
+      resolveCredentialSource
+    })
+
+    await expect(h.runtime.runTurn(
+      'thread_1',
+      'turn_1',
+      new AbortController().signal,
+      'cursor-subscription'
+    )).resolves.toBe('failed')
+    expect(h.createOptions).toEqual([])
+
+    authoritativeKey = 'authoritative-cursor-key'
+    await expect(h.runtime.runTurn(
+      'thread_1',
+      'turn_1',
+      new AbortController().signal,
+      'cursor-subscription'
+    )).resolves.toBe('completed')
+    expect(h.createOptions).toContainEqual(expect.objectContaining({
+      apiKey: 'authoritative-cursor-key'
+    }))
+    expect(resolveCredentialSource).toHaveBeenCalledTimes(2)
   })
 
   test('cancels an active SDK run when the Kun turn aborts', async () => {

@@ -1,0 +1,56 @@
+{
+  "version": "0.2.34",
+  "tagObject": "11fbd261afd298cc3fcb19dd322dc35ec9e1d662",
+  "commit": "d86d44455a554b217a1ea03d62c37517b849dee7",
+  "observedShape": "v3 candidate-copied phase with an independent staging tree",
+  "entries": [
+    {
+      "path": "user-data/kun-settings.json",
+      "content": "{\"version\":1,\"agents\":{\"kun\":{\"dataDir\":\"~/.deepseekgui/kun\"}}}\n"
+    },
+    {
+      "path": "home/.deepseekgui/kun/config.json",
+      "content": "{\"serve\":{}}\n"
+    },
+    {
+      "path": "home/.deepseekgui/kun/threads/thr_0234/metadata.jsonl",
+      "content": "{\"id\":\"thr_0234\"}\n"
+    },
+    {
+      "path": "home/.kun/data.history-preserving-staging-20260701T000000000Z.bak/config.json",
+      "content": "{\"serve\":{}}\n"
+    },
+    {
+      "path": "home/.kun/data.history-preserving-staging-20260701T000000000Z.bak/threads/thr_0234/metadata.jsonl",
+      "content": "{\"id\":\"thr_0234\"}\n"
+    }
+  ],
+  "journal": {
+    "file": "kun-runtime-data-migration-v3.json",
+    "document": {
+      "schemaVersion": 3,
+      "phase": "candidate-copied",
+      "provenance": "original-legacy-source",
+      "sourcePath": "$HOME/.deepseekgui/kun",
+      "targetPath": "$HOME/.kun/data",
+      "stagingPath": "$HOME/.kun/data.history-preserving-staging-20260701T000000000Z.bak",
+      "settingsSourcePath": "$USER_DATA/kun-settings.json",
+      "settingsWritePath": "$USER_DATA/kun-settings.json",
+      "settingsBackupPaths": [],
+      "sourceThreadIds": ["thr_0234"],
+      "sourceInventory": "$SOURCE_INVENTORY",
+      "sourceFingerprint": "$SOURCE_FINGERPRINT",
+      "salvaged": 0,
+      "conflicts": [],
+      "startedAt": "2026-07-01T00:00:00.000Z",
+      "updatedAt": "2026-07-01T00:00:00.000Z"
+    }
+  },
+  "expected": {
+    "scannerState": "candidate-ready",
+    "candidateKinds": ["legacy"],
+    "equivalentCopies": 1,
+    "invalidEvidenceCount": 1,
+    "runnerStatus": "completed"
+  }
+}

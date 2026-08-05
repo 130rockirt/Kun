@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
@@ -14,6 +14,7 @@ import {
   stopSharedRuntime
 } from './shared-runtime.js'
 import type { ServiceManagerConnection } from '../manager/manager-client.js'
+import { acquireRuntimeDataDirMigrationLock } from '../server/runtime-data-dir-migration-lock.js'
 
 function record(overrides: Partial<RuntimeDiscoveryRecord> = {}): RuntimeDiscoveryRecord {
   return {
@@ -52,6 +53,75 @@ function managerConnection(dataDir: string): ServiceManagerConnection {
 }
 
 describe('shared runtime discovery validation', () => {
+  it('does not recreate a missing migration target or its logs while launch is fenced', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-shared-runtime-migration-'))
+    const dataDir = join(root, 'missing', 'data')
+    const migration = await acquireRuntimeDataDirMigrationLock(dataDir)
+    try {
+      await expect(ensureSharedRuntime({
+        dataDir,
+        controlDir: join(root, 'control'),
+        fetch: (async () => new Response('', { status: 404 })) as typeof fetch,
+        launch: {
+          command: process.execPath,
+          args: ['-e', 'process.exit(99)'],
+          runAsNode: false
+        }
+      })).rejects.toThrow(/migration is active/)
+      await expect(stat(dataDir)).rejects.toMatchObject({ code: 'ENOENT' })
+      await expect(stat(join(dataDir, 'logs'))).rejects.toMatchObject({ code: 'ENOENT' })
+    } finally {
+      await migration.release()
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('preserves stale production discovery while migration owns the data directory', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'kun-shared-runtime-stop-migration-'))
+    const discoveryPath = join(dataDir, 'runtime.json')
+    const stale = record({ pid: 2_147_483_647 })
+    await writeFile(discoveryPath, `${JSON.stringify(stale, null, 2)}\n`, 'utf8')
+    const migration = await acquireRuntimeDataDirMigrationLock(dataDir)
+    try {
+      await expect(stopSharedRuntime(dataDir)).rejects.toThrow(/migration is active/)
+      expect(JSON.parse(await readFile(discoveryPath, 'utf8'))).toMatchObject({
+        instanceId: stale.instanceId,
+        pid: stale.pid
+      })
+    } finally {
+      await migration.release()
+    }
+
+    try {
+      await expect(stopSharedRuntime(dataDir)).resolves.toBe(false)
+      await expect(readFile(discoveryPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    } finally {
+      await rm(dataDir, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps development control-dir discovery cleanup outside the production migration fence', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-shared-runtime-dv-stop-'))
+    const dataDir = join(root, 'data')
+    const controlDir = join(root, 'control')
+    await mkdir(dataDir, { recursive: true })
+    await mkdir(controlDir, { recursive: true })
+    const discoveryPath = join(controlDir, 'runtime.development.json')
+    const stale = record({ pid: 2_147_483_647, flavor: 'development' })
+    await writeFile(discoveryPath, `${JSON.stringify(stale, null, 2)}\n`, 'utf8')
+    const migration = await acquireRuntimeDataDirMigrationLock(dataDir)
+    try {
+      await expect(stopSharedRuntime(dataDir, fetch, {
+        runtimeFlavor: 'development',
+        controlDir
+      })).resolves.toBe(false)
+      await expect(readFile(discoveryPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    } finally {
+      await migration.release()
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('uses the GUI-configured data dir by default while preserving explicit precedence', async () => {
     const root = await mkdtemp(join(tmpdir(), 'kun-runtime-gui-data-dir-'))
     const settingsPath = join(root, 'gui', 'kun-settings.json')

@@ -28,6 +28,7 @@ import { homedir } from 'node:os'
 import { basename, join, sep } from 'node:path'
 import { stdin as processStdin, stdout as processStdout } from 'node:process'
 import { redactSecrets, redactSecretText } from '../config/secret-redaction.js'
+import { withRuntimeDataDirAncillaryWriter } from '../server/runtime-data-dir-lease.js'
 import type { AttachmentMetadata } from '../contracts/attachments.js'
 import type { TurnItem } from '../contracts/items.js'
 import type { ModelReasoningEffort } from '../contracts/capabilities.js'
@@ -40,11 +41,12 @@ import {
   type KunToolPermissionMode,
   type SandboxMode
 } from '../contracts/policy.js'
-import type {
-  ClaudeSdkInstallStatus,
-  ModelConnectionOAuthStatus,
-  ModelConnectionProfile,
-  ModelConnectionSnapshot
+import {
+  isModelConnectionProfileUsable,
+  type ClaudeSdkInstallStatus,
+  type ModelConnectionOAuthStatus,
+  type ModelConnectionProfile,
+  type ModelConnectionSnapshot
 } from '../contracts/model-connections.js'
 import type { TuiCommand, TuiCommandDefinition } from './commands.js'
 import { parseTuiCommand, TUI_COMMAND_DEFINITIONS, TUI_SLASH_COMMANDS } from './commands.js'
@@ -238,6 +240,32 @@ export { TUI_SLASH_COMMANDS } from './commands.js'
 
 type ExclusiveRouteHandle = {
   hide: () => void
+}
+
+function localSharePath(dataDir: string, threadId: string): string {
+  return join(dataDir, 'tui', 'shares', `${threadId}.md`)
+}
+
+export async function writeLocalShareSnapshot(
+  dataDir: string,
+  threadId: string,
+  markdown: string
+): Promise<string> {
+  const path = localSharePath(dataDir, threadId)
+  await withRuntimeDataDirAncillaryWriter(dataDir, async () => {
+    await mkdir(join(dataDir, 'tui', 'shares'), { recursive: true, mode: 0o700 })
+    await writeFile(path, markdown, { encoding: 'utf8', mode: 0o600 })
+  })
+  return path
+}
+
+export async function removeLocalShareSnapshot(
+  dataDir: string,
+  threadId: string
+): Promise<void> {
+  await withRuntimeDataDirAncillaryWriter(dataDir, async () => {
+    await unlink(localSharePath(dataDir, threadId))
+  })
 }
 
 /** pi-tui application shell. It deliberately uses the normal screen buffer. */
@@ -1160,10 +1188,6 @@ export class PiTuiApplication {
     }
   }
 
-  private sharePath(threadId: string): string {
-    return join(this.controller.options.dataDir, 'tui', 'shares', `${threadId}.md`)
-  }
-
   private async shareThread(): Promise<void> {
     const projection = this.controller.state.projection
     if (!projection) {
@@ -1171,9 +1195,11 @@ export class PiTuiApplication {
       return
     }
     try {
-      const path = this.sharePath(projection.thread.id)
-      await mkdir(join(this.controller.options.dataDir, 'tui', 'shares'), { recursive: true, mode: 0o700 })
-      await writeFile(path, renderThreadMarkdown(projection.thread), { encoding: 'utf8', mode: 0o600 })
+      const path = await writeLocalShareSnapshot(
+        this.controller.options.dataDir,
+        projection.thread.id,
+        renderThreadMarkdown(projection.thread)
+      )
       this.controller.notify(`Local share snapshot updated: ${path}`)
     } catch (error) {
       this.controller.notify(safeError(error), 'error')
@@ -1187,7 +1213,10 @@ export class PiTuiApplication {
       return
     }
     try {
-      await unlink(this.sharePath(projection.thread.id))
+      await removeLocalShareSnapshot(
+        this.controller.options.dataDir,
+        projection.thread.id
+      )
       this.controller.notify('Local share snapshot removed.')
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') this.controller.notify('No local share snapshot exists.')
@@ -5187,6 +5216,14 @@ function connectionPresetForProfile(profile: ModelConnectionProfile): Connection
     ))
 }
 
+function credentialAvailabilityLabel(
+  profile: Pick<ModelConnectionProfile, 'configured' | 'credentialStatus'>
+): string {
+  if (profile.credentialStatus === 'missing') return 'Credential missing'
+  if (profile.credentialStatus === 'unreadable') return 'Credential unreadable'
+  return isModelConnectionProfileUsable(profile) ? 'Connected' : 'Needs configuration'
+}
+
 const CONNECT_ENDPOINT_FORMATS = ['chat_completions', 'responses', 'messages', 'custom_endpoint'] as const
 
 type ConnectField = 'id' | 'name' | 'baseUrl' | 'endpointFormat' | 'credential' | 'models'
@@ -5528,8 +5565,9 @@ class ConnectDialog implements Component, Focusable {
   invalidate(): void { this.search.invalidate() }
 
   private renderConnections(width: number): string[] {
+    const connected = this.snapshot.providers.filter(isModelConnectionProfileUsable).length
     const body = [
-      sectionLabel('Connections', width, `${this.snapshot.providers.length} configured`),
+      sectionLabel('Connections', width, `${connected}/${this.snapshot.providers.length} connected`),
       selectionRow(
         `${cyan('+')} ${bold('Add a provider')}`,
         'subscriptions or API',
@@ -5539,13 +5577,15 @@ class ConnectDialog implements Component, Focusable {
     ]
     this.snapshot.providers.forEach((profile, index) => {
       const selected = this.connectionIndex === index + 1
+      const usable = isModelConnectionProfileUsable(profile)
       const defaultConnection = profile.id === this.snapshot.defaultProviderId &&
         profile.accountId === this.snapshot.defaultAccountId
       body.push(
         selectionRow(
-          `${statusGlyph(profile.configured ? 'success' : 'warning')} ${sanitizeTerminalText(profile.name)}`,
+          `${statusGlyph(usable ? 'success' : 'warning')} ${sanitizeTerminalText(profile.name)}`,
           [
             profile.selectedModel ? sanitizeTerminalText(profile.selectedModel) : 'needs configuration',
+            !usable ? credentialAvailabilityLabel(profile) : '',
             defaultConnection ? 'default' : ''
           ].filter(Boolean).join(' · '),
           width,
@@ -5640,8 +5680,9 @@ class ConnectDialog implements Component, Focusable {
       } else {
         const profile = this.snapshot.providers[this.connectionIndex - 1]
         const preset = profile ? connectionPresetForProfile(profile) : undefined
-        if (profile?.configured) this.management = { profile, mode: 'menu', index: 0 }
-        else if (preset && authenticationStrategy(preset.authFlow) !== 'secret') {
+        if (profile && isModelConnectionProfileUsable(profile)) {
+          this.management = { profile, mode: 'menu', index: 0 }
+        } else if (preset && authenticationStrategy(preset.authFlow) !== 'secret') {
           this.choosePreset(preset)
         } else if (profile?.kind === 'http') {
           this.management = {
@@ -5730,7 +5771,7 @@ class ConnectDialog implements Component, Focusable {
       const actions = managementActions(profile, connectionPresetForProfile(profile))
       return pageFrame({
         path: ['KUN', 'Connect', profile.name],
-        right: profile.configured ? 'Connected' : 'Needs configuration',
+        right: isModelConnectionProfileUsable(profile) ? 'Connected' : credentialAvailabilityLabel(profile),
         description: [
           profile.selectedModel ? `Model ${profile.selectedModel}.` : 'No model selected.',
           this.snapshot.defaultProviderId === profile.id ? ' This is the shared default.' : ''
@@ -6304,7 +6345,7 @@ class ModelDialog implements Component, Focusable {
     accountId: string
     model: string
     label: string
-    configured: boolean
+    usable: boolean
   }> = []
 
   constructor(
@@ -6341,7 +6382,7 @@ class ModelDialog implements Component, Focusable {
       accountId: string
       model: string
       label: string
-      configured: boolean
+      usable: boolean
     }>()
     for (const provider of this.snapshot.providers) {
       const models = new Set(provider.models)
@@ -6354,7 +6395,7 @@ class ModelDialog implements Component, Focusable {
           accountId: provider.accountId,
           model,
           label: `${provider.name} · ${model}`,
-          configured: provider.configured
+          usable: isModelConnectionProfileUsable(provider)
         })
       }
     }
@@ -6378,7 +6419,7 @@ class ModelDialog implements Component, Focusable {
     accountId: string
     model: string
     label: string
-    configured: boolean
+    usable: boolean
   }> {
     const query = this.input.getValue().trim().toLowerCase()
     const entries = this.providerFilter
@@ -6412,10 +6453,11 @@ class ModelDialog implements Component, Focusable {
       this.index = Math.min(this.index, Math.max(0, providers.length - 1))
       const rows = visibleWindow(providers, this.index, 14).map(({ value: provider, index }) => {
         const selected = index === this.index
+        const usable = isModelConnectionProfileUsable(provider)
         const count = new Set([...provider.models, ...(provider.selectedModel ? [provider.selectedModel] : [])]).size
         return selectionRow(
-          `${statusGlyph(provider.configured ? 'success' : 'warning')} ${sanitizeTerminalText(provider.name)}  ${dim(provider.accountId)}`,
-          `${count} model${count === 1 ? '' : 's'}${provider.configured ? '' : ' · connect'}`,
+          `${statusGlyph(usable ? 'success' : 'warning')} ${sanitizeTerminalText(provider.name)}  ${dim(provider.accountId)}`,
+          `${count} model${count === 1 ? '' : 's'}${usable ? '' : ` · ${credentialAvailabilityLabel(provider)}`}`,
           inner,
           selected
         )
@@ -6453,7 +6495,7 @@ class ModelDialog implements Component, Focusable {
       }
       rows.push(selectionRow(
         `${favorite ? yellow('★') : dim('☆')} ${sanitizeTerminalText(entry.label)}`,
-        `${entry.providerId}${active ? ' · current' : ''}${entry.configured ? '' : ' · connect'}`,
+        `${entry.providerId}${active ? ' · current' : ''}${entry.usable ? '' : ' · connect'}`,
         inner,
         selected
       ))
@@ -6527,9 +6569,9 @@ class ModelDialog implements Component, Focusable {
     providerId: string
     accountId: string
     model: string
-    configured: boolean
+    usable: boolean
   }): Promise<void> {
-    if (!entry.configured) {
+    if (!entry.usable) {
       this.error = `${entry.providerId} is not connected. Run /connect to configure it before selecting this model.`
       this.tui.requestRender()
       return

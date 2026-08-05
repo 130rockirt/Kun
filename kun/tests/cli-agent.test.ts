@@ -1,7 +1,8 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { PassThrough } from 'node:stream'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   runAgentCommand,
   splitKunCliCommand,
@@ -14,6 +15,11 @@ import type { TurnItem } from '../src/contracts/items.js'
 import { CapabilityRegistry } from '../src/adapters/tool/capability-registry.js'
 import { LocalToolHost } from '../src/adapters/tool/local-tool-host.js'
 import { GOAL_TOOL_NAMES } from '../src/adapters/tool/goal-tools.js'
+import {
+  acquireRuntimeDataDirMigrationLock,
+  runtimeDataDirClaimsPath,
+  runtimeDataDirOwnerPath
+} from '../src/server/runtime-data-dir-migration-lock.js'
 
 type Capture = {
   stdout: string
@@ -117,7 +123,10 @@ describe('Kun agent CLI commands', () => {
   })
 
   afterEach(async () => {
-    await rm(dataDir, { recursive: true, force: true })
+    await Promise.all([
+      rm(dataDir, { recursive: true, force: true }),
+      rm(runtimeDataDirClaimsPath(dataDir), { recursive: true, force: true })
+    ])
   })
 
   it('splits explicit commands and uses flags for the default TUI', () => {
@@ -169,6 +178,29 @@ describe('Kun agent CLI commands', () => {
     const item = JSON.parse(c.stdout) as { kind: string; output: { echoed?: string } }
     expect(item.kind).toBe('tool_result')
     expect(item.output.echoed).toBe('hi')
+  })
+
+  it('keeps a direct chat Runtime fenced from migration until shutdown', async () => {
+    const stdin = new PassThrough()
+    const c = capture({ stdin })
+    const command = runAgentCommand('chat', [
+      '--data-dir',
+      dataDir,
+      '--workspace',
+      dataDir
+    ], c.io)
+
+    await vi.waitFor(async () => {
+      await expect(readFile(runtimeDataDirOwnerPath(dataDir), 'utf8'))
+        .resolves.toContain(String(process.pid))
+    })
+    await expect(acquireRuntimeDataDirMigrationLock(dataDir))
+      .rejects.toThrow(/already owned by active process/)
+
+    stdin.end('/exit\n')
+    await expect(command).resolves.toBe(ServeExitCode.ok)
+    const migration = await acquireRuntimeDataDirMigrationLock(dataDir)
+    await migration.release()
   })
 
   it('lists dynamic runtime tools from kun exec', async () => {

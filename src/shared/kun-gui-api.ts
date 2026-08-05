@@ -42,6 +42,7 @@ import type {
   BrowserUseViewState
 } from './browser-use'
 import type { StorageRelocationApi } from './storage-relocation'
+import type { RuntimeDataRecoveryApi } from './runtime-data-recovery'
 import type {
   ClipboardImageReadResult,
   LocalPdfTextReadResult,
@@ -580,6 +581,8 @@ export type KunGuiApi = ExtensionIpcApi & {
   }
   /** Windows production storage-root relocation and recovery surface. */
   storageRelocation: StorageRelocationApi
+  /** One-time, path-opaque Runtime migration recovery surface. */
+  runtimeDataRecovery: RuntimeDataRecoveryApi
   dataMigration: {
     pickExportPackage: (defaultPath?: string) => Promise<DataMigrationPathPickResult>
     pickImportPackage: (defaultPath?: string) => Promise<DataMigrationPathPickResult>

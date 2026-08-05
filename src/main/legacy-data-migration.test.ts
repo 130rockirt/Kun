@@ -1,9 +1,10 @@
-import { lstat, mkdir, mkdtemp, readFile, readlink, rm, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, mkdtemp, readFile, readlink, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   HOME_DATA_MIGRATION_MAPPINGS,
+  legacyHomeDataMigrationRequiresExclusiveAccess,
   migrateLegacyHomeDataDirs,
   migrateLegacyUserDataDir,
   rewriteLegacyPathsInSettingsFile,
@@ -109,6 +110,74 @@ describe('migrateLegacyUserDataDir', () => {
 })
 
 describe('migrateLegacyHomeDataDirs', () => {
+  it('preflights only real directory or settings mutations', async () => {
+    const home = await makeTempRoot()
+    const userData = join(home, 'userData')
+    const mappings = HOME_DATA_MIGRATION_MAPPINGS.filter(
+      (mapping) => mapping.legacySegments[1] !== 'kun'
+    )
+    await mkdir(userData, { recursive: true })
+
+    expect(legacyHomeDataMigrationRequiresExclusiveAccess({
+      userDataPath: userData,
+      homeDir: home,
+      mappings
+    })).toBe(false)
+
+    const legacyWorkspace = join(home, '.deepseekgui', 'default_workspace')
+    const currentWorkspace = join(home, '.kun', 'default_workspace')
+    await mkdir(currentWorkspace, { recursive: true })
+    await mkdir(join(home, '.deepseekgui'), { recursive: true })
+    await symlink(currentWorkspace, legacyWorkspace)
+    await writeFile(
+      join(userData, 'kun-settings.json'),
+      JSON.stringify({ workspaceRoot: currentWorkspace }),
+      'utf8'
+    )
+    expect(legacyHomeDataMigrationRequiresExclusiveAccess({
+      userDataPath: userData,
+      homeDir: home,
+      mappings
+    })).toBe(false)
+
+    await writeFile(
+      join(userData, 'kun-settings.json'),
+      JSON.stringify({ workspaceRoot: legacyWorkspace }),
+      'utf8'
+    )
+    expect(legacyHomeDataMigrationRequiresExclusiveAccess({
+      userDataPath: userData,
+      homeDir: home,
+      mappings
+    })).toBe(true)
+  })
+
+  it('preflights a pending non-Runtime directory move but not an authority conflict', async () => {
+    const home = await makeTempRoot()
+    const userData = join(home, 'userData')
+    const mappings = HOME_DATA_MIGRATION_MAPPINGS.filter(
+      (mapping) => mapping.legacySegments[1] === 'claw'
+    )
+    const legacy = join(home, '.deepseekgui', 'claw')
+    const current = join(home, '.kun', 'claw')
+    await mkdir(legacy, { recursive: true })
+    await writeFile(join(legacy, 'old.txt'), 'old', 'utf8')
+
+    expect(legacyHomeDataMigrationRequiresExclusiveAccess({
+      userDataPath: userData,
+      homeDir: home,
+      mappings
+    })).toBe(true)
+
+    await mkdir(current, { recursive: true })
+    await writeFile(join(current, 'new.txt'), 'new', 'utf8')
+    expect(legacyHomeDataMigrationRequiresExclusiveAccess({
+      userDataPath: userData,
+      homeDir: home,
+      mappings
+    })).toBe(false)
+  })
+
   it('moves all known legacy dirs under ~/.kun and links the old locations', async () => {
     const home = await makeTempRoot()
     for (const child of ['kun', 'default_workspace', 'claw', 'write_workspace']) {

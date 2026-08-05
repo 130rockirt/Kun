@@ -19,6 +19,7 @@ import {
   commitSharedModelConnectionCatalog,
   createSharedModelMutationQueue,
   deleteSharedModelConnection,
+  fenceSharedModelConnectionCredential,
   projectSharedModelConnections,
   rebasePendingSharedProviderCatalog,
   reconcilePendingSharedProviderCatalogs,
@@ -26,12 +27,15 @@ import {
   reconcilePendingSharedProviderNames,
   replaceSharedModelConnectionCredential,
   selectSharedModelConnection,
+  sharedModelConnectionHasUsableCredential,
   sharedProvidersEligibleForSync,
   sharedProviderSetupNeedsApiKey
 } from './settings-section-providers'
 import {
+  drainSharedProviderCredentialMutation,
   enqueueSharedModelMutation,
   resetSharedProviderMutationCoordinatorForTests,
+  stageSharedProviderCredentialMutation,
   sharedProviderMutationCoordinator
 } from './shared-provider-mutation-coordinator'
 import { ProviderModelsManager } from './settings-section-provider-models'
@@ -44,6 +48,22 @@ const textModelProfile: ModelProviderModelProfileV1 = {
 }
 
 describe('shared model connection API-key setup status', () => {
+  it('treats missing and unreadable protected credentials as unavailable', () => {
+    expect(sharedModelConnectionHasUsableCredential({ configured: true })).toBe(true)
+    expect(sharedModelConnectionHasUsableCredential({
+      configured: true,
+      credentialStatus: 'ready'
+    })).toBe(true)
+    expect(sharedModelConnectionHasUsableCredential({
+      configured: true,
+      credentialStatus: 'missing'
+    })).toBe(false)
+    expect(sharedModelConnectionHasUsableCredential({
+      configured: true,
+      credentialStatus: 'unreadable'
+    })).toBe(false)
+  })
+
   it('accepts a credential held only by the protected shared registry', () => {
     const providers = defaultModelProviderSettings().providers
 
@@ -80,6 +100,28 @@ describe('shared model connection API-key setup status', () => {
         baseUrl: 'https://api.deepseek.com',
         endpointFormat: 'chat_completions',
         configured: false,
+        models: ['deepseek-chat']
+      }]
+    })).toBe(true)
+  })
+
+  it('requests setup when a legacy credential binding is unreadable', () => {
+    const providers = defaultModelProviderSettings().providers
+
+    expect(sharedProviderSetupNeedsApiKey(providers, {
+      schemaVersion: 1,
+      revision: 2,
+      providers: [{
+        id: 'deepseek',
+        accountId: 'account:deepseek',
+        name: 'DeepSeek',
+        kind: 'http',
+        authType: 'api-key',
+        baseUrl: 'https://api.deepseek.com',
+        endpointFormat: 'chat_completions',
+        configured: true,
+        credentialStatus: 'unreadable',
+        credentialErrorCode: 'credential_unreadable',
         models: ['deepseek-chat']
       }]
     })).toBe(true)
@@ -519,12 +561,19 @@ describe('shared model connection credential replacement', () => {
       baseUrl: 'https://api.deepseek.com',
       endpointFormat: 'chat_completions' as const,
       configured: true,
+      credentialStatus: 'unreadable' as const,
+      credentialErrorCode: 'credential_unreadable' as const,
       models: ['deepseek-chat']
     }
-    const snapshot = (revision: number) => ({
+    const snapshot = (revision: number, ready = false) => ({
       schemaVersion: 1 as const,
       revision,
-      providers: [provider]
+      providers: [{
+        ...provider,
+        ...(ready
+          ? { credentialStatus: 'ready' as const, credentialErrorCode: undefined }
+          : {})
+      }]
     })
     const runtimeRequest = vi.fn()
       .mockResolvedValueOnce({ ok: true, status: 200, body: JSON.stringify(snapshot(20)) })
@@ -533,11 +582,15 @@ describe('shared model connection credential replacement', () => {
         status: 409,
         body: JSON.stringify({ snapshot: snapshot(21) })
       })
-      .mockResolvedValueOnce({ ok: true, status: 200, body: JSON.stringify(snapshot(22)) })
+      .mockResolvedValueOnce({ ok: true, status: 200, body: JSON.stringify(snapshot(22, true)) })
     vi.stubGlobal('window', { kunGui: { runtimeRequest } })
 
     try {
-      await replaceSharedModelConnectionCredential('deepseek', 'latest-secret')
+      const replaced = await replaceSharedModelConnectionCredential('deepseek', 'latest-secret')
+      expect(replaced.providers[0]).toMatchObject({
+        credentialStatus: 'ready'
+      })
+      expect(replaced.providers[0]).not.toHaveProperty('credentialErrorCode')
       expect(runtimeRequest.mock.calls.map(([path, method, body]) => [
         path,
         method,
@@ -554,6 +607,115 @@ describe('shared model connection credential replacement', () => {
         }]
       ])
     } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('rejects a delayed stale commit after a newer generation installs its fence', async () => {
+    const provider = {
+      id: 'deepseek',
+      accountId: 'account:deepseek',
+      name: 'DeepSeek',
+      kind: 'http' as const,
+      authType: 'api-key' as const,
+      baseUrl: 'https://api.deepseek.com',
+      endpointFormat: 'chat_completions' as const,
+      configured: true,
+      models: ['deepseek-chat']
+    }
+    let revision = 10
+    let latestFence = ''
+    const prepared = new Map<string, string>()
+    const consumedCredentials: string[] = []
+    let firstCommitStarted!: () => void
+    const firstCommitInFlight = new Promise<void>((resolve) => { firstCommitStarted = resolve })
+    let releaseFirstCommit!: () => void
+    const firstCommitRelease = new Promise<void>((resolve) => { releaseFirstCommit = resolve })
+    let delayedCommit = true
+    const snapshot = () => ({ schemaVersion: 1 as const, revision, providers: [provider] })
+    const runtimeRequest = vi.fn(async (path: string, method: string, body?: string) => {
+      const payload = body ? JSON.parse(body) as Record<string, unknown> : {}
+      if (path === '/v1/model-connections' && method === 'GET') {
+        return { ok: true, status: 200, body: JSON.stringify(snapshot()) }
+      }
+      if (path === '/v1/model-connections/deepseek/credential/fence' && method === 'POST') {
+        latestFence = String(payload.operationToken)
+        return { ok: true, status: 200, body: JSON.stringify(snapshot()) }
+      }
+      if (path === '/v1/model-connections/deepseek/credential' && method === 'PUT') {
+        prepared.set(String(payload.operationToken), String(payload.credential))
+        return { ok: true, status: 200, body: JSON.stringify(snapshot()) }
+      }
+      if (path === '/v1/model-connections/deepseek/credential/commit' && method === 'POST') {
+        const operationToken = String(payload.operationToken)
+        if (delayedCommit) {
+          delayedCommit = false
+          firstCommitStarted()
+          await firstCommitRelease
+        }
+        if (operationToken !== latestFence) {
+          return {
+            ok: false,
+            status: 409,
+            body: JSON.stringify({ snapshot: snapshot() })
+          }
+        }
+        consumedCredentials.push(prepared.get(operationToken) ?? '')
+        revision += 1
+        return { ok: true, status: 200, body: JSON.stringify(snapshot()) }
+      }
+      throw new Error(`Unexpected runtime request: ${method} ${path}`)
+    })
+    vi.stubGlobal('window', { kunGui: { runtimeRequest } })
+
+    try {
+      const first = stageSharedProviderCredentialMutation(
+        'deepseek',
+        'first-secret',
+        (operationToken) => fenceSharedModelConnectionCredential('deepseek', operationToken)
+      )
+      const firstDrain = drainSharedProviderCredentialMutation(
+        'deepseek',
+        first.generation,
+        (credential, operationToken, isCurrent) => replaceSharedModelConnectionCredential(
+          'deepseek',
+          credential,
+          () => false,
+          { operationToken, isCurrent }
+        )
+      )
+      await firstCommitInFlight
+
+      const second = stageSharedProviderCredentialMutation(
+        'deepseek',
+        'final-secret',
+        (operationToken) => fenceSharedModelConnectionCredential('deepseek', operationToken)
+      )
+      const firstToken = first.operationToken.split(':')
+      const secondToken = second.operationToken.split(':')
+      expect(firstToken).toHaveLength(3)
+      expect(firstToken[0]).toBe('credential')
+      expect(secondToken[1]).toBe(firstToken[1])
+      expect(Number(secondToken[2])).toBe(Number(firstToken[2]) + 1)
+      await second.fence
+      const secondDrain = drainSharedProviderCredentialMutation(
+        'deepseek',
+        second.generation,
+        (credential, operationToken, isCurrent) => replaceSharedModelConnectionCredential(
+          'deepseek',
+          credential,
+          () => false,
+          { operationToken, isCurrent }
+        )
+      )
+      releaseFirstCommit()
+
+      await expect(firstDrain).resolves.toMatchObject({ committed: false })
+      await expect(secondDrain).resolves.toMatchObject({ committed: true })
+      expect(consumedCredentials).toEqual(['final-secret'])
+      expect(sharedProviderMutationCoordinator.pendingCredentials.has('deepseek')).toBe(false)
+    } finally {
+      resetSharedProviderMutationCoordinatorForTests()
       vi.unstubAllGlobals()
     }
   })
@@ -574,6 +736,87 @@ describe('shared model connection mutation ordering', () => {
     })).resolves.toBe('ok')
 
     expect(operations).toEqual(['failed', 'continued'])
+  })
+
+  it('lets an immediate credential fence settle but cancels its queued mutation before deletion', async () => {
+    resetSharedProviderMutationCoordinatorForTests()
+    let releaseFence!: () => void
+    const fenceGate = new Promise<void>((resolve) => { releaseFence = resolve })
+    let pendingDeletion = false
+    const operations: string[] = []
+    const staged = stageSharedProviderCredentialMutation(
+      'deepseek',
+      'stale-secret',
+      async () => fenceGate
+    )
+    const credentialDrain = drainSharedProviderCredentialMutation(
+      'deepseek',
+      staged.generation,
+      async () => {
+        if (pendingDeletion) throw new Error('provider is pending deletion')
+        operations.push('credential')
+      }
+    )
+    const credentialExpectation = expect(credentialDrain).rejects.toThrow('pending deletion')
+
+    pendingDeletion = true
+    const deletion = enqueueSharedModelMutation(async () => {
+      operations.push('delete')
+      sharedProviderMutationCoordinator.pendingCredentials.delete('deepseek')
+    })
+    releaseFence()
+
+    await credentialExpectation
+    await deletion
+    expect(operations).toEqual(['delete'])
+    expect(sharedProviderMutationCoordinator.pendingCredentials.has('deepseek')).toBe(false)
+  })
+
+  it('lets an immediate credential fence make an in-flight catalog drain conflict safely', async () => {
+    resetSharedProviderMutationCoordinatorForTests()
+    const operations: string[] = []
+    let fenceInstalled = false
+    let catalogStarted!: () => void
+    const started = new Promise<void>((resolve) => { catalogStarted = resolve })
+    let releaseCatalog!: () => void
+    const catalogGate = new Promise<void>((resolve) => { releaseCatalog = resolve })
+    const catalog = enqueueSharedModelMutation(async () => {
+      operations.push('catalog:start')
+      catalogStarted()
+      await catalogGate
+      if (fenceInstalled) {
+        operations.push('catalog:conflict')
+        throw new Error('provider credential replacement is pending')
+      }
+      operations.push('catalog:commit')
+    })
+    const catalogExpectation = expect(catalog).rejects.toThrow('replacement is pending')
+    await started
+
+    const staged = stageSharedProviderCredentialMutation(
+      'deepseek',
+      'new-secret',
+      async () => {
+        operations.push('fence')
+        fenceInstalled = true
+      }
+    )
+    await staged.fence
+    const credential = drainSharedProviderCredentialMutation(
+      'deepseek',
+      staged.generation,
+      async () => { operations.push('credential:commit') }
+    )
+    releaseCatalog()
+
+    await catalogExpectation
+    await expect(credential).resolves.toMatchObject({ committed: true })
+    expect(operations).toEqual([
+      'catalog:start',
+      'fence',
+      'catalog:conflict',
+      'credential:commit'
+    ])
   })
 
   it('finishes an in-flight stale connect before deletion and blocks queued stale reconnects', async () => {
@@ -968,15 +1211,55 @@ describe('provider mutation lifecycle across settings remounts', () => {
     ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = false
   })
 
+  it('shows safe replacement guidance for an unreadable protected credential', async () => {
+    const { settings, provider } = providerFixture()
+    const snapshot = {
+      ...snapshotFor(provider, 3),
+      providers: [{
+        ...connectionFor(provider),
+        credentialStatus: 'unreadable' as const,
+        credentialErrorCode: 'credential_unreadable' as const
+      }]
+    }
+    const runtimeRequest = vi.fn(async (path: string) => {
+      if (path.includes('/events?')) return new Promise<never>(() => undefined)
+      return { ok: true, status: 200, body: JSON.stringify(snapshot) }
+    })
+    Object.assign(window.kunGui, { runtimeRequest })
+
+    const renderer = await mount(contextFor(settings, provider))
+    await flush()
+
+    expect(rendererText(renderer)).toContain(
+      'The existing credential cannot be read. Enter a new value to replace it safely.'
+    )
+    expect(rendererText(renderer)).not.toContain('settings:provider:')
+    expect(rendererText(renderer)).not.toContain('credential_unreadable')
+  })
+
   it('keeps a credential generation through unmount and clears it after the adopted commit', async () => {
     const { settings, provider } = providerFixture()
     let registryRevision = 1
     const credentialPut = deferred<RuntimeResult>()
     const credentialStarted = deferred<void>()
-    const credentialBodies: Array<{ expectedRevision: number; credential: string }> = []
+    const fenceBodies: Array<{ operationToken: string }> = []
+    const credentialBodies: Array<{
+      expectedRevision: number
+      credential: string
+      operationToken: string
+    }> = []
+    const commitBodies: Array<{ expectedRevision: number; operationToken: string }> = []
     const runtimeRequest = vi.fn(async (path: string, method: string, body?: string) => {
       if (path.includes('/events?')) return new Promise<never>(() => undefined)
       if (path === '/v1/model-connections' && method === 'GET') {
+        return {
+          ok: true,
+          status: 200,
+          body: JSON.stringify(snapshotFor(provider, registryRevision))
+        }
+      }
+      if (path === `/v1/model-connections/${provider.id}/credential/fence` && method === 'POST') {
+        fenceBodies.push(JSON.parse(body ?? '{}'))
         return {
           ok: true,
           status: 200,
@@ -987,6 +1270,15 @@ describe('provider mutation lifecycle across settings remounts', () => {
         credentialBodies.push(JSON.parse(body ?? '{}'))
         credentialStarted.resolve()
         return credentialPut.promise
+      }
+      if (path === `/v1/model-connections/${provider.id}/credential/commit` && method === 'POST') {
+        commitBodies.push(JSON.parse(body ?? '{}'))
+        registryRevision = 2
+        return {
+          ok: true,
+          status: 200,
+          body: JSON.stringify(snapshotFor(provider, registryRevision))
+        }
       }
       throw new Error(`Unexpected runtime request: ${method} ${path}`)
     })
@@ -1011,17 +1303,25 @@ describe('provider mutation lifecycle across settings remounts', () => {
       .find((input) => input.props.placeholder === 'modelProviderApiKeyPlaceholder')
     expect(remountedInput?.props.value).toBe('latest-secret')
 
-    registryRevision = 2
     credentialPut.resolve({
       ok: true,
       status: 200,
-      body: JSON.stringify(snapshotFor(provider, registryRevision))
+      body: JSON.stringify(snapshotFor(provider, 1))
     })
     await flush()
     await enqueueSharedModelMutation(async () => undefined)
     await flush()
 
-    expect(credentialBodies).toEqual([{ expectedRevision: 1, credential: 'latest-secret' }])
+    expect(fenceBodies).toHaveLength(1)
+    expect(credentialBodies).toEqual([{
+      expectedRevision: 1,
+      credential: 'latest-secret',
+      operationToken: fenceBodies[0]!.operationToken
+    }])
+    expect(commitBodies).toEqual([{
+      expectedRevision: 1,
+      operationToken: fenceBodies[0]!.operationToken
+    }])
     expect(sharedProviderMutationCoordinator.pendingCredentials.has(provider.id)).toBe(false)
     expect(second.root.findAllByType('input')
       .find((input) => input.props.placeholder === 'modelProviderApiKeyPlaceholder')?.props.value)

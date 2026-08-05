@@ -36,7 +36,34 @@ export async function replaceModelCredential(
   providerId: string,
   request: Request
 ): Promise<JsonResponse> {
-  return mutate(registry, async () => registry!.replaceCredential(providerId, await readJson(request)))
+  return mutate(registry, async () => {
+    const input = await readJson(request)
+    return hasCredentialOperationToken(input)
+      ? registry!.prepareCredential(providerId, input)
+      : registry!.replaceCredential(providerId, input)
+  })
+}
+
+export async function commitModelCredential(
+  registry: ModelConnectionRegistry | undefined,
+  providerId: string,
+  request: Request
+): Promise<JsonResponse> {
+  return mutate(
+    registry,
+    async () => registry!.commitPreparedCredential(providerId, await readJson(request))
+  )
+}
+
+export async function fenceModelCredential(
+  registry: ModelConnectionRegistry | undefined,
+  providerId: string,
+  request: Request
+): Promise<JsonResponse> {
+  return mutate(
+    registry,
+    async () => registry!.fenceCredential(providerId, await readJson(request))
+  )
 }
 
 export async function clearModelCredential(
@@ -265,4 +292,8 @@ async function oauthAction(
 
 async function readJson(request: Request): Promise<unknown> {
   return request.json().catch(() => null)
+}
+
+function hasCredentialOperationToken(value: unknown): value is { operationToken: unknown } {
+  return typeof value === 'object' && value !== null && 'operationToken' in value
 }

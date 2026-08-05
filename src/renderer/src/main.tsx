@@ -24,7 +24,8 @@ document.documentElement.dataset.platform = window.kunGui?.platform ?? 'unknown'
 applyCursorSpotlight(true)
 installCursorSpotlightTracking()
 const storageRelocationMode = new URLSearchParams(window.location.search).get('storageRelocation') === '1'
-if (!storageRelocationMode) installDataMigrationRendererRpc()
+const runtimeMigrationRecoveryMode = new URLSearchParams(window.location.search).get('runtimeMigrationRecovery') === '1'
+if (!storageRelocationMode && !runtimeMigrationRecoveryMode) installDataMigrationRendererRpc()
 
 void bootstrap()
 
@@ -35,6 +36,15 @@ async function bootstrap(): Promise<void> {
     ReactDOM.createRoot(document.getElementById('root')!).render(
       <React.StrictMode>
         <StorageRelocationBootView />
+      </React.StrictMode>
+    )
+    return
+  }
+  if (runtimeMigrationRecoveryMode) {
+    const { RuntimeMigrationRecoveryView } = await import('./components/RuntimeMigrationRecoveryView')
+    ReactDOM.createRoot(document.getElementById('root')!).render(
+      <React.StrictMode>
+        <RuntimeMigrationRecoveryView />
       </React.StrictMode>
     )
     return

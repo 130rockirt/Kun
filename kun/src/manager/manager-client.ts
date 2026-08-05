@@ -35,6 +35,7 @@ import {
 } from './manager-discovery.js'
 import { sameCanonicalPath } from './canonical-path.js'
 import { KUN_MANAGER_CAPABILITIES } from './service-manager.js'
+import { withRuntimeDataDirAncillaryWriter } from '../server/runtime-data-dir-lease.js'
 
 const START_TIMEOUT_MS = 30_000
 const POLL_MS = 100
@@ -331,7 +332,7 @@ async function handoverLegacyProductionRuntime(input: {
   const discovery = await readRuntimeDiscovery(input.dataDir, 'production').catch(() => null)
   if (!discovery) return
   if (!processIsAlive(discovery.pid)) {
-    await removeRuntimeDiscovery(input.dataDir, discovery.instanceId, 'production').catch(() => undefined)
+    await removeLegacyProductionRuntimeDiscovery(input.dataDir, discovery.instanceId)
     return
   }
   const deadline = Date.now() + input.timeoutMs
@@ -339,7 +340,7 @@ async function handoverLegacyProductionRuntime(input: {
     const probe = await probeLegacyHandoverRuntime(discovery, input.fetch)
     if (!probe) {
       if (!processIsAlive(discovery.pid)) {
-        await removeRuntimeDiscovery(input.dataDir, discovery.instanceId, 'production').catch(() => undefined)
+        await removeLegacyProductionRuntimeDiscovery(input.dataDir, discovery.instanceId)
         return
       }
       throw new Error(
@@ -372,13 +373,23 @@ async function handoverLegacyProductionRuntime(input: {
     }
     while (Date.now() < deadline) {
       if (!processIsAlive(discovery.pid)) {
-        await removeRuntimeDiscovery(input.dataDir, discovery.instanceId, 'production').catch(() => undefined)
+        await removeLegacyProductionRuntimeDiscovery(input.dataDir, discovery.instanceId)
         return
       }
       await delay(POLL_MS)
     }
     throw new Error('Timed out waiting for the legacy production Runtime to release shared data')
   }
+}
+
+async function removeLegacyProductionRuntimeDiscovery(
+  dataDir: string,
+  instanceId: string
+): Promise<boolean> {
+  return withRuntimeDataDirAncillaryWriter(
+    dataDir,
+    () => removeRuntimeDiscovery(dataDir, instanceId, 'production').catch(() => false)
+  )
 }
 
 async function probeLegacyHandoverRuntime(

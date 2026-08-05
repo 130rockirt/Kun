@@ -108,6 +108,46 @@ describe('upstream model picker list', () => {
     })
   })
 
+  it('excludes providers whose protected credential is missing or unreadable', () => {
+    const result = modelListFromSharedConnections({
+      schemaVersion: 1,
+      providers: [
+        {
+          id: 'healthy',
+          name: 'Healthy',
+          configured: true,
+          credentialStatus: 'ready',
+          models: ['healthy-model']
+        },
+        {
+          id: 'missing',
+          name: 'Missing',
+          configured: true,
+          credentialStatus: 'missing',
+          models: ['missing-model']
+        },
+        {
+          id: 'unreadable',
+          name: 'Unreadable',
+          configured: true,
+          credentialStatus: 'unreadable',
+          credentialErrorCode: 'credential_unreadable',
+          models: ['unreadable-model']
+        }
+      ],
+      defaultModel: 'unreadable-model'
+    })
+
+    expect(result).toMatchObject({
+      ok: true,
+      modelIds: ['healthy-model'],
+      modelGroups: [{ providerId: 'healthy', modelIds: ['healthy-model'] }]
+    })
+    expect(JSON.stringify(result)).not.toContain('missing-model')
+    expect(JSON.stringify(result)).not.toContain('unreadable-model')
+    expect(result).not.toHaveProperty('defaultModelId')
+  })
+
   it('never reads the canonical legacy config as a model source', async () => {
     await expect(readConfiguredKunModelIds(
       settings(join(homedir(), '.deepseekgui', 'kun'))

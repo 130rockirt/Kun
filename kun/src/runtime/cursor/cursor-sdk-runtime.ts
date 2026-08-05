@@ -90,6 +90,9 @@ export interface CursorSdkRuntimeDeps {
   providerIds: ReadonlySet<string>
   defaultIsCursor: boolean
   defaultApiKey?: string
+  defaultCredentialSourceId?: string
+  /** Re-read managed credentials for every turn; never fall back to cached keys. */
+  resolveCredentialSource?: (sourceId: string) => Promise<{ apiKey: string } | null>
   defaultModel?: string
   systemPrompt?: string
   threadStore: ThreadStore
@@ -370,11 +373,20 @@ export class CursorSdkRuntime implements DelegatedTurnRuntime {
       actingModelRoute.accountId ??
       requestedAccountId
     const provider = this.deps.providerConfigs[resolvedProviderId]
-    const apiKey =
-      provider?.apiKey?.trim() ||
-      (resolvedProviderId === 'cursor-subscription'
-        ? this.deps.defaultApiKey?.trim() || ''
-        : '')
+    const credentialSourceId = provider?.credentialSourceId ?? (
+      resolvedProviderId === 'cursor-subscription'
+        ? this.deps.defaultCredentialSourceId
+        : undefined
+    )
+    const resolvedCredential = credentialSourceId
+      ? await this.deps.resolveCredentialSource?.(credentialSourceId).catch(() => null)
+      : undefined
+    const apiKey = credentialSourceId
+      ? resolvedCredential?.apiKey?.trim() ?? ''
+      : provider?.apiKey?.trim() ||
+        (resolvedProviderId === 'cursor-subscription'
+          ? this.deps.defaultApiKey?.trim() || ''
+          : '')
     if (!apiKey) {
       await this.deps.turns.finishTurn({
         threadId,

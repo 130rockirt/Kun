@@ -34,6 +34,7 @@ import {
   antigravityProviderCatalogPatch
 } from './settings-section-providers'
 import {
+  enqueueSharedModelMutation,
   resetSharedProviderMutationCoordinatorForTests,
   sharedProviderMutationCoordinator
 } from './shared-provider-mutation-coordinator'
@@ -2253,7 +2254,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
       )).toBe(false)
     })
 
-    it('commits successive credential generations in order and clears only the latest one', async () => {
+    it('fences a delayed credential prepare so only the latest generation can commit', async () => {
       const settings = defaultModelProviderSettings()
       const target = {
         ...settings.providers[0]!,
@@ -2283,25 +2284,62 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
         localModelGateway: { enabled: settings.localGateway.enabled }
       })
       let revision = 1
+      let latestFence = ''
       let resolveFirstPut!: (value: { ok: true; status: 200; body: string }) => void
       const firstPut = new Promise<{ ok: true; status: 200; body: string }>((resolve) => {
         resolveFirstPut = resolve
       })
       let firstPutStarted!: () => void
       const firstStarted = new Promise<void>((resolve) => { firstPutStarted = resolve })
-      const credentialBodies: Array<{ expectedRevision: number; credential: string }> = []
+      const fenceBodies: Array<{ operationToken: string }> = []
+      const credentialBodies: Array<{
+        expectedRevision: number
+        credential: string
+        operationToken: string
+      }> = []
+      const commitBodies: Array<{ expectedRevision: number; operationToken: string }> = []
+      const preparedCredentials = new Map<string, string>()
+      const consumedCredentials: string[] = []
       const runtimeRequest = vi.fn(async (path: string, method: string, body?: string) => {
         if (path.includes('/events?')) return new Promise<never>(() => undefined)
         if (path === '/v1/model-connections' && method === 'GET') {
           return { ok: true, status: 200, body: JSON.stringify(snapshot(revision)) }
         }
+        if (path === `/v1/model-connections/${target.id}/credential/fence` && method === 'POST') {
+          const request = JSON.parse(body ?? '{}') as { operationToken: string }
+          fenceBodies.push(request)
+          latestFence = request.operationToken
+          return { ok: true, status: 200, body: JSON.stringify(snapshot(revision)) }
+        }
         if (path === `/v1/model-connections/${target.id}/credential` && method === 'PUT') {
-          credentialBodies.push(JSON.parse(body ?? '{}'))
+          const request = JSON.parse(body ?? '{}') as {
+            expectedRevision: number
+            credential: string
+            operationToken: string
+          }
+          credentialBodies.push(request)
+          preparedCredentials.set(request.operationToken, request.credential)
           if (credentialBodies.length === 1) {
             firstPutStarted()
             return firstPut
           }
-          revision = 3
+          return { ok: true, status: 200, body: JSON.stringify(snapshot(revision)) }
+        }
+        if (path === `/v1/model-connections/${target.id}/credential/commit` && method === 'POST') {
+          const request = JSON.parse(body ?? '{}') as {
+            expectedRevision: number
+            operationToken: string
+          }
+          commitBodies.push(request)
+          if (request.operationToken !== latestFence) {
+            return {
+              ok: false,
+              status: 409,
+              body: JSON.stringify({ snapshot: snapshot(revision) })
+            }
+          }
+          consumedCredentials.push(preparedCredentials.get(request.operationToken) ?? '')
+          revision += 1
           return { ok: true, status: 200, body: JSON.stringify(snapshot(revision)) }
         }
         throw new Error(`Unexpected runtime request: ${method} ${path}`)
@@ -2336,20 +2374,36 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
       await act(async () => {
         await new Promise((resolve) => setTimeout(resolve, 475))
       })
-      expect(credentialBodies).toEqual([{ expectedRevision: 1, credential: 'first-secret' }])
+      expect(fenceBodies).toHaveLength(2)
+      expect(credentialBodies).toEqual([{
+        expectedRevision: 1,
+        credential: 'first-secret',
+        operationToken: fenceBodies[0]!.operationToken
+      }])
 
-      revision = 2
       resolveFirstPut({ ok: true, status: 200, body: JSON.stringify(snapshot(revision)) })
       await act(async () => {
         await Promise.resolve()
-        await Promise.resolve()
-        await new Promise((resolve) => setTimeout(resolve, 0))
+        await enqueueSharedModelMutation(async () => undefined)
       })
 
       expect(credentialBodies).toEqual([
-        { expectedRevision: 1, credential: 'first-secret' },
-        { expectedRevision: 2, credential: 'latest-secret' }
+        {
+          expectedRevision: 1,
+          credential: 'first-secret',
+          operationToken: fenceBodies[0]!.operationToken
+        },
+        {
+          expectedRevision: 1,
+          credential: 'latest-secret',
+          operationToken: fenceBodies[1]!.operationToken
+        }
       ])
+      expect(commitBodies).toEqual([{
+        expectedRevision: 1,
+        operationToken: fenceBodies[1]!.operationToken
+      }])
+      expect(consumedCredentials).toEqual(['latest-secret'])
       expect(update).not.toHaveBeenCalled()
       expect(sharedProviderMutationCoordinator.pendingCredentials.has(target.id)).toBe(false)
       expect(apiKeyInput().props.value).toBe('')

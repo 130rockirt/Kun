@@ -41,9 +41,11 @@ import {
   cancelModelConnectionOAuth,
   clearModelCredential,
   claudeSdkStatus,
+  commitModelCredential,
   completeOfficialProviderAuth,
   connectModelConnection,
   deleteModelConnection,
+  fenceModelCredential,
   listModelConnections,
   modelConnectionEvents,
   patchModelConnection,
@@ -321,6 +323,14 @@ export function buildRouter(runtime: ServerRuntime): Router {
   router.add('PUT', '/v1/model-connections/:providerId/credential', async (request, ctx) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
     return replaceModelCredential(runtime.modelConnections, ctx.params.providerId, request)
+  })
+  router.add('POST', '/v1/model-connections/:providerId/credential/commit', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return commitModelCredential(runtime.modelConnections, ctx.params.providerId, request)
+  })
+  router.add('POST', '/v1/model-connections/:providerId/credential/fence', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return fenceModelCredential(runtime.modelConnections, ctx.params.providerId, request)
   })
   router.add('DELETE', '/v1/model-connections/:providerId/credential', async (request, ctx) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
