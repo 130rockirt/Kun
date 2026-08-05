@@ -20,7 +20,7 @@ export type StoredGrokOAuthCredentials = {
 
 export type RefreshableLegacyCredentialStore = {
   resolveApiKey(sourceId: string): Promise<{ apiKey: string } | null>
-  updateResolvedApiKey(sourceId: string, apiKey: string): Promise<boolean>
+  updateResolvedApiKey(sourceId: string, expectedApiKey: string, apiKey: string): Promise<boolean>
 }
 
 export type ResolvedLegacyRequestCredential = {
@@ -78,7 +78,7 @@ export class GrokOAuthCredentialRefresher {
       }
       credentials = parseStoredGrokOAuthCredentials(resolved.apiKey)
       if (!credentials) {
-        throw new Error('refreshed Grok subscription credentials are invalid')
+        return { rawApiKey: resolved.apiKey, refreshable: false }
       }
     }
 
@@ -121,9 +121,12 @@ export class GrokOAuthCredentialRefresher {
     )
     const updated = await this.store.updateResolvedApiKey(
       sourceId,
+      latest.apiKey,
       JSON.stringify(refreshed)
     )
-    if (!updated) throw new Error(`protected credential source disappeared during refresh: ${sourceId}`)
+    // A user replacement or another writer won the race. resolve() reads the
+    // authoritative value again after this attempt.
+    if (!updated) return
   }
 }
 

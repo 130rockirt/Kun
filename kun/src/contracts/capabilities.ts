@@ -434,6 +434,7 @@ export const ImageGenerationResolution = z.enum(['auto', '1K', '2K', '3K', '4K']
 export type ImageGenerationResolution = z.infer<typeof ImageGenerationResolution>
 
 export const ImageGenCapabilityConfig = CapabilityToggleConfig.extend({
+  providerId: z.string().min(1).optional(),
   protocol: ImageGenerationProtocol.default('openai-images'),
   baseUrl: z.string().min(1).optional(),
   apiKey: z.string().min(1).optional(),
@@ -451,6 +452,7 @@ export const TextToSpeechProtocol = z.enum(['openai-speech', 'minimax-t2a', 'mim
 export type TextToSpeechProtocol = z.infer<typeof TextToSpeechProtocol>
 
 export const SpeechGenCapabilityConfig = CapabilityToggleConfig.extend({
+  providerId: z.string().min(1).optional(),
   protocol: TextToSpeechProtocol.default('openai-speech'),
   baseUrl: z.string().min(1).optional(),
   apiKey: z.string().min(1).optional(),
@@ -465,6 +467,7 @@ export const MusicGenerationProtocol = z.enum(['minimax-music'])
 export type MusicGenerationProtocol = z.infer<typeof MusicGenerationProtocol>
 
 export const MusicGenCapabilityConfig = CapabilityToggleConfig.extend({
+  providerId: z.string().min(1).optional(),
   protocol: MusicGenerationProtocol.default('minimax-music'),
   baseUrl: z.string().min(1).optional(),
   apiKey: z.string().min(1).optional(),
@@ -482,6 +485,7 @@ export const VideoGenerationProtocol = z.enum([
 export type VideoGenerationProtocol = z.infer<typeof VideoGenerationProtocol>
 
 export const VideoGenCapabilityConfig = CapabilityToggleConfig.extend({
+  providerId: z.string().min(1).optional(),
   protocol: VideoGenerationProtocol.default('minimax-video'),
   baseUrl: z.string().min(1).optional(),
   apiKey: z.string().min(1).optional(),

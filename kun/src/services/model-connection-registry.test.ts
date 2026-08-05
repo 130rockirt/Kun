@@ -13,10 +13,15 @@ import { CodexOAuthCredentialRefresher } from './codex-oauth-credential-refreshe
 const roots: string[] = []
 
 afterEach(async () => {
+  vi.unstubAllGlobals()
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })))
 })
 
-async function registry(modelCapabilities?: ConstructorParameters<typeof ModelConnectionRegistry>[0]['modelCapabilities']) {
+async function registry(
+  modelCapabilities?: ConstructorParameters<typeof ModelConnectionRegistry>[0]['modelCapabilities'],
+  retireLegacyCredentialSource?: (sourceId: string) => Promise<void>,
+  resolveCredentialSource?: ConstructorParameters<typeof ModelConnectionRegistry>[0]['resolveCredentialSource']
+) {
   const dataDir = await mkdtemp(join(tmpdir(), 'kun-model-connections-'))
   roots.push(dataDir)
   const credentials = new ExtensionCredentialStore({ dataDir, profileId: 'test' })
@@ -25,6 +30,8 @@ async function registry(modelCapabilities?: ConstructorParameters<typeof ModelCo
     dataDir,
     credentials,
     ...(modelCapabilities ? { modelCapabilities } : {}),
+    ...(retireLegacyCredentialSource ? { retireLegacyCredentialSource } : {}),
+    ...(resolveCredentialSource ? { resolveCredentialSource } : {}),
     onChanged: (connections) => {
       if (connections.selected) applied.push(`${connections.selected.profile.id}/${connections.selected.model}`)
     }
@@ -34,7 +41,174 @@ async function registry(modelCapabilities?: ConstructorParameters<typeof ModelCo
 }
 
 describe('ModelConnectionRegistry', () => {
-  it('keeps managed credential sources internal and authoritative across reconciliation', async () => {
+  it.each([
+    {
+      label: 'an origin root',
+      baseUrl: 'https://catalog.example.test',
+      endpointFormat: 'chat_completions' as const,
+      expectedUrl: 'https://catalog.example.test/v1/models'
+    },
+    {
+      label: 'an existing v1 root',
+      baseUrl: 'https://catalog.example.test/v1/',
+      endpointFormat: 'responses' as const,
+      expectedUrl: 'https://catalog.example.test/v1/models'
+    },
+    {
+      label: 'a versioned chat completions endpoint',
+      baseUrl: 'https://catalog.example.test/v2/chat/completions?deployment=blue#fragment',
+      endpointFormat: 'chat_completions' as const,
+      expectedUrl: 'https://catalog.example.test/v2/models'
+    },
+    {
+      label: 'a prefixed Responses endpoint',
+      baseUrl: 'https://catalog.example.test/openai/v1/responses',
+      endpointFormat: 'responses' as const,
+      expectedUrl: 'https://catalog.example.test/openai/v1/models'
+    },
+    {
+      label: 'a Messages endpoint',
+      baseUrl: 'https://catalog.example.test/v1/messages',
+      endpointFormat: 'messages' as const,
+      expectedUrl: 'https://catalog.example.test/v1/models'
+    },
+    {
+      label: 'a beta inference endpoint',
+      baseUrl: 'https://catalog.example.test/beta/responses',
+      endpointFormat: 'responses' as const,
+      expectedUrl: 'https://catalog.example.test/v1/models'
+    }
+  ])('derives the provider models URL from $label', async ({
+    baseUrl,
+    endpointFormat,
+    expectedUrl
+  }) => {
+    const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) =>
+      new Response(JSON.stringify({
+        data: [{ id: 'discovered-model' }]
+      }), { status: 200, headers: { 'content-type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+    const { value } = await registry()
+
+    await value.connect({
+      expectedRevision: 0,
+      id: 'url-probe',
+      name: 'URL Probe',
+      kind: 'http',
+      authType: 'api-key',
+      baseUrl,
+      endpointFormat,
+      credential: 'registry-secret',
+      models: ['fallback-model'],
+      selectedModel: 'fallback-model',
+      probe: true,
+      select: false
+    })
+
+    expect(fetchMock).toHaveBeenCalledOnce()
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe(expectedUrl)
+  })
+
+  it('does not guess a models URL from a custom full inference endpoint', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const { value } = await registry()
+    await value.connect({
+      expectedRevision: 0,
+      id: 'custom-full-endpoint',
+      name: 'Custom Full Endpoint',
+      kind: 'http',
+      authType: 'api-key',
+      baseUrl: 'https://gateway.example.test/inference/team-a/respond',
+      endpointFormat: 'custom_endpoint',
+      credential: 'registry-secret',
+      models: ['configured-model'],
+      selectedModel: 'configured-model',
+      probe: false,
+      select: false
+    })
+
+    await expect(value.probe('custom-full-endpoint')).rejects.toThrow(
+      'custom_endpoint does not define a models URL'
+    )
+    expect(fetchMock).not.toHaveBeenCalled()
+    await expect(value.snapshot()).resolves.toMatchObject({
+      providers: [expect.objectContaining({
+        id: 'custom-full-endpoint',
+        models: ['configured-model']
+      })]
+    })
+  })
+
+  it('probes Messages providers with the Registry credential and Anthropic headers', async () => {
+    const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) => new Response(JSON.stringify({
+      data: [{ id: 'claude-sonnet-4-5' }]
+    }), { status: 200, headers: { 'content-type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+    const { value } = await registry()
+    await value.connect({
+      expectedRevision: 0,
+      id: 'anthropic',
+      name: 'Anthropic',
+      kind: 'http',
+      authType: 'api-key',
+      baseUrl: 'https://api.anthropic.com/v1/messages',
+      endpointFormat: 'messages',
+      credential: 'registry-secret',
+      models: ['claude-fallback'],
+      selectedModel: 'claude-fallback',
+      probe: false,
+      select: true
+    })
+
+    await expect(value.probe('anthropic')).resolves.toEqual({
+      ok: true,
+      models: ['claude-sonnet-4-5', 'claude-fallback']
+    })
+    expect(fetchMock).toHaveBeenCalledWith('https://api.anthropic.com/v1/models', expect.objectContaining({
+      headers: expect.objectContaining({
+        'x-api-key': 'registry-secret',
+        'anthropic-version': '2023-06-01'
+      })
+    }))
+    expect(JSON.stringify(fetchMock.mock.calls[0]?.[1])).not.toContain('authorization')
+  })
+
+  it('resolves a legacy credential source at persisted-provider probe time', async () => {
+    const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) =>
+      new Response(JSON.stringify({ data: [] }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const resolveCredentialSource = vi.fn(async () => ({
+      apiKey: 'resolved-latest-secret',
+      headers: { 'x-account-id': 'account-1' }
+    }))
+    const { value } = await registry(undefined, undefined, resolveCredentialSource)
+    await value.initialize([{
+      expectedRevision: 0,
+      id: 'legacy-http',
+      name: 'Legacy HTTP',
+      kind: 'http',
+      authType: 'subscription',
+      baseUrl: 'https://example.com/v1',
+      endpointFormat: 'responses',
+      credentialSourceId: 'settings:provider:legacy-http',
+      models: ['model-a'],
+      selectedModel: 'model-a',
+      probe: false,
+      select: true
+    }])
+
+    await value.probe('legacy-http')
+    expect(resolveCredentialSource).toHaveBeenCalledWith('settings:provider:legacy-http')
+    expect(fetchMock).toHaveBeenCalledWith('https://example.com/v1/models', expect.objectContaining({
+      headers: expect.objectContaining({
+        authorization: 'Bearer resolved-latest-secret',
+        'x-account-id': 'account-1'
+      })
+    }))
+  })
+
+  it('keeps Registry-owned credentials authoritative across legacy seed reconciliation', async () => {
     const { dataDir, value } = await registry()
     const direct = await value.connect({
       expectedRevision: 0,
@@ -51,6 +225,7 @@ describe('ModelConnectionRegistry', () => {
       select: true
     })
 
+    const registrySourceId = (await value.materialize()).providers.get('codex')!.credentialSourceId!
     const sourceId = 'settings:provider:codex'
     const reconciled = await value.initialize([{
       expectedRevision: direct.revision,
@@ -69,12 +244,257 @@ describe('ModelConnectionRegistry', () => {
 
     expect(JSON.stringify(reconciled)).not.toContain(sourceId)
     const stored = await readFile(join(dataDir, 'model-connections.v1.json'), 'utf8')
-    expect(stored).toContain(sourceId)
+    expect(stored).not.toContain(sourceId)
     const materialized = await value.materialize()
     expect(materialized.providers.get('codex')).toMatchObject({
-      apiKey: '',
-      credentialSourceId: sourceId
+      apiKey: 'stale-expanded-access-token',
+      credentialSourceId: registrySourceId
     })
+  })
+
+  it('does not resurrect a cleared credential from a later settings seed', async () => {
+    const { dataDir, value } = await registry()
+    const connected = await value.connect({
+      expectedRevision: 0,
+      id: 'deepseek',
+      name: 'DeepSeek',
+      kind: 'http',
+      authType: 'api-key',
+      baseUrl: 'https://api.deepseek.com',
+      endpointFormat: 'chat_completions',
+      credential: 'old-secret',
+      models: ['deepseek-chat'],
+      selectedModel: 'deepseek-chat',
+      probe: false,
+      select: true
+    })
+    const cleared = await value.clearCredential('deepseek', connected.revision)
+
+    const reconciled = await value.initialize([{
+      expectedRevision: cleared.revision,
+      id: 'deepseek',
+      name: 'DeepSeek',
+      kind: 'http',
+      authType: 'api-key',
+      baseUrl: 'https://api.deepseek.com',
+      endpointFormat: 'chat_completions',
+      credentialSourceId: 'settings:provider:deepseek',
+      models: ['deepseek-chat'],
+      selectedModel: 'deepseek-chat',
+      probe: false,
+      select: true
+    }])
+
+    expect(reconciled.providers[0]).toMatchObject({ configured: false })
+    const stored = await readFile(join(dataDir, 'model-connections.v1.json'), 'utf8')
+    expect(stored).not.toContain('settings:provider:deepseek')
+    expect((await value.materialize()).providers.get('deepseek')).toMatchObject({
+      apiKey: ''
+    })
+    await expect(value.credentialStateForInternalConsumer('deepseek')).resolves.toEqual({
+      authoritative: true,
+      apiKey: ''
+    })
+  })
+
+  it('rotates a legacy source to a Registry-owned credential that survives hot apply', async () => {
+    const { dataDir, value } = await registry()
+    const seed = {
+      expectedRevision: 0,
+      id: 'deepseek',
+      name: 'DeepSeek',
+      kind: 'http' as const,
+      authType: 'api-key' as const,
+      baseUrl: 'https://api.deepseek.com',
+      endpointFormat: 'chat_completions' as const,
+      credentialSourceId: 'settings:provider:deepseek',
+      models: ['deepseek-chat'],
+      selectedModel: 'deepseek-chat',
+      probe: false,
+      select: true
+    }
+    const legacy = await value.initialize([seed])
+    const replaced = await value.replaceCredential('deepseek', {
+      expectedRevision: legacy.revision,
+      credential: 'replacement-secret'
+    })
+    const final = await value.replaceCredential('deepseek', {
+      expectedRevision: replaced.revision,
+      credential: 'final-secret'
+    })
+    const registrySourceId = (await value.materialize()).providers.get('deepseek')!.credentialSourceId!
+
+    const hotApplied = await value.initialize([{ ...seed, expectedRevision: final.revision }])
+    const materialized = await value.materialize()
+    expect(hotApplied.providers[0]).toMatchObject({ configured: true })
+    expect(materialized.providers.get('deepseek')).toMatchObject({
+      apiKey: 'final-secret',
+      credentialSourceId: registrySourceId
+    })
+    expect((await value.resolveApiKey(registrySourceId))?.apiKey).toBe('final-secret')
+    await expect(value.credentialStateForInternalConsumer('deepseek')).resolves.toEqual({
+      authoritative: true,
+      apiKey: 'final-secret'
+    })
+    const stored = await readFile(join(dataDir, 'model-connections.v1.json'), 'utf8')
+    expect(stored).not.toContain('settings:provider:deepseek')
+    expect(stored).not.toContain('replacement-secret')
+    expect(stored).not.toContain('final-secret')
+  })
+
+  it('keeps failed targeted legacy retirement durable and retries it on initialize', async () => {
+    const retired: string[] = []
+    let attempts = 0
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const { dataDir, value } = await registry(undefined, async (sourceId) => {
+      attempts += 1
+      if (attempts === 1) throw new Error('temporary legacy store failure')
+      retired.push(sourceId)
+    })
+    const legacy = await value.initialize([{
+      expectedRevision: 0,
+      id: 'deepseek',
+      name: 'DeepSeek',
+      kind: 'http',
+      authType: 'api-key',
+      baseUrl: 'https://api.deepseek.com',
+      endpointFormat: 'chat_completions',
+      credentialSourceId: 'settings:provider:deepseek',
+      models: ['deepseek-chat'],
+      selectedModel: 'deepseek-chat',
+      probe: false,
+      select: true
+    }])
+
+    await value.replaceCredential('deepseek', {
+      expectedRevision: legacy.revision,
+      credential: 'replacement-secret'
+    })
+    expect(await readFile(join(dataDir, 'model-connections.v1.json'), 'utf8'))
+      .toContain('settings:provider:deepseek')
+    expect((await value.materialize()).providers.get('deepseek')).toMatchObject({
+      apiKey: 'replacement-secret',
+      credentialSourceId: 'model-connection:deepseek'
+    })
+
+    await value.initialize()
+    expect(retired).toEqual(['settings:provider:deepseek'])
+    expect(await readFile(join(dataDir, 'model-connections.v1.json'), 'utf8'))
+      .not.toContain('settings:provider:deepseek')
+    warn.mockRestore()
+  })
+
+  it('keeps provider deletion durable across stale seeds and allows an explicit same-id re-add', async () => {
+    const { dataDir, value } = await registry()
+    const request = {
+      expectedRevision: 0,
+      id: 'restart-safe',
+      name: 'Restart Safe',
+      kind: 'http' as const,
+      authType: 'api-key' as const,
+      baseUrl: 'https://restart-safe.example/v1',
+      endpointFormat: 'chat_completions' as const,
+      credential: 'old-secret',
+      models: ['model-a'],
+      selectedModel: 'model-a',
+      probe: false,
+      select: true
+    }
+    const connected = await value.connect(request)
+    const deleted = await value.delete('restart-safe', connected.revision)
+
+    const staleSeed = await value.initialize([{ ...request, expectedRevision: deleted.revision }])
+    expect(staleSeed.providers).toEqual([])
+
+    const restarted = new ModelConnectionRegistry({
+      dataDir,
+      credentials: new ExtensionCredentialStore({ dataDir, profileId: 'test' })
+    })
+    const afterRestart = await restarted.initialize([{ ...request, expectedRevision: deleted.revision }])
+    expect(afterRestart.providers).toEqual([])
+
+    const readded = await restarted.connect({
+      ...request,
+      expectedRevision: afterRestart.revision,
+      credential: 'new-secret'
+    })
+    expect(readded.providers).toEqual([
+      expect.objectContaining({ id: 'restart-safe', configured: true })
+    ])
+    expect((await restarted.materialize()).providers.get('restart-safe')?.apiKey).toBe('new-secret')
+    const stored = JSON.parse(await readFile(join(dataDir, 'model-connections.v1.json'), 'utf8')) as {
+      tombstones: Record<string, unknown>
+    }
+    expect(stored.tombstones).toEqual({})
+  })
+
+  it('does not restore a deleted model from a stale AppSettings seed after restart', async () => {
+    const { dataDir, value } = await registry()
+    const seed = {
+      expectedRevision: 0,
+      id: 'catalog-owner',
+      name: 'Catalog Owner',
+      kind: 'http' as const,
+      authType: 'api-key' as const,
+      baseUrl: 'https://catalog.example/v1',
+      endpointFormat: 'chat_completions' as const,
+      credential: 'secret',
+      models: ['keep-model', 'delete-model'],
+      selectedModel: 'keep-model',
+      probe: false,
+      select: true
+    }
+    const connected = await value.connect(seed)
+    const patched = await value.patch('catalog-owner', {
+      expectedRevision: connected.revision,
+      models: ['keep-model'],
+      selectedModel: 'keep-model'
+    })
+    const staleApplied = await value.initialize([{ ...seed, expectedRevision: patched.revision }])
+    expect(staleApplied.providers[0]?.models).toEqual(['keep-model'])
+
+    const restarted = new ModelConnectionRegistry({
+      dataDir,
+      credentials: new ExtensionCredentialStore({ dataDir, profileId: 'test' })
+    })
+    const afterRestart = await restarted.initialize([{ ...seed, expectedRevision: staleApplied.revision }])
+    expect(afterRestart.providers[0]?.models).toEqual(['keep-model'])
+  })
+
+  it('retries deleted-provider legacy source retirement without allowing seed resurrection', async () => {
+    let attempts = 0
+    const retired: string[] = []
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const { dataDir, value } = await registry(undefined, async (sourceId) => {
+      attempts += 1
+      if (attempts === 1) throw new Error('temporary cleanup outage')
+      retired.push(sourceId)
+    })
+    const seed = {
+      expectedRevision: 0,
+      id: 'legacy-delete',
+      name: 'Legacy Delete',
+      kind: 'http' as const,
+      authType: 'api-key' as const,
+      baseUrl: 'https://legacy-delete.example/v1',
+      endpointFormat: 'chat_completions' as const,
+      credentialSourceId: 'settings:provider:legacy-delete',
+      models: ['model-a'],
+      selectedModel: 'model-a',
+      probe: false,
+      select: true
+    }
+    const connected = await value.initialize([seed])
+    const deleted = await value.delete('legacy-delete', connected.revision)
+    expect(await readFile(join(dataDir, 'model-connections.v1.json'), 'utf8'))
+      .toContain('settings:provider:legacy-delete')
+
+    const restarted = await value.initialize([{ ...seed, expectedRevision: deleted.revision }])
+    expect(restarted.providers).toEqual([])
+    expect(retired).toEqual(['settings:provider:legacy-delete'])
+    expect(await readFile(join(dataDir, 'model-connections.v1.json'), 'utf8'))
+      .not.toContain('settings:provider:legacy-delete')
+    warn.mockRestore()
   })
 
   it('refreshes Registry-owned Codex OAuth credentials through their protected source', async () => {
@@ -134,6 +554,70 @@ describe('ModelConnectionRegistry', () => {
     expect(JSON.parse((await value.resolveApiKey(config!.credentialSourceId!))!.apiKey))
       .toMatchObject({ accessToken: 'rotated-access-2' })
     expect(fetchImpl).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not let a late OAuth refresh overwrite a newer Registry credential', async () => {
+    const { value } = await registry()
+    const oldCredential = JSON.stringify({
+      kind: 'codex-oauth',
+      accessToken: 'expired-access',
+      refreshToken: 'old-refresh',
+      expiresAt: 1,
+      accountId: 'old-account'
+    })
+    const connected = await value.connect({
+      expectedRevision: 0,
+      id: 'codex',
+      name: 'Codex',
+      kind: 'http',
+      authType: 'subscription',
+      baseUrl: 'https://chatgpt.com/backend-api/codex',
+      endpointFormat: 'responses',
+      credential: oldCredential,
+      models: ['gpt-5.6-sol'],
+      selectedModel: 'gpt-5.6-sol',
+      probe: false,
+      select: true
+    })
+    const sourceId = (await value.materialize()).providers.get('codex')!.credentialSourceId!
+    let signalFetchStarted!: () => void
+    const fetchStarted = new Promise<void>((resolve) => { signalFetchStarted = resolve })
+    let releaseFetch!: () => void
+    const fetchReleased = new Promise<void>((resolve) => { releaseFetch = resolve })
+    const fetchImpl = vi.fn<typeof fetch>(async () => {
+      signalFetchStarted()
+      await fetchReleased
+      return Response.json({
+        access_token: 'late-old-account-access',
+        refresh_token: 'late-old-account-refresh',
+        expires_in: 3600
+      })
+    })
+    const refresher = new CodexOAuthCredentialRefresher(value, {
+      fetchImpl,
+      nowMs: () => 10_000
+    })
+
+    const pendingRefresh = refresher.resolve(sourceId)
+    await fetchStarted
+    const replacement = JSON.stringify({
+      kind: 'codex-oauth',
+      accessToken: 'new-account-access',
+      refreshToken: 'new-account-refresh',
+      expiresAt: 9_999_999,
+      accountId: 'new-account'
+    })
+    await value.replaceCredential('codex', {
+      expectedRevision: connected.revision,
+      credential: replacement
+    })
+    releaseFetch()
+
+    await expect(pendingRefresh).resolves.toEqual({
+      rawApiKey: replacement,
+      refreshable: true
+    })
+    expect((await value.resolveApiKey(sourceId))?.apiKey).toBe(replacement)
   })
 
   it('keeps direct Registry API keys request-resolvable but non-refreshable', async () => {
@@ -258,7 +742,7 @@ describe('ModelConnectionRegistry', () => {
     expect((await value.materialize()).providers.get('claude-subscription')).toMatchObject({
       kind: 'agent-sdk',
       apiKey: 'claude-setup-token',
-      credentialSourceId: 'settings:provider:claude-subscription'
+      credentialSourceId: 'model-connection:claude-subscription'
     })
   })
 
@@ -1028,7 +1512,7 @@ describe('ModelConnectionRegistry', () => {
     })
   })
 
-  it('reconciles missing GUI providers and repairs legacy active-model seeds without changing the shared default', async () => {
+  it('imports missing GUI providers without letting stale seeds overwrite a Registry catalog', async () => {
     const { value } = await registry()
     const initial = await value.connect({
       expectedRevision: 0,
@@ -1078,10 +1562,10 @@ describe('ModelConnectionRegistry', () => {
 
     expect(snapshot).toMatchObject({
       defaultProviderId: 'secondary',
-      defaultModel: 'secondary-chat'
+      defaultModel: 'deepseek-v4-pro'
     })
     expect(snapshot.providers.find((profile) => profile.id === 'secondary')?.models)
-      .toEqual(['secondary-chat', 'secondary-reasoning'])
+      .toEqual(['deepseek-v4-pro'])
     expect(snapshot.providers.find((profile) => profile.id === 'kimi-code')?.models)
       .toEqual(['kimi-k2.5', 'kimi-k2-thinking'])
   })

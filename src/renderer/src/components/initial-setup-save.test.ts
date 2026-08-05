@@ -406,6 +406,8 @@ describe('buildInitialSetupSettingsPatch', () => {
 
     expect('instructions' in patch).toBe(false)
     expect(settingsPatchSchema.parse(patch)).toEqual(patch)
+    expect(JSON.stringify(patch)).not.toContain('sk-deepseek-key')
+    expect(patch.provider?.providers?.every((provider) => !provider.apiKey)).toBe(true)
   })
 })
 

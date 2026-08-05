@@ -35,6 +35,7 @@ export type PowerSaveBlockerLike = {
 
 export type ScheduleRuntimeDeps = {
   store: JsonSettingsStore
+  withModelCredentials?: (settings: AppSettingsV1) => Promise<AppSettingsV1>
   runtimeRequest: RuntimeRequestFn
   logError: (category: string, message: string, detail?: unknown) => void
   powerSaveBlocker?: PowerSaveBlockerLike

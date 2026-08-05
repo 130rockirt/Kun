@@ -111,50 +111,53 @@ export class ExtensionCredentialStore {
     validateReference(reference)
     const value = serializePayload(payload)
     await this.ensureInitialized()
-    if (this.primaryActive && this.options.primary) {
-      await this.options.primary.set(this.scopedReference(reference), value)
-      return
-    }
     if (!this.fallbackKey && !this.keyProviderActive) {
+      if (this.primaryActive && this.options.primary) {
+        await this.serialize(() => this.options.primary!.set(this.scopedReference(reference), value))
+        return
+      }
       throw new Error('protected credential storage is unavailable')
     }
-    await this.serialize(async () => {
-      await this.encryptedFile.update(
-        () => this.emptyEncryptedDocument(),
-        (document) => ({
-          ...document,
-          credentials: {
-            ...document.credentials,
-            [reference]: this.encryptFallback(reference, value)
-          }
-        })
-      )
-    })
+    await this.serialize(() => this.writeRaw(reference, value))
   }
 
   async get(reference: string): Promise<ExtensionCredentialPayload | null> {
     validateReference(reference)
     await this.ensureInitialized()
-    let raw: string | null
-    if (this.primaryActive && this.options.primary) {
-      raw = await this.options.primary.get(this.scopedReference(reference))
-    } else {
-      if (!this.fallbackKey && !this.keyProviderActive) {
-        throw new Error('protected credential storage is unavailable')
-      }
-      const document = await this.readEncryptedDocument()
-      const encrypted = document.credentials[reference]
-      if (!encrypted) return null
-      raw = this.decryptFallback(reference, encrypted)
-    }
+    const raw = await this.readRaw(reference)
     return raw === null ? null : parsePayload(raw)
+  }
+
+  /**
+   * Rotates one API key only when the protected value is still the value the
+   * caller refreshed. This prevents a late OAuth response from overwriting a
+   * newer user credential that was committed while the network request ran.
+   */
+  async compareAndSetApiKey(
+    reference: string,
+    expectedApiKey: string,
+    apiKey: string
+  ): Promise<boolean> {
+    validateReference(reference)
+    const expected = expectedApiKey.trim()
+    const next = apiKey.trim()
+    if (!expected || !next) return false
+    await this.ensureInitialized()
+    return this.serialize(async () => {
+      const raw = await this.readRaw(reference)
+      if (raw === null) return false
+      const current = parsePayload(raw)
+      if (current.apiKey?.trim() !== expected) return false
+      await this.writeRaw(reference, serializePayload({ ...current, apiKey: next }))
+      return true
+    })
   }
 
   async delete(reference: string): Promise<void> {
     validateReference(reference)
     await this.ensureInitialized()
     if (this.primaryActive && this.options.primary) {
-      await this.options.primary.delete(this.scopedReference(reference))
+      await this.serialize(() => this.options.primary!.delete(this.scopedReference(reference)))
       return
     }
     if (!this.fallbackKey && !this.keyProviderActive) {
@@ -203,6 +206,38 @@ export class ExtensionCredentialStore {
 
   private async readEncryptedDocument(): Promise<EncryptedCredentialDocument> {
     return this.encryptedFile.read(() => this.emptyEncryptedDocument())
+  }
+
+  private async readRaw(reference: string): Promise<string | null> {
+    if (this.primaryActive && this.options.primary) {
+      return this.options.primary.get(this.scopedReference(reference))
+    }
+    if (!this.fallbackKey && !this.keyProviderActive) {
+      throw new Error('protected credential storage is unavailable')
+    }
+    const document = await this.readEncryptedDocument()
+    const encrypted = document.credentials[reference]
+    return encrypted ? this.decryptFallback(reference, encrypted) : null
+  }
+
+  private async writeRaw(reference: string, value: string): Promise<void> {
+    if (this.primaryActive && this.options.primary) {
+      await this.options.primary.set(this.scopedReference(reference), value)
+      return
+    }
+    if (!this.fallbackKey && !this.keyProviderActive) {
+      throw new Error('protected credential storage is unavailable')
+    }
+    await this.encryptedFile.update(
+      () => this.emptyEncryptedDocument(),
+      (document) => ({
+        ...document,
+        credentials: {
+          ...document.credentials,
+          [reference]: this.encryptFallback(reference, value)
+        }
+      })
+    )
   }
 
   private emptyEncryptedDocument(): EncryptedCredentialDocument {

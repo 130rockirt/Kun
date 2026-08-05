@@ -251,6 +251,7 @@ import { RuntimeMigrationImportService } from '../services/runtime-migration-imp
 import {
   isModelConnectionCredentialSourceId,
   ModelConnectionRegistry,
+  providerIdFromCredentialSource,
   type ModelConnectionSeed
 } from '../services/model-connection-registry.js'
 import { ModelConnectionOAuthService } from '../services/model-connection-oauth.js'
@@ -603,10 +604,10 @@ export async function createKunServeRuntime(
       isModelConnectionCredentialSourceId(sourceId)
         ? modelConnections.resolveApiKey(sourceId)
         : legacyCredentialMigration.resolveApiKey(sourceId),
-    updateResolvedApiKey: (sourceId: string, apiKey: string) =>
+    updateResolvedApiKey: (sourceId: string, expectedApiKey: string, apiKey: string) =>
       isModelConnectionCredentialSourceId(sourceId)
-        ? modelConnections.updateResolvedApiKey(sourceId, apiKey)
-        : legacyCredentialMigration.updateResolvedApiKey(sourceId, apiKey)
+        ? modelConnections.updateResolvedApiKey(sourceId, expectedApiKey, apiKey)
+        : legacyCredentialMigration.updateResolvedApiKey(sourceId, expectedApiKey, apiKey)
   }
   const grokCredentialRefresher = new GrokOAuthCredentialRefresher(
     requestCredentialStore
@@ -746,6 +747,10 @@ export async function createKunServeRuntime(
     dataDir: activeOptions.dataDir,
     credentials: extensionCredentials,
     modelCapabilities: registryModelCapabilities,
+    retireLegacyCredentialSource: async (sourceId) => {
+      await legacyCredentialMigration.forgetSources([sourceId])
+    },
+    resolveCredentialSource: resolveLegacyRequestCredentials,
     onChanged: (connections) => {
       const selected = connections.selected
       const providers = Object.fromEntries(connections.providers.entries())
@@ -796,6 +801,26 @@ export async function createKunServeRuntime(
     routePools: activeOptions.routePools ?? [],
     localModelGateway: activeOptions.localModelGateway ?? { enabled: false }
   })
+  const resolveCapabilityProviderCredential = async (providerId: string): Promise<{
+    apiKey: string
+    headers?: Record<string, string>
+  }> => {
+    const provider = (await modelConnections.materialize()).providers.get(providerId)
+    if (!provider || provider.kind !== 'http') {
+      throw new Error(`Model connection ${providerId} is unavailable for media generation`)
+    }
+    let apiKey = provider.apiKey.trim()
+    let headers = provider.headers
+    if (provider.credentialSourceId) {
+      const resolved = await resolveLegacyRequestCredentials(provider.credentialSourceId)
+      apiKey = resolved.apiKey.trim()
+      headers = { ...(headers ?? {}), ...(resolved.headers ?? {}) }
+    }
+    if (!apiKey) {
+      throw new Error(`Model connection ${providerId} has no usable credential`)
+    }
+    return { apiKey, ...(headers ? { headers } : {}) }
+  }
   const providerQuotaService = new ProviderQuotaService({
     loadSource: async () => {
       const [snapshot, materialized] = await Promise.all([
@@ -1087,11 +1112,21 @@ export async function createKunServeRuntime(
 	  })
 	  let imageGenProviders = buildImageGenToolProviders(activeOptions.capabilities?.imageGen, {
 	    attachmentStore,
-	    nowIso
+	    nowIso,
+	    resolveCredential: resolveCapabilityProviderCredential
 	  })
-	  let speechGenProviders = buildSpeechGenToolProviders(activeOptions.capabilities?.speechGen, { nowIso })
-	  let musicGenProviders = buildMusicGenToolProviders(activeOptions.capabilities?.musicGen, { nowIso })
-	  let videoGenProviders = buildVideoGenToolProviders(activeOptions.capabilities?.videoGen, { nowIso })
+	  let speechGenProviders = buildSpeechGenToolProviders(activeOptions.capabilities?.speechGen, {
+	    nowIso,
+	    resolveCredential: resolveCapabilityProviderCredential
+	  })
+	  let musicGenProviders = buildMusicGenToolProviders(activeOptions.capabilities?.musicGen, {
+	    nowIso,
+	    resolveCredential: resolveCapabilityProviderCredential
+	  })
+	  let videoGenProviders = buildVideoGenToolProviders(activeOptions.capabilities?.videoGen, {
+	    nowIso,
+	    resolveCredential: resolveCapabilityProviderCredential
+	  })
 	  let computerUseProviders = await buildComputerUseToolProviders(activeOptions.capabilities?.computerUse)
 	  let browserUseProviders = buildBrowserUseToolProviders(activeOptions.capabilities?.browserUse)
   const designCanvasProvider = {
@@ -2263,11 +2298,21 @@ export async function createKunServeRuntime(
 	    const nextWebProviders = buildWebToolProviders(nextOptions.capabilities?.web)
 	    const nextImageGenProviders = buildImageGenToolProviders(nextOptions.capabilities?.imageGen, {
 	      attachmentStore: nextAttachmentStore,
-	      nowIso
+	      nowIso,
+	      resolveCredential: resolveCapabilityProviderCredential
 	    })
-	    const nextSpeechGenProviders = buildSpeechGenToolProviders(nextOptions.capabilities?.speechGen, { nowIso })
-	    const nextMusicGenProviders = buildMusicGenToolProviders(nextOptions.capabilities?.musicGen, { nowIso })
-	    const nextVideoGenProviders = buildVideoGenToolProviders(nextOptions.capabilities?.videoGen, { nowIso })
+	    const nextSpeechGenProviders = buildSpeechGenToolProviders(nextOptions.capabilities?.speechGen, {
+	      nowIso,
+	      resolveCredential: resolveCapabilityProviderCredential
+	    })
+	    const nextMusicGenProviders = buildMusicGenToolProviders(nextOptions.capabilities?.musicGen, {
+	      nowIso,
+	      resolveCredential: resolveCapabilityProviderCredential
+	    })
+	    const nextVideoGenProviders = buildVideoGenToolProviders(nextOptions.capabilities?.videoGen, {
+	      nowIso,
+	      resolveCredential: resolveCapabilityProviderCredential
+	    })
 	    const nextComputerUseProviders = await buildComputerUseToolProviders(nextOptions.capabilities?.computerUse)
 	    const nextBrowserUseProviders = buildBrowserUseToolProviders(nextOptions.capabilities?.browserUse)
 	    const nextPptMasterProvider = {
@@ -3522,10 +3567,14 @@ function runtimeBaseUrl(host: string, port: number): string {
   return `http://${urlHost}:${port}`
 }
 
-function activeModelConnectionProviderId(options: KunServeRuntimeOptions): string {
+export function activeModelConnectionProviderId(
+  options: Pick<KunServeRuntimeOptions, 'credentialSourceId' | 'providers'>
+): string {
   const prefix = 'settings:provider:'
   const source = options.credentialSourceId?.trim() ?? ''
-  const candidate = source.startsWith(prefix) ? source.slice(prefix.length).trim() : ''
+  const candidate = source.startsWith(prefix)
+    ? source.slice(prefix.length).trim()
+    : providerIdFromCredentialSource(source)?.trim() ?? ''
   return candidate && options.providers?.[candidate] ? candidate : 'default'
 }
 

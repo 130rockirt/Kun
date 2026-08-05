@@ -26,11 +26,13 @@ function loginErrorText(message: string, t: Translate): string {
  */
 export function ClaudeSubscriptionSection({
   provider,
+  configured = false,
   onTokenChange,
   onModelsChange,
   t
 }: {
   provider: ModelProviderProfileV1
+  configured?: boolean
   onTokenChange: (token: string) => void
   /** Replace the provider's model list with the ids the SDK reports. */
   onModelsChange?: (models: string[]) => void
@@ -105,7 +107,10 @@ export function ClaudeSubscriptionSection({
     setModelsBusy(true)
     setModelsNote(null)
     try {
-      const ids = await window.kunGui.claudeSubscriptionModels(token?.trim() || undefined)
+      const ids = await window.kunGui.claudeSubscriptionModels(
+        token?.trim() || undefined,
+        provider.id
+      )
       if (ids.length > 0) {
         onModelsChange(ids)
         setModelsNote(t('claudeSubModelsFetched').replace('{count}', String(ids.length)))
@@ -171,7 +176,7 @@ export function ClaudeSubscriptionSection({
 
   const rawToken = provider.apiKey.trim()
   const tokenValidation = rawToken ? validateClaudeSubscriptionToken(rawToken) : null
-  const hasToken = tokenValidation?.ok === true
+  const hasToken = tokenValidation?.ok === true || (configured && !rawToken)
   const invalidToken = Boolean(tokenValidation && !tokenValidation.ok)
   const downloadPct =
     progress && progress.total > 0

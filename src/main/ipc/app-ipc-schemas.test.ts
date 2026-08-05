@@ -53,6 +53,9 @@ describe('app-ipc-schemas', () => {
     expect(cursorSubscriptionDiscoveryPayloadSchema.parse({
       apiKey: ' cursor-key '
     })).toEqual({ apiKey: 'cursor-key' })
+    expect(cursorSubscriptionDiscoveryPayloadSchema.parse({
+      providerId: ' cursor-subscription '
+    })).toEqual({ providerId: 'cursor-subscription' })
     expect(() => cursorSubscriptionDiscoveryPayloadSchema.parse({
       apiKey: 'cursor-key',
       endpoint: 'https://private.cursor.example'

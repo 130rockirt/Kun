@@ -8,8 +8,18 @@ import {
 import { ExtensionCredentialStore } from '../../kun/src/services/extension-credential-store.js'
 import { LegacyProviderCredentialMigrationService } from '../../kun/src/services/legacy-provider-credential-migration.js'
 import { ExtensionProviderAccountStore } from '../../kun/src/services/extension-provider-account-store.js'
-import { parseStoredCodexOAuthCredentials } from '../../kun/src/services/codex-oauth-credential-refresher.js'
-import { parseStoredGrokOAuthCredentials } from '../../kun/src/services/grok-oauth-credential-refresher.js'
+import {
+  modelConnectionCredentialSourceId,
+  ModelConnectionRegistry
+} from '../../kun/src/services/model-connection-registry.js'
+import {
+  CodexOAuthCredentialRefresher,
+  parseStoredCodexOAuthCredentials
+} from '../../kun/src/services/codex-oauth-credential-refresher.js'
+import {
+  GrokOAuthCredentialRefresher,
+  parseStoredGrokOAuthCredentials
+} from '../../kun/src/services/grok-oauth-credential-refresher.js'
 import {
   DEFAULT_MODEL_PROVIDER_ID,
   getKunRuntimeSettings,
@@ -35,6 +45,10 @@ export type PreparedLegacyProviderSettingsMigration = {
 
 type MigrationRuntime = {
   service: LegacyProviderCredentialMigrationService
+  modelConnections: ModelConnectionRegistry
+  resolveRegistryCredential: (
+    providerId: string
+  ) => Promise<{ authoritative: boolean; apiKey: string }>
 }
 
 type MigrationRuntimeFactory = (dataDir: string) => Promise<MigrationRuntime>
@@ -52,17 +66,22 @@ export class LegacyProviderSettingsMigrationCoordinator {
 
   async prepare(
     settings: AppSettingsV1,
-    options: { replaceCommitted?: boolean } = {}
+    options: {
+      replaceCommitted?: boolean
+      previousSettings?: AppSettingsV1
+    } = {}
   ): Promise<PreparedLegacyProviderSettingsMigration> {
     const dataDir = resolveSettingsDataDir(settings)
     assertManagedKunDataDirIsCurrent(dataDir)
     const { service } = await this.runtime(dataDir)
-    // Save path only: an empty apiKey means the caller intentionally cleared
-    // credentials (disconnect / revoke). Drop the secure binding so hydrate
-    // cannot resurrect the previous secret. Load path keeps empty plaintext
-    // + existing bindings so restart still restores logged-in sessions.
-    if (options.replaceCommitted === true) {
-      await service.forgetSources(collectClearedLegacyCredentialSourceIds(settings))
+    // An empty compatibility field can also mean that a protected credential
+    // temporarily failed to hydrate. Only retire sources that changed from a
+    // known non-empty value in the caller's previous in-memory snapshot.
+    if (options.replaceCommitted === true && options.previousSettings) {
+      await service.forgetSources(collectClearedLegacyCredentialSourceIds(
+        options.previousSettings,
+        settings
+      ))
     }
     const sources = collectLegacyCredentialSources(settings)
     const migrations = await service.migrate(sources, {
@@ -140,6 +159,53 @@ export class LegacyProviderSettingsMigrationCoordinator {
 
   invalidateRuntime(dataDir: string): void {
     this.runtimes.delete(dataDir)
+  }
+
+  /**
+   * Produces a short-lived Main-only settings view for legacy request paths.
+   * Registry credentials never enter ordinary settings or renderer IPC.
+   */
+  async withRegistryCredentials(settings: AppSettingsV1): Promise<AppSettingsV1> {
+    const dataDir = resolveSettingsDataDir(settings)
+    assertManagedKunDataDirIsCurrent(dataDir)
+    const { resolveRegistryCredential } = await this.runtime(dataDir)
+    return projectRegistryCredentials(settings, resolveRegistryCredential)
+  }
+}
+
+export async function projectRegistryCredentials(
+  settings: AppSettingsV1,
+  resolve: (providerId: string) => Promise<{ authoritative: boolean; apiKey: string }>
+): Promise<AppSettingsV1> {
+  const providerSettings = getModelProviderSettings(settings)
+  const selectedProviderId = getKunRuntimeSettings(settings).providerId
+  let registrySelectedProvider = false
+  const providers: ModelProviderProfileV1[] = []
+  for (const provider of providerSettings.providers) {
+    const state = await resolve(provider.id)
+    if (!state.authoritative) {
+      providers.push(provider)
+      continue
+    }
+    if (selectedProviderId === provider.id) registrySelectedProvider = true
+    providers.push({ ...provider, apiKey: state.apiKey })
+  }
+  const defaultProvider = providers.find((provider) => provider.id === DEFAULT_MODEL_PROVIDER_ID) ?? providers[0]
+  return {
+    ...settings,
+    provider: {
+      ...providerSettings,
+      apiKey: defaultProvider?.apiKey ?? '',
+      providers
+    },
+    ...(registrySelectedProvider
+      ? {
+          agents: {
+            ...settings.agents,
+            kun: { ...getKunRuntimeSettings(settings), apiKey: '' }
+          }
+        }
+      : {})
   }
 }
 
@@ -253,14 +319,28 @@ function codexAccountIdFromClaims(claims: Record<string, unknown>): string {
   return ''
 }
 
-/** Source ids whose plaintext is empty and should be forgotten on save. */
-function collectClearedLegacyCredentialSourceIds(settings: AppSettingsV1): string[] {
-  const providerSettings = getModelProviderSettings(settings)
-  const runtime = getKunRuntimeSettings(settings)
-  const sourceIds = providerSettings.providers
-    .filter((provider) => !provider.apiKey.trim())
-    .map((provider) => legacyProviderCredentialSourceId(provider.id))
-  if (!runtime.apiKey.trim()) sourceIds.push(LEGACY_RUNTIME_OVERRIDE_SOURCE_ID)
+/** Source ids explicitly cleared between two trusted in-memory settings snapshots. */
+function collectClearedLegacyCredentialSourceIds(
+  previous: AppSettingsV1,
+  current: AppSettingsV1
+): string[] {
+  const previousProviders = new Map(
+    getModelProviderSettings(previous).providers.map((provider) => [provider.id, provider])
+  )
+  const currentProviders = new Map(
+    getModelProviderSettings(current).providers.map((provider) => [provider.id, provider])
+  )
+  const sourceIds: string[] = []
+  for (const [providerId, provider] of previousProviders) {
+    const currentProvider = currentProviders.get(providerId)
+    if (!currentProvider || (provider.apiKey.trim() && !currentProvider.apiKey.trim())) {
+      sourceIds.push(legacyProviderCredentialSourceId(providerId))
+    }
+  }
+  if (
+    getKunRuntimeSettings(previous).apiKey.trim() &&
+    !getKunRuntimeSettings(current).apiKey.trim()
+  ) sourceIds.push(LEGACY_RUNTIME_OVERRIDE_SOURCE_ID)
   return sourceIds
 }
 
@@ -372,7 +452,24 @@ async function createMigrationRuntime(dataDir: string): Promise<MigrationRuntime
     profileId: 'default',
     keyProvider
   })
+  const modelConnections = new ModelConnectionRegistry({ dataDir, credentials })
+  const requestCredentialStore = {
+    resolveApiKey: (sourceId: string) => modelConnections.resolveApiKey(sourceId),
+    updateResolvedApiKey: (sourceId: string, expectedApiKey: string, apiKey: string) =>
+      modelConnections.updateResolvedApiKey(sourceId, expectedApiKey, apiKey)
+  }
+  const codexCredentialRefresher = new CodexOAuthCredentialRefresher(requestCredentialStore)
+  const grokCredentialRefresher = new GrokOAuthCredentialRefresher(requestCredentialStore)
   return {
+    modelConnections,
+    resolveRegistryCredential: async (providerId) => {
+      const state = await modelConnections.credentialStateForInternalConsumer(providerId)
+      if (!state.authoritative || !state.apiKey) return state
+      const sourceId = modelConnectionCredentialSourceId(providerId)
+      let resolved = await codexCredentialRefresher.resolve(sourceId)
+      if (!resolved.refreshable) resolved = await grokCredentialRefresher.resolve(sourceId)
+      return { authoritative: true, apiKey: resolved.rawApiKey }
+    },
     service: new LegacyProviderCredentialMigrationService({
       dataDir,
       accounts,

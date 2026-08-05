@@ -126,8 +126,10 @@ const api = {
   cliInstallAction: (action) => ipcRenderer.invoke('cli-install:action', action),
   claudeSubscriptionStatus: () => ipcRenderer.invoke('claude-subscription:status'),
   claudeSubscriptionLogin: () => ipcRenderer.invoke('claude-subscription:login'),
-  claudeSubscriptionProbe: (token) => ipcRenderer.invoke('claude-subscription:probe', token),
-  claudeSubscriptionModels: (token) => ipcRenderer.invoke('claude-subscription:models', token),
+  claudeSubscriptionProbe: (token, providerId) =>
+    ipcRenderer.invoke('claude-subscription:probe', token, providerId),
+  claudeSubscriptionModels: (token, providerId) =>
+    ipcRenderer.invoke('claude-subscription:models', token, providerId),
   claudeSubscriptionSdkStatus: () => ipcRenderer.invoke('claude-subscription:sdk-status'),
   claudeSubscriptionSdkInstall: () => ipcRenderer.invoke('claude-subscription:sdk-install'),
   onClaudeSubscriptionSdkProgress: (handler) => {
@@ -151,8 +153,8 @@ const api = {
   geminiSubscriptionModels: () => ipcRenderer.invoke('gemini-subscription:models'),
   geminiCliSubscriptionStatus: () => ipcRenderer.invoke('gemini-cli-subscription:status'),
   geminiCliSubscriptionModels: () => ipcRenderer.invoke('gemini-cli-subscription:models'),
-  cursorSubscriptionDiscover: (apiKey) =>
-    ipcRenderer.invoke('cursor-subscription:discover', { apiKey }),
+  cursorSubscriptionDiscover: (apiKey, providerId) =>
+    ipcRenderer.invoke('cursor-subscription:discover', { apiKey, providerId }),
   setSettings: (partial) =>
     ipcRenderer.invoke('settings:set', partial),
   saveSettingsSilent: (partial) =>

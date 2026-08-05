@@ -33,7 +33,7 @@ import {
   KUN_APPROVAL_CONSENT_HEADER
 } from '../../../kun/src/server/approval-consent.js'
 
-const handlers = new Map<string, (event: unknown, payload?: unknown) => Promise<unknown>>()
+const handlers = new Map<string, (...args: unknown[]) => Promise<unknown>>()
 const electronMock = vi.hoisted(() => ({
   showMessageBox: vi.fn(),
   openPath: vi.fn(async () => ''),
@@ -48,10 +48,21 @@ const uiPluginMocks = vi.hoisted(() => ({
   activate: vi.fn(async (_pluginId: string, _css: string) => undefined),
   deactivate: vi.fn(async () => undefined)
 }))
+const protectedProviderMocks = vi.hoisted(() => ({
+  probeClaudeSubscription: vi.fn(async () => ({ ok: true as const, latencyMs: 1 })),
+  fetchSdkModels: vi.fn(async () => ['claude-model']),
+  discoverCursorSubscription: vi.fn(async () => ({
+    account: { apiKeyName: 'registry-key' },
+    models: [{ id: 'cursor-model', displayName: 'Cursor Model' }]
+  }))
+}))
 
 vi.mock('electron', () => ({
   app: {
-    quit: vi.fn()
+    quit: vi.fn(),
+    getPath: vi.fn(() => '/tmp/kun-user-data'),
+    getAppPath: vi.fn(() => '/tmp/kun-app'),
+    isPackaged: false
   },
   dialog: { showMessageBox: electronMock.showMessageBox },
   shell: {
@@ -92,6 +103,21 @@ vi.mock('../services/ui-plugin-cdp-theme-controller', () => ({
   }
 }))
 
+vi.mock('../claude-subscription-auth', async () => ({
+  ...await vi.importActual<typeof import('../claude-subscription-auth')>('../claude-subscription-auth'),
+  probeClaudeSubscription: protectedProviderMocks.probeClaudeSubscription
+}))
+
+vi.mock('../claude-subscription-models', async () => ({
+  ...await vi.importActual<typeof import('../claude-subscription-models')>('../claude-subscription-models'),
+  fetchSdkModels: protectedProviderMocks.fetchSdkModels
+}))
+
+vi.mock('../cursor-subscription-models', async () => ({
+  ...await vi.importActual<typeof import('../cursor-subscription-models')>('../cursor-subscription-models'),
+  discoverCursorSubscription: protectedProviderMocks.discoverCursorSubscription
+}))
+
 function settings(): AppSettingsV1 {
   return {
     version: 1,
@@ -121,6 +147,92 @@ function settings(): AppSettingsV1 {
     codePromptPrefix: '',
     disabledSkillIds: []
   }
+}
+
+function settingsWithProtectedSubscriptionCredentials(): AppSettingsV1 {
+  const current = settings()
+  const defaultProfile = current.provider.providers[0]!
+  return {
+    ...current,
+    provider: {
+      ...current.provider,
+      providers: [
+        defaultProfile,
+        {
+          ...defaultProfile,
+          id: 'claude-subscription',
+          name: 'Claude subscription',
+          kind: 'agent-sdk',
+          apiKey: 'registry-claude-secret'
+        },
+        {
+          ...defaultProfile,
+          id: 'cursor-subscription',
+          name: 'Cursor subscription',
+          kind: 'cursor-sdk',
+          apiKey: 'registry-cursor-secret'
+        }
+      ]
+    }
+  }
+}
+
+function settingsWithPlaintextModelCredentials(): AppSettingsV1 {
+  const current = settings()
+  return {
+    ...current,
+    provider: {
+      ...current.provider,
+      apiKey: 'legacy-provider-secret',
+      providers: current.provider.providers.map((provider, index) => ({
+        ...provider,
+        apiKey: `provider-secret-${index}`
+      }))
+    },
+    agents: {
+      ...current.agents,
+      kun: {
+        ...current.agents.kun,
+        apiKey: 'runtime-model-secret',
+        runtimeToken: 'runtime-auth-token',
+        imageGeneration: {
+          ...current.agents.kun.imageGeneration,
+          apiKey: 'image-secret'
+        },
+        speechToText: {
+          ...current.agents.kun.speechToText,
+          apiKey: 'speech-to-text-secret'
+        },
+        textToSpeech: {
+          ...current.agents.kun.textToSpeech,
+          apiKey: 'text-to-speech-secret'
+        },
+        musicGeneration: {
+          ...current.agents.kun.musicGeneration,
+          apiKey: 'music-secret'
+        },
+        videoGeneration: {
+          ...current.agents.kun.videoGeneration,
+          apiKey: 'video-secret'
+        }
+      }
+    }
+  }
+}
+
+function expectRendererModelCredentialsRedacted(value: unknown): void {
+  const projected = value as AppSettingsV1
+  expect(projected.provider.apiKey).toBe('')
+  expect(projected.provider.providers.every((provider) => provider.apiKey === '')).toBe(true)
+  expect(projected.agents.kun.apiKey).toBe('')
+  // These custom capability secrets have not migrated to Registry ownership;
+  // preserving them avoids erasing the key on an adjacent settings edit.
+  expect(projected.agents.kun.imageGeneration.apiKey).toBe('image-secret')
+  expect(projected.agents.kun.speechToText.apiKey).toBe('speech-to-text-secret')
+  expect(projected.agents.kun.textToSpeech.apiKey).toBe('text-to-speech-secret')
+  expect(projected.agents.kun.musicGeneration.apiKey).toBe('music-secret')
+  expect(projected.agents.kun.videoGeneration.apiKey).toBe('video-secret')
+  expect(projected.agents.kun.runtimeToken).toBe('runtime-auth-token')
 }
 
 function registerOptions(overrides: Partial<Parameters<typeof import('./register-app-ipc-handlers').registerAppIpcHandlers>[0]> = {}) {
@@ -180,6 +292,9 @@ describe('registerAppIpcHandlers', () => {
     uiPluginMocks.removeUiPlugin.mockReset()
     uiPluginMocks.activate.mockClear()
     uiPluginMocks.deactivate.mockClear()
+    protectedProviderMocks.probeClaudeSubscription.mockClear()
+    protectedProviderMocks.fetchSdkModels.mockClear()
+    protectedProviderMocks.discoverCursorSubscription.mockClear()
   })
 
   afterEach(() => {
@@ -192,6 +307,173 @@ describe('registerAppIpcHandlers', () => {
     expect(handlers.get('cursor-subscription:discover')).toBeTypeOf('function')
     expect(handlers.get('gemini-cli-subscription:status')).toBeTypeOf('function')
     expect(handlers.get('gemini-cli-subscription:models')).toBeTypeOf('function')
+  })
+
+  it('resolves persisted Claude and Cursor credentials through the Main-only Registry projection', async () => {
+    const projected = settingsWithProtectedSubscriptionCredentials()
+    const stored: AppSettingsV1 = {
+      ...projected,
+      provider: {
+        ...projected.provider,
+        providers: projected.provider.providers.map((provider) => ({
+          ...provider,
+          apiKey: ''
+        }))
+      }
+    }
+    const mainFrame = { processId: 10, routingId: 20 }
+    const contents = { id: 7, mainFrame }
+    const mainWindow = { isDestroyed: () => false, webContents: contents }
+    const trustedEvent = { sender: contents, senderFrame: mainFrame }
+    const withRegistryCredentials = vi.fn(async () => projected)
+    registerAppIpcHandlers(registerOptions({
+      store: { load: vi.fn(async () => stored) } as never,
+      getMainWindow: () => mainWindow as never,
+      withRegistryCredentials
+    }))
+
+    await handlers.get('claude-subscription:probe')?.(
+      trustedEvent,
+      undefined,
+      'claude-subscription'
+    )
+    await handlers.get('claude-subscription:models')?.(
+      trustedEvent,
+      undefined,
+      'claude-subscription'
+    )
+    await handlers.get('cursor-subscription:discover')?.(
+      trustedEvent,
+      { providerId: 'cursor-subscription' }
+    )
+
+    expect(protectedProviderMocks.probeClaudeSubscription).toHaveBeenCalledWith(expect.objectContaining({
+      token: 'registry-claude-secret'
+    }))
+    expect(protectedProviderMocks.fetchSdkModels).toHaveBeenCalledWith(expect.objectContaining({
+      token: 'registry-claude-secret'
+    }))
+    expect(protectedProviderMocks.discoverCursorSubscription).toHaveBeenCalledWith(expect.objectContaining({
+      apiKey: 'registry-cursor-secret'
+    }))
+    expect(withRegistryCredentials).toHaveBeenCalledTimes(3)
+  })
+
+  it('rejects untrusted Registry credential lookups before loading protected settings', async () => {
+    const projected = settingsWithProtectedSubscriptionCredentials()
+    const mainFrame = { processId: 10, routingId: 20 }
+    const contents = { id: 7, mainFrame }
+    const mainWindow = { isDestroyed: () => false, webContents: contents }
+    const untrustedEvent = {
+      sender: { id: 99 },
+      senderFrame: { processId: 90, routingId: 91 }
+    }
+    const storeLoad = vi.fn(async () => settings())
+    const withRegistryCredentials = vi.fn(async () => projected)
+    registerAppIpcHandlers(registerOptions({
+      store: { load: storeLoad } as never,
+      getMainWindow: () => mainWindow as never,
+      withRegistryCredentials
+    }))
+
+    await expect(handlers.get('claude-subscription:probe')?.(
+      untrustedEvent,
+      undefined,
+      'claude-subscription'
+    )).rejects.toThrow(/trusted workbench frame/)
+    await expect(handlers.get('claude-subscription:models')?.(
+      untrustedEvent,
+      undefined,
+      'claude-subscription'
+    )).rejects.toThrow(/trusted workbench frame/)
+    await expect(handlers.get('cursor-subscription:discover')?.(
+      untrustedEvent,
+      { providerId: 'cursor-subscription' }
+    )).rejects.toThrow(/trusted workbench frame/)
+    await expect(handlers.get('claude-subscription:probe')?.(
+      untrustedEvent,
+      'renderer-supplied-secret'
+    )).rejects.toThrow(/trusted workbench frame/)
+
+    expect(storeLoad).not.toHaveBeenCalled()
+    expect(withRegistryCredentials).not.toHaveBeenCalled()
+    expect(protectedProviderMocks.probeClaudeSubscription).not.toHaveBeenCalled()
+    expect(protectedProviderMocks.fetchSdkModels).not.toHaveBeenCalled()
+    expect(protectedProviderMocks.discoverCursorSubscription).not.toHaveBeenCalled()
+  })
+
+  it('binds protected subscription credentials to the expected provider transport', async () => {
+    const projected = settingsWithProtectedSubscriptionCredentials()
+    const mainFrame = { processId: 10, routingId: 20 }
+    const contents = { id: 7, mainFrame }
+    const mainWindow = { isDestroyed: () => false, webContents: contents }
+    const trustedEvent = { sender: contents, senderFrame: mainFrame }
+    const withRegistryCredentials = vi.fn(async () => projected)
+    registerAppIpcHandlers(registerOptions({
+      store: { load: vi.fn(async () => projected) } as never,
+      getMainWindow: () => mainWindow as never,
+      withRegistryCredentials
+    }))
+
+    await expect(handlers.get('claude-subscription:probe')?.(
+      trustedEvent,
+      undefined,
+      'cursor-subscription'
+    )).rejects.toThrow(/not an? agent-sdk provider/)
+    await expect(handlers.get('claude-subscription:models')?.(
+      trustedEvent,
+      undefined,
+      'cursor-subscription'
+    )).rejects.toThrow(/not an? agent-sdk provider/)
+    await expect(handlers.get('cursor-subscription:discover')?.(
+      trustedEvent,
+      { providerId: 'claude-subscription' }
+    )).rejects.toThrow(/not a cursor-sdk provider/)
+
+    expect(protectedProviderMocks.probeClaudeSubscription).not.toHaveBeenCalled()
+    expect(protectedProviderMocks.fetchSdkModels).not.toHaveBeenCalled()
+    expect(protectedProviderMocks.discoverCursorSubscription).not.toHaveBeenCalled()
+    expect(withRegistryCredentials).not.toHaveBeenCalled()
+  })
+
+  it('allows explicit subscription credential drafts without a Registry lookup', async () => {
+    const mainFrame = { processId: 10, routingId: 20 }
+    const contents = { id: 7, mainFrame }
+    const mainWindow = { isDestroyed: () => false, webContents: contents }
+    const trustedEvent = { sender: contents, senderFrame: mainFrame }
+    const withRegistryCredentials = vi.fn(async () => {
+      throw new Error('Registry lookup must not run for an explicit draft')
+    })
+    registerAppIpcHandlers(registerOptions({
+      getMainWindow: () => mainWindow as never,
+      withRegistryCredentials
+    }))
+
+    await handlers.get('claude-subscription:probe')?.(
+      trustedEvent,
+      'draft-claude-secret',
+      'cursor-subscription'
+    )
+    await handlers.get('claude-subscription:models')?.(
+      trustedEvent,
+      'draft-claude-secret',
+      'cursor-subscription'
+    )
+    await handlers.get('cursor-subscription:discover')?.(trustedEvent, {
+      apiKey: 'draft-cursor-secret',
+      providerId: 'claude-subscription'
+    })
+
+    expect(withRegistryCredentials).not.toHaveBeenCalled()
+    expect(protectedProviderMocks.probeClaudeSubscription).toHaveBeenCalledWith(expect.objectContaining({
+      token: 'draft-claude-secret'
+    }))
+    expect(protectedProviderMocks.fetchSdkModels).toHaveBeenCalledWith(expect.objectContaining({
+      token: 'draft-claude-secret'
+    }))
+    expect(protectedProviderMocks.discoverCursorSubscription).toHaveBeenCalledWith(expect.objectContaining({
+      apiKey: 'draft-cursor-secret'
+    }))
   })
 
   it('bypasses cache for development reload commands and keeps packaged reloads ordinary', async () => {
@@ -365,6 +647,36 @@ describe('registerAppIpcHandlers', () => {
     expect(applySettingsPatch).not.toHaveBeenCalled()
   })
 
+  it('redacts plaintext model credentials from settings:get without mutating the Main snapshot', async () => {
+    const current = settingsWithPlaintextModelCredentials()
+    const original = JSON.stringify(current)
+    registerAppIpcHandlers(registerOptions({
+      store: { load: vi.fn(async () => current) } as never
+    }))
+
+    const result = await handlers.get('settings:get')?.({})
+
+    expectRendererModelCredentialsRedacted(result)
+    expect(JSON.stringify(current)).toBe(original)
+  })
+
+  it('redacts plaintext model credentials from both settings write responses', async () => {
+    const persisted = settingsWithPlaintextModelCredentials()
+    const original = JSON.stringify(persisted)
+    const applySettingsPatch = vi.fn(async () => persisted)
+    const saveSettingsPatch = vi.fn(async () => persisted)
+    registerAppIpcHandlers(registerOptions({ applySettingsPatch, saveSettingsPatch }))
+
+    const setResult = await handlers.get('settings:set')?.({}, { theme: 'dark' })
+    const saveResult = await handlers.get('settings:save-silent')?.({}, { locale: 'zh' })
+
+    expectRendererModelCredentialsRedacted(setResult)
+    expectRendererModelCredentialsRedacted(saveResult)
+    expect(applySettingsPatch).toHaveBeenCalledWith({ theme: 'dark' })
+    expect(saveSettingsPatch).toHaveBeenCalledWith({ locale: 'zh' })
+    expect(JSON.stringify(persisted)).toBe(original)
+  })
+
   it('requires trusted native confirmation before resetting unreadable credentials', async () => {
     const mainFrame = { processId: 10, routingId: 20 }
     const contents = { id: 7, mainFrame }
@@ -530,7 +842,7 @@ describe('registerAppIpcHandlers', () => {
     // A Direct DOM synthetic click can at most make the trusted renderer send
     // this request. Cancelling the Main-owned prompt leaves settings unchanged.
     electronMock.showMessageBox.mockResolvedValueOnce({ response: 1 })
-    await expect(handlers.get('settings:set')?.(trustedEvent, payload)).resolves.toBe(current)
+    await expect(handlers.get('settings:set')?.(trustedEvent, payload)).resolves.toEqual(current)
     expect(applySettingsPatch).not.toHaveBeenCalled()
     expect(electronMock.showMessageBox).toHaveBeenLastCalledWith(
       mainWindow,

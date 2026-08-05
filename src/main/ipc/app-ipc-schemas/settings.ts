@@ -68,9 +68,13 @@ export const modelIdSchema = z.string().trim().min(1).max(MAX_MODEL_ID_LENGTH)
 export const optionalModelIdSchema = z.string().trim().max(MAX_MODEL_ID_LENGTH).optional()
 export const cursorSubscriptionDiscoveryPayloadSchema = z
   .object({
-    apiKey: z.string().trim().min(1).max(MAX_BODY_BYTES)
+    apiKey: z.string().trim().min(1).max(MAX_BODY_BYTES).optional(),
+    providerId: modelIdSchema.optional()
   })
   .strict()
+  .refine((value) => Boolean(value.apiKey || value.providerId), {
+    message: 'apiKey or providerId is required'
+  })
 const writeInlineCompletionModelSchema = z.union([
   z.enum(WRITE_INLINE_COMPLETION_MODEL_IDS),
   modelIdSchema

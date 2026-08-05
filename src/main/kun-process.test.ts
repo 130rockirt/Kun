@@ -1022,7 +1022,7 @@ describe('syncGuiManagedKunConfig', () => {
     expect('headers' in cleared.capabilities.imageGen).toBe(false)
   })
 
-  it('unwraps Codex OAuth credentials and writes Codex headers for image generation', async () => {
+  it('persists only the Codex provider reference for image generation', async () => {
     if (!tempRoot) throw new Error('temp root not initialized')
     const configPath = join(tempRoot, 'config.json')
     const module = await import('./kun-process')
@@ -1054,26 +1054,20 @@ describe('syncGuiManagedKunConfig', () => {
     const parsed = JSON.parse(readFileSync(configPath, 'utf8')) as any
     expect(parsed.capabilities.imageGen).toMatchObject({
       enabled: true,
+      providerId: 'codex',
       protocol: 'codex-responses-image',
       baseUrl: 'https://chatgpt.com/backend-api/codex',
-      apiKey: 'codex-access-token',
       model: 'gpt-image-2',
       defaultResolution: '1K',
       quality: 'medium',
-      timeoutMs: 180000,
-      headers: {
-        'ChatGPT-Account-Id': 'acct_123',
-        originator: 'codex_cli_rs',
-        'OpenAI-Beta': 'responses=experimental'
-      }
+      timeoutMs: 180000
     })
-    expect(parsed.capabilities.imageGen.headers['User-Agent']).toMatch(/^codex_cli_rs\/0\.145\.0 \(.+; .+\)$/)
-    expect(parsed.capabilities.imageGen.headers['User-Agent']).not.toMatch(/deepseekgui|kun/i)
-    expect(typeof parsed.capabilities.imageGen.headers.session_id).toBe('string')
+    expect(parsed.capabilities.imageGen.apiKey).toBeUndefined()
+    expect(parsed.capabilities.imageGen.headers).toBeUndefined()
     expect(KunConfigSchema.safeParse(parsed).success).toBe(true)
   })
 
-  it('unwraps Grok OAuth credentials for direct Imagine image and video requests', async () => {
+  it('persists only the Grok provider reference for direct Imagine requests', async () => {
     if (!tempRoot) throw new Error('temp root not initialized')
     const configPath = join(tempRoot, 'config.json')
     const module = await import('./kun-process')
@@ -1111,13 +1105,9 @@ describe('syncGuiManagedKunConfig', () => {
 
     const parsed = JSON.parse(readFileSync(configPath, 'utf8')) as any
     for (const capability of [parsed.capabilities.imageGen, parsed.capabilities.videoGen]) {
-      expect(capability.apiKey).toBe('grok-access-token')
-      expect(capability.headers).toMatchObject({
-        'x-grok-client-version': expect.any(String),
-        'x-grok-client-identifier': 'grok-shell'
-      })
-      expect(capability.headers['X-XAI-Token-Auth']).toBeUndefined()
-      expect(capability.headers['x-authenticateresponse']).toBeUndefined()
+      expect(capability.providerId).toBe('grok-subscription')
+      expect(capability.apiKey).toBeUndefined()
+      expect(capability.headers).toBeUndefined()
     }
     expect(parsed.capabilities.imageGen).toMatchObject({
       protocol: 'grok-imagine-image',
@@ -1133,7 +1123,7 @@ describe('syncGuiManagedKunConfig', () => {
     expect(KunConfigSchema.safeParse(parsed).success).toBe(true)
   })
 
-  it('forwards the selected Volcano Ark media gateway and dedicated key to Kun', async () => {
+  it('forwards the selected Volcano Ark media gateway without persisting its key', async () => {
     if (!tempRoot) throw new Error('temp root not initialized')
     const configPath = join(tempRoot, 'config.json')
     const module = await import('./kun-process')
@@ -1167,21 +1157,23 @@ describe('syncGuiManagedKunConfig', () => {
     const parsed = JSON.parse(readFileSync(configPath, 'utf8')) as any
     expect(parsed.capabilities.imageGen).toMatchObject({
       enabled: true,
+      providerId: 'volcengine-agent-plan',
       protocol: 'volcengine-ark-image',
       baseUrl: 'https://ark.cn-beijing.volces.com/api/plan/v3',
-      apiKey: 'agent-plan-key',
       model: 'doubao-seedream-5.0-lite',
       defaultResolution: '4K'
     })
     expect(parsed.capabilities.videoGen).toMatchObject({
       enabled: true,
+      providerId: 'volcengine-agent-plan',
       protocol: 'volcengine-ark-video',
       baseUrl: 'https://ark.cn-beijing.volces.com/api/plan/v3',
-      apiKey: 'agent-plan-key',
       model: 'doubao-seedance-2.0',
       defaultDuration: 15,
       defaultResolution: '4K'
     })
+    expect(parsed.capabilities.imageGen.apiKey).toBeUndefined()
+    expect(parsed.capabilities.videoGen.apiKey).toBeUndefined()
     expect(parsed.capabilities.imageGen.headers).toBeUndefined()
     expect(parsed.capabilities.videoGen.headers).toBeUndefined()
     expect(KunConfigSchema.safeParse(parsed).success).toBe(true)

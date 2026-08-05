@@ -64,7 +64,10 @@ export type SettingsCredentialMigrationResult = {
 export type SettingsCredentialMigration = {
   prepare: (
     settings: AppSettingsV1,
-    options?: { replaceCommitted?: boolean }
+    options?: {
+      replaceCommitted?: boolean
+      previousSettings?: AppSettingsV1
+    }
   ) => Promise<SettingsCredentialMigrationResult>
   /**
    * Repairs an already-migrated OAuth source whose protected value was
@@ -621,7 +624,10 @@ export class JsonSettingsStore {
   ): Promise<SettingsCredentialMigrationResult | null | undefined> {
     if (!this.options.credentialMigration) return undefined
     try {
-      return await this.options.credentialMigration.prepare(settings, { replaceCommitted })
+      return await this.options.credentialMigration.prepare(settings, {
+        replaceCommitted,
+        ...(replaceCommitted && this.cache ? { previousSettings: this.cache } : {})
+      })
     } catch (error) {
       if (replaceCommitted) throw error
       console.warn('[kun-gui] Legacy credential migration is unavailable; retaining compatibility settings.', {

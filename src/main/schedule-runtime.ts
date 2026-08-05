@@ -89,6 +89,13 @@ export class ScheduleRuntime {
     this.deps = deps
   }
 
+  private async loadSettings(): Promise<AppSettingsV1> {
+    const settings = await this.deps.store.load()
+    return this.deps.withModelCredentials
+      ? this.deps.withModelCredentials(settings)
+      : settings
+  }
+
   private resolveScheduleModelConfig(
     settings: AppSettingsV1,
     input: {
@@ -132,7 +139,7 @@ export class ScheduleRuntime {
   }
 
   async status(): Promise<ScheduleRuntimeStatus> {
-    const settings = await this.deps.store.load()
+    const settings = await this.loadSettings()
     return {
       internalServerRunning: this.server !== null,
       internalUrl: internalUrl(settings),
@@ -144,7 +151,7 @@ export class ScheduleRuntime {
 
   async runTask(taskId: string): Promise<ScheduleRunResult> {
     if (this.stopped) return { ok: false, message: 'Schedule runtime stopped.' }
-    const settings = await this.deps.store.load()
+    const settings = await this.loadSettings()
     const task = settings.schedule.tasks.find((item) => item.id === taskId)
     if (!task) return { ok: false, message: 'Task not found.' }
     if (!task.prompt.trim()) return { ok: false, message: 'Task prompt is empty.' }
@@ -223,7 +230,7 @@ export class ScheduleRuntime {
       mode?: ScheduleRunMode | null
     } = {}
   ): Promise<ScheduleTaskFromTextResult> {
-    const settings = await this.deps.store.load()
+    const settings = await this.loadSettings()
     try {
       const clawChannel = this.resolveClawChannel(settings, options.clawChannelId)
       const modelConfig = this.resolveScheduleModelConfig(settings, {
@@ -234,7 +241,9 @@ export class ScheduleRuntime {
       const request = await detectClawScheduledTaskRequest(
         settings,
         text,
-        modelConfig.model
+        modelConfig.model,
+        new Date(),
+        modelConfig.providerId
       )
       if (!request) return { kind: 'noop' }
       const task = buildScheduledTaskFromDetectedRequest({
@@ -271,12 +280,12 @@ export class ScheduleRuntime {
   }
 
   async listTasks(): Promise<ScheduledTaskV1[]> {
-    const settings = await this.deps.store.load()
+    const settings = await this.loadSettings()
     return settings.schedule.tasks
   }
 
   async createTask(task: ScheduledTaskV1): Promise<ScheduledTaskV1> {
-    const settings = await this.deps.store.load()
+    const settings = await this.loadSettings()
     const saved = await this.deps.store.patch({
       schedule: {
         enabled: true,
@@ -299,7 +308,7 @@ export class ScheduleRuntime {
     enabled?: boolean
     schedule: Partial<ScheduledTaskV1['schedule']> & { kind: ScheduledTaskV1['schedule']['kind'] }
   }): Promise<ScheduledTaskV1> {
-    const settings = await this.deps.store.load()
+    const settings = await this.loadSettings()
     const clawChannel = this.resolveClawChannel(settings, input.clawChannelId)
     const modelConfig = this.resolveScheduleModelConfig(settings, {
       providerId: input.providerId ?? settings.schedule.providerId,
@@ -338,12 +347,12 @@ export class ScheduleRuntime {
       lastThreadId: ''
     }
     const saved = await this.createTask(task)
-    await this.ensureNextRuns(await this.deps.store.load())
+    await this.ensureNextRuns(await this.loadSettings())
     return saved
   }
 
   async updateTaskById(taskId: string, patch: Partial<ScheduledTaskV1>): Promise<ScheduledTaskV1 | null> {
-    const settings = await this.deps.store.load()
+    const settings = await this.loadSettings()
     const task = settings.schedule.tasks.find((item) => item.id === taskId)
     if (!task) return null
     const now = new Date().toISOString()
@@ -366,7 +375,7 @@ export class ScheduleRuntime {
   }
 
   async deleteTaskById(taskId: string): Promise<boolean> {
-    const settings = await this.deps.store.load()
+    const settings = await this.loadSettings()
     if (!settings.schedule.tasks.some((item) => item.id === taskId)) return false
     const saved = await this.deps.store.patch({
       schedule: {
@@ -388,10 +397,10 @@ export class ScheduleRuntime {
 
   private async tick(): Promise<void> {
     if (this.stopped) return
-    const settings = await this.deps.store.load()
+    const settings = await this.loadSettings()
     if (!settings.schedule.enabled) return
     await this.ensureNextRuns(settings)
-    const fresh = await this.deps.store.load()
+    const fresh = await this.loadSettings()
     const now = Date.now()
     const dueTasks = fresh.schedule.tasks
       .filter((task) => task.enabled && task.schedule.kind !== 'manual')
@@ -461,7 +470,7 @@ export class ScheduleRuntime {
     taskId: string,
     updater: (task: ScheduledTaskV1, settings: AppSettingsV1) => ScheduledTaskV1
   ): Promise<AppSettingsV1> {
-    const settings = await this.deps.store.load()
+    const settings = await this.loadSettings()
     const tasks = settings.schedule.tasks.map((task) => task.id === taskId ? updater(task, settings) : task)
     const saved = await this.deps.store.patch({ schedule: { ...settings.schedule, tasks } })
     this.syncPowerSaveBlocker(saved)
@@ -490,7 +499,7 @@ export class ScheduleRuntime {
         this.runningTaskIds.size < MAX_CONCURRENT_BACKGROUND_TASKS &&
         this.queuedTaskIds.size > 0
       ) {
-        const settings = await this.deps.store.load()
+        const settings = await this.loadSettings()
         const queued = settings.schedule.tasks
           .filter((task) => this.queuedTaskIds.has(task.id))
           .sort((left, right) => (right.priority ?? 0) - (left.priority ?? 0) || left.createdAt.localeCompare(right.createdAt))
@@ -604,7 +613,7 @@ export class ScheduleRuntime {
     }))
 
     try {
-      const settings = await this.deps.store.load()
+      const settings = await this.loadSettings()
       const clawChannel = this.resolveTaskClawChannel(settings, task)
       let workspaceRoot = this.resolveTaskWorkspaceRoot(settings, task, clawChannel)
       if (task.useWorktree) {
@@ -712,7 +721,7 @@ export class ScheduleRuntime {
 
   private async monitorTaskTurn(taskId: string, threadId: string, turnId: string): Promise<void> {
     try {
-      const settings = await this.deps.store.load()
+      const settings = await this.loadSettings()
       const task = settings.schedule.tasks.find((item) => item.id === taskId)
       const text = await this.waitForAssistantText(
         settings,
@@ -864,7 +873,7 @@ export class ScheduleRuntime {
 
   private async handleInternalRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
     try {
-      const settings = await this.deps.store.load()
+      const settings = await this.loadSettings()
       const url = new URL(req.url ?? '/', 'http://127.0.0.1')
       if (!url.pathname.startsWith('/schedule/internal/')) {
         writeJson(res, 404, { ok: false, message: 'Not found.' })

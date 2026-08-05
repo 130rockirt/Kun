@@ -29,7 +29,8 @@ function memoryStore(initial: string): RefreshableLegacyCredentialStore & {
     async resolveApiKey() {
       return { apiKey: this.current }
     },
-    async updateResolvedApiKey(_sourceId, apiKey) {
+    async updateResolvedApiKey(_sourceId, expectedApiKey, apiKey) {
+      if (this.current !== expectedApiKey) return false
       this.current = apiKey
       this.updates.push(apiKey)
       return true

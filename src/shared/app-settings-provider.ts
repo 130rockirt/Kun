@@ -770,12 +770,13 @@ export function resolveKunSpeechToTextSettings(settings: AppSettingsV1): KunSpee
       protocol: normalizeSpeechToTextProtocol(speechToText.protocol)
     }
   }
-  const provider = getModelProviderProfile(settings, providerId)
-  const speech = provider.speech
-  if (!speech) {
+  const provider = getModelProviderSettings(settings).providers.find((item) => item.id === providerId)
+  const speech = provider?.speech
+  if (!provider || !speech) {
     return {
       ...speechToText,
-      providerId,
+      providerId: '',
+      apiKey: '',
       protocol: normalizeSpeechToTextProtocol(speechToText.protocol)
     }
   }
@@ -937,12 +938,13 @@ export function resolveKunTextToSpeechSettings(settings: AppSettingsV1): KunText
       protocol: normalizeTextToSpeechProtocol(textToSpeech.protocol)
     }
   }
-  const provider = getModelProviderProfile(settings, providerId)
-  const capability = provider.textToSpeech
-  if (!capability) {
+  const provider = getModelProviderSettings(settings).providers.find((item) => item.id === providerId)
+  const capability = provider?.textToSpeech
+  if (!provider || !capability) {
     return {
       ...textToSpeech,
-      providerId,
+      providerId: '',
+      apiKey: '',
       protocol: normalizeTextToSpeechProtocol(textToSpeech.protocol)
     }
   }
@@ -967,12 +969,13 @@ export function resolveKunMusicGenerationSettings(settings: AppSettingsV1): KunM
       protocol: normalizeMusicGenerationProtocol(musicGeneration.protocol)
     }
   }
-  const provider = getModelProviderProfile(settings, providerId)
-  const capability = provider.music
-  if (!capability) {
+  const provider = getModelProviderSettings(settings).providers.find((item) => item.id === providerId)
+  const capability = provider?.music
+  if (!provider || !capability) {
     return {
       ...musicGeneration,
-      providerId,
+      providerId: '',
+      apiKey: '',
       protocol: normalizeMusicGenerationProtocol(musicGeneration.protocol)
     }
   }
@@ -997,12 +1000,13 @@ export function resolveKunVideoGenerationSettings(settings: AppSettingsV1): KunV
       protocol: normalizeVideoGenerationProtocol(videoGeneration.protocol)
     })
   }
-  const provider = getModelProviderProfile(settings, providerId)
-  const capability = provider.video
-  if (!capability) {
+  const provider = getModelProviderSettings(settings).providers.find((item) => item.id === providerId)
+  const capability = provider?.video
+  if (!provider || !capability) {
     return {
       ...videoGeneration,
-      providerId,
+      providerId: '',
+      apiKey: '',
       protocol: normalizeVideoGenerationProtocol(videoGeneration.protocol)
     }
   }
@@ -1110,12 +1114,13 @@ export function resolveKunImageGenerationSettings(settings: AppSettingsV1): KunI
       protocol: normalizeImageGenerationProtocol(imageGeneration.protocol)
     })
   }
-  const provider = getModelProviderProfile(settings, providerId)
-  const image = provider.image
-  if (!image) {
+  const provider = getModelProviderSettings(settings).providers.find((item) => item.id === providerId)
+  const image = provider?.image
+  if (!provider || !image) {
     return {
       ...imageGeneration,
-      providerId,
+      providerId: '',
+      apiKey: '',
       protocol: normalizeImageGenerationProtocol(imageGeneration.protocol)
     }
   }
