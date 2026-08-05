@@ -6,6 +6,7 @@ import {
   PrototypePlayerOverlay,
   buildPrototypeViewportModeScript,
   openPrototypeHtmlInBrowser,
+  prototypePlayerHeaderStartInset,
   prototypeViewportFitScale,
   shouldInjectPrototypeNavigationCapture,
   shouldSyncPrototypePlayerToInitialId
@@ -28,6 +29,13 @@ function htmlArtifact(id: string, title: string, extra: Partial<DesignArtifact> 
 }
 
 describe('PrototypePlayerOverlay', () => {
+  it('reserves native window-control space only on macOS', () => {
+    expect(prototypePlayerHeaderStartInset('darwin')).toBe(108)
+    expect(prototypePlayerHeaderStartInset('win32')).toBe(12)
+    expect(prototypePlayerHeaderStartInset('linux')).toBe(12)
+    expect(prototypePlayerHeaderStartInset('unknown')).toBe(12)
+  })
+
   it('fits a fixed prototype viewport without changing its intrinsic dimensions', () => {
     expect(prototypeViewportFitScale(1280, 800, 1280, 800)).toBe(1)
     expect(prototypeViewportFitScale(960, 900, 1280, 800)).toBe(0.75)
@@ -116,6 +124,32 @@ describe('PrototypePlayerOverlay', () => {
     expect(script).toContain('scrollbar-width: none')
     expect(script).toContain('::-webkit-scrollbar')
     expect(script).toContain('width: 0')
+  })
+
+  it('renders macOS playback controls after the native traffic-light safe area', () => {
+    const relativePath = '.kun-design/doc/long-title/v15.html'
+    const title = '一个很长的中文交互稿页面标题'
+    const html = renderToStaticMarkup(
+      createElement(PrototypePlayerOverlay, {
+        open: true,
+        workspaceRoot: '/workspace',
+        designTarget: 'web',
+        platform: 'darwin',
+        artifacts: [htmlArtifact('long-title', title, {
+          relativePath,
+          versions: [
+            { id: 'long-title-v15', relativePath, createdAt: now, summary: 'Current screen' }
+          ]
+        })],
+        initialArtifactId: 'long-title',
+        onClose: () => {}
+      })
+    )
+
+    expect(html).toContain('padding-inline-start:108px')
+    expect(html).toContain('aria-label="Back"')
+    expect(html).toContain(title)
+    expect(html).toContain(`${relativePath} - Web 1280 x 800`)
   })
 
   it('renders an app-target prototype shell with phone viewport and all screens', () => {
