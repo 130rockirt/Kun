@@ -500,6 +500,7 @@
   "canvasLayerShow": "แสดงเลเยอร์",
   "canvasLayerLock": "ล็อคเลเยอร์",
   "canvasLayerUnlock": "ปลดล็อคเลเยอร์",
+  "canvasLayerDelete": "ลบเลเยอร์",
   "canvasInspectorArrange": "จัดเรียง",
   "canvasAlignLeft": "จัดชิดซ้าย",
   "canvasAlignHCenter": "จัดกึ่งกลางแนวนอน",

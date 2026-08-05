@@ -500,6 +500,7 @@
   "canvasLayerShow": "Show layer",
   "canvasLayerLock": "Lock layer",
   "canvasLayerUnlock": "Unlock layer",
+  "canvasLayerDelete": "Delete layer",
   "canvasInspectorArrange": "Arrange",
   "canvasAlignLeft": "Align left",
   "canvasAlignHCenter": "Align horizontal centers",

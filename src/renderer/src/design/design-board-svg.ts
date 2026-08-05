@@ -77,14 +77,52 @@ export function buildDesignArtifactSyncKey(
   ].join('|')
 }
 
+export type RemovedLinkedArtifactReference = {
+  artifactId: string
+  kind: 'html' | 'svg'
+  /** HTML version id when the removed frame was stamped with one. */
+  versionId?: string
+}
+
 function documentHasArtifactFrame(
   doc: CanvasDocument,
-  reference: { id: string; kind: 'html' | 'svg' }
+  reference: { id: string; kind: 'html' | 'svg'; versionId?: string }
 ): boolean {
   return Object.values(doc.objects).some((shape) => {
     const current = embeddedArtifactOf(shape)
-    return isArtifactFrame(shape) && current?.id === reference.id && current.kind === reference.kind
+    if (!isArtifactFrame(shape) || !current) return false
+    if (current.id !== reference.id || current.kind !== reference.kind) return false
+    // A version-stamped HTML frame is only a replacement for the SAME version;
+    // deleting one historical version must not be masked by another version's
+    // frame still being on the board.
+    if (reference.versionId === undefined) return true
+    return (current.versionId ?? undefined) === reference.versionId
   })
+}
+
+/**
+ * File-artifact references whose linked frame disappeared from the board,
+ * compared by { artifactId, kind, versionId }. A legacy frame without a version
+ * id matches any frame of the same artifact so the old single-frame behavior
+ * (and SVG one-to-one sync) is preserved.
+ */
+export function removedLinkedArtifactReferences(
+  before: CanvasDocument,
+  after: CanvasDocument
+): RemovedLinkedArtifactReference[] {
+  const removed: RemovedLinkedArtifactReference[] = []
+  for (const shape of Object.values(before.objects)) {
+    const reference = embeddedArtifactOf(shape)
+    if (!isArtifactFrame(shape) || !reference) continue
+    if (!documentHasArtifactFrame(after, reference)) {
+      removed.push({
+        artifactId: reference.id,
+        kind: reference.kind,
+        ...(reference.versionId ? { versionId: reference.versionId } : {})
+      })
+    }
+  }
+  return removed
 }
 
 /** File artifacts whose last linked frame disappeared from the board. */

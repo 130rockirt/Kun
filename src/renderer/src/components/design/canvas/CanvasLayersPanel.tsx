@@ -14,9 +14,11 @@ import {
   Group,
   ArrowUpRight,
   Slash,
-  Pencil
+  Pencil,
+  Trash2
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { deleteCanvasLayers } from '../../../design/canvas/canvas-layer-actions'
 import { flattenCanvasLayerRows } from '../../../design/canvas/canvas-layer-tree'
 import { useCanvasShapeStore } from '../../../design/canvas/canvas-shape-store'
 import { useCanvasSelectionStore } from '../../../design/canvas/canvas-selection-store'
@@ -51,6 +53,7 @@ function LayerRow({
     collapse: string
     visibility: string
     lock: string
+    delete: string
   }
 }) {
   const selectedIds = useCanvasSelectionStore((s) => s.selectedIds)
@@ -159,6 +162,18 @@ function LayerRow({
           <Unlock className="h-3 w-3" strokeWidth={1.5} />
         )}
       </button>
+      <button
+        type="button"
+        title={labels.delete}
+        aria-label={labels.delete}
+        className="shrink-0 p-0.5 text-gray-400 hover:text-red-500 dark:hover:text-red-400"
+        onClick={(e) => {
+          e.stopPropagation()
+          deleteCanvasLayers([shape.id])
+        }}
+      >
+        <Trash2 className="h-3 w-3" strokeWidth={1.5} />
+      </button>
     </div>
   )
 }
@@ -200,7 +215,8 @@ function CanvasLayersPanelInner() {
             labels={{
               collapse: t(row.collapsed ? 'canvasLayerExpand' : 'canvasLayerCollapse'),
               visibility: t(child.visible ? 'canvasLayerHide' : 'canvasLayerShow'),
-              lock: t(child.locked ? 'canvasLayerUnlock' : 'canvasLayerLock')
+              lock: t(child.locked ? 'canvasLayerUnlock' : 'canvasLayerLock'),
+              delete: t('canvasLayerDelete')
             }}
           />
         )

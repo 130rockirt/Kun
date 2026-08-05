@@ -500,6 +500,7 @@
   "canvasLayerShow": "レイヤーを表示",
   "canvasLayerLock": "ロックレイヤー",
   "canvasLayerUnlock": "レイヤーのロックを解除する",
+  "canvasLayerDelete": "レイヤーを削除",
   "canvasInspectorArrange": "アレンジ",
   "canvasAlignLeft": "左揃え",
   "canvasAlignHCenter": "水平方向の中心を揃える",
