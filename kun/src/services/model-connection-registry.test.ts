@@ -622,6 +622,7 @@ describe('ModelConnectionRegistry', () => {
   })
 
   it('expires an abandoned prepared credential and restores the durable credential', async () => {
+    vi.useFakeTimers()
     const { dataDir, value } = await registry(undefined, undefined, undefined, undefined, 25)
     const connected = await value.connect({
       expectedRevision: 0,
@@ -639,7 +640,6 @@ describe('ModelConnectionRegistry', () => {
     })
     const sourceId = (await value.materialize()).providers.get('deepseek')!.credentialSourceId!
     const operationToken = 'credential:11111111-1111-4111-8111-111111111111:1'
-    vi.useFakeTimers()
 
     const fenced = await value.fenceCredential('deepseek', {
       expectedRevision: connected.revision,
@@ -671,6 +671,7 @@ describe('ModelConnectionRegistry', () => {
   })
 
   it('cancels an older expiry when a newer fence takes ownership', async () => {
+    vi.useFakeTimers()
     const { value } = await registry(undefined, undefined, undefined, undefined, 25)
     const connected = await value.connect({
       expectedRevision: 0,
@@ -689,7 +690,6 @@ describe('ModelConnectionRegistry', () => {
     const sourceId = (await value.materialize()).providers.get('deepseek')!.credentialSourceId!
     const firstToken = 'credential:11111111-1111-4111-8111-111111111111:1'
     const secondToken = 'credential:11111111-1111-4111-8111-111111111111:2'
-    vi.useFakeTimers()
 
     const firstFence = await value.fenceCredential('deepseek', {
       expectedRevision: connected.revision,
@@ -718,6 +718,7 @@ describe('ModelConnectionRegistry', () => {
   })
 
   it('cancels the expiry after the matching prepared credential commits', async () => {
+    vi.useFakeTimers()
     const { value } = await registry(undefined, undefined, undefined, undefined, 10)
     const connected = await value.connect({
       expectedRevision: 0,
@@ -735,7 +736,6 @@ describe('ModelConnectionRegistry', () => {
     })
     const sourceId = (await value.materialize()).providers.get('deepseek')!.credentialSourceId!
     const operationToken = 'credential:11111111-1111-4111-8111-111111111111:1'
-    vi.useFakeTimers()
 
     const fenced = await value.fenceCredential('deepseek', {
       expectedRevision: connected.revision,
