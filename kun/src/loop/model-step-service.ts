@@ -42,6 +42,8 @@ import {
   emptyPostToolRecoveryInstruction,
   filterGoalContextsForActiveGoal,
   hasSuccessfulCreatePlanResult,
+  POST_TOOL_FAILURE_FINAL_ANSWER_RECOVERY_STEP,
+  postToolFailureRecoveryInstruction,
   TOOL_SUPPRESSION_FINAL_ANSWER_RECOVERY_STEP,
   toolSuppressionRecoveryInstruction,
   userInputUnavailableInstruction
@@ -518,8 +520,14 @@ export class ModelStepService {
       !softRequiredToolName &&
       !dedicatedSvgTurn &&
       toolSuppressionRecoveryStep >= TOOL_SUPPRESSION_FINAL_ANSWER_RECOVERY_STEP
+    const postToolFailureRecoveryStep =
+      this.deps.roundOutcome.postToolFailureRecoverySteps(turnId)
+    const forcePostToolFailureFinalAnswerRecovery =
+      postToolFailureRecoveryStep >= POST_TOOL_FAILURE_FINAL_ANSWER_RECOVERY_STEP
     const forceFinalAnswerRecovery =
-      forceEmptyPostToolFinalAnswerRecovery || forceToolSuppressionFinalAnswerRecovery
+      forceEmptyPostToolFinalAnswerRecovery ||
+      forceToolSuppressionFinalAnswerRecovery ||
+      forcePostToolFailureFinalAnswerRecovery
     const planningToolSpecs = turn.orchestration === 'graph' && !graphCreateSatisfied
       ? effectiveToolSpecs.filter((tool) =>
           tool.name === GRAPH_DEFINE_PLAN_TOOL_NAME ||
@@ -610,6 +618,13 @@ export class ModelStepService {
               toolSuppressionRecoveryStep,
               forceToolSuppressionFinalAnswerRecovery
             )
+          )]
+        : []),
+      ...(postToolFailureRecoveryStep > 0
+        ? [kunContextBlock(
+            'tool-failure-recovery',
+            'runtime',
+            postToolFailureRecoveryInstruction(postToolFailureRecoveryStep)
           )]
         : []),
       ...imageGenerationReferenceInstructions({

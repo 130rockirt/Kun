@@ -84,6 +84,18 @@ function prepared(overrides: Partial<PreparedTurnContext> = {}): PreparedTurnCon
   }
 }
 
+function failedToolResult(toolName: string): TurnItem {
+  return makeToolResultItem({
+    id: `item_${toolName}_result`,
+    threadId,
+    turnId,
+    callId: `call_${toolName}`,
+    toolName,
+    output: { error: 'simulated failure' },
+    isError: true
+  })
+}
+
 function harness(options: {
   madeProgress?: boolean
   latestItems?: TurnItem[]
@@ -842,5 +854,145 @@ describe('RoundOutcomeCoordinator', () => {
       'required_svg_mutation_missing',
       'svg_completion_gate_exhausted'
     ])
+  })
+
+  it('recovers once when the model announces progress after an ordinary tool failure', async () => {
+    const h = harness()
+    const failed = failedToolResult('read')
+    const progress = input(completed({ text: '接下来我会继续排查' }), {
+      prepared: prepared({ history: [failed] })
+    })
+
+    await expect(h.coordinator.resolve(progress)).resolves.toBe('continue')
+    expect(h.coordinator.postToolFailureRecoverySteps(turnId)).toBe(1)
+    expect(h.eventDrafts.at(-1)).toMatchObject({
+      code: 'post_tool_failure_continuation'
+    })
+  })
+
+  it('forces a final-answer recovery round and then fails visibly when progress repeats', async () => {
+    const h = harness()
+    const failed = failedToolResult('bash')
+    const progress = input(completed({ text: '我准备尝试其他命令' }), {
+      prepared: prepared({ history: [failed] })
+    })
+
+    await expect(h.coordinator.resolve(progress)).resolves.toBe('continue')
+    await expect(h.coordinator.resolve(progress)).resolves.toBe('continue')
+    expect(h.coordinator.postToolFailureRecoverySteps(turnId)).toBe(2)
+    await expect(h.coordinator.resolve(progress)).resolves.toBe('failed')
+    expect(h.failures).toEqual([
+      expect.objectContaining({ code: 'post_tool_failure_recovery_exhausted' })
+    ])
+    expect(h.effects).toEqual([
+      'event:error',
+      'event:error',
+      'event:error',
+      'item:error'
+    ])
+  })
+
+  it('resets the recovery counter when the model calls a tool again', async () => {
+    const h = harness()
+    const failed = failedToolResult('read')
+    const progress = input(completed({ text: 'Let me check the result' }), {
+      prepared: prepared({ history: [failed] })
+    })
+
+    await expect(h.coordinator.resolve(progress)).resolves.toBe('continue')
+    expect(h.coordinator.postToolFailureRecoverySteps(turnId)).toBe(1)
+
+    const call = {
+      callId: 'call_read_2',
+      toolName: 'read',
+      toolKind: 'tool_call' as const,
+      arguments: { path: 'b.ts' }
+    }
+    await expect(h.coordinator.resolve(input(completed({ toolCalls: [call] }), {
+      prepared: prepared({ history: [failed] })
+    }))).resolves.toBe('continue')
+    expect(h.coordinator.postToolFailureRecoverySteps(turnId)).toBe(0)
+  })
+
+  it('accepts a clear final answer after a tool failure without recovery', async () => {
+    const h = harness()
+    const failed = failedToolResult('bash')
+    const finalAnswer = input(completed({
+      text: 'The command failed because the file is missing; the task cannot continue until you restore it.'
+    }), {
+      prepared: prepared({ history: [failed] })
+    })
+
+    await expect(h.coordinator.resolve(finalAnswer)).resolves.toBe('stop')
+    expect(h.coordinator.postToolFailureRecoverySteps(turnId)).toBe(0)
+    expect(h.effects).toEqual([])
+  })
+
+  it('does not recover when a user-directed question follows a tool failure', async () => {
+    const h = harness()
+    const failed = failedToolResult('bash')
+    const question = input(completed({ text: '这个方案可以吗？需要你确认一下。' }), {
+      prepared: prepared({ history: [failed] })
+    })
+
+    await expect(h.coordinator.resolve(question)).resolves.toBe('stop')
+    expect(h.coordinator.postToolFailureRecoverySteps(turnId)).toBe(0)
+  })
+
+  it('ignores failed gated tools (create_plan) in the ordinary recovery window', async () => {
+    const h = harness()
+    const failed = failedToolResult(CREATE_PLAN_TOOL_NAME)
+    const progress = input(completed({ text: 'I will continue without the plan tool.' }), {
+      prepared: prepared({ history: [failed] })
+    })
+
+    await expect(h.coordinator.resolve(progress)).resolves.toBe('stop')
+    expect(h.coordinator.postToolFailureRecoverySteps(turnId)).toBe(0)
+  })
+
+  it('does not enter ordinary recovery on plan or graph turns', async () => {
+    const failed = failedToolResult('write')
+
+    const planTurn = harness()
+    await expect(planTurn.coordinator.resolve(input(completed({ text: '接下来我会完善方案' }), {
+      prepared: prepared({ history: [failed], planTurnActive: true })
+    }))).resolves.toBe('stop')
+    expect(planTurn.coordinator.postToolFailureRecoverySteps(turnId)).toBe(0)
+
+    const graphTurn = harness()
+    await expect(graphTurn.coordinator.resolve(input(completed({ text: '接下来我会继续' }), {
+      prepared: prepared({ history: [failed], orchestration: 'graph' })
+    }))).resolves.toBe('stop')
+    expect(graphTurn.coordinator.postToolFailureRecoverySteps(turnId)).toBe(0)
+  })
+
+  it('does not recover after a successful tool result', async () => {
+    const h = harness()
+    const succeeded = makeToolResultItem({
+      id: 'item_read_ok',
+      threadId,
+      turnId,
+      callId: 'call_read_ok',
+      toolName: 'read',
+      output: { text: 'ok' },
+      isError: false
+    })
+    const progress = input(completed({ text: '接下来我会继续' }), {
+      prepared: prepared({ history: [succeeded] })
+    })
+
+    await expect(h.coordinator.resolve(progress)).resolves.toBe('stop')
+    expect(h.coordinator.postToolFailureRecoverySteps(turnId)).toBe(0)
+  })
+
+  it('clears post-tool-failure recovery state with clearTurn', async () => {
+    const h = harness()
+    const failed = failedToolResult('read')
+    await h.coordinator.resolve(input(completed({ text: '接下来我会继续' }), {
+      prepared: prepared({ history: [failed] })
+    }))
+    expect(h.coordinator.postToolFailureRecoverySteps(turnId)).toBe(1)
+    h.coordinator.clearTurn(turnId)
+    expect(h.coordinator.postToolFailureRecoverySteps(turnId)).toBe(0)
   })
 })
