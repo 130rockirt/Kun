@@ -37,6 +37,7 @@ type Props = {
   artifacts: readonly DesignArtifact[]
   initialArtifactId?: string | null
   designTarget?: unknown
+  platform?: string
   onClose: () => void
   onRequestMissingScreen?: (promptSeed: string) => void
 }
@@ -122,6 +123,11 @@ export function prototypeViewportFitScale(
   return Math.min(1, availableWidth / viewportWidth, availableHeight / viewportHeight)
 }
 
+export function prototypePlayerHeaderStartInset(platform: string): number {
+  // Matches the macOS trafficLightPosition in src/main/index.ts and clears the full native control cluster.
+  return platform === 'darwin' ? 108 : 12
+}
+
 export async function openPrototypeHtmlInBrowser(
   openPrototype: ((payload: { path: string; workspaceRoot: string }) => Promise<{
     ok: boolean
@@ -149,10 +155,14 @@ function PrototypePlayerOverlayInner({
   artifacts,
   initialArtifactId,
   designTarget,
+  platform: platformOverride,
   onClose,
   onRequestMissingScreen
 }: Props) {
   const { t } = useTranslation('common')
+  const platform = platformOverride
+    ?? (typeof window !== 'undefined' ? window.kunGui?.platform ?? 'unknown' : 'unknown')
+  const headerStartInset = prototypePlayerHeaderStartInset(platform)
   const [currentId, setCurrentId] = useState<string | null>(null)
   const [history, setHistory] = useState<string[]>([])
   const [missingHref, setMissingHref] = useState('')
@@ -413,7 +423,10 @@ function PrototypePlayerOverlayInner({
         className="flex h-full w-full overflow-hidden rounded-[10px] border border-ds-border bg-white text-ds-ink shadow-[0_30px_90px_rgba(15,23,42,0.32)] dark:bg-ds-canvas"
       >
         <main className="flex min-w-0 flex-1 flex-col bg-[#f6f8fb] dark:bg-[#111318]">
-          <header className="flex h-12 shrink-0 items-center gap-2 border-b border-ds-border bg-white/82 px-3 dark:bg-ds-card/85">
+          <header
+            className="flex h-12 shrink-0 items-center gap-2 border-b border-ds-border bg-white/82 py-0 pr-3 dark:bg-ds-card/85"
+            style={{ paddingInlineStart: headerStartInset }}
+          >
             <button
               type="button"
               onClick={() => goBack()}
