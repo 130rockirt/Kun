@@ -500,6 +500,7 @@
   "canvasLayerShow": "显示图层",
   "canvasLayerLock": "锁定图层",
   "canvasLayerUnlock": "解锁图层",
+  "canvasLayerDelete": "删除图层",
   "canvasInspectorArrange": "排列",
   "canvasAlignLeft": "左对齐",
   "canvasAlignHCenter": "水平居中对齐",

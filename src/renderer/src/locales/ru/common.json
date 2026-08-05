@@ -500,6 +500,7 @@
   "canvasLayerShow": "Показать слой",
   "canvasLayerLock": "Заблокировать слой",
   "canvasLayerUnlock": "Разблокировать слой",
+  "canvasLayerDelete": "Удалить слой",
   "canvasInspectorArrange": "Устроить",
   "canvasAlignLeft": "Выровнять влево",
   "canvasAlignHCenter": "Выровнять горизонтальные центры",

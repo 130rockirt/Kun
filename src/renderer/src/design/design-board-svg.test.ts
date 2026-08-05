@@ -2,10 +2,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   buildDesignArtifactSyncKey,
   removedLinkedArtifactIds,
+  removedLinkedArtifactReferences,
   syncDesignArtifactsToBoardDocument,
   syncSvgFrameNodesToArtifacts
 } from './design-board-svg'
-import { createDefaultShape, createEmptyDocument, createSvgFrameShape, isSvgFrame } from './canvas/canvas-types'
+import {
+  createDefaultShape,
+  createEmptyDocument,
+  createHtmlFrameShape,
+  createSvgFrameShape,
+  isSvgFrame
+} from './canvas/canvas-types'
 import { useCanvasViewportStore } from './canvas/canvas-viewport-store'
 import { useDesignWorkspaceStore } from './design-workspace-store'
 import { artifact, installDesignDocument } from './design-board.test-helpers'
@@ -117,6 +124,52 @@ describe('SVG artifact board synchronization', () => {
     const deduped = syncDesignArtifactsToBoardDocument(before, [motion])
     expect(deduped.removedFrameIds).toEqual([duplicate.id])
     expect(removedLinkedArtifactIds(deduped.document, createEmptyDocument())).toEqual(['motion'])
+  })
+
+  it('reports a removed HTML version frame even when other versions remain', () => {
+    const before = createEmptyDocument()
+    const v1 = createHtmlFrameShape('Home · v1', 0, 0, 'home', 'desktop', 'home-v1')
+    const v2 = createHtmlFrameShape('Home', 500, 0, 'home', 'desktop', 'home-v2')
+    before.objects[v1.id] = { ...v1, parentId: before.rootId }
+    before.objects[v2.id] = { ...v2, parentId: before.rootId }
+    before.objects[before.rootId] = { ...before.objects[before.rootId], children: [v1.id, v2.id] }
+
+    const after = createEmptyDocument()
+    after.objects[v2.id] = { ...v2, parentId: after.rootId }
+    after.objects[after.rootId] = { ...after.objects[after.rootId], children: [v2.id] }
+
+    expect(removedLinkedArtifactReferences(before, after)).toEqual([
+      { artifactId: 'home', kind: 'html', versionId: 'home-v1' }
+    ])
+  })
+
+  it('does not report a version removed while another frame of the same version remains', () => {
+    const before = createEmptyDocument()
+    const first = createHtmlFrameShape('Home', 0, 0, 'home', 'desktop', 'home-v1')
+    const duplicate = createHtmlFrameShape('Home copy', 500, 0, 'home', 'desktop', 'home-v1')
+    before.objects[first.id] = { ...first, parentId: before.rootId }
+    before.objects[duplicate.id] = { ...duplicate, parentId: before.rootId }
+    before.objects[before.rootId] = { ...before.objects[before.rootId], children: [first.id, duplicate.id] }
+
+    const after = createEmptyDocument()
+    after.objects[first.id] = { ...first, parentId: after.rootId }
+    after.objects[after.rootId] = { ...after.objects[after.rootId], children: [first.id] }
+
+    expect(removedLinkedArtifactReferences(before, after)).toEqual([])
+  })
+
+  it('treats a legacy unversioned HTML frame as any frame of the same artifact', () => {
+    const before = createEmptyDocument()
+    const legacy = createHtmlFrameShape('Home', 0, 0, 'home', 'desktop')
+    before.objects[legacy.id] = { ...legacy, parentId: before.rootId }
+    before.objects[before.rootId] = { ...before.objects[before.rootId], children: [legacy.id] }
+
+    const after = createEmptyDocument()
+    const versioned = createHtmlFrameShape('Home', 0, 0, 'home', 'desktop', 'home-v1')
+    after.objects[versioned.id] = { ...versioned, parentId: after.rootId }
+    after.objects[after.rootId] = { ...after.objects[after.rootId], children: [versioned.id] }
+
+    expect(removedLinkedArtifactReferences(before, after)).toEqual([])
   })
 
   it('persists SVG frame geometry back to the artifact node', () => {

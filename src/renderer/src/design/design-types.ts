@@ -58,6 +58,13 @@ export type DesignArtifactNode = {
   favorite?: boolean
   /** Hidden from the board after the user deletes its linked frame. */
   boardHidden?: boolean
+  /**
+   * Per-HTML-version tombstones for linked frames the user deleted from the
+   * board. Keeps a deleted historical version frame from being recreated on
+   * sync/reload while newer versions still get their own frames. Legacy
+   * artifact-level `boardHidden` continues to cover the current version only.
+   */
+  boardHiddenVersionIds?: string[]
   viewMode?: DesignCanvasView
 }
 

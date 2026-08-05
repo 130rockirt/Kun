@@ -109,7 +109,7 @@ describe('canvas keyboard shortcuts', () => {
     expect(useCanvasShapeStore.getState().document.objects[editable].y).toBe(10)
   })
 
-  it('delete preserves locked and hidden selected shapes', () => {
+  it('delete removes locked and hidden selected shapes as one undoable action', () => {
     const editable = addRect(0)
     const locked = addRect(120)
     const hidden = addRect(240)
@@ -117,13 +117,37 @@ describe('canvas keyboard shortcuts', () => {
     store.updateShape(locked, { locked: true })
     store.updateShape(hidden, { visible: false })
     useCanvasSelectionStore.getState().select([editable, locked, hidden])
+    useCanvasUndoStore.getState().clear()
 
     handleCanvasKeyDown(eventFor('Delete'))
 
     const doc = useCanvasShapeStore.getState().document
     expect(doc.objects[editable]).toBeUndefined()
-    expect(doc.objects[locked]).toBeDefined()
-    expect(doc.objects[hidden]).toBeDefined()
+    expect(doc.objects[locked]).toBeUndefined()
+    expect(doc.objects[hidden]).toBeUndefined()
+    expect(useCanvasUndoStore.getState().undoStack).toHaveLength(1)
+    expect(Array.from(useCanvasSelectionStore.getState().selectedIds)).toEqual([])
+
+    useCanvasShapeStore.getState().undo()
+    expect(useCanvasShapeStore.getState().document.objects[editable]).toBeDefined()
+    expect(Array.from(useCanvasSelectionStore.getState().selectedIds)).toEqual([editable, locked, hidden])
+  })
+
+  it('delete inside a text input does not remove canvas layers', () => {
+    const editable = addRect(0)
+    useCanvasSelectionStore.getState().select([editable])
+
+    const handled = handleCanvasKeyDown({
+      key: 'Delete',
+      metaKey: false,
+      ctrlKey: false,
+      shiftKey: false,
+      target: { tagName: 'input' },
+      preventDefault: vi.fn()
+    } as unknown as KeyboardEvent)
+
+    expect(handled).toBe(false)
+    expect(useCanvasShapeStore.getState().document.objects[editable]).toBeDefined()
   })
 
   it('duplicate skips locked selected shapes', () => {

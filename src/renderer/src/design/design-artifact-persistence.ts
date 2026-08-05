@@ -82,8 +82,17 @@ function parseNode(
       : {}),
     ...(typeof node.favorite === 'boolean' ? { favorite: node.favorite } : {}),
     ...(typeof node.boardHidden === 'boolean' ? { boardHidden: node.boardHidden } : {}),
+    ...(parseBoardHiddenVersionIds(node.boardHiddenVersionIds) ?? {}),
     ...(viewMode ? { viewMode } : {})
   }
+}
+
+function parseBoardHiddenVersionIds(value: unknown): Pick<DesignArtifactNode, 'boardHiddenVersionIds'> | null {
+  if (!Array.isArray(value)) return null
+  const versionIds = [...new Set(
+    value.filter((item): item is string => isStr(item) && item.trim().length > 0)
+  )]
+  return versionIds.length > 0 ? { boardHiddenVersionIds: versionIds } : null
 }
 
 function parsePrototypeLinks(value: unknown): DesignPrototypeLink[] | undefined {
