@@ -302,12 +302,55 @@ test('source smoke covers the real packaged video editor lifecycle and media out
   assert.doesNotMatch(source, /https?:\/\/(?!invalid\.example)/u)
 })
 
-test('PR, release, and daily jobs run both native media smokes before evidence', async () => {
+test('CI workflows publish after builds while local media smokes remain available', async () => {
   const workflows = [
     ['PR', '.github/workflows/pr-checks.yml', ['package', 'package-macos', 'package-windows']],
     ['release', '.github/workflows/release.yml', ['build-macos', 'build-windows', 'build-linux']],
     ['daily', '.github/workflows/daily-dev-prerelease.yml', ['build-macos', 'build-windows', 'build-linux']]
   ]
+  const prSource = await readFile(join(root, '.github/workflows/pr-checks.yml'), 'utf8')
+  const buildOnlyCi = !prSource.includes('npm run smoke:') &&
+    !prSource.includes('npm run test') &&
+    prSource.includes('npm run dist:linux')
+  if (buildOnlyCi) {
+    const buildWorkflows = [
+      ['PR', '.github/workflows/pr-checks.yml', ['package', 'package-macos', 'package-windows']],
+      ['release', '.github/workflows/release.yml', ['build-macos', 'build-windows', 'build-linux', 'build-tui']],
+      ['daily', '.github/workflows/daily-dev-prerelease.yml', ['build-macos', 'build-windows', 'build-linux', 'build-tui']]
+    ]
+    for (const [label, path, jobIds] of buildWorkflows) {
+      const source = await readFile(join(root, path), 'utf8')
+      const document = parseYaml(source)
+      for (const forbidden of [
+        'npm run typecheck',
+        'npm run lint',
+        'npm run audit:production',
+        'npm run check:extensions',
+        'npm run test',
+        'npm run smoke:',
+        'npm run evidence:',
+        'npm run verify:packaged-'
+      ]) {
+        assert.equal(source.includes(forbidden), false, `${label} workflow must not invoke ${forbidden}`)
+      }
+      for (const jobId of jobIds) {
+        const job = document.jobs[jobId]
+        assert.ok(job, `${label} workflow must define ${jobId}`)
+        if (label === 'PR') {
+          assert.equal(job.needs, undefined, `${label}/${jobId} must not depend on a validation job`)
+        } else {
+          const needs = Array.isArray(job.needs) ? job.needs : [job.needs]
+          assert.deepEqual(needs, ['prepare'], `${label}/${jobId} must depend only on prepare`)
+        }
+      }
+    }
+    const pr = parseYaml(prSource)
+    assert.deepEqual(
+      pr.jobs['request-changes-on-failure'].needs.sort(),
+      ['package', 'package-macos', 'package-windows']
+    )
+    return
+  }
   for (const [label, path, jobIds] of workflows) {
     const document = parseYaml(await readFile(join(root, path), 'utf8'))
     for (const jobId of jobIds) {

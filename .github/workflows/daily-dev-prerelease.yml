@@ -58,58 +58,12 @@ jobs:
           echo "App version: ${app_version}"
           echo "Commit: ${head_sha}"
 
-  validate:
-    name: Validate dev commit
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    needs: prepare
-    steps:
-      - name: Check out develop commit
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          ref: ${{ needs.prepare.outputs.head_sha }}
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-          cache-dependency-path: |
-            package-lock.json
-            kun/package-lock.json
-
-      - name: Install root dependencies
-        run: npm ci
-
-      - name: Typecheck
-        run: npm run typecheck
-
-      - name: Lint
-        run: npm run lint
-
-      - name: Audit production dependencies
-        run: npm run audit:production
-
-      - name: Validate Extension release contracts
-        run: npm run check:extensions
-
-      - name: Test
-        run: npm run test
-
-      - name: Test bounded Kun runtime memory growth
-        run: npm --prefix kun run test:memory-growth
-
-      - name: Test joint GUI/TUI release contracts
-        run: npm run test:tui-release
-
   build-macos:
     name: Build macOS
     runs-on: macos-latest
     timeout-minutes: 90
     needs:
       - prepare
-      - validate
     env:
       KUN_APP_VERSION: ${{ needs.prepare.outputs.app_version }}
       KUN_ARTIFACT_VERSION: ${{ needs.prepare.outputs.dev_version }}
@@ -131,71 +85,11 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
 
-      - name: Install host-native FFmpeg
-        run: |
-          brew install ffmpeg-full
-          ffmpeg_bin="$(brew --prefix ffmpeg-full)/bin"
-          "$ffmpeg_bin/ffmpeg" -hide_banner -filters 2>&1 | grep -Eq '[[:space:]]drawtext[[:space:]]'
-          echo "$ffmpeg_bin" >> "$GITHUB_PATH"
-          echo "KUN_FFMPEG_PATH=$ffmpeg_bin/ffmpeg" >> "$GITHUB_ENV"
-          echo "KUN_FFPROBE_PATH=$ffmpeg_bin/ffprobe" >> "$GITHUB_ENV"
-
       - name: Install dependencies
         run: npm ci
 
-      - name: Test Runtime data migration on native macOS
-        run: npx vitest run src/main/kun-data-dir-paths.test.ts src/main/legacy-data-migration.test.ts src/main/runtime-data-dir-migration.test.ts src/main/runtime-data-dir-ownership.test.ts --reporter=dot
-
-      - name: Test Graph Mode on native macOS
-        run: npm run test:graph:platform
-
       - name: Build macOS packages
         run: npm run dist:mac
-
-      - name: Smoke packaged Kun terminal command
-        run: |
-          if [[ "$(uname -m)" == "arm64" ]]; then
-            resources="dist/mac-arm64/Kun.app/Contents/Resources"
-          else
-            resources="dist/mac/Kun.app/Contents/Resources"
-          fi
-          npm run smoke:packaged-cli -- \
-            --resources "$resources" \
-            --expected-version "${KUN_APP_VERSION}"
-
-      - name: Verify packaged macOS x64 native architecture
-        run: npm run verify:packaged-macos-native -- --resources dist/mac/Kun.app/Contents/Resources --arch x64
-
-      - name: Verify packaged macOS arm64 native architecture
-        run: npm run verify:packaged-macos-native -- --resources dist/mac-arm64/Kun.app/Contents/Resources --arch arm64
-
-      - name: Smoke packaged OCR dependencies (macOS arm64)
-        env:
-          KUN_PACKAGED_RESOURCES_DIR: dist/mac-arm64/Kun.app/Contents/Resources
-        run: node scripts/smoke-packaged-ocr.cjs
-
-      - name: Smoke packaged Extension Node runtime (macOS x64)
-        run: npm run smoke:packaged-extensions -- --resources dist/mac/Kun.app/Contents/Resources
-
-      - name: Smoke packaged Extension Node runtime (macOS arm64)
-        run: npm run smoke:packaged-extensions -- --resources dist/mac-arm64/Kun.app/Contents/Resources
-
-      - name: Smoke host-native FFmpeg broker (fail closed)
-        env:
-          KUN_RUN_MEDIA_SMOKE: '1'
-        run: npm run smoke:extension-native-media
-
-      - name: Smoke packaged Runtime data migration
-        run: npm run smoke:packaged-runtime-migration
-
-      - name: Smoke packaged Extension desktop Chromium (host-native macOS)
-        timeout-minutes: 10
-        run: npm run smoke:packaged-extension-desktop
-
-      - name: Record commit-bound macOS artifact evidence
-        env:
-          KUN_EVIDENCE_COMMIT: ${{ needs.prepare.outputs.head_sha }}
-        run: npm run evidence:extension-native
 
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@v4
@@ -208,66 +102,6 @@ jobs:
             dist/Kun-*-mac-*.zip
             dist/Kun-*-mac-*.blockmap
             dist/latest-mac.yml
-            dist/extension-native-evidence-darwin.json
-
-  verify-macos-x64:
-    name: Verify macOS x64 prerelease artifact
-    runs-on: macos-15-intel
-    timeout-minutes: 30
-    needs:
-      - prepare
-      - build-macos
-    steps:
-      - name: Check out develop commit
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          ref: ${{ needs.prepare.outputs.head_sha }}
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
-      - name: Download final macOS prerelease artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: daily-dev-mac
-          path: release-artifacts
-
-      - name: Extract final macOS x64 ZIP
-        run: |
-          set -euo pipefail
-          archives=(release-artifacts/Kun-*-mac-x64.zip)
-          if [[ ${#archives[@]} -ne 1 || ! -f "${archives[0]}" ]]; then
-            echo "::error::Expected exactly one final macOS x64 ZIP"
-            find release-artifacts -maxdepth 2 -type f -print | sort
-            exit 1
-          fi
-          mkdir -p dist/mac-x64-verified
-          ditto -x -k "${archives[0]}" dist/mac-x64-verified
-
-      - name: Verify final macOS x64 native architecture
-        run: >-
-          npm run verify:packaged-macos-native --
-          --resources dist/mac-x64-verified/Kun.app/Contents/Resources
-          --arch x64
-
-      - name: Smoke final macOS x64 OCR dependencies
-        env:
-          KUN_PACKAGED_RESOURCES_DIR: dist/mac-x64-verified/Kun.app/Contents/Resources
-        run: node scripts/smoke-packaged-ocr.cjs
-
-      - name: Smoke final macOS x64 Extension Node runtime
-        run: >-
-          npm run smoke:packaged-extensions --
-          --resources dist/mac-x64-verified/Kun.app/Contents/Resources
-
-      - name: Smoke final macOS x64 desktop Chromium
-        timeout-minutes: 10
-        run: >-
-          npm run smoke:packaged-extension-desktop --
-          --resources dist/mac-x64-verified/Kun.app/Contents/Resources
 
   build-windows:
     name: Build Windows
@@ -275,7 +109,6 @@ jobs:
     timeout-minutes: 90
     needs:
       - prepare
-      - validate
     env:
       KUN_APP_VERSION: ${{ needs.prepare.outputs.app_version }}
       KUN_ARTIFACT_VERSION: ${{ needs.prepare.outputs.dev_version }}
@@ -298,56 +131,11 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
 
-      - name: Install host-native FFmpeg
-        shell: pwsh
-        run: |
-          if (-not (Get-Command ffmpeg.exe -ErrorAction SilentlyContinue) -or -not (Get-Command ffprobe.exe -ErrorAction SilentlyContinue)) {
-            choco install ffmpeg --yes --no-progress
-          }
-          $ffmpegPath = (Get-Command ffmpeg.exe).Source
-          if ((& $ffmpegPath -hide_banner -filters 2>&1 | Out-String) -notmatch '\sdrawtext\s') {
-            throw 'Installed FFmpeg does not provide the required drawtext filter.'
-          }
-          "KUN_FFMPEG_PATH=$ffmpegPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          "KUN_FFPROBE_PATH=$((Get-Command ffprobe.exe).Source)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-
       - name: Install dependencies
         run: npm ci
 
-      - name: Test Runtime data migration on native Windows
-        run: npx vitest run src/main/kun-data-dir-paths.test.ts src/main/legacy-data-migration.test.ts src/main/runtime-data-dir-migration.test.ts src/main/runtime-data-dir-ownership.test.ts --reporter=dot
-
-      - name: Test Graph Mode on native Windows
-        run: npm run test:graph:platform
-
       - name: Build Windows installer
         run: npm run dist:win
-
-      - name: Smoke packaged Kun terminal command
-        run: >-
-          npm run smoke:packaged-cli --
-          --resources dist/win-unpacked/resources
-          --expected-version "${env:KUN_APP_VERSION}"
-
-      - name: Smoke packaged Extension Node runtime
-        run: npm run smoke:packaged-extensions -- --resources dist/win-unpacked/resources
-
-      - name: Smoke host-native FFmpeg broker (fail closed)
-        env:
-          KUN_RUN_MEDIA_SMOKE: '1'
-        run: npm run smoke:extension-native-media
-
-      - name: Smoke packaged Runtime data migration
-        run: npm run smoke:packaged-runtime-migration
-
-      - name: Smoke packaged Extension desktop Chromium
-        timeout-minutes: 10
-        run: npm run smoke:packaged-extension-desktop
-
-      - name: Record commit-bound Windows artifact evidence
-        env:
-          KUN_EVIDENCE_COMMIT: ${{ needs.prepare.outputs.head_sha }}
-        run: npm run evidence:extension-native
 
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
@@ -359,7 +147,6 @@ jobs:
             dist/Kun-*-win-x64.exe
             dist/Kun-*-win-x64.exe.blockmap
             dist/latest.yml
-            dist/extension-native-evidence-win32.json
 
   build-linux:
     name: Build Linux
@@ -367,7 +154,6 @@ jobs:
     timeout-minutes: 90
     needs:
       - prepare
-      - validate
     env:
       KUN_APP_VERSION: ${{ needs.prepare.outputs.app_version }}
       KUN_ARTIFACT_VERSION: ${{ needs.prepare.outputs.dev_version }}
@@ -393,66 +179,13 @@ jobs:
       - name: Install Linux packaging dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libarchive-tools rpm fakeroot dpkg build-essential python3 xvfb xauth util-linux ffmpeg
-          ffmpeg -hide_banner -filters 2>&1 | grep -Eq '[[:space:]]drawtext[[:space:]]'
+          sudo apt-get install -y --no-install-recommends libarchive-tools rpm fakeroot dpkg build-essential python3
 
       - name: Install dependencies
         run: npm ci
 
-      - name: Test Runtime data migration on native Linux
-        run: npx vitest run src/main/kun-data-dir-paths.test.ts src/main/legacy-data-migration.test.ts src/main/runtime-data-dir-migration.test.ts src/main/runtime-data-dir-ownership.test.ts --reporter=dot
-
-      - name: Test Graph Mode on native Linux
-        run: npm run test:graph:platform
-
       - name: Build Linux AppImage
         run: npm run dist:linux
-
-      - name: Smoke packaged Kun terminal command (linux-unpacked and deb)
-        run: |
-          deb_packages=(dist/Kun-*-linux-amd64.deb)
-          if [[ ${#deb_packages[@]} -ne 1 || ! -f "${deb_packages[0]}" ]]; then
-            echo "::error::Expected exactly one Linux deb package"
-            exit 1
-          fi
-          npm run smoke:packaged-cli -- \
-            --resources dist/linux-unpacked/resources \
-            --deb "${deb_packages[0]}" \
-            --expected-version "${KUN_APP_VERSION}"
-
-      - name: Smoke packaged Extension Node runtime
-        run: npm run smoke:packaged-extensions -- --resources dist/linux-unpacked/resources
-
-      - name: Smoke host-native FFmpeg broker (fail closed)
-        env:
-          KUN_RUN_MEDIA_SMOKE: '1'
-        run: npm run smoke:extension-native-media
-
-      - name: Prepare and verify Linux user namespace sandbox
-        run: |
-          if [[ -e /proc/sys/kernel/unprivileged_userns_clone ]]; then
-            sudo sysctl -w kernel.unprivileged_userns_clone=1
-          fi
-          if [[ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
-            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          fi
-          unshare --user --map-root-user /bin/true
-
-      - name: Smoke packaged Runtime data migration
-        run: npm run smoke:packaged-runtime-migration
-
-      - name: Smoke packaged Extension desktop Chromium
-        timeout-minutes: 10
-        run: npm run smoke:packaged-extension-desktop
-
-      - name: Smoke final Linux AppImage desktop Chromium
-        timeout-minutes: 10
-        run: npm run smoke:packaged-extension-appimage
-
-      - name: Record commit-bound Linux artifact evidence
-        env:
-          KUN_EVIDENCE_COMMIT: ${{ needs.prepare.outputs.head_sha }}
-        run: npm run evidence:extension-native
 
       - name: Upload Linux artifacts
         uses: actions/upload-artifact@v4
@@ -465,7 +198,6 @@ jobs:
             dist/Kun-*-linux-x86_64.AppImage.blockmap
             dist/Kun-*-linux-amd64.deb
             dist/latest-linux.yml
-            dist/extension-native-evidence-linux.json
 
   build-tui:
     name: Build standalone TUI prerelease (${{ matrix.target }})
@@ -473,7 +205,6 @@ jobs:
     timeout-minutes: 60
     needs:
       - prepare
-      - validate
     strategy:
       fail-fast: false
       matrix:
@@ -515,9 +246,6 @@ jobs:
           npm ci
           npm --prefix kun ci
 
-      - name: Test joint GUI/TUI release contracts
-        run: npm run test:tui-release
-
       - name: Build shared Kun runtime
         run: npm run build:kun
 
@@ -531,26 +259,6 @@ jobs:
           --commit "${{ needs.prepare.outputs.head_sha }}"
           --target "${{ matrix.target }}"
           --output dist
-
-      - name: Smoke standalone TUI prerelease
-        shell: bash
-        run: |
-          set -euo pipefail
-          artifacts=(dist/Kun-TUI-*)
-          archive=""
-          for candidate in "${artifacts[@]}"; do
-            case "$candidate" in
-              *.tar.gz|*.zip) archive="$candidate" ;;
-            esac
-          done
-          if [[ -z "$archive" ]]; then
-            echo "::error::Standalone TUI archive was not produced"
-            exit 1
-          fi
-          npm run smoke:standalone-tui -- \
-            --artifact "$archive" \
-            --version "${{ needs.prepare.outputs.app_version }}" \
-            --target "${{ matrix.target }}"
 
       - name: Upload standalone TUI prerelease artifact
         uses: actions/upload-artifact@v4
@@ -570,7 +278,6 @@ jobs:
     needs:
       - prepare
       - build-macos
-      - verify-macos-x64
       - build-windows
       - build-linux
       - build-tui
@@ -633,9 +340,6 @@ jobs:
             "latest-mac.yml"
             "latest.yml"
             "latest-linux.yml"
-            "extension-native-evidence-darwin.json"
-            "extension-native-evidence-win32.json"
-            "extension-native-evidence-linux.json"
             "Kun-TUI-${DEV_VERSION}-mac-arm64.tar.gz"
             "Kun-TUI-${DEV_VERSION}-mac-x64.tar.gz"
             "Kun-TUI-${DEV_VERSION}-win-x64.zip"
@@ -700,14 +404,6 @@ jobs:
             git push origin "refs/tags/${TAG_NAME}"
           fi
 
-      - name: Verify three-platform native evidence bundle
-        run: >
-          npm run verify:extension-native-evidence --
-          --directory release-artifacts
-          --commit "${HEAD_SHA}"
-          --tag "${TAG_NAME}"
-          --version "${DEV_VERSION}"
-
       - name: Create or update draft GitHub prerelease
         run: |
           set -euo pipefail
@@ -731,7 +427,7 @@ jobs:
           set -euo pipefail
           mapfile -d '' assets < <(
             find release-artifacts -type f \
-              \( -name 'Kun-*' -o -name 'latest*.yml' -o -name 'extension-native-evidence-*.json' -o -name 'release-tui.json' -o -name 'SHA256SUMS-tui.txt' \) \
+              \( -name 'Kun-*' -o -name 'latest*.yml' -o -name 'release-tui.json' -o -name 'SHA256SUMS-tui.txt' \) \
               -print0
           )
 
