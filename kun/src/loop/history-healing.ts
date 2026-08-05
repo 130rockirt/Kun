@@ -42,6 +42,7 @@ function normalizeLoadedItem(item: TurnItem, index: number): TurnItem | null {
     case 'assistant_text':
     case 'assistant_reasoning':
     case 'user_message':
+    case 'goal_context':
     case 'approval':
     case 'user_input':
     case 'compaction':

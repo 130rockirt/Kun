@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { RuntimeEvent } from '../src/contracts/events.js'
+import { makeGoalContextItem } from '../src/domain/item.js'
 import type { EventBus } from '../src/ports/event-bus.js'
 import type { SessionStore } from '../src/ports/session-store.js'
 import { ThreadEventStreamRegistry } from '../src/server/thread-event-stream-registry.js'
@@ -61,6 +62,83 @@ describe('event stream replay', () => {
       expect(`${decoder.decode(first.value)}${decoder.decode(second.value)}`).toContain('id: 2')
     } finally {
       await reader.cancel()
+    }
+  })
+
+  it('hides persisted goal contexts while carrying their cursor into heartbeats and reconnect replay', async () => {
+    vi.useFakeTimers()
+    try {
+      const threadId = 'thr_private_goal'
+      const hidden: RuntimeEvent = {
+        kind: 'item_created',
+        seq: 1,
+        timestamp: '2026-07-11T08:00:00.000Z',
+        threadId,
+        turnId: 'turn_goal',
+        item: makeGoalContextItem({
+          id: 'goal_context_private',
+          threadId,
+          turnId: 'turn_goal',
+          goalKey: 'goal_private',
+          text: 'Internal goal context must not reach SSE',
+          createdAt: '2026-07-11T08:00:00.000Z'
+        })
+      }
+      const publicEvent: RuntimeEvent = {
+        kind: 'heartbeat',
+        seq: 2,
+        timestamp: '2026-07-11T08:00:01.000Z',
+        threadId
+      }
+      let persisted: RuntimeEvent[] = [hidden]
+      const sessionStore = {
+        async *iterateEventsSince(_threadId: string, sinceSeq: number): AsyncIterable<RuntimeEvent> {
+          for (const event of persisted) {
+            if (event.seq > sinceSeq) yield event
+          }
+        }
+      } as unknown as SessionStore
+      const eventBus: EventBus = {
+        publish: () => undefined,
+        subscribe: () => () => undefined,
+        snapshotSince: () => [],
+        highestSeq: () => 0,
+        reset: () => undefined
+      }
+
+      const first = buildEventStreamResponse({
+        request: new Request(`http://localhost/v1/threads/${threadId}/events?since_seq=0`),
+        threadId,
+        eventBus,
+        sessionStore
+      })
+      await vi.advanceTimersByTimeAsync(0)
+      await vi.advanceTimersByTimeAsync(HEARTBEAT_INTERVAL_MS)
+      const firstReader = first.body!.getReader()
+      const heartbeat = await firstReader.read()
+      const heartbeatText = new TextDecoder().decode(heartbeat.value)
+
+      expect(heartbeatText).toContain('id: 1')
+      expect(heartbeatText).toContain('event: heartbeat')
+      expect(heartbeatText).not.toContain('Internal goal context must not reach SSE')
+      await firstReader.cancel()
+
+      persisted = [hidden, publicEvent]
+      const second = buildEventStreamResponse({
+        request: new Request(`http://localhost/v1/threads/${threadId}/events?since_seq=1`),
+        threadId,
+        eventBus,
+        sessionStore
+      })
+      const secondReader = second.body!.getReader()
+      const replay = await secondReader.read()
+      const replayText = new TextDecoder().decode(replay.value)
+
+      expect(replayText).toContain('id: 2')
+      expect(replayText).not.toContain('Internal goal context must not reach SSE')
+      await secondReader.cancel()
+    } finally {
+      vi.useRealTimers()
     }
   })
 

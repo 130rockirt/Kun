@@ -424,6 +424,87 @@ async function svgLoopHarness(input: {
 }
 
 describe('AgentLoop interruption', () => {
+  it('materializes a stable active-goal history item before the native model request', async () => {
+    const sessionStore = new InMemorySessionStore()
+    const threadStore = new InMemoryThreadStore()
+    const eventBus = new InMemoryEventBus()
+    const inflight = new InflightTracker()
+    const steering = new SteeringQueue()
+    const ids = new SequentialIdGenerator()
+    const nowIso = () => '2026-08-06T00:00:00.000Z'
+    const events = new RuntimeEventRecorder({
+      eventBus,
+      sessionStore,
+      allocateSeq: (threadId) => eventBus.allocateSeq(threadId),
+      nowIso
+    })
+    const model = new CapturingCompleteModel()
+    const turns = new TurnService({
+      threadStore, sessionStore, events, inflight, steering, compactor: new ContextCompactor(), ids, nowIso
+    })
+    const loop = new AgentLoop({
+      threadStore,
+      sessionStore,
+      approvalGate: new AllowApprovalGate(),
+      userInputGate: new NoopUserInputGate(),
+      model,
+      toolHost: new LocalToolHost({ tools: [] }),
+      usage: new UsageService(),
+      events,
+      turns,
+      inflight,
+      steering,
+      compactor: new ContextCompactor(),
+      prefix: createImmutablePrefix({ systemPrompt: 'test system prompt' }),
+      ids,
+      nowIso
+    })
+    const threadId = 'thr_native_goal_context'
+    await threadStore.upsert(createThreadRecord({
+      id: threadId,
+      title: 'Native goal context',
+      workspace: '/tmp/workspace',
+      model: model.model,
+      goal: {
+        threadId,
+        objective: 'Keep this goal as stable history.',
+        status: 'active',
+        tokenBudget: 321,
+        tokensUsed: 19,
+        timeUsedSeconds: 7,
+        createdAt: nowIso(),
+        updatedAt: nowIso()
+      }
+    }))
+    const started = await turns.startTurn({
+      threadId,
+      request: { prompt: 'Continue the goal.', model: model.model }
+    })
+
+    await expect(loop.runTurn(threadId, started.turnId)).resolves.toBe('completed')
+
+    expect(model.requests.length).toBeGreaterThan(0)
+    expect(model.requests[0]?.history.map((item) => item.kind)).toEqual([
+      'user_message',
+      'goal_context'
+    ])
+    const goalContext = model.requests[0]?.history[1]
+    expect(goalContext).toMatchObject({
+      kind: 'goal_context',
+      text: expect.stringContaining('Keep this goal as stable history.')
+    })
+    if (!goalContext || goalContext.kind !== 'goal_context') {
+      throw new Error('expected goal context in model history')
+    }
+    expect(goalContext.text).not.toContain('Tokens used')
+    expect(model.requests[0]?.contextInstructions?.join('\n') ?? '').not.toContain('active thread goal')
+    expect(model.requests.every((request) =>
+      request.history.filter((item) => item.kind === 'goal_context').length === 1
+    )).toBe(true)
+    expect((await threadStore.get(threadId))?.turns[0]?.items.some((item) => item.kind === 'goal_context'))
+      .toBe(false)
+  })
+
   it('continues after a final streamed response when steering was accepted mid-step', async () => {
     const sessionStore = new InMemorySessionStore()
     const threadStore = new InMemoryThreadStore()

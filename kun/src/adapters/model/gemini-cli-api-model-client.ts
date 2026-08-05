@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import type { ToolCallProviderMetadata } from '../../contracts/items.js'
+import { goalContextTexts, type ToolCallProviderMetadata } from '../../contracts/items.js'
 import type { UsageSnapshot } from '../../contracts/usage.js'
 import type { ModelClient, ModelRequest, ModelStreamChunk } from '../../ports/model-client.js'
 import {
@@ -445,7 +445,8 @@ export class GeminiCliApiModelClient implements ModelClient {
         name: tool.name,
         ...(tool.providerKind ? { providerKind: tool.providerKind } : {}),
         ...(tool.providerId ? { providerId: tool.providerId } : {})
-      }))
+      })),
+      redactedRequestValues: goalContextTexts(request.history)
     }) ?? null
   }
 

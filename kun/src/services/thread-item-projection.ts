@@ -1,4 +1,4 @@
-import type { TurnItem } from '../contracts/items.js'
+import { isPublicTurnItem, type TurnItem } from '../contracts/items.js'
 import type { ThreadRecord } from '../contracts/threads.js'
 import { touchThread } from '../domain/thread.js'
 import { placeCompactionsChronologically } from '../loop/compaction-history.js'
@@ -18,6 +18,7 @@ export function projectSessionItemsOntoExistingTurns(
 ): ThreadRecord | null {
   const itemsByTurn = new Map<string, TurnItem[]>()
   for (const item of items) {
+    if (!isPublicTurnItem(item)) continue
     const turnItems = itemsByTurn.get(item.turnId) ?? []
     turnItems.push(item)
     itemsByTurn.set(item.turnId, turnItems)
@@ -26,9 +27,17 @@ export function projectSessionItemsOntoExistingTurns(
   let changed = false
   const turns = thread.turns.map((turn) => {
     const sessionItems = itemsByTurn.get(turn.id)
-    if (!sessionItems) return turn
+    if (sessionItems) {
+      changed = true
+      return { ...turn, items: placeCompactionsChronologically(sessionItems) }
+    }
+    // A GoalContext is canonical session history, never a renderer item. Be
+    // defensive when projecting an older in-memory mirror that could have
+    // retained one before the session-only boundary was established.
+    const publicItems = turn.items.filter(isPublicTurnItem)
+    if (publicItems.length === turn.items.length) return turn
     changed = true
-    return { ...turn, items: placeCompactionsChronologically(sessionItems) }
+    return { ...turn, items: publicItems }
   })
   return changed ? { ...thread, turns } : null
 }

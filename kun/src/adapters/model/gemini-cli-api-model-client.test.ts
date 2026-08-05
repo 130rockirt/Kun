@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { ModelRequest, ModelStreamChunk } from '../../ports/model-client.js'
-import { makeToolCallItem, makeToolResultItem } from '../../domain/item.js'
+import { makeGoalContextItem, makeToolCallItem, makeToolResultItem } from '../../domain/item.js'
 import { LlmDebugRecorder } from '../../services/llm-debug-recorder.js'
 import { GRAPH_DEFINE_PLAN_INPUT_JSON_SCHEMA } from '../tool/graph-mode-tool-provider.js'
 import { GeminiCliOAuthSource } from './gemini-cli-oauth.js'
@@ -190,6 +190,14 @@ describe('GeminiCliApiModelClient', () => {
 
   it('replays thought signatures only in Gemini requests and redacts them from traces', async () => {
     const signature = 'opaque-thought-signature'
+    const goalText = 'Keep the internal Gemini goal private.'
+    const goalContext = makeGoalContextItem({
+      id: 'goal-context',
+      turnId: 'turn-old',
+      threadId: 'thread-gemini',
+      goalKey: 'goal_current',
+      text: goalText
+    })
     const toolCall = makeToolCallItem({
       id: 'tool-call',
       turnId: 'turn-old',
@@ -209,7 +217,7 @@ describe('GeminiCliApiModelClient', () => {
       output: 'old contents',
       status: 'completed'
     })
-    const input = request({ history: [toolCall, toolResult] })
+    const input = request({ history: [goalContext, toolCall, toolResult] })
     const built = buildGeminiCliCodeAssistRequest(input, input.model, 'project')
     expect(JSON.stringify(built)).toContain(signature)
 
@@ -238,7 +246,9 @@ describe('GeminiCliApiModelClient', () => {
     await drain(client.stream(input))
     const trace = (await recorder.listThread(input.threadId)).records[0]
     expect(transmittedBody).toContain(signature)
+    expect(transmittedBody).toContain(goalText)
     expect(trace?.request.body.text).not.toContain(signature)
+    expect(trace?.request.body.text).not.toContain(goalText)
     expect(trace?.request.body.text).toContain('[REDACTED]')
     expect(trace?.request.headers.values.authorization).not.toContain('official-access-token')
   })

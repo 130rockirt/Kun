@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import {
+  isPublicTurnItem,
   TurnItem,
   UserInputAnswerSchema,
   UserInputQuestionSchema,
@@ -515,6 +516,15 @@ export const RuntimeEvent = z.discriminatedUnion('kind', [
   HeartbeatEvent
 ])
 export type RuntimeEvent = z.infer<typeof RuntimeEvent>
+
+/**
+ * Runtime streams can contain model-only item records for durable internal
+ * state. Public transports must never expose those records even if a legacy
+ * migration or a future producer accidentally persists an item event for one.
+ */
+export function isPublicRuntimeEvent(event: RuntimeEvent): boolean {
+  return !('item' in event) || isPublicTurnItem(event.item)
+}
 
 export const RuntimeEventList = z.array(RuntimeEvent)
 export type RuntimeEventList = z.infer<typeof RuntimeEventList>

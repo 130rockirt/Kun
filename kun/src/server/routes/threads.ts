@@ -22,7 +22,11 @@ import type { SessionStore } from '../../ports/session-store.js'
 import type { UserInputGate } from '../../ports/user-input-gate.js'
 import type { ApprovalGate } from '../../ports/approval-gate.js'
 import type { Turn } from '../../contracts/turns.js'
-import type { ApprovalTurnItem, TurnItem } from '../../contracts/items.js'
+import {
+  isPublicTurnItem,
+  type ApprovalTurnItem,
+  type TurnItem
+} from '../../contracts/items.js'
 import type { ApprovalRequest } from '../../domain/approval.js'
 import { placeCompactionsChronologically } from '../../loop/compaction-history.js'
 
@@ -77,7 +81,7 @@ export async function createThread(
     return validationError('invalid create thread body', parsed.error.issues)
   }
   const thread = await service.create(parsed.data)
-  return jsonResponse(ThreadSchema.parse(thread), 201)
+  return jsonResponse(ThreadSchema.parse(projectPublicThreadRecord(thread)), 201)
 }
 
 export async function getThread(
@@ -114,12 +118,16 @@ export async function getThread(
     // approval never replaces the rest of that turn with only the card.
     sessionItems = thread.turns.flatMap((turn) => turn.items)
   }
+  // Goal context belongs to canonical model history only. It has no event and
+  // must not become visible through the GET snapshot used to hydrate the
+  // renderer after reconnect or restart.
+  sessionItems = sessionItems.filter(isPublicTurnItem)
   // Tool approvals intentionally remain event-only in history. A live gate is
   // the authoritative source during SSE recovery, so materialize only the
   // currently actionable requests rather than replaying the full events log
   // on every thread-detail poll.
   sessionItems = mergePendingApprovalItems(sessionItems, pendingApprovals)
-  const hydratedThread = hydrateThreadItemsFromSession(thread, sessionItems)
+  const hydratedThread = projectPublicThreadRecord(hydrateThreadItemsFromSession(thread, sessionItems))
   // Request ids the runtime is still actively awaiting. The renderer uses these
   // to tell a live ask-user prompt (answerable across reconnects) apart from a
   // stale `pending` item rehydrated from a finished thread (issue #606).
@@ -251,9 +259,10 @@ function finalizeOpenSessionItem(
 }
 
 function hydrateThreadItemsFromSession(thread: ThreadRecord, items: TurnItem[]): ThreadRecord {
-  if (items.length === 0 || thread.turns.length === 0) return thread
+  if (thread.turns.length === 0) return thread
   const itemsByTurn = new Map<string, TurnItem[]>()
   for (const item of items) {
+    if (!isPublicTurnItem(item)) continue
     const turnItems = itemsByTurn.get(item.turnId) ?? []
     turnItems.push(item)
     itemsByTurn.set(item.turnId, turnItems)
@@ -261,9 +270,30 @@ function hydrateThreadItemsFromSession(thread: ThreadRecord, items: TurnItem[]):
   let changed = false
   const turns = thread.turns.map((turn): Turn => {
     const sessionTurnItems = itemsByTurn.get(turn.id)
-    if (!sessionTurnItems) return turn
+    if (sessionTurnItems) {
+      changed = true
+      return { ...turn, items: placeCompactionsChronologically(sessionTurnItems) }
+    }
+    const publicItems = turn.items.filter(isPublicTurnItem)
+    if (publicItems.length === turn.items.length) return turn
     changed = true
-    return { ...turn, items: placeCompactionsChronologically(sessionTurnItems) }
+    return { ...turn, items: publicItems }
+  })
+  return changed ? { ...thread, turns } : thread
+}
+
+/**
+ * Defense in depth for every HTTP endpoint that returns a ThreadRecord.
+ * The durable SessionStore intentionally contains internal goal-context
+ * items; an old or manually repaired ThreadRecord may contain one too.
+ */
+function projectPublicThreadRecord(thread: ThreadRecord): ThreadRecord {
+  let changed = false
+  const turns = thread.turns.map((turn): Turn => {
+    const items = turn.items.filter(isPublicTurnItem)
+    if (items.length === turn.items.length) return turn
+    changed = true
+    return { ...turn, items }
   })
   return changed ? { ...thread, turns } : thread
 }
@@ -281,7 +311,7 @@ export async function updateThread(
   }
   try {
     const updated: ThreadRecord = await service.update(threadId, parsed.data)
-    return jsonResponse(ThreadSchema.parse(updated))
+    return jsonResponse(ThreadSchema.parse(projectPublicThreadRecord(updated)))
   } catch (error) {
     if (error instanceof Error && /not found/i.test(error.message)) {
       return jsonResponse(
@@ -325,7 +355,7 @@ export async function forkThread(
   }
   try {
     const fork = await service.fork(threadId, options)
-    return jsonResponse(ThreadSchema.parse(fork), 201)
+    return jsonResponse(ThreadSchema.parse(projectPublicThreadRecord(fork)), 201)
   } catch (error) {
     if (error instanceof Error && /not found/i.test(error.message)) {
       return jsonResponse(

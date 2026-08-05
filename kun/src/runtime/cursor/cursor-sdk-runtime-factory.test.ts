@@ -199,6 +199,88 @@ describe('Cursor SDK runtime factory', () => {
     ])
   })
 
+  test('materializes an active goal context only for non-plan Cursor turns', async () => {
+    const ensureGoalContext = vi.fn(async () => undefined)
+    const createdAt = '2026-08-06T00:00:00.000Z'
+    const thread = {
+      id: 'thread_goal',
+      title: 'Cursor goal',
+      workspace: '/tmp/cursor-goal',
+      model: 'cursor-model',
+      mode: 'agent',
+      approvalPolicy: 'auto',
+      approvalReviewer: 'user',
+      sandboxMode: 'danger-full-access',
+      goal: {
+        threadId: 'thread_goal',
+        objective: 'Finish the migration safely.',
+        status: 'active',
+        tokenBudget: 10_000,
+        tokensUsed: 250,
+        timeUsedSeconds: 12,
+        createdAt,
+        updatedAt: createdAt
+      },
+      turns: [{
+        id: 'turn_goal',
+        prompt: 'continue the migration',
+        actingModelRoute: { model: 'cursor-model', providerId: 'cursor-provider' }
+      }]
+    }
+    const registry = CapabilityRegistry.fromLocalTools([])
+    const runtime = createCursorSdkRuntime({
+      registry,
+      toolHost: new LocalToolHost({ registry }),
+      providerConfigs: {},
+      providerIds: new Set(['cursor-provider']),
+      defaultIsCursor: false,
+      defaultModel: 'cursor-model',
+      defaultApprovalPolicy: 'auto',
+      defaultSandboxMode: 'danger-full-access',
+      threadStore: { get: async () => thread } as never,
+      sessionStore: {} as never,
+      turns: {
+        ensureGoalContext,
+        updateTurnMetadata: async () => undefined
+      } as never,
+      events: { record: async () => undefined } as never,
+      ids: { next: (prefix) => `${prefix}_1` }
+    })
+    const loadKunTurnContext = (runtime as unknown as {
+      deps: {
+        loadKunTurnContext(input: {
+          threadId: string
+          turnId: string
+          userText: string
+          actingModelRoute: { model: string, providerId?: string }
+          signal: AbortSignal
+        }): Promise<{ instructionBlocks: string[] }>
+      }
+    }).deps.loadKunTurnContext
+    const input = {
+      threadId: 'thread_goal',
+      turnId: 'turn_goal',
+      userText: 'continue the migration',
+      actingModelRoute: { model: 'cursor-model', providerId: 'cursor-provider' },
+      signal: new AbortController().signal
+    }
+
+    const agentContext = await loadKunTurnContext(input)
+
+    expect(ensureGoalContext).toHaveBeenCalledWith(
+      'thread_goal',
+      'turn_goal',
+      expect.any(AbortSignal)
+    )
+    expect(agentContext.instructionBlocks.join('\n')).not.toContain(
+      'Continue working toward the active thread goal.'
+    )
+
+    thread.mode = 'plan'
+    await loadKunTurnContext(input)
+    expect(ensureGoalContext).toHaveBeenCalledTimes(1)
+  })
+
   test('bridges policy-filtered MCP and extension tools through Kun ToolHost', async () => {
     const mcpExecute = vi.fn(async (args: Record<string, unknown>) => ({
       output: { server: args.serverId, ok: true }

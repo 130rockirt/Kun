@@ -28,6 +28,18 @@ function assistantMsg(turnId: string, text: string): TurnItem {
   } as unknown as TurnItem
 }
 
+function goalContext(turnId: string, text: string): TurnItem {
+  return {
+    id: `item_${turnId}_goal_context`,
+    threadId: 'th',
+    turnId,
+    kind: 'goal_context',
+    role: 'system',
+    status: 'completed',
+    text
+  } as TurnItem
+}
+
 function compaction(turnId: string, summary: string): TurnItem {
   return {
     id: `item_${turnId}_compact`,
@@ -87,6 +99,21 @@ describe('buildHistoryTranscript', () => {
     expect(transcript).toContain('[assistant] first answer')
     // the live turn's own user text must NOT leak into the replayed history
     expect(transcript).not.toContain('current question')
+  })
+
+  test('retains the current turn durable goal context as history', () => {
+    const transcript = buildHistoryTranscript([
+      userMsg('t1', 'first question'),
+      assistantMsg('t1', 'first answer'),
+      goalContext('t2', 'Complete the migration before declaring success.'),
+      userMsg('t2', 'continue the work')
+    ], 't2')
+
+    expect(transcript).toContain('[active goal] Complete the migration before declaring success.')
+    expect(transcript).not.toContain('continue the work')
+    expect(transcript.indexOf('first answer')).toBeLessThan(
+      transcript.indexOf('[active goal]')
+    )
   })
 
   test('keeps newest history and marks omitted older history at the byte limit', () => {

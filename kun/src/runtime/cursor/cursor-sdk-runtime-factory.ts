@@ -18,7 +18,6 @@ import {
 } from '../../loop/design-mode.js'
 import {
   PLAN_MODE_INSTRUCTION,
-  goalContinuationInstruction,
   isStalePlanContext,
   memoryInstructions,
   todoContinuationInstruction
@@ -440,7 +439,12 @@ export function createCursorSdkRuntime(
         memoryBlocks = memoryInstructions(memories)
       }
       const plan = resolveCursorPlanContext(thread, turnId)
-      const goalInstruction = plan.planMode ? null : goalContinuationInstruction(thread.goal)
+      if (!plan.planMode && thread.goal?.status === 'active') {
+        await deps.turns.ensureGoalContext(threadId, turnId, signal)
+      }
+      if (signal.aborted) {
+        return { instructionBlocks: [], activeSkillIds: [], tools: [], customTools: {} }
+      }
       const todoInstruction = plan.planMode ? null : todoContinuationInstruction(thread.todos)
       const instructionBlocks = [
         ...(graphPolicy ? [graphPolicy.instruction] : []),
@@ -451,7 +455,6 @@ export function createCursorSdkRuntime(
             ? [DESIGN_MODE_INSTRUCTION]
             : []),
         ...(instructionResolution?.instruction ? [instructionResolution.instruction] : []),
-        ...(goalInstruction ? [goalInstruction] : []),
         ...(todoInstruction ? [todoInstruction] : []),
         ...memoryBlocks,
         ...(skillResolution?.catalogInstruction ? [skillResolution.catalogInstruction] : []),

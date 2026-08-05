@@ -40,6 +40,7 @@ import { resolveCoherentProviderAccount } from './compaction-summary.js'
 import {
   EMPTY_POST_TOOL_FINAL_ANSWER_RECOVERY_STEP,
   emptyPostToolRecoveryInstruction,
+  filterGoalContextsForActiveGoal,
   hasSuccessfulCreatePlanResult,
   TOOL_SUPPRESSION_FINAL_ANSWER_RECOVERY_STEP,
   toolSuppressionRecoveryInstruction,
@@ -110,7 +111,7 @@ import { TurnToolCatalogFreezer } from './turn-tool-catalog.js'
 export type ModelStepServiceDeps = {
   threadStore: ThreadStore
   sessionStore: SessionStore
-  turns: Pick<TurnService, 'getTurn' | 'applyItem' | 'updateItem' | 'updateTurnMetadata'>
+  turns: Pick<TurnService, 'getTurn' | 'applyItem' | 'updateItem' | 'updateTurnMetadata' | 'ensureGoalContext'>
   events: Pick<RuntimeEventRecorder, 'record'>
   model: ModelClient
   compactor: import('./context-compactor.js').ContextCompactor
@@ -195,6 +196,11 @@ export class ModelStepService {
     const { dedicatedSvgTurn, activePlanContext } = modeContext
     await this.deps.recordPipelineStage(threadId, turnId, 'input_received', { stepIndex })
     const budgetGate = await this.deps.budgetGate.check(thread, threadId, turnId)
+    // A deadline, lease loss, or explicit interruption can win while an
+    // asynchronous budget check is settling. Do not materialize internal
+    // history (or perform any further model preparation) for that aborted
+    // execution merely because the persisted turn has not been finalized yet.
+    if (signal.aborted) return 'aborted'
     if (budgetGate === 'blocked') {
       // A cost-budget stop is a deliberate cap, not an interrupted goal turn:
       // suppress goal auto-resume so it isn't relaunched straight back into
@@ -218,6 +224,13 @@ export class ModelStepService {
       }
       return 'stop'
     }
+    const planTurnSuppressesGoalContext = !modeContext.dedicatedSvgTurn && !modeContext.planContextStale && (
+      modeContext.effectiveMode === 'plan' || Boolean(modeContext.activePlanContext)
+    )
+    if (!planTurnSuppressesGoalContext) {
+      await this.deps.turns.ensureGoalContext(threadId, turnId, signal)
+    }
+    if (signal.aborted) return 'aborted'
     const loadedItems = await this.deps.sessionStore.loadItems(threadId)
     // Heal (and possibly rewrite) on-disk history once per turn: within a
     // turn the loop only appends well-formed items, and healing's deep
@@ -246,6 +259,14 @@ export class ModelStepService {
         ).items
       }
     }
+    // Keep historical goal records durable without replaying an instruction
+    // for a goal that has since paused, ended, been cleared, or been replaced.
+    // A plan turn intentionally suppresses goal continuation just as it did
+    // before goal context became canonical history.
+    const goalForHistory = planTurnSuppressesGoalContext
+      ? undefined
+      : (await this.deps.threadStore.get(threadId))?.goal
+    historyItems = filterGoalContextsForActiveGoal(historyItems, goalForHistory)
     await this.deps.recordPipelineStage(
       threadId,
       turnId,
@@ -567,9 +588,6 @@ export class ModelStepService {
       ...(instructionResolution.instruction
         ? [kunContextBlock('agents-instructions', 'workspace', instructionResolution.instruction)]
         : []),
-      ...(activeGoalInstruction
-        ? [kunContextBlock('active-goal', 'runtime', activeGoalInstruction)]
-        : []),
       ...(goalRecoveryInstruction && this.deps.roundOutcome.goalNoToolRecoverySteps(turnId) > 0
         ? [kunContextBlock('goal-recovery', 'runtime', goalRecoveryInstruction)]
         : []),
@@ -685,6 +703,18 @@ export class ModelStepService {
     const requestHardCapTokens = modelCapabilities.contextWindowTokens
       ? Math.floor(modelCapabilities.contextWindowTokens * 0.85)
       : this.deps.compactor.hardCap(model, providerId)
+    // History compaction retries from the latest canonical snapshot to avoid
+    // losing concurrent writes. That snapshot deliberately retains internal
+    // goal records, including records for goals that later ended or changed.
+    // Always restore the model-facing projection after a compaction result so
+    // a CAS retry cannot resurrect an obsolete system instruction.
+    const projectCompactedGoalHistory = async (candidate: TurnItem[]): Promise<TurnItem[]> =>
+      filterGoalContextsForActiveGoal(
+        candidate,
+        planTurnSuppressesGoalContext
+          ? undefined
+          : (await this.deps.threadStore.get(threadId))?.goal
+      )
     const firstCompaction = await this.deps.historyCompaction.compactIfNeeded({
       items,
       model,
@@ -726,7 +756,7 @@ export class ModelStepService {
       }
       return 'stop'
     }
-    let history = firstCompaction.history
+    let history = await projectCompactedGoalHistory(firstCompaction.history)
     let fallbackCompactionAttempted = false
     let fallbackCompactionApplied = false
     let replacedTokens = firstCompaction.replacedTokens
@@ -778,7 +808,7 @@ export class ModelStepService {
         reserveModelRequest: () => this.deps.budgetGate.reserveAdditionalModelRequest(threadId, turnId)
       })
       if (signal.aborted) return 'aborted'
-      history = fallbackCompaction.history
+      history = await projectCompactedGoalHistory(fallbackCompaction.history)
       fallbackCompactionApplied = fallbackCompaction.compacted
       replacedTokens += fallbackCompaction.replacedTokens
       composedRequest = await this.composeForwardedRequest({

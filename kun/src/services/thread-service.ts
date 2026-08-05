@@ -26,7 +26,7 @@ import type {
   SandboxMode
 } from '../contracts/policy.js'
 import type { Turn } from '../contracts/turns.js'
-import type { TurnItem } from '../contracts/items.js'
+import { isPublicTurnItem, type TurnItem } from '../contracts/items.js'
 import {
   createThreadRecord,
   resolveThreadAgentSurface,
@@ -620,7 +620,20 @@ export class ThreadService {
     const clonedTurns = sourceTurns.map((turn) =>
       cloneTurnForFork(turn, forkId, now, { relation })
     )
-    const clonedItems = clonedTurns.flatMap((turn) => turn.items)
+    const clonedPublicItems = clonedTurns.flatMap((turn) => turn.items)
+    const persistedItems = await this.sessionStore.loadItems(threadId)
+    const clonedSessionItems = cloneSessionItemsForThread({
+      // A pre-boundary FileThreadStore can contain a complete legacy mirror
+      // while its canonical stream is absent. Preserve the internal item in
+      // that recovery path too; cloneTurnForThread above still strips it from
+      // the new ThreadRecord mirror.
+      sourceItems: persistedItems.length > 0
+        ? persistedItems
+        : sourceTurns.flatMap((turn) => turn.items),
+      clonedTurns,
+      threadId: forkId,
+      now
+    })
     const defaultTitle = relation === 'side' ? `${current.title} · side` : `${current.title} fork`
     const forkIncludesLatestTurn = !targetTurnId || clonedTurns.length === current.turns.length
     const fork = createThreadRecord({
@@ -652,7 +665,7 @@ export class ThreadService {
       forkedFromThreadId: current.id,
       forkedFromTitle: current.title,
       forkedAt: now,
-      forkedFromMessageCount: clonedItems.filter((item) => item.kind === 'user_message').length,
+      forkedFromMessageCount: clonedPublicItems.filter((item) => item.kind === 'user_message').length,
       forkedFromTurnCount: clonedTurns.length,
       ...(forkIncludesLatestTurn && current.todos ? { todos: cloneTodoListForThread(current.todos, forkId, now) } : {}),
       createdAt: now
@@ -662,7 +675,7 @@ export class ThreadService {
       updatedAt: now,
       turns: clonedTurns
     }
-    for (const item of clonedItems) {
+    for (const item of clonedSessionItems) {
       await this.sessionStore.appendItem(record.id, item)
     }
     await this.threadStore.upsert(record)
@@ -684,12 +697,13 @@ export class ThreadService {
   ): Promise<ResumeSessionResult> {
     const sourceThread = await this.threadStore.get(sessionId)
     const sourceSession = await this.sessionStore.loadSession(sessionId)
-    const sourceItems = sourceThread
-      ? sourceThread.turns.flatMap((turn) => turn.items)
+    const persistedItems = await this.sessionStore.loadItems(sessionId)
+    const sourceSessionItems = persistedItems.length > 0
+      ? persistedItems
       : sourceSession?.items.length
         ? sourceSession.items
-        : await this.sessionStore.loadItems(sessionId)
-    if (!sourceThread && !sourceSession && sourceItems.length === 0) {
+        : sourceThread?.turns.flatMap((turn) => turn.items) ?? []
+    if (!sourceThread && !sourceSession && sourceSessionItems.length === 0) {
       throw new Error(`session not found: ${sessionId}`)
     }
     if (
@@ -705,14 +719,22 @@ export class ThreadService {
     const sourceTurns = sourceThread
       ? sourceThread.turns
       : rebuildTurnsFromItems({
-          items: sourceItems,
+          // Reconstructed public turns intentionally exclude internal model
+          // context; the full ordered stream is cloned separately below.
+          items: sourceSessionItems.filter(isPublicTurnItem),
           threadId,
-          fallbackTurnId: sourceSession?.turnId ?? this.ids.next('turn'),
+          fallbackTurnId: sourceSession?.turnId || sourceSessionItems[0]?.turnId || this.ids.next('turn'),
           fallbackPrompt: `Resumed session ${sessionId.slice(0, 8)}`,
           now
         })
     const clonedTurns = sourceTurns.map((turn) => cloneTurnForThread(turn, threadId, now))
-    const clonedItems = clonedTurns.flatMap((turn) => turn.items)
+    const clonedPublicItems = clonedTurns.flatMap((turn) => turn.items)
+    const clonedSessionItems = cloneSessionItemsForThread({
+      sourceItems: sourceSessionItems,
+      clonedTurns,
+      threadId,
+      now
+    })
     const sourceTitle = sourceThread?.title ?? `Session ${sessionId.slice(0, 8)}`
     const record = createThreadRecord({
       id: threadId,
@@ -731,7 +753,7 @@ export class ThreadService {
       forkedFromThreadId: sourceThread?.id,
       forkedFromTitle: sourceThread?.title,
       forkedAt: now,
-      forkedFromMessageCount: clonedItems.filter((item) => item.kind === 'user_message').length,
+      forkedFromMessageCount: clonedPublicItems.filter((item) => item.kind === 'user_message').length,
       forkedFromTurnCount: clonedTurns.length,
       ...(sourceThread?.todos ? { todos: cloneTodoListForThread(sourceThread.todos, threadId, now) } : {}),
       createdAt: now
@@ -741,11 +763,11 @@ export class ThreadService {
       updatedAt: now,
       turns: clonedTurns
     }
-    for (const item of clonedItems) {
+    for (const item of clonedSessionItems) {
       await this.sessionStore.appendItem(resumed.id, item)
     }
     await this.threadStore.upsert(resumed)
-    await this.sessionStore.upsertSession(toSessionSnapshot(resumed, now))
+    await this.sessionStore.upsertSession(toSessionSnapshot(resumed, now, clonedSessionItems))
     await this.events.record({
       kind: 'thread_created',
       threadId: resumed.id,
@@ -754,7 +776,7 @@ export class ThreadService {
       sandboxMode: resumed.sandboxMode,
       approvalReviewer: resumed.approvalReviewer
     })
-    return { thread: resumed, sessionId, messageCount: clonedItems.length }
+    return { thread: resumed, sessionId, messageCount: clonedPublicItems.length }
   }
 
   toSummary(thread: ThreadRecord): ThreadSummary {
@@ -763,7 +785,15 @@ export class ThreadService {
 }
 
 function cloneTurnForThread(turn: Turn, threadId: string, now: string): Turn {
-  const items = repairModelHistoryItems(turn.items.map((item) => cloneItemForThread(item, threadId, now)))
+  // ThreadRecord is a renderer-facing mirror. Older on-disk records can
+  // predate the session-only goal-context boundary, so never carry an
+  // internal item into the cloned mirror. `cloneSessionItemsForThread` below
+  // separately retains those records in canonical model history.
+  const items = repairModelHistoryItems(
+    turn.items
+      .filter(isPublicTurnItem)
+      .map((item) => cloneItemForThread(item, threadId, now))
+  )
   const attachmentIds = turn.attachmentIds.length > 0
     ? turn.attachmentIds
     : attachmentIdsFromItems(items)
@@ -1001,6 +1031,52 @@ function cloneItemForThread(item: TurnItem, threadId: string, now: string): Turn
   return cloned
 }
 
+/**
+ * Clone the durable session stream while keeping the ThreadRecord's turn
+ * mirror public-only. Public item clones come from `clonedTurns` so side
+ * forks retain their existing in-flight cleanup semantics. Session-only
+ * records, including goal context, retain their position in canonical history.
+ */
+function cloneSessionItemsForThread(input: {
+  sourceItems: readonly TurnItem[]
+  clonedTurns: readonly Turn[]
+  threadId: string
+  now: string
+}): TurnItem[] {
+  const allowedTurnIds = new Set(input.clonedTurns.map((turn) => turn.id))
+  const clonedPublicItems = input.clonedTurns.flatMap((turn) => turn.items)
+  const clonedPublicById = new Map(clonedPublicItems.map((item) => [item.id, item]))
+  const includedIds = new Set<string>()
+  const result: TurnItem[] = []
+
+  for (const sourceItem of input.sourceItems) {
+    if (!allowedTurnIds.has(sourceItem.turnId)) continue
+    if (isPublicTurnItem(sourceItem)) {
+      const cloned = clonedPublicById.get(sourceItem.id)
+      if (!cloned || includedIds.has(cloned.id)) continue
+      result.push(cloned)
+      includedIds.add(cloned.id)
+      continue
+    }
+
+    const cloned = cloneItemForThread(sourceItem, input.threadId, input.now)
+    if (includedIds.has(cloned.id)) continue
+    result.push(cloned)
+    includedIds.add(cloned.id)
+  }
+
+  // Older snapshots can have public turn items without a corresponding
+  // canonical session entry. Retain those at the tail rather than dropping
+  // visible history during fork/resume; new GoalContext records never take
+  // this fallback path because they are session-only by construction.
+  for (const item of clonedPublicItems) {
+    if (includedIds.has(item.id)) continue
+    result.push(item)
+    includedIds.add(item.id)
+  }
+  return result
+}
+
 function matchesThreadSearch(thread: ThreadSummary, query: string): boolean {
   return [
     thread.id,
@@ -1084,14 +1160,18 @@ function attachmentIdsFromItems(items: TurnItem[]): string[] {
   return [...ids]
 }
 
-function toSessionSnapshot(thread: ThreadRecord, now: string): AgentSession {
+function toSessionSnapshot(
+  thread: ThreadRecord,
+  now: string,
+  items: readonly TurnItem[] = thread.turns.flatMap((turn) => turn.items)
+): AgentSession {
   const firstTurn = thread.turns[0]
   return {
     threadId: thread.id,
     turnId: firstTurn?.id ?? '',
     startedAt: firstTurn?.createdAt ?? thread.createdAt,
     updatedAt: now,
-    items: thread.turns.flatMap((turn) => turn.items),
+    items: [...items],
     events: [],
     closed: true
   }

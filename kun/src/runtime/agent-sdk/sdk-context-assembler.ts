@@ -25,15 +25,19 @@ type HistoryChunk = {
 
 /**
  * Render the prior conversation (everything BEFORE the current turn) as a
- * compact transcript. The current turn's own items are excluded — the live user
- * text is sent separately as the request. Returns '' when there is no history.
+ * compact transcript. The current turn's own items are excluded — except its
+ * durable internal goal context, which is model history rather than live user
+ * input. The live user text is sent separately as the request. Returns '' when
+ * there is no history.
  */
 export function buildHistoryTranscript(
   items: readonly TurnItem[],
   currentTurnId: string,
   maxBytes: number = DEFAULT_SDK_HISTORY_TRANSCRIPT_MAX_BYTES
 ): string {
-  const priorItems = items.filter((item) => item.turnId !== currentTurnId)
+  const priorItems = items.filter((item) =>
+    item.turnId !== currentTurnId || item.kind === 'goal_context'
+  )
   const effective = effectiveHistoryAfterLatestCompaction(priorItems)
   if (effective.length === 0) return ''
 
@@ -147,7 +151,16 @@ function isTerminal(item: TurnItem): boolean {
 }
 
 function renderChunk(items: readonly TurnItem[]): string {
-  return buildSessionTranscript(items, 16 * 1024 * 1024).trim()
+  // goal_context is intentionally an internal item. Keep it in the delegated
+  // provider transcript without making generic session summaries expose it to
+  // public clients.
+  return items
+    .map((item) => item.kind === 'goal_context'
+      ? `[active goal] ${item.text.trim()}`
+      : buildSessionTranscript([item], 16 * 1024 * 1024).trim())
+    .filter((line) => line.length > 0)
+    .join('\n')
+    .trim()
 }
 
 function utf8Bytes(text: string): number {

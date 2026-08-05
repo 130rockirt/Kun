@@ -3,6 +3,7 @@ import { MODEL_REQUEST_TRACE_REDACTED_VALUE } from '../contracts/model-request-t
 import {
   BoundedModelTraceBodyAccumulator,
   boundedModelTraceText,
+  redactModelTraceValues,
   sanitizeModelTraceHeaders,
   sanitizeModelTraceUrl
 } from './model-request-trace-safety.js'
@@ -64,6 +65,28 @@ describe('model request trace safety', () => {
       capturedBytes: 5,
       originalBytes: 9,
       truncated: true
+    })
+  })
+
+  it('redacts exact model-only values from JSON traces without hiding adjacent diagnostics', () => {
+    const goalText = 'Internal active-goal instruction with a private objective.'
+    const result = redactModelTraceValues(JSON.stringify({
+      messages: [
+        { role: 'user', content: 'visible user request' },
+        { role: 'system', content: goalText }
+      ],
+      nested: { transcript: `before ${goalText} after` }
+    }), [goalText])
+
+    expect(result).not.toContain(goalText)
+    expect(result).toContain('visible user request')
+    expect(result).toContain(MODEL_REQUEST_TRACE_REDACTED_VALUE)
+    expect(JSON.parse(result)).toMatchObject({
+      messages: [
+        { content: 'visible user request' },
+        { content: MODEL_REQUEST_TRACE_REDACTED_VALUE }
+      ],
+      nested: { transcript: `before ${MODEL_REQUEST_TRACE_REDACTED_VALUE} after` }
     })
   })
 })

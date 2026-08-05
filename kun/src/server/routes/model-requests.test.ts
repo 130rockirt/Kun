@@ -36,6 +36,45 @@ describe('model request trace route', () => {
     expect((await dispatch(router, '/v1/threads/missing/model-requests', headers)).status).toBe(404)
     expect((await dispatch(router, '/v1/threads/thread-1/model-requests?limit=9999', headers)).status).toBe(400)
   })
+
+  it('redacts durable goal context before it reaches either trace endpoint', async () => {
+    const recorder = new LlmDebugRecorder()
+    const goalText = 'Internal goal context: do not expose this objective.'
+    const round = recorder.start({
+      threadId: 'thread-1',
+      turnId: 'turn-goal',
+      provider: 'test',
+      model: 'model',
+      redactedRequestValues: [goalText]
+    })
+    const record = recorder.beginHttpAttempt(round, {
+      endpointFormat: 'chat_completions',
+      attempt: 1,
+      reason: 'initial',
+      url: 'https://provider.example/v1/chat/completions',
+      headers: {},
+      bodyText: JSON.stringify({
+        messages: [
+          { role: 'user', content: 'visible request remains useful for diagnostics' },
+          { role: 'system', content: goalText }
+        ]
+      })
+    })
+    recorder.captureHttpResponse(round, record, new Response('{"ok":true}', { status: 200 }))
+    await recorder.finish(round)
+    const router = buildRouter(runtime(recorder))
+    const headers = { authorization: 'Bearer trace-token' }
+
+    const trace = await dispatch(router, '/v1/threads/thread-1/model-requests', headers)
+    const legacy = await dispatch(router, '/v1/debug/llm-rounds', headers)
+
+    for (const response of [trace, legacy]) {
+      expect(response.status).toBe(200)
+      expect(response.body).not.toContain(goalText)
+      expect(response.body).toContain('visible request remains useful for diagnostics')
+      expect(response.body).toContain('[REDACTED]')
+    }
+  })
 })
 
 async function capture(recorder: LlmDebugRecorder, threadId: string, prompt: string): Promise<void> {

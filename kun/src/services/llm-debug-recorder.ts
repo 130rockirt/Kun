@@ -18,6 +18,7 @@ import type { ModelStreamChunk } from '../ports/model-client.js'
 import {
   BoundedModelTraceBodyAccumulator,
   boundedModelTraceText,
+  redactModelTraceValues,
   sanitizeModelTraceHeaders,
   sanitizeModelTraceUrl
 } from './model-request-trace-safety.js'
@@ -80,6 +81,8 @@ export type LlmDebugRoundMeta = {
   provider: string
   model: string
   toolCatalog?: readonly ModelRequestTraceToolCatalogEntry[]
+  /** Exact model-only values that must never enter retained request traces. */
+  redactedRequestValues?: readonly string[]
 }
 
 export type LlmHttpAttemptReason = ModelRequestTraceRecord['attemptReason']
@@ -151,6 +154,7 @@ type CaptureState = {
   requestBytes: number
   outputBytes: number
   toolCatalog: ModelRequestTraceToolCatalogEntry[]
+  redactedRequestValues: string[]
   text: StringBlockAccumulator
   reasoning: StringBlockAccumulator
   pendingCaptures: Promise<void>[]
@@ -216,7 +220,7 @@ export class LlmDebugRecorder implements LlmDebugSink {
       output: { text: '', reasoning: '', toolCalls: [], toolResults: [] },
       exchanges: []
     }
-    this.states.set(round, createCaptureState(meta.toolCatalog))
+    this.states.set(round, createCaptureState(meta.toolCatalog, meta.redactedRequestValues))
     const active = this.activeByThread.get(meta.threadId) ?? new Set<LlmDebugRound>()
     active.add(round)
     this.activeByThread.set(meta.threadId, active)
@@ -285,7 +289,10 @@ export class LlmDebugRecorder implements LlmDebugSink {
     const state = this.stateFor(round)
     const sanitizedUrl = sanitizeModelTraceUrl(meta.target)
     const body = boundedModelTraceText(
-      redactBrowserUseDebugContent(meta.bodyText),
+      redactModelTraceValues(
+        redactBrowserUseDebugContent(meta.bodyText),
+        state.redactedRequestValues
+      ),
       this.limits.maxRequestBodyBytes
     )
     const record: ModelRequestTraceRecord = {
@@ -657,16 +664,24 @@ export async function startLlmDebugRoundIfEnabled(
 }
 
 function createCaptureState(
-  toolCatalog?: readonly ModelRequestTraceToolCatalogEntry[]
+  toolCatalog?: readonly ModelRequestTraceToolCatalogEntry[],
+  redactedRequestValues?: readonly string[]
 ): CaptureState {
   return {
     requestBytes: 0,
     outputBytes: 0,
     toolCatalog: normalizeTraceToolCatalog(toolCatalog),
+    redactedRequestValues: normalizeRedactedRequestValues(redactedRequestValues),
     text: { blocks: [], parts: [] },
     reasoning: { blocks: [], parts: [] },
     pendingCaptures: []
   }
+}
+
+function normalizeRedactedRequestValues(input: readonly string[] | undefined): string[] {
+  if (!input?.length) return []
+  return [...new Set(input.filter((value) => value.trim().length > 0))]
+    .sort((left, right) => right.length - left.length)
 }
 
 function normalizeTraceToolCatalog(

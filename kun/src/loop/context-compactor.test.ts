@@ -4,6 +4,7 @@ import type { TurnItem } from '../contracts/items.js'
 import {
   makeAssistantTextItem,
   makeCompactionItem,
+  makeGoalContextItem,
   makeToolCallItem,
   makeToolResultItem,
   makeUserItem
@@ -13,6 +14,69 @@ import { ContextCompactor } from './context-compactor.js'
 import { modelContextProfilesFromConfig } from './model-context-profile.js'
 
 describe('ContextCompactor', () => {
+  it('keeps goal context once outside compaction sources across repeated folds', () => {
+    const threadId = 'thr_goal_context_compaction'
+    const turnId = 'turn_goal_context_compaction'
+    const goal = makeGoalContextItem({
+      id: 'goal_context_1',
+      threadId,
+      turnId,
+      text: 'Unique durable goal objective that must not enter a summary.',
+      createdAt: '2026-08-06T00:00:00.000Z'
+    })
+    const compactor = new ContextCompactor()
+    const first = compactor.compact({
+      threadId,
+      turnId,
+      history: [
+        makeUserItem({ id: 'goal_user_old', threadId, turnId, text: 'Old request to summarize.' }),
+        goal,
+        makeAssistantTextItem({
+          id: 'goal_assistant_old',
+          threadId,
+          turnId,
+          text: 'Old progress to summarize.',
+          status: 'completed'
+        }),
+        makeUserItem({ id: 'goal_user_tail', threadId, turnId, text: 'Recent request to retain.' }),
+        makeAssistantTextItem({
+          id: 'goal_assistant_tail',
+          threadId,
+          turnId,
+          text: 'Recent response to retain.',
+          status: 'completed'
+        })
+      ],
+      prefix: createImmutablePrefix(),
+      keepRecent: 2,
+      mode: 'force'
+    })
+
+    expect(first.next.filter((item) => item.kind === 'goal_context')).toEqual([goal])
+    expect(first.next.map((item) => item.id)).toEqual([
+      first.summaryItem.id,
+      goal.id,
+      'goal_user_tail',
+      'goal_assistant_tail'
+    ])
+    expect(first.summaryItem.kind).toBe('compaction')
+    if (first.summaryItem.kind !== 'compaction') throw new Error('expected compaction summary')
+    expect(first.summaryItem.sourceItemIds).not.toContain(goal.id)
+    expect(first.summaryItem.summary).not.toContain('Unique durable goal objective')
+
+    const second = compactor.compact({
+      threadId,
+      turnId,
+      history: first.next,
+      prefix: createImmutablePrefix(),
+      keepRecent: 1,
+      mode: 'force'
+    })
+    expect(second.next.filter((item) => item.kind === 'goal_context')).toEqual([goal])
+    expect(second.next.indexOf(goal)).toBe(1)
+    expect(second.next[0]?.kind).toBe('compaction')
+  })
+
   it('forces compaction when input is below soft but input + output budget exceeds the hard cap (dead zone)', () => {
     const compactor = new ContextCompactor({ softThreshold: 750_000, hardThreshold: 850_000 })
 

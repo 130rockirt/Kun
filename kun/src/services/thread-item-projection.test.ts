@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { InMemoryEventBus } from '../adapters/in-memory-event-bus.js'
 import { InMemorySessionStore } from '../adapters/in-memory-session-store.js'
 import { InMemoryThreadStore } from '../adapters/in-memory-thread-store.js'
-import { makeCompactionItem, makeUserItem } from '../domain/item.js'
+import { makeCompactionItem, makeGoalContextItem, makeUserItem } from '../domain/item.js'
 import { createThreadRecord } from '../domain/thread.js'
 import { createTurnRecord } from '../domain/turn.js'
 import { ContextCompactor } from '../loop/context-compactor.js'
@@ -157,6 +157,27 @@ describe('thread item projection', () => {
     expect(projectSessionItemsOntoExistingTurns(thread, [
       makeUserItem({ id: 'unknown', threadId, turnId: 'missing_turn', text: 'unknown' })
     ])).toBeNull()
+  })
+
+  it('keeps goal context in canonical session history without projecting it into the thread mirror', () => {
+    const turn = createTurnRecord({ id: 'turn_goal', threadId, prompt: 'finish the task', status: 'completed' })
+    const thread = {
+      ...createThreadRecord({ id: threadId, title: 'Goal context', workspace: '/', model: 'm' }),
+      turns: [turn]
+    }
+    const user = makeUserItem({ id: 'goal_user', threadId, turnId: turn.id, text: 'finish the task' })
+    const context = makeGoalContextItem({
+      id: 'goal_context',
+      threadId,
+      turnId: turn.id,
+      text: 'Active goal: finish the task',
+      createdAt: '2026-07-11T00:00:01.000Z'
+    })
+
+    const projected = projectSessionItemsOntoExistingTurns(thread, [user, context])
+
+    expect(projected?.turns[0]?.items.map((item) => item.id)).toEqual(['goal_user'])
+    expect(projected?.turns[0]?.items).not.toContainEqual(context)
   })
 
   it('does not upsert when the thread is missing or no session bucket matches', async () => {
