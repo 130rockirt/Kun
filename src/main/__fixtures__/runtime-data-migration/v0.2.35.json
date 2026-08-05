@@ -1,0 +1,44 @@
+{
+  "version": "0.2.35",
+  "tagObject": "fa788899466a405bc65b89ffead30cb486da12aa",
+  "commit": "21ef5194c17dc407a65457896bffa64f397aa737",
+  "observedShape": "v3 target-activated evidence whose canonical target is not a directory",
+  "entries": [
+    {
+      "path": "user-data/kun-settings.json",
+      "content": "{\"version\":1,\"agents\":{\"kun\":{\"dataDir\":\"~/.kun/data\"}}}\n"
+    },
+    {
+      "path": "home/.kun/data",
+      "content": "preserved non-directory target evidence\n"
+    }
+  ],
+  "journal": {
+    "file": "kun-runtime-data-migration-v3.json",
+    "document": {
+      "schemaVersion": 3,
+      "phase": "target-activated",
+      "provenance": "original-legacy-source",
+      "sourcePath": "$HOME/.deepseekgui/kun",
+      "targetPath": "$HOME/.kun/data",
+      "stagingPath": "$HOME/.kun/data.history-preserving-staging-20260701T000000000Z.bak",
+      "settingsSourcePath": "$USER_DATA/kun-settings.json",
+      "settingsWritePath": "$USER_DATA/kun-settings.json",
+      "settingsBackupPaths": [],
+      "sourceThreadIds": ["thr_missing"],
+      "sourceInventory": {"files": 1, "directories": 2, "symlinks": 0, "bytes": 1},
+      "sourceFingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "candidateFingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "salvaged": 0,
+      "conflicts": [],
+      "startedAt": "2026-07-01T00:00:00.000Z",
+      "updatedAt": "2026-07-01T00:00:00.000Z"
+    }
+  },
+  "expected": {
+    "scannerState": "start-over-required",
+    "candidateKinds": [],
+    "invalidEvidenceCount": 1,
+    "runnerStatus": "blocked"
+  }
+}

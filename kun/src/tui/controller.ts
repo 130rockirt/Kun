@@ -13,7 +13,11 @@ import {
   type ApprovalReviewer,
   type SandboxMode
 } from '../contracts/policy.js'
-import type { ModelConnectionSnapshot } from '../contracts/model-connections.js'
+import {
+  isModelConnectionProfileUsable,
+  type ModelConnectionProfile,
+  type ModelConnectionSnapshot
+} from '../contracts/model-connections.js'
 import type { ModelReasoningEffort, ModelReasoningCapabilityMetadata } from '../contracts/capabilities.js'
 import { redactSecretText } from '../config/secret-redaction.js'
 import {
@@ -495,7 +499,12 @@ export class TuiController {
       )
       if (
         snapshot &&
-        (!selection.providerId || !selection.model || !selectedProfile?.configured)
+        (
+          !selection.providerId ||
+          !selection.model ||
+          !selectedProfile ||
+          !isModelConnectionProfileUsable(selectedProfile)
+        )
       ) {
         this.patch({
           busy: false,
@@ -548,6 +557,20 @@ export class TuiController {
     const steeringGraph = Boolean(
       activeGraphRun && !isTerminalGraphRun(activeGraphRun) && !runningTurnId
     )
+    if (!runningTurnId && !steeringGraph) {
+      const providerId = this.options.providerId ?? thread.providerId
+      const accountId = this.options.accountId ?? thread.accountId
+      const profile = this.stateValue.modelConnections?.providers.find((candidate) =>
+        candidate.id === providerId && (!accountId || candidate.accountId === accountId)
+      )
+      if (
+        this.stateValue.modelConnections &&
+        (!profile || !isModelConnectionProfileUsable(profile))
+      ) {
+        this.notify(modelConnectionUnavailableMessage(profile, providerId), 'error')
+        return
+      }
+    }
     if ((runningTurnId || steeringGraph) && this.stateValue.pendingAttachments.length) {
       this.notify('Attachments are kept for the next new turn; they cannot be added to queued guidance or Graph steering.', 'error')
       return
@@ -1016,20 +1039,24 @@ export class TuiController {
   }): Promise<ModelConnectionSnapshot> {
     const snapshot = this.stateValue.modelConnections
     if (!snapshot) throw new Error('No model catalog is available.')
+    const selectedProfile = snapshot.providers.find((candidate) =>
+      candidate.id === input.providerId && candidate.accountId === input.accountId
+    )
+    if (!selectedProfile) throw new Error('The selected provider is no longer available.')
+    if (!isModelConnectionProfileUsable(selectedProfile)) {
+      throw new Error(modelConnectionUnavailableMessage(selectedProfile, input.providerId))
+    }
     if (this.runtime.legacyGui) {
-      const profile = snapshot.providers.find((candidate) =>
-        candidate.id === input.providerId &&
-        candidate.accountId === input.accountId &&
-        candidate.models.includes(input.model)
-      )
-      if (!profile) throw new Error('The selected model is no longer available.')
+      if (!selectedProfile.models.includes(input.model)) {
+        throw new Error('The selected model is no longer available.')
+      }
       const updated: ModelConnectionSnapshot = {
         ...snapshot,
         revision: snapshot.revision + 1,
         defaultProviderId: input.providerId,
         defaultAccountId: input.accountId,
         defaultModel: input.model,
-        providers: snapshot.providers.map((candidate) => candidate.id === profile.id && candidate.accountId === profile.accountId
+        providers: snapshot.providers.map((candidate) => candidate.id === selectedProfile.id && candidate.accountId === selectedProfile.accountId
           ? { ...candidate, selectedModel: input.model }
           : candidate)
       }
@@ -1056,7 +1083,10 @@ export class TuiController {
   async cycleRecentModel(direction: 1 | -1): Promise<boolean> {
     const snapshot = this.stateValue.modelConnections
     const recent = this.persisted.recentModels.filter((entry) => snapshot?.providers.some((profile) =>
-      profile.id === entry.providerId && profile.accountId === entry.accountId && profile.models.includes(entry.model)
+      profile.id === entry.providerId &&
+      profile.accountId === entry.accountId &&
+      profile.models.includes(entry.model) &&
+      isModelConnectionProfileUsable(profile)
     ))
     if (!snapshot || recent.length < 2) {
       this.notify('Use /model to select at least two models before cycling recent models.', 'error')
@@ -2418,6 +2448,18 @@ export class TuiController {
   async askSideQuestion(question: string): Promise<void> {
     const projection = this.requireProjection()
     if (!projection) return
+    const providerId = this.options.providerId ?? projection.thread.providerId
+    const accountId = this.options.accountId ?? projection.thread.accountId
+    const profile = this.stateValue.modelConnections?.providers.find((candidate) =>
+      candidate.id === providerId && (!accountId || candidate.accountId === accountId)
+    )
+    if (
+      this.stateValue.modelConnections &&
+      (!profile || !isModelConnectionProfileUsable(profile))
+    ) {
+      this.notify(modelConnectionUnavailableMessage(profile, providerId), 'error')
+      return
+    }
     try {
       const side = await this.client.forkThread(projection.thread.id, {
         relation: 'side', title: `${projection.thread.title} · side`
@@ -2849,6 +2891,19 @@ export class TuiController {
 
 function safeMessage(error: unknown): string {
   return redactSecretText(error instanceof Error ? error.message : String(error))
+}
+
+function modelConnectionUnavailableMessage(
+  profile: Pick<ModelConnectionProfile, 'name' | 'credentialStatus'> | undefined,
+  providerId: string | undefined
+): string {
+  const label = profile?.name ?? providerId ?? 'The selected provider'
+  const detail = profile?.credentialStatus === 'missing'
+    ? 'credential is missing'
+    : profile?.credentialStatus === 'unreadable'
+      ? 'credential cannot be read'
+      : 'connection is not configured'
+  return `${label} ${detail}. Use /connect to reconnect it before starting a turn.`
 }
 
 function isRefreshConflict(error: unknown): boolean {

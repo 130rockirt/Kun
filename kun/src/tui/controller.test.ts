@@ -58,6 +58,33 @@ const runtime = {
   }
 } as unknown as TuiConnection
 
+function credentialSnapshot(
+  credentialStatus: 'ready' | 'missing' | 'unreadable' | undefined
+): ModelConnectionSnapshot {
+  return {
+    schemaVersion: 1,
+    revision: 9,
+    providers: [{
+      id: 'legacy-provider',
+      accountId: 'account:legacy-provider',
+      name: 'Legacy Provider',
+      kind: 'http',
+      authType: 'api-key',
+      endpointFormat: 'chat_completions',
+      configured: true,
+      ...(credentialStatus ? { credentialStatus } : {}),
+      models: ['model-a'],
+      selectedModel: 'model-a'
+    }],
+    defaultProviderId: 'legacy-provider',
+    defaultAccountId: 'account:legacy-provider',
+    defaultModel: 'model-a',
+    proxy: { enabled: false, url: '' },
+    routePools: [],
+    localModelGateway: { enabled: false }
+  }
+}
+
 describe('TuiController', () => {
   it('hydrates the shared default before first render and publishes it through the compatibility callback', async () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'kun-tui-default-model-'))
@@ -106,6 +133,92 @@ describe('TuiController', () => {
       })
       expect(tuiRuntime.runtimeInfo.model).toBe('gpt-next')
       expect(persistSelection).toHaveBeenCalledWith(snapshot)
+    } finally {
+      await controller.stop()
+      await rm(dataDir, { recursive: true, force: true })
+    }
+  })
+
+  it.each(['missing', 'unreadable'] as const)(
+    'does not create a session with a configured provider whose credential is %s',
+    async (credentialStatus) => {
+      const dataDir = await mkdtemp(join(tmpdir(), 'kun-tui-broken-credential-create-'))
+      const createThread = vi.fn()
+      const controller = new TuiController(
+        { createThread } as unknown as KunTuiClient,
+        { ...options(), dataDir, continueLatest: false },
+        runtime
+      )
+      try {
+        controller.applyModelSelection(credentialSnapshot(credentialStatus), false)
+
+        await controller.createThread('Blocked credential')
+
+        expect(createThread).not.toHaveBeenCalled()
+        expect(controller.state.notification).toMatchObject({
+          kind: 'error',
+          message: expect.stringMatching(/No connected default model/u)
+        })
+      } finally {
+        await controller.stop()
+        await rm(dataDir, { recursive: true, force: true })
+      }
+    }
+  )
+
+  it('rejects direct model selection when the credential is missing', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'kun-tui-broken-credential-select-'))
+    const selectModel = vi.fn()
+    const controller = new TuiController(
+      { selectModel } as unknown as KunTuiClient,
+      { ...options(), dataDir },
+      runtime
+    )
+    try {
+      controller.applyModelSelection(credentialSnapshot('missing'), false)
+
+      await expect(controller.selectModel({
+        providerId: 'legacy-provider',
+        accountId: 'account:legacy-provider',
+        model: 'model-a'
+      })).rejects.toThrow(/credential is missing/u)
+      expect(selectModel).not.toHaveBeenCalled()
+    } finally {
+      await controller.stop()
+      await rm(dataDir, { recursive: true, force: true })
+    }
+  })
+
+  it('does not start a turn when an active session credential is unreadable', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'kun-tui-broken-credential-turn-'))
+    const current = detail({
+      providerId: 'legacy-provider',
+      accountId: 'account:legacy-provider',
+      model: 'model-a'
+    })
+    const startTurn = vi.fn()
+    const client = {
+      listThreads: vi.fn(async () => [current]),
+      getThread: vi.fn(async () => current),
+      subscribeThreadEvents: vi.fn(async (input: { signal: AbortSignal }) => {
+        await new Promise<void>((resolve) =>
+          input.signal.addEventListener('abort', () => resolve(), { once: true }))
+      }),
+      startTurn
+    } as unknown as KunTuiClient
+    const controller = new TuiController(client, { ...options(), dataDir }, runtime)
+    try {
+      await controller.start()
+      controller.applyModelSelection(credentialSnapshot('unreadable'), false)
+
+      await controller.submit('Do not send this')
+
+      expect(startTurn).not.toHaveBeenCalled()
+      expect(controller.state.notification).toMatchObject({
+        kind: 'error',
+        message: expect.stringMatching(/credential cannot be read/u)
+      })
+      expect(controller.state.busy).toBe(false)
     } finally {
       await controller.stop()
       await rm(dataDir, { recursive: true, force: true })

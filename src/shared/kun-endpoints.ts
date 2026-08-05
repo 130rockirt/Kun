@@ -33,6 +33,10 @@ export const KUN_MODEL_CONNECTION_CLAUDE_SDK_INSTALL_TEMPLATE =
 export const KUN_MODEL_CONNECTION_PROVIDER_TEMPLATE = '/v1/model-connections/{id}'
 export const KUN_MODEL_CONNECTION_CREDENTIAL_TEMPLATE =
   '/v1/model-connections/{id}/credential'
+export const KUN_MODEL_CONNECTION_CREDENTIAL_FENCE_TEMPLATE =
+  '/v1/model-connections/{id}/credential/fence'
+export const KUN_MODEL_CONNECTION_CREDENTIAL_COMMIT_TEMPLATE =
+  '/v1/model-connections/{id}/credential/commit'
 export const KUN_MODEL_CONNECTION_PROBE_TEMPLATE = '/v1/model-connections/{id}/probe'
 
 export const KUN_MODEL_ROUTES_PATH = '/v1/model-routes'

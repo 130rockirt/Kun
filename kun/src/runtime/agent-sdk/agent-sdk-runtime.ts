@@ -75,6 +75,16 @@ class AgentSdkProtocolError extends Error {
   }
 }
 
+/** Safe, source-id-free failure raised when a managed Claude credential is fenced or unreadable. */
+export class AgentSdkCredentialUnavailableError extends Error {
+  readonly code = 'agent_sdk_credential_unavailable'
+
+  constructor() {
+    super('Protected Claude subscription credentials are unavailable. Reconnect the provider in Settings.')
+    this.name = 'AgentSdkCredentialUnavailableError'
+  }
+}
+
 export interface SdkTurnContext {
   /** Workspace root the SDK runs in (cwd). */
   workspace: string
@@ -186,7 +196,8 @@ export interface SdkRuntimeDeps {
     threadId: string,
     turnId: string,
     status: TurnStatus,
-    error?: string
+    error?: string,
+    code?: string
   ): Promise<TurnRunOutcome | void>
   /**
    * Check durable Graph state after the first model response. This may park an
@@ -354,7 +365,22 @@ export class AgentSdkRuntime {
     turnId: string,
     signal: AbortSignal
   ): Promise<TurnRunOutcome> {
-    const ctx = await this.deps.loadTurnContext(threadId, turnId)
+    let ctx: SdkTurnContext | null
+    try {
+      ctx = await this.deps.loadTurnContext(threadId, turnId)
+    } catch (error) {
+      if (!(error instanceof AgentSdkCredentialUnavailableError)) throw error
+      await this.deps.recordEvent({
+        kind: 'error',
+        threadId,
+        turnId,
+        message: error.message,
+        code: error.code,
+        severity: 'error'
+      })
+      await this.deps.finishTurn(threadId, turnId, 'failed', error.message, error.code)
+      return 'failed'
+    }
     if (!ctx) {
       await this.deps.finishTurn(threadId, turnId, 'failed', 'no input for subscription turn')
       return 'failed'

@@ -1,4 +1,5 @@
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
 import { createServer, type AddressInfo } from 'node:net'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -24,6 +25,14 @@ import {
   type ModelProviderModelProfileV1
 } from '../shared/app-settings'
 import { KunConfigSchema } from '../../kun/src/config/kun-config.js'
+import {
+  configureManagerAtomicJsonClient,
+  isManagerAtomicJsonPath
+} from '../../kun/src/extensions/atomic-json.js'
+import {
+  ManagerResourceLeaseClient,
+  ManagerRevisionedDocumentClient
+} from '../../kun/src/manager/manager-client.js'
 
 vi.mock('electron', () => ({
   app: {
@@ -135,6 +144,144 @@ afterEach(async () => {
     rmSync(tempRoot, { recursive: true, force: true })
     tempRoot = null
   }
+  vi.unstubAllEnvs()
+  vi.unstubAllGlobals()
+  configureManagerAtomicJsonClient(null)
+})
+
+describe('Manager-owned Main data plane', () => {
+  it('configures Main Registry consumers with the shared Manager endpoint', async () => {
+    vi.stubEnv('KUN_MANAGER_BASE_URL', 'http://inherited.invalid')
+    vi.stubEnv('KUN_MANAGER_TOKEN', 'inherited-child-value')
+    vi.stubEnv('KUN_MANAGER_DATA_DIR', '/tmp/inherited-manager-data')
+    const module = await import('./kun-process')
+    const manager = {
+      discovery: {
+        baseUrl: 'http://127.0.0.1:17777',
+        managerToken: 'manager-secret',
+        dataDir: '/tmp/kun-manager-data'
+      }
+    } as Parameters<typeof module.configureKunManagerDataPlaneForCurrentProcess>[0]
+
+    module.configureKunManagerDataPlaneForCurrentProcess(manager)
+
+    expect(process.env.KUN_MANAGER_BASE_URL).toBe('http://inherited.invalid')
+    expect(process.env.KUN_MANAGER_TOKEN).toBe('inherited-child-value')
+    expect(process.env.KUN_MANAGER_DATA_DIR).toBe('/tmp/inherited-manager-data')
+    expect(isManagerAtomicJsonPath('/tmp/kun-manager-data/model-connections.v1.json')).toBe(true)
+    const child = spawnSync(process.execPath, [
+      '-e',
+      'process.stdout.write(String(process.env.KUN_MANAGER_TOKEN || ""))'
+    ], { encoding: 'utf8' })
+    expect(child.stdout).toBe('inherited-child-value')
+    expect(child.stdout).not.toContain(manager.discovery.managerToken)
+  })
+
+  it('rebinds existing Main document clients after the Manager restarts', async () => {
+    const module = await import('./kun-process')
+    const managerOne = {
+      discovery: {
+        baseUrl: 'http://127.0.0.1:17771',
+        managerToken: 'manager-one-token',
+        dataDir: '/tmp/kun-manager-rebind',
+        settingsPath: '/tmp/kun-settings.json'
+      }
+    } as Parameters<typeof module.configureKunManagerDataPlaneForCurrentProcess>[0]
+    const managerTwo = {
+      discovery: {
+        ...managerOne.discovery,
+        baseUrl: 'http://127.0.0.1:17772',
+        managerToken: 'manager-two-token'
+      }
+    } as Parameters<typeof module.configureKunManagerDataPlaneForCurrentProcess>[0]
+    const binding = module.configureKunManagerDataPlaneForCurrentProcess(managerOne)
+    const existingClient = new ManagerRevisionedDocumentClient(binding, 'settings')
+    const existingLeaseClient = new ManagerResourceLeaseClient(
+      binding,
+      'production',
+      'main-one'
+    )
+    module.configureKunManagerDataPlaneForCurrentProcess(managerTwo)
+    const requests: Array<{ url: string; authorization: string }> = []
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      requests.push({
+        url: String(input),
+        authorization: String((init?.headers as Record<string, string> | undefined)?.authorization ?? '')
+      })
+      const url = String(input)
+      if (url.includes('/v1/documents/')) {
+        return Response.json({ snapshot: { revision: 2, value: null } })
+      }
+      if (url.endsWith('/release')) return Response.json({ released: true })
+      return Response.json({ acquired: true })
+    }))
+
+    await expect(existingClient.read()).resolves.toEqual({ revision: 2, value: null })
+    await expect(existingLeaseClient.maintain({
+      resource: 'main-registry',
+      onAcquired: () => undefined,
+      onLost: () => undefined
+    })).resolves.toBe(true)
+    await existingLeaseClient.shutdown()
+    expect(requests[0]).toEqual({
+      url: 'http://127.0.0.1:17772/v1/documents/settings',
+      authorization: 'Bearer manager-two-token'
+    })
+    expect(requests).toHaveLength(3)
+    expect(requests.every((request) =>
+      request.url.startsWith('http://127.0.0.1:17772/') &&
+      request.authorization === 'Bearer manager-two-token')).toBe(true)
+  })
+
+  it('selects a custom Manager data directory from settings without writing settings', async () => {
+    if (!tempRoot) throw new Error('temp root not initialized')
+    const settingsPath = join(tempRoot, 'custom-data-dir-settings.json')
+    const customDataDir = join(tempRoot, 'custom-runtime-data')
+    writeFileSync(settingsPath, JSON.stringify({
+      version: 1,
+      agents: { kun: { dataDir: customDataDir } }
+    }))
+    const before = readFileSync(settingsPath, 'utf8')
+    const module = await import('./kun-process')
+
+    await expect(module.resolveKunManagerDataDirFromSettings(settingsPath)).resolves.toBe(customDataDir)
+    expect(readFileSync(settingsPath, 'utf8')).toBe(before)
+  })
+
+  it('safely hands a healthy old Manager from the default data directory to custom authority', async () => {
+    const module = await import('./kun-process')
+    const oldManager = {
+      discovery: {
+        instanceId: 'manager-one',
+        pid: 12345,
+        baseUrl: 'http://127.0.0.1:17771',
+        managerToken: 'manager-one-token',
+        dataDir: '/tmp/default-runtime-data',
+        settingsPath: '/tmp/kun-settings.json'
+      }
+    } as Parameters<typeof module.handoffExistingKunServiceManagerForDataDir>[0]
+    const inspect = vi.fn(async () => null)
+    const stop = vi.fn(async () => true)
+    const shutdown = vi.fn(async () => undefined)
+    const waitForExit = vi.fn(async () => true)
+
+    await module.handoffExistingKunServiceManagerForDataDir(
+      oldManager,
+      '/tmp/custom-runtime-data',
+      '/tmp/kun-settings.json',
+      {
+        inspect: inspect as never,
+        stop: stop as never,
+        shutdown,
+        waitForExit
+      }
+    )
+
+    expect(inspect).toHaveBeenCalledTimes(2)
+    expect(stop).toHaveBeenCalledTimes(2)
+    expect(shutdown).toHaveBeenCalledOnce()
+    expect(waitForExit).toHaveBeenCalledWith(12345, 15_000)
+  })
 })
 
 describe('startKunChild', () => {

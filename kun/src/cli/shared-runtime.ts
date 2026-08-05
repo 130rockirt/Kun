@@ -35,6 +35,10 @@ import {
   runtimeBuildIdForFlavor,
   runtimeDisplayName
 } from './runtime-flavor.js'
+import {
+  withRuntimeDataDirAncillaryWriter,
+  withRuntimeDataDirConfigWriter
+} from '../server/runtime-data-dir-lease.js'
 
 const START_TIMEOUT_MS = 30_000
 const STOP_TIMEOUT_MS = 15_000
@@ -137,7 +141,14 @@ export async function runRuntimeCommand(
       return 0
     }
     await stopSharedRuntime(dataDir, fetchImpl, scope)
-    if (guiSettings) await syncGuiProviderCatalogToConfig(dataDir, guiSettings)
+    // A managed Runtime's registry is already Manager-owned, and this CLI
+    // process does not hold the Manager's writer authority. Never borrow that
+    // cross-process lease for a legacy config-file rewrite. Unmanaged restart
+    // has just stopped its sole Runtime owner, so the sync can take a bounded
+    // config claim before the replacement Runtime starts.
+    if (guiSettings && !manager) {
+      await syncGuiProviderCatalogToConfig(dataDir, guiSettings)
+    }
     const restarted = await ensureSharedRuntime({
       dataDir,
       env: io.env,
@@ -262,7 +273,7 @@ export async function ensureSharedRuntime(input: {
   const reusable = reusableRuntimeConnection(existing, expectedBuildId)
   if (reusable) return reusable
   assertRuntimeCanBeReplaced(existing)
-  return withRuntimeStartLock(discoveryDir, async () => {
+  const launch = () => withRuntimeStartLock(discoveryDir, async () => {
     const elected = await inspectSharedRuntime(input.dataDir, fetchImpl, scope)
     const electedReusable = reusableRuntimeConnection(elected, expectedBuildId)
     if (electedReusable) return electedReusable
@@ -272,15 +283,35 @@ export async function ensureSharedRuntime(input: {
     }
     const stale = await readRuntimeDiscovery(discoveryDir, runtimeFlavor).catch(() => null)
     if (stale) {
-      await removeRuntimeDiscovery(discoveryDir, stale.instanceId, runtimeFlavor).catch(() => undefined)
+      await removeSharedRuntimeDiscovery(
+        input.dataDir,
+        discoveryDir,
+        stale.instanceId,
+        runtimeFlavor
+      )
     }
-    await prepareFreshSharedRuntimeCapabilities(input.dataDir)
+    // An unmanaged launch has no owner between handover and process start, so
+    // every config read/compare/write gets its own bounded writer claim. A
+    // managed launch is already Manager-authoritative and must not manufacture
+    // a second cross-process claim; Runtime defaults cover a missing config.
+    if (!input.manager) {
+      await withRuntimeDataDirConfigWriter(
+        input.dataDir,
+        () => prepareFreshSharedRuntimeCapabilities(input.dataDir)
+      )
+    }
 
-    const logsDir = join(input.dataDir, 'logs')
-    await mkdir(logsDir, { recursive: true, mode: 0o700 })
-    const logPath = join(logsDir, runtimeFlavor === 'development' ? 'runtime.development.log' : 'runtime.log')
-    await rotateLog(logPath)
-    const logFd = openSync(logPath, 'a', 0o600)
+    const prepareLog = async (): Promise<{ logPath: string; logFd: number }> => {
+      const logsDir = join(input.dataDir, 'logs')
+      await mkdir(logsDir, { recursive: true, mode: 0o700 })
+      const logPath = join(
+        logsDir,
+        runtimeFlavor === 'development' ? 'runtime.development.log' : 'runtime.log'
+      )
+      await rotateLog(logPath)
+      return { logPath, logFd: openSync(logPath, 'a', 0o600) }
+    }
+    const { logPath, logFd } = await prepareLog()
     const runtimeToken = randomBytes(32).toString('base64url')
     const entry = fileURLToPath(new URL('./serve-entry.js', import.meta.url))
     const packagedRuntimeExecutable = input.launch
@@ -344,6 +375,9 @@ export async function ensureSharedRuntime(input: {
     }
     throw new Error(`Kun shared runtime did not become ready; inspect ${logPath}`)
   }, runtimeFlavor)
+  return input.manager
+    ? launch()
+    : withRuntimeDataDirAncillaryWriter(input.dataDir, launch)
 }
 
 function reusableRuntimeConnection(
@@ -450,6 +484,22 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
+async function removeSharedRuntimeDiscovery(
+  dataDir: string,
+  discoveryDir: string,
+  instanceId: string,
+  runtimeFlavor: RuntimeFlavor
+): Promise<boolean> {
+  const remove = () => removeRuntimeDiscovery(
+    discoveryDir,
+    instanceId,
+    runtimeFlavor
+  ).catch(() => false)
+  return runtimeFlavor === 'production'
+    ? withRuntimeDataDirAncillaryWriter(dataDir, remove)
+    : remove()
+}
+
 export async function stopSharedRuntime(
   dataDir: string,
   fetchImpl: typeof fetch = fetch,
@@ -461,7 +511,12 @@ export async function stopSharedRuntime(
   if (!inspected) {
     const stale = await readRuntimeDiscovery(discoveryDir, runtimeFlavor).catch(() => null)
     if (stale && !processAlive(stale.pid)) {
-      await removeRuntimeDiscovery(discoveryDir, stale.instanceId, runtimeFlavor).catch(() => undefined)
+      await removeSharedRuntimeDiscovery(
+        dataDir,
+        discoveryDir,
+        stale.instanceId,
+        runtimeFlavor
+      )
     }
     return false
   }
@@ -485,17 +540,20 @@ export async function stopSharedRuntime(
   const deadline = Date.now() + STOP_TIMEOUT_MS
   while (Date.now() < deadline) {
     if (!processAlive(record.pid)) {
-      await Promise.all([
-        removeRuntimeDiscovery(discoveryDir, record.instanceId, runtimeFlavor).catch(() => false),
-        scope.manager
-          ? unregisterRuntimeWithManager({
-              manager: scope.manager,
-              flavor: runtimeFlavor,
-              instanceId: record.instanceId,
-              fetch: fetchImpl
-            })
-          : Promise.resolve()
-      ])
+      await removeSharedRuntimeDiscovery(
+        dataDir,
+        discoveryDir,
+        record.instanceId,
+        runtimeFlavor
+      )
+      if (scope.manager) {
+        await unregisterRuntimeWithManager({
+          manager: scope.manager,
+          flavor: runtimeFlavor,
+          instanceId: record.instanceId,
+          fetch: fetchImpl
+        })
+      }
       return true
     }
     await delay(POLL_MS)

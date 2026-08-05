@@ -83,7 +83,14 @@ export function modelListFromSharedConnections(value: unknown): FetchUpstreamMod
   if (root.schemaVersion !== 1 || !Array.isArray(root.providers)) return null
   const groups: ModelProviderModelGroup[] = root.providers.flatMap((raw) => {
     const profile = objectValue(raw)
-    if (profile.configured !== true || typeof profile.id !== 'string' || !Array.isArray(profile.models)) {
+    const credentialUnavailable = profile.credentialStatus === 'missing' ||
+      profile.credentialStatus === 'unreadable'
+    if (
+      profile.configured !== true ||
+      credentialUnavailable ||
+      typeof profile.id !== 'string' ||
+      !Array.isArray(profile.models)
+    ) {
       return []
     }
     const modelIds = profile.models.flatMap((model) =>
@@ -144,10 +151,11 @@ export function modelListFromSharedConnections(value: unknown): FetchUpstreamMod
     }
   }
   const defaultModelId = typeof root.defaultModel === 'string' ? root.defaultModel.trim() : ''
+  const usableDefaultModelId = modelIds.includes(defaultModelId) ? defaultModelId : ''
   return {
     ok: true,
     modelIds: sortComposerModelIds(modelIds),
-    ...(defaultModelId ? { defaultModelId } : {}),
+    ...(usableDefaultModelId ? { defaultModelId: usableDefaultModelId } : {}),
     modelGroups: mergeModelGroups(groups)
   }
 }

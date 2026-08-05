@@ -598,6 +598,103 @@ describe('JsonSettingsStore', () => {
     await expect(readFile(settingsPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
+  it('fails closed without caching plaintext when the protected backup cannot be created', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'kun-settings-backup-fail-'))
+    const secret = 'backup-failure-secret'
+    const plainStore = new JsonSettingsStore(userDataDir)
+    const defaults = await plainStore.load()
+    await plainStore.save({
+      ...defaults,
+      provider: { ...defaults.provider, apiKey: secret }
+    })
+    const settingsPath = join(userDataDir, 'kun-settings.json')
+    const original = await readFile(settingsPath, 'utf8')
+    await mkdir(join(userDataDir, 'kun-settings.pre-extension-credential-migration.json'))
+    const prepare = vi.fn()
+    const store = new JsonSettingsStore(userDataDir, {
+      credentialMigration: { prepare }
+    })
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const error = await store.load().catch((value: unknown) => value)
+      expect(error).toBeInstanceOf(Error)
+      expect(String(error)).toMatch(/protected settings backup could not be written/)
+      expect(String(error)).not.toContain(secret)
+    }
+    expect(prepare).not.toHaveBeenCalled()
+    expect(await readFile(settingsPath, 'utf8')).toBe(original)
+  })
+
+  it('fails closed and retries when credential prepare cannot reach Registry authority', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'kun-settings-prepare-fail-'))
+    const secret = 'prepare-failure-secret'
+    const plainStore = new JsonSettingsStore(userDataDir)
+    const defaults = await plainStore.load()
+    await plainStore.save({
+      ...defaults,
+      provider: { ...defaults.provider, apiKey: secret }
+    })
+    const settingsPath = join(userDataDir, 'kun-settings.json')
+    const original = await readFile(settingsPath, 'utf8')
+    const prepare = vi.fn(async () => { throw new Error('Registry CAS unavailable') })
+    const store = new JsonSettingsStore(userDataDir, {
+      credentialMigration: { prepare }
+    })
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const error = await store.load().catch((value: unknown) => value)
+      expect(error).toBeInstanceOf(Error)
+      expect(String(error)).toMatch(/could not be moved to protected storage/)
+      expect(String(error)).not.toContain(secret)
+    }
+    expect(prepare).toHaveBeenCalledTimes(2)
+    expect(await readFile(settingsPath, 'utf8')).toBe(original)
+  })
+
+  it('rolls back and never caches plaintext when secret-free settings persist fails', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'kun-settings-persist-fail-'))
+    const secret = 'persist-failure-secret'
+    const defaults = await new JsonSettingsStore(userDataDir).load()
+    const runtimeSettings = {
+      ...defaults,
+      provider: { ...defaults.provider, apiKey: secret }
+    }
+    const persistedSettings = {
+      ...runtimeSettings,
+      provider: { ...runtimeSettings.provider, apiKey: '' }
+    }
+    const raw = JSON.stringify(runtimeSettings)
+    const backend = {
+      read: vi.fn(async () => ({ revision: 4, value: raw })),
+      write: vi.fn(async () => { throw new Error('Manager document write failed') })
+    }
+    const rollback = vi.fn(async () => undefined)
+    const prepare = vi.fn(async () => ({
+      runtimeSettings,
+      persistedSettings,
+      sourceIdsToCommit: ['settings:provider:deepseek'],
+      removedPlaintext: true,
+      rollback,
+      commit: async () => undefined
+    }))
+    const store = new JsonSettingsStore(userDataDir, {
+      documentBackend: backend,
+      credentialMigration: { prepare }
+    })
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const error = await store.load().catch((value: unknown) => value)
+      expect(error).toBeInstanceOf(Error)
+      expect(String(error)).toMatch(/could not commit secret-free settings/)
+      expect(String(error)).not.toContain(secret)
+    }
+    expect(prepare).toHaveBeenCalledTimes(2)
+    expect(rollback).toHaveBeenCalledTimes(2)
+    expect(backend.read).toHaveBeenCalledTimes(2)
+    expect(backend.write).toHaveBeenCalledTimes(2)
+    expect(raw).toContain(secret)
+  })
+
   it('ignores null entries in persisted Claw channels and schedule tasks', async () => {
     const userDataDir = await mkdtemp(join(tmpdir(), 'ds-gui-settings-'))
 

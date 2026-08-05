@@ -1,0 +1,25 @@
+{
+  "version": "0.2.29",
+  "tagObject": "19a286f5dd6d6da3011531edea9d2961bd8c3714",
+  "commit": "f65ac05c0f62d060b7a0cf208ee2941b6ecf41f7",
+  "observedShape": "legacy directory with legacy-named settings and no runtime journal",
+  "entries": [
+    {
+      "path": "user-data/deepseek-gui-settings.json",
+      "content": "{\"version\":1,\"agents\":{\"kun\":{\"dataDir\":\"~/.deepseekgui/kun\"}}}\n"
+    },
+    {
+      "path": "home/.deepseekgui/kun/config.json",
+      "content": "{\"serve\":{}}\n"
+    },
+    {
+      "path": "home/.deepseekgui/kun/threads/thr_0229/metadata.jsonl",
+      "content": "{\"id\":\"thr_0229\",\"title\":\"fixture history\"}\n"
+    }
+  ],
+  "expected": {
+    "scannerState": "candidate-ready",
+    "candidateKinds": ["legacy"],
+    "runnerStatus": "completed"
+  }
+}

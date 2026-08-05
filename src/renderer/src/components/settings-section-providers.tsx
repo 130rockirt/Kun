@@ -120,6 +120,8 @@ type SharedModelConnection = {
   baseUrl?: string
   endpointFormat: ModelEndpointFormat
   configured: boolean
+  credentialStatus?: 'ready' | 'missing' | 'unreadable'
+  credentialErrorCode?: 'credential_missing' | 'credential_unreadable'
   models: string[]
   modelCapabilities?: Record<string, Omit<ModelProviderModelProfileV1, 'aliases'> & { id: string }>
   selectedModel?: string
@@ -137,6 +139,16 @@ type SharedModelConnectionsSnapshot = {
   localModelGateway?: { enabled: boolean }
 }
 
+export function sharedModelConnectionHasUsableCredential(
+  connection: Pick<SharedModelConnection, 'configured' | 'credentialStatus'> | undefined
+): boolean {
+  return Boolean(
+    connection?.configured &&
+    connection.credentialStatus !== 'missing' &&
+    connection.credentialStatus !== 'unreadable'
+  )
+}
+
 export function sharedProviderSetupNeedsApiKey(
   providers: readonly ModelProviderProfileV1[],
   snapshot: SharedModelConnectionsSnapshot | null
@@ -146,7 +158,7 @@ export function sharedProviderSetupNeedsApiKey(
     !modelProviderRequiresApiKey(provider) ||
     Boolean(provider.apiKey.trim()) ||
     snapshot.providers.some((connection) =>
-      connection.id === provider.id && connection.configured
+      connection.id === provider.id && sharedModelConnectionHasUsableCredential(connection)
     )
   )
 }
@@ -192,7 +204,9 @@ function SharedDefaultModelPicker({
   )
   const activeProvider = providers.find((connection) => connection.id === activeProviderId) ??
     defaultProvider ??
-    providers.find((connection) => connection.configured && connection.models.length > 0) ??
+    providers.find((connection) =>
+      sharedModelConnectionHasUsableCredential(connection) && connection.models.length > 0
+    ) ??
     providers[0]
   const normalizedQuery = query.trim().toLowerCase()
   const visibleModels = (activeProvider?.models ?? []).filter((model) =>
@@ -210,7 +224,9 @@ function SharedDefaultModelPicker({
       providers.some((connection) => connection.id === current)
         ? current
         : defaultProvider?.id ??
-          providers.find((connection) => connection.configured && connection.models.length > 0)?.id ??
+          providers.find((connection) =>
+            sharedModelConnectionHasUsableCredential(connection) && connection.models.length > 0
+          )?.id ??
           providers[0]?.id ??
           ''
     )
@@ -299,7 +315,8 @@ function SharedDefaultModelPicker({
               <div className="max-h-72 overflow-y-auto">
                 {providers.map((connection) => {
                   const active = connection.id === activeProvider?.id
-                  const available = connection.configured && connection.models.length > 0
+                  const available = sharedModelConnectionHasUsableCredential(connection) &&
+                    connection.models.length > 0
                   return (
                     <button
                       key={connection.id}
@@ -345,7 +362,7 @@ function SharedDefaultModelPicker({
                 />
               </label>
               <div className="max-h-64 overflow-y-auto">
-                {!activeProvider?.configured ? (
+                {!sharedModelConnectionHasUsableCredential(activeProvider) ? (
                   <p className="px-2.5 py-6 text-center text-[12px] text-ds-faint">
                     {zh ? '此供应商尚未连接' : 'This provider is not connected'}
                   </p>
@@ -497,7 +514,7 @@ export async function selectSharedModelConnection(
     if (!connection) {
       throw new Error(`Shared model connection ${providerId} is no longer available`)
     }
-    if (!connection.configured) {
+    if (!sharedModelConnectionHasUsableCredential(connection)) {
       throw new Error(`Shared model connection ${providerId} is not configured`)
     }
     if (!connection.models.includes(model)) {
@@ -722,7 +739,11 @@ export async function commitSharedModelConnectionCatalog(
 export async function replaceSharedModelConnectionCredential(
   providerId: string,
   credential: string,
-  isProviderTombstoned: (providerId: string) => boolean = () => false
+  isProviderTombstoned: (providerId: string) => boolean = () => false,
+  operation?: {
+    operationToken: string
+    isCurrent: () => boolean
+  }
 ): Promise<SharedModelConnectionsSnapshot> {
   let snapshot = await requestSharedModelConnections('/v1/model-connections')
   for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -733,22 +754,67 @@ export async function replaceSharedModelConnectionCredential(
       throw new Error(`Shared model connection ${providerId} is no longer available`)
     }
     try {
-      return credential.trim()
-        ? await requestSharedModelConnections(
-            `/v1/model-connections/${encodeURIComponent(providerId)}/credential`,
-            'PUT',
-            { expectedRevision: snapshot.revision, credential }
-          )
-        : await requestSharedModelConnections(
-            `/v1/model-connections/${encodeURIComponent(providerId)}/credential?expected_revision=${snapshot.revision}`,
-            'DELETE'
-          )
+      if (!credential.trim()) {
+        return await requestSharedModelConnections(
+          `/v1/model-connections/${encodeURIComponent(providerId)}/credential?expected_revision=${snapshot.revision}`,
+          'DELETE'
+        )
+      }
+      if (!operation) {
+        return await requestSharedModelConnections(
+          `/v1/model-connections/${encodeURIComponent(providerId)}/credential`,
+          'PUT',
+          { expectedRevision: snapshot.revision, credential }
+        )
+      }
+      const prepared = await requestSharedModelConnections(
+        `/v1/model-connections/${encodeURIComponent(providerId)}/credential`,
+        'PUT',
+        {
+          expectedRevision: snapshot.revision,
+          credential,
+          operationToken: operation.operationToken
+        }
+      )
+      if (!operation.isCurrent()) return prepared
+      return await requestSharedModelConnections(
+        `/v1/model-connections/${encodeURIComponent(providerId)}/credential/commit`,
+        'POST',
+        {
+          expectedRevision: prepared.revision,
+          operationToken: operation.operationToken
+        }
+      )
     } catch (error) {
+      if (operation && !operation.isCurrent() && error instanceof SharedModelConnectionConflictError) {
+        return error.snapshot
+      }
       if (!(error instanceof SharedModelConnectionConflictError) || attempt === 1) throw error
       snapshot = error.snapshot
     }
   }
   return snapshot
+}
+
+export async function fenceSharedModelConnectionCredential(
+  providerId: string,
+  operationToken: string
+): Promise<void> {
+  let snapshot = await requestSharedModelConnections('/v1/model-connections')
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    if (!snapshot.providers.some((provider) => provider.id === providerId)) return
+    try {
+      await requestSharedModelConnections(
+        `/v1/model-connections/${encodeURIComponent(providerId)}/credential/fence`,
+        'POST',
+        { expectedRevision: snapshot.revision, operationToken }
+      )
+      return
+    } catch (error) {
+      if (!(error instanceof SharedModelConnectionConflictError) || attempt === 1) throw error
+      snapshot = error.snapshot
+    }
+  }
 }
 
 export async function connectOrReplaceSharedModelConnectionCredential(
@@ -2472,7 +2538,10 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
   const sharedConnectionFor = (providerId: string): SharedModelConnection | undefined =>
     sharedConnections?.providers.find((connection) => connection.id === providerId)
   const hasConfiguredCredential = (provider: ModelProviderProfileV1): boolean =>
-    Boolean(provider.apiKey.trim() || sharedConnectionFor(provider.id)?.configured)
+    Boolean(
+      provider.apiKey.trim() ||
+      sharedModelConnectionHasUsableCredential(sharedConnectionFor(provider.id))
+    )
   useEffect(() => {
     if (displayProviders.some((item) => item.id === selectedProviderId)) return
     setSelectedProviderId(
@@ -2736,7 +2805,8 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
       }
       const active = snapshot.providers.find((entry) => entry.id === latestKun.providerId)
       const model = active && (active.models.includes(latestKun.model) ? latestKun.model : active.models[0])
-      if (active?.configured && model && !pendingSharedProviderDeletions.current.has(active.id) && (
+      if (sharedModelConnectionHasUsableCredential(active) && model &&
+        !pendingSharedProviderDeletions.current.has(active.id) && (
         snapshot.defaultProviderId !== active.id || snapshot.defaultModel !== model
       )) {
         snapshot = await requestSharedModelConnections('/v1/model-connections/select', 'POST', {
@@ -2987,10 +3057,11 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
     void drainSharedProviderCredentialMutation(
       providerId,
       generation,
-      (credential) => replaceSharedModelConnectionCredential(
+      (credential, operationToken, isCurrent) => replaceSharedModelConnectionCredential(
         providerId,
         credential,
-        (id) => pendingSharedProviderDeletions.current.has(id)
+        (id) => pendingSharedProviderDeletions.current.has(id),
+        { operationToken, isCurrent }
       )
     ).then((result) => {
       if (!result) {
@@ -3027,7 +3098,11 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
   }
 
   const stageSharedProviderCredential = (providerId: string, credential: string): void => {
-    const { generation } = stageSharedProviderCredentialMutation(providerId, credential)
+    const { generation } = stageSharedProviderCredentialMutation(
+      providerId,
+      credential,
+      (operationToken) => fenceSharedModelConnectionCredential(providerId, operationToken)
+    )
     setCredentialDrafts((previous) => ({ ...previous, [providerId]: credential }))
     const existingTimer = credentialMutationTimers.current.get(providerId)
     if (existingTimer) clearTimeout(existingTimer.timer)
@@ -3620,7 +3695,8 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
     const fingerprint = providerConnectionFingerprint(target)
     if (
       isCursorSubscriptionProvider(target) &&
-      (Boolean(target.apiKey.trim()) || !sharedConnectionFor(target.id)?.configured)
+      (Boolean(target.apiKey.trim()) ||
+        !sharedModelConnectionHasUsableCredential(sharedConnectionFor(target.id)))
     ) {
       if (!target.apiKey.trim()) {
         setProbeStates((previous) => ({
@@ -3862,7 +3938,7 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
     if (
       modelProviderRequiresApiKey(target) &&
       !target.apiKey.trim() &&
-      sharedConnection?.configured
+      sharedModelConnectionHasUsableCredential(sharedConnection)
     ) {
       setProbeStates((previous) => ({
         ...previous,
@@ -4130,6 +4206,12 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
   const activeCursorApiKeyUrl = activeProvider && isCursorSubscriptionProvider(activeProvider)
     ? resolveModelProviderPresetSource(activeProvider)?.preset.apiKeyUrl
     : undefined
+  const activeSharedConnection = activeProvider
+    ? sharedConnectionFor(activeProvider.id)
+    : undefined
+  const activeCredentialNeedsReplacement =
+    activeSharedConnection?.credentialStatus === 'missing' ||
+    activeSharedConnection?.credentialStatus === 'unreadable'
   const activeTokenPlanRegions = activeProvider
     ? tokenPlanPresetForProfile(activeProvider)?.tokenPlan?.regions ?? []
     : []
@@ -4492,7 +4574,7 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
                   {isCodexProvider(activeProvider) ? (
                     <CodexLoginSection
                       provider={activeProvider}
-                      configured={sharedConnectionFor(activeProvider.id)?.configured}
+                      configured={sharedModelConnectionHasUsableCredential(activeSharedConnection)}
                       onCredentialChange={(apiKey) => updateModelProvider(activeProvider.id, { apiKey })}
                       t={t}
                     />
@@ -4540,13 +4622,24 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
                           showLabel={t('showSecret')}
                           hideLabel={t('hideSecret')}
                         />
-                        {!activeProvider.apiKey.trim() && sharedConnectionFor(activeProvider.id)?.configured ? (
-                          <span className="text-[12px] font-normal text-ds-muted">
-                            {zh
-                              ? '凭据已安全保存在共享连接中。输入新值可替换现有凭据。'
-                              : 'The credential is stored securely in the shared connection. Enter a new value to replace it.'}
+                        {!activeProvider.apiKey.trim() && activeCredentialNeedsReplacement ? (
+                          <span className="text-[12px] font-normal text-amber-600 dark:text-amber-300">
+                            {activeSharedConnection?.credentialStatus === 'unreadable'
+                              ? zh
+                                ? '现有凭据无法读取。请输入新值以安全替换它。'
+                                : 'The existing credential cannot be read. Enter a new value to replace it safely.'
+                              : zh
+                                ? '未找到可用凭据。请输入新值以继续。'
+                                : 'No usable credential is stored. Enter a new value to continue.'}
                           </span>
-                        ) : null}
+                        ) : !activeProvider.apiKey.trim() &&
+                          sharedModelConnectionHasUsableCredential(activeSharedConnection) ? (
+                            <span className="text-[12px] font-normal text-ds-muted">
+                              {zh
+                                ? '凭据已安全保存在共享连接中。输入新值可替换现有凭据。'
+                                : 'The credential is stored securely in the shared connection. Enter a new value to replace it.'}
+                            </span>
+                          ) : null}
                       </label>
                       {activeCursorAccountFresh && activeCursorAccount ? (
                         <p className="text-[12px] leading-5 text-ds-muted">
@@ -4560,14 +4653,14 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
                   ) : isGrokSubscriptionProvider(activeProvider) ? (
                     <GrokLoginSection
                       provider={activeProvider}
-                      configured={sharedConnectionFor(activeProvider.id)?.configured}
+                      configured={sharedModelConnectionHasUsableCredential(activeSharedConnection)}
                       onCredentialChange={(apiKey) => updateModelProvider(activeProvider.id, { apiKey })}
                       t={t}
                     />
                   ) : isAgentSdkProvider(activeProvider) ? (
                     <ClaudeSubscriptionSection
                       provider={activeProvider}
-                      configured={sharedConnectionFor(activeProvider.id)?.configured}
+                      configured={sharedModelConnectionHasUsableCredential(activeSharedConnection)}
                       onTokenChange={(token) => updateModelProvider(activeProvider.id, { apiKey: token })}
                       onModelsChange={(models) => updateModelProvider(activeProvider.id, { models })}
                       t={t}
@@ -4587,6 +4680,24 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
                           showLabel={t('showSecret')}
                           hideLabel={t('hideSecret')}
                         />
+                        {!activeProvider.apiKey.trim() && activeCredentialNeedsReplacement ? (
+                          <span className="text-[12px] font-normal text-amber-600 dark:text-amber-300">
+                            {activeSharedConnection?.credentialStatus === 'unreadable'
+                              ? zh
+                                ? '现有凭据无法读取。请输入新值以安全替换它。'
+                                : 'The existing credential cannot be read. Enter a new value to replace it safely.'
+                              : zh
+                                ? '未找到可用凭据。请输入新值以继续。'
+                                : 'No usable credential is stored. Enter a new value to continue.'}
+                          </span>
+                        ) : !activeProvider.apiKey.trim() &&
+                          sharedModelConnectionHasUsableCredential(activeSharedConnection) ? (
+                            <span className="text-[12px] font-normal text-ds-muted">
+                              {zh
+                                ? '凭据已安全保存在共享连接中。输入新值可替换现有凭据。'
+                                : 'The credential is stored securely in the shared connection. Enter a new value to replace it.'}
+                            </span>
+                          ) : null}
                       </label>
                       <label className={fieldLabelClass}>
                         {t('modelProviderBaseUrl')}

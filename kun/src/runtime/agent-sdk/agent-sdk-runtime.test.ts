@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import {
+  AgentSdkCredentialUnavailableError,
   AgentSdkRuntime,
   decideSdkBuiltinSandbox,
   type SdkRuntimeDeps,
@@ -144,12 +145,12 @@ function makeDeps(overrides: Partial<SdkRuntimeDeps> = {}): {
   deps: SdkRuntimeDeps
   events: RuntimeEventDraft[]
   items: TurnItem[]
-  finished: Array<{ status: string; error?: string }>
+  finished: Array<{ status: string; error?: string; code?: string }>
   sessions: string[]
 } {
   const events: RuntimeEventDraft[] = []
   const items: TurnItem[] = []
-  const finished: Array<{ status: string; error?: string }> = []
+  const finished: Array<{ status: string; error?: string; code?: string }> = []
   const sessions: string[] = []
   let n = 0
   const ctx: SdkTurnContext = {
@@ -169,8 +170,8 @@ function makeDeps(overrides: Partial<SdkRuntimeDeps> = {}): {
     applyItem: async (_t, item) => {
       items.push(item)
     },
-    finishTurn: async (_t, _u, status, error) => {
-      finished.push({ status, error })
+    finishTurn: async (_t, _u, status, error, code) => {
+      finished.push({ status, error, code })
     },
     saveSessionId: async (_t, _turnId, id) => {
       sessions.push(id)
@@ -1272,6 +1273,30 @@ describe('AgentSdkRuntime.runTurn', () => {
     const status = await new AgentSdkRuntime(deps).runTurn('th', 'tn', new AbortController().signal)
     expect(status).toBe('failed')
     expect(finished[0].status).toBe('failed')
+  })
+
+  test('fails a fenced managed credential explicitly before loading the SDK', async () => {
+    const loadSdk = vi.fn(async () => fakeSdk(STREAM))
+    const { deps, events, finished } = makeDeps({
+      loadTurnContext: async () => { throw new AgentSdkCredentialUnavailableError() },
+      loadSdk
+    })
+
+    await expect(new AgentSdkRuntime(deps).runTurn(
+      'th',
+      'tn',
+      new AbortController().signal
+    )).resolves.toBe('failed')
+    expect(loadSdk).not.toHaveBeenCalled()
+    expect(finished).toContainEqual(expect.objectContaining({
+      status: 'failed',
+      code: 'agent_sdk_credential_unavailable',
+      error: expect.stringContaining('credentials are unavailable')
+    }))
+    expect(events).toContainEqual(expect.objectContaining({
+      kind: 'error',
+      code: 'agent_sdk_credential_unavailable'
+    }))
   })
 
   test('an already-aborted signal yields an aborted turn', async () => {

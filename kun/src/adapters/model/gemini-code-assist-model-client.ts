@@ -66,6 +66,8 @@ type GeminiCodeAssistPayload = {
 export type GeminiCodeAssistModelClientConfig = {
   baseUrl?: string
   auth?: GeminiCodeAssistCredential
+  /** Managed credentials are resolved for every request so a remote fence wins over cached auth. */
+  resolveAuth?: () => Promise<GeminiCodeAssistCredential | null>
   model: string
   modelProxyUrl?: string
   fetchImpl?: typeof fetch
@@ -89,6 +91,7 @@ export class GeminiCodeAssistModelClient implements ModelClient {
   }
 
   private auth?: GeminiCodeAssistCredential
+  private readonly resolveAuth?: () => Promise<GeminiCodeAssistCredential | null>
   private readonly fetchImpl: typeof fetch
   private readonly historyLimit?: number
   private readonly modelCapabilities?: (model: string) => ModelCapabilityMetadata
@@ -101,6 +104,7 @@ export class GeminiCodeAssistModelClient implements ModelClient {
       model: input.model
     }
     this.auth = input.auth ? { ...input.auth } : undefined
+    this.resolveAuth = input.resolveAuth
     this.fetchImpl = input.fetchImpl ?? createProxyFetch(input.modelProxyUrl ?? '') ?? fetch
     this.historyLimit = input.historyLimit
     this.modelCapabilities = input.modelCapabilities
@@ -111,7 +115,14 @@ export class GeminiCodeAssistModelClient implements ModelClient {
       yield { kind: 'error', message: 'request was aborted before start' }
       return
     }
-    if (!this.auth?.projectId || !this.auth.accessToken) {
+    // Managed auth is request-local: concurrent generations must never publish
+    // into a shared instance field where a late stale resolve could revive a
+    // credential after another request observed a durable fence.
+    let requestAuth = this.resolveAuth
+      ? await this.resolveAuth().catch(() => null)
+      : this.auth
+    requestAuth = requestAuth ? { ...requestAuth } : null
+    if (!requestAuth?.projectId || !requestAuth.accessToken) {
       yield {
         kind: 'error',
         message: 'Gemini subscription credentials are unavailable. Reconnect the provider in Settings.'
@@ -123,7 +134,7 @@ export class GeminiCodeAssistModelClient implements ModelClient {
     const body = buildGeminiCodeAssistRequest({
       request,
       model,
-      projectId: this.auth.projectId,
+      projectId: requestAuth.projectId,
       historyLimit: this.historyLimit,
       supportsImages: this.modelSupportsImageInput(model)
     })
@@ -133,17 +144,23 @@ export class GeminiCodeAssistModelClient implements ModelClient {
 
     let accessToken: string
     try {
-      accessToken = await this.accessToken(false)
+      const resolved = await this.accessToken(requestAuth, false)
+      accessToken = resolved.accessToken
+      requestAuth = resolved.auth
+      if (!this.resolveAuth) this.auth = { ...requestAuth }
     } catch (error) {
       yield { kind: 'error', message: error instanceof Error ? error.message : String(error) }
       return
     }
 
     let result = await this.post(url, body, accessToken, request.abortSignal)
-    if (result.kind === 'response' && result.response.status === 401 && this.auth.refreshToken) {
+    if (result.kind === 'response' && result.response.status === 401 && requestAuth.refreshToken) {
       await result.response.body?.cancel().catch(() => {})
       try {
-        accessToken = await this.accessToken(true)
+        const resolved = await this.accessToken(requestAuth, true)
+        accessToken = resolved.accessToken
+        requestAuth = resolved.auth
+        if (!this.resolveAuth) this.auth = { ...requestAuth }
       } catch (error) {
         yield { kind: 'error', message: error instanceof Error ? error.message : String(error) }
         return
@@ -220,12 +237,15 @@ export class GeminiCodeAssistModelClient implements ModelClient {
     return capability ? capability.inputModalities.includes('image') : true
   }
 
-  private async accessToken(forceRefresh: boolean): Promise<string> {
-    const auth = this.auth
-    if (!auth) throw new Error('Gemini subscription credentials are unavailable')
-    if (!forceRefresh && auth.expiresAt > Date.now() + EARLY_REFRESH_MS) return auth.accessToken
+  private async accessToken(
+    auth: GeminiCodeAssistCredential,
+    forceRefresh: boolean
+  ): Promise<{ accessToken: string; auth: GeminiCodeAssistCredential }> {
+    if (!forceRefresh && auth.expiresAt > Date.now() + EARLY_REFRESH_MS) {
+      return { accessToken: auth.accessToken, auth }
+    }
     if (!auth.refreshToken) {
-      if (auth.expiresAt > Date.now()) return auth.accessToken
+      if (auth.expiresAt > Date.now()) return { accessToken: auth.accessToken, auth }
       throw new Error('Gemini subscription login expired. Reconnect the provider in Settings.')
     }
     const response = await this.fetchImpl(GOOGLE_OAUTH_TOKEN_URL, {
@@ -251,7 +271,7 @@ export class GeminiCodeAssistModelClient implements ModelClient {
     const accessToken = typeof tokens.access_token === 'string' ? tokens.access_token : ''
     if (!accessToken) throw new Error('Gemini subscription token refresh returned no access token')
     const expiresIn = Number(tokens.expires_in) || 3600
-    this.auth = {
+    const refreshedAuth: GeminiCodeAssistCredential = {
       ...auth,
       accessToken,
       refreshToken:
@@ -260,7 +280,7 @@ export class GeminiCodeAssistModelClient implements ModelClient {
           : auth.refreshToken,
       expiresAt: Date.now() + expiresIn * 1000
     }
-    return accessToken
+    return { accessToken, auth: refreshedAuth }
   }
 
   private async post(

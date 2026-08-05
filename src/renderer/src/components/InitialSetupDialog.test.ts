@@ -21,6 +21,11 @@ describe('InitialSetupDialog completion flow', () => {
   afterEach(() => resetSharedProviderMutationCoordinatorForTests())
 
   it('rotates onboarding credentials through the revisioned registry and retries one conflict', async () => {
+    let revision = 4
+    let deepseekConflictPending = true
+    const latestFence = new Map<string, string>()
+    const preparedCredentials = new Map<string, string>()
+    const committedCredentials = new Map<string, string>()
     const snapshot = (revision: number) => ({
       schemaVersion: 1,
       revision,
@@ -29,18 +34,49 @@ describe('InitialSetupDialog completion flow', () => {
         { id: 'minimax', accountId: 'account:minimax' }
       ]
     })
-    const request = vi.fn()
-      .mockResolvedValueOnce({ ok: true, status: 200, body: JSON.stringify(snapshot(4)) })
-      .mockResolvedValueOnce({
-        ok: false,
-        status: 409,
-        body: JSON.stringify({ snapshot: snapshot(5) })
-      })
-      .mockResolvedValueOnce({ ok: true, status: 200, body: JSON.stringify(snapshot(6)) })
-      .mockResolvedValueOnce({ ok: true, status: 200, body: JSON.stringify(snapshot(6)) })
-      .mockResolvedValueOnce({ ok: true, status: 200, body: JSON.stringify(snapshot(7)) })
-      .mockResolvedValueOnce({ ok: true, status: 200, body: JSON.stringify(snapshot(7)) })
-      .mockResolvedValueOnce({ ok: true, status: 200, body: JSON.stringify(snapshot(8)) })
+    const request = vi.fn(async (path: string, method?: string, body?: string) => {
+      const payload = body ? JSON.parse(body) as Record<string, unknown> : {}
+      if (path === '/v1/model-connections' && method === 'GET') {
+        return { ok: true, status: 200, body: JSON.stringify(snapshot(revision)) }
+      }
+      const match = path.match(/^\/v1\/model-connections\/([^/]+)\/credential(?:\/(fence|commit))?$/u)
+      if (match && method === 'POST' && match[2] === 'fence') {
+        latestFence.set(match[1]!, String(payload.operationToken))
+        return { ok: true, status: 200, body: JSON.stringify(snapshot(revision)) }
+      }
+      if (match && method === 'PUT' && !match[2]) {
+        const providerId = match[1]!
+        const operationToken = String(payload.operationToken)
+        expect(operationToken).toBe(latestFence.get(providerId))
+        if (providerId === 'deepseek' && deepseekConflictPending) {
+          deepseekConflictPending = false
+          revision = 5
+          return {
+            ok: false,
+            status: 409,
+            body: JSON.stringify({ snapshot: snapshot(revision) })
+          }
+        }
+        expect(payload.expectedRevision).toBe(revision)
+        preparedCredentials.set(operationToken, String(payload.credential))
+        return { ok: true, status: 200, body: JSON.stringify(snapshot(revision)) }
+      }
+      if (match && method === 'POST' && match[2] === 'commit') {
+        const providerId = match[1]!
+        const operationToken = String(payload.operationToken)
+        expect(operationToken).toBe(latestFence.get(providerId))
+        expect(payload.expectedRevision).toBe(revision)
+        committedCredentials.set(providerId, preparedCredentials.get(operationToken) ?? '')
+        revision += 1
+        return { ok: true, status: 200, body: JSON.stringify(snapshot(revision)) }
+      }
+      if (path === '/v1/model-connections/select' && method === 'POST') {
+        expect(payload.expectedRevision).toBe(revision)
+        revision += 1
+        return { ok: true, status: 200, body: JSON.stringify(snapshot(revision)) }
+      }
+      throw new Error(`Unexpected request: ${method} ${path}`)
+    })
 
     const deepseek = defaultModelProviderSettings().providers[0]!
     const minimax = modelProviderPresetProfile(getModelProviderPreset('minimax')!, '')!
@@ -55,33 +91,55 @@ describe('InitialSetupDialog completion flow', () => {
       selectedModel: deepseek.models[0]!
     }, request)
 
-    expect(request.mock.calls.map(([path, method, body]) => [
+    const calls = request.mock.calls.map(([path, method, body]) => [
       path,
       method,
       body ? JSON.parse(body) : undefined
-    ])).toEqual([
-      ['/v1/model-connections', 'GET', undefined],
-      ['/v1/model-connections/deepseek/credential', 'PUT', {
-        expectedRevision: 4,
-        credential: 'deepseek-new'
-      }],
-      ['/v1/model-connections/deepseek/credential', 'PUT', {
-        expectedRevision: 5,
-        credential: 'deepseek-new'
-      }],
-      ['/v1/model-connections', 'GET', undefined],
-      ['/v1/model-connections/minimax/credential', 'PUT', {
-        expectedRevision: 6,
-        credential: 'minimax-new'
-      }],
-      ['/v1/model-connections', 'GET', undefined],
-      ['/v1/model-connections/select', 'POST', {
-        expectedRevision: 7,
-        providerId: 'deepseek',
-        accountId: 'account:deepseek',
-        model: deepseek.models[0]
-      }]
+    ] as const)
+    const deepseekFence = calls.find(([path]) =>
+      path === '/v1/model-connections/deepseek/credential/fence'
+    )?.[2] as { operationToken: string }
+    const minimaxFence = calls.find(([path]) =>
+      path === '/v1/model-connections/minimax/credential/fence'
+    )?.[2] as { operationToken: string }
+    const fenceCalls = calls.filter(([path]) => path.endsWith('/credential/fence'))
+    expect(fenceCalls.filter(([path, , body]) =>
+      path.includes('/deepseek/') &&
+      (body as { operationToken: string }).operationToken === deepseekFence.operationToken
+    )).toHaveLength(3)
+    expect(fenceCalls.filter(([path, , body]) =>
+      path.includes('/minimax/') &&
+      (body as { operationToken: string }).operationToken === minimaxFence.operationToken
+    )).toHaveLength(2)
+    expect(calls.filter(([path, method]) =>
+      path === '/v1/model-connections/deepseek/credential' && method === 'PUT'
+    ).map(([, , body]) => body)).toEqual([
+      { expectedRevision: 4, credential: 'deepseek-new', operationToken: deepseekFence.operationToken },
+      { expectedRevision: 5, credential: 'deepseek-new', operationToken: deepseekFence.operationToken }
     ])
+    expect(calls.find(([path]) =>
+      path === '/v1/model-connections/deepseek/credential/commit'
+    )?.[2]).toEqual({ expectedRevision: 5, operationToken: deepseekFence.operationToken })
+    expect(calls.find(([path]) =>
+      path === '/v1/model-connections/minimax/credential'
+    )?.[2]).toEqual({
+      expectedRevision: 6,
+      credential: 'minimax-new',
+      operationToken: minimaxFence.operationToken
+    })
+    expect(calls.find(([path]) =>
+      path === '/v1/model-connections/minimax/credential/commit'
+    )?.[2]).toEqual({ expectedRevision: 6, operationToken: minimaxFence.operationToken })
+    expect(calls.find(([path]) => path === '/v1/model-connections/select')?.[2]).toEqual({
+      expectedRevision: 7,
+      providerId: 'deepseek',
+      accountId: 'account:deepseek',
+      model: deepseek.models[0]
+    })
+    expect(committedCredentials).toEqual(new Map([
+      ['deepseek', 'deepseek-new'],
+      ['minimax', 'minimax-new']
+    ]))
   })
 
   it('serializes onboarding behind an older provider-page generation so the newer key wins', async () => {
@@ -105,6 +163,8 @@ describe('InitialSetupDialog completion flow', () => {
     )
     await started
 
+    let latestFence = ''
+    const preparedCredentials = new Map<string, string>()
     const request = vi.fn(async (path: string, method?: string, body?: string) => {
       const snapshot = {
         schemaVersion: 1 as const,
@@ -114,10 +174,33 @@ describe('InitialSetupDialog completion flow', () => {
       if (path === '/v1/model-connections' && method === 'GET') {
         return { ok: true, status: 200, body: JSON.stringify(snapshot) }
       }
+      if (path === '/v1/model-connections/deepseek/credential/fence' && method === 'POST') {
+        latestFence = (JSON.parse(body ?? '{}') as { operationToken: string }).operationToken
+        return { ok: true, status: 200, body: JSON.stringify(snapshot) }
+      }
       if (path === '/v1/model-connections/deepseek/credential' && method === 'PUT') {
-        const payload = JSON.parse(body ?? '{}') as { expectedRevision: number; credential: string }
+        const payload = JSON.parse(body ?? '{}') as {
+          expectedRevision: number
+          credential: string
+          operationToken: string
+        }
         expect(payload.expectedRevision).toBe(revision)
-        storedCredential = payload.credential
+        expect(payload.operationToken).toBe(latestFence)
+        preparedCredentials.set(payload.operationToken, payload.credential)
+        return {
+          ok: true,
+          status: 200,
+          body: JSON.stringify(snapshot)
+        }
+      }
+      if (path === '/v1/model-connections/deepseek/credential/commit' && method === 'POST') {
+        const payload = JSON.parse(body ?? '{}') as {
+          expectedRevision: number
+          operationToken: string
+        }
+        expect(payload.expectedRevision).toBe(revision)
+        expect(payload.operationToken).toBe(latestFence)
+        storedCredential = preparedCredentials.get(payload.operationToken) ?? ''
         revision += 1
         return {
           ok: true,
@@ -143,7 +226,13 @@ describe('InitialSetupDialog completion flow', () => {
       selectedModel: defaultModelProviderSettings().providers[0]!.models[0]!
     }, request)
     await Promise.resolve()
-    expect(request).not.toHaveBeenCalled()
+    await Promise.resolve()
+    expect(request.mock.calls.some(([path]) =>
+      path === '/v1/model-connections/deepseek/credential/fence'
+    )).toBe(true)
+    expect(request.mock.calls.some(([path, method]) =>
+      path === '/v1/model-connections/deepseek/credential' && method === 'PUT'
+    )).toBe(false)
 
     releaseOlder()
     await Promise.all([olderCommit, onboardingCommit])

@@ -151,6 +151,16 @@ describe('app-ipc-schemas', () => {
         body: '{}'
       },
       { path: '/v1/model-connections/provider-a/credential', method: 'DELETE' },
+      {
+        path: '/v1/model-connections/provider-a/credential/fence',
+        method: 'POST',
+        body: '{}'
+      },
+      {
+        path: '/v1/model-connections/provider-a/credential/commit',
+        method: 'POST',
+        body: '{}'
+      },
       { path: '/v1/model-connections/provider-a/probe', method: 'POST', body: '{}' }
     ] as const) {
       expect(runtimeRequestPayloadSchema.parse(payload).path).toBe(payload.path)
@@ -158,6 +168,15 @@ describe('app-ipc-schemas', () => {
     expect(() => runtimeRequestPayloadSchema.parse({
       path: '/v1/model-connections/events',
       method: 'DELETE'
+    })).toThrow(/runtime request path is not allowed/)
+    expect(() => runtimeRequestPayloadSchema.parse({
+      path: '/v1/model-connections/provider-a/credential/fence',
+      method: 'GET'
+    })).toThrow(/runtime request path is not allowed/)
+    expect(() => runtimeRequestPayloadSchema.parse({
+      path: '/v1/model-connections/provider-a/credential/finalize',
+      method: 'POST',
+      body: '{}'
     })).toThrow(/runtime request path is not allowed/)
   })
 

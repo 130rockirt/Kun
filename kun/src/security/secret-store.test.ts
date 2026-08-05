@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mkdir, mkdtemp, rm, readFile, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -12,6 +12,7 @@ import {
   UNREADABLE_CREDENTIAL_KEY_ERROR_CODE,
   WINDOWS_DPAPI_KEY_PREFIX
 } from './secret-store.js'
+import { configureManagerAtomicJsonClient } from '../extensions/atomic-json.js'
 
 const isolatedCredentialEnvironment = {
   [DISABLE_OS_CREDENTIAL_STORE_ENV]: '1'
@@ -20,6 +21,43 @@ const isolatedCredentialEnvironment = {
 const explicitOsCredentialStore = {
   disableOsKeychain: false,
   environment: isolatedCredentialEnvironment
+}
+
+afterEach(() => {
+  configureManagerAtomicJsonClient(null)
+  vi.useRealTimers()
+  vi.unstubAllGlobals()
+})
+
+function installFakeAtomicJsonManager(dataDir: string) {
+  const documents = new Map<string, { revision: number; value: unknown | null }>()
+  configureManagerAtomicJsonClient({
+    baseUrl: 'http://manager.test',
+    token: 'manager-token',
+    dataDir
+  })
+  vi.stubGlobal('fetch', vi.fn<typeof fetch>(async (input, init) => {
+    const url = String(input)
+    const body = JSON.parse(String(init?.body ?? '{}')) as {
+      path: string
+      expectedRevision?: number
+      value?: unknown
+    }
+    const current = documents.get(body.path) ?? { revision: 0, value: null }
+    if (url.endsWith('/read')) {
+      return Response.json({ snapshot: structuredClone(current) })
+    }
+    if (body.expectedRevision !== current.revision) {
+      return Response.json({ currentRevision: current.revision }, { status: 409 })
+    }
+    const next = {
+      revision: current.revision + 1,
+      value: url.endsWith('/delete') ? null : structuredClone(body.value ?? null)
+    }
+    documents.set(body.path, next)
+    return Response.json({ snapshot: structuredClone(next) })
+  }))
+  return documents
 }
 
 describe('createAesEncryptor', () => {
@@ -56,6 +94,156 @@ describe('createAesEncryptor', () => {
 })
 
 describe('createSecretEncryptor', () => {
+  it('serializes empty key bootstrap through the Manager so Main and Runtime share one key', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'kun-secret-manager-bootstrap-'))
+    const keyPath = join(dir, 'secret.key')
+    const documents = installFakeAtomicJsonManager(dir)
+
+    let activeLookups = 0
+    let maximumConcurrentLookups = 0
+    const run = vi.fn(async (_command: string, args: string[]) => {
+      if (args[0] === 'lookup') {
+        activeLookups += 1
+        maximumConcurrentLookups = Math.max(maximumConcurrentLookups, activeLookups)
+        await new Promise((resolve) => setTimeout(resolve, 40))
+        activeLookups -= 1
+        return { code: -1, stdout: '', stderr: 'Secret Service unavailable' }
+      }
+      if (args[0] === 'store') {
+        return { code: -1, stdout: '', stderr: 'Secret Service unavailable' }
+      }
+      throw new Error(`unexpected Secret Service command: ${args.join(' ')}`)
+    })
+
+    try {
+      const options = {
+        keyFilePath: keyPath,
+        platform: 'linux' as const,
+        run,
+        ...explicitOsCredentialStore,
+        canBootstrapKeyFileFallback: async () => true
+      }
+      const [main, runtime] = await Promise.all([
+        createSecretEncryptor(options),
+        createSecretEncryptor(options)
+      ])
+
+      expect(maximumConcurrentLookups).toBe(1)
+      const mainCiphertext = main.encryptor.encrypt('main-secret')
+      const runtimeCiphertext = runtime.encryptor.encrypt('runtime-secret')
+      expect(runtime.encryptor.decrypt(mainCiphertext)).toBe('main-secret')
+      expect(main.encryptor.decrypt(runtimeCiphertext)).toBe('runtime-secret')
+
+      const persistedKey = (await readFile(keyPath, 'utf8')).trim()
+      const lease = documents.get(`${keyPath}.bootstrap-lease.v1.json`)
+      expect(lease?.value).toEqual({
+        schemaVersion: 1,
+        ownerId: null,
+        leaseExpiresAtMs: 0
+      })
+      expect(JSON.stringify(lease?.value)).not.toContain(persistedKey)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects a key path outside Manager authority before any credential side effect', async () => {
+    const managerDir = await mkdtemp(join(tmpdir(), 'kun-secret-manager-authority-'))
+    const outsideDir = await mkdtemp(join(tmpdir(), 'kun-secret-outside-authority-'))
+    const keyPath = join(outsideDir, 'secret.key')
+    configureManagerAtomicJsonClient({
+      baseUrl: 'http://manager.test',
+      token: 'manager-token',
+      dataDir: managerDir
+    })
+    const run = vi.fn(async () => ({ code: 0, stdout: '', stderr: '' }))
+    const canBootstrapKeyFileFallback = vi.fn(async () => true)
+
+    try {
+      await expect(createSecretEncryptor({
+        keyFilePath: keyPath,
+        platform: 'linux',
+        run,
+        ...explicitOsCredentialStore,
+        canBootstrapKeyFileFallback
+      })).rejects.toMatchObject({ code: 'EXTENSION_JSON_MANAGER_PATH_MISMATCH' })
+
+      expect(run).not.toHaveBeenCalled()
+      expect(canBootstrapKeyFileFallback).not.toHaveBeenCalled()
+      await expect(readFile(keyPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    } finally {
+      await Promise.all([
+        rm(managerDir, { recursive: true, force: true }),
+        rm(outsideDir, { recursive: true, force: true })
+      ])
+    }
+  })
+
+  it('does not let an expired live owner get fenced out while its key bootstrap resumes', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-05T00:00:00.000Z'))
+    const dir = await mkdtemp(join(tmpdir(), 'kun-secret-live-owner-'))
+    const keyPath = join(dir, 'secret.key')
+    const documents = installFakeAtomicJsonManager(dir)
+    let releaseAuthorityLookup!: () => void
+    const authorityLookupReleased = new Promise<void>((resolve) => {
+      releaseAuthorityLookup = resolve
+    })
+    let noteAuthorityLookupStarted!: () => void
+    const authorityLookupStarted = new Promise<void>((resolve) => {
+      noteAuthorityLookupStarted = resolve
+    })
+    const ownerRun = vi.fn(async (_command: string, args: string[]) => {
+      if (args[0] === 'lookup') {
+        noteAuthorityLookupStarted()
+        await authorityLookupReleased
+        return { code: -1, stdout: '', stderr: 'Secret Service unavailable' }
+      }
+      if (args[0] === 'store') {
+        return { code: -1, stdout: '', stderr: 'Secret Service unavailable' }
+      }
+      throw new Error(`unexpected Secret Service command: ${args.join(' ')}`)
+    })
+    const contenderRun = vi.fn(async () => {
+      throw new Error('contender must not execute a credential authority side effect')
+    })
+
+    try {
+      const owner = createSecretEncryptor({
+        keyFilePath: keyPath,
+        platform: 'linux',
+        run: ownerRun,
+        ...explicitOsCredentialStore,
+        canBootstrapKeyFileFallback: async () => true
+      })
+      await authorityLookupStarted
+      const activeLease = documents.get(`${keyPath}.bootstrap-lease.v1.json`)?.value as {
+        leaseExpiresAtMs: number
+      }
+      vi.setSystemTime(new Date(activeLease.leaseExpiresAtMs + 1))
+
+      await expect(createSecretEncryptor({
+        keyFilePath: keyPath,
+        platform: 'linux',
+        run: contenderRun,
+        ...explicitOsCredentialStore,
+        canBootstrapKeyFileFallback: async () => true
+      })).rejects.toThrow(/owner process is still alive/)
+      expect(contenderRun).not.toHaveBeenCalled()
+
+      releaseAuthorityLookup()
+      const authoritative = await owner
+      expect(authoritative.encryptor.decrypt(
+        authoritative.encryptor.encrypt('only-authoritative-key')
+      )).toBe('only-authoritative-key')
+      expect(ownerRun).toHaveBeenCalledTimes(1)
+      expect(await readFile(keyPath, 'utf8')).toBeTruthy()
+    } finally {
+      releaseAuthorityLookup()
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
   it('bootstraps a local key for a pre-secret-store Linux profile when Secret Service is unavailable', async () => {
     const run = vi.fn(async (_command: string, args: string[]) => {
       if (args[0] === 'lookup') {

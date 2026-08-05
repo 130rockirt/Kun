@@ -11,11 +11,17 @@
  * keychain.
  */
 
-import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto'
+import { createCipheriv, createDecipheriv, randomBytes, randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import type { Dirent } from 'node:fs'
-import { chmod, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, open, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
+import { setTimeout as delay } from 'node:timers/promises'
+import {
+  assertManagerAtomicJsonPath,
+  AtomicJsonFile,
+  isManagerAtomicJsonPath
+} from '../extensions/atomic-json.js'
 
 export type SecretEncryptor = {
   encrypt: (plaintext: string, additionalAuthenticatedData?: string | Buffer) => string
@@ -319,8 +325,26 @@ async function readKeyFile(path: string): Promise<Buffer | null> {
   }
 }
 
-async function writeKeyFile(path: string, key: Buffer): Promise<void> {
-  await writeKeyFileContent(path, key.toString('base64'))
+/**
+ * Installs a brand-new key without replacing a winner created by another
+ * process. The Manager lease normally serializes GUI/Runtime bootstrap, while
+ * this exclusive create keeps standalone CLI callers convergent as well.
+ */
+async function writeNewKeyFile(path: string, key: Buffer): Promise<boolean> {
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 })
+  let handle: Awaited<ReturnType<typeof open>> | undefined
+  try {
+    handle = await open(path, 'wx', 0o600)
+    await handle.writeFile(key.toString('base64'), 'utf8')
+    await handle.sync()
+    return true
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === 'EEXIST') return false
+    throw error
+  } finally {
+    await handle?.close().catch(() => undefined)
+    await chmod(path, 0o600).catch(() => undefined)
+  }
 }
 
 /** Write arbitrary key-file content (raw key base64, or a DPAPI envelope) with 0600. */
@@ -350,11 +374,17 @@ async function createKeyFileFallback(
     }
   }
   const fileKey = randomBytes(32)
-  await writeKeyFile(keyFilePath, fileKey)
+  const created = await writeNewKeyFile(keyFilePath, fileKey)
+  const authoritativeKey = created ? fileKey : await readKeyFile(keyFilePath)
+  if (!authoritativeKey) {
+    throw new Error('credential master key was concurrently created with invalid contents')
+  }
   return {
-    encryptor: createAesEncryptor(fileKey),
+    encryptor: createAesEncryptor(authoritativeKey),
     osKeychain: false,
-    reason: `${reason}; created a new 0600 key file (tokens still encrypted at rest)`
+    reason: created
+      ? `${reason}; created a new 0600 key file (tokens still encrypted at rest)`
+      : `${reason}; key loaded from concurrently created 0600 key file (tokens still encrypted at rest)`
   }
 }
 
@@ -376,6 +406,157 @@ export type CreateKeyProviderOptions = {
 
 export const DISABLE_OS_CREDENTIAL_STORE_ENV = 'KUN_DISABLE_OS_CREDENTIAL_STORE'
 
+type SecretKeyBootstrapLease = {
+  schemaVersion: 1
+  ownerId: string | null
+  leaseExpiresAtMs: number
+}
+
+const SECRET_KEY_BOOTSTRAP_LEASE_MS = 30_000
+const SECRET_KEY_BOOTSTRAP_HEARTBEAT_MS = 5_000
+const SECRET_KEY_BOOTSTRAP_WAIT_MS = 90_000
+
+function emptySecretKeyBootstrapLease(): SecretKeyBootstrapLease {
+  return { schemaVersion: 1, ownerId: null, leaseExpiresAtMs: 0 }
+}
+
+function validateSecretKeyBootstrapLease(value: unknown): SecretKeyBootstrapLease {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('credential key bootstrap lease is invalid')
+  }
+  const raw = value as Record<string, unknown>
+  if (
+    raw.schemaVersion !== 1 ||
+    (raw.ownerId !== null && typeof raw.ownerId !== 'string') ||
+    typeof raw.leaseExpiresAtMs !== 'number' ||
+    !Number.isFinite(raw.leaseExpiresAtMs) ||
+    raw.leaseExpiresAtMs < 0
+  ) {
+    throw new Error('credential key bootstrap lease is invalid')
+  }
+  return {
+    schemaVersion: 1,
+    ownerId: raw.ownerId as string | null,
+    leaseExpiresAtMs: raw.leaseExpiresAtMs
+  }
+}
+
+function leaseOwnerIsDefinitelyDead(ownerId: string): boolean {
+  const separator = ownerId.indexOf(':')
+  const ownerPid = Number(ownerId.slice(0, separator))
+  if (separator <= 0 || !Number.isInteger(ownerPid) || ownerPid <= 0) return false
+  try {
+    process.kill(ownerPid, 0)
+    return false
+  } catch (error) {
+    // EPERM means a process exists but cannot be signalled. Unknown platform
+    // errors are equally insufficient proof for a destructive takeover.
+    return (error as NodeJS.ErrnoException)?.code === 'ESRCH'
+  }
+}
+
+function assertExpiredLeaseOwnerCanBeReclaimed(lease: SecretKeyBootstrapLease): void {
+  if (lease.ownerId && !leaseOwnerIsDefinitelyDead(lease.ownerId)) {
+    throw new Error(
+      'credential key bootstrap lease expired while its owner process is still alive'
+    )
+  }
+}
+
+/**
+ * Serializes first-use key resolution through the Service Manager. The lease
+ * intentionally contains no key material: the OS credential store or the
+ * owner-only key file remains the sole key authority, while Manager CAS elects
+ * exactly one process to perform lookup/migration/bootstrap at a time.
+ */
+async function withManagerSecretKeyBootstrapLease<T>(
+  keyFilePath: string,
+  action: () => Promise<T>
+): Promise<T> {
+  const leasePath = `${keyFilePath}.bootstrap-lease.v1.json`
+  assertManagerAtomicJsonPath(leasePath)
+  if (!isManagerAtomicJsonPath(leasePath)) return action()
+
+  const leaseFile = new AtomicJsonFile(leasePath, validateSecretKeyBootstrapLease)
+  const ownerId = `${process.pid}:${randomUUID()}`
+  const waitDeadline = Date.now() + SECRET_KEY_BOOTSTRAP_WAIT_MS
+  let acquired = false
+
+  while (!acquired) {
+    const now = Date.now()
+    const observed = await leaseFile.read(emptySecretKeyBootstrapLease)
+    if (observed.ownerId && observed.leaseExpiresAtMs > now) {
+      if (now >= waitDeadline) {
+        throw new Error('timed out waiting for credential key bootstrap lease')
+      }
+      await delay(Math.min(250, Math.max(10, observed.leaseExpiresAtMs - now)))
+      continue
+    }
+    assertExpiredLeaseOwnerCanBeReclaimed(observed)
+    const claimed = await leaseFile.update(emptySecretKeyBootstrapLease, (current) => {
+      const mutationNow = Date.now()
+      if (current.ownerId && current.leaseExpiresAtMs > mutationNow) return current
+      assertExpiredLeaseOwnerCanBeReclaimed(current)
+      return {
+        schemaVersion: 1,
+        ownerId,
+        leaseExpiresAtMs: mutationNow + SECRET_KEY_BOOTSTRAP_LEASE_MS
+      }
+    })
+    acquired = claimed.ownerId === ownerId
+  }
+
+  let heartbeatFailure: unknown
+  let heartbeat = Promise.resolve()
+  const heartbeatTimer = setInterval(() => {
+    heartbeat = heartbeat.then(async () => {
+      await leaseFile.update(emptySecretKeyBootstrapLease, (current) => {
+        if (current.ownerId !== ownerId) {
+          throw new Error('credential key bootstrap lease was lost')
+        }
+        return {
+          ...current,
+          leaseExpiresAtMs: Date.now() + SECRET_KEY_BOOTSTRAP_LEASE_MS
+        }
+      })
+    }).catch((error: unknown) => {
+      heartbeatFailure ??= error
+    })
+  }, SECRET_KEY_BOOTSTRAP_HEARTBEAT_MS)
+  heartbeatTimer.unref()
+
+  let outcome: { ok: true; value: T } | { ok: false; error: unknown }
+  try {
+    const result = await action()
+    clearInterval(heartbeatTimer)
+    await heartbeat
+    if (heartbeatFailure) throw heartbeatFailure
+    const current = await leaseFile.read(emptySecretKeyBootstrapLease)
+    if (current.ownerId !== ownerId) {
+      throw new Error('credential key bootstrap lease was lost')
+    }
+    outcome = { ok: true, value: result }
+  } catch (error) {
+    outcome = { ok: false, error }
+  }
+
+  clearInterval(heartbeatTimer)
+  await heartbeat.catch(() => undefined)
+  let releaseError: unknown
+  try {
+    await leaseFile.update(emptySecretKeyBootstrapLease, (current) =>
+      current.ownerId === ownerId ? emptySecretKeyBootstrapLease() : current
+    )
+  } catch (error) {
+    releaseError = error
+  }
+  if (!outcome.ok) throw outcome.error
+  // After a successful action, fail closed until Manager can confirm lease
+  // release. A failed action preserves its more useful original error.
+  if (releaseError) throw releaseError
+  return outcome.value
+}
+
 async function canBootstrapKeyFileFallback(options: CreateKeyProviderOptions): Promise<boolean> {
   try {
     return await options.canBootstrapKeyFileFallback?.() === true
@@ -390,6 +571,14 @@ async function canBootstrapKeyFileFallback(options: CreateKeyProviderOptions): P
  * rest either way.
  */
 export async function createSecretEncryptor(options: CreateKeyProviderOptions): Promise<KeyProviderResult> {
+  return withManagerSecretKeyBootstrapLease(options.keyFilePath, () =>
+    createSecretEncryptorWithoutManagerLease(options)
+  )
+}
+
+async function createSecretEncryptorWithoutManagerLease(
+  options: CreateKeyProviderOptions
+): Promise<KeyProviderResult> {
   const platform = options.platform ?? process.platform
   const run = options.run
   const environment = options.environment ?? process.env

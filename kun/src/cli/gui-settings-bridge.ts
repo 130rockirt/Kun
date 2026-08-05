@@ -43,6 +43,10 @@ import {
 import { modelCapabilitiesForProviderModel } from '../loop/model-context-profile.js'
 import { readRuntimeDiscovery } from '../server/runtime-discovery.js'
 import { isLoopbackHost } from '../server/loopback-host.js'
+import {
+  withRuntimeDataDirConfigWriter,
+  type RuntimeDataDirWriterAuthority
+} from '../server/runtime-data-dir-lease.js'
 
 const MAX_GUI_SETTINGS_BYTES = 32 * 1024 * 1024
 const LEGACY_PROVIDER_SOURCE_PREFIX = 'settings:provider:'
@@ -124,6 +128,12 @@ export type GuiConfigSyncOptions = {
   authoritative?: boolean
   /** A protected binding has already been committed for every configured provider. */
   stripCredentials?: boolean
+  /** Existing in-process Runtime/Manager lease; avoids a conflicting second claim. */
+  writerAuthority?: RuntimeDataDirWriterAuthority
+  /** Test-only hook for deterministic writer-fence concurrency coverage. */
+  afterWriterClaimAcquired?: () => void | Promise<void>
+  /** Test-only hook invoked inside writer authority immediately before mutation. */
+  beforeConfigWrite?: () => void | Promise<void>
 }
 
 export type LegacyGuiRuntimeConnection = {
@@ -575,115 +585,127 @@ export async function syncGuiProviderCatalogToConfig(
   options: GuiConfigSyncOptions = {}
 ): Promise<GuiConfigSyncResult | null> {
   if (!samePath(dataDir, settings.dataDir)) return null
-  const configPath = join(dataDir, KUN_CONFIG_FILENAME)
-  const existing = await readConfigDocument(configPath)
-  const parsedServe = KunServeConfigSchema.safeParse(existing.serve ?? {})
-  if (!parsedServe.success) {
-    throw new Error(
-      `invalid serve config at ${configPath}: ${parsedServe.error.issues.map((issue) => issue.message).join('; ')}`
-    )
-  }
-  const existingServe = parsedServe.data
-  const providers: Record<string, ServeProviderConfig> = options.authoritative
-    ? {}
-    : { ...(existingServe.providers ?? {}) }
+  const synchronize = async (): Promise<GuiConfigSyncResult> => {
+    const configPath = join(dataDir, KUN_CONFIG_FILENAME)
+    const existing = await readConfigDocument(configPath)
+    const parsedServe = KunServeConfigSchema.safeParse(existing.serve ?? {})
+    if (!parsedServe.success) {
+      throw new Error(
+        `invalid serve config at ${configPath}: ${parsedServe.error.issues.map((issue) => issue.message).join('; ')}`
+      )
+    }
+    const existingServe = parsedServe.data
+    const providers: Record<string, ServeProviderConfig> = options.authoritative
+      ? {}
+      : { ...(existingServe.providers ?? {}) }
 
-  for (const provider of settings.providers) {
-    if (!provider.id || provider.models.length === 0) continue
-    const current = providers[provider.id]
-    const kind = provider.kind ?? current?.kind ?? 'http'
-    const baseUrl = provider.baseUrl || current?.baseUrl
-    if (kind !== 'agent-sdk' && !baseUrl) continue
-    const selectedModel = preferredModel({
-      providerId: provider.id,
-      models: provider.models,
-      current: current?.selectedModel,
-      defaultProviderId: settings.defaultProviderId,
+    for (const provider of settings.providers) {
+      if (!provider.id || provider.models.length === 0) continue
+      const current = providers[provider.id]
+      const kind = provider.kind ?? current?.kind ?? 'http'
+      const baseUrl = provider.baseUrl || current?.baseUrl
+      if (kind !== 'agent-sdk' && !baseUrl) continue
+      const selectedModel = preferredModel({
+        providerId: provider.id,
+        models: provider.models,
+        current: current?.selectedModel,
+        defaultProviderId: settings.defaultProviderId,
+        defaultModel: settings.defaultModel
+      })
+      providers[provider.id] = {
+        ...current,
+        kind,
+        apiKey: options.stripCredentials ? '' : current?.apiKey ?? '',
+        credentialSourceId: current?.credentialSourceId ?? credentialSourceId(provider.id),
+        presetSource: guiProviderPresetId(provider),
+        authType: legacyAuthType(provider),
+        ...(baseUrl ? { baseUrl } : {}),
+        endpointFormat: provider.endpointFormat ?? current?.endpointFormat ?? DEFAULT_MODEL_ENDPOINT_FORMAT,
+        models: provider.models,
+        modelCapabilities: Object.fromEntries(
+          provider.models.map((model) => [model, guiModelCapability(provider, model)])
+        ),
+        ...(selectedModel ? { selectedModel } : {})
+      }
+    }
+
+    const inferredDefaultProviderId = inferDefaultProviderId(settings, existingServe, providers)
+    const defaultProvider = inferredDefaultProviderId ? providers[inferredDefaultProviderId] : undefined
+    const defaultModel = preferredModel({
+      providerId: inferredDefaultProviderId,
+      models: defaultProvider?.models ?? [],
+      current: existingServe.model,
+      defaultProviderId: settings.defaultProviderId || inferredDefaultProviderId,
       defaultModel: settings.defaultModel
     })
-    providers[provider.id] = {
-      ...current,
-      kind,
-      apiKey: options.stripCredentials ? '' : current?.apiKey ?? '',
-      credentialSourceId: current?.credentialSourceId ?? credentialSourceId(provider.id),
-      presetSource: guiProviderPresetId(provider),
-      authType: legacyAuthType(provider),
-      ...(baseUrl ? { baseUrl } : {}),
-      endpointFormat: provider.endpointFormat ?? current?.endpointFormat ?? DEFAULT_MODEL_ENDPOINT_FORMAT,
-      models: provider.models,
-      modelCapabilities: Object.fromEntries(
-        provider.models.map((model) => [model, guiModelCapability(provider, model)])
-      ),
-      ...(selectedModel ? { selectedModel } : {})
+    const nextServe = KunServeConfigSchema.parse({
+      ...existingServe,
+      ...(settings.defaultApprovalPolicy
+        ? { approvalPolicy: settings.defaultApprovalPolicy }
+        : {}),
+      ...(settings.defaultSandboxMode
+        ? { sandboxMode: settings.defaultSandboxMode }
+        : {}),
+      ...(settings.defaultApprovalReviewer
+        ? { approvalReviewer: settings.defaultApprovalReviewer }
+        : {}),
+      ...(options.authoritative ? { providers: {}, credentialSourceId: undefined } : {}),
+      ...(options.stripCredentials ? { apiKey: '' } : {}),
+      providers,
+      ...(defaultProvider && inferredDefaultProviderId
+        ? {
+            credentialSourceId: credentialSourceId(inferredDefaultProviderId),
+            ...(defaultProvider.baseUrl ? { baseUrl: defaultProvider.baseUrl } : {}),
+            endpointFormat: defaultProvider.endpointFormat ?? existingServe.endpointFormat,
+            ...(defaultModel ? { model: defaultModel } : {})
+          }
+        : {})
+    })
+    const existingModels = isRecordValue(existing.models) ? existing.models : {}
+    const existingProfiles = isRecordValue(existingModels.profiles)
+      ? existingModels.profiles
+      : {}
+    const nextModels = ModelConfigSchema.parse({
+      ...existingModels,
+      profiles: {
+        ...existingProfiles,
+        ...guiModelProfilesForConfig(settings)
+      }
+    })
+    // Preserve capability sections written by a newer GUI. This bridge owns
+    // only serve/provider metadata and must not erase forward-compatible fields.
+    const nextDocument = { ...existing, serve: nextServe, models: nextModels }
+    const nextText = `${JSON.stringify(nextDocument, null, 2)}\n`
+    let currentText = ''
+    try {
+      currentText = await readFile(configPath, 'utf8')
+    } catch {
+      // The first standalone TUI launch creates the shared config.
+    }
+    const changed = currentText !== nextText
+    if (changed) {
+      await options.beforeConfigWrite?.()
+      await writeAtomicOwnerOnly(configPath, nextText)
+    }
+    return {
+      changed,
+      config: { serve: nextServe, models: nextModels },
+      applyRequest: runtimeApplyRequest(
+        nextServe,
+        nextModels,
+        inferredDefaultProviderId && defaultModel
+          ? { providerId: inferredDefaultProviderId, model: defaultModel }
+          : undefined
+      )
     }
   }
 
-  const inferredDefaultProviderId = inferDefaultProviderId(settings, existingServe, providers)
-  const defaultProvider = inferredDefaultProviderId ? providers[inferredDefaultProviderId] : undefined
-  const defaultModel = preferredModel({
-    providerId: inferredDefaultProviderId,
-    models: defaultProvider?.models ?? [],
-    current: existingServe.model,
-    defaultProviderId: settings.defaultProviderId || inferredDefaultProviderId,
-    defaultModel: settings.defaultModel
-  })
-  const nextServe = KunServeConfigSchema.parse({
-    ...existingServe,
-    ...(settings.defaultApprovalPolicy
-      ? { approvalPolicy: settings.defaultApprovalPolicy }
-      : {}),
-    ...(settings.defaultSandboxMode
-      ? { sandboxMode: settings.defaultSandboxMode }
-      : {}),
-    ...(settings.defaultApprovalReviewer
-      ? { approvalReviewer: settings.defaultApprovalReviewer }
-      : {}),
-    ...(options.authoritative ? { providers: {}, credentialSourceId: undefined } : {}),
-    ...(options.stripCredentials ? { apiKey: '' } : {}),
-    providers,
-    ...(defaultProvider && inferredDefaultProviderId
-      ? {
-          credentialSourceId: credentialSourceId(inferredDefaultProviderId),
-          ...(defaultProvider.baseUrl ? { baseUrl: defaultProvider.baseUrl } : {}),
-          endpointFormat: defaultProvider.endpointFormat ?? existingServe.endpointFormat,
-          ...(defaultModel ? { model: defaultModel } : {})
-        }
+  return withRuntimeDataDirConfigWriter(dataDir, synchronize, {
+    ...(options.writerAuthority ? { authority: options.writerAuthority } : {}),
+    ...(options.afterWriterClaimAcquired
+      ? { afterClaimAcquired: options.afterWriterClaimAcquired }
       : {})
   })
-  const existingModels = isRecordValue(existing.models) ? existing.models : {}
-  const existingProfiles = isRecordValue(existingModels.profiles)
-    ? existingModels.profiles
-    : {}
-  const nextModels = ModelConfigSchema.parse({
-    ...existingModels,
-    profiles: {
-      ...existingProfiles,
-      ...guiModelProfilesForConfig(settings)
-    }
-  })
-  // Preserve capability sections written by a newer GUI. This bridge owns
-  // only serve/provider metadata and must not erase forward-compatible fields.
-  const nextDocument = { ...existing, serve: nextServe, models: nextModels }
-  const nextText = `${JSON.stringify(nextDocument, null, 2)}\n`
-  let currentText = ''
-  try {
-    currentText = await readFile(configPath, 'utf8')
-  } catch {
-    // The first standalone TUI launch creates the shared config.
-  }
-  const changed = currentText !== nextText
-  if (changed) await writeAtomicOwnerOnly(configPath, nextText)
-  return {
-    changed,
-    config: { serve: nextServe, models: nextModels },
-    applyRequest: runtimeApplyRequest(
-      nextServe,
-      nextModels,
-      inferredDefaultProviderId && defaultModel
-        ? { providerId: inferredDefaultProviderId, model: defaultModel }
-        : undefined
-    )
-  }
 }
 
 function isRecordValue(value: unknown): value is Record<string, unknown> {

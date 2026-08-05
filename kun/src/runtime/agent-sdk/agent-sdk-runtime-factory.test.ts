@@ -400,18 +400,22 @@ describe('createAgentSdkRuntime handlesProvider', () => {
 })
 
 describe('createAgentSdkRuntime turn context', () => {
-  const credentialContext = async (options: {
+  type CredentialContextOptions = {
     providerId?: string
     providerToken?: string
     defaultToken?: string
-  }): Promise<{
+    credentialSourceId?: string
+    resolveCredentialSource?: (sourceId: string) => Promise<{ apiKey: string } | null>
+  }
+  type CredentialContext = {
     oauthToken?: string
     actingModelRoute?: {
       model: string
       providerId?: string
       accountId?: string
     }
-  } | null> => {
+  } | null
+  const credentialContextLoader = (options: CredentialContextOptions): (() => Promise<CredentialContext>) => {
     const runtime = createAgentSdkRuntime({
       registry: CapabilityRegistry.fromLocalTools([]),
       turns: { updateTurnMetadata: async () => undefined } as never,
@@ -446,14 +450,23 @@ describe('createAgentSdkRuntime turn context', () => {
         ? {
             [options.providerId]: {
               kind: 'agent-sdk',
-              apiKey: options.providerToken ?? ''
+              apiKey: options.providerToken ?? '',
+              ...(options.credentialSourceId
+                ? { credentialSourceId: options.credentialSourceId }
+                : {})
             }
           } as never
         : {},
       agentSdkProviderIds: new Set(options.providerId ? [options.providerId] : []),
       defaultApprovalPolicy: 'auto',
       defaultIsAgentSdk: !options.providerId,
-      defaultToken: options.defaultToken
+      defaultToken: options.defaultToken,
+      ...(options.credentialSourceId && !options.providerId
+        ? { defaultCredentialSourceId: options.credentialSourceId }
+        : {}),
+      ...(options.resolveCredentialSource
+        ? { resolveCredentialSource: options.resolveCredentialSource }
+        : {})
     })
     const deps = (runtime as unknown as {
       deps: {
@@ -470,8 +483,10 @@ describe('createAgentSdkRuntime turn context', () => {
         } | null>
       }
     }).deps
-    return deps.loadTurnContext('th', 'tn')
+    return () => deps.loadTurnContext('th', 'tn')
   }
+  const credentialContext = (options: CredentialContextOptions): Promise<CredentialContext> =>
+    credentialContextLoader(options)()
 
   test('keeps an explicit Claude provider on ambient login instead of inheriting the default token', async () => {
     const context = await credentialContext({
@@ -490,6 +505,34 @@ describe('createAgentSdkRuntime turn context', () => {
     expect(context?.actingModelRoute).toMatchObject({
       providerId: 'default'
     })
+  })
+
+  test('re-resolves a managed Claude credential for every turn on the same Runtime', async () => {
+    let authoritativeToken = ''
+    const resolveCredentialSource = vi.fn(async (sourceId: string) =>
+      authoritativeToken ? { apiKey: authoritativeToken } : null)
+    const load = credentialContextLoader({
+      providerId: 'claude-subscription',
+      providerToken: 'sk-ant-oat01-stale-constructor-token',
+      credentialSourceId: 'model-connection:claude-subscription',
+      resolveCredentialSource
+    })
+
+    await expect(load()).rejects.toMatchObject({
+      code: 'agent_sdk_credential_unavailable'
+    })
+    authoritativeToken = 'sk-ant-oat01-authoritative-token'
+    await expect(load()).resolves.toMatchObject({
+      oauthToken: 'sk-ant-oat01-authoritative-token'
+    })
+    expect(resolveCredentialSource).toHaveBeenNthCalledWith(
+      1,
+      'model-connection:claude-subscription'
+    )
+    expect(resolveCredentialSource).toHaveBeenNthCalledWith(
+      2,
+      'model-connection:claude-subscription'
+    )
   })
 
   test('rejects an invalid explicit token without disclosing it', async () => {
