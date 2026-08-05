@@ -448,8 +448,11 @@ describe('ThreadService.fork with side relation', () => {
     expect(parentItems.some((item) => item.kind === 'tool_result' && item.callId === 'call_orphan')).toBe(true)
     expect(forkItems.some((item) => item.kind === 'tool_result' && item.callId === 'call_orphan')).toBe(false)
     expect(forkItems.some((item) => item.kind === 'tool_call' && item.callId === 'call_missing')).toBe(false)
-    expect(forkItems.some((item) => item.kind === 'tool_call' && item.callId === 'call_valid')).toBe(true)
-    expect(forkItems.some((item) => item.kind === 'tool_result' && item.callId === 'call_valid')).toBe(true)
+    // Calls emitted by one assistant response form an atomic round. The
+    // preceding missing result therefore invalidates the otherwise matching
+    // call_valid pair instead of letting a partial round reach a provider.
+    expect(forkItems.some((item) => item.kind === 'tool_call' && item.callId === 'call_valid')).toBe(false)
+    expect(forkItems.some((item) => item.kind === 'tool_result' && item.callId === 'call_valid')).toBe(false)
   })
 
   it('respects a custom side title when provided', async () => {

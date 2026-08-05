@@ -29,6 +29,10 @@ import {
 } from '../../contracts/items.js'
 import type { ApprovalRequest } from '../../domain/approval.js'
 import { placeCompactionsChronologically } from '../../loop/compaction-history.js'
+import {
+  type FinishedTurnStatus,
+  finalizeOpenTurnItem
+} from '../../domain/turn-item-finalization.js'
 
 /**
  * Handlers for the thread CRUD endpoints. The handlers accept a
@@ -201,8 +205,6 @@ function approvalItemFromRequest(
   }
 }
 
-type FinishedTurnStatus = Extract<Turn['status'], 'completed' | 'failed' | 'aborted'>
-
 async function healSessionItemsForFinishedTurns(
   thread: ThreadRecord,
   items: TurnItem[],
@@ -222,7 +224,7 @@ async function healSessionItemsForFinishedTurns(
   const nextItems = items.map((item) => {
     const finished = finishedByTurnId.get(item.turnId)
     if (!finished) return item
-    const next = finalizeOpenSessionItem(item, finished.status, finished.finishedAt ?? healedAt)
+    const next = finalizeOpenTurnItem(item, finished.status, finished.finishedAt ?? healedAt)
     if (next !== item) healedItems.push(next)
     return next
   })
@@ -240,22 +242,6 @@ async function healSessionItemsForFinishedTurns(
 
 function finishedTurnStatus(status: Turn['status']): FinishedTurnStatus | null {
   return status === 'completed' || status === 'failed' || status === 'aborted' ? status : null
-}
-
-function finalizeOpenSessionItem(
-  item: TurnItem,
-  status: FinishedTurnStatus,
-  finishedAt: string
-): TurnItem {
-  if (item.status !== 'pending' && item.status !== 'running') return item
-  if (item.kind === 'approval') {
-    return { ...item, status: 'expired', finishedAt }
-  }
-  if (item.kind === 'user_input') {
-    return { ...item, status: 'cancelled', finishedAt }
-  }
-  const itemStatus = status === 'completed' ? 'completed' : status
-  return { ...item, status: itemStatus, finishedAt } as TurnItem
 }
 
 function hydrateThreadItemsFromSession(thread: ThreadRecord, items: TurnItem[]): ThreadRecord {

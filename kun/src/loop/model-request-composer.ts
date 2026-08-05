@@ -1,6 +1,7 @@
 import type { ImmutablePrefix } from '../cache/immutable-prefix.js'
 import type { TurnItem } from '../contracts/items.js'
 import type {
+  ModelHistoryRoute,
   ModelRequest,
   ModelToolSpec
 } from '../ports/model-client.js'
@@ -31,6 +32,7 @@ export type ModelRequestComposerInput = Readonly<{
   modeInstruction?: string
   contextInstructions: readonly string[]
   history: readonly TurnItem[]
+  historyRoutesByTurnId?: Readonly<Record<string, ModelHistoryRoute>>
   attachments: ResolvedTurnAttachments
   tools: readonly ModelToolSpec[]
   requiredToolName?: string
@@ -67,6 +69,7 @@ export function composeModelRequest(input: ModelRequestComposerInput): ComposedM
       : {}),
     prefix: input.immutablePrefix.fewShots,
     history: capToolResultImages([...input.history], MAX_FORWARDED_TOOL_IMAGES),
+    ...(input.historyRoutesByTurnId ? { historyRoutesByTurnId: input.historyRoutesByTurnId } : {}),
     ...(input.attachments.imageAttachments.length
       ? { attachments: [...input.attachments.imageAttachments] }
       : {}),

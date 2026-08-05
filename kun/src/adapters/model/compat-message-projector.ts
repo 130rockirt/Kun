@@ -14,6 +14,8 @@ import { userMessageTextWithComposerContexts } from '../../domain/composer-conte
 export type CompatMessageProjectionOptions = {
   historyLimit?: number
   thinkingMode: boolean
+  /** DeepSeek rejects a historical tool round without its exact reasoning. */
+  strictThinkingToolReplay?: boolean
   supportsImages: boolean
 }
 
@@ -45,7 +47,8 @@ class CompatMessageProjector {
       repairModelHistoryItems([...request.prefix, ...history]),
       this.options.thinkingMode,
       this.options.supportsImages,
-      request.turnId
+      request.turnId,
+      request
     ))
     for (const instruction of request.contextInstructions ?? []) {
       if (instruction.trim()) out.push({ role: 'system', content: instruction })
@@ -64,7 +67,8 @@ class CompatMessageProjector {
     items: TurnItem[],
     thinkingMode: boolean,
     supportsImages: boolean,
-    activeTurnId: string
+    activeTurnId: string,
+    request: ModelRequest
   ): CompatChatMessage[] {
     const out: CompatChatMessage[] = []
     for (let index = 0; index < items.length; index += 1) {
@@ -94,7 +98,8 @@ class CompatMessageProjector {
           index,
           thinkingMode,
           supportsImages,
-          activeTurnId
+          activeTurnId,
+          request
         )
         if (block) {
           out.push(...block.messages)
@@ -118,7 +123,8 @@ class CompatMessageProjector {
     startIndex: number,
     thinkingMode: boolean,
     supportsImages: boolean,
-    activeTurnId: string
+    activeTurnId: string,
+    request: ModelRequest
   ): { messages: CompatChatMessage[]; nextIndex: number } | null {
     const calls: Extract<TurnItem, { kind: 'tool_call' }>[] = []
     let index = startIndex
@@ -175,17 +181,34 @@ class CompatMessageProjector {
     if (![...expectedCallIds].every((callId) => seenResultIds.has(callId))) {
       return null
     }
+    const sameRoute = turnId === activeTurnId || historicalRouteMatchesRequest(
+      requestRoute(request),
+      request.historyRoutesByTurnId?.[turnId]
+    )
+    // DeepSeek thinking tool-use replay requires the original reasoning
+    // content. A blank placeholder is only safe for the active round, where
+    // the current request route is already frozen. Historical rounds without
+    // a route match or a durable reasoning record are discarded fail-closed.
+    const strictHistoricalThinking = thinkingMode &&
+      this.options.strictThinkingToolReplay === true &&
+      turnId !== activeTurnId
+    const canReplayThinkingRound = !strictHistoricalThinking || (
+      sameRoute && reasoningText.join('\n').trim().length > 0
+    )
+    if (!canReplayThinkingRound) return null
     const anthropicThinking = turnId === activeTurnId
       ? calls.find((call) => call.providerMetadata?.anthropic)?.providerMetadata?.anthropic
           ?.thinkingBlocks
       : undefined
-    const activeTurnThinking = thinkingMode && turnId === activeTurnId
+    const replayThinking = thinkingMode && (turnId === activeTurnId || (
+      this.options.strictThinkingToolReplay === true && sameRoute
+    ))
     return {
       messages: [
         {
           role: 'assistant',
           content: assistantText.length > 0 ? assistantText.join('\n') : '',
-          ...(activeTurnThinking
+          ...(replayThinking
             ? { reasoning_content: reasoningContentOrSpace(reasoningText.join('\n')) }
             : {}),
           ...(anthropicThinking
@@ -293,6 +316,33 @@ class CompatMessageProjector {
         return null
     }
   }
+}
+
+type RequestRoute = {
+  model: string
+  providerId?: string
+  accountId?: string
+}
+
+function requestRoute(request: ModelRequest): RequestRoute {
+  return {
+    model: request.model,
+    ...(request.providerId ? { providerId: request.providerId } : {}),
+    ...(request.accountId ? { accountId: request.accountId } : {})
+  }
+}
+
+function historicalRouteMatchesRequest(
+  current: RequestRoute,
+  historical: RequestRoute | undefined
+): boolean {
+  return historical?.model === current.model &&
+    normalizeRoutePart(historical.providerId) === normalizeRoutePart(current.providerId) &&
+    normalizeRoutePart(historical.accountId) === normalizeRoutePart(current.accountId)
+}
+
+function normalizeRoutePart(value: string | undefined): string {
+  return value?.trim().toLowerCase() || 'default'
 }
 
 function reasoningContentOrSpace(text: string): string {
