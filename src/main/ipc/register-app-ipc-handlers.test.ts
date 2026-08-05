@@ -269,6 +269,7 @@ function registerOptions(overrides: Partial<Parameters<typeof import('./register
     fetchUpstreamModels: vi.fn() as never,
     getClawRuntime: () => null,
     getScheduleRuntime: () => null,
+    getDaemonRuntime: () => null,
     getWorkflowRuntime: () => null,
     startFeishuInstallQrcode: vi.fn() as never,
     pollFeishuInstall: vi.fn() as never,

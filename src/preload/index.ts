@@ -184,6 +184,9 @@ const api = {
   getScheduleStatus: () => ipcRenderer.invoke('schedule:status'),
   runScheduleTask: (taskId) =>
     ipcRenderer.invoke('schedule:task:run', taskId),
+  getDaemonStatus: () => ipcRenderer.invoke('daemon:status'),
+  restartDaemon: (daemonId) => ipcRenderer.invoke('daemon:restart', daemonId),
+  readDaemonLogs: (payload) => ipcRenderer.invoke('daemon:logs', payload),
   getWorkflowStatus: () => ipcRenderer.invoke('workflow:status'),
   runWorkflow: (workflowId, input) => ipcRenderer.invoke('workflow:run', workflowId, input),
   stopWorkflow: (workflowId) => ipcRenderer.invoke('workflow:stop', workflowId),

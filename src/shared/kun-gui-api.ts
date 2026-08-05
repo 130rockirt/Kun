@@ -4,6 +4,9 @@ import type {
   ClawRunResult,
   ClawTaskFromTextResult,
   ClawRuntimeStatus,
+  DaemonActionResult,
+  DaemonLogPage,
+  DaemonRuntimeStatus,
   ModelEndpointFormat,
   ModelProviderModelProfileV1,
   ModelReasoningEffort,
@@ -688,6 +691,9 @@ export type KunGuiApi = ExtensionIpcApi & {
   runClawTask: (taskId: string) => Promise<ClawRunResult>
   getScheduleStatus: () => Promise<ScheduleRuntimeStatus>
   runScheduleTask: (taskId: string) => Promise<ScheduleRunResult>
+  getDaemonStatus: () => Promise<DaemonRuntimeStatus>
+  restartDaemon: (daemonId: string) => Promise<DaemonActionResult>
+  readDaemonLogs: (payload: { id: string; cursor?: string; limit?: number }) => Promise<DaemonLogPage>
   getWorkflowStatus: () => Promise<WorkflowRuntimeStatus>
   runWorkflow: (workflowId: string, input?: unknown) => Promise<WorkflowRunResult>
   stopWorkflow: (workflowId: string) => Promise<WorkflowRunResult>
