@@ -747,7 +747,13 @@ export class CursorSdkRuntime implements DelegatedTurnRuntime {
           run = await Promise.race([
             agent.send(attemptMessage, {
               mode: options.mode,
-              ...(forceRecoveryRun ? { local: { force: true } } : {})
+              local: {
+                ...(forceRecoveryRun ? { force: true } : {}),
+                // Cursor exposes custom tools through the per-send local
+                // override. Re-send the current turn's map so resumed agents
+                // and recovery runs cannot fall back to an empty tool set.
+                customTools: kunContext.customTools
+              }
             }),
             interrupted
           ])
