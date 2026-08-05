@@ -57,7 +57,8 @@ function readImageToolRequest(model: string): ModelRequest {
       turnId: 'turn_1',
       callId: 'call_read',
       toolName: 'read',
-      arguments: { path: 'img/diagram.png' }
+      arguments: { path: 'img/diagram.png' },
+      status: 'completed'
     }),
     makeToolResultItem({
       id: 'item_result_read',
@@ -1583,7 +1584,8 @@ describe('CompatModelClient', () => {
         threadId: 'thr_1',
         callId: 'call_ok',
         toolName: 'echo',
-        arguments: { text: 'ok' }
+        arguments: { text: 'ok' },
+        status: 'completed'
       }),
       makeToolResultItem({
         id: 'valid_result',
@@ -1647,7 +1649,8 @@ describe('CompatModelClient', () => {
         threadId: 'thr_1',
         callId: 'call_a',
         toolName: 'echo',
-        arguments: { text: 'a' }
+        arguments: { text: 'a' },
+        status: 'completed'
       }),
       makeToolCallItem({
         id: 'call_b',
@@ -1655,7 +1658,8 @@ describe('CompatModelClient', () => {
         threadId: 'thr_1',
         callId: 'call_b',
         toolName: 'echo',
-        arguments: { text: 'b' }
+        arguments: { text: 'b' },
+        status: 'completed'
       }),
       makeAssistantTextItem({
         id: 'assistant_bridge',
@@ -1736,7 +1740,8 @@ describe('CompatModelClient', () => {
         threadId: 'thr_1',
         callId: 'call_a',
         toolName: 'echo',
-        arguments: { text: 'a' }
+        arguments: { text: 'a' },
+        status: 'completed'
       }),
       makeToolCallItem({
         id: 'call_b',
@@ -1744,7 +1749,8 @@ describe('CompatModelClient', () => {
         threadId: 'thr_1',
         callId: 'call_b',
         toolName: 'echo',
-        arguments: { text: 'b' }
+        arguments: { text: 'b' },
+        status: 'completed'
       }),
       makeAssistantReasoningItem({
         id: 'assistant_reasoning_bridge',
@@ -1832,7 +1838,8 @@ describe('CompatModelClient', () => {
         threadId: 'thr_1',
         callId: 'call_a',
         toolName: 'echo',
-        arguments: { text: 'a' }
+        arguments: { text: 'a' },
+        status: 'completed'
       }),
       makeToolResultItem({
         id: 'result_a',
@@ -1960,7 +1967,8 @@ describe('CompatModelClient', () => {
         threadId: 'thr_1',
         callId: 'call_a',
         toolName: 'echo',
-        arguments: { text: 'a' }
+        arguments: { text: 'a' },
+        status: 'completed'
       }),
       makeToolResultItem({
         id: 'result_a',
@@ -2020,7 +2028,8 @@ describe('CompatModelClient', () => {
         threadId: 'thr_1',
         callId: 'call_a',
         toolName: 'echo',
-        arguments: { text: 'a' }
+        arguments: { text: 'a' },
+        status: 'completed'
       }),
       makeToolResultItem({
         id: 'result_a',

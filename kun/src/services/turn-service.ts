@@ -39,6 +39,7 @@ import type { ContextCompactionConfig } from '../loop/model-context-profile.js'
 import { reserveExtensionModelRequest } from '../loop/turn-budget-gate.js'
 import { makeGoalContextItem, makeUserItem, makeErrorItem } from '../domain/item.js'
 import { appendTurnItem, createTurnRecord, finishTurn, replaceTurnItem, startTurn as startTurnRecord } from '../domain/turn.js'
+import { finalizeTurnItems } from '../domain/turn-item-finalization.js'
 import { touchThread } from '../domain/thread.js'
 import type { RuntimeEventRecorder } from './runtime-event-recorder.js'
 import type { UsageService } from './usage-service.js'
@@ -1838,13 +1839,8 @@ export class TurnService {
     status: Extract<TurnStatus, 'completed' | 'failed' | 'aborted'>
   ): Turn {
     const finishedAt = this.deps.nowIso()
-    let changed = false
-    const items = turn.items.map((item) => {
-      const next = this.finalizeOpenItem(item, status, finishedAt)
-      if (next !== item) changed = true
-      return next
-    })
-    return changed ? { ...turn, items } : turn
+    const items = finalizeTurnItems(turn.items, { turnId: turn.id, status, finishedAt })
+    return items === turn.items ? turn : { ...turn, items }
   }
 
   private async discardTurnItems(threadId: string, turnId: string): Promise<void> {
@@ -1873,32 +1869,18 @@ export class TurnService {
   ): Promise<void> {
     const items = await this.deps.sessionStore.loadItems(threadId)
     const finishedAt = this.deps.nowIso()
-    for (const item of items) {
-      if (item.turnId !== turnId) continue
-      const finalized = this.finalizeOpenItem(item, status, finishedAt)
-      if (finalized === item) continue
+    const finalizedItems = finalizeTurnItems(items, { turnId, status, finishedAt })
+    if (finalizedItems === items) return
+    for (let index = 0; index < items.length; index += 1) {
+      const item = items[index]
+      const finalized = finalizedItems[index]
+      if (!item || !finalized || finalized === item) continue
       await this.updateItem(threadId, item.id, finalized)
     }
   }
 
   private keepUserItems(items: TurnItem[]): TurnItem[] {
     return items.filter((item) => item.kind === 'user_message')
-  }
-
-  private finalizeOpenItem(
-    item: TurnItem,
-    status: Extract<TurnStatus, 'completed' | 'failed' | 'aborted'>,
-    finishedAt: string
-  ): TurnItem {
-    if (item.status !== 'pending' && item.status !== 'running') return item
-    if (item.kind === 'approval') {
-      return { ...item, status: 'expired', finishedAt }
-    }
-    if (item.kind === 'user_input') {
-      return { ...item, status: 'cancelled', finishedAt }
-    }
-    const itemStatus = status === 'completed' ? 'completed' : status
-    return { ...item, status: itemStatus, finishedAt } as TurnItem
   }
 
 }

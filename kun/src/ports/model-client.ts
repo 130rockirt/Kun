@@ -17,6 +17,17 @@ export type ModelRouteTargetMetadata = {
   requestedModelId: string
 }
 
+/**
+ * Durable route identity for a historical turn. This contains no credential
+ * material; it is used only to decide whether provider-private reasoning can
+ * be replayed to the current model route.
+ */
+export type ModelHistoryRoute = {
+  model: string
+  providerId?: string
+  accountId?: string
+}
+
 export type ModelStreamChunk = (
   | { kind: 'assistant_text_delta'; text: string }
   | { kind: 'assistant_reasoning_delta'; text: string }
@@ -84,6 +95,12 @@ export type ModelRequest = {
   contextInstructions?: string[]
   prefix: TurnItem[]
   history: TurnItem[]
+  /**
+   * Persisted acting routes for historical turns. Thinking adapters must not
+   * replay a tool-use round's private reasoning unless this route exactly
+   * matches the current request route.
+   */
+  historyRoutesByTurnId?: Readonly<Record<string, ModelHistoryRoute>>
   attachments?: ModelInputAttachment[]
   attachmentTextFallbacks?: ModelTextAttachmentFallback[]
   attachmentDocuments?: ModelDocumentAttachment[]

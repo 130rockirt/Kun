@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { makeGoalContextItem, makeUserItem } from '../../domain/item.js'
+import {
+  makeAssistantReasoningItem,
+  makeGoalContextItem,
+  makeToolCallItem,
+  makeToolResultItem,
+  makeUserItem
+} from '../../domain/item.js'
 import type { ModelRequest } from '../../ports/model-client.js'
 import { projectCompatMessages } from './compat-message-projector.js'
 import { COMPAT_HISTORY_CONTEXT } from './compat-request-codecs.js'
@@ -124,5 +130,60 @@ describe('compat composer context projection', () => {
       content: 'Goal objective stays in append-only history.'
     })
     expect(goal?.[COMPAT_HISTORY_CONTEXT]).toBe(true)
+  })
+
+  it('replays complete historical DeepSeek tool rounds only on the identical route', () => {
+    const threadId = 'thread-deepseek'
+    const priorTurnId = 'turn-prior'
+    const request: ModelRequest = {
+      threadId,
+      turnId: 'turn-current',
+      model: 'deepseek-v4-pro',
+      providerId: 'deepseek',
+      accountId: 'account-a',
+      prefix: [],
+      history: [
+        makeAssistantReasoningItem({
+          id: 'reason-prior', threadId, turnId: priorTurnId,
+          text: 'inspect the requested file', status: 'completed'
+        }),
+        makeToolCallItem({
+          id: 'call-prior', threadId, turnId: priorTurnId, callId: 'call-prior',
+          toolName: 'read_file', arguments: { path: 'a.ts' }, status: 'completed'
+        }),
+        makeToolResultItem({
+          id: 'result-prior', threadId, turnId: priorTurnId, callId: 'call-prior',
+          toolName: 'read_file', output: 'contents', status: 'completed'
+        })
+      ],
+      historyRoutesByTurnId: {
+        [priorTurnId]: { model: 'deepseek-v4-pro', providerId: 'deepseek', accountId: 'account-a' }
+      },
+      tools: [],
+      abortSignal: new AbortController().signal
+    }
+
+    const messages = projectCompatMessages(request, {
+      thinkingMode: true,
+      strictThinkingToolReplay: true,
+      supportsImages: false
+    })
+    expect(messages.find((message) => message.tool_calls?.length)).toMatchObject({
+      reasoning_content: 'inspect the requested file'
+    })
+
+    const switched = projectCompatMessages({
+      ...request,
+      model: 'deepseek-v4-flash',
+      historyRoutesByTurnId: {
+        [priorTurnId]: { model: 'deepseek-v4-pro', providerId: 'deepseek', accountId: 'account-a' }
+      }
+    }, {
+      thinkingMode: true,
+      strictThinkingToolReplay: true,
+      supportsImages: false
+    })
+    expect(switched.some((message) => message.tool_calls?.length)).toBe(false)
+    expect(switched.some((message) => message.role === 'tool')).toBe(false)
   })
 })

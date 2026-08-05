@@ -317,6 +317,7 @@ export class ModelStepService {
       ...(routeProviderId ? { providerId: routeProviderId } : {}),
       ...(routeAccountId ? { accountId: routeAccountId } : {})
     }
+    const historyRoutesByTurnId = modelHistoryRoutesByTurnId(thread, actingModelRoute, turnId)
     const routeSelectionDeferred =
       !turn.actingModelRoute &&
       this.deps.model.selectsRouteTargetDuringStream?.({
@@ -685,6 +686,7 @@ export class ModelStepService {
       ...(modeInstruction ? { modeInstruction } : {}),
       contextInstructions,
       history: [],
+      historyRoutesByTurnId,
       attachments,
       tools: requestToolSpecs,
       ...(hardRequiredToolName ? { requiredToolName: hardRequiredToolName } : {}),
@@ -772,6 +774,7 @@ export class ModelStepService {
       serviceTier,
       modeInstruction,
       contextInstructions,
+      historyRoutesByTurnId,
       requestToolSpecs,
       attachments,
       hardRequiredToolName,
@@ -823,6 +826,7 @@ export class ModelStepService {
         serviceTier,
         modeInstruction,
         contextInstructions,
+        historyRoutesByTurnId,
         requestToolSpecs,
         attachments,
         hardRequiredToolName,
@@ -1067,6 +1071,7 @@ export class ModelStepService {
     serviceTier?: 'priority'
     modeInstruction?: string
     contextInstructions: readonly string[]
+    historyRoutesByTurnId: Readonly<Record<string, import('../ports/model-client.js').ModelHistoryRoute>>
     requestToolSpecs: readonly ModelToolSpec[]
     attachments: import('./turn-execution-types.js').ResolvedTurnAttachments
     hardRequiredToolName?: string
@@ -1100,6 +1105,7 @@ export class ModelStepService {
       ...(input.modeInstruction ? { modeInstruction: input.modeInstruction } : {}),
       contextInstructions: input.contextInstructions,
       history: forwardHistory,
+      historyRoutesByTurnId: input.historyRoutesByTurnId,
       attachments: input.attachments,
       tools: input.requestToolSpecs,
       ...(input.hardRequiredToolName ? { requiredToolName: input.hardRequiredToolName } : {}),
@@ -1180,6 +1186,29 @@ function sameActingModelRoute(
   return a.model === b.model &&
     a.providerId === b.providerId &&
     a.accountId === b.accountId
+}
+
+function modelHistoryRoutesByTurnId(
+  thread: import('../contracts/threads.js').ThreadRecord,
+  currentRoute: ActingTurnModelRoute,
+  currentTurnId: string
+): Readonly<Record<string, import('../ports/model-client.js').ModelHistoryRoute>> {
+  const routes: Record<string, import('../ports/model-client.js').ModelHistoryRoute> = {}
+  for (const historicalTurn of thread.turns) {
+    const route = historicalTurn.actingModelRoute
+    if (!route) continue
+    routes[historicalTurn.id] = {
+      model: route.model,
+      ...(route.providerId ? { providerId: route.providerId } : {}),
+      ...(route.accountId ? { accountId: route.accountId } : {})
+    }
+  }
+  routes[currentTurnId] = {
+    model: currentRoute.model,
+    ...(currentRoute.providerId ? { providerId: currentRoute.providerId } : {}),
+    ...(currentRoute.accountId ? { accountId: currentRoute.accountId } : {})
+  }
+  return routes
 }
 
 export function buildExtensionProfileInstruction(extensionId: string, profileId: string, overlay: string): string {

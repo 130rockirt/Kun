@@ -60,6 +60,7 @@ import {
 } from './anthropic-messages-stream-decoder.js'
 import { decodeCompatNonStreamingResponse } from './compat-non-streaming-decoder.js'
 import { IncrementalSseFrameBuffer } from './incremental-sse-frame-buffer.js'
+import { isDeepSeekHost } from './model-error-probe.js'
 
 export { redactUrlForLog } from './compat-http-diagnostics.js'
 
@@ -728,6 +729,7 @@ export class CompatModelClient implements ModelClient {
         this.config.baseUrl,
         this.modelReasoningFor(model)
       ),
+      strictThinkingToolReplay: isDeepSeekHost(this.config.baseUrl),
       supportsImages: this.modelSupportsImageInput(model)
     })
   }

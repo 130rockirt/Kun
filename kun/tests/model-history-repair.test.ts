@@ -9,7 +9,7 @@ import {
 } from '../src/domain/item.js'
 
 describe('model history repair', () => {
-  it('keeps complete multi-tool blocks across assistant text bridges', () => {
+  it('drops an entire multi-tool block when a duplicate result makes it invalid', () => {
     const orphanResult = makeToolResultItem({
       id: 'orphan_result',
       threadId: 'thr_1',
@@ -32,7 +32,8 @@ describe('model history repair', () => {
       turnId: 'turn_1',
       callId: 'call_a',
       toolName: 'echo',
-      arguments: { text: 'a' }
+      arguments: { text: 'a' },
+      status: 'completed'
     })
     const callB = makeToolCallItem({
       id: 'call_b',
@@ -40,7 +41,8 @@ describe('model history repair', () => {
       turnId: 'turn_1',
       callId: 'call_b',
       toolName: 'echo',
-      arguments: { text: 'b' }
+      arguments: { text: 'b' },
+      status: 'completed'
     })
     const bridgeText = makeAssistantTextItem({
       id: 'assistant_bridge',
@@ -87,16 +89,11 @@ describe('model history repair', () => {
     ])
 
     expect(repaired.map((item) => item.id)).toEqual([
-      'user_1',
-      'call_a',
-      'call_b',
-      'assistant_bridge',
-      'result_a',
-      'result_b'
+      'user_1'
     ])
   })
 
-  it('keeps assistant text when dropping an incomplete tool call', () => {
+  it('drops assistant text from the same incomplete tool-call round', () => {
     const repaired = repairModelHistoryItems([
       makeToolCallItem({
         id: 'call_missing',
@@ -124,7 +121,7 @@ describe('model history repair', () => {
       })
     ])
 
-    expect(repaired.map((item) => item.id)).toEqual(['assistant_text', 'user_next'])
+    expect(repaired.map((item) => item.id)).toEqual(['user_next'])
   })
 
   it('heals loaded history by adding missing ids and dropping invalid tool items', () => {

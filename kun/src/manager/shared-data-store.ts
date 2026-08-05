@@ -36,7 +36,12 @@ import {
 import { ThreadSchema } from '../contracts/threads.js'
 import type { ThreadExecutionLease } from '../contracts/runtime-flavor.js'
 import type { AgentSession } from '../domain/session.js'
+import { makeErrorItem } from '../domain/item.js'
 import { finishTurn } from '../domain/turn.js'
+import {
+  type FinishedTurnStatus,
+  finalizeTurnItems
+} from '../domain/turn-item-finalization.js'
 import { FileMemoryStore, type MemoryStore } from '../memory/memory-store.js'
 import { FileGraphRunStore, type GraphRunStore } from '../graph/graph-run-store.js'
 import type {
@@ -52,6 +57,18 @@ import { atomicWriteFile } from '../adapters/file/atomic-write.js'
 import { RevisionConflictError } from './revisioned-document-store.js'
 
 const ThreadIdSchema = z.string().min(1).max(256)
+
+function finishedTurnStatus(status: string): FinishedTurnStatus | null {
+  return status === 'completed' || status === 'failed' || status === 'aborted' ? status : null
+}
+
+function ownerLeaseExpiredMessage(lease: ThreadExecutionLease): string {
+  return `Turn owner ${lease.ownerFlavor}/${lease.ownerInstanceId} stopped heartbeating.`
+}
+
+function ownerLeaseExpiredItemId(turnId: string): string {
+  return `item_${turnId}_owner_lease_expired`
+}
 
 const AgentSessionSchema = z.object({
   threadId: ThreadIdSchema,
@@ -252,12 +269,49 @@ export class ManagerSharedDataStore {
       const thread = await this.threadStore.get(lease.threadId)
       if (!thread) return false
       const target = thread.turns.find((turn) => turn.id === lease.turnId)
-      if (!target || (target.status !== 'queued' && target.status !== 'running')) return false
+      if (!target) return false
+      const wasActive = target.status === 'queued' || target.status === 'running'
+      const terminalStatus = wasActive
+        ? 'failed' as const
+        : finishedTurnStatus(target.status)
+      // A second reconciliation after a partial write must still settle the
+      // session, but a lease that expired after a healthy completion must not
+      // manufacture a new failure.
+      if (!terminalStatus) return false
       const now = new Date().toISOString()
+      const sessionItems = await this.sessionStore.loadItems(lease.threadId)
+      let nextItems = finalizeTurnItems(sessionItems, {
+        turnId: lease.turnId,
+        status: terminalStatus,
+        finishedAt: target.finishedAt ?? now
+      })
+      const shouldRecordLeaseFailure = wasActive || (
+        target.status === 'failed' &&
+        target.error === ownerLeaseExpiredMessage(lease)
+      )
+      const errorItemId = ownerLeaseExpiredItemId(lease.turnId)
+      if (shouldRecordLeaseFailure && !nextItems.some((item) => item.id === errorItemId)) {
+        nextItems = [...nextItems, makeErrorItem({
+          id: errorItemId,
+          turnId: lease.turnId,
+          threadId: lease.threadId,
+          message: 'Turn owner stopped heartbeating.',
+          code: 'owner_lease_expired',
+          severity: 'warning'
+        })]
+      }
+      if (nextItems !== sessionItems) {
+        await this.executeSessionNow('rewriteItems', {
+          threadId: lease.threadId,
+          items: nextItems
+        })
+      }
+
+      if (!wasActive) return nextItems !== sessionItems
       const turns = thread.turns.map((turn) => turn.id === lease.turnId
         ? {
             ...finishTurn(turn, 'failed', now),
-            error: `Turn owner ${lease.ownerFlavor}/${lease.ownerInstanceId} stopped heartbeating.`
+            error: ownerLeaseExpiredMessage(lease)
           }
         : turn)
       await this.threadStore.upsert({
