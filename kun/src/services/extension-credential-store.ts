@@ -67,6 +67,9 @@ export class ExtensionCredentialStore {
   private operation: Promise<unknown> = Promise.resolve()
 
   constructor(private readonly options: ExtensionCredentialStoreOptions) {
+    if (options.primary && options.keyProvider) {
+      throw new Error('primary credential backend and keyProvider cannot be configured together')
+    }
     this.nowIso = options.nowIso ?? (() => new Date().toISOString())
     this.keyPath = join(options.dataDir, 'credentials', 'master.key')
     this.encryptedPath = join(options.dataDir, 'credentials', 'credentials.enc.json')
@@ -182,13 +185,20 @@ export class ExtensionCredentialStore {
   }
 
   private async initialize(): Promise<void> {
-    try {
-      if (this.options.primary && await this.options.primary.isAvailable()) {
-        this.primaryActive = true
-        return
+    if (this.options.primary) {
+      try {
+        if (await this.options.primary.isAvailable()) {
+          this.primaryActive = true
+          return
+        }
+        this.unavailableReason = 'primary credential backend is unavailable'
+      } catch (error) {
+        this.unavailableReason = `primary credential backend failed: ${safeError(error)}`
       }
-    } catch (error) {
-      this.unavailableReason = `primary credential backend failed: ${safeError(error)}`
+      // A configured value backend is authoritative. Falling back to a
+      // second store here would split credential generations across restart
+      // boundaries when availability changes.
+      return
     }
     if (this.options.keyProvider) {
       this.keyProviderActive = true

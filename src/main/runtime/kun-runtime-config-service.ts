@@ -33,6 +33,7 @@ import {
 } from '../../../kun/src/contracts/capabilities.js'
 import {
   DEFAULT_MODEL_PROVIDER_ID,
+  getModelProviderSettings,
   getKunRuntimeSettings,
   resolveKunRuntimeSettings,
   resolveModelProviderProxyUrl,
@@ -229,10 +230,13 @@ export async function syncGuiManagedKunConfig(
   return parsed.data
 }
 
-function defaultCredentialSourceId(settings: AppSettingsV1): string {
+function defaultCredentialSourceId(settings: AppSettingsV1): string | undefined {
   const storedRuntime = getKunRuntimeSettings(settings)
   if (storedRuntime.apiKey.trim()) return LEGACY_RUNTIME_OVERRIDE_SOURCE_ID
-  return legacyProviderCredentialSourceId(storedRuntime.providerId.trim() || DEFAULT_MODEL_PROVIDER_ID)
+  const providerId = storedRuntime.providerId.trim() || DEFAULT_MODEL_PROVIDER_ID
+  const provider = getModelProviderSettings(settings).providers
+    .find((candidate) => candidate.id === providerId)
+  return provider?.apiKey.trim() ? legacyProviderCredentialSourceId(providerId) : undefined
 }
 
 type KunRuntimeConfigSettings = Pick<KunRuntimeSettingsV1,

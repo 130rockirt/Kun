@@ -290,7 +290,7 @@ describe('Kun runtime config service', () => {
         defaultEffort: 'high',
         requestProtocol: 'openai-chat-completions'
       })
-      expect(config.serve.credentialSourceId).toBe('settings:provider:kimi-code')
+      expect(config.serve.credentialSourceId).toBeUndefined()
     } finally {
       await rm(dataDir, { recursive: true, force: true })
     }

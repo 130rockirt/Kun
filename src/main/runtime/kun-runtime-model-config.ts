@@ -70,6 +70,9 @@ export function providersConfigForRuntime(
       provider.kind === 'gemini-cli-api' ||
       provider.kind === 'cursor-sdk'
     if (!id || (!baseUrl && !isKeylessTransport)) continue
+    const credentialSourceId = provider.apiKey.trim()
+      ? legacyProviderCredentialSourceId(id)
+      : undefined
     const selectedModel = id === runtime.providerId && provider.models.includes(runtime.model)
       ? runtime.model
       : provider.models[0]
@@ -78,7 +81,7 @@ export function providersConfigForRuntime(
       // Provider secrets live in the protected account store. The runtime
       // resolves this opaque source binding after reading config.json.
       apiKey: '',
-      credentialSourceId: legacyProviderCredentialSourceId(id),
+      ...(credentialSourceId ? { credentialSourceId } : {}),
       ...(baseUrl ? { baseUrl } : {}),
       ...(provider.kind ? { kind: provider.kind } : {}),
       ...(presetSource ? { presetSource: presetSource.preset.id } : {}),

@@ -85,8 +85,11 @@ describe('LegacyProviderSettingsMigrationCoordinator', () => {
   it('emits distinct protected credential bindings for numbered plan accounts', () => {
     const providerSettings = defaultModelProviderSettings()
     const kimi = getModelProviderPreset('kimi-code')!
-    const first = modelProviderPresetAccountProfile(kimi, 'api', [])!
-    const second = modelProviderPresetAccountProfile(kimi, 'api', [first])!
+    const first = { ...modelProviderPresetAccountProfile(kimi, 'api', [])!, apiKey: 'first-secret' }
+    const second = {
+      ...modelProviderPresetAccountProfile(kimi, 'api', [first])!,
+      apiKey: 'second-secret'
+    }
     const runtimeProviders = providersConfigForRuntime({
       provider: {
         ...providerSettings,
@@ -125,7 +128,7 @@ describe('LegacyProviderSettingsMigrationCoordinator', () => {
     expect(JSON.stringify(runtimeProviders)).not.toContain('cursor-secret')
   })
 
-  it('projects legacy subscription profiles through their preset SDK transports', () => {
+  it('does not manufacture legacy credential sources for unhydrated subscription profiles', () => {
     const providerSettings = defaultModelProviderSettings()
     const legacySubscriptions = [
       'claude-subscription',
@@ -147,21 +150,20 @@ describe('LegacyProviderSettingsMigrationCoordinator', () => {
     } as AppSettingsV1)
 
     expect(runtimeProviders['claude-subscription']).toEqual(expect.objectContaining({
-      kind: 'agent-sdk',
-      credentialSourceId: 'settings:provider:claude-subscription'
+      kind: 'agent-sdk'
     }))
     expect(runtimeProviders['cursor-subscription']).toEqual(expect.objectContaining({
-      kind: 'cursor-sdk',
-      credentialSourceId: 'settings:provider:cursor-subscription'
+      kind: 'cursor-sdk'
     }))
     expect(runtimeProviders['gemini-subscription']).toEqual(expect.objectContaining({
-      kind: 'antigravity-cli',
-      credentialSourceId: 'settings:provider:gemini-subscription'
+      kind: 'antigravity-cli'
     }))
     expect(runtimeProviders['gemini-cli-subscription']).toEqual(expect.objectContaining({
-      kind: 'gemini-cli-api',
-      credentialSourceId: 'settings:provider:gemini-cli-subscription'
+      kind: 'gemini-cli-api'
     }))
+    for (const provider of legacySubscriptions) {
+      expect(runtimeProviders[provider.id]).not.toHaveProperty('credentialSourceId')
+    }
     expect(runtimeProviders['cursor-subscription']?.baseUrl).toBeUndefined()
     expect(runtimeProviders['gemini-subscription']?.baseUrl).toBeUndefined()
     expect(runtimeProviders['gemini-cli-subscription']?.baseUrl).toBeUndefined()

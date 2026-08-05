@@ -133,7 +133,7 @@ async function registry(
     ...(modelCapabilities ? { modelCapabilities } : {}),
     ...(retireLegacyCredentialSource ? { retireLegacyCredentialSource } : {}),
     ...(resolveCredentialSource ? { resolveCredentialSource } : {}),
-    ...(inspectCredentialSource ? { inspectCredentialSource } : {}),
+    inspectCredentialSource: inspectCredentialSource ?? (async () => 'ready'),
     ...(credentialFenceTtlMs ? { credentialFenceTtlMs } : {}),
     ...(beforeCredentialFenceInstall ? { beforeCredentialFenceInstall } : {}),
     ...(afterCredentialCommitWrite ? { afterCredentialCommitWrite } : {}),
@@ -393,9 +393,7 @@ describe('ModelConnectionRegistry', () => {
     expect(reconciled.providers[0]).toMatchObject({ configured: false })
     const stored = await readFile(join(dataDir, 'model-connections.v1.json'), 'utf8')
     expect(stored).not.toContain('settings:provider:deepseek')
-    expect((await value.materialize()).providers.get('deepseek')).toMatchObject({
-      apiKey: ''
-    })
+    expect((await value.materialize()).providers.has('deepseek')).toBe(false)
     await expect(value.credentialStateForInternalConsumer('deepseek')).resolves.toEqual({
       authoritative: true,
       apiKey: ''
@@ -1814,10 +1812,11 @@ describe('ModelConnectionRegistry', () => {
     ])
 
     expect(seeded.providers.find((profile) => profile.id === 'deepseek')).toMatchObject({
-      configured: true,
+      configured: false,
       credentialStatus: 'unreadable',
       credentialErrorCode: 'credential_unreadable'
     })
+    expect(seeded.defaultProviderId).toBeUndefined()
     expect(seeded.providers.find((profile) => profile.id === 'healthy')).toMatchObject({
       configured: true,
       credentialStatus: 'ready'
@@ -1829,10 +1828,12 @@ describe('ModelConnectionRegistry', () => {
     expect(beforeReplacement.providers.get('healthy')).toMatchObject({
       apiKey: 'healthy-secret'
     })
-    expect(beforeReplacement.providers.get('deepseek')).toMatchObject({
-      apiKey: '',
-      credentialSourceId: 'settings:provider:deepseek'
-    })
+    expect(beforeReplacement.providers.has('deepseek')).toBe(false)
+    await expect(value.select({
+      expectedRevision: seeded.revision,
+      providerId: 'deepseek',
+      model: 'deepseek-chat'
+    })).rejects.toThrow('provider is not connected')
 
     const replaced = await value.replaceCredential('deepseek', {
       expectedRevision: seeded.revision,
@@ -2472,7 +2473,7 @@ describe('ModelConnectionRegistry', () => {
     })
     expect(cleared.defaultProviderId).toBeUndefined()
     expect(cleared.defaultModel).toBeUndefined()
-    expect((await value.materialize()).providers.get('custom')?.apiKey).toBe('')
+    expect((await value.materialize()).providers.has('custom')).toBe(false)
   })
 
   it('moves the shared default to another connected provider when its credential is cleared', async () => {

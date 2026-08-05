@@ -56,6 +56,46 @@ describe('ExtensionCredentialStore', () => {
     await expect(store.get(reference)).resolves.toEqual({ accessToken: 'token-value' })
   })
 
+  it('fails closed when a configured primary backend becomes unavailable', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'kun-extension-primary-unavailable-'))
+    const primary: PrimaryCredentialBackend = {
+      id: 'test-keychain',
+      isAvailable: async () => false,
+      set: async () => undefined,
+      get: async () => null,
+      delete: async () => undefined
+    }
+    const store = new ExtensionCredentialStore({ dataDir, profileId: 'profile-a', primary })
+
+    await expect(store.protection()).resolves.toMatchObject({
+      mode: 'unavailable', available: false
+    })
+    await expect(store.create({ apiKey: 'must-not-fallback' }))
+      .rejects.toThrow('protected credential storage is unavailable')
+    await expect(readFile(join(dataDir, 'credentials', 'credentials.enc.json'), 'utf8'))
+      .rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('rejects ambiguous primary and key-provider value backends', () => {
+    const primary: PrimaryCredentialBackend = {
+      id: 'test-keychain',
+      isAvailable: async () => true,
+      set: async () => undefined,
+      get: async () => null,
+      delete: async () => undefined
+    }
+    expect(() => new ExtensionCredentialStore({
+      dataDir: '/tmp/kun-extension-ambiguous-backends',
+      profileId: 'profile-a',
+      primary,
+      keyProvider: {
+        encryptor: createAesEncryptor(randomBytes(32)),
+        osKeychain: true,
+        reason: 'test key provider'
+      }
+    })).toThrow('cannot be configured together')
+  })
+
   it('uses Kun OS-backed key protection and binds ciphertext to profile and reference', async () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'kun-extension-os-credentials-'))
     const keyProvider = {
