@@ -642,7 +642,19 @@ export class ModelStepService {
       ...(this.deps.tokenEconomy ? { tokenEconomy: this.deps.tokenEconomy } : {}),
       signal
     }).sentInputTokens
-    const history = await this.deps.historyCompaction.compactIfNeeded({
+    // Share one capacity model between the compaction preflight and the
+    // send-time guard. The output budget is reserved for this request's
+    // completion, so compaction must treat `input + output` as the real
+    // pressure instead of only comparing input against the soft threshold.
+    const outputBudgetTokens = modelCapabilities.maxOutputTokens ?? 0
+    // A configured model context window is authoritative. ContextCompactor's
+    // test/embedding thresholds can intentionally be much smaller than a real
+    // model window to exercise compaction, so use its cap only when capability
+    // metadata is unavailable.
+    const requestHardCapTokens = modelCapabilities.contextWindowTokens
+      ? Math.floor(modelCapabilities.contextWindowTokens * 0.85)
+      : this.deps.compactor.hardCap(model, providerId)
+    const firstCompaction = await this.deps.historyCompaction.compactIfNeeded({
       items,
       model,
       ...(providerId ? { providerId } : {}),
@@ -654,6 +666,8 @@ export class ModelStepService {
       clientSurface: prepared.clientSurface,
       toolSpecs: requestToolSpecs,
       requestOverheadTokens,
+      outputBudgetTokens,
+      requestHardCapTokens,
       reserveModelRequest: () => this.deps.budgetGate.reserveAdditionalModelRequest(threadId, turnId)
     })
     if (signal.aborted) return 'aborted'
@@ -678,59 +692,113 @@ export class ModelStepService {
       }
       return 'stop'
     }
-    await this.deps.recordPipelineStage(threadId, turnId, 'input_compressed', {
-      historyItems: history.length,
-      requestOverheadTokens
-    })
-    // Forward the just-generated image(s) back to a vision-capable model so it can
-    // self-review and regenerate if the result is off. Bytes come from the
-    // already-persisted attachment/file; the persisted tool output keeps NO base64
-    // (only this transient request copy carries it).
-    const forwardHistory = await rehydrateGeneratedImagesForForward(
-      rehydrateTransientBrowserUseOutputsForForward(history),
-      (output) => this.deps.turnAttachments.resolveGeneratedImageForForward(output, threadId, thread?.workspace),
-      MAX_FORWARDED_GENERATED_IMAGES
-    )
-    const composedRequest = composeModelRequest({
+    let history = firstCompaction.history
+    let fallbackCompactionAttempted = false
+    let fallbackCompactionApplied = false
+    let replacedTokens = firstCompaction.replacedTokens
+    let composedRequest = await this.composeForwardedRequest({
+      history,
       threadId,
+      thread,
       turnId,
       model,
-      ...(providerId ? { providerId } : {}),
-      ...(accountId ? { accountId } : {}),
-      ...(modelRoute.reasoningEffort ? { reasoningEffort: modelRoute.reasoningEffort } : {}),
-      ...(serviceTier ? { serviceTier } : {}),
-      immutablePrefix: this.deps.prefix,
-      ...(thread.systemPrompt !== undefined ? { threadSystemPrompt: thread.systemPrompt } : {}),
-      ...(modeInstruction ? { modeInstruction } : {}),
+      providerId,
+      accountId,
+      modelRoute,
+      serviceTier,
+      modeInstruction,
       contextInstructions,
-      history: forwardHistory,
+      requestToolSpecs,
       attachments,
-      tools: requestToolSpecs,
-      ...(hardRequiredToolName ? { requiredToolName: hardRequiredToolName } : {}),
-      ...(this.deps.tokenEconomy ? { tokenEconomy: this.deps.tokenEconomy } : {}),
+      hardRequiredToolName,
       signal
     })
-    const { request, rawInputTokens, sentInputTokens, tokenEconomy } = composedRequest
-    const requestContext = estimateModelRequestInputTokenBreakdown(request, {
-      skillContextInstructions
-    })
-    const inputTokens = sentInputTokens
-    const outputTokens = modelCapabilities.maxOutputTokens ?? 0
-    // A configured model context window is authoritative. ContextCompactor's
-    // test/embedding thresholds can intentionally be much smaller than a real
-    // model window to exercise compaction, so use its cap only when capability
-    // metadata is unavailable.
-    const hardCap = modelCapabilities.contextWindowTokens
-      ? Math.floor(modelCapabilities.contextWindowTokens * 0.85)
-      : this.deps.compactor.hardCap(model, providerId)
-    if (inputTokens + outputTokens > hardCap) {
+    if (signal.aborted) return 'aborted'
+    let inputTokens = composedRequest.sentInputTokens
+    // Send-boundary fallback: the final request is rebuilt with transient
+    // image/browser-use rehydration, token economy, and history hygiene, so it
+    // can legitimately be larger than the compaction preflight estimated. When
+    // the exact `input + output` still breaks the cap, compact once more with
+    // the exact input as the floor and the deterministic heuristic summary
+    // (never a second model call), rebuild, and only then fail if it still
+    // does not fit. No loops, no recursion, no upstream dispatch before this
+    // guard passes.
+    if (inputTokens + outputBudgetTokens > requestHardCapTokens) {
+      fallbackCompactionAttempted = true
+      const fallbackCompaction = await this.deps.historyCompaction.compactIfNeeded({
+        items: history,
+        model,
+        ...(providerId ? { providerId } : {}),
+        ...(accountId ? { accountId } : {}),
+        ...(serviceTier ? { serviceTier } : {}),
+        signal,
+        threadId,
+        turnId,
+        clientSurface: prepared.clientSurface,
+        toolSpecs: requestToolSpecs,
+        requestOverheadTokens,
+        requestInputTokens: inputTokens,
+        outputBudgetTokens,
+        requestHardCapTokens,
+        allowModelSummary: false,
+        reserveModelRequest: () => this.deps.budgetGate.reserveAdditionalModelRequest(threadId, turnId)
+      })
+      if (signal.aborted) return 'aborted'
+      history = fallbackCompaction.history
+      fallbackCompactionApplied = fallbackCompaction.compacted
+      replacedTokens += fallbackCompaction.replacedTokens
+      composedRequest = await this.composeForwardedRequest({
+        history,
+        threadId,
+        thread,
+        turnId,
+        model,
+        providerId,
+        accountId,
+        modelRoute,
+        serviceTier,
+        modeInstruction,
+        contextInstructions,
+        requestToolSpecs,
+        attachments,
+        hardRequiredToolName,
+        signal
+      })
+      if (signal.aborted) return 'aborted'
+      inputTokens = composedRequest.sentInputTokens
+    }
+    if (inputTokens + outputBudgetTokens > requestHardCapTokens) {
+      const overBy = inputTokens + outputBudgetTokens - requestHardCapTokens
+      const reason = outputBudgetTokens > requestHardCapTokens
+        ? 'output_budget_exceeds_cap'
+        : !fallbackCompactionAttempted
+          ? 'request_too_large'
+          : fallbackCompactionApplied
+            ? 'still_exceeds_after_compaction'
+            : 'no_compactable_history'
+      const action = reason === 'output_budget_exceeds_cap'
+        ? 'Reduce the model\'s max output tokens in provider settings, or switch to a model with a larger context window.'
+        : 'Compact the conversation manually with /compact, reduce the current message or attachments, or lower the model output budget.'
       const message =
-        `request exceeds the ${hardCap}-token context cap ` +
-        `(${inputTokens} input + ${outputTokens} output budget)`
+        `request exceeds the ${requestHardCapTokens}-token context cap ` +
+        `(${inputTokens} input + ${outputBudgetTokens} output budget; over by ${overBy}); ` +
+        `${reason}. ${action}`
+      const details = {
+        inputTokens,
+        outputBudgetTokens,
+        requestHardCapTokens,
+        softThresholdTokens: this.deps.compactor.thresholds(model, providerId).softThreshold,
+        hardThresholdTokens: this.deps.compactor.thresholds(model, providerId).hardThreshold,
+        fallbackCompactionAttempted,
+        fallbackCompactionApplied,
+        replacedTokens,
+        reason
+      }
       this.deps.rememberFailure(turnId, {
         error: message,
         code: 'context_window_exceeded',
-        severity: 'warning'
+        severity: 'warning',
+        details
       })
       await this.deps.events.record({
         kind: 'error',
@@ -738,15 +806,28 @@ export class ModelStepService {
         turnId,
         message,
         code: 'context_window_exceeded',
-        severity: 'warning'
+        severity: 'warning',
+        details
       })
       return 'failed'
     }
+    await this.deps.recordPipelineStage(threadId, turnId, 'input_compressed', {
+      historyItems: composedRequest.request.history.length,
+      requestOverheadTokens,
+      outputBudgetTokens,
+      requestHardCapTokens,
+      fallbackCompactionAttempted,
+      fallbackCompactionApplied
+    })
+    const { request, rawInputTokens, sentInputTokens, tokenEconomy } = composedRequest
+    const requestContext = estimateModelRequestInputTokenBreakdown(request, {
+      skillContextInstructions
+    })
     // Tool results become input to the *next* request. Reserve the configured
     // output budget now so built-in source tools can return the largest honest
     // page that has a realistic chance of fitting instead of relying on the
     // send-time history cleaner to silently rewrite it.
-    const sourceResultBudgetTokens = Math.max(0, hardCap - inputTokens - outputTokens)
+    const sourceResultBudgetTokens = Math.max(0, requestHardCapTokens - inputTokens - outputBudgetTokens)
     const contextThresholds = this.deps.compactor.thresholds(model, providerId)
     const contextWindowTokens = modelCapabilities.contextWindowTokens ??
       Math.max(contextThresholds.softThreshold, contextThresholds.hardThreshold)
@@ -904,6 +985,59 @@ export class ModelStepService {
       toolKinds,
       toolProviderKinds,
       svgCompletion
+    })
+  }
+
+  private async composeForwardedRequest(input: {
+    history: TurnItem[]
+    threadId: string
+    thread: import('../contracts/threads.js').ThreadRecord
+    turnId: string
+    model: string
+    providerId?: string
+    accountId?: string
+    modelRoute: { model: string; reasoningEffort?: string }
+    serviceTier?: 'priority'
+    modeInstruction?: string
+    contextInstructions: readonly string[]
+    requestToolSpecs: readonly ModelToolSpec[]
+    attachments: import('./turn-execution-types.js').ResolvedTurnAttachments
+    hardRequiredToolName?: string
+    signal: AbortSignal
+  }): Promise<import('./model-request-composer.js').ComposedModelRequest> {
+    // Forward the just-generated image(s) back to a vision-capable model so it
+    // can self-review and regenerate if the result is off. Bytes come from the
+    // already-persisted attachment/file; the persisted tool output keeps NO
+    // base64 (only this transient request copy carries it).
+    const forwardHistory = await rehydrateGeneratedImagesForForward(
+      rehydrateTransientBrowserUseOutputsForForward(input.history),
+      (output) => this.deps.turnAttachments.resolveGeneratedImageForForward(
+        output,
+        input.threadId,
+        input.thread.workspace
+      ),
+      MAX_FORWARDED_GENERATED_IMAGES
+    )
+    return composeModelRequest({
+      threadId: input.thread.id,
+      turnId: input.turnId,
+      model: input.model,
+      ...(input.providerId ? { providerId: input.providerId } : {}),
+      ...(input.accountId ? { accountId: input.accountId } : {}),
+      ...(input.modelRoute.reasoningEffort ? { reasoningEffort: input.modelRoute.reasoningEffort } : {}),
+      ...(input.serviceTier ? { serviceTier: input.serviceTier } : {}),
+      immutablePrefix: this.deps.prefix,
+      ...(input.thread.systemPrompt !== undefined
+        ? { threadSystemPrompt: input.thread.systemPrompt }
+        : {}),
+      ...(input.modeInstruction ? { modeInstruction: input.modeInstruction } : {}),
+      contextInstructions: input.contextInstructions,
+      history: forwardHistory,
+      attachments: input.attachments,
+      tools: input.requestToolSpecs,
+      ...(input.hardRequiredToolName ? { requiredToolName: input.hardRequiredToolName } : {}),
+      ...(this.deps.tokenEconomy ? { tokenEconomy: this.deps.tokenEconomy } : {}),
+      signal: input.signal
     })
   }
 

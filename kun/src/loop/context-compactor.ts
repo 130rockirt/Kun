@@ -49,6 +49,27 @@ export type CompactionTriggerOptions = {
    * `promptTokens` is available.
    */
   overheadTokens?: number
+  /**
+   * Exact local input-token estimate of the already-constructed request
+   * (history + dynamic context + attachments + tools). Acts as a floor on
+   * the input pressure; it never replaces provider usage or the stored-item
+   * estimate, it just prevents the compaction heuristic from under-counting
+   * parts of the request that are not part of the stored history.
+   */
+  requestInputTokens?: number
+  /**
+   * Tokens reserved for the model output on this request. When combined with
+   * `requestHardCapTokens` it lets compaction fire *before* the send-time
+   * `input + output` guard rejects the request, closing the dead zone where
+   * input is below the soft threshold but the full budget is over the cap.
+   */
+  outputBudgetTokens?: number
+  /**
+   * Same hard cap used by the send-time guard (`input + output` may not
+   * exceed it). Only when both this and `outputBudgetTokens` are present
+   * does the budget-driven force compaction apply.
+   */
+  requestHardCapTokens?: number
 }
 
 /**
@@ -123,13 +144,36 @@ export class ContextCompactor {
     // estimate of what we sent by a wide margin, so when the reported count
     // blows past it we distrust the provider and fall back to the estimate.
     const promptTokens = trustworthyPromptTokens(reportedPromptTokens, estimatedTokens, options?.model)
-    const tokens = Math.max(estimatedTokens, promptTokens ?? 0)
-    if (tokens < thresholds.softThreshold) return null
+    const inputPressure = Math.max(
+      estimatedTokens,
+      promptTokens ?? 0,
+      finiteNonNegative(options?.requestInputTokens)
+    )
+    const outputBudgetTokens = finiteNonNegative(options?.outputBudgetTokens)
+    const requestHardCapTokens = finiteNonNegative(options?.requestHardCapTokens)
+    // Budget-driven force compaction: the send-time guard rejects any request
+    // whose input + reserved output exceeds the hard cap. Compacting only on
+    // input thresholds leaves a dead zone when the output budget is larger
+    // than (hard - soft): input can sit below soft while input + output is
+    // already over the cap. Mirror the exact `>` boundary of the guard so
+    // equality never spuriously compacts.
+    if (
+      requestHardCapTokens > 0 &&
+      outputBudgetTokens > 0 &&
+      inputPressure + outputBudgetTokens > requestHardCapTokens
+    ) {
+      return {
+        mode: 'force',
+        keepRecent: 1,
+        reason: `request budget ${inputPressure} input + ${outputBudgetTokens} output exceeds ${requestHardCapTokens}-token hard cap`
+      }
+    }
+    if (inputPressure < thresholds.softThreshold) return null
     const aggressiveThreshold = aggressiveCompactionThreshold(thresholds)
     const mode: CompactionMode =
-      tokens >= thresholds.hardThreshold
+      inputPressure >= thresholds.hardThreshold
         ? 'force'
-        : tokens >= aggressiveThreshold
+        : inputPressure >= aggressiveThreshold
           ? 'aggressive'
           : 'normal'
     const source = promptTokens !== undefined && promptTokens >= estimatedTokens ? 'usage prompt_tokens' : 'estimated prompt tokens'
@@ -137,7 +181,7 @@ export class ContextCompactor {
     return {
       mode,
       keepRecent,
-      reason: `${source} ${tokens} reached ${mode} compaction threshold`
+      reason: `${source} ${inputPressure} reached ${mode} compaction threshold`
     }
   }
 
@@ -678,4 +722,15 @@ function clipText(text: string, max = 360): string {
   const compact = text.replace(/\s+/g, ' ').trim()
   if (compact.length <= max) return compact
   return `${compact.slice(0, Math.max(0, max - 3)).trim()}...`
+}
+
+/**
+ * Normalizes optional token budget inputs so missing, negative, or
+ * non-finite values never poison the compaction math. Returns 0 for
+ * anything that is not a finite non-negative number, which keeps legacy
+ * callers (that omit these fields entirely) on the old behavior.
+ */
+function finiteNonNegative(value: number | undefined): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return 0
+  return Math.max(0, Math.floor(value))
 }
