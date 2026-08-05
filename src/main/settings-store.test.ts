@@ -55,6 +55,143 @@ describe('JsonSettingsStore', () => {
     expect((await development.load()).locale).toBe('zh')
   })
 
+  it('serializes concurrent patches so stale full snapshots cannot overwrite sibling intent', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'kun-serialized-settings-'))
+    let revision = 0
+    let value: string | null = null
+    let releaseFirstWrite!: () => void
+    const firstWriteGate = new Promise<void>((resolve) => { releaseFirstWrite = resolve })
+    let writes = 0
+    const backend = {
+      async read() {
+        return { revision, value }
+      },
+      async write(expectedRevision: number, next: string) {
+        writes += 1
+        if (writes === 1) await firstWriteGate
+        if (expectedRevision !== revision) throw new Error('revision conflict')
+        value = next
+        revision += 1
+        return { revision, value: next }
+      }
+    }
+    const store = new JsonSettingsStore(userDataDir, { documentBackend: backend })
+    await store.load()
+
+    const runtimePatch = store.patch({ agents: { kun: { model: 'deepseek-reasoner' } } })
+    const unrelatedPatch = store.patch({ locale: 'zh' })
+    await vi.waitFor(() => expect(writes).toBe(1))
+    expect(writes).toBe(1)
+
+    releaseFirstWrite()
+    await expect(Promise.all([runtimePatch, unrelatedPatch])).resolves.toHaveLength(2)
+
+    const saved = await store.load()
+    expect(saved.agents.kun.model).toBe('deepseek-reasoner')
+    expect(saved.locale).toBe('zh')
+    expect(writes).toBe(2)
+  })
+
+  it('retries a Manager revision conflict from the exact mutation snapshot', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'kun-revision-retry-settings-'))
+    let revision = 0
+    let value: string | null = null
+    let releaseFirstProfileWrite!: () => void
+    let markFirstProfileWriteStarted!: () => void
+    const firstProfileWriteGate = new Promise<void>((resolve) => { releaseFirstProfileWrite = resolve })
+    const firstProfileWriteStarted = new Promise<void>((resolve) => { markFirstProfileWriteStarted = resolve })
+    let gated = false
+    const backend = {
+      async read() {
+        return { revision, value }
+      },
+      async write(expectedRevision: number, next: string) {
+        const parsed = JSON.parse(next) as { agents?: { kun?: { model?: string } } }
+        if (!gated && expectedRevision === 0 && parsed.agents?.kun?.model === 'deepseek-reasoner') {
+          gated = true
+          markFirstProfileWriteStarted()
+          await firstProfileWriteGate
+        }
+        if (expectedRevision !== revision) {
+          const conflict = new Error('revision conflict') as Error & { currentRevision: number }
+          conflict.name = 'ManagerRevisionConflictError'
+          conflict.currentRevision = revision
+          throw conflict
+        }
+        value = next
+        revision += 1
+        return { revision, value: next }
+      }
+    }
+    const production = new JsonSettingsStore(userDataDir, { documentBackend: backend })
+    const development = new JsonSettingsStore(userDataDir, { documentBackend: backend })
+    await Promise.all([production.load(), development.load()])
+
+    const productionPatch = production.patch({ agents: { kun: { model: 'deepseek-reasoner' } } })
+    await firstProfileWriteStarted
+    await development.patch({ locale: 'zh' })
+    releaseFirstProfileWrite()
+    await productionPatch
+
+    const saved = await production.load()
+    expect(saved.agents.kun.model).toBe('deepseek-reasoner')
+    expect(saved.locale).toBe('zh')
+    expect(revision).toBe(2)
+  })
+
+  it('re-checks an updateIf guard after a Manager revision conflict', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'kun-conditional-retry-settings-'))
+    let revision = 0
+    let value: string | null = null
+    let releaseGuardedWrite!: () => void
+    let markGuardedWriteStarted!: () => void
+    const guardedWriteGate = new Promise<void>((resolve) => { releaseGuardedWrite = resolve })
+    const guardedWriteStarted = new Promise<void>((resolve) => { markGuardedWriteStarted = resolve })
+    let gated = false
+    const backend = {
+      async read() {
+        return { revision, value }
+      },
+      async write(expectedRevision: number, next: string) {
+        const parsed = JSON.parse(next) as { agents?: { kun?: { model?: string } } }
+        if (!gated && expectedRevision === 0 && parsed.agents?.kun?.model === 'deepseek-reasoner') {
+          gated = true
+          markGuardedWriteStarted()
+          await guardedWriteGate
+        }
+        if (expectedRevision !== revision) {
+          const conflict = new Error('revision conflict') as Error & { currentRevision: number }
+          conflict.name = 'ManagerRevisionConflictError'
+          conflict.currentRevision = revision
+          throw conflict
+        }
+        value = next
+        revision += 1
+        return { revision, value: next }
+      }
+    }
+    const production = new JsonSettingsStore(userDataDir, { documentBackend: backend })
+    const development = new JsonSettingsStore(userDataDir, { documentBackend: backend })
+    await Promise.all([production.load(), development.load()])
+
+    const guarded = production.updateIf(
+      (current) => current.locale === 'en',
+      (current) => ({
+        ...current,
+        agents: { kun: { ...current.agents.kun, model: 'deepseek-reasoner' } }
+      })
+    )
+    await guardedWriteStarted
+    await development.patch({ locale: 'zh' })
+    releaseGuardedWrite()
+
+    await expect(guarded).resolves.toMatchObject({ applied: false })
+    const saved = await production.load()
+    expect(saved.locale).toBe('zh')
+    expect(saved.agents.kun.model).not.toBe('deepseek-reasoner')
+    expect(revision).toBe(1)
+  })
+
   it('defaults GUI updates to the stable channel for new settings', async () => {
     const userDataDir = await mkdtemp(join(tmpdir(), 'ds-gui-settings-'))
 

@@ -344,6 +344,7 @@ export class DataMigrationImportOrchestrator {
     const importedPortable = input.input.inspection.catalogs.portableSettings
     const importedAutomations = input.input.inspection.catalogs.automations
     if (importedPortable !== undefined || importedAutomations !== undefined) {
+      const importedAt = new Date().toISOString()
       let next = importedPortable === undefined
         ? input.settings
         : applyPortableSettingsMigration(input.settings, importedPortable)
@@ -352,7 +353,7 @@ export class DataMigrationImportOrchestrator {
           current: next,
           automations: importedAutomations,
           workspacePathMap: input.workspacePathMap,
-          nowIso: new Date().toISOString()
+          nowIso: importedAt
         })
       }
       const beforePortable = portableSettingsForMigration(input.settings)
@@ -378,7 +379,22 @@ export class DataMigrationImportOrchestrator {
         expectedBeforeIdentity: stateIdentity({ beforePortable, workflowIds: input.settings.workflow.workflows.map((item) => item.id), scheduleIds: input.settings.schedule.tasks.map((item) => item.id) }),
         expectedAfterIdentity: stateIdentity({ afterPortable, introducedWorkflowIds, introducedScheduleIds }),
         details: { artifact: 'settings-restore.json' },
-        apply: async () => input.input.settingsStore.save(next),
+        apply: async () => {
+          await input.input.settingsStore.update((current) => {
+            let committed = importedPortable === undefined
+              ? current
+              : applyPortableSettingsMigration(current, importedPortable)
+            if (importedAutomations !== undefined) {
+              committed = importDisabledAutomations({
+                current: committed,
+                automations: importedAutomations,
+                workspacePathMap: input.workspacePathMap,
+                nowIso: importedAt
+              })
+            }
+            return committed
+          })
+        },
         verify: async () => {
           const current = await input.input.settingsStore.load()
           if (stateIdentity(portableSettingsForMigration(current)) !== stateIdentity(afterPortable)) {
@@ -392,39 +408,42 @@ export class DataMigrationImportOrchestrator {
           }
         },
         rollback: async () => {
-          const current = await input.input.settingsStore.load()
-          const warnings: string[] = []
-          const portableUnchanged = stateIdentity(portableSettingsForMigration(current)) === stateIdentity(afterPortable)
-          if (!portableUnchanged) warnings.push('Preserved portable settings modified after import; restore them manually if needed.')
-          const workflowIdsToRemove = new Set(introducedWorkflowIds.filter((id) => {
-            const workflow = current.workflow.workflows.find((item) => item.id === id)
-            if (workflow?.enabled || workflow?.callableByAgent) {
-              warnings.push(`Preserved independently activated imported workflow: ${id}`)
-              return false
-            }
-            return Boolean(workflow)
-          }))
-          const scheduleIdsToRemove = new Set(introducedScheduleIds.filter((id) => {
-            const task = current.schedule.tasks.find((item) => item.id === id)
-            if (task?.enabled) {
-              warnings.push(`Preserved independently activated imported schedule: ${id}`)
-              return false
-            }
-            return Boolean(task)
-          }))
-          const restoredPortable = portableUnchanged ? applyPortableSettingsMigration(current, beforePortable) : current
-          await input.input.settingsStore.save({
-            ...restoredPortable,
-            workflow: {
-              ...restoredPortable.workflow,
-              workflows: restoredPortable.workflow.workflows.filter((item) => !workflowIdsToRemove.has(item.id))
-            },
-            schedule: {
-              ...restoredPortable.schedule,
-              tasks: restoredPortable.schedule.tasks.filter((item) => !scheduleIdsToRemove.has(item.id))
+          const warnings = new Set<string>()
+          await input.input.settingsStore.update((current) => {
+            const portableUnchanged = stateIdentity(portableSettingsForMigration(current)) === stateIdentity(afterPortable)
+            if (!portableUnchanged) warnings.add('Preserved portable settings modified after import; restore them manually if needed.')
+            const workflowIdsToRemove = new Set(introducedWorkflowIds.filter((id) => {
+              const workflow = current.workflow.workflows.find((item) => item.id === id)
+              if (workflow?.enabled || workflow?.callableByAgent) {
+                warnings.add(`Preserved independently activated imported workflow: ${id}`)
+                return false
+              }
+              return Boolean(workflow)
+            }))
+            const scheduleIdsToRemove = new Set(introducedScheduleIds.filter((id) => {
+              const task = current.schedule.tasks.find((item) => item.id === id)
+              if (task?.enabled) {
+                warnings.add(`Preserved independently activated imported schedule: ${id}`)
+                return false
+              }
+              return Boolean(task)
+            }))
+            const restoredPortable = portableUnchanged
+              ? applyPortableSettingsMigration(current, beforePortable)
+              : current
+            return {
+              ...restoredPortable,
+              workflow: {
+                ...restoredPortable.workflow,
+                workflows: restoredPortable.workflow.workflows.filter((item) => !workflowIdsToRemove.has(item.id))
+              },
+              schedule: {
+                ...restoredPortable.schedule,
+                tasks: restoredPortable.schedule.tasks.filter((item) => !scheduleIdsToRemove.has(item.id))
+              }
             }
           })
-          return warnings
+          return [...warnings]
         }
       })
     }

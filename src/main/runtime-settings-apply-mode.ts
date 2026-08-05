@@ -1,8 +1,11 @@
 import type { AppSettingsPatch, AppSettingsV1 } from '../shared/app-settings-types'
+import type { KunRuntimeStatusPayload } from '../shared/kun-gui-api'
 import {
+  applyKunRuntimePatch,
   getKunRuntimeSettings,
   getModelProviderProfile,
   getModelProviderSettings,
+  mergeModelProviderSettings,
   resolveKunRuntimeSettings
 } from '../shared/app-settings'
 import { clawScheduleMcpSettingsChanged } from './claw-schedule-mcp-config'
@@ -21,6 +24,108 @@ export function runtimeSettingsRollbackPatch(
       localGateway: desired.provider.localGateway
     }
   }
+}
+
+export function applyRuntimeSettingsRollback(
+  current: AppSettingsV1,
+  previousWorking: AppSettingsV1,
+  desired: AppSettingsV1
+): AppSettingsV1 {
+  const patch = runtimeSettingsRollbackPatch(previousWorking, desired)
+  const withKun = applyKunRuntimePatch(current, patch.agents?.kun)
+  return {
+    ...withKun,
+    provider: mergeModelProviderSettings(current.provider, patch.provider)
+  }
+}
+
+export type RuntimeRollbackTerminalOutcome =
+  | { kind: 'stopped' }
+  | { kind: 'running' }
+  | { kind: 'superseded' }
+  | { kind: 'restore_failed'; detail: string }
+  | { kind: 'commit_failed'; detail: string }
+
+export function runtimeRollbackTerminalStatus(input: {
+  outcome: RuntimeRollbackTerminalOutcome
+  isCurrent: boolean
+  applyFailure: string
+}): Omit<KunRuntimeStatusPayload, 'at'> {
+  const { outcome, isCurrent, applyFailure } = input
+  if (outcome.kind === 'commit_failed') {
+    return {
+      state: 'failed',
+      source: 'settings-apply-rollback',
+      message: `The new settings failed to apply (${applyFailure}) and the previous settings could not be restored on disk: ${outcome.detail}`
+    }
+  }
+  if (outcome.kind === 'superseded') {
+    return {
+      state: 'failed',
+      source: 'settings-apply-rollback',
+      message: `The Runtime settings apply failed (${applyFailure}) and a newer durable settings snapshot superseded its rollback; Runtime availability is pending reconciliation.`
+    }
+  }
+  if (outcome.kind === 'stopped') {
+    return isCurrent
+      ? {
+          state: 'stopped',
+          source: 'settings-apply',
+          rolledBack: true,
+          message: `The new settings failed to apply (${applyFailure}); previous settings were restored but auto-start is unavailable.`
+        }
+      : {
+          state: 'stopped',
+          source: 'settings-apply',
+          message: 'Kun is stopped because automatic startup is disabled; newer settings remain durable.'
+        }
+  }
+  if (outcome.kind === 'running') {
+    return isCurrent
+      ? {
+          state: 'running',
+          source: 'settings-apply',
+          rolledBack: true,
+          message: `The new settings failed to apply (${applyFailure}); Kun is running on the previous settings again.`
+        }
+      : {
+          state: 'running',
+          source: 'settings-apply-rollback'
+        }
+  }
+  return isCurrent
+    ? {
+        state: 'failed',
+        source: 'settings-apply',
+        rolledBack: true,
+        message: `The new settings failed to apply (${applyFailure}) and restoring the previous settings also failed: ${outcome.detail}`
+      }
+    : {
+        state: 'failed',
+        source: 'settings-apply-rollback',
+        message: `Kun is unavailable after a failed settings rollback (${outcome.detail}); newer settings remain durable.`
+      }
+}
+
+/**
+ * A rollback may only touch the exact Runtime/provider snapshot whose apply
+ * failed. Top-level unrelated settings are intentionally ignored because the
+ * rollback patch does not modify them.
+ */
+export function runtimeRollbackTargetUnchanged(
+  current: AppSettingsV1,
+  failedDesired: AppSettingsV1
+): boolean {
+  return stableSettingsValueEqual(
+    {
+      kun: getKunRuntimeSettings(current),
+      provider: current.provider
+    },
+    {
+      kun: getKunRuntimeSettings(failedDesired),
+      provider: failedDesired.provider
+    }
+  )
 }
 
 /**

@@ -334,6 +334,16 @@ type WorkspaceFileWatchSenderRecord = {
   onDestroyed: () => void
 }
 
+type ProtectedRuntimeRequestLease = Readonly<{
+  runtimeToken: string
+  request: (
+    path: string,
+    method?: string,
+    body?: string,
+    headers?: Record<string, string>
+  ) => Promise<RuntimeRequestResult>
+}>
+
 type RegisterAppIpcHandlersOptions = {
   store: JsonSettingsStore
   withRegistryCredentials?: (settings: AppSettingsV1) => Promise<AppSettingsV1>
@@ -347,7 +357,7 @@ type RegisterAppIpcHandlersOptions = {
     body?: string,
     headers?: Record<string, string>
   ) => Promise<RuntimeRequestResult>
-  getRuntimeAuthToken: (settings: AppSettingsV1) => string
+  acquireRuntimeRequestLease: () => Promise<ProtectedRuntimeRequestLease>
   getRuntimeSettingsSyncStatus: () => KunRuntimeSettingsSyncStatusPayload
   restartRuntime: () => Promise<void>
   fetchUpstreamModels: () => Promise<UpstreamModelsResult>
@@ -663,7 +673,7 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     saveSettingsPatch,
     resetUnreadableCredentials,
     runtimeRequest,
-    getRuntimeAuthToken,
+    acquireRuntimeRequestLease,
     getRuntimeSettingsSyncStatus,
     restartRuntime,
     fetchUpstreamModels,
@@ -1145,14 +1155,45 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       }
     }
 
-    const settings = await store.load()
+    let lease: ProtectedRuntimeRequestLease
+    try {
+      lease = await acquireRuntimeRequestLease()
+    } catch (error) {
+      logError('approval', 'Protected approval Runtime lease acquisition failed.', {
+        approvalRef: approvalLogReference(request.approvalId),
+        decision: request.decision,
+        errorType: error instanceof Error ? error.name : typeof error
+      })
+      return {
+        confirmed: true as const,
+        response: {
+          ok: false,
+          status: 0,
+          body: JSON.stringify({
+            code: 'runtime_unhealthy',
+            message: 'Kun Runtime is unavailable. Retry after it finishes starting.'
+          })
+        }
+      }
+    }
+    const parent = getMainWindow()
+    if (!parent || !dialogParentIsAvailable(parent) || !trustedWorkbenchSenderIsCurrent(event, parent)) {
+      logInfoHandler('approval', 'Protected native approval confirmation was not submitted.', {
+        approvalRef: approvalLogReference(request.approvalId),
+        decision: request.decision,
+        reason: 'parent_or_sender_unavailable_after_runtime_ensure',
+        platform: process.platform,
+        ...(parent ? { window: dialogParentState(parent) } : {})
+      })
+      return { confirmed: false as const }
+    }
     const consentToken = createApprovalConsentToken({
-      runtimeToken: getRuntimeAuthToken(settings),
+      runtimeToken: lease.runtimeToken,
       approvalId: request.approvalId,
       decision: request.decision,
       expiresAt: Date.now() + 30_000
     })
-    const response = await runtimeRequest(
+    const response = await lease.request(
       `/v1/approvals/${encodeURIComponent(request.approvalId)}`,
       'POST',
       JSON.stringify({ decision: request.decision }),

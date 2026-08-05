@@ -746,46 +746,42 @@ export class WorkflowRuntime {
     }
   }
 
-  private async ensureNextRuns(settings: AppSettingsV1): Promise<void> {
+  private async ensureNextRuns(_settings: AppSettingsV1): Promise<void> {
     if (this.stopping) return
-    if (!settings.workflow.enabled) {
-      this.syncPowerSaveBlocker(settings)
-      return
-    }
-    let changed = false
     const now = new Date()
-    const workflows = settings.workflow.workflows.map((workflow) => {
-      const wasInterrupted = workflow.lastStatus === 'running' && !this.runCoordinator.isRunning(workflow.id)
-      const scheduled = workflowHasScheduleTrigger(workflow)
-      if (!workflow.enabled || !scheduled || this.runCoordinator.isRunning(workflow.id)) {
-        if (!wasInterrupted) return workflow
+    const saved = await this.deps.store.update((current) => {
+      if (!current.workflow.enabled) return current
+      let changed = false
+      const workflows = current.workflow.workflows.map((workflow) => {
+        const wasInterrupted = workflow.lastStatus === 'running' && !this.runCoordinator.isRunning(workflow.id)
+        const scheduled = workflowHasScheduleTrigger(workflow)
+        if (!workflow.enabled || !scheduled || this.runCoordinator.isRunning(workflow.id)) {
+          if (!wasInterrupted) return workflow
+          changed = true
+          return {
+            ...workflow,
+            lastStatus: 'error' as const,
+            lastMessage: 'Workflow was interrupted before completion.',
+            updatedAt: now.toISOString()
+          }
+        }
+        if (workflow.nextRunAt && !wasInterrupted) return workflow
         changed = true
         return {
           ...workflow,
-          lastStatus: 'error' as const,
-          lastMessage: 'Workflow was interrupted before completion.',
-          updatedAt: now.toISOString()
+          nextRunAt: computeWorkflowNextRunAt(workflow, now),
+          ...(wasInterrupted
+            ? {
+                lastStatus: 'error' as const,
+                lastMessage: 'Workflow was interrupted before completion.',
+                updatedAt: now.toISOString()
+              }
+            : {})
         }
-      }
-      if (workflow.nextRunAt && !wasInterrupted) return workflow
-      changed = true
-      return {
-        ...workflow,
-        nextRunAt: computeWorkflowNextRunAt(workflow, now),
-        ...(wasInterrupted
-          ? {
-              lastStatus: 'error' as const,
-              lastMessage: 'Workflow was interrupted before completion.',
-              updatedAt: now.toISOString()
-            }
-          : {})
-      }
+      })
+      if (!changed) return current
+      return { ...current, workflow: { ...current.workflow, workflows } }
     })
-    if (!changed) {
-      this.syncPowerSaveBlocker(settings)
-      return
-    }
-    const saved = await this.deps.store.patch({ workflow: { ...settings.workflow, workflows } })
     this.syncPowerSaveBlocker(saved)
   }
 
@@ -794,11 +790,12 @@ export class WorkflowRuntime {
     updater: (workflow: WorkflowV1) => WorkflowV1
   ): Promise<AppSettingsV1> {
     const update = this.workflowUpdateTail.then(async () => {
-      const settings = await this.loadSettings()
-      const workflows = settings.workflow.workflows.map((workflow) =>
-        workflow.id === workflowId ? updater(workflow) : workflow
-      )
-      const saved = await this.deps.store.patch({ workflow: { ...settings.workflow, workflows } })
+      const saved = await this.deps.store.update((current) => {
+        const workflows = current.workflow.workflows.map((workflow) =>
+          workflow.id === workflowId ? updater(workflow) : workflow
+        )
+        return { ...current, workflow: { ...current.workflow, workflows } }
+      })
       this.syncPowerSaveBlocker(saved)
       return saved
     })

@@ -263,6 +263,11 @@ export function configureKunManagerDataPlaneForCurrentProcess(
   return mainManagerBinding
 }
 
+/** Current Main-owned Manager binding for authoritative Runtime discovery. */
+export function getKunServiceManagerBinding(): ServiceManagerConnection | undefined {
+  return mainManagerBinding
+}
+
 /**
  * Called when a READY kun child exits without the GUI asking for it.
  * Startup failures are excluded: those are already reported to the

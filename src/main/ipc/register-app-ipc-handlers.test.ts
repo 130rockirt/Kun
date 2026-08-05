@@ -34,6 +34,13 @@ import {
 } from '../../../kun/src/server/approval-consent.js'
 
 const handlers = new Map<string, (...args: unknown[]) => Promise<unknown>>()
+
+function createGate(): { promise: Promise<void>; release: () => void } {
+  let release!: () => void
+  const promise = new Promise<void>((resolve) => { release = resolve })
+  return { promise, release }
+}
+
 const electronMock = vi.hoisted(() => ({
   showMessageBox: vi.fn(),
   openPath: vi.fn(async () => ''),
@@ -249,7 +256,10 @@ function registerOptions(overrides: Partial<Parameters<typeof import('./register
       movedItems: ['secret.key']
     })),
     runtimeRequest: vi.fn() as never,
-    getRuntimeAuthToken: (current: AppSettingsV1) => current.agents.kun.runtimeToken.trim(),
+    acquireRuntimeRequestLease: vi.fn(async () => ({
+      runtimeToken: 'runtime-auth-token',
+      request: vi.fn(async () => ({ ok: true, status: 200, body: '{}' }))
+    })),
     getRuntimeSettingsSyncStatus: () => ({
       state: 'idle' as const,
       generation: 0,
@@ -865,21 +875,25 @@ describe('registerAppIpcHandlers', () => {
   it('uses the resolved shared runtime token after trusted native approval', async () => {
     const current = settings()
     const resolvedRuntimeToken = 'approval-runtime-secret'
-    const getRuntimeAuthToken = vi.fn(() => resolvedRuntimeToken)
     expect(current.agents.kun.runtimeToken).toBe('')
     const mainFrame = { processId: 10, routingId: 20 }
     const contents = { id: 7, mainFrame }
     const mainWindow = { isDestroyed: () => false, webContents: contents }
-    const runtimeRequest = vi.fn(async (
+    const leaseRequest = vi.fn(async (
       _path: string,
       _method?: string,
       _body?: string,
       _headers?: Record<string, string>
     ) => ({ ok: true, status: 200, body: '{}' }))
+    const acquireRuntimeRequestLease = vi.fn(async () => ({
+      runtimeToken: resolvedRuntimeToken,
+      request: leaseRequest
+    }))
+    const runtimeRequest = vi.fn()
     registerAppIpcHandlers(registerOptions({
       store: { load: vi.fn(async () => current) } as never,
       getMainWindow: () => mainWindow as never,
-      getRuntimeAuthToken,
+      acquireRuntimeRequestLease,
       runtimeRequest
     }))
     const handler = handlers.get('approval:decide')!
@@ -890,17 +904,21 @@ describe('registerAppIpcHandlers', () => {
       senderFrame: { processId: 90, routingId: 91 }
     }, payload)).rejects.toThrow(/trusted workbench frame/)
     expect(runtimeRequest).not.toHaveBeenCalled()
+    expect(acquireRuntimeRequestLease).not.toHaveBeenCalled()
 
     electronMock.showMessageBox.mockResolvedValueOnce({ response: 1 })
     await expect(handler({ sender: contents, senderFrame: mainFrame }, payload))
       .resolves.toEqual({ confirmed: false })
     expect(runtimeRequest).not.toHaveBeenCalled()
+    expect(acquireRuntimeRequestLease).not.toHaveBeenCalled()
 
     electronMock.showMessageBox.mockResolvedValueOnce({ response: 0 })
     await expect(handler({ sender: contents, senderFrame: mainFrame }, payload))
       .resolves.toMatchObject({ confirmed: true, response: { ok: true } })
-    expect(getRuntimeAuthToken).toHaveBeenCalledWith(current)
-    const headers = runtimeRequest.mock.calls[0]?.[3] as Record<string, string>
+    expect(acquireRuntimeRequestLease).toHaveBeenCalledOnce()
+    expect(runtimeRequest).not.toHaveBeenCalled()
+    expect(leaseRequest).toHaveBeenCalledOnce()
+    const headers = leaseRequest.mock.calls[0]?.[3] as Record<string, string>
     const consent = headers[KUN_APPROVAL_CONSENT_HEADER]
     expect(consent).toMatch(/^v1\./)
     expect(new ApprovalConsentVerifier(resolvedRuntimeToken).verifyAndConsume({
@@ -1046,6 +1064,119 @@ describe('registerAppIpcHandlers', () => {
       'Protected native approval confirmation was not submitted.',
       expect.objectContaining({ reason: 'parent_or_sender_unavailable_after_confirmation' })
     )
+  })
+
+  it('fails closed when the approval sender changes while the Runtime lease is acquired', async () => {
+    const mainFrame = { processId: 10, routingId: 20, detached: false }
+    const contents = {
+      id: 7,
+      mainFrame,
+      isDestroyed: () => false
+    }
+    const mainWindow = { isDestroyed: () => false, webContents: contents }
+    let releaseLease!: () => void
+    const leaseGate = new Promise<void>((resolve) => { releaseLease = resolve })
+    const leaseRequest = vi.fn(async () => ({ ok: true, status: 200, body: '{}' }))
+    const acquireRuntimeRequestLease = vi.fn(async () => {
+      await leaseGate
+      return { runtimeToken: 'lease-token', request: leaseRequest }
+    })
+    const logInfo = vi.fn()
+    registerAppIpcHandlers(registerOptions({
+      getMainWindow: () => mainWindow as never,
+      acquireRuntimeRequestLease,
+      logInfo
+    }))
+    electronMock.showMessageBox.mockResolvedValueOnce({ response: 0 })
+
+    const decision = handlers.get('approval:decide')?.({
+      sender: contents,
+      senderFrame: mainFrame
+    }, {
+      approvalId: 'approval-navigated-during-ensure',
+      decision: 'allow',
+      source: 'user'
+    })
+    await vi.waitFor(() => expect(acquireRuntimeRequestLease).toHaveBeenCalledOnce())
+    contents.mainFrame = { processId: 11, routingId: 21, detached: false }
+    releaseLease()
+
+    await expect(decision).resolves.toEqual({ confirmed: false })
+    expect(leaseRequest).not.toHaveBeenCalled()
+    expect(logInfo).toHaveBeenCalledWith(
+      'approval',
+      'Protected native approval confirmation was not submitted.',
+      expect.objectContaining({ reason: 'parent_or_sender_unavailable_after_runtime_ensure' })
+    )
+  })
+
+  it('revalidates a policy approval sender after Runtime lease acquisition', async () => {
+    const mainFrame = { processId: 10, routingId: 20, detached: false }
+    const contents = { id: 7, mainFrame, isDestroyed: () => false }
+    const mainWindow = { isDestroyed: () => false, webContents: contents }
+    const leaseGate = createGate()
+    const leaseRequest = vi.fn(async () => ({ ok: true, status: 200, body: '{}' }))
+    const acquireRuntimeRequestLease = vi.fn(async () => {
+      await leaseGate.promise
+      return { runtimeToken: 'lease-token', request: leaseRequest }
+    })
+    registerAppIpcHandlers(registerOptions({
+      getMainWindow: () => mainWindow as never,
+      acquireRuntimeRequestLease
+    }))
+
+    const decision = handlers.get('approval:decide')?.({
+      sender: contents,
+      senderFrame: mainFrame
+    }, {
+      approvalId: 'approval-policy-during-ensure',
+      decision: 'allow',
+      source: 'policy'
+    })
+    await vi.waitFor(() => expect(acquireRuntimeRequestLease).toHaveBeenCalledOnce())
+    contents.mainFrame = { processId: 11, routingId: 21, detached: false }
+    leaseGate.release()
+
+    await expect(decision).resolves.toEqual({ confirmed: false })
+    expect(leaseRequest).not.toHaveBeenCalled()
+    expect(electronMock.showMessageBox).not.toHaveBeenCalled()
+  })
+
+  it('returns a safe Runtime failure when approval lease acquisition fails', async () => {
+    const mainFrame = { processId: 10, routingId: 20 }
+    const contents = { id: 7, mainFrame, isDestroyed: () => false }
+    const mainWindow = { isDestroyed: () => false, webContents: contents }
+    const logError = vi.fn()
+    registerAppIpcHandlers(registerOptions({
+      getMainWindow: () => mainWindow as never,
+      acquireRuntimeRequestLease: vi.fn(async () => {
+        throw new Error('/Users/private-user/.kun/runtime failed to start')
+      }),
+      logError
+    }))
+
+    const result = await handlers.get('approval:decide')?.({
+      sender: contents,
+      senderFrame: mainFrame
+    }, {
+      approvalId: 'approval-lease-failed',
+      decision: 'deny',
+      source: 'policy'
+    }) as { confirmed: boolean; response: { ok: boolean; body: string } }
+
+    expect(result.confirmed).toBe(true)
+    expect(result.response.ok).toBe(false)
+    expect(result.response.body).toContain('runtime_unhealthy')
+    expect(result.response.body).not.toContain('private-user')
+    expect(logError).toHaveBeenCalledWith(
+      'approval',
+      'Protected approval Runtime lease acquisition failed.',
+      expect.objectContaining({
+        approvalRef: expect.stringMatching(/^sha256:/),
+        errorType: 'Error'
+      })
+    )
+    expect(JSON.stringify(logError.mock.calls)).not.toContain('private-user')
   })
 
   it('rejects every UI plugin bridge outside the trusted top-level workbench frame', async () => {
