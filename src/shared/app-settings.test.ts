@@ -1759,6 +1759,61 @@ describe('schedule settings', () => {
     expect(merged.tasks[0].clawChannelId).toBe('')
     expect(merged.tasks[0].reasoningEffort).toBe('medium')
   })
+
+  it('normalizes daemon settings and keeps legacy scheduled tasks untouched', () => {
+    const normalized = normalizeScheduleSettings({
+      enabled: true,
+      tasks: [{ title: 'Existing', prompt: 'x', schedule: { kind: 'manual', everyMinutes: 60, timeOfDay: '09:00', atTime: '' } }],
+      daemons: {
+        enabled: true,
+        items: [{
+          id: 'd1',
+          title: 'Market watcher',
+          scriptPath: ' kb/daemon.py ',
+          workspaceRoot: '/tmp/ws',
+          threadId: 't-1',
+          heartbeatIntervalSeconds: -5,
+          silenceTimeoutSeconds: 99999,
+          interpreter: 'bogus' as never,
+          push: {
+            enabled: true,
+            channelId: 'ch-1',
+            conversationId: 'cv-1'
+          }
+        }]
+      }
+    } as unknown as Parameters<typeof normalizeScheduleSettings>[0])
+
+    expect(normalized.daemons.enabled).toBe(true)
+    expect(normalized.daemons.items).toHaveLength(1)
+    expect(normalized.tasks).toHaveLength(1)
+    expect(normalized.tasks[0].title).toBe('Existing')
+    const daemon = normalized.daemons.items[0]
+    expect(daemon.id).toBe('d1')
+    expect(daemon.scriptPath).toBe('kb/daemon.py')
+    expect(daemon.workspaceRoot).toBe('/tmp/ws')
+    expect(daemon.threadId).toBe('t-1')
+    expect(daemon.heartbeatIntervalSeconds).toBe(5)
+    expect(daemon.silenceTimeoutSeconds).toBe(86_400)
+    expect(daemon.interpreter).toBe('auto')
+    expect(daemon.push).toEqual({ enabled: true, channelId: 'ch-1', conversationId: 'cv-1' })
+    expect(daemon.enabled).toBe(true)
+  })
+
+  it('defaults daemons to disabled and preserves them through merge', () => {
+    expect(normalizeScheduleSettings(undefined).daemons).toEqual({ enabled: false, items: [] })
+
+    const merged = mergeScheduleSettings(normalizeScheduleSettings(undefined), {
+      daemons: {
+        enabled: true,
+        items: [{ title: 'D', scriptPath: 'd.py' }]
+      }
+    } as Parameters<typeof mergeScheduleSettings>[1])
+    expect(merged.daemons.enabled).toBe(true)
+    expect(merged.daemons.items[0].interpreter).toBe('auto')
+    expect(merged.daemons.items[0].push.enabled).toBe(false)
+    expect(merged.daemons.items[0].push.channelId).toBe('')
+  })
 })
 
 describe('claw runtime prompts', () => {

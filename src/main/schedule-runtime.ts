@@ -36,6 +36,7 @@ import {
   summarizeTaskResult,
   waitForAssistantTextViaRuntime,
   writeJson,
+  type PowerSaveControllerLike,
   type RunPromptOptions,
   type ScheduleModelConfig,
   type ScheduleRuntimeDeps
@@ -45,6 +46,7 @@ import {
   findAvailablePoolIndex,
   releaseWorktree
 } from './services/worktree-service'
+import { PowerSaveController } from './power-save-controller'
 
 export { computeScheduleNextRunAt } from './schedule-runtime-helpers'
 
@@ -79,7 +81,8 @@ export class ScheduleRuntime {
   }>()
   private worktreeLeases = new Map<string, { projectPath: string; poolIndex: number }>()
   private drainingQueue = false
-  private powerSaveBlockerId: number | null = null
+  private readonly powerSaveController: PowerSaveControllerLike | null
+  private keepAwakeHeld = false
   private readonly stopController = new AbortController()
   private readonly activeTasks = new Set<Promise<unknown>>()
   private stopped = false
@@ -87,6 +90,9 @@ export class ScheduleRuntime {
 
   constructor(deps: ScheduleRuntimeDeps) {
     this.deps = deps
+    this.powerSaveController =
+      deps.powerSaveController ??
+      (deps.powerSaveBlocker ? new PowerSaveController(deps.powerSaveBlocker) : null)
   }
 
   private async loadSettings(): Promise<AppSettingsV1> {
@@ -124,7 +130,7 @@ export class ScheduleRuntime {
       this.scheduler = null
     }
     this.closeInternalServer()
-    this.stopPowerSaveBlocker()
+    this.releasePowerSave()
     this.queuedTaskIds.clear()
     this.queuedTaskModes.clear()
     for (const taskId of [...this.taskCompletions.keys()]) {
@@ -983,39 +989,24 @@ export class ScheduleRuntime {
       settings.schedule.keepAwake &&
       settings.schedule.enabled &&
       hasEnabledScheduledTask(settings)
-    if (!shouldKeepAwake) {
-      this.stopPowerSaveBlocker()
-      return
-    }
-    if (this.isPowerSaveBlockerActive()) return
-    const blocker = this.deps.powerSaveBlocker
-    if (!blocker) return
-    this.powerSaveBlockerId = blocker.start('prevent-app-suspension')
+    if (shouldKeepAwake) this.acquirePowerSave()
+    else this.releasePowerSave()
   }
 
-  private stopPowerSaveBlocker(): void {
-    const blocker = this.deps.powerSaveBlocker
-    const id = this.powerSaveBlockerId
-    this.powerSaveBlockerId = null
-    if (!blocker || id == null) return
-    try {
-      if (blocker.isStarted(id)) blocker.stop(id)
-    } catch (error) {
-      this.deps.logError('schedule-power-save', 'Failed to stop power save blocker', {
-        message: error instanceof Error ? error.message : String(error)
-      })
-    }
+  private acquirePowerSave(): void {
+    if (this.keepAwakeHeld || !this.powerSaveController) return
+    this.powerSaveController.acquire()
+    this.keepAwakeHeld = true
+  }
+
+  private releasePowerSave(): void {
+    if (!this.keepAwakeHeld || !this.powerSaveController) return
+    this.powerSaveController.release()
+    this.keepAwakeHeld = false
   }
 
   private isPowerSaveBlockerActive(): boolean {
-    const blocker = this.deps.powerSaveBlocker
-    const id = this.powerSaveBlockerId
-    if (!blocker || id == null) return false
-    try {
-      return blocker.isStarted(id)
-    } catch {
-      return false
-    }
+    return this.powerSaveController?.isActive() ?? false
   }
 }
 

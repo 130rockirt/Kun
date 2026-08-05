@@ -19,6 +19,9 @@ import {
   type ClawRunResult,
   type ClawTaskFromTextResult,
   type ClawRuntimeStatus,
+  type DaemonActionResult,
+  type DaemonLogPage,
+  type DaemonRuntimeStatus,
   type ScheduleRunResult,
   type ScheduleRuntimeStatus,
   type ScheduleTaskFromTextResult,
@@ -91,6 +94,7 @@ import {
   skillSaveFilePayloadSchema,
   settingsPatchSchema,
   streamIdSchema,
+  daemonLogsPayloadSchema,
   workflowRunNodePayloadSchema,
   workflowTestNodePayloadSchema,
   workflowResolveApprovalPayloadSchema,
@@ -163,6 +167,7 @@ import { requestRuntimeProviderQuotas } from '../runtime-provider-quota'
 import { fetchModelsDevCatalog } from '../models-dev-catalog'
 import type { ClawRuntime } from '../claw-runtime'
 import type { ScheduleRuntime } from '../schedule-runtime'
+import type { DaemonRuntime } from '../daemon-runtime'
 import { reloadRenderer } from '../dev-renderer-cache'
 import { verifyTelegramBotToken } from '../telegram-runtime'
 import { startCodexDeviceAuth, pollCodexDeviceAuth, startCodexBrowserAuth } from '../codex-auth'
@@ -363,6 +368,7 @@ type RegisterAppIpcHandlersOptions = {
   fetchUpstreamModels: () => Promise<UpstreamModelsResult>
   getClawRuntime: () => ClawRuntime | null
   getScheduleRuntime: () => ScheduleRuntime | null
+  getDaemonRuntime: () => DaemonRuntime | null
   getWorkflowRuntime: () => WorkflowRuntime | null
   startFeishuInstallQrcode: (isLark: boolean) => Promise<ClawImInstallQrResult>
   pollFeishuInstall: (deviceCode: string) => Promise<ClawImInstallPollResult>
@@ -679,6 +685,7 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     fetchUpstreamModels,
     getClawRuntime,
     getScheduleRuntime,
+    getDaemonRuntime,
     getWorkflowRuntime,
     startFeishuInstallQrcode,
     pollFeishuInstall,
@@ -1261,6 +1268,27 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     const scheduleRuntime = getScheduleRuntime()
     if (!scheduleRuntime) return { ok: false, message: 'Schedule runtime is not initialized.' }
     return scheduleRuntime.runTask(normalizedTaskId)
+  })
+
+  ipcMain.handle('daemon:status', async (): Promise<DaemonRuntimeStatus> =>
+    getDaemonRuntime()?.status() ?? {
+      items: [],
+      powerSaveBlockerActive: false
+    }
+  )
+
+  ipcMain.handle('daemon:restart', async (_, payload: unknown): Promise<DaemonActionResult> => {
+    const daemonId = parseIpcPayload('daemon:restart', streamIdSchema, payload)
+    const daemonRuntime = getDaemonRuntime()
+    if (!daemonRuntime) return { ok: false, message: 'Daemon runtime is not initialized.' }
+    return daemonRuntime.restart(daemonId)
+  })
+
+  ipcMain.handle('daemon:logs', async (_, payload: unknown): Promise<DaemonLogPage> => {
+    const request = parseIpcPayload('daemon:logs', daemonLogsPayloadSchema, payload)
+    const daemonRuntime = getDaemonRuntime()
+    if (!daemonRuntime) return { lines: [], eof: true }
+    return daemonRuntime.readLogs(request.id, { cursor: request.cursor, limit: request.limit })
   })
 
   ipcMain.handle('workflow:status', async (): Promise<WorkflowRuntimeStatus> =>

@@ -1124,6 +1124,81 @@ export type ScheduleSettingsV1 = {
   keepAwake: boolean
   internal: ScheduleInternalSettingsV1
   tasks: ScheduledTaskV1[]
+  /** Session-level daemon threads (long-running per-session scripts). */
+  daemons: SessionDaemonSettingsV1
+}
+
+export type SessionDaemonInterpreter = 'auto' | 'python' | 'node'
+
+export type SessionDaemonPushV1 = {
+  enabled: boolean
+  /** Must reference an enabled weixin Claw IM channel. */
+  channelId: string
+  /** Must reference a conversation owned by that channel; resolved to chatId at runtime. */
+  conversationId: string
+}
+
+export type SessionDaemonV1 = {
+  id: string
+  title: string
+  /** Per-daemon on/off. Global kill switch lives in SessionDaemonSettingsV1.enabled. */
+  enabled: boolean
+  workspaceRoot: string
+  /** Kun thread this daemon is bound to (explicit). */
+  threadId: string
+  /** Workspace-relative or absolute script path. */
+  scriptPath: string
+  interpreter: SessionDaemonInterpreter
+  heartbeatIntervalSeconds: number
+  silenceTimeoutSeconds: number
+  restartOnFailure: boolean
+  push: SessionDaemonPushV1
+  createdAt: string
+  updatedAt: string
+}
+
+export type SessionDaemonSettingsV1 = {
+  /** Global kill switch: off stops every daemon but keeps per-daemon config. */
+  enabled: boolean
+  items: SessionDaemonV1[]
+}
+
+export type DaemonProcessState = 'starting' | 'running' | 'restarting' | 'paused' | 'error'
+
+export type DaemonPushStatusV1 = {
+  /** 'sent' means the WeChat bridge accepted the send attempt, not a delivery receipt. */
+  status: 'sent' | 'failed'
+  at: string
+  message?: string
+}
+
+export type DaemonRuntimeItemStatus = {
+  id: string
+  state: DaemonProcessState
+  pid?: number
+  startedAt?: string
+  lastHeartbeatAt?: string
+  lastOutputAt?: string
+  restartCount: number
+  lastError?: string
+  logPath: string
+  lastPush?: DaemonPushStatusV1
+}
+
+export type DaemonRuntimeStatus = {
+  items: DaemonRuntimeItemStatus[]
+  powerSaveBlockerActive: boolean
+}
+
+export type DaemonActionResult = {
+  ok: boolean
+  message?: string
+}
+
+export type DaemonLogPage = {
+  lines: string[]
+  nextCursor?: string
+  eof: boolean
 }
 
 // ---------------------------------------------------------------------------

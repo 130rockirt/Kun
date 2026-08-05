@@ -258,7 +258,14 @@ async function apiPost(
   baseUrl: string,
   endpoint: string,
   body: JsonRecord,
-  options: { token?: string; timeoutMs?: number; label: string; signal?: AbortSignal }
+  options: {
+    token?: string
+    timeoutMs?: number
+    label: string
+    signal?: AbortSignal
+    /** Endpoint-aware business validation. HTTP 200 alone must not mean success. */
+    validate?: (data: JsonRecord) => string | null
+  }
 ): Promise<JsonRecord> {
   const url = new URL(endpoint, baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`)
   const res = await fetch(url.toString(), {
@@ -271,7 +278,29 @@ async function apiPost(
   if (!res.ok) {
     throw new Error(`${options.label} ${res.status}: ${recordString(data, 'message') || JSON.stringify(data)}`)
   }
+  if (options.validate) {
+    const businessError = options.validate(data)
+    if (businessError) {
+      // HTTP 200 with a business error body is a failed send; surface it instead
+      // of reporting a fake success.
+      throw new Error(`${options.label} ${businessError}: ${recordString(data, 'message') || JSON.stringify(data)}`)
+    }
+  }
   return data
+}
+
+/**
+ * Shared business-level validator for message send endpoints. The WeChat bot
+ * API returns HTTP 200 with `ret`/`errcode` set for failed operations, so a
+ * status-code check alone would swallow errors (the "200 fake success" bug).
+ */
+function validateWeixinBusinessOk(data: JsonRecord): string | null {
+  const ret = data.ret ?? data.errcode ?? data.code
+  if (ret !== undefined && ret !== null && Number(ret) !== 0) {
+    return `business error ret=${String(ret)}`
+  }
+  if (data.ok === false) return 'business error ok=false'
+  return null
 }
 
 function asRecord(value: unknown): JsonRecord {
@@ -793,6 +822,7 @@ async function sendMessageWeixin(params: {
       token: params.account.token,
       timeoutMs: params.timeoutMs ?? DEFAULT_API_TIMEOUT_MS,
       label: 'sendMessage',
+      validate: validateWeixinBusinessOk,
       ...(params.signal ? { signal: params.signal } : {})
     }
   )
