@@ -7,11 +7,16 @@ import type {
   ModelsDevCatalogModel,
   ModelsDevCatalogModality,
   ModelsDevCatalogRequest,
-  ModelsDevCatalogResult
+  ModelsDevCatalogResult,
+  ModelsDevCatalogSource
 } from '../shared/kun-gui-api'
 import { fetchWithOptionalProxy } from './proxy-fetch'
 
 export const MODELS_DEV_CATALOG_URL = 'https://models.dev/api.json'
+// Fallback used when the public catalog is unreachable (network error, timeout,
+// non-2xx status, oversized response, or invalid JSON). Kept in the same
+// provider-map shape so parsing and matching can be shared.
+export const KUN_AGENT_MODELS_URL = 'https://www.kun-agent.com/api/models'
 export const MODELS_DEV_CACHE_TTL_MS = 6 * 60 * 60 * 1_000
 // The public catalog is several megabytes and can take more than ten seconds
 // to download on higher-latency connections. Model IDs are still useful when
@@ -19,6 +24,9 @@ export const MODELS_DEV_CACHE_TTL_MS = 6 * 60 * 60 * 1_000
 // providers stuck on the default profile. Keep the request bounded while
 // allowing enough time for the full catalog to arrive.
 export const MODELS_DEV_TIMEOUT_MS = 30_000
+// The fallback endpoint is first-party and expected to be fast; keep it short
+// so a dead fallback does not double the worst-case wait.
+export const KUN_AGENT_TIMEOUT_MS = 15_000
 export const MODELS_DEV_MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 
 const MAX_PROVIDER_COUNT = 1_000
@@ -42,17 +50,26 @@ type ModelsDevProviderMatch = {
 }
 type CatalogCache = {
   catalog: CatalogRoot
+  source: ModelsDevCatalogSource
   etag?: string
   fetchedAt: number
 }
 type LoadedCatalog = {
   catalog: CatalogRoot
+  source: ModelsDevCatalogSource
   stale: boolean
 }
 type CursorCatalogFamily = {
   providerKey: string
   pattern: RegExp
 }
+
+// Provider keys in the kun-agent.com catalog may differ from models.dev's.
+// Map kun-agent-specific keys onto models.dev keys so the shared matching
+// tables (PROFILE_MATCHES / URL matches) work unchanged. Fill entries in from
+// the real endpoint response during integration testing; an empty table keeps
+// the models.dev primary path byte-for-byte identical.
+const KUN_AGENT_PROVIDER_ALIASES: Record<string, string> = {}
 
 const PROFILE_MATCHES: Record<string, ModelsDevProviderMatch> = {
   deepseek: catalogMatch('deepseek'),
@@ -232,6 +249,7 @@ export class ModelsDevCatalogService {
           providerName: 'Cursor',
           matchMode: 'enrichment-only',
           stale: loaded.stale,
+          source: loaded.source,
           models: resolveCursorModelsDevCatalog(loaded.catalog, request.modelHints ?? [])
         }
       }
@@ -241,7 +259,7 @@ export class ModelsDevCatalogService {
       if (!provider) {
         return {
           status: 'error',
-          message: `models.dev did not contain the mapped provider "${match.providerKey}".`,
+          message: `${catalogSourceLabel(loaded.source)} did not contain the mapped provider "${match.providerKey}".`,
           models: []
         }
       }
@@ -251,6 +269,7 @@ export class ModelsDevCatalogService {
         providerName: provider.name,
         matchMode: match.matchMode,
         stale: loaded.stale,
+        source: loaded.source,
         models: provider.models
       }
     } catch (error) {
@@ -270,7 +289,7 @@ export class ModelsDevCatalogService {
   private async loadCatalog(proxyUrl: string, forceRefresh: boolean): Promise<LoadedCatalog> {
     const cached = this.cache
     if (!forceRefresh && cached && this.now() - cached.fetchedAt < MODELS_DEV_CACHE_TTL_MS) {
-      return { catalog: cached.catalog, stale: false }
+      return { catalog: cached.catalog, source: cached.source, stale: false }
     }
     if (this.inFlight) return this.inFlight
 
@@ -282,45 +301,82 @@ export class ModelsDevCatalogService {
 
   private async refreshCatalog(proxyUrl: string): Promise<LoadedCatalog> {
     const cached = this.cache
+    const attempts: ReadonlyArray<{
+      source: ModelsDevCatalogSource
+      url: string
+      timeoutMs: number
+    }> = [
+      { source: 'models.dev', url: MODELS_DEV_CATALOG_URL, timeoutMs: MODELS_DEV_TIMEOUT_MS },
+      { source: 'kun-agent', url: KUN_AGENT_MODELS_URL, timeoutMs: KUN_AGENT_TIMEOUT_MS }
+    ]
+    let lastError: unknown
+    for (const attempt of attempts) {
+      try {
+        return await this.fetchSource(attempt, cached, proxyUrl)
+      } catch (error) {
+        lastError = error
+      }
+    }
+    if (cached) return { catalog: cached.catalog, source: cached.source, stale: true }
+    throw new Error(
+      `models.dev and the kun-agent.com fallback both failed: ${modelsDevFailureMessage(lastError)}`
+    )
+  }
+
+  private async fetchSource(
+    attempt: { source: ModelsDevCatalogSource; url: string; timeoutMs: number },
+    cached: CatalogCache | null,
+    proxyUrl: string
+  ): Promise<LoadedCatalog> {
+    const { source, url, timeoutMs } = attempt
+    const headers: Record<string, string> = { Accept: 'application/json' }
+    if (cached?.source === source && cached.etag) headers['If-None-Match'] = cached.etag
+    let response: Response
     try {
-      const headers: Record<string, string> = { Accept: 'application/json' }
-      if (cached?.etag) headers['If-None-Match'] = cached.etag
-      const response = await this.fetcher(MODELS_DEV_CATALOG_URL, {
+      response = await this.fetcher(url, {
         method: 'GET',
         headers,
-        signal: AbortSignal.timeout(MODELS_DEV_TIMEOUT_MS)
+        signal: AbortSignal.timeout(timeoutMs)
       }, proxyUrl)
-
-      if (response.status === 304 && cached) {
-        this.cache = { ...cached, fetchedAt: this.now() }
-        await response.body?.cancel().catch(() => undefined)
-        return { catalog: cached.catalog, stale: false }
-      }
-
-      const body = await readBoundedResponseText(response, MODELS_DEV_MAX_RESPONSE_BYTES)
-      if (body.truncated) {
-        throw new Error(
-          `models.dev response exceeded the ${MODELS_DEV_MAX_RESPONSE_BYTES} byte limit.`
-        )
-      }
-      if (!response.ok) {
-        throw new Error(
-          `models.dev responded ${response.status}: ${body.text.slice(0, 300)}`
-        )
-      }
-      const catalog = parseCatalog(body.text)
-      this.cache = {
-        catalog,
-        fetchedAt: this.now(),
-        ...(response.headers.get('etag')
-          ? { etag: response.headers.get('etag') ?? undefined }
-          : {})
-      }
-      return { catalog, stale: false }
     } catch (error) {
-      if (cached) return { catalog: cached.catalog, stale: true }
+      if (error instanceof Error && error.name === 'TimeoutError') {
+        throw new Error(
+          `Request to ${catalogSourceLabel(source)} timed out after ${timeoutMs / 1_000}s.`
+        )
+      }
       throw error
     }
+
+    if (response.status === 304 && cached?.source === source) {
+      this.cache = { ...cached, fetchedAt: this.now() }
+      await response.body?.cancel().catch(() => undefined)
+      return { catalog: cached.catalog, source, stale: false }
+    }
+
+    const body = await readBoundedResponseText(response, MODELS_DEV_MAX_RESPONSE_BYTES)
+    if (body.truncated) {
+      throw new Error(
+        `${catalogSourceLabel(source)} response exceeded the ${MODELS_DEV_MAX_RESPONSE_BYTES} byte limit.`
+      )
+    }
+    if (!response.ok) {
+      throw new Error(
+        `${catalogSourceLabel(source)} responded ${response.status}: ${body.text.slice(0, 300)}`
+      )
+    }
+    const catalog = normalizeCatalogKeys(
+      parseCatalog(body.text, source),
+      source === 'kun-agent' ? KUN_AGENT_PROVIDER_ALIASES : {}
+    )
+    this.cache = {
+      catalog,
+      source,
+      fetchedAt: this.now(),
+      ...(response.headers.get('etag')
+        ? { etag: response.headers.get('etag') ?? undefined }
+        : {})
+    }
+    return { catalog, source, stale: false }
   }
 }
 
@@ -391,17 +447,32 @@ export function fetchModelsDevCatalog(
   return modelsDevCatalogService.fetch(request, settings)
 }
 
-function parseCatalog(body: string): CatalogRoot {
+export function normalizeCatalogKeys(
+  catalog: CatalogRoot,
+  aliases: Readonly<Record<string, string>>
+): CatalogRoot {
+  if (Object.keys(aliases).length === 0) return catalog
+  const normalized: CatalogRoot = {}
+  for (const [key, provider] of Object.entries(catalog)) {
+    const target = aliases[key]?.trim()
+    normalized[target && target !== key ? target : key] = provider
+  }
+  return normalized
+}
+
+function parseCatalog(body: string, source: ModelsDevCatalogSource): CatalogRoot {
   let parsed: unknown
   try {
     parsed = JSON.parse(body) as unknown
   } catch {
-    throw new Error('models.dev returned invalid JSON.')
+    throw new Error(`${catalogSourceLabel(source)} returned invalid JSON.`)
   }
-  if (!isRecord(parsed)) throw new Error('models.dev returned an invalid catalog.')
+  if (!isRecord(parsed)) throw new Error(`${catalogSourceLabel(source)} returned an invalid catalog.`)
   const entries = Object.entries(parsed)
   if (entries.length > MAX_PROVIDER_COUNT) {
-    throw new Error(`models.dev catalog exceeded the ${MAX_PROVIDER_COUNT} provider limit.`)
+    throw new Error(
+      `${catalogSourceLabel(source)} catalog exceeded the ${MAX_PROVIDER_COUNT} provider limit.`
+    )
   }
   return Object.fromEntries(entries)
 }
@@ -477,6 +548,10 @@ function boundedString(value: unknown, maxLength: number): string | undefined {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+function catalogSourceLabel(source: ModelsDevCatalogSource): string {
+  return source === 'models.dev' ? 'models.dev' : 'kun-agent.com'
 }
 
 function modelsDevFailureMessage(error: unknown): string {
