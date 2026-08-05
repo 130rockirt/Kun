@@ -20,7 +20,9 @@ import {
   isSddAssistantThread,
   isEmptySddAssistantThreadCandidate,
   markSddAssistantThread,
+  readSddThreadRegistry,
   sddAssistantThreadIdForDraft,
+  sddThreadIdsForDraft,
   showSddAssistantThreadInSidebar,
   type SddThreadRegistry
 } from '../../sdd/sdd-thread-registry'
@@ -51,8 +53,12 @@ function sddDraftFromRegisteredThread(threadId: string): SddDraft | null {
   }
 }
 
-function sddThreadOwnsDraft(threadId: string, draft: SddDraft): boolean {
-  const ref = sddDraftRefForThreadId(threadId)
+function sddThreadOwnsDraft(
+  threadId: string,
+  draft: SddDraft,
+  registry: SddThreadRegistry = readSddThreadRegistry()
+): boolean {
+  const ref = sddDraftRefForThreadId(threadId, registry)
   return Boolean(
     ref &&
     normalizeWorkspaceRoot(ref.workspaceRoot) === normalizeWorkspaceRoot(draft.workspaceRoot) &&
@@ -61,7 +67,9 @@ function sddThreadOwnsDraft(threadId: string, draft: SddDraft): boolean {
   )
 }
 
-export function shouldRestoreRequirementDraftForSidebarThread(
+/** 当前线程是否仍属于“需求 AI 会话”(Plan release 前的需求阶段)。
+ * 仅用于分类,不代表打开草稿。 */
+export function isRequirementSessionThread(
   threadId: string,
   thread: NormalizedThread | null,
   registry?: SddThreadRegistry
@@ -71,6 +79,14 @@ export function shouldRestoreRequirementDraftForSidebarThread(
     normalizedThreadId &&
     isSddAssistantThread(thread ?? { id: normalizedThreadId }, registry)
   )
+}
+
+/** 挑选草稿当前最合适的 AI 会话:优先仍存在于运行时列表中的最近会话,避免
+ * 新建或切回已经 release 成普通 Code 会话的旧主线程。 */
+function sddRecentThreadIdForDraft(draft: SddDraft): string {
+  const knownThreadIds = new Set(useChatStore.getState().threads.map((thread) => thread.id))
+  const allThreadIds = sddThreadIdsForDraft(draft)
+  return allThreadIds.find((threadId) => knownThreadIds.has(threadId)) ?? allThreadIds[0] ?? ''
 }
 
 type UseWorkbenchSddThreadControllerParams = {
@@ -213,9 +229,12 @@ export function useWorkbenchSddThreadController({
   const ensureSddAssistantThreadForDraft = useCallback(async (
     draft: SddDraft
   ): Promise<string | null> => {
+    const currentThreadId = useChatStore.getState().activeThreadId?.trim() ?? ''
     const registeredThreadId = forceNewSddAssistantThreadRef.current
       ? ''
-      : sddAssistantThreadIdForDraft(draft)
+      : sddThreadOwnsDraft(currentThreadId, draft)
+        ? currentThreadId
+        : sddRecentThreadIdForDraft(draft) || sddAssistantThreadIdForDraft(draft)
     if (registeredThreadId) {
       showSddAssistantThreadInSidebar(registeredThreadId)
       setRoute('chat')
@@ -282,9 +301,11 @@ export function useWorkbenchSddThreadController({
     if (options.openAssistant ?? runtimeConnection === 'ready') {
       setRightSidebarWidth((width) => Math.max(width, 420))
       const currentThreadId = useChatStore.getState().activeThreadId?.trim() ?? ''
+      // 优先保留当前且确实拥有该草稿的会话(含已 release 的会话);其次选仍然
+      // 存在的最近需求 AI 会话;最后才回退到注册表中的主线程。
       let sddThreadId = sddThreadOwnsDraft(currentThreadId, draft)
         ? currentThreadId
-        : sddAssistantThreadIdForDraft(draft)
+        : sddRecentThreadIdForDraft(draft) || sddAssistantThreadIdForDraft(draft)
       if (sddThreadId && useChatStore.getState().activeThreadId !== sddThreadId) {
         showSddAssistantThreadInSidebar(sddThreadId)
         await selectThread(sddThreadId)
@@ -324,9 +345,12 @@ export function useWorkbenchSddThreadController({
     const draft = useSddDraftStore.getState().activeDraft
     if (!draft) return
     setRightSidebarWidth((width) => Math.max(width, 420))
+    const currentThreadId = useChatStore.getState().activeThreadId?.trim() ?? ''
     const threadId = forceNewSddAssistantThreadRef.current
       ? ''
-      : sddAssistantThreadIdForDraft(draft)
+      : sddThreadOwnsDraft(currentThreadId, draft)
+        ? currentThreadId
+        : sddRecentThreadIdForDraft(draft) || sddAssistantThreadIdForDraft(draft)
     if (threadId && useChatStore.getState().activeThreadId !== threadId) {
       await selectThread(threadId)
     }
@@ -432,7 +456,7 @@ export function useWorkbenchSddThreadController({
     const normalizedThreadId = threadId.trim()
     if (!normalizedThreadId) return null
 
-    if (shouldRestoreRequirementDraftForSidebarThread(normalizedThreadId, thread)) {
+    if (isRequirementSessionThread(normalizedThreadId, thread)) {
       return sddDraftFromRegisteredThread(normalizedThreadId)
     }
 

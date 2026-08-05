@@ -789,6 +789,134 @@ describe('chat-store navigation workspace selection', () => {
     expect(harness.selectThread).not.toHaveBeenCalled()
   })
 
+  it('openCode restores the last selected Code thread instead of the newest one', async () => {
+    const harness = buildHarness()
+    harness.state.activeThreadId = null
+    harness.state.lastCodeThreadId = 'thr_older'
+    harness.state.threads = [
+      thread({
+        id: 'thr_newer',
+        title: 'Newer task',
+        workspace: '/Users/zxy/project',
+        updatedAt: '2026-08-01T10:00:00.000Z'
+      }),
+      thread({
+        id: 'thr_older',
+        title: 'Older task',
+        workspace: '/Users/zxy/project',
+        updatedAt: '2026-06-12T10:00:00.000Z'
+      })
+    ]
+
+    await harness.actions.openCode()
+
+    expect(harness.state.route).toBe('chat')
+    expect(harness.selectThread).toHaveBeenCalledWith('thr_older')
+  })
+
+  it('openCode restores a requirement AI session as the Code return target', async () => {
+    const storage = new MemoryStorage()
+    markSddAssistantThread(
+      {
+        id: 'draft-1',
+        workspaceRoot: '/Users/zxy/project',
+        relativePath: '.kunsdd/requirements/draft-1/requirement.md'
+      },
+      'thr_sdd',
+      storage
+    )
+    showSddAssistantThreadInSidebar('thr_sdd', storage)
+    vi.stubGlobal('window', { localStorage: storage })
+    const harness = buildHarness()
+    harness.state.activeThreadId = null
+    harness.state.lastCodeThreadId = 'thr_sdd'
+    harness.state.workspaceRoot = '/Users/zxy/project'
+    harness.state.threads = [
+      thread({
+        id: 'thr_sdd',
+        title: 'Requirement session',
+        workspace: '/Users/zxy/project',
+        updatedAt: '2026-08-01T10:00:00.000Z'
+      })
+    ]
+
+    await harness.actions.openCode()
+
+    expect(harness.state.route).toBe('chat')
+    expect(harness.selectThread).toHaveBeenCalledWith('thr_sdd')
+  })
+
+  it('openCode falls back to the newest Code thread when the remembered one is archived', async () => {
+    const harness = buildHarness()
+    harness.state.activeThreadId = null
+    harness.state.lastCodeThreadId = 'thr_archived'
+    harness.state.threads = [
+      thread({
+        id: 'thr_newer',
+        title: 'Newer task',
+        workspace: '/Users/zxy/project',
+        updatedAt: '2026-08-01T10:00:00.000Z'
+      }),
+      thread({
+        id: 'thr_archived',
+        title: 'Archived task',
+        workspace: '/Users/zxy/project',
+        updatedAt: '2026-06-12T10:00:00.000Z',
+        archived: true
+      })
+    ]
+
+    await harness.actions.openCode()
+
+    expect(harness.state.route).toBe('chat')
+    expect(harness.selectThread).toHaveBeenCalledWith('thr_newer')
+  })
+
+  it('openCode falls back to a Code thread when the remembered thread no longer exists', async () => {
+    const harness = buildHarness()
+    harness.state.activeThreadId = null
+    harness.state.lastCodeThreadId = 'thr_gone'
+    harness.state.threads = [
+      thread({
+        id: 'thr_only',
+        title: 'Only task',
+        workspace: '/Users/zxy/project'
+      })
+    ]
+
+    await harness.actions.openCode()
+
+    expect(harness.state.route).toBe('chat')
+    expect(harness.selectThread).toHaveBeenCalledWith('thr_only')
+  })
+
+  it('refreshThreads clears Code session memory when the remembered thread disappears', async () => {
+    const provider = {
+      listThreads: vi.fn(async () => []),
+      getThreadDetail: vi.fn(async () => ({ blocks: [] }))
+    }
+    registryMock.getProvider.mockReturnValue(provider)
+    vi.stubGlobal('window', {
+      localStorage: new MemoryStorage(),
+      kunGui: {
+        getSettings: vi.fn(async () => ({
+          write: {
+            defaultWorkspaceRoot: '~/.kun/write_workspace',
+            activeWorkspaceRoot: '~/.kun/write_workspace',
+            workspaces: []
+          }
+        }))
+      }
+    })
+    const harness = buildHarness()
+    harness.state.lastCodeThreadId = 'thr_gone'
+    harness.state.threads = []
+
+    await harness.actions.refreshThreads()
+
+    expect(harness.state.lastCodeThreadId).toBeNull()
+  })
+
   it('openDesign does not keep a code thread active in Design mode', () => {
     const harness = buildHarness()
     harness.state.activeThreadId = 'thr_code'

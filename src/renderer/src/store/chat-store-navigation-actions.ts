@@ -108,6 +108,7 @@ import {
   flushLiveBlocks,
   forkedMessageCount,
   forkedTurnCount,
+  isCodeSidebarThread,
   isCodeThread,
   latestThread,
   looksLikeActiveTurnError,
@@ -142,23 +143,44 @@ export function createNavigationActions(
   openCode: async () => {
     const state = get()
     const designRegistry = readDesignThreadRegistry()
+    const writeRegistry = readWriteThreadRegistry()
+    const sddRegistry = readSddThreadRegistry()
     const activeThread = state.activeThreadId
       ? state.threads.find((thread) => thread.id === state.activeThreadId) ?? null
       : null
-    if (activeThread && isCodeThread(activeThread, state.clawChannels, undefined, designRegistry)) {
+    // 当前会话已经是 Code 工作台会话(含仍处于需求阶段的需求 AI 会话)时保持不动。
+    if (
+      activeThread &&
+      activeThread.archived !== true &&
+      isCodeSidebarThread(activeThread, state.clawChannels, writeRegistry, designRegistry, sddRegistry)
+    ) {
       set({ route: 'chat' })
       return
     }
 
     const codeThreads = state.threads.filter((thread) =>
-      isCodeThread(thread, state.clawChannels, undefined, designRegistry)
+      isCodeThread(thread, state.clawChannels, writeRegistry, designRegistry, sddRegistry)
     )
+    // 返回 Code 工作台时优先恢复上次选中的会话,而不是默认选择更新时间最新的会话。
+    const rememberedId = state.lastCodeThreadId?.trim()
+    const rememberedThread = rememberedId
+      ? state.threads.find((thread) => thread.id === rememberedId) ?? null
+      : null
+    const rememberedIsCodeTarget = rememberedThread != null &&
+      rememberedThread.archived !== true &&
+      isCodeSidebarThread(rememberedThread, state.clawChannels, writeRegistry, designRegistry, sddRegistry)
+
+    set({ route: 'chat' })
+    if (rememberedThread && rememberedIsCodeTarget && state.runtimeConnection === 'ready') {
+      await get().selectThread(rememberedThread.id)
+      return
+    }
+
     const selectedWorkspace = normalizeWorkspaceRoot(state.workspaceRoot)
     const target =
       latestThread(codeThreads.filter((thread) => threadBelongsToWorkspace(thread, selectedWorkspace))) ??
       latestThread(codeThreads)
 
-    set({ route: 'chat' })
     if (target && state.runtimeConnection === 'ready') {
       await get().selectThread(target.id)
       return
@@ -1050,6 +1072,12 @@ export function createNavigationActions(
         sseAbortRef.current?.abort()
         sseAbortRef.current = null
       }
+      // 记忆中的 Code 会话被删除或归档后清理,避免长期保存悬空 ID。
+      const rememberedCodeThreadId = get().lastCodeThreadId?.trim() ?? ''
+      const staleCodeThreadMemory = Boolean(
+        rememberedCodeThreadId &&
+        !threads.some((thread) => thread.id === rememberedCodeThreadId && thread.archived !== true)
+      )
       const validIds = new Set(displayThreads.map((t) => t.id))
       set((s) => {
         const w: Record<string, boolean> = {}
@@ -1069,6 +1097,7 @@ export function createNavigationActions(
           codeWorkspaceRoots,
           watchTurnCompletion: w,
           unreadThreadIds: u,
+          ...(staleCodeThreadMemory ? { lastCodeThreadId: null } : {}),
           ...(shouldClearSelection ? clearedThreadSelection() : {})
         }
       })

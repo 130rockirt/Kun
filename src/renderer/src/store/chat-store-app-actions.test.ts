@@ -827,4 +827,50 @@ describe('chat-store app actions composer model loading', () => {
     expect(state.composerModel).toBe('deepseek-v4-pro')
     expect(localStorage.getItem(COMPOSER_MODEL_STORAGE_KEY)).toBe('MiniMax-M2')
   })
+
+  it('records the return route only on first entry into settings', () => {
+    const { actions, state } = buildHarness({
+      ok: true,
+      modelIds: [],
+      modelGroups: []
+    })
+    state.route = 'design'
+    state.settingsReturnRoute = 'chat'
+
+    actions.openSettings('general')
+    expect(state.route).toBe('settings')
+    expect(state.settingsSection).toBe('general')
+    expect(state.settingsReturnRoute).toBe('design')
+
+    // 设置页内部重复打开(切分类/再点设置)不得覆盖原返回目标。
+    state.route = 'settings'
+    actions.openSettings('providers')
+    expect(state.route).toBe('settings')
+    expect(state.settingsSection).toBe('providers')
+    expect(state.settingsReturnRoute).toBe('design')
+  })
+
+  it.each(['write', 'design', 'claw', 'plugins', 'extensions', 'schedule', 'workflow', 'chat'] as const)(
+    'closeSettings restores the %s return route without re-selecting a thread',
+    (returnRoute) => {
+      const { actions, state } = buildHarness({
+        ok: true,
+        modelIds: [],
+        modelGroups: []
+      })
+      state.route = returnRoute
+      state.settingsReturnRoute = 'chat'
+      state.activeThreadId = 'thread-a'
+
+      actions.openSettings('general')
+      expect(state.route).toBe('settings')
+      expect(state.settingsReturnRoute).toBe(returnRoute)
+
+      actions.closeSettings()
+
+      expect(state.route).toBe(returnRoute)
+      // closeSettings 不经过 open*/setRoute 之外的重选会话逻辑,选择保持不变。
+      expect(state.activeThreadId).toBe('thread-a')
+    }
+  )
 })
