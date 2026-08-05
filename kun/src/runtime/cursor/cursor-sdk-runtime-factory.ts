@@ -464,11 +464,23 @@ export function createCursorSdkRuntime(
       let graphPlanCommitted = false
       let graphPlanRetryAllowed = true
       const customTools = toolHost
-        ? buildCursorCustomTools(tools, async (toolName, args, toolCallId) => {
+        ? buildCursorCustomTools(tools, async ({ toolName, args, toolCallId }) => {
             const latestThread = await deps.threadStore.get(threadId)
             const latestTurn = latestThread?.turns.find((candidate) => candidate.id === turnId)
             if (!latestThread || !latestTurn) {
               return { output: 'Cursor SDK Kun tool context expired', isError: true }
+            }
+            // Resolve the tool against the bridged catalog so provider and
+            // tool-kind stay authoritative. An unknown name is a structured
+            // error instead of a bypassed registry resolution.
+            const spec = tools.find((tool) => tool.name.trim() === toolName)
+            if (!spec) {
+              return {
+                output: {
+                  error: `Kun tool ${toolName} is not advertised in the active tool catalog`
+                },
+                isError: true
+              }
             }
             const latestActiveSkillIds = await resolveActiveSkillIds(
               latestThread,
@@ -509,6 +521,8 @@ export function createCursorSdkRuntime(
               const result = await toolHost.execute({
                 callId: toolCallId?.trim() || deps.ids.next('call_cursor_sdk'),
                 toolName,
+                ...(spec.providerId ? { providerId: spec.providerId } : {}),
+                ...(spec.toolKind ? { toolKind: spec.toolKind } : {}),
                 arguments: args
               }, context)
               if (result.item.kind !== 'tool_result') {

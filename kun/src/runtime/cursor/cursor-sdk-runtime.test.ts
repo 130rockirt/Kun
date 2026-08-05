@@ -975,6 +975,15 @@ describe('CursorSdkRuntime', () => {
     )).resolves.toBe('completed')
 
     expect(h.createOptions[0]?.local?.customTools).toHaveProperty('mcp_call_tool')
+    // The per-send local override must carry the same Kun custom tools so
+    // resumed and forced recovery runs never lose the tool catalog.
+    expect(h.sentOptions[0]).toMatchObject({
+      local: expect.objectContaining({
+        customTools: expect.objectContaining({
+          mcp_call_tool: expect.objectContaining({ execute: mcpExecute })
+        })
+      })
+    })
     expect(String(h.sentMessages[0])).toContain('Kun system prompt')
     expect(String(h.sentMessages[0])).toContain('Workspace AGENTS instructions')
     expect(String(h.sentMessages[0])).toContain('Active skill instructions')

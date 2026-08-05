@@ -11,14 +11,20 @@ import {
 
 export type CursorBridgeTool = Pick<
   CapabilityToolSpec,
-  'name' | 'description' | 'inputSchema' | 'providerId' | 'providerKind'
+  'name' | 'description' | 'inputSchema' | 'toolKind' | 'providerId' | 'providerKind'
 >
 
-export type CursorKunToolExecutor = (
-  toolName: string,
-  args: Record<string, unknown>,
+export type CursorKunToolCall = {
+  toolName: string
+  args: Record<string, unknown>
   toolCallId?: string
-) => Promise<KunToolResult>
+  /** Kun catalog provider the tool belongs to; forwarded to ToolHost.execute. */
+  providerId?: string
+  /** Kun catalog tool classification; forwarded to ToolHost.execute. */
+  toolKind?: 'tool_call' | 'command_execution' | 'file_change'
+}
+
+export type CursorKunToolExecutor = (call: CursorKunToolCall) => Promise<KunToolResult>
 
 const CURSOR_BRIDGE_EXCLUDED_TOOL_NAMES = new Set(['echo'])
 
@@ -39,7 +45,13 @@ export function buildCursorCustomTools(
   execute: CursorKunToolExecutor
 ): Record<string, SDKCustomTool> {
   const customTools: Record<string, SDKCustomTool> = {}
-  for (const tool of selectCursorBridgeTools(tools)) {
+  for (const rawTool of selectCursorBridgeTools(tools)) {
+    // Tool names are the SDK-facing identity. Normalize catalog whitespace
+    // once so the callback name, the custom-tools key, and the Kun lookup
+    // always agree.
+    const tool = rawTool.name.trim() === rawTool.name
+      ? rawTool
+      : { ...rawTool, name: rawTool.name.trim() }
     customTools[tool.name] = {
       description: tool.description,
       inputSchema: tool.inputSchema as Record<string, SDKJsonValue>,
@@ -48,7 +60,13 @@ export function buildCursorCustomTools(
         context: SDKCustomToolContext
       ) => {
         try {
-          return mapKunResultToSdkContent(await execute(tool.name, args, context.toolCallId))
+          return mapKunResultToSdkContent(await execute({
+            toolName: tool.name,
+            args,
+            ...(context.toolCallId ? { toolCallId: context.toolCallId } : {}),
+            ...(tool.providerId ? { providerId: tool.providerId } : {}),
+            ...(tool.toolKind ? { toolKind: tool.toolKind } : {})
+          }))
         } catch (error) {
           return {
             content: [{
