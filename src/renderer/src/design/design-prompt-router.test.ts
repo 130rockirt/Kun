@@ -64,7 +64,7 @@ describe('design prompt router', () => {
     })).toEqual({ kind: 'attachment-unsupported' })
   })
 
-  it('routes from-scratch generate briefs to a single turn by default', () => {
+  it('routes from-scratch generate briefs to the multi-page lane by default', () => {
     expect(routeDesignPrompt({
       value: 'Design an operations app',
       attachments: [],
@@ -74,8 +74,8 @@ describe('design prompt router', () => {
       imageOnlyDisplay: 'image display',
       imageOnlyPrompt: 'image prompt'
     })).toMatchObject({
-      kind: 'single-turn',
-      promptText: 'Design an operations app',
+      kind: 'multi-page',
+      brief: 'Design an operations app',
       workspaceRoot: '/workspace'
     })
   })

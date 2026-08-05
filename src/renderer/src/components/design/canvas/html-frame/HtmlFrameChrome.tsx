@@ -22,6 +22,7 @@ type HtmlFrameChromeProps = {
   onQualityDetailsOpenChange: React.Dispatch<React.SetStateAction<boolean>>
   onRequestQualityRepair?: (payload: DesignRuntimeQualityPayload) => void
   onToggleModify: (shapeId: string) => void
+  readOnly?: boolean
 }
 
 export function HtmlFrameChrome({
@@ -40,6 +41,7 @@ export function HtmlFrameChrome({
   screenWidth,
   shapeId,
   shapeName,
+  readOnly,
   onQualityDetailsOpenChange,
   onRequestQualityRepair,
   onToggleModify
@@ -71,7 +73,7 @@ export function HtmlFrameChrome({
             qualityFindings={qualityFindings}
             onRequestQualityRepair={onRequestQualityRepair}
           />
-          {previewWebviewUrl && screenWidth > 170 ? (
+          {previewWebviewUrl && screenWidth > 170 && !readOnly ? (
             <>
               {editing ? (
                 <span className="rounded-full border border-accent/30 bg-white/88 px-2 py-1 text-[10.5px] font-medium text-accent shadow-sm backdrop-blur-md dark:border-accent/45 dark:bg-[#20252e] dark:text-[#aeb8ff]">

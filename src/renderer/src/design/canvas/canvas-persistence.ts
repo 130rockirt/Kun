@@ -87,7 +87,8 @@ function parseRunningAppFrame(raw: unknown): CanvasRunningAppFrame | null {
 function parseEmbeddedArtifact(raw: unknown): CanvasEmbeddedArtifact | null {
   if (!isObj(raw) || typeof raw.id !== 'string' || !raw.id.trim()) return null
   if (raw.kind !== 'html' && raw.kind !== 'svg') return null
-  return { id: raw.id.trim(), kind: raw.kind }
+  const versionId = typeof raw.versionId === 'string' && raw.versionId.trim() ? raw.versionId.trim() : undefined
+  return { id: raw.id.trim(), kind: raw.kind, ...(versionId ? { versionId } : {}) }
 }
 
 function parseShape(raw: unknown, id: string): CanvasShape | null {
