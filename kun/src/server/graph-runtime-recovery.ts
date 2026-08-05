@@ -116,9 +116,17 @@ export async function recoverGraphLeadOwnership(
   for (const run of runs) {
     const thread = await context.threadStore.get(run.threadId)
     const sourceTurn = thread?.turns.find((turn) => turn.id === run.sourceTurnId)
-    if (!sourceTurn) continue
     const terminal = isTerminal(run)
+    if (!sourceTurn) {
+      if (terminal) {
+        await context.supervisor.reconcileTerminal(run.id, { resolveLifecycle: true })
+      }
+      continue
+    }
     if (sourceTurn.status !== 'running') {
+      if (terminal) {
+        await context.supervisor.reconcileTerminal(run.id, { resolveLifecycle: true })
+      }
       if (
         !terminal &&
         (sourceTurn.status === 'completed' ||
@@ -183,16 +191,21 @@ export async function recoverGraphLeadOwnership(
     await context.supervisor.redeliverNow({
       runId: run.id,
       reason: recoveredReason(
-        terminal,
+        run.status,
         exhaustedNodeIds,
         latestSignals.at(-1)?.reason,
         durableSupervisionPending
       ),
-      nodeIds: [...new Set([
-        ...latestSignals.flatMap((signal) => signal.nodeIds),
-        ...pendingReviewNodeIds,
-        ...exhaustedNodeIds
-      ])],
+      nodeIds: terminal
+        ? []
+        : [...new Set([
+            ...latestSignals.flatMap((signal) => signal.nodeIds),
+            ...pendingReviewNodeIds,
+            ...exhaustedNodeIds
+          ])],
+      ...(terminal
+        ? { recoveryKey: `terminal:${run.status}:${run.sourceTurnId}:${lastDeliveredSeq}` }
+        : {}),
       digest: recoveredDigest({
         run,
         terminal,
@@ -244,12 +257,13 @@ function isTerminal(run: GraphRunV1): boolean {
 }
 
 function recoveredReason(
-  terminal: boolean,
+  status: GraphRunV1['status'],
   exhaustedNodeIds: string[],
   latestReason: Parameters<GraphSupervisor['redeliver']>[0]['reason'] | undefined,
   durableSupervisionPending: boolean
 ): Parameters<GraphSupervisor['redeliver']>[0]['reason'] {
-  if (terminal) return 'completion'
+  if (status === 'failed') return 'failure'
+  if (status === 'completed' || status === 'cancelled') return 'completion'
   if (exhaustedNodeIds.length > 0) return 'failure'
   if (latestReason) return latestReason
   return durableSupervisionPending ? 'submitted' : 'recovery'

@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from 'node:util'
 import {
+  GRAPH_CANCELLATION_DISPATCH_FENCE_REASON,
   GRAPH_CONTRACT_VERSION,
   GraphRunV1Schema,
   type GraphAttemptStatus,
@@ -12,15 +13,15 @@ import {
 } from '../contracts/graph.js'
 
 const RUN_TRANSITIONS: Readonly<Record<GraphRunStatus, readonly GraphRunStatus[]>> = {
-  draft: ['validating', 'cancelled'],
-  validating: ['draft', 'ready', 'failed', 'cancelled'],
-  ready: ['running', 'paused', 'cancelled'],
+  draft: ['validating', 'pausing', 'cancelled'],
+  validating: ['draft', 'ready', 'pausing', 'failed', 'cancelled'],
+  ready: ['running', 'pausing', 'paused', 'cancelled'],
   running: ['pausing', 'paused', 'awaiting_supervision', 'awaiting_human', 'completing', 'failed', 'cancelled'],
   pausing: ['paused', 'awaiting_supervision', 'failed', 'cancelled'],
-  paused: ['running', 'awaiting_supervision', 'awaiting_human', 'failed', 'cancelled'],
-  awaiting_supervision: ['running', 'paused', 'awaiting_human', 'completing', 'failed', 'cancelled'],
-  awaiting_human: ['running', 'paused', 'awaiting_supervision', 'completing', 'failed', 'cancelled'],
-  completing: ['completed', 'paused', 'awaiting_supervision', 'awaiting_human', 'failed', 'cancelled'],
+  paused: ['running', 'pausing', 'awaiting_supervision', 'awaiting_human', 'failed', 'cancelled'],
+  awaiting_supervision: ['running', 'pausing', 'paused', 'awaiting_human', 'completing', 'failed', 'cancelled'],
+  awaiting_human: ['running', 'pausing', 'paused', 'awaiting_supervision', 'completing', 'failed', 'cancelled'],
+  completing: ['completed', 'pausing', 'paused', 'awaiting_supervision', 'awaiting_human', 'failed', 'cancelled'],
   completed: [],
   failed: [],
   cancelled: []
@@ -63,10 +64,14 @@ export class GraphReducerError extends Error {
   }
 }
 
+export type GraphReducerOptions = {
+  replayCompatibility?: boolean
+}
+
 export function replayGraphEvents(events: readonly GraphEventEnvelopeV1[]): GraphRunV1 {
   let state: GraphRunV1 | undefined
   for (const event of [...events].sort((a, b) => a.graphSeq - b.graphSeq)) {
-    state = applyGraphEvent(state, event)
+    state = applyGraphEvent(state, event, { replayCompatibility: true })
   }
   if (!state) throw new GraphReducerError('cannot replay an empty Graph event stream')
   return state
@@ -74,7 +79,8 @@ export function replayGraphEvents(events: readonly GraphEventEnvelopeV1[]): Grap
 
 export function applyGraphEvent(
   current: GraphRunV1 | undefined,
-  envelope: GraphEventEnvelopeV1
+  envelope: GraphEventEnvelopeV1,
+  options: GraphReducerOptions = {}
 ): GraphRunV1 {
   if (!current) return createRun(envelope)
   if (envelope.runId !== current.id) {
@@ -107,8 +113,28 @@ export function applyGraphEvent(
     case 'run_status_changed':
       assertTransition('run', next.status, event.payload.from, event.payload.to, RUN_TRANSITIONS)
       next.status = event.payload.to
+      if (event.payload.to === 'pausing') {
+        next.pendingControlIntent = event.payload.pendingControlIntent ??
+          (event.payload.reason === GRAPH_CANCELLATION_DISPATCH_FENCE_REASON
+            ? 'cancel'
+            : 'pause')
+      } else {
+        delete next.pendingControlIntent
+      }
       if (event.payload.to === 'running' && !next.startedAt) next.startedAt = envelope.timestamp
       if (isTerminalRunStatus(event.payload.to)) next.finishedAt = envelope.timestamp
+      break
+    case 'run_control_intent_changed':
+      if (next.status !== 'pausing') {
+        throw new GraphReducerError('run control intent may only change while pausing')
+      }
+      if (event.payload.from !== next.pendingControlIntent) {
+        throw new GraphReducerError(
+          `run control intent expected ${event.payload.from ?? 'none'}; ` +
+          `current is ${next.pendingControlIntent ?? 'none'}`
+        )
+      }
+      next.pendingControlIntent = event.payload.to
       break
     case 'plan_revised':
       applyPlanRevision(
@@ -311,13 +337,31 @@ export function applyGraphEvent(
       ) {
         throw new GraphReducerError(`supervision obligation subject changed: ${obligation.id}`)
       }
+      if (previous.state === 'resolved' && obligation.state === 'resolved') {
+        if (!options.replayCompatibility) {
+          throw new GraphReducerError(
+            `illegal supervision obligation transition resolved -> resolved`
+          )
+        }
+        const previousWithLegacyTimestamps = {
+          ...previous,
+          updatedAt: obligation.updatedAt,
+          resolvedAt: obligation.resolvedAt
+        }
+        if (!isDeepStrictEqual(previousWithLegacyTimestamps, obligation)) {
+          throw new GraphReducerError(
+            `resolved supervision obligation changed: ${obligation.id}`
+          )
+        }
+        break
+      }
       const transitions: Record<typeof previous.state, readonly typeof obligation.state[]> = {
         pending: ['pending', 'delivering', 'retry_scheduled', 'resolved', 'needs_attention'],
         delivering: ['delivering', 'awaiting_action', 'retry_scheduled', 'resolved', 'needs_attention'],
         awaiting_action: ['awaiting_action', 'delivering', 'retry_scheduled', 'resolved', 'needs_attention'],
         retry_scheduled: ['retry_scheduled', 'pending', 'delivering', 'resolved', 'needs_attention'],
         needs_attention: ['needs_attention', 'pending', 'delivering', 'resolved'],
-        resolved: ['resolved']
+        resolved: []
       }
       if (!transitions[previous.state].includes(obligation.state)) {
         throw new GraphReducerError(

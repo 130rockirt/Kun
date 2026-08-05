@@ -477,7 +477,9 @@ Journal 是带 checksum 的 append-only JSONL；sequence 单调递增。snapshot
 2. 过期 lease，标记缺失 worktree。
 3. 对 queued/running/waiting attempt 与 child session 对账。
 4. 缺失 child 变为 orphaned/interrupted，并按剩余 attempt 次数重试或升级。
-5. `pausing` 收敛到 paused；缺 final summary 的 `completing` 回到 supervision。
+5. `pausing` 按持久化的 `pendingControlIntent` 收敛：`pause` 进入 `paused`；
+   `cancel` 或旧 journal 的 `cancellation dispatch fence` 完成幂等 cleanup 后进入
+   `cancelled`。缺 final summary 的 `completing` 回到 supervision。
 6. 写入 cleanup 和 recovery signal，再启动 scheduler。
 
 Retention 只删除超过期限、terminal 且未被 thread reference 引用的 GraphRun。
