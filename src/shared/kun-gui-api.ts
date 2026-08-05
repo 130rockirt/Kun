@@ -401,6 +401,7 @@ export type ModelsDevCatalogRequest = {
   modelHints?: ModelsDevCatalogModelHint[]
 }
 export type ModelsDevCatalogMatchMode = 'catalog' | 'enrichment-only'
+export type ModelsDevCatalogSource = 'models.dev' | 'kun-agent'
 export type ModelsDevCatalogResult =
   | {
       status: 'ok'
@@ -408,6 +409,8 @@ export type ModelsDevCatalogResult =
       providerName: string
       matchMode: ModelsDevCatalogMatchMode
       stale: boolean
+      /** Which catalog source produced the model data (for diagnostics/UI). */
+      source?: ModelsDevCatalogSource
       models: ModelsDevCatalogModel[]
     }
   | { status: 'unmapped'; models: [] }
