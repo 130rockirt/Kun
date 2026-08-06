@@ -60,7 +60,7 @@ import { memoryInstructions } from './memory-instructions.js'
 import { modelCapabilitiesForModel } from './model-context-profile.js'
 import type { ModelRoundEngine } from './model-round-engine.js'
 import { modelClientDiagnostics } from './model-client-diagnostics.js'
-import { composeModelRequest } from './model-request-composer.js'
+import { composeModelRequest, effectiveOutputBudgetTokens } from './model-request-composer.js'
 import { estimateModelRequestInputTokenBreakdown } from './model-request-estimator.js'
 import type { ModelRoutingService } from './model-routing-service.js'
 import {
@@ -712,14 +712,23 @@ export class ModelStepService {
     // send-time guard. The output budget is reserved for this request's
     // completion, so compaction must treat `input + output` as the real
     // pressure instead of only comparing input against the soft threshold.
-    const outputBudgetTokens = modelCapabilities.maxOutputTokens ?? 0
-    // A configured model context window is authoritative. ContextCompactor's
-    // test/embedding thresholds can intentionally be much smaller than a real
-    // model window to exercise compaction, so use its cap only when capability
-    // metadata is unavailable.
+    const declaredOutputBudgetTokens = modelCapabilities.maxOutputTokens
     const requestHardCapTokens = modelCapabilities.contextWindowTokens
       ? Math.floor(modelCapabilities.contextWindowTokens * 0.85)
       : this.deps.compactor.hardCap(model, providerId)
+    // Use the request overhead as the conservative input floor during compaction;
+    // the final request is recalculated after history/image rehydration.
+    const effectiveBudget = (inputTokens: number): number =>
+      modelCapabilities.endpointFormat === 'messages' && declaredOutputBudgetTokens === undefined
+        ? 0
+        : effectiveOutputBudgetTokens({
+            inputTokens,
+            contextCapTokens: requestHardCapTokens,
+            ...(declaredOutputBudgetTokens !== undefined
+              ? { declaredMaxOutputTokens: declaredOutputBudgetTokens }
+              : {})
+          })
+    let outputBudgetTokens = effectiveBudget(requestOverheadTokens)
     // History compaction retries from the latest canonical snapshot to avoid
     // losing concurrent writes. That snapshot deliberately retains internal
     // goal records, including records for goals that later ended or changed.
@@ -797,6 +806,13 @@ export class ModelStepService {
     })
     if (signal.aborted) return 'aborted'
     let inputTokens = composedRequest.sentInputTokens
+    outputBudgetTokens = effectiveBudget(inputTokens)
+    composedRequest = {
+      ...composedRequest,
+      request: outputBudgetTokens > 0
+        ? { ...composedRequest.request, maxTokens: outputBudgetTokens }
+        : composedRequest.request
+    }
     // Send-boundary fallback: the final request is rebuilt with transient
     // image/browser-use rehydration, token economy, and history hygiene, so it
     // can legitimately be larger than the compaction preflight estimated. When
@@ -849,6 +865,13 @@ export class ModelStepService {
       })
       if (signal.aborted) return 'aborted'
       inputTokens = composedRequest.sentInputTokens
+      outputBudgetTokens = effectiveBudget(inputTokens)
+      composedRequest = {
+        ...composedRequest,
+        request: outputBudgetTokens > 0
+          ? { ...composedRequest.request, maxTokens: outputBudgetTokens }
+          : composedRequest.request
+      }
     }
     if (inputTokens + outputBudgetTokens > requestHardCapTokens) {
       const overBy = inputTokens + outputBudgetTokens - requestHardCapTokens

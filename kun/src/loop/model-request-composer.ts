@@ -19,6 +19,22 @@ import { buildThreadProfileInstruction } from '../prompt/kun-prompt-context.js'
 
 const MAX_FORWARDED_TOOL_IMAGES = 3
 
+export const DEFAULT_EFFECTIVE_OUTPUT_BUDGET_TOKENS = 32_768
+
+export function effectiveOutputBudgetTokens(input: {
+  inputTokens: number
+  contextCapTokens: number
+  declaredMaxOutputTokens?: number
+  fallbackTokens?: number
+}): number {
+  const fallback = Math.max(1, Math.floor(input.fallbackTokens ?? DEFAULT_EFFECTIVE_OUTPUT_BUDGET_TOKENS))
+  const declared = input.declaredMaxOutputTokens === undefined
+    ? fallback
+    : Math.max(1, Math.floor(input.declaredMaxOutputTokens))
+  const remaining = Math.max(1, Math.floor(input.contextCapTokens - input.inputTokens))
+  return Math.min(declared, remaining)
+}
+
 export type ModelRequestComposerInput = Readonly<{
   threadId: string
   turnId: string

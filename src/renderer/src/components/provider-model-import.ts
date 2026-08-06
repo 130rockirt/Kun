@@ -109,8 +109,10 @@ export function providerModelImportEntryCanEnrich(
   if (!existingKey) return true
   const existing = provider.modelProfiles[existingKey]
   return (
-    (existing.contextWindowTokens === undefined && entry.catalog.contextWindowTokens !== undefined) ||
-    (existing.maxOutputTokens === undefined && entry.catalog.maxOutputTokens !== undefined)
+    (entry.catalog.contextWindowTokens !== undefined &&
+      existing.contextWindowTokens !== entry.catalog.contextWindowTokens) ||
+    (entry.catalog.maxOutputTokens !== undefined &&
+      existing.maxOutputTokens !== entry.catalog.maxOutputTokens)
   )
 }
 
@@ -191,8 +193,10 @@ export function enrichProviderModelProfiles(
     }
 
     const existing = next[existingKey]
-    const addContext = existing.contextWindowTokens === undefined && catalog?.contextWindowTokens !== undefined
-    const addOutput = existing.maxOutputTokens === undefined && catalog?.maxOutputTokens !== undefined
+    const addContext = catalog?.contextWindowTokens !== undefined &&
+      existing.contextWindowTokens !== catalog.contextWindowTokens
+    const addOutput = catalog?.maxOutputTokens !== undefined &&
+      existing.maxOutputTokens !== catalog.maxOutputTokens
     const mergedAliases = normalizeAliases([...(existing.aliases ?? []), ...aliases])
     const addAliases = mergedAliases.length !== (existing.aliases?.length ?? 0)
     if (!addContext && !addOutput && !addAliases) continue

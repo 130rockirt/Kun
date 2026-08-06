@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { createImmutablePrefix } from '../cache/immutable-prefix.js'
 import { makeToolResultItem, makeUserItem } from '../domain/item.js'
 import { estimateModelRequestInputTokens } from './model-request-estimator.js'
-import { composeModelRequest } from './model-request-composer.js'
+import { composeModelRequest, effectiveOutputBudgetTokens } from './model-request-composer.js'
 import { isModelVisibleImageOutput } from './tool-result-image.js'
 
 const threadId = 'thread_request_composer'
@@ -15,6 +15,26 @@ const emptyAttachments = {
 } as const
 
 describe('composeModelRequest', () => {
+  it('clamps declared output to the remaining safe context capacity', () => {
+    expect(effectiveOutputBudgetTokens({
+      inputTokens: 14_236,
+      contextCapTokens: 111_411,
+      declaredMaxOutputTokens: 128_000
+    })).toBe(97_175)
+    expect(effectiveOutputBudgetTokens({
+      inputTokens: 14_236,
+      contextCapTokens: 111_411,
+      declaredMaxOutputTokens: 500_000
+    })).toBe(97_175)
+  })
+
+  it('uses a finite fallback when a model has no output metadata', () => {
+    expect(effectiveOutputBudgetTokens({
+      inputTokens: 1_000,
+      contextCapTokens: 217_600
+    })).toBe(32_768)
+  })
+
   it('keeps the immutable system prompt verbatim and omits empty optional fields', () => {
     const prefix = createImmutablePrefix({
       systemPrompt: 'stable system prompt',

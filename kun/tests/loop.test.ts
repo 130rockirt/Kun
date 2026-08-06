@@ -535,8 +535,11 @@ describe('AgentLoop', () => {
         messageParts: ['text']
       })
     })
+    // The input alone exceeds the 85k send cap, so the output budget clamp
+    // cannot rescue the request: compaction is the only remedy, and the
+    // current message itself is not compactable.
     await bootstrapThread(h, {
-      request: { prompt: `unfoldable current input ${'工'.repeat(80_000)}` }
+      request: { prompt: `unfoldable current input ${'工'.repeat(90_000)}` }
     })
 
     await expect(h.loop.runTurn(h.threadId, h.turnId)).resolves.toBe('failed')
@@ -558,7 +561,7 @@ describe('AgentLoop', () => {
     expect(events.some((event) => event.kind === 'compaction_completed')).toBe(false)
   })
 
-  it('compacts once with the heuristic when forwarded generated-image output blows the final request past the cap', async () => {
+  it('clamps the send-time output budget when rehydrated generated-image input grows', async () => {
     const requests: ModelRequest[] = []
     const h = makeHarness({
       provider: 'image-fallback',
@@ -587,9 +590,9 @@ describe('AgentLoop', () => {
       )
       // Preflight lands just below the soft threshold (718,127), while the
       // rehydrated forwarded image adds a fixed 1,210-token vision allowance
-      // and pushes the final request just past the 718,928 input ceiling.
-      // The send-boundary fallback must compact exactly once (heuristic, no
-      // summary model call) and let the rebuilt request through.
+      // and pushes the final request past what the declared 131,072 output
+      // budget would allow. The send-time clamp shrinks the output budget to
+      // the remaining capacity (130,663) instead of compacting history.
       for (let index = 0; index < 119; index += 1) {
         await h.sessionStore.appendItem(h.threadId, makeUserItem({
           id: `image_old_${index}`,
@@ -629,11 +632,14 @@ describe('AgentLoop', () => {
       await expect(h.loop.runTurn(h.threadId, h.turnId)).resolves.toBe('completed')
 
       expect(requests).toHaveLength(1)
-      expect(requests[0]?.history[0]).toMatchObject({ kind: 'compaction' })
+      // History stays intact: the clamp absorbed the 1,210-token overage.
+      expect(requests[0]?.history[0]).toMatchObject({ kind: 'user_message' })
+      expect(requests[0]?.maxTokens).toBe(130_494)
       const events = await h.sessionStore.loadEventsSince(h.threadId, 0)
       expect(events.some((event) =>
         event.kind === 'error' && event.code === 'context_window_exceeded'
       )).toBe(false)
+      expect(events.some((event) => event.kind === 'compaction_completed')).toBe(false)
       const compressed = events.find((event) =>
         event.kind === 'pipeline_stage' && event.stage === 'input_compressed'
       )
@@ -641,8 +647,9 @@ describe('AgentLoop', () => {
         kind: 'pipeline_stage',
         stage: 'input_compressed',
         details: expect.objectContaining({
-          fallbackCompactionAttempted: true,
-          fallbackCompactionApplied: true
+          outputBudgetTokens: 130_494,
+          requestHardCapTokens: 850_000,
+          fallbackCompactionAttempted: false
         })
       })
     } finally {

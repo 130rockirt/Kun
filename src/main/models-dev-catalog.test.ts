@@ -53,6 +53,20 @@ function catalogBody(): string {
         }
       }
     },
+    'opencode-go': {
+      id: 'opencode-go',
+      name: 'OpenCode Go',
+      api: 'https://opencode.ai/zen/go/v1',
+      models: {
+        'mimo-v2.5': {
+          id: 'mimo-v2.5',
+          reasoning: true,
+          tool_call: true,
+          modalities: { input: ['text'], output: ['text'] },
+          limit: { context: 131_072, output: 128_000 }
+        }
+      }
+    },
     openai: {
       id: 'openai',
       name: 'OpenAI',
@@ -248,6 +262,18 @@ describe('ModelsDevCatalogService', () => {
         },
         { id: 'catalog-only' }
       ]
+    })
+  })
+
+  it('keeps OpenCode Go output limits in the catalog result', async () => {
+    const fetcher = vi.fn(async () => new Response(catalogBody(), { status: 200 }))
+    const service = new ModelsDevCatalogService(fetcher)
+    await expect(service.fetch({
+      providerId: 'opencode-go',
+      baseUrl: 'https://opencode.ai/zen/go/v1'
+    })).resolves.toMatchObject({
+      status: 'ok',
+      models: [{ id: 'mimo-v2.5', contextWindowTokens: 131_072, maxOutputTokens: 128_000 }]
     })
   })
 
