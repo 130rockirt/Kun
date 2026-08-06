@@ -236,7 +236,8 @@ export function parseServeOptions(
     roles: loadedConfig?.config.roles,
     capabilities: loadedConfig?.config.capabilities ?? DEFAULT_SERVE_OPTIONS.capabilities,
     hooks: loadedConfig?.config.hooks,
-    quality: loadedConfig?.config.quality
+    quality: loadedConfig?.config.quality,
+    lab: loadedConfig?.config.lab
   }
   return ServeOptionsSchema.parse(merged)
 }

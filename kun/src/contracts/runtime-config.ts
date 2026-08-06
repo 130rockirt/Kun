@@ -3,6 +3,7 @@ import {
   ContextCompactionConfigSchema,
   GraphRuntimeConfigSchema,
   KunServeConfigSchema,
+  LabConfigSchema,
   ModelConfigSchema,
   QualityConfigSchema,
   RolesConfigSchema,
@@ -40,7 +41,8 @@ export const RuntimeConfigApplyRequest = z
     roles: RolesConfigSchema.optional(),
     capabilities: KunCapabilitiesConfig.optional(),
     hooks: HooksConfigSchema.optional(),
-    quality: QualityConfigSchema.optional()
+    quality: QualityConfigSchema.optional(),
+    lab: LabConfigSchema.optional()
   })
   .strict()
 

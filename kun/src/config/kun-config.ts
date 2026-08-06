@@ -638,6 +638,44 @@ export const RolesConfigSchema = z
   .strict()
 export type RolesConfig = z.infer<typeof RolesConfigSchema>
 
+/**
+ * Lab (experimental) features. `exploreAgent` turns the first-class
+ * `explore_agent` tool on/off and optionally overrides the child model route
+ * (empty model+providerId = follow the main session). `fast` maps to the
+ * Codex serviceTier `priority` and only takes effect for Codex models that
+ * advertise priority support.
+ */
+export const LabExploreAgentConfigSchema = z
+  .object({
+    enabled: z.boolean().default(true),
+    model: z.string().min(1).optional(),
+    providerId: z.string().min(1).optional(),
+    reasoningEffort: ModelReasoningEffort.optional(),
+    fast: z.boolean().default(false)
+  })
+  .strict()
+  .superRefine((config, ctx) => {
+    const hasModel = Boolean(config.model?.trim())
+    const hasProvider = Boolean(config.providerId?.trim())
+    if (hasModel === hasProvider) return
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: hasModel ? ['providerId'] : ['model'],
+      message: 'exploreAgent model and providerId must be configured together'
+    })
+  })
+export type LabExploreAgentConfig = z.infer<typeof LabExploreAgentConfigSchema>
+
+export const LabConfigSchema = z
+  .object({
+    exploreAgent: LabExploreAgentConfigSchema.default({
+      enabled: true,
+      fast: false
+    })
+  })
+  .strict()
+export type LabConfig = z.infer<typeof LabConfigSchema>
+
 export const KunConfigSchema = z
   .object({
     serve: KunServeConfigSchema.optional(),
@@ -647,6 +685,7 @@ export const KunConfigSchema = z
     graph: GraphRuntimeConfigSchema.optional(),
     roles: RolesConfigSchema.optional(),
     capabilities: KunCapabilitiesConfig.default(DEFAULT_KUN_CAPABILITIES_CONFIG),
+    lab: LabConfigSchema.optional(),
     hooks: HooksConfigSchema.optional(),
     quality: QualityConfigSchema.optional()
   })

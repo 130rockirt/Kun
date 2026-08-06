@@ -168,6 +168,15 @@ export function buildToolPreferenceInstruction(
     )
   }
 
+  if (names.has('explore_agent')) {
+    bullets.push(
+      'Use `explore_agent` for file lookup, code/keyword search, and project information exploration: it runs a dedicated read-oriented child with bash plus exploration tools and returns a file:line summary. Prefer it over `delegate_task` for pure investigation; keep `delegate_task` for broader units of work that need full tool access.'
+    )
+    bullets.push(
+      '`explore_agent` never edits files — do not use it for tasks that require write access.'
+    )
+  }
+
   if (names.has('graph_define_plan')) {
     bullets.push(
       'A durable Graph planning draft already exists. Inspect relevant repository facts with read-only tools, then use `graph_define_plan` with only task keys, objectives, dependencies, acceptance criteria, and repository-relative scopes. The host supplies every execution mechanic.'

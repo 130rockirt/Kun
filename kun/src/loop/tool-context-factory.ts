@@ -52,6 +52,7 @@ export function createToolExecutionContext(
     actingModelRoute: input.actingModelRoute,
     ...(input.approvalIntent ? { approvalIntent: input.approvalIntent } : {}),
     ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}),
+    ...(input.serviceTier ? { serviceTier: input.serviceTier } : {}),
     activeSkillIds: input.activeSkillIds,
     memoryPolicy: { enabled: deps.memoryEnabled },
     delegationPolicy: { enabled: false },

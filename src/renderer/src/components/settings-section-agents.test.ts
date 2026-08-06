@@ -15,12 +15,15 @@ import {
   modelProviderPresetAccountProfile,
   modelProviderPresetProfile,
   modelProviderTokenPlanProfile,
+  type KunLabSettingsV1,
+  type ModelProviderModelProfileV1,
   type ModelProviderProfileV1
 } from '@shared/app-settings'
 import type {
   AntigravitySubscriptionModelCatalog,
   ClaudeSubscriptionProbeResult,
   CursorSubscriptionModel,
+  ModelProviderModelGroup,
   ModelsDevCatalogResult,
   ModelProviderProbeResult
 } from '@shared/kun-gui-api'
@@ -29,6 +32,8 @@ import {
   LaboratorySettingsSection,
   modelProvidersSettingsPatch
 } from './settings-section-agents'
+import { ExploreAgentSettingsPanel } from './settings-section-lab-explore'
+import { useChatStore } from '../store/chat-store'
 import {
   ProvidersSettingsSection,
   antigravityProviderCatalogPatch
@@ -46,6 +51,23 @@ const labels: Record<string, string> = {
   agentsQuickMcp: 'MCP',
   agentsQuickPermissions: 'Permissions',
   agentsQuickLaboratory: 'Laboratory',
+  labExploreTitle: 'Explore agent',
+  labExploreDescription: 'Exploration tool description',
+  labExploreEnabled: 'Enable explore_agent',
+  labExploreEnabledDesc: 'Enable description',
+  labExploreModelMode: 'Model policy',
+  labExploreModelModeDesc: 'Model policy description',
+  labExploreModelModeInherit: 'Follow main model',
+  labExploreModelModeFixed: 'Use fixed model',
+  labExploreModel: 'Explore model',
+  labExploreModelDesc: 'Explore model description',
+  labExploreProvider: 'Explore model provider',
+  labExploreReasoning: 'Explore reasoning effort',
+  labExploreReasoningDesc: 'Reasoning description',
+  labExploreReasoningInherit: 'Follow main reasoning',
+  labExploreFast: 'Codex Fast mode',
+  labExploreFastDesc: 'Fast description',
+  labExploreFastUnsupportedHint: 'Fast unsupported hint',
   agents: 'Agents',
   providers: 'Providers',
   providersDesc: 'Providers description',
@@ -3058,22 +3080,115 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
     expect(laboratoryTabs.map(instanceText)).toEqual([
       'Computer control',
       'Browser',
-      'Graph mode'
+      'Graph mode',
+      'Explore agent'
     ])
     expect(laboratoryTabs.map((tab) => tab.props['aria-selected']))
-      .toEqual([true, false, false])
+      .toEqual([true, false, false, false])
     expect(laboratoryTabs.map((tab) => tab.props['aria-controls'])).toEqual([
       'laboratory-settings-panel-computer',
       'laboratory-settings-panel-browser',
-      'laboratory-settings-panel-graph'
+      'laboratory-settings-panel-graph',
+      'laboratory-settings-panel-explore'
     ])
 
     const laboratoryPanels = renderer.root
       .findAllByProps({ role: 'tabpanel' })
       .filter((panel) => String(panel.props.id ?? '').startsWith('laboratory-settings-panel-'))
-    expect(laboratoryPanels).toHaveLength(3)
+    expect(laboratoryPanels).toHaveLength(4)
     expect(laboratoryPanels.map((panel) => panel.props.hidden))
-      .toEqual([false, true, true])
+      .toEqual([false, true, true, true])
+  })
+
+  it('renders the explore_agent lab panel and gates fast mode on Codex priority models', () => {
+    const renderPanel = (value: KunLabSettingsV1) => renderToStaticMarkup(createElement(
+      ExploreAgentSettingsPanel,
+      {
+        t,
+        value,
+        modelProviders: [],
+        leadProviderId: 'deepseek',
+        leadModel: 'deepseek-v4-pro',
+        selectControlClass: 'select',
+        onChange: () => undefined
+      }
+    ))
+
+    const followMain = renderPanel({
+      exploreAgent: { enabled: true, model: '', providerId: '', fast: false }
+    })
+    expect(followMain).toContain('Enable explore_agent')
+    expect(followMain).toContain('Follow main model')
+    expect(followMain).not.toContain('Codex Fast mode')
+
+    const fixed = renderPanel({
+      exploreAgent: { enabled: true, model: 'deepseek-v4-pro', providerId: 'deepseek', fast: false }
+    })
+    expect(fixed).toContain('Use fixed model')
+    expect(fixed).toContain('Explore reasoning effort')
+    expect(fixed).toContain('Codex Fast mode')
+
+    const disabled = renderPanel({
+      exploreAgent: { enabled: false, model: '', providerId: '', fast: false }
+    })
+    expect(disabled).not.toContain('Follow main model')
+  })
+
+  it('enables the fast toggle only when the selected model advertises Codex priority', async () => {
+    const codexModelProfile: ModelProviderModelProfileV1 = {
+      inputModalities: ['text'],
+      outputModalities: ['text'],
+      supportsToolCalling: true,
+      messageParts: ['text'],
+      serviceTiers: ['priority']
+    }
+    const modelProviders: ModelProviderProfileV1[] = [{
+      id: 'codex-2',
+      name: 'Codex',
+      apiKey: '',
+      baseUrl: '',
+      endpointFormat: 'chat_completions',
+      models: ['gpt-5.4'],
+      presetSource: { presetId: 'codex', mode: 'api' },
+      modelProfiles: { 'gpt-5.4': codexModelProfile }
+    }]
+    const groups: ModelProviderModelGroup[] = [{
+      providerId: 'codex-2',
+      presetSource: 'codex',
+      label: 'Codex',
+      modelIds: ['gpt-5.4'],
+      modelProfiles: { 'gpt-5.4': codexModelProfile }
+    }]
+    const mount = async (): Promise<ReactTestRenderer> => {
+      let renderer: ReactTestRenderer
+      await act(async () => {
+        renderer = createRenderer(createElement(ExploreAgentSettingsPanel, {
+          t,
+          value: { exploreAgent: { enabled: true, model: 'gpt-5.4', providerId: 'codex-2', fast: true } },
+          modelProviders,
+          leadProviderId: 'codex-2',
+          leadModel: 'gpt-5.4',
+          selectControlClass: 'select',
+          onChange: () => undefined
+        }))
+      })
+      return renderer!
+    }
+
+    // Codex model advertising priority: both toggles enabled and checked.
+    useChatStore.setState({ composerModelGroups: groups })
+    let renderer = await mount()
+    let switches = renderer.root.findAllByProps({ role: 'switch' })
+    expect(switches).toHaveLength(2)
+    expect(switches.map((node) => node.props['aria-checked'])).toEqual([true, true])
+    expect(switches.map((node) => node.props['aria-disabled'])).toEqual([false, false])
+
+    // Model without priority support: the fast toggle is disabled and unchecked.
+    useChatStore.setState({ composerModelGroups: [] })
+    renderer = await mount()
+    switches = renderer.root.findAllByProps({ role: 'switch' })
+    expect(switches.map((node) => node.props['aria-checked'])).toEqual([true, false])
+    expect(switches.map((node) => node.props['aria-disabled'])).toEqual([false, true])
   })
 
   it('renders pure JSONL as a selectable storage backend', () => {

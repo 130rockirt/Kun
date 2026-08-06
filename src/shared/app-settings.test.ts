@@ -2196,3 +2196,98 @@ describe('write agent presets', () => {
     ])
   })
 })
+
+describe('lab settings', () => {
+  it('defaults explore_agent to enabled with follow-main model and no fast', () => {
+    const lab = defaultKunRuntimeSettings().lab
+    expect(lab.exploreAgent).toEqual({
+      enabled: true,
+      model: '',
+      providerId: '',
+      fast: false
+    })
+  })
+
+  it('merges nested lab patches field by field', () => {
+    const current = defaultKunRuntimeSettings()
+    const next = mergeKunRuntimeSettings(current, {
+      lab: {
+        exploreAgent: {
+          enabled: false
+        }
+      }
+    })
+    expect(next.lab.exploreAgent).toEqual({
+      enabled: false,
+      model: '',
+      providerId: '',
+      fast: false
+    })
+
+    const configured = mergeKunRuntimeSettings(current, {
+      lab: {
+        exploreAgent: {
+          model: 'gpt-5.4',
+          providerId: 'codex-2',
+          reasoningEffort: 'medium',
+          fast: true
+        }
+      }
+    })
+    expect(configured.lab.exploreAgent).toEqual({
+      enabled: true,
+      model: 'gpt-5.4',
+      providerId: 'codex-2',
+      reasoningEffort: 'medium',
+      fast: true
+    })
+  })
+
+  it('drops a half-configured model override (follow-main fallback)', () => {
+    const next = mergeKunRuntimeSettings(defaultKunRuntimeSettings(), {
+      lab: {
+        exploreAgent: {
+          model: 'gpt-5.4',
+          providerId: ''
+        }
+      }
+    })
+    expect(next.lab.exploreAgent.model).toBe('')
+    expect(next.lab.exploreAgent.providerId).toBe('')
+  })
+
+  it('ignores an invalid reasoning effort value', () => {
+    const next = mergeKunRuntimeSettings(defaultKunRuntimeSettings(), {
+      lab: {
+        exploreAgent: {
+          model: 'gpt-5.4',
+          providerId: 'codex-2',
+          reasoningEffort: 'bogus' as never
+        }
+      }
+    })
+    expect(next.lab.exploreAgent.reasoningEffort).toBeUndefined()
+  })
+
+  it('normalizes a persisted lab section through the full settings envelope', () => {
+    const runtime = mergeKunRuntimeSettings(defaultKunRuntimeSettings(), {
+      lab: {
+        exploreAgent: {
+          model: 'deepseek-v4-flash',
+          providerId: 'deepseek',
+          fast: true
+        }
+      }
+    })
+    const normalized = normalizeAppSettings({
+      ...settings(),
+      agents: { kun: runtime }
+    }).agents.kun.lab.exploreAgent
+    expect(normalized).toEqual({
+      enabled: true,
+      model: 'deepseek-v4-flash',
+      providerId: 'deepseek',
+      fast: true
+    })
+  })
+})

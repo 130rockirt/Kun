@@ -20,6 +20,7 @@ import {
   defaultKunContextCompactionSettings,
   defaultKunBrowserUseSettings,
   defaultKunGraphSettings,
+  defaultKunLabSettings,
   defaultModelProviderSettings,
   isKunRuntimeInsecure,
   kunToolPermissionModeFromSettings,
@@ -46,6 +47,7 @@ import {
   Palette,
   RefreshCw,
   RotateCcw,
+  Search,
   Settings,
   ShieldCheck,
   Sparkles,
@@ -85,6 +87,7 @@ import {
   DesignQualitySettingsPanel
 } from './settings-section-agent-panels'
 import { GraphModeSettingsPanel } from './settings-section-graph-panel'
+import { ExploreAgentSettingsPanel } from './settings-section-lab-explore'
 import { runTrustedUserActivation } from '../extensions/protected-user-activation'
 
 export { modelProvidersSettingsPatch } from './settings-section-providers'
@@ -97,7 +100,7 @@ type AgentsSettingsPanel =
   | 'project'
   | 'runtime'
 type PermissionsSettingsPanel = 'policy' | 'quality'
-type LaboratorySettingsPanel = 'computer' | 'browser' | 'graph'
+type LaboratorySettingsPanel = 'computer' | 'browser' | 'graph' | 'explore'
 
 function panelForSettingsSection(section: unknown): AgentsSettingsPanel {
   if (section === 'permissions') return 'permissions'
@@ -2060,6 +2063,7 @@ export function LaboratorySettingsSection({ ctx }: { ctx: Record<string, any> })
   }
   const browserUse = kun.browserUse ?? defaultKunBrowserUseSettings()
   const graph = kun.graph ?? defaultKunGraphSettings()
+  const lab = kun.lab ?? defaultKunLabSettings()
 
   const updateComputerUse = (patch: Record<string, unknown>): void => {
     updateKun({
@@ -2086,7 +2090,8 @@ export function LaboratorySettingsSection({ ctx }: { ctx: Record<string, any> })
         items={[
           { id: 'computer', label: t('computerUseTitle'), icon: Monitor },
           { id: 'browser', label: t('browserUseSettingsTitle'), icon: Globe2 },
-          { id: 'graph', label: t('graphSettingsTitle'), icon: Workflow }
+          { id: 'graph', label: t('graphSettingsTitle'), icon: Workflow },
+          { id: 'explore', label: t('labExploreTitle'), icon: Search }
         ]}
         value={activePanel}
         onChange={setActivePanel}
@@ -2135,6 +2140,23 @@ export function LaboratorySettingsSection({ ctx }: { ctx: Record<string, any> })
           leadModel={kun.model}
           selectControlClass={selectControlClass}
           onChange={(patch) => updateKun({ graph: patch })}
+        />
+      </SettingsTabPanel>
+
+      <SettingsTabPanel<LaboratorySettingsPanel>
+        baseId="laboratory-settings"
+        tabId="explore"
+        active={activePanel === 'explore'}
+        className="[&>div]:mt-0"
+      >
+        <ExploreAgentSettingsPanel
+          t={t}
+          value={lab}
+          modelProviders={modelProviders}
+          leadProviderId={activeProviderId}
+          leadModel={kun.model}
+          selectControlClass={selectControlClass}
+          onChange={(patch) => updateKun({ lab: patch })}
         />
       </SettingsTabPanel>
     </>

@@ -128,13 +128,15 @@ import {
   type ModelRequestRetryConfig,
   type ServeProviderConfig,
   type StorageConfig,
-  type ToolOutputLimitsConfig
+  type ToolOutputLimitsConfig,
+  type LabConfig
 } from '../config/kun-config.js'
 import { createAgentObservabilityRecorder } from '../telemetry/agent-observability.js'
 import { ApprovalReviewService } from '../services/approval-review-service.js'
 import { buildApprovalReviewModelRouterInput } from '../services/approval-review-model-router.js'
 import { buildBuiltinHooks } from '../hooks/builtins/index.js'
 import { mergeBuiltinSubagentProfiles } from '../delegation/builtin-profiles.js'
+import { buildExploreAgentToolProvider } from '../adapters/tool/explore-agent-tool-provider.js'
 import { InflightTracker } from '../loop/inflight-tracker.js'
 import { SteeringQueue } from '../loop/steering-queue.js'
 import type { TurnRunOutcome } from '../loop/turn-execution-types.js'
@@ -321,6 +323,8 @@ export type KunServeRuntimeOptions = {
   hooks?: HooksConfig
   /** Design-quality linter config; drives the builtin PostToolUse hook. */
   quality?: QualityConfig
+  /** Experimental Lab features (explore_agent toggle + model overrides). */
+  lab?: LabConfig
   startedAt?: string
   instanceId?: string
   buildId?: string
@@ -1549,6 +1553,10 @@ async function createKunServeRuntimeComposition(
       tools: [taskGraphTool]
     },
     ...buildDelegationToolProviders(delegationRuntime, subagentRouter),
+    ...buildExploreAgentToolProvider(
+      delegationRuntime,
+      () => activeOptions.lab?.exploreAgent
+    ),
     ...buildComponentDesignToolProviders(delegationRuntime)
   ])
   let prepareExtensionContributions: ((context?: ToolHostContext) => Promise<void>) | undefined
@@ -3315,7 +3323,8 @@ function mergeRuntimeConfigApplyOptions(
     roles: request.roles ?? current.roles,
     capabilities: request.capabilities ?? current.capabilities,
     hooks: request.hooks ?? current.hooks,
-    quality: request.quality ?? current.quality
+    quality: request.quality ?? current.quality,
+    lab: request.lab ?? current.lab
   }
 }
 

@@ -21,7 +21,8 @@ import {
   ServeProviderConfigSchema,
   StorageConfigSchema,
   TokenEconomyConfigSchema,
-  ToolOutputLimitsConfigSchema
+  ToolOutputLimitsConfigSchema,
+  LabConfigSchema
 } from '../config/kun-config.js'
 import {
   DEFAULT_KUN_CAPABILITIES_CONFIG,
@@ -89,7 +90,8 @@ export const ServeOptionsSchema = z.object({
   roles: RolesConfigSchema.optional(),
   capabilities: KunCapabilitiesConfig.default(DEFAULT_KUN_CAPABILITIES_CONFIG),
   hooks: HooksConfigSchema.optional(),
-  quality: QualityConfigSchema.optional()
+  quality: QualityConfigSchema.optional(),
+  lab: LabConfigSchema.optional()
 }).superRefine((value, ctx) => {
   if (value.insecure && !isLoopbackHost(value.host)) {
     ctx.addIssue({

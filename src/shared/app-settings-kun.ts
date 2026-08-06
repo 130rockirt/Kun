@@ -35,6 +35,8 @@ import {
   type KunHistoryHygieneSettingsV1,
   type KunImageGenerationSettingsV1,
   type KunInstructionSettingsV1,
+  type KunLabSettingsPatchV1,
+  type KunLabSettingsV1,
   type KunLlmDebugSettingsV1,
   type ImageGenerationQuality,
   type ImageGenerationResolution,
@@ -193,7 +195,8 @@ export function defaultKunRuntimeSettings(
     computerUse: defaultKunComputerUseSettings(),
     browserUse: defaultKunBrowserUseSettings(),
     quality: defaultKunQualitySettings(),
-    graph: defaultKunGraphSettings()
+    graph: defaultKunGraphSettings(),
+    lab: defaultKunLabSettings()
   }
 }
 
@@ -643,6 +646,7 @@ export function mergeKunRuntimeSettings(
   const nextRoleModelSlots = mergeOptionalModelSlot(current, patch)
   const nextRoleReasoningSlots = mergeOptionalReasoningSlot(current, patch)
   const nextSubagents = mergeKunSubagentsSettings(current.subagents, patch?.subagents)
+  const nextLab = mergeKunLabSettings(current.lab, patch?.lab)
   // Do not let the nested partial patch leak through the broad object spread;
   // `nextSubagents` below is the fully materialized authoritative value.
   const {
@@ -650,12 +654,14 @@ export function mergeKunRuntimeSettings(
     projectConfig: _projectConfigPatch,
     graph: _graphPatch,
     llmDebug: _llmDebugPatch,
+    lab: _labPatch,
     ...flatPatch
   } = patch ?? {}
   void _subagentsPatch
   void _projectConfigPatch
   void _graphPatch
   void _llmDebugPatch
+  void _labPatch
   // NOTE: approvalPolicy/sandboxMode/reviewer are merged through verbatim from
   // the patch. The three-mode UI selector resolves a deliberate selection to
   // its complete authority snapshot before dispatching the patch. We must NOT
@@ -690,6 +696,7 @@ export function mergeKunRuntimeSettings(
     browserUse: nextBrowserUse,
     quality: nextQuality,
     graph: nextGraph,
+    lab: nextLab,
     ...(nextSubagents !== undefined ? { subagents: nextSubagents } : {})
   }
   // Optional model slots are authoritative from mergeOptionalModelSlot: strip any
@@ -716,6 +723,60 @@ function mergeKunSubagentsSettings(
       ? [...patch.profiles]
       : [...(current?.profiles ?? [])]
   }
+}
+
+export function defaultKunLabSettings(): KunLabSettingsV1 {
+  return {
+    exploreAgent: {
+      enabled: true,
+      model: '',
+      providerId: '',
+      fast: false
+    }
+  }
+}
+
+/**
+ * Merge the experimental Lab section. Nested fields merge field-by-field;
+ * a half-configured model override (only one of model/providerId set) is
+ * treated as "follow the main session" and dropped, mirroring the pairing
+ * rule enforced by the Kun runtime config schema.
+ */
+export function mergeKunLabSettings(
+  current: KunLabSettingsV1 | undefined,
+  patch: KunLabSettingsPatchV1 | undefined
+): KunLabSettingsV1 {
+  const base = current ?? defaultKunLabSettings()
+  if (!patch) return base
+  const baseAgent = base.exploreAgent
+  const rawModel = stringOrFallback(patch.exploreAgent?.model, baseAgent.model).trim()
+  const rawProviderId = stringOrFallback(patch.exploreAgent?.providerId, baseAgent.providerId).trim()
+  const paired = rawModel !== '' && rawProviderId !== ''
+  return {
+    exploreAgent: {
+      enabled: patch.exploreAgent?.enabled ?? baseAgent.enabled,
+      model: paired ? rawModel : '',
+      providerId: paired ? rawProviderId : '',
+      ...(patch.exploreAgent?.reasoningEffort !== undefined
+        ? isModelReasoningEffortValue(patch.exploreAgent.reasoningEffort)
+          ? { reasoningEffort: patch.exploreAgent.reasoningEffort }
+          : baseAgent.reasoningEffort !== undefined
+            ? { reasoningEffort: baseAgent.reasoningEffort }
+            : {}
+        : baseAgent.reasoningEffort !== undefined
+          ? { reasoningEffort: baseAgent.reasoningEffort }
+          : {}),
+      fast: patch.exploreAgent?.fast ?? baseAgent.fast
+    }
+  }
+}
+
+function stringOrFallback(value: string | undefined, fallback: string): string {
+  return typeof value === 'string' ? value : fallback
+}
+
+function isModelReasoningEffortValue(value: unknown): value is ModelReasoningEffort {
+  return typeof value === 'string' && MODEL_REASONING_EFFORTS.includes(value as ModelReasoningEffort)
 }
 
 const OPTIONAL_MODEL_SLOT_KEYS = [

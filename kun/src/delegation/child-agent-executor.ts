@@ -304,6 +304,17 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
     const prompt = input.returnFormat === 'evidence'
       ? `${promptBase}\n\nReturn a concise evidence-based conclusion. Inspect the task with tools so the parent can verify the result.`
       : promptBase
+    if (input.serviceTier === 'priority') {
+      // Mirror the main loop's service-tier gating so users are not silently
+      // charged for a "fast" request the routed model cannot honor.
+      const capabilityProviderId = input.providerId?.trim().toLowerCase() === 'default'
+        ? undefined
+        : input.providerId
+      const capabilities = options.modelCapabilities?.(model, capabilityProviderId)
+      if (!capabilities?.serviceTiers?.includes('priority')) {
+        console.warn(`[kun] fast (serviceTier=priority) requested but unsupported for child model=${model}${input.providerId ? ` provider=${input.providerId}` : ''}`)
+      }
+    }
     const started = await turns.startTurn({
       threadId: thread.id,
       request: {
@@ -317,6 +328,7 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
         approvalReviewer,
         mode: 'agent',
         reasoningEffort: normalizeRoleReasoningEffort(input.reasoningEffort),
+        ...(input.serviceTier ? { serviceTier: input.serviceTier } : {}),
         ...(input.guiDesignCanvas ? { guiDesignCanvas: true } : {}),
         // Child runs have no independent interactive surface for structured prompts.
         disableUserInput: true

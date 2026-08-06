@@ -965,6 +965,7 @@ export class RoundOutcomeCoordinator {
       actingModelRoute: prepared.actingModelRoute,
       approvalIntent: input.turn.prompt,
       reasoningEffort: input.modelReasoningEffort,
+      serviceTier: input.turn.serviceTier === 'priority' ? 'priority' : undefined,
       modelCapabilities: prepared.modelCapabilities,
       ...(input.sourceResultBudgetTokens !== undefined
         ? { sourceResultBudgetTokens: input.sourceResultBudgetTokens }
