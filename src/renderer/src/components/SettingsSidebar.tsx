@@ -23,6 +23,7 @@ import {
   Smartphone,
   Sparkles,
   TerminalSquare,
+  Trash2,
   UsersRound,
   type LucideIcon
 } from 'lucide-react'
@@ -49,6 +50,7 @@ export type SettingsCategory =
   | 'extensions'
   | 'storage'
   | 'dataMigration'
+  | 'uninstall'
 
 type SettingsNavigationItem = {
   category: SettingsCategory
@@ -139,7 +141,8 @@ const SETTINGS_NAVIGATION_GROUPS: SettingsNavigationGroup[] = [
       { category: 'updates', labelKey: 'updates', navigationLabelKey: 'settingsNavUpdates', icon: RefreshCw },
       { category: 'claw', labelKey: 'claw', navigationLabelKey: 'settingsNavPhone', icon: Smartphone },
       { category: 'terminal', labelKey: 'terminal', icon: TerminalSquare },
-      { category: 'debug', labelKey: 'debug', icon: Bug }
+      { category: 'debug', labelKey: 'debug', icon: Bug },
+      { category: 'uninstall', labelKey: 'uninstall', icon: Trash2 }
     ]
   }
 ]
@@ -165,7 +168,8 @@ const SETTINGS_CATEGORY_DESCRIPTION_KEYS: Record<SettingsCategory, string> = {
   debug: 'llmDebugDesc',
   terminal: 'terminalColorModeDesc',
   storage: 'storageRelocationSubtitle',
-  dataMigration: 'dataMigrationSubtitle'
+  dataMigration: 'dataMigrationSubtitle',
+  uninstall: 'uninstallSubtitle'
 }
 
 export function settingsCategoryLabelKey(category: SettingsCategory): string {

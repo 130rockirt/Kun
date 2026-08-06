@@ -76,6 +76,10 @@ const api = {
       return () => ipcRenderer.removeListener('storage-relocation:progress', wrapped)
     }
   },
+  uninstall: {
+    getStatus: () => ipcRenderer.invoke('uninstall:status'),
+    perform: (options) => ipcRenderer.invoke('uninstall:perform', options)
+  },
   runtimeDataRecovery: {
     getStatus: () => ipcRenderer.invoke('runtime-data-recovery:status'),
     execute: (input) => ipcRenderer.invoke('runtime-data-recovery:execute', input)

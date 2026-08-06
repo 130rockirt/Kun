@@ -172,6 +172,7 @@ import { createDaemonPushText } from './daemon-push-service'
 import { createPowerSaveController, type PowerSaveController } from './power-save-controller'
 import { StorageRelocationController } from './storage-relocation/controller'
 import { StorageRelocationEngine } from './storage-relocation/engine'
+import { UninstallController } from './uninstall/controller'
 import { storageRelocationFeatureEnabled } from './storage-relocation/feature-policy'
 import { storageRelocationControlRoot } from './storage-relocation/paths'
 import {
@@ -3464,6 +3465,21 @@ app.whenReady().then(async () => {
       mainWindow?.destroy()
       app.relaunch()
       app.exit(0)
+    }
+  }).registerIpc()
+  new UninstallController({
+    getMainWindow: () => mainWindow,
+    getUserDataPath: () => app.getPath('userData'),
+    getExecPath: () => process.execPath,
+    isPackaged: () => app.isPackaged,
+    getAppImageEnv: () => process.env.APPIMAGE,
+    loadSettings: () => store.load(),
+    prepareForUninstall: async () => {
+      await interruptStorageRelocationWork(serviceManager)
+      await runtimeShutdown.stopForQuit()
+      await shutdownServiceManagerAndWait(serviceManager)
+      if (activeServiceManager === serviceManager) activeServiceManager = null
+      mainWindow?.destroy()
     }
   }).registerIpc()
   const extensionIpcOptions: RegisterExtensionIpcHandlersOptions = {

@@ -45,6 +45,7 @@ import type {
   BrowserUseViewState
 } from './browser-use'
 import type { StorageRelocationApi } from './storage-relocation'
+import type { UninstallApi } from './uninstall'
 import type { RuntimeDataRecoveryApi } from './runtime-data-recovery'
 import type {
   ClipboardImageReadResult,
@@ -587,6 +588,8 @@ export type KunGuiApi = ExtensionIpcApi & {
   }
   /** Windows production storage-root relocation and recovery surface. */
   storageRelocation: StorageRelocationApi
+  /** In-app uninstall: optional full local-data removal and app self-removal. */
+  uninstall: UninstallApi
   /** One-time, path-opaque Runtime migration recovery surface. */
   runtimeDataRecovery: RuntimeDataRecoveryApi
   dataMigration: {
