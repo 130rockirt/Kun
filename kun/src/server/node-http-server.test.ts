@@ -82,4 +82,44 @@ describe('startNodeHttpServer', () => {
       await server.close()
     }
   })
+
+  it('does not crash when the client aborts a streaming response mid-body', async () => {
+    const router = new Router()
+    router.add('GET', '/abort-stream', () => {
+      let started = false
+      return new Response(new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (!started) {
+            started = true
+            controller.enqueue(new TextEncoder().encode('partial'))
+            return
+          }
+          // Intentionally never completes: the client abort is what ends this.
+        }
+      }), {
+        headers: { 'content-type': 'text/plain' }
+      })
+    })
+    router.add('GET', '/health', () => jsonResponse({ status: 'ok' }))
+    const server = await startNodeHttpServer({
+      router,
+      host: '127.0.0.1',
+      port: 0
+    })
+    try {
+      const controller = new AbortController()
+      const response = await fetch(`http://127.0.0.1:${server.port}/abort-stream`, {
+        signal: controller.signal
+      })
+      const reader = response.body?.getReader()
+      await reader?.read()
+      controller.abort()
+      await reader?.cancel().catch(() => undefined)
+
+      await expect(fetch(`http://127.0.0.1:${server.port}/health`)
+        .then((response) => response.json())).resolves.toEqual({ status: 'ok' })
+    } finally {
+      await server.close()
+    }
+  })
 })

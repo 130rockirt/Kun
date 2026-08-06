@@ -430,8 +430,9 @@ describe('CursorSdkRuntime', () => {
     )
     expect(String(h.sentMessages[0])).toContain('<prior_conversation>')
     const trace = (await debugSink.listThread('thread_1')).records[0]
-    expect(trace?.request.body.text).not.toContain('Finish the migration safely.')
-    expect(trace?.request.body.text).toContain('[REDACTED]')
+    if (!trace?.request) throw new Error('expected a request payload in the captured trace')
+    expect(trace.request.body.text).not.toContain('Finish the migration safely.')
+    expect(trace.request.body.text).toContain('[REDACTED]')
   })
 
   test('keeps Graph in plan mode and gives pending review a real second Cursor exchange', async () => {
@@ -1006,7 +1007,7 @@ describe('CursorSdkRuntime', () => {
       providerId: 'mcp:facade',
       providerKind: 'mcp'
     }])
-    const traceBody = JSON.parse(trace?.request.body.text ?? '{}') as Record<string, unknown>
+    const traceBody = JSON.parse(trace?.request?.body?.text ?? '{}') as Record<string, unknown>
     expect(traceBody).toMatchObject({
       instructions: expect.arrayContaining([
         'Kun system prompt',

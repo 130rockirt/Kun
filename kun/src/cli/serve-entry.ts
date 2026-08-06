@@ -10,6 +10,7 @@ import {
 } from './agent-cli.js'
 import { startKunServe, type KunServeHandle } from '../server/runtime-factory.js'
 import {
+  resolveEventLoopHardStallThresholdMs,
   resolveEventLoopStallThresholdMs,
   startEventLoopMonitor
 } from '../server/event-loop-monitor.js'
@@ -242,6 +243,8 @@ async function serveMain(argv: readonly string[]): Promise<number> {
     sandboxMode: info.sandboxMode,
     approvalReviewer: info.approvalReviewer,
     insecure: info.insecure,
+    instanceId: info.instanceId ?? server.instanceId,
+    ...(info.buildId ? { buildId: info.buildId } : {}),
     startedAt: info.startedAt,
     pid: info.pid,
     message: `kun runtime listening on http://${server.host}:${server.port}`
@@ -250,8 +253,20 @@ async function serveMain(argv: readonly string[]): Promise<number> {
   process.stdout.write(JSON.stringify(startupInfo, null, 2) + '\n')
   // Watch for event-loop stalls so a hang that starves /health (and trips the
   // GUI watchdog) is attributable to CPU starvation vs a hard deadlock (#621).
+  // Attach non-sensitive identity so multi-instance log streams stay traceable.
   const loopMonitor = startEventLoopMonitor({
-    stallThresholdMs: resolveEventLoopStallThresholdMs(process.env)
+    stallThresholdMs: resolveEventLoopStallThresholdMs(process.env),
+    hardStallThresholdMs: resolveEventLoopHardStallThresholdMs(process.env),
+    context: () => {
+      const counters = server.runtime.liveCounters?.()
+      return [
+        `instance ${startupInfo.instanceId}`,
+        ...(startupInfo.buildId ? [`build ${startupInfo.buildId.slice(0, 12)}`] : []),
+        ...(counters
+          ? [`active inflight ${counters.inflight}`, `active captures ${counters.activeCaptures}`]
+          : [])
+      ]
+    }
   })
   await new Promise<void>((resolve) => {
     let stopping = false

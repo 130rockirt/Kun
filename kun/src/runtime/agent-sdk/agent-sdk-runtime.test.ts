@@ -425,7 +425,7 @@ describe('AgentSdkRuntime.runTurn', () => {
     expect(serialized).not.toContain('sess_42')
     expect(serialized).not.toContain(internalGoalText)
     expect(serialized).toContain('[REDACTED]')
-    expect(JSON.parse(trace!.request.body.text)).toMatchObject({
+    expect(JSON.parse(trace!.request!.body.text)).toMatchObject({
       system: 'You are kun.',
       instructions: ['Workspace AGENTS.md instruction'],
       tools: [{

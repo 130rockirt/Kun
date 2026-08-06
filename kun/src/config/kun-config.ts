@@ -679,9 +679,10 @@ export function readKunConfigFile(path: string): LoadedKunConfig {
     const message = error instanceof Error ? error.message : String(error)
     throw new Error(`Failed to parse Kun config JSON at ${resolvedPath}: ${message}`)
   }
-  const parsed = KunConfigSchema.safeParse(json)
+  const normalized = normalizeLegacyProviderKinds(json)
+  const parsed = KunConfigSchema.safeParse(normalized)
   if (!parsed.success) {
-    const compatible = parseForwardCompatibleKunConfig(json)
+    const compatible = parseForwardCompatibleKunConfig(normalized)
     if (compatible) {
       return { path: resolvedPath, config: compatible }
     }
@@ -690,6 +691,32 @@ export function readKunConfigFile(path: string): LoadedKunConfig {
     )
   }
   return { path: resolvedPath, config: parsed.data }
+}
+
+/**
+ * Idempotently migrates known legacy provider transport kinds written by older
+ * GUI builds before a provider-id/kind rename. Only `serve.providers.*.kind`
+ * values that map 1:1 to a current enum member are rewritten; everything else
+ * is preserved so the strict schema still reports the exact offending path.
+ */
+function normalizeLegacyProviderKinds(json: unknown): unknown {
+  if (!isRecord(json)) return json
+  const serve = json.serve
+  if (!isRecord(serve)) return json
+  const providers = serve.providers
+  if (!isRecord(providers)) return json
+  let changed = false
+  const nextProviders: Record<string, unknown> = {}
+  for (const [id, provider] of Object.entries(providers)) {
+    if (!isRecord(provider) || provider.kind !== 'gemini-cli-subscription') {
+      nextProviders[id] = provider
+      continue
+    }
+    nextProviders[id] = { ...provider, kind: 'gemini-cli-api' }
+    changed = true
+  }
+  if (!changed) return json
+  return { ...json, serve: { ...serve, providers: nextProviders } }
 }
 
 const FORWARD_COMPATIBLE_TOP_LEVEL_SECTIONS = [

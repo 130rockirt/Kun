@@ -895,7 +895,26 @@ async function yieldToEventLoop(): Promise<void> {
   await new Promise<void>((resolve) => setTimeout(resolve, 0))
 }
 
+/**
+ * Classifies the common better-sqlite3 failure — a prebuilt `.node` binary
+ * compiled for a different Node/Electron ABI — so operators see the exact
+ * compiled vs current ABI instead of a generic "JSONL fallback" line.
+ */
+export function describeSqliteAbiMismatch(message: string): string | null {
+  const compiled = /NODE_MODULE_VERSION (\d+)/.exec(message)?.[1]
+  if (!compiled) return null
+  return `abi: compiled=${compiled} current=${process.versions.modules ?? 'unknown'} ` +
+    `(node ${process.version}, ${process.platform}/${process.arch})`
+}
+
 function warnSqlite(action: string, error: unknown): void {
   const message = error instanceof Error ? error.message : String(error)
-  console.warn(`[kun] hybrid sqlite ${action} failed; using JSONL fallback: ${message}`)
+  const abi = describeSqliteAbiMismatch(message)
+  const hint = abi
+    ? ' Run `npm rebuild better-sqlite3` (or `npm ci`) with the same Node/Electron runtime that launches Kun.'
+    : ' Run `npm rebuild better-sqlite3` if the module is missing or stale.'
+  console.warn(
+    `[kun] hybrid sqlite ${action} failed; using JSONL fallback: ${message}` +
+      `${abi ? ` [${abi}]` : ''}${hint}`
+  )
 }

@@ -1,4 +1,4 @@
-import { appendFile, mkdtemp, readFile, rm, stat } from 'node:fs/promises'
+import { appendFile, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -6,7 +6,34 @@ import {
   MODEL_REQUEST_TRACE_SCHEMA_VERSION,
   type ModelRequestTraceRecord
 } from '../contracts/model-request-trace.js'
-import { ModelRequestTraceStore } from './model-request-trace-store.js'
+import {
+  classifyTracePersistenceError,
+  ModelRequestTraceStore
+} from './model-request-trace-store.js'
+
+describe('classifyTracePersistenceError', () => {
+  it('classifies ENOSPC as storage exhaustion', () => {
+    const error = Object.assign(new Error('no space left on device'), {
+      code: 'ENOSPC',
+      errno: -28,
+      syscall: 'rename'
+    })
+    const message = classifyTracePersistenceError(error)
+    expect(message).toContain('storage exhausted (ENOSPC)')
+    expect(message).toContain('in-memory records retained')
+  })
+
+  it('classifies permission failures distinctly', () => {
+    const error = Object.assign(new Error('permission denied'), { code: 'EACCES' })
+    const message = classifyTracePersistenceError(error)
+    expect(message).toContain('trace persistence permission denied (EACCES)')
+  })
+
+  it('falls back to a generic message for unknown errors', () => {
+    expect(classifyTracePersistenceError(new Error('boom'))).toContain('trace persistence failed: boom')
+    expect(classifyTracePersistenceError('boom')).toContain('trace persistence failed: boom')
+  })
+})
 
 describe('ModelRequestTraceStore', () => {
   const cleanup: string[] = []
@@ -96,6 +123,26 @@ describe('ModelRequestTraceStore', () => {
     const latest = await store.list('thread-1')
     expect(latest.records.map((item) => item.id)).toEqual(['trace-2', 'trace-1'])
     expect(latest.warnings).not.toContain('one malformed trace record was ignored')
+  })
+
+  it('degrades without throwing or blocking when persistence is unavailable', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'kun-model-traces-'))
+    cleanup.push(dataDir)
+    // Replace the observability directory with a file so mkdir/append fail.
+    await writeFile(join(dataDir, 'observability'), 'blocking-file')
+    const store = new ModelRequestTraceStore(dataDir)
+
+    await expect(store.append(record('trace-1', '2026-01-01T00:00:01.000Z'))).resolves.toBeUndefined()
+    const page = await store.list('thread-1')
+    expect(page.records).toEqual([])
+    expect(page.warnings.some((warning) => warning.startsWith('trace persistence failed:'))).toBe(true)
+    const initialWarningCount = page.warnings.length
+
+    // A subsequent append still resolves and the bounded warning set is
+    // deduplicated — the store never enters an unbounded retry/growth loop.
+    await expect(store.append(record('trace-2', '2026-01-01T00:00:02.000Z'))).resolves.toBeUndefined()
+    const second = await store.list('thread-1')
+    expect(second.warnings).toHaveLength(initialWarningCount)
   })
 })
 

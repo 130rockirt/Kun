@@ -3,7 +3,7 @@ import type { ModelRequest, ModelStreamChunk } from '../../ports/model-client.js
 import { makeGoalContextItem, makeToolCallItem, makeToolResultItem } from '../../domain/item.js'
 import { LlmDebugRecorder } from '../../services/llm-debug-recorder.js'
 import { GRAPH_DEFINE_PLAN_INPUT_JSON_SCHEMA } from '../tool/graph-mode-tool-provider.js'
-import { GeminiCliOAuthSource } from './gemini-cli-oauth.js'
+import { GeminiCliOAuthSource, GEMINI_CLI_OAUTH_TOKEN_URL } from './gemini-cli-oauth.js'
 import {
   buildGeminiCliCodeAssistRequest,
   GeminiCliApiModelClient
@@ -245,12 +245,13 @@ describe('GeminiCliApiModelClient', () => {
 
     await drain(client.stream(input))
     const trace = (await recorder.listThread(input.threadId)).records[0]
+    if (!trace?.request) throw new Error('expected a request payload in the captured trace')
     expect(transmittedBody).toContain(signature)
     expect(transmittedBody).toContain(goalText)
-    expect(trace?.request.body.text).not.toContain(signature)
-    expect(trace?.request.body.text).not.toContain(goalText)
-    expect(trace?.request.body.text).toContain('[REDACTED]')
-    expect(trace?.request.headers.values.authorization).not.toContain('official-access-token')
+    expect(trace.request.body.text).not.toContain(signature)
+    expect(trace.request.body.text).not.toContain(goalText)
+    expect(trace.request.body.text).toContain('[REDACTED]')
+    expect(trace.request.headers.values.authorization).not.toContain('official-access-token')
   })
 
   it('returns a conversation-safe login error instead of falling back providers', async () => {
@@ -472,5 +473,117 @@ describe('GeminiCliApiModelClient', () => {
         retryAfterMs: 42_000
       })
     })])
+  })
+
+  it('records a setup-phase trace when loadCodeAssist fails and never fabricates a model request', async () => {
+    const recorder = new LlmDebugRecorder()
+    const fetchImpl = vi.fn(async (url: string | URL | Request) => {
+      if (String(url).endsWith(':loadCodeAssist')) {
+        return new Response(JSON.stringify({ error: { code: 403, message: 'forbidden' } }), {
+          status: 403,
+          headers: { 'content-type': 'application/json' }
+        })
+      }
+      throw new Error('streamGenerateContent must not be reached')
+    }) as unknown as typeof fetch
+    const client = new GeminiCliApiModelClient({
+      model: 'gemini-2.5-flash',
+      fetchImpl,
+      oauthSource: oauth(fetchImpl),
+      debugSink: recorder
+    })
+
+    const chunks = await drain(client.stream(request()))
+    expect(chunks).toEqual([expect.objectContaining({
+      kind: 'error',
+      code: 'gemini_cli_setup_failed'
+    })])
+    const page = await recorder.listThread('thread-gemini')
+    expect(page.records).toHaveLength(1)
+    expect(page.records[0]).toMatchObject({
+      phase: 'setup',
+      failureOrigin: 'setup',
+      diagnosticCode: 'gemini_cli_setup_failed'
+    })
+    expect(page.records[0]?.response?.status).toBe(403)
+    expect(page.records[0]?.request).toBeDefined()
+  })
+
+  it('records a not_started credential diagnostic when no credential exists', async () => {
+    const recorder = new LlmDebugRecorder()
+    const client = new GeminiCliApiModelClient({
+      model: 'gemini-2.5-flash',
+      fetchImpl: vi.fn() as unknown as typeof fetch,
+      oauthSource: new GeminiCliOAuthSource({ loadCredential: async () => null }),
+      debugSink: recorder
+    })
+
+    const chunks = await drain(client.stream(request()))
+    expect(chunks).toEqual([expect.objectContaining({
+      kind: 'error',
+      code: 'gemini_cli_login_required'
+    })])
+    const page = await recorder.listThread('thread-gemini')
+    expect(page.records).toHaveLength(1)
+    expect(page.records[0]).toMatchObject({
+      status: 'not_started',
+      phase: 'credential',
+      failureOrigin: 'credential',
+      diagnosticCode: 'gemini_cli_login_required'
+    })
+    expect(page.records[0]?.request).toBeUndefined()
+  })
+
+  it('records a credential diagnostic when OAuth refresh fails after a 401', async () => {
+    const recorder = new LlmDebugRecorder()
+    const fetchImpl = vi.fn(async (url: string | URL | Request) => {
+      if (String(url).endsWith(':loadCodeAssist')) {
+        return new Response(JSON.stringify({ cloudaicompanionProject: 'project' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' }
+        })
+      }
+      if (String(url) === GEMINI_CLI_OAUTH_TOKEN_URL) {
+        return new Response(JSON.stringify({ error: 'invalid_grant' }), {
+          status: 400,
+          headers: { 'content-type': 'application/json' }
+        })
+      }
+      return new Response(JSON.stringify({ error: { code: 401, message: 'unauthorized' } }), {
+        status: 401,
+        headers: { 'content-type': 'application/json' }
+      })
+    }) as unknown as typeof fetch
+    const client = new GeminiCliApiModelClient({
+      model: 'gemini-2.5-flash',
+      fetchImpl,
+      oauthSource: new GeminiCliOAuthSource({
+        fetchImpl,
+        now: () => 1_000,
+        loadCredential: async () => ({
+          accessToken: 'expired-token',
+          refreshToken: 'refresh-token',
+          expiresAt: 1_000_000
+        })
+      }),
+      debugSink: recorder,
+      retry: { maxAttempts: 0 }
+    })
+
+    const chunks = await drain(client.stream(request()))
+    expect(chunks).toEqual([expect.objectContaining({
+      kind: 'error',
+      code: 'gemini_cli_auth_failed'
+    })])
+    const page = await recorder.listThread('thread-gemini')
+    const diagnostics = page.records.filter((item) => item.status === 'not_started')
+    expect(diagnostics).toHaveLength(1)
+    expect(diagnostics[0]).toMatchObject({
+      phase: 'credential',
+      failureOrigin: 'credential',
+      diagnosticCode: 'gemini_cli_auth_failed'
+    })
+    // The failed model attempt itself is still captured with its HTTP 401.
+    expect(page.records.some((item) => item.phase === undefined && item.response?.status === 401)).toBe(true)
   })
 })

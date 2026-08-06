@@ -2636,6 +2636,10 @@ async function createKunServeRuntimeComposition(
     events,
     eventStreamRegistry,
     llmDebug,
+    liveCounters: () => ({
+      inflight: inflight.size(),
+      activeCaptures: llmDebug?.activeCaptureCount ?? 0
+    }),
     approvalGate,
 	    userInputGate,
 	    workspaceInspector,

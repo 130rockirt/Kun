@@ -105,6 +105,7 @@ describe('CompatModelClient request observability', () => {
     })))
     const page = await recorder.listThread('thread-observe')
     const trace = page.records[0]
+    if (!trace.request) throw new Error('expected a request payload in the captured trace')
 
     expect(trace.request.body.text).toBe(transmittedBody)
     expect(JSON.parse(trace.request.body.text)).toHaveProperty('messages')
@@ -169,6 +170,7 @@ describe('CompatModelClient request observability', () => {
 
     await drain(client.stream(request({ history })))
     const trace = (await recorder.listThread('thread-observe')).records[0]
+    if (!trace.request) throw new Error('expected a request payload in the captured trace')
 
     expect(transmittedBody).toContain(goalText)
     expect(trace.request.body.text).not.toContain(goalText)
@@ -241,7 +243,10 @@ describe('CompatModelClient request observability', () => {
     const traces = [...(await recorder.listThread('thread-observe')).records].reverse()
 
     expect(traces.map((trace) => trace.attemptReason)).toEqual(['initial', 'stream_options_fallback'])
-    expect(traces.map((trace) => trace.request.body.text)).toEqual(transmittedBodies)
+    expect(traces.map((trace) => {
+      if (!trace.request) throw new Error('expected a request payload in the captured trace')
+      return trace.request.body.text
+    })).toEqual(transmittedBodies)
     expect(JSON.parse(transmittedBodies[0])).toHaveProperty('stream_options')
     expect(JSON.parse(transmittedBodies[1])).not.toHaveProperty('stream_options')
     expect(traces[1].decoded?.text).toBe('fallback')

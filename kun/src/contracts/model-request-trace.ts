@@ -100,39 +100,111 @@ export const ModelRequestTraceDecodedSchema = z.object({
 })
 export type ModelRequestTraceDecoded = z.infer<typeof ModelRequestTraceDecodedSchema>
 
-export const ModelRequestTraceRecordSchema = z.object({
-  schemaVersion: z.literal(MODEL_REQUEST_TRACE_SCHEMA_VERSION),
-  id: z.string().min(1),
-  sequence: z.number().int().positive(),
-  threadId: z.string().min(1),
-  turnId: z.string().min(1),
-  provider: z.string(),
-  model: z.string(),
-  transport: z.enum(['http', 'cli', 'sdk']).optional(),
-  endpointFormat: z.string(),
-  attempt: z.number().int().positive(),
-  attemptReason: z.enum([
-    'initial',
-    'transport_retry',
-    'credential_refresh',
-    'stream_options_fallback'
-  ]),
-  status: z.enum(['pending', 'completed', 'transport_error', 'capture_error']),
-  startedAt: z.string(),
-  responseStartedAt: z.string().optional(),
-  finishedAt: z.string().optional(),
-  timeToHeadersMs: z.number().nonnegative().optional(),
-  durationMs: z.number().nonnegative().optional(),
-  request: ModelRequestTraceRequestSchema,
-  delegated: ModelRequestTraceDelegatedSchema.optional(),
-  toolCatalog: z.array(ModelRequestTraceToolCatalogEntrySchema)
-    .max(MAX_MODEL_REQUEST_TRACE_TOOL_CATALOG_ENTRIES)
-    .optional(),
-  response: ModelRequestTraceResponseSchema.optional(),
-  decoded: ModelRequestTraceDecodedSchema.optional(),
-  error: z.string().optional(),
-  captureWarnings: z.array(z.string()).optional()
-})
+export const ModelRequestTracePhase = z.enum([
+  'credential',
+  'setup',
+  'model',
+  'transport',
+  'sdk'
+])
+export type ModelRequestTracePhase = z.infer<typeof ModelRequestTracePhase>
+
+export const ModelRequestTraceFailureOrigin = z.enum([
+  'provider',
+  'credential',
+  'setup',
+  'config',
+  'runtime',
+  'transport'
+])
+export type ModelRequestTraceFailureOrigin = z.infer<typeof ModelRequestTraceFailureOrigin>
+
+export const ModelRequestTraceRecordSchema = z
+  .object({
+    schemaVersion: z.literal(MODEL_REQUEST_TRACE_SCHEMA_VERSION),
+    id: z.string().min(1),
+    sequence: z.number().int().positive(),
+    threadId: z.string().min(1),
+    turnId: z.string().min(1),
+    provider: z.string(),
+    model: z.string(),
+    transport: z.enum(['http', 'cli', 'sdk']).optional(),
+    /**
+     * Pipeline stage that produced this record:
+     * - `credential`: token read/refresh before any model request;
+     * - `setup`: provider/account setup (e.g. Gemini loadCodeAssist);
+     * - `model`: the actual LLM stream; the default for existing callers;
+     * - `transport`: non-model delegated transports (CLI/SDK wrappers);
+     * - `sdk`: agent-sdk / cursor-sdk delegated sessions.
+     * Legacy records without the field are treated as `model`.
+     */
+    phase: ModelRequestTracePhase.optional(),
+    /**
+     * Where a failure originated. Lets the Agent Perspective distinguish
+     * "no request was ever attempted" from "the provider rejected a request"
+     * without guessing from the absence of a body.
+     */
+    failureOrigin: ModelRequestTraceFailureOrigin.optional(),
+    /** Stable machine-readable failure code, e.g. `gemini_cli_setup_failed`. */
+    diagnosticCode: z.string().max(256).optional(),
+    endpointFormat: z.string(),
+    attempt: z.number().int().positive(),
+    attemptReason: z.enum([
+      'initial',
+      'transport_retry',
+      'credential_refresh',
+      'stream_options_fallback'
+    ]),
+    status: z.enum([
+      'pending',
+      'completed',
+      'transport_error',
+      'capture_error',
+      'not_started'
+    ]),
+    startedAt: z.string(),
+    responseStartedAt: z.string().optional(),
+    finishedAt: z.string().optional(),
+    timeToHeadersMs: z.number().nonnegative().optional(),
+    durationMs: z.number().nonnegative().optional(),
+    /**
+     * Present for every record that actually attempted a transport. A
+     * `not_started` diagnostic record (e.g. local credential missing) has no
+     * fabricated URL/headers/body — the renderer must show "no request".
+     */
+    request: ModelRequestTraceRequestSchema.optional(),
+    delegated: ModelRequestTraceDelegatedSchema.optional(),
+    toolCatalog: z.array(ModelRequestTraceToolCatalogEntrySchema)
+      .max(MAX_MODEL_REQUEST_TRACE_TOOL_CATALOG_ENTRIES)
+      .optional(),
+    response: ModelRequestTraceResponseSchema.optional(),
+    decoded: ModelRequestTraceDecodedSchema.optional(),
+    error: z.string().optional(),
+    captureWarnings: z.array(z.string()).optional()
+  })
+  .superRefine((record, ctx) => {
+    if (record.status === 'not_started' && record.request !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['request'],
+        message: 'not_started diagnostic records must not carry a fabricated request'
+      })
+    }
+    if (record.status !== 'not_started' && record.request === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['request'],
+        message: 'attempt records require a request payload'
+      })
+    }
+    if (record.failureOrigin === 'credential' && record.phase !== 'credential') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['failureOrigin'],
+        message: 'credential failures must be marked phase=credential'
+      })
+    }
+  })
 export type ModelRequestTraceRecord = z.infer<typeof ModelRequestTraceRecordSchema>
 
 export type ModelRequestTraceLimits = {

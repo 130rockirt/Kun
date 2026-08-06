@@ -53,6 +53,15 @@ export type ModelRequestTraceDelegated = {
   }
 }
 
+export type ModelRequestTracePhase = 'credential' | 'setup' | 'model' | 'transport' | 'sdk'
+export type ModelRequestTraceFailureOrigin =
+  | 'provider'
+  | 'credential'
+  | 'setup'
+  | 'config'
+  | 'runtime'
+  | 'transport'
+
 export type ModelRequestTraceRecord = {
   schemaVersion: 1
   id: string
@@ -62,16 +71,21 @@ export type ModelRequestTraceRecord = {
   provider: string
   model: string
   transport?: 'http' | 'cli' | 'sdk'
+  /** Pipeline stage; legacy records without it are treated as `model`. */
+  phase?: ModelRequestTracePhase
+  failureOrigin?: ModelRequestTraceFailureOrigin
+  diagnosticCode?: string
   endpointFormat: string
   attempt: number
-  attemptReason: 'initial' | 'transport_retry' | 'stream_options_fallback'
-  status: 'pending' | 'completed' | 'transport_error' | 'capture_error'
+  attemptReason: 'initial' | 'transport_retry' | 'credential_refresh' | 'stream_options_fallback'
+  status: 'pending' | 'completed' | 'transport_error' | 'capture_error' | 'not_started'
   startedAt: string
   responseStartedAt?: string
   finishedAt?: string
   timeToHeadersMs?: number
   durationMs?: number
-  request: {
+  /** Absent only for `not_started` diagnostic records (no request was made). */
+  request?: {
     method: 'POST' | 'CLI' | 'SDK'
     url: string
     urlRedacted: boolean
@@ -161,16 +175,28 @@ function parseRecord(value: unknown, label: string): ModelRequestTraceRecord {
   const input = object(value, label)
   if (input.schemaVersion !== TRACE_SCHEMA_VERSION) throw new Error(`${label}.schemaVersion is invalid`)
   const attemptReason = oneOf(input.attemptReason, `${label}.attemptReason`, [
-    'initial', 'transport_retry', 'stream_options_fallback'
+    'initial', 'transport_retry', 'credential_refresh', 'stream_options_fallback'
   ] as const)
   const status = oneOf(input.status, `${label}.status`, [
-    'pending', 'completed', 'transport_error', 'capture_error'
+    'pending', 'completed', 'transport_error', 'capture_error', 'not_started'
   ] as const)
   const transport = input.transport === undefined
     ? undefined
     : oneOf(input.transport, `${label}.transport`, ['http', 'cli', 'sdk'] as const)
-  const request = object(input.request, `${label}.request`)
-  const method = oneOf(request.method, `${label}.request.method`, ['POST', 'CLI', 'SDK'] as const)
+  const phase = input.phase === undefined
+    ? undefined
+    : oneOf(input.phase, `${label}.phase`, ['credential', 'setup', 'model', 'transport', 'sdk'] as const)
+  const failureOrigin = input.failureOrigin === undefined
+    ? undefined
+    : oneOf(input.failureOrigin, `${label}.failureOrigin`, [
+        'provider', 'credential', 'setup', 'config', 'runtime', 'transport'
+      ] as const)
+  const request = input.request === undefined
+    ? undefined
+    : object(input.request, `${label}.request`)
+  const method = request === undefined
+    ? undefined
+    : oneOf(request.method, `${label}.request.method`, ['POST', 'CLI', 'SDK'] as const)
   const parsed: ModelRequestTraceRecord = {
     schemaVersion: TRACE_SCHEMA_VERSION,
     id: text(input.id, `${label}.id`, 256),
@@ -180,18 +206,27 @@ function parseRecord(value: unknown, label: string): ModelRequestTraceRecord {
     provider: text(input.provider, `${label}.provider`, 512),
     model: text(input.model, `${label}.model`, 1_024),
     ...(transport ? { transport } : {}),
+    ...(phase ? { phase } : {}),
+    ...(failureOrigin ? { failureOrigin } : {}),
+    ...(input.diagnosticCode === undefined
+      ? {}
+      : { diagnosticCode: text(input.diagnosticCode, `${label}.diagnosticCode`, 256) }),
     endpointFormat: text(input.endpointFormat, `${label}.endpointFormat`, 128),
     attempt: integer(input.attempt, `${label}.attempt`, 1),
     attemptReason,
     status,
     startedAt: text(input.startedAt, `${label}.startedAt`, 128),
-    request: {
-      method,
-      url: text(request.url, `${label}.request.url`, 16_384),
-      urlRedacted: bool(request.urlRedacted, `${label}.request.urlRedacted`),
-      headers: parseHeaders(request.headers, `${label}.request.headers`),
-      body: parseBody(request.body, `${label}.request.body`)
-    }
+    ...(request === undefined || method === undefined
+      ? {}
+      : {
+          request: {
+            method,
+            url: text(request.url, `${label}.request.url`, 16_384),
+            urlRedacted: bool(request.urlRedacted, `${label}.request.urlRedacted`),
+            headers: parseHeaders(request.headers, `${label}.request.headers`),
+            body: parseBody(request.body, `${label}.request.body`)
+          }
+        })
   }
   if (input.responseStartedAt !== undefined) parsed.responseStartedAt = text(input.responseStartedAt, `${label}.responseStartedAt`, 128)
   if (input.finishedAt !== undefined) parsed.finishedAt = text(input.finishedAt, `${label}.finishedAt`, 128)

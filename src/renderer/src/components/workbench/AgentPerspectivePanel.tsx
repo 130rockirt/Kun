@@ -42,6 +42,7 @@ import {
 import type {
   ModelRequestTraceBody,
   ModelRequestTraceDelegated,
+  ModelRequestTraceFailureOrigin,
   ModelRequestTraceHeaders,
   ModelRequestTraceRecord
 } from '../../agent/model-request-traces'
@@ -936,6 +937,9 @@ function TitleGenerationDetail({ event }: { event: Extract<AgentPerspectiveEvent
 
 function RawRequest({ record }: { record: ModelRequestTraceRecord }): ReactElement {
   const { t } = useTranslation('common')
+  if (!record.request) {
+    return <EmptyState text={record.status === 'not_started' ? t('agentPerspectiveNoRequest') : t('agentPerspectiveNoResponse')} />
+  }
   return (
     <div className="space-y-4">
       <DetailBlock title={t('agentPerspectiveUrl')} value={record.request.url} copyValue={record.request.url} mono />
@@ -986,9 +990,16 @@ function TimingDetail({ record }: { record: ModelRequestTraceRecord }): ReactEle
   const { t } = useTranslation('common')
   const rows: Array<[string, string]> = [
     [t('agentPerspectiveStatus'), statusLabel(t, record)],
+    [t('agentPerspectivePhase'), phaseLabel(t, record)],
     [t('agentPerspectiveAttempt'), `${record.attempt} · ${attemptLabel(t, record.attemptReason)}`],
     [t('agentPerspectiveStartedAt'), formatTimestamp(record.startedAt, true)]
   ]
+  if (record.failureOrigin) {
+    rows.push([t('agentPerspectiveFailureOrigin'), failureOriginLabel(t, record.failureOrigin)])
+  }
+  if (record.diagnosticCode) {
+    rows.push([t('agentPerspectiveDiagnosticCode'), record.diagnosticCode])
+  }
   if (record.responseStartedAt) rows.push([t('agentPerspectiveResponseStartedAt'), formatTimestamp(record.responseStartedAt, true)])
   if (record.finishedAt) rows.push([t('agentPerspectiveFinishedAt'), formatTimestamp(record.finishedAt, true)])
   if (record.timeToHeadersMs !== undefined) rows.push([t('agentPerspectiveTimeToHeaders'), `${Math.round(record.timeToHeadersMs)} ms`])
@@ -1005,7 +1016,7 @@ function TimingDetail({ record }: { record: ModelRequestTraceRecord }): ReactEle
       </dl>
       {record.error ? <Notice text={record.error} warning /> : null}
       {record.captureWarnings?.map((warning) => <Notice key={warning} text={warning} warning />)}
-      {record.request.body.truncated || record.response?.body?.truncated ? <TruncationNotice /> : null}
+      {record.request?.body.truncated || record.response?.body?.truncated ? <TruncationNotice /> : null}
     </div>
   )
 }
@@ -1548,13 +1559,47 @@ function attemptLabel(
 ): string {
   if (reason === 'transport_retry') return t('agentPerspectiveTransportRetry')
   if (reason === 'stream_options_fallback') return t('agentPerspectiveStreamFallback')
+  if (reason === 'credential_refresh') return t('agentPerspectiveCredentialRefresh')
   return t('agentPerspectiveInitial')
+}
+
+function phaseLabel(t: (key: string) => string, record: ModelRequestTraceRecord): string {
+  const key = record.phase === 'credential'
+    ? 'agentPerspectivePhaseCredential'
+    : record.phase === 'setup'
+      ? 'agentPerspectivePhaseSetup'
+      : record.phase === 'transport'
+        ? 'agentPerspectivePhaseTransport'
+        : record.phase === 'sdk'
+          ? 'agentPerspectivePhaseSdk'
+          : 'agentPerspectivePhaseModel'
+  // Records captured before phase tagging are still model transports; mark them
+  // as legacy so the viewer does not mistake them for a fresh diagnostic.
+  const legacy = record.phase === undefined && record.status !== 'not_started'
+    ? ` · ${t('agentPerspectiveLegacyTrace')}`
+    : ''
+  return `${t(key)}${legacy}`
+}
+
+function failureOriginLabel(
+  t: (key: string) => string,
+  origin: ModelRequestTraceFailureOrigin
+): string {
+  switch (origin) {
+    case 'provider': return t('agentPerspectiveFailureProvider')
+    case 'credential': return t('agentPerspectiveFailureCredential')
+    case 'setup': return t('agentPerspectiveFailureSetup')
+    case 'config': return t('agentPerspectiveFailureConfig')
+    case 'runtime': return t('agentPerspectiveFailureRuntime')
+    case 'transport': return t('agentPerspectiveFailureTransport')
+  }
 }
 
 function statusLabel(t: (key: string) => string, record: ModelRequestTraceRecord): string {
   if (record.status === 'pending') return t('agentPerspectivePending')
   if (record.status === 'transport_error') return t('agentPerspectiveTransportError')
   if (record.status === 'capture_error') return t('agentPerspectiveCaptureError')
+  if (record.status === 'not_started') return t('agentPerspectiveNotStarted')
   if (record.decoded?.error) return t('agentPerspectiveModelError')
   return `${t('agentPerspectiveCompleted')}${record.response ? ` · HTTP ${record.response.status}` : ''}`
 }

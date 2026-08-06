@@ -9,8 +9,10 @@ import {
   MODEL_REQUEST_TRACE_SCHEMA_VERSION,
   type ModelRequestTraceDecoded,
   type ModelRequestTraceDelegated,
+  type ModelRequestTraceFailureOrigin,
   type ModelRequestTraceLimits,
   type ModelRequestTracePage,
+  type ModelRequestTracePhase,
   type ModelRequestTraceRecord,
   type ModelRequestTraceToolCatalogEntry
 } from '../contracts/model-request-trace.js'
@@ -95,6 +97,11 @@ export type LlmHttpAttemptMeta = {
   headers: Record<string, string>
   bodyText: string
   secretValues?: readonly string[]
+  /** Pipeline stage; defaults to `model` for existing callers. */
+  phase?: ModelRequestTracePhase
+  failureOrigin?: ModelRequestTraceFailureOrigin
+  /** Stable failure code, e.g. `gemini_cli_setup_failed`. */
+  diagnosticCode?: string
 }
 
 export type LlmCliInvocationMeta = {
@@ -102,6 +109,7 @@ export type LlmCliInvocationMeta = {
   target: string
   bodyText: string
   delegated?: ModelRequestTraceDelegated
+  phase?: ModelRequestTracePhase
 }
 
 export type LlmSdkInvocationMeta = {
@@ -110,6 +118,23 @@ export type LlmSdkInvocationMeta = {
   bodyText: string
   secretValues?: readonly string[]
   delegated?: ModelRequestTraceDelegated
+  phase?: ModelRequestTracePhase
+}
+
+/**
+ * A structured failure that happened *before* any transport was attempted —
+ * for example a locally unavailable credential or an invalid provider setup.
+ * It produces a `not_started` trace record with no fabricated URL/headers/body,
+ * so the Agent Perspective can truthfully show "no model request was made".
+ */
+export type LlmPhaseDiagnosticMeta = {
+  phase: ModelRequestTracePhase
+  failureOrigin: ModelRequestTraceFailureOrigin
+  /** Stable machine-readable failure code, e.g. `gemini_cli_login_required`. */
+  code: string
+  message: string
+  /** Exact values that must never enter the retained diagnostic. */
+  secretValues?: readonly string[]
 }
 
 /** Narrow sink used by model clients to retain bounded debug data. */
@@ -119,6 +144,7 @@ export interface LlmDebugSink {
   beginHttpAttempt(round: LlmDebugRound, meta: LlmHttpAttemptMeta): ModelRequestTraceRecord
   beginCliInvocation(round: LlmDebugRound, meta: LlmCliInvocationMeta): ModelRequestTraceRecord
   beginSdkInvocation?(round: LlmDebugRound, meta: LlmSdkInvocationMeta): ModelRequestTraceRecord
+  recordPhaseDiagnostic?(round: LlmDebugRound, meta: LlmPhaseDiagnosticMeta): ModelRequestTraceRecord
   captureHttpResponse(round: LlmDebugRound, record: ModelRequestTraceRecord, response: Response): void
   captureHttpError(record: ModelRequestTraceRecord, error: unknown): void
   captureTransportError(record: ModelRequestTraceRecord, error: unknown): void
@@ -238,7 +264,10 @@ export class LlmDebugRecorder implements LlmDebugSink {
       target: meta.url,
       headers: meta.headers,
       bodyText: meta.bodyText,
-      ...(meta.secretValues ? { secretValues: meta.secretValues } : {})
+      ...(meta.secretValues ? { secretValues: meta.secretValues } : {}),
+      ...(meta.phase ? { phase: meta.phase } : {}),
+      ...(meta.failureOrigin ? { failureOrigin: meta.failureOrigin } : {}),
+      ...(meta.diagnosticCode ? { diagnosticCode: meta.diagnosticCode } : {})
     })
   }
 
@@ -252,7 +281,8 @@ export class LlmDebugRecorder implements LlmDebugSink {
       target: meta.target,
       headers: {},
       bodyText: meta.bodyText,
-      ...(meta.delegated ? { delegated: meta.delegated } : {})
+      ...(meta.delegated ? { delegated: meta.delegated } : {}),
+      ...(meta.phase ? { phase: meta.phase } : {})
     })
   }
 
@@ -267,8 +297,36 @@ export class LlmDebugRecorder implements LlmDebugSink {
       headers: {},
       bodyText: meta.bodyText,
       ...(meta.secretValues ? { secretValues: meta.secretValues } : {}),
-      ...(meta.delegated ? { delegated: meta.delegated } : {})
+      ...(meta.delegated ? { delegated: meta.delegated } : {}),
+      ...(meta.phase ? { phase: meta.phase } : {})
     })
+  }
+
+  recordPhaseDiagnostic(round: LlmDebugRound, meta: LlmPhaseDiagnosticMeta): ModelRequestTraceRecord {
+    const startedAt = new Date().toISOString()
+    const message = redactModelTraceValues(meta.message, meta.secretValues ?? [])
+    const record: ModelRequestTraceRecord = {
+      schemaVersion: MODEL_REQUEST_TRACE_SCHEMA_VERSION,
+      id: randomUUID(),
+      sequence: this.nextTraceSequence++,
+      threadId: round.threadId,
+      turnId: round.turnId,
+      provider: round.provider,
+      model: round.model,
+      phase: meta.phase,
+      failureOrigin: meta.failureOrigin,
+      diagnosticCode: meta.code,
+      endpointFormat: 'diagnostic',
+      attempt: 1,
+      attemptReason: 'initial',
+      status: 'not_started',
+      startedAt,
+      finishedAt: startedAt,
+      durationMs: 0,
+      error: message.slice(0, 2_048)
+    }
+    round.exchanges.push(record)
+    return record
   }
 
   private beginAttempt(
@@ -284,6 +342,9 @@ export class LlmDebugRecorder implements LlmDebugSink {
       bodyText: string
       secretValues?: readonly string[]
       delegated?: ModelRequestTraceDelegated
+      phase?: ModelRequestTracePhase
+      failureOrigin?: ModelRequestTraceFailureOrigin
+      diagnosticCode?: string
     }
   ): ModelRequestTraceRecord {
     const state = this.stateFor(round)
@@ -304,6 +365,9 @@ export class LlmDebugRecorder implements LlmDebugSink {
       provider: round.provider,
       model: round.model,
       transport: meta.transport,
+      ...(meta.phase ? { phase: meta.phase } : {}),
+      ...(meta.failureOrigin ? { failureOrigin: meta.failureOrigin } : {}),
+      ...(meta.diagnosticCode ? { diagnosticCode: meta.diagnosticCode } : {}),
       endpointFormat: meta.endpointFormat,
       attempt: meta.attempt,
       attemptReason: meta.reason,

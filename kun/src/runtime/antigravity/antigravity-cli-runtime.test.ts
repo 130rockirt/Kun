@@ -251,10 +251,11 @@ describe('AntigravityCliRuntime', () => {
     expect(spawnedArgs[1]).toContain('<prior_conversation>')
     expect(spawnedArgs[1]).toContain('Finish the migration safely before reporting success.')
     const trace = (await debugSink.listThread(turn.threadId)).records[0]
-    expect(trace?.request.body.text).not.toContain(
+    if (!trace?.request) throw new Error('expected a request payload in the captured trace')
+    expect(trace.request.body.text).not.toContain(
       'Finish the migration safely before reporting success.'
     )
-    expect(trace?.request.body.text).toContain('[REDACTED]')
+    expect(trace.request.body.text).toContain('[REDACTED]')
   })
 
   it('persists the Antigravity canonical text before its offset-addressed replay event', async () => {
@@ -951,7 +952,7 @@ describe('AntigravityCliRuntime', () => {
         stopReason: 'stop'
       }
     })
-    expect(JSON.parse(trace.request.body.text)).toMatchObject({
+    expect(JSON.parse(trace.request!.body.text)).toMatchObject({
       model: 'gemini-3.6-flash',
       input: expect.stringContaining('hello from Gemini'),
       effort: 'high'
