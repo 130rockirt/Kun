@@ -943,8 +943,6 @@ export type KunContextCompactionSettingsV1 = {
 
 export type KunToolStormSettingsV1 = {
   enabled: boolean
-  windowSize: number
-  threshold: number
 }
 
 export type KunToolArgumentRepairSettingsV1 = {

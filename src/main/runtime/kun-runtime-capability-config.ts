@@ -170,9 +170,7 @@ export function runtimeTuningConfigForRuntime(
     },
     toolStorm: {
       ...objectValue(existing.toolStorm),
-      enabled: value.toolStorm.enabled,
-      windowSize: value.toolStorm.windowSize,
-      threshold: value.toolStorm.threshold
+      enabled: value.toolStorm.enabled
     },
     toolArgumentRepair: {
       ...objectValue(existing.toolArgumentRepair),

@@ -319,9 +319,7 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
     maxWallTimeMs: 86400000,
     streamIdleTimeoutMs: 450000,
     toolStorm: {
-      enabled: true,
-      windowSize: 8,
-      threshold: 3
+      enabled: true
     },
     toolArgumentRepair: {
       maxStringBytes: 524288
@@ -1793,39 +1791,6 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
                         checked={runtimeTuning.toolStorm.enabled}
                         onChange={(enabled) => updateToolStorm({ enabled })}
                       />
-                    }
-                  />
-                  <SettingRow
-                    title={t('kunToolStormLimits')}
-                    description={t('kunToolStormLimitsDesc')}
-                    wideControl
-                    control={
-                      <div className="grid gap-3 sm:grid-cols-2">
-                        <label className="flex min-w-0 flex-col gap-1.5 text-[12px] font-medium text-ds-muted">
-                          {t('kunToolStormWindowSize')}
-                          <input
-                            type="number"
-                            min={1}
-                            max={128}
-                            className="rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30"
-                            value={runtimeTuning.toolStorm.windowSize}
-                            disabled={!runtimeTuning.toolStorm.enabled}
-                            onChange={(e) => updateToolStorm({ windowSize: Number(e.target.value) })}
-                          />
-                        </label>
-                        <label className="flex min-w-0 flex-col gap-1.5 text-[12px] font-medium text-ds-muted">
-                          {t('kunToolStormThreshold')}
-                          <input
-                            type="number"
-                            min={2}
-                            max={128}
-                            className="rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30"
-                            value={runtimeTuning.toolStorm.threshold}
-                            disabled={!runtimeTuning.toolStorm.enabled}
-                            onChange={(e) => updateToolStorm({ threshold: Number(e.target.value) })}
-                          />
-                        </label>
-                      </div>
                     }
                   />
                   <SettingRow

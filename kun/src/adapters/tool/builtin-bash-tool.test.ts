@@ -28,6 +28,20 @@ async function withTimeout<T>(promise: Promise<T>): Promise<T> {
   }
 }
 
+describe('bash tool schema', () => {
+  it('requires a command so models cannot emit an empty bash invocation', () => {
+    const tool = createBashLocalTool()
+
+    expect(tool.inputSchema).toMatchObject({
+      type: 'object',
+      required: ['command'],
+      properties: {
+        command: { type: 'string' }
+      }
+    })
+  })
+})
+
 describe('background bash progress', () => {
   it('keeps session updates live without updating the tool call after handoff', async () => {
     const workspace = await mkdtemp(join(tmpdir(), 'kun-background-bash-'))

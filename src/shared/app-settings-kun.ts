@@ -428,9 +428,7 @@ export function defaultKunRuntimeTuningSettings(): KunRuntimeTuningSettingsV1 {
     maxWallTimeMs: 86_400_000,
     streamIdleTimeoutMs: DEFAULT_KUN_STREAM_IDLE_TIMEOUT_MS,
     toolStorm: {
-      enabled: true,
-      windowSize: 8,
-      threshold: 3
+      enabled: true
     },
     toolArgumentRepair: {
       maxStringBytes: 512 * 1024
@@ -1258,9 +1256,7 @@ function normalizeKunRuntimeTuningSettings(
       3_600_000
     ),
     toolStorm: {
-      enabled: migrated.toolStorm?.enabled !== false,
-      windowSize: boundedPositiveInt(migrated.toolStorm?.windowSize, defaults.toolStorm.windowSize, 128),
-      threshold: Math.max(2, boundedPositiveInt(migrated.toolStorm?.threshold, defaults.toolStorm.threshold, 128))
+      enabled: migrated.toolStorm?.enabled !== false
     },
     toolArgumentRepair: {
       maxStringBytes: boundedPositiveInt(

@@ -913,7 +913,7 @@ describe('syncGuiManagedKunConfig', () => {
       maxConcurrentTurns: 256,
       maxWallTimeMs: 86400000
     })
-    expect(parsed.runtime.toolStorm).toMatchObject({ enabled: true, windowSize: 8, threshold: 3 })
+    expect(parsed.runtime.toolStorm).toMatchObject({ enabled: true })
     expect(parsed.runtime.toolArgumentRepair).toMatchObject({ maxStringBytes: 524288 })
     expect(parsed.capabilities.attachments).toMatchObject({ enabled: true })
     expect(parsed.capabilities.memory).toMatchObject({ enabled: false })
@@ -1725,9 +1725,7 @@ describe('syncGuiManagedKunConfig', () => {
           maxWallTimeMs: 7_200_000,
           streamIdleTimeoutMs: 120000,
           toolStorm: {
-            enabled: false,
-            windowSize: 12,
-            threshold: 4
+            enabled: false
           },
           toolArgumentRepair: {
             maxStringBytes: 262144
@@ -1817,9 +1815,7 @@ describe('syncGuiManagedKunConfig', () => {
       }
     })
     expect(parsed.runtime.toolStorm).toMatchObject({
-      enabled: false,
-      windowSize: 12,
-      threshold: 4
+      enabled: false
     })
     expect(parsed.runtime.toolStorm.customStormFlag).toBeUndefined()
     expect(parsed.runtime.customRuntimeFlag).toBeUndefined()

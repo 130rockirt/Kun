@@ -146,11 +146,8 @@ Kun 也会在模型请求边界做一层共享的 history hygiene：
 - `kun/src/loop/request-history-hygiene.ts`
 - `kun/src/loop/agent-loop.ts`
 
-同一 turn 内还会启用 repeat-loop guard：
-
-- 第三次完全相同的 `(toolName, arguments)` 会被抑制。
-- Kun 会写入一个 error `tool_result`，让模型收敛到更窄的查询或解释原因。
-- 文件变更类工具会清掉之前的只读调用记录，避免“编辑后复读”被误判。
+同一 turn 内不再抑制重复的相同工具调用：模型可以按需重试同一参数的工具，
+失败原因通过 error `tool_result` 返回给模型自行收敛。
 
 连续的内置只读工具调用会做保守并发：
 
@@ -162,8 +159,8 @@ Kun 也会在模型请求边界做一层共享的 history hygiene：
 
 实现位置：
 
-- `kun/src/loop/tool-storm-breaker.ts`
-- `kun/src/loop/agent-loop.ts`
+- `kun/src/loop/tool-dispatch-policy.ts`
+- `kun/src/loop/tool-call-dispatcher.ts`
 
 Fork / resume 创建新线程时也会修复克隆历史：
 

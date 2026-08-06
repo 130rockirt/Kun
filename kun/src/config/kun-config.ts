@@ -182,9 +182,7 @@ export const RuntimeTuningConfigSchema = z
     streamIdleTimeoutMs: z.number().int().min(0).optional(),
     toolStorm: z
       .object({
-        enabled: z.boolean().optional(),
-        windowSize: PositiveInt.optional(),
-        threshold: z.number().int().min(2).optional()
+        enabled: z.boolean().optional()
       })
       .strict()
       .optional(),

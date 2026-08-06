@@ -926,7 +926,7 @@ export function createBashLocalTool(options: BashLocalToolOptions = {}): LocalTo
         command: { type: 'string' },
         background: { type: 'boolean', default: false }
       },
-      required: [],
+      required: ['command'],
       additionalProperties: false
     },
     policy: 'on-request',

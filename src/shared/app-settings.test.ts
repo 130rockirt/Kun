@@ -479,9 +479,7 @@ describe('kun defaults', () => {
         maxWallTimeMs: 86400000,
         streamIdleTimeoutMs: 450000,
         toolStorm: {
-          enabled: true,
-          windowSize: 8,
-          threshold: 3
+          enabled: true
         },
         toolArgumentRepair: {
           maxStringBytes: 524288
@@ -1090,7 +1088,7 @@ describe('mergeKunRuntimeSettings', () => {
       },
       runtimeTuning: {
         toolStorm: {
-          threshold: 5
+          enabled: false
         }
       }
     })
@@ -1100,9 +1098,7 @@ describe('mergeKunRuntimeSettings', () => {
     expect(next.contextCompaction.defaultSoftThreshold).toBe(64000)
     expect(next.contextCompaction.defaultHardThreshold).toBe(64000)
     expect(next.contextCompaction.summaryMode).toBe('model')
-    expect(next.runtimeTuning.toolStorm.enabled).toBe(true)
-    expect(next.runtimeTuning.toolStorm.windowSize).toBe(current.runtimeTuning.toolStorm.windowSize)
-    expect(next.runtimeTuning.toolStorm.threshold).toBe(5)
+    expect(next.runtimeTuning.toolStorm.enabled).toBe(false)
     expect(next.runtimeTuning.toolArgumentRepair).toEqual(current.runtimeTuning.toolArgumentRepair)
     expect(next.runtimeTuning.maxConcurrentTurns).toBe(current.runtimeTuning.maxConcurrentTurns)
     expect(next.runtimeTuning.maxWallTimeMs).toBe(current.runtimeTuning.maxWallTimeMs)

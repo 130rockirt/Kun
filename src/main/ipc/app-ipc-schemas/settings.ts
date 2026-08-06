@@ -340,9 +340,7 @@ const kunRuntimePatchSchema = z.object({
     maxWallTimeMs: z.number().int().positive().max(86_400_000).optional(),
     streamIdleTimeoutMs: z.number().int().min(0).max(3_600_000).optional(),
     toolStorm: z.object({
-      enabled: z.boolean().optional(),
-      windowSize: z.number().int().positive().max(128).optional(),
-      threshold: z.number().int().min(2).max(128).optional()
+      enabled: z.boolean().optional()
     }).strict().optional(),
     toolArgumentRepair: z.object({
       maxStringBytes: z.number().int().positive().max(16 * 1024 * 1024).optional()
