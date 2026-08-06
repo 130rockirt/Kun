@@ -148,6 +148,16 @@ describe('Windows installer migration ACL contract', () => {
     expect(script).toContain('[IO.File]::SetAccessControl')
   })
 
+  it('reads only the owner and DACL, so normal users do not need SACL privileges', () => {
+    const script = readFileSync(helperPath, 'utf8')
+
+    expect(script).toContain(
+      '$sections = [Security.AccessControl.AccessControlSections]::Owner -bor [Security.AccessControl.AccessControlSections]::Access'
+    )
+    expect(script).not.toContain('[Security.AccessControl.AccessControlSections]::All')
+    expect(script).not.toContain('[Security.AccessControl.AccessControlSections]::Audit')
+  })
+
   it('waits for the real NSIS uninstall lifecycle before starting another installer', () => {
     const script = readFileSync(smokePath, 'utf8')
 

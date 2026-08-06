@@ -44,7 +44,8 @@ function createGate(): { promise: Promise<void>; release: () => void } {
 const electronMock = vi.hoisted(() => ({
   showMessageBox: vi.fn(),
   openPath: vi.fn(async () => ''),
-  showItemInFolder: vi.fn()
+  showItemInFolder: vi.fn(),
+  userDataPath: '/tmp/kun-user-data'
 }))
 const uiPluginMocks = vi.hoisted(() => ({
   ensureBundledUiPlugins: vi.fn(async () => undefined),
@@ -67,7 +68,7 @@ const protectedProviderMocks = vi.hoisted(() => ({
 vi.mock('electron', () => ({
   app: {
     quit: vi.fn(),
-    getPath: vi.fn(() => '/tmp/kun-user-data'),
+    getPath: vi.fn(() => electronMock.userDataPath),
     getAppPath: vi.fn(() => '/tmp/kun-app'),
     isPackaged: false
   },
@@ -293,6 +294,7 @@ function registerOptions(overrides: Partial<Parameters<typeof import('./register
 describe('registerAppIpcHandlers', () => {
   beforeEach(() => {
     handlers.clear()
+    electronMock.userDataPath = '/tmp/kun-user-data'
     electronMock.showMessageBox.mockReset()
     electronMock.openPath.mockClear()
     electronMock.showItemInFolder.mockClear()
@@ -1432,6 +1434,29 @@ describe('registerAppIpcHandlers', () => {
 
     await expect(handlers.get('runtime:restart')?.({})).resolves.toBeUndefined()
     expect(restartRuntime).toHaveBeenCalledTimes(1)
+  })
+
+  it('restarts Kun after an already-downloaded Claude SDK is provisioned through IPC', async () => {
+    const userDataDir = mkdtempSync(join(tmpdir(), 'kun-agent-sdk-ipc-'))
+    const binaryName = process.platform === 'win32' ? 'claude.exe' : 'claude'
+    const binaryPath = join(userDataDir, 'agent-sdk', binaryName)
+    const restartRuntime = vi.fn(async () => undefined)
+    electronMock.userDataPath = userDataDir
+    mkdirSync(join(userDataDir, 'agent-sdk'), { recursive: true })
+    writeFileSync(binaryPath, 'claude binary')
+
+    try {
+      registerAppIpcHandlers(registerOptions({ restartRuntime }))
+
+      await expect(handlers.get('claude-subscription:sdk-install')?.({})).resolves.toMatchObject({
+        status: 'restarting'
+      })
+      await Promise.resolve()
+      await Promise.resolve()
+      expect(restartRuntime).toHaveBeenCalledTimes(1)
+    } finally {
+      rmSync(userDataDir, { recursive: true, force: true })
+    }
   })
 
   it('returns the current Runtime settings synchronization status', async () => {
