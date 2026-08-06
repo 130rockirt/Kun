@@ -987,7 +987,11 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
   }))
   ipcMain.handle('claude-subscription:sdk-install', async () =>
     startAgentSdkInstall(
-      { userDataDir: app.getPath('userData'), proxyUrl: resolveModelProviderProxyUrl(await store.load()) },
+      {
+        userDataDir: app.getPath('userData'),
+        proxyUrl: resolveModelProviderProxyUrl(await store.load()),
+        restartRuntime
+      },
       (state) => getMainWindow()?.webContents.send('claude-subscription:sdk-progress', state)
     )
   )

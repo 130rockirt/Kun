@@ -550,7 +550,7 @@ export type ClaudeSubscriptionProbeResult =
   | { ok: false; message: string }
 
 export type SdkDownloadState = {
-  status: 'downloading' | 'done' | 'error'
+  status: 'downloading' | 'restarting' | 'done' | 'error'
   receivedBytes: number
   totalBytes: number
   message?: string

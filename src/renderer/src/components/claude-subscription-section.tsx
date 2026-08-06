@@ -45,7 +45,7 @@ export function ClaudeSubscriptionSection({
   const [copied, setCopied] = useState(false)
   const [modelsBusy, setModelsBusy] = useState(false)
   const [modelsNote, setModelsNote] = useState<string | null>(null)
-  const [sdk, setSdk] = useState<'checking' | 'ready' | 'missing' | 'downloading'>('checking')
+  const [sdk, setSdk] = useState<'checking' | 'ready' | 'missing' | 'downloading' | 'restarting'>('checking')
   const [progress, setProgress] = useState<{ received: number; total: number } | null>(null)
   const [sdkNote, setSdkNote] = useState<string | null>(null)
 
@@ -58,11 +58,19 @@ export function ClaudeSubscriptionSection({
     if (d.status === 'downloading') {
       setSdk('downloading')
       setProgress({ received: d.receivedBytes, total: d.totalBytes })
+      setSdkNote(null)
+      return true
+    }
+    if (d.status === 'restarting') {
+      setSdk('restarting')
+      setProgress(null)
+      setSdkNote(null)
       return true
     }
     if (d.status === 'done') {
       setSdk('ready')
       setProgress(null)
+      setSdkNote(null)
       return true
     }
     if (d.status === 'error') {
@@ -77,11 +85,16 @@ export function ClaudeSubscriptionSection({
   const checkSdk = useCallback(async (): Promise<void> => {
     try {
       const s = await window.kunGui.claudeSubscriptionSdkStatus()
+      // A managed install/restart is authoritative even when the binary already
+      // exists: Kun cannot use a newly downloaded SDK until its runtime restarts.
+      if (applyDownload(s.download)) return
       if (s.installed) {
         setSdk('ready')
+        setProgress(null)
+        setSdkNote(null)
         return
       }
-      if (!applyDownload(s.download)) setSdk('missing')
+      setSdk('missing')
     } catch {
       setSdk('missing')
     }
@@ -182,6 +195,7 @@ export function ClaudeSubscriptionSection({
     progress && progress.total > 0
       ? Math.min(100, Math.round((progress.received / progress.total) * 100))
       : 0
+  const sdkInstallBusy = sdk === 'downloading' || sdk === 'restarting'
 
   return (
     <div className="flex flex-col gap-3">
@@ -192,7 +206,7 @@ export function ClaudeSubscriptionSection({
       {sdk !== 'ready' ? (
         <div className="flex flex-col gap-2 rounded-lg border border-amber-300/50 bg-amber-50/40 px-3 py-2.5 dark:bg-amber-900/10">
           <div className="flex items-center gap-2 text-[13px]">
-            {sdk === 'checking' || sdk === 'downloading' ? (
+            {sdk === 'checking' || sdk === 'downloading' || sdk === 'restarting' ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin text-ds-muted" strokeWidth={1.9} />
             ) : (
               <AlertCircle className="h-3.5 w-3.5 text-amber-500" strokeWidth={1.9} />
@@ -202,6 +216,8 @@ export function ClaudeSubscriptionSection({
                 ? t('claudeSubSdkChecking')
                 : sdk === 'downloading'
                   ? t('claudeSubSdkDownloading')
+                  : sdk === 'restarting'
+                    ? t('claudeSubSdkRestarting')
                   : t('claudeSubSdkMissing')}
             </span>
           </div>
@@ -263,7 +279,8 @@ export function ClaudeSubscriptionSection({
         <button
           type="button"
           onClick={() => void refreshStatus()}
-          className="ml-auto text-[12px] text-ds-muted underline-offset-2 hover:text-ds-ink hover:underline"
+          disabled={sdkInstallBusy}
+          className="ml-auto text-[12px] text-ds-muted underline-offset-2 hover:text-ds-ink hover:underline disabled:cursor-not-allowed disabled:opacity-60"
         >
           {t('claudeSubRecheck')}
         </button>
@@ -271,7 +288,7 @@ export function ClaudeSubscriptionSection({
 
       <button
         type="button"
-        disabled={busy}
+        disabled={busy || sdkInstallBusy}
         onClick={() => void runLogin()}
         className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-accent/50 bg-ds-main/45 px-3 text-[13px] font-medium text-ds-ink transition hover:bg-ds-main/70 disabled:cursor-not-allowed disabled:opacity-60"
       >
