@@ -160,6 +160,44 @@ describe('buildToolPreferenceInstruction', () => {
     expect(buildToolPreferenceInstruction([...tools].reverse())).toBe(instruction)
   })
 
+  it('makes explore_agent the first step for all repository investigation', () => {
+    const tools = [
+      { name: 'explore_agent', description: 'Explore the repository' },
+      { name: 'read', description: 'Read a file' },
+      { name: 'grep', description: 'Search file contents' },
+      { name: 'bash', description: 'Run a shell command' },
+      { name: 'edit', description: 'Edit a file' },
+      {
+        name: 'mcp_symbol_graph',
+        description: 'Navigate source definitions and reference call graph',
+        providerKind: 'mcp'
+      }
+    ]
+    const instruction = buildToolPreferenceInstruction(tools)
+
+    expect(instruction).toContain('Use `explore_agent` as the first tool')
+    expect(instruction).toContain('This applies even to simple lookups and to tasks that will later modify files')
+    expect(instruction).toContain('Only after `explore_agent` returns')
+    expect(instruction).toContain('narrow follow-up')
+    expect(instruction).toContain('parent agent remains responsible for edits')
+    expect(instruction).toContain('Issue multiple `explore_agent` calls together')
+    expect(instruction).not.toContain('do not use it for tasks that require write access')
+    expect(instruction).not.toContain('Prefer `read` over `bash`')
+    expect(buildToolPreferenceInstruction([...tools].reverse())).toBe(instruction)
+  })
+
+  it('keeps direct inspection guidance when explore_agent is unavailable', () => {
+    const instruction = buildToolPreferenceInstruction([
+      { name: 'read', description: 'Read a file' },
+      { name: 'grep', description: 'Search file contents' },
+      { name: 'bash', description: 'Run a shell command' }
+    ])
+
+    expect(instruction).toContain('Inspect relevant current state before changing it')
+    expect(instruction).toContain('Prefer `read`, `grep` over `bash`')
+    expect(instruction).not.toContain('explore_agent')
+  })
+
   it('adds bounded delegation guidance only when the child-agent tool is available', () => {
     const instruction = buildToolPreferenceInstruction([
       { name: 'delegate_task', description: 'Run a standalone child agent' }

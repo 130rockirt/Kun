@@ -101,6 +101,10 @@ describe('explore_agent tool provider', () => {
     const provider = buildExploreAgentToolProvider(runtime, () => ({}))[0]
     expect(provider.id).toBe(EXPLORE_AGENT_PROVIDER_ID)
     expect(provider.tools[0].name).toBe(EXPLORE_AGENT_TOOL_NAME)
+    expect(provider.tools[0].description).toContain('Use this first for any repository or project exploration')
+    expect(provider.tools[0].description).toContain('即使后续需要修改文件，也必须先调用 explore_agent')
+    expect(provider.tools[0].description).toContain('Only use direct inspection tools for narrow follow-up verification')
+    expect(provider.tools[0].description).toContain('始终不会修改文件')
   })
 
   it('does not register when delegation is unavailable', () => {

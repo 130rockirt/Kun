@@ -67,16 +67,17 @@ export function buildExploreAgentToolProvider(
         LocalToolHost.defineTool({
           name: EXPLORE_AGENT_TOOL_NAME,
           description: [
-            'First-class exploration agent for file lookup, code/keyword search, and project information.',
-            '使用探索代理查找文件、搜索关键字或回答关于项目的问题；优先于 delegate_task 用于纯探索任务。',
-            '它可以运行 bash 与只读探索工具（read/grep/glob/ls/repo_map/find/web_fetch/web_search），但不会修改文件。'
+            'Use this first for any repository or project exploration: locating files or symbols, searching code or keywords, tracing call paths or dependencies, understanding architecture or behavior, or gathering context before a change.',
+            '即使后续需要修改文件，也必须先调用 explore_agent；它优先于主代理直接使用 read/grep/glob/ls/repo_map/find/bash，并可为独立调查并行发起多个调用。',
+            'Only use direct inspection tools for narrow follow-up verification after this tool returns, or when explore_agent is unavailable or fails.',
+            '它可以运行 bash 与只读探索工具（read/grep/glob/ls/repo_map/find/web_fetch/web_search），但始终不会修改文件。'
           ].join(' '),
           inputSchema: {
             type: 'object',
             properties: {
               query: {
                 type: 'string',
-                description: '探索目标：要查找的文件/符号/关键字，或要回答的项目问题。'
+                description: 'Self-contained investigation request: what to locate or explain, and which file:line evidence or concise conclusion to return.'
               },
               workspace: {
                 type: 'string',

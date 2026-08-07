@@ -60,7 +60,7 @@ type ToolPreferenceSpec = {
 const SOURCE_EXPLORATION_PATTERN =
   /\b(?:code(?:base|graph)?|source|repository|repo|symbol|definition|reference|implementation|dependency|call[ -]?graph|ast)\b/i
 
-const INSPECTION_TOOL_NAMES = ['read', 'grep', 'glob', 'ls', 'repo_map', 'lsp'] as const
+const INSPECTION_TOOL_NAMES = ['read', 'grep', 'glob', 'ls', 'repo_map', 'find', 'lsp'] as const
 const MUTATION_TOOL_NAMES = ['edit', 'write'] as const
 const TODO_TOOL_NAMES = ['todo_list', 'todo_write'] as const
 const GOAL_TOOL_NAMES = ['get_goal', 'create_goal', 'update_goal'] as const
@@ -83,9 +83,10 @@ export function buildToolPreferenceInstruction(
   const goalTools = presentNames(names, GOAL_TOOL_NAMES)
   const inputTools = presentNames(names, USER_INPUT_TOOL_NAMES)
   const memoryTools = presentNames(names, MEMORY_TOOL_NAMES)
+  const exploreAgentAvailable = names.has('explore_agent')
   const bullets: string[] = []
 
-  if (inspectionTools.length > 0) {
+  if (inspectionTools.length > 0 && !exploreAgentAvailable) {
     bullets.push(
       `Inspect relevant current state before changing it. Use ${formatToolNames(inspectionTools)} for the matching file, search, directory, repository, or symbol operation.`
     )
@@ -97,7 +98,7 @@ export function buildToolPreferenceInstruction(
     bullets.push(
       'Run independent inspection calls in parallel when their inputs do not depend on one another; keep dependent work sequential.'
     )
-  } else if (names.has('bash')) {
+  } else if (names.has('bash') && !exploreAgentAvailable) {
     bullets.push('Use `bash` for necessary shell and system operations, with commands scoped to the active workspace and task.')
   }
 
@@ -168,13 +169,30 @@ export function buildToolPreferenceInstruction(
     )
   }
 
-  if (names.has('explore_agent')) {
+  if (exploreAgentAvailable) {
+    const directInspectionTools = [
+      ...inspectionTools,
+      ...(names.has('bash') ? ['bash'] : [])
+    ]
     bullets.push(
-      'Use `explore_agent` for file lookup, code/keyword search, and project information exploration: it runs a dedicated read-oriented child with bash plus exploration tools and returns a file:line summary. Prefer it over `delegate_task` for pure investigation; keep `delegate_task` for broader units of work that need full tool access.'
+      'Use `explore_agent` as the first tool for any repository or project exploration: file lookup, code or keyword search, symbol and call-path tracing, architecture or behavior inspection, and context gathering before a change. This applies even to simple lookups and to tasks that will later modify files.'
     )
     bullets.push(
-      '`explore_agent` never edits files — do not use it for tasks that require write access.'
+      '`explore_agent` runs a dedicated read-oriented child and never edits files; after it returns, the parent agent remains responsible for edits and final verification.'
     )
+    if (directInspectionTools.length > 0) {
+      bullets.push(
+        `Only after \`explore_agent\` returns, or when it is unavailable or fails, use ${formatToolNames(directInspectionTools)} for narrow follow-up verification and unsupported-file fallback.`
+      )
+    }
+    bullets.push(
+      'Issue multiple `explore_agent` calls together when the exploration questions are independent; keep dependent investigation sequential.'
+    )
+    if (names.has('delegate_task')) {
+      bullets.push(
+        'Reserve `delegate_task` for broader child work that needs full tool access; use `explore_agent` for repository investigation.'
+      )
+    }
   }
 
   if (names.has('graph_define_plan')) {
@@ -208,15 +226,17 @@ export function buildToolPreferenceInstruction(
     const fallback = inspectionTools.length > 0
       ? ` Use ${formatToolNames(inspectionTools)} for unsupported files, narrow fallback checks, and verification.`
       : ''
-    bullets.push(
-      `Specialized source-code MCP tools are available: ${formatToolNames(sourceTools.map((tool) => tool.name))}. Prefer a matching one for structural source navigation before broad scans.${fallback}`
-    )
+    bullets.push(exploreAgentAvailable
+      ? `Specialized source-code MCP tools are available: ${formatToolNames(sourceTools.map((tool) => tool.name))}. Start repository exploration with \`explore_agent\`; use a matching MCP tool only for narrow structural follow-up or when exploration fails.${fallback}`
+      : `Specialized source-code MCP tools are available: ${formatToolNames(sourceTools.map((tool) => tool.name))}. Prefer a matching one for structural source navigation before broad scans.${fallback}`)
   } else if (mcpTools.some((tool) => tool.name === 'mcp_search')) {
-    bullets.push('Use `mcp_search` when the task may benefit from a specialized external capability not already advertised.')
+    bullets.push(exploreAgentAvailable
+      ? 'Start repository exploration with `explore_agent`; use `mcp_search` only for a specialized external capability that the exploration child cannot provide.'
+      : 'Use `mcp_search` when the task may benefit from a specialized external capability not already advertised.')
   } else if (mcpTools.length > 0) {
-    bullets.push(
-      `Use an advertised MCP tool when its description directly matches the task: ${formatToolNames(mcpTools.map((tool) => tool.name))}.`
-    )
+    bullets.push(exploreAgentAvailable
+      ? `Start repository exploration with \`explore_agent\`; use an advertised MCP tool only when its description directly matches a narrow follow-up task: ${formatToolNames(mcpTools.map((tool) => tool.name))}.`
+      : `Use an advertised MCP tool when its description directly matches the task: ${formatToolNames(mcpTools.map((tool) => tool.name))}.`)
   }
 
   if (bullets.length === 0) return null
