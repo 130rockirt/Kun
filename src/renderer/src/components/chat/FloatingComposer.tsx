@@ -401,6 +401,7 @@ export function FloatingComposer({
   const route = useChatStore((s) => s.route)
   const workspaceRoot = useChatStore((s) => s.workspaceRoot)
   const storeActiveThreadId = useChatStore((s) => s.activeThreadId)
+  const threadLoadingId = useChatStore((s) => s.threadLoadingId)
   const activeThreadId = activeThreadIdOverride === undefined
     ? storeActiveThreadId
     : activeThreadIdOverride
@@ -504,8 +505,9 @@ export function FloatingComposer({
     activeClawChannel?.remoteSession?.chatId?.trim()
   )
 
-  const canEditComposer = !disabled && (route === 'claw' ? clawHasInboundConversation : true)
-  const canCompose = !disabled && runtimeReady && (
+  const hydratingActiveThread = activeThreadId != null && threadLoadingId === activeThreadId
+  const canEditComposer = !disabled && !hydratingActiveThread && (route === 'claw' ? clawHasInboundConversation : true)
+  const canCompose = !disabled && !hydratingActiveThread && runtimeReady && (
     route === 'claw'
       ? clawHasInboundConversation
       : (hasActiveThread || !!effectiveWorkspaceRoot)

@@ -357,6 +357,31 @@ describe('KunRuntimeProvider', () => {
     expect(detail.latestTurnOrchestration).toBe(expected)
   })
 
+  it('loads lightweight thread state without requesting full detail', async () => {
+    const runtimeRequest = vi.fn(async (path: string) => ({
+      ok: true,
+      status: 200,
+      body: JSON.stringify({
+        id: 'thr_state',
+        status: 'running',
+        updatedAt: '2026-08-07T00:00:00.000Z',
+        latestSeq: 91,
+        latestTurn: { id: 'turn_state', status: 'running', orchestration: 'direct' }
+      })
+    }))
+    installDsGui({ runtimeRequest })
+
+    await expect(new KunRuntimeProvider().getThreadState('thr_state')).resolves.toEqual({
+      status: 'running',
+      updatedAt: '2026-08-07T00:00:00.000Z',
+      latestSeq: 91,
+      latestTurnId: 'turn_state',
+      latestTurnStatus: 'running',
+      latestTurnOrchestration: 'direct'
+    })
+    expect(runtimeRequest).toHaveBeenCalledWith('/v1/threads/thr_state/state', 'GET')
+  })
+
   it('rehydrates persisted partial assistant output for a running turn', async () => {
     installDsGui({
       runtimeRequest: vi.fn(async () => ({

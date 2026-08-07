@@ -1,4 +1,4 @@
-import { createElement } from 'react'
+import { createElement, useState } from 'react'
 import {
   act,
   create as createRenderer,
@@ -996,7 +996,7 @@ describe('shared model connection settings projection', () => {
     })
   })
 
-  it('clears the GUI default when the last shared connection is removed', () => {
+  it('clears the GUI provider without emitting an invalid empty model', () => {
     const projected = projectSharedModelConnections(defaultModelProviderSettings(), {
       schemaVersion: 1,
       revision: 5,
@@ -1006,7 +1006,7 @@ describe('shared model connection settings projection', () => {
       localModelGateway: { enabled: false }
     })
 
-    expect(projected.kun).toEqual({ providerId: '', model: '' })
+    expect(projected.kun).toEqual({ providerId: '' })
   })
 
   it('does not restore a provider while its canonical deletion is pending', () => {
@@ -1032,7 +1032,7 @@ describe('shared model connection settings projection', () => {
     }, new Map([['custom-provider-2', { generation: 1, committedRevision: 8 }]]))
 
     expect(projected.provider.providers.map((provider) => provider.id)).toEqual(['deepseek'])
-    expect(projected.kun).toEqual({ providerId: '', model: '' })
+    expect(projected.kun).toEqual({ providerId: '' })
   })
 })
 
@@ -1253,6 +1253,58 @@ describe('provider mutation lifecycle across settings remounts', () => {
     )
     expect(rendererText(renderer)).not.toContain('settings:provider:')
     expect(rendererText(renderer)).not.toContain('credential_unreadable')
+  })
+
+  it('reveals a protected credential on demand and clears it when hidden again', async () => {
+    const { settings, provider } = providerFixture('deepseek')
+    const runtimeRequest = vi.fn(async (path: string) => {
+      if (path.includes('/events?')) return new Promise<never>(() => undefined)
+      return { ok: true, status: 200, body: JSON.stringify(snapshotFor(provider, 1)) }
+    })
+    const revealModelProviderCredential = vi.fn(async (providerId: string) => ({
+      providerId,
+      credential: 'sk-protected-secret'
+    }))
+    Object.assign(window.kunGui, { runtimeRequest, revealModelProviderCredential })
+    const ctx = contextFor(settings, provider)
+    const Harness = () => {
+      const [showApiKey, setShowApiKey] = useState(false)
+      return createElement(ProvidersSettingsSection, {
+        ctx: { ...ctx, showApiKey, setShowApiKey }
+      })
+    }
+    let renderer!: ReactTestRenderer
+    await act(async () => {
+      renderer = createRenderer(createElement(Harness))
+    })
+    mountedRenderers.push(renderer)
+    await flush()
+
+    const hiddenInput = renderer.root.findAllByType('input')
+      .find((input) => input.props.type === 'password')
+    expect(hiddenInput?.props.value).toBe('')
+    expect(hiddenInput?.props.placeholder).toBe('••••••••••••')
+    const showButton = renderer.root.findAllByType('button')
+      .find((button) => button.props['aria-label'] === 'showSecret')
+    expect(showButton).toBeTruthy()
+    await act(async () => showButton!.props.onClick())
+    await flush()
+
+    const revealedInput = renderer.root.findAllByType('input')
+      .find((input) => input.props.type === 'text' && input.props.value === 'sk-protected-secret')
+    expect(revealedInput).toBeTruthy()
+    expect(revealModelProviderCredential).toHaveBeenCalledWith('deepseek')
+
+    const hideButton = renderer.root.findAllByType('button')
+      .find((button) => button.props['aria-label'] === 'hideSecret')
+    expect(hideButton).toBeTruthy()
+    await act(async () => hideButton!.props.onClick())
+    await flush()
+
+    const rehiddenInput = renderer.root.findAllByType('input')
+      .find((input) => input.props.type === 'password')
+    expect(rehiddenInput?.props.value).toBe('')
+    expect(rehiddenInput?.props.placeholder).toBe('••••••••••••')
   })
 
   it('keeps a credential generation through unmount and clears it after the adopted commit', async () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { forkThread, getThread, updateThread } from './threads.js'
+import { forkThread, getThread, getThreadState, updateThread } from './threads.js'
 import { buildRouter } from './index.js'
 import type { ServerRuntime } from './server-runtime.js'
 import { createThreadRecord } from '../../domain/thread.js'
@@ -115,6 +115,50 @@ describe('getThread replay snapshot boundary (#1087)', () => {
     expect(durableHighWater).toBe(201)
     expect(body.latestSeq).toBe(200)
     expect(body.status).toBe('idle')
+  })
+})
+
+describe('getThreadState', () => {
+  it('returns only metadata and never loads session item history', async () => {
+    const record = createThreadRecord({
+      id: 'thr_state', title: 'State', workspace: '/tmp', model: 'deepseek-chat', status: 'running'
+    })
+    record.turns = [createTurnRecord({
+      id: 'turn_state', threadId: record.id, prompt: 'continue', status: 'running',
+      createdAt: '2026-08-07T00:00:00.000Z'
+    })]
+    const getMetadata = vi.fn(async () => record)
+    const loadItems = vi.fn(async () => {
+      throw new Error('state route must not load items')
+    })
+    const response = await getThreadState({
+      get: vi.fn(async () => record),
+      getMetadata
+    } as unknown as ThreadService, record.id, {
+      highestSeq: vi.fn(async () => 73),
+      loadItems
+    } as never)
+
+    expect(response.status).toBe(200)
+    expect(JSON.parse(response.body)).toEqual({
+      id: record.id,
+      status: 'running',
+      updatedAt: record.updatedAt,
+      latestSeq: 73,
+      latestTurn: { id: 'turn_state', status: 'running', orchestration: 'direct' }
+    })
+    expect(getMetadata).toHaveBeenCalledWith(record.id)
+    expect(loadItems).not.toHaveBeenCalled()
+  })
+
+  it('returns the normal 404 response for a missing thread', async () => {
+    const response = await getThreadState({
+      get: vi.fn(async () => null),
+      getMetadata: vi.fn(async () => null)
+    } as unknown as ThreadService, 'thr_missing')
+
+    expect(response.status).toBe(404)
+    expect(JSON.parse(response.body)).toMatchObject({ code: 'not_found' })
   })
 })
 
@@ -347,5 +391,25 @@ describe('GET /v1/threads/:id active-owner forwarding (#1053)', () => {
 
     expect(forwardThreadControl).toHaveBeenCalledWith(request, 'thr_owner')
     expect(result).toBe(forwarded)
+  })
+
+  it('registers the authenticated lightweight state route before the generic detail route', async () => {
+    const forwarded = new Response(JSON.stringify({ state: true }), { status: 200 })
+    const forwardThreadControl = vi.fn(async () => forwarded)
+    const router = buildRouter({
+      runtimeToken: 'thread-route-token', insecure: false, forwardThreadControl
+    } as unknown as ServerRuntime)
+    const authorized = new Request('http://127.0.0.1/v1/threads/thr_owner/state', {
+      headers: { authorization: 'Bearer thread-route-token' }
+    })
+    const match = router.match('GET', new URL(authorized.url).pathname)
+    if (!match) throw new Error('thread state route not found')
+
+    expect(await match.handler(authorized, { params: match.params })).toBe(forwarded)
+    expect(forwardThreadControl).toHaveBeenCalledWith(authorized, 'thr_owner')
+
+    const unauthorized = new Request('http://127.0.0.1/v1/threads/thr_owner/state')
+    const rejected = await match.handler(unauthorized, { params: match.params })
+    expect(rejected.status).toBe(401)
   })
 })

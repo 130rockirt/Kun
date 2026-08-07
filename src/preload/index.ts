@@ -129,6 +129,8 @@ const api = {
     respondRendererRequest: (response) => ipcRenderer.invoke('data-migration:renderer-response', response)
   },
   getSettings: () => ipcRenderer.invoke('settings:get'),
+  revealModelProviderCredential: (providerId) =>
+    ipcRenderer.invoke('model-provider:credential:reveal', { providerId }),
   resetUnreadableCredentials: () => ipcRenderer.invoke('credentials:reset-unreadable'),
   cliInstallStatus: () => ipcRenderer.invoke('cli-install:status'),
   cliInstallAction: (action) => ipcRenderer.invoke('cli-install:action', action),

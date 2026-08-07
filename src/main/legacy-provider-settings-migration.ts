@@ -163,7 +163,8 @@ export class LegacyProviderSettingsMigrationCoordinator {
 
   /**
    * Produces a short-lived Main-only settings view for legacy request paths.
-   * Registry credentials never enter ordinary settings or renderer IPC.
+   * Registry credentials never enter ordinary settings or bulk renderer IPC;
+   * the trusted workbench may request one provider explicitly for UI reveal.
    */
   async withRegistryCredentials(settings: AppSettingsV1): Promise<AppSettingsV1> {
     const dataDir = resolveSettingsDataDir(settings)

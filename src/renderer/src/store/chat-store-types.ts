@@ -252,6 +252,8 @@ export type ChatState = {
   threadSearch: string
   showArchivedThreads: boolean
   activeThreadId: string | null
+  /** Thread selected immediately but whose durable snapshot is still loading. */
+  threadLoadingId: string | null
   /** 最近一次在 Code 工作台(chat 路由)选中的会话,供从设置/其他工作区/Connect Phone 返回时恢复。 */
   lastCodeThreadId: string | null
   /** Relationship of the active thread (e.g. `side` for a subagent's own session). */

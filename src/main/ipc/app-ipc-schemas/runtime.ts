@@ -44,6 +44,7 @@ import {
   KUN_THREAD_INTERRUPT_TEMPLATE,
   KUN_THREAD_MODEL_REQUESTS_TEMPLATE,
   KUN_THREAD_STEER_TEMPLATE,
+  KUN_THREAD_STATE_TEMPLATE,
   KUN_THREAD_TEMPLATE,
   KUN_USER_INPUT_TEMPLATE,
   KUN_USAGE_TEMPLATE,
@@ -92,6 +93,12 @@ export const providerProbePayloadSchema = z
     baseUrl: trimmedString(MAX_URL_LENGTH),
     apiKey: z.string().max(8_192),
     endpointFormat: z.enum(MODEL_ENDPOINT_FORMATS)
+  })
+  .strict()
+
+export const modelProviderCredentialRevealPayloadSchema = z
+  .object({
+    providerId: trimmedString(128)
   })
   .strict()
 
@@ -171,6 +178,7 @@ const ENDPOINTS: readonly EndpointTemplate[] = [
   compileEndpoint(KUN_MCP_OAUTH_TEMPLATE, ['GET', 'DELETE']),
   compileEndpoint(KUN_MCP_OAUTH_SERVER_TEMPLATE, ['DELETE']),
   compileEndpoint(KUN_THREADS_TEMPLATE, ['GET', 'POST']),
+  compileEndpoint(KUN_THREAD_STATE_TEMPLATE, ['GET']),
   compileEndpoint(KUN_THREAD_TEMPLATE, ['GET', 'PATCH', 'DELETE']),
   compileEndpoint(KUN_THREAD_FORK_TEMPLATE, ['POST']),
   compileEndpoint(KUN_THREAD_GOAL_TEMPLATE, ['GET', 'POST', 'DELETE']),

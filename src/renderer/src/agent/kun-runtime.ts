@@ -28,6 +28,7 @@ import {
   kunThreadTodosPath,
   kunThreadInterruptPath,
   kunThreadPath,
+  kunThreadStatePath,
   kunThreadSteerPath,
   kunThreadTurnsPath,
   kunAttachmentContentPath,
@@ -68,6 +69,7 @@ import type {
   CoreStartTurnResponseJson,
   CoreThreadGoalResponseJson,
   CoreThreadJson,
+  CoreThreadRuntimeStateJson,
   CoreThreadSummaryJson,
   CoreThreadTodosResponseJson
 } from './kun-contract'
@@ -303,6 +305,7 @@ export class KunRuntimeProvider implements AgentProvider {
     latestSeq: number
     threadStatus?: string
     latestTurnId?: string
+    latestTurnStatus?: string
     latestTurnOrchestration?: 'direct' | 'graph'
     latestUserMessageId?: string
     turnDurationByUserId?: Record<string, number>
@@ -311,6 +314,7 @@ export class KunRuntimeProvider implements AgentProvider {
     parentThreadId?: string
     goal?: NormalizedThread['goal']
     todos?: NormalizedThread['todos']
+    payloadBytes?: number
   }> {
     const response = await rendererRuntimeClient.runtimeRequest(kunThreadPath(threadId), 'GET')
     if (!response.ok) {
@@ -377,6 +381,7 @@ export class KunRuntimeProvider implements AgentProvider {
       latestSeq: thread.latestSeq ?? 0,
       threadStatus: thread.status ?? latestTurn?.status,
       latestTurnId: latestTurn?.id,
+      latestTurnStatus: latestTurn?.status,
       latestTurnOrchestration: latestTurn
         ? latestTurn.orchestration === 'graph' ? 'graph' : 'direct'
         : undefined,
@@ -385,7 +390,38 @@ export class KunRuntimeProvider implements AgentProvider {
       ...(thread.parentThreadId ? { parentThreadId: thread.parentThreadId } : {}),
       ...(typeof thread.model === 'string' && thread.model.trim() ? { model: thread.model.trim() } : {}),
       goal: thread.goal ? goalFromCore(thread.goal) : null,
-      todos: thread.todos ? todosFromCore(thread.todos) : null
+      todos: thread.todos ? todosFromCore(thread.todos) : null,
+      payloadBytes: response.body.length
+    }
+  }
+
+  async getThreadState(threadId: string): Promise<{
+    status: string
+    updatedAt: string
+    latestSeq: number
+    latestTurnId?: string
+    latestTurnStatus?: string
+    latestTurnOrchestration?: 'direct' | 'graph'
+  }> {
+    const response = await rendererRuntimeClient.runtimeRequest(kunThreadStatePath(threadId), 'GET')
+    if (!response.ok) {
+      throw runtimeErrorToError(readRuntimeError(response.body, 'failed to load thread state'))
+    }
+    const state = readRuntimeJson<CoreThreadRuntimeStateJson>(
+      response.body,
+      'runtime returned an invalid thread state response'
+    )
+    return {
+      status: state.status,
+      updatedAt: state.updatedAt,
+      latestSeq: state.latestSeq,
+      ...(state.latestTurn
+        ? {
+            latestTurnId: state.latestTurn.id,
+            latestTurnStatus: state.latestTurn.status,
+            latestTurnOrchestration: state.latestTurn.orchestration
+          }
+        : {})
     }
   }
 

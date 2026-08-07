@@ -211,6 +211,11 @@ export function kunThreadPath(threadId: string): string {
   return `/v1/threads/${encodeURIComponent(threadId)}`
 }
 
+export const KUN_THREAD_STATE_TEMPLATE = '/v1/threads/{id}/state'
+export function kunThreadStatePath(threadId: string): string {
+  return `${kunThreadPath(threadId)}/state`
+}
+
 export const KUN_THREAD_FORK_TEMPLATE = '/v1/threads/{id}/fork'
 export function kunThreadForkPath(threadId: string): string {
   return `${kunThreadPath(threadId)}/fork`

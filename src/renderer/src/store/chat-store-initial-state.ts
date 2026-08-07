@@ -25,6 +25,7 @@ export function createInitialChatStoreState(workingDirectoryLabel: string) {
     threadSearch: '',
     showArchivedThreads: false,
     activeThreadId: null,
+    threadLoadingId: null,
     lastCodeThreadId: null,
     activeThreadRelation: null,
     activeThreadParentId: null,

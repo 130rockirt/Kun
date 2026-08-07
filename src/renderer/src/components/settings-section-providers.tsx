@@ -139,6 +139,11 @@ type SharedModelConnectionsSnapshot = {
   localModelGateway?: { enabled: boolean }
 }
 
+type ProjectedKunSelectionPatch = {
+  providerId: string
+  model?: string
+}
+
 export function sharedModelConnectionHasUsableCredential(
   connection: Pick<SharedModelConnection, 'configured' | 'credentialStatus'> | undefined
 ): boolean {
@@ -928,7 +933,7 @@ export function projectSharedModelConnections(
   pendingCatalogs: Pick<ReadonlyMap<string, PendingSharedProviderCatalog>, 'get'> = new Map()
 ): {
   provider: Pick<ModelProviderSettingsV1, 'providers' | 'proxy' | 'routePools' | 'localGateway'>
-  kun: Pick<KunRuntimeSettingsV1, 'providerId' | 'model'>
+  kun: ProjectedKunSelectionPatch
 } {
   const existingById = new Map(current.providers.map((item) => [item.id, item]))
   const visibleConnections = snapshot.providers.filter((connection) =>
@@ -971,6 +976,13 @@ export function projectSharedModelConnections(
   const providers = compatibilityDefault
     ? [compatibilityDefault, ...projectedProviders]
     : projectedProviders
+  const defaultProviderId = snapshot.defaultProviderId?.trim()
+  const defaultModel = snapshot.defaultModel?.trim()
+  const hasUsableDefault = Boolean(
+    defaultProviderId &&
+    defaultModel &&
+    pendingDeletions.get(defaultProviderId)?.committedRevision == null
+  )
   return {
     provider: {
       providers,
@@ -981,16 +993,9 @@ export function projectSharedModelConnections(
         enabled: snapshot.localModelGateway?.enabled ?? current.localGateway.enabled
       }
     },
-    kun: {
-      providerId: snapshot.defaultProviderId &&
-        pendingDeletions.get(snapshot.defaultProviderId)?.committedRevision == null
-        ? snapshot.defaultProviderId
-        : '',
-      model: snapshot.defaultProviderId &&
-        pendingDeletions.get(snapshot.defaultProviderId)?.committedRevision == null
-        ? snapshot.defaultModel ?? ''
-        : ''
-    }
+    kun: hasUsableDefault
+      ? { providerId: defaultProviderId!, model: defaultModel! }
+      : { providerId: '' }
   }
 }
 
@@ -2449,6 +2454,13 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
         .map(([providerId, pending]) => [providerId, pending.credential])
     )
   )
+  const [revealedCredential, setRevealedCredential] = useState<{
+    providerId: string
+    credential: string
+  } | null>(null)
+  const [credentialRevealPendingProviderId, setCredentialRevealPendingProviderId] = useState('')
+  const [credentialRevealError, setCredentialRevealError] = useState('')
+  const credentialRevealGeneration = useRef(0)
   const enqueueSharedMutation = enqueueSharedModelMutation
   const sharedProjectionInput = useRef({ provider, kun, update, form })
   sharedProjectionInput.current = { provider, kun, update, form }
@@ -2535,6 +2547,15 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
   const activeProvider =
     displayProviders.find((item) => item.id === selectedProviderId) ??
     modelProviders[0]
+  const activeProviderIdRef = useRef(activeProvider?.id ?? '')
+  activeProviderIdRef.current = activeProvider?.id ?? ''
+  useEffect(() => {
+    credentialRevealGeneration.current += 1
+    setShowApiKey(false)
+    setRevealedCredential(null)
+    setCredentialRevealPendingProviderId('')
+    setCredentialRevealError('')
+  }, [activeProvider?.id, setShowApiKey])
   const sharedConnectionFor = (providerId: string): SharedModelConnection | undefined =>
     sharedConnections?.providers.find((connection) => connection.id === providerId)
   const hasConfiguredCredential = (provider: ModelProviderProfileV1): boolean =>
@@ -2602,10 +2623,11 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
             pendingSharedProviderNames.current,
             pendingSharedProviderCatalogs.current
           )
+          const effectiveProjectedModel = projected.kun.model ?? current.kun.model
           const fingerprint = sharedSettingsFingerprint({
             providers: projected.provider.providers,
             providerId: projected.kun.providerId,
-            model: projected.kun.model,
+            model: effectiveProjectedModel,
             proxy: projected.provider.proxy,
             routePools: projected.provider.routePools,
             localGateway: projected.provider.localGateway
@@ -3211,6 +3233,72 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
     }
     if (Object.keys(settingsPatch).length > 0) {
       patchProviderProfile(target, (item) => ({ ...item, ...settingsPatch }))
+    }
+  }
+
+  const updateActiveProviderCredential = (value: string): void => {
+    if (!activeProvider) return
+    setCredentialRevealError('')
+    if (showApiKey) {
+      setRevealedCredential({ providerId: activeProvider.id, credential: value })
+    }
+    updateModelProvider(activeProvider.id, { apiKey: value })
+  }
+
+  const toggleActiveProviderCredentialVisibility = async (): Promise<void> => {
+    if (!activeProvider) return
+    const providerId = activeProvider.id
+    if (showApiKey) {
+      credentialRevealGeneration.current += 1
+      setShowApiKey(false)
+      setRevealedCredential(null)
+      setCredentialRevealError('')
+      return
+    }
+
+    setCredentialRevealError('')
+    if (
+      activeProvider.apiKey.length > 0 ||
+      !sharedModelConnectionHasUsableCredential(sharedConnectionFor(providerId))
+    ) {
+      setShowApiKey(true)
+      return
+    }
+
+    setCredentialRevealPendingProviderId(providerId)
+    const generation = ++credentialRevealGeneration.current
+    try {
+      if (typeof window.kunGui?.revealModelProviderCredential !== 'function') {
+        throw new Error('Provider credential reveal is unavailable')
+      }
+      const result = await window.kunGui.revealModelProviderCredential(providerId)
+      if (
+        !mounted.current ||
+        activeProviderIdRef.current !== providerId ||
+        credentialRevealGeneration.current !== generation
+      ) return
+      setRevealedCredential({ providerId, credential: result.credential })
+      setShowApiKey(true)
+    } catch {
+      if (
+        mounted.current &&
+        activeProviderIdRef.current === providerId &&
+        credentialRevealGeneration.current === generation
+      ) {
+        setCredentialRevealError(
+          zh
+            ? '无法显示已保存的凭据。请重试，或输入新值替换它。'
+            : 'The saved credential could not be shown. Try again, or enter a new value to replace it.'
+        )
+      }
+    } finally {
+      if (
+        mounted.current &&
+        activeProviderIdRef.current === providerId &&
+        credentialRevealGeneration.current === generation
+      ) {
+        setCredentialRevealPendingProviderId('')
+      }
     }
   }
 
@@ -4218,6 +4306,11 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
     )
       ? '••••••••••••'
       : t('modelProviderApiKeyPlaceholder')
+  const activeApiKeyValue = showApiKey && revealedCredential?.providerId === activeProvider?.id
+    ? revealedCredential.credential
+    : activeProvider?.apiKey ?? ''
+  const activeCredentialRevealBusy =
+    credentialRevealPendingProviderId === activeProvider?.id
   const activeTokenPlanRegions = activeProvider
     ? tokenPlanPresetForProfile(activeProvider)?.tokenPlan?.regions ?? []
     : []
@@ -4619,16 +4712,21 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
                         {t('modelProviderApiKey')}
                         <SecretInput
                           className="min-h-11 !rounded-lg"
-                          value={activeProvider.apiKey}
-                          onChange={(value) => updateModelProvider(activeProvider.id, { apiKey: value })}
+                          value={activeApiKeyValue}
+                          onChange={updateActiveProviderCredential}
                           visible={showApiKey}
-                          onToggleVisibility={() => setShowApiKey((value: boolean) => !value)}
+                          onToggleVisibility={() => { void toggleActiveProviderCredentialVisibility() }}
+                          toggleBusy={activeCredentialRevealBusy}
                           placeholder={activeApiKeyPlaceholder}
                           autoComplete="off"
                           showLabel={t('showSecret')}
                           hideLabel={t('hideSecret')}
                         />
-                        {!activeProvider.apiKey.trim() && activeCredentialNeedsReplacement ? (
+                        {credentialRevealError ? (
+                          <span className="text-[12px] font-normal text-amber-600 dark:text-amber-300">
+                            {credentialRevealError}
+                          </span>
+                        ) : !activeProvider.apiKey.trim() && activeCredentialNeedsReplacement ? (
                           <span className="text-[12px] font-normal text-amber-600 dark:text-amber-300">
                             {activeSharedConnection?.credentialStatus === 'unreadable'
                               ? zh
@@ -4677,16 +4775,21 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
                         {t('modelProviderApiKey')}
                         <SecretInput
                           className="min-h-11 !rounded-lg"
-                          value={activeProvider.apiKey}
-                          onChange={(value) => updateModelProvider(activeProvider.id, { apiKey: value })}
+                          value={activeApiKeyValue}
+                          onChange={updateActiveProviderCredential}
                           visible={showApiKey}
-                          onToggleVisibility={() => setShowApiKey((value: boolean) => !value)}
+                          onToggleVisibility={() => { void toggleActiveProviderCredentialVisibility() }}
+                          toggleBusy={activeCredentialRevealBusy}
                           placeholder={activeApiKeyPlaceholder}
                           autoComplete="off"
                           showLabel={t('showSecret')}
                           hideLabel={t('hideSecret')}
                         />
-                        {!activeProvider.apiKey.trim() && activeCredentialNeedsReplacement ? (
+                        {credentialRevealError ? (
+                          <span className="text-[12px] font-normal text-amber-600 dark:text-amber-300">
+                            {credentialRevealError}
+                          </span>
+                        ) : !activeProvider.apiKey.trim() && activeCredentialNeedsReplacement ? (
                           <span className="text-[12px] font-normal text-amber-600 dark:text-amber-300">
                             {activeSharedConnection?.credentialStatus === 'unreadable'
                               ? zh

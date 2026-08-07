@@ -9,6 +9,7 @@ import {
   SetThreadGoalRequest,
   SetThreadTodosRequest,
   ThreadGoalResponse,
+  ThreadRuntimeStateSchema,
   ThreadSchema,
   ThreadTodosResponse,
   UpdateThreadRequest,
@@ -104,7 +105,21 @@ export async function getThread(
   // replayable without creating either an old-state/new-cursor gap or duplicate
   // assistant text.
   const latestSeq = sessionStore ? await sessionStore.highestSeq(threadId) : 0
-  const thread = await service.get(threadId)
+  // With a durable session store, the thread metadata and items are separate
+  // projections. Read only metadata here, then hydrate item history once
+  // below; `service.get()` would otherwise transfer the same history first.
+  let thread: ThreadRecord | null
+  let loadedSessionItems: TurnItem[] | undefined
+  if (sessionStore) {
+    const loaded = await Promise.all([
+      loadThreadMetadata(service, threadId),
+      sessionStore.loadItems(threadId)
+    ])
+    thread = loaded[0]
+    loadedSessionItems = loaded[1]
+  } else {
+    thread = await service.get(threadId)
+  }
   if (!thread) {
     return jsonResponse(
       { code: 'not_found', message: `thread not found: ${threadId}` },
@@ -114,7 +129,7 @@ export async function getThread(
   const pendingApprovals = approvalGate?.pending(threadId) ?? []
   let sessionItems: TurnItem[] = []
   if (sessionStore) {
-    sessionItems = await sessionStore.loadItems(threadId)
+    sessionItems = loadedSessionItems ?? []
     sessionItems = await healSessionItemsForFinishedTurns(thread, sessionItems, sessionStore)
   } else if (pendingApprovals.length > 0) {
     // Tests and lightweight embedded callers can omit the session store. Use
@@ -147,6 +162,48 @@ export async function getThread(
     pendingUserInputIds,
     ...(pendingApprovalIds ? { pendingApprovalIds } : {})
   })
+}
+
+/**
+ * Return just enough state to decide whether a background thread is still
+ * running. This route intentionally never reads session items.
+ */
+export async function getThreadState(
+  service: ThreadService,
+  threadId: string,
+  sessionStore?: SessionStore
+): Promise<JsonResponse> {
+  const latestSeq = sessionStore ? await sessionStore.highestSeq(threadId) : 0
+  const thread = await loadThreadMetadata(service, threadId)
+  if (!thread) {
+    return jsonResponse(
+      { code: 'not_found', message: `thread not found: ${threadId}` },
+      404
+    )
+  }
+  const latestTurn = thread.turns.at(-1)
+  return jsonResponse(ThreadRuntimeStateSchema.parse({
+    id: thread.id,
+    status: thread.status,
+    updatedAt: thread.updatedAt,
+    latestSeq,
+    latestTurn: latestTurn
+      ? {
+          id: latestTurn.id,
+          status: latestTurn.status,
+          orchestration: latestTurn.orchestration === 'graph' ? 'graph' : 'direct'
+        }
+      : null
+  }))
+}
+
+function loadThreadMetadata(service: ThreadService, threadId: string): Promise<ThreadRecord | null> {
+  // Keep direct route-unit fakes and third-party ThreadService facades from
+  // needing a coordinated upgrade; production ThreadService always exposes
+  // getMetadata and takes the lightweight path.
+  return typeof service.getMetadata === 'function'
+    ? service.getMetadata(threadId)
+    : service.get(threadId)
 }
 
 function mergePendingApprovalItems(

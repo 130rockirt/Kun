@@ -59,6 +59,18 @@ export type CoreThreadJson = CoreThreadSummaryJson & {
   pendingApprovalIds?: string[]
 }
 
+export type CoreThreadRuntimeStateJson = {
+  id: string
+  status: string
+  updatedAt: string
+  latestSeq: number
+  latestTurn: {
+    id: string
+    status: string
+    orchestration: 'direct' | 'graph'
+  } | null
+}
+
 export type CoreAttachmentMetadataJson = {
   id: string
   name: string

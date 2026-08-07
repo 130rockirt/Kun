@@ -104,10 +104,14 @@ export function buildToolPreferenceInstruction(
 
   if (mutationTools.length > 0) {
     if (names.has('edit')) {
-      bullets.push('Use `edit` for focused changes to existing files after reading the relevant content.')
+      bullets.push(exploreAgentAvailable
+        ? 'After `explore_agent` returns, use `edit` for focused changes to existing files; the parent agent owns all mutations.'
+        : 'Use `edit` for focused changes to existing files after reading the relevant content.')
     }
     if (names.has('write')) {
-      bullets.push('Use `write` only when creating or fully replacing a file is necessary; do not create files for explanation or one-off scratch work in the project.')
+      bullets.push(exploreAgentAvailable
+        ? 'After `explore_agent` returns, use `write` only when creating or fully replacing a file is necessary; do not create files for explanation or one-off scratch work in the project.'
+        : 'Use `write` only when creating or fully replacing a file is necessary; do not create files for explanation or one-off scratch work in the project.')
     }
     if (names.has('bash')) {
       bullets.push(
@@ -197,7 +201,9 @@ export function buildToolPreferenceInstruction(
 
   if (names.has('graph_define_plan')) {
     bullets.push(
-      'A durable Graph planning draft already exists. Inspect relevant repository facts with read-only tools, then use `graph_define_plan` with only task keys, objectives, dependencies, acceptance criteria, and repository-relative scopes. The host supplies every execution mechanic.'
+      exploreAgentAvailable
+        ? 'A durable Graph planning draft already exists. Use `explore_agent` to inspect relevant repository facts first, then use `graph_define_plan` with only task keys, objectives, dependencies, acceptance criteria, and repository-relative scopes. The host supplies every execution mechanic.'
+        : 'A durable Graph planning draft already exists. Inspect relevant repository facts with read-only tools, then use `graph_define_plan` with only task keys, objectives, dependencies, acceptance criteria, and repository-relative scopes. The host supplies every execution mechanic.'
     )
     bullets.push(
       'You may make one changed correction from structured validation issues. Never repeat unchanged invalid plan arguments or claim a GraphRun exists before `graph_define_plan` returns committed.'

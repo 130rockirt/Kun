@@ -428,6 +428,7 @@ export function MessageTimeline({
   onExtensionCommand
 }: Props): ReactElement {
   const { t } = useTranslation('common')
+  const threadLoadingId = useChatStore((state) => state.threadLoadingId)
   const {
     route,
     workspaceRoot,
@@ -727,7 +728,17 @@ export function MessageTimeline({
       <div className={`ds-message-timeline-content ds-chat-column-inset ds-chat-content-max-width mx-auto flex w-full min-w-0 flex-col gap-8 pt-8 ${
         timelineBottomPaddingClass()
       }`}>
-        {!hasContent || !activeThreadId ? (
+        {activeThreadId && threadLoadingId === activeThreadId ? (
+          <div
+            data-testid="thread-hydration-skeleton"
+            aria-busy="true"
+            className="flex flex-col gap-4 py-4"
+          >
+            <div className="h-5 w-32 animate-pulse rounded bg-ds-border/60" />
+            <div className="h-20 w-4/5 animate-pulse rounded-2xl bg-ds-border/40" />
+            <div className="ml-auto h-14 w-3/5 animate-pulse rounded-2xl bg-ds-border/30" />
+          </div>
+        ) : !hasContent || !activeThreadId ? (
           <MessageTimelineEmptyHero
             route={heroRoute}
             ready={runtimeConnection === 'ready'}

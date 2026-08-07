@@ -37,6 +37,7 @@ import type {
   ConversationWorkspaceCreateResult,
   DesktopCommand,
   KunRuntimeSettingsSyncStatusPayload,
+  ModelProviderCredentialRevealResult,
   RuntimeRequestResult,
   SystemNotificationResult,
   TurnCompleteNotificationPayload,
@@ -69,6 +70,7 @@ import {
   notificationPayloadSchema,
   openEditorPathPayloadSchema,
   modelsDevCatalogPayloadSchema,
+  modelProviderCredentialRevealPayloadSchema,
   providerProbePayloadSchema,
   projectDesignMdLintPayloadSchema,
   promptOptimizationPayloadSchema,
@@ -917,6 +919,27 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
 
   ipcMain.handle('settings:get', async () =>
     withoutRendererPlaintextCredentials(await store.load())
+  )
+  ipcMain.handle(
+    'model-provider:credential:reveal',
+    async (event, payload: unknown): Promise<ModelProviderCredentialRevealResult> => {
+      assertTrustedWorkbenchSender(event, getMainWindow)
+      const { providerId } = parseIpcPayload(
+        'model-provider:credential:reveal',
+        modelProviderCredentialRevealPayloadSchema,
+        payload
+      )
+      const stored = await store.load()
+      if (!stored.provider.providers.some((provider) => provider.id === providerId)) {
+        throw new Error(`Provider profile "${providerId}" is unavailable`)
+      }
+      const projected = await withRegistryCredentials(stored)
+      const credential = projected.provider.providers
+        .find((provider) => provider.id === providerId)
+        ?.apiKey.trim() ?? ''
+      if (!credential) throw new Error('Protected provider credential is unavailable')
+      return { providerId, credential }
+    }
   )
   ipcMain.handle('credentials:reset-unreadable', async (event): Promise<CredentialRecoveryResetResult> => {
     assertTrustedWorkbenchSender(event, getMainWindow)

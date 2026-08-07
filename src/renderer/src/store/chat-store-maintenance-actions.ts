@@ -35,6 +35,7 @@ import {
   forgetQueuedMessagesForThread,
   saveQueuedMessagesForThread
 } from './queued-message-persistence'
+import { invalidateThreadSnapshot } from './thread-snapshot-cache'
 
 /**
  * Release the worktree pool slot owned by a thread when the task completes
@@ -380,6 +381,9 @@ export function createMaintenanceActions(
       } else {
         throw new Error(i18n.t('common:runtimeFeatureUnsupported'))
       }
+      // An archived/unarchived projection can differ from the one currently
+      // parked in memory; force a fresh durable snapshot next time.
+      invalidateThreadSnapshot(targetId)
       if (archivingActive) {
         sseAbortRef.current?.abort()
         sseAbortRef.current = null
@@ -802,11 +806,13 @@ export function createMaintenanceActions(
     await Promise.all(originalThreadIds.map(async (threadId) => {
       try {
         await provider.deleteThread(threadId)
+        invalidateThreadSnapshot(threadId)
         runtimeDeletedIds.push(threadId)
       } catch (error) {
         // A retry after an interrupted local cleanup commonly reaches a thread
         // already removed from Kun. That is success for this idempotent action.
         if (getRuntimeErrorCode(error) === 'not_found') {
+          invalidateThreadSnapshot(threadId)
           runtimeDeletedIds.push(threadId)
           return
         }
@@ -988,6 +994,7 @@ export function createMaintenanceActions(
     }
     try {
       await p.deleteThread(targetId)
+      invalidateThreadSnapshot(targetId)
       forgetQueuedMessagesForThread(targetId)
       saveWriteThreadRegistry(forgetWriteThread(targetId))
       saveDesignThreadRegistry(forgetDesignThread(targetId))
@@ -1108,6 +1115,7 @@ export function createMaintenanceActions(
       })
       if (canvasResend) openCodeCanvasPanel()
       await p.rewindThread(state.activeThreadId, turnId)
+      invalidateThreadSnapshot(state.activeThreadId)
       set({
         blocks: trimmedBlocks,
         liveReasoning: '',

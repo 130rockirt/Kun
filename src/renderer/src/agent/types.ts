@@ -706,6 +706,7 @@ export interface AgentProvider {
     latestSeq: number
     threadStatus?: string
     latestTurnId?: string
+    latestTurnStatus?: string
     latestTurnOrchestration?: 'direct' | 'graph'
     latestUserMessageId?: string
     turnDurationByUserId?: Record<string, number>
@@ -715,6 +716,16 @@ export interface AgentProvider {
     model?: string
     goal?: ThreadGoal | null
     todos?: ThreadTodoList | null
+    /** Original detail response size, used only to bound renderer snapshots. */
+    payloadBytes?: number
+  }>
+  getThreadState(threadId: string): Promise<{
+    status: string
+    updatedAt: string
+    latestSeq: number
+    latestTurnId?: string
+    latestTurnStatus?: string
+    latestTurnOrchestration?: 'direct' | 'graph'
   }>
   sendUserMessage(
     threadId: string,

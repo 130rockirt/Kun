@@ -11,6 +11,7 @@ import {
   queuedMessagesForThread,
   saveQueuedMessagesForThread
 } from './queued-message-persistence'
+import { clearThreadSnapshotCache } from './thread-snapshot-cache'
 
 const registryMock = vi.hoisted(() => ({
   getProvider: vi.fn()
@@ -111,6 +112,7 @@ function expectSink(sink: ThreadEventSink | null): ThreadEventSink {
 
 describe('chat-store-thread-actions queued messages', () => {
   beforeEach(() => {
+    clearThreadSnapshotCache()
     rendererRuntimeClient.invalidateSettings()
     registryMock.getProvider.mockReset()
     registryMock.getProvider.mockReturnValue({})
@@ -312,6 +314,82 @@ describe('chat-store-thread-actions queued messages', () => {
 
     expect(state.activeThreadId).toBe('thr_drawing')
     expect(state.blocks).toEqual([])
+  })
+
+  it('selects immediately, then settles a stale running sidebar summary from idle detail', async () => {
+    const detail = deferredValue<{
+      blocks: ChatBlock[]
+      latestSeq: number
+      threadStatus: 'idle'
+      latestTurnStatus: 'completed'
+    }>()
+    registryMock.getProvider.mockReturnValue({
+      getThreadDetail: vi.fn(() => detail.promise),
+      subscribeThreadEvents: vi.fn(async () => undefined)
+    })
+    const { actions, state } = buildHarness()
+    state.busy = false
+    state.composerPickList = []
+    state.composerModelGroups = []
+    state.threads = [thread('thr_existing'), { ...thread('thr_idle'), status: 'running' }]
+
+    const selecting = actions.selectThread('thr_idle')
+    expect(state.activeThreadId).toBe('thr_idle')
+    expect(state.threadLoadingId).toBe('thr_idle')
+    expect(state.blocks).toEqual([])
+
+    detail.resolve({
+      blocks: [{ kind: 'assistant', id: 'a-idle', text: 'already complete' }],
+      latestSeq: 17,
+      threadStatus: 'idle',
+      latestTurnStatus: 'completed'
+    })
+    await selecting
+
+    expect(state.threadLoadingId).toBeNull()
+    expect(state.busy).toBe(false)
+    expect(state.threads.find((thread) => thread.id === 'thr_idle')).toMatchObject({
+      status: 'idle',
+      latestTurnStatus: 'completed'
+    })
+  })
+
+  it('restores a cached thread without a second detail request and resumes SSE at its cursor', async () => {
+    const subscribeThreadEvents = vi.fn(async () => undefined)
+    const getThreadDetail = vi.fn(async (id: string) => {
+      if (id === 'thr_b') {
+        return {
+          blocks: [{ kind: 'assistant' as const, id: 'b-answer', text: 'B' }],
+          latestSeq: 22,
+          threadStatus: 'idle'
+        }
+      }
+      throw new Error(`unexpected detail request for ${id}`)
+    })
+    registryMock.getProvider.mockReturnValue({ getThreadDetail, subscribeThreadEvents })
+    const { actions, state } = buildHarness()
+    state.busy = false
+    state.composerPickList = []
+    state.composerModelGroups = []
+    state.activeThreadId = 'thr_a'
+    state.blocks = [{ kind: 'assistant', id: 'a-answer', text: 'A' }]
+    state.lastSeq = 11
+    state.liveDeltaSeqFloor = 11
+    state.threads = [thread('thr_a'), thread('thr_b')]
+
+    await actions.selectThread('thr_b')
+    await actions.selectThread('thr_a')
+
+    expect(getThreadDetail).toHaveBeenCalledTimes(1)
+    expect(getThreadDetail).toHaveBeenCalledWith('thr_b')
+    expect(state.blocks).toEqual([{ kind: 'assistant', id: 'a-answer', text: 'A' }])
+    expect(state.lastSeq).toBe(11)
+    expect(subscribeThreadEvents).toHaveBeenLastCalledWith(
+      'thr_a',
+      11,
+      expect.anything(),
+      expect.anything()
+    )
   })
 
   it('records a Code thread selection as the last Code session memory', async () => {
@@ -1693,6 +1771,7 @@ describe('chat-store-thread-actions queued messages', () => {
 
 describe('chat-store-thread-actions subscribeThreadEventsLive', () => {
   beforeEach(() => {
+    clearThreadSnapshotCache()
     rendererRuntimeClient.invalidateSettings()
     registryMock.getProvider.mockReset()
     registryMock.getProvider.mockReturnValue({})

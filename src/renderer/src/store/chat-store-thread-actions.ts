@@ -125,6 +125,7 @@ import {
   turnCompleteNotificationSource,
   watchTurnCompletionNotification
 } from './chat-store-runtime'
+import { getThreadSnapshot, snapshotThreadProjection } from './thread-snapshot-cache'
 import {
   composerSelectionForThread,
   ensureRuntimeProviderForSend,
@@ -566,8 +567,7 @@ export function createThreadActions(
     const prevBusy = previousState.busy
     const selectionStillCurrent = (): boolean => {
       if (selectionGeneration !== threadSelectionGeneration) return false
-      const currentId = get().activeThreadId
-      return currentId === prevId || currentId === id
+      return get().activeThreadId === id
     }
     let nextWatch = { ...get().watchTurnCompletion }
     delete nextWatch[id]
@@ -587,14 +587,112 @@ export function createThreadActions(
     sseAbortRef.current = null
     const p = getProvider()
     const durableQueuedMessages = queuedMessagesForThread(id)
+    // Park the outgoing renderer projection before its state is replaced. This
+    // is intentionally O(1): blocks stay immutable while another thread is
+    // active, so no expensive JSON serialization runs on the click path.
+    if (prevId && prevId !== id) snapshotThreadProjection(previousState)
+    // Re-selecting the active conversation is an explicit refresh (and is
+    // used by recovery paths to pick up durable queues), so only cross-thread
+    // navigation may consume an in-memory snapshot.
+    const cached = prevId !== id ? getThreadSnapshot(id) : null
+    const targetThread = get().threads.find((thread) => thread.id === id) ?? null
+    resetBusyRecoveryAttempts()
+    clearBusyWatchdog()
+    if (cached) {
+      const queuedMessages = reconcileQueuedMessages(cached.queuedMessages, {
+        busy: cached.busy,
+        turnId: cached.currentTurnId ?? undefined,
+        blocks: cached.blocks
+      })
+      const remembersCodeThread = targetThread != null &&
+        targetThread.archived !== true &&
+        isCodeSidebarThread(
+          targetThread,
+          get().clawChannels,
+          readWriteThreadRegistry(),
+          readDesignThreadRegistry(),
+          readSddThreadRegistry()
+        )
+      set((state) => ({
+        watchTurnCompletion: nextWatch,
+        unreadThreadIds: nextUnread,
+        activeThreadId: id,
+        threadLoadingId: null,
+        activeThreadRelation: cached.activeThreadRelation ?? 'primary',
+        activeThreadParentId: cached.activeThreadParentId,
+        activeThreadGoal: cached.activeThreadGoal,
+        activeThreadTodos: cached.activeThreadTodos,
+        blocks: cached.blocks,
+        lastSeq: cached.lastSeq,
+        liveDeltaSeqFloor: cached.liveDeltaSeqFloor,
+        liveReasoning: cached.liveReasoning,
+        liveAssistant: cached.liveAssistant,
+        error: null,
+        busy: cached.busy,
+        currentTurnId: cached.currentTurnId,
+        currentTurnOrchestration: cached.currentTurnOrchestration,
+        currentTurnUserId: cached.currentTurnUserId,
+        turnStartedAtByUserId: cached.turnStartedAtByUserId,
+        turnDurationByUserId: cached.turnDurationByUserId,
+        turnReasoningFirstAtByUserId: cached.turnReasoningFirstAtByUserId,
+        turnReasoningLastAtByUserId: cached.turnReasoningLastAtByUserId,
+        inspectorSelectedId: null,
+        queuedMessages,
+        composerMode: cached.composerMode,
+        composerModel: cached.composerModel,
+        composerProviderId: cached.composerProviderId,
+        composerReasoningEffort: cached.composerReasoningEffort,
+        threads: state.threads.map((thread) => thread.id === id
+          ? { ...thread, status: cached.busy ? 'running' : 'idle' }
+          : thread),
+        ...(remembersCodeThread ? { lastCodeThreadId: id } : {})
+      }))
+      saveQueuedMessagesForThread(id, queuedMessages)
+      syncTurnCompletionPoll(set, get)
+      const ac = new AbortController()
+      sseAbortRef.current = ac
+      const sink = buildThreadEventSink(set, get, { threadId: id, signal: ac.signal, sinceSeq: cached.lastSeq })
+      subscribeThreadEventsWithRecovery(p, id, cached.lastSeq, sink, ac.signal, get)
+      if (cached.busy) armBusyWatchdog(set, get)
+      else if (queuedMessages.some(isPendingQueuedMessage)) void get().drainQueuedMessages()
+      return
+    }
+    // Give the sidebar its selected state in this render frame. The timeline
+    // shows a skeleton and the composer is disabled until detail hydration
+    // commits, preventing sends against an unhydrated thread.
+    set({
+      watchTurnCompletion: nextWatch,
+      unreadThreadIds: nextUnread,
+      activeThreadId: id,
+      threadLoadingId: id,
+      activeThreadRelation: targetThread?.relation ?? 'primary',
+      activeThreadParentId: targetThread?.parentThreadId ?? null,
+      activeThreadGoal: targetThread?.goal ?? null,
+      activeThreadTodos: targetThread?.todos ?? null,
+      blocks: [],
+      lastSeq: 0,
+      liveDeltaSeqFloor: 0,
+      liveReasoning: '',
+      liveAssistant: '',
+      busy: false,
+      currentTurnId: null,
+      currentTurnOrchestration: null,
+      currentTurnUserId: null,
+      turnStartedAtByUserId: {},
+      turnDurationByUserId: {},
+      turnReasoningFirstAtByUserId: {},
+      turnReasoningLastAtByUserId: {},
+      inspectorSelectedId: null,
+      queuedMessages: [],
+      error: null
+    })
     try {
-      resetBusyRecoveryAttempts()
-      clearBusyWatchdog()
       const {
         blocks: rawBlocks,
         latestSeq,
         threadStatus,
         latestTurnId,
+        latestTurnStatus,
         latestTurnOrchestration,
         latestUserMessageId,
         turnDurationByUserId = {},
@@ -603,7 +701,8 @@ export function createThreadActions(
         parentThreadId: threadParentId,
         model: threadModel,
         goal,
-        todos
+        todos,
+        payloadBytes
       } = await p.getThreadDetail(id)
       if (!selectionStillCurrent()) return
       // A subagent's `side` thread has no locally-stored per-turn model labels
@@ -653,6 +752,7 @@ export function createThreadActions(
         watchTurnCompletion: nextWatch,
         unreadThreadIds: nextUnread,
         activeThreadId: id,
+        threadLoadingId: null,
         activeThreadRelation: threadRelation ?? 'primary',
         activeThreadParentId: threadParentId ?? null,
         activeThreadGoal: goal ?? null,
@@ -674,6 +774,13 @@ export function createThreadActions(
         inspectorSelectedId: null,
         queuedMessages,
         composerMode,
+        threads: get().threads.map((thread) => thread.id === id
+          ? {
+              ...thread,
+              status: thread.archived ? thread.status : (busy ? 'running' : 'idle'),
+              ...(latestTurnStatus ? { latestTurnStatus } : {})
+            }
+          : thread),
         ...(remembersCodeThread ? { lastCodeThreadId: id } : {}),
         ...(composerSelection
           ? {
@@ -687,6 +794,7 @@ export function createThreadActions(
             }
           : {})
       })
+      snapshotThreadProjection(get(), payloadBytes)
       saveQueuedMessagesForThread(id, queuedMessages)
       syncTurnCompletionPoll(set, get)
       const ac = new AbortController()
@@ -701,6 +809,7 @@ export function createThreadActions(
     } catch (e) {
       if (!selectionStillCurrent()) return
       set({
+        threadLoadingId: null,
         error: formatRuntimeError(e),
         ...(shouldOpenSettingsForError(e)
           ? { route: 'settings' as const, settingsSection: 'agents' as const }
@@ -733,6 +842,7 @@ export function createThreadActions(
     clearBusyWatchdog()
     set({
       activeThreadId: targetThreadId,
+      threadLoadingId: null,
       blocks: keepExistingBlocks ? prevState.blocks : [],
       lastSeq: fallbackSinceSeq,
       liveDeltaSeqFloor: fallbackSinceSeq,

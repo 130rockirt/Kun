@@ -42,6 +42,9 @@ class FakeProvider implements AgentProvider {
   async getThreadDetail() {
     return { blocks: [], latestSeq: 0 }
   }
+  async getThreadState() {
+    return { status: 'idle', updatedAt: '', latestSeq: 0 }
+  }
   async sendUserMessage(
     threadId: string,
     text: string,

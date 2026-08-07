@@ -1977,6 +1977,113 @@ describe('ModelConnectionRegistry', () => {
     expect(afterRestart.providers[0]?.models).toEqual(['keep-model'])
   })
 
+  it('selects the first remaining model when a catalog removes the active model', async () => {
+    const { value } = await registry()
+    const connected = await value.connect({
+      expectedRevision: 0,
+      id: 'catalog-owner',
+      name: 'Catalog Owner',
+      kind: 'http',
+      authType: 'api-key',
+      baseUrl: 'https://catalog.example/v1',
+      endpointFormat: 'chat_completions',
+      credential: 'secret',
+      models: ['model-a', 'model-b'],
+      selectedModel: 'model-a',
+      probe: false,
+      select: true
+    })
+
+    const patched = await value.patch('catalog-owner', {
+      expectedRevision: connected.revision,
+      models: ['model-b']
+    })
+
+    expect(patched.providers[0]).toMatchObject({
+      models: ['model-b'],
+      selectedModel: 'model-b'
+    })
+    expect(patched).toMatchObject({
+      defaultProviderId: 'catalog-owner',
+      defaultAccountId: 'account:catalog-owner',
+      defaultModel: 'model-b'
+    })
+  })
+
+  it('clears the default selection when the active provider loses its last model', async () => {
+    const { value } = await registry()
+    const connected = await value.connect({
+      expectedRevision: 0,
+      id: 'catalog-owner',
+      name: 'Catalog Owner',
+      kind: 'http',
+      authType: 'api-key',
+      baseUrl: 'https://catalog.example/v1',
+      endpointFormat: 'chat_completions',
+      credential: 'secret',
+      models: ['model-a'],
+      selectedModel: 'model-a',
+      probe: false,
+      select: true
+    })
+
+    const patched = await value.patch('catalog-owner', {
+      expectedRevision: connected.revision,
+      models: []
+    })
+
+    expect(patched.providers[0]).toMatchObject({ models: [] })
+    expect(patched.providers[0]).not.toHaveProperty('selectedModel')
+    expect(patched).not.toHaveProperty('defaultProviderId')
+    expect(patched).not.toHaveProperty('defaultAccountId')
+    expect(patched).not.toHaveProperty('defaultModel')
+  })
+
+  it('falls back to another configured provider when the default provider loses its last model', async () => {
+    const { value } = await registry()
+    const primary = await value.connect({
+      expectedRevision: 0,
+      id: 'primary',
+      name: 'Primary',
+      kind: 'http',
+      authType: 'api-key',
+      baseUrl: 'https://primary.example/v1',
+      endpointFormat: 'chat_completions',
+      credential: 'primary-secret',
+      models: ['primary-model'],
+      selectedModel: 'primary-model',
+      probe: false,
+      select: true
+    })
+    const withFallback = await value.connect({
+      expectedRevision: primary.revision,
+      id: 'fallback',
+      name: 'Fallback',
+      kind: 'http',
+      authType: 'api-key',
+      baseUrl: 'https://fallback.example/v1',
+      endpointFormat: 'chat_completions',
+      credential: 'fallback-secret',
+      models: ['fallback-model'],
+      selectedModel: 'fallback-model',
+      probe: false,
+      select: false
+    })
+
+    const patched = await value.patch('primary', {
+      expectedRevision: withFallback.revision,
+      models: []
+    })
+
+    expect(patched.providers.find((provider) => provider.id === 'primary'))
+      .not.toHaveProperty('selectedModel')
+    expect(patched).toMatchObject({
+      defaultProviderId: 'fallback',
+      defaultAccountId: 'account:fallback',
+      defaultModel: 'fallback-model'
+    })
+  })
+
   it('retries deleted-provider legacy source retirement without allowing seed resurrection', async () => {
     let attempts = 0
     const retired: string[] = []
