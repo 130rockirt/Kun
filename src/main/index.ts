@@ -26,6 +26,7 @@ import {
   JsonSettingsStore,
   devServerHintUrl
 } from './settings-store'
+import { preserveRedactedProviderCredentials } from './settings-credential-redaction'
 import kunLogoPng from '../asset/img/kun.png?url'
 import kunMacLogoPng from '../asset/img/kun_mac.png?url'
 import kunTrayPng from '../asset/img/kun_tray.png?url'
@@ -3229,7 +3230,10 @@ app.whenReady().then(async () => {
     const { previous, saved } = await runtimeSettingsIntents.serializePersistence(async () => {
       let committedPrevious: AppSettingsV1 | undefined
       const saved = await store.update((current) => {
-        const effectivePartial = preserveRuntimeTokenForFullSettingsSnapshot(current, partial)
+        const effectivePartial = preserveRedactedProviderCredentials(
+          current,
+          preserveRuntimeTokenForFullSettingsSnapshot(current, partial)
+        )
         const requestedDataDir = effectivePartial.agents?.kun?.dataDir
         if (
           appEnvironment.flavor === 'production' &&
@@ -3308,7 +3312,10 @@ app.whenReady().then(async () => {
     const saved = await runtimeSettingsIntents.serializePersistence(async () => {
       let committedPrevious: AppSettingsV1 | undefined
       const saved = await store.update((current) => {
-        const effectivePartial = preserveRuntimeTokenForFullSettingsSnapshot(current, partial)
+        const effectivePartial = preserveRedactedProviderCredentials(
+          current,
+          preserveRuntimeTokenForFullSettingsSnapshot(current, partial)
+        )
         const requestedDataDir = effectivePartial.agents?.kun?.dataDir
         if (
           appEnvironment.flavor === 'production' &&

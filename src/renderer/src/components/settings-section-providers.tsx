@@ -2758,6 +2758,12 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
         const selectedModel = item.models.includes(latestKun.model) ? latestKun.model : item.models[0]
         if (!existing) {
           if (pendingSharedProviderDeletions.current.has(item.id)) continue
+          // Renderer projections redact apiKey to ''. Connecting without a
+          // credential creates an authoritative empty Registry shell that
+          // shadows legacy bindings and leaves the supplier stuck on
+          // "needs configuration". Keyless kinds (CLI/SDK) may still connect.
+          // Credential-bearing connects happen via the staged credential drain.
+          if (modelProviderRequiresApiKey(item) && !item.apiKey.trim()) continue
           snapshot = await requestSharedModelConnections('/v1/model-connections/connect', 'POST', {
             expectedRevision: snapshot.revision,
             id: item.id,
@@ -3810,12 +3816,11 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
 
   const runProbe = async (target: ModelProviderProfileV1, mode: 'test' | 'fetch'): Promise<void> => {
     const fingerprint = providerConnectionFingerprint(target)
-    if (
-      isCursorSubscriptionProvider(target) &&
-      (Boolean(target.apiKey.trim()) ||
-        !sharedModelConnectionHasUsableCredential(sharedConnectionFor(target.id)))
-    ) {
-      if (!target.apiKey.trim()) {
+    if (isCursorSubscriptionProvider(target)) {
+      const cursorCredentialReady =
+        Boolean(target.apiKey.trim()) ||
+        sharedModelConnectionHasUsableCredential(sharedConnectionFor(target.id))
+      if (!cursorCredentialReady) {
         setProbeStates((previous) => ({
           ...previous,
           [target.id]: {
@@ -3836,6 +3841,7 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
         if (typeof discover !== 'function') {
           throw new Error(`No bridge registered for '${CURSOR_SUBSCRIPTION_DISCOVERY_CHANNEL}'`)
         }
+        // apiKey may be redacted in the renderer; Main resolves Registry secrets via providerId.
         const discovery = await discover(target.apiKey.trim() || undefined, target.id)
         const accountName = [
           discovery.account.userFirstName,
