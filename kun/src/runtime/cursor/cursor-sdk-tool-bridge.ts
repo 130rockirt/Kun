@@ -1,3 +1,12 @@
+/**
+ * Re-exposes Kun-exclusive tools to the Cursor SDK as `local.customTools`.
+ * Cursor registers those callbacks as the `custom-user-tools` MCP server.
+ *
+ * Decision (aligned with Claude Agent SDK): tools that OVERLAP Cursor's
+ * built-ins (read/bash/edit/write/grep/glob/find/ls) are NOT bridged — the
+ * model uses Cursor's native tools. We only bridge Kun-exclusive tools such
+ * as MCP facades, extensions, memory, media, GUI input, and delegation.
+ */
 import type {
   SDKCustomTool,
   SDKCustomToolContext,
@@ -28,28 +37,24 @@ export type CursorKunToolCall = {
 
 export type CursorKunToolExecutor = (call: CursorKunToolCall) => Promise<KunToolResult>
 
-/**
- * Kun built-ins that overlap Cursor Agent built-ins — use the SDK's native
- * tools instead of re-exposing them as customTools (which Cursor registers as
- * the `custom-user-tools` MCP server).
- */
-export const CURSOR_OVERLAP_TOOL_NAMES: ReadonlySet<string> = DEFAULT_OVERLAP_TOOL_NAMES
-
-/** Kun tools that are meaningless or internal-only on a Cursor SDK turn. */
-export const CURSOR_EXCLUDED_TOOL_NAMES: ReadonlySet<string> = DEFAULT_EXCLUDED_TOOL_NAMES
-
-export interface SelectCursorBridgeToolsOptions {
+export interface SelectCursorBridgeOptions {
   overlap?: ReadonlySet<string>
   excluded?: ReadonlySet<string>
 }
 
 /**
- * Filter the Kun catalog down to Kun-exclusive tools worth bridging.
- * Overlapping file/shell/search tools stay on Cursor's native toolset.
+ * Kun built-ins that overlap Cursor SDK built-ins — use Cursor's instead.
+ * Kept as an alias of the shared Claude overlap set so both delegated runtimes
+ * drop the same catalog names.
  */
+export const CURSOR_OVERLAP_TOOL_NAMES: ReadonlySet<string> = DEFAULT_OVERLAP_TOOL_NAMES
+
+/** Kun tools that are meaningless or internal-only on a Cursor turn. */
+export const CURSOR_EXCLUDED_TOOL_NAMES: ReadonlySet<string> = DEFAULT_EXCLUDED_TOOL_NAMES
+
 export function selectCursorBridgeTools(
   tools: readonly CursorBridgeTool[],
-  opts: SelectCursorBridgeToolsOptions = {}
+  opts: SelectCursorBridgeOptions = {}
 ): CursorBridgeTool[] {
   const overlap = opts.overlap ?? CURSOR_OVERLAP_TOOL_NAMES
   const excluded = opts.excluded ?? CURSOR_EXCLUDED_TOOL_NAMES
