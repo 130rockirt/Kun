@@ -2557,6 +2557,21 @@ async function probeModels(input: {
 }): Promise<string[]> {
   if (input.kind !== 'http') return uniqueModels(input.fallbackModels)
   if (!input.baseUrl) throw new Error('provider probe failed: HTTP provider has no base URL')
+  // Custom full inference endpoints have no discoverable /models URL. When the
+  // profile already lists models (Codex, coding-plan gateways, user custom
+  // paths), treat an explicit credential + catalog as a successful probe.
+  if (input.endpointFormat === 'custom_endpoint') {
+    const configured = uniqueModels(input.fallbackModels)
+    if (configured.length === 0) {
+      throw new Error(
+        'provider probe failed: custom_endpoint does not define a models URL; configure models explicitly with probe disabled'
+      )
+    }
+    if (!input.apiKey.trim()) {
+      throw new Error('provider probe failed: custom_endpoint requires a credential when probing configured models')
+    }
+    return configured
+  }
   const url = modelsUrl(input.baseUrl, input.endpointFormat)
   const usesAnthropicHeaders = input.endpointFormat === 'messages'
   const authHeaders: Record<string, string> = input.apiKey

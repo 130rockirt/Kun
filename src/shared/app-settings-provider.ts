@@ -1222,7 +1222,8 @@ function normalizeModelProviderProfile(
             : undefined
         )
   const rawName = typeof input?.name === 'string' && input.name.trim() ? input.name.trim() : id
-  const baseUrl = normalizeModelProviderBaseUrl(input?.baseUrl)
+  const rawBaseUrl = normalizeModelProviderBaseUrl(input?.baseUrl)
+  const rawEndpointFormat = normalizeModelEndpointFormat(input?.endpointFormat)
   const savedModels = normalizeProviderModels(input?.models)
   // Existing builds used `gemini-code-assist` on the legacy Antigravity preset.
   // Keep that one-time migration on Antigravity; the new direct Gemini CLI API
@@ -1231,8 +1232,16 @@ function normalizeModelProviderProfile(
     presetSource?.presetId === 'gemini-subscription' && input?.kind === 'gemini-code-assist'
       ? [...GEMINI_SUBSCRIPTION_MODEL_IDS]
       : savedModels
-  const migrated = migrateChatGptSubscriptionProfile(id, rawName, rawModels)
+  const migrated = migrateChatGptSubscriptionProfile(
+    id,
+    rawName,
+    rawModels,
+    rawBaseUrl,
+    rawEndpointFormat
+  )
   const name = migrated.name
+  const baseUrl = migrated.baseUrl
+  const endpointFormat = migrated.endpointFormat
   const models = migrateProviderPresetModelCatalog(id, migrated.models)
   const modelProfiles = withPresetModelProfiles(
     { id, presetSource },
@@ -1255,7 +1264,7 @@ function normalizeModelProviderProfile(
           ? input.apiKey.trim()
           : '',
     baseUrl,
-    endpointFormat: normalizeModelEndpointFormat(input?.endpointFormat),
+    endpointFormat,
     retry: normalizeModelRequestRetrySettings(input?.retry),
     ...(kind ? { kind } : {}),
     models,
@@ -1285,19 +1294,46 @@ function normalizeModelProviderPresetSource(
   return inferred ? { presetId: inferred.preset.id, mode: inferred.mode } : undefined
 }
 
+const CHATGPT_SUBSCRIPTION_RESPONSES_URL = 'https://chatgpt.com/backend-api/codex/responses'
+
+function isChatGptSubscriptionCodexBaseUrl(baseUrl: string): boolean {
+  try {
+    const url = new URL(baseUrl)
+    return url.protocol === 'https:' &&
+      url.hostname === 'chatgpt.com' &&
+      url.pathname.replace(/\/+$/u, '').startsWith('/backend-api/codex')
+  } catch {
+    return false
+  }
+}
+
 function migrateChatGptSubscriptionProfile(
   id: string,
   name: string,
+  models: string[],
+  baseUrl: string,
+  endpointFormat: ModelEndpointFormat
+): {
+  name: string
   models: string[]
-): { name: string; models: string[] } {
-  if (id !== CHATGPT_SUBSCRIPTION_PROVIDER_ID) return { name, models }
+  baseUrl: string
+  endpointFormat: ModelEndpointFormat
+} {
+  if (id !== CHATGPT_SUBSCRIPTION_PROVIDER_ID) {
+    return { name, models, baseUrl, endpointFormat }
+  }
+  const migrateEndpoint = isChatGptSubscriptionCodexBaseUrl(baseUrl)
   return {
     name: name === CHATGPT_SUBSCRIPTION_LEGACY_NAME ? CHATGPT_SUBSCRIPTION_NAME : name,
     // This is intentionally a precise one-time signature migration. Do not
     // re-add models that a user deliberately removed from a custom list.
     models: sameModelIds(models, CHATGPT_SUBSCRIPTION_LEGACY_MODEL_IDS)
       ? [...CHATGPT_SUBSCRIPTION_MODEL_IDS]
-      : models
+      : models,
+    // Older builds stored `.../codex` + `responses`, which CompatModelClient
+    // would expand to the broken `.../codex/v1/responses` path.
+    baseUrl: migrateEndpoint ? CHATGPT_SUBSCRIPTION_RESPONSES_URL : baseUrl,
+    endpointFormat: migrateEndpoint ? 'custom_endpoint' : endpointFormat
   }
 }
 

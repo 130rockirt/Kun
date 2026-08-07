@@ -327,6 +327,8 @@ describe('ChatGPT subscription migration', () => {
 
     const provider = normalized.providers.find((item) => item.id === 'codex')!
     expect(provider.name).toBe('ChatGPT 订阅')
+    expect(provider.baseUrl).toBe('https://chatgpt.com/backend-api/codex/responses')
+    expect(provider.endpointFormat).toBe('custom_endpoint')
     expect(provider.models).toEqual(CHATGPT_SUBSCRIPTION_MODEL_IDS)
     for (const modelId of ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']) {
       expect(provider.modelProfiles[modelId]).toMatchObject({
@@ -389,7 +391,9 @@ describe('ChatGPT subscription migration', () => {
 
     expect(normalized.providers.find((item) => item.id === 'codex')).toMatchObject({
       name: 'Team subscription',
-      models: ['gpt-5.5', 'team-model']
+      models: ['gpt-5.5', 'team-model'],
+      baseUrl: 'https://chatgpt.com/backend-api/codex/responses',
+      endpointFormat: 'custom_endpoint'
     })
   })
 })

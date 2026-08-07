@@ -214,7 +214,7 @@ describe('ModelConnectionRegistry', () => {
     expect(String(fetchMock.mock.calls[0]?.[0])).toBe(expectedUrl)
   })
 
-  it('does not guess a models URL from a custom full inference endpoint', async () => {
+  it('returns configured models for a custom full inference endpoint without guessing a models URL', async () => {
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)
     const { value } = await registry()
@@ -233,9 +233,10 @@ describe('ModelConnectionRegistry', () => {
       select: false
     })
 
-    await expect(value.probe('custom-full-endpoint')).rejects.toThrow(
-      'custom_endpoint does not define a models URL'
-    )
+    await expect(value.probe('custom-full-endpoint')).resolves.toEqual({
+      ok: true,
+      models: ['configured-model']
+    })
     expect(fetchMock).not.toHaveBeenCalled()
     await expect(value.snapshot()).resolves.toMatchObject({
       providers: [expect.objectContaining({
@@ -243,6 +244,62 @@ describe('ModelConnectionRegistry', () => {
         models: ['configured-model']
       })]
     })
+  })
+
+  it('rejects custom_endpoint probe when no models are configured', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const { value } = await registry()
+    await value.connect({
+      expectedRevision: 0,
+      id: 'custom-empty-models',
+      name: 'Custom Empty Models',
+      kind: 'http',
+      authType: 'api-key',
+      baseUrl: 'https://gateway.example.test/inference/team-a/respond',
+      endpointFormat: 'custom_endpoint',
+      credential: 'registry-secret',
+      models: [],
+      probe: false,
+      select: false
+    })
+
+    await expect(value.probe('custom-empty-models')).rejects.toThrow(
+      'custom_endpoint does not define a models URL'
+    )
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('probes Codex with configured models without requesting a models URL', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const { value } = await registry()
+    await value.connect({
+      expectedRevision: 0,
+      id: 'codex',
+      name: 'ChatGPT 订阅',
+      kind: 'http',
+      authType: 'oauth',
+      baseUrl: 'https://chatgpt.com/backend-api/codex/responses',
+      endpointFormat: 'custom_endpoint',
+      credential: JSON.stringify({
+        kind: 'codex-oauth',
+        accessToken: 'access-token',
+        refreshToken: 'refresh-token',
+        expiresAt: Date.now() + 60_000,
+        accountId: 'account-1'
+      }),
+      models: ['gpt-5.5', 'gpt-5.4'],
+      selectedModel: 'gpt-5.5',
+      probe: false,
+      select: false
+    })
+
+    await expect(value.probe('codex')).resolves.toEqual({
+      ok: true,
+      models: ['gpt-5.5', 'gpt-5.4']
+    })
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 
   it('probes Messages providers with the Registry credential and Anthropic headers', async () => {

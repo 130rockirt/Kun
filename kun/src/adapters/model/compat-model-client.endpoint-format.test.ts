@@ -568,15 +568,19 @@ describe('CompatModelClient per-model endpointFormat', () => {
   })
 
   it('uses the Codex Responses Lite shape for GPT-5.6 models', async () => {
-    const calls: Array<{ headers: Record<string, string>; body: Record<string, unknown> }> = []
+    const calls: Array<{ url: string; headers: Record<string, string>; body: Record<string, unknown> }> = []
     const client = new CompatModelClient({
       baseUrl: 'https://chatgpt.com/backend-api/codex',
       apiKey: 'oauth-access-token',
       model: 'gpt-5.6-sol',
       endpointFormat: 'responses',
       nonStreaming: true,
-      fetchImpl: (async (_url: string, init: { headers: Record<string, string>; body: string }) => {
-        calls.push({ headers: init.headers, body: JSON.parse(init.body) as Record<string, unknown> })
+      fetchImpl: (async (url: string, init: { headers: Record<string, string>; body: string }) => {
+        calls.push({
+          url: String(url),
+          headers: init.headers,
+          body: JSON.parse(init.body) as Record<string, unknown>
+        })
         return new Response(JSON.stringify({ output_text: 'ok' }), {
           status: 200,
           headers: { 'content-type': 'application/json' }
@@ -605,6 +609,7 @@ describe('CompatModelClient per-model endpointFormat', () => {
       }]
     }))
 
+    expect(calls[0].url).toBe('https://chatgpt.com/backend-api/codex/responses')
     expect(calls[0].headers['x-openai-internal-codex-responses-lite']).toBe('true')
     expect(calls[0].body).toMatchObject({
       model: 'gpt-5.6-sol',
@@ -626,6 +631,34 @@ describe('CompatModelClient per-model endpointFormat', () => {
       expect.objectContaining({ type: 'image_generation' })
     ]))
     expect(input[1]).toMatchObject({ type: 'message', role: 'developer' })
+  })
+
+  it('normalizes legacy Codex baseUrl + responses format to the custom /responses endpoint', async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = []
+    const client = new CompatModelClient({
+      baseUrl: 'https://chatgpt.com/backend-api/codex',
+      apiKey: 'oauth-access-token',
+      model: 'gpt-5.5',
+      endpointFormat: 'responses',
+      nonStreaming: true,
+      fetchImpl: (async (url: string, init: { body: string }) => {
+        calls.push({ url: String(url), body: JSON.parse(init.body) as Record<string, unknown> })
+        return new Response(JSON.stringify({ output_text: 'ok' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' }
+        })
+      }) as unknown as typeof fetch,
+      modelCapabilities: modelCapabilities({})
+    })
+
+    await drain(client.stream(request('gpt-5.5')))
+
+    expect(calls[0].url).toBe('https://chatgpt.com/backend-api/codex/responses')
+    expect(calls[0].body).toMatchObject({
+      model: 'gpt-5.5',
+      store: false
+    })
+    expect(calls[0].body).not.toHaveProperty('messages')
   })
 
   it('keeps GPT-5.6 Responses Lite cache inputs append-only and thread-scoped', async () => {
