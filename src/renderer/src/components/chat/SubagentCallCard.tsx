@@ -15,6 +15,7 @@ import {
   useSubagentReducedMotion
 } from '../subagents/SubagentLiveness'
 import { BUILTIN_AGENT_CATALOG_BY_ID } from '../../../../../kun/src/delegation/builtin-agent-catalog'
+import { AssistantMarkdown } from './AssistantMarkdown'
 import { ExplorePeekPopover } from './ExplorePeekPopover'
 import {
   firstUsefulLine,
@@ -429,15 +430,10 @@ export function SubagentCallCard({
   const activityLine = !isTerminal(status) ? formatChildActivityLabel(activity) : undefined
   const steps = child.toolInvocations ?? detail.toolInvocations
   const childId = child.childId || detail.childId
-  const exploreProcessCta = childId
-    ? (typeof steps === 'number'
-      ? t('exploreViewProcessSteps', { count: steps, defaultValue: 'View explore process · {{count}} steps' })
-      : t('exploreViewProcess', { defaultValue: 'View explore process' }))
-    : undefined
-  const summaryLine = firstUsefulLine(detail.summary, 72) || firstUsefulLine(detail.query, 72)
+  // Short subtitle only — keep CTA on the explicit process button, not in truncated text.
   const taskLine = activityLine || (
-    isExplore && isTerminal(status) && exploreProcessCta
-      ? (summaryLine ? `${summaryLine} · ${exploreProcessCta}` : exploreProcessCta)
+    isExplore && isTerminal(status)
+      ? (firstUsefulLine(detail.summary, 96) || firstUsefulLine(detail.query, 96) || undefined)
       : (
         detail.summary?.trim() ||
         detail.query?.trim() ||
@@ -453,16 +449,13 @@ export function SubagentCallCard({
     tickNow
   )
 
-  // Always start collapsed — both while running and after it finishes. The card
-  // only opens when the user clicks it (no auto-expand on terminal transition).
   const hasBody = Boolean(detail.summary?.trim() || detail.error?.trim())
+  // Completed explore conclusions default open so the full text is readable.
+  const exploreConclusionDefaultOpen = isExplore && isTerminal(status) && hasBody
   const [userToggled, setUserToggled] = useState<boolean | null>(null)
   const [peekOpen, setPeekOpen] = useState(false)
-  const expanded = (userToggled ?? false) && hasBody && !peekOpen
+  const expanded = hasBody && !peekOpen && (userToggled ?? exploreConclusionDefaultOpen)
 
-  // `meta.child` is only attached on the live child events (which the renderer
-  // currently drops), so for a completed delegation the reliable source of the
-  // child thread id is the tool result JSON (`detail.childId`).
   const canJump = Boolean(childId)
   const openChild = (): void => {
     if (!childId) return
@@ -473,12 +466,9 @@ export function SubagentCallCard({
     }
     void selectThread(childId).catch(() => undefined)
   }
-  const toggleCard = (): void => {
-    if (canJump) {
-      openChild()
-      return
-    }
-    if (hasBody) setUserToggled(!expanded)
+  const toggleConclusion = (): void => {
+    if (!hasBody) return
+    setUserToggled(!(userToggled ?? exploreConclusionDefaultOpen))
   }
 
   // Stagger sweep/pulse per child so a swarm reads as independent.
@@ -488,7 +478,6 @@ export function SubagentCallCard({
     ? 'overflow-hidden border-t border-ds-border-muted first:border-t-0'
     : 'ds-subagent-mount overflow-hidden rounded-[20px] border border-ds-border bg-ds-card/80 shadow-[0_16px_40px_rgba(86,103,136,0.08)] backdrop-blur-xl'
   const failBorder = !inGroup && status === 'failed' ? ' border-ds-danger/60' : ''
-  const interactive = canJump || hasBody
 
   return (
     <section
@@ -499,23 +488,24 @@ export function SubagentCallCard({
       data-testid="subagent-call-card"
       data-explore={isExplore ? 'true' : 'false'}
       data-activity-label={activityLine ?? ''}
+      data-conclusion-expanded={expanded ? 'true' : 'false'}
     >
       <div
-        role={interactive ? 'button' : undefined}
-        tabIndex={interactive ? 0 : undefined}
-        aria-expanded={hasBody && !canJump ? expanded : undefined}
+        role={hasBody ? 'button' : undefined}
+        tabIndex={hasBody ? 0 : undefined}
+        aria-expanded={hasBody ? expanded : undefined}
         onClick={() => {
-          if (interactive) toggleCard()
+          if (hasBody) toggleConclusion()
         }}
         onKeyDown={(e) => {
-          if (!interactive) return
+          if (!hasBody) return
           if (e.key === 'Enter' || e.key === ' ') {
             e.preventDefault()
-            toggleCard()
+            toggleConclusion()
           }
         }}
         className={`flex items-center gap-3 px-4 ${compact ? 'py-2.5' : 'py-3'} text-left ${
-          interactive ? 'cursor-pointer transition hover:bg-ds-hover/30' : ''
+          hasBody ? 'cursor-pointer transition hover:bg-ds-hover/30' : ''
         }`}
       >
         <AvatarDisc poseId={poseId} status={status} hue={hue} compact={compact} animate={animate} />
@@ -534,15 +524,20 @@ export function SubagentCallCard({
             compact={compact}
             t={t}
           />
-          {taskLine ? (
+          {taskLine && !expanded ? (
             <span
               className={`mt-0.5 block truncate text-[12.5px] ${
-                activityLine || (isExplore && canJump) ? 'text-accent' : 'text-ds-muted'
+                activityLine ? 'text-accent' : 'text-ds-muted'
               }`}
               title={taskLine}
               data-testid="subagent-activity-line"
             >
               {taskLine}
+            </span>
+          ) : null}
+          {hasBody && !expanded ? (
+            <span className="mt-0.5 block text-[11.5px] font-semibold text-accent">
+              {t('exploreExpandConclusion', { defaultValue: 'Show conclusion' })}
             </span>
           ) : null}
         </div>
@@ -597,8 +592,13 @@ export function SubagentCallCard({
               : t('subagentOpenSessionShort', { defaultValue: 'Open' })}
             <ChevronRight className="h-3.5 w-3.5" strokeWidth={2} />
           </button>
-        ) : interactive ? (
-          <ChevronRight className="h-4 w-4 shrink-0 text-ds-faint" strokeWidth={1.8} />
+        ) : null}
+        {hasBody ? (
+          expanded ? (
+            <ChevronDown className="h-4 w-4 shrink-0 text-ds-faint" strokeWidth={1.8} />
+          ) : (
+            <ChevronRight className="h-4 w-4 shrink-0 text-ds-faint" strokeWidth={1.8} />
+          )
         ) : (
           <ChevronRight className="h-4 w-4 shrink-0 text-ds-faint/40" strokeWidth={1.8} />
         )}
@@ -607,13 +607,28 @@ export function SubagentCallCard({
       <LaneHairline status={status} animate={animate} />
 
       {expanded ? (
-        <div className="border-t border-ds-border-muted/70 px-4 py-3.5">
+        <div
+          className="border-t border-ds-border-muted/70 px-4 py-3.5"
+          data-testid="subagent-conclusion-body"
+        >
           {detail.error?.trim() ? (
-            <pre className="whitespace-pre-wrap break-words rounded-[10px] border border-red-200/80 bg-red-50/80 px-3 py-2.5 font-mono text-[12px] leading-5 text-ds-danger dark:border-red-800/40 dark:bg-red-500/10">
+            <pre className="max-h-[320px] overflow-y-auto whitespace-pre-wrap break-words rounded-[10px] border border-red-200/80 bg-red-50/80 px-3 py-2.5 font-mono text-[12px] leading-5 text-ds-danger dark:border-red-800/40 dark:bg-red-500/10">
               {detail.error}
             </pre>
           ) : detail.summary?.trim() ? (
-            <p className="whitespace-pre-wrap text-[14px] leading-6 text-ds-muted">{detail.summary}</p>
+            isExplore ? (
+              <div className="max-h-[360px] overflow-y-auto text-[14px] leading-6 text-ds-ink">
+                <AssistantMarkdown
+                  text={detail.summary}
+                  streaming={false}
+                  className="ds-markdown text-[14px] leading-6 text-ds-ink"
+                />
+              </div>
+            ) : (
+              <p className="max-h-[320px] overflow-y-auto whitespace-pre-wrap text-[14px] leading-6 text-ds-muted">
+                {detail.summary}
+              </p>
+            )
           ) : null}
 
           <div className="mt-3 flex flex-wrap items-center gap-1.5">

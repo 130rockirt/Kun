@@ -3032,6 +3032,7 @@
   "exploreViewProcess": "查看探索过程",
   "exploreViewProcessShort": "查看过程",
   "exploreViewProcessSteps": "查看探索过程 · {{count}} 步",
+  "exploreExpandConclusion": "展开结论",
   "explorePeekPreview": "预览",
   "explorePeekTitle": "探索进度",
   "explorePeekClose": "关闭",

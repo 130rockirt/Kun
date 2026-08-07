@@ -900,16 +900,30 @@ function useMediaPreviews(
   return { resolvedPreviews, failedPreviewIds }
 }
 
+function userMediaTileClass(mediaCount: number): string {
+  const base =
+    'group block aspect-[3/2] overflow-hidden rounded-lg border border-ds-border-muted bg-ds-card shadow-sm'
+  if (mediaCount <= 1) {
+    return `${base} w-full max-w-[min(100%,20rem)]`
+  }
+  if (mediaCount <= 3) {
+    return `${base} w-[calc((100%-1rem)/3)] max-w-56 shrink-0`
+  }
+  return `${base} w-[calc((100%-1rem)/3)] max-w-56 shrink-0 snap-start`
+}
+
 function MediaPreviewTile({
   media,
   previewUrl,
   previewState,
-  variant
+  variant,
+  mediaCount = 1
 }: {
   media: TimelineMediaReference
   previewUrl?: string
   previewState?: 'loading' | 'failed'
   variant: 'user' | 'tool' | 'conversation'
+  mediaCount?: number
 }): ReactElement {
   const { t } = useTranslation('common')
   const globalWorkspaceRoot = useChatStore((s) => s.workspaceRoot)
@@ -927,7 +941,7 @@ function MediaPreviewTile({
       ? 'group aspect-square w-52 shrink-0 snap-start overflow-hidden rounded-xl border border-ds-border-muted bg-ds-card shadow-sm'
       : variant === 'tool'
         ? 'block h-32 w-40 overflow-hidden rounded-lg border border-ds-border-muted bg-ds-card shadow-sm'
-        : 'group block aspect-[3/2] w-[calc((100%-1rem)/3)] max-w-56 shrink-0 snap-start overflow-hidden rounded-lg border border-ds-border-muted bg-ds-card shadow-sm'
+        : userMediaTileClass(mediaCount)
   const revealClass = variant === 'user' ? '' : ' ds-media-printer-reveal'
   const mediaClass = `h-full w-full ${variant === 'tool' ? 'object-contain' : 'object-cover'}`
   const canSave = !unavailable && Boolean(filePath || dataUrlPayload(previewUrl))
@@ -1021,19 +1035,21 @@ function MediaPreviewTile({
         >
           <img src={previewUrl} alt={title} className={mediaClass} loading="lazy" />
         </button>
-        <button
-          type="button"
-          onClick={(event) => {
-            event.stopPropagation()
-            void handleSaveAs()
-          }}
-          disabled={!canSave || saveState === 'saving'}
-          title={saveLabel}
-          aria-label={saveLabel}
-          className={iconButtonClass}
-        >
-          {saveIcon}
-        </button>
+        {variant === 'user' ? null : (
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation()
+              void handleSaveAs()
+            }}
+            disabled={!canSave || saveState === 'saving'}
+            title={saveLabel}
+            aria-label={saveLabel}
+            className={iconButtonClass}
+          >
+            {saveIcon}
+          </button>
+        )}
         <ImagePreviewLightbox
           open={imagePreviewOpen}
           src={previewUrl}
@@ -1134,6 +1150,8 @@ function MediaPreviewTile({
   )
 }
 
+const USER_MEDIA_CAROUSEL_THRESHOLD = 3
+
 function MediaAttachmentGallery({
   media,
   variant
@@ -1154,9 +1172,11 @@ function MediaAttachmentGallery({
     canScrollBackward: false,
     canScrollForward: false
   })
+  const useUserCarousel = variant === 'user' && media.length > USER_MEDIA_CAROUSEL_THRESHOLD
+  const useCarouselLayout = variant === 'conversation' || useUserCarousel
 
   useEffect(() => {
-    if (variant === 'tool') return
+    if (!useCarouselLayout) return
     const scroller = conversationScrollerRef.current
     if (!scroller) return
 
@@ -1186,7 +1206,7 @@ function MediaAttachmentGallery({
       scroller.removeEventListener('scroll', updateAvailability)
       resizeObserver.disconnect()
     }
-  }, [media.length, variant])
+  }, [media.length, useCarouselLayout])
 
   if (media.length === 0) return null
   const wrapperClass = 'flex min-w-0 flex-wrap gap-2 border-t border-ds-border-muted/60 px-4 py-3'
@@ -1217,9 +1237,26 @@ function MediaAttachmentGallery({
                 : undefined
         }
         variant={variant}
+        mediaCount={media.length}
       />
     )
   })
+
+  if (variant === 'user' && !useUserCarousel) {
+    return (
+      <div
+        ref={previewAdmissionRef}
+        className="relative min-w-0 w-full max-w-[80%]"
+        data-extension-attachment-context
+        data-user-media-gallery=""
+        data-user-media-count={media.length}
+      >
+        <div className="flex w-full justify-end gap-2 px-0.5 pb-1">
+          {tiles}
+        </div>
+      </div>
+    )
+  }
 
   if (variant !== 'tool') {
     const moveCarousel = (direction: -1 | 1): void => {
@@ -1238,7 +1275,9 @@ function MediaAttachmentGallery({
         ref={previewAdmissionRef}
         className={`group/gallery relative min-w-0 ${isConversation ? 'w-full' : 'w-full max-w-[80%]'}`}
         data-extension-attachment-context
-        {...(isConversation ? { 'data-generated-media-carousel': true } : {})}
+        {...(isConversation
+          ? { 'data-generated-media-carousel': true }
+          : { 'data-user-media-gallery': '', 'data-user-media-carousel': true, 'data-user-media-count': media.length })}
       >
         <div
           ref={conversationScrollerRef}

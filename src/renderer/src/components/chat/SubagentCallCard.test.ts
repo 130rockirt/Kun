@@ -30,6 +30,7 @@ vi.mock('react-i18next', () => {
     exploreViewProcess: 'View explore process',
     exploreViewProcessShort: 'Open',
     exploreViewProcessSteps: 'View explore process · {{count}} steps',
+    exploreExpandConclusion: 'Show conclusion',
     explorePeekPreview: 'Preview',
     'subagentsPanel.role.explore.name': 'Repository Explorer',
     'subagentsPanel.role.general.name': 'General Agent'
@@ -241,9 +242,14 @@ describe('SubagentCallCard route metadata', () => {
     expect(card.props['data-explore']).toBe('true')
   })
 
-  it('opens the child process on card click instead of peeking by default', async () => {
+  it('shows the full conclusion by default and opens the child only via the process button', async () => {
     selectThread.mockClear()
     const onOpenChildThread = vi.fn()
+    const conclusion = [
+      '已找到完整链路。结论如下:',
+      '## 1) 设置定义',
+      '- 类型定义: ProviderRetryConfig'
+    ].join('\n')
     await act(async () => {
       renderer = create(createElement(SubagentCallCard, {
         onOpenChildThread,
@@ -258,7 +264,7 @@ describe('SubagentCallCard route metadata', () => {
             childId: 'child_tokens',
             status: 'completed',
             title: 'Token save label',
-            summary: 'Found FloatingComposer.tsx',
+            summary: conclusion,
             profile: 'explore',
             profileName: 'Repository Explorer',
             model: 'deepseek-v4-flash',
@@ -281,11 +287,24 @@ describe('SubagentCallCard route metadata', () => {
       }))
     })
 
-    expect(instanceText(renderer!.root)).toContain('View explore process · 5 steps')
     const card = renderer!.root.findByProps({ 'data-testid': 'subagent-call-card' })
+    expect(card.props['data-conclusion-expanded']).toBe('true')
+    expect(instanceText(renderer!.root)).toContain('已找到完整链路')
+    expect(instanceText(renderer!.root)).toContain('ProviderRetryConfig')
+    expect(instanceText(renderer!.root)).not.toContain('View explore process · 5 steps')
+
     const clickable = card.findAll((node) => node.props?.role === 'button')[0]
     await act(async () => {
       clickable.props.onClick()
+    })
+    expect(onOpenChildThread).not.toHaveBeenCalled()
+    expect(
+      renderer!.root.findByProps({ 'data-testid': 'subagent-call-card' }).props['data-conclusion-expanded']
+    ).toBe('false')
+
+    const openProcess = renderer!.root.findByProps({ 'data-testid': 'explore-open-process-button' })
+    await act(async () => {
+      openProcess.props.onClick({ stopPropagation() {} })
     })
     expect(onOpenChildThread).toHaveBeenCalledWith('child_tokens')
     expect(selectThread).not.toHaveBeenCalled()

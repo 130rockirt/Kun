@@ -195,6 +195,7 @@ function SharedDefaultModelPicker({
   const triggerRef = useRef<HTMLButtonElement>(null)
   const searchRef = useRef<HTMLInputElement>(null)
   const [open, setOpen] = useState(false)
+  const [placement, setPlacement] = useState<'down' | 'up'>('down')
   const [activeProviderId, setActiveProviderId] = useState('')
   const [query, setQuery] = useState('')
   const providers = useMemo(() => snapshot?.providers ?? [], [snapshot?.providers])
@@ -281,6 +282,18 @@ function SharedDefaultModelPicker({
           aria-expanded={open}
           disabled={!snapshot || providers.length === 0}
           onClick={() => {
+            if (!open) {
+              // 该区块靠近页面底部,下方空间不足时向上展开,避免弹层被视口裁切
+              const rect = triggerRef.current?.getBoundingClientRect()
+              if (rect) {
+                const spaceBelow = window.innerHeight - rect.bottom
+                const spaceAbove = rect.top
+                const panelHeight = Math.min(420, window.innerHeight * 0.7)
+                setPlacement(
+                  spaceBelow < panelHeight && spaceAbove > spaceBelow ? 'up' : 'down'
+                )
+              }
+            }
             setQuery('')
             setOpen((current) => !current)
           }}
@@ -305,7 +318,9 @@ function SharedDefaultModelPicker({
           <div
             role="dialog"
             aria-label={zh ? '选择默认模型' : 'Choose default model'}
-            className="absolute left-0 top-full z-40 mt-2 grid w-full min-w-0 grid-cols-1 overflow-hidden rounded-2xl border border-ds-border bg-ds-card shadow-xl shadow-black/10 sm:grid-cols-[minmax(190px,0.8fr)_minmax(260px,1.2fr)] dark:shadow-black/35"
+            className={`absolute left-0 z-40 grid max-h-[70vh] w-full min-w-0 grid-cols-1 overflow-hidden rounded-2xl border border-ds-border bg-ds-card shadow-xl shadow-black/10 sm:grid-cols-[minmax(190px,0.8fr)_minmax(260px,1.2fr)] dark:shadow-black/35 ${
+              placement === 'up' ? 'bottom-full mb-2' : 'top-full mt-2'
+            }`}
           >
             <div className="min-w-0 border-b border-ds-border-muted p-2 sm:border-b-0 sm:border-r">
               <div className="px-2 pb-1.5 pt-1 text-[11px] font-semibold text-ds-faint">

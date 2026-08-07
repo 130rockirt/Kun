@@ -3032,6 +3032,7 @@
   "exploreViewProcess": "View explore process",
   "exploreViewProcessShort": "Open",
   "exploreViewProcessSteps": "View explore process · {{count}} steps",
+  "exploreExpandConclusion": "Show conclusion",
   "explorePeekPreview": "Preview",
   "explorePeekTitle": "Explore progress",
   "explorePeekClose": "Close",

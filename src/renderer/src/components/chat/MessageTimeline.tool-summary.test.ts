@@ -428,6 +428,64 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
     expect(html).toContain('为什么图片完全没有识别啊')
     expect(html).not.toContain('Attachments 1')
     expect(html).not.toContain('ds-media-printer-reveal')
+    expect(html).toContain('data-user-media-gallery')
+    expect(html).toContain('data-user-media-count="1"')
+    expect(html).toContain('max-w-[min(100%,20rem)]')
+    expect(html).not.toContain('data-user-media-carousel')
+    expect(html).not.toContain('generatedFileDownload')
+  })
+
+  it('keeps two or three user images in a row without carousel controls', () => {
+    const attachments = [1, 2, 3].map((index) => ({
+      id: `att_${index}`,
+      name: `image-${index}.png`,
+      mimeType: 'image/png',
+      previewUrl: `data:image/png;base64,img${index}`
+    }))
+    const block: ChatBlock = {
+      kind: 'user',
+      id: 'user_multi',
+      text: '三张图',
+      meta: {
+        attachmentIds: attachments.map((item) => item.id),
+        attachments
+      }
+    }
+
+    const html = renderToStaticMarkup(createElement(MessageBubble, { block }))
+
+    expect(html).toContain('data-user-media-count="3"')
+    expect(html).not.toContain('data-user-media-carousel')
+    expect(html).not.toContain('generatedFilesPreviousImages')
+    expect(html).not.toContain('generatedFilesNextImages')
+    expect(html).toContain('src="data:image/png;base64,img1"')
+    expect(html).toContain('src="data:image/png;base64,img3"')
+  })
+
+  it('enables the user media carousel only when there are more than three images', () => {
+    const attachments = [1, 2, 3, 4].map((index) => ({
+      id: `att_${index}`,
+      name: `image-${index}.png`,
+      mimeType: 'image/png',
+      previewUrl: `data:image/png;base64,img${index}`
+    }))
+    const block: ChatBlock = {
+      kind: 'user',
+      id: 'user_carousel',
+      text: '四张图',
+      meta: {
+        attachmentIds: attachments.map((item) => item.id),
+        attachments
+      }
+    }
+
+    const html = renderToStaticMarkup(createElement(MessageBubble, { block }))
+
+    expect(html).toContain('data-user-media-gallery')
+    expect(html).toContain('data-user-media-count="4"')
+    expect(html).toContain('data-user-media-carousel')
+    expect(html).toContain('snap-x')
+    expect(html).toContain('overflow-x-auto')
   })
 
   it('renders user file references under the sent prompt', () => {
