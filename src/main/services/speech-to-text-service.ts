@@ -35,6 +35,24 @@ const XAI_FORMAT_LANGUAGE_CODES = new Set([
   'mk', 'ms', 'fa', 'pl', 'pt', 'ro', 'ru', 'es', 'sv', 'th', 'tr', 'vi'
 ])
 
+/**
+ * Merge renderer-provided speech settings with Main's credential-projected
+ * settings. Renderer `settings:get` redacts provider apiKeys, so an empty
+ * request apiKey must fall back to the Registry-injected value.
+ */
+export function resolveSpeechToTextForTranscription(
+  settings: AppSettingsV1,
+  requestSpeechToText?: KunSpeechToTextSettingsV1
+): KunSpeechToTextSettingsV1 {
+  const resolved = resolveKunSpeechToTextSettings(settings)
+  if (!requestSpeechToText) return resolved
+  return {
+    ...resolved,
+    ...requestSpeechToText,
+    apiKey: requestSpeechToText.apiKey.trim() || resolved.apiKey
+  }
+}
+
 export async function requestSpeechTranscription(
   settings: AppSettingsV1,
   request: SpeechTranscriptionRequest,
@@ -50,7 +68,7 @@ export async function requestSpeechTranscription(
     ) => Promise<string>
   } = {}
 ): Promise<SpeechTranscriptionResult> {
-  const speechToText = request.speechToText ?? resolveKunSpeechToTextSettings(settings)
+  const speechToText = resolveSpeechToTextForTranscription(settings, request.speechToText)
   if (!isSpeechToTextConfigured(speechToText)) {
     return { ok: false, message: describeSpeechConfigurationIssue(speechToText) }
   }

@@ -137,9 +137,10 @@ export type { ComposerFileReference } from '../../lib/composer-file-references'
 export type { ComposerExecutionSettings } from './FloatingComposerExecutionPicker'
 
 export function shouldShowVoiceDictation(
-  speechToText: KunSpeechToTextSettingsV1 | null | undefined
+  speechToText: KunSpeechToTextSettingsV1 | null | undefined,
+  credentialReady = false
 ): boolean {
-  return speechToText != null && isSpeechToTextConfigured(speechToText)
+  return speechToText != null && isSpeechToTextConfigured(speechToText, { credentialReady })
 }
 
 export function returnQueuedMessageToComposer(
@@ -449,7 +450,8 @@ export function FloatingComposer({
     onResolveUserInput ?? resolveUserInput
   )
   const fileInputRef = useRef<HTMLInputElement | null>(null)
-  const speechToTextSettings = useSpeechToTextSettings()
+  const { speechToText: speechToTextSettings, credentialReady: speechCredentialReady } =
+    useSpeechToTextSettings()
   const promptOptimizationSettings = usePromptOptimizationSettings()
   const dictationInputRef = useRef(input)
   useEffect(() => {
@@ -468,7 +470,7 @@ export function FloatingComposer({
       }
     }
   })
-  const showVoiceDictation = shouldShowVoiceDictation(speechToTextSettings)
+  const showVoiceDictation = shouldShowVoiceDictation(speechToTextSettings, speechCredentialReady)
   const activeClawChannel = useMemo(
     () => clawChannels.find((channel) => channel.id === activeClawChannelId) ?? null,
     [activeClawChannelId, clawChannels]

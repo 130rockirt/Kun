@@ -8,6 +8,11 @@ import {
   IMAGE_GENERATION_RESOLUTIONS,
   resolveKunImageGenerationSettings
 } from '@shared/app-settings'
+import {
+  fetchSharedModelConnectionCredentialStates,
+  shouldWarnMissingProviderCredential,
+  type SharedConnectionCredentialState
+} from '../lib/provider-credential-readiness'
 import { InlineNoticeView, ModelSelect, SecretInput, SettingsCard, SettingRow, Toggle } from './settings-controls'
 
 const DEFAULT_IMAGE_GENERATION = {
@@ -76,9 +81,28 @@ export function ImageGenerationSettingsSection({ ctx }: { ctx: Record<string, an
     : selectedProviderImage?.models ?? []
   const [showImageGenApiKey, setShowImageGenApiKey] = useState(false)
   const [defaultSizeInput, setDefaultSizeInput] = useState(imageGeneration.defaultSize)
+  const [connectionCredentials, setConnectionCredentials] = useState<SharedConnectionCredentialState[] | null>(null)
+  const warnMissingImageProviderKey = shouldWarnMissingProviderCredential({
+    usingCustomProvider,
+    provider: selectedImageProvider,
+    connectionCredentials
+  })
   useEffect(() => {
     setDefaultSizeInput(imageGeneration.defaultSize)
   }, [imageGeneration.defaultSize])
+  useEffect(() => {
+    let cancelled = false
+    void fetchSharedModelConnectionCredentialStates()
+      .then((states) => {
+        if (!cancelled) setConnectionCredentials(states)
+      })
+      .catch(() => {
+        if (!cancelled) setConnectionCredentials([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
   const updateImageGeneration = (patch: Record<string, unknown>): void => {
     updateKun({
       imageGeneration: {
@@ -133,7 +157,7 @@ export function ImageGenerationSettingsSection({ ctx }: { ctx: Record<string, an
                   ))}
                   <option value={CUSTOM_IMAGE_GENERATION_PROVIDER_ID}>{t('imageGenProviderCustom')}</option>
                 </select>
-                {!usingCustomProvider && !selectedImageProvider?.apiKey?.trim() ? (
+                {warnMissingImageProviderKey ? (
                   <p className="mt-2 text-[12px] text-amber-700 dark:text-amber-300">
                     {t('imageGenProviderMissingKey', { provider: selectedImageProvider?.name ?? selectedProviderId })}
                   </p>

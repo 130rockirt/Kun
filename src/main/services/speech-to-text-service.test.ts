@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import type { AppSettingsV1 } from '../../shared/app-settings'
 import { isSpeechToTextConfigured } from '../../shared/speech-to-text'
-import { requestSpeechTranscription } from './speech-to-text-service'
+import {
+  requestSpeechTranscription,
+  resolveSpeechToTextForTranscription
+} from './speech-to-text-service'
 
 const AUDIO_BASE64 = Buffer.from('fake-wav-bytes').toString('base64')
 
@@ -52,6 +55,65 @@ describe('speech-to-text service', () => {
     expect(isSpeechToTextConfigured({ enabled: true, protocol: 'local-whisper', baseUrl: '', apiKey: '', model: 'whisper-small-q5_1' })).toBe(true)
     expect(isSpeechToTextConfigured({ enabled: true, protocol: 'xai-stt', baseUrl: 'x', apiKey: 'y', model: '' })).toBe(true)
     expect(isSpeechToTextConfigured({ enabled: true, protocol: 'gemini-cli-audio', baseUrl: '', apiKey: '', model: 'gemini-2.5-flash' })).toBe(true)
+    expect(isSpeechToTextConfigured(
+      { enabled: true, protocol: 'xai-stt', baseUrl: 'https://api.x.ai/v1', apiKey: '', model: 'grok-transcribe' },
+      { credentialReady: true }
+    )).toBe(true)
+    expect(isSpeechToTextConfigured(
+      { enabled: true, protocol: 'xai-stt', baseUrl: 'https://api.x.ai/v1', apiKey: '', model: 'grok-transcribe' },
+      { credentialReady: false }
+    )).toBe(false)
+  })
+
+  it('falls back to Registry-projected apiKey when the renderer payload is redacted', async () => {
+    const { fetchImpl, requests } = fakeFetch({ text: 'hello from Grok' })
+    const result = await requestSpeechTranscription(
+      settingsWithSpeech({
+        protocol: 'xai-stt',
+        baseUrl: 'https://api.x.ai/v1',
+        apiKey: 'registry-oauth-json',
+        model: 'grok-transcribe'
+      }),
+      {
+        audioBase64: AUDIO_BASE64,
+        mimeType: 'audio/wav',
+        speechToText: {
+          enabled: true,
+          providerId: 'grok-subscription',
+          protocol: 'xai-stt',
+          baseUrl: 'https://api.x.ai/v1',
+          apiKey: '',
+          model: 'grok-transcribe',
+          localWhisperDownloadSource: 'huggingface',
+          language: '',
+          timeoutMs: 30000
+        }
+      },
+      { fetchImpl }
+    )
+
+    expect(result).toEqual({ ok: true, text: 'hello from Grok' })
+    const headers = requests[0].init.headers as Record<string, string>
+    expect(headers.Authorization).toBe('Bearer registry-oauth-json')
+    expect(resolveSpeechToTextForTranscription(
+      settingsWithSpeech({
+        protocol: 'xai-stt',
+        baseUrl: 'https://api.x.ai/v1',
+        apiKey: 'registry-oauth-json',
+        model: 'grok-transcribe'
+      }),
+      {
+        enabled: true,
+        providerId: 'grok-subscription',
+        protocol: 'xai-stt',
+        baseUrl: 'https://api.x.ai/v1',
+        apiKey: '',
+        model: 'grok-transcribe',
+        localWhisperDownloadSource: 'huggingface',
+        language: '',
+        timeoutMs: 30000
+      }
+    ).apiKey).toBe('registry-oauth-json')
   })
 
   it('transcribes via MiMo ASR chat completions with a base64 data URI', async () => {

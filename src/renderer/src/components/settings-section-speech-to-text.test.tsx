@@ -119,4 +119,35 @@ describe('SpeechToTextSettingsSection', () => {
     expect(html).not.toContain('has no API key')
     expect(html).toContain('gemini-2.5-flash')
   })
+
+  it('does not demand a plaintext API key for redacted Grok OAuth while credentials load', () => {
+    const grok = modelProviderPresetProfile(
+      getModelProviderPreset('grok-subscription')!,
+      ''
+    )
+    const defaults = defaultKunRuntimeSettings()
+    const html = renderToStaticMarkup(createElement(SpeechToTextSettingsSection, {
+      ctx: {
+        t,
+        provider: { providers: [grok] },
+        kun: {
+          ...defaults,
+          speechToText: {
+            ...defaults.speechToText,
+            enabled: true,
+            providerId: grok.id,
+            protocol: 'xai-stt',
+            model: 'grok-transcribe'
+          }
+        },
+        selectControlClass: 'select',
+        updateKun: vi.fn()
+      }
+    }))
+
+    // Credential readiness is fetched asynchronously; until it lands the UI
+    // must not flash a false "missing API key" warning for OAuth providers.
+    expect(html).not.toContain('has no API key')
+    expect(html).toContain('grok-transcribe')
+  })
 })

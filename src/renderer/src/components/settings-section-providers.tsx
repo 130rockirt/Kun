@@ -97,6 +97,9 @@ import {
   Toggle,
   type InlineNotice
 } from './settings-controls'
+import { sharedModelConnectionHasUsableCredential } from '../lib/provider-credential-readiness'
+
+export { sharedModelConnectionHasUsableCredential } from '../lib/provider-credential-readiness'
 import {
   drainSharedProviderCatalogMutation,
   drainSharedProviderCredentialMutation,
@@ -142,16 +145,6 @@ type SharedModelConnectionsSnapshot = {
 type ProjectedKunSelectionPatch = {
   providerId: string
   model?: string
-}
-
-export function sharedModelConnectionHasUsableCredential(
-  connection: Pick<SharedModelConnection, 'configured' | 'credentialStatus'> | undefined
-): boolean {
-  return Boolean(
-    connection?.configured &&
-    connection.credentialStatus !== 'missing' &&
-    connection.credentialStatus !== 'unreadable'
-  )
 }
 
 export function sharedProviderSetupNeedsApiKey(
