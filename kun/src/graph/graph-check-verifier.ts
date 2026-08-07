@@ -74,9 +74,10 @@ function run(
       encoding: 'utf8'
     }, (error, stdout, stderr) => {
       const output = `${stdout ?? ''}${stderr ?? ''}`.trim().slice(0, 4_096)
+      const errorCode = (error as { code?: unknown } | null)?.code
       resolve({
-        exitCode: typeof (error as NodeJS.ErrnoException | null)?.code === 'number'
-          ? (error as NodeJS.ErrnoException & { code: number }).code
+        exitCode: typeof errorCode === 'number'
+          ? errorCode
           : error
             ? null
             : 0,
