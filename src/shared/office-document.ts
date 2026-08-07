@@ -29,6 +29,8 @@ export type LocalOfficeDocumentReadResult =
       truncated: boolean
       visualPreview?: OfficeDocumentVisualPreview
       previewUnavailableReason?: string
+      /** Soft OOXML schema issues (e.g. WPS vendor attrs) that did not block intake. */
+      validationWarning?: string
     }
   | { ok: false; code?: string; message: string }
 

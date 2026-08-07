@@ -6,7 +6,10 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ZipFile } from 'yazl'
 import { MAX_RUNTIME_DOCUMENT_SOURCE_BYTES } from '../../shared/office-document'
-import { readLocalOfficeDocument } from './office-document-service'
+import {
+  isBenignOoxmlSchemaFailure,
+  readLocalOfficeDocument
+} from './office-document-service'
 
 const roots: string[] = []
 
@@ -140,5 +143,114 @@ describe('Office document intake', () => {
 
     expect(result).toMatchObject({ ok: false, code: 'file_too_large' })
     expect(runOfficeCli).not.toHaveBeenCalled()
+  })
+
+  it('soft-fails WPS undeclared schema attributes and continues text extraction (#1122)', async () => {
+    const filePath = await ooxmlFixture('xlsx')
+    const wpsSchemaFailure = JSON.stringify({
+      success: false,
+      data: {
+        count: 1,
+        errors: [{
+          type: 'Schema',
+          description:
+            "The'http://www.wps.cn/officeDocument/2017/etCustomData:filterBottomFollowUsedRange' attribute is not declared.",
+          path: '/x:worksheet[1]/x:autoFilter[1]',
+          part: '/xl/worksheets/sheet1.xml'
+        }]
+      }
+    })
+    const runOfficeCli = vi.fn(async (args: string[]) => {
+      if (args[0] === 'validate') {
+        return { stdout: wpsSchemaFailure, stderr: '', exitCode: 1 }
+      }
+      if (args[2] === 'stats') return { stdout: '{"sheetCount":1}', stderr: '', exitCode: 0 }
+      if (args[2] === 'html') return { stdout: '<html><body>WPS</body></html>', stderr: '', exitCode: 0 }
+      return { stdout: 'Sheet1\\nA1 = ok', stderr: '', exitCode: 0 }
+    })
+
+    const result = await readLocalOfficeDocument({ path: filePath }, {
+      runOfficeCli,
+      renderHtml: vi.fn(async () => ({
+        dataBase64: Buffer.from('p').toString('base64'),
+        mimeType: 'image/webp' as const,
+        byteSize: 1
+      }))
+    })
+
+    expect(result).toMatchObject({
+      ok: true,
+      format: 'xlsx',
+      documentText: expect.stringContaining('A1 = ok'),
+      validationWarning: expect.stringContaining('filterBottomFollowUsedRange')
+    })
+    expect(runOfficeCli.mock.calls.map(([args]) => args[0])).toEqual([
+      'validate',
+      'view',
+      'view',
+      'view'
+    ])
+  })
+
+  it('still rejects non-schema OfficeCLI validate failures', async () => {
+    const filePath = await ooxmlFixture('xlsx')
+    const runOfficeCli = vi.fn(async (args: string[]) => {
+      if (args[0] === 'validate') {
+        return {
+          stdout: JSON.stringify({
+            success: false,
+            data: {
+              count: 1,
+              errors: [{ type: 'Package', description: 'Missing required part /xl/workbook.xml' }]
+            }
+          }),
+          stderr: '',
+          exitCode: 1
+        }
+      }
+      return { stdout: 'should-not-run', stderr: '', exitCode: 0 }
+    })
+
+    const result = await readLocalOfficeDocument({ path: filePath }, {
+      runOfficeCli,
+      renderHtml: vi.fn()
+    })
+
+    expect(result).toMatchObject({
+      ok: false,
+      code: 'office_document_failed',
+      message: expect.stringContaining('Office document validation failed')
+    })
+    expect(runOfficeCli).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('isBenignOoxmlSchemaFailure', () => {
+  it('accepts Schema undeclared-attribute errors from WPS packages', () => {
+    expect(isBenignOoxmlSchemaFailure({
+      exitCode: 1,
+      stdout: JSON.stringify({
+        success: false,
+        data: {
+          errors: [{
+            type: 'Schema',
+            description:
+              "The'http://www.wps.cn/officeDocument/2017/etCustomData:filterBottomFollowUsedRange' attribute is not declared."
+          }]
+        }
+      }),
+      stderr: ''
+    })).toBe(true)
+  })
+
+  it('rejects package-structure validate failures', () => {
+    expect(isBenignOoxmlSchemaFailure({
+      exitCode: 1,
+      stdout: JSON.stringify({
+        success: false,
+        data: { errors: [{ type: 'Package', description: 'Corrupt ZIP central directory' }] }
+      }),
+      stderr: ''
+    })).toBe(false)
   })
 })
