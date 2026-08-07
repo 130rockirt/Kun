@@ -2051,7 +2051,7 @@
   "noSessionSelected": "कोई थ्रेड चयनित नहीं",
   "sessionHeaderHint": "बाईं ओर से थ्रेड शुरू करें, या काम जारी रखने के लिए रनटाइम को फिर से कनेक्ट करें।",
   "sessionUsageTitle": "{{turns}} turns in this thread",
-  "sessionUsageTokens": "{{tokens}} tokens",
+  "sessionUsageTokens": "कुल {{tokens}} टोकन",
   "sessionUsageCost": "{{cost}}",
   "sessionUsageContextSavings": "saved {{tokens}} tokens",
   "sessionUsageContextSavingsTitle": "Saved about {{tokens}} context tokens",

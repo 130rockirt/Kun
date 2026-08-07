@@ -17,10 +17,7 @@ export function insertCompactionIntoVisibleHistory(input: {
 }): TurnItem[] {
   const summaryIndex = input.compactedItems.findIndex((item) => item.id === input.summaryItem.id)
   if (summaryIndex < 0) {
-    return replaceOrAppendItem(
-      coalesceAutomaticCompactions(input.visibleItems, input.summaryItem),
-      input.summaryItem
-    )
+    return replaceOrAppendItem(input.visibleItems, input.summaryItem)
   }
 
   // Goal context is internal model history. `ContextCompactor` intentionally
@@ -38,10 +35,9 @@ export function insertCompactionIntoVisibleHistory(input: {
       .filter((item) => item.kind !== 'goal_context')
       .map((item) => item.id)
   )
-  const withoutSummary = coalesceAutomaticCompactions(
-    input.visibleItems,
-    input.summaryItem
-  ).filter((item) => item.id !== input.summaryItem.id && item.kind !== 'goal_context')
+  const withoutSummary = input.visibleItems.filter(
+    (item) => item.id !== input.summaryItem.id && item.kind !== 'goal_context'
+  )
   if (tailIds.size === 0) return [...withoutSummary, input.summaryItem, ...goalContexts]
 
   const insertIndex = withoutSummary.findIndex((item) => tailIds.has(item.id))
@@ -83,10 +79,9 @@ function replaceOrAppendItem(items: readonly TurnItem[], item: TurnItem): TurnIt
  * items move here; every other item keeps its established relative order.
  */
 export function placeCompactionsChronologically(items: readonly TurnItem[]): TurnItem[] {
-  const coalesced = coalesceAutomaticCompactions(items)
-  const indexed = coalesced.map((item, sourceIndex) => ({ item, sourceIndex }))
+  const indexed = items.map((item, sourceIndex) => ({ item, sourceIndex }))
   const compactions = indexed.filter(({ item }) => isVisibleCompaction(item))
-  if (compactions.length === 0) return coalesced
+  if (compactions.length === 0) return [...items]
 
   const timeline = indexed.filter(({ item }) => !isVisibleCompaction(item))
   const turnOwnerItemIds = new Map<string, string>()
@@ -158,23 +153,4 @@ function timelineEntryFollowsCompaction(
 
 function isVisibleCompaction(item: TurnItem): boolean {
   return item.kind === 'compaction' && item.replacedTokens > 0
-}
-
-/** Keep manual markers and only the newest automatic marker for each turn. */
-function coalesceAutomaticCompactions(
-  items: readonly TurnItem[],
-  incoming?: TurnItem
-): TurnItem[] {
-  const latestAutoByTurn = new Map<string, string>()
-  for (const item of [...items, ...(incoming ? [incoming] : [])]) {
-    if (isAutomaticCompaction(item)) latestAutoByTurn.set(item.turnId, item.id)
-  }
-  if (latestAutoByTurn.size === 0) return [...items]
-  return items.filter((item) =>
-    !isAutomaticCompaction(item) || latestAutoByTurn.get(item.turnId) === item.id
-  )
-}
-
-function isAutomaticCompaction(item: TurnItem): boolean {
-  return item.kind === 'compaction' && item.replacedTokens > 0 && item.auto !== false
 }

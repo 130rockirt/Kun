@@ -2355,6 +2355,49 @@ describe('provider presets', () => {
     }
   })
 
+  it('publishes and narrowly repairs the OpenCode Go Grok 4.5 capacity profile', () => {
+    const preset = getModelProviderPreset('opencode-go')!
+    const profile = modelProviderPresetProfile(preset, 'sk-opencode')
+
+    expect(profile.models).toContain('grok-4.5')
+    expect(profile.modelProfiles['grok-4.5']).toMatchObject({
+      contextWindowTokens: 500_000,
+      maxOutputTokens: 64_000,
+      inputModalities: ['text', 'image'],
+      reasoning: {
+        supportedEfforts: ['low', 'medium', 'high'],
+        defaultEffort: 'medium',
+        requestProtocol: 'openai-chat-completions'
+      }
+    })
+
+    profile.modelProfiles['grok-4.5'] = {
+      ...profile.modelProfiles['grok-4.5']!,
+      contextWindowTokens: 256_000,
+      maxOutputTokens: 500_000
+    }
+    const repaired = normalizeModelProviderSettings({
+      providers: [profile]
+    }).providers.find((provider) => provider.id === 'opencode-go')
+    expect(repaired?.modelProfiles['grok-4.5']).toMatchObject({
+      contextWindowTokens: 500_000,
+      maxOutputTokens: 64_000
+    })
+
+    profile.modelProfiles['grok-4.5'] = {
+      ...profile.modelProfiles['grok-4.5']!,
+      contextWindowTokens: 300_000,
+      maxOutputTokens: 80_000
+    }
+    const preserved = normalizeModelProviderSettings({
+      providers: [profile]
+    }).providers.find((provider) => provider.id === 'opencode-go')
+    expect(preserved?.modelProfiles['grok-4.5']).toMatchObject({
+      contextWindowTokens: 300_000,
+      maxOutputTokens: 80_000
+    })
+  })
+
   it('upgrades the obsolete generated single-auto GLM capability', () => {
     const preset = getModelProviderPreset('opencode-go')!
     const profile = modelProviderPresetProfile(preset, 'sk-opencode')

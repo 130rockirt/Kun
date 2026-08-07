@@ -2051,7 +2051,7 @@
   "noSessionSelected": "スレッドが選択されていません",
   "sessionHeaderHint": "左側からスレッドを開始するか、ランタイムを再接続して作業を続行します。",
   "sessionUsageTitle": "このスレッドのターン数は {{turns}} 回です",
-  "sessionUsageTokens": "{{tokens}} tokens",
+  "sessionUsageTokens": "累計 {{tokens}} tokens",
   "sessionUsageCost": "{{cost}}",
   "sessionUsageContextSavings": "保存された {{tokens}} 個のトークン",
   "sessionUsageContextSavingsTitle": "{{tokens}} 個のコンテキスト トークンについて保存しました",

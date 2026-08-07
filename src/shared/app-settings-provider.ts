@@ -1390,6 +1390,12 @@ function withPresetModelProfiles(
       storedProfile?.reasoning,
       presetProfile.reasoning
     )
+    const repairKnownGrokCapacity = shouldRepairKnownOpenCodeGrokCapacity(
+      provider,
+      modelId,
+      storedProfile,
+      presetProfile
+    )
     const profile: ModelProviderModelProfileV1 = {
       ...presetProfile,
       ...(storedProfile ?? {}),
@@ -1406,12 +1412,33 @@ function withPresetModelProfiles(
       // added profiles should inherit it from the preset.
       ...(presetProfile.responsesMode && !storedProfile?.responsesMode
         ? { responsesMode: presetProfile.responsesMode }
+        : {}),
+      ...(repairKnownGrokCapacity
+        ? {
+            contextWindowTokens: presetProfile.contextWindowTokens!,
+            maxOutputTokens: presetProfile.maxOutputTokens!
+          }
         : {})
     }
     if (!presetProfile.serviceTiers?.length) delete profile.serviceTiers
     profiles[modelId] = profile
   }
   return profiles
+}
+
+function shouldRepairKnownOpenCodeGrokCapacity(
+  provider: Pick<ModelProviderProfileV1, 'id' | 'presetSource'>,
+  modelId: string,
+  stored: ModelProviderModelProfileV1 | undefined,
+  preset: ModelProviderModelProfileV1
+): boolean {
+  const source = resolveModelProviderPresetSource(provider)
+  return source?.preset.id === 'opencode-go' &&
+    modelId === 'grok-4.5' &&
+    stored?.contextWindowTokens === 256_000 &&
+    stored.maxOutputTokens === 500_000 &&
+    preset.contextWindowTokens === 500_000 &&
+    preset.maxOutputTokens === 64_000
 }
 
 function shouldUpgradeGeneratedPresetReasoning(

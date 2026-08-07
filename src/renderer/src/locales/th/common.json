@@ -2051,7 +2051,7 @@
   "noSessionSelected": "ไม่ได้เลือกชุดข้อความ",
   "sessionHeaderHint": "เริ่มเธรดจากด้านซ้าย หรือเชื่อมต่อรันไทม์อีกครั้งเพื่อทำงานต่อ",
   "sessionUsageTitle": "{{turns}} รอบในกระทู้นี้",
-  "sessionUsageTokens": "โทเค็น {{tokens}}",
+  "sessionUsageTokens": "สะสม {{tokens}} โทเค็น",
   "sessionUsageCost": "{{cost}}",
   "sessionUsageContextSavings": "บันทึกโทเค็น {{tokens}} แล้ว",
   "sessionUsageContextSavingsTitle": "บันทึกเกี่ยวกับโทเค็นบริบท {{tokens}} แล้ว",

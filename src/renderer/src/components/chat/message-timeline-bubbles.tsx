@@ -926,9 +926,9 @@ function MediaPreviewTile({
       ? 'group aspect-square w-52 shrink-0 snap-start overflow-hidden rounded-xl border border-ds-border-muted bg-ds-card shadow-sm'
       : variant === 'tool'
         ? 'block h-32 w-40 overflow-hidden rounded-lg border border-ds-border-muted bg-ds-card shadow-sm'
-        : 'block h-28 w-36 overflow-hidden rounded-lg border border-ds-border-muted bg-ds-card shadow-sm'
+        : 'group block aspect-[3/2] w-[calc((100%-1rem)/3)] max-w-56 shrink-0 snap-start overflow-hidden rounded-lg border border-ds-border-muted bg-ds-card shadow-sm'
   const revealClass = variant === 'user' ? '' : ' ds-media-printer-reveal'
-  const mediaClass = `h-full w-full ${variant === 'conversation' ? 'object-cover' : 'object-contain'}`
+  const mediaClass = `h-full w-full ${variant === 'tool' ? 'object-contain' : 'object-cover'}`
   const canSave = !unavailable && Boolean(filePath || dataUrlPayload(previewUrl))
   const canOpenArtifact = !unavailable && Boolean(
     media.artifactId && media.ownerExtensionId && media.ownerExtensionVersion &&
@@ -991,9 +991,11 @@ function MediaPreviewTile({
     'inline-flex h-7 items-center justify-center rounded-md border border-ds-border-muted bg-ds-card/90 px-2 text-[11.5px] font-medium text-ds-muted shadow-sm transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-not-allowed disabled:opacity-50'
   const iconButtonClass =
     `absolute right-2 top-2 inline-flex h-8 w-8 items-center justify-center rounded-md border border-ds-border-muted bg-ds-card/92 text-ds-muted shadow-sm backdrop-blur transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-not-allowed disabled:opacity-50 ${
-      variant === 'conversation'
-        ? 'opacity-0 focus-visible:opacity-100 group-hover:opacity-100'
-        : ''
+      variant === 'user'
+        ? 'h-7 w-7 opacity-0 focus-visible:opacity-100 group-hover:opacity-100'
+        : variant === 'conversation'
+          ? 'opacity-0 focus-visible:opacity-100 group-hover:opacity-100'
+          : ''
     }`
   const saveIcon = saveState === 'saving'
     ? <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={1.9} />
@@ -1153,7 +1155,7 @@ function MediaAttachmentGallery({
   })
 
   useEffect(() => {
-    if (variant !== 'conversation') return
+    if (variant === 'tool') return
     const scroller = conversationScrollerRef.current
     if (!scroller) return
 
@@ -1186,10 +1188,7 @@ function MediaAttachmentGallery({
   }, [media.length, variant])
 
   if (media.length === 0) return null
-  const wrapperClass =
-    variant === 'tool'
-        ? 'flex min-w-0 flex-wrap gap-2 border-t border-ds-border-muted/60 px-4 py-3'
-        : 'flex max-w-[80%] flex-wrap justify-end gap-2'
+  const wrapperClass = 'flex min-w-0 flex-wrap gap-2 border-t border-ds-border-muted/60 px-4 py-3'
 
   const tiles = media.map((item) => {
     const key = mediaKey(item)
@@ -1221,7 +1220,7 @@ function MediaAttachmentGallery({
     )
   })
 
-  if (variant === 'conversation') {
+  if (variant !== 'tool') {
     const moveCarousel = (direction: -1 | 1): void => {
       const scroller = conversationScrollerRef.current
       if (!scroller) return
@@ -1231,39 +1230,70 @@ function MediaAttachmentGallery({
       })
     }
     const showCarouselControls = scrollAvailability.canScrollBackward || scrollAvailability.canScrollForward
+    const isConversation = variant === 'conversation'
 
     return (
-      <div ref={previewAdmissionRef} className="group/gallery relative min-w-0 w-full" data-extension-attachment-context data-generated-media-carousel>
+      <div
+        ref={previewAdmissionRef}
+        className={`group/gallery relative min-w-0 ${isConversation ? 'w-full' : 'w-full max-w-[80%]'}`}
+        data-extension-attachment-context
+        {...(isConversation ? { 'data-generated-media-carousel': true } : {})}
+      >
         <div
           ref={conversationScrollerRef}
           className="flex w-full snap-x snap-mandatory gap-2 overflow-x-auto px-0.5 pb-1 scroll-smooth [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-          data-generated-media-strip
+          {...(isConversation ? { 'data-generated-media-strip': true } : {})}
         >
           {tiles}
         </div>
         {showCarouselControls ? (
-          <div className="absolute bottom-3 right-3 flex items-center gap-1.5">
-            <button
-              type="button"
-              onClick={() => moveCarousel(-1)}
-              disabled={!scrollAvailability.canScrollBackward}
-              className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/20 bg-black/55 text-white shadow-md backdrop-blur-sm transition hover:bg-black/70 disabled:cursor-default disabled:opacity-35"
-              title={t('generatedFilesPreviousImages')}
-              aria-label={t('generatedFilesPreviousImages')}
-            >
-              <ChevronLeft className="h-5 w-5" strokeWidth={2} />
-            </button>
-            <button
-              type="button"
-              onClick={() => moveCarousel(1)}
-              disabled={!scrollAvailability.canScrollForward}
-              className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/20 bg-black/55 text-white shadow-md backdrop-blur-sm transition hover:bg-black/70 disabled:cursor-default disabled:opacity-35"
-              title={t('generatedFilesNextImages')}
-              aria-label={t('generatedFilesNextImages')}
-            >
-              <ChevronRight className="h-5 w-5" strokeWidth={2} />
-            </button>
-          </div>
+          isConversation ? (
+            <div className="absolute bottom-3 right-3 flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => moveCarousel(-1)}
+                disabled={!scrollAvailability.canScrollBackward}
+                className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/20 bg-black/55 text-white shadow-md backdrop-blur-sm transition hover:bg-black/70 disabled:cursor-default disabled:opacity-35"
+                title={t('generatedFilesPreviousImages')}
+                aria-label={t('generatedFilesPreviousImages')}
+              >
+                <ChevronLeft className="h-5 w-5" strokeWidth={2} />
+              </button>
+              <button
+                type="button"
+                onClick={() => moveCarousel(1)}
+                disabled={!scrollAvailability.canScrollForward}
+                className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/20 bg-black/55 text-white shadow-md backdrop-blur-sm transition hover:bg-black/70 disabled:cursor-default disabled:opacity-35"
+                title={t('generatedFilesNextImages')}
+                aria-label={t('generatedFilesNextImages')}
+              >
+                <ChevronRight className="h-5 w-5" strokeWidth={2} />
+              </button>
+            </div>
+          ) : (
+            <>
+              <button
+                type="button"
+                onClick={() => moveCarousel(-1)}
+                disabled={!scrollAvailability.canScrollBackward}
+                className="absolute left-1.5 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full border border-ds-border-muted bg-ds-card/92 text-ds-muted opacity-0 shadow-sm backdrop-blur transition hover:bg-ds-hover hover:text-ds-ink focus-visible:opacity-100 disabled:cursor-default disabled:opacity-0 group-hover/gallery:opacity-100"
+                title={t('generatedFilesPreviousImages')}
+                aria-label={t('generatedFilesPreviousImages')}
+              >
+                <ChevronLeft className="h-4 w-4" strokeWidth={2} />
+              </button>
+              <button
+                type="button"
+                onClick={() => moveCarousel(1)}
+                disabled={!scrollAvailability.canScrollForward}
+                className="absolute right-1.5 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full border border-ds-border-muted bg-ds-card/92 text-ds-muted opacity-0 shadow-sm backdrop-blur transition hover:bg-ds-hover hover:text-ds-ink focus-visible:opacity-100 disabled:cursor-default disabled:opacity-0 group-hover/gallery:opacity-100"
+                title={t('generatedFilesNextImages')}
+                aria-label={t('generatedFilesNextImages')}
+              >
+                <ChevronRight className="h-4 w-4" strokeWidth={2} />
+              </button>
+            </>
+          )
         ) : null}
       </div>
     )

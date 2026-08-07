@@ -266,6 +266,12 @@ const GROK_RESPONSES_REASONING: ModelProviderReasoningCapabilityV1 = {
   requestProtocol: 'openai-responses'
 }
 
+const GROK_CHAT_REASONING: ModelProviderReasoningCapabilityV1 = {
+  supportedEfforts: ['low', 'medium', 'high'],
+  defaultEffort: 'medium',
+  requestProtocol: 'openai-chat-completions'
+}
+
 const KIMI_K3_REASONING: ModelProviderReasoningCapabilityV1 = {
   supportedEfforts: ['low', 'high', 'max'],
   defaultEffort: 'high',
@@ -644,6 +650,7 @@ export const MODEL_PROVIDER_PRESETS: ModelProviderPreset[] = [
     baseUrl: 'https://opencode.ai/zen/go/v1',
     endpointFormat: 'chat_completions',
     models: [
+      'grok-4.5',
       'glm-5.2',
       'glm-5.1',
       'glm-5',
@@ -665,6 +672,10 @@ export const MODEL_PROVIDER_PRESETS: ModelProviderPreset[] = [
       'qwen3.5-plus'
     ],
     modelProfiles: {
+      'grok-4.5': {
+        ...visionChatProfile(500_000, GROK_CHAT_REASONING),
+        maxOutputTokens: 64_000
+      },
       'glm-5.2': visionChatProfile(1_000_000, GLM_REASONING),
       'glm-5.1': visionChatProfile(131_072, GLM_REASONING),
       'glm-5': visionChatProfile(131_072, GLM_REASONING),

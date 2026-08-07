@@ -1,28 +1,15 @@
-import { describe, expect, it, vi } from 'vitest'
-import type { SessionStore } from '../ports/session-store.js'
+import { describe, expect, it } from 'vitest'
 import { LoopTelemetry } from './loop-telemetry.js'
 
 describe('LoopTelemetry', () => {
-  it('hydrates the latest positive persisted prompt pressure only once', async () => {
-    const loadUsageRecords = vi.fn().mockResolvedValue([
-      { threadId: 'thread_1', model: 'older', usage: { promptTokens: 10 } },
-      { threadId: 'thread_1', model: '', usage: { promptTokens: 30 } },
-      { threadId: 'other', model: 'other', usage: { promptTokens: 100 } }
-    ])
-    const telemetry = new LoopTelemetry({ loadUsageRecords } as unknown as SessionStore)
+  it('starts without pressure instead of restoring cumulative usage', () => {
+    const telemetry = new LoopTelemetry()
 
-    await telemetry.hydratePromptPressureIfCold('thread_1', 'fallback')
-
-    expect(telemetry.consumePromptPressure('thread_1', 'fallback')).toEqual({
-      model: 'fallback',
-      promptTokens: 30
-    })
-    await telemetry.hydratePromptPressureIfCold('thread_1', 'fallback')
-    expect(loadUsageRecords).toHaveBeenCalledTimes(1)
+    expect(telemetry.consumePromptPressure('thread_1', 'fallback')).toBeUndefined()
   })
 
   it('keeps the highest prompt pressure seen before compaction consumes it', () => {
-    const telemetry = new LoopTelemetry({} as unknown as SessionStore)
+    const telemetry = new LoopTelemetry()
 
     telemetry.recordPromptPressure('thread_1', 'first', 20)
     telemetry.recordPromptPressure('thread_1', 'smaller', 10)
@@ -36,7 +23,7 @@ describe('LoopTelemetry', () => {
   })
 
   it('classifies additive and breaking tool catalog changes without persistence side effects', () => {
-    const telemetry = new LoopTelemetry({} as unknown as SessionStore)
+    const telemetry = new LoopTelemetry()
     const base = {
       threadId: 'thread_1',
       workspace: '/workspace',

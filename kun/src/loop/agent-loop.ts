@@ -291,7 +291,7 @@ export class AgentLoop {
 
   constructor(opts: AgentLoopOptions) {
     this.opts = opts
-    this.telemetry = new LoopTelemetry(opts.sessionStore)
+    this.telemetry = new LoopTelemetry()
     this.threadItems = new ThreadItemProjectionService({
       threadStore: opts.threadStore,
       sessionStore: opts.sessionStore,

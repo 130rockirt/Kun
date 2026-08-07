@@ -585,17 +585,9 @@ export function reduceChatProjection(
         }
         return { ...base, blocks, error: context.clearRecoveringError(state.error) }
       }
-      const visibleBlocks = event.auto !== false && event.turnId
-        ? state.blocks.filter((block) => !(
-            block.kind === 'compaction' &&
-            block.id !== event.itemId &&
-            block.auto !== false &&
-            block.turnId === event.turnId
-          ))
-        : state.blocks
       return {
         ...base,
-        blocks: [...visibleBlocks, {
+        blocks: [...state.blocks, {
           kind: 'compaction',
           id: event.itemId,
           turnId: event.turnId,

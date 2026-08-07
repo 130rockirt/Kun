@@ -2051,7 +2051,7 @@
   "noSessionSelected": "No thread selected",
   "sessionHeaderHint": "Start a thread from the left, or reconnect the runtime to continue working.",
   "sessionUsageTitle": "{{turns}} turns in this thread",
-  "sessionUsageTokens": "{{tokens}} tokens",
+  "sessionUsageTokens": "Cumulative {{tokens}} tokens",
   "sessionUsageCost": "{{cost}}",
   "sessionUsageContextSavings": "saved {{tokens}} tokens",
   "sessionUsageContextSavingsTitle": "Saved about {{tokens}} context tokens",

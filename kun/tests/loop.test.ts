@@ -115,21 +115,6 @@ describe('AgentLoop', () => {
     )).toEqual([expect.objectContaining({ kind: 'turn_aborted' })])
   })
 
-  it('bounds cached prompt-pressure hydration markers', () => {
-    const telemetry = new LoopTelemetry({} as unknown as SessionStore) as unknown as {
-      rememberHydratedPressureThread(threadId: string): void
-      hydratedPressureThreads: Set<string>
-    }
-
-    for (let index = 0; index <= 512; index += 1) {
-      telemetry.rememberHydratedPressureThread(`thread_${index}`)
-    }
-
-    expect(telemetry.hydratedPressureThreads).toHaveLength(512)
-    expect(telemetry.hydratedPressureThreads.has('thread_0')).toBe(false)
-    expect(telemetry.hydratedPressureThreads.has('thread_512')).toBe(true)
-  })
-
   it('injects the current shell runtime under the full-access sandbox', async () => {
     let observedRequest: ModelRequest | null = null
     const h = makeHarness({
@@ -445,7 +430,7 @@ describe('AgentLoop', () => {
     expect(events.some((event) => event.kind === 'context_snapshot')).toBe(false)
   })
 
-  it('auto-compacts the 725733 + 131072 dead zone before the model transport instead of failing', async () => {
+  it('does not compact below the soft threshold solely for a large output capability', async () => {
     const requests: ModelRequest[] = []
     const h = makeHarness({
       provider: 'deadzone',
@@ -470,8 +455,9 @@ describe('AgentLoop', () => {
     await h.threadStore.upsert(
       createThreadRecord({ id: h.threadId, title: 'demo', workspace: '/tmp', model: 'deadzone' })
     )
-    // ~725k estimated input tokens: below the 750k soft threshold, but with
-    // the 131072 output budget the full request would exceed the 850k cap.
+    // ~725k estimated input tokens stays below the 750k soft threshold. The
+    // advertised 131072 capability must not be reserved in full; ordinary
+    // requests use the bounded 32768-token reservation.
     const chunk = '工'.repeat(6_050)
     for (let index = 0; index < 120; index += 1) {
       await h.sessionStore.appendItem(h.threadId, makeUserItem({
@@ -490,15 +476,13 @@ describe('AgentLoop', () => {
     await expect(h.loop.runTurn(h.threadId, h.turnId)).resolves.toBe('completed')
 
     expect(requests).toHaveLength(1)
-    expect(requests[0]?.history[0]).toMatchObject({ kind: 'compaction' })
+    expect(requests[0]?.history[0]).toMatchObject({ kind: 'user_message' })
+    expect(requests[0]?.maxTokens).toBe(32_768)
     const events = await h.sessionStore.loadEventsSince(h.threadId, 0)
     expect(events.some((event) =>
       event.kind === 'error' && event.code === 'context_window_exceeded'
     )).toBe(false)
-    expect(events).toContainEqual(expect.objectContaining({
-      kind: 'compaction_completed',
-      replacedTokens: expect.any(Number)
-    }))
+    expect(events.some((event) => event.kind === 'compaction_completed')).toBe(false)
     const compressed = events.find((event) =>
       event.kind === 'pipeline_stage' && event.stage === 'input_compressed'
     )
@@ -506,11 +490,70 @@ describe('AgentLoop', () => {
       kind: 'pipeline_stage',
       stage: 'input_compressed',
       details: expect.objectContaining({
-        outputBudgetTokens: 131_072,
+        outputBudgetTokens: 32_768,
         requestHardCapTokens: 850_000,
         fallbackCompactionAttempted: false
       })
     })
+  })
+
+  it('does not repeatedly compact retained history for a 256k / 500k capability profile', async () => {
+    const requests: ModelRequest[] = []
+    const h = makeHarness({
+      provider: 'pathological-output-profile',
+      model: 'grok-4.5',
+      async *stream(request): AsyncIterable<ModelStreamChunk> {
+        requests.push(request)
+        yield { kind: 'completed', stopReason: 'stop' }
+      }
+    }, {
+      tools: [],
+      compactor: new ContextCompactor({ softThreshold: 192_000, hardThreshold: 217_600 }),
+      modelCapabilities: (model) => ({
+        id: model,
+        inputModalities: ['text'],
+        outputModalities: ['text'],
+        supportsToolCalling: true,
+        contextWindowTokens: 256_000,
+        maxOutputTokens: 500_000,
+        messageParts: ['text']
+      })
+    })
+    await h.threadStore.upsert(
+      createThreadRecord({ id: h.threadId, title: 'demo', workspace: '/tmp', model: 'grok-4.5' })
+    )
+    for (let index = 0; index < 40; index += 1) {
+      await h.sessionStore.appendItem(h.threadId, makeUserItem({
+        id: `pathological_old_${index}`,
+        turnId: `pathological_old_turn_${index}`,
+        threadId: h.threadId,
+        text: '工'.repeat(5_000)
+      }))
+    }
+    const first = await h.turns.startTurn({
+      threadId: h.threadId,
+      request: { prompt: 'first retained request' }
+    })
+    h.turnId = first.turnId
+
+    await expect(h.loop.runTurn(h.threadId, h.turnId)).resolves.toBe('completed')
+    const afterFirst = await h.sessionStore.loadEventsSince(h.threadId, 0)
+    expect(afterFirst.filter((event) => event.kind === 'compaction_completed')).toHaveLength(1)
+
+    const second = await h.turns.startTurn({
+      threadId: h.threadId,
+      request: { prompt: 'small follow-up after compaction' }
+    })
+    h.turnId = second.turnId
+    await expect(h.loop.runTurn(h.threadId, h.turnId)).resolves.toBe('completed')
+
+    const afterSecond = await h.sessionStore.loadEventsSince(h.threadId, 0)
+    expect(afterSecond.filter((event) => event.kind === 'compaction_completed')).toHaveLength(1)
+    const mainRequests = requests.filter((request) => request.systemPrompt !== COMPACTION_SYSTEM_PROMPT)
+    expect(mainRequests.at(-1)).toMatchObject({ maxTokens: 32_768 })
+    expect(mainRequests.at(-1)?.history.some((item) =>
+      item.kind === 'user_message' && item.text === 'small follow-up after compaction'
+    )).toBe(true)
   })
 
   it('fails once with a detailed reason when the current message itself cannot be compacted', async () => {
@@ -561,7 +604,7 @@ describe('AgentLoop', () => {
     expect(events.some((event) => event.kind === 'compaction_completed')).toBe(false)
   })
 
-  it('clamps the send-time output budget when rehydrated generated-image input grows', async () => {
+  it('keeps a large output capability bounded when generated-image input is rehydrated', async () => {
     const requests: ModelRequest[] = []
     const h = makeHarness({
       provider: 'image-fallback',
@@ -588,11 +631,9 @@ describe('AgentLoop', () => {
       await h.threadStore.upsert(
         createThreadRecord({ id: h.threadId, title: 'demo', workspace: '/tmp', model: 'image-fallback' })
       )
-      // Preflight lands just below the soft threshold (718,127), while the
-      // rehydrated forwarded image adds a fixed 1,210-token vision allowance
-      // and pushes the final request past what the declared 131,072 output
-      // budget would allow. The send-time clamp shrinks the output budget to
-      // the remaining capacity (130,663) instead of compacting history.
+      // Preflight lands just below the soft threshold and image rehydration
+      // adds a fixed vision allowance. The 131,072 model capability remains a
+      // 32,768-token ordinary reservation, so history stays intact.
       for (let index = 0; index < 119; index += 1) {
         await h.sessionStore.appendItem(h.threadId, makeUserItem({
           id: `image_old_${index}`,
@@ -632,9 +673,9 @@ describe('AgentLoop', () => {
       await expect(h.loop.runTurn(h.threadId, h.turnId)).resolves.toBe('completed')
 
       expect(requests).toHaveLength(1)
-      // History stays intact: the clamp absorbed the 1,210-token overage.
+      // History stays intact because the advertised maximum is not reserved.
       expect(requests[0]?.history[0]).toMatchObject({ kind: 'user_message' })
-      expect(requests[0]?.maxTokens).toBe(130_494)
+      expect(requests[0]?.maxTokens).toBe(32_768)
       const events = await h.sessionStore.loadEventsSince(h.threadId, 0)
       expect(events.some((event) =>
         event.kind === 'error' && event.code === 'context_window_exceeded'
@@ -647,7 +688,7 @@ describe('AgentLoop', () => {
         kind: 'pipeline_stage',
         stage: 'input_compressed',
         details: expect.objectContaining({
-          outputBudgetTokens: 130_494,
+          outputBudgetTokens: 32_768,
           requestHardCapTokens: 850_000,
           fallbackCompactionAttempted: false
         })

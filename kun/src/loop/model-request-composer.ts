@@ -32,7 +32,12 @@ export function effectiveOutputBudgetTokens(input: {
     ? fallback
     : Math.max(1, Math.floor(input.declaredMaxOutputTokens))
   const remaining = Math.max(1, Math.floor(input.contextCapTokens - input.inputTokens))
-  return Math.min(declared, remaining)
+  // `maxOutputTokens` is provider capability metadata, not an instruction to
+  // reserve the model's entire maximum on every request. Keep the ordinary
+  // request reservation bounded by the runtime default; smaller model limits
+  // remain authoritative, and the final request is still clamped to the
+  // remaining safe context capacity.
+  return Math.min(declared, fallback, remaining)
 }
 
 export type ModelRequestComposerInput = Readonly<{

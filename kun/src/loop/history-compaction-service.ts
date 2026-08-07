@@ -33,7 +33,7 @@ export type HistoryCompactionServiceDeps = {
   usage: UsageService
   events: RuntimeEventRecorder
   ids: IdGenerator
-  telemetry: Pick<LoopTelemetry, 'hydratePromptPressureIfCold' | 'consumePromptPressure'>
+  telemetry: Pick<LoopTelemetry, 'consumePromptPressure'>
   recordGoalUsage: (threadId: string, tokens: number) => Promise<void>
   /** Read live runtime config so hot-apply affects future compactions. */
   getContextCompaction?: () => ContextCompactionConfig | undefined
@@ -97,7 +97,6 @@ export class HistoryCompactionService {
     allowModelSummary?: boolean
     reserveModelRequest?: () => Promise<{ allowed: boolean; reason?: string }>
   }): Promise<HistoryCompactionOutcome> {
-    await this.deps.telemetry.hydratePromptPressureIfCold(input.threadId, input.model)
     const pressure = this.deps.telemetry.consumePromptPressure(input.threadId, input.model)
     const thresholdModel = pressure?.model || input.model
     const overheadTokens = input.requestOverheadTokens === undefined

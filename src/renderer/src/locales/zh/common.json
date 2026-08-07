@@ -2051,7 +2051,7 @@
   "noSessionSelected": "未选择会话",
   "sessionHeaderHint": "从左侧进入一个会话，或先恢复运行时连接再继续工作。",
   "sessionUsageTitle": "当前会话 {{turns}} 个回合",
-  "sessionUsageTokens": "{{tokens}} tokens",
+  "sessionUsageTokens": "累计 {{tokens}} tokens",
   "sessionUsageCost": "{{cost}}",
   "sessionUsageContextSavings": "省 {{tokens}} tokens",
   "sessionUsageContextSavingsTitle": "节省约 {{tokens}} tokens 上下文",

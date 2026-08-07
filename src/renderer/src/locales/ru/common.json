@@ -2051,7 +2051,7 @@
   "noSessionSelected": "Нить не выбрана",
   "sessionHeaderHint": "Запустите поток слева или повторно подключите среду выполнения, чтобы продолжить работу.",
   "sessionUsageTitle": "{{turns}} поворотов в этой теме",
-  "sessionUsageTokens": "{{tokens}} токенов",
+  "sessionUsageTokens": "Всего {{tokens}} токенов",
   "sessionUsageCost": "{{cost}}",
   "sessionUsageContextSavings": "сохранено токенов {{tokens}}",
   "sessionUsageContextSavingsTitle": "Сохранено о контекстных токенах {{tokens}}.",

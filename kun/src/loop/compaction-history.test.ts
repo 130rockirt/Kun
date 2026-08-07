@@ -57,6 +57,7 @@ describe('compaction history projection', () => {
     expect(visible.map((item) => item.id)).toEqual([
       'item_head_a',
       'item_head_b',
+      'compaction_previous',
       'compaction_next',
       'item_tail_a',
       'item_tail_b'
@@ -116,7 +117,7 @@ describe('compaction history projection', () => {
     ])
   })
 
-  it('preserves manual compaction markers when coalescing automatic markers', () => {
+  it('preserves manual and automatic compaction markers with distinct identities', () => {
     const threadId = 'thread_1'
     const turnId = 'turn_1'
     const manualSummary = makeCompactionItem({
@@ -238,7 +239,7 @@ describe('compaction history projection', () => {
     ])
   })
 
-  it('coalesces old automatic markers while preserving manual compactions', () => {
+  it('preserves distinct automatic and manual markers in chronological order', () => {
     const threadId = 'thread_1'
     const turnId = 'turn_coalesce'
     const userMessage = {
@@ -291,6 +292,7 @@ describe('compaction history projection', () => {
       ]).map((item) => item.id)
     ).toEqual([
       'item_user_coalesce',
+      'compaction_old_auto',
       'compaction_manual',
       'compaction_latest_auto'
     ])

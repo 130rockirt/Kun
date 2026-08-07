@@ -533,7 +533,7 @@ describe('chat projection reducer', () => {
     expect(projected.currentTurnUserId).toBe('item_original_user')
   })
 
-  it('keeps only the latest automatic compaction marker for a turn', () => {
+  it('keeps distinct automatic compaction markers for a turn', () => {
     const projected = project(state(), [
       {
         type: 'compaction_updated',
@@ -560,9 +560,53 @@ describe('chat projection reducer', () => {
     expect(projected.blocks).toEqual([
       expect.objectContaining({
         kind: 'compaction',
+        id: 'compaction_1',
+        turnId: 'turn_1',
+        summary: 'first summary'
+      }),
+      expect.objectContaining({
+        kind: 'compaction',
         id: 'compaction_2',
         turnId: 'turn_1',
         summary: 'new summary'
+      })
+    ])
+  })
+
+  it('updates one automatic compaction marker across status changes', () => {
+    const projected = project(state(), [
+      {
+        type: 'compaction_updated',
+        payload: {
+          itemId: 'compaction_1',
+          turnId: 'turn_1',
+          summary: 'starting',
+          status: 'running',
+          auto: true
+        }
+      },
+      {
+        type: 'compaction_updated',
+        payload: {
+          itemId: 'compaction_1',
+          turnId: 'turn_1',
+          summary: 'completed summary',
+          status: 'success',
+          auto: true,
+          messagesBefore: 10,
+          messagesAfter: 3
+        }
+      }
+    ])
+
+    expect(projected.blocks).toEqual([
+      expect.objectContaining({
+        kind: 'compaction',
+        id: 'compaction_1',
+        summary: 'completed summary',
+        status: 'success',
+        messagesBefore: 10,
+        messagesAfter: 3
       })
     ])
   })
