@@ -1983,7 +1983,6 @@ export function FloatingComposer({
                         {
                         tokens: formatCompactNumber(threadUsage.totalTokens),
                         cost: formatCost(threadUsage.costUsd, i18n.language, threadUsage.costCny),
-                        saved: formatCompactNumber(threadUsage.tokenEconomySavingsTokens),
                         cache: formatPercent(threadUsage.cacheHitRate),
                         latestCache: formatPercent(threadUsage.lastTurnCacheHitRate),
                         cached: formatCompactNumber(threadUsage.cachedTokens),
@@ -2010,21 +2009,6 @@ export function FloatingComposer({
                         cost: formatCost(threadUsage.costUsd, i18n.language, threadUsage.costCny)
                       })}
                     </span>
-                    {threadUsage.tokenEconomySavingsTokens > 0 ? (
-                      <>
-                        <span className="ds-composer-usage-context-savings-separator text-ds-faint">·</span>
-                        <span
-                          className="ds-composer-usage-context-savings shrink-0 tabular-nums text-emerald-700 dark:text-emerald-300"
-                          title={t('sessionUsageContextSavingsTitle', {
-                            tokens: formatCompactNumber(threadUsage.tokenEconomySavingsTokens)
-                          })}
-                        >
-                          {t('sessionUsageContextSavings', {
-                            tokens: formatCompactNumber(threadUsage.tokenEconomySavingsTokens)
-                          })}
-                        </span>
-                      </>
-                    ) : null}
                     {threadUsage.turns > 1 ? (
                       <>
                         <span className="ds-composer-usage-cache-separator text-ds-faint">·</span>

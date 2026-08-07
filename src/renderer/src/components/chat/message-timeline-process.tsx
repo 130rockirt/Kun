@@ -42,6 +42,7 @@ import {
   formatDuration,
   formatToolTitle,
   isBackgroundShellCommandBlock,
+  parseToolBlockPayload,
   summarizeBackgroundShellToolBlock
 } from './message-timeline-tools'
 import { SubagentGroup, type OpenChildThreadHandler } from './SubagentCallCard'
@@ -62,7 +63,11 @@ export function isSubagentBlock(block: ChatBlock): boolean {
   const meta = block.meta
   if (meta?.child && typeof meta.child === 'object') return true
   const toolName = typeof meta?.toolName === 'string' ? meta.toolName.trim() : ''
-  return toolName === 'delegate_task' || toolName === 'generate_subagent'
+  return (
+    toolName === 'delegate_task' ||
+    toolName === 'generate_subagent' ||
+    toolName === 'explore_agent'
+  )
 }
 
 function processBlockHasGeneratedMedia(block: ChatBlock): block is ToolBlock {
@@ -1582,6 +1587,19 @@ export function summarizeToolBlock(
 
   if (toolName === 'background_shell') {
     return summarizeBackgroundShellToolBlock(block, t)
+  }
+
+  if (toolName === 'explore_agent') {
+    const payload = parseToolBlockPayload(block)
+    const title =
+      (typeof payload.title === 'string' && payload.title.trim() ? payload.title.trim() : undefined) ||
+      (block.meta?.child && typeof block.meta.child === 'object'
+        ? (typeof (block.meta.child as { childLabel?: unknown }).childLabel === 'string'
+          ? (block.meta.child as { childLabel: string }).childLabel.trim()
+          : undefined)
+        : undefined)
+    if (title) return `${label} ${summarizeProcessText(title, 72)}`
+    return label
   }
 
   if ((toolName === 'read_file' || toolName === 'read') && filePath) {

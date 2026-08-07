@@ -2,7 +2,8 @@ import type { ReactElement, RefObject } from 'react'
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ChevronDown, CircleAlert, GitCommitHorizontal, Hash } from 'lucide-react'
-import type { ChatBlock, RuntimeConnectionStatus, ToolBlock } from '../../agent/types'
+import type { ChatBlock, RuntimeChildActivity, RuntimeConnectionStatus, ToolBlock } from '../../agent/types'
+import { formatChildActivityLabel } from './explore-peek-summary'
 import { useChatStore } from '../../store/chat-store'
 import { threadHasPendingRuntimeWork } from '../../store/chat-store-runtime-helpers'
 import { useTimelineStores } from './use-timeline-stores'
@@ -1108,14 +1109,33 @@ export function ConversationTurn({
     workProcessBlocks.length > 0 ||
     (runtimeErrorBlocks.length > 0 && typeof durationMs === 'number')
   const showLiveProgress = isProcessing
-  const showLiveThinking = Boolean(liveProcessText.trim())
   const liveToolBlock = useMemo(
     () => [...workProcessBlocks].reverse().find(
+      (block): block is Extract<ChatBlock, { kind: 'tool' }> =>
+        block.kind === 'tool' && block.status === 'running'
+    ) ?? [...workProcessBlocks].reverse().find(
       (block): block is Extract<ChatBlock, { kind: 'tool' }> =>
         block.kind === 'tool'
     ),
     [workProcessBlocks]
   )
+  const liveChildActivityLabel = useMemo(() => {
+    if (!liveToolBlock) return undefined
+    const child = liveToolBlock.meta?.child
+    if (!child || typeof child !== 'object' || Array.isArray(child)) return undefined
+    const activity = (child as {
+      activity?: { phase?: RuntimeChildActivity['phase']; label?: string; toolName?: string; startedAt?: string; updatedAt?: string }
+    }).activity
+    if (!activity?.label?.trim()) return undefined
+    return formatChildActivityLabel({
+      phase: activity.phase ?? 'tool',
+      label: activity.label.trim(),
+      ...(activity.toolName?.trim() ? { toolName: activity.toolName.trim() } : {}),
+      startedAt: activity.startedAt ?? '',
+      updatedAt: activity.updatedAt ?? ''
+    })
+  }, [liveToolBlock])
+  const showLiveThinking = Boolean(liveProcessText.trim()) && !liveChildActivityLabel && !liveToolBlock
   const forkFromTurn = async (): Promise<void> => {
     if (!allowMainThreadActions || !forkTurnId || forking) return
     setForking(true)
@@ -1251,7 +1271,11 @@ export function ConversationTurn({
       ) : null}
 
       {showLiveProgress ? (
-        <LiveTurnProgressRow tool={liveToolBlock} thinking={showLiveThinking} />
+        <LiveTurnProgressRow
+          tool={liveToolBlock}
+          thinking={showLiveThinking}
+          activityLabel={liveChildActivityLabel}
+        />
       ) : null}
     </div>
   )
@@ -1259,10 +1283,12 @@ export function ConversationTurn({
 
 function LiveTurnProgressRow({
   tool,
-  thinking
+  thinking,
+  activityLabel
 }: {
   tool?: Extract<ChatBlock, { kind: 'tool' }>
   thinking: boolean
+  activityLabel?: string
 }): ReactElement {
   const { t, i18n } = useTranslation('common')
   const swimMode = useWorkLogoSwimMode(true)
@@ -1279,13 +1305,15 @@ function LiveTurnProgressRow({
     swimLabelKey as UiPluginLabelKey,
     i18n.language ?? 'zh'
   )
-  const label = thinking
-    ? t('thinkingNow')
-    : tool
-      ? t('workingToolAction', { action: summarizeToolBlock(tool, t) })
-      : ikunModeOn
-        ? t(IKUN_WORK_LOGO_VARIANT_LABEL_KEYS[ikunVariant])
-        : pluginLabel ?? t(swimLabelKey)
+  const label = activityLabel
+    ? t('workingToolAction', { action: activityLabel })
+    : thinking
+      ? t('thinkingNow')
+      : tool
+        ? t('workingToolAction', { action: summarizeToolBlock(tool, t) })
+        : ikunModeOn
+          ? t(IKUN_WORK_LOGO_VARIANT_LABEL_KEYS[ikunVariant])
+          : pluginLabel ?? t(swimLabelKey)
 
   return (
     <LiveTurnActivityRow

@@ -233,16 +233,22 @@ export function ThreadForkBanner({ parentTitle }: { parentTitle: string }): Reac
  */
 export function SubagentReturnBar({
   parentTitle,
-  onBack
+  onBack,
+  variant = 'subagent'
 }: {
   parentTitle: string
   onBack: () => void
+  /** Explore child sessions get stronger "process / back to main" copy. */
+  variant?: 'explore' | 'subagent'
 }): ReactElement {
   const { t } = useTranslation('common')
+  const isExplore = variant === 'explore'
   return (
     <button
       type="button"
       onClick={onBack}
+      data-testid="subagent-return-bar"
+      data-variant={variant}
       className="group ds-chat-content-max-width flex w-full items-center gap-3 rounded-[16px] border border-accent/16 bg-accent/7 px-4 py-3 text-left text-ds-muted shadow-[0_14px_36px_rgba(59,130,216,0.05)] transition hover:bg-accent/12"
     >
       <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[12px] bg-accent/12 text-accent">
@@ -250,17 +256,30 @@ export function SubagentReturnBar({
       </span>
       <span className="min-w-0 flex-1">
         <span className="block text-[13.5px] font-semibold text-ds-ink">
-          {t('subagentSessionBannerTitle')}
+          {isExplore
+            ? t('exploreSessionBannerTitle', { defaultValue: 'Viewing explore process' })
+            : t('subagentSessionBannerTitle')}
         </span>
         <span className="mt-1 block truncate text-[12.5px] leading-5 text-ds-muted">
           {parentTitle
-            ? t('subagentSessionBannerSub', { title: parentTitle })
-            : t('subagentSessionBannerSubUnknown')}
+            ? (isExplore
+              ? t('exploreSessionBannerSub', {
+                title: parentTitle,
+                defaultValue: 'Exploring for “{{title}}”. Return to the main chat anytime.'
+              })
+              : t('subagentSessionBannerSub', { title: parentTitle }))
+            : (isExplore
+              ? t('exploreSessionBannerSubUnknown', {
+                defaultValue: 'Exploring in a side session. Return to the main chat anytime.'
+              })
+              : t('subagentSessionBannerSubUnknown'))}
         </span>
       </span>
       <span className="flex shrink-0 items-center gap-1.5 rounded-[10px] bg-accent/10 px-2.5 py-1.5 text-[12px] font-semibold text-accent transition group-hover:bg-accent/15">
         <CornerUpLeft className="h-3.5 w-3.5" strokeWidth={2} />
-        {t('subagentSessionBannerBack')}
+        {isExplore
+          ? t('exploreSessionBannerBack', { defaultValue: 'Back to main chat' })
+          : t('subagentSessionBannerBack')}
       </span>
     </button>
   )

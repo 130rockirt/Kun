@@ -52,6 +52,7 @@ export type WorkbenchChatStageProps = {
   devPreviewOpened: boolean
   returnParentTitle: string
   showReturnBar: boolean
+  returnBarVariant?: 'explore' | 'subagent'
   graphChildContext?: GraphChildSessionContext
   composerProps: FloatingComposerProps
   conversationDropWorkspaceRoot: string
@@ -107,6 +108,7 @@ export function WorkbenchChatStage({
   devPreviewOpened,
   returnParentTitle,
   showReturnBar,
+  returnBarVariant = 'subagent',
   graphChildContext,
   composerProps,
   conversationDropWorkspaceRoot,
@@ -263,6 +265,7 @@ export function WorkbenchChatStage({
             <SubagentReturnBar
               parentTitle={returnParentTitle}
               onBack={onBackToParent}
+              variant={returnBarVariant}
             />
           ) : (
             <div className="flex w-full min-w-0 flex-col items-center gap-1">

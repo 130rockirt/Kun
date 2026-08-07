@@ -1344,6 +1344,11 @@ export function Workbench(): ReactElement {
             devPreviewOpened: rightPanelMode === BUILTIN_RIGHT_PANEL_IDS.browser,
             returnParentTitle: threads.find((thread) => thread.id === activeThreadParentId)?.title?.trim() ?? '',
             showReturnBar: activeThreadRelation === 'side' && Boolean(activeThreadParentId),
+            returnBarVariant: (
+              threads.find((thread) => thread.id === activeThreadId)?.agentId === 'explore'
+                ? 'explore'
+                : 'subagent'
+            ) as 'explore' | 'subagent',
             graphChildContext,
             composerProps: chatComposerProps,
             conversationDropWorkspaceRoot: activeSkillWorkspace,

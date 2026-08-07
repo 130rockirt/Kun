@@ -199,6 +199,22 @@ describe('MessageTimeline tool summaries', () => {
     expect(find).toBe('Find *.ts · /tmp/src')
   })
 
+  it('summarizes explore_agent with its short UI title', () => {
+    expect(
+      summarizeToolBlock(
+        toolBlock({
+          summary: 'explore_agent',
+          meta: { toolName: 'explore_agent' },
+          detail: JSON.stringify({
+            title: 'Voice transcription flow',
+            query: 'Trace speech transcription wiring'
+          })
+        }),
+        t
+      )
+    ).toBe('Explore agent Voice transcription flow')
+  })
+
   it('does not repeat a raw summary that matches the generated tool label', () => {
     expect(
       summarizeToolBlock(
