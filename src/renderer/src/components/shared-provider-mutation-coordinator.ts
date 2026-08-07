@@ -69,6 +69,11 @@ export function drainSharedProviderCatalogMutation<T>(
   return promise
 }
 
+/** True while a staged catalog commit is running on the shared mutation queue. */
+export function hasInFlightSharedProviderCatalogMutation(): boolean {
+  return catalogDrains.size > 0
+}
+
 export function stageSharedProviderCredentialMutation(
   providerId: string,
   credential: string,

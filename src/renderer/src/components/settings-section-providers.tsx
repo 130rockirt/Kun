@@ -104,6 +104,7 @@ import {
   drainSharedProviderCatalogMutation,
   drainSharedProviderCredentialMutation,
   enqueueSharedModelMutation,
+  hasInFlightSharedProviderCatalogMutation,
   replaceMapContents,
   sharedProviderMutationCoordinator,
   stageSharedProviderCredentialMutation,
@@ -707,18 +708,56 @@ export function rebasePendingSharedProviderCatalog(
   }
 }
 
+export type SharedModelConnectionCatalogConnectSource = {
+  provider: ModelProviderProfileV1
+  credential?: string
+}
+
 export async function commitSharedModelConnectionCatalog(
   providerId: string,
   pending: PendingSharedProviderCatalog,
-  isProviderTombstoned: (providerId: string) => boolean = () => false
+  isProviderTombstoned: (providerId: string) => boolean = () => false,
+  connectSource?: SharedModelConnectionCatalogConnectSource
 ): Promise<SharedModelConnectionsSnapshot> {
   let snapshot = await requestSharedModelConnections('/v1/model-connections')
   for (let attempt = 0; attempt < 2; attempt += 1) {
     if (isProviderTombstoned(providerId)) {
       throw new Error(`Shared model connection ${providerId} is pending deletion`)
     }
-    const connection = snapshot.providers.find((item) => item.id === providerId)
-    if (!connection) throw new Error(`Shared model connection ${providerId} is no longer available`)
+    let connection = snapshot.providers.find((item) => item.id === providerId)
+    if (!connection) {
+      // Fetch/import can stage a catalog before syncOnce has connected the
+      // provider (common for Aliyun Token Plan). Connect with the pending
+      // catalog instead of leaving an orphan that SSE later reverts (#1117).
+      if (!connectSource) {
+        throw new Error(`Shared model connection ${providerId} is no longer available`)
+      }
+      try {
+        snapshot = await connectSharedModelConnectionWithCatalog(
+          snapshot,
+          connectSource.provider,
+          pending,
+          connectSource.credential
+        )
+      } catch (error) {
+        if (!(error instanceof SharedModelConnectionConflictError) || attempt === 1) throw error
+        snapshot = error.snapshot
+        continue
+      }
+      connection = snapshot.providers.find((item) => item.id === providerId)
+      if (!connection) {
+        throw new Error(`Shared model connection ${providerId} is no longer available`)
+      }
+      if (
+        JSON.stringify(connection.models) === JSON.stringify(pending.localModels) &&
+        sameCatalogCapabilities(
+          connection.modelCapabilities,
+          catalogCapabilities(pending.localModels, pending.localModelProfiles)
+        )
+      ) {
+        return snapshot
+      }
+    }
     const catalog = applyPendingSharedProviderCatalog(connection, pending)
     try {
       return await requestSharedModelConnections(
@@ -732,6 +771,35 @@ export async function commitSharedModelConnectionCatalog(
     }
   }
   return snapshot
+}
+
+async function connectSharedModelConnectionWithCatalog(
+  snapshot: SharedModelConnectionsSnapshot,
+  provider: ModelProviderProfileV1,
+  pending: PendingSharedProviderCatalog,
+  credential?: string
+): Promise<SharedModelConnectionsSnapshot> {
+  const baseUrlOptional =
+    provider.kind === 'agent-sdk' ||
+    provider.kind === 'antigravity-cli' ||
+    provider.kind === 'cursor-sdk'
+  const resolvedCredential = (credential ?? provider.apiKey).trim()
+  const selectedModel = pending.localModels[0]
+  return await requestSharedModelConnections('/v1/model-connections/connect', 'POST', {
+    expectedRevision: snapshot.revision,
+    id: provider.id,
+    name: provider.name.trim() || provider.id,
+    kind: provider.kind ?? 'http',
+    authType: isSubscriptionProvider(provider) ? 'subscription' : 'api-key',
+    ...(baseUrlOptional ? {} : { baseUrl: provider.baseUrl }),
+    endpointFormat: provider.endpointFormat,
+    ...(resolvedCredential ? { credential: resolvedCredential } : {}),
+    models: pending.localModels,
+    modelCapabilities: catalogCapabilities(pending.localModels, pending.localModelProfiles),
+    ...(selectedModel ? { selectedModel } : {}),
+    probe: false,
+    select: false
+  })
 }
 
 export async function replaceSharedModelConnectionCredential(
@@ -960,15 +1028,27 @@ export function projectSharedModelConnections(
         : sharedModelProfiles(connection, existing)
     }
   })
-  // AppSettings keeps a normalized DeepSeek editor as its legacy fallback.
-  // When the canonical registry intentionally has no DeepSeek profile, retain
-  // that local placeholder without treating it as a connected profile.
-  const compatibilityDefault = !visibleConnections.some((entry) => entry.id === DEFAULT_MODEL_PROVIDER_ID)
-    ? existingById.get(DEFAULT_MODEL_PROVIDER_ID)
-    : undefined
-  const providers = compatibilityDefault
-    ? [compatibilityDefault, ...projectedProviders]
-    : projectedProviders
+  // Keep local-only providers that are not yet in the registry (or are waiting
+  // on a catalog commit). Without this, SSE projections drop freshly fetched
+  // Aliyun Token Plan catalogs before connect finishes (#1117).
+  const projectedIds = new Set(projectedProviders.map((provider) => provider.id))
+  const retainedLocalProviders = current.providers
+    .filter((provider) => {
+      if (projectedIds.has(provider.id)) return false
+      if (pendingDeletions.get(provider.id) != null) return false
+      if (provider.id === DEFAULT_MODEL_PROVIDER_ID) return true
+      return pendingCatalogs.get(provider.id) != null
+    })
+    .map((provider) => {
+      const pendingCatalog = pendingCatalogs.get(provider.id)
+      if (!pendingCatalog) return provider
+      return {
+        ...provider,
+        models: [...pendingCatalog.localModels],
+        modelProfiles: structuredClone(pendingCatalog.localModelProfiles)
+      }
+    })
+  const providers = [...retainedLocalProviders, ...projectedProviders]
   const defaultProviderId = snapshot.defaultProviderId?.trim()
   const defaultModel = snapshot.defaultModel?.trim()
   const hasUsableDefault = Boolean(
@@ -2635,6 +2715,12 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
             snapshot,
             pendingSharedProviderCatalogs.current
           ))
+          // Skip AppSettings writes while a catalog commit owns the queue so a
+          // stale registry snapshot cannot revert an in-flight Token Plan fetch
+          // (#1117). SharedConnections UI state above still refreshes.
+          if (hasInFlightSharedProviderCatalogMutation()) {
+            return
+          }
           const projected = projectSharedModelConnections(
             current.provider,
             snapshot,
@@ -3026,16 +3112,23 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
     void drainSharedProviderCatalogMutation(providerId, generation, async () => {
       const pending = pendingSharedProviderCatalogs.current.get(providerId)
       if (!pending || pending.generation !== generation) return
+      const latestProvider = (sharedProjectionInput.current.provider.providers as ModelProviderProfileV1[])
+        .find((item) => item.id === providerId)
+      const pendingCredential = pendingSharedProviderCredentials.current.get(providerId)?.credential
       const snapshot = await commitSharedModelConnectionCatalog(
         providerId,
         pending,
-        (id) => pendingSharedProviderDeletions.current.has(id)
+        (id) => pendingSharedProviderDeletions.current.has(id),
+        latestProvider
+          ? {
+              provider: latestProvider,
+              credential: pendingCredential ?? latestProvider.apiKey
+            }
+          : undefined
       )
       const current = pendingSharedProviderCatalogs.current.get(providerId)
       const connection = snapshot.providers.find((item) => item.id === providerId)
       if (current?.generation === generation) {
-        const latestProvider = (sharedProjectionInput.current.provider.providers as ModelProviderProfileV1[])
-          .find((item) => item.id === providerId)
         pendingSharedProviderCatalogs.current.set(providerId, {
           ...current,
           ...(connection ? {
