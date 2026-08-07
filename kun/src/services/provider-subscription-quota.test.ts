@@ -161,7 +161,7 @@ describe('resolveOpenCodeGoCookie', () => {
     })).resolves.toBeUndefined()
   })
 
-  it('resolves platform cookie database paths', () => {
+  it('resolves platform cookie database paths including Comet', () => {
     const darwin = openCodeGoCookieDatabasePaths({
       platform: 'darwin',
       environment: {},
@@ -169,7 +169,9 @@ describe('resolveOpenCodeGoCookie', () => {
     })
     expect(darwin).toEqual(expect.arrayContaining([
       '/Users/kun/Library/Application Support/Google/Chrome/Default/Network/Cookies',
-      '/Users/kun/Library/Application Support/Arc/User Data/Default/Network/Cookies'
+      '/Users/kun/Library/Application Support/Arc/User Data/Default/Network/Cookies',
+      '/Users/kun/Library/Application Support/Comet/Default/Cookies',
+      '/Users/kun/Library/Application Support/Dia/User Data/Default/Cookies'
     ]))
     const windows = openCodeGoCookieDatabasePaths({
       platform: 'win32',
@@ -177,5 +179,16 @@ describe('resolveOpenCodeGoCookie', () => {
       homeDirectory: 'C:\\Users\\Kun'
     })
     expect(windows[0]).toBe('C:\\Users\\Kun\\AppData\\Local\\Google\\Chrome\\User Data\\Default\\Network\\Cookies')
+  })
+
+  it('decrypts Safe Storage cookies when resolving OpenCode Go auth', async () => {
+    await expect(resolveOpenCodeGoCookie({
+      platform: 'darwin',
+      cookieDatabasePaths: ['/browsers/comet/Cookies'],
+      readSafeStoragePassword: async () => 'unused-because-readCookies-wins',
+      readCookies: async () => [
+        { name: 'auth', value: 'comet-session' }
+      ]
+    })).resolves.toBe('auth=comet-session')
   })
 })

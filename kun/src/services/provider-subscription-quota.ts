@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { join, win32 } from 'node:path'
+import { join } from 'node:path'
 import { promisify } from 'node:util'
 import type { ProviderQuotaMetric } from '../contracts/provider-quota.js'
 import { GeminiCliOAuthSource } from '../adapters/model/gemini-cli-oauth.js'
@@ -30,6 +30,11 @@ import {
   OpenCodeGoWebQuotaError,
   type OpenCodeGoWebQuotaResult
 } from './opencode-go-web-quota.js'
+import {
+  listChromiumCookieDatabaseCandidates,
+  readChromiumCookiesForDomains,
+  type ChromiumCookieDatabaseCandidate
+} from './chromium-browser-cookies.js'
 
 const execFileAsync = promisify(execFile)
 const QUOTA_TIMEOUT_MS = 12_000
@@ -1412,105 +1417,92 @@ export type OpenCodeGoCookieResolverOptions = {
   homeDirectory?: string
   cookieDatabasePaths?: string[]
   readCookies?: (databasePath: string) => Promise<Array<{ name: string; value: string }>>
+  readSafeStoragePassword?: (
+    label: { service: string; account: string }
+  ) => Promise<string | undefined>
 }
 
 const OPENCODE_COOKIE_NAMES = new Set(['auth', '__host-auth'])
 
 /**
  * Resolves an OpenCode session cookie header (auth / __Host-auth) from
- * installed Chromium-family browsers. Any read failure, missing cookie, or
- * encrypted cookie value returns undefined so callers fall back to the local
+ * installed Chromium-family browsers (including Comet/Dia), decrypting macOS
+ * Safe Storage values when needed. Any read failure, missing cookie, or
+ * undecryptable cookie returns undefined so callers fall back to the local
  * usage database instead of surfacing an error.
  */
 export async function resolveOpenCodeGoCookie(
   options: OpenCodeGoCookieResolverOptions = {}
 ): Promise<string | undefined> {
-  const databasePaths = options.cookieDatabasePaths ??
-    openCodeGoCookieDatabasePaths(options)
-  const readCookies = options.readCookies ?? readChromiumCookies
-  for (const databasePath of databasePaths) {
-    try {
-      const cookies = await readCookies(databasePath)
-      const pairs = cookies
-        .filter((cookie) => OPENCODE_COOKIE_NAMES.has(cookie.name.toLowerCase()))
-        .filter((cookie) => cookie.value.trim().length > 0)
-        // Chrome 137+ encrypts cookie values with a v10 prefix; those cannot be
-        // decrypted with the sqlite3 CLI and are treated as absent.
-        .filter((cookie) => !cookie.value.startsWith('v10'))
-        .map((cookie) => `${cookie.name}=${cookie.value}`)
-      if (pairs.length > 0) return pairs.join('; ')
-    } catch {
-      // Browser cookie databases may be locked or encrypted; try the next candidate.
+  // Tests and callers can still inject plaintext cookie readers per DB path.
+  if (options.readCookies || options.cookieDatabasePaths) {
+    const databasePaths = options.cookieDatabasePaths ??
+      openCodeGoCookieDatabasePaths(options)
+    const readCookies = options.readCookies
+    if (!readCookies) {
+      return resolveOpenCodeGoCookieFromChromiumSources({
+        ...options,
+        candidates: databasePaths.map((databasePath) => ({
+          browser: {
+            id: 'custom',
+            displayName: 'Custom',
+            profileRootSegments: [],
+            safeStorageLabels: []
+          },
+          databasePath
+        }))
+      })
     }
+    for (const databasePath of databasePaths) {
+      try {
+        const cookies = await readCookies(databasePath)
+        const pairs = cookies
+          .filter((cookie) => OPENCODE_COOKIE_NAMES.has(cookie.name.toLowerCase()))
+          .filter((cookie) => cookie.value.trim().length > 0)
+          .filter((cookie) => !cookie.value.startsWith('v10'))
+          .map((cookie) => `${cookie.name}=${cookie.value}`)
+        if (pairs.length > 0) return pairs.join('; ')
+      } catch {
+        // Browser cookie databases may be locked; try the next candidate.
+      }
+    }
+    return undefined
   }
-  return undefined
+
+  return resolveOpenCodeGoCookieFromChromiumSources(options)
+}
+
+async function resolveOpenCodeGoCookieFromChromiumSources(
+  options: OpenCodeGoCookieResolverOptions & {
+    candidates?: ChromiumCookieDatabaseCandidate[]
+  }
+): Promise<string | undefined> {
+  const cookies = await readChromiumCookiesForDomains({
+    platform: options.platform,
+    environment: options.environment,
+    homeDirectory: options.homeDirectory,
+    candidates: options.candidates,
+    domainSuffixes: ['opencode.ai'],
+    cookieNames: OPENCODE_COOKIE_NAMES,
+    ...(options.readSafeStoragePassword
+      ? { readSafeStoragePassword: options.readSafeStoragePassword }
+      : {})
+  })
+  const pairs = cookies
+    .filter((cookie) => OPENCODE_COOKIE_NAMES.has(cookie.name.toLowerCase()))
+    .filter((cookie) => cookie.value.trim().length > 0)
+    .map((cookie) => `${cookie.name}=${cookie.value}`)
+  return pairs.length > 0 ? pairs.join('; ') : undefined
 }
 
 export function openCodeGoCookieDatabasePaths(
-  options: Omit<OpenCodeGoCookieResolverOptions, 'readCookies'> = {}
+  options: Omit<OpenCodeGoCookieResolverOptions, 'readCookies' | 'readSafeStoragePassword'> = {}
 ): string[] {
-  const platform = options.platform ?? process.platform
-  const environment = options.environment ?? process.env
-  const userHome = options.homeDirectory ?? homedir()
-  const paths: string[] = []
-  if (platform === 'darwin') {
-    const root = join(userHome, 'Library', 'Application Support')
-    paths.push(
-      join(root, 'Google', 'Chrome'),
-      join(root, 'Microsoft Edge'),
-      join(root, 'BraveSoftware', 'Brave-Browser'),
-      join(root, 'Arc', 'User Data')
-    )
-  } else if (platform === 'linux') {
-    const root = join(userHome, '.config')
-    paths.push(
-      join(root, 'google-chrome'),
-      join(root, 'microsoft-edge'),
-      join(root, 'brave'),
-      join(root, 'arc')
-    )
-  } else if (platform === 'win32') {
-    const localAppData = environment.LOCALAPPDATA?.trim()
-    const root = localAppData || join(userHome, 'AppData', 'Local')
-    const joinPath = win32.join
-    paths.push(
-      joinPath(root, 'Google', 'Chrome', 'User Data'),
-      joinPath(root, 'Microsoft', 'Edge', 'User Data'),
-      joinPath(root, 'BraveSoftware', 'Brave-Browser', 'User Data')
-    )
-  }
-  const joinPath = platform === 'win32' ? win32.join : join
-  return paths.flatMap((browserRoot) => [
-    joinPath(browserRoot, 'Default', 'Network', 'Cookies'),
-    joinPath(browserRoot, 'Default', 'Cookies')
-  ])
-}
-
-async function readChromiumCookies(
-  databasePath: string
-): Promise<Array<{ name: string; value: string }>> {
-  const binary = process.platform === 'darwin' ? '/usr/bin/sqlite3' : 'sqlite3'
-  const { stdout } = await execFileAsync(binary, [
-    databasePath,
-    "SELECT name, value FROM cookies WHERE host_key LIKE '%opencode.ai';"
-  ], {
-    encoding: 'utf8',
-    timeout: 2_000,
-    maxBuffer: 512 * 1024
-  })
-  return stdout
-    .split('\n')
-    .map((line) => {
-      const separator = line.indexOf('|')
-      if (separator <= 0) return undefined
-      return {
-        name: line.slice(0, separator).trim(),
-        value: line.slice(separator + 1)
-      }
-    })
-    .filter((row): row is { name: string; value: string } =>
-      row !== undefined &&
-      row.name.length > 0)
+  return listChromiumCookieDatabaseCandidates({
+    platform: options.platform,
+    environment: options.environment,
+    homeDirectory: options.homeDirectory
+  }).map((candidate) => candidate.databasePath)
 }
 
 async function readJsonFile(path: string): Promise<unknown> {
