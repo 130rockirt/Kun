@@ -686,6 +686,18 @@ export type CoreUsageSnapshotJson = {
   costUsd?: number
   costCny?: number
   tokenEconomySavingsTokens?: number
+  /** Time-to-first-token of this single model request (ms). */
+  requestTtftMs?: number
+  /** Generation duration of this single model request (ms). */
+  requestGenerationMs?: number
+  /** Average TTFT across model calls of the current turn. */
+  turnAvgTtftMs?: number | null
+  /** Average tokens-per-second across model calls of the current turn. */
+  turnAvgTokensPerSecond?: number | null
+  /** Thread-cumulative average TTFT across all model calls. */
+  avgTtftMs?: number | null
+  /** Thread-cumulative average tokens-per-second across all model calls. */
+  avgTokensPerSecond?: number | null
 }
 
 export type CoreRuntimeEventJson = {

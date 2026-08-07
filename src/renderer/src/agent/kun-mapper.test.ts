@@ -2131,6 +2131,78 @@ describe('usage event mapping', () => {
       turns: 1
     })
   })
+
+  it('passes through per-turn and session timing averages', async () => {
+    let captured: unknown = null
+    const sink: ThreadEventSink = {
+      ...makeSink(),
+      onUsage: (usage) => {
+        captured = usage
+      }
+    }
+
+    await dispatchKunRuntimeEvent(
+      {
+        kind: 'usage',
+        seq: 14,
+        turnId: 'turn_1',
+        usage: {
+          promptTokens: 100,
+          completionTokens: 50,
+          totalTokens: 150,
+          turnAvgTtftMs: 1_000,
+          turnAvgTokensPerSecond: 40.2,
+          avgTtftMs: 1_200,
+          avgTokensPerSecond: 38.5,
+          turns: 1
+        }
+      },
+      sink,
+      async () => undefined
+    )
+
+    expect(captured).toMatchObject({
+      turnAvgTtftMs: 1_000,
+      turnAvgTokensPerSecond: 40.2,
+      avgTtftMs: 1_200,
+      avgTokensPerSecond: 38.5,
+      turnId: 'turn_1'
+    })
+  })
+
+  it('normalizes missing or invalid timing fields to null', async () => {
+    let captured: unknown = null
+    const sink: ThreadEventSink = {
+      ...makeSink(),
+      onUsage: (usage) => {
+        captured = usage
+      }
+    }
+
+    await dispatchKunRuntimeEvent(
+      {
+        kind: 'usage',
+        seq: 15,
+        usage: {
+          promptTokens: 10,
+          completionTokens: 2,
+          totalTokens: 12,
+          turnAvgTtftMs: Number.NaN,
+          turns: 1
+        }
+      },
+      sink,
+      async () => undefined
+    )
+
+    expect(captured).toMatchObject({
+      turnAvgTtftMs: null,
+      turnAvgTokensPerSecond: null,
+      avgTtftMs: null,
+      avgTokensPerSecond: null
+    })
+    expect((captured as { turnId?: string }).turnId).toBeUndefined()
+  })
 })
 
 describe('context snapshot event mapping', () => {

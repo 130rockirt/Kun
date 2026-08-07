@@ -104,6 +104,7 @@ import {
 } from '../contracts/policy.js'
 import { AgentLoop, type AgentLoopOptions } from '../loop/agent-loop.js'
 import { ContextCompactor } from '../loop/context-compactor.js'
+import { withModelTiming } from '../loop/model-timing-decorator.js'
 import type { TokenEconomyConfig } from '../loop/token-economy.js'
 import {
   DEFAULT_CONTEXT_THRESHOLDS,
@@ -775,17 +776,23 @@ async function createKunServeRuntimeComposition(
     modelCapabilities,
     routeHealth
   )
+  /**
+   * Timing-instrumented entry point shared by the chat loop, child agents,
+   * review, and compaction so every model response reports TTFT and
+   * generation duration on its usage chunk.
+   */
+  const timedModelClient = withModelTiming(modelClient)
   const routePoolTests = new RoutePoolTestService(
     modelClient,
     () => modelClient.routePools(),
     routeHealth
   )
   const subagentRouter = new SubagentRouter({
-    modelClient,
+    modelClient: timedModelClient,
     roles: () => activeOptions.roles,
     defaultModel: () => activeOptions.model,
     recordUsage: async ({ threadId, turnId, model, usage }) => {
-      const cumulative = usageService.record(threadId, usage)
+      const cumulative = usageService.record(threadId, usage, undefined, turnId)
       await events.record({
         kind: 'usage',
         threadId,
@@ -1028,7 +1035,7 @@ async function createKunServeRuntimeComposition(
     inflight,
     steering,
     compactor,
-    model: modelClient,
+    model: timedModelClient,
     usage: usageService,
     prefix,
     attachmentStore: () => attachmentStore,
@@ -1108,7 +1115,7 @@ async function createKunServeRuntimeComposition(
   const reviewDeps = {
     threadStore,
     turns: turnService,
-    model: modelClient,
+    model: timedModelClient,
     defaultModel: activeOptions.model,
     nowIso,
     modelCapabilities,
@@ -1435,7 +1442,7 @@ async function createKunServeRuntimeComposition(
 	        turns: turnService,
 	        nowIso,
 	        executor: createChildAgentExecutor({
-	          model: modelClient,
+	          model: timedModelClient,
 	          toolHost: childToolHost,
 	          prefix,
 	          defaultModel: activeOptions.model,
@@ -1741,7 +1748,7 @@ async function createKunServeRuntimeComposition(
 	    approvalGate,
       approvalReview: approvalReviewService,
     userInputGate,
-    model: modelClient,
+    model: timedModelClient,
     toolHost,
     sdkRuntime,
     usage: usageService,
@@ -2589,7 +2596,7 @@ async function createKunServeRuntimeComposition(
 	    turnService.updateRuntimeConfig({
 	      defaultModel: activeOptions.model,
 	      contextCompaction: activeOptions.contextCompaction,
-	      model: modelClient,
+	      model: timedModelClient,
 	      maxConcurrentTurns: activeOptions.runtime?.turnLimits?.maxConcurrentTurns
 	    })
 	    extensionAgent.updateRuntimeConfig({

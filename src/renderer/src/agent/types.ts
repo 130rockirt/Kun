@@ -604,6 +604,16 @@ export type ThreadUsageSnapshot = {
   costCny: number | null
   tokenEconomySavingsTokens: number
   turns: number
+  /** Thread-cumulative average time-to-first-token across model calls (ms). */
+  avgTtftMs: number | null
+  /** Thread-cumulative average tokens-per-second across model calls. */
+  avgTokensPerSecond: number | null
+  /** Average TTFT across model calls of the current turn (null = no data). */
+  turnAvgTtftMs: number | null
+  /** Average tokens-per-second across model calls of the current turn. */
+  turnAvgTokensPerSecond: number | null
+  /** Turn this snapshot was emitted for (for per-turn metric attribution). */
+  turnId?: string
 }
 
 export type RequestContextSnapshot = {

@@ -1040,6 +1040,9 @@ export class TurnService {
 
     this.clearRuntimeTurnState(input.threadId, input.turnId)
     await this.finalizePersistedOpenItems(input.threadId, input.turnId, input.status)
+    // The turn's usage metrics are now stable; release per-turn aggregation
+    // so long-lived threads do not accumulate one entry per historical turn.
+    this.deps.usage?.endTurn(input.threadId, input.turnId)
     const errorItem = input.error
       ? makeErrorItem({
           id: `item_${input.turnId}_error`,

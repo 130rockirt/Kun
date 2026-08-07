@@ -1009,3 +1009,107 @@ describe('chat projection reducer', () => {
     expect(projected.blocks.find((block) => block.id === 'assistant_1')).toBe(assistant)
   })
 })
+
+describe('chat projection reducer usage timing metrics', () => {
+  const usageSnapshot = (overrides: Record<string, unknown>) => ({
+    inputTokens: 100,
+    outputTokens: 50,
+    reasoningTokens: 0,
+    cachedTokens: 0,
+    cacheMissTokens: 100,
+    cacheHitRate: 0,
+    totalTokens: 150,
+    costUsd: 0,
+    costCny: null,
+    tokenEconomySavingsTokens: 0,
+    turns: 1,
+    avgTtftMs: null,
+    avgTokensPerSecond: null,
+    turnAvgTtftMs: null,
+    turnAvgTokensPerSecond: null,
+    ...overrides
+  })
+
+  it('stores per-turn averages keyed by the snapshot turnId', () => {
+    const projected = project(state(), [
+      {
+        type: 'usage_received',
+        payload: usageSnapshot({
+          turnId: 'turn_1',
+          turnAvgTtftMs: 1_000,
+          turnAvgTokensPerSecond: 40.2,
+          avgTtftMs: 1_200,
+          avgTokensPerSecond: 38.5
+        })
+      }
+    ])
+
+    expect(projected.turnTimingMetrics.get('turn_1')).toEqual({
+      avgTtftMs: 1_000,
+      avgTokensPerSecond: 40.2
+    })
+  })
+
+  it('clears per-turn metrics when a usage event belongs to a different thread', () => {
+    const first = project(state(), [
+      {
+        type: 'usage_received',
+        payload: usageSnapshot({ turnId: 'turn_1', turnAvgTtftMs: 800 })
+      }
+    ])
+    const switched = project({ ...first, activeThreadId: 'thread_2' }, [
+      {
+        type: 'usage_received',
+        payload: usageSnapshot({ turnId: 'turn_2', turnAvgTtftMs: 500 })
+      }
+    ])
+
+    expect(switched.turnTimingMetrics.has('turn_1')).toBe(false)
+    expect(switched.turnTimingMetrics.get('turn_2')).toEqual({
+      avgTtftMs: 500,
+      avgTokensPerSecond: null
+    })
+  })
+
+  it('removes a turn entry when its snapshot has no timing data', () => {
+    const first = project(state(), [
+      {
+        type: 'usage_received',
+        payload: usageSnapshot({ turnId: 'turn_1', turnAvgTtftMs: 800 })
+      }
+    ])
+    const cleared = project(first, [
+      {
+        type: 'usage_received',
+        payload: usageSnapshot({ turnId: 'turn_1' })
+      }
+    ])
+
+    expect(cleared.turnTimingMetrics.has('turn_1')).toBe(false)
+  })
+
+  it('clears per-turn metrics when the active thread changes', () => {
+    const first = project(state(), [
+      {
+        type: 'usage_received',
+        payload: usageSnapshot({ turnId: 'turn_1', turnAvgTtftMs: 800 })
+      }
+    ])
+    const reconciled = project({ ...first, activeThreadId: 'thread_2' }, [
+      {
+        type: 'thread_snapshot_reconciled',
+        payload: {
+          threadId: 'thread_2',
+          turnId: 'turn_2',
+          userBlockId: 'user_2',
+          latestSeq: 1,
+          blocks: [
+            { kind: 'user', id: 'user_2', turnId: 'turn_2', text: 'Hi' }
+          ]
+        }
+      }
+    ])
+
+    expect(reconciled.turnTimingMetrics.size).toBe(0)
+  })
+})

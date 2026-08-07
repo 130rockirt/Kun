@@ -221,6 +221,11 @@ export type SideConversation = {
   error: string | null
 }
 
+export type TurnTimingMetrics = {
+  avgTtftMs: number | null
+  avgTokensPerSecond: number | null
+}
+
 export type SidePanelState = {
   open: boolean
   activeSideId: string | null
@@ -298,6 +303,11 @@ export type ChatState = {
    * This is billing/cache telemetry and must not be used as context occupancy.
    */
   lastTurnUsage: { threadId: string; snapshot: ThreadUsageSnapshot } | null
+  /**
+   * Per-turn TTFT/TPS averages for the active thread, keyed by turnId. Bounded
+   * to the turns currently visible in the timeline; cleared on thread switch.
+   */
+  turnTimingMetrics: Map<string, TurnTimingMetrics>
   busy: boolean
   error: string | null
   runtimeErrorDetail: string | null

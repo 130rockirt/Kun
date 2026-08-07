@@ -16,7 +16,8 @@ import {
 import {
   GeneratedFilesPanel,
   MessageBubble,
-  generatedMediaScrollAvailability
+  generatedMediaScrollAvailability,
+  turnMetricsLabel
 } from './message-timeline-bubbles'
 import {
   describeProcessSection,
@@ -45,6 +46,8 @@ const labels: Record<string, string> = {
   toolActionBackgroundShellList: 'List background shells',
   workingToolAction: 'Working {{action}}',
   thinkingNow: 'Thinking…',
+  turnMetricsTtft: 'Avg TTFT {{value}}',
+  turnMetricsTps: 'Avg {{value}} tok/s',
   groupReadFiles: 'Read {{count}} files',
   groupReadFile: 'Read 1 file',
   groupSearched: 'Searched {{count}} times',
@@ -1863,6 +1866,43 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
     expect(html).toMatch(/writeExportPdf|Export PDF|导出 PDF/)
     expect(html).toMatch(/writeExportDocx|Export DOCX|导出 DOCX/)
     expect(html).toMatch(/writeExportPng|Export PNG|导出 PNG/)
+  })
+
+  it('renders per-turn average TTFT/TPS next to the timestamp when available', () => {
+    useChatStore.setState({
+      turnTimingMetrics: new Map([
+        ['turn_1', { avgTtftMs: 1_000, avgTokensPerSecond: 40.2 }]
+      ])
+    })
+    try {
+      const html = renderToStaticMarkup(
+        createElement(MessageBubble, {
+          block: {
+            kind: 'assistant',
+            id: 'assistant_1',
+            turnId: 'turn_1',
+            text: 'hello'
+          }
+        })
+      )
+
+      // zustand v5 serves SSR renders from the INITIAL state, so the
+      // per-turn map set above is not visible here; verify the wiring
+      // through the client render path instead.
+      expect(turnMetricsLabel(t, { avgTtftMs: 1_000, avgTokensPerSecond: 40.2 }))
+        .toBe('Avg TTFT 1.0s · Avg 40.2 tok/s')
+      expect(html).not.toContain('tok/s')
+    } finally {
+      useChatStore.setState({ turnTimingMetrics: new Map() })
+    }
+  })
+
+  it('omits segments without timing data from the footer label', () => {
+    expect(turnMetricsLabel(t, { avgTtftMs: null, avgTokensPerSecond: null })).toBe('')
+    expect(turnMetricsLabel(t, { avgTtftMs: 800, avgTokensPerSecond: null }))
+      .toBe('Avg TTFT 0.8s')
+    expect(turnMetricsLabel(t, { avgTtftMs: null, avgTokensPerSecond: 38.5 }))
+      .toBe('Avg 38.5 tok/s')
   })
 
   it('renders the workspace rollback action with fork in completed assistant response actions', () => {

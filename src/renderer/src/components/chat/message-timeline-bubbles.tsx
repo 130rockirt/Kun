@@ -34,6 +34,7 @@ import {
   type AttachmentPreviewFailureState
 } from './attachment-preview-loader'
 import { useDeferredRender } from '../../hooks/use-deferred-render'
+import { formatTtftSeconds, formatTps } from '../../hooks/use-thread-usage'
 
 const COPY_FEEDBACK_RESET_MS = 1600
 const ASSISTANT_EXPORT_FORMATS: WriteExportFormat[] = ['pdf', 'docx', 'png', 'html']
@@ -1841,6 +1842,27 @@ function formatMessageDateTime(input: string, locale: string): string {
  */
 export const MessageBubble = memo(MessageBubbleImpl)
 
+type TurnMetricsLike = {
+  avgTtftMs: number | null
+  avgTokensPerSecond: number | null
+}
+
+/**
+ * Renders a turn's average TTFT/TPS as a compact footer label. Segments with
+ * no data are omitted so legacy turns show nothing at all.
+ */
+export function turnMetricsLabel(
+  t: (key: string, options?: Record<string, unknown>) => string,
+  metrics: TurnMetricsLike
+): string {
+  const parts: string[] = []
+  const ttft = formatTtftSeconds(metrics.avgTtftMs)
+  if (ttft != null) parts.push(t('turnMetricsTtft', { value: ttft }))
+  const tps = formatTps(metrics.avgTokensPerSecond)
+  if (tps != null) parts.push(t('turnMetricsTps', { value: tps }))
+  return parts.join(' · ')
+}
+
 function MessageBubbleImpl({
   block,
   nested = false,
@@ -1862,6 +1884,7 @@ function MessageBubbleImpl({
 }): ReactElement {
   const { t, i18n } = useTranslation('common')
   const resolveApproval = useChatStore((s) => s.resolveApproval)
+  const turnTimingMetrics = useChatStore((s) => s.turnTimingMetrics)
   if (block.kind === 'user' && isBackgroundShellNoticeBlock(block)) {
     return <BackgroundShellNoticeBubble block={block} nested={nested} />
   }
@@ -1876,6 +1899,10 @@ function MessageBubbleImpl({
     const createdAtLabel = block.createdAt
       ? formatMessageDateTime(block.createdAt, i18n.language)
       : null
+    const turnMetrics =
+      !streaming && block.turnId
+        ? turnTimingMetrics.get(block.turnId)
+        : undefined
     return (
       <div className="group/message flex min-w-0 max-w-full flex-col">
         <div className="ds-markdown ds-chat-answer min-w-0 max-w-full text-ds-ink">
@@ -1883,7 +1910,17 @@ function MessageBubbleImpl({
         </div>
         {!streaming ? (
           <div className="mt-1 flex min-h-5 min-w-0 items-center justify-between gap-3 text-[11.5px] text-ds-faint opacity-0 transition duration-150 group-hover/message:opacity-100">
-            <span className="min-w-0 truncate">{createdAtLabel ?? ''}</span>
+            <span className="flex min-w-0 items-center gap-2">
+              <span className="truncate">{createdAtLabel ?? ''}</span>
+              {turnMetrics ? (
+                <span
+                  className="shrink-0 whitespace-nowrap tabular-nums"
+                  title={t('turnMetricsTitle')}
+                >
+                  {turnMetricsLabel(t, turnMetrics)}
+                </span>
+              ) : null}
+            </span>
             <div className="flex shrink-0 items-center gap-1.5">
               {rollbackAction ? (
                 <button

@@ -700,11 +700,26 @@ export function reduceChatProjection(
       return state.activeThreadId === action.payload.threadId
         ? { lastDelegatedRuntimeState: action.payload }
         : {}
-    case 'usage_received':
+    case 'usage_received': {
+      const threadId = state.activeThreadId ?? ''
+      const turnId = action.payload.turnId
+      const turnTimingMetrics = new Map(state.turnTimingMetrics)
+      if (threadId !== (state.lastTurnUsage?.threadId ?? '')) turnTimingMetrics.clear()
+      if (turnId) {
+        const avgTtftMs = action.payload.turnAvgTtftMs
+        const avgTokensPerSecond = action.payload.turnAvgTokensPerSecond
+        if (avgTtftMs != null || avgTokensPerSecond != null) {
+          turnTimingMetrics.set(turnId, { avgTtftMs, avgTokensPerSecond })
+        } else {
+          turnTimingMetrics.delete(turnId)
+        }
+      }
       return {
         usageRefreshKey: state.usageRefreshKey + 1,
-        lastTurnUsage: { threadId: state.activeThreadId ?? '', snapshot: action.payload }
+        lastTurnUsage: { threadId, snapshot: action.payload },
+        turnTimingMetrics
       }
+    }
     case 'thread_snapshot_reconciled': {
       const snapshot = action.payload
       if (state.activeThreadId !== snapshot.threadId) return {}
@@ -741,6 +756,9 @@ export function reduceChatProjection(
               liveAssistantTurnId: undefined,
               liveAssistantCreatedAt: undefined
             }
+          : {}),
+        ...(state.lastTurnUsage && state.lastTurnUsage.threadId !== snapshot.threadId
+          ? { turnTimingMetrics: new Map() }
           : {}),
         activeThreadGoal: snapshot.goal ?? state.activeThreadGoal,
         activeThreadTodos: snapshot.todos ?? state.activeThreadTodos,

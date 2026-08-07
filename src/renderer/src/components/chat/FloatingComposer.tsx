@@ -64,6 +64,8 @@ import {
   formatCost,
   formatPercent,
   cumulativeCacheHitRate,
+  formatTtftSeconds,
+  formatTps,
   useThreadUsageState
 } from '../../hooks/use-thread-usage'
 import { FloatingComposerContextCapacity } from './FloatingComposerContextCapacity'
@@ -492,6 +494,15 @@ export function FloatingComposer({
     `${activeThread?.updatedAt ?? ''}:${busy ? 'busy' : 'idle'}:${usageRefreshKey}`
   )
   const threadUsage = threadUsageState.usage
+  /**
+   * Live session-average TTFT/TPS from the latest usage SSE event of the
+   * active thread. The REST summary above does not carry these timing fields.
+   */
+  const liveThreadUsage = useChatStore((s) =>
+    s.lastTurnUsage && s.lastTurnUsage.threadId === s.activeThreadId
+      ? s.lastTurnUsage.snapshot
+      : null
+  )
   const effectiveWorkspaceRoot = normalizeWorkspaceRoot(activeThreadWorkspace || workspaceRootOverride || workspaceRoot)
   const clawAgentName =
     activeClawChannel?.agentProfile.name.trim()
@@ -2026,6 +2037,21 @@ export function FloatingComposer({
                     <span className="ds-composer-usage-turns shrink-0 truncate tabular-nums">
                       {t('sessionUsageTurns', { turns: threadUsage.turns })}
                     </span>
+                    {liveThreadUsage &&
+                    (liveThreadUsage.avgTtftMs != null || liveThreadUsage.avgTokensPerSecond != null) ? (
+                      <>
+                        <span className="ds-composer-usage-turns-separator text-ds-faint">·</span>
+                        <span
+                          className="ds-composer-usage-metrics shrink-0 truncate tabular-nums"
+                          title={t('sessionUsageAvgMetricsTitle')}
+                        >
+                          {t('sessionUsageAvgMetrics', {
+                            ttft: formatTtftSeconds(liveThreadUsage.avgTtftMs) ?? '-',
+                            tps: formatTps(liveThreadUsage.avgTokensPerSecond) ?? '-'
+                          })}
+                        </span>
+                      </>
+                    ) : null}
                   </>
                 ) : activeThreadId ? (
                   <span className="shrink-0 text-ds-faint">

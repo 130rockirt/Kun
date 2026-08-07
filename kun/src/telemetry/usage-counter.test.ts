@@ -131,3 +131,84 @@ describe('UsageCounter.total cross-thread aggregate', () => {
     })
   })
 })
+
+describe('UsageCounter timing aggregation', () => {
+  it('derives thread-cumulative TTFT and tokens-per-second averages', () => {
+    const counter = new UsageCounter()
+    // TTFT simple mean: (800 + 1200) / 2 = 1000ms.
+    // TPS weighted: (50 + 150) / (2s + 2s) * 1000 = 50 tok/s.
+    counter.record('thread-a', snapshot({
+      completionTokens: 50,
+      requestTtftMs: 800,
+      requestGenerationMs: 2_000
+    }))
+    counter.record('thread-a', snapshot({
+      completionTokens: 150,
+      requestTtftMs: 1_200,
+      requestGenerationMs: 2_000
+    }))
+
+    const usage = counter.forThread('thread-a')
+    expect(usage.avgTtftMs).toBe(1_000)
+    expect(usage.avgTokensPerSecond).toBe(50)
+  })
+
+  it('treats missing timing fields as null instead of zero', () => {
+    const counter = new UsageCounter()
+    counter.record('thread-a', snapshot({ completionTokens: 10 }))
+
+    const usage = counter.forThread('thread-a')
+    expect(usage.avgTtftMs).toBeNull()
+    expect(usage.avgTokensPerSecond).toBeNull()
+  })
+
+  it('ignores invalid timing and mixes timed and untimed requests', () => {
+    const counter = new UsageCounter()
+    counter.record('thread-a', snapshot({ completionTokens: 100 }))
+    counter.record('thread-a', snapshot({
+      completionTokens: 100,
+      requestTtftMs: 400,
+      requestGenerationMs: 1_000
+    }))
+
+    const usage = counter.forThread('thread-a')
+    // Only the timed request contributes to the TTFT average.
+    expect(usage.avgTtftMs).toBe(400)
+    expect(usage.avgTokensPerSecond).toBe(100)
+  })
+
+  it('recomputes timing averages across threads in total()', () => {
+    const counter = new UsageCounter()
+    counter.record('thread-a', snapshot({
+      completionTokens: 100,
+      requestTtftMs: 1_000,
+      requestGenerationMs: 2_000
+    }))
+    counter.record('thread-b', snapshot({
+      completionTokens: 300,
+      requestTtftMs: 3_000,
+      requestGenerationMs: 2_000
+    }))
+
+    const total = counter.total()
+    expect(total.avgTtftMs).toBe(2_000)
+    expect(total.avgTokensPerSecond).toBe(100)
+  })
+
+  it('resets timing together with the thread counter', () => {
+    const counter = new UsageCounter()
+    counter.record('thread-a', snapshot({
+      completionTokens: 100,
+      requestTtftMs: 1_000,
+      requestGenerationMs: 2_000
+    }))
+    counter.reset('thread-a')
+    expect(counter.forThread('thread-a').avgTtftMs).toBeNull()
+    expect(counter.forThread('thread-a').avgTokensPerSecond).toBeNull()
+
+    // Seed restores snapshot values but starts timing history fresh.
+    counter.seed('thread-a', snapshot({ promptTokens: 5, completionTokens: 5 }))
+    expect(counter.forThread('thread-a').promptTokens).toBe(5)
+    expect(counter.forThread('thread-a').avgTtftMs).toBeNull()
+  })
+})
