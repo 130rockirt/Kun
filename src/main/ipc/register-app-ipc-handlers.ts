@@ -434,11 +434,23 @@ function approvalLogReference(approvalId: string): string {
   return `sha256:${createHash('sha256').update(approvalId).digest('hex').slice(0, 16)}`
 }
 
+function formatZodIssuePath(path: readonly PropertyKey[]): string {
+  return path
+    .map((segment) => typeof segment === 'symbol' ? segment.toString() : String(segment))
+    .join('.')
+}
+
 function parseIpcPayload<T>(channel: string, schema: z.ZodType<T>, payload: unknown): T {
   const parsed = schema.safeParse(payload)
   if (parsed.success) return parsed.data
   const issue = parsed.error.issues[0]
-  throw new Error(`Invalid payload for ${channel}: ${issue?.message ?? 'Bad request.'}`)
+  const message = issue?.message ?? 'Bad request.'
+  const path = issue?.path?.length ? formatZodIssuePath(issue.path) : ''
+  throw new Error(
+    path
+      ? `Invalid payload for ${channel}: ${path}: ${message}`
+      : `Invalid payload for ${channel}: ${message}`
+  )
 }
 
 function withoutRendererProjectConfigGrants(partial: AppSettingsPatch): AppSettingsPatch {

@@ -1128,6 +1128,27 @@ const SUBSCRIPTION_REGION_TABS: Array<{
   { id: 'united-states', labelKey: 'modelProviderSubscriptionRegionUnitedStates' }
 ]
 
+/** Primary chat model ids must be non-empty for settings:set (modelIdSchema). */
+export function nonEmptyModelId(value: string | undefined | null): string | undefined {
+  const trimmed = typeof value === 'string' ? value.trim() : ''
+  return trimmed || undefined
+}
+
+/**
+ * Build a kun selection patch that never emits `model: ''`, which Zod rejects
+ * as `Too small: expected string to have >= 1 characters`.
+ */
+export function kunProviderSelectionPatch(input: {
+  providerId: string
+  model?: string | null
+}): KunRuntimeSettingsPatchV1 {
+  const model = nonEmptyModelId(input.model)
+  return {
+    providerId: input.providerId,
+    ...(model ? { model } : {})
+  }
+}
+
 export function modelProvidersSettingsPatch(input: {
   provider: ModelProviderSettingsV1
   providers: ModelProviderProfileV1[]
@@ -1143,8 +1164,13 @@ export function modelProvidersSettingsPatch(input: {
   const baseKunPatch = input.kun?.providerId?.trim()
     ? { ...input.kun, apiKey: '', baseUrl: '' }
     : input.kun ?? {}
+  const { model: rawModel, ...kunWithoutModel } = baseKunPatch as KunRuntimeSettingsPatchV1 & {
+    model?: string
+  }
+  const model = nonEmptyModelId(rawModel)
   const kunPatch = {
-    ...baseKunPatch,
+    ...kunWithoutModel,
+    ...(model ? { model } : {}),
     ...(miniMaxMediaDefaults ?? {})
   }
   return {
@@ -2872,16 +2898,21 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
   ])
 
   const selectSharedModel = async (connection: SharedModelConnection, model: string): Promise<void> => {
+    const selectedModel = nonEmptyModelId(model)
+    if (!selectedModel) return
     try {
       await enqueueSharedMutation(async () => {
         const snapshot = await selectSharedModelConnection(
           connection.id,
-          model,
+          selectedModel,
           (providerId) => pendingSharedProviderDeletions.current.has(providerId)
         )
         setSharedConnections(snapshot)
         setSharedConnectionsError('')
-        update({ agents: { kun: { providerId: connection.id, model } } })
+        update({ agents: { kun: kunProviderSelectionPatch({
+          providerId: connection.id,
+          model: selectedModel
+        }) } })
       })
     } catch (error) {
       if (error instanceof SharedModelConnectionConflictError) {
@@ -3465,7 +3496,10 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
     updateModelProviders(
       [...modelProviders, secretFreeProvider],
       credential
-        ? { providerId: providerDraft.id, model: providerDraft.models[0] ?? kun.model }
+        ? kunProviderSelectionPatch({
+            providerId: providerDraft.id,
+            model: nonEmptyModelId(providerDraft.models[0]) ?? kun.model
+          })
         : undefined
     )
     previousProviderSelectionRef.current = null
@@ -3559,7 +3593,10 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
     updateModelProviders(
       nextProviders,
       nextProvider.apiKey.trim()
-        ? { providerId: nextProvider.id, model: nextProvider.models[0] ?? kun.model }
+        ? kunProviderSelectionPatch({
+            providerId: nextProvider.id,
+            model: nonEmptyModelId(nextProvider.models[0]) ?? kun.model
+          })
         : undefined
     )
   }

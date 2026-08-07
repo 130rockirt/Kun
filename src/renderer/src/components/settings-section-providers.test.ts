@@ -20,6 +20,9 @@ import {
   createSharedModelMutationQueue,
   deleteSharedModelConnection,
   fenceSharedModelConnectionCredential,
+  kunProviderSelectionPatch,
+  modelProvidersSettingsPatch,
+  nonEmptyModelId,
   projectSharedModelConnections,
   rebasePendingSharedProviderCatalog,
   reconcilePendingSharedProviderCatalogs,
@@ -46,6 +49,58 @@ const textModelProfile: ModelProviderModelProfileV1 = {
   supportsToolCalling: true,
   messageParts: ['text']
 }
+
+describe('provider settings patch model sanitization', () => {
+  it('omits empty agents.kun.model so settings:set cannot receive Too small', () => {
+    const provider = defaultModelProviderSettings()
+    const patch = modelProvidersSettingsPatch({
+      provider,
+      providers: provider.providers,
+      kun: { providerId: 'opencode-go', model: '' }
+    })
+
+    expect(patch.agents?.kun).toEqual({
+      providerId: 'opencode-go',
+      apiKey: '',
+      baseUrl: ''
+    })
+    expect(patch.agents?.kun).not.toHaveProperty('model')
+  })
+
+  it('keeps a non-empty primary model on the kun selection patch', () => {
+    const provider = defaultModelProviderSettings()
+    const patch = modelProvidersSettingsPatch({
+      provider,
+      providers: provider.providers,
+      kun: { providerId: 'opencode-go', model: 'grok-4.5' }
+    })
+
+    expect(patch.agents?.kun).toMatchObject({
+      providerId: 'opencode-go',
+      model: 'grok-4.5'
+    })
+  })
+
+  it('builds selection patches that skip blank model ids', () => {
+    expect(nonEmptyModelId('')).toBeUndefined()
+    expect(nonEmptyModelId('  ')).toBeUndefined()
+    expect(nonEmptyModelId('grok-4.5')).toBe('grok-4.5')
+    expect(kunProviderSelectionPatch({ providerId: 'custom', model: '' })).toEqual({
+      providerId: 'custom'
+    })
+    expect(kunProviderSelectionPatch({
+      providerId: 'opencode-go',
+      model: nonEmptyModelId('') ?? nonEmptyModelId('')
+    })).toEqual({ providerId: 'opencode-go' })
+    expect(kunProviderSelectionPatch({
+      providerId: 'opencode-go',
+      model: nonEmptyModelId('') ?? 'glm-5.2'
+    })).toEqual({
+      providerId: 'opencode-go',
+      model: 'glm-5.2'
+    })
+  })
+})
 
 describe('shared model connection API-key setup status', () => {
   it('treats missing and unreadable protected credentials as unavailable', () => {

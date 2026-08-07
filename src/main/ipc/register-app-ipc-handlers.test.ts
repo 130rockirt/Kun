@@ -666,6 +666,18 @@ describe('registerAppIpcHandlers', () => {
     expect(applySettingsPatch).not.toHaveBeenCalled()
   })
 
+  it('includes the Zod path when settings:set rejects an empty primary model', async () => {
+    const applySettingsPatch = vi.fn(async () => settings())
+
+    registerAppIpcHandlers(registerOptions({ applySettingsPatch }))
+
+    const handler = handlers.get('settings:set')
+    await expect(
+      handler?.({}, { agents: { kun: { model: '' } } })
+    ).rejects.toThrow(/Invalid payload for settings:set: agents\.kun\.model: Too small/)
+    expect(applySettingsPatch).not.toHaveBeenCalled()
+  })
+
   it('redacts plaintext model credentials from settings:get without mutating the Main snapshot', async () => {
     const current = settingsWithPlaintextModelCredentials()
     const original = JSON.stringify(current)

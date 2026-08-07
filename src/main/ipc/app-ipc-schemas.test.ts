@@ -616,9 +616,14 @@ describe('app-ipc-schemas', () => {
     expect(settingsPatchSchema.parse({
       agents: { kun: { providerId: '' } }
     }).agents?.kun).toEqual({ providerId: '' })
-    expect(() => settingsPatchSchema.parse({
+    const emptyModel = settingsPatchSchema.safeParse({
       agents: { kun: { model: '' } }
-    })).toThrow(/Too small/)
+    })
+    expect(emptyModel.success).toBe(false)
+    if (!emptyModel.success) {
+      expect(emptyModel.error.issues[0]?.path).toEqual(['agents', 'kun', 'model'])
+      expect(emptyModel.error.issues[0]?.message).toMatch(/Too small/)
+    }
   })
 
   it('accepts the cursor spotlight preference', () => {
