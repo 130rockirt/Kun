@@ -27,7 +27,7 @@ function makeTempRoot(): string {
 }
 
 function runHelper(input: {
-  action: 'ResolvePath' | 'ResolveSource' | 'ResolveUpdateScope' | 'ResolveUninstaller' | 'Recover' | 'Prepare' | 'FallbackCleanup' | 'Restore' | 'ValidatePayload'
+  action: 'ResolvePath' | 'ResolveSource' | 'ResolveUpdateScope' | 'ResolveUninstaller' | 'Recover' | 'Prepare' | 'FallbackCleanup' | 'Restore' | 'ValidatePayload' | 'CleanupInPlaceLeftovers'
   source?: string
   secondary?: string
   currentUserSource?: string
@@ -45,6 +45,7 @@ function runHelper(input: {
   userProfile?: string
   primarySourceStale?: boolean
   secondarySourceStale?: boolean
+  inPlaceUpdate?: boolean
   installMode?: 'CurrentUser' | 'all'
   appGuid?: string
   canonicalLeaf?: string
@@ -86,6 +87,7 @@ function runHelper(input: {
         KUN_INSTALLER_UNINSTALL_STRING: input.uninstallCommand ?? '',
         KUN_INSTALLER_PRIMARY_SOURCE_STALE: input.primarySourceStale ? '1' : '0',
         KUN_INSTALLER_SECONDARY_SOURCE_STALE: input.secondarySourceStale ? '1' : '0',
+        KUN_INSTALLER_IN_PLACE_UPDATE: input.inPlaceUpdate ? '1' : '0',
         KUN_INSTALLER_INSTALL_MODE: input.installMode ?? 'CurrentUser',
         KUN_INSTALLER_APP_GUID: input.appGuid ?? 'test-kun-app-guid',
         KUN_INSTALLER_CANONICAL_LEAF: input.canonicalLeaf ?? 'Kun',
@@ -174,6 +176,25 @@ describe('Windows installer migration ACL contract', () => {
     expect(script).toContain('$process.ExitCode -ne $accessViolationExitCode')
     expect(script).toContain('retrying once after 2 seconds')
   })
+
+  it('keeps same-directory automatic updates from pre-deleting the application payload', () => {
+    const installerScript = readFileSync(join(process.cwd(), 'build/installer.nsh'), 'utf8')
+    const migrationScript = readFileSync(helperPath, 'utf8')
+
+    expect(installerScript).toContain('Function KunMarkInPlaceAutomaticUpdate')
+    expect(installerScript).toContain('${if} $KunInstallerInPlaceUpdate == 1')
+    expect(installerScript).toContain('skipping pre-install removal of $KunInstallerPrimarySourceDir')
+    expect(installerScript).toContain(
+      'suppressed the selected-scope uninstaller until the new payload is installed'
+    )
+    expect(installerScript.indexOf('!insertmacro kunRunMigrationHelper ValidatePayload')).toBeLessThan(
+      installerScript.indexOf('!insertmacro kunRunMigrationHelper CleanupInPlaceLeftovers')
+    )
+    expect(migrationScript).toContain('function Invoke-CleanupInPlaceLeftovers')
+    expect(migrationScript).toContain('function Test-RetainedInPlaceKnownEntry')
+    expect(smokePath.length).toBeGreaterThan(0)
+    expect(readFileSync(smokePath, 'utf8')).toContain('in-app all-users automatic update scope')
+  })
 })
 
 windowsOnly('Windows installer migration helper', () => {
@@ -185,6 +206,83 @@ windowsOnly('Windows installer migration helper', () => {
     const result = runHelper({ action: 'ValidatePayload', target })
 
     expect(result.status, processError(result)).toBe(0)
+  })
+
+  it('removes only obsolete known identity files after a validated in-place update', () => {
+    const target = join(makeTempRoot(), 'Kun')
+    mkdirSync(target, { recursive: true })
+    writePackagedInstallPayload(target)
+    writeFileSync(join(target, 'DeepSeek GUI.exe'), 'legacy identity')
+    writeFileSync(join(target, 'Uninstall DeepSeek GUI.exe'), 'legacy uninstaller')
+    writeFileSync(join(target, 'Uninstall Kun.exe'), 'current uninstaller')
+    writeFileSync(join(target, 'ffmpeg.dll'), 'runtime')
+    writeFileSync(join(target, 'notes.txt'), 'user file')
+
+    const result = runHelper({
+      action: 'CleanupInPlaceLeftovers',
+      source: target,
+      target,
+      inPlaceUpdate: true
+    })
+
+    expect(result.status, processError(result)).toBe(0)
+    expect(existsSync(join(target, 'Kun.exe'))).toBe(true)
+    expect(existsSync(join(target, 'Uninstall Kun.exe'))).toBe(true)
+    expect(existsSync(join(target, 'ffmpeg.dll'))).toBe(true)
+    expect(existsSync(join(target, 'resources', 'app.asar'))).toBe(true)
+    expect(existsSync(join(target, 'DeepSeek GUI.exe'))).toBe(false)
+    expect(existsSync(join(target, 'Uninstall DeepSeek GUI.exe'))).toBe(false)
+    expect(readFileSync(join(target, 'notes.txt'), 'utf8')).toBe('user file')
+  })
+
+  it('does not clean in-place leftovers unless the in-place update marker is set', () => {
+    const target = join(makeTempRoot(), 'Kun')
+    mkdirSync(target, { recursive: true })
+    writePackagedInstallPayload(target)
+    writeFileSync(join(target, 'DeepSeek GUI.exe'), 'legacy identity')
+
+    const result = runHelper({
+      action: 'CleanupInPlaceLeftovers',
+      source: target,
+      target,
+      inPlaceUpdate: false
+    })
+
+    expect(result.status, processError(result)).toBe(0)
+    expect(existsSync(join(target, 'DeepSeek GUI.exe'))).toBe(true)
+  })
+
+  it('refuses in-place leftover cleanup when the validated payload is incomplete', () => {
+    const target = join(makeTempRoot(), 'Kun')
+    mkdirSync(target, { recursive: true })
+    writePackagedInstallPayload(target)
+    rmSync(join(target, 'Kun.exe'))
+    writeFileSync(join(target, 'DeepSeek GUI.exe'), 'legacy identity')
+
+    const result = runHelper({
+      action: 'CleanupInPlaceLeftovers',
+      source: target,
+      target,
+      inPlaceUpdate: true
+    })
+
+    expect(result.status).not.toBe(0)
+    expect(processError(result)).toContain('payload is missing')
+    expect(existsSync(join(target, 'DeepSeek GUI.exe'))).toBe(true)
+  })
+
+  it('keeps known application files after prepare for same-directory updates', () => {
+    const root = makeTempRoot()
+    const source = join(root, 'Kun')
+    const journal = join(root, 'recovery', 'journal.json')
+    mkdirSync(join(source, 'resources'), { recursive: true })
+    writeFileSync(join(source, 'Kun.exe'), 'app')
+    writeFileSync(join(source, 'notes.txt'), 'keep me')
+
+    const prepared = runHelper({ action: 'Prepare', source, target: source, journal })
+    expect(prepared.status, processError(prepared)).toBe(0)
+    expect(existsSync(join(source, 'Kun.exe'))).toBe(true)
+    expect(existsSync(join(source, 'notes.txt'))).toBe(false)
   })
 
   it.each([

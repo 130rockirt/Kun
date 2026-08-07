@@ -78,7 +78,8 @@ export function filterOpenCodeGoCookieHeader(
   rawHeader: string | undefined
 ): string | undefined {
   if (!rawHeader?.trim()) return undefined
-  const pairs = rawHeader
+  const normalized = rawHeader.trim().replace(/^cookie:\s*/i, '')
+  const pairs = normalized
     .split(';')
     .map((part) => part.trim())
     .filter(Boolean)

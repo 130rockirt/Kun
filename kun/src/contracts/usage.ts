@@ -51,7 +51,25 @@ export const UsageSnapshotSchema = z.object({
   tokenEconomySavingsUsd: z.number().nonnegative().optional(),
   tokenEconomySavingsCny: z.number().nonnegative().optional(),
   /** Provider reported an unrecoverable error mid-stream. */
-  hasError: z.boolean().optional()
+  hasError: z.boolean().optional(),
+  /**
+   * Time-to-first-token of this single model request (ms), measured from
+   * request start until the first text/reasoning chunk arrives. Missing for
+   * non-streaming or legacy providers.
+   */
+  requestTtftMs: z.number().nonnegative().optional(),
+  /** Time spent generating this single model response (ms), from first chunk
+   * until the final usage/completed chunk. Used with `completionTokens` to
+   * derive per-request tokens-per-second. */
+  requestGenerationMs: z.number().nonnegative().optional(),
+  /** Average TTFT across model calls of the current turn (null = no data). */
+  turnAvgTtftMs: z.number().nonnegative().nullable().optional(),
+  /** Average tokens-per-second across model calls of the current turn. */
+  turnAvgTokensPerSecond: z.number().nonnegative().nullable().optional(),
+  /** Thread-cumulative average TTFT across all model calls (null = no data). */
+  avgTtftMs: z.number().nonnegative().nullable().optional(),
+  /** Thread-cumulative average tokens-per-second across all model calls. */
+  avgTokensPerSecond: z.number().nonnegative().nullable().optional()
 })
 export type UsageSnapshot = z.infer<typeof UsageSnapshotSchema>
 
@@ -158,5 +176,9 @@ export const emptyUsageSnapshot = (): UsageSnapshot => ({
   cacheMissTokens: 0,
   cacheHitRate: null,
   turns: 0,
-  tokenEconomySavingsTokens: 0
+  tokenEconomySavingsTokens: 0,
+  turnAvgTtftMs: null,
+  turnAvgTokensPerSecond: null,
+  avgTtftMs: null,
+  avgTokensPerSecond: null
 })

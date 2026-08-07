@@ -97,10 +97,14 @@ import {
   Toggle,
   type InlineNotice
 } from './settings-controls'
+import { sharedModelConnectionHasUsableCredential } from '../lib/provider-credential-readiness'
+
+export { sharedModelConnectionHasUsableCredential } from '../lib/provider-credential-readiness'
 import {
   drainSharedProviderCatalogMutation,
   drainSharedProviderCredentialMutation,
   enqueueSharedModelMutation,
+  hasInFlightSharedProviderCatalogMutation,
   replaceMapContents,
   sharedProviderMutationCoordinator,
   stageSharedProviderCredentialMutation,
@@ -139,14 +143,9 @@ type SharedModelConnectionsSnapshot = {
   localModelGateway?: { enabled: boolean }
 }
 
-export function sharedModelConnectionHasUsableCredential(
-  connection: Pick<SharedModelConnection, 'configured' | 'credentialStatus'> | undefined
-): boolean {
-  return Boolean(
-    connection?.configured &&
-    connection.credentialStatus !== 'missing' &&
-    connection.credentialStatus !== 'unreadable'
-  )
+type ProjectedKunSelectionPatch = {
+  providerId: string
+  model?: string
 }
 
 export function sharedProviderSetupNeedsApiKey(
@@ -196,6 +195,7 @@ function SharedDefaultModelPicker({
   const triggerRef = useRef<HTMLButtonElement>(null)
   const searchRef = useRef<HTMLInputElement>(null)
   const [open, setOpen] = useState(false)
+  const [placement, setPlacement] = useState<'down' | 'up'>('down')
   const [activeProviderId, setActiveProviderId] = useState('')
   const [query, setQuery] = useState('')
   const providers = useMemo(() => snapshot?.providers ?? [], [snapshot?.providers])
@@ -282,6 +282,18 @@ function SharedDefaultModelPicker({
           aria-expanded={open}
           disabled={!snapshot || providers.length === 0}
           onClick={() => {
+            if (!open) {
+              // 该区块靠近页面底部,下方空间不足时向上展开,避免弹层被视口裁切
+              const rect = triggerRef.current?.getBoundingClientRect()
+              if (rect) {
+                const spaceBelow = window.innerHeight - rect.bottom
+                const spaceAbove = rect.top
+                const panelHeight = Math.min(420, window.innerHeight * 0.7)
+                setPlacement(
+                  spaceBelow < panelHeight && spaceAbove > spaceBelow ? 'up' : 'down'
+                )
+              }
+            }
             setQuery('')
             setOpen((current) => !current)
           }}
@@ -306,7 +318,9 @@ function SharedDefaultModelPicker({
           <div
             role="dialog"
             aria-label={zh ? '选择默认模型' : 'Choose default model'}
-            className="absolute left-0 top-full z-40 mt-2 grid w-full min-w-0 grid-cols-1 overflow-hidden rounded-2xl border border-ds-border bg-ds-card shadow-xl shadow-black/10 sm:grid-cols-[minmax(190px,0.8fr)_minmax(260px,1.2fr)] dark:shadow-black/35"
+            className={`absolute left-0 z-40 grid max-h-[70vh] w-full min-w-0 grid-cols-1 overflow-hidden rounded-2xl border border-ds-border bg-ds-card shadow-xl shadow-black/10 sm:grid-cols-[minmax(190px,0.8fr)_minmax(260px,1.2fr)] dark:shadow-black/35 ${
+              placement === 'up' ? 'bottom-full mb-2' : 'top-full mt-2'
+            }`}
           >
             <div className="min-w-0 border-b border-ds-border-muted p-2 sm:border-b-0 sm:border-r">
               <div className="px-2 pb-1.5 pt-1 text-[11px] font-semibold text-ds-faint">
@@ -709,18 +723,56 @@ export function rebasePendingSharedProviderCatalog(
   }
 }
 
+export type SharedModelConnectionCatalogConnectSource = {
+  provider: ModelProviderProfileV1
+  credential?: string
+}
+
 export async function commitSharedModelConnectionCatalog(
   providerId: string,
   pending: PendingSharedProviderCatalog,
-  isProviderTombstoned: (providerId: string) => boolean = () => false
+  isProviderTombstoned: (providerId: string) => boolean = () => false,
+  connectSource?: SharedModelConnectionCatalogConnectSource
 ): Promise<SharedModelConnectionsSnapshot> {
   let snapshot = await requestSharedModelConnections('/v1/model-connections')
   for (let attempt = 0; attempt < 2; attempt += 1) {
     if (isProviderTombstoned(providerId)) {
       throw new Error(`Shared model connection ${providerId} is pending deletion`)
     }
-    const connection = snapshot.providers.find((item) => item.id === providerId)
-    if (!connection) throw new Error(`Shared model connection ${providerId} is no longer available`)
+    let connection = snapshot.providers.find((item) => item.id === providerId)
+    if (!connection) {
+      // Fetch/import can stage a catalog before syncOnce has connected the
+      // provider (common for Aliyun Token Plan). Connect with the pending
+      // catalog instead of leaving an orphan that SSE later reverts (#1117).
+      if (!connectSource) {
+        throw new Error(`Shared model connection ${providerId} is no longer available`)
+      }
+      try {
+        snapshot = await connectSharedModelConnectionWithCatalog(
+          snapshot,
+          connectSource.provider,
+          pending,
+          connectSource.credential
+        )
+      } catch (error) {
+        if (!(error instanceof SharedModelConnectionConflictError) || attempt === 1) throw error
+        snapshot = error.snapshot
+        continue
+      }
+      connection = snapshot.providers.find((item) => item.id === providerId)
+      if (!connection) {
+        throw new Error(`Shared model connection ${providerId} is no longer available`)
+      }
+      if (
+        JSON.stringify(connection.models) === JSON.stringify(pending.localModels) &&
+        sameCatalogCapabilities(
+          connection.modelCapabilities,
+          catalogCapabilities(pending.localModels, pending.localModelProfiles)
+        )
+      ) {
+        return snapshot
+      }
+    }
     const catalog = applyPendingSharedProviderCatalog(connection, pending)
     try {
       return await requestSharedModelConnections(
@@ -734,6 +786,35 @@ export async function commitSharedModelConnectionCatalog(
     }
   }
   return snapshot
+}
+
+async function connectSharedModelConnectionWithCatalog(
+  snapshot: SharedModelConnectionsSnapshot,
+  provider: ModelProviderProfileV1,
+  pending: PendingSharedProviderCatalog,
+  credential?: string
+): Promise<SharedModelConnectionsSnapshot> {
+  const baseUrlOptional =
+    provider.kind === 'agent-sdk' ||
+    provider.kind === 'antigravity-cli' ||
+    provider.kind === 'cursor-sdk'
+  const resolvedCredential = (credential ?? provider.apiKey).trim()
+  const selectedModel = pending.localModels[0]
+  return await requestSharedModelConnections('/v1/model-connections/connect', 'POST', {
+    expectedRevision: snapshot.revision,
+    id: provider.id,
+    name: provider.name.trim() || provider.id,
+    kind: provider.kind ?? 'http',
+    authType: isSubscriptionProvider(provider) ? 'subscription' : 'api-key',
+    ...(baseUrlOptional ? {} : { baseUrl: provider.baseUrl }),
+    endpointFormat: provider.endpointFormat,
+    ...(resolvedCredential ? { credential: resolvedCredential } : {}),
+    models: pending.localModels,
+    modelCapabilities: catalogCapabilities(pending.localModels, pending.localModelProfiles),
+    ...(selectedModel ? { selectedModel } : {}),
+    probe: false,
+    select: false
+  })
 }
 
 export async function replaceSharedModelConnectionCredential(
@@ -928,7 +1009,7 @@ export function projectSharedModelConnections(
   pendingCatalogs: Pick<ReadonlyMap<string, PendingSharedProviderCatalog>, 'get'> = new Map()
 ): {
   provider: Pick<ModelProviderSettingsV1, 'providers' | 'proxy' | 'routePools' | 'localGateway'>
-  kun: Pick<KunRuntimeSettingsV1, 'providerId' | 'model'>
+  kun: ProjectedKunSelectionPatch
 } {
   const existingById = new Map(current.providers.map((item) => [item.id, item]))
   const visibleConnections = snapshot.providers.filter((connection) =>
@@ -962,15 +1043,34 @@ export function projectSharedModelConnections(
         : sharedModelProfiles(connection, existing)
     }
   })
-  // AppSettings keeps a normalized DeepSeek editor as its legacy fallback.
-  // When the canonical registry intentionally has no DeepSeek profile, retain
-  // that local placeholder without treating it as a connected profile.
-  const compatibilityDefault = !visibleConnections.some((entry) => entry.id === DEFAULT_MODEL_PROVIDER_ID)
-    ? existingById.get(DEFAULT_MODEL_PROVIDER_ID)
-    : undefined
-  const providers = compatibilityDefault
-    ? [compatibilityDefault, ...projectedProviders]
-    : projectedProviders
+  // Keep local-only providers that are not yet in the registry (or are waiting
+  // on a catalog commit). Without this, SSE projections drop freshly fetched
+  // Aliyun Token Plan catalogs before connect finishes (#1117).
+  const projectedIds = new Set(projectedProviders.map((provider) => provider.id))
+  const retainedLocalProviders = current.providers
+    .filter((provider) => {
+      if (projectedIds.has(provider.id)) return false
+      if (pendingDeletions.get(provider.id) != null) return false
+      if (provider.id === DEFAULT_MODEL_PROVIDER_ID) return true
+      return pendingCatalogs.get(provider.id) != null
+    })
+    .map((provider) => {
+      const pendingCatalog = pendingCatalogs.get(provider.id)
+      if (!pendingCatalog) return provider
+      return {
+        ...provider,
+        models: [...pendingCatalog.localModels],
+        modelProfiles: structuredClone(pendingCatalog.localModelProfiles)
+      }
+    })
+  const providers = [...retainedLocalProviders, ...projectedProviders]
+  const defaultProviderId = snapshot.defaultProviderId?.trim()
+  const defaultModel = snapshot.defaultModel?.trim()
+  const hasUsableDefault = Boolean(
+    defaultProviderId &&
+    defaultModel &&
+    pendingDeletions.get(defaultProviderId)?.committedRevision == null
+  )
   return {
     provider: {
       providers,
@@ -981,16 +1081,9 @@ export function projectSharedModelConnections(
         enabled: snapshot.localModelGateway?.enabled ?? current.localGateway.enabled
       }
     },
-    kun: {
-      providerId: snapshot.defaultProviderId &&
-        pendingDeletions.get(snapshot.defaultProviderId)?.committedRevision == null
-        ? snapshot.defaultProviderId
-        : '',
-      model: snapshot.defaultProviderId &&
-        pendingDeletions.get(snapshot.defaultProviderId)?.committedRevision == null
-        ? snapshot.defaultModel ?? ''
-        : ''
-    }
+    kun: hasUsableDefault
+      ? { providerId: defaultProviderId!, model: defaultModel! }
+      : { providerId: '' }
   }
 }
 
@@ -1130,6 +1223,27 @@ const SUBSCRIPTION_REGION_TABS: Array<{
   { id: 'united-states', labelKey: 'modelProviderSubscriptionRegionUnitedStates' }
 ]
 
+/** Primary chat model ids must be non-empty for settings:set (modelIdSchema). */
+export function nonEmptyModelId(value: string | undefined | null): string | undefined {
+  const trimmed = typeof value === 'string' ? value.trim() : ''
+  return trimmed || undefined
+}
+
+/**
+ * Build a kun selection patch that never emits `model: ''`, which Zod rejects
+ * as `Too small: expected string to have >= 1 characters`.
+ */
+export function kunProviderSelectionPatch(input: {
+  providerId: string
+  model?: string | null
+}): KunRuntimeSettingsPatchV1 {
+  const model = nonEmptyModelId(input.model)
+  return {
+    providerId: input.providerId,
+    ...(model ? { model } : {})
+  }
+}
+
 export function modelProvidersSettingsPatch(input: {
   provider: ModelProviderSettingsV1
   providers: ModelProviderProfileV1[]
@@ -1145,8 +1259,13 @@ export function modelProvidersSettingsPatch(input: {
   const baseKunPatch = input.kun?.providerId?.trim()
     ? { ...input.kun, apiKey: '', baseUrl: '' }
     : input.kun ?? {}
+  const { model: rawModel, ...kunWithoutModel } = baseKunPatch as KunRuntimeSettingsPatchV1 & {
+    model?: string
+  }
+  const model = nonEmptyModelId(rawModel)
   const kunPatch = {
-    ...baseKunPatch,
+    ...kunWithoutModel,
+    ...(model ? { model } : {}),
     ...(miniMaxMediaDefaults ?? {})
   }
   return {
@@ -2449,6 +2568,13 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
         .map(([providerId, pending]) => [providerId, pending.credential])
     )
   )
+  const [revealedCredential, setRevealedCredential] = useState<{
+    providerId: string
+    credential: string
+  } | null>(null)
+  const [credentialRevealPendingProviderId, setCredentialRevealPendingProviderId] = useState('')
+  const [credentialRevealError, setCredentialRevealError] = useState('')
+  const credentialRevealGeneration = useRef(0)
   const enqueueSharedMutation = enqueueSharedModelMutation
   const sharedProjectionInput = useRef({ provider, kun, update, form })
   sharedProjectionInput.current = { provider, kun, update, form }
@@ -2535,6 +2661,15 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
   const activeProvider =
     displayProviders.find((item) => item.id === selectedProviderId) ??
     modelProviders[0]
+  const activeProviderIdRef = useRef(activeProvider?.id ?? '')
+  activeProviderIdRef.current = activeProvider?.id ?? ''
+  useEffect(() => {
+    credentialRevealGeneration.current += 1
+    setShowApiKey(false)
+    setRevealedCredential(null)
+    setCredentialRevealPendingProviderId('')
+    setCredentialRevealError('')
+  }, [activeProvider?.id, setShowApiKey])
   const sharedConnectionFor = (providerId: string): SharedModelConnection | undefined =>
     sharedConnections?.providers.find((connection) => connection.id === providerId)
   const hasConfiguredCredential = (provider: ModelProviderProfileV1): boolean =>
@@ -2595,6 +2730,12 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
             snapshot,
             pendingSharedProviderCatalogs.current
           ))
+          // Skip AppSettings writes while a catalog commit owns the queue so a
+          // stale registry snapshot cannot revert an in-flight Token Plan fetch
+          // (#1117). SharedConnections UI state above still refreshes.
+          if (hasInFlightSharedProviderCatalogMutation()) {
+            return
+          }
           const projected = projectSharedModelConnections(
             current.provider,
             snapshot,
@@ -2602,10 +2743,11 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
             pendingSharedProviderNames.current,
             pendingSharedProviderCatalogs.current
           )
+          const effectiveProjectedModel = projected.kun.model ?? current.kun.model
           const fingerprint = sharedSettingsFingerprint({
             providers: projected.provider.providers,
             providerId: projected.kun.providerId,
-            model: projected.kun.model,
+            model: effectiveProjectedModel,
             proxy: projected.provider.proxy,
             routePools: projected.provider.routePools,
             localGateway: projected.provider.localGateway
@@ -2717,6 +2859,12 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
         const selectedModel = item.models.includes(latestKun.model) ? latestKun.model : item.models[0]
         if (!existing) {
           if (pendingSharedProviderDeletions.current.has(item.id)) continue
+          // Renderer projections redact apiKey to ''. Connecting without a
+          // credential creates an authoritative empty Registry shell that
+          // shadows legacy bindings and leaves the supplier stuck on
+          // "needs configuration". Keyless kinds (CLI/SDK) may still connect.
+          // Credential-bearing connects happen via the staged credential drain.
+          if (modelProviderRequiresApiKey(item) && !item.apiKey.trim()) continue
           snapshot = await requestSharedModelConnections('/v1/model-connections/connect', 'POST', {
             expectedRevision: snapshot.revision,
             id: item.id,
@@ -2857,16 +3005,21 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
   ])
 
   const selectSharedModel = async (connection: SharedModelConnection, model: string): Promise<void> => {
+    const selectedModel = nonEmptyModelId(model)
+    if (!selectedModel) return
     try {
       await enqueueSharedMutation(async () => {
         const snapshot = await selectSharedModelConnection(
           connection.id,
-          model,
+          selectedModel,
           (providerId) => pendingSharedProviderDeletions.current.has(providerId)
         )
         setSharedConnections(snapshot)
         setSharedConnectionsError('')
-        update({ agents: { kun: { providerId: connection.id, model } } })
+        update({ agents: { kun: kunProviderSelectionPatch({
+          providerId: connection.id,
+          model: selectedModel
+        }) } })
       })
     } catch (error) {
       if (error instanceof SharedModelConnectionConflictError) {
@@ -2974,16 +3127,23 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
     void drainSharedProviderCatalogMutation(providerId, generation, async () => {
       const pending = pendingSharedProviderCatalogs.current.get(providerId)
       if (!pending || pending.generation !== generation) return
+      const latestProvider = (sharedProjectionInput.current.provider.providers as ModelProviderProfileV1[])
+        .find((item) => item.id === providerId)
+      const pendingCredential = pendingSharedProviderCredentials.current.get(providerId)?.credential
       const snapshot = await commitSharedModelConnectionCatalog(
         providerId,
         pending,
-        (id) => pendingSharedProviderDeletions.current.has(id)
+        (id) => pendingSharedProviderDeletions.current.has(id),
+        latestProvider
+          ? {
+              provider: latestProvider,
+              credential: pendingCredential ?? latestProvider.apiKey
+            }
+          : undefined
       )
       const current = pendingSharedProviderCatalogs.current.get(providerId)
       const connection = snapshot.providers.find((item) => item.id === providerId)
       if (current?.generation === generation) {
-        const latestProvider = (sharedProjectionInput.current.provider.providers as ModelProviderProfileV1[])
-          .find((item) => item.id === providerId)
         pendingSharedProviderCatalogs.current.set(providerId, {
           ...current,
           ...(connection ? {
@@ -3214,6 +3374,72 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
     }
   }
 
+  const updateActiveProviderCredential = (value: string): void => {
+    if (!activeProvider) return
+    setCredentialRevealError('')
+    if (showApiKey) {
+      setRevealedCredential({ providerId: activeProvider.id, credential: value })
+    }
+    updateModelProvider(activeProvider.id, { apiKey: value })
+  }
+
+  const toggleActiveProviderCredentialVisibility = async (): Promise<void> => {
+    if (!activeProvider) return
+    const providerId = activeProvider.id
+    if (showApiKey) {
+      credentialRevealGeneration.current += 1
+      setShowApiKey(false)
+      setRevealedCredential(null)
+      setCredentialRevealError('')
+      return
+    }
+
+    setCredentialRevealError('')
+    if (
+      activeProvider.apiKey.length > 0 ||
+      !sharedModelConnectionHasUsableCredential(sharedConnectionFor(providerId))
+    ) {
+      setShowApiKey(true)
+      return
+    }
+
+    setCredentialRevealPendingProviderId(providerId)
+    const generation = ++credentialRevealGeneration.current
+    try {
+      if (typeof window.kunGui?.revealModelProviderCredential !== 'function') {
+        throw new Error('Provider credential reveal is unavailable')
+      }
+      const result = await window.kunGui.revealModelProviderCredential(providerId)
+      if (
+        !mounted.current ||
+        activeProviderIdRef.current !== providerId ||
+        credentialRevealGeneration.current !== generation
+      ) return
+      setRevealedCredential({ providerId, credential: result.credential })
+      setShowApiKey(true)
+    } catch {
+      if (
+        mounted.current &&
+        activeProviderIdRef.current === providerId &&
+        credentialRevealGeneration.current === generation
+      ) {
+        setCredentialRevealError(
+          zh
+            ? '无法显示已保存的凭据。请重试，或输入新值替换它。'
+            : 'The saved credential could not be shown. Try again, or enter a new value to replace it.'
+        )
+      }
+    } finally {
+      if (
+        mounted.current &&
+        activeProviderIdRef.current === providerId &&
+        credentialRevealGeneration.current === generation
+      ) {
+        setCredentialRevealPendingProviderId('')
+      }
+    }
+  }
+
   const updateModelProviderImage = (id: string, patch: Partial<ModelProviderImageCapabilityV1>): void => {
     const target = displayProviders.find((item) => item.id === id)
     if (!target) return
@@ -3384,7 +3610,10 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
     updateModelProviders(
       [...modelProviders, secretFreeProvider],
       credential
-        ? { providerId: providerDraft.id, model: providerDraft.models[0] ?? kun.model }
+        ? kunProviderSelectionPatch({
+            providerId: providerDraft.id,
+            model: nonEmptyModelId(providerDraft.models[0]) ?? kun.model
+          })
         : undefined
     )
     previousProviderSelectionRef.current = null
@@ -3478,7 +3707,10 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
     updateModelProviders(
       nextProviders,
       nextProvider.apiKey.trim()
-        ? { providerId: nextProvider.id, model: nextProvider.models[0] ?? kun.model }
+        ? kunProviderSelectionPatch({
+            providerId: nextProvider.id,
+            model: nonEmptyModelId(nextProvider.models[0]) ?? kun.model
+          })
         : undefined
     )
   }
@@ -3692,12 +3924,11 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
 
   const runProbe = async (target: ModelProviderProfileV1, mode: 'test' | 'fetch'): Promise<void> => {
     const fingerprint = providerConnectionFingerprint(target)
-    if (
-      isCursorSubscriptionProvider(target) &&
-      (Boolean(target.apiKey.trim()) ||
-        !sharedModelConnectionHasUsableCredential(sharedConnectionFor(target.id)))
-    ) {
-      if (!target.apiKey.trim()) {
+    if (isCursorSubscriptionProvider(target)) {
+      const cursorCredentialReady =
+        Boolean(target.apiKey.trim()) ||
+        sharedModelConnectionHasUsableCredential(sharedConnectionFor(target.id))
+      if (!cursorCredentialReady) {
         setProbeStates((previous) => ({
           ...previous,
           [target.id]: {
@@ -3718,6 +3949,7 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
         if (typeof discover !== 'function') {
           throw new Error(`No bridge registered for '${CURSOR_SUBSCRIPTION_DISCOVERY_CHANNEL}'`)
         }
+        // apiKey may be redacted in the renderer; Main resolves Registry secrets via providerId.
         const discovery = await discover(target.apiKey.trim() || undefined, target.id)
         const accountName = [
           discovery.account.userFirstName,
@@ -4218,6 +4450,11 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
     )
       ? '••••••••••••'
       : t('modelProviderApiKeyPlaceholder')
+  const activeApiKeyValue = showApiKey && revealedCredential?.providerId === activeProvider?.id
+    ? revealedCredential.credential
+    : activeProvider?.apiKey ?? ''
+  const activeCredentialRevealBusy =
+    credentialRevealPendingProviderId === activeProvider?.id
   const activeTokenPlanRegions = activeProvider
     ? tokenPlanPresetForProfile(activeProvider)?.tokenPlan?.regions ?? []
     : []
@@ -4619,16 +4856,21 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
                         {t('modelProviderApiKey')}
                         <SecretInput
                           className="min-h-11 !rounded-lg"
-                          value={activeProvider.apiKey}
-                          onChange={(value) => updateModelProvider(activeProvider.id, { apiKey: value })}
+                          value={activeApiKeyValue}
+                          onChange={updateActiveProviderCredential}
                           visible={showApiKey}
-                          onToggleVisibility={() => setShowApiKey((value: boolean) => !value)}
+                          onToggleVisibility={() => { void toggleActiveProviderCredentialVisibility() }}
+                          toggleBusy={activeCredentialRevealBusy}
                           placeholder={activeApiKeyPlaceholder}
                           autoComplete="off"
                           showLabel={t('showSecret')}
                           hideLabel={t('hideSecret')}
                         />
-                        {!activeProvider.apiKey.trim() && activeCredentialNeedsReplacement ? (
+                        {credentialRevealError ? (
+                          <span className="text-[12px] font-normal text-amber-600 dark:text-amber-300">
+                            {credentialRevealError}
+                          </span>
+                        ) : !activeProvider.apiKey.trim() && activeCredentialNeedsReplacement ? (
                           <span className="text-[12px] font-normal text-amber-600 dark:text-amber-300">
                             {activeSharedConnection?.credentialStatus === 'unreadable'
                               ? zh
@@ -4677,16 +4919,21 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
                         {t('modelProviderApiKey')}
                         <SecretInput
                           className="min-h-11 !rounded-lg"
-                          value={activeProvider.apiKey}
-                          onChange={(value) => updateModelProvider(activeProvider.id, { apiKey: value })}
+                          value={activeApiKeyValue}
+                          onChange={updateActiveProviderCredential}
                           visible={showApiKey}
-                          onToggleVisibility={() => setShowApiKey((value: boolean) => !value)}
+                          onToggleVisibility={() => { void toggleActiveProviderCredentialVisibility() }}
+                          toggleBusy={activeCredentialRevealBusy}
                           placeholder={activeApiKeyPlaceholder}
                           autoComplete="off"
                           showLabel={t('showSecret')}
                           hideLabel={t('hideSecret')}
                         />
-                        {!activeProvider.apiKey.trim() && activeCredentialNeedsReplacement ? (
+                        {credentialRevealError ? (
+                          <span className="text-[12px] font-normal text-amber-600 dark:text-amber-300">
+                            {credentialRevealError}
+                          </span>
+                        ) : !activeProvider.apiKey.trim() && activeCredentialNeedsReplacement ? (
                           <span className="text-[12px] font-normal text-amber-600 dark:text-amber-300">
                             {activeSharedConnection?.credentialStatus === 'unreadable'
                               ? zh

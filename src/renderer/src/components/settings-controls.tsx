@@ -6,7 +6,7 @@ import {
   type ReactElement,
   type ReactNode
 } from 'react'
-import { ChevronDown, Eye, EyeOff, type LucideIcon } from 'lucide-react'
+import { ChevronDown, Eye, EyeOff, Loader2, type LucideIcon } from 'lucide-react'
 
 export type InlineNotice = {
   tone: 'success' | 'error' | 'info'
@@ -21,6 +21,7 @@ export function SecretInput({
   placeholder,
   autoComplete,
   invalid = false,
+  toggleBusy = false,
   showLabel,
   hideLabel,
   className = ''
@@ -32,6 +33,7 @@ export function SecretInput({
   placeholder?: string
   autoComplete?: string
   invalid?: boolean
+  toggleBusy?: boolean
   showLabel: string
   hideLabel: string
   className?: string
@@ -57,9 +59,15 @@ export function SecretInput({
         aria-label={visible ? hideLabel : showLabel}
         title={visible ? hideLabel : showLabel}
         onClick={onToggleVisibility}
-        className="shrink-0 border-l border-ds-border-muted px-3 text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
+        disabled={toggleBusy}
+        aria-busy={toggleBusy}
+        className="shrink-0 border-l border-ds-border-muted px-3 text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-wait disabled:opacity-60"
       >
-        {visible ? <EyeOff className="h-4 w-4" strokeWidth={1.75} /> : <Eye className="h-4 w-4" strokeWidth={1.75} />}
+        {toggleBusy
+          ? <Loader2 className="h-4 w-4 animate-spin" strokeWidth={1.75} />
+          : visible
+            ? <EyeOff className="h-4 w-4" strokeWidth={1.75} />
+            : <Eye className="h-4 w-4" strokeWidth={1.75} />}
       </button>
     </div>
   )

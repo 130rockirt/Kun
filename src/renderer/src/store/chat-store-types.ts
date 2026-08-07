@@ -221,6 +221,11 @@ export type SideConversation = {
   error: string | null
 }
 
+export type TurnTimingMetrics = {
+  avgTtftMs: number | null
+  avgTokensPerSecond: number | null
+}
+
 export type SidePanelState = {
   open: boolean
   activeSideId: string | null
@@ -252,6 +257,8 @@ export type ChatState = {
   threadSearch: string
   showArchivedThreads: boolean
   activeThreadId: string | null
+  /** Thread selected immediately but whose durable snapshot is still loading. */
+  threadLoadingId: string | null
   /** 最近一次在 Code 工作台(chat 路由)选中的会话,供从设置/其他工作区/Connect Phone 返回时恢复。 */
   lastCodeThreadId: string | null
   /** Relationship of the active thread (e.g. `side` for a subagent's own session). */
@@ -296,6 +303,11 @@ export type ChatState = {
    * This is billing/cache telemetry and must not be used as context occupancy.
    */
   lastTurnUsage: { threadId: string; snapshot: ThreadUsageSnapshot } | null
+  /**
+   * Per-turn TTFT/TPS averages for the active thread, keyed by turnId. Bounded
+   * to the turns currently visible in the timeline; cleared on thread switch.
+   */
+  turnTimingMetrics: Map<string, TurnTimingMetrics>
   busy: boolean
   error: string | null
   runtimeErrorDetail: string | null
@@ -444,6 +456,7 @@ export type ChatState = {
   rewindAndResend: (userBlockId: string, newText: string) => Promise<void>
   rollbackWorkspaceToCheckpoint: (checkpointId: string) => Promise<void>
   interrupt: (options?: { discard?: boolean }) => Promise<void>
+  cancelToolCall: (threadId: string, turnId: string, callId: string) => Promise<boolean>
   renameActiveThread: (title: string) => Promise<void>
   renameThread: (threadId: string, title: string) => Promise<void>
   pinThread: (threadId: string, pinned: boolean) => Promise<void>

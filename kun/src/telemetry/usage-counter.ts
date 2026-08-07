@@ -8,18 +8,24 @@ import { emptyUsageSnapshot } from '../contracts/usage.js'
  */
 export class UsageCounter {
   private perThread = new Map<string, UsageSnapshot>()
+  /** Raw per-request timing sums keyed by thread, used to derive averages. */
+  private readonly timing = new Map<string, TimingAgg>()
 
   reset(threadId?: string): void {
     if (threadId === undefined) {
       this.perThread.clear()
+      this.timing.clear()
       return
     }
     this.perThread.delete(threadId)
+    this.timing.delete(threadId)
   }
 
   seed(threadId: string, snapshot: UsageSnapshot): UsageSnapshot {
-    const next = normalizeUsageSnapshot(snapshot)
+    const next = attachTimingAverages(normalizeUsageSnapshot(snapshot), emptyTimingAgg())
     this.perThread.set(threadId, next)
+    // Restored threads have no in-process timing history.
+    this.timing.delete(threadId)
     return next
   }
 
@@ -99,8 +105,10 @@ export class UsageCounter {
       tokenEconomySavingsCny,
       hasError: snapshot.hasError
     }
-    this.perThread.set(threadId, next)
-    return next
+    const threadTiming = this.timing.get(threadId) ?? emptyTimingAgg()
+    this.timing.set(threadId, foldTiming(threadTiming, snapshot))
+    this.perThread.set(threadId, attachTimingAverages(next, this.timing.get(threadId)!))
+    return this.perThread.get(threadId)!
   }
 
   recordTokenEconomySavings(
@@ -132,11 +140,79 @@ export class UsageCounter {
     const totals = [...this.perThread.values()].reduce((acc, snapshot) => {
       return mergeUsage(acc, snapshot)
     }, emptyUsageSnapshot())
-    return totals
+    const timing = aggregateTiming([...this.timing.values()])
+    return attachTimingAverages(totals, timing)
   }
 
   forThread(threadId: string): UsageSnapshot {
     return this.perThread.get(threadId) ?? emptyUsageSnapshot()
+  }
+}
+
+type TimingAgg = {
+  ttftSumMs: number
+  generationSumMs: number
+  completionTokensSum: number
+  ttftCalls: number
+  tpsCalls: number
+}
+
+function emptyTimingAgg(): TimingAgg {
+  return {
+    ttftSumMs: 0,
+    generationSumMs: 0,
+    completionTokensSum: 0,
+    ttftCalls: 0,
+    tpsCalls: 0
+  }
+}
+
+/** Fold one request's timing fields into the thread aggregate. */
+function foldTiming(agg: TimingAgg, snapshot: UsageSnapshot): TimingAgg {
+  const ttft = snapshot.requestTtftMs
+  if (typeof ttft === 'number' && Number.isFinite(ttft) && ttft >= 0) {
+    agg.ttftSumMs += ttft
+    agg.ttftCalls += 1
+  }
+  const generation = snapshot.requestGenerationMs
+  if (
+    typeof generation === 'number' &&
+    Number.isFinite(generation) &&
+    generation >= 0 &&
+    snapshot.completionTokens > 0
+  ) {
+    agg.generationSumMs += generation
+    agg.completionTokensSum += snapshot.completionTokens
+    agg.tpsCalls += 1
+  }
+  return agg
+}
+
+function aggregateTiming(items: readonly TimingAgg[]): TimingAgg {
+  const agg = emptyTimingAgg()
+  for (const item of items) {
+    agg.ttftSumMs += item.ttftSumMs
+    agg.generationSumMs += item.generationSumMs
+    agg.completionTokensSum += item.completionTokensSum
+    agg.ttftCalls += item.ttftCalls
+    agg.tpsCalls += item.tpsCalls
+  }
+  return agg
+}
+
+/**
+ * Attach thread-cumulative averages to a snapshot. TTFT is a simple mean
+ * over timed requests; tokens-per-second is a weighted mean computed from
+ * total generated tokens divided by total generation time.
+ */
+function attachTimingAverages(snapshot: UsageSnapshot, timing: TimingAgg): UsageSnapshot {
+  return {
+    ...snapshot,
+    avgTtftMs: timing.ttftCalls > 0 ? timing.ttftSumMs / timing.ttftCalls : null,
+    avgTokensPerSecond:
+      timing.generationSumMs > 0
+        ? (timing.completionTokensSum / timing.generationSumMs) * 1_000
+        : null
   }
 }
 

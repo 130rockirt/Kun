@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   armBusyWatchdog,
   clearBusyWatchdog,
-  resetBusyRecoveryAttempts
+  resetBusyRecoveryAttempts,
+  stopTurnCompletionPoll,
+  syncTurnCompletionPoll
 } from './chat-store-schedulers'
 import type { ChatState, ChatStoreSet } from './chat-store-types'
 
@@ -136,5 +138,35 @@ describe('busyTimeout minutes interpolation (#131)', () => {
     vi.advanceTimersByTime(10)
     expect(typeof h.getState().error).toBe('string')
     expect(h.getState().error as string).toMatch(/已等待 9 分钟/)
+  })
+})
+
+describe('syncTurnCompletionPoll', () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => {
+    stopTurnCompletionPoll()
+    vi.useRealTimers()
+  })
+
+  it('uses the lightweight status response and clears a completed watch', async () => {
+    const h = makeHarness({
+      runtimeConnection: 'ready',
+      watchTurnCompletion: { thr_background: true }
+    })
+    const loadThreadState = vi.fn(async () => ({ status: 'idle', latestTurnStatus: 'completed' }))
+    const onCompletedThreads = vi.fn(async (done: Array<{ id: string }>) => {
+      h.set({ watchTurnCompletion: {} })
+      expect(done).toEqual([{ id: 'thr_background', latestTurnStatus: 'completed' }])
+    })
+
+    syncTurnCompletionPoll(h.set, h.get, {
+      loadThreadState,
+      threadLooksRunning: (status) => status === 'running',
+      onCompletedThreads
+    })
+    await vi.runAllTimersAsync()
+
+    expect(loadThreadState).toHaveBeenCalledWith(expect.anything(), 'thr_background')
+    expect(onCompletedThreads).toHaveBeenCalledOnce()
   })
 })

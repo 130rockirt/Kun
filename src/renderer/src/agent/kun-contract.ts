@@ -59,6 +59,18 @@ export type CoreThreadJson = CoreThreadSummaryJson & {
   pendingApprovalIds?: string[]
 }
 
+export type CoreThreadRuntimeStateJson = {
+  id: string
+  status: string
+  updatedAt: string
+  latestSeq: number
+  latestTurn: {
+    id: string
+    status: string
+    orchestration: 'direct' | 'graph'
+  } | null
+}
+
 export type CoreAttachmentMetadataJson = {
   id: string
   name: string
@@ -488,6 +500,7 @@ export type CoreTurnItemJson = {
   messageSource?: 'background_shell' | 'background_subagent' | 'graph_runtime'
   toolName?: string
   callId?: string
+  cancelRequestedAt?: string
   toolKind?: 'tool_call' | 'command_execution' | 'file_change'
   arguments?: Record<string, unknown>
   output?: unknown
@@ -608,6 +621,13 @@ export type CoreStartTurnResponseJson = {
   userMessageItemId?: string
 }
 
+export type CoreCancelToolCallResponseJson = {
+  threadId: string
+  turnId: string
+  callId: string
+  status: 'cancellation_requested' | 'already_requested'
+}
+
 export type CoreStartReviewResponseJson = CoreStartTurnResponseJson & {
   reviewItemId?: string
 }
@@ -666,6 +686,18 @@ export type CoreUsageSnapshotJson = {
   costUsd?: number
   costCny?: number
   tokenEconomySavingsTokens?: number
+  /** Time-to-first-token of this single model request (ms). */
+  requestTtftMs?: number
+  /** Generation duration of this single model request (ms). */
+  requestGenerationMs?: number
+  /** Average TTFT across model calls of the current turn. */
+  turnAvgTtftMs?: number | null
+  /** Average tokens-per-second across model calls of the current turn. */
+  turnAvgTokensPerSecond?: number | null
+  /** Thread-cumulative average TTFT across all model calls. */
+  avgTtftMs?: number | null
+  /** Thread-cumulative average tokens-per-second across all model calls. */
+  avgTokensPerSecond?: number | null
 }
 
 export type CoreRuntimeEventJson = {

@@ -174,6 +174,17 @@ export class ThreadService {
     return this.threadStore.get(threadId)
   }
 
+  /**
+   * Read the thread/turn metadata without hydrating the item history when the
+   * backing store supports it. File/hybrid stores use this on detail and
+   * status routes so the session items are loaded exactly once.
+   */
+  async getMetadata(threadId: string): Promise<ThreadRecord | null> {
+    return this.threadStore.getMetadata
+      ? this.threadStore.getMetadata(threadId)
+      : this.threadStore.get(threadId)
+  }
+
   async create(
     request: CreateThreadRequest,
     options: {

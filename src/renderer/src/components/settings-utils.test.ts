@@ -29,6 +29,21 @@ describe('coerceRendererSettings', () => {
 })
 
 describe('diffSettingsPatch', () => {
+  it('preserves the last valid model when the selected provider is cleared', () => {
+    const base = settings({ providerId: 'custom-provider', model: 'custom-model' })
+    const next = mergeSettings(base, {
+      agents: { kun: { providerId: '' } }
+    })
+
+    expect(next.agents.kun).toMatchObject({
+      providerId: '',
+      model: 'custom-model'
+    })
+    const patch = diffSettingsPatch(base, next)
+    expect(patch.agents?.kun).toEqual({ providerId: '' })
+    expect(patch.agents?.kun).not.toHaveProperty('model')
+  })
+
   it('omits an unchanged blank runtime token when another setting changes', () => {
     const base = settings({ runtimeToken: '' })
     const next: AppSettingsV1 = {

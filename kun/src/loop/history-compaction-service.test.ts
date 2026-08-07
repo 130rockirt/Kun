@@ -64,7 +64,6 @@ function modelCompactionService(
     events: createEvents(sessionStore),
     ids: new SequentialIdGenerator(),
     telemetry: {
-      hydratePromptPressureIfCold: async () => undefined,
       consumePromptPressure: () => undefined
     },
     recordGoalUsage: async () => undefined,
@@ -93,7 +92,6 @@ describe('HistoryCompactionService', () => {
       events: createEvents(sessionStore),
       ids: new SequentialIdGenerator(),
       telemetry: {
-        hydratePromptPressureIfCold: async () => undefined,
         consumePromptPressure: () => undefined
       },
       recordGoalUsage: async () => undefined,
@@ -172,7 +170,7 @@ describe('HistoryCompactionService', () => {
     })).toEqual({ providerId: 'EXT-CURRENT', accountId: 'account-current' })
   })
 
-  it('hydrates pressure, atomically writes the visible marker, then projects and reports it', async () => {
+  it('consumes live pressure, atomically writes the visible marker, then projects and reports it', async () => {
     const sessionStore = new InMemorySessionStore()
     for (let index = 0; index < 5; index += 1) {
       await sessionStore.appendItem(threadId, makeUserItem({
@@ -182,16 +180,9 @@ describe('HistoryCompactionService', () => {
         text: `older context ${index} ${'x'.repeat(120)}`
       }))
     }
-    const telemetryCalls: string[] = []
     const telemetry = {
-      hydratePromptPressureIfCold: vi.fn(async () => {
-        telemetryCalls.push('hydrate')
-      }),
-      consumePromptPressure: vi.fn(() => {
-        telemetryCalls.push('consume')
-        return undefined
-      })
-    } as unknown as Pick<LoopTelemetry, 'hydratePromptPressureIfCold' | 'consumePromptPressure'>
+      consumePromptPressure: vi.fn(() => undefined)
+    } as unknown as Pick<LoopTelemetry, 'consumePromptPressure'>
     const effectOrder: string[] = []
     const service = new HistoryCompactionService({
       sessionStore,
@@ -219,7 +210,7 @@ describe('HistoryCompactionService', () => {
       turnId
     })).history
 
-    expect(telemetryCalls).toEqual(['hydrate', 'consume'])
+    expect(telemetry.consumePromptPressure).toHaveBeenCalledWith(threadId, 'test-model')
     expect(history[0]).toMatchObject({ kind: 'compaction', id: 'compaction_1' })
     expect(effectOrder).toEqual([`clear:${threadId}`, `project:${threadId}`])
     const persisted = await sessionStore.loadItems(threadId)
@@ -249,7 +240,6 @@ describe('HistoryCompactionService', () => {
       events: createEvents(sessionStore),
       ids: new SequentialIdGenerator(),
       telemetry: {
-        hydratePromptPressureIfCold: async () => undefined,
         consumePromptPressure: () => undefined
       },
       recordGoalUsage: async () => undefined,
@@ -279,9 +269,8 @@ describe('HistoryCompactionService', () => {
     const sessionStore = new InMemorySessionStore()
     const item = makeUserItem({ id: 'item_only', threadId, turnId, text: 'short' })
     const telemetry = {
-      hydratePromptPressureIfCold: vi.fn(async () => undefined),
       consumePromptPressure: vi.fn(() => undefined)
-    } as unknown as Pick<LoopTelemetry, 'hydratePromptPressureIfCold' | 'consumePromptPressure'>
+    } as unknown as Pick<LoopTelemetry, 'consumePromptPressure'>
     const rewriteThreadItemsFromSession = vi.fn(async () => undefined)
     const service = new HistoryCompactionService({
       sessionStore,
@@ -307,7 +296,6 @@ describe('HistoryCompactionService', () => {
 
     expect(history).toBe(inputItems)
     expect(history).toEqual([item])
-    expect(telemetry.hydratePromptPressureIfCold).toHaveBeenCalledWith(threadId, 'test-model')
     expect(telemetry.consumePromptPressure).toHaveBeenCalledWith(threadId, 'test-model')
     expect(rewriteThreadItemsFromSession).not.toHaveBeenCalled()
     await expect(sessionStore.loadItems(threadId)).resolves.toEqual([])
@@ -332,7 +320,6 @@ describe('HistoryCompactionService', () => {
       events: createEvents(sessionStore),
       ids: new SequentialIdGenerator(),
       telemetry: {
-        hydratePromptPressureIfCold: async () => undefined,
         consumePromptPressure: () => undefined
       },
       recordGoalUsage: async () => undefined,
@@ -386,7 +373,6 @@ describe('HistoryCompactionService', () => {
       events: createEvents(sessionStore),
       ids: new SequentialIdGenerator(),
       telemetry: {
-        hydratePromptPressureIfCold: async () => undefined,
         consumePromptPressure: () => undefined
       },
       recordGoalUsage: async () => undefined,
@@ -497,7 +483,6 @@ describe('HistoryCompactionService', () => {
       events: createEvents(sessionStore),
       ids: new SequentialIdGenerator(),
       telemetry: {
-        hydratePromptPressureIfCold: async () => undefined,
         consumePromptPressure: () => undefined
       },
       recordGoalUsage,

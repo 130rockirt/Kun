@@ -1889,6 +1889,30 @@ describe('FloatingComposer capability controls', () => {
       language: '',
       timeoutMs: 60_000
     })).toBe(false)
+
+    expect(shouldShowVoiceDictation({
+      enabled: true,
+      providerId: 'grok-subscription',
+      protocol: 'xai-stt',
+      baseUrl: 'https://api.x.ai/v1',
+      apiKey: '',
+      model: 'grok-transcribe',
+      localWhisperDownloadSource: 'huggingface',
+      language: '',
+      timeoutMs: 60_000
+    })).toBe(false)
+
+    expect(shouldShowVoiceDictation({
+      enabled: true,
+      providerId: 'grok-subscription',
+      protocol: 'xai-stt',
+      baseUrl: 'https://api.x.ai/v1',
+      apiKey: '',
+      model: 'grok-transcribe',
+      localWhisperDownloadSource: 'huggingface',
+      language: '',
+      timeoutMs: 60_000
+    }, true)).toBe(true)
   })
 
   it('surfaces user-input requests in Chat, Design, and the compact Write composer', () => {

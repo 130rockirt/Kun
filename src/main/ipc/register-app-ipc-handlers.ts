@@ -37,6 +37,7 @@ import type {
   ConversationWorkspaceCreateResult,
   DesktopCommand,
   KunRuntimeSettingsSyncStatusPayload,
+  ModelProviderCredentialRevealResult,
   RuntimeRequestResult,
   SystemNotificationResult,
   TurnCompleteNotificationPayload,
@@ -69,6 +70,7 @@ import {
   notificationPayloadSchema,
   openEditorPathPayloadSchema,
   modelsDevCatalogPayloadSchema,
+  modelProviderCredentialRevealPayloadSchema,
   providerProbePayloadSchema,
   projectDesignMdLintPayloadSchema,
   promptOptimizationPayloadSchema,
@@ -432,11 +434,23 @@ function approvalLogReference(approvalId: string): string {
   return `sha256:${createHash('sha256').update(approvalId).digest('hex').slice(0, 16)}`
 }
 
+function formatZodIssuePath(path: readonly PropertyKey[]): string {
+  return path
+    .map((segment) => typeof segment === 'symbol' ? segment.toString() : String(segment))
+    .join('.')
+}
+
 function parseIpcPayload<T>(channel: string, schema: z.ZodType<T>, payload: unknown): T {
   const parsed = schema.safeParse(payload)
   if (parsed.success) return parsed.data
   const issue = parsed.error.issues[0]
-  throw new Error(`Invalid payload for ${channel}: ${issue?.message ?? 'Bad request.'}`)
+  const message = issue?.message ?? 'Bad request.'
+  const path = issue?.path?.length ? formatZodIssuePath(issue.path) : ''
+  throw new Error(
+    path
+      ? `Invalid payload for ${channel}: ${path}: ${message}`
+      : `Invalid payload for ${channel}: ${message}`
+  )
 }
 
 function withoutRendererProjectConfigGrants(partial: AppSettingsPatch): AppSettingsPatch {
@@ -917,6 +931,27 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
 
   ipcMain.handle('settings:get', async () =>
     withoutRendererPlaintextCredentials(await store.load())
+  )
+  ipcMain.handle(
+    'model-provider:credential:reveal',
+    async (event, payload: unknown): Promise<ModelProviderCredentialRevealResult> => {
+      assertTrustedWorkbenchSender(event, getMainWindow)
+      const { providerId } = parseIpcPayload(
+        'model-provider:credential:reveal',
+        modelProviderCredentialRevealPayloadSchema,
+        payload
+      )
+      const stored = await store.load()
+      if (!stored.provider.providers.some((provider) => provider.id === providerId)) {
+        throw new Error(`Provider profile "${providerId}" is unavailable`)
+      }
+      const projected = await withRegistryCredentials(stored)
+      const credential = projected.provider.providers
+        .find((provider) => provider.id === providerId)
+        ?.apiKey.trim() ?? ''
+      if (!credential) throw new Error('Protected provider credential is unavailable')
+      return { providerId, credential }
+    }
   )
   ipcMain.handle('credentials:reset-unreadable', async (event): Promise<CredentialRecoveryResetResult> => {
     assertTrustedWorkbenchSender(event, getMainWindow)

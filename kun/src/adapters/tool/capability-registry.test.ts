@@ -78,6 +78,13 @@ describe('CapabilityRegistry Graph orchestration policy', () => {
       enabled: true,
       available: true,
       tools: [tool('delegate_task'), tool('list_subagent_profiles', 'read-only')]
+    },
+    {
+      id: 'explore-agent',
+      kind: 'delegation' as const,
+      enabled: true,
+      available: true,
+      tools: [tool('explore_agent', 'read-only')]
     }
   ]
 
@@ -90,8 +97,10 @@ describe('CapabilityRegistry Graph orchestration policy', () => {
       expect(registry.listTools(current).map((spec) => spec.name)).toEqual([
         'read',
         'graph_create_run',
-        'graph_control_run'
+        'graph_control_run',
+        'explore_agent'
       ])
+      expect(registry.resolveTool('explore_agent', current).provider.id).toBe('explore-agent')
       for (const name of [
         'delegate_task',
         'list_subagent_profiles',
@@ -115,7 +124,8 @@ describe('CapabilityRegistry Graph orchestration policy', () => {
       'graph_create_run',
       'graph_control_run',
       'delegate_task',
-      'list_subagent_profiles'
+      'list_subagent_profiles',
+      'explore_agent'
     ])
     expect(registry.resolveTool('delegate_task', direct).provider.kind).toBe('delegation')
     expect(registry.resolveTool('task_graph', direct).provider.id).toBe('builtin')
@@ -137,5 +147,32 @@ describe('CapabilityRegistry Plan mode policy', () => {
     expect(registry.listTools(planContext)[0]).toMatchObject({ sideEffect: 'read-only' })
     expect(() => registry.resolveTool('mcp_test_mutate', planContext))
       .toThrow('tool mcp_test_mutate is not advertised by active tool policy')
+  })
+
+  it('keeps read-only explore_agent visible in plan mode while hiding delegate_task', () => {
+    const registry = new CapabilityRegistry([
+      {
+        id: 'delegation',
+        kind: 'delegation',
+        enabled: true,
+        available: true,
+        tools: [tool('delegate_task'), tool('list_subagent_profiles', 'read-only')]
+      },
+      {
+        id: 'explore-agent',
+        kind: 'delegation',
+        enabled: true,
+        available: true,
+        tools: [tool('explore_agent', 'read-only')]
+      }
+    ])
+    const planContext = context([], 'plan')
+
+    expect(registry.listTools(planContext).map((spec) => spec.name)).toEqual([
+      'list_subagent_profiles',
+      'explore_agent'
+    ])
+    expect(() => registry.resolveTool('delegate_task', planContext))
+      .toThrow('tool delegate_task is not advertised by active tool policy')
   })
 })

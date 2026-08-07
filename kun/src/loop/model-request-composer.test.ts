@@ -15,17 +15,27 @@ const emptyAttachments = {
 } as const
 
 describe('composeModelRequest', () => {
-  it('clamps declared output to the remaining safe context capacity', () => {
+  it('bounds model output capability by the ordinary reservation and remaining capacity', () => {
     expect(effectiveOutputBudgetTokens({
       inputTokens: 14_236,
       contextCapTokens: 111_411,
       declaredMaxOutputTokens: 128_000
-    })).toBe(97_175)
+    })).toBe(32_768)
     expect(effectiveOutputBudgetTokens({
       inputTokens: 14_236,
       contextCapTokens: 111_411,
       declaredMaxOutputTokens: 500_000
-    })).toBe(97_175)
+    })).toBe(32_768)
+    expect(effectiveOutputBudgetTokens({
+      inputTokens: 14_236,
+      contextCapTokens: 111_411,
+      declaredMaxOutputTokens: 8_000
+    })).toBe(8_000)
+    expect(effectiveOutputBudgetTokens({
+      inputTokens: 105_000,
+      contextCapTokens: 111_411,
+      declaredMaxOutputTokens: 128_000
+    })).toBe(6_411)
   })
 
   it('uses a finite fallback when a model has no output metadata', () => {

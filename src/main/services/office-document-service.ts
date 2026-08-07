@@ -84,7 +84,16 @@ export async function readLocalOfficeDocument(
       ))
 
     const validation = await run(['validate', filePath, '--json'])
-    assertOfficeCliSuccess(validation, 'Office document validation failed')
+    let validationWarning: string | undefined
+    if (validation.exitCode !== 0) {
+      if (!isBenignOoxmlSchemaFailure(validation)) {
+        assertOfficeCliSuccess(validation, 'Office document validation failed')
+      }
+      // Vendor extensions (notably WPS etCustomData attrs) fail strict OpenXML
+      // schema checks but still extract cleanly. Keep intake open and surface a
+      // warning instead of forcing a local tool-reference fallback (#1122).
+      validationWarning = summarizeOfficeCliFailure(validation, 'Office document validation warning')
+    }
 
     const semanticArgs = semanticViewArgs(filePath, format)
     const semantic = await run(semanticArgs)
@@ -130,7 +139,8 @@ export async function readLocalOfficeDocument(
       ...(pageCount ? { pageCount } : {}),
       truncated,
       ...(visualPreview ? { visualPreview } : {}),
-      ...(previewUnavailableReason ? { previewUnavailableReason } : {})
+      ...(previewUnavailableReason ? { previewUnavailableReason } : {}),
+      ...(validationWarning ? { validationWarning } : {})
     }
   } catch (error) {
     return { ok: false, code: 'office_document_failed', message: boundedErrorMessage(error) }
@@ -145,8 +155,57 @@ function semanticViewArgs(filePath: string, format: OfficeDocumentFormat): strin
 
 function assertOfficeCliSuccess(result: OfficeCliResult, fallback: string): void {
   if (result.exitCode === 0) return
+  throw new Error(summarizeOfficeCliFailure(result, fallback))
+}
+
+function summarizeOfficeCliFailure(result: OfficeCliResult, fallback: string): string {
   const detail = result.stderr.trim() || result.stdout.trim()
-  throw new Error(detail ? `${fallback}: ${detail}` : fallback)
+  return detail ? `${fallback}: ${detail}` : fallback
+}
+
+/**
+ * Intake-only: strict OpenXML schema rejects common vendor extensions (WPS
+ * etCustomData attributes, undeclared Ignorable attrs). Those documents still
+ * yield usable text via `view`. Reject anything that is not a Schema / undeclared
+ * markup failure so corrupted packages stay blocked.
+ */
+export function isBenignOoxmlSchemaFailure(result: OfficeCliResult): boolean {
+  if (result.exitCode === 0) return false
+  const payload = result.stdout.trim() || result.stderr.trim()
+  if (!payload) return false
+  const errors = extractOfficeValidateErrors(payload)
+  if (!errors || errors.length === 0) {
+    // Fallback when officecli prints a flat message without --json structure.
+    return /not declared|undeclared|schema/i.test(payload) &&
+      /wps\.cn|etCustomData|officeDocument\/2017/i.test(payload)
+  }
+  return errors.every((error) => isBenignOoxmlSchemaError(error))
+}
+
+function extractOfficeValidateErrors(payload: string): Array<Record<string, unknown>> | null {
+  try {
+    const parsed = JSON.parse(payload) as unknown
+    if (!parsed || typeof parsed !== 'object') return null
+    const root = parsed as Record<string, unknown>
+    const data = root.data && typeof root.data === 'object'
+      ? root.data as Record<string, unknown>
+      : root
+    const errors = data.errors
+    if (!Array.isArray(errors)) return null
+    return errors.filter((entry): entry is Record<string, unknown> =>
+      Boolean(entry) && typeof entry === 'object'
+    )
+  } catch {
+    return null
+  }
+}
+
+function isBenignOoxmlSchemaError(error: Record<string, unknown>): boolean {
+  const type = typeof error.type === 'string' ? error.type : ''
+  const description = typeof error.description === 'string' ? error.description : ''
+  const combined = `${type} ${description}`
+  if (!/schema/i.test(type) && !/schema/i.test(description)) return false
+  return /not declared|undeclared|wps\.cn|etCustomData|officeDocument\/2017/i.test(combined)
 }
 
 async function runOfficeCli(

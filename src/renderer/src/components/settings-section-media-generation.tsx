@@ -1,4 +1,4 @@
-import { useState, type ReactElement } from 'react'
+import { useEffect, useState, type ReactElement } from 'react'
 import { AudioLines, Image as ImageIcon, Music2, Video } from 'lucide-react'
 import {
   CUSTOM_MUSIC_GENERATION_PROVIDER_ID,
@@ -11,6 +11,11 @@ import {
   TEXT_TO_SPEECH_PROTOCOLS,
   VIDEO_GENERATION_PROTOCOLS
 } from '@shared/app-settings'
+import {
+  fetchSharedModelConnectionCredentialStates,
+  shouldWarnMissingProviderCredential,
+  type SharedConnectionCredentialState
+} from '../lib/provider-credential-readiness'
 import {
   ModelSelect,
   SecretInput,
@@ -113,6 +118,21 @@ export function MediaGenerationSettingsSection({ ctx }: { ctx: Record<string, an
   const [showMusicApiKey, setShowMusicApiKey] = useState(false)
   const [showVideoApiKey, setShowVideoApiKey] = useState(false)
   const [activeTab, setActiveTab] = useState<MediaGenerationTab>('image')
+  const [connectionCredentials, setConnectionCredentials] = useState<SharedConnectionCredentialState[] | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    void fetchSharedModelConnectionCredentialStates()
+      .then((states) => {
+        if (!cancelled) setConnectionCredentials(states)
+      })
+      .catch(() => {
+        if (!cancelled) setConnectionCredentials([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const updateTextToSpeech = (patch: Record<string, unknown>): void => {
     updateKun({
@@ -230,6 +250,7 @@ export function MediaGenerationSettingsSection({ ctx }: { ctx: Record<string, an
               missingKeyKey: 'textToSpeechProviderMissingKey',
               setting: textToSpeech,
               defaultProtocol: DEFAULT_TEXT_TO_SPEECH_PROTOCOL,
+              connectionCredentials,
               update: updateTextToSpeech
             })}
             {selectedTts.usingCustom ? (
@@ -319,6 +340,7 @@ export function MediaGenerationSettingsSection({ ctx }: { ctx: Record<string, an
               missingKeyKey: 'musicGenerationProviderMissingKey',
               setting: musicGeneration,
               defaultProtocol: DEFAULT_MUSIC_GENERATION_PROTOCOL,
+              connectionCredentials,
               update: updateMusicGeneration
             })}
             {selectedMusic.usingCustom ? (
@@ -396,6 +418,7 @@ export function MediaGenerationSettingsSection({ ctx }: { ctx: Record<string, an
               missingKeyKey: 'videoGenerationProviderMissingKey',
               setting: videoGeneration,
               defaultProtocol: DEFAULT_VIDEO_GENERATION_PROTOCOL,
+              connectionCredentials,
               update: updateVideoGeneration
             })}
             {selectedVideo.usingCustom ? (
@@ -535,8 +558,14 @@ function renderProviderRow(input: {
   missingKeyKey: string
   setting: { baseUrl: string; apiKey: string; protocol: string; model: string }
   defaultProtocol: string
+  connectionCredentials: SharedConnectionCredentialState[] | null
   update: (patch: Record<string, unknown>) => void
 }): ReactElement {
+  const warnMissingKey = shouldWarnMissingProviderCredential({
+    usingCustomProvider: input.selected.usingCustom,
+    provider: input.selected.provider,
+    connectionCredentials: input.connectionCredentials
+  })
   return (
     <SettingRow
       title={input.title}
@@ -568,7 +597,7 @@ function renderProviderRow(input: {
             ))}
             <option value={input.customProviderId}>{input.customLabel}</option>
           </select>
-          {!input.selected.usingCustom && !input.selected.provider?.apiKey?.trim() ? (
+          {warnMissingKey ? (
             <p className="mt-2 text-[12px] text-amber-700 dark:text-amber-300">
               {input.t(input.missingKeyKey, {
                 provider: input.selected.provider?.name ?? input.selected.providerId

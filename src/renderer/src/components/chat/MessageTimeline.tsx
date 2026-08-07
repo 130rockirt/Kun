@@ -1,8 +1,9 @@
 import type { ReactElement, RefObject } from 'react'
-import { memo, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ChevronDown, CircleAlert, GitCommitHorizontal, Hash } from 'lucide-react'
-import type { ChatBlock, RuntimeConnectionStatus } from '../../agent/types'
+import type { ChatBlock, RuntimeChildActivity, RuntimeConnectionStatus, ToolBlock } from '../../agent/types'
+import { formatChildActivityLabel } from './explore-peek-summary'
 import { useChatStore } from '../../store/chat-store'
 import { threadHasPendingRuntimeWork } from '../../store/chat-store-runtime-helpers'
 import { useTimelineStores } from './use-timeline-stores'
@@ -428,6 +429,14 @@ export function MessageTimeline({
   onExtensionCommand
 }: Props): ReactElement {
   const { t } = useTranslation('common')
+  const threadLoadingId = useChatStore((state) => state.threadLoadingId)
+  const cancelToolCall = useChatStore((state) => state.cancelToolCall)
+  const handleCancelToolCall = useCallback(async (block: ToolBlock): Promise<boolean> => {
+    if (!activeThreadId || !block.turnId) return false
+    const callId = typeof block.meta?.callId === 'string' ? block.meta.callId : ''
+    if (!callId) return false
+    return cancelToolCall(activeThreadId, block.turnId, callId)
+  }, [activeThreadId, cancelToolCall])
   const {
     route,
     workspaceRoot,
@@ -727,7 +736,17 @@ export function MessageTimeline({
       <div className={`ds-message-timeline-content ds-chat-column-inset ds-chat-content-max-width mx-auto flex w-full min-w-0 flex-col gap-8 pt-8 ${
         timelineBottomPaddingClass()
       }`}>
-        {!hasContent || !activeThreadId ? (
+        {activeThreadId && threadLoadingId === activeThreadId ? (
+          <div
+            data-testid="thread-hydration-skeleton"
+            aria-busy="true"
+            className="flex flex-col gap-4 py-4"
+          >
+            <div className="h-5 w-32 animate-pulse rounded bg-ds-border/60" />
+            <div className="h-20 w-4/5 animate-pulse rounded-2xl bg-ds-border/40" />
+            <div className="ml-auto h-14 w-3/5 animate-pulse rounded-2xl bg-ds-border/30" />
+          </div>
+        ) : !hasContent || !activeThreadId ? (
           <MessageTimelineEmptyHero
             route={heroRoute}
             ready={runtimeConnection === 'ready'}
@@ -847,6 +866,7 @@ export function MessageTimeline({
                 onReviewChanges={onReviewChanges}
                 reviewChangesDisabled={reviewChangesDisabled}
                 onOpenChildThread={onOpenChildThread}
+                onCancelToolCall={activeThreadId ? handleCancelToolCall : undefined}
                 onComponentPrototypePrompt={onComponentPrototypePrompt}
                 filePreviewWorkspaceRoot={filePreviewWorkspaceRoot}
                 viewportRef={containerRef}
@@ -910,6 +930,7 @@ export function MessageTimeline({
             filePreviewWorkspaceRoot={filePreviewWorkspaceRoot}
             viewportRef={containerRef}
             onOpenChildThread={onOpenChildThread}
+            onCancelToolCall={undefined}
             onComponentPrototypePrompt={onComponentPrototypePrompt}
             compactCards={compactCards}
             durationMs={
@@ -965,6 +986,7 @@ export type ConversationTurnProps = {
   onReviewChanges?: () => void
   reviewChangesDisabled?: boolean
   onOpenChildThread?: OpenChildThreadHandler
+  onCancelToolCall?: (block: ToolBlock) => Promise<boolean>
   onComponentPrototypePrompt?: (prompt: string) => void
   filePreviewWorkspaceRoot: string
   viewportRef: RefObject<HTMLDivElement | null>
@@ -989,6 +1011,7 @@ export function ConversationTurn({
   onReviewChanges,
   reviewChangesDisabled = false,
   onOpenChildThread,
+  onCancelToolCall,
   onComponentPrototypePrompt,
   filePreviewWorkspaceRoot,
   viewportRef,
@@ -1086,14 +1109,33 @@ export function ConversationTurn({
     workProcessBlocks.length > 0 ||
     (runtimeErrorBlocks.length > 0 && typeof durationMs === 'number')
   const showLiveProgress = isProcessing
-  const showLiveThinking = Boolean(liveProcessText.trim())
   const liveToolBlock = useMemo(
     () => [...workProcessBlocks].reverse().find(
+      (block): block is Extract<ChatBlock, { kind: 'tool' }> =>
+        block.kind === 'tool' && block.status === 'running'
+    ) ?? [...workProcessBlocks].reverse().find(
       (block): block is Extract<ChatBlock, { kind: 'tool' }> =>
         block.kind === 'tool'
     ),
     [workProcessBlocks]
   )
+  const liveChildActivityLabel = useMemo(() => {
+    if (!liveToolBlock) return undefined
+    const child = liveToolBlock.meta?.child
+    if (!child || typeof child !== 'object' || Array.isArray(child)) return undefined
+    const activity = (child as {
+      activity?: { phase?: RuntimeChildActivity['phase']; label?: string; toolName?: string; startedAt?: string; updatedAt?: string }
+    }).activity
+    if (!activity?.label?.trim()) return undefined
+    return formatChildActivityLabel({
+      phase: activity.phase ?? 'tool',
+      label: activity.label.trim(),
+      ...(activity.toolName?.trim() ? { toolName: activity.toolName.trim() } : {}),
+      startedAt: activity.startedAt ?? '',
+      updatedAt: activity.updatedAt ?? ''
+    })
+  }, [liveToolBlock])
+  const showLiveThinking = Boolean(liveProcessText.trim()) && !liveChildActivityLabel && !liveToolBlock
   const forkFromTurn = async (): Promise<void> => {
     if (!allowMainThreadActions || !forkTurnId || forking) return
     setForking(true)
@@ -1144,6 +1186,7 @@ export function ConversationTurn({
                   workspaceRoot={filePreviewWorkspaceRoot}
                   viewportRef={viewportRef}
                   onOpenChildThread={onOpenChildThread}
+                  onCancelToolCall={onCancelToolCall}
                   allowThreadActions={allowMainThreadActions}
                 />
               ))}
@@ -1228,7 +1271,11 @@ export function ConversationTurn({
       ) : null}
 
       {showLiveProgress ? (
-        <LiveTurnProgressRow tool={liveToolBlock} thinking={showLiveThinking} />
+        <LiveTurnProgressRow
+          tool={liveToolBlock}
+          thinking={showLiveThinking}
+          activityLabel={liveChildActivityLabel}
+        />
       ) : null}
     </div>
   )
@@ -1236,10 +1283,12 @@ export function ConversationTurn({
 
 function LiveTurnProgressRow({
   tool,
-  thinking
+  thinking,
+  activityLabel
 }: {
   tool?: Extract<ChatBlock, { kind: 'tool' }>
   thinking: boolean
+  activityLabel?: string
 }): ReactElement {
   const { t, i18n } = useTranslation('common')
   const swimMode = useWorkLogoSwimMode(true)
@@ -1256,13 +1305,15 @@ function LiveTurnProgressRow({
     swimLabelKey as UiPluginLabelKey,
     i18n.language ?? 'zh'
   )
-  const label = thinking
-    ? t('thinkingNow')
-    : tool
-      ? t('workingToolAction', { action: summarizeToolBlock(tool, t) })
-      : ikunModeOn
-        ? t(IKUN_WORK_LOGO_VARIANT_LABEL_KEYS[ikunVariant])
-        : pluginLabel ?? t(swimLabelKey)
+  const label = activityLabel
+    ? t('workingToolAction', { action: activityLabel })
+    : thinking
+      ? t('thinkingNow')
+      : tool
+        ? t('workingToolAction', { action: summarizeToolBlock(tool, t) })
+        : ikunModeOn
+          ? t(IKUN_WORK_LOGO_VARIANT_LABEL_KEYS[ikunVariant])
+          : pluginLabel ?? t(swimLabelKey)
 
   return (
     <LiveTurnActivityRow
@@ -1308,6 +1359,7 @@ const MemoMessageTurn = memo(ConversationTurn, (prev, next) => (
   prev.onReviewChanges === next.onReviewChanges &&
   prev.reviewChangesDisabled === next.reviewChangesDisabled &&
   prev.onOpenChildThread === next.onOpenChildThread &&
+  prev.onCancelToolCall === next.onCancelToolCall &&
   prev.onComponentPrototypePrompt === next.onComponentPrototypePrompt &&
   prev.filePreviewWorkspaceRoot === next.filePreviewWorkspaceRoot &&
   prev.compactCards === next.compactCards &&

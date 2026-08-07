@@ -361,7 +361,12 @@ export class ModelRoundEngine {
                 input.request.model,
                 intent.usage.promptTokens
               )
-              const usage = this.deps.usage.record(input.threadId, intent.usage, input.cacheSignature)
+              const usage = this.deps.usage.record(
+                input.threadId,
+                intent.usage,
+                input.cacheSignature,
+                input.turnId
+              )
               await this.deps.recordGoalUsage(input.threadId, intent.usage.totalTokens)
               await this.deps.events.record({
                 kind: 'usage',

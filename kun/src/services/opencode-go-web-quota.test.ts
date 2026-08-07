@@ -28,6 +28,7 @@ describe('filterOpenCodeGoCookieHeader', () => {
       'auth=a; __Host-auth=b; session=ignored; theme=dark'
     )).toBe('auth=a; __Host-auth=b')
     expect(filterOpenCodeGoCookieHeader('AUTH=x')).toBe('AUTH=x')
+    expect(filterOpenCodeGoCookieHeader('Cookie: auth=manual; session=x')).toBe('auth=manual')
     expect(filterOpenCodeGoCookieHeader('session=only')).toBeUndefined()
     expect(filterOpenCodeGoCookieHeader(undefined)).toBeUndefined()
     expect(filterOpenCodeGoCookieHeader('')).toBeUndefined()

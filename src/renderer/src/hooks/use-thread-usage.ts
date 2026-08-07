@@ -243,3 +243,15 @@ export function useThreadUsage(
 ): ThreadUsageSummary | null {
   return useThreadUsageState(threadId, enabled, refreshKey).usage
 }
+
+/** Format a TTFT millisecond value as a compact seconds label (`1.2s`). */
+export function formatTtftSeconds(value: number | null): string | null {
+  if (value == null || !Number.isFinite(value) || value < 0) return null
+  return `${(value / 1_000).toFixed(1)}s`
+}
+
+/** Format tokens-per-second with one decimal (`38.5`). */
+export function formatTps(value: number | null): string | null {
+  if (value == null || !Number.isFinite(value) || value < 0) return null
+  return value.toFixed(1)
+}

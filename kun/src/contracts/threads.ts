@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { TurnSchema } from './turns.js'
+import { TurnSchema, TurnStatus } from './turns.js'
 import {
   ApprovalPolicySchema,
   ApprovalReviewerSchema,
@@ -11,6 +11,24 @@ import {
 
 export const ThreadStatus = z.enum(['idle', 'running', 'archived', 'deleted'])
 export type ThreadStatus = z.infer<typeof ThreadStatus>
+
+/**
+ * Small runtime-facing projection for background status checks.  Unlike the
+ * full thread document this deliberately excludes turn items/history, making
+ * it safe to poll while another conversation is selected.
+ */
+export const ThreadRuntimeStateSchema = z.object({
+  id: z.string().min(1),
+  status: ThreadStatus,
+  updatedAt: z.string(),
+  latestSeq: z.number().int().nonnegative(),
+  latestTurn: z.object({
+    id: z.string().min(1),
+    status: TurnStatus,
+    orchestration: z.enum(['direct', 'graph'])
+  }).nullable()
+})
+export type ThreadRuntimeState = z.infer<typeof ThreadRuntimeStateSchema>
 
 /**
  * The generic thread PATCH endpoint only owns the archival visibility

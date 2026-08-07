@@ -167,16 +167,15 @@ describe('Cursor SDK runtime factory', () => {
 
     const planning = await loadKunTurnContext(input)
     expect(planning.graphPhase).toBe('planning')
+    // Overlapping Cursor built-ins (read/write) are not bridged as custom tools.
     expect(planning.tools.map((tool) => tool.name).sort()).toEqual([
-      'graph_define_plan',
-      'read'
+      'graph_define_plan'
     ])
     expect(planning.instructionBlocks.join('\n')).toContain(
       'Graph Mode: source Lead operating contract'
     )
     expect(Object.keys(planning.customTools).sort()).toEqual([
-      'graph_define_plan',
-      'read'
+      'graph_define_plan'
     ])
     expect(planning.graphPlanWasCommitted?.()).toBe(false)
     expect(planning.graphPlanCanRetry?.()).toBe(true)
@@ -195,8 +194,7 @@ describe('Cursor SDK runtime factory', () => {
     const supervising = await loadKunTurnContext(input)
     expect(supervising.graphPhase).toBe('supervising')
     expect(supervising.tools.map((tool) => tool.name).sort()).toEqual([
-      'graph_review_node',
-      'read'
+      'graph_review_node'
     ])
   })
 
@@ -439,7 +437,8 @@ describe('Cursor SDK runtime factory', () => {
     expect(String(sentMessages[0])).toContain('Kun canonical system prompt')
     expect(String(sentMessages[0])).toContain('Thread persona')
     expect(String(sentMessages[0])).toContain('Workspace AGENTS.md instruction')
-    expect(String(sentMessages[0])).toContain('Kun-managed tools are available')
+    expect(String(sentMessages[0])).toContain('Prefer Cursor built-in tools')
+    expect(String(sentMessages[0])).toContain('Kun-managed capabilities are available')
     expect(updatedMetadata).toContainEqual(expect.objectContaining({
       instructionInjectionBytes: 31
     }))

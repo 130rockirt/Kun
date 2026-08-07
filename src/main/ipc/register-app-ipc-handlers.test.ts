@@ -666,6 +666,18 @@ describe('registerAppIpcHandlers', () => {
     expect(applySettingsPatch).not.toHaveBeenCalled()
   })
 
+  it('includes the Zod path when settings:set rejects an empty primary model', async () => {
+    const applySettingsPatch = vi.fn(async () => settings())
+
+    registerAppIpcHandlers(registerOptions({ applySettingsPatch }))
+
+    const handler = handlers.get('settings:set')
+    await expect(
+      handler?.({}, { agents: { kun: { model: '' } } })
+    ).rejects.toThrow(/Invalid payload for settings:set: agents\.kun\.model: Too small/)
+    expect(applySettingsPatch).not.toHaveBeenCalled()
+  })
+
   it('redacts plaintext model credentials from settings:get without mutating the Main snapshot', async () => {
     const current = settingsWithPlaintextModelCredentials()
     const original = JSON.stringify(current)
@@ -694,6 +706,58 @@ describe('registerAppIpcHandlers', () => {
     expect(applySettingsPatch).toHaveBeenCalledWith({ theme: 'dark' })
     expect(saveSettingsPatch).toHaveBeenCalledWith({ locale: 'zh' })
     expect(JSON.stringify(persisted)).toBe(original)
+  })
+
+  it('reveals only the requested provider credential to the trusted workbench', async () => {
+    const projected = settingsWithPlaintextModelCredentials()
+    const providerId = projected.provider.providers[0]!.id
+    const stored: AppSettingsV1 = {
+      ...projected,
+      provider: {
+        ...projected.provider,
+        apiKey: '',
+        providers: projected.provider.providers.map((provider) => ({
+          ...provider,
+          apiKey: ''
+        }))
+      }
+    }
+    const mainFrame = { processId: 10, routingId: 20 }
+    const contents = { id: 7, mainFrame }
+    const mainWindow = { isDestroyed: () => false, webContents: contents }
+    const trustedEvent = { sender: contents, senderFrame: mainFrame }
+    const withRegistryCredentials = vi.fn(async () => projected)
+    registerAppIpcHandlers(registerOptions({
+      store: { load: vi.fn(async () => stored) } as never,
+      getMainWindow: () => mainWindow as never,
+      withRegistryCredentials
+    }))
+
+    await expect(handlers.get('model-provider:credential:reveal')?.(
+      trustedEvent,
+      { providerId }
+    )).resolves.toEqual({ providerId, credential: 'provider-secret-0' })
+    expect(withRegistryCredentials).toHaveBeenCalledOnce()
+  })
+
+  it('rejects untrusted provider credential reveal before loading protected settings', async () => {
+    const mainFrame = { processId: 10, routingId: 20 }
+    const contents = { id: 7, mainFrame }
+    const mainWindow = { isDestroyed: () => false, webContents: contents }
+    const storeLoad = vi.fn(async () => settings())
+    const withRegistryCredentials = vi.fn(async (value: AppSettingsV1) => value)
+    registerAppIpcHandlers(registerOptions({
+      store: { load: storeLoad } as never,
+      getMainWindow: () => mainWindow as never,
+      withRegistryCredentials
+    }))
+
+    await expect(handlers.get('model-provider:credential:reveal')?.(
+      { sender: { id: 99 }, senderFrame: { processId: 90, routingId: 91 } },
+      { providerId: 'deepseek' }
+    )).rejects.toThrow(/trusted workbench frame/)
+    expect(storeLoad).not.toHaveBeenCalled()
+    expect(withRegistryCredentials).not.toHaveBeenCalled()
   })
 
   it('requires trusted native confirmation before resetting unreadable credentials', async () => {

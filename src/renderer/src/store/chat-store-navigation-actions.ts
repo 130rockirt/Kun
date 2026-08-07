@@ -43,6 +43,7 @@ import { resolveProjectWorkspacePath } from '../lib/worktree-project-path'
 import { readThreadWorktreeRegistry } from '../lib/thread-worktree-registry'
 import { buildClawRuntimePrompt } from '@shared/app-settings'
 import type { ChatState, ChatStoreGet, ChatStoreSet } from './chat-store-types'
+import { invalidateThreadSnapshot } from './thread-snapshot-cache'
 import {
   activeClawChannel,
   forgetCodeWorkspaceRoot,
@@ -512,6 +513,7 @@ export function createNavigationActions(
         let cleanupError: unknown = null
         try {
           await provider.deleteThread(thread.id)
+          invalidateThreadSnapshot(thread.id)
           saveDesignThreadRegistry(forgetDesignThread(thread.id, readDesignThreadRegistry()))
         } catch (error) {
           cleanupError = error
@@ -902,6 +904,7 @@ export function createNavigationActions(
     try {
       for (const th of workspaceThreads) {
         await p.deleteThread(th.id)
+        invalidateThreadSnapshot(th.id)
       }
       const removeIds = new Set(workspaceThreads.map((th) => th.id))
       const codeWorkspaceRoots = forgetCodeWorkspaceRoot(get().codeWorkspaceRoots, normalizedPath)

@@ -10,6 +10,9 @@ if ((flavor !== 'production' && flavor !== 'development') || !command) {
 const executable = process.platform === 'win32' && !/\.(?:cmd|exe)$/iu.test(command)
   ? `${command}.cmd`
   : command
+// On Windows, .cmd batch scripts cannot be launched directly via CreateProcess;
+// they must go through cmd.exe, otherwise spawnSync fails with EINVAL.
+const needsCmdShell = process.platform === 'win32' && /\.cmd$/iu.test(executable)
 let electronCliArgs = []
 try {
   const configured = JSON.parse(process.env.ELECTRON_CLI_ARGS || '[]')
@@ -34,7 +37,8 @@ const result = spawnSync(executable, args, {
       : {}),
     ELECTRON_CLI_ARGS: JSON.stringify(electronCliArgs)
   },
-  stdio: 'inherit'
+  stdio: 'inherit',
+  ...(needsCmdShell ? { shell: true } : {})
 })
 
 if (result.error) {

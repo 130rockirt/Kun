@@ -35,6 +35,7 @@ import {
   threadSnapshotLooksRunning,
   upsertUserBlock
 } from './chat-store-runtime-helpers'
+import { invalidateThreadSnapshot } from './thread-snapshot-cache'
 import {
   isWriteAssistantThread,
   type WriteThreadRegistry
@@ -689,11 +690,11 @@ export function syncTurnCompletionPoll(
   syncTurnCompletionPollImpl(set, get, {
     loadThreadState: async (state, threadId) => {
       const provider = getProvider()
-      return provider.getThreadDetail(threadId)
+      return provider.getThreadState(threadId)
     },
-    threadLooksRunning: threadSnapshotLooksRunning,
-    onCompletedThreads: async (doneIds, state, setState, getState) => {
-      for (const id of doneIds) {
+    threadLooksRunning: (status) => threadSnapshotLooksRunning([], status),
+    onCompletedThreads: async (done, state, setState, getState) => {
+      for (const { id } of done) {
         notifyTurnComplete(
           id,
           state,
@@ -705,13 +706,41 @@ export function syncTurnCompletionPoll(
       setState((snapshot) => {
         const watchTurnCompletion = { ...snapshot.watchTurnCompletion }
         const unreadThreadIds = { ...snapshot.unreadThreadIds }
-        for (const id of doneIds) {
+        for (const { id } of done) {
           delete watchTurnCompletion[id]
           unreadThreadIds[id] = true
         }
+        const completedById = new Map(done.map((item) => [item.id, item.latestTurnStatus]))
+        return {
+          watchTurnCompletion,
+          unreadThreadIds,
+          threads: snapshot.threads.map((thread) => {
+            const latestTurnStatus = completedById.get(thread.id)
+            if (!completedById.has(thread.id)) return thread
+            return {
+              ...thread,
+              status: thread.archived ? thread.status : 'idle',
+              ...(latestTurnStatus ? { latestTurnStatus } : {})
+            }
+          })
+        }
+      })
+      for (const { id } of done) invalidateThreadSnapshot(id)
+      void getState().refreshThreads()
+    },
+    isMissingThreadError: (error) => getRuntimeErrorCode(error) === 'not_found',
+    onMissingThreads: async (ids, _state, setState) => {
+      for (const id of ids) clearWatchedCompletionNotification(id)
+      setState((snapshot) => {
+        const watchTurnCompletion = { ...snapshot.watchTurnCompletion }
+        const unreadThreadIds = { ...snapshot.unreadThreadIds }
+        for (const id of ids) {
+          delete watchTurnCompletion[id]
+          delete unreadThreadIds[id]
+        }
         return { watchTurnCompletion, unreadThreadIds }
       })
-      void getState().refreshThreads()
+      for (const id of ids) invalidateThreadSnapshot(id)
     }
   })
 }
@@ -1010,7 +1039,7 @@ export function buildThreadEventSink(
       if (!isCurrentStream()) return
       set((state) => reduce(state, { type: 'thread_metadata_changed', payload: event }))
     },
-    onTurnComplete: () => {
+    onTurnComplete: (status = 'completed') => {
       if (!isCurrentStream()) return
       // Reconnect/replay can deliver the same terminal event after the first
       // projection already cleared the active turn. Treat it as a no-op so
@@ -1035,7 +1064,9 @@ export function buildThreadEventSink(
               completedState.liveAssistant
             )
           : ''
-      set((state) => reduce(state, { type: 'turn_completed' }))
+      set((state) => reduce(state, {
+        type: status === 'aborted' ? 'turn_aborted' : 'turn_completed'
+      }))
       if (completedThreadId) clearWatchedCompletionNotification(completedThreadId)
       runEffects(completionProjectionEffects({
         state: completedState,

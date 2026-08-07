@@ -4,6 +4,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ToolBlock } from '../../agent/types'
 import { parseDelegateDetail, SubagentCallCard, SubagentGroup } from './SubagentCallCard'
 
+const selectThread = vi.fn(async () => undefined)
+
+vi.mock('../../store/chat-store', () => ({
+  useChatStore: (selector: (state: { selectThread: typeof selectThread }) => unknown) =>
+    selector({ selectThread })
+}))
+
 vi.mock('react-i18next', () => {
   const labels: Record<string, string> = {
     subagentAgentLabel: 'Agent',
@@ -16,13 +23,31 @@ vi.mock('react-i18next', () => {
     subagentStatusFailed: 'Failed',
     subagentStatusAwaiting: 'Awaiting approval',
     subagentOpenSession: 'Open sub-session',
-    subagentGeneratedBadge: 'Generated'
+    subagentOpenSessionShort: 'Open',
+    subagentGeneratedBadge: 'Generated',
+    exploreKindBadge: 'Explore',
+    exploreTaskDefaultTitle: 'Explore task',
+    exploreViewProcess: 'View explore process',
+    exploreViewProcessShort: 'Open',
+    exploreViewProcessSteps: 'View explore process · {{count}} steps',
+    exploreExpandConclusion: 'Show conclusion',
+    explorePeekPreview: 'Preview',
+    subagentSwarmTitle: '{{count}} subagents',
+    subagentSwarmRunning: '{{count}} running',
+    subagentSwarmQueued: '{{count}} queued',
+    subagentSwarmDone: '{{count}} done',
+    'subagentsPanel.role.explore.name': 'Repository Explorer',
+    'subagentsPanel.role.general.name': 'General Agent'
   }
   return {
     initReactI18next: { type: '3rdParty', init: () => undefined },
     useTranslation: () => ({
-      t: (key: string, fallback?: string | { defaultValue?: string }) =>
-        labels[key] ?? (typeof fallback === 'string' ? fallback : fallback?.defaultValue) ?? key
+      t: (key: string, fallback?: string | { defaultValue?: string; count?: number }) => {
+        if (typeof fallback === 'object' && fallback && 'count' in fallback && key === 'exploreViewProcessSteps') {
+          return `View explore process · ${fallback.count} steps`
+        }
+        return labels[key] ?? (typeof fallback === 'string' ? fallback : fallback?.defaultValue) ?? key
+      }
     })
   }
 })
@@ -52,6 +77,22 @@ describe('parseDelegateDetail', () => {
     }))).toMatchObject({
       generated: true,
       generatedAgentName: 'Browser QA Specialist'
+    })
+  })
+
+  it('reads explore_agent title and query from the tool payload', () => {
+    expect(parseDelegateDetail(JSON.stringify({
+      childId: 'child_explore',
+      status: 'running',
+      title: 'Voice transcription flow',
+      query: 'Find how speech transcription is wired',
+      profile: 'explore'
+    }))).toMatchObject({
+      childId: 'child_explore',
+      status: 'running',
+      title: 'Voice transcription flow',
+      query: 'Find how speech transcription is wired',
+      profile: 'explore'
     })
   })
 })
@@ -109,7 +150,7 @@ describe('SubagentCallCard route metadata', () => {
     expect(instanceText(metadata)).toContain('IPC Investigator (generated:ipc-investigator:12345678)')
   })
 
-  it('labels missing legacy identity and model instead of inferring current settings', async () => {
+  it('labels missing legacy identity and omits an empty model instead of showing Not recorded', async () => {
     await act(async () => {
       renderer = create(createElement(SubagentCallCard, {
         block: childBlock(undefined, { summary: 'Legacy result.' })
@@ -118,8 +159,9 @@ describe('SubagentCallCard route metadata', () => {
 
     const metadata = renderer!.root.findByProps({ 'data-testid': 'subagent-route-metadata' })
     expect(metadata.props['data-agent-id']).toBe('')
-    expect(metadata.props['data-model']).toBe('Not recorded')
-    expect(instanceText(metadata).match(/Not recorded/g)).toHaveLength(2)
+    expect(metadata.props['data-model']).toBe('')
+    expect(instanceText(metadata)).toContain('Not recorded')
+    expect(instanceText(metadata)).not.toContain('Model')
   })
 
   it('shows independently comparable route metadata for every grouped child row', async () => {
@@ -150,6 +192,195 @@ describe('SubagentCallCard route metadata', () => {
     expect(rows).toHaveLength(2)
     expect(rows.map((row) => row.props['data-agent-id'])).toEqual(['general', 'explore'])
     expect(rows.map((row) => row.props['data-model'])).toEqual(['gpt-5.6-sol', 'gpt-5.6-terra'])
+  })
+
+  it('renders an all-explore cluster as independent full cards without a subagent swarm header', async () => {
+    const onOpenChildThread = vi.fn()
+    await act(async () => {
+      renderer = create(createElement(SubagentGroup, {
+        onOpenChildThread,
+        blocks: [
+          exploreChildBlock({
+            id: 'tool_explore_a',
+            childId: 'child_a',
+            childSeq: 1,
+            title: 'Packaging config',
+            summary: 'Checked packaging scripts.'
+          }),
+          exploreChildBlock({
+            id: 'tool_explore_b',
+            childId: 'child_b',
+            childSeq: 2,
+            title: 'Release workflow',
+            summary: 'Checked release.yml.'
+          })
+        ]
+      }))
+    })
+
+    const text = instanceText(renderer!.root)
+    expect(renderer!.root.findByProps({ 'data-testid': 'explore-independent-stack' })).toBeTruthy()
+    expect(renderer!.root.findAllByProps({ 'data-testid': 'subagent-call-card' })).toHaveLength(2)
+    expect(text).toContain('Packaging config')
+    expect(text).toContain('Release workflow')
+    expect(text).not.toContain('subagents')
+    expect(text).not.toContain('{{count}} subagents')
+
+    const openButtons = renderer!.root.findAllByProps({ 'data-testid': 'explore-open-process-button' })
+    expect(openButtons.length).toBeGreaterThanOrEqual(1)
+    await act(async () => {
+      openButtons[0].props.onClick({ stopPropagation() {} })
+    })
+    expect(onOpenChildThread).toHaveBeenCalledWith('child_a')
+  })
+
+  it('prefers explore title and live activity on a running explore_agent card', async () => {
+    await act(async () => {
+      renderer = create(createElement(SubagentCallCard, {
+        block: {
+          kind: 'tool',
+          id: 'tool_explore_live',
+          createdAt: '2026-08-07T00:00:00.000Z',
+          summary: 'explore_agent',
+          status: 'running',
+          toolKind: 'tool_call',
+          detail: JSON.stringify({
+            childId: 'child_voice',
+            status: 'running',
+            title: 'Voice transcription flow',
+            query: 'Trace speech transcription',
+            profile: 'explore'
+          }),
+          meta: {
+            toolName: 'explore_agent',
+            child: {
+              parentThreadId: 'thread_parent',
+              parentTurnId: 'turn_parent',
+              childId: 'child_voice',
+              childLabel: 'Voice transcription flow',
+              childProfile: 'explore',
+              childProfileName: 'Repository Explorer',
+              childModel: 'deepseek-v4-flash',
+              childStatus: 'running',
+              childSeq: 1,
+              activity: {
+                phase: 'tool',
+                label: 'Reading tool timeline UI',
+                toolName: 'read',
+                startedAt: '2026-08-07T00:00:00.000Z',
+                updatedAt: '2026-08-07T00:00:02.000Z'
+              }
+            }
+          }
+        }
+      }))
+    })
+
+    expect(instanceText(renderer!.root)).toContain('Explore')
+    expect(instanceText(renderer!.root)).toContain('Voice transcription flow')
+    expect(instanceText(renderer!.root)).toContain('Reading tool timeline UI · read')
+    expect(instanceText(renderer!.root)).not.toContain('explore_agent')
+    expect(instanceText(renderer!.root)).not.toContain('Not recorded')
+    const card = renderer!.root.findByProps({ 'data-testid': 'subagent-call-card' })
+    expect(card.props['data-activity-label']).toBe('Reading tool timeline UI · read')
+    expect(card.props['data-explore']).toBe('true')
+  })
+
+  it('shows the full conclusion by default and opens the child only via the process button', async () => {
+    selectThread.mockClear()
+    const onOpenChildThread = vi.fn()
+    const conclusion = [
+      '已找到完整链路。结论如下:',
+      '## 1) 设置定义',
+      '- 类型定义: ProviderRetryConfig'
+    ].join('\n')
+    await act(async () => {
+      renderer = create(createElement(SubagentCallCard, {
+        onOpenChildThread,
+        block: {
+          kind: 'tool',
+          id: 'tool_explore_done',
+          createdAt: '2026-08-07T00:00:00.000Z',
+          summary: 'explore_agent',
+          status: 'success',
+          toolKind: 'tool_call',
+          detail: JSON.stringify({
+            childId: 'child_tokens',
+            status: 'completed',
+            title: 'Token save label',
+            summary: conclusion,
+            profile: 'explore',
+            profileName: 'Repository Explorer',
+            model: 'deepseek-v4-flash',
+            toolInvocations: 5
+          }),
+          meta: {
+            toolName: 'explore_agent',
+            child: {
+              parentThreadId: 'thread_parent',
+              parentTurnId: 'turn_parent',
+              childId: 'child_tokens',
+              childLabel: 'Token save label',
+              childProfile: 'explore',
+              childStatus: 'completed',
+              childSeq: 1,
+              toolInvocations: 5
+            }
+          }
+        }
+      }))
+    })
+
+    const card = renderer!.root.findByProps({ 'data-testid': 'subagent-call-card' })
+    expect(card.props['data-conclusion-expanded']).toBe('true')
+    expect(instanceText(renderer!.root)).toContain('已找到完整链路')
+    expect(instanceText(renderer!.root)).toContain('ProviderRetryConfig')
+    expect(instanceText(renderer!.root)).not.toContain('View explore process · 5 steps')
+
+    const clickable = card.findAll((node) => node.props?.role === 'button')[0]
+    await act(async () => {
+      clickable.props.onClick()
+    })
+    expect(onOpenChildThread).not.toHaveBeenCalled()
+    expect(
+      renderer!.root.findByProps({ 'data-testid': 'subagent-call-card' }).props['data-conclusion-expanded']
+    ).toBe('false')
+
+    const openProcess = renderer!.root.findByProps({ 'data-testid': 'explore-open-process-button' })
+    await act(async () => {
+      openProcess.props.onClick({ stopPropagation() {} })
+    })
+    expect(onOpenChildThread).toHaveBeenCalledWith('child_tokens')
+    expect(selectThread).not.toHaveBeenCalled()
+  })
+
+  it('never titles a completed explore card with the raw tool name', async () => {
+    await act(async () => {
+      renderer = create(createElement(SubagentCallCard, {
+        block: {
+          kind: 'tool',
+          id: 'tool_explore_legacy',
+          createdAt: '2026-08-07T00:00:00.000Z',
+          summary: 'explore_agent',
+          status: 'success',
+          toolKind: 'tool_call',
+          detail: JSON.stringify({
+            childId: 'child_legacy',
+            status: 'completed',
+            summary: 'Located save-tokens rendering in FloatingComposer.tsx',
+            toolInvocations: 5
+          }),
+          meta: { toolName: 'explore_agent' }
+        }
+      }))
+    })
+
+    const text = instanceText(renderer!.root)
+    expect(text).toContain('Explore')
+    expect(text).toContain('Located save-tokens rendering in FloatingComposer.tsx')
+    expect(text).not.toMatch(/(^|[^a-z_])explore_agent([^a-z_]|$)/i)
+    expect(text).toContain('Repository Explorer')
+    expect(text).not.toContain('Not recorded')
   })
 })
 
@@ -184,6 +415,46 @@ function childBlock(
           ...child
         }
       } : {})
+    }
+  }
+}
+
+function exploreChildBlock(input: {
+  id: string
+  childId: string
+  childSeq: number
+  title: string
+  summary: string
+}): ToolBlock {
+  return {
+    kind: 'tool',
+    id: input.id,
+    createdAt: '2026-08-07T00:00:00.000Z',
+    summary: 'explore_agent',
+    status: 'success',
+    toolKind: 'tool_call',
+    detail: JSON.stringify({
+      childId: input.childId,
+      status: 'completed',
+      title: input.title,
+      summary: input.summary,
+      profile: 'explore',
+      profileName: 'Repository Explorer',
+      toolInvocations: 3
+    }),
+    meta: {
+      toolName: 'explore_agent',
+      child: {
+        parentThreadId: 'thread_parent',
+        parentTurnId: 'turn_parent',
+        childId: input.childId,
+        childLabel: input.title,
+        childProfile: 'explore',
+        childProfileName: 'Repository Explorer',
+        childModel: 'deepseek-v4-flash',
+        childStatus: 'completed',
+        childSeq: input.childSeq
+      }
     }
   }
 }

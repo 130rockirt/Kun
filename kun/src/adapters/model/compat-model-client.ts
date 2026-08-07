@@ -171,6 +171,25 @@ function isCodexEndpoint(baseUrl: string): boolean {
   return baseUrl.includes('chatgpt.com/backend-api/codex')
 }
 
+function normalizeCodexResponsesUrl(baseUrl: string): string {
+  try {
+    const url = new URL(baseUrl.trim())
+    if (
+      url.protocol !== 'https:' ||
+      url.hostname !== 'chatgpt.com' ||
+      !url.pathname.replace(/\/+$/u, '').startsWith('/backend-api/codex')
+    ) {
+      return exactModelEndpointUrl(baseUrl)
+    }
+    url.pathname = '/backend-api/codex/responses'
+    url.search = ''
+    url.hash = ''
+    return url.toString()
+  } catch {
+    return exactModelEndpointUrl(baseUrl)
+  }
+}
+
 /**
  * Multi-provider HTTP model client.
  *
@@ -257,7 +276,17 @@ export class CompatModelClient implements ModelClient {
     // OpenCode Go) can route some models to chat completions and others to
     // Anthropic Messages. Falls back to the provider/runtime format.
     const configuredEndpointFormat = this.endpointFormatForModel(requestModel)
-    const endpointFormat = resolveModelEndpointFormat(configuredEndpointFormat, this.config.baseUrl)
+    const isCodex = isCodexEndpoint(this.config.baseUrl)
+    // Legacy Codex profiles stored `.../codex` + `responses` (or a bare
+    // custom path without `/responses`). Normalize before format inference so
+    // chat does not fail the custom-endpoint suffix check or hit `/v1/responses`.
+    const resolveBaseUrl = isCodex
+      ? normalizeCodexResponsesUrl(this.config.baseUrl)
+      : this.config.baseUrl
+    const endpointFormat = resolveModelEndpointFormat(
+      isCodex ? 'custom_endpoint' : configuredEndpointFormat,
+      resolveBaseUrl
+    )
     if (!endpointFormat) {
       yield {
         kind: 'error',
@@ -1311,6 +1340,7 @@ export class CompatModelClient implements ModelClient {
 }
 
 function buildModelEndpointUrl(baseUrl: string, endpointFormat: ModelEndpointFormat): string {
+  if (isCodexEndpoint(baseUrl)) return normalizeCodexResponsesUrl(baseUrl)
   if (isCustomModelEndpointFormat(endpointFormat)) return exactModelEndpointUrl(baseUrl)
   const path = modelEndpointPath(endpointFormat)
   const normalized = baseUrl.trim().replace(/\/+$/, '')

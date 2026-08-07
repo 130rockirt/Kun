@@ -58,9 +58,9 @@ import {
 } from '../delegated-graph-turn-policy.js'
 
 const CURSOR_KUN_TOOL_INSTRUCTION = [
-  'Kun-managed tools are available through Cursor custom tools.',
-  'Use these tools for Kun capabilities such as MCP, extensions, skills, memory, media, GUI input, and delegation.',
-  'Tool execution remains governed by Kun approval and sandbox policy.'
+  'Prefer Cursor built-in tools for reading, editing, searching, and running shell commands.',
+  'Kun-managed capabilities are available through Cursor custom tools (MCP, extensions, skills, memory, media, GUI input, and delegation).',
+  'Use those custom tools only for Kun-exclusive work; their execution remains governed by Kun approval and sandbox policy.'
 ].join(' ')
 
 export interface CursorSdkRuntimeFactoryDeps extends Omit<

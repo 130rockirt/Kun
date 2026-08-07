@@ -54,11 +54,11 @@ const LEGACY_KUN_CORE_TOOLS = new Set([
   'request_user_input', 'create_plan', 'read_artifact', 'task_graph'
 ])
 const LEGACY_KUN_GUI_TOOLS = new Set([
-  'computer_use', 'get_goal', 'create_goal', 'update_goal', 'todo_list', 'todo_write'
+  'computer_use', 'browser_use', 'get_goal', 'create_goal', 'update_goal', 'todo_list', 'todo_write'
 ])
 const LEGACY_KUN_RUNTIME_TOOLS = new Set([
   'web_search', 'web_fetch', 'load_skill', 'memory_create', 'memory_update',
-  'memory_delete', 'delegate_task', 'generate_image', 'generate_speech',
+  'memory_delete', 'delegate_task', 'explore_agent', 'generate_image', 'generate_speech',
   'generate_music', 'generate_video', 'ppt_master_run', 'ppt_master_read_guide',
   'ppt_master_confirm_design'
 ])

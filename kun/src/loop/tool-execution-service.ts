@@ -5,6 +5,10 @@ import type { ToolCallLike, ToolHost, ToolHostContext, ToolHostResult } from '..
 import type { RuntimeEventRecorder } from '../services/runtime-event-recorder.js'
 import type { TurnService } from '../services/turn-service.js'
 import { InflightTracker } from './inflight-tracker.js'
+import {
+  TOOL_CANCELLED_BY_USER_CODE,
+  ToolCancellationRegistry
+} from './tool-cancellation-registry.js'
 import { prepareBrowserUseToolResultForPersistence } from './tool-result-image.js'
 
 export type PlanWrittenCallback = (input: {
@@ -20,6 +24,7 @@ export type ToolExecutionServiceDeps = {
   inflight: InflightTracker
   turns: TurnService
   events: RuntimeEventRecorder
+  toolCancellation?: ToolCancellationRegistry
   nowIso: () => string
   onPlanWritten?: PlanWrittenCallback
   awaitWorkspaceCheckpoint?: (
@@ -42,14 +47,47 @@ export type ToolExecutionInput = {
  */
 export class ToolExecutionService {
   private readonly checkpointGates = new Map<string, Promise<void>>()
+  private readonly deps: ToolExecutionServiceDeps
+  private readonly toolCancellation: ToolCancellationRegistry
 
-  constructor(private readonly deps: ToolExecutionServiceDeps) {}
+  constructor(deps: ToolExecutionServiceDeps) {
+    const toolCancellation = deps.toolCancellation ?? new ToolCancellationRegistry()
+    this.deps = {
+      ...deps,
+      toolCancellation
+    }
+    this.toolCancellation = toolCancellation
+  }
 
   async executeSafely(input: ToolExecutionInput): Promise<ToolHostResult> {
+    // Detached/background turns keep their dedicated lifecycle controls. The
+    // registry is intentionally limited to foreground GUI tool calls.
+    const registration = input.context.messageSource
+      ? undefined
+      : this.toolCancellation.register(
+          {
+            threadId: input.threadId,
+            turnId: input.turnId,
+            callId: input.call.callId
+          },
+          input.context.abortSignal
+        )
+    const executionInput: ToolExecutionInput = {
+      ...input,
+      ...(registration
+        ? { context: { ...input.context, abortSignal: registration.signal } }
+        : {})
+    }
     try {
-      return await this.execute(input)
+      const result = await this.execute(executionInput)
+      if (input.context.abortSignal.aborted) {
+        throw input.context.abortSignal.reason ?? new Error('Tool execution aborted')
+      }
+      if (registration?.wasCancelledByUser()) return this.cancelledResult(input)
+      return result
     } catch (error) {
-      if (input.context.abortSignal.aborted) throw error
+      if (input.context.abortSignal.aborted && !registration?.wasCancelledByUser()) throw error
+      if (registration?.wasCancelledByUser()) return this.cancelledResult(input)
       const message = error instanceof Error ? error.message : String(error)
       await this.deps.events.record({
         kind: 'error',
@@ -77,6 +115,29 @@ export class ToolExecutionService {
         }),
         approved: false
       }
+    } finally {
+      registration?.dispose()
+    }
+  }
+
+  private cancelledResult(input: ToolExecutionInput): ToolHostResult {
+    return {
+      item: makeToolResultItem({
+        id: `item_${input.call.callId}`,
+        turnId: input.turnId,
+        threadId: input.threadId,
+        callId: input.call.callId,
+        toolName: input.call.toolName,
+        toolKind: input.call.toolKind ?? 'tool_call',
+        output: {
+          code: TOOL_CANCELLED_BY_USER_CODE,
+          error: 'The user stopped this tool execution.',
+          guidance:
+            'Only this tool was stopped. Continue using the other tool results and choose an alternative approach. Do not repeat the identical call automatically.'
+        },
+        isError: true
+      }),
+      approved: false
     }
   }
 

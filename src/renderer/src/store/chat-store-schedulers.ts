@@ -1,4 +1,3 @@
-import type { ChatBlock } from '../agent/types'
 import type { ChatState, ChatStoreGet, ChatStoreSet } from './chat-store-types'
 
 let startupRuntimeProbeTimer: ReturnType<typeof setTimeout> | null = null
@@ -18,15 +17,27 @@ type TurnCompletionPollOptions = {
   loadThreadState: (
     state: ChatState,
     threadId: string
-  ) => Promise<{ blocks: ChatBlock[]; threadStatus?: string }>
-  threadLooksRunning: (blocks: ChatBlock[], threadStatus?: string) => boolean
+  ) => Promise<{ status: string; latestTurnStatus?: string }>
+  threadLooksRunning: (threadStatus: string) => boolean
   onCompletedThreads: (
-    doneIds: string[],
+    done: Array<{ id: string; latestTurnStatus?: string }>,
+    state: ChatState,
+    set: ChatStoreSet,
+    get: ChatStoreGet
+  ) => void | Promise<void>
+  isMissingThreadError?: (error: unknown) => boolean
+  onMissingThreads?: (
+    ids: string[],
     state: ChatState,
     set: ChatStoreSet,
     get: ChatStoreGet
   ) => void | Promise<void>
 }
+
+type CompletionPollOutcome =
+  | { kind: 'completed'; id: string; latestTurnStatus?: string }
+  | { kind: 'missing'; id: string }
+  | null
 
 export function scheduleStartupRuntimeProbe(get: ChatStoreGet): void {
   if (startupRuntimeProbeTimer) {
@@ -124,20 +135,29 @@ async function pollTurnCompletionWatch(
     return
   }
 
-  const doneIds: string[] = []
-  for (const threadId of ids) {
+  const outcomes: CompletionPollOutcome[] = await Promise.all(ids.map(async (threadId) => {
     try {
-      const { blocks, threadStatus } = await options.loadThreadState(state, threadId)
-      if (!options.threadLooksRunning(blocks, threadStatus)) {
-        doneIds.push(threadId)
-      }
-    } catch {
-      /* ignore */
+      const thread = await options.loadThreadState(state, threadId)
+      return options.threadLooksRunning(thread.status)
+        ? null
+        : { kind: 'completed' as const, id: threadId, latestTurnStatus: thread.latestTurnStatus }
+    } catch (error) {
+      return options.isMissingThreadError?.(error) ? { kind: 'missing' as const, id: threadId } : null
     }
-  }
+  }))
+  const completed = outcomes.filter((outcome): outcome is Extract<CompletionPollOutcome, { kind: 'completed' }> =>
+    outcome?.kind === 'completed'
+  )
+  const done = completed.map(({ id, latestTurnStatus }) => ({ id, latestTurnStatus }))
+  const missingIds = outcomes.flatMap((outcome) =>
+    outcome?.kind === 'missing' ? [outcome.id] : []
+  )
 
-  if (doneIds.length > 0) {
-    await options.onCompletedThreads(doneIds, state, set, get)
+  if (done.length > 0) {
+    await options.onCompletedThreads(done, state, set, get)
+  }
+  if (missingIds.length > 0) {
+    await options.onMissingThreads?.(missingIds, state, set, get)
   }
 
   if (Object.keys(get().watchTurnCompletion).filter((id) => get().watchTurnCompletion[id]).length === 0) {

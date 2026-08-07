@@ -6,6 +6,7 @@ import { isDeepSeekHost, isGeminiOpenAiHost } from './model-error-probe.js'
 
 export const COMPAT_HISTORY_CONTEXT = Symbol('compat-history-context')
 export const COMPAT_ANTHROPIC_THINKING = Symbol('compat-anthropic-thinking')
+export const COMPAT_TOOL_RESULT_ERROR = Symbol('compat-tool-result-error')
 
 export type CompatChatMessage = {
   role: 'system' | 'user' | 'assistant' | 'tool'
@@ -14,6 +15,7 @@ export type CompatChatMessage = {
   [COMPAT_ANTHROPIC_THINKING]?: NonNullable<
     NonNullable<ToolCallProviderMetadata['anthropic']>['thinkingBlocks']
   >
+  [COMPAT_TOOL_RESULT_ERROR]?: boolean
   name?: string
   tool_call_id?: string
   reasoning_content?: string

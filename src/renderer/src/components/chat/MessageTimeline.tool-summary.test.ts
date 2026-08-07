@@ -16,7 +16,8 @@ import {
 import {
   GeneratedFilesPanel,
   MessageBubble,
-  generatedMediaScrollAvailability
+  generatedMediaScrollAvailability,
+  turnMetricsLabel
 } from './message-timeline-bubbles'
 import {
   describeProcessSection,
@@ -45,6 +46,8 @@ const labels: Record<string, string> = {
   toolActionBackgroundShellList: 'List background shells',
   workingToolAction: 'Working {{action}}',
   thinkingNow: 'Thinking…',
+  turnMetricsTtft: 'Avg TTFT {{value}}',
+  turnMetricsTps: 'Avg {{value}} tok/s',
   groupReadFiles: 'Read {{count}} files',
   groupReadFile: 'Read 1 file',
   groupSearched: 'Searched {{count}} times',
@@ -194,6 +197,22 @@ describe('MessageTimeline tool summaries', () => {
       t
     )
     expect(find).toBe('Find *.ts · /tmp/src')
+  })
+
+  it('summarizes explore_agent with its short UI title', () => {
+    expect(
+      summarizeToolBlock(
+        toolBlock({
+          summary: 'explore_agent',
+          meta: { toolName: 'explore_agent' },
+          detail: JSON.stringify({
+            title: 'Voice transcription flow',
+            query: 'Trace speech transcription wiring'
+          })
+        }),
+        t
+      )
+    ).toBe('Explore agent Voice transcription flow')
   })
 
   it('does not repeat a raw summary that matches the generated tool label', () => {
@@ -366,6 +385,102 @@ describe('MessageTimeline tool summaries', () => {
       }
     ])
   })
+
+  it('keeps sibling explore_agent calls as independent subagent sections', () => {
+    const sections = groupProcessSections([
+      toolBlock({
+        id: 'explore_1',
+        summary: 'explore packaging',
+        meta: {
+          toolName: 'explore_agent',
+          child: {
+            parentThreadId: 'thread_parent',
+            parentTurnId: 'turn_1',
+            childId: 'child_1',
+            childProfile: 'explore',
+            childSeq: 1
+          }
+        }
+      }),
+      toolBlock({
+        id: 'explore_2',
+        summary: 'explore workflow',
+        meta: {
+          toolName: 'explore_agent',
+          child: {
+            parentThreadId: 'thread_parent',
+            parentTurnId: 'turn_1',
+            childId: 'child_2',
+            childProfile: 'explore',
+            childSeq: 2
+          }
+        }
+      }),
+      toolBlock({
+        id: 'explore_3',
+        summary: 'explore runtime',
+        meta: {
+          toolName: 'explore_agent',
+          child: {
+            parentThreadId: 'thread_parent',
+            parentTurnId: 'turn_1',
+            childId: 'child_3',
+            childProfile: 'explore',
+            childSeq: 3
+          }
+        }
+      })
+    ])
+
+    expect(sections.map((section) => ({
+      kind: section.kind,
+      ids: section.blocks.map((block) => block.id)
+    }))).toEqual([
+      { kind: 'subagent', ids: ['explore_1'] },
+      { kind: 'subagent', ids: ['explore_2'] },
+      { kind: 'subagent', ids: ['explore_3'] }
+    ])
+  })
+
+  it('still coalesces sibling non-explore delegate_task calls into one swarm section', () => {
+    const sections = groupProcessSections([
+      toolBlock({
+        id: 'delegate_1',
+        summary: 'General Agent 1',
+        meta: {
+          toolName: 'delegate_task',
+          child: {
+            parentThreadId: 'thread_parent',
+            parentTurnId: 'turn_1',
+            childId: 'child_a',
+            childProfile: 'general',
+            childSeq: 1
+          }
+        }
+      }),
+      toolBlock({
+        id: 'delegate_2',
+        summary: 'General Agent 2',
+        meta: {
+          toolName: 'delegate_task',
+          child: {
+            parentThreadId: 'thread_parent',
+            parentTurnId: 'turn_1',
+            childId: 'child_b',
+            childProfile: 'general',
+            childSeq: 2
+          }
+        }
+      })
+    ])
+
+    expect(sections.map((section) => ({
+      kind: section.kind,
+      ids: section.blocks.map((block) => block.id)
+    }))).toEqual([
+      { kind: 'subagent', ids: ['delegate_1', 'delegate_2'] }
+    ])
+  })
 })
 
 describe('MessageTimeline Kun runtime metadata smoke', () => {
@@ -409,6 +524,64 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
     expect(html).toContain('为什么图片完全没有识别啊')
     expect(html).not.toContain('Attachments 1')
     expect(html).not.toContain('ds-media-printer-reveal')
+    expect(html).toContain('data-user-media-gallery')
+    expect(html).toContain('data-user-media-count="1"')
+    expect(html).toContain('max-w-[min(100%,20rem)]')
+    expect(html).not.toContain('data-user-media-carousel')
+    expect(html).not.toContain('generatedFileDownload')
+  })
+
+  it('keeps two or three user images in a row without carousel controls', () => {
+    const attachments = [1, 2, 3].map((index) => ({
+      id: `att_${index}`,
+      name: `image-${index}.png`,
+      mimeType: 'image/png',
+      previewUrl: `data:image/png;base64,img${index}`
+    }))
+    const block: ChatBlock = {
+      kind: 'user',
+      id: 'user_multi',
+      text: '三张图',
+      meta: {
+        attachmentIds: attachments.map((item) => item.id),
+        attachments
+      }
+    }
+
+    const html = renderToStaticMarkup(createElement(MessageBubble, { block }))
+
+    expect(html).toContain('data-user-media-count="3"')
+    expect(html).not.toContain('data-user-media-carousel')
+    expect(html).not.toContain('generatedFilesPreviousImages')
+    expect(html).not.toContain('generatedFilesNextImages')
+    expect(html).toContain('src="data:image/png;base64,img1"')
+    expect(html).toContain('src="data:image/png;base64,img3"')
+  })
+
+  it('enables the user media carousel only when there are more than three images', () => {
+    const attachments = [1, 2, 3, 4].map((index) => ({
+      id: `att_${index}`,
+      name: `image-${index}.png`,
+      mimeType: 'image/png',
+      previewUrl: `data:image/png;base64,img${index}`
+    }))
+    const block: ChatBlock = {
+      kind: 'user',
+      id: 'user_carousel',
+      text: '四张图',
+      meta: {
+        attachmentIds: attachments.map((item) => item.id),
+        attachments
+      }
+    }
+
+    const html = renderToStaticMarkup(createElement(MessageBubble, { block }))
+
+    expect(html).toContain('data-user-media-gallery')
+    expect(html).toContain('data-user-media-count="4"')
+    expect(html).toContain('data-user-media-carousel')
+    expect(html).toContain('snap-x')
+    expect(html).toContain('overflow-x-auto')
   })
 
   it('renders user file references under the sent prompt', () => {
@@ -1863,6 +2036,43 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
     expect(html).toMatch(/writeExportPdf|Export PDF|导出 PDF/)
     expect(html).toMatch(/writeExportDocx|Export DOCX|导出 DOCX/)
     expect(html).toMatch(/writeExportPng|Export PNG|导出 PNG/)
+  })
+
+  it('renders per-turn average TTFT/TPS next to the timestamp when available', () => {
+    useChatStore.setState({
+      turnTimingMetrics: new Map([
+        ['turn_1', { avgTtftMs: 1_000, avgTokensPerSecond: 40.2 }]
+      ])
+    })
+    try {
+      const html = renderToStaticMarkup(
+        createElement(MessageBubble, {
+          block: {
+            kind: 'assistant',
+            id: 'assistant_1',
+            turnId: 'turn_1',
+            text: 'hello'
+          }
+        })
+      )
+
+      // zustand v5 serves SSR renders from the INITIAL state, so the
+      // per-turn map set above is not visible here; verify the wiring
+      // through the client render path instead.
+      expect(turnMetricsLabel(t, { avgTtftMs: 1_000, avgTokensPerSecond: 40.2 }))
+        .toBe('Avg TTFT 1.0s · Avg 40.2 tok/s')
+      expect(html).not.toContain('tok/s')
+    } finally {
+      useChatStore.setState({ turnTimingMetrics: new Map() })
+    }
+  })
+
+  it('omits segments without timing data from the footer label', () => {
+    expect(turnMetricsLabel(t, { avgTtftMs: null, avgTokensPerSecond: null })).toBe('')
+    expect(turnMetricsLabel(t, { avgTtftMs: 800, avgTokensPerSecond: null }))
+      .toBe('Avg TTFT 0.8s')
+    expect(turnMetricsLabel(t, { avgTtftMs: null, avgTokensPerSecond: 38.5 }))
+      .toBe('Avg 38.5 tok/s')
   })
 
   it('renders the workspace rollback action with fork in completed assistant response actions', () => {

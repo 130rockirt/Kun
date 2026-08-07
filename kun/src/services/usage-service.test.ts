@@ -127,3 +127,58 @@ describe('usage cache diagnostics', () => {
     })
   })
 })
+
+describe('usage per-turn timing aggregation', () => {
+  const timed = (overrides: Record<string, unknown>) => ({
+    promptTokens: 100,
+    completionTokens: 10,
+    totalTokens: 110,
+    cacheHitRate: null,
+    turns: 1,
+    ...overrides
+  })
+
+  it('attaches turn averages to the cumulative snapshot per turnId', () => {
+    const usage = new UsageService()
+    // Turn A: two model calls within one user turn.
+    usage.record('thread-a', timed({ completionTokens: 40, requestTtftMs: 800, requestGenerationMs: 2_000 }), undefined, 'turn-a')
+    const turnASnapshot = usage.record('thread-a', timed({ completionTokens: 120, requestTtftMs: 1_200, requestGenerationMs: 2_000 }), undefined, 'turn-a')
+    // Turn B: separate averages, must not bleed into turn A.
+    const afterTurnB = usage.record('thread-a', timed({ completionTokens: 50, requestTtftMs: 500, requestGenerationMs: 1_000 }), undefined, 'turn-b')
+
+    expect(turnASnapshot.turnAvgTtftMs).toBe(1_000)
+    expect(turnASnapshot.turnAvgTokensPerSecond).toBe(40)
+    // Session averages aggregate across all calls in the thread.
+    expect(afterTurnB.avgTtftMs).toBe((800 + 1_200 + 500) / 3)
+    expect(afterTurnB.avgTokensPerSecond).toBe(210 / 5_000 * 1_000)
+    // Turn B has its own fresh averages.
+    expect(afterTurnB.turnAvgTtftMs).toBe(500)
+  })
+
+  it('reports null turn averages without timing data', () => {
+    const usage = new UsageService()
+    const snapshot = usage.record('thread-a', timed({}), undefined, 'turn-a')
+
+    expect(snapshot.turnAvgTtftMs).toBeNull()
+    expect(snapshot.turnAvgTokensPerSecond).toBeNull()
+  })
+
+  it('does not fold timing into a turn when turnId is omitted', () => {
+    const usage = new UsageService()
+    const snapshot = usage.record('thread-a', timed({ requestTtftMs: 900, requestGenerationMs: 1_000 }))
+
+    expect(snapshot.turnAvgTtftMs).toBeUndefined()
+    // Session aggregation still applies.
+    expect(snapshot.avgTtftMs).toBe(900)
+  })
+
+  it('endTurn releases per-turn aggregation for finished turns', () => {
+    const usage = new UsageService()
+    usage.record('thread-a', timed({ requestTtftMs: 800, requestGenerationMs: 1_000 }), undefined, 'turn-a')
+    usage.endTurn('thread-a', 'turn-a')
+
+    // A new call in the same turnId starts a fresh aggregation window.
+    const next = usage.record('thread-a', timed({ requestTtftMs: 200, requestGenerationMs: 1_000 }), undefined, 'turn-a')
+    expect(next.turnAvgTtftMs).toBe(200)
+  })
+})

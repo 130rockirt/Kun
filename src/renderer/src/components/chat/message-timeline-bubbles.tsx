@@ -34,6 +34,7 @@ import {
   type AttachmentPreviewFailureState
 } from './attachment-preview-loader'
 import { useDeferredRender } from '../../hooks/use-deferred-render'
+import { formatTtftSeconds, formatTps } from '../../hooks/use-thread-usage'
 
 const COPY_FEEDBACK_RESET_MS = 1600
 const ASSISTANT_EXPORT_FORMATS: WriteExportFormat[] = ['pdf', 'docx', 'png', 'html']
@@ -899,16 +900,30 @@ function useMediaPreviews(
   return { resolvedPreviews, failedPreviewIds }
 }
 
+function userMediaTileClass(mediaCount: number): string {
+  const base =
+    'group block aspect-[3/2] overflow-hidden rounded-lg border border-ds-border-muted bg-ds-card shadow-sm'
+  if (mediaCount <= 1) {
+    return `${base} w-full max-w-[min(100%,20rem)]`
+  }
+  if (mediaCount <= 3) {
+    return `${base} w-[calc((100%-1rem)/3)] max-w-56 shrink-0`
+  }
+  return `${base} w-[calc((100%-1rem)/3)] max-w-56 shrink-0 snap-start`
+}
+
 function MediaPreviewTile({
   media,
   previewUrl,
   previewState,
-  variant
+  variant,
+  mediaCount = 1
 }: {
   media: TimelineMediaReference
   previewUrl?: string
   previewState?: 'loading' | 'failed'
   variant: 'user' | 'tool' | 'conversation'
+  mediaCount?: number
 }): ReactElement {
   const { t } = useTranslation('common')
   const globalWorkspaceRoot = useChatStore((s) => s.workspaceRoot)
@@ -926,9 +941,9 @@ function MediaPreviewTile({
       ? 'group aspect-square w-52 shrink-0 snap-start overflow-hidden rounded-xl border border-ds-border-muted bg-ds-card shadow-sm'
       : variant === 'tool'
         ? 'block h-32 w-40 overflow-hidden rounded-lg border border-ds-border-muted bg-ds-card shadow-sm'
-        : 'block h-28 w-36 overflow-hidden rounded-lg border border-ds-border-muted bg-ds-card shadow-sm'
+        : userMediaTileClass(mediaCount)
   const revealClass = variant === 'user' ? '' : ' ds-media-printer-reveal'
-  const mediaClass = `h-full w-full ${variant === 'conversation' ? 'object-cover' : 'object-contain'}`
+  const mediaClass = `h-full w-full ${variant === 'tool' ? 'object-contain' : 'object-cover'}`
   const canSave = !unavailable && Boolean(filePath || dataUrlPayload(previewUrl))
   const canOpenArtifact = !unavailable && Boolean(
     media.artifactId && media.ownerExtensionId && media.ownerExtensionVersion &&
@@ -991,9 +1006,11 @@ function MediaPreviewTile({
     'inline-flex h-7 items-center justify-center rounded-md border border-ds-border-muted bg-ds-card/90 px-2 text-[11.5px] font-medium text-ds-muted shadow-sm transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-not-allowed disabled:opacity-50'
   const iconButtonClass =
     `absolute right-2 top-2 inline-flex h-8 w-8 items-center justify-center rounded-md border border-ds-border-muted bg-ds-card/92 text-ds-muted shadow-sm backdrop-blur transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-not-allowed disabled:opacity-50 ${
-      variant === 'conversation'
-        ? 'opacity-0 focus-visible:opacity-100 group-hover:opacity-100'
-        : ''
+      variant === 'user'
+        ? 'h-7 w-7 opacity-0 focus-visible:opacity-100 group-hover:opacity-100'
+        : variant === 'conversation'
+          ? 'opacity-0 focus-visible:opacity-100 group-hover:opacity-100'
+          : ''
     }`
   const saveIcon = saveState === 'saving'
     ? <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={1.9} />
@@ -1018,19 +1035,21 @@ function MediaPreviewTile({
         >
           <img src={previewUrl} alt={title} className={mediaClass} loading="lazy" />
         </button>
-        <button
-          type="button"
-          onClick={(event) => {
-            event.stopPropagation()
-            void handleSaveAs()
-          }}
-          disabled={!canSave || saveState === 'saving'}
-          title={saveLabel}
-          aria-label={saveLabel}
-          className={iconButtonClass}
-        >
-          {saveIcon}
-        </button>
+        {variant === 'user' ? null : (
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation()
+              void handleSaveAs()
+            }}
+            disabled={!canSave || saveState === 'saving'}
+            title={saveLabel}
+            aria-label={saveLabel}
+            className={iconButtonClass}
+          >
+            {saveIcon}
+          </button>
+        )}
         <ImagePreviewLightbox
           open={imagePreviewOpen}
           src={previewUrl}
@@ -1131,6 +1150,8 @@ function MediaPreviewTile({
   )
 }
 
+const USER_MEDIA_CAROUSEL_THRESHOLD = 3
+
 function MediaAttachmentGallery({
   media,
   variant
@@ -1151,9 +1172,11 @@ function MediaAttachmentGallery({
     canScrollBackward: false,
     canScrollForward: false
   })
+  const useUserCarousel = variant === 'user' && media.length > USER_MEDIA_CAROUSEL_THRESHOLD
+  const useCarouselLayout = variant === 'conversation' || useUserCarousel
 
   useEffect(() => {
-    if (variant !== 'conversation') return
+    if (!useCarouselLayout) return
     const scroller = conversationScrollerRef.current
     if (!scroller) return
 
@@ -1183,13 +1206,10 @@ function MediaAttachmentGallery({
       scroller.removeEventListener('scroll', updateAvailability)
       resizeObserver.disconnect()
     }
-  }, [media.length, variant])
+  }, [media.length, useCarouselLayout])
 
   if (media.length === 0) return null
-  const wrapperClass =
-    variant === 'tool'
-        ? 'flex min-w-0 flex-wrap gap-2 border-t border-ds-border-muted/60 px-4 py-3'
-        : 'flex max-w-[80%] flex-wrap justify-end gap-2'
+  const wrapperClass = 'flex min-w-0 flex-wrap gap-2 border-t border-ds-border-muted/60 px-4 py-3'
 
   const tiles = media.map((item) => {
     const key = mediaKey(item)
@@ -1217,11 +1237,28 @@ function MediaAttachmentGallery({
                 : undefined
         }
         variant={variant}
+        mediaCount={media.length}
       />
     )
   })
 
-  if (variant === 'conversation') {
+  if (variant === 'user' && !useUserCarousel) {
+    return (
+      <div
+        ref={previewAdmissionRef}
+        className="relative min-w-0 w-full max-w-[80%]"
+        data-extension-attachment-context
+        data-user-media-gallery=""
+        data-user-media-count={media.length}
+      >
+        <div className="flex w-full justify-end gap-2 px-0.5 pb-1">
+          {tiles}
+        </div>
+      </div>
+    )
+  }
+
+  if (variant !== 'tool') {
     const moveCarousel = (direction: -1 | 1): void => {
       const scroller = conversationScrollerRef.current
       if (!scroller) return
@@ -1231,39 +1268,72 @@ function MediaAttachmentGallery({
       })
     }
     const showCarouselControls = scrollAvailability.canScrollBackward || scrollAvailability.canScrollForward
+    const isConversation = variant === 'conversation'
 
     return (
-      <div ref={previewAdmissionRef} className="group/gallery relative min-w-0 w-full" data-extension-attachment-context data-generated-media-carousel>
+      <div
+        ref={previewAdmissionRef}
+        className={`group/gallery relative min-w-0 ${isConversation ? 'w-full' : 'w-full max-w-[80%]'}`}
+        data-extension-attachment-context
+        {...(isConversation
+          ? { 'data-generated-media-carousel': true }
+          : { 'data-user-media-gallery': '', 'data-user-media-carousel': true, 'data-user-media-count': media.length })}
+      >
         <div
           ref={conversationScrollerRef}
           className="flex w-full snap-x snap-mandatory gap-2 overflow-x-auto px-0.5 pb-1 scroll-smooth [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-          data-generated-media-strip
+          {...(isConversation ? { 'data-generated-media-strip': true } : {})}
         >
           {tiles}
         </div>
         {showCarouselControls ? (
-          <div className="absolute bottom-3 right-3 flex items-center gap-1.5">
-            <button
-              type="button"
-              onClick={() => moveCarousel(-1)}
-              disabled={!scrollAvailability.canScrollBackward}
-              className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/20 bg-black/55 text-white shadow-md backdrop-blur-sm transition hover:bg-black/70 disabled:cursor-default disabled:opacity-35"
-              title={t('generatedFilesPreviousImages')}
-              aria-label={t('generatedFilesPreviousImages')}
-            >
-              <ChevronLeft className="h-5 w-5" strokeWidth={2} />
-            </button>
-            <button
-              type="button"
-              onClick={() => moveCarousel(1)}
-              disabled={!scrollAvailability.canScrollForward}
-              className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/20 bg-black/55 text-white shadow-md backdrop-blur-sm transition hover:bg-black/70 disabled:cursor-default disabled:opacity-35"
-              title={t('generatedFilesNextImages')}
-              aria-label={t('generatedFilesNextImages')}
-            >
-              <ChevronRight className="h-5 w-5" strokeWidth={2} />
-            </button>
-          </div>
+          isConversation ? (
+            <div className="absolute bottom-3 right-3 flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => moveCarousel(-1)}
+                disabled={!scrollAvailability.canScrollBackward}
+                className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/20 bg-black/55 text-white shadow-md backdrop-blur-sm transition hover:bg-black/70 disabled:cursor-default disabled:opacity-35"
+                title={t('generatedFilesPreviousImages')}
+                aria-label={t('generatedFilesPreviousImages')}
+              >
+                <ChevronLeft className="h-5 w-5" strokeWidth={2} />
+              </button>
+              <button
+                type="button"
+                onClick={() => moveCarousel(1)}
+                disabled={!scrollAvailability.canScrollForward}
+                className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/20 bg-black/55 text-white shadow-md backdrop-blur-sm transition hover:bg-black/70 disabled:cursor-default disabled:opacity-35"
+                title={t('generatedFilesNextImages')}
+                aria-label={t('generatedFilesNextImages')}
+              >
+                <ChevronRight className="h-5 w-5" strokeWidth={2} />
+              </button>
+            </div>
+          ) : (
+            <>
+              <button
+                type="button"
+                onClick={() => moveCarousel(-1)}
+                disabled={!scrollAvailability.canScrollBackward}
+                className="absolute left-1.5 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full border border-ds-border-muted bg-ds-card/92 text-ds-muted opacity-0 shadow-sm backdrop-blur transition hover:bg-ds-hover hover:text-ds-ink focus-visible:opacity-100 disabled:cursor-default disabled:opacity-0 group-hover/gallery:opacity-100"
+                title={t('generatedFilesPreviousImages')}
+                aria-label={t('generatedFilesPreviousImages')}
+              >
+                <ChevronLeft className="h-4 w-4" strokeWidth={2} />
+              </button>
+              <button
+                type="button"
+                onClick={() => moveCarousel(1)}
+                disabled={!scrollAvailability.canScrollForward}
+                className="absolute right-1.5 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full border border-ds-border-muted bg-ds-card/92 text-ds-muted opacity-0 shadow-sm backdrop-blur transition hover:bg-ds-hover hover:text-ds-ink focus-visible:opacity-100 disabled:cursor-default disabled:opacity-0 group-hover/gallery:opacity-100"
+                title={t('generatedFilesNextImages')}
+                aria-label={t('generatedFilesNextImages')}
+              >
+                <ChevronRight className="h-4 w-4" strokeWidth={2} />
+              </button>
+            </>
+          )
         ) : null}
       </div>
     )
@@ -1811,6 +1881,27 @@ function formatMessageDateTime(input: string, locale: string): string {
  */
 export const MessageBubble = memo(MessageBubbleImpl)
 
+type TurnMetricsLike = {
+  avgTtftMs: number | null
+  avgTokensPerSecond: number | null
+}
+
+/**
+ * Renders a turn's average TTFT/TPS as a compact footer label. Segments with
+ * no data are omitted so legacy turns show nothing at all.
+ */
+export function turnMetricsLabel(
+  t: (key: string, options?: Record<string, unknown>) => string,
+  metrics: TurnMetricsLike
+): string {
+  const parts: string[] = []
+  const ttft = formatTtftSeconds(metrics.avgTtftMs)
+  if (ttft != null) parts.push(t('turnMetricsTtft', { value: ttft }))
+  const tps = formatTps(metrics.avgTokensPerSecond)
+  if (tps != null) parts.push(t('turnMetricsTps', { value: tps }))
+  return parts.join(' · ')
+}
+
 function MessageBubbleImpl({
   block,
   nested = false,
@@ -1832,6 +1923,7 @@ function MessageBubbleImpl({
 }): ReactElement {
   const { t, i18n } = useTranslation('common')
   const resolveApproval = useChatStore((s) => s.resolveApproval)
+  const turnTimingMetrics = useChatStore((s) => s.turnTimingMetrics)
   if (block.kind === 'user' && isBackgroundShellNoticeBlock(block)) {
     return <BackgroundShellNoticeBubble block={block} nested={nested} />
   }
@@ -1846,6 +1938,10 @@ function MessageBubbleImpl({
     const createdAtLabel = block.createdAt
       ? formatMessageDateTime(block.createdAt, i18n.language)
       : null
+    const turnMetrics =
+      !streaming && block.turnId
+        ? turnTimingMetrics.get(block.turnId)
+        : undefined
     return (
       <div className="group/message flex min-w-0 max-w-full flex-col">
         <div className="ds-markdown ds-chat-answer min-w-0 max-w-full text-ds-ink">
@@ -1853,7 +1949,17 @@ function MessageBubbleImpl({
         </div>
         {!streaming ? (
           <div className="mt-1 flex min-h-5 min-w-0 items-center justify-between gap-3 text-[11.5px] text-ds-faint opacity-0 transition duration-150 group-hover/message:opacity-100">
-            <span className="min-w-0 truncate">{createdAtLabel ?? ''}</span>
+            <span className="flex min-w-0 items-center gap-2">
+              <span className="truncate">{createdAtLabel ?? ''}</span>
+              {turnMetrics ? (
+                <span
+                  className="shrink-0 whitespace-nowrap tabular-nums"
+                  title={t('turnMetricsTitle')}
+                >
+                  {turnMetricsLabel(t, turnMetrics)}
+                </span>
+              ) : null}
+            </span>
             <div className="flex shrink-0 items-center gap-1.5">
               {rollbackAction ? (
                 <button

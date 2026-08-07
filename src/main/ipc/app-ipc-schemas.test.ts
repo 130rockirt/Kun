@@ -6,6 +6,7 @@ import {
   conversationExportPayloadSchema,
   cursorSubscriptionDiscoveryPayloadSchema,
   isSafeOpenExternalUrl,
+  modelProviderCredentialRevealPayloadSchema,
   modelsDevCatalogPayloadSchema,
   notificationPayloadSchema,
   runtimeRequestPayloadSchema,
@@ -61,6 +62,17 @@ describe('app-ipc-schemas', () => {
       endpoint: 'https://private.cursor.example'
     })).toThrow()
     expect(() => cursorSubscriptionDiscoveryPayloadSchema.parse({ apiKey: '' })).toThrow()
+  })
+
+  it('accepts only one bounded provider identity for credential reveal', () => {
+    expect(modelProviderCredentialRevealPayloadSchema.parse({
+      providerId: ' deepseek '
+    })).toEqual({ providerId: 'deepseek' })
+    expect(() => modelProviderCredentialRevealPayloadSchema.parse({ providerId: '' })).toThrow()
+    expect(() => modelProviderCredentialRevealPayloadSchema.parse({
+      providerId: 'deepseek',
+      credential: 'must-not-cross-the-request-boundary'
+    })).toThrow()
   })
 
   it('accepts only provider identity and refresh fields for models.dev lookup', () => {
@@ -598,6 +610,20 @@ describe('app-ipc-schemas', () => {
     expect(() => settingsPatchSchema.parse({
       agents: { kun: { approvalReviewer: 'operator' } }
     })).toThrow()
+  })
+
+  it('accepts clearing the provider while keeping the primary model non-empty', () => {
+    expect(settingsPatchSchema.parse({
+      agents: { kun: { providerId: '' } }
+    }).agents?.kun).toEqual({ providerId: '' })
+    const emptyModel = settingsPatchSchema.safeParse({
+      agents: { kun: { model: '' } }
+    })
+    expect(emptyModel.success).toBe(false)
+    if (!emptyModel.success) {
+      expect(emptyModel.error.issues[0]?.path).toEqual(['agents', 'kun', 'model'])
+      expect(emptyModel.error.issues[0]?.message).toMatch(/Too small/)
+    }
   })
 
   it('accepts the cursor spotlight preference', () => {

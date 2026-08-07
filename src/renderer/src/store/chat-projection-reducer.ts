@@ -585,17 +585,9 @@ export function reduceChatProjection(
         }
         return { ...base, blocks, error: context.clearRecoveringError(state.error) }
       }
-      const visibleBlocks = event.auto !== false && event.turnId
-        ? state.blocks.filter((block) => !(
-            block.kind === 'compaction' &&
-            block.id !== event.itemId &&
-            block.auto !== false &&
-            block.turnId === event.turnId
-          ))
-        : state.blocks
       return {
         ...base,
-        blocks: [...visibleBlocks, {
+        blocks: [...state.blocks, {
           kind: 'compaction',
           id: event.itemId,
           turnId: event.turnId,
@@ -708,11 +700,26 @@ export function reduceChatProjection(
       return state.activeThreadId === action.payload.threadId
         ? { lastDelegatedRuntimeState: action.payload }
         : {}
-    case 'usage_received':
+    case 'usage_received': {
+      const threadId = state.activeThreadId ?? ''
+      const turnId = action.payload.turnId
+      const turnTimingMetrics = new Map(state.turnTimingMetrics)
+      if (threadId !== (state.lastTurnUsage?.threadId ?? '')) turnTimingMetrics.clear()
+      if (turnId) {
+        const avgTtftMs = action.payload.turnAvgTtftMs
+        const avgTokensPerSecond = action.payload.turnAvgTokensPerSecond
+        if (avgTtftMs != null || avgTokensPerSecond != null) {
+          turnTimingMetrics.set(turnId, { avgTtftMs, avgTokensPerSecond })
+        } else {
+          turnTimingMetrics.delete(turnId)
+        }
+      }
       return {
         usageRefreshKey: state.usageRefreshKey + 1,
-        lastTurnUsage: { threadId: state.activeThreadId ?? '', snapshot: action.payload }
+        lastTurnUsage: { threadId, snapshot: action.payload },
+        turnTimingMetrics
       }
+    }
     case 'thread_snapshot_reconciled': {
       const snapshot = action.payload
       if (state.activeThreadId !== snapshot.threadId) return {}
@@ -750,25 +757,39 @@ export function reduceChatProjection(
               liveAssistantCreatedAt: undefined
             }
           : {}),
+        ...(state.lastTurnUsage && state.lastTurnUsage.threadId !== snapshot.threadId
+          ? { turnTimingMetrics: new Map() }
+          : {}),
         activeThreadGoal: snapshot.goal ?? state.activeThreadGoal,
         activeThreadTodos: snapshot.todos ?? state.activeThreadTodos,
         ...(threads !== state.threads ? { threads } : {}),
         error: context.clearRecoveringError(state.error)
       }
     }
-    case 'turn_completed': {
+    case 'turn_completed':
+    case 'turn_aborted': {
+      const aborted = action.type === 'turn_aborted'
       const threadId = state.activeThreadId
       const threads = threadId
-        ? settleProjectedThreadStatus(state.threads, threadId, 'completed')
+        ? settleProjectedThreadStatus(state.threads, threadId, aborted ? 'aborted' : 'completed')
         : state.threads
       if (!state.busy && !state.currentTurnId) {
-        return threads === state.threads ? {} : { threads }
+        if (!aborted) return threads === state.threads ? {} : { threads }
+        const blocks = context.settlePendingRuntimeWork(state.blocks)
+        return {
+          ...(threads !== state.threads ? { threads } : {}),
+          ...(blocks !== state.blocks ? { blocks } : {})
+        }
       }
       const patch = flushLiveProjection(state, context.now, {
         ...finalizeTurnTimingAt(state, context.now),
         error: null,
         currentTurnId: null,
         currentTurnOrchestration: null,
+        ...(aborted ? {
+          currentTurnUserId: null,
+          blocks: context.settlePendingRuntimeWork(state.blocks)
+        } : {}),
         ...(state.busy ? { busy: false } : {}),
         ...(threads !== state.threads ? { threads } : {})
       })

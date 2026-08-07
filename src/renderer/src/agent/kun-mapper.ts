@@ -850,7 +850,8 @@ function toolBlockFromItem(item: CoreTurnItemJson, child?: CoreChildRuntimeMetad
     sourceItemId: item.id,
     sourceItemKind: item.kind,
     ...(item.callId ? { callId: item.callId } : {}),
-    ...(item.toolName ? { toolName: item.toolName } : {})
+    ...(item.toolName ? { toolName: item.toolName } : {}),
+    ...(item.cancelRequestedAt ? { cancelRequestedAt: item.cancelRequestedAt } : {})
   }
   applyRuntimeDisclosureMeta(meta, item, child)
   const sources = extractToolSources(item)
@@ -1061,7 +1062,7 @@ function normalizeUserInputAnswer(answer: unknown): UserInputAnswer | null {
   }
 }
 
-function usageFromCore(usage: CoreUsageSnapshotJson): ThreadUsageSnapshot {
+function usageFromCore(usage: CoreUsageSnapshotJson, turnId?: string): ThreadUsageSnapshot {
   const inputTokens = usage.promptTokens ?? 0
   const outputTokens = usage.completionTokens ?? 0
   const hasHitTokens = typeof usage.cacheHitTokens === 'number' && Number.isFinite(usage.cacheHitTokens)
@@ -1085,8 +1086,18 @@ function usageFromCore(usage: CoreUsageSnapshotJson): ThreadUsageSnapshot {
     costUsd: usage.costUsd ?? 0,
     costCny: usage.costCny ?? null,
     tokenEconomySavingsTokens: usage.tokenEconomySavingsTokens ?? 0,
-    turns: usage.turns ?? 0
+    turns: usage.turns ?? 0,
+    avgTtftMs: nullableFinite(usage.avgTtftMs),
+    avgTokensPerSecond: nullableFinite(usage.avgTokensPerSecond),
+    turnAvgTtftMs: nullableFinite(usage.turnAvgTtftMs),
+    turnAvgTokensPerSecond: nullableFinite(usage.turnAvgTokensPerSecond),
+    ...(turnId ? { turnId } : {})
   }
+}
+
+/** Pass through a nullable metric, normalizing non-finite values to null. */
+function nullableFinite(value: number | null | undefined): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
 }
 
 function contextSnapshotFromCore(event: CoreRuntimeEventJson): RequestContextSnapshot | null {
@@ -1815,7 +1826,7 @@ const kunEventNormalizerDeps: KunEventNormalizerDeps = {
   }),
   contextSnapshot: contextSnapshotFromCore,
   delegatedRuntime: delegatedRuntimeFromCore,
-  usage: (event) => event.usage ? usageFromCore(event.usage) : null,
+  usage: (event) => event.usage ? usageFromCore(event.usage, event.turnId) : null,
   runtimeError: runtimeErrorFromEvent,
   errorFromRuntime: errorForRuntimeEvent
 }
@@ -1853,7 +1864,8 @@ async function applyRuntimeProjectionAction(
     case 'context_snapshot_received': sink.onContextSnapshot?.(action.payload); return
     case 'delegated_runtime_received': sink.onDelegatedRuntimeState?.(action.payload); return
     case 'usage_received': sink.onUsage?.(action.payload); return
-    case 'turn_completed': sink.onTurnComplete(); return
+    case 'turn_completed': sink.onTurnComplete('completed'); return
+    case 'turn_aborted': sink.onTurnComplete('aborted'); return
     case 'turn_failed': sink.onError(action.error, action.options); return
   }
 }

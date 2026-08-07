@@ -647,12 +647,15 @@ export function mergeKunRuntimeSettings(
   const nextLab = mergeKunLabSettings(current.lab, patch?.lab)
   // Do not let the nested partial patch leak through the broad object spread;
   // `nextSubagents` below is the fully materialized authoritative value.
+  // Primary `model` is handled separately: empty strings must not wipe the
+  // chat model (settings:set rejects model: '' via modelIdSchema.min(1)).
   const {
     subagents: _subagentsPatch,
     projectConfig: _projectConfigPatch,
     graph: _graphPatch,
     llmDebug: _llmDebugPatch,
     lab: _labPatch,
+    model: _modelPatch,
     ...flatPatch
   } = patch ?? {}
   void _subagentsPatch
@@ -660,6 +663,11 @@ export function mergeKunRuntimeSettings(
   void _graphPatch
   void _llmDebugPatch
   void _labPatch
+  void _modelPatch
+  const nextModel = nonEmptyStringOrFallback(
+    patch?.model,
+    nonEmptyStringOrFallback(current.model, DEFAULT_KUN_MODEL)
+  )
   // NOTE: approvalPolicy/sandboxMode/reviewer are merged through verbatim from
   // the patch. The three-mode UI selector resolves a deliberate selection to
   // its complete authority snapshot before dispatching the patch. We must NOT
@@ -668,6 +676,7 @@ export function mergeKunRuntimeSettings(
   const merged: KunRuntimeSettingsV1 = {
     ...current,
     ...flatPatch,
+    model: nextModel,
     approvalReviewer: normalizeApprovalReviewer(
       patch?.approvalReviewer ?? current.approvalReviewer
     ),

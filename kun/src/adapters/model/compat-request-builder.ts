@@ -4,6 +4,7 @@ import { isDeepSeekHost } from './model-error-probe.js'
 import { repairToolArguments } from './tool-argument-repair.js'
 import {
   COMPAT_ANTHROPIC_THINKING,
+  COMPAT_TOOL_RESULT_ERROR,
   CompatRequestCodecs,
   type CompatChatMessage,
   type CompatChatMessageContentPart
@@ -19,7 +20,7 @@ type AnthropicContentBlock = (
   | { type: 'thinking'; thinking: string; signature: string }
   | { type: 'redacted_thinking'; data: string }
   | { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> }
-  | { type: 'tool_result'; tool_use_id: string; content: string }
+  | { type: 'tool_result'; tool_use_id: string; content: string; is_error?: boolean }
 ) & { cache_control?: AnthropicCacheControl }
 type AnthropicMessage = {
   role: 'user' | 'assistant'
@@ -133,7 +134,8 @@ function messagesToAnthropic(
       const blocks: AnthropicContentBlock[] = [{
         type: 'tool_result',
         tool_use_id: message.tool_call_id,
-        content: chatContentToTextOnly(message.content)
+        content: chatContentToTextOnly(message.content),
+        ...(message[COMPAT_TOOL_RESULT_ERROR] === true ? { is_error: true } : {})
       }]
       if (Array.isArray(message.content)) {
         for (const part of message.content) {

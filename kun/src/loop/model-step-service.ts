@@ -709,26 +709,34 @@ export class ModelStepService {
       signal
     }).sentInputTokens
     // Share one capacity model between the compaction preflight and the
-    // send-time guard. The output budget is reserved for this request's
-    // completion, so compaction must treat `input + output` as the real
-    // pressure instead of only comparing input against the soft threshold.
+    // send-time guard. `maxOutputTokens` is a capability ceiling, so first
+    // derive the bounded ordinary reservation independently from the current
+    // input. Final request construction may only lower this preferred value
+    // when the rebuilt request leaves less room under the hard cap.
     const declaredOutputBudgetTokens = modelCapabilities.maxOutputTokens
     const requestHardCapTokens = modelCapabilities.contextWindowTokens
       ? Math.floor(modelCapabilities.contextWindowTokens * 0.85)
       : this.deps.compactor.hardCap(model, providerId)
-    // Use the request overhead as the conservative input floor during compaction;
-    // the final request is recalculated after history/image rehydration.
-    const effectiveBudget = (inputTokens: number): number =>
+    const preferredOutputBudgetTokens =
       modelCapabilities.endpointFormat === 'messages' && declaredOutputBudgetTokens === undefined
         ? 0
         : effectiveOutputBudgetTokens({
-            inputTokens,
+            inputTokens: 0,
             contextCapTokens: requestHardCapTokens,
             ...(declaredOutputBudgetTokens !== undefined
               ? { declaredMaxOutputTokens: declaredOutputBudgetTokens }
               : {})
           })
-    let outputBudgetTokens = effectiveBudget(requestOverheadTokens)
+    const effectiveBudget = (inputTokens: number): number =>
+      preferredOutputBudgetTokens === 0
+        ? 0
+        : effectiveOutputBudgetTokens({
+            inputTokens,
+            contextCapTokens: requestHardCapTokens,
+            declaredMaxOutputTokens: preferredOutputBudgetTokens,
+            fallbackTokens: preferredOutputBudgetTokens
+          })
+    let outputBudgetTokens = preferredOutputBudgetTokens
     // History compaction retries from the latest canonical snapshot to avoid
     // losing concurrent writes. That snapshot deliberately retains internal
     // goal records, including records for goals that later ended or changed.

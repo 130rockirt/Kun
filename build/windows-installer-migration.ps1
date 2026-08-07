@@ -1,6 +1,6 @@
 param(
   [Parameter(Mandatory = $true)]
-  [ValidateSet('ResolvePath', 'ResolveSource', 'ResolveUpdateScope', 'ResolveUninstaller', 'StopProcesses', 'Recover', 'Prepare', 'FallbackCleanup', 'Restore', 'ValidatePayload', 'UpdatePath')]
+  [ValidateSet('ResolvePath', 'ResolveSource', 'ResolveUpdateScope', 'ResolveUninstaller', 'StopProcesses', 'Recover', 'Prepare', 'FallbackCleanup', 'Restore', 'ValidatePayload', 'CleanupInPlaceLeftovers', 'UpdatePath')]
   [string]$Action,
   [string]$ResultPath = ''
 )
@@ -939,6 +939,93 @@ function Assert-PackagedInstallPayload {
   ) 'the unpacked Kun service manager entry'
 }
 
+function Test-InPlaceUpdateRequested {
+  return [string]::Equals(
+    (Get-EnvironmentValue 'KUN_INSTALLER_IN_PLACE_UPDATE').Trim(),
+    '1',
+    [StringComparison]::Ordinal
+  )
+}
+
+function Get-CurrentProductUninstallerFile {
+  $configured = (Get-EnvironmentValue 'KUN_INSTALLER_PRODUCT_NAME').Trim()
+  if (-not [string]::IsNullOrWhiteSpace($configured)) {
+    return 'Uninstall ' + $configured + '.exe'
+  }
+  return 'Uninstall ' + (Get-CanonicalLeaf) + '.exe'
+}
+
+function Test-RetainedInPlaceKnownEntry([IO.FileSystemInfo]$Entry) {
+  if ($Entry.PSIsContainer) {
+    # Keep packaged directories that the new payload still uses.
+    return @('resources', 'locales', 'bin') -contains $Entry.Name.ToLowerInvariant()
+  }
+
+  $expectedExecutable = Get-ExpectedApplicationExecutable
+  if ([string]::Equals($Entry.Name, $expectedExecutable, [StringComparison]::OrdinalIgnoreCase)) {
+    return $true
+  }
+
+  $currentUninstaller = Get-CurrentProductUninstallerFile
+  if ([string]::Equals($Entry.Name, $currentUninstaller, [StringComparison]::OrdinalIgnoreCase)) {
+    return $true
+  }
+
+  # Electron runtime files from the newly extracted package stay in place.
+  $runtimeFiles = @(
+    'uninstallericon.ico',
+    'chrome_100_percent.pak',
+    'chrome_200_percent.pak',
+    'd3dcompiler_47.dll',
+    'dxcompiler.dll',
+    'dxil.dll',
+    'ffmpeg.dll',
+    'icudtl.dat',
+    'libegl.dll',
+    'libglesv2.dll',
+    'license.electron.txt',
+    'licenses.chromium.html',
+    'resources.pak',
+    'snapshot_blob.bin',
+    'v8_context_snapshot.bin',
+    'vk_swiftshader.dll',
+    'vk_swiftshader_icd.json',
+    'vulkan-1.dll'
+  )
+  return $runtimeFiles -contains $Entry.Name.ToLowerInvariant()
+}
+
+function Invoke-CleanupInPlaceLeftovers {
+  if (-not (Test-InPlaceUpdateRequested)) {
+    return
+  }
+
+  $target = Normalize-FullPath (Get-EnvironmentValue 'KUN_INSTALLER_TARGET')
+  $source = Normalize-FullPath (Get-EnvironmentValue 'KUN_INSTALLER_SOURCE')
+  if ([string]::IsNullOrWhiteSpace($target)) {
+    throw 'KUN_INSTALLER_TARGET is required for in-place leftover cleanup.'
+  }
+  if (-not [string]::IsNullOrWhiteSpace($source) -and -not (Test-PathEqual $source $target)) {
+    throw "In-place leftover cleanup requires the source and target to match: $source -> $target"
+  }
+
+  Assert-PackagedInstallPayload
+
+  $legacyEntries = @(Get-ChildItem -LiteralPath $target -Force | Where-Object {
+    (Test-KnownApplicationEntry $_) -and -not (Test-RetainedInPlaceKnownEntry $_)
+  })
+  foreach ($entry in $legacyEntries) {
+    if ($entry.PSIsContainer) {
+      Assert-NoReparsePointsInTree $entry 'Obsolete in-place application directory'
+    } elseif (Test-ReparsePoint $entry.FullName) {
+      throw "Obsolete in-place application file is a reparse point: $($entry.FullName)"
+    }
+  }
+  foreach ($entry in $legacyEntries) {
+    Remove-KnownApplicationEntry $entry
+  }
+}
+
 function Test-AppSpecificUninstaller([string]$Source) {
   if ([string]::IsNullOrWhiteSpace($Source)) {
     return $false
@@ -1383,6 +1470,9 @@ try {
     }
     'ValidatePayload' {
       Assert-PackagedInstallPayload
+    }
+    'CleanupInPlaceLeftovers' {
+      Invoke-CleanupInPlaceLeftovers
     }
     'UpdatePath' {
       Update-UserPath

@@ -25,6 +25,8 @@ export class UsageService {
   private readonly counter = new UsageCounter()
   private readonly cache = new CacheTelemetry()
   private readonly cacheSignatures = new Map<string, CacheRequestSignature>()
+  /** Raw per-request timing sums keyed by `threadId::turnId`. */
+  private readonly turnTiming = new Map<string, TurnTiming>()
   /**
    * Rolling cacheable-hit-rate history keyed by thread + provider/model/endpoint
    * so a model or provider switch starts a FRESH baseline instead of polluting
@@ -41,11 +43,16 @@ export class UsageService {
   record(
     threadId: string,
     usage: UsageSnapshot,
-    signature?: CacheRequestSignature
+    signature?: CacheRequestSignature,
+    turnId?: string
   ): UsageSnapshot {
     const enriched = signature ? this.withCacheDiagnostics(threadId, usage, signature) : usage
     this.cache.ingest(threadId, enriched)
-    return this.counter.record(threadId, enriched)
+    const cumulative = this.counter.record(threadId, enriched)
+    if (turnId) {
+      return attachTurnAverages(cumulative, this.foldTurnTiming(threadId, turnId, enriched))
+    }
+    return cumulative
   }
 
   recordTokenEconomySavings(
@@ -64,6 +71,7 @@ export class UsageService {
     this.cache.ingest(threadId, seeded)
     this.cacheSignatures.delete(threadId)
     this.clearCacheHistory(threadId)
+    this.clearTurnTiming(threadId)
     return seeded
   }
 
@@ -82,14 +90,64 @@ export class UsageService {
   reset(threadId?: string): void {
     this.counter.reset(threadId)
     this.cache.reset(threadId)
-    if (threadId === undefined) this.cacheSignatures.clear()
-    else this.cacheSignatures.delete(threadId)
+    if (threadId === undefined) {
+      this.cacheSignatures.clear()
+    } else {
+      this.cacheSignatures.delete(threadId)
+    }
     if (threadId === undefined) {
       this.cacheHitHistory.clear()
       this.cacheRegressionCooldown.clear()
     } else {
       this.clearCacheHistory(threadId)
     }
+    this.clearTurnTiming(threadId)
+  }
+
+  /**
+   * Drop per-turn timing for a finished turn so long-lived threads do not
+   * accumulate one entry per historical turn. Call when the turn settles.
+   */
+  endTurn(threadId: string, turnId: string): void {
+    this.turnTiming.delete(this.turnKey(threadId, turnId))
+  }
+
+  private turnKey(threadId: string, turnId: string): string {
+    return `${threadId}::${turnId}`
+  }
+
+  private clearTurnTiming(threadId?: string): void {
+    if (threadId === undefined) {
+      this.turnTiming.clear()
+      return
+    }
+    const prefix = `${threadId}::`
+    for (const key of this.turnTiming.keys()) {
+      if (key.startsWith(prefix)) this.turnTiming.delete(key)
+    }
+  }
+
+  private foldTurnTiming(threadId: string, turnId: string, snapshot: UsageSnapshot): TurnTiming {
+    const key = this.turnKey(threadId, turnId)
+    const agg = this.turnTiming.get(key) ?? emptyTurnTiming()
+    const ttft = snapshot.requestTtftMs
+    if (typeof ttft === 'number' && Number.isFinite(ttft) && ttft >= 0) {
+      agg.ttftSumMs += ttft
+      agg.ttftCalls += 1
+    }
+    const generation = snapshot.requestGenerationMs
+    if (
+      typeof generation === 'number' &&
+      Number.isFinite(generation) &&
+      generation >= 0 &&
+      snapshot.completionTokens > 0
+    ) {
+      agg.generationSumMs += generation
+      agg.completionTokensSum += snapshot.completionTokens
+      agg.tpsCalls += 1
+    }
+    this.turnTiming.set(key, agg)
+    return agg
   }
 
   /** Drop all signature-keyed cache history + cooldown rows for one thread. */
@@ -156,6 +214,40 @@ export class UsageService {
       cacheMissReasons: diagnostic.reasons,
       cacheSuggestions: [...new Set(suggestions)]
     }
+  }
+}
+
+type TurnTiming = {
+  ttftSumMs: number
+  generationSumMs: number
+  completionTokensSum: number
+  ttftCalls: number
+  tpsCalls: number
+}
+
+function emptyTurnTiming(): TurnTiming {
+  return {
+    ttftSumMs: 0,
+    generationSumMs: 0,
+    completionTokensSum: 0,
+    ttftCalls: 0,
+    tpsCalls: 0
+  }
+}
+
+/**
+ * Attach this turn's averages to the cumulative snapshot. TTFT is a simple
+ * mean; tokens-per-second is weighted by total generated tokens over total
+ * generation time.
+ */
+function attachTurnAverages(snapshot: UsageSnapshot, timing: TurnTiming): UsageSnapshot {
+  return {
+    ...snapshot,
+    turnAvgTtftMs: timing.ttftCalls > 0 ? timing.ttftSumMs / timing.ttftCalls : null,
+    turnAvgTokensPerSecond:
+      timing.generationSumMs > 0
+        ? (timing.completionTokensSum / timing.generationSumMs) * 1_000
+        : null
   }
 }
 

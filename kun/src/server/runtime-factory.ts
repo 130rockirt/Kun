@@ -104,6 +104,7 @@ import {
 } from '../contracts/policy.js'
 import { AgentLoop, type AgentLoopOptions } from '../loop/agent-loop.js'
 import { ContextCompactor } from '../loop/context-compactor.js'
+import { withModelTiming } from '../loop/model-timing-decorator.js'
 import type { TokenEconomyConfig } from '../loop/token-economy.js'
 import {
   DEFAULT_CONTEXT_THRESHOLDS,
@@ -138,6 +139,7 @@ import { buildBuiltinHooks } from '../hooks/builtins/index.js'
 import { mergeBuiltinSubagentProfiles } from '../delegation/builtin-profiles.js'
 import { buildExploreAgentToolProvider } from '../adapters/tool/explore-agent-tool-provider.js'
 import { InflightTracker } from '../loop/inflight-tracker.js'
+import { ToolCancellationRegistry } from '../loop/tool-cancellation-registry.js'
 import { SteeringQueue } from '../loop/steering-queue.js'
 import type { TurnRunOutcome } from '../loop/turn-execution-types.js'
 import { RandomIdGenerator } from '../ports/id-generator.js'
@@ -148,6 +150,7 @@ import type { ToolHostContext } from '../ports/tool-host.js'
 import { ScopedMigrationMaintenanceLock } from '../ports/migration-maintenance-lock.js'
 import { KUN_SYSTEM_PROMPT } from '../prompt/kun-system-prompt.js'
 import { RuntimeEventRecorder } from '../services/runtime-event-recorder.js'
+import { ToolCancellationService } from '../services/tool-cancellation-service.js'
 import { GraphRuntimeComposition } from './graph-runtime-factory.js'
 import { createGraphRuntimeStartOptions } from './graph-runtime-bootstrap.js'
 import {
@@ -411,6 +414,7 @@ async function createKunServeRuntimeComposition(
   const workspaceInspector = new LocalWorkspaceInspector()
   const usageService = new UsageService()
   const inflight = new InflightTracker()
+  const toolCancellation = new ToolCancellationRegistry()
   const steering = new SteeringQueue()
   let modelProfiles = modelContextProfilesFromConfig({
     contextCompaction: activeOptions.contextCompaction,
@@ -772,17 +776,23 @@ async function createKunServeRuntimeComposition(
     modelCapabilities,
     routeHealth
   )
+  /**
+   * Timing-instrumented entry point shared by the chat loop, child agents,
+   * review, and compaction so every model response reports TTFT and
+   * generation duration on its usage chunk.
+   */
+  const timedModelClient = withModelTiming(modelClient)
   const routePoolTests = new RoutePoolTestService(
     modelClient,
     () => modelClient.routePools(),
     routeHealth
   )
   const subagentRouter = new SubagentRouter({
-    modelClient,
+    modelClient: timedModelClient,
     roles: () => activeOptions.roles,
     defaultModel: () => activeOptions.model,
     recordUsage: async ({ threadId, turnId, model, usage }) => {
-      const cumulative = usageService.record(threadId, usage)
+      const cumulative = usageService.record(threadId, usage, undefined, turnId)
       await events.record({
         kind: 'usage',
         threadId,
@@ -1025,7 +1035,7 @@ async function createKunServeRuntimeComposition(
     inflight,
     steering,
     compactor,
-    model: modelClient,
+    model: timedModelClient,
     usage: usageService,
     prefix,
     attachmentStore: () => attachmentStore,
@@ -1041,9 +1051,7 @@ async function createKunServeRuntimeComposition(
 	    transitionGraphPlanningDraft: (input) =>
 	      graphRuntime.transitionPlanningDraft(input),
 	    cancelGraphSourceRuns: ({ threadId, sourceTurnId }) =>
-	      graphRuntime.handleSourceTurnTerminal(threadId, sourceTurnId, 'aborted', {
-	        forceCancel: true
-	      }),
+	      graphRuntime.cancelSourceTurnRunsExplicitly(threadId, sourceTurnId),
 	    migrationMaintenance,
 	    ids,
 	    nowIso
@@ -1075,6 +1083,11 @@ async function createKunServeRuntimeComposition(
     turns: turnService,
     nowIso
   })
+  const toolCancellationService = new ToolCancellationService(
+    turnService,
+    toolCancellation,
+    nowIso
+  )
   const supplyChainTrust = new InMemoryPublisherTrustStore()
   backgroundShellRuntime.bindStopHandler(stopBashSessionById)
   const backgroundShellTool = createBackgroundShellTool({
@@ -1100,7 +1113,7 @@ async function createKunServeRuntimeComposition(
   const reviewDeps = {
     threadStore,
     turns: turnService,
-    model: modelClient,
+    model: timedModelClient,
     defaultModel: activeOptions.model,
     nowIso,
     modelCapabilities,
@@ -1427,7 +1440,7 @@ async function createKunServeRuntimeComposition(
 	        turns: turnService,
 	        nowIso,
 	        executor: createChildAgentExecutor({
-	          model: modelClient,
+	          model: timedModelClient,
 	          toolHost: childToolHost,
 	          prefix,
 	          defaultModel: activeOptions.model,
@@ -1733,13 +1746,14 @@ async function createKunServeRuntimeComposition(
 	    approvalGate,
       approvalReview: approvalReviewService,
     userInputGate,
-    model: modelClient,
+    model: timedModelClient,
     toolHost,
     sdkRuntime,
     usage: usageService,
     events,
     turns: turnService,
     inflight,
+    toolCancellation,
     steering,
     compactor,
     prefix,
@@ -2473,6 +2487,10 @@ async function createKunServeRuntimeComposition(
 	        tools: [taskGraphTool]
 	      },
 	      ...buildDelegationToolProviders(delegationRuntime, subagentRouter),
+	      ...buildExploreAgentToolProvider(
+	        delegationRuntime,
+	        () => activeOptions.lab?.exploreAgent
+	      ),
 	      ...buildComponentDesignToolProviders(delegationRuntime)
 	    ])
 
@@ -2580,7 +2598,7 @@ async function createKunServeRuntimeComposition(
 	    turnService.updateRuntimeConfig({
 	      defaultModel: activeOptions.model,
 	      contextCompaction: activeOptions.contextCompaction,
-	      model: modelClient,
+	      model: timedModelClient,
 	      maxConcurrentTurns: activeOptions.runtime?.turnLimits?.maxConcurrentTurns
 	    })
 	    extensionAgent.updateRuntimeConfig({
@@ -2634,9 +2652,10 @@ async function createKunServeRuntimeComposition(
 	      }
 	    }
 	  }
-	  return {
+  return {
     threadService,
     turnService,
+    toolCancellationService,
     reviewService,
     usageService,
     eventBus,

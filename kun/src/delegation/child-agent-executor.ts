@@ -286,7 +286,10 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
       // providerId into every ModelRequest, and the executor's model is the
       // MultiProviderModelClient, so this single field is all routing needs.
       ...(input.providerId ? { providerId: input.providerId } : {}),
-      ...(input.accountId ? { accountId: input.accountId } : {})
+      ...(input.accountId ? { accountId: input.accountId } : {}),
+      // Persist the resolved profile id so the GUI can label explore/side
+      // sessions (e.g. return-bar "viewing explore process").
+      ...(input.profile?.trim() ? { agentId: input.profile.trim() } : {})
     }, {
       id: input.childId,
       title,

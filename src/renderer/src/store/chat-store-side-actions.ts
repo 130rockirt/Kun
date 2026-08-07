@@ -19,6 +19,7 @@ import {
 } from './chat-store-helpers'
 import { upsertUserBlock } from './chat-store-runtime-helpers'
 import { monotonicToolStatus } from './chat-projection-reducer'
+import { invalidateThreadSnapshot } from './thread-snapshot-cache'
 import { serviceTierForComposerSelection } from '../components/chat/composer-fast-mode'
 
 type SideContext = {
@@ -917,6 +918,7 @@ export function createSideActions(ctx: SideContext): Pick<
         const provider = ctx.getProvider()
         try {
           await provider.deleteThread(sideId)
+          invalidateThreadSnapshot(sideId)
         } catch (e) {
           ctx.set({
             error: ctx.formatRuntimeError(e),

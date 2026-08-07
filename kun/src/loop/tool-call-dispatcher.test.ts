@@ -97,6 +97,45 @@ describe('ToolCallDispatcher', () => {
     expect(executed).toEqual(['read', 'grep'])
   })
 
+  it('continues a parallel batch when one result is a tool-level cancellation', async () => {
+    const persisted: Array<{ callId: string; isError?: boolean }> = []
+    const dispatcher = new ToolCallDispatcher({
+      executeSafely: vi.fn(async (input: { call: ToolCallLike }) => {
+        if (input.call.callId === 'read_1') {
+          return {
+            item: makeToolResultItem({
+              id: 'item_read_1',
+              threadId: 'thread_1',
+              turnId: 'turn_1',
+              callId: 'read_1',
+              toolName: input.call.toolName,
+              output: { code: 'tool_cancelled_by_user' },
+              isError: true
+            }),
+            approved: false
+          }
+        }
+        return resultFor(input.call)
+      }),
+      persistResult: vi.fn(async (_threadId: string, _turnId: string, entry: ToolCallLike, result: ToolHostResult) => {
+        persisted.push({
+          callId: entry.callId,
+          isError: result.item.kind === 'tool_result' ? result.item.isError : undefined
+        })
+      }),
+      persistSuppressed: vi.fn(async () => undefined)
+    } as never)
+
+    await expect(dispatcher.dispatch({
+      dispatch: dispatchInput([call('read', 'read_1'), call('grep', 'grep_1')]),
+      context
+    })).resolves.toBe('continue')
+    expect(persisted).toEqual([
+      { callId: 'read_1', isError: true },
+      { callId: 'grep_1', isError: false }
+    ])
+  })
+
   it('reports all-suppressed only when no call executes', async () => {
     const persistSuppressed = vi.fn(async () => undefined)
     const dispatcher = new ToolCallDispatcher({

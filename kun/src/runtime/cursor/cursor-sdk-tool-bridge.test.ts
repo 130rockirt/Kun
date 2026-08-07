@@ -24,6 +24,62 @@ const tools: CursorBridgeTool[] = [{
   providerId: 'extension:render',
   providerKind: 'extension'
 }, {
+  name: 'read',
+  description: 'Overlaps Cursor built-in read',
+  toolKind: 'tool_call',
+  inputSchema: { type: 'object' },
+  providerId: 'builtin',
+  providerKind: 'built-in'
+}, {
+  name: 'bash',
+  description: 'Overlaps Cursor built-in shell',
+  toolKind: 'command_execution',
+  inputSchema: { type: 'object' },
+  providerId: 'builtin',
+  providerKind: 'built-in'
+}, {
+  name: 'edit',
+  description: 'Overlaps Cursor built-in edit',
+  toolKind: 'file_change',
+  inputSchema: { type: 'object' },
+  providerId: 'builtin',
+  providerKind: 'built-in'
+}, {
+  name: 'write',
+  description: 'Overlaps Cursor built-in write',
+  toolKind: 'file_change',
+  inputSchema: { type: 'object' },
+  providerId: 'builtin',
+  providerKind: 'built-in'
+}, {
+  name: 'grep',
+  description: 'Overlaps Cursor built-in grep',
+  toolKind: 'tool_call',
+  inputSchema: { type: 'object' },
+  providerId: 'builtin',
+  providerKind: 'built-in'
+}, {
+  name: 'glob',
+  description: 'Overlaps Cursor built-in glob',
+  toolKind: 'tool_call',
+  inputSchema: { type: 'object' },
+  providerId: 'builtin',
+  providerKind: 'built-in'
+}, {
+  name: 'find',
+  description: 'Overlaps Cursor built-in find',
+  toolKind: 'tool_call',
+  inputSchema: { type: 'object' },
+  providerId: 'builtin',
+  providerKind: 'built-in'
+}, {
+  name: 'ls',
+  description: 'Overlaps Cursor built-in ls',
+  toolKind: 'tool_call',
+  inputSchema: { type: 'object' },
+  providerId: 'builtin',
+  providerKind: 'built-in'
+}, {
   name: '  padded_tool  ',
   description: 'Padded name',
   toolKind: 'command_execution',
@@ -39,7 +95,7 @@ const tools: CursorBridgeTool[] = [{
 }]
 
 describe('Cursor SDK Kun custom-tool bridge', () => {
-  test('keeps Kun and provider provenance (including toolKind) while excluding internal-only tools', () => {
+  test('bridges Kun-exclusive tools while excluding overlap and internal-only tools', () => {
     expect(selectCursorBridgeTools(tools).map((tool) => [
       tool.name,
       tool.toolKind,
@@ -50,6 +106,15 @@ describe('Cursor SDK Kun custom-tool bridge', () => {
       ['extension_render', 'tool_call', 'extension:render', 'extension'],
       ['  padded_tool  ', 'command_execution', 'builtin', 'built-in']
     ])
+  })
+
+  test('does not advertise overlapping Cursor built-ins as custom tools', () => {
+    const customTools = buildCursorCustomTools(tools, async () => ({ output: 'ok' }))
+    for (const name of ['read', 'bash', 'edit', 'write', 'grep', 'glob', 'find', 'ls', 'echo']) {
+      expect(customTools[name]).toBeUndefined()
+    }
+    expect(customTools.mcp_call_tool).toBeDefined()
+    expect(customTools.extension_render).toBeDefined()
   })
 
   test('maps Cursor callbacks to Kun execution and preserves call identity and provenance', async () => {

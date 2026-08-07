@@ -207,6 +207,19 @@ describe('runtime projection action normalization', () => {
     }])
   })
 
+  it('keeps turn interruption distinct from successful completion', () => {
+    expect(runtimeProjectionActionsFromEvent({
+      kind: 'turn_completed',
+      threadId: 'thread_1',
+      turnId: 'turn_1'
+    })).toEqual([{ type: 'turn_completed' }])
+    expect(runtimeProjectionActionsFromEvent({
+      kind: 'turn_aborted',
+      threadId: 'thread_1',
+      turnId: 'turn_1'
+    })).toEqual([{ type: 'turn_aborted' }])
+  })
+
   it('normalizes the same goal event to a stable action transcript', () => {
     const event: CoreRuntimeEventJson = {
       kind: 'goal_updated',
@@ -2117,6 +2130,78 @@ describe('usage event mapping', () => {
       tokenEconomySavingsTokens: 4096,
       turns: 1
     })
+  })
+
+  it('passes through per-turn and session timing averages', async () => {
+    let captured: unknown = null
+    const sink: ThreadEventSink = {
+      ...makeSink(),
+      onUsage: (usage) => {
+        captured = usage
+      }
+    }
+
+    await dispatchKunRuntimeEvent(
+      {
+        kind: 'usage',
+        seq: 14,
+        turnId: 'turn_1',
+        usage: {
+          promptTokens: 100,
+          completionTokens: 50,
+          totalTokens: 150,
+          turnAvgTtftMs: 1_000,
+          turnAvgTokensPerSecond: 40.2,
+          avgTtftMs: 1_200,
+          avgTokensPerSecond: 38.5,
+          turns: 1
+        }
+      },
+      sink,
+      async () => undefined
+    )
+
+    expect(captured).toMatchObject({
+      turnAvgTtftMs: 1_000,
+      turnAvgTokensPerSecond: 40.2,
+      avgTtftMs: 1_200,
+      avgTokensPerSecond: 38.5,
+      turnId: 'turn_1'
+    })
+  })
+
+  it('normalizes missing or invalid timing fields to null', async () => {
+    let captured: unknown = null
+    const sink: ThreadEventSink = {
+      ...makeSink(),
+      onUsage: (usage) => {
+        captured = usage
+      }
+    }
+
+    await dispatchKunRuntimeEvent(
+      {
+        kind: 'usage',
+        seq: 15,
+        usage: {
+          promptTokens: 10,
+          completionTokens: 2,
+          totalTokens: 12,
+          turnAvgTtftMs: Number.NaN,
+          turns: 1
+        }
+      },
+      sink,
+      async () => undefined
+    )
+
+    expect(captured).toMatchObject({
+      turnAvgTtftMs: null,
+      turnAvgTokensPerSecond: null,
+      avgTtftMs: null,
+      avgTokensPerSecond: null
+    })
+    expect((captured as { turnId?: string }).turnId).toBeUndefined()
   })
 })
 

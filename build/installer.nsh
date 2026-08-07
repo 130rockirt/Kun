@@ -17,6 +17,7 @@ Var /GLOBAL KunInstallerPreserveOtherScope
 Var /GLOBAL KunInstallerOtherUninstallString
 Var /GLOBAL KunInstallerOtherQuietUninstallString
 Var /GLOBAL KunInstallerRestoreInteractive
+Var /GLOBAL KunInstallerInPlaceUpdate
 Var /GLOBAL KunInstallerCurrentUserShortcutName
 Var /GLOBAL KunInstallerCurrentUserMenuDirectory
 !endif
@@ -77,6 +78,7 @@ Var /GLOBAL KunInstallerStopResult
   StrCpy $KunInstallerOtherQuietUninstallString ""
   !ifndef BUILD_UNINSTALLER
     StrCpy $KunInstallerRestoreInteractive 0
+    StrCpy $KunInstallerInPlaceUpdate 0
   !endif
 
   ${if} ${isUpdated}
@@ -157,7 +159,14 @@ Var /GLOBAL KunInstallerStopResult
 !macroend
 
 !macro customUnInstallCheck
-  ${if} $KunInstallerPrimarySourceStale != 1
+  ${if} $KunInstallerInPlaceUpdate == 1
+    # Same-directory automatic updates overwrite in place. Running the old
+    # uninstaller or FallbackCleanup first can empty the program directory when
+    # the subsequent extract/validate step fails.
+    ClearErrors
+    StrCpy $R0 0
+    DetailPrint "In-place automatic update; skipping pre-install removal of $KunInstallerPrimarySourceDir."
+  ${elseIf} $KunInstallerPrimarySourceStale != 1
     StrCpy $KunInstallerSourceDir $KunInstallerPrimarySourceDir
     Call KunHandleOldUninstallerResult
   ${else}
@@ -214,6 +223,13 @@ Var /GLOBAL KunInstallerStopResult
     Quit
   ${endif}
 
+  ${if} $KunInstallerInPlaceUpdate == 1
+    !insertmacro kunRunMigrationHelper CleanupInPlaceLeftovers
+    ${if} $KunInstallerHelperExitCode != 0
+      DetailPrint "Kun could not remove obsolete in-place update leftovers: $KunInstallerHelperOutput"
+    ${endif}
+  ${endif}
+
   !insertmacro kunRunMigrationHelper UpdatePath
   ${if} $KunInstallerHelperExitCode != 0
     DetailPrint "Kun could not update the user PATH: $KunInstallerHelperOutput"
@@ -256,6 +272,7 @@ Var /GLOBAL KunInstallerStopResult
     System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_PRIMARY_SOURCE_STALE", "$KunInstallerPrimarySourceStale").r0'
     System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_SECONDARY_SOURCE_STALE", "$KunInstallerSecondarySourceStale").r0'
     System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_CANDIDATE_EXPLICIT", "$KunInstallerCandidateExplicit").r0'
+    System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_IN_PLACE_UPDATE", "$KunInstallerInPlaceUpdate").r0'
     System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_INSTALL_MODE", "$installMode").r0'
   FunctionEnd
 
@@ -528,6 +545,7 @@ Var /GLOBAL KunInstallerStopResult
       Call KunRetireSelectedShellState
     ${else}
       StrCpy $KunInstallerSourceDir $KunInstallerPrimarySourceDir
+      Call KunMarkInPlaceAutomaticUpdate
       Call KunSecureSelectedUninstallRegistration
     ${endif}
     ${if} $KunInstallerHelperOutput == "2"
@@ -541,6 +559,20 @@ Var /GLOBAL KunInstallerStopResult
     ${endif}
     StrCpy $KunInstallerSourceDir $KunInstallerPrimarySourceDir
     StrCpy $KunInstallerMigrationPrepared 1
+  FunctionEnd
+
+  Function KunMarkInPlaceAutomaticUpdate
+    StrCpy $KunInstallerInPlaceUpdate 0
+    ${ifNot} ${isUpdated}
+      Return
+    ${endif}
+    ${if} $KunInstallerPrimarySourceDir == ""
+      Return
+    ${endif}
+    ${if} $KunInstallerPrimarySourceDir == $KunInstallerTargetDir
+      StrCpy $KunInstallerInPlaceUpdate 1
+      DetailPrint "Automatic update will overwrite $KunInstallerTargetDir in place without pre-deleting the application payload."
+    ${endif}
   FunctionEnd
 
   Function KunSuspendCurrentUserUninstallRegistration
@@ -575,6 +607,14 @@ Var /GLOBAL KunInstallerStopResult
   FunctionEnd
 
   Function KunSecureSelectedUninstallRegistration
+    ${if} $KunInstallerInPlaceUpdate == 1
+      # Hide the old uninstaller from electron-builder so it cannot wipe the
+      # same directory before the new payload is written and validated.
+      DeleteRegValue SHELL_CONTEXT "${UNINSTALL_REGISTRY_KEY}" UninstallString
+      DeleteRegValue SHELL_CONTEXT "${UNINSTALL_REGISTRY_KEY}" QuietUninstallString
+      DetailPrint "In-place automatic update; suppressed the selected-scope uninstaller until the new payload is installed."
+      Return
+    ${endif}
     Call KunResolveTrustedUninstaller
     ${if} $KunInstallerHelperOutput == ""
       DeleteRegValue SHELL_CONTEXT "${UNINSTALL_REGISTRY_KEY}" UninstallString

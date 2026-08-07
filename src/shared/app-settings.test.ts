@@ -848,6 +848,20 @@ describe('isKunRuntimeInsecure', () => {
 })
 
 describe('mergeKunRuntimeSettings', () => {
+  it('does not let an empty primary model wipe the current chat model', () => {
+    const current = defaultKunRuntimeSettings()
+    expect(current.model.trim().length).toBeGreaterThan(0)
+
+    const next = mergeKunRuntimeSettings(current, {
+      providerId: 'opencode-go',
+      model: ''
+    })
+
+    expect(next.providerId).toBe('opencode-go')
+    expect(next.model).toBe(current.model)
+    expect(next.model.trim().length).toBeGreaterThan(0)
+  })
+
   it('merges the new-conversation Agent Perspective capture default', () => {
     const current = defaultKunRuntimeSettings()
     const next = mergeKunRuntimeSettings(current, {

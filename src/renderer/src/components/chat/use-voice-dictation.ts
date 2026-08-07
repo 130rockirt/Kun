@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
+  CUSTOM_SPEECH_TO_TEXT_PROVIDER_ID,
   resolveKunSpeechToTextSettings,
   getKunRuntimeSettings,
   type AppSettingsV1,
@@ -9,6 +10,11 @@ import {
 } from '@shared/app-settings'
 import { SPEECH_TRANSCRIPTION_MAX_DURATION_MS } from '@shared/speech-to-text'
 import { SETTINGS_CHANGED_EVENT } from '../../lib/keyboard-shortcut-settings'
+import {
+  connectionCredentialStateById,
+  fetchSharedModelConnectionCredentialStates,
+  providerHasUsableCredential
+} from '../../lib/provider-credential-readiness'
 
 export type VoiceDictationStatus = 'idle' | 'recording' | 'transcribing'
 
@@ -19,14 +25,68 @@ const TRANSCRIPTION_SAMPLE_RATE = 16_000
 const MIN_RECORDING_MS = 500
 const RECORDER_MIME_CANDIDATES = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4']
 
+export type SpeechToTextSettingsState = {
+  speechToText: KunSpeechToTextSettingsV1 | null
+  /** True when the bound shared provider has usable Registry credentials. */
+  credentialReady: boolean
+}
+
+function speechProviderCredentialReady(
+  speechToText: KunSpeechToTextSettingsV1 | null,
+  connectionUsable: boolean
+): boolean {
+  if (!speechToText) return false
+  if (speechToText.apiKey.trim()) return true
+  const providerId = speechToText.providerId.trim()
+  if (!providerId || providerId === CUSTOM_SPEECH_TO_TEXT_PROVIDER_ID) return false
+  if (
+    speechToText.protocol === 'local-whisper' ||
+    speechToText.protocol === 'gemini-cli-audio'
+  ) {
+    return false
+  }
+  return connectionUsable
+}
+
 /** Resolved speech-to-text settings, kept in sync with the settings screen. */
-export function useSpeechToTextSettings(): KunSpeechToTextSettingsV1 | null {
+export function useSpeechToTextSettings(): SpeechToTextSettingsState {
   const [speechToText, setSpeechToText] = useState<KunSpeechToTextSettingsV1 | null>(null)
+  const [credentialReady, setCredentialReady] = useState(false)
 
   useEffect(() => {
     let cancelled = false
+    const refreshCredentialReady = (next: KunSpeechToTextSettingsV1): void => {
+      const providerId = next.providerId.trim()
+      if (
+        !providerId ||
+        providerId === CUSTOM_SPEECH_TO_TEXT_PROVIDER_ID ||
+        next.protocol === 'local-whisper' ||
+        next.protocol === 'gemini-cli-audio' ||
+        next.apiKey.trim()
+      ) {
+        if (!cancelled) {
+          setCredentialReady(speechProviderCredentialReady(next, false))
+        }
+        return
+      }
+      void fetchSharedModelConnectionCredentialStates()
+        .then((states) => {
+          if (cancelled) return
+          const usable = providerHasUsableCredential(
+            { id: providerId, apiKey: next.apiKey },
+            connectionCredentialStateById(states, providerId)
+          )
+          setCredentialReady(speechProviderCredentialReady(next, usable))
+        })
+        .catch(() => {
+          if (!cancelled) setCredentialReady(false)
+        })
+    }
     const apply = (settings: AppSettingsV1): void => {
-      if (!cancelled) setSpeechToText(resolveKunSpeechToTextSettings(settings))
+      if (cancelled) return
+      const resolved = resolveKunSpeechToTextSettings(settings)
+      setSpeechToText(resolved)
+      refreshCredentialReady(resolved)
     }
     if (typeof window.kunGui?.getSettings === 'function') {
       void window.kunGui.getSettings().then(apply).catch(() => undefined)
@@ -41,7 +101,7 @@ export function useSpeechToTextSettings(): KunSpeechToTextSettingsV1 | null {
     }
   }, [])
 
-  return speechToText
+  return { speechToText, credentialReady }
 }
 
 export function usePromptOptimizationSettings(): KunPromptOptimizationSettingsV1 | null {

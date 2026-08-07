@@ -23,7 +23,8 @@ import {
   resolveRuntimeRequestTimeoutMs,
   runtimeAuthHeaders,
   runtimeRequestViaHost,
-  runtimeRequestViaLease
+  runtimeRequestViaLease,
+  setResolvedKunRuntimeConnectionForTests
 } from './kun-adapter'
 import { buildRuntimeCapabilityManifest } from '../../../kun/src/contracts/capabilities.js'
 import { modelCapabilitiesForModel } from '../../../kun/src/loop/model-context-profile.js'
@@ -479,5 +480,50 @@ describe('kunRuntimeAdapter.resolveConnection', () => {
       await kunRuntimeAdapter.stopAndWait()
       await rm(root, { recursive: true, force: true })
     }
+  })
+})
+
+describe('kunRuntimeAdapter.isChildRunning dead-PID recovery', () => {
+  afterEach(async () => {
+    setResolvedKunRuntimeConnectionForTests(null)
+    await kunRuntimeAdapter.stopAndWait()
+  })
+
+  it('clears a cached discovery record whose PID is no longer alive (#1116)', () => {
+    setResolvedKunRuntimeConnectionForTests({
+      version: 1,
+      instanceId: 'dead-shared-runtime',
+      pid: 2_147_483_647,
+      startedAt: '2026-08-07T00:00:00.000Z',
+      host: '127.0.0.1',
+      port: 44793,
+      baseUrl: 'http://127.0.0.1:44793',
+      runtimeToken: 'stale-token',
+      insecure: false,
+      serviceVersion: '0.0.0-test',
+      launchMode: 'shared'
+    })
+
+    expect(kunRuntimeAdapter.isChildRunning()).toBe(false)
+    expect(kunRuntimeAdapter.getBaseUrl(settingsForPort(18788))).toBe('http://127.0.0.1:18788')
+  })
+
+  it('keeps reporting running while the cached discovery PID is alive', () => {
+    setResolvedKunRuntimeConnectionForTests({
+      version: 1,
+      instanceId: 'live-shared-runtime',
+      pid: process.pid,
+      startedAt: '2026-08-07T00:00:00.000Z',
+      host: '127.0.0.1',
+      port: 44793,
+      baseUrl: 'http://127.0.0.1:44793',
+      runtimeToken: 'live-token',
+      insecure: false,
+      serviceVersion: '0.0.0-test',
+      launchMode: 'shared'
+    })
+
+    expect(kunRuntimeAdapter.isChildRunning()).toBe(true)
+    expect(kunRuntimeAdapter.getBaseUrl(settingsForPort(18788))).toBe('http://127.0.0.1:44793')
   })
 })

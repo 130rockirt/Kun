@@ -10,6 +10,7 @@ import {
   getThreadGoal,
   getThreadTodos,
   getThread,
+  getThreadState,
   listThreads,
   setThreadGoal,
   setThreadTodos,
@@ -18,6 +19,7 @@ import {
 import { summarizeThread } from './threads-summarize.js'
 import {
   compactTurn,
+  cancelToolCall,
   getSteeringQueue,
   getTurn,
   interruptTurn,
@@ -170,7 +172,7 @@ import {
  * - `POST /v1/delegation/abort/{childId}` (auth)
  * - `GET /v1/workspace/status` (auth)
  * - `GET/POST /v1/threads` (auth)
- * - `GET/PATCH/DELETE /v1/threads/{id}` (auth)
+ * - `GET/PATCH/DELETE /v1/threads/{id}` and `GET /v1/threads/{id}/state` (auth)
  * - `GET /v1/threads/{id}/model-requests` (auth)
  * - `POST /v1/threads/{id}/fork` (auth)
  * - `POST /v1/threads/{id}/summarize` (auth)
@@ -675,6 +677,14 @@ export function buildRouter(runtime: ServerRuntime): Router {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
     return createThread(runtime.threadService, request)
   })
+  // This static suffix must be registered before `/:id`, because Router uses
+  // first-match ordering for parameterized paths.
+  router.add('GET', '/v1/threads/:id/state', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    const forwarded = await runtime.forwardThreadControl?.(request, ctx.params.id)
+    if (forwarded) return forwarded
+    return getThreadState(runtime.threadService, ctx.params.id, runtime.sessionStore)
+  })
   router.add('GET', '/v1/threads/:id', async (request, ctx) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
     // The active approval gate is process-local. When a manager lease belongs
@@ -799,6 +809,17 @@ export function buildRouter(runtime: ServerRuntime): Router {
     const forwarded = await runtime.forwardThreadControl?.(request, ctx.params.id)
     if (forwarded) return forwarded
     return interruptTurn(runtime.turnService, ctx.params.id, ctx.params.turnId, request)
+  })
+  router.add('POST', '/v1/threads/:id/turns/:turnId/tool-calls/:callId/cancel', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    const forwarded = await runtime.forwardThreadControl?.(request, ctx.params.id)
+    if (forwarded) return forwarded
+    return cancelToolCall(
+      runtime.toolCancellationService,
+      ctx.params.id,
+      ctx.params.turnId,
+      ctx.params.callId
+    )
   })
   router.add('POST', '/v1/threads/:id/compact', async (request, ctx) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()

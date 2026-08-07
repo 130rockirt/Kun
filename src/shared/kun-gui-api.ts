@@ -573,6 +573,11 @@ export type CredentialRecoveryResetResult =
   | { reset: false }
   | { reset: true; backupPath: string; movedItems: string[] }
 
+export type ModelProviderCredentialRevealResult = {
+  providerId: string
+  credential: string
+}
+
 export type KunGuiApi = ExtensionIpcApi & {
   platform: string
   homeDir: string
@@ -621,6 +626,8 @@ export type KunGuiApi = ExtensionIpcApi & {
     respondRendererRequest: (response: DataMigrationRendererResponse) => Promise<void>
   }
   getSettings: () => Promise<AppSettingsV1>
+  /** Reveal one protected provider credential after an explicit trusted-workbench action. */
+  revealModelProviderCredential: (providerId: string) => Promise<ModelProviderCredentialRevealResult>
   resetUnreadableCredentials: () => Promise<CredentialRecoveryResetResult>
   cliInstallStatus: () => Promise<CliInstallStatus>
   cliInstallAction: (action: CliInstallAction) => Promise<CliInstallResult>

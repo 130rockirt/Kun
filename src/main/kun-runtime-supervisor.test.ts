@@ -184,6 +184,26 @@ describe('KunRuntimeSupervisor', () => {
     expect(h.statuses.map((status) => status.state)).toEqual(['restarting', 'running'])
   })
 
+  it('takes the missing/ensure path when health clears a stale childRunning cache (#1116)', async () => {
+    let childRunning = true
+    const h = harness({
+      childRunning: true,
+      watchdogFailureThreshold: 3
+    })
+    h.deps.isChildRunning = () => childRunning
+    h.checkHealth.mockImplementation(async () => {
+      childRunning = false
+      return false
+    })
+    h.supervisor.setManagedRuntimeExpected(true)
+
+    await h.supervisor.watchdogTick()
+
+    expect(h.ensureRuntime).toHaveBeenCalledOnce()
+    expect(h.restartRuntime).not.toHaveBeenCalled()
+    expect(h.statuses.map((status) => status.state)).toEqual(['restarting', 'running'])
+  })
+
   it('does not recover or restart after shutdown begins', async () => {
     const h = harness({ stopped: true })
     h.supervisor.setManagedRuntimeExpected(true)

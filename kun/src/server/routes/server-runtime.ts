@@ -94,6 +94,7 @@ import type { ModelConnectionRegistry } from '../../services/model-connection-re
 import type { ModelConnectionOAuthService } from '../../services/model-connection-oauth.js'
 import type { OfficialProviderAuthService } from '../../services/official-provider-cli.js'
 import type { ProviderQuotaService } from '../../services/provider-quota-service.js'
+import type { ToolCancellationService } from '../../services/tool-cancellation-service.js'
 
 export type RuntimeToolDiagnostics = {
   providers: ToolProviderPolicy[]
@@ -162,6 +163,7 @@ export type ExtensionPlatformRuntime = {
 export type ServerRuntime = {
   threadService: ThreadService
   turnService: TurnService
+  toolCancellationService?: ToolCancellationService
   usageService: UsageService
   reviewService?: ReviewService
   eventBus: EventBus

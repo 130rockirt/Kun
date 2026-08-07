@@ -1,5 +1,5 @@
 import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent, ReactElement, RefObject } from 'react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { LucideIcon } from 'lucide-react'
 import {
@@ -19,6 +19,7 @@ import {
   BellRing,
   Search,
   Sparkles,
+  Square,
   Terminal,
   Wrench
 } from 'lucide-react'
@@ -41,8 +42,10 @@ import {
   formatDuration,
   formatToolTitle,
   isBackgroundShellCommandBlock,
+  parseToolBlockPayload,
   summarizeBackgroundShellToolBlock
 } from './message-timeline-tools'
+import { isExploreToolBlock } from './explore-card-copy'
 import { SubagentGroup, type OpenChildThreadHandler } from './SubagentCallCard'
 import { InjectedMemoryMetaChip } from './injected-memory-meta-chip'
 
@@ -61,7 +64,11 @@ export function isSubagentBlock(block: ChatBlock): boolean {
   const meta = block.meta
   if (meta?.child && typeof meta.child === 'object') return true
   const toolName = typeof meta?.toolName === 'string' ? meta.toolName.trim() : ''
-  return toolName === 'delegate_task' || toolName === 'generate_subagent'
+  return (
+    toolName === 'delegate_task' ||
+    toolName === 'generate_subagent' ||
+    toolName === 'explore_agent'
+  )
 }
 
 function processBlockHasGeneratedMedia(block: ChatBlock): block is ToolBlock {
@@ -83,16 +90,31 @@ function subagentParentTurnId(block: ChatBlock): string {
   return ''
 }
 
+function isExploreSubagentBlock(block: ChatBlock): boolean {
+  return block.kind === 'tool' && isExploreToolBlock(block)
+}
+
+function sectionHasExploreBlock(section: ProcessSection): boolean {
+  return section.blocks.some(isExploreSubagentBlock)
+}
+
 export function groupProcessSections(blocks: ChatBlock[]): ProcessSection[] {
   const sections: ProcessSection[] = []
 
   for (const block of blocks) {
     if (isSubagentBlock(block)) {
       const last = sections[sections.length - 1]
-      // Coalesce sibling delegations of one turn (same parentTurnId) into one
-      // swarm section. Blocks without a parentTurnId only merge with an
-      // adjacent parentTurnId-less subagent run.
-      if (last && last.kind === 'subagent') {
+      // Coalesce sibling non-explore delegations of one turn (same parentTurnId)
+      // into one swarm section. Explore cards stay independent so they never
+      // land under an "N subagents" swarm shell.
+      // Blocks without a parentTurnId only merge with an adjacent
+      // parentTurnId-less non-explore subagent run.
+      if (
+        last &&
+        last.kind === 'subagent' &&
+        !isExploreSubagentBlock(block) &&
+        !sectionHasExploreBlock(last)
+      ) {
         const lastParent = subagentParentTurnId(last.blocks[0])
         const parent = subagentParentTurnId(block)
         if (lastParent === parent) {
@@ -272,6 +294,7 @@ export function ProcessSectionRow({
   workspaceRoot,
   viewportRef,
   onOpenChildThread,
+  onCancelToolCall,
   allowThreadActions = true
 }: {
   section: ProcessSection
@@ -281,6 +304,7 @@ export function ProcessSectionRow({
   workspaceRoot: string
   viewportRef: RefObject<HTMLDivElement | null>
   onOpenChildThread?: OpenChildThreadHandler
+  onCancelToolCall?: (block: ToolBlock) => Promise<boolean>
   allowThreadActions?: boolean
 }): ReactElement {
   const { t } = useTranslation('common')
@@ -342,6 +366,7 @@ export function ProcessSectionRow({
           block={block}
           processing={processing}
           workspaceRoot={workspaceRoot}
+          onCancelToolCall={onCancelToolCall}
           allowThreadActions={allowThreadActions}
         />
       )
@@ -432,6 +457,7 @@ export function ProcessSectionRow({
               blocks={section.blocks}
               processing={processing}
               workspaceRoot={workspaceRoot}
+              onCancelToolCall={onCancelToolCall}
               allowThreadActions={allowThreadActions}
             />
           )
@@ -505,15 +531,95 @@ function BackgroundSubagentRowSummary({
   )
 }
 
+function toolCancelCallId(block: ChatBlock): string {
+  if (block.kind !== 'tool') return ''
+  const callId = block.meta?.callId
+  return typeof callId === 'string' ? callId.trim() : ''
+}
+
+function toolCancelRequested(block: ChatBlock): boolean {
+  if (block.kind !== 'tool') return false
+  return typeof block.meta?.cancelRequestedAt === 'string' && block.meta.cancelRequestedAt.trim().length > 0
+}
+
+function canCancelToolBlock(block: ChatBlock, processing: boolean): block is ToolBlock {
+  if (!processing || block.kind !== 'tool' || block.status !== 'running' || !toolCancelCallId(block)) return false
+  // Detached/background work owns its own lifecycle and must keep using its
+  // existing control surface rather than the foreground tool cancellation API.
+  if (block.meta?.detached === true || isBackgroundShellCommandBlock(block) || isSubagentBlock(block)) {
+    return false
+  }
+  return true
+}
+
+function ToolCancelButton({
+  block,
+  processing,
+  onCancelToolCall
+}: {
+  block: ChatBlock
+  processing: boolean
+  onCancelToolCall?: (block: ToolBlock) => Promise<boolean>
+}): ReactElement | null {
+  const { t } = useTranslation('common')
+  const [requested, setRequested] = useState(() => toolCancelRequested(block))
+  const cancellable = canCancelToolBlock(block, processing)
+  const blockStatus = block.kind === 'tool' ? block.status : undefined
+  const blockCancelRequestedAt = block.kind === 'tool' && typeof block.meta?.cancelRequestedAt === 'string'
+    ? block.meta.cancelRequestedAt
+    : undefined
+  const cancelRequested = toolCancelRequested(block)
+
+  useEffect(() => {
+    setRequested(cancelRequested)
+  }, [block.id, blockStatus, blockCancelRequestedAt, cancelRequested])
+
+  if (!cancellable || !onCancelToolCall) return null
+  const stopping = requested || toolCancelRequested(block)
+  const handleClick = (event: ReactMouseEvent<HTMLButtonElement>): void => {
+    event.preventDefault()
+    event.stopPropagation()
+    if (stopping) return
+    setRequested(true)
+    void onCancelToolCall(block).then((accepted) => {
+      if (!accepted) setRequested(false)
+    }).catch(() => {
+      setRequested(false)
+    })
+  }
+
+  return (
+    <button
+      type="button"
+      aria-label={stopping ? t('toolCancelling') : t('toolCancel')}
+      title={stopping ? t('toolCancelling') : t('toolCancel')}
+      aria-busy={stopping}
+      disabled={stopping}
+      onClick={handleClick}
+      className={`mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition ${
+        stopping ? 'cursor-wait text-accent opacity-80' : 'text-ds-faint hover:bg-ds-hover/70 hover:text-ds-ink'
+      }`}
+    >
+      {stopping ? (
+        <LoaderCircle className="h-3.5 w-3.5 animate-spin" strokeWidth={1.9} />
+      ) : (
+        <Square className="h-3 w-3" fill="currentColor" strokeWidth={1.9} />
+      )}
+    </button>
+  )
+}
+
 function ProcessStackRows({
   blocks,
   processing,
   workspaceRoot,
+  onCancelToolCall,
   allowThreadActions = true
 }: {
   blocks: ChatBlock[]
   processing: boolean
   workspaceRoot: string
+  onCancelToolCall?: (block: ToolBlock) => Promise<boolean>
   allowThreadActions?: boolean
 }): ReactElement {
   const { t } = useTranslation('common')
@@ -617,6 +723,7 @@ function ProcessStackRows({
                   )}
                 </button>
               ) : null}
+              <ToolCancelButton block={block} processing={processing} onCancelToolCall={onCancelToolCall} />
             </div>
             {open ? (
               detail.kind === 'assistant' ? (
@@ -813,11 +920,13 @@ function ProcessEntryRow({
   block,
   processing,
   workspaceRoot,
+  onCancelToolCall,
   allowThreadActions = true
 }: {
   block: ChatBlock
   processing: boolean
   workspaceRoot: string
+  onCancelToolCall?: (block: ToolBlock) => Promise<boolean>
   allowThreadActions?: boolean
 }): ReactElement {
   const { t } = useTranslation('common')
@@ -926,6 +1035,7 @@ function ProcessEntryRow({
             )}
           </button>
         ) : null}
+        <ToolCancelButton block={block} processing={processing} onCancelToolCall={onCancelToolCall} />
       </div>
       <RuntimeMetaBadges block={block} t={t} />
       {canExpand && open ? (
@@ -1493,6 +1603,19 @@ export function summarizeToolBlock(
 
   if (toolName === 'background_shell') {
     return summarizeBackgroundShellToolBlock(block, t)
+  }
+
+  if (toolName === 'explore_agent') {
+    const payload = parseToolBlockPayload(block)
+    const title =
+      (typeof payload.title === 'string' && payload.title.trim() ? payload.title.trim() : undefined) ||
+      (block.meta?.child && typeof block.meta.child === 'object'
+        ? (typeof (block.meta.child as { childLabel?: unknown }).childLabel === 'string'
+          ? (block.meta.child as { childLabel: string }).childLabel.trim()
+          : undefined)
+        : undefined)
+    if (title) return `${label} ${summarizeProcessText(title, 72)}`
+    return label
   }
 
   if ((toolName === 'read_file' || toolName === 'read') && filePath) {

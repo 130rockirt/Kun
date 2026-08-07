@@ -1,4 +1,4 @@
-import { createElement } from 'react'
+import { createElement, useState } from 'react'
 import {
   act,
   create as createRenderer,
@@ -9,9 +9,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   defaultKunRuntimeSettings,
   defaultModelProviderSettings,
+  modelProviderTokenPlanProfile,
   type ModelProviderModelProfileV1,
   type ModelProviderProfileV1
 } from '@shared/app-settings'
+import { MODEL_PROVIDER_PRESETS } from '@shared/model-provider-presets'
 import {
   ProvidersSettingsSection,
   applyPendingSharedProviderCatalog,
@@ -20,6 +22,9 @@ import {
   createSharedModelMutationQueue,
   deleteSharedModelConnection,
   fenceSharedModelConnectionCredential,
+  kunProviderSelectionPatch,
+  modelProvidersSettingsPatch,
+  nonEmptyModelId,
   projectSharedModelConnections,
   rebasePendingSharedProviderCatalog,
   reconcilePendingSharedProviderCatalogs,
@@ -46,6 +51,58 @@ const textModelProfile: ModelProviderModelProfileV1 = {
   supportsToolCalling: true,
   messageParts: ['text']
 }
+
+describe('provider settings patch model sanitization', () => {
+  it('omits empty agents.kun.model so settings:set cannot receive Too small', () => {
+    const provider = defaultModelProviderSettings()
+    const patch = modelProvidersSettingsPatch({
+      provider,
+      providers: provider.providers,
+      kun: { providerId: 'opencode-go', model: '' }
+    })
+
+    expect(patch.agents?.kun).toEqual({
+      providerId: 'opencode-go',
+      apiKey: '',
+      baseUrl: ''
+    })
+    expect(patch.agents?.kun).not.toHaveProperty('model')
+  })
+
+  it('keeps a non-empty primary model on the kun selection patch', () => {
+    const provider = defaultModelProviderSettings()
+    const patch = modelProvidersSettingsPatch({
+      provider,
+      providers: provider.providers,
+      kun: { providerId: 'opencode-go', model: 'grok-4.5' }
+    })
+
+    expect(patch.agents?.kun).toMatchObject({
+      providerId: 'opencode-go',
+      model: 'grok-4.5'
+    })
+  })
+
+  it('builds selection patches that skip blank model ids', () => {
+    expect(nonEmptyModelId('')).toBeUndefined()
+    expect(nonEmptyModelId('  ')).toBeUndefined()
+    expect(nonEmptyModelId('grok-4.5')).toBe('grok-4.5')
+    expect(kunProviderSelectionPatch({ providerId: 'custom', model: '' })).toEqual({
+      providerId: 'custom'
+    })
+    expect(kunProviderSelectionPatch({
+      providerId: 'opencode-go',
+      model: nonEmptyModelId('') ?? nonEmptyModelId('')
+    })).toEqual({ providerId: 'opencode-go' })
+    expect(kunProviderSelectionPatch({
+      providerId: 'opencode-go',
+      model: nonEmptyModelId('') ?? 'glm-5.2'
+    })).toEqual({
+      providerId: 'opencode-go',
+      model: 'glm-5.2'
+    })
+  })
+})
 
 describe('shared model connection API-key setup status', () => {
   it('treats missing and unreadable protected credentials as unavailable', () => {
@@ -548,6 +605,105 @@ describe('pending shared model connection catalogs', () => {
     expect(applyPendingSharedProviderCatalog(committedWithRemote, rebased).models)
       .toEqual(['old-model', 'remote-model', 'model-a', 'model-b'])
   })
+
+  it('retains a pending Aliyun Token Plan catalog when the registry has not connected yet (#1117)', () => {
+    const aliyunPreset = MODEL_PROVIDER_PRESETS.find((preset) => preset.id === 'aliyun')
+    expect(aliyunPreset).toBeTruthy()
+    const tokenPlan = modelProviderTokenPlanProfile(aliyunPreset!, 'sk-token-plan')
+    const fetchedModels = ['qwen-plus', 'qwen-max', 'qwen-turbo']
+    const current = defaultModelProviderSettings()
+    current.providers.push({
+      ...tokenPlan,
+      models: fetchedModels,
+      modelProfiles: Object.fromEntries(fetchedModels.map((model) => [model, textModelProfile]))
+    })
+    const pendingCatalog = {
+      generation: 1,
+      baseModels: [...tokenPlan.models],
+      baseModelProfiles: structuredClone(tokenPlan.modelProfiles),
+      localModels: fetchedModels,
+      localModelProfiles: Object.fromEntries(fetchedModels.map((model) => [model, textModelProfile])),
+      committedRevision: null
+    }
+
+    const projected = projectSharedModelConnections(
+      current,
+      { schemaVersion: 1, revision: 2, providers: [] },
+      new Map(),
+      new Map(),
+      new Map([[tokenPlan.id, pendingCatalog]])
+    )
+
+    expect(projected.provider.providers.find((item) => item.id === tokenPlan.id)).toMatchObject({
+      models: fetchedModels
+    })
+  })
+
+  it('connects then commits a catalog when the shared connection is missing (#1117)', async () => {
+    const aliyunPreset = MODEL_PROVIDER_PRESETS.find((preset) => preset.id === 'aliyun')
+    expect(aliyunPreset).toBeTruthy()
+    const tokenPlan = modelProviderTokenPlanProfile(aliyunPreset!, 'sk-token-plan')
+    const fetchedModels = ['qwen-plus', 'qwen-max']
+    const pendingCatalog = {
+      generation: 2,
+      baseModels: [...tokenPlan.models],
+      baseModelProfiles: structuredClone(tokenPlan.modelProfiles),
+      localModels: fetchedModels,
+      localModelProfiles: Object.fromEntries(fetchedModels.map((model) => [model, textModelProfile])),
+      committedRevision: null
+    }
+    const emptySnapshot = { schemaVersion: 1 as const, revision: 3, providers: [] as [] }
+    const connectedSnapshot = {
+      schemaVersion: 1 as const,
+      revision: 4,
+      providers: [{
+        id: tokenPlan.id,
+        accountId: `account:${tokenPlan.id}`,
+        name: tokenPlan.name,
+        kind: 'http' as const,
+        authType: 'api-key' as const,
+        baseUrl: tokenPlan.baseUrl,
+        endpointFormat: tokenPlan.endpointFormat,
+        configured: true,
+        models: fetchedModels,
+        modelCapabilities: Object.fromEntries(fetchedModels.map((model) => [model, {
+          id: model,
+          ...textModelProfile
+        }])),
+        selectedModel: fetchedModels[0]
+      }]
+    }
+    const runtimeRequest = vi.fn()
+      .mockResolvedValueOnce({ ok: true, status: 200, body: JSON.stringify(emptySnapshot) })
+      .mockResolvedValueOnce({ ok: true, status: 200, body: JSON.stringify(connectedSnapshot) })
+    vi.stubGlobal('window', { kunGui: { runtimeRequest } })
+
+    try {
+      await expect(commitSharedModelConnectionCatalog(
+        tokenPlan.id,
+        pendingCatalog,
+        () => false,
+        { provider: tokenPlan, credential: 'sk-token-plan' }
+      )).resolves.toMatchObject({ revision: 4 })
+
+      expect(runtimeRequest.mock.calls.map(([path, method]) => [path, method])).toEqual([
+        ['/v1/model-connections', 'GET'],
+        ['/v1/model-connections/connect', 'POST']
+      ])
+      const connectBody = JSON.parse(runtimeRequest.mock.calls[1]![2] as string) as {
+        id: string
+        models: string[]
+        credential: string
+      }
+      expect(connectBody).toMatchObject({
+        id: tokenPlan.id,
+        models: fetchedModels,
+        credential: 'sk-token-plan'
+      })
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
 })
 
 describe('shared model connection credential replacement', () => {
@@ -996,7 +1152,7 @@ describe('shared model connection settings projection', () => {
     })
   })
 
-  it('clears the GUI default when the last shared connection is removed', () => {
+  it('clears the GUI provider without emitting an invalid empty model', () => {
     const projected = projectSharedModelConnections(defaultModelProviderSettings(), {
       schemaVersion: 1,
       revision: 5,
@@ -1006,7 +1162,7 @@ describe('shared model connection settings projection', () => {
       localModelGateway: { enabled: false }
     })
 
-    expect(projected.kun).toEqual({ providerId: '', model: '' })
+    expect(projected.kun).toEqual({ providerId: '' })
   })
 
   it('does not restore a provider while its canonical deletion is pending', () => {
@@ -1032,7 +1188,7 @@ describe('shared model connection settings projection', () => {
     }, new Map([['custom-provider-2', { generation: 1, committedRevision: 8 }]]))
 
     expect(projected.provider.providers.map((provider) => provider.id)).toEqual(['deepseek'])
-    expect(projected.kun).toEqual({ providerId: '', model: '' })
+    expect(projected.kun).toEqual({ providerId: '' })
   })
 })
 
@@ -1253,6 +1409,58 @@ describe('provider mutation lifecycle across settings remounts', () => {
     )
     expect(rendererText(renderer)).not.toContain('settings:provider:')
     expect(rendererText(renderer)).not.toContain('credential_unreadable')
+  })
+
+  it('reveals a protected credential on demand and clears it when hidden again', async () => {
+    const { settings, provider } = providerFixture('deepseek')
+    const runtimeRequest = vi.fn(async (path: string) => {
+      if (path.includes('/events?')) return new Promise<never>(() => undefined)
+      return { ok: true, status: 200, body: JSON.stringify(snapshotFor(provider, 1)) }
+    })
+    const revealModelProviderCredential = vi.fn(async (providerId: string) => ({
+      providerId,
+      credential: 'sk-protected-secret'
+    }))
+    Object.assign(window.kunGui, { runtimeRequest, revealModelProviderCredential })
+    const ctx = contextFor(settings, provider)
+    const Harness = () => {
+      const [showApiKey, setShowApiKey] = useState(false)
+      return createElement(ProvidersSettingsSection, {
+        ctx: { ...ctx, showApiKey, setShowApiKey }
+      })
+    }
+    let renderer!: ReactTestRenderer
+    await act(async () => {
+      renderer = createRenderer(createElement(Harness))
+    })
+    mountedRenderers.push(renderer)
+    await flush()
+
+    const hiddenInput = renderer.root.findAllByType('input')
+      .find((input) => input.props.type === 'password')
+    expect(hiddenInput?.props.value).toBe('')
+    expect(hiddenInput?.props.placeholder).toBe('••••••••••••')
+    const showButton = renderer.root.findAllByType('button')
+      .find((button) => button.props['aria-label'] === 'showSecret')
+    expect(showButton).toBeTruthy()
+    await act(async () => showButton!.props.onClick())
+    await flush()
+
+    const revealedInput = renderer.root.findAllByType('input')
+      .find((input) => input.props.type === 'text' && input.props.value === 'sk-protected-secret')
+    expect(revealedInput).toBeTruthy()
+    expect(revealModelProviderCredential).toHaveBeenCalledWith('deepseek')
+
+    const hideButton = renderer.root.findAllByType('button')
+      .find((button) => button.props['aria-label'] === 'hideSecret')
+    expect(hideButton).toBeTruthy()
+    await act(async () => hideButton!.props.onClick())
+    await flush()
+
+    const rehiddenInput = renderer.root.findAllByType('input')
+      .find((input) => input.props.type === 'password')
+    expect(rehiddenInput?.props.value).toBe('')
+    expect(rehiddenInput?.props.placeholder).toBe('••••••••••••')
   })
 
   it('keeps a credential generation through unmount and clears it after the adopted commit', async () => {

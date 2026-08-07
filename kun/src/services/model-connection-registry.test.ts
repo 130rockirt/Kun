@@ -214,7 +214,7 @@ describe('ModelConnectionRegistry', () => {
     expect(String(fetchMock.mock.calls[0]?.[0])).toBe(expectedUrl)
   })
 
-  it('does not guess a models URL from a custom full inference endpoint', async () => {
+  it('returns configured models for a custom full inference endpoint without guessing a models URL', async () => {
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)
     const { value } = await registry()
@@ -233,9 +233,10 @@ describe('ModelConnectionRegistry', () => {
       select: false
     })
 
-    await expect(value.probe('custom-full-endpoint')).rejects.toThrow(
-      'custom_endpoint does not define a models URL'
-    )
+    await expect(value.probe('custom-full-endpoint')).resolves.toEqual({
+      ok: true,
+      models: ['configured-model']
+    })
     expect(fetchMock).not.toHaveBeenCalled()
     await expect(value.snapshot()).resolves.toMatchObject({
       providers: [expect.objectContaining({
@@ -243,6 +244,62 @@ describe('ModelConnectionRegistry', () => {
         models: ['configured-model']
       })]
     })
+  })
+
+  it('rejects custom_endpoint probe when no models are configured', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const { value } = await registry()
+    await value.connect({
+      expectedRevision: 0,
+      id: 'custom-empty-models',
+      name: 'Custom Empty Models',
+      kind: 'http',
+      authType: 'api-key',
+      baseUrl: 'https://gateway.example.test/inference/team-a/respond',
+      endpointFormat: 'custom_endpoint',
+      credential: 'registry-secret',
+      models: [],
+      probe: false,
+      select: false
+    })
+
+    await expect(value.probe('custom-empty-models')).rejects.toThrow(
+      'custom_endpoint does not define a models URL'
+    )
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('probes Codex with configured models without requesting a models URL', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const { value } = await registry()
+    await value.connect({
+      expectedRevision: 0,
+      id: 'codex',
+      name: 'ChatGPT 订阅',
+      kind: 'http',
+      authType: 'oauth',
+      baseUrl: 'https://chatgpt.com/backend-api/codex/responses',
+      endpointFormat: 'custom_endpoint',
+      credential: JSON.stringify({
+        kind: 'codex-oauth',
+        accessToken: 'access-token',
+        refreshToken: 'refresh-token',
+        expiresAt: Date.now() + 60_000,
+        accountId: 'account-1'
+      }),
+      models: ['gpt-5.5', 'gpt-5.4'],
+      selectedModel: 'gpt-5.5',
+      probe: false,
+      select: false
+    })
+
+    await expect(value.probe('codex')).resolves.toEqual({
+      ok: true,
+      models: ['gpt-5.5', 'gpt-5.4']
+    })
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 
   it('probes Messages providers with the Registry credential and Anthropic headers', async () => {
@@ -1975,6 +2032,113 @@ describe('ModelConnectionRegistry', () => {
     })
     const afterRestart = await restarted.initialize([{ ...seed, expectedRevision: staleApplied.revision }])
     expect(afterRestart.providers[0]?.models).toEqual(['keep-model'])
+  })
+
+  it('selects the first remaining model when a catalog removes the active model', async () => {
+    const { value } = await registry()
+    const connected = await value.connect({
+      expectedRevision: 0,
+      id: 'catalog-owner',
+      name: 'Catalog Owner',
+      kind: 'http',
+      authType: 'api-key',
+      baseUrl: 'https://catalog.example/v1',
+      endpointFormat: 'chat_completions',
+      credential: 'secret',
+      models: ['model-a', 'model-b'],
+      selectedModel: 'model-a',
+      probe: false,
+      select: true
+    })
+
+    const patched = await value.patch('catalog-owner', {
+      expectedRevision: connected.revision,
+      models: ['model-b']
+    })
+
+    expect(patched.providers[0]).toMatchObject({
+      models: ['model-b'],
+      selectedModel: 'model-b'
+    })
+    expect(patched).toMatchObject({
+      defaultProviderId: 'catalog-owner',
+      defaultAccountId: 'account:catalog-owner',
+      defaultModel: 'model-b'
+    })
+  })
+
+  it('clears the default selection when the active provider loses its last model', async () => {
+    const { value } = await registry()
+    const connected = await value.connect({
+      expectedRevision: 0,
+      id: 'catalog-owner',
+      name: 'Catalog Owner',
+      kind: 'http',
+      authType: 'api-key',
+      baseUrl: 'https://catalog.example/v1',
+      endpointFormat: 'chat_completions',
+      credential: 'secret',
+      models: ['model-a'],
+      selectedModel: 'model-a',
+      probe: false,
+      select: true
+    })
+
+    const patched = await value.patch('catalog-owner', {
+      expectedRevision: connected.revision,
+      models: []
+    })
+
+    expect(patched.providers[0]).toMatchObject({ models: [] })
+    expect(patched.providers[0]).not.toHaveProperty('selectedModel')
+    expect(patched).not.toHaveProperty('defaultProviderId')
+    expect(patched).not.toHaveProperty('defaultAccountId')
+    expect(patched).not.toHaveProperty('defaultModel')
+  })
+
+  it('falls back to another configured provider when the default provider loses its last model', async () => {
+    const { value } = await registry()
+    const primary = await value.connect({
+      expectedRevision: 0,
+      id: 'primary',
+      name: 'Primary',
+      kind: 'http',
+      authType: 'api-key',
+      baseUrl: 'https://primary.example/v1',
+      endpointFormat: 'chat_completions',
+      credential: 'primary-secret',
+      models: ['primary-model'],
+      selectedModel: 'primary-model',
+      probe: false,
+      select: true
+    })
+    const withFallback = await value.connect({
+      expectedRevision: primary.revision,
+      id: 'fallback',
+      name: 'Fallback',
+      kind: 'http',
+      authType: 'api-key',
+      baseUrl: 'https://fallback.example/v1',
+      endpointFormat: 'chat_completions',
+      credential: 'fallback-secret',
+      models: ['fallback-model'],
+      selectedModel: 'fallback-model',
+      probe: false,
+      select: false
+    })
+
+    const patched = await value.patch('primary', {
+      expectedRevision: withFallback.revision,
+      models: []
+    })
+
+    expect(patched.providers.find((provider) => provider.id === 'primary'))
+      .not.toHaveProperty('selectedModel')
+    expect(patched).toMatchObject({
+      defaultProviderId: 'fallback',
+      defaultAccountId: 'account:fallback',
+      defaultModel: 'fallback-model'
+    })
   })
 
   it('retries deleted-provider legacy source retirement without allowing seed resurrection', async () => {

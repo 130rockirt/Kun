@@ -706,6 +706,7 @@ export class ModelConnectionRegistry {
   async patch(providerId: string, raw: unknown): Promise<ModelConnectionSnapshot> {
     const input = ModelConnectionPatchRequestSchema.parse(raw)
     const { expectedRevision: _expectedRevision, ...changes } = input
+    const fallbackHealth = await this.inspectCredentialHealth(await this.file.read(emptyDocument))
     const document = await this.file.update(emptyDocument, (current) => {
       assertRevision(current, input.expectedRevision, this.options.modelCapabilities, this.credentialHealth)
       const profile = requireProfile(current, providerId)
@@ -721,24 +722,52 @@ export class ModelConnectionRegistry {
         : profile.modelCapabilities
           ? capabilitiesForModels(profile.modelCapabilities, models)
           : undefined
-      const selectedModel = input.selectedModel ?? profile.selectedModel
-      if (selectedModel && models.length > 0 && !models.includes(selectedModel)) {
+      if (input.selectedModel && !models.includes(input.selectedModel)) {
         throw new Error('selected model is not present in the provider model list')
       }
+      const selectedModel = input.selectedModel ?? (
+        profile.selectedModel && models.includes(profile.selectedModel)
+          ? profile.selectedModel
+          : models[0]
+      )
+      const { selectedModel: _previousSelectedModel, ...profileWithoutSelection } = profile
+      const nextProfile = StoredProfileSchema.parse({
+        ...profileWithoutSelection,
+        ...changes,
+        models,
+        ...(modelCapabilities ? { modelCapabilities } : {}),
+        ...(selectedModel ? { selectedModel } : {})
+      })
+      const profiles = {
+        ...current.profiles,
+        [providerId]: nextProfile
+      }
+      const fallback = current.defaultProviderId === providerId && !selectedModel
+        ? configuredFallback(Object.values(profiles), fallbackHealth)
+        : undefined
       return {
         ...current,
         revision: current.revision + 1,
-        profiles: {
-          ...current.profiles,
-          [providerId]: StoredProfileSchema.parse({
-            ...profile,
-            ...changes,
-            models,
-            ...(modelCapabilities ? { modelCapabilities } : {}),
-            selectedModel
-          })
-        },
-        ...(current.defaultProviderId === providerId && selectedModel ? { defaultModel: selectedModel } : {})
+        profiles,
+        ...(current.defaultProviderId === providerId
+          ? selectedModel
+            ? {
+                defaultProviderId: providerId,
+                defaultAccountId: profile.accountId,
+                defaultModel: selectedModel
+              }
+            : fallback
+              ? {
+                  defaultProviderId: fallback.profile.id,
+                  defaultAccountId: fallback.profile.accountId,
+                  defaultModel: fallback.model
+                }
+              : {
+                  defaultProviderId: undefined,
+                  defaultAccountId: undefined,
+                  defaultModel: undefined
+                }
+          : {})
       }
     })
     await this.changed(document)
@@ -2528,6 +2557,21 @@ async function probeModels(input: {
 }): Promise<string[]> {
   if (input.kind !== 'http') return uniqueModels(input.fallbackModels)
   if (!input.baseUrl) throw new Error('provider probe failed: HTTP provider has no base URL')
+  // Custom full inference endpoints have no discoverable /models URL. When the
+  // profile already lists models (Codex, coding-plan gateways, user custom
+  // paths), treat an explicit credential + catalog as a successful probe.
+  if (input.endpointFormat === 'custom_endpoint') {
+    const configured = uniqueModels(input.fallbackModels)
+    if (configured.length === 0) {
+      throw new Error(
+        'provider probe failed: custom_endpoint does not define a models URL; configure models explicitly with probe disabled'
+      )
+    }
+    if (!input.apiKey.trim()) {
+      throw new Error('provider probe failed: custom_endpoint requires a credential when probing configured models')
+    }
+    return configured
+  }
   const url = modelsUrl(input.baseUrl, input.endpointFormat)
   const usesAnthropicHeaders = input.endpointFormat === 'messages'
   const authHeaders: Record<string, string> = input.apiKey

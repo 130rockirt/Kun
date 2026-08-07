@@ -32,7 +32,7 @@ Do not treat dispatch or one milestone as completion.
 
 The host has already created a durable planning draft for this turn. Follow these five steps:
 
-1. Inspect the relevant project facts with the available read-only tools before defining work. Do not mutate files, run arbitrary commands, or delegate during planning.
+1. Inspect the relevant project facts with the available read-only tools before defining work. Prefer \`explore_agent\` when it is advertised; do not mutate files, run arbitrary commands, or use ordinary \`delegate_task\` during planning.
 2. Split the outcome into focused tasks. Use \`dependsOn\` only for real control ordering and \`dataFrom\` only when a task consumes a named accepted predecessor result.
 3. Call \`graph_define_plan\` using only its advertised fields. A complete minimal valid call is:
 \`{"plan":{"title":"Update project documentation","tasks":[{"key":"update_docs","kind":"work","title":"Update the documentation","objective":"Inspect the current documentation and make the requested corrections.","dependsOn":[],"dataFrom":[],"acceptanceCriteria":["The requested behavior is documented with a concrete example."],"readScopes":["."],"writeScopes":["docs"]}],"completionTaskKeys":["update_docs"]}}\`
@@ -45,7 +45,7 @@ The host has already created a durable planning draft for this turn. Follow thes
 - Maximize useful safe fan-out, not node count for its own sake. Split independent concerns, subsystems, repository regions, or validation tracks into sibling ready nodes so the scheduler can use the available concurrency. Keep nodes large enough to produce a meaningful reviewed result; do not create line-by-line busywork.
 - Treat independence as the default. Add a control edge only when the successor truly requires the predecessor outcome, and add a data edge only when it consumes that accepted named result packet. Do not serialize nodes merely because they belong to the same phase or because their final results will later be integrated. If the work is inherently sequential, keep the real dependency.
 - A data-edge name labels the bounded result packet you will approve for the successor; it does not require the executor to publish an artifact. Avoid worker-to-worker message flow. Use explicit completion nodes and only bounded LoopGates. A LoopGate may observe only a source node that has produced a real outcome; never route repair or final work from a pending condition source. Ordinary dependencies must remain acyclic.
-- Do not use ordinary delegation, legacy task_graph fields, guessed profile ids, assignments, or host-owned identity/provenance fields while planning.
+- Do not use ordinary \`delegate_task\` / reusable-profile delegation, legacy task_graph fields, guessed profile ids, assignments, or host-owned identity/provenance fields while planning. Read-only \`explore_agent\` remains allowed for repository investigation.
 - Never submit budget, model, provider, reasoning, timeout, retry, priority, phase, revision, workspace, run-id, or timestamp fields. They belong to the host and are intentionally absent from \`graph_define_plan\`.
 - Scopes must be normalized repository-relative paths such as \`.\`, \`src\`, or \`.graph-artifacts\`, never absolute workspace paths.
 - Ordinary \`work\`, \`review\`, and \`integration\` tasks never contain \`loop\`. Only a \`loop_gate\` task contains the required bounded loop object.

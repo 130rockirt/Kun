@@ -1,8 +1,6 @@
 import type { GuiDesignArtifactContext } from '../ports/tool-host.js'
-import type { SessionStore } from '../ports/session-store.js'
 
 const MAX_TOOL_CATALOG_SNAPSHOTS = 256
-const MAX_HYDRATED_PRESSURE_THREADS = 512
 
 type ToolCatalogSnapshot = {
   fingerprint: string
@@ -38,51 +36,13 @@ export type ToolCatalogFingerprintInput = {
  */
 export class LoopTelemetry {
   private readonly promptTokenPressure = new Map<string, { model: string; promptTokens: number }>()
-  /** Threads for which a one-time pressure hydration from persisted usage was already attempted. */
-  private readonly hydratedPressureThreads = new Set<string>()
   private readonly toolCatalogSnapshots = new Map<string, ToolCatalogSnapshot>()
-
-  constructor(private readonly sessionStore: SessionStore) {}
 
   recordPromptPressure(threadId: string, model: string, promptTokens: number): void {
     if (!threadId || promptTokens <= 0) return
     const current = this.promptTokenPressure.get(threadId)
     if (current && current.promptTokens >= promptTokens) return
     this.promptTokenPressure.set(threadId, { model, promptTokens })
-  }
-
-  /**
-   * Seed prompt pressure from persisted request usage once per thread and
-   * process. This keeps a restart from underestimating a history that already
-   * includes a large system prompt or tool catalog. Failure is intentionally
-   * best-effort; the caller's local estimator remains the fallback.
-   */
-  async hydratePromptPressureIfCold(threadId: string, fallbackModel: string): Promise<void> {
-    if (!threadId) return
-    if (this.promptTokenPressure.has(threadId)) return
-    if (this.hydratedPressureThreads.has(threadId)) return
-    const loadUsageRecords = this.sessionStore.loadUsageRecords
-    if (typeof loadUsageRecords !== 'function') {
-      this.rememberHydratedPressureThread(threadId)
-      return
-    }
-    try {
-      const records = await loadUsageRecords.call(this.sessionStore, { threadId })
-      let restored: { model: string; promptTokens: number } | undefined
-      for (const record of records) {
-        if (record.threadId !== threadId) continue
-        const promptTokens = Math.floor(record.usage?.promptTokens ?? 0)
-        if (promptTokens > 0) {
-          restored = { model: record.model || fallbackModel, promptTokens }
-        }
-      }
-      if (restored && !this.promptTokenPressure.has(threadId)) {
-        this.promptTokenPressure.set(threadId, restored)
-      }
-      this.rememberHydratedPressureThread(threadId)
-    } catch {
-      // Best-effort restore; the estimator + overhead floor still applies.
-    }
   }
 
   consumePromptPressure(
@@ -134,14 +94,6 @@ export class LoopTelemetry {
       : { kind: 'breaking', previous }
   }
 
-  private rememberHydratedPressureThread(threadId: string): void {
-    this.hydratedPressureThreads.delete(threadId)
-    this.hydratedPressureThreads.add(threadId)
-    if (this.hydratedPressureThreads.size > MAX_HYDRATED_PRESSURE_THREADS) {
-      const oldest = this.hydratedPressureThreads.values().next().value
-      if (oldest !== undefined) this.hydratedPressureThreads.delete(oldest)
-    }
-  }
 }
 
 function isAdditiveToolCatalogChange(previous: ToolCatalogSnapshot, current: ToolCatalogSnapshot): boolean {

@@ -64,6 +64,8 @@ import {
   formatCost,
   formatPercent,
   cumulativeCacheHitRate,
+  formatTtftSeconds,
+  formatTps,
   useThreadUsageState
 } from '../../hooks/use-thread-usage'
 import { FloatingComposerContextCapacity } from './FloatingComposerContextCapacity'
@@ -135,9 +137,10 @@ export type { ComposerFileReference } from '../../lib/composer-file-references'
 export type { ComposerExecutionSettings } from './FloatingComposerExecutionPicker'
 
 export function shouldShowVoiceDictation(
-  speechToText: KunSpeechToTextSettingsV1 | null | undefined
+  speechToText: KunSpeechToTextSettingsV1 | null | undefined,
+  credentialReady = false
 ): boolean {
-  return speechToText != null && isSpeechToTextConfigured(speechToText)
+  return speechToText != null && isSpeechToTextConfigured(speechToText, { credentialReady })
 }
 
 export function returnQueuedMessageToComposer(
@@ -401,6 +404,7 @@ export function FloatingComposer({
   const route = useChatStore((s) => s.route)
   const workspaceRoot = useChatStore((s) => s.workspaceRoot)
   const storeActiveThreadId = useChatStore((s) => s.activeThreadId)
+  const threadLoadingId = useChatStore((s) => s.threadLoadingId)
   const activeThreadId = activeThreadIdOverride === undefined
     ? storeActiveThreadId
     : activeThreadIdOverride
@@ -446,7 +450,8 @@ export function FloatingComposer({
     onResolveUserInput ?? resolveUserInput
   )
   const fileInputRef = useRef<HTMLInputElement | null>(null)
-  const speechToTextSettings = useSpeechToTextSettings()
+  const { speechToText: speechToTextSettings, credentialReady: speechCredentialReady } =
+    useSpeechToTextSettings()
   const promptOptimizationSettings = usePromptOptimizationSettings()
   const dictationInputRef = useRef(input)
   useEffect(() => {
@@ -465,7 +470,7 @@ export function FloatingComposer({
       }
     }
   })
-  const showVoiceDictation = shouldShowVoiceDictation(speechToTextSettings)
+  const showVoiceDictation = shouldShowVoiceDictation(speechToTextSettings, speechCredentialReady)
   const activeClawChannel = useMemo(
     () => clawChannels.find((channel) => channel.id === activeClawChannelId) ?? null,
     [activeClawChannelId, clawChannels]
@@ -491,6 +496,15 @@ export function FloatingComposer({
     `${activeThread?.updatedAt ?? ''}:${busy ? 'busy' : 'idle'}:${usageRefreshKey}`
   )
   const threadUsage = threadUsageState.usage
+  /**
+   * Live session-average TTFT/TPS from the latest usage SSE event of the
+   * active thread. The REST summary above does not carry these timing fields.
+   */
+  const liveThreadUsage = useChatStore((s) =>
+    s.lastTurnUsage && s.lastTurnUsage.threadId === s.activeThreadId
+      ? s.lastTurnUsage.snapshot
+      : null
+  )
   const effectiveWorkspaceRoot = normalizeWorkspaceRoot(activeThreadWorkspace || workspaceRootOverride || workspaceRoot)
   const clawAgentName =
     activeClawChannel?.agentProfile.name.trim()
@@ -504,8 +518,9 @@ export function FloatingComposer({
     activeClawChannel?.remoteSession?.chatId?.trim()
   )
 
-  const canEditComposer = !disabled && (route === 'claw' ? clawHasInboundConversation : true)
-  const canCompose = !disabled && runtimeReady && (
+  const hydratingActiveThread = activeThreadId != null && threadLoadingId === activeThreadId
+  const canEditComposer = !disabled && !hydratingActiveThread && (route === 'claw' ? clawHasInboundConversation : true)
+  const canCompose = !disabled && !hydratingActiveThread && runtimeReady && (
     route === 'claw'
       ? clawHasInboundConversation
       : (hasActiveThread || !!effectiveWorkspaceRoot)
@@ -1968,7 +1983,6 @@ export function FloatingComposer({
                         {
                         tokens: formatCompactNumber(threadUsage.totalTokens),
                         cost: formatCost(threadUsage.costUsd, i18n.language, threadUsage.costCny),
-                        saved: formatCompactNumber(threadUsage.tokenEconomySavingsTokens),
                         cache: formatPercent(threadUsage.cacheHitRate),
                         latestCache: formatPercent(threadUsage.lastTurnCacheHitRate),
                         cached: formatCompactNumber(threadUsage.cachedTokens),
@@ -1995,21 +2009,6 @@ export function FloatingComposer({
                         cost: formatCost(threadUsage.costUsd, i18n.language, threadUsage.costCny)
                       })}
                     </span>
-                    {threadUsage.tokenEconomySavingsTokens > 0 ? (
-                      <>
-                        <span className="ds-composer-usage-context-savings-separator text-ds-faint">·</span>
-                        <span
-                          className="ds-composer-usage-context-savings shrink-0 tabular-nums text-emerald-700 dark:text-emerald-300"
-                          title={t('sessionUsageContextSavingsTitle', {
-                            tokens: formatCompactNumber(threadUsage.tokenEconomySavingsTokens)
-                          })}
-                        >
-                          {t('sessionUsageContextSavings', {
-                            tokens: formatCompactNumber(threadUsage.tokenEconomySavingsTokens)
-                          })}
-                        </span>
-                      </>
-                    ) : null}
                     {threadUsage.turns > 1 ? (
                       <>
                         <span className="ds-composer-usage-cache-separator text-ds-faint">·</span>
@@ -2024,6 +2023,21 @@ export function FloatingComposer({
                     <span className="ds-composer-usage-turns shrink-0 truncate tabular-nums">
                       {t('sessionUsageTurns', { turns: threadUsage.turns })}
                     </span>
+                    {liveThreadUsage &&
+                    (liveThreadUsage.avgTtftMs != null || liveThreadUsage.avgTokensPerSecond != null) ? (
+                      <>
+                        <span className="ds-composer-usage-turns-separator text-ds-faint">·</span>
+                        <span
+                          className="ds-composer-usage-metrics shrink-0 truncate tabular-nums"
+                          title={t('sessionUsageAvgMetricsTitle')}
+                        >
+                          {t('sessionUsageAvgMetrics', {
+                            ttft: formatTtftSeconds(liveThreadUsage.avgTtftMs) ?? '-',
+                            tps: formatTps(liveThreadUsage.avgTokensPerSecond) ?? '-'
+                          })}
+                        </span>
+                      </>
+                    ) : null}
                   </>
                 ) : activeThreadId ? (
                   <span className="shrink-0 text-ds-faint">

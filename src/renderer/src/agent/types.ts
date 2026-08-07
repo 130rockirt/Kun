@@ -604,6 +604,16 @@ export type ThreadUsageSnapshot = {
   costCny: number | null
   tokenEconomySavingsTokens: number
   turns: number
+  /** Thread-cumulative average time-to-first-token across model calls (ms). */
+  avgTtftMs: number | null
+  /** Thread-cumulative average tokens-per-second across model calls. */
+  avgTokensPerSecond: number | null
+  /** Average TTFT across model calls of the current turn (null = no data). */
+  turnAvgTtftMs: number | null
+  /** Average tokens-per-second across model calls of the current turn. */
+  turnAvgTokensPerSecond: number | null
+  /** Turn this snapshot was emitted for (for per-turn metric attribution). */
+  turnId?: string
 }
 
 export type RequestContextSnapshot = {
@@ -673,7 +683,7 @@ export type ThreadEventSink = {
   onTodos?(ev: { threadId: string; todos: ThreadTodoList | null; cleared?: boolean; createdAt?: string }): void
   /** Thread metadata changed out-of-band (e.g. the backend LLM titler upgraded the title). */
   onThreadUpdated?(ev: { threadId: string; title?: string; titleAuto?: boolean; status?: string }): void
-  onTurnComplete(): void
+  onTurnComplete(status?: 'completed' | 'aborted'): void
   onError(err: Error, options?: ThreadErrorOptions): void
   /** Optional: cumulative usage update for the thread. */
   onUsage?(usage: ThreadUsageSnapshot): void
@@ -706,6 +716,7 @@ export interface AgentProvider {
     latestSeq: number
     threadStatus?: string
     latestTurnId?: string
+    latestTurnStatus?: string
     latestTurnOrchestration?: 'direct' | 'graph'
     latestUserMessageId?: string
     turnDurationByUserId?: Record<string, number>
@@ -715,6 +726,16 @@ export interface AgentProvider {
     model?: string
     goal?: ThreadGoal | null
     todos?: ThreadTodoList | null
+    /** Original detail response size, used only to bound renderer snapshots. */
+    payloadBytes?: number
+  }>
+  getThreadState(threadId: string): Promise<{
+    status: string
+    updatedAt: string
+    latestSeq: number
+    latestTurnId?: string
+    latestTurnStatus?: string
+    latestTurnOrchestration?: 'direct' | 'graph'
   }>
   sendUserMessage(
     threadId: string,
@@ -804,6 +825,11 @@ export interface AgentProvider {
     options?: { displayText?: string }
   ): Promise<void>
   interruptTurn(threadId: string, turnId: string, options?: { discard?: boolean }): Promise<void>
+  cancelToolCall?(
+    threadId: string,
+    turnId: string,
+    callId: string
+  ): Promise<{ status: 'cancellation_requested' | 'already_requested' }>
   /**
    * Rename a thread. `auto` marks the title as provisional/auto (true, e.g. the
    * client first-message heuristic — the backend LLM titler may upgrade it) or

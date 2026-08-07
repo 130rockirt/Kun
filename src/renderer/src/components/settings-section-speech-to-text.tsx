@@ -18,6 +18,11 @@ import {
 } from '@shared/local-whisper'
 import { Download, Loader2, Mic, PlugZap, SlidersHorizontal, Square, Trash2 } from 'lucide-react'
 import {
+  fetchSharedModelConnectionCredentialStates,
+  shouldWarnMissingProviderCredential,
+  type SharedConnectionCredentialState
+} from '../lib/provider-credential-readiness'
+import {
   AdvancedSettingsDisclosure,
   InlineNoticeView,
   ModelSelect,
@@ -197,7 +202,28 @@ export function SpeechToTextSettingsSection({ ctx }: { ctx: Record<string, any> 
   const [localWhisperNotice, setLocalWhisperNotice] = useState<InlineNotice | null>(null)
   const [localWhisperSourceStatuses, setLocalWhisperSourceStatuses] = useState<LocalWhisperDownloadSourceStatus[] | null>(null)
   const [localWhisperSourceCheckBusy, setLocalWhisperSourceCheckBusy] = useState(false)
+  const [connectionCredentials, setConnectionCredentials] = useState<SharedConnectionCredentialState[] | null>(null)
   const localWhisperStatus = localWhisperStatuses[selectedLocalWhisperModelId] ?? null
+  const warnMissingSpeechProviderKey = shouldWarnMissingProviderCredential({
+    usingCustomProvider: usingLocalWhisper || usingCustomProvider,
+    protocolExempt: selectedProviderSpeech?.protocol === 'gemini-cli-audio',
+    provider: selectedSpeechProvider,
+    connectionCredentials
+  })
+
+  useEffect(() => {
+    let cancelled = false
+    void fetchSharedModelConnectionCredentialStates()
+      .then((states) => {
+        if (!cancelled) setConnectionCredentials(states)
+      })
+      .catch(() => {
+        if (!cancelled) setConnectionCredentials([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
   const updateSpeechToText = (patch: Record<string, unknown>): void => {
     updateKun({
       speechToText: {
@@ -455,10 +481,7 @@ export function SpeechToTextSettingsSection({ ctx }: { ctx: Record<string, any> 
                   ))}
                   <option value={CUSTOM_SPEECH_TO_TEXT_PROVIDER_ID}>{t('speechToTextProviderCustom')}</option>
                 </select>
-                {!usingLocalWhisper &&
-                !usingCustomProvider &&
-                selectedProviderSpeech?.protocol !== 'gemini-cli-audio' &&
-                !selectedSpeechProvider?.apiKey?.trim() ? (
+                {warnMissingSpeechProviderKey ? (
                   <p className="mt-2 text-[12px] text-amber-700 dark:text-amber-300">
                     {t('speechToTextProviderMissingKey', { provider: selectedSpeechProvider?.name ?? selectedProviderId })}
                   </p>
