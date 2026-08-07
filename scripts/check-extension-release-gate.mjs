@@ -1001,10 +1001,6 @@ check(
 
 const prWorkflow = await text('.github/workflows/pr-checks.yml')
 const prWorkflowDocument = parseYaml(prWorkflow)
-const buildOnlyCi = !prWorkflow.includes('npm run smoke:') &&
-  !prWorkflow.includes('npm run test') &&
-  prWorkflow.includes('npm run dist:linux')
-if (!buildOnlyCi) {
 const appImageDesktopCommand = 'npm run smoke:packaged-extension-appimage'
 const nativeMediaSmokeCommand = 'npm run smoke:extension-native-media'
 const nativeEvidenceCommand = 'npm run evidence:extension-native'
@@ -1016,6 +1012,10 @@ const smokeMacX64ExtensionsCommand =
 const smokeMacX64DesktopCommand =
   'npm run smoke:packaged-extension-desktop -- --resources dist/mac-x64-verified/Kun.app/Contents/Resources'
 const smokePackagedOcrCommand = 'node scripts/smoke-packaged-ocr.cjs'
+const buildOnlyCi = !prWorkflow.includes('npm run smoke:') &&
+  !prWorkflow.includes('npm run test') &&
+  prWorkflow.includes('npm run dist:linux')
+if (!buildOnlyCi) {
 const nativeEvidenceSource = await text('scripts/write-extension-native-evidence.mjs')
 const nativeEvidenceVerifierSource = await text('scripts/verify-extension-native-evidence.mjs')
 const manualReleaseVerifierSource = await text('scripts/verify-manual-extension-release.mjs')

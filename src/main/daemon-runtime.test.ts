@@ -134,7 +134,20 @@ describe('DaemonRuntime', () => {
 
   afterEach(async () => {
     if (testWorkspaceRoot) {
-      rmSync(testWorkspaceRoot, { recursive: true, force: true })
+      let attempt = 0
+      while (attempt < 5) {
+        try {
+          rmSync(testWorkspaceRoot, { recursive: true, force: true })
+          break
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === 'EBUSY' && attempt < 4) {
+            attempt += 1
+            await new Promise((resolve) => setTimeout(resolve, 100))
+            continue
+          }
+          throw error
+        }
+      }
       testWorkspaceRoot = ''
     }
   })

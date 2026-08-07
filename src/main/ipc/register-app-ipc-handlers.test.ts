@@ -596,7 +596,13 @@ describe('registerAppIpcHandlers', () => {
         senderFrame: { processId: 90, routingId: 91 }
       }, payload)).rejects.toThrow(/trusted workbench frame/)
       await expect(handler?.({ sender: contents, senderFrame: mainFrame }, payload)).resolves.toEqual({ ok: true })
-      expect(electronMock.showItemInFolder).toHaveBeenCalledWith(realpathSync(filePath))
+      const shownPath = electronMock.showItemInFolder.mock.calls[0]?.[0]
+      expect(shownPath).toBeTypeOf('string')
+      const canonicalPath = (candidate: string): string =>
+        typeof (realpathSync as { native?: (path: string) => string }).native === 'function'
+          ? realpathSync.native(candidate).toLowerCase()
+          : realpathSync(candidate).toLowerCase()
+      expect(canonicalPath(shownPath as string)).toBe(canonicalPath(filePath))
       expect(electronMock.openPath).not.toHaveBeenCalled()
     } finally {
       rmSync(root, { recursive: true, force: true })

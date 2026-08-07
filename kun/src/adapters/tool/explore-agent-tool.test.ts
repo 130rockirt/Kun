@@ -71,12 +71,13 @@ const baseContext = {
   clientSurface: 'gui' as const,
   approvalPolicy: 'auto' as const,
   approvalReviewer: 'user' as const,
+  awaitApproval: async () => 'allow' as const,
   model: {
     id: 'main-model',
-    inputModalities: ['text'],
-    outputModalities: ['text'],
+    inputModalities: ['text'] as ('text' | 'image')[],
+    outputModalities: ['text'] as ('text' | 'image')[],
     supportsToolCalling: true,
-    messageParts: ['text'],
+    messageParts: ['text'] as ('text' | 'image_url' | 'input_image')[],
     contextWindowTokens: 128_000
   },
   actingModelRoute: { model: 'main-model', providerId: 'deepseek' },

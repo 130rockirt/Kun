@@ -198,7 +198,7 @@ export function postToolFailureRecoveryInstruction(recoveryStep: number): string
  * round.
  */
 const POST_TOOL_FAILURE_QUESTION_OR_BLOCKER_PATTERNS: RegExp[] = [
-  /[\?？]/,
+  /[?？]/,
   /请问|是否|能不能|可不可以|麻烦你|请(你|先|确认|提供|补充|告诉|检查|调整|修复|重试|修改|选择|决定|告诉我|再看看)/,
   /需要(你|用户|手动|人工)/,
   /等(你|用户|你的)|等待(你|用户|你的)/,
