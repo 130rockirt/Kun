@@ -5,7 +5,7 @@ import {
 } from '@shared/sdd'
 import type { ChatBlock } from '../agent/types'
 import { getProvider } from '../agent/registry'
-import { readSddThreadRegistry } from './sdd-thread-registry'
+import { readSddThreadRegistry, type SddThreadRegistry } from './sdd-thread-registry'
 
 /**
  * Mirrors the 需求 AI conversation into the requirement unit directory
@@ -185,10 +185,10 @@ export async function writeSddChatTranscriptForThread(input: {
 /** Resolve the requirement unit owning a thread via the thread registry,
  * independent of which draft (if any) is currently open. */
 export function sddDraftRefForThreadId(
-  threadId: string
+  threadId: string,
+  registry: SddThreadRegistry = readSddThreadRegistry()
 ): { workspaceRoot: string; draftRelativePath: string } | null {
   if (!threadId.trim()) return null
-  const registry = readSddThreadRegistry()
   for (const record of Object.values(registry.drafts)) {
     if (!record.threadIds.includes(threadId)) continue
     // draftId is `${workspaceRoot}:${relativePath}`; slice on the stored

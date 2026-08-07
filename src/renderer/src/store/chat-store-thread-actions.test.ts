@@ -314,6 +314,45 @@ describe('chat-store-thread-actions queued messages', () => {
     expect(state.blocks).toEqual([])
   })
 
+  it('records a Code thread selection as the last Code session memory', async () => {
+    registryMock.getProvider.mockReturnValue({
+      getThreadDetail: vi.fn(async () => ({ blocks: [], latestSeq: 0, threadStatus: 'idle' })),
+      subscribeThreadEvents: vi.fn(async () => undefined)
+    })
+    const { actions, state } = buildHarness()
+    state.busy = false
+    state.composerPickList = []
+    state.composerModelGroups = []
+    state.threads = [thread('thr_existing'), thread('thr_code')]
+    state.lastCodeThreadId = 'thr_existing'
+
+    await actions.selectThread('thr_code')
+
+    expect(state.activeThreadId).toBe('thr_code')
+    expect(state.lastCodeThreadId).toBe('thr_code')
+  })
+
+  it('does not overwrite Code session memory when selecting a Design thread', async () => {
+    registryMock.getProvider.mockReturnValue({
+      getThreadDetail: vi.fn(async () => ({ blocks: [], latestSeq: 0, threadStatus: 'idle' })),
+      subscribeThreadEvents: vi.fn(async () => undefined)
+    })
+    const { actions, state } = buildHarness()
+    state.busy = false
+    state.composerPickList = []
+    state.composerModelGroups = []
+    state.lastCodeThreadId = 'thr_code_memory'
+    state.threads = [
+      thread('thr_existing'),
+      { ...thread('thr_design'), agentSurface: 'design' as const }
+    ]
+
+    await actions.selectThread('thr_design')
+
+    expect(state.activeThreadId).toBe('thr_design')
+    expect(state.lastCodeThreadId).toBe('thr_code_memory')
+  })
+
   it('snapshots active-turn model and reasoning selections into the next queued input', async () => {
     const { actions, state } = buildHarness()
     state.composerModel = 'deepseek-v4-flash'
@@ -618,7 +657,7 @@ describe('chat-store-thread-actions queued messages', () => {
     expect(state.queuedMessages.map((message) => message.id)).toEqual(['q-1', 'q-2', 'q-3'])
   })
 
-  it('does not queue GUI plan messages while another turn is active', async () => {
+  it('queues GUI plan messages while another turn is active', async () => {
     const { actions, state } = buildHarness()
     const guiPlan: GuiPlanMessageContext = {
       operation: 'draft',
@@ -631,10 +670,16 @@ describe('chat-store-thread-actions queued messages', () => {
     await expect(actions.sendMessage('prompt one', 'plan', {
       displayText: 'Generate implementation plan',
       guiPlan
-    })).resolves.toBe(false)
+    })).resolves.toBe(true)
 
-    expect(state.queuedMessages).toHaveLength(0)
-    expect(state.error).toBeTruthy()
+    expect(state.queuedMessages).toHaveLength(1)
+    expect(state.queuedMessages[0]).toMatchObject({
+      text: 'prompt one',
+      displayText: 'Generate implementation plan',
+      mode: 'plan',
+      guiPlan
+    })
+    expect(state.error).toBeNull()
   })
 
   it('rejects a busy Write send instead of accepting a queue that can lose file identity', async () => {
@@ -836,7 +881,7 @@ describe('chat-store-thread-actions queued messages', () => {
     expect(provider.sendUserMessage).not.toHaveBeenCalled()
   })
 
-  it('removes stale queued GUI plan messages before draining normal queued messages', async () => {
+  it('drains queued GUI plan messages before later normal queued messages', async () => {
     const { actions, state } = buildHarness()
     const sendMessage = vi.fn(async (_text, _mode, overrides) => {
       state.queuedMessages = state.queuedMessages.filter((message) => message.id !== overrides?.queued?.id)
@@ -844,17 +889,18 @@ describe('chat-store-thread-actions queued messages', () => {
     })
     state.busy = false
     state.sendMessage = sendMessage as unknown as ChatState['sendMessage']
+    const guiPlan = {
+      operation: 'draft' as const,
+      workspaceRoot: '/workspace/deepseek-gui',
+      relativePath: '.kunsdd/plan/one.md',
+      planId: 'plan-1'
+    }
     state.queuedMessages = [
       {
         id: 'q-plan',
         text: 'internal plan prompt',
         mode: 'plan',
-        guiPlan: {
-          operation: 'draft',
-          workspaceRoot: '/workspace/deepseek-gui',
-          relativePath: '.kunsdd/plan/one.md',
-          planId: 'plan-1'
-        }
+        guiPlan
       },
       {
         id: 'q-user',
@@ -872,7 +918,14 @@ describe('chat-store-thread-actions queued messages', () => {
     await actions.drainQueuedMessages()
 
     expect(state.queuedMessages).toEqual([])
-    expect(sendMessage).toHaveBeenCalledWith('normal follow-up', 'agent', {
+    expect(sendMessage).toHaveBeenNthCalledWith(1, 'internal plan prompt', 'plan', {
+      queued: expect.objectContaining({
+        id: 'q-plan',
+        mode: 'plan',
+        guiPlan
+      })
+    })
+    expect(sendMessage).toHaveBeenNthCalledWith(2, 'normal follow-up', 'agent', {
       queued: expect.objectContaining({
         id: 'q-user',
         fileReferences: [{
@@ -1650,20 +1703,32 @@ describe('chat-store-thread-actions subscribeThreadEventsLive', () => {
     vi.unstubAllGlobals()
   })
 
-  it('opens SSE with sinceSeq=0 in parallel with the fetch, so deltas flow in immediately', async () => {
+  it('hydrates first, then replays events committed during hydration from snapshot latestSeq', async () => {
     const subscribeCalls: Array<{ threadId: string; sinceSeq: number }> = []
-    const getDetailCalls: string[] = []
+    const callOrder: string[] = []
     let capturedSink: ThreadEventSink | null = null
+    let eventPersistedDuringHydration = false
+    const snapshot = deferredValue<{
+      blocks: ChatBlock[]
+      latestSeq: number
+      threadStatus: string
+      latestTurnId: string
+      latestUserMessageId: string
+    }>()
 
     const provider = {
-      getThreadDetail: vi.fn(async (id: string) => {
-        getDetailCalls.push(id)
-        return { blocks: [], latestSeq: 0, threadStatus: 'idle' }
+      getThreadDetail: vi.fn((id: string) => {
+        callOrder.push(`snapshot:${id}`)
+        return snapshot.promise
       }),
       subscribeThreadEvents: vi.fn(
         async (threadId: string, sinceSeq: number, sink: ThreadEventSink) => {
+          callOrder.push(`subscribe:${threadId}:${sinceSeq}`)
           subscribeCalls.push({ threadId, sinceSeq })
           capturedSink = sink
+          if (eventPersistedDuringHydration) {
+            sink.onDeltas([{ kind: 'agent_message', text: 'replayed live event', seq: 201 }])
+          }
           return { streamId: 'stream_1' }
         }
       )
@@ -1675,37 +1740,56 @@ describe('chat-store-thread-actions subscribeThreadEventsLive', () => {
     state.busy = true
     state.runtimeConnection = 'ready'
 
-    await actions.subscribeThreadEventsLive('thr_live')
+    const hydration = actions.subscribeThreadEventsLive('thr_live')
+    await Promise.resolve()
 
-    // Both HTTP fetch and SSE are kicked off in parallel.
     expect(provider.getThreadDetail).toHaveBeenCalledWith('thr_live')
-    expect(getDetailCalls).toEqual(['thr_live'])
-    // SSE opens with sinceSeq=0 so all events replay.
-    expect(subscribeCalls).toEqual([{ threadId: 'thr_live', sinceSeq: 0 }])
-    // The chat view switches to the live thread.
+    expect(provider.subscribeThreadEvents).not.toHaveBeenCalled()
+    // This event is durably appended after the HTTP snapshot was captured but
+    // before the renderer opens SSE. sinceSeq=200 must replay it.
+    eventPersistedDuringHydration = true
+    snapshot.resolve({
+      blocks: [],
+      latestSeq: 200,
+      threadStatus: 'running',
+      latestTurnId: 'turn_live',
+      latestUserMessageId: 'user_live'
+    })
+    await hydration
+
+    expect(callOrder).toEqual(['snapshot:thr_live', 'subscribe:thr_live:200'])
+    expect(subscribeCalls).toEqual([{ threadId: 'thr_live', sinceSeq: 200 }])
     expect(state.activeThreadId).toBe('thr_live')
-    // SSE-sourced deltas flow into the chat-store's live state.
-    const sink = expectSink(capturedSink)
-    sink.onDeltas([{ kind: 'agent_message', text: 'hello', seq: 1 }])
-    expect(state.liveAssistant).toBe('hello')
-    sink.onDeltas([{ kind: 'agent_message', text: ' world', seq: 2 }])
-    expect(state.liveAssistant).toBe('hello world')
+    expect(expectSink(capturedSink)).toBeDefined()
+    expect(state.liveAssistant).toBe('replayed live event')
+    expect(state.lastSeq).toBe(201)
   })
 
-  it('merges fetched history without overwriting live buffers, and takes lastSeq = max(fetched, current)', async () => {
+  it('keeps a terminal snapshot tool monotonic if a running update is re-delivered', async () => {
     let capturedSink: ThreadEventSink | null = null
-    const fetchedBlocks = [
-      { id: 'b1', kind: 'user', text: 'prior turn' }
+    const fetchedBlocks: ChatBlock[] = [
+      {
+        id: 'tool_call_1',
+        kind: 'tool',
+        summary: 'Read complete',
+        status: 'success'
+      }
     ]
     const provider = {
       getThreadDetail: vi.fn(async () => ({
         blocks: fetchedBlocks,
-        latestSeq: 5,
+        latestSeq: 200,
         threadStatus: 'idle'
       })),
       subscribeThreadEvents: vi.fn(
-        async (_threadId: string, _sinceSeq: number, sink: ThreadEventSink) => {
+        async (_threadId: string, sinceSeq: number, sink: ThreadEventSink) => {
+          expect(sinceSeq).toBe(200)
           capturedSink = sink
+          sink.onTool({
+            itemId: 'tool_call_1',
+            summary: 'Historical start',
+            status: 'running'
+          })
           return { streamId: 'stream_2' }
         }
       )
@@ -1721,28 +1805,25 @@ describe('chat-store-thread-actions subscribeThreadEventsLive', () => {
 
     await actions.subscribeThreadEventsLive('thr_live')
 
-    // Wait a microtask for the fetch promise to settle into the store.
-    await new Promise((r) => setTimeout(r, 0))
-
-    // Fetched blocks are written.
-    expect(state.blocks.length).toBeGreaterThan(0)
-    expect(state.blocks[0].id).toBe('b1')
-    // SSE deltas that arrived during the fetch are preserved.
-    const sink = expectSink(capturedSink)
-    sink.onDeltas([{ kind: 'agent_message', text: 'live text', seq: 8 }])
-    expect(state.liveAssistant).toBe('live text')
-    // lastSeq is bumped to the max of fetched and current (SSE advanced it).
-    expect(state.lastSeq).toBeGreaterThanOrEqual(8)
+    expect(expectSink(capturedSink)).toBeDefined()
+    expect(state.blocks).toContainEqual(expect.objectContaining({
+      id: 'tool_call_1',
+      kind: 'tool',
+      status: 'success'
+    }))
+    expect(state.lastSeq).toBe(200)
   })
 
-  it('falls back gracefully when the fetch fails: SSE stays open and the error is surfaced', async () => {
+  it('falls back from a failed hydrate using the cursor matching the retained projection', async () => {
     let capturedSink: ThreadEventSink | null = null
+    let capturedSinceSeq = -1
     const provider = {
       getThreadDetail: vi.fn(async () => {
         throw new Error('network down')
       }),
       subscribeThreadEvents: vi.fn(
-        async (_threadId: string, _sinceSeq: number, sink: ThreadEventSink) => {
+        async (_threadId: string, sinceSeq: number, sink: ThreadEventSink) => {
+          capturedSinceSeq = sinceSeq
           capturedSink = sink
           return { streamId: 'stream_3' }
         }
@@ -1751,19 +1832,20 @@ describe('chat-store-thread-actions subscribeThreadEventsLive', () => {
     registryMock.getProvider.mockReturnValue(provider)
 
     const { actions, state } = buildHarness()
-    state.activeThreadId = 'thr_other'
+    state.activeThreadId = 'thr_live'
     state.busy = false
     state.runtimeConnection = 'ready'
+    state.lastSeq = 55
+    state.blocks = [{ id: 'assistant_existing', kind: 'assistant', text: 'existing' }]
 
     await actions.subscribeThreadEventsLive('thr_live')
-    await new Promise((r) => setTimeout(r, 0))
 
-    // SSE is still open and deltas still flow.
+    expect(capturedSinceSeq).toBe(55)
     const sink = expectSink(capturedSink)
-    sink.onDeltas([{ kind: 'agent_message', text: 'still works', seq: 1 }])
+    sink.onDeltas([{ kind: 'agent_message', text: 'still works', seq: 56 }])
     expect(state.liveAssistant).toBe('still works')
-    // Error is surfaced.
     expect(state.error).toBeTruthy()
+    expect(state.blocks).toContainEqual(expect.objectContaining({ id: 'assistant_existing' }))
   })
 })
 

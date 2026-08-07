@@ -9,8 +9,23 @@ import {
   tuiStatePath,
   writeTuiPersistentState
 } from './persistence.js'
+import { acquireRuntimeDataDirMigrationLock } from '../server/runtime-data-dir-migration-lock.js'
 
 describe('TUI persistent state', () => {
+  it('does not recreate a missing migration target while state persistence is fenced', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-tui-state-migration-'))
+    const dataDir = join(root, 'missing', 'data')
+    const migration = await acquireRuntimeDataDirMigrationLock(dataDir)
+    try {
+      await expect(writeTuiPersistentState(dataDir, emptyTuiPersistentState()))
+        .rejects.toThrow(/migration is active/)
+      await expect(stat(dataDir)).rejects.toMatchObject({ code: 'ENOENT' })
+    } finally {
+      await migration.release()
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('atomically stores recents, favorites, and per-model effort without credentials', async () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'kun-tui-state-'))
     const key = modelStateKey('provider-a', 'account-a', 'model-a')

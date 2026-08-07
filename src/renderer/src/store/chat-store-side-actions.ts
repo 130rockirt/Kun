@@ -18,6 +18,7 @@ import {
   providerIdForComposerModel
 } from './chat-store-helpers'
 import { upsertUserBlock } from './chat-store-runtime-helpers'
+import { monotonicToolStatus } from './chat-projection-reducer'
 import { serviceTierForComposerSelection } from '../components/chat/composer-fast-mode'
 
 type SideContext = {
@@ -312,7 +313,7 @@ function buildSideSink(sideId: string, ctx: SideContext, sinceSeq = 0): ThreadEv
               ...cur,
               turnId: ev.turnId ?? cur.turnId,
               summary: ev.summary || cur.summary,
-              status: ev.status,
+              status: monotonicToolStatus(cur.status, ev.status),
               toolKind: ev.toolKind ?? cur.toolKind,
               detail: ev.detail ?? cur.detail,
               filePath: ev.filePath ?? cur.filePath,

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { TurnItem } from '../../contracts/items.js'
 import type { ModelRequest, ModelStreamChunk } from '../../ports/model-client.js'
 import {
@@ -147,5 +147,81 @@ describe('GeminiCodeAssistModelClient', () => {
     expect(urls[0]).toBe('https://oauth2.googleapis.com/token')
     expect(urls[1]).toContain('/v1internal:generateContent')
     expect(chunks).toContainEqual({ kind: 'assistant_text_delta', text: 'ok' })
+  })
+
+  it('re-resolves managed auth for every request and never falls back to cached auth', async () => {
+    let authoritativeAuth: ReturnType<typeof auth> | null = null
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => Response.json({
+      response: {
+        candidates: [{ content: { parts: [{ text: 'ok' }] }, finishReason: 'STOP' }]
+      }
+    }))
+    const client = new GeminiCodeAssistModelClient({
+      model: 'gemini-3.1-pro-preview',
+      auth: { ...auth(), accessToken: 'stale-constructor-token' },
+      resolveAuth: async () => authoritativeAuth,
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    })
+
+    const fenced = await drain(client.stream(request({ stream: false })))
+    expect(fenced).toContainEqual(expect.objectContaining({
+      kind: 'error',
+      message: expect.stringContaining('credentials are unavailable')
+    }))
+    expect(fetchImpl).not.toHaveBeenCalled()
+
+    authoritativeAuth = { ...auth(), accessToken: 'replacement-token' }
+    const committed = await drain(client.stream(request({ stream: false })))
+    expect(committed).toContainEqual({ kind: 'assistant_text_delta', text: 'ok' })
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+    expect(fetchImpl.mock.calls[0]?.[1]).toMatchObject({
+      headers: expect.objectContaining({ Authorization: 'Bearer replacement-token' })
+    })
+  })
+
+  it('keeps concurrent managed auth generations request-local', async () => {
+    let releaseOld!: () => void
+    let markOldStarted!: () => void
+    const oldStarted = new Promise<void>((resolve) => { markOldStarted = resolve })
+    const oldBlocked = new Promise<void>((resolve) => { releaseOld = resolve })
+    let resolveCount = 0
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => Response.json({
+      response: {
+        candidates: [{ content: { parts: [{ text: 'old request' }] }, finishReason: 'STOP' }]
+      }
+    }))
+    const client = new GeminiCodeAssistModelClient({
+      model: 'gemini-3.1-pro-preview',
+      auth: { ...auth(), accessToken: 'stale-constructor-token' },
+      resolveAuth: async () => {
+        resolveCount += 1
+        if (resolveCount === 1) {
+          markOldStarted()
+          await oldBlocked
+          return { ...auth(), accessToken: 'late-old-token' }
+        }
+        return null
+      },
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    })
+
+    const oldRequest = drain(client.stream(request({ stream: false })))
+    await oldStarted
+    const fencedRequest = await drain(client.stream(request({ stream: false })))
+    expect(fencedRequest).toContainEqual(expect.objectContaining({
+      kind: 'error',
+      message: expect.stringContaining('credentials are unavailable')
+    }))
+    expect(fetchImpl).not.toHaveBeenCalled()
+
+    releaseOld()
+    await expect(oldRequest).resolves.toContainEqual({
+      kind: 'assistant_text_delta',
+      text: 'old request'
+    })
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+    expect(fetchImpl.mock.calls[0]?.[1]).toMatchObject({
+      headers: expect.objectContaining({ Authorization: 'Bearer late-old-token' })
+    })
   })
 })

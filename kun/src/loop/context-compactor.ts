@@ -49,6 +49,27 @@ export type CompactionTriggerOptions = {
    * `promptTokens` is available.
    */
   overheadTokens?: number
+  /**
+   * Exact local input-token estimate of the already-constructed request
+   * (history + dynamic context + attachments + tools). Acts as a floor on
+   * the input pressure; it never replaces provider usage or the stored-item
+   * estimate, it just prevents the compaction heuristic from under-counting
+   * parts of the request that are not part of the stored history.
+   */
+  requestInputTokens?: number
+  /**
+   * Tokens reserved for the model output on this request. When combined with
+   * `requestHardCapTokens` it lets compaction fire *before* the send-time
+   * `input + output` guard rejects the request, closing the dead zone where
+   * input is below the soft threshold but the full budget is over the cap.
+   */
+  outputBudgetTokens?: number
+  /**
+   * Same hard cap used by the send-time guard (`input + output` may not
+   * exceed it). Only when both this and `outputBudgetTokens` are present
+   * does the budget-driven force compaction apply.
+   */
+  requestHardCapTokens?: number
 }
 
 /**
@@ -123,13 +144,36 @@ export class ContextCompactor {
     // estimate of what we sent by a wide margin, so when the reported count
     // blows past it we distrust the provider and fall back to the estimate.
     const promptTokens = trustworthyPromptTokens(reportedPromptTokens, estimatedTokens, options?.model)
-    const tokens = Math.max(estimatedTokens, promptTokens ?? 0)
-    if (tokens < thresholds.softThreshold) return null
+    const inputPressure = Math.max(
+      estimatedTokens,
+      promptTokens ?? 0,
+      finiteNonNegative(options?.requestInputTokens)
+    )
+    const outputBudgetTokens = finiteNonNegative(options?.outputBudgetTokens)
+    const requestHardCapTokens = finiteNonNegative(options?.requestHardCapTokens)
+    // Budget-driven force compaction: the send-time guard rejects any request
+    // whose input + reserved output exceeds the hard cap. Compacting only on
+    // input thresholds leaves a dead zone when the output budget is larger
+    // than (hard - soft): input can sit below soft while input + output is
+    // already over the cap. Mirror the exact `>` boundary of the guard so
+    // equality never spuriously compacts.
+    if (
+      requestHardCapTokens > 0 &&
+      outputBudgetTokens > 0 &&
+      inputPressure + outputBudgetTokens > requestHardCapTokens
+    ) {
+      return {
+        mode: 'force',
+        keepRecent: 1,
+        reason: `request budget ${inputPressure} input + ${outputBudgetTokens} output exceeds ${requestHardCapTokens}-token hard cap`
+      }
+    }
+    if (inputPressure < thresholds.softThreshold) return null
     const aggressiveThreshold = aggressiveCompactionThreshold(thresholds)
     const mode: CompactionMode =
-      tokens >= thresholds.hardThreshold
+      inputPressure >= thresholds.hardThreshold
         ? 'force'
-        : tokens >= aggressiveThreshold
+        : inputPressure >= aggressiveThreshold
           ? 'aggressive'
           : 'normal'
     const source = promptTokens !== undefined && promptTokens >= estimatedTokens ? 'usage prompt_tokens' : 'estimated prompt tokens'
@@ -137,7 +181,7 @@ export class ContextCompactor {
     return {
       mode,
       keepRecent,
-      reason: `${source} ${tokens} reached ${mode} compaction threshold`
+      reason: `${source} ${inputPressure} reached ${mode} compaction threshold`
     }
   }
 
@@ -166,18 +210,27 @@ export class ContextCompactor {
     summaryItem: TurnItem
     replacedTokens: number
   } {
+    // Goal context is durable model history, but it is neither conversation
+    // content nor an instruction that a compaction summary may paraphrase.
+    // Pull it out before calculating frozen/head/tail boundaries so exactly
+    // one original record survives after the newly-created summary.
+    const goalContexts = input.history.filter((item) => item.kind === 'goal_context')
+    const compactableInput = input.history.filter((item) => item.kind !== 'goal_context')
     const frozenMessageCount = normalizeFrozenMessageCount(
       input.frozenMessageCount,
-      input.history.length
+      compactableInput.length
     )
-    const frozen = frozenMessageCount > 0 ? input.history.slice(0, frozenMessageCount) : []
-    const history = trimTrailingToolCalls(input.history.slice(frozenMessageCount))
+    const frozen = frozenMessageCount > 0 ? compactableInput.slice(0, frozenMessageCount) : []
+    const history = trimTrailingToolCalls(compactableInput.slice(frozenMessageCount))
+    // Preserve exact order on no-op paths. It avoids a needless cache miss on
+    // a short goal turn merely because compaction was considered.
+    const unchangedNext = goalContexts.length > 0 ? [...input.history] : [...frozen, ...history]
     const requestedKeepRecent = Math.max(0, input.keepRecent ?? 4)
     const keepRecent =
       history.length <= 1 ? history.length : Math.min(requestedKeepRecent, history.length - 1)
     if (history.length <= 1 || history.length - keepRecent <= 0) {
       return {
-        next: [...frozen, ...history],
+        next: unchangedNext,
         summaryItem: makeCompactionItem({
           id: `compaction_${input.turnId}_noop`,
           turnId: input.turnId,
@@ -195,7 +248,7 @@ export class ContextCompactor {
       : repairTailStartForToolResults(history, history.length - keepRecent)
     if (tailStart === 0) {
       return {
-        next: [...frozen, ...history],
+        next: unchangedNext,
         summaryItem: makeCompactionItem({
           id: `compaction_${input.turnId}_noop`,
           turnId: input.turnId,
@@ -216,7 +269,7 @@ export class ContextCompactor {
     // used to create a fresh compaction item on every following model step.
     if (head.length > 0 && head.every((item) => item.kind === 'compaction')) {
       return {
-        next: [...frozen, ...history],
+        next: unchangedNext,
         summaryItem: makeCompactionItem({
           id: `compaction_${input.turnId}_noop`,
           turnId: input.turnId,
@@ -263,7 +316,7 @@ export class ContextCompactor {
       digestMarker,
       sourceItemIds: head.map((item) => item.id)
     })
-    return { next: [...frozen, summaryItem, ...tail], summaryItem, replacedTokens }
+    return { next: [...frozen, summaryItem, ...goalContexts, ...tail], summaryItem, replacedTokens }
   }
 
   /** Hard cap used by the loop to enforce an upper bound on the conversation. */
@@ -508,6 +561,8 @@ function extractDurableOutlineLines(history: TurnItem[]): string[] {
       case 'user_message':
         lines.push(...durableTextLines('User request', item.text, { fallback: true }))
         break
+      case 'goal_context':
+        break
       case 'assistant_text':
         lines.push(...durableTextLines('Assistant finding', item.text))
         break
@@ -599,6 +654,8 @@ function summarizeItem(item: TurnItem): string {
   switch (item.kind) {
     case 'user_message':
       return `- User: ${clipText(item.text)}`
+    case 'goal_context':
+      return ''
     case 'assistant_text':
       return `- Assistant: ${clipText(item.text)}`
     case 'assistant_reasoning':
@@ -678,4 +735,15 @@ function clipText(text: string, max = 360): string {
   const compact = text.replace(/\s+/g, ' ').trim()
   if (compact.length <= max) return compact
   return `${compact.slice(0, Math.max(0, max - 3)).trim()}...`
+}
+
+/**
+ * Normalizes optional token budget inputs so missing, negative, or
+ * non-finite values never poison the compaction math. Returns 0 for
+ * anything that is not a finite non-negative number, which keeps legacy
+ * callers (that omit these fields entirely) on the old behavior.
+ */
+function finiteNonNegative(value: number | undefined): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return 0
+  return Math.max(0, Math.floor(value))
 }

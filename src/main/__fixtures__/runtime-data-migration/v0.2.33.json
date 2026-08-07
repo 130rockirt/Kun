@@ -1,0 +1,46 @@
+{
+  "version": "0.2.33",
+  "tagObject": "a73d00c8d02a1a719835988a4507c3fe8f600e78",
+  "commit": "1a6c8f679baf025f6883cf2370e9c3b162f4310c",
+  "observedShape": "v2 source-promoted journal with current history and no compatibility link",
+  "entries": [
+    {
+      "path": "user-data/kun-settings.json",
+      "content": "{\"version\":1,\"agents\":{\"kun\":{\"dataDir\":\"~/.kun/data\"}}}\n"
+    },
+    {
+      "path": "home/.kun/data/config.json",
+      "content": "{\"serve\":{}}\n"
+    },
+    {
+      "path": "home/.kun/data/threads/thr_0233/metadata.jsonl",
+      "content": "{\"id\":\"thr_0233\"}\n"
+    }
+  ],
+  "journal": {
+    "file": "kun-runtime-data-migration-v2.json",
+    "document": {
+      "schemaVersion": 2,
+      "phase": "source-promoted",
+      "sourcePath": "$HOME/.deepseekgui/kun",
+      "targetPath": "$HOME/.kun/data",
+      "cutoverConflictBackupPaths": [],
+      "settingsSourcePath": "$USER_DATA/kun-settings.json",
+      "settingsWritePath": "$USER_DATA/kun-settings.json",
+      "settingsBackupPaths": [],
+      "settingsBackedUp": true,
+      "extensionRegistryBackupPaths": [],
+      "sourceThreadIds": ["thr_0233"],
+      "sourceInventory": "$TARGET_INVENTORY",
+      "salvaged": 0,
+      "conflicts": [],
+      "startedAt": "2026-07-01T00:00:00.000Z",
+      "updatedAt": "2026-07-01T00:00:00.000Z"
+    }
+  },
+  "expected": {
+    "scannerState": "candidate-ready",
+    "candidateKinds": ["current"],
+    "runnerStatus": "completed"
+  }
+}

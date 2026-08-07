@@ -180,7 +180,11 @@ describe('LegacyProviderCredentialMigrationService', () => {
     )
 
     await expect(
-      migration.updateResolvedApiKey('provider:grok', 'refreshed-oauth-json')
+      migration.updateResolvedApiKey(
+        'provider:grok',
+        'old-oauth-json',
+        'refreshed-oauth-json'
+      )
     ).resolves.toBe(true)
 
     expect((await migration.resolveApiKey('provider:grok'))?.apiKey).toBe('refreshed-oauth-json')

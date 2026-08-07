@@ -1,0 +1,29 @@
+{
+  "version": "0.2.30",
+  "tagObject": "d42203dd20d059aea257dbbeb69bdcb1e1bf8e35",
+  "commit": "caa4dc5f50b65b2e17cd0f7bf9427f4a511cc0d9",
+  "observedShape": "legacy directory with kun-settings and no runtime journal",
+  "entries": [
+    {
+      "path": "user-data/kun-settings.json",
+      "content": "{\"version\":1,\"agents\":{\"kun\":{\"dataDir\":\"~/.deepseekgui/kun\"}}}\n"
+    },
+    {
+      "path": "home/.deepseekgui/kun/config.json",
+      "content": "{\"serve\":{}}\n"
+    },
+    {
+      "path": "home/.deepseekgui/kun/threads/thr_0230/events.jsonl",
+      "content": "{\"seq\":1,\"type\":\"thread.created\"}\n"
+    },
+    {
+      "path": "home/.deepseekgui/kun/task-graphs/graph_0230.json",
+      "content": "{\"schemaVersion\":1,\"id\":\"graph_0230\"}\n"
+    }
+  ],
+  "expected": {
+    "scannerState": "candidate-ready",
+    "candidateKinds": ["legacy"],
+    "runnerStatus": "completed"
+  }
+}

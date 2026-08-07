@@ -109,9 +109,116 @@ describe('design board helpers', () => {
 
   // HTML frame sizing sync cases live in design-board.frame-sizing.test.ts.
 
+  it('creates one canvas frame per HTML version by default and keeps each snapshot linked', () => {
+    const v1Path = '.kun-design/doc/home/v1.html'
+    const v2Path = '.kun-design/doc/home/v2.html'
+    const screen = artifact('home', 'html', {
+      title: 'Home',
+      relativePath: v2Path,
+      versions: [
+        { id: 'home-v2', relativePath: v2Path, createdAt, summary: 'Second pass' },
+        { id: 'home-v1', relativePath: v1Path, createdAt, summary: 'First pass' }
+      ]
+    })
+
+    const first = syncHtmlArtifactsToBoardDocument(createEmptyDocument(), [screen])
+    const frames = first.addedFrameIds.map((id) => first.document.objects[id])
+
+    expect(frames).toHaveLength(2)
+    expect(frames.map((frame) => frame?.embeddedArtifact?.versionId)).toEqual(['home-v1', 'home-v2'])
+    expect(frames.map((frame) => frame?.name)).toEqual(['Home · v1', 'Home'])
+
+    const second = syncHtmlArtifactsToBoardDocument(first.document, [screen])
+    expect(second.addedFrameIds).toEqual([])
+    expect(second.removedFrameIds).toEqual([])
+    expect(second.document.objects).toEqual(first.document.objects)
+  })
+
+  it('does not recreate a tombstoned historical version frame across syncs and reloads', () => {
+    const screen = artifact('home', 'html', {
+      title: 'Home',
+      relativePath: '.kun-design/doc/home/v2.html',
+      versions: [
+        { id: 'home-v2', relativePath: '.kun-design/doc/home/v2.html', createdAt, summary: 'Second pass' },
+        { id: 'home-v1', relativePath: '.kun-design/doc/home/v1.html', createdAt, summary: 'First pass' }
+      ],
+      node: { x: 40, y: 60, width: 390, height: 844, sizeMode: 'manual', boardHiddenVersionIds: ['home-v1'] }
+    })
+
+    const first = syncHtmlArtifactsToBoardDocument(createEmptyDocument(), [screen])
+    expect(first.addedFrameIds.map((id) => first.document.objects[id]?.embeddedArtifact?.versionId))
+      .toEqual(['home-v2'])
+
+    const second = syncHtmlArtifactsToBoardDocument(first.document, [screen])
+    expect(second.addedFrameIds).toEqual([])
+    expect(second.document.objects).toEqual(first.document.objects)
+
+    // A fresh load from disk must reconstruct the same board without v1.
+    const reloaded = syncHtmlArtifactsToBoardDocument(createEmptyDocument(), [screen])
+    expect(reloaded.addedFrameIds.map((id) => reloaded.document.objects[id]?.embeddedArtifact?.versionId))
+      .toEqual(['home-v2'])
+  })
+
+  it('lets a newly generated version appear while older tombstoned versions stay hidden', () => {
+    const withV3 = artifact('home', 'html', {
+      title: 'Home',
+      relativePath: '.kun-design/doc/home/v3.html',
+      versions: [
+        { id: 'home-v3', relativePath: '.kun-design/doc/home/v3.html', createdAt, summary: 'Third pass' },
+        { id: 'home-v2', relativePath: '.kun-design/doc/home/v2.html', createdAt, summary: 'Second pass' },
+        { id: 'home-v1', relativePath: '.kun-design/doc/home/v1.html', createdAt, summary: 'First pass' }
+      ],
+      node: { x: 40, y: 60, width: 390, height: 844, sizeMode: 'manual', boardHiddenVersionIds: ['home-v1'] }
+    })
+
+    const synced = syncHtmlArtifactsToBoardDocument(createEmptyDocument(), [withV3])
+    expect(synced.addedFrameIds.map((id) => synced.document.objects[id]?.embeddedArtifact?.versionId))
+      .toEqual(['home-v2', 'home-v3'])
+  })
+
+  it('clears a version tombstone when its frame is restored (undo path)', () => {
+    const screen = artifact('home', 'html', {
+      title: 'Home',
+      relativePath: '.kun-design/doc/home/v2.html',
+      versions: [
+        { id: 'home-v2', relativePath: '.kun-design/doc/home/v2.html', createdAt, summary: 'Second pass' },
+        { id: 'home-v1', relativePath: '.kun-design/doc/home/v1.html', createdAt, summary: 'First pass' }
+      ],
+      node: { x: 40, y: 60, width: 390, height: 844, sizeMode: 'manual', boardHiddenVersionIds: ['home-v1'] }
+    })
+    installDesignDocument([screen], screen.id)
+    const synced = syncHtmlArtifactsToBoardDocument(createEmptyDocument(), [screen])
+    const restored = createHtmlFrameShape('Home · v1', 100, 100, 'home', 'desktop', 'home-v1')
+    restored.width = 300
+    restored.height = 400
+    synced.document.objects[restored.id] = { ...restored, parentId: synced.document.rootId }
+    const root = synced.document.objects[synced.document.rootId]
+    synced.document.objects[synced.document.rootId] = { ...root, children: [...root.children, restored.id] }
+
+    syncHtmlFrameNodesToArtifacts(synced.document)
+
+    expect(useDesignWorkspaceStore.getState().artifacts.find((item) => item.id === 'home')?.node)
+      .toMatchObject({ boardHiddenVersionIds: [] })
+  })
+
+  it('keeps legacy boardHidden as a current-version-only hidden marker', () => {
+    const screen = artifact('home', 'html', {
+      title: 'Home',
+      relativePath: '.kun-design/doc/home/v2.html',
+      versions: [
+        { id: 'home-v2', relativePath: '.kun-design/doc/home/v2.html', createdAt, summary: 'Second pass' },
+        { id: 'home-v1', relativePath: '.kun-design/doc/home/v1.html', createdAt, summary: 'First pass' }
+      ],
+      node: { x: 40, y: 60, width: 390, height: 844, sizeMode: 'auto', boardHidden: true }
+    })
+
+    const synced = syncHtmlArtifactsToBoardDocument(createEmptyDocument(), [screen])
+    expect(synced.addedFrameIds.map((id) => synced.document.objects[id]?.embeddedArtifact?.versionId))
+      .toEqual(['home-v1'])
+  })
+
   it('does not recreate a board-hidden HTML artifact after its linked frame was deleted', () => {
     const screen = artifact('screen', 'html', {
-      title: 'Hidden',
       node: { x: 40, y: 60, width: 390, height: 844, sizeMode: 'auto', boardHidden: true }
     })
 
@@ -162,6 +269,37 @@ describe('design board helpers', () => {
     expect(synced.removedFrameIds).toEqual([])
     expect(useDesignWorkspaceStore.getState().artifacts.find((item) => item.id === 'screen')?.node)
       .toMatchObject({ boardHidden: false, x: 40, y: 60, width: 390, height: 844 })
+  })
+
+  it('only writes the current version frame back to the artifact node', () => {
+    const v1 = artifact('home', 'html', {
+      relativePath: '.kun-design/doc/home/v2.html',
+      versions: [
+        { id: 'home-v2', relativePath: '.kun-design/doc/home/v2.html', createdAt, summary: 'Current' },
+        { id: 'home-v1', relativePath: '.kun-design/doc/home/v1.html', createdAt, summary: 'History' }
+      ],
+      node: { x: 10, y: 20, width: 1280, height: 800, sizeMode: 'manual' }
+    })
+    installDesignDocument([v1], v1.id)
+    const doc = createEmptyDocument()
+    const historical = createHtmlFrameShape('Home · v1', 100, 100, 'home', 'desktop', 'home-v1')
+    historical.width = 300
+    historical.height = 400
+    const current = createHtmlFrameShape('Home', 500, 120, 'home', 'desktop', 'home-v2')
+    current.width = 1280
+    current.height = 800
+    doc.objects[historical.id] = { ...historical, parentId: doc.rootId }
+    doc.objects[current.id] = { ...current, parentId: doc.rootId }
+    doc.objects[doc.rootId] = { ...doc.objects[doc.rootId], children: [historical.id, current.id] }
+
+    syncHtmlFrameNodesToArtifacts(doc)
+
+    expect(useDesignWorkspaceStore.getState().artifacts[0]?.node).toMatchObject({
+      x: 500,
+      y: 120,
+      width: 1280,
+      height: 800
+    })
   })
 
   it('detects deleted linked HTML frames only when no replacement frame remains', () => {

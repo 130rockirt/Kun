@@ -67,7 +67,7 @@ describe('LlmDebugRecorder', () => {
     await recorder.finish(round)
 
     const captured = recorder.snapshot()[0]
-    const request = captured?.exchanges[0]?.request.body
+    const request = captured?.exchanges[0]?.request?.body
     expect(captured?.requestBodyTruncated).toBe(true)
     expect(captured?.requestBodyOriginalBytes).toBeGreaterThan(96)
     expect(captured?.requestBody).toMatchObject({ __debugTruncated: true })
@@ -117,5 +117,60 @@ describe('LlmDebugRecorder', () => {
     expect(snapshot.length).toBeLessThan(3)
     expect(snapshot[0]?.model).toBe('c')
     expect(snapshot.reduce((total, round) => total + (round.retainedBytes ?? 0), 0)).toBeLessThanOrEqual(2_000)
+  })
+
+  it('defaults the attempt phase to model and honors explicit setup/credential phases', async () => {
+    const recorder = new LlmDebugRecorder()
+    const plain = recorder.start({ threadId: 't', turnId: 'u', provider: 'compat', model: 'm' })
+    recorder.beginHttpAttempt(plain, {
+      endpointFormat: 'chat_completions',
+      attempt: 1,
+      reason: 'initial',
+      url: 'https://example.test/v1/chat/completions',
+      headers: {},
+      bodyText: '{}'
+    })
+    const setup = recorder.start({ threadId: 't', turnId: 'u', provider: 'compat', model: 'm' })
+    recorder.beginHttpAttempt(setup, {
+      endpointFormat: 'gemini-cli-api',
+      attempt: 1,
+      reason: 'initial',
+      url: 'https://example.test/:loadCodeAssist',
+      headers: {},
+      bodyText: '{}',
+      phase: 'setup'
+    })
+
+    expect(plain.exchanges[0]?.phase).toBeUndefined()
+    expect(setup.exchanges[0]?.phase).toBe('setup')
+  })
+
+  it('records a not_started diagnostic without fabricating a request and persists it', async () => {
+    const dataDir = await import('node:fs/promises').then(async (fs) => {
+      const { mkdtemp } = fs
+      const { tmpdir } = await import('node:os')
+      const { join } = await import('node:path')
+      return mkdtemp(join(tmpdir(), 'kun-llm-diag-'))
+    })
+    const recorder = new LlmDebugRecorder({ dataDir })
+    const round = recorder.start({ threadId: 't', turnId: 'u', provider: 'gemini', model: 'm' })
+    recorder.recordPhaseDiagnostic(round, {
+      phase: 'credential',
+      failureOrigin: 'credential',
+      code: 'gemini_cli_login_required',
+      message: 'Run `gemini` once to finish onboarding.',
+      secretValues: ['supersecret-token']
+    })
+    await recorder.finish(round)
+
+    const page = await recorder.listThread('t')
+    const record = page.records[0]
+    expect(record?.status).toBe('not_started')
+    expect(record?.phase).toBe('credential')
+    expect(record?.failureOrigin).toBe('credential')
+    expect(record?.diagnosticCode).toBe('gemini_cli_login_required')
+    expect(record?.request).toBeUndefined()
+    expect(record?.error).toContain('Run `gemini`')
+    await import('node:fs/promises').then((fs) => fs.rm(dataDir, { recursive: true, force: true }))
   })
 })

@@ -55,6 +55,143 @@ describe('JsonSettingsStore', () => {
     expect((await development.load()).locale).toBe('zh')
   })
 
+  it('serializes concurrent patches so stale full snapshots cannot overwrite sibling intent', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'kun-serialized-settings-'))
+    let revision = 0
+    let value: string | null = null
+    let releaseFirstWrite!: () => void
+    const firstWriteGate = new Promise<void>((resolve) => { releaseFirstWrite = resolve })
+    let writes = 0
+    const backend = {
+      async read() {
+        return { revision, value }
+      },
+      async write(expectedRevision: number, next: string) {
+        writes += 1
+        if (writes === 1) await firstWriteGate
+        if (expectedRevision !== revision) throw new Error('revision conflict')
+        value = next
+        revision += 1
+        return { revision, value: next }
+      }
+    }
+    const store = new JsonSettingsStore(userDataDir, { documentBackend: backend })
+    await store.load()
+
+    const runtimePatch = store.patch({ agents: { kun: { model: 'deepseek-reasoner' } } })
+    const unrelatedPatch = store.patch({ locale: 'zh' })
+    await vi.waitFor(() => expect(writes).toBe(1))
+    expect(writes).toBe(1)
+
+    releaseFirstWrite()
+    await expect(Promise.all([runtimePatch, unrelatedPatch])).resolves.toHaveLength(2)
+
+    const saved = await store.load()
+    expect(saved.agents.kun.model).toBe('deepseek-reasoner')
+    expect(saved.locale).toBe('zh')
+    expect(writes).toBe(2)
+  })
+
+  it('retries a Manager revision conflict from the exact mutation snapshot', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'kun-revision-retry-settings-'))
+    let revision = 0
+    let value: string | null = null
+    let releaseFirstProfileWrite!: () => void
+    let markFirstProfileWriteStarted!: () => void
+    const firstProfileWriteGate = new Promise<void>((resolve) => { releaseFirstProfileWrite = resolve })
+    const firstProfileWriteStarted = new Promise<void>((resolve) => { markFirstProfileWriteStarted = resolve })
+    let gated = false
+    const backend = {
+      async read() {
+        return { revision, value }
+      },
+      async write(expectedRevision: number, next: string) {
+        const parsed = JSON.parse(next) as { agents?: { kun?: { model?: string } } }
+        if (!gated && expectedRevision === 0 && parsed.agents?.kun?.model === 'deepseek-reasoner') {
+          gated = true
+          markFirstProfileWriteStarted()
+          await firstProfileWriteGate
+        }
+        if (expectedRevision !== revision) {
+          const conflict = new Error('revision conflict') as Error & { currentRevision: number }
+          conflict.name = 'ManagerRevisionConflictError'
+          conflict.currentRevision = revision
+          throw conflict
+        }
+        value = next
+        revision += 1
+        return { revision, value: next }
+      }
+    }
+    const production = new JsonSettingsStore(userDataDir, { documentBackend: backend })
+    const development = new JsonSettingsStore(userDataDir, { documentBackend: backend })
+    await Promise.all([production.load(), development.load()])
+
+    const productionPatch = production.patch({ agents: { kun: { model: 'deepseek-reasoner' } } })
+    await firstProfileWriteStarted
+    await development.patch({ locale: 'zh' })
+    releaseFirstProfileWrite()
+    await productionPatch
+
+    const saved = await production.load()
+    expect(saved.agents.kun.model).toBe('deepseek-reasoner')
+    expect(saved.locale).toBe('zh')
+    expect(revision).toBe(2)
+  })
+
+  it('re-checks an updateIf guard after a Manager revision conflict', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'kun-conditional-retry-settings-'))
+    let revision = 0
+    let value: string | null = null
+    let releaseGuardedWrite!: () => void
+    let markGuardedWriteStarted!: () => void
+    const guardedWriteGate = new Promise<void>((resolve) => { releaseGuardedWrite = resolve })
+    const guardedWriteStarted = new Promise<void>((resolve) => { markGuardedWriteStarted = resolve })
+    let gated = false
+    const backend = {
+      async read() {
+        return { revision, value }
+      },
+      async write(expectedRevision: number, next: string) {
+        const parsed = JSON.parse(next) as { agents?: { kun?: { model?: string } } }
+        if (!gated && expectedRevision === 0 && parsed.agents?.kun?.model === 'deepseek-reasoner') {
+          gated = true
+          markGuardedWriteStarted()
+          await guardedWriteGate
+        }
+        if (expectedRevision !== revision) {
+          const conflict = new Error('revision conflict') as Error & { currentRevision: number }
+          conflict.name = 'ManagerRevisionConflictError'
+          conflict.currentRevision = revision
+          throw conflict
+        }
+        value = next
+        revision += 1
+        return { revision, value: next }
+      }
+    }
+    const production = new JsonSettingsStore(userDataDir, { documentBackend: backend })
+    const development = new JsonSettingsStore(userDataDir, { documentBackend: backend })
+    await Promise.all([production.load(), development.load()])
+
+    const guarded = production.updateIf(
+      (current) => current.locale === 'en',
+      (current) => ({
+        ...current,
+        agents: { kun: { ...current.agents.kun, model: 'deepseek-reasoner' } }
+      })
+    )
+    await guardedWriteStarted
+    await development.patch({ locale: 'zh' })
+    releaseGuardedWrite()
+
+    await expect(guarded).resolves.toMatchObject({ applied: false })
+    const saved = await production.load()
+    expect(saved.locale).toBe('zh')
+    expect(saved.agents.kun.model).not.toBe('deepseek-reasoner')
+    expect(revision).toBe(1)
+  })
+
   it('defaults GUI updates to the stable channel for new settings', async () => {
     const userDataDir = await mkdtemp(join(tmpdir(), 'ds-gui-settings-'))
 
@@ -596,6 +733,103 @@ describe('JsonSettingsStore', () => {
 
     const settingsPath = join(userDataDir, 'kun-settings.json')
     await expect(readFile(settingsPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('fails closed without caching plaintext when the protected backup cannot be created', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'kun-settings-backup-fail-'))
+    const secret = 'backup-failure-secret'
+    const plainStore = new JsonSettingsStore(userDataDir)
+    const defaults = await plainStore.load()
+    await plainStore.save({
+      ...defaults,
+      provider: { ...defaults.provider, apiKey: secret }
+    })
+    const settingsPath = join(userDataDir, 'kun-settings.json')
+    const original = await readFile(settingsPath, 'utf8')
+    await mkdir(join(userDataDir, 'kun-settings.pre-extension-credential-migration.json'))
+    const prepare = vi.fn()
+    const store = new JsonSettingsStore(userDataDir, {
+      credentialMigration: { prepare }
+    })
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const error = await store.load().catch((value: unknown) => value)
+      expect(error).toBeInstanceOf(Error)
+      expect(String(error)).toMatch(/protected settings backup could not be written/)
+      expect(String(error)).not.toContain(secret)
+    }
+    expect(prepare).not.toHaveBeenCalled()
+    expect(await readFile(settingsPath, 'utf8')).toBe(original)
+  })
+
+  it('fails closed and retries when credential prepare cannot reach Registry authority', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'kun-settings-prepare-fail-'))
+    const secret = 'prepare-failure-secret'
+    const plainStore = new JsonSettingsStore(userDataDir)
+    const defaults = await plainStore.load()
+    await plainStore.save({
+      ...defaults,
+      provider: { ...defaults.provider, apiKey: secret }
+    })
+    const settingsPath = join(userDataDir, 'kun-settings.json')
+    const original = await readFile(settingsPath, 'utf8')
+    const prepare = vi.fn(async () => { throw new Error('Registry CAS unavailable') })
+    const store = new JsonSettingsStore(userDataDir, {
+      credentialMigration: { prepare }
+    })
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const error = await store.load().catch((value: unknown) => value)
+      expect(error).toBeInstanceOf(Error)
+      expect(String(error)).toMatch(/could not be moved to protected storage/)
+      expect(String(error)).not.toContain(secret)
+    }
+    expect(prepare).toHaveBeenCalledTimes(2)
+    expect(await readFile(settingsPath, 'utf8')).toBe(original)
+  })
+
+  it('rolls back and never caches plaintext when secret-free settings persist fails', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'kun-settings-persist-fail-'))
+    const secret = 'persist-failure-secret'
+    const defaults = await new JsonSettingsStore(userDataDir).load()
+    const runtimeSettings = {
+      ...defaults,
+      provider: { ...defaults.provider, apiKey: secret }
+    }
+    const persistedSettings = {
+      ...runtimeSettings,
+      provider: { ...runtimeSettings.provider, apiKey: '' }
+    }
+    const raw = JSON.stringify(runtimeSettings)
+    const backend = {
+      read: vi.fn(async () => ({ revision: 4, value: raw })),
+      write: vi.fn(async () => { throw new Error('Manager document write failed') })
+    }
+    const rollback = vi.fn(async () => undefined)
+    const prepare = vi.fn(async () => ({
+      runtimeSettings,
+      persistedSettings,
+      sourceIdsToCommit: ['settings:provider:deepseek'],
+      removedPlaintext: true,
+      rollback,
+      commit: async () => undefined
+    }))
+    const store = new JsonSettingsStore(userDataDir, {
+      documentBackend: backend,
+      credentialMigration: { prepare }
+    })
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const error = await store.load().catch((value: unknown) => value)
+      expect(error).toBeInstanceOf(Error)
+      expect(String(error)).toMatch(/could not commit secret-free settings/)
+      expect(String(error)).not.toContain(secret)
+    }
+    expect(prepare).toHaveBeenCalledTimes(2)
+    expect(rollback).toHaveBeenCalledTimes(2)
+    expect(backend.read).toHaveBeenCalledTimes(2)
+    expect(backend.write).toHaveBeenCalledTimes(2)
+    expect(raw).toContain(secret)
   })
 
   it('ignores null entries in persisted Claw channels and schedule tasks', async () => {

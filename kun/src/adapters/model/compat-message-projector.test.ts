@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import { makeUserItem } from '../../domain/item.js'
+import {
+  makeAssistantReasoningItem,
+  makeGoalContextItem,
+  makeToolCallItem,
+  makeToolResultItem,
+  makeUserItem
+} from '../../domain/item.js'
 import type { ModelRequest } from '../../ports/model-client.js'
 import { projectCompatMessages } from './compat-message-projector.js'
+import { COMPAT_HISTORY_CONTEXT } from './compat-request-codecs.js'
 
 const composerContextFixture = {
   schemaVersion: 1 as const,
@@ -85,5 +92,98 @@ describe('compat composer context projection', () => {
       ['system', 'turn-context-preamble'],
       ['system', 'turn-context-block']
     ])
+  })
+
+  it('projects durable goal context as history rather than a per-request instruction', () => {
+    const request: ModelRequest = {
+      threadId: 'thread-goal',
+      turnId: 'turn-goal',
+      model: 'test-model',
+      systemPrompt: 'stable-system-prefix',
+      prefix: [],
+      history: [
+        makeGoalContextItem({
+          id: 'goal-context',
+          threadId: 'thread-goal',
+          turnId: 'turn-goal',
+          text: 'Goal objective stays in append-only history.',
+          createdAt: '2026-08-06T00:00:00.000Z'
+        }),
+        makeUserItem({
+          id: 'goal-user',
+          threadId: 'thread-goal',
+          turnId: 'turn-goal',
+          text: 'Continue.'
+        })
+      ],
+      tools: [],
+      abortSignal: new AbortController().signal
+    }
+
+    const messages = projectCompatMessages(request, {
+      thinkingMode: false,
+      supportsImages: false
+    })
+    const goal = messages[1]
+    expect(goal).toMatchObject({
+      role: 'system',
+      content: 'Goal objective stays in append-only history.'
+    })
+    expect(goal?.[COMPAT_HISTORY_CONTEXT]).toBe(true)
+  })
+
+  it('replays complete historical DeepSeek tool rounds only on the identical route', () => {
+    const threadId = 'thread-deepseek'
+    const priorTurnId = 'turn-prior'
+    const request: ModelRequest = {
+      threadId,
+      turnId: 'turn-current',
+      model: 'deepseek-v4-pro',
+      providerId: 'deepseek',
+      accountId: 'account-a',
+      prefix: [],
+      history: [
+        makeAssistantReasoningItem({
+          id: 'reason-prior', threadId, turnId: priorTurnId,
+          text: 'inspect the requested file', status: 'completed'
+        }),
+        makeToolCallItem({
+          id: 'call-prior', threadId, turnId: priorTurnId, callId: 'call-prior',
+          toolName: 'read_file', arguments: { path: 'a.ts' }, status: 'completed'
+        }),
+        makeToolResultItem({
+          id: 'result-prior', threadId, turnId: priorTurnId, callId: 'call-prior',
+          toolName: 'read_file', output: 'contents', status: 'completed'
+        })
+      ],
+      historyRoutesByTurnId: {
+        [priorTurnId]: { model: 'deepseek-v4-pro', providerId: 'deepseek', accountId: 'account-a' }
+      },
+      tools: [],
+      abortSignal: new AbortController().signal
+    }
+
+    const messages = projectCompatMessages(request, {
+      thinkingMode: true,
+      strictThinkingToolReplay: true,
+      supportsImages: false
+    })
+    expect(messages.find((message) => message.tool_calls?.length)).toMatchObject({
+      reasoning_content: 'inspect the requested file'
+    })
+
+    const switched = projectCompatMessages({
+      ...request,
+      model: 'deepseek-v4-flash',
+      historyRoutesByTurnId: {
+        [priorTurnId]: { model: 'deepseek-v4-pro', providerId: 'deepseek', accountId: 'account-a' }
+      }
+    }, {
+      thinkingMode: true,
+      strictThinkingToolReplay: true,
+      supportsImages: false
+    })
+    expect(switched.some((message) => message.tool_calls?.length)).toBe(false)
+    expect(switched.some((message) => message.role === 'tool')).toBe(false)
   })
 })

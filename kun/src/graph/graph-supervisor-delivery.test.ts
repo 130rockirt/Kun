@@ -72,21 +72,36 @@ describe('GraphSupervisor delivery', () => {
         return result
       })
     }
-    let leadStarted!: () => void
-    const started = new Promise<void>((resolve) => {
-      leadStarted = resolve
+    let leadAStarted!: () => void
+    const startedA = new Promise<void>((resolve) => {
+      leadAStarted = resolve
     })
-    let releaseLead!: () => void
-    const released = new Promise<void>((resolve) => {
-      releaseLead = resolve
+    let leadBStarted!: () => void
+    const startedB = new Promise<void>((resolve) => {
+      leadBStarted = resolve
     })
+    let releaseLeadA!: () => void
+    const releasedA = new Promise<void>((resolve) => {
+      releaseLeadA = resolve
+    })
+    let releaseLeadB!: () => void
+    const releasedB = new Promise<void>((resolve) => {
+      releaseLeadB = resolve
+    })
+    let episode = 0
     const supervisor = new GraphSupervisor({
       store: store as never,
       config: () => testGraphConfig({ supervision: { coalesceWindowMs: 60_000 } }),
       delegation: () => undefined,
       leadTurn: async () => {
-        leadStarted()
-        await released
+        episode += 1
+        if (episode === 1) {
+          leadAStarted()
+          await releasedA
+          return
+        }
+        leadBStarted()
+        await releasedB
       }
     })
     await supervisor.signal({
@@ -96,7 +111,7 @@ describe('GraphSupervisor delivery', () => {
       digest: 'Deliver episode A.'
     })
     const flushingA = supervisor.flush(current.id)
-    await started
+    await startedA
 
     // Steering B and its supervision request become durable while A is still
     // running. A must not acknowledge either on B's behalf.
@@ -111,12 +126,19 @@ describe('GraphSupervisor delivery', () => {
       nodeIds: [],
       digest: 'Deliver episode B.'
     })
-    releaseLead()
-    await flushingA
+    releaseLeadA()
+    await startedB
 
     expect(current.steering).toEqual([
       expect.objectContaining({ steeringId: 'steering_a', status: 'handled' }),
       expect.objectContaining({ steeringId: 'steering_b', status: 'persisted' })
+    ])
+    releaseLeadB()
+    await flushingA
+
+    expect(current.steering).toEqual([
+      expect.objectContaining({ steeringId: 'steering_a', status: 'handled' }),
+      expect.objectContaining({ steeringId: 'steering_b', status: 'handled' })
     ])
     await supervisor.stop()
   })

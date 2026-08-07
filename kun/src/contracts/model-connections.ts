@@ -11,6 +11,17 @@ export const ModelConnectionProxySchema = z.object({
   url: z.string().max(2_048)
 }).strict()
 
+export const ModelConnectionCredentialStatusSchema = z.enum([
+  'ready',
+  'missing',
+  'unreadable'
+])
+
+export const ModelConnectionCredentialErrorCodeSchema = z.enum([
+  'credential_missing',
+  'credential_unreadable'
+])
+
 export const ModelConnectionProfileSchema = z.object({
   id: z.string().min(1).max(128),
   accountId: z.string().min(1).max(128),
@@ -28,6 +39,8 @@ export const ModelConnectionProfileSchema = z.object({
   baseUrl: z.string().url().optional(),
   endpointFormat: z.enum(MODEL_ENDPOINT_FORMATS),
   configured: z.boolean(),
+  credentialStatus: ModelConnectionCredentialStatusSchema.optional(),
+  credentialErrorCode: ModelConnectionCredentialErrorCodeSchema.optional(),
   models: z.array(z.string().min(1).max(512)).max(500),
   modelCapabilities: z.record(z.string(), ModelCapabilityMetadata).optional(),
   selectedModel: z.string().min(1).max(512).optional()
@@ -86,6 +99,29 @@ export const ModelConnectionSelectRequestSchema = z.object({
 export const ModelConnectionCredentialRequestSchema = z.object({
   expectedRevision: z.number().int().nonnegative(),
   credential: z.string().min(1).max(64 * 1024)
+}).strict()
+
+export const ModelConnectionCredentialOperationTokenSchema = z.string()
+  .max(128)
+  .regex(
+    /^credential:[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}:[1-9][0-9]*$/iu,
+    'credential operation token must contain a stable client id and a positive generation'
+  )
+
+export const ModelConnectionCredentialPrepareRequestSchema = z.object({
+  expectedRevision: z.number().int().nonnegative(),
+  credential: z.string().min(1).max(64 * 1024),
+  operationToken: ModelConnectionCredentialOperationTokenSchema
+}).strict()
+
+export const ModelConnectionCredentialFenceRequestSchema = z.object({
+  expectedRevision: z.number().int().nonnegative(),
+  operationToken: ModelConnectionCredentialOperationTokenSchema
+}).strict()
+
+export const ModelConnectionCredentialCommitRequestSchema = z.object({
+  expectedRevision: z.number().int().nonnegative(),
+  operationToken: ModelConnectionCredentialOperationTokenSchema
 }).strict()
 
 export const ModelConnectionPatchRequestSchema = z.object({
@@ -148,7 +184,26 @@ export const ClaudeSdkInstallStatusSchema = z.object({
 
 export type ModelConnectionProfile = z.infer<typeof ModelConnectionProfileSchema>
 export type ModelConnectionSnapshot = z.infer<typeof ModelConnectionSnapshotSchema>
+export type ModelConnectionCredentialStatus = z.infer<typeof ModelConnectionCredentialStatusSchema>
+export type ModelConnectionCredentialErrorCode = z.infer<typeof ModelConnectionCredentialErrorCodeSchema>
+
+/**
+ * Snapshots written before credential health was published have no
+ * `credentialStatus`. Preserve their previous `configured` behavior while
+ * preventing known-bad credential references from being selected or used.
+ */
+export function isModelConnectionProfileUsable(
+  profile: Pick<ModelConnectionProfile, 'configured' | 'credentialStatus'>
+): boolean {
+  return profile.configured &&
+    profile.credentialStatus !== 'missing' &&
+    profile.credentialStatus !== 'unreadable'
+}
+
 export type ModelConnectionConnectRequest = z.infer<typeof ModelConnectionConnectRequestSchema>
+export type ModelConnectionCredentialPrepareRequest = z.infer<typeof ModelConnectionCredentialPrepareRequestSchema>
+export type ModelConnectionCredentialFenceRequest = z.infer<typeof ModelConnectionCredentialFenceRequestSchema>
+export type ModelConnectionCredentialCommitRequest = z.infer<typeof ModelConnectionCredentialCommitRequestSchema>
 export type ModelConnectionSelectRequest = z.infer<typeof ModelConnectionSelectRequestSchema>
 export type ModelConnectionOAuthStartRequest = z.infer<typeof ModelConnectionOAuthStartRequestSchema>
 export type ModelConnectionOAuthStatus = z.infer<typeof ModelConnectionOAuthStatusSchema>

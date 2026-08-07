@@ -34,6 +34,7 @@ import { KEYBOARD_SHORTCUT_COMMANDS } from '../../../shared/keyboard-shortcuts'
 import { LOCAL_WHISPER_DOWNLOAD_SOURCES, LOCAL_WHISPER_MODELS } from '../../../shared/local-whisper'
 import type { LocalWhisperDownloadSourceId } from '../../../shared/local-whisper'
 import { kunGraphPatchSchema } from './settings-graph'
+import { kunLabPatchSchema } from './settings-lab'
 import {
   MAX_BODY_BYTES,
   MAX_CHANNEL_TEXT_LENGTH,
@@ -68,9 +69,13 @@ export const modelIdSchema = z.string().trim().min(1).max(MAX_MODEL_ID_LENGTH)
 export const optionalModelIdSchema = z.string().trim().max(MAX_MODEL_ID_LENGTH).optional()
 export const cursorSubscriptionDiscoveryPayloadSchema = z
   .object({
-    apiKey: z.string().trim().min(1).max(MAX_BODY_BYTES)
+    apiKey: z.string().trim().min(1).max(MAX_BODY_BYTES).optional(),
+    providerId: modelIdSchema.optional()
   })
   .strict()
+  .refine((value) => Boolean(value.apiKey || value.providerId), {
+    message: 'apiKey or providerId is required'
+  })
 const writeInlineCompletionModelSchema = z.union([
   z.enum(WRITE_INLINE_COMPLETION_MODEL_IDS),
   modelIdSchema
@@ -335,9 +340,7 @@ const kunRuntimePatchSchema = z.object({
     maxWallTimeMs: z.number().int().positive().max(86_400_000).optional(),
     streamIdleTimeoutMs: z.number().int().min(0).max(3_600_000).optional(),
     toolStorm: z.object({
-      enabled: z.boolean().optional(),
-      windowSize: z.number().int().positive().max(128).optional(),
-      threshold: z.number().int().min(2).max(128).optional()
+      enabled: z.boolean().optional()
     }).strict().optional(),
     toolArgumentRepair: z.object({
       maxStringBytes: z.number().int().positive().max(16 * 1024 * 1024).optional()
@@ -466,7 +469,8 @@ const kunRuntimePatchSchema = z.object({
   summaryReasoningEffort: modelReasoningEffortSchema.optional(),
   codeReviewReasoningEffort: modelReasoningEffortSchema.optional(),
   graph: kunGraphPatchSchema.optional(),
-  subagents: subagentsPatchSchema.optional()
+  subagents: subagentsPatchSchema.optional(),
+  lab: kunLabPatchSchema.optional()
 }).strict()
 
 const logPatchSchema = z.object({
@@ -777,6 +781,33 @@ const scheduledTaskPatchSchema = z.object({
   lastThreadId: z.string().max(MAX_ID_LENGTH).optional()
 }).strict()
 
+const sessionDaemonPushPatchSchema = z.object({
+  enabled: z.boolean().optional(),
+  channelId: z.string().trim().max(MAX_ID_LENGTH).optional(),
+  conversationId: z.string().trim().max(MAX_ID_LENGTH).optional()
+}).strict()
+
+const sessionDaemonPatchSchema = z.object({
+  id: z.string().trim().min(1).max(MAX_ID_LENGTH).optional(),
+  title: z.string().trim().max(128).optional(),
+  enabled: z.boolean().optional(),
+  workspaceRoot: defaultPathSchema.optional(),
+  threadId: z.string().trim().max(MAX_ID_LENGTH).optional(),
+  scriptPath: z.string().trim().max(1024).optional(),
+  interpreter: z.enum(['auto', 'python', 'node']).optional(),
+  heartbeatIntervalSeconds: z.number().int().min(5).max(3600).optional(),
+  silenceTimeoutSeconds: z.number().int().min(15).max(86_400).optional(),
+  restartOnFailure: z.boolean().optional(),
+  push: sessionDaemonPushPatchSchema.optional(),
+  createdAt: z.string().max(128).optional(),
+  updatedAt: z.string().max(128).optional()
+}).strict()
+
+const sessionDaemonSettingsPatchSchema = z.object({
+  enabled: z.boolean().optional(),
+  items: z.array(sessionDaemonPatchSchema).max(256).optional()
+}).strict()
+
 const scheduleSettingsPatchSchema = z.object({
   enabled: z.boolean().optional(),
   defaultWorkspaceRoot: defaultPathSchema,
@@ -787,7 +818,8 @@ const scheduleSettingsPatchSchema = z.object({
   skills: scheduleSkillPatchSchema.optional(),
   keepAwake: z.boolean().optional(),
   internal: scheduleInternalPatchSchema.optional(),
-  tasks: z.array(scheduledTaskPatchSchema).max(512).optional()
+  tasks: z.array(scheduledTaskPatchSchema).max(512).optional(),
+  daemons: sessionDaemonSettingsPatchSchema.optional()
 }).strict()
 
 // --- Workflow (node-based automation) ---

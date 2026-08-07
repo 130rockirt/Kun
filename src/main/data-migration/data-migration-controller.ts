@@ -617,19 +617,20 @@ async function recoveryApplicationStep(
       introducedSchedules: AppSettingsV1['schedule']['tasks']
     }>(operationId, artifactName)
     const apply = async () => {
-      const current = await store.load()
       const workflowIds = new Set(artifact.introducedWorkflowIds)
       const scheduleIds = new Set(artifact.introducedScheduleIds)
-      const next = applyPortableSettingsMigration(current, artifact.afterPortable)
-      await store.save({
-        ...next,
-        workflow: {
-          ...next.workflow,
-          workflows: [...next.workflow.workflows.filter((item) => !workflowIds.has(item.id)), ...artifact.introducedWorkflows]
-        },
-        schedule: {
-          ...next.schedule,
-          tasks: [...next.schedule.tasks.filter((item) => !scheduleIds.has(item.id)), ...artifact.introducedSchedules]
+      await store.update((current) => {
+        const next = applyPortableSettingsMigration(current, artifact.afterPortable)
+        return {
+          ...next,
+          workflow: {
+            ...next.workflow,
+            workflows: [...next.workflow.workflows.filter((item) => !workflowIds.has(item.id)), ...artifact.introducedWorkflows]
+          },
+          schedule: {
+            ...next.schedule,
+            tasks: [...next.schedule.tasks.filter((item) => !scheduleIds.has(item.id)), ...artifact.introducedSchedules]
+          }
         }
       })
     }
@@ -646,41 +647,42 @@ async function recoveryApplicationStep(
       }
     }
     return recoveryStep(mutation, { apply, verify, rollback: async () => {
-      const current = await store.load()
-      const warnings: string[] = []
-      const portableUnchanged = stateIdentity(portableSettingsForMigration(current)) === stateIdentity(artifact.afterPortable)
-      if (!portableUnchanged) warnings.push('Preserved portable settings modified after import; restore them manually if needed.')
-      const workflowIdsToRemove = new Set(artifact.introducedWorkflowIds.filter((id) => {
-        const workflow = current.workflow.workflows.find((item) => item.id === id)
-        if (workflow?.enabled || workflow?.callableByAgent) {
-          warnings.push(`Preserved independently activated imported workflow: ${id}`)
-          return false
-        }
-        return Boolean(workflow)
-      }))
-      const scheduleIdsToRemove = new Set(artifact.introducedScheduleIds.filter((id) => {
-        const task = current.schedule.tasks.find((item) => item.id === id)
-        if (task?.enabled) {
-          warnings.push(`Preserved independently activated imported schedule: ${id}`)
-          return false
-        }
-        return Boolean(task)
-      }))
-      const restoredPortable = portableUnchanged
-        ? applyPortableSettingsMigration(current, artifact.beforePortable)
-        : current
-      await store.save({
-        ...restoredPortable,
-        workflow: {
-          ...restoredPortable.workflow,
-          workflows: restoredPortable.workflow.workflows.filter((item) => !workflowIdsToRemove.has(item.id))
-        },
-        schedule: {
-          ...restoredPortable.schedule,
-          tasks: restoredPortable.schedule.tasks.filter((item) => !scheduleIdsToRemove.has(item.id))
-        }
-      } as AppSettingsV1)
-      return warnings
+      const warnings = new Set<string>()
+      await store.update((current) => {
+        const portableUnchanged = stateIdentity(portableSettingsForMigration(current)) === stateIdentity(artifact.afterPortable)
+        if (!portableUnchanged) warnings.add('Preserved portable settings modified after import; restore them manually if needed.')
+        const workflowIdsToRemove = new Set(artifact.introducedWorkflowIds.filter((id) => {
+          const workflow = current.workflow.workflows.find((item) => item.id === id)
+          if (workflow?.enabled || workflow?.callableByAgent) {
+            warnings.add(`Preserved independently activated imported workflow: ${id}`)
+            return false
+          }
+          return Boolean(workflow)
+        }))
+        const scheduleIdsToRemove = new Set(artifact.introducedScheduleIds.filter((id) => {
+          const task = current.schedule.tasks.find((item) => item.id === id)
+          if (task?.enabled) {
+            warnings.add(`Preserved independently activated imported schedule: ${id}`)
+            return false
+          }
+          return Boolean(task)
+        }))
+        const restoredPortable = portableUnchanged
+          ? applyPortableSettingsMigration(current, artifact.beforePortable)
+          : current
+        return {
+          ...restoredPortable,
+          workflow: {
+            ...restoredPortable.workflow,
+            workflows: restoredPortable.workflow.workflows.filter((item) => !workflowIdsToRemove.has(item.id))
+          },
+          schedule: {
+            ...restoredPortable.schedule,
+            tasks: restoredPortable.schedule.tasks.filter((item) => !scheduleIdsToRemove.has(item.id))
+          }
+        } as AppSettingsV1
+      })
+      return [...warnings]
     } })
   }
   if (mutation.target === 'renderer-state' && artifactName === 'renderer-state-restore.json') {

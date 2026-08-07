@@ -33,11 +33,21 @@ export type PowerSaveBlockerLike = {
   isStarted: (id: number) => boolean
 }
 
+export type PowerSaveControllerLike = {
+  acquire: () => void
+  release: () => void
+  isActive: () => boolean
+  reset: () => void
+}
+
 export type ScheduleRuntimeDeps = {
   store: JsonSettingsStore
+  withModelCredentials?: (settings: AppSettingsV1) => Promise<AppSettingsV1>
   runtimeRequest: RuntimeRequestFn
   logError: (category: string, message: string, detail?: unknown) => void
   powerSaveBlocker?: PowerSaveBlockerLike
+  /** Shared reference-counted blocker. When present it wins over powerSaveBlocker. */
+  powerSaveController?: PowerSaveControllerLike
 }
 
 export type ThreadRecordJson = {

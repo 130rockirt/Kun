@@ -17,6 +17,9 @@ import {
 import {
   EMPTY_POST_TOOL_MAX_RECOVERY_STEPS,
   GOAL_NO_TOOL_REPEAT_MAX_RECOVERY_STEPS,
+  POST_TOOL_FAILURE_MAX_RECOVERY_STEPS,
+  TOOL_SUPPRESSION_FINAL_ANSWER_RECOVERY_STEP,
+  isPostToolFailureProgressText,
   isRepeatedNoToolAssistantText,
   latestUserMessageText
 } from './continuation-instructions.js'
@@ -39,6 +42,20 @@ export const GRAPH_CREATE_RUN_TOOL_NAME = 'graph_create_run'
 export const MAX_GRAPH_CREATE_RUN_ATTEMPTS = 3
 /** @deprecated Use MAX_GRAPH_CREATE_RUN_ATTEMPTS for the total request cap. */
 export const MAX_GRAPH_CREATE_RUN_RECOVERY_STEPS = MAX_GRAPH_CREATE_RUN_ATTEMPTS - 1
+
+/**
+ * Failed results of these tools are owned by dedicated completion gates
+ * (plan/Graph/SVG) and must not re-enter the ordinary post-tool-failure
+ * continuation window.
+ */
+const POST_TOOL_FAILURE_EXCLUDED_TOOL_NAMES = new Set([
+  CREATE_PLAN_TOOL_NAME,
+  GRAPH_DEFINE_PLAN_TOOL_NAME,
+  GRAPH_CREATE_RUN_TOOL_NAME,
+  DESIGN_SVG_ANIMATE_TOOL_NAME,
+  DESIGN_SVG_EDIT_TOOL_NAME,
+  DESIGN_SVG_VALIDATE_TOOL_NAME
+])
 
 export type GraphCreateRunRecoveryReason = 'missing' | 'invalid' | 'mismatch'
 
@@ -65,6 +82,8 @@ export type RoundOutcomeInput = Readonly<{
   modelProviderId?: string
   modelReasoningEffort?: string
   sourceResultBudgetTokens?: number
+  /** The request advertised no tools and must not execute provider-emitted calls. */
+  toolCallsDisabled?: boolean
   toolProviderMetadata: ReadonlyMap<string, RoundToolProviderMetadata>
   toolKinds: ReadonlyMap<string, ToolCallLike['toolKind'] | undefined>
   toolProviderKinds: ReadonlyMap<string, ToolProviderKind | undefined>
@@ -77,6 +96,7 @@ export type RoundOutcomeCoordinatorDeps = {
   events: Pick<RuntimeEventRecorder, 'record'>
   ids: Pick<IdGenerator, 'next'>
   dispatchToolCalls: (input: ToolDispatchInput) => Promise<ToolDispatchOutcome>
+  suppressToolCalls: (input: ToolDispatchInput, reason: string) => Promise<void>
   rememberFailure: (turnId: string, failure: TurnExecutionFailure) => void
   hasTurnMadeProgress: (turnId: string) => boolean
   suppressGoalResume: (turnId: string) => void
@@ -91,9 +111,11 @@ export class RoundOutcomeCoordinator {
   private readonly lastNoToolTextByTurn = new Map<string, string>()
   private readonly goalNoToolRecoveryStepsByTurn = new Map<string, number>()
   private readonly emptyPostToolRecoveryStepsByTurn = new Map<string, number>()
+  private readonly toolSuppressionRecoveryStepsByTurn = new Map<string, number>()
   private readonly svgCompletionRecoveryStepsByTurn = new Map<string, number>()
   private readonly graphCreateRunRecoveryByTurn = new Map<string, GraphCreateRunRecoveryState>()
   private readonly graphPlanNoToolRecoveryByTurn = new Map<string, number>()
+  private readonly postToolFailureRecoveryStepsByTurn = new Map<string, number>()
 
   constructor(private readonly deps: RoundOutcomeCoordinatorDeps) {}
 
@@ -107,6 +129,14 @@ export class RoundOutcomeCoordinator {
 
   emptyPostToolRecoverySteps(turnId: string): number {
     return this.emptyPostToolRecoveryStepsByTurn.get(turnId) ?? 0
+  }
+
+  postToolFailureRecoverySteps(turnId: string): number {
+    return this.postToolFailureRecoveryStepsByTurn.get(turnId) ?? 0
+  }
+
+  toolSuppressionRecoverySteps(turnId: string): number {
+    return this.toolSuppressionRecoveryStepsByTurn.get(turnId) ?? 0
   }
 
   graphCreateRunRecoverySteps(turnId: string): number {
@@ -125,9 +155,11 @@ export class RoundOutcomeCoordinator {
     this.lastNoToolTextByTurn.delete(turnId)
     this.goalNoToolRecoveryStepsByTurn.delete(turnId)
     this.emptyPostToolRecoveryStepsByTurn.delete(turnId)
+    this.toolSuppressionRecoveryStepsByTurn.delete(turnId)
     this.svgCompletionRecoveryStepsByTurn.delete(turnId)
     this.graphCreateRunRecoveryByTurn.delete(turnId)
     this.graphPlanNoToolRecoveryByTurn.delete(turnId)
+    this.postToolFailureRecoveryStepsByTurn.delete(turnId)
   }
 
   async resolve(input: RoundOutcomeInput): Promise<ModelRoundOutcome> {
@@ -143,8 +175,27 @@ export class RoundOutcomeCoordinator {
       if (input.svgCompletion && !input.svgCompletion.validationAfterMutation) {
         return this.recoverRequiredSvgCompletion(input, input.svgCompletion)
       }
+      const toolSuppressionRecoverySteps = this.toolSuppressionRecoverySteps(input.turnId)
+      if (toolSuppressionRecoverySteps > 0 && !streamSnapshot.text.trim()) {
+        return this.resolveEmptyToolSuppressionRecovery(input)
+      }
+      if (toolSuppressionRecoverySteps > 0 && !input.softRequiredToolName) {
+        // A non-empty answer is the successful terminal outcome of suppression
+        // recovery. Do not clear the phase and then fall through to active-goal
+        // continuation: that would advertise tools again and let the same
+        // suppressed calls restart an unbounded loop. Keep the goal itself
+        // active, but require an explicit future turn to resume it.
+        this.toolSuppressionRecoveryStepsByTurn.delete(input.turnId)
+        if (input.prepared.activeGoalInstruction) {
+          this.deps.suppressGoalResume(input.turnId)
+        }
+        return 'stop'
+      }
       if (input.softRequiredToolName) {
         return this.resolveMissingSoftRequiredTool(input, streamSnapshot.text)
+      }
+      if (streamSnapshot.text.trim()) {
+        this.toolSuppressionRecoveryStepsByTurn.delete(input.turnId)
       }
       const hasCurrentTurnFileChange = input.prepared.history.some(
         (item) =>
@@ -163,6 +214,16 @@ export class RoundOutcomeCoordinator {
       if (streamSnapshot.stopReason === 'stop' && input.prepared.activeGoalInstruction) {
         return this.resolveGoalNoToolResponse(input, streamSnapshot.text)
       }
+      if (
+        streamSnapshot.stopReason === 'stop' &&
+        streamSnapshot.text.trim() &&
+        input.prepared.orchestration !== 'graph' &&
+        !input.prepared.planTurnActive &&
+        this.hasFailedOrdinaryToolResult(input) &&
+        isPostToolFailureProgressText(streamSnapshot.text)
+      ) {
+        return this.advancePostToolFailureRecovery(input)
+      }
       if (streamSnapshot.stopReason === 'length') {
         await this.recordOutputTruncated(input)
         return 'stop'
@@ -175,6 +236,16 @@ export class RoundOutcomeCoordinator {
     this.lastNoToolTextByTurn.delete(input.turnId)
     this.goalNoToolRecoveryStepsByTurn.delete(input.turnId)
     this.emptyPostToolRecoveryStepsByTurn.delete(input.turnId)
+    this.postToolFailureRecoveryStepsByTurn.delete(input.turnId)
+    if (input.toolCallsDisabled) {
+      const message =
+        'Tool calls are disabled during final-answer recovery; the provider-emitted calls were not executed.'
+      await this.deps.suppressToolCalls(
+        this.toolDispatchInput(input, completedToolCalls, true),
+        message
+      )
+      return this.failToolSuppressionRecovery(input.threadId, input.turnId)
+    }
     const dispatchableToolCalls = await this.suppressMismatchedRequiredToolCalls(
       input,
       completedToolCalls
@@ -275,8 +346,9 @@ export class RoundOutcomeCoordinator {
           return this.recoverRequiredSvgCompletion(input, latestCompletion)
         }
       }
-      return 'stop'
+      return this.advanceToolSuppressionRecovery(input)
     }
+    this.toolSuppressionRecoveryStepsByTurn.delete(input.turnId)
     if (input.prepared.dedicatedSvgTurn && completedToolCalls.some((call) =>
       call.toolName === DESIGN_SVG_EDIT_TOOL_NAME ||
       call.toolName === DESIGN_SVG_ANIMATE_TOOL_NAME ||
@@ -370,7 +442,8 @@ export class RoundOutcomeCoordinator {
       )
       if (dispatched === 'aborted') return 'aborted'
       if (dispatched === 'budget_exhausted') return 'failed'
-      if (dispatched === 'all_suppressed') return 'stop'
+      if (dispatched === 'all_suppressed') return this.advanceToolSuppressionRecovery(input)
+      this.toolSuppressionRecoveryStepsByTurn.delete(input.turnId)
       return 'continue'
     }
 
@@ -624,6 +697,132 @@ export class RoundOutcomeCoordinator {
     return 'failed'
   }
 
+  /**
+   * Whether this turn already contains a failed ordinary tool result that is
+   * not owned by a dedicated completion gate. The history snapshot is the
+   * same model-visible projection the next request would see, so the check
+   * stays aligned with what the model itself observes.
+   */
+  private hasFailedOrdinaryToolResult(input: RoundOutcomeInput): boolean {
+    return input.prepared.history.some(
+      (item) =>
+        item.turnId === input.turnId &&
+        item.kind === 'tool_result' &&
+        item.isError === true &&
+        !POST_TOOL_FAILURE_EXCLUDED_TOOL_NAMES.has(item.toolName)
+    )
+  }
+
+  /**
+   * Bounded continuation when the model stops with a progress announcement
+   * after an ordinary tool failure. The first recovery keeps tools so the
+   * model can act; once the recovery budget is exhausted the turn fails
+   * visibly instead of silently presenting the announcement as completion.
+   */
+  private async advancePostToolFailureRecovery(
+    input: RoundOutcomeInput
+  ): Promise<ModelRoundOutcome> {
+    const recoverySteps = (this.postToolFailureRecoveryStepsByTurn.get(input.turnId) ?? 0) + 1
+    if (recoverySteps <= POST_TOOL_FAILURE_MAX_RECOVERY_STEPS) {
+      this.postToolFailureRecoveryStepsByTurn.set(input.turnId, recoverySteps)
+      await this.deps.events.record({
+        kind: 'error',
+        threadId: input.threadId,
+        turnId: input.turnId,
+        message:
+          'Model stopped with a progress announcement after a tool failure; requesting continuation.',
+        code: 'post_tool_failure_continuation',
+        severity: 'warning'
+      })
+      return 'continue'
+    }
+    this.postToolFailureRecoveryStepsByTurn.delete(input.turnId)
+    const message =
+      'Model kept ending with progress announcements after a tool failure instead of continuing the task or providing a final answer.'
+    this.deps.rememberFailure(input.turnId, {
+      error: message,
+      code: 'post_tool_failure_recovery_exhausted',
+      severity: 'error'
+    })
+    await this.deps.events.record({
+      kind: 'error',
+      threadId: input.threadId,
+      turnId: input.turnId,
+      message,
+      code: 'post_tool_failure_recovery_exhausted',
+      severity: 'error'
+    })
+    await this.deps.turns.applyItem(
+      input.threadId,
+      makeErrorItem({
+        id: this.deps.ids.next('item_error'),
+        turnId: input.turnId,
+        threadId: input.threadId,
+        message,
+        code: 'post_tool_failure_recovery_exhausted',
+        severity: 'error'
+      })
+    )
+    return 'failed'
+  }
+
+  private async advanceToolSuppressionRecovery(
+    input: RoundOutcomeInput
+  ): Promise<ModelRoundOutcome> {
+    const current = this.toolSuppressionRecoverySteps(input.turnId)
+    if (current >= TOOL_SUPPRESSION_FINAL_ANSWER_RECOVERY_STEP) {
+      return this.failToolSuppressionRecovery(input.threadId, input.turnId)
+    }
+    this.toolSuppressionRecoveryStepsByTurn.set(input.turnId, current + 1)
+    return 'continue'
+  }
+
+  private async resolveEmptyToolSuppressionRecovery(
+    input: RoundOutcomeInput
+  ): Promise<ModelRoundOutcome> {
+    const current = this.toolSuppressionRecoverySteps(input.turnId)
+    if (current < TOOL_SUPPRESSION_FINAL_ANSWER_RECOVERY_STEP) {
+      this.toolSuppressionRecoveryStepsByTurn.set(
+        input.turnId,
+        TOOL_SUPPRESSION_FINAL_ANSWER_RECOVERY_STEP
+      )
+      return 'continue'
+    }
+    return this.failToolSuppressionRecovery(input.threadId, input.turnId)
+  }
+
+  async failToolSuppressionRecovery(threadId: string, turnId: string): Promise<'failed'> {
+    const message =
+      'Turn stopped because repeated tool calls were suppressed and the model still did not produce a final answer.'
+    this.toolSuppressionRecoveryStepsByTurn.delete(turnId)
+    this.deps.suppressGoalResume(turnId)
+    this.deps.rememberFailure(turnId, {
+      error: message,
+      code: 'tool_loop_suppressed',
+      severity: 'error'
+    })
+    await this.deps.events.record({
+      kind: 'error',
+      threadId,
+      turnId,
+      message,
+      code: 'tool_loop_suppressed',
+      severity: 'error'
+    })
+    await this.deps.turns.applyItem(
+      threadId,
+      makeErrorItem({
+        id: this.deps.ids.next('item_error'),
+        turnId,
+        threadId,
+        message,
+        code: 'tool_loop_suppressed',
+        severity: 'error'
+      })
+    )
+    return 'failed'
+  }
+
   private async resolveGoalNoToolResponse(
     input: RoundOutcomeInput,
     assistantText: string
@@ -766,6 +965,7 @@ export class RoundOutcomeCoordinator {
       actingModelRoute: prepared.actingModelRoute,
       approvalIntent: input.turn.prompt,
       reasoningEffort: input.modelReasoningEffort,
+      serviceTier: input.turn.serviceTier === 'priority' ? 'priority' : undefined,
       modelCapabilities: prepared.modelCapabilities,
       ...(input.sourceResultBudgetTokens !== undefined
         ? { sourceResultBudgetTokens: input.sourceResultBudgetTokens }

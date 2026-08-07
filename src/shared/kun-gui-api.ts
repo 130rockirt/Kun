@@ -4,6 +4,9 @@ import type {
   ClawRunResult,
   ClawTaskFromTextResult,
   ClawRuntimeStatus,
+  DaemonActionResult,
+  DaemonLogPage,
+  DaemonRuntimeStatus,
   ModelEndpointFormat,
   ModelProviderModelProfileV1,
   ModelReasoningEffort,
@@ -42,6 +45,8 @@ import type {
   BrowserUseViewState
 } from './browser-use'
 import type { StorageRelocationApi } from './storage-relocation'
+import type { UninstallApi } from './uninstall'
+import type { RuntimeDataRecoveryApi } from './runtime-data-recovery'
 import type {
   ClipboardImageReadResult,
   LocalPdfTextReadResult,
@@ -69,6 +74,7 @@ import type {
   WorkspaceFileCreatePayload,
   WorkspaceFileCreateResult,
   WorkspaceFileOpenResult,
+  WorkspaceFileRevealTarget,
   WorkspaceFileResolveResult,
   WorkspaceFileTarget,
   WorkspaceFileWatchPayload,
@@ -399,6 +405,7 @@ export type ModelsDevCatalogRequest = {
   modelHints?: ModelsDevCatalogModelHint[]
 }
 export type ModelsDevCatalogMatchMode = 'catalog' | 'enrichment-only'
+export type ModelsDevCatalogSource = 'models.dev' | 'kun-agent'
 export type ModelsDevCatalogResult =
   | {
       status: 'ok'
@@ -406,6 +413,8 @@ export type ModelsDevCatalogResult =
       providerName: string
       matchMode: ModelsDevCatalogMatchMode
       stale: boolean
+      /** Which catalog source produced the model data (for diagnostics/UI). */
+      source?: ModelsDevCatalogSource
       models: ModelsDevCatalogModel[]
     }
   | { status: 'unmapped'; models: [] }
@@ -542,7 +551,7 @@ export type ClaudeSubscriptionProbeResult =
   | { ok: false; message: string }
 
 export type SdkDownloadState = {
-  status: 'downloading' | 'done' | 'error'
+  status: 'downloading' | 'restarting' | 'done' | 'error'
   receivedBytes: number
   totalBytes: number
   message?: string
@@ -579,6 +588,10 @@ export type KunGuiApi = ExtensionIpcApi & {
   }
   /** Windows production storage-root relocation and recovery surface. */
   storageRelocation: StorageRelocationApi
+  /** In-app uninstall: optional full local-data removal and app self-removal. */
+  uninstall: UninstallApi
+  /** One-time, path-opaque Runtime migration recovery surface. */
+  runtimeDataRecovery: RuntimeDataRecoveryApi
   dataMigration: {
     pickExportPackage: (defaultPath?: string) => Promise<DataMigrationPathPickResult>
     pickImportPackage: (defaultPath?: string) => Promise<DataMigrationPathPickResult>
@@ -616,9 +629,9 @@ export type KunGuiApi = ExtensionIpcApi & {
   /** Run the official ambient Claude subscription login flow. */
   claudeSubscriptionLogin: () => Promise<ClaudeSubscriptionLoginResult>
   /** Make a bounded real request through the official Claude transport. */
-  claudeSubscriptionProbe: (token?: string) => Promise<ClaudeSubscriptionProbeResult>
+  claudeSubscriptionProbe: (token?: string, providerId?: string) => Promise<ClaudeSubscriptionProbeResult>
   /** List Claude models available to the subscription (via the SDK's supportedModels). */
-  claudeSubscriptionModels: (token?: string) => Promise<string[]>
+  claudeSubscriptionModels: (token?: string, providerId?: string) => Promise<string[]>
   /** Whether the on-demand Claude Code binary is present + any in-flight download. */
   claudeSubscriptionSdkStatus: () => Promise<{
     installed: boolean
@@ -651,7 +664,7 @@ export type KunGuiApi = ExtensionIpcApi & {
   /** Concrete models routed through the Gemini CLI Code Assist API contract. */
   geminiCliSubscriptionModels: () => Promise<string[]>
   /** Validate a Cursor API key and list models visible to that Cursor account. */
-  cursorSubscriptionDiscover: (apiKey: string) => Promise<{
+  cursorSubscriptionDiscover: (apiKey?: string, providerId?: string) => Promise<{
     account: {
       apiKeyName: string
       userEmail?: string
@@ -681,6 +694,9 @@ export type KunGuiApi = ExtensionIpcApi & {
   runClawTask: (taskId: string) => Promise<ClawRunResult>
   getScheduleStatus: () => Promise<ScheduleRuntimeStatus>
   runScheduleTask: (taskId: string) => Promise<ScheduleRunResult>
+  getDaemonStatus: () => Promise<DaemonRuntimeStatus>
+  restartDaemon: (daemonId: string) => Promise<DaemonActionResult>
+  readDaemonLogs: (payload: { id: string; cursor?: string; limit?: number }) => Promise<DaemonLogPage>
   getWorkflowStatus: () => Promise<WorkflowRuntimeStatus>
   runWorkflow: (workflowId: string, input?: unknown) => Promise<WorkflowRunResult>
   stopWorkflow: (workflowId: string) => Promise<WorkflowRunResult>
@@ -810,6 +826,7 @@ export type KunGuiApi = ExtensionIpcApi & {
   listWorkspaceDirectory: (options: WorkspaceDirectoryTarget) => Promise<WorkspaceDirectoryListResult>
   resolveWorkspaceFile: (options: WorkspaceFileTarget) => Promise<WorkspaceFileResolveResult>
   openWorkspaceFileInSystem: (options: WorkspaceFileTarget) => Promise<WorkspaceFileOpenResult>
+  revealWorkspaceFileInFolder: (options: WorkspaceFileRevealTarget) => Promise<WorkspaceFileOpenResult>
   readWorkspaceFile: (options: WorkspaceFileTarget) => Promise<WorkspaceFileReadResult>
   lintProjectDesignMd: (content: string) => Promise<ProjectDesignMdOfficialLintResult>
   readWorkspaceImage: (options: WorkspaceFileTarget) => Promise<WorkspaceImageReadResult>

@@ -1,4 +1,5 @@
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
 import { createServer, type AddressInfo } from 'node:net'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -24,6 +25,14 @@ import {
   type ModelProviderModelProfileV1
 } from '../shared/app-settings'
 import { KunConfigSchema } from '../../kun/src/config/kun-config.js'
+import {
+  configureManagerAtomicJsonClient,
+  isManagerAtomicJsonPath
+} from '../../kun/src/extensions/atomic-json.js'
+import {
+  ManagerResourceLeaseClient,
+  ManagerRevisionedDocumentClient
+} from '../../kun/src/manager/manager-client.js'
 
 vi.mock('electron', () => ({
   app: {
@@ -135,6 +144,147 @@ afterEach(async () => {
     rmSync(tempRoot, { recursive: true, force: true })
     tempRoot = null
   }
+  vi.unstubAllEnvs()
+  vi.unstubAllGlobals()
+  configureManagerAtomicJsonClient(null)
+})
+
+describe('Manager-owned Main data plane', () => {
+  it('configures Main Registry consumers with the shared Manager endpoint', async () => {
+    vi.stubEnv('KUN_MANAGER_BASE_URL', 'http://inherited.invalid')
+    vi.stubEnv('KUN_MANAGER_TOKEN', 'inherited-child-value')
+    vi.stubEnv('KUN_MANAGER_DATA_DIR', '/tmp/inherited-manager-data')
+    const module = await import('./kun-process')
+    const manager = {
+      discovery: {
+        baseUrl: 'http://127.0.0.1:17777',
+        managerToken: 'manager-secret',
+        dataDir: '/tmp/kun-manager-data'
+      }
+    } as Parameters<typeof module.configureKunManagerDataPlaneForCurrentProcess>[0]
+
+    module.configureKunManagerDataPlaneForCurrentProcess(manager)
+
+    expect(process.env.KUN_MANAGER_BASE_URL).toBe('http://inherited.invalid')
+    expect(process.env.KUN_MANAGER_TOKEN).toBe('inherited-child-value')
+    expect(process.env.KUN_MANAGER_DATA_DIR).toBe('/tmp/inherited-manager-data')
+    expect(isManagerAtomicJsonPath('/tmp/kun-manager-data/model-connections.v1.json')).toBe(true)
+    const child = spawnSync(process.execPath, [
+      '-e',
+      'process.stdout.write(String(process.env.KUN_MANAGER_TOKEN || ""))'
+    ], { encoding: 'utf8' })
+    expect(child.stdout).toBe('inherited-child-value')
+    expect(child.stdout).not.toContain(manager.discovery.managerToken)
+  })
+
+  it('rebinds existing Main document clients after the Manager restarts', async () => {
+    const module = await import('./kun-process')
+    const managerOne = {
+      discovery: {
+        baseUrl: 'http://127.0.0.1:17771',
+        managerToken: 'manager-one-token',
+        dataDir: '/tmp/kun-manager-rebind',
+        settingsPath: '/tmp/kun-settings.json'
+      }
+    } as Parameters<typeof module.configureKunManagerDataPlaneForCurrentProcess>[0]
+    const managerTwo = {
+      discovery: {
+        ...managerOne.discovery,
+        baseUrl: 'http://127.0.0.1:17772',
+        managerToken: 'manager-two-token'
+      }
+    } as Parameters<typeof module.configureKunManagerDataPlaneForCurrentProcess>[0]
+    const binding = module.configureKunManagerDataPlaneForCurrentProcess(managerOne)
+    expect(module.getKunServiceManagerBinding()).toBe(binding)
+    const existingClient = new ManagerRevisionedDocumentClient(binding, 'settings')
+    const existingLeaseClient = new ManagerResourceLeaseClient(
+      binding,
+      'production',
+      'main-one'
+    )
+    module.configureKunManagerDataPlaneForCurrentProcess(managerTwo)
+    expect(module.getKunServiceManagerBinding()).toBe(binding)
+    expect(module.getKunServiceManagerBinding()?.discovery).toBe(managerTwo.discovery)
+    const requests: Array<{ url: string; authorization: string }> = []
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      requests.push({
+        url: String(input),
+        authorization: String((init?.headers as Record<string, string> | undefined)?.authorization ?? '')
+      })
+      const url = String(input)
+      if (url.includes('/v1/documents/')) {
+        return Response.json({ snapshot: { revision: 2, value: null } })
+      }
+      if (url.endsWith('/release')) return Response.json({ released: true })
+      return Response.json({ acquired: true })
+    }))
+
+    await expect(existingClient.read()).resolves.toEqual({ revision: 2, value: null })
+    await expect(existingLeaseClient.maintain({
+      resource: 'main-registry',
+      onAcquired: () => undefined,
+      onLost: () => undefined
+    })).resolves.toBe(true)
+    await existingLeaseClient.shutdown()
+    expect(requests[0]).toEqual({
+      url: 'http://127.0.0.1:17772/v1/documents/settings',
+      authorization: 'Bearer manager-two-token'
+    })
+    expect(requests).toHaveLength(3)
+    expect(requests.every((request) =>
+      request.url.startsWith('http://127.0.0.1:17772/') &&
+      request.authorization === 'Bearer manager-two-token')).toBe(true)
+  })
+
+  it('selects a custom Manager data directory from settings without writing settings', async () => {
+    if (!tempRoot) throw new Error('temp root not initialized')
+    const settingsPath = join(tempRoot, 'custom-data-dir-settings.json')
+    const customDataDir = join(tempRoot, 'custom-runtime-data')
+    writeFileSync(settingsPath, JSON.stringify({
+      version: 1,
+      agents: { kun: { dataDir: customDataDir } }
+    }))
+    const before = readFileSync(settingsPath, 'utf8')
+    const module = await import('./kun-process')
+
+    await expect(module.resolveKunManagerDataDirFromSettings(settingsPath)).resolves.toBe(customDataDir)
+    expect(readFileSync(settingsPath, 'utf8')).toBe(before)
+  })
+
+  it('safely hands a healthy old Manager from the default data directory to custom authority', async () => {
+    const module = await import('./kun-process')
+    const oldManager = {
+      discovery: {
+        instanceId: 'manager-one',
+        pid: 12345,
+        baseUrl: 'http://127.0.0.1:17771',
+        managerToken: 'manager-one-token',
+        dataDir: '/tmp/default-runtime-data',
+        settingsPath: '/tmp/kun-settings.json'
+      }
+    } as Parameters<typeof module.handoffExistingKunServiceManagerForDataDir>[0]
+    const inspect = vi.fn(async () => null)
+    const stop = vi.fn(async () => true)
+    const shutdown = vi.fn(async () => undefined)
+    const waitForExit = vi.fn(async () => true)
+
+    await module.handoffExistingKunServiceManagerForDataDir(
+      oldManager,
+      '/tmp/custom-runtime-data',
+      '/tmp/kun-settings.json',
+      {
+        inspect: inspect as never,
+        stop: stop as never,
+        shutdown,
+        waitForExit
+      }
+    )
+
+    expect(inspect).toHaveBeenCalledTimes(2)
+    expect(stop).toHaveBeenCalledTimes(2)
+    expect(shutdown).toHaveBeenCalledOnce()
+    expect(waitForExit).toHaveBeenCalledWith(12345, 15_000)
+  })
 })
 
 describe('startKunChild', () => {
@@ -763,7 +913,7 @@ describe('syncGuiManagedKunConfig', () => {
       maxConcurrentTurns: 256,
       maxWallTimeMs: 86400000
     })
-    expect(parsed.runtime.toolStorm).toMatchObject({ enabled: true, windowSize: 8, threshold: 3 })
+    expect(parsed.runtime.toolStorm).toMatchObject({ enabled: true })
     expect(parsed.runtime.toolArgumentRepair).toMatchObject({ maxStringBytes: 524288 })
     expect(parsed.capabilities.attachments).toMatchObject({ enabled: true })
     expect(parsed.capabilities.memory).toMatchObject({ enabled: false })
@@ -1022,7 +1172,7 @@ describe('syncGuiManagedKunConfig', () => {
     expect('headers' in cleared.capabilities.imageGen).toBe(false)
   })
 
-  it('unwraps Codex OAuth credentials and writes Codex headers for image generation', async () => {
+  it('persists only the Codex provider reference for image generation', async () => {
     if (!tempRoot) throw new Error('temp root not initialized')
     const configPath = join(tempRoot, 'config.json')
     const module = await import('./kun-process')
@@ -1054,26 +1204,20 @@ describe('syncGuiManagedKunConfig', () => {
     const parsed = JSON.parse(readFileSync(configPath, 'utf8')) as any
     expect(parsed.capabilities.imageGen).toMatchObject({
       enabled: true,
+      providerId: 'codex',
       protocol: 'codex-responses-image',
       baseUrl: 'https://chatgpt.com/backend-api/codex',
-      apiKey: 'codex-access-token',
       model: 'gpt-image-2',
       defaultResolution: '1K',
       quality: 'medium',
-      timeoutMs: 180000,
-      headers: {
-        'ChatGPT-Account-Id': 'acct_123',
-        originator: 'codex_cli_rs',
-        'OpenAI-Beta': 'responses=experimental'
-      }
+      timeoutMs: 180000
     })
-    expect(parsed.capabilities.imageGen.headers['User-Agent']).toMatch(/^codex_cli_rs\/0\.145\.0 \(.+; .+\)$/)
-    expect(parsed.capabilities.imageGen.headers['User-Agent']).not.toMatch(/deepseekgui|kun/i)
-    expect(typeof parsed.capabilities.imageGen.headers.session_id).toBe('string')
+    expect(parsed.capabilities.imageGen.apiKey).toBeUndefined()
+    expect(parsed.capabilities.imageGen.headers).toBeUndefined()
     expect(KunConfigSchema.safeParse(parsed).success).toBe(true)
   })
 
-  it('unwraps Grok OAuth credentials for direct Imagine image and video requests', async () => {
+  it('persists only the Grok provider reference for direct Imagine requests', async () => {
     if (!tempRoot) throw new Error('temp root not initialized')
     const configPath = join(tempRoot, 'config.json')
     const module = await import('./kun-process')
@@ -1111,13 +1255,9 @@ describe('syncGuiManagedKunConfig', () => {
 
     const parsed = JSON.parse(readFileSync(configPath, 'utf8')) as any
     for (const capability of [parsed.capabilities.imageGen, parsed.capabilities.videoGen]) {
-      expect(capability.apiKey).toBe('grok-access-token')
-      expect(capability.headers).toMatchObject({
-        'x-grok-client-version': expect.any(String),
-        'x-grok-client-identifier': 'grok-shell'
-      })
-      expect(capability.headers['X-XAI-Token-Auth']).toBeUndefined()
-      expect(capability.headers['x-authenticateresponse']).toBeUndefined()
+      expect(capability.providerId).toBe('grok-subscription')
+      expect(capability.apiKey).toBeUndefined()
+      expect(capability.headers).toBeUndefined()
     }
     expect(parsed.capabilities.imageGen).toMatchObject({
       protocol: 'grok-imagine-image',
@@ -1133,7 +1273,7 @@ describe('syncGuiManagedKunConfig', () => {
     expect(KunConfigSchema.safeParse(parsed).success).toBe(true)
   })
 
-  it('forwards the selected Volcano Ark media gateway and dedicated key to Kun', async () => {
+  it('forwards the selected Volcano Ark media gateway without persisting its key', async () => {
     if (!tempRoot) throw new Error('temp root not initialized')
     const configPath = join(tempRoot, 'config.json')
     const module = await import('./kun-process')
@@ -1167,21 +1307,23 @@ describe('syncGuiManagedKunConfig', () => {
     const parsed = JSON.parse(readFileSync(configPath, 'utf8')) as any
     expect(parsed.capabilities.imageGen).toMatchObject({
       enabled: true,
+      providerId: 'volcengine-agent-plan',
       protocol: 'volcengine-ark-image',
       baseUrl: 'https://ark.cn-beijing.volces.com/api/plan/v3',
-      apiKey: 'agent-plan-key',
       model: 'doubao-seedream-5.0-lite',
       defaultResolution: '4K'
     })
     expect(parsed.capabilities.videoGen).toMatchObject({
       enabled: true,
+      providerId: 'volcengine-agent-plan',
       protocol: 'volcengine-ark-video',
       baseUrl: 'https://ark.cn-beijing.volces.com/api/plan/v3',
-      apiKey: 'agent-plan-key',
       model: 'doubao-seedance-2.0',
       defaultDuration: 15,
       defaultResolution: '4K'
     })
+    expect(parsed.capabilities.imageGen.apiKey).toBeUndefined()
+    expect(parsed.capabilities.videoGen.apiKey).toBeUndefined()
     expect(parsed.capabilities.imageGen.headers).toBeUndefined()
     expect(parsed.capabilities.videoGen.headers).toBeUndefined()
     expect(KunConfigSchema.safeParse(parsed).success).toBe(true)
@@ -1583,9 +1725,7 @@ describe('syncGuiManagedKunConfig', () => {
           maxWallTimeMs: 7_200_000,
           streamIdleTimeoutMs: 120000,
           toolStorm: {
-            enabled: false,
-            windowSize: 12,
-            threshold: 4
+            enabled: false
           },
           toolArgumentRepair: {
             maxStringBytes: 262144
@@ -1675,9 +1815,7 @@ describe('syncGuiManagedKunConfig', () => {
       }
     })
     expect(parsed.runtime.toolStorm).toMatchObject({
-      enabled: false,
-      windowSize: 12,
-      threshold: 4
+      enabled: false
     })
     expect(parsed.runtime.toolStorm.customStormFlag).toBeUndefined()
     expect(parsed.runtime.customRuntimeFlag).toBeUndefined()

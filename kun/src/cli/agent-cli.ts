@@ -1,7 +1,8 @@
 import { createInterface } from 'node:readline/promises'
 import { stdin as processStdin, stdout as processStdout } from 'node:process'
 import { LocalToolHost, buildDefaultLocalTools } from '../adapters/tool/local-tool-host.js'
-import type { TurnItem } from '../contracts/items.js'
+import { isPublicTurnItem, type TurnItem } from '../contracts/items.js'
+import { isPublicRuntimeEvent } from '../contracts/events.js'
 import {
   modelCapabilitiesForModel,
   modelContextProfilesFromConfig
@@ -175,7 +176,7 @@ async function runOneShot(argv: readonly string[], io: CliIo): Promise<number> {
     })
     let streamed = false
     const unsubscribe = runtime.eventBus.subscribe(thread.id, (event) => {
-      if (jsonl) {
+      if (jsonl && isPublicRuntimeEvent(event)) {
         writeJsonLine(io.stdout, { type: 'runtime_event', event })
       } else if (!parsed.json && event.kind === 'assistant_text_delta' && event.item.kind === 'assistant_text') {
         streamed = true
@@ -188,7 +189,12 @@ async function runOneShot(argv: readonly string[], io: CliIo): Promise<number> {
     if (jsonl) {
       writeJsonLine(io.stdout, { type: 'run_finished', threadId: thread.id, turnId: turn.turnId, status })
     } else if (parsed.json) {
-      io.stdout.write(JSON.stringify({ threadId: thread.id, turnId: turn.turnId, status, items }) + '\n')
+      io.stdout.write(JSON.stringify({
+        threadId: thread.id,
+        turnId: turn.turnId,
+        status,
+        items: items.filter(isPublicTurnItem)
+      }) + '\n')
     } else {
       if (!streamed) {
         const text = assistantText(items)

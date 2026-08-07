@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import {
+  openCodeGoCookieDatabasePaths,
   parseClaudeSubscriptionQuota,
   parseCodexSubscriptionQuota,
   parseCursorSubscriptionQuota,
   parseGrokSubscriptionQuota,
-  parseGoogleCodeAssistQuota
+  parseGoogleCodeAssistQuota,
+  resolveOpenCodeGoCookie
 } from './provider-subscription-quota.js'
 
 function grokBillingFrame(usedPercent: number, resetEpoch: number): Uint8Array {
@@ -112,5 +114,68 @@ describe('subscription provider quota parsers', () => {
       usedPercent: 42.5,
       resetsAt: '2030-03-17T17:46:40.000Z'
     }])
+  })
+})
+
+describe('resolveOpenCodeGoCookie', () => {
+  it('returns an auth cookie header when a browser has one', async () => {
+    await expect(resolveOpenCodeGoCookie({
+      cookieDatabasePaths: ['/browsers/chrome/Cookies'],
+      readCookies: async () => [
+        { name: 'session', value: 'ignored' },
+        { name: 'auth', value: 'session-token' },
+        { name: '__Host-auth', value: 'host-token' }
+      ]
+    })).resolves.toBe('auth=session-token; __Host-auth=host-token')
+  })
+
+  it('tries the next cookie database when the first one fails', async () => {
+    const calls: string[] = []
+    await expect(resolveOpenCodeGoCookie({
+      cookieDatabasePaths: ['/first/Cookies', '/second/Cookies'],
+      readCookies: async (databasePath) => {
+        calls.push(databasePath)
+        if (databasePath === '/first/Cookies') throw new Error('locked')
+        return [{ name: 'auth', value: 'second-token' }]
+      }
+    })).resolves.toBe('auth=second-token')
+    expect(calls).toEqual(['/first/Cookies', '/second/Cookies'])
+  })
+
+  it('ignores non-auth cookies and encrypted v10 values', async () => {
+    await expect(resolveOpenCodeGoCookie({
+      cookieDatabasePaths: ['/browsers/chrome/Cookies'],
+      readCookies: async () => [
+        { name: 'session', value: 'plain' },
+        { name: 'auth', value: 'v10encryptedvalue' }
+      ]
+    })).resolves.toBeUndefined()
+  })
+
+  it('returns undefined when every database fails', async () => {
+    await expect(resolveOpenCodeGoCookie({
+      cookieDatabasePaths: ['/missing/Cookies'],
+      readCookies: async () => {
+        throw new Error('no such table')
+      }
+    })).resolves.toBeUndefined()
+  })
+
+  it('resolves platform cookie database paths', () => {
+    const darwin = openCodeGoCookieDatabasePaths({
+      platform: 'darwin',
+      environment: {},
+      homeDirectory: '/Users/kun'
+    })
+    expect(darwin).toEqual(expect.arrayContaining([
+      '/Users/kun/Library/Application Support/Google/Chrome/Default/Network/Cookies',
+      '/Users/kun/Library/Application Support/Arc/User Data/Default/Network/Cookies'
+    ]))
+    const windows = openCodeGoCookieDatabasePaths({
+      platform: 'win32',
+      environment: { LOCALAPPDATA: 'C:\\Users\\Kun\\AppData\\Local' },
+      homeDirectory: 'C:\\Users\\Kun'
+    })
+    expect(windows[0]).toBe('C:\\Users\\Kun\\AppData\\Local\\Google\\Chrome\\User Data\\Default\\Network\\Cookies')
   })
 })

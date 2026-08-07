@@ -20,7 +20,7 @@ import { BUILTIN_RIGHT_PANEL_IDS } from '../../extensions/contribution-ids'
 
 export type WorkbenchSidebarView = 'chat' | 'write' | 'claw' | 'schedule' | 'workflow' | 'subagents'
 
-type UseWorkbenchNavigationControllerParams = {
+export type UseWorkbenchNavigationControllerParams = {
   activeSddDraft: boolean
   activeThreadId: string | null
   pluginHostRoute: ChatState['pluginHostRoute']
@@ -50,7 +50,6 @@ type UseWorkbenchNavigationControllerParams = {
   openSchedule: ChatState['openSchedule']
   openWorkflow: ChatState['openWorkflow']
   openWrite: ChatState['openWrite']
-  openSddRequirementDraftFromHistory: (draft: SddDraft) => Promise<void>
   selectThread: ChatState['selectThread']
   setConnectPhoneSidebarOpen: Dispatch<SetStateAction<boolean>>
   setDesignAssistantOpen: (open: boolean) => void
@@ -118,7 +117,6 @@ export function useWorkbenchNavigationController({
   openSchedule,
   openWorkflow,
   openWrite,
-  openSddRequirementDraftFromHistory,
   selectThread,
   setConnectPhoneSidebarOpen,
   setDesignAssistantOpen,
@@ -171,8 +169,13 @@ export function useWorkbenchNavigationController({
       }
       const sddDraft = await findSddDraftForSidebarThread(id, thread)
       if (sddDraft) {
+        // 点击“需求 AI”会话只打开该会话本身:登记草稿归属后精确选择点击的线程,
+        // 不调用 openSddRequirementDraftFromHistory(),因此不会自动展开草稿编辑器。
+        // 若当前正显示其他草稿,先保存并关闭草稿视图与需求 AI 右栏。
         markSddAssistantThread(sddDraft, id)
-        await openSddRequirementDraftFromHistory(sddDraft)
+        if (useSddDraftStore.getState().activeDraft) dismissActiveSddDraft({ closeAssistant: true })
+        setRoute('chat')
+        await selectThread(id)
         void useChatStore.getState().refreshThreads()
         return
       }
@@ -184,7 +187,6 @@ export function useWorkbenchNavigationController({
     dismissActiveSddDraft,
     findSddDraftForSidebarThread,
     openDesign,
-    openSddRequirementDraftFromHistory,
     selectThread,
     setConnectPhoneSidebarOpen,
     setRoute,
@@ -279,16 +281,32 @@ export function useWorkbenchNavigationController({
   }, [openWorkflow, setConnectPhoneSidebarOpen])
 
   const toggleConnectPhone = useCallback((): void => {
-    if (activeSddDraft) dismissActiveSddDraft({ closeAssistant: true })
+    // 打开 Connect Phone 不清空需求草稿:草稿内容与保存状态留在本地 store,
+    // 返回原工作台后继续可见。
     if (route === 'claw') {
       setConnectPhoneSidebarOpen(false)
-      setRoute(connectPhoneReturnRouteRef.current === 'claw' ? 'chat' : connectPhoneReturnRouteRef.current)
+      const returnRoute =
+        connectPhoneReturnRouteRef.current === 'claw' ? 'chat' : connectPhoneReturnRouteRef.current
+      if (returnRoute === 'chat') {
+        // 利用 lastCodeThreadId 恢复离开前的 Code 会话(含需求 AI 会话)。
+        void openCode()
+        return
+      }
+      if (returnRoute === 'write') {
+        void openWrite()
+        return
+      }
+      if (returnRoute === 'design') {
+        openDesign()
+        return
+      }
+      setRoute(returnRoute)
       return
     }
     connectPhoneReturnRouteRef.current = route
     openClaw()
     setConnectPhoneSidebarOpen(true)
-  }, [activeSddDraft, dismissActiveSddDraft, openClaw, route, setConnectPhoneSidebarOpen, setRoute])
+  }, [openClaw, openCode, openDesign, openWrite, route, setConnectPhoneSidebarOpen, setRoute])
 
   const closeRightPanel = useCallback((): void => {
     if (route === 'write') {

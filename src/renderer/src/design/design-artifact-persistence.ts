@@ -82,8 +82,17 @@ function parseNode(
       : {}),
     ...(typeof node.favorite === 'boolean' ? { favorite: node.favorite } : {}),
     ...(typeof node.boardHidden === 'boolean' ? { boardHidden: node.boardHidden } : {}),
+    ...(parseBoardHiddenVersionIds(node.boardHiddenVersionIds) ?? {}),
     ...(viewMode ? { viewMode } : {})
   }
+}
+
+function parseBoardHiddenVersionIds(value: unknown): Pick<DesignArtifactNode, 'boardHiddenVersionIds'> | null {
+  if (!Array.isArray(value)) return null
+  const versionIds = [...new Set(
+    value.filter((item): item is string => isStr(item) && item.trim().length > 0)
+  )]
+  return versionIds.length > 0 ? { boardHiddenVersionIds: versionIds } : null
 }
 
 function parsePrototypeLinks(value: unknown): DesignPrototypeLink[] | undefined {
@@ -266,6 +275,15 @@ export function parseArtifactMeta(raw: string, dirId: string, actualArtifactDir?
   const role = o.role === 'design-system' || o.role === 'logo' ? o.role : undefined
   const prototypeLinks = parsePrototypeLinks(o.prototypeLinks)
   const direction = parseDirection(o.direction)
+  const importedFromPath = (() => {
+    const raw = isStr(o.importedFromPath) ? o.importedFromPath.trim().replaceAll('\\', '/') : ''
+    if (
+      !raw ||
+      !/^\.kun-design\/component-prototypes\/[^/]+\/prototype\.html$/i.test(raw) ||
+      raw.split('/').includes('..')
+    ) return undefined
+    return raw
+  })()
   const normalizedVersions = versionsWithCurrentPresent(id, relativePath, createdAt, versions)
   return {
     id,
@@ -282,6 +300,7 @@ export function parseArtifactMeta(raw: string, dirId: string, actualArtifactDir?
     ...(parsedNode ? { node: parsedNode } : {}),
     ...(prototypeLinks ? { prototypeLinks } : {}),
     ...(direction ? { direction } : {}),
+    ...(importedFromPath ? { importedFromPath } : {}),
     implementedAt: isStr(o.implementedAt) ? o.implementedAt : undefined,
     implementedThreadId: isStr(o.implementedThreadId) ? o.implementedThreadId : undefined,
     implementedDesignSystemHash: isStr(o.implementedDesignSystemHash) ? o.implementedDesignSystemHash : undefined,

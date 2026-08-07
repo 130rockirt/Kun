@@ -18,7 +18,7 @@ import {
 } from './compaction-history.js'
 import { resolveCompactionModel, summarizeCompactionWithModel } from './compaction-summary.js'
 import { ContextCompactor } from './context-compactor.js'
-import { repairModelHistoryItems } from '../domain/model-history-repair.js'
+import { repairModelHistoryItemsForModel } from '../domain/model-history-repair.js'
 import { recordLifecycleHookWarnings } from './turn-lifecycle-hooks.js'
 import type { ContextCompactionConfig } from './model-context-profile.js'
 import { estimateRequestOverheadTokens } from './model-request-estimator.js'
@@ -41,6 +41,15 @@ export type HistoryCompactionServiceDeps = {
   getHooks?: () => readonly ResolvedHook[] | undefined
   clearReadTracker?: (threadId?: string) => void
   rewriteThreadItemsFromSession: (threadId: string) => Promise<void>
+}
+
+export type HistoryCompactionOutcome = {
+  history: TurnItem[]
+  /** A compaction plan was produced (input or budget threshold reached). */
+  triggered: boolean
+  /** A plan was committed and actually replaced history tokens. */
+  compacted: boolean
+  replacedTokens: number
 }
 
 /**
@@ -69,8 +78,25 @@ export class HistoryCompactionService {
      * in the compaction preflight.
      */
     requestOverheadTokens?: number
+    /**
+     * Exact local input-token estimate of the already-constructed request.
+     * Acts as a floor on input pressure so compaction cannot under-count
+     * dynamic context, attachments, or tools that live outside stored items.
+     */
+    requestInputTokens?: number
+    /** Tokens reserved for model output; mirrors the send-time guard. */
+    outputBudgetTokens?: number
+    /** Hard cap shared with the send-time `input + output` guard. */
+    requestHardCapTokens?: number
+    /**
+     * When false, skip the model-backed summary (no reservation and no
+     * summarizer request) and commit the deterministic heuristic directly.
+     * Used by the send-boundary fallback so a second model call cannot be
+     * issued just to make room for the first one. Defaults to true.
+     */
+    allowModelSummary?: boolean
     reserveModelRequest?: () => Promise<{ allowed: boolean; reason?: string }>
-  }): Promise<TurnItem[]> {
+  }): Promise<HistoryCompactionOutcome> {
     await this.deps.telemetry.hydratePromptPressureIfCold(input.threadId, input.model)
     const pressure = this.deps.telemetry.consumePromptPressure(input.threadId, input.model)
     const thresholdModel = pressure?.model || input.model
@@ -85,9 +111,19 @@ export class HistoryCompactionService {
       model: thresholdModel,
       providerId: input.providerId,
       promptTokens: pressure?.promptTokens,
-      overheadTokens
+      overheadTokens,
+      requestInputTokens: input.requestInputTokens,
+      outputBudgetTokens: input.outputBudgetTokens,
+      requestHardCapTokens: input.requestHardCapTokens
     })
-    if (!plan) return input.items
+    if (!plan) {
+      return {
+        history: input.items,
+        triggered: false,
+        compacted: false,
+        replacedTokens: 0
+      }
+    }
     const hooks = this.deps.getHooks?.()
     if (hasHooksForPhase(hooks, 'PreCompact')) {
       const observed = await runObserverHooks(hooks, {
@@ -113,7 +149,7 @@ export class HistoryCompactionService {
       threadId: input.threadId,
       maxAttempts: 2,
       build: async (snapshot, attempt) => {
-        const currentItems = repairModelHistoryItems(
+        const currentItems = repairModelHistoryItemsForModel(
           effectiveHistoryAfterLatestCompaction(snapshot.items)
         )
         const currentPlan = attempt === 1
@@ -121,7 +157,13 @@ export class HistoryCompactionService {
           : this.deps.compactor.planCompaction(currentItems, {
               model: thresholdModel,
               providerId: input.providerId,
-              overheadTokens
+              overheadTokens,
+              // Provider usage from the stale snapshot is dropped on retry,
+              // but this round's capacity constraints must survive the retry
+              // so the budget-driven force compaction still applies.
+              requestInputTokens: input.requestInputTokens,
+              outputBudgetTokens: input.outputBudgetTokens,
+              requestHardCapTokens: input.requestHardCapTokens
             })
         if (!currentPlan) {
           return {
@@ -151,7 +193,7 @@ export class HistoryCompactionService {
         // to newer history. On retry the deterministic heuristic is used
         // instead of issuing a duplicate summarizer request.
         const contextCompaction = this.deps.getContextCompaction?.()
-        if (attempt === 1 && contextCompaction?.summaryMode === 'model') {
+        if (attempt === 1 && input.allowModelSummary !== false && contextCompaction?.summaryMode === 'model') {
           if (input.signal.aborted) {
             return {
               changed: false,
@@ -288,13 +330,30 @@ export class HistoryCompactionService {
             : {})
         })
       }
-      return committed.value.history
+      return {
+        history: committed.value.history,
+        triggered: true,
+        compacted: result ? result.replacedTokens > 0 : false,
+        replacedTokens: result?.replacedTokens ?? 0
+      }
     }
-    if (committed.status === 'unchanged') return committed.value.history
+    if (committed.status === 'unchanged') {
+      return {
+        history: committed.value.history,
+        triggered: true,
+        compacted: false,
+        replacedTokens: 0
+      }
+    }
     // Do not fall back to the stale input after a lost CAS race. The next
     // loop step can retry compaction from this current safe history.
-    return repairModelHistoryItems(
-      effectiveHistoryAfterLatestCompaction(await this.deps.sessionStore.loadItems(input.threadId))
-    )
+    return {
+      history: repairModelHistoryItemsForModel(
+        effectiveHistoryAfterLatestCompaction(await this.deps.sessionStore.loadItems(input.threadId))
+      ),
+      triggered: true,
+      compacted: false,
+      replacedTokens: 0
+    }
   }
 }

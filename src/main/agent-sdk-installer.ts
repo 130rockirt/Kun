@@ -14,7 +14,10 @@ import { Readable, Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import type { SdkDownloadState } from '../shared/kun-gui-api'
 import { fetchWithOptionalProxy } from './proxy-fetch'
+
+export type { SdkDownloadState } from '../shared/kun-gui-api'
 
 // Keep in sync with kun/package.json's @anthropic-ai/claude-agent-sdk version.
 export const AGENT_SDK_VERSION = '0.3.220'
@@ -147,15 +150,36 @@ export async function installClaudeBinary(options: {
 // user navigates away from the settings page; the UI re-reads its state on mount.
 // ---------------------------------------------------------------------------
 
-export type SdkDownloadState = {
-  status: 'downloading' | 'done' | 'error'
-  receivedBytes: number
-  totalBytes: number
-  message?: string
+let activeState: SdkDownloadState | null = null
+
+export type StartAgentSdkInstallOptions = {
+  userDataDir: string
+  proxyUrl?: string
+  version?: string
+  /** Recreate Kun after the binary appears so its launch environment sees it. */
+  restartRuntime: () => Promise<void>
 }
 
-let activeState: SdkDownloadState | null = null
-let activePromise: Promise<AgentSdkInstallResult> | null = null
+type StartAgentSdkInstallDependencies = {
+  installBinary: typeof installClaudeBinary
+  hasDownloadedBinary: (userDataDir: string) => boolean
+}
+
+function hasDownloadedClaudeBinary(userDataDir: string): boolean {
+  const path = agentSdkBinaryPath(userDataDir)
+  try {
+    return existsSync(path) && statSync(path).size > 0
+  } catch {
+    return false
+  }
+}
+
+function restartFailureMessage(error: unknown): string {
+  const detail = error instanceof Error ? error.message : String(error)
+  return detail
+    ? `Claude runtime downloaded, but Kun could not restart: ${detail}`
+    : 'Claude runtime downloaded, but Kun could not restart. Try again.'
+}
 
 /** Current background-download state, or null if none has run. */
 export function agentSdkDownloadState(): SdkDownloadState | null {
@@ -163,32 +187,71 @@ export function agentSdkDownloadState(): SdkDownloadState | null {
 }
 
 /**
- * Start (or resume) the background download. Idempotent while one is in flight —
- * a second call returns the current state instead of starting another. Returns
- * immediately with the live state; `onState` is called on every update.
+ * Start (or resume) the background provisioning. A successful binary download is
+ * not usable until Kun restarts with its newly resolved binary path. The state is
+ * therefore `downloading -> restarting -> done`; repeated calls share either
+ * active state, and a retry after a restart failure reuses the downloaded binary.
  */
 export function startAgentSdkInstall(
-  options: { userDataDir: string; proxyUrl?: string; version?: string },
-  onState?: (state: SdkDownloadState) => void
+  options: StartAgentSdkInstallOptions,
+  onState?: (state: SdkDownloadState) => void,
+  dependencies: Partial<StartAgentSdkInstallDependencies> = {}
 ): SdkDownloadState {
-  if (activeState?.status === 'downloading') return activeState
+  if (activeState?.status === 'downloading' || activeState?.status === 'restarting') {
+    return activeState
+  }
+  const installBinary = dependencies.installBinary ?? installClaudeBinary
+  const hasDownloadedBinary = dependencies.hasDownloadedBinary ?? hasDownloadedClaudeBinary
   const emit = (state: SdkDownloadState): void => {
     activeState = state
     onState?.(state)
   }
+
+  const restart = async (receivedBytes: number, totalBytes: number): Promise<void> => {
+    emit({ status: 'restarting', receivedBytes, totalBytes })
+    try {
+      await options.restartRuntime()
+      emit({ status: 'done', receivedBytes, totalBytes })
+    } catch (error) {
+      emit({
+        status: 'error',
+        receivedBytes,
+        totalBytes,
+        message: restartFailureMessage(error)
+      })
+    }
+  }
+
+  if (hasDownloadedBinary(options.userDataDir)) {
+    void restart(0, 0)
+    return activeState as SdkDownloadState
+  }
+
   emit({ status: 'downloading', receivedBytes: 0, totalBytes: 0 })
-  activePromise = installClaudeBinary({
-    ...options,
+  void installBinary({
+    userDataDir: options.userDataDir,
+    proxyUrl: options.proxyUrl,
+    version: options.version,
     onProgress: (receivedBytes, totalBytes) => emit({ status: 'downloading', receivedBytes, totalBytes })
-  }).then((result) => {
-    const received = activeState?.receivedBytes ?? 0
-    const total = activeState?.totalBytes ?? 0
-    emit(
-      result.ok
-        ? { status: 'done', receivedBytes: received, totalBytes: total }
-        : { status: 'error', receivedBytes: received, totalBytes: total, message: result.message }
-    )
-    return result
   })
+    .then(async (result) => {
+      const received = activeState?.receivedBytes ?? 0
+      const total = activeState?.totalBytes ?? 0
+      if (!result.ok) {
+        emit({ status: 'error', receivedBytes: received, totalBytes: total, message: result.message })
+        return
+      }
+      await restart(received, total)
+    })
+    .catch((error) => {
+      const received = activeState?.receivedBytes ?? 0
+      const total = activeState?.totalBytes ?? 0
+      emit({
+        status: 'error',
+        receivedBytes: received,
+        totalBytes: total,
+        message: error instanceof Error ? error.message : String(error)
+      })
+    })
   return activeState as SdkDownloadState
 }

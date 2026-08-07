@@ -183,7 +183,14 @@ describe('graph_supervise_node', () => {
       kind: 'assistant_text',
       text: 'Checking the shared contract.'
     })
-    const { tool, loadItems } = harness([tail], run)
+    const goalContext = item({
+      id: 'overview_goal_context',
+      kind: 'goal_context',
+      role: 'system',
+      goalKey: 'goal_internal',
+      text: 'Internal goal objective must not enter Graph supervision output.'
+    })
+    const { tool, loadItems } = harness([goalContext, tail], run)
     const first = await tool.execute({
       action: 'overview',
       runId: 'run_1',
@@ -223,6 +230,7 @@ describe('graph_supervise_node', () => {
       }
     })
     expect(loadItems).toHaveBeenCalledOnce()
+    expect(JSON.stringify(first.output)).not.toContain('Internal goal objective')
 
     const second = await tool.execute({
       action: 'overview',

@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { AppSettingsV1 } from '../shared/app-settings'
 import {
+  KUN_AGENT_MODELS_URL,
   MODELS_DEV_CACHE_TTL_MS,
+  MODELS_DEV_CATALOG_URL,
   MODELS_DEV_MAX_RESPONSE_BYTES,
-  MODELS_DEV_TIMEOUT_MS,
   ModelsDevCatalogService,
+  normalizeCatalogKeys,
   resolveCursorModelsDevCatalog,
   resolveModelsDevProvider
 } from './models-dev-catalog'
@@ -48,6 +50,20 @@ function catalogBody(): string {
           tool_call: true,
           modalities: { input: ['text'], output: ['text'] },
           limit: { context: 64_000, output: 8_000 }
+        }
+      }
+    },
+    'opencode-go': {
+      id: 'opencode-go',
+      name: 'OpenCode Go',
+      api: 'https://opencode.ai/zen/go/v1',
+      models: {
+        'mimo-v2.5': {
+          id: 'mimo-v2.5',
+          reasoning: true,
+          tool_call: true,
+          modalities: { input: ['text'], output: ['text'] },
+          limit: { context: 131_072, output: 128_000 }
         }
       }
     },
@@ -141,6 +157,26 @@ function catalogBody(): string {
   })
 }
 
+function kunAgentCatalogBody(): string {
+  return JSON.stringify({
+    deepseek: {
+      id: 'deepseek',
+      name: 'DeepSeek',
+      api: 'https://api.deepseek.com',
+      models: {
+        'deepseek-chat': {
+          id: 'deepseek-chat',
+          name: 'DeepSeek Chat (kun-agent)',
+          reasoning: false,
+          tool_call: true,
+          modalities: { input: ['text'], output: ['text'] },
+          limit: { context: 128_000, output: 16_000 }
+        }
+      }
+    }
+  })
+}
+
 function proxySettings(): AppSettingsV1 {
   return {
     provider: {
@@ -229,6 +265,18 @@ describe('ModelsDevCatalogService', () => {
     })
   })
 
+  it('keeps OpenCode Go output limits in the catalog result', async () => {
+    const fetcher = vi.fn(async () => new Response(catalogBody(), { status: 200 }))
+    const service = new ModelsDevCatalogService(fetcher)
+    await expect(service.fetch({
+      providerId: 'opencode-go',
+      baseUrl: 'https://opencode.ai/zen/go/v1'
+    })).resolves.toMatchObject({
+      status: 'ok',
+      models: [{ id: 'mimo-v2.5', contextWindowTokens: 131_072, maxOutputTokens: 128_000 }]
+    })
+  })
+
   it('enriches Cursor models only from deterministic original providers', async () => {
     const fetcher = vi.fn(async () => new Response(catalogBody(), { status: 200 }))
     const service = new ModelsDevCatalogService(fetcher)
@@ -300,6 +348,7 @@ describe('ModelsDevCatalogService', () => {
       providerName: 'DeepSeek',
       matchMode: 'catalog',
       stale: false,
+      source: 'models.dev',
       models: [{
         id: 'deepseek-chat',
         name: 'DeepSeek Chat',
@@ -422,6 +471,7 @@ describe('ModelsDevCatalogService', () => {
       .fn()
       .mockResolvedValueOnce(new Response(catalogBody(), { status: 200 }))
       .mockRejectedValueOnce(new Error('offline'))
+      .mockRejectedValueOnce(new Error('offline'))
     const service = new ModelsDevCatalogService(fetcher, () => now)
     const request = { providerId: 'deepseek', baseUrl: 'https://api.deepseek.com' }
 
@@ -429,7 +479,12 @@ describe('ModelsDevCatalogService', () => {
     now += MODELS_DEV_CACHE_TTL_MS + 1
     const stale = await service.fetch(request)
 
-    expect(stale).toMatchObject({ status: 'ok', stale: true })
+    expect(stale).toMatchObject({
+      status: 'ok',
+      stale: true,
+      source: 'models.dev'
+    })
+    expect(fetcher).toHaveBeenCalledTimes(3)
   })
 
   it('reports malformed, oversized, and timed-out first loads', async () => {
@@ -447,14 +502,155 @@ describe('ModelsDevCatalogService', () => {
       status: 'error',
       message: expect.stringContaining('byte limit')
     })
-    await expect(malformed.fetch(request)).resolves.toEqual({
+    await expect(malformed.fetch(request)).resolves.toMatchObject({
       status: 'error',
-      message: 'models.dev returned invalid JSON.',
-      models: []
+      message: expect.stringContaining('models.dev and the kun-agent.com fallback both failed')
     })
     await expect(timedOut.fetch(request)).resolves.toMatchObject({
       status: 'error',
-      message: `Request to models.dev timed out after ${MODELS_DEV_TIMEOUT_MS / 1_000}s.`
+      message: expect.stringContaining('both failed')
     })
+  })
+
+  it('falls back to the kun-agent catalog when models.dev times out', async () => {
+    const timeoutError = new Error('timed out')
+    timeoutError.name = 'TimeoutError'
+    const fetcher = vi.fn(async (input: string | URL) => {
+      if (String(input) === MODELS_DEV_CATALOG_URL) throw timeoutError
+      return new Response(kunAgentCatalogBody(), { status: 200 })
+    })
+    const service = new ModelsDevCatalogService(fetcher)
+
+    const result = await service.fetch({
+      providerId: 'deepseek',
+      baseUrl: 'https://api.deepseek.com'
+    })
+
+    expect(result).toMatchObject({
+      status: 'ok',
+      providerKey: 'deepseek',
+      providerName: 'DeepSeek',
+      matchMode: 'catalog',
+      stale: false,
+      source: 'kun-agent',
+      models: [{ id: 'deepseek-chat', name: 'DeepSeek Chat (kun-agent)' }]
+    })
+    expect(fetcher.mock.calls.map((call) => String(call[0]))).toEqual([
+      MODELS_DEV_CATALOG_URL,
+      KUN_AGENT_MODELS_URL
+    ])
+  })
+
+  it('falls back to the kun-agent catalog when models.dev responds 5xx', async () => {
+    const fetcher = vi.fn(async (input: string | URL) => {
+      if (String(input) === MODELS_DEV_CATALOG_URL) {
+        return new Response('upstream exploded', { status: 500 })
+      }
+      return new Response(kunAgentCatalogBody(), { status: 200 })
+    })
+    const service = new ModelsDevCatalogService(fetcher)
+
+    const result = await service.fetch({
+      providerId: 'deepseek',
+      baseUrl: 'https://api.deepseek.com'
+    })
+
+    expect(result).toMatchObject({
+      status: 'ok',
+      source: 'kun-agent',
+      stale: false
+    })
+    expect(fetcher.mock.calls.map((call) => String(call[0]))).toEqual([
+      MODELS_DEV_CATALOG_URL,
+      KUN_AGENT_MODELS_URL
+    ])
+  })
+
+  it('reports both sources when the kun-agent fallback also fails', async () => {
+    const timeoutError = new Error('timed out')
+    timeoutError.name = 'TimeoutError'
+    const fetcher = vi.fn(async () => { throw timeoutError })
+    const service = new ModelsDevCatalogService(fetcher)
+
+    const result = await service.fetch({
+      providerId: 'deepseek',
+      baseUrl: 'https://api.deepseek.com'
+    })
+
+    expect(result.status).toBe('error')
+    if (result.status === 'error') {
+      expect(result.message).toContain('models.dev')
+      expect(result.message).toContain('kun-agent.com')
+    }
+    expect(fetcher).toHaveBeenCalledTimes(2)
+  })
+
+  it('normalizes kun-agent provider keys onto models.dev keys', () => {
+    const catalog = normalizeCatalogKeys({
+      'deepseek-cn': { id: 'deepseek-cn', name: 'DeepSeek CN', models: {} }
+    }, { 'deepseek-cn': 'deepseek' })
+    expect(catalog.deepseek).toMatchObject({ id: 'deepseek-cn' })
+    expect(catalog['deepseek-cn']).toBeUndefined()
+    expect(resolveModelsDevProvider({ providerId: 'deepseek', baseUrl: '' })).toEqual({
+      providerKey: 'deepseek',
+      matchMode: 'catalog'
+    })
+  })
+
+  it('revalidates the kun-agent fallback cache with its own ETag', async () => {
+    let kunAgentCalls = 0
+    const fetcher = vi.fn(async (
+      input: string | URL,
+      _init: RequestInit | undefined,
+      _proxyUrl: string
+    ) => {
+      if (String(input) === MODELS_DEV_CATALOG_URL) throw new Error('offline')
+      kunAgentCalls += 1
+      if (kunAgentCalls === 1) {
+        return new Response(kunAgentCatalogBody(), {
+          status: 200,
+          headers: { etag: '"kun-agent-v1"' }
+        })
+      }
+      return new Response(null, { status: 304 })
+    })
+    const service = new ModelsDevCatalogService(fetcher)
+    const request = { providerId: 'deepseek', baseUrl: 'https://api.deepseek.com' }
+
+    const first = await service.fetch(request)
+    const refreshed = await service.fetch({ ...request, forceRefresh: true })
+
+    expect(first).toMatchObject({ status: 'ok', source: 'kun-agent', stale: false })
+    expect(refreshed).toMatchObject({ status: 'ok', source: 'kun-agent', stale: false })
+    expect(fetcher).toHaveBeenCalledTimes(4)
+    const kunAgentCallsList = fetcher.mock.calls
+      .map((call, index) => ({ index, url: String(call[0]) }))
+      .filter((call) => call.url === KUN_AGENT_MODELS_URL)
+    expect(kunAgentCallsList.map((call) => call.index)).toEqual([1, 3])
+    expect(fetcher.mock.calls[3]?.[1]?.headers).toEqual({
+      Accept: 'application/json',
+      'If-None-Match': '"kun-agent-v1"'
+    })
+  })
+
+  it('deduplicates concurrent loads across the fallback chain', async () => {
+    const timeoutError = new Error('timed out')
+    timeoutError.name = 'TimeoutError'
+    const fetcher = vi.fn(async (input: string | URL) => {
+      if (String(input) === MODELS_DEV_CATALOG_URL) throw timeoutError
+      return new Response(kunAgentCatalogBody(), { status: 200 })
+    })
+    const service = new ModelsDevCatalogService(fetcher)
+    const request = { providerId: 'deepseek', baseUrl: 'https://api.deepseek.com' }
+
+    const [first, second] = await Promise.all([service.fetch(request), service.fetch(request)])
+
+    expect(first.status).toBe('ok')
+    expect(second.status).toBe('ok')
+    expect(fetcher).toHaveBeenCalledTimes(2)
+    expect(fetcher.mock.calls.map((call) => String(call[0]))).toEqual([
+      MODELS_DEV_CATALOG_URL,
+      KUN_AGENT_MODELS_URL
+    ])
   })
 })

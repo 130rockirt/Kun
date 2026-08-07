@@ -75,6 +75,16 @@ class AgentSdkProtocolError extends Error {
   }
 }
 
+/** Safe, source-id-free failure raised when a managed Claude credential is fenced or unreadable. */
+export class AgentSdkCredentialUnavailableError extends Error {
+  readonly code = 'agent_sdk_credential_unavailable'
+
+  constructor() {
+    super('Protected Claude subscription credentials are unavailable. Reconnect the provider in Settings.')
+    this.name = 'AgentSdkCredentialUnavailableError'
+  }
+}
+
 export interface SdkTurnContext {
   /** Workspace root the SDK runs in (cwd). */
   workspace: string
@@ -121,6 +131,8 @@ export interface SdkTurnContext {
    * native session. Resumed turns send only their current delta.
    */
   historyTranscript?: string
+  /** Internal context values that must be removed from request diagnostics. */
+  redactedRequestValues?: string[]
   /**
    * Per-turn instruction blocks injected after the history (skill catalog,
    * activated skills, memories, goal/todo continuation, plan instruction).
@@ -159,7 +171,7 @@ export interface SdkRuntimeDeps {
   /** True when this runtime owns the given provider (kind: 'agent-sdk'). */
   handlesProvider(providerId: string | undefined): boolean
   /** Resolve the turn's inputs; null aborts the turn early (e.g. no user text). */
-  loadTurnContext(threadId: string, turnId: string): Promise<SdkTurnContext | null>
+  loadTurnContext(threadId: string, turnId: string, signal?: AbortSignal): Promise<SdkTurnContext | null>
   /** Execute a kun tool in-process (raw — permission/hooks handled by the SDK seam).
    *  `signal` aborts in-flight interactive work (e.g. a pending user_input). */
   executeKunTool(
@@ -181,12 +193,20 @@ export interface SdkRuntimeDeps {
   recordEvent(draft: RuntimeEventDraft): Promise<void>
   /** Upsert a turn item into the item store (turns.applyItem). */
   applyItem(threadId: string, item: TurnItem): Promise<void>
+  /** Persist one cumulative assistant item before publishing its offset delta. */
+  applyAssistantDelta(
+    threadId: string,
+    item: TurnItem,
+    deltaText: string,
+    deltaOffset: number
+  ): Promise<void>
   /** Finish the turn lifecycle (turns.finishTurn). */
   finishTurn(
     threadId: string,
     turnId: string,
     status: TurnStatus,
-    error?: string
+    error?: string,
+    code?: string
   ): Promise<TurnRunOutcome | void>
   /**
    * Check durable Graph state after the first model response. This may park an
@@ -237,9 +257,12 @@ type SdkAssistantDeltaEvent = {
   kind: 'assistant_text_delta' | 'assistant_reasoning_delta'
   itemId: string
   text: string
+  textOffset: number
 }
 
-function assistantDeltaOf(draft: RuntimeEventDraft): SdkAssistantDeltaEvent | undefined {
+type SdkAssistantDeltaFragment = Omit<SdkAssistantDeltaEvent, 'textOffset'>
+
+function assistantDeltaOf(draft: RuntimeEventDraft): SdkAssistantDeltaFragment | undefined {
   if (draft.kind !== 'assistant_text_delta' && draft.kind !== 'assistant_reasoning_delta') {
     return undefined
   }
@@ -354,7 +377,30 @@ export class AgentSdkRuntime {
     turnId: string,
     signal: AbortSignal
   ): Promise<TurnRunOutcome> {
-    const ctx = await this.deps.loadTurnContext(threadId, turnId)
+    let ctx: SdkTurnContext | null
+    try {
+      ctx = await this.deps.loadTurnContext(threadId, turnId, signal)
+    } catch (error) {
+      if (signal.aborted) {
+        await this.deps.finishTurn(threadId, turnId, 'aborted')
+        return 'aborted'
+      }
+      if (!(error instanceof AgentSdkCredentialUnavailableError)) throw error
+      await this.deps.recordEvent({
+        kind: 'error',
+        threadId,
+        turnId,
+        message: error.message,
+        code: error.code,
+        severity: 'error'
+      })
+      await this.deps.finishTurn(threadId, turnId, 'failed', error.message, error.code)
+      return 'failed'
+    }
+    if (signal.aborted) {
+      await this.deps.finishTurn(threadId, turnId, 'aborted')
+      return 'aborted'
+    }
     if (!ctx) {
       await this.deps.finishTurn(threadId, turnId, 'failed', 'no input for subscription turn')
       return 'failed'
@@ -389,28 +435,44 @@ export class AgentSdkRuntime {
         maxPendingToolCalls: sdkStreamLimits?.maxPendingToolCalls ?? limits.maxToolCallsPerStep
       }
     })
+    let emittedText = ''
+    let emittedReasoning = ''
+    let queuedTextChars = 0
+    let queuedReasoningChars = 0
     const deltaEvents = new SdkAssistantDeltaEventCoalescer(async (delta) => {
       if (delta.kind === 'assistant_text_delta') {
-        await this.deps.recordEvent({
-          kind: delta.kind,
+        if (delta.textOffset !== emittedText.length) {
+          throw new Error(
+            `Agent SDK assistant text delta offset mismatch: expected ${emittedText.length}, ` +
+            `got ${delta.textOffset}`
+          )
+        }
+        emittedText += delta.text
+        await this.deps.applyAssistantDelta(
           threadId,
-          turnId,
-          itemId: delta.itemId,
-          item: makeAssistantTextItem({
-            id: delta.itemId, threadId, turnId, text: delta.text, status: 'running'
-          })
-        })
+          makeAssistantTextItem({
+            id: delta.itemId, threadId, turnId, text: emittedText, status: 'running'
+          }),
+          delta.text,
+          delta.textOffset
+        )
         return
       }
-      await this.deps.recordEvent({
-        kind: delta.kind,
+      if (delta.textOffset !== emittedReasoning.length) {
+        throw new Error(
+          `Agent SDK assistant reasoning delta offset mismatch: expected ${emittedReasoning.length}, ` +
+          `got ${delta.textOffset}`
+        )
+      }
+      emittedReasoning += delta.text
+      await this.deps.applyAssistantDelta(
         threadId,
-        turnId,
-        itemId: delta.itemId,
-        item: makeAssistantReasoningItem({
-          id: delta.itemId, threadId, turnId, text: delta.text, status: 'running'
-        })
-      })
+        makeAssistantReasoningItem({
+          id: delta.itemId, threadId, turnId, text: emittedReasoning, status: 'running'
+        }),
+        delta.text,
+        delta.textOffset
+      )
     })
     const abort = new AbortController()
     const maxWallTimeMs = limits.maxWallTimeMs
@@ -628,6 +690,7 @@ export class AgentSdkRuntime {
           systemPrompt: this.deps.kunSystemPrompt(),
           threadPersona: ctx.threadPersona,
           contextInstructions: ctx.contextInstructions ?? [],
+          redactedRequestValues: ctx.redactedRequestValues ?? [],
           tools: selectedKunTools,
           images: (ctx.images ?? []).map((image) => ({ mediaType: image.mediaType })),
           approvalPolicy: ctx.approvalPolicy,
@@ -666,7 +729,15 @@ export class AgentSdkRuntime {
               captureAgentSdkTraceDraft(trace, draft)
               const delta = assistantDeltaOf(draft)
               if (delta) {
-                await deltaEvents.append(delta)
+                const textOffset = delta.kind === 'assistant_text_delta'
+                  ? queuedTextChars
+                  : queuedReasoningChars
+                await deltaEvents.append({ ...delta, textOffset })
+                if (delta.kind === 'assistant_text_delta') {
+                  queuedTextChars += delta.text.length
+                } else {
+                  queuedReasoningChars += delta.text.length
+                }
                 continue
               }
               // Preserve the mapper's exact event order: milestones, tools,
@@ -921,6 +992,7 @@ async function startAgentSdkTrace(
     systemPrompt: string
     threadPersona?: string
     contextInstructions: readonly string[]
+    redactedRequestValues: readonly string[]
     tools: readonly BridgeableTool[]
     images: ReadonlyArray<{ mediaType: string }>
     approvalPolicy: ApprovalPolicy
@@ -937,6 +1009,7 @@ async function startAgentSdkTrace(
       turnId: input.turnId,
       provider: input.provider,
       model: input.model,
+      redactedRequestValues: input.redactedRequestValues,
       toolCatalog: input.tools.map((tool) => ({
         name: bridgedToolModelName(tool.name),
         ...(tool.providerId ? { providerId: tool.providerId } : {}),
@@ -1173,7 +1246,13 @@ class SdkAssistantDeltaEventCoalescer {
     let offset = 0
     while (offset < event.text.length) {
       if (!this.pending) {
-        this.pending = { kind: event.kind, itemId: event.itemId, parts: [], bytes: 0 }
+        this.pending = {
+          kind: event.kind,
+          itemId: event.itemId,
+          textOffset: event.textOffset + offset,
+          parts: [],
+          bytes: 0
+        }
         this.scheduleFlush()
       }
       const prefix = utf8PrefixWithinBytes(
@@ -1227,6 +1306,7 @@ class SdkAssistantDeltaEventCoalescer {
         await this.emit({
           kind: pending.kind,
           itemId: pending.itemId,
+          textOffset: pending.textOffset,
           text: pending.parts.join('')
         })
       } catch (error) {

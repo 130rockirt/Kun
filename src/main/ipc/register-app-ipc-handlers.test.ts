@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { EventEmitter } from 'node:events'
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   realpathSync,
@@ -32,11 +33,19 @@ import {
   KUN_APPROVAL_CONSENT_HEADER
 } from '../../../kun/src/server/approval-consent.js'
 
-const handlers = new Map<string, (event: unknown, payload?: unknown) => Promise<unknown>>()
+const handlers = new Map<string, (...args: unknown[]) => Promise<unknown>>()
+
+function createGate(): { promise: Promise<void>; release: () => void } {
+  let release!: () => void
+  const promise = new Promise<void>((resolve) => { release = resolve })
+  return { promise, release }
+}
+
 const electronMock = vi.hoisted(() => ({
   showMessageBox: vi.fn(),
   openPath: vi.fn(async () => ''),
-  showItemInFolder: vi.fn()
+  showItemInFolder: vi.fn(),
+  userDataPath: '/tmp/kun-user-data'
 }))
 const uiPluginMocks = vi.hoisted(() => ({
   ensureBundledUiPlugins: vi.fn(async () => undefined),
@@ -47,10 +56,21 @@ const uiPluginMocks = vi.hoisted(() => ({
   activate: vi.fn(async (_pluginId: string, _css: string) => undefined),
   deactivate: vi.fn(async () => undefined)
 }))
+const protectedProviderMocks = vi.hoisted(() => ({
+  probeClaudeSubscription: vi.fn(async () => ({ ok: true as const, latencyMs: 1 })),
+  fetchSdkModels: vi.fn(async () => ['claude-model']),
+  discoverCursorSubscription: vi.fn(async () => ({
+    account: { apiKeyName: 'registry-key' },
+    models: [{ id: 'cursor-model', displayName: 'Cursor Model' }]
+  }))
+}))
 
 vi.mock('electron', () => ({
   app: {
-    quit: vi.fn()
+    quit: vi.fn(),
+    getPath: vi.fn(() => electronMock.userDataPath),
+    getAppPath: vi.fn(() => '/tmp/kun-app'),
+    isPackaged: false
   },
   dialog: { showMessageBox: electronMock.showMessageBox },
   shell: {
@@ -91,6 +111,21 @@ vi.mock('../services/ui-plugin-cdp-theme-controller', () => ({
   }
 }))
 
+vi.mock('../claude-subscription-auth', async () => ({
+  ...await vi.importActual<typeof import('../claude-subscription-auth')>('../claude-subscription-auth'),
+  probeClaudeSubscription: protectedProviderMocks.probeClaudeSubscription
+}))
+
+vi.mock('../claude-subscription-models', async () => ({
+  ...await vi.importActual<typeof import('../claude-subscription-models')>('../claude-subscription-models'),
+  fetchSdkModels: protectedProviderMocks.fetchSdkModels
+}))
+
+vi.mock('../cursor-subscription-models', async () => ({
+  ...await vi.importActual<typeof import('../cursor-subscription-models')>('../cursor-subscription-models'),
+  discoverCursorSubscription: protectedProviderMocks.discoverCursorSubscription
+}))
+
 function settings(): AppSettingsV1 {
   return {
     version: 1,
@@ -122,6 +157,92 @@ function settings(): AppSettingsV1 {
   }
 }
 
+function settingsWithProtectedSubscriptionCredentials(): AppSettingsV1 {
+  const current = settings()
+  const defaultProfile = current.provider.providers[0]!
+  return {
+    ...current,
+    provider: {
+      ...current.provider,
+      providers: [
+        defaultProfile,
+        {
+          ...defaultProfile,
+          id: 'claude-subscription',
+          name: 'Claude subscription',
+          kind: 'agent-sdk',
+          apiKey: 'registry-claude-secret'
+        },
+        {
+          ...defaultProfile,
+          id: 'cursor-subscription',
+          name: 'Cursor subscription',
+          kind: 'cursor-sdk',
+          apiKey: 'registry-cursor-secret'
+        }
+      ]
+    }
+  }
+}
+
+function settingsWithPlaintextModelCredentials(): AppSettingsV1 {
+  const current = settings()
+  return {
+    ...current,
+    provider: {
+      ...current.provider,
+      apiKey: 'legacy-provider-secret',
+      providers: current.provider.providers.map((provider, index) => ({
+        ...provider,
+        apiKey: `provider-secret-${index}`
+      }))
+    },
+    agents: {
+      ...current.agents,
+      kun: {
+        ...current.agents.kun,
+        apiKey: 'runtime-model-secret',
+        runtimeToken: 'runtime-auth-token',
+        imageGeneration: {
+          ...current.agents.kun.imageGeneration,
+          apiKey: 'image-secret'
+        },
+        speechToText: {
+          ...current.agents.kun.speechToText,
+          apiKey: 'speech-to-text-secret'
+        },
+        textToSpeech: {
+          ...current.agents.kun.textToSpeech,
+          apiKey: 'text-to-speech-secret'
+        },
+        musicGeneration: {
+          ...current.agents.kun.musicGeneration,
+          apiKey: 'music-secret'
+        },
+        videoGeneration: {
+          ...current.agents.kun.videoGeneration,
+          apiKey: 'video-secret'
+        }
+      }
+    }
+  }
+}
+
+function expectRendererModelCredentialsRedacted(value: unknown): void {
+  const projected = value as AppSettingsV1
+  expect(projected.provider.apiKey).toBe('')
+  expect(projected.provider.providers.every((provider) => provider.apiKey === '')).toBe(true)
+  expect(projected.agents.kun.apiKey).toBe('')
+  // These custom capability secrets have not migrated to Registry ownership;
+  // preserving them avoids erasing the key on an adjacent settings edit.
+  expect(projected.agents.kun.imageGeneration.apiKey).toBe('image-secret')
+  expect(projected.agents.kun.speechToText.apiKey).toBe('speech-to-text-secret')
+  expect(projected.agents.kun.textToSpeech.apiKey).toBe('text-to-speech-secret')
+  expect(projected.agents.kun.musicGeneration.apiKey).toBe('music-secret')
+  expect(projected.agents.kun.videoGeneration.apiKey).toBe('video-secret')
+  expect(projected.agents.kun.runtimeToken).toBe('runtime-auth-token')
+}
+
 function registerOptions(overrides: Partial<Parameters<typeof import('./register-app-ipc-handlers').registerAppIpcHandlers>[0]> = {}) {
   const applySettingsPatch = vi.fn(async () => settings())
   const saveSettingsPatch = vi.fn(async () => settings())
@@ -136,7 +257,10 @@ function registerOptions(overrides: Partial<Parameters<typeof import('./register
       movedItems: ['secret.key']
     })),
     runtimeRequest: vi.fn() as never,
-    getRuntimeAuthToken: (current: AppSettingsV1) => current.agents.kun.runtimeToken.trim(),
+    acquireRuntimeRequestLease: vi.fn(async () => ({
+      runtimeToken: 'runtime-auth-token',
+      request: vi.fn(async () => ({ ok: true, status: 200, body: '{}' }))
+    })),
     getRuntimeSettingsSyncStatus: () => ({
       state: 'idle' as const,
       generation: 0,
@@ -146,6 +270,7 @@ function registerOptions(overrides: Partial<Parameters<typeof import('./register
     fetchUpstreamModels: vi.fn() as never,
     getClawRuntime: () => null,
     getScheduleRuntime: () => null,
+    getDaemonRuntime: () => null,
     getWorkflowRuntime: () => null,
     startFeishuInstallQrcode: vi.fn() as never,
     pollFeishuInstall: vi.fn() as never,
@@ -169,6 +294,7 @@ function registerOptions(overrides: Partial<Parameters<typeof import('./register
 describe('registerAppIpcHandlers', () => {
   beforeEach(() => {
     handlers.clear()
+    electronMock.userDataPath = '/tmp/kun-user-data'
     electronMock.showMessageBox.mockReset()
     electronMock.openPath.mockClear()
     electronMock.showItemInFolder.mockClear()
@@ -179,6 +305,9 @@ describe('registerAppIpcHandlers', () => {
     uiPluginMocks.removeUiPlugin.mockReset()
     uiPluginMocks.activate.mockClear()
     uiPluginMocks.deactivate.mockClear()
+    protectedProviderMocks.probeClaudeSubscription.mockClear()
+    protectedProviderMocks.fetchSdkModels.mockClear()
+    protectedProviderMocks.discoverCursorSubscription.mockClear()
   })
 
   afterEach(() => {
@@ -191,6 +320,173 @@ describe('registerAppIpcHandlers', () => {
     expect(handlers.get('cursor-subscription:discover')).toBeTypeOf('function')
     expect(handlers.get('gemini-cli-subscription:status')).toBeTypeOf('function')
     expect(handlers.get('gemini-cli-subscription:models')).toBeTypeOf('function')
+  })
+
+  it('resolves persisted Claude and Cursor credentials through the Main-only Registry projection', async () => {
+    const projected = settingsWithProtectedSubscriptionCredentials()
+    const stored: AppSettingsV1 = {
+      ...projected,
+      provider: {
+        ...projected.provider,
+        providers: projected.provider.providers.map((provider) => ({
+          ...provider,
+          apiKey: ''
+        }))
+      }
+    }
+    const mainFrame = { processId: 10, routingId: 20 }
+    const contents = { id: 7, mainFrame }
+    const mainWindow = { isDestroyed: () => false, webContents: contents }
+    const trustedEvent = { sender: contents, senderFrame: mainFrame }
+    const withRegistryCredentials = vi.fn(async () => projected)
+    registerAppIpcHandlers(registerOptions({
+      store: { load: vi.fn(async () => stored) } as never,
+      getMainWindow: () => mainWindow as never,
+      withRegistryCredentials
+    }))
+
+    await handlers.get('claude-subscription:probe')?.(
+      trustedEvent,
+      undefined,
+      'claude-subscription'
+    )
+    await handlers.get('claude-subscription:models')?.(
+      trustedEvent,
+      undefined,
+      'claude-subscription'
+    )
+    await handlers.get('cursor-subscription:discover')?.(
+      trustedEvent,
+      { providerId: 'cursor-subscription' }
+    )
+
+    expect(protectedProviderMocks.probeClaudeSubscription).toHaveBeenCalledWith(expect.objectContaining({
+      token: 'registry-claude-secret'
+    }))
+    expect(protectedProviderMocks.fetchSdkModels).toHaveBeenCalledWith(expect.objectContaining({
+      token: 'registry-claude-secret'
+    }))
+    expect(protectedProviderMocks.discoverCursorSubscription).toHaveBeenCalledWith(expect.objectContaining({
+      apiKey: 'registry-cursor-secret'
+    }))
+    expect(withRegistryCredentials).toHaveBeenCalledTimes(3)
+  })
+
+  it('rejects untrusted Registry credential lookups before loading protected settings', async () => {
+    const projected = settingsWithProtectedSubscriptionCredentials()
+    const mainFrame = { processId: 10, routingId: 20 }
+    const contents = { id: 7, mainFrame }
+    const mainWindow = { isDestroyed: () => false, webContents: contents }
+    const untrustedEvent = {
+      sender: { id: 99 },
+      senderFrame: { processId: 90, routingId: 91 }
+    }
+    const storeLoad = vi.fn(async () => settings())
+    const withRegistryCredentials = vi.fn(async () => projected)
+    registerAppIpcHandlers(registerOptions({
+      store: { load: storeLoad } as never,
+      getMainWindow: () => mainWindow as never,
+      withRegistryCredentials
+    }))
+
+    await expect(handlers.get('claude-subscription:probe')?.(
+      untrustedEvent,
+      undefined,
+      'claude-subscription'
+    )).rejects.toThrow(/trusted workbench frame/)
+    await expect(handlers.get('claude-subscription:models')?.(
+      untrustedEvent,
+      undefined,
+      'claude-subscription'
+    )).rejects.toThrow(/trusted workbench frame/)
+    await expect(handlers.get('cursor-subscription:discover')?.(
+      untrustedEvent,
+      { providerId: 'cursor-subscription' }
+    )).rejects.toThrow(/trusted workbench frame/)
+    await expect(handlers.get('claude-subscription:probe')?.(
+      untrustedEvent,
+      'renderer-supplied-secret'
+    )).rejects.toThrow(/trusted workbench frame/)
+
+    expect(storeLoad).not.toHaveBeenCalled()
+    expect(withRegistryCredentials).not.toHaveBeenCalled()
+    expect(protectedProviderMocks.probeClaudeSubscription).not.toHaveBeenCalled()
+    expect(protectedProviderMocks.fetchSdkModels).not.toHaveBeenCalled()
+    expect(protectedProviderMocks.discoverCursorSubscription).not.toHaveBeenCalled()
+  })
+
+  it('binds protected subscription credentials to the expected provider transport', async () => {
+    const projected = settingsWithProtectedSubscriptionCredentials()
+    const mainFrame = { processId: 10, routingId: 20 }
+    const contents = { id: 7, mainFrame }
+    const mainWindow = { isDestroyed: () => false, webContents: contents }
+    const trustedEvent = { sender: contents, senderFrame: mainFrame }
+    const withRegistryCredentials = vi.fn(async () => projected)
+    registerAppIpcHandlers(registerOptions({
+      store: { load: vi.fn(async () => projected) } as never,
+      getMainWindow: () => mainWindow as never,
+      withRegistryCredentials
+    }))
+
+    await expect(handlers.get('claude-subscription:probe')?.(
+      trustedEvent,
+      undefined,
+      'cursor-subscription'
+    )).rejects.toThrow(/not an? agent-sdk provider/)
+    await expect(handlers.get('claude-subscription:models')?.(
+      trustedEvent,
+      undefined,
+      'cursor-subscription'
+    )).rejects.toThrow(/not an? agent-sdk provider/)
+    await expect(handlers.get('cursor-subscription:discover')?.(
+      trustedEvent,
+      { providerId: 'claude-subscription' }
+    )).rejects.toThrow(/not a cursor-sdk provider/)
+
+    expect(protectedProviderMocks.probeClaudeSubscription).not.toHaveBeenCalled()
+    expect(protectedProviderMocks.fetchSdkModels).not.toHaveBeenCalled()
+    expect(protectedProviderMocks.discoverCursorSubscription).not.toHaveBeenCalled()
+    expect(withRegistryCredentials).not.toHaveBeenCalled()
+  })
+
+  it('allows explicit subscription credential drafts without a Registry lookup', async () => {
+    const mainFrame = { processId: 10, routingId: 20 }
+    const contents = { id: 7, mainFrame }
+    const mainWindow = { isDestroyed: () => false, webContents: contents }
+    const trustedEvent = { sender: contents, senderFrame: mainFrame }
+    const withRegistryCredentials = vi.fn(async () => {
+      throw new Error('Registry lookup must not run for an explicit draft')
+    })
+    registerAppIpcHandlers(registerOptions({
+      getMainWindow: () => mainWindow as never,
+      withRegistryCredentials
+    }))
+
+    await handlers.get('claude-subscription:probe')?.(
+      trustedEvent,
+      'draft-claude-secret',
+      'cursor-subscription'
+    )
+    await handlers.get('claude-subscription:models')?.(
+      trustedEvent,
+      'draft-claude-secret',
+      'cursor-subscription'
+    )
+    await handlers.get('cursor-subscription:discover')?.(trustedEvent, {
+      apiKey: 'draft-cursor-secret',
+      providerId: 'claude-subscription'
+    })
+
+    expect(withRegistryCredentials).not.toHaveBeenCalled()
+    expect(protectedProviderMocks.probeClaudeSubscription).toHaveBeenCalledWith(expect.objectContaining({
+      token: 'draft-claude-secret'
+    }))
+    expect(protectedProviderMocks.fetchSdkModels).toHaveBeenCalledWith(expect.objectContaining({
+      token: 'draft-claude-secret'
+    }))
+    expect(protectedProviderMocks.discoverCursorSubscription).toHaveBeenCalledWith(expect.objectContaining({
+      apiKey: 'draft-cursor-secret'
+    }))
   })
 
   it('bypasses cache for development reload commands and keeps packaged reloads ordinary', async () => {
@@ -283,6 +579,80 @@ describe('registerAppIpcHandlers', () => {
     ])
   })
 
+  it('reveals a workspace file only for the trusted workbench frame', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'kun-reveal-workspace-'))
+    const filePath = join(root, 'preview.md')
+    writeFileSync(filePath, '# Preview', 'utf8')
+    const mainFrame = { processId: 10, routingId: 20 }
+    const contents = { id: 7, mainFrame }
+    const mainWindow = { isDestroyed: () => false, webContents: contents }
+    try {
+      registerAppIpcHandlers(registerOptions({ getMainWindow: () => mainWindow as never }))
+      const handler = handlers.get('file:reveal-workspace-file')
+      const payload = { path: 'preview.md', workspaceRoot: root }
+
+      await expect(handler?.({
+        sender: { id: 99 },
+        senderFrame: { processId: 90, routingId: 91 }
+      }, payload)).rejects.toThrow(/trusted workbench frame/)
+      await expect(handler?.({ sender: contents, senderFrame: mainFrame }, payload)).resolves.toEqual({ ok: true })
+      const shownPath = electronMock.showItemInFolder.mock.calls[0]?.[0]
+      expect(shownPath).toBeTypeOf('string')
+      const canonicalPath = (candidate: string): string =>
+        typeof (realpathSync as { native?: (path: string) => string }).native === 'function'
+          ? realpathSync.native(candidate).toLowerCase()
+          : realpathSync(candidate).toLowerCase()
+      expect(canonicalPath(shownPath as string)).toBe(canonicalPath(filePath))
+      expect(electronMock.openPath).not.toHaveBeenCalled()
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects reveal targets that escape or do not name a workspace file', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'kun-reveal-boundary-'))
+    const workspaceRoot = join(root, 'workspace')
+    const outsideFile = join(root, 'outside.md')
+    mkdirSync(workspaceRoot)
+    writeFileSync(outsideFile, '# Outside', 'utf8')
+    const mainFrame = { processId: 10, routingId: 20 }
+    const contents = { id: 7, mainFrame }
+    const mainWindow = { isDestroyed: () => false, webContents: contents }
+    const event = { sender: contents, senderFrame: mainFrame }
+
+    try {
+      registerAppIpcHandlers(registerOptions({ getMainWindow: () => mainWindow as never }))
+      const handler = handlers.get('file:reveal-workspace-file')
+      expect(handler).toBeTypeOf('function')
+
+      await expect(handler?.(event, {
+        path: '../outside.md',
+        workspaceRoot
+      })).resolves.toMatchObject({ ok: false })
+      await expect(handler?.(event, {
+        path: outsideFile,
+        workspaceRoot
+      })).resolves.toMatchObject({ ok: false })
+      await expect(handler?.(event, {
+        path: '.',
+        workspaceRoot
+      })).resolves.toEqual({
+        ok: false,
+        message: 'Path must point to a regular workspace file.'
+      })
+      await expect(handler?.(event, {
+        path: 'missing.md',
+        workspaceRoot
+      })).resolves.toMatchObject({ ok: false })
+      await expect(handler?.(event, {
+        path: outsideFile
+      })).rejects.toThrow(/Invalid payload for file:reveal-workspace-file/)
+      expect(electronMock.showItemInFolder).not.toHaveBeenCalled()
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it('rejects invalid settings patches at the handler boundary', async () => {
     const applySettingsPatch = vi.fn(async () => settings())
 
@@ -294,6 +664,36 @@ describe('registerAppIpcHandlers', () => {
       handler?.({}, { agents: { kun: { mysteryFlag: true } } })
     ).rejects.toThrow(/Invalid payload for settings:set/)
     expect(applySettingsPatch).not.toHaveBeenCalled()
+  })
+
+  it('redacts plaintext model credentials from settings:get without mutating the Main snapshot', async () => {
+    const current = settingsWithPlaintextModelCredentials()
+    const original = JSON.stringify(current)
+    registerAppIpcHandlers(registerOptions({
+      store: { load: vi.fn(async () => current) } as never
+    }))
+
+    const result = await handlers.get('settings:get')?.({})
+
+    expectRendererModelCredentialsRedacted(result)
+    expect(JSON.stringify(current)).toBe(original)
+  })
+
+  it('redacts plaintext model credentials from both settings write responses', async () => {
+    const persisted = settingsWithPlaintextModelCredentials()
+    const original = JSON.stringify(persisted)
+    const applySettingsPatch = vi.fn(async () => persisted)
+    const saveSettingsPatch = vi.fn(async () => persisted)
+    registerAppIpcHandlers(registerOptions({ applySettingsPatch, saveSettingsPatch }))
+
+    const setResult = await handlers.get('settings:set')?.({}, { theme: 'dark' })
+    const saveResult = await handlers.get('settings:save-silent')?.({}, { locale: 'zh' })
+
+    expectRendererModelCredentialsRedacted(setResult)
+    expectRendererModelCredentialsRedacted(saveResult)
+    expect(applySettingsPatch).toHaveBeenCalledWith({ theme: 'dark' })
+    expect(saveSettingsPatch).toHaveBeenCalledWith({ locale: 'zh' })
+    expect(JSON.stringify(persisted)).toBe(original)
   })
 
   it('requires trusted native confirmation before resetting unreadable credentials', async () => {
@@ -461,7 +861,7 @@ describe('registerAppIpcHandlers', () => {
     // A Direct DOM synthetic click can at most make the trusted renderer send
     // this request. Cancelling the Main-owned prompt leaves settings unchanged.
     electronMock.showMessageBox.mockResolvedValueOnce({ response: 1 })
-    await expect(handlers.get('settings:set')?.(trustedEvent, payload)).resolves.toBe(current)
+    await expect(handlers.get('settings:set')?.(trustedEvent, payload)).resolves.toEqual(current)
     expect(applySettingsPatch).not.toHaveBeenCalled()
     expect(electronMock.showMessageBox).toHaveBeenLastCalledWith(
       mainWindow,
@@ -484,21 +884,25 @@ describe('registerAppIpcHandlers', () => {
   it('uses the resolved shared runtime token after trusted native approval', async () => {
     const current = settings()
     const resolvedRuntimeToken = 'approval-runtime-secret'
-    const getRuntimeAuthToken = vi.fn(() => resolvedRuntimeToken)
     expect(current.agents.kun.runtimeToken).toBe('')
     const mainFrame = { processId: 10, routingId: 20 }
     const contents = { id: 7, mainFrame }
     const mainWindow = { isDestroyed: () => false, webContents: contents }
-    const runtimeRequest = vi.fn(async (
+    const leaseRequest = vi.fn(async (
       _path: string,
       _method?: string,
       _body?: string,
       _headers?: Record<string, string>
     ) => ({ ok: true, status: 200, body: '{}' }))
+    const acquireRuntimeRequestLease = vi.fn(async () => ({
+      runtimeToken: resolvedRuntimeToken,
+      request: leaseRequest
+    }))
+    const runtimeRequest = vi.fn()
     registerAppIpcHandlers(registerOptions({
       store: { load: vi.fn(async () => current) } as never,
       getMainWindow: () => mainWindow as never,
-      getRuntimeAuthToken,
+      acquireRuntimeRequestLease,
       runtimeRequest
     }))
     const handler = handlers.get('approval:decide')!
@@ -509,17 +913,21 @@ describe('registerAppIpcHandlers', () => {
       senderFrame: { processId: 90, routingId: 91 }
     }, payload)).rejects.toThrow(/trusted workbench frame/)
     expect(runtimeRequest).not.toHaveBeenCalled()
+    expect(acquireRuntimeRequestLease).not.toHaveBeenCalled()
 
     electronMock.showMessageBox.mockResolvedValueOnce({ response: 1 })
     await expect(handler({ sender: contents, senderFrame: mainFrame }, payload))
       .resolves.toEqual({ confirmed: false })
     expect(runtimeRequest).not.toHaveBeenCalled()
+    expect(acquireRuntimeRequestLease).not.toHaveBeenCalled()
 
     electronMock.showMessageBox.mockResolvedValueOnce({ response: 0 })
     await expect(handler({ sender: contents, senderFrame: mainFrame }, payload))
       .resolves.toMatchObject({ confirmed: true, response: { ok: true } })
-    expect(getRuntimeAuthToken).toHaveBeenCalledWith(current)
-    const headers = runtimeRequest.mock.calls[0]?.[3] as Record<string, string>
+    expect(acquireRuntimeRequestLease).toHaveBeenCalledOnce()
+    expect(runtimeRequest).not.toHaveBeenCalled()
+    expect(leaseRequest).toHaveBeenCalledOnce()
+    const headers = leaseRequest.mock.calls[0]?.[3] as Record<string, string>
     const consent = headers[KUN_APPROVAL_CONSENT_HEADER]
     expect(consent).toMatch(/^v1\./)
     expect(new ApprovalConsentVerifier(resolvedRuntimeToken).verifyAndConsume({
@@ -665,6 +1073,119 @@ describe('registerAppIpcHandlers', () => {
       'Protected native approval confirmation was not submitted.',
       expect.objectContaining({ reason: 'parent_or_sender_unavailable_after_confirmation' })
     )
+  })
+
+  it('fails closed when the approval sender changes while the Runtime lease is acquired', async () => {
+    const mainFrame = { processId: 10, routingId: 20, detached: false }
+    const contents = {
+      id: 7,
+      mainFrame,
+      isDestroyed: () => false
+    }
+    const mainWindow = { isDestroyed: () => false, webContents: contents }
+    let releaseLease!: () => void
+    const leaseGate = new Promise<void>((resolve) => { releaseLease = resolve })
+    const leaseRequest = vi.fn(async () => ({ ok: true, status: 200, body: '{}' }))
+    const acquireRuntimeRequestLease = vi.fn(async () => {
+      await leaseGate
+      return { runtimeToken: 'lease-token', request: leaseRequest }
+    })
+    const logInfo = vi.fn()
+    registerAppIpcHandlers(registerOptions({
+      getMainWindow: () => mainWindow as never,
+      acquireRuntimeRequestLease,
+      logInfo
+    }))
+    electronMock.showMessageBox.mockResolvedValueOnce({ response: 0 })
+
+    const decision = handlers.get('approval:decide')?.({
+      sender: contents,
+      senderFrame: mainFrame
+    }, {
+      approvalId: 'approval-navigated-during-ensure',
+      decision: 'allow',
+      source: 'user'
+    })
+    await vi.waitFor(() => expect(acquireRuntimeRequestLease).toHaveBeenCalledOnce())
+    contents.mainFrame = { processId: 11, routingId: 21, detached: false }
+    releaseLease()
+
+    await expect(decision).resolves.toEqual({ confirmed: false })
+    expect(leaseRequest).not.toHaveBeenCalled()
+    expect(logInfo).toHaveBeenCalledWith(
+      'approval',
+      'Protected native approval confirmation was not submitted.',
+      expect.objectContaining({ reason: 'parent_or_sender_unavailable_after_runtime_ensure' })
+    )
+  })
+
+  it('revalidates a policy approval sender after Runtime lease acquisition', async () => {
+    const mainFrame = { processId: 10, routingId: 20, detached: false }
+    const contents = { id: 7, mainFrame, isDestroyed: () => false }
+    const mainWindow = { isDestroyed: () => false, webContents: contents }
+    const leaseGate = createGate()
+    const leaseRequest = vi.fn(async () => ({ ok: true, status: 200, body: '{}' }))
+    const acquireRuntimeRequestLease = vi.fn(async () => {
+      await leaseGate.promise
+      return { runtimeToken: 'lease-token', request: leaseRequest }
+    })
+    registerAppIpcHandlers(registerOptions({
+      getMainWindow: () => mainWindow as never,
+      acquireRuntimeRequestLease
+    }))
+
+    const decision = handlers.get('approval:decide')?.({
+      sender: contents,
+      senderFrame: mainFrame
+    }, {
+      approvalId: 'approval-policy-during-ensure',
+      decision: 'allow',
+      source: 'policy'
+    })
+    await vi.waitFor(() => expect(acquireRuntimeRequestLease).toHaveBeenCalledOnce())
+    contents.mainFrame = { processId: 11, routingId: 21, detached: false }
+    leaseGate.release()
+
+    await expect(decision).resolves.toEqual({ confirmed: false })
+    expect(leaseRequest).not.toHaveBeenCalled()
+    expect(electronMock.showMessageBox).not.toHaveBeenCalled()
+  })
+
+  it('returns a safe Runtime failure when approval lease acquisition fails', async () => {
+    const mainFrame = { processId: 10, routingId: 20 }
+    const contents = { id: 7, mainFrame, isDestroyed: () => false }
+    const mainWindow = { isDestroyed: () => false, webContents: contents }
+    const logError = vi.fn()
+    registerAppIpcHandlers(registerOptions({
+      getMainWindow: () => mainWindow as never,
+      acquireRuntimeRequestLease: vi.fn(async () => {
+        throw new Error('/Users/private-user/.kun/runtime failed to start')
+      }),
+      logError
+    }))
+
+    const result = await handlers.get('approval:decide')?.({
+      sender: contents,
+      senderFrame: mainFrame
+    }, {
+      approvalId: 'approval-lease-failed',
+      decision: 'deny',
+      source: 'policy'
+    }) as { confirmed: boolean; response: { ok: boolean; body: string } }
+
+    expect(result.confirmed).toBe(true)
+    expect(result.response.ok).toBe(false)
+    expect(result.response.body).toContain('runtime_unhealthy')
+    expect(result.response.body).not.toContain('private-user')
+    expect(logError).toHaveBeenCalledWith(
+      'approval',
+      'Protected approval Runtime lease acquisition failed.',
+      expect.objectContaining({
+        approvalRef: expect.stringMatching(/^sha256:/),
+        errorType: 'Error'
+      })
+    )
+    expect(JSON.stringify(logError.mock.calls)).not.toContain('private-user')
   })
 
   it('rejects every UI plugin bridge outside the trusted top-level workbench frame', async () => {
@@ -919,6 +1440,29 @@ describe('registerAppIpcHandlers', () => {
 
     await expect(handlers.get('runtime:restart')?.({})).resolves.toBeUndefined()
     expect(restartRuntime).toHaveBeenCalledTimes(1)
+  })
+
+  it('restarts Kun after an already-downloaded Claude SDK is provisioned through IPC', async () => {
+    const userDataDir = mkdtempSync(join(tmpdir(), 'kun-agent-sdk-ipc-'))
+    const binaryName = process.platform === 'win32' ? 'claude.exe' : 'claude'
+    const binaryPath = join(userDataDir, 'agent-sdk', binaryName)
+    const restartRuntime = vi.fn(async () => undefined)
+    electronMock.userDataPath = userDataDir
+    mkdirSync(join(userDataDir, 'agent-sdk'), { recursive: true })
+    writeFileSync(binaryPath, 'claude binary')
+
+    try {
+      registerAppIpcHandlers(registerOptions({ restartRuntime }))
+
+      await expect(handlers.get('claude-subscription:sdk-install')?.({})).resolves.toMatchObject({
+        status: 'restarting'
+      })
+      await Promise.resolve()
+      await Promise.resolve()
+      expect(restartRuntime).toHaveBeenCalledTimes(1)
+    } finally {
+      rmSync(userDataDir, { recursive: true, force: true })
+    }
   })
 
   it('returns the current Runtime settings synchronization status', async () => {

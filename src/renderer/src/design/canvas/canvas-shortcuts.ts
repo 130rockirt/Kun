@@ -3,6 +3,7 @@ import { useCanvasShapeStore, withDescendants } from './canvas-shape-store'
 import { useCanvasSelectionStore } from './canvas-selection-store'
 import { pasteClipboardImageToCanvas } from './canvas-image-import'
 import { filterEditableRootShapeIds, filterEditableShapeIds } from './canvas-editability'
+import { deleteCanvasLayers } from './canvas-layer-actions'
 import { useCanvasUndoStore } from './canvas-undo-store'
 import { executeOps, type ShapeOp } from './shape-ops'
 import { isArtifactFrame, type CanvasDocument, type CanvasTool } from './canvas-types'
@@ -212,11 +213,10 @@ export function handleCanvasKeyDown(e: KeyboardEvent): boolean {
 
   if (!meta && (key === 'delete' || key === 'backspace')) {
     e.preventDefault()
-    const { clearSelection } = useCanvasSelectionStore.getState()
-    for (const id of editableSelectionRoots()) {
-      useCanvasShapeStore.getState().deleteShape(id)
-    }
-    clearSelection()
+    // Explicit delete intentionally covers locked/hidden layers too; the
+    // layers panel and this shortcut are the user's way to remove a layer,
+    // while lock/visibility only guard accidental geometry edits.
+    deleteCanvasLayers(useCanvasSelectionStore.getState().selectedIds)
     return true
   }
 

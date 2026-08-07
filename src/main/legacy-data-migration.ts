@@ -375,6 +375,55 @@ function rewriteDeep(value: unknown, pairs: readonly ReplacementPair[]): { value
 }
 
 /**
+ * Read-only startup preflight for the non-Runtime home mappings. It returns
+ * true only when the subsequent migration can mutate a directory or rewrite
+ * an existing settings document. Permanent compatibility links alone are a
+ * completed state and must not restart the Manager on every launch.
+ */
+export function legacyHomeDataMigrationRequiresExclusiveAccess(input: {
+  userDataPath: string
+  homeDir: string
+  mappings?: readonly HomeDataMigrationMapping[]
+}): boolean {
+  const mappings = input.mappings ?? HOME_DATA_MIGRATION_MAPPINGS
+  const rewriteSafe: HomeDataMigrationMapping[] = []
+  for (const mapping of mappings) {
+    const legacyPath = join(input.homeDir, ...mapping.legacySegments)
+    const nextPath = join(input.homeDir, ...mapping.nextSegments)
+    const legacyState = pathState(legacyPath)
+    if (legacyState === 'symlink' || legacyState === 'missing' || legacyState === 'other') {
+      rewriteSafe.push(mapping)
+      continue
+    }
+    const nextState = pathState(nextPath)
+    if (nextState === 'missing') return true
+    if (nextState === 'dir') {
+      try {
+        if (readdirSync(nextPath).length === 0) return true
+      } catch {
+        // The mutating path also fails closed when the directory is unreadable.
+      }
+    }
+  }
+  if (rewriteSafe.length === 0) return false
+
+  const pairs = buildReplacementPairs(input.homeDir, rewriteSafe)
+  for (const settingsPath of [
+    join(input.userDataPath, SETTINGS_FILE_NAME_NEW),
+    join(input.userDataPath, SETTINGS_FILE_NAME_LEGACY)
+  ]) {
+    const state = pathState(settingsPath)
+    if (state !== 'other' && state !== 'symlink') continue
+    try {
+      if (rewriteDeep(JSON.parse(readFileSync(settingsPath, 'utf8')), pairs).changed) return true
+    } catch {
+      // Invalid or unreadable settings are left to the settings-store recovery path.
+    }
+  }
+  return false
+}
+
+/**
  * 把 settings JSON 里指向已迁移目录的旧路径(绝对路径和 ~ 形式)改写
  * 成新路径。只处理传入的 rewriteSafe 映射;解析失败时不动文件,交给
  * settings-store 既有的 invalid-backup 流程。

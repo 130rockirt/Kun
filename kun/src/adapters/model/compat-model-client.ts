@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { ModelClient, ModelRequest, ModelStreamChunk } from '../../ports/model-client.js'
 import type { UsageSnapshot } from '../../contracts/usage.js'
+import { goalContextTexts } from '../../contracts/items.js'
 import type { ModelCapabilityMetadata } from '../../contracts/capabilities.js'
 import {
   startLlmDebugRoundIfEnabled,
@@ -53,9 +54,13 @@ import {
   createResponsesContentTracker,
   decodeResponsesStreamPayload
 } from './responses-stream-decoder.js'
-import { decodeAnthropicMessagesStreamPayload } from './anthropic-messages-stream-decoder.js'
+import {
+  createAnthropicThinkingState,
+  decodeAnthropicMessagesStreamPayload
+} from './anthropic-messages-stream-decoder.js'
 import { decodeCompatNonStreamingResponse } from './compat-non-streaming-decoder.js'
 import { IncrementalSseFrameBuffer } from './incremental-sse-frame-buffer.js'
+import { isDeepSeekHost } from './model-error-probe.js'
 
 export { redactUrlForLog } from './compat-http-diagnostics.js'
 
@@ -161,7 +166,6 @@ type CompatPostResult =
     }
 
 export const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 450_000
-const MIN_SAFE_STREAM_RECOVERY_ATTEMPTS = 1
 
 function isCodexEndpoint(baseUrl: string): boolean {
   return baseUrl.includes('chatgpt.com/backend-api/codex')
@@ -219,7 +223,8 @@ export class CompatModelClient implements ModelClient {
         name: tool.name,
         ...(tool.providerKind ? { providerKind: tool.providerKind } : {}),
         ...(tool.providerId ? { providerId: tool.providerId } : {})
-      }))
+      })),
+      redactedRequestValues: goalContextTexts(request.history)
     }, warnModelTraceFailure)
     if (!round) {
       yield* this.streamInner(request, null)
@@ -724,6 +729,7 @@ export class CompatModelClient implements ModelClient {
         this.config.baseUrl,
         this.modelReasoningFor(model)
       ),
+      strictThinkingToolReplay: isDeepSeekHost(this.config.baseUrl),
       supportsImages: this.modelSupportsImageInput(model)
     })
   }
@@ -766,10 +772,11 @@ export class CompatModelClient implements ModelClient {
     let usedRetryAttempts = input.usedRetryAttempts
     let emittedReasoning = false
     let committedOutput = false
-    const maxRetryAttempts = Math.max(
-      MIN_SAFE_STREAM_RECOVERY_ATTEMPTS,
-      input.retry.maxAttempts
-    )
+    // maxAttempts counts retries after the initial request everywhere, and
+    // `0` is an explicit "no automatic transport retries" setting. Unlike the
+    // older code, this stream-recovery budget must not sneak in a minimum of
+    // one retry when the operator disabled retries.
+    const maxRetryAttempts = input.retry.maxAttempts
 
     while (true) {
       if (!response.body) {
@@ -798,12 +805,27 @@ export class CompatModelClient implements ModelClient {
       }
 
       if (!recoverableError) return
-      if (
-        input.request.abortSignal.aborted ||
-        committedOutput ||
-        usedRetryAttempts >= maxRetryAttempts
-      ) {
+      if (input.request.abortSignal.aborted) {
         yield recoverableError
+        return
+      }
+      if (committedOutput) {
+        // Final assistant text, tool calls, and generated images are commit
+        // points: replaying the identical request could append a different
+        // answer or duplicate a side effect. Surface the transport failure
+        // with an explicit reason (while keeping the original code, which
+        // consumers already map) instead of silently retrying.
+        yield {
+          ...recoverableError,
+          message: `${recoverableError.message} (stream recovery was blocked because final text, a tool call, or generated output had already started)`
+        }
+        return
+      }
+      if (usedRetryAttempts >= maxRetryAttempts) {
+        yield {
+          ...recoverableError,
+          message: `${recoverableError.message} (all ${maxRetryAttempts} configured stream retries were exhausted)`
+        }
         return
       }
 
@@ -832,7 +854,11 @@ export class CompatModelClient implements ModelClient {
             retried.failure.failoverAllowed === false ||
             usedRetryAttempts >= maxRetryAttempts
           ) {
-            yield { kind: 'error', message: retried.message, failure: retried.failure }
+            yield {
+              kind: 'error',
+              message: `${retried.message} (all ${maxRetryAttempts} configured stream retries were exhausted)`,
+              failure: retried.failure
+            }
             return
           }
           const networkRetryAttempt = usedRetryAttempts + 1
@@ -957,6 +983,7 @@ export class CompatModelClient implements ModelClient {
     const pendingByIndex = new Map<number, string>()
     const completedToolCalls = new Set<string>()
     const responsesContentTracker = createResponsesContentTracker()
+    const anthropicThinkingState = createAnthropicThinkingState()
     let usage: UsageSnapshot | null = null
     // The Responses protocol may repeat final output in response.completed;
     // a boolean is sufficient to suppress that duplicate. Retaining the full
@@ -1046,6 +1073,7 @@ export class CompatModelClient implements ModelClient {
             completedToolCalls,
             sawTextDelta,
             responsesContentTracker,
+            anthropicThinkingState,
             endpointFormat,
             model,
             budget
@@ -1151,6 +1179,7 @@ export class CompatModelClient implements ModelClient {
     completedToolCalls: Set<string>,
     sawTextDelta: boolean,
     responsesContentTracker: import('./responses-stream-decoder.js').ResponsesContentTracker,
+    anthropicThinkingState: import('./anthropic-messages-stream-decoder.js').AnthropicThinkingState,
     endpointFormat: ModelEndpointFormat,
     model: string,
     budget: ModelStreamResourceBudget
@@ -1186,6 +1215,7 @@ export class CompatModelClient implements ModelClient {
         pendingArguments,
         pendingByIndex,
         completedToolCalls,
+        anthropicThinkingState,
         sawTextDelta,
         model,
         budget
@@ -1229,6 +1259,7 @@ export class CompatModelClient implements ModelClient {
     pendingArguments: Map<string, PendingToolCall>,
     pendingByIndex: Map<number, string>,
     completedToolCalls: Set<string>,
+    thinkingState: import('./anthropic-messages-stream-decoder.js').AnthropicThinkingState,
     sawTextDelta: boolean,
     model: string,
     budget: ModelStreamResourceBudget
@@ -1238,6 +1269,7 @@ export class CompatModelClient implements ModelClient {
       pendingArguments,
       pendingByIndex,
       completedToolCalls,
+      thinkingState,
       sawTextDelta,
       budget,
       normalizeUsage: (usage) => this.mapUsage(usage, model),

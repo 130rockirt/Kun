@@ -74,6 +74,49 @@ describe('Media gen tool provider', () => {
     expect(video.diagnostics[0].reason).toMatch(/missing apiKey/)
   })
 
+  it('keeps provider-backed media available and resolves rotated credentials per request', async () => {
+    const authorization: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (_url: string | URL, init?: RequestInit) => {
+      authorization.push(new Headers(init?.headers).get('authorization') ?? '')
+      return new Response(Buffer.from('speech'), {
+        status: 200,
+        headers: { 'content-type': 'audio/mpeg' }
+      })
+    }))
+    let currentCredential = 'generation-a'
+    const resolveCredential = vi.fn(async () => ({ apiKey: currentCredential }))
+    const config = KunCapabilitiesConfig.parse({
+      speechGen: {
+        enabled: true,
+        providerId: 'registry-speech',
+        baseUrl: 'https://media.example.test/v1',
+        model: 'speech-test'
+      }
+    })
+    const built = buildSpeechGenToolProviders(config.speechGen, {
+      resolveCredential,
+      nowIso: fixedNow
+    })
+    const host = new LocalToolHost({ registry: new CapabilityRegistry(built.providers) })
+
+    expect(built.available).toBe(true)
+    await host.execute({
+      callId: 'call_generation_a',
+      toolName: 'generate_speech',
+      arguments: { text: 'first' }
+    }, buildContext())
+    currentCredential = 'generation-b'
+    await host.execute({
+      callId: 'call_generation_b',
+      toolName: 'generate_speech',
+      arguments: { text: 'second' }
+    }, buildContext())
+
+    expect(resolveCredential).toHaveBeenNthCalledWith(1, 'registry-speech')
+    expect(resolveCredential).toHaveBeenNthCalledWith(2, 'registry-speech')
+    expect(authorization).toEqual(['Bearer generation-a', 'Bearer generation-b'])
+  })
+
   it('generates speech, music, and video files through configured media tools', async () => {
     const speechCalls: unknown[] = []
     const musicCalls: unknown[] = []

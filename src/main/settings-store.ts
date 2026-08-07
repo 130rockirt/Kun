@@ -64,7 +64,10 @@ export type SettingsCredentialMigrationResult = {
 export type SettingsCredentialMigration = {
   prepare: (
     settings: AppSettingsV1,
-    options?: { replaceCommitted?: boolean }
+    options?: {
+      replaceCommitted?: boolean
+      previousSettings?: AppSettingsV1
+    }
   ) => Promise<SettingsCredentialMigrationResult>
   /**
    * Repairs an already-migrated OAuth source whose protected value was
@@ -312,6 +315,12 @@ function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
   return typeof error === 'object' && error !== null
 }
 
+function isDocumentRevisionConflict(error: unknown): boolean {
+  if (!(error instanceof Error) || error.name !== 'ManagerRevisionConflictError') return false
+  const currentRevision = (error as Error & { currentRevision?: unknown }).currentRevision
+  return Number.isSafeInteger(currentRevision) && Number(currentRevision) >= 0
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
@@ -388,14 +397,14 @@ async function readLegacyCredentialSettingsBackup(path: string): Promise<AppSett
 }
 
 async function replaceInvalidSettingsWithDefaults(
-  store: JsonSettingsStore,
+  saveDefaults: (defaults: AppSettingsV1) => Promise<void>,
   sourcePath: string,
   raw: string,
   reason: string
 ): Promise<AppSettingsV1> {
   const backupPath = await writeInvalidSettingsBackup(sourcePath, raw)
   const defaults = await loadDefaultSettings()
-  await store.save(defaults)
+  await saveDefaults(defaults)
   if (backupPath) {
     console.warn(
       `[kun-gui] Invalid settings were replaced with defaults (${reason}). Backup: ${backupPath}`
@@ -426,10 +435,43 @@ async function readSettingsFileWithCompatibility(
   return null
 }
 
+export function applySettingsPatchToSnapshot(
+  current: AppSettingsV1,
+  partial: AppSettingsPatch
+): AppSettingsV1 {
+  const { agents: agentsPatch, provider: providerPatch, ...restPatch } = partial
+  return normalizeStoredSettings({
+    ...applyKunRuntimePatch(current, agentsPatch?.kun),
+    ...restPatch,
+    provider: mergeModelProviderSettings(current.provider, providerPatch),
+    log: { ...current.log, ...(partial.log ?? {}) },
+    checkpointCleanup: normalizeCheckpointCleanupSettings({
+      ...current.checkpointCleanup,
+      ...(partial.checkpointCleanup ?? {})
+    }),
+    notifications: { ...current.notifications, ...(partial.notifications ?? {}) },
+    appBehavior: mergeAppBehaviorSettings(current.appBehavior, partial.appBehavior),
+    keyboardShortcuts: normalizeKeyboardShortcuts({
+      bindings: {
+        ...current.keyboardShortcuts.bindings,
+        ...(partial.keyboardShortcuts?.bindings ?? {})
+      }
+    }),
+    write: mergeWriteSettings(current.write, partial.write),
+    claw: mergeClawSettings(current.claw, partial.claw),
+    schedule: mergeScheduleSettings(current.schedule, partial.schedule),
+    workflow: mergeWorkflowSettings(current.workflow, partial.workflow),
+    design: mergeDesignSettings(current.design, partial.design),
+    terminal: mergeTerminalSettings(current.terminal, partial.terminal),
+    guiUpdate: { ...current.guiUpdate, ...(partial.guiUpdate ?? {}) }
+  })
+}
+
 export class JsonSettingsStore {
   private path: string
   private cache: AppSettingsV1 | null = null
   private documentRevision: number | undefined
+  private operationTail: Promise<void> = Promise.resolve()
 
   constructor(
     userDataPath: string,
@@ -438,7 +480,11 @@ export class JsonSettingsStore {
     this.path = join(userDataPath, SETTINGS_FILE_NAME)
   }
 
-  async load(): Promise<AppSettingsV1> {
+  load(): Promise<AppSettingsV1> {
+    return this.enqueueOperation(() => this.loadOnce())
+  }
+
+  private async loadOnce(): Promise<AppSettingsV1> {
     const document = this.options.documentBackend
       ? await this.options.documentBackend.read()
       : undefined
@@ -470,14 +516,24 @@ export class JsonSettingsStore {
       parsed = JSON.parse(raw)
     } catch (error) {
       if (error instanceof SyntaxError) {
-        return replaceInvalidSettingsWithDefaults(this, sourcePath, raw, 'invalid JSON')
+        return replaceInvalidSettingsWithDefaults(
+          (defaults) => this.saveOnce(defaults),
+          sourcePath,
+          raw,
+          'invalid JSON'
+        )
       }
       const message = error instanceof Error ? error.message : String(error)
       throw new Error(`Failed to parse settings file ${sourcePath}: ${message}`, { cause: error })
     }
 
     if (!isRecord(parsed)) {
-      return replaceInvalidSettingsWithDefaults(this, sourcePath, raw, 'top-level value is not an object')
+      return replaceInvalidSettingsWithDefaults(
+        (defaults) => this.saveOnce(defaults),
+        sourcePath,
+        raw,
+        'top-level value is not an object'
+      )
     }
 
     const persistRuntimeTuningDefaultsMigration = (() => {
@@ -492,9 +548,9 @@ export class JsonSettingsStore {
     if (this.options.credentialMigration && hasLegacyProviderPlaintext(prepared)) {
       const backupPath = await writeLegacyCredentialSettingsBackup(sourcePath, raw)
       if (!backupPath) {
-        console.warn('[kun-gui] Legacy credential migration deferred because the settings backup could not be written.')
-        this.cache = prepared
-        return this.cache
+        throw new Error(
+          'Legacy credential migration was blocked because a protected settings backup could not be written'
+        )
       }
     }
     const migration = await this.prepareCredentialMigration(prepared, false)
@@ -506,7 +562,7 @@ export class JsonSettingsStore {
             '[kun-gui] Settings compatibility rewrite deferred because protected credential storage is unavailable.'
           )
         } else {
-          await this.save(prepared)
+          await this.saveOnce(prepared)
         }
       }
       return this.cache
@@ -525,11 +581,10 @@ export class JsonSettingsStore {
         await this.persistSettings(migration.persistedSettings)
       } catch (error) {
         await migration.rollback().catch(() => undefined)
-        console.warn('[kun-gui] Legacy credential migration settings commit failed; plaintext settings remain authoritative.', {
-          message: error instanceof Error ? error.message : String(error)
-        })
-        this.cache = prepared
-        return this.cache
+        throw new Error(
+          'Legacy credential migration could not commit secret-free settings',
+          { cause: error }
+        )
       }
     }
     await migration.commit().catch((error) => {
@@ -541,7 +596,11 @@ export class JsonSettingsStore {
     return this.cache
   }
 
-  async save(data: AppSettingsV1): Promise<void> {
+  save(data: AppSettingsV1): Promise<void> {
+    return this.enqueueOperation(() => this.saveOnce(data))
+  }
+
+  private async saveOnce(data: AppSettingsV1, expectedRevision = this.documentRevision): Promise<void> {
     const normalized = normalizeStoredSettings(data)
     await ensureManagedWorkspaceRootsExist(normalized)
     const prepared = normalized
@@ -564,13 +623,13 @@ export class JsonSettingsStore {
     }
     const migration = await this.prepareCredentialMigration(prepared, true)
     if (migration === undefined) {
-      await this.persistSettings(prepared)
+      await this.persistSettings(prepared, expectedRevision)
       this.cache = prepared
       return
     }
     if (migration === null) throw new Error('Legacy credential migration is unavailable')
     try {
-      await this.persistSettings(migration.persistedSettings)
+      await this.persistSettings(migration.persistedSettings, expectedRevision)
     } catch (error) {
       await migration.rollback().catch(() => undefined)
       throw error
@@ -583,36 +642,74 @@ export class JsonSettingsStore {
     this.cache = migration.runtimeSettings
   }
 
-  async patch(partial: AppSettingsPatch): Promise<AppSettingsV1> {
-    const cur = await this.load()
-    const { agents: agentsPatch, provider: providerPatch, ...restPatch } = partial
-    const next = normalizeStoredSettings({
-      ...applyKunRuntimePatch(cur, agentsPatch?.kun),
-      ...restPatch,
-      provider: mergeModelProviderSettings(cur.provider, providerPatch),
-      log: { ...cur.log, ...(partial.log ?? {}) },
-      checkpointCleanup: normalizeCheckpointCleanupSettings({
-        ...cur.checkpointCleanup,
-        ...(partial.checkpointCleanup ?? {})
-      }),
-      notifications: { ...cur.notifications, ...(partial.notifications ?? {}) },
-      appBehavior: mergeAppBehaviorSettings(cur.appBehavior, partial.appBehavior),
-      keyboardShortcuts: normalizeKeyboardShortcuts({
-        bindings: {
-          ...cur.keyboardShortcuts.bindings,
-          ...(partial.keyboardShortcuts?.bindings ?? {})
-        }
-      }),
-      write: mergeWriteSettings(cur.write, partial.write),
-      claw: mergeClawSettings(cur.claw, partial.claw),
-      schedule: mergeScheduleSettings(cur.schedule, partial.schedule),
-      workflow: mergeWorkflowSettings(cur.workflow, partial.workflow),
-      design: mergeDesignSettings(cur.design, partial.design),
-      terminal: mergeTerminalSettings(cur.terminal, partial.terminal),
-      guiUpdate: { ...cur.guiUpdate, ...(partial.guiUpdate ?? {}) }
+  patch(partial: AppSettingsPatch): Promise<AppSettingsV1> {
+    return this.enqueueOperation(() => this.mutateWithRevisionRetry((current) =>
+      applySettingsPatchToSnapshot(current, partial)
+    ))
+  }
+
+  /**
+   * Atomically derive and persist one snapshot from the latest settings.
+   * The mutation may be evaluated twice after a Manager revision conflict, so
+   * it must not perform external side effects.
+   */
+  update(
+    mutation: (current: AppSettingsV1) => AppSettingsV1 | Promise<AppSettingsV1>
+  ): Promise<AppSettingsV1> {
+    return this.enqueueOperation(() => this.mutateWithRevisionRetry(mutation))
+  }
+
+  /** Atomically re-check a condition after any Manager revision retry. */
+  updateIf(
+    predicate: (current: AppSettingsV1) => boolean,
+    mutation: (current: AppSettingsV1) => AppSettingsV1 | Promise<AppSettingsV1>
+  ): Promise<{ settings: AppSettingsV1; applied: boolean }> {
+    return this.enqueueOperation(async () => {
+      let applied = false
+      const settings = await this.mutateWithRevisionRetry(async (current) => {
+        applied = false
+        if (!predicate(current)) return current
+        applied = true
+        return mutation(current)
+      })
+      return { settings, applied }
     })
-    await this.save(next)
-    return this.cache ?? next
+  }
+
+  private enqueueOperation<Value>(operation: () => Promise<Value>): Promise<Value> {
+    const result = this.operationTail.then(
+      operation,
+      operation
+    )
+    this.operationTail = result.then(() => undefined, () => undefined)
+    return result
+  }
+
+  private async mutateWithRevisionRetry(
+    mutation: (current: AppSettingsV1) => AppSettingsV1 | Promise<AppSettingsV1>
+  ): Promise<AppSettingsV1> {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const current = await this.loadOnce()
+      const expectedRevision = this.documentRevision
+      const next = await mutation(current)
+      if (next === current) return current
+      try {
+        await this.saveOnce(next, expectedRevision)
+        return this.cache ?? next
+      } catch (error) {
+        if (
+          attempt === 0 &&
+          this.options.documentBackend &&
+          isDocumentRevisionConflict(error)
+        ) {
+          this.cache = null
+          this.documentRevision = undefined
+          continue
+        }
+        throw error
+      }
+    }
+    throw new Error('Settings mutation revision retry exhausted')
   }
 
   private async prepareCredentialMigration(
@@ -621,9 +718,18 @@ export class JsonSettingsStore {
   ): Promise<SettingsCredentialMigrationResult | null | undefined> {
     if (!this.options.credentialMigration) return undefined
     try {
-      return await this.options.credentialMigration.prepare(settings, { replaceCommitted })
+      return await this.options.credentialMigration.prepare(settings, {
+        replaceCommitted,
+        ...(replaceCommitted && this.cache ? { previousSettings: this.cache } : {})
+      })
     } catch (error) {
       if (replaceCommitted) throw error
+      if (hasLegacyProviderPlaintext(settings)) {
+        throw new Error(
+          'Legacy provider credentials could not be moved to protected storage',
+          { cause: error }
+        )
+      }
       console.warn('[kun-gui] Legacy credential migration is unavailable; retaining compatibility settings.', {
         message: error instanceof Error ? error.message : String(error)
       })
@@ -660,10 +766,13 @@ export class JsonSettingsStore {
       hasLegacyProviderPlaintext(settings)
   }
 
-  private async persistSettings(settings: AppSettingsV1): Promise<void> {
+  private async persistSettings(
+    settings: AppSettingsV1,
+    expectedRevision = this.documentRevision
+  ): Promise<void> {
     const serialized = serializeSettingsForDisk(settings)
     if (this.options.documentBackend) {
-      const revision = this.documentRevision ?? (await this.options.documentBackend.read()).revision
+      const revision = expectedRevision ?? (await this.options.documentBackend.read()).revision
       const committed = await this.options.documentBackend.write(revision, serialized)
       this.documentRevision = committed.revision
       return

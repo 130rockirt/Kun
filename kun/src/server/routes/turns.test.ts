@@ -3,6 +3,8 @@ import { InMemoryEventBus } from '../../adapters/in-memory-event-bus.js'
 import { InMemorySessionStore } from '../../adapters/in-memory-session-store.js'
 import { InMemoryThreadStore } from '../../adapters/in-memory-thread-store.js'
 import { createThreadRecord } from '../../domain/thread.js'
+import { createTurnRecord } from '../../domain/turn.js'
+import { makeGoalContextItem, makeUserItem } from '../../domain/item.js'
 import { ContextCompactor } from '../../loop/context-compactor.js'
 import { InflightTracker } from '../../loop/inflight-tracker.js'
 import { SteeringQueue } from '../../loop/steering-queue.js'
@@ -10,7 +12,31 @@ import { SequentialIdGenerator } from '../../ports/id-generator.js'
 import { RuntimeEventRecorder } from '../../services/runtime-event-recorder.js'
 import { TurnService } from '../../services/turn-service.js'
 import type { JsonResponse } from '../response.js'
-import { rewindThread, startTurn, steerTurn } from './turns.js'
+import { getTurn, rewindThread, startTurn, steerTurn } from './turns.js'
+
+describe('GET /v1/threads/:id/turns/:turnId public-item boundary', () => {
+  it('does not expose a legacy internal goal context from the raw turn mirror', async () => {
+    const turn = createTurnRecord({
+      id: 'turn_legacy_goal_context', threadId: 'thr_legacy_goal_context', prompt: 'finish', status: 'completed'
+    })
+    const user = makeUserItem({ id: 'item_user', threadId: turn.threadId, turnId: turn.id, text: 'finish' })
+    const context = makeGoalContextItem({
+      id: 'item_goal_context',
+      threadId: turn.threadId,
+      turnId: turn.id,
+      text: 'internal goal instructions must never be public'
+    })
+    const turns = {
+      getTurn: async () => ({ ...turn, items: [user, context] })
+    } as unknown as TurnService
+
+    const response = await getTurn(turns, turn.threadId, turn.id)
+    const body = JSON.parse(response.body)
+
+    expect(body.items.map((item: { id: string }) => item.id)).toEqual([user.id])
+    expect(JSON.stringify(body)).not.toContain('internal goal instructions')
+  })
+})
 
 describe('POST /v1/threads/:id/turns/:turnId/steer execution', () => {
   it('starts the runner after accepted steering so a suspended Graph planning turn can continue', async () => {

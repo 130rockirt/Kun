@@ -11,6 +11,7 @@ import { CapabilityRegistry } from '../../adapters/tool/capability-registry.js'
 import { LocalToolHost } from '../../adapters/tool/local-tool-host.js'
 import { InMemoryApprovalGate } from '../../adapters/in-memory-approval-gate.js'
 import { InMemoryUserInputGate } from '../../adapters/in-memory-user-input-gate.js'
+import { goalContextKey } from '../../loop/continuation-instructions.js'
 import type { TurnRunOutcome } from '../../loop/turn-execution-types.js'
 import {
   DelegatedSessionCoordinator,
@@ -400,18 +401,22 @@ describe('createAgentSdkRuntime handlesProvider', () => {
 })
 
 describe('createAgentSdkRuntime turn context', () => {
-  const credentialContext = async (options: {
+  type CredentialContextOptions = {
     providerId?: string
     providerToken?: string
     defaultToken?: string
-  }): Promise<{
+    credentialSourceId?: string
+    resolveCredentialSource?: (sourceId: string) => Promise<{ apiKey: string } | null>
+  }
+  type CredentialContext = {
     oauthToken?: string
     actingModelRoute?: {
       model: string
       providerId?: string
       accountId?: string
     }
-  } | null> => {
+  } | null
+  const credentialContextLoader = (options: CredentialContextOptions): (() => Promise<CredentialContext>) => {
     const runtime = createAgentSdkRuntime({
       registry: CapabilityRegistry.fromLocalTools([]),
       turns: { updateTurnMetadata: async () => undefined } as never,
@@ -446,14 +451,23 @@ describe('createAgentSdkRuntime turn context', () => {
         ? {
             [options.providerId]: {
               kind: 'agent-sdk',
-              apiKey: options.providerToken ?? ''
+              apiKey: options.providerToken ?? '',
+              ...(options.credentialSourceId
+                ? { credentialSourceId: options.credentialSourceId }
+                : {})
             }
           } as never
         : {},
       agentSdkProviderIds: new Set(options.providerId ? [options.providerId] : []),
       defaultApprovalPolicy: 'auto',
       defaultIsAgentSdk: !options.providerId,
-      defaultToken: options.defaultToken
+      defaultToken: options.defaultToken,
+      ...(options.credentialSourceId && !options.providerId
+        ? { defaultCredentialSourceId: options.credentialSourceId }
+        : {}),
+      ...(options.resolveCredentialSource
+        ? { resolveCredentialSource: options.resolveCredentialSource }
+        : {})
     })
     const deps = (runtime as unknown as {
       deps: {
@@ -470,8 +484,10 @@ describe('createAgentSdkRuntime turn context', () => {
         } | null>
       }
     }).deps
-    return deps.loadTurnContext('th', 'tn')
+    return () => deps.loadTurnContext('th', 'tn')
   }
+  const credentialContext = (options: CredentialContextOptions): Promise<CredentialContext> =>
+    credentialContextLoader(options)()
 
   test('keeps an explicit Claude provider on ambient login instead of inheriting the default token', async () => {
     const context = await credentialContext({
@@ -490,6 +506,111 @@ describe('createAgentSdkRuntime turn context', () => {
     expect(context?.actingModelRoute).toMatchObject({
       providerId: 'default'
     })
+  })
+
+  test('persists an active goal context before assembling delegated history', async () => {
+    const createdAt = '2026-08-06T00:00:00.000Z'
+    const goal = {
+      threadId: 'th',
+      objective: 'Finish the migration safely.',
+      status: 'active' as const,
+      tokenBudget: 10_000,
+      tokensUsed: 250,
+      timeUsedSeconds: 12,
+      createdAt,
+      updatedAt: createdAt
+    }
+    const sessionItems = [{
+      id: 'item_user',
+      turnId: 'tn',
+      threadId: 'th',
+      kind: 'user_message',
+      role: 'user',
+      status: 'completed',
+      text: 'continue the migration',
+      createdAt
+    }]
+    const loadItems = vi.fn(async () => sessionItems)
+    const ensureGoalContext = vi.fn(async () => {
+      sessionItems.push({
+        id: 'item_tn_goal_context',
+        turnId: 'tn',
+        threadId: 'th',
+        kind: 'goal_context',
+        role: 'system',
+        status: 'completed',
+        goalKey: goalContextKey(goal)!,
+        text: 'Finish the migration safely.',
+        createdAt
+      } as never)
+    })
+    const runtime = createAgentSdkRuntime({
+      registry: CapabilityRegistry.fromLocalTools([]),
+      turns: {
+        updateTurnMetadata: async () => undefined,
+        ensureGoalContext
+      } as never,
+      sessionStore: { loadItems } as never,
+      threadStore: {
+        get: async () => threadWith({
+          goal
+        })
+      } as never,
+      events: {} as never,
+      ids: { next: (prefix) => prefix },
+      prefix: { systemPrompt: 'Kun system prompt' },
+      providerConfigs: {},
+      agentSdkProviderIds: new Set(),
+      defaultApprovalPolicy: 'auto',
+      defaultIsAgentSdk: true
+    })
+    const deps = (runtime as unknown as {
+      deps: {
+        loadTurnContext(threadId: string, turnId: string): Promise<{
+          historyTranscript?: string
+          contextInstructions?: string[]
+          redactedRequestValues?: string[]
+        } | null>
+      }
+    }).deps
+
+    const context = await deps.loadTurnContext('th', 'tn')
+
+    expect(ensureGoalContext).toHaveBeenCalledWith('th', 'tn', undefined)
+    expect(loadItems).toHaveBeenCalledTimes(2)
+    expect(context?.historyTranscript).toContain('[active goal] Finish the migration safely.')
+    expect(context?.redactedRequestValues).toEqual(['Finish the migration safely.'])
+    expect(context?.contextInstructions?.join('\n')).not.toContain(
+      'Continue working toward the active thread goal.'
+    )
+  })
+
+  test('re-resolves a managed Claude credential for every turn on the same Runtime', async () => {
+    let authoritativeToken = ''
+    const resolveCredentialSource = vi.fn(async (sourceId: string) =>
+      authoritativeToken ? { apiKey: authoritativeToken } : null)
+    const load = credentialContextLoader({
+      providerId: 'claude-subscription',
+      providerToken: 'sk-ant-oat01-stale-constructor-token',
+      credentialSourceId: 'model-connection:claude-subscription',
+      resolveCredentialSource
+    })
+
+    await expect(load()).rejects.toMatchObject({
+      code: 'agent_sdk_credential_unavailable'
+    })
+    authoritativeToken = 'sk-ant-oat01-authoritative-token'
+    await expect(load()).resolves.toMatchObject({
+      oauthToken: 'sk-ant-oat01-authoritative-token'
+    })
+    expect(resolveCredentialSource).toHaveBeenNthCalledWith(
+      1,
+      'model-connection:claude-subscription'
+    )
+    expect(resolveCredentialSource).toHaveBeenNthCalledWith(
+      2,
+      'model-connection:claude-subscription'
+    )
   })
 
   test('rejects an invalid explicit token without disclosing it', async () => {

@@ -293,6 +293,13 @@ export class WorkflowRuntime {
     })
   }
 
+  private async loadSettings(): Promise<AppSettingsV1> {
+    const settings = await this.deps.store.load()
+    return this.deps.withModelCredentials
+      ? this.deps.withModelCredentials(settings)
+      : settings
+  }
+
   sync(settings: AppSettingsV1): void {
     if (this.stopping) return
     this.startScheduler()
@@ -352,7 +359,7 @@ export class WorkflowRuntime {
 
   private async handleWebhookRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
     try {
-      const settings = await this.deps.store.load()
+      const settings = await this.loadSettings()
       const pathname = new URL(req.url ?? '/', 'http://127.0.0.1').pathname
       const secret = settings.workflow.webhookSecret.trim()
       if (secret) {
@@ -471,7 +478,7 @@ export class WorkflowRuntime {
     input?: unknown,
     workspaceOverride?: string
   ): Promise<{ ok: boolean; status: WorkflowRunStatus; message: string; output: string; runId: string }> {
-    const settings = await this.deps.store.load()
+    const settings = await this.loadSettings()
     const lower = idOrName.toLowerCase()
     const workflow = settings.workflow.workflows.find(
       (item) => item.enabled && item.callableByAgent && (item.id === idOrName || item.name.toLowerCase() === lower)
@@ -495,7 +502,7 @@ export class WorkflowRuntime {
     if (this.hookRunActive) {
       return { ok: true, status: 'success', message: 'skipped (hook already running)', output: '', runId: '', skipped: true }
     }
-    const settings = await this.deps.store.load()
+    const settings = await this.loadSettings()
     const workflow = settings.workflow.workflows.find((item) => item.id === workflowId)
     if (!workflow) {
       return { ok: false, status: 'error', message: `Hook workflow "${workflowId}" not found.`, output: '', runId: '', skipped: false }
@@ -515,7 +522,7 @@ export class WorkflowRuntime {
     input?: unknown,
     workspaceOverride?: string
   ): Promise<{ ok: boolean; status: WorkflowRunStatus; message: string; output: string; runId: string }> {
-    const settings = await this.deps.store.load()
+    const settings = await this.loadSettings()
     const lower = idOrName.toLowerCase()
     const workflow = settings.workflow.workflows.find(
       (item) => item.enabled && (item.id === idOrName || item.name.toLowerCase() === lower)
@@ -556,7 +563,7 @@ export class WorkflowRuntime {
     const runId = randomUUID()
     const initialPayload = coerceInputToPayload(inputSchema, input)
     const result = await this.runWorkflowInternal(workflow, trigger.id, 'agent', runId, initialPayload, workspaceOverride)
-    const after = await this.deps.store.load()
+    const after = await this.loadSettings()
     const run = after.workflow.workflows.find((item) => item.id === workflow.id)?.runs.find((entry) => entry.id === runId)
     const status: WorkflowRunStatus = 'status' in result ? result.status : 'error'
     const output = this.pickRunOutput(workflow, run) || result.message
@@ -585,7 +592,7 @@ export class WorkflowRuntime {
 
   async runWorkflow(workflowId: string, input?: unknown): Promise<WorkflowRunResult> {
     if (this.stopping) return { ok: false, message: 'Workflow runtime is stopping.' }
-    const settings = await this.deps.store.load()
+    const settings = await this.loadSettings()
     const workflow = settings.workflow.workflows.find((item) => item.id === workflowId)
     if (!workflow) return { ok: false, message: 'Workflow not found.' }
     if (this.runCoordinator.isRunning(workflowId)) return { ok: false, message: 'Workflow is already running.' }
@@ -608,7 +615,7 @@ export class WorkflowRuntime {
 
   async runSingleNode(workflowId: string, nodeId: string): Promise<WorkflowRunResult> {
     if (this.stopping) return { ok: false, message: 'Workflow runtime is stopping.' }
-    const settings = await this.deps.store.load()
+    const settings = await this.loadSettings()
     const workflow = settings.workflow.workflows.find((item) => item.id === workflowId)
     if (!workflow) return { ok: false, message: 'Workflow not found.' }
     const node = workflow.nodes.find((item) => item.id === nodeId)
@@ -643,7 +650,7 @@ export class WorkflowRuntime {
   /** Run a single node in isolation against a mock upstream payload, returning its result (not persisted). */
   async testNode(workflowId: string, nodeId: string, mockJson: string): Promise<WorkflowNodeTestResult> {
     if (this.stopping) return { ok: false, message: 'Workflow runtime is stopping.' }
-    const settings = await this.deps.store.load()
+    const settings = await this.loadSettings()
     const workflow = settings.workflow.workflows.find((item) => item.id === workflowId)
     if (!workflow) return { ok: false, message: 'Workflow not found.' }
     const node = workflow.nodes.find((item) => item.id === nodeId)
@@ -724,10 +731,10 @@ export class WorkflowRuntime {
 
   private async tick(): Promise<void> {
     if (this.stopping) return
-    const settings = await this.deps.store.load()
+    const settings = await this.loadSettings()
     if (!settings.workflow.enabled) return
     await this.ensureNextRuns(settings)
-    const fresh = await this.deps.store.load()
+    const fresh = await this.loadSettings()
     const now = Date.now()
     for (const workflow of fresh.workflow.workflows) {
       if (!workflow.enabled || this.runCoordinator.isRunning(workflow.id)) continue
@@ -739,46 +746,42 @@ export class WorkflowRuntime {
     }
   }
 
-  private async ensureNextRuns(settings: AppSettingsV1): Promise<void> {
+  private async ensureNextRuns(_settings: AppSettingsV1): Promise<void> {
     if (this.stopping) return
-    if (!settings.workflow.enabled) {
-      this.syncPowerSaveBlocker(settings)
-      return
-    }
-    let changed = false
     const now = new Date()
-    const workflows = settings.workflow.workflows.map((workflow) => {
-      const wasInterrupted = workflow.lastStatus === 'running' && !this.runCoordinator.isRunning(workflow.id)
-      const scheduled = workflowHasScheduleTrigger(workflow)
-      if (!workflow.enabled || !scheduled || this.runCoordinator.isRunning(workflow.id)) {
-        if (!wasInterrupted) return workflow
+    const saved = await this.deps.store.update((current) => {
+      if (!current.workflow.enabled) return current
+      let changed = false
+      const workflows = current.workflow.workflows.map((workflow) => {
+        const wasInterrupted = workflow.lastStatus === 'running' && !this.runCoordinator.isRunning(workflow.id)
+        const scheduled = workflowHasScheduleTrigger(workflow)
+        if (!workflow.enabled || !scheduled || this.runCoordinator.isRunning(workflow.id)) {
+          if (!wasInterrupted) return workflow
+          changed = true
+          return {
+            ...workflow,
+            lastStatus: 'error' as const,
+            lastMessage: 'Workflow was interrupted before completion.',
+            updatedAt: now.toISOString()
+          }
+        }
+        if (workflow.nextRunAt && !wasInterrupted) return workflow
         changed = true
         return {
           ...workflow,
-          lastStatus: 'error' as const,
-          lastMessage: 'Workflow was interrupted before completion.',
-          updatedAt: now.toISOString()
+          nextRunAt: computeWorkflowNextRunAt(workflow, now),
+          ...(wasInterrupted
+            ? {
+                lastStatus: 'error' as const,
+                lastMessage: 'Workflow was interrupted before completion.',
+                updatedAt: now.toISOString()
+              }
+            : {})
         }
-      }
-      if (workflow.nextRunAt && !wasInterrupted) return workflow
-      changed = true
-      return {
-        ...workflow,
-        nextRunAt: computeWorkflowNextRunAt(workflow, now),
-        ...(wasInterrupted
-          ? {
-              lastStatus: 'error' as const,
-              lastMessage: 'Workflow was interrupted before completion.',
-              updatedAt: now.toISOString()
-            }
-          : {})
-      }
+      })
+      if (!changed) return current
+      return { ...current, workflow: { ...current.workflow, workflows } }
     })
-    if (!changed) {
-      this.syncPowerSaveBlocker(settings)
-      return
-    }
-    const saved = await this.deps.store.patch({ workflow: { ...settings.workflow, workflows } })
     this.syncPowerSaveBlocker(saved)
   }
 
@@ -787,11 +790,12 @@ export class WorkflowRuntime {
     updater: (workflow: WorkflowV1) => WorkflowV1
   ): Promise<AppSettingsV1> {
     const update = this.workflowUpdateTail.then(async () => {
-      const settings = await this.deps.store.load()
-      const workflows = settings.workflow.workflows.map((workflow) =>
-        workflow.id === workflowId ? updater(workflow) : workflow
-      )
-      const saved = await this.deps.store.patch({ workflow: { ...settings.workflow, workflows } })
+      const saved = await this.deps.store.update((current) => {
+        const workflows = current.workflow.workflows.map((workflow) =>
+          workflow.id === workflowId ? updater(workflow) : workflow
+        )
+        return { ...current, workflow: { ...current.workflow, workflows } }
+      })
       this.syncPowerSaveBlocker(saved)
       return saved
     })
@@ -875,7 +879,7 @@ export class WorkflowRuntime {
     let runMessage = ''
     let nodeResults: WorkflowNodeRunResultV1[] = []
     try {
-      const settings = await this.deps.store.load()
+      const settings = await this.loadSettings()
       const result = await this.runGraph(workflow, triggerNodeId, initialPayload, {
         settings,
         statusWorkflowId: workflow.id,

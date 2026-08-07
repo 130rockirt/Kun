@@ -252,6 +252,8 @@ export type ChatState = {
   threadSearch: string
   showArchivedThreads: boolean
   activeThreadId: string | null
+  /** 最近一次在 Code 工作台(chat 路由)选中的会话,供从设置/其他工作区/Connect Phone 返回时恢复。 */
+  lastCodeThreadId: string | null
   /** Relationship of the active thread (e.g. `side` for a subagent's own session). */
   activeThreadRelation: 'primary' | 'fork' | 'side' | null
   /** Parent thread of the active thread, when it is a `side`/`fork` branch. */
@@ -361,6 +363,8 @@ export type ChatState = {
   ) => Promise<ClearDesignHistoryResult>
   selectWriteThread: (threadId: string, workspaceRoot?: string) => Promise<void>
   openSettings: (section?: SettingsRouteSection) => void
+  /** 离开设置页:直接把 route 恢复为进入设置前的工作台路由,不经过会重新解析/切换会话的 open* 入口。 */
+  closeSettings: () => void
   openPlugins: (host?: PluginHostRoute) => void
   openClaw: () => void
   openSchedule: () => void

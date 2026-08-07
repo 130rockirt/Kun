@@ -6,6 +6,7 @@ import { buildRouter } from './routes/index.js'
 import type { ServerRuntime } from './routes/server-runtime.js'
 import { startNodeHttpServer, type NodeHttpServerHandle } from './node-http-server.js'
 import { isLoopbackHost } from './loopback-host.js'
+import { acquireRuntimeDataDirLease, type RuntimeDataDirLease } from './runtime-data-dir-lease.js'
 import {
   KUN_SERVICE_VERSION,
   publishRuntimeDiscovery,
@@ -127,13 +128,15 @@ import {
   type ModelRequestRetryConfig,
   type ServeProviderConfig,
   type StorageConfig,
-  type ToolOutputLimitsConfig
+  type ToolOutputLimitsConfig,
+  type LabConfig
 } from '../config/kun-config.js'
 import { createAgentObservabilityRecorder } from '../telemetry/agent-observability.js'
 import { ApprovalReviewService } from '../services/approval-review-service.js'
 import { buildApprovalReviewModelRouterInput } from '../services/approval-review-model-router.js'
 import { buildBuiltinHooks } from '../hooks/builtins/index.js'
 import { mergeBuiltinSubagentProfiles } from '../delegation/builtin-profiles.js'
+import { buildExploreAgentToolProvider } from '../adapters/tool/explore-agent-tool-provider.js'
 import { InflightTracker } from '../loop/inflight-tracker.js'
 import { SteeringQueue } from '../loop/steering-queue.js'
 import type { TurnRunOutcome } from '../loop/turn-execution-types.js'
@@ -161,8 +164,10 @@ import { UsageService } from '../services/usage-service.js'
 import { ProviderQuotaService } from '../services/provider-quota-service.js'
 import {
   resolveDefaultCodexQuotaCredential,
-  resolveDefaultGrokQuotaCredential
+  resolveDefaultGrokQuotaCredential,
+  resolveOpenCodeGoCookie
 } from '../services/provider-subscription-quota.js'
+import { fetchOpenCodeGoWebQuota } from '../services/opencode-go-web-quota.js'
 import { RoutePoolTestService } from '../services/route-pool-test-service.js'
 import type { UsageEvent } from '../contracts/events.js'
 import type {
@@ -249,6 +254,7 @@ import { RuntimeMigrationImportService } from '../services/runtime-migration-imp
 import {
   isModelConnectionCredentialSourceId,
   ModelConnectionRegistry,
+  providerIdFromCredentialSource,
   type ModelConnectionSeed
 } from '../services/model-connection-registry.js'
 import { ModelConnectionOAuthService } from '../services/model-connection-oauth.js'
@@ -317,6 +323,8 @@ export type KunServeRuntimeOptions = {
   hooks?: HooksConfig
   /** Design-quality linter config; drives the builtin PostToolUse hook. */
   quality?: QualityConfig
+  /** Experimental Lab features (explore_agent toggle + model overrides). */
+  lab?: LabConfig
   startedAt?: string
   instanceId?: string
   buildId?: string
@@ -339,6 +347,20 @@ export type KunServeHandle = NodeHttpServerHandle & {
   shutdownRequested: Promise<void>
 }
 
+async function settleCleanupSteps(
+  steps: readonly (() => void | Promise<void>)[]
+): Promise<void> {
+  let firstError: unknown
+  for (const step of steps) {
+    try {
+      await step()
+    } catch (error) {
+      if (firstError === undefined) firstError = error
+    }
+  }
+  if (firstError !== undefined) throw firstError
+}
+
 /**
  * Composition root for serve mode. This is intentionally the only
  * place that wires concrete adapters to ports; domain, services, loop,
@@ -346,6 +368,25 @@ export type KunServeHandle = NodeHttpServerHandle & {
  */
 export async function createKunServeRuntime(
   options: KunServeRuntimeOptions
+): Promise<ServerRuntime> {
+  // Every composition that owns local persistent stores must publish its
+  // writer claim before constructing any store. This includes direct CLI
+  // run/chat/exec runtimes that never pass through startKunServe(). Managed
+  // runtimes use Manager-owned remote stores, so the Manager owns the lease.
+  const dataDirLease = options.serviceManager
+    ? undefined
+    : await acquireRuntimeDataDirLease(options.dataDir)
+  try {
+    return await createKunServeRuntimeComposition(options, dataDirLease)
+  } catch (error) {
+    await dataDirLease?.release().catch(() => undefined)
+    throw error
+  }
+}
+
+async function createKunServeRuntimeComposition(
+  options: KunServeRuntimeOptions,
+  dataDirLease: RuntimeDataDirLease | undefined
 ): Promise<ServerRuntime> {
   await mkdir(options.dataDir, { recursive: true, mode: 0o700 })
   let activeOptions: KunServeRuntimeOptions = { ...options }
@@ -596,15 +637,28 @@ export async function createKunServeRuntime(
     nowIso
   })
   let modelConnections!: ModelConnectionRegistry
+  const safeCredentialUnavailableMessage = 'protected model credential is unavailable'
   const requestCredentialStore = {
-    resolveApiKey: (sourceId: string) =>
-      isModelConnectionCredentialSourceId(sourceId)
-        ? modelConnections.resolveApiKey(sourceId)
-        : legacyCredentialMigration.resolveApiKey(sourceId),
-    updateResolvedApiKey: (sourceId: string, apiKey: string) =>
-      isModelConnectionCredentialSourceId(sourceId)
-        ? modelConnections.updateResolvedApiKey(sourceId, apiKey)
-        : legacyCredentialMigration.updateResolvedApiKey(sourceId, apiKey)
+    resolveApiKey: async (sourceId: string) => {
+      try {
+        return isModelConnectionCredentialSourceId(sourceId)
+          ? await modelConnections.resolveApiKey(sourceId)
+          : await legacyCredentialMigration.resolveApiKey(sourceId)
+      } catch {
+        // Request errors may cross HTTP/SSE boundaries. Never expose protected
+        // source identifiers or keychain/decryption details to those clients.
+        throw new Error(safeCredentialUnavailableMessage)
+      }
+    },
+    updateResolvedApiKey: async (sourceId: string, expectedApiKey: string, apiKey: string) => {
+      try {
+        return isModelConnectionCredentialSourceId(sourceId)
+          ? await modelConnections.updateResolvedApiKey(sourceId, expectedApiKey, apiKey)
+          : await legacyCredentialMigration.updateResolvedApiKey(sourceId, expectedApiKey, apiKey)
+      } catch {
+        throw new Error(safeCredentialUnavailableMessage)
+      }
+    }
   }
   const grokCredentialRefresher = new GrokOAuthCredentialRefresher(
     requestCredentialStore
@@ -618,16 +672,28 @@ export async function createKunServeRuntime(
   ): Promise<{
     apiKey: string
     headers?: Record<string, string>
+    geminiAuth?: GeminiCodeAssistCredential
     refreshable: boolean
   }> => {
-    let resolved = await codexCredentialRefresher.resolve(sourceId, rejectedAccessToken)
-    if (!resolved.refreshable) {
-      resolved = await grokCredentialRefresher.resolve(sourceId, rejectedAccessToken)
-    }
-    const material = materializeLegacyProviderCredential(resolved.rawApiKey)
-    return {
-      ...material,
-      refreshable: resolved.refreshable
+    try {
+      let resolved = await codexCredentialRefresher.resolve(sourceId, rejectedAccessToken)
+      if (!resolved.refreshable) {
+        resolved = await grokCredentialRefresher.resolve(sourceId, rejectedAccessToken)
+      }
+      const material = materializeLegacyProviderCredential(resolved.rawApiKey)
+      return {
+        ...material,
+        refreshable: resolved.refreshable
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : ''
+      if (
+        message === safeCredentialUnavailableMessage ||
+        message.startsWith('protected credential source is unavailable')
+      ) {
+        throw new Error(safeCredentialUnavailableMessage)
+      }
+      throw error
     }
   }
   const migrateLegacyProviderCredentials = async (
@@ -744,6 +810,18 @@ export async function createKunServeRuntime(
     dataDir: activeOptions.dataDir,
     credentials: extensionCredentials,
     modelCapabilities: registryModelCapabilities,
+    retireLegacyCredentialSource: async (sourceId) => {
+      await legacyCredentialMigration.forgetSources([sourceId])
+    },
+    inspectCredentialSource: async (sourceId) => {
+      try {
+        const resolved = await requestCredentialStore.resolveApiKey(sourceId)
+        return resolved?.apiKey?.trim() ? 'ready' : 'missing'
+      } catch {
+        return 'unreadable'
+      }
+    },
+    resolveCredentialSource: resolveLegacyRequestCredentials,
     onChanged: (connections) => {
       const selected = connections.selected
       const providers = Object.fromEntries(connections.providers.entries())
@@ -794,6 +872,26 @@ export async function createKunServeRuntime(
     routePools: activeOptions.routePools ?? [],
     localModelGateway: activeOptions.localModelGateway ?? { enabled: false }
   })
+  const resolveCapabilityProviderCredential = async (providerId: string): Promise<{
+    apiKey: string
+    headers?: Record<string, string>
+  }> => {
+    const provider = (await modelConnections.materialize()).providers.get(providerId)
+    if (!provider || provider.kind !== 'http') {
+      throw new Error(`Model connection ${providerId} is unavailable for media generation`)
+    }
+    let apiKey = provider.apiKey.trim()
+    let headers = provider.headers
+    if (provider.credentialSourceId) {
+      const resolved = await resolveLegacyRequestCredentials(provider.credentialSourceId)
+      apiKey = resolved.apiKey.trim()
+      headers = { ...(headers ?? {}), ...(resolved.headers ?? {}) }
+    }
+    if (!apiKey) {
+      throw new Error(`Model connection ${providerId} has no usable credential`)
+    }
+    return { apiKey, ...(headers ? { headers } : {}) }
+  }
   const providerQuotaService = new ProviderQuotaService({
     loadSource: async () => {
       const [snapshot, materialized] = await Promise.all([
@@ -869,6 +967,19 @@ export async function createKunServeRuntime(
         } catch {
           return undefined
         }
+      },
+      // OpenCode Go uses the default browser-cookie resolver and the shared
+      // proxy-aware fetcher; explicit wiring keeps GUI/TUI quota behavior
+      // identical to the standalone runtime defaults.
+      resolveOpenCodeGoCookie: async () => resolveOpenCodeGoCookie(),
+      fetchOpenCodeGoWebQuota: async (cookieHeader, context) => {
+        const fetcher = ((input: string | URL | Request, init?: RequestInit) =>
+          context.fetcher(
+            typeof input === 'string' || input instanceof URL ? input : input.url,
+            init,
+            context.proxyUrl
+          )) as typeof fetch
+        return fetchOpenCodeGoWebQuota({ cookieHeader, fetcher })
       }
     }
   })
@@ -1072,11 +1183,21 @@ export async function createKunServeRuntime(
 	  })
 	  let imageGenProviders = buildImageGenToolProviders(activeOptions.capabilities?.imageGen, {
 	    attachmentStore,
-	    nowIso
+	    nowIso,
+	    resolveCredential: resolveCapabilityProviderCredential
 	  })
-	  let speechGenProviders = buildSpeechGenToolProviders(activeOptions.capabilities?.speechGen, { nowIso })
-	  let musicGenProviders = buildMusicGenToolProviders(activeOptions.capabilities?.musicGen, { nowIso })
-	  let videoGenProviders = buildVideoGenToolProviders(activeOptions.capabilities?.videoGen, { nowIso })
+	  let speechGenProviders = buildSpeechGenToolProviders(activeOptions.capabilities?.speechGen, {
+	    nowIso,
+	    resolveCredential: resolveCapabilityProviderCredential
+	  })
+	  let musicGenProviders = buildMusicGenToolProviders(activeOptions.capabilities?.musicGen, {
+	    nowIso,
+	    resolveCredential: resolveCapabilityProviderCredential
+	  })
+	  let videoGenProviders = buildVideoGenToolProviders(activeOptions.capabilities?.videoGen, {
+	    nowIso,
+	    resolveCredential: resolveCapabilityProviderCredential
+	  })
 	  let computerUseProviders = await buildComputerUseToolProviders(activeOptions.capabilities?.computerUse)
 	  let browserUseProviders = buildBrowserUseToolProviders(activeOptions.capabilities?.browserUse)
   const designCanvasProvider = {
@@ -1432,6 +1553,10 @@ export async function createKunServeRuntime(
       tools: [taskGraphTool]
     },
     ...buildDelegationToolProviders(delegationRuntime, subagentRouter),
+    ...buildExploreAgentToolProvider(
+      delegationRuntime,
+      () => activeOptions.lab?.exploreAgent
+    ),
     ...buildComponentDesignToolProviders(delegationRuntime)
   ])
   let prepareExtensionContributions: ((context?: ToolHostContext) => Promise<void>) | undefined
@@ -1490,6 +1615,11 @@ export async function createKunServeRuntime(
       defaultModel: input.options.model,
       defaultIsAgentSdk,
       defaultToken: input.options.apiKey,
+      defaultCredentialSourceId: input.options.credentialSourceId,
+      resolveCredentialSource: async (sourceId) => {
+        const resolved = await resolveLegacyRequestCredentials(sourceId)
+        return resolved.apiKey.trim() ? { apiKey: resolved.apiKey } : null
+      },
       turnLimits: input.options.runtime?.turnLimits,
       approvalGate,
       approvalReview: approvalReviewService,
@@ -1531,6 +1661,11 @@ export async function createKunServeRuntime(
       providerIds: new Set(cursorSdkProviderIdsForOptions(input.options)),
       defaultIsCursor: defaultIsCursorSdk,
       defaultApiKey: input.options.apiKey,
+      defaultCredentialSourceId: input.options.credentialSourceId,
+      resolveCredentialSource: async (sourceId) => {
+        const resolved = await resolveLegacyRequestCredentials(sourceId)
+        return resolved.apiKey.trim() ? { apiKey: resolved.apiKey } : null
+      },
       defaultModel: input.options.model,
       defaultApprovalPolicy: input.options.approvalPolicy,
       defaultSandboxMode: input.options.sandboxMode,
@@ -2248,11 +2383,21 @@ export async function createKunServeRuntime(
 	    const nextWebProviders = buildWebToolProviders(nextOptions.capabilities?.web)
 	    const nextImageGenProviders = buildImageGenToolProviders(nextOptions.capabilities?.imageGen, {
 	      attachmentStore: nextAttachmentStore,
-	      nowIso
+	      nowIso,
+	      resolveCredential: resolveCapabilityProviderCredential
 	    })
-	    const nextSpeechGenProviders = buildSpeechGenToolProviders(nextOptions.capabilities?.speechGen, { nowIso })
-	    const nextMusicGenProviders = buildMusicGenToolProviders(nextOptions.capabilities?.musicGen, { nowIso })
-	    const nextVideoGenProviders = buildVideoGenToolProviders(nextOptions.capabilities?.videoGen, { nowIso })
+	    const nextSpeechGenProviders = buildSpeechGenToolProviders(nextOptions.capabilities?.speechGen, {
+	      nowIso,
+	      resolveCredential: resolveCapabilityProviderCredential
+	    })
+	    const nextMusicGenProviders = buildMusicGenToolProviders(nextOptions.capabilities?.musicGen, {
+	      nowIso,
+	      resolveCredential: resolveCapabilityProviderCredential
+	    })
+	    const nextVideoGenProviders = buildVideoGenToolProviders(nextOptions.capabilities?.videoGen, {
+	      nowIso,
+	      resolveCredential: resolveCapabilityProviderCredential
+	    })
 	    const nextComputerUseProviders = await buildComputerUseToolProviders(nextOptions.capabilities?.computerUse)
 	    const nextBrowserUseProviders = buildBrowserUseToolProviders(nextOptions.capabilities?.browserUse)
 	    const nextPptMasterProvider = {
@@ -2499,6 +2644,10 @@ export async function createKunServeRuntime(
     events,
     eventStreamRegistry,
     llmDebug,
+    liveCounters: () => ({
+      inflight: inflight.size(),
+      activeCaptures: llmDebug?.activeCaptureCount ?? 0
+    }),
     approvalGate,
 	    userInputGate,
 	    workspaceInspector,
@@ -2733,44 +2882,49 @@ export async function createKunServeRuntime(
       return result
     },
     shutdown: async () => {
-      try {
-        shuttingDown = true
-        executionLeases?.shutdown()
-        clearInterval(attachmentPruneTimer)
-	        await shutdownGraphExecutionForHost({
-	          graphRuntime,
-	          turnService
-	        })
-        modelConnectionOAuth.close()
-        eventStreamRegistry.closeAll()
-        loop.shutdownGoalResume()
-	        await backgroundShellRuntime.shutdown()
-	        await extensionJobs.handleRuntimeShutdown()
-	        extensionMediaJobs.dispose()
-	        extensionAudioAnalysisJobs.dispose()
-	        extensionMediaArchiveJobs.dispose()
-        await waitForActiveRuns(activeRuntimeRuns)
-	        stopExtensionModelListener()
-	        extensionViewSessions.disposeAll()
-	        await extensionManager.shutdown()
-	        await extensionBroker.dispose()
-	        extensionSecretReveals.dispose()
-	        await extensionAccountAudit.flush()
-	        extensionTools.disposeAll()
-	        await extensionModelProviders.disposeAll()
-	        shutdownAllLspSessions()
-	        await mcpProviders.close()
-	        await migrationService.shutdown()
-	        await migrationImportService.shutdown()
-	        await routeHealth.flush()
-      } finally {
-        try {
-          await llmDebug?.shutdown()
-          await agentObservability?.shutdown()
-        } finally {
-          await stores.shutdown?.()
-        }
-      }
+      await settleCleanupSteps([
+        async () => {
+          try {
+            shuttingDown = true
+            executionLeases?.shutdown()
+            clearInterval(attachmentPruneTimer)
+	          await shutdownGraphExecutionForHost({
+	            graphRuntime,
+	            turnService
+	          })
+            modelConnectionOAuth.close()
+            eventStreamRegistry.closeAll()
+            loop.shutdownGoalResume()
+	          await backgroundShellRuntime.shutdown()
+	          await extensionJobs.handleRuntimeShutdown()
+	          extensionMediaJobs.dispose()
+	          extensionAudioAnalysisJobs.dispose()
+	          extensionMediaArchiveJobs.dispose()
+            await waitForActiveRuns(activeRuntimeRuns)
+	          stopExtensionModelListener()
+	          extensionViewSessions.disposeAll()
+	          await extensionManager.shutdown()
+	          await extensionBroker.dispose()
+	          extensionSecretReveals.dispose()
+	          await extensionAccountAudit.flush()
+	          extensionTools.disposeAll()
+	          await extensionModelProviders.disposeAll()
+	          shutdownAllLspSessions()
+	          await mcpProviders.close()
+	          await migrationService.shutdown()
+	          await migrationImportService.shutdown()
+	          await routeHealth.flush()
+          } finally {
+            try {
+              await llmDebug?.shutdown()
+              await agentObservability?.shutdown()
+            } finally {
+              await stores.shutdown?.()
+            }
+          }
+        },
+        async () => { await dataDirLease?.release() }
+      ])
     }
   }
 }
@@ -2907,6 +3061,7 @@ function buildModelClientRouterInput(
   ) => Promise<{
     apiKey: string
     headers?: Record<string, string>
+    geminiAuth?: GeminiCodeAssistCredential
     refreshable: boolean
   }>
 ): { default: ModelClient; providers: Map<string, ModelClient> } {
@@ -2926,6 +3081,12 @@ function buildModelClientRouterInput(
       ? new GeminiCodeAssistModelClient({
           baseUrl: options.baseUrl,
           auth: options.geminiAuth,
+          ...(options.credentialSourceId && credentialResolver
+            ? {
+                resolveAuth: async () =>
+                  (await credentialResolver(options.credentialSourceId!)).geminiAuth ?? null
+              }
+            : {}),
           modelProxyUrl: options.modelProxyUrl,
           model: options.model,
           modelCapabilities: defaultModelCapabilities
@@ -2970,6 +3131,12 @@ function buildModelClientRouterInput(
       ? new GeminiCodeAssistModelClient({
           baseUrl: provider.baseUrl ?? options.baseUrl,
           auth: provider.geminiAuth,
+          ...(provider.credentialSourceId && credentialResolver
+            ? {
+                resolveAuth: async () =>
+                  (await credentialResolver(provider.credentialSourceId!)).geminiAuth ?? null
+              }
+            : {}),
           modelProxyUrl: provider.modelProxyUrl ?? options.modelProxyUrl,
           model: options.model,
           modelCapabilities: scopedModelCapabilities
@@ -3156,7 +3323,8 @@ function mergeRuntimeConfigApplyOptions(
     roles: request.roles ?? current.roles,
     capabilities: request.capabilities ?? current.capabilities,
     hooks: request.hooks ?? current.hooks,
-    quality: request.quality ?? current.quality
+    quality: request.quality ?? current.quality,
+    lab: request.lab ?? current.lab
   }
 }
 
@@ -3338,6 +3506,9 @@ export async function startKunServe(
   const instanceId = options.instanceId ?? randomUUID()
   process.env.KUN_RUNTIME_INSTANCE_ID = instanceId
   const serveOptions = { ...options, startedAt, instanceId }
+  // The composition owns the writer lease for all local stores. Keeping lease
+  // ownership below the HTTP layer also covers direct CLI runtimes and avoids
+  // a second claim for serve mode.
   const runtime = await createKunServeRuntime(serveOptions)
   let requestShutdown!: () => void
   const shutdownRequested = new Promise<void>((resolve) => { requestShutdown = resolve })
@@ -3398,15 +3569,22 @@ export async function startKunServe(
       instanceId
     })
   } catch (error) {
-    if (registeredWithManager && options.serviceManager) {
-      await unregisterRuntimeWithManager({
-        manager: options.serviceManager,
-        flavor: runtimeFlavor,
-        instanceId
-      })
-    }
-    await server.close().catch(() => undefined)
-    await runtime.shutdown?.().catch(() => undefined)
+    await settleCleanupSteps([
+      async () => {
+        if (!registeredWithManager || !options.serviceManager) return
+        try {
+          await unregisterRuntimeWithManager({
+            manager: options.serviceManager,
+            flavor: runtimeFlavor,
+            instanceId
+          })
+        } finally {
+          registeredWithManager = false
+        }
+      },
+      () => server.close(),
+      async () => { await runtime.shutdown?.() }
+    ]).catch(() => undefined)
     throw error
   }
   // Background sweep after listen: settle turns orphaned by a crash so
@@ -3447,27 +3625,29 @@ export async function startKunServe(
     instanceId,
     shutdownRequested,
     close: async () => {
-      try {
-        await runtime.shutdown?.()
-      } finally {
-        try {
-          await server.close()
-        } finally {
-          if (registeredWithManager && options.serviceManager) {
+      await settleCleanupSteps([
+        async () => { await runtime.shutdown?.() },
+        () => server.close(),
+        async () => {
+          if (!registeredWithManager || !options.serviceManager) return
+          try {
             await unregisterRuntimeWithManager({
               manager: options.serviceManager,
               flavor: runtimeFlavor,
               instanceId
             })
+          } finally {
             registeredWithManager = false
           }
+        },
+        async () => {
           await removeRuntimeDiscovery(
             options.discoveryDir ?? options.dataDir,
             discovery.instanceId,
             options.runtimeFlavor ?? 'production'
-          ).catch(() => undefined)
+          )
         }
-      }
+      ])
     }
   }
 }
@@ -3507,10 +3687,14 @@ function runtimeBaseUrl(host: string, port: number): string {
   return `http://${urlHost}:${port}`
 }
 
-function activeModelConnectionProviderId(options: KunServeRuntimeOptions): string {
+export function activeModelConnectionProviderId(
+  options: Pick<KunServeRuntimeOptions, 'credentialSourceId' | 'providers'>
+): string {
   const prefix = 'settings:provider:'
   const source = options.credentialSourceId?.trim() ?? ''
-  const candidate = source.startsWith(prefix) ? source.slice(prefix.length).trim() : ''
+  const candidate = source.startsWith(prefix)
+    ? source.slice(prefix.length).trim()
+    : providerIdFromCredentialSource(source)?.trim() ?? ''
   return candidate && options.providers?.[candidate] ? candidate : 'default'
 }
 

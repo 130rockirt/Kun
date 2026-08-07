@@ -60,19 +60,21 @@ export function imageGenConfigForRuntime(
     enabled: value.enabled,
     timeoutMs: value.timeoutMs
   }
+  const providerId = value.providerId.trim()
   const resolvedApiKey = value.protocol === 'grok-imagine-image'
     ? resolveGrokMediaOAuthApiKey(value.apiKey)
     : resolveCodexOAuthApiKey(value.apiKey)
   applyTrimmedFields(next, {
     protocol: value.protocol,
+    providerId,
     baseUrl: value.baseUrl,
-    apiKey: resolvedApiKey.apiKey,
+    apiKey: providerId ? '' : resolvedApiKey.apiKey,
     model: value.model,
     defaultResolution: value.defaultResolution,
     defaultSize: value.defaultSize,
     quality: value.quality
   })
-  if (resolvedApiKey.headers) next.headers = resolvedApiKey.headers
+  if (!providerId && resolvedApiKey.headers) next.headers = resolvedApiKey.headers
   else delete next.headers
   return next
 }
@@ -87,10 +89,12 @@ export function speechGenConfigForRuntime(
     timeoutMs: value.timeoutMs,
     format: value.format
   }
+  const providerId = value.providerId.trim()
   applyTrimmedFields(next, {
     protocol: value.protocol,
+    providerId,
     baseUrl: value.baseUrl,
-    apiKey: value.apiKey,
+    apiKey: providerId ? '' : value.apiKey,
     model: value.model,
     voice: value.voice
   })
@@ -107,10 +111,12 @@ export function musicGenConfigForRuntime(
     timeoutMs: value.timeoutMs,
     format: value.format
   }
+  const providerId = value.providerId.trim()
   applyTrimmedFields(next, {
     protocol: value.protocol,
+    providerId,
     baseUrl: value.baseUrl,
-    apiKey: value.apiKey,
+    apiKey: providerId ? '' : value.apiKey,
     model: value.model
   })
   return next
@@ -127,17 +133,19 @@ export function videoGenConfigForRuntime(
     timeoutMs: value.timeoutMs,
     pollIntervalMs: value.pollIntervalMs
   }
+  const providerId = value.providerId.trim()
   const resolvedApiKey = value.protocol === 'grok-imagine-video'
     ? resolveGrokMediaOAuthApiKey(value.apiKey)
     : { apiKey: value.apiKey }
   applyTrimmedFields(next, {
     protocol: value.protocol,
+    providerId,
     baseUrl: value.baseUrl,
-    apiKey: resolvedApiKey.apiKey,
+    apiKey: providerId ? '' : resolvedApiKey.apiKey,
     model: value.model,
     defaultResolution: value.defaultResolution
   })
-  if (resolvedApiKey.headers) next.headers = resolvedApiKey.headers
+  if (!providerId && resolvedApiKey.headers) next.headers = resolvedApiKey.headers
   else delete next.headers
   return next
 }
@@ -162,9 +170,7 @@ export function runtimeTuningConfigForRuntime(
     },
     toolStorm: {
       ...objectValue(existing.toolStorm),
-      enabled: value.toolStorm.enabled,
-      windowSize: value.toolStorm.windowSize,
-      threshold: value.toolStorm.threshold
+      enabled: value.toolStorm.enabled
     },
     toolArgumentRepair: {
       ...objectValue(existing.toolArgumentRepair),

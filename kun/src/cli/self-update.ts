@@ -16,6 +16,7 @@ import { tmpdir } from 'node:os'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import semver from 'semver'
+import { withRuntimeDataDirAncillaryWriter } from '../server/runtime-data-dir-lease.js'
 
 const RELEASE_METADATA_FILENAME = 'release.json'
 const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1_000
@@ -210,17 +211,19 @@ export async function checkStandaloneTuiUpdateOnce(
     // Missing or invalid state means a check is due.
   }
   const result = await checkStandaloneTuiUpdate(input)
-  await mkdir(input.dataDir, { recursive: true, mode: 0o700 })
-  await writeFile(
-    statePath,
-    `${JSON.stringify({
-      checkedAt: new Date(now).toISOString(),
-      currentVersion: result?.current.version,
-      latestVersion: result?.latest.version,
-      available: result?.available ?? false
-    }, null, 2)}\n`,
-    { encoding: 'utf8', mode: 0o600 }
-  )
+  await withRuntimeDataDirAncillaryWriter(input.dataDir, async () => {
+    await mkdir(input.dataDir, { recursive: true, mode: 0o700 })
+    await writeFile(
+      statePath,
+      `${JSON.stringify({
+        checkedAt: new Date(now).toISOString(),
+        currentVersion: result?.current.version,
+        latestVersion: result?.latest.version,
+        available: result?.available ?? false
+      }, null, 2)}\n`,
+      { encoding: 'utf8', mode: 0o600 }
+    )
+  })
   return result
 }
 

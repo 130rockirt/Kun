@@ -32,9 +32,33 @@ export async function atomicWriteFile(
     }
   } catch (error) {
     await rm(tmp, { force: true }).catch(() => undefined)
-    throw error
+    throw describeAtomicWriteError(path, error)
   }
   await rm(tmp, { force: true }).catch(() => undefined)
+}
+
+/**
+ * Preserves Node fs error fields (`code`, `errno`, `syscall`, `path`) while
+ * prefixing a stable `atomic write failed (CODE) for <path>` message so
+ * manager/runtime logs clearly attribute disk exhaustion (ENOSPC) or
+ * permission failures to the exact lease/config file instead of a bare
+ * "Internal server error" / "fetch failed".
+ */
+function describeAtomicWriteError(path: string, error: unknown): unknown {
+  if (!(error instanceof Error)) return error
+  const source = error as NodeJS.ErrnoException
+  const code = String(source.code ?? '')
+  const prefixed = new Error(
+    `atomic write failed${code ? ` (${code})` : ''} for ${path}: ${error.message}`,
+    { cause: error }
+  )
+  Object.assign(prefixed, {
+    ...(source.code !== undefined ? { code: source.code } : {}),
+    ...(source.errno !== undefined ? { errno: source.errno } : {}),
+    ...(source.syscall !== undefined ? { syscall: source.syscall } : {}),
+    ...(source.path !== undefined ? { path: source.path } : {})
+  })
+  return prefixed
 }
 
 async function renameWithRetry(

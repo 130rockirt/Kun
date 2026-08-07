@@ -102,10 +102,29 @@ export class AtomicJsonFile<T> {
 
 const MAX_MANAGER_WRITE_ATTEMPTS = 8
 
-type ManagerAtomicJsonConfig = {
+export type ManagerAtomicJsonConfig = {
   baseUrl: string
   token: string
   dataDir: string
+}
+
+let explicitManagerAtomicJsonConfig: ManagerAtomicJsonConfig | null = null
+
+/**
+ * Configures this process as a Manager data-plane client without putting the
+ * Manager bearer token in process.env (and therefore in spawned child envs).
+ * Runtime processes keep using their explicitly scoped launch environment.
+ */
+export function configureManagerAtomicJsonClient(
+  config: ManagerAtomicJsonConfig | null
+): void {
+  explicitManagerAtomicJsonConfig = config
+    ? {
+        baseUrl: config.baseUrl.replace(/\/+$/u, ''),
+        token: config.token,
+        dataDir: resolve(config.dataDir)
+      }
+    : null
 }
 
 type ManagerAtomicJsonSnapshot = {
@@ -121,9 +140,10 @@ const ManagerAtomicJsonSnapshotSchema = z.object({
 })
 
 function managerAtomicJsonConfig(path: string): ManagerAtomicJsonConfig | null {
-  const baseUrl = process.env.KUN_MANAGER_BASE_URL?.trim()
-  const token = process.env.KUN_MANAGER_TOKEN?.trim()
-  const configuredDataDir = process.env.KUN_MANAGER_DATA_DIR?.trim()
+  const baseUrl = explicitManagerAtomicJsonConfig?.baseUrl ?? process.env.KUN_MANAGER_BASE_URL?.trim()
+  const token = explicitManagerAtomicJsonConfig?.token ?? process.env.KUN_MANAGER_TOKEN?.trim()
+  const configuredDataDir = explicitManagerAtomicJsonConfig?.dataDir ??
+    process.env.KUN_MANAGER_DATA_DIR?.trim()
   if (!baseUrl || !token || !configuredDataDir) return null
   const dataDir = resolve(configuredDataDir)
   const target = resolve(path)
@@ -143,6 +163,22 @@ function managerAtomicJsonConfig(path: string): ManagerAtomicJsonConfig | null {
 
 export function isManagerAtomicJsonPath(path: string): boolean {
   return managerAtomicJsonConfig(path) !== null
+}
+
+/** Prevent security-sensitive stores from silently falling back to local RMW. */
+export function assertManagerAtomicJsonPath(path: string): void {
+  const managerConfigured = Boolean(
+    (explicitManagerAtomicJsonConfig?.baseUrl ?? process.env.KUN_MANAGER_BASE_URL?.trim()) &&
+    (explicitManagerAtomicJsonConfig?.token ?? process.env.KUN_MANAGER_TOKEN?.trim()) &&
+    (explicitManagerAtomicJsonConfig?.dataDir ?? process.env.KUN_MANAGER_DATA_DIR?.trim())
+  )
+  if (managerConfigured && !managerAtomicJsonConfig(path)) {
+    throw extensionError(
+      'EXTENSION_JSON_MANAGER_PATH_MISMATCH',
+      'Persisted Registry path is outside the configured Manager data directory',
+      { path }
+    )
+  }
 }
 
 async function readManagerSnapshot(

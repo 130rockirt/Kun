@@ -121,6 +121,61 @@ describe('detectClawScheduledTaskRequest endpoint formats', () => {
     })
   })
 
+  it('uses the caller-resolved non-default provider route and credential', async () => {
+    const calls: Array<{ url: string; headers: HeadersInit | undefined; body: Record<string, unknown> }> = []
+    vi.stubGlobal('fetch', async (url: string, init: RequestInit) => {
+      calls.push({
+        url: String(url),
+        headers: init.headers,
+        body: JSON.parse(String(init.body ?? '{}'))
+      })
+      return new Response(JSON.stringify({
+        content: [{ type: 'text', text: '{"shouldCreateTask":false}' }]
+      }), { status: 200 })
+    })
+    const appSettings = settings('chat_completions')
+    appSettings.provider.providers[0] = {
+      ...appSettings.provider.providers[0],
+      apiKey: 'sk-default',
+      baseUrl: 'https://default.example/v1',
+      endpointFormat: 'chat_completions'
+    }
+    appSettings.provider.providers.push({
+      ...appSettings.provider.providers[0],
+      id: 'secondary',
+      name: 'Secondary Provider',
+      apiKey: 'sk-secondary',
+      baseUrl: 'https://secondary.example/v1',
+      endpointFormat: 'messages',
+      models: ['secondary-model'],
+      modelProfiles: {}
+    })
+
+    await detectClawScheduledTaskRequest(
+      appSettings,
+      'remind me tomorrow to stretch',
+      'secondary-model',
+      new Date('2026-06-09T12:00:00+08:00'),
+      'secondary'
+    )
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toMatchObject({
+      url: 'https://secondary.example/v1/messages',
+      body: {
+        model: 'secondary-model',
+        messages: [{ role: 'user', content: 'remind me tomorrow to stretch' }],
+        max_tokens: 300
+      }
+    })
+    expect(calls[0]?.headers).toMatchObject({
+      Authorization: 'Bearer sk-secondary',
+      'x-api-key': 'sk-secondary',
+      'anthropic-version': '2023-06-01'
+    })
+    expect(calls[0]?.headers).not.toMatchObject({ Authorization: 'Bearer sk-default' })
+  })
+
   it('uses the configured full endpoint URL in custom endpoint mode', async () => {
     const calls: Array<{ url: string; body: Record<string, unknown> }> = []
     vi.stubGlobal('fetch', async (url: string, init: RequestInit) => {

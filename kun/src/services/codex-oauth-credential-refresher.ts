@@ -15,7 +15,7 @@ export type StoredCodexOAuthCredentials = {
 
 export type CodexRefreshableCredentialStore = {
   resolveApiKey(sourceId: string): Promise<{ apiKey: string } | null>
-  updateResolvedApiKey(sourceId: string, apiKey: string): Promise<boolean>
+  updateResolvedApiKey(sourceId: string, expectedApiKey: string, apiKey: string): Promise<boolean>
 }
 
 export type ResolvedCodexRequestCredential = {
@@ -64,7 +64,7 @@ export class CodexOAuthCredentialRefresher {
       }
       credentials = parseStoredCodexOAuthCredentials(resolved.apiKey)
       if (!credentials) {
-        throw new Error('refreshed Codex subscription credentials are invalid')
+        return { rawApiKey: resolved.apiKey, refreshable: false }
       }
     }
 
@@ -105,10 +105,13 @@ export class CodexOAuthCredentialRefresher {
     )
     const updated = await this.store.updateResolvedApiKey(
       sourceId,
+      latest.apiKey,
       JSON.stringify(refreshed)
     )
     if (!updated) {
-      throw new Error(`protected credential source disappeared during refresh: ${sourceId}`)
+      // A user replacement or another writer won the race. The caller will
+      // resolve the authoritative value again after this refresh attempt.
+      return
     }
   }
 }

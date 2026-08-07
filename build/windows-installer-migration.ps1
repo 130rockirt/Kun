@@ -388,7 +388,10 @@ function Convert-IdentityToSid([string]$Identity) {
 }
 
 function Get-FileSystemSecurity([string]$PathValue) {
-  $sections = [Security.AccessControl.AccessControlSections]::All
+  # Journal trust only depends on the owner and DACL. Requesting All would
+  # also read the SACL/Audit section, which ordinary user accounts cannot
+  # inspect without SeSecurityPrivilege.
+  $sections = [Security.AccessControl.AccessControlSections]::Owner -bor [Security.AccessControl.AccessControlSections]::Access
   if ([IO.Directory]::Exists($PathValue)) {
     return [IO.Directory]::GetAccessControl($PathValue, $sections)
   }

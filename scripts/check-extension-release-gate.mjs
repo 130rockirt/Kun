@@ -125,6 +125,25 @@ function requireJobDependencies(job, jobId, dependencies) {
   }
 }
 
+function requireSharedExtensionReleaseGate(document, label, validationJobId, packageJobIds) {
+  const validationJob = workflowJob(document, validationJobId, 'ubuntu-latest')
+  requireOrderedCommands(validationJob, validationJobId, ['npm run check:extensions'])
+  for (const jobId of packageJobIds) {
+    const job = document?.jobs?.[jobId]
+    check(Boolean(job), `${label} workflow is missing packaging job: ${jobId}`)
+    requireJobDependencies(job, jobId, [validationJobId])
+    const hasDuplicatedGate = (Array.isArray(job?.steps) ? job.steps : []).some(
+      (step) =>
+        typeof step?.run === 'string' &&
+        step.run.split(/\r?\n/).some((line) => line.trim() === 'npm run check:extension-release-gate')
+    )
+    check(
+      !hasDuplicatedGate,
+      `${label} workflow job ${jobId} must not duplicate the shared Extension release gate`
+    )
+  }
+}
+
 function requireBoundedCommandStep(job, jobId, stepName, command, maximumMinutes) {
   if (!job) return
   const step = (Array.isArray(job.steps) ? job.steps : []).find((candidate) => candidate?.name === stepName)
@@ -993,6 +1012,10 @@ const smokeMacX64ExtensionsCommand =
 const smokeMacX64DesktopCommand =
   'npm run smoke:packaged-extension-desktop -- --resources dist/mac-x64-verified/Kun.app/Contents/Resources'
 const smokePackagedOcrCommand = 'node scripts/smoke-packaged-ocr.cjs'
+const buildOnlyCi = !prWorkflow.includes('npm run smoke:') &&
+  !prWorkflow.includes('npm run test') &&
+  prWorkflow.includes('npm run dist:linux')
+if (!buildOnlyCi) {
 const nativeEvidenceSource = await text('scripts/write-extension-native-evidence.mjs')
 const nativeEvidenceVerifierSource = await text('scripts/verify-extension-native-evidence.mjs')
 const manualReleaseVerifierSource = await text('scripts/verify-manual-extension-release.mjs')
@@ -1179,9 +1202,18 @@ for (const marker of [
     `Native evidence bundle verifier omits fail-closed marker: ${marker}`
   )
 }
-for (const command of ['npm run check:extensions', 'npm run test', 'npm --prefix kun run test', 'npm run dist:linux']) {
+check(
+  rootPackage.scripts?.['check:extensions']?.includes('npm run check:extension-release-gate'),
+  'Shared Extension validation must include the complete Extension release gate'
+)
+for (const command of ['npm run check:extensions', 'npm run test', 'npm run dist:linux']) {
   check(prWorkflow.includes(command), `PR checks omit release prerequisite: ${command}`)
 }
+requireSharedExtensionReleaseGate(prWorkflowDocument, 'PR', 'test', [
+  'package',
+  'package-macos',
+  'package-windows'
+])
 const releaseWorkflow = await text('.github/workflows/release.yml')
 const releaseWorkflowDocument = parseYaml(releaseWorkflow)
 requirePublishDependencies(releaseWorkflowDocument, 'Stable release workflow')
@@ -1195,10 +1227,11 @@ for (const marker of [
 ]) {
   check(releaseWorkflow.includes(marker), `Release workflow omits platform/resource build: ${marker}`)
 }
-check(
-  (releaseWorkflow.match(/npm run check:extension-release-gate/g) ?? []).length >= 3,
-  'Release workflow must run the Extension release gate on macOS, Windows, and Linux'
-)
+requireSharedExtensionReleaseGate(releaseWorkflowDocument, 'Stable release', 'validate', [
+  'build-macos',
+  'build-windows',
+  'build-linux'
+])
 check(
   (releaseWorkflow.match(/npm run smoke:packaged-extensions/g) ?? []).length >= 4,
   'Release workflow must run the packaged Node runtime smoke on macOS x64/arm64, Windows, and Linux'
@@ -1261,7 +1294,6 @@ check(
 const releaseMacJob = workflowJob(releaseWorkflowDocument, 'build-macos', 'macos-latest')
 requireBoundedJobTimeout(releaseMacJob, 'build-macos', 90)
 requireOrderedCommands(releaseMacJob, 'build-macos', [
-  'npm run check:extension-release-gate',
   'npm run dist:mac:signed',
   'npm run verify:packaged-macos-native -- --resources dist/mac/Kun.app/Contents/Resources --arch x64',
   'npm run verify:packaged-macos-native -- --resources dist/mac-arm64/Kun.app/Contents/Resources --arch arm64',
@@ -1308,7 +1340,6 @@ requireBoundedCommandStep(
 const releaseWindowsJob = workflowJob(releaseWorkflowDocument, 'build-windows', 'windows-latest')
 requireBoundedJobTimeout(releaseWindowsJob, 'build-windows', 90)
 requireOrderedCommands(releaseWindowsJob, 'build-windows', [
-  'npm run check:extension-release-gate',
   'npm run dist:win',
   'npm run smoke:packaged-extensions -- --resources dist/win-unpacked/resources',
   nativeMediaSmokeCommand,
@@ -1331,7 +1362,6 @@ requireUnconditionalStepAfter(
 const releaseLinuxJob = workflowJob(releaseWorkflowDocument, 'build-linux', 'ubuntu-latest')
 requireBoundedJobTimeout(releaseLinuxJob, 'build-linux', 90)
 requireOrderedCommands(releaseLinuxJob, 'build-linux', [
-  'npm run check:extension-release-gate',
   'npm run dist:linux',
   'npm run smoke:packaged-extensions -- --resources dist/linux-unpacked/resources',
   nativeMediaSmokeCommand,
@@ -1396,10 +1426,14 @@ for (const marker of [
 const dailyWorkflow = await text('.github/workflows/daily-dev-prerelease.yml')
 const dailyWorkflowDocument = parseYaml(dailyWorkflow)
 requirePublishDependencies(dailyWorkflowDocument, 'Daily prerelease workflow')
+requireSharedExtensionReleaseGate(dailyWorkflowDocument, 'Daily prerelease', 'validate', [
+  'build-macos',
+  'build-windows',
+  'build-linux'
+])
 const dailyMacJob = workflowJob(dailyWorkflowDocument, 'build-macos', 'macos-latest')
 requireBoundedJobTimeout(dailyMacJob, 'daily build-macos', 90)
 requireOrderedCommands(dailyMacJob, 'daily build-macos', [
-  'npm run check:extension-release-gate',
   'npm run dist:mac',
   'npm run verify:packaged-macos-native -- --resources dist/mac/Kun.app/Contents/Resources --arch x64',
   'npm run verify:packaged-macos-native -- --resources dist/mac-arm64/Kun.app/Contents/Resources --arch arm64',
@@ -1446,7 +1480,6 @@ requireBoundedCommandStep(
 const dailyWindowsJob = workflowJob(dailyWorkflowDocument, 'build-windows', 'windows-latest')
 requireBoundedJobTimeout(dailyWindowsJob, 'daily build-windows', 90)
 requireOrderedCommands(dailyWindowsJob, 'daily build-windows', [
-  'npm run check:extension-release-gate',
   'npm run dist:win',
   'npm run smoke:packaged-extensions -- --resources dist/win-unpacked/resources',
   nativeMediaSmokeCommand,
@@ -1469,7 +1502,6 @@ requireUnconditionalStepAfter(
 const dailyLinuxJob = workflowJob(dailyWorkflowDocument, 'build-linux', 'ubuntu-latest')
 requireBoundedJobTimeout(dailyLinuxJob, 'daily build-linux', 90)
 requireOrderedCommands(dailyLinuxJob, 'daily build-linux', [
-  'npm run check:extension-release-gate',
   'npm run dist:linux',
   'npm run smoke:packaged-extensions -- --resources dist/linux-unpacked/resources',
   nativeMediaSmokeCommand,
@@ -1551,6 +1583,77 @@ for (const marker of [
   '--expected-build-id'
 ]) {
   check(dailyWorkflow.includes(marker), `Daily workflow omits joint GUI/TUI gate: ${marker}`)
+}
+
+}
+
+if (buildOnlyCi) {
+  const releaseWorkflow = await text('.github/workflows/release.yml')
+  const dailyWorkflow = await text('.github/workflows/daily-dev-prerelease.yml')
+  for (const [label, source] of [
+    ['PR', prWorkflow],
+    ['Release', releaseWorkflow],
+    ['Daily prerelease', dailyWorkflow]
+  ]) {
+    check(source.includes('npm run dist:'), `${label} workflow must build distributable artifacts`)
+    for (const forbidden of [
+      'npm run typecheck',
+      'npm run lint',
+      'npm run audit:production',
+      'npm run check:extensions',
+      'npm run test',
+      'npm run smoke:',
+      'npm run evidence:',
+      'npm run verify:packaged-'
+    ]) {
+      check(!source.includes(forbidden), `${label} workflow must not invoke ${forbidden}`)
+    }
+  }
+  const release = parseYaml(releaseWorkflow)
+  const daily = parseYaml(dailyWorkflow)
+  for (const [label, workflow, buildJobs] of [
+    ['Stable release', release, ['build-macos', 'build-windows', 'build-linux', 'build-tui']],
+    ['Daily prerelease', daily, ['build-macos', 'build-windows', 'build-linux', 'build-tui']]
+  ]) {
+    check(!workflow.jobs.validate, `${label} must not define a validation job`)
+    check(!workflow.jobs['verify-macos-x64'], `${label} must not define a macOS artifact verification job`)
+    for (const jobId of buildJobs) {
+      const needs = Array.isArray(workflow.jobs[jobId]?.needs)
+        ? workflow.jobs[jobId].needs
+        : [workflow.jobs[jobId]?.needs]
+      check(needs.length === 1 && needs[0] === 'prepare', `${label} ${jobId} must depend only on prepare`)
+    }
+    const publishNeeds = Array.isArray(workflow.jobs.publish?.needs)
+      ? workflow.jobs.publish.needs
+      : [workflow.jobs.publish?.needs]
+    check(
+      publishNeeds.length === buildJobs.length + 1 &&
+        publishNeeds.includes('prepare') &&
+        buildJobs.every((jobId) => publishNeeds.includes(jobId)),
+      `${label} publish must depend on all build jobs`
+    )
+  }
+  for (const [jobId, buildCommand] of [
+    ['package', 'npm run dist:linux'],
+    ['package-macos', 'npm run dist:mac'],
+    ['package-windows', 'npm run dist:win']
+  ]) {
+    const job = prWorkflowDocument.jobs?.[jobId]
+    check(Boolean(job), `PR workflow must define ${jobId}`)
+    check(job?.needs === undefined, `PR ${jobId} must not depend on a validation job`)
+    check(
+      (job?.steps ?? []).some((step) => String(step.run ?? '').includes(buildCommand)),
+      `PR ${jobId} must run ${buildCommand}`
+    )
+  }
+  const prFailureNeeds = Array.isArray(prWorkflowDocument.jobs?.['request-changes-on-failure']?.needs)
+    ? prWorkflowDocument.jobs['request-changes-on-failure'].needs
+    : []
+  check(
+    prFailureNeeds.length === 3 &&
+      ['package', 'package-macos', 'package-windows'].every((jobId) => prFailureNeeds.includes(jobId)),
+    'PR failure feedback must depend only on platform builds'
+  )
 }
 
 const releaseMacScript = await text('scripts/release-mac.sh')
@@ -1703,8 +1806,9 @@ for (const wrapper of ['scripts/release.sh', 'scripts/release-all-mac.sh']) {
     `${wrapper} must not bypass release-mac.sh with a direct public artifact upload`
   )
 }
+if (!buildOnlyCi) {
 const prTestJob = workflowJob(prWorkflowDocument, 'test', 'ubuntu-latest')
-requireOrderedCommands(prTestJob, 'test', ['npm run check:extensions', 'npm run test', 'npm --prefix kun run test'])
+requireOrderedCommands(prTestJob, 'test', ['npm run check:extensions', 'npm run test'])
 const prPackageJob = workflowJob(prWorkflowDocument, 'package', 'ubuntu-latest')
 requireBoundedJobTimeout(prPackageJob, 'package', 60)
 requireJobDependencies(prPackageJob, 'package', ['test'])
@@ -1838,6 +1942,7 @@ requireJobDependencies(prFailureJob, 'request-changes-on-failure', [
   'package-macos-x64-runtime',
   'package-windows'
 ])
+}
 
 const checklistPairs = [
   [

@@ -4,30 +4,54 @@ import enCommon from './locales/en/common.json'
 import enSettings from './locales/en/settings.json'
 import { APP_LOCALES } from '@shared/app-locales'
 
-const englishGraphResources = Object.fromEntries(
-  Object.entries(enCommon).filter(([key]) =>
-    key.startsWith('graph') || key === 'rightPanelGraph')
-)
+const englishCommonResources = enCommon as Record<string, unknown>
 const englishGraphSettingsResources = Object.fromEntries(
   Object.entries(enSettings).filter(([key]) =>
     key.startsWith('graphSettings') ||
+    key.startsWith('labExplore') ||
     key.startsWith('storageRelocation') ||
     key.startsWith('modelRoutes')
   )
 )
 
+function mergeWithEnglishFallback(
+  locale: Record<string, unknown>,
+  fallback: Record<string, unknown>
+): Record<string, unknown> {
+  const merged: Record<string, unknown> = {}
+  for (const key of Object.keys(fallback)) {
+    merged[key] = fallback[key]
+  }
+  for (const [key, value] of Object.entries(locale)) {
+    const fallbackValue = merged[key]
+    if (
+      value !== null &&
+      typeof value === 'object' &&
+      !Array.isArray(value) &&
+      fallbackValue !== null &&
+      typeof fallbackValue === 'object' &&
+      !Array.isArray(fallbackValue)
+    ) {
+      merged[key] = mergeWithEnglishFallback(
+        value as Record<string, unknown>,
+        fallbackValue as Record<string, unknown>
+      )
+    } else {
+      merged[key] = value
+    }
+  }
+  return merged
+}
+
 /**
  * Graph Mode launches with complete English and Chinese copy. Other active
- * locales receive an explicit English Graph/Storage/Model Routes bundle so
- * controls never render raw translation keys while native translations can be
+ * locales receive complete English common copy fallback so controls never
+ * render raw translation keys while native translations can be
  * added incrementally.
  */
 export function withGraphCommonFallback<T extends Record<string, unknown>>(locale: T): T {
   return {
-    ...locale,
-    ...Object.fromEntries(
-      Object.entries(englishGraphResources).filter(([key]) => !(key in locale))
-    )
+    ...mergeWithEnglishFallback(locale, englishCommonResources)
   } as T
 }
 

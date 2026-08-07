@@ -16,6 +16,7 @@ import { readJsonBody } from '../read-json-body.js'
 import { ERRORS } from './runtime-error.js'
 import { TurnCapacityError, TurnConflictError, type TurnService } from '../../services/turn-service.js'
 import { ThreadExecutionBusyError } from '../../ports/thread-execution-lease.js'
+import { isPublicTurnItem } from '../../contracts/items.js'
 
 export async function startTurn(
   turns: TurnService,
@@ -218,5 +219,8 @@ export async function getTurn(
       404
     )
   }
-  return jsonResponse(TurnSchema.parse(turn))
+  return jsonResponse(TurnSchema.parse({
+    ...turn,
+    items: turn.items.filter(isPublicTurnItem)
+  }))
 }

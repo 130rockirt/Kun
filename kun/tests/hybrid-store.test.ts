@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { InMemoryEventBus } from '../src/adapters/in-memory-event-bus.js'
-import { HybridSessionStore, HybridThreadStore } from '../src/adapters/hybrid/index.js'
+import { HybridSessionStore, HybridThreadStore, describeSqliteAbiMismatch } from '../src/adapters/hybrid/index.js'
 import { makeUserItem } from '../src/domain/item.js'
 import { appendTurnItem, createTurnRecord, startTurn } from '../src/domain/turn.js'
 import { createThreadRecord } from '../src/domain/thread.js'
@@ -558,4 +558,20 @@ describe('HybridThreadStore', () => {
       turns: overrides.turns ?? 1
     }
   }
+})
+
+describe('describeSqliteAbiMismatch', () => {
+  it('classifies a NODE_MODULE_VERSION mismatch with compiled/current ABI', () => {
+    const message = "The module 'better_sqlite3.node' was compiled against a different Node.js version " +
+      'using NODE_MODULE_VERSION 148. This version of Node.js requires NODE_MODULE_VERSION 141.'
+    const classified = describeSqliteAbiMismatch(message)
+    expect(classified).toContain('compiled=148')
+    expect(classified).toContain(`current=${process.versions.modules ?? 'unknown'}`)
+    expect(classified).toContain(process.version)
+  })
+
+  it('returns null for unrelated load errors', () => {
+    expect(describeSqliteAbiMismatch('Could not locate the bindings file.')).toBeNull()
+    expect(describeSqliteAbiMismatch('')).toBeNull()
+  })
 })

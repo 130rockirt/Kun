@@ -1,6 +1,7 @@
 import {
   createEmptyDocument,
   createHtmlFrameShape,
+  embeddedArtifactOf,
   isArtifactFrame,
   isHtmlFrame,
   type CanvasDocument,
@@ -27,10 +28,13 @@ import { writeDesignWorkspaceFile } from './design-persistence-coordinator'
 import { createLinkedHtmlScreen } from './canvas/screen-lifecycle'
 import {
   createDesignArtifactId,
+  currentDesignArtifactVersion,
   defaultDesignArtifactNode,
+  designArtifactVersionLabel,
   inferDesignArtifactFoundationRole,
   type DesignArtifact,
-  type DesignArtifactNode
+  type DesignArtifactNode,
+  type DesignArtifactVersion
 } from './design-types'
 import { useDesignWorkspaceStore } from './design-workspace-store'
 
@@ -72,6 +76,9 @@ export function buildHtmlArtifactSyncKey(
         const node = artifact.node
         return [
           artifact.id,
+          artifact.versions.map((version) => `${version.id}@${version.relativePath}`).join(','),
+          currentDesignArtifactVersion(artifact)?.id ?? '',
+          currentDesignArtifactVersion(artifact)?.relativePath ?? artifact.relativePath,
           artifact.title,
           artifact.previewStatus ?? '',
           inferDesignArtifactFoundationRole(artifact) ?? '',
@@ -81,7 +88,8 @@ export function buildHtmlArtifactSyncKey(
           node?.height ?? '',
           node?.sizeMode ?? '',
           node?.viewMode ?? '',
-          node?.boardHidden ? 'hidden' : ''
+          node?.boardHidden ? 'hidden' : '',
+          (node?.boardHiddenVersionIds ?? []).join(',')
         ].join(':')
       })
   ].join('|')
@@ -118,21 +126,63 @@ function documentShapeIdsInOrder(doc: CanvasDocument): string[] {
   return ordered
 }
 
-function linkedHtmlFrames(doc: CanvasDocument): Map<string, CanvasShape> {
+function linkedHtmlFrames(
+  doc: CanvasDocument,
+  artifacts: readonly DesignArtifact[]
+): Map<string, CanvasShape> {
   const frames = new Map<string, CanvasShape>()
+  const artifactById = new Map(artifacts.map((artifact) => [artifact.id, artifact]))
   for (const id of documentShapeIdsInOrder(doc)) {
     const shape = doc.objects[id]
-    if (shape && isHtmlFrame(shape) && shape.htmlArtifactId && !frames.has(shape.htmlArtifactId)) {
-      frames.set(shape.htmlArtifactId, shape)
-    }
+    const reference = shape ? embeddedArtifactOf(shape) : null
+    if (!shape || !isHtmlFrame(shape) || !reference?.id) continue
+    const artifact = artifactById.get(reference.id)
+    const versionId = effectiveHtmlFrameVersionId(shape, artifact)
+    const key = htmlFrameKey(reference.id, versionId)
+    if (!frames.has(key)) frames.set(key, shape)
   }
   return frames
+}
+
+export function currentHtmlVersionId(artifact: DesignArtifact): string {
+  return currentDesignArtifactVersion(artifact)?.id ?? `${artifact.id}-current`
+}
+
+function htmlArtifactVersions(artifact: DesignArtifact): DesignArtifactVersion[] {
+  if (artifact.versions.length === 0) {
+    return [{
+      id: currentHtmlVersionId(artifact),
+      relativePath: artifact.relativePath,
+      createdAt: artifact.updatedAt,
+      summary: ''
+    }]
+  }
+  // Versions are persisted newest-first; place historical versions first so a
+  // newly-created version is laid out after the frames already on the board.
+  return [...artifact.versions].reverse()
+}
+
+function htmlFrameKey(artifactId: string, versionId: string): string {
+  return `${artifactId}:${versionId}`
+}
+
+function effectiveHtmlFrameVersionId(
+  shape: CanvasShape,
+  artifact: DesignArtifact | undefined
+): string {
+  return embeddedArtifactOf(shape)?.versionId ?? (artifact ? currentHtmlVersionId(artifact) : `${shape.htmlArtifactId ?? shape.id}-current`)
+}
+
+function htmlFrameName(artifact: DesignArtifact, version: DesignArtifactVersion, isCurrent: boolean): string {
+  if (isCurrent) return artifact.title || 'Screen'
+  return `${artifact.title || 'Screen'} · ${designArtifactVersionLabel(version, artifact.versions.length)}`
 }
 
 function documentHasHtmlFrameForArtifact(doc: CanvasDocument, artifactId: string): boolean {
   for (const id of documentShapeIdsInOrder(doc)) {
     const shape = doc.objects[id]
-    if (shape && isHtmlFrame(shape) && shape.htmlArtifactId === artifactId) return true
+    const reference = shape ? embeddedArtifactOf(shape) : null
+    if (shape && isHtmlFrame(shape) && reference?.id === artifactId) return true
   }
   return false
 }
@@ -357,16 +407,19 @@ export function syncHtmlArtifactsToBoardDocument(
   const updatedFrameIds: string[] = []
   const removedFrameIds: string[] = []
   let next: CanvasDocument | null = null
-  const htmlArtifactIds = new Set(htmlArtifacts.map((artifact) => artifact.id))
-  const seenFrameArtifactIds = new Set<string>()
+  const htmlArtifactsById = new Map(htmlArtifacts.map((artifact) => [artifact.id, artifact]))
+  const seenFrameKeys = new Set<string>()
 
   for (const id of documentShapeIdsInOrder(doc)) {
     const shape = doc.objects[id]
-    if (!shape || !isHtmlFrame(shape) || !shape.htmlArtifactId) continue
-    const duplicateLinkedFrame = seenFrameArtifactIds.has(shape.htmlArtifactId)
-    const missingArtifact = !htmlArtifactIds.has(shape.htmlArtifactId)
+    const reference = shape ? embeddedArtifactOf(shape) : null
+    if (!shape || !isHtmlFrame(shape) || !reference?.id) continue
+    const artifact = htmlArtifactsById.get(reference.id)
+    const versionId = effectiveHtmlFrameVersionId(shape, artifact)
+    const duplicateLinkedFrame = seenFrameKeys.has(htmlFrameKey(reference.id, versionId))
+    const missingArtifact = !htmlArtifactsById.has(reference.id)
     if (!duplicateLinkedFrame && !missingArtifact) {
-      seenFrameArtifactIds.add(shape.htmlArtifactId)
+      seenFrameKeys.add(htmlFrameKey(reference.id, versionId))
       continue
     }
     if (!next) next = cloneDocument(doc)
@@ -389,14 +442,21 @@ export function syncHtmlArtifactsToBoardDocument(
   if (!root) return { document: workingDoc, addedFrameIds, updatedFrameIds, removedFrameIds }
 
   const designTarget = useDesignWorkspaceStore.getState().designContext.designTarget
-  const framesByArtifactId = linkedHtmlFrames(workingDoc)
-  const autoPlaceArtifacts = htmlArtifacts
-    .map((artifact, index) => ({ artifact, index }))
-    .filter(({ artifact, index }) =>
-      !artifact.node?.boardHidden &&
-      !framesByArtifactId.has(artifact.id) &&
-      !shouldUseArtifactNodeForFrame(artifact, index)
-    )
+  const framesByVersion = linkedHtmlFrames(workingDoc, htmlArtifacts)
+  const frameSpecs = htmlArtifacts.flatMap((artifact, index) => {
+    const currentVersionId = currentHtmlVersionId(artifact)
+    return htmlArtifactVersions(artifact).map((version) => ({
+      artifact,
+      version,
+      index,
+      isCurrent: version.id === currentVersionId
+    }))
+  })
+  const autoPlaceArtifacts = frameSpecs.filter(({ artifact, version, isCurrent, index }) =>
+    !artifact.node?.boardHidden &&
+    !framesByVersion.has(htmlFrameKey(artifact.id, version.id)) &&
+    (isCurrent ? !shouldUseArtifactNodeForFrame(artifact, index) : true)
+  )
   const autoRects = layoutRectsInViewport(
     autoPlaceArtifacts.map(({ artifact, index }) =>
       defaultFrameSizeForArtifact(artifact, index, designTarget)
@@ -414,13 +474,14 @@ export function syncHtmlArtifactsToBoardDocument(
   const placedAutoRects: Rect[] = []
   let autoIndex = 0
 
-  htmlArtifacts.forEach((artifact, index) => {
-    const existing = framesByArtifactId.get(artifact.id)
-    const customNode = shouldUseArtifactNodeForFrame(artifact, index) ? artifact.node : null
-    const autoNode = autoArtifactNode(artifact, index)
+  frameSpecs.forEach(({ artifact, version, index, isCurrent }) => {
+    const existing = framesByVersion.get(htmlFrameKey(artifact.id, version.id))
+    const customNode = isCurrent && shouldUseArtifactNodeForFrame(artifact, index) ? artifact.node : null
+    const autoNode = isCurrent ? autoArtifactNode(artifact, index) : null
     const defaultFrameSize = defaultFrameSizeForArtifact(artifact, index, designTarget)
     const defaultDevicePreset = defaultDevicePresetForArtifact(artifact, designTarget)
-    if (!existing && artifact.node?.boardHidden) return
+    if (!existing && isCurrent && artifact.node?.boardHidden) return
+    if (!existing && (artifact.node?.boardHiddenVersionIds ?? []).includes(version.id)) return
     if (existing) {
       const rootHasFrame = root.children.includes(existing.id)
       if (existing.parentId !== workingDoc.rootId || !rootHasFrame || existing.frameId !== null) {
@@ -443,6 +504,33 @@ export function syncHtmlArtifactsToBoardDocument(
         }
       }
       const patch: Partial<CanvasShape> = {}
+      const expectedEmbeddedArtifact = {
+        id: artifact.id,
+        kind: 'html' as const,
+        versionId: version.id
+      }
+      if (
+        existing.embeddedArtifact?.id !== expectedEmbeddedArtifact.id ||
+        existing.embeddedArtifact.kind !== expectedEmbeddedArtifact.kind ||
+        existing.embeddedArtifact.versionId !== expectedEmbeddedArtifact.versionId
+      ) {
+        // Stamp legacy/current frames with the exact snapshot they render. This
+        // lets the next generated version get its own frame without treating
+        // the older frame as an unversioned alias of the latest one.
+        patch.embeddedArtifact = expectedEmbeddedArtifact
+      }
+      if (!isCurrent) {
+        // Historical version frames are snapshots. Keep their position, size,
+        // and label stable while the artifact's current version evolves.
+        if (Object.keys(patch).length > 0) {
+          if (!next) next = cloneDocument(workingDoc)
+          next.objects[existing.id] = { ...next.objects[existing.id], ...patch }
+          if (Object.keys(patch).some((key) => key !== 'embeddedArtifact') && !updatedFrameIds.includes(existing.id)) {
+            updatedFrameIds.push(existing.id)
+          }
+        }
+        return
+      }
       const nextName = artifact.title || existing.name
       if (existing.name !== nextName) patch.name = nextName
       const minSize = ensureHtmlFrameMinSize(existing)
@@ -480,7 +568,9 @@ export function syncHtmlArtifactsToBoardDocument(
       if (Object.keys(patch).length > 0) {
         if (!next) next = cloneDocument(workingDoc)
         next.objects[existing.id] = { ...next.objects[existing.id], ...patch }
-        if (!updatedFrameIds.includes(existing.id)) updatedFrameIds.push(existing.id)
+        if (Object.keys(patch).some((key) => key !== 'embeddedArtifact') && !updatedFrameIds.includes(existing.id)) {
+          updatedFrameIds.push(existing.id)
+        }
       }
       return
     }
@@ -500,10 +590,17 @@ export function syncHtmlArtifactsToBoardDocument(
             useCanvasViewportStore.getState().vbox,
             [...occupiedAutoRects, ...placedAutoRects]
           )
-    const frame = createHtmlFrameShape(artifact.title || 'Screen', rect.x, rect.y, artifact.id, defaultDevicePreset)
+    const frame = createHtmlFrameShape(
+      htmlFrameName(artifact, version, isCurrent),
+      rect.x,
+      rect.y,
+      artifact.id,
+      defaultDevicePreset,
+      version.id
+    )
     frame.width = rect.width
     frame.height = rect.height
-    frame.name = artifact.title || frame.name
+    frame.name = htmlFrameName(artifact, version, isCurrent)
     frame.parentId = next.rootId
     if (customNode) occupiedAutoRects.push({ x: frame.x, y: frame.y, width: frame.width, height: frame.height })
     else placedAutoRects.push({ x: frame.x, y: frame.y, width: frame.width, height: frame.height })
@@ -521,15 +618,52 @@ export function syncHtmlArtifactsToBoardDocument(
 
 export function syncHtmlFrameNodesToArtifacts(doc: CanvasDocument): void {
   const designStore = useDesignWorkspaceStore.getState()
+  const htmlArtifactsById = new Map(
+    designStore.artifacts
+      .filter((item) => item.kind === 'html')
+      .map((item) => [item.id, item])
+  )
+
+  // Drop board-hidden tombstones for any version whose frame is present again
+  // (e.g. after undo restores a deleted frame). This must also cover historical
+  // versions, which the current-version geometry pass below intentionally skips.
+  const presentVersionIdsByArtifact = new Map<string, Set<string>>()
+  for (const id of documentShapeIdsInOrder(doc)) {
+    const shape = doc.objects[id]
+    if (!shape || !isHtmlFrame(shape) || !shape.htmlArtifactId) continue
+    const reference = embeddedArtifactOf(shape)
+    if (!reference?.id) continue
+    const artifact = htmlArtifactsById.get(shape.htmlArtifactId)
+    const versionId = reference.versionId
+      ?? (artifact ? currentHtmlVersionId(artifact) : `${shape.htmlArtifactId}-current`)
+    let versionIds = presentVersionIdsByArtifact.get(shape.htmlArtifactId)
+    if (!versionIds) {
+      versionIds = new Set<string>()
+      presentVersionIdsByArtifact.set(shape.htmlArtifactId, versionIds)
+    }
+    versionIds.add(versionId)
+  }
+  for (const [artifactId, versionIds] of presentVersionIdsByArtifact) {
+    const artifact = htmlArtifactsById.get(artifactId)
+    if (!artifact) continue
+    const hidden = (artifact.node?.boardHiddenVersionIds ?? []).filter((id) => !versionIds.has(id))
+    if (hidden.length !== (artifact.node?.boardHiddenVersionIds ?? []).length) {
+      designStore.updateArtifactNode(artifactId, { boardHiddenVersionIds: hidden })
+    }
+  }
+
   const syncedArtifactIds = new Set<string>()
   for (const id of documentShapeIdsInOrder(doc)) {
     const shape = doc.objects[id]
     if (!shape || !isHtmlFrame(shape) || !shape.htmlArtifactId) continue
+    const artifact = htmlArtifactsById.get(shape.htmlArtifactId)
+    if (!artifact) continue
+    const reference = embeddedArtifactOf(shape)
+    const versionId = reference?.versionId
+    if (versionId && versionId !== currentHtmlVersionId(artifact)) continue
     if (syncedArtifactIds.has(shape.htmlArtifactId)) continue
-    const artifactIndex = designStore.artifacts.findIndex((item) => item.id === shape.htmlArtifactId)
-    const artifact = artifactIndex >= 0 ? designStore.artifacts[artifactIndex] : undefined
-    if (!artifact || artifact.kind !== 'html') continue
     syncedArtifactIds.add(shape.htmlArtifactId)
+    const artifactIndex = designStore.artifacts.findIndex((item) => item.id === shape.htmlArtifactId)
     const patch = frameNodePatch(shape)
     if (!patch) continue
     const nextNode = {

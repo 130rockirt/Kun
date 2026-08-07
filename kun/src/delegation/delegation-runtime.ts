@@ -138,6 +138,8 @@ export const ChildRunRecord = z.object({
   accountId: z.string().optional(),
   /** Effective reasoning strength used by the child model request. */
   reasoningEffort: ModelReasoningEffort.optional(),
+  /** Effective Codex service tier used by the child model request ('fast' = priority). */
+  serviceTier: z.literal('priority').optional(),
   /** Resolved subagent profile name, when one was selected. */
   profile: z.string().optional(),
   /** Legacy read compatibility; new child runs never write skillId. */
@@ -235,6 +237,8 @@ export type ChildRunExecutor = (input: {
   guiDesignCanvas?: boolean
   /** Reasoning depth for this profile's child model requests (default 'off'). */
   reasoningEffort?: string
+  /** Effective Codex service tier for this child's model requests ('fast' = priority). */
+  serviceTier?: 'priority'
   returnFormat?: ChildReturnFormat
   signal: AbortSignal
 }) => Promise<{
@@ -401,6 +405,18 @@ export class DelegationRuntime {
     inheritedAccountId?: string
     /** Effective parent-turn reasoning strength inherited by custom one-run agents. */
     inheritedReasoningEffort?: string
+    /** Effective parent-turn Codex service tier ('fast'). Inherited by default-inherit tools unless overridden. */
+    inheritedServiceTier?: 'priority'
+    /**
+     * When true, the child falls back to the parent session's model route,
+     * reasoning effort, and service tier wherever the profile does not
+     * configure an explicit override (explicit tool overrides still win).
+     * Used by first-class tools such as `explore_agent`; delegate_task
+     * keeps its existing precedence semantics when this is unset.
+     */
+    inheritSessionDefaults?: boolean
+    /** Explicit Codex service tier override for this child ('fast' = priority). */
+    serviceTier?: 'priority'
     /** Effective parent policy captured by the delegating tool call. */
     approvalPolicy?: ApprovalPolicy
     sandboxMode?: SandboxMode
@@ -547,9 +563,20 @@ export class DelegationRuntime {
     const resolvedBlockedSkills = profile?.blockedSkills
     const resolvedSkillsEnabled = profile?.skillsEnabled ?? true
     const promptPreamble = profile?.promptPreamble
+    // Default-inherit tools (e.g. explore_agent) follow the parent session's
+    // reasoning strength unless the profile configures an explicit depth;
+    // reusable delegate_task profiles keep their existing 'off'-style default.
     const resolvedReasoningEffort = ephemeralAgentInheritsSessionSelection
       ? normalizeInheritedReasoningEffort(input.inheritedReasoningEffort)
-      : profile?.reasoningEffort
+      : input.inheritSessionDefaults === true
+        ? profile?.reasoningEffort ?? normalizeInheritedReasoningEffort(input.inheritedReasoningEffort)
+        : profile?.reasoningEffort
+    // Explicit tool override wins; otherwise default-inherit tools adopt the
+    // parent turn's Codex service tier ('fast'). The child model request is
+    // still capability-gated downstream (Codex + priority-capable only).
+    const resolvedServiceTier =
+      input.serviceTier ??
+      (input.inheritSessionDefaults === true ? input.inheritedServiceTier : undefined)
     const returnFormat = input.returnFormat ?? 'summary'
 
     // Reserve against the per-thread child-count limit before persisting anything.
@@ -572,6 +599,7 @@ export class DelegationRuntime {
       providerId: resolvedProviderId,
       accountId: resolvedAccountId,
       reasoningEffort: resolvedReasoningEffort,
+      ...(resolvedServiceTier ? { serviceTier: resolvedServiceTier } : {}),
       profile: profileName,
       ...(input.routing ? { routing: ChildRoutingMetadata.parse(input.routing) } : {}),
       ...(profile ? { profileSnapshot: profile } : {}),
@@ -649,6 +677,7 @@ export class DelegationRuntime {
         clientSurface: input.clientSurface,
         guiDesignCanvas: input.guiDesignCanvas === true,
         resolvedReasoningEffort,
+        resolvedServiceTier,
         returnFormat,
         workspace,
         security,
@@ -713,6 +742,7 @@ export class DelegationRuntime {
       clientSurface: input.clientSurface,
       guiDesignCanvas: input.guiDesignCanvas === true,
       resolvedReasoningEffort,
+      resolvedServiceTier,
       returnFormat,
       workspace,
       security,
@@ -778,6 +808,7 @@ export class DelegationRuntime {
     clientSurface: TurnClientSurface | undefined
     guiDesignCanvas: boolean
     resolvedReasoningEffort: string | undefined
+    resolvedServiceTier: 'priority' | undefined
     returnFormat: ChildReturnFormat
     workspace: string | undefined
     security: ChildSecuritySnapshot | undefined
@@ -843,6 +874,7 @@ export class DelegationRuntime {
         ...(args.promptPreamble ? { promptPreamble: args.promptPreamble } : {}),
         ...(args.guiDesignCanvas ? { guiDesignCanvas: true } : {}),
         ...(args.resolvedReasoningEffort ? { reasoningEffort: args.resolvedReasoningEffort } : {}),
+        ...(args.resolvedServiceTier ? { serviceTier: args.resolvedServiceTier } : {}),
         returnFormat: args.returnFormat,
         signal
       }))

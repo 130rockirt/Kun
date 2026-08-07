@@ -268,7 +268,7 @@ describe('models.dev profile enrichment', () => {
     expect(next['vision-model']).not.toHaveProperty('description')
   })
 
-  it('fills only missing limits on an existing profile and preserves behavior fields', () => {
+  it('refreshes catalog limits on an existing profile and preserves behavior fields', () => {
     const explicitProfile: ModelProviderModelProfileV1 = {
       aliases: ['writer'],
       maxOutputTokens: 4_096,
@@ -295,11 +295,12 @@ describe('models.dev profile enrichment', () => {
     }])
     expect(next['Model-A']).toEqual({
       ...explicitProfile,
-      contextWindowTokens: 1_000_000
+      contextWindowTokens: 1_000_000,
+      maxOutputTokens: 128_000
     })
   })
 
-  it('returns the original profile map when there is nothing safe to add', () => {
+  it('returns the original profile map when catalog limits are unchanged', () => {
     const profile: ModelProviderModelProfileV1 = {
       contextWindowTokens: 128_000,
       maxOutputTokens: 8_000,
@@ -313,8 +314,8 @@ describe('models.dev profile enrichment', () => {
       id: 'model-a',
       inputModalities: ['text', 'image'],
       outputModalities: ['text'],
-      contextWindowTokens: 256_000,
-      maxOutputTokens: 16_000,
+      contextWindowTokens: 128_000,
+      maxOutputTokens: 8_000,
       toolCalling: false
     }])).toBe(target.modelProfiles)
   })

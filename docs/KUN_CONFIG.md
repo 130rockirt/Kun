@@ -120,7 +120,7 @@ GUI 启动 Kun 时会按下面的顺序合并配置。
   },
   "runtime": {
     "streamIdleTimeoutMs": 450000,
-    "toolStorm": { "enabled": true, "windowSize": 8, "threshold": 3 },
+    "toolStorm": { "enabled": true },
     "toolArgumentRepair": { "maxStringBytes": 524288 }
   }
 }

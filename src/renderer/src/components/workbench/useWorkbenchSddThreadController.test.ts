@@ -4,7 +4,7 @@ import {
   markSddAssistantThread,
   normalizeSddThreadRegistry
 } from '../../sdd/sdd-thread-registry'
-import { shouldRestoreRequirementDraftForSidebarThread } from './useWorkbenchSddThreadController'
+import { isRequirementSessionThread } from './useWorkbenchSddThreadController'
 
 const requirementThread: NormalizedThread = {
   id: 'thread-sdd-1',
@@ -15,8 +15,8 @@ const requirementThread: NormalizedThread = {
   workspace: '/tmp/app'
 }
 
-describe('requirement sidebar thread destination', () => {
-  it('restores the requirement before Plan release and opens Code afterward', () => {
+describe('requirement sidebar thread classification', () => {
+  it('classifies the session as a requirement session before Plan release and as plain Code afterward', () => {
     const requirementRegistry = markSddAssistantThread({
       id: 'draft-1',
       workspaceRoot: '/tmp/app',
@@ -41,12 +41,12 @@ describe('requirement sidebar thread destination', () => {
       )
     })
 
-    expect(shouldRestoreRequirementDraftForSidebarThread(
+    expect(isRequirementSessionThread(
       requirementThread.id,
       requirementThread,
       visibleRequirementRegistry
     )).toBe(true)
-    expect(shouldRestoreRequirementDraftForSidebarThread(
+    expect(isRequirementSessionThread(
       requirementThread.id,
       requirementThread,
       releasedRegistry

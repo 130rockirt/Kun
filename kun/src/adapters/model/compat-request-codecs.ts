@@ -1,14 +1,19 @@
 import type { ModelCapabilityMetadata } from '../../contracts/capabilities.js'
 import type { ModelEndpointFormat } from '../../contracts/model-endpoint-format.js'
+import type { ToolCallProviderMetadata } from '../../contracts/items.js'
 import type { ModelRequest, ModelToolSpec } from '../../ports/model-client.js'
 import { isDeepSeekHost, isGeminiOpenAiHost } from './model-error-probe.js'
 
 export const COMPAT_HISTORY_CONTEXT = Symbol('compat-history-context')
+export const COMPAT_ANTHROPIC_THINKING = Symbol('compat-anthropic-thinking')
 
 export type CompatChatMessage = {
   role: 'system' | 'user' | 'assistant' | 'tool'
   content: string | CompatChatMessageContentPart[] | null
   [COMPAT_HISTORY_CONTEXT]?: true
+  [COMPAT_ANTHROPIC_THINKING]?: NonNullable<
+    NonNullable<ToolCallProviderMetadata['anthropic']>['thinkingBlocks']
+  >
   name?: string
   tool_call_id?: string
   reasoning_content?: string

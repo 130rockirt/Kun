@@ -930,6 +930,7 @@ describe('provider quota registry and refresh', () => {
         'opencode-go'
       )
     ]), fetcher, {
+      resolveOpenCodeGoCookie: async () => undefined,
       resolveOpenCodeGoQuota: async () => ({
         summary: 'Local estimate · $12 / $30 / $60 plan limits',
         metrics: [{
@@ -964,12 +965,13 @@ describe('provider quota registry and refresh', () => {
         'opencode-go'
       )
     ]), vi.fn(), {
+      resolveOpenCodeGoCookie: async () => undefined,
       resolveOpenCodeGoQuota: async () => undefined
     })
 
     expect(result.entries.find((entry) => entry.providerId === 'opencode-go')).toMatchObject({
       status: 'missing_credentials',
-      message: 'Use OpenCode Go locally first so its local usage database contains history.'
+      message: 'Sign in to opencode.ai in your browser, or use OpenCode Go locally first so its usage history exists.'
     })
   })
 })

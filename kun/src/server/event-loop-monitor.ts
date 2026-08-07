@@ -7,6 +7,19 @@ export type EventLoopMonitorOptions = {
   intervalMs?: number
   /** Log when a heartbeat fires this much later than its scheduled interval. */
   stallThresholdMs?: number
+  /**
+   * Stalls at or above this magnitude are classified `hard` (the runtime was
+   * unresponsive for a long wall-clock window, typically a synchronous
+   * CPU-bound or blocking-I/O step) instead of `cpu` (short jitter that still
+   * suggests transient starvation).
+   */
+  hardStallThresholdMs?: number
+  /**
+   * Non-sensitive diagnostic context attached to every stall report (for
+   * example runtime instance id / build id). Resolved lazily at stall time so
+   * the caller can include live counters without keeping stale state.
+   */
+  context?: () => string[]
   /** Injectable monotonic clock (defaults to performance.now()). */
   now?: () => number
   /** Injectable log sink (defaults to console.warn → captured by the GUI). */
@@ -15,6 +28,7 @@ export type EventLoopMonitorOptions = {
 
 const DEFAULT_INTERVAL_MS = 1_000
 const DEFAULT_STALL_THRESHOLD_MS = 2_000
+const DEFAULT_HARD_STALL_THRESHOLD_MS = 60_000
 
 /**
  * Logs when the runtime's (single) event loop stalls — i.e. a heartbeat timer
@@ -35,6 +49,7 @@ const DEFAULT_STALL_THRESHOLD_MS = 2_000
 export function startEventLoopMonitor(options: EventLoopMonitorOptions = {}): EventLoopMonitorHandle {
   const intervalMs = options.intervalMs ?? DEFAULT_INTERVAL_MS
   const stallThresholdMs = options.stallThresholdMs ?? DEFAULT_STALL_THRESHOLD_MS
+  const hardStallThresholdMs = options.hardStallThresholdMs ?? DEFAULT_HARD_STALL_THRESHOLD_MS
   const now = options.now ?? (() => performance.now())
   const log = options.log ?? ((line: string) => console.warn(line))
 
@@ -44,9 +59,13 @@ export function startEventLoopMonitor(options: EventLoopMonitorOptions = {}): Ev
     const stall = current - last - intervalMs
     last = current
     if (stall >= stallThresholdMs) {
+      const stallClass = stall >= hardStallThresholdMs ? 'hard' : 'cpu'
+      const context = options.context?.() ?? []
+      const suffix = context.length ? `; ${context.join('; ')}` : ''
       log(
         `[kun] event loop stalled for ~${Math.round(stall)}ms — ` +
-          `health checks and SSE were unanswerable during this window`
+          `health checks and SSE were unanswerable during this window ` +
+          `(stall=${stallClass}${suffix})`
       )
     }
   }, intervalMs)
@@ -63,4 +82,14 @@ export function resolveEventLoopStallThresholdMs(env: NodeJS.ProcessEnv): number
     if (Number.isFinite(parsed) && parsed > 0) return Math.floor(parsed)
   }
   return DEFAULT_STALL_THRESHOLD_MS
+}
+
+/** Resolve the hard-stall classification threshold via `KUN_EVENT_LOOP_STALL_HARD_MS`. */
+export function resolveEventLoopHardStallThresholdMs(env: NodeJS.ProcessEnv): number {
+  const raw = env.KUN_EVENT_LOOP_STALL_HARD_MS
+  if (raw && raw.trim()) {
+    const parsed = Number(raw)
+    if (Number.isFinite(parsed) && parsed > 0) return Math.floor(parsed)
+  }
+  return DEFAULT_HARD_STALL_THRESHOLD_MS
 }

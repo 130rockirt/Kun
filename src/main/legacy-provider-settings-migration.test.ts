@@ -9,18 +9,47 @@ import {
   getModelProviderPreset,
   modelProviderPresetAccountProfile,
   modelProviderPresetProfile,
+  resolveWriteInlineCompletionApiKey,
   resolveKunRuntimeSettings,
   type AppSettingsV1
 } from '../shared/app-settings'
 import {
   LEGACY_PROVIDER_SOURCE_PREFIX,
-  LegacyProviderSettingsMigrationCoordinator
+  LegacyProviderSettingsMigrationCoordinator,
+  projectRegistryCredentials
 } from './legacy-provider-settings-migration'
 import { providersConfigForRuntime } from './runtime/kun-runtime-model-config'
 import { syncGuiManagedKunConfig } from './runtime/kun-runtime-config-service'
 import { JsonSettingsStore } from './settings-store'
 
 describe('LegacyProviderSettingsMigrationCoordinator', () => {
+  it('projects the final Registry generation only for Main request consumers', async () => {
+    const defaults = await new JsonSettingsStore(await mkdtemp(join(tmpdir(), 'kun-registry-projection-'))).load()
+    const settings = {
+      ...defaults,
+      provider: {
+        ...defaults.provider,
+        providers: defaults.provider.providers.map((provider) => provider.id === 'deepseek'
+          ? { ...provider, apiKey: 'stale-settings-key' }
+          : provider)
+      },
+      agents: {
+        ...defaults.agents,
+        kun: { ...defaults.agents.kun, providerId: 'deepseek', apiKey: 'stale-runtime-key' }
+      }
+    }
+
+    const projected = await projectRegistryCredentials(settings, async (providerId) => ({
+      authoritative: providerId === 'deepseek',
+      apiKey: providerId === 'deepseek' ? 'final-registry-key' : ''
+    }))
+
+    expect(resolveKunRuntimeSettings(projected).apiKey).toBe('final-registry-key')
+    expect(resolveWriteInlineCompletionApiKey(projected)).toBe('final-registry-key')
+    expect(projected.agents.kun.apiKey).toBe('')
+    expect(settings.provider.providers[0]?.apiKey).toBe('stale-settings-key')
+  })
+
   it('does not initialize protected stores in the canonical legacy directory', async () => {
     const runtimeFactory = vi.fn()
     const coordinator = new LegacyProviderSettingsMigrationCoordinator(runtimeFactory)
@@ -56,8 +85,11 @@ describe('LegacyProviderSettingsMigrationCoordinator', () => {
   it('emits distinct protected credential bindings for numbered plan accounts', () => {
     const providerSettings = defaultModelProviderSettings()
     const kimi = getModelProviderPreset('kimi-code')!
-    const first = modelProviderPresetAccountProfile(kimi, 'api', [])!
-    const second = modelProviderPresetAccountProfile(kimi, 'api', [first])!
+    const first = { ...modelProviderPresetAccountProfile(kimi, 'api', [])!, apiKey: 'first-secret' }
+    const second = {
+      ...modelProviderPresetAccountProfile(kimi, 'api', [first])!,
+      apiKey: 'second-secret'
+    }
     const runtimeProviders = providersConfigForRuntime({
       provider: {
         ...providerSettings,
@@ -96,7 +128,7 @@ describe('LegacyProviderSettingsMigrationCoordinator', () => {
     expect(JSON.stringify(runtimeProviders)).not.toContain('cursor-secret')
   })
 
-  it('projects legacy subscription profiles through their preset SDK transports', () => {
+  it('does not manufacture legacy credential sources for unhydrated subscription profiles', () => {
     const providerSettings = defaultModelProviderSettings()
     const legacySubscriptions = [
       'claude-subscription',
@@ -118,21 +150,20 @@ describe('LegacyProviderSettingsMigrationCoordinator', () => {
     } as AppSettingsV1)
 
     expect(runtimeProviders['claude-subscription']).toEqual(expect.objectContaining({
-      kind: 'agent-sdk',
-      credentialSourceId: 'settings:provider:claude-subscription'
+      kind: 'agent-sdk'
     }))
     expect(runtimeProviders['cursor-subscription']).toEqual(expect.objectContaining({
-      kind: 'cursor-sdk',
-      credentialSourceId: 'settings:provider:cursor-subscription'
+      kind: 'cursor-sdk'
     }))
     expect(runtimeProviders['gemini-subscription']).toEqual(expect.objectContaining({
-      kind: 'antigravity-cli',
-      credentialSourceId: 'settings:provider:gemini-subscription'
+      kind: 'antigravity-cli'
     }))
     expect(runtimeProviders['gemini-cli-subscription']).toEqual(expect.objectContaining({
-      kind: 'gemini-cli-api',
-      credentialSourceId: 'settings:provider:gemini-cli-subscription'
+      kind: 'gemini-cli-api'
     }))
+    for (const provider of legacySubscriptions) {
+      expect(runtimeProviders[provider.id]).not.toHaveProperty('credentialSourceId')
+    }
     expect(runtimeProviders['cursor-subscription']?.baseUrl).toBeUndefined()
     expect(runtimeProviders['gemini-subscription']?.baseUrl).toBeUndefined()
     expect(runtimeProviders['gemini-cli-subscription']?.baseUrl).toBeUndefined()
@@ -330,6 +361,12 @@ describe('LegacyProviderSettingsMigrationCoordinator', () => {
     expect(await readFile(join(userDataDir, 'kun-settings.json'), 'utf8'))
       .not.toContain('fresh-minimax-secret')
     expect(loaded.provider.apiKey).toBe('')
+    const markers = JSON.parse(await readFile(
+      join(dataDir, 'extensions', 'legacy-credential-migrations.json'),
+      'utf8'
+    )) as { entries: Record<string, unknown> }
+    expect(markers.entries['settings:provider:deepseek']).toBeDefined()
+    expect(markers.entries['settings:provider:minimax']).toBeDefined()
   })
 
   it('recovers OAuth refresh material flattened to its backed-up access token', async () => {
@@ -441,7 +478,7 @@ describe('LegacyProviderSettingsMigrationCoordinator', () => {
     expect(rollback).toHaveBeenCalledOnce()
   })
 
-  it('does not migrate when an existing backup path is not a protected regular file', async () => {
+  it('fails closed when an existing backup path is not a protected regular file', async () => {
     const userDataDir = await mkdtemp(join(tmpdir(), 'kun-settings-credential-backup-'))
     const plainStore = new JsonSettingsStore(userDataDir)
     const settings = await plainStore.load()
@@ -452,12 +489,38 @@ describe('LegacyProviderSettingsMigrationCoordinator', () => {
     await mkdir(join(userDataDir, 'kun-settings.pre-extension-credential-migration.json'))
     const prepare = vi.fn()
 
-    const loaded = await new JsonSettingsStore(userDataDir, {
+    const loading = new JsonSettingsStore(userDataDir, {
       credentialMigration: { prepare }
     }).load()
 
-    expect(loaded.provider.apiKey).toBe('plaintext-must-remain-authoritative')
+    await expect(loading).rejects.toThrow(/protected settings backup could not be written/)
     expect(prepare).not.toHaveBeenCalled()
+  })
+
+  it('never returns or caches plaintext when protected Registry migration is unavailable', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'kun-settings-credential-manager-failure-'))
+    const plainStore = new JsonSettingsStore(userDataDir)
+    const defaults = await plainStore.load()
+    const value = JSON.stringify({
+      ...defaults,
+      provider: { ...defaults.provider, apiKey: 'plaintext-must-not-escape' }
+    })
+    const backend = {
+      read: vi.fn(async () => ({ revision: 1, value })),
+      write: vi.fn(async () => { throw new Error('unexpected write') })
+    }
+    const prepare = vi.fn(async () => {
+      throw new Error('Manager Registry unavailable')
+    })
+    const store = new JsonSettingsStore(userDataDir, {
+      documentBackend: backend,
+      credentialMigration: { prepare }
+    })
+
+    await expect(store.load()).rejects.toThrow(/could not be moved to protected storage/)
+    await expect(store.load()).rejects.toThrow(/could not be moved to protected storage/)
+    expect(prepare).toHaveBeenCalledTimes(2)
+    expect(backend.write).not.toHaveBeenCalled()
   })
 
   it('forgets Grok and Codex OAuth bindings when the user clears the provider apiKey', async () => {

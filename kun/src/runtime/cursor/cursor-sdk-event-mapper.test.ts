@@ -56,6 +56,58 @@ describe('CursorSdkEventMapper', () => {
     ]))
   })
 
+  test('addresses every text and reasoning fragment by its UTF-16 offset', () => {
+    const subject = mapper()
+    const firstText = subject.map({
+      type: 'assistant',
+      agent_id: 'agent',
+      run_id: 'run',
+      message: {
+        role: 'assistant',
+        content: [
+          { type: 'text', text: 'A😀' },
+          { type: 'text', text: 'B' }
+        ]
+      }
+    })
+    const secondText = subject.map({
+      type: 'assistant',
+      agent_id: 'agent',
+      run_id: 'run',
+      message: { role: 'assistant', content: [{ type: 'text', text: '猫' }] }
+    })
+    const reasoning = [
+      ...subject.map({
+        type: 'thinking',
+        agent_id: 'agent',
+        run_id: 'run',
+        text: '思😀'
+      }),
+      ...subject.map({
+        type: 'thinking',
+        agent_id: 'agent',
+        run_id: 'run',
+        text: '考'
+      })
+    ]
+
+    expect([...firstText, ...secondText].map((event) => ({
+      offset: 'deltaOffset' in event ? event.deltaOffset : undefined,
+      text: 'item' in event && 'text' in event.item ? event.item.text : undefined
+    }))).toEqual([
+      { offset: 0, text: 'A😀' },
+      { offset: 3, text: 'B' },
+      { offset: 4, text: '猫' }
+    ])
+    expect(reasoning.map((event) => ({
+      offset: 'deltaOffset' in event ? event.deltaOffset : undefined,
+      text: 'item' in event && 'text' in event.item ? event.item.text : undefined
+    }))).toEqual([
+      { offset: 0, text: '思😀' },
+      { offset: 3, text: '考' }
+    ])
+  })
+
   test('projects Cursor-owned tool lifecycle without a Kun-ready redispatch event', () => {
     const subject = mapper()
     const started = subject.map({

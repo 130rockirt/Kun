@@ -385,7 +385,7 @@ export class FileGraphRunStore implements GraphRunStore {
     for (const record of records) {
       if (record.envelope.graphSeq <= replayFrom) continue
       const hydrated = await this.hydrateEnvelope(record.envelope)
-      state = applyGraphEvent(state, hydrated)
+      state = applyGraphEvent(state, hydrated, { replayCompatibility: true })
     }
     if (!state) throw new GraphStoreCorruptionError(`GraphRun ${runId} could not be reconstructed`)
     return state

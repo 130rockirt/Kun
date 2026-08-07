@@ -5,6 +5,7 @@ import {
   GraphRuntimeConfigSchema,
   KunConfigSchema,
   KunServeConfigSchema,
+  LabConfigSchema,
   ModelConfigSchema,
   QualityConfigSchema,
   RolesConfigSchema,
@@ -33,10 +34,13 @@ import {
 } from '../../../kun/src/contracts/capabilities.js'
 import {
   DEFAULT_MODEL_PROVIDER_ID,
+  MODEL_REASONING_EFFORTS,
+  getModelProviderSettings,
   getKunRuntimeSettings,
   resolveKunRuntimeSettings,
   resolveModelProviderProxyUrl,
   type AppSettingsV1,
+  type KunLabSettingsV1,
   type KunRuntimeSettingsV1
 } from '../../shared/app-settings'
 import { resolveCodexOAuthApiKey } from '../codex-auth'
@@ -173,6 +177,7 @@ export async function syncGuiManagedKunConfig(
     graph: graphConfigForRuntime(runtime.graph),
     quality: qualityConfigForRuntime(runtime.quality, objectValue(existing?.quality)),
     ...(Object.keys(roles).length ? { roles } : {}),
+    lab: labConfigForRuntime(runtime.lab),
     capabilities: {
       ...capabilities,
       attachments: enabledByDefault(objectValue(capabilities.attachments)),
@@ -229,10 +234,36 @@ export async function syncGuiManagedKunConfig(
   return parsed.data
 }
 
-function defaultCredentialSourceId(settings: AppSettingsV1): string {
+function labConfigForRuntime(lab: KunLabSettingsV1 | undefined): KunConfig['lab'] {
+  const agent = lab?.exploreAgent
+  if (!agent) return { exploreAgent: { enabled: true, fast: false } }
+  const model = agent.model?.trim()
+  const providerId = agent.providerId?.trim()
+  return {
+    exploreAgent: {
+      enabled: agent.enabled !== false,
+      ...(model && providerId
+        ? {
+            model,
+            providerId,
+            ...(typeof agent.reasoningEffort === 'string' &&
+            MODEL_REASONING_EFFORTS.includes(agent.reasoningEffort)
+              ? { reasoningEffort: agent.reasoningEffort }
+              : {})
+          }
+        : {}),
+      fast: agent.fast === true
+    }
+  }
+}
+
+function defaultCredentialSourceId(settings: AppSettingsV1): string | undefined {
   const storedRuntime = getKunRuntimeSettings(settings)
   if (storedRuntime.apiKey.trim()) return LEGACY_RUNTIME_OVERRIDE_SOURCE_ID
-  return legacyProviderCredentialSourceId(storedRuntime.providerId.trim() || DEFAULT_MODEL_PROVIDER_ID)
+  const providerId = storedRuntime.providerId.trim() || DEFAULT_MODEL_PROVIDER_ID
+  const provider = getModelProviderSettings(settings).providers
+    .find((candidate) => candidate.id === providerId)
+  return provider?.apiKey.trim() ? legacyProviderCredentialSourceId(providerId) : undefined
 }
 
 type KunRuntimeConfigSettings = Pick<KunRuntimeSettingsV1,
@@ -242,7 +273,7 @@ type KunRuntimeConfigSettings = Pick<KunRuntimeSettingsV1,
   'tokenEconomy' | 'toolOutputLimits' | 'storage' | 'contextCompaction' |
   'runtimeTuning' | 'llmDebug' | 'imageGeneration' | 'textToSpeech' | 'musicGeneration' |
   'videoGeneration' | 'computerUse' | 'browserUse' | 'modelProfiles' | 'memoryEnabled' |
-  'instructions' | 'quality' | 'subagents' | 'graph' | 'smallModel' |
+  'instructions' | 'quality' | 'subagents' | 'graph' | 'lab' | 'smallModel' |
   'smallModelProviderId' | 'smallModelAccountId' |
   'titleModel' | 'titleProviderId' | 'titleAccountId' |
   'summaryModel' | 'summaryProviderId' | 'summaryAccountId' |
@@ -339,6 +370,7 @@ function sanitizeKunConfigSections(
     runtime: parseKunConfigSection(RuntimeTuningConfigSchema, existing.runtime),
     graph: parseKunConfigSection(GraphRuntimeConfigSchema, existing.graph),
     quality: parseKunConfigSection(QualityConfigSchema, existing.quality),
+    ...('lab' in existing ? { lab: parseKunConfigSection(LabConfigSchema, existing.lab) } : {}),
     capabilities: sanitizeCapabilities(existing.capabilities),
     ...('roles' in existing ? { roles: parseKunConfigSection(RolesConfigSchema, existing.roles) } : {}),
     ...(hooks.length ? { hooks } : {})

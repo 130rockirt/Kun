@@ -31,7 +31,7 @@ type ThreadMetadataProjection = Parameters<NonNullable<ThreadEventSink['onThread
  * These records contain no store calls or renderer effects and can therefore
  * be replayed through the same reducer used for live SSE.
  */
-export type RuntimeProjectionAction =
+type RuntimeProjectionActionPayload =
   | { type: 'seq_observed'; seq: number }
   | { type: 'deltas_received'; deltas: ThreadDeltaEvent[] }
   | { type: 'assistant_item_upserted'; payload: AssistantItemSnapshotPayload }
@@ -68,5 +68,15 @@ export type RuntimeProjectionAction =
     }
   | { type: 'turn_completed' }
   | { type: 'turn_failed'; error: Error; options?: ThreadErrorOptions }
+
+/**
+ * Every action produced from a persisted runtime event keeps that event's
+ * sequence identity.  Consumers can therefore reject a replay before either
+ * state projection or browser-side effects run.  Legacy/unpersisted events
+ * may omit the value.
+ */
+export type RuntimeProjectionAction = RuntimeProjectionActionPayload & {
+  seq?: number
+}
 
 export type RuntimeProjectionActionBatch = readonly RuntimeProjectionAction[]

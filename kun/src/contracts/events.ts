@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import {
+  isPublicTurnItem,
   TurnItem,
   UserInputAnswerSchema,
   UserInputQuestionSchema,
@@ -165,6 +166,14 @@ export const ItemEvent = RuntimeEventBase.extend({
     'tool_call_started',
     'tool_call_finished'
   ]),
+  /**
+   * UTF-16 string offset of an assistant delta within the complete item text.
+   * New producers persist the cumulative item snapshot before recording the
+   * delta. Consumers can use this offset to make replay idempotent when a
+   * hydration snapshot already contains some or all of the fragment. Legacy
+   * events omit the field and retain append-once semantics.
+   */
+  deltaOffset: z.number().int().nonnegative().optional(),
   item: TurnItem
 })
 export type ItemEvent = z.infer<typeof ItemEvent>
@@ -507,6 +516,15 @@ export const RuntimeEvent = z.discriminatedUnion('kind', [
   HeartbeatEvent
 ])
 export type RuntimeEvent = z.infer<typeof RuntimeEvent>
+
+/**
+ * Runtime streams can contain model-only item records for durable internal
+ * state. Public transports must never expose those records even if a legacy
+ * migration or a future producer accidentally persists an item event for one.
+ */
+export function isPublicRuntimeEvent(event: RuntimeEvent): boolean {
+  return !('item' in event) || isPublicTurnItem(event.item)
+}
 
 export const RuntimeEventList = z.array(RuntimeEvent)
 export type RuntimeEventList = z.infer<typeof RuntimeEventList>

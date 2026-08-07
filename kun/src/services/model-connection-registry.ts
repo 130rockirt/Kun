@@ -1,31 +1,87 @@
+import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { z } from 'zod'
-import { AtomicJsonFile } from '../extensions/atomic-json.js'
+import { assertManagerAtomicJsonPath, AtomicJsonFile } from '../extensions/atomic-json.js'
 import type { ServeProviderConfig } from '../config/kun-config.js'
 import type { ModelCapabilityMetadata } from '../contracts/capabilities.js'
 import {
   ModelConnectionConnectRequestSchema,
+  ModelConnectionCredentialCommitRequestSchema,
+  ModelConnectionCredentialFenceRequestSchema,
+  ModelConnectionCredentialPrepareRequestSchema,
   ModelConnectionCredentialRequestSchema,
   ModelConnectionGlobalsRequestSchema,
   ModelConnectionPatchRequestSchema,
   ModelConnectionSelectRequestSchema,
   ModelConnectionSnapshotSchema,
   type ModelConnectionConnectRequest,
+  type ModelConnectionCredentialErrorCode,
+  type ModelConnectionCredentialStatus,
   type ModelConnectionProfile,
   type ModelConnectionSnapshot
 } from '../contracts/model-connections.js'
 import { materializeLegacyProviderCredential } from './legacy-provider-credential-migration.js'
 import type { ExtensionCredentialStore } from './extension-credential-store.js'
+import { createProxyFetch } from '../adapters/model/proxy-fetch.js'
 
-const StoredProfileSchema = ModelConnectionSnapshotSchema.shape.providers.element.extend({
+const StoredProfileSchema = ModelConnectionSnapshotSchema.shape.providers.element.omit({
+  credentialStatus: true,
+  credentialErrorCode: true
+}).extend({
+  incarnationId: z.string().uuid().optional(),
+  credentialMutationHighWater: z.record(
+    z.string().uuid(),
+    z.number().int().positive()
+  ).optional(),
   credentialRef: z.string().min(1).max(256).optional(),
   credentialSourceId: z.string().min(1).max(256).optional(),
+  legacyCredentialSourceToRetire: z.string().min(1).max(256).optional(),
   headers: z.record(z.string(), z.string()).optional()
 })
+const DeletedProfileTombstoneSchema = z.object({
+  deletedRevision: z.number().int().nonnegative(),
+  credentialMutationHighWater: z.record(
+    z.string().uuid(),
+    z.number().int().positive()
+  ).optional(),
+  legacyCredentialSourceToRetire: z.string().min(1).max(256).optional()
+}).strict()
+const CredentialTransactionPreviousSchema = z.object({
+  credentialRef: z.string().min(1).max(256).optional(),
+  credentialSourceId: z.string().min(1).max(256).optional(),
+  legacyCredentialSourceToRetire: z.string().min(1).max(256).optional(),
+  configured: z.boolean()
+}).strict()
+const CredentialTransactionSchema = z.object({
+  operationToken: z.string().min(1).max(128),
+  clientId: z.string().uuid(),
+  generation: z.number().int().positive(),
+  incarnationId: z.string().uuid(),
+  phase: z.enum(['fenced', 'prepared', 'committing', 'recovering']),
+  expiresAt: z.number().int().nonnegative(),
+  previous: CredentialTransactionPreviousSchema,
+  nextCredentialRef: z.string().min(1).max(256).optional(),
+  writerInstanceId: z.string().uuid().optional(),
+  writerPid: z.number().int().positive().optional(),
+  recoveryOwnerId: z.string().uuid().optional(),
+  recoveryOwnerPid: z.number().int().positive().optional()
+}).strict()
+const CredentialRefCleanupEntrySchema = z.object({
+  reference: z.string().min(1).max(256),
+  enqueuedAt: z.number().int().nonnegative(),
+  writerInstanceId: z.string().uuid().optional(),
+  writerPid: z.number().int().positive().optional()
+}).strict()
 const RegistryDocumentSchema = z.object({
   schemaVersion: z.literal(1),
   revision: z.number().int().nonnegative(),
   profiles: z.record(z.string(), StoredProfileSchema),
+  tombstones: z.record(z.string(), DeletedProfileTombstoneSchema).default({}),
+  credentialTransactions: z.record(z.string(), CredentialTransactionSchema).default({}),
+  credentialRefCleanup: z.record(
+    z.string().min(1).max(256),
+    CredentialRefCleanupEntrySchema
+  ).default({}),
   defaultProviderId: z.string().min(1).optional(),
   defaultAccountId: z.string().min(1).optional(),
   defaultModel: z.string().min(1).optional(),
@@ -35,6 +91,12 @@ const RegistryDocumentSchema = z.object({
 }).strict()
 type RegistryDocument = z.infer<typeof RegistryDocumentSchema>
 type StoredProfile = z.infer<typeof StoredProfileSchema>
+type CredentialTransaction = z.infer<typeof CredentialTransactionSchema>
+type PreparedCredentialSecret = {
+  operationToken: string
+  incarnationId: string
+  credential: string
+}
 
 export type ModelConnectionSeed = ModelConnectionConnectRequest & {
   /** Trusted runtime-only binding; never accepted by public connection APIs. */
@@ -61,11 +123,11 @@ export function isModelConnectionCredentialSourceId(sourceId: string): boolean {
     sourceId.length > MODEL_CONNECTION_CREDENTIAL_SOURCE_PREFIX.length
 }
 
-function modelConnectionCredentialSourceId(providerId: string): string {
+export function modelConnectionCredentialSourceId(providerId: string): string {
   return `${MODEL_CONNECTION_CREDENTIAL_SOURCE_PREFIX}${providerId}`
 }
 
-function providerIdFromCredentialSource(sourceId: string): string | null {
+export function providerIdFromCredentialSource(sourceId: string): string | null {
   if (!isModelConnectionCredentialSourceId(sourceId)) return null
   return sourceId.slice(MODEL_CONNECTION_CREDENTIAL_SOURCE_PREFIX.length)
 }
@@ -90,6 +152,13 @@ export class ModelConnectionRegistry {
   private listeners = new Set<(snapshot: ModelConnectionSnapshot) => void>()
   private changeOperation: Promise<void> = Promise.resolve()
   private lastAppliedRevision = -1
+  private credentialHealthRevision = -1
+  private credentialHealth = new Map<string, ProjectedCredentialHealth>()
+  /** Plaintext is origin-process memory only; the transaction authority is durable. */
+  private preparedCredentialSecrets = new Map<string, PreparedCredentialSecret>()
+  private preparedCredentialSecretTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  private credentialRecoveryTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  private readonly registryInstanceId = randomUUID()
 
   constructor(private readonly options: {
     dataDir: string
@@ -99,9 +168,24 @@ export class ModelConnectionRegistry {
       profile?: Pick<ModelConnectionProfile, 'id' | 'presetSource' | 'baseUrl' | 'kind'>
     ) => ModelCapabilityMetadata
     onChanged?: (connections: MaterializedModelConnections) => Promise<void> | void
+    retireLegacyCredentialSource?: (sourceId: string) => Promise<void>
+    inspectCredentialSource?: (sourceId: string) => Promise<ModelConnectionCredentialStatus>
+    credentialFenceTtlMs?: number
+    nowMs?: () => number
+    isProcessAlive?: (pid: number) => boolean
+    beforeCredentialFenceInstall?: (providerId: string) => Promise<void>
+    afterCredentialCommitRecord?: (providerId: string) => Promise<void>
+    afterCredentialCommitWrite?: (providerId: string) => Promise<void>
+    afterCredentialConnectWrite?: (providerId: string) => Promise<void>
+    resolveCredentialSource?: (sourceId: string) => Promise<{
+      apiKey: string
+      headers?: Record<string, string>
+    }>
   }) {
+    const registryPath = join(options.dataDir, 'model-connections.v1.json')
+    assertManagerAtomicJsonPath(registryPath)
     this.file = new AtomicJsonFile(
-      join(options.dataDir, 'model-connections.v1.json'),
+      registryPath,
       (value) => RegistryDocumentSchema.parse(value)
     )
   }
@@ -115,7 +199,11 @@ export class ModelConnectionRegistry {
     }
   ): Promise<ModelConnectionSnapshot> {
     let current = await this.file.read(emptyDocument)
-    const newRegistry = Object.keys(current.profiles).length === 0
+    await this.recoverExpiredCredentialTransactions(current)
+    await this.drainCredentialRefCleanup()
+    current = await this.file.read(emptyDocument)
+    const newRegistry = Object.keys(current.profiles).length === 0 &&
+      Object.keys(current.tombstones).length === 0
     if (seed.length > 0) {
       for (const input of seed) {
         const credentialSourceId = input.credentialSourceId?.trim() || undefined
@@ -127,6 +215,13 @@ export class ModelConnectionRegistry {
         })
         const existing = request.id ? current.profiles[request.id] : undefined
         if (!existing) {
+          const requestedId = normalizeProviderId(request.id ?? request.name)
+          if (current.tombstones[requestedId]) {
+            // Durable deletion intent is authoritative over stale AppSettings
+            // seeds across GUI/Runtime restarts. Only an explicit connect API
+            // may clear this tombstone and re-add the same id.
+            continue
+          }
           // A non-empty registry is authoritative for the current default, but
           // GUI-managed providers that were never imported must still become
           // visible to standalone TUI clients.
@@ -136,19 +231,17 @@ export class ModelConnectionRegistry {
             request.kind === 'antigravity-cli' || request.kind === 'gemini-cli-api'
           )
         } else {
-          const preserveSelection = !newRegistry && current.defaultProviderId === existing.id
-          const reconciled = reconcileSeedProfile(existing, request, {
-            preserveSelection,
-            credentialSourceId
-          })
+          const reconciled = reconcileSeedProfile(existing, request)
           if (!sameStoredProfile(existing, reconciled)) {
             current = await this.file.update(emptyDocument, (document) => {
-              assertRevision(document, current.revision, this.options.modelCapabilities)
+              assertRevision(
+                document,
+                current.revision,
+                this.options.modelCapabilities,
+                this.credentialHealth
+              )
               const profile = requireProfile(document, existing.id)
-              const nextProfile = reconcileSeedProfile(profile, request, {
-                preserveSelection: document.defaultProviderId === profile.id,
-                credentialSourceId
-              })
+              const nextProfile = reconcileSeedProfile(profile, request)
               return {
                 ...document,
                 revision: document.revision + 1,
@@ -183,16 +276,23 @@ export class ModelConnectionRegistry {
         localModelGateway: globals.localModelGateway ?? document.localModelGateway
       }))
     }
+    await this.retryLegacyCredentialSourceRetirements()
     await this.applyLatest()
-    return this.project(current)
+    this.scheduleCredentialRecoveries(await this.file.read(emptyDocument))
+    return this.snapshot()
   }
 
   async snapshot(): Promise<ModelConnectionSnapshot> {
-    return this.project(await this.file.read(emptyDocument))
+    return this.projectWithCredentialHealth(await this.file.read(emptyDocument))
   }
 
   async assertRevision(expectedRevision: number): Promise<void> {
-    assertRevision(await this.file.read(emptyDocument), expectedRevision, this.options.modelCapabilities)
+    assertRevision(
+      await this.file.read(emptyDocument),
+      expectedRevision,
+      this.options.modelCapabilities,
+      this.credentialHealth
+    )
   }
 
   subscribe(listener: (snapshot: ModelConnectionSnapshot) => void): () => void {
@@ -253,6 +353,7 @@ export class ModelConnectionRegistry {
     })
     const requestedId = input.id?.trim()
     if (!requestedId) throw new Error('authenticated model connection id is required')
+    const connectedId = normalizeProviderId(requestedId)
     if (input.kind === 'http' && !input.baseUrl) {
       throw new Error('baseUrl is required for HTTP providers')
     }
@@ -260,71 +361,166 @@ export class ModelConnectionRegistry {
     if (!credential && !externalAuthVerified) {
       throw new Error('authenticated model connection credential is required')
     }
-    const nextRef = credential
-      ? await this.options.credentials.create({ apiKey: credential })
-      : undefined
-    let previousRef: string | undefined
-    let document: RegistryDocument
-    try {
-      document = await this.file.update(emptyDocument, (current) => {
-        assertRevision(current, input.expectedRevision, this.options.modelCapabilities)
-        const id = normalizeProviderId(requestedId)
-        const existing = current.profiles[id]
-        previousRef = nextRef ? existing?.credentialRef : undefined
-        const models = uniqueModels(input.models)
-        const selectedModel = input.selectedModel ?? models[0]
-        if (selectedModel && models.length > 0 && !models.includes(selectedModel)) {
-          throw new Error('selected model is not present in the provider model list')
+    const profileFor = (
+      current: RegistryDocument,
+      credentialRef: string | undefined,
+      incarnationId: string
+    ): StoredProfile => {
+      const existing = current.profiles[connectedId]
+      const deleted = current.tombstones[connectedId]
+      const models = uniqueModels(input.models)
+      const selectedModel = input.selectedModel ?? models[0]
+      if (selectedModel && models.length > 0 && !models.includes(selectedModel)) {
+        throw new Error('selected model is not present in the provider model list')
+      }
+      const legacyCredentialSourceToRetire = this.options.retireLegacyCredentialSource
+        ? existing?.legacyCredentialSourceToRetire ??
+          existing?.credentialSourceId ??
+          deleted?.legacyCredentialSourceToRetire
+        : undefined
+      return StoredProfileSchema.parse({
+        id: connectedId,
+        accountId: existing?.accountId ?? `account:${connectedId}`,
+        name: input.name,
+        presetSource: input.presetSource,
+        kind: input.kind,
+        authType: input.authType,
+        baseUrl: input.baseUrl,
+        endpointFormat: input.endpointFormat,
+        configured: true,
+        incarnationId,
+        credentialMutationHighWater:
+          existing?.credentialMutationHighWater ?? deleted?.credentialMutationHighWater,
+        models,
+        ...(input.modelCapabilities
+          ? { modelCapabilities: capabilitiesForModels(input.modelCapabilities, models) }
+          : {}),
+        selectedModel,
+        credentialRef,
+        credentialSourceId: credentialRef ? undefined : existing?.credentialSourceId,
+        ...(legacyCredentialSourceToRetire ? { legacyCredentialSourceToRetire } : {}),
+        headers: existing?.headers
+      })
+    }
+
+    if (!credential) {
+      const document = await this.file.update(emptyDocument, (current) => {
+        assertRevision(current, input.expectedRevision, this.options.modelCapabilities, this.credentialHealth)
+        if (current.credentialTransactions[connectedId]) {
+          throw new ModelConnectionConflictError(this.project(current))
         }
-        const accountId = existing?.accountId ?? `account:${id}`
-        const credentialRef = nextRef ?? existing?.credentialRef
-        const profile = StoredProfileSchema.parse({
-          id,
-          accountId,
-          name: input.name,
-          presetSource: input.presetSource,
-          kind: input.kind,
-          authType: input.authType,
-          baseUrl: input.baseUrl,
-          endpointFormat: input.endpointFormat,
-          configured: true,
-          models,
-          ...(input.modelCapabilities
-            ? { modelCapabilities: capabilitiesForModels(input.modelCapabilities, models) }
-            : {}),
-          selectedModel,
-          credentialRef,
-          // A newly committed runtime-owned credential replaces any imported
-          // request-time source. Official CLI verification intentionally
-          // leaves an existing source untouched when no credential is copied.
-          credentialSourceId: nextRef
-            ? undefined
-            : existing?.credentialSourceId,
-          headers: existing?.headers
-        })
+        const existing = current.profiles[connectedId]
+        const profile = profileFor(
+          current,
+          existing?.credentialRef,
+          existing?.incarnationId ?? randomUUID()
+        )
+        const tombstones = { ...current.tombstones }
+        delete tombstones[connectedId]
         return {
           ...current,
           revision: current.revision + 1,
-          profiles: { ...current.profiles, [id]: profile },
-          ...(input.select && selectedModel ? {
-            defaultProviderId: id,
-            defaultAccountId: accountId,
-            defaultModel: selectedModel
+          profiles: { ...current.profiles, [connectedId]: profile },
+          tombstones,
+          ...(input.select && profile.selectedModel ? {
+            defaultProviderId: connectedId,
+            defaultAccountId: profile.accountId,
+            defaultModel: profile.selectedModel
+          } : {})
+        }
+      })
+      await this.changed(document)
+      await this.retireLegacyCredentialSource(connectedId)
+      return this.projectWithCredentialHealth(document)
+    }
+
+    const operationToken = `authenticated:${randomUUID()}`
+    const nextRef = `cred_${randomUUID()}`
+    let previousRef: string | undefined
+    const committing = await this.file.update(emptyDocument, (current) => {
+      assertRevision(current, input.expectedRevision, this.options.modelCapabilities, this.credentialHealth)
+      if (current.credentialTransactions[connectedId]) {
+        throw new ModelConnectionConflictError(this.project(current))
+      }
+      const existing = current.profiles[connectedId]
+      const incarnationId = existing?.incarnationId ?? randomUUID()
+      previousRef = existing?.credentialRef
+      return {
+        ...current,
+        revision: current.revision + 1,
+        profiles: existing && !existing.incarnationId
+          ? { ...current.profiles, [connectedId]: { ...existing, incarnationId } }
+          : current.profiles,
+        credentialTransactions: {
+          ...current.credentialTransactions,
+          [connectedId]: {
+            operationToken,
+            clientId: randomUUID(),
+            generation: 1,
+            incarnationId,
+            phase: 'committing',
+            expiresAt: this.nowMs() + this.credentialFenceTtlMs(),
+            previous: existing ? previousCredentialState(existing) : { configured: false },
+            nextCredentialRef: nextRef,
+            writerInstanceId: this.registryInstanceId,
+            writerPid: process.pid
+          }
+        }
+      }
+    })
+    this.scheduleCredentialRecovery(connectedId, committing.credentialTransactions[connectedId])
+    try {
+      await this.changed(committing)
+      await this.options.credentials.set(nextRef, { apiKey: credential })
+    } catch (error) {
+      await this.abandonCredentialWrite(connectedId, operationToken, nextRef)
+      throw error
+    }
+    let document: RegistryDocument
+    try {
+      document = await this.file.update(emptyDocument, (current) => {
+        const transaction = current.credentialTransactions[connectedId]
+        const existing = current.profiles[connectedId]
+        if (
+          transaction?.operationToken !== operationToken ||
+          transaction.phase !== 'committing' ||
+          transaction.nextCredentialRef !== nextRef ||
+          (existing && existing.incarnationId !== transaction.incarnationId)
+        ) {
+          throw new ModelConnectionConflictError(this.project(current))
+        }
+        const profile = profileFor(current, nextRef, transaction.incarnationId)
+        const credentialTransactions = { ...current.credentialTransactions }
+        delete credentialTransactions[connectedId]
+        const tombstones = { ...current.tombstones }
+        delete tombstones[connectedId]
+        return {
+          ...current,
+          revision: current.revision + 1,
+          profiles: { ...current.profiles, [connectedId]: profile },
+          tombstones,
+          credentialTransactions,
+          credentialRefCleanup: appendCredentialRefs(
+            current.credentialRefCleanup,
+            this.nowMs(),
+            previousRef
+          ),
+          ...(input.select && profile.selectedModel ? {
+            defaultProviderId: connectedId,
+            defaultAccountId: profile.accountId,
+            defaultModel: profile.selectedModel
           } : {})
         }
       })
     } catch (error) {
-      if (nextRef) await this.options.credentials.delete(nextRef).catch(() => undefined)
+      await this.retireStaleCredentialWrite(nextRef)
       throw error
     }
-    try {
-      await this.changed(document)
-    } finally {
-      if (previousRef && previousRef !== nextRef) {
-        await this.options.credentials.delete(previousRef).catch(() => undefined)
-      }
-    }
-    return this.project(document)
+    this.cancelCredentialRecoveryTimer(connectedId)
+    await this.changed(document)
+    await this.drainCredentialRefCleanup()
+    await this.retireLegacyCredentialSource(connectedId)
+    return this.projectWithCredentialHealth(document)
   }
 
   private async connectInternal(
@@ -339,65 +535,183 @@ export class ModelConnectionRegistry {
       : uniqueModels(input.models)
     const usesRequestTimeCredential = input.kind === 'http' && Boolean(credentialSourceId)
     const credential = usesRequestTimeCredential ? '' : input.credential?.trim() ?? ''
-    const credentialRef = credential
-      ? await this.options.credentials.create({ apiKey: credential })
-      : undefined
-    let document: RegistryDocument
-    try {
-      document = await this.file.update(emptyDocument, (current) => {
-        assertRevision(current, input.expectedRevision, this.options.modelCapabilities)
-        const id = allocateId(current, input.id ?? input.name)
-        const accountId = `account:${id}`
-        const selectedModel = input.selectedModel ?? models[0]
-        const configured = Boolean(credentialRef || credentialSourceId) ||
-          input.kind === 'agent-sdk' ||
-          trustedExternalAuth
-        const profile = StoredProfileSchema.parse({
-          id,
-          accountId,
-          name: input.name,
-          presetSource: input.presetSource,
-          kind: input.kind,
-          authType: input.authType,
-          baseUrl: input.baseUrl,
-          endpointFormat: input.endpointFormat,
-          configured,
-          models,
-          ...(input.modelCapabilities
-            ? { modelCapabilities: capabilitiesForModels(input.modelCapabilities, models) }
-            : {}),
-          selectedModel,
-          credentialRef,
-          credentialSourceId
-        })
+    const selectedModel = input.selectedModel ?? models[0]
+    if (selectedModel && models.length > 0 && !models.includes(selectedModel)) {
+      throw new Error('selected model is not present in the provider model list')
+    }
+    let connectedId = ''
+
+    if (credential) {
+      const nextRef = `cred_${randomUUID()}`
+      const operationToken = `connect:${randomUUID()}`
+      const clientId = randomUUID()
+      let incarnationId = ''
+      const reserved = await this.file.update(emptyDocument, (current) => {
+        assertRevision(current, input.expectedRevision, this.options.modelCapabilities, this.credentialHealth)
+        connectedId = allocateId(current, input.id ?? input.name)
+        incarnationId = randomUUID()
         return {
           ...current,
           revision: current.revision + 1,
-          profiles: { ...current.profiles, [id]: profile },
-          ...(input.select && configured && selectedModel ? {
-            defaultProviderId: id,
-            defaultAccountId: accountId,
-            defaultModel: selectedModel
-          } : {})
+          credentialTransactions: {
+            ...current.credentialTransactions,
+            [connectedId]: {
+              operationToken,
+              clientId,
+              generation: 1,
+              incarnationId,
+              phase: 'committing',
+              expiresAt: this.nowMs() + this.credentialFenceTtlMs(),
+              previous: { configured: false },
+              nextCredentialRef: nextRef,
+              writerInstanceId: this.registryInstanceId,
+              writerPid: process.pid
+            }
+          },
+          credentialRefCleanup: appendCredentialRefs(
+            current.credentialRefCleanup,
+            this.nowMs(),
+            nextRef,
+            this.registryInstanceId,
+            process.pid
+          )
         }
       })
-    } catch (error) {
-      if (credentialRef) await this.options.credentials.delete(credentialRef).catch(() => undefined)
-      throw error
+      this.scheduleCredentialRecovery(connectedId, reserved.credentialTransactions[connectedId])
+      try {
+        await this.options.credentials.set(nextRef, { apiKey: credential })
+        await this.options.afterCredentialConnectWrite?.(connectedId)
+      } catch (error) {
+        await this.abandonCredentialWrite(connectedId, operationToken, nextRef)
+        throw error
+      }
+      let document: RegistryDocument
+      try {
+        document = await this.file.update(emptyDocument, (current) => {
+          const transaction = current.credentialTransactions[connectedId]
+          if (
+            transaction?.operationToken !== operationToken ||
+            transaction.phase !== 'committing' ||
+            transaction.nextCredentialRef !== nextRef ||
+            transaction.incarnationId !== incarnationId ||
+            current.profiles[connectedId]
+          ) {
+            throw new ModelConnectionConflictError(this.project(current))
+          }
+          const deleted = current.tombstones[connectedId]
+          const accountId = `account:${connectedId}`
+          const profile = StoredProfileSchema.parse({
+            id: connectedId,
+            accountId,
+            name: input.name,
+            presetSource: input.presetSource,
+            kind: input.kind,
+            authType: input.authType,
+            baseUrl: input.baseUrl,
+            endpointFormat: input.endpointFormat,
+            configured: true,
+            incarnationId,
+            credentialMutationHighWater: deleted?.credentialMutationHighWater,
+            models,
+            ...(input.modelCapabilities
+              ? { modelCapabilities: capabilitiesForModels(input.modelCapabilities, models) }
+              : {}),
+            selectedModel,
+            credentialRef: nextRef,
+            ...(deleted?.legacyCredentialSourceToRetire && this.options.retireLegacyCredentialSource
+              ? { legacyCredentialSourceToRetire: deleted.legacyCredentialSourceToRetire }
+              : {})
+          })
+          const credentialTransactions = { ...current.credentialTransactions }
+          delete credentialTransactions[connectedId]
+          const credentialRefCleanup = { ...current.credentialRefCleanup }
+          delete credentialRefCleanup[nextRef]
+          const tombstones = { ...current.tombstones }
+          delete tombstones[connectedId]
+          return {
+            ...current,
+            revision: current.revision + 1,
+            profiles: { ...current.profiles, [connectedId]: profile },
+            tombstones,
+            credentialTransactions,
+            credentialRefCleanup,
+            ...(input.select && selectedModel ? {
+              defaultProviderId: connectedId,
+              defaultAccountId: accountId,
+              defaultModel: selectedModel
+            } : {})
+          }
+        })
+      } catch (error) {
+        await this.abandonCredentialWrite(connectedId, operationToken, nextRef)
+        throw error
+      }
+      this.cancelCredentialRecoveryTimer(connectedId)
+      await this.changed(document)
+      await this.drainCredentialRefCleanup()
+      await this.retireLegacyCredentialSource(connectedId)
+      return this.projectWithCredentialHealth(document)
     }
-    // The durable document now owns credentialRef. If live application fails,
-    // retain the referenced secret so a restart or subsequent reconciliation
-    // can recover; deleting it here would corrupt the committed registry.
+
+    const document = await this.file.update(emptyDocument, (current) => {
+      assertRevision(current, input.expectedRevision, this.options.modelCapabilities, this.credentialHealth)
+      const id = allocateId(current, input.id ?? input.name)
+      connectedId = id
+      const deleted = current.tombstones[id]
+      const accountId = `account:${id}`
+      const configured = Boolean(credentialSourceId) ||
+        input.kind === 'agent-sdk' ||
+        trustedExternalAuth
+      const profile = StoredProfileSchema.parse({
+        id,
+        accountId,
+        name: input.name,
+        presetSource: input.presetSource,
+        kind: input.kind,
+        authType: input.authType,
+        baseUrl: input.baseUrl,
+        endpointFormat: input.endpointFormat,
+        configured,
+        incarnationId: randomUUID(),
+        credentialMutationHighWater: deleted?.credentialMutationHighWater,
+        models,
+        ...(input.modelCapabilities
+          ? { modelCapabilities: capabilitiesForModels(input.modelCapabilities, models) }
+          : {}),
+        selectedModel,
+        credentialSourceId,
+        ...(deleted?.legacyCredentialSourceToRetire && this.options.retireLegacyCredentialSource
+          ? { legacyCredentialSourceToRetire: deleted.legacyCredentialSourceToRetire }
+          : {})
+      })
+      const tombstones = { ...current.tombstones }
+      delete tombstones[id]
+      return {
+        ...current,
+        revision: current.revision + 1,
+        profiles: { ...current.profiles, [id]: profile },
+        tombstones,
+        ...(input.select && configured && selectedModel ? {
+          defaultProviderId: id,
+          defaultAccountId: accountId,
+          defaultModel: selectedModel
+        } : {})
+      }
+    })
     await this.changed(document)
-    return this.project(document)
+    if (document.profiles[connectedId]) await this.retireLegacyCredentialSource(connectedId)
+    return this.projectWithCredentialHealth(document)
   }
 
   async patch(providerId: string, raw: unknown): Promise<ModelConnectionSnapshot> {
     const input = ModelConnectionPatchRequestSchema.parse(raw)
     const { expectedRevision: _expectedRevision, ...changes } = input
     const document = await this.file.update(emptyDocument, (current) => {
-      assertRevision(current, input.expectedRevision, this.options.modelCapabilities)
+      assertRevision(current, input.expectedRevision, this.options.modelCapabilities, this.credentialHealth)
       const profile = requireProfile(current, providerId)
+      if (current.credentialTransactions[providerId]) {
+        throw new ModelConnectionConflictError(this.project(current))
+      }
       const kind = input.kind ?? profile.kind
       const baseUrl = input.baseUrl ?? profile.baseUrl
       if (kind === 'http' && !baseUrl) throw new Error('baseUrl is required for HTTP providers')
@@ -428,19 +742,205 @@ export class ModelConnectionRegistry {
       }
     })
     await this.changed(document)
-    return this.project(document)
+    return this.projectWithCredentialHealth(document)
   }
 
-  async replaceCredential(providerId: string, raw: unknown): Promise<ModelConnectionSnapshot> {
-    const input = ModelConnectionCredentialRequestSchema.parse(raw)
-    const nextRef = await this.options.credentials.create({ apiKey: input.credential.trim() })
+  /**
+   * Installs a secret-free fence in the Manager-owned Registry document. The
+   * client id/generation high-water survives a successful commit, so a delayed
+   * request from an older renderer generation cannot re-fence the final key.
+   */
+  async fenceCredential(providerId: string, raw: unknown): Promise<ModelConnectionSnapshot> {
+    const input = ModelConnectionCredentialFenceRequestSchema.parse(raw)
+    const token = parseCredentialOperationToken(input.operationToken)
+    await this.options.beforeCredentialFenceInstall?.(providerId)
+    let supersededToken: string | undefined
+    const document = await this.file.update(emptyDocument, (current) => {
+      const profile = requireProfile(current, providerId)
+      const active = current.credentialTransactions[providerId]
+      if (
+        active?.operationToken === input.operationToken &&
+        active.incarnationId === profile.incarnationId
+      ) return current
+      assertRevision(current, input.expectedRevision, this.options.modelCapabilities, this.credentialHealth)
+      if (active?.phase === 'recovering') {
+        throw new ModelConnectionConflictError(this.project(current))
+      }
+      const incarnationId = profile.incarnationId ?? randomUUID()
+      const highWater = profile.credentialMutationHighWater?.[token.clientId] ?? 0
+      if (token.generation <= highWater) {
+        throw new ModelConnectionConflictError(this.project(current))
+      }
+      supersededToken = active?.operationToken
+      const credentialTransactions = { ...current.credentialTransactions }
+      credentialTransactions[providerId] = {
+        operationToken: input.operationToken,
+        clientId: token.clientId,
+        generation: token.generation,
+        incarnationId,
+        phase: 'fenced',
+        expiresAt: this.nowMs() + this.credentialFenceTtlMs(),
+        previous: previousCredentialState(profile)
+      }
+      return {
+        ...current,
+        revision: current.revision + 1,
+        profiles: {
+          ...current.profiles,
+          [providerId]: {
+            ...profile,
+            incarnationId,
+            credentialMutationHighWater: boundedCredentialHighWater(
+              profile.credentialMutationHighWater,
+              token.clientId,
+              token.generation
+            )
+          }
+        },
+        credentialTransactions,
+        credentialRefCleanup: appendCredentialRefs(
+          current.credentialRefCleanup,
+          this.nowMs(),
+          active?.nextCredentialRef,
+          active?.writerInstanceId,
+          active?.writerPid
+        )
+      }
+    })
+    const local = this.preparedCredentialSecrets.get(providerId)
+    if (local && local.operationToken !== input.operationToken) {
+      this.clearPreparedCredentialSecret(providerId, local.operationToken)
+    }
+    if (supersededToken && supersededToken !== input.operationToken) {
+      this.cancelCredentialRecoveryTimer(providerId)
+    }
+    this.scheduleCredentialRecovery(providerId, document.credentialTransactions[providerId])
+    await this.changed(document)
+    await this.drainCredentialRefCleanup()
+    return this.projectWithCredentialHealth(await this.file.read(emptyDocument))
+  }
+
+  /**
+   * Stages a protected credential behind a provider-scoped fence. A prepared
+   * value is deliberately absent from the durable Registry document and all
+   * credential consumers fail closed until the matching operation token is
+   * committed. A prepare without its previously admitted fence is rejected.
+   */
+  async prepareCredential(providerId: string, raw: unknown): Promise<ModelConnectionSnapshot> {
+    const input = ModelConnectionCredentialPrepareRequestSchema.parse(raw)
+    let incarnationId = ''
+    const document = await this.file.update(emptyDocument, (current) => {
+      assertRevision(current, input.expectedRevision, this.options.modelCapabilities, this.credentialHealth)
+      const profile = requireProfile(current, providerId)
+      const transaction = requireCredentialTransaction(current, providerId, input.operationToken)
+      if (!profile.incarnationId || transaction.incarnationId !== profile.incarnationId) {
+        throw new ModelConnectionConflictError(this.project(current))
+      }
+      incarnationId = transaction.incarnationId
+      return {
+        ...current,
+        revision: current.revision + 1,
+        credentialTransactions: {
+          ...current.credentialTransactions,
+          [providerId]: {
+            ...transaction,
+            phase: 'prepared',
+            expiresAt: this.nowMs() + this.credentialFenceTtlMs()
+          }
+        }
+      }
+    })
+    const latest = await this.file.read(emptyDocument)
+    const latestTransaction = latest.credentialTransactions[providerId]
+    if (
+      latestTransaction?.operationToken !== input.operationToken ||
+      latestTransaction.incarnationId !== incarnationId ||
+      latestTransaction.phase !== 'prepared'
+    ) {
+      throw new ModelConnectionConflictError(await this.projectWithCredentialHealth(latest))
+    }
+    this.clearPreparedCredentialSecret(providerId)
+    this.preparedCredentialSecrets.set(providerId, {
+      operationToken: input.operationToken,
+      incarnationId,
+      credential: input.credential.trim()
+    })
+    this.schedulePreparedCredentialSecretExpiry(
+      providerId,
+      input.operationToken,
+      latestTransaction.expiresAt
+    )
+    this.scheduleCredentialRecovery(providerId, latestTransaction)
+    await this.changed(document)
+    return this.projectWithCredentialHealth(await this.file.read(emptyDocument))
+  }
+
+  /** Commits only the latest prepared token for this provider. */
+  async commitPreparedCredential(providerId: string, raw: unknown): Promise<ModelConnectionSnapshot> {
+    const input = ModelConnectionCredentialCommitRequestSchema.parse(raw)
+    const pending = this.preparedCredentialSecrets.get(providerId)
+    if (!pending || pending.operationToken !== input.operationToken) {
+      throw new ModelConnectionConflictError(await this.snapshot())
+    }
+    const nextRef = `cred_${randomUUID()}`
     let previousRef: string | undefined
+    let legacyCredentialSourceToRetire: string | undefined
+    const committing = await this.file.update(emptyDocument, (current) => {
+      assertRevision(current, input.expectedRevision, this.options.modelCapabilities, this.credentialHealth)
+      const transaction = requireCredentialTransaction(current, providerId, input.operationToken)
+      const profile = requireProfile(current, providerId)
+      if (
+        transaction.phase !== 'prepared' ||
+        transaction.incarnationId !== profile.incarnationId ||
+        transaction.incarnationId !== pending.incarnationId
+      ) {
+        throw new ModelConnectionConflictError(this.project(current))
+      }
+      previousRef = profile.credentialRef
+      legacyCredentialSourceToRetire = this.options.retireLegacyCredentialSource
+        ? profile.legacyCredentialSourceToRetire ?? profile.credentialSourceId
+        : undefined
+      return {
+        ...current,
+        revision: current.revision + 1,
+        credentialTransactions: {
+          ...current.credentialTransactions,
+          [providerId]: {
+            ...transaction,
+            phase: 'committing',
+            expiresAt: this.nowMs() + this.credentialFenceTtlMs(),
+            nextCredentialRef: nextRef,
+            writerInstanceId: this.registryInstanceId,
+            writerPid: process.pid
+          }
+        }
+      }
+    })
+    this.scheduleCredentialRecovery(providerId, committing.credentialTransactions[providerId])
+    try {
+      await this.changed(committing)
+      await this.options.afterCredentialCommitRecord?.(providerId)
+      await this.options.credentials.set(nextRef, { apiKey: pending.credential })
+    } catch (error) {
+      await this.abandonCredentialWrite(providerId, input.operationToken, nextRef)
+      throw error
+    }
+    await this.options.afterCredentialCommitWrite?.(providerId)
     let document: RegistryDocument
     try {
       document = await this.file.update(emptyDocument, (current) => {
-        assertRevision(current, input.expectedRevision, this.options.modelCapabilities)
+        const transaction = requireCredentialTransaction(current, providerId, input.operationToken)
         const profile = requireProfile(current, providerId)
-        previousRef = profile.credentialRef
+        if (
+          transaction.phase !== 'committing' ||
+          transaction.nextCredentialRef !== nextRef ||
+          transaction.incarnationId !== profile.incarnationId ||
+          transaction.incarnationId !== pending.incarnationId
+        ) {
+          throw new ModelConnectionConflictError(this.project(current))
+        }
+        const credentialTransactions = { ...current.credentialTransactions }
+        delete credentialTransactions[providerId]
         return {
           ...current,
           revision: current.revision + 1,
@@ -450,29 +950,153 @@ export class ModelConnectionRegistry {
               ...profile,
               credentialRef: nextRef,
               credentialSourceId: undefined,
+              ...(legacyCredentialSourceToRetire
+                ? { legacyCredentialSourceToRetire }
+                : {}),
               configured: true
             }
-          }
+          },
+          credentialTransactions,
+          credentialRefCleanup: appendCredentialRefs(
+            current.credentialRefCleanup,
+            this.nowMs(),
+            previousRef
+          )
         }
       })
     } catch (error) {
-      await this.options.credentials.delete(nextRef).catch(() => undefined)
+      await this.retireStaleCredentialWrite(nextRef)
+      throw error
+    } finally {
+      this.clearPreparedCredentialSecret(providerId, input.operationToken)
+    }
+    this.cancelCredentialRecoveryTimer(providerId)
+    await this.changed(document)
+    await this.drainCredentialRefCleanup()
+    await this.retireLegacyCredentialSource(providerId)
+    return this.projectWithCredentialHealth(await this.file.read(emptyDocument))
+  }
+
+  async replaceCredential(providerId: string, raw: unknown): Promise<ModelConnectionSnapshot> {
+    const input = ModelConnectionCredentialRequestSchema.parse(raw)
+    const nextRef = `cred_${randomUUID()}`
+    const operationToken = `replace:${randomUUID()}`
+    let previousRef: string | undefined
+    let legacyCredentialSourceToRetire: string | undefined
+    const committing = await this.file.update(emptyDocument, (current) => {
+      assertRevision(current, input.expectedRevision, this.options.modelCapabilities, this.credentialHealth)
+      if (current.credentialTransactions[providerId]) {
+        throw new ModelConnectionConflictError(this.project(current))
+      }
+      const profile = requireProfile(current, providerId)
+      const incarnationId = profile.incarnationId ?? randomUUID()
+      previousRef = profile.credentialRef
+      legacyCredentialSourceToRetire = this.options.retireLegacyCredentialSource
+        ? profile.legacyCredentialSourceToRetire ?? profile.credentialSourceId
+        : undefined
+      return {
+        ...current,
+        revision: current.revision + 1,
+        profiles: profile.incarnationId
+          ? current.profiles
+          : { ...current.profiles, [providerId]: { ...profile, incarnationId } },
+        credentialTransactions: {
+          ...current.credentialTransactions,
+          [providerId]: {
+            operationToken,
+            clientId: randomUUID(),
+            generation: 1,
+            incarnationId,
+            phase: 'committing',
+            expiresAt: this.nowMs() + this.credentialFenceTtlMs(),
+            previous: previousCredentialState(profile),
+            nextCredentialRef: nextRef,
+            writerInstanceId: this.registryInstanceId,
+            writerPid: process.pid
+          }
+        }
+      }
+    })
+    this.scheduleCredentialRecovery(providerId, committing.credentialTransactions[providerId])
+    try {
+      await this.changed(committing)
+      await this.options.credentials.set(nextRef, { apiKey: input.credential.trim() })
+    } catch (error) {
+      await this.abandonCredentialWrite(providerId, operationToken, nextRef)
       throw error
     }
+    let document: RegistryDocument
+    try {
+      document = await this.file.update(emptyDocument, (current) => {
+        const transaction = current.credentialTransactions[providerId]
+        const profile = current.profiles[providerId]
+        if (
+          transaction?.operationToken !== operationToken ||
+          transaction.phase !== 'committing' ||
+          transaction.nextCredentialRef !== nextRef ||
+          !profile ||
+          profile.incarnationId !== transaction.incarnationId
+        ) {
+          throw new ModelConnectionConflictError(this.project(current))
+        }
+        const credentialTransactions = { ...current.credentialTransactions }
+        delete credentialTransactions[providerId]
+        return {
+          ...current,
+          revision: current.revision + 1,
+          profiles: {
+            ...current.profiles,
+            [providerId]: {
+              ...profile,
+              credentialRef: nextRef,
+              credentialSourceId: undefined,
+              ...(legacyCredentialSourceToRetire
+                ? { legacyCredentialSourceToRetire }
+                : {}),
+              configured: true
+            }
+          },
+          credentialTransactions,
+          credentialRefCleanup: appendCredentialRefs(
+            current.credentialRefCleanup,
+            this.nowMs(),
+            previousRef
+          )
+        }
+      })
+    } catch (error) {
+      await this.retireStaleCredentialWrite(nextRef)
+      throw error
+    }
+    this.cancelCredentialRecoveryTimer(providerId)
     await this.changed(document)
-    if (previousRef) await this.options.credentials.delete(previousRef).catch(() => undefined)
-    return this.project(document)
+    await this.drainCredentialRefCleanup()
+    await this.retireLegacyCredentialSource(providerId)
+    return this.projectWithCredentialHealth(await this.file.read(emptyDocument))
   }
 
   async clearCredential(
     providerId: string,
     expectedRevision: number
   ): Promise<ModelConnectionSnapshot> {
+    const fallbackHealth = await this.inspectCredentialHealth(await this.file.read(emptyDocument))
     let previousRef: string | undefined
+    let legacyCredentialSourceToRetire: string | undefined
+    let cancelledTransactionToken: string | undefined
     const document = await this.file.update(emptyDocument, (current) => {
-      assertRevision(current, expectedRevision, this.options.modelCapabilities)
+      assertRevision(current, expectedRevision, this.options.modelCapabilities, this.credentialHealth)
       const profile = requireProfile(current, providerId)
       previousRef = profile.credentialRef
+      legacyCredentialSourceToRetire = this.options.retireLegacyCredentialSource
+        ? profile.legacyCredentialSourceToRetire ?? profile.credentialSourceId
+        : undefined
+      const transaction = current.credentialTransactions[providerId]
+      if (transaction?.phase === 'recovering') {
+        throw new ModelConnectionConflictError(this.project(current))
+      }
+      cancelledTransactionToken = transaction?.operationToken
+      const credentialTransactions = { ...current.credentialTransactions }
+      delete credentialTransactions[providerId]
       const configured =
         profile.kind === 'agent-sdk' ||
         profile.kind === 'antigravity-cli' ||
@@ -483,16 +1107,29 @@ export class ModelConnectionRegistry {
           ...profile,
           credentialRef: undefined,
           credentialSourceId: undefined,
+          ...(legacyCredentialSourceToRetire ? { legacyCredentialSourceToRetire } : {}),
           configured
         }
       }
       const fallback = !configured && current.defaultProviderId === providerId
-        ? configuredFallback(Object.values(profiles).filter((candidate) => candidate.id !== providerId))
+        ? configuredFallback(
+            Object.values(profiles).filter((candidate) => candidate.id !== providerId),
+            fallbackHealth
+          )
         : undefined
       return {
         schemaVersion: 1,
         revision: current.revision + 1,
         profiles,
+        tombstones: current.tombstones,
+        credentialTransactions,
+        credentialRefCleanup: appendCredentialRefs(
+          appendCredentialRefs(current.credentialRefCleanup, this.nowMs(), previousRef),
+          this.nowMs(),
+          transaction?.nextCredentialRef,
+          transaction?.writerInstanceId,
+          transaction?.writerPid
+        ),
         proxy: current.proxy,
         routePools: current.routePools,
         localModelGateway: current.localModelGateway,
@@ -509,24 +1146,56 @@ export class ModelConnectionRegistry {
             })
       }
     })
+    this.clearPreparedCredentialSecret(providerId, cancelledTransactionToken)
+    this.cancelCredentialRecoveryTimer(providerId)
     await this.changed(document)
-    if (previousRef) await this.options.credentials.delete(previousRef).catch(() => undefined)
-    return this.project(document)
+    await this.drainCredentialRefCleanup()
+    await this.retireLegacyCredentialSource(providerId)
+    return this.projectWithCredentialHealth(await this.file.read(emptyDocument))
   }
 
   async delete(providerId: string, expectedRevision: number): Promise<ModelConnectionSnapshot> {
+    const fallbackHealth = await this.inspectCredentialHealth(await this.file.read(emptyDocument))
     let credentialRef: string | undefined
+    let legacyCredentialSourceToRetire: string | undefined
+    let cancelledTransactionToken: string | undefined
     const document = await this.file.update(emptyDocument, (current) => {
-      assertRevision(current, expectedRevision, this.options.modelCapabilities)
+      assertRevision(current, expectedRevision, this.options.modelCapabilities, this.credentialHealth)
       const profile = requireProfile(current, providerId)
       credentialRef = profile.credentialRef
+      legacyCredentialSourceToRetire = this.options.retireLegacyCredentialSource
+        ? profile.legacyCredentialSourceToRetire ?? profile.credentialSourceId
+        : undefined
+      const transaction = current.credentialTransactions[providerId]
+      if (transaction?.phase === 'recovering') {
+        throw new ModelConnectionConflictError(this.project(current))
+      }
+      cancelledTransactionToken = transaction?.operationToken
+      const credentialTransactions = { ...current.credentialTransactions }
+      delete credentialTransactions[providerId]
       const profiles = { ...current.profiles }
       delete profiles[providerId]
-      const fallback = configuredFallback(Object.values(profiles))
+      const fallback = configuredFallback(Object.values(profiles), fallbackHealth)
       return {
         schemaVersion: 1,
         revision: current.revision + 1,
         profiles,
+        tombstones: {
+          ...current.tombstones,
+          [providerId]: {
+            deletedRevision: current.revision + 1,
+            credentialMutationHighWater: profile.credentialMutationHighWater,
+            ...(legacyCredentialSourceToRetire ? { legacyCredentialSourceToRetire } : {})
+          }
+        },
+        credentialTransactions,
+        credentialRefCleanup: appendCredentialRefs(
+          appendCredentialRefs(current.credentialRefCleanup, this.nowMs(), credentialRef),
+          this.nowMs(),
+          transaction?.nextCredentialRef,
+          transaction?.writerInstanceId,
+          transaction?.writerPid
+        ),
         proxy: current.proxy,
         routePools: current.routePools,
         localModelGateway: current.localModelGateway,
@@ -543,17 +1212,26 @@ export class ModelConnectionRegistry {
             })
       }
     })
+    this.clearPreparedCredentialSecret(providerId, cancelledTransactionToken)
+    this.cancelCredentialRecoveryTimer(providerId)
     await this.changed(document)
-    if (credentialRef) await this.options.credentials.delete(credentialRef).catch(() => undefined)
-    return this.project(document)
+    await this.drainCredentialRefCleanup()
+    await this.retireDeletedLegacyCredentialSource(providerId)
+    return this.projectWithCredentialHealth(await this.file.read(emptyDocument))
   }
 
   async select(raw: unknown): Promise<ModelConnectionSnapshot> {
     const input = ModelConnectionSelectRequestSchema.parse(raw)
+    const selectionHealth = await this.inspectCredentialHealth(await this.file.read(emptyDocument))
     const document = await this.file.update(emptyDocument, (current) => {
-      assertRevision(current, input.expectedRevision, this.options.modelCapabilities)
+      assertRevision(current, input.expectedRevision, this.options.modelCapabilities, this.credentialHealth)
       const profile = requireProfile(current, input.providerId)
-      if (!profile.configured) throw new Error('provider is not connected')
+      if (current.credentialTransactions[profile.id]) {
+        throw new Error('provider credential replacement is pending')
+      }
+      if (!isProfileUsable(profile, selectionHealth.get(profile.id))) {
+        throw new Error('provider is not connected')
+      }
       if (input.accountId && input.accountId !== profile.accountId) {
         throw new Error('account does not belong to the selected provider')
       }
@@ -571,7 +1249,7 @@ export class ModelConnectionRegistry {
       }
     })
     await this.changed(document)
-    return this.project(document)
+    return this.projectWithCredentialHealth(document)
   }
 
   /**
@@ -588,10 +1266,16 @@ export class ModelConnectionRegistry {
     const input = ModelConnectionSelectRequestSchema
       .omit({ expectedRevision: true })
       .parse(raw)
+    const selectionHealth = await this.inspectCredentialHealth(await this.file.read(emptyDocument))
     let changed = false
     const document = await this.file.update(emptyDocument, (current) => {
       const profile = requireProfile(current, input.providerId)
-      if (!profile.configured) throw new Error('provider is not connected')
+      if (current.credentialTransactions[profile.id]) {
+        throw new Error('provider credential replacement is pending')
+      }
+      if (!isProfileUsable(profile, selectionHealth.get(profile.id))) {
+        throw new Error('provider is not connected')
+      }
       if (input.accountId && input.accountId !== profile.accountId) {
         throw new Error('account does not belong to the selected provider')
       }
@@ -621,13 +1305,13 @@ export class ModelConnectionRegistry {
       }
     })
     if (changed) await this.changed(document)
-    return this.project(document)
+    return this.projectWithCredentialHealth(document)
   }
 
   async updateGlobals(raw: unknown): Promise<ModelConnectionSnapshot> {
     const input = ModelConnectionGlobalsRequestSchema.parse(raw)
     const document = await this.file.update(emptyDocument, (current) => {
-      assertRevision(current, input.expectedRevision, this.options.modelCapabilities)
+      assertRevision(current, input.expectedRevision, this.options.modelCapabilities, this.credentialHealth)
       return {
         ...current,
         revision: current.revision + 1,
@@ -637,19 +1321,32 @@ export class ModelConnectionRegistry {
       }
     })
     await this.changed(document)
-    return this.project(document)
+    return this.projectWithCredentialHealth(document)
   }
 
   async probe(providerId: string): Promise<{ ok: true; models: string[] }> {
-    const document = await this.file.read(emptyDocument)
+    const document = await this.readDocumentForCredentialConsumer(providerId)
+    if (document.credentialTransactions[providerId]) {
+      throw new Error('provider credential replacement is pending')
+    }
     const profile = requireProfile(document, providerId)
     const credential = profile.credentialRef
       ? await this.options.credentials.get(profile.credentialRef)
       : null
+    const credentialSourceId = profile.credentialRef
+      ? modelConnectionCredentialSourceId(profile.id)
+      : profile.credentialSourceId
+    const resolved = credentialSourceId && this.options.resolveCredentialSource
+      ? await this.options.resolveCredentialSource(credentialSourceId)
+      : materializeLegacyProviderCredential(credential?.apiKey ?? '')
     const models = await probeModels({
+      kind: profile.kind,
       baseUrl: profile.baseUrl,
-      apiKey: credential?.apiKey ?? '',
-      fallbackModels: profile.models
+      endpointFormat: profile.endpointFormat,
+      apiKey: resolved.apiKey,
+      headers: { ...(profile.headers ?? {}), ...(resolved.headers ?? {}) },
+      fallbackModels: profile.models,
+      proxyUrl: document.proxy.enabled ? document.proxy.url : ''
     })
     return { ok: true, models }
   }
@@ -660,18 +1357,50 @@ export class ModelConnectionRegistry {
    * never cross HTTP, logs, ordinary settings, or terminal output.
    */
   async credentialForCompatibility(providerId: string): Promise<string | null> {
-    const document = await this.file.read(emptyDocument)
+    const document = await this.readDocumentForCredentialConsumer(providerId)
+    if (document.credentialTransactions[providerId]) return null
     const profile = requireProfile(document, providerId)
     if (!profile.credentialRef) return null
     const credential = await this.options.credentials.get(profile.credentialRef)
     return credential?.apiKey?.trim() || null
   }
 
+  /**
+   * Main-only bridge for request paths that have not moved into Kun yet. A
+   * Registry profile without a credentialRef is authoritative unless it is
+   * still explicitly bound to a legacy settings source. No HTTP route exposes
+   * this result.
+   */
+  async credentialStateForInternalConsumer(providerId: string): Promise<{
+    authoritative: boolean
+    apiKey: string
+  }> {
+    const document = await this.readDocumentForCredentialConsumer(providerId)
+    if (document.credentialTransactions[providerId]) {
+      return { authoritative: true, apiKey: '' }
+    }
+    const profile = document.profiles[providerId]
+    if (!profile || (!profile.credentialRef && profile.credentialSourceId)) {
+      return { authoritative: false, apiKey: '' }
+    }
+    if (!profile.credentialRef) return { authoritative: true, apiKey: '' }
+    let credential: Awaited<ReturnType<ExtensionCredentialStore['get']>> = null
+    try {
+      credential = await this.options.credentials.get(profile.credentialRef)
+    } catch {
+      // An unreadable credential must not break unrelated Main-process model
+      // consumers. The public snapshot carries the safe per-provider status.
+    }
+    return { authoritative: true, apiKey: credential?.apiKey?.trim() ?? '' }
+  }
+
   /** Resolves a Registry-owned protected credential for request-time refresh. */
   async resolveApiKey(sourceId: string): Promise<{ apiKey: string } | null> {
     const providerId = providerIdFromCredentialSource(sourceId)
     if (!providerId) return null
-    const profile = (await this.file.read(emptyDocument)).profiles[providerId]
+    const document = await this.readDocumentForCredentialConsumer(providerId)
+    if (document.credentialTransactions[providerId]) return null
+    const profile = document.profiles[providerId]
     if (!profile?.credentialRef) return null
     const credential = await this.options.credentials.get(profile.credentialRef)
     const apiKey = credential?.apiKey?.trim() ?? ''
@@ -679,41 +1408,166 @@ export class ModelConnectionRegistry {
   }
 
   /** Atomically rotates a Registry-owned protected credential in place. */
-  async updateResolvedApiKey(sourceId: string, apiKey: string): Promise<boolean> {
+  async updateResolvedApiKey(
+    sourceId: string,
+    expectedApiKey: string,
+    apiKey: string
+  ): Promise<boolean> {
     const providerId = providerIdFromCredentialSource(sourceId)
     const trimmed = apiKey.trim()
     if (!providerId || !trimmed) return false
-    const profile = (await this.file.read(emptyDocument)).profiles[providerId]
-    if (!profile?.credentialRef) return false
-    const credential = await this.options.credentials.get(profile.credentialRef)
-    if (!credential) return false
-    await this.options.credentials.set(profile.credentialRef, {
-      ...credential,
-      apiKey: trimmed
-    })
+    const initial = await this.readDocumentForCredentialConsumer(providerId)
+    if (initial.credentialTransactions[providerId]) return false
+    const initialProfile = initial.profiles[providerId]
+    if (!initialProfile?.credentialRef || !initialProfile.incarnationId) return false
+    const incarnationId = initialProfile.incarnationId
+    const currentCredential = await this.options.credentials.get(initialProfile.credentialRef)
+    if (currentCredential?.apiKey?.trim() !== expectedApiKey.trim()) return false
+
+    const operationToken = `refresh:${randomUUID()}`
+    const nextRef = `cred_${randomUUID()}`
+    let previousRef: string | undefined
+    let committing: RegistryDocument
+    try {
+      committing = await this.file.update(emptyDocument, (current) => {
+        if (current.credentialTransactions[providerId]) {
+          throw new ModelConnectionConflictError(this.project(current))
+        }
+        const profile = current.profiles[providerId]
+        if (
+          !profile?.credentialRef ||
+          profile.credentialRef !== initialProfile.credentialRef ||
+          profile.incarnationId !== incarnationId
+        ) {
+          throw new ModelConnectionConflictError(this.project(current))
+        }
+        previousRef = profile.credentialRef
+        return {
+          ...current,
+          revision: current.revision + 1,
+          credentialTransactions: {
+            ...current.credentialTransactions,
+            [providerId]: {
+              operationToken,
+              clientId: randomUUID(),
+              generation: 1,
+              incarnationId,
+              phase: 'committing',
+              expiresAt: this.nowMs() + this.credentialFenceTtlMs(),
+              previous: previousCredentialState(profile),
+              nextCredentialRef: nextRef,
+              writerInstanceId: this.registryInstanceId,
+              writerPid: process.pid
+            }
+          }
+        }
+      })
+    } catch (error) {
+      if (error instanceof ModelConnectionConflictError) return false
+      throw error
+    }
+    this.scheduleCredentialRecovery(providerId, committing.credentialTransactions[providerId])
+    try {
+      await this.changed(committing)
+      await this.options.credentials.set(nextRef, {
+        ...currentCredential,
+        apiKey: trimmed
+      })
+    } catch (error) {
+      await this.abandonCredentialWrite(providerId, operationToken, nextRef)
+      throw error
+    }
+    let finalized: RegistryDocument
+    try {
+      finalized = await this.file.update(emptyDocument, (current) => {
+        const transaction = current.credentialTransactions[providerId]
+        const profile = current.profiles[providerId]
+        if (
+          transaction?.operationToken !== operationToken ||
+          transaction.phase !== 'committing' ||
+          transaction.nextCredentialRef !== nextRef ||
+          !profile ||
+          profile.incarnationId !== incarnationId ||
+          profile.credentialRef !== previousRef
+        ) {
+          throw new ModelConnectionConflictError(this.project(current))
+        }
+        const credentialTransactions = { ...current.credentialTransactions }
+        delete credentialTransactions[providerId]
+        return {
+          ...current,
+          revision: current.revision + 1,
+          profiles: {
+            ...current.profiles,
+            [providerId]: { ...profile, credentialRef: nextRef }
+          },
+          credentialTransactions,
+          credentialRefCleanup: appendCredentialRefs(
+            current.credentialRefCleanup,
+            this.nowMs(),
+            previousRef
+          )
+        }
+      })
+    } catch (error) {
+      await this.retireStaleCredentialWrite(nextRef)
+      if (error instanceof ModelConnectionConflictError) return false
+      throw error
+    }
+    this.cancelCredentialRecoveryTimer(providerId)
+    await this.drainCredentialRefCleanup()
+    // Keep live consumers monotonic without synchronously rebuilding the model
+    // client that initiated this request-time OAuth refresh.
+    void this.changed(finalized).catch(() => undefined)
     return true
   }
 
   async materialize(): Promise<MaterializedModelConnections> {
+    const document = await this.file.read(emptyDocument)
+    await this.recoverExpiredCredentialTransactions(document)
     return this.materializeDocument(await this.file.read(emptyDocument))
   }
 
   private async materializeDocument(
-    document: RegistryDocument
+    document: RegistryDocument,
+    recoveryProviderId?: string
   ): Promise<MaterializedModelConnections> {
+    const credentialHealth = await this.inspectCredentialHealth(document)
     const providers = new Map<string, ServeProviderConfig>()
     let selected: MaterializedModelConnections['selected']
     for (const profile of Object.values(document.profiles)) {
-      const credential = profile.credentialRef
-        ? await this.options.credentials.get(profile.credentialRef)
-        : null
+      const credentialReplacementPending = Boolean(
+        document.credentialTransactions[profile.id] && profile.id !== recoveryProviderId
+      )
+      const profileUsable = (recoveryProviderId === profile.id && profile.configured) ||
+        isProfileUsable(profile, credentialHealth.get(profile.id))
+      // A pending replacement must remain in the live provider map with an
+      // empty credential so onChanged can retire the old client atomically.
+      // Other unusable profiles stay visible in the Registry snapshot but are
+      // intentionally absent from executable runtime configuration.
+      if (!profileUsable && !credentialReplacementPending) continue
+      let credential: Awaited<ReturnType<ExtensionCredentialStore['get']>> = null
+      if (profile.credentialRef && !credentialReplacementPending) {
+        try {
+          credential = await this.options.credentials.get(profile.credentialRef)
+        } catch {
+          // Keep materializing the remaining providers. Request-time resolution
+          // for this provider will fail closed until its credential is replaced.
+        }
+      }
       const material = materializeLegacyProviderCredential(credential?.apiKey ?? '')
-      const credentialSourceId = profile.credentialSourceId ??
-        (profile.credentialRef ? modelConnectionCredentialSourceId(profile.id) : undefined)
+      const credentialSourceId = credentialReplacementPending || !profileUsable
+        ? undefined
+        : profile.credentialRef
+          ? modelConnectionCredentialSourceId(profile.id)
+          : profile.credentialSourceId
       // A managed source is authoritative and may already have rotated beyond
       // the Registry's pre-migration credential copy. Never expose that stale
       // copy as a fallback client key.
-      const usesRequestTimeCredential = profile.kind === 'http' && Boolean(profile.credentialSourceId)
+      const usesRequestTimeCredential = !credentialReplacementPending &&
+        profile.kind === 'http' &&
+        !profile.credentialRef &&
+        Boolean(profile.credentialSourceId)
       const apiKey = usesRequestTimeCredential ? '' : material.apiKey
       const materialHeaders = usesRequestTimeCredential ? undefined : material.headers
       const config: ServeProviderConfig =
@@ -755,7 +1609,7 @@ export class ModelConnectionRegistry {
                 : {})
             }
       providers.set(profile.id, config)
-      if (profile.id === document.defaultProviderId && document.defaultModel) {
+      if (profileUsable && profile.id === document.defaultProviderId && document.defaultModel) {
         selected = { profile, config, model: document.defaultModel }
       }
     }
@@ -770,9 +1624,12 @@ export class ModelConnectionRegistry {
 
   private async probeInput(input: ModelConnectionConnectRequest): Promise<string[]> {
     return probeModels({
+      kind: input.kind,
       baseUrl: input.baseUrl,
+      endpointFormat: input.endpointFormat,
       apiKey: input.credential?.trim() ?? '',
-      fallbackModels: input.models
+      fallbackModels: input.models,
+      proxyUrl: ''
     })
   }
 
@@ -780,8 +1637,447 @@ export class ModelConnectionRegistry {
     await this.options.onChanged?.(await this.materializeDocument(document))
   }
 
+  private async retryLegacyCredentialSourceRetirements(): Promise<void> {
+    const document = await this.file.read(emptyDocument)
+    for (const profile of Object.values(document.profiles)) {
+      if (profile.legacyCredentialSourceToRetire) {
+        await this.retireLegacyCredentialSource(profile.id)
+      }
+    }
+    for (const [providerId, tombstone] of Object.entries(document.tombstones)) {
+      if (tombstone.legacyCredentialSourceToRetire) {
+        await this.retireDeletedLegacyCredentialSource(providerId)
+      }
+    }
+  }
+
+  private async retireLegacyCredentialSource(providerId: string): Promise<void> {
+    const retire = this.options.retireLegacyCredentialSource
+    if (!retire) return
+    const profile = (await this.file.read(emptyDocument)).profiles[providerId]
+    const sourceId = profile?.legacyCredentialSourceToRetire
+    if (!sourceId) return
+    try {
+      await retire(sourceId)
+      await this.file.update(emptyDocument, (current) => {
+        const currentProfile = current.profiles[providerId]
+        if (currentProfile?.legacyCredentialSourceToRetire !== sourceId) return current
+        return {
+          ...current,
+          profiles: {
+            ...current.profiles,
+            [providerId]: {
+              ...currentProfile,
+              legacyCredentialSourceToRetire: undefined
+            }
+          }
+        }
+      })
+    } catch (error) {
+      console.warn('[kun] Registry credential replaced, but its legacy source retirement is pending.', {
+        providerId,
+        sourceId,
+        message: error instanceof Error ? error.message : String(error)
+      })
+    }
+  }
+
+  private async retireDeletedLegacyCredentialSource(providerId: string): Promise<void> {
+    const retire = this.options.retireLegacyCredentialSource
+    if (!retire) return
+    const tombstone = (await this.file.read(emptyDocument)).tombstones[providerId]
+    const sourceId = tombstone?.legacyCredentialSourceToRetire
+    if (!sourceId) return
+    try {
+      await retire(sourceId)
+      await this.file.update(emptyDocument, (current) => {
+        const currentTombstone = current.tombstones[providerId]
+        if (currentTombstone?.legacyCredentialSourceToRetire !== sourceId) return current
+        return {
+          ...current,
+          tombstones: {
+            ...current.tombstones,
+            [providerId]: {
+              ...currentTombstone,
+              legacyCredentialSourceToRetire: undefined
+            }
+          }
+        }
+      })
+    } catch (error) {
+      console.warn('[kun] Deleted Registry provider still has a pending legacy source retirement.', {
+        providerId,
+        sourceId,
+        message: error instanceof Error ? error.message : String(error)
+      })
+    }
+  }
+
   private async changed(_document: RegistryDocument): Promise<void> {
     await this.applyLatest()
+  }
+
+  private nowMs(): number {
+    return this.options.nowMs?.() ?? Date.now()
+  }
+
+  private credentialFenceTtlMs(): number {
+    const configured = this.options.credentialFenceTtlMs
+    return configured !== undefined && Number.isFinite(configured) && configured > 0
+      ? configured
+      : 60_000
+  }
+
+  private clearPreparedCredentialSecret(providerId: string, operationToken?: string): void {
+    const pending = this.preparedCredentialSecrets.get(providerId)
+    if (!pending || (operationToken && pending.operationToken !== operationToken)) return
+    this.preparedCredentialSecrets.delete(providerId)
+    const timerKey = preparedCredentialSecretTimerKey(providerId, pending.operationToken)
+    const timer = this.preparedCredentialSecretTimers.get(timerKey)
+    if (timer) clearTimeout(timer)
+    this.preparedCredentialSecretTimers.delete(timerKey)
+  }
+
+  private schedulePreparedCredentialSecretExpiry(
+    providerId: string,
+    operationToken: string,
+    expiresAt: number
+  ): void {
+    const timerKey = preparedCredentialSecretTimerKey(providerId, operationToken)
+    const previous = this.preparedCredentialSecretTimers.get(timerKey)
+    if (previous) clearTimeout(previous)
+    const timer = setTimeout(() => {
+      this.clearPreparedCredentialSecret(providerId, operationToken)
+      this.preparedCredentialSecretTimers.delete(timerKey)
+    }, Math.min(Math.max(0, expiresAt - this.nowMs()), 2_147_483_647))
+    timer.unref?.()
+    this.preparedCredentialSecretTimers.set(timerKey, timer)
+  }
+
+  private cancelCredentialRecoveryTimer(providerId: string): void {
+    const timer = this.credentialRecoveryTimers.get(providerId)
+    if (timer) clearTimeout(timer)
+    this.credentialRecoveryTimers.delete(providerId)
+  }
+
+  private scheduleCredentialRecoveries(document: RegistryDocument): void {
+    for (const [providerId, transaction] of Object.entries(document.credentialTransactions)) {
+      this.scheduleCredentialRecovery(providerId, transaction)
+    }
+  }
+
+  private scheduleCredentialRecovery(
+    providerId: string,
+    transaction: CredentialTransaction | undefined
+  ): void {
+    this.cancelCredentialRecoveryTimer(providerId)
+    if (!transaction) return
+    const delay = transaction.phase === 'recovering'
+      ? 1_000
+      : Math.max(0, transaction.expiresAt - this.nowMs())
+    const timer = setTimeout(() => {
+      void this.recoverExpiredCredentialTransaction(providerId, transaction.operationToken)
+        .catch(() => undefined)
+        .finally(async () => {
+          const current = (await this.file.read(emptyDocument)).credentialTransactions[providerId]
+          if (current) this.scheduleCredentialRecovery(providerId, current)
+        })
+    }, Math.min(delay, 2_147_483_647))
+    timer.unref?.()
+    this.credentialRecoveryTimers.set(providerId, timer)
+  }
+
+  private async readDocumentForCredentialConsumer(providerId: string): Promise<RegistryDocument> {
+    await this.recoverExpiredCredentialTransaction(providerId).catch(() => undefined)
+    return this.file.read(emptyDocument)
+  }
+
+  private async recoverExpiredCredentialTransactions(document: RegistryDocument): Promise<void> {
+    for (const [providerId, transaction] of Object.entries(document.credentialTransactions)) {
+      const writerDied = transaction.writerPid !== undefined && !this.isProcessAlive(transaction.writerPid)
+      if (transaction.phase === 'recovering' || transaction.expiresAt <= this.nowMs() || writerDied) {
+        await this.recoverExpiredCredentialTransaction(providerId, transaction.operationToken)
+          .catch(() => undefined)
+      } else {
+        this.scheduleCredentialRecovery(providerId, transaction)
+      }
+    }
+  }
+
+  /**
+   * Restores the previous durable credential while the global fence remains
+   * installed. Only after the live apply succeeds is the matching transaction
+   * removed. A failed apply therefore remains fail-closed and is retried.
+   */
+  private async recoverExpiredCredentialTransaction(
+    providerId: string,
+    operationToken?: string
+  ): Promise<boolean> {
+    let recover = false
+    let removedOrphan = false
+    let durableTokenMissingOrMismatch = false
+    let token = operationToken
+    const recovering = await this.file.update(emptyDocument, (current) => {
+      const transaction = current.credentialTransactions[providerId]
+      if (!transaction || (token && transaction.operationToken !== token)) {
+        durableTokenMissingOrMismatch = true
+        return current
+      }
+      token = transaction.operationToken
+      const writerDied = transaction.writerPid !== undefined && !this.isProcessAlive(transaction.writerPid)
+      if (
+        transaction.phase !== 'recovering' &&
+        transaction.expiresAt > this.nowMs() &&
+        !writerDied
+      ) {
+        return current
+      }
+      if (
+        transaction.phase === 'recovering' &&
+        transaction.recoveryOwnerId !== this.registryInstanceId &&
+        transaction.recoveryOwnerPid !== undefined &&
+        this.isProcessAlive(transaction.recoveryOwnerPid)
+      ) {
+        return current
+      }
+      const profile = current.profiles[providerId]
+      if (!profile || profile.incarnationId !== transaction.incarnationId) {
+        const credentialTransactions = { ...current.credentialTransactions }
+        delete credentialTransactions[providerId]
+        removedOrphan = true
+        return {
+          ...current,
+          revision: current.revision + 1,
+          credentialTransactions,
+          credentialRefCleanup: appendCredentialRefs(
+            current.credentialRefCleanup,
+            this.nowMs(),
+            transaction.nextCredentialRef,
+            transaction.writerInstanceId,
+            transaction.writerPid
+          )
+        }
+      }
+      recover = true
+      if (
+        transaction.phase === 'recovering' &&
+        transaction.recoveryOwnerId === this.registryInstanceId &&
+        (!transaction.nextCredentialRef || Boolean(current.credentialRefCleanup[transaction.nextCredentialRef]))
+      ) return current
+      return {
+        ...current,
+        revision: current.revision + 1,
+        credentialTransactions: {
+          ...current.credentialTransactions,
+          [providerId]: {
+            ...transaction,
+            phase: 'recovering',
+            recoveryOwnerId: this.registryInstanceId,
+            recoveryOwnerPid: process.pid
+          }
+        },
+        credentialRefCleanup: appendCredentialRefs(
+          current.credentialRefCleanup,
+          this.nowMs(),
+          transaction.nextCredentialRef,
+          transaction.writerInstanceId,
+          transaction.writerPid
+        )
+      }
+    })
+    // Another Registry can supersede, commit, clear, or delete the durable
+    // transaction without touching this process's prepared plaintext. The old
+    // timer still identifies its local token, so release only that generation
+    // and leave the newer durable state completely untouched.
+    if (durableTokenMissingOrMismatch && operationToken) {
+      this.clearPreparedCredentialSecret(providerId, operationToken)
+    }
+    if (removedOrphan) {
+      this.clearPreparedCredentialSecret(providerId, token)
+      this.cancelCredentialRecoveryTimer(providerId)
+      await this.changed(recovering)
+      await this.drainCredentialRefCleanup()
+      return true
+    }
+    if (!recover || !token) {
+      const current = recovering.credentialTransactions[providerId]
+      if (current) this.scheduleCredentialRecovery(providerId, current)
+      return false
+    }
+
+    const operation = this.changeOperation.then(async () => {
+      const current = await this.file.read(emptyDocument)
+      const transaction = current.credentialTransactions[providerId]
+      if (
+        transaction?.operationToken !== token ||
+        transaction.phase !== 'recovering' ||
+        transaction.recoveryOwnerId !== this.registryInstanceId
+      ) return false
+      await this.options.onChanged?.(await this.materializeDocument(current, providerId))
+      const afterApply = await this.file.read(emptyDocument)
+      const afterTransaction = afterApply.credentialTransactions[providerId]
+      if (
+        afterTransaction?.operationToken !== token ||
+        afterTransaction.phase !== 'recovering' ||
+        afterTransaction.recoveryOwnerId !== this.registryInstanceId
+      ) {
+        await this.apply(afterApply)
+        return false
+      }
+      return true
+    })
+    this.changeOperation = operation.then(() => undefined, () => undefined)
+    let applied: boolean
+    try {
+      applied = await operation
+    } catch (error) {
+      const current = (await this.file.read(emptyDocument)).credentialTransactions[providerId]
+      if (current?.operationToken === token) this.scheduleCredentialRecovery(providerId, current)
+      throw error
+    }
+    if (!applied) return false
+
+    let finalized = false
+    const document = await this.file.update(emptyDocument, (current) => {
+      const transaction = current.credentialTransactions[providerId]
+      const profile = current.profiles[providerId]
+      if (
+        transaction?.operationToken !== token ||
+        transaction.phase !== 'recovering' ||
+        transaction.recoveryOwnerId !== this.registryInstanceId ||
+        !profile ||
+        profile.incarnationId !== transaction.incarnationId
+      ) return current
+      const credentialTransactions = { ...current.credentialTransactions }
+      delete credentialTransactions[providerId]
+      finalized = true
+      return {
+        ...current,
+        revision: current.revision + 1,
+        credentialTransactions
+      }
+    })
+    if (!finalized) {
+      await this.applyLatest()
+      return false
+    }
+    this.clearPreparedCredentialSecret(providerId, token)
+    this.cancelCredentialRecoveryTimer(providerId)
+    await this.changed(document)
+    await this.drainCredentialRefCleanup()
+    return true
+  }
+
+  private async drainCredentialRefCleanup(): Promise<void> {
+    const initial = await this.file.read(emptyDocument)
+    for (const entry of Object.values(initial.credentialRefCleanup)) {
+      const { reference } = entry
+      const current = await this.file.read(emptyDocument)
+      const latestEntry = current.credentialRefCleanup[reference]
+      if (!latestEntry) continue
+      if (credentialReferenceIsLive(current, reference)) continue
+      if (latestEntry.writerPid && this.isProcessAlive(latestEntry.writerPid)) continue
+      try {
+        await this.options.credentials.delete(reference)
+      } catch {
+        continue
+      }
+      await this.file.update(emptyDocument, (latest) => {
+        const candidate = latest.credentialRefCleanup[reference]
+        if (!candidate || credentialReferenceIsLive(latest, reference)) return latest
+        if (candidate.writerPid && this.isProcessAlive(candidate.writerPid)) return latest
+        const credentialRefCleanup = { ...latest.credentialRefCleanup }
+        delete credentialRefCleanup[reference]
+        return { ...latest, credentialRefCleanup }
+      })
+    }
+  }
+
+  private isProcessAlive(pid: number): boolean {
+    return this.options.isProcessAlive?.(pid) ?? processIsAlive(pid)
+  }
+
+  private async retireStaleCredentialWrite(reference: string): Promise<void> {
+    let deleted = false
+    try {
+      await this.options.credentials.delete(reference)
+      deleted = true
+    } catch {
+      // The writer is still able to durably acknowledge that it will never
+      // write this ref again. Preserve a retryable cleanup entry without the
+      // live-writer lease instead of dropping the ref after a failed delete.
+    }
+    await this.file.update(emptyDocument, (current) => {
+      const entry = current.credentialRefCleanup[reference]
+      if (!entry || credentialReferenceIsLive(current, reference)) return current
+      if (entry.writerInstanceId && entry.writerInstanceId !== this.registryInstanceId) return current
+      const credentialRefCleanup = { ...current.credentialRefCleanup }
+      if (deleted) {
+        delete credentialRefCleanup[reference]
+      } else {
+        credentialRefCleanup[reference] = {
+          reference,
+          enqueuedAt: entry.enqueuedAt
+        }
+      }
+      return { ...current, credentialRefCleanup }
+    })
+  }
+
+  private async abandonCredentialWrite(
+    providerId: string,
+    operationToken: string,
+    reference: string
+  ): Promise<void> {
+    await this.options.credentials.delete(reference).catch(() => undefined)
+    await this.file.update(emptyDocument, (current) => {
+      const transaction = current.credentialTransactions[providerId]
+      if (
+        transaction?.operationToken !== operationToken ||
+        transaction.nextCredentialRef !== reference ||
+        transaction.writerInstanceId !== this.registryInstanceId
+      ) {
+        const entry = current.credentialRefCleanup[reference]
+        if (
+          !entry ||
+          entry.writerInstanceId !== this.registryInstanceId ||
+          credentialReferenceIsLive(current, reference)
+        ) return current
+        return {
+          ...current,
+          credentialRefCleanup: {
+            ...current.credentialRefCleanup,
+            [reference]: {
+              reference,
+              enqueuedAt: entry.enqueuedAt
+            }
+          }
+        }
+      }
+      return {
+        ...current,
+        revision: current.revision + 1,
+        credentialTransactions: {
+          ...current.credentialTransactions,
+          [providerId]: {
+            ...transaction,
+            phase: 'recovering',
+            expiresAt: this.nowMs(),
+            writerInstanceId: undefined,
+            writerPid: undefined,
+            recoveryOwnerId: this.registryInstanceId,
+            recoveryOwnerPid: process.pid
+          }
+        },
+        credentialRefCleanup: appendCredentialRefs(
+          current.credentialRefCleanup,
+          this.nowMs(),
+          reference
+        )
+      }
+    })
+    await this.recoverExpiredCredentialTransaction(providerId, operationToken).catch(() => undefined)
+    await this.drainCredentialRefCleanup()
   }
 
   /**
@@ -797,7 +2093,7 @@ export class ModelConnectionRegistry {
       if (document.revision <= this.lastAppliedRevision) return
       await this.apply(document)
       this.lastAppliedRevision = document.revision
-      const snapshot = this.project(document)
+      const snapshot = await this.projectWithCredentialHealth(document)
       for (const listener of this.listeners) listener(snapshot)
     })
     this.changeOperation = operation.catch(() => undefined)
@@ -805,8 +2101,67 @@ export class ModelConnectionRegistry {
   }
 
   private project(document: RegistryDocument): ModelConnectionSnapshot {
-    return project(document, this.options.modelCapabilities)
+    return project(document, this.options.modelCapabilities, this.credentialHealth)
   }
+
+  private async projectWithCredentialHealth(
+    document: RegistryDocument
+  ): Promise<ModelConnectionSnapshot> {
+    const health = await this.inspectCredentialHealth(document)
+    if (document.revision >= this.credentialHealthRevision) {
+      this.credentialHealthRevision = document.revision
+      this.credentialHealth = new Map(health)
+    }
+    return project(document, this.options.modelCapabilities, health)
+  }
+
+  private async inspectCredentialHealth(
+    document: RegistryDocument
+  ): Promise<ReadonlyMap<string, ProjectedCredentialHealth>> {
+    const entries = await Promise.all(Object.values(document.profiles).map(async (profile) => {
+      if (document.credentialTransactions[profile.id]) {
+        return [profile.id, credentialHealth('missing')] as const
+      }
+      if (profile.credentialRef) {
+        try {
+          const credential = await this.options.credentials.get(profile.credentialRef)
+          return [profile.id, credential?.apiKey?.trim()
+            ? credentialHealth('ready')
+            : credentialHealth('missing')] as const
+        } catch {
+          return [profile.id, credentialHealth('unreadable')] as const
+        }
+      }
+      if (profile.credentialSourceId && this.options.inspectCredentialSource) {
+        try {
+          const status = await this.options.inspectCredentialSource(profile.credentialSourceId)
+          return [profile.id, credentialHealth(status)] as const
+        } catch {
+          return [profile.id, credentialHealth('unreadable')] as const
+        }
+      }
+      if (!profile.configured && profile.kind === 'http') {
+        return [profile.id, credentialHealth('missing')] as const
+      }
+      return null
+    }))
+    return new Map(entries.filter((entry): entry is NonNullable<typeof entry> => entry !== null))
+  }
+}
+
+type ProjectedCredentialHealth = {
+  credentialStatus: ModelConnectionCredentialStatus
+  credentialErrorCode?: ModelConnectionCredentialErrorCode
+}
+
+function credentialHealth(status: ModelConnectionCredentialStatus): ProjectedCredentialHealth {
+  if (status === 'missing') {
+    return { credentialStatus: status, credentialErrorCode: 'credential_missing' }
+  }
+  if (status === 'unreadable') {
+    return { credentialStatus: status, credentialErrorCode: 'credential_unreadable' }
+  }
+  return { credentialStatus: status }
 }
 
 function readLatestIfChanged(
@@ -819,11 +2174,94 @@ function readLatestIfChanged(
   })
 }
 
+function parseCredentialOperationToken(operationToken: string): {
+  clientId: string
+  generation: number
+} {
+  const [, clientId = '', generationRaw = ''] = operationToken.split(':')
+  const generation = Number(generationRaw)
+  if (!clientId || !Number.isSafeInteger(generation) || generation <= 0) {
+    throw new Error('invalid credential operation token')
+  }
+  return { clientId, generation }
+}
+
+function previousCredentialState(profile: StoredProfile): CredentialTransaction['previous'] {
+  return {
+    credentialRef: profile.credentialRef,
+    credentialSourceId: profile.credentialSourceId,
+    legacyCredentialSourceToRetire: profile.legacyCredentialSourceToRetire,
+    configured: profile.configured
+  }
+}
+
+function boundedCredentialHighWater(
+  current: StoredProfile['credentialMutationHighWater'],
+  clientId: string,
+  generation: number
+): Record<string, number> {
+  const previousClients = Object.entries(current ?? {})
+    .filter(([existingClientId]) => existingClientId !== clientId)
+    .slice(-63)
+  return Object.fromEntries([...previousClients, [clientId, generation]])
+}
+
+function appendCredentialRefs(
+  current: RegistryDocument['credentialRefCleanup'],
+  enqueuedAt: number,
+  reference?: string,
+  writerInstanceId?: string,
+  writerPid?: number
+): RegistryDocument['credentialRefCleanup'] {
+  if (!reference) return current
+  const existing = current[reference]
+  if (existing && !existing.writerInstanceId) return current
+  return {
+    ...current,
+    [reference]: {
+      reference,
+      enqueuedAt,
+      ...(writerInstanceId ? { writerInstanceId } : {}),
+      ...(writerPid ? { writerPid } : {})
+    }
+  }
+}
+
+function requireCredentialTransaction(
+  document: RegistryDocument,
+  providerId: string,
+  operationToken: string
+): CredentialTransaction {
+  const transaction = document.credentialTransactions[providerId]
+  if (!transaction || transaction.operationToken !== operationToken) {
+    throw new ModelConnectionConflictError(project(document))
+  }
+  return transaction
+}
+
+function credentialReferenceIsLive(document: RegistryDocument, reference: string): boolean {
+  return Object.values(document.profiles).some((profile) => profile.credentialRef === reference) ||
+    Object.values(document.credentialTransactions)
+      .some((transaction) => transaction.nextCredentialRef === reference)
+}
+
+function processIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM'
+  }
+}
+
 function emptyDocument(): RegistryDocument {
   return {
     schemaVersion: 1,
     revision: 0,
     profiles: {},
+    tombstones: {},
+    credentialTransactions: {},
+    credentialRefCleanup: {},
     proxy: { enabled: false, url: '' },
     routePools: [],
     localModelGateway: { enabled: false }
@@ -831,10 +2269,11 @@ function emptyDocument(): RegistryDocument {
 }
 
 function configuredFallback(
-  profiles: readonly StoredProfile[]
+  profiles: readonly StoredProfile[],
+  credentialHealth: ReadonlyMap<string, ProjectedCredentialHealth> = new Map()
 ): { profile: StoredProfile; model: string } | undefined {
   for (const profile of profiles) {
-    if (!profile.configured) continue
+    if (!isProfileUsable(profile, credentialHealth.get(profile.id))) continue
     const model = profile.selectedModel ?? profile.models[0]
     if (model) return { profile, model }
   }
@@ -843,53 +2282,36 @@ function configuredFallback(
 
 function reconcileSeedProfile(
   existing: StoredProfile,
-  request: ModelConnectionConnectRequest,
-  options: {
-    preserveSelection?: boolean
-    credentialSourceId?: string
-  } = {}
+  request: ModelConnectionConnectRequest
 ): StoredProfile {
   const incomingModels = uniqueModels([
     ...request.models,
     ...(request.selectedModel ? [request.selectedModel] : [])
   ])
-  // Early registry builds seeded every secondary provider with the active
-  // DeepSeek model. Recognize that one-value signature and replace it with the
-  // provider's real GUI catalog; otherwise only add missing models so
-  // registry-owned edits are not discarded.
-  const repairLegacySeed = incomingModels.length > 0 &&
-    request.select === false &&
-    existing.models.length === 1 &&
-    !incomingModels.includes(existing.models[0]!) &&
-    existing.selectedModel === existing.models[0]
-  const models = incomingModels.length === 0
-    ? existing.models
-    : repairLegacySeed
-      ? incomingModels
-      : uniqueModels([...existing.models, ...incomingModels])
-  const selectedModel = repairLegacySeed
-    ? request.selectedModel ?? models[0]
-    : options.preserveSelection
-      ? existing.selectedModel ?? request.selectedModel ?? models[0]
-    : request.select && request.selectedModel
-      ? request.selectedModel
-      : existing.selectedModel ?? request.selectedModel ?? models[0]
-  const modelCapabilities = request.modelCapabilities
-    ? {
-        ...(existing.modelCapabilities ?? {}),
-        ...capabilitiesForModels(request.modelCapabilities, models)
-      }
-    : existing.modelCapabilities
   const migrateGeminiSubscription =
     existing.id === 'gemini-subscription' &&
     existing.kind === 'gemini-code-assist' &&
     request.kind === 'antigravity-cli'
+  // Once a profile exists, the Registry owns its catalog and selection.
+  // AppSettings seeds are a compatibility import, not a union source: using
+  // them to add models would resurrect a user-deleted model after restart.
+  // The one exception is the explicit one-time Gemini transport migration.
+  const models = migrateGeminiSubscription && incomingModels.length > 0
+    ? incomingModels
+    : existing.models
+  const selectedModel = migrateGeminiSubscription
+    ? request.selectedModel ?? models[0]
+    : existing.selectedModel ?? models[0]
+  const modelCapabilities = migrateGeminiSubscription && request.modelCapabilities
+    ? capabilitiesForModels(request.modelCapabilities, models)
+    : existing.modelCapabilities
 
   return StoredProfileSchema.parse({
     ...existing,
-    ...(options.credentialSourceId
-      ? { credentialSourceId: options.credentialSourceId, configured: true }
-      : {}),
+    // Credential ownership is imported only when a profile is first created.
+    // Re-applying GUI/settings seeds must never replace a Registry-owned
+    // credentialRef, resurrect a cleared credential, or switch an existing
+    // profile back to a legacy settings:provider:* source.
     ...(migrateGeminiSubscription
       ? {
           kind: request.kind,
@@ -916,9 +2338,11 @@ function sameStoredProfile(left: StoredProfile, right: StoredProfile): boolean {
     left.baseUrl === right.baseUrl &&
     left.endpointFormat === right.endpointFormat &&
     left.configured === right.configured &&
+    left.incarnationId === right.incarnationId &&
     left.selectedModel === right.selectedModel &&
     left.credentialRef === right.credentialRef &&
     left.credentialSourceId === right.credentialSourceId &&
+    left.legacyCredentialSourceToRetire === right.legacyCredentialSourceToRetire &&
     sameModels(left.models, right.models) &&
     sameCapabilities(left.modelCapabilities, right.modelCapabilities)
 }
@@ -928,38 +2352,65 @@ function project(
   resolveModelCapabilities?: (
     model: string,
     profile?: Pick<ModelConnectionProfile, 'id' | 'presetSource' | 'baseUrl' | 'kind'>
-  ) => ModelCapabilityMetadata
+  ) => ModelCapabilityMetadata,
+  credentialHealthByProvider: ReadonlyMap<string, ProjectedCredentialHealth> = new Map()
 ): ModelConnectionSnapshot {
+  const providers = Object.values(document.profiles)
+    .map((storedProfile) => {
+      const {
+        incarnationId: _incarnationId,
+        credentialMutationHighWater: _credentialMutationHighWater,
+        credentialRef: _credentialRef,
+        credentialSourceId: _credentialSourceId,
+        legacyCredentialSourceToRetire: _legacyCredentialSourceToRetire,
+        headers: _headers,
+        ...profile
+      } = storedProfile
+      const credentialHealth = credentialHealthByProvider.get(profile.id)
+      const modelCapabilities = Object.fromEntries(profile.models.flatMap((model) => {
+        const stored = profile.modelCapabilities?.[model] ??
+          profile.modelCapabilities?.[model.trim().toLowerCase()]
+        const derived = resolveModelCapabilities?.(model, profile)
+        const capability = mergeProjectedCapability(stored, derived, profile, model)
+        return capability ? [[model, { ...capability, id: model }]] : []
+      }))
+      return {
+        ...profile,
+        configured: isProfileUsable(storedProfile, credentialHealth),
+        ...credentialHealth,
+        ...(Object.keys(modelCapabilities).length > 0 ? { modelCapabilities } : {})
+      }
+    })
+    .sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id))
+  const selected = document.defaultProviderId
+    ? providers.find((profile) => profile.id === document.defaultProviderId && profile.configured)
+    : undefined
   return ModelConnectionSnapshotSchema.parse({
     schemaVersion: 1,
     revision: document.revision,
-    providers: Object.values(document.profiles)
-      .map(({
-        credentialRef: _credentialRef,
-        credentialSourceId: _credentialSourceId,
-        headers: _headers,
-        ...profile
-      }) => {
-        const modelCapabilities = Object.fromEntries(profile.models.flatMap((model) => {
-          const stored = profile.modelCapabilities?.[model] ??
-            profile.modelCapabilities?.[model.trim().toLowerCase()]
-          const derived = resolveModelCapabilities?.(model, profile)
-          const capability = mergeProjectedCapability(stored, derived, profile, model)
-          return capability ? [[model, { ...capability, id: model }]] : []
-        }))
-        return {
-          ...profile,
-          ...(Object.keys(modelCapabilities).length > 0 ? { modelCapabilities } : {})
+    providers,
+    ...(selected
+      ? {
+          defaultProviderId: document.defaultProviderId,
+          defaultAccountId: document.defaultAccountId,
+          defaultModel: document.defaultModel
         }
-      })
-      .sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id)),
-    defaultProviderId: document.defaultProviderId,
-    defaultAccountId: document.defaultAccountId,
-    defaultModel: document.defaultModel,
+      : {}),
     proxy: document.proxy,
     routePools: document.routePools,
     localModelGateway: document.localModelGateway
   })
+}
+
+function isProfileUsable(
+  profile: Pick<StoredProfile, 'configured' | 'kind' | 'credentialRef' | 'credentialSourceId'>,
+  health?: ProjectedCredentialHealth
+): boolean {
+  if (!profile.configured) return false
+  const requiresCredential = profile.kind === 'http' ||
+    profile.kind === 'gemini-code-assist' ||
+    Boolean(profile.credentialRef || profile.credentialSourceId)
+  return !requiresCredential || health?.credentialStatus === 'ready'
 }
 
 function mergeProjectedCapability(
@@ -1002,10 +2453,15 @@ function assertRevision(
   resolveModelCapabilities?: (
     model: string,
     profile?: Pick<ModelConnectionProfile, 'id' | 'presetSource' | 'baseUrl' | 'kind'>
-  ) => ModelCapabilityMetadata
+  ) => ModelCapabilityMetadata,
+  credentialHealthByProvider: ReadonlyMap<string, ProjectedCredentialHealth> = new Map()
 ): void {
   if (document.revision !== expected) {
-    throw new ModelConnectionConflictError(project(document, resolveModelCapabilities))
+    throw new ModelConnectionConflictError(project(
+      document,
+      resolveModelCapabilities,
+      credentialHealthByProvider
+    ))
   }
 }
 
@@ -1034,10 +2490,10 @@ function sameCapabilities(
 
 function allocateId(document: RegistryDocument, requested: string): string {
   const base = normalizeProviderId(requested) || 'provider'
-  if (!document.profiles[base]) return base
+  if (!document.profiles[base] && !document.credentialTransactions[base]) return base
   for (let index = 2; index < 10_000; index += 1) {
     const candidate = `${base}-${index}`
-    if (!document.profiles[candidate]) return candidate
+    if (!document.profiles[candidate] && !document.credentialTransactions[candidate]) return candidate
   }
   throw new Error('unable to allocate provider id')
 }
@@ -1049,6 +2505,10 @@ function normalizeProviderId(requested: string): string {
     .slice(0, 100)
 }
 
+function preparedCredentialSecretTimerKey(providerId: string, operationToken: string): string {
+  return `${providerId}\u0000${operationToken}`
+}
+
 function uniqueModels(models: readonly string[]): string[] {
   return [...new Set(models.map((model) => model.trim()).filter(Boolean))]
 }
@@ -1058,14 +2518,26 @@ function sameModels(left: readonly string[], right: readonly string[]): boolean 
 }
 
 async function probeModels(input: {
+  kind: ModelConnectionProfile['kind']
   baseUrl?: string
+  endpointFormat?: ModelConnectionProfile['endpointFormat']
   apiKey: string
+  headers?: Record<string, string>
   fallbackModels: readonly string[]
+  proxyUrl: string
 }): Promise<string[]> {
-  if (!input.baseUrl) return uniqueModels(input.fallbackModels)
-  const url = modelsUrl(input.baseUrl)
-  const response = await fetch(url, {
-    headers: input.apiKey ? { authorization: `Bearer ${input.apiKey}` } : {},
+  if (input.kind !== 'http') return uniqueModels(input.fallbackModels)
+  if (!input.baseUrl) throw new Error('provider probe failed: HTTP provider has no base URL')
+  const url = modelsUrl(input.baseUrl, input.endpointFormat)
+  const usesAnthropicHeaders = input.endpointFormat === 'messages'
+  const authHeaders: Record<string, string> = input.apiKey
+    ? usesAnthropicHeaders
+      ? { 'x-api-key': input.apiKey, 'anthropic-version': '2023-06-01' }
+      : { authorization: `Bearer ${input.apiKey}` }
+    : {}
+  const fetchImpl = createProxyFetch(input.proxyUrl) ?? fetch
+  const response = await fetchImpl(url, {
+    headers: { ...(input.headers ?? {}), ...authHeaders },
     signal: AbortSignal.timeout(15_000)
   })
   if (!response.ok) throw new Error(`provider probe failed with HTTP ${response.status}`)
@@ -1078,12 +2550,36 @@ async function probeModels(input: {
   return uniqueModels([...discovered, ...input.fallbackModels])
 }
 
-function modelsUrl(baseUrl: string): string {
+function modelsUrl(
+  baseUrl: string,
+  endpointFormat: ModelConnectionProfile['endpointFormat'] | undefined
+): string {
+  if (endpointFormat === 'custom_endpoint') {
+    throw new Error(
+      'provider probe failed: custom_endpoint does not define a models URL; configure models explicitly with probe disabled'
+    )
+  }
   const url = new URL(baseUrl)
   url.search = ''
   url.hash = ''
-  url.pathname = url.pathname
-    .replace(/\/(chat\/completions|responses|messages)\/?$/u, '')
-    .replace(/\/$/u, '') + '/models'
+  const segments = url.pathname.split('/').filter(Boolean)
+  const last = segments.at(-1)?.toLowerCase()
+  if (last === 'models') {
+    url.pathname = `/${segments.join('/')}`
+    return url.toString()
+  }
+  if (last === 'responses' || last === 'messages') {
+    segments.pop()
+  } else if (last === 'completions' && segments.at(-2)?.toLowerCase() === 'chat') {
+    segments.splice(-2)
+  }
+  const version = segments.at(-1)?.toLowerCase()
+  if (version === 'beta') {
+    segments[segments.length - 1] = 'v1'
+  } else if (!version || !/^v\d+$/u.test(version)) {
+    segments.push('v1')
+  }
+  if (segments.at(-1)?.toLowerCase() !== 'models') segments.push('models')
+  url.pathname = `/${segments.join('/')}`
   return url.toString()
 }

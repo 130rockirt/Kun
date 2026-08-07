@@ -2,7 +2,9 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_KUN_CAPABILITIES_CONFIG } from '../contracts/capabilities.js'
-import { expandHomePath, RuntimeTuningConfigSchema } from './kun-config.js'
+import { expandHomePath, readKunConfigFile, RuntimeTuningConfigSchema } from './kun-config.js'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 
 describe('RuntimeTuningConfigSchema streamIdleTimeoutMs', () => {
   it('accepts a custom timeout, including 0 to disable the guard', () => {
@@ -66,5 +68,76 @@ describe('expandHomePath', () => {
 
   it('leaves non-home tilde prefixes untouched', () => {
     expect(expandHomePath('~other/config.json')).toBe('~other/config.json')
+  })
+})
+
+describe('readKunConfigFile provider compatibility', () => {
+  async function withConfigFile(contents: string, run: (path: string) => Promise<void>): Promise<void> {
+    const dir = await mkdtemp(join(tmpdir(), 'kun-config-'))
+    const path = join(dir, 'config.json')
+    await writeFile(path, contents, 'utf8')
+    try {
+      await run(path)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  }
+
+  it('accepts providers.modelProfiles written by the current GUI', async () => {
+    await withConfigFile(JSON.stringify({
+      serve: {
+        providers: {
+          deepseek: {
+            kind: 'http',
+            baseUrl: 'https://api.deepseek.com',
+            modelProfiles: {
+              'deepseek-v4-pro': { contextWindowTokens: 128_000 }
+            }
+          }
+        }
+      }
+    }), async (path) => {
+      const loaded = readKunConfigFile(path)
+      const profile = loaded.config.serve?.providers?.deepseek?.modelProfiles
+      expect(profile?.['deepseek-v4-pro']?.contextWindowTokens).toBe(128_000)
+    })
+  })
+
+  it('migrates the legacy gemini-cli-subscription kind idempotently', async () => {
+    await withConfigFile(JSON.stringify({
+      serve: {
+        providers: {
+          'gemini-cli-subscription': {
+            kind: 'gemini-cli-subscription',
+            modelProfiles: { 'gemini-2.5-flash': { contextWindowTokens: 1_000_000 } }
+          }
+        }
+      }
+    }), async (path) => {
+      const loaded = readKunConfigFile(path)
+      expect(loaded.config.serve?.providers?.['gemini-cli-subscription']?.kind)
+        .toBe('gemini-cli-api')
+    })
+  })
+
+  it('fails closed with the offending provider path for unknown kinds', async () => {
+    await withConfigFile(JSON.stringify({
+      serve: {
+        providers: {
+          mystery: { kind: 'not-a-kind', baseUrl: 'https://example.test' }
+        }
+      }
+    }), async (path) => {
+      let message = ''
+      try {
+        readKunConfigFile(path)
+      } catch (error) {
+        message = error instanceof Error ? error.message : String(error)
+      }
+      expect(message).toContain('Invalid Kun config')
+      expect(message).toContain('providers')
+      expect(message).toContain('mystery')
+      expect(message).toContain('kind')
+    })
   })
 })

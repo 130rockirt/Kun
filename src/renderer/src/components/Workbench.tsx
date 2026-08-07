@@ -863,7 +863,7 @@ export function Workbench(): ReactElement {
     runtimeConnection, sddDraftContent, threads, useWorktreePool, workspaceRoot, worktreeBranch,
     clearFilePreviewTargets, createConversation, createThread, createWriteThread, dismissActiveSddDraft,
     ensureWriteThreadForWorkspace, findSddDraftForSidebarThread, openClaw, openCode, openDesign,
-    openPlugins, openSchedule, openWorkflow, openWrite, openSddRequirementDraftFromHistory,
+    openPlugins, openSchedule, openWorkflow, openWrite,
     selectThread, setConnectPhoneSidebarOpen, setDesignAssistantOpen, setFilePreviewTarget, setInput,
     setRightPanelMode, setRoute, setUseWorktreePool, setWriteAssistantOpen
   })

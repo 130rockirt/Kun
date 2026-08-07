@@ -58,6 +58,128 @@ const BrowserUseTopLevelUrl = z.string().url().max(4096).refine((value) => {
   }
 }, 'browser use only accepts credential-free http or https top-level URLs')
 
+export const BROWSER_USE_ACTIONS = [
+  'open',
+  'snapshot',
+  'screenshot',
+  'click',
+  'type',
+  'select',
+  'press',
+  'scroll',
+  'wait',
+  'tabs',
+  'close'
+] as const
+
+export type BrowserUseActionName = typeof BROWSER_USE_ACTIONS[number]
+
+const BROWSER_USE_ACTION_FIELDS: Readonly<Record<BrowserUseActionName, {
+  required: readonly string[]
+  allowed: readonly string[]
+}>> = {
+  open: { required: ['action', 'url'], allowed: ['action', 'url'] },
+  snapshot: { required: ['action'], allowed: ['action'] },
+  screenshot: { required: ['action'], allowed: ['action'] },
+  click: { required: ['action', 'ref', 'expectedTarget'], allowed: ['action', 'ref', 'expectedTarget'] },
+  type: { required: ['action', 'ref', 'expectedTarget', 'text'], allowed: ['action', 'ref', 'expectedTarget', 'text'] },
+  select: { required: ['action', 'ref', 'expectedTarget', 'value'], allowed: ['action', 'ref', 'expectedTarget', 'value'] },
+  press: { required: ['action', 'ref', 'expectedTarget', 'key'], allowed: ['action', 'ref', 'expectedTarget', 'key'] },
+  scroll: { required: ['action', 'direction'], allowed: ['action', 'direction', 'amount'] },
+  wait: { required: ['action'], allowed: ['action', 'milliseconds'] },
+  tabs: { required: ['action'], allowed: ['action', 'operation', 'tabId'] },
+  close: { required: ['action'], allowed: ['action'] }
+}
+
+export type BrowserUseValidationIssueCode =
+  | 'missing_action'
+  | 'unsupported_action'
+  | 'missing_required_field'
+  | 'invalid_field'
+  | 'unexpected_field'
+
+export type BrowserUseValidationSummary = {
+  attemptedAction: BrowserUseActionName | 'missing' | 'unsupported'
+  allowedActions: readonly BrowserUseActionName[]
+  requiredFields: readonly string[]
+  allowedFields: readonly string[]
+  issueCodes: readonly BrowserUseValidationIssueCode[]
+  issuePaths: readonly string[]
+  guidance: string
+}
+
+const BROWSER_USE_ACTION_SET = new Set<string>(BROWSER_USE_ACTIONS)
+
+function browserUseActionName(value: unknown): BrowserUseActionName | undefined {
+  return typeof value === 'string' && BROWSER_USE_ACTION_SET.has(value)
+    ? value as BrowserUseActionName
+    : undefined
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value))
+}
+
+export function summarizeBrowserUseActionValidation(input: unknown): BrowserUseValidationSummary {
+  const raw = isRecord(input) ? input : {}
+  const rawAction = raw.action
+  const action = browserUseActionName(rawAction)
+  const attemptedAction = action
+    ? action
+    : typeof rawAction === 'string' && rawAction.trim()
+      ? 'unsupported'
+      : 'missing'
+  const shape = action ? BROWSER_USE_ACTION_FIELDS[action] : undefined
+  const issueCodes = new Set<BrowserUseValidationIssueCode>()
+  const issuePaths = new Set<string>()
+
+  if (attemptedAction === 'missing') {
+    issueCodes.add('missing_action')
+  } else if (attemptedAction === 'unsupported') {
+    issueCodes.add('unsupported_action')
+  } else {
+    const parsed = BrowserUseActionInput.safeParse(input)
+    if (!parsed.success) {
+      for (const issue of parsed.error.issues) {
+        if (issue.code === 'unrecognized_keys') {
+          issueCodes.add('unexpected_field')
+          continue
+        }
+        const path = issue.path[0]
+        if (typeof path === 'string' && shape?.allowed.includes(path)) {
+          issuePaths.add(path)
+        }
+        if (
+          issue.code === 'invalid_type' &&
+          typeof path === 'string' &&
+          shape?.required.includes(path) &&
+          !Object.prototype.hasOwnProperty.call(raw, path)
+        ) {
+          issueCodes.add('missing_required_field')
+        } else {
+          issueCodes.add('invalid_field')
+        }
+      }
+    }
+  }
+
+  const requiredFields = shape?.required ?? []
+  const allowedFields = shape?.allowed ?? []
+  const guidance = action
+    ? `Use browser_use action "${action}" with only these fields: ${allowedFields.join(', ')}. Required fields: ${requiredFields.join(', ')}.`
+    : 'Use browser_use with one supported action. To open a page: {"action":"open","url":"https://example.com"}. To inspect the current page: {"action":"snapshot"}.'
+
+  return {
+    attemptedAction,
+    allowedActions: BROWSER_USE_ACTIONS,
+    requiredFields,
+    allowedFields,
+    issueCodes: [...issueCodes],
+    issuePaths: [...issuePaths],
+    guidance
+  }
+}
+
 export const BrowserUseActionInput = z.discriminatedUnion('action', [
   z.object({
     action: z.literal('open'),
@@ -339,6 +461,32 @@ export function isBrowserUseApprovalBoundaryAction(action: BrowserUseActionInput
     action.action === 'press'
 }
 
+/**
+ * Identifies Browser Use actions that can advance or invalidate page state.
+ * The storm breaker uses this to let a fresh observation follow an explicit
+ * browser state transition without weakening its duplicate-call limit.
+ */
+export function isBrowserUseStateAdvancingAction(input: unknown): boolean {
+  const parsed = BrowserUseActionInput.safeParse(input)
+  if (!parsed.success) return false
+  switch (parsed.data.action) {
+    case 'open':
+    case 'click':
+    case 'type':
+    case 'select':
+    case 'press':
+    case 'scroll':
+    case 'wait':
+    case 'close':
+      return true
+    case 'tabs':
+      return parsed.data.operation !== 'list'
+    case 'snapshot':
+    case 'screenshot':
+      return false
+  }
+}
+
 export function redactBrowserUseUrl(value: string): string {
   try {
     const url = new URL(value)
@@ -350,7 +498,10 @@ export function redactBrowserUseUrl(value: string): string {
 
 export function redactBrowserUseActionForPersistence(input: unknown): unknown {
   const parsed = BrowserUseActionInput.safeParse(input)
-  if (!parsed.success) return { action: 'invalid' }
+  if (!parsed.success) {
+    const action = isRecord(input) ? browserUseActionName(input.action) : undefined
+    return action ? { action } : {}
+  }
   const action = parsed.data
   if (action.action === 'open') {
     return { ...action, url: redactBrowserUseUrl(action.url) }

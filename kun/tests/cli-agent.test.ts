@@ -1,7 +1,8 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { PassThrough } from 'node:stream'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   runAgentCommand,
   splitKunCliCommand,
@@ -11,9 +12,16 @@ import { ServeExitCode } from '../src/cli/serve.js'
 import type { ServeOptions } from '../src/cli/cli-options.js'
 import type { ServerRuntime } from '../src/server/routes/server-runtime.js'
 import type { TurnItem } from '../src/contracts/items.js'
+import type { RuntimeEvent } from '../src/contracts/events.js'
+import { makeGoalContextItem } from '../src/domain/item.js'
 import { CapabilityRegistry } from '../src/adapters/tool/capability-registry.js'
 import { LocalToolHost } from '../src/adapters/tool/local-tool-host.js'
 import { GOAL_TOOL_NAMES } from '../src/adapters/tool/goal-tools.js'
+import {
+  acquireRuntimeDataDirMigrationLock,
+  runtimeDataDirClaimsPath,
+  runtimeDataDirOwnerPath
+} from '../src/server/runtime-data-dir-migration-lock.js'
 
 type Capture = {
   stdout: string
@@ -57,6 +65,7 @@ function assistantItem(text: string): TurnItem {
 
 function fakeRuntime(input: {
   items?: TurnItem[]
+  events?: RuntimeEvent[]
   status?: 'completed' | 'failed' | 'aborted'
   throwRun?: boolean
   toolHost?: ServerRuntime['toolHost']
@@ -67,6 +76,7 @@ function fakeRuntime(input: {
     input.onOptions?.(options)
     const items = input.items ?? [assistantItem('hello from fake model')]
     const status = input.status ?? 'completed'
+    let subscriber: ((event: RuntimeEvent) => void) | undefined
     return {
       threadService: {
         create: async () => ({
@@ -92,7 +102,10 @@ function fakeRuntime(input: {
         })
       },
       eventBus: {
-        subscribe: () => () => undefined
+        subscribe: (_threadId: string, handler: (event: RuntimeEvent) => void) => {
+          subscriber = handler
+          return () => { subscriber = undefined }
+        }
       },
       sessionStore: {
         loadItems: async () => items
@@ -100,6 +113,7 @@ function fakeRuntime(input: {
       toolHost: input.toolHost,
       runTurn: async () => {
         if (input.throwRun) throw new Error('model exploded')
+        for (const event of input.events ?? []) subscriber?.(event)
         return status
       },
       shutdown: async () => {
@@ -117,7 +131,10 @@ describe('Kun agent CLI commands', () => {
   })
 
   afterEach(async () => {
-    await rm(dataDir, { recursive: true, force: true })
+    await Promise.all([
+      rm(dataDir, { recursive: true, force: true }),
+      rm(runtimeDataDirClaimsPath(dataDir), { recursive: true, force: true })
+    ])
   })
 
   it('splits explicit commands and uses flags for the default TUI', () => {
@@ -169,6 +186,29 @@ describe('Kun agent CLI commands', () => {
     const item = JSON.parse(c.stdout) as { kind: string; output: { echoed?: string } }
     expect(item.kind).toBe('tool_result')
     expect(item.output.echoed).toBe('hi')
+  })
+
+  it('keeps a direct chat Runtime fenced from migration until shutdown', async () => {
+    const stdin = new PassThrough()
+    const c = capture({ stdin })
+    const command = runAgentCommand('chat', [
+      '--data-dir',
+      dataDir,
+      '--workspace',
+      dataDir
+    ], c.io)
+
+    await vi.waitFor(async () => {
+      await expect(readFile(runtimeDataDirOwnerPath(dataDir), 'utf8'))
+        .resolves.toContain(String(process.pid))
+    })
+    await expect(acquireRuntimeDataDirMigrationLock(dataDir))
+      .rejects.toThrow(/already owned by active process/)
+
+    stdin.end('/exit\n')
+    await expect(command).resolves.toBe(ServeExitCode.ok)
+    const migration = await acquireRuntimeDataDirMigrationLock(dataDir)
+    await migration.release()
   })
 
   it('lists dynamic runtime tools from kun exec', async () => {
@@ -254,6 +294,48 @@ describe('Kun agent CLI commands', () => {
     const lines = c.stdout.trim().split('\n').map((line) => JSON.parse(line) as Record<string, unknown>)
     expect(lines[0]).toMatchObject({ type: 'run_started' })
     expect(lines.at(-1)).toMatchObject({ type: 'run_finished', status: 'completed' })
+  })
+
+  it('does not emit internal goal context records through JSONL', async () => {
+    const goalContext = makeGoalContextItem({
+      id: 'item_goal_context',
+      threadId: 'thr_1',
+      turnId: 'turn_1',
+      goalKey: 'goal_1',
+      text: 'Internal goal instructions must stay private',
+      createdAt: '2026-07-11T08:00:00.000Z'
+    })
+    const c = capture({
+      createRuntime: fakeRuntime({
+        events: [{
+          kind: 'item_created',
+          seq: 1,
+          timestamp: '2026-07-11T08:00:00.000Z',
+          threadId: 'thr_1',
+          turnId: 'turn_1',
+          item: goalContext
+        }, {
+          kind: 'assistant_text_delta',
+          seq: 2,
+          timestamp: '2026-07-11T08:00:01.000Z',
+          threadId: 'thr_1',
+          turnId: 'turn_1',
+          item: assistantItem('public response')
+        }]
+      })
+    })
+
+    const code = await runAgentCommand('run', [
+      '--data-dir', dataDir, '--prompt', 'hello', '--jsonl'
+    ], c.io)
+
+    expect(code).toBe(ServeExitCode.ok)
+    expect(c.stdout).not.toContain('Internal goal instructions must stay private')
+    const lines = c.stdout.trim().split('\n').map((line) => JSON.parse(line) as {
+      type: string
+      event?: RuntimeEvent
+    })
+    expect(lines.filter((line) => line.type === 'runtime_event').map((line) => line.event?.seq)).toEqual([2])
   })
 
   it('rejects combining JSON and JSONL output modes', async () => {

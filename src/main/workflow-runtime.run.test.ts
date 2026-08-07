@@ -84,6 +84,13 @@ function createStore(initial: AppSettingsV1) {
       current = { ...current, workflow: mergeWorkflowSettings(current.workflow, partial.workflow) }
       return current
     },
+    update: async (
+      mutation: (settings: AppSettingsV1) => AppSettingsV1 | Promise<AppSettingsV1>
+    ) => {
+      current = await mutation(current)
+      return current
+    },
+    replace: (next: AppSettingsV1) => { current = next },
     read: () => current
   }
 }
@@ -117,6 +124,44 @@ describe('WorkflowRuntime end-to-end execution', () => {
       rmSync(workflowWorkspaceRoot, { recursive: true, force: true })
       workflowWorkspaceRoot = ''
     }
+  })
+
+  it('preserves the latest webhook endpoint while reconciling a stale workflow snapshot', async () => {
+    const workflow = buildWorkflow({
+      id: 'wf-scheduled',
+      name: 'Scheduled',
+      enabled: true,
+      nextRunAt: '',
+      nodes: [{
+        id: 'schedule',
+        type: 'schedule-trigger',
+        config: { schedule: { kind: 'interval', everyMinutes: 10 } }
+      }],
+      connections: []
+    })
+    const initial = settingsWithWorkflows([workflow])
+    const store = createStore(initial)
+    const runtime = createWorkflowRuntime({
+      store: store as never,
+      runtimeRequest: vi.fn() as never,
+      logError: vi.fn()
+    })
+    store.replace({
+      ...initial,
+      workflow: {
+        ...initial.workflow,
+        webhookPort: 28799,
+        webhookSecret: 'latest-secret'
+      }
+    })
+
+    await (runtime as unknown as {
+      ensureNextRuns: (settings: AppSettingsV1) => Promise<void>
+    }).ensureNextRuns(initial)
+
+    expect(store.read().workflow.webhookPort).toBe(28799)
+    expect(store.read().workflow.webhookSecret).toBe('latest-secret')
+    expect(store.read().workflow.workflows[0].nextRunAt).not.toBe('')
   })
 
   it('runs trigger → AI → condition(true) → delay and skips the false branch', async () => {

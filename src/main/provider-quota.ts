@@ -459,7 +459,7 @@ async function refreshProviderQuota(
     return {
       ...baseEntry,
       status: 'available',
-      source: probe.source,
+      source: result.source ?? probe.source,
       dashboardUrl: probe.dashboardUrl,
       metrics: result.metrics,
       ...(result.summary ? { summary: result.summary } : {}),
@@ -493,7 +493,7 @@ async function runProbe(
   provider: ModelProviderProfileV1,
   context: ProbeContext,
   subscriptionRuntime: Partial<SubscriptionQuotaRuntime>
-): Promise<{ metrics: ProviderQuotaMetric[]; summary?: string }> {
+): Promise<{ metrics: ProviderQuotaMetric[]; summary?: string; source?: string }> {
   if (isSubscriptionQuotaProbe(kind)) {
     return runSubscriptionQuotaProbe(kind, provider, context, subscriptionRuntime)
   }

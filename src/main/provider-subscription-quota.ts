@@ -15,6 +15,14 @@ import {
   type OpenCodeGoLocalQuotaResult
 } from '../../kun/src/services/opencode-go-local-quota.js'
 import {
+  resolveOpenCodeGoCookie as resolveOpenCodeGoCookieImpl
+} from '../../kun/src/services/provider-subscription-quota.js'
+import {
+  fetchOpenCodeGoWebQuota as fetchOpenCodeGoWebQuotaImpl,
+  OpenCodeGoWebQuotaError,
+  type OpenCodeGoWebQuotaResult
+} from '../../kun/src/services/opencode-go-web-quota.js'
+import {
   codexUserAgent,
   parseCodexCredentials,
   refreshCodexToken,
@@ -89,6 +97,11 @@ export type SubscriptionQuotaRuntime = {
   ): Promise<GoogleQuotaCredential | undefined>
   resolveGeminiCliToken(context: SubscriptionProbeContext): Promise<string | undefined>
   resolveOpenCodeGoQuota(): Promise<OpenCodeGoLocalQuotaResult | undefined>
+  resolveOpenCodeGoCookie(): Promise<string | undefined>
+  fetchOpenCodeGoWebQuota(
+    cookieHeader: string,
+    context: SubscriptionProbeContext
+  ): Promise<OpenCodeGoWebQuotaResult>
 }
 
 export class ProviderQuotaMissingCredentialError extends Error {
@@ -110,7 +123,7 @@ export async function runSubscriptionQuotaProbe(
   provider: ModelProviderProfileV1,
   context: SubscriptionProbeContext,
   runtimeOverrides: Partial<SubscriptionQuotaRuntime> = {}
-): Promise<{ metrics: ProviderQuotaMetric[]; summary?: string }> {
+): Promise<{ metrics: ProviderQuotaMetric[]; summary?: string; source?: string }> {
   const runtime = { ...defaultSubscriptionQuotaRuntime, ...runtimeOverrides }
   if (kind === 'claude-subscription') {
     const accessToken = await runtime.resolveClaudeToken(provider)
@@ -210,13 +223,33 @@ export async function runSubscriptionQuotaProbe(
     return probeGoogleCodeAssistQuota(credential, context, 'antigravity')
   }
   if (kind === 'opencode-go-local') {
-    const quota = await runtime.resolveOpenCodeGoQuota()
-    if (!quota) {
-      throw new ProviderQuotaMissingCredentialError(
-        'Use OpenCode Go locally first so its local usage database contains history.'
-      )
+    const cookieHeader = await runtime.resolveOpenCodeGoCookie()
+    if (cookieHeader) {
+      try {
+        const web = await runtime.fetchOpenCodeGoWebQuota(cookieHeader, context)
+        if (web.metrics.length > 0) {
+          return {
+            metrics: web.metrics,
+            ...(web.summary ? { summary: web.summary } : {}),
+            source: 'OpenCode Go subscription usage'
+          }
+        }
+      } catch (error) {
+        // Web quota is best-effort: any auth/network/parse failure falls back
+        // to the local usage database estimate.
+        if (!(error instanceof OpenCodeGoWebQuotaError)) throw error
+      }
     }
-    return quota
+    const quota = await runtime.resolveOpenCodeGoQuota()
+    if (quota) {
+      return {
+        ...quota,
+        source: 'OpenCode Go local usage estimate'
+      }
+    }
+    throw new ProviderQuotaMissingCredentialError(
+      'Sign in to opencode.ai in your browser, or use OpenCode Go locally first so its usage history exists.'
+    )
   }
   const accessToken = await runtime.resolveGeminiCliToken(context)
   if (!accessToken) {
@@ -464,6 +497,16 @@ const defaultSubscriptionQuotaRuntime: SubscriptionQuotaRuntime = {
   resolveCursorSession,
   resolveAntigravityCredential,
   resolveOpenCodeGoQuota: readOpenCodeGoLocalQuota,
+  resolveOpenCodeGoCookie: resolveOpenCodeGoCookieImpl,
+  async fetchOpenCodeGoWebQuota(cookieHeader, context) {
+    const fetcher = ((input: string | URL | Request, init?: RequestInit) =>
+      context.fetcher(
+        typeof input === 'string' || input instanceof URL ? input : input.url,
+        init,
+        context.proxyUrl
+      )) as typeof fetch
+    return fetchOpenCodeGoWebQuotaImpl({ cookieHeader, fetcher })
+  },
   async resolveGeminiCliToken(context) {
     const fetchImpl = ((input: string | URL | Request, init?: RequestInit) =>
       context.fetcher(

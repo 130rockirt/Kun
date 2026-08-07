@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
@@ -32,8 +32,10 @@ import {
   renderKunThinking,
   renderKunWelcome,
   renderKunWordmark,
-  TranscriptComponent
+  TranscriptComponent,
+  writeLocalShareSnapshot
 } from './pi-app.js'
+import { acquireRuntimeDataDirMigrationLock } from '../server/runtime-data-dir-migration-lock.js'
 import { projectThreadSnapshot } from './state.js'
 import type { TerminalInput, TerminalOutput } from './pi-terminal.js'
 
@@ -175,6 +177,20 @@ function renderAssistantMessage(text: string, width: number, running = false): s
 }
 
 describe('PiTuiApplication command overlays', () => {
+  it('does not recreate a missing migration target for local share snapshots', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-tui-share-migration-'))
+    const dataDir = join(root, 'missing', 'data')
+    const migration = await acquireRuntimeDataDirMigrationLock(dataDir)
+    try {
+      await expect(writeLocalShareSnapshot(dataDir, 'thr_share', '# snapshot\n'))
+        .rejects.toThrow(/migration is active/)
+      await expect(stat(dataDir)).rejects.toMatchObject({ code: 'ENOENT' })
+    } finally {
+      await migration.release()
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('keeps browser authentication usable when a Linux desktop opener is unavailable', () => {
     const child = Object.assign(new EventEmitter(), { unref: vi.fn() })
     const spawnFn = vi.fn(() => child)
@@ -3580,6 +3596,124 @@ describe('PiTuiApplication command overlays', () => {
       await waitFor(() => outputText.includes('ZenMux') && outputText.includes('future-model'))
       const before = outputText.length
       for (const character of 'zenmux') input.emit('data', character)
+      input.emit('data', '\r')
+      await waitFor(() => outputText.slice(before).includes('Run /connect'))
+      expect(selectModel).not.toHaveBeenCalled()
+    } finally {
+      controller.requestQuit()
+      await running
+      await app.stop()
+      await controller.stop()
+    }
+  })
+
+  it('shows a configured provider with a missing credential as disconnected and opens reconnect', async () => {
+    const current = detail()
+    const base = modelSnapshot()
+    const catalog: ModelConnectionSnapshot = {
+      ...base,
+      providers: [...base.providers, {
+        id: 'broken-legacy',
+        accountId: 'account:broken-legacy',
+        name: 'Broken Legacy',
+        kind: 'http',
+        authType: 'api-key',
+        baseUrl: 'https://legacy.example.test/v1',
+        endpointFormat: 'chat_completions',
+        configured: true,
+        credentialStatus: 'missing',
+        credentialErrorCode: 'credential_missing',
+        models: ['legacy-model'],
+        selectedModel: 'legacy-model'
+      }]
+    }
+    const client = {
+      listThreads: vi.fn(async () => [current]),
+      getThread: vi.fn(async () => current),
+      subscribeThreadEvents: vi.fn(async (input: { signal: AbortSignal }) => {
+        await new Promise<void>((resolve) => input.signal.addEventListener('abort', () => resolve(), { once: true }))
+      }),
+      skills: vi.fn(async () => ({ enabled: true, roots: [], skills: [], validationErrors: [] })),
+      modelConnections: vi.fn(async () => catalog)
+    } as unknown as KunTuiClient
+    const controller = new TuiController(client, options, runtime)
+    await controller.start()
+    controller.applyModelSelection(catalog, false)
+    const input = Object.assign(new EventEmitter(), {
+      isRaw: false, setRawMode: vi.fn(), setEncoding: vi.fn(), resume: vi.fn(), pause: vi.fn()
+    }) as unknown as TerminalInput
+    let outputText = ''
+    const output = Object.assign(new EventEmitter(), {
+      columns: 88, rows: 26, write: (chunk: string) => { outputText += chunk }
+    }) as unknown as TerminalOutput
+    const app = new PiTuiApplication(controller, input, output)
+    const running = app.run()
+    try {
+      type(input, '/connect')
+      await waitFor(() => {
+        const visible = sanitizeTerminalText(outputText)
+        return visible.includes('2/3 connected') && visible.includes('Credential missing')
+      })
+
+      input.emit('data', '\x1b[F')
+      input.emit('data', '\r')
+      await waitFor(() => outputText.includes('API key / token plan key'))
+    } finally {
+      controller.requestQuit()
+      await running
+      await app.stop()
+      await controller.stop()
+    }
+  })
+
+  it('keeps an unreadable configured provider in /model but refuses selection', async () => {
+    const current = detail()
+    const base = modelSnapshot()
+    const catalog: ModelConnectionSnapshot = {
+      ...base,
+      providers: [...base.providers, {
+        id: 'unreadable-legacy',
+        accountId: 'account:unreadable-legacy',
+        name: 'Unreadable Legacy',
+        kind: 'http',
+        authType: 'api-key',
+        baseUrl: 'https://unreadable.example.test/v1',
+        endpointFormat: 'chat_completions',
+        configured: true,
+        credentialStatus: 'unreadable',
+        credentialErrorCode: 'credential_unreadable',
+        models: ['unreadable-model'],
+        selectedModel: 'unreadable-model'
+      }]
+    }
+    const selectModel = vi.fn()
+    const client = {
+      listThreads: vi.fn(async () => [current]),
+      getThread: vi.fn(async () => current),
+      subscribeThreadEvents: vi.fn(async (input: { signal: AbortSignal }) => {
+        await new Promise<void>((resolve) => input.signal.addEventListener('abort', () => resolve(), { once: true }))
+      }),
+      skills: vi.fn(async () => ({ enabled: true, roots: [], skills: [], validationErrors: [] })),
+      modelConnections: vi.fn(async () => catalog),
+      selectModel
+    } as unknown as KunTuiClient
+    const controller = new TuiController(client, options, runtime)
+    await controller.start()
+    controller.applyModelSelection(catalog, false)
+    const input = Object.assign(new EventEmitter(), {
+      isRaw: false, setRawMode: vi.fn(), setEncoding: vi.fn(), resume: vi.fn(), pause: vi.fn()
+    }) as unknown as TerminalInput
+    let outputText = ''
+    const output = Object.assign(new EventEmitter(), {
+      columns: 88, rows: 26, write: (chunk: string) => { outputText += chunk }
+    }) as unknown as TerminalOutput
+    const app = new PiTuiApplication(controller, input, output)
+    const running = app.run()
+    try {
+      type(input, '/model')
+      await waitFor(() => outputText.includes('Unreadable Legacy') && outputText.includes('unreadable-model'))
+      const before = outputText.length
+      type(input, 'unreadable')
       input.emit('data', '\r')
       await waitFor(() => outputText.slice(before).includes('Run /connect'))
       expect(selectModel).not.toHaveBeenCalled()

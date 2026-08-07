@@ -218,7 +218,11 @@ export class LegacyProviderCredentialMigrationService {
    * uses this path so a stale in-memory settings snapshot still matches the
    * marker and cannot overwrite the newly rotated token on the next save.
    */
-  async updateResolvedApiKey(sourceId: string, apiKey: string): Promise<boolean> {
+  async updateResolvedApiKey(
+    sourceId: string,
+    expectedApiKey: string,
+    apiKey: string
+  ): Promise<boolean> {
     const trimmed = apiKey.trim()
     if (!trimmed) throw new Error('updated provider credential is empty')
     const entry = (await this.markers.read(emptyDocument)).entries[sourceId]
@@ -227,13 +231,11 @@ export class LegacyProviderCredentialMigrationService {
     if (!account || account.providerId !== entry.providerId || account.status !== 'connected') {
       return false
     }
-    const credential = await this.options.credentials.get(account.credentialRef)
-    if (!credential) return false
-    await this.options.credentials.set(account.credentialRef, {
-      ...credential,
-      apiKey: trimmed
-    })
-    return true
+    return this.options.credentials.compareAndSetApiKey(
+      account.credentialRef,
+      expectedApiKey,
+      trimmed
+    )
   }
 
   async markSettingsCommitted(sourceIds: readonly string[]): Promise<void> {

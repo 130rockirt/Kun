@@ -9,6 +9,7 @@ import type {
 import { CapabilityRegistry } from '../../adapters/tool/capability-registry.js'
 import { InMemoryApprovalGate } from '../../adapters/in-memory-approval-gate.js'
 import { LocalToolHost } from '../../adapters/tool/local-tool-host.js'
+import { createCreatePlanTool } from '../../adapters/tool/create-plan-tool.js'
 import { LlmDebugRecorder } from '../../services/llm-debug-recorder.js'
 import {
   createCursorSdkRuntime,
@@ -199,6 +200,88 @@ describe('Cursor SDK runtime factory', () => {
     ])
   })
 
+  test('materializes an active goal context only for non-plan Cursor turns', async () => {
+    const ensureGoalContext = vi.fn(async () => undefined)
+    const createdAt = '2026-08-06T00:00:00.000Z'
+    const thread = {
+      id: 'thread_goal',
+      title: 'Cursor goal',
+      workspace: '/tmp/cursor-goal',
+      model: 'cursor-model',
+      mode: 'agent',
+      approvalPolicy: 'auto',
+      approvalReviewer: 'user',
+      sandboxMode: 'danger-full-access',
+      goal: {
+        threadId: 'thread_goal',
+        objective: 'Finish the migration safely.',
+        status: 'active',
+        tokenBudget: 10_000,
+        tokensUsed: 250,
+        timeUsedSeconds: 12,
+        createdAt,
+        updatedAt: createdAt
+      },
+      turns: [{
+        id: 'turn_goal',
+        prompt: 'continue the migration',
+        actingModelRoute: { model: 'cursor-model', providerId: 'cursor-provider' }
+      }]
+    }
+    const registry = CapabilityRegistry.fromLocalTools([])
+    const runtime = createCursorSdkRuntime({
+      registry,
+      toolHost: new LocalToolHost({ registry }),
+      providerConfigs: {},
+      providerIds: new Set(['cursor-provider']),
+      defaultIsCursor: false,
+      defaultModel: 'cursor-model',
+      defaultApprovalPolicy: 'auto',
+      defaultSandboxMode: 'danger-full-access',
+      threadStore: { get: async () => thread } as never,
+      sessionStore: {} as never,
+      turns: {
+        ensureGoalContext,
+        updateTurnMetadata: async () => undefined
+      } as never,
+      events: { record: async () => undefined } as never,
+      ids: { next: (prefix) => `${prefix}_1` }
+    })
+    const loadKunTurnContext = (runtime as unknown as {
+      deps: {
+        loadKunTurnContext(input: {
+          threadId: string
+          turnId: string
+          userText: string
+          actingModelRoute: { model: string, providerId?: string }
+          signal: AbortSignal
+        }): Promise<{ instructionBlocks: string[] }>
+      }
+    }).deps.loadKunTurnContext
+    const input = {
+      threadId: 'thread_goal',
+      turnId: 'turn_goal',
+      userText: 'continue the migration',
+      actingModelRoute: { model: 'cursor-model', providerId: 'cursor-provider' },
+      signal: new AbortController().signal
+    }
+
+    const agentContext = await loadKunTurnContext(input)
+
+    expect(ensureGoalContext).toHaveBeenCalledWith(
+      'thread_goal',
+      'turn_goal',
+      expect.any(AbortSignal)
+    )
+    expect(agentContext.instructionBlocks.join('\n')).not.toContain(
+      'Continue working toward the active thread goal.'
+    )
+
+    thread.mode = 'plan'
+    await loadKunTurnContext(input)
+    expect(ensureGoalContext).toHaveBeenCalledTimes(1)
+  })
+
   test('bridges policy-filtered MCP and extension tools through Kun ToolHost', async () => {
     const mcpExecute = vi.fn(async (args: Record<string, unknown>) => ({
       output: { server: args.serverId, ok: true }
@@ -233,6 +316,7 @@ describe('Cursor SDK runtime factory', () => {
       })]
     }])
     const toolHost = new LocalToolHost({ registry })
+    const executeSpy = vi.spyOn(toolHost, 'execute')
     const createOptions: AgentOptions[] = []
     const sentMessages: unknown[] = []
     const recorded: unknown[] = []
@@ -366,6 +450,13 @@ describe('Cursor SDK runtime factory', () => {
         text: JSON.stringify({ server: 'docs', ok: true }, null, 2)
       }]
     })
+    expect(executeSpy).toHaveBeenCalled()
+    expect(executeSpy.mock.calls[0]?.[0]).toMatchObject({
+      toolName: 'mcp_call_tool',
+      providerId: 'mcp:facade',
+      toolKind: 'tool_call',
+      callId: 'cursor-mcp-call'
+    })
     await expect(customTools?.mcp_call_tool?.execute(
       { serverId: 'late' },
       { toolCallId: 'cursor-late-call' }
@@ -410,6 +501,133 @@ describe('Cursor SDK runtime factory', () => {
         providerKind: 'extension'
       }
     ]))
+  })
+
+  test('bridges create_plan through Cursor custom tools with Plan mode and sandbox policy intact', async () => {
+    const planWrites: Array<{
+      workspaceRoot: string
+      relativePath: string
+      markdown: string
+    }> = []
+    const createPlanTool = createCreatePlanTool({
+      resolveWorkspaceRoot: async (workspace) => workspace,
+      listPlanFiles: async () => [],
+      writePlan: async (target) => {
+        planWrites.push({
+          workspaceRoot: target.workspaceRoot,
+          relativePath: target.relativePath,
+          markdown: target.markdown
+        })
+        return { path: target.absolutePath, savedAt: '2026-08-06T00:00:00.000Z' }
+      }
+    })
+    const registry = CapabilityRegistry.fromLocalTools([createPlanTool])
+    const toolHost = new LocalToolHost({ registry })
+    const executeSpy = vi.spyOn(toolHost, 'execute')
+    const threadStore = { get: async () => thread }
+    const thread = {
+      id: 'thread_plan',
+      title: 'Cursor plan',
+      workspace: '/tmp/cursor-plan',
+      model: 'cursor-model',
+      mode: 'plan',
+      approvalPolicy: 'auto',
+      approvalReviewer: 'user',
+      sandboxMode: 'workspace-write',
+      turns: [{
+        id: 'turn_plan',
+        prompt: 'draft a plan',
+        mode: 'plan',
+        actingModelRoute: { model: 'cursor-model', providerId: 'cursor-provider' }
+      }]
+    }
+    const runtime = createCursorSdkRuntime({
+      registry,
+      toolHost,
+      providerConfigs: {},
+      providerIds: new Set(['cursor-provider']),
+      defaultIsCursor: false,
+      defaultModel: 'cursor-model',
+      defaultApprovalPolicy: 'auto',
+      defaultSandboxMode: 'workspace-write',
+      threadStore: threadStore as never,
+      sessionStore: {} as never,
+      turns: { updateTurnMetadata: async () => undefined } as never,
+      events: { record: async () => undefined } as never,
+      ids: { next: (prefix) => `${prefix}_1` }
+    })
+    const loadKunTurnContext = (runtime as unknown as {
+      deps: {
+        loadKunTurnContext(input: {
+          threadId: string
+          turnId: string
+          userText: string
+          actingModelRoute: { model: string; providerId?: string }
+          signal: AbortSignal
+        }): Promise<{
+          tools: Array<{ name: string; toolKind?: string }>
+          customTools: Record<string, {
+            execute(
+              args: Record<string, unknown>,
+              context: { toolCallId?: string }
+            ): Promise<unknown>
+          }>
+        }>
+      }
+    }).deps.loadKunTurnContext
+    const input = {
+      threadId: 'thread_plan',
+      turnId: 'turn_plan',
+      userText: 'draft a plan',
+      actingModelRoute: { model: 'cursor-model', providerId: 'cursor-provider' },
+      signal: new AbortController().signal
+    }
+
+    const planning = await loadKunTurnContext(input)
+    expect(planning.tools.map((tool) => tool.name)).toContain('create_plan')
+    expect(planning.tools.find((tool) => tool.name === 'create_plan')?.toolKind)
+      .toBe('file_change')
+    expect(planning.customTools.create_plan).toBeDefined()
+
+    const result = await planning.customTools.create_plan.execute(
+      { markdown: '# Implementation plan\n\n- step 1' },
+      { toolCallId: 'call_plan' }
+    )
+    expect(result).toMatchObject({
+      content: [{ type: 'text', text: expect.stringContaining('Created Kun plan at') }]
+    })
+    expect(planWrites).toHaveLength(1)
+    expect(planWrites[0]).toMatchObject({
+      workspaceRoot: '/tmp/cursor-plan',
+      relativePath: expect.stringContaining('.kunsdd/plan/')
+    })
+    expect(executeSpy).toHaveBeenCalled()
+    expect(executeSpy.mock.calls[0]?.[0]).toMatchObject({
+      toolName: 'create_plan',
+      providerId: 'builtin',
+      toolKind: 'file_change',
+      callId: 'call_plan'
+    })
+
+    // Plan mode must not advertise create_plan on ordinary agent turns.
+    thread.mode = 'agent'
+    thread.turns[0].mode = 'agent'
+    const agentContext = await loadKunTurnContext(input)
+    expect(agentContext.tools.map((tool) => tool.name)).not.toContain('create_plan')
+    expect(agentContext.customTools.create_plan).toBeUndefined()
+
+    // Read-only sandbox hides the file-change plan tool from Cursor even in
+    // Plan mode: Kun's sandbox policy gates advertisement, so the model can
+    // never invoke a write that the read-only sandbox forbids.
+    threadStore.get = async () => ({
+      ...thread,
+      mode: 'plan',
+      sandboxMode: 'read-only',
+      turns: [{ ...thread.turns[0]!, mode: 'plan' }]
+    })
+    const readOnlyContext = await loadKunTurnContext(input)
+    expect(readOnlyContext.tools.map((tool) => tool.name)).not.toContain('create_plan')
+    expect(readOnlyContext.customTools.create_plan).toBeUndefined()
   })
 
   test.each([

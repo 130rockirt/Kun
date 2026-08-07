@@ -14,6 +14,7 @@ export type GraphSupervisionSignalInput = {
   reason: GraphSupervisionReason
   nodeIds: string[]
   digest: string
+  recoveryKey?: string
 }
 
 const INFRASTRUCTURE_RETRY_DELAYS_MS = [2_000, 5_000, 15_000, 60_000] as const
@@ -68,9 +69,10 @@ export function graphSupervisionObligationForSignal(
           }
         }
       : {}),
-    ...(subjectUsesDigest(kind)
+    ...(subjectUsesDigest(kind) && !input.recoveryKey
       ? { digest: normalizeDigest(input.digest), steeringId: run.steering.at(-1)?.steeringId }
-      : {})
+      : {}),
+    ...(input.recoveryKey ? { recoveryKey: input.recoveryKey.slice(0, 256) } : {})
   }
   const digest = createHash('sha256')
     .update(JSON.stringify(subject))
@@ -109,6 +111,7 @@ export function graphSupervisionSignalForObligation(
 const SEMANTIC_PROGRESS_EVENT_TYPES = new Set<GraphEventEnvelopeV1['event']['type']>([
   'plan_validated',
   'run_status_changed',
+  'run_control_intent_changed',
   'plan_revised',
   'node_status_changed',
   'loop_iteration_advanced',

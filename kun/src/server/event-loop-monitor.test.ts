@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { resolveEventLoopStallThresholdMs, startEventLoopMonitor } from './event-loop-monitor.js'
+import {
+  resolveEventLoopHardStallThresholdMs,
+  resolveEventLoopStallThresholdMs,
+  startEventLoopMonitor
+} from './event-loop-monitor.js'
 
 describe('startEventLoopMonitor', () => {
   afterEach(() => {
@@ -67,6 +71,52 @@ describe('startEventLoopMonitor', () => {
     vi.advanceTimersByTime(2_000)
     expect(logs).toHaveLength(0)
   })
+
+  it('classifies a long stall as hard and appends non-sensitive context', () => {
+    vi.useFakeTimers()
+    let clock = 0
+    const logs: string[] = []
+    const handle = startEventLoopMonitor({
+      intervalMs: 1_000,
+      stallThresholdMs: 2_000,
+      hardStallThresholdMs: 60_000,
+      now: () => clock,
+      log: (line) => logs.push(line),
+      context: () => ['instance i-1', 'build abc123']
+    })
+
+    clock = 900_000
+    vi.advanceTimersByTime(1_000)
+    expect(logs).toHaveLength(1)
+    expect(logs[0]).toMatch(/event loop stalled for ~899000ms/)
+    expect(logs[0]).toContain('stall=hard')
+    expect(logs[0]).toContain('instance i-1')
+    expect(logs[0]).toContain('build abc123')
+
+    handle.stop()
+  })
+
+  it('classifies a short stall as cpu and omits empty context', () => {
+    vi.useFakeTimers()
+    let clock = 0
+    const logs: string[] = []
+    const handle = startEventLoopMonitor({
+      intervalMs: 1_000,
+      stallThresholdMs: 2_000,
+      hardStallThresholdMs: 60_000,
+      now: () => clock,
+      log: (line) => logs.push(line)
+    })
+
+    clock = 7_000
+    vi.advanceTimersByTime(1_000)
+    expect(logs).toHaveLength(1)
+    expect(logs[0]).toContain('stall=cpu')
+    expect(logs[0]).not.toContain('stall=hard')
+    expect(logs[0]).not.toContain('; ')
+
+    handle.stop()
+  })
 })
 
 describe('resolveEventLoopStallThresholdMs', () => {
@@ -82,5 +132,17 @@ describe('resolveEventLoopStallThresholdMs', () => {
     expect(resolveEventLoopStallThresholdMs({ KUN_EVENT_LOOP_STALL_LOG_MS: 'abc' })).toBe(2_000)
     expect(resolveEventLoopStallThresholdMs({ KUN_EVENT_LOOP_STALL_LOG_MS: '0' })).toBe(2_000)
     expect(resolveEventLoopStallThresholdMs({ KUN_EVENT_LOOP_STALL_LOG_MS: '-5' })).toBe(2_000)
+  })
+})
+
+describe('resolveEventLoopHardStallThresholdMs', () => {
+  it('defaults to 60000ms', () => {
+    expect(resolveEventLoopHardStallThresholdMs({})).toBe(60_000)
+  })
+
+  it('honors a positive override and ignores garbage', () => {
+    expect(resolveEventLoopHardStallThresholdMs({ KUN_EVENT_LOOP_STALL_HARD_MS: '120000' })).toBe(120_000)
+    expect(resolveEventLoopHardStallThresholdMs({ KUN_EVENT_LOOP_STALL_HARD_MS: 'abc' })).toBe(60_000)
+    expect(resolveEventLoopHardStallThresholdMs({ KUN_EVENT_LOOP_STALL_HARD_MS: '0' })).toBe(60_000)
   })
 })

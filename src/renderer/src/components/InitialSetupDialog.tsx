@@ -9,11 +9,13 @@ import {
   type AppSettingsPatch,
   type AppSettingsV1,
   type KunToolPermissionMode,
-  type ModelProviderPreset
+  type ModelProviderPreset,
+  type ModelProviderProfileV1
 } from '@shared/app-settings'
 import { UNREADABLE_CREDENTIAL_KEY_ERROR_CODE } from '@shared/kun-gui-api'
 import {
   buildInitialSetupSettingsPatch,
+  buildInitialSetupSettings,
   INITIAL_SETUP_PROVIDER_PRESETS,
   initialSetupAutoWirePlan,
   initialSetupDrafts,
@@ -22,6 +24,11 @@ import {
   type InitialSetupDrafts,
   type InitialSetupSelection
 } from './initial-setup-save'
+import {
+  drainSharedProviderCredentialMutation,
+  enqueueSharedModelMutation,
+  stageSharedProviderCredentialMutation
+} from './shared-provider-mutation-coordinator'
 import { rendererRuntimeClient } from '../agent/runtime-client'
 import type { RuntimeConnectionStatus } from '../agent/types'
 import { applyTheme } from '../lib/apply-theme'
@@ -142,6 +149,184 @@ function keyPlaceholder(card: SetupProviderCard, mode: InitialSetupSelection['mo
     return prefix ? `${prefix}...` : 'API Key'
   }
   return card.presetId === 'minimax' ? 'API Key' : 'sk-...'
+}
+
+type InitialSetupModelConnectionsSnapshot = {
+  schemaVersion: 1
+  revision: number
+  providers: Array<{ id: string; accountId?: string }>
+}
+
+type InitialSetupRuntimeRequest = (
+  path: string,
+  method?: string,
+  body?: string
+) => Promise<{ ok: boolean; status: number; body: string }>
+
+function initialSetupModelConnectionsSnapshot(raw: unknown): InitialSetupModelConnectionsSnapshot {
+  const snapshot = raw as InitialSetupModelConnectionsSnapshot
+  if (
+    snapshot?.schemaVersion !== 1 ||
+    !Number.isInteger(snapshot.revision) ||
+    !Array.isArray(snapshot.providers)
+  ) throw new Error('Invalid shared model connection response')
+  return snapshot
+}
+
+function initialSetupModelConnectionResponse(body: string): InitialSetupModelConnectionsSnapshot {
+  return initialSetupModelConnectionsSnapshot(JSON.parse(body))
+}
+
+export async function commitInitialSetupRegistryCredentials(
+  drafts: InitialSetupDrafts,
+  options: {
+    profiles: readonly ModelProviderProfileV1[]
+    selectedProviderId: string
+    selectedModel: string
+  },
+  request: InitialSetupRuntimeRequest = (path, method, body) =>
+    rendererRuntimeClient.runtimeRequest(path, method, body)
+): Promise<void> {
+  const replacements = Object.entries(drafts).flatMap(([providerId, draft]) => {
+    const credential = draft.apiKey.trim()
+    return credential ? [{ providerId, credential }] : []
+  })
+  if (replacements.length === 0) return
+  const staged = replacements.map(({ providerId, credential }) => ({
+    providerId,
+    profile: options.profiles.find((profile) => profile.id === providerId),
+    generation: stageSharedProviderCredentialMutation(
+      providerId,
+      credential,
+      async (operationToken) => {
+        const listed = await request('/v1/model-connections', 'GET')
+        if (!listed.ok) {
+          throw new Error(`Shared model connection request failed (HTTP ${listed.status})`)
+        }
+        let snapshot = initialSetupModelConnectionResponse(listed.body)
+        if (!snapshot.providers.some((provider) => provider.id === providerId)) return
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          const fenced = await request(
+            `/v1/model-connections/${encodeURIComponent(providerId)}/credential/fence`,
+            'POST',
+            JSON.stringify({ expectedRevision: snapshot.revision, operationToken })
+          )
+          if (fenced.ok) return
+          if (fenced.status !== 409 || attempt === 1) {
+            throw new Error(`Shared model connection request failed (HTTP ${fenced.status})`)
+          }
+          const conflict = JSON.parse(fenced.body) as { snapshot?: unknown }
+          snapshot = initialSetupModelConnectionsSnapshot(conflict.snapshot)
+        }
+      }
+    ).generation
+  }))
+  for (const replacement of staged) {
+    const profile = replacement.profile
+    if (!profile) {
+      throw new Error(`Shared model connection profile ${replacement.providerId} is unavailable`)
+    }
+    await drainSharedProviderCredentialMutation(
+      replacement.providerId,
+      replacement.generation,
+      async (credential, operationToken, isCurrent) => {
+        const listed = await request('/v1/model-connections', 'GET')
+        if (!listed.ok) throw new Error(`Shared model connection request failed (HTTP ${listed.status})`)
+        let snapshot = initialSetupModelConnectionResponse(listed.body)
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          if (!isCurrent()) return snapshot
+          const connected = snapshot.providers.some((provider) => provider.id === replacement.providerId)
+          if (connected) {
+            const fenced = await request(
+                `/v1/model-connections/${encodeURIComponent(replacement.providerId)}/credential/fence`,
+                'POST',
+                JSON.stringify({ expectedRevision: snapshot.revision, operationToken })
+              )
+              if (!fenced.ok) {
+                throw new Error(`Shared model connection request failed (HTTP ${fenced.status})`)
+              }
+              snapshot = initialSetupModelConnectionResponse(fenced.body)
+            if (!isCurrent()) return snapshot
+          }
+          let response = connected
+            ? await request(
+                `/v1/model-connections/${encodeURIComponent(replacement.providerId)}/credential`,
+                'PUT',
+                JSON.stringify({
+                  expectedRevision: snapshot.revision,
+                  credential,
+                  operationToken
+                })
+              )
+            : await request(
+                '/v1/model-connections/connect',
+                'POST',
+                JSON.stringify({
+                  expectedRevision: snapshot.revision,
+                  id: profile.id,
+                  name: profile.name.trim() || profile.id,
+                  kind: profile.kind ?? 'http',
+                  authType: 'api-key',
+                  baseUrl: profile.baseUrl,
+                  endpointFormat: profile.endpointFormat,
+                  credential,
+                  models: profile.models,
+                  ...(profile.models[0]
+                    ? { selectedModel: profile.models[0] }
+                    : {}),
+                  probe: false,
+                  select: false
+                })
+              )
+          if (connected && response.ok) {
+            snapshot = initialSetupModelConnectionResponse(response.body)
+            if (!isCurrent()) return snapshot
+            response = await request(
+              `/v1/model-connections/${encodeURIComponent(replacement.providerId)}/credential/commit`,
+              'POST',
+              JSON.stringify({
+                expectedRevision: snapshot.revision,
+                operationToken
+              })
+            )
+          }
+          if (response.ok) return initialSetupModelConnectionResponse(response.body)
+          if (response.status !== 409) {
+            throw new Error(`Shared model connection request failed (HTTP ${response.status})`)
+          }
+          const conflict = JSON.parse(response.body) as { snapshot?: unknown }
+          snapshot = initialSetupModelConnectionsSnapshot(conflict.snapshot)
+          if (!isCurrent()) return snapshot
+          if (attempt === 1) {
+            throw new Error(`Shared model connection request failed (HTTP ${response.status})`)
+          }
+        }
+        return snapshot
+      }
+    )
+  }
+  await enqueueSharedModelMutation(async () => {
+    const listed = await request('/v1/model-connections', 'GET')
+    if (!listed.ok) throw new Error(`Shared model connection request failed (HTTP ${listed.status})`)
+    let snapshot = initialSetupModelConnectionResponse(listed.body)
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const selected = snapshot.providers.find((provider) => provider.id === options.selectedProviderId)
+      if (!selected) throw new Error(`Shared model connection ${options.selectedProviderId} is unavailable`)
+      const response = await request('/v1/model-connections/select', 'POST', JSON.stringify({
+        expectedRevision: snapshot.revision,
+        providerId: options.selectedProviderId,
+        ...(selected.accountId ? { accountId: selected.accountId } : {}),
+        model: options.selectedModel
+      }))
+      if (response.ok) return initialSetupModelConnectionResponse(response.body)
+      if (response.status !== 409 || attempt === 1) {
+        throw new Error(`Shared model connection request failed (HTTP ${response.status})`)
+      }
+      const conflict = JSON.parse(response.body) as { snapshot?: unknown }
+      snapshot = initialSetupModelConnectionsSnapshot(conflict.snapshot)
+    }
+    return snapshot
+  })
 }
 
 export function canCloseInitialSetup(_mode: InitialSetupMode): boolean {
@@ -339,6 +524,17 @@ export function InitialSetupDialog(): ReactElement {
     setSaving(true)
     setError(null)
     try {
+      const intended = buildInitialSetupSettings(current, drafts, selection)
+      const selectedProviderId = initialSetupProfileId(selection)
+      const selectedProvider = intended.provider.providers.find((provider) =>
+        provider.id === selectedProviderId
+      )
+      if (!selectedProvider) throw new Error(`Provider ${selectedProviderId} is unavailable`)
+      await commitInitialSetupRegistryCredentials(drafts, {
+        profiles: intended.provider.providers,
+        selectedProviderId,
+        selectedModel: selectedProvider.models[0] ?? intended.agents.kun.model
+      })
       const next = await rendererRuntimeClient.setSettings(
         buildInitialSetupSettingsPatch(current, drafts, selection)
       )

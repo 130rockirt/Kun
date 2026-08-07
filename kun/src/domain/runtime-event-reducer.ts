@@ -170,7 +170,7 @@ export function applyRuntimeEvent(
       break
     case 'assistant_text_delta':
     case 'assistant_reasoning_delta':
-      upsertItem(next, event.item, 'append-delta')
+      upsertItem(next, event.item, 'append-delta', event.deltaOffset)
       break
     case 'approval_requested':
     case 'approval_resolved':
@@ -455,11 +455,12 @@ function upsertUserInputFromEvent(
 function upsertItem(
   projection: MutableProjection,
   item: TurnItem,
-  mode: 'replace' | 'append-delta'
+  mode: 'replace' | 'append-delta',
+  deltaOffset?: number
 ): void {
   const index = projection.items.findIndex((candidate) => candidate.id === item.id)
   const nextItem = index >= 0 && mode === 'append-delta'
-    ? appendDelta(projection.items[index]!, item)
+    ? appendDelta(projection.items[index]!, item, deltaOffset)
     : item
   if (index >= 0) projection.items[index] = nextItem
   else projection.items.push(nextItem)
@@ -467,19 +468,30 @@ function upsertItem(
   if (!turn.itemIds.includes(item.id)) turn.itemIds.push(item.id)
 }
 
-function appendDelta(existing: TurnItem, delta: TurnItem): TurnItem {
+function appendDelta(existing: TurnItem, delta: TurnItem, deltaOffset?: number): TurnItem {
   if (
     (existing.kind === 'assistant_text' && delta.kind === 'assistant_text') ||
     (existing.kind === 'assistant_reasoning' && delta.kind === 'assistant_reasoning')
   ) {
     return {
       ...existing,
-      text: `${existing.text}${delta.text}`,
+      text: mergeAssistantDelta(existing.text, delta.text, deltaOffset),
       status: delta.status,
       finishedAt: delta.finishedAt ?? existing.finishedAt
     }
   }
   return delta
+}
+
+function mergeAssistantDelta(existing: string, fragment: string, offset?: number): string {
+  if (offset === undefined || !Number.isSafeInteger(offset) || offset < 0 || offset > existing.length) {
+    return `${existing}${fragment}`
+  }
+  const overlapLength = Math.min(existing.length - offset, fragment.length)
+  if (existing.slice(offset, offset + overlapLength) !== fragment.slice(0, overlapLength)) {
+    return `${existing}${fragment}`
+  }
+  return `${existing}${fragment.slice(overlapLength)}`
 }
 
 function ensureTurn(

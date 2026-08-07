@@ -1,10 +1,11 @@
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import Database from 'better-sqlite3'
 import { describe, expect, it } from 'vitest'
 import {
   buildOpenCodeGoLocalQuota,
+  OpenCodeGoLocalQuotaError,
   readOpenCodeGoLocalQuota,
   resolveOpenCodeGoDatabasePath
 } from './opencode-go-local-quota.js'
@@ -74,6 +75,20 @@ describe('OpenCode Go local quota', () => {
     await expect(readOpenCodeGoLocalQuota({
       databasePath: join(tmpdir(), 'missing-kun-opencode-go', 'opencode.db')
     })).resolves.toBeUndefined()
+  })
+
+  it('throws a classified error when the database cannot be opened', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'kun-opencode-go-broken-'))
+    const databasePath = join(directory, 'opencode.db')
+    await writeFile(databasePath, 'this is not a sqlite database')
+    try {
+      await expect(readOpenCodeGoLocalQuota({ databasePath })).rejects.toMatchObject({
+        name: 'OpenCodeGoLocalQuotaError',
+        causeKind: 'sqlite'
+      })
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
   })
 
   it('prefers step-finish costs so message totals are not counted twice', async () => {

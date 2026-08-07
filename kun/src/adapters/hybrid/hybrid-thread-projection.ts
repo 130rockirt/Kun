@@ -1,6 +1,6 @@
 import type { ThreadRecord } from '../../contracts/threads.js'
 import { ThreadSchema } from '../../contracts/threads.js'
-import type { TurnItem } from '../../contracts/items.js'
+import { isPublicTurnItem, type TurnItem } from '../../contracts/items.js'
 import type { Turn } from '../../contracts/turns.js'
 
 export type ThreadMetadataLine = {
@@ -14,14 +14,37 @@ export function stripThreadItemBodies(thread: ThreadRecord): ThreadRecord {
   return { ...thread, turns: thread.turns.map((turn) => ({ ...turn, prompt: '', items: [] })) }
 }
 
+function stripInternalThreadItems(thread: ThreadRecord): ThreadRecord {
+  let changed = false
+  const turns = thread.turns.map((turn) => {
+    const items = turn.items.filter(isPublicTurnItem)
+    if (items.length === turn.items.length) return turn
+    changed = true
+    return { ...turn, items }
+  })
+  return changed ? { ...thread, turns } : thread
+}
+
 export function hydrateThreadItems(
   thread: ThreadRecord,
   items: TurnItem[],
   options: { preserveExistingItemsWhenNoFileItems: boolean }
 ): ThreadRecord {
-  if (items.length === 0) return options.preserveExistingItemsWhenNoFileItems ? thread : stripThreadItemBodies(thread)
+  // The session stream also contains model-only records (for example the
+  // stable active-goal context). A hybrid ThreadRecord is the renderer/API
+  // projection, so it must never rehydrate those records after a restart.
+  const publicItems = items.filter(isPublicTurnItem)
+  if (publicItems.length === 0) {
+    // Older hybrid snapshots can still carry their own item mirror while the
+    // canonical stream is absent. Preserve that public history when asked,
+    // but do not let a model-only item from a previous process escape through
+    // this fallback path.
+    return options.preserveExistingItemsWhenNoFileItems ? stripInternalThreadItems(thread) : stripThreadItemBodies(thread)
+  }
   const itemsByTurn = new Map<string, TurnItem[]>()
-  for (const item of items) itemsByTurn.set(item.turnId, [...(itemsByTurn.get(item.turnId) ?? []), item])
+  for (const item of publicItems) {
+    itemsByTurn.set(item.turnId, [...(itemsByTurn.get(item.turnId) ?? []), item])
+  }
   const knownTurnIds = new Set(thread.turns.map((turn) => turn.id))
   const turns = thread.turns.map((turn): Turn => {
     const turnItems = itemsByTurn.get(turn.id) ?? []

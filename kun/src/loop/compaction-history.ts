@@ -23,25 +23,47 @@ export function insertCompactionIntoVisibleHistory(input: {
     )
   }
 
+  // Goal context is internal model history. `ContextCompactor` intentionally
+  // positions it immediately after the new summary, but the public transcript
+  // insertion path otherwise preserves folded items before that summary. Do
+  // not let the internal record choose the insertion point: doing so would
+  // leave folded visible items after the summary and replay them again.
+  const goalContexts = uniqueGoalContexts([
+    ...input.compactedItems,
+    ...input.visibleItems
+  ])
   const tailIds = new Set(
     input.compactedItems
       .slice(summaryIndex + 1)
+      .filter((item) => item.kind !== 'goal_context')
       .map((item) => item.id)
   )
   const withoutSummary = coalesceAutomaticCompactions(
     input.visibleItems,
     input.summaryItem
-  ).filter((item) => item.id !== input.summaryItem.id)
-  if (tailIds.size === 0) return [...withoutSummary, input.summaryItem]
+  ).filter((item) => item.id !== input.summaryItem.id && item.kind !== 'goal_context')
+  if (tailIds.size === 0) return [...withoutSummary, input.summaryItem, ...goalContexts]
 
   const insertIndex = withoutSummary.findIndex((item) => tailIds.has(item.id))
-  if (insertIndex < 0) return [...withoutSummary, input.summaryItem]
+  if (insertIndex < 0) return [...withoutSummary, input.summaryItem, ...goalContexts]
 
   return [
     ...withoutSummary.slice(0, insertIndex),
     input.summaryItem,
+    ...goalContexts,
     ...withoutSummary.slice(insertIndex)
   ]
+}
+
+function uniqueGoalContexts(items: readonly TurnItem[]): TurnItem[] {
+  const seen = new Set<string>()
+  const contexts: TurnItem[] = []
+  for (const item of items) {
+    if (item.kind !== 'goal_context' || seen.has(item.id)) continue
+    seen.add(item.id)
+    contexts.push(item)
+  }
+  return contexts
 }
 
 function replaceOrAppendItem(items: readonly TurnItem[], item: TurnItem): TurnItem[] {

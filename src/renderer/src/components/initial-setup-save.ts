@@ -228,7 +228,20 @@ export function buildInitialSetupSettingsPatch(
   selection: Pick<InitialSetupSelection, 'presetId' | 'mode'> &
     Partial<Pick<InitialSetupSelection, 'permissionMode' | 'permissionTouched'>>
 ): AppSettingsPatch {
-  return diffSettingsPatch(settings, buildInitialSetupSettings(settings, drafts, selection))
+  const next = buildInitialSetupSettings(settings, drafts, selection)
+  const providers = next.provider.providers.map((provider) => ({ ...provider, apiKey: '' }))
+  return diffSettingsPatch(settings, {
+    ...next,
+    provider: {
+      ...next.provider,
+      apiKey: '',
+      providers
+    },
+    agents: {
+      ...next.agents,
+      kun: { ...next.agents.kun, apiKey: '' }
+    }
+  })
 }
 
 function upsertPresetProfile(

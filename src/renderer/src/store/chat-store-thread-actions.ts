@@ -111,6 +111,7 @@ import {
   flushLiveBlocks,
   forkedMessageCount,
   forkedTurnCount,
+  isCodeSidebarThread,
   isCodeThread,
   latestThread,
   looksLikeActiveTurnError,
@@ -131,6 +132,8 @@ import {
   subscribeThreadEventsWithRecovery
 } from './chat-store-thread-action-helpers'
 import { GitCheckpointAvailabilityCache } from '../lib/git-checkpoint-availability'
+import { readDesignThreadRegistry } from '../design/design-thread-registry'
+import { readSddThreadRegistry } from '../sdd/sdd-thread-registry'
 import type { ComposerContextAttachment } from '@kun/extension-api'
 
 const GUIDED_MESSAGE_RACE_WINDOW_MS = 5_000
@@ -624,6 +627,18 @@ export function createThreadActions(
         ? latestUserMessageId ?? findLatestUserBlockId(blocks)
         : null
       const threadSnap = get().threads.find((thread) => thread.id === id) ?? null
+      // Code 工作台返回记忆:记录最近一次在 chat 路由选中的 Code/需求 AI 会话,
+      // 供从设置、Write/Design 或 Connect Phone 返回时恢复。Write/Design/Claw
+      // 会话以及已归档会话不写入记忆。
+      const remembersCodeThread = threadSnap != null &&
+        threadSnap.archived !== true &&
+        isCodeSidebarThread(
+          threadSnap,
+          get().clawChannels,
+          readWriteThreadRegistry(),
+          readDesignThreadRegistry(),
+          readSddThreadRegistry()
+        )
       const composerSelection = composerSelectionForThread(get(), threadSnap, {
         hasUserMessages: rawBlocks.some((block) => block.kind === 'user'),
         runtimeModel: threadModel
@@ -659,6 +674,7 @@ export function createThreadActions(
         inspectorSelectedId: null,
         queuedMessages,
         composerMode,
+        ...(remembersCodeThread ? { lastCodeThreadId: id } : {}),
         ...(composerSelection
           ? {
               composerModel: composerSelection.model,
@@ -698,36 +714,28 @@ export function createThreadActions(
     const targetThreadId = threadId.trim()
     if (!targetThreadId) return
     threadSelectionGeneration += 1
-    // Live-only entry point for claw channel events (e.g. Feishu / Lark
-    // bot replies). Three things happen in parallel:
-    //   1. Synchronously switch the chat view to this thread + mark busy
-    //      so the user sees the bot's deltas arrive as they stream in,
-    //      not blocked by the HTTP fetch.
-    //   2. Open the SSE stream immediately with `sinceSeq: 0` to capture
-    //      any deltas that arrive during the fetch window.
-    //   3. Pre-fetch the thread's persisted history so the user is not
-    //      left staring at an empty view if the thread had prior turns.
-    // On fetch success we merge the persisted blocks into the store
-    // while preserving the liveAssistant/liveReasoning buffers (which
-    // may have accumulated SSE deltas during the fetch) and bumping
-    // `lastSeq` to `Math.max(fetched, current)` so no deltas are lost.
+    // Live-only entry point for claw channel events (e.g. Feishu / Lark bot
+    // replies). Hydrate the canonical persisted snapshot first, then subscribe
+    // from exactly that snapshot's latestSeq. Events committed after the HTTP
+    // snapshot are replayed by the persisted SSE route, closing the hydrate /
+    // subscribe window without replaying historical non-delta lifecycle events
+    // over terminal snapshot state.
     sseAbortRef.current?.abort()
     sseAbortRef.current = null
     const p = getProvider()
     const prevState = get()
-    // Same-thread case: keep the existing blocks/lastSeq so the user does
-    // not see the view blank out for a turn that is already streaming.
-    // Cross-thread case: start empty (the fetch will populate history).
+    // Same-thread fallback retains a projection that matches its cursor if the
+    // snapshot request fails. Cross-thread fallback starts from an empty
+    // projection/cursor and can safely replay from zero.
     const keepExistingBlocks = prevState.activeThreadId === targetThreadId
+    const fallbackSinceSeq = keepExistingBlocks ? prevState.lastSeq : 0
     resetBusyRecoveryAttempts()
     clearBusyWatchdog()
     set({
       activeThreadId: targetThreadId,
       blocks: keepExistingBlocks ? prevState.blocks : [],
-      lastSeq: keepExistingBlocks ? prevState.lastSeq : 0,
-      // This live entry point subscribes from since_seq=0, so the floor starts
-      // at 0 too (matching the per-sink floor) — the buffer is reset to '' here.
-      liveDeltaSeqFloor: 0,
+      lastSeq: fallbackSinceSeq,
+      liveDeltaSeqFloor: fallbackSinceSeq,
       liveReasoning: '',
       liveAssistant: '',
       unreadThreadIds: { ...prevState.unreadThreadIds, [targetThreadId]: false },
@@ -747,12 +755,14 @@ export function createThreadActions(
     })
     const ac = new AbortController()
     sseAbortRef.current = ac
-    const sink = buildThreadEventSink(set, get, { threadId: targetThreadId, signal: ac.signal, sinceSeq: 0 })
-    subscribeThreadEventsWithRecovery(p, targetThreadId, 0, sink, ac.signal, get)
-    armBusyWatchdog(set, get)
-    // Pre-fetch persisted history in parallel. The SSE is already open
-    // and may have started accumulating deltas; the merge step below
-    // must not stomp on those buffers.
+    const subscribeFrom = (sinceSeq: number): void => {
+      const sink = buildThreadEventSink(set, get, {
+        threadId: targetThreadId,
+        signal: ac.signal,
+        sinceSeq
+      })
+      subscribeThreadEventsWithRecovery(p, targetThreadId, sinceSeq, sink, ac.signal, get)
+    }
     try {
       const {
         blocks: rawBlocks,
@@ -779,32 +789,33 @@ export function createThreadActions(
         turnId: latestTurnId,
         blocks
       })
-      set((s) => ({
+      set({
         activeThreadGoal: goal ?? null,
         activeThreadTodos: todos ?? null,
         blocks,
-        // Bump lastSeq to the max of fetched and current so deltas
-        // received during the fetch window are not lost.
-        lastSeq: Math.max(latestSeq, s.lastSeq),
+        lastSeq: latestSeq,
+        liveDeltaSeqFloor: latestSeq,
         busy,
         currentTurnId: busy ? latestTurnId ?? null : null,
         currentTurnOrchestration: busy ? latestTurnOrchestration ?? 'direct' : null,
         currentTurnUserId,
         turnDurationByUserId,
         queuedMessages
-        // Note: `liveAssistant` and `liveReasoning` are intentionally
-        // NOT touched here. They may contain deltas that arrived during
-        // the fetch and must be preserved for `flushLiveBlocks` to pick
-        // them up at turn boundaries.
-      }))
+      })
       saveQueuedMessagesForThread(targetThreadId, queuedMessages)
+      // The server replays every event persisted after latestSeq, including
+      // events committed while getThreadDetail was in flight.
+      subscribeFrom(latestSeq)
+      if (busy) armBusyWatchdog(set, get)
       if (!busy && queuedMessages.some(isPendingQueuedMessage)) {
         void get().drainQueuedMessages()
       }
     } catch (e) {
-      // Fetch failure: keep the SSE open so the user still sees the
-      // streaming deltas, but surface the error in the UI.
       if (ac.signal.aborted) return
+      // The fallback cursor matches the projection installed above, so this
+      // cannot replay older lifecycle records over newer on-screen state.
+      subscribeFrom(fallbackSinceSeq)
+      if (get().busy) armBusyWatchdog(set, get)
       set({
         error: formatRuntimeError(e),
         ...(shouldOpenSettingsForError(e)
@@ -824,7 +835,7 @@ export function createThreadActions(
           busy: state.busy,
           turnId: state.currentTurnId,
           blocks: state.blocks
-        }).filter((message) => !message.guiPlan)
+        })
         const queueChanged =
           queuedMessages.length !== state.queuedMessages.length ||
           queuedMessages.some((message, index) => message !== state.queuedMessages[index])
@@ -1058,7 +1069,9 @@ export function createThreadActions(
     const hasPendingActiveTurn = threadHasPendingRuntimeWork(get().blocks)
     if (get().busy || hasPendingActiveTurn) {
       const state = get()
-      if (overrides?.guiPlan || writeContext) {
+      // Write keeps a file-identity contract that cannot safely survive a
+      // deferred queue. Plan turns may queue like normal chat messages.
+      if (writeContext) {
         set({ error: i18n.t('common:composerQueuePlaceholder') })
         return false
       }

@@ -51,15 +51,28 @@ export class RestartBudget {
     this.now = options.now ?? (() => Date.now())
   }
 
+  get limit(): number {
+    return this.maxRestarts
+  }
+
+  /** Inspect the next restart attempt without consuming the budget. */
+  preview(): RestartVerdict {
+    return this.evaluate(false)
+  }
+
   /** Ask for one restart attempt; records it when allowed. */
   note(): RestartVerdict {
+    return this.evaluate(true)
+  }
+
+  private evaluate(record: boolean): RestartVerdict {
     const at = this.now()
     this.attempts = this.attempts.filter((t) => at - t < this.windowMs)
     if (this.attempts.length >= this.maxRestarts) {
       return { allowed: false, attempt: this.attempts.length, delayMs: 0 }
     }
-    this.attempts.push(at)
-    const attempt = this.attempts.length
+    const attempt = this.attempts.length + 1
+    if (record) this.attempts.push(at)
     return {
       allowed: true,
       attempt,
@@ -102,7 +115,8 @@ export class KunRuntimeSupervisor<Settings> {
   private watchdogTimer: ReturnType<typeof setInterval> | null = null
   private watchdogFailures = 0
   private watchdogTickInFlight = false
-  private crashRecoveryInFlight = false
+  private recoveryInFlight = false
+  private managedRuntimeExpected = false
   private currentStatus: KunRuntimeStatus | null = null
 
   constructor(options: {
@@ -121,6 +135,31 @@ export class KunRuntimeSupervisor<Settings> {
     return this.currentStatus
   }
 
+  /**
+   * Whether Main currently expects the managed Runtime to exist. This is
+   * intentionally independent from the child/discovery signal: discovery can
+   * disappear during a crash, while an explicit stop must suppress recovery.
+   */
+  get isManagedRuntimeExpected(): boolean {
+    return this.managedRuntimeExpected
+  }
+
+  /**
+   * Set by the lifecycle owner after a managed Runtime has proved healthy and
+   * reset before an explicit stop. Enabling the expectation starts the
+   * watchdog so later loss of the child or discovery signal can be recovered.
+   */
+  setManagedRuntimeExpected(expected: boolean): void {
+    if (this.managedRuntimeExpected === expected) return
+    this.managedRuntimeExpected = expected
+    this.watchdogFailures = 0
+    if (expected) {
+      this.startWatchdog()
+    } else {
+      this.stopWatchdog()
+    }
+  }
+
   hasPendingOperation(): boolean {
     return this.operations.hasPendingOperation()
   }
@@ -133,10 +172,6 @@ export class KunRuntimeSupervisor<Settings> {
     this.operations.noteLatest(settings)
   }
 
-  waitForRestart(): Promise<boolean> {
-    return this.operations.waitForRestart()
-  }
-
   ensure(fingerprint: string, operation: () => Promise<Settings>): Promise<Settings> {
     return this.operations.ensure(fingerprint, operation)
   }
@@ -145,12 +180,12 @@ export class KunRuntimeSupervisor<Settings> {
     return this.operations.restart(operation)
   }
 
-  enqueueSettingsApply(operation: () => Promise<void>, onError: (error: unknown) => void): void {
-    this.operations.enqueueSettingsApply(operation, onError)
-  }
-
-  waitForSettingsApply(): Promise<void> {
-    return this.operations.waitForSettingsApply()
+  enqueueSettingsApply(
+    operation: () => Promise<void>,
+    onError: (error: unknown) => void,
+    coalesceKey?: string
+  ): void {
+    this.operations.enqueueSettingsApply(operation, onError, coalesceKey)
   }
 
   publish(status: Omit<KunRuntimeStatus, 'at'>): void {
@@ -160,10 +195,16 @@ export class KunRuntimeSupervisor<Settings> {
   }
 
   noteHealthy(source: string): void {
-    this.restartBudget.reset()
+    // A single successful probe is not proof of a stable Runtime. Keep recent
+    // restart attempts in the sliding window so a start-crash-start loop can
+    // still trip the circuit breaker. Attempts age out naturally.
     this.watchdogFailures = 0
+    if (!this.managedRuntimeExpected) return
     this.startWatchdog()
-    if (this.currentStatus && this.currentStatus.state !== 'running') {
+    if (
+      this.currentStatus &&
+      (this.currentStatus.state !== 'running' || this.currentStatus.rolledBack === true)
+    ) {
       this.publish({ state: 'running', source })
     }
   }
@@ -199,15 +240,24 @@ export class KunRuntimeSupervisor<Settings> {
 
   async watchdogTick(): Promise<void> {
     if (this.watchdogTickInFlight || this.deps.isStopped()) return
-    if (this.crashRecoveryInFlight || this.operations.hasPendingOperation()) return
-    if (!this.deps.isChildRunning()) return
+    if (!this.managedRuntimeExpected) return
+    if (this.recoveryInFlight || this.operations.hasPendingOperation()) return
     this.watchdogTickInFlight = true
     try {
       const settings = await this.deps.loadSettings()
-      if (await this.deps.checkHealth(settings, 5_000)) {
-        this.watchdogFailures = 0
+      if (!this.managedRuntimeExpected || !this.deps.canAutoRestart(settings)) return
+
+      const childRunning = this.deps.isChildRunning()
+      if (childRunning && await this.deps.checkHealth(settings, 5_000)) {
+        this.noteHealthy('watchdog')
         return
       }
+
+      if (!childRunning) {
+        await this.recoverFromWatchdog('missing')
+        return
+      }
+
       this.watchdogFailures += 1
       this.deps.warn(
         'kun-watchdog',
@@ -215,25 +265,97 @@ export class KunRuntimeSupervisor<Settings> {
       )
       if (this.watchdogFailures < this.watchdogFailureThreshold) return
       this.watchdogFailures = 0
+      await this.recoverFromWatchdog('unresponsive')
+    } finally {
+      this.watchdogTickInFlight = false
+    }
+  }
+
+  private async recoverFromWatchdog(
+    reason: 'missing' | 'unresponsive'
+  ): Promise<void> {
+    if (!this.managedRuntimeExpected || this.deps.isStopped()) return
+    if (this.recoveryInFlight) return
+    this.recoveryInFlight = true
+    try {
+      await this.recoverFromWatchdogOnce(reason)
+    } finally {
+      this.recoveryInFlight = false
+    }
+  }
+
+  private async recoverFromWatchdogOnce(
+    reason: 'missing' | 'unresponsive'
+  ): Promise<void> {
+    const preview = this.restartBudget.preview()
+    if (!preview.allowed) {
       this.publish({
-        state: 'restarting',
+        state: 'failed',
         source: 'watchdog',
-        message: 'Kun stopped responding to health checks; restarting it.'
+        attempt: preview.attempt,
+        maxAttempts: this.restartBudget.limit,
+        message: 'Kun recovery exceeded its restart budget; automatic restarts are paused.'
       })
-      try {
-        await this.deps.restartRuntime(settings)
+      return
+    }
+
+    await (this.deps.sleep ?? defaultSleep)(preview.delayMs)
+    if (!this.managedRuntimeExpected || this.deps.isStopped()) return
+    if (this.operations.hasPendingOperation()) return
+    let recoveryAttempt = preview.attempt
+    try {
+      const currentSettings = await this.deps.loadSettings()
+      if (!this.managedRuntimeExpected || this.deps.isStopped() ||
+          !this.deps.canAutoRestart(currentSettings)) return
+
+      const childRunning = this.deps.isChildRunning()
+      if (childRunning && await this.deps.checkHealth(currentSettings, 5_000)) {
         this.noteHealthy('watchdog')
-      } catch (error) {
+        return
+      }
+      if (!this.managedRuntimeExpected || this.deps.isStopped() ||
+          this.operations.hasPendingOperation()) return
+
+      const verdict = this.restartBudget.note()
+      if (!verdict.allowed) {
         this.publish({
           state: 'failed',
           source: 'watchdog',
-          message: `Kun is unresponsive and the automatic restart failed: ${
-            error instanceof Error ? error.message : String(error)
-          }`
+          attempt: verdict.attempt,
+          maxAttempts: this.restartBudget.limit,
+          message: 'Kun recovery exceeded its restart budget; automatic restarts are paused.'
         })
+        return
       }
-    } finally {
-      this.watchdogTickInFlight = false
+      recoveryAttempt = verdict.attempt
+      this.publish({
+        state: 'restarting',
+        source: 'watchdog',
+        attempt: verdict.attempt,
+        maxAttempts: this.restartBudget.limit,
+        message: reason === 'missing'
+          ? 'Kun is expected to be running but its process or discovery record is missing; recovering it.'
+          : 'Kun stopped responding to health checks; restarting it.'
+      })
+
+      if (childRunning) {
+        await this.deps.restartRuntime(currentSettings)
+      } else {
+        await this.deps.ensureRuntime(currentSettings)
+      }
+      if (!this.managedRuntimeExpected || this.deps.isStopped()) return
+      this.noteHealthy('watchdog')
+    } catch (error) {
+      if (!this.managedRuntimeExpected || this.deps.isStopped()) return
+      this.publish({
+        state: 'failed',
+        source: 'watchdog',
+        attempt: recoveryAttempt,
+        maxAttempts: this.restartBudget.limit,
+        message: `Kun automatic recovery failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      })
     }
   }
 
@@ -242,7 +364,7 @@ export class KunRuntimeSupervisor<Settings> {
     signal: NodeJS.Signals | null
     stderrTail: string
   }): Promise<void> {
-    if (this.deps.isStopped()) return
+    if (this.deps.isStopped() || !this.managedRuntimeExpected) return
     const exitLabel = info.signal ? `signal ${info.signal}` : `code ${info.code ?? 'unknown'}`
     this.publish({
       state: 'crashed',
@@ -250,8 +372,8 @@ export class KunRuntimeSupervisor<Settings> {
       message: `Kun exited unexpectedly (${exitLabel}).`,
       stderrTail: info.stderrTail
     })
-    if (this.crashRecoveryInFlight) return
-    this.crashRecoveryInFlight = true
+    if (this.recoveryInFlight) return
+    this.recoveryInFlight = true
     try {
       const settings = await this.deps.loadSettings()
       if (!this.deps.canAutoRestart(settings)) {
@@ -264,12 +386,14 @@ export class KunRuntimeSupervisor<Settings> {
       }
       let lastError = ''
       for (;;) {
-        if (this.deps.isStopped()) return
+        if (this.deps.isStopped() || !this.managedRuntimeExpected) return
         const verdict = this.restartBudget.note()
         if (!verdict.allowed) {
           this.publish({
             state: 'failed',
             source: 'supervisor',
+            attempt: verdict.attempt,
+            maxAttempts: this.restartBudget.limit,
             message: lastError
               ? `Kun keeps crashing; automatic restarts are paused. Last error: ${lastError}`
               : 'Kun keeps crashing; automatic restarts are paused. Check the runtime logs, then retry.',
@@ -281,12 +405,14 @@ export class KunRuntimeSupervisor<Settings> {
           state: 'restarting',
           source: 'supervisor',
           attempt: verdict.attempt,
-          maxAttempts: 3,
-          message: `Restarting Kun automatically (attempt ${verdict.attempt}/3).`
+          maxAttempts: this.restartBudget.limit,
+          message: `Restarting Kun automatically (attempt ${verdict.attempt}/${this.restartBudget.limit}).`
         })
         await (this.deps.sleep ?? defaultSleep)(verdict.delayMs)
+        if (this.deps.isStopped() || !this.managedRuntimeExpected) return
         try {
           await this.deps.ensureRuntime(await this.deps.loadSettings())
+          if (this.deps.isStopped() || !this.managedRuntimeExpected) return
           this.noteHealthy('supervisor')
           return
         } catch (error) {
@@ -298,7 +424,7 @@ export class KunRuntimeSupervisor<Settings> {
         }
       }
     } finally {
-      this.crashRecoveryInFlight = false
+      this.recoveryInFlight = false
     }
   }
 }

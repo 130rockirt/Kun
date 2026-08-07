@@ -3,13 +3,20 @@ import type { ThreadGoal, ThreadTodoList } from '../contracts/threads.js'
 import { CREATE_PLAN_TOOL_NAME } from '../adapters/tool/create-plan-tool.js'
 import { GET_GOAL_TOOL_NAME, UPDATE_GOAL_TOOL_NAME } from '../adapters/tool/goal-tools.js'
 import { TODO_LIST_TOOL_NAME, TODO_WRITE_TOOL_NAME } from '../adapters/tool/todo-tools.js'
+import { computeShortHash } from './compaction-marker.js'
 
 export function goalContinuationInstruction(goal: ThreadGoal | undefined): string | null {
+  return goalContextInstruction(goal)
+}
+
+/**
+ * Stable model history for an active goal. Runtime token/time accounting is
+ * intentionally absent: it changes on every model step and belongs to the
+ * host's budget gate, not a cache-sensitive prompt snapshot.
+ */
+export function goalContextInstruction(goal: ThreadGoal | undefined): string | null {
   if (!goal || goal.status !== 'active') return null
   const tokenBudget = goal.tokenBudget == null ? 'none' : String(goal.tokenBudget)
-  const remainingTokens = goal.tokenBudget == null
-    ? 'none'
-    : String(Math.max(0, goal.tokenBudget - goal.tokensUsed))
   return [
     'Continue working toward the active thread goal.',
     '',
@@ -25,9 +32,8 @@ export function goalContinuationInstruction(goal: ThreadGoal | undefined): strin
     '- Temporary rough edges are acceptable while the work is moving in the right direction. Completion still requires the requested end state to be true and verified.',
     '',
     'Budget:',
-    `- Tokens used: ${goal.tokensUsed}`,
     `- Token budget: ${tokenBudget}`,
-    `- Tokens remaining: ${remainingTokens}`,
+    '- Live token and elapsed-time budgets are enforced by the host. Do not infer their current usage from this context.',
     '',
     'Completion audit:',
     '- Before deciding that the goal is achieved, verify it against the actual current state and every explicit requirement.',
@@ -42,11 +48,69 @@ export function goalContinuationInstruction(goal: ThreadGoal | undefined): strin
   ].join('\n')
 }
 
+/**
+ * Identifies a goal's cache-stable semantic generation without serializing
+ * changing usage or elapsed-time counters into either the key or prompt.
+ */
+export function goalContextKey(goal: ThreadGoal | undefined): string | null {
+  if (!goal || goal.status !== 'active') return null
+  return `goal_${computeShortHash(JSON.stringify([
+    goal.createdAt,
+    goal.objective,
+    goal.tokenBudget ?? null
+  ]), 32)}`
+}
+
+/**
+ * The session stream retains historical internal records for recovery, but
+ * only the context belonging to the thread's current active goal is model
+ * visible. This prevents a completed, paused, cleared, replaced, or forked
+ * goal from remaining a live system instruction.
+ */
+export function filterGoalContextsForActiveGoal(
+  items: readonly TurnItem[],
+  goal: ThreadGoal | undefined
+): TurnItem[] {
+  return filterGoalContextsForGoalKey(items, goalContextKey(goal))
+}
+
+/**
+ * Applies a previously captured goal generation to a canonical session
+ * stream. Delegated runtimes use this after a request completes: the thread's
+ * live goal may have changed during that request, but its native checkpoint
+ * must describe the exact goal context the provider actually saw.
+ */
+export function filterGoalContextsForGoalKey(
+  items: readonly TurnItem[],
+  activeKey: string | null | undefined
+): TurnItem[] {
+  // A goal generation has one stable system record for the whole thread. Be
+  // defensive when reading older streams that may contain duplicates from an
+  // interrupted pre-rollout writer: retaining all of them would multiply the
+  // same instruction in the cache prefix and force needless native rebases.
+  let retainedActiveContext = false
+  return items.filter((item) => {
+    if (item.kind !== 'goal_context') return true
+    if (!activeKey || item.goalKey !== activeKey || retainedActiveContext) return false
+    retainedActiveContext = true
+    return true
+  })
+}
+
 const GOAL_NO_TOOL_REPEAT_SIMILARITY = 0.85
 const GOAL_NO_TOOL_REPEAT_MIN_LENGTH = 12
 export const GOAL_NO_TOOL_REPEAT_MAX_RECOVERY_STEPS = 3
 export const EMPTY_POST_TOOL_FINAL_ANSWER_RECOVERY_STEP = 2
 export const EMPTY_POST_TOOL_MAX_RECOVERY_STEPS = EMPTY_POST_TOOL_FINAL_ANSWER_RECOVERY_STEP
+export const TOOL_SUPPRESSION_FINAL_ANSWER_RECOVERY_STEP = 2
+/**
+ * Ordinary-agent recovery when a tool call failed and the model ended the
+ * round with only a progress announcement. The first recovery keeps tools so
+ * the model can act; the final recovery disables tools and requires a factual
+ * answer; any further progress-only stop fails the turn visibly.
+ */
+export const POST_TOOL_FAILURE_FINAL_ANSWER_RECOVERY_STEP = 2
+export const POST_TOOL_FAILURE_MAX_RECOVERY_STEPS = POST_TOOL_FAILURE_FINAL_ANSWER_RECOVERY_STEP
 
 export function goalNoToolRecoveryInstruction(recoveryStep: number): string {
   return [
@@ -75,6 +139,103 @@ export function emptyPostToolRecoveryInstruction(recoveryStep: number): string {
     '- Continue the task now: inspect the tool result, call additional tools if needed, or provide a clear final answer.',
     '- Do not stop with an empty response.'
   ].join('\n')
+}
+
+export function toolSuppressionRecoveryInstruction(
+  recoveryStep: number,
+  toolsDisabled = recoveryStep >= TOOL_SUPPRESSION_FINAL_ANSWER_RECOVERY_STEP
+): string {
+  if (toolsDisabled) {
+    return [
+      'Tool-loop final-answer recovery:',
+      '- Repeated tool calls were suppressed because they would repeat work already attempted in this turn.',
+      '- Tool calling is disabled for this recovery request.',
+      '- Provide a clear, non-empty final answer now using only results that were actually completed.',
+      '- Do not claim that a suppressed tool call ran successfully.'
+    ].join('\n')
+  }
+  if (recoveryStep >= TOOL_SUPPRESSION_FINAL_ANSWER_RECOVERY_STEP) {
+    return [
+      'Required tool-loop recovery:',
+      '- Repeated tool calls were suppressed, but this turn still has an outstanding completion gate.',
+      '- Only tools eligible for that gate remain available.',
+      '- Do not repeat the same tool arguments; make a valid, meaningfully different call that satisfies the gate.',
+      '- Another response containing only suppressed calls will fail the turn.'
+    ].join('\n')
+  }
+  return [
+    'Tool-loop recovery:',
+    '- The previous model response only requested tool calls that the host suppressed as repetitions.',
+    '- Do not repeat the same tool with the same arguments.',
+    '- Either use a meaningfully different available tool or provide a clear, non-empty final answer.',
+    '- Do not stop with an empty response.'
+  ].join('\n')
+}
+
+export function postToolFailureRecoveryInstruction(recoveryStep: number): string {
+  if (recoveryStep >= POST_TOOL_FAILURE_FINAL_ANSWER_RECOVERY_STEP) {
+    return [
+      'Tool failure final-answer recovery:',
+      '- A tool call failed earlier in this turn, and the previous responses only announced next steps without acting.',
+      '- Tool calling is disabled for this recovery request.',
+      '- Inspect the completed tool results and provide a clear, non-empty final answer now.',
+      '- Summarize what succeeded, what failed, and what the user needs to do next.'
+    ].join('\n')
+  }
+  return [
+    'Tool failure recovery:',
+    '- A tool call failed earlier in this turn, and the previous response ended with only a plan or progress announcement.',
+    '- If the task is genuinely blocked or needs the user, state that clearly as your final answer now.',
+    '- Otherwise inspect the failed tool result and either call an available tool to make concrete progress or provide a complete final answer.',
+    '- Do not end with another status update or "next I will..." announcement.'
+  ].join('\n')
+}
+
+/**
+ * Conservative classifier for "progress announcement" text produced after a
+ * tool failure. Questions directed at the user and explicit blocker/final
+ * reports are excluded so a legitimate answer is never forced into another
+ * round.
+ */
+const POST_TOOL_FAILURE_QUESTION_OR_BLOCKER_PATTERNS: RegExp[] = [
+  /[?？]/,
+  /请问|是否|能不能|可不可以|麻烦你|请(你|先|确认|提供|补充|告诉|检查|调整|修复|重试|修改|选择|决定|告诉我|再看看)/,
+  /需要(你|用户|手动|人工)/,
+  /等(你|用户|你的)|等待(你|用户|你的)/,
+  /你能|你可以|你能不能|请你/,
+  /(cannot|can't|unable to) (continue|proceed|complete|finish|do)/i,
+  /i (can't|cannot|couldn't|am unable|'m unable)/i,
+  /i need (your|you to|the user)/i,
+  /(needs?|requires?) (your|user|manual|approval|input)/i,
+  /(awaiting|waiting (for|on)) (the )?(user|you|your|approval|input)/i,
+  /please (approve|confirm|review|provide|check|fix|retry|adjust|give|tell|let|contact|ask|update)/i,
+  /can you|could you|would you|do you want/i,
+  /what should|how should|which (option|way|approach)/i
+]
+
+const POST_TOOL_FAILURE_COMMITMENT_PATTERNS: RegExp[] = [
+  /接下来|下一步/,
+  /我先|让我|我会|我将|我准备|我马上|稍后|接着|随后|再去/,
+  /马上(开始|尝试|处理|检查|去)/,
+  /继续(尝试|检查|排查|定位|处理|推进|完成|验证|搜索|调查|分析|跟进|确认|看)/,
+  /i will|i'll|i am going to|i'm going to/i,
+  /let me|let's|lets /i,
+  /proceed(ing)? to/i,
+  /will (try|continue|check|start|investigate|inspect|look|verify|attempt|search|run|retry|debug|explore)/i,
+  /going to (try|check|investigate|look|verify|start|debug|explore|search)/i,
+  /continue (with|to|investigating|checking|working|debugging)/i,
+  /start (by|with|investigating|checking|debugging|looking)/i,
+  /begin (by|with)/i,
+  /next(,)? i|moving (on|forward)|keep (going|working|investigating|debugging)/i
+]
+
+export function isPostToolFailureProgressText(text: string): boolean {
+  const trimmed = text.trim()
+  if (!trimmed) return false
+  if (POST_TOOL_FAILURE_QUESTION_OR_BLOCKER_PATTERNS.some((pattern) => pattern.test(trimmed))) {
+    return false
+  }
+  return POST_TOOL_FAILURE_COMMITMENT_PATTERNS.some((pattern) => pattern.test(trimmed))
 }
 
 /**

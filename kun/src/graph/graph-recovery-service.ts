@@ -1,12 +1,14 @@
 import {
+  GRAPH_CANCELLATION_DISPATCH_FENCE_REASON,
   GRAPH_CONTRACT_VERSION,
   type GraphCleanupRecordV1,
+  type GraphControlIntent,
   type GraphNodeAttemptV1,
   type GraphRunV1
 } from '../contracts/graph.js'
 import type { GraphRuntimeConfig } from '../config/kun-config.js'
 import type { DelegationRuntime } from '../delegation/delegation-runtime.js'
-import type { GraphSupervisionPort } from './graph-scheduler.js'
+import type { GraphSupervisionPort } from './graph-scheduler-types.js'
 import type {
   GraphRunStore,
   GraphStoreDiagnostic
@@ -20,12 +22,14 @@ import {
   GRAPH_RUNTIME_RESTART_ATTEMPT_FAILURE
 } from './graph-scheduler-policy.js'
 import type { GraphSchedulerOptions } from './graph-scheduler-types.js'
+import { recordGraphTerminalCleanup } from './graph-terminal-cleanup.js'
 
 export type GraphRecoveryReport = {
   runsInspected: number
   orphanedAttempts: number
   retriedNodes: number
   pausedRuns: number
+  cancelledRuns: number
   expiredLeases: number
   orphanedWorktrees: number
   orphanedChildRuns: number
@@ -83,8 +87,16 @@ export class GraphRecoveryService {
     let completedChildrenRecovered = 0
     let retriedNodes = 0
     let pausedRuns = 0
+    let cancelledRuns = 0
     for (const initial of runs) {
       let run = initial
+      const controlIntent = await this.resolvePendingControlIntent(run)
+      if (run.status === 'pausing' && controlIntent === 'cancel') {
+        run = await this.finishInterruptedCancellation(run)
+        cancelledRuns += 1
+        await this.options.store.snapshot(run.id)
+        continue
+      }
       const affected: string[] = []
       for (const node of Object.values(run.nodes)) {
         const attempt = node.attempts.at(-1)
@@ -145,11 +157,94 @@ export class GraphRecoveryService {
       completedChildrenRecovered,
       retriedNodes,
       pausedRuns,
+      cancelledRuns,
       expiredLeases: writeReport.expiredLeases,
       orphanedWorktrees: writeReport.orphanedWorktrees,
       orphanedChildRuns,
       storeDiagnostics: await this.options.store.diagnostics?.() ?? []
     }
+  }
+
+  private async resolvePendingControlIntent(
+    run: GraphRunV1
+  ): Promise<GraphControlIntent | undefined> {
+    if (run.status !== 'pausing') return undefined
+    if (run.pendingControlIntent) return run.pendingControlIntent
+    const events = await this.options.store.events(run.id)
+    for (const envelope of [...events].reverse()) {
+      if (envelope.event.type === 'run_control_intent_changed') {
+        return envelope.event.payload.to
+      }
+      if (
+        envelope.event.type !== 'run_status_changed' ||
+        envelope.event.payload.to !== 'pausing'
+      ) continue
+      if (envelope.event.payload.pendingControlIntent) {
+        return envelope.event.payload.pendingControlIntent
+      }
+      return envelope.event.payload.reason === GRAPH_CANCELLATION_DISPATCH_FENCE_REASON
+        ? 'cancel'
+        : 'pause'
+    }
+    return 'pause'
+  }
+
+  private async finishInterruptedCancellation(initialRun: GraphRunV1): Promise<GraphRunV1> {
+    let run = initialRun
+    const activeAttemptIds = Object.values(run.nodes).flatMap((node) =>
+      node.attempts
+        .filter((attempt) => ['queued', 'running', 'waiting'].includes(attempt.status))
+        .map((attempt) => ({ nodeId: node.node.id, attemptId: attempt.id })))
+    for (const { nodeId, attemptId } of activeAttemptIds) {
+      const attempt = run.nodes[nodeId]?.attempts.find((entry) => entry.id === attemptId)
+      if (!attempt || !['queued', 'running', 'waiting'].includes(attempt.status)) continue
+      run = await this.recordCleanup(run, {
+        resourceKind: 'worker',
+        resourceId: attempt.childThreadId ?? attempt.id,
+        attemptId: attempt.id,
+        state: 'orphaned',
+        lastError: 'Cancelled child execution was not live after runtime restart.'
+      })
+      run = await this.transitionAttemptToCancelled(run, attempt)
+    }
+    for (const nodeId of Object.keys(run.nodes)) {
+      const node = run.nodes[nodeId]!
+      if (node.status !== 'queued' && node.status !== 'running') continue
+      run = await this.transitionNode(
+        run,
+        nodeId,
+        'cancelled',
+        'completed interrupted cancellation during recovery'
+      )
+    }
+    run = await recordGraphTerminalCleanup({
+      run,
+      writes: this.options.writes,
+      nextId: this.nextId,
+      nowIso: this.nowIso,
+      append: async (current, event, idempotencyKey) => (await this.options.store.append(
+        current.id,
+        {
+          expectedSeq: current.lastEventSeq,
+          graphRevision: current.currentRevision,
+          commandId: this.nextId('graph_recovery'),
+          idempotencyKey,
+          event
+        }
+      )).state
+    })
+    const cancelled = await this.transitionRun(
+      run,
+      'cancelled',
+      'completed interrupted cancellation during recovery'
+    )
+    await this.options.supervision?.()?.signal({
+      runId: cancelled.id,
+      reason: 'completion',
+      nodeIds: [],
+      digest: 'GraphRun cancellation completed after runtime restart.'
+    })
+    return cancelled
   }
 
   private async recoverCompletedChild(
@@ -291,6 +386,27 @@ export class GraphRecoveryService {
     })).state
   }
 
+  private async transitionAttemptToCancelled(
+    run: GraphRunV1,
+    attempt: GraphNodeAttemptV1
+  ): Promise<GraphRunV1> {
+    return (await this.options.store.append(run.id, {
+      expectedSeq: run.lastEventSeq,
+      graphRevision: run.currentRevision,
+      commandId: this.nextId('graph_recovery'),
+      idempotencyKey: `recovery:cancel-attempt:${attempt.id}`,
+      event: {
+        type: 'attempt_status_changed',
+        payload: {
+          nodeId: attempt.nodeId,
+          attemptId: attempt.id,
+          from: attempt.status,
+          to: 'cancelled'
+        }
+      }
+    })).state
+  }
+
   private async transitionNode(
     run: GraphRunV1,
     nodeId: string,
@@ -334,6 +450,11 @@ export class GraphRecoveryService {
       'resourceKind' | 'resourceId' | 'attemptId' | 'state' | 'lastError'
     >
   ): Promise<GraphRunV1> {
+    if (run.cleanup.some((entry) =>
+      entry.resourceKind === input.resourceKind &&
+      entry.resourceId === input.resourceId &&
+      entry.state === input.state
+    )) return run
     const cleanup: GraphCleanupRecordV1 = {
       version: GRAPH_CONTRACT_VERSION,
       id: this.nextId('graph_cleanup'),
@@ -346,7 +467,8 @@ export class GraphRecoveryService {
       expectedSeq: run.lastEventSeq,
       graphRevision: run.currentRevision,
       commandId: this.nextId('graph_recovery'),
-      idempotencyKey: `recovery:cleanup:${run.id}:${input.resourceKind}:${input.resourceId}`,
+      idempotencyKey: `recovery:cleanup:${run.id}:${input.resourceKind}:` +
+        `${input.resourceId}:${input.state}`,
       event: { type: 'cleanup_updated', payload: { cleanup } }
     })).state
   }

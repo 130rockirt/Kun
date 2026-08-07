@@ -16,7 +16,11 @@ import {
   type RoundOutcomeInput
 } from './round-outcome-coordinator.js'
 import { svgArtifactCompletionState } from './svg-artifact-completion.js'
-import type { PreparedTurnContext, ToolDispatchInput } from './turn-execution-types.js'
+import type {
+  PreparedTurnContext,
+  ToolDispatchInput,
+  ToolDispatchOutcome
+} from './turn-execution-types.js'
 
 const threadId = 'thread_round_outcome'
 const turnId = 'turn_round_outcome'
@@ -80,15 +84,29 @@ function prepared(overrides: Partial<PreparedTurnContext> = {}): PreparedTurnCon
   }
 }
 
+function failedToolResult(toolName: string): TurnItem {
+  return makeToolResultItem({
+    id: `item_${toolName}_result`,
+    threadId,
+    turnId,
+    callId: `call_${toolName}`,
+    toolName,
+    output: { error: 'simulated failure' },
+    isError: true
+  })
+}
+
 function harness(options: {
   madeProgress?: boolean
   latestItems?: TurnItem[]
   graphResults?: Array<{ output: unknown; isError: boolean }>
+  dispatchOutcomes?: ToolDispatchOutcome[]
 } = {}) {
   const effects: string[] = []
   const items: TurnItem[] = []
   const sessionItems = [...(options.latestItems ?? [])]
   const graphResults = [...(options.graphResults ?? [])]
+  const dispatchOutcomes = [...(options.dispatchOutcomes ?? [])]
   let requiredToolGate: {
     toolName: string
     attempt: number
@@ -122,8 +140,9 @@ function harness(options: {
         isError: result.isError
       }))
     }
-    return 'continue' as const
+    return dispatchOutcomes.shift() ?? 'continue'
   })
+  const suppressToolCalls = vi.fn(async () => undefined)
   const turns = {
     applyItem: vi.fn(async (_threadId: string, item: TurnItem) => {
       effects.push(`item:${item.kind}`)
@@ -161,6 +180,7 @@ function harness(options: {
     events,
     ids: new SequentialIdGenerator(),
     dispatchToolCalls,
+    suppressToolCalls,
     rememberFailure: (_turnId, failure) => failures.push(failure),
     hasTurnMadeProgress: () => options.madeProgress === true,
     suppressGoalResume
@@ -176,7 +196,8 @@ function harness(options: {
     updatedItemPatches,
     sessionItems,
     suppressGoalResume,
-    dispatchToolCalls
+    dispatchToolCalls,
+    suppressToolCalls
   }
 }
 
@@ -205,6 +226,161 @@ describe('RoundOutcomeCoordinator', () => {
     await expect(h.coordinator.resolve(input({ kind: 'failed' }))).resolves.toBe('failed')
     expect(h.dispatchToolCalls).not.toHaveBeenCalled()
     expect(h.effects).toEqual([])
+  })
+
+  it('continues after the first all-suppressed round and resets after a different tool executes', async () => {
+    const h = harness({ dispatchOutcomes: ['all_suppressed', 'continue'] })
+    const repeatedCall = {
+      callId: 'call_repeated',
+      toolName: 'read',
+      arguments: { path: 'same.ts' }
+    }
+    const alternateCall = {
+      callId: 'call_alternate',
+      toolName: 'grep',
+      arguments: { pattern: 'different' }
+    }
+
+    await expect(h.coordinator.resolve(input(completed({ toolCalls: [repeatedCall] }))))
+      .resolves.toBe('continue')
+    expect(h.coordinator.toolSuppressionRecoverySteps(turnId)).toBe(1)
+
+    await expect(h.coordinator.resolve(input(completed({ toolCalls: [alternateCall] }))))
+      .resolves.toBe('continue')
+    expect(h.coordinator.toolSuppressionRecoverySteps(turnId)).toBe(0)
+  })
+
+  it('terminates an active goal on the tools-disabled suppression final answer', async () => {
+    const h = harness({ dispatchOutcomes: ['all_suppressed', 'all_suppressed'] })
+    const repeatedCall = {
+      callId: 'call_repeated',
+      toolName: 'read',
+      arguments: { path: 'same.ts' }
+    }
+
+    await h.coordinator.resolve(input(completed({ toolCalls: [repeatedCall] })))
+    await h.coordinator.resolve(input(completed({
+      toolCalls: [{ ...repeatedCall, callId: 'call_repeated_again' }]
+    })))
+    expect(h.coordinator.toolSuppressionRecoverySteps(turnId)).toBe(2)
+
+    await expect(h.coordinator.resolve(input(completed({ text: 'Here is the final answer.' }), {
+      toolCallsDisabled: true,
+      prepared: prepared({ activeGoalInstruction: 'Continue the active goal.' })
+    })))
+      .resolves.toBe('stop')
+    expect(h.coordinator.toolSuppressionRecoverySteps(turnId)).toBe(0)
+    expect(h.failures).toEqual([])
+    expect(h.suppressGoalResume).toHaveBeenCalledWith(turnId)
+  })
+
+  it('fails with tool_loop_suppressed when final-answer recovery is still empty', async () => {
+    const h = harness({ dispatchOutcomes: ['all_suppressed', 'all_suppressed'] })
+    const repeatedCall = {
+      callId: 'call_repeated',
+      toolName: 'read',
+      arguments: { path: 'same.ts' }
+    }
+
+    await h.coordinator.resolve(input(completed({ toolCalls: [repeatedCall] })))
+    await h.coordinator.resolve(input(completed({
+      toolCalls: [{ ...repeatedCall, callId: 'call_repeated_again' }]
+    })))
+
+    await expect(h.coordinator.resolve(input(completed())))
+      .resolves.toBe('failed')
+    expect(h.failures).toEqual([
+      expect.objectContaining({ code: 'tool_loop_suppressed' })
+    ])
+    expect(h.eventDrafts).toContainEqual(
+      expect.objectContaining({ kind: 'error', code: 'tool_loop_suppressed' })
+    )
+    expect(h.items).toContainEqual(
+      expect.objectContaining({ kind: 'error', code: 'tool_loop_suppressed' })
+    )
+    expect(h.suppressGoalResume).toHaveBeenCalledWith(turnId)
+  })
+
+  it('suppresses provider-emitted tool calls during final-answer recovery', async () => {
+    const h = harness({ dispatchOutcomes: ['all_suppressed', 'all_suppressed'] })
+    const repeatedCall = {
+      callId: 'call_repeated',
+      toolName: 'read',
+      arguments: { path: 'same.ts' }
+    }
+
+    await h.coordinator.resolve(input(completed({ toolCalls: [repeatedCall] })))
+    await h.coordinator.resolve(input(completed({
+      toolCalls: [{ ...repeatedCall, callId: 'call_repeated_again' }]
+    })))
+    await expect(h.coordinator.resolve(input(completed({
+      toolCalls: [{ ...repeatedCall, callId: 'call_provider_violation' }]
+    }), { toolCallsDisabled: true }))).resolves.toBe('failed')
+
+    expect(h.suppressToolCalls).toHaveBeenCalledTimes(1)
+    expect(h.dispatchToolCalls).toHaveBeenCalledTimes(2)
+    expect(h.failures).toEqual([
+      expect.objectContaining({ code: 'tool_loop_suppressed' })
+    ])
+  })
+
+  it('keeps hard required-tool recovery authoritative and clears suppression state at terminal cleanup', async () => {
+    const h = harness({ dispatchOutcomes: ['all_suppressed', 'all_suppressed'] })
+    const requiredCall = {
+      callId: 'call_required',
+      toolName: 'required_tool',
+      arguments: {}
+    }
+    const round = (callId: string) => input(completed({
+      toolCalls: [{ ...requiredCall, callId }]
+    }), { requiredToolName: 'required_tool' })
+
+    await expect(h.coordinator.resolve(round('call_required_1'))).resolves.toBe('continue')
+    await expect(h.coordinator.resolve(round('call_required_2'))).resolves.toBe('continue')
+    await expect(h.coordinator.resolve(input(completed(), {
+      requiredToolName: 'required_tool'
+    }))).resolves.toBe('failed')
+
+    expect(h.failures.at(-1)).toMatchObject({ code: 'required_tool_missing' })
+    h.coordinator.clearTurn(turnId)
+    expect(h.coordinator.toolSuppressionRecoverySteps(turnId)).toBe(0)
+  })
+
+  it('leaves dedicated SVG suppression under the SVG completion gate', async () => {
+    const h = harness({ dispatchOutcomes: ['all_suppressed'] })
+    const svgState = svgArtifactCompletionState([], turnId)
+
+    await expect(h.coordinator.resolve(input(completed({
+      toolCalls: [{
+        callId: 'call_svg_edit',
+        toolName: 'design_svg_edit',
+        arguments: { operations: [] }
+      }]
+    }), {
+      prepared: prepared({ dedicatedSvgTurn: true }),
+      svgCompletion: svgState
+    }))).resolves.toBe('continue')
+
+    expect(h.coordinator.toolSuppressionRecoverySteps(turnId)).toBe(0)
+    expect(h.eventDrafts.at(-1)).toMatchObject({ code: 'required_svg_mutation_missing' })
+  })
+
+  it('leaves required Graph creation suppression under the Graph gate', async () => {
+    const h = harness({ dispatchOutcomes: ['all_suppressed'] })
+
+    await expect(h.coordinator.resolve(input(completed({
+      toolCalls: [{
+        callId: 'call_graph_create',
+        toolName: GRAPH_CREATE_RUN_TOOL_NAME,
+        arguments: {}
+      }]
+    }), {
+      requiredToolName: GRAPH_CREATE_RUN_TOOL_NAME,
+      prepared: prepared({ orchestration: 'graph' })
+    }))).resolves.toBe('failed')
+
+    expect(h.coordinator.toolSuppressionRecoverySteps(turnId)).toBe(0)
+    expect(h.failures.at(-1)).toMatchObject({ code: 'graph_create_run_failed' })
   })
 
   it('materializes plan text before dispatch without adding interactive flags', async () => {
@@ -678,5 +854,145 @@ describe('RoundOutcomeCoordinator', () => {
       'required_svg_mutation_missing',
       'svg_completion_gate_exhausted'
     ])
+  })
+
+  it('recovers once when the model announces progress after an ordinary tool failure', async () => {
+    const h = harness()
+    const failed = failedToolResult('read')
+    const progress = input(completed({ text: '接下来我会继续排查' }), {
+      prepared: prepared({ history: [failed] })
+    })
+
+    await expect(h.coordinator.resolve(progress)).resolves.toBe('continue')
+    expect(h.coordinator.postToolFailureRecoverySteps(turnId)).toBe(1)
+    expect(h.eventDrafts.at(-1)).toMatchObject({
+      code: 'post_tool_failure_continuation'
+    })
+  })
+
+  it('forces a final-answer recovery round and then fails visibly when progress repeats', async () => {
+    const h = harness()
+    const failed = failedToolResult('bash')
+    const progress = input(completed({ text: '我准备尝试其他命令' }), {
+      prepared: prepared({ history: [failed] })
+    })
+
+    await expect(h.coordinator.resolve(progress)).resolves.toBe('continue')
+    await expect(h.coordinator.resolve(progress)).resolves.toBe('continue')
+    expect(h.coordinator.postToolFailureRecoverySteps(turnId)).toBe(2)
+    await expect(h.coordinator.resolve(progress)).resolves.toBe('failed')
+    expect(h.failures).toEqual([
+      expect.objectContaining({ code: 'post_tool_failure_recovery_exhausted' })
+    ])
+    expect(h.effects).toEqual([
+      'event:error',
+      'event:error',
+      'event:error',
+      'item:error'
+    ])
+  })
+
+  it('resets the recovery counter when the model calls a tool again', async () => {
+    const h = harness()
+    const failed = failedToolResult('read')
+    const progress = input(completed({ text: 'Let me check the result' }), {
+      prepared: prepared({ history: [failed] })
+    })
+
+    await expect(h.coordinator.resolve(progress)).resolves.toBe('continue')
+    expect(h.coordinator.postToolFailureRecoverySteps(turnId)).toBe(1)
+
+    const call = {
+      callId: 'call_read_2',
+      toolName: 'read',
+      toolKind: 'tool_call' as const,
+      arguments: { path: 'b.ts' }
+    }
+    await expect(h.coordinator.resolve(input(completed({ toolCalls: [call] }), {
+      prepared: prepared({ history: [failed] })
+    }))).resolves.toBe('continue')
+    expect(h.coordinator.postToolFailureRecoverySteps(turnId)).toBe(0)
+  })
+
+  it('accepts a clear final answer after a tool failure without recovery', async () => {
+    const h = harness()
+    const failed = failedToolResult('bash')
+    const finalAnswer = input(completed({
+      text: 'The command failed because the file is missing; the task cannot continue until you restore it.'
+    }), {
+      prepared: prepared({ history: [failed] })
+    })
+
+    await expect(h.coordinator.resolve(finalAnswer)).resolves.toBe('stop')
+    expect(h.coordinator.postToolFailureRecoverySteps(turnId)).toBe(0)
+    expect(h.effects).toEqual([])
+  })
+
+  it('does not recover when a user-directed question follows a tool failure', async () => {
+    const h = harness()
+    const failed = failedToolResult('bash')
+    const question = input(completed({ text: '这个方案可以吗？需要你确认一下。' }), {
+      prepared: prepared({ history: [failed] })
+    })
+
+    await expect(h.coordinator.resolve(question)).resolves.toBe('stop')
+    expect(h.coordinator.postToolFailureRecoverySteps(turnId)).toBe(0)
+  })
+
+  it('ignores failed gated tools (create_plan) in the ordinary recovery window', async () => {
+    const h = harness()
+    const failed = failedToolResult(CREATE_PLAN_TOOL_NAME)
+    const progress = input(completed({ text: 'I will continue without the plan tool.' }), {
+      prepared: prepared({ history: [failed] })
+    })
+
+    await expect(h.coordinator.resolve(progress)).resolves.toBe('stop')
+    expect(h.coordinator.postToolFailureRecoverySteps(turnId)).toBe(0)
+  })
+
+  it('does not enter ordinary recovery on plan or graph turns', async () => {
+    const failed = failedToolResult('write')
+
+    const planTurn = harness()
+    await expect(planTurn.coordinator.resolve(input(completed({ text: '接下来我会完善方案' }), {
+      prepared: prepared({ history: [failed], planTurnActive: true })
+    }))).resolves.toBe('stop')
+    expect(planTurn.coordinator.postToolFailureRecoverySteps(turnId)).toBe(0)
+
+    const graphTurn = harness()
+    await expect(graphTurn.coordinator.resolve(input(completed({ text: '接下来我会继续' }), {
+      prepared: prepared({ history: [failed], orchestration: 'graph' })
+    }))).resolves.toBe('stop')
+    expect(graphTurn.coordinator.postToolFailureRecoverySteps(turnId)).toBe(0)
+  })
+
+  it('does not recover after a successful tool result', async () => {
+    const h = harness()
+    const succeeded = makeToolResultItem({
+      id: 'item_read_ok',
+      threadId,
+      turnId,
+      callId: 'call_read_ok',
+      toolName: 'read',
+      output: { text: 'ok' },
+      isError: false
+    })
+    const progress = input(completed({ text: '接下来我会继续' }), {
+      prepared: prepared({ history: [succeeded] })
+    })
+
+    await expect(h.coordinator.resolve(progress)).resolves.toBe('stop')
+    expect(h.coordinator.postToolFailureRecoverySteps(turnId)).toBe(0)
+  })
+
+  it('clears post-tool-failure recovery state with clearTurn', async () => {
+    const h = harness()
+    const failed = failedToolResult('read')
+    await h.coordinator.resolve(input(completed({ text: '接下来我会继续' }), {
+      prepared: prepared({ history: [failed] })
+    }))
+    expect(h.coordinator.postToolFailureRecoverySteps(turnId)).toBe(1)
+    h.coordinator.clearTurn(turnId)
+    expect(h.coordinator.postToolFailureRecoverySteps(turnId)).toBe(0)
   })
 })

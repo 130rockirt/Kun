@@ -67,6 +67,7 @@ describe('GraphControlService', () => {
       expectedRevision: 1
     })
     expect(paused.status).toBe('paused')
+    expect(paused.pendingControlIntent).toBeUndefined()
     expect(pauseActive).toHaveBeenCalledOnce()
     const resumed = await control.resume('run_1', {
       commandId: 'command_resume',
@@ -80,6 +81,140 @@ describe('GraphControlService', () => {
       reason: 'test cancellation'
     })
     expect(cancelled.status).toBe('cancelled')
+    expect(cancelled.pendingControlIntent).toBeUndefined()
+    const statusEvents = (await store.events('run_1'))
+      .filter((event) => event.event.type === 'run_status_changed')
+    expect(statusEvents).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        event: expect.objectContaining({
+          payload: expect.objectContaining({
+            to: 'pausing',
+            pendingControlIntent: 'pause'
+          })
+        })
+      }),
+      expect.objectContaining({
+        event: expect.objectContaining({
+          payload: expect.objectContaining({
+            to: 'pausing',
+            pendingControlIntent: 'cancel'
+          })
+        })
+      })
+    ]))
+  })
+
+  it('durably upgrades an in-flight pause to cancellation without allowing downgrade', async () => {
+    const { control: creator, store } = await fixture()
+    await creator.create({
+      runId: 'run_pause_cancel_race',
+      threadId: 'thread_1',
+      projectId: 'project_1',
+      sourceTurnId: 'turn_1',
+      plan: testGraphPlan(),
+      commandId: 'create_pause_cancel_race',
+      idempotencyKey: 'create_pause_cancel_race',
+      start: true
+    })
+    let releasePause!: () => void
+    let pauseStarted!: () => void
+    const pauseEntered = new Promise<void>((resolve) => { pauseStarted = resolve })
+    const pauseBlocked = new Promise<void>((resolve) => { releasePause = resolve })
+    const concurrent = new GraphControlService({
+      store,
+      config: () => testGraphConfig(),
+      pauseActive: async () => {
+        pauseStarted()
+        await pauseBlocked
+      },
+      cancelActive: async () => {
+        throw new Error('simulated process exit after cancellation intent')
+      }
+    })
+
+    const pause = concurrent.pause('run_pause_cancel_race', {
+      commandId: 'pause_race',
+      idempotencyKey: 'pause_race'
+    })
+    await pauseEntered
+    await expect(concurrent.cancel('run_pause_cancel_race', {
+      commandId: 'cancel_race',
+      idempotencyKey: 'cancel_race'
+    })).rejects.toThrow(/simulated process exit/)
+    expect(await store.get('run_pause_cancel_race')).toMatchObject({
+      status: 'pausing',
+      pendingControlIntent: 'cancel'
+    })
+    releasePause()
+    await expect(pause).rejects.toThrow(/cancellation is pending/)
+    expect(await store.get('run_pause_cancel_race')).toMatchObject({
+      status: 'pausing',
+      pendingControlIntent: 'cancel'
+    })
+    expect((await store.events('run_pause_cancel_race')).at(-1)?.event).toMatchObject({
+      type: 'run_control_intent_changed',
+      payload: { from: 'pause', to: 'cancel' }
+    })
+  })
+
+  it.each([
+    ['draft', []],
+    ['validating', ['validating']],
+    ['ready', ['validating', 'ready']],
+    ['running', ['validating', 'ready', 'running']],
+    ['paused', ['validating', 'ready', 'paused']],
+    ['awaiting_supervision', ['validating', 'ready', 'running', 'awaiting_supervision']],
+    ['awaiting_human', ['validating', 'ready', 'running', 'awaiting_human']],
+    ['completing', ['validating', 'ready', 'running', 'completing']]
+  ] as const)('fences cancellation durably from %s', async (status, transitions) => {
+    const { store } = await fixture()
+    await store.create({
+      runId: `run_cancel_${status}`,
+      threadId: 'thread_1',
+      projectId: 'project_1',
+      sourceTurnId: 'turn_1',
+      plan: testGraphPlan(),
+      commandId: `create_cancel_${status}`,
+      idempotencyKey: `create_cancel_${status}`
+    })
+    let run = (await store.get(`run_cancel_${status}`))!
+    for (const to of transitions) {
+      run = (await store.append(run.id, {
+        expectedSeq: run.lastEventSeq,
+        graphRevision: run.currentRevision,
+        commandId: `enter_${to}_${status}`,
+        idempotencyKey: `enter_${to}_${status}`,
+        event: {
+          type: 'run_status_changed',
+          payload: { from: run.status, to }
+        }
+      })).state
+    }
+    expect(run.status).toBe(status)
+    const control = new GraphControlService({
+      store,
+      config: () => testGraphConfig(),
+      cancelActive: async () => {
+        throw new Error('simulated exit after durable fence')
+      }
+    })
+
+    await expect(control.cancel(run.id, {
+      commandId: `cancel_${status}`,
+      idempotencyKey: `cancel_${status}`
+    })).rejects.toThrow(/simulated exit/)
+    expect(await store.get(run.id)).toMatchObject({
+      status: 'pausing',
+      pendingControlIntent: 'cancel'
+    })
+    expect((await store.events(run.id)).at(-1)?.event).toMatchObject({
+      type: 'run_status_changed',
+      payload: {
+        from: status,
+        to: 'pausing',
+        pendingControlIntent: 'cancel'
+      }
+    })
   })
   it('notifies supervision after durable user steering and cancellation', async () => {
     const { store } = await fixture()

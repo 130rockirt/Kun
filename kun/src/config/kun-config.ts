@@ -182,9 +182,7 @@ export const RuntimeTuningConfigSchema = z
     streamIdleTimeoutMs: z.number().int().min(0).optional(),
     toolStorm: z
       .object({
-        enabled: z.boolean().optional(),
-        windowSize: PositiveInt.optional(),
-        threshold: z.number().int().min(2).optional()
+        enabled: z.boolean().optional()
       })
       .strict()
       .optional(),
@@ -638,6 +636,44 @@ export const RolesConfigSchema = z
   .strict()
 export type RolesConfig = z.infer<typeof RolesConfigSchema>
 
+/**
+ * Lab (experimental) features. `exploreAgent` turns the first-class
+ * `explore_agent` tool on/off and optionally overrides the child model route
+ * (empty model+providerId = follow the main session). `fast` maps to the
+ * Codex serviceTier `priority` and only takes effect for Codex models that
+ * advertise priority support.
+ */
+export const LabExploreAgentConfigSchema = z
+  .object({
+    enabled: z.boolean().default(true),
+    model: z.string().min(1).optional(),
+    providerId: z.string().min(1).optional(),
+    reasoningEffort: ModelReasoningEffort.optional(),
+    fast: z.boolean().default(false)
+  })
+  .strict()
+  .superRefine((config, ctx) => {
+    const hasModel = Boolean(config.model?.trim())
+    const hasProvider = Boolean(config.providerId?.trim())
+    if (hasModel === hasProvider) return
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: hasModel ? ['providerId'] : ['model'],
+      message: 'exploreAgent model and providerId must be configured together'
+    })
+  })
+export type LabExploreAgentConfig = z.infer<typeof LabExploreAgentConfigSchema>
+
+export const LabConfigSchema = z
+  .object({
+    exploreAgent: LabExploreAgentConfigSchema.default({
+      enabled: true,
+      fast: false
+    })
+  })
+  .strict()
+export type LabConfig = z.infer<typeof LabConfigSchema>
+
 export const KunConfigSchema = z
   .object({
     serve: KunServeConfigSchema.optional(),
@@ -647,6 +683,7 @@ export const KunConfigSchema = z
     graph: GraphRuntimeConfigSchema.optional(),
     roles: RolesConfigSchema.optional(),
     capabilities: KunCapabilitiesConfig.default(DEFAULT_KUN_CAPABILITIES_CONFIG),
+    lab: LabConfigSchema.optional(),
     hooks: HooksConfigSchema.optional(),
     quality: QualityConfigSchema.optional()
   })
@@ -679,9 +716,10 @@ export function readKunConfigFile(path: string): LoadedKunConfig {
     const message = error instanceof Error ? error.message : String(error)
     throw new Error(`Failed to parse Kun config JSON at ${resolvedPath}: ${message}`)
   }
-  const parsed = KunConfigSchema.safeParse(json)
+  const normalized = normalizeLegacyProviderKinds(json)
+  const parsed = KunConfigSchema.safeParse(normalized)
   if (!parsed.success) {
-    const compatible = parseForwardCompatibleKunConfig(json)
+    const compatible = parseForwardCompatibleKunConfig(normalized)
     if (compatible) {
       return { path: resolvedPath, config: compatible }
     }
@@ -690,6 +728,32 @@ export function readKunConfigFile(path: string): LoadedKunConfig {
     )
   }
   return { path: resolvedPath, config: parsed.data }
+}
+
+/**
+ * Idempotently migrates known legacy provider transport kinds written by older
+ * GUI builds before a provider-id/kind rename. Only `serve.providers.*.kind`
+ * values that map 1:1 to a current enum member are rewritten; everything else
+ * is preserved so the strict schema still reports the exact offending path.
+ */
+function normalizeLegacyProviderKinds(json: unknown): unknown {
+  if (!isRecord(json)) return json
+  const serve = json.serve
+  if (!isRecord(serve)) return json
+  const providers = serve.providers
+  if (!isRecord(providers)) return json
+  let changed = false
+  const nextProviders: Record<string, unknown> = {}
+  for (const [id, provider] of Object.entries(providers)) {
+    if (!isRecord(provider) || provider.kind !== 'gemini-cli-subscription') {
+      nextProviders[id] = provider
+      continue
+    }
+    nextProviders[id] = { ...provider, kind: 'gemini-cli-api' }
+    changed = true
+  }
+  if (!changed) return json
+  return { ...json, serve: { ...serve, providers: nextProviders } }
 }
 
 const FORWARD_COMPATIBLE_TOP_LEVEL_SECTIONS = [

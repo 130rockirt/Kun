@@ -4,6 +4,7 @@
  * keeping the orchestration (and its tests) free of both.
  */
 import {
+  AgentSdkCredentialUnavailableError,
   AgentSdkRuntime,
   agentSdkCapabilities,
   type SdkRuntimeDeps,
@@ -43,11 +44,14 @@ import type { InstructionRuntime } from '../../instructions/instruction-runtime.
 import type { MemoryStore } from '../../memory/memory-store.js'
 import {
   PLAN_MODE_INSTRUCTION,
-  goalContinuationInstruction,
   todoContinuationInstruction,
   memoryInstructions,
   isStalePlanContext
 } from '../../loop/agent-loop.js'
+import {
+  filterGoalContextsForGoalKey,
+  goalContextKey
+} from '../../loop/continuation-instructions.js'
 import {
   DESIGN_MODE_INSTRUCTION,
   SVG_ARTIFACT_ALLOWED_TOOL_NAMES,
@@ -60,7 +64,7 @@ import type {
   UserInputRequest,
   UserInputResolution
 } from '../../ports/user-input-gate.js'
-import type { TurnItem } from '../../contracts/items.js'
+import { goalContextTexts, type TurnItem } from '../../contracts/items.js'
 import type { ApprovalGate } from '../../ports/approval-gate.js'
 import {
   createApprovalActionEnvelope,
@@ -142,6 +146,14 @@ export interface AgentSdkRuntimeFactoryDeps {
   defaultIsAgentSdk?: boolean
   /** Token for the default provider (used when a turn doesn't target a specific provider). */
   defaultToken?: string
+  /** Protected source for the default route; resolved for every turn. */
+  defaultCredentialSourceId?: string
+  /**
+   * Request-time credential authority. A configured source must resolve here;
+   * cached providerConfig.apiKey material is never a fallback because another
+   * Runtime may have installed a durable replacement fence.
+   */
+  resolveCredentialSource?: (sourceId: string) => Promise<{ apiKey: string } | null>
   /** Resolves a turn's image attachments so they can be forwarded to the model. */
   attachmentStore?: AttachmentStore
   /** Skill engine — injects the available-skills catalog + activated skills per turn. */
@@ -257,6 +269,12 @@ function intersectAllowedToolNames(
 export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSdkRuntime {
   const sessionIdsByTurn = new Map<string, string>()
   const sessionPreparationsByTurn = new Map<string, DelegatedSessionPreparation>()
+  // A delegated native session must checkpoint the same goal projection that
+  // its request used. The goal can be completed, cleared, or replaced while
+  // the request is running; using its post-turn value here would make the
+  // checkpoint digest disagree with the provider's actual transcript and
+  // force every later turn to rebase.
+  const sessionGoalContextKeysByTurn = new Map<string, string | null>()
   // Skill activation is turn-scoped. Keep the exact result used for the SDK
   // tool catalog so bridged execution sees the same skill-gated tools after a
   // Client-neutral structured input pause/resume.
@@ -595,12 +613,13 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
       return !providerId || !deps.providerConfigs[providerId]
     },
 
-    async loadTurnContext(threadId, turnId): Promise<SdkTurnContext | null> {
+    async loadTurnContext(threadId, turnId, signal): Promise<SdkTurnContext | null> {
+      if (signal?.aborted) return null
       const thread = await deps.threadStore.get(threadId)
       if (!thread) return null
       const turn = thread.turns.find((candidate) => candidate.id === turnId)
       if (!turn) return null
-      const items = await deps.sessionStore.loadItems(threadId)
+      let items = await deps.sessionStore.loadItems(threadId)
       const userItem = [...items]
         .reverse()
         .find((item) => item.turnId === turnId && item.kind === 'user_message')
@@ -652,10 +671,19 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
         deps.defaultApprovalReviewer ??
         DEFAULT_APPROVAL_REVIEWER
       // An explicit Claude provider owns its credential boundary. Empty means
-      // ambient Claude Code login; it must never inherit another provider's key.
-      const token = normalizeClaudeOAuthToken(
-        explicitRouteProviderId ? providerCfg?.apiKey : deps.defaultToken
-      )
+      // ambient Claude Code login only when it has no managed credential
+      // source. Managed sources are re-read for every turn so a fence written
+      // by another Runtime fails closed before the SDK can use cached material.
+      const credentialSourceId = explicitRouteProviderId
+        ? providerCfg?.credentialSourceId
+        : deps.defaultCredentialSourceId
+      let rawToken = explicitRouteProviderId ? providerCfg?.apiKey : deps.defaultToken
+      if (credentialSourceId) {
+        const resolved = await deps.resolveCredentialSource?.(credentialSourceId).catch(() => null)
+        rawToken = resolved?.apiKey ?? ''
+        if (!rawToken.trim()) throw new AgentSdkCredentialUnavailableError()
+      }
+      const token = normalizeClaudeOAuthToken(rawToken)
       // Resolve skills before listing bridgeable tools. Some managed tools
       // (notably PPT Master) are deliberately advertised only for an active
       // skill, and the SDK must see the same per-turn catalog as the native
@@ -690,6 +718,19 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
       const plan = dedicatedSvgTurn
         ? { planMode: false as const }
         : resolveTurnPlanContext(thread, turnId)
+      if (!plan.planMode && thread.goal?.status === 'active') {
+        await deps.turns.ensureGoalContext(threadId, turnId, signal)
+        // Goal context is persisted by TurnService outside the public thread
+        // projection. Reload canonical history before the SDK transcript and
+        // delegated-session digest are assembled.
+        items = await deps.sessionStore.loadItems(threadId)
+      }
+      if (signal?.aborted) return null
+      const goalForHistory = plan.planMode
+        ? undefined
+        : (await deps.threadStore.get(threadId))?.goal
+      const goalContextKeyForHistory = goalContextKey(goalForHistory)
+      items = filterGoalContextsForGoalKey(items, goalContextKeyForHistory)
       const graphPolicy = delegatedGraphTurnPolicy(turn)
       // An Agent SDK query pins its in-process MCP schemas at startup and
       // cannot add tools after `load_skill` returns. Pre-bridge schemas gated
@@ -792,7 +833,6 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
         memoryBlocks = memoryInstructions(memories)
       }
 
-      const goalInstruction = planMode ? null : goalContinuationInstruction(thread.goal)
       const todoInstruction = planMode ? null : todoContinuationInstruction(thread.todos)
       if (instructionResolution) {
         await deps.turns.updateTurnMetadata(threadId, turnId, {
@@ -814,7 +854,6 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
             ? [DESIGN_MODE_INSTRUCTION]
             : []),
         ...(instructionResolution?.instruction ? [instructionResolution.instruction] : []),
-        ...(goalInstruction ? [goalInstruction] : []),
         ...(todoInstruction ? [todoInstruction] : []),
         ...memoryBlocks,
         ...(skillResolution?.catalogInstruction ? [skillResolution.catalogInstruction] : []),
@@ -867,6 +906,7 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
           await mkdir(claudeConfigDir, { recursive: true, mode: 0o700 })
         }
         sessionPreparationsByTurn.set(skillTurnKey(threadId, turnId), preparation)
+        sessionGoalContextKeysByTurn.set(skillTurnKey(threadId, turnId), goalContextKeyForHistory)
       }
 
       return {
@@ -906,6 +946,9 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
         oauthToken: token || undefined,
         ...(images.length ? { images } : {}),
         bridgeableTools,
+        ...(goalContextTexts(items).length
+          ? { redactedRequestValues: goalContextTexts(items) }
+          : {}),
         ...(historyTranscript ? { historyTranscript } : {}),
         ...(contextInstructions.length ? { contextInstructions } : {}),
         ...(activeSkillIds.length ? { activeSkillIds: [...activeSkillIds] } : {})
@@ -1126,7 +1169,11 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
       await deps.turns.applyItem(threadId, item)
     },
 
-    async finishTurn(threadId, turnId, status, error): Promise<TurnRunOutcome> {
+    async applyAssistantDelta(threadId, item, deltaText, deltaOffset): Promise<void> {
+      await deps.turns.applyAssistantDelta(threadId, item, deltaText, deltaOffset)
+    },
+
+    async finishTurn(threadId, turnId, status, error, code): Promise<TurnRunOutcome> {
       const key = skillTurnKey(threadId, turnId)
       try {
         let outcome: TurnRunOutcome = status
@@ -1141,10 +1188,22 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
           ) {
             outcome = graphCompletion
           } else {
-            await deps.turns.finishTurn({ threadId, turnId, status, ...(error ? { error } : {}) })
+            await deps.turns.finishTurn({
+              threadId,
+              turnId,
+              status,
+              ...(error ? { error } : {}),
+              ...(code ? { code } : {})
+            })
           }
         } else {
-          await deps.turns.finishTurn({ threadId, turnId, status, ...(error ? { error } : {}) })
+          await deps.turns.finishTurn({
+            threadId,
+            turnId,
+            status,
+            ...(error ? { error } : {}),
+            ...(code ? { code } : {})
+          })
         }
         if (
           (
@@ -1159,7 +1218,10 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
             try {
               await deps.sessionCoordinator.commit({
                 preparation,
-                committedItems: await deps.sessionStore.loadItems(threadId),
+                committedItems: filterGoalContextsForGoalKey(
+                  await deps.sessionStore.loadItems(threadId),
+                  sessionGoalContextKeysByTurn.get(key)
+                ),
                 lastCommittedTurnId: turnId,
                 nativeSessionId: sessionIdsByTurn.get(key)
               })
@@ -1176,6 +1238,7 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
         skillPromptByTurn.delete(key)
         sessionIdsByTurn.delete(key)
         sessionPreparationsByTurn.delete(key)
+        sessionGoalContextKeysByTurn.delete(key)
         if (typeof deps.skillRuntime?.clearTurnActivation === 'function') {
           deps.skillRuntime.clearTurnActivation(threadId, turnId)
         }

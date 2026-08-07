@@ -1,15 +1,35 @@
 import type { UsageSnapshot } from '../../contracts/usage.js'
+import type { ToolCallProviderMetadata } from '../../contracts/items.js'
 import type { ModelStreamChunk } from '../../ports/model-client.js'
 import {
   ModelStreamResourceBudget,
   type PendingToolCall
 } from './model-stream-resource-budget.js'
 
+type AnthropicThinkingBlock = NonNullable<
+  NonNullable<ToolCallProviderMetadata['anthropic']>['thinkingBlocks']
+>[number]
+
+export type AnthropicThinkingState = {
+  blocks: AnthropicThinkingBlock[]
+  blockByIndex: Map<number, number>
+  metadataAttached: boolean
+  invalid: boolean
+}
+
+export function createAnthropicThinkingState(): AnthropicThinkingState {
+  return { blocks: [], blockByIndex: new Map(), metadataAttached: false, invalid: false }
+}
+
+const MAX_ANTHROPIC_THINKING_BLOCKS = 16
+const MAX_ANTHROPIC_THINKING_FIELD_CHARS = 262_144
+
 export function decodeAnthropicMessagesStreamPayload(input: {
   payload: Record<string, unknown>
   pendingArguments: Map<string, PendingToolCall>
   pendingByIndex: Map<number, string>
   completedToolCalls: Set<string>
+  thinkingState: AnthropicThinkingState
   sawTextDelta: boolean
   budget: ModelStreamResourceBudget
   normalizeUsage: (usage: Record<string, unknown>) => UsageSnapshot
@@ -32,7 +52,10 @@ export function decodeAnthropicMessagesStreamPayload(input: {
     if (usagePayload) usage = input.normalizeUsage(usagePayload)
   } else if (type === 'content_block_start') {
     const block = recordValue(input.payload, 'content_block')
-    if (block && recordString(block, 'type') === 'tool_use') {
+    const blockType = block ? recordString(block, 'type') : ''
+    if (block && (blockType === 'thinking' || blockType === 'redacted_thinking')) {
+      rememberThinkingBlock(input.thinkingState, index, block, blockType)
+    } else if (block && blockType === 'tool_use') {
       const callId = recordString(block, 'id') || indexFallbackCallId(index, input.pendingArguments)
       const pending = input.budget.pendingCall(input.pendingArguments, callId, index)
       if (index !== undefined) input.budget.bindPendingIndex(input.pendingByIndex, index, callId)
@@ -54,7 +77,13 @@ export function decodeAnthropicMessagesStreamPayload(input: {
       }
     } else if (deltaType === 'thinking_delta') {
       const text = recordString(delta!, 'thinking')
-      if (text) chunks.push({ kind: 'assistant_reasoning_delta', text })
+      if (text) {
+        appendThinkingDelta(input.thinkingState, index, text)
+        chunks.push({ kind: 'assistant_reasoning_delta', text })
+      }
+    } else if (deltaType === 'signature_delta') {
+      const signature = recordString(delta!, 'signature')
+      if (signature) setThinkingSignature(input.thinkingState, index, signature)
     } else if (deltaType === 'input_json_delta') {
       const callId = anthropicStreamCallId(index, input.pendingArguments, input.pendingByIndex)
       const pending = input.budget.pendingCall(input.pendingArguments, callId, index)
@@ -73,7 +102,8 @@ export function decodeAnthropicMessagesStreamPayload(input: {
       input.budget.completeToolCall(raw)
       chunks.push({
         kind: 'tool_call_complete', callId, toolName: pending.name,
-        arguments: input.parseToolArguments(raw || '{}')
+        arguments: input.parseToolArguments(raw || '{}'),
+        ...anthropicProviderMetadata(input.thinkingState)
       })
       input.completedToolCalls.add(callId)
       input.budget.removePendingCall(input.pendingArguments, callId)
@@ -94,6 +124,99 @@ export function decodeAnthropicMessagesStreamPayload(input: {
     finishReason = 'error'
   }
   return { chunks, sawTextDelta: sawText, finishReason, usage }
+}
+
+function rememberThinkingBlock(
+  state: AnthropicThinkingState,
+  index: number | undefined,
+  block: Record<string, unknown>,
+  blockType: 'thinking' | 'redacted_thinking'
+): void {
+  if (state.blocks.length >= MAX_ANTHROPIC_THINKING_BLOCKS) {
+    state.invalid = true
+    return
+  }
+  const next = blockType === 'thinking'
+    ? {
+        type: 'thinking' as const,
+        thinking: recordString(block, 'thinking'),
+        signature: recordString(block, 'signature')
+      }
+    : {
+        type: 'redacted_thinking' as const,
+        data: recordString(block, 'data')
+      }
+  if (
+    (next.type === 'thinking' && (
+      next.thinking.length > MAX_ANTHROPIC_THINKING_FIELD_CHARS ||
+      next.signature.length > MAX_ANTHROPIC_THINKING_FIELD_CHARS
+    )) ||
+    (next.type === 'redacted_thinking' && next.data.length > MAX_ANTHROPIC_THINKING_FIELD_CHARS)
+  ) {
+    state.invalid = true
+    return
+  }
+  state.blocks.push(next)
+  if (index !== undefined) state.blockByIndex.set(index, state.blocks.length - 1)
+}
+
+function appendThinkingDelta(
+  state: AnthropicThinkingState,
+  index: number | undefined,
+  text: string
+): void {
+  const block = thinkingBlockAt(state, index)
+  if (block?.type === 'thinking') {
+    if (block.thinking.length + text.length > MAX_ANTHROPIC_THINKING_FIELD_CHARS) {
+      state.invalid = true
+      return
+    }
+    block.thinking += text
+  }
+}
+
+function setThinkingSignature(
+  state: AnthropicThinkingState,
+  index: number | undefined,
+  signature: string
+): void {
+  const block = thinkingBlockAt(state, index)
+  if (block?.type === 'thinking') {
+    if (block.signature.length + signature.length > MAX_ANTHROPIC_THINKING_FIELD_CHARS) {
+      state.invalid = true
+      return
+    }
+    block.signature += signature
+  }
+}
+
+function thinkingBlockAt(
+  state: AnthropicThinkingState,
+  index: number | undefined
+): AnthropicThinkingBlock | undefined {
+  if (index !== undefined) {
+    const blockIndex = state.blockByIndex.get(index)
+    if (blockIndex !== undefined) return state.blocks[blockIndex]
+  }
+  return state.blocks.at(-1)
+}
+
+function anthropicProviderMetadata(
+  state: AnthropicThinkingState
+): { providerMetadata?: ToolCallProviderMetadata } {
+  if (state.invalid || state.metadataAttached || state.blocks.length === 0) return {}
+  const complete = state.blocks.every((block) =>
+    block.type === 'thinking' ? Boolean(block.signature) : Boolean(block.data)
+  )
+  if (!complete) return {}
+  state.metadataAttached = true
+  return {
+    providerMetadata: {
+      anthropic: {
+        thinkingBlocks: state.blocks.map((block) => ({ ...block }))
+      }
+    }
+  }
 }
 
 function anthropicStreamCallId(

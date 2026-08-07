@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createThreadRecord } from '../domain/thread.js'
+import { createTurnRecord } from '../domain/turn.js'
 import { testGraphConfig, testGraphPlan } from '../graph/graph-test-fixtures.test-support.js'
 import { DEFAULT_KUN_CAPABILITIES_CONFIG } from '../contracts/capabilities.js'
 import { ManagerSharedDataStore } from './shared-data-store.js'
@@ -76,6 +77,87 @@ describe('manager shared data store', () => {
       threadId: event.threadId,
       event: { ...event, timestamp: '2026-08-01T00:00:01.000Z' }
     })).rejects.toThrow(/high-water/u)
+    await store.close()
+  })
+
+  it('settles open session items exactly once when a runtime owner lease expires', async () => {
+    const store = await dataStore()
+    const thread = createThreadRecord({
+      id: 'thread-lease',
+      title: 'Lease recovery',
+      workspace: '/tmp/workspace',
+      model: 'test-model'
+    })
+    const turn = createTurnRecord({
+      id: 'turn-lease',
+      threadId: thread.id,
+      prompt: 'Continue the interrupted tool call',
+      status: 'running'
+    })
+    await store.executeThread('upsert', {
+      thread: { ...thread, status: 'running', turns: [turn] }
+    })
+    const createdAt = '2026-08-06T00:00:00.000Z'
+    const items = [
+      {
+        id: 'call-open', kind: 'tool_call', turnId: turn.id, threadId: thread.id,
+        role: 'assistant', status: 'running', createdAt,
+        toolName: 'read_file', callId: 'call-1', toolKind: 'tool_call', arguments: {}
+      },
+      {
+        id: 'result-open', kind: 'tool_result', turnId: turn.id, threadId: thread.id,
+        role: 'tool', status: 'running', createdAt,
+        toolName: 'read_file', callId: 'call-1', toolKind: 'tool_call', output: '', isError: false
+      },
+      {
+        id: 'approval-open', kind: 'approval', turnId: turn.id, threadId: thread.id,
+        role: 'tool', status: 'pending', createdAt,
+        approvalId: 'approval-1', toolName: 'read_file', summary: 'Read a file'
+      },
+      {
+        id: 'input-open', kind: 'user_input', turnId: turn.id, threadId: thread.id,
+        role: 'tool', status: 'pending', createdAt,
+        inputId: 'input-1', prompt: 'Choose', questions: []
+      }
+    ]
+    for (const item of items) await store.executeSession('appendItem', { threadId: thread.id, item })
+
+    const lease = {
+      threadId: thread.id,
+      turnId: turn.id,
+      ownerFlavor: 'production' as const,
+      ownerInstanceId: 'runtime-dead',
+      acquiredAt: '2026-08-06T00:00:00.000Z',
+      expiresAt: '2026-08-06T00:01:00.000Z'
+    }
+    expect(await store.reconcileExpiredLease(lease)).toBe(true)
+
+    const recovered = await store.executeSession('loadItems', { threadId: thread.id }) as Array<{
+      id: string
+      kind: string
+      status: string
+      code?: string
+    }>
+    expect(recovered.map((item) => [item.id, item.status])).toEqual(expect.arrayContaining([
+      ['call-open', 'failed'],
+      ['result-open', 'failed'],
+      ['approval-open', 'expired'],
+      ['input-open', 'cancelled'],
+      ['item_turn-lease_owner_lease_expired', 'failed']
+    ]))
+    expect(recovered.find((item) => item.id === 'item_turn-lease_owner_lease_expired')).toMatchObject({
+      kind: 'error', code: 'owner_lease_expired'
+    })
+    const persisted = await store.executeThread('get', { threadId: thread.id }) as {
+      turns: Array<{ status: string }>
+    }
+    expect(persisted.turns[0]?.status).toBe('failed')
+    expect(await store.reconcileExpiredLease(lease)).toBe(false)
+    const events = await store.executeSession('loadEventsSince', { threadId: thread.id, sinceSeq: 0 }) as Array<{
+      kind: string
+      code?: string
+    }>
+    expect(events.filter((event) => event.code === 'owner_lease_expired')).toHaveLength(1)
     await store.close()
   })
 

@@ -19,6 +19,9 @@ import {
   type ClawRunResult,
   type ClawTaskFromTextResult,
   type ClawRuntimeStatus,
+  type DaemonActionResult,
+  type DaemonLogPage,
+  type DaemonRuntimeStatus,
   type ScheduleRunResult,
   type ScheduleRuntimeStatus,
   type ScheduleTaskFromTextResult,
@@ -91,6 +94,7 @@ import {
   skillSaveFilePayloadSchema,
   settingsPatchSchema,
   streamIdSchema,
+  daemonLogsPayloadSchema,
   workflowRunNodePayloadSchema,
   workflowTestNodePayloadSchema,
   workflowResolveApprovalPayloadSchema,
@@ -104,6 +108,7 @@ import {
   workspaceEntryDeletePayloadSchema,
   workspaceEntryRenamePayloadSchema,
   workspaceFileCreatePayloadSchema,
+  workspaceFileRevealTargetPayloadSchema,
   workspaceFileSaveAsPayloadSchema,
   workspaceFileTargetPayloadSchema,
   workspaceFileWatchPayloadSchema,
@@ -162,6 +167,7 @@ import { requestRuntimeProviderQuotas } from '../runtime-provider-quota'
 import { fetchModelsDevCatalog } from '../models-dev-catalog'
 import type { ClawRuntime } from '../claw-runtime'
 import type { ScheduleRuntime } from '../schedule-runtime'
+import type { DaemonRuntime } from '../daemon-runtime'
 import { reloadRenderer } from '../dev-renderer-cache'
 import { verifyTelegramBotToken } from '../telegram-runtime'
 import { startCodexDeviceAuth, pollCodexDeviceAuth, startCodexBrowserAuth } from '../codex-auth'
@@ -333,8 +339,19 @@ type WorkspaceFileWatchSenderRecord = {
   onDestroyed: () => void
 }
 
+type ProtectedRuntimeRequestLease = Readonly<{
+  runtimeToken: string
+  request: (
+    path: string,
+    method?: string,
+    body?: string,
+    headers?: Record<string, string>
+  ) => Promise<RuntimeRequestResult>
+}>
+
 type RegisterAppIpcHandlersOptions = {
   store: JsonSettingsStore
+  withRegistryCredentials?: (settings: AppSettingsV1) => Promise<AppSettingsV1>
   getMainWindow: () => BrowserWindow | null
   applySettingsPatch: (partial: AppSettingsPatch) => Promise<AppSettingsV1>
   saveSettingsPatch: (partial: AppSettingsPatch) => Promise<AppSettingsV1>
@@ -345,12 +362,13 @@ type RegisterAppIpcHandlersOptions = {
     body?: string,
     headers?: Record<string, string>
   ) => Promise<RuntimeRequestResult>
-  getRuntimeAuthToken: (settings: AppSettingsV1) => string
+  acquireRuntimeRequestLease: () => Promise<ProtectedRuntimeRequestLease>
   getRuntimeSettingsSyncStatus: () => KunRuntimeSettingsSyncStatusPayload
   restartRuntime: () => Promise<void>
   fetchUpstreamModels: () => Promise<UpstreamModelsResult>
   getClawRuntime: () => ClawRuntime | null
   getScheduleRuntime: () => ScheduleRuntime | null
+  getDaemonRuntime: () => DaemonRuntime | null
   getWorkflowRuntime: () => WorkflowRuntime | null
   startFeishuInstallQrcode: (isLark: boolean) => Promise<ClawImInstallQrResult>
   pollFeishuInstall: (deviceCode: string) => Promise<ClawImInstallPollResult>
@@ -460,6 +478,34 @@ function assertTrustedWorkbenchSender(
 ): void {
   if (!trustedWorkbenchSenderIsCurrent(event, getMainWindow())) {
     throw new Error('IPC sender is not the trusted workbench frame.')
+  }
+}
+
+/**
+ * Renderer settings are an editable projection, not a Provider credential
+ * transport. Standalone custom media credentials remain editable legacy
+ * settings until they have their own protected-store migration; redacting
+ * those values here would make the next adjacent settings edit erase them.
+ */
+function withoutRendererPlaintextCredentials(settings: AppSettingsV1): AppSettingsV1 {
+  const runtime = getKunRuntimeSettings(settings)
+  return {
+    ...settings,
+    provider: {
+      ...settings.provider,
+      apiKey: '',
+      providers: settings.provider.providers.map((provider) => ({
+        ...provider,
+        apiKey: ''
+      }))
+    },
+    agents: {
+      ...settings.agents,
+      kun: {
+        ...runtime,
+        apiKey: ''
+      }
+    }
   }
 }
 
@@ -633,12 +679,13 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     saveSettingsPatch,
     resetUnreadableCredentials,
     runtimeRequest,
-    getRuntimeAuthToken,
+    acquireRuntimeRequestLease,
     getRuntimeSettingsSyncStatus,
     restartRuntime,
     fetchUpstreamModels,
     getClawRuntime,
     getScheduleRuntime,
+    getDaemonRuntime,
     getWorkflowRuntime,
     startFeishuInstallQrcode,
     pollFeishuInstall,
@@ -655,6 +702,7 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     logError,
     logInfo: logInfoHandler = () => undefined
   } = options
+  const withRegistryCredentials = options.withRegistryCredentials ?? (async (settings) => settings)
   const nativeDialogs = options.nativeDialogs ?? new NativeDialogCoordinator()
   const showMainWindowMessageBox = (
     parent: BrowserWindow,
@@ -867,7 +915,9 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     }, 90)
   }
 
-  ipcMain.handle('settings:get', async () => store.load())
+  ipcMain.handle('settings:get', async () =>
+    withoutRendererPlaintextCredentials(await store.load())
+  )
   ipcMain.handle('credentials:reset-unreadable', async (event): Promise<CredentialRecoveryResetResult> => {
     assertTrustedWorkbenchSender(event, getMainWindow)
     const parent = getMainWindow()
@@ -901,6 +951,31 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     ].map((root) => join(root, 'kun'))
   const claudeSubBinary = (): string | undefined =>
     resolveClaudeBinary(app.getPath('userData'), claudeSubKunDirs())
+  const resolveProtectedProviderCredential = async (
+    event: Pick<IpcMainInvokeEvent, 'sender' | 'senderFrame'>,
+    explicitCredential: unknown,
+    providerId: unknown,
+    expectedKind: 'agent-sdk' | 'cursor-sdk'
+  ): Promise<string | undefined> => {
+    assertTrustedWorkbenchSender(event, getMainWindow)
+    const explicit = typeof explicitCredential === 'string' ? explicitCredential.trim() : ''
+    if (explicit) return explicit
+    const id = typeof providerId === 'string' ? providerId.trim() : ''
+    if (!id) return undefined
+    const expectedProvider = (settings: AppSettingsV1) => {
+      const provider = settings.provider.providers.find((candidate) => candidate.id === id)
+      if (!provider) throw new Error(`Provider profile "${id}" is unavailable`)
+      if (provider.kind !== expectedKind) {
+        const kind = expectedKind === 'agent-sdk' ? 'an agent-sdk' : 'a cursor-sdk'
+        throw new Error(`Provider profile "${id}" is not ${kind} provider`)
+      }
+      return provider
+    }
+    const storedSettings = await store.load()
+    expectedProvider(storedSettings)
+    const projectedSettings = await withRegistryCredentials(storedSettings)
+    return expectedProvider(projectedSettings).apiKey.trim() || undefined
+  }
   // Claude Pro/Max subscription login. The official CLI owns browser OAuth and
   // platform credential storage; Kun observes only structured, redacted state.
   ipcMain.handle('claude-subscription:status', async () =>
@@ -912,22 +987,26 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
   }))
   ipcMain.handle('claude-subscription:sdk-install', async () =>
     startAgentSdkInstall(
-      { userDataDir: app.getPath('userData'), proxyUrl: resolveModelProviderProxyUrl(await store.load()) },
+      {
+        userDataDir: app.getPath('userData'),
+        proxyUrl: resolveModelProviderProxyUrl(await store.load()),
+        restartRuntime
+      },
       (state) => getMainWindow()?.webContents.send('claude-subscription:sdk-progress', state)
     )
   )
   ipcMain.handle('claude-subscription:login', async () =>
     runClaudeSubscriptionLogin({ binaryPath: claudeSubBinary() })
   )
-  ipcMain.handle('claude-subscription:probe', async (_event, token: unknown) =>
+  ipcMain.handle('claude-subscription:probe', async (event, token: unknown, providerId: unknown) =>
     probeClaudeSubscription({
-      token: typeof token === 'string' ? token : undefined,
+      token: await resolveProtectedProviderCredential(event, token, providerId, 'agent-sdk'),
       binaryPath: claudeSubBinary()
     })
   )
-  ipcMain.handle('claude-subscription:models', async (_event, token: unknown) =>
+  ipcMain.handle('claude-subscription:models', async (event, token: unknown, providerId: unknown) =>
     fetchSdkModels({
-      token: typeof token === 'string' ? token : undefined,
+      token: await resolveProtectedProviderCredential(event, token, providerId, 'agent-sdk'),
       kunRoots: claudeSubKunDirs(),
       binaryPath: claudeSubBinary()
     })
@@ -958,33 +1037,44 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
   ipcMain.handle('gemini-cli-subscription:models', async () =>
     geminiCliSubscriptionModels()
   )
-  ipcMain.handle('cursor-subscription:discover', async (_event, payload: unknown) => {
-    const { apiKey } = parseIpcPayload(
+  ipcMain.handle('cursor-subscription:discover', async (event, payload: unknown) => {
+    const { apiKey, providerId } = parseIpcPayload(
       'cursor-subscription:discover',
       cursorSubscriptionDiscoveryPayloadSchema,
       payload
     )
-    return discoverCursorSubscription({
+    const credential = await resolveProtectedProviderCredential(
+      event,
       apiKey,
+      providerId,
+      'cursor-sdk'
+    )
+    if (!credential) throw new Error('Cursor subscription credential is unavailable')
+    return discoverCursorSubscription({
+      apiKey: credential,
       kunRoots: claudeSubKunDirs()
     })
   })
-  ipcMain.handle('settings:set', async (event, partial: unknown) =>
-    applyProtectedSettingsPatch(
+  ipcMain.handle('settings:set', async (event, partial: unknown) => {
+    const persisted = await applyProtectedSettingsPatch(
       event,
       withoutRendererProjectConfigGrants(
         parseIpcPayload('settings:set', settingsPatchSchema, partial) as AppSettingsPatch
       ),
       applySettingsPatch
-    ))
-  ipcMain.handle('settings:save-silent', async (event, partial: unknown) =>
-    applyProtectedSettingsPatch(
+    )
+    return withoutRendererPlaintextCredentials(persisted)
+  })
+  ipcMain.handle('settings:save-silent', async (event, partial: unknown) => {
+    const persisted = await applyProtectedSettingsPatch(
       event,
       withoutRendererProjectConfigGrants(
         parseIpcPayload('settings:save-silent', settingsPatchSchema, partial) as AppSettingsPatch
       ),
       saveSettingsPatch
-    ))
+    )
+    return withoutRendererPlaintextCredentials(persisted)
+  })
 
   ipcMain.handle('runtime:request', async (_, payload: unknown) => {
     const request = parseIpcPayload('runtime:request', runtimeRequestPayloadSchema, payload)
@@ -1076,14 +1166,45 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       }
     }
 
-    const settings = await store.load()
+    let lease: ProtectedRuntimeRequestLease
+    try {
+      lease = await acquireRuntimeRequestLease()
+    } catch (error) {
+      logError('approval', 'Protected approval Runtime lease acquisition failed.', {
+        approvalRef: approvalLogReference(request.approvalId),
+        decision: request.decision,
+        errorType: error instanceof Error ? error.name : typeof error
+      })
+      return {
+        confirmed: true as const,
+        response: {
+          ok: false,
+          status: 0,
+          body: JSON.stringify({
+            code: 'runtime_unhealthy',
+            message: 'Kun Runtime is unavailable. Retry after it finishes starting.'
+          })
+        }
+      }
+    }
+    const parent = getMainWindow()
+    if (!parent || !dialogParentIsAvailable(parent) || !trustedWorkbenchSenderIsCurrent(event, parent)) {
+      logInfoHandler('approval', 'Protected native approval confirmation was not submitted.', {
+        approvalRef: approvalLogReference(request.approvalId),
+        decision: request.decision,
+        reason: 'parent_or_sender_unavailable_after_runtime_ensure',
+        platform: process.platform,
+        ...(parent ? { window: dialogParentState(parent) } : {})
+      })
+      return { confirmed: false as const }
+    }
     const consentToken = createApprovalConsentToken({
-      runtimeToken: getRuntimeAuthToken(settings),
+      runtimeToken: lease.runtimeToken,
       approvalId: request.approvalId,
       decision: request.decision,
       expiresAt: Date.now() + 30_000
     })
-    const response = await runtimeRequest(
+    const response = await lease.request(
       `/v1/approvals/${encodeURIComponent(request.approvalId)}`,
       'POST',
       JSON.stringify({ decision: request.decision }),
@@ -1118,7 +1239,7 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
 
   ipcMain.handle('prompt:optimize', async (_, payload: unknown) => {
     const request = parseIpcPayload('prompt:optimize', promptOptimizationPayloadSchema, payload)
-    return optimizePrompt(await store.load(), request.text)
+    return optimizePrompt(await withRegistryCredentials(await store.load()), request.text)
   })
 
   ipcMain.handle('claw:status', async (): Promise<ClawRuntimeStatus> =>
@@ -1151,6 +1272,27 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     const scheduleRuntime = getScheduleRuntime()
     if (!scheduleRuntime) return { ok: false, message: 'Schedule runtime is not initialized.' }
     return scheduleRuntime.runTask(normalizedTaskId)
+  })
+
+  ipcMain.handle('daemon:status', async (): Promise<DaemonRuntimeStatus> =>
+    getDaemonRuntime()?.status() ?? {
+      items: [],
+      powerSaveBlockerActive: false
+    }
+  )
+
+  ipcMain.handle('daemon:restart', async (_, payload: unknown): Promise<DaemonActionResult> => {
+    const daemonId = parseIpcPayload('daemon:restart', streamIdSchema, payload)
+    const daemonRuntime = getDaemonRuntime()
+    if (!daemonRuntime) return { ok: false, message: 'Daemon runtime is not initialized.' }
+    return daemonRuntime.restart(daemonId)
+  })
+
+  ipcMain.handle('daemon:logs', async (_, payload: unknown): Promise<DaemonLogPage> => {
+    const request = parseIpcPayload('daemon:logs', daemonLogsPayloadSchema, payload)
+    const daemonRuntime = getDaemonRuntime()
+    if (!daemonRuntime) return { lines: [], eof: true }
+    return daemonRuntime.readLogs(request.id, { cursor: request.cursor, limit: request.limit })
   })
 
   ipcMain.handle('workflow:status', async (): Promise<WorkflowRuntimeStatus> =>
@@ -2115,6 +2257,15 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     const message = await shell.openPath(resolved.path)
     return message ? { ok: false as const, message } : { ok: true as const }
   })
+  ipcMain.handle('file:reveal-workspace-file', async (event, payload: unknown) => {
+    assertTrustedWorkbenchSender(event, options.getMainWindow)
+    const resolved = await resolveWorkspaceFile(
+      parseIpcPayload('file:reveal-workspace-file', workspaceFileRevealTargetPayloadSchema, payload)
+    )
+    if (!resolved.ok) return resolved
+    shell.showItemInFolder(resolved.path)
+    return { ok: true as const }
+  })
   ipcMain.handle('file:list-workspace-directory', async (_, payload: unknown) =>
     listWorkspaceDirectory(
       parseIpcPayload('file:list-workspace-directory', workspaceDirectoryTargetPayloadSchema, payload)
@@ -2452,7 +2603,7 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
   )
   ipcMain.handle('write:inline-completion', async (_, payload: unknown) =>
     requestWriteInlineCompletion(
-      await store.load(),
+      await withRegistryCredentials(await store.load()),
       parseIpcPayload('write:inline-completion', writeInlineCompletionPayloadSchema, payload)
     )
   )
@@ -2471,7 +2622,7 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
   })
   ipcMain.handle('write:generate-infographic', async (_, payload: unknown) =>
     requestWriteInfographic(
-      await store.load(),
+      await withRegistryCredentials(await store.load()),
       parseIpcPayload('write:generate-infographic', writeInfographicPayloadSchema, payload)
     )
   )
@@ -2487,7 +2638,7 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
   })
   ipcMain.handle('speech:transcribe', async (_, payload: unknown) =>
     requestSpeechTranscription(
-      await store.load(),
+      await withRegistryCredentials(await store.load()),
       parseIpcPayload('speech:transcribe', speechTranscribePayloadSchema, payload)
     )
   )

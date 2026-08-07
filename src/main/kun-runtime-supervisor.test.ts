@@ -6,6 +6,14 @@ import {
   type KunRuntimeStatus
 } from './kun-runtime-supervisor'
 
+function createGate(): { promise: Promise<void>; release: () => void } {
+  let release!: () => void
+  const promise = new Promise<void>((resolve) => { release = resolve })
+  return { promise, release }
+}
+
+type TestSettings = { autoStart: boolean; revision?: number }
+
 function budgetAt(times: { value: number }): RestartBudget {
   return new RestartBudget({
     windowMs: 60_000,
@@ -38,6 +46,16 @@ describe('RestartBudget', () => {
     const verdict = budget.note()
     expect(verdict.allowed).toBe(false)
     expect(verdict.delayMs).toBe(0)
+  })
+
+  it('previews backoff without consuming an attempt', () => {
+    const clock = { value: 0 }
+    const budget = budgetAt(clock)
+
+    expect(budget.preview()).toEqual({ allowed: true, attempt: 1, delayMs: 1_000 })
+    expect(budget.preview()).toEqual({ allowed: true, attempt: 1, delayMs: 1_000 })
+    expect(budget.note()).toEqual({ allowed: true, attempt: 1, delayMs: 1_000 })
+    expect(budget.preview()).toEqual({ allowed: true, attempt: 2, delayMs: 3_000 })
   })
 
   it('frees attempts as they age out of the sliding window', () => {
@@ -99,35 +117,67 @@ describe('KunRuntimeSupervisor', () => {
   function harness(overrides: {
     healthy?: boolean
     restartError?: Error
+    ensureError?: Error
     stopped?: boolean
+    childRunning?: boolean
+    canAutoRestart?: boolean
+    maxRestarts?: number
+    ensureGate?: Promise<void>
+    sleepGate?: Promise<void>
+    onSleep?: () => void
+    settingsSequence?: TestSettings[]
+    watchdogFailureThreshold?: number
   } = {}) {
     const statuses: KunRuntimeStatus[] = []
-    const settings = { autoStart: true }
+    const settings: TestSettings = { autoStart: true }
+    let settingsRead = 0
+    const loadSettings = vi.fn(async () => {
+      const sequence = overrides.settingsSequence
+      if (!sequence?.length) return settings
+      const current = sequence[Math.min(settingsRead, sequence.length - 1)] ?? settings
+      settingsRead += 1
+      return current
+    })
+    const ensureRuntime = vi.fn(async (_settings: TestSettings) => {
+      await overrides.ensureGate
+      if (overrides.ensureError) throw overrides.ensureError
+      return settings
+    })
+    const restartRuntime = vi.fn(async (_settings: TestSettings) => {
+      if (overrides.restartError) throw overrides.restartError
+    })
+    const checkHealth = vi.fn(async (_settings: TestSettings) => overrides.healthy ?? false)
     const deps = {
-      loadSettings: async () => settings,
-      canAutoRestart: () => true,
-      ensureRuntime: async () => settings,
-      restartRuntime: async () => {
-        if (overrides.restartError) throw overrides.restartError
-      },
-      checkHealth: async () => overrides.healthy ?? false,
-      isChildRunning: () => true,
+      loadSettings,
+      canAutoRestart: (_settings: TestSettings) => overrides.canAutoRestart ?? true,
+      ensureRuntime,
+      restartRuntime,
+      checkHealth,
+      isChildRunning: () => overrides.childRunning ?? true,
       isStopped: () => overrides.stopped ?? false,
       publish: (status: KunRuntimeStatus) => { statuses.push(status) },
       warn: () => undefined,
       error: () => undefined,
-      sleep: async () => undefined
+      sleep: async () => {
+        overrides.onSleep?.()
+        await overrides.sleepGate
+      }
     }
     const supervisor = new KunRuntimeSupervisor({
       deps,
-      watchdogFailureThreshold: 2,
-      restartBudget: new RestartBudget({ windowMs: 60_000, maxRestarts: 3, baseDelayMs: 0 })
+      watchdogFailureThreshold: overrides.watchdogFailureThreshold ?? 2,
+      restartBudget: new RestartBudget({
+        windowMs: 60_000,
+        maxRestarts: overrides.maxRestarts ?? 3,
+        baseDelayMs: 0
+      })
     })
-    return { supervisor, statuses, deps }
+    return { supervisor, statuses, deps, loadSettings, ensureRuntime, restartRuntime, checkHealth }
   }
 
   it('restarts after the configured consecutive watchdog failures', async () => {
     const h = harness()
+    h.supervisor.setManagedRuntimeExpected(true)
     await h.supervisor.watchdogTick()
     expect(h.statuses).toEqual([])
     await h.supervisor.watchdogTick()
@@ -136,6 +186,7 @@ describe('KunRuntimeSupervisor', () => {
 
   it('does not recover or restart after shutdown begins', async () => {
     const h = harness({ stopped: true })
+    h.supervisor.setManagedRuntimeExpected(true)
     h.supervisor.handleUnexpectedExit({ code: 1, signal: null, stderrTail: 'failed' })
     await Promise.resolve()
     await h.supervisor.watchdogTick()
@@ -144,9 +195,31 @@ describe('KunRuntimeSupervisor', () => {
 
   it('publishes failed when watchdog restart fails', async () => {
     const h = harness({ restartError: new Error('restart failed') })
+    h.supervisor.setManagedRuntimeExpected(true)
     await h.supervisor.watchdogTick()
     await h.supervisor.watchdogTick()
     expect(h.statuses.at(-1)).toMatchObject({ state: 'failed', source: 'watchdog' })
+  })
+
+  it('clears a stale watchdog failure after the preserved Runtime becomes healthy again', async () => {
+    const h = harness({
+      restartError: new Error('preserved live Runtime did not stop'),
+      watchdogFailureThreshold: 1
+    })
+    h.supervisor.setManagedRuntimeExpected(true)
+
+    await h.supervisor.watchdogTick()
+    expect(h.statuses.at(-1)).toMatchObject({ state: 'failed', source: 'watchdog' })
+
+    h.checkHealth.mockResolvedValue(true)
+    await h.supervisor.watchdogTick()
+
+    expect(h.statuses.map((status) => status.state)).toEqual([
+      'restarting',
+      'failed',
+      'running'
+    ])
+    expect(h.restartRuntime).toHaveBeenCalledOnce()
   })
 
   it('owns single-flight ensure operations for one runtime fingerprint', async () => {
@@ -169,6 +242,7 @@ describe('KunRuntimeSupervisor', () => {
 
   it('serializes settings apply and suppresses watchdog recovery while it is pending', async () => {
     const h = harness()
+    h.supervisor.setManagedRuntimeExpected(true)
     let release!: () => void
     const gate = new Promise<void>((resolve) => { release = resolve })
     const onError = vi.fn()
@@ -179,8 +253,205 @@ describe('KunRuntimeSupervisor', () => {
     expect(h.statuses).toEqual([])
 
     release()
-    await h.supervisor.waitForSettingsApply()
+    await vi.waitFor(() => expect(h.supervisor.hasPendingOperation()).toBe(false))
     expect(h.supervisor.hasPendingOperation()).toBe(false)
     expect(onError).not.toHaveBeenCalled()
+  })
+
+  it('does not recover a Runtime that was never expected to start', async () => {
+    const h = harness({ childRunning: false })
+
+    await h.supervisor.watchdogTick()
+    h.supervisor.handleUnexpectedExit({ code: 1, signal: null, stderrTail: 'failed' })
+    await Promise.resolve()
+
+    expect(h.supervisor.isManagedRuntimeExpected).toBe(false)
+    expect(h.ensureRuntime).not.toHaveBeenCalled()
+    expect(h.restartRuntime).not.toHaveBeenCalled()
+    expect(h.statuses).toEqual([])
+  })
+
+  it('recovers when the Runtime is expected but child or discovery state is missing', async () => {
+    const h = harness({ childRunning: false })
+    h.supervisor.setManagedRuntimeExpected(true)
+
+    await h.supervisor.watchdogTick()
+
+    expect(h.ensureRuntime).toHaveBeenCalledOnce()
+    expect(h.checkHealth).not.toHaveBeenCalled()
+    expect(h.statuses.map((status) => status.state)).toEqual(['restarting', 'running'])
+    expect(h.statuses[0]).toMatchObject({ source: 'watchdog', attempt: 1 })
+  })
+
+  it('does not recover after an explicit stop clears the expectation', async () => {
+    const h = harness({ childRunning: false })
+    h.supervisor.setManagedRuntimeExpected(true)
+    h.supervisor.setManagedRuntimeExpected(false)
+
+    await h.supervisor.watchdogTick()
+    h.supervisor.handleUnexpectedExit({ code: 1, signal: null, stderrTail: 'stopped' })
+    await Promise.resolve()
+
+    expect(h.ensureRuntime).not.toHaveBeenCalled()
+    expect(h.statuses).toEqual([])
+  })
+
+  it('does not announce recovery when an explicit stop wins an in-flight ensure', async () => {
+    let releaseEnsure!: () => void
+    const ensureGate = new Promise<void>((resolve) => { releaseEnsure = resolve })
+    const h = harness({ childRunning: false, ensureGate })
+    h.supervisor.setManagedRuntimeExpected(true)
+
+    const tick = h.supervisor.watchdogTick()
+    await vi.waitFor(() => expect(h.ensureRuntime).toHaveBeenCalledOnce())
+    h.supervisor.setManagedRuntimeExpected(false)
+    releaseEnsure()
+    await tick
+
+    expect(h.statuses.map((status) => status.state)).toEqual(['restarting'])
+    expect(h.supervisor.isManagedRuntimeExpected).toBe(false)
+  })
+
+  it('keeps the expectation independent from an ordinary healthy signal', () => {
+    const h = harness({ healthy: true })
+
+    h.supervisor.noteHealthy('probe')
+
+    expect(h.supervisor.isManagedRuntimeExpected).toBe(false)
+  })
+
+  it('clears a stale rollback warning after a newer healthy apply', () => {
+    const h = harness({ healthy: true })
+    h.supervisor.setManagedRuntimeExpected(true)
+    h.supervisor.publish({
+      state: 'running',
+      source: 'settings-apply',
+      rolledBack: true,
+      message: 'Previous settings were restored.'
+    })
+
+    h.supervisor.noteHealthy('settings-apply')
+
+    expect(h.statuses.at(-1)).toMatchObject({ state: 'running', source: 'settings-apply' })
+    expect(h.statuses.at(-1)).not.toHaveProperty('rolledBack')
+    expect(h.statuses.at(-1)).not.toHaveProperty('message')
+  })
+
+  it('shares one restart budget between watchdog recovery and unexpected exits', async () => {
+    const h = harness({ childRunning: false, maxRestarts: 1 })
+    h.supervisor.setManagedRuntimeExpected(true)
+
+    await h.supervisor.watchdogTick()
+    h.supervisor.handleUnexpectedExit({ code: 1, signal: null, stderrTail: 'crashed again' })
+
+    await vi.waitFor(() => {
+      expect(h.statuses.at(-1)).toMatchObject({ state: 'failed', source: 'supervisor' })
+    })
+    expect(h.ensureRuntime).toHaveBeenCalledOnce()
+    expect(h.statuses.map((status) => status.state)).toEqual([
+      'restarting',
+      'running',
+      'crashed',
+      'failed'
+    ])
+  })
+
+  it('keeps restart attempts after a brief healthy recovery', async () => {
+    const h = harness({ maxRestarts: 1 })
+    h.supervisor.setManagedRuntimeExpected(true)
+    h.supervisor.handleUnexpectedExit({ code: 1, signal: null, stderrTail: 'first crash' })
+    await vi.waitFor(() => expect(h.ensureRuntime).toHaveBeenCalledOnce())
+
+    h.supervisor.noteHealthy('brief-probe')
+    h.supervisor.handleUnexpectedExit({ code: 1, signal: null, stderrTail: 'second crash' })
+
+    await vi.waitFor(() => {
+      expect(h.statuses.at(-1)).toMatchObject({ state: 'failed', source: 'supervisor' })
+    })
+    expect(h.ensureRuntime).toHaveBeenCalledOnce()
+  })
+
+  it('does not start crash recovery while watchdog recovery owns the shared lease', async () => {
+    const sleepGate = createGate()
+    const sleepStarted = createGate()
+    const h = harness({
+      childRunning: false,
+      sleepGate: sleepGate.promise,
+      onSleep: sleepStarted.release
+    })
+    h.supervisor.setManagedRuntimeExpected(true)
+
+    const watchdog = h.supervisor.watchdogTick()
+    await sleepStarted.promise
+    h.supervisor.handleUnexpectedExit({ code: 1, signal: null, stderrTail: 'same crash' })
+    await vi.waitFor(() => {
+      expect(h.statuses).toContainEqual(expect.objectContaining({
+        state: 'crashed',
+        source: 'supervisor'
+      }))
+    })
+
+    sleepGate.release()
+    await watchdog
+
+    expect(h.ensureRuntime).toHaveBeenCalledOnce()
+    expect(h.restartRuntime).not.toHaveBeenCalled()
+    expect(h.statuses.filter((status) => status.state === 'restarting')).toHaveLength(1)
+  })
+
+  it('reloads settings after watchdog backoff before restarting an unresponsive Runtime', async () => {
+    const sleepGate = createGate()
+    const sleepStarted = createGate()
+    const initial = { autoStart: true, revision: 1 }
+    const latest = { autoStart: true, revision: 2 }
+    const h = harness({
+      healthy: false,
+      childRunning: true,
+      watchdogFailureThreshold: 1,
+      sleepGate: sleepGate.promise,
+      onSleep: sleepStarted.release,
+      settingsSequence: [initial, latest]
+    })
+    h.supervisor.setManagedRuntimeExpected(true)
+
+    const tick = h.supervisor.watchdogTick()
+    await sleepStarted.promise
+    sleepGate.release()
+    await tick
+
+    expect(h.loadSettings).toHaveBeenCalledTimes(2)
+    expect(h.restartRuntime).toHaveBeenCalledWith(latest)
+    expect(h.ensureRuntime).not.toHaveBeenCalled()
+  })
+
+  it('does not consume restart budget when a lifecycle operation supersedes watchdog backoff', async () => {
+    const sleepGate = createGate()
+    const sleepStarted = createGate()
+    const h = harness({
+      childRunning: false,
+      maxRestarts: 1,
+      sleepGate: sleepGate.promise,
+      onSleep: sleepStarted.release
+    })
+    h.supervisor.setManagedRuntimeExpected(true)
+
+    const firstTick = h.supervisor.watchdogTick()
+    await sleepStarted.promise
+    const applyGate = createGate()
+    h.supervisor.enqueueSettingsApply(() => applyGate.promise, vi.fn())
+    await vi.waitFor(() => expect(h.supervisor.hasPendingOperation()).toBe(true))
+    sleepGate.release()
+    await firstTick
+
+    expect(h.statuses).toEqual([])
+    expect(h.ensureRuntime).not.toHaveBeenCalled()
+
+    applyGate.release()
+    await vi.waitFor(() => expect(h.supervisor.hasPendingOperation()).toBe(false))
+    await h.supervisor.watchdogTick()
+
+    expect(h.ensureRuntime).toHaveBeenCalledOnce()
+    expect(h.statuses.map((status) => status.state)).toEqual(['restarting', 'running'])
+    expect(h.statuses[0]).toMatchObject({ attempt: 1 })
   })
 })

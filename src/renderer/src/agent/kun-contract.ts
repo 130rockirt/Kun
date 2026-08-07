@@ -671,6 +671,8 @@ export type CoreUsageSnapshotJson = {
 export type CoreRuntimeEventJson = {
   kind?: string
   seq?: number
+  /** UTF-16 offset of this incremental assistant delta within its item text. */
+  deltaOffset?: number
   timestamp?: string
   threadId?: string
   turnId?: string

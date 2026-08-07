@@ -1,9 +1,17 @@
-import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, open, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { buildRuntimeCapabilityManifest } from '../contracts/capabilities.js'
 import { publishRuntimeDiscovery } from '../server/runtime-discovery.js'
+import {
+  acquireRuntimeDataDirMigrationLock,
+  runtimeDataDirClaimsPath
+} from '../server/runtime-data-dir-migration-lock.js'
+import {
+  acquireRuntimeDataDirLease,
+  RUNTIME_DATA_DIR_OWNER_FILE
+} from '../server/runtime-data-dir-lease.js'
 import {
   hasUnpublishedGuiRuntime,
   modelConnectionSnapshotFromGuiSettings,
@@ -179,6 +187,193 @@ describe('GUI settings bridge', () => {
       defaultEffort: 'low',
       requestProtocol: 'openai-responses'
     })
+  })
+
+  it('fails closed without changing config while migration owns the data dir', async () => {
+    const fixture = await createFixture()
+    const settings = await readGuiSharedSettings({
+      env: { KUN_GUI_SETTINGS_PATH: fixture.settingsPath },
+      platform: 'darwin',
+      homeDir: fixture.home
+    })
+    const configPath = join(fixture.dataDir, 'config.json')
+    const before = await readFile(configPath, 'utf8')
+    const migration = await acquireRuntimeDataDirMigrationLock(fixture.dataDir)
+    try {
+      await expect(syncGuiProviderCatalogToConfig(fixture.dataDir, settings!))
+        .rejects.toThrow(/migration is active/)
+      await expect(readFile(configPath, 'utf8')).resolves.toBe(before)
+    } finally {
+      await migration.release()
+    }
+  })
+
+  it('fails closed without changing config while a legacy Runtime owner is live', async () => {
+    const fixture = await createFixture()
+    const settings = await readGuiSharedSettings({
+      env: { KUN_GUI_SETTINGS_PATH: fixture.settingsPath },
+      platform: 'darwin',
+      homeDir: fixture.home
+    })
+    const configPath = join(fixture.dataDir, 'config.json')
+    const before = await readFile(configPath, 'utf8')
+    await writeFile(join(fixture.dataDir, RUNTIME_DATA_DIR_OWNER_FILE), JSON.stringify({
+      schemaVersion: 1,
+      pid: process.pid,
+      token: 'legacy-runtime-owner',
+      startedAt: '2026-08-05T00:00:00.000Z'
+    }))
+
+    await expect(syncGuiProviderCatalogToConfig(fixture.dataDir, settings!))
+      .rejects.toThrow(new RegExp(`active process ${process.pid}`))
+    await expect(readFile(configPath, 'utf8')).resolves.toBe(before)
+  })
+
+  it('holds the legacy owner fence for the full config mutation', async () => {
+    const fixture = await createFixture()
+    const settings = await readGuiSharedSettings({
+      env: { KUN_GUI_SETTINGS_PATH: fixture.settingsPath },
+      platform: 'darwin',
+      homeDir: fixture.home
+    })
+    let entered!: () => void
+    const claimAcquired = new Promise<void>((resolve) => { entered = resolve })
+    let continueSync!: () => void
+    const mayContinue = new Promise<void>((resolve) => { continueSync = resolve })
+    const sync = syncGuiProviderCatalogToConfig(fixture.dataDir, settings!, {
+      afterWriterClaimAcquired: async () => {
+        entered()
+        await mayContinue
+      }
+    })
+    await claimAcquired
+
+    const ownerPath = join(fixture.dataDir, RUNTIME_DATA_DIR_OWNER_FILE)
+    await expect(open(ownerPath, 'wx', 0o600)).rejects.toMatchObject({ code: 'EEXIST' })
+    continueSync()
+    await expect(sync).resolves.toMatchObject({ changed: true })
+    await expect(readFile(ownerPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('safely reclaims a stale legacy owner before synchronizing config', async () => {
+    const fixture = await createFixture()
+    const settings = await readGuiSharedSettings({
+      env: { KUN_GUI_SETTINGS_PATH: fixture.settingsPath },
+      platform: 'darwin',
+      homeDir: fixture.home
+    })
+    const ownerPath = join(fixture.dataDir, RUNTIME_DATA_DIR_OWNER_FILE)
+    await writeFile(ownerPath, JSON.stringify({
+      schemaVersion: 1,
+      pid: 2_147_483_647,
+      token: 'stale-legacy-runtime-owner',
+      startedAt: '2026-08-05T00:00:00.000Z'
+    }))
+
+    await expect(syncGuiProviderCatalogToConfig(fixture.dataDir, settings!))
+      .resolves.toMatchObject({ changed: true })
+    await expect(readFile(ownerPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('uses an existing in-process writer authority without a second claim', async () => {
+    const fixture = await createFixture()
+    const settings = await readGuiSharedSettings({
+      env: { KUN_GUI_SETTINGS_PATH: fixture.settingsPath },
+      platform: 'darwin',
+      homeDir: fixture.home
+    })
+    const lease = await acquireRuntimeDataDirLease(fixture.dataDir)
+    try {
+      await expect(syncGuiProviderCatalogToConfig(fixture.dataDir, settings!, {
+        writerAuthority: lease.authority
+      })).resolves.toMatchObject({ changed: true })
+      expect((await readdir(runtimeDataDirClaimsPath(fixture.dataDir)))
+        .filter((name) => name.startsWith('claim-'))).toHaveLength(1)
+    } finally {
+      await lease.release()
+    }
+  })
+
+  it('serializes authority-backed config mutations and makes release await the queue', async () => {
+    const fixture = await createFixture()
+    const settings = await readGuiSharedSettings({
+      env: { KUN_GUI_SETTINGS_PATH: fixture.settingsPath },
+      platform: 'darwin',
+      homeDir: fixture.home
+    })
+    const nextSettings = {
+      ...settings!,
+      defaultProviderId: 'kimi-code',
+      defaultModel: 'kimi-for-coding-highspeed'
+    }
+    const lease = await acquireRuntimeDataDirLease(fixture.dataDir)
+    let firstEntered!: () => void
+    const firstAtWrite = new Promise<void>((resolve) => { firstEntered = resolve })
+    let allowFirst!: () => void
+    const firstMayWrite = new Promise<void>((resolve) => { allowFirst = resolve })
+    let secondEntered!: () => void
+    const secondAtWrite = new Promise<void>((resolve) => { secondEntered = resolve })
+    let allowSecond!: () => void
+    const secondMayWrite = new Promise<void>((resolve) => { allowSecond = resolve })
+    let secondStarted = false
+    const first = syncGuiProviderCatalogToConfig(fixture.dataDir, settings!, {
+      writerAuthority: lease.authority,
+      authoritative: true,
+      beforeConfigWrite: async () => {
+        firstEntered()
+        await firstMayWrite
+      }
+    })
+    await firstAtWrite
+    const second = syncGuiProviderCatalogToConfig(fixture.dataDir, nextSettings, {
+      writerAuthority: lease.authority,
+      authoritative: true,
+      beforeConfigWrite: async () => {
+        secondStarted = true
+        secondEntered()
+        await secondMayWrite
+      }
+    })
+    let releaseFinished = false
+    const release = lease.release().then(() => { releaseFinished = true })
+
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      expect(secondStarted).toBe(false)
+      expect(releaseFinished).toBe(false)
+      allowFirst()
+      await secondAtWrite
+      expect(releaseFinished).toBe(false)
+      allowSecond()
+      await expect(Promise.all([first, second])).resolves.toHaveLength(2)
+      await release
+      expect(releaseFinished).toBe(true)
+      const config = JSON.parse(await readFile(join(fixture.dataDir, 'config.json'), 'utf8'))
+      expect(config.serve).toMatchObject({ model: 'kimi-for-coding-highspeed' })
+    } finally {
+      allowFirst()
+      allowSecond()
+      await Promise.allSettled([first, second, release])
+    }
+  })
+
+  it('releases the short config claim when synchronization throws', async () => {
+    const fixture = await createFixture()
+    const settings = await readGuiSharedSettings({
+      env: { KUN_GUI_SETTINGS_PATH: fixture.settingsPath },
+      platform: 'darwin',
+      homeDir: fixture.home
+    })
+    await writeFile(
+      join(fixture.dataDir, 'config.json'),
+      JSON.stringify({ serve: { port: -1 } }),
+      'utf8'
+    )
+
+    await expect(syncGuiProviderCatalogToConfig(fixture.dataDir, settings!))
+      .rejects.toThrow(/invalid serve config/)
+    const migration = await acquireRuntimeDataDirMigrationLock(fixture.dataDir)
+    await migration.release()
   })
 
   it('preserves canonical permission defaults when legacy GUI settings omit them', async () => {

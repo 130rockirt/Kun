@@ -722,9 +722,7 @@ describe('cli', () => {
         },
         runtime: {
           toolStorm: {
-            enabled: true,
-            windowSize: 5,
-            threshold: 4
+            enabled: true
           },
           toolArgumentRepair: {
             maxStringBytes: 4096
@@ -789,8 +787,7 @@ describe('cli', () => {
       expect(parsed.contextCompaction?.summaryInputMaxBytes).toBe(98_304)
       expect(parsed.models?.profiles?.['custom-1m']?.contextCompaction?.softRatio).toBe(0.7)
       expect(parsed.models?.profiles?.['custom-1m']?.inputModalities).toEqual(['text', 'image'])
-      expect(parsed.runtime?.toolStorm?.windowSize).toBe(5)
-      expect(parsed.runtime?.toolStorm?.threshold).toBe(4)
+      expect(parsed.runtime?.toolStorm?.enabled).toBe(true)
       expect(parsed.runtime?.toolArgumentRepair?.maxStringBytes).toBe(4096)
       expect(parsed.capabilities.web.enabled).toBe(true)
       expect(parsed.capabilities.web.fetchEnabled).toBe(true)

@@ -21,6 +21,12 @@ import {
   classifyManagedRuntimeHotApplyResponse,
   syncGuiManagedKunConfig
 } from './kun-runtime-config-service'
+import {
+  imageGenConfigForRuntime,
+  musicGenConfigForRuntime,
+  speechGenConfigForRuntime,
+  videoGenConfigForRuntime
+} from './kun-runtime-capability-config'
 
 describe('Kun runtime config service', () => {
   it('projects canonical runtime fields into a hot-apply body without restart-only config', async () => {
@@ -152,6 +158,56 @@ describe('Kun runtime config service', () => {
     expect(body.modelSelection).toBeUndefined()
   })
 
+  it('persists only provider ids for Registry-backed media capabilities', () => {
+    const defaults = defaultKunRuntimeSettings()
+    const capabilities = {
+      imageGen: imageGenConfigForRuntime({
+        ...defaults.imageGeneration,
+        enabled: true,
+        providerId: 'media-provider',
+        apiKey: 'image-plaintext',
+        baseUrl: 'https://media.example/v1',
+        model: 'image-model'
+      }, {}),
+      speechGen: speechGenConfigForRuntime({
+        ...defaults.textToSpeech,
+        enabled: true,
+        providerId: 'media-provider',
+        apiKey: 'speech-plaintext',
+        baseUrl: 'https://media.example/v1',
+        model: 'speech-model'
+      }, {}),
+      musicGen: musicGenConfigForRuntime({
+        ...defaults.musicGeneration,
+        enabled: true,
+        providerId: 'media-provider',
+        apiKey: 'music-plaintext',
+        baseUrl: 'https://media.example/v1',
+        model: 'music-model'
+      }, {}),
+      videoGen: videoGenConfigForRuntime({
+        ...defaults.videoGeneration,
+        enabled: true,
+        providerId: 'media-provider',
+        apiKey: 'video-plaintext',
+        baseUrl: 'https://media.example/v1',
+        model: 'video-model'
+      }, {})
+    }
+
+    expect(capabilities).toMatchObject({
+      imageGen: { providerId: 'media-provider' },
+      speechGen: { providerId: 'media-provider' },
+      musicGen: { providerId: 'media-provider' },
+      videoGen: { providerId: 'media-provider' }
+    })
+    expect(capabilities.imageGen).not.toHaveProperty('apiKey')
+    expect(capabilities.speechGen).not.toHaveProperty('apiKey')
+    expect(capabilities.musicGen).not.toHaveProperty('apiKey')
+    expect(capabilities.videoGen).not.toHaveProperty('apiKey')
+    expect(JSON.stringify(capabilities)).not.toContain('plaintext')
+  })
+
   it('persists the GUI new-thread capture default while keeping the facility available', async () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'kun-runtime-config-llm-debug-'))
     const runtime = {
@@ -234,7 +290,7 @@ describe('Kun runtime config service', () => {
         defaultEffort: 'high',
         requestProtocol: 'openai-chat-completions'
       })
-      expect(config.serve.credentialSourceId).toBe('settings:provider:kimi-code')
+      expect(config.serve.credentialSourceId).toBeUndefined()
     } finally {
       await rm(dataDir, { recursive: true, force: true })
     }

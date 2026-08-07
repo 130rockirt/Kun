@@ -18,7 +18,6 @@ import {
 } from '../../loop/design-mode.js'
 import {
   PLAN_MODE_INSTRUCTION,
-  goalContinuationInstruction,
   isStalePlanContext,
   memoryInstructions,
   todoContinuationInstruction
@@ -440,7 +439,12 @@ export function createCursorSdkRuntime(
         memoryBlocks = memoryInstructions(memories)
       }
       const plan = resolveCursorPlanContext(thread, turnId)
-      const goalInstruction = plan.planMode ? null : goalContinuationInstruction(thread.goal)
+      if (!plan.planMode && thread.goal?.status === 'active') {
+        await deps.turns.ensureGoalContext(threadId, turnId, signal)
+      }
+      if (signal.aborted) {
+        return { instructionBlocks: [], activeSkillIds: [], tools: [], customTools: {} }
+      }
       const todoInstruction = plan.planMode ? null : todoContinuationInstruction(thread.todos)
       const instructionBlocks = [
         ...(graphPolicy ? [graphPolicy.instruction] : []),
@@ -451,7 +455,6 @@ export function createCursorSdkRuntime(
             ? [DESIGN_MODE_INSTRUCTION]
             : []),
         ...(instructionResolution?.instruction ? [instructionResolution.instruction] : []),
-        ...(goalInstruction ? [goalInstruction] : []),
         ...(todoInstruction ? [todoInstruction] : []),
         ...memoryBlocks,
         ...(skillResolution?.catalogInstruction ? [skillResolution.catalogInstruction] : []),
@@ -461,11 +464,23 @@ export function createCursorSdkRuntime(
       let graphPlanCommitted = false
       let graphPlanRetryAllowed = true
       const customTools = toolHost
-        ? buildCursorCustomTools(tools, async (toolName, args, toolCallId) => {
+        ? buildCursorCustomTools(tools, async ({ toolName, args, toolCallId }) => {
             const latestThread = await deps.threadStore.get(threadId)
             const latestTurn = latestThread?.turns.find((candidate) => candidate.id === turnId)
             if (!latestThread || !latestTurn) {
               return { output: 'Cursor SDK Kun tool context expired', isError: true }
+            }
+            // Resolve the tool against the bridged catalog so provider and
+            // tool-kind stay authoritative. An unknown name is a structured
+            // error instead of a bypassed registry resolution.
+            const spec = tools.find((tool) => tool.name.trim() === toolName)
+            if (!spec) {
+              return {
+                output: {
+                  error: `Kun tool ${toolName} is not advertised in the active tool catalog`
+                },
+                isError: true
+              }
             }
             const latestActiveSkillIds = await resolveActiveSkillIds(
               latestThread,
@@ -506,6 +521,8 @@ export function createCursorSdkRuntime(
               const result = await toolHost.execute({
                 callId: toolCallId?.trim() || deps.ids.next('call_cursor_sdk'),
                 toolName,
+                ...(spec.providerId ? { providerId: spec.providerId } : {}),
+                ...(spec.toolKind ? { toolKind: spec.toolKind } : {}),
                 arguments: args
               }, context)
               if (result.item.kind !== 'tool_result') {

@@ -384,6 +384,7 @@ describe('Agent Perspective semantic projection', () => {
     })
 
     const malformed = trace('2', {})
+    if (!malformed.request) throw new Error('fixture must include a request payload')
     malformed.request.body.text = '{'
     expect(parseSemanticRequest(malformed)).toMatchObject({ body: null, prompts: [], tools: [] })
     expect(parseSemanticRequest(malformed).parseError).toBeTruthy()

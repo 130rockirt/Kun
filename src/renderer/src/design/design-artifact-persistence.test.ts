@@ -75,6 +75,61 @@ describe('design artifact persistence', () => {
     expect(parsed?.previewStatus).toBe('ready')
   })
 
+  it('parses, dedupes, and round-trips per-version board-hidden tombstones', () => {
+    const createdAt = '2026-06-20T00:00:00.000Z'
+    const artifact: DesignArtifact = {
+      id: 'draft',
+      kind: 'html',
+      title: 'Draft',
+      relativePath: '.kun-design/draft/v2.html',
+      createdAt,
+      updatedAt: createdAt,
+      versions: [
+        { id: 'draft-v2', relativePath: '.kun-design/draft/v2.html', createdAt, summary: '' },
+        { id: 'draft-v1', relativePath: '.kun-design/draft/v1.html', createdAt, summary: '' }
+      ],
+      designMdPath: '.kun-design/draft/DESIGN.md',
+      node: {
+        x: 120,
+        y: 240,
+        width: 512,
+        height: 384,
+        sizeMode: 'manual',
+        boardHiddenVersionIds: ['draft-v1']
+      }
+    }
+
+    const parsed = parseArtifactMeta(serializeArtifactMeta(artifact), 'draft')
+    expect(parsed?.node?.boardHiddenVersionIds).toEqual(['draft-v1'])
+    expect(parseArtifactMeta(serializeArtifactMeta(parsed!), 'draft')?.node?.boardHiddenVersionIds)
+      .toEqual(['draft-v1'])
+  })
+
+  it('dedupes and drops invalid entries from boardHiddenVersionIds', () => {
+    const createdAt = '2026-06-20T00:00:00.000Z'
+    const parsed = parseArtifactMeta(
+      JSON.stringify({
+        id: 'draft',
+        kind: 'html',
+        title: 'Draft',
+        relativePath: '.kun-design/draft/v1.html',
+        createdAt,
+        updatedAt: createdAt,
+        versions: [],
+        node: {
+          x: 120,
+          y: 240,
+          width: 512,
+          height: 384,
+          boardHiddenVersionIds: ['draft-v1', 'draft-v1', '', 42, 'draft-v2']
+        }
+      }),
+      'draft'
+    )
+
+    expect(parsed?.node?.boardHiddenVersionIds).toEqual(['draft-v1', 'draft-v2'])
+  })
+
   it('keeps persisted version order while exposing the current relativePath version', () => {
     const createdAt = '2026-06-20T00:00:00.000Z'
     const parsed = parseArtifactMeta(
@@ -230,6 +285,33 @@ describe('design artifact persistence', () => {
       versions: [{ id: 'bad-v1', relativePath: '.kun-design/doc/bad/v1.svg' }],
       designMdPath: '.kun-design/doc/bad/DESIGN.md'
     })
+  })
+
+  it('round-trips the imported component prototype source and drops unsafe sources', () => {
+    const createdAt = '2026-06-20T00:00:00.000Z'
+    const imported: DesignArtifact = {
+      id: 'draft',
+      kind: 'html',
+      title: 'Date range picker',
+      relativePath: '.kun-design/doc/draft/v1.html',
+      createdAt,
+      updatedAt: createdAt,
+      versions: [{ id: 'draft-v1', relativePath: '.kun-design/doc/draft/v1.html', createdAt, summary: '' }],
+      importedFromPath: '.kun-design/component-prototypes/date-picker/prototype.html'
+    }
+
+    expect(parseArtifactMeta(serializeArtifactMeta(imported), 'draft')?.importedFromPath)
+      .toBe(imported.importedFromPath)
+
+    expect(parseArtifactMeta(JSON.stringify({
+      ...imported,
+      importedFromPath: '.kun-design/other/screen.html'
+    }), 'draft')?.importedFromPath).toBeUndefined()
+
+    expect(parseArtifactMeta(JSON.stringify({
+      ...imported,
+      importedFromPath: '.kun-design/component-prototypes/../secret/prototype.html'
+    }), 'draft')?.importedFromPath).toBeUndefined()
   })
 
   it('refuses to delete directories derived from untrusted artifact paths', async () => {

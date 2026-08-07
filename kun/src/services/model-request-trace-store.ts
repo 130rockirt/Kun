@@ -44,7 +44,7 @@ export class ModelRequestTraceStore {
           await chmod(path, 0o600)
           this.rememberRecent(threadId, record)
         } catch (error) {
-          this.rememberWarning(`trace persistence failed: ${safeError(error)}`)
+          this.rememberWarning(classifyTracePersistenceError(error))
         }
       })
     this.writes.set(threadId, queued)
@@ -247,4 +247,23 @@ function isMissingFileError(error: unknown): boolean {
 
 function safeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+/**
+ * Classifies a trace-persistence failure so operators can distinguish disk
+ * exhaustion from other write errors without parsing generic "fetch failed"
+ * / "Internal server error" responses. Keeps the code path free of retry loops:
+ * a failed append is reported once through the bounded warning set and the
+ * in-memory active record remains servable.
+ */
+export function classifyTracePersistenceError(error: unknown): string {
+  const code = String((error as { code?: unknown })?.code ?? '')
+  const message = safeError(error)
+  if (code === 'ENOSPC') {
+    return `storage exhausted (ENOSPC); trace persistence degraded, in-memory records retained: ${message}`
+  }
+  if (code === 'EACCES' || code === 'EPERM') {
+    return `trace persistence permission denied (${code}): ${message}`
+  }
+  return `trace persistence failed: ${message}`
 }

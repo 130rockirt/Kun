@@ -153,6 +153,12 @@ function createStore(initial: AppSettingsV1) {
       current = { ...current, workflow: mergeWorkflowSettings(current.workflow, partial.workflow) }
       return current
     },
+    update: async (
+      mutation: (settings: AppSettingsV1) => AppSettingsV1 | Promise<AppSettingsV1>
+    ) => {
+      current = await mutation(current)
+      return current
+    },
     read: () => current
   }
 }

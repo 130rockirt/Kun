@@ -171,6 +171,11 @@ export type ServerRuntime = {
   eventStreamRegistry?: ThreadEventStreamRegistry
   /** Optional troubleshooting buffer of the most recent LLM rounds (in-memory). */
   llmDebug?: LlmDebugRecorder
+  /**
+   * Cheap non-sensitive live counters for stall/heartbeat diagnostics.
+   * Must never touch the filesystem or await persistence.
+   */
+  liveCounters?: () => { inflight: number; activeCaptures: number }
   approvalGate: ApprovalGate
   userInputGate: UserInputGate
   workspaceInspector: WorkspaceInspector

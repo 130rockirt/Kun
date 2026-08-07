@@ -124,7 +124,7 @@ describe('ArchivedThreadsSettingsSection', () => {
     expect(permissionsIndex).toBe(-1)
     expect(archivesIndex).toBeGreaterThan(subagentsIndex)
     expect(migrationIndex).toBeGreaterThan(archivesIndex)
-    expect(html.match(/data-cursor-spotlight-target/g)?.length).toBe(20)
+    expect(html.match(/data-cursor-spotlight-target/g)?.length).toBe(21)
   })
 
   it('groups compact settings navigation without pushing the footer away', () => {

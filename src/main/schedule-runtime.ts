@@ -36,6 +36,7 @@ import {
   summarizeTaskResult,
   waitForAssistantTextViaRuntime,
   writeJson,
+  type PowerSaveControllerLike,
   type RunPromptOptions,
   type ScheduleModelConfig,
   type ScheduleRuntimeDeps
@@ -45,6 +46,7 @@ import {
   findAvailablePoolIndex,
   releaseWorktree
 } from './services/worktree-service'
+import { PowerSaveController } from './power-save-controller'
 
 export { computeScheduleNextRunAt } from './schedule-runtime-helpers'
 
@@ -79,7 +81,8 @@ export class ScheduleRuntime {
   }>()
   private worktreeLeases = new Map<string, { projectPath: string; poolIndex: number }>()
   private drainingQueue = false
-  private powerSaveBlockerId: number | null = null
+  private readonly powerSaveController: PowerSaveControllerLike | null
+  private keepAwakeHeld = false
   private readonly stopController = new AbortController()
   private readonly activeTasks = new Set<Promise<unknown>>()
   private stopped = false
@@ -87,6 +90,16 @@ export class ScheduleRuntime {
 
   constructor(deps: ScheduleRuntimeDeps) {
     this.deps = deps
+    this.powerSaveController =
+      deps.powerSaveController ??
+      (deps.powerSaveBlocker ? new PowerSaveController(deps.powerSaveBlocker) : null)
+  }
+
+  private async loadSettings(): Promise<AppSettingsV1> {
+    const settings = await this.deps.store.load()
+    return this.deps.withModelCredentials
+      ? this.deps.withModelCredentials(settings)
+      : settings
   }
 
   private resolveScheduleModelConfig(
@@ -117,7 +130,7 @@ export class ScheduleRuntime {
       this.scheduler = null
     }
     this.closeInternalServer()
-    this.stopPowerSaveBlocker()
+    this.releasePowerSave()
     this.queuedTaskIds.clear()
     this.queuedTaskModes.clear()
     for (const taskId of [...this.taskCompletions.keys()]) {
@@ -132,7 +145,7 @@ export class ScheduleRuntime {
   }
 
   async status(): Promise<ScheduleRuntimeStatus> {
-    const settings = await this.deps.store.load()
+    const settings = await this.loadSettings()
     return {
       internalServerRunning: this.server !== null,
       internalUrl: internalUrl(settings),
@@ -144,7 +157,7 @@ export class ScheduleRuntime {
 
   async runTask(taskId: string): Promise<ScheduleRunResult> {
     if (this.stopped) return { ok: false, message: 'Schedule runtime stopped.' }
-    const settings = await this.deps.store.load()
+    const settings = await this.loadSettings()
     const task = settings.schedule.tasks.find((item) => item.id === taskId)
     if (!task) return { ok: false, message: 'Task not found.' }
     if (!task.prompt.trim()) return { ok: false, message: 'Task prompt is empty.' }
@@ -223,7 +236,7 @@ export class ScheduleRuntime {
       mode?: ScheduleRunMode | null
     } = {}
   ): Promise<ScheduleTaskFromTextResult> {
-    const settings = await this.deps.store.load()
+    const settings = await this.loadSettings()
     try {
       const clawChannel = this.resolveClawChannel(settings, options.clawChannelId)
       const modelConfig = this.resolveScheduleModelConfig(settings, {
@@ -234,7 +247,9 @@ export class ScheduleRuntime {
       const request = await detectClawScheduledTaskRequest(
         settings,
         text,
-        modelConfig.model
+        modelConfig.model,
+        new Date(),
+        modelConfig.providerId
       )
       if (!request) return { kind: 'noop' }
       const task = buildScheduledTaskFromDetectedRequest({
@@ -271,12 +286,12 @@ export class ScheduleRuntime {
   }
 
   async listTasks(): Promise<ScheduledTaskV1[]> {
-    const settings = await this.deps.store.load()
+    const settings = await this.loadSettings()
     return settings.schedule.tasks
   }
 
   async createTask(task: ScheduledTaskV1): Promise<ScheduledTaskV1> {
-    const settings = await this.deps.store.load()
+    const settings = await this.loadSettings()
     const saved = await this.deps.store.patch({
       schedule: {
         enabled: true,
@@ -299,7 +314,7 @@ export class ScheduleRuntime {
     enabled?: boolean
     schedule: Partial<ScheduledTaskV1['schedule']> & { kind: ScheduledTaskV1['schedule']['kind'] }
   }): Promise<ScheduledTaskV1> {
-    const settings = await this.deps.store.load()
+    const settings = await this.loadSettings()
     const clawChannel = this.resolveClawChannel(settings, input.clawChannelId)
     const modelConfig = this.resolveScheduleModelConfig(settings, {
       providerId: input.providerId ?? settings.schedule.providerId,
@@ -338,12 +353,12 @@ export class ScheduleRuntime {
       lastThreadId: ''
     }
     const saved = await this.createTask(task)
-    await this.ensureNextRuns(await this.deps.store.load())
+    await this.ensureNextRuns(await this.loadSettings())
     return saved
   }
 
   async updateTaskById(taskId: string, patch: Partial<ScheduledTaskV1>): Promise<ScheduledTaskV1 | null> {
-    const settings = await this.deps.store.load()
+    const settings = await this.loadSettings()
     const task = settings.schedule.tasks.find((item) => item.id === taskId)
     if (!task) return null
     const now = new Date().toISOString()
@@ -366,7 +381,7 @@ export class ScheduleRuntime {
   }
 
   async deleteTaskById(taskId: string): Promise<boolean> {
-    const settings = await this.deps.store.load()
+    const settings = await this.loadSettings()
     if (!settings.schedule.tasks.some((item) => item.id === taskId)) return false
     const saved = await this.deps.store.patch({
       schedule: {
@@ -388,10 +403,10 @@ export class ScheduleRuntime {
 
   private async tick(): Promise<void> {
     if (this.stopped) return
-    const settings = await this.deps.store.load()
+    const settings = await this.loadSettings()
     if (!settings.schedule.enabled) return
     await this.ensureNextRuns(settings)
-    const fresh = await this.deps.store.load()
+    const fresh = await this.loadSettings()
     const now = Date.now()
     const dueTasks = fresh.schedule.tasks
       .filter((task) => task.enabled && task.schedule.kind !== 'manual')
@@ -406,54 +421,50 @@ export class ScheduleRuntime {
     }
   }
 
-  private async ensureNextRuns(settings: AppSettingsV1): Promise<void> {
+  private async ensureNextRuns(_settings: AppSettingsV1): Promise<void> {
     if (this.stopped) return
-    if (!settings.schedule.enabled) {
-      this.syncPowerSaveBlocker(settings)
-      return
-    }
-    let changed = false
     const now = new Date()
-    const tasks = settings.schedule.tasks.map((task) => {
-      const wasRunning = task.lastStatus === 'running' && !this.runningTaskIds.has(task.id)
-      const wasQueued = task.lastStatus === 'queued' && !this.queuedTaskIds.has(task.id)
-      if (wasQueued && task.enabled && task.schedule.kind !== 'manual') {
-        this.queuedTaskIds.add(task.id)
-        this.queuedTaskModes.set(task.id, true)
-        return task
-      }
-      const wasInterrupted = wasRunning || wasQueued
-      if (!task.enabled || task.schedule.kind === 'manual' || this.runningTaskIds.has(task.id)) {
-        if (!wasInterrupted) return task
+    const saved = await this.deps.store.update((current) => {
+      if (!current.schedule.enabled) return current
+      let changed = false
+      const tasks = current.schedule.tasks.map((task) => {
+        const wasRunning = task.lastStatus === 'running' && !this.runningTaskIds.has(task.id)
+        const wasQueued = task.lastStatus === 'queued' && !this.queuedTaskIds.has(task.id)
+        if (wasQueued && task.enabled && task.schedule.kind !== 'manual') {
+          this.queuedTaskIds.add(task.id)
+          this.queuedTaskModes.set(task.id, true)
+          return task
+        }
+        const wasInterrupted = wasRunning || wasQueued
+        if (!task.enabled || task.schedule.kind === 'manual' || this.runningTaskIds.has(task.id)) {
+          if (!wasInterrupted) return task
+          changed = true
+          return {
+            ...task,
+            ...(task.schedule.kind === 'at' ? { enabled: false } : {}),
+            nextRunAt: task.schedule.kind === 'at' ? '' : task.nextRunAt,
+            lastStatus: 'error' as const,
+            lastMessage: 'Task was interrupted before completion.',
+            updatedAt: now.toISOString()
+          }
+        }
+        if (task.nextRunAt && !wasInterrupted) return task
         changed = true
         return {
           ...task,
-          ...(task.schedule.kind === 'at' ? { enabled: false } : {}),
-          nextRunAt: task.schedule.kind === 'at' ? '' : task.nextRunAt,
-          lastStatus: 'error' as const,
-          lastMessage: 'Task was interrupted before completion.',
-          updatedAt: now.toISOString()
+          nextRunAt: computeScheduleNextRunAt(task, now),
+          ...(wasInterrupted
+            ? {
+                lastStatus: 'error' as const,
+                lastMessage: 'Task was interrupted before completion.',
+                updatedAt: now.toISOString()
+              }
+            : {})
         }
-      }
-      if (task.nextRunAt && !wasInterrupted) return task
-      changed = true
-      return {
-        ...task,
-        nextRunAt: computeScheduleNextRunAt(task, now),
-        ...(wasInterrupted
-          ? {
-              lastStatus: 'error' as const,
-              lastMessage: 'Task was interrupted before completion.',
-              updatedAt: now.toISOString()
-            }
-          : {})
-      }
+      })
+      if (!changed) return current
+      return { ...current, schedule: { ...current.schedule, tasks } }
     })
-    if (!changed) {
-      this.syncPowerSaveBlocker(settings)
-      return
-    }
-    const saved = await this.deps.store.patch({ schedule: { ...settings.schedule, tasks } })
     this.syncPowerSaveBlocker(saved)
   }
 
@@ -461,9 +472,12 @@ export class ScheduleRuntime {
     taskId: string,
     updater: (task: ScheduledTaskV1, settings: AppSettingsV1) => ScheduledTaskV1
   ): Promise<AppSettingsV1> {
-    const settings = await this.deps.store.load()
-    const tasks = settings.schedule.tasks.map((task) => task.id === taskId ? updater(task, settings) : task)
-    const saved = await this.deps.store.patch({ schedule: { ...settings.schedule, tasks } })
+    const saved = await this.deps.store.update((current) => {
+      const tasks = current.schedule.tasks.map((task) =>
+        task.id === taskId ? updater(task, current) : task
+      )
+      return { ...current, schedule: { ...current.schedule, tasks } }
+    })
     this.syncPowerSaveBlocker(saved)
     return saved
   }
@@ -490,7 +504,7 @@ export class ScheduleRuntime {
         this.runningTaskIds.size < MAX_CONCURRENT_BACKGROUND_TASKS &&
         this.queuedTaskIds.size > 0
       ) {
-        const settings = await this.deps.store.load()
+        const settings = await this.loadSettings()
         const queued = settings.schedule.tasks
           .filter((task) => this.queuedTaskIds.has(task.id))
           .sort((left, right) => (right.priority ?? 0) - (left.priority ?? 0) || left.createdAt.localeCompare(right.createdAt))
@@ -604,7 +618,7 @@ export class ScheduleRuntime {
     }))
 
     try {
-      const settings = await this.deps.store.load()
+      const settings = await this.loadSettings()
       const clawChannel = this.resolveTaskClawChannel(settings, task)
       let workspaceRoot = this.resolveTaskWorkspaceRoot(settings, task, clawChannel)
       if (task.useWorktree) {
@@ -712,7 +726,7 @@ export class ScheduleRuntime {
 
   private async monitorTaskTurn(taskId: string, threadId: string, turnId: string): Promise<void> {
     try {
-      const settings = await this.deps.store.load()
+      const settings = await this.loadSettings()
       const task = settings.schedule.tasks.find((item) => item.id === taskId)
       const text = await this.waitForAssistantText(
         settings,
@@ -864,7 +878,7 @@ export class ScheduleRuntime {
 
   private async handleInternalRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
     try {
-      const settings = await this.deps.store.load()
+      const settings = await this.loadSettings()
       const url = new URL(req.url ?? '/', 'http://127.0.0.1')
       if (!url.pathname.startsWith('/schedule/internal/')) {
         writeJson(res, 404, { ok: false, message: 'Not found.' })
@@ -975,39 +989,24 @@ export class ScheduleRuntime {
       settings.schedule.keepAwake &&
       settings.schedule.enabled &&
       hasEnabledScheduledTask(settings)
-    if (!shouldKeepAwake) {
-      this.stopPowerSaveBlocker()
-      return
-    }
-    if (this.isPowerSaveBlockerActive()) return
-    const blocker = this.deps.powerSaveBlocker
-    if (!blocker) return
-    this.powerSaveBlockerId = blocker.start('prevent-app-suspension')
+    if (shouldKeepAwake) this.acquirePowerSave()
+    else this.releasePowerSave()
   }
 
-  private stopPowerSaveBlocker(): void {
-    const blocker = this.deps.powerSaveBlocker
-    const id = this.powerSaveBlockerId
-    this.powerSaveBlockerId = null
-    if (!blocker || id == null) return
-    try {
-      if (blocker.isStarted(id)) blocker.stop(id)
-    } catch (error) {
-      this.deps.logError('schedule-power-save', 'Failed to stop power save blocker', {
-        message: error instanceof Error ? error.message : String(error)
-      })
-    }
+  private acquirePowerSave(): void {
+    if (this.keepAwakeHeld || !this.powerSaveController) return
+    this.powerSaveController.acquire()
+    this.keepAwakeHeld = true
+  }
+
+  private releasePowerSave(): void {
+    if (!this.keepAwakeHeld || !this.powerSaveController) return
+    this.powerSaveController.release()
+    this.keepAwakeHeld = false
   }
 
   private isPowerSaveBlockerActive(): boolean {
-    const blocker = this.deps.powerSaveBlocker
-    const id = this.powerSaveBlockerId
-    if (!blocker || id == null) return false
-    try {
-      return blocker.isStarted(id)
-    } catch {
-      return false
-    }
+    return this.powerSaveController?.isActive() ?? false
   }
 }
 

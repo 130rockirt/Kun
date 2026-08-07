@@ -130,6 +130,9 @@ const DataMigrationSettingsSection = lazy(() =>
 const StorageRelocationSettingsSection = lazy(() =>
   import('./settings-section-storage-relocation').then((module) => ({ default: module.StorageRelocationSettingsSection }))
 )
+const UninstallSettingsSection = lazy(() =>
+  import('./settings-section-uninstall').then((module) => ({ default: module.UninstallSettingsSection }))
+)
 const WriteDebugLogModal = lazy(() =>
   import('./settings-debug-log').then((module) => ({ default: module.WriteDebugLogModal }))
 )
@@ -172,13 +175,9 @@ const DEFAULT_PROJECT_CONFIG_TEXT = `${JSON.stringify({
 export function SettingsView(): ReactElement {
   const { t, i18n } = useTranslation('settings')
   const { t: tCommon } = useTranslation('common')
-  const setRoute = useChatStore((s) => s.setRoute)
-  const settingsReturnRoute = useChatStore((s) => s.settingsReturnRoute)
+  const closeSettings = useChatStore((s) => s.closeSettings)
   const settingsSection = useChatStore((s) => s.settingsSection)
   const openCode = useChatStore((s) => s.openCode)
-  const openWrite = useChatStore((s) => s.openWrite)
-  const openClaw = useChatStore((s) => s.openClaw)
-  const openSchedule = useChatStore((s) => s.openSchedule)
   const openInitialSetup = useChatStore((s) => s.openInitialSetup)
   const openPlugins = useChatStore((s) => s.openPlugins)
   const applyI18n = useChatStore((s) => s.applyI18nFromSettings)
@@ -1056,23 +1055,7 @@ export function SettingsView(): ReactElement {
     void (async () => {
       await flushPendingSave()
       await reloadUiSettings()
-      if (settingsReturnRoute === 'write') {
-        await openWrite()
-        return
-      }
-      if (settingsReturnRoute === 'claw') {
-        openClaw()
-        return
-      }
-      if (settingsReturnRoute === 'schedule') {
-        openSchedule()
-        return
-      }
-      if (settingsReturnRoute === 'plugins') {
-        setRoute('plugins')
-        return
-      }
-      await openCode()
+      closeSettings()
     })()
   }
 
@@ -1409,7 +1392,7 @@ export function SettingsView(): ReactElement {
                 {categoryDescription}
               </p>
             </div>
-            {category !== 'extensions' && category !== 'dataMigration' && category !== 'storage' ? <span
+            {category !== 'extensions' && category !== 'dataMigration' && category !== 'storage' && category !== 'uninstall' ? <span
               title={saveStatus === 'error' && saveError ? saveError : undefined}
               className={`shrink-0 rounded-full px-3 py-1 text-[12px] font-medium ${
                 portError
@@ -1433,7 +1416,7 @@ export function SettingsView(): ReactElement {
             </span> : null}
           </div> : null}
 
-          {category !== 'extensions' && category !== 'dataMigration' && category !== 'storage' && saveStatus === 'error' && saveError ? (
+          {category !== 'extensions' && category !== 'dataMigration' && category !== 'storage' && category !== 'uninstall' && saveStatus === 'error' && saveError ? (
             <div
               role="alert"
               className="mb-5 rounded-[var(--ds-radius-card)] border border-red-200 bg-red-50 px-4 py-3 text-[13px] leading-5 text-red-800 dark:border-red-500/25 dark:bg-red-500/10 dark:text-red-200"
@@ -1477,12 +1460,13 @@ export function SettingsView(): ReactElement {
               {category === 'debug' ? <LlmDebugSettingsSection ctx={settingsSectionContext} /> : null}
               {category === 'dataMigration' ? <DataMigrationSettingsSection /> : null}
               {category === 'storage' ? <StorageRelocationSettingsSection /> : null}
+              {category === 'uninstall' ? <UninstallSettingsSection /> : null}
             </Suspense>
           </div>
           </div>
         </div>
       </div>
-      {category !== 'extensions' && category !== 'dataMigration' && category !== 'storage' && saveStatus === 'error' && saveError ? (
+      {category !== 'extensions' && category !== 'dataMigration' && category !== 'storage' && category !== 'uninstall' && saveStatus === 'error' && saveError ? (
         <div
           role="alert"
           className="ds-no-drag fixed bottom-6 right-8 z-30 flex max-w-[min(560px,calc(100vw-3rem))] items-center gap-3 rounded-2xl border border-red-300/70 bg-red-50/95 px-4 py-3 text-red-900 shadow-2xl shadow-red-950/10 backdrop-blur dark:border-red-500/30 dark:bg-red-950/90 dark:text-red-100"

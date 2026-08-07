@@ -2,6 +2,7 @@ import type {
   ChatBlock,
   RuntimeErrorEventPayload,
   RuntimeStatusEventPayload,
+  ThreadDeltaEvent,
   ToolBlock,
   ToolEventPayload
 } from '../agent/types'
@@ -35,6 +36,60 @@ export type ChatProjectionReducerContext = {
   isInterruptSettledError: (error: unknown, message: string) => boolean
   settlePendingRuntimeWork: (blocks: ChatBlock[]) => ChatBlock[]
   threadSnapshotLooksRunning: (blocks: ChatBlock[], threadStatus?: string) => boolean
+}
+
+export function monotonicToolStatus(
+  current: ToolBlock['status'],
+  incoming: ToolBlock['status']
+): ToolBlock['status'] {
+  // A persisted replay may contain the historical tool_call_started record
+  // after the snapshot already contains its terminal result.  Terminal state
+  // is durable; only a running -> terminal transition is actionable.
+  return current !== 'running' && incoming === 'running' ? current : incoming
+}
+
+function unseenDeltaText(
+  delta: ThreadDeltaEvent,
+  blocks: ChatBlock[],
+  liveText: string,
+  liveItemId: string | undefined
+): string {
+  const offset = delta.deltaOffset
+  if (
+    !delta.itemId ||
+    typeof offset !== 'number' ||
+    !Number.isSafeInteger(offset) ||
+    offset < 0
+  ) {
+    // Legacy events have no stable item-relative position and retain the
+    // original append-only projection semantics.
+    return delta.text
+  }
+
+  const blockKind = delta.kind === 'agent_message' ? 'assistant' : 'reasoning'
+  const hydrated = blocks.find(
+    (block) => block.kind === blockKind && block.id === delta.itemId
+  )
+  const hydratedText = hydrated && (
+    hydrated.kind === 'assistant' || hydrated.kind === 'reasoning'
+  ) ? hydrated.text : ''
+  const projectedText = hydratedText + (
+    liveItemId === delta.itemId ? liveText : ''
+  )
+  const overlapLength = Math.min(
+    delta.text.length,
+    Math.max(0, projectedText.length - offset)
+  )
+  if (
+    overlapLength > 0 &&
+    projectedText.slice(offset, offset + overlapLength) !== delta.text.slice(0, overlapLength)
+  ) {
+    // The offset is only a deduplication hint. If the projected prefix does
+    // not actually contain this fragment, preserve the payload instead of
+    // silently trimming potentially new content.
+    return delta.text
+  }
+  return delta.text.slice(overlapLength)
 }
 
 export function flushLiveProjection(
@@ -150,8 +205,7 @@ export function reduceChatProjection(
         .filter((value): value is number => typeof value === 'number')
       const patch: Partial<ChatState> = {
         error: context.clearRecoveringError(state.error),
-        ...(seqs.length > 0 ? { lastSeq: Math.max(state.lastSeq, ...seqs) } : {}),
-        ...(!state.busy ? { busy: true } : {})
+        ...(seqs.length > 0 ? { lastSeq: Math.max(state.lastSeq, ...seqs) } : {})
       }
       let blocks = state.blocks
       let liveReasoning = state.liveReasoning
@@ -166,12 +220,20 @@ export function reduceChatProjection(
       let reasoningFirst = state.turnReasoningFirstAtByUserId
       let reasoningLast = state.turnReasoningLastAtByUserId
       let sawReasoning = false
+      let sawUnseenDelta = false
       for (const delta of deltas) {
         if (typeof delta.seq === 'number') {
           if (delta.seq <= liveDeltaSeqFloor) continue
           liveDeltaSeqFloor = delta.seq
         }
         if (delta.kind === 'agent_reasoning') {
+          const text = unseenDeltaText(
+            delta,
+            blocks,
+            liveReasoning,
+            liveReasoningItemId
+          )
+          if (!text) continue
           if (delta.itemId && liveReasoningItemId && delta.itemId !== liveReasoningItemId) {
             if (liveReasoning.trim()) {
               blocks = upsertTimelineBlock(blocks, {
@@ -187,9 +249,17 @@ export function reduceChatProjection(
           liveReasoningItemId = delta.itemId ?? liveReasoningItemId
           liveReasoningTurnId = delta.turnId ?? liveReasoningTurnId ?? state.currentTurnId ?? undefined
           liveReasoningCreatedAt = delta.createdAt ?? liveReasoningCreatedAt
-          liveReasoning += delta.text
+          liveReasoning += text
           sawReasoning = true
+          sawUnseenDelta = true
         } else {
+          const text = unseenDeltaText(
+            delta,
+            blocks,
+            liveAssistant,
+            liveAssistantItemId
+          )
+          if (!text) continue
           if (delta.itemId && liveAssistantItemId && delta.itemId !== liveAssistantItemId) {
             if (liveAssistant.trim()) {
               blocks = upsertTimelineBlock(blocks, {
@@ -205,9 +275,11 @@ export function reduceChatProjection(
           liveAssistantItemId = delta.itemId ?? liveAssistantItemId
           liveAssistantTurnId = delta.turnId ?? liveAssistantTurnId ?? state.currentTurnId ?? undefined
           liveAssistantCreatedAt = delta.createdAt ?? liveAssistantCreatedAt
-          liveAssistant += delta.text
+          liveAssistant += text
+          sawUnseenDelta = true
         }
       }
+      if (sawUnseenDelta && !state.busy) patch.busy = true
       const userId = state.currentTurnUserId
       if (sawReasoning && userId) {
         if (typeof reasoningFirst[userId] !== 'number') {
@@ -303,7 +375,7 @@ export function reduceChatProjection(
           ...current,
           turnId: event.turnId ?? current.turnId,
           summary: event.summary || current.summary,
-          status: event.status,
+          status: monotonicToolStatus(current.status, event.status),
           toolKind: event.toolKind ?? current.toolKind,
           detail: event.detail ?? current.detail,
           filePath: event.filePath ?? current.filePath,

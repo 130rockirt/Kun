@@ -8,7 +8,7 @@ import type { ModelCapabilityMetadata } from '../contracts/capabilities.js'
 import type { TurnItem } from '../contracts/items.js'
 import type { ActingTurnModelRoute } from '../contracts/turns.js'
 import { makeErrorItem } from '../domain/item.js'
-import { repairModelHistoryItems } from '../domain/model-history-repair.js'
+import { repairModelHistoryItemsForModel } from '../domain/model-history-repair.js'
 import { memoryPreview } from '../shared/memory-preview.js'
 import type { IdGenerator } from '../ports/id-generator.js'
 import type { ModelClient, ModelToolSpec } from '../ports/model-client.js'
@@ -40,7 +40,12 @@ import { resolveCoherentProviderAccount } from './compaction-summary.js'
 import {
   EMPTY_POST_TOOL_FINAL_ANSWER_RECOVERY_STEP,
   emptyPostToolRecoveryInstruction,
+  filterGoalContextsForActiveGoal,
   hasSuccessfulCreatePlanResult,
+  POST_TOOL_FAILURE_FINAL_ANSWER_RECOVERY_STEP,
+  postToolFailureRecoveryInstruction,
+  TOOL_SUPPRESSION_FINAL_ANSWER_RECOVERY_STEP,
+  toolSuppressionRecoveryInstruction,
   userInputUnavailableInstruction
 } from './continuation-instructions.js'
 import {
@@ -55,7 +60,7 @@ import { memoryInstructions } from './memory-instructions.js'
 import { modelCapabilitiesForModel } from './model-context-profile.js'
 import type { ModelRoundEngine } from './model-round-engine.js'
 import { modelClientDiagnostics } from './model-client-diagnostics.js'
-import { composeModelRequest } from './model-request-composer.js'
+import { composeModelRequest, effectiveOutputBudgetTokens } from './model-request-composer.js'
 import { estimateModelRequestInputTokenBreakdown } from './model-request-estimator.js'
 import type { ModelRoutingService } from './model-routing-service.js'
 import {
@@ -108,7 +113,7 @@ import { TurnToolCatalogFreezer } from './turn-tool-catalog.js'
 export type ModelStepServiceDeps = {
   threadStore: ThreadStore
   sessionStore: SessionStore
-  turns: Pick<TurnService, 'getTurn' | 'applyItem' | 'updateItem' | 'updateTurnMetadata'>
+  turns: Pick<TurnService, 'getTurn' | 'applyItem' | 'updateItem' | 'updateTurnMetadata' | 'ensureGoalContext'>
   events: Pick<RuntimeEventRecorder, 'record'>
   model: ModelClient
   compactor: import('./context-compactor.js').ContextCompactor
@@ -193,11 +198,19 @@ export class ModelStepService {
     const { dedicatedSvgTurn, activePlanContext } = modeContext
     await this.deps.recordPipelineStage(threadId, turnId, 'input_received', { stepIndex })
     const budgetGate = await this.deps.budgetGate.check(thread, threadId, turnId)
+    // A deadline, lease loss, or explicit interruption can win while an
+    // asynchronous budget check is settling. Do not materialize internal
+    // history (or perform any further model preparation) for that aborted
+    // execution merely because the persisted turn has not been finalized yet.
+    if (signal.aborted) return 'aborted'
     if (budgetGate === 'blocked') {
       // A cost-budget stop is a deliberate cap, not an interrupted goal turn:
       // suppress goal auto-resume so it isn't relaunched straight back into
       // the same exhausted budget.
       this.deps.goalTurns.suppressResume(turnId)
+      if (this.deps.roundOutcome.toolSuppressionRecoverySteps(turnId) > 0) {
+        return this.deps.roundOutcome.failToolSuppressionRecovery(threadId, turnId)
+      }
       if (dedicatedSvgTurn) {
         const persistedCompletion = svgArtifactCompletionState(
           await this.deps.sessionStore.loadItems(threadId),
@@ -213,6 +226,13 @@ export class ModelStepService {
       }
       return 'stop'
     }
+    const planTurnSuppressesGoalContext = !modeContext.dedicatedSvgTurn && !modeContext.planContextStale && (
+      modeContext.effectiveMode === 'plan' || Boolean(modeContext.activePlanContext)
+    )
+    if (!planTurnSuppressesGoalContext) {
+      await this.deps.turns.ensureGoalContext(threadId, turnId, signal)
+    }
+    if (signal.aborted) return 'aborted'
     const loadedItems = await this.deps.sessionStore.loadItems(threadId)
     // Heal (and possibly rewrite) on-disk history once per turn: within a
     // turn the loop only appends well-formed items, and healing's deep
@@ -241,6 +261,14 @@ export class ModelStepService {
         ).items
       }
     }
+    // Keep historical goal records durable without replaying an instruction
+    // for a goal that has since paused, ended, been cleared, or been replaced.
+    // A plan turn intentionally suppresses goal continuation just as it did
+    // before goal context became canonical history.
+    const goalForHistory = planTurnSuppressesGoalContext
+      ? undefined
+      : (await this.deps.threadStore.get(threadId))?.goal
+    historyItems = filterGoalContextsForActiveGoal(historyItems, goalForHistory)
     await this.deps.recordPipelineStage(
       threadId,
       turnId,
@@ -259,7 +287,7 @@ export class ModelStepService {
         toolResultCount
       })
     }
-    const items = repairModelHistoryItems(
+    const items = repairModelHistoryItemsForModel(
       effectiveHistoryAfterLatestCompaction(historyItems)
     )
     const inheritedProviderAccount = resolveCoherentProviderAccount({
@@ -291,6 +319,7 @@ export class ModelStepService {
       ...(routeProviderId ? { providerId: routeProviderId } : {}),
       ...(routeAccountId ? { accountId: routeAccountId } : {})
     }
+    const historyRoutesByTurnId = modelHistoryRoutesByTurnId(thread, actingModelRoute, turnId)
     const routeSelectionDeferred =
       !turn.actingModelRoute &&
       this.deps.model.selectsRouteTargetDuringStream?.({
@@ -307,8 +336,15 @@ export class ModelStepService {
       ...(modelRoute.reasoningEffort ? { reasoningEffort: modelRoute.reasoningEffort } : {})
     })
     const model = modelRoute.model
+    // `default` is the explicit turn pin for the runtime's implicit provider.
+    // Capability resolvers historically receive that provider as `undefined`;
+    // keep that contract while still sending the explicit alias to the model
+    // router so a later thread selection cannot take over this turn.
+    const capabilityProviderId = providerId?.trim().toLowerCase() === 'default'
+      ? undefined
+      : providerId
     const modelCapabilities =
-      this.deps.modelCapabilities?.(model, providerId) ?? modelCapabilitiesForModel(model)
+      this.deps.modelCapabilities?.(model, capabilityProviderId) ?? modelCapabilitiesForModel(model)
     const serviceTier =
       turn?.serviceTier === 'priority' &&
       modelCapabilities.serviceTiers?.includes('priority')
@@ -475,8 +511,23 @@ export class ModelStepService {
       stepIndex
     })
     const emptyPostToolRecoveryStep = this.deps.roundOutcome.emptyPostToolRecoverySteps(turnId)
-    const forceFinalAnswerRecovery =
+    const forceEmptyPostToolFinalAnswerRecovery =
       emptyPostToolRecoveryStep >= EMPTY_POST_TOOL_FINAL_ANSWER_RECOVERY_STEP
+    const toolSuppressionRecoveryStep =
+      this.deps.roundOutcome.toolSuppressionRecoverySteps(turnId)
+    const forceToolSuppressionFinalAnswerRecovery =
+      !hardRequiredToolName &&
+      !softRequiredToolName &&
+      !dedicatedSvgTurn &&
+      toolSuppressionRecoveryStep >= TOOL_SUPPRESSION_FINAL_ANSWER_RECOVERY_STEP
+    const postToolFailureRecoveryStep =
+      this.deps.roundOutcome.postToolFailureRecoverySteps(turnId)
+    const forcePostToolFailureFinalAnswerRecovery =
+      postToolFailureRecoveryStep >= POST_TOOL_FAILURE_FINAL_ANSWER_RECOVERY_STEP
+    const forceFinalAnswerRecovery =
+      forceEmptyPostToolFinalAnswerRecovery ||
+      forceToolSuppressionFinalAnswerRecovery ||
+      forcePostToolFailureFinalAnswerRecovery
     const planningToolSpecs = turn.orchestration === 'graph' && !graphCreateSatisfied
       ? effectiveToolSpecs.filter((tool) =>
           tool.name === GRAPH_DEFINE_PLAN_TOOL_NAME ||
@@ -546,9 +597,6 @@ export class ModelStepService {
       ...(instructionResolution.instruction
         ? [kunContextBlock('agents-instructions', 'workspace', instructionResolution.instruction)]
         : []),
-      ...(activeGoalInstruction
-        ? [kunContextBlock('active-goal', 'runtime', activeGoalInstruction)]
-        : []),
       ...(goalRecoveryInstruction && this.deps.roundOutcome.goalNoToolRecoverySteps(turnId) > 0
         ? [kunContextBlock('goal-recovery', 'runtime', goalRecoveryInstruction)]
         : []),
@@ -560,6 +608,23 @@ export class ModelStepService {
             'model-recovery',
             'runtime',
             emptyPostToolRecoveryInstruction(emptyPostToolRecoveryStep)
+          )]
+        : []),
+      ...(toolSuppressionRecoveryStep > 0
+        ? [kunContextBlock(
+            'tool-loop-recovery',
+            'runtime',
+            toolSuppressionRecoveryInstruction(
+              toolSuppressionRecoveryStep,
+              forceToolSuppressionFinalAnswerRecovery
+            )
+          )]
+        : []),
+      ...(postToolFailureRecoveryStep > 0
+        ? [kunContextBlock(
+            'tool-failure-recovery',
+            'runtime',
+            postToolFailureRecoveryInstruction(postToolFailureRecoveryStep)
           )]
         : []),
       ...imageGenerationReferenceInstructions({
@@ -636,13 +701,47 @@ export class ModelStepService {
       ...(modeInstruction ? { modeInstruction } : {}),
       contextInstructions,
       history: [],
+      historyRoutesByTurnId,
       attachments,
       tools: requestToolSpecs,
       ...(hardRequiredToolName ? { requiredToolName: hardRequiredToolName } : {}),
       ...(this.deps.tokenEconomy ? { tokenEconomy: this.deps.tokenEconomy } : {}),
       signal
     }).sentInputTokens
-    const history = await this.deps.historyCompaction.compactIfNeeded({
+    // Share one capacity model between the compaction preflight and the
+    // send-time guard. The output budget is reserved for this request's
+    // completion, so compaction must treat `input + output` as the real
+    // pressure instead of only comparing input against the soft threshold.
+    const declaredOutputBudgetTokens = modelCapabilities.maxOutputTokens
+    const requestHardCapTokens = modelCapabilities.contextWindowTokens
+      ? Math.floor(modelCapabilities.contextWindowTokens * 0.85)
+      : this.deps.compactor.hardCap(model, providerId)
+    // Use the request overhead as the conservative input floor during compaction;
+    // the final request is recalculated after history/image rehydration.
+    const effectiveBudget = (inputTokens: number): number =>
+      modelCapabilities.endpointFormat === 'messages' && declaredOutputBudgetTokens === undefined
+        ? 0
+        : effectiveOutputBudgetTokens({
+            inputTokens,
+            contextCapTokens: requestHardCapTokens,
+            ...(declaredOutputBudgetTokens !== undefined
+              ? { declaredMaxOutputTokens: declaredOutputBudgetTokens }
+              : {})
+          })
+    let outputBudgetTokens = effectiveBudget(requestOverheadTokens)
+    // History compaction retries from the latest canonical snapshot to avoid
+    // losing concurrent writes. That snapshot deliberately retains internal
+    // goal records, including records for goals that later ended or changed.
+    // Always restore the model-facing projection after a compaction result so
+    // a CAS retry cannot resurrect an obsolete system instruction.
+    const projectCompactedGoalHistory = async (candidate: TurnItem[]): Promise<TurnItem[]> =>
+      filterGoalContextsForActiveGoal(
+        candidate,
+        planTurnSuppressesGoalContext
+          ? undefined
+          : (await this.deps.threadStore.get(threadId))?.goal
+      )
+    const firstCompaction = await this.deps.historyCompaction.compactIfNeeded({
       items,
       model,
       ...(providerId ? { providerId } : {}),
@@ -654,6 +753,8 @@ export class ModelStepService {
       clientSurface: prepared.clientSurface,
       toolSpecs: requestToolSpecs,
       requestOverheadTokens,
+      outputBudgetTokens,
+      requestHardCapTokens,
       reserveModelRequest: () => this.deps.budgetGate.reserveAdditionalModelRequest(threadId, turnId)
     })
     if (signal.aborted) return 'aborted'
@@ -663,6 +764,9 @@ export class ModelStepService {
     )
     if (postCompactionBudgetGate === 'blocked') {
       this.deps.goalTurns.suppressResume(turnId)
+      if (this.deps.roundOutcome.toolSuppressionRecoverySteps(turnId) > 0) {
+        return this.deps.roundOutcome.failToolSuppressionRecovery(threadId, turnId)
+      }
       if (dedicatedSvgTurn) {
         const persistedCompletion = svgArtifactCompletionState(
           await this.deps.sessionStore.loadItems(threadId),
@@ -678,59 +782,129 @@ export class ModelStepService {
       }
       return 'stop'
     }
-    await this.deps.recordPipelineStage(threadId, turnId, 'input_compressed', {
-      historyItems: history.length,
-      requestOverheadTokens
-    })
-    // Forward the just-generated image(s) back to a vision-capable model so it can
-    // self-review and regenerate if the result is off. Bytes come from the
-    // already-persisted attachment/file; the persisted tool output keeps NO base64
-    // (only this transient request copy carries it).
-    const forwardHistory = await rehydrateGeneratedImagesForForward(
-      rehydrateTransientBrowserUseOutputsForForward(history),
-      (output) => this.deps.turnAttachments.resolveGeneratedImageForForward(output, threadId, thread?.workspace),
-      MAX_FORWARDED_GENERATED_IMAGES
-    )
-    const composedRequest = composeModelRequest({
+    let history = await projectCompactedGoalHistory(firstCompaction.history)
+    let fallbackCompactionAttempted = false
+    let fallbackCompactionApplied = false
+    let replacedTokens = firstCompaction.replacedTokens
+    let composedRequest = await this.composeForwardedRequest({
+      history,
       threadId,
+      thread,
       turnId,
       model,
-      ...(providerId ? { providerId } : {}),
-      ...(accountId ? { accountId } : {}),
-      ...(modelRoute.reasoningEffort ? { reasoningEffort: modelRoute.reasoningEffort } : {}),
-      ...(serviceTier ? { serviceTier } : {}),
-      immutablePrefix: this.deps.prefix,
-      ...(thread.systemPrompt !== undefined ? { threadSystemPrompt: thread.systemPrompt } : {}),
-      ...(modeInstruction ? { modeInstruction } : {}),
+      providerId,
+      accountId,
+      modelRoute,
+      serviceTier,
+      modeInstruction,
       contextInstructions,
-      history: forwardHistory,
+      historyRoutesByTurnId,
+      requestToolSpecs,
       attachments,
-      tools: requestToolSpecs,
-      ...(hardRequiredToolName ? { requiredToolName: hardRequiredToolName } : {}),
-      ...(this.deps.tokenEconomy ? { tokenEconomy: this.deps.tokenEconomy } : {}),
+      hardRequiredToolName,
       signal
     })
-    const { request, rawInputTokens, sentInputTokens, tokenEconomy } = composedRequest
-    const requestContext = estimateModelRequestInputTokenBreakdown(request, {
-      skillContextInstructions
-    })
-    const inputTokens = sentInputTokens
-    const outputTokens = modelCapabilities.maxOutputTokens ?? 0
-    // A configured model context window is authoritative. ContextCompactor's
-    // test/embedding thresholds can intentionally be much smaller than a real
-    // model window to exercise compaction, so use its cap only when capability
-    // metadata is unavailable.
-    const hardCap = modelCapabilities.contextWindowTokens
-      ? Math.floor(modelCapabilities.contextWindowTokens * 0.85)
-      : this.deps.compactor.hardCap(model, providerId)
-    if (inputTokens + outputTokens > hardCap) {
+    if (signal.aborted) return 'aborted'
+    let inputTokens = composedRequest.sentInputTokens
+    outputBudgetTokens = effectiveBudget(inputTokens)
+    composedRequest = {
+      ...composedRequest,
+      request: outputBudgetTokens > 0
+        ? { ...composedRequest.request, maxTokens: outputBudgetTokens }
+        : composedRequest.request
+    }
+    // Send-boundary fallback: the final request is rebuilt with transient
+    // image/browser-use rehydration, token economy, and history hygiene, so it
+    // can legitimately be larger than the compaction preflight estimated. When
+    // the exact `input + output` still breaks the cap, compact once more with
+    // the exact input as the floor and the deterministic heuristic summary
+    // (never a second model call), rebuild, and only then fail if it still
+    // does not fit. No loops, no recursion, no upstream dispatch before this
+    // guard passes.
+    if (inputTokens + outputBudgetTokens > requestHardCapTokens) {
+      fallbackCompactionAttempted = true
+      const fallbackCompaction = await this.deps.historyCompaction.compactIfNeeded({
+        items: history,
+        model,
+        ...(providerId ? { providerId } : {}),
+        ...(accountId ? { accountId } : {}),
+        ...(serviceTier ? { serviceTier } : {}),
+        signal,
+        threadId,
+        turnId,
+        clientSurface: prepared.clientSurface,
+        toolSpecs: requestToolSpecs,
+        requestOverheadTokens,
+        requestInputTokens: inputTokens,
+        outputBudgetTokens,
+        requestHardCapTokens,
+        allowModelSummary: false,
+        reserveModelRequest: () => this.deps.budgetGate.reserveAdditionalModelRequest(threadId, turnId)
+      })
+      if (signal.aborted) return 'aborted'
+      history = await projectCompactedGoalHistory(fallbackCompaction.history)
+      fallbackCompactionApplied = fallbackCompaction.compacted
+      replacedTokens += fallbackCompaction.replacedTokens
+      composedRequest = await this.composeForwardedRequest({
+        history,
+        threadId,
+        thread,
+        turnId,
+        model,
+        providerId,
+        accountId,
+        modelRoute,
+        serviceTier,
+        modeInstruction,
+        contextInstructions,
+        historyRoutesByTurnId,
+        requestToolSpecs,
+        attachments,
+        hardRequiredToolName,
+        signal
+      })
+      if (signal.aborted) return 'aborted'
+      inputTokens = composedRequest.sentInputTokens
+      outputBudgetTokens = effectiveBudget(inputTokens)
+      composedRequest = {
+        ...composedRequest,
+        request: outputBudgetTokens > 0
+          ? { ...composedRequest.request, maxTokens: outputBudgetTokens }
+          : composedRequest.request
+      }
+    }
+    if (inputTokens + outputBudgetTokens > requestHardCapTokens) {
+      const overBy = inputTokens + outputBudgetTokens - requestHardCapTokens
+      const reason = outputBudgetTokens > requestHardCapTokens
+        ? 'output_budget_exceeds_cap'
+        : !fallbackCompactionAttempted
+          ? 'request_too_large'
+          : fallbackCompactionApplied
+            ? 'still_exceeds_after_compaction'
+            : 'no_compactable_history'
+      const action = reason === 'output_budget_exceeds_cap'
+        ? 'Reduce the model\'s max output tokens in provider settings, or switch to a model with a larger context window.'
+        : 'Compact the conversation manually with /compact, reduce the current message or attachments, or lower the model output budget.'
       const message =
-        `request exceeds the ${hardCap}-token context cap ` +
-        `(${inputTokens} input + ${outputTokens} output budget)`
+        `request exceeds the ${requestHardCapTokens}-token context cap ` +
+        `(${inputTokens} input + ${outputBudgetTokens} output budget; over by ${overBy}); ` +
+        `${reason}. ${action}`
+      const details = {
+        inputTokens,
+        outputBudgetTokens,
+        requestHardCapTokens,
+        softThresholdTokens: this.deps.compactor.thresholds(model, providerId).softThreshold,
+        hardThresholdTokens: this.deps.compactor.thresholds(model, providerId).hardThreshold,
+        fallbackCompactionAttempted,
+        fallbackCompactionApplied,
+        replacedTokens,
+        reason
+      }
       this.deps.rememberFailure(turnId, {
         error: message,
         code: 'context_window_exceeded',
-        severity: 'warning'
+        severity: 'warning',
+        details
       })
       await this.deps.events.record({
         kind: 'error',
@@ -738,15 +912,28 @@ export class ModelStepService {
         turnId,
         message,
         code: 'context_window_exceeded',
-        severity: 'warning'
+        severity: 'warning',
+        details
       })
       return 'failed'
     }
+    await this.deps.recordPipelineStage(threadId, turnId, 'input_compressed', {
+      historyItems: composedRequest.request.history.length,
+      requestOverheadTokens,
+      outputBudgetTokens,
+      requestHardCapTokens,
+      fallbackCompactionAttempted,
+      fallbackCompactionApplied
+    })
+    const { request, rawInputTokens, sentInputTokens, tokenEconomy } = composedRequest
+    const requestContext = estimateModelRequestInputTokenBreakdown(request, {
+      skillContextInstructions
+    })
     // Tool results become input to the *next* request. Reserve the configured
     // output budget now so built-in source tools can return the largest honest
     // page that has a realistic chance of fitting instead of relying on the
     // send-time history cleaner to silently rewrite it.
-    const sourceResultBudgetTokens = Math.max(0, hardCap - inputTokens - outputTokens)
+    const sourceResultBudgetTokens = Math.max(0, requestHardCapTokens - inputTokens - outputBudgetTokens)
     const contextThresholds = this.deps.compactor.thresholds(model, providerId)
     const contextWindowTokens = modelCapabilities.contextWindowTokens ??
       Math.max(contextThresholds.softThreshold, contextThresholds.hardThreshold)
@@ -892,7 +1079,10 @@ export class ModelStepService {
       turnId,
       streamed,
       ...(request.requiredToolName ? { requiredToolName: request.requiredToolName } : {}),
-      ...(softRequiredToolName ? { softRequiredToolName } : {}),
+      ...(softRequiredToolName && !forceToolSuppressionFinalAnswerRecovery
+        ? { softRequiredToolName }
+        : {}),
+      ...(forceToolSuppressionFinalAnswerRecovery ? { toolCallsDisabled: true } : {}),
       turn,
       prepared: effectivePrepared,
       ...(effectiveActingModelRoute.providerId
@@ -904,6 +1094,61 @@ export class ModelStepService {
       toolKinds,
       toolProviderKinds,
       svgCompletion
+    })
+  }
+
+  private async composeForwardedRequest(input: {
+    history: TurnItem[]
+    threadId: string
+    thread: import('../contracts/threads.js').ThreadRecord
+    turnId: string
+    model: string
+    providerId?: string
+    accountId?: string
+    modelRoute: { model: string; reasoningEffort?: string }
+    serviceTier?: 'priority'
+    modeInstruction?: string
+    contextInstructions: readonly string[]
+    historyRoutesByTurnId: Readonly<Record<string, import('../ports/model-client.js').ModelHistoryRoute>>
+    requestToolSpecs: readonly ModelToolSpec[]
+    attachments: import('./turn-execution-types.js').ResolvedTurnAttachments
+    hardRequiredToolName?: string
+    signal: AbortSignal
+  }): Promise<import('./model-request-composer.js').ComposedModelRequest> {
+    // Forward the just-generated image(s) back to a vision-capable model so it
+    // can self-review and regenerate if the result is off. Bytes come from the
+    // already-persisted attachment/file; the persisted tool output keeps NO
+    // base64 (only this transient request copy carries it).
+    const forwardHistory = await rehydrateGeneratedImagesForForward(
+      rehydrateTransientBrowserUseOutputsForForward(input.history),
+      (output) => this.deps.turnAttachments.resolveGeneratedImageForForward(
+        output,
+        input.threadId,
+        input.thread.workspace
+      ),
+      MAX_FORWARDED_GENERATED_IMAGES
+    )
+    return composeModelRequest({
+      threadId: input.thread.id,
+      turnId: input.turnId,
+      model: input.model,
+      ...(input.providerId ? { providerId: input.providerId } : {}),
+      ...(input.accountId ? { accountId: input.accountId } : {}),
+      ...(input.modelRoute.reasoningEffort ? { reasoningEffort: input.modelRoute.reasoningEffort } : {}),
+      ...(input.serviceTier ? { serviceTier: input.serviceTier } : {}),
+      immutablePrefix: this.deps.prefix,
+      ...(input.thread.systemPrompt !== undefined
+        ? { threadSystemPrompt: input.thread.systemPrompt }
+        : {}),
+      ...(input.modeInstruction ? { modeInstruction: input.modeInstruction } : {}),
+      contextInstructions: input.contextInstructions,
+      history: forwardHistory,
+      historyRoutesByTurnId: input.historyRoutesByTurnId,
+      attachments: input.attachments,
+      tools: input.requestToolSpecs,
+      ...(input.hardRequiredToolName ? { requiredToolName: input.hardRequiredToolName } : {}),
+      ...(this.deps.tokenEconomy ? { tokenEconomy: this.deps.tokenEconomy } : {}),
+      signal: input.signal
     })
   }
 
@@ -979,6 +1224,29 @@ function sameActingModelRoute(
   return a.model === b.model &&
     a.providerId === b.providerId &&
     a.accountId === b.accountId
+}
+
+function modelHistoryRoutesByTurnId(
+  thread: import('../contracts/threads.js').ThreadRecord,
+  currentRoute: ActingTurnModelRoute,
+  currentTurnId: string
+): Readonly<Record<string, import('../ports/model-client.js').ModelHistoryRoute>> {
+  const routes: Record<string, import('../ports/model-client.js').ModelHistoryRoute> = {}
+  for (const historicalTurn of thread.turns) {
+    const route = historicalTurn.actingModelRoute
+    if (!route) continue
+    routes[historicalTurn.id] = {
+      model: route.model,
+      ...(route.providerId ? { providerId: route.providerId } : {}),
+      ...(route.accountId ? { accountId: route.accountId } : {})
+    }
+  }
+  routes[currentTurnId] = {
+    model: currentRoute.model,
+    ...(currentRoute.providerId ? { providerId: currentRoute.providerId } : {}),
+    ...(currentRoute.accountId ? { accountId: currentRoute.accountId } : {})
+  }
+  return routes
 }
 
 export function buildExtensionProfileInstruction(extensionId: string, profileId: string, overlay: string): string {

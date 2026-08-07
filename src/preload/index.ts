@@ -76,6 +76,14 @@ const api = {
       return () => ipcRenderer.removeListener('storage-relocation:progress', wrapped)
     }
   },
+  uninstall: {
+    getStatus: () => ipcRenderer.invoke('uninstall:status'),
+    perform: (options) => ipcRenderer.invoke('uninstall:perform', options)
+  },
+  runtimeDataRecovery: {
+    getStatus: () => ipcRenderer.invoke('runtime-data-recovery:status'),
+    execute: (input) => ipcRenderer.invoke('runtime-data-recovery:execute', input)
+  },
   dataMigration: {
     pickExportPackage: (defaultPath) => ipcRenderer.invoke('data-migration:pick-export', { defaultPath }),
     pickImportPackage: (defaultPath) => ipcRenderer.invoke('data-migration:pick-import', { defaultPath }),
@@ -126,8 +134,10 @@ const api = {
   cliInstallAction: (action) => ipcRenderer.invoke('cli-install:action', action),
   claudeSubscriptionStatus: () => ipcRenderer.invoke('claude-subscription:status'),
   claudeSubscriptionLogin: () => ipcRenderer.invoke('claude-subscription:login'),
-  claudeSubscriptionProbe: (token) => ipcRenderer.invoke('claude-subscription:probe', token),
-  claudeSubscriptionModels: (token) => ipcRenderer.invoke('claude-subscription:models', token),
+  claudeSubscriptionProbe: (token, providerId) =>
+    ipcRenderer.invoke('claude-subscription:probe', token, providerId),
+  claudeSubscriptionModels: (token, providerId) =>
+    ipcRenderer.invoke('claude-subscription:models', token, providerId),
   claudeSubscriptionSdkStatus: () => ipcRenderer.invoke('claude-subscription:sdk-status'),
   claudeSubscriptionSdkInstall: () => ipcRenderer.invoke('claude-subscription:sdk-install'),
   onClaudeSubscriptionSdkProgress: (handler) => {
@@ -151,8 +161,8 @@ const api = {
   geminiSubscriptionModels: () => ipcRenderer.invoke('gemini-subscription:models'),
   geminiCliSubscriptionStatus: () => ipcRenderer.invoke('gemini-cli-subscription:status'),
   geminiCliSubscriptionModels: () => ipcRenderer.invoke('gemini-cli-subscription:models'),
-  cursorSubscriptionDiscover: (apiKey) =>
-    ipcRenderer.invoke('cursor-subscription:discover', { apiKey }),
+  cursorSubscriptionDiscover: (apiKey, providerId) =>
+    ipcRenderer.invoke('cursor-subscription:discover', { apiKey, providerId }),
   setSettings: (partial) =>
     ipcRenderer.invoke('settings:set', partial),
   saveSettingsSilent: (partial) =>
@@ -178,6 +188,9 @@ const api = {
   getScheduleStatus: () => ipcRenderer.invoke('schedule:status'),
   runScheduleTask: (taskId) =>
     ipcRenderer.invoke('schedule:task:run', taskId),
+  getDaemonStatus: () => ipcRenderer.invoke('daemon:status'),
+  restartDaemon: (daemonId) => ipcRenderer.invoke('daemon:restart', daemonId),
+  readDaemonLogs: (payload) => ipcRenderer.invoke('daemon:logs', payload),
   getWorkflowStatus: () => ipcRenderer.invoke('workflow:status'),
   runWorkflow: (workflowId, input) => ipcRenderer.invoke('workflow:run', workflowId, input),
   stopWorkflow: (workflowId) => ipcRenderer.invoke('workflow:stop', workflowId),
@@ -318,6 +331,8 @@ const api = {
     ipcRenderer.invoke('file:resolve-workspace', options),
   openWorkspaceFileInSystem: (options) =>
     ipcRenderer.invoke('file:open-workspace-system', options),
+  revealWorkspaceFileInFolder: (options) =>
+    ipcRenderer.invoke('file:reveal-workspace-file', options),
   readWorkspaceFile: (options) =>
     ipcRenderer.invoke('file:read-workspace', options),
   lintProjectDesignMd: (content) =>

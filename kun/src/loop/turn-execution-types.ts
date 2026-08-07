@@ -122,6 +122,7 @@ export type ToolTurnContextInput = {
   actingModelRoute?: ActingTurnModelRoute
   approvalIntent?: string
   reasoningEffort?: string
+  serviceTier?: 'priority'
   modelCapabilities: ModelCapabilityMetadata
   activeSkillIds: readonly string[]
   allowedToolNames?: readonly string[]

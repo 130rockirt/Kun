@@ -7,6 +7,7 @@ import {
   mkdir,
   readFile,
   rm,
+  stat,
   writeFile
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -20,6 +21,7 @@ import {
   standaloneTuiTarget,
   type StandaloneTuiReleaseMetadata
 } from './self-update.js'
+import { acquireRuntimeDataDirMigrationLock } from '../server/runtime-data-dir-migration-lock.js'
 
 const roots: string[] = []
 const BUILD_ID = 'a'.repeat(64)
@@ -87,6 +89,22 @@ describe('standalone TUI self-update', () => {
     })).resolves.toBeNull()
     await expect(readFile(join(dataDir, 'tui-update-check.json'), 'utf8'))
       .rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('does not recreate a missing migration target for update-check persistence', async () => {
+    const root = await standaloneRoot(release())
+    const dataDir = join(root, 'missing', 'data')
+    const migration = await acquireRuntimeDataDirMigrationLock(dataDir)
+    try {
+      await expect(checkStandaloneTuiUpdateOnce({
+        env: { KUN_STANDALONE_ROOT: root },
+        dataDir,
+        fetch: async () => Response.json(latest())
+      })).rejects.toThrow(/migration is active/)
+      await expect(stat(dataDir)).rejects.toMatchObject({ code: 'ENOENT' })
+    } finally {
+      await migration.release()
+    }
   })
 
   it('requires explicit confirmation before downloading an available update', async () => {

@@ -141,7 +141,13 @@ export type ImageGenToolProviderOptions = {
   client?: ImageGenClient
   attachmentStore?: AttachmentStore
   nowIso?: () => string
+  resolveCredential?: ProviderCredentialResolver
 }
+
+export type ProviderCredentialResolver = (providerId: string) => Promise<{
+  apiKey: string
+  headers?: Record<string, string>
+}>
 
 export type ImageGenToolProviderBuildResult = {
   providers: CapabilityToolProvider[]
@@ -236,7 +242,7 @@ export function buildImageGenToolProviders(
 
   const missing = [
     !config.baseUrl ? 'baseUrl' : undefined,
-    !config.apiKey ? 'apiKey' : undefined,
+    !config.apiKey && !(config.providerId && options.resolveCredential) ? 'apiKey' : undefined,
     !config.model ? 'model' : undefined
   ].filter((field): field is string => Boolean(field))
 
@@ -249,7 +255,6 @@ export function buildImageGenToolProviders(
     }
   }
 
-  const client = options.client ?? createImageGenClient(config)
   const model = config.model!
   // Only advertise (and accept) image-to-image when the active protocol can truly
   // edit; otherwise the param is dropped so the model never tries a reference edit
@@ -356,7 +361,21 @@ export function buildImageGenToolProviders(
         )
       }
       let image: GeneratedImage
+      let client = options.client
+      const requestTelemetry = () => telemetry(startedAt, client?.id ?? 'image-provider')
       try {
+        if (!client) {
+          const credential = config.providerId && options.resolveCredential
+            ? await options.resolveCredential(config.providerId)
+            : undefined
+          client = createImageGenClient({
+            ...config,
+            ...(credential ? {
+              apiKey: credential.apiKey,
+              headers: { ...(config.headers ?? {}), ...(credential.headers ?? {}) }
+            } : {})
+          })
+        }
         const request = {
           prompt,
           model,
@@ -377,9 +396,9 @@ export function buildImageGenToolProviders(
               'the configured image provider does not support reference image edits; retry generate_image without reference_image_paths'
             )
           }
-          return toolError('provider_error', error.message, telemetry(startedAt, client.id))
+          return toolError('provider_error', error.message, requestTelemetry())
         }
-        return toolError('generation_failed', errorMessage(error), telemetry(startedAt, client.id))
+        return toolError('generation_failed', errorMessage(error), requestTelemetry())
       }
 
       const detected = detectImage(image.data)
@@ -402,7 +421,7 @@ export function buildImageGenToolProviders(
         })).absolutePath
         await writeFile(absolutePath, image.data)
       } catch (error) {
-        return toolError('workspace_path_escape', errorMessage(error), telemetry(startedAt, client.id))
+        return toolError('workspace_path_escape', errorMessage(error), requestTelemetry())
       }
 
       const warnings: string[] = []
@@ -448,7 +467,7 @@ export function buildImageGenToolProviders(
           mode: endpoint === 'edits' ? 'edit' : 'generation',
           referenceImageCount: references.images.length,
           warnings,
-          telemetry: telemetry(startedAt, client.id)
+          telemetry: requestTelemetry()
         }
       }
     }

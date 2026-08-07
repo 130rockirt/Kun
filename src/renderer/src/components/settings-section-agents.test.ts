@@ -15,12 +15,15 @@ import {
   modelProviderPresetAccountProfile,
   modelProviderPresetProfile,
   modelProviderTokenPlanProfile,
+  type KunLabSettingsV1,
+  type ModelProviderModelProfileV1,
   type ModelProviderProfileV1
 } from '@shared/app-settings'
 import type {
   AntigravitySubscriptionModelCatalog,
   ClaudeSubscriptionProbeResult,
   CursorSubscriptionModel,
+  ModelProviderModelGroup,
   ModelsDevCatalogResult,
   ModelProviderProbeResult
 } from '@shared/kun-gui-api'
@@ -29,10 +32,18 @@ import {
   LaboratorySettingsSection,
   modelProvidersSettingsPatch
 } from './settings-section-agents'
+import { ExploreAgentSettingsPanel } from './settings-section-lab-explore'
+import { useChatStore } from '../store/chat-store'
 import {
   ProvidersSettingsSection,
   antigravityProviderCatalogPatch
 } from './settings-section-providers'
+import {
+  enqueueSharedModelMutation,
+  resetSharedProviderMutationCoordinatorForTests,
+  sharedProviderMutationCoordinator
+} from './shared-provider-mutation-coordinator'
+import { ProviderModelsManager } from './settings-section-provider-models'
 
 const labels: Record<string, string> = {
   agentsQuickBase: 'Base',
@@ -40,6 +51,23 @@ const labels: Record<string, string> = {
   agentsQuickMcp: 'MCP',
   agentsQuickPermissions: 'Permissions',
   agentsQuickLaboratory: 'Laboratory',
+  labExploreTitle: 'Explore agent',
+  labExploreDescription: 'Exploration tool description',
+  labExploreEnabled: 'Enable explore_agent',
+  labExploreEnabledDesc: 'Enable description',
+  labExploreModelMode: 'Model policy',
+  labExploreModelModeDesc: 'Model policy description',
+  labExploreModelModeInherit: 'Follow main model',
+  labExploreModelModeFixed: 'Use fixed model',
+  labExploreModel: 'Explore model',
+  labExploreModelDesc: 'Explore model description',
+  labExploreProvider: 'Explore model provider',
+  labExploreReasoning: 'Explore reasoning effort',
+  labExploreReasoningDesc: 'Reasoning description',
+  labExploreReasoningInherit: 'Follow main reasoning',
+  labExploreFast: 'Codex Fast mode',
+  labExploreFastDesc: 'Fast description',
+  labExploreFastUnsupportedHint: 'Fast unsupported hint',
   agents: 'Agents',
   providers: 'Providers',
   providersDesc: 'Providers description',
@@ -316,10 +344,6 @@ const labels: Record<string, string> = {
   kunStreamIdleTimeoutDesc: 'Stream idle timeout description',
   kunToolStorm: 'Tool storm',
   kunToolStormDesc: 'Tool storm description',
-  kunToolStormLimits: 'Tool storm limits',
-  kunToolStormLimitsDesc: 'Tool storm limits description',
-  kunToolStormWindowSize: 'Tool storm window',
-  kunToolStormThreshold: 'Tool storm threshold',
   kunToolOutputLimits: 'Tool output limits',
   kunToolOutputLimitsDesc: 'Tool output limits description',
   kunToolOutputMaxLines: 'Tool output max lines',
@@ -901,6 +925,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
       await act(async () => {
         for (const renderer of mountedRenderers) renderer.unmount()
       })
+      resetSharedProviderMutationCoordinatorForTests()
       vi.unstubAllGlobals()
       ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = false
     })
@@ -909,6 +934,48 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
       const renderer = await renderProviders(ctx)
       mountedRenderers.push(renderer)
       return renderer
+    }
+
+    const installDraftRegistry = (): ReturnType<typeof vi.fn> => {
+      let revision = 0
+      let providers: Array<Record<string, unknown>> = []
+      const snapshot = () => ({
+        schemaVersion: 1,
+        revision,
+        providers,
+        defaultProviderId: providers[0]?.id,
+        defaultAccountId: providers[0]?.accountId,
+        defaultModel: providers[0]?.selectedModel,
+        proxy: { enabled: false, url: '' },
+        routePools: [],
+        localModelGateway: { enabled: false }
+      })
+      const runtimeRequest = vi.fn(async (path: string, method = 'GET', body?: string) => {
+        if (path.includes('/events?')) return new Promise<never>(() => undefined)
+        if (path === '/v1/model-connections' && method === 'GET') {
+          return { ok: true, status: 200, body: JSON.stringify(snapshot()) }
+        }
+        if (path === '/v1/model-connections/connect' && method === 'POST') {
+          const request = JSON.parse(body ?? '{}') as Record<string, unknown>
+          revision += 1
+          providers = [{
+            id: request.id,
+            accountId: `account:${String(request.id)}`,
+            name: request.name,
+            kind: request.kind,
+            authType: request.authType,
+            baseUrl: request.baseUrl,
+            endpointFormat: request.endpointFormat,
+            configured: true,
+            models: request.models,
+            selectedModel: request.selectedModel
+          }]
+          return { ok: true, status: 201, body: JSON.stringify(snapshot()) }
+        }
+        throw new Error(`Unexpected runtime request: ${method} ${path}`)
+      })
+      Object.assign(window.kunGui, { runtimeRequest })
+      return runtimeRequest
     }
 
     it('opens the official Cursor User API Keys page from the connection form', async () => {
@@ -1559,9 +1626,134 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
       })
 
       expect(claudeSubscriptionProbe).toHaveBeenCalledOnce()
-      expect(claudeSubscriptionProbe).toHaveBeenCalledWith(undefined)
+      expect(claudeSubscriptionProbe).toHaveBeenCalledWith(undefined, profile.id)
       expect(probeModelProvider).not.toHaveBeenCalled()
       expect(rendererText(renderer)).toContain('Connected · 23ms')
+    })
+
+    it.each([
+      ['codex', 'ChatGPT 订阅', 'codexDisconnect'],
+      ['grok-subscription', 'Grok 订阅', 'grokDisconnect']
+    ])('keeps a secret-free %s Registry login visibly connected', async (
+      presetId,
+      expectedName,
+      disconnectLabel
+    ) => {
+      const settings = defaultModelProviderSettings()
+      const profile = {
+        ...modelProviderPresetProfile(getModelProviderPreset(presetId)!),
+        apiKey: ''
+      }
+      const snapshot = {
+        schemaVersion: 1,
+        revision: 1,
+        providers: [{
+          id: profile.id,
+          accountId: `account:${profile.id}`,
+          name: profile.name,
+          kind: profile.kind ?? 'http',
+          authType: 'subscription',
+          baseUrl: profile.baseUrl,
+          endpointFormat: profile.endpointFormat,
+          configured: true,
+          models: profile.models,
+          selectedModel: profile.models[0]
+        }],
+        defaultProviderId: profile.id,
+        defaultAccountId: `account:${profile.id}`,
+        defaultModel: profile.models[0],
+        proxy: settings.proxy,
+        routePools: settings.routePools,
+        localModelGateway: { enabled: settings.localGateway.enabled }
+      }
+      const runtimeRequest = vi.fn(async (path: string, _method = 'GET', _body?: string) =>
+        path.includes('/events?')
+          ? new Promise<never>(() => undefined)
+          : { ok: true, status: 200, body: JSON.stringify(snapshot) })
+      Object.assign(window.kunGui, { runtimeRequest })
+
+      const renderer = await mountProviders({
+        ...baseCtx(),
+        provider: { ...settings, providers: [...settings.providers, profile] },
+        kun: { ...defaultKunRuntimeSettings(), providerId: profile.id, model: profile.models[0] }
+      })
+      await act(async () => {
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+
+      expect(activePanelText(renderer)).toContain(expectedName)
+      await act(async () => findButton(renderer, disconnectLabel).props.onClick())
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 475))
+      })
+
+      const clearCall = runtimeRequest.mock.calls.find(([path, method]) =>
+        path === `/v1/model-connections/${profile.id}/credential?expected_revision=1` &&
+        method === 'DELETE'
+      )
+      expect(clearCall).toBeTruthy()
+      expect(clearCall?.[2]).toBeUndefined()
+    })
+
+    it('clears a protected Claude setup token after ambient login succeeds', async () => {
+      const settings = defaultModelProviderSettings()
+      const profile = {
+        ...modelProviderPresetProfile(getModelProviderPreset('claude-subscription')!),
+        apiKey: ''
+      }
+      const snapshot = {
+        schemaVersion: 1,
+        revision: 1,
+        providers: [{
+          id: profile.id,
+          accountId: `account:${profile.id}`,
+          name: profile.name,
+          kind: profile.kind ?? 'agent-sdk',
+          authType: 'subscription',
+          baseUrl: profile.baseUrl,
+          endpointFormat: profile.endpointFormat,
+          configured: true,
+          models: profile.models,
+          selectedModel: profile.models[0]
+        }],
+        defaultProviderId: profile.id,
+        defaultAccountId: `account:${profile.id}`,
+        defaultModel: profile.models[0],
+        proxy: settings.proxy,
+        routePools: settings.routePools,
+        localModelGateway: { enabled: settings.localGateway.enabled }
+      }
+      const runtimeRequest = vi.fn(async (path: string, _method = 'GET', _body?: string) =>
+        path.includes('/events?')
+          ? new Promise<never>(() => undefined)
+          : { ok: true, status: 200, body: JSON.stringify(snapshot) })
+      Object.assign(window.kunGui, {
+        runtimeRequest,
+        claudeSubscriptionLogin: vi.fn(async () => ({ ok: true as const, mode: 'ambient' as const }))
+      })
+
+      const renderer = await mountProviders({
+        ...baseCtx(),
+        provider: { ...settings, providers: [...settings.providers, profile] },
+        kun: { ...defaultKunRuntimeSettings(), providerId: profile.id, model: profile.models[0] }
+      })
+      await act(async () => {
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+
+      await act(async () => findButton(renderer, 'claudeSubReloginButton').props.onClick())
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 475))
+      })
+
+      const clearCall = runtimeRequest.mock.calls.find(([path, method]) =>
+        path === `/v1/model-connections/${profile.id}/credential?expected_revision=1` &&
+        method === 'DELETE'
+      )
+      expect(clearCall).toBeTruthy()
+      expect(clearCall?.[2]).toBeUndefined()
     })
 
     it('shows a real Claude authentication failure instead of a false connected state', async () => {
@@ -1591,7 +1783,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
         await Promise.resolve()
       })
 
-      expect(claudeSubscriptionProbe).toHaveBeenCalledWith(undefined)
+      expect(claudeSubscriptionProbe).toHaveBeenCalledWith(undefined, profile.id)
       expect(rendererText(renderer)).toContain(
         'Connection failed: API Error: 401 Invalid Bearer <redacted>'
       )
@@ -1625,6 +1817,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
     })
 
     it('filters the add dialog and keeps custom providers local until confirmation', async () => {
+      const runtimeRequest = installDraftRegistry()
       const provider = defaultModelProviderSettings()
       const inspectedProvider = {
         id: 'inspection-provider',
@@ -1645,6 +1838,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
         kun: defaultKunRuntimeSettings(),
         update
       })
+      update.mockClear()
 
       await act(async () => findButtonContaining(renderer, 'Inspection Provider').props.onClick())
 
@@ -1718,7 +1912,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
           providers: expect.arrayContaining([
             expect.objectContaining({
               id: 'custom-provider-3',
-              apiKey: 'sk-custom'
+              apiKey: ''
             })
           ])
         },
@@ -1726,7 +1920,600 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
           kun: expect.objectContaining({ providerId: 'custom-provider-3' })
         }
       })
+      expect(runtimeRequest.mock.calls.some(([path, method, body]) =>
+        path === '/v1/model-connections/connect' &&
+        method === 'POST' &&
+        JSON.parse(body as string).credential === 'sk-custom'
+      )).toBe(true)
       expect(rendererText(renderer)).not.toContain('Unsaved')
+    })
+
+    it('deletes the canonical shared provider before removing it from local settings', async () => {
+      const settings = defaultModelProviderSettings()
+      const target = {
+        id: 'custom-provider-2',
+        name: 'Custom Provider',
+        apiKey: 'sk-custom',
+        baseUrl: 'https://api.example.com/v1',
+        endpointFormat: 'chat_completions',
+        kind: 'http',
+        models: ['custom-model'],
+        modelProfiles: {}
+      } satisfies ModelProviderProfileV1
+      const sharedProvider = {
+        id: target.id,
+        accountId: `account:${target.id}`,
+        name: target.name,
+        kind: 'http',
+        authType: 'api-key',
+        baseUrl: target.baseUrl,
+        endpointFormat: target.endpointFormat,
+        configured: true,
+        models: target.models,
+        selectedModel: target.models[0]
+      }
+      const snapshot = (revision: number, providers = [sharedProvider]) => ({
+        schemaVersion: 1,
+        revision,
+        providers,
+        defaultProviderId: providers[0]?.id,
+        defaultAccountId: providers[0]?.accountId,
+        defaultModel: providers[0]?.selectedModel,
+        proxy: settings.proxy,
+        routePools: settings.routePools,
+        localModelGateway: { enabled: settings.localGateway.enabled }
+      })
+      let resolveDelete!: (value: { ok: true; status: 200; body: string }) => void
+      const deleteRequest = new Promise<{ ok: true; status: 200; body: string }>((resolve) => {
+        resolveDelete = resolve
+      })
+      const runtimeRequest = vi.fn(async (path: string, method: string) => {
+        if (method === 'DELETE') return deleteRequest
+        return { ok: true, status: 200, body: JSON.stringify(snapshot(1)) }
+      })
+      Object.assign(window.kunGui, {
+        runtimeRequest,
+        confirmDialog: vi.fn(async () => true)
+      })
+      const update = vi.fn()
+      const initialCtx = {
+        ...baseCtx(),
+        provider: { ...settings, providers: [...settings.providers, target] },
+        kun: {
+          ...defaultKunRuntimeSettings(),
+          providerId: target.id,
+          model: target.models[0]
+        },
+        saveStatus: 'saving',
+        update
+      }
+      const renderer = await mountProviders(initialCtx)
+      await act(async () => {
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+      update.mockClear()
+
+      await clickProviderTab(renderer, 'Advanced')
+      let removePromise!: Promise<void>
+      await act(async () => {
+        removePromise = findButton(renderer, 'Remove provider').props.onClick()
+        await Promise.resolve()
+      })
+
+      const unrelatedProvider = {
+        ...settings.providers[0]!,
+        name: 'Edited while delete was pending'
+      }
+      await act(async () => {
+        renderer.update(createElement(ProvidersSettingsSection, {
+          ctx: {
+            ...initialCtx,
+            provider: {
+              ...initialCtx.provider,
+              providers: [unrelatedProvider, target]
+            }
+          }
+        }))
+        await Promise.resolve()
+      })
+      resolveDelete({ ok: true, status: 200, body: JSON.stringify(snapshot(2, [])) })
+      await act(async () => {
+        await removePromise
+      })
+
+      const deleteCallIndex = runtimeRequest.mock.calls.findIndex(([path, method]) =>
+        method === 'DELETE' && path.includes('/v1/model-connections/custom-provider-2?')
+      )
+      expect(deleteCallIndex).toBeGreaterThanOrEqual(0)
+      expect(update).not.toHaveBeenCalled()
+      expect(sharedProviderMutationCoordinator.pendingDeletions.get(target.id)).toMatchObject({
+        committedRevision: 2
+      })
+    })
+
+    it('keeps a custom provider rename while a stale registry event races the canonical PATCH', async () => {
+      const settings = defaultModelProviderSettings()
+      const target = {
+        id: 'custom-provider-2',
+        name: 'Custom Provider',
+        apiKey: 'sk-custom',
+        baseUrl: 'https://api.example.com/v1',
+        endpointFormat: 'chat_completions',
+        kind: 'http',
+        models: ['custom-model'],
+        modelProfiles: {
+          'custom-model': {
+            inputModalities: ['text'],
+            outputModalities: ['text'],
+            supportsToolCalling: true,
+            messageParts: ['text']
+          }
+        }
+      } satisfies ModelProviderProfileV1
+      const sharedProvider = (name: string) => ({
+        id: target.id,
+        accountId: `account:${target.id}`,
+        name,
+        kind: 'http',
+        authType: 'api-key',
+        baseUrl: target.baseUrl,
+        endpointFormat: target.endpointFormat,
+        configured: true,
+        models: target.models,
+        selectedModel: target.models[0]
+      })
+      const snapshot = (revision: number, name: string) => ({
+        schemaVersion: 1,
+        revision,
+        providers: [sharedProvider(name)],
+        defaultProviderId: target.id,
+        defaultAccountId: `account:${target.id}`,
+        defaultModel: target.models[0],
+        proxy: settings.proxy,
+        routePools: settings.routePools,
+        localModelGateway: { enabled: settings.localGateway.enabled }
+      })
+      let resolveStaleEvent!: (value: { ok: true; status: 200; body: string }) => void
+      const staleEvent = new Promise<{ ok: true; status: 200; body: string }>((resolve) => {
+        resolveStaleEvent = resolve
+      })
+      let eventRequests = 0
+      const runtimeRequest = vi.fn(async (path: string, method: string, body?: string) => {
+        if (path.includes('/events?')) {
+          eventRequests += 1
+          if (eventRequests === 1) return staleEvent
+          return new Promise<never>(() => undefined)
+        }
+        if (path === '/v1/model-connections' && method === 'GET') {
+          return { ok: true, status: 200, body: JSON.stringify(snapshot(1, target.name)) }
+        }
+        if (path === `/v1/model-connections/${target.id}` && method === 'PATCH') {
+          expect(JSON.parse(body ?? '{}')).toMatchObject({
+            expectedRevision: 1,
+            name: 'Renamed Provider'
+          })
+          return { ok: true, status: 200, body: JSON.stringify(snapshot(2, 'Renamed Provider')) }
+        }
+        throw new Error(`Unexpected runtime request: ${method} ${path}`)
+      })
+      Object.assign(window.kunGui, { runtimeRequest })
+      const update = vi.fn()
+      const initialCtx = {
+        ...baseCtx(),
+        provider: { ...settings, providers: [...settings.providers, target] },
+        kun: {
+          ...defaultKunRuntimeSettings(),
+          providerId: target.id,
+          model: target.models[0]
+        },
+        saveStatus: 'saved',
+        update
+      }
+      const renderer = await mountProviders(initialCtx)
+      await act(async () => {
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+      update.mockClear()
+
+      const nameInput = renderer.root.findAllByType('input')
+        .find((input) => input.props.value === target.name)
+      expect(nameInput).toBeTruthy()
+      await act(async () => nameInput!.props.onChange({ target: { value: 'Renamed Provider' } }))
+      expect(update).toHaveBeenCalledOnce()
+      const localPatch = update.mock.calls[0]![0]
+      expect(localPatch.provider.providers.find((item: ModelProviderProfileV1) => item.id === target.id)?.name)
+        .toBe('Renamed Provider')
+
+      await act(async () => {
+        renderer.update(createElement(ProvidersSettingsSection, {
+          ctx: {
+            ...initialCtx,
+            provider: { ...initialCtx.provider, ...localPatch.provider },
+            kun: { ...initialCtx.kun, ...localPatch.agents?.kun }
+          }
+        }))
+        await Promise.resolve()
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+
+      expect(runtimeRequest.mock.calls.some(([path, method]) =>
+        path === `/v1/model-connections/${target.id}` && method === 'PATCH'
+      )).toBe(true)
+      resolveStaleEvent({ ok: true, status: 200, body: JSON.stringify(snapshot(1, target.name)) })
+      await act(async () => {
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+
+      expect(update.mock.calls.some(([patch]) =>
+        patch.provider?.providers?.some((item: ModelProviderProfileV1) =>
+          item.id === target.id && item.name === target.name
+        )
+      )).toBe(false)
+    })
+
+    it('keeps a model catalog edit while a stale registry event races its revision-safe PATCH', async () => {
+      const settings = defaultModelProviderSettings()
+      const target = {
+        id: 'custom-provider-2',
+        name: 'Custom Provider',
+        apiKey: '',
+        baseUrl: 'https://api.example.com/v1',
+        endpointFormat: 'chat_completions',
+        kind: 'http',
+        models: ['old-model'],
+        modelProfiles: {}
+      } satisfies ModelProviderProfileV1
+      const sharedProvider = (models: string[]) => ({
+        id: target.id,
+        accountId: `account:${target.id}`,
+        name: target.name,
+        kind: 'http',
+        authType: 'api-key',
+        baseUrl: target.baseUrl,
+        endpointFormat: target.endpointFormat,
+        configured: true,
+        models,
+        selectedModel: models[0]
+      })
+      const snapshot = (revision: number, models: string[]) => ({
+        schemaVersion: 1,
+        revision,
+        providers: [sharedProvider(models)],
+        defaultProviderId: target.id,
+        defaultAccountId: `account:${target.id}`,
+        defaultModel: models[0],
+        proxy: settings.proxy,
+        routePools: settings.routePools,
+        localModelGateway: { enabled: settings.localGateway.enabled }
+      })
+      let resolveStaleEvent!: (value: { ok: true; status: 200; body: string }) => void
+      const staleEvent = new Promise<{ ok: true; status: 200; body: string }>((resolve) => {
+        resolveStaleEvent = resolve
+      })
+      let eventRequests = 0
+      const runtimeRequest = vi.fn(async (path: string, method: string, body?: string) => {
+        if (path.includes('/events?')) {
+          eventRequests += 1
+          if (eventRequests === 1) return staleEvent
+          return new Promise<never>(() => undefined)
+        }
+        if (path === '/v1/model-connections' && method === 'GET') {
+          return { ok: true, status: 200, body: JSON.stringify(snapshot(1, ['old-model'])) }
+        }
+        if (path === `/v1/model-connections/${target.id}` && method === 'PATCH') {
+          const request = JSON.parse(body ?? '{}')
+          expect(request).toMatchObject({
+            expectedRevision: 1,
+            models: ['old-model', 'openrouter/free']
+          })
+          return {
+            ok: true,
+            status: 200,
+            body: JSON.stringify(snapshot(2, ['old-model', 'openrouter/free']))
+          }
+        }
+        throw new Error(`Unexpected runtime request: ${method} ${path}`)
+      })
+      Object.assign(window.kunGui, { runtimeRequest })
+      const update = vi.fn()
+      const initialCtx = {
+        ...baseCtx(),
+        provider: { ...settings, providers: [...settings.providers, target] },
+        kun: {
+          ...defaultKunRuntimeSettings(),
+          providerId: target.id,
+          model: target.models[0]
+        },
+        saveStatus: 'saved',
+        update
+      }
+      const renderer = await mountProviders(initialCtx)
+      await act(async () => {
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+      update.mockClear()
+
+      const nextTarget = { ...target, models: ['old-model', 'openrouter/free'] }
+      await act(async () => {
+        renderer.root.findByType(ProviderModelsManager).props.onChange(nextTarget)
+      })
+      const localPatch = update.mock.calls[0]![0]
+      expect(localPatch.provider.providers.find((item: ModelProviderProfileV1) => item.id === target.id)?.models)
+        .toEqual(nextTarget.models)
+      await act(async () => {
+        renderer.update(createElement(ProvidersSettingsSection, {
+          ctx: {
+            ...initialCtx,
+            provider: { ...initialCtx.provider, ...localPatch.provider },
+            kun: { ...initialCtx.kun, ...localPatch.agents?.kun }
+          }
+        }))
+        resolveStaleEvent({
+          ok: true,
+          status: 200,
+          body: JSON.stringify(snapshot(1, ['old-model']))
+        })
+        await new Promise((resolve) => setTimeout(resolve, 175))
+        await Promise.resolve()
+      })
+
+      expect(runtimeRequest.mock.calls.some(([path, method]) =>
+        path === `/v1/model-connections/${target.id}` && method === 'PATCH'
+      )).toBe(true)
+      expect(update.mock.calls.some(([patch]) =>
+        patch.provider?.providers?.some((item: ModelProviderProfileV1) =>
+          item.id === target.id && !item.models.includes('openrouter/free')
+        )
+      )).toBe(false)
+    })
+
+    it('fences a delayed credential prepare so only the latest generation can commit', async () => {
+      const settings = defaultModelProviderSettings()
+      const target = {
+        ...settings.providers[0]!,
+        apiKey: ''
+      }
+      const sharedProvider = {
+        id: target.id,
+        accountId: `account:${target.id}`,
+        name: target.name,
+        kind: 'http',
+        authType: 'api-key',
+        baseUrl: target.baseUrl,
+        endpointFormat: target.endpointFormat,
+        configured: true,
+        models: target.models,
+        selectedModel: target.models[0]
+      }
+      const snapshot = (revision: number) => ({
+        schemaVersion: 1,
+        revision,
+        providers: [sharedProvider],
+        defaultProviderId: target.id,
+        defaultAccountId: sharedProvider.accountId,
+        defaultModel: target.models[0],
+        proxy: settings.proxy,
+        routePools: settings.routePools,
+        localModelGateway: { enabled: settings.localGateway.enabled }
+      })
+      let revision = 1
+      let latestFence = ''
+      let resolveFirstPut!: (value: { ok: true; status: 200; body: string }) => void
+      const firstPut = new Promise<{ ok: true; status: 200; body: string }>((resolve) => {
+        resolveFirstPut = resolve
+      })
+      let firstPutStarted!: () => void
+      const firstStarted = new Promise<void>((resolve) => { firstPutStarted = resolve })
+      const fenceBodies: Array<{ operationToken: string }> = []
+      const credentialBodies: Array<{
+        expectedRevision: number
+        credential: string
+        operationToken: string
+      }> = []
+      const commitBodies: Array<{ expectedRevision: number; operationToken: string }> = []
+      const preparedCredentials = new Map<string, string>()
+      const consumedCredentials: string[] = []
+      const runtimeRequest = vi.fn(async (path: string, method: string, body?: string) => {
+        if (path.includes('/events?')) return new Promise<never>(() => undefined)
+        if (path === '/v1/model-connections' && method === 'GET') {
+          return { ok: true, status: 200, body: JSON.stringify(snapshot(revision)) }
+        }
+        if (path === `/v1/model-connections/${target.id}/credential/fence` && method === 'POST') {
+          const request = JSON.parse(body ?? '{}') as { operationToken: string }
+          fenceBodies.push(request)
+          latestFence = request.operationToken
+          return { ok: true, status: 200, body: JSON.stringify(snapshot(revision)) }
+        }
+        if (path === `/v1/model-connections/${target.id}/credential` && method === 'PUT') {
+          const request = JSON.parse(body ?? '{}') as {
+            expectedRevision: number
+            credential: string
+            operationToken: string
+          }
+          credentialBodies.push(request)
+          preparedCredentials.set(request.operationToken, request.credential)
+          if (credentialBodies.length === 1) {
+            firstPutStarted()
+            return firstPut
+          }
+          return { ok: true, status: 200, body: JSON.stringify(snapshot(revision)) }
+        }
+        if (path === `/v1/model-connections/${target.id}/credential/commit` && method === 'POST') {
+          const request = JSON.parse(body ?? '{}') as {
+            expectedRevision: number
+            operationToken: string
+          }
+          commitBodies.push(request)
+          if (request.operationToken !== latestFence) {
+            return {
+              ok: false,
+              status: 409,
+              body: JSON.stringify({ snapshot: snapshot(revision) })
+            }
+          }
+          consumedCredentials.push(preparedCredentials.get(request.operationToken) ?? '')
+          revision += 1
+          return { ok: true, status: 200, body: JSON.stringify(snapshot(revision)) }
+        }
+        throw new Error(`Unexpected runtime request: ${method} ${path}`)
+      })
+      Object.assign(window.kunGui, { runtimeRequest })
+      const update = vi.fn()
+      const renderer = await mountProviders({
+        ...baseCtx(),
+        provider: { ...settings, providers: [target] },
+        kun: {
+          ...defaultKunRuntimeSettings(),
+          providerId: target.id,
+          model: target.models[0]
+        },
+        saveStatus: 'saved',
+        update
+      })
+      await act(async () => {
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+      update.mockClear()
+      const apiKeyInput = () => renderer.root.findAllByType('input')
+        .find((input) => input.props.placeholder === 'Enter provider API key')!
+
+      await act(async () => apiKeyInput().props.onChange({ target: { value: 'first-secret' } }))
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 475))
+      })
+      await firstStarted
+      await act(async () => apiKeyInput().props.onChange({ target: { value: 'latest-secret' } }))
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 475))
+      })
+      expect(fenceBodies).toHaveLength(2)
+      expect(credentialBodies).toEqual([{
+        expectedRevision: 1,
+        credential: 'first-secret',
+        operationToken: fenceBodies[0]!.operationToken
+      }])
+
+      resolveFirstPut({ ok: true, status: 200, body: JSON.stringify(snapshot(revision)) })
+      await act(async () => {
+        await Promise.resolve()
+        await enqueueSharedModelMutation(async () => undefined)
+      })
+
+      expect(credentialBodies).toEqual([
+        {
+          expectedRevision: 1,
+          credential: 'first-secret',
+          operationToken: fenceBodies[0]!.operationToken
+        },
+        {
+          expectedRevision: 1,
+          credential: 'latest-secret',
+          operationToken: fenceBodies[1]!.operationToken
+        }
+      ])
+      expect(commitBodies).toEqual([{
+        expectedRevision: 1,
+        operationToken: fenceBodies[1]!.operationToken
+      }])
+      expect(consumedCredentials).toEqual(['latest-secret'])
+      expect(update).not.toHaveBeenCalled()
+      expect(sharedProviderMutationCoordinator.pendingCredentials.has(target.id)).toBe(false)
+      expect(apiKeyInput().props.value).toBe('')
+    })
+
+    it('keeps the local provider and shows an error when the shared registry cannot delete it', async () => {
+      const settings = defaultModelProviderSettings()
+      const target = {
+        id: 'custom-provider-2',
+        name: 'Custom Provider',
+        apiKey: 'sk-custom',
+        baseUrl: 'https://api.example.com/v1',
+        endpointFormat: 'chat_completions',
+        kind: 'http',
+        models: ['custom-model'],
+        modelProfiles: {}
+      } satisfies ModelProviderProfileV1
+      const sharedProvider = {
+        id: target.id,
+        accountId: `account:${target.id}`,
+        name: target.name,
+        kind: 'http',
+        authType: 'api-key',
+        baseUrl: target.baseUrl,
+        endpointFormat: target.endpointFormat,
+        configured: true,
+        models: target.models,
+        selectedModel: target.models[0]
+      }
+      let registryReads = 0
+      const runtimeRequest = vi.fn(async (path: string, method: string) => {
+        if (path.includes('/events?')) return new Promise<never>(() => undefined)
+        if (path === '/v1/model-connections' && method === 'GET') {
+          registryReads += 1
+          if (registryReads > 1) {
+            return {
+              ok: false,
+              status: 503,
+              body: JSON.stringify({ message: 'Shared registry unavailable' })
+            }
+          }
+        }
+        return {
+          ok: true,
+          status: 200,
+          body: JSON.stringify({
+            schemaVersion: 1,
+            revision: 1,
+            providers: [sharedProvider],
+            defaultProviderId: target.id,
+            defaultAccountId: sharedProvider.accountId,
+            defaultModel: target.models[0],
+            proxy: settings.proxy,
+            routePools: settings.routePools,
+            localModelGateway: { enabled: settings.localGateway.enabled }
+          })
+        }
+      })
+      Object.assign(window.kunGui, {
+        runtimeRequest,
+        confirmDialog: vi.fn(async () => true)
+      })
+      const update = vi.fn()
+      const renderer = await mountProviders({
+        ...baseCtx(),
+        provider: { ...settings, providers: [...settings.providers, target] },
+        kun: {
+          ...defaultKunRuntimeSettings(),
+          providerId: target.id,
+          model: target.models[0]
+        },
+        saveStatus: 'saving',
+        update
+      })
+      await act(async () => {
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+      update.mockClear()
+
+      await clickProviderTab(renderer, 'Advanced')
+      await act(async () => {
+        findButton(renderer, 'Remove provider').props.onClick()
+        await Promise.resolve()
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+
+      expect(runtimeRequest.mock.calls.some(([, method]) => method === 'DELETE')).toBe(false)
+      expect(update).not.toHaveBeenCalled()
+      expect(rendererText(renderer)).toContain('Shared registry unavailable')
+      expect(rendererText(renderer)).toContain('Custom Provider')
     })
 
     it('configures Ollama Cloud and imports only provider-confirmed models with catalog metadata', async () => {
@@ -1826,6 +2613,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
     })
 
     it('adds repeated Token Plan accounts with independent numbered identities', async () => {
+      const runtimeRequest = installDraftRegistry()
       const settings = defaultModelProviderSettings()
       const minimax = getModelProviderPreset('minimax')
       const first = modelProviderTokenPlanProfile(minimax!, 'sk-first')!
@@ -1836,6 +2624,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
         kun: { ...defaultKunRuntimeSettings(), providerId: first.id, model: first.models[0] },
         update
       })
+      update.mockClear()
 
       await act(async () => findButton(renderer, 'Add provider').props.onClick())
       const dialog = renderer.root.findByProps({ role: 'dialog' })
@@ -1882,11 +2671,16 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
         expect.objectContaining({
           id: 'minimax-token-plan-2',
           name: 'MiniMax Token Plan 2',
-          apiKey: 'sk-second',
+          apiKey: '',
           presetSource: { presetId: 'minimax', mode: 'token-plan' }
         })
       ])
       expect(update.mock.calls[0]?.[0]?.agents?.kun?.providerId).toBe('minimax-token-plan-2')
+      expect(runtimeRequest.mock.calls.some(([path, method, body]) =>
+        path === '/v1/model-connections/connect' &&
+        method === 'POST' &&
+        JSON.parse(body as string).credential === 'sk-second'
+      )).toBe(true)
     })
 
     it('uses the canonical models.dev source for a numbered provider account', async () => {
@@ -2282,22 +3076,115 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
     expect(laboratoryTabs.map(instanceText)).toEqual([
       'Computer control',
       'Browser',
-      'Graph mode'
+      'Graph mode',
+      'Explore agent'
     ])
     expect(laboratoryTabs.map((tab) => tab.props['aria-selected']))
-      .toEqual([true, false, false])
+      .toEqual([true, false, false, false])
     expect(laboratoryTabs.map((tab) => tab.props['aria-controls'])).toEqual([
       'laboratory-settings-panel-computer',
       'laboratory-settings-panel-browser',
-      'laboratory-settings-panel-graph'
+      'laboratory-settings-panel-graph',
+      'laboratory-settings-panel-explore'
     ])
 
     const laboratoryPanels = renderer.root
       .findAllByProps({ role: 'tabpanel' })
       .filter((panel) => String(panel.props.id ?? '').startsWith('laboratory-settings-panel-'))
-    expect(laboratoryPanels).toHaveLength(3)
+    expect(laboratoryPanels).toHaveLength(4)
     expect(laboratoryPanels.map((panel) => panel.props.hidden))
-      .toEqual([false, true, true])
+      .toEqual([false, true, true, true])
+  })
+
+  it('renders the explore_agent lab panel and gates fast mode on Codex priority models', () => {
+    const renderPanel = (value: KunLabSettingsV1) => renderToStaticMarkup(createElement(
+      ExploreAgentSettingsPanel,
+      {
+        t,
+        value,
+        modelProviders: [],
+        leadProviderId: 'deepseek',
+        leadModel: 'deepseek-v4-pro',
+        selectControlClass: 'select',
+        onChange: () => undefined
+      }
+    ))
+
+    const followMain = renderPanel({
+      exploreAgent: { enabled: true, model: '', providerId: '', fast: false }
+    })
+    expect(followMain).toContain('Enable explore_agent')
+    expect(followMain).toContain('Follow main model')
+    expect(followMain).not.toContain('Codex Fast mode')
+
+    const fixed = renderPanel({
+      exploreAgent: { enabled: true, model: 'deepseek-v4-pro', providerId: 'deepseek', fast: false }
+    })
+    expect(fixed).toContain('Use fixed model')
+    expect(fixed).toContain('Explore reasoning effort')
+    expect(fixed).toContain('Codex Fast mode')
+
+    const disabled = renderPanel({
+      exploreAgent: { enabled: false, model: '', providerId: '', fast: false }
+    })
+    expect(disabled).not.toContain('Follow main model')
+  })
+
+  it('enables the fast toggle only when the selected model advertises Codex priority', async () => {
+    const codexModelProfile: ModelProviderModelProfileV1 = {
+      inputModalities: ['text'],
+      outputModalities: ['text'],
+      supportsToolCalling: true,
+      messageParts: ['text'],
+      serviceTiers: ['priority']
+    }
+    const modelProviders: ModelProviderProfileV1[] = [{
+      id: 'codex-2',
+      name: 'Codex',
+      apiKey: '',
+      baseUrl: '',
+      endpointFormat: 'chat_completions',
+      models: ['gpt-5.4'],
+      presetSource: { presetId: 'codex', mode: 'api' },
+      modelProfiles: { 'gpt-5.4': codexModelProfile }
+    }]
+    const groups: ModelProviderModelGroup[] = [{
+      providerId: 'codex-2',
+      presetSource: 'codex',
+      label: 'Codex',
+      modelIds: ['gpt-5.4'],
+      modelProfiles: { 'gpt-5.4': codexModelProfile }
+    }]
+    const mount = async (): Promise<ReactTestRenderer> => {
+      let renderer: ReactTestRenderer
+      await act(async () => {
+        renderer = createRenderer(createElement(ExploreAgentSettingsPanel, {
+          t,
+          value: { exploreAgent: { enabled: true, model: 'gpt-5.4', providerId: 'codex-2', fast: true } },
+          modelProviders,
+          leadProviderId: 'codex-2',
+          leadModel: 'gpt-5.4',
+          selectControlClass: 'select',
+          onChange: () => undefined
+        }))
+      })
+      return renderer!
+    }
+
+    // Codex model advertising priority: both toggles enabled and checked.
+    useChatStore.setState({ composerModelGroups: groups })
+    let renderer = await mount()
+    let switches = renderer.root.findAllByProps({ role: 'switch' })
+    expect(switches).toHaveLength(2)
+    expect(switches.map((node) => node.props['aria-checked'])).toEqual([true, true])
+    expect(switches.map((node) => node.props['aria-disabled'])).toEqual([false, false])
+
+    // Model without priority support: the fast toggle is disabled and unchecked.
+    useChatStore.setState({ composerModelGroups: [] })
+    renderer = await mount()
+    switches = renderer.root.findAllByProps({ role: 'switch' })
+    expect(switches.map((node) => node.props['aria-checked'])).toEqual([true, false])
+    expect(switches.map((node) => node.props['aria-disabled'])).toEqual([false, true])
   })
 
   it('renders pure JSONL as a selectable storage backend', () => {

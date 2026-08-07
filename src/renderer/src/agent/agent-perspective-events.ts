@@ -185,6 +185,20 @@ export function groupAgentPerspectiveEvents(
 }
 
 export function parseSemanticRequest(record: ModelRequestTraceRecord): SemanticRequest {
+  if (!record.request) {
+    return {
+      body: null,
+      model: record.model,
+      prompts: [],
+      skills: [],
+      tools: [],
+      messages: [],
+      parameters: [],
+      parseError: record.status === 'not_started'
+        ? 'no request was attempted'
+        : 'request payload unavailable'
+    }
+  }
   let body: Record<string, unknown>
   try {
     const value: unknown = JSON.parse(record.request.body.text)

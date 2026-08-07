@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { makeAssistantTextItem, makeCompactionItem, makeUserItem } from '../domain/item.js'
+import {
+  makeAssistantTextItem,
+  makeCompactionItem,
+  makeGoalContextItem,
+  makeUserItem
+} from '../domain/item.js'
 import {
   effectiveHistoryAfterLatestCompaction,
   insertCompactionIntoVisibleHistory,
@@ -60,6 +65,54 @@ describe('compaction history projection', () => {
       'compaction_next',
       'item_tail_a',
       'item_tail_b'
+    ])
+  })
+
+  it('moves internal goal context after a new summary without replaying folded history', () => {
+    const threadId = 'thread_goal_context'
+    const turnId = 'turn_goal_context'
+    const head = makeUserItem({ id: 'goal_head', threadId, turnId, text: 'old context' })
+    const goal = makeGoalContextItem({
+      id: 'goal_context',
+      threadId,
+      turnId,
+      text: 'Durable goal context.',
+      createdAt: '2026-08-06T00:00:00.000Z'
+    })
+    const folded = makeAssistantTextItem({
+      id: 'goal_folded',
+      threadId,
+      turnId,
+      text: 'old progress',
+      status: 'completed'
+    })
+    const tail = makeUserItem({ id: 'goal_tail', threadId, turnId, text: 'recent context' })
+    const summary = makeCompactionItem({
+      id: 'goal_summary',
+      threadId,
+      turnId,
+      summary: 'summary of old context',
+      replacedTokens: 100,
+      pinnedConstraints: []
+    })
+
+    const visible = insertCompactionIntoVisibleHistory({
+      visibleItems: [head, goal, folded, tail],
+      compactedItems: [summary, goal, tail],
+      summaryItem: summary
+    })
+
+    expect(visible.map((item) => item.id)).toEqual([
+      head.id,
+      folded.id,
+      summary.id,
+      goal.id,
+      tail.id
+    ])
+    expect(effectiveHistoryAfterLatestCompaction(visible).map((item) => item.id)).toEqual([
+      summary.id,
+      goal.id,
+      tail.id
     ])
   })
 

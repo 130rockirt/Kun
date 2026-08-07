@@ -8,6 +8,7 @@ import {
   MODEL_REQUEST_TRACE_REDACTED_VALUE
 } from '../../contracts/model-request-trace.js'
 import { LlmDebugRecorder, type LlmDebugSink } from '../../services/llm-debug-recorder.js'
+import { makeGoalContextItem, makeUserItem } from '../../domain/item.js'
 import { CompatModelClient } from './compat-model-client.js'
 
 function request(overrides: Partial<ModelRequest> = {}): ModelRequest {
@@ -104,6 +105,7 @@ describe('CompatModelClient request observability', () => {
     })))
     const page = await recorder.listThread('thread-observe')
     const trace = page.records[0]
+    if (!trace.request) throw new Error('expected a request payload in the captured trace')
 
     expect(trace.request.body.text).toBe(transmittedBody)
     expect(JSON.parse(trace.request.body.text)).toHaveProperty('messages')
@@ -132,6 +134,48 @@ describe('CompatModelClient request observability', () => {
     expect(trace.decoded?.text).toBe('hello')
     expect(trace.decoded?.stopReason).toBe('stop')
     expect(chunks).toContainEqual({ kind: 'assistant_text_delta', text: 'hello' })
+  })
+
+  it('redacts goal-context history from the retained trace without changing the provider request', async () => {
+    const recorder = new LlmDebugRecorder()
+    let transmittedBody = ''
+    const goalText = 'Internal active-goal context must not be exposed through diagnostics.'
+    const client = new CompatModelClient({
+      baseUrl: 'https://provider.example/v1',
+      apiKey: 'sk-test',
+      model: 'test-model',
+      endpointFormat: 'chat_completions',
+      nonStreaming: true,
+      debugSink: recorder,
+      fetchImpl: (async (_url: string, init: { body: string }) => {
+        transmittedBody = init.body
+        return okJson('done')
+      }) as unknown as typeof fetch
+    })
+    const history = [
+      makeGoalContextItem({
+        id: 'item_goal_context',
+        threadId: 'thread-observe',
+        turnId: 'turn-observe',
+        goalKey: 'goal_debug',
+        text: goalText
+      }),
+      makeUserItem({
+        id: 'item_visible',
+        threadId: 'thread-observe',
+        turnId: 'turn-observe',
+        text: 'visible continuation context'
+      })
+    ]
+
+    await drain(client.stream(request({ history })))
+    const trace = (await recorder.listThread('thread-observe')).records[0]
+    if (!trace.request) throw new Error('expected a request payload in the captured trace')
+
+    expect(transmittedBody).toContain(goalText)
+    expect(trace.request.body.text).not.toContain(goalText)
+    expect(trace.request.body.text).toContain('visible continuation context')
+    expect(trace.request.body.text).toContain(MODEL_REQUEST_TRACE_REDACTED_VALUE)
   })
 
   it('records transient retries as separately ordered HTTP attempts', async () => {
@@ -199,7 +243,10 @@ describe('CompatModelClient request observability', () => {
     const traces = [...(await recorder.listThread('thread-observe')).records].reverse()
 
     expect(traces.map((trace) => trace.attemptReason)).toEqual(['initial', 'stream_options_fallback'])
-    expect(traces.map((trace) => trace.request.body.text)).toEqual(transmittedBodies)
+    expect(traces.map((trace) => {
+      if (!trace.request) throw new Error('expected a request payload in the captured trace')
+      return trace.request.body.text
+    })).toEqual(transmittedBodies)
     expect(JSON.parse(transmittedBodies[0])).toHaveProperty('stream_options')
     expect(JSON.parse(transmittedBodies[1])).not.toHaveProperty('stream_options')
     expect(traces[1].decoded?.text).toBe('fallback')

@@ -150,6 +150,8 @@ export type ToolHostContext = {
   approvalIntent?: string
   /** Effective reasoning strength selected for this model round. Custom child agents inherit it. */
   reasoningEffort?: string
+  /** Effective Codex service tier for this turn ('fast' = priority). Children may inherit it unless a profile/tool overrides it. */
+  serviceTier?: 'priority'
   /** Skill ids activated for this turn, if the Skill runtime is enabled. */
   activeSkillIds?: readonly string[]
   /** Optional memory recall/mutation policy for this turn. */

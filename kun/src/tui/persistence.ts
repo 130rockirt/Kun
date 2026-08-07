@@ -2,6 +2,7 @@ import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { z } from 'zod'
 import { ModelReasoningEffort } from '../contracts/capabilities.js'
+import { withRuntimeDataDirAncillaryWriter } from '../server/runtime-data-dir-lease.js'
 
 const RecentModelSchema = z.object({
   providerId: z.string().min(1),
@@ -49,13 +50,15 @@ export async function writeTuiPersistentState(dataDir: string, state: TuiPersist
   const target = tuiStatePath(dataDir)
   const directory = dirname(target)
   const safe = TuiPersistentStateSchema.parse(state)
-  await mkdir(directory, { recursive: true, mode: 0o700 })
-  await chmod(directory, 0o700).catch(() => undefined)
-  const temporary = `${target}.${process.pid}.tmp`
-  await writeFile(temporary, `${JSON.stringify(safe, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
-  await chmod(temporary, 0o600).catch(() => undefined)
-  await rename(temporary, target)
-  await chmod(target, 0o600).catch(() => undefined)
+  await withRuntimeDataDirAncillaryWriter(dataDir, async () => {
+    await mkdir(directory, { recursive: true, mode: 0o700 })
+    await chmod(directory, 0o700).catch(() => undefined)
+    const temporary = `${target}.${process.pid}.tmp`
+    await writeFile(temporary, `${JSON.stringify(safe, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
+    await chmod(temporary, 0o600).catch(() => undefined)
+    await rename(temporary, target)
+    await chmod(target, 0o600).catch(() => undefined)
+  })
 }
 
 export function modelStateKey(providerId: string, accountId: string, model: string): string {

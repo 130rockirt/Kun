@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { AtomicJsonFile } from './atomic-json.js'
+import { AtomicJsonFile, configureManagerAtomicJsonClient } from './atomic-json.js'
 
 function validateCounter(value: unknown): { count: number } {
   if (
@@ -11,11 +11,37 @@ function validateCounter(value: unknown): { count: number } {
 }
 
 afterEach(() => {
+  configureManagerAtomicJsonClient(null)
   vi.unstubAllEnvs()
   vi.unstubAllGlobals()
 })
 
 describe('AtomicJsonFile manager data plane', () => {
+  it('uses an in-memory Main client override without mutating process.env', async () => {
+    vi.stubEnv('KUN_MANAGER_BASE_URL', '')
+    vi.stubEnv('KUN_MANAGER_TOKEN', '')
+    vi.stubEnv('KUN_MANAGER_DATA_DIR', '')
+    configureManagerAtomicJsonClient({
+      baseUrl: 'http://127.0.0.1:19001',
+      token: 'memory-only-manager-secret',
+      dataDir: '/tmp/kun-main-data'
+    })
+    const fetchMock = vi.fn(async () => Response.json({
+      snapshot: { revision: 1, value: { count: 7 } }
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const file = new AtomicJsonFile('/tmp/kun-main-data/state.json', validateCounter)
+    await expect(file.read(() => ({ count: 0 }))).resolves.toEqual({ count: 7 })
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://127.0.0.1:19001/v1/data/atomic-json/read',
+      expect.objectContaining({
+        headers: expect.objectContaining({ authorization: 'Bearer memory-only-manager-secret' })
+      })
+    )
+    expect(process.env.KUN_MANAGER_TOKEN).toBe('')
+  })
+
   it('uses manager CAS and retries against the latest shared revision', async () => {
     vi.stubEnv('KUN_MANAGER_BASE_URL', 'http://127.0.0.1:19000')
     vi.stubEnv('KUN_MANAGER_TOKEN', 'manager-secret')

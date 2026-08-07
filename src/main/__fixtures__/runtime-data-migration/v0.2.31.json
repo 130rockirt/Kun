@@ -1,0 +1,33 @@
+{
+  "version": "0.2.31",
+  "tagObject": "a42343e323e4d2299bfde08de53bab7e274ef525",
+  "commit": "2f578f61a88985dc7afcc976a3b295ce8a4d5d8b",
+  "observedShape": "legacy history plus provider registry references and no runtime journal",
+  "entries": [
+    {
+      "path": "user-data/kun-settings.json",
+      "content": "{\"version\":1,\"agents\":{\"kun\":{\"dataDir\":\"~/.deepseekgui/kun\"}}}\n"
+    },
+    {
+      "path": "home/.deepseekgui/kun/config.json",
+      "content": "{\"serve\":{}}\n"
+    },
+    {
+      "path": "home/.deepseekgui/kun/threads/thr_0231/metadata.jsonl",
+      "content": "{\"id\":\"thr_0231\",\"title\":\"provider fixture\"}\n"
+    },
+    {
+      "path": "home/.deepseekgui/kun/extensions/providers.json",
+      "content": "{\"schemaVersion\":1,\"revision\":1,\"providers\":{\"fixture-provider\":{\"id\":\"fixture-provider\"}}}\n"
+    },
+    {
+      "path": "home/.deepseekgui/kun/extensions/accounts.json",
+      "content": "{\"schemaVersion\":1,\"revision\":1,\"accounts\":{\"fixture-account\":{\"id\":\"fixture-account\",\"providerId\":\"fixture-provider\",\"credentialRef\":\"registry-owned:fixture\"}}}\n"
+    }
+  ],
+  "expected": {
+    "scannerState": "candidate-ready",
+    "candidateKinds": ["legacy"],
+    "runnerStatus": "completed"
+  }
+}

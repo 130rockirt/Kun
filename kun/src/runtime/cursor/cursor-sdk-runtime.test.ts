@@ -9,7 +9,12 @@ import type {
   SDKAgent,
   SDKMessage
 } from '@cursor/sdk'
+import type { RuntimeEvent } from '../../contracts/events.js'
 import type { TurnItem } from '../../contracts/items.js'
+import {
+  applyRuntimeEvent,
+  createRuntimeEventProjection
+} from '../../domain/runtime-event-reducer.js'
 import { LlmDebugRecorder } from '../../services/llm-debug-recorder.js'
 import {
   CursorSdkRuntime,
@@ -27,6 +32,7 @@ import {
   delegatedCredentialIdentity,
   delegatedHistoryDigest
 } from '../delegated-session-binding.js'
+import { goalContextKey } from '../../loop/continuation-instructions.js'
 
 function messages(values: SDKMessage[]): AsyncGenerator<SDKMessage, void> {
   return (async function* () {
@@ -73,6 +79,8 @@ function fakeRun(input: {
 
 function harness(input: {
   apiKey?: string
+  credentialSourceId?: string
+  resolveCredentialSource?: CursorSdkRuntimeDeps['resolveCredentialSource']
   run?: Run
   sendResults?: Array<Run | Error>
   thread?: Record<string, unknown>
@@ -84,6 +92,7 @@ function harness(input: {
   sessionCoordinator?: CursorSdkRuntimeDeps['sessionCoordinator']
   omitLocalStore?: boolean
   kunContext?: CursorKunTurnContext
+  onLoadKunTurnContext?: () => void | Promise<void>
   contextProfile?: CursorSdkRuntimeDeps['contextProfile']
   streamLimits?: CursorSdkRuntimeDeps['streamLimits']
   todoSyncError?: Error
@@ -100,6 +109,10 @@ function harness(input: {
   const updated: unknown[] = []
   const materialized = new Map<string, TurnItem>()
   const recorded: unknown[] = []
+  const recordedDeltaSnapshots: Array<{
+    event: unknown
+    item: TurnItem
+  }> = []
   const finished: unknown[] = []
   const createOptions: AgentOptions[] = []
   const sentMessages: unknown[] = []
@@ -108,6 +121,16 @@ function harness(input: {
   const resumedOptions: Array<Partial<AgentOptions> | undefined> = []
   const kunContextSignals: AbortSignal[] = []
   const syncedTodos: unknown[] = []
+  const loadItems = vi.fn(async () => input.items ?? [{
+    id: 'user_1',
+    threadId: 'thread_1',
+    turnId: 'turn_1',
+    role: 'user',
+    status: 'completed',
+    createdAt: new Date().toISOString(),
+    kind: 'user_message',
+    text: 'hi'
+  }])
   const sendResults = input.sendResults ?? [input.run ?? fakeRun()]
   let sendIndex = 0
   const reload = vi.fn(async () => undefined)
@@ -165,7 +188,8 @@ function harness(input: {
     providerConfigs: {
       'cursor-subscription': {
         kind: 'cursor-sdk',
-        apiKey: input.apiKey ?? 'cursor-secret'
+        apiKey: input.apiKey ?? 'cursor-secret',
+        ...(input.credentialSourceId ? { credentialSourceId: input.credentialSourceId } : {})
       }
     },
     providerIds: new Set(['cursor-subscription']),
@@ -174,16 +198,7 @@ function harness(input: {
     systemPrompt: 'Kun system prompt',
     threadStore: { get: async () => thread },
     sessionStore: {
-      loadItems: async () => input.items ?? [{
-        id: 'user_1',
-        threadId: 'thread_1',
-        turnId: 'turn_1',
-        role: 'user',
-        status: 'completed',
-        createdAt: new Date().toISOString(),
-        kind: 'user_message',
-        text: 'hi'
-      }]
+      loadItems
     },
     turns: {
       applyItem: async (_threadId: string, item: TurnItem) => {
@@ -207,7 +222,20 @@ function harness(input: {
         : {}),
       finishTurn: async (value: unknown) => { finished.push(value) }
     },
-    events: { record: async (value: unknown) => { recorded.push(value) } },
+    events: {
+      record: async (value: unknown) => {
+        recorded.push(value)
+        const event = value as { kind?: unknown; itemId?: unknown }
+        if (
+          (event.kind === 'assistant_text_delta' ||
+            event.kind === 'assistant_reasoning_delta') &&
+          typeof event.itemId === 'string'
+        ) {
+          const item = materialized.get(event.itemId)
+          if (item) recordedDeltaSnapshots.push({ event: value, item: structuredClone(item) })
+        }
+      }
+    },
     ids: { next: (prefix: string) => `${prefix}_1` },
     setThreadTodos: async (threadId: string, request: unknown) => {
       if (input.todoSyncError) throw input.todoSyncError
@@ -217,6 +245,9 @@ function harness(input: {
       if (input.loadError) throw input.loadError
       return sdk
     },
+    ...(input.resolveCredentialSource
+      ? { resolveCredentialSource: input.resolveCredentialSource }
+      : {}),
     debugSink: input.debugSink,
     attachmentStore: input.attachmentStore,
     turnLimits: input.turnLimits,
@@ -227,6 +258,7 @@ function harness(input: {
       ? {
           loadKunTurnContext: async ({ signal }: { signal: AbortSignal }) => {
             kunContextSignals.push(signal)
+            await input.onLoadKunTurnContext?.()
             return input.kunContext!
           }
         }
@@ -239,9 +271,11 @@ function harness(input: {
     updated,
     materialized,
     recorded,
+    recordedDeltaSnapshots,
     finished,
     sentMessages,
     sentOptions,
+    loadItems,
     kunContextSignals,
     resumedAgentIds,
     resumedOptions,
@@ -333,6 +367,72 @@ describe('CursorSdkRuntime', () => {
       }
     })
     expect(JSON.stringify(trace)).not.toContain('cursor-secret')
+  })
+
+  test('reloads canonical history after Kun context materializes a goal', async () => {
+    const createdAt = '2026-08-06T00:00:00.000Z'
+    const goal = {
+      threadId: 'thread_1',
+      objective: 'Finish the migration safely.',
+      status: 'active' as const,
+      tokenBudget: 10_000,
+      tokensUsed: 0,
+      timeUsedSeconds: 0,
+      createdAt,
+      updatedAt: createdAt
+    }
+    const items: Array<Record<string, unknown>> = [{
+      id: 'user_1',
+      threadId: 'thread_1',
+      turnId: 'turn_1',
+      role: 'user',
+      status: 'completed',
+      createdAt,
+      kind: 'user_message',
+      text: 'continue the migration'
+    }]
+    const debugSink = new LlmDebugRecorder()
+    const h = harness({
+      items,
+      debugSink,
+      kunContext: {
+        instructionBlocks: [],
+        activeSkillIds: [],
+        tools: [],
+        customTools: {}
+      },
+      thread: { goal },
+      onLoadKunTurnContext: () => {
+        items.push({
+          id: 'item_turn_1_goal_context',
+          threadId: 'thread_1',
+          turnId: 'turn_1',
+          role: 'system',
+          status: 'completed',
+          goalKey: goalContextKey(goal)!,
+          createdAt,
+          kind: 'goal_context',
+          text: 'Finish the migration safely.'
+        })
+      }
+    })
+
+    await expect(h.runtime.runTurn(
+      'thread_1',
+      'turn_1',
+      new AbortController().signal,
+      'cursor-subscription'
+    )).resolves.toBe('completed')
+
+    expect(h.loadItems).toHaveBeenCalledTimes(2)
+    expect(String(h.sentMessages[0])).toContain(
+      '[active goal] Finish the migration safely.'
+    )
+    expect(String(h.sentMessages[0])).toContain('<prior_conversation>')
+    const trace = (await debugSink.listThread('thread_1')).records[0]
+    if (!trace?.request) throw new Error('expected a request payload in the captured trace')
+    expect(trace.request.body.text).not.toContain('Finish the migration safely.')
+    expect(trace.request.body.text).toContain('[REDACTED]')
   })
 
   test('keeps Graph in plan mode and gives pending review a real second Cursor exchange', async () => {
@@ -584,6 +684,114 @@ describe('CursorSdkRuntime', () => {
     expect(h.kunContextSignals[0]?.aborted).toBe(true)
   })
 
+  test('replays Cursor text and reasoning fragments over cumulative snapshots without duplication', async () => {
+    const h = harness({
+      run: fakeRun({
+        stream: [{
+          type: 'thinking',
+          agent_id: 'agent_1',
+          run_id: 'run_1',
+          text: '思😀'
+        }, {
+          type: 'assistant',
+          agent_id: 'agent_1',
+          run_id: 'run_1',
+          message: {
+            role: 'assistant',
+            content: [
+              { type: 'text', text: 'A😀' },
+              { type: 'text', text: 'B' }
+            ]
+          }
+        }, {
+          type: 'thinking',
+          agent_id: 'agent_1',
+          run_id: 'run_1',
+          text: '考'
+        }, {
+          type: 'assistant',
+          agent_id: 'agent_1',
+          run_id: 'run_1',
+          message: { role: 'assistant', content: [{ type: 'text', text: '猫' }] }
+        }],
+        result: { result: 'A😀B猫' }
+      })
+    })
+
+    await expect(h.runtime.runTurn(
+      'thread_1',
+      'turn_1',
+      new AbortController().signal,
+      'cursor-subscription'
+    )).resolves.toBe('completed')
+
+    const deltas = h.recordedDeltaSnapshots.map(({ event, item }) => {
+      const draft = event as {
+        kind: string
+        deltaOffset?: number
+        item: { text?: string }
+      }
+      return {
+        kind: draft.kind,
+        offset: draft.deltaOffset,
+        fragment: draft.item.text,
+        persistedText: 'text' in item ? item.text : undefined
+      }
+    })
+    expect(deltas).toEqual([
+      {
+        kind: 'assistant_reasoning_delta',
+        offset: 0,
+        fragment: '思😀',
+        persistedText: '思😀'
+      },
+      {
+        kind: 'assistant_text_delta',
+        offset: 0,
+        fragment: 'A😀',
+        persistedText: 'A😀B'
+      },
+      {
+        kind: 'assistant_text_delta',
+        offset: 3,
+        fragment: 'B',
+        persistedText: 'A😀B'
+      },
+      {
+        kind: 'assistant_reasoning_delta',
+        offset: 3,
+        fragment: '考',
+        persistedText: '思😀考'
+      },
+      {
+        kind: 'assistant_text_delta',
+        offset: 4,
+        fragment: '猫',
+        persistedText: 'A😀B猫'
+      }
+    ])
+
+    const latestSnapshots = new Map<string, TurnItem>()
+    for (const snapshot of h.recordedDeltaSnapshots) {
+      latestSnapshots.set(snapshot.item.id, snapshot.item)
+    }
+    let replayed = {
+      ...createRuntimeEventProjection('thread_1'),
+      items: [...latestSnapshots.values()]
+    }
+    for (const [index, snapshot] of h.recordedDeltaSnapshots.entries()) {
+      replayed = applyRuntimeEvent(replayed, {
+        ...(snapshot.event as RuntimeEvent),
+        seq: index + 1,
+        timestamp: `2026-08-05T00:00:0${index}.000Z`
+      })
+    }
+    expect(replayed.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'assistant_text', text: 'A😀B猫' }),
+      expect.objectContaining({ kind: 'assistant_reasoning', text: '思😀考' })
+    ]))
+  })
+
   test('rebuilds the SDK session once and continues an accepted run after authentication expires', async () => {
     const h = harness({
       sendResults: [
@@ -658,6 +866,12 @@ describe('CursorSdkRuntime', () => {
       kind: 'error',
       code: 'cursor_sdk_authentication_failed'
     }))
+    expect(h.recorded.filter((event) => (
+      event as { kind?: unknown }
+    ).kind === 'assistant_text_delta')).toEqual([
+      expect.objectContaining({ deltaOffset: 0 }),
+      expect.objectContaining({ deltaOffset: 'partial result'.length })
+    ])
     expect(h.finished).toContainEqual(expect.objectContaining({ status: 'completed' }))
   })
 
@@ -762,6 +976,15 @@ describe('CursorSdkRuntime', () => {
     )).resolves.toBe('completed')
 
     expect(h.createOptions[0]?.local?.customTools).toHaveProperty('mcp_call_tool')
+    // The per-send local override must carry the same Kun custom tools so
+    // resumed and forced recovery runs never lose the tool catalog.
+    expect(h.sentOptions[0]).toMatchObject({
+      local: expect.objectContaining({
+        customTools: expect.objectContaining({
+          mcp_call_tool: expect.objectContaining({ execute: mcpExecute })
+        })
+      })
+    })
     expect(String(h.sentMessages[0])).toContain('Kun system prompt')
     expect(String(h.sentMessages[0])).toContain('Workspace AGENTS instructions')
     expect(String(h.sentMessages[0])).toContain('Active skill instructions')
@@ -784,7 +1007,7 @@ describe('CursorSdkRuntime', () => {
       providerId: 'mcp:facade',
       providerKind: 'mcp'
     }])
-    const traceBody = JSON.parse(trace?.request.body.text ?? '{}') as Record<string, unknown>
+    const traceBody = JSON.parse(trace?.request?.body?.text ?? '{}') as Record<string, unknown>
     expect(traceBody).toMatchObject({
       instructions: expect.arrayContaining([
         'Kun system prompt',
@@ -880,6 +1103,111 @@ describe('CursorSdkRuntime', () => {
     ).toContain('provider-state')
     expect(String(h.sentMessages[0])).toContain('current only')
     expect(String(h.sentMessages[0])).not.toContain('portable old context')
+  })
+
+  test('rebases a native session when the current turn introduces active goal context', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-cursor-goal-rebase-'))
+    const coordinator = new DelegatedSessionCoordinator(
+      new FileDelegatedSessionBindingStore(root)
+    )
+    const priorItems = [{
+      id: 'user_old_goal_rebase',
+      threadId: 'thread_1',
+      turnId: 'turn_old',
+      role: 'user',
+      status: 'completed',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      kind: 'user_message',
+      text: 'portable context before the goal'
+    }] as const
+    const route = {
+      providerKind: 'cursor-sdk' as const,
+      providerId: 'cursor-subscription',
+      credentialIdentity: delegatedCredentialIdentity({
+        providerId: 'cursor-subscription',
+        credentialSecret: 'cursor-secret'
+      }),
+      workspace: '/tmp/cursor-workspace',
+      model: 'auto',
+      capabilityFingerprint: delegatedCapabilityFingerprint({
+        systemPrompt: 'Kun system prompt',
+        threadPersona: '',
+        mode: 'agent',
+        sandbox: false,
+        approvalPolicy: 'auto',
+        sandboxMode: 'danger-full-access',
+        settingSources: [],
+        capabilities: cursorSdkCapabilities()
+      }),
+      continuationMode: 'native' as const
+    }
+    const prepared = await coordinator.prepare({
+      threadId: 'thread_1',
+      route,
+      priorItems: []
+    })
+    await coordinator.commit({
+      preparation: prepared,
+      committedItems: priorItems as never,
+      lastCommittedTurnId: 'turn_old',
+      nativeSessionId: 'agent_persisted'
+    })
+    const createdAt = '2026-08-06T00:00:00.000Z'
+    const goal = {
+      threadId: 'thread_1',
+      objective: 'Finish the migration before answering anything else.',
+      status: 'active' as const,
+      tokenBudget: 1_000,
+      tokensUsed: 0,
+      timeUsedSeconds: 0,
+      createdAt,
+      updatedAt: createdAt
+    }
+    const h = harness({
+      sessionCoordinator: coordinator,
+      thread: {
+        goal,
+        turns: [{ id: 'turn_1', model: 'auto', mode: 'agent' }]
+      },
+      items: [
+        ...priorItems,
+        {
+          id: 'user_goal_rebase',
+          threadId: 'thread_1',
+          turnId: 'turn_1',
+          role: 'user',
+          status: 'completed',
+          createdAt,
+          kind: 'user_message',
+          text: 'continue now'
+        },
+        {
+          id: 'goal_context_rebase',
+          threadId: 'thread_1',
+          turnId: 'turn_1',
+          role: 'system',
+          status: 'completed',
+          createdAt,
+          kind: 'goal_context',
+          goalKey: goalContextKey(goal)!,
+          text: 'Finish the migration before answering anything else.'
+        }
+      ]
+    })
+
+    await expect(h.runtime.runTurn(
+      'thread_1',
+      'turn_1',
+      new AbortController().signal,
+      'cursor-subscription'
+    )).resolves.toBe('completed')
+
+    expect(h.resumedAgentIds).toEqual([])
+    expect(String(h.sentMessages[0])).toContain('<prior_conversation>')
+    expect(String(h.sentMessages[0])).toContain('portable context before the goal')
+    expect(String(h.sentMessages[0])).toContain(
+      '[active goal] Finish the migration before answering anything else.'
+    )
   })
 
   test('rotates native continuation when the bridged Kun tool catalog changes', async () => {
@@ -1193,6 +1521,37 @@ describe('CursorSdkRuntime', () => {
       status: 'failed',
       code: 'cursor_sdk_missing_credential'
     }))
+  })
+
+  test('re-resolves a managed credential for every turn on the same Runtime', async () => {
+    let authoritativeKey = ''
+    const resolveCredentialSource = vi.fn(async () =>
+      authoritativeKey ? { apiKey: authoritativeKey } : null)
+    const h = harness({
+      apiKey: 'stale-constructor-key',
+      credentialSourceId: 'model-connection:cursor-subscription',
+      resolveCredentialSource
+    })
+
+    await expect(h.runtime.runTurn(
+      'thread_1',
+      'turn_1',
+      new AbortController().signal,
+      'cursor-subscription'
+    )).resolves.toBe('failed')
+    expect(h.createOptions).toEqual([])
+
+    authoritativeKey = 'authoritative-cursor-key'
+    await expect(h.runtime.runTurn(
+      'thread_1',
+      'turn_1',
+      new AbortController().signal,
+      'cursor-subscription'
+    )).resolves.toBe('completed')
+    expect(h.createOptions).toContainEqual(expect.objectContaining({
+      apiKey: 'authoritative-cursor-key'
+    }))
+    expect(resolveCredentialSource).toHaveBeenCalledTimes(2)
   })
 
   test('cancels an active SDK run when the Kun turn aborts', async () => {

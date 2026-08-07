@@ -180,6 +180,103 @@ describe('GraphSupervisor', () => {
     }))
   })
 
+  it('bounds stale flushes behind a slow Lead and does not acknowledge later steering', async () => {
+    let current: GraphRunV1 = { ...baseRun(), status: 'running' }
+    let releaseLead!: () => void
+    let markLeadStarted!: () => void
+    const leadStarted = new Promise<void>((resolve) => { markLeadStarted = resolve })
+    const leadBlocked = new Promise<void>((resolve) => { releaseLead = resolve })
+    const leadTurn = vi.fn(async ({ run }: { run: GraphRunV1 }) => {
+      markLeadStarted()
+      await leadBlocked
+      return {
+        status: 'delivered' as const,
+        sourceTurnId: run.sourceTurnId,
+        deliveredSeq: run.lastEventSeq,
+        executionActive: true
+      }
+    })
+    const store = {
+      get: vi.fn(async () => current),
+      list: vi.fn(async () => [current]),
+      events: vi.fn(async () => []),
+      append: vi.fn(async (_runId: string, input: AppendGraphEventInput) => {
+        const result = applyTestAppend(current, input)
+        current = result.state
+        return result
+      })
+    }
+    const supervisor = new GraphSupervisor({
+      store: store as never,
+      config: () => testGraphConfig({
+        supervision: { coalesceWindowMs: 60_000 }
+      }),
+      delegation: () => undefined,
+      leadTurn,
+      isLeadTurnActive: () => true
+    })
+
+    await supervisor.signal({
+      runId: current.id,
+      reason: 'help',
+      nodeIds: [],
+      digest: 'Episode A is already in flight.'
+    })
+    const firstFlush = supervisor.flush(current.id)
+    await leadStarted
+    await store.append(current.id, {
+      expectedSeq: current.lastEventSeq,
+      graphRevision: current.currentRevision,
+      event: {
+        type: 'steering_recorded',
+        payload: {
+          steering: {
+            version: 1,
+            steeringId: 'steering_episode_b',
+            runId: current.id,
+            target: { kind: 'lead' },
+            text: 'Episode B must not be acknowledged by episode A.',
+            status: 'persisted',
+            createdAt: current.updatedAt
+          }
+        }
+      }
+    })
+    await supervisor.signal({
+      runId: current.id,
+      reason: 'user_steering',
+      nodeIds: [],
+      digest: 'Episode B arrived while episode A was blocked.'
+    })
+    await store.append(current.id, {
+      expectedSeq: current.lastEventSeq,
+      graphRevision: current.currentRevision,
+      event: {
+        type: 'run_status_changed',
+        payload: { from: 'running', to: 'cancelled', reason: 'test terminal fence' }
+      }
+    })
+    const staleFlushes = Array.from({ length: 2_000 }, () => supervisor.flush(current.id))
+    releaseLead()
+    await Promise.all([firstFlush, ...staleFlushes])
+
+    expect(leadTurn).toHaveBeenCalledOnce()
+    expect(current.steering.find((entry) => entry.steeringId === 'steering_episode_b')?.status)
+      .toBe('persisted')
+    const resolvedIds = store.append.mock.calls.flatMap(([, input]) =>
+      input.event.type === 'supervision_obligation_resolved'
+        ? [input.event.payload.obligation.id]
+        : [])
+    expect(resolvedIds).toHaveLength(2)
+    expect(new Set(resolvedIds).size).toBe(2)
+    expect(current.supervisionObligations.every((entry) => entry.state === 'resolved')).toBe(true)
+
+    const appendCount = store.append.mock.calls.length
+    await Promise.all(Array.from({ length: 1_000 }, () => supervisor.sweepObligations()))
+    expect(store.append).toHaveBeenCalledTimes(appendCount)
+    await supervisor.stop()
+  })
+
   it('conservatively requests a human when an independent reviewer is unavailable', async () => {
     const run = baseRun()
     const attempt = failedAttempt('attempt_review', 1, 'not relevant')
@@ -619,6 +716,347 @@ describe('GraphSupervisor', () => {
       reasons: ['failure']
     }))
     await supervisor.stop()
+  })
+
+  it('reconciles stale obligations when a live run emits its terminal signal', async () => {
+    let current: GraphRunV1 = { ...baseRun(), status: 'running' }
+    const leadTurn = vi.fn(async () => undefined)
+    const store = {
+      get: vi.fn(async () => current),
+      list: vi.fn(async () => [current]),
+      events: vi.fn(async () => []),
+      append: vi.fn(async (_runId: string, input: AppendGraphEventInput) => {
+        const result = applyTestAppend(current, input)
+        current = result.state
+        return result
+      })
+    }
+    const supervisor = new GraphSupervisor({
+      store: store as never,
+      config: () => testGraphConfig({ supervision: { coalesceWindowMs: 60_000 } }),
+      delegation: () => undefined,
+      leadTurn,
+      isLeadTurnActive: () => true
+    })
+
+    await supervisor.signal({
+      runId: current.id,
+      reason: 'help',
+      nodeIds: [],
+      digest: 'A nonterminal obligation awaiting source Lead action.'
+    })
+    await supervisor.flush(current.id)
+    expect(current.supervisionObligations[0]?.state).toBe('awaiting_action')
+
+    current = { ...current, status: 'failed' }
+    await supervisor.signal({
+      runId: current.id,
+      reason: 'failure',
+      nodeIds: [],
+      digest: 'The GraphRun reached a terminal failure.'
+    })
+    await supervisor.flush(current.id)
+
+    expect(leadTurn).toHaveBeenCalledTimes(2)
+    expect(current.supervisionObligations).toHaveLength(2)
+    expect(current.supervisionObligations.every((entry) => entry.state === 'resolved'))
+      .toBe(true)
+    const stableSeq = current.lastEventSeq
+    await Promise.all(Array.from({ length: 1_000 }, () => supervisor.sweepObligations()))
+    expect(current.lastEventSeq).toBe(stableSeq)
+    await supervisor.stop()
+  })
+
+  it.each([
+    ['completed', 'completion'],
+    ['failed', 'failure'],
+    ['cancelled', 'completion']
+  ] as const)(
+    'recovers an abandoned %s delivery and bounds a stable startup episode',
+    async (status, reason) => {
+      let current: GraphRunV1 = { ...baseRun(), status }
+      let releaseAbandoned!: () => void
+      let markAbandonedStarted!: () => void
+      const abandonedStarted = new Promise<void>((resolve) => { markAbandonedStarted = resolve })
+      const abandonedBlocked = new Promise<void>((resolve) => { releaseAbandoned = resolve })
+      const store = {
+        get: vi.fn(async () => current),
+        list: vi.fn(async () => [current]),
+        events: vi.fn(async () => []),
+        append: vi.fn(async (_runId: string, input: AppendGraphEventInput) => {
+          const result = applyTestAppend(current, input)
+          current = result.state
+          return result
+        })
+      }
+      const abandoned = new GraphSupervisor({
+        store: store as never,
+        config: () => testGraphConfig({ supervision: { coalesceWindowMs: 60_000 } }),
+        delegation: () => undefined,
+        leadTurn: async () => {
+          markAbandonedStarted()
+          await abandonedBlocked
+        }
+      })
+      const signal = {
+        runId: current.id,
+        reason,
+        nodeIds: [] as string[],
+        digest: `Terminal lifecycle for ${status}.`
+      }
+      await abandoned.signal(signal)
+      const abandonedFlush = abandoned.flush(current.id)
+      await abandonedStarted
+      expect(current.supervisionObligations[0]).toMatchObject({
+        state: 'delivering',
+        deliveryAttempts: 1
+      })
+
+      let releaseSecondAbandoned!: () => void
+      let markSecondAbandonedStarted!: () => void
+      const secondAbandonedStarted = new Promise<void>((resolve) => {
+        markSecondAbandonedStarted = resolve
+      })
+      const secondAbandonedBlocked = new Promise<void>((resolve) => {
+        releaseSecondAbandoned = resolve
+      })
+      const secondAbandoned = new GraphSupervisor({
+        store: store as never,
+        config: () => testGraphConfig({ supervision: { coalesceWindowMs: 60_000 } }),
+        delegation: () => undefined,
+        leadTurn: async () => {
+          markSecondAbandonedStarted()
+          await secondAbandonedBlocked
+        }
+      })
+      const secondAbandonedDelivery = secondAbandoned.redeliverNow(signal)
+      await secondAbandonedStarted
+      expect(current.supervisionObligations[0]).toMatchObject({
+        state: 'delivering',
+        deliveryAttempts: 2
+      })
+
+      const recoveredLead = vi.fn(async () => undefined)
+      const recovered = new GraphSupervisor({
+        store: store as never,
+        config: () => testGraphConfig({ supervision: { coalesceWindowMs: 60_000 } }),
+        delegation: () => undefined,
+        leadTurn: recoveredLead
+      })
+      const recoverySignal = {
+        ...signal,
+        recoveryKey: `terminal:${status}:${current.sourceTurnId}:0`
+      }
+      await recovered.redeliverNow(recoverySignal)
+      releaseAbandoned()
+      releaseSecondAbandoned()
+      await Promise.all([abandonedFlush, secondAbandonedDelivery])
+
+      expect(recoveredLead).toHaveBeenCalledOnce()
+      expect(current.supervisionObligations).toHaveLength(2)
+      expect(current.supervisionObligations[0]).toMatchObject({
+        state: 'resolved',
+        deliveryAttempts: 2
+      })
+      expect(current.supervisionObligations[1]).toMatchObject({
+        state: 'resolved',
+        deliveryAttempts: 1
+      })
+      // The active notification exhausted its delivery cap. The same startup pass
+      // creates the stable recovery episode, and that key cannot create another.
+      const stableRecoverySeq = current.lastEventSeq
+      await recovered.redeliverNow(recoverySignal)
+      await recovered.redeliverNow(recoverySignal)
+      await recovered.redeliverNow({
+        ...recoverySignal,
+        digest: `Changed recovery prose for the same ${status} episode.`
+      })
+      expect(recoveredLead).toHaveBeenCalledOnce()
+      expect(current.supervisionObligations).toHaveLength(2)
+      expect(current.lastEventSeq).toBe(stableRecoverySeq)
+      const resolvedEvents = store.append.mock.calls.filter(([, input]) =>
+        input.event.type === 'supervision_obligation_resolved')
+      expect(resolvedEvents).toHaveLength(2)
+      const appendCount = store.append.mock.calls.length
+      await Promise.all(Array.from({ length: 1_000 }, () => recovered.sweepObligations()))
+      expect(store.append).toHaveBeenCalledTimes(appendCount)
+      await Promise.all([abandoned.stop(), secondAbandoned.stop(), recovered.stop()])
+    }
+  )
+
+  it('serializes an exact terminal recovery with a concurrent legacy signal', async () => {
+    let current: GraphRunV1 = { ...baseRun(), status: 'failed' }
+    let markRecoveryRead!: () => void
+    let releaseRecoveryRead!: () => void
+    const recoveryRead = new Promise<void>((resolve) => { markRecoveryRead = resolve })
+    const recoveryReadBlocked = new Promise<void>((resolve) => { releaseRecoveryRead = resolve })
+    let blockFirstRead = true
+    const leadTurn = vi.fn(async () => undefined)
+    const store = {
+      get: vi.fn(async () => {
+        if (blockFirstRead) {
+          blockFirstRead = false
+          markRecoveryRead()
+          await recoveryReadBlocked
+        }
+        return current
+      }),
+      list: vi.fn(async () => [current]),
+      events: vi.fn(async () => []),
+      append: vi.fn(async (_runId: string, input: AppendGraphEventInput) => {
+        const result = applyTestAppend(current, input)
+        current = result.state
+        return result
+      })
+    }
+    const supervisor = new GraphSupervisor({
+      store: store as never,
+      config: () => testGraphConfig({ supervision: { coalesceWindowMs: 60_000 } }),
+      delegation: () => undefined,
+      leadTurn
+    })
+    const recoverySignal = {
+      runId: current.id,
+      reason: 'failure' as const,
+      nodeIds: [] as string[],
+      digest: 'Recovered terminal failure.',
+      recoveryKey: `terminal:failed:${current.sourceTurnId}:0`
+    }
+
+    const recovery = supervisor.redeliverNow(recoverySignal)
+    await recoveryRead
+    const legacySignal = supervisor.signal({
+      runId: current.id,
+      reason: 'failure',
+      nodeIds: [],
+      digest: 'Concurrent legacy terminal failure.'
+    })
+    releaseRecoveryRead()
+    await Promise.all([recovery, legacySignal])
+    await supervisor.flush(current.id)
+
+    expect(leadTurn).toHaveBeenCalledOnce()
+    expect(current.supervisionObligations).toHaveLength(1)
+    expect(current.supervisionObligations[0]).toMatchObject({
+      state: 'resolved',
+      deliveryAttempts: 1
+    })
+    const stableSeq = current.lastEventSeq
+    await supervisor.redeliverNow(recoverySignal)
+    expect(leadTurn).toHaveBeenCalledOnce()
+    expect(current.lastEventSeq).toBe(stableSeq)
+    await supervisor.stop()
+  })
+
+  it('redelivers terminal pending work once when Graph is disabled and re-enabled', async () => {
+    let current: GraphRunV1 = { ...baseRun(), status: 'failed' }
+    let config = testGraphConfig({ supervision: { coalesceWindowMs: 60_000 } })
+    const leadTurn = vi.fn(async () => undefined)
+    const store = {
+      get: vi.fn(async () => current),
+      list: vi.fn(async () => [current]),
+      events: vi.fn(async () => []),
+      append: vi.fn(async (_runId: string, input: AppendGraphEventInput) => {
+        const result = applyTestAppend(current, input)
+        current = result.state
+        return result
+      })
+    }
+    const supervisor = new GraphSupervisor({
+      store: store as never,
+      config: () => config,
+      delegation: () => undefined,
+      leadTurn
+    })
+    supervisor.start()
+    await supervisor.signal({
+      runId: current.id,
+      reason: 'failure',
+      nodeIds: [],
+      digest: 'Terminal work was queued before Graph was disabled.'
+    })
+    expect(current.supervisionObligations[0]?.state).toBe('pending')
+
+    config = testGraphConfig({ enabled: false })
+    supervisor.reconfigure()
+    config = testGraphConfig({ supervision: { coalesceWindowMs: 0 } })
+    supervisor.reconfigure()
+
+    await vi.waitFor(() => {
+      expect(current.supervisionObligations[0]?.state).toBe('resolved')
+    })
+    expect(leadTurn).toHaveBeenCalledOnce()
+    const resolvedEvents = store.append.mock.calls.filter(([, input]) =>
+      input.event.type === 'supervision_obligation_resolved')
+    expect(resolvedEvents).toHaveLength(1)
+    await supervisor.stop()
+  })
+
+  it('defers startup terminal recovery while Graph is disabled and replays it on enable', async () => {
+    let current: GraphRunV1 = { ...baseRun(), status: 'failed' }
+    let config = testGraphConfig({ supervision: { coalesceWindowMs: 60_000 } })
+    let failNextGet = false
+    const store = {
+      get: vi.fn(async () => {
+        if (failNextGet) {
+          failNextGet = false
+          throw new Error('transient store read failure')
+        }
+        return current
+      }),
+      list: vi.fn(async () => [current]),
+      events: vi.fn(async () => []),
+      append: vi.fn(async (_runId: string, input: AppendGraphEventInput) => {
+        const result = applyTestAppend(current, input)
+        current = result.state
+        return result
+      })
+    }
+    const original = new GraphSupervisor({
+      store: store as never,
+      config: () => config,
+      delegation: () => undefined
+    })
+    await original.signal({
+      runId: current.id,
+      reason: 'failure',
+      nodeIds: [],
+      digest: 'Persisted before the disabled startup.'
+    })
+    await original.stop()
+
+    config = testGraphConfig({ enabled: false })
+    const leadTurn = vi.fn(async () => undefined)
+    const recovered = new GraphSupervisor({
+      store: store as never,
+      config: () => config,
+      delegation: () => undefined,
+      leadTurn
+    })
+    const recoverySignal = {
+      runId: current.id,
+      reason: 'failure' as const,
+      nodeIds: [] as string[],
+      digest: 'Recovered terminal failure after disabled startup.',
+      recoveryKey: `terminal:failed:${current.sourceTurnId}:0`
+    }
+    await recovered.redeliverNow(recoverySignal)
+    expect(leadTurn).not.toHaveBeenCalled()
+
+    config = testGraphConfig({ supervision: { coalesceWindowMs: 0 } })
+    failNextGet = true
+    recovered.reconfigure()
+    await vi.waitFor(() => {
+      expect(leadTurn).toHaveBeenCalledOnce()
+      expect(current.supervisionObligations).toHaveLength(2)
+      expect(current.supervisionObligations.every((entry) => entry.state === 'resolved'))
+        .toBe(true)
+    })
+    const stableRecoverySeq = current.lastEventSeq
+    await recovered.redeliverNow(recoverySignal)
+    expect(leadTurn).toHaveBeenCalledOnce()
+    expect(current.lastEventSeq).toBe(stableRecoverySeq)
+    await recovered.stop()
   })
 
   it('builds a bounded deterministic synthesis with evidence and risks', async () => {

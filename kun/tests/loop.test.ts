@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { appendFile, mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
+import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { InMemoryEventBus } from '../src/adapters/in-memory-event-bus.js'
 import { LocalToolHost, buildDefaultLocalTools } from '../src/adapters/tool/local-tool-host.js'
 import { CapabilityRegistry } from '../src/adapters/tool/capability-registry.js'
+import { buildBrowserUseToolProviders } from '../src/adapters/tool/browser-use-tool-provider.js'
 import { CREATE_PLAN_TOOL_NAME } from '../src/adapters/tool/create-plan-tool.js'
 import { GET_GOAL_TOOL_NAME, UPDATE_GOAL_TOOL_NAME } from '../src/adapters/tool/goal-tools.js'
 import { FileThreadStore, FileSessionStore } from '../src/adapters/file/index.js'
@@ -19,6 +20,7 @@ import {
   makeApprovalItem,
   makeAssistantReasoningItem,
   makeAssistantTextItem,
+  makeGoalContextItem,
   makeToolCallItem,
   makeToolResultItem,
   makeUserInputItem,
@@ -33,6 +35,7 @@ import type { SessionStore } from '../src/ports/session-store.js'
 import { TurnService } from '../src/services/turn-service.js'
 import type { TurnItem } from '../src/contracts/items.js'
 import type { ModelRequest, ModelStreamChunk } from '../src/ports/model-client.js'
+import type { BrowserController } from '../src/ports/browser-controller.js'
 import {
   bootstrapThread,
   makeFakeModel,
@@ -442,6 +445,218 @@ describe('AgentLoop', () => {
     expect(events.some((event) => event.kind === 'context_snapshot')).toBe(false)
   })
 
+  it('auto-compacts the 725733 + 131072 dead zone before the model transport instead of failing', async () => {
+    const requests: ModelRequest[] = []
+    const h = makeHarness({
+      provider: 'deadzone',
+      model: 'deadzone',
+      async *stream(request): AsyncIterable<ModelStreamChunk> {
+        requests.push(request)
+        yield { kind: 'completed', stopReason: 'stop' }
+      }
+    }, {
+      tools: [],
+      compactor: new ContextCompactor({ softThreshold: 750_000, hardThreshold: 850_000 }),
+      modelCapabilities: (model) => ({
+        id: model,
+        inputModalities: ['text'],
+        outputModalities: ['text'],
+        supportsToolCalling: true,
+        contextWindowTokens: 1_000_000,
+        maxOutputTokens: 131_072,
+        messageParts: ['text']
+      })
+    })
+    await h.threadStore.upsert(
+      createThreadRecord({ id: h.threadId, title: 'demo', workspace: '/tmp', model: 'deadzone' })
+    )
+    // ~725k estimated input tokens: below the 750k soft threshold, but with
+    // the 131072 output budget the full request would exceed the 850k cap.
+    const chunk = '工'.repeat(6_050)
+    for (let index = 0; index < 120; index += 1) {
+      await h.sessionStore.appendItem(h.threadId, makeUserItem({
+        id: `deadzone_old_${index}`,
+        turnId: `deadzone_old_turn_${index}`,
+        threadId: h.threadId,
+        text: chunk
+      }))
+    }
+    const started = await h.turns.startTurn({
+      threadId: h.threadId,
+      request: { prompt: 'keep this current request' }
+    })
+    h.turnId = started.turnId
+
+    await expect(h.loop.runTurn(h.threadId, h.turnId)).resolves.toBe('completed')
+
+    expect(requests).toHaveLength(1)
+    expect(requests[0]?.history[0]).toMatchObject({ kind: 'compaction' })
+    const events = await h.sessionStore.loadEventsSince(h.threadId, 0)
+    expect(events.some((event) =>
+      event.kind === 'error' && event.code === 'context_window_exceeded'
+    )).toBe(false)
+    expect(events).toContainEqual(expect.objectContaining({
+      kind: 'compaction_completed',
+      replacedTokens: expect.any(Number)
+    }))
+    const compressed = events.find((event) =>
+      event.kind === 'pipeline_stage' && event.stage === 'input_compressed'
+    )
+    expect(compressed).toMatchObject({
+      kind: 'pipeline_stage',
+      stage: 'input_compressed',
+      details: expect.objectContaining({
+        outputBudgetTokens: 131_072,
+        requestHardCapTokens: 850_000,
+        fallbackCompactionAttempted: false
+      })
+    })
+  })
+
+  it('fails once with a detailed reason when the current message itself cannot be compacted', async () => {
+    let dispatches = 0
+    const h = makeHarness({
+      provider: 'huge-prompt',
+      model: 'huge-prompt',
+      async *stream(): AsyncIterable<ModelStreamChunk> {
+        dispatches += 1
+        yield { kind: 'completed', stopReason: 'stop' }
+      }
+    }, {
+      tools: [],
+      compactor: new ContextCompactor({ softThreshold: 40_000, hardThreshold: 85_000 }),
+      modelCapabilities: (model) => ({
+        id: model,
+        inputModalities: ['text'],
+        outputModalities: ['text'],
+        supportsToolCalling: true,
+        contextWindowTokens: 100_000,
+        maxOutputTokens: 10_000,
+        messageParts: ['text']
+      })
+    })
+    // The input alone exceeds the 85k send cap, so the output budget clamp
+    // cannot rescue the request: compaction is the only remedy, and the
+    // current message itself is not compactable.
+    await bootstrapThread(h, {
+      request: { prompt: `unfoldable current input ${'工'.repeat(90_000)}` }
+    })
+
+    await expect(h.loop.runTurn(h.threadId, h.turnId)).resolves.toBe('failed')
+
+    expect(dispatches).toBe(0)
+    const events = await h.sessionStore.loadEventsSince(h.threadId, 0)
+    const error = events.find((event) => event.kind === 'error' && event.code === 'context_window_exceeded')
+    expect(error).toMatchObject({
+      kind: 'error',
+      code: 'context_window_exceeded',
+      details: expect.objectContaining({
+        fallbackCompactionAttempted: true,
+        fallbackCompactionApplied: false,
+        reason: 'no_compactable_history'
+      })
+    })
+    // The single-attempt rule: nothing was compactable, no compaction was
+    // committed, and the turn failed without ever dispatching a model request.
+    expect(events.some((event) => event.kind === 'compaction_completed')).toBe(false)
+  })
+
+  it('clamps the send-time output budget when rehydrated generated-image input grows', async () => {
+    const requests: ModelRequest[] = []
+    const h = makeHarness({
+      provider: 'image-fallback',
+      model: 'image-fallback',
+      async *stream(request): AsyncIterable<ModelStreamChunk> {
+        requests.push(request)
+        yield { kind: 'completed', stopReason: 'stop' }
+      }
+    }, {
+      tools: [],
+      compactor: new ContextCompactor({ softThreshold: 750_000, hardThreshold: 850_000 }),
+      modelCapabilities: (model) => ({
+        id: model,
+        inputModalities: ['text'],
+        outputModalities: ['text'],
+        supportsToolCalling: true,
+        contextWindowTokens: 1_000_000,
+        maxOutputTokens: 131_072,
+        messageParts: ['text']
+      })
+    })
+    const dataDir = await mkdtemp(join(tmpdir(), 'kun-image-fallback-'))
+    try {
+      await h.threadStore.upsert(
+        createThreadRecord({ id: h.threadId, title: 'demo', workspace: '/tmp', model: 'image-fallback' })
+      )
+      // Preflight lands just below the soft threshold (718,127), while the
+      // rehydrated forwarded image adds a fixed 1,210-token vision allowance
+      // and pushes the final request past what the declared 131,072 output
+      // budget would allow. The send-time clamp shrinks the output budget to
+      // the remaining capacity (130,663) instead of compacting history.
+      for (let index = 0; index < 119; index += 1) {
+        await h.sessionStore.appendItem(h.threadId, makeUserItem({
+          id: `image_old_${index}`,
+          turnId: `image_old_turn_${index}`,
+          threadId: h.threadId,
+          text: '工'.repeat(6_033)
+        }))
+      }
+      const pngPath = join(dataDir, 'generated.png')
+      await writeFile(pngPath, Buffer.from(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+        'base64'
+      ))
+      await h.sessionStore.appendItem(h.threadId, makeToolCallItem({
+        id: 'image_forward_call',
+        threadId: h.threadId,
+        turnId: 'image_old_turn_118',
+        callId: 'call_image_forward',
+        toolName: 'generate_image',
+        arguments: { prompt: 'tiny probe image' },
+        status: 'completed'
+      }))
+      await h.sessionStore.appendItem(h.threadId, makeToolResultItem({
+        id: 'image_forward_result',
+        threadId: h.threadId,
+        turnId: 'image_old_turn_118',
+        callId: 'call_image_forward',
+        toolName: 'generate_image',
+        output: { markdown: '![generated image](.kun/images/generated.png)', files: [{ absolutePath: pngPath }] }
+      }))
+      const started = await h.turns.startTurn({
+        threadId: h.threadId,
+        request: { prompt: 'keep this current request' }
+      })
+      h.turnId = started.turnId
+
+      await expect(h.loop.runTurn(h.threadId, h.turnId)).resolves.toBe('completed')
+
+      expect(requests).toHaveLength(1)
+      // History stays intact: the clamp absorbed the 1,210-token overage.
+      expect(requests[0]?.history[0]).toMatchObject({ kind: 'user_message' })
+      expect(requests[0]?.maxTokens).toBe(130_494)
+      const events = await h.sessionStore.loadEventsSince(h.threadId, 0)
+      expect(events.some((event) =>
+        event.kind === 'error' && event.code === 'context_window_exceeded'
+      )).toBe(false)
+      expect(events.some((event) => event.kind === 'compaction_completed')).toBe(false)
+      const compressed = events.find((event) =>
+        event.kind === 'pipeline_stage' && event.stage === 'input_compressed'
+      )
+      expect(compressed).toMatchObject({
+        kind: 'pipeline_stage',
+        stage: 'input_compressed',
+        details: expect.objectContaining({
+          outputBudgetTokens: 130_494,
+          requestHardCapTokens: 850_000,
+          fallbackCompactionAttempted: false
+        })
+      })
+    } finally {
+      await rm(dataDir, { recursive: true, force: true })
+    }
+  })
+
   it('records provider endpoint diagnostics for model send stages', async () => {
     const model = {
       provider: 'compat',
@@ -828,6 +1043,175 @@ describe('AgentLoop', () => {
     expect(items).not.toEqual(expect.arrayContaining([
       expect.objectContaining({ code: 'empty_post_tool_continuation' })
     ]))
+  })
+
+  it('recovers an ordinary turn when the model only announces progress after a tool failure', async () => {
+    let calls = 0
+    let executions = 0
+    const requests: ModelRequest[] = []
+    const fragile = LocalToolHost.defineTool({
+      name: 'fragile',
+      description: 'Fails unless retried with a valid attempt',
+      inputSchema: {
+        type: 'object',
+        properties: { attempt: { type: 'number' } },
+        required: ['attempt']
+      },
+      policy: 'auto',
+      execute: async (args) => {
+        executions += 1
+        return args.attempt === 2
+          ? { output: { ok: true } }
+          : { output: { error: 'simulated failure' }, isError: true }
+      }
+    })
+    const h = makeHarness(
+      {
+        provider: 'progress-after-failure',
+        model: 'progress-after-failure',
+        async *stream(request: ModelRequest): AsyncIterable<ModelStreamChunk> {
+          requests.push(request)
+          calls += 1
+          if (calls === 1) {
+            yield {
+              kind: 'tool_call_complete',
+              callId: 'call_fragile_1',
+              toolName: 'fragile',
+              arguments: { attempt: 1 }
+            }
+            yield { kind: 'completed', stopReason: 'tool_calls' }
+            return
+          }
+          if (calls === 2) {
+            yield { kind: 'assistant_text_delta', text: '接下来我会尝试其他参数' }
+            yield { kind: 'completed', stopReason: 'stop' }
+            return
+          }
+          if (calls === 3) {
+            yield {
+              kind: 'tool_call_complete',
+              callId: 'call_fragile_2',
+              toolName: 'fragile',
+              arguments: { attempt: 2 }
+            }
+            yield { kind: 'completed', stopReason: 'tool_calls' }
+            return
+          }
+          yield { kind: 'assistant_text_delta', text: '成功完成。' }
+          yield { kind: 'completed', stopReason: 'stop' }
+        }
+      },
+      {
+        tools: [fragile],
+        toolStorm: { enabled: false },
+        compactor: new ContextCompactor({ softThreshold: 1_000_000, hardThreshold: 1_100_000 })
+      }
+    )
+    await bootstrapThread(h)
+
+    const status = await h.loop.runTurn(h.threadId, h.turnId)
+    const items = await h.sessionStore.loadItems(h.threadId)
+
+    expect(status).toBe('completed')
+    expect(calls).toBe(4)
+    expect(executions).toBe(2)
+    expect(requests[2]?.contextInstructions?.join('\n')).toContain('Tool failure recovery')
+    const failedResult = requests[2]?.history.find(
+      (item) => item.kind === 'tool_result' && item.toolName === 'fragile'
+    )
+    expect(failedResult?.kind === 'tool_result' ? failedResult.isError : false).toBe(true)
+    expect(items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'tool_result', toolName: 'fragile', isError: false })
+    ]))
+  })
+
+  it('fails visibly when the model keeps announcing progress after a tool failure', async () => {
+    let calls = 0
+    const requests: ModelRequest[] = []
+    const fragile = LocalToolHost.defineTool({
+      name: 'fragile',
+      description: 'Always fails',
+      inputSchema: { type: 'object', properties: {} },
+      policy: 'auto',
+      execute: async () => ({ output: { error: 'simulated failure' }, isError: true })
+    })
+    const h = makeHarness(
+      {
+        provider: 'repeated-progress-after-failure',
+        model: 'repeated-progress-after-failure',
+        async *stream(request: ModelRequest): AsyncIterable<ModelStreamChunk> {
+          requests.push(request)
+          calls += 1
+          if (calls === 1) {
+            yield {
+              kind: 'tool_call_complete',
+              callId: 'call_fragile',
+              toolName: 'fragile',
+              arguments: {}
+            }
+            yield { kind: 'completed', stopReason: 'tool_calls' }
+            return
+          }
+          yield { kind: 'assistant_text_delta', text: '接下来我会继续排查' }
+          yield { kind: 'completed', stopReason: 'stop' }
+        }
+      },
+      { tools: [fragile], toolStorm: { enabled: false } }
+    )
+    await bootstrapThread(h)
+
+    const status = await h.loop.runTurn(h.threadId, h.turnId)
+    const items = await h.sessionStore.loadItems(h.threadId)
+
+    expect(status).toBe('failed')
+    expect(calls).toBe(4)
+    expect(requests[3]?.tools).toEqual([])
+    expect(requests[3]?.contextInstructions?.join('\n'))
+      .toContain('Tool failure final-answer recovery')
+    expect(items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'post_tool_failure_recovery_exhausted' })
+    ]))
+  })
+
+  it('accepts a final answer directly after a tool failure without forcing recovery', async () => {
+    let calls = 0
+    const fragile = LocalToolHost.defineTool({
+      name: 'fragile',
+      description: 'Always fails',
+      inputSchema: { type: 'object', properties: {} },
+      policy: 'auto',
+      execute: async () => ({ output: { error: 'simulated failure' }, isError: true })
+    })
+    const h = makeHarness(
+      {
+        provider: 'final-after-failure',
+        model: 'final-after-failure',
+        async *stream(): AsyncIterable<ModelStreamChunk> {
+          calls += 1
+          if (calls === 1) {
+            yield {
+              kind: 'tool_call_complete',
+              callId: 'call_fragile',
+              toolName: 'fragile',
+              arguments: {}
+            }
+            yield { kind: 'completed', stopReason: 'tool_calls' }
+            return
+          }
+          yield {
+            kind: 'assistant_text_delta',
+            text: 'The fragile tool failed; the task cannot continue until you provide the missing credential.'
+          }
+          yield { kind: 'completed', stopReason: 'stop' }
+        }
+      },
+      { tools: [fragile], toolStorm: { enabled: false } }
+    )
+    await bootstrapThread(h)
+
+    const status = await h.loop.runTurn(h.threadId, h.turnId)
+    expect(status).toBe('completed')
+    expect(calls).toBe(2)
   })
 
   it('keeps running past the legacy eight-step ceiling until the model stops', async () => {
@@ -1298,6 +1682,7 @@ describe('AgentLoop', () => {
             yield { kind: 'completed', stopReason: 'tool_calls' }
             return
           }
+          yield { kind: 'assistant_text_delta', text: 'The repeated call was unnecessary; the earlier result is sufficient.' }
           yield { kind: 'completed', stopReason: 'stop' }
         }
       },
@@ -1327,6 +1712,402 @@ describe('AgentLoop', () => {
 	      toolName: 'echo'
 	    })
 	  })
+
+  it('recovers from malformed Browser Use arguments without poisoning model history', async () => {
+    const requests: ModelRequest[] = []
+    let calls = 0
+    const browserController: BrowserController = {
+      readiness: () => ({ available: true }),
+      execute: vi.fn(async ({ action }) => ({
+        ok: true,
+        code: action.action === 'snapshot' ? 'snapshot' : 'opened',
+        message: 'ok'
+      }))
+    }
+    const browserProviders = buildBrowserUseToolProviders({
+      enabled: true,
+      mode: 'public',
+      approvalMode: 'auto-safe',
+      maxTabs: 2,
+      maxObservationActionsPerTurn: 3,
+      maxInteractionActionsPerTurn: 1,
+      maxSnapshotNodes: 250,
+      maxSnapshotTextChars: 20_000,
+      maxImageDimension: 1280,
+      idleTimeoutMs: 300_000
+    }, { controller: browserController }).providers
+    const toolHost = new LocalToolHost({
+      registry: new CapabilityRegistry([
+        {
+          id: 'builtin',
+          kind: 'built-in',
+          enabled: true,
+          available: true,
+          tools: buildDefaultLocalTools()
+        },
+        ...browserProviders
+      ])
+    })
+    const h = makeHarness({
+      provider: 'browser-recovery-model',
+      model: 'browser-recovery-model',
+      async *stream(request: ModelRequest): AsyncIterable<ModelStreamChunk> {
+        requests.push(request)
+        calls += 1
+        if (calls === 1) {
+          yield {
+            kind: 'tool_call_complete',
+            callId: 'call-invalid-browser',
+            toolName: 'browser_use',
+            arguments: {
+              action: 'navigate',
+              url: 'https://example.com/path?secret=should-not-persist'
+            }
+          }
+          yield { kind: 'completed', stopReason: 'tool_calls' }
+          return
+        }
+        if (calls === 2) {
+          const previousCall = request.history.find(
+            (item) => item.kind === 'tool_call' && item.callId === 'call-invalid-browser'
+          )
+          expect(previousCall?.kind === 'tool_call' ? previousCall.arguments : undefined).toEqual({})
+          expect(JSON.stringify(request.history)).not.toContain('action":"invalid')
+          expect(JSON.stringify(request.history)).not.toContain('should-not-persist')
+          yield {
+            kind: 'tool_call_complete',
+            callId: 'call-open-browser',
+            toolName: 'browser_use',
+            arguments: { action: 'open', url: 'https://example.com/path' }
+          }
+          yield { kind: 'completed', stopReason: 'tool_calls' }
+          return
+        }
+        if (calls === 3) {
+          yield {
+            kind: 'tool_call_complete',
+            callId: 'call-snapshot-browser',
+            toolName: 'browser_use',
+            arguments: { action: 'snapshot' }
+          }
+          yield { kind: 'completed', stopReason: 'tool_calls' }
+          return
+        }
+        yield { kind: 'assistant_text_delta', text: 'Browser recovery completed.' }
+        yield { kind: 'completed', stopReason: 'stop' }
+      }
+    }, { toolHost })
+    await bootstrapThread(h, {
+      request: {
+        prompt: 'Recover Browser Use',
+        clientSurface: 'gui',
+        approvalPolicy: 'auto',
+        sandboxMode: 'danger-full-access'
+      }
+    })
+
+    await expect(h.loop.runTurn(h.threadId, h.turnId)).resolves.toBe('completed')
+
+    expect(browserController.execute).toHaveBeenCalledTimes(2)
+    expect(browserController.execute).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ action: { action: 'open', url: 'https://example.com/path' } })
+    )
+    expect(browserController.execute).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ action: { action: 'snapshot' } })
+    )
+    const events = await h.sessionStore.loadEventsSince(h.threadId, 0)
+    expect(events.some((event) => event.kind === 'tool_storm_suppressed')).toBe(false)
+    const items = await h.sessionStore.loadItems(h.threadId)
+    const invalidCall = items.find(
+      (item) => item.kind === 'tool_call' && item.callId === 'call-invalid-browser'
+    )
+    expect(invalidCall?.kind === 'tool_call' ? invalidCall.arguments : undefined).toEqual({})
+    expect(JSON.stringify(items)).not.toContain('should-not-persist')
+    expect(JSON.stringify(items)).not.toContain('action":"invalid')
+  })
+
+  it('lets a suppressed tool loop recover by using a different tool', async () => {
+    const requests: ModelRequest[] = []
+    let echoExecutions = 0
+    let alternateExecutions = 0
+    const echoTool = LocalToolHost.defineTool({
+      name: 'echo',
+      description: 'Echo text',
+      inputSchema: {
+        type: 'object',
+        properties: { text: { type: 'string' } },
+        required: ['text']
+      },
+      policy: 'auto',
+      execute: async () => {
+        echoExecutions += 1
+        return { output: { ok: echoExecutions } }
+      }
+    })
+    const alternateTool = LocalToolHost.defineTool({
+      name: 'alternate_lookup',
+      description: 'Use a different lookup strategy.',
+      inputSchema: { type: 'object', properties: {} },
+      policy: 'auto',
+      execute: async () => {
+        alternateExecutions += 1
+        return { output: { found: true } }
+      }
+    })
+    let calls = 0
+    const h = makeHarness(
+      {
+        provider: 'storm-alternate-model',
+        model: 'storm-alternate-model',
+        async *stream(request: ModelRequest): AsyncIterable<ModelStreamChunk> {
+          requests.push(request)
+          calls += 1
+          if (calls <= 3) {
+            yield {
+              kind: 'tool_call_complete',
+              callId: `call_echo_${calls}`,
+              toolName: 'echo',
+              arguments: { text: 'repeat me' }
+            }
+            yield { kind: 'completed', stopReason: 'tool_calls' }
+            return
+          }
+          if (calls === 4) {
+            yield {
+              kind: 'tool_call_complete',
+              callId: 'call_alternate',
+              toolName: 'alternate_lookup',
+              arguments: {}
+            }
+            yield { kind: 'completed', stopReason: 'tool_calls' }
+            return
+          }
+          yield { kind: 'assistant_text_delta', text: 'The alternate lookup completed successfully.' }
+          yield { kind: 'completed', stopReason: 'stop' }
+        }
+      },
+      { tools: [echoTool, alternateTool] }
+    )
+    await bootstrapThread(h)
+
+    await expect(h.loop.runTurn(h.threadId, h.turnId)).resolves.toBe('completed')
+
+    expect(echoExecutions).toBe(2)
+    expect(alternateExecutions).toBe(1)
+    expect(requests[3]?.tools.map((tool) => tool.name)).toContain('alternate_lookup')
+    expect(requests[3]?.contextInstructions?.join('\n')).toContain('Tool-loop recovery:')
+    expect(requests[4]?.contextInstructions?.join('\n')).not.toContain('Tool-loop recovery:')
+    expect((await h.turns.getTurn(h.threadId, h.turnId))?.status).toBe('completed')
+    expect(h.inflight.size()).toBe(0)
+  })
+
+  it('does not reopen tools after an active-goal suppression final answer', async () => {
+    const requests: ModelRequest[] = []
+    let executions = 0
+    const scheduleGoalResume = vi.fn(() => ({ cancel: vi.fn() }))
+    const echoTool = LocalToolHost.defineTool({
+      name: 'echo',
+      description: 'Echo text',
+      inputSchema: {
+        type: 'object',
+        properties: { text: { type: 'string' } },
+        required: ['text']
+      },
+      policy: 'auto',
+      execute: async () => {
+        executions += 1
+        return { output: { ok: executions } }
+      }
+    })
+    let calls = 0
+    const h = makeHarness(
+      {
+        provider: 'storm-final-answer-model',
+        model: 'storm-final-answer-model',
+        async *stream(request: ModelRequest): AsyncIterable<ModelStreamChunk> {
+          requests.push(request)
+          calls += 1
+          if (calls <= 4) {
+            yield {
+              kind: 'tool_call_complete',
+              callId: `call_echo_${calls}`,
+              toolName: 'echo',
+              arguments: { text: 'repeat me' }
+            }
+            yield { kind: 'completed', stopReason: 'tool_calls' }
+            return
+          }
+          yield {
+            kind: 'assistant_text_delta',
+            text: 'The first two calls completed; the repeated calls were not executed.'
+          }
+          yield { kind: 'completed', stopReason: 'stop' }
+        }
+      },
+      {
+        tools: [echoTool],
+        goalResume: { setTimer: scheduleGoalResume }
+      }
+    )
+    await bootstrapThread(h)
+    await h.threads.setGoal(h.threadId, {
+      objective: 'Finish using the completed echo result.',
+      status: 'active'
+    })
+
+    await expect(h.loop.runTurn(h.threadId, h.turnId)).resolves.toBe('completed')
+
+    expect(executions).toBe(2)
+    expect(calls).toBe(5)
+    expect(requests[3]?.tools).toHaveLength(1)
+    expect(requests[4]?.tools).toHaveLength(0)
+    expect(requests[4]?.contextInstructions?.join('\n'))
+      .toContain('Tool-loop final-answer recovery:')
+    const items = await h.sessionStore.loadItems(h.threadId)
+    expect(items).toContainEqual(expect.objectContaining({
+      kind: 'assistant_text',
+      text: 'The first two calls completed; the repeated calls were not executed.'
+    }))
+    expect((await h.turns.getTurn(h.threadId, h.turnId))?.status).toBe('completed')
+    expect((await h.threads.getGoal(h.threadId))?.status).toBe('active')
+    expect(scheduleGoalResume).not.toHaveBeenCalled()
+    expect(h.inflight.size()).toBe(0)
+  })
+
+  it('fails and releases the turn when suppression recovery still has no answer', async () => {
+    const requests: ModelRequest[] = []
+    let executions = 0
+    const echoTool = LocalToolHost.defineTool({
+      name: 'echo',
+      description: 'Echo text',
+      inputSchema: {
+        type: 'object',
+        properties: { text: { type: 'string' } },
+        required: ['text']
+      },
+      policy: 'auto',
+      execute: async () => {
+        executions += 1
+        return { output: { ok: executions } }
+      }
+    })
+    let calls = 0
+    const h = makeHarness(
+      {
+        provider: 'storm-empty-recovery-model',
+        model: 'storm-empty-recovery-model',
+        async *stream(request: ModelRequest): AsyncIterable<ModelStreamChunk> {
+          requests.push(request)
+          calls += 1
+          if (calls <= 4) {
+            yield {
+              kind: 'tool_call_complete',
+              callId: `call_echo_${calls}`,
+              toolName: 'echo',
+              arguments: { text: 'repeat me' }
+            }
+            yield { kind: 'completed', stopReason: 'tool_calls' }
+            return
+          }
+          yield { kind: 'completed', stopReason: 'stop' }
+        }
+      },
+      { tools: [echoTool] }
+    )
+    await bootstrapThread(h)
+
+    await expect(h.loop.runTurn(h.threadId, h.turnId)).resolves.toBe('failed')
+
+    expect(executions).toBe(2)
+    expect(requests[4]?.tools).toHaveLength(0)
+    const turn = await h.turns.getTurn(h.threadId, h.turnId)
+    const thread = await h.threadStore.get(h.threadId)
+    const items = await h.sessionStore.loadItems(h.threadId)
+    const terminalEvents = (await h.sessionStore.loadEventsSince(h.threadId, 0)).filter(
+      (event) =>
+        event.kind === 'turn_completed' ||
+        event.kind === 'turn_failed' ||
+        event.kind === 'turn_aborted'
+    )
+    expect(turn).toMatchObject({ status: 'failed', error: expect.stringContaining('final answer') })
+    expect(thread?.status).toBe('idle')
+    expect(h.inflight.size()).toBe(0)
+    expect(items).toContainEqual(expect.objectContaining({
+      kind: 'error',
+      code: 'tool_loop_suppressed'
+    }))
+    expect(items.some((item) => item.kind === 'assistant_text' && item.text.trim())).toBe(false)
+    expect(terminalEvents).toEqual([
+      expect.objectContaining({ kind: 'turn_failed', code: 'tool_loop_suppressed' })
+    ])
+  })
+
+  it('does not complete silently when the budget blocks suppression recovery', async () => {
+    let executions = 0
+    let modelCalls = 0
+    const echoTool = LocalToolHost.defineTool({
+      name: 'echo',
+      description: 'Echo text',
+      inputSchema: {
+        type: 'object',
+        properties: { text: { type: 'string' } },
+        required: ['text']
+      },
+      policy: 'auto',
+      execute: async () => {
+        executions += 1
+        return { output: { ok: executions } }
+      }
+    })
+    const h = makeHarness(
+      {
+        provider: 'storm-budget-model',
+        model: 'storm-budget-model',
+        async *stream(): AsyncIterable<ModelStreamChunk> {
+          modelCalls += 1
+          yield {
+            kind: 'tool_call_complete',
+            callId: `call_echo_${modelCalls}`,
+            toolName: 'echo',
+            arguments: { text: 'repeat me' }
+          }
+          if (modelCalls === 3) {
+            yield {
+              kind: 'usage',
+              usage: {
+                promptTokens: 1,
+                completionTokens: 1,
+                totalTokens: 2,
+                cacheHitRate: null,
+                turns: 1,
+                costUsd: 1
+              }
+            }
+          }
+          yield { kind: 'completed', stopReason: 'tool_calls' }
+        }
+      },
+      { tools: [echoTool] }
+    )
+    await bootstrapThread(h)
+    const thread = await h.threadStore.get(h.threadId)
+    await h.threadStore.upsert({ ...thread!, costBudgetUsd: 1 })
+
+    await expect(h.loop.runTurn(h.threadId, h.turnId)).resolves.toBe('failed')
+
+    expect(modelCalls).toBe(3)
+    expect(executions).toBe(2)
+    expect((await h.turns.getTurn(h.threadId, h.turnId))).toMatchObject({
+      status: 'failed',
+      error: expect.stringContaining('final answer')
+    })
+    expect((await h.sessionStore.loadEventsSince(h.threadId, 0))).toContainEqual(
+      expect.objectContaining({ kind: 'turn_failed', code: 'tool_loop_suppressed' })
+    )
+    expect(h.inflight.size()).toBe(0)
+  })
 
   it('suppresses the third identical Graph run inspection within a turn', async () => {
     let executions = 0
@@ -1364,6 +2145,7 @@ describe('AgentLoop', () => {
             yield { kind: 'completed', stopReason: 'tool_calls' }
             return
           }
+          yield { kind: 'assistant_text_delta', text: 'The existing Graph inspection result is sufficient.' }
           yield { kind: 'completed', stopReason: 'stop' }
         }
       },
@@ -2210,7 +2992,7 @@ describe('AgentLoop', () => {
     )).toBe(true)
   })
 
-  it('injects active goal guidance and goal status tools into model requests', async () => {
+  it('persists active goal guidance in model history and includes goal status tools', async () => {
     const observedRequests: ModelRequest[] = []
     const goalTools = [GET_GOAL_TOOL_NAME, UPDATE_GOAL_TOOL_NAME].map((name) =>
       LocalToolHost.defineTool({
@@ -2246,8 +3028,16 @@ describe('AgentLoop', () => {
 
     const [request] = observedRequests
     if (!request) throw new Error('expected model request')
-    expect(request.contextInstructions?.join('\n')).toContain('Continue working toward the active thread goal.')
-    expect(request.contextInstructions?.join('\n')).toContain('check current memory usage')
+    const goalContext = request.history.find((item) => item.kind === 'goal_context')
+    expect(goalContext).toMatchObject({
+      kind: 'goal_context',
+      text: expect.stringContaining('check current memory usage')
+    })
+    if (!goalContext || goalContext.kind !== 'goal_context') {
+      throw new Error('expected durable goal context in model history')
+    }
+    expect(goalContext.text).toContain('Continue working toward the active thread goal.')
+    expect(request.contextInstructions?.join('\n') ?? '').not.toContain('Continue working toward the active thread goal.')
     expect(request.tools.map((tool) => tool.name)).toContain(GET_GOAL_TOOL_NAME)
     expect(request.tools.map((tool) => tool.name)).toContain(UPDATE_GOAL_TOOL_NAME)
   })
@@ -3184,6 +3974,50 @@ describe('AgentLoop', () => {
     expect(effectiveItems[0]?.kind).toBe('compaction')
     expect(effectiveItems.some((item) => item.id === 'hist_0')).toBe(false)
     expect(effectiveItems.length).toBeLessThan(items.length)
+  })
+
+  it('does not reintroduce an ended goal context after compaction reloads canonical history', async () => {
+    const requests: ModelRequest[] = []
+    const h = makeHarness({
+      provider: 'goal-context-compaction',
+      model: 'goal-context-compaction',
+      async *stream(request: ModelRequest): AsyncIterable<ModelStreamChunk> {
+        requests.push(request)
+        yield { kind: 'completed', stopReason: 'stop' }
+      }
+    }, {
+      compactor: new ContextCompactor({ softThreshold: 8, hardThreshold: 16 })
+    })
+    await bootstrapThread(h)
+    await h.threads.setGoal(h.threadId, {
+      objective: 'Old goal that has already ended.',
+      status: 'active'
+    })
+    await h.sessionStore.appendItem(h.threadId, makeGoalContextItem({
+      id: 'old_goal_context',
+      threadId: h.threadId,
+      turnId: h.turnId,
+      goalKey: 'old_goal_key',
+      text: 'STALE GOAL CONTEXT MUST NOT REACH THE MODEL.',
+      createdAt: '2026-08-06T00:00:00.000Z'
+    }))
+    await h.threads.setGoal(h.threadId, { status: 'complete' })
+    for (let index = 0; index < 10; index += 1) {
+      await h.sessionStore.appendItem(h.threadId, makeUserItem({
+        id: `goal_compaction_history_${index}`,
+        threadId: h.threadId,
+        turnId: h.turnId,
+        text: 'x'.repeat(20)
+      }))
+    }
+
+    await expect(h.loop.runTurn(h.threadId, h.turnId)).resolves.toBe('completed')
+
+    const request = requests[0]
+    expect(request).toBeDefined()
+    expect(request?.history.some((item) => item.kind === 'goal_context')).toBe(false)
+    expect(JSON.stringify(request?.history)).not.toContain('STALE GOAL CONTEXT MUST NOT REACH THE MODEL.')
+    expect((await h.sessionStore.loadItems(h.threadId)).some((item) => item.id === 'old_goal_context')).toBe(true)
   })
 
   it('can use a model summary for history compaction while reusing the main prefix', async () => {

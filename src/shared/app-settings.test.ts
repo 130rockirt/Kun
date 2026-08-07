@@ -479,9 +479,7 @@ describe('kun defaults', () => {
         maxWallTimeMs: 86400000,
         streamIdleTimeoutMs: 450000,
         toolStorm: {
-          enabled: true,
-          windowSize: 8,
-          threshold: 3
+          enabled: true
         },
         toolArgumentRepair: {
           maxStringBytes: 524288
@@ -1090,7 +1088,7 @@ describe('mergeKunRuntimeSettings', () => {
       },
       runtimeTuning: {
         toolStorm: {
-          threshold: 5
+          enabled: false
         }
       }
     })
@@ -1100,9 +1098,7 @@ describe('mergeKunRuntimeSettings', () => {
     expect(next.contextCompaction.defaultSoftThreshold).toBe(64000)
     expect(next.contextCompaction.defaultHardThreshold).toBe(64000)
     expect(next.contextCompaction.summaryMode).toBe('model')
-    expect(next.runtimeTuning.toolStorm.enabled).toBe(true)
-    expect(next.runtimeTuning.toolStorm.windowSize).toBe(current.runtimeTuning.toolStorm.windowSize)
-    expect(next.runtimeTuning.toolStorm.threshold).toBe(5)
+    expect(next.runtimeTuning.toolStorm.enabled).toBe(false)
     expect(next.runtimeTuning.toolArgumentRepair).toEqual(current.runtimeTuning.toolArgumentRepair)
     expect(next.runtimeTuning.maxConcurrentTurns).toBe(current.runtimeTuning.maxConcurrentTurns)
     expect(next.runtimeTuning.maxWallTimeMs).toBe(current.runtimeTuning.maxWallTimeMs)
@@ -1759,6 +1755,61 @@ describe('schedule settings', () => {
     expect(merged.tasks[0].clawChannelId).toBe('')
     expect(merged.tasks[0].reasoningEffort).toBe('medium')
   })
+
+  it('normalizes daemon settings and keeps legacy scheduled tasks untouched', () => {
+    const normalized = normalizeScheduleSettings({
+      enabled: true,
+      tasks: [{ title: 'Existing', prompt: 'x', schedule: { kind: 'manual', everyMinutes: 60, timeOfDay: '09:00', atTime: '' } }],
+      daemons: {
+        enabled: true,
+        items: [{
+          id: 'd1',
+          title: 'Market watcher',
+          scriptPath: ' kb/daemon.py ',
+          workspaceRoot: '/tmp/ws',
+          threadId: 't-1',
+          heartbeatIntervalSeconds: -5,
+          silenceTimeoutSeconds: 99999,
+          interpreter: 'bogus' as never,
+          push: {
+            enabled: true,
+            channelId: 'ch-1',
+            conversationId: 'cv-1'
+          }
+        }]
+      }
+    } as unknown as Parameters<typeof normalizeScheduleSettings>[0])
+
+    expect(normalized.daemons.enabled).toBe(true)
+    expect(normalized.daemons.items).toHaveLength(1)
+    expect(normalized.tasks).toHaveLength(1)
+    expect(normalized.tasks[0].title).toBe('Existing')
+    const daemon = normalized.daemons.items[0]
+    expect(daemon.id).toBe('d1')
+    expect(daemon.scriptPath).toBe('kb/daemon.py')
+    expect(daemon.workspaceRoot).toBe('/tmp/ws')
+    expect(daemon.threadId).toBe('t-1')
+    expect(daemon.heartbeatIntervalSeconds).toBe(5)
+    expect(daemon.silenceTimeoutSeconds).toBe(86_400)
+    expect(daemon.interpreter).toBe('auto')
+    expect(daemon.push).toEqual({ enabled: true, channelId: 'ch-1', conversationId: 'cv-1' })
+    expect(daemon.enabled).toBe(true)
+  })
+
+  it('defaults daemons to disabled and preserves them through merge', () => {
+    expect(normalizeScheduleSettings(undefined).daemons).toEqual({ enabled: false, items: [] })
+
+    const merged = mergeScheduleSettings(normalizeScheduleSettings(undefined), {
+      daemons: {
+        enabled: true,
+        items: [{ title: 'D', scriptPath: 'd.py' }]
+      }
+    } as Parameters<typeof mergeScheduleSettings>[1])
+    expect(merged.daemons.enabled).toBe(true)
+    expect(merged.daemons.items[0].interpreter).toBe('auto')
+    expect(merged.daemons.items[0].push.enabled).toBe(false)
+    expect(merged.daemons.items[0].push.channelId).toBe('')
+  })
 })
 
 describe('claw runtime prompts', () => {
@@ -2139,5 +2190,100 @@ describe('write agent presets', () => {
       { id: 'coordinator', name: '我的统筹', emoji: '🧭', persona: '' },
       { id: 'custom-1', name: '', emoji: '🤖', persona: '专属人设' }
     ])
+  })
+})
+
+describe('lab settings', () => {
+  it('defaults explore_agent to enabled with follow-main model and no fast', () => {
+    const lab = defaultKunRuntimeSettings().lab
+    expect(lab.exploreAgent).toEqual({
+      enabled: true,
+      model: '',
+      providerId: '',
+      fast: false
+    })
+  })
+
+  it('merges nested lab patches field by field', () => {
+    const current = defaultKunRuntimeSettings()
+    const next = mergeKunRuntimeSettings(current, {
+      lab: {
+        exploreAgent: {
+          enabled: false
+        }
+      }
+    })
+    expect(next.lab.exploreAgent).toEqual({
+      enabled: false,
+      model: '',
+      providerId: '',
+      fast: false
+    })
+
+    const configured = mergeKunRuntimeSettings(current, {
+      lab: {
+        exploreAgent: {
+          model: 'gpt-5.4',
+          providerId: 'codex-2',
+          reasoningEffort: 'medium',
+          fast: true
+        }
+      }
+    })
+    expect(configured.lab.exploreAgent).toEqual({
+      enabled: true,
+      model: 'gpt-5.4',
+      providerId: 'codex-2',
+      reasoningEffort: 'medium',
+      fast: true
+    })
+  })
+
+  it('drops a half-configured model override (follow-main fallback)', () => {
+    const next = mergeKunRuntimeSettings(defaultKunRuntimeSettings(), {
+      lab: {
+        exploreAgent: {
+          model: 'gpt-5.4',
+          providerId: ''
+        }
+      }
+    })
+    expect(next.lab.exploreAgent.model).toBe('')
+    expect(next.lab.exploreAgent.providerId).toBe('')
+  })
+
+  it('ignores an invalid reasoning effort value', () => {
+    const next = mergeKunRuntimeSettings(defaultKunRuntimeSettings(), {
+      lab: {
+        exploreAgent: {
+          model: 'gpt-5.4',
+          providerId: 'codex-2',
+          reasoningEffort: 'bogus' as never
+        }
+      }
+    })
+    expect(next.lab.exploreAgent.reasoningEffort).toBeUndefined()
+  })
+
+  it('normalizes a persisted lab section through the full settings envelope', () => {
+    const runtime = mergeKunRuntimeSettings(defaultKunRuntimeSettings(), {
+      lab: {
+        exploreAgent: {
+          model: 'deepseek-v4-flash',
+          providerId: 'deepseek',
+          fast: true
+        }
+      }
+    })
+    const normalized = normalizeAppSettings({
+      ...settings(),
+      agents: { kun: runtime }
+    }).agents.kun.lab.exploreAgent
+    expect(normalized).toEqual({
+      enabled: true,
+      model: 'deepseek-v4-flash',
+      providerId: 'deepseek',
+      fast: true
+    })
   })
 })

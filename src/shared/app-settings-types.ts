@@ -453,6 +453,30 @@ export type KunSubagentsSettingsPatchV1 = Partial<
   profiles?: KunSubagentProfileV1[]
 }
 
+/** Experimental Lab feature settings for the first-class `explore_agent` tool. */
+export type KunLabExploreAgentSettingsV1 = {
+  /** Master switch for the explore_agent tool. Default true. */
+  enabled: boolean
+  /** Optional child model override. Empty = follow the main session model. */
+  model: string
+  /** Provider id paired with model. Empty = follow the main session provider. */
+  providerId: string
+  /** Optional reasoning depth for explore_agent child requests. Empty = follow the main session. */
+  reasoningEffort?: ModelReasoningEffort
+  /** Codex fast mode (serviceTier = priority). Only effective for Codex models that advertise priority. */
+  fast: boolean
+}
+
+/** Experimental Lab feature settings written into Kun config `lab`. */
+export type KunLabSettingsV1 = {
+  exploreAgent: KunLabExploreAgentSettingsV1
+}
+
+/** Partial settings patch for the Lab section. Nested fields merge with current values. */
+export type KunLabSettingsPatchV1 = {
+  exploreAgent?: Partial<KunLabExploreAgentSettingsV1>
+}
+
 export const KUN_GRAPH_ROLLOUT_STAGES = [
   'experimental',
   'alpha',
@@ -666,6 +690,8 @@ export type KunRuntimeSettingsV1 = {
   subagents?: KunSubagentsSettingsV1
   /** Host-owned Graph orchestration, project-agent routing, and learning policy. */
   graph: KunGraphSettingsV1
+  /** Experimental Lab features (explore_agent toggle + model overrides). */
+  lab: KunLabSettingsV1
   /** Global small-model slot. Title & Summary default to this. Empty = follow main model. */
   smallModel?: string
   /** Provider id paired with smallModel for per-provider routing. */
@@ -917,8 +943,6 @@ export type KunContextCompactionSettingsV1 = {
 
 export type KunToolStormSettingsV1 = {
   enabled: boolean
-  windowSize: number
-  threshold: number
 }
 
 export type KunToolArgumentRepairSettingsV1 = {
@@ -979,7 +1003,7 @@ export type KunTokenEconomySettingsPatchV1 = Partial<
 export type KunRuntimeSettingsPatchV1 = Partial<
   Omit<
     KunRuntimeSettingsV1,
-    'mcpSearch' | 'projectConfig' | 'storage' | 'contextCompaction' | 'runtimeTuning' | 'llmDebug' | 'tokenEconomy' | 'toolOutputLimits' | 'imageGeneration' | 'speechToText' | 'textToSpeech' | 'promptOptimization' | 'musicGeneration' | 'videoGeneration' | 'instructions' | 'computerUse' | 'browserUse' | 'quality' | 'modelProfiles' | 'subagents' | 'graph'
+    'mcpSearch' | 'projectConfig' | 'storage' | 'contextCompaction' | 'runtimeTuning' | 'llmDebug' | 'tokenEconomy' | 'toolOutputLimits' | 'imageGeneration' | 'speechToText' | 'textToSpeech' | 'promptOptimization' | 'musicGeneration' | 'videoGeneration' | 'instructions' | 'computerUse' | 'browserUse' | 'quality' | 'modelProfiles' | 'subagents' | 'graph' | 'lab'
   >
 > & {
   mcpSearch?: Partial<KunMcpSearchSettingsV1>
@@ -1003,6 +1027,7 @@ export type KunRuntimeSettingsPatchV1 = Partial<
   modelProfiles?: Record<string, ModelProviderModelProfilePatchV1 | null>
   subagents?: KunSubagentsSettingsPatchV1
   graph?: KunGraphSettingsPatchV1
+  lab?: KunLabSettingsPatchV1
 }
 
 export type KunSettingsEnvelopePatchV1 = {
@@ -1124,6 +1149,81 @@ export type ScheduleSettingsV1 = {
   keepAwake: boolean
   internal: ScheduleInternalSettingsV1
   tasks: ScheduledTaskV1[]
+  /** Session-level daemon threads (long-running per-session scripts). */
+  daemons: SessionDaemonSettingsV1
+}
+
+export type SessionDaemonInterpreter = 'auto' | 'python' | 'node'
+
+export type SessionDaemonPushV1 = {
+  enabled: boolean
+  /** Must reference an enabled weixin Claw IM channel. */
+  channelId: string
+  /** Must reference a conversation owned by that channel; resolved to chatId at runtime. */
+  conversationId: string
+}
+
+export type SessionDaemonV1 = {
+  id: string
+  title: string
+  /** Per-daemon on/off. Global kill switch lives in SessionDaemonSettingsV1.enabled. */
+  enabled: boolean
+  workspaceRoot: string
+  /** Kun thread this daemon is bound to (explicit). */
+  threadId: string
+  /** Workspace-relative or absolute script path. */
+  scriptPath: string
+  interpreter: SessionDaemonInterpreter
+  heartbeatIntervalSeconds: number
+  silenceTimeoutSeconds: number
+  restartOnFailure: boolean
+  push: SessionDaemonPushV1
+  createdAt: string
+  updatedAt: string
+}
+
+export type SessionDaemonSettingsV1 = {
+  /** Global kill switch: off stops every daemon but keeps per-daemon config. */
+  enabled: boolean
+  items: SessionDaemonV1[]
+}
+
+export type DaemonProcessState = 'starting' | 'running' | 'restarting' | 'paused' | 'error'
+
+export type DaemonPushStatusV1 = {
+  /** 'sent' means the WeChat bridge accepted the send attempt, not a delivery receipt. */
+  status: 'sent' | 'failed'
+  at: string
+  message?: string
+}
+
+export type DaemonRuntimeItemStatus = {
+  id: string
+  state: DaemonProcessState
+  pid?: number
+  startedAt?: string
+  lastHeartbeatAt?: string
+  lastOutputAt?: string
+  restartCount: number
+  lastError?: string
+  logPath: string
+  lastPush?: DaemonPushStatusV1
+}
+
+export type DaemonRuntimeStatus = {
+  items: DaemonRuntimeItemStatus[]
+  powerSaveBlockerActive: boolean
+}
+
+export type DaemonActionResult = {
+  ok: boolean
+  message?: string
+}
+
+export type DaemonLogPage = {
+  lines: string[]
+  nextCursor?: string
+  eof: boolean
 }
 
 // ---------------------------------------------------------------------------

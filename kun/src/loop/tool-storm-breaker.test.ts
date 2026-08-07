@@ -36,78 +36,13 @@ describe('ToolStormBreaker', () => {
     ).toEqual({ suppress: false })
   })
 
-  it('suppresses a third identical Graph inspection when durable state did not change', () => {
-    const breaker = new ToolStormBreaker({ threshold: 3 })
-    const inspect = (callId: string) => breaker.inspect({
-      callId,
-      toolName: 'graph_control_run',
-      arguments: { action: 'inspect', runId: 'graph_run_1' }
-    })
+  it('never suppresses ordinary tool calls, even with identical arguments', () => {
+    const breaker = new ToolStormBreaker()
 
-    expect(inspect('c1')).toEqual({ suppress: false })
-    expect(inspect('c2')).toEqual({ suppress: false })
-    expect(inspect('c3')).toMatchObject({
-      suppress: true,
-      reason: expect.stringContaining('identical arguments 3 times')
-    })
-  })
-
-  it('allows a fresh Graph inspection after a control mutation', () => {
-    const breaker = new ToolStormBreaker({ threshold: 3 })
-    const args = { action: 'inspect', runId: 'graph_run_1' }
-
-    expect(breaker.inspect({
-      callId: 'c1',
-      toolName: 'graph_control_run',
-      arguments: args
-    })).toEqual({ suppress: false })
-    expect(breaker.inspect({
-      callId: 'c2',
-      toolName: 'graph_control_run',
-      arguments: args
-    })).toEqual({ suppress: false })
-    expect(breaker.inspect({
-      callId: 'c3',
-      toolName: 'graph_control_run',
-      arguments: { action: 'retry_node', runId: 'graph_run_1', nodeId: 'research' }
-    })).toEqual({ suppress: false })
-    expect(breaker.inspect({
-      callId: 'c4',
-      toolName: 'graph_control_run',
-      arguments: args
-    })).toEqual({ suppress: false })
-  })
-
-  it('allows a fresh Graph inspection after a semantic patch or Lead review', () => {
-    for (const mutation of [
-      {
-        toolName: 'graph_patch_run',
-        arguments: {
-          runId: 'graph_run_1',
-          reason: 'Replace exhausted work.',
-          operations: [{ op: 'supersede_node', nodeId: 'research' }]
-        }
-      },
-      {
-        toolName: 'graph_review_node',
-        arguments: {
-          runId: 'graph_run_1',
-          nodeId: 'research',
-          outcome: 'pass',
-          summary: 'Accepted.'
-        }
-      }
-    ]) {
-      const breaker = new ToolStormBreaker({ threshold: 3 })
-      const inspect = {
-        toolName: 'graph_control_run',
-        arguments: { action: 'inspect', runId: 'graph_run_1' }
-      }
-
-      expect(breaker.inspect({ callId: 'c1', ...inspect })).toEqual({ suppress: false })
-      expect(breaker.inspect({ callId: 'c2', ...inspect })).toEqual({ suppress: false })
-      expect(breaker.inspect({ callId: 'c3', ...mutation })).toEqual({ suppress: false })
-      expect(breaker.inspect({ callId: 'c4', ...inspect })).toEqual({ suppress: false })
-    }
+    const call = { callId: 'c1', toolName: 'bash', arguments: { command: 'ls' } }
+    expect(breaker.inspect(call)).toEqual({ suppress: false })
+    expect(breaker.inspect({ ...call, callId: 'c2' })).toEqual({ suppress: false })
+    expect(breaker.inspect({ ...call, callId: 'c3' })).toEqual({ suppress: false })
+    expect(breaker.inspect({ ...call, callId: 'c4' })).toEqual({ suppress: false })
   })
 })

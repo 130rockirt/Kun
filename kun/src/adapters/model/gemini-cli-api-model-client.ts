@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import type { ToolCallProviderMetadata } from '../../contracts/items.js'
+import { goalContextTexts, type ToolCallProviderMetadata } from '../../contracts/items.js'
 import type { UsageSnapshot } from '../../contracts/usage.js'
 import type { ModelClient, ModelRequest, ModelStreamChunk } from '../../ports/model-client.js'
 import {
@@ -168,6 +168,14 @@ export class GeminiCliApiModelClient implements ModelClient {
     try {
       accessToken = await this.oauthSource.accessToken()
     } catch (error) {
+      if (round && this.debugSink) {
+        safeDebug(() => this.debugSink!.recordPhaseDiagnostic?.(round, {
+          phase: 'credential',
+          failureOrigin: 'credential',
+          code: 'gemini_cli_login_required',
+          message: safeErrorMessage(error)
+        }))
+      }
       yield {
         kind: 'error',
         code: 'gemini_cli_login_required',
@@ -177,13 +185,21 @@ export class GeminiCliApiModelClient implements ModelClient {
     }
 
     try {
-      this.projectId = this.projectId ?? await this.loadProject(accessToken, request.abortSignal)
+      this.projectId = this.projectId ?? await this.loadProject(accessToken, request.abortSignal, round)
     } catch (error) {
       if (isUnauthorized(error)) {
         try {
           accessToken = await this.oauthSource.accessToken(accessToken)
-          this.projectId = await this.loadProject(accessToken, request.abortSignal)
+          this.projectId = await this.loadProject(accessToken, request.abortSignal, round)
         } catch (retryError) {
+          if (round && this.debugSink) {
+            safeDebug(() => this.debugSink!.recordPhaseDiagnostic?.(round, {
+              phase: 'credential',
+              failureOrigin: 'credential',
+              code: 'gemini_cli_auth_failed',
+              message: safeErrorMessage(retryError)
+            }))
+          }
           yield {
             kind: 'error',
             code: 'gemini_cli_auth_failed',
@@ -256,6 +272,14 @@ export class GeminiCliApiModelClient implements ModelClient {
         try {
           accessToken = await this.oauthSource.accessToken(accessToken)
         } catch (error) {
+          if (round && this.debugSink) {
+            safeDebug(() => this.debugSink!.recordPhaseDiagnostic?.(round, {
+              phase: 'credential',
+              failureOrigin: 'credential',
+              code: 'gemini_cli_auth_failed',
+              message: safeErrorMessage(error)
+            }))
+          }
           yield {
             kind: 'error',
             code: 'gemini_cli_auth_failed',
@@ -445,42 +469,76 @@ export class GeminiCliApiModelClient implements ModelClient {
         name: tool.name,
         ...(tool.providerKind ? { providerKind: tool.providerKind } : {}),
         ...(tool.providerId ? { providerId: tool.providerId } : {})
-      }))
+      })),
+      redactedRequestValues: goalContextTexts(request.history)
     }) ?? null
   }
 
-  private async loadProject(accessToken: string, signal: AbortSignal): Promise<string> {
-    const response = await this.fetchImpl(this.methodUrl('loadCodeAssist'), {
-      method: 'POST',
-      headers: geminiHeaders(accessToken),
-      body: JSON.stringify({
-        metadata: {
-          ideType: 'IDE_UNSPECIFIED',
-          platform: 'PLATFORM_UNSPECIFIED',
-          pluginType: 'GEMINI'
-        }
-      }),
-      signal
-    })
-    const payload = await response.json().catch(() => null) as GeminiCodeAssistSetup | null
-    if (!response.ok) {
-      throw new GeminiCliApiHttpError(
-        response.status,
-        providerErrorMessage(payload?.error, response.status)
-      )
+  private async loadProject(
+    accessToken: string,
+    signal: AbortSignal,
+    round: LlmDebugRound | null = null
+  ): Promise<string> {
+    const url = this.methodUrl('loadCodeAssist')
+    const headers = geminiHeaders(accessToken)
+    const requestBody = {
+      metadata: {
+        ideType: 'IDE_UNSPECIFIED',
+        platform: 'PLATFORM_UNSPECIFIED',
+        pluginType: 'GEMINI'
+      }
     }
-    const projectId = payload?.cloudaicompanionProject?.trim() ||
-      process.env.GOOGLE_CLOUD_PROJECT?.trim() ||
-      process.env.GOOGLE_CLOUD_PROJECT_ID?.trim()
-    if (projectId) return projectId
-    const reason = payload?.ineligibleTiers
-      ?.map((tier) => tier.reasonMessage?.trim())
-      .filter(Boolean)
-      .join('; ')
-    throw new Error(
-      reason ||
-      'Gemini CLI account setup is incomplete. Run `gemini` once to finish Google subscription onboarding.'
-    )
+    const body = JSON.stringify(requestBody)
+    const trace = round && this.debugSink
+      ? safeDebug(() => this.debugSink!.beginHttpAttempt(round, {
+          endpointFormat: 'gemini-cli-api',
+          attempt: 1,
+          reason: 'initial',
+          url,
+          headers,
+          bodyText: traceSafeBody(requestBody),
+          secretValues: [accessToken],
+          phase: 'setup',
+          failureOrigin: 'setup'
+        }))
+      : undefined
+    try {
+      const response = await this.fetchImpl(url, {
+        method: 'POST',
+        headers,
+        body,
+        signal
+      })
+      if (trace && round && this.debugSink) {
+        safeDebug(() => this.debugSink!.captureHttpResponse(round, trace, response))
+      }
+      const payload = await response.json().catch(() => null) as GeminiCodeAssistSetup | null
+      if (!response.ok) {
+        if (trace) trace.diagnosticCode = 'gemini_cli_setup_failed'
+        throw new GeminiCliApiHttpError(
+          response.status,
+          providerErrorMessage(payload?.error, response.status)
+        )
+      }
+      const projectId = payload?.cloudaicompanionProject?.trim() ||
+        process.env.GOOGLE_CLOUD_PROJECT?.trim() ||
+        process.env.GOOGLE_CLOUD_PROJECT_ID?.trim()
+      if (projectId) return projectId
+      const reason = payload?.ineligibleTiers
+        ?.map((tier) => tier.reasonMessage?.trim())
+        .filter(Boolean)
+        .join('; ')
+      if (trace) trace.diagnosticCode = 'gemini_cli_setup_failed'
+      throw new Error(
+        reason ||
+        'Gemini CLI account setup is incomplete. Run `gemini` once to finish Google subscription onboarding.'
+      )
+    } catch (error) {
+      if (trace && !(error instanceof GeminiCliApiHttpError)) {
+        this.debugSink?.captureHttpError(trace, error)
+      }
+      throw error
+    }
   }
 
   private async postStream(input: {

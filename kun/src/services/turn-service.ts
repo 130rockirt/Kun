@@ -37,8 +37,9 @@ import {
 } from '../loop/compaction-summary.js'
 import type { ContextCompactionConfig } from '../loop/model-context-profile.js'
 import { reserveExtensionModelRequest } from '../loop/turn-budget-gate.js'
-import { makeUserItem, makeErrorItem } from '../domain/item.js'
+import { makeGoalContextItem, makeUserItem, makeErrorItem } from '../domain/item.js'
 import { appendTurnItem, createTurnRecord, finishTurn, replaceTurnItem, startTurn as startTurnRecord } from '../domain/turn.js'
+import { finalizeTurnItems } from '../domain/turn-item-finalization.js'
 import { touchThread } from '../domain/thread.js'
 import type { RuntimeEventRecorder } from './runtime-event-recorder.js'
 import type { UsageService } from './usage-service.js'
@@ -48,6 +49,10 @@ import { withThreadStoreMutation } from './thread-mutation-coordinator.js'
 import type { ThreadLifecycleFence } from './thread-lifecycle-fence.js'
 import { ThreadItemProjectionService } from './thread-item-projection.js'
 import { ComposerContextAttachmentSchema } from '../contracts/composer-context.js'
+import {
+  goalContextInstruction,
+  goalContextKey
+} from '../loop/continuation-instructions.js'
 
 export type TurnServiceDeps = {
   threadStore: ThreadStore
@@ -276,14 +281,35 @@ export class TurnService {
                   workspace: thread.workspace
                 })
               : undefined
+          // Snapshot the effective selection at admission. Some clients omit
+          // fields that merely inherit the thread. Without this copy a model
+          // picker change could mutate `thread.model` between tool steps and
+          // silently move an already-running turn onto a different protocol.
+          const turnModel = firstNonBlank(
+            input.request.model,
+            thread.model,
+            this.deps.defaultModel,
+            this.deps.model?.model
+          )
+          const requestedProviderId = firstNonBlank(input.request.providerId)
+          const threadProviderId = firstNonBlank(thread.providerId)
+          // `undefined` means "consult the current thread/default" to older
+          // consumers. Persist the default alias explicitly so a selection
+          // change after admission cannot move this already-running turn.
+          const turnProviderId = requestedProviderId ?? threadProviderId ?? 'default'
+          const turnAccountId = firstNonBlank(input.request.accountId) ?? (
+            !requestedProviderId || requestedProviderId === threadProviderId
+              ? firstNonBlank(thread.accountId)
+              : undefined
+          )
           const turn = createTurnRecord({
             id: turnId,
             threadId: input.threadId,
             prompt: input.request.prompt,
             messageSource: input.request.messageSource,
-            model: input.request.model,
-            providerId: input.request.providerId,
-            accountId: input.request.accountId,
+            model: turnModel,
+            providerId: turnProviderId,
+            accountId: turnAccountId,
             reasoningEffort: input.request.reasoningEffort,
             serviceTier: input.request.serviceTier,
             clientSurface: input.request.clientSurface,
@@ -1529,6 +1555,46 @@ export class TurnService {
     return thread?.turns.find((turn) => turn.id === turnId) ?? null
   }
 
+  /**
+   * Append the stable active-goal context exactly once before a model request.
+   * This deliberately bypasses applyItem(): it is canonical model history,
+   * not renderer content, so it must not create an SSE item event or enter the
+   * renderer-facing thread mirror.
+   */
+  async ensureGoalContext(threadId: string, turnId: string, signal?: AbortSignal): Promise<void> {
+    if (signal?.aborted) return
+    await this.withThreadMutation(threadId, async () => {
+      // The caller can wait behind another mutation while its execution lease
+      // is cancelled. Check again inside the serialized section so an aborted
+      // turn never gains model-only history after that wait.
+      if (signal?.aborted) return
+      const current = await this.deps.threadStore.get(threadId)
+      const turn = current?.turns.find((candidate) => candidate.id === turnId)
+      if (!current || !turn || (turn.status !== 'queued' && turn.status !== 'running')) return
+      const text = goalContextInstruction(current.goal)
+      const goalKey = goalContextKey(current.goal)
+      if (!text || !goalKey) return
+
+      const existing = await this.deps.sessionStore.loadItems(threadId)
+      // The goal record is a thread-level cache prefix, not a per-turn
+      // instruction. One active generation must therefore be represented
+      // exactly once even when the goal spans many user turns.
+      if (existing.some((item) => item.kind === 'goal_context' && item.goalKey === goalKey)) {
+        return
+      }
+      if (signal?.aborted) return
+      const itemId = `item_${turnId}_goal_context_${goalKey}`
+      await this.deps.sessionStore.appendItem(threadId, makeGoalContextItem({
+        id: itemId,
+        threadId,
+        turnId,
+        goalKey,
+        text,
+        createdAt: this.deps.nowIso()
+      }))
+    })
+  }
+
   async updateTurnMetadata(
     threadId: string,
     turnId: string,
@@ -1613,6 +1679,39 @@ export class TurnService {
       turnId: item.turnId,
       itemId: item.id,
       item
+    })
+  }
+
+  /**
+   * Persist the cumulative assistant item before exposing its next replay
+   * fragment. The ordering closes the hydrate event-before-state window; the
+   * offset makes the opposite state-before-event window safe to replay.
+   */
+  async applyAssistantDelta(
+    threadId: string,
+    item: TurnItem,
+    deltaText: string,
+    deltaOffset: number
+  ): Promise<void> {
+    if (item.kind !== 'assistant_text' && item.kind !== 'assistant_reasoning') {
+      throw new TypeError(`assistant delta requires assistant item: ${item.kind}`)
+    }
+    if (!Number.isSafeInteger(deltaOffset) || deltaOffset < 0) {
+      throw new RangeError(`assistant delta offset must be a non-negative safe integer: ${deltaOffset}`)
+    }
+    // Do not rewrite the full thread mirror for every ~40 ms stream fragment.
+    // The session item stream is the hydration source of truth; applyItem()
+    // publishes the final authoritative item into both stores at round end.
+    await this.deps.sessionStore.appendItem(threadId, item)
+    await this.deps.events.record({
+      kind: item.kind === 'assistant_text'
+        ? 'assistant_text_delta'
+        : 'assistant_reasoning_delta',
+      threadId,
+      turnId: item.turnId,
+      itemId: item.id,
+      deltaOffset,
+      item: { ...item, text: deltaText }
     })
   }
 
@@ -1740,13 +1839,8 @@ export class TurnService {
     status: Extract<TurnStatus, 'completed' | 'failed' | 'aborted'>
   ): Turn {
     const finishedAt = this.deps.nowIso()
-    let changed = false
-    const items = turn.items.map((item) => {
-      const next = this.finalizeOpenItem(item, status, finishedAt)
-      if (next !== item) changed = true
-      return next
-    })
-    return changed ? { ...turn, items } : turn
+    const items = finalizeTurnItems(turn.items, { turnId: turn.id, status, finishedAt })
+    return items === turn.items ? turn : { ...turn, items }
   }
 
   private async discardTurnItems(threadId: string, turnId: string): Promise<void> {
@@ -1775,32 +1869,18 @@ export class TurnService {
   ): Promise<void> {
     const items = await this.deps.sessionStore.loadItems(threadId)
     const finishedAt = this.deps.nowIso()
-    for (const item of items) {
-      if (item.turnId !== turnId) continue
-      const finalized = this.finalizeOpenItem(item, status, finishedAt)
-      if (finalized === item) continue
+    const finalizedItems = finalizeTurnItems(items, { turnId, status, finishedAt })
+    if (finalizedItems === items) return
+    for (let index = 0; index < items.length; index += 1) {
+      const item = items[index]
+      const finalized = finalizedItems[index]
+      if (!item || !finalized || finalized === item) continue
       await this.updateItem(threadId, item.id, finalized)
     }
   }
 
   private keepUserItems(items: TurnItem[]): TurnItem[] {
     return items.filter((item) => item.kind === 'user_message')
-  }
-
-  private finalizeOpenItem(
-    item: TurnItem,
-    status: Extract<TurnStatus, 'completed' | 'failed' | 'aborted'>,
-    finishedAt: string
-  ): TurnItem {
-    if (item.status !== 'pending' && item.status !== 'running') return item
-    if (item.kind === 'approval') {
-      return { ...item, status: 'expired', finishedAt }
-    }
-    if (item.kind === 'user_input') {
-      return { ...item, status: 'cancelled', finishedAt }
-    }
-    const itemStatus = status === 'completed' ? 'completed' : status
-    return { ...item, status: itemStatus, finishedAt } as TurnItem
   }
 
 }
@@ -1836,6 +1916,14 @@ function threadStatusAfterTurnTransition(currentStatus: ThreadStatus, turns: Tur
 function normalizeMaxConcurrentTurns(value: number | undefined): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) return DEFAULT_MAX_CONCURRENT_TURNS
   return Math.max(1, Math.floor(value))
+}
+
+function firstNonBlank(...values: Array<string | undefined>): string | undefined {
+  for (const value of values) {
+    const normalized = value?.trim()
+    if (normalized) return normalized
+  }
+  return undefined
 }
 
 function modelForManualCompaction(input: {

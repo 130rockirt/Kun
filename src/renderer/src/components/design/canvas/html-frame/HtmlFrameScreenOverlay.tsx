@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
 import { Brush, Check, X } from 'lucide-react'
 import type { CanvasShape } from '../../../../design/canvas/canvas-types'
+import { embeddedArtifactOf } from '../../../../design/canvas/canvas-types'
 import { useCanvasMotionPortalStyle } from '../../../../design/motion/canvas-motion-preview'
 import type { DesignHtmlElementContext } from '../../../../design/design-composer-context'
 import { inferDesignArtifactFoundationRole } from '../../../../design/design-types'
@@ -75,8 +76,18 @@ function ScreenOverlayInner({
   const artifact = useDesignWorkspaceStore((s) =>
     s.artifacts.find((a) => a.id === shape.htmlArtifactId)
   )
-  const artifactKind = artifact?.kind
-  const artifactRelativePath = artifact?.relativePath
+  const artifactVersionId = embeddedArtifactOf(shape)?.versionId
+  const artifactVersion = artifactVersionId
+    ? artifact?.versions.find((version) => version.id === artifactVersionId)
+    : undefined
+  const artifactRelativePath = artifactVersion?.relativePath ?? artifact?.relativePath
+  const renderedArtifact = artifact && artifactRelativePath && artifactRelativePath !== artifact.relativePath
+    ? { ...artifact, relativePath: artifactRelativePath }
+    : artifact
+  const isHistoricalVersion = Boolean(
+    artifactVersionId && artifactVersion?.relativePath && artifactVersion.relativePath !== artifact?.relativePath
+  )
+  const artifactKind = renderedArtifact?.kind
   const parallelState = useDesignWorkspaceStore((s) =>
     shape.htmlArtifactId ? s.parallelPageStates[shape.htmlArtifactId] : undefined
   )
@@ -89,8 +100,8 @@ function ScreenOverlayInner({
   const chatBusy = useChatStore((s) => s.busy)
   const canvasWidth = Math.max(1, shape.width)
   const canvasHeight = Math.max(1, shape.height)
-  const foundationRole = artifact ? inferDesignArtifactFoundationRole(artifact) : undefined
-  const drawingActive = htmlFrameDrawingActive({
+  const foundationRole = renderedArtifact ? inferDesignArtifactFoundationRole(renderedArtifact) : undefined
+  const drawingActive = !isHistoricalVersion && htmlFrameDrawingActive({
     foundationRole,
     previewStatus: artifact?.previewStatus,
     parallelStatus: parallelState?.status,
@@ -98,7 +109,7 @@ function ScreenOverlayInner({
     pagesRunStep: pagesRun?.step,
     chatBusy
   })
-  const autoResizeEnabled = shouldAutoResizeHtmlFrame({
+  const autoResizeEnabled = !isHistoricalVersion && shouldAutoResizeHtmlFrame({
     sizeMode: artifact?.node?.sizeMode,
     role: foundationRole,
     previewStatus: artifact?.previewStatus,
@@ -107,8 +118,8 @@ function ScreenOverlayInner({
   const reportPreviewError = useCallback((message: string): void => {
     setLocalPreviewError(message)
     setFileError(message)
-    if (artifact?.id) setArtifactPreviewStatus(artifact.id, 'error')
-  }, [artifact?.id, setArtifactPreviewStatus, setFileError])
+    if (artifact?.id && !isHistoricalVersion) setArtifactPreviewStatus(artifact.id, 'error')
+  }, [artifact?.id, isHistoricalVersion, setArtifactPreviewStatus, setFileError])
   const clearPreviewError = useCallback((): void => setLocalPreviewError(''), [])
   const {
     state: preview,
@@ -152,7 +163,7 @@ function ScreenOverlayInner({
   ])
   useHtmlFrameAutoSize({
     shape,
-    artifact,
+    artifact: renderedArtifact,
     artifactKind,
     foundationRole,
     autoResizeEnabled,
@@ -193,10 +204,10 @@ function ScreenOverlayInner({
     selectElementAt,
     updateSelectedElementText
   } = useHtmlFrameElementSelection({
-    artifact,
+    artifact: renderedArtifact,
     canvasWidth,
     canvasHeight,
-    editing,
+    editing: editing && !isHistoricalVersion,
     executeScript,
     interactive,
     shapeId: shape.id,
@@ -214,7 +225,7 @@ function ScreenOverlayInner({
   }, [selectedElementContext?.artifactId, selectedElementContext?.selector, selectedElementContext?.text])
 
   const commitSelectedElementText = useCallback((): void => {
-    if (!artifact || artifact.kind !== 'html' || !artifact.relativePath || !selectedElementContext) return
+    if (isHistoricalVersion || !artifact || artifact.kind !== 'html' || !artifactRelativePath || !selectedElementContext) return
     if (!workspaceRoot.trim()) {
       setElementTextStatus({ kind: 'error', message: 'Workspace root is missing.' })
       return
@@ -230,7 +241,7 @@ function ScreenOverlayInner({
     setElementTextStatus({ kind: 'saving' })
     void (async () => {
       const read = await window.kunGui.readWorkspaceFile({
-        path: artifact.relativePath,
+        path: artifactRelativePath,
         workspaceRoot
       })
       if (!read.ok) throw new Error(read.message)
@@ -242,7 +253,7 @@ function ScreenOverlayInner({
       if (replaced.content !== read.content) {
         setArtifactPreviewStatus(artifact.id, 'pending')
         const write = await writeDesignWorkspaceFile({
-          path: artifact.relativePath,
+          path: artifactRelativePath,
           workspaceRoot,
           content: replaced.content
         })
@@ -266,7 +277,9 @@ function ScreenOverlayInner({
     })
   }, [
     artifact,
+    artifactRelativePath,
     elementTextDraft,
+    isHistoricalVersion,
     selectedElementContext,
     setArtifactPreviewStatus,
     setFileError,
@@ -305,7 +318,7 @@ function ScreenOverlayInner({
   // This keeps the transparent generating surface up for the whole write so the
   // canvas updates live without an opaque white frame appearing mid-stream.
   useEffect(() => {
-    if (!artifact?.id) return
+    if (isHistoricalVersion || !artifact?.id) return
     if (!htmlFrameShouldPromotePreviewToReady({
       previewStatus: artifact.previewStatus,
       previewRenderState: preview.renderState,
@@ -320,9 +333,10 @@ function ScreenOverlayInner({
     artifact?.id,
     artifact?.previewStatus,
     artifactRelativePath,
+    drawingActive,
+    isHistoricalVersion,
     preview.relativePath,
     preview.renderState,
-    drawingActive,
     setArtifactPreviewStatus
   ])
 
@@ -373,7 +387,7 @@ function ScreenOverlayInner({
           artifactRelativePath={artifactRelativePath}
           chromeOffset={chromeOffset}
           drawingActive={drawingActive}
-          editing={editing}
+          editing={editing && !isHistoricalVersion}
           failedMessage={failedMessage}
           interactive={interactive}
           previewWebviewUrl={preview.webviewUrl}
@@ -384,7 +398,8 @@ function ScreenOverlayInner({
           shapeId={shape.id}
           shapeName={shape.name}
           onQualityDetailsOpenChange={setQualityDetailsOpen}
-          onRequestQualityRepair={onRequestQualityRepair}
+          onRequestQualityRepair={isHistoricalVersion ? undefined : onRequestQualityRepair}
+          readOnly={isHistoricalVersion}
           onToggleModify={onToggleModify}
         />
       ) : null}
