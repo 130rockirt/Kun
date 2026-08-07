@@ -28,6 +28,7 @@ export const UninstallStatusSchema = z.object({
   canRemoveApp: z.boolean(),
   removeAppMode: UninstallRemoveAppModeSchema,
   removeAppTarget: z.string().max(32_767).optional(),
+  appInstallPath: z.string().max(32_767).optional(),
   appRemovalHint: z.string().max(2_000).optional(),
   paths: z.array(UninstallPathItemSchema).max(16)
 }).strict()

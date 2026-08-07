@@ -107,6 +107,12 @@ export function UninstallSettingsSection(): React.JSX.Element {
               <p className="min-w-0 break-all font-mono text-[11px] text-ds-muted">{item.path}</p>
             </div>
           ))}
+          {status?.canRemoveApp && status.appInstallPath ? (
+            <div className="grid gap-1 rounded-xl border border-ds-border bg-ds-subtle/30 px-4 py-3 text-xs md:grid-cols-[10rem_1fr]">
+              <span className="font-medium text-ds-ink">{t('uninstallRemoveApp')}</span>
+              <p className="min-w-0 break-all font-mono text-[11px] text-ds-muted">{status.appInstallPath}</p>
+            </div>
+          ) : null}
         </div>
       </section>
 

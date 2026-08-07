@@ -1061,14 +1061,14 @@ describe('provider mutation lifecycle across settings remounts', () => {
     return value
   }
 
-  const providerFixture = (): {
+  const providerFixture = (id = 'custom-provider-2'): {
     settings: ReturnType<typeof defaultModelProviderSettings>
     provider: ModelProviderProfileV1
   } => {
     const settings = defaultModelProviderSettings()
     const provider = {
       ...settings.providers[0]!,
-      id: 'custom-provider-2',
+      id,
       name: 'Remount Provider',
       apiKey: '',
       baseUrl: 'https://api.example.com/v1',
@@ -1126,7 +1126,10 @@ describe('provider mutation lifecycle across settings remounts', () => {
       locale: 'en',
       write: { inlineCompletion: { inheritProvider: true, providerId: '' } }
     },
-    provider: { ...settings, providers: [...settings.providers, provider] },
+    provider: {
+      ...settings,
+      providers: [...settings.providers.filter((item) => item.id !== provider.id), provider]
+    },
     kun: {
       ...defaultKunRuntimeSettings(),
       providerId: provider.id,
@@ -1209,6 +1212,21 @@ describe('provider mutation lifecycle across settings remounts', () => {
     resetSharedProviderMutationCoordinatorForTests()
     vi.unstubAllGlobals()
     ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = false
+  })
+
+  it('shows the delete action for the default API provider', async () => {
+    const { settings, provider } = providerFixture('deepseek')
+    const runtimeRequest = vi.fn(async (path: string) => {
+      if (path.includes('/events?')) return new Promise<never>(() => undefined)
+      return { ok: true, status: 200, body: JSON.stringify(snapshotFor(provider, 1)) }
+    })
+    Object.assign(window.kunGui, { runtimeRequest })
+
+    const renderer = await mount(contextFor(settings, provider))
+    await flush()
+    await clickTab(renderer, 'modelProviderTabAdvanced')
+
+    expect(findButton(renderer, 'modelProviderRemove')).toBeTruthy()
   })
 
   it('shows safe replacement guidance for an unreadable protected credential', async () => {

@@ -3484,7 +3484,6 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
   }
 
   const removeModelProvider = async (id: string): Promise<void> => {
-    if (id === DEFAULT_MODEL_PROVIDER_ID) return
     const target = modelProviders.find((item) => item.id === id)
     if (!target) return
     const usedByChat = activeKunProviderId === id
@@ -5329,7 +5328,7 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
                   ) : null}
                 </CapabilitySection>
                 </SettingsTabPanel>
-                {!isDraftActive && activeTab === 'advanced' && activeProvider.id !== DEFAULT_MODEL_PROVIDER_ID ? (
+                {!isDraftActive && activeTab === 'advanced' ? (
                   <DetailSection title={t('modelProviderSectionDanger')}>
                     <div className="flex flex-wrap items-center gap-3">
                       <button

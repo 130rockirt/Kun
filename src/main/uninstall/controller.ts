@@ -72,6 +72,7 @@ export class UninstallController {
       canRemoveApp: appRemoval.mode !== 'none',
       removeAppMode: appRemoval.mode,
       removeAppTarget: appRemoval.target,
+      appInstallPath: appRemoval.installPath,
       appRemovalHint: appRemoval.hint,
       paths
     }

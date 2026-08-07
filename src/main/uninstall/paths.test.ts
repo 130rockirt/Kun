@@ -99,7 +99,11 @@ describe('app removal target resolution', () => {
       isPackaged: true,
       platform: 'darwin'
     })
-    expect(result).toEqual({ mode: 'bundle', target: '/Applications/Kun.app' })
+    expect(result).toEqual({
+      mode: 'bundle',
+      target: '/Applications/Kun.app',
+      installPath: '/Applications/Kun.app'
+    })
   })
 
   it('targets the AppImage on Linux and gives a hint for deb installs', async () => {
@@ -109,7 +113,11 @@ describe('app removal target resolution', () => {
       platform: 'linux',
       appImageEnv: '/home/Alice/Downloads/Kun-0.1.0.AppImage'
     })
-    expect(appImage).toEqual({ mode: 'appimage', target: '/home/Alice/Downloads/Kun-0.1.0.AppImage' })
+    expect(appImage).toEqual({
+      mode: 'appimage',
+      target: '/home/Alice/Downloads/Kun-0.1.0.AppImage',
+      installPath: '/home/Alice/Downloads/Kun-0.1.0.AppImage'
+    })
     const deb = await resolveAppRemovalTarget({
       execPath: '/opt/Kun/kun',
       isPackaged: true,
@@ -127,7 +135,11 @@ describe('app removal target resolution', () => {
       isPackaged: true,
       platform: 'win32'
     })
-    expect(result).toEqual({ mode: 'uninstaller', target: join(installDir, 'Uninstall Kun.exe') })
+    expect(result).toEqual({
+      mode: 'uninstaller',
+      target: join(installDir, 'Uninstall Kun.exe'),
+      installPath: installDir
+    })
     const emptyDir = await mkdtemp(join(tmpdir(), 'kun-uninstall-empty-'))
     const withoutUninstaller = await resolveAppRemovalTarget({
       execPath: join(emptyDir, 'Kun.exe'),

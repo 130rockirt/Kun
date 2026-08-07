@@ -24,6 +24,8 @@ export type UninstallPathCollectionInput = {
 export type UninstallAppRemovalTarget = {
   mode: UninstallRemoveAppMode
   target?: string
+  /** The user-selected application installation location, for display only. */
+  installPath?: string
   hint?: string
 }
 
@@ -153,13 +155,13 @@ export async function resolveAppRemovalTarget(input: {
   }
   if (platform === 'darwin') {
     const bundleRoot = findMacBundleRoot(execPath)
-    if (bundleRoot) return { mode: 'bundle', target: bundleRoot }
+    if (bundleRoot) return { mode: 'bundle', target: bundleRoot, installPath: bundleRoot }
     return { mode: 'none', hint: 'Could not locate the Kun.app bundle for removal.' }
   }
   if (platform === 'win32') {
     const installDir = dirname(execPath)
     const uninstaller = await findWindowsUninstaller(installDir)
-    if (uninstaller) return { mode: 'uninstaller', target: uninstaller }
+    if (uninstaller) return { mode: 'uninstaller', target: uninstaller, installPath: installDir }
     return {
       mode: 'none',
       hint: 'Could not locate the Kun uninstaller in the installation directory.'
@@ -167,7 +169,7 @@ export async function resolveAppRemovalTarget(input: {
   }
   if (platform === 'linux') {
     const appImage = input.appImageEnv?.trim()
-    if (appImage) return { mode: 'appimage', target: appImage }
+    if (appImage) return { mode: 'appimage', target: appImage, installPath: appImage }
     return {
       mode: 'none',
       hint: 'Kun was installed via a system package (deb). Remove it with your package manager, for example: sudo dpkg -r <package>'

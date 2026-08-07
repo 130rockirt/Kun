@@ -17,6 +17,7 @@ function status(overrides: Partial<UninstallStatus> = {}): UninstallStatus {
     canRemoveApp: true,
     removeAppMode: 'bundle',
     removeAppTarget: '/Applications/Kun.app',
+    appInstallPath: '/Applications/Kun.app',
     paths: [
       { kind: 'userData', path: '/Users/Alice/Library/Application Support/Kun', exists: true },
       { kind: 'kunData', path: '/Users/Alice/.kun/data', exists: true },
@@ -75,6 +76,7 @@ describe('UninstallSettingsSection', () => {
     expect(text).toContain('/Users/Alice/Library/Application Support/Kun')
     expect(text).toContain('/Users/Alice/.kun/data')
     expect(text).not.toContain('/Users/Alice/.deepseekgui/kun')
+    expect(text).toContain('/Applications/Kun.app')
     expect(text).toContain('Uninstall Kun')
   })
 
