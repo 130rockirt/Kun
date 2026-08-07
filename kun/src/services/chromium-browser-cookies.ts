@@ -1,7 +1,7 @@
 import { createDecipheriv, createHash, pbkdf2Sync } from 'node:crypto'
 import { execFile } from 'node:child_process'
-import { readdirSync } from 'node:fs'
-import { copyFile, mkdtemp, rm } from 'node:fs/promises'
+import { accessSync, constants, readdirSync } from 'node:fs'
+import { access, copyFile, mkdtemp, rm } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { join, win32 } from 'node:path'
 import { promisify } from 'node:util'
@@ -9,7 +9,8 @@ import { promisify } from 'node:util'
 const execFileAsync = promisify(execFile)
 const CHROMIUM_COOKIE_SALT = Buffer.from('saltysalt')
 const CHROMIUM_COOKIE_IV = Buffer.alloc(16, 0x20)
-const KEYCHAIN_TIMEOUT_MS = 4_000
+/** Allow time for the macOS Keychain Allow dialog on first access. */
+const KEYCHAIN_TIMEOUT_MS = 30_000
 
 export type ChromiumCookieRow = {
   name: string
@@ -29,12 +30,15 @@ export type ChromiumBrowserCookieSource = {
   profileRootSegments: string[]
   /** Windows Local AppData-relative profile root. */
   windowsProfileRootSegments?: string[]
+  /** Linux ~/.config-relative profile root segments. */
+  linuxProfileRootSegments?: string[]
   safeStorageLabels: ChromiumSafeStorageLabel[]
 }
 
 /**
  * Chromium browsers CodexBar / SweetCookieKit can import from for OpenCode Go.
  * Keep Comet and Dia here — they are real session hosts for opencode.ai.
+ * Beta/Canary/Nightly variants match CodexBar's broader Chromium coverage.
  */
 export const OPENCODE_GO_CHROMIUM_BROWSERS: ChromiumBrowserCookieSource[] = [
   {
@@ -42,15 +46,61 @@ export const OPENCODE_GO_CHROMIUM_BROWSERS: ChromiumBrowserCookieSource[] = [
     displayName: 'Chrome',
     profileRootSegments: ['Google', 'Chrome'],
     windowsProfileRootSegments: ['Google', 'Chrome', 'User Data'],
+    linuxProfileRootSegments: ['google-chrome'],
     safeStorageLabels: [{ service: 'Chrome Safe Storage', account: 'Chrome' }]
+  },
+  {
+    id: 'chrome-beta',
+    displayName: 'Chrome Beta',
+    profileRootSegments: ['Google', 'Chrome Beta'],
+    windowsProfileRootSegments: ['Google', 'Chrome Beta', 'User Data'],
+    linuxProfileRootSegments: ['google-chrome-beta'],
+    safeStorageLabels: [
+      { service: 'Chrome Safe Storage', account: 'Chrome' },
+      { service: 'Chrome Beta Safe Storage', account: 'Chrome Beta' }
+    ]
+  },
+  {
+    id: 'chrome-canary',
+    displayName: 'Chrome Canary',
+    profileRootSegments: ['Google', 'Chrome Canary'],
+    windowsProfileRootSegments: ['Google', 'Chrome SxS', 'User Data'],
+    linuxProfileRootSegments: ['google-chrome-unstable'],
+    safeStorageLabels: [
+      { service: 'Chrome Safe Storage', account: 'Chrome' },
+      { service: 'Chrome Canary Safe Storage', account: 'Chrome Canary' }
+    ]
   },
   {
     id: 'edge',
     displayName: 'Microsoft Edge',
     profileRootSegments: ['Microsoft Edge'],
     windowsProfileRootSegments: ['Microsoft', 'Edge', 'User Data'],
+    linuxProfileRootSegments: ['microsoft-edge'],
     safeStorageLabels: [
       { service: 'Microsoft Edge Safe Storage', account: 'Microsoft Edge' }
+    ]
+  },
+  {
+    id: 'edge-beta',
+    displayName: 'Microsoft Edge Beta',
+    profileRootSegments: ['Microsoft Edge Beta'],
+    windowsProfileRootSegments: ['Microsoft', 'Edge Beta', 'User Data'],
+    linuxProfileRootSegments: ['microsoft-edge-beta'],
+    safeStorageLabels: [
+      { service: 'Microsoft Edge Safe Storage', account: 'Microsoft Edge' },
+      { service: 'Microsoft Edge Beta Safe Storage', account: 'Microsoft Edge Beta' }
+    ]
+  },
+  {
+    id: 'edge-canary',
+    displayName: 'Microsoft Edge Canary',
+    profileRootSegments: ['Microsoft Edge Canary'],
+    windowsProfileRootSegments: ['Microsoft', 'Edge SxS', 'User Data'],
+    linuxProfileRootSegments: ['microsoft-edge-dev'],
+    safeStorageLabels: [
+      { service: 'Microsoft Edge Safe Storage', account: 'Microsoft Edge' },
+      { service: 'Microsoft Edge Canary Safe Storage', account: 'Microsoft Edge Canary' }
     ]
   },
   {
@@ -58,12 +108,36 @@ export const OPENCODE_GO_CHROMIUM_BROWSERS: ChromiumBrowserCookieSource[] = [
     displayName: 'Brave',
     profileRootSegments: ['BraveSoftware', 'Brave-Browser'],
     windowsProfileRootSegments: ['BraveSoftware', 'Brave-Browser', 'User Data'],
+    linuxProfileRootSegments: ['BraveSoftware', 'Brave-Browser'],
     safeStorageLabels: [{ service: 'Brave Safe Storage', account: 'Brave' }]
+  },
+  {
+    id: 'brave-beta',
+    displayName: 'Brave Beta',
+    profileRootSegments: ['BraveSoftware', 'Brave-Browser-Beta'],
+    windowsProfileRootSegments: ['BraveSoftware', 'Brave-Browser-Beta', 'User Data'],
+    linuxProfileRootSegments: ['BraveSoftware', 'Brave-Browser-Beta'],
+    safeStorageLabels: [
+      { service: 'Brave Safe Storage', account: 'Brave' },
+      { service: 'Brave Safe Storage', account: 'Brave Beta' }
+    ]
+  },
+  {
+    id: 'brave-nightly',
+    displayName: 'Brave Nightly',
+    profileRootSegments: ['BraveSoftware', 'Brave-Browser-Nightly'],
+    windowsProfileRootSegments: ['BraveSoftware', 'Brave-Browser-Nightly', 'User Data'],
+    linuxProfileRootSegments: ['BraveSoftware', 'Brave-Browser-Nightly'],
+    safeStorageLabels: [
+      { service: 'Brave Safe Storage', account: 'Brave' },
+      { service: 'Brave Safe Storage', account: 'Brave Nightly' }
+    ]
   },
   {
     id: 'arc',
     displayName: 'Arc',
     profileRootSegments: ['Arc', 'User Data'],
+    linuxProfileRootSegments: ['arc'],
     safeStorageLabels: [{ service: 'Arc Safe Storage', account: 'Arc' }]
   },
   {
@@ -76,6 +150,7 @@ export const OPENCODE_GO_CHROMIUM_BROWSERS: ChromiumBrowserCookieSource[] = [
     id: 'comet',
     displayName: 'Comet',
     profileRootSegments: ['Comet'],
+    linuxProfileRootSegments: ['comet'],
     safeStorageLabels: [{ service: 'Comet Safe Storage', account: 'Comet' }]
   },
   {
@@ -83,6 +158,7 @@ export const OPENCODE_GO_CHROMIUM_BROWSERS: ChromiumBrowserCookieSource[] = [
     displayName: 'Vivaldi',
     profileRootSegments: ['Vivaldi'],
     windowsProfileRootSegments: ['Vivaldi', 'User Data'],
+    linuxProfileRootSegments: ['vivaldi'],
     safeStorageLabels: [{ service: 'Vivaldi Safe Storage', account: 'Vivaldi' }]
   },
   {
@@ -90,6 +166,7 @@ export const OPENCODE_GO_CHROMIUM_BROWSERS: ChromiumBrowserCookieSource[] = [
     displayName: 'Chromium',
     profileRootSegments: ['Chromium'],
     windowsProfileRootSegments: ['Chromium', 'User Data'],
+    linuxProfileRootSegments: ['chromium'],
     safeStorageLabels: [{ service: 'Chromium Safe Storage', account: 'Chromium' }]
   }
 ]
@@ -97,6 +174,32 @@ export const OPENCODE_GO_CHROMIUM_BROWSERS: ChromiumBrowserCookieSource[] = [
 export type ChromiumCookieDatabaseCandidate = {
   browser: ChromiumBrowserCookieSource
   databasePath: string
+}
+
+/** Non-sensitive outcome of a Chromium cookie scan (never includes cookie values). */
+export type ChromiumCookieReadDiagnosis =
+  | {
+    kind: 'success'
+    browserId: string
+    browserDisplayName: string
+    databasePath: string
+  }
+  | {
+    kind: 'not_found'
+    scannedDatabases: number
+    foundAuthRows: boolean
+  }
+  | {
+    kind: 'decrypt_failed'
+    browserId: string
+    browserDisplayName: string
+    databasePath: string
+    reason: 'keychain_unavailable' | 'decrypt_failed'
+  }
+
+export type ChromiumCookieReadResult = {
+  cookies: ChromiumCookieRow[]
+  diagnosis: ChromiumCookieReadDiagnosis
 }
 
 export type ReadChromiumCookiesForDomainsOptions = {
@@ -121,37 +224,84 @@ export type ReadChromiumCookiesForDomainsOptions = {
 export async function readChromiumCookiesForDomains(
   options: ReadChromiumCookiesForDomainsOptions = {}
 ): Promise<ChromiumCookieRow[]> {
-  const domainSuffixes = options.domainSuffixes ?? ['opencode.ai']
+  const result = await readChromiumCookiesForDomainsWithDiagnosis(options)
+  return result.cookies
+}
+
+/**
+ * Same as {@link readChromiumCookiesForDomains}, but also returns a
+ * non-sensitive diagnosis so callers can distinguish "not signed in" from
+ * "signed in but Keychain/decrypt failed".
+ */
+export async function readChromiumCookiesForDomainsWithDiagnosis(
+  options: ReadChromiumCookiesForDomainsOptions = {}
+): Promise<ChromiumCookieReadResult> {
+  const domainSuffixes = options.domainSuffixes ?? ['opencode.ai', 'app.opencode.ai']
   const cookieNames = options.cookieNames
   const candidates = options.candidates ??
     listChromiumCookieDatabaseCandidates(options)
+  const passwordCache = new Map<string, string | undefined>()
+  let scannedDatabases = 0
+  let foundAuthRows = false
+  let decryptFailure: Extract<ChromiumCookieReadDiagnosis, { kind: 'decrypt_failed' }> | undefined
+
   for (const candidate of candidates) {
     try {
+      if (!(await cookieDatabaseExists(candidate.databasePath))) continue
+      scannedDatabases += 1
       const rows = await readCookiesFromDatabase(candidate.databasePath, domainSuffixes)
       const matched = rows.filter((row) =>
         cookieNames ? cookieNames.has(row.name.toLowerCase()) : true
       )
       if (matched.length === 0) continue
+      foundAuthRows = true
 
       const plaintext = matched.filter((row) => row.value.trim().length > 0)
       if (plaintext.length > 0) {
-        return plaintext.map((row) => ({
-          name: row.name,
-          value: row.value,
-          hostKey: row.hostKey
-        }))
+        return {
+          cookies: plaintext.map((row) => ({
+            name: row.name,
+            value: row.value,
+            hostKey: row.hostKey
+          })),
+          diagnosis: {
+            kind: 'success',
+            browserId: candidate.browser.id,
+            browserDisplayName: candidate.browser.displayName,
+            databasePath: candidate.databasePath
+          }
+        }
       }
 
       const encrypted = matched.filter((row) => row.encryptedValue.length > 0)
       if (encrypted.length === 0) continue
       const platform = options.platform ?? process.platform
-      if (platform !== 'darwin') continue
+      if (platform !== 'darwin') {
+        decryptFailure = {
+          kind: 'decrypt_failed',
+          browserId: candidate.browser.id,
+          browserDisplayName: candidate.browser.displayName,
+          databasePath: candidate.databasePath,
+          reason: 'decrypt_failed'
+        }
+        continue
+      }
 
       const password = await resolveSafeStoragePassword(
         candidate.browser,
-        options.readSafeStoragePassword
+        options.readSafeStoragePassword,
+        passwordCache
       )
-      if (!password) continue
+      if (!password) {
+        decryptFailure = {
+          kind: 'decrypt_failed',
+          browserId: candidate.browser.id,
+          browserDisplayName: candidate.browser.displayName,
+          databasePath: candidate.databasePath,
+          reason: 'keychain_unavailable'
+        }
+        continue
+      }
       const key = deriveChromiumSafeStorageKey(password)
       const decrypted: ChromiumCookieRow[] = []
       for (const row of encrypted) {
@@ -164,12 +314,40 @@ export async function readChromiumCookiesForDomains(
         if (!value?.trim()) continue
         decrypted.push({ name: row.name, value, hostKey: row.hostKey })
       }
-      if (decrypted.length > 0) return decrypted
+      if (decrypted.length > 0) {
+        return {
+          cookies: decrypted,
+          diagnosis: {
+            kind: 'success',
+            browserId: candidate.browser.id,
+            browserDisplayName: candidate.browser.displayName,
+            databasePath: candidate.databasePath
+          }
+        }
+      }
+      decryptFailure = {
+        kind: 'decrypt_failed',
+        browserId: candidate.browser.id,
+        browserDisplayName: candidate.browser.displayName,
+        databasePath: candidate.databasePath,
+        reason: 'decrypt_failed'
+      }
     } catch {
-      // Locked/missing DBs and keychain denials are expected; try the next source.
+      // Locked DBs and unexpected IO failures are expected; try the next source.
     }
   }
-  return []
+
+  if (decryptFailure) {
+    return { cookies: [], diagnosis: decryptFailure }
+  }
+  return {
+    cookies: [],
+    diagnosis: {
+      kind: 'not_found',
+      scannedDatabases,
+      foundAuthRows
+    }
+  }
 }
 
 export function listChromiumCookieDatabaseCandidates(
@@ -194,17 +372,8 @@ export function listChromiumCookieDatabaseCandidates(
       continue
     }
     if (platform === 'linux') {
-      const linuxRootById: Record<string, string[]> = {
-        chrome: ['google-chrome'],
-        edge: ['microsoft-edge'],
-        brave: ['brave'],
-        arc: ['arc'],
-        chromium: ['chromium'],
-        vivaldi: ['vivaldi'],
-        comet: ['comet']
-      }
-      const segments = linuxRootById[browser.id]
-      if (!segments) continue
+      const segments = browser.linuxProfileRootSegments
+      if (!segments?.length) continue
       roots.push({
         browser,
         root: joinPath(userHome, '.config', ...segments)
@@ -226,15 +395,23 @@ export function listChromiumCookieDatabaseCandidates(
   const out: ChromiumCookieDatabaseCandidate[] = []
   for (const { browser, root } of roots) {
     for (const profileName of discoverChromiumProfileNamesSync(root)) {
-      out.push(
-        {
-          browser,
-          databasePath: joinPath(root, profileName, 'Network', 'Cookies')
-        },
-        {
-          browser,
-          databasePath: joinPath(root, profileName, 'Cookies')
+      const networkPath = joinPath(root, profileName, 'Network', 'Cookies')
+      const legacyPath = joinPath(root, profileName, 'Cookies')
+      // Prefer listing only paths that exist when the profile root is readable.
+      // When the root itself is missing, keep Default candidates for tests that
+      // assert path shapes without creating directories.
+      if (directoryExistsSync(root)) {
+        if (cookieDatabaseExistsSync(networkPath)) {
+          out.push({ browser, databasePath: networkPath })
         }
+        if (cookieDatabaseExistsSync(legacyPath)) {
+          out.push({ browser, databasePath: legacyPath })
+        }
+        continue
+      }
+      out.push(
+        { browser, databasePath: networkPath },
+        { browser, databasePath: legacyPath }
       )
     }
   }
@@ -286,6 +463,33 @@ type RawCookieRow = {
   hostKey: string
   encryptedValue: Buffer
   databaseVersion: number
+}
+
+async function cookieDatabaseExists(databasePath: string): Promise<boolean> {
+  try {
+    await access(databasePath)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function cookieDatabaseExistsSync(databasePath: string): boolean {
+  try {
+    accessSync(databasePath, constants.F_OK)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function directoryExistsSync(directoryPath: string): boolean {
+  try {
+    accessSync(directoryPath, constants.F_OK)
+    return true
+  } catch {
+    return false
+  }
 }
 
 async function readCookiesFromDatabase(
@@ -406,16 +610,22 @@ async function readCookiesFromDatabaseWithSqliteCli(
 
 async function resolveSafeStoragePassword(
   browser: ChromiumBrowserCookieSource,
-  override?: (label: ChromiumSafeStorageLabel) => Promise<string | undefined>
+  override: ((label: ChromiumSafeStorageLabel) => Promise<string | undefined>) | undefined,
+  passwordCache: Map<string, string | undefined>
 ): Promise<string | undefined> {
   for (const label of browser.safeStorageLabels) {
-    if (override) {
-      const password = await override(label)
-      if (password?.trim()) return password.trim()
+    const cacheKey = `${label.service}\0${label.account}`
+    if (passwordCache.has(cacheKey)) {
+      const cached = passwordCache.get(cacheKey)
+      if (cached?.trim()) return cached.trim()
       continue
     }
-    const password = await readMacosSafeStoragePassword(label)
-    if (password?.trim()) return password.trim()
+    const password = override
+      ? await override(label)
+      : await readMacosSafeStoragePassword(label)
+    const trimmed = password?.trim() || undefined
+    passwordCache.set(cacheKey, trimmed)
+    if (trimmed) return trimmed
   }
   return undefined
 }

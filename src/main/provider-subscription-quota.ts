@@ -15,6 +15,10 @@ import {
   type OpenCodeGoLocalQuotaResult
 } from '../../kun/src/services/opencode-go-local-quota.js'
 import {
+  clearOpenCodeGoCookieCache,
+  getOpenCodeGoCookieFailureReason,
+  OPENCODE_GO_KEYCHAIN_MESSAGE,
+  OPENCODE_GO_SIGN_IN_MESSAGE,
   resolveOpenCodeGoCookie as resolveOpenCodeGoCookieImpl
 } from '../../kun/src/services/provider-subscription-quota.js'
 import {
@@ -223,21 +227,37 @@ export async function runSubscriptionQuotaProbe(
     return probeGoogleCodeAssistQuota(credential, context, 'antigravity')
   }
   if (kind === 'opencode-go-local') {
-    const cookieHeader = await runtime.resolveOpenCodeGoCookie()
+    const tryWeb = async (cookieHeader: string) => {
+      const web = await runtime.fetchOpenCodeGoWebQuota(cookieHeader, context)
+      if (web.metrics.length > 0) {
+        return {
+          metrics: web.metrics,
+          ...(web.summary ? { summary: web.summary } : {}),
+          source: 'OpenCode Go subscription usage'
+        } as const
+      }
+      return undefined
+    }
+
+    let cookieHeader = await runtime.resolveOpenCodeGoCookie()
     if (cookieHeader) {
       try {
-        const web = await runtime.fetchOpenCodeGoWebQuota(cookieHeader, context)
-        if (web.metrics.length > 0) {
-          return {
-            metrics: web.metrics,
-            ...(web.summary ? { summary: web.summary } : {}),
-            source: 'OpenCode Go subscription usage'
+        const web = await tryWeb(cookieHeader)
+        if (web) return web
+      } catch (error) {
+        if (!(error instanceof OpenCodeGoWebQuotaError)) throw error
+        if (error.code === 'invalid_credentials') {
+          clearOpenCodeGoCookieCache()
+          cookieHeader = await runtime.resolveOpenCodeGoCookie()
+          if (cookieHeader) {
+            try {
+              const web = await tryWeb(cookieHeader)
+              if (web) return web
+            } catch (retryError) {
+              if (!(retryError instanceof OpenCodeGoWebQuotaError)) throw retryError
+            }
           }
         }
-      } catch (error) {
-        // Web quota is best-effort: any auth/network/parse failure falls back
-        // to the local usage database estimate.
-        if (!(error instanceof OpenCodeGoWebQuotaError)) throw error
       }
     }
     const quota = await runtime.resolveOpenCodeGoQuota()
@@ -248,7 +268,9 @@ export async function runSubscriptionQuotaProbe(
       }
     }
     throw new ProviderQuotaMissingCredentialError(
-      'Sign in to opencode.ai in your browser, or use OpenCode Go locally first so its usage history exists.'
+      getOpenCodeGoCookieFailureReason() === 'decrypt_failed'
+        ? OPENCODE_GO_KEYCHAIN_MESSAGE
+        : OPENCODE_GO_SIGN_IN_MESSAGE
     )
   }
   const accessToken = await runtime.resolveGeminiCliToken(context)

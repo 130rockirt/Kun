@@ -1,6 +1,6 @@
 import { createCipheriv, createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -8,11 +8,12 @@ import {
   decryptChromiumCookieValue,
   deriveChromiumSafeStorageKey,
   listChromiumCookieDatabaseCandidates,
-  readChromiumCookiesForDomains
+  readChromiumCookiesForDomains,
+  readChromiumCookiesForDomainsWithDiagnosis
 } from './chromium-browser-cookies.js'
 
 describe('chromium-browser-cookies', () => {
-  it('lists Comet cookie databases on macOS', () => {
+  it('lists Comet cookie databases and Chrome Beta/Canary on macOS', () => {
     const paths = listChromiumCookieDatabaseCandidates({
       platform: 'darwin',
       homeDirectory: '/Users/kun',
@@ -22,10 +23,35 @@ describe('chromium-browser-cookies', () => {
     expect(paths).toEqual(expect.arrayContaining([
       '/Users/kun/Library/Application Support/Google/Chrome/Default/Network/Cookies',
       '/Users/kun/Library/Application Support/Google/Chrome/Default/Cookies',
+      '/Users/kun/Library/Application Support/Google/Chrome Beta/Default/Network/Cookies',
+      '/Users/kun/Library/Application Support/Google/Chrome Canary/Default/Network/Cookies',
       '/Users/kun/Library/Application Support/Comet/Default/Network/Cookies',
       '/Users/kun/Library/Application Support/Comet/Default/Cookies',
       '/Users/kun/Library/Application Support/Dia/User Data/Default/Cookies'
     ]))
+  })
+
+  it('skips missing cookie databases when a profile root exists', () => {
+    const home = mkdtempSync(join(tmpdir(), 'kun-chromium-home-'))
+    const profileRoot = join(home, 'Library', 'Application Support', 'Google', 'Chrome')
+    const defaultProfile = join(profileRoot, 'Default')
+    mkdirSync(join(defaultProfile, 'Network'), { recursive: true })
+    writeFileSync(join(defaultProfile, 'Cookies'), '')
+
+    const paths = listChromiumCookieDatabaseCandidates({
+      platform: 'darwin',
+      homeDirectory: home,
+      environment: {},
+      browsers: [{
+        id: 'chrome',
+        displayName: 'Chrome',
+        profileRootSegments: ['Google', 'Chrome'],
+        safeStorageLabels: [{ service: 'Chrome Safe Storage', account: 'Chrome' }]
+      }]
+    }).map((candidate) => candidate.databasePath)
+
+    expect(paths).toEqual([join(defaultProfile, 'Cookies')])
+    expect(paths.some((path) => path.includes(`${join('Network', 'Cookies')}`))).toBe(false)
   })
 
   it('decrypts v10 cookies with DB version >= 24 domain hash prefix', () => {
@@ -66,7 +92,7 @@ describe('chromium-browser-cookies', () => {
         },
         databasePath
       }],
-      domainSuffixes: ['opencode.ai'],
+      domainSuffixes: ['opencode.ai', 'app.opencode.ai'],
       cookieNames: new Set(['auth', '__host-auth']),
       readSafeStoragePassword: async () => password
     })
@@ -74,6 +100,34 @@ describe('chromium-browser-cookies', () => {
     expect(cookies).toEqual([
       { name: 'auth', value: token, hostKey: 'opencode.ai' }
     ])
+  })
+
+  it('reads auth cookies hosted on app.opencode.ai', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'kun-chromium-cookie-app-'))
+    const databasePath = join(directory, 'Cookies')
+    createCookieDatabase(databasePath, [
+      { hostKey: 'app.opencode.ai', name: 'auth', value: 'app-token', encryptedHex: '' }
+    ])
+
+    const result = await readChromiumCookiesForDomainsWithDiagnosis({
+      platform: 'darwin',
+      candidates: [{
+        browser: {
+          id: 'chrome',
+          displayName: 'Chrome',
+          profileRootSegments: ['Google', 'Chrome'],
+          safeStorageLabels: [{ service: 'Chrome Safe Storage', account: 'Chrome' }]
+        },
+        databasePath
+      }],
+      domainSuffixes: ['opencode.ai', 'app.opencode.ai'],
+      cookieNames: new Set(['auth'])
+    })
+
+    expect(result.cookies).toEqual([
+      { name: 'auth', value: 'app-token', hostKey: 'app.opencode.ai' }
+    ])
+    expect(result.diagnosis.kind).toBe('success')
   })
 
   it('prefers plaintext cookie values without touching Safe Storage', async () => {
@@ -106,6 +160,91 @@ describe('chromium-browser-cookies', () => {
       { name: 'auth', value: 'plain-token', hostKey: 'opencode.ai' }
     ])
     expect(passwordCalls).toBe(0)
+  })
+
+  it('reports decrypt_failed when encrypted auth exists but Keychain is unavailable', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'kun-chromium-cookie-locked-'))
+    const databasePath = join(directory, 'Cookies')
+    const key = deriveChromiumSafeStorageKey('secret')
+    const encrypted = encryptV10Cookie('token', key, 'opencode.ai', 24)
+    createCookieDatabase(databasePath, [
+      { hostKey: 'opencode.ai', name: 'auth', value: '', encryptedHex: encrypted.toString('hex') }
+    ])
+
+    const result = await readChromiumCookiesForDomainsWithDiagnosis({
+      platform: 'darwin',
+      candidates: [{
+        browser: {
+          id: 'chrome',
+          displayName: 'Chrome',
+          profileRootSegments: ['Google', 'Chrome'],
+          safeStorageLabels: [{ service: 'Chrome Safe Storage', account: 'Chrome' }]
+        },
+        databasePath
+      }],
+      cookieNames: new Set(['auth']),
+      readSafeStoragePassword: async () => undefined
+    })
+
+    expect(result.cookies).toEqual([])
+    expect(result.diagnosis).toMatchObject({
+      kind: 'decrypt_failed',
+      browserId: 'chrome',
+      reason: 'keychain_unavailable'
+    })
+  })
+
+  it('caches Safe Storage passwords across profiles in one scan', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'kun-chromium-cookie-cache-'))
+    const firstPath = join(directory, 'one', 'Cookies')
+    const secondPath = join(directory, 'two', 'Cookies')
+    mkdirSync(join(directory, 'one'), { recursive: true })
+    mkdirSync(join(directory, 'two'), { recursive: true })
+    const password = 'shared-password'
+    const key = deriveChromiumSafeStorageKey(password)
+    // First profile's blob uses a mismatched domain hash so decrypt fails after
+    // Keychain is consulted; the second profile should reuse the cached password.
+    createCookieDatabase(firstPath, [
+      {
+        hostKey: 'opencode.ai',
+        name: 'auth',
+        value: '',
+        encryptedHex: encryptV10Cookie('stale', key, 'other.host', 24).toString('hex')
+      }
+    ])
+    createCookieDatabase(secondPath, [
+      {
+        hostKey: 'opencode.ai',
+        name: 'auth',
+        value: '',
+        encryptedHex: encryptV10Cookie('cached-token', key, 'opencode.ai', 24).toString('hex')
+      }
+    ])
+
+    let passwordCalls = 0
+    const browser = {
+      id: 'chrome',
+      displayName: 'Chrome',
+      profileRootSegments: ['Google', 'Chrome'],
+      safeStorageLabels: [{ service: 'Chrome Safe Storage', account: 'Chrome' }]
+    }
+    const result = await readChromiumCookiesForDomainsWithDiagnosis({
+      platform: 'darwin',
+      candidates: [
+        { browser, databasePath: firstPath },
+        { browser, databasePath: secondPath }
+      ],
+      cookieNames: new Set(['auth']),
+      readSafeStoragePassword: async () => {
+        passwordCalls += 1
+        return password
+      }
+    })
+
+    expect(result.cookies).toEqual([
+      { name: 'auth', value: 'cached-token', hostKey: 'opencode.ai' }
+    ])
+    expect(passwordCalls).toBe(1)
   })
 })
 
