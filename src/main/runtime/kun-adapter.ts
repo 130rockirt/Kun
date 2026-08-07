@@ -68,7 +68,14 @@ export const kunRuntimeAdapter = {
   },
 
   isChildRunning(): boolean {
-    return Boolean(resolvedConnection) || isKunChildRunning()
+    if (resolvedConnection) {
+      // Shared runtimes are detached; a cached discovery record can outlive the
+      // process. Treat a dead PID as "not running" so watchdog recovery takes the
+      // missing/ensure fast path instead of waiting out unresponsive retries (#1116).
+      if (processIsAlive(resolvedConnection.pid)) return true
+      resolvedConnection = null
+    }
+    return isKunChildRunning()
   },
 
   getBaseUrl(settings: AppSettingsV1): string {
@@ -165,6 +172,23 @@ function sharedRuntimeScope(dataDir: string): {
 
 function expandDataDir(value: string): string {
   return value.replace(/^~(?=$|[\\/])/, homedir())
+}
+
+function processIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    // EPERM means the process exists but we cannot signal it.
+    return (error as NodeJS.ErrnoException)?.code === 'EPERM'
+  }
+}
+
+/** Test-only: inject a cached discovery record for dead-PID recovery coverage. */
+export function setResolvedKunRuntimeConnectionForTests(
+  connection: RuntimeDiscoveryRecord | null
+): void {
+  resolvedConnection = connection
 }
 
 export type RuntimeRequestInit = {
