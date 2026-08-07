@@ -4211,6 +4211,13 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
   const activeCredentialNeedsReplacement =
     activeSharedConnection?.credentialStatus === 'missing' ||
     activeSharedConnection?.credentialStatus === 'unreadable'
+  const activeApiKeyPlaceholder =
+    !activeCredentialNeedsReplacement && (
+      Boolean(activeProvider?.apiKey.trim()) ||
+      sharedModelConnectionHasUsableCredential(activeSharedConnection)
+    )
+      ? '••••••••••••'
+      : t('modelProviderApiKeyPlaceholder')
   const activeTokenPlanRegions = activeProvider
     ? tokenPlanPresetForProfile(activeProvider)?.tokenPlan?.regions ?? []
     : []
@@ -4616,7 +4623,7 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
                           onChange={(value) => updateModelProvider(activeProvider.id, { apiKey: value })}
                           visible={showApiKey}
                           onToggleVisibility={() => setShowApiKey((value: boolean) => !value)}
-                          placeholder={t('modelProviderApiKeyPlaceholder')}
+                          placeholder={activeApiKeyPlaceholder}
                           autoComplete="off"
                           showLabel={t('showSecret')}
                           hideLabel={t('hideSecret')}
@@ -4674,7 +4681,7 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
                           onChange={(value) => updateModelProvider(activeProvider.id, { apiKey: value })}
                           visible={showApiKey}
                           onToggleVisibility={() => setShowApiKey((value: boolean) => !value)}
-                          placeholder={t('modelProviderApiKeyPlaceholder')}
+                          placeholder={activeApiKeyPlaceholder}
                           autoComplete="off"
                           showLabel={t('showSecret')}
                           hideLabel={t('hideSecret')}

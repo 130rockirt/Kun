@@ -1306,8 +1306,9 @@ describe('provider mutation lifecycle across settings remounts', () => {
     await flush()
 
     const credentialInput = first.root.findAllByType('input')
-      .find((input) => input.props.placeholder === 'modelProviderApiKeyPlaceholder')
+      .find((input) => input.props.type === 'password')
     expect(credentialInput).toBeTruthy()
+    expect(credentialInput?.props.placeholder).toBe('••••••••••••')
     await act(async () => credentialInput!.props.onChange({ target: { value: 'latest-secret' } }))
     expect(sharedProviderMutationCoordinator.pendingCredentials.get(provider.id)).toMatchObject({
       credential: 'latest-secret'
@@ -1318,7 +1319,7 @@ describe('provider mutation lifecycle across settings remounts', () => {
     const second = await mount(ctx)
     await flush()
     const remountedInput = second.root.findAllByType('input')
-      .find((input) => input.props.placeholder === 'modelProviderApiKeyPlaceholder')
+      .find((input) => input.props.type === 'password')
     expect(remountedInput?.props.value).toBe('latest-secret')
 
     credentialPut.resolve({
@@ -1342,7 +1343,7 @@ describe('provider mutation lifecycle across settings remounts', () => {
     }])
     expect(sharedProviderMutationCoordinator.pendingCredentials.has(provider.id)).toBe(false)
     expect(second.root.findAllByType('input')
-      .find((input) => input.props.placeholder === 'modelProviderApiKeyPlaceholder')?.props.value)
+      .find((input) => input.props.type === 'password')?.props.value)
       .toBe('')
   })
 
