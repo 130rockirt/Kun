@@ -78,6 +78,17 @@ describe('Graph Lead mode system contract', () => {
     )
   })
 
+  it('allows read-only explore_agent while forbidding ordinary delegate_task in planning', () => {
+    expect(GRAPH_LEAD_MODE_INSTRUCTION).toContain('Prefer `explore_agent` when it is advertised')
+    expect(GRAPH_LEAD_MODE_INSTRUCTION).toContain('or use ordinary `delegate_task` during planning')
+    expect(GRAPH_LEAD_MODE_INSTRUCTION).toContain(
+      'Do not use ordinary `delegate_task` / reusable-profile delegation'
+    )
+    expect(GRAPH_LEAD_MODE_INSTRUCTION).toContain(
+      'Read-only `explore_agent` remains allowed for repository investigation'
+    )
+  })
+
   it('keeps executors task-only and makes every handoff a Lead decision', () => {
     expect(GRAPH_LEAD_MODE_INSTRUCTION).toContain(
       'They can proactively use `report_to_parent`'

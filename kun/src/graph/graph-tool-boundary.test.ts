@@ -34,6 +34,19 @@ describe('Graph tool boundary', () => {
     }, { orchestration: 'direct' })).toBe(true)
   })
 
+  it('keeps Lab explore_agent available on Graph Lead turns', () => {
+    expect(isToolAllowedInOrchestration({
+      toolName: 'explore_agent',
+      providerId: 'explore-agent',
+      providerKind: 'delegation'
+    }, { orchestration: 'graph' })).toBe(true)
+    expect(isToolAllowedInOrchestration({
+      toolName: 'explore_agent',
+      providerId: 'explore-agent',
+      providerKind: 'delegation'
+    }, { messageSource: 'graph_runtime' })).toBe(true)
+  })
+
   it('builds executor authority without ordinary or Graph orchestration tools', () => {
     const names = graphParentAuthorityToolNames([
       'read',
@@ -43,7 +56,8 @@ describe('Graph tool boundary', () => {
       'delegate_task',
       'list_subagent_profiles',
       'task_graph',
-      'design_component'
+      'design_component',
+      'explore_agent'
     ])
 
     expect(names).toEqual(['read'])

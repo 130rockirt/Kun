@@ -25,6 +25,8 @@ import {
   EXPLORE_AGENT_TOOL_NAME,
   buildExploreAgentToolProvider
 } from './explore-agent-tool-provider.js'
+import { CapabilityRegistry } from './capability-registry.js'
+import { LocalToolHost } from './local-tool-host.js'
 
 function makeRuntime(dir: string, executor: ChildRunExecutor): DelegationRuntime {
   const nowIso = () => '2026-07-08T00:00:00.000Z'
@@ -103,6 +105,7 @@ describe('explore_agent tool provider', () => {
     const provider = buildExploreAgentToolProvider(runtime, () => ({}))[0]
     expect(provider.id).toBe(EXPLORE_AGENT_PROVIDER_ID)
     expect(provider.tools[0].name).toBe(EXPLORE_AGENT_TOOL_NAME)
+    expect(provider.tools[0].sideEffect).toBe('read-only')
     expect(provider.tools[0].shouldAdvertise?.(baseContext)).toBe(true)
     expect(provider.tools[0].description).toContain('Use this first for any repository or project exploration')
     expect(provider.tools[0].description).toContain('multiple parallel explore_agent calls')
@@ -124,6 +127,29 @@ describe('explore_agent tool provider', () => {
 
   it('does not register when delegation is unavailable', () => {
     expect(buildExploreAgentToolProvider(undefined, () => ({ enabled: true }))).toHaveLength(0)
+  })
+
+  it('stays advertised in plan and graph contexts while Lab is enabled', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'explore-agent-tool-'))
+    const runtime = makeRuntime(dir, async () => ({ summary: 'ok' }))
+    const host = new LocalToolHost({
+      registry: new CapabilityRegistry(buildExploreAgentToolProvider(runtime, () => ({ enabled: true })))
+    })
+
+    for (const current of [
+      { ...baseContext, threadMode: 'plan' as const },
+      { ...baseContext, orchestration: 'graph' as const },
+      { ...baseContext, messageSource: 'graph_runtime' as const }
+    ]) {
+      const tools = await host.listTools(current)
+      expect(tools.map((tool) => tool.name)).toEqual([EXPLORE_AGENT_TOOL_NAME])
+      expect(tools[0]?.sideEffect).toBe('read-only')
+    }
+
+    const disabledHost = new LocalToolHost({
+      registry: new CapabilityRegistry(buildExploreAgentToolProvider(runtime, () => ({ enabled: false })))
+    })
+    expect(await disabledHost.listTools({ ...baseContext, threadMode: 'plan' })).toEqual([])
   })
 
   it('rejects a missing title/query and a disabled feature without creating a child run', async () => {

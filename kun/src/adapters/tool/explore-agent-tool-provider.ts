@@ -98,6 +98,7 @@ export function buildExploreAgentToolProvider(
             additionalProperties: false
           },
           policy: 'auto',
+          sideEffect: 'read-only',
           shouldAdvertise,
           execute: async (args, context, onUpdate) => {
             const cfg = config()
