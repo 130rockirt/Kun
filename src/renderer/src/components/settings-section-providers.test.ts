@@ -9,9 +9,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   defaultKunRuntimeSettings,
   defaultModelProviderSettings,
+  modelProviderTokenPlanProfile,
   type ModelProviderModelProfileV1,
   type ModelProviderProfileV1
 } from '@shared/app-settings'
+import { MODEL_PROVIDER_PRESETS } from '@shared/model-provider-presets'
 import {
   ProvidersSettingsSection,
   applyPendingSharedProviderCatalog,
@@ -602,6 +604,105 @@ describe('pending shared model connection catalogs', () => {
     expect(rebased.localModels).toEqual(['old-model', 'remote-model', 'model-a', 'model-b'])
     expect(applyPendingSharedProviderCatalog(committedWithRemote, rebased).models)
       .toEqual(['old-model', 'remote-model', 'model-a', 'model-b'])
+  })
+
+  it('retains a pending Aliyun Token Plan catalog when the registry has not connected yet (#1117)', () => {
+    const aliyunPreset = MODEL_PROVIDER_PRESETS.find((preset) => preset.id === 'aliyun')
+    expect(aliyunPreset).toBeTruthy()
+    const tokenPlan = modelProviderTokenPlanProfile(aliyunPreset!, 'sk-token-plan')
+    const fetchedModels = ['qwen-plus', 'qwen-max', 'qwen-turbo']
+    const current = defaultModelProviderSettings()
+    current.providers.push({
+      ...tokenPlan,
+      models: fetchedModels,
+      modelProfiles: Object.fromEntries(fetchedModels.map((model) => [model, textModelProfile]))
+    })
+    const pendingCatalog = {
+      generation: 1,
+      baseModels: [...tokenPlan.models],
+      baseModelProfiles: structuredClone(tokenPlan.modelProfiles),
+      localModels: fetchedModels,
+      localModelProfiles: Object.fromEntries(fetchedModels.map((model) => [model, textModelProfile])),
+      committedRevision: null
+    }
+
+    const projected = projectSharedModelConnections(
+      current,
+      { schemaVersion: 1, revision: 2, providers: [] },
+      new Map(),
+      new Map(),
+      new Map([[tokenPlan.id, pendingCatalog]])
+    )
+
+    expect(projected.provider.providers.find((item) => item.id === tokenPlan.id)).toMatchObject({
+      models: fetchedModels
+    })
+  })
+
+  it('connects then commits a catalog when the shared connection is missing (#1117)', async () => {
+    const aliyunPreset = MODEL_PROVIDER_PRESETS.find((preset) => preset.id === 'aliyun')
+    expect(aliyunPreset).toBeTruthy()
+    const tokenPlan = modelProviderTokenPlanProfile(aliyunPreset!, 'sk-token-plan')
+    const fetchedModels = ['qwen-plus', 'qwen-max']
+    const pendingCatalog = {
+      generation: 2,
+      baseModels: [...tokenPlan.models],
+      baseModelProfiles: structuredClone(tokenPlan.modelProfiles),
+      localModels: fetchedModels,
+      localModelProfiles: Object.fromEntries(fetchedModels.map((model) => [model, textModelProfile])),
+      committedRevision: null
+    }
+    const emptySnapshot = { schemaVersion: 1 as const, revision: 3, providers: [] as [] }
+    const connectedSnapshot = {
+      schemaVersion: 1 as const,
+      revision: 4,
+      providers: [{
+        id: tokenPlan.id,
+        accountId: `account:${tokenPlan.id}`,
+        name: tokenPlan.name,
+        kind: 'http' as const,
+        authType: 'api-key' as const,
+        baseUrl: tokenPlan.baseUrl,
+        endpointFormat: tokenPlan.endpointFormat,
+        configured: true,
+        models: fetchedModels,
+        modelCapabilities: Object.fromEntries(fetchedModels.map((model) => [model, {
+          id: model,
+          ...textModelProfile
+        }])),
+        selectedModel: fetchedModels[0]
+      }]
+    }
+    const runtimeRequest = vi.fn()
+      .mockResolvedValueOnce({ ok: true, status: 200, body: JSON.stringify(emptySnapshot) })
+      .mockResolvedValueOnce({ ok: true, status: 200, body: JSON.stringify(connectedSnapshot) })
+    vi.stubGlobal('window', { kunGui: { runtimeRequest } })
+
+    try {
+      await expect(commitSharedModelConnectionCatalog(
+        tokenPlan.id,
+        pendingCatalog,
+        () => false,
+        { provider: tokenPlan, credential: 'sk-token-plan' }
+      )).resolves.toMatchObject({ revision: 4 })
+
+      expect(runtimeRequest.mock.calls.map(([path, method]) => [path, method])).toEqual([
+        ['/v1/model-connections', 'GET'],
+        ['/v1/model-connections/connect', 'POST']
+      ])
+      const connectBody = JSON.parse(runtimeRequest.mock.calls[1]![2] as string) as {
+        id: string
+        models: string[]
+        credential: string
+      }
+      expect(connectBody).toMatchObject({
+        id: tokenPlan.id,
+        models: fetchedModels,
+        credential: 'sk-token-plan'
+      })
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 })
 
