@@ -2487,6 +2487,10 @@ async function createKunServeRuntimeComposition(
 	        tools: [taskGraphTool]
 	      },
 	      ...buildDelegationToolProviders(delegationRuntime, subagentRouter),
+	      ...buildExploreAgentToolProvider(
+	        delegationRuntime,
+	        () => activeOptions.lab?.exploreAgent
+	      ),
 	      ...buildComponentDesignToolProviders(delegationRuntime)
 	    ])
 

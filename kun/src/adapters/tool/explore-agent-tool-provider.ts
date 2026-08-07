@@ -48,15 +48,17 @@ const EXPLORE_AGENT_PROMPT_PREAMBLE = [
  * exploration query to a read-oriented child that may use full bash plus the
  * exploration allow-list. It reuses the whole subagent runtime (child thread,
  * events, approval inheritance, SubagentCallCard rendering) while keeping the
- * delegate_task router untouched. Disabled via Lab settings removes the tool
- * from the main agent's tool list entirely.
+ * delegate_task router untouched. Lab disable is enforced live via
+ * `shouldAdvertise` (and an execute backstop) so hot-applied settings can
+ * hide or restore the tool without rebuilding the provider away.
  */
 export function buildExploreAgentToolProvider(
   runtime: DelegationRuntime | undefined,
   config: () => ExploreAgentToolConfig | undefined
 ): CapabilityToolProvider[] {
   if (!runtime?.enabled()) return []
-  if (config()?.enabled === false) return []
+  const shouldAdvertise = (_context: ToolHostContext): boolean =>
+    config()?.enabled !== false
   return [
     {
       id: EXPLORE_AGENT_PROVIDER_ID,
@@ -88,9 +90,10 @@ export function buildExploreAgentToolProvider(
             additionalProperties: false
           },
           policy: 'auto',
+          shouldAdvertise,
           execute: async (args, context) => {
             const cfg = config()
-            if (!cfg || cfg.enabled === false) {
+            if (cfg?.enabled === false) {
               return {
                 output: { error: 'explore_agent is disabled in Lab settings' },
                 isError: true
@@ -99,7 +102,8 @@ export function buildExploreAgentToolProvider(
             const query = stringValue(args.query)
             if (!query) return { output: { error: 'query is required' }, isError: true }
             const workspace = stringValue(args.workspace) || context.workspace
-            const inlineProfile = buildExploreInlineProfile(cfg)
+            const resolvedCfg = cfg ?? {}
+            const inlineProfile = buildExploreInlineProfile(resolvedCfg)
             const record = await runtime.runChild({
               parentThreadId: context.threadId,
               parentTurnId: context.turnId,
@@ -111,7 +115,7 @@ export function buildExploreAgentToolProvider(
               // Follow the parent session's model/provider/reasoning/service
               // tier unless the Lab settings configure an explicit override.
               inheritSessionDefaults: true,
-              ...(cfg.fast === true ? { serviceTier: 'priority' as const } : {}),
+              ...(resolvedCfg.fast === true ? { serviceTier: 'priority' as const } : {}),
               ...(context.serviceTier ? { inheritedServiceTier: context.serviceTier } : {}),
               ...(context.actingModelRoute?.model
                 ? { inheritedModel: context.actingModelRoute.model }

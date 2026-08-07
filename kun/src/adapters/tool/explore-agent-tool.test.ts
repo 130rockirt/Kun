@@ -92,19 +92,30 @@ describe('explore_agent tool provider', () => {
     if (dir) await rm(dir, { recursive: true, force: true })
   })
 
-  it('registers the tool only when enabled by default or explicitly', async () => {
+  it('registers the tool and gates advertising from live Lab settings', async () => {
     dir = await mkdtemp(join(tmpdir(), 'explore-agent-tool-'))
     const runtime = makeRuntime(dir, async () => ({ summary: 'ok' }))
     expect(buildExploreAgentToolProvider(runtime, () => undefined)).toHaveLength(1)
     expect(buildExploreAgentToolProvider(runtime, () => ({ enabled: true }))).toHaveLength(1)
-    expect(buildExploreAgentToolProvider(runtime, () => ({ enabled: false }))).toHaveLength(0)
+    const disabledProvider = buildExploreAgentToolProvider(runtime, () => ({ enabled: false }))
+    expect(disabledProvider).toHaveLength(1)
+    expect(disabledProvider[0].tools[0].shouldAdvertise?.(baseContext)).toBe(false)
     const provider = buildExploreAgentToolProvider(runtime, () => ({}))[0]
     expect(provider.id).toBe(EXPLORE_AGENT_PROVIDER_ID)
     expect(provider.tools[0].name).toBe(EXPLORE_AGENT_TOOL_NAME)
+    expect(provider.tools[0].shouldAdvertise?.(baseContext)).toBe(true)
     expect(provider.tools[0].description).toContain('Use this first for any repository or project exploration')
     expect(provider.tools[0].description).toContain('即使后续需要修改文件，也必须先调用 explore_agent')
     expect(provider.tools[0].description).toContain('Only use direct inspection tools for narrow follow-up verification')
     expect(provider.tools[0].description).toContain('始终不会修改文件')
+
+    let cfg: { enabled?: boolean } | undefined
+    const liveTool = buildExploreAgentToolProvider(runtime, () => cfg)[0].tools[0]
+    expect(liveTool.shouldAdvertise?.(baseContext)).toBe(true)
+    cfg = { enabled: false }
+    expect(liveTool.shouldAdvertise?.(baseContext)).toBe(false)
+    cfg = { enabled: true }
+    expect(liveTool.shouldAdvertise?.(baseContext)).toBe(true)
   })
 
   it('does not register when delegation is unavailable', () => {
@@ -124,14 +135,12 @@ describe('explore_agent tool provider', () => {
     expect((missing.output as { error: string }).error).toBe('query is required')
     expect(ran).toBe(false)
 
-    // A provider built while disabled registers no tool at all.
-    expect(buildExploreAgentToolProvider(runtime, () => ({ enabled: false }))).toHaveLength(0)
-
     // The execute-time backstop fires when the feature is turned off after
     // the tool was already advertised (in-flight call safety).
     let cfg = { enabled: true }
     const mutableTool = buildExploreAgentToolProvider(runtime, () => cfg)[0].tools[0]
     cfg = { enabled: false }
+    expect(mutableTool.shouldAdvertise?.(baseContext)).toBe(false)
     const disabled = await mutableTool.execute({ query: 'find x' }, baseContext)
     expect(disabled.isError).toBe(true)
     expect((disabled.output as { error: string }).error).toContain('disabled in Lab settings')
