@@ -385,6 +385,102 @@ describe('MessageTimeline tool summaries', () => {
       }
     ])
   })
+
+  it('keeps sibling explore_agent calls as independent subagent sections', () => {
+    const sections = groupProcessSections([
+      toolBlock({
+        id: 'explore_1',
+        summary: 'explore packaging',
+        meta: {
+          toolName: 'explore_agent',
+          child: {
+            parentThreadId: 'thread_parent',
+            parentTurnId: 'turn_1',
+            childId: 'child_1',
+            childProfile: 'explore',
+            childSeq: 1
+          }
+        }
+      }),
+      toolBlock({
+        id: 'explore_2',
+        summary: 'explore workflow',
+        meta: {
+          toolName: 'explore_agent',
+          child: {
+            parentThreadId: 'thread_parent',
+            parentTurnId: 'turn_1',
+            childId: 'child_2',
+            childProfile: 'explore',
+            childSeq: 2
+          }
+        }
+      }),
+      toolBlock({
+        id: 'explore_3',
+        summary: 'explore runtime',
+        meta: {
+          toolName: 'explore_agent',
+          child: {
+            parentThreadId: 'thread_parent',
+            parentTurnId: 'turn_1',
+            childId: 'child_3',
+            childProfile: 'explore',
+            childSeq: 3
+          }
+        }
+      })
+    ])
+
+    expect(sections.map((section) => ({
+      kind: section.kind,
+      ids: section.blocks.map((block) => block.id)
+    }))).toEqual([
+      { kind: 'subagent', ids: ['explore_1'] },
+      { kind: 'subagent', ids: ['explore_2'] },
+      { kind: 'subagent', ids: ['explore_3'] }
+    ])
+  })
+
+  it('still coalesces sibling non-explore delegate_task calls into one swarm section', () => {
+    const sections = groupProcessSections([
+      toolBlock({
+        id: 'delegate_1',
+        summary: 'General Agent 1',
+        meta: {
+          toolName: 'delegate_task',
+          child: {
+            parentThreadId: 'thread_parent',
+            parentTurnId: 'turn_1',
+            childId: 'child_a',
+            childProfile: 'general',
+            childSeq: 1
+          }
+        }
+      }),
+      toolBlock({
+        id: 'delegate_2',
+        summary: 'General Agent 2',
+        meta: {
+          toolName: 'delegate_task',
+          child: {
+            parentThreadId: 'thread_parent',
+            parentTurnId: 'turn_1',
+            childId: 'child_b',
+            childProfile: 'general',
+            childSeq: 2
+          }
+        }
+      })
+    ])
+
+    expect(sections.map((section) => ({
+      kind: section.kind,
+      ids: section.blocks.map((block) => block.id)
+    }))).toEqual([
+      { kind: 'subagent', ids: ['delegate_1', 'delegate_2'] }
+    ])
+  })
 })
 
 describe('MessageTimeline Kun runtime metadata smoke', () => {

@@ -45,6 +45,7 @@ import {
   parseToolBlockPayload,
   summarizeBackgroundShellToolBlock
 } from './message-timeline-tools'
+import { isExploreToolBlock } from './explore-card-copy'
 import { SubagentGroup, type OpenChildThreadHandler } from './SubagentCallCard'
 import { InjectedMemoryMetaChip } from './injected-memory-meta-chip'
 
@@ -89,16 +90,31 @@ function subagentParentTurnId(block: ChatBlock): string {
   return ''
 }
 
+function isExploreSubagentBlock(block: ChatBlock): boolean {
+  return block.kind === 'tool' && isExploreToolBlock(block)
+}
+
+function sectionHasExploreBlock(section: ProcessSection): boolean {
+  return section.blocks.some(isExploreSubagentBlock)
+}
+
 export function groupProcessSections(blocks: ChatBlock[]): ProcessSection[] {
   const sections: ProcessSection[] = []
 
   for (const block of blocks) {
     if (isSubagentBlock(block)) {
       const last = sections[sections.length - 1]
-      // Coalesce sibling delegations of one turn (same parentTurnId) into one
-      // swarm section. Blocks without a parentTurnId only merge with an
-      // adjacent parentTurnId-less subagent run.
-      if (last && last.kind === 'subagent') {
+      // Coalesce sibling non-explore delegations of one turn (same parentTurnId)
+      // into one swarm section. Explore cards stay independent so they never
+      // land under an "N subagents" swarm shell.
+      // Blocks without a parentTurnId only merge with an adjacent
+      // parentTurnId-less non-explore subagent run.
+      if (
+        last &&
+        last.kind === 'subagent' &&
+        !isExploreSubagentBlock(block) &&
+        !sectionHasExploreBlock(last)
+      ) {
         const lastParent = subagentParentTurnId(last.blocks[0])
         const parent = subagentParentTurnId(block)
         if (lastParent === parent) {

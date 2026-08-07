@@ -32,6 +32,10 @@ vi.mock('react-i18next', () => {
     exploreViewProcessSteps: 'View explore process · {{count}} steps',
     exploreExpandConclusion: 'Show conclusion',
     explorePeekPreview: 'Preview',
+    subagentSwarmTitle: '{{count}} subagents',
+    subagentSwarmRunning: '{{count}} running',
+    subagentSwarmQueued: '{{count}} queued',
+    subagentSwarmDone: '{{count}} done',
     'subagentsPanel.role.explore.name': 'Repository Explorer',
     'subagentsPanel.role.general.name': 'General Agent'
   }
@@ -188,6 +192,46 @@ describe('SubagentCallCard route metadata', () => {
     expect(rows).toHaveLength(2)
     expect(rows.map((row) => row.props['data-agent-id'])).toEqual(['general', 'explore'])
     expect(rows.map((row) => row.props['data-model'])).toEqual(['gpt-5.6-sol', 'gpt-5.6-terra'])
+  })
+
+  it('renders an all-explore cluster as independent full cards without a subagent swarm header', async () => {
+    const onOpenChildThread = vi.fn()
+    await act(async () => {
+      renderer = create(createElement(SubagentGroup, {
+        onOpenChildThread,
+        blocks: [
+          exploreChildBlock({
+            id: 'tool_explore_a',
+            childId: 'child_a',
+            childSeq: 1,
+            title: 'Packaging config',
+            summary: 'Checked packaging scripts.'
+          }),
+          exploreChildBlock({
+            id: 'tool_explore_b',
+            childId: 'child_b',
+            childSeq: 2,
+            title: 'Release workflow',
+            summary: 'Checked release.yml.'
+          })
+        ]
+      }))
+    })
+
+    const text = instanceText(renderer!.root)
+    expect(renderer!.root.findByProps({ 'data-testid': 'explore-independent-stack' })).toBeTruthy()
+    expect(renderer!.root.findAllByProps({ 'data-testid': 'subagent-call-card' })).toHaveLength(2)
+    expect(text).toContain('Packaging config')
+    expect(text).toContain('Release workflow')
+    expect(text).not.toContain('subagents')
+    expect(text).not.toContain('{{count}} subagents')
+
+    const openButtons = renderer!.root.findAllByProps({ 'data-testid': 'explore-open-process-button' })
+    expect(openButtons.length).toBeGreaterThanOrEqual(1)
+    await act(async () => {
+      openButtons[0].props.onClick({ stopPropagation() {} })
+    })
+    expect(onOpenChildThread).toHaveBeenCalledWith('child_a')
   })
 
   it('prefers explore title and live activity on a running explore_agent card', async () => {
@@ -371,6 +415,46 @@ function childBlock(
           ...child
         }
       } : {})
+    }
+  }
+}
+
+function exploreChildBlock(input: {
+  id: string
+  childId: string
+  childSeq: number
+  title: string
+  summary: string
+}): ToolBlock {
+  return {
+    kind: 'tool',
+    id: input.id,
+    createdAt: '2026-08-07T00:00:00.000Z',
+    summary: 'explore_agent',
+    status: 'success',
+    toolKind: 'tool_call',
+    detail: JSON.stringify({
+      childId: input.childId,
+      status: 'completed',
+      title: input.title,
+      summary: input.summary,
+      profile: 'explore',
+      profileName: 'Repository Explorer',
+      toolInvocations: 3
+    }),
+    meta: {
+      toolName: 'explore_agent',
+      child: {
+        parentThreadId: 'thread_parent',
+        parentTurnId: 'turn_parent',
+        childId: input.childId,
+        childLabel: input.title,
+        childProfile: 'explore',
+        childProfileName: 'Repository Explorer',
+        childModel: 'deepseek-v4-flash',
+        childStatus: 'completed',
+        childSeq: input.childSeq
+      }
     }
   }
 }

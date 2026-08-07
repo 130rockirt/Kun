@@ -745,9 +745,27 @@ export function SubagentGroup({
 
   if (sorted.length === 0) return null
 
-  // N=1: single full card, no swarm header.
-  if (sorted.length === 1) {
-    return <SubagentCallCard block={sorted[0]} tickNow={tickNow} onOpenChildThread={onOpenChildThread} />
+  const allExplore = sorted.every(
+    (b) => b.kind === 'tool' && isExploreToolBlock(b as ToolBlock)
+  )
+
+  // N=1, or an all-explore cluster: full independent cards (no swarm shell).
+  if (sorted.length === 1 || allExplore) {
+    if (sorted.length === 1) {
+      return <SubagentCallCard block={sorted[0]} tickNow={tickNow} onOpenChildThread={onOpenChildThread} />
+    }
+    return (
+      <div className="flex flex-col gap-2" data-testid="explore-independent-stack">
+        {sorted.map((b) => (
+          <SubagentCallCard
+            key={b.id}
+            block={b}
+            tickNow={tickNow}
+            onOpenChildThread={onOpenChildThread}
+          />
+        ))}
+      </div>
+    )
   }
 
   const clusterPoses = sorted.slice(0, 5).map((b) => {

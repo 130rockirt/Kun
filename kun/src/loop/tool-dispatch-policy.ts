@@ -3,6 +3,11 @@ import type { ToolCallLike, ToolProviderKind } from '../ports/tool-host.js'
 
 const PARALLEL_READ_ONLY_TOOL_NAMES = new Set(['read', 'grep', 'glob', 'find', 'ls'])
 const DELEGATE_TASK_TOOL_NAME = 'delegate_task'
+const EXPLORE_AGENT_TOOL_NAME = 'explore_agent'
+const PARALLEL_DELEGATION_TOOL_NAMES = new Set([
+  DELEGATE_TASK_TOOL_NAME,
+  EXPLORE_AGENT_TOOL_NAME
+])
 export const DEFAULT_MAX_PARALLEL_READ_ONLY_TOOL_CALLS = 3
 
 export type ToolDispatchLane = 'serial' | 'read_only' | 'delegation'
@@ -55,7 +60,7 @@ export function isParallelDelegationCall(
   call: ToolCallLike,
   policy: Pick<ToolDispatchPolicy, 'toolProviderKinds'>
 ): boolean {
-  return call.toolName === DELEGATE_TASK_TOOL_NAME &&
+  return PARALLEL_DELEGATION_TOOL_NAMES.has(call.toolName) &&
     policy.toolProviderKinds.get(call.toolName) === 'delegation'
 }
 
