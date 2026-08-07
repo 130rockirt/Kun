@@ -566,6 +566,17 @@ describe('electron-builder Kun packaging', () => {
       'DeleteRegKey HKEY_CURRENT_USER "${INSTALL_REGISTRY_KEY}"'
     )
     expect(installerScript).toContain('KunHandleOldUninstallerResult')
+    expect(installerScript).toContain('Var /GLOBAL KunInstallerInPlaceUpdate')
+    expect(installerScript).toContain('Function KunMarkInPlaceAutomaticUpdate')
+    expect(installerScript).toContain('${if} $KunInstallerInPlaceUpdate == 1')
+    expect(installerScript).toContain(
+      'skipping pre-install removal of $KunInstallerPrimarySourceDir'
+    )
+    expect(installerScript).toContain(
+      'suppressed the selected-scope uninstaller until the new payload is installed'
+    )
+    expect(installerScript).toContain('!insertmacro kunRunMigrationHelper CleanupInPlaceLeftovers')
+    expect(installerScript).toContain('KUN_INSTALLER_IN_PLACE_UPDATE')
     expect(installerScript).toContain('Function KunSecureSelectedUninstallRegistration')
     expect(installerScript).toContain('Function KunSecureCurrentUserUninstallRegistration')
     expect(installerScript).toContain('!insertmacro kunRunMigrationHelper ResolveUninstaller')
@@ -590,6 +601,10 @@ describe('electron-builder Kun packaging', () => {
     expect(installerScript).not.toContain('Stop-Process -Id')
 
     expect(migrationScript).toContain("'ResolveUpdateScope', 'ResolveUninstaller', 'StopProcesses'")
+    expect(migrationScript).toContain("'CleanupInPlaceLeftovers', 'UpdatePath'")
+    expect(migrationScript).toContain('function Invoke-CleanupInPlaceLeftovers')
+    expect(migrationScript).toContain('function Test-RetainedInPlaceKnownEntry')
+    expect(migrationScript).toContain("Get-EnvironmentValue 'KUN_INSTALLER_IN_PLACE_UPDATE'")
     expect(migrationScript).not.toContain("'old-uninstaller.exe'")
     expect(migrationScript).toContain("Join-Path $PSScriptRoot 'kun-windows-installer-result.txt'")
     expect(migrationScript).toContain('function Test-AppOwnedProcessPath')

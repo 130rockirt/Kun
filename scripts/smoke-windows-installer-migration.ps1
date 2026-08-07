@@ -482,12 +482,15 @@ try {
   Assert-True (-not (Test-Path -LiteralPath $attackerMarker)) 'The elevated update executed the tampered registry uninstaller.'
   $machineLocationAfterUpdate = Get-ItemPropertyValue -LiteralPath $machineInstallRegistryPath -Name InstallLocation
   Assert-True (Test-PathEqual $machineLocationAfterUpdate $machineTarget) 'The automatic update did not retain the all-users registration.'
+  Assert-True (Test-Path -LiteralPath (Join-Path $machineTarget 'Kun.exe')) 'The automatic update left the all-users application executable missing.'
+  Assert-True (Test-Path -LiteralPath (Join-Path $machineTarget 'resources\app.asar')) 'The automatic update left the all-users application payload incomplete.'
   $otherUserLocationAfterUpdate = Get-ItemPropertyValue -LiteralPath $otherUserInstallRegistryPath -Name InstallLocation
   Assert-True (Test-PathEqual $otherUserLocationAfterUpdate $otherUserTarget) 'The automatic update changed the unrelated current-user registration.'
   $otherUserUninstallAfterUpdate = Get-ItemPropertyValue -LiteralPath $otherUserUninstallRegistryPath -Name UninstallString
   Assert-True ($otherUserUninstallAfterUpdate -eq $otherUserUninstallString) 'The automatic update did not restore the unrelated current-user uninstall registration.'
   $automaticUpdateDiagnostics = Get-Content -LiteralPath $diagnosticPath -Raw
   Assert-True ($automaticUpdateDiagnostics -match [regex]::Escape("source=$machineTarget")) 'The automatic update did not validate the running all-users source.'
+  Assert-True ($automaticUpdateDiagnostics -match 'SUCCESS action=CleanupInPlaceLeftovers') 'The automatic update did not run post-validate in-place leftover cleanup.'
 
   Invoke-Uninstaller 'all-users uninstall' $machineTarget '/allusers'
   Assert-PathEntryRemoved $machineTarget
