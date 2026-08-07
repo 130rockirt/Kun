@@ -247,12 +247,16 @@ export class KunRuntimeSupervisor<Settings> {
       const settings = await this.deps.loadSettings()
       if (!this.managedRuntimeExpected || !this.deps.canAutoRestart(settings)) return
 
-      const childRunning = this.deps.isChildRunning()
+      let childRunning = this.deps.isChildRunning()
       if (childRunning && await this.deps.checkHealth(settings, 5_000)) {
         this.noteHealthy('watchdog')
         return
       }
 
+      // checkHealth refreshes discovery; a dead shared-runtime PID may have been
+      // cleared from the adapter cache. Re-read before counting unresponsive
+      // failures so recovery can take the missing/ensure path (#1116).
+      childRunning = this.deps.isChildRunning()
       if (!childRunning) {
         await this.recoverFromWatchdog('missing')
         return
