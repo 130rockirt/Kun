@@ -1810,6 +1810,8 @@
   "copySuccess": "Скопировано",
   "copyFailed": "Не удалось скопировать",
   "interrupt": "Прервать",
+  "toolCancel": "Остановить инструмент",
+  "toolCancelling": "Остановка инструмента",
   "connecting": "Подключение…",
   "runtimeOffline": "Кун недоступен. Проверьте настройки или запустите «Kun Serve».",
   "planMode": "План",

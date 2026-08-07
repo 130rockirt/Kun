@@ -1810,6 +1810,8 @@
   "copySuccess": "已复制",
   "copyFailed": "复制失败",
   "interrupt": "停止",
+  "toolCancel": "停止工具",
+  "toolCancelling": "正在停止工具",
   "connecting": "连接中…",
   "runtimeOffline": "Kun 不可用。请在设置中检查或先启动 `kun serve`。",
   "planMode": "规划",

@@ -1039,7 +1039,7 @@ export function buildThreadEventSink(
       if (!isCurrentStream()) return
       set((state) => reduce(state, { type: 'thread_metadata_changed', payload: event }))
     },
-    onTurnComplete: () => {
+    onTurnComplete: (status = 'completed') => {
       if (!isCurrentStream()) return
       // Reconnect/replay can deliver the same terminal event after the first
       // projection already cleared the active turn. Treat it as a no-op so
@@ -1064,7 +1064,9 @@ export function buildThreadEventSink(
               completedState.liveAssistant
             )
           : ''
-      set((state) => reduce(state, { type: 'turn_completed' }))
+      set((state) => reduce(state, {
+        type: status === 'aborted' ? 'turn_aborted' : 'turn_completed'
+      }))
       if (completedThreadId) clearWatchedCompletionNotification(completedThreadId)
       runEffects(completionProjectionEffects({
         state: completedState,

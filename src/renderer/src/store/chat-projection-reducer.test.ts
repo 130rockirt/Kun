@@ -43,9 +43,13 @@ function state(): ChatState {
   } as unknown as ChatState
 }
 
-function project(initial: ChatState, actions: RuntimeProjectionAction[]): ChatState {
+function project(
+  initial: ChatState,
+  actions: RuntimeProjectionAction[],
+  reducerContext = context
+): ChatState {
   return actions.reduce(
-    (current, action) => ({ ...current, ...reduceChatProjection(current, action, context) }),
+    (current, action) => ({ ...current, ...reduceChatProjection(current, action, reducerContext) }),
     initial
   )
 }
@@ -169,6 +173,37 @@ describe('chat projection reducer', () => {
       status: 'idle',
       latestTurnStatus: 'completed'
     })
+  })
+
+  it('settles an interrupted turn as aborted and closes running tools', () => {
+    const projected = project({
+      ...state(),
+      busy: true,
+      currentTurnId: 'turn_1',
+      threads: [{ ...state().threads[0]!, status: 'running' }],
+      blocks: [{
+        kind: 'tool',
+        id: 'tool_1',
+        turnId: 'turn_1',
+        summary: 'Run command',
+        status: 'running'
+      }]
+    }, [{ type: 'turn_aborted' }], {
+      ...context,
+      settlePendingRuntimeWork: (blocks) => blocks.map((block) =>
+        block.kind === 'tool' && block.status === 'running'
+          ? { ...block, status: 'error' as const }
+          : block
+      )
+    })
+
+    expect(projected.busy).toBe(false)
+    expect(projected.currentTurnId).toBeNull()
+    expect(projected.threads[0]).toMatchObject({
+      status: 'idle',
+      latestTurnStatus: 'aborted'
+    })
+    expect(projected.blocks[0]).toMatchObject({ kind: 'tool', status: 'error' })
   })
 
   it('clears current-turn orchestration when a Graph turn fails terminally', () => {

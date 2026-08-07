@@ -27,6 +27,7 @@ import {
   kunThreadRewindPath,
   kunThreadTodosPath,
   kunThreadInterruptPath,
+  kunThreadToolCancelPath,
   kunThreadPath,
   kunThreadStatePath,
   kunThreadSteerPath,
@@ -66,6 +67,7 @@ import type {
   CoreStartReviewResponseJson,
   CoreClearThreadGoalResponseJson,
   CoreClearThreadTodosResponseJson,
+  CoreCancelToolCallResponseJson,
   CoreStartTurnResponseJson,
   CoreThreadGoalResponseJson,
   CoreThreadJson,
@@ -620,6 +622,24 @@ export class KunRuntimeProvider implements AgentProvider {
     if (!response.ok) {
       throw runtimeErrorToError(readRuntimeError(response.body, 'failed to interrupt turn'))
     }
+  }
+
+  async cancelToolCall(
+    threadId: string,
+    turnId: string,
+    callId: string
+  ): Promise<CoreCancelToolCallResponseJson> {
+    const response = await rendererRuntimeClient.runtimeRequest(
+      kunThreadToolCancelPath(threadId, turnId, callId),
+      'POST'
+    )
+    if (!response.ok) {
+      throw runtimeErrorToError(readRuntimeError(response.body, 'failed to cancel tool call'))
+    }
+    return readRuntimeJson<CoreCancelToolCallResponseJson>(
+      response.body,
+      'runtime returned an invalid tool cancellation response'
+    )
   }
 
   async renameThread(threadId: string, title: string, auto?: boolean): Promise<void> {

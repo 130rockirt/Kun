@@ -358,6 +358,14 @@ export const InterruptTurnResponse = z.object({
 })
 export type InterruptTurnResponse = z.infer<typeof InterruptTurnResponse>
 
+export const CancelToolCallResponse = z.object({
+  threadId: z.string().min(1),
+  turnId: z.string().min(1),
+  callId: z.string().min(1),
+  status: z.enum(['cancellation_requested', 'already_requested'])
+}).strict()
+export type CancelToolCallResponse = z.infer<typeof CancelToolCallResponse>
+
 export const CompactRequest = z.object({
   reason: z.string().optional(),
   /** Optional explicit token budget. */

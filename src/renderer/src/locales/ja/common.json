@@ -1810,6 +1810,8 @@
   "copySuccess": "コピーされました",
   "copyFailed": "コピーに失敗しました",
   "interrupt": "停止",
+  "toolCancel": "ツールを停止",
+  "toolCancelling": "ツールを停止中",
   "connecting": "接続中…",
   "runtimeOffline": "くんは不在です。設定を確認するか、「くんサーブ」を起動してください。",
   "planMode": "計画",

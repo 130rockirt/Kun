@@ -1810,6 +1810,8 @@
   "copySuccess": "복사됨",
   "copyFailed": "복사 실패",
   "interrupt": "중지",
+  "toolCancel": "도구 중지",
+  "toolCancelling": "도구 중지 중",
   "connecting": "연결 중…",
   "runtimeOffline": "쿤은 이용할 수 없습니다. 설정을 확인하거나 '쿤 서브'를 시작하세요.",
   "planMode": "계획",

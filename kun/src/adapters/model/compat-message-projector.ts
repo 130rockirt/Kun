@@ -8,6 +8,7 @@ import { extractToolResultImages, toolResultTextWithoutImages } from '../../loop
 import { wrapUntrustedContent } from '../../security/untrusted-content.js'
 import {
   COMPAT_ANTHROPIC_THINKING,
+  COMPAT_TOOL_RESULT_ERROR,
   COMPAT_HISTORY_CONTEXT,
   type CompatChatMessage,
   type CompatChatMessageContentPart
@@ -248,7 +249,8 @@ class CompatMessageProjector {
         return {
           role: 'tool',
           content: text || '(image omitted: the active model has no image input)',
-          tool_call_id: item.callId
+          tool_call_id: item.callId,
+          ...(item.isError === true ? { [COMPAT_TOOL_RESULT_ERROR]: true } : {})
         }
       }
       const parts: CompatChatMessageContentPart[] = []
@@ -259,12 +261,18 @@ class CompatMessageProjector {
           image_url: { url: `data:${image.mimeType};base64,${image.dataBase64}` }
         })
       }
-      return { role: 'tool', content: parts, tool_call_id: item.callId }
+      return {
+        role: 'tool',
+        content: parts,
+        tool_call_id: item.callId,
+        ...(item.isError === true ? { [COMPAT_TOOL_RESULT_ERROR]: true } : {})
+      }
     }
     return {
       role: 'tool',
       content: toolResultContent(item.output),
-      tool_call_id: item.callId
+      tool_call_id: item.callId,
+      ...(item.isError === true ? { [COMPAT_TOOL_RESULT_ERROR]: true } : {})
     }
   }
 

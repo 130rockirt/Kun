@@ -850,7 +850,8 @@ function toolBlockFromItem(item: CoreTurnItemJson, child?: CoreChildRuntimeMetad
     sourceItemId: item.id,
     sourceItemKind: item.kind,
     ...(item.callId ? { callId: item.callId } : {}),
-    ...(item.toolName ? { toolName: item.toolName } : {})
+    ...(item.toolName ? { toolName: item.toolName } : {}),
+    ...(item.cancelRequestedAt ? { cancelRequestedAt: item.cancelRequestedAt } : {})
   }
   applyRuntimeDisclosureMeta(meta, item, child)
   const sources = extractToolSources(item)
@@ -1853,7 +1854,8 @@ async function applyRuntimeProjectionAction(
     case 'context_snapshot_received': sink.onContextSnapshot?.(action.payload); return
     case 'delegated_runtime_received': sink.onDelegatedRuntimeState?.(action.payload); return
     case 'usage_received': sink.onUsage?.(action.payload); return
-    case 'turn_completed': sink.onTurnComplete(); return
+    case 'turn_completed': sink.onTurnComplete('completed'); return
+    case 'turn_aborted': sink.onTurnComplete('aborted'); return
     case 'turn_failed': sink.onError(action.error, action.options); return
   }
 }

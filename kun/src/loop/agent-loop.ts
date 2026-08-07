@@ -34,6 +34,7 @@ import type {
 import { ContextCompactor } from './context-compactor.js'
 import type { RolesConfig } from '../config/kun-config.js'
 import { InflightTracker } from './inflight-tracker.js'
+import { ToolCancellationRegistry } from './tool-cancellation-registry.js'
 import { SteeringQueue } from './steering-queue.js'
 import {
   createImmutablePrefix
@@ -141,6 +142,7 @@ export type AgentLoopOptions = {
   events: RuntimeEventRecorder
   turns: TurnService
   inflight: InflightTracker
+  toolCancellation?: ToolCancellationRegistry
   steering: SteeringQueue
   compactor: ContextCompactor
   prefix: ImmutablePrefix
@@ -362,6 +364,7 @@ export class AgentLoop {
     this.toolExecution = new ToolExecutionService({
       toolHost: opts.toolHost,
       inflight: opts.inflight,
+      toolCancellation: opts.toolCancellation,
       turns: opts.turns,
       events: opts.events,
       nowIso: opts.nowIso,

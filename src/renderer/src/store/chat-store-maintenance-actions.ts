@@ -236,7 +236,7 @@ function resolveCheckpointExpectedWorkspaceRoot(state: {
 export function createMaintenanceActions(
   { set, get, sseAbortRef }: StoreActionContext,
   dependencies: MaintenanceActionDependencies = {}
-): Pick<ChatState, 'renameActiveThread' | 'renameThread' | 'pinThread' | 'archiveThread' | 'compactActiveThread' | 'forkActiveThread' | 'forkThreadFromTurn' | 'setActiveThreadGoal' | 'setActiveThreadGoalStatus' | 'clearActiveThreadGoal' | 'setActiveThreadTodoStatus' | 'clearActiveThreadTodos' | 'syncPlanTodosFromMarkdown' | 'resumeSessionIntoThread' | 'deleteThread' | 'clearDesignHistory' | 'rewindAndResend' | 'rollbackWorkspaceToCheckpoint' | 'resolveApproval' | 'resolveUserInput' | 'interrupt'> {
+): Pick<ChatState, 'renameActiveThread' | 'renameThread' | 'pinThread' | 'archiveThread' | 'compactActiveThread' | 'forkActiveThread' | 'forkThreadFromTurn' | 'setActiveThreadGoal' | 'setActiveThreadGoalStatus' | 'clearActiveThreadGoal' | 'setActiveThreadTodoStatus' | 'clearActiveThreadTodos' | 'syncPlanTodosFromMarkdown' | 'resumeSessionIntoThread' | 'deleteThread' | 'clearDesignHistory' | 'rewindAndResend' | 'rollbackWorkspaceToCheckpoint' | 'resolveApproval' | 'resolveUserInput' | 'interrupt' | 'cancelToolCall'> {
   const prepareCanvasResend = dependencies.prepareCodeCanvasResend ?? prepareCodeCanvasResend
   const openCodeCanvasPanel =
     dependencies.requestCodeCanvasPanelOpen ?? requestCodeCanvasPanelOpen
@@ -1429,6 +1429,37 @@ export function createMaintenanceActions(
     // or a newer stream owns the subscription.
     if (get().activeThreadId === activeThreadId && sseAbortRef.current === null) {
       await get().recoverActiveTurn()
+    }
+  },
+
+  cancelToolCall: async (threadId, turnId, callId) => {
+    const normalizedThreadId = threadId.trim()
+    const normalizedTurnId = turnId.trim()
+    const normalizedCallId = callId.trim()
+    if (!normalizedThreadId || !normalizedTurnId || !normalizedCallId) return false
+    const p = getProvider()
+    if (typeof p.cancelToolCall !== 'function') {
+      set({ error: i18n.t('common:runtimeFeatureUnsupported') })
+      return false
+    }
+    try {
+      await p.cancelToolCall(normalizedThreadId, normalizedTurnId, normalizedCallId)
+      return true
+    } catch (e) {
+      const msg = formatRuntimeError(e)
+      void window.kunGui.logError('tool-cancel', 'Failed to cancel tool call', {
+        message: msg,
+        threadId: normalizedThreadId,
+        turnId: normalizedTurnId,
+        callId: normalizedCallId
+      }).catch(() => undefined)
+      set({
+        error: msg,
+        ...(shouldOpenSettingsForError(e)
+          ? { route: 'settings' as const, settingsSection: 'agents' as const }
+          : {})
+      })
+      return false
     }
   }
   }

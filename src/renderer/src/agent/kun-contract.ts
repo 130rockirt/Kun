@@ -500,6 +500,7 @@ export type CoreTurnItemJson = {
   messageSource?: 'background_shell' | 'background_subagent' | 'graph_runtime'
   toolName?: string
   callId?: string
+  cancelRequestedAt?: string
   toolKind?: 'tool_call' | 'command_execution' | 'file_change'
   arguments?: Record<string, unknown>
   output?: unknown
@@ -618,6 +619,13 @@ export type CoreStartTurnResponseJson = {
   threadId: string
   turnId: string
   userMessageItemId?: string
+}
+
+export type CoreCancelToolCallResponseJson = {
+  threadId: string
+  turnId: string
+  callId: string
+  status: 'cancellation_requested' | 'already_requested'
 }
 
 export type CoreStartReviewResponseJson = CoreStartTurnResponseJson & {

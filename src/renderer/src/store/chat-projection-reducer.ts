@@ -756,19 +756,30 @@ export function reduceChatProjection(
         error: context.clearRecoveringError(state.error)
       }
     }
-    case 'turn_completed': {
+    case 'turn_completed':
+    case 'turn_aborted': {
+      const aborted = action.type === 'turn_aborted'
       const threadId = state.activeThreadId
       const threads = threadId
-        ? settleProjectedThreadStatus(state.threads, threadId, 'completed')
+        ? settleProjectedThreadStatus(state.threads, threadId, aborted ? 'aborted' : 'completed')
         : state.threads
       if (!state.busy && !state.currentTurnId) {
-        return threads === state.threads ? {} : { threads }
+        if (!aborted) return threads === state.threads ? {} : { threads }
+        const blocks = context.settlePendingRuntimeWork(state.blocks)
+        return {
+          ...(threads !== state.threads ? { threads } : {}),
+          ...(blocks !== state.blocks ? { blocks } : {})
+        }
       }
       const patch = flushLiveProjection(state, context.now, {
         ...finalizeTurnTimingAt(state, context.now),
         error: null,
         currentTurnId: null,
         currentTurnOrchestration: null,
+        ...(aborted ? {
+          currentTurnUserId: null,
+          blocks: context.settlePendingRuntimeWork(state.blocks)
+        } : {}),
         ...(state.busy ? { busy: false } : {}),
         ...(threads !== state.threads ? { threads } : {})
       })

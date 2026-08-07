@@ -12,7 +12,7 @@ import { SequentialIdGenerator } from '../../ports/id-generator.js'
 import { RuntimeEventRecorder } from '../../services/runtime-event-recorder.js'
 import { TurnService } from '../../services/turn-service.js'
 import type { JsonResponse } from '../response.js'
-import { getTurn, rewindThread, startTurn, steerTurn } from './turns.js'
+import { cancelToolCall, getTurn, rewindThread, startTurn, steerTurn } from './turns.js'
 
 describe('GET /v1/threads/:id/turns/:turnId public-item boundary', () => {
   it('does not expose a legacy internal goal context from the raw turn mirror', async () => {
@@ -66,6 +66,48 @@ describe('POST /v1/threads/:id/turns/:turnId/steer execution', () => {
       threadId: 'thread_graph_planning',
       turnId: 'turn_graph_planning'
     })
+  })
+})
+
+describe('POST /v1/threads/:id/turns/:turnId/tool-calls/:callId/cancel', () => {
+  it('returns the accepted cancellation status without requiring a request body', async () => {
+    const cancellation = {
+      cancel: vi.fn(async (input: { threadId: string; turnId: string; callId: string }) => ({
+        ...input,
+        status: 'cancellation_requested' as const
+      }))
+    }
+    const response = await cancelToolCall(
+      cancellation as never,
+      'thread_1',
+      'turn_1',
+      'call_1'
+    ) as JsonResponse
+
+    expect(response.status).toBe(200)
+    expect(JSON.parse(response.body)).toEqual({
+      threadId: 'thread_1',
+      turnId: 'turn_1',
+      callId: 'call_1',
+      status: 'cancellation_requested'
+    })
+    expect(cancellation.cancel).toHaveBeenCalledWith({
+      threadId: 'thread_1',
+      turnId: 'turn_1',
+      callId: 'call_1'
+    })
+  })
+
+  it('maps missing and inactive calls to the documented HTTP statuses', async () => {
+    const notFound = await cancelToolCall({
+      cancel: async () => { throw new Error('tool call not found: call_1') }
+    } as never, 'thread_1', 'turn_1', 'call_1') as JsonResponse
+    expect(notFound.status).toBe(404)
+
+    const conflict = await cancelToolCall({
+      cancel: async () => { throw new Error('tool call is no longer active: call_1') }
+    } as never, 'thread_1', 'turn_1', 'call_1') as JsonResponse
+    expect(conflict.status).toBe(409)
   })
 })
 

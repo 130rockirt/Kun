@@ -446,6 +446,7 @@ export type ChatState = {
   rewindAndResend: (userBlockId: string, newText: string) => Promise<void>
   rollbackWorkspaceToCheckpoint: (checkpointId: string) => Promise<void>
   interrupt: (options?: { discard?: boolean }) => Promise<void>
+  cancelToolCall: (threadId: string, turnId: string, callId: string) => Promise<boolean>
   renameActiveThread: (title: string) => Promise<void>
   renameThread: (threadId: string, title: string) => Promise<void>
   pinThread: (threadId: string, pinned: boolean) => Promise<void>

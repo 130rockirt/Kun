@@ -1,5 +1,6 @@
 import {
   CompactRequest,
+  CancelToolCallResponse,
   InterruptTurnRequest,
   InterruptTurnResponse,
   RewindThreadRequest,
@@ -17,6 +18,7 @@ import { ERRORS } from './runtime-error.js'
 import { TurnCapacityError, TurnConflictError, type TurnService } from '../../services/turn-service.js'
 import { ThreadExecutionBusyError } from '../../ports/thread-execution-lease.js'
 import { isPublicTurnItem } from '../../contracts/items.js'
+import type { ToolCancellationService } from '../../services/tool-cancellation-service.js'
 
 export async function startTurn(
   turns: TurnService,
@@ -153,6 +155,27 @@ export async function interruptTurn(
     status: result.status
   }
   return jsonResponse(payload)
+}
+
+export async function cancelToolCall(
+  cancellation: ToolCancellationService | undefined,
+  threadId: string,
+  turnId: string,
+  callId: string
+): Promise<JsonResponse | Response> {
+  if (!cancellation) return ERRORS.unavailable('tool cancellation is unavailable')
+  try {
+    const result = await cancellation.cancel({ threadId, turnId, callId })
+    const payload: CancelToolCallResponse = CancelToolCallResponse.parse(result)
+    return jsonResponse(payload)
+  } catch (error) {
+    if (error instanceof TurnConflictError) return ERRORS.conflict(error.message)
+    if (error instanceof Error && /not found/i.test(error.message)) return ERRORS.notFound(error.message)
+    if (error instanceof Error && /no longer active|not currently executing|already being interrupted/i.test(error.message)) {
+      return ERRORS.conflict(error.message)
+    }
+    throw error
+  }
 }
 
 export async function compactTurn(

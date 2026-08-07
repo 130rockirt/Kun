@@ -266,6 +266,12 @@ export function kunThreadInterruptPath(threadId: string, turnId: string): string
   return `${kunThreadTurnPath(threadId, turnId)}/interrupt`
 }
 
+export const KUN_THREAD_TOOL_CANCEL_TEMPLATE =
+  '/v1/threads/{id}/turns/{turn}/tool-calls/{id}/cancel'
+export function kunThreadToolCancelPath(threadId: string, turnId: string, callId: string): string {
+  return `${kunThreadTurnPath(threadId, turnId)}/tool-calls/${encodeURIComponent(callId)}/cancel`
+}
+
 export const KUN_THREAD_EVENTS_TEMPLATE = '/v1/threads/{id}/events'
 export function kunThreadEventsPath(threadId: string): string {
   return `${kunThreadPath(threadId)}/events`

@@ -67,6 +67,7 @@ type RuntimeProjectionActionPayload =
       }
     }
   | { type: 'turn_completed' }
+  | { type: 'turn_aborted' }
   | { type: 'turn_failed'; error: Error; options?: ThreadErrorOptions }
 
 /**

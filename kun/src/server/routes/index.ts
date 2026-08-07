@@ -19,6 +19,7 @@ import {
 import { summarizeThread } from './threads-summarize.js'
 import {
   compactTurn,
+  cancelToolCall,
   getSteeringQueue,
   getTurn,
   interruptTurn,
@@ -808,6 +809,17 @@ export function buildRouter(runtime: ServerRuntime): Router {
     const forwarded = await runtime.forwardThreadControl?.(request, ctx.params.id)
     if (forwarded) return forwarded
     return interruptTurn(runtime.turnService, ctx.params.id, ctx.params.turnId, request)
+  })
+  router.add('POST', '/v1/threads/:id/turns/:turnId/tool-calls/:callId/cancel', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    const forwarded = await runtime.forwardThreadControl?.(request, ctx.params.id)
+    if (forwarded) return forwarded
+    return cancelToolCall(
+      runtime.toolCancellationService,
+      ctx.params.id,
+      ctx.params.turnId,
+      ctx.params.callId
+    )
   })
   router.add('POST', '/v1/threads/:id/compact', async (request, ctx) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()

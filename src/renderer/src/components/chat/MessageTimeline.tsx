@@ -1,8 +1,8 @@
 import type { ReactElement, RefObject } from 'react'
-import { memo, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ChevronDown, CircleAlert, GitCommitHorizontal, Hash } from 'lucide-react'
-import type { ChatBlock, RuntimeConnectionStatus } from '../../agent/types'
+import type { ChatBlock, RuntimeConnectionStatus, ToolBlock } from '../../agent/types'
 import { useChatStore } from '../../store/chat-store'
 import { threadHasPendingRuntimeWork } from '../../store/chat-store-runtime-helpers'
 import { useTimelineStores } from './use-timeline-stores'
@@ -429,6 +429,13 @@ export function MessageTimeline({
 }: Props): ReactElement {
   const { t } = useTranslation('common')
   const threadLoadingId = useChatStore((state) => state.threadLoadingId)
+  const cancelToolCall = useChatStore((state) => state.cancelToolCall)
+  const handleCancelToolCall = useCallback(async (block: ToolBlock): Promise<boolean> => {
+    if (!activeThreadId || !block.turnId) return false
+    const callId = typeof block.meta?.callId === 'string' ? block.meta.callId : ''
+    if (!callId) return false
+    return cancelToolCall(activeThreadId, block.turnId, callId)
+  }, [activeThreadId, cancelToolCall])
   const {
     route,
     workspaceRoot,
@@ -858,6 +865,7 @@ export function MessageTimeline({
                 onReviewChanges={onReviewChanges}
                 reviewChangesDisabled={reviewChangesDisabled}
                 onOpenChildThread={onOpenChildThread}
+                onCancelToolCall={activeThreadId ? handleCancelToolCall : undefined}
                 onComponentPrototypePrompt={onComponentPrototypePrompt}
                 filePreviewWorkspaceRoot={filePreviewWorkspaceRoot}
                 viewportRef={containerRef}
@@ -921,6 +929,7 @@ export function MessageTimeline({
             filePreviewWorkspaceRoot={filePreviewWorkspaceRoot}
             viewportRef={containerRef}
             onOpenChildThread={onOpenChildThread}
+            onCancelToolCall={undefined}
             onComponentPrototypePrompt={onComponentPrototypePrompt}
             compactCards={compactCards}
             durationMs={
@@ -976,6 +985,7 @@ export type ConversationTurnProps = {
   onReviewChanges?: () => void
   reviewChangesDisabled?: boolean
   onOpenChildThread?: OpenChildThreadHandler
+  onCancelToolCall?: (block: ToolBlock) => Promise<boolean>
   onComponentPrototypePrompt?: (prompt: string) => void
   filePreviewWorkspaceRoot: string
   viewportRef: RefObject<HTMLDivElement | null>
@@ -1000,6 +1010,7 @@ export function ConversationTurn({
   onReviewChanges,
   reviewChangesDisabled = false,
   onOpenChildThread,
+  onCancelToolCall,
   onComponentPrototypePrompt,
   filePreviewWorkspaceRoot,
   viewportRef,
@@ -1155,6 +1166,7 @@ export function ConversationTurn({
                   workspaceRoot={filePreviewWorkspaceRoot}
                   viewportRef={viewportRef}
                   onOpenChildThread={onOpenChildThread}
+                  onCancelToolCall={onCancelToolCall}
                   allowThreadActions={allowMainThreadActions}
                 />
               ))}
@@ -1319,6 +1331,7 @@ const MemoMessageTurn = memo(ConversationTurn, (prev, next) => (
   prev.onReviewChanges === next.onReviewChanges &&
   prev.reviewChangesDisabled === next.reviewChangesDisabled &&
   prev.onOpenChildThread === next.onOpenChildThread &&
+  prev.onCancelToolCall === next.onCancelToolCall &&
   prev.onComponentPrototypePrompt === next.onComponentPrototypePrompt &&
   prev.filePreviewWorkspaceRoot === next.filePreviewWorkspaceRoot &&
   prev.compactCards === next.compactCards &&

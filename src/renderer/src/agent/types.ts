@@ -673,7 +673,7 @@ export type ThreadEventSink = {
   onTodos?(ev: { threadId: string; todos: ThreadTodoList | null; cleared?: boolean; createdAt?: string }): void
   /** Thread metadata changed out-of-band (e.g. the backend LLM titler upgraded the title). */
   onThreadUpdated?(ev: { threadId: string; title?: string; titleAuto?: boolean; status?: string }): void
-  onTurnComplete(): void
+  onTurnComplete(status?: 'completed' | 'aborted'): void
   onError(err: Error, options?: ThreadErrorOptions): void
   /** Optional: cumulative usage update for the thread. */
   onUsage?(usage: ThreadUsageSnapshot): void
@@ -815,6 +815,11 @@ export interface AgentProvider {
     options?: { displayText?: string }
   ): Promise<void>
   interruptTurn(threadId: string, turnId: string, options?: { discard?: boolean }): Promise<void>
+  cancelToolCall?(
+    threadId: string,
+    turnId: string,
+    callId: string
+  ): Promise<{ status: 'cancellation_requested' | 'already_requested' }>
   /**
    * Rename a thread. `auto` marks the title as provisional/auto (true, e.g. the
    * client first-message heuristic — the backend LLM titler may upgrade it) or

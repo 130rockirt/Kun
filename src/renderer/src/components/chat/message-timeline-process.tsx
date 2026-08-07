@@ -1,5 +1,5 @@
 import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent, ReactElement, RefObject } from 'react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { LucideIcon } from 'lucide-react'
 import {
@@ -19,6 +19,7 @@ import {
   BellRing,
   Search,
   Sparkles,
+  Square,
   Terminal,
   Wrench
 } from 'lucide-react'
@@ -272,6 +273,7 @@ export function ProcessSectionRow({
   workspaceRoot,
   viewportRef,
   onOpenChildThread,
+  onCancelToolCall,
   allowThreadActions = true
 }: {
   section: ProcessSection
@@ -281,6 +283,7 @@ export function ProcessSectionRow({
   workspaceRoot: string
   viewportRef: RefObject<HTMLDivElement | null>
   onOpenChildThread?: OpenChildThreadHandler
+  onCancelToolCall?: (block: ToolBlock) => Promise<boolean>
   allowThreadActions?: boolean
 }): ReactElement {
   const { t } = useTranslation('common')
@@ -342,6 +345,7 @@ export function ProcessSectionRow({
           block={block}
           processing={processing}
           workspaceRoot={workspaceRoot}
+          onCancelToolCall={onCancelToolCall}
           allowThreadActions={allowThreadActions}
         />
       )
@@ -432,6 +436,7 @@ export function ProcessSectionRow({
               blocks={section.blocks}
               processing={processing}
               workspaceRoot={workspaceRoot}
+              onCancelToolCall={onCancelToolCall}
               allowThreadActions={allowThreadActions}
             />
           )
@@ -505,15 +510,95 @@ function BackgroundSubagentRowSummary({
   )
 }
 
+function toolCancelCallId(block: ChatBlock): string {
+  if (block.kind !== 'tool') return ''
+  const callId = block.meta?.callId
+  return typeof callId === 'string' ? callId.trim() : ''
+}
+
+function toolCancelRequested(block: ChatBlock): boolean {
+  if (block.kind !== 'tool') return false
+  return typeof block.meta?.cancelRequestedAt === 'string' && block.meta.cancelRequestedAt.trim().length > 0
+}
+
+function canCancelToolBlock(block: ChatBlock, processing: boolean): block is ToolBlock {
+  if (!processing || block.kind !== 'tool' || block.status !== 'running' || !toolCancelCallId(block)) return false
+  // Detached/background work owns its own lifecycle and must keep using its
+  // existing control surface rather than the foreground tool cancellation API.
+  if (block.meta?.detached === true || isBackgroundShellCommandBlock(block) || isSubagentBlock(block)) {
+    return false
+  }
+  return true
+}
+
+function ToolCancelButton({
+  block,
+  processing,
+  onCancelToolCall
+}: {
+  block: ChatBlock
+  processing: boolean
+  onCancelToolCall?: (block: ToolBlock) => Promise<boolean>
+}): ReactElement | null {
+  const { t } = useTranslation('common')
+  const [requested, setRequested] = useState(() => toolCancelRequested(block))
+  const cancellable = canCancelToolBlock(block, processing)
+  const blockStatus = block.kind === 'tool' ? block.status : undefined
+  const blockCancelRequestedAt = block.kind === 'tool' && typeof block.meta?.cancelRequestedAt === 'string'
+    ? block.meta.cancelRequestedAt
+    : undefined
+  const cancelRequested = toolCancelRequested(block)
+
+  useEffect(() => {
+    setRequested(cancelRequested)
+  }, [block.id, blockStatus, blockCancelRequestedAt, cancelRequested])
+
+  if (!cancellable || !onCancelToolCall) return null
+  const stopping = requested || toolCancelRequested(block)
+  const handleClick = (event: ReactMouseEvent<HTMLButtonElement>): void => {
+    event.preventDefault()
+    event.stopPropagation()
+    if (stopping) return
+    setRequested(true)
+    void onCancelToolCall(block).then((accepted) => {
+      if (!accepted) setRequested(false)
+    }).catch(() => {
+      setRequested(false)
+    })
+  }
+
+  return (
+    <button
+      type="button"
+      aria-label={stopping ? t('toolCancelling') : t('toolCancel')}
+      title={stopping ? t('toolCancelling') : t('toolCancel')}
+      aria-busy={stopping}
+      disabled={stopping}
+      onClick={handleClick}
+      className={`mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition ${
+        stopping ? 'cursor-wait text-accent opacity-80' : 'text-ds-faint hover:bg-ds-hover/70 hover:text-ds-ink'
+      }`}
+    >
+      {stopping ? (
+        <LoaderCircle className="h-3.5 w-3.5 animate-spin" strokeWidth={1.9} />
+      ) : (
+        <Square className="h-3 w-3" fill="currentColor" strokeWidth={1.9} />
+      )}
+    </button>
+  )
+}
+
 function ProcessStackRows({
   blocks,
   processing,
   workspaceRoot,
+  onCancelToolCall,
   allowThreadActions = true
 }: {
   blocks: ChatBlock[]
   processing: boolean
   workspaceRoot: string
+  onCancelToolCall?: (block: ToolBlock) => Promise<boolean>
   allowThreadActions?: boolean
 }): ReactElement {
   const { t } = useTranslation('common')
@@ -617,6 +702,7 @@ function ProcessStackRows({
                   )}
                 </button>
               ) : null}
+              <ToolCancelButton block={block} processing={processing} onCancelToolCall={onCancelToolCall} />
             </div>
             {open ? (
               detail.kind === 'assistant' ? (
@@ -813,11 +899,13 @@ function ProcessEntryRow({
   block,
   processing,
   workspaceRoot,
+  onCancelToolCall,
   allowThreadActions = true
 }: {
   block: ChatBlock
   processing: boolean
   workspaceRoot: string
+  onCancelToolCall?: (block: ToolBlock) => Promise<boolean>
   allowThreadActions?: boolean
 }): ReactElement {
   const { t } = useTranslation('common')
@@ -926,6 +1014,7 @@ function ProcessEntryRow({
             )}
           </button>
         ) : null}
+        <ToolCancelButton block={block} processing={processing} onCancelToolCall={onCancelToolCall} />
       </div>
       <RuntimeMetaBadges block={block} t={t} />
       {canExpand && open ? (

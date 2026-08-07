@@ -5,6 +5,7 @@ import type { ToolHost, ToolHostContext, ToolHostResult } from '../ports/tool-ho
 import type { RuntimeEventRecorder } from '../services/runtime-event-recorder.js'
 import type { TurnService } from '../services/turn-service.js'
 import { InflightTracker } from './inflight-tracker.js'
+import { ToolCancellationRegistry } from './tool-cancellation-registry.js'
 import { ToolExecutionService } from './tool-execution-service.js'
 
 const call = {
@@ -27,6 +28,7 @@ function makeService(input: {
   execute?: ToolHost['execute']
   onPlanWritten?: () => Promise<void>
   awaitWorkspaceCheckpoint?: (requestId: string, signal: AbortSignal) => Promise<string | null>
+  toolCancellation?: ToolCancellationRegistry
 } = {}) {
   const lifecycle: string[] = []
   const events: Array<Record<string, unknown>> = []
@@ -57,7 +59,8 @@ function makeService(input: {
     ...(input.awaitWorkspaceCheckpoint
       ? { awaitWorkspaceCheckpoint: input.awaitWorkspaceCheckpoint }
       : {}),
-    ...(input.onPlanWritten ? { onPlanWritten: input.onPlanWritten } : {})
+    ...(input.onPlanWritten ? { onPlanWritten: input.onPlanWritten } : {}),
+    ...(input.toolCancellation ? { toolCancellation: input.toolCancellation } : {})
   })
   return { service, lifecycle, events, turns }
 }
@@ -80,6 +83,84 @@ describe('ToolExecutionService', () => {
     expect(events).toEqual(expect.arrayContaining([
       expect.objectContaining({ kind: 'error', code: 'tool_dispatch_rejected' })
     ]))
+  })
+
+  it('turns an accepted tool cancellation into a paired model-visible error result', async () => {
+    const registry = new ToolCancellationRegistry()
+    let started!: () => void
+    const toolStarted = new Promise<void>((resolve) => { started = resolve })
+    const setup = makeService({
+      toolCancellation: registry,
+      execute: async (_call, executionContext) => {
+        started()
+        return await new Promise<never>((_resolve, reject) => {
+          executionContext.abortSignal.addEventListener('abort', () => {
+            reject(executionContext.abortSignal.reason)
+          }, { once: true })
+        })
+      }
+    })
+    const parent = new AbortController()
+    const execution = setup.service.executeSafely({
+      threadId: 'thread_1',
+      turnId: 'turn_1',
+      call,
+      context: { ...context, abortSignal: parent.signal }
+    })
+    await toolStarted
+    expect(registry.request(
+      { threadId: 'thread_1', turnId: 'turn_1', callId: 'call_1' },
+      '2026-08-07T00:00:00.000Z'
+    )).toBe('cancellation_requested')
+    const result = await execution
+    expect(result).toMatchObject({ approved: false, item: { isError: true } })
+    expect(result.item.kind === 'tool_result' ? result.item.output : null).toMatchObject({
+      code: 'tool_cancelled_by_user',
+      guidance: expect.stringContaining('Do not repeat the identical call automatically')
+    })
+    expect(registry.list()).toEqual([])
+  })
+
+  it('keeps the cancellation result when a tool catches abort and returns normally', async () => {
+    const registry = new ToolCancellationRegistry()
+    let started!: () => void
+    const toolStarted = new Promise<void>((resolve) => { started = resolve })
+    const setup = makeService({
+      toolCancellation: registry,
+      execute: async (toolCall, executionContext) => {
+        started()
+        await new Promise<void>((resolve) => {
+          executionContext.abortSignal.addEventListener('abort', () => resolve(), { once: true })
+        })
+        return {
+          item: makeToolResultItem({
+            id: `item_${toolCall.callId}`,
+            threadId: 'thread_1',
+            turnId: 'turn_1',
+            callId: toolCall.callId,
+            toolName: toolCall.toolName,
+            output: { stale: true }
+          }),
+          approved: true
+        }
+      }
+    })
+    const execution = setup.service.executeSafely({
+      threadId: 'thread_1',
+      turnId: 'turn_1',
+      call,
+      context: { ...context, abortSignal: new AbortController().signal }
+    })
+    await toolStarted
+    expect(registry.request(
+      { threadId: 'thread_1', turnId: 'turn_1', callId: 'call_1' },
+      '2026-08-07T00:00:00.000Z'
+    )).toBe('cancellation_requested')
+    const result = await execution
+    expect(result.item).toMatchObject({ kind: 'tool_result', isError: true })
+    expect(result.item.kind === 'tool_result' ? result.item.output : null).toMatchObject({
+      code: 'tool_cancelled_by_user'
+    })
   })
 
   it('waits for a pending checkpoint before the first workspace mutation', async () => {

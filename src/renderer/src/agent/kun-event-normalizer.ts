@@ -204,12 +204,17 @@ function normalizeKunRuntimeEventPayload(
         }
       }]
     case 'turn_completed':
-    case 'turn_aborted':
       if (event.child) {
         const tool = deps.childTool(event)
         return tool ? [{ type: 'tool_updated', payload: tool }] : []
       }
       return [{ type: 'turn_completed' }]
+    case 'turn_aborted':
+      if (event.child) {
+        const tool = deps.childTool(event)
+        return tool ? [{ type: 'tool_updated', payload: tool }] : []
+      }
+      return [{ type: 'turn_aborted' }]
     case 'turn_failed': {
       if (event.child) {
         const tool = deps.childTool(event)

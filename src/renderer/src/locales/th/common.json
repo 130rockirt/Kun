@@ -1810,6 +1810,8 @@
   "copySuccess": "คัดลอกแล้ว",
   "copyFailed": "การคัดลอกล้มเหลว",
   "interrupt": "หยุด",
+  "toolCancel": "หยุดเครื่องมือ",
+  "toolCancelling": "กำลังหยุดเครื่องมือ",
   "connecting": "กำลังเชื่อมต่อ...",
   "runtimeOffline": "คุนไม่ว่าง ตรวจสอบการตั้งค่าหรือเริ่ม `คุนเสิร์ฟ`",
   "planMode": "แผน",

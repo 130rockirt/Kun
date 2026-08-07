@@ -207,6 +207,19 @@ describe('runtime projection action normalization', () => {
     }])
   })
 
+  it('keeps turn interruption distinct from successful completion', () => {
+    expect(runtimeProjectionActionsFromEvent({
+      kind: 'turn_completed',
+      threadId: 'thread_1',
+      turnId: 'turn_1'
+    })).toEqual([{ type: 'turn_completed' }])
+    expect(runtimeProjectionActionsFromEvent({
+      kind: 'turn_aborted',
+      threadId: 'thread_1',
+      turnId: 'turn_1'
+    })).toEqual([{ type: 'turn_aborted' }])
+  })
+
   it('normalizes the same goal event to a stable action transcript', () => {
     const event: CoreRuntimeEventJson = {
       kind: 'goal_updated',

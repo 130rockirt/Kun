@@ -122,6 +122,8 @@ export const ToolCallTurnItem = TurnItemBase.extend({
   kind: z.literal('tool_call'),
   toolName: z.string().min(1),
   callId: z.string().min(1),
+  /** Set when a user requested cancellation of this still-running call. */
+  cancelRequestedAt: z.string().optional(),
   toolKind: z.enum(['tool_call', 'command_execution', 'file_change']),
   arguments: z.record(z.string(), z.unknown()),
   /**

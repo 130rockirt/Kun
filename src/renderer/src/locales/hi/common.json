@@ -1810,6 +1810,8 @@
   "copySuccess": "नकल की गई",
   "copyFailed": "प्रतिलिपि विफल",
   "interrupt": "रुकें",
+  "toolCancel": "टूल रोकें",
+  "toolCancelling": "टूल रोक रहे हैं",
   "connecting": "कनेक्ट हो रहा है...",
   "runtimeOffline": "कुन अनुपलब्ध है. सेटिंग्स जांचें या `कुन सर्व` प्रारंभ करें।",
   "planMode": "योजना",

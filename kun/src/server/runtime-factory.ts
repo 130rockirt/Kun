@@ -138,6 +138,7 @@ import { buildBuiltinHooks } from '../hooks/builtins/index.js'
 import { mergeBuiltinSubagentProfiles } from '../delegation/builtin-profiles.js'
 import { buildExploreAgentToolProvider } from '../adapters/tool/explore-agent-tool-provider.js'
 import { InflightTracker } from '../loop/inflight-tracker.js'
+import { ToolCancellationRegistry } from '../loop/tool-cancellation-registry.js'
 import { SteeringQueue } from '../loop/steering-queue.js'
 import type { TurnRunOutcome } from '../loop/turn-execution-types.js'
 import { RandomIdGenerator } from '../ports/id-generator.js'
@@ -148,6 +149,7 @@ import type { ToolHostContext } from '../ports/tool-host.js'
 import { ScopedMigrationMaintenanceLock } from '../ports/migration-maintenance-lock.js'
 import { KUN_SYSTEM_PROMPT } from '../prompt/kun-system-prompt.js'
 import { RuntimeEventRecorder } from '../services/runtime-event-recorder.js'
+import { ToolCancellationService } from '../services/tool-cancellation-service.js'
 import { GraphRuntimeComposition } from './graph-runtime-factory.js'
 import { createGraphRuntimeStartOptions } from './graph-runtime-bootstrap.js'
 import {
@@ -411,6 +413,7 @@ async function createKunServeRuntimeComposition(
   const workspaceInspector = new LocalWorkspaceInspector()
   const usageService = new UsageService()
   const inflight = new InflightTracker()
+  const toolCancellation = new ToolCancellationRegistry()
   const steering = new SteeringQueue()
   let modelProfiles = modelContextProfilesFromConfig({
     contextCompaction: activeOptions.contextCompaction,
@@ -1075,6 +1078,11 @@ async function createKunServeRuntimeComposition(
     turns: turnService,
     nowIso
   })
+  const toolCancellationService = new ToolCancellationService(
+    turnService,
+    toolCancellation,
+    nowIso
+  )
   const supplyChainTrust = new InMemoryPublisherTrustStore()
   backgroundShellRuntime.bindStopHandler(stopBashSessionById)
   const backgroundShellTool = createBackgroundShellTool({
@@ -1740,6 +1748,7 @@ async function createKunServeRuntimeComposition(
     events,
     turns: turnService,
     inflight,
+    toolCancellation,
     steering,
     compactor,
     prefix,
@@ -2634,9 +2643,10 @@ async function createKunServeRuntimeComposition(
 	      }
 	    }
 	  }
-	  return {
+  return {
     threadService,
     turnService,
+    toolCancellationService,
     reviewService,
     usageService,
     eventBus,
