@@ -382,6 +382,89 @@ describe('SubagentCallCard route metadata', () => {
     expect(text).toContain('Repository Explorer')
     expect(text).not.toContain('Not recorded')
   })
+
+  it('shows Done when the tool result settled even if a stale child snapshot says running', async () => {
+    await act(async () => {
+      renderer = create(createElement(SubagentCallCard, {
+        block: {
+          kind: 'tool',
+          id: 'tool_explore_stale',
+          createdAt: '2026-08-07T00:00:00.000Z',
+          summary: 'explore_agent',
+          status: 'success',
+          toolKind: 'tool_call',
+          detail: JSON.stringify({
+            childId: 'child_stale',
+            status: 'completed',
+            summary: 'Located the save-tokens wiring.',
+            toolInvocations: 4
+          }),
+          meta: {
+            toolName: 'explore_agent',
+            child: {
+              parentThreadId: 'thread_parent',
+              parentTurnId: 'turn_parent',
+              childId: 'child_stale',
+              childProfile: 'explore',
+              childProfileName: 'Repository Explorer',
+              childStatus: 'running',
+              childSeq: 1
+            }
+          }
+        }
+      }))
+    })
+
+    const text = instanceText(renderer!.root)
+    expect(text).toContain('Done')
+    expect(text).not.toContain('Running')
+    expect(text).toContain('Located the save-tokens wiring.')
+    const card = renderer!.root.findByProps({ 'data-testid': 'subagent-call-card' })
+    expect(card.props['data-conclusion-expanded']).toBe('true')
+    expect(card.props['data-activity-label']).toBe('')
+  })
+
+  it('shows Failed for a settled error result even when the child snapshot still says running', async () => {
+    await act(async () => {
+      renderer = create(createElement(SubagentCallCard, {
+        block: {
+          kind: 'tool',
+          id: 'tool_delegate_stale_failed',
+          createdAt: '2026-08-07T00:00:00.000Z',
+          summary: 'delegate_task',
+          status: 'error',
+          toolKind: 'tool_call',
+          detail: JSON.stringify({
+            childId: 'child_failed_stale',
+            status: 'failed',
+            error: 'Child run failed after provider timeout.',
+            toolInvocations: 2
+          }),
+          meta: {
+            toolName: 'delegate_task',
+            child: {
+              parentThreadId: 'thread_parent',
+              parentTurnId: 'turn_parent',
+              childId: 'child_failed_stale',
+              childProfile: 'general',
+              childProfileName: 'General Agent',
+              childStatus: 'running',
+              childSeq: 1
+            }
+          }
+        }
+      }))
+    })
+
+    const text = instanceText(renderer!.root)
+    expect(text).toContain('Failed')
+    expect(text).not.toContain('Running')
+    // Error body is collapsed by default on non-explore cards; the expand
+    // affordance proves the terminal payload survived the stale snapshot.
+    expect(text).toContain('Show conclusion')
+    const card = renderer!.root.findByProps({ 'data-testid': 'subagent-call-card' })
+    expect(card.props['data-activity-label']).toBe('')
+  })
 })
 
 function childBlock(

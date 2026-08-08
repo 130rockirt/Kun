@@ -171,31 +171,39 @@ function readChildMeta(block: ChatBlock): ChildMeta {
 }
 
 /**
- * Map the child run + block status to one of five card states. `childStatus`
- * (when present) wins; otherwise fall back to `block.status`.
+ * Map the child run + block status to one of five card states. Terminal
+ * evidence is monotonic: a stale replayed `queued`/`running` child snapshot
+ * must not override a settled tool result that is already on the timeline.
  */
 function resolveStatus(block: ChatBlock, child: ChildMeta, detail?: DelegateDetail): CardStatus {
   const detached = child.detached === true || detail?.detached === true
   const cs = child.childStatus
+  const blockStatus =
+    'status' in block && typeof block.status === 'string' ? block.status : undefined
+
+  // A terminal child event is the most specific signal and can still turn a
+  // superficially successful tool result into a failed child card.
+  if (cs === 'completed') return 'done'
+  if (cs === 'failed' || cs === 'aborted') return 'failed'
+  if (detail?.status === 'completed') return 'done'
+  if (detail?.status === 'failed' || detail?.status === 'aborted') return 'failed'
+
+  // The tool projection is monotonic: success/error means the child settled,
+  // even if a stale lifecycle snapshot still says queued/running.
+  if (blockStatus === 'success') return 'done'
+  if (blockStatus === 'error') return 'failed'
+
   if (detached) {
-    if (cs === 'completed') return 'done'
-    if (cs === 'failed' || cs === 'aborted') return 'failed'
     if (cs === 'queued' || cs === 'running') return 'running'
-    if (detail?.status === 'completed') return 'done'
-    if (detail?.status === 'failed' || detail?.status === 'aborted') return 'failed'
     if (detail?.status === 'queued' || detail?.status === 'running') return 'running'
   }
   if (cs === 'queued') return 'queued'
   if (cs === 'running') return 'running'
-  if (cs === 'completed') return 'done'
-  if (cs === 'failed' || cs === 'aborted') return 'failed'
+  if (detail?.status === 'queued') return 'queued'
+  if (detail?.status === 'running') return 'running'
   // Pending approval surfaced as an approval block alongside the child.
   if (block.kind === 'approval' && block.status === 'pending') return 'awaiting-permission'
-  const blockStatus =
-    'status' in block && typeof block.status === 'string' ? block.status : undefined
   if (blockStatus === 'running') return 'running'
-  if (blockStatus === 'error') return 'failed'
-  if (blockStatus === 'success') return 'done'
   return 'running'
 }
 

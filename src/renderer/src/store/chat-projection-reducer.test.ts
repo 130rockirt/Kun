@@ -157,6 +157,76 @@ describe('chat projection reducer', () => {
     }
   )
 
+  it.each(['success', 'error'] as const)(
+    'keeps terminal detail and child status when a %s tool is replayed as running',
+    (terminalStatus) => {
+      const expectedChildStatus = terminalStatus === 'success' ? 'completed' : 'failed'
+      const projected = project({
+        ...state(),
+        blocks: [{
+          kind: 'tool',
+          id: 'tool_1',
+          summary: 'delegate_task',
+          status: terminalStatus,
+          detail: JSON.stringify({
+            childId: 'child_1',
+            status: expectedChildStatus,
+            summary: 'Full conclusion text',
+            toolInvocations: 5
+          }),
+          meta: {
+            toolName: 'delegate_task',
+            child: {
+              parentThreadId: 'thr_1',
+              parentTurnId: 'turn_1',
+              childId: 'child_1',
+              childStatus: expectedChildStatus,
+              childSeq: 1
+            }
+          }
+        }]
+      }, [{
+        type: 'tool_updated',
+        seq: 199,
+        payload: {
+          itemId: 'child_lifecycle_child_1',
+          summary: 'delegate_task',
+          status: 'running',
+          updateOnly: true,
+          createdAt: '2026-07-11T00:00:00.000Z',
+          toolKind: 'tool_call',
+          detail: JSON.stringify({ childId: 'child_1', status: 'running' }),
+          meta: {
+            child: {
+              parentThreadId: 'thr_1',
+              parentTurnId: 'turn_1',
+              childId: 'child_1',
+              childStatus: 'running',
+              childSeq: 1
+            }
+          }
+        }
+      }])
+
+      expect(projected.blocks[0]).toMatchObject({
+        kind: 'tool',
+        id: 'tool_1',
+        status: terminalStatus,
+        detail: expect.stringContaining('Full conclusion text'),
+        meta: {
+          child: {
+            childId: 'child_1',
+            childStatus: expectedChildStatus
+          }
+        }
+      })
+      const tool = projected.blocks[0]
+      if (tool?.kind === 'tool') {
+        expect(JSON.stringify(tool.detail)).not.toContain('"status":"running"')
+      }
+    }
+  )
+
   it('clears current-turn orchestration when a Graph turn completes', () => {
     const projected = project({
       ...state(),

@@ -813,6 +813,88 @@ describe('thread event sink runtime errors', () => {
     })
   })
 
+  it('merges a pending running lifecycle update into a settled tool result without regressing to running', () => {
+    const { getState, set, get } = makeSinkHarness({
+      activeThreadId: 'thread-current',
+      busy: false,
+      currentTurnId: null,
+      currentTurnUserId: null,
+      blocks: []
+    })
+    const sink = buildThreadEventSink(set, get, { threadId: 'thread-current' })
+
+    // The child lifecycle event races ahead of the parent tool block and is
+    // parked in the pending-update repair state.
+    sink.onTool({
+      itemId: 'child_lifecycle_child-race',
+      summary: '通用代理',
+      status: 'running',
+      updateOnly: true,
+      createdAt: '2026-07-04T00:00:01.000Z',
+      toolKind: 'tool_call',
+      detail: JSON.stringify({ childId: 'child-race', status: 'running', detached: true }),
+      meta: {
+        child: {
+          parentThreadId: 'thread-current',
+          parentTurnId: 'turn-current',
+          childId: 'child-race',
+          childLabel: '通用代理',
+          childStatus: 'running',
+          childSeq: 1,
+          detached: true
+        }
+      }
+    })
+
+    expect(getState().blocks).toHaveLength(0)
+
+    // The settled tool result arrives after the lifecycle event. It must win.
+    sink.onTool({
+      itemId: 'tool_delegate_race',
+      summary: 'delegate_task',
+      status: 'success',
+      createdAt: '2026-07-04T00:00:02.000Z',
+      toolKind: 'tool_call',
+      detail: JSON.stringify({
+        childId: 'child-race',
+        status: 'completed',
+        summary: 'Race conclusion preserved.',
+        detached: true
+      }),
+      meta: {
+        child: {
+          parentThreadId: 'thread-current',
+          parentTurnId: 'turn-current',
+          childId: 'child-race',
+          childLabel: '通用代理',
+          childStatus: 'completed',
+          childSeq: 1,
+          detached: true
+        }
+      }
+    })
+
+    expect(getState().busy).toBe(false)
+    expect(getState().blocks).toHaveLength(1)
+    expect(getState().blocks[0]).toMatchObject({
+      kind: 'tool',
+      id: 'tool_delegate_race',
+      status: 'success',
+      detail: expect.stringContaining('Race conclusion preserved.'),
+      meta: {
+        child: {
+          childId: 'child-race',
+          childStatus: 'completed',
+          detached: true
+        }
+      }
+    })
+    const settled = getState().blocks[0]
+    if (settled?.kind === 'tool') {
+      expect(settled.detail).not.toContain('"status":"running"')
+    }
+  })
+
   it('keeps pending child lifecycle repair state isolated per thread stream', () => {
     const first = makeSinkHarness({
       activeThreadId: 'thread-first',

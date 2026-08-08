@@ -370,14 +370,18 @@ export function reduceChatProjection(
       if (index >= 0) {
         const current = state.blocks[index]
         if (current.kind !== 'tool') return base
+        const nextStatus = monotonicToolStatus(current.status, event.status)
+        // A stale queued/running lifecycle snapshot must never replace the
+        // terminal summary/detail of an already settled tool block.
+        const staleRunning = nextStatus !== event.status
         const blocks = [...state.blocks]
         blocks[index] = {
           ...current,
           turnId: event.turnId ?? current.turnId,
-          summary: event.summary || current.summary,
-          status: monotonicToolStatus(current.status, event.status),
+          summary: staleRunning ? current.summary : (event.summary || current.summary),
+          status: nextStatus,
           toolKind: event.toolKind ?? current.toolKind,
-          detail: event.detail ?? current.detail,
+          detail: staleRunning ? current.detail : (event.detail ?? current.detail),
           filePath: event.filePath ?? current.filePath,
           meta: mergeToolProjectionMeta(current.meta, event.meta)
         }
@@ -920,14 +924,19 @@ export function mergeToolProjectionEvents(
   base: ToolEventPayload,
   update: ToolEventPayload
 ): ToolEventPayload {
+  const status = monotonicToolStatus(base.status, update.status)
+  // The pending update may be an older queued/running lifecycle snapshot that
+  // raced ahead of the settled tool result. Keep terminal summary/detail intact
+  // instead of replacing them with the minimal lifecycle payload.
+  const staleRunning = status !== update.status
   return {
     ...base,
     turnId: update.turnId ?? base.turnId,
     createdAt: base.createdAt ?? update.createdAt,
-    summary: update.summary || base.summary,
-    status: update.status,
+    summary: staleRunning ? base.summary : (update.summary || base.summary),
+    status,
     toolKind: update.toolKind ?? base.toolKind,
-    detail: update.detail ?? base.detail,
+    detail: staleRunning ? base.detail : (update.detail ?? base.detail),
     filePath: update.filePath ?? base.filePath,
     meta: mergeToolProjectionMeta(base.meta, update.meta)
   }
@@ -946,9 +955,39 @@ function mergeToolProjectionMeta(
     currentChild && typeof currentChild === 'object' && !Array.isArray(currentChild) &&
     incomingChild && typeof incomingChild === 'object' && !Array.isArray(incomingChild)
   ) {
-    merged.child = { ...currentChild, ...incomingChild }
+    merged.child = mergeChildMetadata(
+      currentChild as Record<string, unknown>,
+      incomingChild as Record<string, unknown>
+    )
   }
   return merged
+}
+
+/**
+ * Child lifecycle metadata is monotonic: a terminal `childStatus` recorded by
+ * the settled result must survive an older queued/running snapshot, while a
+ * genuine running -> terminal transition still wins.
+ */
+function mergeChildMetadata(
+  current: Record<string, unknown>,
+  incoming: Record<string, unknown>
+): Record<string, unknown> {
+  const merged = { ...current, ...incoming }
+  const currentStatus = current.childStatus
+  const incomingStatus = incoming.childStatus
+  if (
+    typeof currentStatus === 'string' &&
+    typeof incomingStatus === 'string' &&
+    isTerminalChildStatus(currentStatus) &&
+    (incomingStatus === 'queued' || incomingStatus === 'running')
+  ) {
+    merged.childStatus = currentStatus
+  }
+  return merged
+}
+
+function isTerminalChildStatus(status: string): boolean {
+  return status === 'completed' || status === 'failed' || status === 'aborted'
 }
 
 function isDetachedSubagentToolEvent(event: ToolEventPayload): boolean {
