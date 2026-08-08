@@ -1778,6 +1778,8 @@
   "queuedMessageEdit": "메시지 편집",
   "queuedMessageReorder": "드래그하여 대기 순서 변경",
   "guideQueuedMessage": "가이드",
+  "queuedMessagePaused": "일시 중지됨",
+  "sendPausedQueuedMessage": "보내기",
   "guideQueuedMessageGraph": "현재 Graph 안내",
   "guideQueuedMessagePending": "안내",
   "guideQueuedMessageHint": "에이전트의 다음 모델 상호작용에 이 입력을 추가하세요.",

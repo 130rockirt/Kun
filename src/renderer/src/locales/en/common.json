@@ -1778,6 +1778,8 @@
   "queuedMessageEdit": "Edit message",
   "queuedMessageReorder": "Drag to reorder queued message",
   "guideQueuedMessage": "Guide",
+  "queuedMessagePaused": "Paused",
+  "sendPausedQueuedMessage": "Send",
   "guideQueuedMessageGraph": "Guide current Graph",
   "guideQueuedMessagePending": "Guiding",
   "guideQueuedMessageHint": "Add this input to the agent's next model interaction",

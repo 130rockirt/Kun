@@ -2,7 +2,7 @@ import { browserStorage, type BrowserStorageLike } from '../lib/browser-storage'
 import type { ChatBlock } from '../agent/types'
 import type { QueuedUserMessage } from './chat-store-types'
 
-export type QueuedMessageDeliveryState = 'pending' | 'starting' | 'in_flight'
+export type QueuedMessageDeliveryState = 'pending' | 'paused' | 'starting' | 'in_flight'
 
 export type QueuedMessageRegistry = {
   version: 1
@@ -30,7 +30,7 @@ function normalizeQueuedMessage(value: unknown): QueuedUserMessage | null {
   if (!id || !text) return null
 
   const deliveryState: QueuedMessageDeliveryState =
-    source.deliveryState === 'starting' || source.deliveryState === 'in_flight'
+    source.deliveryState === 'paused' || source.deliveryState === 'starting' || source.deliveryState === 'in_flight'
     ? source.deliveryState
     : 'pending'
   const deliveryTurnId = normalizedString(source.deliveryTurnId)
@@ -181,18 +181,18 @@ export function reconcileQueuedMessages(
   const reconciled: QueuedUserMessage[] = []
   for (const message of messages) {
     const state = message.deliveryState ?? 'pending'
-    if (state === 'pending') {
+    if (state === 'pending' || state === 'paused') {
       if (
-        message.deliveryState === 'pending' &&
+        message.deliveryState === state &&
         !message.deliveryTurnId &&
         !message.deliveryUserMessageItemId
       ) {
         reconciled.push(message)
       } else {
-        const pending = { ...message, deliveryState: 'pending' as const }
-        delete pending.deliveryTurnId
-        delete pending.deliveryUserMessageItemId
-        reconciled.push(pending)
+        const retained = { ...message, deliveryState: state }
+        delete retained.deliveryTurnId
+        delete retained.deliveryUserMessageItemId
+        reconciled.push(retained)
       }
       continue
     }

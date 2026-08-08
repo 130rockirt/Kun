@@ -1778,6 +1778,8 @@
   "queuedMessageEdit": "संदेश संपादित करें",
   "queuedMessageReorder": "कतार का क्रम बदलने के लिए खींचें",
   "guideQueuedMessage": "मार्गदर्शक",
+  "queuedMessagePaused": "Paused",
+  "sendPausedQueuedMessage": "Send",
   "guideQueuedMessageGraph": "वर्तमान Graph को निर्देश दें",
   "guideQueuedMessagePending": "मार्गदर्शन",
   "guideQueuedMessageHint": "इस इनपुट को एजेंट के अगले मॉडल इंटरैक्शन में जोड़ें",

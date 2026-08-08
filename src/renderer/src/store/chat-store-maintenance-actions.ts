@@ -36,6 +36,7 @@ import {
   saveQueuedMessagesForThread
 } from './queued-message-persistence'
 import { invalidateThreadSnapshot } from './thread-snapshot-cache'
+import { invalidatePendingTurnStarts } from './turn-start-fence'
 
 /**
  * Release the worktree pool slot owned by a thread when the task completes
@@ -198,12 +199,37 @@ function settleInterruptedTurn(set: ChatStoreSet, get: ChatStoreGet): void {
       currentTurnUserId: null,
       error: null
     })
+    const watchTurnCompletion = { ...s.watchTurnCompletion }
+    const unreadThreadIds = { ...s.unreadThreadIds }
+    if (threadId) {
+      delete watchTurnCompletion[threadId]
+      delete unreadThreadIds[threadId]
+    }
+    const queuedMessages = s.queuedMessages.map((message) => {
+      if (message.deliveryState && message.deliveryState !== 'pending') return message
+      const paused = { ...message, deliveryState: 'paused' as const }
+      delete paused.deliveryTurnId
+      delete paused.deliveryUserMessageItemId
+      return paused
+    })
     const blocks = settlePendingRuntimeWorkAfterInterrupt(out.blocks ?? s.blocks)
-    return { ...out, blocks }
+    return {
+      ...out,
+      blocks,
+      queuedMessages,
+      watchTurnCompletion,
+      unreadThreadIds,
+      threads: threadId
+        ? s.threads.map((thread) => thread.id === threadId
+            ? { ...thread, status: 'idle' as const, latestTurnStatus: 'aborted' as const }
+            : thread)
+        : s.threads
+    }
   })
-  // Release worktree slot when user manually stops the agent (unless queued
-  // follow-ups will restart the turn in the same thread).
-  if (threadId && get().queuedMessages.length === 0) {
+  if (threadId) {
+    clearWatchedCompletionNotification(threadId)
+    invalidateThreadSnapshot(threadId)
+    saveQueuedMessagesForThread(threadId, get().queuedMessages)
     releaseThreadWorktreeIfNeeded(threadId)
   }
 }
@@ -1402,8 +1428,9 @@ export function createMaintenanceActions(
   },
 
   interrupt: async (options) => {
-    const { activeThreadId, currentTurnId } = get()
-    if (!activeThreadId || !currentTurnId) return
+    const { activeThreadId, currentTurnId, busy } = get()
+    if (!activeThreadId || (!currentTurnId && !busy)) return
+    invalidatePendingTurnStarts()
     const p = getProvider()
     // Settle the UI before notifying the runtime: a slow or hung
     // interruptTurn must not keep the stop button unresponsive. The event
@@ -1413,7 +1440,9 @@ export function createMaintenanceActions(
     sseAbortRef.current = null
     settleInterruptedTurn(set, get)
     try {
-      await p.interruptTurn(activeThreadId, currentTurnId, { discard: options?.discard === true })
+      if (currentTurnId) {
+        await p.interruptTurn(activeThreadId, currentTurnId, { discard: options?.discard === true })
+      }
     } catch (e) {
       const msg = formatRuntimeError(e)
       void window.kunGui.logError('interrupt', 'Failed to interrupt turn', { message: msg }).catch(() => undefined)

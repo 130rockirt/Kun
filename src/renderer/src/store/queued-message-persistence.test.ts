@@ -112,6 +112,21 @@ describe('queued-message-persistence', () => {
     }])
   })
 
+  it('keeps paused messages across persistence and idle/running reconciliation', () => {
+    const storage = new MemoryStorage()
+    const paused = [{ id: 'q-paused', text: 'send later', deliveryState: 'paused' as const }]
+    saveQueuedMessagesForThread('thread-a', paused, storage)
+
+    expect(queuedMessagesForThread('thread-a', storage)).toEqual(paused)
+    expect(reconcileQueuedMessages(paused, { busy: false, turnId: null })).toEqual(paused)
+    expect(reconcileQueuedMessages(paused, { busy: true, turnId: 'turn-live' })).toEqual(paused)
+  })
+
+  it('does not treat paused messages as automatically sendable', async () => {
+    const { isPendingQueuedMessage } = await import('./queued-message-persistence')
+    expect(isPendingQueuedMessage({ id: 'q-paused', text: 'send later', deliveryState: 'paused' })).toBe(false)
+  })
+
   it('forgets a deleted thread queue and ignores malformed storage', () => {
     const storage = new MemoryStorage()
     saveQueuedMessagesForThread('thread-a', [

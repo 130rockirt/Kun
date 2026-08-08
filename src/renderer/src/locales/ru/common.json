@@ -1778,6 +1778,8 @@
   "queuedMessageEdit": "Редактировать сообщение",
   "queuedMessageReorder": "Перетащите, чтобы изменить порядок",
   "guideQueuedMessage": "Руководство",
+  "queuedMessagePaused": "Приостановлено",
+  "sendPausedQueuedMessage": "Отправить",
   "guideQueuedMessageGraph": "Направить текущему Graph",
   "guideQueuedMessagePending": "Руководство",
   "guideQueuedMessageHint": "Добавьте эти входные данные к следующему взаимодействию модели агента.",

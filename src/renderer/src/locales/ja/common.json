@@ -1778,6 +1778,8 @@
   "queuedMessageEdit": "メッセージを編集",
   "queuedMessageReorder": "ドラッグしてキューの順序を変更",
   "guideQueuedMessage": "ガイド",
+  "queuedMessagePaused": "一時停止中",
+  "sendPausedQueuedMessage": "送信",
   "guideQueuedMessageGraph": "現在の Graph をガイド",
   "guideQueuedMessagePending": "導き",
   "guideQueuedMessageHint": "この入力をエージェントの次のモデル インタラクションに追加します",

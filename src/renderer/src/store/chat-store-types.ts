@@ -32,8 +32,8 @@ import type { ExtensionComposerContextEvent } from '@shared/extension-ipc'
 export type QueuedUserMessage = {
   id: string
   text: string
-  /** Pending items are visible; starting/in-flight items remain durable until the turn settles. */
-  deliveryState?: 'pending' | 'starting' | 'in_flight'
+  /** Pending/paused items are visible; starting/in-flight items remain durable until the turn settles. */
+  deliveryState?: 'pending' | 'paused' | 'starting' | 'in_flight'
   deliveryTurnId?: string
   deliveryUserMessageItemId?: string
   displayText?: string

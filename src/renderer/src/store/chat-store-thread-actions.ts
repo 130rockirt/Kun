@@ -47,6 +47,7 @@ import type {
   WriteAssistantMessageContext
 } from './chat-store-types'
 import { queuedMessageGuidancePayload } from './queued-message-guidance'
+import { currentTurnStartGeneration } from './turn-start-fence'
 import {
   isPendingQueuedMessage,
   queuedMessagesForThread,
@@ -1039,6 +1040,17 @@ export function createThreadActions(
     const state = get()
     const message = state.queuedMessages.find((candidate) => candidate.id === id)
     if (!message) return false
+    if (message.deliveryState === 'paused') {
+      if (state.busy) return false
+      set((current) => ({
+        queuedMessages: current.queuedMessages.map((candidate) => candidate.id === id
+          ? { ...candidate, deliveryState: 'pending' as const }
+          : candidate)
+      }))
+      persistActiveQueuedMessages()
+      await get().drainQueuedMessages()
+      return true
+    }
     const guidance = queuedMessageGuidancePayload(message)
     if (!guidance) {
       set({ error: i18n.t('common:guideQueuedMessageTextOnly') })
@@ -1609,6 +1621,7 @@ export function createThreadActions(
         }
         return false
       }
+      const sendGeneration = currentTurnStartGeneration()
       const { turnId, userMessageItemId } = await p.sendUserMessage(activeThreadId, runtimeText, {
         mode,
         orchestration,
@@ -1632,6 +1645,12 @@ export function createThreadActions(
         ...(composerContexts.length ? { composerContexts } : {})
       })
       runtimeTurnAccepted = true
+      if (currentTurnStartGeneration() !== sendGeneration) {
+        // Stop was pressed while the POST was still pending. The accepted turn
+        // is real, but must not revive this renderer projection or its queue.
+        void p.interruptTurn(activeThreadId, turnId, { discard: false }).catch(() => undefined)
+        return true
+      }
       // The runtime accepted this scoped turn, but the user may have switched
       // threads while the provider request was in flight. Leave the accepted
       // turn on its original thread and let persistence/reload surface it later;

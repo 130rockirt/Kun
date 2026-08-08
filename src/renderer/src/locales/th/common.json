@@ -1778,6 +1778,8 @@
   "queuedMessageEdit": "แก้ไขข้อความ",
   "queuedMessageReorder": "ลากเพื่อจัดลำดับข้อความในคิว",
   "guideQueuedMessage": "คู่มือ",
+  "queuedMessagePaused": "Paused",
+  "sendPausedQueuedMessage": "Send",
   "guideQueuedMessageGraph": "แนะนำ Graph ปัจจุบัน",
   "guideQueuedMessagePending": "แนวทาง",
   "guideQueuedMessageHint": "เพิ่มอินพุตนี้ลงในการโต้ตอบโมเดลถัดไปของตัวแทน",

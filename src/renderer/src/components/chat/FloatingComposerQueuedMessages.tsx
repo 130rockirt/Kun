@@ -72,7 +72,7 @@ function currentBodyZoom(): number {
 export type QueuedComposerMessage = {
   id: string
   text: string
-  deliveryState?: 'pending' | 'starting' | 'in_flight'
+  deliveryState?: 'pending' | 'paused' | 'starting' | 'in_flight'
   deliveryTurnId?: string
   deliveryUserMessageItemId?: string
   displayText?: string
@@ -122,7 +122,7 @@ export function FloatingComposerQueuedMessages({
 }: Props): ReactElement | null {
   const { t } = useTranslation('common')
   const visibleMessages = messages.filter(
-    (message) => !message.deliveryState || message.deliveryState === 'pending'
+    (message) => !message.deliveryState || message.deliveryState === 'pending' || message.deliveryState === 'paused'
   )
   const rootRef = useRef<HTMLDivElement | null>(null)
   const menuRef = useRef<HTMLDivElement | null>(null)
@@ -295,14 +295,19 @@ export function FloatingComposerQueuedMessages({
           const guiding = guidingIds.has(message.id)
           const guidanceEligible =
             message.guidanceEligible !== false && canGuideQueuedComposerMessage(message)
-          const guideLabel = guidanceTarget === 'graph'
-            ? t('guideQueuedMessageGraph')
-            : t('guideQueuedMessage')
-          const guideTitle = guidanceEligible
-            ? guidanceTarget === 'graph'
-              ? t('guideQueuedMessageGraphHint')
-              : t('guideQueuedMessageHint')
-            : t('guideQueuedMessageTextOnly')
+          const paused = message.deliveryState === 'paused'
+          const guideLabel = paused
+            ? t('sendPausedQueuedMessage')
+            : guidanceTarget === 'graph'
+              ? t('guideQueuedMessageGraph')
+              : t('guideQueuedMessage')
+          const guideTitle = paused
+            ? t('sendPausedQueuedMessage')
+            : guidanceEligible
+              ? guidanceTarget === 'graph'
+                ? t('guideQueuedMessageGraphHint')
+                : t('guideQueuedMessageHint')
+              : t('guideQueuedMessageTextOnly')
           const editMessage = onEdit && canEditQueuedComposerMessage(message) ? onEdit : null
           const canReorder = Boolean(onReorder && visibleMessages.length > 1 && !guiding)
           const messageDropTarget = dropTarget?.id === message.id ? dropTarget : null
@@ -352,7 +357,11 @@ export function FloatingComposerQueuedMessages({
                 <div className="truncate text-[14px] leading-5 text-ds-ink">
                   {message.displayText ?? message.text}
                 </div>
-                {guidanceTarget === 'graph' ? (
+                {paused ? (
+                  <div className="truncate text-[11px] leading-4 text-ds-faint">
+                    {t('queuedMessagePaused')}
+                  </div>
+                ) : guidanceTarget === 'graph' ? (
                   <div className="truncate text-[11px] leading-4 text-ds-faint">
                     {t('queuedMessageAfterGraph')}
                   </div>
@@ -362,7 +371,7 @@ export function FloatingComposerQueuedMessages({
                 <button
                   type="button"
                   onClick={() => void guide(message.id)}
-                  disabled={!guidanceEligible || guiding}
+                  disabled={(!guidanceEligible && !paused) || guiding}
                   className="ds-no-drag inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full px-2.5 text-[13px] font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent disabled:hover:text-ds-muted"
                   aria-label={guiding ? t('guideQueuedMessagePending') : guideLabel}
                   title={guiding ? t('guideQueuedMessagePending') : guideTitle}

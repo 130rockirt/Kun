@@ -1287,7 +1287,10 @@ describe('chat-store-maintenance-actions goal actions', () => {
       currentTurnUserId: 'user-1',
       liveAssistant: 'partial answer',
       liveReasoning: '',
-      queuedMessages: [],
+      queuedMessages: [{ id: 'q-followup', text: 'send later', deliveryState: 'pending' }],
+      watchTurnCompletion: { thr_existing: true },
+      unreadThreadIds: { thr_existing: true },
+      threads: [{ ...thread('thr_existing'), status: 'running', latestTurnStatus: 'running' as const }],
       turnStartedAtByUserId: { 'user-1': Date.now() - 1000 },
       turnDurationByUserId: {},
       turnReasoningFirstAtByUserId: {},
@@ -1315,6 +1318,12 @@ describe('chat-store-maintenance-actions goal actions', () => {
       'assistant'
     ])
     expect(refreshThreads).toHaveBeenCalledTimes(1)
+    expect(state.queuedMessages).toEqual([
+      expect.objectContaining({ id: 'q-followup', deliveryState: 'paused' })
+    ])
+    expect(state.watchTurnCompletion).toEqual({})
+    expect(state.unreadThreadIds).toEqual({})
+    expect(state.threads[0]).toMatchObject({ status: 'idle', latestTurnStatus: 'aborted' })
     expect(recoverActiveTurn).toHaveBeenCalledTimes(1)
   })
 

@@ -1778,6 +1778,8 @@
   "queuedMessageEdit": "编辑消息",
   "queuedMessageReorder": "拖动调整排队顺序",
   "guideQueuedMessage": "引导",
+  "queuedMessagePaused": "已暂停",
+  "sendPausedQueuedMessage": "发送",
   "guideQueuedMessageGraph": "引导当前 Graph",
   "guideQueuedMessagePending": "引导中",
   "guideQueuedMessageHint": "在 Agent 的下一次模型交互中加入这条输入",
