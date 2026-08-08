@@ -1177,7 +1177,7 @@ async function showTurnCompleteNotification(
   }
 }
 
-async function probeThreadApi(settings: AppSettingsV1): Promise<
+async function probeRuntimeApi(settings: AppSettingsV1): Promise<
   | { ok: true }
   | { ok: false; error: string; message: string }
 > {
@@ -1186,7 +1186,10 @@ async function probeThreadApi(settings: AppSettingsV1): Promise<
   headers.set('Accept', 'application/json')
 
   try {
-    const res = await fetch(`${base}/v1/threads?limit=1`, {
+    // Runtime readiness must stay independent of the user's session count.
+    // Listing threads can require loading a large history projection, while
+    // runtime info is authenticated and already part of the build contract.
+    const res = await fetch(`${base}/v1/runtime/info`, {
       headers,
       signal: AbortSignal.timeout(2_000)
     })
@@ -1601,12 +1604,12 @@ async function ensureKunRuntime(settings: AppSettingsV1): Promise<AppSettingsV1>
   const healthy = connectionResolved &&
     await kunRuntimeHealthMonitor.waitForHealthy(currentSettings, 2_000)
   if (healthy) {
-    const threadApi = await probeThreadApi(currentSettings)
-    if (threadApi.ok) {
+    const runtimeApi = await probeRuntimeApi(currentSettings)
+    if (runtimeApi.ok) {
       noteRuntimeHealthy('ensure', currentSettings)
       return currentSettings
     }
-    throw runtimeJsonError(threadApi.error, threadApi.message)
+    throw runtimeJsonError(runtimeApi.error, runtimeApi.message)
   }
 
   if (!runtime.autoStart) {
@@ -1628,12 +1631,12 @@ async function ensureKunRuntime(settings: AppSettingsV1): Promise<AppSettingsV1>
       // hung, so one long synchronous step does not cost the user their turn.
       const recovered = await kunRuntimeHealthMonitor.waitForHealthy(currentSettings, RUNTIME_HUNG_CONFIRM_MS)
       if (recovered) {
-        const threadApi = await probeThreadApi(currentSettings)
-        if (threadApi.ok) {
+        const runtimeApi = await probeRuntimeApi(currentSettings)
+        if (runtimeApi.ok) {
           noteRuntimeHealthy('ensure', currentSettings)
           return currentSettings
         }
-        throw runtimeJsonError(threadApi.error, threadApi.message)
+        throw runtimeJsonError(runtimeApi.error, runtimeApi.message)
       }
       if (!isKunChildRunning()) {
         throw runtimeJsonError(
@@ -1667,9 +1670,9 @@ async function ensureKunRuntime(settings: AppSettingsV1): Promise<AppSettingsV1>
     )
   }
 
-  const threadApi = await probeThreadApi(launchSettings)
-  if (!threadApi.ok) {
-    throw runtimeJsonError(threadApi.error, threadApi.message)
+  const runtimeApi = await probeRuntimeApi(launchSettings)
+  if (!runtimeApi.ok) {
+    throw runtimeJsonError(runtimeApi.error, runtimeApi.message)
   }
   noteRuntimeHealthy('ensure', launchSettings)
   return launchSettings
@@ -1721,9 +1724,9 @@ async function restartRuntimeOnce(settings: AppSettingsV1): Promise<void> {
     )
   }
 
-  const threadApi = await probeThreadApi(launchSettings)
-  if (!threadApi.ok) {
-    throw runtimeJsonError(threadApi.error, threadApi.message)
+  const runtimeApi = await probeRuntimeApi(launchSettings)
+  if (!runtimeApi.ok) {
+    throw runtimeJsonError(runtimeApi.error, runtimeApi.message)
   }
   noteRuntimeHealthy('restart', launchSettings)
 }

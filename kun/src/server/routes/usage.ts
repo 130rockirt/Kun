@@ -23,6 +23,8 @@ type UsageThreadSource = {
   summary?: ThreadSummary
 }
 
+const allUsageRecordLoads = new WeakMap<ServerRuntime, Promise<ThreadUsageRecord[]>>()
+
 /**
  * Usage endpoint response shape. The `total` field mirrors the
  * per-thread cumulative usage snapshot; `perThread` exposes a list
@@ -103,15 +105,31 @@ async function usageRecords(
   runtime: ServerRuntime,
   options: { threadId?: string } = {}
 ): Promise<ThreadUsageRecord[]> {
+  if (options.threadId) return loadUsageRecords(runtime, options)
+  const active = allUsageRecordLoads.get(runtime)
+  if (active) return active
+  let load: Promise<ThreadUsageRecord[]>
+  load = loadUsageRecords(runtime, options).finally(() => {
+    if (allUsageRecordLoads.get(runtime) === load) allUsageRecordLoads.delete(runtime)
+  })
+  allUsageRecordLoads.set(runtime, load)
+  return load
+}
+
+async function loadUsageRecords(
+  runtime: ServerRuntime,
+  options: { threadId?: string } = {}
+): Promise<ThreadUsageRecord[]> {
+  const explicitThread = options.threadId
+    ? await runtime.threadService.get(options.threadId)
+    : null
+  if (options.threadId && !explicitThread) return []
+  const threadSummaries = options.threadId
+    ? []
+    : await runtime.threadService.list()
+
   if (typeof runtime.sessionStore.loadUsageRecords === 'function') {
     try {
-      const explicitThread = options.threadId
-        ? await runtime.threadService.get(options.threadId)
-        : null
-      if (options.threadId && !explicitThread) return []
-      const threadSummaries = options.threadId
-        ? []
-        : await runtime.threadService.list()
       const allowedThreadIds = new Set(
         options.threadId
           ? [options.threadId]
@@ -145,12 +163,11 @@ async function usageRecords(
         const thread = explicitThread?.id === threadId
           ? explicitThread
           : summary
-            ? await runtime.threadService.get(threadId) ?? { ...summary, turns: [] }
-            : await runtime.threadService.get(threadId)
+            ?? await runtime.threadService.get(threadId)
         if (!thread) continue
         records.push({
           threadId,
-          model: usageRecordModel(thread, { turnId: thread.turns?.at(-1)?.id }),
+          model: usageRecordModel(thread, { turnId: latestTurnId(thread) }),
           completedAt: thread.updatedAt || runtime.nowIso(),
           usage: liveRemainder
         })
@@ -161,20 +178,13 @@ async function usageRecords(
     }
   }
   const records: ThreadUsageRecord[] = []
-  const threadSummaries = options.threadId
-    ? []
-    : await runtime.threadService.list()
-  const explicitThread = options.threadId
-    ? await runtime.threadService.get(options.threadId)
-    : null
-  if (options.threadId && !explicitThread) return records
   const sources: UsageThreadSource[] = explicitThread
     ? [{ id: explicitThread.id, thread: explicitThread }]
     : threadSummaries.map((thread) => ({ id: thread.id, summary: thread }))
   for (const source of sources) {
     const thread = source.thread
+      ?? source.summary
       ?? await runtime.threadService.get(source.id)
-      ?? (source.summary ? { ...source.summary, turns: [] } : null)
     if (!thread) continue
     let latestPersisted = emptyUsageSnapshot()
     const events = await runtime.sessionStore.loadEventsSince(thread.id, 0)
@@ -199,13 +209,17 @@ async function usageRecords(
     if (hasUsage(liveRemainder)) {
       records.push({
         threadId: thread.id,
-        model: usageRecordModel(thread, { turnId: thread.turns?.at(-1)?.id }),
+        model: usageRecordModel(thread, { turnId: latestTurnId(thread) }),
         completedAt: thread.updatedAt || runtime.nowIso(),
         usage: liveRemainder
       })
     }
   }
   return records
+}
+
+function latestTurnId(thread: { id?: string; turns?: Array<{ id: string }> }): string | undefined {
+  return thread.turns?.at(-1)?.id
 }
 
 function usageRecordModel(

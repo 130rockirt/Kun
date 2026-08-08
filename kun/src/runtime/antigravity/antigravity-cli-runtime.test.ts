@@ -375,6 +375,75 @@ describe('AntigravityCliRuntime', () => {
     })
   })
 
+  it('preserves Chinese output when an UTF-8 character spans stdout chunks', async () => {
+    const threadStore = new InMemoryThreadStore()
+    const sessionStore = new InMemorySessionStore()
+    const turn = TurnSchema.parse({
+      id: 'turn-split-utf8',
+      threadId: 'thread-split-utf8',
+      status: 'running',
+      prompt: '请用中文回答',
+      model: 'gemini-3.6-flash',
+      createdAt: '2026-08-09T00:00:00.000Z'
+    })
+    await threadStore.upsert({
+      ...createThreadRecord({
+        id: turn.threadId,
+        title: 'Split UTF-8 output',
+        workspace: '/tmp',
+        model: turn.model!,
+        providerId: 'gemini-subscription',
+        status: 'running'
+      }),
+      turns: [turn]
+    })
+    await sessionStore.appendItem(
+      turn.threadId,
+      makeUserItem({
+        id: 'item-user-split-utf8',
+        threadId: turn.threadId,
+        turnId: turn.id,
+        text: turn.prompt
+      })
+    )
+    const text = '这是来自 Antigravity 的中文回复。'
+    const bytes = Buffer.from(`${text}\n`)
+    const applyItem = vi.fn(async () => undefined)
+    const runtime = new AntigravityCliRuntime({
+      providerConfigs: {},
+      providerIds: new Set(['gemini-subscription']),
+      defaultIsAntigravity: false,
+      threadStore,
+      sessionStore,
+      turns: {
+        applyItem,
+        applyAssistantDelta: vi.fn(async () => undefined),
+        updateTurnMetadata: vi.fn(async () => undefined),
+        finishTurn: vi.fn(async () => undefined)
+      } as unknown as TurnService,
+      events: { record: vi.fn(async () => undefined) } as unknown as RuntimeEventRecorder,
+      ids: { next: () => 'item-assistant-split-utf8' },
+      // Split inside the first Chinese character (three UTF-8 bytes).
+      spawnFn: successfulSpawn([
+        bytes.subarray(0, 1),
+        bytes.subarray(1, 5),
+        bytes.subarray(5)
+      ])
+    })
+
+    await expect(runtime.runTurn(
+      turn.threadId,
+      turn.id,
+      new AbortController().signal,
+      'gemini-subscription'
+    )).resolves.toBe('completed')
+
+    expect(applyItem).toHaveBeenCalledWith(
+      turn.threadId,
+      expect.objectContaining({ kind: 'assistant_text', status: 'completed', text })
+    )
+  })
+
   it('preserves pending Graph supervision without launching the unsupported CLI', async () => {
     const threadStore = new InMemoryThreadStore()
     const sessionStore = new InMemorySessionStore()
@@ -966,7 +1035,7 @@ describe('AntigravityCliRuntime', () => {
 })
 
 function successfulSpawn(
-  output: string,
+  output: string | readonly Buffer[],
   onSpawn?: (
     args: readonly string[],
     options?: { env?: NodeJS.ProcessEnv }
@@ -987,7 +1056,12 @@ function successfulSpawn(
     child.stderr = new PassThrough()
     child.kill = () => true
     queueMicrotask(() => {
-      child.stdout.end(output)
+      if (typeof output === 'string') {
+        child.stdout.end(output)
+      } else {
+        for (const chunk of output) child.stdout.write(chunk)
+        child.stdout.end()
+      }
       child.stderr.end()
       child.emit('exit', 0, null)
     })

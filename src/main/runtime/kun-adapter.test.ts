@@ -18,6 +18,7 @@ import {
 } from '../../shared/app-settings'
 import {
   acquireRuntimeRequestLease,
+  expectedKunRuntimeBuildId,
   getRuntimeAuthToken,
   kunRuntimeAdapter,
   resolveRuntimeRequestTimeoutMs,
@@ -361,6 +362,14 @@ describe('runtimeRequestViaHost', () => {
 })
 
 describe('kunRuntimeAdapter.resolveConnection', () => {
+  it('compares development runtimes using their flavor-namespaced build identity', () => {
+    const sourceBuildId = 'd'.repeat(64)
+
+    expect(expectedKunRuntimeBuildId(sourceBuildId, 'development')).toMatch(/^[a-f0-9]{64}$/)
+    expect(expectedKunRuntimeBuildId(sourceBuildId, 'development')).not.toBe(sourceBuildId)
+    expect(expectedKunRuntimeBuildId(sourceBuildId, 'production')).toBe(sourceBuildId)
+  })
+
   it('rejects an identity-less runtime before the GUI health fast path can reuse it', async () => {
     const root = await mkdtemp(join(tmpdir(), 'kun-adapter-build-identity-'))
     const dataDir = join(root, 'data')

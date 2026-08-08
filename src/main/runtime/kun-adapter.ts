@@ -26,7 +26,10 @@ import {
   runtimeMatchesExpectedBuild,
   stopSharedRuntime
 } from '../../../kun/src/cli/shared-runtime.js'
-import { resolveCliRuntimeFlavor } from '../../../kun/src/cli/runtime-flavor.js'
+import {
+  resolveCliRuntimeFlavor,
+  runtimeBuildIdForFlavor
+} from '../../../kun/src/cli/runtime-flavor.js'
 import { sameCanonicalPath } from '../../../kun/src/manager/canonical-path.js'
 
 const KUN_RUNTIME_ID = 'kun' as const
@@ -130,13 +133,28 @@ async function ensureResolvedKunRuntime(settings: AppSettingsV1): Promise<void> 
   resolvedConnection = connection?.discovery ?? null
 }
 
+export function expectedKunRuntimeBuildId(
+  sourceBuildId: string | undefined,
+  runtimeFlavor: ReturnType<typeof resolveCliRuntimeFlavor>
+): string | undefined {
+  return runtimeBuildIdForFlavor(sourceBuildId, runtimeFlavor)
+}
+
 async function refreshResolvedKunRuntime(settings: AppSettingsV1): Promise<boolean> {
   const runtime = getKunRuntimeSettings(settings)
   const dataDir = expandDataDir(runtime.dataDir)
-  const expectedBuildId = await resolveKunRuntimeBuildId(
+  const runtimeFlavor = resolveCliRuntimeFlavor({ env: process.env })
+  const sourceBuildId = await resolveKunRuntimeBuildId(
     resolveKunExecutable(runtime.binaryPath.trim() ? '' : appRoot(), runtime.binaryPath)
   )
-  const inspected = await inspectSharedRuntime(dataDir, fetch, sharedRuntimeScope(dataDir))
+  // Shared runtimes namespace development build identities by flavor. Compare
+  // against the same identity that `ensureSharedRuntime` publishes.
+  const expectedBuildId = expectedKunRuntimeBuildId(sourceBuildId, runtimeFlavor)
+  const inspected = await inspectSharedRuntime(
+    dataDir,
+    fetch,
+    sharedRuntimeScope(dataDir, runtimeFlavor)
+  )
     .catch(() => null)
   if (!inspected) {
     resolvedConnection = null
@@ -158,11 +176,13 @@ async function refreshResolvedKunRuntime(settings: AppSettingsV1): Promise<boole
   return true
 }
 
-function sharedRuntimeScope(dataDir: string): {
+function sharedRuntimeScope(
+  dataDir: string,
+  runtimeFlavor = resolveCliRuntimeFlavor({ env: process.env })
+): {
   runtimeFlavor: ReturnType<typeof resolveCliRuntimeFlavor>
   manager?: NonNullable<ReturnType<typeof getKunServiceManagerBinding>>
 } {
-  const runtimeFlavor = resolveCliRuntimeFlavor({ env: process.env })
   const manager = getKunServiceManagerBinding()
   return {
     runtimeFlavor,

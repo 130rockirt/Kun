@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process'
+import { StringDecoder } from 'node:string_decoder'
 import type { ServeProviderConfig } from '../../config/kun-config.js'
 import type {
   ActingTurnModelRoute,
@@ -531,6 +532,9 @@ function runAntigravityProcess(input: {
     }
     let stdout = ''
     let stderr = ''
+    let stdoutBytes = 0
+    const stdoutDecoder = new StringDecoder('utf8')
+    const stderrDecoder = new StringDecoder('utf8')
     let settled = false
     let timedOut = false
     const terminate = (): void => {
@@ -556,17 +560,28 @@ function runAntigravityProcess(input: {
     if (input.signal.aborted) terminate()
     else input.signal.addEventListener('abort', onAbort, { once: true })
     child.stdout?.on('data', (chunk: Buffer | string) => {
-      stdout += chunk
-      if (Buffer.byteLength(stdout) > MAX_STDOUT_BYTES) {
+      if (settled) return
+      // Child-process streams may split one UTF-8 character across multiple
+      // data events. Decode incrementally so Chinese and other multibyte text
+      // survives those boundaries intact.
+      stdoutBytes += Buffer.byteLength(chunk)
+      if (stdoutBytes > MAX_STDOUT_BYTES) {
         terminate()
         done(new Error('Antigravity CLI response exceeded the output limit'))
+        return
       }
+      stdout += stdoutDecoder.write(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
     })
     child.stderr?.on('data', (chunk: Buffer | string) => {
-      stderr = `${stderr}${chunk}`.slice(-MAX_STDERR_BYTES)
+      if (settled) return
+      stderr = `${stderr}${stderrDecoder.write(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))}`
+        .slice(-MAX_STDERR_BYTES)
     })
     child.on('error', (error) => done(error))
     child.on('exit', (code) => {
+      if (settled) return
+      stdout += stdoutDecoder.end()
+      stderr = `${stderr}${stderrDecoder.end()}`.slice(-MAX_STDERR_BYTES)
       if (input.signal.aborted) {
         done(new Error('Antigravity CLI turn was aborted'))
       } else if (timedOut) {
