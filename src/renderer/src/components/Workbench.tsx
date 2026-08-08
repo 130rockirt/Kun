@@ -45,6 +45,8 @@ import {
   relativeWorkspacePath,
 } from '../lib/composer-file-references'
 import { useDesignWorkspaceStore } from '../design/design-workspace-store'
+import { useCodeCanvasDesignSurface } from '../design/code-canvas-design-surface'
+import { requestCodeCanvasPanelOpen } from '../lib/code-canvas-panel-event'
 import { designDocumentComposerFileReferences } from '../design/design-document-file-reference'
 import {
   readBrowserStorageItem,
@@ -677,6 +679,15 @@ export function Workbench(): ReactElement {
     openRightPanelTab(BUILTIN_RIGHT_PANEL_IDS.files)
   }, [openDesignFileTreeSidePanel, openRightPanelTab])
 
+  // Sidebar 设计稿 row click: open the draft in the Code whiteboard panel
+  // instead of switching the workbench to Design mode.
+  const openDesignDocumentInWhiteboard = useCallback((documentId: string): void => {
+    const root = normalizeWorkspaceRoot(designWorkspaceRoot || workspaceRoot)
+    if (!activeThreadId || !root) return
+    useCodeCanvasDesignSurface.getState().showDesignDocument(activeThreadId, root, documentId)
+    requestCodeCanvasPanelOpen()
+  }, [activeThreadId, designWorkspaceRoot, workspaceRoot])
+
   const openCodeRightTool = useCallback((id: RightPanelContributionId): void => {
     if (id === BUILTIN_RIGHT_PANEL_IDS.terminal) {
       toggleTerminal()
@@ -1154,7 +1165,8 @@ export function Workbench(): ReactElement {
         selectedTarget: filePreviewTarget,
         onViewChange: setFileTreeSidePanelView,
         onPreviewFile: previewWorkspaceFileFromSidebar,
-        onAddReference: addWorkspaceReferenceFromSidebar
+        onAddReference: addWorkspaceReferenceFromSidebar,
+        onOpenDesignInWhiteboard: openDesignDocumentInWhiteboard
       },
       extensionItems: extensionRightRailItems,
       extensionViews: extensionRightPanelItems,

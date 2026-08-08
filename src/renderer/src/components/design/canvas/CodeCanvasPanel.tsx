@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from 'react'
+import { useCallback, useEffect, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { PanelRightClose, Shapes } from 'lucide-react'
 import { CanvasViewport } from './CanvasViewport'
@@ -16,6 +16,11 @@ import {
   type CanvasAgentExportRequest
 } from '../../../design/canvas/canvas-export'
 import { canvasDocumentKey } from '../../../design/canvas/canvas-persistence'
+import { useCodeCanvasDesignSurface } from '../../../design/code-canvas-design-surface'
+import { useDesignWorkspaceStore } from '../../../design/design-workspace-store'
+import { findDesignBoardArtifact, ensureDesignBoardArtifact } from '../../../design/design-board'
+import { normalizeDesignWorkspaceRoot } from '../../../design/design-workspace-lifecycle'
+import { displayDrawingTitle } from '../../../design/design-drawing-title'
 
 function cx(...parts: Array<string | false | null | undefined>): string {
   return parts.filter(Boolean).join(' ')
@@ -41,11 +46,51 @@ export function codeCanvasPanelTitlebarClass(): string {
 
 /**
  * Hosts the reusable {@link CanvasViewport} as a code-workspace right panel.
- * The canvas is per-thread (`code-<threadId>`), persisted under
- * {@link CODE_CANVAS_DIR}. The main chat agent drives it via ShapeOps (Block C).
+ * By default the canvas is per-thread (`code-<threadId>`), persisted under
+ * {@link CODE_CANVAS_DIR}, and the main chat agent drives it via ShapeOps
+ * (Block C).
+ *
+ * When the user asks to view a 设计稿 (prototype card "open in canvas", sidebar
+ * design tree, or a design thread in the sidebar), the panel instead renders
+ * that document's design board — a whiteboard-style space with the same
+ * zoom/pan/grid tooling — without leaving the chat route.
  */
 export function CodeCanvasPanel({ workspaceRoot, activeThreadId, onCollapse, className }: Props) {
   const { t } = useTranslation('common')
+  const surface = useCodeCanvasDesignSurface((s) => s.surface)
+  const designDocuments = useDesignWorkspaceStore((s) => s.documents)
+  const designArtifacts = useDesignWorkspaceStore((s) => s.artifacts)
+  const designMode = Boolean(
+    surface &&
+    surface.threadId === activeThreadId &&
+    normalizeDesignWorkspaceRoot(surface.workspaceRoot) === normalizeDesignWorkspaceRoot(workspaceRoot) &&
+    designDocuments.some((document) => document.id === surface.documentId)
+  )
+
+  // The design surface is transient: once the panel unmounts (tab close or
+  // collapse) the next manual whiteboard open returns to the thread canvas.
+  useEffect(() => {
+    return () => {
+      useCodeCanvasDesignSurface.getState().clearDesignSurface()
+    }
+  }, [])
+
+  // Activate the requested 设计稿 so the design store projects its artifacts
+  // (the board + linked HTML frames for that document).
+  useEffect(() => {
+    if (!designMode || !surface) return
+    const state = useDesignWorkspaceStore.getState()
+    if (state.activeDocumentId !== surface.documentId) {
+      state.switchActiveDocument(surface.documentId)
+    }
+  }, [designMode, surface])
+
+  // Mirror the Design stage: make sure the board artifact exists.
+  useEffect(() => {
+    if (!designMode || !workspaceRoot) return
+    void ensureDesignBoardArtifact(workspaceRoot)
+  }, [designMode, workspaceRoot])
+
   const ready = Boolean(workspaceRoot && activeThreadId)
   const artifactId = activeThreadId ? codeCanvasArtifactId(activeThreadId) : ''
   const designSystemBaseDir = activeThreadId ? codeCanvasThreadBaseDir(activeThreadId) : undefined
@@ -71,7 +116,7 @@ export function CodeCanvasPanel({ workspaceRoot, activeThreadId, onCollapse, cla
     [artifactId, expectedDocumentKey, workspaceRoot]
   )
   useApplyShapeOpsLive(
-    ready,
+    !designMode && ready,
     undefined,
     executeOptions,
     feedbackKey,
@@ -79,6 +124,62 @@ export function CodeCanvasPanel({ workspaceRoot, activeThreadId, onCollapse, cla
     undefined,
     exportCanvas
   )
+
+  const designDoc = designMode && surface
+    ? designDocuments.find((document) => document.id === surface.documentId) ?? null
+    : null
+  const designBoardArtifact = designMode ? findDesignBoardArtifact(designArtifacts) : null
+  const designDocTitle = designDoc ? displayDrawingTitle(designDoc, t('designUntitledDrawing')) : ''
+
+  if (designMode) {
+    return (
+      <aside className={codeCanvasPanelShellClass(className)}>
+        <div className="pointer-events-none absolute left-3 right-3 top-3 z-50 flex min-w-0 items-start">
+          <div className={codeCanvasPanelTitlebarClass()} data-code-canvas-titlebar="true">
+            <button
+              type="button"
+              onClick={onCollapse}
+              className="ds-sidebar-toggle-button shrink-0"
+              aria-label={t('rightPanelCollapse')}
+              title={t('rightPanelCollapse')}
+            >
+              <PanelRightClose className="h-4 w-4" strokeWidth={1.85} />
+            </button>
+            <div className="flex min-w-0 items-center gap-1.5 pl-1 pr-2">
+              <Shapes className="h-4 w-4 shrink-0 text-accent" strokeWidth={1.8} />
+              <span className="min-w-0 truncate text-[12.5px] font-medium text-ds-ink">
+                {designDocTitle || t('rightPanelWhiteboard')}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <div className="relative min-h-0 flex-1 overflow-hidden">
+          {designDoc && designBoardArtifact ? (
+            <>
+              <CanvasViewport
+                workspaceRoot={workspaceRoot}
+                artifactId={designBoardArtifact.id}
+                baseDir={`.kun-design/${designDoc.id}`}
+                surface="design"
+                syncHtmlScreens
+              />
+              <PropertiesPanel surface="design" />
+            </>
+          ) : (
+            <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
+              <div className="rounded-full bg-ds-surface-subtle p-3 text-ds-faint dark:bg-white/6">
+                <Shapes className="h-6 w-6" strokeWidth={1.65} />
+              </div>
+              <div className="max-w-64 text-[12px] leading-5 text-ds-muted">
+                {t('designCanvasLoading')}
+              </div>
+            </div>
+          )}
+        </div>
+      </aside>
+    )
+  }
 
   return (
     <aside className={codeCanvasPanelShellClass(className)}>

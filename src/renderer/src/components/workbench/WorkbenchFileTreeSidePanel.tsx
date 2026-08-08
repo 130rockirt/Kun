@@ -20,6 +20,7 @@ export type WorkbenchFileTreeSidePanelProps = {
   onViewChange: (view: WorkbenchFileTreeSidePanelView) => void
   onPreviewFile: (path: string) => void
   onAddReference: (reference: ChatFileTreeReference) => void
+  onOpenDesignInWhiteboard?: (documentId: string) => void
 }
 
 export function WorkbenchFileTreeSidePanel({
@@ -34,7 +35,8 @@ export function WorkbenchFileTreeSidePanel({
   selectedTarget,
   onViewChange,
   onPreviewFile,
-  onAddReference
+  onAddReference,
+  onOpenDesignInWhiteboard
 }: WorkbenchFileTreeSidePanelProps): ReactElement | null {
   const { t } = useTranslation()
   if (!open) return null
@@ -86,6 +88,7 @@ export function WorkbenchFileTreeSidePanel({
                   documents={designDocuments}
                   activeDocumentId={activeDesignDocumentId}
                   onAddReference={onAddReference}
+                  onOpenInWhiteboard={onOpenDesignInWhiteboard}
                   t={t}
                   fill
                 />

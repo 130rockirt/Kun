@@ -25,6 +25,8 @@ type Props = {
   documents: readonly DesignDocument[]
   activeDocumentId?: string | null
   onAddReference: (reference: ChatFileTreeReference) => void
+  /** Optional: open the 设计稿 in the Code whiteboard panel when its row is clicked. */
+  onOpenInWhiteboard?: (documentId: string) => void
   t: TFunction
   fill?: boolean
 }
@@ -61,6 +63,7 @@ export function ChatDesignTreePanel({
   documents,
   activeDocumentId,
   onAddReference,
+  onOpenInWhiteboard,
   t,
   fill = false
 }: Props): ReactElement {
@@ -144,7 +147,10 @@ export function ChatDesignTreePanel({
         key={doc.id}
         active={active}
         title={drawingTitle}
-        onClick={() => toggleDocument(doc.id)}
+        onClick={() => {
+          toggleDocument(doc.id)
+          onOpenInWhiteboard?.(doc.id)
+        }}
         buttonClassName="items-center gap-1.5 px-2.5 py-2 text-[12.5px]"
         trailing={
           isExpanded ? (

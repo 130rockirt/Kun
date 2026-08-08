@@ -4,6 +4,8 @@ import type { NormalizedThread, RuntimeConnectionStatus } from '../../agent/type
 import { useChatStore } from '../../store/chat-store'
 import type { ChatState } from '../../store/chat-store-types'
 import { useDesignWorkspaceStore } from '../../design/design-workspace-store'
+import { useCodeCanvasDesignSurface } from '../../design/code-canvas-design-surface'
+import { requestCodeCanvasPanelOpen } from '../../lib/code-canvas-panel-event'
 import { useWriteWorkspaceStore } from '../../write/write-workspace-store'
 import type { SddDraft } from '../../sdd/sdd-draft-store'
 import { useSddDraftStore } from '../../sdd/sdd-draft-store'
@@ -148,7 +150,19 @@ export function useWorkbenchNavigationController({
       const designRegistry = readDesignThreadRegistry()
       if (isWorkbenchDesignThread(id, thread, designRegistry)) {
         const designRef = designDocRefForThreadId(id, designRegistry)
-        openDesign()
+        // Clicking a 设计稿 thread opens it in the Code whiteboard panel
+        // instead of switching to Design mode. Orphan threads without a
+        // registered drawing keep the previous Design-mode fallback.
+        if (designRef) {
+          useCodeCanvasDesignSurface.getState().showDesignDocument(
+            id,
+            designRef.workspaceRoot,
+            designRef.docId
+          )
+          requestCodeCanvasPanelOpen()
+        } else {
+          openDesign()
+        }
         // A durable Design thread can outlive a renderer-local registry. In that
         // orphan case we still route to Design, but do not attach it to an
         // unrelated drawing. Registered threads can safely restore their owner.
