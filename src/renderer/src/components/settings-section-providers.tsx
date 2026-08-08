@@ -143,6 +143,13 @@ type SharedModelConnectionsSnapshot = {
   localModelGateway?: { enabled: boolean }
 }
 
+export function shouldUseSharedModelConnectionProbe(
+  provider: Pick<ModelProviderProfileV1, 'apiKey'>,
+  connection: Pick<SharedModelConnection, 'configured' | 'credentialStatus'> | undefined
+): boolean {
+  return !provider.apiKey.trim() && sharedModelConnectionHasUsableCredential(connection)
+}
+
 type ProjectedKunSelectionPatch = {
   providerId: string
   model?: string
@@ -4166,11 +4173,7 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
       return
     }
     const sharedConnection = sharedConnectionFor(target.id)
-    if (
-      modelProviderRequiresApiKey(target) &&
-      !target.apiKey.trim() &&
-      sharedModelConnectionHasUsableCredential(sharedConnection)
-    ) {
+    if (shouldUseSharedModelConnectionProbe(target, sharedConnection)) {
       setProbeStates((previous) => ({
         ...previous,
         [target.id]: { fingerprint, mode, status: 'busy' }

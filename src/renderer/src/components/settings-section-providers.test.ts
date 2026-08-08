@@ -34,7 +34,8 @@ import {
   selectSharedModelConnection,
   sharedModelConnectionHasUsableCredential,
   sharedProvidersEligibleForSync,
-  sharedProviderSetupNeedsApiKey
+  sharedProviderSetupNeedsApiKey,
+  shouldUseSharedModelConnectionProbe
 } from './settings-section-providers'
 import {
   drainSharedProviderCredentialMutation,
@@ -138,6 +139,28 @@ describe('shared model connection API-key setup status', () => {
         configured: true,
         models: ['deepseek-chat']
       }]
+    })).toBe(false)
+  })
+
+  it('uses the stored shared credential to probe a custom provider without a preset', () => {
+    const customProvider = {
+      ...defaultModelProviderSettings().providers[0]!,
+      id: 'custom-provider-without-preset',
+      presetSource: undefined,
+      apiKey: ''
+    }
+
+    expect(shouldUseSharedModelConnectionProbe(customProvider, {
+      configured: true,
+      credentialStatus: 'ready'
+    })).toBe(true)
+    expect(shouldUseSharedModelConnectionProbe(
+      { ...customProvider, apiKey: 'form-api-key' },
+      { configured: true, credentialStatus: 'ready' }
+    )).toBe(false)
+    expect(shouldUseSharedModelConnectionProbe(customProvider, {
+      configured: true,
+      credentialStatus: 'missing'
     })).toBe(false)
   })
 
