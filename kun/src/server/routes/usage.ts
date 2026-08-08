@@ -295,7 +295,14 @@ function diffUsage(current: UsageSnapshot, previous: UsageSnapshot): UsageSnapsh
           )
         }
       : {}),
-    ...(current.hasError ? { hasError: true } : {})
+    ...(current.hasError ? { hasError: true } : {}),
+    // Timing aggregates are cumulative snapshot values, not per-record
+    // counters: carry the latest snapshot's averages so thread usage
+    // keeps TTFT/TPS after the differential fold.
+    ...(current.avgTtftMs !== undefined ? { avgTtftMs: current.avgTtftMs } : {}),
+    ...(current.avgTokensPerSecond !== undefined
+      ? { avgTokensPerSecond: current.avgTokensPerSecond }
+      : {})
   }
 }
 
