@@ -664,9 +664,39 @@ export const LabExploreAgentConfigSchema = z
   })
 export type LabExploreAgentConfig = z.infer<typeof LabExploreAgentConfigSchema>
 
+/**
+ * Lab `ppt_agent` tool: same shape as exploreAgent (enabled + optional child
+ * model route + fast). The PPT child also inherits the main session unless
+ * model and providerId are configured as a pair.
+ */
+export const LabPptAgentConfigSchema = z
+  .object({
+    enabled: z.boolean().default(true),
+    model: z.string().min(1).optional(),
+    providerId: z.string().min(1).optional(),
+    reasoningEffort: ModelReasoningEffort.optional(),
+    fast: z.boolean().default(false)
+  })
+  .strict()
+  .superRefine((config, ctx) => {
+    const hasModel = Boolean(config.model?.trim())
+    const hasProvider = Boolean(config.providerId?.trim())
+    if (hasModel === hasProvider) return
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: hasModel ? ['providerId'] : ['model'],
+      message: 'pptAgent model and providerId must be configured together'
+    })
+  })
+export type LabPptAgentConfig = z.infer<typeof LabPptAgentConfigSchema>
+
 export const LabConfigSchema = z
   .object({
     exploreAgent: LabExploreAgentConfigSchema.default({
+      enabled: true,
+      fast: false
+    }),
+    pptAgent: LabPptAgentConfigSchema.default({
       enabled: true,
       fast: false
     })

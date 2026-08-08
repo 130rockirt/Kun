@@ -589,6 +589,9 @@ async function prepareKunLaunch(
     appRoot: root,
     explicitPath: process.env.KUN_OFFICECLI_BINARY
   })
+  const pptToolchainDirectory = app.isPackaged
+    ? join(process.resourcesPath, 'ppt-toolchain')
+    : resolve(root, 'resources', 'ppt-toolchain')
   const browserUseBridge = runtime.browserUse.enabled
     ? await prepareBrowserUseHostForKunLaunch()
     : undefined
@@ -598,6 +601,7 @@ async function prepareKunLaunch(
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     DEEPSEEK_API_KEY: defaultClientApiKey || process.env.DEEPSEEK_API_KEY || '',
+    KUN_PPT_TOOLCHAIN_DIR: pptToolchainDirectory,
     ...(activeProviderKind ? { KUN_RUNTIME_PROVIDER_KIND: activeProviderKind } : {}),
     ...(claudeBinary ? { KUN_CLAUDE_BINARY: claudeBinary } : {}),
     ...(antigravityBinary ? { KUN_ANTIGRAVITY_BINARY: antigravityBinary } : {}),

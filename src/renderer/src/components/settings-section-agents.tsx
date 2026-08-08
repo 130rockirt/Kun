@@ -52,6 +52,7 @@ import {
   ShieldCheck,
   Sparkles,
   Trash2,
+  Presentation,
   Workflow,
   Wrench
 } from 'lucide-react'
@@ -88,6 +89,7 @@ import {
 } from './settings-section-agent-panels'
 import { GraphModeSettingsPanel } from './settings-section-graph-panel'
 import { ExploreAgentSettingsPanel } from './settings-section-lab-explore'
+import { PptAgentSettingsPanel } from './settings-section-lab-ppt'
 import { runTrustedUserActivation } from '../extensions/protected-user-activation'
 
 export { modelProvidersSettingsPatch } from './settings-section-providers'
@@ -100,7 +102,7 @@ type AgentsSettingsPanel =
   | 'project'
   | 'runtime'
 type PermissionsSettingsPanel = 'policy' | 'quality'
-type LaboratorySettingsPanel = 'computer' | 'browser' | 'graph' | 'explore'
+type LaboratorySettingsPanel = 'computer' | 'browser' | 'graph' | 'explore' | 'ppt'
 
 function panelForSettingsSection(section: unknown): AgentsSettingsPanel {
   if (section === 'permissions') return 'permissions'
@@ -2056,7 +2058,8 @@ export function LaboratorySettingsSection({ ctx }: { ctx: Record<string, any> })
           { id: 'computer', label: t('computerUseTitle'), icon: Monitor },
           { id: 'browser', label: t('browserUseSettingsTitle'), icon: Globe2 },
           { id: 'graph', label: t('graphSettingsTitle'), icon: Workflow },
-          { id: 'explore', label: t('labExploreTitle'), icon: Search }
+          { id: 'explore', label: t('labExploreTitle'), icon: Search },
+          { id: 'ppt', label: t('labPptTitle'), icon: Presentation }
         ]}
         value={activePanel}
         onChange={setActivePanel}
@@ -2115,6 +2118,23 @@ export function LaboratorySettingsSection({ ctx }: { ctx: Record<string, any> })
         className="[&>div]:mt-0"
       >
         <ExploreAgentSettingsPanel
+          t={t}
+          value={lab}
+          modelProviders={modelProviders}
+          leadProviderId={activeProviderId}
+          leadModel={kun.model}
+          selectControlClass={selectControlClass}
+          onChange={(patch) => updateKun({ lab: patch })}
+        />
+      </SettingsTabPanel>
+
+      <SettingsTabPanel<LaboratorySettingsPanel>
+        baseId="laboratory-settings"
+        tabId="ppt"
+        active={activePanel === 'ppt'}
+        className="[&>div]:mt-0"
+      >
+        <PptAgentSettingsPanel
           t={t}
           value={lab}
           modelProviders={modelProviders}

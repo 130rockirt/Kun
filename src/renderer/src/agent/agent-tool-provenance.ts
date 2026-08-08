@@ -147,7 +147,7 @@ function inferLegacyProvenance(toolName: string): ToolProvenance {
   if (LEGACY_KUN_CORE_TOOLS.has(toolName)) {
     return { source: 'kun', category: 'kun-core', inferred: true }
   }
-  if (LEGACY_KUN_GUI_TOOLS.has(toolName) || toolName.startsWith('design_')) {
+  if (LEGACY_KUN_GUI_TOOLS.has(toolName) || toolName.startsWith('design_') || toolName === 'ppt_to_board') {
     return { source: 'kun', category: 'kun-gui', inferred: true }
   }
   if (LEGACY_KUN_RUNTIME_TOOLS.has(toolName)) {

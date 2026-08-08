@@ -65,6 +65,7 @@ import {
 import { buildGoalLocalTools } from '../adapters/tool/goal-tools.js'
 import { buildTodoLocalTools } from '../adapters/tool/todo-tools.js'
 import { buildDesignCanvasLocalTools } from '../adapters/tool/design-canvas-tool.js'
+import { buildPptBoardLocalTools } from '../adapters/tool/ppt-board-tool.js'
 import { buildDesignMotionLocalTools } from '../adapters/tool/design-motion-tool.js'
 import { buildDesignSvgLocalTools } from '../adapters/tool/design-svg-tool.js'
 import { buildPptMasterLocalTools } from '../adapters/tool/ppt-master-tool.js'
@@ -138,6 +139,7 @@ import { buildApprovalReviewModelRouterInput } from '../services/approval-review
 import { buildBuiltinHooks } from '../hooks/builtins/index.js'
 import { mergeBuiltinSubagentProfiles } from '../delegation/builtin-profiles.js'
 import { buildExploreAgentToolProvider } from '../adapters/tool/explore-agent-tool-provider.js'
+import { buildPptAgentToolProvider } from '../adapters/tool/ppt-agent-tool-provider.js'
 import { InflightTracker } from '../loop/inflight-tracker.js'
 import { ToolCancellationRegistry } from '../loop/tool-cancellation-registry.js'
 import { SteeringQueue } from '../loop/steering-queue.js'
@@ -1229,7 +1231,10 @@ async function createKunServeRuntimeComposition(
     tools: [
       ...buildDesignCanvasLocalTools(),
       ...buildDesignMotionLocalTools(),
-      ...buildDesignSvgLocalTools()
+      ...buildDesignSvgLocalTools(),
+      // PPTD → whiteboard conversion; same guiDesignCanvas gating as the
+      // design tools, and also available on Design whiteboard turns.
+      ...buildPptBoardLocalTools()
     ]
   }
   const pptMasterProvider = {
@@ -1569,6 +1574,10 @@ async function createKunServeRuntimeComposition(
     ...buildExploreAgentToolProvider(
       delegationRuntime,
       () => activeOptions.lab?.exploreAgent
+    ),
+    ...buildPptAgentToolProvider(
+      delegationRuntime,
+      () => activeOptions.lab?.pptAgent
     ),
     ...buildComponentDesignToolProviders(delegationRuntime)
   ])
@@ -2490,6 +2499,10 @@ async function createKunServeRuntimeComposition(
 	      ...buildExploreAgentToolProvider(
 	        delegationRuntime,
 	        () => activeOptions.lab?.exploreAgent
+	      ),
+	      ...buildPptAgentToolProvider(
+	        delegationRuntime,
+	        () => activeOptions.lab?.pptAgent
 	      ),
 	      ...buildComponentDesignToolProviders(delegationRuntime)
 	    ])

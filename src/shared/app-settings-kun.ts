@@ -739,6 +739,12 @@ export function defaultKunLabSettings(): KunLabSettingsV1 {
       model: '',
       providerId: '',
       fast: false
+    },
+    pptAgent: {
+      enabled: true,
+      model: '',
+      providerId: '',
+      fast: false
     }
   }
 }
@@ -755,26 +761,38 @@ export function mergeKunLabSettings(
 ): KunLabSettingsV1 {
   const base = current ?? defaultKunLabSettings()
   if (!patch) return base
-  const baseAgent = base.exploreAgent
-  const rawModel = stringOrFallback(patch.exploreAgent?.model, baseAgent.model).trim()
-  const rawProviderId = stringOrFallback(patch.exploreAgent?.providerId, baseAgent.providerId).trim()
+  return {
+    exploreAgent: mergeLabAgentSettings(base.exploreAgent, patch.exploreAgent),
+    pptAgent: mergeLabAgentSettings(base.pptAgent, patch.pptAgent)
+  }
+}
+
+/** Shared merge for Lab agent feature blocks (exploreAgent / pptAgent). */
+function mergeLabAgentSettings<
+  T extends { enabled: boolean; model: string; providerId: string; reasoningEffort?: ModelReasoningEffort; fast: boolean }
+>(
+  base: T,
+  patch: Partial<T> | undefined
+): T {
+  if (!patch) return base
+  const rawModel = stringOrFallback(patch.model, base.model).trim()
+  const rawProviderId = stringOrFallback(patch.providerId, base.providerId).trim()
   const paired = rawModel !== '' && rawProviderId !== ''
   return {
-    exploreAgent: {
-      enabled: patch.exploreAgent?.enabled ?? baseAgent.enabled,
-      model: paired ? rawModel : '',
-      providerId: paired ? rawProviderId : '',
-      ...(patch.exploreAgent?.reasoningEffort !== undefined
-        ? isModelReasoningEffortValue(patch.exploreAgent.reasoningEffort)
-          ? { reasoningEffort: patch.exploreAgent.reasoningEffort }
-          : baseAgent.reasoningEffort !== undefined
-            ? { reasoningEffort: baseAgent.reasoningEffort }
-            : {}
-        : baseAgent.reasoningEffort !== undefined
-          ? { reasoningEffort: baseAgent.reasoningEffort }
-          : {}),
-      fast: patch.exploreAgent?.fast ?? baseAgent.fast
-    }
+    ...base,
+    enabled: patch.enabled ?? base.enabled,
+    model: paired ? rawModel : '',
+    providerId: paired ? rawProviderId : '',
+    ...(patch.reasoningEffort !== undefined
+      ? isModelReasoningEffortValue(patch.reasoningEffort)
+        ? { reasoningEffort: patch.reasoningEffort }
+        : base.reasoningEffort !== undefined
+          ? { reasoningEffort: base.reasoningEffort }
+          : {}
+      : base.reasoningEffort !== undefined
+        ? { reasoningEffort: base.reasoningEffort }
+        : {}),
+    fast: patch.fast ?? base.fast
   }
 }
 

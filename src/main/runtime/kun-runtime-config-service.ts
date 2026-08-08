@@ -235,25 +235,32 @@ export async function syncGuiManagedKunConfig(
 }
 
 function labConfigForRuntime(lab: KunLabSettingsV1 | undefined): KunConfig['lab'] {
-  const agent = lab?.exploreAgent
-  if (!agent) return { exploreAgent: { enabled: true, fast: false } }
+  return {
+    exploreAgent: labAgentConfigForRuntime(lab?.exploreAgent),
+    pptAgent: labAgentConfigForRuntime(lab?.pptAgent)
+  }
+}
+
+/** Shared Lab agent runtime config (exploreAgent / pptAgent). */
+function labAgentConfigForRuntime(
+  agent: { enabled: boolean; model: string; providerId: string; reasoningEffort?: string; fast: boolean } | undefined
+): { enabled: boolean; fast: boolean; model?: string; providerId?: string; reasoningEffort?: string } {
+  if (!agent) return { enabled: true, fast: false }
   const model = agent.model?.trim()
   const providerId = agent.providerId?.trim()
   return {
-    exploreAgent: {
-      enabled: agent.enabled !== false,
-      ...(model && providerId
-        ? {
-            model,
-            providerId,
-            ...(typeof agent.reasoningEffort === 'string' &&
-            MODEL_REASONING_EFFORTS.includes(agent.reasoningEffort)
-              ? { reasoningEffort: agent.reasoningEffort }
-              : {})
-          }
-        : {}),
-      fast: agent.fast === true
-    }
+    enabled: agent.enabled !== false,
+    ...(model && providerId
+      ? {
+          model,
+          providerId,
+          ...(typeof agent.reasoningEffort === 'string' &&
+          MODEL_REASONING_EFFORTS.includes(agent.reasoningEffort)
+            ? { reasoningEffort: agent.reasoningEffort }
+            : {})
+        }
+      : {}),
+    fast: agent.fast === true
   }
 }
 

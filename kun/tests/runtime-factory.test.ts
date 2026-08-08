@@ -172,7 +172,7 @@ describe('runtime factory usage carryover', () => {
       tokenEconomyMode: false,
       insecure: false,
       storage: { backend: 'file' },
-      lab: { exploreAgent: { enabled: true, fast: false } },
+      lab: { exploreAgent: { enabled: true, fast: false }, pptAgent: { enabled: true, fast: false } },
       capabilities: KunCapabilitiesConfig.parse({
         subagents: { enabled: true }
       })
@@ -210,14 +210,81 @@ describe('runtime factory usage carryover', () => {
       expect(await listExplore()).toBe(true)
 
       expect(await runtime.applyConfig({
-        lab: { exploreAgent: { enabled: false, fast: false } }
+        lab: { exploreAgent: { enabled: false, fast: false }, pptAgent: { enabled: true, fast: false } }
       })).toEqual({ ok: true })
       expect(await listExplore()).toBe(false)
 
       expect(await runtime.applyConfig({
-        lab: { exploreAgent: { enabled: true, fast: false } }
+        lab: { exploreAgent: { enabled: true, fast: false }, pptAgent: { enabled: true, fast: false } }
       })).toEqual({ ok: true })
       expect(await listExplore()).toBe(true)
+    } finally {
+      await runtime.shutdown?.()
+    }
+  })
+
+  it('keeps ppt_agent advertised across Lab hot-apply toggles', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'kun-runtime-ppt-lab-'))
+    tempDirs.push(dataDir)
+    const runtime = await createKunServeRuntime({
+      host: '127.0.0.1',
+      port: 0,
+      dataDir,
+      runtimeToken: 'tok',
+      apiKey: 'sk-default',
+      baseUrl: 'https://api.example.test/v1',
+      model: 'model-before',
+      approvalPolicy: 'auto',
+      sandboxMode: 'danger-full-access',
+      tokenEconomyMode: false,
+      insecure: false,
+      storage: { backend: 'file' },
+      lab: { exploreAgent: { enabled: true, fast: false }, pptAgent: { enabled: true, fast: false } },
+      capabilities: KunCapabilitiesConfig.parse({
+        subagents: { enabled: true }
+      })
+    })
+
+    const listPpt = async () => {
+      const toolHost = runtime.toolHost
+      expect(toolHost).toBeDefined()
+      if (!toolHost) throw new Error('Expected the Kun runtime tool host to be available')
+      const tools = await toolHost.listTools({
+        threadId: 'thr_ppt',
+        turnId: 'turn_ppt',
+        workspace: dataDir,
+        threadMode: 'agent',
+        clientSurface: 'gui',
+        approvalPolicy: 'auto',
+        abortSignal: new AbortController().signal,
+        awaitApproval: async () => 'allow'
+      })
+      return tools.some((tool) => tool.name === 'ppt_agent')
+    }
+
+    try {
+      const diagnostics = await runtime.toolDiagnostics?.()
+      expect(diagnostics?.providers.some((provider) => provider.id === 'ppt-agent')).toBe(true)
+      expect(await listPpt()).toBe(true)
+
+      // Any hot-apply previously dropped ppt_agent from the rebuilt registry.
+      expect(await runtime.applyConfig({
+        capabilities: KunCapabilitiesConfig.parse({
+          subagents: { enabled: true },
+          web: { enabled: true, fetchEnabled: true }
+        })
+      })).toEqual({ ok: true })
+      expect(await listPpt()).toBe(true)
+
+      expect(await runtime.applyConfig({
+        lab: { exploreAgent: { enabled: true, fast: false }, pptAgent: { enabled: false, fast: false } }
+      })).toEqual({ ok: true })
+      expect(await listPpt()).toBe(false)
+
+      expect(await runtime.applyConfig({
+        lab: { exploreAgent: { enabled: true, fast: false }, pptAgent: { enabled: true, fast: false } }
+      })).toEqual({ ok: true })
+      expect(await listPpt()).toBe(true)
     } finally {
       await runtime.shutdown?.()
     }

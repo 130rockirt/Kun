@@ -2218,6 +2218,72 @@ describe('lab settings', () => {
     })
   })
 
+  it('mirrors exploreAgent for lab.pptAgent defaults and merging', () => {
+    const lab = defaultKunRuntimeSettings().lab
+    expect(lab.pptAgent).toEqual({
+      enabled: true,
+      model: '',
+      providerId: '',
+      fast: false
+    })
+
+    const next = mergeKunRuntimeSettings(defaultKunRuntimeSettings(), {
+      lab: {
+        pptAgent: {
+          enabled: false
+        }
+      }
+    })
+    expect(next.lab.pptAgent).toEqual({
+      enabled: false,
+      model: '',
+      providerId: '',
+      fast: false
+    })
+
+    const configured = mergeKunRuntimeSettings(defaultKunRuntimeSettings(), {
+      lab: {
+        pptAgent: {
+          model: 'gpt-5.4',
+          providerId: 'codex-2',
+          reasoningEffort: 'high',
+          fast: true
+        }
+      }
+    })
+    expect(configured.lab.pptAgent).toEqual({
+      enabled: true,
+      model: 'gpt-5.4',
+      providerId: 'codex-2',
+      reasoningEffort: 'high',
+      fast: true
+    })
+
+    // Half-configured model override falls back to follow-main.
+    const half = mergeKunRuntimeSettings(defaultKunRuntimeSettings(), {
+      lab: {
+        pptAgent: {
+          model: 'gpt-5.4',
+          providerId: ''
+        }
+      }
+    })
+    expect(half.lab.pptAgent.model).toBe('')
+    expect(half.lab.pptAgent.providerId).toBe('')
+
+    // Invalid reasoning effort is ignored.
+    const bad = mergeKunRuntimeSettings(defaultKunRuntimeSettings(), {
+      lab: {
+        pptAgent: {
+          model: 'gpt-5.4',
+          providerId: 'codex-2',
+          reasoningEffort: 'bogus' as never
+        }
+      }
+    })
+    expect(bad.lab.pptAgent.reasoningEffort).toBeUndefined()
+  })
+
   it('merges nested lab patches field by field', () => {
     const current = defaultKunRuntimeSettings()
     const next = mergeKunRuntimeSettings(current, {

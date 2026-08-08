@@ -467,14 +467,30 @@ export type KunLabExploreAgentSettingsV1 = {
   fast: boolean
 }
 
+/** Experimental Lab feature settings for the first-class `ppt_agent` tool. */
+export type KunLabPptAgentSettingsV1 = {
+  /** Master switch for the ppt_agent tool. Default true. */
+  enabled: boolean
+  /** Optional child model override. Empty = follow the main session model. */
+  model: string
+  /** Provider id paired with model. Empty = follow the main session provider. */
+  providerId: string
+  /** Optional reasoning depth for ppt_agent child requests. Empty = follow the main session. */
+  reasoningEffort?: ModelReasoningEffort
+  /** Codex fast mode (serviceTier = priority). Only effective for Codex models that advertise priority. */
+  fast: boolean
+}
+
 /** Experimental Lab feature settings written into Kun config `lab`. */
 export type KunLabSettingsV1 = {
   exploreAgent: KunLabExploreAgentSettingsV1
+  pptAgent: KunLabPptAgentSettingsV1
 }
 
 /** Partial settings patch for the Lab section. Nested fields merge with current values. */
 export type KunLabSettingsPatchV1 = {
   exploreAgent?: Partial<KunLabExploreAgentSettingsV1>
+  pptAgent?: Partial<KunLabPptAgentSettingsV1>
 }
 
 export const KUN_GRAPH_ROLLOUT_STAGES = [

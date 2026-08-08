@@ -213,6 +213,11 @@ module.exports = {
       filter: ['officecli', 'officecli.exe', 'selected.json']
     },
     {
+      from: 'resources/ppt-toolchain',
+      to: 'ppt-toolchain',
+      filter: ['**/*']
+    },
+    {
       from: 'resources/officecli/manifest.json',
       to: 'officecli/manifest.json'
     },

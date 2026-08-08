@@ -12,5 +12,12 @@ export const kunLabPatchSchema = z.object({
     providerId: z.string().trim().max(128).optional(),
     reasoningEffort: z.enum(['auto', 'off', 'low', 'medium', 'high', 'max']).optional(),
     fast: z.boolean().optional()
+  }).strict().optional(),
+  pptAgent: z.object({
+    enabled: z.boolean().optional(),
+    model: z.string().trim().max(256).optional(),
+    providerId: z.string().trim().max(128).optional(),
+    reasoningEffort: z.enum(['auto', 'off', 'low', 'medium', 'high', 'max']).optional(),
+    fast: z.boolean().optional()
   }).strict().optional()
 }).strict()

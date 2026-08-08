@@ -13,7 +13,9 @@ export const DESIGN_CANVAS_TOOL_NAMES = new Set([
   'design_motion_set_timeline',
   'design_motion_upsert_keyframes',
   'design_motion_apply_preset',
-  'design_motion_delete'
+  'design_motion_delete',
+  // PPTD → whiteboard layout replayed by the main agent (verdict B).
+  'ppt_to_board'
 ])
 
 export function isDesignCanvasToolName(name: unknown): boolean {

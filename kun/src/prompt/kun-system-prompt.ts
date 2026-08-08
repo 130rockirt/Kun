@@ -84,6 +84,7 @@ export function buildToolPreferenceInstruction(
   const inputTools = presentNames(names, USER_INPUT_TOOL_NAMES)
   const memoryTools = presentNames(names, MEMORY_TOOL_NAMES)
   const exploreAgentAvailable = names.has('explore_agent')
+  const pptAgentAvailable = names.has('ppt_agent')
   const bullets: string[] = []
 
   if (inspectionTools.length > 0 && !exploreAgentAvailable) {
@@ -197,6 +198,23 @@ export function buildToolPreferenceInstruction(
         'Reserve `delegate_task` for broader child work that needs full tool access; use `explore_agent` for repository investigation.'
       )
     }
+  }
+
+  if (pptAgentAvailable) {
+    bullets.push(
+      'Use `ppt_agent` for any presentation/PPT task: create, edit, replicate, or read a deck. Give it a clear deck goal (topic, content, page count, style, whether to generate images, whether to show on the whiteboard) in a single call; it runs a dedicated PPT child whose workflow distills open-kimi-ppt-skill and returns a PPTD project plus a locally exported .pptx.'
+    )
+    if (names.has('delegate_task')) {
+      bullets.push(
+        'Reserve `delegate_task` for general child work; use `ppt_agent` for presentation tasks and verify the delivered deck (files + exported .pptx) in the parent turn.'
+      )
+    }
+  }
+
+  if (names.has('ppt_to_board')) {
+    bullets.push(
+      'In whiteboard / Design contexts, use `ppt_to_board` to lay a PPTD deck out on the canvas when the user asked to show a presentation: after a `ppt_agent` run, replay its boardSpec with `ppt_to_board` (start at batch 0 and keep calling with batch+1 while `more` is true).'
+    )
   }
 
   if (names.has('graph_define_plan')) {
