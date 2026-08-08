@@ -21,6 +21,10 @@ import {
 } from './SidebarProjectsSection'
 import { useChatStore } from '../../store/chat-store'
 import {
+  prioritizeSidebarThreadActivity,
+  sidebarThreadActivity
+} from './sidebar-project-selectors'
+import {
   SIDEBAR_THREAD_DRAG_DATA_KEY,
   readSidebarOrderRegistry,
   reconcileSidebarThreadOrder,
@@ -66,6 +70,7 @@ export function SidebarConversationsSection({
 }: Props): ReactElement {
   const { i18n } = useTranslation('common')
   const locale = i18n.language
+  const busy = useChatStore((s) => s.busy)
   const watchTurnCompletion = useChatStore((s) => s.watchTurnCompletion)
   const unreadThreadIds = useChatStore((s) => s.unreadThreadIds)
 
@@ -81,6 +86,13 @@ export function SidebarConversationsSection({
   const conversationOrderScopePath = conversationRoot.trim() || defaultConversationWorkspaceRoot()
   const conversationOrderScope = sidebarThreadOrderScope(conversationOrderScopePath)
 
+  const sidebarThreadActivityContext = useMemo(() => ({
+    activeThreadId,
+    busy,
+    watchTurnCompletion,
+    unreadThreadIds
+  }), [activeThreadId, busy, unreadThreadIds, watchTurnCompletion])
+
   const allConversationThreads = useMemo(() => sortSidebarThreads(threads.filter((thread) =>
     isConversationWorkspacePath(thread.workspace, conversationRoot) && thread.archived !== true
   )), [conversationRoot, threads])
@@ -91,7 +103,8 @@ export function SidebarConversationsSection({
       allConversationThreads,
       sidebarOrder.threadIdsByScope[conversationOrderScope] ?? []
     )
-    return ordered.filter((thread) => {
+    const prioritized = prioritizeSidebarThreadActivity(ordered, sidebarThreadActivityContext)
+    return prioritized.filter((thread) => {
       if (!query) return true
       const haystack = [thread.title, thread.preview, thread.workspace]
         .filter(Boolean)
@@ -99,7 +112,13 @@ export function SidebarConversationsSection({
         .toLowerCase()
       return haystack.includes(query)
     })
-  }, [allConversationThreads, conversationOrderScope, search, sidebarOrder.threadIdsByScope])
+  }, [
+    allConversationThreads,
+    conversationOrderScope,
+    search,
+    sidebarOrder.threadIdsByScope,
+    sidebarThreadActivityContext
+  ])
 
   const handlePin = (threadId: string, pinned: boolean): void => {
     void onPinThread(threadId, pinned)
@@ -291,8 +310,8 @@ export function SidebarConversationsSection({
               active={activeThreadId === thread.id}
               deleting={deletingThreadIds[thread.id] === true}
               locale={locale}
-              showRunning={watchTurnCompletion[thread.id] === true}
-              showUnread={unreadThreadIds[thread.id] === true}
+              showRunning={sidebarThreadActivity(thread, sidebarThreadActivityContext) === 'running'}
+              showUnread={sidebarThreadActivity(thread, sidebarThreadActivityContext) === 'unread'}
               onSelect={() => onSelectThread(thread.id)}
               onContextMenu={noOp}
               onPreviewOpen={noOp}

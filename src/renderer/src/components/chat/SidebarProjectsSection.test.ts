@@ -14,8 +14,10 @@ import {
   isSidebarThreadMoveBlocked,
   mergeSidebarWorkspaceGroupsWithDraftHistory,
   MoveThreadDialog,
+  prioritizeSidebarThreadActivity,
   resolveThreadPreviewPosition,
   sddDraftHistorySavedRevision,
+  sidebarThreadActivity,
   sidebarOverlayPortalHost,
   SidebarProjectsSection,
   sortSidebarThreads,
@@ -488,6 +490,63 @@ describe('SidebarProjectsSection groups', () => {
       filterEmptySddAssistantThreadsFromSidebar([hidden, visibleNormal, visibleWithTurn], items)
         .map((item) => item.id)
     ).toEqual(['thread-normal', 'thread-sdd-active-build'])
+  })
+
+  it('prioritizes unread threads, then running threads, while preserving each bucket order', () => {
+    const base = [
+      thread({ id: 'read-newer', workspace: '/tmp/app' }),
+      thread({ id: 'running-status', workspace: '/tmp/app', status: 'running' }),
+      thread({ id: 'unread-first', workspace: '/tmp/app' }),
+      thread({ id: 'running-watched', workspace: '/tmp/app' }),
+      thread({ id: 'unread-second', workspace: '/tmp/app' }),
+      thread({ id: 'read-older', workspace: '/tmp/app' })
+    ]
+    const context = {
+      activeThreadId: null,
+      busy: false,
+      watchTurnCompletion: { 'running-watched': true },
+      unreadThreadIds: { 'unread-first': true, 'unread-second': true }
+    }
+
+    expect(prioritizeSidebarThreadActivity(base, context).map((item) => item.id)).toEqual([
+      'unread-first',
+      'unread-second',
+      'running-status',
+      'running-watched',
+      'read-newer',
+      'read-older'
+    ])
+  })
+
+  it('gives running precedence over unread and treats the active thread as read when settled', () => {
+    const running = thread({ id: 'running', workspace: '/tmp/app', status: 'running' })
+    const active = thread({ id: 'active', workspace: '/tmp/app' })
+    const context = {
+      activeThreadId: 'active',
+      busy: false,
+      watchTurnCompletion: {},
+      unreadThreadIds: { running: true, active: true }
+    }
+
+    expect(sidebarThreadActivity(running, context)).toBe('running')
+    expect(sidebarThreadActivity(active, context)).toBe('read')
+  })
+
+  it('recognizes an active busy thread as running and returns a viewed thread below running work', () => {
+    const running = thread({ id: 'running', workspace: '/tmp/app' })
+    const viewed = thread({ id: 'viewed', workspace: '/tmp/app' })
+    const context = {
+      activeThreadId: 'running',
+      busy: true,
+      watchTurnCompletion: {},
+      unreadThreadIds: { viewed: true }
+    }
+
+    expect(sidebarThreadActivity(running, context)).toBe('running')
+    expect(prioritizeSidebarThreadActivity([viewed, running], {
+      ...context,
+      unreadThreadIds: {}
+    }).map((item) => item.id)).toEqual(['running', 'viewed'])
   })
 
   it('sorts pinned threads before newer unpinned threads', () => {

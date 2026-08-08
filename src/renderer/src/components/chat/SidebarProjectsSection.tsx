@@ -66,6 +66,8 @@ import {
   filterSddDraftHistoryItems,
   isSidebarProjectWorkspacePath,
   mergeSidebarWorkspaceGroupsWithDraftHistory,
+  prioritizeSidebarThreadActivity,
+  sidebarThreadActivity,
   sidebarWorkspacePathForThread,
   sidebarWorkspaceResolutionCandidates,
   sortSidebarThreads,
@@ -124,7 +126,9 @@ export {
   filterSddDraftHistoryItems,
   isSidebarThreadMoveBlocked,
   mergeSidebarWorkspaceGroupsWithDraftHistory,
+  prioritizeSidebarThreadActivity,
   resolveThreadPreviewPosition,
+  sidebarThreadActivity,
   sortSidebarThreads
 } from './sidebar-project-selectors'
 export type { SidebarWorkspaceGroup } from './sidebar-project-selectors'
@@ -233,6 +237,13 @@ export function SidebarProjectsSection({
   useEffect(() => {
     setThreadWorktrees(readThreadWorktreeRegistry().worktrees)
   }, [activeThreadId, threads, workspaceRoots])
+
+  const sidebarThreadActivityContext = {
+    activeThreadId,
+    busy,
+    watchTurnCompletion,
+    unreadThreadIds
+  }
 
   const groups = useMemo(() => {
     return buildSidebarWorkspaceGroups({
@@ -1202,14 +1213,8 @@ export function SidebarProjectsSection({
       active={(activeView === 'chat' || activeView === 'write') && activeThreadId === thread.id}
       deleting={deletingThreadIds[thread.id] === true}
       locale={locale}
-      showRunning={
-        thread.status?.trim().toLowerCase() === 'running' ||
-        (activeThreadId === thread.id && busy) ||
-        watchTurnCompletion[thread.id] === true
-      }
-      showUnread={
-        unreadThreadIds[thread.id] === true && activeThreadId !== thread.id
-      }
+      showRunning={sidebarThreadActivity(thread, sidebarThreadActivityContext) === 'running'}
+      showUnread={sidebarThreadActivity(thread, sidebarThreadActivityContext) === 'unread'}
       onSelect={() => onSelectThread(thread.id)}
       onContextMenu={(event) => openThreadContextMenu(event, thread)}
       onPreviewOpen={openThreadPreview}
@@ -1308,9 +1313,12 @@ export function SidebarProjectsSection({
               ? workspaceOrderDropTarget.position
               : null
           const threadOrderScope = sidebarThreadOrderScope(workspacePath)
-          const sortedThreads = reconcileSidebarThreadOrder(
-            sortSidebarThreads(list),
-            sidebarOrder.threadIdsByScope[threadOrderScope] ?? []
+          const sortedThreads = prioritizeSidebarThreadActivity(
+            reconcileSidebarThreadOrder(
+              sortSidebarThreads(list),
+              sidebarOrder.threadIdsByScope[threadOrderScope] ?? []
+            ),
+            sidebarThreadActivityContext
           )
           const workspaceFolders = sidebarFoldersForWorkspace(sidebarFolders, workspacePath)
           const assignedThreadIds = new Set(
@@ -1412,10 +1420,13 @@ export function SidebarProjectsSection({
                         workspacePath,
                         item.id
                       )
-                      const folderThreads = item.threadIds.flatMap((threadId) => {
-                        const thread = threadsById.get(threadId)
-                        return thread ? [thread] : []
-                      })
+                      const folderThreads = prioritizeSidebarThreadActivity(
+                        item.threadIds.flatMap((threadId) => {
+                          const thread = threadsById.get(threadId)
+                          return thread ? [thread] : []
+                        }),
+                        sidebarThreadActivityContext
+                      )
                       const childFolders = sidebarChildFolders(workspaceFolders, item.id).filter(visibleFolder)
                       const isFolderDragOver =
                         folderDropTarget?.folderId === item.id
