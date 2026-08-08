@@ -260,7 +260,10 @@ export function WorkbenchChatStage({
           {uiModeCameosEnabled && !focusModeEnabled ? <IkunCameoLayer /> : null}
           {!focusModeEnabled ? <KunCelebrationLayer active={busy} suppressed={Boolean(runtimeError)} /> : null}
         </ConversationFileDropZone>
-        <div className="ds-composer-dock ds-no-drag relative flex shrink-0 justify-center px-2 pb-3 pt-0 sm:px-4 md:px-6 lg:px-8">
+        <div
+          className="ds-composer-dock ds-no-drag relative flex shrink-0 justify-center px-2 pb-3 pt-0 sm:px-4 md:px-6 lg:px-8"
+          data-usage-history-boundary
+        >
           {showReturnBar ? (
             <SubagentReturnBar
               parentTitle={returnParentTitle}
