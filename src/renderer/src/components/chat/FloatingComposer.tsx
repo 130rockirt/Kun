@@ -497,14 +497,16 @@ export function FloatingComposer({
   )
   const threadUsage = threadUsageState.usage
   /**
-   * Live session-average TTFT/TPS from the latest usage SSE event of the
-   * active thread. The REST summary above does not carry these timing fields.
+   * Prefer the latest usage SSE event while a thread is active, then fall back
+   * to the persisted REST summary after reloads, thread switches, or missed
+   * events. Both paths carry provider-independent timing aggregates.
    */
   const liveThreadUsage = useChatStore((s) =>
     s.lastTurnUsage && s.lastTurnUsage.threadId === s.activeThreadId
       ? s.lastTurnUsage.snapshot
       : null
   )
+  const timingThreadUsage = liveThreadUsage ?? threadUsage
   const effectiveWorkspaceRoot = normalizeWorkspaceRoot(activeThreadWorkspace || workspaceRootOverride || workspaceRoot)
   const clawAgentName =
     activeClawChannel?.agentProfile.name.trim()
@@ -2023,8 +2025,8 @@ export function FloatingComposer({
                     <span className="ds-composer-usage-turns shrink-0 truncate tabular-nums">
                       {t('sessionUsageTurns', { turns: threadUsage.turns })}
                     </span>
-                    {liveThreadUsage &&
-                    (liveThreadUsage.avgTtftMs != null || liveThreadUsage.avgTokensPerSecond != null) ? (
+                    {timingThreadUsage &&
+                    (timingThreadUsage.avgTtftMs != null || timingThreadUsage.avgTokensPerSecond != null) ? (
                       <>
                         <span className="ds-composer-usage-turns-separator text-ds-faint">·</span>
                         <span
@@ -2032,8 +2034,8 @@ export function FloatingComposer({
                           title={t('sessionUsageAvgMetricsTitle')}
                         >
                           {t('sessionUsageAvgMetrics', {
-                            ttft: formatTtftSeconds(liveThreadUsage.avgTtftMs) ?? '-',
-                            tps: formatTps(liveThreadUsage.avgTokensPerSecond) ?? '-'
+                            ttft: formatTtftSeconds(timingThreadUsage.avgTtftMs) ?? '-',
+                            tps: formatTps(timingThreadUsage.avgTokensPerSecond) ?? '-'
                           })}
                         </span>
                       </>

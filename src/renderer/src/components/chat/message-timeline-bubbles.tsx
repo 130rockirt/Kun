@@ -940,7 +940,7 @@ function MediaPreviewTile({
     variant === 'conversation'
       ? 'group aspect-square w-52 shrink-0 snap-start overflow-hidden rounded-xl border border-ds-border-muted bg-ds-card shadow-sm'
       : variant === 'tool'
-        ? 'block h-32 w-40 overflow-hidden rounded-lg border border-ds-border-muted bg-ds-card shadow-sm'
+        ? 'block h-32 w-40 shrink-0 overflow-hidden rounded-lg border border-ds-border-muted bg-ds-card shadow-sm'
         : userMediaTileClass(mediaCount)
   const revealClass = variant === 'user' ? '' : ' ds-media-printer-reveal'
   const mediaClass = `h-full w-full ${variant === 'tool' ? 'object-contain' : 'object-cover'}`
@@ -1209,7 +1209,8 @@ function MediaAttachmentGallery({
   }, [media.length, useCarouselLayout])
 
   if (media.length === 0) return null
-  const wrapperClass = 'flex min-w-0 flex-wrap gap-2 border-t border-ds-border-muted/60 px-4 py-3'
+  const toolWrapperClass =
+    'flex min-w-0 flex-nowrap items-start gap-2 overflow-x-auto border-t border-ds-border-muted/60 px-4 py-3'
 
   const tiles = media.map((item) => {
     const key = mediaKey(item)
@@ -1340,7 +1341,13 @@ function MediaAttachmentGallery({
   }
 
   return (
-    <div ref={previewAdmissionRef} className={wrapperClass} data-extension-attachment-context>
+    <div
+      ref={previewAdmissionRef}
+      className={toolWrapperClass}
+      data-extension-attachment-context
+      data-tool-media-gallery=""
+      data-tool-media-count={media.length}
+    >
       {tiles}
     </div>
   )

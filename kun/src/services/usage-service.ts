@@ -564,6 +564,8 @@ function emptyThreadBucket(threadId: string): ThreadUsageAccumulator {
     last_turn_total_input_hit_rate: null,
     last_cache_miss_reasons: [],
     last_cache_suggestions: [],
+    avg_ttft_ms: null,
+    avg_tokens_per_second: null,
     hasCacheTelemetry: false,
     lastCompletedAt: ''
   }
@@ -624,7 +626,9 @@ function finalizeThreadBucket(bucket: ThreadUsageAccumulator): ThreadUsageBucket
     last_turn_cacheable_hit_rate: bucket.last_turn_cacheable_hit_rate,
     last_turn_total_input_hit_rate: bucket.last_turn_total_input_hit_rate,
     last_cache_miss_reasons: bucket.last_cache_miss_reasons,
-    last_cache_suggestions: bucket.last_cache_suggestions
+    last_cache_suggestions: bucket.last_cache_suggestions,
+    avg_ttft_ms: bucket.avg_ttft_ms,
+    avg_tokens_per_second: bucket.avg_tokens_per_second
   }
 }
 
@@ -666,6 +670,8 @@ export function buildThreadUsageResponse(records: readonly ThreadUsageRecord[]):
       bucket.last_turn_total_input_hit_rate = record.usage.totalInputTokenHitRate ?? null
       bucket.last_cache_miss_reasons = record.usage.cacheMissReasons ?? []
       bucket.last_cache_suggestions = record.usage.cacheSuggestions ?? []
+      bucket.avg_ttft_ms = record.usage.avgTtftMs ?? null
+      bucket.avg_tokens_per_second = record.usage.avgTokensPerSecond ?? null
     }
     buckets.set(record.threadId, bucket)
   }

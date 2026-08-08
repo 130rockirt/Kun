@@ -558,6 +558,31 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
     expect(html).toContain('src="data:image/png;base64,img3"')
   })
 
+  it('keeps two tool result images in a horizontal scrollable gallery', () => {
+    const attachments = [1, 2].map((index) => ({
+      id: `tool_image_${index}`,
+      name: `tool-image-${index}.png`,
+      mimeType: 'image/png',
+      previewUrl: `data:image/png;base64,tool${index}`
+    }))
+    const block = toolBlock({
+      id: 'tool_images',
+      summary: 'Generated two images',
+      meta: { attachments }
+    })
+
+    const html = renderToStaticMarkup(createElement(MessageBubble, { block }))
+
+    expect(html).toContain('data-tool-media-gallery')
+    expect(html).toContain('data-tool-media-count="2"')
+    expect(html).toContain('flex-nowrap')
+    expect(html).toContain('overflow-x-auto')
+    expect(html).not.toContain('flex-wrap')
+    expect(html).toContain('src="data:image/png;base64,tool1"')
+    expect(html).toContain('src="data:image/png;base64,tool2"')
+    expect(html).toContain('aria-label="Download"')
+  })
+
   it('enables the user media carousel only when there are more than three images', () => {
     const attachments = [1, 2, 3, 4].map((index) => ({
       id: `att_${index}`,

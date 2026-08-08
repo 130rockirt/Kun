@@ -112,6 +112,8 @@ describe('usage cache diagnostics', () => {
           totalInputTokenHitRate: 0.6,
           cacheMissReasons: ['tool_catalog_changed'],
           cacheSuggestions: ['Keep MCP and Skill tools stable within a thread.'],
+          avgTtftMs: 850,
+          avgTokensPerSecond: 42.5,
           turns: 1
         }
       }
@@ -123,7 +125,9 @@ describe('usage cache diagnostics', () => {
       last_turn_cacheable_hit_rate: 0.75,
       last_turn_total_input_hit_rate: 0.6,
       last_cache_miss_reasons: ['tool_catalog_changed'],
-      last_cache_suggestions: ['Keep MCP and Skill tools stable within a thread.']
+      last_cache_suggestions: ['Keep MCP and Skill tools stable within a thread.'],
+      avg_ttft_ms: 850,
+      avg_tokens_per_second: 42.5
     })
   })
 })

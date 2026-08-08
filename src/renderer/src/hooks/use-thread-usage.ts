@@ -20,6 +20,8 @@ export type ThreadUsageSummary = {
   costCny: number | null
   tokenEconomySavingsTokens: number
   turns: number
+  avgTtftMs: number | null
+  avgTokensPerSecond: number | null
 }
 
 export type ThreadUsageState = {
@@ -175,6 +177,10 @@ export async function loadThreadUsage(threadId: string): Promise<ThreadUsageSumm
   const costCny = rawCostCny != null && rawCostCny > 0 ? rawCostCny : null
   const tokenEconomySavingsTokens = usageNumber(bucket.token_economy_savings_tokens)
   const turns = usageNumber(bucket.turns)
+  const avgTtftMs = hasFiniteNumber(bucket, 'avg_ttft_ms') ? usageNumber(bucket.avg_ttft_ms) : null
+  const avgTokensPerSecond = hasFiniteNumber(bucket, 'avg_tokens_per_second')
+    ? usageNumber(bucket.avg_tokens_per_second)
+    : null
   if (
     totalTokens <= 0 &&
     cachedTokens <= 0 &&
@@ -199,7 +205,9 @@ export async function loadThreadUsage(threadId: string): Promise<ThreadUsageSumm
     costUsd,
     costCny,
     tokenEconomySavingsTokens,
-    turns
+    turns,
+    avgTtftMs,
+    avgTokensPerSecond
   }
 }
 
