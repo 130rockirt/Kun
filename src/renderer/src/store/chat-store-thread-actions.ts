@@ -218,7 +218,10 @@ function pendingComposerContexts(state: ChatState): ComposerContextAttachment[] 
   if (state.route !== 'chat') return []
   const workspaceRoot = activeChatWorkspaceRoot(state)
   return state.extensionComposerContexts
-    .filter((event) => workspaceRootScopeKey(event.workspaceRoot) === workspaceRootScopeKey(workspaceRoot))
+    .filter((event) =>
+      workspaceRootScopeKey(event.workspaceRoot) === workspaceRootScopeKey(workspaceRoot) &&
+      (!event.threadId || event.threadId === state.activeThreadId)
+    )
     .map((event) => event.attachment)
 }
 

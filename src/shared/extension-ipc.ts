@@ -221,12 +221,22 @@ export type ExtensionViewEventPayload = {
   events: unknown[]
 }
 
-/** Main-authenticated handoff from an isolated extension View to the composer. */
-export type ExtensionComposerContextEvent = {
+/** Source-neutral host state for context awaiting one Composer send. */
+export type PendingComposerContextEvent = {
   /** Host-only scope fence; never forwarded to Kun as model-visible context. */
   workspaceRoot?: string
+  /** Host-only thread fence used by first-party surfaces. */
+  threadId?: string
+  /** Host-only association to an ordinary Composer image attachment. */
+  linkedAttachmentId?: string
   attachment: ComposerContextAttachment
 }
+
+/** Main-authenticated, backward-compatible handoff from an isolated extension View. */
+export type ExtensionComposerContextEvent = Omit<
+  PendingComposerContextEvent,
+  'threadId' | 'linkedAttachmentId'
+>
 
 export type ExtensionWorkbenchNotification = {
   notificationId: string

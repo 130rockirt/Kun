@@ -202,6 +202,7 @@ import {
   stableSettingsStringify
 } from './runtime-settings-apply-mode'
 import { registerAppIpcHandlers } from './ipc/register-app-ipc-handlers'
+import { registerDevPreviewCaptureIpc } from './dev-preview-capture'
 import { DataMigrationController } from './data-migration/data-migration-controller'
 import { resolveDataMigrationFeatureEnabled } from './data-migration/feature-policy'
 import {
@@ -3418,6 +3419,7 @@ app.whenReady().then(async () => {
     nativeDialogs: nativeDialogCoordinator,
     workspacePreviewProtocols
   })
+  registerDevPreviewCaptureIpc({ getMainWindow: () => mainWindow })
   const disposeBrowserUseIpc = registerBrowserUseIpc({
     ipcMain,
     manager: browserUseManager,

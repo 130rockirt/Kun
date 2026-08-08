@@ -11,10 +11,14 @@ function activeWorkspaceRoot(state: ChatState): string {
 
 function eventMatchesCurrentComposer(
   state: ChatState,
-  workspaceRoot: string | undefined
+  workspaceRoot: string | undefined,
+  threadId?: string
 ): boolean {
   if (state.route !== 'chat') return false
-  return workspaceRootScopeKey(workspaceRoot) === workspaceRootScopeKey(activeWorkspaceRoot(state))
+  if (workspaceRootScopeKey(workspaceRoot) !== workspaceRootScopeKey(activeWorkspaceRoot(state))) {
+    return false
+  }
+  return !threadId || threadId === state.activeThreadId
 }
 
 function isNewerOrEqual(
@@ -30,30 +34,51 @@ function isNewerOrEqual(
 export function createComposerContextActions(input: {
   set: ChatStoreSet
   get: ChatStoreGet
-}): Pick<ChatState, 'attachExtensionComposerContext' | 'removeExtensionComposerContext'> {
+}): Pick<
+  ChatState,
+  | 'attachExtensionComposerContext'
+  | 'removeExtensionComposerContext'
+  | 'attachComposerContext'
+  | 'removeComposerContext'
+  | 'clearComposerContexts'
+> {
   const { set, get } = input
-  return {
-    attachExtensionComposerContext: (event) => {
-      if (!eventMatchesCurrentComposer(get(), event.workspaceRoot)) return
-      set((state) => {
-        if (!eventMatchesCurrentComposer(state, event.workspaceRoot)) return {}
-        const index = state.extensionComposerContexts.findIndex(
-          (candidate) => candidate.attachment.attachmentId === event.attachment.attachmentId
-        )
-        if (index >= 0 && !isNewerOrEqual(state.extensionComposerContexts[index]!, event)) return {}
-        const withoutCurrent = index < 0
-          ? state.extensionComposerContexts
-          : state.extensionComposerContexts.filter((_, candidateIndex) => candidateIndex !== index)
-        return {
-          extensionComposerContexts: [...withoutCurrent, event]
-            .slice(-MAX_COMPOSER_CONTEXT_ATTACHMENTS)
-        }
-      })
-    },
-    removeExtensionComposerContext: (attachmentId) => set((state) => ({
-      extensionComposerContexts: state.extensionComposerContexts.filter(
-        (candidate) => candidate.attachment.attachmentId !== attachmentId
+  const attachComposerContext: ChatState['attachComposerContext'] = (event) => {
+    if (!eventMatchesCurrentComposer(get(), event.workspaceRoot, event.threadId)) return
+    set((state) => {
+      if (!eventMatchesCurrentComposer(state, event.workspaceRoot, event.threadId)) return {}
+      const index = state.extensionComposerContexts.findIndex(
+        (candidate) => candidate.attachment.attachmentId === event.attachment.attachmentId
       )
+      if (index >= 0 && !isNewerOrEqual(state.extensionComposerContexts[index]!, event)) return {}
+      const withoutCurrent = index < 0
+        ? state.extensionComposerContexts
+        : state.extensionComposerContexts.filter((_, candidateIndex) => candidateIndex !== index)
+      return {
+        extensionComposerContexts: [...withoutCurrent, event]
+          .slice(-MAX_COMPOSER_CONTEXT_ATTACHMENTS)
+      }
+    })
+  }
+  const removeComposerContext: ChatState['removeComposerContext'] = (attachmentId) => set((state) => ({
+    extensionComposerContexts: state.extensionComposerContexts.filter(
+      (candidate) => candidate.attachment.attachmentId !== attachmentId
+    )
+  }))
+  return {
+    attachComposerContext,
+    removeComposerContext,
+    attachExtensionComposerContext: attachComposerContext,
+    removeExtensionComposerContext: removeComposerContext,
+    clearComposerContexts: (filter) => set((state) => ({
+      extensionComposerContexts: state.extensionComposerContexts.filter((event) => {
+        if (filter?.threadId && event.threadId !== filter.threadId) return true
+        if (filter?.source === 'dev-preview') {
+          return !('source' in event.attachment.provenance) ||
+            event.attachment.provenance.source !== 'dev-preview'
+        }
+        return false
+      })
     }))
   }
 }

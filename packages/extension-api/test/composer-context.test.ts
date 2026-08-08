@@ -39,6 +39,20 @@ describe('bounded composer context API', () => {
     expect(isExtensionViewSafeMethod('ui.attachComposerContext')).toBe(true)
   })
 
+  it('accepts first-party Preview provenance without changing extension attachments', () => {
+    const previewAttachment = {
+      ...request,
+      attachmentId: `dev-preview-context:${'c'.repeat(64)}`,
+      provenance: { source: 'dev-preview', workspaceId: 'd'.repeat(64) }
+    } as const
+    expect(ComposerContextAttachmentSchema.parse(previewAttachment)).toEqual(previewAttachment)
+    expect(ComposerContextAttachmentSchema.parse(attachment)).toEqual(attachment)
+    expect(ComposerContextAttachmentSchema.safeParse({
+      ...previewAttachment,
+      attachmentId: `browser-context:${'c'.repeat(64)}`
+    }).success).toBe(false)
+  })
+
   it('rejects absolute paths, path fields, excessive depth, and oversized references', () => {
     expect(ComposerContextAttachmentRequestSchema.safeParse({
       ...request,

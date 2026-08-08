@@ -88,7 +88,17 @@ type WorkbenchRightPanelElementOptions = Pick<
   changes: {
     blocks: RightPanelHostProps['changes']['blocks']
   }
-  browser: Pick<BrowserPanelProps, 'blocks' | 'preferredUrl'>
+  browser: Pick<
+    BrowserPanelProps,
+    | 'blocks'
+    | 'preferredUrl'
+    | 'workspaceRoot'
+    | 'activeThreadId'
+    | 'selectedElementCount'
+    | 'supportsImageCapture'
+    | 'onAttachContext'
+    | 'onDocumentChange'
+  >
   canvas: Pick<CanvasPanelProps, 'workspaceRoot' | 'activeThreadId'>
   file: Pick<
     FilePanelProps,
@@ -202,8 +212,7 @@ export function useWorkbenchRightPanelElement({
       }}
       changes={{ blocks: changes.blocks, onCollapse }}
       browser={{
-        blocks: browser.blocks,
-        preferredUrl: browser.preferredUrl,
+        ...browser,
         onCollapse
       }}
       planPanel={<WorkbenchPlanPanel {...planPanelProps} />}

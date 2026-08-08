@@ -100,6 +100,9 @@ import { useGraphParentObserver } from '../graph/use-graph-parent-observer'
 import { graphNodeLiveness } from '../graph/graph-liveness'
 import { openGraphChildThread } from '../graph/graph-child-navigation'
 import { formatSubagentElapsed } from './subagents/SubagentLiveness'
+import { MAX_COMPOSER_CONTEXT_ATTACHMENTS } from '@kun/extension-api'
+import type { DevPreviewContextDraft } from './DevBrowserPanel'
+import { createDevPreviewComposerContextAttachment } from '../lib/dev-preview-composer-context'
 
 const FILE_TREE_SIDEBAR_WIDTH = 320
 const extensionSurfaceLayoutStorage = {
@@ -128,7 +131,8 @@ export function Workbench(): ReactElement {
     openPlugins, openClaw, openSchedule, openWorkflow, chooseWorkspace, clawChannels,
     activeClawChannelId, selectClawChannel, resetClawChannelSession, setClawChannelModel,
     appendLocalClawTurn, setError, sendMessage, reviewActiveThread, queuedMessages,
-    extensionComposerContexts, attachExtensionComposerContext, removeExtensionComposerContext,
+    extensionComposerContexts, attachExtensionComposerContext,
+    attachComposerContext, removeComposerContext, clearComposerContexts,
     removeQueuedMessage, guideQueuedMessage, interrupt, probeRuntime, composerModel, composerProviderId,
     composerPickList, composerModelGroups, composerReasoningEffort, composerFastMode, disabledSkillIds,
     composerMode, composerOrchestration, graphEnabled, setComposerMode,
@@ -165,19 +169,35 @@ export function Workbench(): ReactElement {
     if (typeof window.kunGui?.onExtensionComposerContext !== 'function') return
     return window.kunGui.onExtensionComposerContext(attachExtensionComposerContext)
   }, [attachExtensionComposerContext])
-  const extensionComposerContextChips = useMemo(() => {
+  const activeComposerContextEvents = useMemo(() => {
     if (route !== 'chat') return []
     const workspace = workspaceRootScopeKey(extensionWorkspaceRoot)
     return extensionComposerContexts
-      .filter((event) => workspaceRootScopeKey(event.workspaceRoot) === workspace)
+      .filter((event) =>
+        workspaceRootScopeKey(event.workspaceRoot) === workspace &&
+        (!event.threadId || event.threadId === activeThreadId)
+      )
+  }, [activeThreadId, extensionComposerContexts, extensionWorkspaceRoot, route])
+  const extensionComposerContextChips = useMemo(() => {
+    return activeComposerContextEvents
       .map((event) => ({
         id: event.attachment.attachmentId,
-        kind: 'extension-context' as const,
+        kind: ('source' in event.attachment.provenance &&
+          event.attachment.provenance.source === 'dev-preview'
+          ? event.attachment.reference.kind === 'issue'
+            ? 'dev-preview-issue'
+            : 'dev-preview-element'
+          : 'extension-context') as 'extension-context' | 'dev-preview-element' | 'dev-preview-issue',
         label: event.attachment.title,
         detail: event.attachment.summary,
         removable: true
       }))
-  }, [extensionComposerContexts, extensionWorkspaceRoot, route])
+  }, [activeComposerContextEvents])
+  const selectedPreviewElementCount = useMemo(() => activeComposerContextEvents.filter((event) =>
+    'source' in event.attachment.provenance &&
+    event.attachment.provenance.source === 'dev-preview' &&
+    event.attachment.reference.kind === 'element'
+  ).length, [activeComposerContextEvents])
   const extensionContributionLoadContext = useMemo<ExtensionContributionLoadContext>(() => ({
     workspaceRoot: extensionWorkspaceRoot,
     locale: i18n.language
@@ -759,6 +779,7 @@ export function Workbench(): ReactElement {
   })
 
   const {
+    addComposerImageBase64,
     attachmentUploadBusy,
     attachmentUploadEnabled,
     attachmentUploadError,
@@ -788,6 +809,90 @@ export function Workbench(): ReactElement {
       ? addComposerFileReference
       : undefined
   })
+
+  const removeComposerContextWithLinkedImage = useCallback((attachmentId: string): void => {
+    const linkedId = extensionComposerContexts.find(
+      (event) => event.attachment.attachmentId === attachmentId
+    )?.linkedAttachmentId
+    removeComposerContext(attachmentId)
+    if (linkedId) removeComposerAttachments([linkedId], 'chat')
+  }, [extensionComposerContexts, removeComposerAttachments, removeComposerContext])
+
+  const clearDevPreviewContexts = useCallback((): void => {
+    const linkedIds = extensionComposerContexts.flatMap((event) =>
+      'source' in event.attachment.provenance &&
+      event.attachment.provenance.source === 'dev-preview' &&
+      event.linkedAttachmentId
+        ? [event.linkedAttachmentId]
+        : []
+    )
+    if (linkedIds.length > 0) removeComposerAttachments(linkedIds, 'chat')
+    clearComposerContexts({ source: 'dev-preview' })
+  }, [clearComposerContexts, extensionComposerContexts, removeComposerAttachments])
+
+  const attachDevPreviewContext = useCallback(async (
+    draft: DevPreviewContextDraft
+  ): Promise<void> => {
+    const threadId = activeThreadId
+    const contextWorkspaceRoot = extensionWorkspaceRoot
+    if (!threadId || route !== 'chat') return
+    let linkedAttachmentId: string | null = null
+    if (draft.screenshot && selectedModelSupportsImageInput && attachmentUploadEnabled) {
+      linkedAttachmentId = await addComposerImageBase64({
+        dataBase64: draft.screenshot.dataBase64,
+        mimeType: draft.screenshot.mimeType,
+        name: `preview-${draft.kind}.png`
+      })
+    }
+    if (
+      useChatStore.getState().activeThreadId !== threadId ||
+      workspaceRootScopeKey(resolveActiveExtensionWorkspaceRoot(
+        useChatStore.getState().activeThreadId,
+        useChatStore.getState().threads,
+        useChatStore.getState().workspaceRoot
+      )) !== workspaceRootScopeKey(contextWorkspaceRoot)
+    ) {
+      if (linkedAttachmentId) removeComposerAttachments([linkedAttachmentId], 'chat')
+      return
+    }
+    const attachment = await createDevPreviewComposerContextAttachment({
+      workspaceRoot: contextWorkspaceRoot,
+      threadId,
+      kind: draft.kind,
+      title: draft.title,
+      summary: draft.summary,
+      reference: draft.reference
+    })
+    if (activeComposerContextEvents.length >= MAX_COMPOSER_CONTEXT_ATTACHMENTS) {
+      const oldest = activeComposerContextEvents[0]
+      if (oldest) removeComposerContextWithLinkedImage(oldest.attachment.attachmentId)
+    }
+    attachComposerContext({
+      workspaceRoot: contextWorkspaceRoot,
+      threadId,
+      attachment,
+      ...(linkedAttachmentId ? { linkedAttachmentId } : {})
+    })
+  }, [
+    activeThreadId,
+    activeComposerContextEvents,
+    addComposerImageBase64,
+    attachComposerContext,
+    attachmentUploadEnabled,
+    extensionWorkspaceRoot,
+    removeComposerAttachments,
+    removeComposerContextWithLinkedImage,
+    route,
+    selectedModelSupportsImageInput
+  ])
+
+  const previewScopeRef = useRef(`${workspaceRootScopeKey(extensionWorkspaceRoot)}:${activeThreadId ?? ''}`)
+  useEffect(() => {
+    const nextScope = `${workspaceRootScopeKey(extensionWorkspaceRoot)}:${activeThreadId ?? ''}`
+    if (previewScopeRef.current === nextScope) return
+    previewScopeRef.current = nextScope
+    clearDevPreviewContexts()
+  }, [activeThreadId, clearDevPreviewContexts, extensionWorkspaceRoot])
 
   const {
     buildCodeCanvasOutboundPrompt,
@@ -981,7 +1086,7 @@ export function Workbench(): ReactElement {
     setClawChannelModel, setComposerModel, openProvidersSettings: () => openSettings('providers'), handleSend,
     composerAttachments,
     contextChips: extensionComposerContextChips,
-    removeContextChip: removeExtensionComposerContext,
+    removeContextChip: removeComposerContextWithLinkedImage,
     attachmentUploadEnabled, attachmentUploadBusy, attachmentUploadError,
     activeSddDraft: Boolean(activeSddDraft), composerFileReferences,
     extraFileMentionCandidates: designDocumentFileMentionCandidates, webAccessAvailable,
@@ -1130,7 +1235,16 @@ export function Workbench(): ReactElement {
       }
     },
     changes: { blocks },
-    browser: { blocks: devPreviewBlocks, preferredUrl: latestDevPreviewUrl },
+    browser: {
+      blocks: devPreviewBlocks,
+      preferredUrl: latestDevPreviewUrl,
+      workspaceRoot: extensionWorkspaceRoot,
+      activeThreadId,
+      selectedElementCount: selectedPreviewElementCount,
+      supportsImageCapture: selectedModelSupportsImageInput && attachmentUploadEnabled,
+      onAttachContext: attachDevPreviewContext,
+      onDocumentChange: clearDevPreviewContexts
+    },
     canvas: { workspaceRoot: activeCodeCanvasWorkspace, activeThreadId },
     file: {
       target: filePreviewTarget,

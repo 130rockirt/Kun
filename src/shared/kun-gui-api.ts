@@ -183,6 +183,10 @@ import type {
 } from './runtime-image-attachment'
 import type { CliInstallAction, CliInstallResult, CliInstallStatus } from './cli-install'
 import type { ProviderQuotaListResult } from './provider-quota'
+import type {
+  DevPreviewCaptureRequest,
+  DevPreviewCaptureResult
+} from './dev-preview-capture'
 
 export type KunRuntimeStatusPayload = {
   state: 'starting' | 'running' | 'restarting' | 'crashed' | 'failed' | 'stopped'
@@ -693,6 +697,9 @@ export type KunGuiApi = ExtensionIpcApi & {
   uploadRuntimeImageAttachment: (
     request: RuntimeImageAttachmentUploadRequest
   ) => Promise<RuntimeImageAttachmentUploadResult>
+  captureDevPreviewRegion: (
+    request: DevPreviewCaptureRequest
+  ) => Promise<DevPreviewCaptureResult>
   readLocalOfficeDocument: (
     options: LocalOfficeDocumentTarget
   ) => Promise<LocalOfficeDocumentReadResult>

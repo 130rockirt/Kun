@@ -129,16 +129,24 @@ export const ComposerContextAttachmentRequestSchema = z.strictObject({
 })
 export type ComposerContextAttachmentRequest = z.infer<typeof ComposerContextAttachmentRequestSchema>
 
-export const ComposerContextProvenanceSchema = z.strictObject({
+export const ExtensionComposerContextProvenanceSchema = z.strictObject({
   extensionId: ExtensionIdSchema,
   extensionVersion: SemverSchema,
   viewContributionId: ContributionIdSchema,
   workspaceId: z.string().regex(/^[a-f0-9]{64}$/)
 })
+export const DevPreviewComposerContextProvenanceSchema = z.strictObject({
+  source: z.literal('dev-preview'),
+  workspaceId: z.string().regex(/^[a-f0-9]{64}$/)
+})
+export const ComposerContextProvenanceSchema = z.union([
+  ExtensionComposerContextProvenanceSchema,
+  DevPreviewComposerContextProvenanceSchema
+])
 export type ComposerContextProvenance = z.infer<typeof ComposerContextProvenanceSchema>
 
 export const ComposerContextAttachmentSchema = ComposerContextAttachmentRequestSchema.extend({
-  attachmentId: z.string().regex(/^extension-context:[a-f0-9]{64}$/),
+  attachmentId: z.string().regex(/^(?:extension-context|dev-preview-context):[a-f0-9]{64}$/),
   provenance: ComposerContextProvenanceSchema
 })
 export type ComposerContextAttachment = z.infer<typeof ComposerContextAttachmentSchema>

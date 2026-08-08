@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { CoreRuntimeInfoJson } from '../../agent/kun-contract'
-import type { NormalizedThread, RuntimeConnectionStatus } from '../../agent/types'
+import type { AttachmentReference, NormalizedThread, RuntimeConnectionStatus } from '../../agent/types'
 import type { CanvasDocument } from '../../design/canvas/canvas-types'
 import { useDesignWorkspaceStore } from '../../design/design-workspace-store'
 import { isChatAttachmentUploadEnabled } from '../../lib/attachment-upload-availability'
@@ -19,6 +19,10 @@ import { useWorkbenchAttachmentController } from './useWorkbenchAttachmentContro
 import type { RightPanelMode } from '../chat/WorkbenchTopBar'
 import { BUILTIN_RIGHT_PANEL_IDS } from '../../extensions/contribution-ids'
 import type { ComposerFileReference } from '../chat/FloatingComposer'
+import {
+  runtimeImagePreviewUrl,
+  uploadRuntimeImageAttachment
+} from '../../lib/runtime-image-attachment'
 
 type WorkbenchAttachmentRuntimeOptions = {
   activeThreadId: string | null
@@ -96,7 +100,7 @@ export function useWorkbenchAttachmentRuntime({
     setAttachmentUploadError(null)
   }, [composerAttachmentScope])
 
-  const activeComposerWorkspace = (): string | undefined => {
+  const activeComposerWorkspace = useCallback((): string | undefined => {
     const sddDraft = useSddDraftStore.getState().activeDraft
     if (rightPanelMode === BUILTIN_RIGHT_PANEL_IDS.sddAi && sddDraft?.workspaceRoot) return sddDraft.workspaceRoot
     const designWorkspace = useDesignWorkspaceStore.getState().workspaceRoot
@@ -104,7 +108,7 @@ export function useWorkbenchAttachmentRuntime({
     const writeWorkspace = useWriteWorkspaceStore.getState().workspaceRoot
     if (route === 'write' && writeWorkspace.trim()) return writeWorkspace
     return threads.find((thread) => thread.id === activeThreadId)?.workspace || workspaceRoot || undefined
-  }
+  }, [activeThreadId, rightPanelMode, route, threads, workspaceRoot])
 
   const { clearAutoAttachment: clearCanvasImageAutoAttachment } = useCanvasImageAutoAttachment({
     route,
@@ -133,6 +137,56 @@ export function useWorkbenchAttachmentRuntime({
     )
   }
 
+  const addComposerImageBase64 = useCallback(async (input: {
+    dataBase64: string
+    mimeType: string
+    name: string
+  }): Promise<string | null> => {
+    if (!attachmentUploadEnabled || !selectedModelSupportsImageInput) return null
+    const scope = composerAttachmentScopeRef.current
+    setAttachmentUploadBusy(true)
+    setAttachmentUploadError(null)
+    try {
+      const workspace = activeComposerWorkspace()
+      const result = await uploadRuntimeImageAttachment({
+        source: {
+          kind: 'base64',
+          dataBase64: input.dataBase64,
+          mimeType: input.mimeType
+        },
+        name: input.name,
+        ...(activeThreadId ? { threadId: activeThreadId } : {}),
+        ...(workspace ? { workspace } : {})
+      })
+      const attachment: AttachmentReference = {
+        id: result.attachment.id,
+        kind: 'image',
+        name: result.attachment.name,
+        mimeType: result.attachment.mimeType,
+        width: result.attachment.width,
+        height: result.attachment.height,
+        previewUrl: runtimeImagePreviewUrl(result)
+      }
+      setComposerAttachmentsForScope(scope, (current) => {
+        const byId = new Map(current.map((item) => [item.id, item]))
+        byId.set(attachment.id, attachment)
+        return [...byId.values()]
+      })
+      return attachment.id
+    } catch (error) {
+      setAttachmentUploadError(error instanceof Error ? error.message : String(error))
+      return null
+    } finally {
+      setAttachmentUploadBusy(false)
+    }
+  }, [
+    activeThreadId,
+    activeComposerWorkspace,
+    attachmentUploadEnabled,
+    selectedModelSupportsImageInput,
+    setComposerAttachmentsForScope
+  ])
+
   const {
     handlePickAttachments,
     handlePasteClipboardImage,
@@ -155,6 +209,7 @@ export function useWorkbenchAttachmentRuntime({
     attachmentUploadBusy,
     attachmentUploadEnabled,
     attachmentUploadError,
+    addComposerImageBase64,
     clearComposerAttachments,
     composerAttachments,
     getAttachmentScope: () => composerAttachmentScopeRef.current,

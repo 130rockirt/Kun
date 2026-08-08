@@ -75,4 +75,30 @@ describe('extension composer context store fence', () => {
     actions.removeExtensionComposerContext(attachment.attachmentId)
     expect(getState().extensionComposerContexts).toEqual([])
   })
+
+  it('fences first-party context to the active thread and clears it by source', () => {
+    const { actions, getState } = harness()
+    const previewAttachment = {
+      ...attachment,
+      attachmentId: `dev-preview-context:${'c'.repeat(64)}`,
+      provenance: { source: 'dev-preview' as const, workspaceId: 'd'.repeat(64) }
+    }
+    actions.attachComposerContext({
+      workspaceRoot: '/workspace/a',
+      threadId: 'thread-2',
+      attachment: previewAttachment
+    })
+    expect(getState().extensionComposerContexts).toEqual([])
+
+    actions.attachComposerContext({
+      workspaceRoot: '/workspace/a',
+      threadId: 'thread-1',
+      linkedAttachmentId: 'image-1',
+      attachment: previewAttachment
+    })
+    expect(getState().extensionComposerContexts).toHaveLength(1)
+    expect(getState().extensionComposerContexts[0]?.linkedAttachmentId).toBe('image-1')
+    actions.clearComposerContexts({ source: 'dev-preview' })
+    expect(getState().extensionComposerContexts).toEqual([])
+  })
 })

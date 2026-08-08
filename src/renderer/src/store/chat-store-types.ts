@@ -27,7 +27,10 @@ import type {
 } from '@shared/app-settings'
 import type { ModelProviderModelGroup } from '@shared/kun-gui-api'
 import type { ComposerContextAttachment } from '@kun/extension-api'
-import type { ExtensionComposerContextEvent } from '@shared/extension-ipc'
+import type {
+  ExtensionComposerContextEvent,
+  PendingComposerContextEvent
+} from '@shared/extension-ipc'
 
 export type QueuedUserMessage = {
   id: string
@@ -336,8 +339,8 @@ export type ChatState = {
   composerAgentId: string
   disabledSkillIds: string[]
   queuedMessages: QueuedUserMessage[]
-  /** Host-authenticated, workspace-scoped context awaiting one main-chat turn. */
-  extensionComposerContexts: ExtensionComposerContextEvent[]
+  /** Source-neutral, host-fenced context awaiting one main-chat turn. Legacy field name is persisted for compatibility. */
+  extensionComposerContexts: PendingComposerContextEvent[]
   watchTurnCompletion: Record<string, boolean>
   unreadThreadIds: Record<string, boolean>
   /**
@@ -453,6 +456,9 @@ export type ChatState = {
   guideQueuedMessage: (id: string) => Promise<boolean>
   attachExtensionComposerContext: (event: ExtensionComposerContextEvent) => void
   removeExtensionComposerContext: (attachmentId: string) => void
+  attachComposerContext: (event: PendingComposerContextEvent) => void
+  removeComposerContext: (attachmentId: string) => void
+  clearComposerContexts: (filter?: { source?: 'dev-preview'; threadId?: string }) => void
   rewindAndResend: (userBlockId: string, newText: string) => Promise<void>
   rollbackWorkspaceToCheckpoint: (checkpointId: string) => Promise<void>
   interrupt: (options?: { discard?: boolean }) => Promise<void>
