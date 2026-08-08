@@ -33,6 +33,8 @@ export type FetchUpstreamModelsResult =
     }
   | { ok: false; message: string }
 
+const LOCAL_MODEL_GATEWAY_PROVIDER_ID = 'route-gateway:local'
+
 export function fallbackModelIds(): string[] {
   return sortComposerModelIds(DEFAULT_COMPOSER_MODEL_IDS)
 }
@@ -78,7 +80,10 @@ export async function fetchUpstreamModelIds(
  * composer's existing picker contract. This is the live authority used when
  * GUI and TUI are open together; settings remain a startup fallback only.
  */
-export function modelListFromSharedConnections(value: unknown): FetchUpstreamModelsResult | null {
+export function modelListFromSharedConnections(
+  value: unknown,
+  localGatewayName = 'Kun API'
+): FetchUpstreamModelsResult | null {
   const root = objectValue(value)
   if (root.schemaVersion !== 1 || !Array.isArray(root.providers)) return null
   const groups: ModelProviderModelGroup[] = root.providers.flatMap((raw) => {
@@ -143,6 +148,45 @@ export function modelListFromSharedConnections(value: unknown): FetchUpstreamMod
         : {})
     }]
   })
+  const routeModelIds: string[] = []
+  const routeModelProfiles: Record<string, ModelProviderModelProfileV1> = {}
+  const providerGroups = new Map(groups.map((group) => [group.providerId.toLowerCase(), group]))
+  for (const rawPool of Array.isArray(root.routePools) ? root.routePools : []) {
+    const pool = objectValue(rawPool)
+    const modelId = typeof pool.modelId === 'string' ? pool.modelId.trim() : ''
+    if (pool.enabled !== true || !modelId || !Array.isArray(pool.targets)) continue
+    const profiles = pool.targets.flatMap((rawTarget) => {
+      const target = objectValue(rawTarget)
+      if (target.enabled === false) return []
+      const providerId = typeof target.providerId === 'string'
+        ? target.providerId.trim().toLowerCase()
+        : ''
+      const targetModelId = typeof target.modelId === 'string' ? target.modelId.trim() : ''
+      const group = providerGroups.get(providerId)
+      if (!group || !targetModelId) return []
+      const configuredModelId = group.modelIds.find(
+        (candidate) => candidate.trim().toLowerCase() === targetModelId.toLowerCase()
+      )
+      if (!configuredModelId) return []
+      return [group.modelProfiles?.[configuredModelId] ?? {
+        inputModalities: ['text'],
+        outputModalities: ['text'],
+        supportsToolCalling: true,
+        messageParts: ['text']
+      } satisfies ModelProviderModelProfileV1]
+    })
+    if (profiles.length === 0) continue
+    routeModelIds.push(modelId)
+    routeModelProfiles[modelId] = aggregateRouteModelProfile(profiles)
+  }
+  if (routeModelIds.length > 0) {
+    groups.push({
+      providerId: LOCAL_MODEL_GATEWAY_PROVIDER_ID,
+      label: localGatewayName.trim() || 'Kun API',
+      modelIds: routeModelIds,
+      modelProfiles: routeModelProfiles
+    })
+  }
   const modelIds = groups.flatMap((group) => group.modelIds)
   if (modelIds.length === 0) {
     return {
@@ -233,28 +277,34 @@ async function readConfiguredModelGroups(settings: AppSettingsV1): Promise<Model
       } satisfies ModelProviderModelProfileV1] : []
     })
     if (profiles.length === 0) continue
-    const inputModalities = [...new Set(profiles.flatMap((profile) => profile.inputModalities))]
-    const outputModalities = [...new Set(profiles.flatMap((profile) => profile.outputModalities))]
-    const messageParts = [...new Set(profiles.flatMap((profile) => profile.messageParts))]
     routeModelIds.push(pool.modelId)
-    routeModelProfiles[pool.modelId] = {
-      inputModalities,
-      outputModalities,
-      messageParts,
-      supportsToolCalling: profiles.some((profile) => profile.supportsToolCalling),
-      contextWindowTokens: Math.max(...profiles.map((profile) => profile.contextWindowTokens ?? 0)) || undefined,
-      maxOutputTokens: Math.max(...profiles.map((profile) => profile.maxOutputTokens ?? 0)) || undefined
-    }
+    routeModelProfiles[pool.modelId] = aggregateRouteModelProfile(profiles)
   }
   if (routeModelIds.length > 0) {
     groups.push({
-      providerId: 'route-gateway:local',
+      providerId: LOCAL_MODEL_GATEWAY_PROVIDER_ID,
       label: providerSettings.localGateway.name,
       modelIds: routeModelIds,
       modelProfiles: routeModelProfiles
     })
   }
   return mergeModelGroups(groups)
+}
+
+function aggregateRouteModelProfile(
+  profiles: readonly ModelProviderModelProfileV1[]
+): ModelProviderModelProfileV1 {
+  const inputModalities = [...new Set(profiles.flatMap((profile) => profile.inputModalities))]
+  const outputModalities = [...new Set(profiles.flatMap((profile) => profile.outputModalities))]
+  const messageParts = [...new Set(profiles.flatMap((profile) => profile.messageParts))]
+  return {
+    inputModalities,
+    outputModalities,
+    messageParts,
+    supportsToolCalling: profiles.some((profile) => profile.supportsToolCalling),
+    contextWindowTokens: Math.max(...profiles.map((profile) => profile.contextWindowTokens ?? 0)) || undefined,
+    maxOutputTokens: Math.max(...profiles.map((profile) => profile.maxOutputTokens ?? 0)) || undefined
+  }
 }
 
 function mergeModelGroups(groups: readonly ModelProviderModelGroup[]): ModelProviderModelGroup[] {

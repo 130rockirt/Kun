@@ -92,6 +92,7 @@ import {
 import { resetUnreadableWindowsCredentials } from './credential-recovery'
 import {
   getActiveAgentApiKey,
+  getModelProviderSettings,
   getKunRuntimeSettings,
   MIN_KUN_LOCAL_PORT,
   normalizeAppBehaviorSettings,
@@ -3298,7 +3299,10 @@ app.whenReady().then(async () => {
     const shared = await runtimeRequest(settings, '/v1/model-connections', { method: 'GET' })
     if (shared.ok) {
       try {
-        const live = modelListFromSharedConnections(JSON.parse(shared.body) as unknown)
+        const live = modelListFromSharedConnections(
+          JSON.parse(shared.body) as unknown,
+          getModelProviderSettings(settings).localGateway.name
+        )
         if (live) return live
       } catch {
         // Fall back to the compatibility settings projection below.

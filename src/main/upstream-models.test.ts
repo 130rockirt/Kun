@@ -148,6 +148,86 @@ describe('upstream model picker list', () => {
     expect(result).not.toHaveProperty('defaultModelId')
   })
 
+  it('includes executable route aliases from the live registry', () => {
+    const result = modelListFromSharedConnections({
+      schemaVersion: 1,
+      providers: [
+        {
+          id: 'kimi-code',
+          name: 'Kimi Code',
+          configured: true,
+          credentialStatus: 'ready',
+          models: ['k3'],
+          modelCapabilities: {
+            k3: {
+              inputModalities: ['text', 'image'],
+              outputModalities: ['text'],
+              supportsToolCalling: true,
+              messageParts: ['text', 'image_url'],
+              contextWindowTokens: 262_144
+            }
+          }
+        },
+        {
+          id: 'missing-provider',
+          name: 'Missing Provider',
+          configured: true,
+          credentialStatus: 'missing',
+          models: ['missing-model']
+        }
+      ],
+      routePools: [
+        {
+          id: 'k3-route',
+          name: 'K3 Route',
+          modelId: 'k3-local',
+          enabled: true,
+          targets: [
+            { id: 'kimi', providerId: 'kimi-code', modelId: 'k3', enabled: true, weight: 1 }
+          ]
+        },
+        {
+          id: 'missing-route',
+          name: 'Missing Route',
+          modelId: 'missing-local',
+          enabled: true,
+          targets: [
+            { id: 'missing', providerId: 'missing-provider', modelId: 'missing-model', enabled: true, weight: 1 }
+          ]
+        },
+        {
+          id: 'disabled-route',
+          name: 'Disabled Route',
+          modelId: 'disabled-local',
+          enabled: false,
+          targets: [
+            { id: 'kimi-disabled', providerId: 'kimi-code', modelId: 'k3', enabled: true, weight: 1 }
+          ]
+        }
+      ]
+    }, 'Team Relay')
+
+    expect(result).toMatchObject({
+      ok: true,
+      modelIds: expect.arrayContaining(['k3', 'k3-local']),
+      modelGroups: expect.arrayContaining([expect.objectContaining({
+        providerId: 'route-gateway:local',
+        label: 'Team Relay',
+        modelIds: ['k3-local'],
+        modelProfiles: {
+          'k3-local': expect.objectContaining({
+            inputModalities: ['text', 'image'],
+            contextWindowTokens: 262_144
+          })
+        }
+      })])
+    })
+    if (result?.ok) {
+      expect(result.modelIds).not.toContain('missing-local')
+      expect(result.modelIds).not.toContain('disabled-local')
+    }
+  })
+
   it('never reads the canonical legacy config as a model source', async () => {
     await expect(readConfiguredKunModelIds(
       settings(join(homedir(), '.deepseekgui', 'kun'))
