@@ -69,6 +69,7 @@ import { buildPptBoardLocalTools } from '../adapters/tool/ppt-board-tool.js'
 import { buildDesignMotionLocalTools } from '../adapters/tool/design-motion-tool.js'
 import { buildDesignSvgLocalTools } from '../adapters/tool/design-svg-tool.js'
 import { buildPptMasterLocalTools } from '../adapters/tool/ppt-master-tool.js'
+import { buildPptAgentLocalTools } from '../adapters/tool/ppt-agent-local-tools.js'
 import { LocalToolHost, buildDefaultLocalTools } from '../adapters/tool/local-tool-host.js'
 import { ExtensionToolRegistry } from '../adapters/tool/extension-tool-provider.js'
 import { shutdownAllLspSessions } from '../adapters/tool/lsp-client.js'
@@ -1245,10 +1246,16 @@ async function createKunServeRuntimeComposition(
     effects: {
       network: false,
       externalWrite: false,
-      processExecution: false,
+      processExecution: true,
       guiAutomation: false
     },
-    tools: buildPptMasterLocalTools()
+    tools: [
+      ...buildPptMasterLocalTools(),
+      ...buildPptAgentLocalTools({
+        enabled: () => activeOptions.lab?.pptAgent?.enabled !== false,
+        toolchainDirectory: () => process.env.KUN_PPT_TOOLCHAIN_DIR
+      })
+    ]
   }
   const officeCliProviders = buildOfficeCliToolProviders({
     binaryPath: process.env.KUN_OFFICECLI_BINARY,
@@ -2428,7 +2435,13 @@ async function createKunServeRuntimeComposition(
 	      kind: 'skill' as const,
 	      enabled: true,
 	      available: true,
-	      tools: buildPptMasterLocalTools()
+	      tools: [
+	        ...buildPptMasterLocalTools(),
+	        ...buildPptAgentLocalTools({
+	          enabled: () => nextOptions.lab?.pptAgent?.enabled !== false,
+	          toolchainDirectory: () => process.env.KUN_PPT_TOOLCHAIN_DIR
+	        })
+	      ]
 	    }
 	    const nextResolvedHooks = [
 	      ...buildBuiltinHooks({ quality: nextOptions.quality ?? DEFAULT_QUALITY_CONFIG }),

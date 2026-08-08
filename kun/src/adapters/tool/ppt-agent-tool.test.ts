@@ -253,7 +253,9 @@ describe('ppt_agent tool provider', () => {
     expect(systemPrompt).toContain('step0')
     expect(systemPrompt).toContain('slides_categories')
     expect(systemPrompt).toContain('export_images')
-    expect(systemPrompt).toContain('CT_Slide')
+    expect(systemPrompt).toContain('ppt_read_guide')
+    expect(systemPrompt).toContain('ppt_export')
+    expect(systemPrompt).toContain('validated=true')
     expect(systemPrompt).toContain('generate_image')
   })
 
@@ -299,7 +301,7 @@ describe('ppt_agent tool provider', () => {
     expect(received?.inheritedModel).toBe('main-model')
   })
 
-  it('keeps the allow-list free of delegation tools and the board tool (verdict B)', () => {
+  it('keeps the allow-list free of delegation, board and child-inert design tools (verdict B)', () => {
     const forbidden = [
       'delegate_task',
       'generate_subagent',
@@ -308,12 +310,15 @@ describe('ppt_agent tool provider', () => {
       'create_plan',
       // Verdict B: child design-tool results never reach the canvas, so the
       // child must not receive the board tool; the parent replays it.
-      'ppt_to_board'
+      'ppt_to_board',
+      'design_canvas',
+      'design_create_screen',
+      'design_update_shapes'
     ]
     for (const name of forbidden) {
       expect(PPT_AGENT_ALLOWED_TOOLS).not.toContain(name)
     }
-    for (const name of ['write', 'edit', 'bash', 'generate_image', 'design_canvas']) {
+    for (const name of ['write', 'edit', 'bash', 'generate_image', 'ppt_read_guide', 'ppt_export']) {
       expect(PPT_AGENT_ALLOWED_TOOLS).toContain(name)
     }
   })

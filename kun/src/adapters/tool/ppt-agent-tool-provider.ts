@@ -23,12 +23,13 @@ export type PptAgentToolConfig = {
 }
 
 /**
- * First-class PPT allow-list. Full file authoring (write/edit/bash) plus the
- * web helpers, image generation and the design tools so the child can build a
- * PPTD project, export a PPTX and generate artwork. Deliberately excludes
- * `ppt_to_board` and the delegation tools: whiteboard layout is replayed by
- * the parent agent because child design-tool results never reach the canvas
- * (verdict B), and the child must not spin up further children.
+ * First-class PPT allow-list. Full file authoring plus the managed `ppt_export`
+ * tool, optional shell access for visual QA, web helpers and image generation
+ * so the child can build a PPTD project, export a verified PPTX and generate
+ * artwork. Deliberately excludes `ppt_to_board`, GUI design tools and the
+ * delegation tools: whiteboard layout is replayed by the parent agent because
+ * child design-tool results never reach the canvas (verdict B), and the child
+ * must not spin up further children.
  */
 export const PPT_AGENT_ALLOWED_TOOLS = [
   'read',
@@ -37,13 +38,12 @@ export const PPT_AGENT_ALLOWED_TOOLS = [
   'ls',
   'write',
   'edit',
+  'ppt_read_guide',
+  'ppt_export',
   'bash',
   'web_fetch',
   'web_search',
-  'generate_image',
-  'design_canvas',
-  'design_create_screen',
-  'design_update_shapes'
+  'generate_image'
 ] as const
 
 const PPT_AGENT_DESCRIPTION = [

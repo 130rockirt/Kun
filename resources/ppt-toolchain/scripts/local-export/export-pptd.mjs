@@ -33,6 +33,11 @@ const require = createRequire(import.meta.url);
 
 // ---------- minimal YAML (enough for PPTD) via dynamic import of yaml if present ----------
 async function loadYaml() {
+  const configuredModule = process.env.KUN_PPT_YAML_MODULE;
+  if (configuredModule) {
+    const yaml = await import(pathToFileURL(configuredModule).href);
+    return yaml.parse;
+  }
   try {
     const yaml = await import('yaml');
     return yaml.parse;
@@ -80,6 +85,7 @@ function parseArgs(argv) {
     cookie: process.env.KIMI_COOKIE || '',
     origin: process.env.KIMI_ORIGIN || 'https://www.kimi.com',
     noSign: false,
+    localImagesOnly: false,
     embedFonts: false,
     transition: 'fade',
     wasmPath: null,
@@ -91,6 +97,7 @@ function parseArgs(argv) {
     else if (x === '--cookie') args.cookie = a.shift();
     else if (x === '--origin') args.origin = a.shift();
     else if (x === '--no-sign') args.noSign = true;
+    else if (x === '--local-images-only') args.localImagesOnly = true;
     else if (x === '--embed-fonts') args.embedFonts = true;
     else if (x === '--transition') args.transition = a.shift();
     else if (x === '--wasm') args.wasmPath = a.shift();
@@ -114,6 +121,7 @@ function findManifest(input) {
 
 async function loadProject(manifestPath, parseYaml) {
   const root = path.dirname(manifestPath);
+  const canonicalRoot = fs.realpathSync(root);
   const manifestText = fs.readFileSync(manifestPath, 'utf8');
   const manifest = parseYaml(manifestText);
   if (!manifest || manifest.version !== 'v2') {
@@ -125,7 +133,7 @@ async function loadProject(manifestPath, parseYaml) {
 
   const pages = [];
   for (const rel of manifest.pages) {
-    const pagePath = path.join(root, rel);
+    const pagePath = resolveProjectFile(root, canonicalRoot, rel, 'page');
     if (!fs.existsSync(pagePath)) throw new Error(`Missing page: ${rel}`);
     const page = parseYaml(fs.readFileSync(pagePath, 'utf8'));
     if (!page || !Array.isArray(page.elements)) {
@@ -145,6 +153,24 @@ async function loadProject(manifestPath, parseYaml) {
     pages,
     pptdFileName: path.basename(manifestPath),
   };
+}
+
+function resolveProjectFile(projectRoot, canonicalRoot, requested, kind) {
+  if (typeof requested !== 'string' || !requested || /^file:/i.test(requested)) {
+    throw new Error(`Invalid local ${kind} path: ${String(requested)}`);
+  }
+  const target = path.resolve(projectRoot, requested.replace(/\\/g, '/'));
+  const lexicalRelative = path.relative(projectRoot, target);
+  if (lexicalRelative === '..' || lexicalRelative.startsWith(`..${path.sep}`) || path.isAbsolute(lexicalRelative)) {
+    throw new Error(`Local ${kind} escapes the PPTD project: ${requested}`);
+  }
+  if (!fs.existsSync(target)) return target;
+  const canonicalTarget = fs.realpathSync(target);
+  const canonicalRelative = path.relative(canonicalRoot, canonicalTarget);
+  if (canonicalRelative === '..' || canonicalRelative.startsWith(`..${path.sep}`) || path.isAbsolute(canonicalRelative)) {
+    throw new Error(`Local ${kind} resolves outside the PPTD project: ${requested}`);
+  }
+  return canonicalTarget;
 }
 
 function normalizeElement(el) {
@@ -203,7 +229,7 @@ function extFromSrc(src, contentType = '') {
   return `.${ext}`;
 }
 
-async function resolveImages(pptd, projectRoot) {
+async function resolveImages(pptd, projectRoot, { localImagesOnly = false } = {}) {
   const srcs = collectImageSrcs(pptd);
   const images = {}; // path -> Uint8Array
   const remap = new Map();
@@ -212,6 +238,9 @@ async function resolveImages(pptd, projectRoot) {
     srcs.map(async (src, idx) => {
       let bytes;
       let ext = extFromSrc(src);
+      if (/^https?:\/\//i.test(src) && localImagesOnly) {
+        throw new Error(`Remote image is not allowed in local-only mode: ${src}`);
+      }
       if (/^(https?:\/\/|data:)/i.test(src)) {
         if (src.startsWith('data:')) {
           const m = /^data:([^;,]+)?(;base64)?,(.*)$/s.exec(src);
@@ -231,12 +260,21 @@ async function resolveImages(pptd, projectRoot) {
           bytes = Buffer.from(await res.arrayBuffer());
         }
       } else {
-        // local relative to project root
-        const local = path.join(
-          projectRoot,
-          src.replace(/^file:\/\/+/, '').replace(/\\/g, '/'),
-        );
+        const localSrc = localImagesOnly
+          ? src
+          : src.replace(/^file:\/\/+/, '').replace(/\\/g, '/');
+        const local = localImagesOnly
+          ? resolveProjectFile(
+              projectRoot,
+              fs.realpathSync(projectRoot),
+              localSrc,
+              'image',
+            )
+          : path.join(projectRoot, localSrc);
         if (!fs.existsSync(local)) {
+          if (localImagesOnly) {
+            throw new Error(`Missing local image: ${src}`);
+          }
           console.warn(`[warn] missing local image: ${src}`);
           return;
         }
@@ -595,6 +633,7 @@ Options:
   --cookie STRING       Kimi session cookie for signature API
   --origin URL          default https://www.kimi.com
   --no-sign             skip signature request (WASM may reject)
+  --local-images-only   reject HTTP(S) image sources instead of fetching them
   --transition fade|none
   --wasm PATH           path to patched pptd_wasm (default: resolve from editor mirror)
   --embed-fonts         reserved (font embedding needs font blobs)
@@ -616,7 +655,9 @@ Env: KIMI_COOKIE, KIMI_ORIGIN`);
   console.log('[2/5] resolve images');
   // deep clone so we can rewrite src
   pptd = JSON.parse(JSON.stringify(pptd));
-  const images = await resolveImages(pptd, projectRoot);
+  const images = await resolveImages(pptd, projectRoot, {
+    localImagesOnly: args.localImagesOnly,
+  });
   console.log(`      ${Object.keys(images).length} image(s)`);
 
   console.log('[3/5] signature');
