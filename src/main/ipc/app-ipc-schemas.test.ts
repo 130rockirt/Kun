@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { CONVERSATION_EXPORT_MAX_MARKDOWN_CHARS } from '../../shared/conversation-export'
 import {
+  appBadgeCountSchema,
   clawImInstallPollPayloadSchema,
   clawTaskFromTextPayloadSchema,
   conversationExportPayloadSchema,
@@ -29,6 +30,16 @@ import {
 } from './app-ipc-schemas'
 
 describe('app-ipc-schemas', () => {
+  it('accepts only bounded non-negative integer app badge counts', () => {
+    expect(appBadgeCountSchema.parse(0)).toBe(0)
+    expect(appBadgeCountSchema.parse(42)).toBe(42)
+    expect(appBadgeCountSchema.parse(999)).toBe(999)
+    expect(() => appBadgeCountSchema.parse(-1)).toThrow()
+    expect(() => appBadgeCountSchema.parse(1.5)).toThrow()
+    expect(() => appBadgeCountSchema.parse(1_000)).toThrow()
+    expect(() => appBadgeCountSchema.parse({ count: 1 })).toThrow()
+  })
+
   it('accepts only modeled completion notification sources', () => {
     expect(notificationPayloadSchema.parse({
       threadId: 'thread-main',

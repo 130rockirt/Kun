@@ -37,8 +37,6 @@ const PLAN_MODE_ALLOWED_TOOL_NAMES = new Set([
   'repo_map',
   'git_inspect',
   'lsp',
-  'write',
-  'edit',
   'create_plan',
   'user_input',
   'request_user_input'

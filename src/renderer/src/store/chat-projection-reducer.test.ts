@@ -1044,6 +1044,73 @@ describe('chat projection reducer', () => {
     expect(projected.busy).toBe(true)
   })
 
+  it('does not settle a newer running turn when a terminal snapshot for an older turn is reconciled', () => {
+    const projected = project({
+      ...state(),
+      busy: true,
+      currentTurnId: 'turn_B',
+      currentTurnUserId: 'user_B',
+      liveAssistant: 'still streaming',
+      blocks: [
+        { kind: 'user', id: 'user_B', turnId: 'turn_B', text: 'keep going' },
+        { kind: 'assistant', id: 'assistant_B', turnId: 'turn_B', text: 'streaming' }
+      ],
+      threads: [{
+        ...state().threads[0]!,
+        status: 'running',
+        latestTurnId: 'turn_B',
+        latestTurnStatus: 'running'
+      }]
+    }, [{
+      type: 'thread_snapshot_reconciled',
+      payload: {
+        threadId: 'thread_1',
+        turnId: 'turn_A',
+        userBlockId: 'user_A',
+        blocks: [{ kind: 'assistant', id: 'assistant_A', turnId: 'turn_A', text: 'old done' }],
+        latestSeq: 12,
+        threadStatus: 'running',
+        latestTurnId: 'turn_A',
+        latestTurnStatus: 'completed'
+      }
+    }])
+
+    expect(projected.threads[0]).toMatchObject({
+      status: 'running',
+      latestTurnId: 'turn_B',
+      latestTurnStatus: 'running'
+    })
+    // The newer turn B's live text and blocks are untouched.
+    expect(projected.blocks).toContainEqual(
+      expect.objectContaining({ id: 'assistant_B', turnId: 'turn_B', text: 'streaming' })
+    )
+    expect(projected.liveAssistant).toBe('still streaming')
+  })
+
+  it('keeps terminal latest-turn evidence authoritative during snapshot reconciliation', () => {
+    const projected = project({
+      ...state(),
+      busy: false,
+      currentTurnId: null,
+      threads: [{ ...state().threads[0]!, status: 'running' }]
+    }, [{
+      type: 'thread_snapshot_reconciled',
+      payload: {
+        threadId: 'thread_1',
+        blocks: [{ kind: 'assistant', id: 'assistant_done', text: 'done' }],
+        latestSeq: 9,
+        threadStatus: 'running',
+        latestTurnId: 'turn_done',
+        latestTurnStatus: 'completed'
+      }
+    }])
+
+    expect(projected.busy).toBe(false)
+    expect(projected.threads[0]).toMatchObject({
+      status: 'idle', latestTurnId: 'turn_done', latestTurnStatus: 'completed'
+    })
+  })
+
   it('preserves an unchanged assistant block reference during terminal snapshot reconciliation', () => {
     const assistant = {
       kind: 'assistant' as const,

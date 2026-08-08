@@ -1960,6 +1960,74 @@ describe('chat-store-thread-actions recoverActiveTurn settles interrupted work',
     }
   }
 
+  it('does not commit a recovery result for a thread the user already left', async () => {
+    const detail = deferredValue<Record<string, unknown>>()
+    registryMock.getProvider.mockReturnValue({
+      getThreadDetail: vi.fn(() => detail.promise as never),
+      subscribeThreadEvents: vi.fn(async () => ({ streamId: 'stream_stale' }))
+    })
+    const { actions, state } = buildHarness()
+    state.activeThreadId = 'thr_existing'
+    state.busy = true
+    state.watchTurnCompletion = {}
+
+    const recovering = actions.recoverActiveTurn()
+    // The user switches to another thread while recovery is in flight.
+    state.activeThreadId = 'thr_other'
+    detail.resolve({
+      blocks: [{ id: 'u1', kind: 'user', text: 'old request' }],
+      latestSeq: 4,
+      threadStatus: 'idle',
+      latestTurnId: 'turn_1',
+      latestTurnStatus: 'completed',
+      latestTurnOrchestration: 'direct',
+      latestUserMessageId: 'u1'
+    })
+    await recovering
+
+    // The stale recovery must not commit the old thread's projection or clear
+    // the newer selection's busy state. The optimistic recovering banner may
+    // have been set before the guard observed the newer selection.
+    expect(state.activeThreadId).toBe('thr_other')
+    expect(state.busy).toBe(true)
+    expect(state.threads.find((thread) => thread.id === 'thr_existing')).toMatchObject({
+      status: 'running'
+    })
+  })
+
+  it('treats a terminal latest turn as authoritative during recovery', async () => {
+    const provider = {
+      ...providerWith('running'),
+      getThreadDetail: vi.fn(async () => ({
+        blocks: [
+          { id: 'u1', kind: 'user', text: 'do the big thing' },
+          { id: 'tool1', kind: 'tool', name: 'delegate_task', status: 'running' }
+        ],
+        latestSeq: 3,
+        threadStatus: 'running',
+        latestTurnId: 'turn_1',
+        latestTurnStatus: 'completed',
+        latestTurnOrchestration: 'direct',
+        latestUserMessageId: 'u1'
+      }))
+    }
+    registryMock.getProvider.mockReturnValue(provider)
+
+    const { actions, state } = buildHarness()
+    state.activeThreadId = 'thr_existing'
+    state.busy = true
+    state.currentTurnId = 'turn_1'
+    state.watchTurnCompletion = { thr_existing: true }
+
+    await expect(actions.recoverActiveTurn()).resolves.toBe(false)
+    expect(state.busy).toBe(false)
+    expect(state.currentTurnId).toBeNull()
+    expect(state.watchTurnCompletion).toEqual({})
+    expect(state.threads[0]).toMatchObject({
+      status: 'idle', latestTurnId: 'turn_1', latestTurnStatus: 'completed'
+    })
+  })
+
   it('settles a stuck running tool block when the server has already settled (#621)', async () => {
     const provider = providerWith('idle')
     registryMock.getProvider.mockReturnValue(provider)

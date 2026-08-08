@@ -149,6 +149,29 @@ describe('CapabilityRegistry Plan mode policy', () => {
       .toThrow('tool mcp_test_mutate is not advertised by active tool policy')
   })
 
+  it('hides generic file mutation tools while retaining create_plan and user input', () => {
+    const registry = CapabilityRegistry.fromLocalTools([
+      tool('read', 'read-only'),
+      tool('write'),
+      tool('edit'),
+      tool('create_plan'),
+      tool('user_input'),
+      tool('request_user_input')
+    ])
+    const planContext = context([], 'plan')
+
+    expect(registry.listTools(planContext).map((spec) => spec.name)).toEqual([
+      'read',
+      'create_plan',
+      'user_input',
+      'request_user_input'
+    ])
+    for (const name of ['write', 'edit']) {
+      expect(() => registry.resolveTool(name, planContext))
+        .toThrow(`tool ${name} is not advertised by active tool policy`)
+    }
+  })
+
   it('keeps read-only explore_agent visible in plan mode while hiding delegate_task', () => {
     const registry = new CapabilityRegistry([
       {

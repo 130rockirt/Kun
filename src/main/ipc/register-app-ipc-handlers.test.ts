@@ -45,7 +45,8 @@ const electronMock = vi.hoisted(() => ({
   showMessageBox: vi.fn(),
   openPath: vi.fn(async () => ''),
   showItemInFolder: vi.fn(),
-  userDataPath: '/tmp/kun-user-data'
+  userDataPath: '/tmp/kun-user-data',
+  setBadgeCount: vi.fn(() => true)
 }))
 const uiPluginMocks = vi.hoisted(() => ({
   ensureBundledUiPlugins: vi.fn(async () => undefined),
@@ -70,7 +71,8 @@ vi.mock('electron', () => ({
     quit: vi.fn(),
     getPath: vi.fn(() => electronMock.userDataPath),
     getAppPath: vi.fn(() => '/tmp/kun-app'),
-    isPackaged: false
+    isPackaged: false,
+    setBadgeCount: electronMock.setBadgeCount
   },
   dialog: { showMessageBox: electronMock.showMessageBox },
   shell: {
@@ -298,6 +300,7 @@ describe('registerAppIpcHandlers', () => {
     electronMock.showMessageBox.mockReset()
     electronMock.openPath.mockClear()
     electronMock.showItemInFolder.mockClear()
+    electronMock.setBadgeCount.mockClear()
     uiPluginMocks.ensureBundledUiPlugins.mockClear()
     uiPluginMocks.installUiPluginFromDirectory.mockReset()
     uiPluginMocks.listUiPlugins.mockReset()
@@ -312,6 +315,27 @@ describe('registerAppIpcHandlers', () => {
 
   afterEach(() => {
     vi.unstubAllEnvs()
+  })
+
+  it('applies bounded app badge counts only for the trusted workbench frame', async () => {
+    const mainFrame = { processId: 10, routingId: 20 }
+    const contents = { id: 7, mainFrame }
+    const mainWindow = { isDestroyed: () => false, webContents: contents }
+    const trustedEvent = { sender: contents, senderFrame: mainFrame }
+    const untrustedEvent = { sender: { id: 9 }, senderFrame: mainFrame }
+    registerAppIpcHandlers(registerOptions({ getMainWindow: () => mainWindow as never }))
+
+    const supported = process.platform === 'darwin' || process.platform === 'linux'
+    await expect(handlers.get('app:badge-count')?.(trustedEvent, 3))
+      .resolves.toEqual({ applied: supported })
+    expect(electronMock.setBadgeCount).toHaveBeenCalledTimes(supported ? 1 : 0)
+    if (supported) expect(electronMock.setBadgeCount).toHaveBeenCalledWith(3)
+    await expect(handlers.get('app:badge-count')?.(trustedEvent, -1)).rejects.toThrow(
+      /Invalid payload for app:badge-count/
+    )
+    await expect(handlers.get('app:badge-count')?.(untrustedEvent, 1)).rejects.toThrow(
+      /trusted workbench frame/
+    )
   })
 
   it('registers the Cursor subscription discovery handler at application startup', () => {

@@ -1839,7 +1839,7 @@ const ALL_TOOLS: ModelToolSpec[] = [
 ]
 
 const READ_ONLY_TOOLS = new Set([
-  'read', 'write', 'edit', 'ls', 'glob', 'grep', 'web_search', 'web_fetch'
+  'read', 'ls', 'glob', 'grep', 'web_search', 'web_fetch'
 ])
 
 describe('isStalePlanContext', () => {
@@ -1861,7 +1861,7 @@ describe('isStalePlanContext', () => {
 })
 
 describe('resolvePlanModeToolSpecs', () => {
-  it('keeps read-only and Markdown tools available while the plan is unsaved', () => {
+  it('keeps only read-only tools available while the plan is unsaved', () => {
     const result = resolvePlanModeToolSpecs(ALL_TOOLS, {
       planTurnActive: true,
       createPlanSatisfied: false,
@@ -1876,8 +1876,8 @@ describe('resolvePlanModeToolSpecs', () => {
     expect(names).toContain('web_search')
     expect(names).toContain('web_fetch')
     expect(names).toContain('create_plan')
-    expect(names).toContain('write')
-    expect(names).toContain('edit')
+    expect(names).not.toContain('write')
+    expect(names).not.toContain('edit')
     expect(names).not.toContain('bash')
   })
 
@@ -1906,8 +1906,6 @@ describe('resolvePlanModeToolSpecs', () => {
     })
     expect(result.map((tool) => tool.name)).toEqual([
       'read',
-      'write',
-      'edit',
       'ls',
       'glob',
       'grep',
@@ -1917,14 +1915,21 @@ describe('resolvePlanModeToolSpecs', () => {
     ])
   })
 
-  it('plan satisfied: returns all tools unchanged (pass-through)', () => {
+  it('plan satisfied: keeps read-only tools but removes create_plan and mutation tools', () => {
     const result = resolvePlanModeToolSpecs(ALL_TOOLS, {
       planTurnActive: true,
       createPlanSatisfied: true,
       stepIndex: 0,
       readOnlyToolNames: READ_ONLY_TOOLS
     })
-    expect(result).toBe(ALL_TOOLS)
+    expect(result.map((tool) => tool.name)).toEqual([
+      'read',
+      'ls',
+      'glob',
+      'grep',
+      'web_search',
+      'web_fetch'
+    ])
   })
 
   it('not plan-active: returns all tools unchanged (pass-through)', () => {
@@ -1999,7 +2004,7 @@ describe('resolvePlanModeToolSpecs', () => {
     expect(names).toContain('user_input')
     expect(names).toContain('request_user_input')
     expect(names).toContain('create_plan')
-    expect(names).toContain('write')
+    expect(names).not.toContain('write')
   })
 
   it('step > 0: keeps investigation and user-input tools available', () => {
@@ -2011,7 +2016,6 @@ describe('resolvePlanModeToolSpecs', () => {
     })
     expect(result.map((t) => t.name)).toEqual([
       'read',
-      'write',
       'create_plan',
       'user_input',
       'request_user_input'

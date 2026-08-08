@@ -890,6 +890,173 @@ describe('chat-store navigation workspace selection', () => {
     expect(harness.selectThread).toHaveBeenCalledWith('thr_only')
   })
 
+  it('refreshThreads reconciles stale running summaries and clears only terminal watches', async () => {
+    const listed = [
+      thread({ id: 'thr_done', workspace: '/Users/zxy/project', status: 'running' }),
+      thread({ id: 'thr_live', workspace: '/Users/zxy/project', status: 'running' }),
+      thread({ id: 'thr_retry', workspace: '/Users/zxy/project', status: 'running' })
+    ]
+    const provider = {
+      listThreads: vi.fn(async () => listed),
+      getThreadDetail: vi.fn(async () => ({ blocks: [{ kind: 'user', id: 'u', text: 'work' }] })),
+      getThreadState: vi.fn(async (id: string) => {
+        if (id === 'thr_done') {
+          return { status: 'running', latestTurnId: 'turn_done', latestTurnStatus: 'completed' }
+        }
+        if (id === 'thr_live') {
+          return { status: 'idle', latestTurnId: 'turn_live', latestTurnStatus: 'running' }
+        }
+        throw new Error('temporary failure')
+      })
+    }
+    registryMock.getProvider.mockReturnValue(provider)
+    vi.stubGlobal('window', {
+      localStorage: new MemoryStorage(),
+      kunGui: {
+        getSettings: vi.fn(async () => ({
+          write: { defaultWorkspaceRoot: '', activeWorkspaceRoot: '', workspaces: [] }
+        })),
+        showTurnCompleteNotification: vi.fn(async () => ({ ok: true }))
+      }
+    })
+    const harness = buildHarness()
+    harness.state.activeThreadId = null
+    harness.state.threads = listed
+    harness.state.watchTurnCompletion = {
+      thr_done: true,
+      thr_live: true,
+      thr_retry: true
+    }
+
+    await harness.actions.refreshThreads()
+
+    expect(harness.state.threads.find((item) => item.id === 'thr_done')).toMatchObject({
+      status: 'idle', latestTurnId: 'turn_done', latestTurnStatus: 'completed'
+    })
+    expect(harness.state.threads.find((item) => item.id === 'thr_live')).toMatchObject({
+      status: 'running', latestTurnId: 'turn_live', latestTurnStatus: 'running'
+    })
+    expect(harness.state.watchTurnCompletion).toEqual({
+      thr_live: true,
+      thr_retry: true
+    })
+  })
+
+  it('ignores an older refresh after a newer refresh committed', async () => {
+    const oldList = deferred<NormalizedThread[]>()
+    const newList = deferred<NormalizedThread[]>()
+    const provider = {
+      listThreads: vi.fn()
+        .mockImplementationOnce(() => oldList.promise)
+        .mockImplementationOnce(() => newList.promise),
+      getThreadDetail: vi.fn(async () => ({ blocks: [{ kind: 'user', id: 'u', text: 'work' }] })),
+      getThreadState: vi.fn(async () => ({
+        status: 'idle',
+        latestTurnId: 'turn_new',
+        latestTurnStatus: 'completed'
+      }))
+    }
+    registryMock.getProvider.mockReturnValue(provider)
+    vi.stubGlobal('window', {
+      localStorage: new MemoryStorage(),
+      kunGui: {
+        getSettings: vi.fn(async () => ({
+          write: { defaultWorkspaceRoot: '', activeWorkspaceRoot: '', workspaces: [] }
+        }))
+      }
+    })
+    const harness = buildHarness()
+    harness.state.activeThreadId = null
+    harness.state.threads = []
+    harness.state.watchTurnCompletion = {}
+
+    const olderRefresh = harness.actions.refreshThreads()
+    const newerRefresh = harness.actions.refreshThreads()
+    newList.resolve([thread({ id: 'thr_new', workspace: '/Users/zxy/project', status: 'idle' })])
+    await newerRefresh
+    oldList.resolve([thread({ id: 'thr_old', workspace: '/Users/zxy/project', status: 'running' })])
+    await olderRefresh
+
+    expect(harness.state.threads.map((item) => item.id)).toEqual(['thr_new'])
+  })
+
+  it('keeps a newer running turn when a stale terminal state resolves after it started', async () => {
+    const provider = {
+      listThreads: vi.fn(async () => [
+        thread({ id: 'thr_turn', workspace: '/Users/zxy/project', status: 'running' })
+      ]),
+      getThreadDetail: vi.fn(async () => ({ blocks: [{ kind: 'user', id: 'u', text: 'work' }] })),
+      getThreadState: vi.fn(async () => ({
+        status: 'running',
+        latestTurnId: 'turn_A',
+        latestTurnStatus: 'completed'
+      }))
+    }
+    registryMock.getProvider.mockReturnValue(provider)
+    vi.stubGlobal('window', {
+      localStorage: new MemoryStorage(),
+      kunGui: {
+        getSettings: vi.fn(async () => ({
+          write: { defaultWorkspaceRoot: '', activeWorkspaceRoot: '', workspaces: [] }
+        }))
+      }
+    })
+    const harness = buildHarness()
+    harness.state.activeThreadId = null
+    harness.state.threads = [{
+      ...thread({ id: 'thr_turn', workspace: '/Users/zxy/project', status: 'running' }),
+      latestTurnId: 'turn_B',
+      latestTurnStatus: 'running'
+    }]
+    harness.state.watchTurnCompletion = {}
+
+    await harness.actions.refreshThreads()
+
+    // The runtime response describes the older turn A; the local projection
+    // already observed the newer turn B, so the stale response is rejected and
+    // the running B projection survives.
+    expect(harness.state.threads[0]).toMatchObject({
+      status: 'running',
+      latestTurnId: 'turn_B',
+      latestTurnStatus: 'running'
+    })
+  })
+
+  it('does not roll a confirmed terminal thread back to a stale raw running summary', async () => {
+    const provider = {
+      listThreads: vi.fn(async () => [
+        thread({ id: 'thr_terminal', workspace: '/Users/zxy/project', status: 'running' })
+      ]),
+      getThreadDetail: vi.fn(async () => ({ blocks: [] }))
+      // No getThreadState: legacy provider path must still preserve terminal evidence.
+    }
+    registryMock.getProvider.mockReturnValue(provider)
+    vi.stubGlobal('window', {
+      localStorage: new MemoryStorage(),
+      kunGui: {
+        getSettings: vi.fn(async () => ({
+          write: { defaultWorkspaceRoot: '', activeWorkspaceRoot: '', workspaces: [] }
+        }))
+      }
+    })
+    const harness = buildHarness()
+    harness.state.activeThreadId = null
+    harness.state.threads = [{
+      ...thread({ id: 'thr_terminal', workspace: '/Users/zxy/project', status: 'idle' }),
+      latestTurnId: 'turn_terminal',
+      latestTurnStatus: 'completed'
+    }]
+    harness.state.watchTurnCompletion = {}
+
+    await harness.actions.refreshThreads()
+
+    expect(harness.state.threads[0]).toMatchObject({
+      status: 'idle',
+      latestTurnId: 'turn_terminal',
+      latestTurnStatus: 'completed'
+    })
+  })
+
   it('refreshThreads clears Code session memory when the remembered thread disappears', async () => {
     const provider = {
       listThreads: vi.fn(async () => []),

@@ -47,6 +47,7 @@ import type {
 import type { WorkspaceFileSaveAsResult } from '../../shared/workspace-file'
 import type { GuiUpdateDownloadResult, GuiUpdateInfo, GuiUpdateInstallResult, GuiUpdateState } from '../../shared/gui-update'
 import {
+  appBadgeCountSchema,
   clawMirrorPayloadSchema,
   clawImInstallPollPayloadSchema,
   clawImTelegramTokenPayloadSchema,
@@ -2722,6 +2723,18 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       kind
     )
     return requestComputerUsePermission(parsed)
+  })
+  ipcMain.handle('app:badge-count', async (event, count: unknown) => {
+    assertTrustedWorkbenchSender(event, getMainWindow)
+    const badgeCount = parseIpcPayload('app:badge-count', appBadgeCountSchema, count)
+    if (process.platform !== 'darwin' && process.platform !== 'linux') {
+      return { applied: false }
+    }
+    try {
+      return { applied: app.setBadgeCount(badgeCount) }
+    } catch {
+      return { applied: false }
+    }
   })
   ipcMain.handle('notification:turn-complete', async (_, payload: unknown) =>
     showTurnCompleteNotification(

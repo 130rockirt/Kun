@@ -6,6 +6,8 @@ import {
 import { defaultConversationWorkspaceRoot } from '../lib/workspace-path'
 import { readProtectedSurfaceRestore } from '../extensions/protected-surface-session'
 
+import { readUnreadCompletions } from './unread-completions'
+
 export function createInitialChatStoreState(workingDirectoryLabel: string) {
   const protectedSurfaceRestore = readProtectedSurfaceRestore()
   return {
@@ -65,7 +67,7 @@ export function createInitialChatStoreState(workingDirectoryLabel: string) {
     queuedMessages: [],
     extensionComposerContexts: [],
     watchTurnCompletion: {},
-    unreadThreadIds: {},
+    unreadThreadIds: readUnreadCompletions(),
     sideConversations: {},
     sidePanel: { open: false, activeSideId: null },
     clawChannels: [],

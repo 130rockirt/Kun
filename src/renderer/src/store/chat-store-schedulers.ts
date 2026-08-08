@@ -13,14 +13,26 @@ type BusyWatchdogOptions = {
   busyTimeoutMessage: () => string
 }
 
+type ThreadCompletionState = {
+  status: string
+  latestTurnId?: string
+  latestTurnStatus?: string
+  completionWatchKey?: string
+}
+
 type TurnCompletionPollOptions = {
   loadThreadState: (
     state: ChatState,
     threadId: string
-  ) => Promise<{ status: string; latestTurnStatus?: string }>
-  threadLooksRunning: (threadStatus: string) => boolean
+  ) => Promise<ThreadCompletionState>
+  threadLooksRunning: (thread: ThreadCompletionState) => boolean
   onCompletedThreads: (
-    done: Array<{ id: string; latestTurnStatus?: string }>,
+    done: Array<{
+      id: string
+      latestTurnId?: string
+      latestTurnStatus?: string
+      completionWatchKey?: string
+    }>,
     state: ChatState,
     set: ChatStoreSet,
     get: ChatStoreGet
@@ -35,7 +47,13 @@ type TurnCompletionPollOptions = {
 }
 
 type CompletionPollOutcome =
-  | { kind: 'completed'; id: string; latestTurnStatus?: string }
+  | {
+      kind: 'completed'
+      id: string
+      latestTurnId?: string
+      latestTurnStatus?: string
+      completionWatchKey?: string
+    }
   | { kind: 'missing'; id: string }
   | null
 
@@ -138,9 +156,15 @@ async function pollTurnCompletionWatch(
   const outcomes: CompletionPollOutcome[] = await Promise.all(ids.map(async (threadId) => {
     try {
       const thread = await options.loadThreadState(state, threadId)
-      return options.threadLooksRunning(thread.status)
+      return options.threadLooksRunning(thread)
         ? null
-        : { kind: 'completed' as const, id: threadId, latestTurnStatus: thread.latestTurnStatus }
+        : {
+            kind: 'completed' as const,
+            id: threadId,
+            latestTurnId: thread.latestTurnId,
+            latestTurnStatus: thread.latestTurnStatus,
+            completionWatchKey: thread.completionWatchKey
+          }
     } catch (error) {
       return options.isMissingThreadError?.(error) ? { kind: 'missing' as const, id: threadId } : null
     }
@@ -148,7 +172,17 @@ async function pollTurnCompletionWatch(
   const completed = outcomes.filter((outcome): outcome is Extract<CompletionPollOutcome, { kind: 'completed' }> =>
     outcome?.kind === 'completed'
   )
-  const done = completed.map(({ id, latestTurnStatus }) => ({ id, latestTurnStatus }))
+  const done = completed.map(({
+    id,
+    latestTurnId,
+    latestTurnStatus,
+    completionWatchKey
+  }) => ({
+    id,
+    latestTurnId,
+    latestTurnStatus,
+    completionWatchKey
+  }))
   const missingIds = outcomes.flatMap((outcome) =>
     outcome?.kind === 'missing' ? [outcome.id] : []
   )

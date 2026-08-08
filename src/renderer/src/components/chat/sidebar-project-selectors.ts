@@ -15,6 +15,7 @@ import {
   resolveProjectWorkspacePath,
   shouldOmitFromCodeWorkspaceRoots
 } from '../../lib/worktree-project-path'
+import { threadLooksRunning } from '../../store/chat-store-runtime-helpers'
 import type { ThreadWorktreeRecord } from '../../lib/thread-worktree-registry'
 
 export type SidebarWorkspaceGroup = [workspacePath: string, threads: NormalizedThread[]]
@@ -50,7 +51,7 @@ export function sidebarThreadActivity(
 ): SidebarThreadActivity {
   const id = thread.id.trim()
   const running =
-    thread.status?.trim().toLowerCase() === 'running' ||
+    threadLooksRunning(thread) ||
     context.watchTurnCompletion[id] === true ||
     (context.activeThreadId === id && context.busy)
   if (running) return 'running'
@@ -330,7 +331,7 @@ export function isSidebarThreadMoveBlocked({
 }): boolean {
   const threadId = thread.id.trim()
   if (!threadId || deleting || worktreeRecord) return true
-  if (thread.status?.trim().toLowerCase() === 'running') return true
+  if (threadLooksRunning(thread)) return true
   if (watchTurnCompletion[threadId] === true) return true
   if (activeThreadId === threadId && busy) return true
   return false

@@ -79,6 +79,7 @@ import {
   findReusableEmptyThreadId,
   reconcileOptimisticUserBlock,
   settlePendingRuntimeWorkAfterInterrupt,
+  threadLooksRunning,
   threadSnapshotLooksRunning,
   threadBelongsToWorkspace
 } from './chat-store-runtime-helpers'
@@ -782,16 +783,17 @@ export function createMaintenanceActions(
     for (const threadId of originalThreadIds) {
       const localThread = get().threads.find((thread) => thread.id === threadId)
       if (
-        localThread && (
-          threadSnapshotLooksRunning([], localThread.status) ||
-          threadSnapshotLooksRunning([], localThread.latestTurnStatus)
-        )
+        localThread && threadLooksRunning(localThread)
       ) {
         return fail(i18n.t('common:designAgentBusy'), originalThreadIds, [])
       }
       try {
         const detail = await provider.getThreadDetail(threadId)
-        if (threadSnapshotLooksRunning(detail.blocks, detail.threadStatus)) {
+        if (threadSnapshotLooksRunning(
+          detail.blocks,
+          detail.threadStatus,
+          detail.latestTurnStatus
+        )) {
           return fail(i18n.t('common:designAgentBusy'), originalThreadIds, [])
         }
       } catch (error) {

@@ -10,10 +10,29 @@ import {
   reconcileOptimisticUserBlock,
   settlePendingRuntimeWorkAfterInterrupt,
   threadHasPendingRuntimeWork,
+  threadLooksRunning,
+  threadSnapshotLooksRunning,
   upsertUserBlock
 } from './chat-store-runtime-helpers'
 
 describe('chat store runtime helpers', () => {
+  it('uses the latest turn as the execution-state authority', () => {
+    expect(threadLooksRunning({ status: 'running', latestTurnStatus: 'completed' })).toBe(false)
+    expect(threadLooksRunning({ status: 'running', latestTurnStatus: 'failed' })).toBe(false)
+    expect(threadLooksRunning({ status: 'running', latestTurnStatus: 'aborted' })).toBe(false)
+    expect(threadLooksRunning({ status: 'idle', latestTurnStatus: 'running' })).toBe(true)
+    expect(threadLooksRunning({ status: 'idle', latestTurnStatus: 'queued' })).toBe(true)
+  })
+
+  it('keeps archived/deleted lifecycle states terminal and falls back to blocks without status', () => {
+    const runningBlock: ChatBlock = {
+      kind: 'tool', id: 'tool-1', summary: 'work', status: 'running', toolKind: 'tool_call'
+    }
+    expect(threadSnapshotLooksRunning([runningBlock], 'archived', 'running')).toBe(false)
+    expect(threadSnapshotLooksRunning([runningBlock], 'deleted', 'running')).toBe(false)
+    expect(threadSnapshotLooksRunning([runningBlock])).toBe(true)
+  })
+
   it('detects optimistic user block ids', () => {
     expect(isOptimisticUserBlockId('u-123')).toBe(true)
     expect(isOptimisticUserBlockId('q-123-0')).toBe(true)

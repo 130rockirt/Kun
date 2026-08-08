@@ -266,6 +266,7 @@ describe('chat-store-side-actions', () => {
   })
   afterEach(() => {
     teardownAllSideSubscriptions()
+    vi.unstubAllGlobals()
     delete (globalThis as { window?: unknown }).window
   })
 
@@ -656,6 +657,37 @@ describe('chat-store-side-actions', () => {
     expect(state.sideConversations[id]).toBeUndefined()
     expect(signal?.aborted).toBe(true)
     expect(state.busy).toBe(true)
+  })
+
+  it('marks a hidden side completion unread and clears it when the side is opened', async () => {
+    vi.stubGlobal('document', {
+      visibilityState: 'hidden',
+      hasFocus: () => false
+    })
+    const { actions, state, provider } = buildHarness()
+    const id = (await actions.spawnSideConversation())!
+    const sink = provider.subscribeMock.mock.calls.at(-1)?.[2] as ThreadEventSink
+
+    sink.onTurnComplete()
+    sink.onTurnComplete()
+    expect(state.unreadThreadIds).toEqual({ [id]: true })
+
+    actions.selectSideConversation(id)
+    expect(state.unreadThreadIds).toEqual({})
+  })
+
+  it('keeps the focused selected side completion read', async () => {
+    vi.stubGlobal('document', {
+      visibilityState: 'visible',
+      hasFocus: () => true
+    })
+    const { actions, state, provider } = buildHarness()
+    const id = (await actions.spawnSideConversation())!
+    const sink = provider.subscribeMock.mock.calls.at(-1)?.[2] as ThreadEventSink
+
+    sink.onTurnComplete()
+
+    expect(state.unreadThreadIds).toEqual({})
   })
 
   it('deduplicates replayed compaction lifecycle events by item id', async () => {

@@ -148,6 +148,71 @@ describe('syncTurnCompletionPoll', () => {
     vi.useRealTimers()
   })
 
+  it.each(['completed', 'failed', 'aborted'])(
+    'treats a terminal latest turn (%s) as completed even when the thread summary is stale running',
+    async (latestTurnStatus) => {
+      const h = makeHarness({
+        runtimeConnection: 'ready',
+        watchTurnCompletion: { thr_background: true }
+      })
+      const loadThreadState = vi.fn(async () => ({
+        status: 'running',
+        latestTurnId: 'turn-old',
+        latestTurnStatus
+      }))
+      const onCompletedThreads = vi.fn(async () => {
+        h.set({ watchTurnCompletion: {} })
+      })
+
+      syncTurnCompletionPoll(h.set, h.get, {
+        loadThreadState,
+        threadLooksRunning: (thread) => thread.latestTurnStatus === 'running',
+        onCompletedThreads
+      })
+      await vi.runAllTimersAsync()
+
+      expect(onCompletedThreads).toHaveBeenCalledWith([
+        { id: 'thr_background', latestTurnId: 'turn-old', latestTurnStatus }
+      ], expect.anything(), expect.anything(), expect.anything())
+    }
+  )
+
+  it('keeps a watch when the latest turn is running despite an idle thread summary', async () => {
+    const h = makeHarness({
+      runtimeConnection: 'ready',
+      watchTurnCompletion: { thr_background: true }
+    })
+    syncTurnCompletionPoll(h.set, h.get, {
+      loadThreadState: async () => ({ status: 'idle', latestTurnStatus: 'running' }),
+      threadLooksRunning: (thread) => thread.latestTurnStatus === 'running',
+      onCompletedThreads: vi.fn()
+    })
+    await vi.advanceTimersByTimeAsync(1)
+
+    expect(h.getState().watchTurnCompletion).toEqual({ thr_background: true })
+  })
+
+  it('keeps a watch across a transient poll failure and retries', async () => {
+    const h = makeHarness({
+      runtimeConnection: 'ready',
+      watchTurnCompletion: { thr_background: true }
+    })
+    const loadThreadState = vi.fn()
+      .mockRejectedValueOnce(new Error('temporary network failure'))
+      .mockResolvedValueOnce({ status: 'idle', latestTurnStatus: 'completed' })
+    const onCompletedThreads = vi.fn(async () => h.set({ watchTurnCompletion: {} }))
+
+    syncTurnCompletionPoll(h.set, h.get, {
+      loadThreadState,
+      threadLooksRunning: (thread) => thread.status === 'running',
+      onCompletedThreads
+    })
+    await vi.advanceTimersByTimeAsync(1)
+    expect(h.getState().watchTurnCompletion).toEqual({ thr_background: true })
+    await vi.advanceTimersByTimeAsync(2500)
+    expect(onCompletedThreads).toHaveBeenCalledOnce()
+  })
+
   it('uses the lightweight status response and clears a completed watch', async () => {
     const h = makeHarness({
       runtimeConnection: 'ready',
@@ -156,12 +221,16 @@ describe('syncTurnCompletionPoll', () => {
     const loadThreadState = vi.fn(async () => ({ status: 'idle', latestTurnStatus: 'completed' }))
     const onCompletedThreads = vi.fn(async (done: Array<{ id: string }>) => {
       h.set({ watchTurnCompletion: {} })
-      expect(done).toEqual([{ id: 'thr_background', latestTurnStatus: 'completed' }])
+      expect(done).toEqual([{
+        id: 'thr_background',
+        latestTurnId: undefined,
+        latestTurnStatus: 'completed'
+      }])
     })
 
     syncTurnCompletionPoll(h.set, h.get, {
       loadThreadState,
-      threadLooksRunning: (status) => status === 'running',
+      threadLooksRunning: (thread) => thread.status === 'running',
       onCompletedThreads
     })
     await vi.runAllTimersAsync()

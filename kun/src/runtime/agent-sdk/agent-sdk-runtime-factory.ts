@@ -803,7 +803,7 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
       }))
       const bridgedTools = selectBridgeableTools(
         bridgeableTools,
-        graphPolicy ? { overlap: new Set() } : undefined
+        graphPolicy || plan.planMode ? { overlap: new Set() } : undefined
       )
 
       // This is the portable rebase handoff. Compatible consecutive turns use
@@ -885,7 +885,7 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
               approvalReviewer,
               planMode,
               allowSdkBuiltins:
-                graphPolicy || turn?.guiDesignArtifact?.kind === 'svg'
+                graphPolicy || planMode || turn?.guiDesignArtifact?.kind === 'svg'
                   ? false
                   : deps.allowSdkBuiltins ?? true,
               capabilities: agentSdkCapabilities(),
@@ -920,7 +920,7 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
         actingModelRoute,
         planMode,
         allowSdkBuiltins:
-          graphPolicy || turn?.guiDesignArtifact?.kind === 'svg'
+          graphPolicy || planMode || turn?.guiDesignArtifact?.kind === 'svg'
             ? false
             : deps.allowSdkBuiltins ?? true,
         ...(graphPolicy

@@ -108,11 +108,28 @@ export function settlePendingRuntimeWorkAfterInterrupt(blocks: ChatBlock[]): Cha
   return changed ? next : blocks
 }
 
-export function threadSnapshotLooksRunning(blocks: ChatBlock[], threadStatus?: string): boolean {
-  if (threadStatus != null && threadStatus.trim()) {
-    return runtimeStatusLooksRunning(threadStatus)
+export function threadSnapshotLooksRunning(
+  blocks: ChatBlock[],
+  threadStatus?: string,
+  latestTurnStatus?: string
+): boolean {
+  const normalizedThreadStatus = normalizedRuntimeStatus(threadStatus)
+  if (normalizedThreadStatus === 'archived' || normalizedThreadStatus === 'deleted') return false
+
+  if (latestTurnStatus != null && latestTurnStatus.trim()) {
+    return runtimeStatusLooksRunning(latestTurnStatus)
+  }
+  if (normalizedThreadStatus) {
+    return runtimeStatusLooksRunning(normalizedThreadStatus)
   }
   return threadHasPendingRuntimeWork(blocks)
+}
+
+export function threadLooksRunning(thread: {
+  status?: string
+  latestTurnStatus?: string
+}): boolean {
+  return threadSnapshotLooksRunning([], thread.status, thread.latestTurnStatus)
 }
 
 export function findLatestUserBlockId(blocks: ChatBlock[]): string | null {
@@ -346,8 +363,12 @@ export async function findReusableEmptyThreadId(
   return null
 }
 
+function normalizedRuntimeStatus(status?: string): string {
+  return status?.trim().toLowerCase() ?? ''
+}
+
 function runtimeStatusLooksRunning(status?: string): boolean {
-  const normalized = status?.trim().toLowerCase()
+  const normalized = normalizedRuntimeStatus(status)
   return normalized === 'running'
     || normalized === 'in_progress'
     || normalized === 'queued'

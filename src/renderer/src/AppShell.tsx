@@ -1,5 +1,6 @@
 import { lazy, Suspense, useEffect } from 'react'
 import { appWindowTitleForFlavor } from '@shared/app-environment'
+import { MAX_APP_BADGE_COUNT } from '@shared/kun-gui-api'
 import { useChatStore } from './store/chat-store'
 import { supportsDesktopTitleBar, WindowsTitleBar } from './components/WindowsTitleBar'
 import { RuntimeStatusBanner } from './components/RuntimeStatusBanner'
@@ -9,6 +10,11 @@ import { ProtectedRendererSurface } from './extensions/ProtectedRendererSurface'
 import { ExtensionSettingsServiceProvider } from './extensions/ExtensionSettingsServiceContext'
 import { RuntimeExtensionSettingsService } from './extensions/runtime-extension-settings-service'
 import { DataMigrationActivityIndicator } from './components/DataMigrationActivityIndicator'
+import {
+  clearCurrentlyVisibleUnreadCompletions,
+  persistUnreadCompletions,
+  unreadCompletionCount
+} from './store/unread-completions'
 
 const extensionSettingsService = new RuntimeExtensionSettingsService()
 
@@ -59,6 +65,50 @@ export default function AppShell(): React.ReactElement {
       if (frame) window.cancelAnimationFrame(frame)
     }
   }, [boot])
+
+  useEffect(() => {
+    let previousUnread = useChatStore.getState().unreadThreadIds
+    const syncBadge = (unread: typeof previousUnread): void => {
+      const normalized = persistUnreadCompletions(unread)
+      const count = Math.min(unreadCompletionCount(normalized), MAX_APP_BADGE_COUNT)
+      if (typeof window.kunGui?.setAppBadgeCount !== 'function') return
+      void window.kunGui.setAppBadgeCount(count).catch((error: unknown) => {
+        void window.kunGui?.logError?.('app-badge', 'Failed to update unread completion badge', {
+          message: error instanceof Error ? error.message : String(error),
+          count
+        }).catch(() => undefined)
+      })
+    }
+    const clearVisible = (): void => {
+      const state = useChatStore.getState()
+      const unreadThreadIds = clearCurrentlyVisibleUnreadCompletions(state.unreadThreadIds, state)
+      if (unreadThreadIds !== state.unreadThreadIds) useChatStore.setState({ unreadThreadIds })
+    }
+    const onAttentionChanged = (): void => clearVisible()
+    const unsubscribe = useChatStore.subscribe((state) => {
+      const visibleCleared = clearCurrentlyVisibleUnreadCompletions(state.unreadThreadIds, state)
+      if (visibleCleared !== state.unreadThreadIds) {
+        useChatStore.setState({ unreadThreadIds: visibleCleared })
+        return
+      }
+      if (state.unreadThreadIds === previousUnread) return
+      previousUnread = state.unreadThreadIds
+      syncBadge(previousUnread)
+    })
+
+    clearVisible()
+    previousUnread = useChatStore.getState().unreadThreadIds
+    syncBadge(previousUnread)
+    window.addEventListener('focus', onAttentionChanged)
+    window.addEventListener('blur', onAttentionChanged)
+    document.addEventListener('visibilitychange', onAttentionChanged)
+    return () => {
+      unsubscribe()
+      window.removeEventListener('focus', onAttentionChanged)
+      window.removeEventListener('blur', onAttentionChanged)
+      document.removeEventListener('visibilitychange', onAttentionChanged)
+    }
+  }, [])
 
   useEffect(() => {
     if (!appEnvironment?.flavor || typeof document === 'undefined') return

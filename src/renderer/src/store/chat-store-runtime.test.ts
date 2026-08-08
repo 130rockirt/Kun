@@ -529,6 +529,47 @@ describe('thread event sink binding', () => {
     vi.unstubAllGlobals()
   })
 
+  it('keeps a focused visible active conversation read when its turn completes', () => {
+    vi.stubGlobal('document', {
+      visibilityState: 'visible',
+      hasFocus: () => true
+    })
+    vi.stubGlobal('window', { kunGui: {} })
+    const { getState, set, get } = makeSinkHarness({
+      route: 'chat',
+      activeThreadId: 'thread-visible',
+      sideConversations: {},
+      sidePanel: { open: false, activeSideId: null },
+      unreadThreadIds: { 'thread-visible': true }
+    })
+
+    buildThreadEventSink(set, get, { threadId: 'thread-visible' }).onTurnComplete()
+
+    expect(getState().unreadThreadIds).toEqual({})
+    vi.unstubAllGlobals()
+  })
+
+  it('marks the active conversation unread when it completes while the app is hidden', () => {
+    vi.stubGlobal('document', {
+      visibilityState: 'hidden',
+      hasFocus: () => false
+    })
+    vi.stubGlobal('window', { kunGui: {} })
+    const { getState, set, get } = makeSinkHarness({
+      route: 'chat',
+      activeThreadId: 'thread-hidden',
+      sideConversations: {},
+      sidePanel: { open: false, activeSideId: null }
+    })
+
+    const sink = buildThreadEventSink(set, get, { threadId: 'thread-hidden' })
+    sink.onTurnComplete()
+    sink.onTurnComplete()
+
+    expect(getState().unreadThreadIds).toEqual({ 'thread-hidden': true })
+    vi.unstubAllGlobals()
+  })
+
   it('refreshes the active Write workspace exactly for a successful in-workspace file change', () => {
     const originalWriteState = useWriteWorkspaceStore.getState()
     const refreshWorkspace = vi.fn(async () => undefined)

@@ -302,6 +302,12 @@ export type KunProjectConfigFileResult = {
   skillRootCount: number
   disabledSkillCount: number
 }
+export const MAX_APP_BADGE_COUNT = 999
+
+export type AppBadgeCountResult = {
+  applied: boolean
+}
+
 export type TurnCompleteNotificationSource = 'main-agent' | 'subagent'
 
 export type TurnCompleteNotificationPayload = {
@@ -967,6 +973,7 @@ export type KunGuiApi = ExtensionIpcApi & {
   showTurnCompleteNotification: (
     payload: TurnCompleteNotificationPayload
   ) => Promise<SystemNotificationResult>
+  setAppBadgeCount: (count: number) => Promise<AppBadgeCountResult>
   getAppVersion: () => Promise<string>
   getGuiUpdateState: () => Promise<GuiUpdateState>
   checkGuiUpdate: (channel?: GuiUpdateChannel) => Promise<GuiUpdateInfo>

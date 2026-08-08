@@ -125,7 +125,11 @@ import {
   turnCompleteNotificationSource,
   watchTurnCompletionNotification
 } from './chat-store-runtime'
-import { getThreadSnapshot, snapshotThreadProjection } from './thread-snapshot-cache'
+import {
+  getThreadSnapshot,
+  invalidateThreadSnapshot,
+  snapshotThreadProjection
+} from './thread-snapshot-cache'
 import {
   composerSelectionForThread,
   ensureRuntimeProviderForSend,
@@ -476,6 +480,13 @@ export function createThreadActions(
     const state = get()
     if (!state.activeThreadId) return false
     const { activeThreadId } = state
+    // Recovery results are bound to the thread selected when the request
+    // started. If the user switches to another thread or starts a newer turn
+    // while the detail is in flight, never commit this stale projection.
+    const recoveryGeneration = ++threadSelectionGeneration
+    const recoveryStillCurrent = (): boolean =>
+      recoveryGeneration === threadSelectionGeneration &&
+      get().activeThreadId === activeThreadId
     const p = getProvider()
     sseAbortRef.current?.abort()
     sseAbortRef.current = null
@@ -487,14 +498,16 @@ export function createThreadActions(
         latestSeq,
         threadStatus,
         latestTurnId,
+        latestTurnStatus,
         latestTurnOrchestration,
         latestUserMessageId,
         turnDurationByUserId = {},
         goal,
         todos
       } = await p.getThreadDetail(activeThreadId)
+      if (!recoveryStillCurrent()) return state.busy
       const loaded = hydrateBlockModelLabels(activeThreadId, rawBlocks)
-      const busy = threadSnapshotLooksRunning(loaded, threadStatus)
+      const busy = threadSnapshotLooksRunning(loaded, threadStatus, latestTurnStatus)
       // The server has settled but a tool/approval/user_input block may still be
       // open (e.g. a delegate_task interrupted by a runtime restart). Settle it,
       // otherwise threadHasPendingRuntimeWork stays true and the queued message
@@ -503,31 +516,50 @@ export function createThreadActions(
       const currentTurnUserId = busy
         ? state.currentTurnUserId ?? latestUserMessageId ?? findLatestUserBlockId(blocks)
         : null
-      const currentTurnId = busy ? state.currentTurnId ?? latestTurnId ?? null : null
+      // The detail response is authoritative for the running turn; a stale local
+      // currentTurnId from a previous recovery attempt must not win over it.
+      const currentTurnId = busy ? latestTurnId ?? state.currentTurnId ?? null : null
       const durableQueuedMessages = queuedMessagesForThread(activeThreadId)
       const queuedMessages = reconcileQueuedMessages(
         state.queuedMessages.length > 0 ? state.queuedMessages : durableQueuedMessages,
         { busy, turnId: currentTurnId, blocks }
       )
 
-      set({
-        activeThreadId,
-        activeThreadGoal: goal ?? null,
-        activeThreadTodos: todos ?? null,
-        blocks,
-        lastSeq: latestSeq,
-        // Re-baseline the shared delta floor to this subscription's since_seq,
-        // in lockstep with the liveAssistant reset below.
-        liveDeltaSeqFloor: latestSeq,
-        liveReasoning: '',
-        liveAssistant: '',
-        error: busy ? runtimeStreamRecoveringMessage() : null,
-        busy,
-        currentTurnId,
-        currentTurnOrchestration: busy ? latestTurnOrchestration ?? 'direct' : null,
-        currentTurnUserId,
-        turnDurationByUserId,
-        queuedMessages
+      set((snapshot) => {
+        const watchTurnCompletion = { ...(snapshot.watchTurnCompletion ?? {}) }
+        if (!busy) {
+          delete watchTurnCompletion[activeThreadId]
+          clearWatchedCompletionNotification(activeThreadId)
+          invalidateThreadSnapshot(activeThreadId)
+        }
+        return {
+          activeThreadId,
+          activeThreadGoal: goal ?? null,
+          activeThreadTodos: todos ?? null,
+          blocks,
+          lastSeq: latestSeq,
+          // Re-baseline the shared delta floor to this subscription's since_seq,
+          // in lockstep with the liveAssistant reset below.
+          liveDeltaSeqFloor: latestSeq,
+          liveReasoning: '',
+          liveAssistant: '',
+          error: busy ? runtimeStreamRecoveringMessage() : null,
+          busy,
+          currentTurnId,
+          currentTurnOrchestration: busy ? latestTurnOrchestration ?? 'direct' : null,
+          currentTurnUserId,
+          turnDurationByUserId,
+          queuedMessages,
+          watchTurnCompletion,
+          threads: snapshot.threads.map((thread) => thread.id === activeThreadId
+            ? {
+                ...thread,
+                status: thread.archived ? thread.status : busy ? 'running' : 'idle',
+                ...(latestTurnId ? { latestTurnId } : {}),
+                ...(latestTurnStatus ? { latestTurnStatus } : {})
+              }
+            : thread)
+        }
       })
       saveQueuedMessagesForThread(activeThreadId, queuedMessages)
 
@@ -545,6 +577,7 @@ export function createThreadActions(
       }
       return busy
     } catch (e) {
+      if (!recoveryStillCurrent()) return state.busy
       set({
         error: formatRuntimeError(e),
         ...(shouldOpenSettingsForError(e)
@@ -718,7 +751,7 @@ export function createThreadActions(
             )
           : rawBlocks
       const loaded = hydrateBlockModelLabels(id, labeledBlocks)
-      const busy = threadSnapshotLooksRunning(loaded, threadStatus)
+      const busy = threadSnapshotLooksRunning(loaded, threadStatus, latestTurnStatus)
       // Settle blocks left open by an interrupted turn when the server has
       // already settled, so selecting the thread doesn't keep it wedged (#621).
       const blocks = busy ? loaded : settlePendingRuntimeWorkAfterInterrupt(loaded)
@@ -879,6 +912,7 @@ export function createThreadActions(
         latestSeq,
         threadStatus,
         latestTurnId,
+        latestTurnStatus,
         latestTurnOrchestration,
         latestUserMessageId,
         turnDurationByUserId = {},
@@ -887,7 +921,7 @@ export function createThreadActions(
       } = await p.getThreadDetail(targetThreadId)
       if (ac.signal.aborted) return
       const loaded = hydrateBlockModelLabels(targetThreadId, rawBlocks)
-      const busy = threadSnapshotLooksRunning(loaded, threadStatus)
+      const busy = threadSnapshotLooksRunning(loaded, threadStatus, latestTurnStatus)
       // Settle blocks left open by an interrupted turn when the server has
       // already settled, so the thread doesn't stay wedged on load (#621).
       const blocks = busy ? loaded : settlePendingRuntimeWorkAfterInterrupt(loaded)
@@ -910,7 +944,15 @@ export function createThreadActions(
         currentTurnOrchestration: busy ? latestTurnOrchestration ?? 'direct' : null,
         currentTurnUserId,
         turnDurationByUserId,
-        queuedMessages
+        queuedMessages,
+        threads: get().threads.map((thread) => thread.id === targetThreadId
+          ? {
+              ...thread,
+              status: thread.archived ? thread.status : busy ? 'running' : 'idle',
+              ...(latestTurnId ? { latestTurnId } : {}),
+              ...(latestTurnStatus ? { latestTurnStatus } : {})
+            }
+          : thread)
       })
       saveQueuedMessagesForThread(targetThreadId, queuedMessages)
       // The server replays every event persisted after latestSeq, including
@@ -1694,8 +1736,21 @@ export function createThreadActions(
       // Re-baseline the shared delta floor to this send's since_seq right before
       // the sink opens, so a replayed backlog can't re-append text. Subscribe to the
       // turn's event stream BEFORE the cosmetic title rename so a slow/blocked title
-      // write never delays the conversation.
-      set({ currentTurnId: turnId, liveDeltaSeqFloor: seqAtSend })
+      // write never delays the conversation. Project the accepted turn onto the
+      // sidebar immediately so a stale summary for the previous turn cannot make
+      // this thread look idle or completed while the new turn streams.
+      set((s) => ({
+        currentTurnId: turnId,
+        liveDeltaSeqFloor: seqAtSend,
+        threads: s.threads.map((thread) => thread.id === activeThreadId
+          ? {
+              ...thread,
+              status: thread.archived ? thread.status : 'running',
+              latestTurnId: turnId,
+              latestTurnStatus: 'running'
+            }
+          : thread)
+      }))
       const ac = new AbortController()
       sseAbortRef.current = ac
       const sink = buildThreadEventSink(set, get, { threadId: activeThreadId, signal: ac.signal, sinceSeq: seqAtSend })
@@ -1860,7 +1915,20 @@ export function createThreadActions(
       }
       // Re-baseline the shared delta floor to this send's since_seq right
       // before the sink opens, so a replayed backlog can't re-append text.
-      set({ currentTurnId: turnId, liveDeltaSeqFloor: seqAtSend })
+      // Project the accepted review turn so a stale previous-turn summary
+      // cannot make this thread look idle/completed while it streams.
+      set((s) => ({
+        currentTurnId: turnId,
+        liveDeltaSeqFloor: seqAtSend,
+        threads: s.threads.map((thread) => thread.id === activeThreadId
+          ? {
+              ...thread,
+              status: thread.archived ? thread.status : 'running',
+              latestTurnId: turnId,
+              latestTurnStatus: 'running'
+            }
+          : thread)
+      }))
       const ac = new AbortController()
       sseAbortRef.current = ac
       const sink = buildThreadEventSink(set, get, { threadId: activeThreadId, signal: ac.signal, sinceSeq: seqAtSend })

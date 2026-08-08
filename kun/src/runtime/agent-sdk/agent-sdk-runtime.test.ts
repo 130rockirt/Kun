@@ -332,6 +332,62 @@ describe('AgentSdkRuntime.runTurn', () => {
     })
   })
 
+  test('denies every native SDK tool in Plan mode before full-access handling', () => {
+    const context = {
+      workspace: '/ws',
+      sandboxMode: 'danger-full-access' as const,
+      planMode: true
+    }
+    for (const toolName of ['Write', 'Edit', 'Bash', 'Read']) {
+      expect(decideSdkBuiltinSandbox(toolName, { file_path: '/ws/file.ts' }, context)).toMatchObject({
+        allow: false,
+        message: expect.stringContaining('Plan mode')
+      })
+    }
+    expect(decideSdkBuiltinSandbox('mcp__kun__create_plan', {}, context)).toBeNull()
+  })
+
+  test('Plan turns disable SDK built-ins and bridge Kun read tools plus create_plan', async () => {
+    let options: {
+      tools?: unknown[]
+      allowedTools?: string[]
+      permissionMode?: unknown
+    } = {}
+    const sdk = fakeSdk(STREAM, (value) => {
+      options = value as typeof options
+    })
+    const { deps } = makeDeps({
+      loadSdk: async () => sdk,
+      loadTurnContext: async () => ({
+        workspace: '/ws',
+        userText: 'plan this safely',
+        approvalPolicy: 'auto',
+        sandboxMode: 'danger-full-access',
+        planMode: true,
+        bridgeableTools: [
+          { name: 'read', description: 'Read a file', inputSchema: { type: 'object' } },
+          { name: 'grep', description: 'Search files', inputSchema: { type: 'object' } },
+          { name: 'create_plan', description: 'Save the plan', inputSchema: { type: 'object' } }
+        ]
+      })
+    })
+
+    await expect(new AgentSdkRuntime(deps).runTurn(
+      'th',
+      'tn',
+      new AbortController().signal
+    )).resolves.toBe('completed')
+
+    expect(options.tools).toEqual([])
+    expect(options.permissionMode).toBe('default')
+    expect(options.allowedTools).toEqual(expect.arrayContaining([
+      'mcp__kun__read',
+      'mcp__kun__grep',
+      'mcp__kun__create_plan'
+    ]))
+    expect(options.allowedTools).not.toEqual(expect.arrayContaining(['Read', 'Write', 'Edit', 'Bash']))
+  })
+
   test('drives the SDK stream into kun events/items and completes the turn', async () => {
     const { deps, events, items, finished, sessions } = makeDeps({ loadSdk: async () => fakeSdk(STREAM) })
     const runtime = new AgentSdkRuntime(deps)

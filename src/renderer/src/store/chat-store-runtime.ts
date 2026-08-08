@@ -32,9 +32,15 @@ import {
   isOptimisticUserBlockId,
   reconcileOptimisticUserBlock,
   settlePendingRuntimeWorkAfterInterrupt,
+  threadLooksRunning,
   threadSnapshotLooksRunning,
   upsertUserBlock
 } from './chat-store-runtime-helpers'
+import {
+  clearUnreadCompletion,
+  completionIsCurrentlyVisible,
+  markUnreadCompletion
+} from './unread-completions'
 import { invalidateThreadSnapshot } from './thread-snapshot-cache'
 import {
   isWriteAssistantThread,
@@ -122,6 +128,18 @@ export function completionNotificationDedupeKeyForWatchedThread(
   const normalizedThreadId = threadId?.trim()
   if (!normalizedThreadId) return `watch:unknown:${now}`
   return watchCompletionNotificationKeys.get(normalizedThreadId) ?? `watch:${normalizedThreadId}:${now}`
+}
+
+/**
+ * The opaque watch-generation token for a thread, when a background completion
+ * watch is currently armed. Consumers compare a token captured at request start
+ * against the current token at commit time to reject results from an older
+ * watch that was removed and re-created for a newer turn.
+ */
+export function currentCompletionWatchToken(threadId: string | null | undefined): string | undefined {
+  const normalizedThreadId = threadId?.trim()
+  if (!normalizedThreadId) return undefined
+  return watchCompletionNotificationKeys.get(normalizedThreadId)
 }
 
 export function clearWatchedCompletionNotifications(): void {
@@ -320,7 +338,7 @@ export function turnCompleteNotificationSource(
     : 'main-agent'
 }
 
-function notifyTurnComplete(
+export function notifyTurnComplete(
   threadId: string | null,
   state: ChatState,
   dedupeKey: string,
@@ -690,57 +708,89 @@ export function syncTurnCompletionPoll(
   syncTurnCompletionPollImpl(set, get, {
     loadThreadState: async (state, threadId) => {
       const provider = getProvider()
-      return provider.getThreadState(threadId)
-    },
-    threadLooksRunning: (status) => threadSnapshotLooksRunning([], status),
-    onCompletedThreads: async (done, state, setState, getState) => {
-      for (const { id } of done) {
-        notifyTurnComplete(
-          id,
-          state,
-          completionNotificationDedupeKeyForWatchedThread(id),
-          watchCompletionNotificationSources.get(id)
-        )
-        clearWatchedCompletionNotification(id)
+      const completionWatchKey = watchCompletionNotificationKeys.get(threadId)
+      return {
+        ...(await provider.getThreadState(threadId)),
+        ...(completionWatchKey ? { completionWatchKey } : {})
       }
+    },
+    threadLooksRunning,
+    onCompletedThreads: async (done, _state, setState, getState) => {
+      // Claim watches atomically inside the functional update. Between the
+      // poll response and this commit the user may have switched away and
+      // re-created a watch for a newer turn on the same thread; only the watch
+      // token captured at request start may be cleared, and only when it is
+      // still the current one. Notifications/cache invalidation run after the
+      // claim so they never fire for a watch that was not actually removed.
+      let claimed: typeof done = []
       setState((snapshot) => {
+        const accepted = done.filter(({ id, completionWatchKey }) => {
+          if (!snapshot.watchTurnCompletion[id]) return false
+          if (
+            completionWatchKey &&
+            watchCompletionNotificationKeys.get(id) !== completionWatchKey
+          ) return false
+          return true
+        })
+        if (accepted.length === 0) return snapshot
+        claimed = accepted
         const watchTurnCompletion = { ...snapshot.watchTurnCompletion }
-        const unreadThreadIds = { ...snapshot.unreadThreadIds }
-        for (const { id } of done) {
+        let unreadThreadIds = snapshot.unreadThreadIds
+        const completedById = new Map(accepted.map((item) => [item.id, item]))
+        for (const { id } of accepted) {
           delete watchTurnCompletion[id]
-          unreadThreadIds[id] = true
+          unreadThreadIds = completionIsCurrentlyVisible(snapshot, id)
+            ? clearUnreadCompletion(unreadThreadIds, id)
+            : markUnreadCompletion(unreadThreadIds, id)
         }
-        const completedById = new Map(done.map((item) => [item.id, item.latestTurnStatus]))
         return {
           watchTurnCompletion,
           unreadThreadIds,
           threads: snapshot.threads.map((thread) => {
-            const latestTurnStatus = completedById.get(thread.id)
-            if (!completedById.has(thread.id)) return thread
+            const completion = completedById.get(thread.id)
+            if (!completion) return thread
             return {
               ...thread,
               status: thread.archived ? thread.status : 'idle',
-              ...(latestTurnStatus ? { latestTurnStatus } : {})
+              ...(completion.latestTurnId ? { latestTurnId: completion.latestTurnId } : {}),
+              ...(completion.latestTurnStatus ? { latestTurnStatus: completion.latestTurnStatus } : {})
             }
           })
         }
       })
-      for (const { id } of done) invalidateThreadSnapshot(id)
+      if (claimed.length === 0) return
+      const notificationState = getState()
+      for (const { id, completionWatchKey } of claimed) {
+        notifyTurnComplete(
+          id,
+          notificationState,
+          completionWatchKey ?? completionNotificationDedupeKeyForWatchedThread(id),
+          watchCompletionNotificationSources.get(id)
+        )
+        clearWatchedCompletionNotification(id)
+        invalidateThreadSnapshot(id)
+      }
       void getState().refreshThreads()
     },
     isMissingThreadError: (error) => getRuntimeErrorCode(error) === 'not_found',
     onMissingThreads: async (ids, _state, setState) => {
-      for (const id of ids) clearWatchedCompletionNotification(id)
+      let cleared: string[] = []
       setState((snapshot) => {
+        const removed = ids.filter((id) => snapshot.watchTurnCompletion[id])
+        if (removed.length === 0) return snapshot
+        cleared = removed
         const watchTurnCompletion = { ...snapshot.watchTurnCompletion }
         const unreadThreadIds = { ...snapshot.unreadThreadIds }
-        for (const id of ids) {
+        for (const id of removed) {
           delete watchTurnCompletion[id]
           delete unreadThreadIds[id]
         }
         return { watchTurnCompletion, unreadThreadIds }
       })
-      for (const id of ids) invalidateThreadSnapshot(id)
+      for (const id of cleared) {
+        clearWatchedCompletionNotification(id)
+        invalidateThreadSnapshot(id)
+      }
     }
   })
 }
@@ -771,18 +821,28 @@ async function reconcileCompletedTurnFromThreadDetail(input: {
   if (!threadId) return
 
   try {
-    const detail = await input.loadThreadDetail(threadId)
-    const loaded = hydrateBlockModelLabels(threadId, detail.blocks)
+    const {
+      blocks: rawBlocks,
+      latestSeq,
+      threadStatus,
+      latestTurnId,
+      latestTurnStatus,
+      goal,
+      todos
+    } = await input.loadThreadDetail(threadId)
+    const loaded = hydrateBlockModelLabels(threadId, rawBlocks)
 
     input.set((state) => reduceChatProjection(state, {
       type: 'thread_snapshot_reconciled',
       payload: {
         threadId,
         blocks: loaded,
-        latestSeq: detail.latestSeq,
-        threadStatus: detail.threadStatus,
-        goal: detail.goal,
-        todos: detail.todos,
+        latestSeq,
+        threadStatus,
+        latestTurnId,
+        latestTurnStatus,
+        goal,
+        todos,
         turnId: input.turnId,
         userBlockId: input.userBlockId
       }
@@ -1064,9 +1124,18 @@ export function buildThreadEventSink(
               completedState.liveAssistant
             )
           : ''
-      set((state) => reduce(state, {
-        type: status === 'aborted' ? 'turn_aborted' : 'turn_completed'
-      }))
+      set((state) => {
+        const patch = reduce(state, {
+          type: status === 'aborted' ? 'turn_aborted' : 'turn_completed'
+        })
+        if (!completedThreadId) return patch
+        return {
+          ...patch,
+          unreadThreadIds: status === 'aborted' || completionIsCurrentlyVisible(state, completedThreadId)
+            ? clearUnreadCompletion(state.unreadThreadIds, completedThreadId)
+            : markUnreadCompletion(state.unreadThreadIds, completedThreadId)
+        }
+      })
       if (completedThreadId) clearWatchedCompletionNotification(completedThreadId)
       runEffects(completionProjectionEffects({
         state: completedState,

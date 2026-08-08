@@ -3432,12 +3432,12 @@ describe('AgentLoop', () => {
       const writeResult = items.find((item) => item.kind === 'tool_result' && item.toolName === 'write')
 
       expect(status).toBe('completed')
-      expect(observedToolLists[0]).toEqual(expect.arrayContaining(['write', 'edit', 'git_inspect']))
-      expect(observedToolLists[0]).not.toContain('bash')
+      expect(observedToolLists[0]).toEqual(expect.arrayContaining(['read', 'git_inspect', CREATE_PLAN_TOOL_NAME]))
+      expect(observedToolLists[0]).not.toEqual(expect.arrayContaining(['write', 'edit', 'bash']))
       expect(writeCall).toMatchObject({ kind: 'tool_call', status: 'failed' })
       expect(writeResult).toMatchObject({ kind: 'tool_result', isError: true })
       expect(writeResult?.kind === 'tool_result' ? JSON.stringify(writeResult.output) : '')
-        .toContain('plan_mode_write_blocked')
+        .toContain('not advertised by active tool policy')
       await expect(readFile(join(workspace, 'forbidden.txt'), 'utf8')).rejects.toThrow()
       await expect(readFile(join(workspace, '.kunsdd/plan/plan-a-safe-change.md'), 'utf8')).resolves.toBe(
         '## Plan\nStay read-only until build mode.'

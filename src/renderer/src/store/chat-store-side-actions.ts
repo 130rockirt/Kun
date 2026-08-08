@@ -21,6 +21,11 @@ import { upsertUserBlock } from './chat-store-runtime-helpers'
 import { monotonicToolStatus } from './chat-projection-reducer'
 import { invalidateThreadSnapshot } from './thread-snapshot-cache'
 import { serviceTierForComposerSelection } from '../components/chat/composer-fast-mode'
+import {
+  clearUnreadCompletion,
+  completionIsCurrentlyVisible,
+  markUnreadCompletion
+} from './unread-completions'
 
 type SideContext = {
   set: (partial: Partial<ChatState> | ((state: ChatState) => Partial<ChatState>)) => void
@@ -479,12 +484,18 @@ function buildSideSink(sideId: string, ctx: SideContext, sinceSeq = 0): ThreadEv
     },
     onTurnComplete: () => {
       const completedTurnId = ctx.get().sideConversations[sideId]?.turnId
-      ctx.set((s) =>
-        patchSide(s, sideId, (side) => {
+      ctx.set((s) => {
+        const sidePatch = patchSide(s, sideId, (side) => {
           const flushed = flushSideLiveBlocks(side)
           return { ...flushed.side, busy: false, turnId: null }
         })
-      )
+        return {
+          ...sidePatch,
+          unreadThreadIds: completionIsCurrentlyVisible(s, sideId)
+            ? clearUnreadCompletion(s.unreadThreadIds, sideId)
+            : markUnreadCompletion(s.unreadThreadIds, sideId)
+        }
+      })
       void reconcileCompletedSideTurn(sideId, completedTurnId, ctx)
     },
     onError: (err, options) => {
@@ -870,12 +881,23 @@ export function createSideActions(ctx: SideContext): Pick<
     selectSideConversation: (sideId) => {
       ctx.set((s) => {
         if (!s.sideConversations[sideId]) return {}
-        return { sidePanel: setSidePanel(s.sidePanel, { activeSideId: sideId, open: true }) }
+        return {
+          sidePanel: setSidePanel(s.sidePanel, { activeSideId: sideId, open: true }),
+          unreadThreadIds: clearUnreadCompletion(s.unreadThreadIds, sideId)
+        }
       })
     },
 
     setSidePanelOpen: (open) => {
-      ctx.set((s) => ({ sidePanel: setSidePanel(s.sidePanel, { open }) }))
+      ctx.set((s) => {
+        const activeSideId = s.sidePanel.activeSideId
+        return {
+          sidePanel: setSidePanel(s.sidePanel, { open }),
+          unreadThreadIds: open && activeSideId
+            ? clearUnreadCompletion(s.unreadThreadIds, activeSideId)
+            : s.unreadThreadIds
+        }
+      })
     },
 
     closeSideConversation: async (sideId) => {
@@ -893,7 +915,8 @@ export function createSideActions(ctx: SideContext): Pick<
           open: nextActiveId ? s.sidePanel.open : false,
           activeSideId: nextActiveId
         }
-        return { sideConversations: next, sidePanel: nextPanel }
+        const unreadThreadIds = clearUnreadCompletion(s.unreadThreadIds, sideId)
+        return { sideConversations: next, sidePanel: nextPanel, unreadThreadIds }
       })
     },
 
@@ -912,7 +935,8 @@ export function createSideActions(ctx: SideContext): Pick<
           open: nextActiveId ? s.sidePanel.open : false,
           activeSideId: nextActiveId
         }
-        return { sideConversations: next, sidePanel: nextPanel }
+        const unreadThreadIds = clearUnreadCompletion(s.unreadThreadIds, sideId)
+        return { sideConversations: next, sidePanel: nextPanel, unreadThreadIds }
       })
       if (side) {
         const provider = ctx.getProvider()

@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { DESKTOP_COMMANDS } from '../../../shared/kun-gui-api'
+import { DESKTOP_COMMANDS, MAX_APP_BADGE_COUNT } from '../../../shared/kun-gui-api'
 import { GUI_UPDATE_CHANNELS } from '../../../shared/gui-update'
 import { SPEECH_TRANSCRIPTION_MAX_BASE64_CHARS, SPEECH_TRANSCRIPTION_MAX_DURATION_MS } from '../../../shared/speech-to-text'
 import {
@@ -59,6 +59,8 @@ export const shellOpenExternalUrlSchema = trimmedString(MAX_URL_LENGTH).refine(
   isSafeOpenExternalUrl,
   { message: 'Only http, https, and mailto URLs are allowed.' }
 )
+
+export const appBadgeCountSchema = z.number().int().min(0).max(MAX_APP_BADGE_COUNT)
 
 export const notificationPayloadSchema = z
   .object({

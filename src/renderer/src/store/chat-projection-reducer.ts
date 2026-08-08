@@ -35,7 +35,11 @@ export type ChatProjectionReducerContext = {
   runtimeErrorDetail: (error: unknown) => string
   isInterruptSettledError: (error: unknown, message: string) => boolean
   settlePendingRuntimeWork: (blocks: ChatBlock[]) => ChatBlock[]
-  threadSnapshotLooksRunning: (blocks: ChatBlock[], threadStatus?: string) => boolean
+  threadSnapshotLooksRunning: (
+    blocks: ChatBlock[],
+    threadStatus?: string,
+    latestTurnStatus?: string
+  ) => boolean
 }
 
 export function monotonicToolStatus(
@@ -727,11 +731,40 @@ export function reduceChatProjection(
     case 'thread_snapshot_reconciled': {
       const snapshot = action.payload
       if (state.activeThreadId !== snapshot.threadId) return {}
-      const busy = context.threadSnapshotLooksRunning(snapshot.blocks, snapshot.threadStatus)
-      const threads = snapshot.threadStatus
-        ? updateProjectedThreadStatus(state.threads, snapshot.threadId, snapshot.threadStatus)
+      const busy = context.threadSnapshotLooksRunning(
+        snapshot.blocks,
+        snapshot.threadStatus,
+        snapshot.latestTurnStatus
+      )
+      // The snapshot is authoritative for the turn it describes. A terminal
+      // snapshot for an older turn must never settle the sidebar projection,
+      // clear live text, or settle blocks of a newer turn that is still
+      // running locally.
+      const snapshotTurnIsCurrent = (
+        !snapshot.turnId ||
+        !state.currentTurnId ||
+        state.currentTurnId === snapshot.turnId
+      )
+      const terminalIdle = !busy && snapshotTurnIsCurrent
+      const reconciledStatus = snapshot.threadStatus
+        ? (
+            terminalIdle && snapshot.threadStatus.trim().toLowerCase() === 'running'
+              ? 'idle'
+              : snapshot.threadStatus
+          )
+        : undefined
+      const threads = snapshotTurnIsCurrent && (
+        reconciledStatus || snapshot.latestTurnId || snapshot.latestTurnStatus
+      )
+        ? updateProjectedThreadStatus(
+            state.threads,
+            snapshot.threadId,
+            reconciledStatus ?? (busy ? 'running' : 'idle'),
+            snapshot.latestTurnStatus,
+            snapshot.latestTurnId
+          )
         : state.threads
-      const canonicalBlocks = busy
+      const canonicalBlocks = busy || !snapshotTurnIsCurrent
         ? snapshot.blocks
         : context.settlePendingRuntimeWork(snapshot.blocks)
       const shouldClearLive = (
@@ -849,13 +882,16 @@ function updateProjectedThreadStatus(
   threads: ChatState['threads'],
   threadId: string,
   status: string,
-  latestTurnStatus?: string
+  latestTurnStatus?: string,
+  latestTurnId?: string
 ): ChatState['threads'] {
   let changed = false
   const next = threads.map((thread) => {
     if (thread.id !== threadId) return thread
     if (thread.status === status && (
       latestTurnStatus === undefined || thread.latestTurnStatus === latestTurnStatus
+    ) && (
+      latestTurnId === undefined || thread.latestTurnId === latestTurnId
     )) {
       return thread
     }
@@ -863,7 +899,8 @@ function updateProjectedThreadStatus(
     return {
       ...thread,
       status,
-      ...(latestTurnStatus ? { latestTurnStatus } : {})
+      ...(latestTurnStatus ? { latestTurnStatus } : {}),
+      ...(latestTurnId ? { latestTurnId } : {})
     }
   })
   return changed ? next : threads

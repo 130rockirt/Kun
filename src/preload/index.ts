@@ -543,6 +543,7 @@ const api = {
     return () => ipcRenderer.removeListener('browser-use:state', wrapped)
   },
   showTurnCompleteNotification: (payload) => ipcRenderer.invoke('notification:turn-complete', payload),
+  setAppBadgeCount: (count) => ipcRenderer.invoke('app:badge-count', count),
   getAppVersion: () => ipcRenderer.invoke('app:version'),
   getGuiUpdateState: () => ipcRenderer.invoke('gui:update-state'),
   checkGuiUpdate: (channel) =>

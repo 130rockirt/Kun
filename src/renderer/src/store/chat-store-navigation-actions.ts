@@ -62,6 +62,7 @@ import {
   findLatestUserBlockId,
   findReusableEmptyThreadId,
   reconcileOptimisticUserBlock,
+  threadLooksRunning,
   threadSnapshotLooksRunning,
   threadBelongsToWorkspace
 } from './chat-store-runtime-helpers'
@@ -105,6 +106,8 @@ import {
   buildFollowupMessageFromUserInput,
   buildThreadEventSink,
   clearWatchedCompletionNotification,
+  completionNotificationDedupeKeyForWatchedThread,
+  currentCompletionWatchToken,
   finalizeTurnTiming,
   flushLiveBlocks,
   forkedMessageCount,
@@ -113,6 +116,7 @@ import {
   isCodeThread,
   latestThread,
   looksLikeActiveTurnError,
+  notifyTurnComplete,
   readActiveWriteWorkspace,
   readWriteWorkspaceRoots,
   rememberPendingClawFeishuMirror,
@@ -123,6 +127,12 @@ import {
   turnCompleteNotificationSource,
   watchTurnCompletionNotification
 } from './chat-store-runtime'
+import {
+  clearUnreadCompletion,
+  completionIsCurrentlyVisible,
+  markUnreadCompletion,
+  retainUnreadCompletions
+} from './unread-completions'
 
 type SseAbortRef = { current: AbortController | null }
 
@@ -133,6 +143,7 @@ type StoreActionContext = {
 }
 
 let bootPromise: Promise<void> | null = null
+let refreshThreadsGeneration = 0
 let clawChannelActivityUnsubscribe: (() => void) | null = null
 let runtimeStatusUnsubscribe: (() => void) | null = null
 let trayActionUnsubscribe: (() => void) | null = null
@@ -956,6 +967,7 @@ export function createNavigationActions(
 
   refreshThreads: async () => {
     if (get().runtimeConnection !== 'ready') return
+    const refreshGeneration = ++refreshThreadsGeneration
     try {
       const p = getProvider()
       let rawThreads: NormalizedThread[]
@@ -967,10 +979,91 @@ export function createNavigationActions(
       } catch {
         rawThreads = await p.listThreads()
       }
-      const threads = rawThreads.map((thread) => ({
+      let threads = rawThreads.map((thread) => ({
         ...thread,
         workspace: normalizeWorkspaceRoot(thread.workspace)
       }))
+      const watchSnapshot = get().watchTurnCompletion
+      const localThreadById = new Map(get().threads.map((thread) => [thread.id, thread]))
+      // A raw summary may already carry terminal latest-turn evidence (for
+      // example a list written by the runtime after the turn settled). Normalize
+      // it to idle here so a stale raw `running` never lingers, and so these
+      // threads do not need a state request at all. When the raw summary carries
+      // no turn evidence at all but the local projection already confirmed a
+      // terminal latest turn (poll/recovery result), keep that confirmed
+      // terminal state instead of rolling it back to a stale raw `running`.
+      threads = threads.map((thread) => {
+        if (
+          !threadLooksRunning(thread) &&
+          thread.status?.trim().toLowerCase() === 'running' &&
+          thread.archived !== true
+        ) {
+          return { ...thread, status: 'idle' }
+        }
+        const localThread = localThreadById.get(thread.id)
+        if (
+          localThread &&
+          !thread.latestTurnStatus &&
+          !thread.latestTurnId &&
+          localThread.latestTurnStatus
+        ) {
+          const localRunning = threadLooksRunning(localThread)
+          return {
+            ...thread,
+            status: thread.archived
+              ? thread.status
+              : localRunning ? 'running' : 'idle',
+            ...(localThread.latestTurnId ? { latestTurnId: localThread.latestTurnId } : {}),
+            ...(localThread.latestTurnStatus ? { latestTurnStatus: localThread.latestTurnStatus } : {})
+          }
+        }
+        return thread
+      })
+      const watchTokenByThread = new Map<string, string>()
+      for (const id of Object.keys(watchSnapshot)) {
+        const watchKey = currentCompletionWatchToken(id)
+        if (watchKey) watchTokenByThread.set(id, watchKey)
+      }
+      const reconcileCandidates = threads.filter((thread) =>
+        thread.status?.trim().toLowerCase() === 'running' ||
+        threadLooksRunning(thread) ||
+        watchSnapshot[thread.id] === true
+      )
+      const reconciledStateById = new Map<string, Awaited<ReturnType<typeof p.getThreadState>>>()
+      if (reconcileCandidates.length > 0 && typeof p.getThreadState === 'function') {
+        const results = await Promise.allSettled(
+          reconcileCandidates.map(async (thread) => ({
+            id: thread.id,
+            state: await p.getThreadState(thread.id)
+          }))
+        )
+        for (const result of results) {
+          if (result.status !== 'fulfilled') continue
+          const localThread = localThreadById.get(result.value.id)
+          const latestTurnId = result.value.state.latestTurnId
+          // Reject the response when the runtime reports a *newer* turn than
+          // the one this refresh started from: the response is authoritative
+          // for its own turn, but committing it here could regress local state
+          // that already observed a later turn.
+          if (
+            latestTurnId &&
+            localThread?.latestTurnId &&
+            localThread.latestTurnId !== latestTurnId
+          ) continue
+          reconciledStateById.set(result.value.id, result.value.state)
+        }
+        threads = threads.map((thread) => {
+          const runtimeState = reconciledStateById.get(thread.id)
+          if (!runtimeState) return thread
+          const running = threadLooksRunning(runtimeState)
+          return {
+            ...thread,
+            status: thread.archived ? thread.status : running ? 'running' : 'idle',
+            ...(runtimeState.latestTurnId ? { latestTurnId: runtimeState.latestTurnId } : {}),
+            ...(runtimeState.latestTurnStatus ? { latestTurnStatus: runtimeState.latestTurnStatus } : {})
+          }
+        })
+      }
       const sddThreadRegistry = readSddThreadRegistry()
       const designRegistry = readDesignThreadRegistry()
       const sidebarThreads = await filterThreadsForSidebar(threads, p)
@@ -1075,25 +1168,58 @@ export function createNavigationActions(
         sseAbortRef.current?.abort()
         sseAbortRef.current = null
       }
+      // A newer whole-list refresh already committed; this older result must
+      // not clobber its thread projections, watch state, or selection.
+      if (refreshGeneration !== refreshThreadsGeneration) return
       // 记忆中的 Code 会话被删除或归档后清理,避免长期保存悬空 ID。
       const rememberedCodeThreadId = get().lastCodeThreadId?.trim() ?? ''
       const staleCodeThreadMemory = Boolean(
         rememberedCodeThreadId &&
         !threads.some((thread) => thread.id === rememberedCodeThreadId && thread.archived !== true)
       )
-      const validIds = new Set(displayThreads.map((t) => t.id))
+      const validIds = new Set([
+        ...displayThreads.map((thread) => thread.id),
+        ...Object.keys(get().sideConversations ?? {})
+      ])
+      const reconciledCompletedWatchIds = new Set(
+        [...reconciledStateById.entries()]
+          .filter(([id, state]) => {
+            if (!watchSnapshot[id]) return false
+            if (threadLooksRunning(state)) return false
+            // Claim only the watch generation that existed when this refresh
+            // started. A watch removed and re-created for a newer turn carries a
+            // fresh token; an old refresh must not clear that newer watch.
+            const capturedToken = watchTokenByThread.get(id)
+            if (capturedToken && currentCompletionWatchToken(id) !== capturedToken) return false
+            return true
+          })
+          .map(([id]) => id)
+      )
+      const notificationState = get()
+      for (const id of reconciledCompletedWatchIds) {
+        notifyTurnComplete(
+          id,
+          notificationState,
+          completionNotificationDedupeKeyForWatchedThread(id),
+          turnCompleteNotificationSource(id, notificationState)
+        )
+        clearWatchedCompletionNotification(id)
+        invalidateThreadSnapshot(id)
+      }
       set((s) => {
         const w: Record<string, boolean> = {}
         for (const [k, v] of Object.entries(s.watchTurnCompletion)) {
-          if (v && validIds.has(k)) {
+          if (v && validIds.has(k) && !reconciledCompletedWatchIds.has(k)) {
             w[k] = true
           } else {
             clearWatchedCompletionNotification(k)
           }
         }
-        const u: Record<string, boolean> = {}
-        for (const [k, v] of Object.entries(s.unreadThreadIds)) {
-          if (v && validIds.has(k)) u[k] = true
+        let u = retainUnreadCompletions(s.unreadThreadIds, validIds)
+        for (const id of reconciledCompletedWatchIds) {
+          u = completionIsCurrentlyVisible(s, id)
+            ? clearUnreadCompletion(u, id)
+            : markUnreadCompletion(u, id)
         }
         return {
           threads: displayThreads,

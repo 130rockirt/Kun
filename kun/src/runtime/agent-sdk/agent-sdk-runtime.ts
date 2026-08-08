@@ -519,7 +519,7 @@ export class AgentSdkRuntime {
       // Bridge kun-exclusive tools into an in-process MCP server.
       const selectedKunTools = selectBridgeableTools(
         ctx.bridgeableTools,
-        ctx.bridgeKunBuiltinOverlaps ? { overlap: new Set() } : undefined
+        ctx.bridgeKunBuiltinOverlaps || ctx.planMode ? { overlap: new Set() } : undefined
       )
       let graphPlanCommitted = false
       let graphPlanRetryAllowed = true
@@ -551,15 +551,16 @@ export class AgentSdkRuntime {
           cwd: ctx.workspace,
           kunSystemPrompt: this.deps.kunSystemPrompt(),
           threadPersona: ctx.threadPersona,
-          approvalPolicy: ctx.approvalPolicy,
+          // Plan turns never enter SDK bypassPermissions; bridged calls still
+          // cross Kun's own execution gate below.
+          approvalPolicy: ctx.planMode ? 'never' : ctx.approvalPolicy,
           ...(ctx.sandboxMode ? { sandboxMode: ctx.sandboxMode } : {}),
-          // Deliberately NOT mapping kun's plan turn to the SDK's 'plan' permission
-          // mode: that mode blocks tool execution, which would also block kun's
-          // bridged create_plan tool (the whole point of a plan turn). kun's plan
-          // behavior comes from advertising create_plan + the injected plan
-          // instruction instead (see resolveTurnPlanContext + contextInstructions).
+          // Do not map Kun's plan turn to the SDK's global `plan` permission:
+          // that also blocks Kun's bridged create_plan tool. Plan authority is
+          // instead enforced by disabling native built-ins, bridging the
+          // Plan-filtered Kun catalog, and denying forged native calls below.
           bridgedToolModelNames: bridgedToolModelNames(bridged),
-          ...(ctx.allowSdkBuiltins === false || ctx.requireSvgCompletion
+          ...(ctx.allowSdkBuiltins === false || ctx.requireSvgCompletion || ctx.planMode
             ? { allowSdkBuiltins: false }
             : {}),
           // Each retry gets a fresh SDK MCP server wrapper. Reusing one server
@@ -1391,8 +1392,11 @@ const KUN_BRIDGED_TOOL_PREFIX = 'mcp__kun__'
 export function decideSdkBuiltinSandbox(
   toolName: string,
   input: Record<string, unknown>,
-  context: Pick<SdkTurnContext, 'workspace' | 'additionalWorkspaces' | 'sandboxMode'>
+  context: Pick<SdkTurnContext, 'workspace' | 'additionalWorkspaces' | 'sandboxMode' | 'planMode'>
 ): ToolApprovalDecision | null {
+  if (context.planMode && !toolName.startsWith(KUN_BRIDGED_TOOL_PREFIX)) {
+    return denySandbox(`tool ${toolName} is blocked because Plan mode only allows Kun-gated read-only tools and create_plan`)
+  }
   const mode = context.sandboxMode ?? 'danger-full-access'
   if (!isKnownSdkTool(toolName)) {
     return denySandbox(`tool ${toolName} is blocked because it is not in kun's SDK tool allowlist`)

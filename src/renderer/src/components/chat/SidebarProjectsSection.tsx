@@ -58,6 +58,7 @@ export {
   ThreadRenameDialog
 } from './SidebarProjectOverlays'
 export type { RenameThreadDialogState } from './SidebarProjectOverlays'
+import { threadLooksRunning } from '../../store/chat-store-runtime-helpers'
 import {
   buildSidebarDraftWorkspacePaths,
   buildSidebarThreadMoveTargets,
@@ -531,7 +532,7 @@ export function SidebarProjectsSection({
     if (!thread.id.trim()) return t('sidebarThreadMoveUnsupported')
     if (deletingThreadIds[thread.id] === true) return t('loading')
     if (worktreeRecord) return t('sidebarThreadMoveWorktreeBlocked')
-    if (thread.status?.trim().toLowerCase() === 'running') return t('sidebarThreadMoveRunningBlocked')
+    if (threadLooksRunning(thread)) return t('sidebarThreadMoveRunningBlocked')
     if (watchTurnCompletion[thread.id] === true) return t('sidebarThreadMoveRunningBlocked')
     if (activeThreadId === thread.id && busy) return t('sidebarThreadMoveRunningBlocked')
     if (typeof getProvider().updateThreadWorkspace !== 'function') return t('sidebarThreadMoveUnsupported')
