@@ -49,6 +49,40 @@ describe('usageJsonResponse', () => {
     expect(list).toHaveBeenCalledTimes(1)
     expect(get).not.toHaveBeenCalled()
   })
+
+  it('bounds parallel JSONL reads when rebuilding usage without an index', async () => {
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    let activeReads = 0
+    let maxActiveReads = 0
+    const loadEventsSince = vi.fn(async () => {
+      activeReads += 1
+      maxActiveReads = Math.max(maxActiveReads, activeReads)
+      await gate
+      activeReads -= 1
+      return []
+    })
+    const runtime = runtimeFixture({
+      loadUsageRecords: vi.fn(async () => { throw new Error('index unavailable') }),
+      loadEventsSince,
+      list: vi.fn(async () => Array.from({ length: 20 }, (_, index) => ({
+        id: `thread-${index}`,
+        model: 'fixture-model',
+        updatedAt: '2026-08-09T00:00:00.000Z'
+      })))
+    })
+
+    const response = usageJsonResponse(
+      request('day', '2026-08-01', '2026-08-09'),
+      runtime
+    )
+    await vi.waitFor(() => expect(maxActiveReads).toBe(4))
+    release()
+
+    expect((await response).status).toBe(200)
+    expect(loadEventsSince).toHaveBeenCalledTimes(20)
+    expect(maxActiveReads).toBe(4)
+  })
 })
 
 function request(groupBy: 'day' | 'model', from: string, to: string): Request {

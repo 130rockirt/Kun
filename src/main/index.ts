@@ -1248,6 +1248,11 @@ async function sleepWithAbort(ms: number, signal: AbortSignal): Promise<void> {
  * slow-but-alive runtime would cost the user their in-flight turn (#621).
  */
 const RUNTIME_HUNG_CONFIRM_MS = 10_000
+// A detached shared Runtime does not emit a child-process exit event to this
+// Electron instance. Probe often enough that a crash is recovered before the
+// UI feels permanently offline, while still requiring multiple failures before
+// treating a live process as unresponsive.
+const RUNTIME_WATCHDOG_INTERVAL_MS = 10_000
 const runtimeSettingsIntents = new RuntimeSettingsIntentSequencer()
 let settledRuntimeSettings: AppSettingsV1 | null = null
 let runtimeSettingsSyncStatus: KunRuntimeSettingsSyncStatusPayload = {
@@ -1286,7 +1291,8 @@ const runtimeSupervisor = new KunRuntimeSupervisor<AppSettingsV1>({
     },
     warn: (source, message, details) => logWarn(source, message, details),
     error: (source, message, details) => logError(source, message, details)
-  }
+  },
+  watchdogIntervalMs: RUNTIME_WATCHDOG_INTERVAL_MS
 })
 
 function publishRuntimeStatus(status: Omit<KunRuntimeStatus, 'at'>): void {
@@ -1569,8 +1575,14 @@ function runtimeFingerprint(settings: AppSettingsV1): string {
 }
 
 async function ensureRuntime(settings: AppSettingsV1): Promise<AppSettingsV1> {
-  assertCanonicalRuntimeMigrationReady()
   const requested = runtimeSupervisor.latestOr(settings)
+  // Availability is the durable intent, not a reward for one successful
+  // launch. Arm recovery before the first attempt so a cold-start failure is
+  // retried automatically by the watchdog.
+  if (managedKunHostCanAutoStart(requested)) {
+    runtimeSupervisor.setManagedRuntimeExpected(true)
+  }
+  assertCanonicalRuntimeMigrationReady()
   const fingerprint = runtimeFingerprint(requested)
   return runtimeSupervisor.ensure(
     fingerprint,

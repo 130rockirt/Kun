@@ -24,6 +24,10 @@ type UsageThreadSource = {
 }
 
 const allUsageRecordLoads = new WeakMap<ServerRuntime, Promise<ThreadUsageRecord[]>>()
+// JSONL replay is a degraded, non-core path. Keep enough parallelism to avoid
+// serially walking a large history, but leave event-loop and disk headroom for
+// health, thread, and turn requests that determine product availability.
+const USAGE_FALLBACK_READ_CONCURRENCY = 4
 
 /**
  * Usage endpoint response shape. The `total` field mirrors the
@@ -177,43 +181,65 @@ async function loadUsageRecords(
       // Fall back to JSONL replay when the optional usage index is unavailable.
     }
   }
-  const records: ThreadUsageRecord[] = []
   const sources: UsageThreadSource[] = explicitThread
     ? [{ id: explicitThread.id, thread: explicitThread }]
     : threadSummaries.map((thread) => ({ id: thread.id, summary: thread }))
-  for (const source of sources) {
-    const thread = source.thread
-      ?? source.summary
-      ?? await runtime.threadService.get(source.id)
-    if (!thread) continue
-    let latestPersisted = emptyUsageSnapshot()
-    const events = await runtime.sessionStore.loadEventsSince(thread.id, 0)
-    const usageEvents = events
-      .filter((event): event is UsageEvent => event.kind === 'usage')
-      .sort((a, b) => a.seq - b.seq)
+  return loadUsageRecordsFromSources(runtime, sources)
+}
 
-    for (const event of usageEvents) {
-      const delta = diffUsage(event.usage, latestPersisted)
-      latestPersisted = event.usage
-      if (hasUsage(delta)) {
-        records.push({
-          threadId: thread.id,
-          model: usageRecordModel(thread, event),
-          completedAt: event.timestamp,
-          usage: delta
-        })
-      }
+async function loadUsageRecordsFromSources(
+  runtime: ServerRuntime,
+  sources: UsageThreadSource[]
+): Promise<ThreadUsageRecord[]> {
+  const recordsBySource: ThreadUsageRecord[][] = Array.from({ length: sources.length })
+  let nextIndex = 0
+  const workerCount = Math.min(USAGE_FALLBACK_READ_CONCURRENCY, sources.length)
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (nextIndex < sources.length) {
+      const index = nextIndex
+      nextIndex += 1
+      recordsBySource[index] = await loadUsageRecordsForSource(runtime, sources[index])
     }
+  }))
+  return recordsBySource.flat()
+}
 
-    const liveRemainder = diffUsage(runtime.usageService.forThread(thread.id), latestPersisted)
-    if (hasUsage(liveRemainder)) {
+async function loadUsageRecordsForSource(
+  runtime: ServerRuntime,
+  source: UsageThreadSource
+): Promise<ThreadUsageRecord[]> {
+  const thread = source.thread
+    ?? source.summary
+    ?? await runtime.threadService.get(source.id)
+  if (!thread) return []
+  const records: ThreadUsageRecord[] = []
+  let latestPersisted = emptyUsageSnapshot()
+  const events = await runtime.sessionStore.loadEventsSince(thread.id, 0)
+  const usageEvents = events
+    .filter((event): event is UsageEvent => event.kind === 'usage')
+    .sort((a, b) => a.seq - b.seq)
+
+  for (const event of usageEvents) {
+    const delta = diffUsage(event.usage, latestPersisted)
+    latestPersisted = event.usage
+    if (hasUsage(delta)) {
       records.push({
         threadId: thread.id,
-        model: usageRecordModel(thread, { turnId: latestTurnId(thread) }),
-        completedAt: thread.updatedAt || runtime.nowIso(),
-        usage: liveRemainder
+        model: usageRecordModel(thread, event),
+        completedAt: event.timestamp,
+        usage: delta
       })
     }
+  }
+
+  const liveRemainder = diffUsage(runtime.usageService.forThread(thread.id), latestPersisted)
+  if (hasUsage(liveRemainder)) {
+    records.push({
+      threadId: thread.id,
+      model: usageRecordModel(thread, { turnId: latestTurnId(thread) }),
+      completedAt: thread.updatedAt || runtime.nowIso(),
+      usage: liveRemainder
+    })
   }
   return records
 }

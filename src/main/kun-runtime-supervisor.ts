@@ -145,9 +145,10 @@ export class KunRuntimeSupervisor<Settings> {
   }
 
   /**
-   * Set by the lifecycle owner after a managed Runtime has proved healthy and
-   * reset before an explicit stop. Enabling the expectation starts the
-   * watchdog so later loss of the child or discovery signal can be recovered.
+   * Set by the lifecycle owner as soon as durable settings require a managed
+   * Runtime, and reset before an explicit stop. This deliberately does not
+   * wait for the first successful launch: a cold-start failure must leave the
+   * watchdog armed so the product can recover without user intervention.
    */
   setManagedRuntimeExpected(expected: boolean): void {
     if (this.managedRuntimeExpected === expected) return

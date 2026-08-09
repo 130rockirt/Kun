@@ -303,6 +303,26 @@ describe('KunRuntimeSupervisor', () => {
     expect(h.statuses[0]).toMatchObject({ source: 'watchdog', attempt: 1 })
   })
 
+  it('keeps cold-start recovery armed after the first launch attempt fails', async () => {
+    const launch: { childRunning: boolean; ensureError?: Error } = {
+      childRunning: false,
+      ensureError: new Error('first launch failed')
+    }
+    const h = harness(launch)
+    h.supervisor.setManagedRuntimeExpected(true)
+
+    await h.supervisor.watchdogTick()
+
+    expect(h.supervisor.isManagedRuntimeExpected).toBe(true)
+    expect(h.statuses.at(-1)).toMatchObject({ state: 'failed', source: 'watchdog' })
+
+    delete launch.ensureError
+    await h.supervisor.watchdogTick()
+
+    expect(h.ensureRuntime).toHaveBeenCalledTimes(2)
+    expect(h.statuses.at(-1)).toMatchObject({ state: 'running', source: 'watchdog' })
+  })
+
   it('does not recover after an explicit stop clears the expectation', async () => {
     const h = harness({ childRunning: false })
     h.supervisor.setManagedRuntimeExpected(true)
