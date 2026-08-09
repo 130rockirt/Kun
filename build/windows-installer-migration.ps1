@@ -1,6 +1,6 @@
 param(
   [Parameter(Mandatory = $true)]
-  [ValidateSet('ResolvePath', 'ResolveSource', 'ResolveUpdateScope', 'ResolveUninstaller', 'StopProcesses', 'Recover', 'Prepare', 'FallbackCleanup', 'Restore', 'ValidatePayload', 'CleanupInPlaceLeftovers', 'UpdatePath')]
+  [ValidateSet('ResolvePath', 'ResolveSource', 'ResolveUpdateScope', 'ResolveUninstaller', 'StopProcesses', 'Recover', 'Prepare', 'FallbackCleanup', 'Restore', 'ValidatePayload', 'CleanupInPlaceLeftovers', 'CleanupJournal', 'UpdatePath')]
   [string]$Action,
   [string]$ResultPath = ''
 )
@@ -87,6 +87,9 @@ try {
     }
     'CleanupInPlaceLeftovers' {
       Invoke-CleanupInPlaceLeftovers
+    }
+    'CleanupJournal' {
+      Invoke-CleanupJournal
     }
     'UpdatePath' {
       Update-UserPath

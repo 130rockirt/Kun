@@ -156,11 +156,113 @@ function Set-SecureJournalFileAcl([string]$PathValue, [string]$Mode) {
   [IO.File]::SetAccessControl($PathValue, $security)
 }
 
+function Get-JournalTransactionPaths {
+  $paths = @()
+  foreach ($name in @(
+    'KUN_INSTALLER_SOURCE',
+    'KUN_INSTALLER_SECONDARY_SOURCE',
+    'KUN_INSTALLER_TARGET'
+  )) {
+    $value = Get-EnvironmentValue $name
+    if ([string]::IsNullOrWhiteSpace($value)) {
+      continue
+    }
+    $normalized = Normalize-FullPath $value
+    if (-not ($paths | Where-Object { Test-PathEqual $_ $normalized })) {
+      $paths += $normalized
+    }
+  }
+  return $paths
+}
+
+function Test-JournalPreservationRootBlocksRecovery([string]$Root) {
+  if (-not (Test-Path -LiteralPath $Root)) {
+    return $false
+  }
+  if (-not (Test-Path -LiteralPath $Root -PathType Container) -or
+      (Test-ReparsePoint $Root)) {
+    return $true
+  }
+
+  $entries = @(Get-ChildItem -LiteralPath $Root -Force)
+  if ($entries | Where-Object {
+    -not [string]::Equals($_.Name, 'content', [StringComparison]::OrdinalIgnoreCase)
+  }) {
+    return $true
+  }
+  $content = Join-Path $Root 'content'
+  if (-not (Test-Path -LiteralPath $content)) {
+    return $false
+  }
+  if (-not (Test-Path -LiteralPath $content -PathType Container) -or
+      (Test-ReparsePoint $content)) {
+    return $true
+  }
+  return (@(Get-ChildItem -LiteralPath $content -Force).Count -gt 0)
+}
+
+function Get-ExistingJournalPreservationRoots {
+  $blockingRoots = @()
+  foreach ($source in @(Get-JournalTransactionPaths)) {
+    $root = Get-PreservationRoot $source
+    if ((Test-JournalPreservationRootBlocksRecovery $root) -and
+        -not ($blockingRoots | Where-Object { Test-PathEqual $_ $root })) {
+      $blockingRoots += $root
+    }
+  }
+  return $blockingRoots
+}
+
+function Remove-EmptyJournalPreservationRoots {
+  foreach ($source in @(Get-JournalTransactionPaths)) {
+    $root = Get-PreservationRoot $source
+    if ((Test-Path -LiteralPath $root) -and
+        -not (Test-JournalPreservationRootBlocksRecovery $root)) {
+      Assert-SafeInstallRoot $root 'Empty preservation directory'
+      Remove-Item -LiteralPath $root -Recurse -Force
+      Write-InstallerDiagnostic "Removed an empty preservation directory at: $root"
+    }
+  }
+}
+
+function Move-UntrustedJournalToQuarantine([string]$PathValue, [string]$Mode) {
+  $preservationRoots = @(Get-ExistingJournalPreservationRoots)
+  if ($preservationRoots.Count -gt 0) {
+    throw (
+      'The recovery journal has untrusted permissions while preserved installation files still exist at: ' +
+      ($preservationRoots -join ', ') + '. The journal and preserved files were left unchanged.'
+    )
+  }
+  Remove-EmptyJournalPreservationRoots
+  if (Test-ReparsePoint $PathValue) {
+    throw "The recovery journal is a reparse point and cannot be quarantined: $PathValue"
+  }
+
+  $quarantinePath = "$PathValue.untrusted-$([Guid]::NewGuid().ToString('N'))"
+  [IO.File]::Move($PathValue, $quarantinePath)
+  Write-InstallerDiagnostic "Quarantined an untrusted recovery journal at: $quarantinePath"
+
+  $parent = Split-Path -Parent $PathValue
+  if (-not (Test-JournalAclSecure $parent $Mode)) {
+    Set-SecureJournalDirectoryAcl $parent $Mode
+  }
+  if (-not (Test-JournalAclSecure $parent $Mode)) {
+    throw "The recovery journal directory ACL could not be secured after quarantine: $parent"
+  }
+  # Never read or mutate the quarantined file again. It could be a hard link
+  # supplied through the previously writable directory, so changing its ACL
+  # could affect a different file on the same volume.
+}
+
 function Assert-JournalStorageTrusted {
   $journalPath = Get-JournalPath
   $journalParent = Split-Path -Parent $journalPath
   $mode = Get-NormalizedInstallMode
   $journalExists = Test-Path -LiteralPath $journalPath -PathType Leaf
+
+  if ((Test-Path -LiteralPath $journalPath) -and -not $journalExists) {
+    throw "The recovery journal path is not a regular file: $journalPath"
+  }
 
   if (Test-Path -LiteralPath $journalParent) {
     if (-not (Test-Path -LiteralPath $journalParent -PathType Container) -or
@@ -168,7 +270,8 @@ function Assert-JournalStorageTrusted {
       throw "The recovery journal directory is not a trusted directory: $journalParent"
     }
     if ($journalExists -and -not (Test-JournalAclSecure $journalParent $mode)) {
-      throw "The existing recovery journal directory has an untrusted ACL: $journalParent"
+      Move-UntrustedJournalToQuarantine $journalPath $mode
+      $journalExists = $false
     }
   } else {
     [IO.Directory]::CreateDirectory($journalParent) | Out-Null
@@ -181,12 +284,18 @@ function Assert-JournalStorageTrusted {
     throw "The recovery journal directory ACL could not be secured: $journalParent"
   }
 
+  # Re-evaluate the fixed journal path only after the parent DACL is secured.
+  # An untrusted writer could have recreated it between quarantine and lockdown.
+  $journalExists = Test-Path -LiteralPath $journalPath -PathType Leaf
+  if ((Test-Path -LiteralPath $journalPath) -and -not $journalExists) {
+    throw "The recovery journal path is not a regular file: $journalPath"
+  }
   if ($journalExists) {
     if (Test-ReparsePoint $journalPath) {
       throw "The recovery journal is a reparse point: $journalPath"
     }
     if (-not (Test-JournalAclSecure $journalPath $mode)) {
-      throw "The recovery journal file has an untrusted ACL: $journalPath"
+      Move-UntrustedJournalToQuarantine $journalPath $mode
     }
   }
 }
@@ -207,6 +316,38 @@ function Assert-JournalContext($Journal) {
       -not (Test-PathEqual ([string]$Journal.Target) $expectedTarget)) {
     throw 'The recovery journal target does not match this installer transaction.'
   }
+}
+
+function Convert-LegacyJournal($Journal) {
+  $schemaVersion = if ($null -eq $Journal.PSObject.Properties['SchemaVersion']) {
+    0
+  } else {
+    [int]$Journal.SchemaVersion
+  }
+  if ($schemaVersion -ne 2) {
+    throw "The recovery journal schema is unsupported: $schemaVersion"
+  }
+
+  $transactionPaths = @(Get-JournalTransactionPaths)
+  $records = @(Get-JournalRecords $Journal)
+  if ($records.Count -eq 0) {
+    throw 'The legacy recovery journal contains no recovery records.'
+  }
+  foreach ($record in $records) {
+    $validated = Get-ValidatedJournalRecord $record
+    if (-not ($transactionPaths | Where-Object { Test-PathEqual $_ $validated.Source })) {
+      throw "The legacy recovery journal source is outside this installer transaction: $($validated.Source)"
+    }
+  }
+
+  $upgraded = @{
+    SchemaVersion = 3
+    Phase = if ($null -eq $Journal.PSObject.Properties['Phase']) { 'preserved' } else { [string]$Journal.Phase }
+    Records = $records
+  }
+  Write-Journal $upgraded
+  Write-InstallerDiagnostic 'Upgraded a trusted legacy recovery journal from schema 2 to schema 3.'
+  return [pscustomobject]$upgraded
 }
 
 function Write-Journal([hashtable]$Journal) {
@@ -232,16 +373,29 @@ function Read-Journal {
     return $null
   }
   Assert-JournalStorageTrusted
+  if (-not (Test-Path -LiteralPath $journalPath -PathType Leaf)) {
+    return $null
+  }
   $journal = Get-Content -LiteralPath $journalPath -Raw | ConvertFrom-Json
-  Assert-JournalContext $journal
-  return $journal
+  $schemaVersion = if ($null -eq $journal.PSObject.Properties['SchemaVersion']) {
+    0
+  } else {
+    [int]$journal.SchemaVersion
+  }
+  if ($schemaVersion -eq 3) {
+    Assert-JournalContext $journal
+    return $journal
+  }
+  return (Convert-LegacyJournal $journal)
 }
 
 function Remove-Journal {
   $journalPath = Get-JournalPath
   if (Test-Path -LiteralPath $journalPath) {
     Assert-JournalStorageTrusted
-    Remove-Item -LiteralPath $journalPath -Force
+    if (Test-Path -LiteralPath $journalPath -PathType Leaf) {
+      Remove-Item -LiteralPath $journalPath -Force
+    }
   }
   $parent = Split-Path -Parent $journalPath
   if (Test-Path -LiteralPath $parent -PathType Container) {
@@ -249,5 +403,25 @@ function Remove-Journal {
     if ($remaining.Count -eq 0) {
       Remove-Item -LiteralPath $parent -Force
     }
+  }
+}
+
+function Invoke-CleanupJournal {
+  $journalPath = Get-JournalPath
+  if (-not (Test-Path -LiteralPath $journalPath)) {
+    return
+  }
+  $preservationRoots = @(Get-ExistingJournalPreservationRoots)
+  if ($preservationRoots.Count -gt 0) {
+    Write-InstallerDiagnostic (
+      'Keeping the recovery journal because preserved installation files still exist at: ' +
+      ($preservationRoots -join ', ')
+    )
+    return
+  }
+  Remove-EmptyJournalPreservationRoots
+  Assert-JournalStorageTrusted
+  if (Test-Path -LiteralPath $journalPath -PathType Leaf) {
+    Remove-Journal
   }
 }
