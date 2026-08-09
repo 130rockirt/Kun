@@ -16,6 +16,10 @@ class MemoryStorage {
   setItem(key: string, value: string): void {
     this.values.set(key, value)
   }
+
+  removeItem(key: string): void {
+    this.values.delete(key)
+  }
 }
 
 const originalLocalStorage = Object.getOwnPropertyDescriptor(globalThis, 'localStorage')
@@ -52,7 +56,31 @@ const labels: Record<string, string> = {
   uiPluginActive: 'Active',
   uiPluginRemove: 'Remove plugin',
   uiPluginEmpty: 'No UI plugins installed yet.',
-  uiPluginDocsHint: 'Developer guide: docs/UI_PLUGINS.md'
+  uiPluginDocsHint: 'Developer guide: docs/UI_PLUGINS.md',
+  uiPluginCharacterScale: 'Character size',
+  uiPluginCharacterScaleDesc: 'Adjust the active character relative to its pack default.',
+  uiPluginCharacterScaleSmaller: 'Make character smaller',
+  uiPluginCharacterScaleLarger: 'Make character larger'
+}
+
+const presentation = {
+  character: {
+    anchor: 'right' as const,
+    size: 'hero' as const,
+    offsetX: 0,
+    offsetY: 0,
+    opacity: 1,
+    frame: 'soft-card' as const,
+    motion: 'none' as const,
+    contentReserve: 'wide' as const
+  },
+  readability: { scrim: 'opposite-character' as const, strength: 'medium' as const },
+  surfaces: {
+    sidebar: 'glass' as const,
+    topbar: 'glass' as const,
+    composer: 'strong-glass' as const,
+    cards: 'translucent' as const
+  }
 }
 
 function t(key: string): string {
@@ -69,6 +97,7 @@ describe('EasterEggSettingsSection (mode workshop)', () => {
       uiMode: 'default',
       installed: [],
       activeRuntime: null,
+      characterScale: 1,
       busy: false,
       initialized: false,
       lastError: null
@@ -98,6 +127,59 @@ describe('EasterEggSettingsSection (mode workshop)', () => {
     // 默认 Kun 卡片右上角带 Retroma 配色切换按钮(SSR 下 uiMode=default,按钮为关闭态)
     expect(html).toContain('Switch to Retroma parchment palette')
     expect(html).toContain('aria-pressed="false"')
+    expect(html).not.toContain('Character size')
+  })
+
+  it('shows the active plugin scale and updates it through every control style', async () => {
+    useUiPluginStore.setState({
+      uiMode: 'alpha-theme',
+      activeRuntime: {
+        manifest: {
+          id: 'alpha-theme',
+          name: 'Alpha theme',
+          version: '1.0.0',
+          figures: { portrait: 'portrait.png' },
+          presentation
+        },
+        figures: { portrait: 'data:image/png;base64,AAAA' },
+        sceneAssets: {}
+      },
+      characterScale: 1.25,
+      initialized: true
+    })
+
+    let renderer!: ReactTestRenderer
+    await act(async () => {
+      renderer = createRenderer(createElement(EasterEggSettingsSection, {
+        ctx: { t, tCommon: t }
+      }))
+    })
+    expect(JSON.stringify(renderer.toJSON())).toContain('Character size')
+
+    const range = renderer.root.findAllByType('input')
+      .find((input) => input.props.type === 'range')
+    expect(range?.props.value).toBe(1.25)
+    const initialNumber = renderer.root.findAllByType('input')
+      .find((input) => input.props.type === 'number')
+    expect(initialNumber?.props.value).toBe(125)
+    await act(async () => range?.props.onChange({ target: { value: '1.5' } }))
+    expect(useUiPluginStore.getState().characterScale).toBe(1.5)
+
+    const number = renderer.root.findAllByType('input')
+      .find((input) => input.props.type === 'number')
+    await act(async () => number?.props.onChange({ target: { value: '180' } }))
+    expect(useUiPluginStore.getState().characterScale).toBe(1.8)
+
+    const smaller = renderer.root.findAllByType('button')
+      .find((button) => button.props['aria-label'] === 'Make character smaller')
+    await act(async () => smaller?.props.onClick())
+    expect(useUiPluginStore.getState().characterScale).toBe(1.75)
+
+    const larger = renderer.root.findAllByType('button')
+      .find((button) => button.props['aria-label'] === 'Make character larger')
+    await act(async () => larger?.props.onClick())
+    expect(useUiPluginStore.getState().characterScale).toBe(1.8)
+    await act(async () => renderer.unmount())
   })
 
   it('adds the workshop tab to the settings sidebar', () => {

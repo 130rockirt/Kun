@@ -88,6 +88,25 @@ const baseContext = {
   abortSignal: new AbortController().signal
 }
 
+function reviewBundle(childId: string, workflowId = 'ppt_workflow') {
+  return {
+    workflowId,
+    childId,
+    manifestPath: 'deck/.kun-ppt-review/manifest.json',
+    deckTitle: 'Launch deck',
+    styleFingerprint: 'style-1',
+    phase: 'awaiting_review',
+    slides: [{
+      slideId: 'slide-1',
+      index: 0,
+      title: 'Opening',
+      previewPath: '.kun/images/opening.png',
+      revision: 1,
+      status: 'ready'
+    }]
+  }
+}
+
 describe('ppt_agent tool provider', () => {
   let dir: string
   afterEach(async () => {
@@ -242,7 +261,8 @@ describe('ppt_agent tool provider', () => {
     })
     expect(String(received?.prompt)).toContain('IMAGE-FIRST FALLBACK')
     expect(result.output).toMatchObject({
-      phase: 'direct_build',
+      phase: 'completed',
+      mode: 'direct',
       fallbackNotice: expect.stringContaining('no configured image-generation model')
     })
     const inline = received?.inlineProfile as { id: string; source: string; profile: Record<string, unknown> }
@@ -270,15 +290,7 @@ describe('ppt_agent tool provider', () => {
       calls.push({ ...input, signal: undefined })
       return {
         summary: 'review ready',
-        reviewBundle: {
-          workflowId: 'ppt_workflow',
-          childId: input.childId,
-          manifestPath: 'deck/.kun-ppt-review/manifest.json',
-          deckTitle: 'Launch deck',
-          styleFingerprint: 'style-1',
-          phase: 'awaiting_review',
-          slides: []
-        }
+        reviewBundle: reviewBundle(input.childId)
       }
     })
     const tool = buildPptAgentToolProvider(runtime, () => ({
@@ -297,6 +309,7 @@ describe('ppt_agent tool provider', () => {
 
     const revised = await tool.execute({
       action: 'revise_previews',
+      deliverable: 'pptx',
       childId,
       workflowId: 'ppt_workflow',
       title: 'Revise deck',
@@ -310,6 +323,135 @@ describe('ppt_agent tool provider', () => {
     expect(calls[1]).toMatchObject({ childId, resumeChild: true, parentTurnId: 'turn_followup' })
     expect(String(calls[1]?.prompt)).toContain('workflowId="ppt_workflow"')
     expect(String(calls[1]?.prompt)).toContain('larger headline')
+  })
+
+  it('requires the same PPT workflow and a validated export before completing approval', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'ppt-agent-tool-'))
+    const calls: Array<Record<string, unknown>> = []
+    const runtime = makeRuntime(dir, async (input) => {
+      calls.push({ ...input, signal: undefined })
+      if (!input.resumeChild) return { summary: 'review ready', reviewBundle: reviewBundle(input.childId) }
+      return {
+        summary: 'deck exported',
+        deckArtifact: {
+          output: 'deck/deck.pptx',
+          absolutePath: '/workspace/deck/deck.pptx',
+          slides: 1,
+          editableSlides: 1,
+          validated: true
+        }
+      }
+    })
+    const tool = buildPptAgentToolProvider(runtime, () => ({
+      enabled: true,
+      imageFirst: true,
+      imageGenAvailable: true
+    }))[0].tools[0]
+    const started = await tool.execute({ title: 'Review deck', query: 'create a deck' }, baseContext)
+    const childId = (started.output as { childId: string }).childId
+
+    await expect(tool.execute({
+      action: 'approve_and_build',
+      deliverable: 'pptx',
+      childId,
+      workflowId: 'wrong-workflow',
+      title: 'Build deck',
+      query: 'approved'
+    }, { ...baseContext, turnId: 'turn-wrong' })).rejects.toThrow('does not own PPT workflow')
+
+    const approved = await tool.execute({
+      action: 'approve_and_build',
+      deliverable: 'pptx',
+      childId,
+      workflowId: 'ppt_workflow',
+      title: 'Build deck',
+      query: 'approved'
+    }, { ...baseContext, turnId: 'turn-approved' })
+    expect(approved).toMatchObject({
+      isError: false,
+      output: {
+        childId,
+        phase: 'completed',
+        mode: 'visual-first',
+        deckArtifact: { output: 'deck/deck.pptx', editableSlides: 1, validated: true }
+      }
+    })
+    expect(approved.output).not.toHaveProperty('reviewBundle')
+    expect(calls[1]).toMatchObject({
+      childId,
+      resumeChild: true,
+      parentTurnId: 'turn-approved'
+    })
+  })
+
+  it('does not let a stale review bundle hide a failed revision turn', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'ppt-agent-tool-'))
+    let call = 0
+    const runtime = makeRuntime(dir, async (input) => {
+      call += 1
+      if (call === 2) return { summary: 'forgot the bundle' }
+      return { summary: 'review ready', reviewBundle: reviewBundle(input.childId) }
+    })
+    const tool = buildPptAgentToolProvider(runtime, () => ({
+      enabled: true,
+      imageFirst: true,
+      imageGenAvailable: true
+    }))[0].tools[0]
+    const started = await tool.execute({ title: 'Review deck', query: 'create a deck' }, baseContext)
+    const childId = (started.output as { childId: string }).childId
+    const revision = await tool.execute({
+      action: 'revise_previews',
+      deliverable: 'pptx',
+      childId,
+      workflowId: 'ppt_workflow',
+      title: 'Revise deck',
+      query: 'revise opening'
+    }, { ...baseContext, turnId: 'turn-revise' })
+    expect(revision).toMatchObject({
+      isError: true,
+      output: { phase: 'failed_recoverable', error: 'PPT child completed without the required visual review bundle' }
+    })
+    expect(revision.output).not.toHaveProperty('reviewBundle')
+
+    await expect(tool.execute({
+      action: 'retry_failed',
+      deliverable: 'pptx',
+      childId,
+      workflowId: 'ppt_workflow',
+      title: 'Retry deck',
+      query: 'retry the revision'
+    }, { ...baseContext, turnId: 'turn-retry' })).resolves.toMatchObject({
+      isError: false,
+      output: { phase: 'awaiting_review', reviewBundle: { workflowId: 'ppt_workflow' } }
+    })
+  })
+
+  it('refuses to approve an arbitrary terminal non-PPT child', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'ppt-agent-tool-'))
+    const runtime = makeRuntime(dir, async () => ({ summary: 'done' }))
+    const general = await runtime.runChild({
+      parentThreadId: 'thr_main',
+      parentTurnId: 'turn_general',
+      profile: 'general',
+      prompt: 'general work',
+      workspace: '/workspace',
+      security: { sandboxRoot: '/workspace', memoryEnabled: false },
+      signal: new AbortController().signal
+    })
+    const tool = buildPptAgentToolProvider(runtime, () => ({
+      enabled: true,
+      imageFirst: true,
+      imageGenAvailable: true
+    }))[0].tools[0]
+
+    await expect(tool.execute({
+      action: 'approve_and_build',
+      childId: general.id,
+      workflowId: 'ppt_workflow',
+      deliverable: 'pptx',
+      title: 'Build deck',
+      query: 'approved'
+    }, { ...baseContext, turnId: 'turn_approve_general' })).rejects.toThrow('is not a ppt child')
   })
 
   it('fails an image-first run that does not return a visual review bundle', async () => {

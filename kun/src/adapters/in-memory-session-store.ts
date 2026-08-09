@@ -1,7 +1,14 @@
-import type { ItemHistoryCommit, ItemHistorySnapshot, SessionStore } from '../ports/session-store.js'
+import type {
+  ItemHistoryCommit,
+  ItemHistoryPage,
+  ItemHistoryPageOptions,
+  ItemHistorySnapshot,
+  SessionStore
+} from '../ports/session-store.js'
 import type { RuntimeEvent } from '../contracts/events.js'
 import type { TurnItem } from '../contracts/items.js'
 import type { AgentSession } from '../domain/session.js'
+import { buildPublicItemHistoryPage } from '../services/item-history-page.js'
 
 /**
  * In-memory session store used by tests and the default runtime.
@@ -135,6 +142,13 @@ export class InMemorySessionStore implements SessionStore {
 
   async loadItems(threadId: string): Promise<TurnItem[]> {
     return [...(this.items.get(threadId) ?? [])]
+  }
+
+  async loadItemPage(
+    threadId: string,
+    options: ItemHistoryPageOptions
+  ): Promise<ItemHistoryPage> {
+    return buildPublicItemHistoryPage(this.items.get(threadId) ?? [], options)
   }
 
   async loadSession(threadId: string): Promise<AgentSession | null> {

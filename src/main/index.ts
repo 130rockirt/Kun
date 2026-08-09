@@ -276,6 +276,7 @@ import {
   createAppEnvironmentInfo,
   resolveAppFlavor
 } from '../shared/app-environment'
+import { resolveDesktopTitleBarMode } from '../shared/desktop-title-bar'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -1747,10 +1748,17 @@ function resolveMainRendererUrl(): string {
   return developmentRendererUrl() ?? pathToFileURL(join(__dirname, '../renderer/index.html')).href
 }
 
-function createWindow(options: { suppressInitialShow?: boolean } = {}): void {
+function createWindow(options: {
+  suppressInitialShow?: boolean
+  useSystemTitleBar?: boolean
+} = {}): void {
   traceStartup('createWindow:start')
   const preloadPath = resolvePreloadPath(__dirname)
-  const usesDesktopTitleBar = process.platform === 'win32' || process.platform === 'linux'
+  const desktopTitleBarMode = resolveDesktopTitleBarMode(
+    process.platform,
+    options.useSystemTitleBar === true
+  )
+  const usesCustomDesktopTitleBar = desktopTitleBarMode === 'custom'
   const windowTitle = appWindowTitleForFlavor(appEnvironment.flavor)
   const window = new BrowserWindow({
     width: 1280,
@@ -1759,9 +1767,9 @@ function createWindow(options: { suppressInitialShow?: boolean } = {}): void {
     minHeight: 640,
     title: windowTitle,
     icon: appIcon.isEmpty() ? undefined : appIcon,
-    titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : usesDesktopTitleBar ? 'hidden' : 'default',
+    titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : usesCustomDesktopTitleBar ? 'hidden' : 'default',
     trafficLightPosition: process.platform === 'darwin' ? { x: 31, y: 22 } : undefined,
-    autoHideMenuBar: usesDesktopTitleBar,
+    autoHideMenuBar: usesCustomDesktopTitleBar || process.platform === 'linux',
     show: false,
     webPreferences: {
       preload: preloadPath,
@@ -1771,7 +1779,8 @@ function createWindow(options: { suppressInitialShow?: boolean } = {}): void {
       // Pass the home dir to the sandboxed preload (it can't require node:os).
       additionalArguments: [
         `--kun-home-dir=${homedir()}`,
-        `--kun-app-environment=${encodeURIComponent(JSON.stringify(appEnvironment))}`
+        `--kun-app-environment=${encodeURIComponent(JSON.stringify(appEnvironment))}`,
+        `--kun-desktop-title-bar-mode=${desktopTitleBarMode}`
       ]
     }
   })
@@ -1788,7 +1797,7 @@ function createWindow(options: { suppressInitialShow?: boolean } = {}): void {
   window.webContents.on('will-navigate', preventUntrustedNavigation)
   window.webContents.on('will-redirect', preventUntrustedNavigation)
   bindExtensionMainWindow?.(window)
-  if (usesDesktopTitleBar) {
+  if (usesCustomDesktopTitleBar) {
     window.setMenu(null)
     window.setMenuBarVisibility(false)
   }
@@ -3597,7 +3606,10 @@ app.whenReady().then(async () => {
   })
   traceStartup('ipc registration:done')
 
-  createWindow({ suppressInitialShow: shouldStartHidden(initial) })
+  createWindow({
+    suppressInitialShow: shouldStartHidden(initial),
+    useSystemTitleBar: initial.appBehavior.useSystemTitleBar
+  })
   void maybePromptCliInstall(() => mainWindow).catch((error) => {
     console.warn('[kun-gui] CLI install prompt failed:', error)
   })

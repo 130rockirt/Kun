@@ -12,6 +12,8 @@ export type ThreadSnapshot = {
   threadId: string
   blocks: ChatBlock[]
   lastSeq: number
+  threadHistoryCursor: string | null
+  threadHasMoreHistory: boolean
   liveDeltaSeqFloor: number
   liveReasoning: string
   liveAssistant: string
@@ -74,6 +76,8 @@ export function snapshotThreadProjection(state: ChatState, payloadBytes?: number
     threadId,
     blocks: state.blocks,
     lastSeq: state.lastSeq,
+    threadHistoryCursor: state.threadHistoryCursor,
+    threadHasMoreHistory: state.threadHasMoreHistory,
     liveDeltaSeqFloor: state.liveDeltaSeqFloor,
     liveReasoning: state.liveReasoning,
     liveAssistant: state.liveAssistant,

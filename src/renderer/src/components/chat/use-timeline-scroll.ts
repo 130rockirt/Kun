@@ -14,6 +14,9 @@ type UseTimelineScrollOptions = {
   pageSize: number
   totalTurns: number
   busy: boolean
+  hasRemoteHistory?: boolean
+  remoteHistoryLoading?: boolean
+  loadRemoteHistory?: () => Promise<boolean>
   /** Triggers stick-to-bottom snap scroll. */
   scrollDeps: { contentKey: string; streaming: boolean; userTurnKey: string }
 }
@@ -21,6 +24,7 @@ type UseTimelineScrollOptions = {
 export type UseTimelineScrollResult = {
   visibleTurnCount: number
   hiddenTurnCount: number
+  hasEarlierTurns: boolean
   loadEarlierTurns: (options?: { userInitiated?: boolean }) => void
   collapseEarlierTurns: () => void
 }
@@ -92,6 +96,9 @@ export function useTimelineScroll({
   pageSize,
   totalTurns,
   busy,
+  hasRemoteHistory = false,
+  remoteHistoryLoading = false,
+  loadRemoteHistory,
   scrollDeps
 }: UseTimelineScrollOptions): UseTimelineScrollResult {
   const { contentKey, streaming, userTurnKey } = scrollDeps
@@ -115,17 +122,23 @@ export function useTimelineScroll({
     busy
   })
   const hiddenTurnCount = Math.max(0, totalTurns - renderedVisibleTurnCount)
+  const hasEarlierTurns = hiddenTurnCount > 0 || hasRemoteHistory
 
   const stickToBottomRef = useRef(true)
   const lastUserTurnKeyRef = useRef(userTurnKey)
   const historyExpansionRequestedRef = useRef(false)
   const pendingPrependRef = useRef<{ scrollHeight: number; scrollTop: number } | null>(null)
   const prependInFlightRef = useRef(false)
+  const remoteLoadStartTotalRef = useRef<number | null>(null)
+  const remoteLoadSettledRef = useRef(false)
+  const remoteLoadProgressedRef = useRef(false)
+  const [remoteLoadCompletionRevision, setRemoteLoadCompletionRevision] = useState(0)
   const scrollFrameRef = useRef<number | null>(null)
 
   const loadEarlierTurns = useCallback(
     (options?: { userInitiated?: boolean }): void => {
-      if (busy || hiddenTurnCount === 0 || prependInFlightRef.current) return
+      if (busy || prependInFlightRef.current) return
+      if (hiddenTurnCount === 0 && (!hasRemoteHistory || !loadRemoteHistory || remoteHistoryLoading)) return
       if (options?.userInitiated) {
         historyExpansionRequestedRef.current = true
       }
@@ -137,9 +150,33 @@ export function useTimelineScroll({
         }
       }
       prependInFlightRef.current = true
-      setVisibleTurnCount((count) => Math.min(totalTurns, count + pageSize))
+      if (hiddenTurnCount > 0) {
+        setVisibleTurnCount((count) => Math.min(totalTurns, count + pageSize))
+        return
+      }
+      remoteLoadStartTotalRef.current = totalTurns
+      remoteLoadSettledRef.current = false
+      remoteLoadProgressedRef.current = false
+      void loadRemoteHistory!().then((progressed) => {
+        remoteLoadProgressedRef.current = progressed
+        if (!progressed) historyExpansionRequestedRef.current = false
+      }).finally(() => {
+        // Keep the prepend snapshot until React has committed the store update.
+        // Promise settlement normally precedes the totalTurns/content effects.
+        remoteLoadSettledRef.current = true
+        setRemoteLoadCompletionRevision((revision) => revision + 1)
+      })
     },
-    [busy, containerRef, hiddenTurnCount, pageSize, totalTurns]
+    [
+      busy,
+      containerRef,
+      hasRemoteHistory,
+      hiddenTurnCount,
+      loadRemoteHistory,
+      pageSize,
+      remoteHistoryLoading,
+      totalTurns
+    ]
   )
 
   const collapseEarlierTurns = useCallback((): void => {
@@ -162,13 +199,13 @@ export function useTimelineScroll({
     if (!el) return
     const onScroll = (): void => {
       stickToBottomRef.current = isTimelineNearBottom(el)
-      if (hiddenTurnCount > 0 && el.scrollTop <= TOP_LOAD_TRIGGER_PX) {
+      if (hasEarlierTurns && el.scrollTop <= TOP_LOAD_TRIGGER_PX) {
         loadEarlierTurns({ userInitiated: true })
       }
     }
     el.addEventListener('scroll', onScroll, { passive: true })
     return () => el.removeEventListener('scroll', onScroll)
-  }, [containerRef, hiddenTurnCount, loadEarlierTurns])
+  }, [containerRef, hasEarlierTurns, loadEarlierTurns])
 
   // Snap to bottom when the content or the visible window changes, but only if
   // the user was already at the bottom. Runs as a layout effect so a discrete
@@ -199,6 +236,9 @@ export function useTimelineScroll({
     historyExpansionRequestedRef.current = false
     pendingPrependRef.current = null
     prependInFlightRef.current = false
+    remoteLoadStartTotalRef.current = null
+    remoteLoadSettledRef.current = false
+    remoteLoadProgressedRef.current = false
     if (scrollFrameRef.current !== null) {
       window.cancelAnimationFrame(scrollFrameRef.current)
       scrollFrameRef.current = null
@@ -230,6 +270,16 @@ export function useTimelineScroll({
     )
   }, [activeThreadId, pageSize, shouldCollapseHistory, totalTurns])
 
+  useEffect(() => {
+    const startedWith = remoteLoadStartTotalRef.current
+    if (startedWith === null || totalTurns <= startedWith) return
+    remoteLoadStartTotalRef.current = null
+    remoteLoadSettledRef.current = false
+    remoteLoadProgressedRef.current = true
+    const addedTurns = totalTurns - startedWith
+    setVisibleTurnCount((count) => Math.min(totalTurns, count + addedTurns))
+  }, [totalTurns])
+
   // While a turn is running, keep the latest page visible without
   // mounting every historical turn. Expanding all history during SSE
   // streaming can repaint long conversations and make the viewport look
@@ -256,20 +306,43 @@ export function useTimelineScroll({
     })
   }, [containerRef, visibleTurnCount])
 
+  // A successful page can contain only more blocks for an already-rendered
+  // turn (for example a tool call split from its result), so totalTurns may not
+  // change. Once the committed content effect had a chance to restore scroll,
+  // release any remaining in-flight guard.
+  useEffect(() => {
+    if (!remoteLoadSettledRef.current || remoteLoadStartTotalRef.current === null) return
+    const snapshot = pendingPrependRef.current
+    const el = containerRef.current
+    remoteLoadSettledRef.current = false
+    if (!remoteLoadProgressedRef.current) historyExpansionRequestedRef.current = false
+    remoteLoadProgressedRef.current = false
+    remoteLoadStartTotalRef.current = null
+    pendingPrependRef.current = null
+    prependInFlightRef.current = false
+    if (snapshot && el) {
+      requestAnimationFrame(() => {
+        const addedHeight = el.scrollHeight - snapshot.scrollHeight
+        el.scrollTop = snapshot.scrollTop + Math.max(0, addedHeight)
+      })
+    }
+  }, [containerRef, remoteLoadCompletionRevision, totalTurns])
+
   // If the user explicitly asked to expand history and the container
   // still has room, keep loading earlier turns until it overflows.
   useEffect(() => {
     const el = containerRef.current
-    if (!el || hiddenTurnCount === 0 || prependInFlightRef.current) return
+    if (!el || !hasEarlierTurns || prependInFlightRef.current) return
     if (!historyExpansionRequestedRef.current) return
     if (el.scrollHeight <= el.clientHeight + TOP_LOAD_TRIGGER_PX) {
       loadEarlierTurns()
     }
-  }, [containerRef, hiddenTurnCount, loadEarlierTurns, visibleTurnCount])
+  }, [containerRef, hasEarlierTurns, loadEarlierTurns, visibleTurnCount])
 
   return {
     visibleTurnCount: renderedVisibleTurnCount,
     hiddenTurnCount,
+    hasEarlierTurns,
     loadEarlierTurns,
     collapseEarlierTurns
   }

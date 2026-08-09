@@ -1,20 +1,26 @@
-import { appendFile, mkdir, readFile, stat } from 'node:fs/promises'
+import { appendFile, mkdir, open, readFile, stat, type FileHandle } from 'node:fs/promises'
 import { createReadStream } from 'node:fs'
 import { performance } from 'node:perf_hooks'
 import { join, resolve } from 'node:path'
 import type {
+  ItemHistoryPage,
+  ItemHistoryPageOptions,
   ItemHistoryCompactionResult,
   ItemHistoryCommit,
   ItemHistorySnapshot,
   SessionStore
 } from '../../ports/session-store.js'
 import type { RuntimeEvent } from '../../contracts/events.js'
-import type { TurnItem } from '../../contracts/items.js'
+import { isPublicTurnItem, type TurnItem } from '../../contracts/items.js'
 import { assertSafeThreadId, isSafeThreadId } from '../../contracts/thread-id.js'
 import type { AgentSession } from '../../domain/session.js'
 import { readJsonl } from './file-thread-store.js'
 import { atomicWriteFile } from './atomic-write.js'
 import { isPathBelowDirectory } from './path-containment.js'
+import {
+  buildPublicItemHistoryPage,
+  timelineSafeItem
+} from '../../services/item-history-page.js'
 
 const DEFAULT_USAGE_EVENT_COMPACTION_MAX_BYTES = 5 * 1024 * 1024
 const DEFAULT_USAGE_EVENT_RETENTION_DAYS = 365
@@ -242,6 +248,42 @@ export class FileSessionStore implements SessionStore {
     return this.withThreadWrite(threadId, () => this.loadItemsUnlocked(threadId))
   }
 
+  async loadItemPage(
+    threadId: string,
+    options: ItemHistoryPageOptions
+  ): Promise<ItemHistoryPage> {
+    if (!isSafeThreadId(threadId)) {
+      return { items: [], hasMore: false, itemBytes: 0 }
+    }
+    type PageSource =
+      | { kind: 'cached'; items: TurnItem[] }
+      | { kind: 'file'; handle: FileHandle; size: number }
+    const source = await this.withThreadWrite<PageSource | null>(threadId, async () => {
+      const cached = this.itemsCache.get(threadId)
+      if (cached) {
+        this.cacheItems(threadId, cached)
+        return { kind: 'cached', items: [...cached] }
+      }
+      let handle: FileHandle | undefined
+      try {
+        handle = await open(this.messagesPath(threadId), 'r')
+        const info = await handle.stat()
+        return { kind: 'file', handle, size: info.size }
+      } catch (error) {
+        await handle?.close().catch(() => undefined)
+        if ((error as { code?: string }).code === 'ENOENT') return null
+        throw error
+      }
+    })
+    if (!source) return { items: [], hasMore: false, itemBytes: 0 }
+    if (source.kind === 'cached') return buildPublicItemHistoryPage(source.items, options)
+    if (source.size <= 0) {
+      await source.handle.close()
+      return { items: [], hasMore: false, itemBytes: 0 }
+    }
+    return readItemPageFromJsonl(source.handle, source.size, options)
+  }
+
   private async loadItemsUnlocked(threadId: string): Promise<TurnItem[]> {
     const cached = this.itemsCache.get(threadId)
     if (cached) {
@@ -307,9 +349,14 @@ export class FileSessionStore implements SessionStore {
       this.cacheHighestSeq(threadId, cached.seq, info)
       return cached.seq
     }
-    const events = await readJsonl<RuntimeEvent>(path)
-    const highest = events.reduce((max, event) => Math.max(max, event.seq), 0)
-    this.cacheHighestSeq(threadId, highest, await stat(path).catch(() => info))
+    let highest = 0
+    for await (const event of this.iterateEventsSince(threadId, -1)) {
+      highest = Math.max(highest, event.seq)
+    }
+    // Cache against the size captured before the streaming scan. If a writer
+    // appended concurrently, the next stat differs and forces another scan
+    // rather than pairing an old sequence with the new file size.
+    this.cacheHighestSeq(threadId, highest, info)
     return highest
   }
 
@@ -700,6 +747,155 @@ export async function readLatestItemsFromJsonl(
     items: firstSeenIds.map((id) => latestById.get(id)!),
     rawCount,
     malformedCount
+  }
+}
+
+/**
+ * Scan an append-only item log without retaining every item payload. A set of
+ * stable ids preserves first-seen ordering, while each rolling window keeps at
+ * most one page plus a sentinel used to derive `hasMore`.
+ */
+async function readItemPageFromJsonl(
+  handle: FileHandle,
+  sourceBytes: number,
+  options: ItemHistoryPageOptions
+): Promise<ItemHistoryPage> {
+  const maxItems = Math.max(1, Math.floor(options.maxItems))
+  const maxBytes = Math.max(1, Math.floor(options.maxBytes))
+  const seenIds = new Set<string>()
+  const latestWindow = createItemPageWindow()
+  const beforeWindow = createItemPageWindow()
+  let beforeFound = options.before === undefined
+  let remainder = ''
+
+  const acceptLine = (line: string): void => {
+    if (!line.trim()) return
+    if (Buffer.byteLength(line, 'utf-8') > DEFAULT_ITEM_HISTORY_MAX_RECORD_BYTES) {
+      throw new Error(`item history record exceeds ${DEFAULT_ITEM_HISTORY_MAX_RECORD_BYTES} bytes`)
+    }
+    let item: TurnItem
+    try {
+      item = JSON.parse(line) as TurnItem
+    } catch {
+      return
+    }
+    if (!item || typeof item !== 'object' || typeof item.id !== 'string' || !item.id) return
+
+    const safeItem = isPublicTurnItem(item) ? timelineSafeItem(item, maxBytes) : item
+    const firstSeen = !seenIds.has(item.id)
+    if (firstSeen) {
+      seenIds.add(item.id)
+      if (isPublicTurnItem(item)) {
+        appendPageWindowItem(latestWindow, safeItem, maxItems, maxBytes)
+      }
+      if (!beforeFound && item.id === options.before) {
+        beforeFound = true
+      } else if (!beforeFound && isPublicTurnItem(item)) {
+        appendPageWindowItem(beforeWindow, safeItem, maxItems, maxBytes)
+      }
+      return
+    }
+
+    // Updates are appended after the original record. Refresh a retained
+    // candidate in place so terminal state is current without moving its
+    // original timeline position.
+    if (isPublicTurnItem(item)) {
+      updatePageWindowItem(latestWindow, safeItem, maxItems, maxBytes)
+      updatePageWindowItem(beforeWindow, safeItem, maxItems, maxBytes)
+    }
+  }
+
+  try {
+    const stream = handle.createReadStream({
+      encoding: 'utf-8',
+      start: 0,
+      end: sourceBytes - 1,
+      autoClose: true,
+      highWaterMark: 64 * 1024
+    })
+    for await (const chunk of stream) {
+      remainder += typeof chunk === 'string' ? chunk : chunk.toString('utf-8')
+      let newline = remainder.indexOf('\n')
+      while (newline >= 0) {
+        acceptLine(remainder.slice(0, newline))
+        remainder = remainder.slice(newline + 1)
+        newline = remainder.indexOf('\n')
+      }
+      if (Buffer.byteLength(remainder, 'utf-8') > DEFAULT_ITEM_HISTORY_MAX_RECORD_BYTES) {
+        throw new Error(`item history record exceeds ${DEFAULT_ITEM_HISTORY_MAX_RECORD_BYTES} bytes`)
+      }
+    }
+    acceptLine(remainder)
+  } catch (error) {
+    await handle.close().catch(() => undefined)
+    throw error
+  }
+
+  const selectedWindow = options.before && beforeFound ? beforeWindow : latestWindow
+  const page = buildPublicItemHistoryPage(
+    selectedWindow.ids.flatMap((id) => {
+      const item = selectedWindow.items.get(id)
+      return item ? [item] : []
+    }),
+    { maxItems, maxBytes }
+  )
+  if (selectedWindow.droppedBefore && page.items[0]) {
+    return { ...page, nextCursor: page.items[0].id, hasMore: true }
+  }
+  return page
+}
+
+type ItemPageWindow = {
+  ids: string[]
+  items: Map<string, TurnItem>
+  itemBytes: number
+  droppedBefore: boolean
+}
+
+function createItemPageWindow(): ItemPageWindow {
+  return { ids: [], items: new Map(), itemBytes: 0, droppedBefore: false }
+}
+
+function appendPageWindowItem(
+  window: ItemPageWindow,
+  item: TurnItem,
+  maxItems: number,
+  maxBytes: number
+): void {
+  window.ids.push(item.id)
+  window.items.set(item.id, item)
+  window.itemBytes += serializedBytes(item)
+  trimPageWindow(window, maxItems, maxBytes)
+}
+
+function updatePageWindowItem(
+  window: ItemPageWindow,
+  item: TurnItem,
+  maxItems: number,
+  maxBytes: number
+): void {
+  const previous = window.items.get(item.id)
+  if (!previous) return
+  window.items.set(item.id, item)
+  window.itemBytes += serializedBytes(item) - serializedBytes(previous)
+  trimPageWindow(window, maxItems, maxBytes)
+}
+
+function trimPageWindow(
+  window: ItemPageWindow,
+  maxItems: number,
+  maxBytes: number
+): void {
+  while (
+    window.ids.length > maxItems ||
+    (window.itemBytes > maxBytes && window.ids.length > 1)
+  ) {
+    const removed = window.ids.shift()
+    if (!removed) break
+    const removedItem = window.items.get(removed)
+    if (removedItem) window.itemBytes -= serializedBytes(removedItem)
+    window.items.delete(removed)
+    window.droppedBefore = true
   }
 }
 

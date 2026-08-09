@@ -15,6 +15,13 @@ import {
   readUiModePreference,
   writeUiModePreference
 } from '../lib/ui-mode'
+import {
+  UI_PLUGIN_CHARACTER_SCALE_DEFAULT,
+  normalizeUiPluginCharacterScale,
+  readUiPluginCharacterScalePreference,
+  removeUiPluginCharacterScalePreference,
+  writeUiPluginCharacterScalePreference
+} from '../lib/ui-plugin-character-scale'
 
 /**
  * 形象工坊运行时:单一 uiMode('default' | 'ikun' | 插件 id),
@@ -32,12 +39,14 @@ type UiPluginState = {
   uiMode: string
   installed: UiPluginListItem[]
   activeRuntime: UiPluginRuntime | null
+  characterScale: number
   busy: boolean
   initialized: boolean
   lastError: string | null
   initUiPlugins: () => Promise<void>
   refreshUiPlugins: () => Promise<void>
   activateUiMode: (mode: string) => Promise<void>
+  setCharacterScale: (scale: number) => void
   installUiPluginFromDialog: () => Promise<{ ok: boolean; errors?: string[]; canceled?: boolean }>
   removeUiPluginById: (id: string) => Promise<void>
 }
@@ -162,6 +171,7 @@ export const useUiPluginStore = create<UiPluginState>((set, get) => ({
   uiMode: UI_MODE_DEFAULT,
   installed: [],
   activeRuntime: null,
+  characterScale: UI_PLUGIN_CHARACTER_SCALE_DEFAULT,
   busy: false,
   initialized: false,
   lastError: null,
@@ -203,7 +213,13 @@ export const useUiPluginStore = create<UiPluginState>((set, get) => ({
 
       if (normalized === UI_MODE_DEFAULT || normalized === UI_MODE_RETROMA) {
         writeUiModePreference(normalized)
-        set({ busy: false, uiMode: normalized, activeRuntime: null, lastError: null })
+        set({
+          busy: false,
+          uiMode: normalized,
+          activeRuntime: null,
+          characterScale: UI_PLUGIN_CHARACTER_SCALE_DEFAULT,
+          lastError: null
+        })
         applyUiModeDom(normalized, null)
         const deactivateError = await deactivateHostTheme(api)
         if (requestId === activationRequestId && deactivateError) {
@@ -218,7 +234,13 @@ export const useUiPluginStore = create<UiPluginState>((set, get) => ({
         // 桌面接口不可用(如纯渲染测试):ikun 仍可退化为仅属性模式。
         if (normalized === UI_MODE_IKUN) {
           writeUiModePreference(normalized)
-          set({ busy: false, uiMode: normalized, activeRuntime: null, lastError: null })
+          set({
+            busy: false,
+            uiMode: normalized,
+            activeRuntime: null,
+            characterScale: UI_PLUGIN_CHARACTER_SCALE_DEFAULT,
+            lastError: null
+          })
           applyUiModeDom(normalized, null)
         } else {
           const message = '桌面 CDP 主题注入接口不可用'
@@ -227,6 +249,7 @@ export const useUiPluginStore = create<UiPluginState>((set, get) => ({
             busy: false,
             uiMode: UI_MODE_DEFAULT,
             activeRuntime: null,
+            characterScale: UI_PLUGIN_CHARACTER_SCALE_DEFAULT,
             lastError: message
           })
           applyUiModeDom(UI_MODE_DEFAULT, null)
@@ -247,6 +270,7 @@ export const useUiPluginStore = create<UiPluginState>((set, get) => ({
             busy: false,
             uiMode: UI_MODE_DEFAULT,
             activeRuntime: null,
+            characterScale: UI_PLUGIN_CHARACTER_SCALE_DEFAULT,
             lastError: themeResult.error
           })
           applyUiModeDom(UI_MODE_DEFAULT, null)
@@ -260,7 +284,13 @@ export const useUiPluginStore = create<UiPluginState>((set, get) => ({
           sceneAssets: themeResult.sceneAssets ?? {}
         }
         writeUiModePreference(normalized)
-        set({ busy: false, uiMode: normalized, activeRuntime: runtime, lastError: null })
+        set({
+          busy: false,
+          uiMode: normalized,
+          activeRuntime: runtime,
+          characterScale: readUiPluginCharacterScalePreference(normalized),
+          lastError: null
+        })
         applyUiModeDom(normalized, runtime)
       } catch (error) {
         if (requestId !== activationRequestId) return
@@ -270,6 +300,7 @@ export const useUiPluginStore = create<UiPluginState>((set, get) => ({
           busy: false,
           uiMode: UI_MODE_DEFAULT,
           activeRuntime: null,
+          characterScale: UI_PLUGIN_CHARACTER_SCALE_DEFAULT,
           lastError: message
         })
         applyUiModeDom(UI_MODE_DEFAULT, null)
@@ -281,6 +312,14 @@ export const useUiPluginStore = create<UiPluginState>((set, get) => ({
       () => undefined
     )
     return operation
+  },
+
+  setCharacterScale: (scale: number) => {
+    const { activeRuntime, uiMode } = get()
+    if (!activeRuntime || activeRuntime.manifest.id !== uiMode) return
+    const characterScale = normalizeUiPluginCharacterScale(scale)
+    writeUiPluginCharacterScalePreference(uiMode, characterScale)
+    set({ characterScale })
   },
 
   installUiPluginFromDialog: async () => {
@@ -324,7 +363,11 @@ export const useUiPluginStore = create<UiPluginState>((set, get) => ({
       try {
         if (get().uiMode === normalized) {
           writeUiModePreference(UI_MODE_DEFAULT)
-          set({ uiMode: UI_MODE_DEFAULT, activeRuntime: null })
+          set({
+            uiMode: UI_MODE_DEFAULT,
+            activeRuntime: null,
+            characterScale: UI_PLUGIN_CHARACTER_SCALE_DEFAULT
+          })
           applyUiModeDom(UI_MODE_DEFAULT, null)
           await deactivateHostTheme(api)
         }
@@ -332,6 +375,8 @@ export const useUiPluginStore = create<UiPluginState>((set, get) => ({
         const result = await api.removeUiPlugin(normalized)
         if (!result.ok) {
           set({ lastError: '删除 UI 插件失败，插件可能正在使用或文件不可写' })
+        } else {
+          removeUiPluginCharacterScalePreference(normalized)
         }
       } catch (error) {
         set({ lastError: error instanceof Error ? error.message : String(error) })

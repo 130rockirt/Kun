@@ -1,4 +1,10 @@
 {
+  "connectPhoneTelegramProxyEnabledLabel": "Use a custom proxy",
+  "connectPhoneTelegramProxyEnabledHint": "Applies only to this Telegram Bot connection, not model requests.",
+  "connectPhoneTelegramProxyUrlLabel": "Proxy URL",
+  "connectPhoneTelegramProxyUrlPlaceholder": "e.g. socks5://127.0.0.1:1080",
+  "connectPhoneTelegramProxyUrlHint": "Supports HTTP, HTTPS, SOCKS, SOCKS4, and SOCKS5. The URL is saved locally with the bot credential.",
+  "connectPhoneTelegramErrorInvalidProxy": "Enter a valid HTTP, HTTPS, SOCKS, SOCKS4, or SOCKS5 proxy URL, or turn the custom proxy off.",
   "appName": "クン",
   "runtimeStatusRestarting": "Kun が自動的に再起動しています…",
   "runtimeStatusRestartingAttempt": "Kun は自動的に再起動しています (試行 {{attempt}}/{{max}})…",
@@ -2232,6 +2238,7 @@
   "threadActionBusy": "このスレッドを変更する前に、現在のターンが終了するまで待ってください。",
   "runtimeFeatureUnsupported": "接続されたランタイムはこのアクションをまだサポートしていません。",
   "runtimeActiveTurn": "このスレッドではすでにターンが進行中です。",
+  "runtimeThreadBusyQueued": "現在のタスクはまだ実行中です。メッセージはキューに追加されました。完了を待つか、実行中のタスクを停止してください。",
   "sidebarOfflineHint": "最初にランタイムを接続して、スレッドを作成して続行します。",
   "sidebarEmptyTitle": "まだスレッドがありません",
   "sidebarEmptySub": "上記のアクションから最初のタスクを開始します。",

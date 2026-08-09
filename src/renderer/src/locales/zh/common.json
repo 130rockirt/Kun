@@ -1,4 +1,10 @@
 {
+  "connectPhoneTelegramProxyEnabledLabel": "使用自定义代理",
+  "connectPhoneTelegramProxyEnabledHint": "仅用于此 Telegram Bot 连接，不影响模型请求。",
+  "connectPhoneTelegramProxyUrlLabel": "代理 URL",
+  "connectPhoneTelegramProxyUrlPlaceholder": "例如 socks5://127.0.0.1:1080",
+  "connectPhoneTelegramProxyUrlHint": "支持 HTTP、HTTPS、SOCKS、SOCKS4 和 SOCKS5。URL 会和 Bot 凭据一起保存在本机。",
+  "connectPhoneTelegramErrorInvalidProxy": "请输入有效的 HTTP、HTTPS、SOCKS、SOCKS4 或 SOCKS5 代理 URL，或关闭自定义代理。",
   "appName": "Kun",
   "runtimeStatusRestarting": "Kun 正在自动重启…",
   "runtimeStatusRestartingAttempt": "Kun 正在自动重启(第 {{attempt}}/{{max}} 次)…",
@@ -2232,6 +2238,7 @@
   "threadActionBusy": "当前回合结束后再操作这个会话。",
   "runtimeFeatureUnsupported": "当前连接的运行时还不支持这个操作。",
   "runtimeActiveTurn": "这个会话已有回合正在运行。",
+  "runtimeThreadBusyQueued": "当前任务仍在运行，你的消息已排队。可以等待任务完成，或停止当前任务。",
   "sidebarOfflineHint": "连接运行时后即可创建并继续会话。",
   "sidebarEmptyTitle": "还没有会话",
   "sidebarEmptySub": "从上方新建会话开始第一轮任务。",

@@ -1,4 +1,10 @@
 {
+  "connectPhoneTelegramProxyEnabledLabel": "Use a custom proxy",
+  "connectPhoneTelegramProxyEnabledHint": "Applies only to this Telegram Bot connection, not model requests.",
+  "connectPhoneTelegramProxyUrlLabel": "Proxy URL",
+  "connectPhoneTelegramProxyUrlPlaceholder": "e.g. socks5://127.0.0.1:1080",
+  "connectPhoneTelegramProxyUrlHint": "Supports HTTP, HTTPS, SOCKS, SOCKS4, and SOCKS5. The URL is saved locally with the bot credential.",
+  "connectPhoneTelegramErrorInvalidProxy": "Enter a valid HTTP, HTTPS, SOCKS, SOCKS4, or SOCKS5 proxy URL, or turn the custom proxy off.",
   "appName": "คุน",
   "runtimeStatusRestarting": "คุนกำลังรีสตาร์ทโดยอัตโนมัติ...",
   "runtimeStatusRestartingAttempt": "คุนกำลังรีสตาร์ทโดยอัตโนมัติ (พยายาม {{attempt}}/{{max}})...",
@@ -2232,6 +2238,7 @@
   "threadActionBusy": "รอให้รอบปัจจุบันเสร็จสิ้นก่อนที่จะเปลี่ยนกระทู้นี้",
   "runtimeFeatureUnsupported": "รันไทม์ที่เชื่อมต่อยังไม่รองรับการดำเนินการนี้",
   "runtimeActiveTurn": "มีการเลี้ยวอยู่ในกระทู้นี้แล้ว",
+  "runtimeThreadBusyQueued": "งานปัจจุบันยังทำงานอยู่ ข้อความของคุณถูกเพิ่มลงในคิวแล้ว โปรดรอให้งานเสร็จหรือหยุดงานที่กำลังทำงานอยู่",
   "sidebarOfflineHint": "เชื่อมต่อรันไทม์ก่อนเพื่อสร้างและดำเนินเธรดต่อ",
   "sidebarEmptyTitle": "ยังไม่มีกระทู้",
   "sidebarEmptySub": "เริ่มงานแรกของคุณจากการกระทำข้างต้น",

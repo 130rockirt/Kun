@@ -42,6 +42,7 @@ import {
   KUN_RUNTIME_TUNING_DEFAULTS_VERSION,
   normalizeChatContentMaxWidth,
   normalizeComposerSendKey,
+  normalizeClawImPlatformCredential,
   isComposerSendHotkey,
   normalizeGitBranchPrefix,
   applyGitBranchPrefix,
@@ -50,6 +51,7 @@ import {
   kunToolPermissionModeFromSettings,
   kunToolPermissionModeSettings,
   normalizeScheduleSettings,
+  validateClawImTelegramProxy,
   resolveKunRuntimeSettings,
   resolveWriteInlineCompletionApiKey,
   resolveWriteInlineCompletionBaseUrl,
@@ -615,6 +617,7 @@ describe('app behavior settings', () => {
     expect(normalizeAppSettings(raw).appBehavior).toEqual({
       openAtLogin: false,
       startMinimized: false,
+      useSystemTitleBar: false,
       closeAction: 'ask',
       closeToTray: false
     })
@@ -626,6 +629,7 @@ describe('app behavior settings', () => {
       appBehavior: {
         openAtLogin: false,
         startMinimized: true,
+        useSystemTitleBar: true,
         closeToTray: true
       }
     })
@@ -633,6 +637,7 @@ describe('app behavior settings', () => {
     expect(normalized.appBehavior).toEqual({
       openAtLogin: false,
       startMinimized: false,
+      useSystemTitleBar: true,
       closeAction: 'tray',
       closeToTray: true
     })
@@ -647,6 +652,18 @@ describe('app behavior settings', () => {
     expect(current.appBehavior.closeAction).toBe('ask')
     expect(mergeAppBehaviorSettings(current.appBehavior, { closeToTray: true }).closeAction).toBe('tray')
     expect(mergeAppBehaviorSettings(current.appBehavior, { closeToTray: false }).closeAction).toBe('quit')
+  })
+
+  it('preserves the Linux system title bar preference through patches', () => {
+    const current = normalizeAppSettings({
+      ...settings(),
+      appBehavior: undefined
+    } as unknown as AppSettingsV1)
+
+    expect(mergeAppBehaviorSettings(current.appBehavior, { useSystemTitleBar: true }))
+      .toMatchObject({ useSystemTitleBar: true })
+    expect(mergeAppBehaviorSettings(current.appBehavior, { useSystemTitleBar: false }))
+      .toMatchObject({ useSystemTitleBar: false })
   })
 })
 
@@ -694,6 +711,58 @@ describe('keyboard shortcut settings', () => {
 })
 
 describe('claw settings', () => {
+  it('normalizes Telegram proxies while keeping legacy credentials compatible', () => {
+    const legacy = normalizeClawImPlatformCredential({
+      kind: 'telegram',
+      botToken: '123:token',
+      allowedChatIds: '',
+      createdAt: '2026-08-09T00:00:00.000Z'
+    })
+    expect(legacy).toMatchObject({
+      kind: 'telegram',
+      proxy: { enabled: false, url: '' }
+    })
+
+    const proxied = normalizeClawImPlatformCredential({
+      kind: 'telegram',
+      botToken: '123:token',
+      allowedChatIds: '',
+      proxy: { enabled: true, url: '  socks5://user:pass@127.0.0.1:1080  ' },
+      createdAt: '2026-08-09T00:00:00.000Z'
+    })
+    expect(proxied).toMatchObject({
+      kind: 'telegram',
+      proxy: { enabled: true, url: 'socks5://user:pass@127.0.0.1:1080' }
+    })
+
+    const invalid = normalizeClawImPlatformCredential({
+      kind: 'telegram',
+      botToken: '123:token',
+      allowedChatIds: '',
+      proxy: { enabled: true, url: 'ftp://127.0.0.1:21' }
+    })
+    expect(invalid).toMatchObject({
+      kind: 'telegram',
+      proxy: { enabled: false, url: 'ftp://127.0.0.1:21' }
+    })
+  })
+
+  it.each(['http', 'https', 'socks', 'socks4', 'socks5'])(
+    'accepts %s Telegram proxy URLs',
+    (scheme) => {
+      expect(validateClawImTelegramProxy({
+        enabled: true,
+        url: `${scheme}://127.0.0.1:1080`
+      })).toMatchObject({ ok: true })
+    }
+  )
+
+  it('rejects enabled empty, relative, and unsupported Telegram proxies', () => {
+    for (const url of ['', '127.0.0.1:1080', 'ftp://127.0.0.1:21']) {
+      expect(validateClawImTelegramProxy({ enabled: true, url })).toMatchObject({ ok: false })
+    }
+  })
+
   it('stores the WeChat bridge URL in Claw IM settings', () => {
     const defaults = defaultClawSettings()
     expect(defaults.im.weixinBridgeUrl).toBe(DEFAULT_WEIXIN_BRIDGE_RPC_URL)

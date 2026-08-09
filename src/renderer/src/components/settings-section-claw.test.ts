@@ -60,10 +60,16 @@ const commonLabels: Record<string, string> = {
   connectPhoneTelegramAllowedChatsLabel: 'Allowed Private Chat IDs (optional)',
   connectPhoneTelegramAllowedChatsPlaceholder: 'e.g. 123456789, 987654321',
   connectPhoneTelegramAllowedChatsHint: 'Comma-separated private chat IDs. Leave empty to allow all private messages; group chats are not supported.',
+  connectPhoneTelegramProxyEnabledLabel: 'Use a custom proxy',
+  connectPhoneTelegramProxyEnabledHint: 'Applies only to this Telegram Bot connection, not model requests.',
+  connectPhoneTelegramProxyUrlLabel: 'Proxy URL',
+  connectPhoneTelegramProxyUrlPlaceholder: 'e.g. socks5://127.0.0.1:1080',
+  connectPhoneTelegramProxyUrlHint: 'Supports HTTP, HTTPS, SOCKS, SOCKS4, and SOCKS5.',
   connectPhoneTelegramConnect: 'Connect',
   connectPhoneTelegramConnecting: 'Verifying...',
   connectPhoneTelegramTokenRequired: 'Please enter a Bot Token.',
   connectPhoneTelegramErrorInvalidFormat: 'Invalid bot token format.',
+  connectPhoneTelegramErrorInvalidProxy: 'Invalid Telegram proxy URL.',
   connectPhoneTelegramErrorRejected: 'Telegram rejected this token.',
   connectPhoneTelegramErrorNetwork: 'Network error.',
   connectPhoneTelegramErrorUnknown: 'Verification failed.',
@@ -168,6 +174,7 @@ function buildTelegramSettings(): AppSettingsV1 {
       botToken: '123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi',
       allowedChatIds: '123456789',
       botUsername: 'kun_test_bot',
+      proxy: { enabled: true, url: 'socks5://127.0.0.1:1080' },
       createdAt: '2026-06-19T00:00:00.000Z'
     },
     conversations: [],
@@ -202,6 +209,9 @@ describe('ClawSettingsSection', () => {
     expect(html).toContain('Paste the token below')
     expect(html).toContain('Allowed Private Chat IDs (optional)')
     expect(html).toContain('e.g. 123456789, 987654321')
+    expect(html).toContain('Use a custom proxy')
+    expect(html).toContain('Proxy URL')
+    expect(html).toContain('e.g. socks5://127.0.0.1:1080')
     expect(html).not.toContain('clawTelegramConnectTitle')
     expect(html).not.toContain('connectPhoneTelegramBotTokenLabel')
     expect(html).not.toContain('-1009876543210')
@@ -236,6 +246,8 @@ describe('ClawSettingsSection', () => {
 
     expect(html).toContain('Telegram Bot Credentials')
     expect(html).toContain('@kun_test_bot is connected and saved locally.')
+    expect(html).toContain('value="socks5://127.0.0.1:1080"')
+    expect(html).toContain('role="switch" aria-label="Use a custom proxy" aria-checked="true"')
     expect(html).not.toContain('Connect Telegram Bot description')
     expect(html).not.toContain('Paste the token below')
   })

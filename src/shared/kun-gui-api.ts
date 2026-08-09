@@ -2,6 +2,7 @@ import type {
   AppSettingsPatch,
   AppSettingsV1,
   ClawRunResult,
+  ClawImTelegramProxyV1,
   ClawTaskFromTextResult,
   ClawRuntimeStatus,
   DaemonActionResult,
@@ -21,6 +22,7 @@ import type {
   WorkflowRuntimeStatus
 } from './app-settings'
 import type { EditorListResult, EditorOpenResult, OpenEditorPathOptions } from './editor'
+import type { DesktopTitleBarMode } from './desktop-title-bar'
 import type { GitBranchesResult, GitBranchWorktreesResult, GitWorktreeCheckoutResult } from './git-branches'
 import type { GitCheckpointCreateResult, GitCheckpointRestoreResult } from './git-checkpoint'
 import type {
@@ -475,7 +477,7 @@ export type GrokBrowserAuthResult =
   | { ok: true; credentials: GrokOAuthCredentials }
   | { ok: false; message: string; code?: GrokBrowserAuthErrorCode }
 export type GrokBrowserAuthCancelResult = { ok: true }
-export type ClawImTelegramConnectErrorCode = 'invalid_format' | 'rejected' | 'network' | 'unknown'
+export type ClawImTelegramConnectErrorCode = 'invalid_format' | 'invalid_proxy' | 'rejected' | 'network' | 'unknown'
 export type ClawImTelegramConnectResult =
   | { ok: true; botId: number; botUsername: string; botFirstName: string }
   | { ok: false; code: ClawImTelegramConnectErrorCode; message: string }
@@ -590,6 +592,8 @@ export type ModelProviderCredentialRevealResult = {
 
 export type KunGuiApi = ExtensionIpcApi & {
   platform: string
+  /** Immutable mode selected before the BrowserWindow and renderer are created. */
+  desktopTitleBarMode: DesktopTitleBarMode
   homeDir: string
   /** Immutable process identity selected before Electron profile locking. */
   appEnvironment: import('./app-environment').AppEnvironmentInfo
@@ -734,7 +738,8 @@ export type KunGuiApi = ExtensionIpcApi & {
   ) => Promise<ClawImInstallPollResult>
   connectTelegramBot: (
     botToken: string,
-    allowedChatIds?: string
+    allowedChatIds?: string,
+    proxy?: ClawImTelegramProxyV1
   ) => Promise<ClawImTelegramConnectResult>
   startCodexAuth: () => Promise<CodexAuthStartResult>
   pollCodexAuth: (deviceCode: string, userCode: string) => Promise<CodexAuthPollResult>

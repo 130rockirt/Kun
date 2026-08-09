@@ -44,6 +44,7 @@ import type {
   ChatState,
   ChatStoreGet,
   ChatStoreSet,
+  QueuedUserMessage,
   WriteAssistantMessageContext
 } from './chat-store-types'
 import { queuedMessageGuidancePayload } from './queued-message-guidance'
@@ -141,6 +142,7 @@ import { GitCheckpointAvailabilityCache } from '../lib/git-checkpoint-availabili
 import { readDesignThreadRegistry } from '../design/design-thread-registry'
 import { readSddThreadRegistry } from '../sdd/sdd-thread-registry'
 import type { ComposerContextAttachment } from '@kun/extension-api'
+import { mergeChatBlocks } from '../agent/kun-mapper'
 
 const GUIDED_MESSAGE_RACE_WINDOW_MS = 5_000
 
@@ -175,6 +177,26 @@ function hasRuntimeUserBlockForGuidance(
   })
 }
 
+function prependOlderHistoryBlocks(
+  current: readonly ChatBlock[],
+  older: readonly ChatBlock[]
+): ChatBlock[] {
+  const currentIds = new Set(current.map((block) => block.id))
+  const olderTools = new Map(
+    older.flatMap((block) => block.kind === 'tool' ? [[block.id, block] as const] : [])
+  )
+  const mergedCurrent = current.map((block) => {
+    const olderTool = block.kind === 'tool' ? olderTools.get(block.id) : undefined
+    return olderTool ? mergeChatBlocks([olderTool, block])[0]! : block
+  })
+  return [
+    ...older.filter((block) => !currentIds.has(block.id)),
+    // Preserve the current page's order while enriching a result whose call
+    // item fell on the preceding page.
+    ...mergedCurrent
+  ]
+}
+
 type SseAbortRef = { current: AbortController | null }
 
 type StoreActionContext = {
@@ -185,12 +207,63 @@ type StoreActionContext = {
 
 let drainingQueuedMessages = false
 const guidingQueuedMessageIds = new Set<string>()
+const expandedHistoryThreadIds = new Set<string>()
 const checkpointGitAvailability = new GitCheckpointAvailabilityCache()
 
 function createWorkspaceCheckpointRequestId(): string {
   const random = globalThis.crypto?.randomUUID?.() ??
     `${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`
   return `gcp_${Date.now()}_${random}`
+}
+
+function createClientTurnRequestId(): string {
+  const random = globalThis.crypto?.randomUUID?.() ??
+    `${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`
+  return `turn_${random}`
+}
+
+function pendingQueuedMessage(message: QueuedUserMessage): QueuedUserMessage {
+  const pending = { ...message, deliveryState: 'pending' as const }
+  delete pending.deliveryTurnId
+  delete pending.deliveryUserMessageItemId
+  return pending
+}
+
+function upsertQueuedSubmission(
+  messages: readonly QueuedUserMessage[],
+  submission: QueuedUserMessage
+): QueuedUserMessage[] {
+  const pending = pendingQueuedMessage(submission)
+  const existingIndex = messages.findIndex((message) =>
+    message.id === pending.id ||
+    Boolean(
+      pending.clientRequestId &&
+      message.clientRequestId === pending.clientRequestId
+    )
+  )
+  if (existingIndex < 0) return [...messages, pending]
+  return messages.map((message, index) => index === existingIndex
+    ? { ...message, ...pending, id: message.id }
+    : message)
+}
+
+function startingQueuedSubmission(
+  messages: readonly QueuedUserMessage[],
+  submission: QueuedUserMessage
+): QueuedUserMessage[] {
+  const pending = upsertQueuedSubmission(messages, submission)
+  return pending.map((message) => message.id === submission.id
+    ? { ...message, deliveryState: 'starting' as const }
+    : message)
+}
+
+function turnAdmissionOutcomeMayBeUnknown(error: unknown): boolean {
+  const code = getRuntimeErrorCode(error)
+  if (code) return code === 'unknown' || code === 'runtime_offline' || code === 'internal_error'
+  const message = error instanceof Error ? error.message : String(error ?? '')
+  // A renderer-side 4xx response is a definitive rejection, even when a
+  // legacy endpoint did not supply a structured code.
+  return !/\bHTTP\s+4\d\d\b/i.test(message)
 }
 
 function localConversationErrorBlock(error: unknown, id: string): Extract<ChatBlock, { kind: 'system' }> {
@@ -258,7 +331,7 @@ function activeWriteMessageContextMatches(context: WriteAssistantMessageContext)
 
 export function createThreadActions(
   { set, get, sseAbortRef }: StoreActionContext
-): Pick<ChatState, 'createThread' | 'createConversation' | 'recoverActiveTurn' | 'selectThread' | 'subscribeThreadEventsLive' | 'drainQueuedMessages' | 'removeQueuedMessage' | 'reorderQueuedMessage' | 'guideQueuedMessage' | 'sendMessage' | 'reviewActiveThread'> {
+): Pick<ChatState, 'createThread' | 'createConversation' | 'recoverActiveTurn' | 'selectThread' | 'loadEarlierThreadHistory' | 'subscribeThreadEventsLive' | 'drainQueuedMessages' | 'removeQueuedMessage' | 'reorderQueuedMessage' | 'guideQueuedMessage' | 'sendMessage' | 'reviewActiveThread'> {
   let threadSelectionGeneration = 0
   const persistActiveQueuedMessages = (): void => {
     const state = get()
@@ -507,7 +580,9 @@ export function createThreadActions(
         latestUserMessageId,
         turnDurationByUserId = {},
         goal,
-        todos
+        todos,
+        historyCursor,
+        hasMoreHistory = false
       } = await p.getThreadDetail(activeThreadId)
       if (!recoveryStillCurrent()) return state.busy
       const loaded = hydrateBlockModelLabels(activeThreadId, rawBlocks)
@@ -540,6 +615,9 @@ export function createThreadActions(
           activeThreadId,
           activeThreadGoal: goal ?? null,
           activeThreadTodos: todos ?? null,
+          threadHistoryCursor: historyCursor ?? null,
+          threadHasMoreHistory: hasMoreHistory,
+          threadHistoryLoading: false,
           blocks,
           lastSeq: latestSeq,
           // Re-baseline the shared delta floor to this subscription's since_seq,
@@ -627,7 +705,10 @@ export function createThreadActions(
     // Park the outgoing renderer projection before its state is replaced. This
     // is intentionally O(1): blocks stay immutable while another thread is
     // active, so no expensive JSON serialization runs on the click path.
-    if (prevId && prevId !== id) snapshotThreadProjection(previousState)
+    if (prevId && prevId !== id) {
+      if (expandedHistoryThreadIds.delete(prevId)) invalidateThreadSnapshot(prevId)
+      else snapshotThreadProjection(previousState)
+    }
     // Re-selecting the active conversation is an explicit refresh (and is
     // used by recovery paths to pick up durable queues), so only cross-thread
     // navigation may consume an in-memory snapshot.
@@ -655,6 +736,9 @@ export function createThreadActions(
         unreadThreadIds: nextUnread,
         activeThreadId: id,
         threadLoadingId: null,
+        threadHistoryCursor: cached.threadHistoryCursor,
+        threadHasMoreHistory: cached.threadHasMoreHistory,
+        threadHistoryLoading: false,
         activeThreadRelation: cached.activeThreadRelation ?? 'primary',
         activeThreadParentId: cached.activeThreadParentId,
         activeThreadGoal: cached.activeThreadGoal,
@@ -702,6 +786,9 @@ export function createThreadActions(
       unreadThreadIds: nextUnread,
       activeThreadId: id,
       threadLoadingId: id,
+      threadHistoryCursor: null,
+      threadHasMoreHistory: false,
+      threadHistoryLoading: false,
       activeThreadRelation: targetThread?.relation ?? 'primary',
       activeThreadParentId: targetThread?.parentThreadId ?? null,
       activeThreadGoal: targetThread?.goal ?? null,
@@ -739,7 +826,9 @@ export function createThreadActions(
         model: threadModel,
         goal,
         todos,
-        payloadBytes
+        payloadBytes,
+        historyCursor,
+        hasMoreHistory = false
       } = await p.getThreadDetail(id)
       if (!selectionStillCurrent()) return
       // A subagent's `side` thread has no locally-stored per-turn model labels
@@ -790,6 +879,9 @@ export function createThreadActions(
         unreadThreadIds: nextUnread,
         activeThreadId: id,
         threadLoadingId: null,
+        threadHistoryCursor: historyCursor ?? null,
+        threadHasMoreHistory: hasMoreHistory,
+        threadHistoryLoading: false,
         activeThreadRelation: threadRelation ?? 'primary',
         activeThreadParentId: threadParentId ?? null,
         activeThreadGoal: goal ?? null,
@@ -855,6 +947,52 @@ export function createThreadActions(
     }
   },
 
+  loadEarlierThreadHistory: async () => {
+    const state = get()
+    const threadId = state.activeThreadId
+    const cursor = state.threadHistoryCursor
+    if (
+      !threadId ||
+      !cursor ||
+      !state.threadHasMoreHistory ||
+      state.threadHistoryLoading ||
+      state.busy
+    ) return false
+    set({ threadHistoryLoading: true })
+    try {
+      const detail = await getProvider().getThreadDetail(threadId, { before: cursor })
+      if (get().activeThreadId !== threadId) return false
+      const olderBlocks = hydrateBlockModelLabels(threadId, detail.blocks)
+      if (
+        detail.hasMoreHistory === true &&
+        (!detail.historyCursor || detail.historyCursor === cursor)
+      ) {
+        throw new Error('thread history cursor did not advance')
+      }
+      set((current) => {
+        if (current.activeThreadId !== threadId) return { threadHistoryLoading: false }
+        return {
+          blocks: prependOlderHistoryBlocks(current.blocks, olderBlocks),
+          threadHistoryCursor: detail.historyCursor ?? null,
+          threadHasMoreHistory: detail.hasMoreHistory === true,
+          threadHistoryLoading: false
+        }
+      })
+      expandedHistoryThreadIds.add(threadId)
+      // Expanded history can outgrow the projection cache; a later switch
+      // safely rehydrates the latest bounded page instead.
+      invalidateThreadSnapshot(threadId)
+      return true
+    } catch (error) {
+      if (get().activeThreadId !== threadId) return false
+      set({
+        threadHistoryLoading: false,
+        error: formatRuntimeError(error)
+      })
+      return false
+    }
+  },
+
   subscribeThreadEventsLive: async (threadId) => {
     if (get().runtimeConnection !== 'ready') return
     const targetThreadId = threadId.trim()
@@ -880,6 +1018,9 @@ export function createThreadActions(
     set({
       activeThreadId: targetThreadId,
       threadLoadingId: null,
+      threadHistoryCursor: keepExistingBlocks ? prevState.threadHistoryCursor : null,
+      threadHasMoreHistory: keepExistingBlocks ? prevState.threadHasMoreHistory : false,
+      threadHistoryLoading: false,
       blocks: keepExistingBlocks ? prevState.blocks : [],
       lastSeq: fallbackSinceSeq,
       liveDeltaSeqFloor: fallbackSinceSeq,
@@ -921,7 +1062,9 @@ export function createThreadActions(
         latestUserMessageId,
         turnDurationByUserId = {},
         goal,
-        todos
+        todos,
+        historyCursor,
+        hasMoreHistory = false
       } = await p.getThreadDetail(targetThreadId)
       if (ac.signal.aborted) return
       const loaded = hydrateBlockModelLabels(targetThreadId, rawBlocks)
@@ -940,6 +1083,9 @@ export function createThreadActions(
       set({
         activeThreadGoal: goal ?? null,
         activeThreadTodos: todos ?? null,
+        threadHistoryCursor: historyCursor ?? null,
+        threadHasMoreHistory: hasMoreHistory,
+        threadHistoryLoading: false,
         blocks,
         lastSeq: latestSeq,
         liveDeltaSeqFloor: latestSeq,
@@ -1167,6 +1313,9 @@ export function createThreadActions(
     const trimmedText = text.trim()
     if (!trimmedText) return false
     const queued = overrides?.queued
+    const clientRequestId = queued?.clientRequestId?.trim() ||
+      overrides?.clientRequestId?.trim() ||
+      createClientTurnRequestId()
     const expectedThreadId = (queued?.expectedThreadId ?? overrides?.expectedThreadId ?? '').trim()
     const requestedAgentSurface = queued?.agentSurface ?? overrides?.agentSurface
     const expectedThreadStillActive = (): boolean => Boolean(
@@ -1242,70 +1391,75 @@ export function createThreadActions(
         set({ error: i18n.t('common:composerQueuePlaceholder') })
         return false
       }
-      const now = Date.now()
       const activeThreadId = state.activeThreadId
       const threadSnap = activeThreadId
         ? state.threads.find((thread) => thread.id === activeThreadId)
         : undefined
       const clawModel = activeClawChannel(state)?.model
-      const overrideModel = overrides?.model?.trim()
+      const overrideModel = queued?.model ?? overrides?.model?.trim()
       const composerModel =
         overrideModel ?? (state.route === 'claw' && clawModel ? clawModel : state.composerModel.trim())
       const composerProviderId =
-        overrides?.providerId?.trim() || fallbackComposerProviderIdForSend(state)
-      const composerAccountId = overrides?.accountId?.trim() || accountIdForComposerSelection(
-        state.composerModelGroups,
-        composerProviderId,
-        composerModel
-      )
+        queued?.providerId?.trim() || overrides?.providerId?.trim() || fallbackComposerProviderIdForSend(state)
+      const composerAccountId =
+        queued?.accountId?.trim() ||
+        overrides?.accountId?.trim() ||
+        accountIdForComposerSelection(
+          state.composerModelGroups,
+          composerProviderId,
+          composerModel
+        )
       const userModelChip =
-        overrides?.modelLabel ?? optimisticUserModelLabel(composerModel, threadSnap?.model)
-      const displayText = overrides?.displayText?.trim()
-      const reasoningEffort = overrides?.reasoningEffort?.trim()
-      const serviceTier = overrides?.serviceTier === 'priority' ? 'priority' as const : undefined
-      const attachmentIds = overrides?.attachmentIds?.filter((id) => id.trim().length > 0)
-      const attachments = overrides?.attachments?.filter((attachment) => attachment.id.trim().length > 0)
-      const fileReferences = overrides?.fileReferences?.filter((reference) =>
+        queued?.modelLabel ?? overrides?.modelLabel ?? optimisticUserModelLabel(composerModel, threadSnap?.model)
+      const displayText = queued?.displayText ?? overrides?.displayText?.trim()
+      const reasoningEffort = queued?.reasoningEffort ?? overrides?.reasoningEffort?.trim()
+      const serviceTier = (queued?.serviceTier ?? overrides?.serviceTier) === 'priority'
+        ? 'priority' as const
+        : undefined
+      const attachmentIds = queued?.attachmentIds ?? overrides?.attachmentIds?.filter((id) => id.trim().length > 0)
+      const attachments = queued?.attachments ?? overrides?.attachments?.filter((attachment) => attachment.id.trim().length > 0)
+      const fileReferences = queued?.fileReferences ?? overrides?.fileReferences?.filter((reference) =>
         reference.path.trim().length > 0 &&
         reference.relativePath.trim().length > 0 &&
         reference.name.trim().length > 0
       )
       const composerContexts = state.route === 'chat'
-        ? overrides?.composerContexts ?? pendingComposerContexts(state)
+        ? queued?.composerContexts ?? overrides?.composerContexts ?? pendingComposerContexts(state)
         : []
-      const orchestration = overrides?.orchestration ??
+      const orchestration = queued?.orchestration ?? overrides?.orchestration ??
         (mode === 'agent' && state.route === 'chat' && state.graphEnabled
           ? state.composerOrchestration
           : 'direct')
       set((s) => ({
-        queuedMessages: [
-          ...s.queuedMessages,
-          {
-            id: `q-${now}-${s.queuedMessages.length}`,
-            text: trimmedText,
-            deliveryState: 'pending' as const,
-            ...(displayText ? { displayText } : {}),
-            ...(mode ? { mode } : {}),
-            orchestration,
-            ...(composerModel ? { model: composerModel } : {}),
-            ...(composerProviderId ? { providerId: composerProviderId } : {}),
-            ...(composerAccountId ? { accountId: composerAccountId } : {}),
-            ...(userModelChip ? { modelLabel: userModelChip } : {}),
-            ...(reasoningEffort ? { reasoningEffort } : {}),
-            ...(serviceTier ? { serviceTier } : {}),
-            ...(expectedThreadId ? { expectedThreadId } : {}),
-            ...(overrides?.guiPlan ? { guiPlan: overrides.guiPlan } : {}),
-            ...(overrides?.guiDesignCanvas ? { guiDesignCanvas: true } : {}),
-            ...(overrides?.guiDesignMode ? { guiDesignMode: true } : {}),
-            ...(overrides?.agentSurface ? { agentSurface: overrides.agentSurface } : {}),
-            ...(overrides?.guiDesignArtifact ? { guiDesignArtifact: overrides.guiDesignArtifact } : {}),
-            ...(writeContext ? { writeContext } : {}),
-            ...(attachmentIds?.length ? { attachmentIds } : {}),
-            ...(attachments?.length ? { attachments } : {}),
-            ...(fileReferences?.length ? { fileReferences } : {}),
-            ...(composerContexts.length ? { composerContexts } : {})
-          }
-        ],
+        queuedMessages: upsertQueuedSubmission(s.queuedMessages, {
+          ...queued,
+          id: queued?.id ?? `q-${clientRequestId}`,
+          text: trimmedText,
+          clientRequestId,
+          deliveryState: 'pending' as const,
+          ...(displayText ? { displayText } : {}),
+          ...(mode ? { mode } : {}),
+          orchestration,
+          ...(composerModel ? { model: composerModel } : {}),
+          ...(composerProviderId ? { providerId: composerProviderId } : {}),
+          ...(composerAccountId ? { accountId: composerAccountId } : {}),
+          ...(userModelChip ? { modelLabel: userModelChip } : {}),
+          ...(reasoningEffort ? { reasoningEffort } : {}),
+          ...(serviceTier ? { serviceTier } : {}),
+          ...(expectedThreadId ? { expectedThreadId } : {}),
+          ...((queued?.guiPlan ?? overrides?.guiPlan) ? { guiPlan: queued?.guiPlan ?? overrides?.guiPlan } : {}),
+          ...((queued?.guiDesignCanvas ?? overrides?.guiDesignCanvas) ? { guiDesignCanvas: true } : {}),
+          ...((queued?.guiDesignMode ?? overrides?.guiDesignMode) ? { guiDesignMode: true } : {}),
+          ...(requestedAgentSurface ? { agentSurface: requestedAgentSurface } : {}),
+          ...((queued?.guiDesignArtifact ?? overrides?.guiDesignArtifact)
+            ? { guiDesignArtifact: queued?.guiDesignArtifact ?? overrides?.guiDesignArtifact }
+            : {}),
+          ...(writeContext ? { writeContext } : {}),
+          ...(attachmentIds?.length ? { attachmentIds } : {}),
+          ...(attachments?.length ? { attachments } : {}),
+          ...(fileReferences?.length ? { fileReferences } : {}),
+          ...(composerContexts.length ? { composerContexts } : {})
+        }),
         extensionComposerContexts: withoutConsumedComposerContexts(s, composerContexts),
         error: null
       }))
@@ -1382,6 +1536,34 @@ export function createThreadActions(
         : 'direct')
     const userModelChip =
       queued?.modelLabel ?? overrides?.modelLabel ?? optimisticUserModelLabel(composerModel, threadSnap?.model)
+    const submittedMessageForQueue = pendingQueuedMessage({
+      ...queued,
+      id: queued?.id ?? `q-${clientRequestId}`,
+      text: trimmedText,
+      clientRequestId,
+      ...(displayText ? { displayText } : {}),
+      ...(mode ? { mode } : {}),
+      orchestration,
+      ...(composerModel ? { model: composerModel } : {}),
+      ...(composerProviderId ? { providerId: composerProviderId } : {}),
+      ...(composerAccountId ? { accountId: composerAccountId } : {}),
+      ...(userModelChip ? { modelLabel: userModelChip } : {}),
+      ...(reasoningEffort ? { reasoningEffort } : {}),
+      ...(serviceTier ? { serviceTier } : {}),
+      ...(expectedThreadId ? { expectedThreadId } : {}),
+      ...((queued?.guiPlan ?? overrides?.guiPlan) ? { guiPlan: queued?.guiPlan ?? overrides?.guiPlan } : {}),
+      ...(guiDesignCanvas ? { guiDesignCanvas: true } : {}),
+      ...(guiDesignMode ? { guiDesignMode: true } : {}),
+      ...(requestedAgentSurface ? { agentSurface: requestedAgentSurface } : {}),
+      ...((queued?.guiDesignArtifact ?? overrides?.guiDesignArtifact)
+        ? { guiDesignArtifact: queued?.guiDesignArtifact ?? overrides?.guiDesignArtifact }
+        : {}),
+      ...(writeContext ? { writeContext } : {}),
+      ...(attachmentIds.length ? { attachmentIds } : {}),
+      ...(attachments.length ? { attachments } : {}),
+      ...(fileReferences.length ? { fileReferences } : {}),
+      ...(composerContexts.length ? { composerContexts } : {})
+    })
     const previousBlocks = get().blocks
     const previousActiveThreadId = get().activeThreadId
     const previousLastSeq = get().lastSeq
@@ -1624,8 +1806,16 @@ export function createThreadActions(
         }
         return false
       }
+      // Persist the idempotency key before the POST. If the runtime accepts the
+      // turn but the response is lost (or the app exits), recovery retries the
+      // exact same admission instead of creating a duplicate turn.
+      saveQueuedMessagesForThread(
+        activeThreadId,
+        startingQueuedSubmission(get().queuedMessages, submittedMessageForQueue)
+      )
       const sendGeneration = currentTurnStartGeneration()
       const { turnId, userMessageItemId } = await p.sendUserMessage(activeThreadId, runtimeText, {
+        clientRequestId,
         mode,
         orchestration,
         agentSurface: requestedAgentSurface ??
@@ -1648,6 +1838,7 @@ export function createThreadActions(
         ...(composerContexts.length ? { composerContexts } : {})
       })
       runtimeTurnAccepted = true
+      if (!queued) saveQueuedMessagesForThread(activeThreadId, get().queuedMessages)
       if (currentTurnStartGeneration() !== sendGeneration) {
         // Stop was pressed while the POST was still pending. The accepted turn
         // is real, but must not revive this renderer projection or its queue.
@@ -1806,10 +1997,11 @@ export function createThreadActions(
         message: e instanceof Error ? e.message : String(e),
         threadId: activeThreadId
       }).catch(() => undefined)
-      if (looksLikeActiveTurnError(e)) {
-        set({
+      const runtimeErrorCode = getRuntimeErrorCode(e)
+      if (runtimeErrorCode === 'thread_busy' || looksLikeActiveTurnError(e)) {
+        set((state) => ({
           blocks: previousBlocks,
-          busy: false,
+          busy: true,
           currentTurnId: previousCurrentTurnId,
           currentTurnOrchestration: previousCurrentTurnOrchestration,
           currentTurnUserId: previousCurrentTurnUserId,
@@ -1817,13 +2009,67 @@ export function createThreadActions(
           turnDurationByUserId: previousTurnDurationByUserId,
           turnReasoningFirstAtByUserId: previousTurnReasoningFirstAtByUserId,
           turnReasoningLastAtByUserId: previousTurnReasoningLastAtByUserId,
-          queuedMessages: previousQueuedMessages,
-          error: i18n.t('common:runtimeActiveTurn')
-        })
+          queuedMessages: upsertQueuedSubmission(
+            previousQueuedMessages,
+            submittedMessageForQueue
+          ),
+          extensionComposerContexts: withoutConsumedComposerContexts(state, composerContexts),
+          threads: state.threads.map((thread) => thread.id === activeThreadId
+            ? {
+                ...thread,
+                status: thread.archived ? thread.status : 'running'
+              }
+            : thread),
+          error: i18n.t('common:runtimeThreadBusyQueued'),
+          runtimeErrorDetail: null
+        }))
         persistActiveQueuedMessages()
         await get().recoverActiveTurn()
+        if (
+          get().activeThreadId === activeThreadId &&
+          get().busy &&
+          (
+            get().error === null ||
+            get().error === runtimeStreamRecoveringMessage() ||
+            get().error === i18n.t('common:runtimeThreadBusyQueued')
+          )
+        ) {
+          set({ error: i18n.t('common:runtimeThreadBusyQueued') })
+        }
         await get().refreshThreads()
-        return false
+        return true
+      }
+      if (turnAdmissionOutcomeMayBeUnknown(e)) {
+        const view = describeRuntimeError(e)
+        set((state) => ({
+          blocks: previousBlocks,
+          busy: false,
+          currentTurnId: previousCurrentTurnId,
+          currentTurnOrchestration: previousCurrentTurnOrchestration,
+          currentTurnUserId: previousCurrentTurnUserId,
+          queuedMessages: startingQueuedSubmission(
+            previousQueuedMessages,
+            submittedMessageForQueue
+          ),
+          extensionComposerContexts: withoutConsumedComposerContexts(state, composerContexts),
+          error: view.summary,
+          runtimeErrorDetail: null
+        }))
+        persistActiveQueuedMessages()
+        const recovered = await get().recoverActiveTurn()
+        if (!recovered && get().activeThreadId === activeThreadId) {
+          set((state) => ({
+            queuedMessages: state.queuedMessages.map((message) =>
+              message.id === submittedMessageForQueue.id
+                ? pendingQueuedMessage(message)
+                : message
+            ),
+            error: view.summary
+          }))
+          persistActiveQueuedMessages()
+        }
+        await get().refreshThreads()
+        return true
       }
       const view = describeRuntimeError(e)
       set((state) => ({

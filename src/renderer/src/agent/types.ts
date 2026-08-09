@@ -711,7 +711,7 @@ export interface AgentProvider {
   connect(): Promise<void>
   listThreads(options?: ThreadListOptions): Promise<NormalizedThread[]>
   createThread(input: { workspace?: string; title?: string; titleAuto?: boolean; mode?: string; agentSurface?: 'code' | 'write' | 'design'; agentId?: string; providerId?: string; accountId?: string; model?: string; systemPrompt?: string }): Promise<NormalizedThread>
-  getThreadDetail(threadId: string): Promise<{
+  getThreadDetail(threadId: string, options?: { before?: string }): Promise<{
     blocks: ChatBlock[]
     latestSeq: number
     threadStatus?: string
@@ -728,6 +728,8 @@ export interface AgentProvider {
     todos?: ThreadTodoList | null
     /** Original detail response size, used only to bound renderer snapshots. */
     payloadBytes?: number
+    historyCursor?: string
+    hasMoreHistory?: boolean
   }>
   getThreadState(threadId: string): Promise<{
     status: string
@@ -741,6 +743,7 @@ export interface AgentProvider {
     threadId: string,
     text: string,
     options?: {
+      clientRequestId?: string
       mode?: string
       orchestration?: 'direct' | 'graph'
       model?: string

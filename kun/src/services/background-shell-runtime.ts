@@ -19,10 +19,19 @@ export type BackgroundShellRuntimeDeps = {
 type RunTurnFn = (threadId: string, turnId: string) => Promise<unknown>
 
 export const MAX_BACKGROUND_SHELL_SESSIONS = 512
+export const BACKGROUND_SHELL_UPDATE_CHECKPOINT_INTERVAL_MS = 5_000
+
+type UpdateCheckpoint = {
+  lastPersistedAt: number
+  pending?: BackgroundShellRecord
+  timer?: NodeJS.Timeout
+  writeInFlight?: Promise<void>
+}
 
 export class BackgroundShellRuntime {
   private readonly sessions = new Map<string, BackgroundShellRecord>()
   private readonly detachedIds = new Set<string>()
+  private readonly updateCheckpoints = new Map<string, UpdateCheckpoint>()
   private runTurn: RunTurnFn | null = null
   private shuttingDown = false
 
@@ -82,6 +91,9 @@ export class BackgroundShellRuntime {
       .filter((session) => session.status === 'running')
       .map((session) => session.id)
     await Promise.allSettled(runningIds.map((sessionId) => this.stopSession(sessionId)))
+    await Promise.allSettled(
+      [...this.updateCheckpoints.keys()].map((sessionId) => this.discardUpdateCheckpoint(sessionId))
+    )
   }
 
   markDetached(sessionId: string): void {
@@ -99,6 +111,7 @@ export class BackgroundShellRuntime {
   removeSession(sessionId: string): void {
     this.sessions.delete(sessionId)
     this.detachedIds.delete(sessionId)
+    void this.discardUpdateCheckpoint(sessionId)
   }
 
   private sessionEventOutput(record: BackgroundShellRecord): {
@@ -114,6 +127,7 @@ export class BackgroundShellRuntime {
   }
 
   private async handleSessionStarted(record: BackgroundShellRecord): Promise<void> {
+    await this.discardUpdateCheckpoint(record.id)
     this.rememberSession(record)
     if (record.detached) this.detachedIds.add(record.id)
     await this.deps.events.record({
@@ -129,10 +143,54 @@ export class BackgroundShellRuntime {
       detached: record.detached,
       ...this.sessionEventOutput(record)
     })
+    this.updateCheckpoints.set(record.id, { lastPersistedAt: Date.now() })
   }
 
   private async handleSessionUpdated(record: BackgroundShellRecord): Promise<void> {
     this.rememberSession(record)
+    const checkpoint = this.updateCheckpoints.get(record.id) ?? {
+      lastPersistedAt: Date.now()
+    }
+    checkpoint.pending = record
+    this.updateCheckpoints.set(record.id, checkpoint)
+    this.scheduleUpdateCheckpoint(record.id, checkpoint)
+  }
+
+  private scheduleUpdateCheckpoint(sessionId: string, checkpoint: UpdateCheckpoint): void {
+    if (checkpoint.timer || checkpoint.writeInFlight) return
+    const elapsed = Math.max(0, Date.now() - checkpoint.lastPersistedAt)
+    const delay = Math.max(0, BACKGROUND_SHELL_UPDATE_CHECKPOINT_INTERVAL_MS - elapsed)
+    checkpoint.timer = setTimeout(() => {
+      checkpoint.timer = undefined
+      void this.flushUpdateCheckpoint(sessionId, checkpoint).catch(() => undefined)
+    }, delay)
+    checkpoint.timer.unref?.()
+  }
+
+  private async flushUpdateCheckpoint(sessionId: string, checkpoint: UpdateCheckpoint): Promise<void> {
+    if (this.updateCheckpoints.get(sessionId) !== checkpoint) return
+    const record = checkpoint.pending
+    if (!record) return
+    checkpoint.pending = undefined
+    checkpoint.lastPersistedAt = Date.now()
+    const write = this.recordSessionUpdate(record)
+    checkpoint.writeInFlight = write
+    try {
+      await write
+    } catch (error) {
+      if (this.updateCheckpoints.get(sessionId) === checkpoint && !checkpoint.pending) {
+        checkpoint.pending = record
+      }
+      throw error
+    } finally {
+      if (checkpoint.writeInFlight === write) checkpoint.writeInFlight = undefined
+      if (this.updateCheckpoints.get(sessionId) === checkpoint && checkpoint.pending) {
+        this.scheduleUpdateCheckpoint(sessionId, checkpoint)
+      }
+    }
+  }
+
+  private async recordSessionUpdate(record: BackgroundShellRecord): Promise<void> {
     await this.deps.events.record({
       kind: 'bash_session_updated',
       threadId: record.threadId,
@@ -152,6 +210,7 @@ export class BackgroundShellRuntime {
   }
 
   private async handleSessionSettled(record: BackgroundShellRecord): Promise<void> {
+    await this.discardUpdateCheckpoint(record.id)
     this.rememberSession(record)
     await this.deps.events.record({
       kind: 'bash_session_completed',
@@ -179,6 +238,18 @@ export class BackgroundShellRuntime {
     if (record.status !== 'running') {
       this.detachedIds.delete(record.id)
     }
+  }
+
+  private async discardUpdateCheckpoint(sessionId: string): Promise<void> {
+    const checkpoint = this.updateCheckpoints.get(sessionId)
+    if (!checkpoint) return
+    this.updateCheckpoints.delete(sessionId)
+    checkpoint.pending = undefined
+    if (checkpoint.timer) {
+      clearTimeout(checkpoint.timer)
+      checkpoint.timer = undefined
+    }
+    await checkpoint.writeInFlight?.catch(() => undefined)
   }
 
   private async notifyAgent(record: BackgroundShellRecord): Promise<void> {

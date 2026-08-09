@@ -128,7 +128,7 @@ function createPptExportTool(
     name: PPT_EXPORT_TOOL_NAME,
     description: [
       'Export a workspace PPTD project to an editable .pptx with Kun\'s bundled offline WASM exporter.',
-      'The tool performs a ZIP/OpenXML structure check, counts slides, and verifies the requested fade transition before publishing the output.',
+      'The tool performs ZIP/OpenXML structure and editability checks, rejects raster-only pages, counts slides, and verifies the requested fade transition before publishing the output.',
       'It requires no Python, browser, cookie, network access, or arbitrary shell command.'
     ].join(' '),
     toolKind: 'file_change',
@@ -252,6 +252,7 @@ function createPptExportTool(
             absolutePath: output.absolutePath,
             exporter: 'local-wasm-patched',
             slides: validation.slides,
+            editableSlides: validation.editableSlides,
             fadeTransitions: validation.fadeTransitions,
             bytes: validation.bytes,
             transition,
@@ -286,11 +287,12 @@ function createPptGeneratePreviewsTool(
     inputSchema: {
       type: 'object',
       properties: {
+        parentThreadId: { type: 'string', description: 'Owning parent chat thread id supplied by ppt_agent.' },
         input: { type: 'string', description: 'Workspace-relative deck.pptd path or PPTD project directory.' },
         output: { type: 'string', description: 'Optional workspace-relative preview directory. Defaults to <project>/.kun-ppt-review/previews.' },
         force: { type: 'boolean', description: 'Replace an existing preview directory. Defaults to true for a new review revision.' }
       },
-      required: ['input'],
+      required: ['parentThreadId', 'input'],
       additionalProperties: false
     },
     execute: async (args, context) => withToolBoundary(async () => {
@@ -298,7 +300,10 @@ function createPptGeneratePreviewsTool(
         return { output: { error: 'PPT Agent is disabled in Lab settings' }, isError: true }
       }
       const inputArg = stringArg(args.input)
-      if (!inputArg) return { output: { error: 'input is required' }, isError: true }
+      const parentThreadId = stringArg(args.parentThreadId)
+      if (!parentThreadId || !inputArg) {
+        return { output: { error: 'parentThreadId and input are required' }, isError: true }
+      }
       const input = await resolveWorkspacePath(inputArg, context, { enforceWorkspaceBoundary: true })
       const inputInfo = await stat(input.absolutePath)
       const projectDir = inputInfo.isDirectory() ? input.absolutePath : dirname(input.absolutePath)
@@ -336,7 +341,7 @@ function createPptGeneratePreviewsTool(
         const existingManifest = await readPptReviewManifest(projectDir)
         const manifest = createPptReviewManifest({
           ...(existingManifest ? { workflowId: existingManifest.workflowId } : {}),
-          parentThreadId: context.threadId,
+          parentThreadId,
           childId: context.threadId,
           projectDir: relative(workspaceRoot, projectDir).replaceAll('\\\\', '/'),
           deckTitle: inputInfo.isDirectory() ? input.absolutePath.split(/[\\\\/]/).pop() || 'PPT review' : input.absolutePath.split(/[\\\\/]/).slice(-2, -1)[0] || 'PPT review',
@@ -466,6 +471,9 @@ function createPptCreateReviewBundleTool(
         const existing = await readPptReviewManifest(projectDir)
         if (!existing && resolvedSlides.length !== pageCount) {
           return { output: { error: `initial review must cover all ${pageCount} slides; received ${resolvedSlides.length}` }, isError: true }
+        }
+        if (!existing && resolvedSlides.some((slide) => slide.slideId)) {
+          return { output: { error: 'slideId must be omitted for an initial review; the workflow assigns stable ids' }, isError: true }
         }
         if (existing && existing.deck.slideCount !== pageCount) {
           return { output: { error: `pageCount ${pageCount} does not match workflow slide count ${existing.deck.slideCount}` }, isError: true }
@@ -598,7 +606,7 @@ function parsePreviewRendererOutput(value: string): PreviewRendererOutput {
 async function validatePptx(
   path: string,
   transition: 'fade' | 'none'
-): Promise<{ slides: number; fadeTransitions: number; bytes: number }> {
+): Promise<{ slides: number; editableSlides: number; fadeTransitions: number; bytes: number }> {
   const info = await stat(path)
   if (!info.isFile() || info.size <= 0 || info.size > MAX_PPTX_BYTES) {
     throw new Error(`exported PPTX has an invalid size: ${info.size}`)
@@ -607,6 +615,7 @@ async function validatePptx(
   let hasContentTypes = false
   let hasPresentation = false
   let slides = 0
+  let editableSlides = 0
   let fadeTransitions = 0
   try {
     archive = await yauzl.openPromise(path, {
@@ -629,6 +638,13 @@ async function validatePptx(
       for await (const chunk of stream) chunks.push(Buffer.from(chunk))
       const xml = Buffer.concat(chunks).toString('utf8')
       if (/<p:transition\b[^>]*>[\s\S]*?<p:fade\b/.test(xml)) fadeTransitions += 1
+      if (/<p:(?:sp|graphicFrame|cxnSp)\b/.test(xml)) {
+        editableSlides += 1
+      } else if (/<p:pic\b/.test(xml)) {
+        throw new Error(`editable deck verification failed: ${entry.fileName} contains only raster image content`)
+      } else {
+        throw new Error(`editable deck verification failed: ${entry.fileName} has no native text, shape, or chart content`)
+      }
     }
   } finally {
     archive?.close()
@@ -639,7 +655,7 @@ async function validatePptx(
   if (transition === 'fade' && fadeTransitions !== slides) {
     throw new Error(`fade transition verification failed: ${fadeTransitions}/${slides} slides`)
   }
-  return { slides, fadeTransitions, bytes: info.size }
+  return { slides, editableSlides, fadeTransitions, bytes: info.size }
 }
 
 async function requireToolchainDirectory(options: PptAgentLocalToolOptions): Promise<string> {

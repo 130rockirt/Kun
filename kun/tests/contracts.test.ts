@@ -114,6 +114,21 @@ describe('contracts', () => {
     expect(result.success).toBe(false)
   })
 
+  it('accepts a bounded retry-stable client request id', () => {
+    expect(StartTurnRequest.parse({
+      prompt: 'retry safely',
+      clientRequestId: '  request_123  '
+    }).clientRequestId).toBe('request_123')
+    expect(StartTurnRequest.safeParse({
+      prompt: 'invalid empty key',
+      clientRequestId: '   '
+    }).success).toBe(false)
+    expect(StartTurnRequest.safeParse({
+      prompt: 'invalid oversized key',
+      clientRequestId: 'x'.repeat(257)
+    }).success).toBe(false)
+  })
+
   it('bounds and deduplicates start-turn attachment ids', () => {
     expect(StartTurnRequest.safeParse({
       prompt: 'too many attachments',
@@ -1006,6 +1021,7 @@ describe('cli', () => {
     expect(manifest.attachments.textFallbackMaxImageDimension).toBe(1280)
     expect(manifest.attachments.textFallbackPreferredMimeType).toBe('image/webp')
     expect(manifest.imageGen.available).toBe(false)
+    expect(manifest.imageGen.supportsReferenceEdit).toBe(false)
     expect(manifest.imageGen.reason).toMatch(/disabled/)
 
     const enabledButMissingProvider = buildRuntimeCapabilityManifest({

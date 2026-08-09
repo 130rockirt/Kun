@@ -1526,7 +1526,8 @@ async function createKunServeRuntimeComposition(
     },
     imageGen: {
       available: imageGenProviders.available,
-      reason: imageGenProviders.diagnostics.find((diagnostic) => diagnostic.reason)?.reason
+      reason: imageGenProviders.diagnostics.find((diagnostic) => diagnostic.reason)?.reason,
+      supportsReferenceEdit: protocolSupportsImageEdit(activeOptions.capabilities?.imageGen?.protocol)
     },
     speechGen: {
       available: speechGenProviders.available,
@@ -2315,7 +2316,8 @@ async function createKunServeRuntimeComposition(
 	    },
 	    imageGen: {
 	      available: imageGenProviders.available,
-	      reason: imageGenProviders.diagnostics.find((diagnostic) => diagnostic.reason)?.reason
+	      reason: imageGenProviders.diagnostics.find((diagnostic) => diagnostic.reason)?.reason,
+	      supportsReferenceEdit: protocolSupportsImageEdit(activeOptions.capabilities?.imageGen?.protocol)
 	    },
 	    speechGen: {
 	      available: speechGenProviders.available,

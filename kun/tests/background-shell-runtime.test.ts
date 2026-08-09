@@ -1,10 +1,87 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { ThreadStore } from '../src/ports/thread-store.js'
 import type { RuntimeEventRecorder } from '../src/services/runtime-event-recorder.js'
-import { BackgroundShellRuntime, MAX_BACKGROUND_SHELL_SESSIONS } from '../src/services/background-shell-runtime.js'
+import {
+  BACKGROUND_SHELL_UPDATE_CHECKPOINT_INTERVAL_MS,
+  BackgroundShellRuntime,
+  MAX_BACKGROUND_SHELL_SESSIONS
+} from '../src/services/background-shell-runtime.js'
 import type { TurnService } from '../src/services/turn-service.js'
 
 describe('BackgroundShellRuntime', () => {
+  it('coalesces high-frequency durable updates, flushes a trailing checkpoint, and keeps terminal immediate', async () => {
+    vi.useFakeTimers()
+    const recordEvent = vi.fn(async (_event: Record<string, unknown>) => undefined)
+    const runtime = new BackgroundShellRuntime({
+      events: { record: recordEvent } as unknown as RuntimeEventRecorder,
+      threadStore: {} as ThreadStore,
+      turns: {} as TurnService,
+      nowIso: () => '2026-01-01T00:00:00.000Z'
+    })
+    const hooks = runtime.bashHooks()
+    const running = {
+      id: 'checkpoint1',
+      threadId: 'thr_1',
+      turnId: 'turn_1',
+      command: 'generate-output',
+      cwd: '/tmp',
+      shell: 'bash',
+      status: 'running' as const,
+      startedAt: '2026-01-01T00:00:00.000Z',
+      exitCode: null,
+      output: '',
+      detached: false
+    }
+
+    try {
+      await hooks.onSessionStarted?.(running)
+      for (let index = 0; index < 100; index += 1) {
+        await hooks.onSessionUpdated?.({ ...running, output: `burst-one-${index}` })
+      }
+
+      expect(recordEvent.mock.calls.filter(([event]) => event.kind === 'bash_session_updated')).toHaveLength(0)
+      await vi.advanceTimersByTimeAsync(BACKGROUND_SHELL_UPDATE_CHECKPOINT_INTERVAL_MS)
+      expect(recordEvent.mock.calls.filter(([event]) => event.kind === 'bash_session_updated')).toHaveLength(1)
+      expect(recordEvent).toHaveBeenLastCalledWith(expect.objectContaining({
+        kind: 'bash_session_updated',
+        output: 'burst-one-99'
+      }))
+
+      for (let index = 0; index < 100; index += 1) {
+        await hooks.onSessionUpdated?.({ ...running, output: `burst-two-${index}` })
+      }
+      await vi.advanceTimersByTimeAsync(BACKGROUND_SHELL_UPDATE_CHECKPOINT_INTERVAL_MS - 1)
+      expect(recordEvent.mock.calls.filter(([event]) => event.kind === 'bash_session_updated')).toHaveLength(1)
+      // Even though output is now silent, the trailing timer persists the
+      // latest liveness/output checkpoint at the end of the throttle window.
+      await vi.advanceTimersByTimeAsync(1)
+      expect(recordEvent.mock.calls.filter(([event]) => event.kind === 'bash_session_updated')).toHaveLength(2)
+      expect(recordEvent).toHaveBeenLastCalledWith(expect.objectContaining({
+        kind: 'bash_session_updated',
+        output: 'burst-two-99'
+      }))
+
+      await hooks.onSessionUpdated?.({ ...running, output: 'superseded-by-terminal' })
+      await hooks.onSessionSettled?.({
+        ...running,
+        status: 'completed',
+        finishedAt: '2026-01-01T00:00:12.000Z',
+        exitCode: 0,
+        output: 'final-output'
+      })
+      expect(recordEvent).toHaveBeenLastCalledWith(expect.objectContaining({
+        kind: 'bash_session_completed',
+        output: 'final-output'
+      }))
+      await vi.advanceTimersByTimeAsync(BACKGROUND_SHELL_UPDATE_CHECKPOINT_INTERVAL_MS)
+      expect(recordEvent.mock.calls.filter(([event]) => event.kind === 'bash_session_updated')).toHaveLength(2)
+      expect(recordEvent.mock.calls.filter(([event]) => event.kind === 'bash_session_completed')).toHaveLength(1)
+    } finally {
+      await runtime.shutdown()
+      vi.useRealTimers()
+    }
+  })
+
   it('bounds settled sessions while retaining active shells', () => {
     const runtime = new BackgroundShellRuntime({
       events: { record: vi.fn(async () => undefined) } as unknown as RuntimeEventRecorder,

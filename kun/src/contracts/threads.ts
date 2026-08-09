@@ -30,6 +30,17 @@ export const ThreadRuntimeStateSchema = z.object({
 })
 export type ThreadRuntimeState = z.infer<typeof ThreadRuntimeStateSchema>
 
+export const THREAD_TIMELINE_MAX_ITEMS = 300
+export const THREAD_TIMELINE_MAX_ITEM_BYTES = 4 * 1024 * 1024
+
+export const ThreadTimelinePageSchema = z.object({
+  nextCursor: z.string().min(1).optional(),
+  hasMore: z.boolean(),
+  itemCount: z.number().int().nonnegative().max(THREAD_TIMELINE_MAX_ITEMS),
+  itemBytes: z.number().int().nonnegative().max(THREAD_TIMELINE_MAX_ITEM_BYTES)
+})
+export type ThreadTimelinePage = z.infer<typeof ThreadTimelinePageSchema>
+
 /**
  * The generic thread PATCH endpoint only owns the archival visibility
  * overlay. Execution and deletion states are controlled by TurnService and
@@ -264,6 +275,15 @@ export const ThreadSchema = z.object({
   turns: z.array(TurnSchema).default([])
 })
 export type ThreadRecord = z.infer<typeof ThreadSchema>
+
+export const ThreadTimelineResponseSchema = ThreadSchema.extend({
+  latestSeq: z.number().int().nonnegative(),
+  latestTurn: TurnSchema.omit({ items: true }).nullable(),
+  pendingUserInputIds: z.array(z.string()),
+  pendingApprovalIds: z.array(z.string()).optional(),
+  timeline: ThreadTimelinePageSchema
+})
+export type ThreadTimelineResponse = z.infer<typeof ThreadTimelineResponseSchema>
 
 export const ThreadSummarySchema = ThreadSchema.pick({
   id: true,

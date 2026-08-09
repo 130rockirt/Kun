@@ -6,12 +6,13 @@ import { graphRuntimeClient } from '../graph/graph-runtime-client'
 import { useGraphStore } from '../graph/graph-store'
 import type { GraphRun } from '../graph/graph-types'
 import { useWriteWorkspaceStore } from '../write/write-workspace-store'
+import i18n from '../i18n'
 import type { BrowserStorageLike } from '../lib/browser-storage'
 import {
   queuedMessagesForThread,
   saveQueuedMessagesForThread
 } from './queued-message-persistence'
-import { clearThreadSnapshotCache } from './thread-snapshot-cache'
+import { clearThreadSnapshotCache, getThreadSnapshot } from './thread-snapshot-cache'
 
 const registryMock = vi.hoisted(() => ({
   getProvider: vi.fn()
@@ -314,6 +315,68 @@ describe('chat-store-thread-actions queued messages', () => {
 
     expect(state.activeThreadId).toBe('thr_drawing')
     expect(state.blocks).toEqual([])
+  })
+
+  it('prepends an older bounded history page without duplicating current blocks', async () => {
+    const getThreadDetail = vi.fn(async (_threadId: string, options?: { before?: string }) => ({
+      blocks: [
+        { kind: 'user' as const, id: 'user-older', text: 'older question' },
+        { kind: 'assistant' as const, id: 'assistant-current', text: 'stale duplicate' },
+        {
+          kind: 'tool' as const,
+          id: 'tool_call_1',
+          summary: 'Run build',
+          status: 'running' as const,
+          filePath: '/workspace/build.log',
+          meta: { sourceItemId: 'call_item', sourceItemKind: 'tool_call', command: 'npm run build' }
+        }
+      ],
+      latestSeq: 50,
+      historyCursor: 'item_older_cursor',
+      hasMoreHistory: true
+    }))
+    registryMock.getProvider.mockReturnValue({ getThreadDetail })
+    const { actions, state } = buildHarness()
+    state.busy = false
+    state.activeThreadId = 'thr_existing'
+    state.blocks = [
+      { kind: 'assistant', id: 'assistant-current', text: 'current answer' },
+      {
+        kind: 'tool',
+        id: 'tool_call_1',
+        summary: 'Build complete',
+        status: 'success',
+        detail: 'done',
+        meta: { sourceItemId: 'result_item', sourceItemKind: 'tool_result', exit_code: 0 }
+      }
+    ]
+    state.threadHistoryCursor = 'item_current_cursor'
+    state.threadHasMoreHistory = true
+    state.threadHistoryLoading = false
+
+    await actions.loadEarlierThreadHistory()
+
+    expect(getThreadDetail).toHaveBeenCalledWith('thr_existing', {
+      before: 'item_current_cursor'
+    })
+    expect(state.blocks).toEqual([
+      expect.objectContaining({ id: 'user-older' }),
+      expect.objectContaining({ id: 'assistant-current', text: 'current answer' }),
+      expect.objectContaining({
+        id: 'tool_call_1',
+        status: 'success',
+        detail: 'done',
+        filePath: '/workspace/build.log',
+        meta: expect.objectContaining({ command: 'npm run build', exit_code: 0 })
+      })
+    ])
+    expect(state.threadHistoryCursor).toBe('item_older_cursor')
+    expect(state.threadHasMoreHistory).toBe(true)
+    expect(state.threadHistoryLoading).toBe(false)
+
+    state.threads = [thread('thr_existing'), thread('thr_other')]
+    await actions.selectThread('thr_other')
+    expect(getThreadSnapshot('thr_existing')).toBeNull()
   })
 
   it('selects immediately, then settles a stale running sidebar summary from idle detail', async () => {
@@ -1498,6 +1561,131 @@ describe('chat-store-thread-actions queued messages', () => {
     expect(errorBlock?.text).toContain('HTTP 429')
     expect(errorBlock?.text).toContain('<redacted>')
     expect(errorBlock?.text).not.toContain('secret-token')
+  })
+
+  it('retains the same admission key when the POST outcome is unknown', async () => {
+    const sendUserMessage = vi.fn(async (
+      _threadId: string,
+      _text: string,
+      _options?: { clientRequestId?: string }
+    ) => {
+      throw new Error('socket closed after request write')
+    })
+    registryMock.getProvider.mockReturnValue({ sendUserMessage })
+    vi.stubGlobal('window', {
+      kunGui: {
+        getSettings: vi.fn(async () => ({
+          agents: { kun: { providerId: 'deepseek', model: 'deepseek-v4-pro' } },
+          codePromptPrefix: ''
+        })),
+        logError: vi.fn(async () => undefined)
+      }
+    })
+    const { actions, state } = buildHarness()
+    state.busy = false
+    state.recoverActiveTurn = vi.fn(async () => false)
+
+    await expect(actions.sendMessage('retry safely', 'agent')).resolves.toBe(true)
+
+    const requestId = sendUserMessage.mock.calls[0]![2]?.clientRequestId
+    expect(requestId).toMatch(/^turn_/)
+    expect(state.queuedMessages).toEqual([
+      expect.objectContaining({
+        text: 'retry safely',
+        clientRequestId: requestId,
+        deliveryState: 'pending'
+      })
+    ])
+    expect(state.blocks.some((block) => block.kind === 'system' && block.runtimeError)).toBe(false)
+  })
+
+  it('recovers a server-busy thread and retains one queued submission with its request id', async () => {
+    const ownerInstanceId = 'af197738-2317-49bb-b9b0-d6d5e7b24cdd'
+    const sendUserMessage = vi.fn(async (
+      _threadId: string,
+      _text: string,
+      _options?: { clientRequestId?: string }
+    ) => {
+      throw new Error(JSON.stringify({
+        code: 'thread_busy',
+        message: `thread thr_existing is busy in production/${ownerInstanceId}`,
+        details: {
+          activeTurnId: 'turn_active',
+          owner: { instanceId: ownerInstanceId, runtimeFlavor: 'production' }
+        }
+      }))
+    })
+    const subscribeThreadEvents = vi.fn(() => new Promise<void>(() => undefined))
+    const provider = {
+      sendUserMessage,
+      getThreadDetail: vi.fn(async () => ({
+        blocks: [{
+          kind: 'user' as const,
+          id: 'user_active',
+          turnId: 'turn_active',
+          text: 'Long-running task'
+        }],
+        latestSeq: 41,
+        threadStatus: 'running',
+        latestTurnId: 'turn_active',
+        latestTurnStatus: 'running',
+        latestTurnOrchestration: 'direct' as const,
+        latestUserMessageId: 'user_active'
+      })),
+      subscribeThreadEvents
+    }
+    registryMock.getProvider.mockReturnValue(provider)
+    vi.stubGlobal('window', {
+      kunGui: {
+        getSettings: vi.fn(async () => ({
+          agents: { kun: { providerId: 'deepseek', model: 'deepseek-v4-pro' } },
+          workspaceRoot: '/workspace/deepseek-gui',
+          codePromptPrefix: ''
+        })),
+        workspaceDirectoryExists: vi.fn(async () => true),
+        logError: vi.fn(async () => undefined)
+      }
+    })
+    const { actions, state } = buildHarness()
+    state.busy = false
+    state.threads = [{ ...thread('thr_existing'), status: 'idle' }]
+    state.recoverActiveTurn = actions.recoverActiveTurn
+
+    await expect(actions.sendMessage('send this after the current task', 'agent')).resolves.toBe(true)
+
+    expect(sendUserMessage).toHaveBeenCalledOnce()
+    const firstOptions = sendUserMessage.mock.calls[0]![2] as { clientRequestId?: string }
+    expect(firstOptions.clientRequestId).toMatch(/^turn_/)
+    expect(state.queuedMessages).toHaveLength(1)
+    expect(state.queuedMessages[0]).toMatchObject({
+      text: 'send this after the current task',
+      clientRequestId: firstOptions.clientRequestId,
+      deliveryState: 'pending'
+    })
+    expect(state.blocks).toEqual([expect.objectContaining({ id: 'user_active' })])
+    expect(state.blocks.some((block) => block.kind === 'system' && block.runtimeError)).toBe(false)
+    expect(state.busy).toBe(true)
+    expect(state.currentTurnId).toBe('turn_active')
+    expect(state.error).toBe(i18n.t('common:runtimeThreadBusyQueued'))
+    expect(state.error).not.toContain(ownerInstanceId)
+    expect(state.error).not.toContain('unknown')
+    expect(subscribeThreadEvents).toHaveBeenCalledWith(
+      'thr_existing',
+      41,
+      expect.any(Object),
+      expect.any(AbortSignal)
+    )
+
+    const retained = state.queuedMessages[0]!
+    state.busy = false
+    state.currentTurnId = null
+    await expect(actions.sendMessage(retained.text, retained.mode, { queued: retained })).resolves.toBe(true)
+
+    expect(sendUserMessage).toHaveBeenCalledTimes(2)
+    const retryOptions = sendUserMessage.mock.calls[1]![2] as { clientRequestId?: string }
+    expect(retryOptions.clientRequestId).toBe(firstOptions.clientRequestId)
+    expect(state.queuedMessages).toHaveLength(1)
+    expect(state.queuedMessages[0]?.clientRequestId).toBe(firstOptions.clientRequestId)
   })
 
   it('returns a thread-bound Design turn as soon as runtime accepts it', async () => {

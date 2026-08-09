@@ -114,8 +114,7 @@
   --ds-write-titlebar-extra-inset: 20px;
 }
 
-:root[data-platform='win32'],
-:root[data-platform='linux'] {
+:root[data-desktop-title-bar='custom'] {
   --ds-windows-titlebar-height: 40px;
 }
 
@@ -573,9 +572,9 @@ html {
 
 /*
  * Full-window `fixed inset-0` overlays (e.g. the workflow/Loop editor) must not
- * cover the real DOM titlebar that AppShell draws on Windows/Linux. The titlebar
- * height var is only set on those platforms, so this collapses to `top: 0` on
- * macOS (native traffic-light overlay) — issue #570.
+ * cover the real DOM titlebar that AppShell draws in custom mode. The titlebar
+ * height var is omitted for system frames, so this collapses to `top: 0` on
+ * macOS and on Linux when the window manager owns the title bar — issue #570.
  */
 .ds-titlebar-fixed-overlay {
   top: var(--ds-windows-titlebar-height, 0px);

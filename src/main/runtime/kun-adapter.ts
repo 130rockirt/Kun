@@ -235,8 +235,15 @@ export type RuntimeRequestLease = Readonly<{
 
 const DEFAULT_RUNTIME_GET_TIMEOUT_MS = 15_000
 const DEFAULT_RUNTIME_POST_TIMEOUT_MS = 60_000
+const THREAD_TIMELINE_GET_TIMEOUT_MS = 120_000
 const MODEL_CONNECTION_EVENTS_TIMEOUT_MARGIN_MS = 5_000
 const MAX_MODEL_CONNECTION_EVENTS_WAIT_MS = 120_000
+
+function isThreadTimelinePath(pathNorm: string): boolean {
+  const queryIndex = pathNorm.indexOf('?')
+  const pathname = queryIndex >= 0 ? pathNorm.slice(0, queryIndex) : pathNorm
+  return /^\/v1\/threads\/[^/]+\/timeline$/u.test(pathname)
+}
 
 export function resolveRuntimeRequestTimeoutMs(
   pathNorm: string,
@@ -247,6 +254,9 @@ export function resolveRuntimeRequestTimeoutMs(
   const fallback = method === 'POST'
     ? DEFAULT_RUNTIME_POST_TIMEOUT_MS
     : DEFAULT_RUNTIME_GET_TIMEOUT_MS
+  if (method === 'GET' && isThreadTimelinePath(pathNorm)) {
+    return THREAD_TIMELINE_GET_TIMEOUT_MS
+  }
   if (method !== 'GET' || !pathNorm.startsWith('/v1/model-connections/events?')) {
     return fallback
   }

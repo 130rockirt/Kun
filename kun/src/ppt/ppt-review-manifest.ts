@@ -1,9 +1,13 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
-import { dirname, isAbsolute, relative, resolve } from 'node:path'
+import { dirname, isAbsolute, relative, resolve, win32 } from 'node:path'
 import { z } from 'zod'
 
 export const PPT_REVIEW_MANIFEST_VERSION = 1 as const
+
+const WorkspaceRelativePath = z.string().min(1).refine(isPortableWorkspaceRelativePath, {
+  message: 'path must be workspace-relative and must not escape the workspace'
+})
 
 export const PptWorkflowPhase = z.enum([
   'planning',
@@ -32,7 +36,7 @@ export const PptStyleSpec = z.object({
   backgroundLanguage: z.string().default(''),
   imageTreatment: z.string().default(''),
   chartTreatment: z.string().default(''),
-  anchorImagePath: z.string().min(1).optional()
+  anchorImagePath: WorkspaceRelativePath.optional()
 }).strict()
 export type PptStyleSpec = z.infer<typeof PptStyleSpec>
 
@@ -40,9 +44,9 @@ export const PptReviewSlide = z.object({
   slideId: z.string().min(1),
   index: z.number().int().nonnegative(),
   title: z.string().min(1),
-  pagePath: z.string().min(1).optional(),
-  layoutSpecPath: z.string().min(1),
-  previewPath: z.string().min(1).optional(),
+  pagePath: WorkspaceRelativePath.optional(),
+  layoutSpecPath: WorkspaceRelativePath,
+  previewPath: WorkspaceRelativePath.optional(),
   revision: z.number().int().nonnegative(),
   status: PptReviewSlideStatus,
   attempts: z.number().int().nonnegative(),
@@ -56,7 +60,7 @@ export const PptReviewManifestV1 = z.object({
   workflowId: z.string().min(1),
   parentThreadId: z.string().min(1),
   childId: z.string().min(1),
-  projectDir: z.string().min(1),
+  projectDir: WorkspaceRelativePath,
   phase: PptWorkflowPhase,
   deck: z.object({
     title: z.string().min(1),
@@ -69,26 +73,75 @@ export const PptReviewManifestV1 = z.object({
     artifactId: z.string().min(1),
     lastAppliedRevision: z.number().int().nonnegative()
   }).strict().optional()
-}).strict()
+}).strict().superRefine((manifest, ctx) => {
+  if (manifest.deck.slideCount !== manifest.slides.length) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['deck', 'slideCount'],
+      message: 'slideCount must match the number of manifest slides'
+    })
+  }
+  const slideIds = new Set<string>()
+  const indexes = new Set<number>()
+  for (const [position, slide] of manifest.slides.entries()) {
+    if (slideIds.has(slide.slideId)) {
+      ctx.addIssue({ code: 'custom', path: ['slides', position, 'slideId'], message: 'slideId must be unique' })
+    }
+    if (indexes.has(slide.index)) {
+      ctx.addIssue({ code: 'custom', path: ['slides', position, 'index'], message: 'slide index must be unique' })
+    }
+    slideIds.add(slide.slideId)
+    indexes.add(slide.index)
+  }
+  for (let index = 0; index < manifest.slides.length; index += 1) {
+    if (!indexes.has(index)) {
+      ctx.addIssue({ code: 'custom', path: ['slides'], message: 'slide indexes must be contiguous from zero' })
+      break
+    }
+  }
+})
 export type PptReviewManifestV1 = z.infer<typeof PptReviewManifestV1>
 
-export type PptReviewBundleV1 = {
-  workflowId: string
-  childId: string
-  manifestPath: string
-  deckTitle: string
-  styleFingerprint: string
-  phase: PptWorkflowPhase
-  slides: Array<{
-    slideId: string
-    index: number
-    title: string
-    previewPath?: string
-    revision: number
-    status: 'ready' | 'failed'
-    error?: string
-  }>
-}
+export const PptReviewBundleV1 = z.object({
+  workflowId: z.string().min(1),
+  childId: z.string().min(1),
+  manifestPath: WorkspaceRelativePath,
+  deckTitle: z.string().min(1),
+  styleFingerprint: z.string().min(1),
+  phase: PptWorkflowPhase,
+  slides: z.array(z.object({
+    slideId: z.string().min(1),
+    index: z.number().int().nonnegative(),
+    title: z.string().min(1),
+    previewPath: WorkspaceRelativePath.optional(),
+    revision: z.number().int().nonnegative(),
+    status: z.enum(['ready', 'failed']),
+    error: z.string().min(1).optional()
+  }).strict()).min(1)
+}).strict().superRefine((bundle, ctx) => {
+  const slideIds = new Set<string>()
+  const indexes = new Set<number>()
+  for (const [position, slide] of bundle.slides.entries()) {
+    if (slideIds.has(slide.slideId)) {
+      ctx.addIssue({ code: 'custom', path: ['slides', position, 'slideId'], message: 'slideId must be unique' })
+    }
+    slideIds.add(slide.slideId)
+    if (indexes.has(slide.index)) {
+      ctx.addIssue({ code: 'custom', path: ['slides', position, 'index'], message: 'slide index must be unique' })
+    }
+    indexes.add(slide.index)
+    if (slide.status === 'ready' && !slide.previewPath) {
+      ctx.addIssue({ code: 'custom', path: ['slides', position, 'previewPath'], message: 'ready slides require previewPath' })
+    }
+  }
+  for (let index = 0; index < bundle.slides.length; index += 1) {
+    if (!indexes.has(index)) {
+      ctx.addIssue({ code: 'custom', path: ['slides'], message: 'slide indexes must be contiguous from zero' })
+      break
+    }
+  }
+})
+export type PptReviewBundleV1 = z.infer<typeof PptReviewBundleV1>
 
 export type PptReviewContextV1 = {
   workflowId: string
@@ -169,7 +222,7 @@ export function toPptReviewBundle(
   manifest: PptReviewManifestV1,
   manifestPath: string
 ): PptReviewBundleV1 {
-  return {
+  return PptReviewBundleV1.parse({
     workflowId: manifest.workflowId,
     childId: manifest.childId,
     manifestPath,
@@ -185,11 +238,11 @@ export function toPptReviewBundle(
       status: slide.status === 'failed' ? 'failed' : 'ready',
       ...(slide.lastError ? { error: slide.lastError } : {})
     }))
-  }
+  })
 }
 
 export function assertWorkspaceRelativePath(path: string, workspaceRoot: string): string {
-  if (!path.trim() || isAbsolute(path)) throw new Error('path must be workspace-relative')
+  if (!isPortableWorkspaceRelativePath(path)) throw new Error('path must be workspace-relative')
   const absolute = resolve(workspaceRoot, path)
   const outside = relative(workspaceRoot, absolute)
   if (outside.startsWith('..') || isAbsolute(outside)) throw new Error('path escapes the active workspace')
@@ -206,4 +259,12 @@ function fingerprint(value: unknown): string {
 
 function isMissing(error: unknown): boolean {
   return typeof error === 'object' && error !== null && 'code' in error && (error as { code?: unknown }).code === 'ENOENT'
+}
+
+function isPortableWorkspaceRelativePath(value: string): boolean {
+  const path = value.trim()
+  if (!path || isAbsolute(path) || win32.isAbsolute(path)) return false
+  if (/^[A-Za-z][A-Za-z0-9+.-]*:/.test(path)) return false
+  const segments = path.replaceAll('\\', '/').split('/')
+  return !segments.includes('..')
 }

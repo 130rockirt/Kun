@@ -628,7 +628,8 @@ export const RuntimeCapabilityManifest = z
       maxInjectedRecords: z.number().int().positive()
     }).strict(),
     imageGen: RuntimeCapabilityState.extend({
-      model: z.string().optional()
+      model: z.string().optional(),
+      supportsReferenceEdit: z.boolean()
     }).strict(),
     speechGen: RuntimeCapabilityState.extend({
       model: z.string().optional()
@@ -696,6 +697,7 @@ export function buildRuntimeCapabilityManifest(input: {
   imageGen?: {
     available?: boolean
     reason?: string
+    supportsReferenceEdit?: boolean
   }
   speechGen?: {
     available?: boolean
@@ -836,7 +838,8 @@ export function buildRuntimeCapabilityManifest(input: {
         input.imageGen?.available === true,
         input.imageGen?.reason ?? 'image generation provider is not configured'
       ),
-      ...(config.imageGen.model ? { model: config.imageGen.model } : {})
+      ...(config.imageGen.model ? { model: config.imageGen.model } : {}),
+      supportsReferenceEdit: input.imageGen?.supportsReferenceEdit === true
     },
     speechGen: {
       ...providerCapabilityState(

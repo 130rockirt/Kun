@@ -20,6 +20,7 @@ export type KunErrorCode =
   | 'not_found'
   | 'conflict'
   | 'rate_limited'
+  | 'thread_busy'
   | 'turn_in_progress'
   | 'turn_not_running'
   | 'approval_not_pending'
@@ -51,6 +52,15 @@ export type RuntimeError = {
   details?: unknown
 }
 
+/** Safe subset of a Kun execution lease exposed to clients on `thread_busy`. */
+export type ThreadBusyDetails = {
+  threadId: string
+  activeTurnId: string
+  ownerFlavor: 'production' | 'development'
+  acquiredAt: string
+  expiresAt: string
+}
+
 const KNOWN_KUN_CODES: ReadonlySet<KunErrorCode> = new Set<KunErrorCode>([
   'validation_error',
   'unauthorized',
@@ -58,6 +68,7 @@ const KNOWN_KUN_CODES: ReadonlySet<KunErrorCode> = new Set<KunErrorCode>([
   'not_found',
   'conflict',
   'rate_limited',
+  'thread_busy',
   'turn_in_progress',
   'turn_not_running',
   'approval_not_pending',
@@ -157,4 +168,25 @@ export function isKnownKunErrorCode(value: unknown): value is KunErrorCode {
 
 export function isLegacyMainGuardCode(value: unknown): value is LegacyMainGuardCode {
   return typeof value === 'string' && (KNOWN_LEGACY_CODES as Set<string>).has(value)
+}
+
+export function parseThreadBusyDetails(value: unknown): ThreadBusyDetails | null {
+  if (!value || typeof value !== 'object') return null
+  const details = value as Record<string, unknown>
+  if (
+    typeof details.threadId !== 'string' || !details.threadId ||
+    typeof details.activeTurnId !== 'string' || !details.activeTurnId ||
+    (details.ownerFlavor !== 'production' && details.ownerFlavor !== 'development') ||
+    typeof details.acquiredAt !== 'string' || !details.acquiredAt ||
+    typeof details.expiresAt !== 'string' || !details.expiresAt
+  ) {
+    return null
+  }
+  return {
+    threadId: details.threadId,
+    activeTurnId: details.activeTurnId,
+    ownerFlavor: details.ownerFlavor,
+    acquiredAt: details.acquiredAt,
+    expiresAt: details.expiresAt
+  }
 }

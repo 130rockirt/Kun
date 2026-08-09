@@ -65,6 +65,14 @@ const protectedProviderMocks = vi.hoisted(() => ({
     models: [{ id: 'cursor-model', displayName: 'Cursor Model' }]
   }))
 }))
+const telegramMocks = vi.hoisted(() => ({
+  verifyTelegramBotToken: vi.fn(async () => ({
+    ok: true as const,
+    botId: 123,
+    botUsername: 'kun_test_bot',
+    botFirstName: 'Kun'
+  }))
+}))
 
 vi.mock('electron', () => ({
   app: {
@@ -126,6 +134,10 @@ vi.mock('../claude-subscription-models', async () => ({
 vi.mock('../cursor-subscription-models', async () => ({
   ...await vi.importActual<typeof import('../cursor-subscription-models')>('../cursor-subscription-models'),
   discoverCursorSubscription: protectedProviderMocks.discoverCursorSubscription
+}))
+
+vi.mock('../telegram-runtime', () => ({
+  verifyTelegramBotToken: telegramMocks.verifyTelegramBotToken
 }))
 
 function settings(): AppSettingsV1 {
@@ -311,6 +323,7 @@ describe('registerAppIpcHandlers', () => {
     protectedProviderMocks.probeClaudeSubscription.mockClear()
     protectedProviderMocks.fetchSdkModels.mockClear()
     protectedProviderMocks.discoverCursorSubscription.mockClear()
+    telegramMocks.verifyTelegramBotToken.mockClear()
   })
 
   afterEach(() => {
@@ -1507,6 +1520,7 @@ describe('registerAppIpcHandlers', () => {
             botToken: '123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi',
             allowedChatIds: '123456789',
             botUsername: 'kun_test_bot',
+            proxy: { enabled: true, url: 'socks5://127.0.0.1:1080' },
             createdAt: '2026-06-19T00:00:00.000Z'
           },
           conversations: [],
@@ -1519,6 +1533,31 @@ describe('registerAppIpcHandlers', () => {
     const handler = handlers.get('settings:set')
     await expect(handler?.({}, payload)).resolves.toEqual(settings())
     expect(applySettingsPatch).toHaveBeenCalledWith(payload)
+  })
+
+  it('passes Telegram proxy settings through the token verification IPC boundary', async () => {
+    registerAppIpcHandlers(registerOptions())
+    const payload = {
+      botToken: '123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi',
+      allowedChatIds: '123456789',
+      proxy: { enabled: true, url: 'socks5://user:pass@127.0.0.1:1080' }
+    }
+
+    await expect(handlers.get('claw:im-install:telegram-token')?.({}, payload)).resolves.toMatchObject({
+      ok: true,
+      botUsername: 'kun_test_bot'
+    })
+    expect(telegramMocks.verifyTelegramBotToken).toHaveBeenCalledWith(payload.botToken, payload.proxy)
+  })
+
+  it('rejects oversized Telegram proxy URLs before token verification', async () => {
+    registerAppIpcHandlers(registerOptions())
+
+    await expect(handlers.get('claw:im-install:telegram-token')?.({}, {
+      botToken: '123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi',
+      proxy: { enabled: true, url: `socks5://${'a'.repeat(5_000)}` }
+    })).rejects.toThrow(/Invalid payload for claw:im-install:telegram-token/)
+    expect(telegramMocks.verifyTelegramBotToken).not.toHaveBeenCalled()
   })
 
   it('restarts the managed runtime through the restart IPC handler', async () => {

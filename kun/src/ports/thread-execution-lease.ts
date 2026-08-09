@@ -2,7 +2,7 @@ import type { ThreadExecutionLease } from '../contracts/runtime-flavor.js'
 
 export class ThreadExecutionBusyError extends Error {
   constructor(readonly owner: ThreadExecutionLease) {
-    super(`thread ${owner.threadId} is busy in ${owner.ownerFlavor}/${owner.ownerInstanceId}`)
+    super(`thread ${owner.threadId} already has an active turn`)
     this.name = 'ThreadExecutionBusyError'
   }
 }

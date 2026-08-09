@@ -324,6 +324,18 @@ describe('app-ipc-schemas', () => {
     }).path).toBe('/v1/threads/thr_1/goal')
   })
 
+  it('accepts only GET requests for bounded Kun thread timeline pages', () => {
+    expect(runtimeRequestPayloadSchema.parse({
+      path: '/v1/threads/thr_1/timeline?before=item_42&limit=300',
+      method: 'GET'
+    }).path).toBe('/v1/threads/thr_1/timeline?before=item_42&limit=300')
+    expect(() => runtimeRequestPayloadSchema.parse({
+      path: '/v1/threads/thr_1/timeline',
+      method: 'POST',
+      body: '{}'
+    })).toThrow(/runtime request path is not allowed/)
+  })
+
   it('accepts the Kun delegation profiles endpoint', () => {
     expect(runtimeRequestPayloadSchema.parse({
       path: '/v1/delegation/profiles',
@@ -641,6 +653,12 @@ describe('app-ipc-schemas', () => {
     expect(settingsPatchSchema.parse({ cursorSpotlight: false }).cursorSpotlight).toBe(false)
     expect(settingsPatchSchema.parse({ cursorSpotlightColor: ' #FF8800 ' }).cursorSpotlightColor).toBe('#FF8800')
     expect(() => settingsPatchSchema.parse({ cursorSpotlightColor: 'blue' })).toThrow()
+  })
+
+  it('accepts the Linux system title bar preference', () => {
+    expect(settingsPatchSchema.parse({
+      appBehavior: { useSystemTitleBar: true }
+    }).appBehavior).toEqual({ useSystemTitleBar: true })
   })
 
   it('accepts media generation settings and provider capability patches', () => {

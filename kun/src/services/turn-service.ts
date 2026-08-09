@@ -1,4 +1,6 @@
+import { createHash } from 'node:crypto'
 import type { ThreadRecord, ThreadStatus } from '../contracts/threads.js'
+import { StartTurnRequest as StartTurnRequestSchema } from '../contracts/turns.js'
 import type {
   CompactRequest,
   CompactResponse,
@@ -220,7 +222,12 @@ export class TurnService {
   }, options: {
     /** Internal extension-broker accounting baseline; not part of StartTurnRequest. */
     extensionBudgetTokenBaseline?: number
+    /** Runs only for a newly admitted turn, never for an idempotent replay. */
+    onAdmitted?: (response: StartTurnResponse) => void
   } = {}): Promise<StartTurnResponse> {
+    const requestFingerprint = fingerprintStartTurnRequest(input.request)
+    const replay = await this.findIdempotentStart(input, requestFingerprint)
+    if (replay) return replay
     if (this.deps.migrationMaintenance?.isLocked()) {
       throw new TurnConflictError('runtime migration maintenance is in progress')
     }
@@ -234,6 +241,8 @@ export class TurnService {
         }
         const thread = await this.deps.threadStore.get(input.threadId)
         if (!thread) throw new Error(`thread not found: ${input.threadId}`)
+        const replay = this.idempotentStartFromThread(thread, input.request, requestFingerprint)
+        if (replay) return { kind: 'replay' as const, response: replay }
         // Archival is an overlay on the execution-derived thread state. It
         // deliberately permits an already-running turn to settle, but it
         // must not admit a new one while the thread remains archived.
@@ -305,6 +314,8 @@ export class TurnService {
           const turn = createTurnRecord({
             id: turnId,
             threadId: input.threadId,
+            clientRequestId: input.request.clientRequestId,
+            clientRequestFingerprint: requestFingerprint,
             prompt: input.request.prompt,
             messageSource: input.request.messageSource,
             model: turnModel,
@@ -369,7 +380,7 @@ export class TurnService {
           await this.deps.sessionStore.appendItem(input.threadId, userItem)
           this.inflightTurns.set(turnId, controller)
           this.deps.inflight.begin({ id: turnId, kind: 'model', threadId: input.threadId, turnId })
-          return { turnId, userItem, turn: startedTurn }
+          return { kind: 'admitted' as const, turnId, userItem, turn: startedTurn }
         } catch (error) {
           // A failed start has no loop to perform lifecycle cleanup. Release
           // its slot immediately; the outer catch best-effort marks any
@@ -378,6 +389,7 @@ export class TurnService {
           throw error
         }
       })
+      if (started.kind === 'replay') return started.response
       await this.deps.events.record({
         kind: 'turn_started',
         threadId: input.threadId,
@@ -400,7 +412,14 @@ export class TurnService {
         itemId: started.userItem.id,
         item: started.userItem
       })
-      return { threadId: input.threadId, turnId: started.turnId, userMessageItemId: started.userItem.id }
+      await this.markTurnAdmissionCompleted(input.threadId, started.turnId)
+      const response = {
+        threadId: input.threadId,
+        turnId: started.turnId,
+        userMessageItemId: started.userItem.id
+      }
+      options.onAdmitted?.(response)
+      return response
     } catch (error) {
       if (attemptedTurnId) {
         // This is deliberately outside the per-thread mutation callback: the
@@ -408,6 +427,71 @@ export class TurnService {
         await this.interruptTurn({ threadId: input.threadId, turnId: attemptedTurnId }).catch(() => undefined)
       }
       throw error
+    }
+  }
+
+  private async findIdempotentStart(input: {
+    threadId: string
+    request: StartTurnRequest
+  }, requestFingerprint: string | undefined): Promise<StartTurnResponse | null> {
+    const clientRequestId = input.request.clientRequestId?.trim()
+    if (!clientRequestId) return null
+    const projection = this.deps.threadStore.getMetadata
+      ? await this.deps.threadStore.getMetadata(input.threadId)
+      : await this.deps.threadStore.get(input.threadId)
+    const projectedTurn = projection?.turns.find((turn) =>
+      turn.clientRequestId === clientRequestId && !this.isRetryableFailedAdmission(turn)
+    )
+    if (!projectedTurn) return null
+    if (projectedTurn.prompt) {
+      return this.idempotentStartFromTurn(projectedTurn, input.request, requestFingerprint)
+    }
+    const hydrated = await this.deps.threadStore.get(input.threadId)
+    const turn = hydrated?.turns.find((candidate) =>
+      candidate.clientRequestId === clientRequestId && !this.isRetryableFailedAdmission(candidate)
+    )
+    return turn ? this.idempotentStartFromTurn(turn, input.request, requestFingerprint) : null
+  }
+
+  private idempotentStartFromThread(
+    thread: ThreadRecord,
+    request: StartTurnRequest,
+    requestFingerprint: string | undefined
+  ): StartTurnResponse | null {
+    const clientRequestId = request.clientRequestId?.trim()
+    if (!clientRequestId) return null
+    const turn = thread.turns.find((candidate) =>
+      candidate.clientRequestId === clientRequestId && !this.isRetryableFailedAdmission(candidate)
+    )
+    return turn ? this.idempotentStartFromTurn(turn, request, requestFingerprint) : null
+  }
+
+  private isRetryableFailedAdmission(turn: Turn): boolean {
+    return !turn.admissionCompletedAt && (turn.status === 'aborted' || turn.status === 'failed')
+  }
+
+  private idempotentStartFromTurn(
+    turn: Turn,
+    request: StartTurnRequest,
+    requestFingerprint: string | undefined
+  ): StartTurnResponse | null {
+    const userItem = turn.items.find((item) => item.kind === 'user_message')
+    const originalPrompt = userItem?.text || turn.prompt
+    // A different runtime may observe the metadata write in the narrow window
+    // before the canonical user item is durable. Treat that as not yet
+    // admitted so the execution lease remains authoritative for the retry.
+    if (!originalPrompt) return null
+    if (turn.clientRequestFingerprint) {
+      if (turn.clientRequestFingerprint !== requestFingerprint) {
+        throw new TurnConflictError('clientRequestId is already associated with a different request')
+      }
+    } else if (originalPrompt !== request.prompt) {
+      throw new TurnConflictError('clientRequestId is already associated with a different prompt')
+    }
+    return {
+      threadId: turn.threadId,
+      turnId: turn.id,
+      userMessageItemId: userItem?.id ?? `item_${turn.id}_user`
     }
   }
 
@@ -1797,6 +1881,27 @@ export class TurnService {
     return withThreadStoreMutation(this.deps.threadStore, threadId, operation)
   }
 
+  private async markTurnAdmissionCompleted(threadId: string, turnId: string): Promise<void> {
+    await this.withThreadMutation(threadId, async () => {
+      const current = await this.deps.threadStore.get(threadId)
+      if (!current) throw new Error(`thread not found: ${threadId}`)
+      const completedAt = this.deps.nowIso()
+      const turns = current.turns.map((turn) =>
+        turn.id === turnId && !turn.admissionCompletedAt
+          ? { ...turn, admissionCompletedAt: completedAt }
+          : turn
+      )
+      if (!turns.some((turn) => turn.id === turnId)) {
+        throw new Error(`turn not found: ${turnId}`)
+      }
+      await this.deps.threadStore.upsert({
+        ...current,
+        turns,
+        updatedAt: completedAt
+      })
+    })
+  }
+
   private tryAdmitTurn(turnId: string, threadId: string): boolean {
     if (this.admittedTurnThreads.size >= this.maxConcurrentTurns) {
       return false
@@ -1886,6 +1991,24 @@ export class TurnService {
     return items.filter((item) => item.kind === 'user_message')
   }
 
+}
+
+function fingerprintStartTurnRequest(request: StartTurnRequest): string | undefined {
+  if (!request.clientRequestId?.trim()) return undefined
+  const normalized = StartTurnRequestSchema.parse(request)
+  const canonical = canonicalizeFingerprintValue(normalized)
+  return createHash('sha256').update(JSON.stringify(canonical), 'utf8').digest('hex')
+}
+
+function canonicalizeFingerprintValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalizeFingerprintValue)
+  if (!value || typeof value !== 'object') return value
+  const canonical: Record<string, unknown> = {}
+  for (const key of Object.keys(value).sort()) {
+    const entry = (value as Record<string, unknown>)[key]
+    if (entry !== undefined) canonical[key] = canonicalizeFingerprintValue(entry)
+  }
+  return canonical
 }
 
 function isActiveTurn(turn: Turn): turn is Turn & { status: 'queued' | 'running' } {

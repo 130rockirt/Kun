@@ -503,6 +503,7 @@ const notificationsPatchSchema = z.object({
 const appBehaviorPatchSchema = z.object({
   openAtLogin: z.boolean().optional(),
   startMinimized: z.boolean().optional(),
+  useSystemTitleBar: z.boolean().optional(),
   closeAction: z.enum(WINDOW_CLOSE_ACTIONS).optional(),
   closeToTray: z.boolean().optional()
 }).strict()
@@ -637,6 +638,11 @@ const clawImAgentProfilePatchSchema = z.object({
   replyRules: z.string().max(MAX_CHANNEL_TEXT_LENGTH).optional()
 }).strict()
 
+const clawImTelegramProxyPatchSchema = z.object({
+  enabled: z.boolean().optional(),
+  url: z.string().max(MAX_URL_LENGTH).optional()
+}).strict()
+
 const clawImPlatformCredentialPatchSchema = z.union([
   z.object({
     kind: z.literal('feishu').optional(),
@@ -656,6 +662,7 @@ const clawImPlatformCredentialPatchSchema = z.union([
     botToken: z.string().max(MAX_BODY_BYTES).optional(),
     allowedChatIds: z.string().max(MAX_CHANNEL_TEXT_LENGTH).optional(),
     botUsername: z.string().trim().max(128).optional(),
+    proxy: clawImTelegramProxyPatchSchema.optional(),
     createdAt: z.string().max(128).optional()
   }).strict()
 ])

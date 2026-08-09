@@ -59,6 +59,16 @@ export type CoreThreadJson = CoreThreadSummaryJson & {
   pendingApprovalIds?: string[]
 }
 
+export type CoreThreadTimelineJson = CoreThreadJson & {
+  latestTurn?: Omit<CoreTurnJson, 'items'> | null
+  timeline: {
+    nextCursor?: string
+    hasMore: boolean
+    itemCount: number
+    itemBytes: number
+  }
+}
+
 export type CoreThreadRuntimeStateJson = {
   id: string
   status: string
@@ -271,6 +281,7 @@ export type CoreRuntimeCapabilityManifestJson = {
   /** Optional so the GUI keeps working against older Kun builds without the capability. */
   imageGen?: CoreRuntimeCapabilityStateJson & {
     model?: string
+    supportsReferenceEdit?: boolean
   }
   speechGen?: CoreRuntimeCapabilityStateJson & {
     model?: string

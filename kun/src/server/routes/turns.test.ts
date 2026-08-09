@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { InMemoryEventBus } from '../../adapters/in-memory-event-bus.js'
 import { InMemorySessionStore } from '../../adapters/in-memory-session-store.js'
 import { InMemoryThreadStore } from '../../adapters/in-memory-thread-store.js'
+import type { StartTurnRequest } from '../../contracts/turns.js'
 import { createThreadRecord } from '../../domain/thread.js'
 import { createTurnRecord } from '../../domain/turn.js'
 import { makeGoalContextItem, makeUserItem } from '../../domain/item.js'
@@ -9,6 +10,7 @@ import { ContextCompactor } from '../../loop/context-compactor.js'
 import { InflightTracker } from '../../loop/inflight-tracker.js'
 import { SteeringQueue } from '../../loop/steering-queue.js'
 import { SequentialIdGenerator } from '../../ports/id-generator.js'
+import { ThreadExecutionBusyError } from '../../ports/thread-execution-lease.js'
 import { RuntimeEventRecorder } from '../../services/runtime-event-recorder.js'
 import { TurnService } from '../../services/turn-service.js'
 import type { JsonResponse } from '../response.js'
@@ -112,6 +114,178 @@ describe('POST /v1/threads/:id/turns/:turnId/tool-calls/:callId/cancel', () => {
 })
 
 describe('POST /v1/threads/:id/turns admission', () => {
+  it('returns one admitted turn for exact retries and conflicts when the keyed request changes', async () => {
+    const threadStore = new InMemoryThreadStore()
+    const sessionStore = new InMemorySessionStore()
+    const eventBus = new InMemoryEventBus()
+    const nowIso = () => '2026-08-09T10:00:00.000Z'
+    const turns = new TurnService({
+      threadStore,
+      sessionStore,
+      events: new RuntimeEventRecorder({
+        eventBus,
+        sessionStore,
+        allocateSeq: (threadId) => eventBus.allocateSeq(threadId),
+        nowIso
+      }),
+      inflight: new InflightTracker(),
+      steering: new SteeringQueue(),
+      compactor: new ContextCompactor(),
+      ids: new SequentialIdGenerator(),
+      nowIso
+    })
+    const threadId = 'thr_idempotent_start'
+    await threadStore.upsert(createThreadRecord({
+      id: threadId,
+      title: 'Idempotent start',
+      workspace: '/tmp/workspace',
+      model: 'deepseek-v4-pro'
+    }))
+    const onStarted = vi.fn()
+    const admittedRequest: StartTurnRequest = {
+      prompt: 'run exactly once',
+      clientRequestId: 'request_123',
+      model: 'deepseek-v4-pro',
+      sandboxMode: 'workspace-write',
+      attachments: [{ path: '/tmp/input.txt', name: 'input.txt' }]
+    }
+    const request = (body: object = admittedRequest) => new Request(
+      `http://kun.local/v1/threads/${threadId}/turns`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body)
+    })
+
+    const [first, retry] = await Promise.all([
+      startTurn(turns, threadId, request(), onStarted),
+      startTurn(turns, threadId, request(), onStarted)
+    ]) as JsonResponse[]
+
+    expect(first.status).toBe(202)
+    expect(retry.status).toBe(202)
+    expect(JSON.parse(retry.body)).toEqual(JSON.parse(first.body))
+    expect(onStarted).toHaveBeenCalledTimes(1)
+    const thread = await threadStore.get(threadId)
+    expect(thread?.turns).toHaveLength(1)
+    expect(thread?.turns[0]).toMatchObject({
+      clientRequestId: 'request_123',
+      clientRequestFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
+      prompt: 'run exactly once'
+    })
+    expect((await sessionStore.loadItems(threadId)).filter((item) => item.kind === 'user_message'))
+      .toHaveLength(1)
+    expect((await sessionStore.loadEventsSince(threadId, 0)).filter((event) => event.kind === 'turn_started'))
+      .toHaveLength(1)
+
+    const admittedBody = JSON.parse(first.body) as {
+      threadId: string
+      turnId: string
+      userMessageItemId: string
+    }
+    const foreignOwner = {
+      threadId,
+      turnId: admittedBody.turnId,
+      ownerFlavor: 'production' as const,
+      ownerInstanceId: 'foreign-runtime-instance',
+      acquiredAt: '2026-08-09T10:00:00.000Z',
+      expiresAt: '2026-08-09T10:00:30.000Z'
+    }
+    const owner = vi.fn(async () => foreignOwner)
+    const retryingRuntime = new TurnService({
+      threadStore,
+      sessionStore,
+      events: new RuntimeEventRecorder({
+        eventBus,
+        sessionStore,
+        allocateSeq: (id) => eventBus.allocateSeq(id),
+        nowIso
+      }),
+      inflight: new InflightTracker(),
+      steering: new SteeringQueue(),
+      compactor: new ContextCompactor(),
+      executionLeases: {
+        owner,
+        acquire: async () => foreignOwner,
+        release: async () => undefined
+      },
+      ids: new SequentialIdGenerator(),
+      nowIso
+    })
+    await expect(retryingRuntime.startTurn({
+      threadId,
+      request: admittedRequest
+    })).resolves.toEqual(admittedBody)
+    expect(owner).not.toHaveBeenCalled()
+    await expect(retryingRuntime.startTurn({
+      threadId,
+      request: { prompt: 'new work', clientRequestId: 'request_456' }
+    })).rejects.toBeInstanceOf(ThreadExecutionBusyError)
+    expect(owner).toHaveBeenCalledTimes(1)
+
+    const changedRequests = [
+      { ...admittedRequest, prompt: 'different prompt' },
+      { ...admittedRequest, model: 'another-model' },
+      { ...admittedRequest, attachments: [{ path: '/tmp/other.txt', name: 'other.txt' }] },
+      { ...admittedRequest, sandboxMode: 'danger-full-access' }
+    ]
+    for (const changedRequest of changedRequests) {
+      const conflict = await startTurn(
+        turns,
+        threadId,
+        request(changedRequest),
+        onStarted
+      ) as JsonResponse
+      expect(conflict.status).toBe(409)
+      expect(JSON.parse(conflict.body)).toEqual({
+        code: 'conflict',
+        message: 'clientRequestId is already associated with a different request'
+      })
+    }
+    expect(onStarted).toHaveBeenCalledTimes(1)
+    expect((await threadStore.get(threadId))?.turns).toHaveLength(1)
+
+    await turns.interruptTurn({ threadId, turnId: admittedBody.turnId })
+  })
+
+  it('returns sanitized structured details when another runtime owns the thread', async () => {
+    const owner = {
+      threadId: 'thr_busy',
+      turnId: 'turn_active',
+      ownerFlavor: 'production' as const,
+      ownerInstanceId: 'private-runtime-instance',
+      acquiredAt: '2026-08-09T10:00:00.000Z',
+      expiresAt: '2026-08-09T10:00:30.000Z'
+    }
+    const turns = {
+      startTurn: async () => { throw new ThreadExecutionBusyError(owner) }
+    } as unknown as TurnService
+
+    const response = await startTurn(
+      turns,
+      owner.threadId,
+      new Request(`http://kun.local/v1/threads/${owner.threadId}/turns`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ prompt: 'distinct request', clientRequestId: 'request_busy' })
+      })
+    ) as JsonResponse
+    const body = JSON.parse(response.body)
+
+    expect(response.status).toBe(409)
+    expect(body).toEqual({
+      code: 'thread_busy',
+      message: 'thread already has an active turn',
+      details: {
+        threadId: owner.threadId,
+        activeTurnId: owner.turnId,
+        ownerFlavor: owner.ownerFlavor,
+        acquiredAt: owner.acquiredAt,
+        expiresAt: owner.expiresAt
+      }
+    })
+    expect(response.body).not.toContain(owner.ownerInstanceId)
+  })
+
   it('rejects stale Graph submissions after safe disable while direct turns remain available', async () => {
     const threadStore = new InMemoryThreadStore()
     const sessionStore = new InMemorySessionStore()

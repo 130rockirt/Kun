@@ -48,6 +48,20 @@ describe('format runtime error', () => {
     expect(formatRuntimeError(error)).not.toBe(i18n.t('common:runtimeFetchFailed'))
   })
 
+  it('localizes thread_busy without exposing its runtime owner in the primary message', () => {
+    const owner = 'af197738-2317-49bb-b9b0-d6d5e7b24cdd'
+    const view = describeRuntimeError(new Error(JSON.stringify({
+      code: 'thread_busy',
+      message: `thread thr_1 is busy in production/${owner}`
+    })))
+
+    expect(view.code).toBe('thread_busy')
+    expect(view.summary).toBe(i18n.t('common:runtimeActiveTurn'))
+    expect(view.message).toBe(i18n.t('common:runtimeActiveTurn'))
+    expect(view.message).not.toContain(owner)
+    expect(view.detail).not.toContain(owner)
+  })
+
   it('keeps raw provider messages visible in details even when the summary is the same text', () => {
     const message = `model request failed with status 400: ${JSON.stringify({
       error: {

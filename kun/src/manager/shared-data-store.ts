@@ -47,6 +47,8 @@ import { FileGraphRunStore, type GraphRunStore } from '../graph/graph-run-store.
 import type {
   ItemHistoryCommit,
   ItemHistoryCompactionResult,
+  ItemHistoryPage,
+  ItemHistoryPageOptions,
   ItemHistorySnapshot,
   SessionLatestUsageSnapshot,
   SessionStore,
@@ -55,6 +57,7 @@ import type {
 import type { ThreadStore, ThreadStoreListOptions } from '../ports/thread-store.js'
 import { atomicWriteFile } from '../adapters/file/atomic-write.js'
 import { RevisionConflictError } from './revisioned-document-store.js'
+import { buildPublicItemHistoryPage } from '../services/item-history-page.js'
 
 const ThreadIdSchema = z.string().min(1).max(256)
 
@@ -98,6 +101,7 @@ export type ManagerSessionStoreOperation =
   | 'compactItems'
   | 'loadEventsSince'
   | 'loadItems'
+  | 'loadItemPage'
   | 'loadSession'
   | 'upsertSession'
   | 'highestSeq'
@@ -715,6 +719,24 @@ export class ManagerSharedDataStore {
       case 'loadItems': {
         const { threadId } = parseThreadId(value)
         return this.sessionStore.loadItems(threadId)
+      }
+      case 'loadItemPage': {
+        const body = z.object({
+          threadId: ThreadIdSchema,
+          options: z.object({
+            before: z.string().min(1).max(256).optional(),
+            maxItems: z.number().int().positive().max(1_000),
+            maxBytes: z.number().int().positive().max(16 * 1024 * 1024)
+          }).strict()
+        }).strict().parse(value) as { threadId: string; options: ItemHistoryPageOptions }
+        if (this.sessionStore.loadItemPage) {
+          return this.sessionStore.loadItemPage(body.threadId, body.options)
+        }
+        const page: ItemHistoryPage = buildPublicItemHistoryPage(
+          await this.sessionStore.loadItems(body.threadId),
+          body.options
+        )
+        return page
       }
       case 'loadSession': {
         const { threadId } = parseThreadId(value)

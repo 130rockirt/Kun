@@ -1,4 +1,10 @@
 {
+  "connectPhoneTelegramProxyEnabledLabel": "Use a custom proxy",
+  "connectPhoneTelegramProxyEnabledHint": "Applies only to this Telegram Bot connection, not model requests.",
+  "connectPhoneTelegramProxyUrlLabel": "Proxy URL",
+  "connectPhoneTelegramProxyUrlPlaceholder": "e.g. socks5://127.0.0.1:1080",
+  "connectPhoneTelegramProxyUrlHint": "Supports HTTP, HTTPS, SOCKS, SOCKS4, and SOCKS5. The URL is saved locally with the bot credential.",
+  "connectPhoneTelegramErrorInvalidProxy": "Enter a valid HTTP, HTTPS, SOCKS, SOCKS4, or SOCKS5 proxy URL, or turn the custom proxy off.",
   "appName": "쿤",
   "runtimeStatusRestarting": "Kun이 자동으로 다시 시작됩니다…",
   "runtimeStatusRestartingAttempt": "Kun이 자동으로 다시 시작됩니다({{attempt}}/{{max}} 시도)…",
@@ -2232,6 +2238,7 @@
   "threadActionBusy": "이 스레드를 변경하기 전에 현재 차례가 완료될 때까지 기다리십시오.",
   "runtimeFeatureUnsupported": "연결된 런타임은 아직 이 작업을 지원하지 않습니다.",
   "runtimeActiveTurn": "이 스레드에서는 이미 차례가 실행 중입니다.",
+  "runtimeThreadBusyQueued": "현재 작업이 아직 실행 중입니다. 메시지가 대기열에 추가되었습니다. 완료를 기다리거나 실행 중인 작업을 중지하세요.",
   "sidebarOfflineHint": "스레드를 생성하고 계속하려면 먼저 런타임을 연결하세요.",
   "sidebarEmptyTitle": "아직 스레드가 없습니다.",
   "sidebarEmptySub": "위 작업에서 첫 번째 작업을 시작하세요.",

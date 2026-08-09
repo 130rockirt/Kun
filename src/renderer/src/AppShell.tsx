@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect } from 'react'
 import { appWindowTitleForFlavor } from '@shared/app-environment'
 import { MAX_APP_BADGE_COUNT } from '@shared/kun-gui-api'
+import { resolveDesktopTitleBarMode } from '@shared/desktop-title-bar'
 import { useChatStore } from './store/chat-store'
 import { supportsDesktopTitleBar, WindowsTitleBar } from './components/WindowsTitleBar'
 import { RuntimeStatusBanner } from './components/RuntimeStatusBanner'
@@ -51,7 +52,10 @@ export default function AppShell(): React.ReactElement {
   const initialSetupOpen = useChatStore((s) => s.initialSetupOpen)
   const platform = typeof window !== 'undefined' ? window.kunGui?.platform ?? 'unknown' : 'unknown'
   const appEnvironment = typeof window !== 'undefined' ? window.kunGui?.appEnvironment : undefined
-  const hasDesktopTitleBar = supportsDesktopTitleBar(platform)
+  const desktopTitleBarMode = typeof window !== 'undefined'
+    ? window.kunGui?.desktopTitleBarMode ?? resolveDesktopTitleBarMode(platform, false)
+    : resolveDesktopTitleBarMode(platform, false)
+  const hasDesktopTitleBar = supportsDesktopTitleBar(platform, desktopTitleBarMode)
 
   useEffect(() => {
     let frame = 0

@@ -1,5 +1,5 @@
 import { chmod, mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { isAbsolute, join, relative, resolve } from 'node:path'
 import { createHash } from 'node:crypto'
 import { z } from 'zod'
 import {
@@ -164,6 +164,12 @@ export const ChildRunRecord = z.object({
   summary: z.string().optional(),
   /** Structured PPT review result captured from the child tool stream. */
   reviewBundle: z.unknown().optional(),
+  /** Parent turn that produced reviewBundle; distinguishes a fresh bundle from the preserved prior revision. */
+  reviewBundleParentTurnId: z.string().min(1).optional(),
+  /** Structured validated PPT export captured from the child tool stream. */
+  deckArtifact: z.unknown().optional(),
+  /** Parent turn that produced deckArtifact. */
+  deckArtifactParentTurnId: z.string().min(1).optional(),
   evidence: z.array(z.string().min(1).max(2_000)).max(32).optional(),
   tokenBudget: z.number().int().positive().optional(),
   /** Legacy persisted field. New child runs do not use wall-clock budgets. */
@@ -255,6 +261,7 @@ export type ChildRunExecutor = (input: {
   prefixReused?: boolean
   inheritedHistoryItems?: number
   reviewBundle?: unknown
+  deckArtifact?: unknown
   evidence?: string[]
 }>
 
@@ -804,6 +811,10 @@ export class DelegationRuntime {
     parentThreadId: string
     parentTurnId: string
     prompt: string
+    expectedProfile?: string
+    expectedWorkflowId?: string
+    /** Current parent boundary; the resumed child receives its intersection with the stored snapshot. */
+    security?: ChildSecuritySnapshot
     signal: AbortSignal
     onQueued?: (childId: string, profile?: string, metadata?: ChildRunLifecycleMetadata) => Promise<void> | void
     onRunning?: (childId: string, profile?: string, metadata?: ChildRunLifecycleMetadata) => Promise<void> | void
@@ -824,6 +835,9 @@ export class DelegationRuntime {
     parentThreadId: string
     parentTurnId: string
     prompt: string
+    expectedProfile?: string
+    expectedWorkflowId?: string
+    security?: ChildSecuritySnapshot
     signal: AbortSignal
     onQueued?: (childId: string, profile?: string, metadata?: ChildRunLifecycleMetadata) => Promise<void> | void
     onRunning?: (childId: string, profile?: string, metadata?: ChildRunLifecycleMetadata) => Promise<void> | void
@@ -836,12 +850,26 @@ export class DelegationRuntime {
     if (previous.status === 'queued' || previous.status === 'running') {
       throw new Error(`child run ${input.childId} is still running`)
     }
+    if (input.expectedProfile && previous.profile !== input.expectedProfile) {
+      throw new Error(`child run ${input.childId} is not a ${input.expectedProfile} child`)
+    }
+    if (input.expectedWorkflowId) {
+      const reviewIdentityError = persistedReviewIdentityError(
+        previous.reviewBundle,
+        previous.id,
+        input.expectedWorkflowId
+      )
+      if (reviewIdentityError) throw new Error(reviewIdentityError)
+    }
     const profileSnapshot = previous.profileSnapshot
-    const security = previous.security
-    const workspace = previous.workspace
-    if (!profileSnapshot || !security || !workspace) {
+    const storedSecurity = previous.security
+    if (!profileSnapshot || !storedSecurity || !previous.workspace) {
       throw new Error(`child run ${input.childId} lacks a resumable security/profile snapshot`)
     }
+    const security = input.security
+      ? intersectChildSecurity(storedSecurity, ChildSecuritySnapshot.parse(input.security))
+      : storedSecurity
+    const workspace = security.sandboxRoot
     if (input.signal.aborted) throw new Error('child resume aborted before start')
 
     const queuedAt = this.now()
@@ -851,13 +879,11 @@ export class DelegationRuntime {
       parentTurnId: input.parentTurnId,
       status: 'queued',
       summary: undefined,
-      reviewBundle: undefined,
       evidence: undefined,
       error: undefined,
       activity: undefined,
       detached: undefined,
       queuedMs: undefined,
-      durationMs: undefined,
       startedAt: undefined,
       resumeCount: (previous.resumeCount ?? 0) + 1,
       lastResumeAt: queuedAt,
@@ -979,6 +1005,7 @@ export class DelegationRuntime {
     const unsubscribeActivity = this.options.eventBus?.subscribe(record.id, (event) => {
       void this.projectChildActivity(args.state, event)
     })
+    const usageBeforeRun = record.usage
     try {
       const executor: ChildRunExecutor = this.options.executor ?? defaultExecutor
       const result = await executeWithParentSignal(args.signal, (signal) => executor({
@@ -1019,17 +1046,27 @@ export class DelegationRuntime {
         ...current,
         status: contractError ? 'failed' : 'completed',
         summary: result.summary,
-        reviewBundle: result.reviewBundle,
+        reviewBundle: result.reviewBundle ?? current.reviewBundle,
+        reviewBundleParentTurnId: result.reviewBundle !== undefined
+          ? args.parentTurnId
+          : current.reviewBundleParentTurnId,
+        deckArtifact: result.deckArtifact ?? current.deckArtifact,
+        deckArtifactParentTurnId: result.deckArtifact !== undefined
+          ? args.parentTurnId
+          : current.deckArtifactParentTurnId,
         evidence: result.evidence,
-        usage: addChildUsage(current.usage, result.usage),
+        // ChildRunExecutor reports the cumulative usage of the persistent side
+        // thread. Adding it to the prior record would double-count every turn
+        // before a resume.
+        usage: result.usage ?? current.usage,
         toolInvocations: result.toolInvocations,
         prefixReused: result.prefixReused,
         inheritedHistoryItems: result.inheritedHistoryItems,
         ...(contractError ? { error: contractError } : {}),
-        durationMs: elapsedMs(startedAt, finishedAt),
+        durationMs: (current.durationMs ?? 0) + elapsedMs(startedAt, finishedAt),
         updatedAt: finishedAt
       }))
-      this.recordExternalUsage(record)
+      this.recordExternalUsage(record, subtractChildUsage(record.usage, usageBeforeRun))
       return record
     } catch (error) {
       const finishedAt = this.now()
@@ -1037,7 +1074,7 @@ export class DelegationRuntime {
         ...current,
         status: args.signal.aborted ? 'aborted' : 'failed',
         error: errorMessage(error),
-        durationMs: elapsedMs(startedAt, finishedAt),
+        durationMs: (current.durationMs ?? 0) + elapsedMs(startedAt, finishedAt),
         updatedAt: finishedAt
       }))
       return record
@@ -1434,8 +1471,8 @@ export class DelegationRuntime {
     return this.nextChildSeq(record.id)
   }
 
-  private recordExternalUsage(record: ChildRunRecord): void {
-    const usage = toUsageSnapshot(record.usage)
+  private recordExternalUsage(record: ChildRunRecord, childUsage: ChildRunRecord['usage'] = record.usage): void {
+    const usage = toUsageSnapshot(childUsage)
     if (usage.totalTokens <= 0 && usage.costUsd === undefined && usage.costCny === undefined) return
     this.options.recordExternalUsage?.(record.parentThreadId, usage)
   }
@@ -1780,35 +1817,145 @@ function sameChildActivity(
     left.updatedAt === right.updatedAt
 }
 
-function addChildUsage(
-  previous: ChildRunRecord['usage'],
-  next: ChildRunRecord['usage'] | undefined
+function persistedReviewIdentityError(
+  value: unknown,
+  childId: string,
+  workflowId: string
+): string {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return `child run ${childId} has no persisted PPT review workflow`
+  }
+  const bundle = value as Record<string, unknown>
+  if (bundle.childId !== childId) return `child run ${childId} has a mismatched PPT review owner`
+  if (bundle.workflowId !== workflowId) return `child run ${childId} does not own PPT workflow ${workflowId}`
+  return ''
+}
+
+function subtractChildUsage(
+  next: ChildRunRecord['usage'],
+  previous: ChildRunRecord['usage']
 ): ChildRunRecord['usage'] {
-  if (!next) return previous
-  const add = (key: keyof ChildRunRecord['usage']): number | undefined => {
-    const left = previous[key]
+  const difference = (key: keyof ChildRunRecord['usage']): number | undefined => {
     const right = next[key]
-    return typeof left === 'number' || typeof right === 'number'
-      ? (typeof left === 'number' ? left : 0) + (typeof right === 'number' ? right : 0)
-      : undefined
+    const left = previous[key]
+    if (typeof right !== 'number' && typeof left !== 'number') return undefined
+    return Math.max(0, (typeof right === 'number' ? right : 0) - (typeof left === 'number' ? left : 0))
   }
   return ChildRunRecord.shape.usage.parse({
-    promptTokens: add('promptTokens') ?? 0,
-    completionTokens: add('completionTokens') ?? 0,
-    totalTokens: add('totalTokens') ?? 0,
-    ...(add('cachedTokens') !== undefined ? { cachedTokens: add('cachedTokens') } : {}),
-    ...(add('cacheHitTokens') !== undefined ? { cacheHitTokens: add('cacheHitTokens') } : {}),
-    ...(add('cacheMissTokens') !== undefined ? { cacheMissTokens: add('cacheMissTokens') } : {}),
-    ...(add('turns') !== undefined ? { turns: add('turns') } : {}),
-    ...(add('costUsd') !== undefined ? { costUsd: add('costUsd') } : {}),
-    ...(add('costCny') !== undefined ? { costCny: add('costCny') } : {}),
-    ...(add('cacheSavingsUsd') !== undefined ? { cacheSavingsUsd: add('cacheSavingsUsd') } : {}),
-    ...(add('cacheSavingsCny') !== undefined ? { cacheSavingsCny: add('cacheSavingsCny') } : {}),
-    ...(add('tokenEconomySavingsTokens') !== undefined ? { tokenEconomySavingsTokens: add('tokenEconomySavingsTokens') } : {}),
-    ...(add('tokenEconomySavingsUsd') !== undefined ? { tokenEconomySavingsUsd: add('tokenEconomySavingsUsd') } : {}),
-    ...(add('tokenEconomySavingsCny') !== undefined ? { tokenEconomySavingsCny: add('tokenEconomySavingsCny') } : {}),
-    cacheHitRate: next.cacheHitRate ?? previous.cacheHitRate
+    promptTokens: difference('promptTokens') ?? 0,
+    completionTokens: difference('completionTokens') ?? 0,
+    totalTokens: difference('totalTokens') ?? 0,
+    ...(difference('cachedTokens') !== undefined ? { cachedTokens: difference('cachedTokens') } : {}),
+    ...(difference('cacheHitTokens') !== undefined ? { cacheHitTokens: difference('cacheHitTokens') } : {}),
+    ...(difference('cacheMissTokens') !== undefined ? { cacheMissTokens: difference('cacheMissTokens') } : {}),
+    ...(difference('turns') !== undefined ? { turns: difference('turns') } : {}),
+    ...(difference('costUsd') !== undefined ? { costUsd: difference('costUsd') } : {}),
+    ...(difference('costCny') !== undefined ? { costCny: difference('costCny') } : {}),
+    ...(difference('cacheSavingsUsd') !== undefined ? { cacheSavingsUsd: difference('cacheSavingsUsd') } : {}),
+    ...(difference('cacheSavingsCny') !== undefined ? { cacheSavingsCny: difference('cacheSavingsCny') } : {}),
+    ...(difference('tokenEconomySavingsTokens') !== undefined
+      ? { tokenEconomySavingsTokens: difference('tokenEconomySavingsTokens') }
+      : {}),
+    ...(difference('tokenEconomySavingsUsd') !== undefined
+      ? { tokenEconomySavingsUsd: difference('tokenEconomySavingsUsd') }
+      : {}),
+    ...(difference('tokenEconomySavingsCny') !== undefined
+      ? { tokenEconomySavingsCny: difference('tokenEconomySavingsCny') }
+      : {}),
+    cacheHitRate: next.cacheHitRate
   })
+}
+
+function intersectChildSecurity(
+  stored: ChildSecuritySnapshot,
+  current: ChildSecuritySnapshot
+): ChildSecuritySnapshot {
+  if (resolve(stored.sandboxRoot) !== resolve(current.sandboxRoot)) {
+    throw new Error('resumed child workspace does not match the current parent workspace')
+  }
+  return ChildSecuritySnapshot.parse({
+    sandboxRoot: stored.sandboxRoot,
+    ...intersectOptionalList('allowedModelProviderIds', stored, current),
+    ...intersectOptionalList('allowedModelIds', stored, current),
+    ...intersectOptionalList('allowedProviderIds', stored, current),
+    ...intersectOptionalList('allowedToolNames', stored, current),
+    ...intersectOptionalList('allowedSkillIds', stored, current),
+    ...intersectOptionalPaths('allowedReadPaths', stored, current),
+    ...intersectOptionalPaths('allowedWritePaths', stored, current),
+    ...intersectOptionalList('allowedArtifactIds', stored, current),
+    ...unionOptionalList('blockedProviderIds', stored, current),
+    ...unionOptionalList('blockedToolNames', stored, current),
+    ...unionOptionalList('blockedSkillIds', stored, current),
+    memoryEnabled: stored.memoryEnabled && current.memoryEnabled
+  })
+}
+
+type SecurityListKey =
+  | 'allowedModelProviderIds'
+  | 'allowedModelIds'
+  | 'allowedProviderIds'
+  | 'allowedToolNames'
+  | 'allowedSkillIds'
+  | 'allowedReadPaths'
+  | 'allowedWritePaths'
+  | 'allowedArtifactIds'
+  | 'blockedProviderIds'
+  | 'blockedToolNames'
+  | 'blockedSkillIds'
+
+function intersectOptionalList<K extends SecurityListKey>(
+  key: K,
+  stored: ChildSecuritySnapshot,
+  current: ChildSecuritySnapshot
+): Partial<Pick<ChildSecuritySnapshot, K>> {
+  const left = stored[key] as string[] | undefined
+  const right = current[key] as string[] | undefined
+  const values = left === undefined
+    ? right
+    : right === undefined
+      ? left
+      : left.filter((value) => right.includes(value))
+  return values === undefined ? {} : { [key]: [...new Set(values)] } as Partial<Pick<ChildSecuritySnapshot, K>>
+}
+
+function unionOptionalList<K extends SecurityListKey>(
+  key: K,
+  stored: ChildSecuritySnapshot,
+  current: ChildSecuritySnapshot
+): Partial<Pick<ChildSecuritySnapshot, K>> {
+  const left = stored[key] as string[] | undefined
+  const right = current[key] as string[] | undefined
+  return left === undefined && right === undefined
+    ? {}
+    : { [key]: [...new Set([...(left ?? []), ...(right ?? [])])] } as Partial<Pick<ChildSecuritySnapshot, K>>
+}
+
+function intersectOptionalPaths<K extends 'allowedReadPaths' | 'allowedWritePaths'>(
+  key: K,
+  stored: ChildSecuritySnapshot,
+  current: ChildSecuritySnapshot
+): Partial<Pick<ChildSecuritySnapshot, K>> {
+  const left = stored[key]
+  const right = current[key]
+  if (left === undefined) return right === undefined ? {} : { [key]: [...new Set(right)] } as Partial<Pick<ChildSecuritySnapshot, K>>
+  if (right === undefined) return { [key]: [...new Set(left)] } as Partial<Pick<ChildSecuritySnapshot, K>>
+  const values = left.flatMap((storedPath) => right.flatMap((currentPath) => {
+    const storedAbsolute = securityPath(storedPath, stored.sandboxRoot)
+    const currentAbsolute = securityPath(currentPath, current.sandboxRoot)
+    if (pathContains(storedAbsolute, currentAbsolute)) return [currentPath]
+    if (pathContains(currentAbsolute, storedAbsolute)) return [storedPath]
+    return []
+  }))
+  return { [key]: [...new Set(values)] } as Partial<Pick<ChildSecuritySnapshot, K>>
+}
+
+function securityPath(path: string, sandboxRoot: string): string {
+  return isAbsolute(path) ? resolve(path) : resolve(sandboxRoot, path)
+}
+
+function pathContains(parent: string, candidate: string): boolean {
+  const outside = relative(parent, candidate)
+  return outside === '' || (!outside.startsWith('..') && !isAbsolute(outside))
 }
 
 function isNotFound(error: unknown): boolean {

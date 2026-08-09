@@ -210,6 +210,20 @@ describe('buildToolPreferenceInstruction', () => {
     expect(instruction).toContain('Do not delegate trivial work')
   })
 
+  it('describes the stateful image-first PPT review loop without the legacy one-call board path', () => {
+    const instruction = buildToolPreferenceInstruction([
+      { name: 'ppt_agent', description: 'Run PPT Master' },
+      { name: 'ppt_to_board', description: 'Lay out a PPTD deck' }
+    ])
+
+    expect(instruction).toContain('phase="awaiting_review"')
+    expect(instruction).toContain('action="revise_previews"|"retry_failed"')
+    expect(instruction).toContain('action="approve_and_build"')
+    expect(instruction).toContain('same PPT child')
+    expect(instruction).toContain('Never replay boardSpec')
+    expect(instruction).not.toContain('in a single call')
+  })
+
   it('explains only exact-profile and automatic routes in existing-profile mode', () => {
     const instruction = buildToolPreferenceInstruction([
       { name: 'list_subagent_profiles', description: 'List reusable roles' },
