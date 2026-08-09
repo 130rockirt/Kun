@@ -45,6 +45,8 @@ import type {
 import type {
   ItemHistoryCompactionResult,
   ItemHistoryCommit,
+  ItemHistoryPage,
+  ItemHistoryPageOptions,
   ItemHistorySnapshot,
   SessionLatestUsageSnapshot,
   SessionStore,
@@ -55,6 +57,7 @@ import { requestManagerJson, type ServiceManagerConnection } from './manager-cli
 
 const ResultSchema = z.object({ result: z.unknown() }).strict()
 const MANAGER_DATA_REQUEST_TIMEOUT_MS = 30_000
+const MANAGER_TIMELINE_DATA_REQUEST_TIMEOUT_MS = 120_000
 const ItemSnapshotSchema = z.object({
   revision: z.number().int().nonnegative(),
   items: z.array(TurnItem)
@@ -72,6 +75,12 @@ const ItemCompactionSchema = z.object({
   beforeBytes: z.number().int().nonnegative(),
   afterBytes: z.number().int().nonnegative(),
   itemCount: z.number().int().nonnegative()
+})
+const ItemPageSchema = z.object({
+  items: z.array(TurnItem),
+  nextCursor: z.string().optional(),
+  hasMore: z.boolean(),
+  itemBytes: z.number().int().nonnegative()
 })
 const UsageRecordSchema = z.object({
   threadId: z.string(),
@@ -265,6 +274,13 @@ export class ManagerRemoteSessionStore implements SessionStore {
 
   async loadItems(threadId: string): Promise<TurnItemValue[]> {
     return TurnItem.array().parse(await this.call('loadItems', { threadId }))
+  }
+
+  async loadItemPage(
+    threadId: string,
+    options: ItemHistoryPageOptions
+  ): Promise<ItemHistoryPage> {
+    return ItemPageSchema.parse(await this.call('loadItemPage', { threadId, options }))
   }
 
   async loadSession(threadId: string): Promise<AgentSession | null> {
@@ -528,9 +544,22 @@ async function callManagerStore(
   const response = await requestManagerJson(manager, `/v1/data/${store}/${operation}`, {
     method: 'POST',
     body: value ?? {},
-    timeoutMs: MANAGER_DATA_REQUEST_TIMEOUT_MS
+    timeoutMs: resolveManagerDataRequestTimeoutMs(store, operation)
   })
   return ResultSchema.parse(response).result
+}
+
+export function resolveManagerDataRequestTimeoutMs(
+  store: 'thread' | 'session' | 'artifact' | 'memory' | 'graph' | 'attachment',
+  operation: string
+): number {
+  if (
+    store === 'session' &&
+    (operation === 'loadItemPage' || operation === 'highestSeq')
+  ) {
+    return MANAGER_TIMELINE_DATA_REQUEST_TIMEOUT_MS
+  }
+  return MANAGER_DATA_REQUEST_TIMEOUT_MS
 }
 
 function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {

@@ -35,6 +35,8 @@ import type {
 export type QueuedUserMessage = {
   id: string
   text: string
+  /** Stable idempotency key reused while this user submission is retried. */
+  clientRequestId?: string
   /** Pending/paused items are visible; starting/in-flight items remain durable until the turn settles. */
   deliveryState?: 'pending' | 'paused' | 'starting' | 'in_flight'
   deliveryTurnId?: string
@@ -109,6 +111,8 @@ export type WriteAssistantMessageContext = {
 
 export type SendMessageOverrides = {
   queued?: QueuedUserMessage
+  /** Optional stable idempotency key for callers that retry one logical submission. */
+  clientRequestId?: string
   model?: string
   providerId?: string
   accountId?: string
@@ -262,6 +266,10 @@ export type ChatState = {
   activeThreadId: string | null
   /** Thread selected immediately but whose durable snapshot is still loading. */
   threadLoadingId: string | null
+  /** Opaque cursor for the next older durable timeline page. */
+  threadHistoryCursor: string | null
+  threadHasMoreHistory: boolean
+  threadHistoryLoading: boolean
   /** 最近一次在 Code 工作台(chat 路由)选中的会话,供从设置/其他工作区/Connect Phone 返回时恢复。 */
   lastCodeThreadId: string | null
   /** Relationship of the active thread (e.g. `side` for a subagent's own session). */
@@ -436,6 +444,7 @@ export type ChatState = {
   }) => Promise<string | null>
   createConversation: () => Promise<void>
   selectThread: (id: string) => Promise<void>
+  loadEarlierThreadHistory: () => Promise<boolean>
   /**
    * 打开 SSE 订阅一条 thread(不预先拉 getThreadDetail)。
    * 用于:onClawChannelActivity 自动切到 bot thread,让流式 deltas 立即可见。

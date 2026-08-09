@@ -115,7 +115,7 @@ function localizedRuntimeSummary(code: string | null, text: string): string | nu
     return i18n.t('common:runtimeUnhealthy')
   }
 
-  if (code === 'turn_in_progress' || lowered.includes('active turn')) {
+  if (code === 'thread_busy' || code === 'turn_in_progress' || lowered.includes('active turn')) {
     return i18n.t('common:runtimeActiveTurn')
   }
 
@@ -147,23 +147,26 @@ export function describeRuntimeError(error: unknown): RuntimeErrorView {
   const summary = localizedRuntimeSummary(errorCode, redactedText) ||
     redactedText ||
     i18n.t('common:runtimeRequestFailed')
+  const message = errorCode === 'thread_busy' ? summary : redactedText || summary
   const details: string[] = []
   if (errorCode) details.push(`Code: ${errorCode}`)
-  if (payload?.severity) details.push(`Severity: ${payload.severity}`)
+  const hideBusyOwnerDetails = errorCode === 'thread_busy'
+  if (!hideBusyOwnerDetails && payload?.severity) details.push(`Severity: ${payload.severity}`)
   if (
+    !hideBusyOwnerDetails &&
     redactedText &&
     (redactedText !== summary || Boolean(errorCode) || Boolean(payload?.severity) || payload?.details !== undefined)
   ) {
     details.push(`Message:\n${redactedText}`)
   }
-  const payloadDetails = detailString(payload?.details)
+  const payloadDetails = hideBusyOwnerDetails ? '' : detailString(payload?.details)
   if (payloadDetails) details.push(`Details:\n${payloadDetails}`)
-  if (!payload && raw && raw !== redactedText) {
+  if (!hideBusyOwnerDetails && !payload && raw && raw !== redactedText) {
     details.push(`Raw:\n${redactSecretText(raw)}`)
   }
   return {
     summary,
-    message: redactedText || summary,
+    message,
     ...(details.length > 0 ? { detail: details.join('\n\n') } : {}),
     ...(errorCode ? { code: errorCode } : {}),
     ...(shouldOpenAgentsSettings(errorCode) ? { settingsAction: 'agents' as const } : {})

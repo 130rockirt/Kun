@@ -120,6 +120,22 @@ describe('runtimeRequestViaHost', () => {
     )).toBe(40_000)
   })
 
+  it('allows bounded thread timeline reads to finish cold storage scans', () => {
+    expect(resolveRuntimeRequestTimeoutMs(
+      '/v1/threads/thr_1/timeline?before=item_42&limit=300',
+      'GET'
+    )).toBe(120_000)
+    expect(resolveRuntimeRequestTimeoutMs(
+      '/v1/threads/thr_1/timeline',
+      'GET',
+      45_000
+    )).toBe(45_000)
+    expect(resolveRuntimeRequestTimeoutMs(
+      '/v1/threads/thr_1/timeline',
+      'POST'
+    )).toBe(60_000)
+  })
+
   it('forwards daily usage requests to the Kun runtime with bearer auth', async () => {
     let seenUrl = ''
     let seenAuthorization = ''

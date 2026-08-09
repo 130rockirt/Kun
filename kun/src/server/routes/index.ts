@@ -11,6 +11,7 @@ import {
   getThreadTodos,
   getThread,
   getThreadState,
+  getThreadTimeline,
   listThreads,
   setThreadGoal,
   setThreadTodos,
@@ -172,7 +173,8 @@ import {
  * - `POST /v1/delegation/abort/{childId}` (auth)
  * - `GET /v1/workspace/status` (auth)
  * - `GET/POST /v1/threads` (auth)
- * - `GET/PATCH/DELETE /v1/threads/{id}` and `GET /v1/threads/{id}/state` (auth)
+ * - `GET/PATCH/DELETE /v1/threads/{id}` and bounded `GET /v1/threads/{id}/timeline` (auth)
+ * - `GET /v1/threads/{id}/state` (auth)
  * - `GET /v1/threads/{id}/model-requests` (auth)
  * - `POST /v1/threads/{id}/fork` (auth)
  * - `POST /v1/threads/{id}/summarize` (auth)
@@ -684,6 +686,19 @@ export function buildRouter(runtime: ServerRuntime): Router {
     const forwarded = await runtime.forwardThreadControl?.(request, ctx.params.id)
     if (forwarded) return forwarded
     return getThreadState(runtime.threadService, ctx.params.id, runtime.sessionStore)
+  })
+  router.add('GET', '/v1/threads/:id/timeline', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    const forwarded = await runtime.forwardThreadControl?.(request, ctx.params.id)
+    if (forwarded) return forwarded
+    return getThreadTimeline(
+      runtime.threadService,
+      ctx.params.id,
+      request,
+      runtime.sessionStore,
+      runtime.userInputGate,
+      runtime.approvalGate
+    )
   })
   router.add('GET', '/v1/threads/:id', async (request, ctx) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()

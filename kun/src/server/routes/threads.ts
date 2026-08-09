@@ -11,7 +11,10 @@ import {
   ThreadGoalResponse,
   ThreadRuntimeStateSchema,
   ThreadSchema,
+  ThreadTimelineResponseSchema,
   ThreadTodosResponse,
+  THREAD_TIMELINE_MAX_ITEM_BYTES,
+  THREAD_TIMELINE_MAX_ITEMS,
   UpdateThreadRequest,
   type ThreadRecord
 } from '../../contracts/threads.js'
@@ -34,6 +37,7 @@ import {
   type FinishedTurnStatus,
   finalizeOpenTurnItem
 } from '../../domain/turn-item-finalization.js'
+import { buildPublicItemHistoryPage } from '../../services/item-history-page.js'
 
 /**
  * Handlers for the thread CRUD endpoints. The handlers accept a
@@ -197,6 +201,149 @@ export async function getThreadState(
   }))
 }
 
+/**
+ * Return a bounded public history window for normal renderer hydration. The
+ * full-detail route remains available for compatibility clients.
+ */
+export async function getThreadTimeline(
+  service: ThreadService,
+  threadId: string,
+  request: Request,
+  sessionStore: SessionStore,
+  userInputGate?: UserInputGate,
+  approvalGate?: ApprovalGate
+): Promise<JsonResponse> {
+  const url = new URL(request.url)
+  const parsedQuery = z.object({
+    before: z.string().min(1).max(256).optional(),
+    limit: z.preprocess((value) => {
+      if (typeof value !== 'string' || value.trim() === '') return THREAD_TIMELINE_MAX_ITEMS
+      return Number(value)
+    }, z.number().int().positive().max(THREAD_TIMELINE_MAX_ITEMS))
+  }).safeParse({
+    before: url.searchParams.get('before') ?? undefined,
+    limit: url.searchParams.get('limit') ?? undefined
+  })
+  if (!parsedQuery.success) {
+    return validationError('invalid thread timeline query', parsedQuery.error.issues)
+  }
+
+  // Freeze the replay floor before reading the item projection. Any event
+  // appended afterwards is replayed by SSE from this sequence.
+  const latestSeq = await sessionStore.highestSeq(threadId)
+  const pageOptions = {
+    ...(parsedQuery.data.before ? { before: parsedQuery.data.before } : {}),
+    maxItems: parsedQuery.data.limit,
+    maxBytes: THREAD_TIMELINE_MAX_ITEM_BYTES
+  }
+  const [thread, page] = await Promise.all([
+    loadThreadMetadata(service, threadId),
+    sessionStore.loadItemPage
+      ? sessionStore.loadItemPage(threadId, pageOptions)
+      : sessionStore.loadItems(threadId).then((items) =>
+          buildPublicItemHistoryPage(items, pageOptions)
+        )
+  ])
+  if (!thread) {
+    return jsonResponse(
+      { code: 'not_found', message: `thread not found: ${threadId}` },
+      404
+    )
+  }
+
+  const pendingApprovals = approvalGate?.pending(threadId) ?? []
+  let sessionItems = await healSessionItemsForFinishedTurns(
+    thread,
+    page.items.filter(isPublicTurnItem),
+    sessionStore
+  )
+  // Only the newest page materializes live gates. Older pages are immutable
+  // history and must not repeat the current approval card.
+  if (!parsedQuery.data.before) {
+    sessionItems = mergePendingApprovalItems(sessionItems, pendingApprovals)
+  }
+  const bounded = buildPublicItemHistoryPage(sessionItems, {
+    maxItems: parsedQuery.data.limit,
+    maxBytes: THREAD_TIMELINE_MAX_ITEM_BYTES
+  })
+  sessionItems = bounded.items
+  const turnIds = new Set(sessionItems.map((item) => item.turnId))
+  const pageThread = hydrateThreadItemsFromSession({
+    ...thread,
+    turns: thread.turns
+      .filter((turn) => turnIds.has(turn.id))
+      .map((turn) => ({ ...turn, items: [] }))
+  }, sessionItems)
+  const latestTurn = thread.turns.at(-1)
+  const latestTurnMetadata = latestTurn
+    ? omitTurnItems(projectTimelineTurn(latestTurn, []))
+    : null
+  const hasMore = page.hasMore || bounded.hasMore
+  const nextCursor = bounded.hasMore
+    ? bounded.nextCursor
+    : page.nextCursor
+  const pendingUserInputIds = userInputGate?.pending(threadId).map((value) => value.id) ?? []
+  const pendingApprovalIds = approvalGate
+    ? pendingApprovals.map((value) => value.id)
+    : undefined
+
+  return jsonResponse(ThreadTimelineResponseSchema.parse({
+    ...ThreadSchema.parse(projectTimelineThread(pageThread)),
+    latestSeq,
+    latestTurn: latestTurnMetadata,
+    pendingUserInputIds,
+    ...(pendingApprovalIds ? { pendingApprovalIds } : {}),
+    timeline: {
+      ...(hasMore && nextCursor ? { nextCursor } : {}),
+      hasMore,
+      itemCount: sessionItems.length,
+      itemBytes: bounded.itemBytes
+    }
+  }))
+}
+
+function projectTimelineThread(thread: ThreadRecord): ThreadRecord {
+  return {
+    ...thread,
+    ...(thread.summary ? { summary: truncateTimelineText(thread.summary, 64 * 1024) } : {}),
+    additionalWorkspaces: thread.additionalWorkspaces?.slice(0, 32),
+    // These snapshots are model/runtime inputs, not renderer timeline data.
+    extensionProfile: undefined,
+    toolCatalogEpoch: undefined,
+    systemPrompt: undefined,
+    turns: thread.turns.map((turn) => projectTimelineTurn(turn, turn.items))
+  }
+}
+
+function projectTimelineTurn(turn: Turn, items: TurnItem[]): Turn {
+  return {
+    ...turn,
+    prompt: '',
+    steering: [],
+    items,
+    attachmentIds: turn.attachmentIds.slice(0, 32),
+    composerContexts: undefined,
+    activeSkillIds: turn.activeSkillIds.slice(0, 32),
+    injectedMemoryIds: turn.injectedMemoryIds.slice(0, 32),
+    injectedMemorySummaries: [],
+    injectedInstructionSources: [],
+    graphLeadLifecycle: undefined,
+    graphPlanningLifecycle: undefined,
+    guiPlan: undefined,
+    guiDesignArtifact: undefined,
+    ...(turn.error ? { error: truncateTimelineText(turn.error, 16 * 1024) } : {})
+  }
+}
+
+function truncateTimelineText(value: string, maxChars: number): string {
+  return value.length <= maxChars ? value : `${value.slice(0, maxChars - 24)}... [truncated]`
+}
+
+function omitTurnItems(turn: Turn): Omit<Turn, 'items'> {
+  const { items: _items, ...metadata } = turn
+  return metadata
+}
+
 function loadThreadMetadata(service: ThreadService, threadId: string): Promise<ThreadRecord | null> {
   // Keep direct route-unit fakes and third-party ThreadService facades from
   // needing a coordinated upgrade; production ThreadService always exposes
@@ -289,7 +436,10 @@ async function healSessionItemsForFinishedTurns(
 
   for (const item of healedItems) {
     try {
-      await sessionStore.updateItem(thread.id, item.id, item)
+      await sessionStore.updateItem(thread.id, item.id, {
+        status: item.status,
+        ...(item.finishedAt ? { finishedAt: item.finishedAt } : {})
+      })
     } catch {
       // Healing is best-effort; the response still uses the repaired view.
     }

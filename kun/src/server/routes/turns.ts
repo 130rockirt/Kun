@@ -12,6 +12,7 @@ import {
   SteerTurnRequest,
   TurnSchema
 } from '../../contracts/turns.js'
+import { ThreadBusyDetailsSchema } from '../../contracts/errors.js'
 import { jsonResponse, type JsonResponse } from '../response.js'
 import { readJsonBody } from '../read-json-body.js'
 import { ERRORS } from './runtime-error.js'
@@ -40,15 +41,20 @@ export async function startTurn(
     const response: StartTurnResponse = await turns.startTurn({
       threadId,
       request: parsed.data
-    })
-    onStarted?.(response)
+    }, { onAdmitted: onStarted })
     return jsonResponse(response, 202)
   } catch (error) {
     if (error instanceof ThreadExecutionBusyError) {
       return jsonResponse({
         code: 'thread_busy',
-        message: error.message,
-        details: { owner: error.owner }
+        message: 'thread already has an active turn',
+        details: ThreadBusyDetailsSchema.parse({
+          threadId: error.owner.threadId,
+          activeTurnId: error.owner.turnId,
+          ownerFlavor: error.owner.ownerFlavor,
+          acquiredAt: error.owner.acquiredAt,
+          expiresAt: error.owner.expiresAt
+        })
       }, 409)
     }
     if (error instanceof TurnCapacityError) {

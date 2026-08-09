@@ -460,6 +460,8 @@ export function shouldOpenSettingsForError(error: unknown): boolean {
 }
 
 export function looksLikeActiveTurnError(error: unknown): boolean {
+  const code = getRuntimeErrorCode(error)
+  if (code === 'thread_busy' || code === 'turn_in_progress') return true
   const raw = error instanceof Error ? error.message : String(error ?? '')
   return raw.toLowerCase().includes('active turn')
 }

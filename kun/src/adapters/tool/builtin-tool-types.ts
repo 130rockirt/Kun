@@ -4,7 +4,10 @@ import type { LocalTool } from './local-tool-host.js'
 
 export type FsStats = NonNullable<Awaited<ReturnType<typeof stat>>>
 
-export const DEFAULT_BASH_TIMEOUT_SECONDS = 24 * 60 * 60
+/** Runtime-owned ceiling for synchronous foreground shell commands. */
+export const DEFAULT_BASH_TIMEOUT_SECONDS = 15 * 60
+/** Runtime-owned ceiling for explicitly detached shell commands. */
+export const DEFAULT_BACKGROUND_BASH_TIMEOUT_SECONDS = 24 * 60 * 60
 export const DEFAULT_SEARCH_LIMIT = 100
 export const DEFAULT_LIST_LIMIT = 500
 export const DEFAULT_FIND_LIMIT = 1000
@@ -164,7 +167,12 @@ export type BackgroundShellHooks = {
 }
 
 export type BashLocalToolOptions = {
+  /** Foreground timeout. Also remains the compatibility fallback for background calls when explicitly configured. */
   defaultTimeoutSeconds?: number
+  /** Background timeout. Defaults to 24 hours independently of the foreground ceiling. */
+  defaultBackgroundTimeoutSeconds?: number
+  /** Test/composition seam; production defaults to one non-durable liveness update every 30 seconds. */
+  foregroundLivenessIntervalMs?: number
   maxLines?: number
   maxBytes?: number
   /** Process-wide cap for concurrently running detached shell sessions. */

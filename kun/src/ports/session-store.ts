@@ -41,6 +41,24 @@ export type ItemHistoryCompactionResult = {
 }
 
 /**
+ * A bounded chronological window from the durable item projection. `before`
+ * is the stable id of the first item in the previously returned page and is
+ * treated as an exclusive cursor.
+ */
+export type ItemHistoryPageOptions = {
+  before?: string
+  maxItems: number
+  maxBytes: number
+}
+
+export type ItemHistoryPage = {
+  items: TurnItem[]
+  nextCursor?: string
+  hasMore: boolean
+  itemBytes: number
+}
+
+/**
  * Port for persisted per-thread activity.
  *
  * The store keeps three streams: the ordered runtime event log
@@ -103,6 +121,8 @@ export interface SessionStore {
     options?: { maxRecordBytes?: number }
   ): AsyncIterable<RuntimeEvent>
   loadItems(threadId: string): Promise<TurnItem[]>
+  /** Optional bounded history read used by renderer timeline hydration. */
+  loadItemPage?(threadId: string, options: ItemHistoryPageOptions): Promise<ItemHistoryPage>
   loadSession(threadId: string): Promise<AgentSession | null>
   upsertSession(session: AgentSession): Promise<void>
   /** Highest known per-thread `seq`. Returns 0 when no events have been recorded. */

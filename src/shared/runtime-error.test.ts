@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { parseRuntimeErrorBody, runtimeErrorToError } from './runtime-error'
+import {
+  isKnownKunErrorCode,
+  parseRuntimeErrorBody,
+  parseThreadBusyDetails,
+  runtimeErrorToError
+} from './runtime-error'
 
 describe('runtime error parsing', () => {
   it('parses Kun code, message, and details payloads', () => {
@@ -31,5 +36,33 @@ describe('runtime error parsing', () => {
       message: 'provider failed',
       details: { status: 503 }
     })
+  })
+
+  it('preserves thread_busy and reads its sanitized structured details', () => {
+    const parsed = parseRuntimeErrorBody(
+      JSON.stringify({
+        code: 'thread_busy',
+        message: 'thread already has an active turn',
+        details: {
+          threadId: 'thr_1',
+          activeTurnId: 'turn_1',
+          ownerFlavor: 'production',
+          acquiredAt: '2026-08-09T10:00:00.000Z',
+          expiresAt: '2026-08-09T10:00:30.000Z'
+        }
+      }),
+      'fallback'
+    )
+
+    expect(parsed.code).toBe('thread_busy')
+    expect(isKnownKunErrorCode(parsed.code)).toBe(true)
+    expect(parseThreadBusyDetails(parsed.details)).toEqual({
+      threadId: 'thr_1',
+      activeTurnId: 'turn_1',
+      ownerFlavor: 'production',
+      acquiredAt: '2026-08-09T10:00:00.000Z',
+      expiresAt: '2026-08-09T10:00:30.000Z'
+    })
+    expect(JSON.stringify(parsed)).not.toContain('ownerInstanceId')
   })
 })
