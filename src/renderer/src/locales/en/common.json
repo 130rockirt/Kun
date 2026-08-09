@@ -1,4 +1,10 @@
 {
+  "connectPhoneTelegramProxyEnabledLabel": "Use a custom proxy",
+  "connectPhoneTelegramProxyEnabledHint": "Applies only to this Telegram Bot connection, not model requests.",
+  "connectPhoneTelegramProxyUrlLabel": "Proxy URL",
+  "connectPhoneTelegramProxyUrlPlaceholder": "e.g. socks5://127.0.0.1:1080",
+  "connectPhoneTelegramProxyUrlHint": "Supports HTTP, HTTPS, SOCKS, SOCKS4, and SOCKS5. The URL is saved locally with the bot credential.",
+  "connectPhoneTelegramErrorInvalidProxy": "Enter a valid HTTP, HTTPS, SOCKS, SOCKS4, or SOCKS5 proxy URL, or turn the custom proxy off.",
   "appName": "Kun",
   "runtimeStatusRestarting": "Kun is restarting automatically…",
   "runtimeStatusRestartingAttempt": "Kun is restarting automatically (attempt {{attempt}}/{{max}})…",

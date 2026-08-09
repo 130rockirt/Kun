@@ -4,7 +4,8 @@ import {
   type ClawImChannelV1,
   type ClawImConversationV1,
   type ClawImPlatformCredentialV1,
-  type ClawImRemoteSessionV1
+  type ClawImRemoteSessionV1,
+  type ClawImTelegramProxyV1
 } from './app-settings-types'
 import {
   resolveKunImageGenerationSettings,
@@ -40,6 +41,48 @@ export function defaultClawImAgentProfile(): ClawImAgentProfileV1 {
     userContext: '',
     replyRules: ''
   }
+}
+
+const TELEGRAM_PROXY_PROTOCOLS = new Set(['http:', 'https:', 'socks:', 'socks4:', 'socks5:'])
+
+export type TelegramProxyValidationResult =
+  | { ok: true; proxy: ClawImTelegramProxyV1 }
+  | { ok: false; message: string }
+
+export function validateClawImTelegramProxy(input: unknown): TelegramProxyValidationResult {
+  const raw = typeof input === 'object' && input !== null && !Array.isArray(input)
+    ? input as Record<string, unknown>
+    : {}
+  const enabled = raw.enabled === true
+  const url = typeof raw.url === 'string' ? raw.url.trim() : ''
+  if (!enabled) return { ok: true, proxy: { enabled: false, url } }
+  if (!url) return { ok: false, message: 'Enter a proxy URL or disable the Telegram proxy.' }
+  try {
+    const parsed = new URL(url)
+    if (!TELEGRAM_PROXY_PROTOCOLS.has(parsed.protocol) || !parsed.hostname) {
+      return { ok: false, message: 'Use an HTTP, HTTPS, SOCKS, SOCKS4, or SOCKS5 proxy URL.' }
+    }
+  } catch {
+    return { ok: false, message: 'Enter a valid absolute proxy URL.' }
+  }
+  return { ok: true, proxy: { enabled: true, url } }
+}
+
+export function normalizeClawImTelegramProxy(input: unknown): ClawImTelegramProxyV1 {
+  const validation = validateClawImTelegramProxy(input)
+  if (validation.ok) return validation.proxy
+  const raw = typeof input === 'object' && input !== null && !Array.isArray(input)
+    ? input as Record<string, unknown>
+    : {}
+  return {
+    enabled: false,
+    url: typeof raw.url === 'string' ? raw.url.trim() : ''
+  }
+}
+
+export function resolveClawImTelegramProxyUrl(input: unknown): string {
+  const proxy = normalizeClawImTelegramProxy(input)
+  return proxy.enabled ? proxy.url : ''
 }
 
 export function normalizeClawImAgentProfile(input: unknown): ClawImAgentProfileV1 {
@@ -80,6 +123,7 @@ export function normalizeClawImPlatformCredential(input: unknown): ClawImPlatfor
       botToken,
       allowedChatIds,
       ...(botUsername ? { botUsername } : {}),
+      proxy: normalizeClawImTelegramProxy(raw.proxy),
       createdAt: typeof raw.createdAt === 'string' && raw.createdAt ? raw.createdAt : new Date().toISOString()
     }
   }

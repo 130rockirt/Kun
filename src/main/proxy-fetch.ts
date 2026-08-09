@@ -19,10 +19,13 @@ async function fetchViaProxy(input: string | URL, init: RequestInit | undefined,
     throw new Error(`Unsupported proxied request protocol: ${url.protocol}`)
   }
 
-  const body = await requestBodyToBuffer(init?.body)
   const headers = headersToRecord(init?.headers)
-  if (body && !hasHeader(headers, 'content-length')) {
-    headers['content-length'] = String(body.byteLength)
+  const body = await materializeProxyRequestBody(init?.body)
+  for (const [key, value] of Object.entries(body.headers)) {
+    if (!hasHeader(headers, key)) headers[key] = value
+  }
+  if (body.buffer && !hasHeader(headers, 'content-length')) {
+    headers['content-length'] = String(body.buffer.byteLength)
   }
 
   return new Promise<Response>((resolve, reject) => {
@@ -63,18 +66,45 @@ async function fetchViaProxy(input: string | URL, init: RequestInit | undefined,
     signal?.addEventListener('abort', abort, { once: true })
     request.on('error', reject)
     request.on('close', () => signal?.removeEventListener('abort', abort))
-    if (body) request.write(body)
+    if (body.buffer) request.write(body.buffer)
     request.end()
   })
 }
 
-async function requestBodyToBuffer(body: BodyInit | null | undefined): Promise<Buffer | null> {
-  if (body === null || body === undefined) return null
-  if (typeof body === 'string') return Buffer.from(body)
-  if (body instanceof URLSearchParams) return Buffer.from(body.toString())
-  if (body instanceof ArrayBuffer) return Buffer.from(body)
+type MaterializedRequestBody = {
+  buffer: Buffer | null
+  headers: Record<string, string>
+}
+
+export async function materializeProxyRequestBody(body: BodyInit | null | undefined): Promise<MaterializedRequestBody> {
+  if (body === null || body === undefined) return { buffer: null, headers: {} }
+  if (typeof body === 'string') return { buffer: Buffer.from(body), headers: {} }
+  if (body instanceof URLSearchParams) {
+    return {
+      buffer: Buffer.from(body.toString()),
+      headers: { 'content-type': 'application/x-www-form-urlencoded;charset=UTF-8' }
+    }
+  }
+  if (body instanceof ArrayBuffer) return { buffer: Buffer.from(body), headers: {} }
   if (ArrayBuffer.isView(body)) {
-    return Buffer.from(body.buffer, body.byteOffset, body.byteLength)
+    return {
+      buffer: Buffer.from(body.buffer, body.byteOffset, body.byteLength),
+      headers: {}
+    }
+  }
+  if (body instanceof Blob) {
+    return {
+      buffer: Buffer.from(await body.arrayBuffer()),
+      headers: body.type ? { 'content-type': body.type } : {}
+    }
+  }
+  if (body instanceof FormData) {
+    const encoded = new Response(body)
+    const contentType = encoded.headers.get('content-type')
+    return {
+      buffer: Buffer.from(await encoded.arrayBuffer()),
+      headers: contentType ? { 'content-type': contentType } : {}
+    }
   }
   throw new Error('Unsupported proxied request body type.')
 }

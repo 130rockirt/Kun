@@ -222,8 +222,8 @@ const api = {
     ipcRenderer.invoke('claw:im-install:qrcode', { provider, isLark: options?.isLark }),
   pollClawImInstall: (provider, deviceCode) =>
     ipcRenderer.invoke('claw:im-install:poll', { provider, deviceCode }),
-  connectTelegramBot: (botToken, allowedChatIds) =>
-    ipcRenderer.invoke('claw:im-install:telegram-token', { botToken, allowedChatIds }),
+  connectTelegramBot: (botToken, allowedChatIds, proxy) =>
+    ipcRenderer.invoke('claw:im-install:telegram-token', { botToken, allowedChatIds, proxy }),
   startCodexAuth: () =>
     ipcRenderer.invoke('codex:auth:start'),
   pollCodexAuth: (deviceCode, userCode) =>
