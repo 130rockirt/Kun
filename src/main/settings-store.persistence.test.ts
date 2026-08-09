@@ -154,6 +154,7 @@ it('ignores null entries in persisted Claw channels and schedule tasks', async (
       appBehavior: {
         openAtLogin: true,
         startMinimized: true,
+        useSystemTitleBar: true,
         closeAction: 'tray'
       }
     })
@@ -167,12 +168,14 @@ it('ignores null entries in persisted Claw channels and schedule tasks', async (
     expect(enabled.appBehavior).toEqual({
       openAtLogin: true,
       startMinimized: true,
+      useSystemTitleBar: true,
       closeAction: 'tray',
       closeToTray: true
     })
     expect(disabled.appBehavior).toEqual({
       openAtLogin: false,
       startMinimized: false,
+      useSystemTitleBar: true,
       closeAction: 'quit',
       closeToTray: false
     })

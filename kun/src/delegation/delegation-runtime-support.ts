@@ -1,5 +1,5 @@
 import { chmod, mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { isAbsolute, join, relative, resolve } from 'node:path'
 import { createHash } from 'node:crypto'
 import { z } from 'zod'
 import {
@@ -37,6 +37,7 @@ import { resolveTurnClientSurface } from '../loop/turn-context-resolver.js'
 import { AtomicJsonFile, isManagerAtomicJsonPath } from '../extensions/atomic-json.js'
 import { withManagerDataMutex } from '../manager/data-mutex.js'
 import {
+  ChildSecuritySnapshot,
   ChildRunRecord,
   type ChildRunAggregate,
   type ChildRunExecutor,
@@ -375,6 +376,149 @@ export function addChildUsage(
     ...(add('tokenEconomySavingsCny') !== undefined ? { tokenEconomySavingsCny: add('tokenEconomySavingsCny') } : {}),
     cacheHitRate: next.cacheHitRate ?? previous.cacheHitRate
   })
+}
+
+export function persistedReviewIdentityError(
+  value: unknown,
+  childId: string,
+  workflowId: string
+): string {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return `child run ${childId} has no persisted PPT review workflow`
+  }
+  const bundle = value as Record<string, unknown>
+  if (bundle.childId !== childId) return `child run ${childId} has a mismatched PPT review owner`
+  if (bundle.workflowId !== workflowId) return `child run ${childId} does not own PPT workflow ${workflowId}`
+  return ''
+}
+
+export function subtractChildUsage(
+  next: ChildRunRecord['usage'],
+  previous: ChildRunRecord['usage']
+): ChildRunRecord['usage'] {
+  const difference = (key: keyof ChildRunRecord['usage']): number | undefined => {
+    const right = next[key]
+    const left = previous[key]
+    if (typeof right !== 'number' && typeof left !== 'number') return undefined
+    return Math.max(0, (typeof right === 'number' ? right : 0) - (typeof left === 'number' ? left : 0))
+  }
+  return ChildRunRecord.shape.usage.parse({
+    promptTokens: difference('promptTokens') ?? 0,
+    completionTokens: difference('completionTokens') ?? 0,
+    totalTokens: difference('totalTokens') ?? 0,
+    ...(difference('cachedTokens') !== undefined ? { cachedTokens: difference('cachedTokens') } : {}),
+    ...(difference('cacheHitTokens') !== undefined ? { cacheHitTokens: difference('cacheHitTokens') } : {}),
+    ...(difference('cacheMissTokens') !== undefined ? { cacheMissTokens: difference('cacheMissTokens') } : {}),
+    ...(difference('turns') !== undefined ? { turns: difference('turns') } : {}),
+    ...(difference('costUsd') !== undefined ? { costUsd: difference('costUsd') } : {}),
+    ...(difference('costCny') !== undefined ? { costCny: difference('costCny') } : {}),
+    ...(difference('cacheSavingsUsd') !== undefined ? { cacheSavingsUsd: difference('cacheSavingsUsd') } : {}),
+    ...(difference('cacheSavingsCny') !== undefined ? { cacheSavingsCny: difference('cacheSavingsCny') } : {}),
+    ...(difference('tokenEconomySavingsTokens') !== undefined
+      ? { tokenEconomySavingsTokens: difference('tokenEconomySavingsTokens') }
+      : {}),
+    ...(difference('tokenEconomySavingsUsd') !== undefined
+      ? { tokenEconomySavingsUsd: difference('tokenEconomySavingsUsd') }
+      : {}),
+    ...(difference('tokenEconomySavingsCny') !== undefined
+      ? { tokenEconomySavingsCny: difference('tokenEconomySavingsCny') }
+      : {}),
+    cacheHitRate: next.cacheHitRate
+  })
+}
+
+export function intersectChildSecurity(
+  stored: ChildSecuritySnapshot,
+  current: ChildSecuritySnapshot
+): ChildSecuritySnapshot {
+  if (resolve(stored.sandboxRoot) !== resolve(current.sandboxRoot)) {
+    throw new Error('resumed child workspace does not match the current parent workspace')
+  }
+  return ChildSecuritySnapshot.parse({
+    sandboxRoot: stored.sandboxRoot,
+    ...intersectOptionalList('allowedModelProviderIds', stored, current),
+    ...intersectOptionalList('allowedModelIds', stored, current),
+    ...intersectOptionalList('allowedProviderIds', stored, current),
+    ...intersectOptionalList('allowedToolNames', stored, current),
+    ...intersectOptionalList('allowedSkillIds', stored, current),
+    ...intersectOptionalPaths('allowedReadPaths', stored, current),
+    ...intersectOptionalPaths('allowedWritePaths', stored, current),
+    ...intersectOptionalList('allowedArtifactIds', stored, current),
+    ...unionOptionalList('blockedProviderIds', stored, current),
+    ...unionOptionalList('blockedToolNames', stored, current),
+    ...unionOptionalList('blockedSkillIds', stored, current),
+    memoryEnabled: stored.memoryEnabled && current.memoryEnabled
+  })
+}
+
+type SecurityListKey =
+  | 'allowedModelProviderIds'
+  | 'allowedModelIds'
+  | 'allowedProviderIds'
+  | 'allowedToolNames'
+  | 'allowedSkillIds'
+  | 'allowedReadPaths'
+  | 'allowedWritePaths'
+  | 'allowedArtifactIds'
+  | 'blockedProviderIds'
+  | 'blockedToolNames'
+  | 'blockedSkillIds'
+
+function intersectOptionalList<K extends SecurityListKey>(
+  key: K,
+  stored: ChildSecuritySnapshot,
+  current: ChildSecuritySnapshot
+): Partial<Pick<ChildSecuritySnapshot, K>> {
+  const left = stored[key] as string[] | undefined
+  const right = current[key] as string[] | undefined
+  const values = left === undefined
+    ? right
+    : right === undefined
+      ? left
+      : left.filter((value) => right.includes(value))
+  return values === undefined ? {} : { [key]: [...new Set(values)] } as Partial<Pick<ChildSecuritySnapshot, K>>
+}
+
+function unionOptionalList<K extends SecurityListKey>(
+  key: K,
+  stored: ChildSecuritySnapshot,
+  current: ChildSecuritySnapshot
+): Partial<Pick<ChildSecuritySnapshot, K>> {
+  const left = stored[key] as string[] | undefined
+  const right = current[key] as string[] | undefined
+  return left === undefined && right === undefined
+    ? {}
+    : { [key]: [...new Set([...(left ?? []), ...(right ?? [])])] } as Partial<Pick<ChildSecuritySnapshot, K>>
+}
+
+function intersectOptionalPaths<K extends 'allowedReadPaths' | 'allowedWritePaths'>(
+  key: K,
+  stored: ChildSecuritySnapshot,
+  current: ChildSecuritySnapshot
+): Partial<Pick<ChildSecuritySnapshot, K>> {
+  const left = stored[key]
+  const right = current[key]
+  if (left === undefined) {
+    return right === undefined ? {} : { [key]: [...new Set(right)] } as Partial<Pick<ChildSecuritySnapshot, K>>
+  }
+  if (right === undefined) return { [key]: [...new Set(left)] } as Partial<Pick<ChildSecuritySnapshot, K>>
+  const values = left.flatMap((storedPath) => right.flatMap((currentPath) => {
+    const storedAbsolute = securityPath(storedPath, stored.sandboxRoot)
+    const currentAbsolute = securityPath(currentPath, current.sandboxRoot)
+    if (pathContains(storedAbsolute, currentAbsolute)) return [currentPath]
+    if (pathContains(currentAbsolute, storedAbsolute)) return [storedPath]
+    return []
+  }))
+  return { [key]: [...new Set(values)] } as Partial<Pick<ChildSecuritySnapshot, K>>
+}
+
+function securityPath(path: string, sandboxRoot: string): string {
+  return isAbsolute(path) ? resolve(path) : resolve(sandboxRoot, path)
+}
+
+function pathContains(parent: string, candidate: string): boolean {
+  const outside = relative(parent, candidate)
+  return outside === '' || (!outside.startsWith('..') && !isAbsolute(outside))
 }
 
 export function isNotFound(error: unknown): boolean {

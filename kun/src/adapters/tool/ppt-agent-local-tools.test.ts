@@ -76,6 +76,7 @@ describe('PPT agent local tools', () => {
         output: 'deck.pptx',
         exporter: 'local-wasm-patched',
         slides: 1,
+        editableSlides: 1,
         fadeTransitions: 1,
         transition: 'fade',
         validated: true
@@ -84,6 +85,43 @@ describe('PPT agent local tools', () => {
     const pptx = await readFile(join(root, 'deck.pptx'))
     expect(pptx.length).toBeGreaterThan(1_000)
     expect(pptx.subarray(0, 2).toString()).toBe('PK')
+  }, 30_000)
+
+  it('rejects a deck page flattened into one full-slide raster image', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-ppt-editable-check-'))
+    roots.push(root)
+    await Promise.all([
+      mkdir(join(root, 'pages')),
+      mkdir(join(root, 'media'))
+    ])
+    await writeFile(join(root, 'media', 'flattened.png'), Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z4QAAAABJRU5ErkJggg==',
+      'base64'
+    ))
+    await writeFile(join(root, 'deck.pptd'), [
+      'version: v2',
+      'title: Flattened deck',
+      'size: [960, 540]',
+      'pages:',
+      '  - pages/01.page',
+      ''
+    ].join('\n'))
+    await writeFile(join(root, 'pages', '01.page'), [
+      'pageType: cover',
+      'elements:',
+      '  - elementId: flattened',
+      '    elementType: image',
+      '    bounds: [0, 0, 960, 540]',
+      '    src: "media/flattened.png"',
+      ''
+    ].join('\n'))
+    const tool = buildPptAgentLocalTools({
+      toolchainDirectory: () => toolchain
+    }).find((candidate) => candidate.name === PPT_EXPORT_TOOL_NAME)!
+
+    const result = await tool.execute({ input: 'deck.pptd', output: 'deck.pptx' }, context(root))
+    expect(result).toMatchObject({ isError: true })
+    expect(JSON.stringify(result.output)).toContain('contains only raster image content')
   }, 30_000)
 
   it('enforces workspace paths and does not replace output without force', async () => {
@@ -318,6 +356,16 @@ describe('PPT agent local tools', () => {
     }, context(root))
     expect(invalidPath).toMatchObject({ isError: true })
     expect(JSON.stringify(invalidPath.output)).toContain('imagePath must come from generate_image')
+
+    const duplicateIds = await tool.execute({
+      parentThreadId: 'thr_parent', projectDir: 'deck-3', deckTitle: 'Deck', pageCount: 2,
+      slides: [
+        { slideId: 'duplicate', title: 'One', prompt: 'One', error: 'failed' },
+        { slideId: 'duplicate', title: 'Two', prompt: 'Two', error: 'failed' }
+      ]
+    }, context(root))
+    expect(duplicateIds).toMatchObject({ isError: true })
+    expect(JSON.stringify(duplicateIds.output)).toContain('slideId must be omitted for an initial review')
   })
 
   it('reads only bounded Markdown from the bundled reference directory', async () => {

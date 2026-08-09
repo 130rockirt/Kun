@@ -38,10 +38,10 @@ import { AtomicJsonFile, isManagerAtomicJsonPath } from '../extensions/atomic-js
 import { withManagerDataMutex } from '../manager/data-mutex.js'
 import {
   ChildRunRecord,
+  ChildSecuritySnapshot,
   type ChildReturnFormat,
   type ChildRunExecutor,
-  type ChildRunLifecycleMetadata,
-  type ChildSecuritySnapshot
+  type ChildRunLifecycleMetadata
 } from './delegation-runtime-contracts.js'
 import { DelegationRuntimeRun } from './delegation-runtime-run.js'
 import type { ChildExecutionState } from './delegation-runtime-base.js'
@@ -56,9 +56,11 @@ import {
   errorMessage,
   executeWithParentSignal,
   fingerprintProfile,
+  intersectChildSecurity,
   isNotFound,
   normalizeInheritedReasoningEffort,
   notifyLifecycle,
+  persistedReviewIdentityError,
   resolveChildModelSelection,
   sameChildActivity,
   sameModelRoute
@@ -70,6 +72,10 @@ export class DelegationRuntime extends DelegationRuntimeRun {
     parentThreadId: string
     parentTurnId: string
     prompt: string
+    expectedProfile?: string
+    expectedWorkflowId?: string
+    /** Current parent boundary; the resumed child receives its intersection with the stored snapshot. */
+    security?: ChildSecuritySnapshot
     signal: AbortSignal
     onQueued?: (childId: string, profile?: string, metadata?: ChildRunLifecycleMetadata) => Promise<void> | void
     onRunning?: (childId: string, profile?: string, metadata?: ChildRunLifecycleMetadata) => Promise<void> | void
@@ -90,6 +96,9 @@ export class DelegationRuntime extends DelegationRuntimeRun {
     parentThreadId: string
     parentTurnId: string
     prompt: string
+    expectedProfile?: string
+    expectedWorkflowId?: string
+    security?: ChildSecuritySnapshot
     signal: AbortSignal
     onQueued?: (childId: string, profile?: string, metadata?: ChildRunLifecycleMetadata) => Promise<void> | void
     onRunning?: (childId: string, profile?: string, metadata?: ChildRunLifecycleMetadata) => Promise<void> | void
@@ -102,12 +111,26 @@ export class DelegationRuntime extends DelegationRuntimeRun {
     if (previous.status === 'queued' || previous.status === 'running') {
       throw new Error(`child run ${input.childId} is still running`)
     }
+    if (input.expectedProfile && previous.profile !== input.expectedProfile) {
+      throw new Error(`child run ${input.childId} is not a ${input.expectedProfile} child`)
+    }
+    if (input.expectedWorkflowId) {
+      const reviewIdentityError = persistedReviewIdentityError(
+        previous.reviewBundle,
+        previous.id,
+        input.expectedWorkflowId
+      )
+      if (reviewIdentityError) throw new Error(reviewIdentityError)
+    }
     const profileSnapshot = previous.profileSnapshot
-    const security = previous.security
-    const workspace = previous.workspace
-    if (!profileSnapshot || !security || !workspace) {
+    const storedSecurity = previous.security
+    if (!profileSnapshot || !storedSecurity || !previous.workspace) {
       throw new Error(`child run ${input.childId} lacks a resumable security/profile snapshot`)
     }
+    const security = input.security
+      ? intersectChildSecurity(storedSecurity, ChildSecuritySnapshot.parse(input.security))
+      : storedSecurity
+    const workspace = security.sandboxRoot
     if (input.signal.aborted) throw new Error('child resume aborted before start')
 
     const queuedAt = this.now()
@@ -117,13 +140,11 @@ export class DelegationRuntime extends DelegationRuntimeRun {
       parentTurnId: input.parentTurnId,
       status: 'queued',
       summary: undefined,
-      reviewBundle: undefined,
       evidence: undefined,
       error: undefined,
       activity: undefined,
       detached: undefined,
       queuedMs: undefined,
-      durationMs: undefined,
       startedAt: undefined,
       resumeCount: (previous.resumeCount ?? 0) + 1,
       lastResumeAt: queuedAt,

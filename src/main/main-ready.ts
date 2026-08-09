@@ -47,7 +47,10 @@ export function startMainApp(): void {
     const { initial } = services
     registerMainIpc(services)
 
-    createWindow({ suppressInitialShow: shouldStartHidden(initial) })
+    createWindow({
+      suppressInitialShow: shouldStartHidden(initial),
+      useSystemTitleBar: initial.appBehavior.useSystemTitleBar
+    })
     void maybePromptCliInstall(() => mainState.mainWindow).catch((error) => {
       console.warn('[kun-gui] CLI install prompt failed:', error)
     })

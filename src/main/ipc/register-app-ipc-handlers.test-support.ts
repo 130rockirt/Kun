@@ -65,6 +65,14 @@ const protectedProviderMocks = vi.hoisted(() => ({
     models: [{ id: 'cursor-model', displayName: 'Cursor Model' }]
   }))
 }))
+const telegramMocks = vi.hoisted(() => ({
+  verifyTelegramBotToken: vi.fn(async () => ({
+    ok: true as const,
+    botId: 123,
+    botUsername: 'kun_test_bot',
+    botFirstName: 'Kun'
+  }))
+}))
 
 vi.mock('electron', () => ({
   app: {
@@ -126,6 +134,10 @@ vi.mock('../claude-subscription-models', async () => ({
 vi.mock('../cursor-subscription-models', async () => ({
   ...await vi.importActual<typeof import('../cursor-subscription-models')>('../cursor-subscription-models'),
   discoverCursorSubscription: protectedProviderMocks.discoverCursorSubscription
+}))
+
+vi.mock('../telegram-runtime', () => ({
+  verifyTelegramBotToken: telegramMocks.verifyTelegramBotToken
 }))
 
 export function settings(): AppSettingsV1 {
@@ -311,6 +323,7 @@ export function resetAppIpcHandlerTestState(): void {
     protectedProviderMocks.probeClaudeSubscription.mockClear()
     protectedProviderMocks.fetchSdkModels.mockClear()
     protectedProviderMocks.discoverCursorSubscription.mockClear()
+    telegramMocks.verifyTelegramBotToken.mockClear()
 }
 
 export function cleanupAppIpcHandlerTestState(): void {
@@ -327,6 +340,10 @@ export function getUiPluginMocks(): typeof uiPluginMocks {
 
 export function getProtectedProviderMocks(): typeof protectedProviderMocks {
   return protectedProviderMocks
+}
+
+export function getTelegramMocks(): typeof telegramMocks {
+  return telegramMocks
 }
 
 export {

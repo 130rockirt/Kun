@@ -99,6 +99,11 @@ export type ClawImWeixinPlatformCredentialV1 = {
   createdAt: string
 }
 
+export type ClawImTelegramProxyV1 = {
+  enabled: boolean
+  url: string
+}
+
 export type ClawImTelegramPlatformCredentialV1 = {
   kind: 'telegram'
   botToken: string
@@ -109,6 +114,8 @@ export type ClawImTelegramPlatformCredentialV1 = {
   allowedChatIds: string
   /** Bot username resolved via getMe, e.g. "my_kun_bot". Cosmetic only. */
   botUsername?: string
+  /** Optional explicit proxy used only for this Telegram Bot connection. */
+  proxy?: ClawImTelegramProxyV1
   createdAt: string
 }
 

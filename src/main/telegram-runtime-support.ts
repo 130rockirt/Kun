@@ -1,5 +1,6 @@
 import { net } from 'electron'
 import type { ClawImTelegramConnectErrorCode } from '../shared/kun-gui-api'
+import { fetchWithOptionalProxy } from './proxy-fetch'
 import type { JsonSettingsStore } from './settings-store'
 
 export const TELEGRAM_API_BASE = 'https://api.telegram.org'
@@ -14,10 +15,18 @@ export const BACKOFF_JITTER_MS = 250
 /** Telegram chat types that represent multi-party conversations. */
 export const GROUP_CHAT_TYPES = new Set(['group', 'supergroup', 'channel'])
 
-export function telegramFetch(input: string, init?: RequestInit): Promise<Response> {
+export function telegramFetch(input: string, init?: RequestInit, proxyUrl = ''): Promise<Response> {
+  if (proxyUrl) return fetchWithOptionalProxy(input, init, proxyUrl)
   return typeof net.fetch === 'function'
     ? net.fetch(input, init)
     : fetch(input, init)
+}
+
+export function sanitizeTelegramTransportError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error)
+  return message
+    .replace(/(https:\/\/api\.telegram\.org\/(?:file\/)?bot)[^/\s]+/gi, '$1[REDACTED]')
+    .replace(/\b((?:https?|socks(?:4|5)?):\/\/)[^@\s/]+@/gi, '$1[REDACTED]@')
 }
 
 export type TelegramLogFn = (category: string, message: string, detail?: unknown) => void

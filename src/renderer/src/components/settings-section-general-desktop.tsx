@@ -81,7 +81,7 @@ function CliCommandSettingsCard({ locale }: { locale: string }): ReactElement {
 }
 
 export function GeneralDesktopSettingsPanel({ view }: { view: Record<string, any> }): ReactElement {
-  const { t, form, update, selectControlClass, logPath, logDirOpenError, setLogDirOpenError, compactHomePath, activeTab, desktopSubTab, setDesktopSubTab, openAtLoginSupported, startMinimizedSupported, desktopBehavior, closeAction, closeActionOptions } = view
+  const { t, form, update, selectControlClass, logPath, logDirOpenError, setLogDirOpenError, compactHomePath, activeTab, desktopSubTab, setDesktopSubTab, openAtLoginSupported, startMinimizedSupported, systemTitleBarSupported, desktopBehavior, closeAction, closeActionOptions } = view
   return (
     <>
       <SettingsTabPanel
@@ -173,6 +173,18 @@ export function GeneralDesktopSettingsPanel({ view }: { view: Record<string, any
               </select>
             }
           />
+          {systemTitleBarSupported ? (
+            <SettingRow
+              title={t('desktopUseSystemTitleBar')}
+              description={t('desktopUseSystemTitleBarDesc')}
+              control={
+                <Toggle
+                  checked={desktopBehavior.useSystemTitleBar === true}
+                  onChange={(v) => update({ appBehavior: { useSystemTitleBar: v } })}
+                />
+              }
+            />
+          ) : null}
           </SettingsCard>
         </SettingsTabPanel>
         <SettingsTabPanel

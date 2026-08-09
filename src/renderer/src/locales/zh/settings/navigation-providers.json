@@ -292,6 +292,8 @@
   "desktopStartMinimized": "开机后最小化",
   "desktopStartMinimizedDesc": "Windows 开机启动时隐藏主窗口。",
   "desktopStartMinimizedDisabledDesc": "先开启开机自动启动。此选项用于 Windows 启动。",
+  "desktopUseSystemTitleBar": "使用系统原生标题栏",
+  "desktopUseSystemTitleBarDesc": "由 Linux 桌面环境或窗口管理器绘制标题栏。重启 Kun 后生效。",
   "desktopCloseToTray": "关闭时最小化到托盘",
   "desktopCloseToTrayDesc": "关闭窗口时隐藏到系统托盘。",
   "desktopCloseAction": "窗口关闭行为",

@@ -211,6 +211,7 @@ describe('JsonSettingsStore', () => {
     expect(loaded.appBehavior).toEqual({
       openAtLogin: false,
       startMinimized: false,
+      useSystemTitleBar: false,
       closeAction: 'ask',
       closeToTray: false
     })

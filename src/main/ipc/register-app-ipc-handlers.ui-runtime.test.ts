@@ -1,6 +1,7 @@
 import {
   cleanupAppIpcHandlerTestState,
   getAppIpcElectronMock,
+  getTelegramMocks,
   getUiPluginMocks,
   handlers,
   registerOptions,
@@ -32,6 +33,7 @@ import {
 } from './register-app-ipc-handlers'
 
 const electronMock = getAppIpcElectronMock()
+const telegramMocks = getTelegramMocks()
 const uiPluginMocks = getUiPluginMocks()
 
 describe('registerAppIpcHandlers UI plugins and runtime', () => {
@@ -269,6 +271,7 @@ describe('registerAppIpcHandlers UI plugins and runtime', () => {
             botToken: '123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi',
             allowedChatIds: '123456789',
             botUsername: 'kun_test_bot',
+            proxy: { enabled: true, url: 'socks5://127.0.0.1:1080' },
             createdAt: '2026-06-19T00:00:00.000Z'
           },
           conversations: [],
@@ -281,6 +284,31 @@ describe('registerAppIpcHandlers UI plugins and runtime', () => {
     const handler = handlers.get('settings:set')
     await expect(handler?.({}, payload)).resolves.toEqual(settings())
     expect(applySettingsPatch).toHaveBeenCalledWith(payload)
+  })
+
+  it('passes Telegram proxy settings through the token verification IPC boundary', async () => {
+    registerAppIpcHandlers(registerOptions())
+    const payload = {
+      botToken: '123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi',
+      allowedChatIds: '123456789',
+      proxy: { enabled: true, url: 'socks5://user:pass@127.0.0.1:1080' }
+    }
+
+    await expect(handlers.get('claw:im-install:telegram-token')?.({}, payload)).resolves.toMatchObject({
+      ok: true,
+      botUsername: 'kun_test_bot'
+    })
+    expect(telegramMocks.verifyTelegramBotToken).toHaveBeenCalledWith(payload.botToken, payload.proxy)
+  })
+
+  it('rejects oversized Telegram proxy URLs before token verification', async () => {
+    registerAppIpcHandlers(registerOptions())
+
+    await expect(handlers.get('claw:im-install:telegram-token')?.({}, {
+      botToken: '123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi',
+      proxy: { enabled: true, url: `socks5://${'a'.repeat(5_000)}` }
+    })).rejects.toThrow(/Invalid payload for claw:im-install:telegram-token/)
+    expect(telegramMocks.verifyTelegramBotToken).not.toHaveBeenCalled()
   })
 
   it('restarts the managed runtime through the restart IPC handler', async () => {

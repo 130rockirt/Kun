@@ -47,7 +47,6 @@ import {
   type ChildSecuritySnapshot
 } from './delegation-runtime-contracts.js'
 import {
-  addChildUsage,
   aggregateChildRuns,
   childActivityFromEvent,
   childContractError,
@@ -59,6 +58,7 @@ import {
   formatDetachedChildNotice,
   notifyLifecycle,
   sameChildActivity,
+  subtractChildUsage,
   toUsageSnapshot
 } from './delegation-runtime-support.js'
 
@@ -397,8 +397,11 @@ export abstract class DelegationRuntimeBase {
     return this.nextChildSeq(record.id)
   }
 
-  protected recordExternalUsage(record: ChildRunRecord): void {
-    const usage = toUsageSnapshot(record.usage)
+  protected recordExternalUsage(
+    record: ChildRunRecord,
+    childUsage: ChildRunRecord['usage'] = record.usage
+  ): void {
+    const usage = toUsageSnapshot(childUsage)
     if (usage.totalTokens <= 0 && usage.costUsd === undefined && usage.costCny === undefined) return
     this.options.recordExternalUsage?.(record.parentThreadId, usage)
   }
@@ -501,6 +504,7 @@ export abstract class DelegationRuntimeBase {
     const unsubscribeActivity = this.options.eventBus?.subscribe(record.id, (event) => {
       void this.projectChildActivity(args.state, event)
     })
+    const usageBeforeRun = record.usage
     try {
       const executor: ChildRunExecutor = this.options.executor ?? defaultExecutor
       const result = await executeWithParentSignal(args.signal, (signal) => executor({
@@ -541,17 +545,26 @@ export abstract class DelegationRuntimeBase {
         ...current,
         status: contractError ? 'failed' : 'completed',
         summary: result.summary,
-        reviewBundle: result.reviewBundle,
+        reviewBundle: result.reviewBundle ?? current.reviewBundle,
+        reviewBundleParentTurnId: result.reviewBundle !== undefined
+          ? args.parentTurnId
+          : current.reviewBundleParentTurnId,
+        deckArtifact: result.deckArtifact ?? current.deckArtifact,
+        deckArtifactParentTurnId: result.deckArtifact !== undefined
+          ? args.parentTurnId
+          : current.deckArtifactParentTurnId,
         evidence: result.evidence,
-        usage: addChildUsage(current.usage, result.usage),
+        // ChildRunExecutor reports cumulative usage for the persistent side
+        // thread, so adding it would double-count turns completed before resume.
+        usage: result.usage ?? current.usage,
         toolInvocations: result.toolInvocations,
         prefixReused: result.prefixReused,
         inheritedHistoryItems: result.inheritedHistoryItems,
         ...(contractError ? { error: contractError } : {}),
-        durationMs: elapsedMs(startedAt, finishedAt),
+        durationMs: (current.durationMs ?? 0) + elapsedMs(startedAt, finishedAt),
         updatedAt: finishedAt
       }))
-      this.recordExternalUsage(record)
+      this.recordExternalUsage(record, subtractChildUsage(record.usage, usageBeforeRun))
       return record
     } catch (error) {
       const finishedAt = this.now()
@@ -559,7 +572,7 @@ export abstract class DelegationRuntimeBase {
         ...current,
         status: args.signal.aborted ? 'aborted' : 'failed',
         error: errorMessage(error),
-        durationMs: elapsedMs(startedAt, finishedAt),
+        durationMs: (current.durationMs ?? 0) + elapsedMs(startedAt, finishedAt),
         updatedAt: finishedAt
       }))
       return record

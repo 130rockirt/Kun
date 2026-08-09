@@ -2,7 +2,13 @@ import { createHash } from 'node:crypto'
 import { mkdir, readFile, realpath, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
-import type { AppSettingsV1, ClawImChannelV1 } from '../shared/app-settings'
+import {
+  resolveClawImTelegramProxyUrl,
+  validateClawImTelegramProxy,
+  type AppSettingsV1,
+  type ClawImChannelV1,
+  type ClawImTelegramProxyV1
+} from '../shared/app-settings'
 import {
   BACKOFF_JITTER_MS,
   inferImageExtension,
@@ -13,6 +19,7 @@ import {
   parseAllowedChatIds,
   POLL_HTTP_TIMEOUT_MS,
   POLL_TIMEOUT_SECONDS,
+  sanitizeTelegramTransportError,
   senderDisplayName,
   sleep,
   splitForTelegram,
@@ -29,7 +36,10 @@ import {
   type TelegramVerifyResult
 } from './telegram-runtime-support'
 
-export { parseAllowedChatIds } from './telegram-runtime-support'
+export {
+  parseAllowedChatIds,
+  sanitizeTelegramTransportError
+} from './telegram-runtime-support'
 export type {
   TelegramInboundPayload,
   TelegramLogFn,
@@ -49,6 +59,7 @@ class TelegramChannel {
     private readonly channelId: string,
     private readonly token: string,
     private readonly allowedChatIds: ReadonlySet<number>,
+    private readonly proxyUrl: string,
     private readonly deps: { logError: TelegramLogFn; onInbound: (payload: TelegramInboundPayload) => void | Promise<void> }
   ) {}
 
@@ -64,7 +75,7 @@ class TelegramChannel {
       if (!this.running) return
       this.deps.logError('claw-telegram', 'Telegram poll loop stopped unexpectedly.', {
         channelId: this.channelId,
-        message: error instanceof Error ? error.message : String(error)
+        message: sanitizeTelegramTransportError(error)
       })
     })
     this.pollTask = task
@@ -133,13 +144,13 @@ class TelegramChannel {
         method: 'POST',
         body: form,
         signal: this.abort?.signal
-      })
+      }, this.proxyUrl)
       const data = (await res.json().catch(() => null)) as TelegramApiResponse<{ message_id: number }> | null
       if (!data) return { ok: false, message: `HTTP ${res.status}: empty body` }
       if (!data.ok) return { ok: false, message: data.description || `HTTP ${res.status}` }
       return { ok: true, messageId: data.result?.message_id }
     } catch (error) {
-      return { ok: false, message: error instanceof Error ? error.message : String(error) }
+      return { ok: false, message: sanitizeTelegramTransportError(error) }
     }
   }
 
@@ -222,7 +233,7 @@ class TelegramChannel {
       this.deps.logError('claw-telegram', 'Inbound handler threw for a Telegram update.', {
         channelId: this.channelId,
         chatId: payload.chatId,
-        message: error instanceof Error ? error.message : String(error)
+        message: sanitizeTelegramTransportError(error)
       })
     })
     this.inboundTasks.add(task)
@@ -273,7 +284,7 @@ class TelegramChannel {
       const signal = this.abort
         ? AbortSignal.any([this.abort.signal, timeoutSignal])
         : timeoutSignal
-      const res = await telegramFetch(downloadUrl, { signal })
+      const res = await telegramFetch(downloadUrl, { signal }, this.proxyUrl)
       if (!res.ok) {
         this.deps.logError('claw-telegram', 'Telegram file download returned a non-OK status.', {
           channelId: this.channelId,
@@ -303,7 +314,7 @@ class TelegramChannel {
       this.deps.logError('claw-telegram', 'Failed to download an inbound Telegram photo.', {
         channelId: this.channelId,
         chatId,
-        message: error instanceof Error ? error.message : String(error)
+        message: sanitizeTelegramTransportError(error)
       })
       return undefined
     }
@@ -327,7 +338,7 @@ class TelegramChannel {
     this.consecutiveErrors += 1
     this.deps.logError('claw-telegram', 'Telegram poll loop caught an exception.', {
       channelId: this.channelId,
-      message: error instanceof Error ? error.message : String(error)
+      message: sanitizeTelegramTransportError(error)
     })
     await sleep(this.nextBackoff(), this.abort?.signal)
   }
@@ -351,7 +362,7 @@ class TelegramChannel {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
         signal: signal ?? this.abort?.signal
-      })
+      }, this.proxyUrl)
       const data = (await res.json().catch(() => null)) as TelegramApiResponse<T> | null
       if (!data) {
         return { ok: false, message: `HTTP ${res.status}: empty body` }
@@ -370,7 +381,7 @@ class TelegramChannel {
         // Aborted during shutdown — not a real error.
         return { ok: false, message: 'aborted' }
       }
-      return { ok: false, message: error instanceof Error ? error.message : String(error) }
+      return { ok: false, message: sanitizeTelegramTransportError(error) }
     }
   }
 }
@@ -393,7 +404,10 @@ export type TelegramRuntime = {
  * so the IPC handler can validate user input before a channel is ever written
  * to the settings store.
  */
-export async function verifyTelegramBotToken(botToken: string): Promise<TelegramVerifyResult> {
+export async function verifyTelegramBotToken(
+  botToken: string,
+  proxy: ClawImTelegramProxyV1 = { enabled: false, url: '' }
+): Promise<TelegramVerifyResult> {
   const token = botToken.trim()
   if (!token || !/^\d+:[A-Za-z0-9_-]{30,}$/.test(token)) {
     return {
@@ -402,9 +416,18 @@ export async function verifyTelegramBotToken(botToken: string): Promise<Telegram
       message: 'Invalid token format. Expected "<numeric-id>:<35+ chars>".'
     }
   }
+  const proxyValidation = validateClawImTelegramProxy(proxy)
+  if (!proxyValidation.ok) {
+    return {
+      ok: false,
+      code: 'invalid_proxy',
+      message: proxyValidation.message
+    }
+  }
+  const proxyUrl = proxyValidation.proxy.enabled ? proxyValidation.proxy.url : ''
   const url = `${TELEGRAM_API_BASE}/bot${token}/getMe`
   try {
-    const res = await telegramFetch(url, { signal: AbortSignal.timeout(15_000) })
+    const res = await telegramFetch(url, { signal: AbortSignal.timeout(15_000) }, proxyUrl)
     const data = (await res.json().catch(() => null)) as TelegramApiResponse<TelegramBotInfo> | null
     if (!data || !data.ok || !data.result) {
       return {
@@ -423,7 +446,7 @@ export async function verifyTelegramBotToken(botToken: string): Promise<Telegram
     return {
       ok: false,
       code: 'network',
-      message: error instanceof Error ? error.message : String(error)
+      message: sanitizeTelegramTransportError(error)
     }
   }
 }
@@ -436,9 +459,19 @@ export function createTelegramRuntime(deps: TelegramRuntimeDeps): TelegramRuntim
   let stopped = false
   let stopPromise: Promise<void> | null = null
 
-  function resolveTargets(settings: AppSettingsV1): Array<{ channel: ClawImChannelV1; token: string; allowed: Set<number> }> {
+  function resolveTargets(settings: AppSettingsV1): Array<{
+    channel: ClawImChannelV1
+    token: string
+    allowed: Set<number>
+    proxyUrl: string
+  }> {
     if (!settings.claw.enabled || !settings.claw.im.enabled) return []
-    const targets: Array<{ channel: ClawImChannelV1; token: string; allowed: Set<number> }> = []
+    const targets: Array<{
+      channel: ClawImChannelV1
+      token: string
+      allowed: Set<number>
+      proxyUrl: string
+    }> = []
     for (const channel of settings.claw.channels) {
       if (!channel.enabled || channel.provider !== 'telegram') continue
       const credential = channel.platformCredential
@@ -448,15 +481,26 @@ export function createTelegramRuntime(deps: TelegramRuntimeDeps): TelegramRuntim
       targets.push({
         channel,
         token,
-        allowed: parseAllowedChatIds(credential.allowedChatIds)
+        allowed: parseAllowedChatIds(credential.allowedChatIds),
+        proxyUrl: resolveClawImTelegramProxyUrl(credential.proxy)
       })
     }
     return targets
   }
 
-  function buildKey(channel: ClawImChannelV1, token: string, allowed: Set<number>): string {
+  function buildKey(
+    channel: ClawImChannelV1,
+    token: string,
+    allowed: Set<number>,
+    proxyUrl: string
+  ): string {
     const sortedAllowed = [...allowed].sort((a, b) => a - b).join(',')
-    return `${channel.id}|${token}|${sortedAllowed}`
+    const routeFingerprint = createHash('sha256')
+      .update(token)
+      .update('\0')
+      .update(proxyUrl)
+      .digest('hex')
+    return `${channel.id}|${routeFingerprint}|${sortedAllowed}`
   }
 
   async function closeChannel(channelId: string): Promise<void> {
@@ -470,7 +514,7 @@ export function createTelegramRuntime(deps: TelegramRuntimeDeps): TelegramRuntim
   function trackSyncTask(task: Promise<void>): void {
     const tracked = task.catch((error) => {
       deps.logError('claw-telegram', 'Failed to reconcile Telegram channels.', {
-        message: error instanceof Error ? error.message : String(error)
+        message: sanitizeTelegramTransportError(error)
       })
     })
     syncTasks.add(tracked)
@@ -493,7 +537,7 @@ export function createTelegramRuntime(deps: TelegramRuntimeDeps): TelegramRuntim
 
     for (const target of targets) {
       if (stopped || version !== syncVersion) return
-      const nextKey = buildKey(target.channel, target.token, target.allowed)
+      const nextKey = buildKey(target.channel, target.token, target.allowed, target.proxyUrl)
       const currentKey = channelKeys.get(target.channel.id)
       if (channels.has(target.channel.id) && currentKey === nextKey) continue
       if (channels.has(target.channel.id)) {
@@ -504,6 +548,7 @@ export function createTelegramRuntime(deps: TelegramRuntimeDeps): TelegramRuntim
         target.channel.id,
         target.token,
         target.allowed,
+        target.proxyUrl,
         {
           logError: deps.logError,
           onInbound: (payload) => deps.onInbound(payload)
@@ -520,7 +565,7 @@ export function createTelegramRuntime(deps: TelegramRuntimeDeps): TelegramRuntim
       } catch (error) {
         deps.logError('claw-telegram', 'Failed to start a Telegram channel.', {
           channelId: target.channel.id,
-          message: error instanceof Error ? error.message : String(error)
+          message: sanitizeTelegramTransportError(error)
         })
       }
     }

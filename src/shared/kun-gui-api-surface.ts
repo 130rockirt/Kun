@@ -2,6 +2,7 @@ import type {
   AppSettingsPatch,
   AppSettingsV1,
   ClawRunResult,
+  ClawImTelegramProxyV1,
   ClawTaskFromTextResult,
   ClawRuntimeStatus,
   DaemonActionResult,
@@ -20,6 +21,7 @@ import type {
   WorkflowRunResult,
   WorkflowRuntimeStatus
 } from './app-settings'
+import type { DesktopTitleBarMode } from './desktop-title-bar'
 import type { EditorListResult, EditorOpenResult, OpenEditorPathOptions } from './editor'
 import type { GitBranchesResult, GitBranchWorktreesResult, GitWorktreeCheckoutResult } from './git-branches'
 import type { GitCheckpointCreateResult, GitCheckpointRestoreResult } from './git-checkpoint'
@@ -239,6 +241,8 @@ import {
 
 export type KunGuiApi = ExtensionIpcApi & {
   platform: string
+  /** Immutable mode selected before the BrowserWindow and renderer are created. */
+  desktopTitleBarMode: DesktopTitleBarMode
   homeDir: string
   /** Immutable process identity selected before Electron profile locking. */
   appEnvironment: import('./app-environment').AppEnvironmentInfo
@@ -383,7 +387,8 @@ export type KunGuiApi = ExtensionIpcApi & {
   ) => Promise<ClawImInstallPollResult>
   connectTelegramBot: (
     botToken: string,
-    allowedChatIds?: string
+    allowedChatIds?: string,
+    proxy?: ClawImTelegramProxyV1
   ) => Promise<ClawImTelegramConnectResult>
   startCodexAuth: () => Promise<CodexAuthStartResult>
   pollCodexAuth: (deviceCode: string, userCode: string) => Promise<CodexAuthPollResult>

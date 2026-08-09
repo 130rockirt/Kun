@@ -246,6 +246,7 @@ describe('cli', () => {
     expect(manifest.attachments.textFallbackMaxImageDimension).toBe(1280)
     expect(manifest.attachments.textFallbackPreferredMimeType).toBe('image/webp')
     expect(manifest.imageGen.available).toBe(false)
+    expect(manifest.imageGen.supportsReferenceEdit).toBe(false)
     expect(manifest.imageGen.reason).toMatch(/disabled/)
 
     const enabledButMissingProvider = buildRuntimeCapabilityManifest({

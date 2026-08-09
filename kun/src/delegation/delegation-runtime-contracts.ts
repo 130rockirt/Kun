@@ -164,6 +164,12 @@ export const ChildRunRecord = z.object({
   summary: z.string().optional(),
   /** Structured PPT review result captured from the child tool stream. */
   reviewBundle: z.unknown().optional(),
+  /** Parent turn that produced reviewBundle; distinguishes a fresh bundle from the preserved prior revision. */
+  reviewBundleParentTurnId: z.string().min(1).optional(),
+  /** Structured validated PPT export captured from the child tool stream. */
+  deckArtifact: z.unknown().optional(),
+  /** Parent turn that produced deckArtifact. */
+  deckArtifactParentTurnId: z.string().min(1).optional(),
   evidence: z.array(z.string().min(1).max(2_000)).max(32).optional(),
   tokenBudget: z.number().int().positive().optional(),
   /** Legacy persisted field. New child runs do not use wall-clock budgets. */
@@ -255,6 +261,7 @@ export type ChildRunExecutor = (input: {
   prefixReused?: boolean
   inheritedHistoryItems?: number
   reviewBundle?: unknown
+  deckArtifact?: unknown
   evidence?: string[]
 }>
 

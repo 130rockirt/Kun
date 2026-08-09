@@ -164,6 +164,7 @@ export function LaboratorySettingsSection({ ctx }: { ctx: Record<string, any> })
           imageGen={runtimeInfo?.capabilities?.imageGen
             ? {
                 available: runtimeInfo.capabilities.imageGen.available === true,
+                supportsReferenceEdit: runtimeInfo.capabilities.imageGen.supportsReferenceEdit === true,
                 ...(runtimeInfo.capabilities.imageGen.reason ? { reason: runtimeInfo.capabilities.imageGen.reason } : {})
               }
             : undefined}

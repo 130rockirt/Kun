@@ -109,6 +109,19 @@ describe('UiPluginStagePresentation', () => {
     expect(html).not.toContain('dangerouslySetInnerHTML')
   })
 
+  it('applies a normalized user scale to the legacy stage character', () => {
+    const html = renderToStaticMarkup(
+      createElement(UiPluginStagePresentation, {
+        portraitSrc: 'data:image/png;base64,AAAA',
+        presentation,
+        characterScale: 1.65
+      })
+    )
+
+    expect(html).toContain('--kun-ui-plugin-character-user-scale:1.65')
+    expect(html.match(/--kun-ui-plugin-character-user-scale/g)).toHaveLength(1)
+  })
+
   it('renders nothing unless both portrait and presentation are active', () => {
     expect(
       renderToStaticMarkup(
@@ -155,6 +168,26 @@ describe('UiPluginStagePresentation', () => {
     expect(html).not.toContain('dangerouslySetInnerHTML')
   })
 
+  it('applies the user scale only to the scene character and not scene artwork', () => {
+    const html = renderToStaticMarkup(
+      createElement(UiPluginStagePresentation, {
+        portraitSrc: 'data:image/png;base64,AAAA',
+        presentation,
+        scene,
+        characterScale: 0.75,
+        sceneAssets: {
+          assets: {
+            'scene/backdrop.webp': 'data:image/webp;base64,AAAA',
+            'scene/frame.png': 'data:image/png;base64,AAAA'
+          }
+        }
+      })
+    )
+
+    expect(html).toContain('--kun-ui-plugin-character-user-scale:0.75')
+    expect(html.match(/--kun-ui-plugin-character-user-scale/g)).toHaveLength(1)
+  })
+
   it('does not render a scene artwork path when Main did not return a safe raster data URL', () => {
     const html = renderToStaticMarkup(
       createElement(UiPluginStagePresentation, {
@@ -188,6 +221,8 @@ describe('UiPluginStagePresentation', () => {
     expect(css).toContain(".ds-chat-stage[data-terminal-open='true']")
     expect(css).toContain("[data-scene-motion='orbit']")
     expect(css).toContain('@keyframes ds-ui-plugin-scene-sway')
+    expect(css).toContain('scale: var(--kun-ui-plugin-character-user-scale, 1);')
+    expect(css).toContain('calc(-1 * var(--kun-ui-plugin-character-user-scale, 1))')
     expect(css).toContain('@media (prefers-reduced-motion: reduce)')
   })
 

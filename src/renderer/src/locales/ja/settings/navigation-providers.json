@@ -292,6 +292,8 @@
   "desktopStartMinimized": "最小化して開始",
   "desktopStartMinimizedDesc": "Windows ログイン起動中はメイン ウィンドウを非表示にしておきます。",
   "desktopStartMinimizedDisabledDesc": "最初にログイン時に開くを有効にします。このオプションは Windows の起動に適用されます。",
+  "desktopUseSystemTitleBar": "システムのタイトルバーを使用",
+  "desktopUseSystemTitleBarDesc": "Linux のデスクトップ環境またはウィンドウマネージャーにタイトルバーを描画させます。適用するには Kun を再起動してください。",
   "desktopCloseToTray": "トレイに近い",
   "desktopCloseToTrayDesc": "ウィンドウを閉じると、ウィンドウがシステム トレイに表示されなくなります。",
   "desktopCloseAction": "ウィンドウを閉じる動作",

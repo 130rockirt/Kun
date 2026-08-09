@@ -14,6 +14,7 @@ import {
 } from './main-window-renderer-recovery'
 import { logError, logInfo, logWarn } from './logger'
 import { appWindowTitleForFlavor } from '../shared/app-environment'
+import { resolveDesktopTitleBarMode } from '../shared/desktop-title-bar'
 import {
   __dirname,
   appEnvironment,
@@ -34,10 +35,17 @@ function resolveMainRendererUrl(): string {
   return developmentRendererUrl() ?? pathToFileURL(join(__dirname, '../renderer/index.html')).href
 }
 
-export function createWindow(options: { suppressInitialShow?: boolean } = {}): void {
+export function createWindow(options: {
+  suppressInitialShow?: boolean
+  useSystemTitleBar?: boolean
+} = {}): void {
   traceStartup('createWindow:start')
   const preloadPath = resolvePreloadPath(__dirname)
-  const usesDesktopTitleBar = process.platform === 'win32' || process.platform === 'linux'
+  const desktopTitleBarMode = resolveDesktopTitleBarMode(
+    process.platform,
+    options.useSystemTitleBar === true
+  )
+  const usesCustomDesktopTitleBar = desktopTitleBarMode === 'custom'
   const windowTitle = appWindowTitleForFlavor(appEnvironment.flavor)
   const window = new BrowserWindow({
     width: 1280,
@@ -46,9 +54,9 @@ export function createWindow(options: { suppressInitialShow?: boolean } = {}): v
     minHeight: 640,
     title: windowTitle,
     icon: appIcon.isEmpty() ? undefined : appIcon,
-    titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : usesDesktopTitleBar ? 'hidden' : 'default',
+    titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : usesCustomDesktopTitleBar ? 'hidden' : 'default',
     trafficLightPosition: process.platform === 'darwin' ? { x: 31, y: 22 } : undefined,
-    autoHideMenuBar: usesDesktopTitleBar,
+    autoHideMenuBar: usesCustomDesktopTitleBar || process.platform === 'linux',
     show: false,
     webPreferences: {
       preload: preloadPath,
@@ -58,7 +66,8 @@ export function createWindow(options: { suppressInitialShow?: boolean } = {}): v
       // Pass the home dir to the sandboxed preload (it can't require node:os).
       additionalArguments: [
         `--kun-home-dir=${homedir()}`,
-        `--kun-app-environment=${encodeURIComponent(JSON.stringify(appEnvironment))}`
+        `--kun-app-environment=${encodeURIComponent(JSON.stringify(appEnvironment))}`,
+        `--kun-desktop-title-bar-mode=${desktopTitleBarMode}`
       ]
     }
   })
@@ -75,7 +84,7 @@ export function createWindow(options: { suppressInitialShow?: boolean } = {}): v
   window.webContents.on('will-navigate', preventUntrustedNavigation)
   window.webContents.on('will-redirect', preventUntrustedNavigation)
   mainState.bindExtensionMainWindow?.(window)
-  if (usesDesktopTitleBar) {
+  if (usesCustomDesktopTitleBar) {
     window.setMenu(null)
     window.setMenuBarVisibility(false)
   }

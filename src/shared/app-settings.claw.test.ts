@@ -44,12 +44,14 @@ import {
   normalizeComposerSendKey,
   isComposerSendHotkey,
   normalizeGitBranchPrefix,
+  normalizeClawImPlatformCredential,
   applyGitBranchPrefix,
   parseClawUserPromptForDisplay,
   inferModelEndpointFormatFromUrl,
   kunToolPermissionModeFromSettings,
   kunToolPermissionModeSettings,
   normalizeScheduleSettings,
+  validateClawImTelegramProxy,
   resolveKunRuntimeSettings,
   resolveWriteInlineCompletionApiKey,
   resolveWriteInlineCompletionBaseUrl,
@@ -115,6 +117,58 @@ function clawChannel(provider: ClawImProvider, label: string, name = label): Cla
 }
 
 describe('claw settings', () => {
+  it('normalizes Telegram proxies while keeping legacy credentials compatible', () => {
+    const legacy = normalizeClawImPlatformCredential({
+      kind: 'telegram',
+      botToken: '123:token',
+      allowedChatIds: '',
+      createdAt: '2026-08-09T00:00:00.000Z'
+    })
+    expect(legacy).toMatchObject({
+      kind: 'telegram',
+      proxy: { enabled: false, url: '' }
+    })
+
+    const proxied = normalizeClawImPlatformCredential({
+      kind: 'telegram',
+      botToken: '123:token',
+      allowedChatIds: '',
+      proxy: { enabled: true, url: '  socks5://user:pass@127.0.0.1:1080  ' },
+      createdAt: '2026-08-09T00:00:00.000Z'
+    })
+    expect(proxied).toMatchObject({
+      kind: 'telegram',
+      proxy: { enabled: true, url: 'socks5://user:pass@127.0.0.1:1080' }
+    })
+
+    const invalid = normalizeClawImPlatformCredential({
+      kind: 'telegram',
+      botToken: '123:token',
+      allowedChatIds: '',
+      proxy: { enabled: true, url: 'ftp://127.0.0.1:21' }
+    })
+    expect(invalid).toMatchObject({
+      kind: 'telegram',
+      proxy: { enabled: false, url: 'ftp://127.0.0.1:21' }
+    })
+  })
+
+  it.each(['http', 'https', 'socks', 'socks4', 'socks5'])(
+    'accepts %s Telegram proxy URLs',
+    (scheme) => {
+      expect(validateClawImTelegramProxy({
+        enabled: true,
+        url: `${scheme}://127.0.0.1:1080`
+      })).toMatchObject({ ok: true })
+    }
+  )
+
+  it('rejects enabled empty, relative, and unsupported Telegram proxies', () => {
+    for (const url of ['', '127.0.0.1:1080', 'ftp://127.0.0.1:21']) {
+      expect(validateClawImTelegramProxy({ enabled: true, url })).toMatchObject({ ok: false })
+    }
+  })
+
   it('stores the WeChat bridge URL in Claw IM settings', () => {
     const defaults = defaultClawSettings()
     expect(defaults.im.weixinBridgeUrl).toBe(DEFAULT_WEIXIN_BRIDGE_RPC_URL)

@@ -28,6 +28,7 @@ html[data-ui-plugin-presentation='on'][data-ui-plugin-character-anchor='bottom-r
 .ds-ui-plugin-character {
   display: block;
   box-sizing: border-box;
+  scale: var(--kun-ui-plugin-character-user-scale, 1);
   width: clamp(16rem, 28cqw, 27rem);
   max-width: 58%;
   max-height: 100%;

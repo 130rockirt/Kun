@@ -1,4 +1,4 @@
-import type { DelegationRuntime } from '../../delegation/delegation-runtime.js'
+import type { ChildSecuritySnapshot, DelegationRuntime } from '../../delegation/delegation-runtime.js'
 import {
   PPT_AGENT_PROFILE,
   PPT_AGENT_PROMPT_PREAMBLE
@@ -10,6 +10,7 @@ import {
 import type { ToolExecutionUpdate, ToolHostContext } from '../../ports/tool-host.js'
 import type { CapabilityToolProvider } from './capability-registry.js'
 import { LocalToolHost } from './local-tool-host.js'
+import { PptReviewBundleV1 } from '../../ppt/ppt-review-manifest.js'
 
 export const PPT_AGENT_TOOL_NAME = 'ppt_agent' as const
 export const PPT_AGENT_PROVIDER_ID = 'ppt-agent' as const
@@ -112,7 +113,7 @@ export function buildPptAgentToolProvider(
               deliverable: {
                 type: 'string',
                 enum: ['pptx', 'pptd-only'],
-                description: 'Optional deliverable preference. Defaults to PPTD project + locally exported .pptx.'
+                description: 'Final deliverable preference. Defaults to PPTD + PPTX on start; repeat the returned value on every review follow-up.'
               }
             },
             required: ['title', 'query'],
@@ -153,12 +154,36 @@ export function buildPptAgentToolProvider(
             const childId = stringValue(args.childId)
             const workflowId = stringValue(args.workflowId)
             const reviewContext = args.reviewContext
+            const deliverable = args.deliverable === 'pptd-only' ? 'pptd-only' as const : 'pptx' as const
             if (action !== 'start' && (!childId || !workflowId)) {
               return { output: { error: 'childId and workflowId are required for PPT review follow-ups' }, isError: true }
             }
+            if (action !== 'start' && args.deliverable !== 'pptx' && args.deliverable !== 'pptd-only') {
+              return { output: { error: 'deliverable must be repeated for PPT review follow-ups' }, isError: true }
+            }
+            if (
+              (action === 'revise_previews' || action === 'retry_failed') &&
+              resolvedCfg.imageGenAvailable !== true
+            ) {
+              return {
+                output: {
+                  childId,
+                  workflowId,
+                  phase: 'failed_recoverable',
+                  error: resolvedCfg.imageGenReason?.trim() || 'image generation is currently unavailable'
+                },
+                isError: true
+              }
+            }
             const fallbackNotice = imageFirstFallbackNotice(resolvedCfg, action)
             const workflowInstruction = visualWorkflowInstruction(resolvedCfg, action, workflowId, reviewContext, context.threadId)
-            const prompt = [query, fallbackNotice, workflowInstruction].filter(Boolean).join('\n\n')
+            const prompt = [
+              query,
+              fallbackNotice,
+              workflowInstruction,
+              deliverableInstruction(deliverable, action, resolvedCfg)
+            ].filter(Boolean).join('\n\n')
+            const childSecurity = pptChildSecurity(context, workspace)
             const record = action === 'start'
               ? await runtime.runChild({
               parentThreadId: context.threadId,
@@ -190,37 +215,7 @@ export function buildPptAgentToolProvider(
                 ? { inheritedReasoningEffort: context.reasoningEffort.trim() }
                 : {}),
               ...(context.guiDesignCanvas === true ? { guiDesignCanvas: true } : {}),
-              security: {
-                sandboxRoot: workspace,
-                ...(context.allowedProviderIds
-                  ? { allowedProviderIds: [...context.allowedProviderIds] }
-                  : {}),
-                ...(context.allowedToolNames
-                  ? { allowedToolNames: [...context.allowedToolNames] }
-                  : {}),
-                ...(context.allowedSkillIds
-                  ? { allowedSkillIds: [...context.allowedSkillIds] }
-                  : {}),
-                ...(context.allowedReadPaths
-                  ? { allowedReadPaths: [...context.allowedReadPaths] }
-                  : {}),
-                ...(context.allowedWritePaths
-                  ? { allowedWritePaths: [...context.allowedWritePaths] }
-                  : {}),
-                ...(context.allowedArtifactIds
-                  ? { allowedArtifactIds: [...context.allowedArtifactIds] }
-                  : {}),
-                ...(context.blockedProviderIds
-                  ? { blockedProviderIds: [...context.blockedProviderIds] }
-                  : {}),
-                ...(context.blockedToolNames
-                  ? { blockedToolNames: [...context.blockedToolNames] }
-                  : {}),
-                ...(context.blockedSkillIds
-                  ? { blockedSkillIds: [...context.blockedSkillIds] }
-                  : {}),
-                memoryEnabled: context.memoryPolicy?.enabled === true
-              },
+              security: childSecurity,
               approvalPolicy: context.approvalPolicy,
               ...(context.sandboxMode ? { sandboxMode: context.sandboxMode } : {}),
               approvalReviewer: context.approvalReviewer ?? 'user',
@@ -265,6 +260,9 @@ export function buildPptAgentToolProvider(
                 parentThreadId: context.threadId,
                 parentTurnId: context.turnId,
                 prompt,
+                expectedProfile: 'ppt',
+                expectedWorkflowId: workflowId,
+                security: childSecurity,
                 signal: context.abortSignal,
                 onQueued: async (resumedChildId, profile, metadata) => emitPptLifecycle(onUpdate, {
                   childId: resumedChildId,
@@ -285,10 +283,20 @@ export function buildPptAgentToolProvider(
               (action === 'start' && resolvedCfg.imageFirst !== false && resolvedCfg.imageGenAvailable === true) ||
               action === 'revise_previews' ||
               action === 'retry_failed'
-            const reviewContractError = reviewExpected && record.reviewBundle === undefined
+            const currentReviewBundle = reviewExpected && record.reviewBundleParentTurnId === context.turnId
+              ? record.reviewBundle
+              : undefined
+            const reviewContractError = reviewExpected && currentReviewBundle === undefined
               ? 'PPT child completed without the required visual review bundle'
-              : reviewBundleContractError(record.reviewBundle, record.id, action === 'start' ? undefined : workflowId)
-            const failed = record.status === 'failed' || record.status === 'aborted' || Boolean(reviewContractError)
+              : reviewBundleContractError(currentReviewBundle, record.id, action === 'start' ? undefined : workflowId)
+            const deckArtifact = record.deckArtifactParentTurnId === context.turnId
+              ? record.deckArtifact
+              : undefined
+            const deckContractError = action === 'approve_and_build' && deliverable === 'pptx' && !validatedDeckArtifact(deckArtifact)
+              ? 'PPT child completed without a validated PPTX export'
+              : ''
+            const contractError = reviewContractError || deckContractError
+            const failed = record.status === 'failed' || record.status === 'aborted' || Boolean(contractError)
             const resolvedModel =
               record.model?.trim() ||
               (typeof context.actingModelRoute?.model === 'string'
@@ -305,22 +313,21 @@ export function buildPptAgentToolProvider(
                 status: record.status,
                 title,
                 summary: record.summary ?? '',
-                phase: action === 'approve_and_build'
-                  ? (failed ? 'failed_recoverable' : 'completed')
-                  : record.reviewBundle
-                    ? 'awaiting_review'
-                    : failed
-                      ? 'failed_recoverable'
-                      : 'direct_build',
+                phase: failed ? 'failed_recoverable' : currentReviewBundle ? 'awaiting_review' : 'completed',
+                mode: action === 'start' && (resolvedCfg.imageFirst === false || resolvedCfg.imageGenAvailable !== true)
+                  ? 'direct'
+                  : 'visual-first',
+                deliverable,
                 ...(fallbackNotice ? { fallbackNotice } : {}),
-                ...(record.reviewBundle !== undefined ? { reviewBundle: record.reviewBundle } : {}),
+                ...(currentReviewBundle !== undefined ? { reviewBundle: currentReviewBundle } : {}),
+                ...(deckArtifact !== undefined ? { deckArtifact } : {}),
                 toolInvocations: record.toolInvocations ?? 0,
                 usage: record.usage,
                 profile: 'ppt',
                 profileName,
                 ...(resolvedModel ? { model: resolvedModel } : {}),
                 ...(record.durationMs !== undefined ? { durationMs: record.durationMs } : {}),
-                ...(failed ? { error: reviewContractError || record.error || record.status } : {})
+                ...(failed ? { error: contractError || record.error || record.status } : {})
               },
               isError: failed
             }
@@ -392,15 +399,41 @@ function reviewBundleContractError(
   workflowId?: string
 ): string {
   if (value === undefined) return ''
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    return 'PPT child returned an invalid visual review bundle'
-  }
-  const bundle = value as Record<string, unknown>
+  const parsed = PptReviewBundleV1.safeParse(value)
+  if (!parsed.success) return 'PPT child returned an invalid visual review bundle'
+  const bundle = parsed.data
   if (bundle.childId !== childId) return 'PPT visual review bundle does not belong to the resumed child'
   if (workflowId && bundle.workflowId !== workflowId) {
     return 'PPT visual review bundle does not match the requested workflow'
   }
+  if (bundle.phase !== 'awaiting_review') return 'PPT visual review bundle is not awaiting review'
   return ''
+}
+
+function validatedDeckArtifact(value: unknown): boolean {
+  return Boolean(
+    value &&
+    typeof value === 'object' &&
+    !Array.isArray(value) &&
+    (value as Record<string, unknown>).validated === true &&
+    typeof (value as Record<string, unknown>).output === 'string'
+  )
+}
+
+function pptChildSecurity(context: ToolHostContext, workspace: string): ChildSecuritySnapshot {
+  return {
+    sandboxRoot: workspace,
+    ...(context.allowedProviderIds ? { allowedProviderIds: [...context.allowedProviderIds] } : {}),
+    ...(context.allowedToolNames ? { allowedToolNames: [...context.allowedToolNames] } : {}),
+    ...(context.allowedSkillIds ? { allowedSkillIds: [...context.allowedSkillIds] } : {}),
+    ...(context.allowedReadPaths ? { allowedReadPaths: [...context.allowedReadPaths] } : {}),
+    ...(context.allowedWritePaths ? { allowedWritePaths: [...context.allowedWritePaths] } : {}),
+    ...(context.allowedArtifactIds ? { allowedArtifactIds: [...context.allowedArtifactIds] } : {}),
+    ...(context.blockedProviderIds ? { blockedProviderIds: [...context.blockedProviderIds] } : {}),
+    ...(context.blockedToolNames ? { blockedToolNames: [...context.blockedToolNames] } : {}),
+    ...(context.blockedSkillIds ? { blockedSkillIds: [...context.blockedSkillIds] } : {}),
+    memoryEnabled: context.memoryPolicy?.enabled === true
+  }
 }
 
 function imageFirstFallbackNotice(
@@ -436,6 +469,23 @@ function visualWorkflowInstruction(
     return `PPT REVIEW APPROVED: workflow=${workflowId}. Use the approved per-slide visual concepts as the style/layout reference, then build native editable PPTD elements for text, charts, tables, and reusable background geometry; use generated images only where raster artwork is intended. Validate and export the PPTX now. Do not flatten ordinary slides into full-page images.${context}`
   }
   return `PPT REVIEW FOLLOW-UP: workflow=${workflowId}; action=${action}. Keep the locked style system. Regenerate only the requested slideIds with generate_image aspect_ratio="16:9"${cfg.imageGenSupportsReferenceEdit ? ' and use their current imagePath as reference_image_paths when useful' : ''}; then call ppt_create_review_bundle with workflowId=${JSON.stringify(workflowId)}, parentThreadId=${JSON.stringify(parentThreadId)} and those stable slideIds. Return its reviewBundle and stop at awaiting_review.${context}`
+}
+
+function deliverableInstruction(
+  deliverable: 'pptx' | 'pptd-only',
+  action: 'start' | 'revise_previews' | 'retry_failed' | 'approve_and_build',
+  cfg: PptAgentToolConfig
+): string {
+  if (action === 'revise_previews' || action === 'retry_failed') return ''
+  const visualFirstStart = action === 'start' && cfg.imageFirst !== false && cfg.imageGenAvailable === true
+  if (visualFirstStart) {
+    return deliverable === 'pptd-only'
+      ? 'After the parent later approves the review, the requested final deliverable is the editable PPTD project only; do not export PPTX.'
+      : 'After the parent later approves the review, the final deliverable must include a ppt_export result with validated=true.'
+  }
+  return deliverable === 'pptd-only'
+    ? 'FINAL DELIVERABLE: create and validate the editable PPTD project only; do not call ppt_export.'
+    : 'FINAL DELIVERABLE: create the editable PPTD project and call ppt_export; completion requires ppt_export to return validated=true.'
 }
 
 function stringValue(value: unknown): string {

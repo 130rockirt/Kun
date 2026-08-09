@@ -273,7 +273,8 @@ export function createRuntimeRegistry(
     },
     imageGen: {
       available: services.imageGenProviders.available,
-      reason: services.imageGenProviders.diagnostics.find((diagnostic) => diagnostic.reason)?.reason
+      reason: services.imageGenProviders.diagnostics.find((diagnostic) => diagnostic.reason)?.reason,
+      supportsReferenceEdit: protocolSupportsImageEdit(core.activeOptions.capabilities?.imageGen?.protocol)
     },
     speechGen: {
       available: services.speechGenProviders.available,

@@ -127,7 +127,11 @@ export const clawImInstallPollPayloadSchema = z
 export const clawImTelegramTokenPayloadSchema = z
   .object({
     botToken: z.string().trim().min(1),
-    allowedChatIds: z.string().trim().optional().default('')
+    allowedChatIds: z.string().trim().optional().default(''),
+    proxy: z.object({
+      enabled: z.boolean(),
+      url: z.string().trim().max(MAX_URL_LENGTH)
+    }).strict().optional().default({ enabled: false, url: '' })
   })
   .strict()
 

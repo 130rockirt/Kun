@@ -576,11 +576,12 @@ it('reports image generation availability in the runtime capability manifest', (
     const manifest = buildRuntimeCapabilityManifest({
       config,
       model: modelCapabilitiesForModel('deepseek-chat'),
-      imageGen: { available: built.available }
+      imageGen: { available: built.available, supportsReferenceEdit: true }
     })
 
     expect(manifest.imageGen.available).toBe(true)
     expect(manifest.imageGen.model).toBe('test-image-model')
+    expect(manifest.imageGen.supportsReferenceEdit).toBe(true)
   })
 
 })

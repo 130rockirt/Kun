@@ -292,6 +292,8 @@
   "desktopStartMinimized": "최소화된 상태로 시작",
   "desktopStartMinimizedDesc": "Windows 로그인 시작 중에 기본 창을 숨겨 둡니다.",
   "desktopStartMinimizedDisabledDesc": "먼저 로그인 시 열기를 활성화합니다. 이 옵션은 Windows 시작에 적용됩니다.",
+  "desktopUseSystemTitleBar": "시스템 제목 표시줄 사용",
+  "desktopUseSystemTitleBarDesc": "Linux 데스크톱 환경 또는 창 관리자가 제목 표시줄을 그리도록 합니다. 적용하려면 Kun을 다시 시작하세요.",
   "desktopCloseToTray": "트레이에 가깝습니다.",
   "desktopCloseToTrayDesc": "창을 닫을 때 시스템 트레이에 창을 숨깁니다.",
   "desktopCloseAction": "창 닫기 동작",

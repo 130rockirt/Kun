@@ -1,4 +1,4 @@
-import type { ReactElement, ReactNode } from 'react'
+import type { CSSProperties, ReactElement, ReactNode } from 'react'
 import {
   UI_PLUGIN_SCENE_ARTWORK_SLOTS,
   type UiPluginPresentation,
@@ -7,6 +7,7 @@ import {
   type UiPluginSceneArtworkSlot,
   type UiPluginSceneV16
 } from '@shared/ui-plugin'
+import { normalizeUiPluginCharacterScale } from '../../lib/ui-plugin-character-scale'
 import { useUiPluginStore } from '../../store/ui-plugin-store'
 
 export type UiPluginStagePresentationProps = {
@@ -14,6 +15,11 @@ export type UiPluginStagePresentationProps = {
   presentation: UiPluginPresentation | null
   scene?: UiPluginSceneV16 | null
   sceneAssets?: UiPluginRuntimeSceneAssets | null
+  characterScale?: number
+}
+
+type UiPluginCharacterStyle = CSSProperties & {
+  '--kun-ui-plugin-character-user-scale': string
 }
 
 const SAFE_SCENE_DATA_URL = /^data:image\/(?:png|jpeg|webp);base64,([A-Za-z0-9+/]+={0,2})$/
@@ -110,9 +116,15 @@ export function UiPluginStagePresentation({
   portraitSrc,
   presentation,
   scene = null,
-  sceneAssets = null
+  sceneAssets = null,
+  characterScale = 1
 }: UiPluginStagePresentationProps): ReactElement | null {
   if (!portraitSrc || !presentation) return null
+  const characterStyle: UiPluginCharacterStyle = {
+    '--kun-ui-plugin-character-user-scale': String(
+      normalizeUiPluginCharacterScale(characterScale)
+    )
+  }
 
   if (scene) {
     const stageSlots = UI_PLUGIN_SCENE_ARTWORK_SLOTS.filter(
@@ -131,6 +143,7 @@ export function UiPluginStagePresentation({
             className="ds-ui-plugin-character ds-ui-plugin-scene-character"
             src={portraitSrc}
             alt=""
+            style={characterStyle}
             draggable={false}
             decoding="async"
           />
@@ -149,6 +162,7 @@ export function UiPluginStagePresentation({
           className="ds-ui-plugin-character"
           src={portraitSrc}
           alt=""
+          style={characterStyle}
           draggable={false}
           decoding="async"
         />
@@ -160,12 +174,14 @@ export function UiPluginStagePresentation({
 
 export function ActiveUiPluginStagePresentation(): ReactElement | null {
   const runtime = useUiPluginStore((state) => state.activeRuntime)
+  const characterScale = useUiPluginStore((state) => state.characterScale)
   return (
     <UiPluginStagePresentation
       portraitSrc={runtime?.figures.portrait ?? null}
       presentation={runtime?.manifest.presentation ?? null}
       scene={runtime?.manifest.scene ?? null}
       sceneAssets={runtime?.sceneAssets ?? null}
+      characterScale={characterScale}
     />
   )
 }
