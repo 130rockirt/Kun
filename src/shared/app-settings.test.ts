@@ -2224,13 +2224,15 @@ describe('lab settings', () => {
       enabled: true,
       model: '',
       providerId: '',
-      fast: false
+      fast: false,
+      imageFirst: true
     })
 
     const next = mergeKunRuntimeSettings(defaultKunRuntimeSettings(), {
       lab: {
         pptAgent: {
-          enabled: false
+          enabled: false,
+          imageFirst: false
         }
       }
     })
@@ -2238,7 +2240,8 @@ describe('lab settings', () => {
       enabled: false,
       model: '',
       providerId: '',
-      fast: false
+      fast: false,
+      imageFirst: false
     })
 
     const configured = mergeKunRuntimeSettings(defaultKunRuntimeSettings(), {
@@ -2247,7 +2250,8 @@ describe('lab settings', () => {
           model: 'gpt-5.4',
           providerId: 'codex-2',
           reasoningEffort: 'high',
-          fast: true
+          fast: true,
+          imageFirst: false
         }
       }
     })
@@ -2256,7 +2260,8 @@ describe('lab settings', () => {
       model: 'gpt-5.4',
       providerId: 'codex-2',
       reasoningEffort: 'high',
-      fast: true
+      fast: true,
+      imageFirst: false
     })
 
     // Half-configured model override falls back to follow-main.
