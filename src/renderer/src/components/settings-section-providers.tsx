@@ -5585,7 +5585,9 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
                   ) : null}
                 </CapabilitySection>
                 </SettingsTabPanel>
-                {!isDraftActive && activeTab === 'advanced' ? (
+                {!isDraftActive &&
+                activeTab === 'advanced' &&
+                activeProvider.id !== DEFAULT_MODEL_PROVIDER_ID ? (
                   <DetailSection title={t('modelProviderSectionDanger')}>
                     <div className="flex flex-wrap items-center gap-3">
                       <button

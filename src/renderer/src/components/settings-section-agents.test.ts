@@ -2403,7 +2403,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
       })
       update.mockClear()
       const apiKeyInput = () => renderer.root.findAllByType('input')
-        .find((input) => input.props.placeholder === 'Enter provider API key')!
+        .find((input) => input.props.type === 'password' && input.props.autoComplete === 'off')!
 
       await act(async () => apiKeyInput().props.onChange({ target: { value: 'first-secret' } }))
       await act(async () => {
