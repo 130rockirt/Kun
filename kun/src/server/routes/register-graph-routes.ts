@@ -126,6 +126,7 @@ export function registerGraphRoutes(router: Router, runtime: ServerRuntime): voi
     return readGraphArtifact(
       runtime.graph?.control,
       runtime.graph?.artifacts,
+      (runId, artifactId) => externalizedGraphArtifactReference(runtime, runId, artifactId),
       ctx.params.id,
       ctx.params.artifactId,
       request
@@ -234,4 +235,23 @@ export function registerGraphRoutes(router: Router, runtime: ServerRuntime): voi
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
     return listThreadGraphReferences(runtime, ctx.params.id)
   })
+}
+
+async function externalizedGraphArtifactReference(
+  runtime: ServerRuntime,
+  runId: string,
+  artifactId: string
+) {
+  const store = runtime.graph?.store
+  if (!store) return undefined
+  const events = store.eventReplay
+    ? (await store.eventReplay(runId, 0)).events
+    : await store.events(runId, 0)
+  for (const entry of events) {
+    if (entry.runId === runId && entry.event.type === 'payload_externalized' &&
+      entry.event.payload.artifact.artifactId === artifactId) {
+      return entry.event.payload.artifact
+    }
+  }
+  return undefined
 }
