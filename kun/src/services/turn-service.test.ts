@@ -19,7 +19,7 @@ import type { ModelClient, ModelRequest, ModelStreamChunk } from '../ports/model
 import { emptyUsageSnapshot } from '../contracts/usage.js'
 import type { TurnItem } from '../contracts/items.js'
 import type { RuntimeEvent } from '../contracts/events.js'
-import type { GraphPlanningLifecycle } from '../contracts/turns.js'
+import type { GraphPlanningLifecycle, StartTurnRequest } from '../contracts/turns.js'
 import { RuntimeEventRecorder } from './runtime-event-recorder.js'
 import {
   DEFAULT_MAX_CONCURRENT_TURNS,
@@ -261,6 +261,131 @@ describe('TurnService assistant delta persistence (#1087)', () => {
 describe('TurnService startTurn', () => {
   it('defaults to 256 concurrent active turns', () => {
     expect(DEFAULT_MAX_CONCURRENT_TURNS).toBe(256)
+  })
+
+  it('binds an idempotency key to the canonical full request and supports legacy turns', async () => {
+    const sessionStore = new InMemorySessionStore()
+    const threadStore = new InMemoryThreadStore()
+    const eventBus = new InMemoryEventBus()
+    const nowIso = () => '2026-08-09T10:00:00.000Z'
+    const service = new TurnService({
+      threadStore,
+      sessionStore,
+      events: new RuntimeEventRecorder({
+        eventBus,
+        sessionStore,
+        allocateSeq: (threadId) => eventBus.allocateSeq(threadId),
+        nowIso
+      }),
+      inflight: new InflightTracker(),
+      steering: new SteeringQueue(),
+      compactor: new ContextCompactor(),
+      ids: new SequentialIdGenerator(),
+      nowIso
+    })
+    const threadId = 'thr_full_request_idempotency'
+    await threadStore.upsert(createThreadRecord({
+      id: threadId,
+      title: 'Full request idempotency',
+      workspace: '/tmp/workspace',
+      model: 'model-a'
+    }))
+    const admittedRequest: StartTurnRequest = {
+      prompt: 'same prompt',
+      clientRequestId: 'request_full_fingerprint',
+      model: 'model-a',
+      sandboxMode: 'workspace-write',
+      attachments: [{ path: '/tmp/input.txt', name: 'input.txt' }],
+      fileReferences: [{
+        path: '/tmp/workspace/input.ts',
+        relativePath: 'input.ts',
+        name: 'input.ts',
+        kind: 'file'
+      }]
+    }
+
+    const admitted = await service.startTurn({ threadId, request: admittedRequest })
+    expect((await threadStore.get(threadId))?.turns[0]).toMatchObject({
+      clientRequestId: admittedRequest.clientRequestId,
+      clientRequestFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/)
+    })
+
+    const reorderedRequest: StartTurnRequest = {
+      fileReferences: [{
+        kind: 'file',
+        name: 'input.ts',
+        relativePath: 'input.ts',
+        path: '/tmp/workspace/input.ts'
+      }],
+      attachments: [{ name: 'input.txt', path: '/tmp/input.txt' }],
+      sandboxMode: 'workspace-write',
+      model: 'model-a',
+      clientRequestId: 'request_full_fingerprint',
+      prompt: 'same prompt'
+    }
+    await expect(service.startTurn({
+      threadId,
+      request: reorderedRequest
+    })).resolves.toEqual(admitted)
+
+    const changedRequests: StartTurnRequest[] = [
+      { ...admittedRequest, model: 'model-b' },
+      { ...admittedRequest, attachments: [{ path: '/tmp/other.txt', name: 'other.txt' }] },
+      { ...admittedRequest, sandboxMode: 'danger-full-access' }
+    ]
+    for (const request of changedRequests) {
+      await expect(service.startTurn({ threadId, request })).rejects.toThrow(
+        'clientRequestId is already associated with a different request'
+      )
+    }
+    await service.interruptTurn({ threadId, turnId: admitted.turnId })
+
+    const legacyThreadId = 'thr_legacy_prompt_idempotency'
+    const legacyTurn = createTurnRecord({
+      id: 'turn_legacy_prompt_idempotency',
+      threadId: legacyThreadId,
+      clientRequestId: 'request_legacy_prompt_only',
+      prompt: 'legacy prompt',
+      model: 'legacy-model',
+      status: 'completed',
+      createdAt: nowIso()
+    })
+    const legacyUserItem = makeUserItem({
+      id: `item_${legacyTurn.id}_user`,
+      threadId: legacyThreadId,
+      turnId: legacyTurn.id,
+      text: legacyTurn.prompt
+    })
+    await threadStore.upsert({
+      ...createThreadRecord({
+        id: legacyThreadId,
+        title: 'Legacy prompt idempotency',
+        workspace: '/tmp/workspace',
+        model: 'legacy-model',
+        createdAt: nowIso()
+      }),
+      turns: [appendTurnItem(legacyTurn, legacyUserItem)]
+    })
+
+    await expect(service.startTurn({
+      threadId: legacyThreadId,
+      request: {
+        prompt: 'legacy prompt',
+        clientRequestId: 'request_legacy_prompt_only',
+        model: 'changed-model'
+      }
+    })).resolves.toEqual({
+      threadId: legacyThreadId,
+      turnId: legacyTurn.id,
+      userMessageItemId: legacyUserItem.id
+    })
+    await expect(service.startTurn({
+      threadId: legacyThreadId,
+      request: {
+        prompt: 'different legacy prompt',
+        clientRequestId: 'request_legacy_prompt_only'
+      }
+    })).rejects.toThrow('clientRequestId is already associated with a different prompt')
   })
 
   it('persists one stable goal context in canonical history without publishing it', async () => {
@@ -1799,10 +1924,33 @@ describe('TurnService startTurn', () => {
 
     await expect(service.startTurn({
       threadId: 'thr_start_failure_a',
-      request: { prompt: 'will fail while persisting', model: 'm' }
+      request: {
+        prompt: 'will fail while persisting',
+        model: 'm',
+        clientRequestId: 'request_retry_after_failed_admission'
+      }
     })).rejects.toThrow('append item failed')
 
-    expect((await threadStore.get('thr_start_failure_a'))?.turns[0]?.status).toBe('aborted')
+    const failed = await threadStore.get('thr_start_failure_a')
+    expect(failed?.turns[0]).toMatchObject({
+      status: 'aborted',
+      clientRequestId: 'request_retry_after_failed_admission'
+    })
+    expect(failed?.turns[0]?.admissionCompletedAt).toBeUndefined()
+
+    const retried = await service.startTurn({
+      threadId: 'thr_start_failure_a',
+      request: {
+        prompt: 'will fail while persisting',
+        model: 'm',
+        clientRequestId: 'request_retry_after_failed_admission'
+      }
+    })
+    expect(retried.turnId).not.toBe(failed?.turns[0]?.id)
+    expect((await threadStore.get('thr_start_failure_a'))?.turns.at(-1)?.admissionCompletedAt)
+      .toBe(nowIso())
+    await service.interruptTurn({ threadId: 'thr_start_failure_a', turnId: retried.turnId })
+
     const recovered = await service.startTurn({
       threadId: 'thr_start_failure_b',
       request: { prompt: 'slot was released', model: 'm' }

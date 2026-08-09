@@ -56,7 +56,11 @@ import { withFileMutationQueue } from '../src/adapters/tool/file-mutation-queue.
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from '../src/adapters/tool/truncate.js'
 import { BackgroundShellOutputWriter } from '../src/services/background-shell-output.js'
 import type { TurnItem } from '../src/contracts/items.js'
-import { DEFAULT_BASH_TIMEOUT_SECONDS, type FsStats } from '../src/adapters/tool/builtin-tool-types.js'
+import {
+  DEFAULT_BACKGROUND_BASH_TIMEOUT_SECONDS,
+  DEFAULT_BASH_TIMEOUT_SECONDS,
+  type FsStats
+} from '../src/adapters/tool/builtin-tool-types.js'
 import type { ToolHostContext } from '../src/ports/tool-host.js'
 
 function buildContext(workspace: string, overrides: Partial<ToolHostContext> = {}): ToolHostContext {
@@ -690,12 +694,13 @@ describe('Kun built-in tools', () => {
     expect(output.truncation).toBe(null)
   })
 
-  it('keeps the Bash timeout runtime-owned at 24 hours', async () => {
+  it('keeps Bash timeouts runtime-owned with separate foreground and background ceilings', async () => {
     const exec = vi.fn(async () => ({ exitCode: 0, stdout: 'done' }))
     const bash = createBashLocalTool({ operations: { exec } })
     const properties = bash.inputSchema.properties as Record<string, unknown>
     expect(properties).not.toHaveProperty('timeout')
-    expect(DEFAULT_BASH_TIMEOUT_SECONDS).toBe(86_400)
+    expect(DEFAULT_BASH_TIMEOUT_SECONDS).toBe(900)
+    expect(DEFAULT_BACKGROUND_BASH_TIMEOUT_SECONDS).toBe(86_400)
 
     await executeTool(new LocalToolHost({ tools: [bash] }), workspace, 'bash', {
       command: 'echo done'
@@ -703,7 +708,7 @@ describe('Kun built-in tools', () => {
     expect(exec).toHaveBeenCalledWith(
       'echo done',
       workspace,
-      expect.objectContaining({ timeoutSeconds: 86_400 })
+      expect.objectContaining({ timeoutSeconds: 900 })
     )
   })
 

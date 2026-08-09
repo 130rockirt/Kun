@@ -443,6 +443,9 @@ export function MessageTimeline({
     chooseWorkspace,
     activeClawChannel,
     busy,
+    threadHasMoreHistory,
+    threadHistoryLoading,
+    loadEarlierThreadHistory,
     currentTurnUserId,
     turnStartedAtByUserId,
     turnDurationByUserId,
@@ -495,6 +498,7 @@ export function MessageTimeline({
   ].join(':')
   const {
     hiddenTurnCount,
+    hasEarlierTurns,
     loadEarlierTurns,
     collapseEarlierTurns
   } = useTimelineScroll({
@@ -504,6 +508,9 @@ export function MessageTimeline({
     pageSize: TURN_PAGE_SIZE,
     totalTurns: turns.length,
     busy,
+    hasRemoteHistory: threadHasMoreHistory,
+    remoteHistoryLoading: threadHistoryLoading,
+    loadRemoteHistory: loadEarlierThreadHistory,
     scrollDeps: {
       contentKey: scrollContentKey,
       streaming: Boolean(live.trim() || liveReasoning.trim()),
@@ -765,14 +772,17 @@ export function MessageTimeline({
           <ThreadForkBanner parentTitle={forkedFromTitle} />
         ) : null}
 
-        {hiddenTurnCount > 0 && !busy ? (
+        {hasEarlierTurns && !busy ? (
           <div className="flex items-center justify-center">
             <button
               type="button"
+              disabled={threadHistoryLoading}
               onClick={() => loadEarlierTurns({ userInitiated: true })}
               className="ds-chip rounded-full px-4 py-2 text-[13px] font-medium text-ds-muted transition hover:text-ds-ink"
             >
-              {t('timelineShowEarlierTurns', { count: Math.min(hiddenTurnCount, TURN_PAGE_SIZE) })}
+              {t('timelineShowEarlierTurns', {
+                count: Math.min(hiddenTurnCount || TURN_PAGE_SIZE, TURN_PAGE_SIZE)
+              })}
             </button>
           </div>
         ) : null}

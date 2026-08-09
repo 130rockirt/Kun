@@ -30,6 +30,7 @@ import {
   kunThreadToolCancelPath,
   kunThreadPath,
   kunThreadStatePath,
+  kunThreadTimelinePath,
   kunThreadSteerPath,
   kunThreadTurnsPath,
   kunAttachmentContentPath,
@@ -72,6 +73,7 @@ import type {
   CoreThreadGoalResponseJson,
   CoreThreadJson,
   CoreThreadRuntimeStateJson,
+  CoreThreadTimelineJson,
   CoreThreadSummaryJson,
   CoreThreadTodosResponseJson
 } from './kun-contract'
@@ -302,7 +304,7 @@ export class KunRuntimeProvider implements AgentProvider {
     ))
   }
 
-  async getThreadDetail(threadId: string): Promise<{
+  async getThreadDetail(threadId: string, options: { before?: string } = {}): Promise<{
     blocks: ChatBlock[]
     latestSeq: number
     threadStatus?: string
@@ -317,12 +319,30 @@ export class KunRuntimeProvider implements AgentProvider {
     goal?: NormalizedThread['goal']
     todos?: NormalizedThread['todos']
     payloadBytes?: number
+    historyCursor?: string
+    hasMoreHistory?: boolean
   }> {
-    const response = await rendererRuntimeClient.runtimeRequest(kunThreadPath(threadId), 'GET')
+    let response = await rendererRuntimeClient.runtimeRequest(
+      kunThreadTimelinePath(threadId, {
+        ...(options.before ? { before: options.before } : {}),
+        limit: 300
+      }),
+      'GET'
+    )
+    // A renderer can briefly outlive an older bundled runtime during a local
+    // restart. Preserve initial hydration compatibility until that runtime is
+    // replaced; older-page requests require the new timeline contract.
+    if (
+      !response.ok &&
+      !options.before &&
+      (response.status === 404 || response.status === 405)
+    ) {
+      response = await rendererRuntimeClient.runtimeRequest(kunThreadPath(threadId), 'GET')
+    }
     if (!response.ok) {
       throw runtimeErrorToError(readRuntimeError(response.body, 'failed to load thread'))
     }
-    const thread = readRuntimeJson<CoreThreadJson>(
+    const thread = readRuntimeJson<CoreThreadTimelineJson>(
       response.body,
       'runtime returned an invalid thread response'
     )
@@ -376,7 +396,7 @@ export class KunRuntimeProvider implements AgentProvider {
         }
       }
     }
-    const latestTurn = turns.at(-1)
+    const latestTurn = thread.latestTurn ?? turns.at(-1)
     const latestUserMessageId = [...items].reverse().find((item) => item.kind === 'user_message')?.id
     return {
       blocks,
@@ -393,7 +413,9 @@ export class KunRuntimeProvider implements AgentProvider {
       ...(typeof thread.model === 'string' && thread.model.trim() ? { model: thread.model.trim() } : {}),
       goal: thread.goal ? goalFromCore(thread.goal) : null,
       todos: thread.todos ? todosFromCore(thread.todos) : null,
-      payloadBytes: response.body.length
+      payloadBytes: response.body.length,
+      ...(thread.timeline?.nextCursor ? { historyCursor: thread.timeline.nextCursor } : {}),
+      hasMoreHistory: thread.timeline?.hasMore === true
     }
   }
 
@@ -431,6 +453,7 @@ export class KunRuntimeProvider implements AgentProvider {
     threadId: string,
     text: string,
     options?: {
+      clientRequestId?: string
       mode?: KunThreadMode
       orchestration?: 'direct' | 'graph'
       model?: string
@@ -473,6 +496,9 @@ export class KunRuntimeProvider implements AgentProvider {
       (mode === 'plan' ? runtime.planAccountId?.trim() : '')
     const body: Record<string, unknown> = {
       prompt: text,
+      ...(options?.clientRequestId?.trim()
+        ? { clientRequestId: options.clientRequestId.trim() }
+        : {}),
       ...(options?.orchestration === 'graph' ? { orchestration: 'graph' } : {}),
       clientSurface: 'gui',
       ...(selectedModel ? { model: selectedModel } : {}),

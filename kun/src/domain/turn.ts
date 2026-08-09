@@ -23,6 +23,8 @@ export type TurnEntity = Turn
 export function createTurnRecord(input: {
   id: string
   threadId: string
+  clientRequestId?: string
+  clientRequestFingerprint?: string
   prompt: string
   messageSource?: UserMessageSource
   model?: string
@@ -56,10 +58,15 @@ export function createTurnRecord(input: {
   const model = input.model?.trim()
   const providerId = input.providerId?.trim()
   const accountId = input.accountId?.trim()
+  const clientRequestId = input.clientRequestId?.trim()
   const reasoningEffort = normalizeReasoningEffort(input.reasoningEffort)
   return {
     id: input.id,
     threadId: input.threadId,
+    ...(clientRequestId ? { clientRequestId } : {}),
+    ...(input.clientRequestFingerprint
+      ? { clientRequestFingerprint: input.clientRequestFingerprint }
+      : {}),
     status: input.status ?? 'queued',
     prompt: input.prompt,
     ...(input.messageSource ? { messageSource: input.messageSource } : {}),

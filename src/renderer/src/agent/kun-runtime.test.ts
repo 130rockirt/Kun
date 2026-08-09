@@ -382,6 +382,53 @@ describe('KunRuntimeProvider', () => {
     expect(runtimeRequest).toHaveBeenCalledWith('/v1/threads/thr_state/state', 'GET')
   })
 
+  it('falls back to legacy full detail only when the timeline route is unavailable', async () => {
+    const runtimeRequest = vi.fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 404,
+        body: JSON.stringify({ code: 'not_found', message: 'route not found' })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        body: JSON.stringify({
+          id: 'thr_legacy',
+          title: 'Legacy',
+          workspace: '/tmp',
+          model: 'm',
+          mode: 'agent',
+          status: 'idle',
+          createdAt: 't0',
+          updatedAt: 't1',
+          latestSeq: 0,
+          turns: []
+        })
+      })
+    installDsGui({ runtimeRequest })
+
+    await expect(new KunRuntimeProvider().getThreadDetail('thr_legacy'))
+      .resolves.toMatchObject({ blocks: [], latestSeq: 0 })
+    expect(runtimeRequest).toHaveBeenNthCalledWith(
+      2,
+      '/v1/threads/thr_legacy',
+      'GET'
+    )
+  })
+
+  it('does not fall back to unbounded detail when timeline hydration fails', async () => {
+    const runtimeRequest = vi.fn(async () => ({
+      ok: false,
+      status: 500,
+      body: JSON.stringify({ code: 'internal_error', message: 'manager page read failed' })
+    }))
+    installDsGui({ runtimeRequest })
+
+    await expect(new KunRuntimeProvider().getThreadDetail('thr_large'))
+      .rejects.toThrow('manager page read failed')
+    expect(runtimeRequest).toHaveBeenCalledTimes(1)
+  })
+
   it('rehydrates persisted partial assistant output for a running turn', async () => {
     installDsGui({
       runtimeRequest: vi.fn(async () => ({
@@ -624,6 +671,30 @@ describe('KunRuntimeProvider', () => {
       })
     )
     expect(result.userMessageItemId).toBe('item_user_real')
+  })
+
+  it('forwards a client request id for retry-safe turn admission', async () => {
+    const runtimeRequest = vi.fn(async () => ({
+      ok: true,
+      status: 202,
+      body: JSON.stringify({ threadId: 'thr_1', turnId: 'turn_abc', userMessageItemId: 'item_user_real' })
+    }))
+    installDsGui({ runtimeRequest })
+
+    await new KunRuntimeProvider().sendUserMessage('thr_1', 'hello', {
+      clientRequestId: 'turn_client_1'
+    })
+
+    expect(runtimeRequest).toHaveBeenCalledWith(
+      '/v1/threads/thr_1/turns',
+      'POST',
+      JSON.stringify({
+        prompt: 'hello',
+        clientRequestId: 'turn_client_1',
+        clientSurface: 'gui',
+        ...DEFAULT_EXECUTION_SETTINGS
+      })
+    )
   })
 
   it('posts per-turn provider ids with Kun turn requests when provided', async () => {

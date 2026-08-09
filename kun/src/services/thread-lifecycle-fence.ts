@@ -208,6 +208,7 @@ export class LifecycleFencedSessionStore implements SessionStore {
   readonly loadUsageRecords?: (options?: { threadId?: string }) => Promise<SessionUsageRecord[]>
   readonly loadLatestUsageSnapshots?: (options?: { threadIds?: string[] }) => Promise<SessionLatestUsageSnapshot[]>
   readonly compactItems?: SessionStore['compactItems']
+  readonly loadItemPage?: SessionStore['loadItemPage']
 
   constructor(
     readonly raw: SessionStore,
@@ -241,6 +242,9 @@ export class LifecycleFencedSessionStore implements SessionStore {
           afterBytes: 0,
           itemCount: 0
         }, () => raw.compactItems!(threadId, options))
+    }
+    if (raw.loadItemPage) {
+      this.loadItemPage = (threadId, options) => raw.loadItemPage!(threadId, options)
     }
   }
 

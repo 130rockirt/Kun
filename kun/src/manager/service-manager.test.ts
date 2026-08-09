@@ -51,7 +51,8 @@ describe('service manager control plane', () => {
       status: 'ok',
       service: 'kun-service-manager',
       protocolVersion: 1,
-      instanceId: 'manager-a'
+      instanceId: 'manager-a',
+      capabilities: expect.arrayContaining(['item-page-v1'])
     })
     expect(text).not.toContain('manager-secret')
   })

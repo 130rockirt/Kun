@@ -1,11 +1,14 @@
 import { mkdir } from 'node:fs/promises'
 import { randomInt } from 'node:crypto'
-import { type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { type ChildProcess, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { LocalToolHost, type LocalTool } from './local-tool-host.js'
 import { OutputAccumulator } from './output-accumulator.js'
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize } from './truncate.js'
 import type { BashLocalToolOptions, TextSlice, TruncateMode, BackgroundShellRecordInput } from './builtin-tool-types.js'
-import { DEFAULT_BASH_TIMEOUT_SECONDS } from './builtin-tool-types.js'
+import {
+  DEFAULT_BACKGROUND_BASH_TIMEOUT_SECONDS,
+  DEFAULT_BASH_TIMEOUT_SECONDS
+} from './builtin-tool-types.js'
 import {
   BackgroundShellOutputWriter
 } from '../../services/background-shell-output.js'
@@ -25,10 +28,12 @@ const DEFAULT_BASH_YIELD_SECONDS = 10
 const MAX_BASH_YIELD_SECONDS = 60
 const SESSION_EXIT_FLUSH_MS = 50
 const STOP_GRACE_MS = 1000
+const STOP_WAIT_MS = 5000
 const FINISHED_SESSION_RETENTION_MS = 10 * 60 * 1000
+export const DEFAULT_FOREGROUND_BASH_LIVENESS_INTERVAL_MS = 30 * 1000
 export const DEFAULT_MAX_RUNNING_BACKGROUND_BASH_SESSIONS = 32
 export const DEFAULT_MAX_RUNNING_BACKGROUND_BASH_SESSIONS_PER_THREAD = 4
-export const DEFAULT_MAX_BACKGROUND_BASH_TIMEOUT_SECONDS = 24 * 60 * 60
+export const DEFAULT_MAX_BACKGROUND_BASH_TIMEOUT_SECONDS = DEFAULT_BACKGROUND_BASH_TIMEOUT_SECONDS
 
 type BackgroundSessionLimits = {
   maxRunningSessions: number
@@ -57,6 +62,7 @@ type BashSession = {
   finalized: boolean
   finalization?: Promise<void>
   settlement?: Promise<void>
+  stopCleanup?: Promise<void>
   detached: boolean
   exitWaiters: Set<() => void>
   outputWriter?: BackgroundShellOutputWriter
@@ -86,6 +92,59 @@ type BashPayload = {
   stop_sent?: boolean
   error?: string
   output_file?: string
+  liveness?: true
+  elapsed_seconds?: number
+  last_output_age_seconds?: number
+}
+
+class BashTimeoutError extends Error {
+  constructor(readonly timeoutSeconds: number) {
+    super(`command timed out after ${timeoutSeconds} seconds`)
+    this.name = 'BashTimeoutError'
+  }
+}
+
+/**
+ * Every Bash stop path uses the same two-stage process-group cleanup. Always
+ * send the force signal after the grace period: the shell process can exit on
+ * SIGTERM while a descendant that inherited its process group ignores it.
+ */
+function terminateBashProcessTree(child: ChildProcess): Promise<void> {
+  terminateSpawnTree(child)
+  return new Promise((resolve, reject) => {
+    const startedAt = Date.now()
+    let forced = false
+    const waitOrForce = () => {
+      if (!bashProcessTreeIsAlive(child)) {
+        resolve()
+        return
+      }
+      const elapsedMs = Date.now() - startedAt
+      if (!forced && elapsedMs >= STOP_GRACE_MS) {
+        forced = true
+        terminateSpawnTree(child, { signal: 'SIGKILL' })
+      }
+      if (elapsedMs >= STOP_WAIT_MS) {
+        reject(new Error('bash process tree did not terminate after SIGKILL'))
+        return
+      }
+      setTimeout(waitOrForce, 25)
+    }
+    setTimeout(waitOrForce, 25)
+  })
+}
+
+function bashProcessTreeIsAlive(child: ChildProcess): boolean {
+  const pid = child.pid
+  if (!pid || process.platform === 'win32') {
+    return child.exitCode === null && child.signalCode === null
+  }
+  try {
+    process.kill(-pid, 0)
+    return true
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM'
+  }
 }
 
 const bashSessions = new Map<string, BashSession>()
@@ -144,6 +203,7 @@ async function bashExecute(
   signal: AbortSignal,
   timeoutSeconds: number,
   outputLimits: { maxLines: number; maxBytes: number },
+  livenessIntervalMs: number,
   onUpdate?: (update: { output: unknown; isError?: boolean }) => Promise<void> | void,
   execOperation?: (
     command: string,
@@ -173,27 +233,39 @@ async function bashExecute(
   const child = started?.child ?? null
   if (started) resultShell = started.runtime.name
   if (!execOperation && signal.aborted) {
-    if (child) terminateSpawnTree(child)
+    if (child) await terminateBashProcessTree(child)
     throw new Error('command aborted')
   }
   let timedOut = false
   let settled = false
+  let termination: Promise<void> | undefined
   const output = new OutputAccumulator({
     maxLines: outputLimits.maxLines,
     maxBytes: outputLimits.maxBytes,
     tempFilePrefix: 'kun-bash'
   })
+  const startedAtMs = Date.now()
+  let lastOutputAtMs: number | undefined
   let updateDirty = false
+  let livenessDirty = false
   let updateTimer: NodeJS.Timeout | undefined
+  let livenessTimer: NodeJS.Timeout | undefined
   let lastUpdateAt = 0
+  let updateInFlight: Promise<void> | undefined
+  let updateFailure: unknown
   const handleData = (chunk: Buffer) => {
+    lastOutputAtMs = Date.now()
     output.append(chunk)
+    armLiveness()
     scheduleUpdate()
   }
-  const emitUpdate = async () => {
-    if (!onUpdate || !updateDirty) return
+  const flushUpdate = async () => {
+    if (!onUpdate || (!updateDirty && !livenessDirty)) return
+    const liveness = livenessDirty
     updateDirty = false
-    lastUpdateAt = Date.now()
+    livenessDirty = false
+    const now = Date.now()
+    lastUpdateAt = now
     const snapshot = output.snapshot({ persistIfTruncated: true })
     await onUpdate({
       output: {
@@ -213,95 +285,161 @@ async function bashExecute(
               last_line_partial: snapshot.truncation.lastLinePartial === true
             }
           : null,
-        partial: true
+        partial: true,
+        ...(liveness
+          ? {
+              liveness: true as const,
+              elapsed_seconds: Math.max(0, Math.floor((now - startedAtMs) / 1000)),
+              last_output_age_seconds: Math.max(
+                0,
+                Math.floor((now - (lastOutputAtMs ?? startedAtMs)) / 1000)
+              )
+            }
+          : {})
       }
     })
   }
-  const scheduleUpdate = () => {
+  const emitUpdate = () => {
+    if (updateInFlight) return
+    const flush = flushUpdate()
+    updateInFlight = flush
+    void flush
+      .catch((error) => {
+        updateFailure ??= error
+      })
+      .finally(() => {
+        if (updateInFlight === flush) updateInFlight = undefined
+        if ((updateDirty || livenessDirty) && !settled) scheduleUpdate(livenessDirty)
+      })
+  }
+  const scheduleUpdate = (liveness = false) => {
     if (!onUpdate) return
-    updateDirty = true
-    const delay = 100 - (Date.now() - lastUpdateAt)
+    if (liveness) livenessDirty = true
+    else updateDirty = true
+    const delay = liveness ? 0 : 100 - (Date.now() - lastUpdateAt)
     if (delay <= 0) {
-      void emitUpdate()
+      emitUpdate()
       return
     }
     if (updateTimer) return
     updateTimer = setTimeout(() => {
       updateTimer = undefined
-      void emitUpdate()
+      emitUpdate()
     }, delay)
+    updateTimer.unref?.()
   }
-  const kill = () => {
-    if (settled) return
-    if (!child) return
-    terminateSpawnTree(child)
+  const normalizedLivenessIntervalMs = Math.max(1, Math.floor(livenessIntervalMs))
+  const armLiveness = () => {
+    if (!onUpdate || settled) return
+    if (livenessTimer) clearTimeout(livenessTimer)
+    livenessTimer = setTimeout(() => {
+      livenessTimer = undefined
+      if (settled) return
+      scheduleUpdate(true)
+      armLiveness()
+    }, normalizedLivenessIntervalMs)
+    livenessTimer.unref?.()
   }
+  const drainUpdates = async () => {
+    if (updateTimer) {
+      clearTimeout(updateTimer)
+      updateTimer = undefined
+    }
+    while (updateInFlight || updateDirty || livenessDirty) {
+      if (!updateInFlight) emitUpdate()
+      await updateInFlight?.catch(() => undefined)
+    }
+    if (updateFailure) throw updateFailure
+  }
+  const requestStop = (): Promise<void> | undefined => {
+    if (!child) return undefined
+    termination ??= terminateBashProcessTree(child)
+    return termination
+  }
+  const operationTimeout = new AbortController()
   const timer = setTimeout(() => {
     timedOut = true
-    kill()
+    operationTimeout.abort(new BashTimeoutError(timeoutSeconds))
+    void requestStop()
   }, timeoutSeconds * 1000)
-  const onAbort = () => kill()
-  let exitCode: number | null
-  if (execOperation) {
-    try {
+  timer.unref?.()
+  const onAbort = () => {
+    void requestStop()
+  }
+  if (child) {
+    signal.addEventListener('abort', onAbort, { once: true })
+    if (signal.aborted) onAbort()
+  }
+  // ToolExecutionService persists this one running snapshot, then publishes
+  // changed liveness/output snapshots transiently under the same item id.
+  scheduleUpdate()
+  armLiveness()
+
+  let exitCode: number | null = null
+  let executionError: unknown
+  try {
+    if (execOperation) {
+      const operationSignal = AbortSignal.any([signal, operationTimeout.signal])
       const result = await execOperation(command, cwd, {
-        signal,
+        signal: operationSignal,
         timeoutSeconds,
         onData: handleData
       })
       exitCode = result.exitCode
       resultShell = result.shell ?? resultShell
-    } finally {
-      settled = true
-      clearTimeout(timer)
-      if (updateTimer) clearTimeout(updateTimer)
+    } else {
+      if (!child) throw new Error('shell process failed to start')
+      child.stdout?.on('data', (chunk: Buffer | string) => {
+        handleData(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
+      })
+      child.stderr?.on('data', (chunk: Buffer | string) => {
+        handleData(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
+      })
+      exitCode = await waitForSpawnExit(child)
     }
-  } else {
-    if (!child) throw new Error('shell process failed to start')
-    signal.addEventListener('abort', onAbort, { once: true })
-    child.stdout?.on('data', (chunk: Buffer | string) => {
-      handleData(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
-    })
-    child.stderr?.on('data', (chunk: Buffer | string) => {
-      handleData(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
-    })
-
-    exitCode = await waitForSpawnExit(child).finally(() => {
-      settled = true
-      clearTimeout(timer)
-      if (updateTimer) clearTimeout(updateTimer)
-      signal.removeEventListener('abort', onAbort)
-    })
+  } catch (error) {
+    executionError = error
+  } finally {
+    settled = true
+    clearTimeout(timer)
+    if (livenessTimer) clearTimeout(livenessTimer)
+    signal.removeEventListener('abort', onAbort)
   }
 
-  if (signal.aborted) {
-    throw new Error('command aborted')
-  }
-  if (timedOut) {
-    throw new Error(`command timed out after ${timeoutSeconds} seconds`)
+  if (executionError && child && bashProcessTreeIsAlive(child)) {
+    await requestStop()
   }
 
-  output.finish()
-  await emitUpdate()
-  const snapshot = output.snapshot({ persistIfTruncated: true })
-  await output.closeTempFile()
-  const truncated: TextSlice = {
-    text: snapshot.content,
-    truncated: snapshot.truncation.truncated,
-    totalLines: snapshot.truncation.totalLines,
-    shownLines: snapshot.truncation.outputLines,
-    totalBytes: snapshot.truncation.totalBytes,
-    shownBytes: snapshot.truncation.outputBytes,
-    firstLineExceedsLimit: snapshot.truncation.firstLineExceedsLimit,
-    truncatedBy: snapshot.truncation.truncatedBy ?? undefined,
-    lastLinePartial: snapshot.truncation.lastLinePartial
-  }
-  return {
-    output: snapshot.content,
-    exitCode,
-    shell: resultShell,
-    truncated,
-    fullOutputPath: snapshot.fullOutputPath
+  try {
+    await termination
+    if (signal.aborted) throw new Error('command aborted')
+    if (timedOut) throw new BashTimeoutError(timeoutSeconds)
+    if (executionError) throw executionError
+
+    output.finish()
+    await drainUpdates()
+    const snapshot = output.snapshot({ persistIfTruncated: true })
+    const truncated: TextSlice = {
+      text: snapshot.content,
+      truncated: snapshot.truncation.truncated,
+      totalLines: snapshot.truncation.totalLines,
+      shownLines: snapshot.truncation.outputLines,
+      totalBytes: snapshot.truncation.totalBytes,
+      shownBytes: snapshot.truncation.outputBytes,
+      firstLineExceedsLimit: snapshot.truncation.firstLineExceedsLimit,
+      truncatedBy: snapshot.truncation.truncatedBy ?? undefined,
+      lastLinePartial: snapshot.truncation.lastLinePartial
+    }
+    return {
+      output: snapshot.content,
+      exitCode,
+      shell: resultShell,
+      truncated,
+      fullOutputPath: snapshot.fullOutputPath
+    }
+  } finally {
+    output.finish()
+    await output.closeTempFile()
   }
 }
 
@@ -513,10 +651,11 @@ function waitForSessionExitOrDelay(session: BashSession, ms: number): Promise<bo
   })
 }
 
-function stopSession(session: BashSession): void {
-  if (session.status !== 'running') return
+function stopSession(session: BashSession): Promise<void> {
+  if (session.status !== 'running') return session.stopCleanup ?? Promise.resolve()
   session.stopRequested = true
-  terminateSpawnTree(session.child)
+  session.stopCleanup ??= terminateBashProcessTree(session.child)
+  return session.stopCleanup
 }
 
 function normalizeYieldSeconds(value: unknown): number {
@@ -596,8 +735,8 @@ function sessionById(sessionId: unknown, threadId?: string): BashSession | null 
 export async function stopBashSessionById(sessionId: string, threadId?: string): Promise<boolean> {
   const session = sessionById(sessionId, threadId)
   if (!session || session.status !== 'running') return false
-  stopSession(session)
-  await waitForSessionExitOrDelay(session, STOP_GRACE_MS)
+  await stopSession(session)
+  await waitForSessionExitOrDelay(session, STOP_WAIT_MS - STOP_GRACE_MS)
   if (session.status === 'running') return false
   await session.settlement?.catch(() => undefined)
   return true
@@ -686,7 +825,7 @@ async function startBackgroundBashSession(
     child = started.child as ChildProcessWithoutNullStreams
   } catch (error) {
     releaseReservation()
-    if (child) terminateSpawnTree(child)
+    if (child) await terminateBashProcessTree(child)
     if (outputWriter) await outputWriter.close().catch(() => undefined)
     throw error
   }
@@ -806,11 +945,18 @@ async function startBackgroundBashSession(
   }
   child.stdout.on('data', handleData)
   child.stderr.on('data', handleData)
+  let timeoutTimer: NodeJS.Timeout | undefined
+  const clearSessionTimeout = () => {
+    if (!timeoutTimer) return
+    clearTimeout(timeoutTimer)
+    timeoutTimer = undefined
+  }
   const settleAndNotify = (
     status: Exclude<BashSessionStatus, 'running'>,
     exitCode: number | null,
     error?: string
   ): Promise<void> => {
+    clearSessionTimeout()
     if (!settleSession(session, status, exitCode, error)) {
       return session.settlement ?? Promise.resolve()
     }
@@ -846,9 +992,39 @@ async function startBackgroundBashSession(
       child.exitCode
     ).catch(() => undefined)
   }
+  if (input.detached) {
+    timeoutTimer = setTimeout(() => {
+      timeoutTimer = undefined
+      if (session.status !== 'running') return
+      void stopSession(session)
+    }, input.timeoutSeconds * 1000)
+    timeoutTimer.unref?.()
+    // The child can settle synchronously between the immediate exit check and
+    // timer installation. Do not retain a detached 24-hour timer in that race.
+    if (session.status !== 'running') clearSessionTimeout()
+  }
 
   const initialPayload = await sessionPayload(session)
-  await startedNotification
+  try {
+    await startedNotification
+  } catch (error) {
+    // Session admission is transactional: a caller never received this id, so
+    // a rejected start hook must not leave an unreachable process or record.
+    await stopSession(session)
+    await waitForSessionExitOrDelay(session, STOP_WAIT_MS - STOP_GRACE_MS)
+    if (session.status === 'running') {
+      await settleAndNotify(
+        'failed',
+        null,
+        'background shell start notification failed'
+      ).catch(() => undefined)
+    }
+    await session.settlement?.catch(() => undefined)
+    if (!session.finalized) await finalizeSessionOutput(session).catch(() => undefined)
+    clearSessionTimeout()
+    bashSessions.delete(session.id)
+    throw error
+  }
 
   if (input.detached) {
     // The bash tool call is complete once the detached session has been
@@ -856,14 +1032,6 @@ async function startBackgroundBashSession(
     // prevent later process output from updating the completed tool_result.
     liveToolUpdates = false
     await updateInFlight?.catch(() => undefined)
-    const timeoutMs = input.timeoutSeconds * 1000
-    const timeoutTimer = setTimeout(() => {
-      if (session.status !== 'running') return
-      stopSession(session)
-    }, timeoutMs)
-    timeoutTimer.unref?.()
-    child.once('exit', () => clearTimeout(timeoutTimer))
-    child.once('error', () => clearTimeout(timeoutTimer))
     return { payload: initialPayload }
   }
 
@@ -915,11 +1083,25 @@ export function createBashLocalTool(options: BashLocalToolOptions = {}): LocalTo
     maxLines: options.maxLines ?? DEFAULT_MAX_LINES,
     maxBytes: options.maxBytes ?? DEFAULT_MAX_BYTES
   }
+  const foregroundTimeoutSeconds = normalizePositiveInteger(
+    options.defaultTimeoutSeconds,
+    DEFAULT_BASH_TIMEOUT_SECONDS
+  )
+  const backgroundTimeoutSeconds = normalizePositiveInteger(
+    options.defaultBackgroundTimeoutSeconds,
+    options.defaultTimeoutSeconds === undefined
+      ? DEFAULT_BACKGROUND_BASH_TIMEOUT_SECONDS
+      : foregroundTimeoutSeconds
+  )
+  const foregroundLivenessIntervalMs = normalizePositiveInteger(
+    options.foregroundLivenessIntervalMs,
+    DEFAULT_FOREGROUND_BASH_LIVENESS_INTERVAL_MS
+  )
   const shellRunner = createShellCommandRunner()
   const shellRuntime = shellRunner.runtime
   return LocalToolHost.defineTool({
     name: 'bash',
-    description: `Execute a shell command in the workspace using the host platform shell. Current shell: ${shellRuntime.name}. Use ${shellRuntime.syntax} syntax. Return combined stdout and stderr. Commands use a runtime-owned 24-hour ceiling. Runs synchronously by default (background defaults to false). Set background=true to start a detached session that keeps running after the turn ends; the tool assigns an 8-character session_id in the response. Use the background_shell tool to list, read, poll, write, or stop background sessions.`,
+    description: `Execute a shell command in the workspace using the host platform shell. Current shell: ${shellRuntime.name}. Use ${shellRuntime.syntax} syntax. Return combined stdout and stderr. Foreground commands run synchronously with a runtime-owned ${foregroundTimeoutSeconds}-second ceiling (15 minutes by default). Commands expected to run longer must set background=true; explicit background sessions have a ${backgroundTimeoutSeconds}-second ceiling (24 hours by default), keep running after the turn ends, and return an 8-character session_id. Use the background_shell tool to list, read, poll, write, or stop background sessions.`,
     inputSchema: {
       type: 'object',
       properties: {
@@ -940,11 +1122,8 @@ export function createBashLocalTool(options: BashLocalToolOptions = {}): LocalTo
     execute: async (args, context, onUpdate) => withToolBoundary(async () => {
       const command = typeof args.command === 'string' ? args.command : ''
       if (!command.trim()) return { output: { error: 'command is required' }, isError: true }
-      const timeout = normalizePositiveInteger(
-        options.defaultTimeoutSeconds,
-        DEFAULT_BASH_TIMEOUT_SECONDS
-      )
       const background = args.background === true
+      const timeout = background ? backgroundTimeoutSeconds : foregroundTimeoutSeconds
       const cwd = workspaceRoot(context.workspace)
       try {
         if (background) {
@@ -991,6 +1170,7 @@ export function createBashLocalTool(options: BashLocalToolOptions = {}): LocalTo
           context.abortSignal,
           timeout,
           outputLimits,
+          foregroundLivenessIntervalMs,
           onUpdate,
           bashOps?.exec,
           shellRunner
@@ -1016,11 +1196,15 @@ export function createBashLocalTool(options: BashLocalToolOptions = {}): LocalTo
         }
       } catch (error) {
         const spawnError = error instanceof ShellSpawnError ? error.toJSON() : undefined
+        const timeoutError = error instanceof BashTimeoutError ? error : undefined
         return {
           output: {
             command,
             cwd,
             error: error instanceof Error ? error.message : String(error),
+            ...(timeoutError
+              ? { code: 'tool_timeout', timeout_seconds: timeoutError.timeoutSeconds }
+              : {}),
             ...(spawnError ? { spawn_error: spawnError } : {})
           },
           isError: true

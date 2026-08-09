@@ -324,6 +324,18 @@ describe('app-ipc-schemas', () => {
     }).path).toBe('/v1/threads/thr_1/goal')
   })
 
+  it('accepts only GET requests for bounded Kun thread timeline pages', () => {
+    expect(runtimeRequestPayloadSchema.parse({
+      path: '/v1/threads/thr_1/timeline?before=item_42&limit=300',
+      method: 'GET'
+    }).path).toBe('/v1/threads/thr_1/timeline?before=item_42&limit=300')
+    expect(() => runtimeRequestPayloadSchema.parse({
+      path: '/v1/threads/thr_1/timeline',
+      method: 'POST',
+      body: '{}'
+    })).toThrow(/runtime request path is not allowed/)
+  })
+
   it('accepts the Kun delegation profiles endpoint', () => {
     expect(runtimeRequestPayloadSchema.parse({
       path: '/v1/delegation/profiles',

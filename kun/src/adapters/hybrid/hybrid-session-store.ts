@@ -4,6 +4,8 @@ import type { AgentSession } from '../../domain/session.js'
 import type {
   ItemHistoryCompactionResult,
   ItemHistoryCommit,
+  ItemHistoryPage,
+  ItemHistoryPageOptions,
   ItemHistorySnapshot,
   SessionLatestUsageSnapshot,
   SessionStore,
@@ -83,6 +85,13 @@ export class HybridSessionStore implements SessionStore {
 
   async loadItems(threadId: string): Promise<TurnItem[]> {
     return this.delegate.loadItems(threadId)
+  }
+
+  async loadItemPage(
+    threadId: string,
+    options: ItemHistoryPageOptions
+  ): Promise<ItemHistoryPage> {
+    return this.delegate.loadItemPage(threadId, options)
   }
 
   async loadSession(threadId: string): Promise<AgentSession | null> {

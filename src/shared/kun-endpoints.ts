@@ -216,6 +216,18 @@ export function kunThreadStatePath(threadId: string): string {
   return `${kunThreadPath(threadId)}/state`
 }
 
+export const KUN_THREAD_TIMELINE_TEMPLATE = '/v1/threads/{id}/timeline'
+export function kunThreadTimelinePath(
+  threadId: string,
+  options: { before?: string; limit?: number } = {}
+): string {
+  const params = new URLSearchParams()
+  if (options.before) params.set('before', options.before)
+  if (options.limit !== undefined) params.set('limit', String(options.limit))
+  const query = params.toString()
+  return `${kunThreadPath(threadId)}/timeline${query ? `?${query}` : ''}`
+}
+
 export const KUN_THREAD_FORK_TEMPLATE = '/v1/threads/{id}/fork'
 export function kunThreadForkPath(threadId: string): string {
   return `${kunThreadPath(threadId)}/fork`

@@ -274,6 +274,9 @@ export function clearedThreadSelection(): Pick<
   ChatState,
   | 'activeThreadId'
   | 'threadLoadingId'
+  | 'threadHistoryCursor'
+  | 'threadHasMoreHistory'
+  | 'threadHistoryLoading'
   | 'activeThreadRelation'
   | 'activeThreadParentId'
   | 'activeThreadGoal'
@@ -297,6 +300,9 @@ export function clearedThreadSelection(): Pick<
   return {
     activeThreadId: null,
     threadLoadingId: null,
+    threadHistoryCursor: null,
+    threadHasMoreHistory: false,
+    threadHistoryLoading: false,
     activeThreadRelation: null,
     activeThreadParentId: null,
     activeThreadGoal: null,

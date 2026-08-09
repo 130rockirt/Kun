@@ -147,6 +147,12 @@ export type GraphPlanningLifecycle = z.infer<typeof GraphPlanningLifecycleSchema
 export const TurnSchema = z.object({
   id: z.string().min(1),
   threadId: z.string().min(1),
+  /** Client-generated admission key. Missing on turns created by legacy clients. */
+  clientRequestId: z.string().trim().min(1).max(256).optional(),
+  /** SHA-256 of the canonical start request bound to clientRequestId. */
+  clientRequestFingerprint: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  /** Set only after the durable start/item events have both been recorded. */
+  admissionCompletedAt: z.string().optional(),
   status: TurnStatus,
   prompt: z.string(),
   messageSource: UserMessageSource.optional(),
@@ -232,6 +238,8 @@ export type Turn = z.infer<typeof TurnSchema>
 
 export const StartTurnRequest = z.object({
   prompt: z.string().min(1),
+  /** Retry-stable client-generated admission key, scoped to this thread. */
+  clientRequestId: z.string().trim().min(1).max(256).optional(),
   displayText: z.string().optional(),
   messageSource: UserMessageSource.optional(),
   model: z.string().optional(),

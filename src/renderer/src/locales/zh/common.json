@@ -2232,6 +2232,7 @@
   "threadActionBusy": "当前回合结束后再操作这个会话。",
   "runtimeFeatureUnsupported": "当前连接的运行时还不支持这个操作。",
   "runtimeActiveTurn": "这个会话已有回合正在运行。",
+  "runtimeThreadBusyQueued": "当前任务仍在运行，你的消息已排队。可以等待任务完成，或停止当前任务。",
   "sidebarOfflineHint": "连接运行时后即可创建并继续会话。",
   "sidebarEmptyTitle": "还没有会话",
   "sidebarEmptySub": "从上方新建会话开始第一轮任务。",

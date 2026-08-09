@@ -43,7 +43,8 @@ export const KUN_MANAGER_CAPABILITIES = [
   'artifact-memory-data-v1',
   'atomic-json-v1',
   'thread-leases-v1',
-  'durable-leases-v1'
+  'durable-leases-v1',
+  'item-page-v1'
 ] as const
 
 const ThreadStoreOperationSchema = z.enum([
@@ -52,7 +53,7 @@ const ThreadStoreOperationSchema = z.enum([
 const SessionStoreOperationSchema = z.enum([
   'appendEvent', 'appendItem', 'rewriteItems', 'loadItemSnapshot',
   'rewriteItemsIfRevision', 'updateItem', 'compactItems', 'loadEventsSince',
-  'loadItems', 'loadSession', 'upsertSession', 'highestSeq', 'allocateEventSeq',
+  'loadItems', 'loadItemPage', 'loadSession', 'upsertSession', 'highestSeq', 'allocateEventSeq',
   'loadUsageRecords', 'loadLatestUsageSnapshots', 'resetMemory', 'clearThreadMemory'
 ])
 const ArtifactStoreOperationSchema = z.enum([
