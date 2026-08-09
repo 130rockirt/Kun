@@ -661,6 +661,7 @@ html[data-ui-plugin-presentation='on'][data-ui-plugin-character-anchor='bottom-r
 .ds-ui-plugin-character {
   display: block;
   box-sizing: border-box;
+  scale: var(--kun-ui-plugin-character-user-scale, 1);
   width: clamp(16rem, 28cqw, 27rem);
   max-width: 58%;
   max-height: 100%;
@@ -1469,7 +1470,9 @@ html[data-ui-plugin-scene-character-mask='ticket'] .ds-ui-plugin-scene-character
 }
 
 html[data-ui-plugin-scene-character-flip-x='on'] .ds-ui-plugin-scene-character {
-  scale: -1 1;
+  scale:
+    calc(-1 * var(--kun-ui-plugin-character-user-scale, 1))
+    var(--kun-ui-plugin-character-user-scale, 1);
 }
 
 html[data-ui-plugin-scene-character-motion='breathe'] .ds-ui-plugin-scene-character {

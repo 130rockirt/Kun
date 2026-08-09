@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { UI_MODE_DEFAULT, UI_MODE_STORAGE_KEY } from '../lib/ui-mode'
+import {
+  UI_PLUGIN_CHARACTER_SCALE_DEFAULT,
+  uiPluginCharacterScaleStorageKey
+} from '../lib/ui-plugin-character-scale'
 import { useUiPluginStore } from './ui-plugin-store'
 
 const dedicatedCharacterChromeRecipes = [
@@ -33,7 +37,8 @@ function createDomFixture(storedMode?: string) {
   }
   const localStorage = {
     getItem: (key: string) => storage.get(key) ?? null,
-    setItem: (key: string, value: string) => storage.set(key, value)
+    setItem: (key: string, value: string) => storage.set(key, value),
+    removeItem: (key: string) => storage.delete(key)
   }
   vi.stubGlobal('document', documentFixture)
   return { attributes, createElement, localStorage }
@@ -44,6 +49,7 @@ function resetStore(): void {
     uiMode: UI_MODE_DEFAULT,
     installed: [],
     activeRuntime: null,
+    characterScale: UI_PLUGIN_CHARACTER_SCALE_DEFAULT,
     busy: false,
     initialized: false,
     lastError: null
@@ -128,6 +134,59 @@ describe('UI plugin CDP theme activation', () => {
     expect(useUiPluginStore.getState().uiMode).toBe('beta-theme')
     expect(attributes.get('data-ui-plugin')).toBe('beta-theme')
     expect(createElement).not.toHaveBeenCalled()
+  })
+
+  it('restores and updates an isolated character scale for each successfully activated plugin', async () => {
+    const { localStorage } = createDomFixture()
+    localStorage.setItem(uiPluginCharacterScaleStorageKey('alpha-theme'), '1.65')
+    localStorage.setItem(uiPluginCharacterScaleStorageKey('beta-theme'), '0.75')
+    const activateUiPluginTheme = vi.fn(async (id: string) => ({
+      ok: true as const,
+      manifest: { id, name: id, version: '1.0.0', figures: {} },
+      figures: {}
+    }))
+    vi.stubGlobal('window', {
+      localStorage,
+      kunGui: {
+        activateUiPluginTheme,
+        deactivateUiPluginTheme: vi.fn(async () => ({ ok: true as const }))
+      }
+    })
+
+    await useUiPluginStore.getState().activateUiMode('alpha-theme')
+    expect(useUiPluginStore.getState().characterScale).toBe(1.65)
+
+    useUiPluginStore.getState().setCharacterScale(1.82)
+    expect(useUiPluginStore.getState().characterScale).toBe(1.82)
+    expect(localStorage.getItem(uiPluginCharacterScaleStorageKey('alpha-theme'))).toBe('1.82')
+
+    await useUiPluginStore.getState().activateUiMode('beta-theme')
+    expect(useUiPluginStore.getState().characterScale).toBe(0.75)
+
+    await useUiPluginStore.getState().activateUiMode(UI_MODE_DEFAULT)
+    expect(useUiPluginStore.getState().characterScale).toBe(UI_PLUGIN_CHARACTER_SCALE_DEFAULT)
+
+    await useUiPluginStore.getState().activateUiMode('alpha-theme')
+    expect(useUiPluginStore.getState().characterScale).toBe(1.82)
+  })
+
+  it('falls back to 100% when the activated plugin has malformed persisted scale data', async () => {
+    const { localStorage } = createDomFixture()
+    localStorage.setItem(uiPluginCharacterScaleStorageKey('broken-theme'), 'not-a-number')
+    vi.stubGlobal('window', {
+      localStorage,
+      kunGui: {
+        activateUiPluginTheme: vi.fn(async (id: string) => ({
+          ok: true as const,
+          manifest: { id, name: id, version: '1.0.0', figures: {} },
+          figures: {}
+        }))
+      }
+    })
+
+    await useUiPluginStore.getState().activateUiMode('broken-theme')
+
+    expect(useUiPluginStore.getState().characterScale).toBe(UI_PLUGIN_CHARACTER_SCALE_DEFAULT)
   })
 
   it('applies only normalized presentation attributes and clears them on a fast theme switch', async () => {
@@ -355,6 +414,7 @@ describe('UI plugin CDP theme activation', () => {
 
   it('waits for activation before removing that plugin and leaves the default mode active', async () => {
     const { attributes, localStorage } = createDomFixture()
+    localStorage.setItem(uiPluginCharacterScaleStorageKey('alpha-theme'), '1.6')
     const activationResult = deferred<{
       ok: true
       manifest: { id: string; name: string; version: string; figures: {} }
@@ -395,6 +455,8 @@ describe('UI plugin CDP theme activation', () => {
       lastError: null
     })
     expect(attributes.has('data-ui-plugin')).toBe(false)
+    expect(localStorage.getItem(uiPluginCharacterScaleStorageKey('alpha-theme'))).toBeNull()
+    expect(useUiPluginStore.getState().characterScale).toBe(UI_PLUGIN_CHARACTER_SCALE_DEFAULT)
   })
 
   it('reloads an active plugin immediately after reinstalling it', async () => {
