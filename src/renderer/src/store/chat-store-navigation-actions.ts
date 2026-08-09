@@ -745,7 +745,11 @@ export function createNavigationActions(
           conversationWorkspaceRoot: settings.conversationWorkspaceRoot || '',
           disabledSkillIds: settings.disabledSkillIds,
           graphEnabled: settings.agents.kun.graph?.enabled === true,
-          composerOrchestration: 'direct',
+          composerOrchestration:
+            settings.agents.kun.graph?.enabled === true &&
+            settings.agents.kun.graph.defaultStrategy === 'graph'
+              ? 'graph'
+              : 'direct',
           clawChannels: settings.claw.channels,
           activeClawChannelId: settings.claw.channels.find((channel) => channel.enabled)?.id ?? '',
           runtimeConnection: needsInitialSetup ? 'idle' : get().runtimeConnection,

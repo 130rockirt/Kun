@@ -3,12 +3,14 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { LocalToolHost, echoTool, userInputTool } from './local-tool-host.js'
-import type { ToolHostContext } from '../../ports/tool-host.js'
+import type { ToolCallLike, ToolHostContext } from '../../ports/tool-host.js'
 import { InMemoryArtifactStore } from '../../artifacts/artifact-store.js'
 import { createEditLocalTool, createWriteLocalTool } from './builtin-file-tools.js'
 import { createReadLocalTool } from './builtin-read-tool.js'
 import { resolveWorkspacePath, withToolBoundary } from './builtin-tool-utils.js'
 import { CapabilityRegistry } from './capability-registry.js'
+import type { HookInvocation } from '../../hooks/hook-engine.js'
+import type { ApprovalRequest } from '../../domain/approval.js'
 
 describe('LocalToolHost approval policy', () => {
   it('pins tool registries and hooks for the lifetime of a running turn', async () => {
@@ -46,6 +48,117 @@ describe('LocalToolHost approval policy', () => {
       { callId: 'call_missing', toolName: 'old_tool', arguments: {} },
       context('turn_new')
     )).rejects.toThrow(/unknown tool/i)
+  })
+
+  it('normalizes hook-rewritten raw arguments for policy, approval, identity, and execution', async () => {
+    const requiresExplicitApproval = vi.fn((call: ToolCallLike) => (
+      call.arguments.mutate === true
+    ))
+    const execute = vi.fn(async (args: Record<string, unknown>) => ({ output: args }))
+    const preHookCalls: ToolCallLike[] = []
+    const postHookCalls: ToolCallLike[] = []
+    const host = new LocalToolHost({
+      tools: [LocalToolHost.defineTool({
+        name: 'normalized_hook_tool',
+        description: 'Exercise canonical tool argument handling.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            mutate: { type: 'boolean' },
+            value: { type: 'string' }
+          },
+          required: ['mutate', 'value'],
+          additionalProperties: false
+        },
+        policy: 'auto',
+        requiresExplicitApproval,
+        execute
+      })],
+      hooks: [{
+        phase: 'PreToolUse',
+        run: (invocation: HookInvocation) => {
+          if (invocation.phase !== 'PreToolUse' || invocation.call.arguments.seed !== true) return
+          return {
+            arguments: {
+              tool_name: invocation.call.toolName,
+              provider_id: 'transport-only-provider',
+              __raw: '{"mutate":true,"value":"hooked"}'
+            }
+          }
+        }
+      }, {
+        phase: 'PreToolUse',
+        run: (invocation: HookInvocation) => {
+          if (invocation.phase === 'PreToolUse') preHookCalls.push(invocation.call)
+        }
+      }, {
+        phase: 'PostToolUse',
+        run: (invocation: HookInvocation) => {
+          if (invocation.phase === 'PostToolUse') postHookCalls.push(invocation.call)
+        }
+      }]
+    })
+    const awaitApproval = vi.fn(async (_approval: ApprovalRequest) => 'allow' as const)
+    const context = {
+      threadId: 'thread_normalized',
+      turnId: 'turn_normalized',
+      workspace: '/tmp/workspace',
+      approvalPolicy: 'on-request',
+      sandboxMode: 'workspace-write',
+      abortSignal: new AbortController().signal,
+      awaitApproval
+    } satisfies ToolHostContext
+    const canonicalArguments = { mutate: true, value: 'hooked' }
+
+    const first = await host.execute({
+      callId: 'call_normalized',
+      toolName: 'normalized_hook_tool',
+      providerId: 'builtin',
+      arguments: { seed: true }
+    }, context)
+    const replayed = await host.execute({
+      callId: 'call_normalized',
+      toolName: 'normalized_hook_tool',
+      providerId: 'builtin',
+      arguments: {
+        tool_name: 'normalized_hook_tool',
+        provider_id: 'transport-only-provider',
+        __raw: '{"mutate":true,"value":"hooked"}'
+      }
+    }, context)
+
+    expect(first.item).toMatchObject({ output: canonicalArguments, isError: false })
+    expect(replayed.item).toMatchObject({ output: canonicalArguments, isError: false })
+    expect(requiresExplicitApproval).toHaveBeenCalledTimes(2)
+    expect(preHookCalls).toHaveLength(2)
+    for (const activeCall of preHookCalls) {
+      expect(activeCall).toMatchObject({
+        providerId: 'builtin',
+        arguments: canonicalArguments
+      })
+    }
+    for (const [activeCall] of requiresExplicitApproval.mock.calls) {
+      expect(activeCall).toMatchObject({
+        providerId: 'builtin',
+        arguments: canonicalArguments
+      })
+    }
+    expect(awaitApproval).toHaveBeenCalledTimes(2)
+    for (const [approval] of awaitApproval.mock.calls) {
+      expect(approval.action).toMatchObject({
+        providerId: 'builtin',
+        arguments: canonicalArguments
+      })
+      expect(JSON.stringify(approval)).not.toContain('__raw')
+      expect(JSON.stringify(approval)).not.toContain('transport-only-provider')
+    }
+    expect(execute).toHaveBeenCalledOnce()
+    expect(execute.mock.calls[0]?.[0]).toEqual(canonicalArguments)
+    expect(postHookCalls).toHaveLength(1)
+    expect(postHookCalls[0]).toMatchObject({
+      providerId: 'builtin',
+      arguments: canonicalArguments
+    })
   })
 
   it('asks before auto tools when approval policy is always', async () => {

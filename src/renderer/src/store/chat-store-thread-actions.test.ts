@@ -376,14 +376,26 @@ describe('chat-store-thread-actions queued messages', () => {
     state.lastSeq = 11
     state.liveDeltaSeqFloor = 11
     state.threads = [thread('thr_a'), thread('thr_b')]
+    state.composerOrchestration = 'graph'
+    state.queuedMessages = [{
+      id: 'q-graph',
+      text: 'queued graph task',
+      deliveryState: 'paused',
+      orchestration: 'graph'
+    }]
 
     await actions.selectThread('thr_b')
+    state.composerOrchestration = 'direct'
     await actions.selectThread('thr_a')
 
     expect(getThreadDetail).toHaveBeenCalledTimes(1)
     expect(getThreadDetail).toHaveBeenCalledWith('thr_b')
     expect(state.blocks).toEqual([{ kind: 'assistant', id: 'a-answer', text: 'A' }])
     expect(state.lastSeq).toBe(11)
+    expect(state.queuedMessages).toEqual([
+      expect.objectContaining({ id: 'q-graph', orchestration: 'graph' })
+    ])
+    expect(state.composerOrchestration).toBe('direct')
     expect(subscribeThreadEvents).toHaveBeenLastCalledWith(
       'thr_a',
       11,
@@ -642,7 +654,12 @@ describe('chat-store-thread-actions queued messages', () => {
     const storage = new MemoryStorage()
     vi.stubGlobal('window', { localStorage: storage })
     saveQueuedMessagesForThread('thr_existing', [
-      { id: 'q-restored', text: 'continue after restart', deliveryState: 'pending' }
+      {
+        id: 'q-restored',
+        text: 'continue after restart',
+        deliveryState: 'pending',
+        orchestration: 'graph'
+      }
     ], storage)
     expect(queuedMessagesForThread('thr_existing')).toHaveLength(1)
     registryMock.getProvider.mockReturnValue({
@@ -667,7 +684,8 @@ describe('chat-store-thread-actions queued messages', () => {
       expect.objectContaining({
         id: 'q-restored',
         text: 'continue after restart',
-        deliveryState: 'pending'
+        deliveryState: 'pending',
+        orchestration: 'graph'
       })
     ])
     expect(state.currentTurnOrchestration).toBe('graph')
@@ -1400,6 +1418,46 @@ describe('chat-store-thread-actions queued messages', () => {
       expect.objectContaining({ orchestration: 'direct' })
     )
     expect(directState.currentTurnOrchestration).toBe('direct')
+  })
+
+  it('surfaces a Graph-disabled 503 without retrying Direct or changing the Graph preference', async () => {
+    const sendUserMessage = vi.fn(async () => {
+      throw Object.assign(new Error(JSON.stringify({
+        code: 'capability_unavailable',
+        message: 'Graph Mode is disabled; submit this turn with direct orchestration'
+      })), { status: 503 })
+    })
+    registryMock.getProvider.mockReturnValue({ sendUserMessage })
+    vi.stubGlobal('window', {
+      kunGui: {
+        getSettings: vi.fn(async () => ({
+          agents: { kun: { providerId: 'deepseek', model: 'deepseek-v4-pro' } },
+          codePromptPrefix: ''
+        })),
+        logError: vi.fn(async () => undefined)
+      }
+    })
+    const { actions, state } = buildHarness()
+    state.busy = false
+    state.graphEnabled = true
+    state.composerOrchestration = 'graph'
+
+    await expect(actions.sendMessage('run this graph', 'agent')).resolves.toBe(false)
+
+    expect(sendUserMessage).toHaveBeenCalledTimes(1)
+    expect(sendUserMessage).toHaveBeenCalledWith(
+      'thr_existing',
+      'run this graph',
+      expect.objectContaining({ orchestration: 'graph' })
+    )
+    expect(state.composerOrchestration).toBe('graph')
+    expect(state.currentTurnOrchestration).toBeNull()
+    expect(state.error).toBe('Graph Mode is disabled; submit this turn with direct orchestration')
+    expect(state.blocks).toContainEqual(expect.objectContaining({
+      kind: 'system',
+      text: 'Graph Mode is disabled; submit this turn with direct orchestration',
+      code: 'capability_unavailable'
+    }))
   })
 
   it('keeps a rejected send visible as a non-interactive conversation error', async () => {

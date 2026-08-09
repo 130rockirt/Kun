@@ -116,6 +116,144 @@ describe('graph_define_plan', () => {
     }
   })
 
+  it('defensively unwraps a complete __raw transport envelope and commits one run', async () => {
+    const { create, drafts, get, start, tool } = await harness()
+    create.mockResolvedValue({
+      run: { id: 'run_1', status: 'ready' },
+      validation: { valid: true, issues: [] }
+    })
+    get.mockResolvedValue({ id: 'run_1', status: 'ready' })
+    start.mockResolvedValue({ id: 'run_1', status: 'running' })
+
+    await expect(tool.execute({
+      tool_name: 'graph_define_plan',
+      __raw: JSON.stringify(validPlan())
+    }, context())).resolves.toMatchObject({
+      output: {
+        status: 'committed',
+        draft: { status: 'committed', committedRunId: 'run_1' },
+        run: { id: 'run_1', status: 'running' }
+      }
+    })
+
+    expect(await drafts.readCandidate('draft_1')).toEqual(validPlan().plan)
+    expect(create).toHaveBeenCalledOnce()
+    expect(start).toHaveBeenCalledOnce()
+  })
+
+  it('does not let a parseable raw envelope overwrite an explicit business plan', async () => {
+    const { create, drafts, start, tool } = await harness()
+    const explicitPlan = validPlan().plan
+    const raw = JSON.stringify({
+      plan: { ...explicitPlan, title: 'private-inner-plan-marker' }
+    })
+
+    const result = await tool.execute({ __raw: raw, plan: explicitPlan }, context())
+
+    expect(result).toMatchObject({
+      isError: true,
+      output: {
+        code: 'graph_plan_invalid',
+        retryable: true,
+        issues: expect.any(Array)
+      }
+    })
+    expect(await drafts.readCandidate('draft_1')).toEqual(explicitPlan)
+    expect(JSON.stringify(result)).not.toContain('private-inner-plan-marker')
+    expect(create).not.toHaveBeenCalled()
+    expect(start).not.toHaveBeenCalled()
+  })
+
+  it('returns a bounded structured repair for truncated __raw arguments and commits a changed correction', async () => {
+    const { create, drafts, get, start, tool } = await harness()
+    create.mockResolvedValue({
+      run: { id: 'run_1', status: 'ready' },
+      validation: { valid: true, issues: [] }
+    })
+    get.mockResolvedValue({ id: 'run_1', status: 'ready' })
+    start.mockResolvedValue({ id: 'run_1', status: 'running' })
+    const raw = '{"plan":{"title":"private-regression-marker","tasks":['
+
+    const first = await tool.execute({ __raw: raw }, context())
+
+    expect(first).toMatchObject({
+      isError: true,
+      output: {
+        code: 'graph_plan_invalid',
+        error: expect.stringContaining('smaller structured plan'),
+        retryable: true,
+        repairHint: expect.stringContaining('never use __raw'),
+        validExample: expect.objectContaining({ plan: expect.any(Object) }),
+        issues: [expect.objectContaining({
+          code: 'incomplete_tool_arguments',
+          path: ['plan'],
+          message: expect.stringContaining('not a complete structured JSON object'),
+          repairHint: expect.stringContaining('Shorten titles')
+        })],
+        draft: {
+          status: 'repairing',
+          repairCount: 1,
+          candidateHash: expect.stringMatching(/^[a-f0-9]{64}$/)
+        }
+      }
+    })
+    expect(JSON.stringify(first)).not.toContain('private-regression-marker')
+    expect(await drafts.readCandidate('draft_1')).toBeNull()
+    expect(create).not.toHaveBeenCalled()
+
+    await expect(tool.execute(validPlan(), context())).resolves.toMatchObject({
+      output: {
+        status: 'committed',
+        draft: { status: 'committed', committedRunId: 'run_1' }
+      }
+    })
+    expect(create).toHaveBeenCalledOnce()
+  })
+
+  it('stops an unchanged truncated retry without persisting or echoing the raw payload', async () => {
+    const { create, drafts, tool } = await harness()
+    const raw = '{"plan":{"title":"do-not-echo-this-marker"'
+
+    const first = await tool.execute({ __raw: raw }, context())
+    const repeated = await tool.execute({ __raw: raw }, context())
+
+    expect(first).toMatchObject({
+      isError: true,
+      output: { code: 'graph_plan_invalid', retryable: true }
+    })
+    expect(repeated).toMatchObject({
+      isError: true,
+      output: {
+        code: 'unchanged_invalid_plan',
+        retryable: false,
+        draft: { status: 'needs_correction', repairCount: 1 }
+      }
+    })
+    expect(JSON.stringify([first, repeated])).not.toContain('do-not-echo-this-marker')
+    expect(await drafts.readCandidate('draft_1')).toBeNull()
+    expect(create).not.toHaveBeenCalled()
+  })
+
+  it('recognizes changed but still incomplete arguments without treating them as an unchanged retry', async () => {
+    const { create, tool } = await harness()
+
+    await tool.execute({ __raw: '{"plan":{"title":"first"' }, context())
+    const changed = await tool.execute({
+      __raw: '{"plan":{"title":"second","tasks":['
+    }, context())
+
+    expect(changed).toMatchObject({
+      isError: true,
+      output: {
+        code: 'graph_plan_needs_correction',
+        retryable: false,
+        issues: [expect.objectContaining({ code: 'incomplete_tool_arguments' })],
+        draft: { status: 'needs_correction', repairCount: 1 }
+      }
+    })
+    expect(create).not.toHaveBeenCalled()
+  })
+
   it('returns one precise repair and pauses immediately when identical invalid arguments repeat', async () => {
     const { create, drafts, tool } = await harness()
     const invalidPlan = {

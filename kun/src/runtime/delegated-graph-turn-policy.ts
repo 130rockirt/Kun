@@ -91,8 +91,9 @@ export function delegatedGraphRecoveryInstruction(
     const instruction = [
       'Host planning gate: no GraphRun exists yet because this response did not commit a plan.',
       'Do not answer with prose alone.',
-      'Inspect only if needed, then call `graph_define_plan` now using its advertised schema.',
-      'If the tool returned structured validation issues, change the exact reported paths before calling it once more.'
+      'Inspect only if needed, then call `graph_define_plan` now with a structured top-level `{ plan: ... }` object using its advertised schema.',
+      'Do not use `__raw`, a JSON string, a Markdown code fence, or ordinary prose for the tool arguments.',
+      'If the tool returned structured validation issues, make the plan smaller when requested, change the exact reported paths, and call it only once more with changed arguments.'
     ].join(' ')
     return planningFeedback
       ? [

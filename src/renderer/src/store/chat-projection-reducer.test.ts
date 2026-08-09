@@ -281,7 +281,8 @@ describe('chat projection reducer', () => {
       ...state(),
       busy: true,
       currentTurnId: 'turn_graph',
-      currentTurnOrchestration: 'graph'
+      currentTurnOrchestration: 'graph',
+      composerOrchestration: 'graph'
     }, [{
       type: 'turn_failed',
       error: new Error('stopped'),
@@ -291,6 +292,7 @@ describe('chat projection reducer', () => {
     expect(projected.busy).toBe(false)
     expect(projected.currentTurnId).toBeNull()
     expect(projected.currentTurnOrchestration).toBeNull()
+    expect(projected.composerOrchestration).toBe('graph')
   })
 
   it('settles a stale running sidebar status when a terminal event is replayed (#1028)', () => {

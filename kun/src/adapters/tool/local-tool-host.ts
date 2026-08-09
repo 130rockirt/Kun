@@ -46,6 +46,7 @@ import {
   ToolOperationJournal
 } from '../../reliability/operation-journal.js'
 import { planModeToolBlock } from './plan-mode-tool-policy.js'
+import { normalizeRawToolArgumentsEnvelope } from '../../domain/tool-argument-envelope.js'
 
 const KUN_ACTION_APPROVAL_GRANT_TTL_MS = 2 * 60 * 1_000
 
@@ -236,7 +237,10 @@ export class LocalToolHost implements ToolHost {
         approved: false
       }
     }
-    const activeCall = preHooks.call
+    const normalizedArguments = normalizeRawToolArgumentsEnvelope(preHooks.call.arguments)
+    const activeCall = normalizedArguments === preHooks.call.arguments
+      ? preHooks.call
+      : { ...preHooks.call, arguments: normalizedArguments }
     const planModeBlock = await planModeToolBlock(tool, activeCall, context)
     if (planModeBlock) {
       return {

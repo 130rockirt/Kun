@@ -54,6 +54,59 @@ function fakeSdkAttempts(
   }
 }
 
+type GraphPlanSdkAttempt = {
+  arguments?: Record<string, unknown>
+  text: string
+  sessionId?: string
+}
+
+function fakeGraphPlanSdkAttempts(
+  attempts: readonly GraphPlanSdkAttempt[],
+  onQuery?: (input: { prompt: unknown; options?: unknown }, attempt: number) => void
+): SdkApi {
+  let attempt = 0
+  let graphDefinePlanHandler:
+    | ((args: Record<string, unknown>, extra: unknown) => Promise<unknown>)
+    | undefined
+  return {
+    tool: (name, _description, _schema, handler) => {
+      if (name === 'graph_define_plan') graphDefinePlanHandler = handler
+      return { name }
+    },
+    createSdkMcpServer: (config) => ({
+      type: 'sdk',
+      name: config.name,
+      instance: {}
+    }),
+    query: (input): SdkQueryResult => {
+      const current = attempt
+      attempt += 1
+      onQuery?.(input as { prompt: unknown; options?: unknown }, current)
+      async function* gen(): AsyncGenerator<SdkMessage> {
+        const currentAttempt = attempts[current] ?? attempts.at(-1)
+        if (!currentAttempt) return
+        if (currentAttempt.arguments) {
+          if (!graphDefinePlanHandler) {
+            throw new Error('graph_define_plan handler was not registered')
+          }
+          await graphDefinePlanHandler(currentAttempt.arguments, {})
+        }
+        if (currentAttempt.sessionId) {
+          yield {
+            type: 'system',
+            subtype: 'init',
+            session_id: currentAttempt.sessionId
+          } as SdkMessage
+        }
+        yield* svgSdkTextAttempt(currentAttempt.text)
+      }
+      const stream = gen() as SdkQueryResult
+      stream.interrupt = async () => {}
+      return stream
+    }
+  }
+}
+
 function stalledSdk(onStarted: () => void, onInterrupt: () => void): SdkApi {
   return {
     query: (): SdkQueryResult => {
@@ -1114,45 +1167,17 @@ describe('AgentSdkRuntime.runTurn', () => {
       prompt: unknown
       options?: { resume?: string }
     }> = []
-    let graphDefinePlanHandler:
-      | ((args: Record<string, unknown>, extra: unknown) => Promise<unknown>)
-      | undefined
-    let queryIndex = 0
-    const sdk: SdkApi = {
-      tool: (name, _description, _schema, handler) => {
-        if (name === 'graph_define_plan') graphDefinePlanHandler = handler
-        return { name }
-      },
-      createSdkMcpServer: (config) => ({
-        type: 'sdk',
-        name: config.name,
-        instance: {}
-      }),
-      query: (input): SdkQueryResult => {
-        const current = queryIndex
-        queryIndex += 1
-        queries.push(input as typeof queries[number])
-        async function* gen(): AsyncGenerator<SdkMessage> {
-          if (current === 0) {
-            await graphDefinePlanHandler?.({}, {})
-            yield {
-              type: 'system',
-              subtype: 'init',
-              session_id: 'graph_session_after_invalid_plan'
-            } as SdkMessage
-          }
-          yield* svgSdkTextAttempt(
-            current === 0 ? 'The plan is ready.' : 'Still prose only.'
-          )
-        }
-        const stream = gen() as SdkQueryResult
-        stream.interrupt = async () => {}
-        return stream
-      }
-    }
+    const sdk = fakeGraphPlanSdkAttempts([{
+      arguments: {},
+      text: 'The plan is ready.',
+      sessionId: 'graph_session_after_invalid_plan'
+    }, {
+      text: 'Still prose only.'
+    }], (input) => queries.push(input as typeof queries[number]))
     const executeKunTool = vi.fn(async () => ({
       output: {
         code: 'graph_plan_invalid',
+        retryable: true,
         issues: [{
           path: ['tasks', 0, 'loop'],
           message: 'Ordinary work tasks cannot contain loop.',
@@ -1162,7 +1187,7 @@ describe('AgentSdkRuntime.runTurn', () => {
       isError: true
     }))
     const finishTurn = vi.fn(async () => 'suspended' as const)
-    const { deps } = makeDeps({
+    const { deps, events } = makeDeps({
       loadSdk: async () => sdk,
       executeKunTool,
       finishTurn,
@@ -1198,7 +1223,176 @@ describe('AgentSdkRuntime.runTurn', () => {
     expect(queries[1]?.prompt).toEqual(expect.stringContaining(
       'Remove loop or change kind to loop_gate.'
     ))
+    expect(queries[1]?.prompt).toEqual(expect.stringContaining(
+      'structured top-level `{ plan: ... }` object'
+    ))
+    expect(queries[1]?.prompt).toEqual(expect.stringContaining(
+      'Do not use `__raw`'
+    ))
     expect(executeKunTool).toHaveBeenCalledTimes(1)
+    expect(events.filter((event) => (
+      event.kind === 'error' && event.code === 'graph_plan_submission_required'
+    ))).toHaveLength(1)
+  })
+
+  test('does not inject a second Graph planning query after a non-retryable plan result', async () => {
+    const queries: Array<{ prompt: unknown }> = []
+    const sdk = fakeGraphPlanSdkAttempts([{
+      arguments: { __raw: '{"plan":{"title":"still incomplete"' },
+      text: 'The plan needs user correction.'
+    }, {
+      arguments: { plan: { title: 'must not run' } },
+      text: 'unexpected retry'
+    }], (input) => queries.push(input))
+    const executeKunTool = vi.fn(async () => ({
+      output: {
+        code: 'graph_plan_needs_correction',
+        retryable: false,
+        issues: [{
+          path: ['plan'],
+          message: 'The corrected plan is still incomplete.'
+        }]
+      },
+      isError: true
+    }))
+    const finishTurn = vi.fn(async () => 'suspended' as const)
+    const { deps, events } = makeDeps({
+      loadSdk: async () => sdk,
+      executeKunTool,
+      finishTurn,
+      loadTurnContext: async () => ({
+        workspace: '/ws',
+        userText: 'build this with Graph',
+        approvalPolicy: 'auto',
+        sandboxMode: 'read-only',
+        allowSdkBuiltins: false,
+        bridgeKunBuiltinOverlaps: true,
+        graphPhase: 'planning',
+        bridgeableTools: [{
+          name: 'graph_define_plan',
+          description: 'Define the Graph plan',
+          inputSchema: { type: 'object' }
+        }]
+      })
+    })
+
+    await expect(new AgentSdkRuntime(deps).runTurn(
+      'th',
+      'tn',
+      new AbortController().signal
+    )).resolves.toBe('suspended')
+
+    expect(queries).toHaveLength(1)
+    expect(executeKunTool).toHaveBeenCalledTimes(1)
+    expect(events).not.toContainEqual(expect.objectContaining({
+      kind: 'error',
+      code: 'graph_plan_submission_required'
+    }))
+    expect(finishTurn).toHaveBeenCalledTimes(1)
+  })
+
+  test('commits a changed direct plan on the single recovery query and exits planning', async () => {
+    const initialArguments = {
+      plan: {
+        title: 'Initial oversized plan',
+        tasks: [{ id: 'task_1', objective: 'Repeat all background details' }]
+      }
+    }
+    const correctedArguments = {
+      plan: {
+        title: 'Focused plan',
+        tasks: [{ id: 'task_1', objective: 'Apply the requested change' }]
+      }
+    }
+    const queries: Array<{
+      prompt: unknown
+      options?: { resume?: string }
+    }> = []
+    const sdk = fakeGraphPlanSdkAttempts([{
+      arguments: initialArguments,
+      text: 'The first plan needs correction.',
+      sessionId: 'graph_session_after_retryable_plan'
+    }, {
+      arguments: correctedArguments,
+      text: 'The corrected plan was committed.'
+    }], (input) => queries.push(input as typeof queries[number]))
+    let toolAttempt = 0
+    let planCommitted = false
+    const executeKunTool = vi.fn(async (
+      _threadId: string,
+      _turnId: string,
+      _toolName: string,
+      _args: Record<string, unknown>
+    ): Promise<{ output: unknown; isError?: boolean }> => {
+      toolAttempt += 1
+      if (toolAttempt === 1) {
+        return {
+          output: {
+            code: 'graph_plan_invalid',
+            retryable: true,
+            issues: [{
+              path: ['plan', 'tasks'],
+              message: 'The plan is too large.',
+              repairHint: 'Submit a smaller changed plan.'
+            }]
+          },
+          isError: true
+        }
+      }
+      planCommitted = true
+      return {
+        output: { status: 'committed', runId: 'run_graph_1' },
+        isError: false
+      }
+    })
+    const finishTurn = vi.fn(async () => (
+      planCommitted ? 'suspended_pending_supervision' as const : 'suspended' as const
+    ))
+    const { deps, events } = makeDeps({
+      loadSdk: async () => sdk,
+      executeKunTool,
+      finishTurn,
+      loadTurnContext: async () => ({
+        workspace: '/ws',
+        userText: 'build this with Graph',
+        approvalPolicy: 'auto',
+        sandboxMode: 'read-only',
+        allowSdkBuiltins: false,
+        bridgeKunBuiltinOverlaps: true,
+        graphPhase: 'planning',
+        bridgeableTools: [{
+          name: 'graph_define_plan',
+          description: 'Define the Graph plan',
+          inputSchema: { type: 'object' }
+        }]
+      })
+    })
+
+    await expect(new AgentSdkRuntime(deps).runTurn(
+      'th',
+      'tn',
+      new AbortController().signal
+    )).resolves.toBe('suspended_pending_supervision')
+
+    expect(queries).toHaveLength(2)
+    expect(queries[1]?.options?.resume).toBe(
+      'graph_session_after_retryable_plan'
+    )
+    expect(queries[1]?.prompt).toEqual(expect.stringContaining(
+      'structured top-level `{ plan: ... }` object'
+    ))
+    expect(queries[1]?.prompt).toEqual(expect.stringContaining(
+      'Do not use `__raw`'
+    ))
+    expect(executeKunTool).toHaveBeenCalledTimes(2)
+    expect(executeKunTool.mock.calls[0]?.[3]).toEqual(initialArguments)
+    expect(executeKunTool.mock.calls[1]?.[3]).toEqual(correctedArguments)
+    expect(executeKunTool.mock.calls[1]?.[3]).not.toHaveProperty('__raw')
+    expect(planCommitted).toBe(true)
+    expect(events.filter((event) => (
+      event.kind === 'error' && event.code === 'graph_plan_submission_required'
+    ))).toHaveLength(1)
+    expect(finishTurn).toHaveBeenCalledTimes(1)
   })
 
   test('gives pending Graph supervision one real SDK recovery exchange before parking', async () => {

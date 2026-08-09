@@ -737,6 +737,19 @@ describe('createAgentSdkRuntime turn context', () => {
   test('uses the bounded Graph catalog and disables SDK built-ins across planning and supervision', async () => {
     const graphOnly = (context: { orchestration?: string }) =>
       context.orchestration === 'graph'
+    const graphDefinePlan = vi.fn(async (args: Record<string, unknown>) => {
+      if (Object.prototype.hasOwnProperty.call(args, '__raw')) {
+        return {
+          output: {
+            code: 'graph_plan_invalid',
+            retryable: true,
+            receivedArguments: args
+          },
+          isError: true
+        }
+      }
+      return { output: { status: 'committed', receivedArguments: args } }
+    })
     const registry = CapabilityRegistry.fromLocalTools([
       LocalToolHost.defineTool({
         name: 'read',
@@ -757,7 +770,7 @@ describe('createAgentSdkRuntime turn context', () => {
         description: 'Define Graph plan',
         inputSchema: { type: 'object' },
         shouldAdvertise: graphOnly,
-        execute: async () => ({ output: { status: 'committed' } })
+        execute: graphDefinePlan
       }),
       LocalToolHost.defineTool({
         name: 'graph_review_node',
@@ -845,6 +858,50 @@ describe('createAgentSdkRuntime turn context', () => {
       isError: true,
       output: expect.stringContaining('active tool policy')
     })
+
+    const incompleteRaw = '{"plan":{"title":"truncated"'
+    await expect(deps.executeKunTool(
+      'th',
+      'tn',
+      'graph_define_plan',
+      { __raw: incompleteRaw }
+    )).resolves.toEqual({
+      output: {
+        code: 'graph_plan_invalid',
+        retryable: true,
+        receivedArguments: { __raw: incompleteRaw }
+      },
+      isError: true
+    })
+    expect(graphDefinePlan).toHaveBeenLastCalledWith(
+      { __raw: incompleteRaw },
+      expect.objectContaining({ threadId: 'th', turnId: 'tn' }),
+      expect.any(Function)
+    )
+
+    const correctedArguments = {
+      plan: {
+        title: 'Bounded Graph plan',
+        tasks: [{ id: 'task_1', objective: 'Apply the requested change' }]
+      }
+    }
+    await expect(deps.executeKunTool(
+      'th',
+      'tn',
+      'graph_define_plan',
+      { __raw: JSON.stringify(correctedArguments) }
+    )).resolves.toEqual({
+      output: {
+        status: 'committed',
+        receivedArguments: correctedArguments
+      },
+      isError: false
+    })
+    expect(graphDefinePlan).toHaveBeenLastCalledWith(
+      correctedArguments,
+      expect.objectContaining({ threadId: 'th', turnId: 'tn' }),
+      expect.any(Function)
+    )
 
     thread.turns[0]!.graphPlanningLifecycle = {
       ...thread.turns[0]!.graphPlanningLifecycle!,

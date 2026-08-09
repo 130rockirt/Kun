@@ -46,6 +46,20 @@ describe('Graph Lead mode system contract', () => {
     )
     expect(GRAPH_LEAD_MODE_INSTRUCTION).toContain('GUI-only plan path')
     expect(GRAPH_LEAD_MODE_INSTRUCTION).toContain('pending condition source')
+    expect(GRAPH_LEAD_MODE_INSTRUCTION).toContain(
+      'top-level object contains only `plan`'
+    )
+    for (const forbiddenEnvelope of [
+      '`__raw`',
+      'a JSON string',
+      'a Markdown fenced block',
+      'an ordinary text response'
+    ]) {
+      expect(GRAPH_LEAD_MODE_INSTRUCTION).toContain(forbiddenEnvelope)
+    }
+    expect(GRAPH_LEAD_MODE_INSTRUCTION).toContain(
+      'do not copy the entire source plan into every task objective'
+    )
   })
 
   it('delegates mechanical fields to the host', () => {

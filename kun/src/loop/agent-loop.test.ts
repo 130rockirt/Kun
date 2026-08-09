@@ -1,10 +1,14 @@
-import { resolve } from 'node:path'
+import { mkdir, mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { InMemoryEventBus } from '../adapters/in-memory-event-bus.js'
 import { InMemorySessionStore } from '../adapters/in-memory-session-store.js'
 import { InMemoryThreadStore } from '../adapters/in-memory-thread-store.js'
 import { LocalToolHost, echoTool, type LocalTool } from '../adapters/tool/local-tool-host.js'
+import { InMemoryArtifactStore } from '../artifacts/artifact-store.js'
 import { createImmutablePrefix } from '../cache/immutable-prefix.js'
+import { DEFAULT_GRAPH_RUNTIME_CONFIG } from '../config/kun-config.js'
 import { emptyUsageSnapshot } from '../contracts/usage.js'
 import { createThreadRecord } from '../domain/thread.js'
 import type { ApprovalRequest } from '../domain/approval.js'
@@ -23,6 +27,7 @@ import {
 import { SequentialIdGenerator } from '../ports/id-generator.js'
 import type { ModelClient, ModelRequest, ModelStreamChunk, ModelToolSpec } from '../ports/model-client.js'
 import type { UserInputGate, UserInputRequest, UserInputResolution } from '../ports/user-input-gate.js'
+import { GraphRuntimeComposition } from '../server/graph-runtime-factory.js'
 import { RuntimeEventRecorder } from '../services/runtime-event-recorder.js'
 import { TurnService } from '../services/turn-service.js'
 import { UsageService } from '../services/usage-service.js'
@@ -258,6 +263,46 @@ class ScriptedInvalidGraphModel implements ModelClient {
       return
     }
     yield { kind: 'assistant_text_delta', text: 'GraphRun started after correction.' }
+    yield { kind: 'completed', stopReason: 'stop' }
+  }
+}
+
+class TruncatedRawGraphPlanModel implements ModelClient {
+  readonly provider = 'test'
+  readonly model = 'truncated-raw-graph-plan-model'
+  readonly requests: ModelRequest[] = []
+
+  async *stream(request: ModelRequest): AsyncIterable<ModelStreamChunk> {
+    this.requests.push(request)
+    if (this.requests.length <= 2) {
+      yield {
+        kind: 'tool_call_complete',
+        callId: `graph_define_raw_recovery_${this.requests.length}`,
+        toolName: 'graph_define_plan',
+        arguments: this.requests.length === 1
+          ? { __raw: '{"plan":{"title":"truncated-private-marker","tasks":[' }
+          : {
+              plan: {
+                title: 'Implement the requested Graph change',
+                tasks: [{
+                  key: 'implement',
+                  kind: 'work',
+                  title: 'Implement and verify the change',
+                  objective: 'Implement the requested change and verify its behavior.',
+                  dependsOn: [],
+                  dataFrom: [],
+                  acceptanceCriteria: ['The requested behavior is implemented and verified.'],
+                  readScopes: ['.'],
+                  writeScopes: ['src']
+                }],
+                completionTaskKeys: ['implement']
+              }
+            }
+      }
+      yield { kind: 'completed', stopReason: 'tool_calls' }
+      return
+    }
+    yield { kind: 'assistant_text_delta', text: 'The durable GraphRun is now active.' }
     yield { kind: 'completed', stopReason: 'stop' }
   }
 }
@@ -1459,6 +1504,202 @@ describe('AgentLoop interruption', () => {
       })
     ]))
     expect(model.requests[2]?.requiredToolName).toBeUndefined()
+  })
+
+  it('recovers truncated raw Graph planning arguments into one durable runtime run', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-agent-loop-graph-raw-'))
+    const workspace = join(root, 'workspace')
+    await mkdir(workspace)
+    try {
+      const sessionStore = new InMemorySessionStore()
+      const threadStore = new InMemoryThreadStore()
+      const eventBus = new InMemoryEventBus()
+      const inflight = new InflightTracker()
+      const steering = new SteeringQueue()
+      const ids = new SequentialIdGenerator()
+      const nowIso = () => '2026-08-09T00:00:00.000Z'
+      const events = new RuntimeEventRecorder({
+        eventBus,
+        sessionStore,
+        allocateSeq: (threadId) => eventBus.allocateSeq(threadId),
+        nowIso
+      })
+      const graphConfig = () => ({
+        ...DEFAULT_GRAPH_RUNTIME_CONFIG,
+        enabled: true
+      })
+      const graphRuntime = new GraphRuntimeComposition({
+        dataDir: root,
+        config: graphConfig,
+        artifactStore: new InMemoryArtifactStore(),
+        runtimeEvents: events,
+        threadStore,
+        sessionStore,
+        ids,
+        nowIso
+      })
+      const resolveGraphLeadRun = async (input: { threadId: string; turnId: string }) => {
+        const run = (await graphRuntime.store.list({ threadId: input.threadId }))
+          .find((candidate) => candidate.sourceTurnId === input.turnId)
+        return run
+          ? {
+              runId: run.id,
+              lastEventSeq: run.lastEventSeq,
+              terminal: run.status === 'completed' ||
+                run.status === 'failed' ||
+                run.status === 'cancelled'
+            }
+          : null
+      }
+      const turns = new TurnService({
+        threadStore,
+        sessionStore,
+        events,
+        inflight,
+        steering,
+        compactor: new ContextCompactor(),
+        resolveGraphLeadRun,
+        createGraphPlanningDraft: (input) => graphRuntime.createPlanningDraft(input),
+        resolveGraphPlanningDraft: (input) => graphRuntime.resolvePlanningDraft(input),
+        transitionGraphPlanningDraft: (input) => graphRuntime.transitionPlanningDraft(input),
+        ids,
+        nowIso
+      })
+      const graphDefineTool = graphRuntime.toolsProvider.tools.find(
+        (tool) => tool.name === 'graph_define_plan'
+      )
+      if (!graphDefineTool) throw new Error('graph_define_plan tool is unavailable')
+      const model = new TruncatedRawGraphPlanModel()
+      const loop = new AgentLoop({
+        threadStore,
+        sessionStore,
+        approvalGate: new AllowApprovalGate(),
+        userInputGate: new NoopUserInputGate(),
+        model,
+        toolHost: new LocalToolHost({ tools: [graphDefineTool] }),
+        usage: new UsageService(),
+        events,
+        turns,
+        inflight,
+        steering,
+        compactor: new ContextCompactor(),
+        prefix: createImmutablePrefix({ systemPrompt: 'test system prompt' }),
+        ids,
+        nowIso
+      })
+      const threadId = 'thr_graph_raw_recovery'
+      await threadStore.upsert(createThreadRecord({
+        id: threadId,
+        title: 'Graph raw argument recovery',
+        workspace,
+        model: model.model
+      }))
+      const started = await turns.startTurn({
+        threadId,
+        request: {
+          prompt: 'Implement and verify the requested change as one durable Graph.',
+          model: model.model,
+          orchestration: 'graph'
+        }
+      })
+      expect(await turns.getTurn(threadId, started.turnId)).toMatchObject({
+        orchestration: 'graph',
+        graphPlanningLifecycle: { state: 'planning' }
+      })
+      expect(await graphRuntime.control.list({ threadId })).toEqual([])
+
+      await expect(loop.runTurn(threadId, started.turnId)).resolves.toBe('suspended')
+
+      expect(model.requests).toHaveLength(3)
+      expect(model.requests.slice(0, 2).every((request) =>
+        request.requiredToolName === undefined &&
+        request.tools.map((tool) => tool.name).join(',') === 'graph_define_plan'
+      )).toBe(true)
+      expect(model.requests.every((request) =>
+        request.modeInstruction?.includes('Graph Mode is active') === true
+      )).toBe(true)
+      expect(model.requests[1]?.history).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'tool_result',
+          toolName: 'graph_define_plan',
+          isError: true,
+          output: expect.objectContaining({
+            code: 'graph_plan_invalid',
+            retryable: true,
+            issues: [expect.objectContaining({ code: 'incomplete_tool_arguments' })]
+          })
+        })
+      ]))
+
+      const items = await sessionStore.loadItems(threadId)
+      const planCalls = items.filter((item) =>
+        item.turnId === started.turnId &&
+        item.kind === 'tool_call' &&
+        item.toolName === 'graph_define_plan'
+      )
+      expect(planCalls).toHaveLength(2)
+      expect(planCalls[0]).toMatchObject({
+        arguments: {},
+        summary: expect.stringMatching(/Incomplete tool arguments omitted \(\d+ UTF-8 bytes; sha256 [a-f0-9]{64}\)\./)
+      })
+      expect(planCalls[1]).toMatchObject({ arguments: { plan: expect.any(Object) } })
+      expect(planCalls[1]?.kind === 'tool_call' && '__raw' in planCalls[1].arguments).toBe(false)
+      const planResults = items.filter((item) =>
+        item.turnId === started.turnId &&
+        item.kind === 'tool_result' &&
+        item.toolName === 'graph_define_plan'
+      )
+      expect(planResults).toHaveLength(2)
+      expect(planResults.filter((item) => {
+        if (item.kind !== 'tool_result' || !item.output || typeof item.output !== 'object') {
+          return false
+        }
+        return item.isError === true &&
+          (item.output as Record<string, unknown>).retryable === true
+      })).toHaveLength(1)
+      expect(JSON.stringify(planResults[0])).not.toContain('truncated-private-marker')
+      expect(JSON.stringify(items)).not.toContain('truncated-private-marker')
+      expect(JSON.stringify(model.requests[1]?.history)).not.toContain('truncated-private-marker')
+      expect(planResults[1]).toMatchObject({
+        isError: false,
+        output: {
+          status: 'committed',
+          draft: { status: 'committed' },
+          run: { status: 'running' }
+        }
+      })
+
+      const drafts = await graphRuntime.drafts.list({ threadId })
+      const runs = await graphRuntime.control.list({ threadId })
+      expect(drafts).toHaveLength(1)
+      expect(runs).toHaveLength(1)
+      expect(drafts[0]).toMatchObject({
+        sourceTurnId: started.turnId,
+        status: 'committed',
+        reservedRunId: runs[0]?.id,
+        committedRunId: runs[0]?.id,
+        repairCount: 1
+      })
+      expect(runs[0]).toMatchObject({
+        sourceTurnId: started.turnId,
+        threadId,
+        status: 'running'
+      })
+
+      const persistedThread = await threadStore.get(threadId)
+      expect(persistedThread?.turns).toHaveLength(1)
+      expect(persistedThread?.turns[0]).toMatchObject({
+        id: started.turnId,
+        status: 'running',
+        orchestration: 'graph',
+        graphPlanningLifecycle: { state: 'committed' },
+        graphLeadLifecycle: { runId: runs[0]?.id, state: 'supervising' }
+      })
+      expect(persistedThread?.turns.some((turn) => turn.orchestration === 'direct')).toBe(false)
+      expect(turns.isTurnExecutionActive(started.turnId)).toBe(false)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
   })
 
   it('recovers a dedicated SVG turn until mutation and matching validation succeed', async () => {

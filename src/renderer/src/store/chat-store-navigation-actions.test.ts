@@ -373,7 +373,16 @@ describe('chat-store navigation workspace selection', () => {
     }
   })
 
-  it('hydrates Graph availability during boot but starts the composer in Direct mode', async () => {
+  it.each([
+    { enabled: true, defaultStrategy: 'graph' as const, expected: 'graph' as const },
+    { enabled: true, defaultStrategy: 'direct' as const, expected: 'direct' as const },
+    { enabled: false, defaultStrategy: 'graph' as const, expected: 'direct' as const },
+    { enabled: false, defaultStrategy: 'direct' as const, expected: 'direct' as const }
+  ])('hydrates Graph availability and default strategy during boot ($enabled, $defaultStrategy)', async ({
+    enabled,
+    defaultStrategy,
+    expected
+  }) => {
     vi.useFakeTimers()
     try {
       vi.stubGlobal('window', {
@@ -399,8 +408,8 @@ describe('chat-store navigation workspace selection', () => {
                 model: 'deepseek-v4-pro',
                 baseUrl: '',
                 graph: {
-                  enabled: true,
-                  defaultStrategy: 'graph'
+                  enabled,
+                  defaultStrategy
                 }
               }
             },
@@ -409,12 +418,14 @@ describe('chat-store navigation workspace selection', () => {
         }
       })
       const harness = buildHarness()
-      harness.state.composerOrchestration = 'graph'
+      harness.state.composerOrchestration = expected === 'graph' ? 'direct' : 'graph'
+      harness.state.currentTurnOrchestration = expected === 'graph' ? 'direct' : 'graph'
 
       await harness.actions.boot()
 
-      expect(harness.state.graphEnabled).toBe(true)
-      expect(harness.state.composerOrchestration).toBe('direct')
+      expect(harness.state.graphEnabled).toBe(enabled)
+      expect(harness.state.composerOrchestration).toBe(expected)
+      expect(harness.state.currentTurnOrchestration).toBe(expected === 'graph' ? 'direct' : 'graph')
     } finally {
       vi.useRealTimers()
     }

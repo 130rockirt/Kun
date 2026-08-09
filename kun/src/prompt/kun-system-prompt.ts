@@ -220,11 +220,14 @@ export function buildToolPreferenceInstruction(
   if (names.has('graph_define_plan')) {
     bullets.push(
       exploreAgentAvailable
-        ? 'A durable Graph planning draft already exists. Use `explore_agent` to inspect relevant repository facts first, then use `graph_define_plan` with only task keys, objectives, dependencies, acceptance criteria, and repository-relative scopes. The host supplies every execution mechanic.'
-        : 'A durable Graph planning draft already exists. Inspect relevant repository facts with read-only tools, then use `graph_define_plan` with only task keys, objectives, dependencies, acceptance criteria, and repository-relative scopes. The host supplies every execution mechanic.'
+        ? 'A durable Graph planning draft already exists. Use `explore_agent` to inspect relevant repository facts first, then use `graph_define_plan` with only its advertised plan fields: a plan title plus task keys, kinds, titles, objectives, dependencies, acceptance criteria, and repository-relative scopes. The host supplies every execution mechanic.'
+        : 'A durable Graph planning draft already exists. Inspect relevant repository facts with read-only tools, then use `graph_define_plan` with only its advertised plan fields: a plan title plus task keys, kinds, titles, objectives, dependencies, acceptance criteria, and repository-relative scopes. The host supplies every execution mechanic.'
     )
     bullets.push(
       'You may make one changed correction from structured validation issues. Never repeat unchanged invalid plan arguments or claim a GraphRun exists before `graph_define_plan` returns committed.'
+    )
+    bullets.push(
+      'Call `graph_define_plan` with a structured top-level `{ plan: ... }` object. Never wrap the arguments in `__raw`, a JSON string, a Markdown code fence, or ordinary prose; keep large plans compact instead of repeating the full source plan in every objective.'
     )
   }
   if (names.has('graph_supervise_node')) {

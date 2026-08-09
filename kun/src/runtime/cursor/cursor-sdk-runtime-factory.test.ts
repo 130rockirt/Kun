@@ -59,6 +59,19 @@ describe('Cursor SDK runtime factory', () => {
   test('uses the bounded Graph tool catalog and Graph Lead instruction by durable phase', async () => {
     const graphOnly = (context: { orchestration?: string }) =>
       context.orchestration === 'graph'
+    const graphDefinePlan = vi.fn(async (args: Record<string, unknown>) => {
+      if (Object.prototype.hasOwnProperty.call(args, '__raw')) {
+        return {
+          output: {
+            code: 'graph_plan_invalid',
+            retryable: true,
+            receivedArguments: args
+          },
+          isError: true
+        }
+      }
+      return { output: { status: 'committed', receivedArguments: args } }
+    })
     const registry = CapabilityRegistry.fromLocalTools([
       LocalToolHost.defineTool({
         name: 'read',
@@ -79,7 +92,7 @@ describe('Cursor SDK runtime factory', () => {
         description: 'Define Graph plan',
         inputSchema: { type: 'object' },
         shouldAdvertise: graphOnly,
-        execute: async () => ({ output: { status: 'committed' } })
+        execute: graphDefinePlan
       }),
       LocalToolHost.defineTool({
         name: 'graph_review_node',
@@ -179,9 +192,58 @@ describe('Cursor SDK runtime factory', () => {
     ])
     expect(planning.graphPlanWasCommitted?.()).toBe(false)
     expect(planning.graphPlanCanRetry?.()).toBe(true)
-    await planning.customTools.graph_define_plan!.execute(
-      {},
-      { toolCallId: 'call_define_plan' }
+
+    const incompleteRaw = '{"plan":{"title":"truncated"'
+    await expect(planning.customTools.graph_define_plan!.execute(
+      { __raw: incompleteRaw },
+      { toolCallId: 'call_define_plan_invalid' }
+    )).resolves.toEqual({
+      content: [{
+        type: 'text',
+        text: JSON.stringify({
+          code: 'graph_plan_invalid',
+          retryable: true,
+          receivedArguments: { __raw: incompleteRaw }
+        }, null, 2)
+      }],
+      isError: true
+    })
+    expect(graphDefinePlan).toHaveBeenLastCalledWith(
+      { __raw: incompleteRaw },
+      expect.objectContaining({
+        threadId: 'thread_graph',
+        turnId: 'turn_graph'
+      }),
+      expect.any(Function)
+    )
+    expect(planning.graphPlanWasCommitted?.()).toBe(false)
+    expect(planning.graphPlanCanRetry?.()).toBe(true)
+
+    const correctedArguments = {
+      plan: {
+        title: 'Bounded Graph plan',
+        tasks: [{ id: 'task_1', objective: 'Apply the requested change' }]
+      }
+    }
+    await expect(planning.customTools.graph_define_plan!.execute(
+      { __raw: JSON.stringify(correctedArguments) },
+      { toolCallId: 'call_define_plan_valid' }
+    )).resolves.toEqual({
+      content: [{
+        type: 'text',
+        text: JSON.stringify({
+          status: 'committed',
+          receivedArguments: correctedArguments
+        }, null, 2)
+      }]
+    })
+    expect(graphDefinePlan).toHaveBeenLastCalledWith(
+      correctedArguments,
+      expect.objectContaining({
+        threadId: 'thread_graph',
+        turnId: 'turn_graph'
+      }),
+      expect.any(Function)
     )
     expect(planning.graphPlanWasCommitted?.()).toBe(true)
     expect(planning.graphPlanCanRetry?.()).toBe(false)

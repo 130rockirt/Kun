@@ -21,6 +21,10 @@ import {
 import type { ToolHostContext } from '../../ports/tool-host.js'
 import type { RuntimeEventRecorder } from '../../services/runtime-event-recorder.js'
 import { isHostShutdownTurnSuspension } from '../../services/turn-service.js'
+import {
+  isUnresolvedRawToolArgumentsEnvelope,
+  normalizeRawToolArgumentsEnvelope
+} from '../../domain/tool-argument-envelope.js'
 import { graphCreateBudgetDefaults } from './graph-create-run-tool.js'
 import { restoreMissingTaskTitles } from './graph-plan-candidate-repair.js'
 import { LocalToolHost, type LocalTool } from './local-tool-host.js'
@@ -80,6 +84,7 @@ export function buildGraphDefinePlanTool(options: {
       'Every scope is repository-relative. Use "." for the repository root and an empty writeScopes array for read-only work.',
       'Ordinary work/review/integration tasks never contain loop. Only kind "loop_gate" contains the required bounded loop object.',
       'The host owns run identity, phases, strategy, budgets, model/provider routing, retries, timeouts, reviews, revisions, workspace, and timestamps.',
+      'Call this as a structured tool with only a top-level plan object. Never use __raw, a JSON string, a Markdown code fence, or ordinary prose for the arguments.',
       `Minimal valid call: ${JSON.stringify(MINIMAL_VALID_PLAN_EXAMPLE)}`,
       'If validation returns issues, change the exact paths once. Never repeat unchanged invalid arguments and never claim a GraphRun exists until this tool returns committed.'
     ].join(' '),
@@ -127,18 +132,22 @@ export function buildGraphDefinePlanTool(options: {
           )
         }
 
-        const submittedCandidate = typeof args === 'object' && args !== null && 'plan' in args
-          ? (args as { plan?: unknown }).plan
+        const normalizedArgs = normalizeRawToolArgumentsEnvelope(args)
+        const unresolvedRaw = isUnresolvedRawToolArgumentsEnvelope(normalizedArgs)
+          ? normalizedArgs.__raw
+          : undefined
+        const submittedCandidate = 'plan' in normalizedArgs
+          ? normalizedArgs.plan
           : undefined
         const previousCandidate = await options.drafts.readCandidate(draft.id)
         const candidate = restoreMissingTaskTitles(
           submittedCandidate,
           previousCandidate
         )
-        const effectiveArgs = typeof args === 'object' && args !== null
-          ? { ...args, plan: candidate }
-          : args
-        const candidateHash = hashCandidate(candidate)
+        const effectiveArgs = { ...normalizedArgs, plan: candidate }
+        const candidateHash = typeof unresolvedRaw === 'string'
+          ? hashIncompleteToolArguments(unresolvedRaw)
+          : hashCandidate(candidate)
         if (draft.candidateHash === candidateHash && draft.issues.length > 0) {
           draft = await transitionDraft(options, draft, {
             status: 'needs_correction',
@@ -155,13 +164,23 @@ export function buildGraphDefinePlanTool(options: {
           )
         }
 
-        await options.drafts.writeCandidate(draft.id, candidate)
+        if (typeof unresolvedRaw !== 'string') {
+          await options.drafts.writeCandidate(draft.id, candidate)
+        }
         assertPlanningExecutionActive(context)
         draft = await transitionDraft(options, draft, {
           status: 'validating',
           candidateHash,
           issues: []
         })
+        if (typeof unresolvedRaw === 'string') {
+          return recordIncompleteToolArguments(
+            options,
+            draft,
+            candidateHash,
+            Buffer.byteLength(unresolvedRaw, 'utf8')
+          )
+        }
         const parsed = GraphDefinePlanInputSchema.safeParse(effectiveArgs)
         if (!parsed.success) {
           return recordInvalidCandidate(options, draft, candidateHash, parsed.error.issues)
@@ -459,18 +478,58 @@ async function recordInvalidCandidate(
 ): Promise<{ output: Record<string, unknown>; isError: true }> {
   const issues = rawIssues.slice(0, 64).map((issue) =>
     toPlanningIssue(issue, issue.path ?? []))
+  return recordInvalidPlanningIssues(options, draft, candidateHash, issues)
+}
+
+async function recordIncompleteToolArguments(
+  options: Parameters<typeof buildGraphDefinePlanTool>[0],
+  draft: GraphPlanningDraftV1,
+  candidateHash: string,
+  rawBytes: number
+): Promise<{ output: Record<string, unknown>; isError: true }> {
+  const issue: GraphPlanningIssueV1 = {
+    code: 'incomplete_tool_arguments',
+    path: ['plan'],
+    message: [
+      `The graph_define_plan arguments were not a complete structured JSON object (${rawBytes} UTF-8 bytes).`,
+      'This usually means the model output limit truncated the arguments or the complete plan was wrapped as a string.'
+    ].join(' '),
+    repairHint: [
+      'Call graph_define_plan once more with a smaller direct { plan: ... } object.',
+      'Shorten titles, objectives, and acceptance criteria; remove repeated background; and never use __raw, a JSON string, a Markdown code fence, or ordinary prose.'
+    ].join(' '),
+    validExample: MINIMAL_VALID_PLAN_EXAMPLE
+  }
+  return recordInvalidPlanningIssues(options, draft, candidateHash, [issue], {
+    first: 'Graph plan arguments are incomplete. Retry once with a smaller structured plan.',
+    subsequent:
+      'The corrected Graph plan arguments are still incomplete. The draft is waiting for user correction.'
+  })
+}
+
+async function recordInvalidPlanningIssues(
+  options: Parameters<typeof buildGraphDefinePlanTool>[0],
+  draft: GraphPlanningDraftV1,
+  candidateHash: string,
+  issues: readonly GraphPlanningIssueV1[],
+  messages: {
+    first: string
+    subsequent: string
+  } = {
+    first: 'The plan is invalid. Change every listed path and submit one corrected plan.',
+    subsequent: 'The corrected plan is still invalid. The draft is waiting for user correction.'
+  }
+): Promise<{ output: Record<string, unknown>; isError: true }> {
   const firstRepair = draft.repairCount === 0
   const next = await transitionDraft(options, draft, {
     status: firstRepair ? 'repairing' : 'needs_correction',
     candidateHash,
-    issues,
+    issues: [...issues],
     repairCount: firstRepair ? 1 : draft.repairCount
   })
   return planningError(
     firstRepair ? 'graph_plan_invalid' : 'graph_plan_needs_correction',
-    firstRepair
-      ? 'The plan is invalid. Change every listed path and submit one corrected plan.'
-      : 'The corrected plan is still invalid. The draft is waiting for user correction.',
+    firstRepair ? messages.first : messages.subsequent,
     issues,
     firstRepair,
     next
@@ -617,6 +676,7 @@ function planningError(
       error: error.slice(0, 2_048),
       issues: issues.slice(0, 64),
       retryable,
+      ...(issues[0]?.repairHint ? { repairHint: issues[0].repairHint } : {}),
       validExample: MINIMAL_VALID_PLAN_EXAMPLE,
       ...(draft ? { draft } : {})
     },
@@ -655,6 +715,13 @@ async function cancelCreatedRun(
 
 function hashCandidate(candidate: unknown): string {
   return createHash('sha256').update(stableJson(candidate)).digest('hex')
+}
+
+function hashIncompleteToolArguments(raw: string): string {
+  return createHash('sha256')
+    .update('graph_define_plan:incomplete:')
+    .update(raw)
+    .digest('hex')
 }
 
 function stableJson(value: unknown): string {
