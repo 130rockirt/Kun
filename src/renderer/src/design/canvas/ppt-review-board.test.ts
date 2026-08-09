@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { createDefaultShape, type CanvasShape } from './canvas-types'
 import {
+  isPptReviewBundle,
   pptReviewBoardOps,
   serializeActivePptReviewContexts,
   type PptReviewBundle
@@ -53,6 +54,39 @@ describe('PPT review board', () => {
       imageUrl: '.kun/images/opening-v2.png',
       pptReviewRef: { workflowId: 'ppt_workflow', childId: 'child_ppt', slideId: 'slide-1', revision: 2 }
     })
+  })
+
+  it('repairs only missing card layers instead of duplicating an existing frame', () => {
+    const frame = {
+      ...shape('frame', 'ppt-review:ppt_workflow:slide-1:frame', 'frame-1'),
+      pptReviewRef: { workflowId: 'ppt_workflow', childId: 'child_ppt', slideId: 'slide-1', revision: 1, role: 'slide-frame' as const }
+    }
+    const ops = pptReviewBoardOps(bundle, [frame], 'thread-a') as Array<{ op: string; id?: string; shape?: Partial<CanvasShape> }>
+    expect(ops).toHaveLength(4)
+    expect(ops[0]).toMatchObject({ op: 'update', id: 'frame-1' })
+    expect(ops.slice(1).every((op) => op.op === 'add')).toBe(true)
+    expect(ops.filter((op) => op.op === 'add' && op.shape?.name?.endsWith(':frame'))).toHaveLength(0)
+  })
+
+  it('rejects malformed or stale review bundles before they reach the canvas', () => {
+    expect(isPptReviewBundle(bundle)).toBe(true)
+    expect(isPptReviewBundle({ ...bundle, phase: 'completed' })).toBe(false)
+    expect(isPptReviewBundle({
+      ...bundle,
+      slides: [{ ...bundle.slides[0], previewPath: '/outside/opening.png' }]
+    })).toBe(false)
+    expect(isPptReviewBundle({
+      ...bundle,
+      slides: [{ ...bundle.slides[0], previewPath: 'https://example.com/opening.png' }]
+    })).toBe(false)
+    expect(isPptReviewBundle({
+      ...bundle,
+      slides: [bundle.slides[0], { ...bundle.slides[0], index: 1 }]
+    })).toBe(false)
+    expect(isPptReviewBundle({
+      ...bundle,
+      slides: [{ ...bundle.slides[0], index: 1 }]
+    })).toBe(false)
   })
 
   it('serializes slide ids, revisions, images, and user text inside each card', () => {

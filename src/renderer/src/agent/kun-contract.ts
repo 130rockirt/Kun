@@ -281,6 +281,7 @@ export type CoreRuntimeCapabilityManifestJson = {
   /** Optional so the GUI keeps working against older Kun builds without the capability. */
   imageGen?: CoreRuntimeCapabilityStateJson & {
     model?: string
+    supportsReferenceEdit?: boolean
   }
   speechGen?: CoreRuntimeCapabilityStateJson & {
     model?: string

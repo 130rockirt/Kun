@@ -398,12 +398,14 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
       ? childToolEvidence(items, started.turnId)
       : undefined
     const reviewBundle = childReviewBundle(items, started.turnId)
+    const deckArtifact = childDeckArtifact(items, started.turnId)
     if (status !== 'completed') {
       throw new Error(summary || `child agent ${status}`)
     }
     return {
       summary,
       ...(reviewBundle !== undefined ? { reviewBundle } : {}),
+      ...(deckArtifact !== undefined ? { deckArtifact } : {}),
       ...(evidence ? { evidence } : {}),
       usage: usage.forThread(thread.id),
       toolInvocations,
@@ -425,6 +427,23 @@ function childReviewBundle(items: readonly TurnItem[], turnId: string): unknown 
       isRecord(item.output) &&
       'reviewBundle' in item.output)
   return result && isRecord(result.output) ? result.output.reviewBundle : undefined
+}
+
+function childDeckArtifact(items: readonly TurnItem[], turnId: string): unknown | undefined {
+  const exportCallIds = new Set(items
+    .filter((item): item is Extract<TurnItem, { kind: 'tool_call' }> =>
+      item.turnId === turnId && item.kind === 'tool_call' && item.toolName === 'ppt_export')
+    .map((item) => item.callId))
+  const result = [...items]
+    .reverse()
+    .find((item): item is Extract<TurnItem, { kind: 'tool_result' }> =>
+      item.turnId === turnId &&
+      item.kind === 'tool_result' &&
+      exportCallIds.has(item.callId) &&
+      !item.isError &&
+      isRecord(item.output) &&
+      item.output.validated === true)
+  return result?.output
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
