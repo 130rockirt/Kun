@@ -6,6 +6,7 @@ import type {
 import type { ReviewOutput, ReviewTarget } from '../contracts/review.js'
 import type { UserInputQuestion } from '../ports/user-input-gate.js'
 import type { ComposerContextAttachmentJson } from '../contracts/composer-context.js'
+import { projectToolArgumentsForPersistence } from './tool-argument-envelope.js'
 
 export type ItemEntity = TurnItem
 
@@ -125,6 +126,8 @@ export function makeToolCallItem(input: {
   summary?: string
   status?: 'pending' | 'running' | 'completed' | 'failed'
 }): TurnItem {
+  const projected = projectToolArgumentsForPersistence(input.arguments)
+  const summary = [input.summary, projected.rawSummary].filter(Boolean).join(' ') || undefined
   return {
     id: input.id,
     turnId: input.turnId,
@@ -136,9 +139,9 @@ export function makeToolCallItem(input: {
     toolName: input.toolName,
     callId: input.callId,
     toolKind: input.toolKind ?? 'tool_call',
-    arguments: input.arguments,
+    arguments: projected.arguments,
     ...(input.providerMetadata ? { providerMetadata: input.providerMetadata } : {}),
-    summary: input.summary
+    summary
   }
 }
 

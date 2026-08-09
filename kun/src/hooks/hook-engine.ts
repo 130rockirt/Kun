@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process'
 import type { ToolCallLike, ToolHostContext } from '../ports/tool-host.js'
 import { shellSpawnEnv, terminateSpawnTree } from '../adapters/tool/builtin-tool-utils.js'
 import type { TurnClientSurface } from '../contracts/turns.js'
+import { normalizeRawToolArgumentsEnvelope } from '../domain/tool-argument-envelope.js'
 
 /**
  * Hook phases. Tool phases run inside the tool host around every tool
@@ -162,7 +163,7 @@ export async function runPreToolUseHooks(
   hooks: readonly ResolvedHook[] | undefined,
   input: { call: ToolCallLike; context: ToolHookContext }
 ): Promise<PreToolUseOutcome> {
-  let call = input.call
+  let call = normalizeToolCallArguments(input.call)
   let autoApproved = false
   const warnings: string[] = []
   for (const hook of hooksForTool(hooks, 'PreToolUse', call.toolName)) {
@@ -180,10 +181,15 @@ export async function runPreToolUseHooks(
     }
     if (result.decision === 'allow') autoApproved = true
     if (result.arguments && typeof result.arguments === 'object') {
-      call = { ...call, arguments: result.arguments }
+      call = normalizeToolCallArguments({ ...call, arguments: result.arguments })
     }
   }
   return { call, autoApproved, warnings }
+}
+
+function normalizeToolCallArguments(call: ToolCallLike): ToolCallLike {
+  const normalized = normalizeRawToolArgumentsEnvelope(call.arguments)
+  return normalized === call.arguments ? call : { ...call, arguments: normalized }
 }
 
 /**

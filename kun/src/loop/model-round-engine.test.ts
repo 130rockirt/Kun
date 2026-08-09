@@ -364,6 +364,34 @@ describe('ModelRoundEngine', () => {
     expect(JSON.stringify(test.recordedEvents)).not.toContain('opaque-provider-signature')
   })
 
+  it('keeps unresolved raw arguments for execution but redacts persisted history and events', async () => {
+    const raw = '{"path":"private-round-marker"'
+    const test = harness([
+      {
+        kind: 'tool_call_complete',
+        callId: 'call_raw',
+        toolName: 'read',
+        arguments: { __raw: raw }
+      },
+      { kind: 'completed', stopReason: 'tool_calls' }
+    ])
+
+    const outcome = await test.run()
+
+    expect(outcome).toMatchObject({
+      kind: 'tool_calls',
+      snapshot: { toolCalls: [{ arguments: { __raw: raw } }] }
+    })
+    expect(test.appliedItems.find((item) => item.kind === 'tool_call')).toMatchObject({
+      arguments: {},
+      summary: expect.stringMatching(
+        new RegExp(`${Buffer.byteLength(raw, 'utf8')} UTF-8 bytes; sha256 [a-f0-9]{64}`)
+      )
+    })
+    expect(JSON.stringify(test.appliedItems)).not.toContain('private-round-marker')
+    expect(JSON.stringify(test.recordedEvents)).not.toContain('private-round-marker')
+  })
+
   it('allocates distinct runtime ids when one model step repeats a provider call id', async () => {
     const test = harness([
       { kind: 'tool_call_complete', callId: 'call_shared', toolName: 'read', arguments: { path: 'a.ts' } },

@@ -112,6 +112,33 @@ describe('SdkEventMapper', () => {
     })
   })
 
+  test('omits unresolved raw arguments from durable SDK tool-call events', () => {
+    const m = makeMapper()
+    const raw = '{"plan":{"title":"private-sdk-event-marker"'
+    const events = m.map({
+      type: 'assistant',
+      parent_tool_use_id: null,
+      message: {
+        role: 'assistant',
+        content: [{
+          type: 'tool_use',
+          id: 'toolu_raw',
+          name: 'mcp__kun__graph_define_plan',
+          input: { __raw: raw }
+        }]
+      }
+    } as SdkMessage)
+
+    expect(events.find((event) => event.kind === 'item_created')).toMatchObject({
+      item: {
+        kind: 'tool_call',
+        arguments: {},
+        summary: expect.stringContaining(`${Buffer.byteLength(raw, 'utf8')} UTF-8 bytes`)
+      }
+    })
+    expect(JSON.stringify(events)).not.toContain('private-sdk-event-marker')
+  })
+
   test('maps a tool_result back to tool_call_finished, recovering the tool name', () => {
     const m = makeMapper()
     m.map({

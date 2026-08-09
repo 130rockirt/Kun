@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { UsageSnapshot } from '../contracts/usage.js'
 import { redactBrowserUseActionForPersistence } from '../contracts/browser-use.js'
+import { projectToolArgumentsForPersistence } from '../domain/tool-argument-envelope.js'
 import {
   MAX_MODEL_REQUEST_TRACE_PROVIDER_ID_LENGTH,
   MAX_MODEL_REQUEST_TRACE_PROVIDER_KIND_LENGTH,
@@ -11,6 +12,7 @@ import {
   type ModelRequestTraceDelegated,
   type ModelRequestTraceFailureOrigin,
   type ModelRequestTraceLimits,
+  type ModelRequestTraceBody,
   type ModelRequestTracePage,
   type ModelRequestTracePhase,
   type ModelRequestTraceRecord,
@@ -184,11 +186,13 @@ type CaptureState = {
   text: StringBlockAccumulator
   reasoning: StringBlockAccumulator
   pendingCaptures: Promise<void>[]
+  omitResponseBodiesForRawToolArguments: boolean
 }
 
 type StringBlockAccumulator = { blocks: string[]; parts: string[] }
 
 const DEBUG_TEXT_BLOCK_FRAGMENT_WINDOW = 256
+const RAW_TOOL_ARGUMENT_RESPONSE_OMISSION = '[response body omitted: raw tool argument envelope]'
 
 /**
  * Count/byte-bounded live recorder plus private per-thread JSONL persistence.
@@ -420,7 +424,7 @@ export class LlmDebugRecorder implements LlmDebugSink {
       finishRecord(record)
       return
     }
-    const capture = this.captureResponseBody(record, clone)
+    const capture = this.captureResponseBody(round, record, clone)
     this.stateFor(round).pendingCaptures.push(capture)
   }
 
@@ -444,6 +448,9 @@ export class LlmDebugRecorder implements LlmDebugSink {
         this.captureText(round, state, 'reasoning', chunk.text)
         break
       case 'tool_call_complete':
+        if (typeof chunk.arguments.__raw === 'string') {
+          this.omitRawToolArgumentResponseBodies(round, state)
+        }
         this.captureToolCall(round, state, {
           callId: chunk.callId,
           toolName: chunk.toolName,
@@ -490,6 +497,9 @@ export class LlmDebugRecorder implements LlmDebugSink {
   async finish(round: LlmDebugRound): Promise<void> {
     const state = this.stateFor(round)
     await Promise.allSettled(state.pendingCaptures)
+    if (state.omitResponseBodiesForRawToolArguments) {
+      this.omitRawToolArgumentResponseBodies(round, state)
+    }
     round.output.text = joinStringBlocks(state.text)
     round.output.reasoning = joinStringBlocks(state.reasoning)
     const lastExchange = round.exchanges.at(-1)
@@ -607,7 +617,11 @@ export class LlmDebugRecorder implements LlmDebugSink {
       .sort(newestRecordFirst)
   }
 
-  private async captureResponseBody(record: ModelRequestTraceRecord, response: Response): Promise<void> {
+  private async captureResponseBody(
+    round: LlmDebugRound,
+    record: ModelRequestTraceRecord,
+    response: Response
+  ): Promise<void> {
     const accumulator = new BoundedModelTraceBodyAccumulator(this.limits.maxResponseBodyBytes)
     try {
       if (response.body) {
@@ -622,11 +636,19 @@ export class LlmDebugRecorder implements LlmDebugSink {
           try { reader.releaseLock() } catch { /* already released */ }
         }
       }
-      if (record.response) record.response.body = accumulator.finish()
+      if (record.response) {
+        const body = accumulator.finish()
+        record.response.body = this.stateFor(round).omitResponseBodiesForRawToolArguments
+          ? omittedRawToolArgumentResponseBody(body)
+          : body
+      }
       record.status = 'completed'
     } catch (error) {
       if (record.response) {
-        record.response.body = accumulator.finish()
+        const body = accumulator.finish()
+        record.response.body = this.stateFor(round).omitResponseBodiesForRawToolArguments
+          ? omittedRawToolArgumentResponseBody(body)
+          : body
         record.response.captureError = safeError(error)
       }
       record.status = 'capture_error'
@@ -652,12 +674,12 @@ export class LlmDebugRecorder implements LlmDebugSink {
   }
 
   private captureToolCall(round: LlmDebugRound, state: CaptureState, call: LlmDebugToolCall): void {
-    const safeCall = call.toolName === 'browser_use'
-      ? {
-          ...call,
-          arguments: redactBrowserUseActionForPersistence(call.arguments) as Record<string, unknown>
-        }
-      : call
+    const safeCall = {
+      ...call,
+      arguments: projectToolArgumentsForPersistence(call.toolName === 'browser_use'
+        ? redactBrowserUseActionForPersistence(call.arguments) as Record<string, unknown>
+        : call.arguments).arguments
+    }
     const bytes = jsonBytes(safeCall)
     if (bytes > this.remainingOutputBytes(state)) {
       markTruncated(round.output, 'toolCalls')
@@ -665,6 +687,16 @@ export class LlmDebugRecorder implements LlmDebugSink {
     }
     round.output.toolCalls.push(safeCall)
     state.outputBytes += bytes
+  }
+
+  private omitRawToolArgumentResponseBodies(round: LlmDebugRound, state: CaptureState): void {
+    state.omitResponseBodiesForRawToolArguments = true
+    for (const record of round.exchanges) {
+      if (record.response?.body) {
+        record.response.body = omittedRawToolArgumentResponseBody(record.response.body)
+      }
+      addCaptureWarning(record, 'response body omitted because a raw tool argument envelope was observed')
+    }
   }
 
   private captureValue(round: LlmDebugRound, state: CaptureState, value: UsageSnapshot): void {
@@ -738,7 +770,17 @@ function createCaptureState(
     redactedRequestValues: normalizeRedactedRequestValues(redactedRequestValues),
     text: { blocks: [], parts: [] },
     reasoning: { blocks: [], parts: [] },
-    pendingCaptures: []
+    pendingCaptures: [],
+    omitResponseBodiesForRawToolArguments: false
+  }
+}
+
+function omittedRawToolArgumentResponseBody(body: ModelRequestTraceBody): ModelRequestTraceBody {
+  return {
+    text: RAW_TOOL_ARGUMENT_RESPONSE_OMISSION,
+    capturedBytes: Buffer.byteLength(RAW_TOOL_ARGUMENT_RESPONSE_OMISSION, 'utf8'),
+    originalBytes: body.originalBytes,
+    truncated: true
   }
 }
 
