@@ -202,7 +202,10 @@ export function buildToolPreferenceInstruction(
 
   if (pptAgentAvailable) {
     bullets.push(
-      'Use `ppt_agent` for any presentation/PPT task: create, edit, replicate, or read a deck. Give it a clear deck goal (topic, content, page count, style, whether to generate images, whether to show on the whiteboard) in a single call; it runs a dedicated PPT child whose workflow distills open-kimi-ppt-skill and returns a PPTD project plus a locally exported .pptx.'
+      'Use `ppt_agent(action="start")` for any presentation/PPT task: create, edit, replicate, or read a deck. Give it a clear deck goal (topic, content, page count, style, and deliverable). Inspect its structured phase instead of assuming one call always returns a PPTX.'
+    )
+    bullets.push(
+      'When `ppt_agent` returns `phase="awaiting_review"`, the visual bundle is opened automatically on the parent whiteboard: stop final export, invite the user to review, and retain its childId/workflowId/deliverable. For changes or failed pages, call `ppt_agent(action="revise_previews"|"retry_failed", childId, workflowId, deliverable, reviewContext)`; after explicit approval, call `ppt_agent(action="approve_and_build", childId, workflowId, deliverable)` so the same PPT child builds the editable deliverable. Never replace an active review workflow with a new PPT child.'
     )
     if (names.has('delegate_task')) {
       bullets.push(
@@ -213,7 +216,9 @@ export function buildToolPreferenceInstruction(
 
   if (names.has('ppt_to_board')) {
     bullets.push(
-      'In whiteboard / Design contexts, use `ppt_to_board` to lay a PPTD deck out on the canvas when the user asked to show a presentation: after a `ppt_agent` run, replay its boardSpec with `ppt_to_board` (start at batch 0 and keep calling with batch+1 while `more` is true).'
+      pptAgentAvailable
+        ? 'Use `ppt_to_board` only for a completed direct-mode/final PPTD deck that has no image-first reviewBundle and that the user asked to show. Never replay boardSpec or call `ppt_to_board` for `phase="awaiting_review"`; the structured review bundle is applied automatically.'
+        : 'In whiteboard / Design contexts, use `ppt_to_board` to lay a PPTD deck out on the canvas when the user asked to show a presentation (start at batch 0 and keep calling with batch+1 while `more` is true).'
     )
   }
 

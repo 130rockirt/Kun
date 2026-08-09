@@ -72,7 +72,7 @@ export function PptAgentSettingsPanel({
   modelProviders: ModelProviderProfileV1[]
   leadProviderId: string
   leadModel: string
-  imageGen?: { available: boolean; reason?: string }
+  imageGen?: { available: boolean; reason?: string; supportsReferenceEdit?: boolean }
   selectControlClass: string
   onChange: (patch: KunLabSettingsPatchV1) => void
 }): ReactElement {
@@ -117,7 +117,9 @@ export function PptAgentSettingsPanel({
               <div className="px-3 pb-3">
                 <p className={`text-[12px] leading-5 ${imageGen?.available ? 'text-emerald-700 dark:text-emerald-200' : 'text-ds-faint'}`}>
                   {imageGen?.available
-                    ? t('labPptImageFirstReadyHint')
+                    ? `${t('labPptImageFirstReadyHint')} ${imageGen.supportsReferenceEdit
+                      ? t('labPptImageFirstReferenceEditHint')
+                      : t('labPptImageFirstRegenerateOnlyHint')}`
                     : `${t('labPptImageFirstUnavailableHint')}${imageGen?.reason ? ` ${imageGen.reason}` : ''}`}
                 </p>
               </div>
