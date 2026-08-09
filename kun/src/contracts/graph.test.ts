@@ -8,6 +8,7 @@ import {
   GraphLoopGateV1Schema,
   GraphPatchV1Schema,
   GraphPlanV1Schema,
+  GraphSupervisionObligationV1Schema,
   GraphWorkerResultV1Schema
 } from './graph.js'
 import { RuntimeEvent } from './events.js'
@@ -168,6 +169,28 @@ describe('Graph Mode contracts', () => {
   test('defaults old turn requests to direct and accepts explicit graph turns', () => {
     expect(StartTurnRequest.parse({ prompt: 'hello' }).orchestration).toBe('direct')
     expect(StartTurnRequest.parse({ prompt: 'hello', orchestration: 'graph' }).orchestration).toBe('graph')
+  })
+
+  test('defaults delivery fencing fields when parsing a legacy supervision obligation', () => {
+    const parsed = GraphSupervisionObligationV1Schema.parse({
+      version: GRAPH_CONTRACT_VERSION,
+      id: 'graph_obligation_legacy',
+      kind: 'help',
+      reason: 'help',
+      graphRevision: 1,
+      nodeIds: [],
+      attemptIds: [],
+      digest: 'Legacy durable obligation.',
+      state: 'pending',
+      deliveryAttempts: 0,
+      noProgressCount: 0,
+      lastProgressSeq: 1,
+      createdAt: now,
+      updatedAt: now
+    })
+
+    expect(parsed.consecutiveDeliveryFailures).toBe(0)
+    expect(parsed.deliveryLeaseId).toBeUndefined()
   })
 
   test('parses optional durable Graph Lead lifecycle metadata without breaking legacy turns', () => {

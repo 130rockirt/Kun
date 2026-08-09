@@ -314,4 +314,206 @@ describe('GraphSupervisor manual wake', () => {
     expect(leadTurn).toHaveBeenCalledOnce()
     await supervisor.stop()
   })
+
+  it('fails closed for a targeted wake when another attention obligation remains', async () => {
+    const value = await harness()
+    await runningRun(value)
+    let orphaned = true
+    const leadTurn = vi.fn(async ({ run }: { run: GraphRunV1 }) => orphaned
+      ? {
+          status: 'orphaned' as const,
+          reason: 'Source Lead owner is temporarily unavailable.'
+        }
+      : {
+          status: 'delivered' as const,
+          sourceTurnId: run.sourceTurnId,
+          deliveredSeq: run.lastEventSeq,
+          executionActive: true
+        })
+    const supervisor = supervisorFor(value, {
+      leadTurn,
+      isLeadTurnActive: () => true
+    })
+
+    await supervisor.signal({
+      runId: 'run_manual_wake',
+      reason: 'help',
+      nodeIds: [],
+      digest: 'First independent attention obligation.'
+    })
+    await supervisor.signal({
+      runId: 'run_manual_wake',
+      reason: 'help',
+      nodeIds: [],
+      digest: 'Second independent attention obligation.'
+    })
+    await supervisor.flush('run_manual_wake')
+    let run = (await value.store.get('run_manual_wake'))!
+    expect(run.supervisionObligations).toHaveLength(2)
+    const [first] = run.supervisionObligations
+    expect(run.status).toBe('awaiting_human')
+    expect(run.supervisionObligations.every((entry) =>
+      entry.state === 'needs_attention')).toBe(true)
+    const attentionSeq = run.lastEventSeq
+
+    run = (await supervisor.wake(
+      run.id,
+      first!.id,
+      'targeted-wake-must-fail-closed'
+    ))!
+    expect(run.lastEventSeq).toBe(attentionSeq)
+    expect(run.status).toBe('awaiting_human')
+    expect(run.supervisionObligations.every((entry) =>
+      entry.state === 'needs_attention')).toBe(true)
+
+    orphaned = false
+    run = (await supervisor.wake(
+      run.id,
+      undefined,
+      'wake-all-attention-obligations'
+    ))!
+    expect(run.status).toBe('awaiting_supervision')
+    expect(run.supervisionObligations.every((entry) =>
+      entry.state === 'pending')).toBe(true)
+    await supervisor.flush(run.id)
+
+    run = (await value.store.get(run.id))!
+    expect(run.status).toBe('awaiting_supervision')
+    expect(run.supervisionObligations.every((entry) =>
+      entry.state === 'awaiting_action')).toBe(true)
+    expect(leadTurn).toHaveBeenCalledTimes(2)
+    await supervisor.stop()
+  })
+
+  it('aborts a wake when concurrent attention arrives before the final check', async () => {
+    const value = await harness()
+    await runningRun(value)
+    let orphaned = true
+    const leadTurn = vi.fn(async ({ run }: { run: GraphRunV1 }) => orphaned
+      ? {
+          status: 'orphaned' as const,
+          reason: 'Source Lead owner is temporarily unavailable.'
+        }
+      : {
+          status: 'delivered' as const,
+          sourceTurnId: run.sourceTurnId,
+          deliveredSeq: run.lastEventSeq,
+          executionActive: true
+        })
+    const supervisor = supervisorFor(value, {
+      leadTurn,
+      isLeadTurnActive: () => true
+    })
+    await supervisor.signal({
+      runId: 'run_manual_wake',
+      reason: 'help',
+      nodeIds: [],
+      digest: 'Original attention obligation.'
+    })
+    await supervisor.flush('run_manual_wake')
+    let run = (await value.store.get('run_manual_wake'))!
+    const original = obligation(run)
+    expect(run.status).toBe('awaiting_human')
+    expect(original.state).toBe('needs_attention')
+
+    const concurrent = {
+      ...original,
+      id: 'graph_obligation_concurrent_attention',
+      digest: 'Attention created concurrently with manual wake.',
+      attentionReason: 'Concurrent supervision requires human attention.',
+      createdAt: value.nowIso(),
+      updatedAt: value.nowIso()
+    }
+    const originalAppend = value.store.append.bind(value.store)
+    let injected = false
+    const appendSpy = vi.spyOn(value.store, 'append').mockImplementation(
+      async (runId, input) => {
+        if (
+          !injected &&
+          input.event.type === 'supervision_obligation_updated' &&
+          input.event.payload.obligation.id === original.id &&
+          input.event.payload.obligation.state === 'pending'
+        ) {
+          injected = true
+          const woken = await originalAppend(runId, input)
+          await originalAppend(runId, {
+            expectedSeq: woken.state.lastEventSeq,
+            graphRevision: woken.state.currentRevision,
+            commandId: 'command_concurrent_attention',
+            idempotencyKey: 'manual-wake-test:concurrent-attention',
+            timestamp: value.nowIso(),
+            event: {
+              type: 'supervision_attention_required',
+              payload: { obligation: concurrent }
+            }
+          })
+          return woken
+        }
+        return originalAppend(runId, input)
+      }
+    )
+
+    run = (await supervisor.wake(
+      run.id,
+      original.id,
+      'wake-racing-concurrent-attention'
+    ))!
+    appendSpy.mockRestore()
+    expect(injected).toBe(true)
+    expect(run.status).toBe('awaiting_human')
+    expect(run.supervisionObligations).toHaveLength(2)
+    expect(run.supervisionObligations.every((entry) =>
+      entry.state === 'needs_attention')).toBe(true)
+    expect(leadTurn).toHaveBeenCalledOnce()
+    await supervisor.flush(run.id)
+    expect(leadTurn).toHaveBeenCalledOnce()
+
+    orphaned = false
+    run = (await supervisor.wake(
+      run.id,
+      undefined,
+      'wake-all-after-concurrent-attention'
+    ))!
+    expect(run.status).toBe('awaiting_supervision')
+    const lateAttention = {
+      ...concurrent,
+      id: 'graph_obligation_late_attention',
+      digest: 'Attention arrived after wake verification but before claim.',
+      attentionReason: 'Late attention must fence the queued delivery.',
+      createdAt: value.nowIso(),
+      updatedAt: value.nowIso()
+    }
+    run = await append(value, {
+      type: 'supervision_attention_required',
+      payload: { obligation: lateAttention }
+    }, 'late-attention-after-wake-verification')
+    run = await append(value, {
+      type: 'run_status_changed',
+      payload: {
+        from: 'awaiting_supervision',
+        to: 'awaiting_human',
+        reason: lateAttention.attentionReason
+      }
+    }, 'late-attention-human-fence')
+    await supervisor.flush(run.id)
+    run = (await value.store.get(run.id))!
+    expect(leadTurn).toHaveBeenCalledOnce()
+    expect(run.supervisionObligations.filter((entry) =>
+      entry.id !== lateAttention.id).every((entry) =>
+      entry.state === 'pending')).toBe(true)
+    expect(run.supervisionObligations.find((entry) =>
+      entry.id === lateAttention.id)?.state).toBe('needs_attention')
+
+    run = (await supervisor.wake(
+      run.id,
+      undefined,
+      'wake-all-after-late-attention'
+    ))!
+    await supervisor.flush(run.id)
+    run = (await value.store.get(run.id))!
+    expect(run.supervisionObligations.every((entry) =>
+      entry.state === 'awaiting_action')).toBe(true)
+    expect(leadTurn).toHaveBeenCalledTimes(2)
+    await supervisor.stop()
+  })
 })

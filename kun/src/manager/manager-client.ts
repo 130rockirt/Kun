@@ -18,6 +18,7 @@ import {
   ThreadExecutionBusyError,
   type ThreadExecutionLeasePort
 } from '../ports/thread-execution-lease.js'
+import { GraphRunConflictError } from '../graph/graph-run-store.js'
 import { isLoopbackHost } from '../server/loopback-host.js'
 import {
   readRuntimeDiscovery,
@@ -697,9 +698,24 @@ export async function requestManagerResponse(
 async function requireManagerJson(response: Response): Promise<unknown> {
   if (!response.ok) {
     const body = await response.text().catch(() => '')
+    if (response.status === 409) {
+      const conflict = z.object({
+        code: z.literal('graph_run_conflict'),
+        message: z.string()
+      }).safeParse(parseJson(body))
+      if (conflict.success) throw new GraphRunConflictError(conflict.data.message)
+    }
     throw new Error(`Kun Service Manager request failed with HTTP ${response.status}: ${body.slice(0, 1_024)}`)
   }
   return response.json()
+}
+
+function parseJson(value: string): unknown {
+  try {
+    return JSON.parse(value)
+  } catch {
+    return null
+  }
 }
 
 function safeManagerUrl(record: ManagerDiscoveryRecord): boolean {
