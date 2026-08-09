@@ -274,31 +274,37 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
     })
 
     const title = childThreadTitle(input.childId, input.label, input.profile)
-    const thread = await threads.create({
-      title,
-      workspace: input.workspace?.trim() || '~',
-      model,
-      mode: 'agent',
-      approvalPolicy,
-      ...(sandboxMode ? { sandboxMode } : {}),
-      approvalReviewer,
-      // Route the child to the profile's provider. ThreadService threads
-      // providerId into every ModelRequest, and the executor's model is the
-      // MultiProviderModelClient, so this single field is all routing needs.
-      ...(input.providerId ? { providerId: input.providerId } : {}),
-      ...(input.accountId ? { accountId: input.accountId } : {}),
-      // Persist the resolved profile id so the GUI can label explore/side
-      // sessions (e.g. return-bar "viewing explore process").
-      ...(input.profile?.trim() ? { agentId: input.profile.trim() } : {})
-    }, {
-      id: input.childId,
-      title,
-      // Persist as a side branch of the parent: hidden from the default thread
-      // list, but loadable on demand so the user can open the subagent's own
-      // session from the parent's delegate_task card.
-      relation: 'side',
-      parentThreadId: input.parentThreadId
-    })
+    const thread = input.resumeChild
+      ? await threadStore.get(input.childId)
+      : await threads.create({
+        title,
+        workspace: input.workspace?.trim() || '~',
+        model,
+        mode: 'agent',
+        approvalPolicy,
+        ...(sandboxMode ? { sandboxMode } : {}),
+        approvalReviewer,
+        // Route the child to the profile's provider. ThreadService threads
+        // providerId into every ModelRequest, and the executor's model is the
+        // MultiProviderModelClient, so this single field is all routing needs.
+        ...(input.providerId ? { providerId: input.providerId } : {}),
+        ...(input.accountId ? { accountId: input.accountId } : {}),
+        // Persist the resolved profile id so the GUI can label explore/side
+        // sessions (e.g. return-bar "viewing explore process").
+        ...(input.profile?.trim() ? { agentId: input.profile.trim() } : {})
+      }, {
+        id: input.childId,
+        title,
+        // Persist as a side branch of the parent: hidden from the default thread
+        // list, but loadable on demand so the user can open the subagent's own
+        // session from the parent's delegate_task card.
+        relation: 'side',
+        parentThreadId: input.parentThreadId
+      })
+    if (!thread) throw new Error(`child thread ${input.childId} no longer exists`)
+    if (input.resumeChild && (thread.relation !== 'side' || thread.parentThreadId !== input.parentThreadId)) {
+      throw new Error(`child thread ${input.childId} is not a side thread of the expected parent`)
+    }
     // A profile preamble rides in the prompt body (not the system prompt) so
     // the cached stable prefix stays byte-identical to the main agent's.
     const promptBase = input.promptPreamble?.trim()
@@ -391,11 +397,13 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
     const evidence = input.returnFormat === 'evidence'
       ? childToolEvidence(items, started.turnId)
       : undefined
+    const reviewBundle = childReviewBundle(items, started.turnId)
     if (status !== 'completed') {
       throw new Error(summary || `child agent ${status}`)
     }
     return {
       summary,
+      ...(reviewBundle !== undefined ? { reviewBundle } : {}),
       ...(evidence ? { evidence } : {}),
       usage: usage.forThread(thread.id),
       toolInvocations,
@@ -405,6 +413,22 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
       inheritedHistoryItems: 0
     }
   }
+}
+
+function childReviewBundle(items: readonly TurnItem[], turnId: string): unknown | undefined {
+  const result = [...items]
+    .reverse()
+    .find((item): item is Extract<TurnItem, { kind: 'tool_result' }> =>
+      item.turnId === turnId &&
+      item.kind === 'tool_result' &&
+      !item.isError &&
+      isRecord(item.output) &&
+      'reviewBundle' in item.output)
+  return result && isRecord(result.output) ? result.output.reviewBundle : undefined
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 function childToolEvidence(items: readonly TurnItem[], turnId: string): string[] {

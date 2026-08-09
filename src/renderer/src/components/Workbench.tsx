@@ -47,6 +47,7 @@ import {
 import { useDesignWorkspaceStore } from '../design/design-workspace-store'
 import { useCodeCanvasDesignSurface } from '../design/code-canvas-design-surface'
 import { requestCodeCanvasPanelOpen } from '../lib/code-canvas-panel-event'
+import { isPptReviewBundle } from '../design/canvas/ppt-review-board'
 import { designDocumentComposerFileReferences } from '../design/design-document-file-reference'
 import {
   readBrowserStorageItem,
@@ -161,6 +162,22 @@ export function Workbench(): ReactElement {
     ) return
     useGraphStore.getState().clearChildReturnTarget()
   }, [activeThreadId, graphChildReturnTarget])
+  const pptReviewOpenBlockIdsRef = useRef(new Set<string>())
+  useEffect(() => {
+    const completedReview = [...blocks].reverse().find((block) => {
+      if (pptReviewOpenBlockIdsRef.current.has(block.id)) return false
+      if (block.kind !== 'tool' || block.status !== 'success' || block.meta?.toolName !== 'ppt_agent' || !block.detail) return false
+      try {
+        const payload = JSON.parse(block.detail) as { reviewBundle?: unknown }
+        return isPptReviewBundle(payload.reviewBundle)
+      } catch {
+        return false
+      }
+    })
+    if (!completedReview || pptReviewOpenBlockIdsRef.current.has(completedReview.id)) return
+    pptReviewOpenBlockIdsRef.current.add(completedReview.id)
+    requestCodeCanvasPanelOpen()
+  }, [blocks])
   const extensionWorkspaceRoot = useMemo(
     () => resolveActiveExtensionWorkspaceRoot(activeThreadId, threads, workspaceRoot),
     [activeThreadId, threads, workspaceRoot]

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import type { ToolHostContext } from '../../ports/tool-host.js'
 import {
   buildPptAgentLocalTools,
+  PPT_CREATE_REVIEW_BUNDLE_TOOL_NAME,
   PPT_EXPORT_TOOL_NAME,
   PPT_READ_GUIDE_TOOL_NAME
 } from './ppt-agent-local-tools.js'
@@ -220,6 +221,103 @@ describe('PPT agent local tools', () => {
     }, context(root))
     expect(imageEscape.isError).toBe(true)
     expect(JSON.stringify(imageEscape.output)).toContain('Local image escapes the PPTD project')
+  })
+
+  it('creates a complete generated-image review bundle and revises one stable slide', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-ppt-review-bundle-'))
+    roots.push(root)
+    await mkdir(join(root, '.kun', 'images'), { recursive: true })
+    await Promise.all([
+      writeFile(join(root, '.kun', 'images', 'slide-1.png'), Buffer.from([1, 2, 3])),
+      writeFile(join(root, '.kun', 'images', 'slide-1b.png'), Buffer.from([4, 5, 6]))
+    ])
+    const tool = buildPptAgentLocalTools().find((candidate) => candidate.name === PPT_CREATE_REVIEW_BUNDLE_TOOL_NAME)!
+
+    const created = await tool.execute({
+      parentThreadId: 'thr_parent',
+      projectDir: 'deck',
+      deckTitle: 'Visual first deck',
+      pageCount: 2,
+      styleSummary: 'Warm editorial paper, cobalt accents',
+      slides: [
+        { title: 'Opening', prompt: 'Editorial title composition', imagePath: '.kun/images/slide-1.png' },
+        { title: 'Evidence', prompt: 'Data-led evidence page', error: 'provider timeout' }
+      ]
+    }, context(root))
+
+    expect(created).toMatchObject({
+      output: {
+        reviewBundle: {
+          childId: 'thr_ppt_export',
+          deckTitle: 'Visual first deck',
+          phase: 'awaiting_review',
+          slides: [
+            { index: 0, status: 'ready', previewPath: '.kun/images/slide-1.png', revision: 1 },
+            { index: 1, status: 'failed', error: 'provider timeout', revision: 1 }
+          ]
+        }
+      }
+    })
+    const bundle = (created.output as { reviewBundle: { workflowId: string; slides: Array<{ slideId: string }> } }).reviewBundle
+    const wrongWorkflow = await tool.execute({
+      workflowId: 'ppt_wrong',
+      parentThreadId: 'thr_parent',
+      projectDir: 'deck',
+      deckTitle: 'Visual first deck',
+      pageCount: 2,
+      slides: [{ slideId: bundle.slides[0].slideId, title: 'Opening', prompt: 'Retry', error: 'retry later' }]
+    }, context(root))
+    expect(wrongWorkflow).toMatchObject({ isError: true })
+    expect(JSON.stringify(wrongWorkflow.output)).toContain('workflowId must match')
+
+    const revised = await tool.execute({
+      workflowId: bundle.workflowId,
+      parentThreadId: 'thr_parent',
+      projectDir: 'deck',
+      deckTitle: 'Visual first deck',
+      pageCount: 2,
+      slides: [{
+        slideId: bundle.slides[0].slideId,
+        title: 'Opening revised',
+        prompt: 'Larger headline and quieter cobalt field',
+        imagePath: '.kun/images/slide-1b.png'
+      }]
+    }, context(root))
+    expect(revised).toMatchObject({
+      output: {
+        reviewBundle: {
+          workflowId: bundle.workflowId,
+          slides: [
+            { slideId: bundle.slides[0].slideId, previewPath: '.kun/images/slide-1b.png', revision: 2 },
+            { status: 'failed', revision: 1 }
+          ]
+        }
+      }
+    })
+    const revisedManifest = JSON.parse(await readFile(join(root, 'deck', '.kun-ppt-review', 'manifest.json'), 'utf8')) as {
+      slides: Array<{ promptHash: string }>
+    }
+    expect(revisedManifest.slides[0].promptHash).not.toBe(revisedManifest.slides[1].promptHash)
+  })
+
+  it('rejects incomplete initial reviews and non-generate_image paths', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-ppt-review-invalid-'))
+    roots.push(root)
+    await writeFile(join(root, 'manual.png'), Buffer.from([1]))
+    const tool = buildPptAgentLocalTools().find((candidate) => candidate.name === PPT_CREATE_REVIEW_BUNDLE_TOOL_NAME)!
+    const incomplete = await tool.execute({
+      parentThreadId: 'thr_parent', projectDir: 'deck', deckTitle: 'Deck', pageCount: 2,
+      slides: [{ title: 'Only one', prompt: 'One', error: 'failed' }]
+    }, context(root))
+    expect(incomplete).toMatchObject({ isError: true })
+    expect(JSON.stringify(incomplete.output)).toContain('initial review must cover all 2 slides')
+
+    const invalidPath = await tool.execute({
+      parentThreadId: 'thr_parent', projectDir: 'deck-2', deckTitle: 'Deck', pageCount: 1,
+      slides: [{ title: 'One', prompt: 'One', imagePath: 'manual.png' }]
+    }, context(root))
+    expect(invalidPath).toMatchObject({ isError: true })
+    expect(JSON.stringify(invalidPath.output)).toContain('imagePath must come from generate_image')
   })
 
   it('reads only bounded Markdown from the bundled reference directory', async () => {

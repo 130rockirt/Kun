@@ -531,6 +531,129 @@ describe('DelegationRuntime model provider selection', () => {
   })
 })
 
+describe('DelegationRuntime resume handling', () => {
+  it('appends a follow-up turn to the same persisted child snapshot', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'kun-delegation-resume-'))
+    try {
+      const calls: Parameters<ChildRunExecutor>[0][] = []
+      const store = new FileDelegationStore(dir)
+      const runtime = new DelegationRuntime({
+        config: subagentConfig(),
+        store,
+        idGenerator: () => 'child_ppt',
+        nowIso: (() => {
+          let tick = 0
+          return () => `2026-07-04T00:00:0${tick++}.000Z`
+        })(),
+        executor: async (input) => {
+          calls.push(input)
+          return {
+            summary: input.resumeChild ? 'revised' : 'initial',
+            reviewBundle: { revision: input.resumeChild ? 2 : 1 }
+          }
+        }
+      })
+      const first = await runtime.runChild({
+        parentThreadId: 'parent',
+        parentTurnId: 'turn-1',
+        label: 'PPT review',
+        prompt: 'generate previews',
+        workspace: '/workspace',
+        inlineProfile: {
+          id: 'ppt',
+          source: 'builtin',
+          profile: {
+            mode: 'subagent',
+            toolPolicy: 'inherit',
+            allowedTools: ['generate_image'],
+            systemPrompt: 'PPT child'
+          }
+        },
+        security: { sandboxRoot: '/workspace' },
+        signal: new AbortController().signal
+      })
+      const resumed = await runtime.resumeChild({
+        childId: first.id,
+        parentThreadId: 'parent',
+        parentTurnId: 'turn-2',
+        prompt: 'revise slide 2',
+        signal: new AbortController().signal
+      })
+
+      expect(first.id).toBe('child_ppt')
+      expect(resumed).toMatchObject({
+        id: 'child_ppt',
+        parentTurnId: 'turn-2',
+        prompt: 'revise slide 2',
+        summary: 'revised',
+        resumeCount: 1,
+        reviewBundle: { revision: 2 }
+      })
+      expect(calls).toHaveLength(2)
+      expect(calls[1]).toMatchObject({
+        resumeChild: true,
+        childId: 'child_ppt',
+        parentThreadId: 'parent',
+        parentTurnId: 'turn-2',
+        workspace: '/workspace',
+        systemPrompt: 'PPT child',
+        allowedTools: ['generate_image']
+      })
+      expect((await store.list('parent'))).toHaveLength(1)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects concurrent follow-ups for the same persistent child', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'kun-delegation-resume-lock-'))
+    try {
+      let releaseResume = (): void => undefined
+      const resumeGate = new Promise<void>((resolve) => { releaseResume = resolve })
+      const runtime = new DelegationRuntime({
+        config: subagentConfig(),
+        store: new FileDelegationStore(dir),
+        idGenerator: () => 'child_ppt_lock',
+        executor: async (input) => {
+          if (input.resumeChild) await resumeGate
+          return { summary: input.resumeChild ? 'revised' : 'initial' }
+        }
+      })
+      const first = await runtime.runChild({
+        parentThreadId: 'parent',
+        parentTurnId: 'turn-1',
+        prompt: 'generate previews',
+        workspace: '/workspace',
+        inlineProfile: {
+          id: 'ppt',
+          source: 'builtin',
+          profile: { mode: 'subagent', toolPolicy: 'inherit' }
+        },
+        security: { sandboxRoot: '/workspace' },
+        signal: new AbortController().signal
+      })
+      const running = runtime.resumeChild({
+        childId: first.id,
+        parentThreadId: 'parent',
+        parentTurnId: 'turn-2',
+        prompt: 'first follow-up',
+        signal: new AbortController().signal
+      })
+      await expect(runtime.resumeChild({
+        childId: first.id,
+        parentThreadId: 'parent',
+        parentTurnId: 'turn-3',
+        prompt: 'racing follow-up',
+        signal: new AbortController().signal
+      })).rejects.toThrow('is still running')
+      releaseResume()
+      await expect(running).resolves.toMatchObject({ summary: 'revised', resumeCount: 1 })
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
 describe('createChildAgentExecutor abort handling', () => {
   it('connects the parent signal to the child turn interrupt', async () => {
     const model = new HangingModel()

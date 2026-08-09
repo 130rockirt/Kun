@@ -3132,7 +3132,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
 
     const followMain = renderPanel({
       exploreAgent: { enabled: true, model: '', providerId: '', fast: false },
-      pptAgent: { enabled: true, model: '', providerId: '', fast: false }
+      pptAgent: { enabled: true, model: '', providerId: '', fast: false, imageFirst: true }
     })
     expect(followMain).toContain('Enable explore_agent')
     expect(followMain).toContain('Follow main model')
@@ -3140,7 +3140,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
 
     const fixed = renderPanel({
       exploreAgent: { enabled: true, model: 'deepseek-v4-pro', providerId: 'deepseek', fast: false },
-      pptAgent: { enabled: true, model: '', providerId: '', fast: false }
+      pptAgent: { enabled: true, model: '', providerId: '', fast: false, imageFirst: true }
     })
     expect(fixed).toContain('Use fixed model')
     expect(fixed).toContain('Explore reasoning effort')
@@ -3148,7 +3148,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
 
     const disabled = renderPanel({
       exploreAgent: { enabled: false, model: '', providerId: '', fast: false },
-      pptAgent: { enabled: true, model: '', providerId: '', fast: false }
+      pptAgent: { enabled: true, model: '', providerId: '', fast: false, imageFirst: true }
     })
     expect(disabled).not.toContain('Follow main model')
   })
@@ -3169,7 +3169,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
 
     const followMain = renderPanel({
       exploreAgent: { enabled: true, model: '', providerId: '', fast: false },
-      pptAgent: { enabled: true, model: '', providerId: '', fast: false }
+      pptAgent: { enabled: true, model: '', providerId: '', fast: false, imageFirst: true }
     })
     expect(followMain).toContain('Enable ppt_agent')
     expect(followMain).toContain('Follow main model')
@@ -3177,7 +3177,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
 
     const fixed = renderPanel({
       exploreAgent: { enabled: true, model: '', providerId: '', fast: false },
-      pptAgent: { enabled: true, model: 'deepseek-v4-pro', providerId: 'deepseek', fast: false }
+      pptAgent: { enabled: true, model: 'deepseek-v4-pro', providerId: 'deepseek', fast: false, imageFirst: true }
     })
     expect(fixed).toContain('Use fixed model')
     expect(fixed).toContain('PPT reasoning effort')
@@ -3185,7 +3185,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
 
     const disabled = renderPanel({
       exploreAgent: { enabled: true, model: '', providerId: '', fast: false },
-      pptAgent: { enabled: false, model: '', providerId: '', fast: false }
+      pptAgent: { enabled: false, model: '', providerId: '', fast: false, imageFirst: true }
     })
     expect(disabled).not.toContain('Follow main model')
   })
@@ -3220,7 +3220,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
       await act(async () => {
         renderer = createRenderer(createElement(ExploreAgentSettingsPanel, {
           t,
-          value: { exploreAgent: { enabled: true, model: 'gpt-5.4', providerId: 'codex-2', fast: true }, pptAgent: { enabled: true, model: '', providerId: '', fast: false } },
+          value: { exploreAgent: { enabled: true, model: 'gpt-5.4', providerId: 'codex-2', fast: true }, pptAgent: { enabled: true, model: '', providerId: '', fast: false, imageFirst: true } },
           modelProviders,
           leadProviderId: 'codex-2',
           leadModel: 'gpt-5.4',

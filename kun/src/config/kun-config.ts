@@ -675,7 +675,8 @@ export const LabPptAgentConfigSchema = z
     model: z.string().min(1).optional(),
     providerId: z.string().min(1).optional(),
     reasoningEffort: ModelReasoningEffort.optional(),
-    fast: z.boolean().default(false)
+    fast: z.boolean().default(false),
+    imageFirst: z.boolean().default(true)
   })
   .strict()
   .superRefine((config, ctx) => {
@@ -698,7 +699,8 @@ export const LabConfigSchema = z
     }),
     pptAgent: LabPptAgentConfigSchema.default({
       enabled: true,
-      fast: false
+      fast: false,
+      imageFirst: true
     })
   })
   .strict()

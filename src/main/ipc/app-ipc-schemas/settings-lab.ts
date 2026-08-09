@@ -18,6 +18,7 @@ export const kunLabPatchSchema = z.object({
     model: z.string().trim().max(256).optional(),
     providerId: z.string().trim().max(128).optional(),
     reasoningEffort: z.enum(['auto', 'off', 'low', 'medium', 'high', 'max']).optional(),
-    fast: z.boolean().optional()
+    fast: z.boolean().optional(),
+    imageFirst: z.boolean().optional()
   }).strict().optional()
 }).strict()

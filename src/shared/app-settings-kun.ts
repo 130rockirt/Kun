@@ -744,7 +744,8 @@ export function defaultKunLabSettings(): KunLabSettingsV1 {
       enabled: true,
       model: '',
       providerId: '',
-      fast: false
+      fast: false,
+      imageFirst: true
     }
   }
 }
@@ -763,7 +764,10 @@ export function mergeKunLabSettings(
   if (!patch) return base
   return {
     exploreAgent: mergeLabAgentSettings(base.exploreAgent, patch.exploreAgent),
-    pptAgent: mergeLabAgentSettings(base.pptAgent, patch.pptAgent)
+    pptAgent: {
+      ...mergeLabAgentSettings(base.pptAgent, patch.pptAgent),
+      imageFirst: patch.pptAgent?.imageFirst ?? base.pptAgent.imageFirst
+    }
   }
 }
 

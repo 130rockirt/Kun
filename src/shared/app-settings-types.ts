@@ -479,6 +479,8 @@ export type KunLabPptAgentSettingsV1 = {
   reasoningEffort?: ModelReasoningEffort
   /** Codex fast mode (serviceTier = priority). Only effective for Codex models that advertise priority. */
   fast: boolean
+  /** Generate and review a complete visual slide set before building the editable deck. Default true. */
+  imageFirst: boolean
 }
 
 /** Experimental Lab feature settings written into Kun config `lab`. */

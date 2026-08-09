@@ -2017,7 +2017,7 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
 }
 
 export function LaboratorySettingsSection({ ctx }: { ctx: Record<string, any> }): ReactElement {
-  const { t, form, kun, updateKun, selectControlClass } = ctx
+  const { t, form, kun, updateKun, selectControlClass, runtimeInfo } = ctx
   const [activePanel, setActivePanel] = useState<LaboratorySettingsPanel>('computer')
   const provider = form.provider ?? defaultModelProviderSettings()
   const modelProviders = provider.providers as ModelProviderProfileV1[]
@@ -2140,6 +2140,12 @@ export function LaboratorySettingsSection({ ctx }: { ctx: Record<string, any> })
           modelProviders={modelProviders}
           leadProviderId={activeProviderId}
           leadModel={kun.model}
+          imageGen={runtimeInfo?.capabilities?.imageGen
+            ? {
+                available: runtimeInfo.capabilities.imageGen.available === true,
+                ...(runtimeInfo.capabilities.imageGen.reason ? { reason: runtimeInfo.capabilities.imageGen.reason } : {})
+              }
+            : undefined}
           selectControlClass={selectControlClass}
           onChange={(patch) => updateKun({ lab: patch })}
         />

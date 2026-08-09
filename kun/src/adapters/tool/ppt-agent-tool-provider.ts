@@ -20,6 +20,10 @@ export type PptAgentToolConfig = {
   providerId?: string
   reasoningEffort?: ModelReasoningEffort
   fast?: boolean
+  imageFirst?: boolean
+  imageGenAvailable?: boolean
+  imageGenReason?: string
+  imageGenSupportsReferenceEdit?: boolean
 }
 
 /**
@@ -40,6 +44,8 @@ export const PPT_AGENT_ALLOWED_TOOLS = [
   'edit',
   'ppt_read_guide',
   'ppt_export',
+  'ppt_generate_previews',
+  'ppt_create_review_bundle',
   'bash',
   'web_fetch',
   'web_search',
@@ -48,7 +54,8 @@ export const PPT_AGENT_ALLOWED_TOOLS = [
 
 const PPT_AGENT_DESCRIPTION = [
   'Use `ppt_agent` for any presentation/PPT task: create, edit, replicate, or read a deck.',
-  'It runs a dedicated PPT agent child that produces a PPTD project + locally exported .pptx (open-kimi-ppt-skill workflow distilled into its system prompt), can call generate_image for artwork, and returns a boardSpec the parent replays on the Design whiteboard when the user asked to present.',
+  'It runs a dedicated PPT agent child using the open-kimi-ppt-skill workflow distilled into its system prompt and produces a PPTD project + locally exported .pptx. When visual-first review is active and generate_image is available, it must generate one 16:9 concept image per slide and create a complete review bundle first; the main agent opens that bundle on the parent whiteboard before asking the child to build the editable deck.',
+  'For later review actions, pass the original childId, workflowId and compact reviewContext so the same PPT child can continue with its saved visual plan rather than creating a new child.',
   'Give it a short distinct title (2-6 words) for the UI plus a self-contained query covering: topic/content, page count, style direction, whether to generate artwork, and whether the user wants the deck laid out on the whiteboard.',
   'The child writes deck files under the workspace; the parent owns deliverable verification (deck structure, .pptx export, per-page fade).',
   'PPT 演示文稿任务（创建/编辑/复刻/读取）都应优先交给 ppt_agent；委托时给出清晰的目标与交付物要求。'
@@ -82,6 +89,14 @@ export function buildPptAgentToolProvider(
           inputSchema: {
             type: 'object',
             properties: {
+              action: {
+                type: 'string',
+                enum: ['start', 'revise_previews', 'retry_failed', 'approve_and_build'],
+                description: 'Workflow action. Defaults to start; review follow-ups resume the original PPT child.'
+              },
+              childId: { type: 'string', description: 'Existing PPT child id required for a review follow-up.' },
+              workflowId: { type: 'string', description: 'Persisted PPT review workflow id required for a review follow-up.' },
+              reviewContext: { type: 'object', description: 'Compact slide-id keyed whiteboard feedback for the PPT child.' },
               title: {
                 type: 'string',
                 description: 'Distinct 2-6 word UI title for this PPT task (shown in the child-run card).'
@@ -122,13 +137,34 @@ export function buildPptAgentToolProvider(
             if (!title) return { output: { error: 'title is required' }, isError: true }
             if (!query) return { output: { error: 'query is required' }, isError: true }
             const workspace = stringValue(args.workspace) || context.workspace
-            const resolvedCfg = cfg ?? {}
+            const configuredCfg = cfg ?? {}
+            const imageGenAllowed =
+              (!context.allowedToolNames || context.allowedToolNames.includes('generate_image')) &&
+              !context.blockedToolNames?.includes('generate_image')
+            const resolvedCfg: PptAgentToolConfig = {
+              ...configuredCfg,
+              imageGenAvailable: configuredCfg.imageGenAvailable === true && imageGenAllowed,
+              ...(!imageGenAllowed
+                ? { imageGenReason: 'generate_image is unavailable in the current tool policy' }
+                : {})
+            }
             const inlineProfile = buildPptInlineProfile(resolvedCfg)
-            const record = await runtime.runChild({
+            const action = actionValue(args.action)
+            const childId = stringValue(args.childId)
+            const workflowId = stringValue(args.workflowId)
+            const reviewContext = args.reviewContext
+            if (action !== 'start' && (!childId || !workflowId)) {
+              return { output: { error: 'childId and workflowId are required for PPT review follow-ups' }, isError: true }
+            }
+            const fallbackNotice = imageFirstFallbackNotice(resolvedCfg, action)
+            const workflowInstruction = visualWorkflowInstruction(resolvedCfg, action, workflowId, reviewContext, context.threadId)
+            const prompt = [query, fallbackNotice, workflowInstruction].filter(Boolean).join('\n\n')
+            const record = action === 'start'
+              ? await runtime.runChild({
               parentThreadId: context.threadId,
               parentTurnId: context.turnId,
               label: title,
-              prompt: query,
+              prompt,
               workspace,
               inlineProfile,
               agentSurface: context.agentSurface ?? 'code',
@@ -224,7 +260,35 @@ export function buildPptAgentToolProvider(
               },
               signal: context.abortSignal
             })
-            const failed = record.status === 'failed' || record.status === 'aborted'
+              : await runtime.resumeChild({
+                childId,
+                parentThreadId: context.threadId,
+                parentTurnId: context.turnId,
+                prompt,
+                signal: context.abortSignal,
+                onQueued: async (resumedChildId, profile, metadata) => emitPptLifecycle(onUpdate, {
+                  childId: resumedChildId,
+                  status: 'queued',
+                  title,
+                  profile,
+                  metadata
+                }),
+                onRunning: async (resumedChildId, profile, metadata) => emitPptLifecycle(onUpdate, {
+                  childId: resumedChildId,
+                  status: 'running',
+                  title,
+                  profile,
+                  metadata
+                })
+              })
+            const reviewExpected =
+              (action === 'start' && resolvedCfg.imageFirst !== false && resolvedCfg.imageGenAvailable === true) ||
+              action === 'revise_previews' ||
+              action === 'retry_failed'
+            const reviewContractError = reviewExpected && record.reviewBundle === undefined
+              ? 'PPT child completed without the required visual review bundle'
+              : reviewBundleContractError(record.reviewBundle, record.id, action === 'start' ? undefined : workflowId)
+            const failed = record.status === 'failed' || record.status === 'aborted' || Boolean(reviewContractError)
             const resolvedModel =
               record.model?.trim() ||
               (typeof context.actingModelRoute?.model === 'string'
@@ -241,13 +305,22 @@ export function buildPptAgentToolProvider(
                 status: record.status,
                 title,
                 summary: record.summary ?? '',
+                phase: action === 'approve_and_build'
+                  ? (failed ? 'failed_recoverable' : 'completed')
+                  : record.reviewBundle
+                    ? 'awaiting_review'
+                    : failed
+                      ? 'failed_recoverable'
+                      : 'direct_build',
+                ...(fallbackNotice ? { fallbackNotice } : {}),
+                ...(record.reviewBundle !== undefined ? { reviewBundle: record.reviewBundle } : {}),
                 toolInvocations: record.toolInvocations ?? 0,
                 usage: record.usage,
                 profile: 'ppt',
                 profileName,
                 ...(resolvedModel ? { model: resolvedModel } : {}),
                 ...(record.durationMs !== undefined ? { durationMs: record.durationMs } : {}),
-                ...(failed ? { error: record.error ?? record.status } : {})
+                ...(failed ? { error: reviewContractError || record.error || record.status } : {})
               },
               isError: failed
             }
@@ -305,6 +378,64 @@ function buildPptInlineProfile(
       ...(reasoningEffort ? { reasoningEffort } : {})
     }
   }
+}
+
+function actionValue(value: unknown): 'start' | 'revise_previews' | 'retry_failed' | 'approve_and_build' {
+  return value === 'revise_previews' || value === 'retry_failed' || value === 'approve_and_build'
+    ? value
+    : 'start'
+}
+
+function reviewBundleContractError(
+  value: unknown,
+  childId: string,
+  workflowId?: string
+): string {
+  if (value === undefined) return ''
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return 'PPT child returned an invalid visual review bundle'
+  }
+  const bundle = value as Record<string, unknown>
+  if (bundle.childId !== childId) return 'PPT visual review bundle does not belong to the resumed child'
+  if (workflowId && bundle.workflowId !== workflowId) {
+    return 'PPT visual review bundle does not match the requested workflow'
+  }
+  return ''
+}
+
+function imageFirstFallbackNotice(
+  cfg: PptAgentToolConfig,
+  action: 'start' | 'revise_previews' | 'retry_failed' | 'approve_and_build'
+): string {
+  if (action !== 'start' || cfg.imageFirst === false || cfg.imageGenAvailable === true) return ''
+  const reason = cfg.imageGenReason?.trim()
+  return `IMAGE-FIRST FALLBACK: no configured image-generation model is available${reason ? ` (${reason})` : ''}. Tell the user that visual previews cannot be generated, then continue with the direct editable PPT workflow.`
+}
+
+function visualWorkflowInstruction(
+  cfg: PptAgentToolConfig,
+  action: 'start' | 'revise_previews' | 'retry_failed' | 'approve_and_build',
+  workflowId: string,
+  reviewContext: unknown,
+  parentThreadId: string
+): string {
+  const configured = cfg.imageFirst !== false
+  const visualFirst = configured && cfg.imageGenAvailable === true
+  if (action === 'start') {
+    return visualFirst
+      ? [
+          'Do not create PPTD or PPTX yet. First plan every slide and one locked visual system, then call generate_image exactly once per planned slide with aspect_ratio="16:9". Each prompt must describe the complete slide visual, preserve the same style system, and avoid tiny unreadable text.',
+          `After every page has either generate_image files[0].relativePath or a recoverable error, call ppt_create_review_bundle with parentThreadId=${JSON.stringify(parentThreadId)}, the full page count, and all slides.`,
+          'Return that tool reviewBundle and stop at awaiting_review. Never call ppt_export before the parent explicitly calls approve_and_build.',
+          cfg.imageGenSupportsReferenceEdit ? 'Reference-image edits are available for targeted review revisions.' : 'Reference-image edits are unavailable; revise requested pages as complete 16:9 slides while keeping the locked style specification.'
+        ].join(' ')
+      : ''
+  }
+  const context = reviewContext === undefined ? '' : `\nReview context JSON: ${JSON.stringify(reviewContext)}`
+  if (action === 'approve_and_build') {
+    return `PPT REVIEW APPROVED: workflow=${workflowId}. Use the approved per-slide visual concepts as the style/layout reference, then build native editable PPTD elements for text, charts, tables, and reusable background geometry; use generated images only where raster artwork is intended. Validate and export the PPTX now. Do not flatten ordinary slides into full-page images.${context}`
+  }
+  return `PPT REVIEW FOLLOW-UP: workflow=${workflowId}; action=${action}. Keep the locked style system. Regenerate only the requested slideIds with generate_image aspect_ratio="16:9"${cfg.imageGenSupportsReferenceEdit ? ' and use their current imagePath as reference_image_paths when useful' : ''}; then call ppt_create_review_bundle with workflowId=${JSON.stringify(workflowId)}, parentThreadId=${JSON.stringify(parentThreadId)} and those stable slideIds. Return its reviewBundle and stop at awaiting_review.${context}`
 }
 
 function stringValue(value: unknown): string {

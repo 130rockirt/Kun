@@ -28,6 +28,8 @@ import {
 import { loadWorkspaceDirectoryContextFiles } from '../../lib/workspace-file-index'
 import { resolveCodeCanvasComposerRoute } from '../../design/canvas/code-canvas'
 import { useCanvasSelectionStore } from '../../design/canvas/canvas-selection-store'
+import { useCanvasShapeStore } from '../../design/canvas/canvas-shape-store'
+import { serializeActivePptReviewContexts } from '../../design/canvas/ppt-review-board'
 import {
   composerReasoningEffortRequestValue,
   type ComposerReasoningEffort
@@ -735,6 +737,14 @@ export function useWorkbenchComposerSubmitController({
         })
         outboundDisplay = codeCanvasRoute.displayText
         outboundGuiDesignCanvas = true
+      }
+      const pptReviews = serializeActivePptReviewContexts(
+        Object.values(useCanvasShapeStore.getState().document.objects),
+        activeThreadId ?? undefined
+      )
+      if (route === 'chat' && pptReviews.length > 0) {
+        outboundText = `${outboundText}\n\n[PPT visual review context]\n${JSON.stringify({ userFeedback: v, workflows: pptReviews })}`
+        outboundDisplay = v || outboundDisplay
       }
       void sendMessage(outboundText, composerMode === 'plan' ? 'plan' : 'agent', {
         ...(outboundDisplay ? { displayText: outboundDisplay } : {}),

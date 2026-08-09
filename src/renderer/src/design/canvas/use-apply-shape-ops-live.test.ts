@@ -18,7 +18,7 @@ import {
 import { createDefaultShape, createEmptyDocument, createHtmlFrameShape } from './canvas-types'
 
 describe('replayActiveCanvasTurn', () => {
-  it('marks durable SVG and Motion results for idle remount replay', () => {
+  it('marks durable SVG, Motion, and PPT review results for idle remount replay', () => {
     const block = (toolName: string): ToolBlock => ({
       kind: 'tool',
       id: `tool-${toolName}`,
@@ -29,6 +29,7 @@ describe('replayActiveCanvasTurn', () => {
     })
     expect(shouldReplayIdleCanvasToolBlock(block('design_motion_upsert_keyframes'))).toBe(true)
     expect(shouldReplayIdleCanvasToolBlock(block('design_svg_create'))).toBe(true)
+    expect(shouldReplayIdleCanvasToolBlock(block('ppt_agent'))).toBe(true)
     expect(shouldReplayIdleCanvasToolBlock(block('design_update_shapes'))).toBe(false)
   })
 

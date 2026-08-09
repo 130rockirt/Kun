@@ -172,7 +172,7 @@ describe('runtime factory usage carryover', () => {
       tokenEconomyMode: false,
       insecure: false,
       storage: { backend: 'file' },
-      lab: { exploreAgent: { enabled: true, fast: false }, pptAgent: { enabled: true, fast: false } },
+      lab: { exploreAgent: { enabled: true, fast: false }, pptAgent: { enabled: true, fast: false, imageFirst: true } },
       capabilities: KunCapabilitiesConfig.parse({
         subagents: { enabled: true }
       })
@@ -210,12 +210,12 @@ describe('runtime factory usage carryover', () => {
       expect(await listExplore()).toBe(true)
 
       expect(await runtime.applyConfig({
-        lab: { exploreAgent: { enabled: false, fast: false }, pptAgent: { enabled: true, fast: false } }
+        lab: { exploreAgent: { enabled: false, fast: false }, pptAgent: { enabled: true, fast: false, imageFirst: true } }
       })).toEqual({ ok: true })
       expect(await listExplore()).toBe(false)
 
       expect(await runtime.applyConfig({
-        lab: { exploreAgent: { enabled: true, fast: false }, pptAgent: { enabled: true, fast: false } }
+        lab: { exploreAgent: { enabled: true, fast: false }, pptAgent: { enabled: true, fast: false, imageFirst: true } }
       })).toEqual({ ok: true })
       expect(await listExplore()).toBe(true)
     } finally {
@@ -239,7 +239,7 @@ describe('runtime factory usage carryover', () => {
       tokenEconomyMode: false,
       insecure: false,
       storage: { backend: 'file' },
-      lab: { exploreAgent: { enabled: true, fast: false }, pptAgent: { enabled: true, fast: false } },
+      lab: { exploreAgent: { enabled: true, fast: false }, pptAgent: { enabled: true, fast: false, imageFirst: true } },
       capabilities: KunCapabilitiesConfig.parse({
         subagents: { enabled: true }
       })
@@ -277,12 +277,12 @@ describe('runtime factory usage carryover', () => {
       expect(await listPpt()).toBe(true)
 
       expect(await runtime.applyConfig({
-        lab: { exploreAgent: { enabled: true, fast: false }, pptAgent: { enabled: false, fast: false } }
+        lab: { exploreAgent: { enabled: true, fast: false }, pptAgent: { enabled: false, fast: false, imageFirst: true } }
       })).toEqual({ ok: true })
       expect(await listPpt()).toBe(false)
 
       expect(await runtime.applyConfig({
-        lab: { exploreAgent: { enabled: true, fast: false }, pptAgent: { enabled: true, fast: false } }
+        lab: { exploreAgent: { enabled: true, fast: false }, pptAgent: { enabled: true, fast: false, imageFirst: true } }
       })).toEqual({ ok: true })
       expect(await listPpt()).toBe(true)
     } finally {

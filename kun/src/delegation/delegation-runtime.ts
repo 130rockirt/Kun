@@ -162,6 +162,8 @@ export const ChildRunRecord = z.object({
   detached: z.boolean().optional(),
   status: z.enum(['queued', 'running', 'completed', 'failed', 'aborted']),
   summary: z.string().optional(),
+  /** Structured PPT review result captured from the child tool stream. */
+  reviewBundle: z.unknown().optional(),
   evidence: z.array(z.string().min(1).max(2_000)).max(32).optional(),
   tokenBudget: z.number().int().positive().optional(),
   /** Legacy persisted field. New child runs do not use wall-clock budgets. */
@@ -184,6 +186,9 @@ export const ChildRunRecord = z.object({
   queuedMs: z.number().int().nonnegative().optional(),
   /** Stable display order for this child inside its parent turn. */
   childSeq: z.number().int().nonnegative().optional(),
+  /** Number of follow-up turns appended to this same persistent child session. */
+  resumeCount: z.number().int().nonnegative().optional(),
+  lastResumeAt: z.string().optional(),
   createdAt: z.string(),
   /** When the child left the queue and began running. */
   startedAt: z.string().optional(),
@@ -201,6 +206,8 @@ export type ChildRunLifecycleMetadata = {
 }
 
 export type ChildRunExecutor = (input: {
+  /** Continue the persisted child thread instead of creating it again. */
+  resumeChild?: boolean
   childId: string
   parentThreadId: string
   parentTurnId: string
@@ -247,6 +254,7 @@ export type ChildRunExecutor = (input: {
   toolInvocations?: number
   prefixReused?: boolean
   inheritedHistoryItems?: number
+  reviewBundle?: unknown
   evidence?: string[]
 }>
 
@@ -284,6 +292,16 @@ export class FileDelegationStore {
             encoding: 'utf8',
             mode: 0o600
           }))
+  }
+
+  async get(childId: string): Promise<ChildRunRecord | undefined> {
+    await this.ensureRoot()
+    try {
+      return ChildRunRecord.parse(JSON.parse(await readFile(join(this.rootDir, `${childId}.json`), 'utf8')))
+    } catch (error) {
+      if (isNotFound(error)) return undefined
+      throw error
+    }
   }
 
   async list(parentThreadId?: string): Promise<ChildRunRecord[]> {
@@ -357,6 +375,8 @@ export class DelegationRuntime {
    * safe for every client and lets the pending delegate_task return.
    */
   private readonly foregroundChildren = new Map<string, ForegroundChildControl>()
+  /** A persistent child thread accepts at most one appended follow-up turn at a time. */
+  private readonly resumingChildren = new Set<string>()
   private runTurn: RunTurnFn | null = null
 
   constructor(private options: {
@@ -779,6 +799,119 @@ export class DelegationRuntime {
     return state.record
   }
 
+  async resumeChild(input: {
+    childId: string
+    parentThreadId: string
+    parentTurnId: string
+    prompt: string
+    signal: AbortSignal
+    onQueued?: (childId: string, profile?: string, metadata?: ChildRunLifecycleMetadata) => Promise<void> | void
+    onRunning?: (childId: string, profile?: string, metadata?: ChildRunLifecycleMetadata) => Promise<void> | void
+  }): Promise<ChildRunRecord> {
+    if (this.resumingChildren.has(input.childId)) {
+      throw new Error(`child run ${input.childId} is still running`)
+    }
+    this.resumingChildren.add(input.childId)
+    try {
+      return await this.resumeChildExclusive(input)
+    } finally {
+      this.resumingChildren.delete(input.childId)
+    }
+  }
+
+  private async resumeChildExclusive(input: {
+    childId: string
+    parentThreadId: string
+    parentTurnId: string
+    prompt: string
+    signal: AbortSignal
+    onQueued?: (childId: string, profile?: string, metadata?: ChildRunLifecycleMetadata) => Promise<void> | void
+    onRunning?: (childId: string, profile?: string, metadata?: ChildRunLifecycleMetadata) => Promise<void> | void
+  }): Promise<ChildRunRecord> {
+    const previous = await this.options.store.get(input.childId)
+    if (!previous) throw new Error(`child run ${input.childId} was not found`)
+    if (previous.parentThreadId !== input.parentThreadId) {
+      throw new Error(`child run ${input.childId} does not belong to this parent thread`)
+    }
+    if (previous.status === 'queued' || previous.status === 'running') {
+      throw new Error(`child run ${input.childId} is still running`)
+    }
+    const profileSnapshot = previous.profileSnapshot
+    const security = previous.security
+    const workspace = previous.workspace
+    if (!profileSnapshot || !security || !workspace) {
+      throw new Error(`child run ${input.childId} lacks a resumable security/profile snapshot`)
+    }
+    if (input.signal.aborted) throw new Error('child resume aborted before start')
+
+    const queuedAt = this.now()
+    const record = ChildRunRecord.parse({
+      ...previous,
+      prompt: input.prompt,
+      parentTurnId: input.parentTurnId,
+      status: 'queued',
+      summary: undefined,
+      reviewBundle: undefined,
+      evidence: undefined,
+      error: undefined,
+      activity: undefined,
+      detached: undefined,
+      queuedMs: undefined,
+      durationMs: undefined,
+      startedAt: undefined,
+      resumeCount: (previous.resumeCount ?? 0) + 1,
+      lastResumeAt: queuedAt,
+      updatedAt: queuedAt
+    })
+    await this.options.store.upsert(record)
+    await this.recordChildEvent(record)
+    await notifyLifecycle(input.onQueued, record)
+
+    const state: ChildExecutionState = { record, commits: Promise.resolve() }
+    const controller = new AbortController()
+    const abortFromParent = (): void => controller.abort()
+    if (input.signal.aborted) controller.abort()
+    else input.signal.addEventListener('abort', abortFromParent, { once: true })
+    try {
+      return await this.executeChild({
+        state,
+        queuedAt,
+        profileName: record.profile,
+        toolPolicy: record.toolPolicy ?? this.options.config.defaultToolPolicy,
+        resolvedModel: record.model,
+        resolvedProviderId: record.providerId,
+        resolvedAccountId: record.accountId,
+        resolvedSystemPrompt: profileSnapshot.systemPrompt,
+        resolvedOmitBasePrompt: profileSnapshot.omitBasePrompt === true,
+        resolvedAllowedTools: profileSnapshot.allowedTools,
+        resolvedBlockedTools: [...new Set(['delegate_task', 'generate_subagent', ...(profileSnapshot.blockedTools ?? [])])],
+        resolvedBlockedMcpServers: profileSnapshot.blockedMcpServers,
+        resolvedBlockedSkills: profileSnapshot.blockedSkills,
+        skillsEnabled: profileSnapshot.skillsEnabled !== false,
+        promptPreamble: profileSnapshot.promptPreamble,
+        approvalPolicy: record.approvalPolicy,
+        sandboxMode: record.sandboxMode,
+        approvalReviewer: record.approvalReviewer,
+        clientSurface: undefined,
+        guiDesignCanvas: false,
+        resolvedReasoningEffort: record.reasoningEffort,
+        resolvedServiceTier: record.serviceTier,
+        returnFormat: record.returnFormat,
+        workspace,
+        security,
+        onRunning: input.onRunning,
+        label: record.label,
+        parentThreadId: record.parentThreadId,
+        parentTurnId: input.parentTurnId,
+        prompt: input.prompt,
+        resumeChild: true,
+        signal: controller.signal
+      })
+    } finally {
+      input.signal.removeEventListener('abort', abortFromParent)
+    }
+  }
+
   /**
    * Run the queue-acquire + execute + result-recording block for a child
    * that was already persisted with status='queued'. Shared by the
@@ -817,6 +950,7 @@ export class DelegationRuntime {
     parentThreadId: string
     parentTurnId: string
     prompt: string
+    resumeChild?: boolean
     signal: AbortSignal
   }): Promise<ChildRunRecord> {
     let record = args.state.record
@@ -848,6 +982,7 @@ export class DelegationRuntime {
     try {
       const executor: ChildRunExecutor = this.options.executor ?? defaultExecutor
       const result = await executeWithParentSignal(args.signal, (signal) => executor({
+        ...(args.resumeChild ? { resumeChild: true } : {}),
         childId: record.id,
         parentThreadId: args.parentThreadId,
         parentTurnId: args.parentTurnId,
@@ -884,8 +1019,9 @@ export class DelegationRuntime {
         ...current,
         status: contractError ? 'failed' : 'completed',
         summary: result.summary,
+        reviewBundle: result.reviewBundle,
         evidence: result.evidence,
-        usage: result.usage ?? current.usage,
+        usage: addChildUsage(current.usage, result.usage),
         toolInvocations: result.toolInvocations,
         prefixReused: result.prefixReused,
         inheritedHistoryItems: result.inheritedHistoryItems,
@@ -1642,6 +1778,41 @@ function sameChildActivity(
     left.toolName === right.toolName &&
     left.startedAt === right.startedAt &&
     left.updatedAt === right.updatedAt
+}
+
+function addChildUsage(
+  previous: ChildRunRecord['usage'],
+  next: ChildRunRecord['usage'] | undefined
+): ChildRunRecord['usage'] {
+  if (!next) return previous
+  const add = (key: keyof ChildRunRecord['usage']): number | undefined => {
+    const left = previous[key]
+    const right = next[key]
+    return typeof left === 'number' || typeof right === 'number'
+      ? (typeof left === 'number' ? left : 0) + (typeof right === 'number' ? right : 0)
+      : undefined
+  }
+  return ChildRunRecord.shape.usage.parse({
+    promptTokens: add('promptTokens') ?? 0,
+    completionTokens: add('completionTokens') ?? 0,
+    totalTokens: add('totalTokens') ?? 0,
+    ...(add('cachedTokens') !== undefined ? { cachedTokens: add('cachedTokens') } : {}),
+    ...(add('cacheHitTokens') !== undefined ? { cacheHitTokens: add('cacheHitTokens') } : {}),
+    ...(add('cacheMissTokens') !== undefined ? { cacheMissTokens: add('cacheMissTokens') } : {}),
+    ...(add('turns') !== undefined ? { turns: add('turns') } : {}),
+    ...(add('costUsd') !== undefined ? { costUsd: add('costUsd') } : {}),
+    ...(add('costCny') !== undefined ? { costCny: add('costCny') } : {}),
+    ...(add('cacheSavingsUsd') !== undefined ? { cacheSavingsUsd: add('cacheSavingsUsd') } : {}),
+    ...(add('cacheSavingsCny') !== undefined ? { cacheSavingsCny: add('cacheSavingsCny') } : {}),
+    ...(add('tokenEconomySavingsTokens') !== undefined ? { tokenEconomySavingsTokens: add('tokenEconomySavingsTokens') } : {}),
+    ...(add('tokenEconomySavingsUsd') !== undefined ? { tokenEconomySavingsUsd: add('tokenEconomySavingsUsd') } : {}),
+    ...(add('tokenEconomySavingsCny') !== undefined ? { tokenEconomySavingsCny: add('tokenEconomySavingsCny') } : {}),
+    cacheHitRate: next.cacheHitRate ?? previous.cacheHitRate
+  })
+}
+
+function isNotFound(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && 'code' in error && (error as { code?: unknown }).code === 'ENOENT'
 }
 
 const defaultExecutor: ChildRunExecutor = async (input) => {

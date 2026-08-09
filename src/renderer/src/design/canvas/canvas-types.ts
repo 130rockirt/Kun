@@ -178,6 +178,15 @@ export type CanvasEmbeddedArtifact = {
   versionId?: string
 }
 
+export type CanvasPptReviewRef = {
+  workflowId: string
+  childId: string
+  slideId: string
+  revision: number
+  parentThreadId?: string
+  role: 'slide-frame' | 'preview-image' | 'annotation'
+}
+
 export type CanvasShape = {
   id: string
   type: ShapeType
@@ -223,6 +232,8 @@ export type CanvasShape = {
   /** Named component variant applied to this instance root. */
   componentVariant?: string
   overrides?: Record<string, unknown>
+  /** Stable source identity for a PPT visual-review card on the whiteboard. */
+  pptReviewRef?: CanvasPptReviewRef
   textContent?: string
   fontSize?: number
   fontFamily?: string

@@ -10,6 +10,8 @@ import type { ExecuteOpsOptions, OpError } from './shape-ops'
 import { isHtmlFrame, type CanvasDocument } from './canvas-types'
 import { useDesignAssistantStore } from '../design-assistant-store'
 import { useDesignWorkspaceStore } from '../design-workspace-store'
+import { requestCodeCanvasPanelOpen } from '../../lib/code-canvas-panel-event'
+import { isPptReviewBundle, pptReviewBoardOps } from './ppt-review-board'
 import {
   applySvgArtifactToolBlock,
   shouldApplyDesignCanvasToolBlock,
@@ -57,6 +59,10 @@ export type PendingScreenGeneration = {
   brief?: string
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
 export function activeCanvasTurnMatchesThread(
   state: Pick<ActiveCanvasTurnReplayState, 'activeThreadId'>,
   targetThreadId?: string | null
@@ -66,6 +72,7 @@ export function activeCanvasTurnMatchesThread(
 
 export function shouldReplayIdleCanvasToolBlock(block: ToolBlock): boolean {
   return block.meta?.toolName === 'design_svg_create' ||
+    block.meta?.toolName === 'ppt_agent' ||
     isDesignMotionRendererToolName(block.meta?.toolName)
 }
 
@@ -305,13 +312,31 @@ export function useApplyShapeOpsLive(
 
     const applyToolBlock = (block: ToolBlock): void => {
       if (appliedToolBlockIds.has(block.id)) return
-      if (!shouldApplyDesignCanvasToolBlock(block)) return
       const detail = block.detail?.trim()
       if (!detail) return
       let parsed: unknown
       try {
         parsed = JSON.parse(detail)
       } catch {
+        return
+      }
+      const reviewBundle = isRecord(parsed) ? parsed.reviewBundle : undefined
+      const isPptReview = block.meta?.toolName === 'ppt_agent' && isPptReviewBundle(reviewBundle)
+      if (!isPptReview && !shouldApplyDesignCanvasToolBlock(block)) return
+      if (isPptReview) {
+        const canvasShapes = Object.values(useCanvasShapeStore.getState().document.objects)
+        const parentThreadId = targetThreadId ?? useChatStore.getState().activeThreadId ?? undefined
+        const { affectedIds, errors } = applyCanvasOpBlocks(
+          [pptReviewBoardOps(reviewBundle, canvasShapes, parentThreadId)], `ppt-review:${block.id}`, executeOptions)
+        appliedToolBlockIds.add(block.id)
+        if (errors.length > 0) errorsThisTurn.push(...errors)
+        if (affectedIds.length > 0) {
+          for (const id of affectedIds) affectedThisTurn.add(id)
+          useCanvasSelectionStore.getState().select([...affectedThisTurn])
+          useDesignAssistantStore.getState().markAiAffected(affectedIds)
+          requestCodeCanvasPanelOpen()
+          framedThisTurn = true
+        }
         return
       }
       const chatState = useChatStore.getState()
@@ -558,8 +583,9 @@ export function useApplyShapeOpsLive(
     if (!initialState.currentTurnId && activeCanvasTurnMatchesThread(initialState, targetThreadId)) {
       for (const block of initialState.blocks) {
         if (block.kind !== 'tool' || !shouldReplayIdleCanvasToolBlock(block)) continue
-        if (isDesignMotionRendererToolName(block.meta?.toolName)) applyToolBlock(block)
-        else {
+        if (isDesignMotionRendererToolName(block.meta?.toolName) || block.meta?.toolName === 'ppt_agent') {
+          applyToolBlock(block)
+        } else {
           void applySvgToolBlock(block)
         }
       }
@@ -582,8 +608,9 @@ export function useApplyShapeOpsLive(
       if (!state.currentTurnId && state.blocks !== prev.blocks) {
         for (const block of state.blocks) {
           if (block.kind !== 'tool' || !shouldReplayIdleCanvasToolBlock(block)) continue
-          if (isDesignMotionRendererToolName(block.meta?.toolName)) applyToolBlock(block)
-          else {
+          if (isDesignMotionRendererToolName(block.meta?.toolName) || block.meta?.toolName === 'ppt_agent') {
+            applyToolBlock(block)
+          } else {
             void applySvgToolBlock(block)
           }
         }

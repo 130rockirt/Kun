@@ -237,7 +237,10 @@ export async function syncGuiManagedKunConfig(
 function labConfigForRuntime(lab: KunLabSettingsV1 | undefined): KunConfig['lab'] {
   return {
     exploreAgent: labAgentConfigForRuntime(lab?.exploreAgent),
-    pptAgent: labAgentConfigForRuntime(lab?.pptAgent)
+    pptAgent: {
+      ...labAgentConfigForRuntime(lab?.pptAgent),
+      imageFirst: lab?.pptAgent?.imageFirst !== false
+    }
   }
 }
 

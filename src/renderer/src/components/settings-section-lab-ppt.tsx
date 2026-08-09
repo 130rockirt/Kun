@@ -63,6 +63,7 @@ export function PptAgentSettingsPanel({
   modelProviders,
   leadProviderId,
   leadModel,
+  imageGen,
   selectControlClass,
   onChange
 }: {
@@ -71,6 +72,7 @@ export function PptAgentSettingsPanel({
   modelProviders: ModelProviderProfileV1[]
   leadProviderId: string
   leadModel: string
+  imageGen?: { available: boolean; reason?: string }
   selectControlClass: string
   onChange: (patch: KunLabSettingsPatchV1) => void
 }): ReactElement {
@@ -101,6 +103,25 @@ export function PptAgentSettingsPanel({
         />
         {agent.enabled ? (
           <>
+            <SettingRow
+              title={t('labPptImageFirst')}
+              description={t('labPptImageFirstDesc')}
+              control={
+                <Toggle
+                  checked={agent.imageFirst !== false}
+                  onChange={(imageFirst) => onChange({ pptAgent: { imageFirst } })}
+                />
+              }
+            />
+            {agent.imageFirst !== false ? (
+              <div className="px-3 pb-3">
+                <p className={`text-[12px] leading-5 ${imageGen?.available ? 'text-emerald-700 dark:text-emerald-200' : 'text-ds-faint'}`}>
+                  {imageGen?.available
+                    ? t('labPptImageFirstReadyHint')
+                    : `${t('labPptImageFirstUnavailableHint')}${imageGen?.reason ? ` ${imageGen.reason}` : ''}`}
+                </p>
+              </div>
+            ) : null}
             <SettingRow
               title={t('labPptModelMode')}
               description={t('labPptModelModeDesc')}

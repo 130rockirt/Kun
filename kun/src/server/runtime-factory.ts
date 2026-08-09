@@ -82,7 +82,7 @@ import { buildSkillToolProviders } from '../adapters/tool/skill-tool-provider.js
 import { buildDelegationToolProviders } from '../adapters/tool/delegation-tool-provider.js'
 import { buildComponentDesignToolProviders } from '../adapters/tool/component-design-tool-provider.js'
 import { buildWebToolProviders } from '../adapters/tool/web-tool-provider.js'
-import { buildImageGenToolProviders } from '../adapters/tool/image-gen-tool-provider.js'
+import { buildImageGenToolProviders, protocolSupportsImageEdit } from '../adapters/tool/image-gen-tool-provider.js'
 import { buildComputerUseToolProviders } from '../adapters/tool/computer-use-tool-provider.js'
 import { buildBrowserUseToolProviders } from '../adapters/tool/browser-use-tool-provider.js'
 import { buildOfficeCliToolProviders } from '../adapters/tool/office-cli-tool-provider.js'
@@ -1584,7 +1584,12 @@ async function createKunServeRuntimeComposition(
     ),
     ...buildPptAgentToolProvider(
       delegationRuntime,
-      () => activeOptions.lab?.pptAgent
+      () => ({
+        ...activeOptions.lab?.pptAgent,
+        imageGenAvailable: imageGenProviders.available,
+        imageGenReason: imageGenProviders.diagnostics.find((diagnostic) => diagnostic.reason)?.reason,
+        imageGenSupportsReferenceEdit: protocolSupportsImageEdit(activeOptions.capabilities?.imageGen?.protocol)
+      })
     ),
     ...buildComponentDesignToolProviders(delegationRuntime)
   ])
@@ -2515,7 +2520,12 @@ async function createKunServeRuntimeComposition(
 	      ),
 	      ...buildPptAgentToolProvider(
 	        delegationRuntime,
-	        () => activeOptions.lab?.pptAgent
+	        () => ({
+	          ...nextOptions.lab?.pptAgent,
+	          imageGenAvailable: nextImageGenProviders.available,
+	          imageGenReason: nextImageGenProviders.diagnostics.find((diagnostic) => diagnostic.reason)?.reason,
+	          imageGenSupportsReferenceEdit: protocolSupportsImageEdit(nextOptions.capabilities?.imageGen?.protocol)
+	        })
 	      ),
 	      ...buildComponentDesignToolProviders(delegationRuntime)
 	    ])
