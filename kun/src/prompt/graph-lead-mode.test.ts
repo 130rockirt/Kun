@@ -92,6 +92,21 @@ describe('Graph Lead mode system contract', () => {
     )
   })
 
+  it('requires explicit full-workspace authority for command-running nodes', () => {
+    expect(GRAPH_LEAD_MODE_INSTRUCTION).toContain(
+      'Narrow `readScopes` or `writeScopes` remove tools such as `bash` and `background_shell`'
+    )
+    expect(GRAPH_LEAD_MODE_INSTRUCTION).toContain(
+      'Only when the user has authorized full-workspace access and command execution is genuinely necessary'
+    )
+    expect(GRAPH_LEAD_MODE_INSTRUCTION).toContain(
+      'set both `readScopes` and `writeScopes` to include `.`'
+    )
+    expect(GRAPH_LEAD_MODE_INSTRUCTION).toContain(
+      'never claim a command, build, test, or formatter ran when the executor did not have and use a command tool'
+    )
+  })
+
   it('allows read-only explore_agent while forbidding ordinary delegate_task in planning', () => {
     expect(GRAPH_LEAD_MODE_INSTRUCTION).toContain('Prefer `explore_agent` when it is advertised')
     expect(GRAPH_LEAD_MODE_INSTRUCTION).toContain('or use ordinary `delegate_task` during planning')
