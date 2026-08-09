@@ -53,7 +53,6 @@ function makeRuntime(dir: string, executor: ChildRunExecutor): DelegationRuntime
     config: SubagentsCapabilityConfig.parse({
       enabled: true,
       maxParallel: 1,
-      maxChildRuns: 10,
       profiles: { general: { mode: 'subagent', toolPolicy: 'inherit' } }
     }),
     store: new FileDelegationStore(dir),

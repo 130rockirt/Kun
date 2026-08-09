@@ -26,6 +26,32 @@ describe('coerceRendererSettings', () => {
       subagentTurnComplete: false
     })
   })
+
+  it('drops legacy cumulative subagent limits from the renderer settings snapshot', () => {
+    const base = settings()
+    const normalized = coerceRendererSettings({
+      ...base,
+      agents: {
+        kun: {
+          ...base.agents.kun,
+          subagents: {
+            enabled: true,
+            maxParallel: 3,
+            maxChildRuns: 12,
+            profiles: []
+          }
+        }
+      }
+    } as unknown as AppSettingsV1)
+
+    expect(normalized.agents.kun.subagents).toEqual({
+      enabled: true,
+      useExistingAgents: true,
+      maxParallel: 3,
+      profiles: []
+    })
+    expect(normalized.agents.kun.subagents).not.toHaveProperty('maxChildRuns')
+  })
 })
 
 describe('diffSettingsPatch', () => {
@@ -154,7 +180,6 @@ describe('diffSettingsPatch', () => {
       subagents: {
         enabled: true,
         maxParallel: 3,
-        maxChildRuns: 12,
         defaultToolPolicy: 'inherit',
         defaultProfile: 'researcher',
         profiles: [{
@@ -187,7 +212,6 @@ describe('diffSettingsPatch', () => {
       enabled: true,
       useExistingAgents: true,
       maxParallel: 3,
-      maxChildRuns: 12,
       defaultToolPolicy: 'inherit',
       defaultProfile: 'researcher',
       profiles: [replacement]

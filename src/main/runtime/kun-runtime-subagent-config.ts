@@ -27,7 +27,6 @@ export function subagentProfilesForRuntime(
     enabled: subagents.enabled !== false,
     useExistingAgents: subagents.useExistingAgents !== false,
     maxParallel: validMaxParallel(subagents.maxParallel) ? subagents.maxParallel : 256,
-    maxChildRuns: subagents.maxChildRuns && subagents.maxChildRuns > 0 ? subagents.maxChildRuns : 25,
     ...(subagents.defaultToolPolicy ? { defaultToolPolicy: subagents.defaultToolPolicy } : {}),
     ...(subagents.defaultProfile ? { defaultProfile: subagents.defaultProfile } : {}),
     profiles
@@ -44,7 +43,6 @@ export function subagentProfilesForRuntime(
     enabled: candidate.enabled,
     useExistingAgents: candidate.useExistingAgents,
     maxParallel: candidate.maxParallel,
-    maxChildRuns: candidate.maxChildRuns,
     ...(subagents.defaultToolPolicy ? { defaultToolPolicy: subagents.defaultToolPolicy } : {})
   })
 }

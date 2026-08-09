@@ -8,7 +8,7 @@
     "delegatableCount": "委任可能なロール {{count}} 個",
     "configuredCount": "設定済み {{count}} 個",
     "showingCount": "{{visible}} / {{total}} 件を表示",
-    "policySummary": "キューとセッションの上限",
+    "policySummary": "キューと同時実行",
     "search": "サブエージェントを検索",
     "searchPlaceholder": "名前、能力、ユースケースで検索",
     "clearSearch": "検索をクリア",

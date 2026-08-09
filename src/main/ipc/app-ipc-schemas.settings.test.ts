@@ -43,7 +43,8 @@ describe('app-ipc-schemas settings', () => {
           },
           subagents: {
             useExistingAgents: false,
-            maxParallel: 256
+            maxParallel: 256,
+            maxChildRuns: 25
           }
         }
       },

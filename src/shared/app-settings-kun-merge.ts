@@ -37,6 +37,8 @@ import {
   type KunInstructionSettingsV1,
   type KunLabSettingsPatchV1,
   type KunLabSettingsV1,
+  type KunSubagentsSettingsV1,
+  type LegacyKunSubagentsSettingsInputV1,
   type KunLlmDebugSettingsV1,
   type ImageGenerationQuality,
   type ImageGenerationResolution,
@@ -369,18 +371,29 @@ export function mergeKunSubagentsSettings(
   current: KunRuntimeSettingsV1['subagents'],
   patch: KunRuntimeSettingsPatchV1['subagents']
 ): KunRuntimeSettingsV1['subagents'] {
-  if (patch === undefined) return current
+  const effectiveCurrent = stripLegacyChildRunLimit(current)
+  const effectivePatch = stripLegacyChildRunLimit(patch)
+  if (effectiveCurrent === undefined && effectivePatch === undefined) return undefined
   return {
-    ...(current ?? { enabled: true, useExistingAgents: true, profiles: [] }),
-    ...patch,
-    enabled: patch.enabled ?? current?.enabled ?? true,
-    useExistingAgents: patch.useExistingAgents ?? current?.useExistingAgents ?? true,
+    ...(effectiveCurrent ?? { enabled: true, useExistingAgents: true, profiles: [] }),
+    ...effectivePatch,
+    enabled: effectivePatch?.enabled ?? effectiveCurrent?.enabled ?? true,
+    useExistingAgents: effectivePatch?.useExistingAgents ?? effectiveCurrent?.useExistingAgents ?? true,
     // A roster diff is an intentional whole-array replacement (including []
     // for deleting every custom profile). Omitting it keeps the current roster.
-    profiles: patch.profiles !== undefined
-      ? [...patch.profiles]
-      : [...(current?.profiles ?? [])]
+    profiles: effectivePatch?.profiles !== undefined
+      ? [...effectivePatch.profiles]
+      : [...(effectiveCurrent?.profiles ?? [])]
   }
+}
+
+function stripLegacyChildRunLimit(
+  input: LegacyKunSubagentsSettingsInputV1 | undefined
+): Partial<KunSubagentsSettingsV1> | undefined {
+  if (input === undefined) return undefined
+  const { maxChildRuns: _legacyMaxChildRuns, ...effective } = input
+  void _legacyMaxChildRuns
+  return effective
 }
 
 export function defaultKunLabSettings(): KunLabSettingsV1 {

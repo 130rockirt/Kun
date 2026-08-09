@@ -78,7 +78,7 @@ export function SubagentSettingsContent({ context }: { context: Context }): Reac
               <p className="mt-0.5 text-[12px] text-ds-muted">{tSettings('subagentsRuntimePolicyDesc')}</p>
             </div>
             <span className="mt-2 inline-flex w-fit rounded-full bg-accent-soft px-2.5 py-1 text-[11px] font-semibold text-accent sm:mt-0">
-              {t('subagentsPanel.policySummary', 'Queue and session limits')}
+              {t('subagentsPanel.policySummary', 'Queue and concurrency')}
             </span>
           </div>
           <div className="grid gap-px bg-ds-border-muted sm:grid-cols-2">
@@ -94,28 +94,19 @@ export function SubagentSettingsContent({ context }: { context: Context }): Reac
                 />
               </CompactPolicySetting>
             </div>
-            <CompactPolicySetting
-              title={tSettings('subagentsMaxParallel')}
-              description={tSettings('subagentsMaxParallelDesc')}
-            >
-              <BoundedNumberInput
-                value={subagents.maxParallel ?? 256}
-                min={1}
-                max={256}
-                onCommit={(maxParallel) => patchSubagents({ maxParallel })}
-              />
-            </CompactPolicySetting>
-            <CompactPolicySetting
-              title={tSettings('subagentsMaxChildRuns')}
-              description={tSettings('subagentsMaxChildRunsDesc')}
-            >
-              <BoundedNumberInput
-                value={subagents.maxChildRuns ?? 25}
-                min={1}
-                max={10_000}
-                onCommit={(maxChildRuns) => patchSubagents({ maxChildRuns })}
-              />
-            </CompactPolicySetting>
+            <div className="sm:col-span-2">
+              <CompactPolicySetting
+                title={tSettings('subagentsMaxParallel')}
+                description={tSettings('subagentsMaxParallelDesc')}
+              >
+                <BoundedNumberInput
+                  value={subagents.maxParallel ?? 256}
+                  min={1}
+                  max={256}
+                  onCommit={(maxParallel) => patchSubagents({ maxParallel })}
+                />
+              </CompactPolicySetting>
+            </div>
           </div>
           </section>
         </SettingsTabPanel>

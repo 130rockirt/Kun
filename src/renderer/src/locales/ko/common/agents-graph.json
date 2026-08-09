@@ -8,7 +8,7 @@
     "delegatableCount": "위임 가능한 역할 {{count}}개",
     "configuredCount": "설정됨 {{count}}개",
     "showingCount": "{{visible}} / {{total}} 표시",
-    "policySummary": "대기열 및 세션 제한",
+    "policySummary": "대기열 및 동시 실행",
     "search": "하위 에이전트 검색",
     "searchPlaceholder": "이름, 기능 또는 시나리오 검색",
     "clearSearch": "검색 지우기",

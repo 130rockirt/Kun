@@ -8,7 +8,7 @@
     "delegatableCount": "{{count}} delegatable roles",
     "configuredCount": "{{count}} configured",
     "showingCount": "Showing {{visible}} of {{total}}",
-    "policySummary": "Queue and session limits",
+    "policySummary": "Queue and concurrency",
     "search": "Search subagents",
     "searchPlaceholder": "Search names, capabilities, or scenarios",
     "clearSearch": "Clear search",

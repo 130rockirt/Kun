@@ -56,7 +56,8 @@ import {
   resolveWriteInlineCompletionModel,
   type AppSettingsV1,
   type ClawImChannelV1,
-  type ClawImProvider
+  type ClawImProvider,
+  type KunRuntimeSettingsV1
 } from './app-settings'
 
 function settings(): AppSettingsV1 {
@@ -165,7 +166,7 @@ describe('mergeKunRuntimeSettings', () => {
     expect(next.baseUrl).toBe(current.baseUrl)
   })
 
-  it('deep-merges subagent settings while replacing an explicit profiles roster', () => {
+  it('deep-merges subagent settings while dropping the legacy cumulative limit', () => {
     const current = {
       ...defaultKunRuntimeSettings(),
       subagents: {
@@ -183,24 +184,44 @@ describe('mergeKunRuntimeSettings', () => {
           toolPolicy: 'readOnly' as const
         }]
       }
-    }
+    } as unknown as KunRuntimeSettingsV1
 
     const limitsChanged = mergeKunRuntimeSettings(current, {
       subagents: { maxParallel: 5 }
     })
     expect(limitsChanged.subagents).toEqual({
-      ...current.subagents,
-      maxParallel: 5
+      enabled: true,
+      useExistingAgents: true,
+      maxParallel: 5,
+      defaultToolPolicy: 'inherit',
+      defaultProfile: 'researcher',
+      profiles: current.subagents?.profiles
     })
+    expect(limitsChanged.subagents).not.toHaveProperty('maxChildRuns')
 
     const rosterCleared = mergeKunRuntimeSettings(limitsChanged, {
       subagents: { profiles: [] }
     })
     expect(rosterCleared.subagents).toEqual({
-      ...current.subagents,
+      enabled: true,
+      useExistingAgents: true,
       maxParallel: 5,
+      defaultToolPolicy: 'inherit',
+      defaultProfile: 'researcher',
       profiles: []
     })
+
+    const normalized = normalizeAppSettings({
+      ...settings(),
+      agents: { kun: current }
+    })
+    expect(normalized.agents.kun.subagents).not.toHaveProperty('maxChildRuns')
+
+    const migrated = migrateLegacyAppSettings({
+      ...settings(),
+      agents: { kun: current }
+    })
+    expect(migrated.agents?.kun.subagents).not.toHaveProperty('maxChildRuns')
   })
 
   it('completes a partial first subagent patch with safe defaults', () => {

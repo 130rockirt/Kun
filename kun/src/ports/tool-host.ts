@@ -163,7 +163,6 @@ export type ToolHostContext = {
   delegationPolicy?: {
     enabled: boolean
     maxParallel?: number
-    maxChildRuns?: number
   }
   /** Optional provider allow-list. When set, other providers are not advertised or executed. */
   allowedProviderIds?: readonly string[]

@@ -31,7 +31,6 @@ vi.mock('react-i18next', () => ({
       subagentsUseExistingAgents: 'Use existing agents',
       subagentsUseExistingAgentsDesc: 'Choose configured profiles or parent-defined one-run roles.',
       subagentsMaxParallel: 'Maximum parallel subagents',
-      subagentsMaxChildRuns: 'Child runs per session',
       subagentsDelegatable: 'Delegatable subagents',
       subagentsAutomaticRoles: 'Automatic model roles',
       'agentsView.followDefault': 'Follow default',
@@ -114,7 +113,6 @@ describe('SubagentSettingsEditor', () => {
       subagents: {
         enabled: true,
         maxParallel: 5,
-        maxChildRuns: 20,
         defaultToolPolicy: 'inherit' as const,
         profiles: [customProfile()]
       }
@@ -131,6 +129,9 @@ describe('SubagentSettingsEditor', () => {
 
     const text = JSON.stringify(renderer.toJSON())
     expect(text).toContain('Runtime policy')
+    expect(text).toContain('Maximum parallel subagents')
+    expect(text).not.toContain('subagentsMaxChildRuns')
+    expect(text).not.toContain('Child runs per session')
     expect(text).toContain('General')
     expect(text).toContain('Search names, capabilities, or scenarios')
     expect(text).toContain('Development')
@@ -154,7 +155,9 @@ describe('SubagentSettingsEditor', () => {
       'subagent-settings-tab-profiles',
       'subagent-settings-tab-automatic'
     ])
-    expect(renderer.root.findByProps({ id: 'subagent-settings-panel-policy' }).props.hidden).toBe(false)
+    const policyPanel = renderer.root.findByProps({ id: 'subagent-settings-panel-policy' })
+    expect(policyPanel.props.hidden).toBe(false)
+    expect(policyPanel.findAllByType('input').filter((input) => input.props.type === 'number')).toHaveLength(1)
     expect(renderer.root.findByProps({ id: 'subagent-settings-panel-profiles' }).props.hidden).toBe(true)
     expect(renderer.root.findByProps({ id: 'subagent-settings-panel-automatic' }).props.hidden).toBe(true)
 
@@ -446,7 +449,7 @@ describe('SubagentSettingsEditor', () => {
     expect(JSON.stringify(renderer.toJSON())).not.toContain('Copy Editor')
   })
 
-  it('patches runtime policy without dropping the roster or sibling limits', async () => {
+  it('patches runtime concurrency without dropping the roster or sibling settings', async () => {
     const onPatch = vi.fn<(patch: KunRuntimeSettingsPatchV1) => void>()
     const profile = customProfile()
     const kun = {
@@ -454,7 +457,6 @@ describe('SubagentSettingsEditor', () => {
       subagents: {
         enabled: true,
         maxParallel: 3,
-        maxChildRuns: 12,
         defaultToolPolicy: 'inherit' as const,
         profiles: [profile]
       }
@@ -482,7 +484,6 @@ describe('SubagentSettingsEditor', () => {
       subagents: {
         enabled: true,
         maxParallel: 7,
-        maxChildRuns: 12,
         defaultToolPolicy: 'inherit',
         profiles: [profile]
       }
@@ -497,7 +498,6 @@ describe('SubagentSettingsEditor', () => {
       subagents: {
         enabled: true,
         maxParallel: 4,
-        maxChildRuns: 18,
         defaultToolPolicy: 'inherit' as const,
         profiles: [profile]
       }
@@ -532,7 +532,6 @@ describe('SubagentSettingsEditor', () => {
       subagents: {
         enabled: true,
         maxParallel: 4,
-        maxChildRuns: 18,
         defaultToolPolicy: 'inherit',
         profiles: [{ ...profile, enabled: false }]
       }
@@ -547,7 +546,6 @@ describe('SubagentSettingsEditor', () => {
       subagents: {
         enabled: true,
         maxParallel: 3,
-        maxChildRuns: 12,
         profiles: [profile]
       }
     }
@@ -592,7 +590,6 @@ describe('SubagentSettingsEditor', () => {
       subagents: {
         enabled: true,
         maxParallel: 3,
-        maxChildRuns: 12,
         profiles: [{ ...profile, model: 'model-a', providerId: 'provider-a' }]
       }
     })

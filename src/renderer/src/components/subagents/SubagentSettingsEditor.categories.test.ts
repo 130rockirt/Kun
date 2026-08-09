@@ -31,7 +31,6 @@ vi.mock('react-i18next', () => ({
       subagentsUseExistingAgents: 'Use existing agents',
       subagentsUseExistingAgentsDesc: 'Choose configured profiles or parent-defined one-run roles.',
       subagentsMaxParallel: 'Maximum parallel subagents',
-      subagentsMaxChildRuns: 'Child runs per session',
       subagentsDelegatable: 'Delegatable subagents',
       subagentsAutomaticRoles: 'Automatic model roles',
       'agentsView.followDefault': 'Follow default',

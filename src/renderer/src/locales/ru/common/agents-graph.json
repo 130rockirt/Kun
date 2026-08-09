@@ -8,7 +8,7 @@
     "delegatableCount": "Делегируемых ролей: {{count}}",
     "configuredCount": "Настроено: {{count}}",
     "showingCount": "Показано {{visible}} из {{total}}",
-    "policySummary": "Ограничения очереди и сеанса",
+    "policySummary": "Очередь и параллелизм",
     "search": "Поиск субагентов",
     "searchPlaceholder": "Поиск по названию, возможностям или сценарию",
     "clearSearch": "Очистить поиск",

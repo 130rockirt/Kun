@@ -8,7 +8,7 @@
     "delegatableCount": "บทบาทที่มอบหมายได้ {{count}} รายการ",
     "configuredCount": "ตั้งค่าแล้ว {{count}}",
     "showingCount": "แสดง {{visible}} จาก {{total}}",
-    "policySummary": "ขีดจำกัดคิวและเซสชัน",
+    "policySummary": "คิวและการทำงานพร้อมกัน",
     "search": "ค้นหาตัวแทนย่อย",
     "searchPlaceholder": "ค้นหาชื่อ ความสามารถ หรือสถานการณ์",
     "clearSearch": "ล้างการค้นหา",

@@ -181,13 +181,16 @@ describe('subagentProfilesForRuntime', () => {
 
   it('preserves the parent-generated delegation mode', async () => {
     const module = await import('./kun-process')
-    const config = module.subagentProfilesForRuntime({
+    const legacySettings = {
       enabled: true,
       useExistingAgents: false,
+      maxChildRuns: 1,
       profiles: []
-    })
+    }
+    const config = module.subagentProfilesForRuntime(legacySettings)
 
     expect(config.useExistingAgents).toBe(false)
+    expect(config).not.toHaveProperty('maxChildRuns')
   })
 
   it('removes provider-only legacy routing without dropping the rest of the profile', async () => {

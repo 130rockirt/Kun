@@ -73,10 +73,18 @@ export type KunSubagentsSettingsV1 = {
   /** Defaults to true when absent for settings written by older app versions. */
   useExistingAgents?: boolean
   maxParallel?: number
-  maxChildRuns?: number
   defaultToolPolicy?: 'readOnly' | 'inherit'
   defaultProfile?: string
   profiles: KunSubagentProfileV1[]
+}
+
+/**
+ * Compatibility-only shape for settings written before cumulative child-run
+ * limits were removed. Normalization accepts `maxChildRuns` but never carries
+ * it into effective settings or newly saved patches.
+ */
+export type LegacyKunSubagentsSettingsInputV1 = Partial<KunSubagentsSettingsV1> & {
+  maxChildRuns?: unknown
 }
 
 /**

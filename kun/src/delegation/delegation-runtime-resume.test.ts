@@ -290,8 +290,7 @@ describe('createChildAgentExecutor abort handling', () => {
 function subagentConfig() {
   return SubagentsCapabilityConfig.parse({
     enabled: true,
-    maxParallel: 1,
-    maxChildRuns: 10
+    maxParallel: 1
   })
 }
 

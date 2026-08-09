@@ -399,33 +399,51 @@ describe('DelegationRuntime', () => {
     expect((await runtime.diagnostics('thr_1')).childRuns[0]).not.toHaveProperty('tokenBudget')
   })
 
-  it('caps concurrency at maxParallel and queues the overflow instead of erroring', async () => {
-    const gate = deferred<void>()
-    let active = 0
-    let maxObservedActive = 0
+  it('keeps maxParallel overflow queued and starts it in FIFO order', async () => {
+    const firstGate = deferred<void>()
+    const startOrder: string[] = []
     const runtime = createRuntime({
-      maxParallel: 2,
-      maxChildRuns: 10,
+      maxParallel: 1,
       executor: async ({ prompt }) => {
-        active += 1
-        maxObservedActive = Math.max(maxObservedActive, active)
-        await gate.promise
-        active -= 1
+        startOrder.push(prompt)
+        if (prompt === 'first') await firstGate.promise
         return { summary: `done: ${prompt}` }
       }
     })
     const signal = new AbortController().signal
-    const runs = [0, 1, 2, 3].map((index) =>
-      runtime.runChild({ parentThreadId: 'thr_1', parentTurnId: 'turn_1', prompt: `p${index}`, signal })
-    )
-    // Two children start; the other two wait on a parallel slot.
-    await waitFor(() => maxObservedActive >= 2)
-    expect(active).toBe(2)
-    gate.resolve()
-    const results = await Promise.all(runs)
+    const first = runtime.runChild({
+      parentThreadId: 'thr_fifo',
+      parentTurnId: 'turn_1',
+      prompt: 'first',
+      signal
+    })
+    await waitFor(() => startOrder.length === 1)
+
+    const secondAllocated = deferred<void>()
+    const second = runtime.runChild({
+      parentThreadId: 'thr_fifo',
+      parentTurnId: 'turn_2',
+      prompt: 'second',
+      onStart: () => secondAllocated.resolve(),
+      signal
+    })
+    await secondAllocated.promise
+    const thirdAllocated = deferred<void>()
+    const third = runtime.runChild({
+      parentThreadId: 'thr_fifo',
+      parentTurnId: 'turn_3',
+      prompt: 'third',
+      onStart: () => thirdAllocated.resolve(),
+      signal
+    })
+    await thirdAllocated.promise
+
+    expect(startOrder).toEqual(['first'])
+    expect((await runtime.diagnostics('thr_fifo')).childRuns.filter((run) => run.status === 'queued')).toHaveLength(2)
+    firstGate.resolve()
+    const results = await Promise.all([first, second, third])
     expect(results.every((record) => record.status === 'completed')).toBe(true)
-    expect(maxObservedActive).toBe(2)
-    expect((await runtime.diagnostics('thr_1')).childRuns).toHaveLength(4)
+    expect(startOrder).toEqual(['first', 'second', 'third'])
   })
 
   it('marks a child aborted while it is still queued', async () => {
@@ -552,7 +570,6 @@ describe('DelegationRuntime', () => {
     enabled?: boolean
     useExistingAgents?: boolean
     maxParallel?: number
-    maxChildRuns?: number
     defaultToolPolicy?: 'readOnly' | 'inherit'
     defaultProfile?: string
     profiles?: Record<string, Partial<SubagentProfileConfig>>
@@ -578,7 +595,6 @@ describe('DelegationRuntime', () => {
         enabled: options.enabled ?? true,
         useExistingAgents: options.useExistingAgents ?? true,
         maxParallel: options.maxParallel ?? 1,
-        maxChildRuns: options.maxChildRuns ?? 3,
         ...(options.defaultToolPolicy ? { defaultToolPolicy: options.defaultToolPolicy } : {}),
         ...(defaultProfile ? { defaultProfile } : {}),
         profiles

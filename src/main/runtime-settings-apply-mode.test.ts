@@ -268,7 +268,6 @@ describe('runtimeSettingsApplyMode', () => {
           subagents: {
             enabled: true,
             maxParallel: 5,
-            maxChildRuns: 20,
             profiles: [{
               id: 'researcher',
               enabled: true,

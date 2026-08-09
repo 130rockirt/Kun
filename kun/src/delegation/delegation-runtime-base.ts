@@ -92,10 +92,6 @@ export abstract class DelegationRuntimeBase {
   protected readonly childSeqById = new Map<string, number>()
   /** Children waiting for a parallel slot, in FIFO order. */
   protected readonly slotWaiters: SlotWaiter[] = []
-  /** Per-thread child counts (persisted + in-flight) for the scheduler limit. */
-  protected readonly threadCounts = new Map<string, number>()
-  /** Cached per-thread seed reads so concurrent first-spawns don't double-count. */
-  protected readonly threadSeeds = new Map<string, Promise<void>>()
   /**
    * Background (detached) child runs keyed by childId, exposing an
    * AbortController so the user can cancel a long-running task from the
@@ -181,31 +177,6 @@ export abstract class DelegationRuntimeBase {
     } else {
       this.active = Math.max(0, this.active - 1)
     }
-  }
-
-  /** Seed the per-thread budget counter from persisted records exactly once. */
-  protected ensureSeeded(threadId: string): Promise<void> {
-    let seed = this.threadSeeds.get(threadId)
-    if (!seed) {
-      seed = this.options.store
-        .list(threadId)
-        .then((runs) => {
-          if (!this.threadCounts.has(threadId)) this.threadCounts.set(threadId, runs.length)
-        })
-        .catch(() => {
-          if (!this.threadCounts.has(threadId)) this.threadCounts.set(threadId, 0)
-        })
-      this.threadSeeds.set(threadId, seed)
-    }
-    return seed
-  }
-
-  /** Atomically reserve a budget slot; returns false when the cap is reached. */
-  protected reserveChild(threadId: string): boolean {
-    const used = this.threadCounts.get(threadId) ?? 0
-    if (used >= this.options.config.maxChildRuns) return false
-    this.threadCounts.set(threadId, used + 1)
-    return true
   }
 
   /** Configured profiles, surfaced to the delegate_task tool schema/UI. */

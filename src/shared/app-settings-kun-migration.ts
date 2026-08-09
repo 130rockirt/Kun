@@ -37,6 +37,7 @@ import {
   type KunInstructionSettingsV1,
   type KunLabSettingsPatchV1,
   type KunLabSettingsV1,
+  type LegacyKunSubagentsSettingsInputV1,
   type KunLlmDebugSettingsV1,
   type ImageGenerationQuality,
   type ImageGenerationResolution,
@@ -107,7 +108,8 @@ import {
   normalizeKunVideoGenerationSettings
 } from './app-settings-kun-media'
 import {
-  mergeKunRuntimeSettings
+  mergeKunRuntimeSettings,
+  mergeKunSubagentsSettings
 } from './app-settings-kun-merge'
 import {
   boundedPositiveInt,
@@ -339,8 +341,12 @@ export function mergeAgentRuntimeSettings(
   )
 }
 
+type LegacyKunRuntimeSettingsInputV1 = Partial<Omit<KunRuntimeSettingsV1, 'subagents'>> & {
+  subagents?: LegacyKunSubagentsSettingsInputV1
+}
+
 export type LegacyAgentsSettingsShape = {
-  kun?: Partial<KunRuntimeSettingsV1>
+  kun?: LegacyKunRuntimeSettingsInputV1
   codewhale?: Partial<LegacyLocalHttpRuntimeSettingsV1>
   reasonix?: Partial<LegacyReasoningRuntimeSettingsV1>
 }
@@ -405,7 +411,8 @@ export function migrateLegacyAppSettings(parsed: LegacyAppSettingsShape): Partia
     ...legacyReasoningRuntimeDefaults(),
     ...(parsed.agents?.reasonix ?? {})
   }
-  const explicitKun: Partial<KunRuntimeSettingsV1> = parsed.agents?.kun ?? {}
+  const explicitKunInput = parsed.agents?.kun ?? {}
+  const { subagents: explicitSubagents, ...explicitKun } = explicitKunInput
   const legacySource = isReasoningLegacy ? legacyReasoning : legacyLocalHttp
   const legacySeed = {
     binaryPath: kunDefaults.binaryPath,
@@ -437,6 +444,7 @@ export function migrateLegacyAppSettings(parsed: LegacyAppSettingsShape): Partia
     routePools: parsed.provider?.routePools,
     localGateway: parsed.provider?.localGateway
   })
+  const normalizedSubagents = mergeKunSubagentsSettings(kunDefaults.subagents, explicitSubagents)
   const kun: KunRuntimeSettingsV1 = {
     ...kunDefaults,
     ...legacySeed,
@@ -469,7 +477,8 @@ export function migrateLegacyAppSettings(parsed: LegacyAppSettingsShape): Partia
     textToSpeech: normalizeKunTextToSpeechSettings(explicitKun.textToSpeech),
     musicGeneration: normalizeKunMusicGenerationSettings(explicitKun.musicGeneration),
     videoGeneration: normalizeKunVideoGenerationSettings(explicitKun.videoGeneration),
-    quality: normalizeKunQualitySettings(explicitKun.quality)
+    quality: normalizeKunQualitySettings(explicitKun.quality),
+    ...(normalizedSubagents !== undefined ? { subagents: normalizedSubagents } : {})
   }
   // Strip the legacy `agentProvider` discriminator and the legacy
   // per-provider settings from the surfaced migration result. The

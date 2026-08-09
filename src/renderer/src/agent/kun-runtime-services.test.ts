@@ -116,7 +116,7 @@ describe('KunRuntimeProvider', () => {
                 search: { status: 'disabled', enabled: false, available: false }
               },
               skills: { status: 'disabled', enabled: false, available: false, configuredRoots: 0, discoveredSkills: 0 },
-              subagents: { status: 'disabled', enabled: false, available: false, maxParallel: 0, maxChildRuns: 0 },
+              subagents: { status: 'disabled', enabled: false, available: false, maxParallel: 0 },
               attachments: {
                 status: 'available',
                 enabled: true,
