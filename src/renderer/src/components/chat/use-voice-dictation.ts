@@ -3,11 +3,11 @@ import { useTranslation } from 'react-i18next'
 import {
   CUSTOM_SPEECH_TO_TEXT_PROVIDER_ID,
   resolveKunSpeechToTextSettings,
-  getKunRuntimeSettings,
   type AppSettingsV1,
   type KunPromptOptimizationSettingsV1,
   type KunSpeechToTextSettingsV1
 } from '@shared/app-settings'
+import { getKunRuntimeSettings } from '@shared/app-settings-kun-defaults'
 import { SPEECH_TRANSCRIPTION_MAX_DURATION_MS } from '@shared/speech-to-text'
 import { SETTINGS_CHANGED_EVENT } from '../../lib/keyboard-shortcut-settings'
 import {

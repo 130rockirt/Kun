@@ -10,8 +10,8 @@ import {
   type DataMigrationOperationStatus,
   type DataMigrationProgress
 } from '@shared/data-migration'
-import english from '../locales/en/settings.json'
-import chinese from '../locales/zh/settings.json'
+import english from '../locales/en/settings'
+import chinese from '../locales/zh/settings'
 import {
   DEFAULT_CATEGORIES,
   DataMigrationActionError,

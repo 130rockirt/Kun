@@ -32,16 +32,16 @@ import { normalizeKeyboardShortcuts, type KeyboardShortcutsConfigV1 } from './ke
 import {
   defaultKunRuntimeSettings,
   getKunRuntimeSettings,
-  kunSettingsEnvelope,
-  mergeKunRuntimeSettings,
-  migrateKunContextCompactionDefaults,
-  migrateLegacyAppSettings
-} from './app-settings-kun'
+  kunSettingsEnvelope
+} from './app-settings-kun-defaults'
+import { mergeKunRuntimeSettings } from './app-settings-kun-merge'
+import { migrateLegacyAppSettings } from './app-settings-kun-migration'
+import { migrateKunContextCompactionDefaults } from './app-settings-kun-tuning'
 import {
   activeModelProviderNeedsApiKey,
-  defaultMiniMaxMediaGenerationKunPatch,
   normalizeModelProviderSettings
-} from './app-settings-provider'
+} from './app-settings-provider-core'
+import { defaultMiniMaxMediaGenerationKunPatch } from './app-settings-provider-media'
 import { normalizeDeepseekBaseUrl } from './app-settings-normalizers'
 import { normalizeClawSettings } from './app-settings-claw'
 import { normalizeScheduleSettings } from './app-settings-schedule'

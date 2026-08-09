@@ -1,0 +1,287 @@
+import type { Router } from '../router.js'
+import {
+  createThread,
+  clearThreadGoal,
+  clearThreadTodos,
+  deleteThread,
+  forkThread,
+  getThreadGoal,
+  getThreadTodos,
+  getThread,
+  getThreadState,
+  getThreadTimeline,
+  listThreads,
+  setThreadGoal,
+  setThreadTodos,
+  updateThread
+} from './threads.js'
+import { summarizeThread } from './threads-summarize.js'
+import {
+  compactTurn,
+  cancelToolCall,
+  getSteeringQueue,
+  getTurn,
+  interruptTurn,
+  rewindThread,
+  startTurn,
+  steerTurn,
+  replaceSteeringQueue
+} from './turns.js'
+import { startReview } from './review.js'
+import { buildEventStreamResponse, parseEventCursor } from './events.js'
+import { decideApproval } from './approvals.js'
+import { resolveUserInput } from './user-inputs.js'
+import { resumeSession } from './sessions.js'
+import { usageJsonResponse } from './usage.js'
+import { listProviderQuotas } from './provider-quotas.js'
+import { llmDebugRoundsResponse } from './debug-llm.js'
+import { modelRequestsResponse } from './model-requests.js'
+import { ERRORS } from './runtime-error.js'
+import type { ServerRuntime } from './server-runtime.js'
+import type { ApprovalConsentVerifier } from '../approval-consent.js'
+import { authorize } from './route-auth.js'
+
+export function registerThreadRoutes(
+  router: Router,
+  runtime: ServerRuntime,
+  approvalConsent: ApprovalConsentVerifier
+): void {
+  router.add('GET', '/v1/threads', async (request) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return listThreads(runtime.threadService, request)
+  })
+  router.add('POST', '/v1/threads', async (request) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return createThread(runtime.threadService, request)
+  })
+  // This static suffix must be registered before `/:id`, because Router uses
+  // first-match ordering for parameterized paths.
+  router.add('GET', '/v1/threads/:id/state', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    const forwarded = await runtime.forwardThreadControl?.(request, ctx.params.id)
+    if (forwarded) return forwarded
+    return getThreadState(runtime.threadService, ctx.params.id, runtime.sessionStore)
+  })
+  router.add('GET', '/v1/threads/:id/timeline', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    const forwarded = await runtime.forwardThreadControl?.(request, ctx.params.id)
+    if (forwarded) return forwarded
+    return getThreadTimeline(
+      runtime.threadService,
+      ctx.params.id,
+      request,
+      runtime.sessionStore,
+      runtime.userInputGate,
+      runtime.approvalGate
+    )
+  })
+  router.add('GET', '/v1/threads/:id', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    // The active approval gate is process-local. When a manager lease belongs
+    // to another runtime, obtain the detail snapshot from that execution owner
+    // so its live approval state cannot be mistaken for expired locally.
+    const forwarded = await runtime.forwardThreadControl?.(request, ctx.params.id)
+    if (forwarded) return forwarded
+    return getThread(
+      runtime.threadService,
+      ctx.params.id,
+      runtime.sessionStore,
+      runtime.userInputGate,
+      runtime.approvalGate
+    )
+  })
+  router.add('GET', '/v1/threads/:id/model-requests', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return modelRequestsResponse(runtime, ctx.params.id, request)
+  })
+  router.add('PATCH', '/v1/threads/:id', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return updateThread(runtime.threadService, ctx.params.id, request)
+  })
+  router.add('DELETE', '/v1/threads/:id', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return deleteThread(runtime.threadService, ctx.params.id)
+  })
+  router.add('POST', '/v1/threads/:id/fork', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return forkThread(runtime.threadService, ctx.params.id, request)
+  })
+  router.add('POST', '/v1/threads/:id/summarize', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return summarizeThread(runtime, ctx.params.id, request)
+  })
+  router.add('GET', '/v1/threads/:id/goal', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return getThreadGoal(runtime.threadService, ctx.params.id)
+  })
+  router.add('POST', '/v1/threads/:id/goal', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return setThreadGoal(runtime.threadService, ctx.params.id, request)
+  })
+  router.add('DELETE', '/v1/threads/:id/goal', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return clearThreadGoal(runtime.threadService, ctx.params.id)
+  })
+  router.add('GET', '/v1/threads/:id/todos', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return getThreadTodos(runtime.threadService, ctx.params.id)
+  })
+  router.add('POST', '/v1/threads/:id/todos', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return setThreadTodos(runtime.threadService, ctx.params.id, request)
+  })
+  router.add('DELETE', '/v1/threads/:id/todos', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return clearThreadTodos(runtime.threadService, ctx.params.id)
+  })
+  router.add('POST', '/v1/threads/:id/turns', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return startTurn(
+      runtime.turnService,
+      ctx.params.id,
+      request,
+      ({ threadId, turnId }) => {
+        runtime.runTurn(threadId, turnId)
+      },
+      () => runtime.graph?.config().enabled === true
+    )
+  })
+  router.add('POST', '/v1/threads/:id/rewind', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return rewindThread(runtime.turnService, ctx.params.id, request)
+  })
+  router.add('POST', '/v1/threads/:id/review', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    if (!runtime.reviewService || !runtime.runReview) {
+      return ERRORS.unavailable('review is not available')
+    }
+    return startReview(
+      runtime.turnService,
+      ctx.params.id,
+      request,
+      ({ threadId, turnId, reviewItemId }, target, model, providerId, accountId) => {
+        runtime.runReview?.({ threadId, turnId, reviewItemId, target, model, providerId, accountId })
+      }
+    )
+  })
+  router.add('GET', '/v1/threads/:id/turns/:turnId', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return getTurn(runtime.turnService, ctx.params.id, ctx.params.turnId)
+  })
+  router.add('POST', '/v1/threads/:id/turns/:turnId/steer', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    const forwarded = await runtime.forwardThreadControl?.(request, ctx.params.id)
+    if (forwarded) return forwarded
+    return steerTurn(
+      runtime.turnService,
+      ctx.params.id,
+      ctx.params.turnId,
+      request,
+      ({ threadId, turnId }) => {
+        runtime.runTurn(threadId, turnId)
+      }
+    )
+  })
+  router.add('GET', '/v1/threads/:id/turns/:turnId/steering', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    const forwarded = await runtime.forwardThreadControl?.(request, ctx.params.id)
+    if (forwarded) return forwarded
+    return getSteeringQueue(runtime.turnService, ctx.params.id, ctx.params.turnId)
+  })
+  router.add('PATCH', '/v1/threads/:id/turns/:turnId/steering', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    const forwarded = await runtime.forwardThreadControl?.(request, ctx.params.id)
+    if (forwarded) return forwarded
+    return replaceSteeringQueue(runtime.turnService, ctx.params.id, ctx.params.turnId, request)
+  })
+  router.add('POST', '/v1/threads/:id/turns/:turnId/interrupt', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    const forwarded = await runtime.forwardThreadControl?.(request, ctx.params.id)
+    if (forwarded) return forwarded
+    return interruptTurn(runtime.turnService, ctx.params.id, ctx.params.turnId, request)
+  })
+  router.add('POST', '/v1/threads/:id/turns/:turnId/tool-calls/:callId/cancel', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    const forwarded = await runtime.forwardThreadControl?.(request, ctx.params.id)
+    if (forwarded) return forwarded
+    return cancelToolCall(
+      runtime.toolCancellationService,
+      ctx.params.id,
+      ctx.params.turnId,
+      ctx.params.callId
+    )
+  })
+  router.add('POST', '/v1/threads/:id/compact', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return compactTurn(runtime.turnService, ctx.params.id, request)
+  })
+  router.add('GET', '/v1/threads/:id/events', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    const sinceSeq = parseEventCursor(request)
+    if (sinceSeq === null) return ERRORS.validation('since_seq must be a non-negative safe integer')
+    if (!await runtime.threadService.get(ctx.params.id)) {
+      return ERRORS.notFound(`thread not found: ${ctx.params.id}`)
+    }
+    return buildEventStreamResponse({
+      request,
+      threadId: ctx.params.id,
+      eventBus: runtime.eventBus,
+      sessionStore: runtime.sessionStore,
+      streamRegistry: runtime.eventStreamRegistry,
+      sinceSeq
+    })
+  })
+  router.add('POST', '/v1/approvals/:id', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    const forwarded = await runtime.forwardControlById?.(request, 'approval', ctx.params.id)
+    if (forwarded) return forwarded
+    return decideApproval({
+      approvalId: ctx.params.id,
+      request,
+      gate: runtime.approvalGate,
+      events: runtime.events,
+      consent: approvalConsent
+    })
+  })
+  router.add('POST', '/v1/user-inputs/:id', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    const forwarded = await runtime.forwardControlById?.(request, 'user-input', ctx.params.id)
+    if (forwarded) return forwarded
+    return resolveUserInput({
+      inputId: ctx.params.id,
+      request,
+      gate: runtime.userInputGate,
+      events: runtime.events
+    })
+  })
+  router.add('POST', '/v1/user-input/:id', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    const forwarded = await runtime.forwardControlById?.(request, 'user-input', ctx.params.id)
+    if (forwarded) return forwarded
+    return resolveUserInput({
+      inputId: ctx.params.id,
+      request,
+      gate: runtime.userInputGate,
+      events: runtime.events
+    })
+  })
+  router.add('POST', '/v1/sessions/:id/resume-thread', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return resumeSession(runtime.threadService, ctx.params.id, request)
+  })
+  router.add('GET', '/v1/usage', async (request) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return usageJsonResponse(request, runtime)
+  })
+  router.add('GET', '/v1/provider-quotas', async (request) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    if (!runtime.providerQuotaService) {
+      return ERRORS.unavailable('provider quota service is not available')
+    }
+    return listProviderQuotas(runtime.providerQuotaService)
+  })
+  router.add('GET', '/v1/debug/llm-rounds', async (request) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return llmDebugRoundsResponse(runtime)
+  })
+}

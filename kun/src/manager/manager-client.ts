@@ -669,67 +669,16 @@ export async function forwardRequestToExecutionOwner(input: {
   })
 }
 
-export async function requestManagerJson(
-  manager: ServiceManagerConnection,
-  path: string,
-  options: { method?: string; body?: unknown; fetch?: typeof fetch; timeoutMs?: number }
-): Promise<unknown> {
-  return requireManagerJson(await requestManagerResponse(manager, path, options))
-}
-
-export async function requestManagerResponse(
-  manager: ServiceManagerConnection,
-  path: string,
-  options: { method?: string; body?: unknown; fetch?: typeof fetch; timeoutMs?: number }
-): Promise<Response> {
-  const fetchImpl = options.fetch ?? fetch
-  return fetchImpl(`${manager.discovery.baseUrl}${path}`, {
-    method: options.method ?? 'GET',
-    headers: {
-      authorization: `Bearer ${manager.discovery.managerToken}`,
-      ...(options.body === undefined ? {} : { 'content-type': 'application/json' })
-    },
-    ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
-    signal: AbortSignal.timeout(options.timeoutMs ?? 5_000)
-  })
-}
-
-async function requireManagerJson(response: Response): Promise<unknown> {
-  if (!response.ok) {
-    const body = await response.text().catch(() => '')
-    throw new Error(`Kun Service Manager request failed with HTTP ${response.status}: ${body.slice(0, 1_024)}`)
-  }
-  return response.json()
-}
-
-function safeManagerUrl(record: ManagerDiscoveryRecord): boolean {
-  try {
-    const url = new URL(record.baseUrl)
-    return url.protocol === 'http:' &&
-      isLoopbackHost(url.hostname) &&
-      isLoopbackHost(record.host) &&
-      Number(url.port || '80') === record.port &&
-      (url.pathname === '/' || url.pathname === '') &&
-      url.username === '' &&
-      url.password === ''
-  } catch {
-    return false
-  }
-}
-
-function processIsAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (error) {
-    return String((error as { code?: unknown })?.code ?? '') === 'EPERM'
-  }
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
-}
-
-export function defaultManagerControlDirForTests(home = homedir()): string {
-  return defaultKunControlDir(home)
-}
+import {
+  delay,
+  processIsAlive,
+  requestManagerJson,
+  requestManagerResponse,
+  requireManagerJson,
+  safeManagerUrl
+} from './manager-client-support.js'
+export {
+  defaultManagerControlDirForTests,
+  requestManagerJson,
+  requestManagerResponse
+} from './manager-client-support.js'

@@ -1,0 +1,644 @@
+html[data-ui-plugin-scene-chrome-sidebar='washi']
+  :is(.ds-sidebar-shell, .ds-settings-sidebar),
+html[data-ui-plugin-scene-chrome-topbar='washi'] .ds-topbar-surface,
+html[data-ui-plugin-scene-chrome-composer='washi'] .ds-composer-shell.ds-chat-composer,
+html[data-ui-plugin-scene-chrome-cards='washi']
+  :is(
+    .ds-card-soft,
+    .ds-card-strong,
+    .ds-card-muted,
+    .ds-card-ghost,
+    .ds-surface-soft,
+    .ds-surface-strong,
+    .ds-user-message-bubble,
+    .ds-chat-answer
+  ),
+html[data-ui-plugin-scene-chrome-cards='washi']
+  .ds-markdown
+  [data-streamdown='table-wrapper']
+  > div:last-child,
+html[data-ui-plugin-scene-chrome-cards='washi'] .ds-markdown [data-streamdown='table'] {
+  --ds-sidebar-haze: repeating-linear-gradient(
+    104deg,
+    rgba(139, 110, 68, 0.035) 0 1px,
+    transparent 1px 8px
+  );
+  --ds-table-head-bg: color-mix(in srgb, #b38a56 10%, var(--kun-ui-plugin-host-surface-color));
+  border: 1px solid color-mix(in srgb, #9b7650 36%, var(--ds-border) 64%);
+  border-radius: 0.75rem 1.35rem 0.82rem 1.18rem;
+  background:
+    repeating-linear-gradient(
+      102deg,
+      color-mix(in srgb, #9d774c 4%, transparent) 0 1px,
+      transparent 1px 7px
+    ),
+    repeating-linear-gradient(
+      -8deg,
+      color-mix(in srgb, #ffffff 7%, transparent) 0 2px,
+      transparent 2px 11px
+    ),
+    color-mix(in srgb, var(--kun-ui-plugin-host-surface-color) 88%, #f3e3c2 12%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.36),
+    7px 9px 0 color-mix(in srgb, #8d6745 7%, transparent);
+  -webkit-backdrop-filter: blur(6px) saturate(0.96);
+  backdrop-filter: blur(6px) saturate(0.96);
+}
+
+html[data-ui-plugin-scene-chrome-sidebar='scrapbook']
+  :is(.ds-sidebar-shell, .ds-settings-sidebar),
+html[data-ui-plugin-scene-chrome-topbar='scrapbook'] .ds-topbar-surface,
+html[data-ui-plugin-scene-chrome-composer='scrapbook'] .ds-composer-shell.ds-chat-composer,
+html[data-ui-plugin-scene-chrome-cards='scrapbook']
+  :is(
+    .ds-card-soft,
+    .ds-card-strong,
+    .ds-card-muted,
+    .ds-card-ghost,
+    .ds-surface-soft,
+    .ds-surface-strong,
+    .ds-user-message-bubble,
+    .ds-chat-answer
+  ),
+html[data-ui-plugin-scene-chrome-cards='scrapbook']
+  .ds-markdown
+  [data-streamdown='table-wrapper']
+  > div:last-child,
+html[data-ui-plugin-scene-chrome-cards='scrapbook']
+  .ds-markdown
+  [data-streamdown='table'] {
+  --ds-sidebar-haze: linear-gradient(135deg, rgba(240, 119, 153, 0.08), transparent 42%);
+  --ds-table-head-bg: color-mix(in srgb, #f08aaa 12%, var(--kun-ui-plugin-host-surface-color));
+  border: 2px dashed color-mix(in srgb, #e66d98 42%, #6ba3be 58%);
+  border-radius: 0.55rem 1.1rem 0.45rem 1.35rem;
+  background:
+    linear-gradient(
+      135deg,
+      transparent 0 9%,
+      color-mix(in srgb, #f4b4c8 19%, transparent) 9% 15%,
+      transparent 15% 82%,
+      color-mix(in srgb, #8cc3d7 16%, transparent) 82% 89%,
+      transparent 89%
+    ),
+    linear-gradient(
+      22deg,
+      color-mix(in srgb, var(--kun-ui-plugin-host-surface-color) 88%, #fff1ba 12%),
+      color-mix(in srgb, var(--kun-ui-plugin-host-surface-color) 90%, #f7dbe8 10%)
+    );
+  box-shadow:
+    7px 8px 0 color-mix(in srgb, #e66d98 12%, transparent),
+    -3px -3px 0 color-mix(in srgb, #6ba3be 9%, transparent);
+  -webkit-backdrop-filter: blur(10px) saturate(1.09);
+  backdrop-filter: blur(10px) saturate(1.09);
+}
+
+html[data-ui-plugin-scene-chrome-sidebar='aurora']
+  :is(.ds-sidebar-shell, .ds-settings-sidebar),
+html[data-ui-plugin-scene-chrome-topbar='aurora'] .ds-topbar-surface,
+html[data-ui-plugin-scene-chrome-composer='aurora'] .ds-composer-shell.ds-chat-composer,
+html[data-ui-plugin-scene-chrome-cards='aurora']
+  :is(
+    .ds-card-soft,
+    .ds-card-strong,
+    .ds-card-muted,
+    .ds-card-ghost,
+    .ds-surface-soft,
+    .ds-surface-strong,
+    .ds-user-message-bubble,
+    .ds-chat-answer
+  ),
+html[data-ui-plugin-scene-chrome-cards='aurora']
+  .ds-markdown
+  [data-streamdown='table-wrapper']
+  > div:last-child,
+html[data-ui-plugin-scene-chrome-cards='aurora'] .ds-markdown [data-streamdown='table'] {
+  --ds-sidebar-haze: radial-gradient(circle at 8% 4%, rgba(100, 224, 233, 0.13), transparent 37%);
+  --ds-table-head-bg: color-mix(in srgb, #7b6dea 12%, var(--kun-ui-plugin-host-surface-color));
+  border: 1px solid color-mix(in srgb, #72dfe5 44%, #a77ae7 56%);
+  border-radius: 1.9rem 0.65rem 2.15rem 0.85rem;
+  background:
+    radial-gradient(circle at 8% 12%, color-mix(in srgb, #74e7d4 25%, transparent), transparent 36%),
+    radial-gradient(circle at 92% 8%, color-mix(in srgb, #9c75e8 24%, transparent), transparent 40%),
+    radial-gradient(circle at 62% 112%, color-mix(in srgb, #6fa4ee 17%, transparent), transparent 47%),
+    color-mix(in srgb, var(--kun-ui-plugin-host-surface-color) 81%, transparent);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.58),
+    0 0 0 3px color-mix(in srgb, #72dfe5 7%, transparent),
+    0 18px 52px color-mix(in srgb, #7b6dea 18%, transparent);
+  -webkit-backdrop-filter: blur(24px) saturate(1.24);
+  backdrop-filter: blur(24px) saturate(1.24);
+}
+
+html[data-ui-plugin-scene-chrome-sidebar='synth']
+  :is(.ds-sidebar-shell, .ds-settings-sidebar),
+html[data-ui-plugin-scene-chrome-topbar='synth'] .ds-topbar-surface,
+html[data-ui-plugin-scene-chrome-composer='synth'] .ds-composer-shell.ds-chat-composer,
+html[data-ui-plugin-scene-chrome-cards='synth']
+  :is(
+    .ds-card-soft,
+    .ds-card-strong,
+    .ds-card-muted,
+    .ds-card-ghost,
+    .ds-surface-soft,
+    .ds-surface-strong,
+    .ds-user-message-bubble,
+    .ds-chat-answer
+  ),
+html[data-ui-plugin-scene-chrome-cards='synth']
+  .ds-markdown
+  [data-streamdown='table-wrapper']
+  > div:last-child,
+html[data-ui-plugin-scene-chrome-cards='synth'] .ds-markdown [data-streamdown='table'] {
+  --ds-sidebar-haze: linear-gradient(135deg, rgba(49, 231, 238, 0.08), rgba(245, 75, 197, 0.06));
+  --ds-table-head-bg: color-mix(in srgb, #1bdde8 13%, var(--kun-ui-plugin-host-surface-color));
+  border: 1px solid color-mix(in srgb, #27dce5 58%, #ec4ec6 42%);
+  border-radius: 0.35rem;
+  background:
+    repeating-linear-gradient(
+      90deg,
+      color-mix(in srgb, #27dce5 9%, transparent) 0 1px,
+      transparent 1px 1.25rem
+    ),
+    repeating-linear-gradient(
+      0deg,
+      color-mix(in srgb, #ec4ec6 7%, transparent) 0 1px,
+      transparent 1px 1.25rem
+    ),
+    color-mix(in srgb, var(--kun-ui-plugin-host-surface-color) 82%, #102b38 18%);
+  box-shadow:
+    inset 0 0 24px color-mix(in srgb, #27dce5 12%, transparent),
+    0 0 18px color-mix(in srgb, #ec4ec6 18%, transparent);
+  -webkit-backdrop-filter: blur(18px) saturate(1.2);
+  backdrop-filter: blur(18px) saturate(1.2);
+}
+
+html[data-ui-plugin-scene-chrome-sidebar='midnight-pass']
+  :is(.ds-sidebar-shell, .ds-settings-sidebar),
+html[data-ui-plugin-scene-chrome-topbar='midnight-pass'] .ds-topbar-surface,
+html[data-ui-plugin-scene-chrome-composer='midnight-pass']
+  .ds-composer-shell.ds-chat-composer,
+html[data-ui-plugin-scene-chrome-cards='midnight-pass']
+  :is(
+    .ds-card-soft,
+    .ds-card-strong,
+    .ds-card-muted,
+    .ds-card-ghost,
+    .ds-surface-soft,
+    .ds-surface-strong,
+    .ds-user-message-bubble,
+    .ds-chat-answer
+  ),
+html[data-ui-plugin-scene-chrome-cards='midnight-pass']
+  .ds-markdown
+  [data-streamdown='table-wrapper']
+  > div:last-child,
+html[data-ui-plugin-scene-chrome-cards='midnight-pass']
+  .ds-markdown
+  [data-streamdown='table'] {
+  --ds-sidebar-haze: radial-gradient(circle at 50% 0%, rgba(220, 180, 92, 0.09), transparent 44%);
+  --ds-table-head-bg: color-mix(in srgb, #d4ac55 12%, var(--kun-ui-plugin-host-surface-color));
+  border: 2px dashed color-mix(in srgb, #d4ac55 64%, #493354 36%);
+  border-radius: 0.6rem 1.7rem 0.6rem 1.7rem;
+  background:
+    linear-gradient(105deg, transparent 0 47%, color-mix(in srgb, #d4ac55 12%, transparent) 47% 49%, transparent 49%),
+    radial-gradient(circle at 76% 8%, color-mix(in srgb, #7f4a98 16%, transparent), transparent 34%),
+    color-mix(in srgb, var(--kun-ui-plugin-host-surface-color) 80%, #21172d 20%);
+  box-shadow:
+    inset 0 0 0 3px color-mix(in srgb, #d4ac55 7%, transparent),
+    0 20px 46px color-mix(in srgb, #21172d 24%, transparent);
+  -webkit-backdrop-filter: blur(18px) saturate(1.12);
+  backdrop-filter: blur(18px) saturate(1.12);
+}
+
+html[data-ui-plugin-scene-chrome-sidebar='nautical']
+  :is(.ds-sidebar-shell, .ds-settings-sidebar),
+html[data-ui-plugin-scene-chrome-topbar='nautical'] .ds-topbar-surface,
+html[data-ui-plugin-scene-chrome-composer='nautical'] .ds-composer-shell.ds-chat-composer,
+html[data-ui-plugin-scene-chrome-cards='nautical']
+  :is(
+    .ds-card-soft,
+    .ds-card-strong,
+    .ds-card-muted,
+    .ds-card-ghost,
+    .ds-surface-soft,
+    .ds-surface-strong,
+    .ds-user-message-bubble,
+    .ds-chat-answer
+  ),
+html[data-ui-plugin-scene-chrome-cards='nautical']
+  .ds-markdown
+  [data-streamdown='table-wrapper']
+  > div:last-child,
+html[data-ui-plugin-scene-chrome-cards='nautical'] .ds-markdown [data-streamdown='table'] {
+  --ds-sidebar-haze: radial-gradient(circle at 14% 8%, rgba(41, 155, 166, 0.1), transparent 38%);
+  --ds-table-head-bg: color-mix(in srgb, #208e9b 13%, var(--kun-ui-plugin-host-surface-color));
+  border: 2px solid color-mix(in srgb, #236b82 62%, #bf9860 38%);
+  border-radius: 0.85rem 0.85rem 1.6rem 1.6rem;
+  background:
+    repeating-linear-gradient(
+      135deg,
+      color-mix(in srgb, #258ca0 8%, transparent) 0 2px,
+      transparent 2px 1.35rem
+    ),
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--kun-ui-plugin-host-surface-color) 88%, #d9eef0 12%),
+      color-mix(in srgb, var(--kun-ui-plugin-host-surface-color) 91%, #e9dec7 9%)
+    );
+  box-shadow:
+    inset 0 0 0 3px color-mix(in srgb, #bf9860 10%, transparent),
+    0 15px 38px color-mix(in srgb, #174c64 15%, transparent);
+  -webkit-backdrop-filter: blur(14px) saturate(1.07);
+  backdrop-filter: blur(14px) saturate(1.07);
+}
+
+/* Adventure Tide: a captain's log sidebar and chart-table composer. These
+ * rules only skin stable host-owned controls; they do not add overlay DOM. */
+html[data-ui-plugin-scene-chrome-sidebar='nautical'] .ds-sidebar-shell {
+  --ds-sidebar-row-active: rgba(184, 132, 45, 0.2);
+  --ds-sidebar-row-hover: rgba(13, 54, 83, 0.09);
+  --ds-sidebar-row-ring: rgba(157, 104, 28, 0.44);
+  --ds-sidebar-field-bg: rgba(255, 249, 231, 0.74);
+  --ds-sidebar-field-focus: rgba(255, 252, 240, 0.94);
+  --ds-sidebar-divider: rgba(126, 82, 23, 0.34);
+  border-color: #b68a43 #0a3454 #b68a43 #b68a43;
+  border-style: solid;
+  border-width: 1px 7px 1px 1px;
+  border-radius: 1rem 0.3rem 0.3rem 1rem;
+  background:
+    radial-gradient(circle at 18% 15%, rgba(151, 101, 32, 0.14) 0 1px, transparent 2px),
+    radial-gradient(circle at 78% 62%, rgba(14, 61, 91, 0.08) 0 1px, transparent 2px),
+    repeating-linear-gradient(0deg, rgba(38, 77, 99, 0.035) 0 1px, transparent 1px 1.55rem),
+    linear-gradient(102deg, #fbf2dc 0%, #f3e5c7 68%, #dec391 100%);
+  background-size: 72px 72px, 96px 96px, auto, auto;
+  box-shadow:
+    inset -2px 0 0 #d1a85e,
+    inset -8px 0 0 rgba(5, 36, 61, 0.96),
+    inset 0 0 26px rgba(104, 65, 19, 0.08),
+    7px 0 24px rgba(4, 32, 54, 0.16);
+  -webkit-backdrop-filter: blur(12px) saturate(0.9);
+  backdrop-filter: blur(12px) saturate(0.9);
+}
+
+html[data-ui-plugin-scene-chrome-sidebar='nautical'] .ds-sidebar-shell::before {
+  background:
+    radial-gradient(circle at 78% 12%, transparent 0 30px, rgba(13, 54, 83, 0.08) 31px 32px, transparent 33px),
+    repeating-radial-gradient(circle at 78% 12%, transparent 0 13px, rgba(169, 116, 36, 0.045) 14px 15px, transparent 16px 25px),
+    linear-gradient(122deg, transparent 0 72%, rgba(89, 52, 13, 0.055) 72.2% 72.6%, transparent 72.8%);
+  opacity: 0.94;
+}
+
+html[data-ui-plugin-scene-chrome-sidebar='nautical'] .ds-sidebar-titlebar-spacer {
+  border-bottom: 1px solid rgba(154, 103, 30, 0.32);
+  box-shadow: 0 1px 0 rgba(255, 252, 232, 0.7);
+}
+
+html[data-ui-plugin-scene-chrome-sidebar='nautical'] .workspace-mode-tabs {
+  border: 1px solid #b98d43;
+  border-radius: 0.55rem;
+  background: linear-gradient(180deg, #123f61, #062d4d);
+  box-shadow:
+    inset 0 0 0 1px rgba(244, 212, 151, 0.16),
+    0 3px 9px rgba(5, 35, 58, 0.18);
+}
+
+html[data-ui-plugin-scene-chrome-sidebar='nautical'] .workspace-mode-tab {
+  border: 1px solid transparent;
+  color: #ead29e;
+  text-shadow: 0 1px rgba(0, 0, 0, 0.25);
+}
+
+html[data-ui-plugin-scene-chrome-sidebar='nautical'] .workspace-mode-tab svg {
+  color: currentColor;
+}
+
+html[data-ui-plugin-scene-chrome-sidebar='nautical']
+  .workspace-mode-tab[aria-selected='true'] {
+  border-color: #d2ab61;
+  background: linear-gradient(180deg, #fff5dc, #e8d09b);
+  color: #123c59;
+  text-shadow: none;
+  box-shadow:
+    inset 0 1px rgba(255, 255, 255, 0.74),
+    0 2px 5px rgba(1, 27, 47, 0.32);
+}
+
+html[data-ui-plugin-scene-chrome-sidebar='nautical'] .ds-sidebar-section-header {
+  color: #173c58;
+  background: linear-gradient(90deg, rgba(166, 112, 30, 0.28), transparent 74%) left bottom / 100% 1px no-repeat;
+}
+
+html[data-ui-plugin-scene-chrome-sidebar='nautical'] .ds-sidebar-section-header > span {
+  color: #37566d;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+html[data-ui-plugin-scene-chrome-sidebar='nautical']
+  :is(.ds-sidebar-command-row, .ds-sidebar-tree-row) {
+  border: 1px solid transparent;
+  border-radius: 0.35rem 0.8rem 0.8rem 0.35rem;
+}
+
+html[data-ui-plugin-scene-chrome-sidebar='nautical']
+  :is(.ds-sidebar-command-row, .ds-sidebar-tree-row):hover {
+  border-color: rgba(168, 113, 32, 0.26);
+  background: linear-gradient(90deg, rgba(202, 157, 78, 0.18), rgba(255, 250, 234, 0.4));
+  box-shadow: inset 3px 0 0 rgba(15, 57, 85, 0.7);
+}
+
+html[data-ui-plugin-scene-chrome-sidebar='nautical']
+  :is(.ds-sidebar-command-row, .ds-sidebar-tree-row)[data-active='true'] {
+  border-color: #bd8c3e;
+  background:
+    linear-gradient(90deg, rgba(10, 49, 78, 0.13), transparent 14%),
+    linear-gradient(180deg, #fff2cf, #ecd29b);
+  color: #102f48;
+  box-shadow:
+    inset 4px 0 0 #0a385b,
+    inset 0 0 0 1px rgba(255, 249, 224, 0.65),
+    0 3px 8px rgba(68, 40, 11, 0.12);
+}
+
+html[data-ui-plugin-scene-chrome-sidebar='nautical'] .ds-sidebar-icon-button {
+  border-color: rgba(153, 103, 32, 0.24);
+  color: #31536b;
+}
+
+html[data-ui-plugin-scene-chrome-sidebar='nautical'] .ds-sidebar-search-field input {
+  border-color: rgba(153, 103, 32, 0.32);
+  background:
+    linear-gradient(rgba(255, 252, 239, 0.82), rgba(242, 224, 186, 0.66));
+  color: #173b57;
+  box-shadow: inset 0 1px 4px rgba(74, 43, 10, 0.08);
+}
+
+html[data-ui-plugin-scene-chrome-sidebar='nautical'] .ds-sidebar-footer {
+  margin-inline: -0.15rem;
+  border: 1px solid #b98d43;
+  border-radius: 0.8rem 0.8rem 0.35rem 0.35rem;
+  background:
+    repeating-linear-gradient(135deg, rgba(225, 188, 115, 0.045) 0 2px, transparent 2px 11px),
+    linear-gradient(180deg, #123f61, #062b49);
+  padding: 0.55rem 0.55rem 0.45rem;
+  color: #f3dfb2;
+  box-shadow:
+    inset 0 0 0 1px rgba(238, 205, 141, 0.12),
+    0 4px 12px rgba(3, 30, 51, 0.24);
+}
+
+html[data-ui-plugin-scene-chrome-sidebar='nautical']
+  .ds-sidebar-footer :is(.ds-sidebar-command-row, .ds-sidebar-icon-button) {
+  color: #f2dfb4;
+}
+
+html[data-ui-plugin-scene-chrome-sidebar='nautical']
+  .ds-sidebar-footer .ds-sidebar-command-row span:first-child {
+  color: #d8ad62;
+}
+
+html[data-ui-plugin-scene-chrome-composer='nautical']
+  .ds-composer-shell.ds-chat-composer {
+  border: 2px solid #0b3b5c;
+  border-radius: 1rem 1rem 1.45rem 1.45rem;
+  background:
+    radial-gradient(circle at 86% 24%, transparent 0 32px, rgba(13, 59, 89, 0.07) 33px 34px, transparent 35px),
+    repeating-linear-gradient(0deg, rgba(20, 63, 89, 0.055) 0 1px, transparent 1px 1.55rem),
+    linear-gradient(105deg, rgba(255, 253, 241, 0.96), rgba(244, 229, 194, 0.96));
+  box-shadow:
+    inset 0 0 0 2px #d0a458,
+    inset 0 0 0 5px rgba(10, 55, 85, 0.16),
+    0 14px 38px rgba(4, 37, 62, 0.24);
+  -webkit-backdrop-filter: blur(15px) saturate(0.94);
+  backdrop-filter: blur(15px) saturate(0.94);
+}
+
+html[data-ui-plugin-scene-chrome-composer='nautical'] .ds-composer-textarea {
+  color: #153b57;
+  caret-color: #9b2d25;
+  text-shadow: 0 1px rgba(255, 255, 255, 0.54);
+}
+
+html[data-ui-plugin-scene-chrome-composer='nautical']
+  .ds-composer-textarea::placeholder {
+  color: rgba(45, 75, 94, 0.68);
+  font-style: italic;
+}
+
+html[data-ui-plugin-scene-chrome-composer='nautical'] .ds-composer-toolbar {
+  border-top: 1px solid rgba(156, 103, 28, 0.42);
+  background: linear-gradient(90deg, transparent, rgba(255, 248, 222, 0.56) 18% 82%, transparent);
+  box-shadow: 0 -1px rgba(255, 253, 239, 0.72);
+  padding-top: 0.35rem;
+}
+
+html[data-ui-plugin-scene-chrome-composer='nautical'] .ds-composer-menu-button {
+  border: 1px solid #b78a42;
+  background: linear-gradient(180deg, #f9e8bd, #dfbd79);
+  color: #123d5b;
+  box-shadow: inset 0 1px rgba(255, 255, 255, 0.68);
+}
+
+html[data-ui-plugin-scene-chrome-composer='nautical']
+  .ds-composer-permission-button {
+  border-color: #0c405f;
+  border-radius: 0.5rem 0.85rem 0.55rem 0.9rem;
+  background: linear-gradient(180deg, #f8e8be, #e1bf7d);
+  color: #153b57;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 250, 226, 0.64),
+    0 2px 5px rgba(48, 31, 9, 0.15);
+}
+
+html[data-ui-plugin-scene-chrome-composer='nautical']
+  .ds-composer-permission-button[data-permission-mode='full-access'] {
+  border-color: #7e211d;
+  background:
+    radial-gradient(circle at 20% 30%, rgba(255, 225, 190, 0.24), transparent 28%),
+    linear-gradient(155deg, #b74335, #7d211e);
+  color: #fff1d2;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 213, 166, 0.24),
+    0 3px 7px rgba(83, 23, 18, 0.25);
+}
+
+html[data-ui-plugin-scene-chrome-composer='nautical']
+  :is(.ds-composer-model-picker, .ds-composer-agent-picker) > button {
+  border-color: rgba(153, 103, 32, 0.38);
+  color: #244a64;
+}
+
+html[data-ui-plugin-scene-chrome-composer='nautical'] .ds-composer-primary-action {
+  border: 2px solid #0a3959;
+  background:
+    radial-gradient(circle, #fff2c6 0 18%, transparent 20%),
+    conic-gradient(from 45deg, #d8a64f, #fff0b8, #bd8534, #f7d98f, #d8a64f);
+  color: #0a3959;
+  box-shadow:
+    inset 0 0 0 2px rgba(255, 248, 209, 0.56),
+    0 5px 12px rgba(5, 39, 63, 0.28);
+}
+
+html[data-ui-plugin-scene-chrome-composer='nautical']
+  .ds-composer-primary-action:hover:not(:disabled) {
+  filter: brightness(1.06) saturate(1.08);
+  transform: rotate(4deg);
+}
+
+html[data-ui-plugin-scene-chrome-composer='nautical']
+  .ds-composer-primary-action:disabled {
+  border-color: rgba(58, 80, 94, 0.35);
+  background: linear-gradient(180deg, #ddd3bd, #c8b99d);
+  color: rgba(32, 65, 85, 0.45);
+  box-shadow: none;
+}
+
+html[data-theme='dark'][data-ui-plugin-scene-chrome-sidebar='nautical'] .ds-sidebar-shell {
+  --ds-sidebar-row-active: rgba(225, 176, 86, 0.18);
+  --ds-sidebar-row-hover: rgba(239, 205, 139, 0.1);
+  --ds-sidebar-field-bg: rgba(9, 43, 70, 0.82);
+  --ds-sidebar-field-focus: rgba(13, 55, 86, 0.94);
+  background:
+    radial-gradient(circle at 22% 16%, rgba(237, 199, 126, 0.1) 0 1px, transparent 2px),
+    repeating-linear-gradient(0deg, rgba(226, 189, 119, 0.04) 0 1px, transparent 1px 1.55rem),
+    linear-gradient(104deg, #0a3150, #051f37 76%, #03182c);
+  color: #f3e4c4;
+}
+
+html[data-theme='dark'][data-ui-plugin-scene-chrome-sidebar='nautical']
+  .ds-sidebar-section-header > span,
+html[data-theme='dark'][data-ui-plugin-scene-chrome-sidebar='nautical']
+  :is(.ds-sidebar-command-row, .ds-sidebar-tree-row) {
+  color: #ead7ae;
+}
+
+html[data-theme='dark'][data-ui-plugin-scene-chrome-composer='nautical']
+  .ds-composer-shell.ds-chat-composer {
+  background:
+    radial-gradient(circle at 86% 24%, transparent 0 32px, rgba(236, 199, 126, 0.1) 33px 34px, transparent 35px),
+    repeating-linear-gradient(0deg, rgba(228, 192, 123, 0.045) 0 1px, transparent 1px 1.55rem),
+    linear-gradient(105deg, rgba(8, 44, 72, 0.97), rgba(4, 29, 51, 0.97));
+}
+
+html[data-theme='dark'][data-ui-plugin-scene-chrome-composer='nautical']
+  .ds-composer-textarea {
+  color: #f3e6c9;
+  text-shadow: 0 1px rgba(0, 0, 0, 0.3);
+}
+
+html[data-theme='dark'][data-ui-plugin-scene-chrome-composer='nautical']
+  .ds-composer-textarea::placeholder {
+  color: rgba(235, 214, 175, 0.6);
+}
+
+/* Cloud Sword Immortal ---------------------------------------------------
+ * This theme deliberately reuses Grand Line's already verified geometry,
+ * while replacing every material and color with the Lü Dongbin art system.
+ * The scene remains a zero-reserve backdrop: no selector changes sidebar or
+ * conversation width, and no character layer participates in layout. */
+html[data-ui-plugin="lv-dongbin-cloud-sword"]
+  :is(
+    .ds-sidebar-shell,
+    .ds-chat-stage,
+    .ds-workbench-side-rail,
+    .ds-floating-composer,
+    .ds-topbar-surface,
+    .write-workspace-view,
+    .design-workspace-view
+  ) {
+  font-family:
+    "PingFang SC",
+    "Hiragino Sans GB",
+    "Noto Sans CJK SC",
+    "Microsoft YaHei",
+    -apple-system,
+    BlinkMacSystemFont,
+    sans-serif;
+  font-kerning: normal;
+  text-rendering: geometricPrecision;
+}
+
+html[data-ui-plugin="lv-dongbin-cloud-sword"] .ds-chat-stage {
+  box-shadow: inset 0 0 0 1px rgba(184, 139, 67, 0.6);
+}
+
+html[data-ui-plugin="lv-dongbin-cloud-sword"]
+  .ds-ui-plugin-scene-artwork-backdrop {
+  width: 100%;
+  height: 100%;
+  object-fit: fill !important;
+  object-position: center;
+}
+
+/* Backdrop layouts normally collapse both scene wrappers onto z-1. Keep this
+ * theme's transparent immortal medallion above the painted backdrop while it
+ * remains below Kun's z-3 conversation and composer surfaces. */
+html[data-ui-plugin="lv-dongbin-cloud-sword"]
+  .ds-ui-plugin-scene-visual-zone {
+  z-index: 2;
+}
+
+html[data-ui-plugin="lv-dongbin-cloud-sword"]
+  .ds-ui-plugin-scene-artwork-foreground {
+  width: 100%;
+  height: 100%;
+  object-fit: fill !important;
+  object-position: center bottom;
+}
+
+html[data-ui-plugin="lv-dongbin-cloud-sword"] .ds-sidebar-shell {
+  --ds-sidebar-row-active: rgba(47, 113, 107, 0.2);
+  --ds-sidebar-row-hover: rgba(47, 113, 107, 0.1);
+  --ds-sidebar-row-ring: rgba(137, 98, 43, 0.48);
+  --ds-sidebar-field-bg: rgba(245, 232, 202, 0.8);
+  --ds-sidebar-field-focus: rgba(252, 244, 222, 0.96);
+  --ds-sidebar-divider: rgba(91, 72, 39, 0.32);
+  border: 0 !important;
+  border-radius: 0.9rem 0.28rem 0.28rem 0.9rem;
+  background: transparent !important;
+  padding-left: 0.82rem;
+  padding-right: 2.45rem;
+  box-shadow:
+    inset 0 0 0 1px rgba(221, 190, 126, 0.35),
+    7px 0 18px rgba(4, 31, 28, 0.24);
+  color: #253630;
+}
+
+html[data-ui-plugin="lv-dongbin-cloud-sword"] .ds-sidebar-shell::after {
+  inset: 0 !important;
+  border-radius: inherit;
+  background-size: 100% 100% !important;
+  background-position: center !important;
+  opacity: 1 !important;
+}
+
+html[data-ui-plugin="lv-dongbin-cloud-sword"] .ds-sidebar-shell::before {
+  background: none !important;
+  opacity: 0 !important;
+}
+
+html[data-ui-plugin="lv-dongbin-cloud-sword"] .ds-sidebar-titlebar-spacer {
+  min-height: 5.1rem;
+  border: 0;
+  box-shadow: none;
+}
+
+html[data-ui-plugin="lv-dongbin-cloud-sword"] .workspace-mode-tabs {
+  border-color: #b88b43 !important;
+  background: linear-gradient(180deg, #1d5149, #0c332e) !important;
+  box-shadow:
+    inset 0 0 0 1px rgba(230, 200, 137, 0.2),
+    0 3px 8px rgba(4, 31, 28, 0.3) !important;
+}
+
+html[data-ui-plugin="lv-dongbin-cloud-sword"] .workspace-mode-tab,
+html[data-ui-plugin="lv-dongbin-cloud-sword"]
+  .workspace-mode-tab[aria-selected="true"] {
+  background: linear-gradient(
+    180deg,
+    rgba(37, 92, 82, 0.96),
+    rgba(11, 50, 45, 0.98)
+  ) !important;
+  color: #dfc17e !important;
+}

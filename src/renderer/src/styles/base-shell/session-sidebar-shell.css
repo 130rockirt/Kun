@@ -1,0 +1,643 @@
+.ds-side-rail-button:hover::before,
+.ds-side-rail-button:hover::after,
+.ds-side-rail-button:focus-visible::before,
+.ds-side-rail-button:focus-visible::after {
+  opacity: 1;
+  transform: translateY(-50%) translateX(0);
+}
+
+[data-theme='dark'] .ds-side-rail-button::before {
+  border-left-color: rgba(248, 250, 252, 0.92);
+}
+
+[data-theme='dark'] .ds-side-rail-button::after {
+  border-color: rgba(15, 23, 42, 0.14);
+  background: rgba(248, 250, 252, 0.95);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.4);
+  color: #111827;
+}
+
+.ds-workbench-top-actions {
+  z-index: 30;
+  margin-right: clamp(4.5rem, 14cqw, 12rem);
+}
+
+.ds-topbar-action-button {
+  position: relative;
+}
+
+.ds-topbar-action-button::before,
+.ds-topbar-action-button::after {
+  pointer-events: none;
+  position: absolute;
+  right: 0;
+  z-index: 80;
+  opacity: 0;
+  transform: translateY(-4px);
+  transition:
+    opacity 120ms ease,
+    transform 120ms ease;
+}
+
+.ds-topbar-action-button::before {
+  content: '';
+  top: calc(100% + 3px);
+  right: 11px;
+  border: 5px solid transparent;
+  border-bottom-color: rgba(15, 23, 42, 0.9);
+}
+
+.ds-topbar-action-button::after {
+  content: attr(data-tooltip);
+  top: calc(100% + 12px);
+  max-width: min(260px, calc(100vw - 2rem));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.94);
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.22);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  padding: 7px 9px;
+}
+
+.ds-topbar-action-button:hover::before,
+.ds-topbar-action-button:hover::after,
+.ds-topbar-action-button:focus-visible::before,
+.ds-topbar-action-button:focus-visible::after {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+[data-theme='dark'] .ds-topbar-action-button::before {
+  border-bottom-color: rgba(248, 250, 252, 0.92);
+}
+
+[data-theme='dark'] .ds-topbar-action-button::after {
+  border-color: rgba(15, 23, 42, 0.14);
+  background: rgba(248, 250, 252, 0.95);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.4);
+  color: #111827;
+}
+
+.session-header-compact-meta {
+  overflow: hidden;
+}
+
+@container (max-width: 640px) {
+  .chat-topbar-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .chat-topbar-actions {
+    width: 100%;
+    overflow-x: auto;
+  }
+
+  .ds-workbench-top-actions {
+    margin-right: 0;
+  }
+}
+
+@container (max-width: 760px) {
+  .chat-topbar.ds-topbar-surface {
+    min-height: 56px;
+  }
+
+  .chat-topbar-grid {
+    padding-block: 0.35rem;
+  }
+
+  .session-meta-usage,
+  .session-meta-usage-separator {
+    display: none;
+  }
+
+  .chat-connection-status {
+    max-width: 150px;
+  }
+}
+
+@media (max-height: 820px) {
+  .ds-stage-inset {
+    --ds-stage-inset-inline: 0px;
+    padding-inline: 0;
+  }
+
+  .ds-chat-column-inset {
+    padding-inline: clamp(0.5rem, calc((100% - 48rem) / 2 + 0.75rem), 1.5rem);
+  }
+
+  .ds-message-timeline-content {
+    gap: 0.875rem;
+    padding-top: 0.5rem;
+    padding-bottom: 0.75rem;
+  }
+
+  .chat-topbar.ds-topbar-surface {
+    min-height: 56px;
+  }
+
+  .chat-topbar-grid {
+    padding-block: 0.35rem;
+  }
+
+  .ds-chat-stage .ds-floating-composer {
+    padding-bottom: 0.5rem;
+  }
+
+  .ds-chat-composer {
+    border-radius: 20px;
+  }
+
+  .ds-chat-composer textarea {
+    min-height: 32px;
+  }
+
+  .ds-chat-composer .ds-composer-toolbar {
+    min-height: 2rem;
+    padding-top: 0.25rem;
+  }
+
+  .ds-chat-composer .ds-composer-model-picker {
+    height: 2rem;
+  }
+
+  .ds-chat-composer .ds-composer-toolbar > div:first-child > button,
+  .ds-chat-composer .ds-composer-toolbar > div:last-child > button {
+    height: 2rem;
+    width: 2rem;
+  }
+
+  .ds-composer-footer {
+    margin-top: 0.25rem;
+    min-height: 1.5rem;
+  }
+}
+
+@container (max-width: 520px) {
+  .session-header-compact-workspace,
+  .session-header-compact-branch,
+  .session-header-compact-chevron {
+    display: none;
+  }
+
+  .session-meta-mode,
+  .session-meta-mode-separator {
+    display: none;
+  }
+
+  .chat-topbar-actions {
+    justify-content: flex-start;
+  }
+
+  .chat-agent-switcher-label {
+    display: none;
+  }
+
+  .chat-agent-switcher {
+    padding-inline: 0.625rem;
+  }
+}
+
+@container (max-width: 420px) {
+  .chat-connection-status-label {
+    display: none;
+  }
+}
+
+.ds-floating-composer {
+  container-type: inline-size;
+}
+
+.ds-composer-toolbar {
+  min-width: 0;
+  flex-wrap: nowrap;
+  overflow: hidden;
+}
+
+.ds-composer-toolbar-start {
+  flex: 0 1 auto;
+  max-width: min(42%, 22rem);
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.ds-composer-toolbar-start::-webkit-scrollbar {
+  display: none;
+}
+
+.ds-composer-toolbar-actions {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.ds-composer-toolbar-actions .ds-composer-model-picker {
+  flex-shrink: 1;
+  min-width: 0;
+}
+
+.ds-composer-footer {
+  flex-wrap: nowrap;
+  overflow: visible;
+}
+
+.ds-composer-footer-left {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.ds-git-branch-picker {
+  max-width: 100%;
+}
+
+.ds-composer-usage {
+  flex: 0 1 auto;
+  width: max-content;
+}
+
+.ds-composer-usage-tokens {
+  min-width: 0;
+}
+
+.ds-composer-footer-hint {
+  flex: 0 1 auto;
+  max-width: min(14rem, 34%);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/*
+ * Keep the composer useful while split panes narrow it. Lower-priority actions
+ * leave first, then verbose state controls collapse to their recognizable icon.
+ * Container queries follow the composer itself, not the application window.
+ */
+@container (max-width: 760px) {
+  .ds-composer-optional-action {
+    display: none;
+  }
+}
+
+@container (max-width: 700px) {
+  .ds-composer-mode-badge {
+    gap: 0;
+    padding-inline: 0;
+    width: 2rem;
+  }
+
+  .ds-composer-mode-label,
+  .ds-composer-permission-label,
+  .ds-composer-permission-chevron {
+    display: none;
+  }
+
+  .ds-floating-composer
+    .ds-composer-toolbar
+    .ds-composer-permission-control
+    .ds-composer-permission-button {
+    border-radius: 9999px;
+    gap: 0;
+    height: 2rem;
+    justify-content: center;
+    min-height: 2rem;
+    padding: 0;
+    width: 2rem;
+  }
+}
+
+@container (max-width: 640px) {
+  .ds-composer-toolbar {
+    align-items: center;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    gap: 0.375rem;
+  }
+
+  .ds-composer-toolbar > div {
+    width: auto;
+  }
+
+  .ds-composer-toolbar-start {
+    flex: 0 1 auto;
+    max-width: 44%;
+    min-width: 0;
+  }
+
+  .ds-composer-toolbar-start::-webkit-scrollbar {
+    display: none;
+  }
+
+  .ds-composer-toolbar-actions {
+    flex: 1 1 0;
+    min-width: 0;
+    justify-content: flex-end;
+  }
+
+  .ds-composer-toolbar-actions {
+    gap: 0.25rem;
+  }
+
+  .ds-composer-toolbar-actions .ds-composer-model-picker {
+    max-width: min(220px, 44vw);
+  }
+
+  .ds-composer-intent-detail {
+    display: none;
+  }
+
+  .ds-composer-footer {
+    padding-inline: 0.5rem;
+  }
+
+  .ds-composer-footer-left {
+    flex-basis: 100%;
+  }
+
+  .ds-composer-footer-hint {
+    display: none;
+  }
+
+  .ds-git-branch-picker {
+    flex: 1 1 180px;
+  }
+
+  .ds-composer-usage {
+    flex: 0 1 100%;
+  }
+}
+
+@container (max-width: 520px) {
+  .ds-composer-context-control,
+  .ds-composer-agent-picker {
+    display: none;
+  }
+}
+
+@container (max-width: 420px) {
+  .ds-composer-toolbar-start {
+    max-width: 46%;
+  }
+
+  .ds-composer-toolbar-actions .ds-composer-model-picker {
+    max-width: min(180px, 40vw);
+  }
+
+}
+
+@container (max-width: 620px) {
+  .ds-composer-usage-cost,
+  .ds-composer-usage-cost-separator {
+    display: none;
+  }
+}
+
+@container (max-width: 520px) {
+  .ds-composer-usage-cache,
+  .ds-composer-usage-cache-separator {
+    display: none;
+  }
+}
+
+@container (max-width: 440px) {
+  .ds-composer-usage-context-savings,
+  .ds-composer-usage-context-savings-separator {
+    display: none;
+  }
+}
+
+@container (max-width: 390px) {
+  .ds-composer-intent-label {
+    display: none;
+  }
+}
+
+@container (max-width: 360px) {
+  .ds-composer-usage-turns,
+  .ds-composer-usage-turns-separator {
+    display: none;
+  }
+}
+
+.ds-empty-hero {
+  padding-top: 7rem;
+}
+
+.ds-empty-hero-title {
+  font-size: 56px;
+  line-height: 1.08;
+}
+
+.ds-empty-hero-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.ds-composer-model-picker {
+  display: inline-flex;
+  min-width: 0;
+}
+
+.ds-runtime-wake-hero {
+  align-items: center;
+  display: flex;
+  flex-direction: column;
+  min-height: min(560px, calc(100vh - 240px));
+}
+
+.ds-runtime-wake-stage {
+  display: grid;
+  height: 236px;
+  margin-bottom: 1.35rem;
+  place-items: center;
+  width: min(560px, 100%);
+}
+
+.ds-runtime-wake-shell {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(248, 251, 254, 0.9)),
+    linear-gradient(120deg, rgba(59, 130, 216, 0.08), transparent 42%, rgba(240, 196, 110, 0.1));
+  border: 1px solid color-mix(in srgb, var(--ds-border) 78%, transparent);
+  border-radius: 28px;
+  box-shadow:
+    0 24px 70px rgba(20, 47, 95, 0.1),
+    inset 0 1px 0 rgba(255, 255, 255, 0.82);
+  height: 206px;
+  overflow: hidden;
+  position: relative;
+  width: min(500px, calc(100vw - 56px));
+}
+
+.ds-runtime-wake-shell::before {
+  animation: ds-runtime-wake-sweep 3.6s cubic-bezier(0.22, 1, 0.36, 1) infinite;
+  background: linear-gradient(
+    112deg,
+    transparent 0%,
+    transparent 34%,
+    rgba(59, 130, 216, 0.16) 45%,
+    rgba(18, 138, 74, 0.14) 53%,
+    transparent 66%,
+    transparent 100%
+  );
+  content: '';
+  inset: 0;
+  position: absolute;
+  transform: translateX(-100%);
+  z-index: 1;
+}
+
+.ds-runtime-wake-shell::after {
+  background-image:
+    linear-gradient(rgba(59, 130, 216, 0.08) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(18, 138, 74, 0.08) 1px, transparent 1px);
+  background-size: 34px 34px;
+  content: '';
+  inset: 44px 0 0 116px;
+  mask-image: linear-gradient(90deg, transparent, #000 18%, #000 76%, transparent);
+  opacity: 0.55;
+  position: absolute;
+}
+
+.ds-runtime-wake-titlebar {
+  align-items: center;
+  border-bottom: 1px solid color-mix(in srgb, var(--ds-border-muted) 78%, transparent);
+  display: flex;
+  gap: 0.45rem;
+  height: 38px;
+  padding: 0 1rem;
+  position: relative;
+  z-index: 3;
+}
+
+.ds-runtime-wake-dot {
+  border-radius: 999px;
+  height: 0.55rem;
+  opacity: 0.85;
+  width: 0.55rem;
+}
+
+.ds-runtime-wake-dot.is-red {
+  background: #ff5f57;
+}
+
+.ds-runtime-wake-dot.is-yellow {
+  background: #ffbd2e;
+}
+
+.ds-runtime-wake-dot.is-green {
+  background: #28c840;
+}
+
+.ds-runtime-wake-body {
+  display: flex;
+  height: calc(100% - 38px);
+  position: relative;
+  z-index: 2;
+}
+
+.ds-runtime-wake-nav {
+  border-right: 1px solid color-mix(in srgb, var(--ds-border-muted) 74%, transparent);
+  display: grid;
+  gap: 0.7rem;
+  grid-auto-rows: 12px;
+  padding: 1.25rem 1rem;
+  width: 112px;
+}
+
+.ds-runtime-wake-nav span,
+.ds-runtime-wake-thread,
+.ds-runtime-wake-composer span {
+  background: color-mix(in srgb, var(--ds-text-faint) 18%, transparent);
+  border-radius: 999px;
+  display: block;
+}
+
+.ds-runtime-wake-nav span {
+  width: 68px;
+}
+
+.ds-runtime-wake-nav span:nth-child(2) {
+  width: 52px;
+}
+
+.ds-runtime-wake-nav span:nth-child(3) {
+  width: 62px;
+}
+
+.ds-runtime-wake-nav span:nth-child(4) {
+  width: 44px;
+}
+
+.ds-runtime-wake-nav .is-active {
+  animation: ds-runtime-wake-soft-pulse 2.4s ease-in-out infinite;
+  background: color-mix(in srgb, var(--ds-accent) 18%, transparent);
+}
+
+.ds-runtime-wake-canvas {
+  flex: 1;
+  padding: 1.35rem 1.5rem;
+  position: relative;
+}
+
+.ds-runtime-wake-thread {
+  animation: ds-runtime-wake-thread 2.8s ease-in-out infinite;
+  height: 10px;
+  position: absolute;
+}
+
+.ds-runtime-wake-thread.is-one {
+  left: 58px;
+  top: 32px;
+  width: 160px;
+}
+
+.ds-runtime-wake-thread.is-two {
+  animation-delay: 0.36s;
+  left: 92px;
+  top: 62px;
+  width: 198px;
+}
+
+.ds-runtime-wake-thread.is-three {
+  animation-delay: 0.72s;
+  left: 52px;
+  top: 92px;
+  width: 128px;
+}
+
+.ds-runtime-wake-flow {
+  background: linear-gradient(90deg, transparent, rgba(59, 130, 216, 0.24), transparent);
+  height: 1px;
+  left: 134px;
+  overflow: hidden;
+  position: absolute;
+  right: 70px;
+  top: 105px;
+  z-index: 3;
+}
+
+.ds-runtime-wake-flow::after {
+  animation: ds-runtime-wake-flow 1.9s ease-in-out infinite;
+  background: linear-gradient(90deg, transparent, #3b82d8, #128a4a, transparent);
+  content: '';
+  inset: 0;
+  position: absolute;
+  transform: translateX(-100%);
+}
+
+.ds-runtime-wake-flow.is-right {
+  left: 230px;
+  right: 36px;
+  top: 126px;
+}
+
+.ds-runtime-wake-flow.is-right::after {
+  animation-delay: 0.42s;
+}

@@ -154,7 +154,11 @@ test('requires the first-launch protected prompt to expose localized permissions
 test('source smoke keeps the editor hidden from the rail and opens it from Extension management', async () => {
   assert.equal(CONTRIBUTION_ID, 'extension:kun-examples.kun-video-editor/editor')
   assert.match(SUCCESS_MARKER, /desktop E2E OK/)
-  const source = await readFile(join(__dirname, 'smoke-packaged-video-editor-desktop.cjs'), 'utf8')
+  const source = (await Promise.all([
+    'smoke-packaged-video-editor-desktop.cjs',
+    'smoke-packaged-video-editor-desktop-runtime.cjs',
+    'smoke-packaged-video-editor-desktop-guest.cjs'
+  ].map((name) => readFile(join(__dirname, name), 'utf8')))).join('\n')
   for (const marker of [
     "require('playwright-core')",
     '_electron.launch',

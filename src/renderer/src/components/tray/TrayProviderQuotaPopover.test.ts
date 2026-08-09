@@ -4,6 +4,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import type { ProviderQuotaListResult } from '@shared/provider-quota'
 import type { KunTrayProviderQuotaApi } from '@shared/tray-provider-quota'
 import i18n from '../../i18n'
+import { readStylesheetBundle } from '../../testing/stylesheet-bundle'
 import { TrayProviderQuotaPopover } from './TrayProviderQuotaPopover'
 
 const result: ProviderQuotaListResult = {
@@ -225,9 +226,7 @@ describe('TrayProviderQuotaPopover', () => {
   })
 
   it('keeps providers in one horizontal row and quota details independently scrollable', async () => {
-    const nodeFs = 'node:fs/promises'
-    const { readFile } = await import(/* @vite-ignore */ nodeFs)
-    const css = await readFile(new URL('../../styles/tray-provider-quota.css', import.meta.url), 'utf8')
+    const css = await readStylesheetBundle(new URL('../../styles/tray-provider-quota.css', import.meta.url))
 
     expect(css).toMatch(/\.tray-quota-tabs \{[\s\S]*display: flex/)
     expect(css).toMatch(/\.tray-provider-tab \{[\s\S]*flex: 1 0 56px/)
@@ -244,9 +243,7 @@ describe('TrayProviderQuotaPopover', () => {
   })
 
   it('uses the shared neutral visual language without glass or undersized copy', async () => {
-    const nodeFs = 'node:fs/promises'
-    const { readFile } = await import(/* @vite-ignore */ nodeFs)
-    const css = await readFile(new URL('../../styles/tray-provider-quota.css', import.meta.url), 'utf8')
+    const css = await readStylesheetBundle(new URL('../../styles/tray-provider-quota.css', import.meta.url))
 
     expect(css).toContain('--tray-bg: #ededed')
     expect(css).toContain('--tray-panel: #f8f8f8')

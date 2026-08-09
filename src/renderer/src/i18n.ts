@@ -1,7 +1,7 @@
 import i18n, { type BackendModule } from 'i18next'
 import { initReactI18next } from 'react-i18next'
-import enCommon from './locales/en/common.json'
-import enSettings from './locales/en/settings.json'
+import enCommon from './locales/en/common'
+import enSettings from './locales/en/settings'
 import { APP_LOCALES } from '@shared/app-locales'
 
 const englishCommonResources = enCommon as Record<string, unknown>
@@ -9,6 +9,7 @@ const englishGraphSettingsResources = Object.fromEntries(
   Object.entries(enSettings).filter(([key]) =>
     key.startsWith('graphSettings') ||
     key.startsWith('labExplore') ||
+    key.startsWith('labPpt') ||
     key.startsWith('storageRelocation') ||
     key.startsWith('modelRoutes')
   )
@@ -78,14 +79,14 @@ export function withGraphSettingsFallback<T extends Record<string, unknown>>(loc
 type LocaleModule = { default: Record<string, unknown> }
 
 const localeLoaders = import.meta.glob<LocaleModule>(
-  './locales/{hi,ja,ko,ru,th,zh}/*.json'
+  './locales/{hi,ja,ko,ru,th,zh}/{common,settings}.ts'
 )
 
 const lazyLocaleBackend: BackendModule = {
   type: 'backend',
   init() {},
   read(language, namespace, callback) {
-    const loader = localeLoaders[`./locales/${language}/${namespace}.json`]
+    const loader = localeLoaders[`./locales/${language}/${namespace}.ts`]
     if (!loader) {
       callback(new Error(`Unsupported locale resource: ${language}/${namespace}`), false)
       return

@@ -145,7 +145,7 @@ describe('readKunConfigFile provider compatibility', () => {
 describe('LabPptAgentConfigSchema', () => {
   it('defaults to enabled with follow-main model and no fast', () => {
     const parsed = LabPptAgentConfigSchema.parse({})
-    expect(parsed).toEqual({ enabled: true, fast: false })
+    expect(parsed).toEqual({ enabled: true, fast: false, imageFirst: true })
   })
 
   it('accepts a paired model override with reasoning effort', () => {
@@ -169,7 +169,7 @@ describe('LabPptAgentConfigSchema', () => {
 
   it('defaults pptAgent inside LabConfigSchema', () => {
     const lab = LabConfigSchema.parse({})
-    expect(lab.pptAgent).toEqual({ enabled: true, fast: false })
+    expect(lab.pptAgent).toEqual({ enabled: true, fast: false, imageFirst: true })
     expect(lab.exploreAgent).toEqual({ enabled: true, fast: false })
   })
 })

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { readStylesheetBundle } from '../../testing/stylesheet-bundle'
 
 describe('shared sidebar surfaces', () => {
   it('keeps workbench side panels on the same semantic background', async () => {
@@ -12,13 +13,12 @@ describe('shared sidebar surfaces', () => {
       new URL('../design/DesignImplementPanel.tsx', import.meta.url),
       new URL('../workbench/WorkbenchRightPanel.tsx', import.meta.url),
       new URL('../chat/SideConversationPanel.tsx', import.meta.url),
-      new URL('../DevBrowserPanel.tsx', import.meta.url),
+      new URL('../DevBrowserContent.tsx', import.meta.url),
       new URL('../AgentBrowserPanel.tsx', import.meta.url)
     ]
     const sources = await Promise.all(sourceUrls.map((url) => readFile(url, 'utf8')))
-    const surfaces = await readFile(
-      new URL('../../styles/surfaces-write.css', import.meta.url),
-      'utf8'
+    const surfaces = await readStylesheetBundle(
+      new URL('../../styles/surfaces-write.css', import.meta.url)
     )
 
     expect(surfaces).toContain('.ds-sidebar-surface')

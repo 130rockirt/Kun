@@ -1,0 +1,130 @@
+import { useEffect, type RefObject } from 'react'
+import { WRITE_EXPORT_NOTICE_MS, type WriteNotice } from './write-workspace-view-utils'
+
+type Params = {
+  loadWriteSettings: () => void | Promise<void>
+  onboardingComplete: boolean
+  onboardingDecision: string
+  completeOnboarding: () => void
+  activeFilePath: string | null
+  previewMode: string
+  selectionCharCount: number
+  selectionText: string
+  editorPaneRef: RefObject<HTMLDivElement | null>
+  exportMenuRef: RefObject<HTMLDivElement | null>
+  modeMenuRef: RefObject<HTMLDivElement | null>
+  exportNoticeTimerRef: RefObject<number | null>
+  exportMenuOpen: boolean
+  modeMenuOpen: boolean
+  exportNotice: WriteNotice | null
+  setExportMenuOpen: (open: boolean) => void
+  setModeMenuOpen: (open: boolean) => void
+  setInlineAgentValue: (value: string) => void
+  setPointerSelecting: (selecting: boolean) => void
+  setExportNotice: (notice: WriteNotice | null) => void
+}
+
+export function useWriteWorkspaceViewEffects({
+  loadWriteSettings,
+  onboardingComplete,
+  onboardingDecision,
+  completeOnboarding,
+  activeFilePath,
+  previewMode,
+  selectionCharCount,
+  selectionText,
+  editorPaneRef,
+  exportMenuRef,
+  modeMenuRef,
+  exportNoticeTimerRef,
+  exportMenuOpen,
+  modeMenuOpen,
+  exportNotice,
+  setExportMenuOpen,
+  setModeMenuOpen,
+  setInlineAgentValue,
+  setPointerSelecting,
+  setExportNotice
+}: Params): void {
+  useEffect(() => {
+    void loadWriteSettings()
+  }, [loadWriteSettings])
+
+  useEffect(() => {
+    if (!onboardingComplete && onboardingDecision === 'complete') completeOnboarding()
+  }, [completeOnboarding, onboardingComplete, onboardingDecision])
+
+  useEffect(() => setExportMenuOpen(false), [activeFilePath, setExportMenuOpen])
+  useEffect(() => setModeMenuOpen(false), [activeFilePath, previewMode, setModeMenuOpen])
+
+  useEffect(() => {
+    setInlineAgentValue('')
+  }, [selectionCharCount, selectionText, setInlineAgentValue])
+
+  useEffect(() => {
+    const handleDown = (event: PointerEvent): void => {
+      const target = event.target
+      if (target instanceof Node && editorPaneRef.current?.contains(target)) {
+        setPointerSelecting(true)
+      }
+    }
+    const handleUp = (): void => setPointerSelecting(false)
+    window.addEventListener('pointerdown', handleDown)
+    window.addEventListener('pointerup', handleUp)
+    window.addEventListener('pointercancel', handleUp)
+    return () => {
+      window.removeEventListener('pointerdown', handleDown)
+      window.removeEventListener('pointerup', handleUp)
+      window.removeEventListener('pointercancel', handleUp)
+    }
+  }, [editorPaneRef, setPointerSelecting])
+
+  useEffect(() => {
+    if (!exportMenuOpen && !modeMenuOpen) return
+    const handlePointerDown = (event: PointerEvent): void => {
+      const target = event.target
+      if (exportMenuRef.current && target instanceof Node && !exportMenuRef.current.contains(target)) {
+        setExportMenuOpen(false)
+      }
+      if (modeMenuRef.current && target instanceof Node && !modeMenuRef.current.contains(target)) {
+        setModeMenuOpen(false)
+      }
+    }
+    const handleKeyDown = (event: globalThis.KeyboardEvent): void => {
+      if (event.key !== 'Escape') return
+      setExportMenuOpen(false)
+      setModeMenuOpen(false)
+    }
+    window.addEventListener('pointerdown', handlePointerDown)
+    window.addEventListener('keydown', handleKeyDown)
+    return () => {
+      window.removeEventListener('pointerdown', handlePointerDown)
+      window.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [exportMenuOpen, exportMenuRef, modeMenuOpen, modeMenuRef, setExportMenuOpen, setModeMenuOpen])
+
+  useEffect(() => {
+    if (exportNoticeTimerRef.current) {
+      window.clearTimeout(exportNoticeTimerRef.current)
+      exportNoticeTimerRef.current = null
+    }
+    if (!exportNotice) return
+    exportNoticeTimerRef.current = window.setTimeout(() => {
+      exportNoticeTimerRef.current = null
+      setExportNotice(null)
+    }, WRITE_EXPORT_NOTICE_MS)
+    return () => {
+      if (exportNoticeTimerRef.current) {
+        window.clearTimeout(exportNoticeTimerRef.current)
+        exportNoticeTimerRef.current = null
+      }
+    }
+  }, [exportNotice, exportNoticeTimerRef, setExportNotice])
+
+  useEffect(() => () => {
+    if (exportNoticeTimerRef.current) {
+      window.clearTimeout(exportNoticeTimerRef.current)
+      exportNoticeTimerRef.current = null
+    }
+  }, [exportNoticeTimerRef])
+}

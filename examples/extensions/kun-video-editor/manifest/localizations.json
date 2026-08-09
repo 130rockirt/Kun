@@ -1,0 +1,127 @@
+{
+  "zh": {
+    "displayName": "Kun 视频编辑器",
+    "description": "面向口播、访谈和播客媒体的本地转录文本剪辑工具。",
+    "contributes": {
+      "commands": {
+        "editor-request": {
+          "title": "视频编辑器请求",
+          "category": "视频",
+          "description": "Kun 视频编辑器视图使用的私有、有边界的 RPC。"
+        }
+      },
+      "views.rightSidebar": {
+        "editor": {
+          "title": "Kun 视频编辑器"
+        }
+      },
+      "message.resultPreviews": {
+        "render-preview": {
+          "title": "视频渲染结果"
+        }
+      },
+      "settings": {
+        "video-editor": {
+          "title": "Kun 视频编辑器",
+          "properties": {
+            "defaultRenderPreset": {
+              "title": "默认渲染预设",
+              "description": "新渲染任务使用的默认类型。"
+            },
+            "defaultCaptionMode": {
+              "title": "默认字幕模式",
+              "description": "媒体渲染任务默认使用的字幕处理方式。"
+            },
+            "localTranscriber": {
+              "title": "本地转录器",
+              "description": "仅使用本地 ASR；没有可用的本地 Broker 时会明确报告不可用。"
+            }
+          }
+        }
+      },
+      "agentProfiles": {
+        "video-editor": {
+          "title": "视频编辑器",
+          "description": "用于口播、访谈和播客项目的私有本地转录文本剪辑 Agent。"
+        }
+      },
+      "tools": {
+        "video-project": {
+          "description": "解析当前项目、列出项目、以只读方式获取项目，或显式创建、选择工作区中的权威项目。任何编辑前都必须读取当前版本。"
+        },
+        "video-inspect": {
+          "description": "解析显式且绑定版本的视频上下文，或有边界地读取项目窗口、原始媒体证据、多机位节目单和合成帧校样；不会读取 Webview DOM。"
+        },
+        "video-probe": {
+          "description": "导入或检测由 Host 授权的媒体句柄，持久化规范化的素材元数据，并可选请求缩略图或波形任务。绝不接受文件路径。"
+        },
+        "video-transcribe": {
+          "description": "为素材导入有边界的带时间戳逐字稿；本地 ASR 不可用时如实报告，不编造文本，也不上传媒体。"
+        },
+        "video-read-script": {
+          "description": "读取与确定版本绑定的 timeline.md 投影，用于逐字稿优先的审阅。"
+        },
+        "video-apply-script": {
+          "description": "对未变更且绑定版本的 timeline.md 投影，作为单个事务应用明确的带时间源范围 Agent 剪辑。"
+        },
+        "video-update-timeline": {
+          "description": "在预期版本上应用有边界的类型化序列、时间线、多机位、链接组、字幕、合成、效果、关键帧、变速、轨道状态或画布操作。"
+        },
+        "video-analyze-visual": {
+          "description": "仅在工作区明确启用且 Host 验证本地模型安装后，为授权素材建立绑定版本的不可变视觉索引；不接受路径、URL 或未验证的模型元数据。"
+        },
+        "video-analyze-audio": {
+          "description": "使用不透明媒体授权运行本地静音分析、如实报告说话人模型能力、预览或应用经审阅的说话人归属、检测节拍能力，以及预览或应用置信度达标的音频同步。未知、重叠或低置信度证据不会被断言为某个说话人。"
+        },
+        "video-analysis-status": {
+          "description": "只读获取本地音频、视觉与说话人分析能力、说话人身份注册表、不可变缓存证据、绑定版本的运行进度或有边界的视觉时刻搜索；不会启动索引。"
+        },
+        "video-analysis-cancel": {
+          "description": "在验证项目与分析版本后取消一个正在运行的本地媒体分析。"
+        },
+        "video-interchange": {
+          "description": "在精确项目版本上启动原子、持久的 OpenTimelineIO JSON 导出；保留稳定 ID、时间码和明确有边界的损失清单，目标始终是不透明的 Host 授权。"
+        },
+        "video-interchange-status": {
+          "description": "只读获取一个自有、受跟踪的 OTIO 导出，包括固定版本、进度、文档产物和原始损失清单。"
+        },
+        "video-interchange-cancel": {
+          "description": "验证项目与工作区所有权后取消一个自有、受跟踪的 OTIO 导出。"
+        },
+        "video-generation-catalog": {
+          "description": "只读获取有边界且与供应商无关的本地、BYOK 与远程生成模型目录，以及权限、隐私、参考素材和费用限制；没有已批准 Broker 时会如实报告不可用。"
+        },
+        "video-generation-request": {
+          "description": "在固定项目版本上请求或显式重试有边界的图像、视频、音频或超分任务；远程权限、参考素材上传与费用上限必须明确确认，凭据不会进入工具。"
+        },
+        "video-generation-status": {
+          "description": "只读获取自有生成占位素材和任务状态；不会返回原始提示词、供应商凭据、受保护媒体句柄、端点或可复用 URL。"
+        },
+        "video-generation-cancel": {
+          "description": "通过单独授权的操作取消一个自有生成任务，不暴露供应商或媒体凭据。"
+        },
+        "video-project-package": {
+          "description": "在固定项目版本上预检或启动原子、持久、自包含的 ZIP 工程包导出；二进制媒体始终保留在 Host 不透明授权之后。"
+        },
+        "video-project-package-status": {
+          "description": "只读获取一个自有、受跟踪的持久工程包任务及其原子归档结果，不暴露 Host 路径。"
+        },
+        "video-project-package-cancel": {
+          "description": "验证项目身份后取消一个自有、受跟踪的持久工程包任务。"
+        },
+        "video-render": {
+          "description": "从规范时间线或保留源素材身份的多机位节目单启动由 Broker 持久处理的校样、预览、音频或视频导出任务；绑定项目版本和不透明输出授权。"
+        },
+        "video-render-status": {
+          "description": "无副作用地读取一个自有持久化渲染任务，仅返回与项目匹配且已通过技术校验的生成产物。"
+        },
+        "video-render-cancel": {
+          "description": "验证可选的项目身份后，取消一个自有、受跟踪的持久化视频渲染任务。"
+        },
+        "video-undo": {
+          "description": "仅撤销当前 Agent 运行最近一次仍符合条件的视频编辑；如期间存在手工或其他来源修改则拒绝。"
+        }
+      }
+    }
+  }
+}

@@ -1,4 +1,3 @@
-import { readFileSync } from 'node:fs'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { act, create, type ReactTestRenderer } from 'react-test-renderer'
 import { describe, expect, it, vi } from 'vitest'
@@ -7,6 +6,7 @@ import { messagesFor } from '../src/webview/i18n.js'
 import { MediaIntelligencePanel } from '../src/webview/media-intelligence.js'
 import { INITIAL_EDITOR_STATE, editorReducer, type EditorState } from '../src/webview/model.js'
 import { makeViewProject } from './webview-fixtures.js'
+import { webviewStyles } from './support/webview-styles.js'
 
 describe('media intelligence Webview panel', () => {
   it('keeps search and optional local analysis usable in a bounded sidebar layout', () => {
@@ -40,7 +40,7 @@ describe('media intelligence Webview panel', () => {
     expect(chinese).not.toContain('Optional local intelligence')
     expect(chinese).not.toContain('Visual model status')
 
-    const css = readFileSync(new URL('../src/webview/styles.css', import.meta.url), 'utf8')
+    const css = webviewStyles()
     expect(css).toMatch(/\.media-intelligence-panel\s*\{[^}]*display:\s*grid;/su)
     expect(css).toMatch(/\.media-search-results ol\s*\{[^}]*max-height:\s*320px;[^}]*overflow:\s*auto;/su)
     expect(css).toMatch(/@media \(max-width: 540px\)[\s\S]*\.media-search-form\s*\{\s*grid-template-columns:\s*minmax\(0, 1fr\);/u)

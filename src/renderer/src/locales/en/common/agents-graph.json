@@ -1,0 +1,583 @@
+{
+  "subagentsPanel": {
+    "configModel": "configure model",
+    "delegatable": "Delegatable · usable in chat",
+    "system": "System · internal",
+    "global": "Global · shared",
+    "newSubagent": "New subagent",
+    "delegatableCount": "{{count}} delegatable roles",
+    "configuredCount": "{{count}} configured",
+    "showingCount": "Showing {{visible}} of {{total}}",
+    "policySummary": "Queue and session limits",
+    "search": "Search subagents",
+    "searchPlaceholder": "Search names, capabilities, or scenarios",
+    "clearSearch": "Clear search",
+    "toggleCategory": "Toggle {{category}} category",
+    "batchModel": "Batch model",
+    "mixedModels": "Mixed models",
+    "mixedConfiguration": "Multiple configurations",
+    "categoryConfiguration": "Category default configuration",
+    "categoryConfigurationDesc": "Apply the same defaults to every agent in this category",
+    "resetCategoryConfiguration": "Reset defaults",
+    "effectiveModel": "Effective model",
+    "batchModelAria": "Set the same model for all {{count}} agents in {{category}}",
+    "reasoning": "Reasoning",
+    "mixedReasoning": "Mixed reasoning",
+    "batchReasoningAria": "Set the same reasoning effort for all {{count}} agents in {{category}}",
+    "capabilities": "Capabilities",
+    "emptyTitle": "No matching agents",
+    "emptySearch": "Try another name, capability, or scenario.",
+    "emptyCategory": "Choose another category to continue browsing.",
+    "surface": {
+      "shared": "Base",
+      "code": "Code",
+      "write": "Write",
+      "design": "Design"
+    },
+    "surfaceInherited": "Inherited from Base",
+    "surfaceAssigned": "Available in this mode",
+    "surfaceUnassigned": "Not available in this mode",
+    "pagination": "Agent pages",
+    "pageSummary": "Page {{page}} of {{pages}} · {{count}} agents",
+    "previousPage": "Previous page",
+    "nextPage": "Next page",
+    "extensionAgents": {
+      "title": "Extension agents",
+      "description": "Agents beyond the base set · {{count}}",
+      "enabled": "Enabled",
+      "disabled": "Disabled",
+      "toggle": "Toggle extension agents",
+      "keepBaseOnly": "Keep base agents only",
+      "enableExtensions": "Enable extension agents",
+      "baseAlwaysAvailable": "Base agents are always available"
+    },
+    "category": {
+      "all": "All",
+      "baseAgent": "Base agents",
+      "development": "Development",
+      "review": "Review",
+      "quality": "Quality",
+      "planning": "Planning",
+      "operations": "Operations",
+      "research": "Research",
+      "custom": "Custom"
+    },
+    "smallModel": {
+      "name": "Small model",
+      "desc": "Default for Title & Summary"
+    },
+    "role": {
+      "general": {
+        "name": "General",
+        "desc": "Full tools · multi-step work"
+      },
+      "explore": {
+        "name": "Explore",
+        "desc": "Read-only · find & search code"
+      },
+      "component-designer": {
+        "name": "Component Designer",
+        "desc": "Focused interactive component prototype"
+      },
+      "design-reviewer": {
+        "name": "Design review",
+        "desc": "Visual hierarchy and accessibility · read-only"
+      },
+      "over-engineering-reviewer": {
+        "name": "Over-engineering review",
+        "desc": "Find removable complexity · read-only"
+      },
+      "code-reviewer": {
+        "name": "Code reviewer",
+        "desc": "Five-axis review · read-only"
+      },
+      "test-engineer": {
+        "name": "Test engineer",
+        "desc": "Test strategy · can write and run tests"
+      },
+      "security-auditor": {
+        "name": "Security auditor",
+        "desc": "Threats and OWASP risks · read-only"
+      },
+      "web-performance-auditor": {
+        "name": "Web performance auditor",
+        "desc": "Core Web Vitals · evidence-based"
+      },
+      "api-and-interface-design": {
+        "name": "API & Interface Architect",
+        "desc": "Stable public contracts · compatibility and validation"
+      },
+      "browser-testing-with-devtools": {
+        "name": "Web QA Planner",
+        "desc": "Browser and accessibility verification plans · read-only"
+      },
+      "ci-cd-and-automation": {
+        "name": "CI/CD Engineer",
+        "desc": "Pipelines, quality gates, and rollback-safe releases"
+      },
+      "code-review-and-quality": {
+        "name": "Code Quality Reviewer",
+        "desc": "Multi-axis correctness and architecture review · read-only"
+      },
+      "code-simplification": {
+        "name": "Code Simplification Engineer",
+        "desc": "Reduce complexity · preserve behavior"
+      },
+      "context-engineering": {
+        "name": "Context Engineer",
+        "desc": "Minimal authoritative context pack · read-only"
+      },
+      "debugging-and-error-recovery": {
+        "name": "Root Cause Debugger",
+        "desc": "Reproduce, localize, fix, and regression-test"
+      },
+      "deprecation-and-migration": {
+        "name": "Migration Engineer",
+        "desc": "Staged compatibility, data migration, and rollback"
+      },
+      "documentation-and-adrs": {
+        "name": "Documentation & ADR Engineer",
+        "desc": "Architecture decisions, guides, and API docs"
+      },
+      "doubt-driven-development": {
+        "name": "Doubt-Driven Reviewer",
+        "desc": "Challenge assumptions and designs · read-only"
+      },
+      "frontend-ui-engineering": {
+        "name": "Frontend UI Engineer",
+        "desc": "Accessible, responsive, product-quality interfaces"
+      },
+      "git-workflow-and-versioning": {
+        "name": "Git Workflow Engineer",
+        "desc": "Branches, atomic commits, and history safety"
+      },
+      "idea-refine": {
+        "name": "Idea Refinement Partner",
+        "desc": "Compare options, MVP bounds, and validation · read-only"
+      },
+      "incremental-implementation": {
+        "name": "Incremental Implementation Engineer",
+        "desc": "Thin, buildable, continuously verified slices"
+      },
+      "interview-me": {
+        "name": "Requirements Interviewer",
+        "desc": "Find gaps and high-information questions · read-only"
+      },
+      "observability-and-instrumentation": {
+        "name": "Observability Engineer",
+        "desc": "Logs, metrics, traces, and actionable alerts"
+      },
+      "performance-optimization": {
+        "name": "Performance Engineer",
+        "desc": "Measure bottlenecks and prove before/after impact"
+      },
+      "planning-and-task-breakdown": {
+        "name": "Implementation Planner",
+        "desc": "Dependency-aware, acceptance-driven tasks · read-only"
+      },
+      "security-and-hardening": {
+        "name": "Security Hardening Engineer",
+        "desc": "Threat-model and implement scoped security fixes"
+      },
+      "shipping-and-launch": {
+        "name": "Release Readiness Engineer",
+        "desc": "Go/no-go, rollout, and rollback plans · read-only"
+      },
+      "source-driven-development": {
+        "name": "Source-Driven Researcher",
+        "desc": "Ground guidance in version-matched sources · read-only"
+      },
+      "spec-driven-development": {
+        "name": "Specification Engineer",
+        "desc": "Scenarios, interfaces, and acceptance criteria · read-only"
+      },
+      "test-driven-development": {
+        "name": "TDD Engineer",
+        "desc": "Red-green-refactor with behavior-focused proof"
+      },
+      "using-agent-skills": {
+        "name": "Engineering Workflow Advisor",
+        "desc": "Map work to the smallest suitable agent sequence · read-only"
+      },
+      "write-outline-architect": {
+        "name": "Outline Architect",
+        "desc": "Structure, arguments, and narrative progression · read-only"
+      },
+      "write-draft-author": {
+        "name": "Draft Author",
+        "desc": "Long-form drafts and focused section writing"
+      },
+      "write-developmental-editor": {
+        "name": "Developmental Editor",
+        "desc": "Improve logic, structure, pacing, and clarity"
+      },
+      "write-copy-editor": {
+        "name": "Copy Editor",
+        "desc": "Polish tone, terminology, and grammar"
+      },
+      "write-fact-checker": {
+        "name": "Fact Checker",
+        "desc": "Verify claims, figures, and uncertainty · read-only"
+      },
+      "write-citation-researcher": {
+        "name": "Citation Researcher",
+        "desc": "Authoritative sources and traceable citations · read-only"
+      },
+      "design-product-planner": {
+        "name": "Product Design Planner",
+        "desc": "Direction, goals, flows, and tradeoffs · read-only"
+      },
+      "design-ux-researcher": {
+        "name": "UX Researcher",
+        "desc": "User journeys and usability research · read-only"
+      },
+      "design-screen-designer": {
+        "name": "Screen Designer",
+        "desc": "Complete responsive screens and interaction states"
+      },
+      "design-system-architect": {
+        "name": "Design System Architect",
+        "desc": "Semantic tokens, components, and variant constraints"
+      },
+      "design-code-binder": {
+        "name": "Design Code Binder",
+        "desc": "Map design nodes to routes and source files"
+      },
+      "design-handoff-specialist": {
+        "name": "Design Handoff Specialist",
+        "desc": "DESIGN.md, implementation notes, and handoff assets"
+      },
+      "compaction": {
+        "name": "Compaction",
+        "desc": "Configurable · defaults to main model"
+      },
+      "codeReview": {
+        "name": "Code review",
+        "desc": "Isolated read-only run · configurable"
+      },
+      "plan": {
+        "name": "Plan mode",
+        "desc": "Planning turns · defaults to the conversation model"
+      },
+      "title": {
+        "name": "Title",
+        "desc": "LLM · defaults to small model"
+      },
+      "summary": {
+        "name": "Summary",
+        "desc": "LLM · defaults to small model"
+      }
+    },
+    "builtin": "Built-in",
+    "customTag": "Custom",
+    "workspaceFile": "Defined in {{path}}",
+    "workspaceReadOnly": "Edit this role in .kun/agents/*.md"
+  },
+  "summarizeSession": "Summarize",
+  "summarizing": "Summarizing…",
+  "summarizeFailed": "Could not summarize this conversation",
+  "name": "Name",
+  "description": "Description",
+  "color": "Color",
+  "mode": "Mode",
+  "writeFocusModeEnter": "Enter focus mode",
+  "writeFocusModeExit": "Exit focus mode",
+  "writeFocusModeShortcut": "⌘/Ctrl + Shift + F",
+  "writeShowLineNumbers": "Show line numbers",
+  "writeHideLineNumbers": "Hide line numbers",
+  "writeEnableLineWrapping": "Enable line wrapping",
+  "writeDisableLineWrapping": "Disable line wrapping",
+  "systemPrompt": "System prompt",
+  "toolPolicy": "Tool access",
+  "graphModeSelector": "Orchestration mode",
+  "graphModeDirect": "Direct",
+  "graphModeDirectHint": "The main agent executes the task itself",
+  "graphModeGraph": "Graph",
+  "graphModeGraphHint": "Plan, delegate, supervise, review, and synthesize",
+  "graphModeRunning": "Running: Graph",
+  "graphModeNextTurnGraph": "Next turn: Graph",
+  "graphModeNextTurnHint": "Controls the next turn and cannot change the turn already running",
+  "graphModeDisabledHint": "Enable experimental Graph Mode in Settings → AI assistant",
+  "graphPanelTitle": "Graph Mode",
+  "graphComposerPreview": "Graph run preview",
+  "graphComposerProgress": "{{status}} · {{completed}} / {{total}} nodes accepted",
+  "graphComposerAria": "Graph run: {{status}}, {{completed}} of {{total}} nodes accepted. Hover or focus to preview.",
+  "graphComposerPreviewSummary": "Directed Graph preview with {{phases}} phases and {{nodes}} nodes",
+  "graphComposerOpenFull": "Open full Graph",
+  "graphComposerActiveAgents": "{{count}} active subagents",
+  "graphComposerNoActiveAgents": "No active subagents",
+  "graphComposerAssignedAgent": "Assigned to {{agent}}",
+  "graphComposerNodeAria": "{{title}}, {{status}}, assigned to {{agent}}. Open node details.",
+  "graphCompletedAndRunning": "{{completed}}/{{total}} accepted · {{running}} running",
+  "graphLiveness_working": "Working",
+  "graphLiveness_active_review": "Lead reviewing",
+  "graphLiveness_waiting_lead": "Waiting for Lead review",
+  "graphLiveness_retry_scheduled": "Lead wake retry scheduled",
+  "graphLiveness_needs_attention": "Needs attention",
+  "graphLiveness_reviewing": "Lead reviewing",
+  "graphLiveness_retrying": "Preparing retry",
+  "graphLiveness_waiting_dependency": "Waiting for upstream node",
+  "graphLiveness_waiting_human": "Waiting for input",
+  "graphLiveness_queued": "Queued",
+  "graphLiveness_idle": "Ready",
+  "graphLiveness_done": "Completed",
+  "graphLiveness_failed": "Failed",
+  "graphSupervision_waiting_for_lead": "Waiting for the source Lead",
+  "graphSupervision_active_review": "The source Lead is reviewing",
+  "graphSupervision_active_peer_review": "An independent reviewer is reviewing",
+  "graphSupervision_retry_scheduled": "Lead wake retry scheduled",
+  "graphSupervision_needs_attention": "Graph supervision needs attention",
+  "graphSupervisionAction_review_required": "Review the submitted result",
+  "graphSupervisionAction_repair_required": "Decide how to repair the result",
+  "graphSupervisionAction_stall": "Resolve a stalled executor",
+  "graphSupervisionAction_conflict": "Resolve a Graph conflict",
+  "graphSupervisionAction_budget": "Resolve a Graph budget condition",
+  "graphSupervisionAction_help": "Handle an executor help request",
+  "graphSupervisionAction_recovery": "Recover Graph supervision",
+  "graphSupervisionAction_completion": "Complete and synthesize the Graph run",
+  "graphSupervisionAction_user_steering": "Apply user steering",
+  "graphSupervisionAction_worker_report": "Review an executor report",
+  "graphSupervisionAction_scheduler_error": "Handle a scheduler error",
+  "graphSupervisionRetries": "Wake retries",
+  "graphSupervisionNoProgress": "No-progress rounds",
+  "graphSupervisionLastWake": "Last wake",
+  "graphSupervisionNextWake": "Next wake",
+  "graphSupervisionWakeLead": "Wake Lead",
+  "graphSupervisionWakeHint": "Make this obligation due for the original source Lead; no replacement Lead is created.",
+  "graphSupervisionWaking": "Waking…",
+  "graphStillWaiting": "Still waiting for model/tool response · last activity {{seconds}}s ago",
+  "graphWaitingUpstream": "Waiting for an upstream node",
+  "graphTransitionReview": "Working → submitted → waiting for Lead review",
+  "graphTransitionRepair": "{{reason}} → preparing attempt #{{attempt}}",
+  "graphRepairReasonUnknown": "Review requested a revision",
+  "graphViewLiveWork": "View live work",
+  "graphCreatingChildSession": "Creating child session…",
+  "graphChildSessionUnavailable": "Child session is not ready yet; Graph is still running",
+  "graphBreadcrumbMain": "Main session",
+  "graphBreadcrumbAttempt": "Attempt #{{number}}",
+  "graphObserver_connecting": "Graph connecting",
+  "graphObserver_live": "Graph live",
+  "graphObserver_reconnecting": "Graph reconnecting",
+  "graphObserver_stopped": "Graph paused",
+  "graphReturnToGraph": "Return to Graph",
+  "graphPanelRun": "Run",
+  "graphPanelAgents": "Project Agents",
+  "graphPanelLearning": "Learning",
+  "graphEmptyRunTitle": "No Graph run in this thread",
+  "graphPlanningStatus_planning": "Inspecting the project",
+  "graphPlanningStatus_validating": "Validating the task plan",
+  "graphPlanningStatus_repairing": "The plan needs one correction",
+  "graphPlanningStatus_needs_correction": "The plan needs your guidance",
+  "graphPlanningStatus_committing": "Starting the Graph run",
+  "graphPlanningStatus_committed": "Graph run started",
+  "graphPlanningStatus_cancelled": "Graph planning cancelled",
+  "graphPlanningStatus_host_error": "Graph planning hit a system error",
+  "graphPlanningWorkingBody": "The Lead is inspecting repository facts and preparing a bounded task graph.",
+  "graphPlanningCorrectionBody": "The draft is saved. Review the exact fields below, add guidance in chat if needed, then continue planning.",
+  "graphPlanningTaskSummary": "Draft tasks",
+  "graphPlanningContinue": "Continue planning",
+  "graphPlanningCancel": "Cancel",
+  "graphEmptyRunBody": "Enable Graph Mode in Settings, select Graph in the composer, and send a task.",
+  "graphRunProgress": "rev {{revision}} · {{completed}}/{{total}} accepted · {{loops}} loops",
+  "graphProgressLabel": "Graph accepted progress",
+  "graphStateCounts": "Node state counts",
+  "graphCanvasLabel": "Directed Graph run",
+  "graphCanvasHelp": "Drag nodes · drag background to pan · scroll to zoom",
+  "graphCanvasTools": "Graph canvas tools",
+  "graphCanvasSelect": "Select and move nodes",
+  "graphCanvasPan": "Pan canvas",
+  "graphCanvasFit": "Fit graph to view",
+  "graphCanvasPanHelp": "Hand: drag anywhere to pan · scroll to zoom",
+  "graphCanvasSelectHelp": "Select: drag nodes · double-click for details · middle-drag to pan",
+  "graphOpenInspector": "Open details",
+  "graphCloseInspector": "Close details",
+  "graphInspectorRunOverview": "Run overview and controls",
+  "graphInspectorSections": "Node detail sections",
+  "graphInspectorOverview": "Overview",
+  "graphInspectorExecution": "Execution",
+  "graphInspectorEvidence": "Evidence",
+  "graphSelectRun": "Select Graph run",
+  "graphMetricProgress": "Accepted",
+  "graphRevisionShort": "rev {{revision}}",
+  "graphMetricNodes": "nodes",
+  "graphActiveAgents": "Active agents",
+  "graphMetricRunning": "running",
+  "graphMetricTotal": "total",
+  "graphListFallback": "Accessible list",
+  "graphTogglePhase": "Toggle phase {{phase}} with {{count}} nodes",
+  "graphSteerNodePlaceholder": "Steer selected node…",
+  "graphSteerRunPlaceholder": "Steer this run…",
+  "graphSendSteering": "Send steering",
+  "graphResizeInspector": "Resize Graph details",
+  "graphNodeDetails": "Selected node details",
+  "graphRunDetails": "Graph run details",
+  "graphActionStart": "Start",
+  "graphActionPause": "Pause",
+  "graphActionResume": "Resume",
+  "graphActionCancel": "Cancel",
+  "graphActionCleanup": "Clean up resources",
+  "graphActionExport": "Export",
+  "graphActionRestore": "Restore",
+  "graphActionDormant": "Mark dormant",
+  "graphActionArchive": "Archive",
+  "graphActionDelete": "Delete",
+  "graphActionApprove": "Approve",
+  "graphActionReject": "Reject",
+  "graphActionStartProbation": "Start probation",
+  "graphActionPromote": "Promote",
+  "graphActionRollback": "Rollback",
+  "graphActionRebind": "Rebind",
+  "graphRiskLabel": "{{risk}} risk",
+  "graphRisk_low": "low",
+  "graphRisk_medium": "medium",
+  "graphRisk_high": "high",
+  "graphRisk_critical": "critical",
+  "graphMetricAgent": "Agent",
+  "graphMetricProfile": "Profile",
+  "graphMetricModel": "Model",
+  "graphMetricProvider": "Provider",
+  "graphMetricAttempt": "Attempt",
+  "graphMetricTokens": "Tokens",
+  "graphMetricElapsed": "Elapsed",
+  "graphMetricSandbox": "Sandbox",
+  "graphMetricChildSession": "Child session",
+  "graphPlannedAssignment": "Planned subagent",
+  "graphDispatchState": "Dispatch state",
+  "graphDispatchNotStarted": "not dispatched",
+  "graphDispatchAdmitted": "admitted",
+  "graphDispatchChildCreated": "child session created",
+  "graphDispatchAdmissionFailed": "admission failed",
+  "graphChildSessionPending": "not created yet",
+  "graphRequestedProfile": "Requested profile",
+  "graphRoutingDecision": "Routing decision",
+  "graphLatestTransitionReason": "Latest state reason",
+  "graphNodeTimeout": "Node timeout",
+  "graphNodeAttemptsLimit": "Max attempts",
+  "graphInheritedValue": "inherited",
+  "graphAssignmentPolicy": "Frozen assignment policy",
+  "graphReasoningLabel": "Reasoning",
+  "graphApprovalLabel": "Approval",
+  "graphToolPolicyLabel": "Tool policy",
+  "graphNetworkLabel": "Network",
+  "graphWallTimeLabel": "Wall-time limit",
+  "graphEnabledValue": "enabled",
+  "graphDisabledValue": "disabled",
+  "graphAllowedTools": "Allowed tools",
+  "graphBlockedTools": "Blocked tools",
+  "graphAllowedSkills": "Allowed skills",
+  "graphBlockedSkills": "Blocked skills",
+  "graphAllowedMcp": "Allowed MCP servers",
+  "graphBlockedMcp": "Blocked MCP servers",
+  "graphReadScopes": "Read scopes",
+  "graphFrozenContext": "Frozen execution context",
+  "graphWorkspaceRoot": "Workspace",
+  "graphCapturedAt": "Captured",
+  "graphSystemPrompt": "System prompt",
+  "graphOpenChildSession": "Open child session",
+  "graphOpenAttemptSession": "Open attempt #{{number}} session",
+  "graphRebindProfilePlaceholder": "Existing profile ID",
+  "graphAttemptHistory": "Attempt history ({{count}})",
+  "graphTokenCount": "{{count}} tokens",
+  "graphDependencies": "Dependencies",
+  "graphWriteScopes": "Write scopes",
+  "graphAcceptanceCriteria": "Acceptance criteria",
+  "graphRequiredResultFields": "Required result fields",
+  "graphValidationIssues": "Validation issues",
+  "graphWorktrees": "Worktrees",
+  "graphChangedFiles": "Changed files",
+  "graphChecks": "Checks",
+  "graphEvidenceLabel": "Evidence",
+  "graphRisksLabel": "Risks",
+  "graphArtifacts": "Artifacts",
+  "graphArtifactLoading": "Loading bounded artifact preview…",
+  "graphArtifactPreview": "Bounded artifact preview",
+  "graphArtifactNextPage": "Next page",
+  "graphMailbox": "Mailbox",
+  "graphReviews": "Reviews",
+  "graphApproveResult": "Approve result",
+  "graphRejectResult": "Reject result",
+  "graphRetryNode": "Retry node",
+  "graphAttempts": "Attempts",
+  "graphMessages": "Messages",
+  "graphRevisionHistory": "Revision history ({{count}})",
+  "graphRevisionSummary": "Revision {{revision}} · {{nodes}} nodes · {{edges}} edges",
+  "graphRevisionDelta": "{{delta}} nodes",
+  "graphOriginalPlan": "original plan",
+  "graphLoopExplanation": "Loop gates have continued {{count}} time(s). Amber dashed edges mark bounded continuation paths; every gate exits or applies its exhaustion outcome.",
+  "graphLatestCommunication": "Latest communication",
+  "graphFinalSynthesis": "Final synthesis",
+  "graphCleanupDisposition": "Cleanup disposition",
+  "graphPatchEditor": "Apply a versioned GraphPatch",
+  "graphPatchReason": "Reason for this graph revision",
+  "graphPatchOperations": "One operation or an array of operations in JSON",
+  "graphPatchInvalid": "Enter a reason and valid GraphPatch operation JSON.",
+  "graphPatchApplying": "Applying…",
+  "graphApplyPatch": "Apply patch",
+  "graphRoutingExplanation": "Routing first checks permissions, scope, tools, skills, MCP, network, and risk. The score then combines task fit, verified quality, trust, freshness, efficiency, confidence, availability, and current load.",
+  "graphPortableProfiles": "Portable profiles and merge",
+  "graphPortablePaste": "Paste a kun.graph-agent-profile export…",
+  "graphImportCandidate": "Import as candidate",
+  "graphPortableExportLabel": "Portable project-agent export",
+  "graphMergedProfileName": "Merged profile name",
+  "graphMergeSelected": "Merge selected ({{count}})",
+  "graphNoAgentsTitle": "No persistent Project Agents yet",
+  "graphNoAgentsBody": "Graph uses constrained ephemeral workers until repeated verified patterns are learned and approved.",
+  "graphSelectForMerge": "Select {{name}} for merge",
+  "graphEvidenceCount": "{{count}} evidence",
+  "graphAliasesLabel": "Aliases",
+  "graphProfilePolicy": "Profile policy and provenance",
+  "graphScoreFit": "Fit",
+  "graphScoreQuality": "Quality",
+  "graphScoreTrust": "Trust",
+  "graphScoreFreshness": "Fresh",
+  "graphScoreEfficiency": "Eff.",
+  "graphScoreConfidence": "Conf.",
+  "graphScoreAvailability": "Avail.",
+  "graphScoreLoad": "Load",
+  "graphGovernanceHistory": "Governance history",
+  "graphAsyncConsolidation": "Async consolidation",
+  "graphAsyncConsolidationBody": "Find repeated success across distinct sessions.",
+  "graphScanNow": "Scan now",
+  "graphEpisodeCount": "{{count}} episodes",
+  "graphNoCandidatesTitle": "No learning candidates",
+  "graphNoCandidatesBody": "Candidates appear only after enough successful, independently verified sessions.",
+  "graphProvenanceDraft": "Provenance and draft",
+  "graphEpisodesLabel": "Episodes",
+  "graphRequestedCapabilities": "Requested: {{policy}} · {{tools}} tools · {{skills}} skills · {{mcp}} MCP servers · {{scopes}} write scopes · network {{network}}",
+  "graphRollbackLabel": "Rollback",
+  "graphYes": "yes",
+  "graphNo": "no",
+  "graphStatus_draft": "draft",
+  "graphStatus_validating": "validating",
+  "graphStatus_ready": "ready",
+  "graphStatus_running": "running",
+  "graphStatus_pausing": "pausing",
+  "graphStatus_paused": "paused",
+  "graphStatus_awaiting_supervision": "awaiting supervision",
+  "graphStatus_awaiting_human": "awaiting human",
+  "graphStatus_completing": "completing",
+  "graphStatus_completed": "completed",
+  "graphStatus_failed": "failed",
+  "graphStatus_cancelled": "cancelled",
+  "graphStatus_pending": "pending",
+  "graphStatus_blocked": "waiting upstream",
+  "graphStatus_queued": "queued",
+  "graphStatus_submitted": "submitted",
+  "graphStatus_reviewing": "reviewing",
+  "graphStatus_accepted": "accepted",
+  "graphStatus_repair_required": "repair required",
+  "graphStatus_skipped": "skipped",
+  "graphStatus_superseded": "superseded",
+  "graphStatus_candidate": "candidate",
+  "graphStatus_probation": "probation",
+  "graphStatus_trusted": "trusted",
+  "graphStatus_dormant": "dormant",
+  "graphStatus_archived": "archived",
+  "graphStatus_deleted": "deleted",
+  "graphStatus_approved": "approved",
+  "graphStatus_rejected": "rejected",
+  "graphStatus_promoted": "promoted",
+  "graphStatus_rolled_back": "rolled back",
+  "graphStatus_merged": "merged",
+  "rightPanelGraph": "Graph"
+}

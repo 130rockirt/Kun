@@ -1,0 +1,607 @@
+.ds-ui-plugin-scene-artwork[data-scene-anchor='top'] {
+  --kun-ui-plugin-scene-anchor-translate-x: -50%;
+  --kun-ui-plugin-scene-anchor-translate-y: 0%;
+  top: 0;
+  left: 50%;
+}
+
+.ds-ui-plugin-scene-artwork[data-scene-anchor='top-right'] {
+  --kun-ui-plugin-scene-anchor-translate-x: -100%;
+  --kun-ui-plugin-scene-anchor-translate-y: 0%;
+  top: 0;
+  left: 100%;
+}
+
+.ds-ui-plugin-scene-artwork[data-scene-anchor='left'] {
+  --kun-ui-plugin-scene-anchor-translate-x: 0%;
+  --kun-ui-plugin-scene-anchor-translate-y: -50%;
+  top: 50%;
+  left: 0;
+}
+
+.ds-ui-plugin-scene-artwork[data-scene-anchor='center'] {
+  --kun-ui-plugin-scene-anchor-translate-x: -50%;
+  --kun-ui-plugin-scene-anchor-translate-y: -50%;
+  top: 50%;
+  left: 50%;
+}
+
+.ds-ui-plugin-scene-artwork[data-scene-anchor='right'] {
+  --kun-ui-plugin-scene-anchor-translate-x: -100%;
+  --kun-ui-plugin-scene-anchor-translate-y: -50%;
+  top: 50%;
+  left: 100%;
+}
+
+.ds-ui-plugin-scene-artwork[data-scene-anchor='bottom-left'] {
+  --kun-ui-plugin-scene-anchor-translate-x: 0%;
+  --kun-ui-plugin-scene-anchor-translate-y: -100%;
+  top: 100%;
+  left: 0;
+}
+
+.ds-ui-plugin-scene-artwork[data-scene-anchor='bottom'] {
+  --kun-ui-plugin-scene-anchor-translate-x: -50%;
+  --kun-ui-plugin-scene-anchor-translate-y: -100%;
+  top: 100%;
+  left: 50%;
+}
+
+.ds-ui-plugin-scene-artwork[data-scene-anchor='bottom-right'] {
+  --kun-ui-plugin-scene-anchor-translate-x: -100%;
+  --kun-ui-plugin-scene-anchor-translate-y: -100%;
+  top: 100%;
+  left: 100%;
+}
+
+.ds-ui-plugin-scene-artwork[data-scene-variant='dark'] {
+  display: none;
+}
+
+html[data-theme='dark']
+  .ds-ui-plugin-scene-artwork[data-scene-variant='default'][data-scene-has-dark='true'] {
+  display: none;
+}
+
+html[data-theme='dark'] .ds-ui-plugin-scene-artwork[data-scene-variant='dark'] {
+  display: block;
+}
+
+html[data-ui-plugin-scene='on'] .ds-ui-plugin-scene-character {
+  z-index: 2;
+  inset: 0;
+  width: 86%;
+  height: 100%;
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  opacity: var(--kun-ui-plugin-scene-character-opacity, 1);
+  object-fit: contain;
+  object-position: center;
+  translate: var(--kun-ui-plugin-scene-character-offset-x, 0%)
+    var(--kun-ui-plugin-scene-character-offset-y, 0%);
+  transform-origin: 50% 62%;
+}
+
+html[data-ui-plugin-scene-layout='rail-left'] .ds-ui-plugin-scene-character,
+html[data-ui-plugin-scene-layout='card-left'] .ds-ui-plugin-scene-character {
+  margin-right: auto;
+  margin-left: 0;
+}
+
+html[data-ui-plugin-scene-character-scale='compact'] .ds-ui-plugin-scene-character {
+  width: 70%;
+}
+
+html[data-ui-plugin-scene-character-scale='hero'] .ds-ui-plugin-scene-character {
+  width: 100%;
+}
+
+/* Backdrop-right keeps a deliberate right-side silhouette at every scale.
+ * These layout+scale selectors follow the generic scale rules so they cannot
+ * be overwritten by the default 70/86/100% character widths. */
+html[data-ui-plugin-scene-layout='backdrop-right'][data-ui-plugin-scene-character-scale='compact']
+  .ds-ui-plugin-scene-character {
+  width: min(52%, 44rem);
+}
+
+html[data-ui-plugin-scene-layout='backdrop-right'][data-ui-plugin-scene-character-scale='standard']
+  .ds-ui-plugin-scene-character {
+  width: min(68%, 58rem);
+}
+
+html[data-ui-plugin-scene-layout='backdrop-right'][data-ui-plugin-scene-character-scale='hero']
+  .ds-ui-plugin-scene-character {
+  width: min(78%, 66rem);
+}
+
+html[data-ui-plugin-scene-character-fit='cover'] .ds-ui-plugin-scene-character {
+  object-fit: cover;
+}
+
+html[data-ui-plugin-scene-character-focal-point='top-left'] .ds-ui-plugin-scene-character {
+  object-position: left top;
+}
+
+html[data-ui-plugin-scene-character-focal-point='top'] .ds-ui-plugin-scene-character {
+  object-position: center top;
+}
+
+html[data-ui-plugin-scene-character-focal-point='top-right'] .ds-ui-plugin-scene-character {
+  object-position: right top;
+}
+
+html[data-ui-plugin-scene-character-focal-point='left'] .ds-ui-plugin-scene-character {
+  object-position: left center;
+}
+
+html[data-ui-plugin-scene-character-focal-point='right'] .ds-ui-plugin-scene-character {
+  object-position: right center;
+}
+
+html[data-ui-plugin-scene-character-focal-point='bottom-left'] .ds-ui-plugin-scene-character {
+  object-position: left bottom;
+}
+
+html[data-ui-plugin-scene-character-focal-point='bottom'] .ds-ui-plugin-scene-character {
+  object-position: center bottom;
+}
+
+html[data-ui-plugin-scene-character-focal-point='bottom-right'] .ds-ui-plugin-scene-character {
+  object-position: right bottom;
+}
+
+html[data-ui-plugin-scene-character-mask='soft-card'] .ds-ui-plugin-scene-character {
+  border-radius: 2.4rem;
+}
+
+html[data-ui-plugin-scene-character-mask='circle'] .ds-ui-plugin-scene-character {
+  border-radius: 50%;
+  clip-path: circle(48% at 50% 50%);
+}
+
+html[data-ui-plugin-scene-character-mask='arch'] .ds-ui-plugin-scene-character {
+  border-radius: 48% 48% 1.4rem 1.4rem / 34% 34% 1.4rem 1.4rem;
+  clip-path: inset(0 round 48% 48% 1.4rem 1.4rem / 34% 34% 1.4rem 1.4rem);
+}
+
+html[data-ui-plugin-scene-character-mask='diamond'] .ds-ui-plugin-scene-character {
+  clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
+}
+
+html[data-ui-plugin-scene-character-mask='hologram'] .ds-ui-plugin-scene-character {
+  clip-path: polygon(4% 0, 96% 0, 100% 8%, 100% 92%, 96% 100%, 4% 100%, 0 92%, 0 8%);
+}
+
+html[data-ui-plugin-scene-character-mask='portal'] .ds-ui-plugin-scene-character {
+  border-radius: 46% 46% 42% 42% / 36% 36% 50% 50%;
+  clip-path: ellipse(48% 49% at 50% 50%);
+}
+
+html[data-ui-plugin-scene-character-mask='polaroid'] .ds-ui-plugin-scene-character {
+  clip-path: inset(2% 3% 11% round 0.35rem);
+}
+
+html[data-ui-plugin-scene-character-mask='ticket'] .ds-ui-plugin-scene-character {
+  clip-path: polygon(4% 0, 96% 0, 100% 7%, 96% 14%, 100% 21%, 96% 28%, 100% 35%, 96% 42%, 100% 50%, 96% 58%, 100% 65%, 96% 72%, 100% 79%, 96% 86%, 100% 93%, 96% 100%, 4% 100%, 0 93%, 4% 86%, 0 79%, 4% 72%, 0 65%, 4% 58%, 0 50%, 4% 42%, 0 35%, 4% 28%, 0 21%, 4% 14%, 0 7%);
+}
+
+html[data-ui-plugin-scene-character-flip-x='on'] .ds-ui-plugin-scene-character {
+  scale: -1 1;
+}
+
+html[data-ui-plugin-scene-character-motion='breathe'] .ds-ui-plugin-scene-character {
+  animation-name: ds-ui-plugin-character-breathe;
+}
+
+html[data-ui-plugin-scene-character-motion='float'] .ds-ui-plugin-scene-character {
+  animation-name: ds-ui-plugin-character-float;
+}
+
+html[data-ui-plugin-scene-character-motion='sway'] .ds-ui-plugin-scene-character {
+  animation-name: ds-ui-plugin-scene-sway;
+}
+
+html[data-ui-plugin-scene-character-motion='none'] .ds-ui-plugin-scene-character {
+  animation: none;
+}
+
+html[data-ui-plugin-scene='on'] .ds-ui-plugin-scene-character,
+.ds-ui-plugin-scene-artwork[data-scene-motion]:not([data-scene-motion='none']) {
+  animation-duration: var(--kun-ui-plugin-scene-motion-duration, 8s);
+  --kun-ui-plugin-scene-motion-phase-b: -2.64s;
+  --kun-ui-plugin-scene-motion-phase-c: -5.28s;
+  animation-timing-function: ease-in-out;
+  animation-iteration-count: infinite;
+}
+
+html[data-ui-plugin-scene-character-motion-speed='slow'] .ds-ui-plugin-scene-character,
+.ds-ui-plugin-scene-artwork[data-scene-motion-speed='slow'] {
+  --kun-ui-plugin-scene-motion-duration: 12s;
+  --kun-ui-plugin-scene-motion-phase-b: -4s;
+  --kun-ui-plugin-scene-motion-phase-c: -8s;
+}
+
+html[data-ui-plugin-scene-character-motion-speed='fast'] .ds-ui-plugin-scene-character,
+.ds-ui-plugin-scene-artwork[data-scene-motion-speed='fast'] {
+  --kun-ui-plugin-scene-motion-duration: 5s;
+  --kun-ui-plugin-scene-motion-phase-b: -1.65s;
+  --kun-ui-plugin-scene-motion-phase-c: -3.3s;
+}
+
+html[data-ui-plugin-scene-character-motion-phase='b'] .ds-ui-plugin-scene-character,
+.ds-ui-plugin-scene-artwork[data-scene-motion-phase='b'] {
+  animation-delay: var(--kun-ui-plugin-scene-motion-phase-b, -2.64s);
+}
+
+html[data-ui-plugin-scene-character-motion-phase='c'] .ds-ui-plugin-scene-character,
+.ds-ui-plugin-scene-artwork[data-scene-motion-phase='c'] {
+  animation-delay: var(--kun-ui-plugin-scene-motion-phase-c, -5.28s);
+}
+
+.ds-ui-plugin-scene-artwork[data-scene-motion='float'] {
+  animation-name: ds-ui-plugin-scene-float;
+}
+
+.ds-ui-plugin-scene-artwork[data-scene-motion='drift-x'] {
+  animation-name: ds-ui-plugin-scene-drift-x;
+}
+
+.ds-ui-plugin-scene-artwork[data-scene-motion='drift-y'] {
+  animation-name: ds-ui-plugin-scene-drift-y;
+}
+
+.ds-ui-plugin-scene-artwork[data-scene-motion='pulse'] {
+  animation-name: ds-ui-plugin-scene-pulse;
+}
+
+.ds-ui-plugin-scene-artwork[data-scene-motion='orbit'] {
+  animation-name: ds-ui-plugin-scene-orbit;
+  animation-timing-function: linear;
+}
+
+.ds-ui-plugin-scene-artwork[data-scene-motion='twinkle'] {
+  animation-name: ds-ui-plugin-scene-twinkle;
+}
+
+.ds-ui-plugin-scene-artwork[data-scene-motion='scan'] {
+  animation-name: ds-ui-plugin-scene-scan;
+  animation-timing-function: linear;
+}
+
+@keyframes ds-ui-plugin-scene-sway {
+  0%,
+  100% {
+    transform: rotate(-0.8deg) translateY(0);
+  }
+  50% {
+    transform: rotate(0.8deg) translateY(-0.25rem);
+  }
+}
+
+@keyframes ds-ui-plugin-scene-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-0.7rem);
+  }
+}
+
+@keyframes ds-ui-plugin-scene-drift-x {
+  0%,
+  100% {
+    transform: translateX(-0.7rem);
+  }
+  50% {
+    transform: translateX(0.7rem);
+  }
+}
+
+@keyframes ds-ui-plugin-scene-drift-y {
+  0%,
+  100% {
+    transform: translateY(-0.55rem);
+  }
+  50% {
+    transform: translateY(0.55rem);
+  }
+}
+
+@keyframes ds-ui-plugin-scene-pulse {
+  0%,
+  100% {
+    transform: scale(0.985);
+  }
+  50% {
+    transform: scale(1.015);
+  }
+}
+
+@keyframes ds-ui-plugin-scene-orbit {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes ds-ui-plugin-scene-twinkle {
+  0%,
+  100% {
+    filter: brightness(0.92);
+    opacity: calc(var(--kun-ui-plugin-scene-layer-opacity) * 0.68);
+  }
+  50% {
+    filter: brightness(1.16);
+    opacity: var(--kun-ui-plugin-scene-layer-opacity);
+  }
+}
+
+@keyframes ds-ui-plugin-scene-scan {
+  0% {
+    clip-path: inset(0 0 92% 0);
+  }
+  50% {
+    clip-path: inset(46% 0 46% 0);
+  }
+  100% {
+    clip-path: inset(92% 0 0 0);
+  }
+}
+
+/* v1.6 chrome recipes affect only fixed Kun surfaces. */
+html[data-ui-plugin-scene-chrome-sidebar='soft'] :is(.ds-sidebar-shell, .ds-settings-sidebar),
+html[data-ui-plugin-scene-chrome-topbar='soft'] .ds-topbar-surface,
+html[data-ui-plugin-scene-chrome-composer='soft'] .ds-composer-shell.ds-chat-composer,
+html[data-ui-plugin-scene-chrome-cards='soft']
+  :is(.ds-card-soft, .ds-card-strong, .ds-card-muted, .ds-card-ghost, .ds-surface-soft, .ds-surface-strong) {
+  border-radius: 1.8rem;
+  border-color: color-mix(in srgb, var(--ds-accent) 18%, var(--ds-border));
+  box-shadow: 0 18px 46px color-mix(in srgb, var(--ds-accent) 12%, transparent);
+}
+
+html[data-ui-plugin-scene-chrome-sidebar='editorial'] :is(.ds-sidebar-shell, .ds-settings-sidebar),
+html[data-ui-plugin-scene-chrome-topbar='editorial'] .ds-topbar-surface,
+html[data-ui-plugin-scene-chrome-composer='editorial'] .ds-composer-shell.ds-chat-composer,
+html[data-ui-plugin-scene-chrome-cards='editorial']
+  :is(.ds-card-soft, .ds-card-strong, .ds-card-muted, .ds-card-ghost, .ds-surface-soft, .ds-surface-strong) {
+  border-radius: 0.45rem;
+  border-color: color-mix(in srgb, var(--ds-accent) 40%, var(--ds-border));
+  box-shadow:
+    inset 3px 0 0 color-mix(in srgb, var(--ds-accent) 72%, transparent),
+    0 12px 30px rgba(27, 31, 39, 0.1);
+}
+
+html[data-ui-plugin-scene-chrome-sidebar='paper'] :is(.ds-sidebar-shell, .ds-settings-sidebar),
+html[data-ui-plugin-scene-chrome-topbar='paper'] .ds-topbar-surface,
+html[data-ui-plugin-scene-chrome-composer='paper'] .ds-composer-shell.ds-chat-composer,
+html[data-ui-plugin-scene-chrome-cards='paper']
+  :is(.ds-card-soft, .ds-card-strong, .ds-card-muted, .ds-card-ghost, .ds-surface-soft, .ds-surface-strong) {
+  border-radius: 0.85rem 1.35rem 0.9rem 1.25rem;
+  border-color: color-mix(in srgb, var(--ds-accent) 22%, #a98252 78%);
+  background-color: color-mix(in srgb, var(--kun-ui-plugin-host-surface-color) 90%, #f1dfb6 10%);
+  box-shadow: 8px 10px 0 color-mix(in srgb, var(--ds-accent) 6%, transparent);
+}
+
+html[data-ui-plugin-scene-chrome-sidebar='crystal'] :is(.ds-sidebar-shell, .ds-settings-sidebar),
+html[data-ui-plugin-scene-chrome-topbar='crystal'] .ds-topbar-surface,
+html[data-ui-plugin-scene-chrome-composer='crystal'] .ds-composer-shell.ds-chat-composer,
+html[data-ui-plugin-scene-chrome-cards='crystal']
+  :is(.ds-card-soft, .ds-card-strong, .ds-card-muted, .ds-card-ghost, .ds-surface-soft, .ds-surface-strong) {
+  border-radius: 1.9rem 0.6rem 2.2rem 0.8rem;
+  border-color: color-mix(in srgb, var(--ds-accent) 50%, white 50%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.62),
+    0 0 0 3px color-mix(in srgb, var(--ds-accent) 6%, transparent),
+    0 18px 52px color-mix(in srgb, var(--ds-accent) 18%, transparent);
+}
+
+html[data-ui-plugin-scene-chrome-sidebar='hologram'] :is(.ds-sidebar-shell, .ds-settings-sidebar),
+html[data-ui-plugin-scene-chrome-topbar='hologram'] .ds-topbar-surface,
+html[data-ui-plugin-scene-chrome-composer='hologram'] .ds-composer-shell.ds-chat-composer,
+html[data-ui-plugin-scene-chrome-cards='hologram']
+  :is(.ds-card-soft, .ds-card-strong, .ds-card-muted, .ds-card-ghost, .ds-surface-soft, .ds-surface-strong) {
+  border-radius: 1rem;
+  border-color: color-mix(in srgb, var(--ds-accent) 58%, #7af5ff 42%);
+  box-shadow:
+    inset 0 0 24px rgba(116, 239, 255, 0.1),
+    0 0 26px color-mix(in srgb, var(--ds-accent) 22%, transparent);
+}
+
+html[data-ui-plugin-scene-chrome-sidebar='backstage'] :is(.ds-sidebar-shell, .ds-settings-sidebar),
+html[data-ui-plugin-scene-chrome-topbar='backstage'] .ds-topbar-surface,
+html[data-ui-plugin-scene-chrome-composer='backstage'] .ds-composer-shell.ds-chat-composer,
+html[data-ui-plugin-scene-chrome-cards='backstage']
+  :is(.ds-card-soft, .ds-card-strong, .ds-card-muted, .ds-card-ghost, .ds-surface-soft, .ds-surface-strong) {
+  border: 2px solid color-mix(in srgb, var(--ds-accent) 48%, #d7aa58 52%);
+  border-radius: 0.5rem 1.9rem;
+  box-shadow:
+    inset 0 0 0 3px color-mix(in srgb, var(--ds-accent) 7%, transparent),
+    0 20px 48px rgba(42, 20, 39, 0.2);
+}
+
+html[data-ui-plugin-scene-chrome-sidebar='portal'] :is(.ds-sidebar-shell, .ds-settings-sidebar),
+html[data-ui-plugin-scene-chrome-topbar='portal'] .ds-topbar-surface,
+html[data-ui-plugin-scene-chrome-composer='portal'] .ds-composer-shell.ds-chat-composer,
+html[data-ui-plugin-scene-chrome-cards='portal']
+  :is(.ds-card-soft, .ds-card-strong, .ds-card-muted, .ds-card-ghost, .ds-surface-soft, .ds-surface-strong) {
+  border: 3px double color-mix(in srgb, var(--ds-accent) 64%, white 36%);
+  border-radius: 2.4rem;
+  box-shadow:
+    0 0 0 5px color-mix(in srgb, var(--ds-accent) 6%, transparent),
+    0 0 42px color-mix(in srgb, var(--ds-accent) 22%, transparent);
+}
+
+html[data-ui-plugin-scene-chrome-sidebar='polaroid'] :is(.ds-sidebar-shell, .ds-settings-sidebar),
+html[data-ui-plugin-scene-chrome-topbar='polaroid'] .ds-topbar-surface,
+html[data-ui-plugin-scene-chrome-composer='polaroid'] .ds-composer-shell.ds-chat-composer,
+html[data-ui-plugin-scene-chrome-cards='polaroid']
+  :is(.ds-card-soft, .ds-card-strong, .ds-card-muted, .ds-card-ghost, .ds-surface-soft, .ds-surface-strong) {
+  border: 1px solid rgba(50, 55, 67, 0.13);
+  border-radius: 0.35rem;
+  background-color: color-mix(in srgb, var(--kun-ui-plugin-host-surface-color) 94%, #fff4dd 6%);
+  box-shadow:
+    -7px 10px 0 color-mix(in srgb, var(--ds-accent) 7%, transparent),
+    0 20px 44px rgba(26, 31, 42, 0.16);
+}
+
+html[data-ui-plugin-scene-chrome-sidebar='ticket'] :is(.ds-sidebar-shell, .ds-settings-sidebar),
+html[data-ui-plugin-scene-chrome-topbar='ticket'] .ds-topbar-surface,
+html[data-ui-plugin-scene-chrome-composer='ticket'] .ds-composer-shell.ds-chat-composer,
+html[data-ui-plugin-scene-chrome-cards='ticket']
+  :is(.ds-card-soft, .ds-card-strong, .ds-card-muted, .ds-card-ghost, .ds-surface-soft, .ds-surface-strong) {
+  border: 2px dashed color-mix(in srgb, var(--ds-accent) 50%, #987044 50%);
+  border-radius: 0.65rem 1.8rem;
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--kun-ui-plugin-host-bg-color) 82%, transparent);
+}
+
+html[data-ui-plugin-scene-chrome-sidebar='seal'] :is(.ds-sidebar-shell, .ds-settings-sidebar),
+html[data-ui-plugin-scene-chrome-topbar='seal'] .ds-topbar-surface,
+html[data-ui-plugin-scene-chrome-composer='seal'] .ds-composer-shell.ds-chat-composer,
+html[data-ui-plugin-scene-chrome-cards='seal']
+  :is(.ds-card-soft, .ds-card-strong, .ds-card-muted, .ds-card-ghost, .ds-surface-soft, .ds-surface-strong) {
+  border: 3px double color-mix(in srgb, var(--ds-accent) 58%, #c79543 42%);
+  border-radius: 1.5rem;
+  box-shadow:
+    0 0 0 5px color-mix(in srgb, var(--ds-accent) 7%, transparent),
+    0 18px 44px color-mix(in srgb, var(--ds-accent) 16%, transparent);
+}
+
+/* Character-specific v1.6 chrome recipes. These selectors only restyle
+ * existing Kun surfaces: they never create plugin-owned DOM or hit targets. */
+html[data-ui-plugin-scene-chrome-sidebar='botanical']
+  :is(.ds-sidebar-shell, .ds-settings-sidebar),
+html[data-ui-plugin-scene-chrome-topbar='botanical'] .ds-topbar-surface,
+html[data-ui-plugin-scene-chrome-composer='botanical'] .ds-composer-shell.ds-chat-composer,
+html[data-ui-plugin-scene-chrome-cards='botanical']
+  :is(
+    .ds-card-soft,
+    .ds-card-strong,
+    .ds-card-muted,
+    .ds-card-ghost,
+    .ds-surface-soft,
+    .ds-surface-strong,
+    .ds-user-message-bubble,
+    .ds-chat-answer
+  ),
+html[data-ui-plugin-scene-chrome-cards='botanical']
+  .ds-markdown
+  [data-streamdown='table-wrapper']
+  > div:last-child,
+html[data-ui-plugin-scene-chrome-cards='botanical']
+  .ds-markdown
+  [data-streamdown='table'] {
+  --ds-sidebar-haze: radial-gradient(
+    circle at 12% 8%,
+    color-mix(in srgb, var(--ds-accent) 13%, transparent),
+    transparent 34%
+  );
+  --ds-table-head-bg: color-mix(in srgb, var(--ds-accent) 12%, var(--kun-ui-plugin-host-surface-color));
+  border: 1px solid color-mix(in srgb, var(--ds-accent) 32%, #789883 68%);
+  border-radius: 1.8rem 0.75rem 1.45rem 0.95rem;
+  background:
+    radial-gradient(circle at 8% 2%, color-mix(in srgb, #e98eb1 18%, transparent), transparent 27%),
+    radial-gradient(circle at 94% 92%, color-mix(in srgb, #79ae8c 18%, transparent), transparent 31%),
+    linear-gradient(
+      145deg,
+      color-mix(in srgb, var(--kun-ui-plugin-host-surface-color) 91%, #fff0f5 9%),
+      color-mix(in srgb, var(--kun-ui-plugin-host-surface-color) 87%, #dff2e6 13%)
+    );
+  box-shadow:
+    inset 4px 0 0 color-mix(in srgb, #79ae8c 22%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.48),
+    0 16px 38px color-mix(in srgb, #a94c76 13%, transparent);
+  -webkit-backdrop-filter: blur(18px) saturate(1.08);
+  backdrop-filter: blur(18px) saturate(1.08);
+}
+
+html[data-ui-plugin-scene-chrome-sidebar='fortune-ledger']
+  :is(.ds-sidebar-shell, .ds-settings-sidebar),
+html[data-ui-plugin-scene-chrome-topbar='fortune-ledger'] .ds-topbar-surface,
+html[data-ui-plugin-scene-chrome-composer='fortune-ledger']
+  .ds-composer-shell.ds-chat-composer,
+html[data-ui-plugin-scene-chrome-cards='fortune-ledger']
+  :is(
+    .ds-card-soft,
+    .ds-card-strong,
+    .ds-card-muted,
+    .ds-card-ghost,
+    .ds-surface-soft,
+    .ds-surface-strong,
+    .ds-user-message-bubble,
+    .ds-chat-answer
+  ),
+html[data-ui-plugin-scene-chrome-cards='fortune-ledger']
+  .ds-markdown
+  [data-streamdown='table-wrapper']
+  > div:last-child,
+html[data-ui-plugin-scene-chrome-cards='fortune-ledger']
+  .ds-markdown
+  [data-streamdown='table'] {
+  --ds-sidebar-haze: linear-gradient(90deg, rgba(160, 35, 31, 0.07), transparent 36%);
+  --ds-table-head-bg: color-mix(in srgb, #b82e2c 11%, var(--kun-ui-plugin-host-surface-color));
+  border: 2px solid color-mix(in srgb, #b82e2c 58%, #b49355 42%);
+  border-radius: 0.35rem;
+  background:
+    linear-gradient(
+      90deg,
+      transparent 0 2.15rem,
+      color-mix(in srgb, #b82e2c 20%, transparent) 2.15rem 2.22rem,
+      transparent 2.22rem
+    ),
+    repeating-linear-gradient(
+      0deg,
+      transparent 0 1.42rem,
+      color-mix(in srgb, #b49355 15%, transparent) 1.42rem 1.47rem
+    ),
+    color-mix(in srgb, var(--kun-ui-plugin-host-surface-color) 91%, #f5e6c7 9%);
+  box-shadow:
+    inset 0 0 0 3px color-mix(in srgb, #b49355 13%, transparent),
+    5px 7px 0 color-mix(in srgb, #8f2423 11%, transparent);
+  -webkit-backdrop-filter: blur(8px) saturate(1.04);
+  backdrop-filter: blur(8px) saturate(1.04);
+}
+
+html[data-ui-plugin-scene-chrome-sidebar='dream-gate']
+  :is(.ds-sidebar-shell, .ds-settings-sidebar),
+html[data-ui-plugin-scene-chrome-topbar='dream-gate'] .ds-topbar-surface,
+html[data-ui-plugin-scene-chrome-composer='dream-gate'] .ds-composer-shell.ds-chat-composer,
+html[data-ui-plugin-scene-chrome-cards='dream-gate']
+  :is(
+    .ds-card-soft,
+    .ds-card-strong,
+    .ds-card-muted,
+    .ds-card-ghost,
+    .ds-surface-soft,
+    .ds-surface-strong,
+    .ds-user-message-bubble,
+    .ds-chat-answer
+  ),
+html[data-ui-plugin-scene-chrome-cards='dream-gate']
+  .ds-markdown
+  [data-streamdown='table-wrapper']
+  > div:last-child,
+html[data-ui-plugin-scene-chrome-cards='dream-gate']
+  .ds-markdown
+  [data-streamdown='table'] {
+  --ds-sidebar-haze: radial-gradient(ellipse at 50% 0%, rgba(195, 34, 74, 0.15), transparent 48%);
+  --ds-table-head-bg: color-mix(in srgb, #c3224a 13%, var(--kun-ui-plugin-host-surface-color));
+  border: 2px solid color-mix(in srgb, #c3224a 52%, #cda15f 48%);
+  border-radius: 2.4rem 2.4rem 0.7rem 0.7rem;
+  background:
+    radial-gradient(
+      ellipse at 50% 112%,
+      color-mix(in srgb, #c3224a 22%, transparent),
+      transparent 58%
+    ),
+    radial-gradient(circle at 50% -12%, color-mix(in srgb, #d5a85e 18%, transparent), transparent 46%),
+    color-mix(in srgb, var(--kun-ui-plugin-host-surface-color) 88%, #f4d9df 12%);
+  box-shadow:
+    inset 0 0 0 4px color-mix(in srgb, #c3224a 8%, transparent),
+    0 0 34px color-mix(in srgb, #c3224a 19%, transparent);
+  -webkit-backdrop-filter: blur(16px) saturate(1.12);
+  backdrop-filter: blur(16px) saturate(1.12);
+}

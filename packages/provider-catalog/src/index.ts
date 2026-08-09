@@ -354,6 +354,7 @@ export const PROVIDER_CATALOG = [
     baseUrl: 'https://opencode.ai/zen/go/v1',
     endpointFormat: 'chat_completions',
     models: [
+      'grok-4.5',
       'glm-5.2', 'glm-5.1', 'glm-5',
       'kimi-k2.7', 'kimi-k2.7-code', 'kimi-k2.6',
       'deepseek-v4-pro', 'deepseek-v4-flash',

@@ -1,69 +1,30 @@
-import type { ComponentProps, ReactElement } from 'react'
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useTranslation } from 'react-i18next'
 import {
   DEFAULT_WRITE_INLINE_COMPLETION_BASE_URL,
-  kunSettingsPatch,
   DEFAULT_WRITE_WORKSPACE_ROOT,
-  type AppSettingsPatch,
-  getKunRuntimeSettings,
-  getModelProviderSettings,
-  isKunRuntimeInsecure,
   resolveWriteInlineCompletionApiKey,
   resolveWriteInlineCompletionBaseUrl,
   resolveWriteInlineCompletionModel,
+  type AppSettingsPatch,
   type AppSettingsV1,
-  type KunRuntimeSettingsPatchV1,
+  type KunRuntimeSettingsPatchV1
 } from '@shared/app-settings'
-import { rendererRuntimeClient } from '../agent/runtime-client'
-import { getProvider } from '../agent/registry'
+import {
+  getKunRuntimeSettings,
+  kunSettingsPatch
+} from '@shared/app-settings-kun-defaults'
+import { getModelProviderSettings } from '@shared/app-settings-provider-core'
+import type { KunProjectConfigFileResult, SkillRootListItem } from '@shared/kun-gui-api'
+import type { WriteInlineCompletionDebugEntry } from '@shared/write-inline-completion'
+import type { ReactElement } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import type {
   CoreMemoryDiagnosticsJson,
   CoreMemoryRecordJson,
   CoreRuntimeInfoJson,
   CoreRuntimeToolDiagnosticsJson
 } from '../agent/kun-contract'
-import type { WriteInlineCompletionDebugEntry } from '@shared/write-inline-completion'
-import {
-  applyChatContentMaxWidth,
-  applyCursorSpotlight,
-  applyCursorSpotlightColor,
-  applyTheme,
-  applyUiFontScale,
-  applyWriteTypography
-} from '../lib/apply-theme'
-import { formatWorkspacePickerError } from '../lib/format-workspace-picker-error'
-import type { KunProjectConfigFileResult, SkillRootListItem } from '@shared/kun-gui-api'
-import { defaultConversationWorkspaceRoot, normalizeWorkspaceRoot } from '../lib/workspace-path'
-import {
-  compactHomePathForSettingsDisplay,
-  compactHomePathListForSettingsDisplay,
-  expandHomePathForSettingsUse,
-  expandHomePathListForSettingsUse,
-  expandSettingsHomePathsForUse
-} from '../lib/settings-home-paths'
-import { useChatStore, type SettingsRouteSection } from '../store/chat-store'
-import {
-  SettingsSidebar,
-  settingsCategoryDescriptionKey,
-  settingsCategoryLabelKey,
-  type SettingsCategory
-} from './SettingsSidebar'
-import { useSettingsGuiUpdate } from './use-settings-gui-update'
-import {
-  DEFAULT_WORKSPACE_ROOT,
-  coerceRendererSettings,
-  diffSettingsPatch,
-  hasValidPort,
-  listSettingsText,
-  mergeSettings,
-  splitSettingsList
-} from './settings-utils'
-import { loadKunDiagnostics } from '../lib/load-kun-diagnostics'
-import { SETTINGS_CHANGED_EVENT, emitRendererSettingsChanged } from '../lib/keyboard-shortcut-settings'
-import { confirmDialog } from '../lib/confirm-dialog'
-import { GeneralSettingsSection } from './settings-section-general'
-import { ExtensionDeclarativeSettingsPane } from '../extensions/ExtensionDeclarativeSettingsPane'
+import { useActiveExtensionWorkspaceRoot } from '../extensions/active-extension-workspace'
 import { useExtensionSettingsService } from '../extensions/ExtensionSettingsServiceContext'
 import {
   isExtensionContributionSnapshotReady,
@@ -71,90 +32,37 @@ import {
   useWorkbenchContributions,
   workbenchContextForRoute
 } from '../extensions/use-contributions'
-import { useActiveExtensionWorkspaceRoot } from '../extensions/active-extension-workspace'
+import { formatWorkspacePickerError } from '../lib/format-workspace-picker-error'
+import {
+  compactHomePathForSettingsDisplay,
+  compactHomePathListForSettingsDisplay,
+  expandHomePathForSettingsUse,
+  expandHomePathListForSettingsUse
+} from '../lib/settings-home-paths'
+import { defaultConversationWorkspaceRoot } from '../lib/workspace-path'
+import { useChatStore } from '../store/chat-store'
+import {
+  DEFAULT_WORKSPACE_ROOT,
+  hasValidPort,
+  listSettingsText,
+  mergeSettings,
+  splitSettingsList
+} from './settings-utils'
+import { SettingsViewLayout } from './settings-view-layout'
+import {
+  settingsCategoryDescriptionKey,
+  settingsCategoryLabelKey,
+  type SettingsCategory
+} from './SettingsSidebar'
+import {
+  DEFAULT_PROJECT_CONFIG_TEXT,
+  useSettingsDomainOperations
+} from './use-settings-domain-operations'
+import { useSettingsGuiUpdate } from './use-settings-gui-update'
+import { useSettingsPersistence } from './use-settings-persistence'
+import { useSettingsRouteSynchronization } from './use-settings-route-synchronization'
+import { useSettingsViewBootstrap } from './use-settings-view-bootstrap'
 
-const ProvidersSettingsSection = lazy(() =>
-  import('./settings-section-providers').then((module) => ({ default: module.ProvidersSettingsSection }))
-)
-const WriteSettingsSection = lazy(() =>
-  import('./settings-section-write').then((module) => ({ default: module.WriteSettingsSection }))
-)
-const DesignSettingsSection = lazy(() =>
-  import('./settings-section-design').then((module) => ({ default: module.DesignSettingsSection }))
-)
-const MediaGenerationSettingsSection = lazy(() =>
-  import('./settings-section-media-generation').then((module) => ({ default: module.MediaGenerationSettingsSection }))
-)
-const SpeechToTextSettingsSection = lazy(() =>
-  import('./settings-section-speech-to-text').then((module) => ({ default: module.SpeechToTextSettingsSection }))
-)
-const AgentsSettingsSection = lazy(() =>
-  import('./settings-section-agents').then((module) => ({ default: module.AgentsSettingsSection }))
-)
-const LaboratorySettingsSection = lazy(() =>
-  import('./settings-section-agents').then((module) => ({ default: module.LaboratorySettingsSection }))
-)
-const SubagentsSettingsSection = lazy(() =>
-  import('./settings-section-subagents').then((module) => ({ default: module.SubagentsSettingsSection }))
-)
-const ArchivedThreadsSettingsSection = lazy(() =>
-  import('./settings-section-archives').then((module) => ({ default: module.ArchivedThreadsSettingsSection }))
-)
-const WorktreeSettingsSection = lazy(() =>
-  import('./settings-section-worktree').then((module) => ({ default: module.WorktreeSettingsSection }))
-)
-const MemorySettingsSection = lazy(() =>
-  import('./settings-section-memory').then((module) => ({ default: module.MemorySettingsSection }))
-)
-const KeyboardShortcutsSettingsSection = lazy(() =>
-  import('./settings-section-shortcuts').then((module) => ({ default: module.KeyboardShortcutsSettingsSection }))
-)
-const EasterEggSettingsSection = lazy(() =>
-  import('./settings-section-easter-egg').then((module) => ({ default: module.EasterEggSettingsSection }))
-)
-const ClawSettingsSection = lazy(() =>
-  import('./settings-section-claw').then((module) => ({ default: module.ClawSettingsSection }))
-)
-const UpdatesSettingsSection = lazy(() =>
-  import('./settings-section-updates').then((module) => ({ default: module.UpdatesSettingsSection }))
-)
-const TerminalSettingsSection = lazy(() =>
-  import('./settings-section-terminal').then((module) => ({ default: module.TerminalSettingsSection }))
-)
-const LlmDebugSettingsSection = lazy(() =>
-  import('./settings-section-llm-debug').then((module) => ({ default: module.LlmDebugSettingsSection }))
-)
-const DataMigrationSettingsSection = lazy(() =>
-  import('./settings-section-data-migration').then((module) => ({ default: module.DataMigrationSettingsSection }))
-)
-const StorageRelocationSettingsSection = lazy(() =>
-  import('./settings-section-storage-relocation').then((module) => ({ default: module.StorageRelocationSettingsSection }))
-)
-const UninstallSettingsSection = lazy(() =>
-  import('./settings-section-uninstall').then((module) => ({ default: module.UninstallSettingsSection }))
-)
-const WriteDebugLogModal = lazy(() =>
-  import('./settings-debug-log').then((module) => ({ default: module.WriteDebugLogModal }))
-)
-
-function LoadedAgentsSettingsSection({
-  onReady,
-  ...props
-}: ComponentProps<typeof AgentsSettingsSection> & { onReady: () => void }): ReactElement {
-  useEffect(() => {
-    onReady()
-  }, [onReady])
-  return <AgentsSettingsSection {...props} />
-}
-
-function SettingsSectionFallback(): ReactElement {
-  return (
-    <div aria-busy="true" className="space-y-3" data-testid="settings-section-fallback">
-      <div className="h-7 w-48 animate-pulse rounded-lg bg-ds-subtle" />
-      <div className="h-32 animate-pulse rounded-2xl bg-ds-subtle" />
-    </div>
-  )
-}
 
 type SaveStatus = 'idle' | 'saving' | 'saved' | 'error'
 type SettingsPatch = AppSettingsPatch
@@ -162,16 +70,6 @@ type InlineNotice = {
   tone: 'success' | 'error' | 'info'
   message: string
 }
-const DEFAULT_PROJECT_CONFIG_TEXT = `${JSON.stringify({
-  version: 1,
-  mcp: { servers: {} },
-  skills: {
-    enabled: true,
-    includeConventional: true,
-    roots: [],
-    disabledIds: []
-  }
-}, null, 2)}\n`
 export function SettingsView(): ReactElement {
   const { t, i18n } = useTranslation('settings')
   const { t: tCommon } = useTranslation('common')
@@ -313,240 +211,18 @@ export function SettingsView(): ReactElement {
     t
   })
 
-  useEffect(() => {
-    if (
-      category === 'extensions' &&
-      extensionContributionSnapshotReady &&
-      !extensionSettingsAvailable
-    ) setCategory('general')
-  }, [category, extensionContributionSnapshotReady, extensionSettingsAvailable])
+  const { loadWriteDebugEntries } = useSettingsViewBootstrap({
+    category, setCategory, form, setForm, setLoadError, setLogPath,
+    setWriteCompletionDebugEntries, setWriteCompletionDebugSelectedId, setWriteDebugLoading,
+    setWriteDebugError, extensionContributionSnapshotReady, extensionSettingsAvailable,
+    settingsScrollerRef, persistedSettingsRef, formTheme, formUiFontScale,
+    formChatContentMaxWidthPx, writeTypography, formCursorSpotlight, formCursorSpotlightColor
+  })
 
-  useEffect(() => {
-    let cancelled = false
-    if (typeof window.kunGui === 'undefined') {
-      setLoadError('PRELOAD_BRIDGE')
-      return
-    }
-    void rendererRuntimeClient
-      .getSettings({ forceRefresh: true })
-      .then((s) => {
-        if (!cancelled) {
-          const next = coerceRendererSettings(s)
-          persistedSettingsRef.current = next
-          setForm(next)
-        }
-      })
-      .catch((e: unknown) => {
-        if (!cancelled) setLoadError(e instanceof Error ? e.message : String(e))
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [])
-
-  useEffect(() => {
-    if (!formTheme || formUiFontScale == null || formChatContentMaxWidthPx == null) return
-    applyTheme(formTheme)
-    applyUiFontScale(formUiFontScale)
-    applyChatContentMaxWidth(formChatContentMaxWidthPx)
-  }, [formTheme, formUiFontScale, formChatContentMaxWidthPx])
-
-  useEffect(() => {
-    if (typeof formCursorSpotlight === 'boolean') {
-      applyCursorSpotlight(formCursorSpotlight)
-    }
-    applyCursorSpotlightColor(formCursorSpotlightColor)
-  }, [formCursorSpotlight, formCursorSpotlightColor])
-
-  // Live-preview the Write editor typography as the form changes, mirroring the
-  // theme/scale preview above.
-  useEffect(() => {
-    if (writeTypography) applyWriteTypography(writeTypography)
-  }, [writeTypography])
-
-  useEffect(() => {
-    const onSettingsChanged = (event: Event): void => {
-      const next = (event as CustomEvent<AppSettingsV1>).detail
-      if (next) {
-        const coerced = coerceRendererSettings(next)
-        persistedSettingsRef.current = coerced
-        setForm(coerced)
-      }
-    }
-    window.addEventListener(SETTINGS_CHANGED_EVENT, onSettingsChanged)
-    return () => window.removeEventListener(SETTINGS_CHANGED_EVENT, onSettingsChanged)
-  }, [])
-
-  useEffect(() => {
-    if (typeof window.kunGui?.getLogPath !== 'function') return
-    void window.kunGui.getLogPath().then((p) => setLogPath(p)).catch(() => undefined)
-  }, [category])
-
-  const loadWriteDebugEntries = useCallback(async (): Promise<void> => {
-    setWriteDebugLoading(true)
-    setWriteDebugError(null)
-    try {
-      const completionEntries = typeof window.kunGui?.listWriteInlineCompletionDebugEntries === 'function'
-        ? await window.kunGui.listWriteInlineCompletionDebugEntries()
-        : []
-      setWriteCompletionDebugEntries(completionEntries)
-      setWriteCompletionDebugSelectedId((current) =>
-        current && completionEntries.some((entry) => entry.id === current)
-          ? current
-          : completionEntries[0]?.id ?? null
-      )
-    } catch (error) {
-      setWriteDebugError(error instanceof Error ? error.message : String(error))
-    } finally {
-      setWriteDebugLoading(false)
-    }
-  }, [])
-
-  useEffect(() => {
-    if (category !== 'write') return
-    void loadWriteDebugEntries()
-  }, [category, loadWriteDebugEntries])
-
-  useEffect(() => {
-    settingsScrollerRef.current?.scrollTo({ top: 0, behavior: 'auto' })
-  }, [category])
-
-  useEffect(() => {
-    if (settingsSection === 'general') {
-      setCategory('general')
-      return
-    }
-    if (settingsSection === 'providers') {
-      setCategory('providers')
-      return
-    }
-    if (settingsSection === 'extensions') {
-      setCategory('extensions')
-      return
-    }
-    if (settingsSection === 'write') {
-      setCategory('write')
-      return
-    }
-    if (settingsSection === 'design') {
-      setCategory('design')
-      return
-    }
-    if (settingsSection === 'imageGeneration') {
-      setCategory('mediaGeneration')
-      return
-    }
-    if (settingsSection === 'mediaGeneration') {
-      setCategory('mediaGeneration')
-      return
-    }
-    if (settingsSection === 'speechToText') {
-      setCategory('speechToText')
-      return
-    }
-    if (settingsSection === 'permissions') {
-      setCategory('agents')
-      return
-    }
-    if (settingsSection === 'laboratory') {
-      setCategory('laboratory')
-      return
-    }
-    if (settingsSection === 'subagents') {
-      setCategory('subagents')
-      return
-    }
-    if (settingsSection === 'archives') {
-      setCategory('archives')
-      return
-    }
-    if (settingsSection === 'worktree') {
-      setCategory('worktree')
-      return
-    }
-    if (settingsSection === 'memory') {
-      setCategory('memory')
-      return
-    }
-    if (settingsSection === 'claw') {
-      setCategory('claw')
-      return
-    }
-    if (settingsSection === 'shortcuts') {
-      setCategory('shortcuts')
-      return
-    }
-    if (settingsSection === 'easterEgg') {
-      setCategory('easterEgg')
-      return
-    }
-    if (settingsSection === 'updates') {
-      setCategory('updates')
-      return
-    }
-    if (settingsSection === 'terminal') {
-      setCategory('terminal')
-      return
-    }
-    if (settingsSection === 'debug') {
-      setCategory('debug')
-      return
-    }
-    if (settingsSection === 'dataMigration') {
-      setCategory('dataMigration')
-      return
-    }
-    if (settingsSection === 'storage') {
-      setCategory('storage')
-      return
-    }
-    setCategory('agents')
-  }, [settingsSection])
-
-  useEffect(() => {
-    if (!form) return
-    if (
-      settingsSection === 'general' ||
-      settingsSection === 'providers' ||
-      settingsSection === 'extensions' ||
-      settingsSection === 'write' ||
-      settingsSection === 'design' ||
-      settingsSection === 'imageGeneration' ||
-      settingsSection === 'mediaGeneration' ||
-      settingsSection === 'speechToText' ||
-      settingsSection === 'laboratory' ||
-      settingsSection === 'subagents' ||
-      settingsSection === 'archives' ||
-      settingsSection === 'worktree' ||
-      settingsSection === 'memory' ||
-      settingsSection === 'claw' ||
-      settingsSection === 'shortcuts' ||
-      settingsSection === 'easterEgg' ||
-      settingsSection === 'updates' ||
-      settingsSection === 'terminal' ||
-      settingsSection === 'debug' ||
-      settingsSection === 'storage' ||
-      settingsSection === 'dataMigration' ||
-      category !== 'agents'
-    ) {
-      return
-    }
-    if (!agentsSectionReady) return
-    const refs: Record<
-      Exclude<SettingsRouteSection, 'general' | 'providers' | 'extensions' | 'write' | 'design' | 'imageGeneration' | 'mediaGeneration' | 'speechToText' | 'laboratory' | 'subagents' | 'archives' | 'worktree' | 'memory' | 'claw' | 'shortcuts' | 'easterEgg' | 'updates' | 'terminal' | 'debug' | 'storage' | 'dataMigration'>,
-      HTMLDivElement | null
-    > = {
-      agents: agentsSectionRef.current,
-      skill: skillSectionRef.current,
-      mcp: mcpSectionRef.current,
-      permissions: permissionsSectionRef.current
-    }
-    const target = refs[settingsSection]
-    if (!target) return
-    window.requestAnimationFrame(() => {
-      target.scrollIntoView({ behavior: 'smooth', block: 'start' })
-    })
-  }, [agentsSectionReady, category, form, settingsSection])
+  useSettingsRouteSynchronization({
+    settingsSection, category, setCategory, form, agentsSectionReady, agentsSectionRef,
+    skillSectionRef, mcpSectionRef, permissionsSectionRef
+  })
 
   useEffect(() => {
     return () => {
@@ -563,508 +239,40 @@ export function SettingsView(): ReactElement {
     return null
   }, [form, formPort, t])
 
-  const refreshSkillRoots = useCallback(async (): Promise<void> => {
-    if (typeof window.kunGui?.listSkillRoots !== 'function') return
-    setSkillRootsLoading(true)
-    try {
-      // Settings is global: list every configured skill root from persisted
-      // settings, not the sidebar's currently selected project workspace.
-      const result = await window.kunGui.listSkillRoots()
-      if (result.ok) setSkillRoots(result.roots)
-    } catch {
-      /* listing skill roots is best-effort; keep the last known list */
-    } finally {
-      setSkillRootsLoading(false)
+  const { scheduleSave, flushPendingSave, goBack, openOnboardingPreview } = useSettingsPersistence({
+    closeSettings, openInitialSetup, applyI18n, reloadUiSettings, probeRuntime, form, setForm,
+    setSaveStatus, setSaveError, saveTimer, statusTimer, draftVersion, pendingSnapshotRef,
+    persistedSettingsRef, flushOnUnmountRef, settingsPlatform, settingsHomeDir
+  })
+
+  const update = useCallback((partial: SettingsPatch): void => {
+    if (!form) return
+    const next = mergeSettings(form, partial)
+    setForm(next)
+    if (partial.locale) void applyI18n(partial.locale)
+    if (partial.guiUpdate?.channel && partial.guiUpdate.channel !== form.guiUpdate.channel) {
+      resetGuiUpdateState()
     }
-  }, [])
+    scheduleSave(next)
+  }, [applyI18n, form, resetGuiUpdateState, scheduleSave])
 
-  useEffect(() => {
-    if (category !== 'agents') return
-    void refreshSkillRoots()
-  }, [category, refreshSkillRoots])
-
-  const loadMcpConfig = async (): Promise<void> => {
-    if (typeof window.kunGui?.getKunConfigFile !== 'function') return
-    setMcpLoading(true)
-    setMcpNotice(null)
-    try {
-      const config = await window.kunGui.getKunConfigFile()
-      setMcpConfigPath(config.path)
-      setMcpConfigText(config.content)
-      setMcpConfigExists(config.exists)
-      setMcpLoaded(true)
-    } catch (e) {
-      setMcpNotice({
-        tone: 'error',
-        message: e instanceof Error ? e.message : String(e)
-      })
-    } finally {
-      setMcpLoading(false)
-    }
-  }
-
-  useEffect(() => {
-    if (category !== 'agents' || mcpLoaded || mcpLoading) return
-    void loadMcpConfig()
-  }, [category, mcpLoaded, mcpLoading])
-
-  const openSkillRoot = async (path: string): Promise<void> => {
-    if (!path) {
-      setSkillNotice({ tone: 'error', message: t('skillsRootUnavailable') })
-      return
-    }
-    if (typeof window.kunGui?.openSkillRoot !== 'function') return
-    setSkillNotice(null)
-    const result = await window.kunGui.openSkillRoot(path)
-    if (!result.ok) {
-      setSkillNotice({ tone: 'error', message: result.message ?? t('applyFailed') })
-    }
-  }
-
-  const toggleSkillRoot = (root: SkillRootListItem, enabled: boolean): void => {
-    const current = form?.claw.skills.disabledDirs ?? []
-    const keys = new Set([root.disableKey, root.id])
-    const nextDisabled = enabled
-      ? current.filter((entry) => !keys.has(entry))
-      : [...new Set([...current, root.disableKey])]
-    update({ claw: { skills: { disabledDirs: nextDisabled } } })
-    // Optimistically reflect the toggle so the row responds before the
-    // debounced save round-trips; skill counts are unaffected by toggling.
-    setSkillRoots((roots) =>
-      roots.map((item) =>
-        item.id === root.id && item.path === root.path ? { ...item, enabled } : item
-      )
-    )
-  }
-
-  const saveMcpConfig = async (): Promise<void> => {
-    if (typeof window.kunGui?.setKunConfigFile !== 'function') return
-    setMcpBusy(true)
-    setMcpNotice(null)
-    try {
-      const result = await window.kunGui.setKunConfigFile(mcpConfigText)
-      setMcpConfigPath(result.path)
-      setMcpConfigExists(true)
-      setMcpNotice({
-        tone: 'success',
-        message: t('mcpSaved', { path: compactHomePath(result.path) })
-      })
-    } catch (e) {
-      setMcpNotice({
-        tone: 'error',
-        message: e instanceof Error ? e.message : String(e)
-      })
-    } finally {
-      setMcpBusy(false)
-    }
-  }
-
-  const openMcpConfigDir = async (): Promise<void> => {
-    if (typeof window.kunGui?.openKunConfigDir !== 'function') return
-    const result = await window.kunGui.openKunConfigDir()
-    if (!result.ok) {
-      setMcpNotice({ tone: 'error', message: result.message ?? t('applyFailed') })
-    }
-  }
-
-  const loadProjectConfig = useCallback(async (): Promise<void> => {
-    if (!activeProjectWorkspaceRoot || typeof window.kunGui?.getKunProjectConfigFile !== 'function') {
-      setProjectConfig(null)
-      setProjectConfigText(DEFAULT_PROJECT_CONFIG_TEXT)
-      return
-    }
-    setProjectConfigLoading(true)
-    setProjectConfigNotice(null)
-    try {
-      const result = await window.kunGui.getKunProjectConfigFile(activeProjectWorkspaceRoot)
-      setProjectConfig(result)
-      setProjectConfigText(result.exists ? result.content : DEFAULT_PROJECT_CONFIG_TEXT)
-    } catch (error) {
-      setProjectConfigNotice({
-        tone: 'error',
-        message: error instanceof Error ? error.message : String(error)
-      })
-    } finally {
-      setProjectConfigLoading(false)
-    }
-  }, [activeProjectWorkspaceRoot])
-
-  useEffect(() => {
-    if (category !== 'agents') return
-    void loadProjectConfig()
-  }, [category, loadProjectConfig, projectConfigGrantFingerprint])
-
-  const saveProjectConfig = async (): Promise<void> => {
-    if (!activeProjectWorkspaceRoot || typeof window.kunGui?.setKunProjectConfigFile !== 'function') return
-    setProjectConfigBusy(true)
-    setProjectConfigNotice(null)
-    try {
-      const result = await window.kunGui.setKunProjectConfigFile(
-        activeProjectWorkspaceRoot,
-        projectConfigText
-      )
-      setProjectConfig(result)
-      setProjectConfigText(result.content)
-      setProjectConfigNotice({
-        tone: 'success',
-        message: result.trust === 'stale'
-          ? t('projectConfigSavedStale')
-          : t('projectConfigSaved', { path: compactHomePath(result.path) })
-      })
-    } catch (error) {
-      setProjectConfigNotice({
-        tone: 'error',
-        message: error instanceof Error ? error.message : String(error)
-      })
-    } finally {
-      setProjectConfigBusy(false)
-    }
-  }
-
-  const syncSettingsAfterProjectTrust = async (): Promise<void> => {
-    const saved = coerceRendererSettings(await rendererRuntimeClient.getSettings({ forceRefresh: true }))
-    persistedSettingsRef.current = saved
-    setForm(saved)
-    emitRendererSettingsChanged(saved)
-    void reloadUiSettings()
-  }
-
-  const setProjectConfigTrust = async (trusted: boolean): Promise<void> => {
-    if (!activeProjectWorkspaceRoot || typeof window.kunGui?.setKunProjectConfigTrust !== 'function') return
-    if (trusted && projectConfig?.status !== 'valid') return
-    setProjectConfigBusy(true)
-    setProjectConfigNotice(null)
-    try {
-      const result = await window.kunGui.setKunProjectConfigTrust(
-        activeProjectWorkspaceRoot,
-        trusted,
-        trusted ? projectConfig?.digest : undefined
-      )
-      setProjectConfig(result)
-      setProjectConfigText(result.exists ? result.content : DEFAULT_PROJECT_CONFIG_TEXT)
-      if (trusted ? result.trust !== 'trusted' : result.trust !== 'untrusted') return
-      await syncSettingsAfterProjectTrust()
-      setProjectConfigNotice({
-        tone: 'success',
-        message: trusted ? t('projectConfigApproved') : t('projectConfigRevoked')
-      })
-    } catch (error) {
-      setProjectConfigNotice({
-        tone: 'error',
-        message: error instanceof Error ? error.message : String(error)
-      })
-    } finally {
-      setProjectConfigBusy(false)
-    }
-  }
-
-  const openProjectConfigDir = async (): Promise<void> => {
-    if (!activeProjectWorkspaceRoot || typeof window.kunGui?.openKunProjectConfigDir !== 'function') return
-    const result = await window.kunGui.openKunProjectConfigDir(activeProjectWorkspaceRoot)
-    if (!result.ok) {
-      setProjectConfigNotice({ tone: 'error', message: result.message ?? t('applyFailed') })
-    }
-  }
-
-  const refreshKunDiagnostics = useCallback(async (): Promise<void> => {
-    const provider = getProvider()
-    setRuntimeDiagnosticsBusy(true)
-    setRuntimeDiagnosticsNotice(null)
-    try {
-      const loaded = await loadKunDiagnostics(provider, { listAllMemories: true })
-      if (loaded.runtimeInfo !== undefined) setRuntimeInfo(loaded.runtimeInfo)
-      if (loaded.toolDiagnostics !== undefined) setToolDiagnostics(loaded.toolDiagnostics)
-      if (loaded.memoryRecords !== undefined) setMemoryRecords(loaded.memoryRecords)
-      if (loaded.errors.length > 0) {
-        setRuntimeDiagnosticsNotice({
-          tone: 'error',
-          message: loaded.errors.join(' | ')
-        })
-      }
-    } catch (error) {
-      setRuntimeDiagnosticsNotice({
-        tone: 'error',
-        message: error instanceof Error ? error.message : String(error)
-      })
-    } finally {
-      setRuntimeDiagnosticsBusy(false)
-    }
-  }, [])
-
-  useEffect(() => {
-    if (category !== 'agents' && category !== 'memory') return
-    void refreshKunDiagnostics()
-  }, [category, refreshKunDiagnostics])
-
-  const refreshMemoryDiagnostics = async (): Promise<void> => {
-    const provider = getProvider()
-    if (typeof provider.getMemoryDiagnostics !== 'function') return
-    try {
-      const diagnostics = await provider.getMemoryDiagnostics()
-      setMemoryDiagnostics(diagnostics)
-    } catch {
-      // best-effort; surfaced via runtimeDiagnosticsNotice elsewhere
-    }
-  }
-
-  useEffect(() => {
-    if (category !== 'memory') return
-    void refreshMemoryDiagnostics()
-  }, [category, memoryRecords])
-
-  const memoryMutationWorkspace = useCallback((memoryId: string): string | undefined => {
-    const record = memoryRecords.find((item) => item.id === memoryId)
-    if (!record || record.scope === 'user') return undefined
-    if (record.scope === 'project') {
-      return record.project ?? record.workspace
-    }
-    return record.workspace
-  }, [memoryRecords])
-
-  const createMemoryRecord = async (input: {
-    content: string
-    scope?: 'user' | 'workspace' | 'project'
-    targetPath?: string
-    tags?: string[]
-    confidence?: number
-  }): Promise<boolean> => {
-    const provider = getProvider()
-    if (typeof provider.createMemory !== 'function') return false
-    try {
-      const workspace = normalizeWorkspaceRoot(expandHomePath(input.targetPath ?? ''))
-      const memory = await provider.createMemory({
-        content: input.content,
-        scope: input.scope,
-        tags: input.tags,
-        confidence: input.confidence,
-        ...(input.scope === 'user' ? {} : { workspace }),
-        ...(input.scope === 'project' ? { project: workspace } : {})
-      })
-      setMemoryRecords((records) => [memory, ...records])
-      return true
-    } catch (error) {
-      setRuntimeDiagnosticsNotice({
-        tone: 'error',
-        message: error instanceof Error ? error.message : String(error)
-      })
-      return false
-    }
-  }
-
-  const updateMemoryRecord = async (
-    memoryId: string,
-    patch: { content?: string; tags?: string[]; confidence?: number; disabled?: boolean }
-  ): Promise<boolean> => {
-    const provider = getProvider()
-    if (typeof provider.updateMemory !== 'function') return false
-    try {
-      const memory = await provider.updateMemory(memoryId, patch, {
-        workspace: memoryMutationWorkspace(memoryId)
-      })
-      setMemoryRecords((records) => records.map((record) => (record.id === memoryId ? memory : record)))
-      return true
-    } catch (error) {
-      setRuntimeDiagnosticsNotice({
-        tone: 'error',
-        message: error instanceof Error ? error.message : String(error)
-      })
-      return false
-    }
-  }
-
-  const setMemoryRecordDisabled = async (memoryId: string, disabled: boolean): Promise<void> => {
-    const provider = getProvider()
-    if (typeof provider.updateMemory !== 'function') return
-    try {
-      const memory = await provider.updateMemory(memoryId, { disabled }, {
-        workspace: memoryMutationWorkspace(memoryId)
-      })
-      setMemoryRecords((records) => records.map((record) => record.id === memoryId ? memory : record))
-    } catch (error) {
-      setRuntimeDiagnosticsNotice({
-        tone: 'error',
-        message: error instanceof Error ? error.message : String(error)
-      })
-    }
-  }
-
-  const disableMemoryRecord = async (memoryId: string): Promise<void> => {
-    const confirmed = await confirmDialog(
-      t('memoryDisableConfirm'),
-      t('memoryDisableConfirmDetail')
-    )
-    if (!confirmed) return
-    await setMemoryRecordDisabled(memoryId, true)
-  }
-
-  const restoreMemoryRecord = async (memoryId: string): Promise<void> => {
-    await setMemoryRecordDisabled(memoryId, false)
-  }
-
-  const deleteMemoryRecord = async (memoryId: string): Promise<void> => {
-    const confirmed = await confirmDialog(
-      t('memoryDeleteConfirm'),
-      t('memoryDeleteConfirmDetail')
-    )
-    if (!confirmed) return
-    const provider = getProvider()
-    if (typeof provider.deleteMemory !== 'function') return
-    try {
-      await provider.deleteMemory(memoryId, {
-        workspace: memoryMutationWorkspace(memoryId)
-      })
-      setMemoryRecords((records) => records.filter((record) => record.id !== memoryId))
-    } catch (error) {
-      setRuntimeDiagnosticsNotice({
-        tone: 'error',
-        message: error instanceof Error ? error.message : String(error)
-      })
-    }
-  }
-
-  const scrollToAgentSection = (target: 'agents' | 'skill' | 'mcp' | 'permissions'): void => {
-    const refs = {
-      agents: agentsSectionRef.current,
-      skill: skillSectionRef.current,
-      mcp: mcpSectionRef.current,
-      permissions: permissionsSectionRef.current
-    }
-    refs[target]?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-  }
-
-  const persistSettings = async (snapshot: AppSettingsV1, version: number): Promise<void> => {
-    if (!hasValidPort(snapshot)) return
-    setSaveStatus('saving')
-    setSaveError(null)
-
-    try {
-      const expandedSnapshot = expandSettingsHomePathsForUse(snapshot, settingsHomeDir, settingsPlatform)
-      const expandedBase = expandSettingsHomePathsForUse(
-        persistedSettingsRef.current ?? snapshot,
-        settingsHomeDir,
-        settingsPlatform
-      )
-      const patch = diffSettingsPatch(expandedBase, expandedSnapshot)
-      const next = coerceRendererSettings(
-        Object.keys(patch).length > 0
-          ? await rendererRuntimeClient.setSettings(patch)
-          : await rendererRuntimeClient.getSettings({ forceRefresh: true })
-      )
-      if (version !== draftVersion.current) return
-
-      persistedSettingsRef.current = next
-      setForm(next)
-      emitRendererSettingsChanged(next)
-      await applyI18n(next.locale)
-      void reloadUiSettings()
-      void probeRuntime('background')
-      if (version !== draftVersion.current) return
-
-      setSaveStatus('saved')
-      if (statusTimer.current) window.clearTimeout(statusTimer.current)
-      statusTimer.current = window.setTimeout(() => {
-        if (version === draftVersion.current) setSaveStatus('idle')
-        statusTimer.current = null
-      }, 1500)
-    } catch (e) {
-      if (version !== draftVersion.current) return
-      const message = e instanceof Error ? e.message : String(e)
-      setSaveError(message)
-      setSaveStatus('error')
-      void window.kunGui?.logError?.('settings', 'Failed to apply settings', { message }).catch(() => undefined)
-    }
-  }
-
-  const scheduleSave = (next: AppSettingsV1): void => {
-    draftVersion.current += 1
-    const version = draftVersion.current
-
-    if (saveTimer.current) window.clearTimeout(saveTimer.current)
-    if (statusTimer.current) window.clearTimeout(statusTimer.current)
-    statusTimer.current = null
-    setSaveError(null)
-
-    if (!hasValidPort(next)) {
-      pendingSnapshotRef.current = null
-      setSaveStatus('idle')
-      return
-    }
-
-    pendingSnapshotRef.current = next
-    setSaveStatus('saving')
-    saveTimer.current = window.setTimeout(() => {
-      saveTimer.current = null
-      pendingSnapshotRef.current = null
-      void persistSettings(next, version)
-    }, 450)
-  }
-
-  const flushPendingSave = async (): Promise<void> => {
-    pendingSnapshotRef.current = null
-    if (!form || !hasValidPort(form)) return
-    draftVersion.current += 1
-    const version = draftVersion.current
-
-    if (saveTimer.current) {
-      window.clearTimeout(saveTimer.current)
-      saveTimer.current = null
-    }
-    if (statusTimer.current) {
-      window.clearTimeout(statusTimer.current)
-      statusTimer.current = null
-    }
-
-    await persistSettings(form, version)
-  }
-
-  // Recomputed every render so the unmount cleanup always sees current values.
-  // Persists the pending snapshot directly over IPC (no React state writes,
-  // since the component is unmounting) and broadcasts the change so other
-  // surfaces stay in sync.
-  flushOnUnmountRef.current = (): void => {
-    const snapshot = pendingSnapshotRef.current
-    pendingSnapshotRef.current = null
-    if (!snapshot || !hasValidPort(snapshot)) return
-    const expandedSnapshot = expandSettingsHomePathsForUse(snapshot, settingsHomeDir, settingsPlatform)
-    const expandedBase = expandSettingsHomePathsForUse(
-      persistedSettingsRef.current ?? snapshot,
-      settingsHomeDir,
-      settingsPlatform
-    )
-    const patch = diffSettingsPatch(expandedBase, expandedSnapshot)
-    void rendererRuntimeClient
-      .setSettings(patch)
-      .then((saved) => {
-        const next = coerceRendererSettings(saved)
-        persistedSettingsRef.current = next
-        emitRendererSettingsChanged(next)
-        // App-wide effects the normal save path runs, so a last-moment locale or
-        // UI-token edit still takes effect immediately rather than on next start.
-        void applyI18n(next.locale)
-        void reloadUiSettings()
-      })
-      .catch((e) => {
-        const message = e instanceof Error ? e.message : String(e)
-        void window.kunGui?.logError?.('settings', 'Failed to flush settings on unmount', { message }).catch(
-          () => undefined
-        )
-      })
-  }
-
-  const goBack = (): void => {
-    void (async () => {
-      await flushPendingSave()
-      await reloadUiSettings()
-      closeSettings()
-    })()
-  }
-
-  const openOnboardingPreview = (): void => {
-    void (async () => {
-      await flushPendingSave()
-      openInitialSetup('preview')
-    })()
-  }
+  const {
+    loadMcpConfig, openSkillRoot, toggleSkillRoot, saveMcpConfig, openMcpConfigDir,
+    loadProjectConfig, saveProjectConfig, setProjectConfigTrust, openProjectConfigDir,
+    refreshKunDiagnostics, createMemoryRecord, updateMemoryRecord, disableMemoryRecord,
+    restoreMemoryRecord, deleteMemoryRecord, scrollToAgentSection
+  } = useSettingsDomainOperations({
+    t, reloadUiSettings, category, form, setForm, setSkillRoots, setSkillRootsLoading,
+    setSkillNotice, setMcpConfigPath, mcpConfigText, setMcpConfigText, setMcpConfigExists,
+    mcpLoading, setMcpLoading, mcpLoaded, setMcpLoaded, setMcpBusy, setMcpNotice,
+    projectConfig, setProjectConfig, projectConfigText, setProjectConfigText,
+    setProjectConfigLoading, setProjectConfigBusy, setProjectConfigNotice, runtimeInfo,
+    setRuntimeInfo, toolDiagnostics, setToolDiagnostics, memoryRecords, setMemoryRecords,
+    setMemoryDiagnostics, setRuntimeDiagnosticsBusy, runtimeDiagnosticsNotice,
+    setRuntimeDiagnosticsNotice, persistedSettingsRef, agentsSectionRef, skillSectionRef,
+    mcpSectionRef, permissionsSectionRef, compactHomePath, expandHomePath,
+    activeProjectWorkspaceRoot, projectConfigGrantFingerprint, update
+  })
 
   if (loadError) {
     const msg =
@@ -1093,16 +301,6 @@ export function SettingsView(): ReactElement {
 
   const kun = getKunRuntimeSettings(form)
   const provider = getModelProviderSettings(form)
-
-  const update = (partial: SettingsPatch): void => {
-    const next = mergeSettings(form, partial)
-    setForm(next)
-    if (partial.locale) void applyI18n(partial.locale)
-    if (partial.guiUpdate?.channel && partial.guiUpdate.channel !== form.guiUpdate.channel) {
-      resetGuiUpdateState()
-    }
-    scheduleSave(next)
-  }
 
   const sharedApiKey = provider.apiKey
   const sharedBaseUrl = provider.baseUrl
@@ -1362,146 +560,13 @@ export function SettingsView(): ReactElement {
     deleteThread
   }
 
-  return (
-    <div className="ds-settings-surface ds-drag flex h-full min-h-0 w-full min-w-0 bg-ds-main">
-      <SettingsSidebar
-        category={category}
-        setCategory={setCategory}
-        goBack={goBack}
-        extensionSettingsAvailable={extensionSettingsAvailable}
-        platform={window.kunGui.platform}
-        t={t}
-      />
-
-      <div className="ds-settings-stage relative min-h-0 min-w-0 flex-1 overflow-hidden">
-        <div
-          ref={settingsScrollerRef}
-          className={`ds-settings-scroller ds-no-drag h-full min-h-0 overflow-y-auto ${
-            category === 'providers' ? 'ds-settings-scroller--providers' : ''
-          }`}
-        >
-          <div className={`ds-settings-content mx-auto ${
-            category === 'providers' ? 'ds-settings-content--providers' : ''
-          }`}>
-          {category !== 'providers' ? <div className="ds-settings-page-header flex items-start justify-between gap-5">
-            <div className="min-w-0">
-              <h1 className="truncate text-[24px] font-medium leading-tight tracking-[-0.02em] text-ds-ink">
-                {categoryTitle}
-              </h1>
-              <p className="mt-1.5 max-w-2xl text-[12px] leading-[1.4] text-ds-muted">
-                {categoryDescription}
-              </p>
-            </div>
-            {category !== 'extensions' && category !== 'dataMigration' && category !== 'storage' && category !== 'uninstall' ? <span
-              title={saveStatus === 'error' && saveError ? saveError : undefined}
-              className={`shrink-0 rounded-full px-3 py-1 text-[12px] font-medium ${
-                portError
-                  ? 'bg-amber-500/15 text-amber-700 dark:text-amber-200'
-                  : saveStatus === 'saved'
-                    ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-200'
-                    : saveStatus === 'error'
-                      ? 'bg-red-500/15 text-red-700 dark:text-red-200'
-                      : 'bg-ds-subtle text-ds-muted'
-              }`}
-            >
-              {portError
-                ? t('autoApplyBlocked')
-                : saveStatus === 'saving'
-                  ? t('applying')
-                  : saveStatus === 'saved'
-                    ? t('applied')
-                    : saveStatus === 'error'
-                      ? t('applyFailed')
-                      : t('autoApplyHint')}
-            </span> : null}
-          </div> : null}
-
-          {category !== 'extensions' && category !== 'dataMigration' && category !== 'storage' && category !== 'uninstall' && saveStatus === 'error' && saveError ? (
-            <div
-              role="alert"
-              className="mb-5 rounded-[var(--ds-radius-card)] border border-red-200 bg-red-50 px-4 py-3 text-[13px] leading-5 text-red-800 dark:border-red-500/25 dark:bg-red-500/10 dark:text-red-200"
-            >
-              {saveError}
-            </div>
-          ) : null}
-
-          <div
-            className={`ds-settings-page ds-settings-page--${category}`}
-            data-settings-category-view={category}
-            key={category}
-          >
-            {category === 'general' ? <GeneralSettingsSection ctx={settingsSectionContext} /> : null}
-            {category === 'extensions' && extensionSettingsService ? (
-              <ExtensionDeclarativeSettingsPane
-                contributions={extensionSettingsContributions}
-                workspaceRoot={extensionWorkspaceRoot}
-                service={extensionSettingsService}
-              />
-            ) : null}
-            <Suspense fallback={<SettingsSectionFallback />}>
-              {category === 'providers' ? <ProvidersSettingsSection ctx={settingsSectionContext} /> : null}
-              {category === 'write' ? <WriteSettingsSection ctx={settingsSectionContext} /> : null}
-              {category === 'design' ? <DesignSettingsSection ctx={settingsSectionContext} /> : null}
-              {category === 'mediaGeneration' ? <MediaGenerationSettingsSection ctx={settingsSectionContext} /> : null}
-              {category === 'speechToText' ? <SpeechToTextSettingsSection ctx={settingsSectionContext} /> : null}
-              {category === 'agents' ? (
-                <LoadedAgentsSettingsSection ctx={settingsSectionContext} onReady={markAgentsSectionReady} />
-              ) : null}
-              {category === 'laboratory' ? <LaboratorySettingsSection ctx={settingsSectionContext} /> : null}
-              {category === 'subagents' ? <SubagentsSettingsSection ctx={settingsSectionContext} /> : null}
-              {category === 'archives' ? <ArchivedThreadsSettingsSection ctx={settingsSectionContext} /> : null}
-              {category === 'worktree' ? <WorktreeSettingsSection ctx={settingsSectionContext} /> : null}
-              {category === 'memory' ? <MemorySettingsSection ctx={settingsSectionContext} /> : null}
-              {category === 'shortcuts' ? <KeyboardShortcutsSettingsSection ctx={settingsSectionContext} /> : null}
-              {category === 'easterEgg' ? <EasterEggSettingsSection ctx={settingsSectionContext} /> : null}
-              {category === 'claw' ? <ClawSettingsSection ctx={settingsSectionContext} /> : null}
-              {category === 'updates' ? <UpdatesSettingsSection ctx={settingsSectionContext} /> : null}
-              {category === 'terminal' ? <TerminalSettingsSection ctx={settingsSectionContext} /> : null}
-              {category === 'debug' ? <LlmDebugSettingsSection ctx={settingsSectionContext} /> : null}
-              {category === 'dataMigration' ? <DataMigrationSettingsSection /> : null}
-              {category === 'storage' ? <StorageRelocationSettingsSection /> : null}
-              {category === 'uninstall' ? <UninstallSettingsSection /> : null}
-            </Suspense>
-          </div>
-          </div>
-        </div>
-      </div>
-      {category !== 'extensions' && category !== 'dataMigration' && category !== 'storage' && category !== 'uninstall' && saveStatus === 'error' && saveError ? (
-        <div
-          role="alert"
-          className="ds-no-drag fixed bottom-6 right-8 z-30 flex max-w-[min(560px,calc(100vw-3rem))] items-center gap-3 rounded-2xl border border-red-300/70 bg-red-50/95 px-4 py-3 text-red-900 shadow-2xl shadow-red-950/10 backdrop-blur dark:border-red-500/30 dark:bg-red-950/90 dark:text-red-100"
-        >
-          <div className="min-w-0">
-            <div className="text-[13px] font-semibold">{t('applyFailed')}</div>
-            <div className="mt-0.5 truncate text-[12px] text-red-800/85 dark:text-red-100/80">
-              {saveError}
-            </div>
-          </div>
-          <button
-            type="button"
-            className="shrink-0 rounded-xl bg-red-600 px-3 py-2 text-[12px] font-semibold text-white shadow-sm transition hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-60"
-            disabled={Boolean(portError)}
-            onClick={() => void flushPendingSave()}
-          >
-            {t('retrySave')}
-          </button>
-        </div>
-      ) : null}
-      {writeDebugModalOpen ? (
-        <Suspense fallback={null}>
-          <WriteDebugLogModal
-            completionEntries={writeCompletionDebugEntries}
-            completionSelectedId={writeCompletionDebugSelectedId}
-            loading={writeDebugLoading}
-            error={writeDebugError}
-            onSelectCompletion={setWriteCompletionDebugSelectedId}
-            onRefresh={() => void loadWriteDebugEntries()}
-            onClear={() => void clearWriteDebugEntries()}
-            onClose={() => setWriteDebugModalOpen(false)}
-            t={t}
-          />
-        </Suspense>
-      ) : null}
-    </div>
-  )
+  return <SettingsViewLayout view={{
+    t, workspaceRoot, extensionWorkspaceRoot, category, setCategory, saveStatus, saveError,
+    writeDebugModalOpen, setWriteDebugModalOpen, writeCompletionDebugEntries,
+    writeCompletionDebugSelectedId, setWriteCompletionDebugSelectedId, writeDebugLoading,
+    writeDebugError, extensionSettingsService, extensionSettingsContributions,
+    extensionSettingsAvailable, settingsScrollerRef, markAgentsSectionReady, categoryTitle,
+    categoryDescription, loadWriteDebugEntries, portError, flushPendingSave, goBack,
+    clearWriteDebugEntries, settingsSectionContext
+  }} />
 }

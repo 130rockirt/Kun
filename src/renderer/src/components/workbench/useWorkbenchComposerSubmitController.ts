@@ -1,12 +1,5 @@
-import { useCallback, type Dispatch, type SetStateAction } from 'react'
+import { useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import type { ModelProviderModelGroup } from '@shared/kun-gui-api'
-import {
-  isComposerChatModelId,
-  modelProfileSupportsTextChat
-} from '@shared/app-settings'
-import type { AttachmentReference, NormalizedThread } from '../../agent/types'
-import type { ChatState, SendMessageOverrides } from '../../store/chat-store-types'
 import { useChatStore } from '../../store/chat-store'
 import { providerIdForComposerModel } from '../../store/chat-store-helpers'
 import { parseClawCommand } from '@shared/claw-commands'
@@ -30,17 +23,11 @@ import { resolveCodeCanvasComposerRoute } from '../../design/canvas/code-canvas'
 import { useCanvasSelectionStore } from '../../design/canvas/canvas-selection-store'
 import { useCanvasShapeStore } from '../../design/canvas/canvas-shape-store'
 import { serializeActivePptReviewContexts } from '../../design/canvas/ppt-review-board'
-import {
-  composerReasoningEffortRequestValue,
-  type ComposerReasoningEffort
-} from '../chat/FloatingComposerModelPicker'
+import { composerReasoningEffortRequestValue } from '../chat/FloatingComposerModelPicker'
 import { serviceTierForComposerSelection } from '../chat/composer-fast-mode'
 import type { ComposerFileReference } from '../chat/FloatingComposer'
-import type { ComposerAttachmentScope } from '../workbench-composer-attachments'
-import type { RightPanelMode } from '../chat/WorkbenchTopBar'
 import { BUILTIN_RIGHT_PANEL_IDS } from '../../extensions/contribution-ids'
 import { officeDocumentFormatFromName } from '@shared/office-document'
-import type { CodeCanvasOutboundPromptInput } from '../design/canvas/useCodeCanvasPromptController'
 import {
   COMPOSER_DIRECTORY_CONTEXT_MAX_FILES,
   COMPOSER_FILE_CONTEXT_MAX_TOTAL_CHARS,
@@ -50,101 +37,11 @@ import {
   composerReferencesToUserFileReferences,
   stripTransientAttachmentFields
 } from './workbench-composer-prompts'
-
-type PlanTurnOverrides = Pick<
-  SendMessageOverrides,
-  | 'attachmentIds'
-  | 'attachments'
-  | 'displayText'
-  | 'fileReferences'
-  | 'guiPlan'
-  | 'model'
-  | 'providerId'
-  | 'reasoningEffort'
-  | 'serviceTier'
-> & {
-  workspaceRoot?: string
-}
-
-type UseWorkbenchComposerSubmitControllerParams = {
-  activeClawChannelId: string
-  activeClawChannelModel?: string
-  activeClawChannelProviderId?: string
-  activeSddDraft: boolean
-  activeThreadId: string | null
-  attachmentUploadEnabled: boolean
-  buildCodeCanvasOutboundPrompt: (input: CodeCanvasOutboundPromptInput) => Promise<string>
-  clearComposerAttachments: (scope?: ComposerAttachmentScope) => void
-  removeComposerAttachments: (ids: readonly string[], scope?: ComposerAttachmentScope) => void
-  clearComposerFileReferences: () => void
-  composerAttachments: AttachmentReference[]
-  composerFileReferences: ComposerFileReference[]
-  composerMode: 'plan' | 'agent'
-  composerModel: string
-  composerProviderId: string
-  composerModelGroups: ModelProviderModelGroup[]
-  composerReasoningEffort: ComposerReasoningEffort
-  composerFastMode: boolean
-  getAttachmentScope: () => ComposerAttachmentScope
-  handleGuiPlanCommand: (request?: string) => void | Promise<void>
-  input: string
-  resetClawChannelSession: (channelId: string) => Promise<void>
-  rightPanelMode: RightPanelMode
-  route: ChatState['route']
-  selectClawChannel: (channelId: string) => Promise<void>
-  sendMessage: ChatState['sendMessage']
-  sendPlanTurn: (text: string, overrides?: PlanTurnOverrides) => Promise<boolean>
-  sendSddAssistantPrompt: (value: string) => Promise<void>
-  setAttachmentUploadError: (message: string | null) => void
-  setClawChannelModel: (channelId: string, model: string, providerId?: string) => Promise<void>
-  setError: (message: string | null) => void
-  setInput: Dispatch<SetStateAction<string>>
-  threads: NormalizedThread[]
-  workspaceRoot: string
-  appendLocalClawTurn: (userText: string, replyText: string) => void
-  clearWriteQuotedSelections?: () => void
-}
-
-type ClawComposerModelOption = {
-  providerId: string
-  model: string
-}
-
-function listClawComposerModelOptions(groups: readonly ModelProviderModelGroup[]): ClawComposerModelOption[] {
-  const seen = new Set<string>()
-  const options: ClawComposerModelOption[] = []
-  for (const group of groups) {
-    const providerId = group.providerId.trim()
-    if (!providerId) continue
-    for (const modelId of group.modelIds) {
-      const model = modelId.trim()
-      if (!model || !isComposerChatModelId(model)) continue
-      if (!modelProfileSupportsTextChat(group.modelProfiles?.[model])) continue
-      const key = `${providerId}\u0000${model}`
-      if (seen.has(key)) continue
-      seen.add(key)
-      options.push({ providerId, model })
-    }
-  }
-  return options
-}
-
-function resolveClawComposerModelByIndex(
-  groups: readonly ModelProviderModelGroup[],
-  value: string
-): ClawComposerModelOption | undefined {
-  const raw = value.trim()
-  if (!/^\d+$/.test(raw)) return undefined
-  const index = Number.parseInt(raw, 10)
-  if (!Number.isSafeInteger(index) || index < 1) return undefined
-  return listClawComposerModelOptions(groups)[index - 1]
-}
-
-export type WorkbenchComposerSubmitController = {
-  handleSend: () => void
-  sendWritePrompt: (value: string) => void
-}
-
+export type { WorkbenchComposerSubmitController } from './workbench-composer-submit-types'
+import { listClawComposerModelOptions, resolveClawComposerModelByIndex,
+  type UseWorkbenchComposerSubmitControllerParams,
+  type WorkbenchComposerSubmitController
+} from './workbench-composer-submit-types'
 export function useWorkbenchComposerSubmitController({
   activeClawChannelId,
   activeClawChannelModel,

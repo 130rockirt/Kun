@@ -1,8 +1,6 @@
 import { useMemo } from 'react'
-import {
-  modelSupportsImageInput,
-  type ModelProviderModelProfileV1
-} from '@shared/app-settings'
+import type { ModelProviderModelProfileV1 } from '@shared/app-settings'
+import { modelSupportsImageInput } from '@shared/app-settings-provider-core'
 import type { ModelProviderModelGroup } from '@shared/kun-gui-api'
 import type { CoreRuntimeInfoJson } from '../../agent/kun-contract'
 import { resolveComposerContextWindowTokens } from '../../store/chat-store-helpers'

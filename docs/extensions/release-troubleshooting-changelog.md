@@ -196,9 +196,9 @@ Changelog 记录公开 Extension API，而不是 Kun 内部重构。每项包含
 下面的 public surface 快照由文档门禁从 package 入口、公开 export 和可达 `.d.ts` 计算。只有在本节已经解释兼容性影响后才更新快照；不能把更新 hash 当成 Changelog 条目。
 
 <!-- BEGIN GENERATED SDK PUBLIC SURFACE SNAPSHOTS -->
-<!-- sdk-surface-snapshot @kun/extension-api@1.2.0 sha256:2333c41597d3c788c81c39604f99f1dca80902304018ceabed696651026e7b45 -->
+<!-- sdk-surface-snapshot @kun/extension-api@1.2.0 sha256:cc5a1819fbdfa928bfdb0a5913779cf080165841992d008ef7b2680199467e42 -->
 <!-- sdk-surface-snapshot @kun/extension-react@1.2.0 sha256:e2099a64dc22c05056dca0c599bafdfb22702b6d57e9b60edd2154b165323322 -->
-<!-- sdk-surface-snapshot @kun/extension-test@1.2.0 sha256:386c2beca46c240f957af2c92925c410a6d801a3bcc9f87697944d9f6d23337e -->
+<!-- sdk-surface-snapshot @kun/extension-test@1.2.0 sha256:fccbdd3fb3400ce179f8d6c3ae1d191bfe3488ef125577423f3d2b3f4fad851d -->
 <!-- END GENERATED SDK PUBLIC SURFACE SNAPSHOTS -->
 
 ### v1.2.0 — 媒体调度、本地分析与项目交换
