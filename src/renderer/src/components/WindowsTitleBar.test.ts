@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import i18n from '../i18n'
 import {
   buildWindowsTitleBarMenuSections,
+  supportsDesktopTitleBar,
   WindowsTitleBar,
   type WindowsTitleBarActions
 } from './WindowsTitleBar'
@@ -49,6 +50,13 @@ describe('WindowsTitleBar', () => {
     expect(winHtml).toContain('Window')
     expect(winHtml).toContain('Help')
     expect(macHtml).toBe('')
+  })
+
+  it('disables only the Linux renderer title bar in system mode', () => {
+    expect(supportsDesktopTitleBar('linux', 'system')).toBe(false)
+    expect(supportsDesktopTitleBar('linux', 'custom')).toBe(true)
+    expect(supportsDesktopTitleBar('win32', 'system')).toBe(true)
+    expect(supportsDesktopTitleBar('darwin', 'custom')).toBe(false)
   })
 
   it('maps menu items to desktop commands and app actions', async () => {

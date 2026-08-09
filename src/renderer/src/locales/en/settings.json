@@ -292,6 +292,8 @@
   "desktopStartMinimized": "Start minimized",
   "desktopStartMinimizedDesc": "Keep the main window hidden during Windows login startup.",
   "desktopStartMinimizedDisabledDesc": "Enable Open at login first. This option applies to Windows startup.",
+  "desktopUseSystemTitleBar": "Use system title bar",
+  "desktopUseSystemTitleBarDesc": "Let the Linux desktop environment or window manager draw the title bar. Restart Kun to apply.",
   "desktopCloseToTray": "Close to tray",
   "desktopCloseToTrayDesc": "Hide the window to the system tray when it is closed.",
   "desktopCloseAction": "Window close behavior",

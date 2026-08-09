@@ -322,6 +322,7 @@ export function GeneralSettingsSection({ ctx }: { ctx: Record<string, any> }): R
   const platform = typeof window !== 'undefined' ? window.kunGui?.platform ?? '' : ''
   const openAtLoginSupported = platform === 'win32' || platform === 'darwin'
   const startMinimizedSupported = platform === 'win32'
+  const systemTitleBarSupported = platform === 'linux'
   const desktopBehavior = form.appBehavior
   const closeAction = desktopBehavior.closeAction ?? (desktopBehavior.closeToTray ? 'tray' : 'ask')
   const closeActionOptions: WindowCloseAction[] = ['ask', 'tray', 'quit']
@@ -901,6 +902,18 @@ export function GeneralSettingsSection({ ctx }: { ctx: Record<string, any> }): R
               </select>
             }
           />
+          {systemTitleBarSupported ? (
+            <SettingRow
+              title={t('desktopUseSystemTitleBar')}
+              description={t('desktopUseSystemTitleBarDesc')}
+              control={
+                <Toggle
+                  checked={desktopBehavior.useSystemTitleBar === true}
+                  onChange={(v) => update({ appBehavior: { useSystemTitleBar: v } })}
+                />
+              }
+            />
+          ) : null}
           </SettingsCard>
         </SettingsTabPanel>
         <SettingsTabPanel

@@ -211,6 +211,7 @@ describe('JsonSettingsStore', () => {
     expect(loaded.appBehavior).toEqual({
       openAtLogin: false,
       startMinimized: false,
+      useSystemTitleBar: false,
       closeAction: 'ask',
       closeToTray: false
     })
@@ -953,6 +954,7 @@ describe('JsonSettingsStore', () => {
       appBehavior: {
         openAtLogin: true,
         startMinimized: true,
+        useSystemTitleBar: true,
         closeAction: 'tray'
       }
     })
@@ -966,12 +968,14 @@ describe('JsonSettingsStore', () => {
     expect(enabled.appBehavior).toEqual({
       openAtLogin: true,
       startMinimized: true,
+      useSystemTitleBar: true,
       closeAction: 'tray',
       closeToTray: true
     })
     expect(disabled.appBehavior).toEqual({
       openAtLogin: false,
       startMinimized: false,
+      useSystemTitleBar: true,
       closeAction: 'quit',
       closeToTray: false
     })

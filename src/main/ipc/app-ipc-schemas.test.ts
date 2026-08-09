@@ -655,6 +655,12 @@ describe('app-ipc-schemas', () => {
     expect(() => settingsPatchSchema.parse({ cursorSpotlightColor: 'blue' })).toThrow()
   })
 
+  it('accepts the Linux system title bar preference', () => {
+    expect(settingsPatchSchema.parse({
+      appBehavior: { useSystemTitleBar: true }
+    }).appBehavior).toEqual({ useSystemTitleBar: true })
+  })
+
   it('accepts media generation settings and provider capability patches', () => {
     const payload = settingsPatchSchema.parse({
       provider: {

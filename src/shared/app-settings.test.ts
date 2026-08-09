@@ -615,6 +615,7 @@ describe('app behavior settings', () => {
     expect(normalizeAppSettings(raw).appBehavior).toEqual({
       openAtLogin: false,
       startMinimized: false,
+      useSystemTitleBar: false,
       closeAction: 'ask',
       closeToTray: false
     })
@@ -626,6 +627,7 @@ describe('app behavior settings', () => {
       appBehavior: {
         openAtLogin: false,
         startMinimized: true,
+        useSystemTitleBar: true,
         closeToTray: true
       }
     })
@@ -633,6 +635,7 @@ describe('app behavior settings', () => {
     expect(normalized.appBehavior).toEqual({
       openAtLogin: false,
       startMinimized: false,
+      useSystemTitleBar: true,
       closeAction: 'tray',
       closeToTray: true
     })
@@ -647,6 +650,18 @@ describe('app behavior settings', () => {
     expect(current.appBehavior.closeAction).toBe('ask')
     expect(mergeAppBehaviorSettings(current.appBehavior, { closeToTray: true }).closeAction).toBe('tray')
     expect(mergeAppBehaviorSettings(current.appBehavior, { closeToTray: false }).closeAction).toBe('quit')
+  })
+
+  it('preserves the Linux system title bar preference through patches', () => {
+    const current = normalizeAppSettings({
+      ...settings(),
+      appBehavior: undefined
+    } as unknown as AppSettingsV1)
+
+    expect(mergeAppBehaviorSettings(current.appBehavior, { useSystemTitleBar: true }))
+      .toMatchObject({ useSystemTitleBar: true })
+    expect(mergeAppBehaviorSettings(current.appBehavior, { useSystemTitleBar: false }))
+      .toMatchObject({ useSystemTitleBar: false })
   })
 })
 

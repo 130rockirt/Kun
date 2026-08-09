@@ -1099,6 +1099,8 @@ export type WindowCloseAction = typeof WINDOW_CLOSE_ACTIONS[number]
 export type AppBehaviorConfigV1 = {
   openAtLogin: boolean
   startMinimized: boolean
+  /** Linux only. Use the desktop environment/window manager title bar after restart. */
+  useSystemTitleBar?: boolean
   closeAction?: WindowCloseAction
   /** Legacy compatibility field. New code should use closeAction. */
   closeToTray: boolean

@@ -19,8 +19,11 @@ import { applyCursorSpotlight } from './lib/apply-theme'
 import { installCursorSpotlightTracking } from './lib/cursor-spotlight'
 import { installDataMigrationRendererRpc } from './data-migration/renderer-state-rpc'
 import { installSharedBusinessStorage } from './lib/shared-business-storage'
+import { resolveDesktopTitleBarMode } from '@shared/desktop-title-bar'
 
 document.documentElement.dataset.platform = window.kunGui?.platform ?? 'unknown'
+document.documentElement.dataset.desktopTitleBar = window.kunGui?.desktopTitleBarMode
+  ?? resolveDesktopTitleBarMode(window.kunGui?.platform ?? 'unknown', false)
 applyCursorSpotlight(true)
 installCursorSpotlightTracking()
 const storageRelocationMode = new URLSearchParams(window.location.search).get('storageRelocation') === '1'

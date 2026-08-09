@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer, webFrame, webUtils } from 'electron'
 import type { KunGuiApi } from '../shared/kun-gui-api'
 import type { AppEnvironmentInfo } from '../shared/app-environment'
+import { normalizeDesktopTitleBarMode } from '../shared/desktop-title-bar'
 import { registerExtensionContentScriptPreload } from './extension-content-script'
 
 registerExtensionContentScriptPreload({ contextBridge, ipcRenderer, webFrame })
@@ -15,6 +16,17 @@ const homeDirFromArgs =
 const APP_ENVIRONMENT_ARG = '--kun-app-environment='
 const appEnvironment = parseAppEnvironment(
   process.argv.find((arg) => arg.startsWith(APP_ENVIRONMENT_ARG))?.slice(APP_ENVIRONMENT_ARG.length)
+)
+
+const DESKTOP_TITLE_BAR_MODE_ARG = '--kun-desktop-title-bar-mode='
+const desktopTitleBarMode = normalizeDesktopTitleBarMode(
+  process.platform,
+  // Per-window additionalArguments are appended to argv, so prefer the last
+  // occurrence over any similarly named application launch argument.
+  [...process.argv]
+    .reverse()
+    .find((arg) => arg.startsWith(DESKTOP_TITLE_BAR_MODE_ARG))
+    ?.slice(DESKTOP_TITLE_BAR_MODE_ARG.length)
 )
 
 function parseAppEnvironment(encoded: string | undefined): AppEnvironmentInfo {
@@ -48,6 +60,7 @@ function parseAppEnvironment(encoded: string | undefined): AppEnvironmentInfo {
 
 const api = {
   platform: process.platform,
+  desktopTitleBarMode,
   homeDir: homeDirFromArgs,
   appEnvironment,
   sharedClientState: {

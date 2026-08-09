@@ -298,6 +298,7 @@ export function normalizeAppBehaviorSettings(
   return {
     openAtLogin,
     startMinimized: openAtLogin && settings?.startMinimized === true,
+    useSystemTitleBar: settings?.useSystemTitleBar === true,
     closeAction,
     closeToTray: closeAction === 'tray'
   }

@@ -292,6 +292,8 @@
   "desktopStartMinimized": "Запуск свёрнутым",
   "desktopStartMinimizedDesc": "Скрывать главное окно при запуске Windows.",
   "desktopStartMinimizedDisabledDesc": "Сначала включите «Открывать при входе». Эта опция работает при запуске Windows.",
+  "desktopUseSystemTitleBar": "Использовать системную строку заголовка",
+  "desktopUseSystemTitleBarDesc": "Разрешить среде рабочего стола Linux или оконному менеджеру отрисовывать строку заголовка. Перезапустите Kun для применения.",
   "desktopCloseToTray": "Сворачивать в трей",
   "desktopCloseToTrayDesc": "Скрывать окно в системном трее при закрытии.",
   "desktopCloseAction": "Поведение при закрытии окна",

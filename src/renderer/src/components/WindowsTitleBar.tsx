@@ -3,6 +3,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { DesktopCommand } from '@shared/kun-gui-api'
 import {
+  resolveDesktopTitleBarMode,
+  usesCustomDesktopTitleBar,
+  type DesktopTitleBarMode
+} from '@shared/desktop-title-bar'
+import {
   resolveKeyboardShortcutBindings,
   type KeyboardShortcutBindingsV1,
   type KeyboardShortcutCommandId
@@ -65,8 +70,11 @@ function defaultOpenLogDir(): Promise<void> {
   return window.kunGui.openLogDir().then(() => undefined)
 }
 
-export function supportsDesktopTitleBar(platform: string): boolean {
-  return platform === 'win32' || platform === 'linux'
+export function supportsDesktopTitleBar(
+  platform: string,
+  mode: DesktopTitleBarMode = resolveDesktopTitleBarMode(platform, false)
+): boolean {
+  return usesCustomDesktopTitleBar(platform, mode)
 }
 
 export function buildWindowsTitleBarMenuSections(

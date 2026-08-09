@@ -292,6 +292,8 @@
   "desktopStartMinimized": "न्यूनतम प्रारंभ करें",
   "desktopStartMinimizedDesc": "विंडोज़ लॉगिन स्टार्टअप के दौरान मुख्य विंडो को छिपाकर रखें।",
   "desktopStartMinimizedDisabledDesc": "पहले लॉगिन पर ओपन सक्षम करें। यह विकल्प विंडोज़ स्टार्टअप पर लागू होता है।",
+  "desktopUseSystemTitleBar": "सिस्टम टाइटल बार का उपयोग करें",
+  "desktopUseSystemTitleBarDesc": "Linux डेस्कटॉप वातावरण या विंडो मैनेजर को टाइटल बार बनाने दें। लागू करने के लिए Kun को पुनः आरंभ करें।",
   "desktopCloseToTray": "ट्रे के करीब",
   "desktopCloseToTrayDesc": "विंडो बंद होने पर उसे सिस्टम ट्रे में छिपा दें।",
   "desktopCloseAction": "खिड़की बंद करने का व्यवहार",

@@ -21,6 +21,7 @@ import type {
   WorkflowRuntimeStatus
 } from './app-settings'
 import type { EditorListResult, EditorOpenResult, OpenEditorPathOptions } from './editor'
+import type { DesktopTitleBarMode } from './desktop-title-bar'
 import type { GitBranchesResult, GitBranchWorktreesResult, GitWorktreeCheckoutResult } from './git-branches'
 import type { GitCheckpointCreateResult, GitCheckpointRestoreResult } from './git-checkpoint'
 import type {
@@ -590,6 +591,8 @@ export type ModelProviderCredentialRevealResult = {
 
 export type KunGuiApi = ExtensionIpcApi & {
   platform: string
+  /** Immutable mode selected before the BrowserWindow and renderer are created. */
+  desktopTitleBarMode: DesktopTitleBarMode
   homeDir: string
   /** Immutable process identity selected before Electron profile locking. */
   appEnvironment: import('./app-environment').AppEnvironmentInfo
