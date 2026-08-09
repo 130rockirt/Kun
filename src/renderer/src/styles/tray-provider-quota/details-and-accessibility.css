@@ -1,0 +1,223 @@
+.tray-quota-source > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.tray-quota-source svg {
+  width: 10px;
+  height: 10px;
+}
+
+.tray-quota-state {
+  display: flex;
+  min-height: 230px;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 8px;
+  padding: 24px;
+  color: var(--tray-muted);
+  text-align: center;
+}
+
+.tray-quota-state > svg {
+  width: 26px;
+  height: 26px;
+  color: var(--tray-faint);
+}
+
+.tray-quota-state strong {
+  color: var(--tray-text);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.tray-quota-state p {
+  max-width: 300px;
+  margin: 0;
+  font-size: 12px;
+  line-height: 17px;
+}
+
+.tray-quota-state-missing_credentials > svg {
+  color: var(--tray-warn);
+}
+
+.tray-quota-state-error > svg {
+  color: var(--tray-danger);
+}
+
+.tray-quota-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  border: 1px solid color-mix(in srgb, var(--tray-danger), transparent 62%);
+  border-radius: var(--tray-radius-control);
+  padding: 10px;
+  background: var(--tray-danger-soft);
+  color: var(--tray-danger);
+}
+
+.tray-quota-error svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  margin-top: 1px;
+}
+
+.tray-quota-error p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 17px;
+}
+
+.tray-quota-stale {
+  margin-bottom: 8px;
+}
+
+.tray-quota-dashboard-button {
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--tray-border);
+  border-radius: var(--tray-radius-control);
+  padding: 0 12px;
+  background: var(--tray-panel-strong);
+  color: var(--tray-text);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  transition:
+    border-color var(--tray-duration) ease,
+    background var(--tray-duration) ease;
+}
+
+.tray-quota-dashboard-button:hover {
+  border-color: var(--tray-border-strong);
+  background: var(--tray-hover);
+}
+
+.tray-quota-dashboard-button svg {
+  width: 12px;
+  height: 12px;
+}
+
+.tray-quota-footer {
+  display: grid;
+  flex: none;
+  grid-template-columns: minmax(0, 0.94fr) minmax(0, 1.06fr);
+  gap: 8px;
+  border-top: 1px solid var(--tray-border);
+  padding: 10px 16px;
+  background: var(--tray-bg);
+}
+
+.tray-quota-footer button {
+  display: inline-flex;
+  min-width: 0;
+  height: 40px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid var(--tray-border);
+  border-radius: var(--tray-radius-pill);
+  background: var(--tray-panel-strong);
+  color: var(--tray-text);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  transition:
+    border-color var(--tray-duration) ease,
+    background var(--tray-duration) ease,
+    color var(--tray-duration) ease;
+}
+
+.tray-quota-footer button:hover {
+  background: var(--tray-hover);
+  border-color: var(--tray-border-strong);
+}
+
+.tray-quota-footer button.is-primary {
+  border-color: var(--tray-control);
+  background: var(--tray-control);
+  color: var(--tray-control-foreground);
+}
+
+.tray-quota-footer button.is-primary:hover {
+  border-color: var(--tray-control-hover);
+  background: var(--tray-control-hover);
+}
+
+.tray-quota-footer svg {
+  width: 14px;
+  height: 14px;
+}
+
+.is-spinning {
+  animation: tray-quota-spin 0.8s linear infinite;
+}
+
+@keyframes tray-quota-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+}
+
+@media (forced-colors: active) {
+  :root {
+    --tray-bg: Canvas;
+    --tray-panel: Canvas;
+    --tray-panel-strong: Canvas;
+    --tray-subtle: Canvas;
+    --tray-text: CanvasText;
+    --tray-muted: CanvasText;
+    --tray-faint: GrayText;
+    --tray-border: CanvasText;
+    --tray-border-strong: CanvasText;
+    --tray-hover: Highlight;
+    --tray-control: Highlight;
+    --tray-control-hover: Highlight;
+    --tray-control-foreground: HighlightText;
+    --tray-focus: Highlight;
+    --tray-progress: Highlight;
+    --tray-good: CanvasText;
+    --tray-warn: CanvasText;
+    --tray-danger: CanvasText;
+  }
+
+  .tray-quota-popover {
+    border-color: CanvasText;
+    background: Canvas;
+    box-shadow: none;
+  }
+
+  .tray-provider-tab.is-active,
+  .tray-quota-footer button.is-primary {
+    border: 1px solid Highlight;
+    background: Highlight;
+    color: HighlightText;
+    forced-color-adjust: none;
+  }
+
+  .tray-quota-progress span {
+    background: Highlight;
+    forced-color-adjust: none;
+  }
+
+  button:focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+  }
+}

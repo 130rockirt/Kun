@@ -1,7 +1,7 @@
-import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
+import { webviewStyles } from './support/webview-styles.js'
 
-const css = readFileSync(new URL('../src/webview/styles.css', import.meta.url), 'utf8')
+const css = webviewStyles()
 const compactCss = atRuleBlock(css, '@media (max-width: 1180px)')
 const narrowCss = atRuleBlock(css, '@media (max-width: 540px)')
 

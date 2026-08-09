@@ -10,6 +10,13 @@ const installerHelperPath = join(
   'build',
   'windows-installer-migration.ps1'
 )
+const installerHelperPaths = [
+  installerHelperPath,
+  'windows-installer-migration-paths.ps1',
+  'windows-installer-migration-journal.ps1',
+  'windows-installer-migration-filesystem.ps1',
+  'windows-installer-migration-actions.ps1'
+].map((path) => path === installerHelperPath ? path : join(__dirname, '..', 'build', path))
 
 function getWindowsPowerShellPath(env = process.env) {
   const systemRoot = env.SystemRoot || env.WINDIR
@@ -63,35 +70,37 @@ function validateWindowsInstallerSyntax({
     '}'
   ].join('\n')
 
-  const result = spawn(
-    powershellPath,
-    [
-      '-NoProfile',
-      '-NonInteractive',
-      '-ExecutionPolicy',
-      'Bypass',
-      '-Command',
-      parseCommand
-    ],
-    {
-      encoding: 'utf8',
-      env: {
-        ...env,
-        KUN_INSTALLER_SYNTAX_TARGET: scriptPath
+  const scriptPaths = scriptPath === installerHelperPath ? installerHelperPaths : [scriptPath]
+  for (const currentScriptPath of scriptPaths) {
+    const result = spawn(
+      powershellPath,
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-Command',
+        parseCommand
+      ],
+      {
+        encoding: 'utf8',
+        env: {
+          ...env,
+          KUN_INSTALLER_SYNTAX_TARGET: currentScriptPath
+        }
       }
-    }
-  )
-
-  if (result.stdout) process.stdout.write(result.stdout)
-  if (result.stderr) process.stderr.write(result.stderr)
-  if (result.error) throw result.error
-  if (result.status !== 0) {
-    throw new Error(
-      `[windows-installer-syntax] PowerShell parser exited with code ${result.status}.`
     )
-  }
 
-  console.log(`[windows-installer-syntax] PowerShell syntax OK: ${scriptPath}`)
+    if (result.stdout) process.stdout.write(result.stdout)
+    if (result.stderr) process.stderr.write(result.stderr)
+    if (result.error) throw result.error
+    if (result.status !== 0) {
+      throw new Error(
+        `[windows-installer-syntax] PowerShell parser exited with code ${result.status}.`
+      )
+    }
+    console.log(`[windows-installer-syntax] PowerShell syntax OK: ${currentScriptPath}`)
+  }
 }
 
 if (require.main === module) {
@@ -101,5 +110,6 @@ if (require.main === module) {
 module.exports = {
   getWindowsPowerShellPath,
   installerHelperPath,
+  installerHelperPaths,
   validateWindowsInstallerSyntax
 }

@@ -25,26 +25,20 @@ import {
   validateWhenExpression,
   type WorkbenchContext
 } from './when-expression'
+import {
+  WORKBENCH_CONTRIBUTION_POINTS,
+  type WorkbenchContributionPoint
+} from './contribution-points'
 
-export const WORKBENCH_CONTRIBUTION_POINTS = [
-  'commands',
-  'views.containers',
-  'views.leftSidebar',
-  'views.rightSidebar',
-  'views.auxiliaryPanel',
-  'views.editorTab',
-  'views.fullPage',
-  'actions.topBar',
-  'actions.composer',
-  'actions.message',
-  'message.resultPreviews',
-  'settings',
-  'contextMenus',
-  'notifications',
-  'hostContentScripts'
-] as const
-
-export type WorkbenchContributionPoint = (typeof WORKBENCH_CONTRIBUTION_POINTS)[number]
+export {
+  WORKBENCH_CONTRIBUTION_POINTS,
+  type WorkbenchContributionPoint
+} from './contribution-points'
+export {
+  extensionHostIconUrl,
+  extensionResourceUrl,
+  resolveContributionCommand
+} from './contribution-urls'
 
 export type ContributionPayloadMap = {
   commands: CommandContribution
@@ -702,24 +696,3 @@ export class ContributionRegistry {
 }
 
 export const workbenchContributionRegistry = new ContributionRegistry()
-
-export function extensionResourceUrl(extensionId: string, relativePath: string): string {
-  const safeId = ExtensionIdSchema.parse(extensionId)
-  const segments = relativePath.split('/').map((segment) => encodeURIComponent(segment))
-  return `kun-extension://${safeId}/${segments.join('/')}`
-}
-
-export function extensionHostIconUrl(extensionId: string, relativePath: string): string {
-  return `${extensionResourceUrl(extensionId, relativePath)}?kunHostResource=icon`
-}
-
-export function resolveContributionCommand(
-  contribution: RegisteredContribution,
-  command: string
-): string {
-  if (command.startsWith('builtin:')) return command
-  if (contribution.owner.kind === 'builtin') return command.startsWith('extension:') ? '' : command
-  const prefix = `extension:${contribution.owner.extensionId}/`
-  if (command.startsWith('extension:')) return command.startsWith(prefix) ? command : ''
-  return `${prefix}${command}`
-}

@@ -1,8 +1,7 @@
 import { createHash } from 'node:crypto'
-import type {
-  GraphPlanningDraftV1,
-  GraphPlanningIssueV1
-} from '../../contracts/graph.js'
+import type { GraphPlanningDraftV1, GraphPlanningIssueV1 } from '../../contracts/graph.js'
+import type { GraphControlService } from '../../graph/index.js'
+import type { ToolHostContext } from '../../ports/tool-host.js'
 
 export const MINIMAL_VALID_PLAN_EXAMPLE = {
   plan: {
@@ -116,6 +115,35 @@ export function planningError(
   }
 }
 
+export class PlanningExecutionAbortedError extends Error {
+  constructor() {
+    super('Graph planning execution was aborted')
+    this.name = 'PlanningExecutionAbortedError'
+  }
+}
+
+export function assertPlanningExecutionActive(context: ToolHostContext): void {
+  if (context.abortSignal.aborted) throw new PlanningExecutionAbortedError()
+}
+
+export async function cancelCreatedRun(
+  options: { control: GraphControlService; nextId: (prefix: string) => string },
+  runId: string,
+  sourceTurnId: string
+): Promise<void> {
+  const run = await options.control.get(runId)
+  if (
+    run.status === 'completed' ||
+    run.status === 'failed' ||
+    run.status === 'cancelled'
+  ) return
+  await options.control.cancel(runId, {
+    commandId: options.nextId('graph_plan_abort'),
+    idempotencyKey: `graph-plan-abort:${sourceTurnId}:${runId}`,
+    reason: 'Graph planning source turn was interrupted before commit'
+  })
+}
+
 export function hashCandidate(candidate: unknown): string {
   return createHash('sha256').update(stableJson(candidate)).digest('hex')
 }
@@ -125,6 +153,17 @@ export function hashIncompleteToolArguments(raw: string): string {
     .update('graph_define_plan:incomplete:')
     .update(raw)
     .digest('hex')
+}
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`
+  if (value && typeof value === 'object') {
+    return `{${Object.entries(value)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`)
+      .join(',')}}`
+  }
+  return JSON.stringify(value) ?? 'null'
 }
 
 export function planningRunSummary(run: {
@@ -145,15 +184,4 @@ export function planningRunSummary(run: {
 
 export function errorMessage(error: unknown): string {
   return (error instanceof Error ? error.message : String(error)).slice(0, 2_048)
-}
-
-function stableJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`
-  if (value && typeof value === 'object') {
-    return `{${Object.entries(value)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`)
-      .join(',')}}`
-  }
-  return JSON.stringify(value) ?? 'null'
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import enCommon from '../locales/en/common.json'
-import zhCommon from '../locales/zh/common.json'
+import enCommon from '../locales/en/common'
+import zhCommon from '../locales/zh/common'
 import {
   PM_SKILL_FRAMEWORKS,
   SDD_ASSISTANT_FRAMEWORK_GROUPS,

@@ -2,9 +2,6 @@ import {
   DEFAULT_MODEL_PROVIDER_ID,
   KUN_TOOL_PERMISSION_MODES,
   MODEL_PROVIDER_PRESETS,
-  applyKunRuntimePatch,
-  getKunRuntimeSettings,
-  getModelProviderSettings,
   kunToolPermissionModeFromSettings,
   kunToolPermissionModeSettings,
   modelProviderPresetProfile,
@@ -18,6 +15,9 @@ import {
   type ModelProviderPreset,
   type ModelProviderProfileV1
 } from '@shared/app-settings'
+import { getKunRuntimeSettings } from '@shared/app-settings-kun-defaults'
+import { applyKunRuntimePatch } from '@shared/app-settings-kun-migration'
+import { getModelProviderSettings } from '@shared/app-settings-provider-core'
 import { diffSettingsPatch } from './settings-utils'
 
 export type InitialSetupAccessMode = 'api' | 'token-plan'

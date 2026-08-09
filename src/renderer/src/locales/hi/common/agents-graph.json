@@ -1,0 +1,292 @@
+{
+  "subagentsPanel": {
+    "configModel": "मॉडल कॉन्फ़िगर करें",
+    "delegatable": "प्रत्यायोजित · चैट में प्रयोग करने योग्य",
+    "system": "सिस्टम · आंतरिक",
+    "global": "वैश्विक · साझा किया गया",
+    "newSubagent": "नया उपएजेंट",
+    "delegatableCount": "{{count}} सौंपने योग्य भूमिकाएँ",
+    "configuredCount": "{{count}} कॉन्फ़िगर किए गए",
+    "showingCount": "{{visible}} / {{total}} दिखाए जा रहे हैं",
+    "policySummary": "कतार और सत्र सीमाएँ",
+    "search": "उप-एजेंट खोजें",
+    "searchPlaceholder": "नाम, क्षमता या परिदृश्य खोजें",
+    "clearSearch": "खोज साफ़ करें",
+    "toggleCategory": "{{category}} श्रेणी खोलें या बंद करें",
+    "batchModel": "बैच मॉडल",
+    "mixedModels": "मिश्रित मॉडल",
+    "mixedConfiguration": "कई कॉन्फ़िगरेशन",
+    "categoryConfiguration": "श्रेणी की डिफ़ॉल्ट कॉन्फ़िगरेशन",
+    "categoryConfigurationDesc": "इस श्रेणी के हर एजेंट पर समान डिफ़ॉल्ट लागू करें",
+    "resetCategoryConfiguration": "डिफ़ॉल्ट रीसेट करें",
+    "effectiveModel": "प्रभावी मॉडल",
+    "batchModelAria": "{{category}} में {{count}} एजेंटों के लिए एक ही मॉडल सेट करें",
+    "reasoning": "रीज़निंग तीव्रता",
+    "mixedReasoning": "मिश्रित रीज़निंग",
+    "batchReasoningAria": "{{category}} में {{count}} एजेंटों के लिए एक ही रीज़निंग तीव्रता सेट करें",
+    "capabilities": "क्षमताएँ",
+    "emptyTitle": "कोई मेल खाता उप-एजेंट नहीं",
+    "emptySearch": "कोई दूसरा नाम, क्षमता या परिदृश्य आज़माएँ।",
+    "emptyCategory": "ब्राउज़ करने के लिए दूसरी श्रेणी चुनें।",
+    "surface": {
+      "shared": "आधार",
+      "code": "Code",
+      "write": "लेखन",
+      "design": "डिज़ाइन"
+    },
+    "surfaceInherited": "आधार से मिला",
+    "surfaceAssigned": "इस मोड में उपलब्ध",
+    "surfaceUnassigned": "इस मोड में उपलब्ध नहीं",
+    "pagination": "Agent पृष्ठ",
+    "pageSummary": "पृष्ठ {{page}} / {{pages}} · {{count}} Agent",
+    "previousPage": "पिछला पृष्ठ",
+    "nextPage": "अगला पृष्ठ",
+    "extensionAgents": {
+      "title": "विस्तार एजेंट",
+      "description": "आधार सेट के अतिरिक्त एजेंट · {{count}}",
+      "enabled": "चालू",
+      "disabled": "बंद",
+      "toggle": "विस्तार एजेंट टॉगल करें",
+      "keepBaseOnly": "केवल आधार एजेंट रखें",
+      "enableExtensions": "विस्तार एजेंट चालू करें",
+      "baseAlwaysAvailable": "आधार एजेंट हमेशा उपलब्ध रहते हैं"
+    },
+    "category": {
+      "all": "सभी",
+      "baseAgent": "आधार एजेंट",
+      "development": "विकास",
+      "review": "समीक्षा",
+      "quality": "गुणवत्ता",
+      "planning": "योजना",
+      "operations": "संचालन",
+      "research": "शोध",
+      "custom": "कस्टम"
+    },
+    "smallModel": {
+      "name": "छोटा मॉडल",
+      "desc": "शीर्षक और सारांश के लिए डिफ़ॉल्ट"
+    },
+    "role": {
+      "general": {
+        "name": "सामान्य",
+        "desc": "पूर्ण उपकरण · बहु-चरणीय कार्य"
+      },
+      "explore": {
+        "name": "अन्वेषण करें",
+        "desc": "केवल पढ़ने के लिए · कोड ढूंढें और खोजें"
+      },
+      "component-designer": {
+        "name": "Component Designer",
+        "desc": "Focused interactive component prototype"
+      },
+      "design-reviewer": {
+        "name": "डिज़ाइन समीक्षा",
+        "desc": "डिज़ाइन-समीक्षक · केवल-पढ़ने के लिए"
+      },
+      "over-engineering-reviewer": {
+        "name": "ओवर-इंजीनियरिंग समीक्षा",
+        "desc": "ओवर-इंजीनियरिंग-समीक्षक · केवल पढ़ने के लिए"
+      },
+      "code-reviewer": {
+        "name": "कोड समीक्षक",
+        "desc": "पाँच-आयामी समीक्षा · केवल पढ़ने के लिए"
+      },
+      "test-engineer": {
+        "name": "टेस्ट इंजीनियर",
+        "desc": "परीक्षण रणनीति · परीक्षण लिख और चला सकता है"
+      },
+      "security-auditor": {
+        "name": "सुरक्षा ऑडिटर",
+        "desc": "खतरे और OWASP जोखिम · केवल पढ़ने के लिए"
+      },
+      "web-performance-auditor": {
+        "name": "वेब प्रदर्शन ऑडिटर",
+        "desc": "Core Web Vitals · साक्ष्य-आधारित"
+      },
+      "api-and-interface-design": {
+        "name": "API & Interface Architect",
+        "desc": "Stable public contracts · compatibility and validation"
+      },
+      "browser-testing-with-devtools": {
+        "name": "Web QA Planner",
+        "desc": "Browser and accessibility verification plans · read-only"
+      },
+      "ci-cd-and-automation": {
+        "name": "CI/CD Engineer",
+        "desc": "Pipelines, quality gates, and rollback-safe releases"
+      },
+      "code-review-and-quality": {
+        "name": "Code Quality Reviewer",
+        "desc": "Multi-axis correctness and architecture review · read-only"
+      },
+      "code-simplification": {
+        "name": "Code Simplification Engineer",
+        "desc": "Reduce complexity · preserve behavior"
+      },
+      "context-engineering": {
+        "name": "Context Engineer",
+        "desc": "Minimal authoritative context pack · read-only"
+      },
+      "debugging-and-error-recovery": {
+        "name": "Root Cause Debugger",
+        "desc": "Reproduce, localize, fix, and regression-test"
+      },
+      "deprecation-and-migration": {
+        "name": "Migration Engineer",
+        "desc": "Staged compatibility, data migration, and rollback"
+      },
+      "documentation-and-adrs": {
+        "name": "Documentation & ADR Engineer",
+        "desc": "Architecture decisions, guides, and API docs"
+      },
+      "doubt-driven-development": {
+        "name": "Doubt-Driven Reviewer",
+        "desc": "Challenge assumptions and designs · read-only"
+      },
+      "frontend-ui-engineering": {
+        "name": "Frontend UI Engineer",
+        "desc": "Accessible, responsive, product-quality interfaces"
+      },
+      "git-workflow-and-versioning": {
+        "name": "Git Workflow Engineer",
+        "desc": "Branches, atomic commits, and history safety"
+      },
+      "idea-refine": {
+        "name": "Idea Refinement Partner",
+        "desc": "Compare options, MVP bounds, and validation · read-only"
+      },
+      "incremental-implementation": {
+        "name": "Incremental Implementation Engineer",
+        "desc": "Thin, buildable, continuously verified slices"
+      },
+      "interview-me": {
+        "name": "Requirements Interviewer",
+        "desc": "Find gaps and high-information questions · read-only"
+      },
+      "observability-and-instrumentation": {
+        "name": "Observability Engineer",
+        "desc": "Logs, metrics, traces, and actionable alerts"
+      },
+      "performance-optimization": {
+        "name": "Performance Engineer",
+        "desc": "Measure bottlenecks and prove before/after impact"
+      },
+      "planning-and-task-breakdown": {
+        "name": "Implementation Planner",
+        "desc": "Dependency-aware, acceptance-driven tasks · read-only"
+      },
+      "security-and-hardening": {
+        "name": "Security Hardening Engineer",
+        "desc": "Threat-model and implement scoped security fixes"
+      },
+      "shipping-and-launch": {
+        "name": "Release Readiness Engineer",
+        "desc": "Go/no-go, rollout, and rollback plans · read-only"
+      },
+      "source-driven-development": {
+        "name": "Source-Driven Researcher",
+        "desc": "Ground guidance in version-matched sources · read-only"
+      },
+      "spec-driven-development": {
+        "name": "Specification Engineer",
+        "desc": "Scenarios, interfaces, and acceptance criteria · read-only"
+      },
+      "test-driven-development": {
+        "name": "TDD Engineer",
+        "desc": "Red-green-refactor with behavior-focused proof"
+      },
+      "using-agent-skills": {
+        "name": "Engineering Workflow Advisor",
+        "desc": "Map work to the smallest suitable agent sequence · read-only"
+      },
+      "write-outline-architect": {
+        "name": "Outline Architect",
+        "desc": "Structure, arguments, and narrative progression · read-only"
+      },
+      "write-draft-author": {
+        "name": "Draft Author",
+        "desc": "Long-form drafts and focused section writing"
+      },
+      "write-developmental-editor": {
+        "name": "Developmental Editor",
+        "desc": "Improve logic, structure, pacing, and clarity"
+      },
+      "write-copy-editor": {
+        "name": "Copy Editor",
+        "desc": "Polish tone, terminology, and grammar"
+      },
+      "write-fact-checker": {
+        "name": "Fact Checker",
+        "desc": "Verify claims, figures, and uncertainty · read-only"
+      },
+      "write-citation-researcher": {
+        "name": "Citation Researcher",
+        "desc": "Authoritative sources and traceable citations · read-only"
+      },
+      "design-product-planner": {
+        "name": "Product Design Planner",
+        "desc": "Direction, goals, flows, and tradeoffs · read-only"
+      },
+      "design-ux-researcher": {
+        "name": "UX Researcher",
+        "desc": "User journeys and usability research · read-only"
+      },
+      "design-screen-designer": {
+        "name": "Screen Designer",
+        "desc": "Complete responsive screens and interaction states"
+      },
+      "design-system-architect": {
+        "name": "Design System Architect",
+        "desc": "Semantic tokens, components, and variant constraints"
+      },
+      "design-code-binder": {
+        "name": "Design Code Binder",
+        "desc": "Map design nodes to routes and source files"
+      },
+      "design-handoff-specialist": {
+        "name": "Design Handoff Specialist",
+        "desc": "DESIGN.md, implementation notes, and handoff assets"
+      },
+      "compaction": {
+        "name": "संघनन",
+        "desc": "कॉन्फ़िगर करने योग्य · मुख्य मॉडल पर डिफ़ॉल्ट"
+      },
+      "codeReview": {
+        "name": "कोड समीक्षा",
+        "desc": "पृथक केवल-पढ़ने के लिए चलाएं · कॉन्फ़िगर करने योग्य"
+      },
+      "plan": {
+        "name": "योजना मोड",
+        "desc": "योजना बनाना · वार्तालाप मॉडल को डिफ़ॉल्ट बनाता है"
+      },
+      "title": {
+        "name": "शीर्षक",
+        "desc": "एलएलएम · छोटे मॉडल के लिए डिफ़ॉल्ट"
+      },
+      "summary": {
+        "name": "सारांश",
+        "desc": "एलएलएम · छोटे मॉडल के लिए डिफ़ॉल्ट"
+      }
+    },
+    "builtin": "अंतर्निर्मित",
+    "customTag": "कस्टम",
+    "workspaceFile": "{{path}} में परिभाषित",
+    "workspaceReadOnly": "इस भूमिका को .kun/agents/*.md में संपादित करें"
+  },
+  "summarizeSession": "संक्षेप करें",
+  "summarizing": "संक्षेप में...",
+  "summarizeFailed": "इस बातचीत का सारांश नहीं दिया जा सका",
+  "name": "नाम",
+  "description": "विवरण",
+  "color": "रंग",
+  "mode": "मोड",
+  "writeFocusModeEnter": "फ़ोकस मोड दर्ज करें",
+  "writeFocusModeExit": "फ़ोकस मोड से बाहर निकलें",
+  "writeFocusModeShortcut": "⌘/Ctrl + Shift + F",
+  "writeShowLineNumbers": "पंक्ति क्रमांक दिखाएँ",
+  "writeHideLineNumbers": "पंक्ति क्रमांक छिपाएँ",
+  "writeEnableLineWrapping": "लाइन रैपिंग सक्षम करें",
+  "writeDisableLineWrapping": "लाइन रैपिंग अक्षम करें",
+  "systemPrompt": "सिस्टम प्रॉम्प्ट",
+  "toolPolicy": "टूल एक्सेस"
+}

@@ -1,0 +1,223 @@
+import { readFile, rm } from 'node:fs/promises'
+import { relative, resolve, sep } from 'node:path'
+import { z } from 'zod'
+import { HybridSessionStore } from '../adapters/hybrid/hybrid-session-store.js'
+import { HybridThreadStore } from '../adapters/hybrid/hybrid-thread-store.js'
+import {
+  FileArtifactStore,
+  type ArtifactStore
+} from '../artifacts/artifact-store.js'
+import { FileAttachmentStore, type AttachmentStore } from '../attachments/attachment-store.js'
+import {
+  AttachmentsCapabilityConfig,
+  MemoryCapabilityConfig
+} from '../contracts/capabilities.js'
+import {
+  DEFAULT_GRAPH_RUNTIME_CONFIG,
+  GraphRuntimeConfigSchema,
+  type GraphRuntimeConfig
+} from '../config/kun-config.js'
+import { RuntimeEvent, type RuntimeEvent as RuntimeEventValue } from '../contracts/events.js'
+import {
+  AttachmentMetadata,
+  AttachmentUploadRequest
+} from '../contracts/attachments.js'
+import {
+  GraphDomainEventV1Schema,
+  GraphPlanV1Schema,
+  GraphRunIdSchema,
+  GraphRunStatusSchema
+} from '../contracts/graph.js'
+import { TurnItem } from '../contracts/items.js'
+import {
+  MemoryCreateRequest,
+  MemoryUpdateRequest
+} from '../contracts/memory.js'
+import { ThreadSchema } from '../contracts/threads.js'
+import type { ThreadExecutionLease } from '../contracts/runtime-flavor.js'
+import type { AgentSession } from '../domain/session.js'
+import { makeErrorItem } from '../domain/item.js'
+import { finishTurn } from '../domain/turn.js'
+import {
+  type FinishedTurnStatus,
+  finalizeTurnItems
+} from '../domain/turn-item-finalization.js'
+import { FileMemoryStore, type MemoryStore } from '../memory/memory-store.js'
+import { FileGraphRunStore, type GraphRunStore } from '../graph/graph-run-store.js'
+import type {
+  ItemHistoryCommit,
+  ItemHistoryCompactionResult,
+  ItemHistoryPage,
+  ItemHistoryPageOptions,
+  ItemHistorySnapshot,
+  SessionLatestUsageSnapshot,
+  SessionStore,
+  SessionUsageRecord
+} from '../ports/session-store.js'
+import type { ThreadStore, ThreadStoreListOptions } from '../ports/thread-store.js'
+import { atomicWriteFile } from '../adapters/file/atomic-write.js'
+import { RevisionConflictError } from './revisioned-document-store.js'
+import { buildPublicItemHistoryPage } from '../services/item-history-page.js'
+
+export const ThreadIdSchema = z.string().min(1).max(256)
+
+export function finishedTurnStatus(status: string): FinishedTurnStatus | null {
+  return status === 'completed' || status === 'failed' || status === 'aborted' ? status : null
+}
+
+export function ownerLeaseExpiredMessage(lease: ThreadExecutionLease): string {
+  return `Turn owner ${lease.ownerFlavor}/${lease.ownerInstanceId} stopped heartbeating.`
+}
+
+export function ownerLeaseExpiredItemId(turnId: string): string {
+  return `item_${turnId}_owner_lease_expired`
+}
+
+export const AgentSessionSchema = z.object({
+  threadId: ThreadIdSchema,
+  turnId: z.string().min(1).max(256),
+  startedAt: z.string(),
+  updatedAt: z.string(),
+  items: z.array(TurnItem),
+  events: z.array(RuntimeEvent),
+  closed: z.boolean()
+})
+
+export type ManagerThreadStoreOperation =
+  | 'list'
+  | 'get'
+  | 'getMetadata'
+  | 'touch'
+  | 'upsert'
+  | 'delete'
+
+export type ManagerSessionStoreOperation =
+  | 'appendEvent'
+  | 'appendItem'
+  | 'rewriteItems'
+  | 'loadItemSnapshot'
+  | 'rewriteItemsIfRevision'
+  | 'updateItem'
+  | 'compactItems'
+  | 'loadEventsSince'
+  | 'loadItems'
+  | 'loadItemPage'
+  | 'loadSession'
+  | 'upsertSession'
+  | 'highestSeq'
+  | 'allocateEventSeq'
+  | 'loadUsageRecords'
+  | 'loadLatestUsageSnapshots'
+  | 'resetMemory'
+  | 'clearThreadMemory'
+
+export type ManagerArtifactStoreOperation =
+  | 'put'
+  | 'delete'
+  | 'list'
+  | 'get'
+  | 'readRange'
+  | 'stat'
+
+export type ManagerMemoryStoreOperation =
+  | 'create'
+  | 'createWithId'
+  | 'update'
+  | 'delete'
+  | 'purge'
+  | 'list'
+  | 'retrieve'
+  | 'diagnostics'
+
+export type ManagerGraphStoreOperation =
+  | 'create'
+  | 'append'
+  | 'get'
+  | 'list'
+  | 'events'
+  | 'eventReplay'
+  | 'snapshot'
+  | 'remove'
+  | 'diagnostics'
+
+export type ManagerAttachmentStoreOperation =
+  | 'create'
+  | 'get'
+  | 'bindScope'
+  | 'bindScopes'
+  | 'delete'
+  | 'releaseLease'
+  | 'pruneExpiredLeases'
+  | 'replaceMetadata'
+  | 'resolveContent'
+  | 'diagnostics'
+
+/**
+ * Canonical manager-owned storage composition.
+ *
+ * HybridThreadStore retains the existing JSONL documents as the source of
+ * truth and its SQLite database as a rebuildable index. No migration or data
+ * copy is performed when the manager takes ownership.
+ */
+export function parseThreadId(value: unknown): { threadId: string } {
+  return z.object({ threadId: ThreadIdSchema }).strict().parse(value)
+}
+
+export function parseArtifactId(value: unknown): { id: string } {
+  return z.object({ id: z.string().min(1).max(256) }).strict().parse(value)
+}
+
+export function parseGraphRunId(value: unknown): { runId: string } {
+  return z.object({ runId: GraphRunIdSchema }).strict().parse(value)
+}
+
+export function parseAttachmentId(value: unknown): { id: string } {
+  return z.object({ id: z.string().min(1) }).strict().parse(value)
+}
+
+export function attachmentScopeRequest(value: unknown): {
+  id: string
+  scope: { threadId?: string; workspace?: string }
+} {
+  return z.object({
+    id: z.string().min(1),
+    scope: z.object({ threadId: z.string().optional(), workspace: z.string().optional() }).strict()
+  }).strict().parse(value)
+}
+
+export function mutationThreadId(value: unknown): string | null {
+  const parsed = z.object({ threadId: ThreadIdSchema }).passthrough().safeParse(value)
+  if (parsed.success) return parsed.data.threadId
+  const session = z.object({ session: z.object({ threadId: ThreadIdSchema }).passthrough() })
+    .passthrough()
+    .safeParse(value)
+  if (session.success) return session.data.session.threadId
+  const thread = z.object({ thread: z.object({ id: ThreadIdSchema }).passthrough() })
+    .passthrough()
+    .safeParse(value)
+  return thread.success ? thread.data.thread.id : null
+}
+
+export function isThreadMutation(operation: ManagerThreadStoreOperation): boolean {
+  return operation === 'touch' || operation === 'upsert' || operation === 'delete'
+}
+
+export function isSessionMutation(operation: ManagerSessionStoreOperation): boolean {
+  return operation === 'appendEvent' ||
+    operation === 'appendItem' ||
+    operation === 'rewriteItems' ||
+    operation === 'rewriteItemsIfRevision' ||
+    operation === 'updateItem' ||
+    operation === 'compactItems' ||
+    operation === 'upsertSession' ||
+    operation === 'clearThreadMemory'
+}
+
+export type ManagerSharedDataResults = {
+  itemSnapshot: ItemHistorySnapshot
+  itemCommit: ItemHistoryCommit
+  itemCompaction: ItemHistoryCompactionResult
+  event: RuntimeEventValue
+  usageRecord: SessionUsageRecord
+  latestUsage: SessionLatestUsageSnapshot
+}

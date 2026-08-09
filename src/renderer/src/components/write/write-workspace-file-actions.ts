@@ -1,0 +1,246 @@
+import type { RefObject } from 'react'
+import type { TFunction } from 'i18next'
+import type { WriteExportFormat } from '@shared/write-export'
+import { useWriteWorkspaceStore, writeJoinPath } from '../../write/write-workspace-store'
+import { pathsEqual } from '../../write/write-workspace-store-helpers'
+import { formatWorkspacePickerError } from '../../lib/format-workspace-picker-error'
+import { buildWritePresentationPrompt } from '../../write/write-presentation'
+import {
+  WRITE_RICH_CLIPBOARD_ACTION,
+  exportFormatLabel,
+  type WriteNotice
+} from './write-workspace-view-utils'
+
+type WriteWorkspaceState = ReturnType<typeof useWriteWorkspaceStore.getState>
+type ExportInFlight = WriteExportFormat | typeof WRITE_RICH_CLIPBOARD_ACTION | null
+
+type Params = {
+  t: TFunction<'common'>
+  workspaceReady: boolean
+  workspaceRoot: string
+  rootDirectory: string | null
+  activeFilePath: string | null
+  activeFileIsText: boolean
+  fileContent: string
+  presentationEnabled: boolean
+  presentationInFlight: boolean
+  runtimeConnection: string
+  input: string
+  setInput: (value: string) => void
+  onSubmitPrompt?: (value: string) => void
+  saveTimerRef: RefObject<number | null>
+  addWriteWorkspace: WriteWorkspaceState['addWriteWorkspace']
+  createFile: WriteWorkspaceState['createFile']
+  flushSave: WriteWorkspaceState['flushSave']
+  setAssistantOpen: WriteWorkspaceState['setAssistantOpen']
+  setFileError: WriteWorkspaceState['setFileError']
+  ensureWriteThreadForWorkspace: (workspaceRoot: string) => unknown
+  completeOnboarding: () => void
+  showExportNotice: (notice: WriteNotice) => void
+  setExportMenuOpen: (value: boolean) => void
+  setExportingFormat: (value: ExportInFlight) => void
+  setPresentationInFlight: (value: boolean) => void
+}
+
+export function createWriteWorkspaceFileActions({
+  t,
+  workspaceReady,
+  workspaceRoot,
+  rootDirectory,
+  activeFilePath,
+  activeFileIsText,
+  fileContent,
+  presentationEnabled,
+  presentationInFlight,
+  runtimeConnection,
+  input,
+  setInput,
+  onSubmitPrompt,
+  saveTimerRef,
+  addWriteWorkspace,
+  createFile,
+  flushSave,
+  setAssistantOpen,
+  setFileError,
+  ensureWriteThreadForWorkspace,
+  completeOnboarding,
+  showExportNotice,
+  setExportMenuOpen,
+  setExportingFormat,
+  setPresentationInFlight
+}: Params) {
+  const pickWriteWorkspace = async (): Promise<void> => {
+    try {
+      setFileError(null)
+      if (typeof window.kunGui?.pickWorkspaceDirectory !== 'function') {
+        throw new Error('workspace:pick-directory unavailable')
+      }
+      const picked = await window.kunGui.pickWorkspaceDirectory(workspaceRoot || undefined)
+      if (!picked.canceled && picked.path) {
+        await addWriteWorkspace(picked.path)
+        if (pathsEqual(useWriteWorkspaceStore.getState().workspaceRoot, picked.path)) {
+          completeOnboarding()
+          if (runtimeConnection === 'ready') void ensureWriteThreadForWorkspace(picked.path)
+        }
+      }
+    } catch (error) {
+      setFileError(formatWorkspacePickerError(error))
+    }
+  }
+
+  const createDraftFile = async (): Promise<void> => {
+    if (!workspaceReady) {
+      await pickWriteWorkspace()
+      return
+    }
+    const root = rootDirectory || workspaceRoot
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+    const path = writeJoinPath(root, `draft-${stamp}.md`)
+    const created = await createFile(workspaceRoot, path, `# ${t('writeUntitledDraft')}\n\n`)
+    if (created) completeOnboarding()
+  }
+
+  const generatePresentation = async (): Promise<void> => {
+    if (!presentationEnabled || !activeFilePath || presentationInFlight) return
+
+    const sourcePath = activeFilePath
+    const sourceWorkspace = workspaceRoot
+    if (saveTimerRef.current) {
+      window.clearTimeout(saveTimerRef.current)
+      saveTimerRef.current = null
+    }
+
+    setPresentationInFlight(true)
+    try {
+      if (!await flushSave(sourceWorkspace)) {
+        showExportNotice({ tone: 'error', message: t('writePptSaveFailed') })
+        return
+      }
+      if (typeof window.kunGui?.ensurePptMaster !== 'function') {
+        showExportNotice({ tone: 'error', message: t('writePptUnavailable') })
+        return
+      }
+
+      const ensured = await window.kunGui.ensurePptMaster()
+      if (!ensured.ok) {
+        showExportNotice({
+          tone: 'error',
+          message: t('writePptInstallFailed', { message: ensured.message })
+        })
+        return
+      }
+
+      const latest = useWriteWorkspaceStore.getState()
+      if (latest.workspaceRoot !== sourceWorkspace || latest.activeFilePath !== sourcePath) {
+        showExportNotice({ tone: 'error', message: t('writePptSourceChanged') })
+        return
+      }
+      if (!await flushSave(sourceWorkspace)) {
+        showExportNotice({ tone: 'error', message: t('writePptSaveFailed') })
+        return
+      }
+
+      const prompt = buildWritePresentationPrompt({ workspaceRoot: sourceWorkspace, sourcePath })
+      setAssistantOpen(true)
+      if (onSubmitPrompt) onSubmitPrompt(prompt)
+      else setInput(input.trim() ? `${input.trim()}\n\n${prompt}` : prompt)
+    } catch (error) {
+      showExportNotice({
+        tone: 'error',
+        message: t('writePptInstallFailed', {
+          message: error instanceof Error ? error.message : String(error)
+        })
+      })
+    } finally {
+      setPresentationInFlight(false)
+    }
+  }
+
+  const exportCurrentFile = async (format: WriteExportFormat): Promise<void> => {
+    if (!activeFilePath || !activeFileIsText) return
+    if (typeof window.kunGui?.exportWriteDocument !== 'function') {
+      showExportNotice({ tone: 'error', message: t('writeExportUnavailable') })
+      return
+    }
+
+    setExportMenuOpen(false)
+    setExportingFormat(format)
+    try {
+      const result = await window.kunGui.exportWriteDocument({
+        path: activeFilePath,
+        workspaceRoot,
+        format,
+        content: fileContent
+      })
+      if (!result.ok) {
+        if (!result.canceled) {
+          showExportNotice({
+            tone: 'error',
+            message: t('writeExportFailed', {
+              format: exportFormatLabel(format, t),
+              message: result.message
+            })
+          })
+        }
+        return
+      }
+      showExportNotice({
+        tone: 'success',
+        message: t('writeExportSuccess', { format: exportFormatLabel(format, t) })
+      })
+    } catch (error) {
+      showExportNotice({
+        tone: 'error',
+        message: t('writeExportFailed', {
+          format: exportFormatLabel(format, t),
+          message: error instanceof Error ? error.message : String(error)
+        })
+      })
+    } finally {
+      setExportingFormat(null)
+    }
+  }
+
+  const copyCurrentFileAsRichText = async (): Promise<void> => {
+    if (!activeFilePath || !activeFileIsText) return
+    if (typeof window.kunGui?.copyWriteDocumentAsRichText !== 'function') {
+      showExportNotice({ tone: 'error', message: t('writeCopyRichTextUnavailable') })
+      return
+    }
+
+    setExportMenuOpen(false)
+    setExportingFormat(WRITE_RICH_CLIPBOARD_ACTION)
+    try {
+      const result = await window.kunGui.copyWriteDocumentAsRichText({
+        path: activeFilePath,
+        workspaceRoot,
+        content: fileContent
+      })
+      if (!result.ok) {
+        showExportNotice({
+          tone: 'error',
+          message: t('writeCopyRichTextFailed', { message: result.message })
+        })
+        return
+      }
+      showExportNotice({ tone: 'success', message: t('writeCopyRichTextSuccess') })
+    } catch (error) {
+      showExportNotice({
+        tone: 'error',
+        message: t('writeCopyRichTextFailed', {
+          message: error instanceof Error ? error.message : String(error)
+        })
+      })
+    } finally {
+      setExportingFormat(null)
+    }
+  }
+
+  return {
+    copyCurrentFileAsRichText,
+    createDraftFile,
+    exportCurrentFile,
+    generatePresentation,
+    pickWriteWorkspace
+  }
+}

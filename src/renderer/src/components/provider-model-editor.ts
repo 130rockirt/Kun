@@ -5,12 +5,6 @@ import {
   DEFAULT_TEXT_TO_SPEECH_PROTOCOL,
   DEFAULT_VIDEO_GENERATION_PROTOCOL,
   MODEL_REASONING_EFFORTS,
-  isComposerChatModelId,
-  isImageGenerationModelId,
-  isMusicGenerationModelId,
-  isSpeechToTextModelId,
-  isTextToSpeechModelId,
-  isVideoGenerationModelId,
   type ModelEndpointFormat,
   type ModelProviderModelProfileV1,
   type ModelProviderProfileV1,
@@ -18,6 +12,14 @@ import {
   type ModelReasoningEffort,
   type ModelReasoningRequestProtocol
 } from '@shared/app-settings'
+import {
+  isComposerChatModelId,
+  isImageGenerationModelId,
+  isMusicGenerationModelId,
+  isSpeechToTextModelId,
+  isTextToSpeechModelId,
+  isVideoGenerationModelId
+} from '@shared/app-settings-provider-core'
 
 export type ProviderModelKind = 'chat' | 'image' | 'speech' | 'tts' | 'music' | 'video'
 

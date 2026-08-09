@@ -5,15 +5,9 @@ import {
   DEFAULT_GUI_UPDATE_CHANNEL,
   DEFAULT_GIT_BRANCH_PREFIX,
   MIN_KUN_LOCAL_PORT,
-  defaultKunRuntimeSettings,
-  applyKunRuntimePatch,
-  getKunRuntimeSettings,
-  kunSettingsEnvelope,
-  mergeKunRuntimeSettings,
   mergeAppBehaviorSettings,
   mergeClawSettings,
   mergeDesignSettings,
-  mergeModelProviderSettings,
   mergeScheduleSettings,
   mergeWorkflowSettings,
   mergeWriteSettings,
@@ -26,7 +20,6 @@ import {
   normalizeGuiUpdateChannel,
   normalizeGitBranchPrefix,
   normalizeKeyboardShortcuts,
-  normalizeModelProviderSettings,
   normalizeScheduleSettings,
   normalizeWorkflowSettings,
   normalizeWriteSettings,
@@ -37,6 +30,17 @@ import {
   type AppSettingsPatch,
   type AppSettingsV1
 } from '@shared/app-settings'
+import {
+  defaultKunRuntimeSettings,
+  getKunRuntimeSettings,
+  kunSettingsEnvelope
+} from '@shared/app-settings-kun-defaults'
+import { mergeKunRuntimeSettings } from '@shared/app-settings-kun-merge'
+import { applyKunRuntimePatch } from '@shared/app-settings-kun-migration'
+import {
+  mergeModelProviderSettings,
+  normalizeModelProviderSettings
+} from '@shared/app-settings-provider-core'
 import type { GuiUpdateInfo } from '@shared/gui-update'
 
 type RendererSettingsShape = AppSettingsPatch

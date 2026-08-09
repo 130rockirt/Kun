@@ -1,8 +1,8 @@
 import { createElement } from 'react'
-import { readFileSync } from 'node:fs'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import AppShell from './AppShell'
+import { readStylesheetBundle } from './testing/stylesheet-bundle'
 
 describe('AppShell', () => {
   afterEach(() => {
@@ -55,8 +55,8 @@ describe('AppShell', () => {
     expect(html).toContain('ds-windows-titlebar')
   })
 
-  it('reserves overlay height only when the renderer owns the title bar', () => {
-    const css = readFileSync(new URL('./styles/base-shell.css', import.meta.url), 'utf8')
+  it('reserves overlay height only when the renderer owns the title bar', async () => {
+    const css = await readStylesheetBundle(new URL('./styles/base-shell.css', import.meta.url))
 
     expect(css).toContain(":root[data-desktop-title-bar='custom']")
     expect(css).not.toMatch(/data-platform='linux'[^}]*--ds-windows-titlebar-height/s)

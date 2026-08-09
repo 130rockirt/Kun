@@ -2,10 +2,10 @@ import type { ReactElement, ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   SCHEDULE_REASONING_EFFORT_IDS,
-  getModelProviderSettings,
   type AppSettingsV1,
   type WorkflowNodeV1
 } from '@shared/app-settings'
+import { getModelProviderSettings } from '@shared/app-settings-provider-core'
 import { ModelPicker } from '../ModelPicker'
 
 const INPUT_CLASS = 'w-full rounded-lg border border-ds-border bg-ds-card px-3 py-2 text-[13px] text-ds-ink outline-none focus:border-accent/40 focus:ring-1 focus:ring-accent/25'

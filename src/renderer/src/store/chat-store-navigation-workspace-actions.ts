@@ -1,0 +1,640 @@
+import type { NormalizedThread } from '../agent/types'
+import { getProvider } from '../agent/registry'
+import { rendererRuntimeClient } from '../agent/runtime-client'
+import i18n from '../i18n'
+import {
+  applyChatContentMaxWidth,
+  applyCursorSpotlight,
+  applyCursorSpotlightColor,
+  applyTheme,
+  applyUiFontScale,
+  applyWriteTypography
+} from '../lib/apply-theme'
+import { formatWorkspacePickerError } from '../lib/format-workspace-picker-error'
+import { formatRuntimeError, getRuntimeErrorCode } from '../lib/format-runtime-error'
+import {
+  deriveThreadTitleFromPrompt,
+  getDefaultThreadTitle,
+  shouldAutoTitleThread
+} from '../lib/thread-title'
+import { filterThreadsForSidebar } from '../lib/thread-sidebar-visibility'
+import {
+  enrichThreadsWithForkInfo,
+  forgetThreadFork,
+  hydrateThreadForkRegistry,
+  markThreadFork,
+  readThreadForkRegistry,
+  saveThreadForkRegistry
+} from '../lib/thread-fork-registry'
+import { workspaceLabelFromPath } from '../lib/workspace-label'
+import {
+  showWorkspaceMissingDialog,
+  workspaceDirectoryExists,
+  workspaceMissingError
+} from '../lib/workspace-availability'
+import {
+  isConversationWorkspacePath,
+  isInternalDeepSeekGuiWorkspace,
+  isInternalTemporaryWorkspace,
+  normalizeWorkspaceRoot,
+  workspaceRootIdentityKey
+} from '../lib/workspace-path'
+import { resolveProjectWorkspacePath } from '../lib/worktree-project-path'
+import { readThreadWorktreeRegistry } from '../lib/thread-worktree-registry'
+import { buildClawRuntimePrompt } from '@shared/app-settings'
+import type { ChatState, ChatStoreGet, ChatStoreSet } from './chat-store-types'
+import { invalidateThreadSnapshot } from './thread-snapshot-cache'
+import {
+  activeClawChannel,
+  forgetCodeWorkspaceRoot,
+  hydrateBlockModelLabels,
+  isClawThread,
+  optimisticUserModelLabel,
+  readCodeWorkspaceRoots,
+  rememberCodeWorkspaceRoots,
+  rememberTurnModel,
+  reconcileCodeWorkspaceRoots,
+  saveCodeWorkspaceRoots
+} from './chat-store-helpers'
+import {
+  clearedThreadSelection,
+  collectAssistantTextForTurn,
+  findLatestUserBlockId,
+  findReusableEmptyThreadId,
+  reconcileOptimisticUserBlock,
+  threadLooksRunning,
+  threadSnapshotLooksRunning,
+  threadBelongsToWorkspace
+} from './chat-store-runtime-helpers'
+import {
+  WRITE_ASSISTANT_THREAD_TITLE,
+  activeWriteThreadForWorkspace,
+  forgetWriteThread,
+  hydrateWriteThreadRegistry,
+  isWriteAssistantThread,
+  markWriteThread,
+  pruneWriteThreadRegistry,
+  readWriteThreadRegistry,
+  saveWriteThreadRegistry,
+  writeThreadBelongsToWorkspace,
+  writeWorkspaceForThreadId
+} from '../write/write-thread-registry'
+import { useWriteWorkspaceStore } from '../write/write-workspace-store'
+import {
+  DESIGN_ASSISTANT_THREAD_TITLE,
+  activeDesignThreadForWorkspace,
+  designDocKey,
+  forgetDesignThread,
+  isDesignThreadId,
+  markDesignThread,
+  readDesignThreadRegistry,
+  saveDesignThreadRegistry
+} from '../design/design-thread-registry'
+import { persistDesignChatMetaForDoc } from '../design/design-chat-transcript'
+import {
+  isSddAssistantThread,
+  readSddThreadRegistry
+} from '../sdd/sdd-thread-registry'
+import {
+  clearBusyWatchdog,
+  resetBusyRecoveryAttempts,
+  scheduleStartupRuntimeProbe,
+  stopTurnCompletionPoll
+} from './chat-store-schedulers'
+import {
+  armBusyWatchdog,
+  buildFollowupMessageFromUserInput,
+  buildThreadEventSink,
+  clearWatchedCompletionNotification,
+  completionNotificationDedupeKeyForWatchedThread,
+  currentCompletionWatchToken,
+  finalizeTurnTiming,
+  flushLiveBlocks,
+  forkedMessageCount,
+  forkedTurnCount,
+  isCodeSidebarThread,
+  isCodeThread,
+  latestThread,
+  looksLikeActiveTurnError,
+  notifyTurnComplete,
+  readActiveWriteWorkspace,
+  readWriteWorkspaceRoots,
+  rememberPendingClawFeishuMirror,
+  runtimeErrorDetail,
+  runtimeStreamRecoveringMessage,
+  shouldOpenSettingsForError,
+  syncTurnCompletionPoll,
+  turnCompleteNotificationSource,
+  watchTurnCompletionNotification
+} from './chat-store-runtime'
+import {
+  clearUnreadCompletion,
+  completionIsCurrentlyVisible,
+  markUnreadCompletion,
+  retainUnreadCompletions
+} from './unread-completions'
+
+type SseAbortRef = { current: AbortController | null }
+
+type StoreActionContext = {
+  set: ChatStoreSet
+  get: ChatStoreGet
+  sseAbortRef: SseAbortRef
+}
+
+let bootPromise: Promise<void> | null = null
+let refreshThreadsGeneration = 0
+let clawChannelActivityUnsubscribe: (() => void) | null = null
+let runtimeStatusUnsubscribe: (() => void) | null = null
+let trayActionUnsubscribe: (() => void) | null = null
+
+export function createNavigationWorkspaceActions(
+  { set, get, sseAbortRef }: StoreActionContext
+): Pick<ChatState, 'chooseWorkspace' | 'selectWorkspaceRoot' | 'clearWorkspace' | 'deleteWorkspace' | 'refreshThreads' | 'setThreadSearch' | 'setShowArchivedThreads'> {
+  return {
+  chooseWorkspace: async ({ createThreadAfter = false, selectThreadAfter = true } = {}) => {
+    try {
+      const wasWriteRoute = get().route === 'write'
+      if (typeof window.kunGui === 'undefined' || typeof window.kunGui.pickWorkspaceDirectory !== 'function') {
+        throw new Error(i18n.t('common:workspacePickerUnavailable'))
+      }
+      const picked = await window.kunGui.pickWorkspaceDirectory(get().workspaceRoot || undefined)
+      if (picked.canceled || !picked.path) {
+        if (createThreadAfter) {
+          set({ error: i18n.t('common:workspaceRequiredToCreateThread') })
+        }
+        return null
+      }
+      // 拒绝把对话工作目录下的文件夹当作项目加入:对话文件夹会被持续自动管理,
+      // 建议用户先拷贝到其他位置再加入。
+      const conversationRoot = get().conversationWorkspaceRoot
+      if (isConversationWorkspacePath(picked.path, conversationRoot)) {
+        set({ error: i18n.t('common:workspaceInsideConversationDir') })
+        return null
+      }
+      const next = await rendererRuntimeClient.setSettings({ workspaceRoot: picked.path })
+      const workspaceRoot = normalizeWorkspaceRoot(next.workspaceRoot)
+      const codeWorkspaceRoots = rememberCodeWorkspaceRoots(get().codeWorkspaceRoots, [workspaceRoot])
+
+      set({
+        workspaceRoot,
+        codeWorkspaceRoots,
+        workspaceLabel: workspaceLabelFromPath(workspaceRoot),
+        error: null
+      })
+      await get().refreshThreads()
+      if (workspaceRoot) {
+        if (!selectThreadAfter) return workspaceRoot
+        if (wasWriteRoute) {
+          await get().openWrite()
+          return workspaceRoot
+        }
+        const workspaceThreads = get().threads
+          .filter((thread) => isCodeThread(thread, get().clawChannels))
+          .filter((thread) => threadBelongsToWorkspace(thread, workspaceRoot))
+          .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))
+
+        if (createThreadAfter || workspaceThreads.length === 0) {
+          await get().createThread({ workspaceRoot })
+        } else {
+          const targetThreadId = workspaceThreads[0]?.id
+          if (targetThreadId && get().activeThreadId !== targetThreadId) {
+            await get().selectThread(targetThreadId)
+          }
+        }
+      }
+      return workspaceRoot
+    } catch (e) {
+      set({
+        error: formatWorkspacePickerError(e)
+      })
+      return null
+    }
+  },
+
+  // Switch the active working directory to an already-known workspace (no native
+  // picker). Persists the choice and lands on a clean new-conversation state for
+  // that directory — typing then starts a fresh thread there. This backs the
+  // workspace picker shown beneath the composer.
+  selectWorkspaceRoot: async (workspaceRoot) => {
+    const normalized = normalizeWorkspaceRoot(workspaceRoot)
+    if (!normalized) return null
+    if (get().runtimeConnection !== 'ready') {
+      set({ error: i18n.t('common:runtimeActionNeedsConnection') })
+      return null
+    }
+    // 拒绝把对话工作目录下的文件夹切换为当前项目目录(同 chooseWorkspace 守卫)。
+    if (isConversationWorkspacePath(normalized, get().conversationWorkspaceRoot)) {
+      set({ error: i18n.t('common:workspaceInsideConversationDir') })
+      return null
+    }
+    // Already on this directory with an empty composer — nothing to switch.
+    if (normalizeWorkspaceRoot(get().workspaceRoot) === normalized && !get().activeThreadId) {
+      set({ route: 'chat', error: null })
+      return normalized
+    }
+    try {
+      const next = await rendererRuntimeClient.setSettings({ workspaceRoot: normalized })
+      const persisted = normalizeWorkspaceRoot(next.workspaceRoot) || normalized
+      sseAbortRef.current?.abort()
+      sseAbortRef.current = null
+      clearBusyWatchdog()
+      resetBusyRecoveryAttempts()
+      set((s) => ({
+        ...clearedThreadSelection(),
+        route: 'chat',
+        workspaceRoot: persisted,
+        workspaceLabel: workspaceLabelFromPath(persisted),
+        codeWorkspaceRoots: rememberCodeWorkspaceRoots(s.codeWorkspaceRoots, [persisted]),
+        error: null
+      }))
+      await get().refreshThreads()
+      return persisted
+    } catch (e) {
+      set({ error: formatRuntimeError(e) })
+      return null
+    }
+  },
+
+  clearWorkspace: async () => {
+    try {
+      if (typeof window.kunGui === 'undefined' || typeof window.kunGui.setSettings !== 'function') {
+        return
+      }
+      const next = await rendererRuntimeClient.setSettings({ workspaceRoot: '' })
+      set({
+        workspaceRoot: normalizeWorkspaceRoot(next.workspaceRoot),
+        codeWorkspaceRoots: get().codeWorkspaceRoots,
+        workspaceLabel: workspaceLabelFromPath(''),
+        error: null
+      })
+      await get().refreshThreads()
+    } catch {
+      // silently ignore — the workspace will remain set
+    }
+  },
+
+  deleteWorkspace: async (workspacePath) => {
+    const normalizedPath = normalizeWorkspaceRoot(workspacePath)
+    if (!normalizedPath) return
+    if (get().runtimeConnection !== 'ready') {
+      set({ error: i18n.t('common:runtimeActionNeedsConnection') })
+      return
+    }
+    const { activeThreadId } = get()
+    const p = getProvider()
+    const workspaceThreads = get().threads.filter((thread) =>
+      threadBelongsToWorkspace(thread, normalizedPath)
+    )
+    const deletingActive = workspaceThreads.some((th) => th.id === activeThreadId)
+    if (deletingActive) {
+      sseAbortRef.current?.abort()
+      sseAbortRef.current = null
+      clearBusyWatchdog()
+    }
+    try {
+      for (const th of workspaceThreads) {
+        await p.deleteThread(th.id)
+        invalidateThreadSnapshot(th.id)
+      }
+      const removeIds = new Set(workspaceThreads.map((th) => th.id))
+      const codeWorkspaceRoots = forgetCodeWorkspaceRoot(get().codeWorkspaceRoots, normalizedPath)
+      set((s) => {
+        const w = { ...s.watchTurnCompletion }
+        const u = { ...s.unreadThreadIds }
+        for (const tid of removeIds) {
+          delete w[tid]
+          delete u[tid]
+          clearWatchedCompletionNotification(tid)
+        }
+        return {
+          threads: s.threads.filter(
+            (thread) => !threadBelongsToWorkspace(thread, normalizedPath)
+          ),
+          codeWorkspaceRoots,
+          watchTurnCompletion: w,
+          unreadThreadIds: u,
+          ...(deletingActive ? clearedThreadSelection() : {}),
+          error: null
+        }
+      })
+      // If the deleted workspace is the current workspaceRoot, clear it.
+      if (normalizeWorkspaceRoot(get().workspaceRoot) === normalizedPath) {
+        try {
+          if (typeof window.kunGui?.setSettings === 'function') {
+            const next = await rendererRuntimeClient.setSettings({ workspaceRoot: '' })
+            set({
+              workspaceRoot: normalizeWorkspaceRoot(next.workspaceRoot),
+              codeWorkspaceRoots: get().codeWorkspaceRoots,
+              workspaceLabel: workspaceLabelFromPath('')
+            })
+          }
+        } catch {
+          /* silently keep workspaceRoot if settings clear fails */
+        }
+      }
+      await get().refreshThreads()
+    } catch (e) {
+      set({
+        error: formatRuntimeError(e),
+        ...(shouldOpenSettingsForError(e)
+          ? { route: 'settings' as const, settingsSection: 'agents' as const }
+          : {})
+      })
+      await get().refreshThreads()
+    }
+  },
+
+  refreshThreads: async () => {
+    if (get().runtimeConnection !== 'ready') return
+    const refreshGeneration = ++refreshThreadsGeneration
+    try {
+      const p = getProvider()
+      let rawThreads: NormalizedThread[]
+      try {
+        // Omitting `limit` is intentional: migrated and long-lived profiles
+        // must expose the complete inventory instead of silently hiding older
+        // conversations after an arbitrary client-side cutoff.
+        rawThreads = await p.listThreads({ includeArchived: true })
+      } catch {
+        rawThreads = await p.listThreads()
+      }
+      let threads = rawThreads.map((thread) => ({
+        ...thread,
+        workspace: normalizeWorkspaceRoot(thread.workspace)
+      }))
+      const watchSnapshot = get().watchTurnCompletion
+      const localThreadById = new Map(get().threads.map((thread) => [thread.id, thread]))
+      // A raw summary may already carry terminal latest-turn evidence (for
+      // example a list written by the runtime after the turn settled). Normalize
+      // it to idle here so a stale raw `running` never lingers, and so these
+      // threads do not need a state request at all. When the raw summary carries
+      // no turn evidence at all but the local projection already confirmed a
+      // terminal latest turn (poll/recovery result), keep that confirmed
+      // terminal state instead of rolling it back to a stale raw `running`.
+      threads = threads.map((thread) => {
+        if (
+          !threadLooksRunning(thread) &&
+          thread.status?.trim().toLowerCase() === 'running' &&
+          thread.archived !== true
+        ) {
+          return { ...thread, status: 'idle' }
+        }
+        const localThread = localThreadById.get(thread.id)
+        if (
+          localThread &&
+          !thread.latestTurnStatus &&
+          !thread.latestTurnId &&
+          localThread.latestTurnStatus
+        ) {
+          const localRunning = threadLooksRunning(localThread)
+          return {
+            ...thread,
+            status: thread.archived
+              ? thread.status
+              : localRunning ? 'running' : 'idle',
+            ...(localThread.latestTurnId ? { latestTurnId: localThread.latestTurnId } : {}),
+            ...(localThread.latestTurnStatus ? { latestTurnStatus: localThread.latestTurnStatus } : {})
+          }
+        }
+        return thread
+      })
+      const watchTokenByThread = new Map<string, string>()
+      for (const id of Object.keys(watchSnapshot)) {
+        const watchKey = currentCompletionWatchToken(id)
+        if (watchKey) watchTokenByThread.set(id, watchKey)
+      }
+      const reconcileCandidates = threads.filter((thread) =>
+        thread.status?.trim().toLowerCase() === 'running' ||
+        threadLooksRunning(thread) ||
+        watchSnapshot[thread.id] === true
+      )
+      const reconciledStateById = new Map<string, Awaited<ReturnType<typeof p.getThreadState>>>()
+      if (reconcileCandidates.length > 0 && typeof p.getThreadState === 'function') {
+        const results = await Promise.allSettled(
+          reconcileCandidates.map(async (thread) => ({
+            id: thread.id,
+            state: await p.getThreadState(thread.id)
+          }))
+        )
+        for (const result of results) {
+          if (result.status !== 'fulfilled') continue
+          const localThread = localThreadById.get(result.value.id)
+          const latestTurnId = result.value.state.latestTurnId
+          // Reject the response when the runtime reports a *newer* turn than
+          // the one this refresh started from: the response is authoritative
+          // for its own turn, but committing it here could regress local state
+          // that already observed a later turn.
+          if (
+            latestTurnId &&
+            localThread?.latestTurnId &&
+            localThread.latestTurnId !== latestTurnId
+          ) continue
+          reconciledStateById.set(result.value.id, result.value.state)
+        }
+        threads = threads.map((thread) => {
+          const runtimeState = reconciledStateById.get(thread.id)
+          if (!runtimeState) return thread
+          const running = threadLooksRunning(runtimeState)
+          return {
+            ...thread,
+            status: thread.archived ? thread.status : running ? 'running' : 'idle',
+            ...(runtimeState.latestTurnId ? { latestTurnId: runtimeState.latestTurnId } : {}),
+            ...(runtimeState.latestTurnStatus ? { latestTurnStatus: runtimeState.latestTurnStatus } : {})
+          }
+        })
+      }
+      const sddThreadRegistry = readSddThreadRegistry()
+      const designRegistry = readDesignThreadRegistry()
+      const sidebarThreads = await filterThreadsForSidebar(threads, p)
+      const forkRegistry = hydrateThreadForkRegistry(sidebarThreads, readThreadForkRegistry())
+      saveThreadForkRegistry(forkRegistry)
+      const enrichedThreads = enrichThreadsWithForkInfo(sidebarThreads, forkRegistry)
+      // Preserve the active Kun thread when it is not in the listing yet.
+      // A brand-new thread can be absent from `listThreads` until the first
+      // message is written. Without this, the optimistic thread would be wiped
+      // from the sidebar and its live turn aborted by the selection clearing
+      // path below.
+      const activeId = get().activeThreadId
+      const activeRawThread = activeId
+        ? threads.find((thread) => thread.id === activeId) ?? null
+        : null
+      const activeThreadIsSdd =
+        isSddAssistantThread(activeRawThread, sddThreadRegistry) ||
+        isSddAssistantThread(
+          activeId ? get().threads.find((thread) => thread.id === activeId) ?? null : null,
+          sddThreadRegistry
+        )
+      const activeThreadFilteredFromCodeSidebar =
+        get().route === 'chat' &&
+        activeId != null &&
+        !activeThreadIsSdd &&
+        threads.some((thread) => thread.id === activeId) &&
+        !sidebarThreads.some((thread) => thread.id === activeId)
+      const preservedSddActiveThread =
+        activeThreadIsSdd && activeId
+          ? activeRawThread ?? get().threads.find((thread) => thread.id === activeId) ?? null
+          : null
+      const pendingActiveThread =
+        activeId != null &&
+        !activeThreadFilteredFromCodeSidebar &&
+        !enrichedThreads.some((thread) => thread.id === activeId)
+          ? get().threads.find((thread) => thread.id === activeId) ?? null
+          : null
+      let displayThreads = pendingActiveThread
+        ? [pendingActiveThread, ...enrichedThreads]
+        : enrichedThreads
+      if (
+        preservedSddActiveThread &&
+        !displayThreads.some((thread) => thread.id === preservedSddActiveThread.id)
+      ) {
+        displayThreads = [preservedSddActiveThread, ...displayThreads]
+      }
+      const writeWorkspaceRoots = await readWriteWorkspaceRoots()
+      const writeRegistry = hydrateWriteThreadRegistry(
+        displayThreads,
+        writeWorkspaceRoots,
+        pruneWriteThreadRegistry(displayThreads, readWriteThreadRegistry())
+      )
+      saveWriteThreadRegistry(writeRegistry)
+      displayThreads = displayThreads.map((thread) => {
+        const writeWorkspace = writeWorkspaceForThreadId(thread.id, writeRegistry)
+        return writeWorkspace ? { ...thread, workspace: writeWorkspace } : thread
+      })
+      const threadWorktreeRegistry = readThreadWorktreeRegistry().worktrees
+      const workspaceCandidates = [
+        get().workspaceRoot,
+        ...get().codeWorkspaceRoots,
+        ...threads.map((thread) => thread.workspace),
+        ...displayThreads.map((thread) => thread.workspace)
+      ].filter((path): path is string => Boolean(path))
+      const codeThreadWorkspaceRoots = [
+        ...threads,
+        ...displayThreads
+      ]
+        .filter((thread) => isCodeThread(thread, get().clawChannels, writeRegistry, designRegistry))
+        .map((thread) => {
+          const record = threadWorktreeRegistry[thread.id]
+          if (record?.projectPath?.trim()) return record.projectPath.trim()
+          return resolveProjectWorkspacePath(thread.workspace ?? '', {
+            threadWorktrees: threadWorktreeRegistry,
+            candidateProjectPaths: workspaceCandidates
+          })
+        })
+        .filter(Boolean)
+      const codeWorkspaceRoots = reconcileCodeWorkspaceRoots({
+        currentRoots: get().codeWorkspaceRoots,
+        codeThreadWorkspaceRoots,
+        writeWorkspaceRoots,
+        preservedWorkspaceRoots: [get().workspaceRoot]
+      })
+      saveCodeWorkspaceRoots(codeWorkspaceRoots)
+      const activeThreadId = get().activeThreadId
+      const activeThread = activeThreadId
+        ? displayThreads.find((thread) => thread.id === activeThreadId) ?? null
+        : null
+      const activeThreadIsManagedInCodeRoute =
+        get().route === 'chat' &&
+        activeThread != null &&
+        (activeThread.agentSurface === 'write' ||
+          activeThread.agentSurface === 'design' ||
+          isWriteAssistantThread(activeThread, writeRegistry) ||
+          isClawThread(activeThread, get().clawChannels) ||
+          isDesignThreadId(activeThread.id, designRegistry) ||
+          isInternalDeepSeekGuiWorkspace(activeThread.workspace))
+      const shouldClearSelection =
+        activeThreadId != null && !displayThreads.some((thread) => thread.id === activeThreadId)
+      if (shouldClearSelection) {
+        sseAbortRef.current?.abort()
+        sseAbortRef.current = null
+      }
+      // A newer whole-list refresh already committed; this older result must
+      // not clobber its thread projections, watch state, or selection.
+      if (refreshGeneration !== refreshThreadsGeneration) return
+      // 记忆中的 Code 会话被删除或归档后清理,避免长期保存悬空 ID。
+      const rememberedCodeThreadId = get().lastCodeThreadId?.trim() ?? ''
+      const staleCodeThreadMemory = Boolean(
+        rememberedCodeThreadId &&
+        !threads.some((thread) => thread.id === rememberedCodeThreadId && thread.archived !== true)
+      )
+      const validIds = new Set([
+        ...displayThreads.map((thread) => thread.id),
+        ...Object.keys(get().sideConversations ?? {})
+      ])
+      const reconciledCompletedWatchIds = new Set(
+        [...reconciledStateById.entries()]
+          .filter(([id, state]) => {
+            if (!watchSnapshot[id]) return false
+            if (threadLooksRunning(state)) return false
+            // Claim only the watch generation that existed when this refresh
+            // started. A watch removed and re-created for a newer turn carries a
+            // fresh token; an old refresh must not clear that newer watch.
+            const capturedToken = watchTokenByThread.get(id)
+            if (capturedToken && currentCompletionWatchToken(id) !== capturedToken) return false
+            return true
+          })
+          .map(([id]) => id)
+      )
+      const notificationState = get()
+      for (const id of reconciledCompletedWatchIds) {
+        notifyTurnComplete(
+          id,
+          notificationState,
+          completionNotificationDedupeKeyForWatchedThread(id),
+          turnCompleteNotificationSource(id, notificationState)
+        )
+        clearWatchedCompletionNotification(id)
+        invalidateThreadSnapshot(id)
+      }
+      set((s) => {
+        const w: Record<string, boolean> = {}
+        for (const [k, v] of Object.entries(s.watchTurnCompletion)) {
+          if (v && validIds.has(k) && !reconciledCompletedWatchIds.has(k)) {
+            w[k] = true
+          } else {
+            clearWatchedCompletionNotification(k)
+          }
+        }
+        let u = retainUnreadCompletions(s.unreadThreadIds, validIds)
+        for (const id of reconciledCompletedWatchIds) {
+          u = completionIsCurrentlyVisible(s, id)
+            ? clearUnreadCompletion(u, id)
+            : markUnreadCompletion(u, id)
+        }
+        return {
+          threads: displayThreads,
+          codeWorkspaceRoots,
+          watchTurnCompletion: w,
+          unreadThreadIds: u,
+          ...(staleCodeThreadMemory ? { lastCodeThreadId: null } : {}),
+          ...(shouldClearSelection ? clearedThreadSelection() : {})
+        }
+      })
+      syncTurnCompletionPoll(set, get)
+      if (activeThreadIsManagedInCodeRoute) {
+        await get().openCode()
+      }
+    } catch (e) {
+      stopTurnCompletionPoll()
+      set({
+        runtimeConnection: 'offline',
+        error: formatRuntimeError(e),
+        ...(shouldOpenSettingsForError(e)
+          ? { route: 'settings' as const, settingsSection: 'agents' as const }
+          : {})
+      })
+    }
+  },
+
+  setThreadSearch: (query) => {
+    set({ threadSearch: query })
+  },
+
+  setShowArchivedThreads: (show) => {
+    set({ showArchivedThreads: show })
+    if (show && get().runtimeConnection === 'ready') {
+      void get().refreshThreads()
+    }
+  },
+  }
+}

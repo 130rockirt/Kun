@@ -2,6 +2,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type { UiPluginPresentation, UiPluginSceneV16 } from '@shared/ui-plugin'
+import { readStylesheetBundle } from '../../testing/stylesheet-bundle'
 import { UiPluginStagePresentation } from './UiPluginStagePresentation'
 
 const dedicatedCharacterChromeRecipes = [
@@ -208,9 +209,7 @@ describe('UiPluginStagePresentation', () => {
   })
 
   it('uses host-owned color primitives when presentation tokens may be gradients', async () => {
-    const nodeFs = 'node:fs/promises'
-    const { readFile } = await import(/* @vite-ignore */ nodeFs)
-    const css = await readFile(new URL('../../styles/surfaces-write.css', import.meta.url), 'utf8')
+    const css = await readStylesheetBundle(new URL('../../styles/surfaces-write.css', import.meta.url))
     expect(css).toContain('--kun-ui-plugin-host-bg-color: var(--bg-app, #f3f5fc);')
     expect(css).toContain('--kun-ui-plugin-host-surface-color: var(--surface-2, #ffffff);')
     expect(css).toContain('var(--kun-ui-plugin-host-bg-color) 0%')
@@ -228,9 +227,7 @@ describe('UiPluginStagePresentation', () => {
   })
 
   it('skins every application surface with each dedicated host-owned chrome recipe', async () => {
-    const nodeFs = 'node:fs/promises'
-    const { readFile } = await import(/* @vite-ignore */ nodeFs)
-    const css = await readFile(new URL('../../styles/surfaces-write.css', import.meta.url), 'utf8')
+    const css = await readStylesheetBundle(new URL('../../styles/surfaces-write.css', import.meta.url))
 
     for (const [index, recipe] of dedicatedCharacterChromeRecipes.entries()) {
       const recipeStartMarker =
@@ -284,7 +281,7 @@ describe('UiPluginStagePresentation', () => {
     const nodeFs = 'node:fs/promises'
     const { readFile } = await import(/* @vite-ignore */ nodeFs)
     const [css, workbenchStage, sidebar, executionPicker] = await Promise.all([
-      readFile(new URL('../../styles/surfaces-write.css', import.meta.url), 'utf8'),
+      readStylesheetBundle(new URL('../../styles/surfaces-write.css', import.meta.url)),
       readFile(new URL('../workbench/WorkbenchChatStage.tsx', import.meta.url), 'utf8'),
       readFile(new URL('./Sidebar.tsx', import.meta.url), 'utf8'),
       readFile(new URL('./FloatingComposerExecutionPicker.tsx', import.meta.url), 'utf8')

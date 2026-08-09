@@ -41,6 +41,7 @@ import {
   resolveModelProviderProxyUrl,
   type AppSettingsV1,
   type KunLabSettingsV1,
+  type ModelReasoningEffort,
   type KunRuntimeSettingsV1
 } from '../../shared/app-settings'
 import { resolveCodexOAuthApiKey } from '../codex-auth'
@@ -247,7 +248,7 @@ function labConfigForRuntime(lab: KunLabSettingsV1 | undefined): KunConfig['lab'
 /** Shared Lab agent runtime config (exploreAgent / pptAgent). */
 function labAgentConfigForRuntime(
   agent: { enabled: boolean; model: string; providerId: string; reasoningEffort?: string; fast: boolean } | undefined
-): { enabled: boolean; fast: boolean; model?: string; providerId?: string; reasoningEffort?: string } {
+): { enabled: boolean; fast: boolean; model?: string; providerId?: string; reasoningEffort?: ModelReasoningEffort } {
   if (!agent) return { enabled: true, fast: false }
   const model = agent.model?.trim()
   const providerId = agent.providerId?.trim()
@@ -258,8 +259,8 @@ function labAgentConfigForRuntime(
           model,
           providerId,
           ...(typeof agent.reasoningEffort === 'string' &&
-          MODEL_REASONING_EFFORTS.includes(agent.reasoningEffort)
-            ? { reasoningEffort: agent.reasoningEffort }
+          MODEL_REASONING_EFFORTS.includes(agent.reasoningEffort as ModelReasoningEffort)
+            ? { reasoningEffort: agent.reasoningEffort as ModelReasoningEffort }
             : {})
         }
       : {}),

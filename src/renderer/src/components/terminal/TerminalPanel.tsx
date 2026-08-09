@@ -5,10 +5,7 @@ import {
   TerminalSquare,
   Plus,
   RotateCw,
-  X,
-  PencilLine,
-  PanelRightClose,
-  PanelsTopLeft
+  X
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import '@xterm/xterm/css/xterm.css'
@@ -21,14 +18,25 @@ import {
 } from '@shared/terminal'
 import {
   defaultTerminalColors,
-  resolveTerminalTheme as resolveTerminalThemeFromSettings,
-  TERMINAL_PRESET_DARK,
-  TERMINAL_PRESET_LIGHT,
   type TerminalColorSettingsV1
 } from '@shared/app-settings'
 import { rendererRuntimeClient } from '../../agent/runtime-client'
 import { SETTINGS_CHANGED_EVENT } from '../../lib/keyboard-shortcut-settings'
 import { terminalSessionIdForWorkspace, terminalWorkspaceSessionKey } from './terminal-session'
+import { TerminalTabContextMenu } from './TerminalTabContextMenu'
+import {
+  FIT_DEBOUNCE_MS,
+  INITIAL_TAB_ID,
+  MAX_RENDERER_TABS,
+  TERMINAL_FONT_FAMILY,
+  TERMINAL_FONT_SIZE,
+  TERMINAL_SCROLLBACK,
+  initialTerminalTabState,
+  resolveTerminalTheme,
+  type TerminalTab,
+  type TerminalTabState,
+  type TerminalTabContextMenu as TerminalTabContextMenuState
+} from './terminal-panel-support'
 
 type Props = {
   className?: string
@@ -39,117 +47,6 @@ type Props = {
   active?: boolean
   embedded?: boolean
   onTitleChange?: (title: string) => void
-}
-
-type TerminalTab = {
-  id: string
-  index: number
-  title?: string
-}
-
-type TerminalTabContextMenu = {
-  tabId: string
-  x: number
-  y: number
-}
-
-type TerminalTabState = {
-  tabs: TerminalTab[]
-  activeTabId: string
-}
-
-type RgbaColor = {
-  r: number
-  g: number
-  b: number
-  a: number
-}
-
-// Monospace stack matches the editor's preference and falls back to a
-// platform-appropriate default (Menlo on macOS, Consolas on Windows).
-const TERMINAL_FONT_FAMILY =
-  'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace'
-const TERMINAL_FONT_SIZE = 13
-const TERMINAL_SCROLLBACK = 5000
-const FIT_DEBOUNCE_MS = 80
-const INITIAL_TAB_ID = 'main'
-const MAX_RENDERER_TABS = 8
-
-function initialTerminalTabState(): TerminalTabState {
-  return {
-    tabs: [{ id: INITIAL_TAB_ID, index: 1 }],
-    activeTabId: INITIAL_TAB_ID
-  }
-}
-
-function resolveThemeMode(): 'dark' | 'light' {
-  return document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark'
-}
-
-function isTransparentColor(color: string): boolean {
-  return !color || color === 'transparent' || color === 'rgba(0, 0, 0, 0)'
-}
-
-function parseCssColor(color: string): RgbaColor | null {
-  if (isTransparentColor(color)) return { r: 0, g: 0, b: 0, a: 0 }
-  const match = color.match(/^rgba?\((.+)\)$/)
-  if (!match) return null
-  const normalized = match[1].replace(/\s*\/\s*/, ', ')
-  const parts = normalized.includes(',')
-    ? normalized.split(',').map((part) => part.trim())
-    : normalized.trim().split(/\s+/)
-  const [r, g, b] = parts.slice(0, 3).map((part) => Number.parseFloat(part))
-  const alpha = parts[3] === undefined ? 1 : Number.parseFloat(parts[3])
-  if (![r, g, b, alpha].every(Number.isFinite)) return null
-  return {
-    r: Math.min(255, Math.max(0, r)),
-    g: Math.min(255, Math.max(0, g)),
-    b: Math.min(255, Math.max(0, b)),
-    a: Math.min(1, Math.max(0, alpha))
-  }
-}
-
-function compositeColor(foreground: RgbaColor, background: RgbaColor): RgbaColor {
-  const alpha = foreground.a + background.a * (1 - foreground.a)
-  if (alpha <= 0) return { r: 0, g: 0, b: 0, a: 0 }
-  return {
-    r: (foreground.r * foreground.a + background.r * background.a * (1 - foreground.a)) / alpha,
-    g: (foreground.g * foreground.a + background.g * background.a * (1 - foreground.a)) / alpha,
-    b: (foreground.b * foreground.a + background.b * background.a * (1 - foreground.a)) / alpha,
-    a: alpha
-  }
-}
-
-function toOpaqueRgb(color: RgbaColor): string {
-  return `rgb(${Math.round(color.r)}, ${Math.round(color.g)}, ${Math.round(color.b)})`
-}
-
-function resolveTerminalSurfaceColor(container: HTMLElement | null): string {
-  const layers: RgbaColor[] = []
-  let node: HTMLElement | null = container
-  while (node) {
-    const color = parseCssColor(getComputedStyle(node).backgroundColor)
-    if (color && color.a > 0) layers.push(color)
-    if (color && color.a >= 1) break
-    node = node.parentElement
-  }
-  const fallback = parseCssColor(resolveThemeMode() === 'light' ? TERMINAL_PRESET_LIGHT.background : TERMINAL_PRESET_DARK.background) ?? {
-    r: 255,
-    g: 255,
-    b: 255,
-    a: 1
-  }
-  const resolved = layers.reduceRight((background, foreground) => compositeColor(foreground, background), fallback)
-  return toOpaqueRgb(resolved)
-}
-
-function resolveTerminalTheme(
-  container: HTMLElement | null,
-  colors: TerminalColorSettingsV1
-) {
-  const surfaceColor = resolveTerminalSurfaceColor(container)
-  const mode = resolveThemeMode()
-  return resolveTerminalThemeFromSettings(colors, mode, surfaceColor)
 }
 
 export function TerminalPanel({
@@ -173,7 +70,7 @@ export function TerminalPanel({
   const [exited, setExited] = useState(false)
   const [tabs, setTabs] = useState<TerminalTab[]>(() => initialTerminalTabState().tabs)
   const [activeTabId, setActiveTabId] = useState(() => initialTerminalTabState().activeTabId)
-  const [contextMenu, setContextMenu] = useState<TerminalTabContextMenu | null>(null)
+  const [contextMenu, setContextMenu] = useState<TerminalTabContextMenuState | null>(null)
   const [renamingTabId, setRenamingTabId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const [terminalBackground, setTerminalBackground] = useState<string | null>(null)
@@ -735,86 +632,5 @@ export function TerminalPanel({
         ) : null}
       </div>
     </aside>
-  )
-}
-
-function TerminalTabContextMenu({
-  state,
-  tabCount,
-  onRename,
-  onCloseOthers,
-  onCloseAll,
-  t
-}: {
-  state: TerminalTabContextMenu
-  tabCount: number
-  onRename: () => void
-  onCloseOthers: () => void
-  onCloseAll: () => void
-  t: (key: string, options?: Record<string, unknown>) => string
-}): ReactElement {
-  const run = (action: () => void): void => {
-    action()
-  }
-
-  return (
-    <div
-      role="menu"
-      aria-label={t('terminalTabMenuTitle')}
-      className="ds-no-drag fixed z-[1000] min-w-[196px] rounded-lg border border-ds-border bg-ds-card/98 p-1 text-[13px] text-ds-ink shadow-[0_18px_48px_rgba(2,6,16,0.28)] backdrop-blur-xl dark:bg-ds-card"
-      style={{ left: state.x, top: state.y }}
-      onPointerDown={(event) => event.stopPropagation()}
-      onContextMenu={(event) => event.preventDefault()}
-    >
-      <TerminalTabContextMenuItem
-        icon={<PencilLine className="h-3.5 w-3.5" strokeWidth={1.9} />}
-        label={t('terminalRenameTab')}
-        onClick={() => run(onRename)}
-      />
-      <div className="my-1 h-px bg-ds-border-muted" />
-      <TerminalTabContextMenuItem
-        icon={<PanelRightClose className="h-3.5 w-3.5" strokeWidth={1.9} />}
-        label={t('terminalCloseOtherTabs')}
-        disabled={tabCount <= 1}
-        onClick={() => run(onCloseOthers)}
-      />
-      <TerminalTabContextMenuItem
-        icon={<PanelsTopLeft className="h-3.5 w-3.5" strokeWidth={1.9} />}
-        label={t('terminalCloseAllTabs')}
-        danger
-        onClick={() => run(onCloseAll)}
-      />
-    </div>
-  )
-}
-
-function TerminalTabContextMenuItem({
-  icon,
-  label,
-  disabled = false,
-  danger = false,
-  onClick
-}: {
-  icon: ReactElement
-  label: string
-  disabled?: boolean
-  danger?: boolean
-  onClick: () => void
-}): ReactElement {
-  return (
-    <button
-      type="button"
-      role="menuitem"
-      disabled={disabled}
-      onClick={onClick}
-      className={`flex min-h-[30px] w-full items-center gap-2 rounded-md px-2 text-left transition disabled:cursor-not-allowed disabled:opacity-50 ${
-        danger
-          ? 'text-red-600 hover:bg-red-500/10 dark:text-red-300'
-          : 'text-ds-ink hover:bg-[var(--ds-sidebar-row-hover)]'
-      }`}
-    >
-      <span className="shrink-0 text-current">{icon}</span>
-      <span className="min-w-0 flex-1 truncate">{label}</span>
-    </button>
   )
 }

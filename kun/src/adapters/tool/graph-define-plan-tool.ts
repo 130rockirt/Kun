@@ -27,10 +27,13 @@ import {
 import { graphCreateBudgetDefaults } from './graph-create-run-tool.js'
 import { restoreMissingTaskTitles } from './graph-plan-candidate-repair.js'
 import {
+  MINIMAL_VALID_PLAN_EXAMPLE,
+  PlanningExecutionAbortedError,
+  assertPlanningExecutionActive,
+  cancelCreatedRun,
   errorMessage,
   hashCandidate,
   hashIncompleteToolArguments,
-  MINIMAL_VALID_PLAN_EXAMPLE,
   planningError,
   planningEventForStatus,
   planningRunSummary,
@@ -56,6 +59,7 @@ export const GRAPH_DEFINE_PLAN_INPUT_JSON_SCHEMA = (() => {
   delete schema.$schema
   return schema
 })()
+
 
 export function buildGraphDefinePlanTool(options: {
   control: GraphControlService
@@ -579,34 +583,5 @@ export async function emitPlanningEvent(
       tasks: view.tasks,
       ...(draft.committedRunId ? { committedRunId: draft.committedRunId } : {})
     }
-  })
-}
-
-class PlanningExecutionAbortedError extends Error {
-  constructor() {
-    super('Graph planning execution was aborted')
-    this.name = 'PlanningExecutionAbortedError'
-  }
-}
-
-function assertPlanningExecutionActive(context: ToolHostContext): void {
-  if (context.abortSignal.aborted) throw new PlanningExecutionAbortedError()
-}
-
-async function cancelCreatedRun(
-  options: Pick<Parameters<typeof buildGraphDefinePlanTool>[0], 'control' | 'nextId'>,
-  runId: string,
-  sourceTurnId: string
-): Promise<void> {
-  const run = await options.control.get(runId)
-  if (
-    run.status === 'completed' ||
-    run.status === 'failed' ||
-    run.status === 'cancelled'
-  ) return
-  await options.control.cancel(runId, {
-    commandId: options.nextId('graph_plan_abort'),
-    idempotencyKey: `graph-plan-abort:${sourceTurnId}:${runId}`,
-    reason: 'Graph planning source turn was interrupted before commit'
   })
 }

@@ -7,17 +7,11 @@ import {
   type ThreadSummary
 } from '../../contracts/threads.js'
 import type { RuntimeEvent } from '../../contracts/events.js'
-import type { TurnItem } from '../../contracts/items.js'
 import type { ThreadStore, ThreadStoreListOptions } from '../../ports/thread-store.js'
 import type { SessionLatestUsageSnapshot, SessionUsageRecord } from '../../ports/session-store.js'
 import { resolveThreadAgentSurface, toThreadSummary } from '../../domain/thread.js'
 import { assertSafeThreadId, isSafeThreadId } from '../../contracts/thread-id.js'
 import { readJsonl } from '../file/file-thread-store.js'
-import {
-  emptyUsageSnapshot,
-  UsageSnapshotSchema,
-  type UsageSnapshot
-} from '../../contracts/usage.js'
 import { stripThreadItemBodies, type ThreadMetadataLine } from './hybrid-thread-projection.js'
 import { HybridThreadDocumentRepository } from './hybrid-thread-documents.js'
 import {
@@ -28,17 +22,22 @@ import {
 } from './hybrid-thread-index-mapping.js'
 import { HybridThreadIndexRepository } from './hybrid-thread-index.js'
 import { HybridThreadBackfillCoordinator } from './hybrid-thread-backfill.js'
+import {
+  METADATA_COMPACT_MIN_BYTES,
+  addColumnIfMissing,
+  appendJsonlLine,
+  latestUsageSnapshotsFromRows,
+  pathExists,
+  previewFromItems,
+  usageRecordsFromRows,
+  usageRowFromEvent,
+  warnSqlite,
+  yieldToEventLoop,
+  type UsageRow,
+  type UsageRuntimeEvent
+} from './hybrid-thread-support.js'
 
-type UsageRuntimeEvent = Extract<RuntimeEvent, { kind: 'usage' }>
-
-type UsageRow = {
-  thread_id: string
-  seq: number
-  timestamp: string
-  turn_id: string | null
-  model: string | null
-  usage_json: string
-}
+export { describeSqliteAbiMismatch } from './hybrid-thread-support.js'
 
 /**
  * Hybrid store inspired by Codex: JSONL files are canonical and SQLite
@@ -697,231 +696,4 @@ export class HybridThreadStore implements ThreadStore {
   private eventsPath(threadId: string): string {
     return this.documents.eventsPath(threadId)
   }
-}
-
-function previewFromItems(items: TurnItem[]): string {
-  for (let index = items.length - 1; index >= 0; index -= 1) {
-    const item = items[index]
-    if (!item) continue
-    if (item.kind === 'user_message' || item.kind === 'assistant_text') {
-      return item.text.slice(0, 500)
-    }
-    if (item.kind === 'error') return item.message.slice(0, 500)
-    if (item.kind === 'tool_call') return (item.summary ?? item.toolName).slice(0, 500)
-  }
-  return ''
-}
-
-function usageRowFromEvent(event: RuntimeEvent & { kind: 'usage' }): UsageRow {
-  return {
-    thread_id: event.threadId,
-    seq: event.seq,
-    timestamp: event.timestamp,
-    turn_id: event.turnId ?? null,
-    model: event.model ?? null,
-    usage_json: JSON.stringify(event.usage)
-  }
-}
-
-function usageRecordsFromRows(rows: UsageRow[]): SessionUsageRecord[] {
-  const previousByThread = new Map<string, UsageSnapshot>()
-  const records: SessionUsageRecord[] = []
-  for (const row of rows) {
-    const usage = parseUsageSnapshot(row.usage_json)
-    if (!usage) continue
-    const previous = previousByThread.get(row.thread_id) ?? emptyUsageSnapshot()
-    const delta = diffUsage(usage, previous)
-    previousByThread.set(row.thread_id, usage)
-    if (!hasUsage(delta)) continue
-    records.push({
-      threadId: row.thread_id,
-      ...(row.turn_id ? { turnId: row.turn_id } : {}),
-      ...(row.model ? { model: row.model } : {}),
-      completedAt: row.timestamp,
-      usage: delta
-    })
-  }
-  return records
-}
-
-function latestUsageSnapshotsFromRows(rows: UsageRow[]): SessionLatestUsageSnapshot[] {
-  return rows.flatMap((row) => {
-    const usage = parseUsageSnapshot(row.usage_json)
-    if (!usage) return []
-    return [{
-      threadId: row.thread_id,
-      seq: row.seq,
-      usage
-    }]
-  })
-}
-
-function parseUsageSnapshot(raw: string): UsageSnapshot | null {
-  try {
-    const parsed = UsageSnapshotSchema.safeParse(JSON.parse(raw))
-    return parsed.success ? parsed.data : null
-  } catch {
-    return null
-  }
-}
-
-function diffUsage(current: UsageSnapshot, previous: UsageSnapshot): UsageSnapshot {
-  const promptTokens = diffNumber(current.promptTokens, previous.promptTokens)
-  const completionTokens = diffNumber(current.completionTokens, previous.completionTokens)
-  const reportedTotal = diffNumber(current.totalTokens, previous.totalTokens)
-  const totalTokens = reportedTotal || promptTokens + completionTokens
-  const cachedTokens = diffOptionalNumber(current.cachedTokens, previous.cachedTokens)
-  const cacheHitTokens = diffOptionalNumber(current.cacheHitTokens, previous.cacheHitTokens)
-  const cacheMissTokens = diffOptionalNumber(current.cacheMissTokens, previous.cacheMissTokens)
-  const cacheTotal = (cacheHitTokens ?? 0) + (cacheMissTokens ?? 0)
-  return {
-    promptTokens,
-    completionTokens,
-    totalTokens,
-    ...(cachedTokens !== undefined ? { cachedTokens } : {}),
-    ...(cacheHitTokens !== undefined ? { cacheHitTokens } : {}),
-    ...(cacheMissTokens !== undefined ? { cacheMissTokens } : {}),
-    cacheHitRate: cacheHitTokens !== undefined && cacheTotal > 0 ? cacheHitTokens / cacheTotal : null,
-    ...(current.cacheableTokenHitRate !== undefined
-      ? { cacheableTokenHitRate: current.cacheableTokenHitRate }
-      : {}),
-    ...(current.totalInputTokenHitRate !== undefined
-      ? { totalInputTokenHitRate: current.totalInputTokenHitRate }
-      : {}),
-    ...(current.cacheMissReasons ? { cacheMissReasons: [...current.cacheMissReasons] } : {}),
-    ...(current.cacheSuggestions ? { cacheSuggestions: [...current.cacheSuggestions] } : {}),
-    turns: diffNumber(current.turns, previous.turns),
-    ...(current.costUsd !== undefined || previous.costUsd !== undefined
-      ? { costUsd: diffNumber(current.costUsd ?? 0, previous.costUsd ?? 0) }
-      : {}),
-    ...(current.costCny !== undefined || previous.costCny !== undefined
-      ? { costCny: diffNumber(current.costCny ?? 0, previous.costCny ?? 0) }
-      : {}),
-    ...(current.cacheSavingsUsd !== undefined || previous.cacheSavingsUsd !== undefined
-      ? { cacheSavingsUsd: diffNumber(current.cacheSavingsUsd ?? 0, previous.cacheSavingsUsd ?? 0) }
-      : {}),
-    ...(current.cacheSavingsCny !== undefined || previous.cacheSavingsCny !== undefined
-      ? { cacheSavingsCny: diffNumber(current.cacheSavingsCny ?? 0, previous.cacheSavingsCny ?? 0) }
-      : {}),
-    ...(current.tokenEconomySavingsTokens !== undefined || previous.tokenEconomySavingsTokens !== undefined
-      ? {
-          tokenEconomySavingsTokens: diffNumber(
-            current.tokenEconomySavingsTokens ?? 0,
-            previous.tokenEconomySavingsTokens ?? 0
-          )
-        }
-      : {}),
-    ...(current.tokenEconomySavingsUsd !== undefined || previous.tokenEconomySavingsUsd !== undefined
-      ? {
-          tokenEconomySavingsUsd: diffNumber(
-            current.tokenEconomySavingsUsd ?? 0,
-            previous.tokenEconomySavingsUsd ?? 0
-          )
-        }
-      : {}),
-    ...(current.tokenEconomySavingsCny !== undefined || previous.tokenEconomySavingsCny !== undefined
-      ? {
-          tokenEconomySavingsCny: diffNumber(
-            current.tokenEconomySavingsCny ?? 0,
-            previous.tokenEconomySavingsCny ?? 0
-          )
-        }
-      : {}),
-    ...(current.hasError ? { hasError: true } : {}),
-    // Timing aggregates are cumulative snapshot values, not per-record
-    // counters: carry the latest snapshot's averages so thread usage
-    // keeps TTFT/TPS after the differential fold.
-    ...(current.avgTtftMs !== undefined ? { avgTtftMs: current.avgTtftMs } : {}),
-    ...(current.avgTokensPerSecond !== undefined
-      ? { avgTokensPerSecond: current.avgTokensPerSecond }
-      : {})
-  }
-}
-
-function diffNumber(current: number, previous: number): number {
-  return Math.max(0, current - previous)
-}
-
-function diffOptionalNumber(current?: number, previous?: number): number | undefined {
-  if (current === undefined && previous === undefined) return undefined
-  return Math.max(0, (current ?? 0) - (previous ?? 0))
-}
-
-function hasUsage(usage: UsageSnapshot): boolean {
-  return usage.promptTokens > 0
-    || usage.completionTokens > 0
-    || usage.totalTokens > 0
-    || (usage.cachedTokens ?? 0) > 0
-    || (usage.cacheHitTokens ?? 0) > 0
-    || (usage.cacheMissTokens ?? 0) > 0
-    || usage.turns > 0
-    || (usage.costUsd ?? 0) > 0
-    || (usage.costCny ?? 0) > 0
-    || (usage.cacheSavingsUsd ?? 0) > 0
-    || (usage.cacheSavingsCny ?? 0) > 0
-    || (usage.tokenEconomySavingsTokens ?? 0) > 0
-    || (usage.tokenEconomySavingsUsd ?? 0) > 0
-    || (usage.tokenEconomySavingsCny ?? 0) > 0
-}
-
-function addColumnIfMissing(db: BetterSqliteDatabase, table: string, columnSql: string): void {
-  const column = columnSql.trim().split(/\s+/)[0]
-  if (!column) return
-  try {
-    const rows = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>
-    if (rows.some((row) => row.name === column)) return
-    db.exec(`ALTER TABLE ${table} ADD COLUMN ${columnSql}`)
-  } catch (error) {
-    warnSqlite(`add column ${column}`, error)
-  }
-}
-
-const METADATA_COMPACT_MIN_BYTES = 1_000_000
-
-async function appendJsonlLine(path: string, value: unknown): Promise<void> {
-  await mkdir(dirname(path), { recursive: true })
-  const handle = await open(path, 'a')
-  try {
-    await handle.writeFile(`${JSON.stringify(value)}\n`, 'utf-8')
-    await handle.sync()
-  } finally {
-    await handle.close()
-  }
-}
-
-async function pathExists(path: string): Promise<boolean> {
-  try {
-    await stat(path)
-    return true
-  } catch {
-    return false
-  }
-}
-
-async function yieldToEventLoop(): Promise<void> {
-  await new Promise<void>((resolve) => setTimeout(resolve, 0))
-}
-
-/**
- * Classifies the common better-sqlite3 failure — a prebuilt `.node` binary
- * compiled for a different Node/Electron ABI — so operators see the exact
- * compiled vs current ABI instead of a generic "JSONL fallback" line.
- */
-export function describeSqliteAbiMismatch(message: string): string | null {
-  const compiled = /NODE_MODULE_VERSION (\d+)/.exec(message)?.[1]
-  if (!compiled) return null
-  return `abi: compiled=${compiled} current=${process.versions.modules ?? 'unknown'} ` +
-    `(node ${process.version}, ${process.platform}/${process.arch})`
-}
-
-function warnSqlite(action: string, error: unknown): void {
-  const message = error instanceof Error ? error.message : String(error)
-  const abi = describeSqliteAbiMismatch(message)
-  const hint = abi
-    ? ' Run `npm rebuild better-sqlite3` (or `npm ci`) with the same Node/Electron runtime that launches Kun.'
-    : ' Run `npm rebuild better-sqlite3` if the module is missing or stale.'
-  console.warn(
-    `[kun] hybrid sqlite ${action} failed; using JSONL fallback: ${message}` +
-      `${abi ? ` [${abi}]` : ''}${hint}`
-  )
 }

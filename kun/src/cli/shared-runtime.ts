@@ -43,7 +43,6 @@ import {
 const START_TIMEOUT_MS = 30_000
 const STOP_TIMEOUT_MS = 15_000
 const POLL_MS = 100
-const MAX_LOG_BYTES = 5 * 1024 * 1024
 
 export type SharedRuntimeConnection = {
   discovery: RuntimeDiscoveryRecord
@@ -630,85 +629,13 @@ async function probeManagerRuntimeRegistration(
   }
 }
 
-function discoveryFromManagerRegistration(
-  registration: RuntimeRegistration,
-  info?: RuntimeInfo
-): RuntimeDiscoveryRecord {
-  return createRuntimeDiscoveryRecord({
-    instanceId: registration.instanceId,
-    pid: registration.pid,
-    startedAt: registration.startedAt,
-    host: registration.host,
-    port: registration.port,
-    baseUrl: registration.baseUrl,
-    runtimeToken: registration.runtimeToken,
-    insecure: info?.insecure ?? false,
-    ...(info ? { serviceVersion: info.serviceVersion } : {}),
-    flavor: registration.flavor,
-    ...(registration.buildId ? { buildId: registration.buildId } : {}),
-    launchMode: info?.launchMode ?? 'shared',
-    ...(registration.logPath ? { logPath: registration.logPath } : {})
-  })
-}
-
-export function runtimeDiscoveryDirectory(
-  dataDir: string,
-  flavor: RuntimeFlavor,
-  controlDir = defaultKunControlDir()
-): string {
-  return flavor === 'production' ? dataDir : controlDir
-}
-
-function safeDiscoveryUrl(record: RuntimeDiscoveryRecord): boolean {
-  try {
-    const url = new URL(record.baseUrl)
-    return url.protocol === 'http:' &&
-      isLoopbackHost(url.hostname) &&
-      (url.pathname === '/' || url.pathname === '') &&
-      url.username === '' &&
-      url.password === '' &&
-      Number(url.port || '80') === record.port &&
-      isLoopbackHost(record.host)
-  } catch {
-    return false
-  }
-}
-
-function processAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (error) {
-    return String((error as { code?: unknown })?.code ?? '') === 'EPERM'
-  }
-}
-
-async function rotateLog(logPath: string): Promise<void> {
-  try {
-    if ((await stat(logPath)).size < MAX_LOG_BYTES) return
-    await rename(logPath, `${logPath}.1`).catch(() => undefined)
-  } catch (error) {
-    if (String((error as { code?: unknown })?.code ?? '') !== 'ENOENT') throw error
-  }
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
-}
-
-function runtimeDataDir(
-  argv: readonly string[],
-  env: Record<string, string | undefined>
-): { ok: true; dataDir: string; source: 'argument' | 'environment' | 'default' } | { ok: false; message: string } {
-  const environmentDataDir = env.KUN_DATA_DIR?.trim()
-  let dataDir = environmentDataDir || join(homedir(), '.kun', 'data')
-  let source: 'argument' | 'environment' | 'default' = environmentDataDir ? 'environment' : 'default'
-  for (let index = 0; index < argv.length; index += 1) {
-    if (argv[index] !== '--data-dir') return { ok: false, message: `unknown option: ${argv[index]}` }
-    const value = argv[++index]?.trim()
-    if (!value) return { ok: false, message: 'missing value for --data-dir' }
-    dataDir = value
-    source = 'argument'
-  }
-  return { ok: true, dataDir, source }
-}
+import {
+  delay,
+  discoveryFromManagerRegistration,
+  processAlive,
+  rotateLog,
+  runtimeDataDir,
+  runtimeDiscoveryDirectory,
+  safeDiscoveryUrl
+} from './shared-runtime-support.js'
+export { runtimeDiscoveryDirectory } from './shared-runtime-support.js'

@@ -27,7 +27,8 @@ async function harness() {
   const root = await mkdtemp(join(tmpdir(), 'kun-graph-manual-wake-'))
   roots.push(root)
   const config = testGraphConfig({ supervision: { coalesceWindowMs: 60_000 } })
-  const nowIso = () => '2026-07-31T00:00:00.000Z'
+  let nowMs = Date.parse('2026-07-31T00:00:00.000Z')
+  const nowIso = () => new Date(nowMs).toISOString()
   let next = 0
   const nextId = (prefix: string) => `${prefix}_${++next}`
   const store = new FileGraphRunStore({
@@ -45,7 +46,7 @@ async function harness() {
     commandId: 'command_create_manual_wake',
     idempotencyKey: 'create-manual-wake'
   })
-  return { config, nextId, nowIso, store }
+  return { config, nextId, nowIso, advance: (delayMs: number) => { nowMs += delayMs }, store }
 }
 
 type Harness = Awaited<ReturnType<typeof harness>>
@@ -200,6 +201,93 @@ function obligation(run: GraphRunV1) {
 }
 
 describe('GraphSupervisor manual wake', () => {
+  it('caps eight consecutive delivery failures and lets a manual wake recover', async () => {
+    const value = await harness()
+    let run = await runningRun(value)
+    run = await append(value, {
+      type: 'run_status_changed',
+      payload: {
+        from: 'running',
+        to: 'awaiting_supervision',
+        reason: 'test scheduler failure'
+      }
+    }, 'awaiting-supervision-for-delivery-cap')
+    let failDelivery = true
+    const leadTurn = vi.fn(async ({ run: current }: { run: GraphRunV1 }) => {
+      if (failDelivery) throw new Error('persistent source Lead HTTP 500')
+      return {
+        status: 'delivered' as const,
+        sourceTurnId: current.sourceTurnId,
+        deliveredSeq: current.lastEventSeq,
+        executionActive: true
+      }
+    })
+    const supervisor = supervisorFor(value, {
+      leadTurn,
+      isLeadTurnActive: () => true
+    })
+    const retryDelays = [2_000, 5_000, 15_000, 60_000, 60_000, 60_000, 60_000]
+
+    await supervisor.signal({
+      runId: run.id,
+      reason: 'scheduler_error',
+      nodeIds: [],
+      digest: 'Scheduler could not resume the source Lead.'
+    })
+    for (let attempt = 1; attempt <= 8; attempt += 1) {
+      if (attempt > 1) {
+        value.advance(retryDelays[attempt - 2]!)
+        await supervisor.sweepObligations()
+      }
+      await supervisor.flush(run.id)
+      run = (await value.store.get(run.id))!
+      const current = obligation(run)
+      expect(current.deliveryAttempts).toBe(attempt)
+      expect(current.consecutiveDeliveryFailures).toBe(attempt)
+      if (attempt < 8) expect(current.state).toBe('retry_scheduled')
+    }
+
+    let current = obligation(run)
+    expect(run.status).toBe('awaiting_human')
+    expect(current).toMatchObject({
+      state: 'needs_attention',
+      consecutiveDeliveryFailures: 8,
+      lastError: 'persistent source Lead HTTP 500'
+    })
+    expect(current.nextWakeAt).toBeUndefined()
+    expect(current.deliveryLeaseId).toBeUndefined()
+    const cappedSeq = run.lastEventSeq
+    await supervisor.sweepObligations()
+    expect((await value.store.get(run.id))!.lastEventSeq).toBe(cappedSeq)
+
+    failDelivery = false
+    run = (await supervisor.wake(
+      run.id,
+      current.id,
+      'manual-retry-after-delivery-cap'
+    ))!
+    current = obligation(run)
+    expect(run.status).toBe('awaiting_supervision')
+    expect(current).toMatchObject({
+      state: 'pending',
+      deliveryAttempts: 8,
+      consecutiveDeliveryFailures: 0
+    })
+    expect(current.lastError).toBeUndefined()
+    expect(current.attentionReason).toBeUndefined()
+
+    await supervisor.flush(run.id)
+    run = (await value.store.get(run.id))!
+    expect(run.status).toBe('awaiting_supervision')
+    expect(obligation(run)).toMatchObject({
+      state: 'awaiting_action',
+      deliveryAttempts: 9,
+      consecutiveDeliveryFailures: 0
+    })
+    expect(leadTurn).toHaveBeenCalledTimes(9)
+    await supervisor.stop()
+  })
+
   it('deduplicates a repeated command without duplicating Lead delivery', async () => {
     const value = await harness()
     await runningRun(value)

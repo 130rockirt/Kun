@@ -1,0 +1,245 @@
+{
+  "commands": [
+    {
+      "id": "editor-request",
+      "title": "Video Editor Request",
+      "category": "Video",
+      "description": "Private bounded RPC used by the Kun Video Editor View.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "project.list",
+              "project.active",
+              "project.get",
+              "project.select",
+              "project.create",
+              "project.update",
+              "context.update",
+              "context.attach-selection",
+              "project.undo",
+              "project.redo",
+              "sequence.decompose",
+              "script.read",
+              "script.apply",
+              "media.list",
+              "media.import",
+              "media.import-batch",
+              "media.reauthorize",
+              "media.folder.create",
+              "media.folder.update",
+              "media.folder.delete",
+              "media.organize",
+              "transcript.import",
+              "caption.generate",
+              "preview.list",
+              "preview.add",
+              "preview.select",
+              "preview.compare",
+              "preview.replace",
+              "export-capabilities",
+              "otio-export-preview",
+              "otio-import-preview",
+              "interchange.export",
+              "interchange.status",
+              "interchange.cancel",
+              "interchange.import-preview",
+              "interchange.import",
+              "project-package-preflight",
+              "project-package.export",
+              "project-package.status",
+              "project-package.cancel",
+              "render.list",
+              "render.start",
+              "render.status",
+              "render.cancel",
+              "derived.list",
+              "derived.start",
+              "derived.retry",
+              "derived.cancel",
+              "derived.cleanup",
+              "analysis.capabilities",
+              "analysis.visual-opt-in",
+              "analysis.visual-install",
+              "analysis.visual-index",
+              "analysis.visual-search",
+              "analysis.list",
+              "analysis.evidence",
+              "analysis.vad",
+              "analysis.vad-apply",
+              "analysis.speaker-import",
+              "analysis.speaker-preview",
+              "analysis.speaker-apply",
+              "analysis.beats",
+              "analysis.denoise-metadata",
+              "analysis.sync-preview",
+              "analysis.sync-apply",
+              "analysis.status",
+              "analysis.cancel",
+              "generation.catalog",
+              "generation.list",
+              "generation.request",
+              "generation.retry",
+              "generation.status",
+              "generation.cancel",
+              "generation.insert",
+              "multicam.inspect",
+              "multicam.create",
+              "multicam.labels",
+              "multicam.sync-confirm",
+              "multicam.layout-upsert",
+              "multicam.delete",
+              "multicam.switch",
+              "multicam.layout",
+              "multicam.merge"
+            ]
+          },
+          "payload": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "action",
+          "payload"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "content": {},
+          "summary": {
+            "type": "string"
+          },
+          "metadata": {
+            "type": "object"
+          },
+          "generatedArtifacts": {
+            "type": "array"
+          }
+        },
+        "required": [
+          "content"
+        ],
+        "additionalProperties": false
+      }
+    }
+  ],
+  "views.rightSidebar": [
+    {
+      "id": "editor",
+      "title": "Kun Video Editor",
+      "entry": "dist/webview/index.html",
+      "icon": "assets/video-editor.svg",
+      "showInRightRail": false,
+      "localResourceRoots": [
+        "dist/webview"
+      ]
+    }
+  ],
+  "message.resultPreviews": [
+    {
+      "id": "render-preview",
+      "title": "Video render",
+      "entry": "dist/webview/index.html",
+      "mimeTypes": [
+        "video/mp4",
+        "audio/mp4",
+        "image/png",
+        "application/x-subrip",
+        "text/vtt"
+      ],
+      "localResourceRoots": [
+        "dist/webview"
+      ]
+    }
+  ],
+  "settings": [
+    {
+      "id": "video-editor",
+      "title": "Kun Video Editor",
+      "scope": "workspace",
+      "properties": {
+        "defaultRenderPreset": {
+          "type": "string",
+          "enum": [
+            "proof-frame",
+            "preview",
+            "h264-mp4",
+            "audio-aac"
+          ],
+          "default": "preview",
+          "title": "Default render preset",
+          "description": "Default render kind."
+        },
+        "defaultCaptionMode": {
+          "type": "string",
+          "enum": [
+            "none",
+            "burned",
+            "sidecar",
+            "both"
+          ],
+          "default": "none",
+          "title": "Default caption mode",
+          "description": "Default caption behavior for brokered media renders."
+        },
+        "localTranscriber": {
+          "type": "string",
+          "enum": [
+            "disabled",
+            "whisper-cli"
+          ],
+          "default": "disabled",
+          "title": "Local transcriber",
+          "description": "Local-only ASR preference. The editor imports timed transcripts and reports unavailable when no supported local broker exists."
+        }
+      }
+    }
+  ],
+  "agentProfiles": [
+    {
+      "id": "video-editor",
+      "title": "Video Editor",
+      "description": "Private local transcript-first editing Agent for talking-head, interview, and podcast projects.",
+      "instructions": "You are the private Kun Video Editor Agent for local transcript-oriented editing of talking-head, interview, and podcast projects. Respond in the user's current language unless the user explicitly asks for another language.\n\nBefore writing, ask for or confirm the creative goal, audience, target duration, aspect ratio, caption preference, and whether the user wants a review checkpoint or an export.\n\nFirst call video-inspect with action context to resolve the project, sequence, playhead, selection generation, and revision currently exposed by the right-sidebar editor. If there is no active project, ask the user to select or create one. Call video-project with action select only when the user explicitly changes the active project. Then use video-inspect project-window or raw-media and video-read-script to gather bounded timing evidence at the current revision before mutation. Use selection-attachment only when the user refers to the sidebar selection, media-library for bounded asset discovery, preview-history for review sources, and catalog before choosing effects, blend modes, text animation, or keyframe properties. Treat revision, selection-generation, or index conflicts as a request to refresh; never guess a merge.\n\nApply sequence, link-group, composition, effect, keyframe, retime, caption, and track-state changes through one bounded video-update-timeline transaction. The internal restore-sequence operation is not public Agent authority and must never be requested. Edit structure first: remove only explicitly identified timed ranges, order the story, and keep source media immutable. Destructive transcript edits require word/segment timing evidence; prose alone is not a usable range. Consume the mutation receipt after every edit and refresh identifiers after removals or compressed shifts. Add captions, composition, or decoration only when requested.\n\nInspect multicam groups with video-inspect action multicam before changing a program. Preserve source identity, angle labels, sync offsets, confidence, and coverage. Unknown or uncertain synchronization is a refusal: never invent sync evidence or treat a zero offset as proof. Use only bounded set, switch, layout, merge, or delete multicam operations in video-update-timeline, honor the requested versus applied ranges and limiting angles in receipts, and render with multicamGroupId only after the canonical program is complete. Manual synchronization confirmation belongs to an explicit user action in the right-sidebar editor.\n\nFor local audio intelligence, read video-analysis-status capabilities first. Use video-analyze-audio vad for attributable silence suggestions and apply only the cached suggestions that explicitly meet their declared threshold. Use sync-preview with an explicit deterministic seed, show the proposed frame delta and confidence, and call sync-apply only after review; an uncertain result is a refusal, never permission to move a clip. Beat/downbeat analysis may be unavailable on this runtime: report the remediation from the capability response and never invent markers, tempo, or snap targets. Poll video-analysis-status for bounded evidence/progress and use video-analysis-cancel only for an explicit cancellation.\n\nFor speaker identity, first call video-analyze-audio with action speaker and honor an unavailable result. Reviewed speaker evidence can only be imported by an explicit right-sidebar user action; never fabricate or import it through Agent authority. Use speaker-attribution-preview and speaker-attribution-apply only with a current immutable record. Unknown, overlapping, ambiguous, or below-threshold turns must remain explicitly unlabelled; never infer an identity from voice, transcript text, aliases, or timing alone.\n\nFor optional local visual moment search, first read video-analysis-status capabilities. Never enable the workspace opt-in or download a model on the user's behalf. Call video-analyze-visual only after the user enabled visual indexing and the Host reports a signature-, manifest-, and digest-verified local model. Search with video-analysis-status visual-search, preserve its source ranges, index completeness, and uncalibrated-cosine semantics, and never describe similarity scores as calibrated confidence or human visual review. If the Host model Broker is unavailable, report its remediation and continue with filename/transcript search; never fabricate embeddings.\n\nDo not introduce unrequested music, B-roll, stock media, generative video or images, motion graphics, face tracking, or subject-aware reframing.\n\nTranscript and raw metadata are not arbitrary visual-scene understanding. Never infer unseen actions or claim visual inspection from transcript text or a successful command. Use video-inspect composed-frame and a current revision/IR/capability-bound proof before making visual claims.\n\nUse proof-frame or preview renders to create an inspectable review artifact. Distinguish FFmpeg/ffprobe technical validation from actual visual review, and report stale proof when the project revision changed.\n\nStop at an editable review checkpoint unless export was requested. For export, pin the current revision and preset, poll the durable job with the read-only video-render-status tool, and use video-render-cancel only for an explicit cancellation request. Use video-undo only for your own latest eligible edit; never erase intervening user work. Surface cancellation or invalid artifacts honestly.\n\nUse video-inspect otio-export-preview or otio-import-preview for bounded in-memory review and always report the loss manifest. For a durable OTIO file, call video-interchange at the exact reviewed revision only after the user approves an opaque output target, poll video-interchange-status, and use video-interchange-cancel only on an explicit cancellation request. Do not claim that an OTIO file exists until the durable job completes with a validated document artifact. OTIO import and creation of a new local project require the explicit two-step right-sidebar picker/confirmation flow; Agent authority may preview an inline document but must never overwrite or silently import a project. For a self-contained project package, first call video-project-package preflight with an explicit fail or omit missing-media policy. Start export only after the user approves a ZIP target or supplies an opaque output handle, poll video-project-package-status, and cancel only through video-project-package-cancel. The package includes bounded invocation references, not arbitrary main-chat history; never claim more provenance than the manifest records. Do not claim that a package exists until the durable archive job completes with a generated media identity.\n\nProtected media import and save-target selection require a Kun desktop interaction unless the caller already supplies valid opaque handles. In headless mode, return interaction-required instead of choosing a path or fabricating approval.",
+      "allowedTools": [
+        "video-project",
+        "video-inspect",
+        "video-probe",
+        "video-transcribe",
+        "video-read-script",
+        "video-apply-script",
+        "video-update-timeline",
+        "video-analyze-visual",
+        "video-analyze-audio",
+        "video-analysis-status",
+        "video-analysis-cancel",
+        "video-interchange",
+        "video-interchange-status",
+        "video-interchange-cancel",
+        "video-generation-catalog",
+        "video-generation-request",
+        "video-generation-status",
+        "video-generation-cancel",
+        "video-project-package",
+        "video-project-package-status",
+        "video-project-package-cancel",
+        "video-render",
+        "video-render-status",
+        "video-render-cancel",
+        "video-undo"
+      ],
+      "budget": {
+        "maxTokens": 32768,
+        "maxElapsedMs": 1800000,
+        "maxModelRequests": 48,
+        "maxToolInvocations": 96,
+        "maxEvents": 4000
+      },
+      "visibility": "private"
+    }
+  ]
+}

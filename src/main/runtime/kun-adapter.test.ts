@@ -516,7 +516,7 @@ describe('kunRuntimeAdapter.isChildRunning dead-PID recovery', () => {
 
   it('clears a cached discovery record whose PID is no longer alive (#1116)', () => {
     setResolvedKunRuntimeConnectionForTests({
-      version: 1,
+      version: 2,
       instanceId: 'dead-shared-runtime',
       pid: 2_147_483_647,
       startedAt: '2026-08-07T00:00:00.000Z',
@@ -535,7 +535,7 @@ describe('kunRuntimeAdapter.isChildRunning dead-PID recovery', () => {
 
   it('keeps reporting running while the cached discovery PID is alive', () => {
     setResolvedKunRuntimeConnectionForTests({
-      version: 1,
+      version: 2,
       instanceId: 'live-shared-runtime',
       pid: process.pid,
       startedAt: '2026-08-07T00:00:00.000Z',

@@ -228,8 +228,8 @@ export class KunRuntimeSupervisor<Settings> {
         })
       })
     }, this.watchdogIntervalMs)
-    timer.unref?.()
-    this.watchdogTimer = timer
+    if (typeof timer === 'object' && 'unref' in timer) timer.unref()
+    this.watchdogTimer = timer as ReturnType<typeof setInterval>
   }
 
   stopWatchdog(): void {
