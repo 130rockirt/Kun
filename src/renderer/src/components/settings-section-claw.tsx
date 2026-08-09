@@ -2,11 +2,14 @@ import type { ReactElement } from 'react'
 import { useState } from 'react'
 import { Bot, MessageSquare, Settings } from 'lucide-react'
 import {
+  validateClawImTelegramProxy,
   type AppSettingsPatch,
   type AppSettingsV1,
   type ClawImAgentProfileV1,
   type ClawImChannelV1,
   type ClawImPlatformCredentialV1,
+  type ClawImTelegramPlatformCredentialV1,
+  type ClawImTelegramProxyV1,
   type ClawModel
 } from '@shared/app-settings'
 import type { ClawImTelegramConnectErrorCode } from '@shared/kun-gui-api'
@@ -80,6 +83,8 @@ function translateTelegramError(
   switch (code) {
     case 'invalid_format':
       return t('connectPhoneTelegramErrorInvalidFormat')
+    case 'invalid_proxy':
+      return t('connectPhoneTelegramErrorInvalidProxy')
     case 'rejected':
       return t('connectPhoneTelegramErrorRejected')
     case 'network':
@@ -135,8 +140,7 @@ function updateTelegramCredential(
   form: AppSettingsV1,
   update: (partial: AppSettingsPatch) => void,
   channelId: string,
-  botToken: string,
-  allowedChatIds: string
+  patch: Partial<Pick<ClawImTelegramPlatformCredentialV1, 'botToken' | 'allowedChatIds' | 'proxy'>>
 ): void {
   const now = new Date().toISOString()
   updateChannels(form, update, (channel) => {
@@ -146,7 +150,7 @@ function updateTelegramCredential(
     return {
       ...channel,
       updatedAt: now,
-      platformCredential: { ...prev, botToken, allowedChatIds }
+      platformCredential: { ...prev, ...patch }
     }
   })
 }
@@ -162,6 +166,8 @@ function TelegramConnectCard({
 }): ReactElement {
   const [botToken, setBotToken] = useState('')
   const [allowedChatIds, setAllowedChatIds] = useState('')
+  const [proxyEnabled, setProxyEnabled] = useState(false)
+  const [proxyUrl, setProxyUrl] = useState('')
   const [connecting, setConnecting] = useState(false)
   const [error, setError] = useState('')
 
@@ -171,13 +177,20 @@ function TelegramConnectCard({
       setError(tCommon('connectPhoneTelegramTokenRequired'))
       return
     }
+    const proxy: ClawImTelegramProxyV1 = { enabled: proxyEnabled, url: proxyUrl.trim() }
+    const proxyValidation = validateClawImTelegramProxy(proxy)
+    if (!proxyValidation.ok) {
+      setError(tCommon('connectPhoneTelegramErrorInvalidProxy'))
+      return
+    }
     if (connecting) return
     setError('')
     setConnecting(true)
     try {
       const result = await window.kunGui.connectTelegramBot(
         trimmedToken,
-        allowedChatIds.trim() || undefined
+        allowedChatIds.trim() || undefined,
+        proxyValidation.proxy
       )
       if (!result.ok) {
         setError(translateTelegramError(tCommon, result.code, result.message))
@@ -191,6 +204,7 @@ function TelegramConnectCard({
           botToken: trimmedToken,
           allowedChatIds: allowedChatIds.trim(),
           ...(result.botUsername ? { botUsername: result.botUsername } : {}),
+          proxy: proxyValidation.proxy,
           createdAt: new Date().toISOString()
         },
         { model: 'auto', enabled: true, im: { enabled: true }, preserveRoute: true }
@@ -260,6 +274,40 @@ function TelegramConnectCard({
             {tCommon('connectPhoneTelegramAllowedChatsHint')}
           </span>
         </label>
+        <div className="rounded-xl border border-ds-border-muted bg-ds-card/55 px-3 py-3">
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <div className="text-[12px] font-semibold text-ds-muted">
+                {tCommon('connectPhoneTelegramProxyEnabledLabel')}
+              </div>
+              <div className="mt-1 text-[12px] leading-5 text-ds-faint">
+                {tCommon('connectPhoneTelegramProxyEnabledHint')}
+              </div>
+            </div>
+            <Toggle
+              checked={proxyEnabled}
+              onChange={setProxyEnabled}
+              disabled={connecting}
+              ariaLabel={tCommon('connectPhoneTelegramProxyEnabledLabel')}
+            />
+          </div>
+          <label className="mt-3 block min-w-0">
+            <span className="mb-1.5 block text-[12px] font-semibold text-ds-muted">
+              {tCommon('connectPhoneTelegramProxyUrlLabel')}
+            </span>
+            <input
+              type="password"
+              value={proxyUrl}
+              onChange={(e) => setProxyUrl(e.target.value)}
+              placeholder={tCommon('connectPhoneTelegramProxyUrlPlaceholder')}
+              disabled={connecting}
+              className={textInputClass()}
+            />
+            <span className="mt-1.5 block text-[12px] leading-5 text-ds-faint">
+              {tCommon('connectPhoneTelegramProxyUrlHint')}
+            </span>
+          </label>
+        </div>
         <button
           type="button"
           onClick={() => void handleConnect()}
@@ -505,7 +553,7 @@ export function ClawSettingsSection({ ctx }: { ctx: ClawSettingsContext }): Reac
                               className={textInputClass()}
                               value={tgCredential.botToken}
                               onChange={(e) =>
-                                updateTelegramCredential(form, update, channel.id, e.target.value, tgCredential.allowedChatIds)}
+                                updateTelegramCredential(form, update, channel.id, { botToken: e.target.value })}
                               placeholder={tCommon('connectPhoneTelegramBotTokenPlaceholder')}
                             />
                           </label>
@@ -518,13 +566,59 @@ export function ClawSettingsSection({ ctx }: { ctx: ClawSettingsContext }): Reac
                               className={textInputClass()}
                               value={tgCredential.allowedChatIds}
                               onChange={(e) =>
-                                updateTelegramCredential(form, update, channel.id, tgCredential.botToken, e.target.value)}
+                                updateTelegramCredential(form, update, channel.id, { allowedChatIds: e.target.value })}
                               placeholder={tCommon('connectPhoneTelegramAllowedChatsPlaceholder')}
                             />
                             <span className="mt-1.5 block text-[12px] leading-5 text-ds-faint">
                               {tCommon('connectPhoneTelegramAllowedChatsHint')}
                             </span>
                           </label>
+                          <div className="rounded-xl border border-ds-border-muted bg-ds-card/55 px-3 py-3">
+                            <div className="flex items-center justify-between gap-3">
+                              <div className="min-w-0">
+                                <div className="text-[12px] font-semibold text-ds-muted">
+                                  {tCommon('connectPhoneTelegramProxyEnabledLabel')}
+                                </div>
+                                <div className="mt-1 text-[12px] leading-5 text-ds-faint">
+                                  {tCommon('connectPhoneTelegramProxyEnabledHint')}
+                                </div>
+                              </div>
+                              <Toggle
+                                checked={tgCredential.proxy?.enabled === true}
+                                onChange={(enabled) => updateTelegramCredential(form, update, channel.id, {
+                                  proxy: {
+                                    enabled,
+                                    url: tgCredential.proxy?.url ?? ''
+                                  }
+                                })}
+                                disabled={!validateClawImTelegramProxy({
+                                  enabled: true,
+                                  url: tgCredential.proxy?.url ?? ''
+                                }).ok && tgCredential.proxy?.enabled !== true}
+                                ariaLabel={tCommon('connectPhoneTelegramProxyEnabledLabel')}
+                              />
+                            </div>
+                            <label className="mt-3 block min-w-0">
+                              <span className="mb-1.5 block text-[12px] font-semibold text-ds-muted">
+                                {tCommon('connectPhoneTelegramProxyUrlLabel')}
+                              </span>
+                              <input
+                                type="password"
+                                className={textInputClass()}
+                                value={tgCredential.proxy?.url ?? ''}
+                                onChange={(e) => updateTelegramCredential(form, update, channel.id, {
+                                  proxy: {
+                                    enabled: tgCredential.proxy?.enabled === true,
+                                    url: e.target.value
+                                  }
+                                })}
+                                placeholder={tCommon('connectPhoneTelegramProxyUrlPlaceholder')}
+                              />
+                              <span className="mt-1.5 block text-[12px] leading-5 text-ds-faint">
+                                {tCommon('connectPhoneTelegramProxyUrlHint')}
+                              </span>
+                            </label>
+                          </div>
                         </div>
                         <div className="mt-3">
                           <InlineNoticeView

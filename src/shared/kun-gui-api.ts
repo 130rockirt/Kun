@@ -2,6 +2,7 @@ import type {
   AppSettingsPatch,
   AppSettingsV1,
   ClawRunResult,
+  ClawImTelegramProxyV1,
   ClawTaskFromTextResult,
   ClawRuntimeStatus,
   DaemonActionResult,
@@ -475,7 +476,7 @@ export type GrokBrowserAuthResult =
   | { ok: true; credentials: GrokOAuthCredentials }
   | { ok: false; message: string; code?: GrokBrowserAuthErrorCode }
 export type GrokBrowserAuthCancelResult = { ok: true }
-export type ClawImTelegramConnectErrorCode = 'invalid_format' | 'rejected' | 'network' | 'unknown'
+export type ClawImTelegramConnectErrorCode = 'invalid_format' | 'invalid_proxy' | 'rejected' | 'network' | 'unknown'
 export type ClawImTelegramConnectResult =
   | { ok: true; botId: number; botUsername: string; botFirstName: string }
   | { ok: false; code: ClawImTelegramConnectErrorCode; message: string }
@@ -734,7 +735,8 @@ export type KunGuiApi = ExtensionIpcApi & {
   ) => Promise<ClawImInstallPollResult>
   connectTelegramBot: (
     botToken: string,
-    allowedChatIds?: string
+    allowedChatIds?: string,
+    proxy?: ClawImTelegramProxyV1
   ) => Promise<ClawImTelegramConnectResult>
   startCodexAuth: () => Promise<CodexAuthStartResult>
   pollCodexAuth: (deviceCode: string, userCode: string) => Promise<CodexAuthPollResult>

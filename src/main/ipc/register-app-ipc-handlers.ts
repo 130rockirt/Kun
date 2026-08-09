@@ -1490,7 +1490,7 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
         clawImTelegramTokenPayloadSchema,
         payload
       )
-      return verifyTelegramBotToken(request.botToken)
+      return verifyTelegramBotToken(request.botToken, request.proxy)
     }
   )
 
