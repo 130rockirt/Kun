@@ -39,7 +39,7 @@ function makeTempRoot(): string {
 }
 
 function runHelper(input: {
-  action: 'ResolvePath' | 'ResolveSource' | 'ResolveUpdateScope' | 'ResolveUninstaller' | 'Recover' | 'Prepare' | 'FallbackCleanup' | 'Restore' | 'ValidatePayload' | 'CleanupInPlaceLeftovers'
+  action: 'ResolvePath' | 'ResolveSource' | 'ResolveUpdateScope' | 'ResolveUninstaller' | 'Recover' | 'Prepare' | 'FallbackCleanup' | 'Restore' | 'ValidatePayload' | 'CleanupInPlaceLeftovers' | 'CleanupJournal'
   source?: string
   secondary?: string
   currentUserSource?: string
@@ -115,6 +115,17 @@ function processError(result: ReturnType<typeof runHelper>): string {
   return String(result.stderr ?? '')
 }
 
+function makeAclUntrusted(path: string): void {
+  const result = spawnSync(
+    'icacls.exe',
+    [path, '/grant', '*S-1-1-0:(OI)(CI)M', '/T', '/C'],
+    { encoding: 'utf8' }
+  )
+  if (result.status !== 0) {
+    throw new Error(`Unable to make the test ACL untrusted: ${result.stderr || result.stdout}`)
+  }
+}
+
 function unavailableDriveTarget(): string {
   for (let code = 'Z'.charCodeAt(0); code >= 'P'.charCodeAt(0); code -= 1) {
     const root = `${String.fromCharCode(code)}:\\`
@@ -123,8 +134,9 @@ function unavailableDriveTarget(): string {
   throw new Error('No unavailable drive letter was available for the installer helper test.')
 }
 
-function readJournal(path: string): { Records: Array<{ Stash: string }> } {
+function readJournal(path: string): { SchemaVersion: number; Records: Array<{ Stash: string }> } {
   return JSON.parse(readFileSync(path, 'utf8').replace(/^\uFEFF/, '')) as {
+    SchemaVersion: number
     Records: Array<{ Stash: string }>
   }
 }
@@ -170,6 +182,34 @@ describe('Windows installer migration ACL contract', () => {
     )
     expect(script).not.toContain('[Security.AccessControl.AccessControlSections]::All')
     expect(script).not.toContain('[Security.AccessControl.AccessControlSections]::Audit')
+  })
+
+  it('quarantines untrusted journals only when no preservation directory remains', () => {
+    const script = readHelperSources()
+
+    expect(script).toContain('function Move-UntrustedJournalToQuarantine')
+    expect(script).toContain('function Get-ExistingJournalPreservationRoots')
+    expect(script).toContain('function Remove-EmptyJournalPreservationRoots')
+    expect(script.indexOf('Get-ExistingJournalPreservationRoots')).toBeLessThan(
+      script.indexOf('[IO.File]::Move($PathValue, $quarantinePath)')
+    )
+    expect(script).toContain('The journal and preserved files were left unchanged.')
+    expect(script).not.toContain('Set-SecureJournalFileAcl $quarantinePath')
+    expect(script.match(/\$journalExists = Test-Path -LiteralPath \$journalPath -PathType Leaf/gu)).toHaveLength(2)
+  })
+
+  it('migrates trusted schema-2 journals and cleans stale journals during uninstall', () => {
+    const script = readHelperSources()
+    const installerScript = readFileSync(join(process.cwd(), 'build/installer.nsh'), 'utf8')
+
+    expect(script).toContain('function Convert-LegacyJournal')
+    expect(script).toContain("if ($schemaVersion -ne 2)")
+    expect(script).toContain('Get-ValidatedJournalRecord $record')
+    expect(script).toContain('function Invoke-CleanupJournal')
+    expect(installerScript).toContain('!insertmacro kunRunMigrationHelper CleanupJournal')
+    expect(installerScript).toContain(
+      '${ifNot} ${isUpdated}\n    StrCpy $KunInstallerJournalPath'
+    )
   })
 
   it('waits for the real NSIS uninstall lifecycle before starting another installer', () => {
@@ -295,6 +335,126 @@ windowsOnly('Windows installer migration helper', () => {
     expect(prepared.status, processError(prepared)).toBe(0)
     expect(existsSync(join(source, 'Kun.exe'))).toBe(true)
     expect(existsSync(join(source, 'notes.txt'))).toBe(false)
+  })
+
+  it('quarantines an untrusted stale journal when no preserved files remain', () => {
+    const root = makeTempRoot()
+    const source = join(root, 'Kun')
+    const recovery = join(root, 'recovery')
+    const journal = join(recovery, 'journal.json')
+    mkdirSync(join(source, 'resources'), { recursive: true })
+    mkdirSync(recovery, { recursive: true })
+    writeFileSync(join(source, 'Kun.exe'), 'app')
+    writeFileSync(journal, '{"SchemaVersion":2,"Phase":"preserved","Records":[]}')
+    makeAclUntrusted(recovery)
+
+    const prepared = runHelper({ action: 'Prepare', source, target: source, journal })
+
+    expect(prepared.status, processError(prepared)).toBe(0)
+    expect(readJournal(journal).SchemaVersion).toBe(3)
+    expect(readdirSync(recovery).some((name) => name.startsWith('journal.json.untrusted-'))).toBe(true)
+  })
+
+  it('keeps an untrusted journal unchanged when preserved files still exist', () => {
+    const root = makeTempRoot()
+    const source = join(root, 'Kun')
+    const recovery = join(root, 'recovery')
+    const journal = join(recovery, 'journal.json')
+    mkdirSync(join(source, 'resources'), { recursive: true })
+    writeFileSync(join(source, 'Kun.exe'), 'app')
+    writeFileSync(join(source, 'notes.txt'), 'keep me')
+
+    const firstPrepare = runHelper({ action: 'Prepare', source, target: source, journal })
+    expect(firstPrepare.status, processError(firstPrepare)).toBe(0)
+    const stash = readJournal(journal).Records[0]?.Stash
+    if (!stash) throw new Error('Prepare did not record the preservation directory.')
+    makeAclUntrusted(recovery)
+
+    const retry = runHelper({ action: 'Prepare', source, target: source, journal })
+
+    expect(retry.status).not.toBe(0)
+    expect(processError(retry)).toContain('preserved installation files still exist')
+    expect(existsSync(journal)).toBe(true)
+    expect(readFileSync(join(stash, 'content', 'notes.txt'), 'utf8')).toBe('keep me')
+  })
+
+  it('removes an empty preservation directory before quarantining a stale journal', () => {
+    const root = makeTempRoot()
+    const source = join(root, 'Kun')
+    const recovery = join(root, 'recovery')
+    const journal = join(recovery, 'journal.json')
+    mkdirSync(join(source, 'resources'), { recursive: true })
+    writeFileSync(join(source, 'Kun.exe'), 'app')
+    writeFileSync(join(source, 'notes.txt'), 'already recovered elsewhere')
+
+    const firstPrepare = runHelper({ action: 'Prepare', source, target: source, journal })
+    expect(firstPrepare.status, processError(firstPrepare)).toBe(0)
+    const stash = readJournal(journal).Records[0]?.Stash
+    if (!stash) throw new Error('Prepare did not record the preservation directory.')
+    rmSync(join(stash, 'content', 'notes.txt'))
+    makeAclUntrusted(recovery)
+
+    const retry = runHelper({ action: 'Prepare', source, target: source, journal })
+
+    expect(retry.status, processError(retry)).toBe(0)
+    expect(existsSync(stash)).toBe(false)
+    expect(readdirSync(recovery).some((name) => name.startsWith('journal.json.untrusted-'))).toBe(true)
+  })
+
+  it('validates and restores a trusted schema-2 recovery journal', () => {
+    const root = makeTempRoot()
+    const source = join(root, 'Kun')
+    const journal = join(root, 'recovery', 'journal.json')
+    mkdirSync(join(source, 'resources'), { recursive: true })
+    writeFileSync(join(source, 'Kun.exe'), 'app')
+    writeFileSync(join(source, 'notes.txt'), 'keep me')
+
+    const prepared = runHelper({ action: 'Prepare', source, target: source, journal })
+    expect(prepared.status, processError(prepared)).toBe(0)
+    const current = readJournal(journal)
+    writeFileSync(journal, JSON.stringify({
+      SchemaVersion: 2,
+      Phase: 'preserved',
+      Records: current.Records
+    }))
+
+    const restored = runHelper({ action: 'Restore', source, target: source, journal })
+
+    expect(restored.status, processError(restored)).toBe(0)
+    expect(readFileSync(join(source, 'notes.txt'), 'utf8')).toBe('keep me')
+    expect(existsSync(journal)).toBe(false)
+  })
+
+  it('cleans only journals that have no preserved files during uninstall', () => {
+    const root = makeTempRoot()
+    const source = join(root, 'Kun')
+    const journal = join(root, 'recovery', 'journal.json')
+    mkdirSync(join(source, 'resources'), { recursive: true })
+    writeFileSync(join(source, 'Kun.exe'), 'app')
+
+    const prepared = runHelper({ action: 'Prepare', source, target: source, journal })
+    expect(prepared.status, processError(prepared)).toBe(0)
+
+    const cleaned = runHelper({ action: 'CleanupJournal', source, target: source, journal })
+
+    expect(cleaned.status, processError(cleaned)).toBe(0)
+    expect(existsSync(journal)).toBe(false)
+
+    const preservedSource = join(root, 'Kun-preserved')
+    const preservedJournal = join(root, 'recovery-preserved', 'journal.json')
+    mkdirSync(join(preservedSource, 'resources'), { recursive: true })
+    writeFileSync(join(preservedSource, 'Kun.exe'), 'app')
+    writeFileSync(join(preservedSource, 'notes.txt'), 'keep me')
+    const preparedWithFiles = runHelper({
+      action: 'Prepare', source: preservedSource, target: preservedSource, journal: preservedJournal
+    })
+    expect(preparedWithFiles.status, processError(preparedWithFiles)).toBe(0)
+
+    const preserved = runHelper({
+      action: 'CleanupJournal', source: preservedSource, target: preservedSource, journal: preservedJournal
+    })
+    expect(preserved.status, processError(preserved)).toBe(0)
+    expect(existsSync(preservedJournal)).toBe(true)
   })
 
   it.each([
