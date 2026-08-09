@@ -16,6 +16,18 @@ describe('isSubagentBlock', () => {
     expect(isSubagentBlock(block)).toBe(true)
   })
 
+  it('recognizes persisted ppt_agent results without child metadata', () => {
+    expect(isSubagentBlock({
+      kind: 'tool',
+      id: 'tool_ppt_history',
+      createdAt: '2026-08-07T00:00:00.000Z',
+      summary: 'ppt_agent',
+      status: 'success',
+      toolKind: 'tool_call',
+      meta: { toolName: 'ppt_agent' }
+    })).toBe(true)
+  })
+
   it('still recognizes delegate_task and child-bearing tools', () => {
     expect(isSubagentBlock({
       kind: 'tool',

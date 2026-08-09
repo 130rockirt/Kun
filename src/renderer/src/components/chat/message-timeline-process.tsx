@@ -56,8 +56,8 @@ export type ProcessSection = {
 }
 
 /**
- * A `delegate_task` tool call (or any block carrying child runtime metadata)
- * is rendered as a "Kun Crew" subagent card, not a generic tool row.
+ * Built-in child-agent tools (or any block carrying child runtime metadata)
+ * are rendered as "Kun Crew" subagent cards, not generic tool rows.
  */
 export function isSubagentBlock(block: ChatBlock): boolean {
   if (block.kind !== 'tool') return false
@@ -67,7 +67,8 @@ export function isSubagentBlock(block: ChatBlock): boolean {
   return (
     toolName === 'delegate_task' ||
     toolName === 'generate_subagent' ||
-    toolName === 'explore_agent'
+    toolName === 'explore_agent' ||
+    toolName === 'ppt_agent'
   )
 }
 

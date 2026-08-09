@@ -150,6 +150,45 @@ describe('SubagentCallCard route metadata', () => {
     expect(instanceText(metadata)).toContain('IPC Investigator (generated:ipc-investigator:12345678)')
   })
 
+  it('restores a persisted PPT agent result and opens its child session', async () => {
+    selectThread.mockClear()
+    await act(async () => {
+      renderer = create(createElement(SubagentCallCard, {
+        block: {
+          kind: 'tool',
+          id: 'tool_ppt_history',
+          createdAt: '2026-08-07T00:00:00.000Z',
+          summary: 'ppt_agent',
+          status: 'success',
+          toolKind: 'tool_call',
+          detail: JSON.stringify({
+            childId: 'child_ppt_history',
+            status: 'completed',
+            title: 'Product launch deck',
+            summary: 'Created the PPT deck and exported it.',
+            profile: 'ppt',
+            profileName: 'PPT Master',
+            model: 'deepseek-v4-pro',
+            toolInvocations: 4
+          }),
+          meta: { toolName: 'ppt_agent' }
+        }
+      }))
+    })
+
+    const metadata = renderer!.root.findByProps({ 'data-testid': 'subagent-route-metadata' })
+    expect(metadata.props['data-agent-id']).toBe('ppt')
+    expect(metadata.props['data-model']).toBe('deepseek-v4-pro')
+    expect(instanceText(renderer!.root)).toContain('Product launch deck')
+    expect(instanceText(renderer!.root)).toContain('Done')
+
+    const open = renderer!.root.findByProps({ 'data-testid': 'explore-open-process-button' })
+    await act(async () => {
+      open.props.onClick({ stopPropagation() {} })
+    })
+    expect(selectThread).toHaveBeenCalledWith('child_ppt_history')
+  })
+
   it('labels missing legacy identity and omits an empty model instead of showing Not recorded', async () => {
     await act(async () => {
       renderer = create(createElement(SubagentCallCard, {
