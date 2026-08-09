@@ -325,7 +325,7 @@ describe('SubagentCallCard route metadata', () => {
     expect(card.props['data-explore']).toBe('true')
   })
 
-  it('shows the full conclusion by default and opens the child only via the process button', async () => {
+  it('keeps the conclusion collapsed by default and opens it only on explicit toggle', async () => {
     selectThread.mockClear()
     const onOpenChildThread = vi.fn()
     const conclusion = [
@@ -371,10 +371,10 @@ describe('SubagentCallCard route metadata', () => {
     })
 
     const card = renderer!.root.findByProps({ 'data-testid': 'subagent-call-card' })
-    expect(card.props['data-conclusion-expanded']).toBe('true')
+    expect(card.props['data-conclusion-expanded']).toBe('false')
     expect(instanceText(renderer!.root)).toContain('已找到完整链路')
-    expect(instanceText(renderer!.root)).toContain('ProviderRetryConfig')
-    expect(instanceText(renderer!.root)).not.toContain('View explore process · 5 steps')
+    expect(instanceText(renderer!.root)).toContain('Show conclusion')
+    expect(renderer!.root.findAllByProps({ 'data-testid': 'subagent-conclusion-body' })).toHaveLength(0)
 
     const clickable = card.findAll((node) => node.props?.role === 'button')[0]
     await act(async () => {
@@ -383,7 +383,9 @@ describe('SubagentCallCard route metadata', () => {
     expect(onOpenChildThread).not.toHaveBeenCalled()
     expect(
       renderer!.root.findByProps({ 'data-testid': 'subagent-call-card' }).props['data-conclusion-expanded']
-    ).toBe('false')
+    ).toBe('true')
+    expect(instanceText(renderer!.root)).toContain('ProviderRetryConfig')
+    expect(renderer!.root.findAllByProps({ 'data-testid': 'subagent-conclusion-body' })).toHaveLength(1)
 
     const openProcess = renderer!.root.findByProps({ 'data-testid': 'explore-open-process-button' })
     await act(async () => {
@@ -459,7 +461,7 @@ describe('SubagentCallCard route metadata', () => {
     expect(text).not.toContain('Running')
     expect(text).toContain('Located the save-tokens wiring.')
     const card = renderer!.root.findByProps({ 'data-testid': 'subagent-call-card' })
-    expect(card.props['data-conclusion-expanded']).toBe('true')
+    expect(card.props['data-conclusion-expanded']).toBe('false')
     expect(card.props['data-activity-label']).toBe('')
   })
 

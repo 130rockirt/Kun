@@ -458,11 +458,9 @@ export function SubagentCallCard({
   )
 
   const hasBody = Boolean(detail.summary?.trim() || detail.error?.trim())
-  // Completed explore conclusions default open so the full text is readable.
-  const exploreConclusionDefaultOpen = isExplore && isTerminal(status) && hasBody
-  const [userToggled, setUserToggled] = useState<boolean | null>(null)
+  const [conclusionExpanded, setConclusionExpanded] = useState(false)
   const [peekOpen, setPeekOpen] = useState(false)
-  const expanded = hasBody && !peekOpen && (userToggled ?? exploreConclusionDefaultOpen)
+  const expanded = hasBody && !peekOpen && conclusionExpanded
 
   const canJump = Boolean(childId)
   const openChild = (): void => {
@@ -476,7 +474,7 @@ export function SubagentCallCard({
   }
   const toggleConclusion = (): void => {
     if (!hasBody) return
-    setUserToggled(!(userToggled ?? exploreConclusionDefaultOpen))
+    setConclusionExpanded((value) => !value)
   }
 
   // Stagger sweep/pulse per child so a swarm reads as independent.
