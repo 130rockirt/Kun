@@ -21,7 +21,10 @@ import {
 } from 'lucide-react'
 import type { JsonObject } from '@kun/extension-api'
 import type { ChatBlock } from '../agent/types'
-import { normalizeDevPreviewUrlInput } from '@shared/dev-preview-url'
+import {
+  devPreviewUrlRejectionReason,
+  normalizeDevPreviewUrlInput
+} from '@shared/dev-preview-url'
 import {
   appendDevPreviewIssue,
   createDevPreviewIssue,
@@ -395,7 +398,14 @@ function DevPreviewPanel({
   const loadUrl = (value: string, options: LoadOptions = {}): void => {
     const normalized = normalizeDevPreviewUrlInput(value)
     if (!normalized) {
-      setLoadError(t('browserInvalidUrl'))
+      const reason = devPreviewUrlRejectionReason(value)
+      setLoadError(
+        reason === 'scheme'
+          ? t('browserSchemeBlocked')
+          : reason === 'metadata'
+            ? t('browserMetadataBlocked')
+            : t('browserInvalidUrl')
+      )
       return
     }
     setAddressMenuOpen(false)
