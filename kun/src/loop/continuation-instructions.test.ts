@@ -4,7 +4,8 @@ import { makeGoalContextItem, makeUserItem } from '../domain/item.js'
 import {
   filterGoalContextsForActiveGoal,
   filterGoalContextsForGoalKey,
-  goalContextKey
+  goalContextKey,
+  isPostToolFailureProgressText
 } from './continuation-instructions.js'
 
 function activeGoal(overrides: Partial<ThreadGoal> = {}): ThreadGoal {
@@ -119,5 +120,21 @@ describe('goal context lifecycle projection', () => {
     })
 
     expect(filterGoalContextsForActiveGoal([first, duplicate], active)).toEqual([first])
+  })
+})
+
+describe('post-tool-failure progress classifier', () => {
+  it('recognizes the Chinese investigation status that previously ended the turn', () => {
+    expect(isPostToolFailureProgressText(
+      '我来调查页面上下文从前端到后端的完整链路。先定位关键符号。'
+    )).toBe(true)
+    expect(isPostToolFailureProgressText('我来排查调用路径。')).toBe(true)
+    expect(isPostToolFailureProgressText('先搜索相关实现。')).toBe(true)
+  })
+
+  it('does not recover user questions, blockers, or factual failure reports', () => {
+    expect(isPostToolFailureProgressText('这个路径不存在，需要你确认工作区。')).toBe(false)
+    expect(isPostToolFailureProgressText('请问要继续使用这个路径吗？')).toBe(false)
+    expect(isPostToolFailureProgressText('搜索失败：工作区不存在，无法继续。')).toBe(false)
   })
 })
