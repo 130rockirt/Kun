@@ -34,6 +34,7 @@ import {
   errorMessage,
   hashCandidate,
   hashIncompleteToolArguments,
+  hostPlanningIssue,
   planningError,
   planningEventForStatus,
   planningRunSummary,
@@ -439,21 +440,21 @@ export function buildGraphDefinePlanTool(options: {
             true
           )
         }
+        const hostIssue = hostPlanningIssue()
         if (
           latestDraft &&
           latestDraft.status !== 'committed' &&
           latestDraft.status !== 'host_error'
         ) {
-          const issue = toPlanningIssue(failure, [])
           draft = await transitionDraft(options, latestDraft, {
             status: 'host_error',
-            issues: [issue]
+            issues: [hostIssue]
           }).catch(() => latestDraft)
         }
         return planningError(
           'graph_planning_host_error',
-          errorMessage(failure),
-          [],
+          'Graph planning could not persist or commit the draft because the host encountered an error.',
+          [hostIssue],
           false,
           draft ?? latestDraft ?? undefined
         )

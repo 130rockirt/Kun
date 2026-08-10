@@ -486,6 +486,35 @@ describe('graph_define_plan', () => {
     expect(start).toHaveBeenCalledOnce()
   })
 
+  it('labels an unrecoverable committed-run creation failure as a host error', async () => {
+    const { create, drafts, get, tool } = await harness()
+    const failure = Object.assign(new Error('private create failure'), {
+      code: 'invalid_plan'
+    })
+    create.mockRejectedValue(failure)
+    get.mockRejectedValue(new Error('run not found'))
+
+    const result = await tool.execute(validPlan(), context())
+
+    expect(result).toMatchObject({
+      isError: true,
+      output: {
+        code: 'graph_planning_host_error',
+        retryable: false,
+        error: 'Graph planning could not persist or commit the draft because the host encountered an error.',
+        issues: [{ code: 'graph_planning_host_error', path: [] }],
+        draft: {
+          status: 'host_error',
+          repairCount: 0,
+          issues: [{ code: 'graph_planning_host_error', path: [] }]
+        }
+      }
+    })
+    expect(JSON.stringify(result)).not.toContain('private create failure')
+    expect(JSON.stringify(result)).not.toContain('invalid_plan')
+    expect((await drafts.require('draft_1')).status).toBe('host_error')
+  })
+
   it('reports user cancellation when Stop wins a deferred committed start', async () => {
     const { create, get, start, tool } = await harness()
     let runStatus: 'ready' | 'cancelled' = 'ready'
