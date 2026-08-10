@@ -26,6 +26,7 @@ import {
   completionIsCurrentlyVisible,
   markUnreadCompletion
 } from './unread-completions'
+import { unseenDeltaText } from './chat-projection-reducer-support'
 
 export type SideContext = {
   set: (partial: Partial<ChatState> | ((state: ChatState) => Partial<ChatState>)) => void
@@ -219,6 +220,13 @@ function buildSideSink(sideId: string, ctx: SideContext, sinceSeq = 0): ThreadEv
           let blocks = side.blocks
           for (const delta of deltas) {
             if (delta.kind === 'agent_reasoning') {
+              const text = unseenDeltaText(
+                delta,
+                blocks,
+                liveReasoning,
+                liveReasoningItemId
+              )
+              if (!text) continue
               if (delta.itemId && liveReasoningItemId && delta.itemId !== liveReasoningItemId) {
                 if (liveReasoning.trim()) {
                   blocks = upsertSideTimelineBlock(blocks, {
@@ -234,8 +242,15 @@ function buildSideSink(sideId: string, ctx: SideContext, sinceSeq = 0): ThreadEv
               liveReasoningItemId = delta.itemId ?? liveReasoningItemId
               liveReasoningTurnId = delta.turnId ?? liveReasoningTurnId ?? side.turnId ?? undefined
               liveReasoningCreatedAt = delta.createdAt ?? liveReasoningCreatedAt
-              liveReasoning += delta.text
+              liveReasoning += text
             } else {
+              const text = unseenDeltaText(
+                delta,
+                blocks,
+                liveAssistant,
+                liveAssistantItemId
+              )
+              if (!text) continue
               if (delta.itemId && liveAssistantItemId && delta.itemId !== liveAssistantItemId) {
                 if (liveAssistant.trim()) {
                   blocks = upsertSideTimelineBlock(blocks, {
@@ -251,7 +266,7 @@ function buildSideSink(sideId: string, ctx: SideContext, sinceSeq = 0): ThreadEv
               liveAssistantItemId = delta.itemId ?? liveAssistantItemId
               liveAssistantTurnId = delta.turnId ?? liveAssistantTurnId ?? side.turnId ?? undefined
               liveAssistantCreatedAt = delta.createdAt ?? liveAssistantCreatedAt
-              liveAssistant += delta.text
+              liveAssistant += text
             }
           }
           return {

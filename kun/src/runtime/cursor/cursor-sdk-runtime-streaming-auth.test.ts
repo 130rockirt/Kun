@@ -463,6 +463,54 @@ describe('CursorSdkRuntime', () => {
     ]))
   })
 
+  test('collapses cumulative Cursor assistant snapshots to a single final reply', async () => {
+    const answer = '可视化辅助选项'
+    const h = harness({
+      run: fakeRun({
+        stream: [{
+          type: 'assistant',
+          agent_id: 'agent_1',
+          run_id: 'run_1',
+          message: { role: 'assistant', content: [{ type: 'text', text: answer }] }
+        }, {
+          type: 'assistant',
+          agent_id: 'agent_1',
+          run_id: 'run_1',
+          message: { role: 'assistant', content: [{ type: 'text', text: answer }] }
+        }, {
+          type: 'assistant',
+          agent_id: 'agent_1',
+          run_id: 'run_1',
+          message: { role: 'assistant', content: [{ type: 'text', text: `${answer}：完成` }] }
+        }],
+        result: { result: `${answer}：完成` }
+      })
+    })
+
+    await expect(h.runtime.runTurn(
+      'thread_1',
+      'turn_1',
+      new AbortController().signal,
+      'cursor-subscription'
+    )).resolves.toBe('completed')
+
+    const textDeltas = h.recordedDeltaSnapshots
+      .map(({ event }) => event as { kind?: string; item?: { text?: string }; deltaOffset?: number })
+      .filter((event) => event.kind === 'assistant_text_delta')
+    expect(textDeltas).toEqual([
+      expect.objectContaining({ deltaOffset: 0, item: expect.objectContaining({ text: answer }) }),
+      expect.objectContaining({
+        deltaOffset: answer.length,
+        item: expect.objectContaining({ text: '：完成' })
+      })
+    ])
+
+    const latest = [...h.recordedDeltaSnapshots].reverse().find((snapshot) =>
+      'text' in snapshot.item && snapshot.item.kind === 'assistant_text'
+    )
+    expect(latest?.item).toEqual(expect.objectContaining({ text: `${answer}：完成` }))
+  })
+
   test('rebuilds the SDK session once and continues an accepted run after authentication expires', async () => {
     const h = harness({
       sendResults: [
