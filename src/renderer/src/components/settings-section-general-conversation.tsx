@@ -31,6 +31,21 @@ export function GeneralConversationSettingsPanel({ view }: { view: Record<string
             }
           />
           <SettingRow
+            title={t('chatWelcomeMessage')}
+            description={t('chatWelcomeMessageDesc')}
+            wideControl
+            control={
+              <input
+                type="text"
+                value={form.chatWelcomeMessage ?? ''}
+                onChange={(e) => update({ chatWelcomeMessage: e.target.value })}
+                placeholder={t('chatWelcomeMessagePlaceholder')}
+                maxLength={200}
+                className="w-full rounded-xl border border-ds-border bg-ds-main/60 px-3 py-2.5 text-[14px] leading-6 text-ds-ink outline-none focus:border-accent/40 focus:ring-1 focus:ring-accent/25"
+              />
+            }
+          />
+          <SettingRow
             title={t('turnCompleteNotification')}
             description={t('turnCompleteNotificationDesc')}
             control={

@@ -541,6 +541,11 @@ export type AppSettingsV1 = {
   guiUpdate: GuiUpdateConfigV1
   terminal: TerminalSettingsV1
   codePromptPrefix: string
+  /**
+   * Custom empty-chat welcome title. Empty string keeps the locale default
+   * (`emptyHeroTitle`).
+   */
+  chatWelcomeMessage: string
   /** User-disabled skill IDs. Disabled skills are hidden from command surfaces. */
   disabledSkillIds: string[]
 }

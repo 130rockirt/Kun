@@ -356,6 +356,7 @@ describe('skill-service', () => {
       terminal: defaultTerminalSettings(),
       guiUpdate: { channel: 'stable' },
       codePromptPrefix: '',
+      chatWelcomeMessage: '',
       disabledSkillIds: []
     }
   }

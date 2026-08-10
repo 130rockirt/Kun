@@ -72,6 +72,7 @@ function settingsWithWorkflows(workflows: WorkflowV1[], modules: WorkflowCustomM
     terminal: defaultTerminalSettings(),
     guiUpdate: { channel: 'stable' },
     codePromptPrefix: '',
+    chatWelcomeMessage: '',
     disabledSkillIds: []
   }
 }

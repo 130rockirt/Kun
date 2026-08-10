@@ -55,6 +55,7 @@ function createSettings(patch: Partial<AppSettingsV1['agents']['kun']> = {}): Ap
     },
     design: defaultDesignSettings(),
     codePromptPrefix: '',
+    chatWelcomeMessage: '',
     disabledSkillIds: [],
     claw: defaultClawSettings()
   }

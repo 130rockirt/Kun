@@ -227,6 +227,7 @@ export function portableSettingsForMigration(settings: AppSettingsV1): Record<st
     appBehavior: { closeAction: settings.appBehavior.closeAction },
     gitBranchPrefix: settings.gitBranchPrefix,
     codePromptPrefix: settings.codePromptPrefix,
+    chatWelcomeMessage: settings.chatWelcomeMessage,
     disabledSkillIds: settings.disabledSkillIds,
     write: {
       autoSaveEnabled: settings.write.autoSaveEnabled,

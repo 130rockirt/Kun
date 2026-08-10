@@ -68,6 +68,7 @@ function createSettings(patch: Partial<AppSettingsV1['schedule']['internal']> = 
       channel: 'stable'
     },
     codePromptPrefix: '',
+    chatWelcomeMessage: '',
     disabledSkillIds: [],
     claw: {
       ...claw,

@@ -53,6 +53,7 @@ function settings(workspaceRoot: string): AppSettingsV1 {
     guiUpdate: { channel: 'stable' },
     terminal: defaultTerminalSettings(),
     codePromptPrefix: '',
+    chatWelcomeMessage: '',
     disabledSkillIds: []
   }
 }

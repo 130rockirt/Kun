@@ -500,6 +500,7 @@ const settingsPatchObjectSchema = z.object({
     channel: z.enum(GUI_UPDATE_CHANNELS).optional()
   }).strict().optional(),
   codePromptPrefix: z.string().max(MAX_CHANNEL_TEXT_LENGTH).optional(),
+  chatWelcomeMessage: z.string().max(200).optional(),
   disabledSkillIds: z.array(trimmedString(128)).max(512).optional()
 }).strict()
 

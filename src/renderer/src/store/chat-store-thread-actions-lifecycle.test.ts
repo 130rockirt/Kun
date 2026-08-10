@@ -665,6 +665,7 @@ describe('chat-store-thread-actions createThread conversation mode', () => {
           terminal: { colors: {} },
           guiUpdate: { channel: 'stable' },
           codePromptPrefix: '',
+          chatWelcomeMessage: '',
           disabledSkillIds: []
         })),
         createConversationWorkspace: vi.fn(async () => ({ ok: true, path: createdPath }))

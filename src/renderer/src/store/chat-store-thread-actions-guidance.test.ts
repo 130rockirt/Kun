@@ -393,6 +393,7 @@ describe('chat-store-thread-actions queued messages', () => {
         getSettings: vi.fn(async () => ({
           agents: { kun: { providerId: 'deepseek', model: 'deepseek-v4-pro' } },
           codePromptPrefix: ''
+          chatWelcomeMessage: ''
         })),
         logError: vi.fn(async () => undefined)
       }
