@@ -41,6 +41,8 @@ export function createTurnRecord(input: {
   guiDesignCanvas?: boolean
   guiDesignMode?: boolean
   agentSurface?: 'code' | 'write' | 'design'
+  /** Turn-scoped persona text; stored so replay reconstructs the same request. */
+  persona?: string
   guiDesignArtifact?: GuiDesignArtifactContextJson
   mode?: ThreadMode
   orchestration?: GraphOrchestrationStrategy
@@ -86,6 +88,7 @@ export function createTurnRecord(input: {
     ...(input.guiDesignCanvas ? { guiDesignCanvas: true } : {}),
     ...(input.guiDesignMode ? { guiDesignMode: true } : {}),
     ...(input.agentSurface ? { agentSurface: input.agentSurface } : {}),
+    ...(input.persona?.trim() ? { persona: input.persona.trim() } : {}),
     ...(input.guiDesignArtifact ? { guiDesignArtifact: input.guiDesignArtifact } : {}),
     ...(input.mode ? { mode: input.mode } : {}),
     ...(input.disableUserInput ? { disableUserInput: true } : {}),

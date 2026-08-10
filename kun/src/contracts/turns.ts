@@ -15,6 +15,13 @@ import { GraphOrchestrationStrategySchema } from './graph.js'
 import { GraphPlanningDraftStatusSchema } from './graph-planning.js'
 
 /**
+ * Upper bound for a turn-scoped persona. Personas are short stance/voice
+ * guidance, not documents; the cap keeps a mistyped paste from displacing
+ * conversation context.
+ */
+export const TURN_PERSONA_MAX_CHARS = 2000
+
+/**
  * Mode enum, inlined here (instead of importing `ThreadMode` from
  * `threads.js`) to avoid a `threads <-> turns` module init cycle:
  * `threads.ts` already imports `TurnSchema` from this file. The two
@@ -204,6 +211,12 @@ export const TurnSchema = z.object({
   guiDesignMode: z.boolean().optional(),
   /** Product surface that owns this turn. Missing legacy values behave as Code. */
   agentSurface: z.enum(['code', 'write', 'design']).optional(),
+  /**
+   * Turn-scoped persona text chosen by the user in the composer. Rendered as
+   * a `user`-authority dynamic context block after history, so it never
+   * touches the immutable prefix or the cached history span.
+   */
+  persona: z.string().max(TURN_PERSONA_MAX_CHARS).optional(),
   /** Reserved first-class SVG artifact for structured SVG tools. */
   guiDesignArtifact: GuiDesignArtifactContextSchema.optional(),
   /**
@@ -250,6 +263,13 @@ export const StartTurnRequest = z.object({
    * mode Kun advertises `create_plan` for the whole conversation.
    */
   mode: TurnModeSchema.optional(),
+  /**
+   * Optional persona text for this turn only. It guides tone, stance, and
+   * working style; it cannot grant tools or relax policy. Kun renders it as
+   * a `user`-authority context block after history so switching personas
+   * mid-thread leaves the cached prefix and history byte-stable.
+   */
+  persona: z.string().max(TURN_PERSONA_MAX_CHARS).optional(),
   /**
    * Explicitly selects host-owned Graph orchestration for this turn.
    * Missing values preserve the existing direct agent loop.
