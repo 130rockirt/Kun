@@ -616,5 +616,8 @@
   "mcpFormBackToForm": "กลับคืนสู่ฟอร์ม",
   "mcpFormInvalidJson": "The config could not be parsed, so the form is unavailable. Fix the JSON below to continue. ({{error}})",
   "mcpFormName": "ชื่อ",
-  "mcpFormNamePlaceholder": "เครื่องมือของฉัน"
+  "mcpFormNamePlaceholder": "เครื่องมือของฉัน",
+  "kunResetDefaultModel": "รีเซ็ตโมเดลฉุกเฉิน",
+  "kunResetDefaultModelDesc": "หากเอเจนต์ภายในใช้งานไม่ได้เพราะโมเดลเริ่มต้นเข้ากันไม่ได้ ให้รีเซ็ตเป็น {{model}} โดยไม่ลบการตั้งค่าอื่น",
+  "kunResetDefaultModelAction": "รีเซ็ตเป็น {{model}}"
 }

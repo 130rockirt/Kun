@@ -616,5 +616,8 @@
   "mcpFormBackToForm": "返回表单",
   "mcpFormInvalidJson": "配置无法解析，暂时无法使用表单。请先修正下方 JSON。（{{error}}）",
   "mcpFormName": "名称",
-  "mcpFormNamePlaceholder": "my-tool"
+  "mcpFormNamePlaceholder": "my-tool",
+  "kunResetDefaultModel": "紧急恢复默认模型",
+  "kunResetDefaultModelDesc": "当默认模型不兼容导致本地智能体无法启动或对话时，可一键恢复为 {{model}}，无需删除其他配置。",
+  "kunResetDefaultModelAction": "恢复为 {{model}}"
 }

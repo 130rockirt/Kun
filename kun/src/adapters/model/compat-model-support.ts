@@ -172,6 +172,11 @@ export function shouldRetryWithoutStreamUsage(
   return /\b(stream_options|include_usage)\b/i.test(text)
 }
 
+export {
+  shouldRetryWithoutSamplingParams,
+  stripSamplingFromBody
+} from './fixed-sampling.js'
+
 export function reasoningFromMessage(message: ChatCompletionResponse['choices'][number]['message'] | undefined): string {
   if (!message) return ''
   const value = message.reasoning_content ??
