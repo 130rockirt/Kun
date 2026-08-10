@@ -211,7 +211,9 @@ export function SubagentCallCard({
           hasBody ? 'cursor-pointer transition hover:bg-ds-hover/30' : ''
         }`}
       >
-        <AvatarDisc poseId={poseId} status={status} hue={hue} compact={compact} animate={animate} />
+        <span className="ds-subagent-focus-decoration contents">
+          <AvatarDisc poseId={poseId} status={status} hue={hue} compact={compact} animate={animate} />
+        </span>
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-2">
             {isExplore ? <ExploreKindBadge t={t} /> : null}
@@ -504,7 +506,7 @@ export function SubagentGroup({
             <span className="font-normal text-ds-muted"> · {summaryParts.join(' · ')}</span>
           ) : null}
         </span>
-        <span className="flex shrink-0">
+        <span className="ds-subagent-focus-decoration flex shrink-0">
           {clusterPoses.map((pose, i) => (
             <span
               key={`${pose}-${i}`}

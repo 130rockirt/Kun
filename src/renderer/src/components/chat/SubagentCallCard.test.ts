@@ -127,6 +127,7 @@ describe('SubagentCallCard route metadata', () => {
     const metadata = renderer!.root.findByProps({ 'data-testid': 'subagent-route-metadata' })
     expect(metadata.props['data-agent-id']).toBe('general')
     expect(metadata.props['data-model']).toBe('gpt-5.6-sol')
+    expect(focusDecorationCount(renderer!.root)).toBe(1)
     expect(instanceText(metadata)).toContain('General Agent (general)')
     expect(instanceText(renderer!.root)).toContain('Greeting Agent 1')
     expect(instanceText(renderer!.root)).toContain('Hello! How can I help?')
@@ -231,6 +232,7 @@ describe('SubagentCallCard route metadata', () => {
     expect(rows).toHaveLength(2)
     expect(rows.map((row) => row.props['data-agent-id'])).toEqual(['general', 'explore'])
     expect(rows.map((row) => row.props['data-model'])).toEqual(['gpt-5.6-sol', 'gpt-5.6-terra'])
+    expect(focusDecorationCount(renderer!.root)).toBe(3)
   })
 
   it('renders an all-explore cluster as independent full cards without a subagent swarm header', async () => {
@@ -260,6 +262,7 @@ describe('SubagentCallCard route metadata', () => {
     const text = instanceText(renderer!.root)
     expect(renderer!.root.findByProps({ 'data-testid': 'explore-independent-stack' })).toBeTruthy()
     expect(renderer!.root.findAllByProps({ 'data-testid': 'subagent-call-card' })).toHaveLength(2)
+    expect(focusDecorationCount(renderer!.root)).toBe(2)
     expect(text).toContain('Packaging config')
     expect(text).toContain('Release workflow')
     expect(text).not.toContain('subagents')
@@ -587,4 +590,10 @@ function instanceText(instance: ReactTestInstance): string {
   return instance.children
     .map((child) => typeof child === 'string' ? child : instanceText(child))
     .join('')
+}
+
+function focusDecorationCount(instance: ReactTestInstance): number {
+  return instance.findAll((node) =>
+    typeof node.props.className === 'string' && node.props.className.includes('ds-subagent-focus-decoration')
+  ).length
 }

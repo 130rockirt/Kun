@@ -192,13 +192,14 @@
   }
 }
 
-/* Focus mode removes decorative Kun / iKun mascots without hiding essential loading indicators. */
+/* Focus mode removes decorative Kun / iKun mascots and subagent avatars without hiding essential loading indicators. */
 [data-focus-mode='on'] .ds-ikun-cameo-layer,
 [data-focus-mode='on'] .ds-kun-celebration-layer,
 [data-focus-mode='on'] .ds-kun-state,
 [data-focus-mode='on'] .ds-runtime-wake-zzz,
 [data-focus-mode='on'] .ds-work-logo,
 [data-focus-mode='on'] .ds-work-logo-slot:has(.ds-work-logo),
+[data-focus-mode='on'] .ds-subagent-focus-decoration,
 [data-focus-mode='on'] .ds-ikun-toggle-figure {
   display: none !important;
 }
