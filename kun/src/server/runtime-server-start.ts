@@ -12,6 +12,7 @@ import {
 } from './runtime-factory-dependencies.js'
 import { createKunServeRuntime } from './runtime-composition.js'
 import { settleCleanupSteps } from './runtime-factory-cleanup.js'
+import { startMemoryPressureMonitor } from './memory-pressure-monitor.js'
 import type { KunServeHandle, KunServeRuntimeOptions } from './runtime-factory-types.js'
 
 export async function startKunServe(
@@ -123,6 +124,15 @@ export async function startKunServe(
           console.warn(`[kun] auto-resumed ${resumed} interrupted goal(s) after restart`)
         }
       }
+      // Ordinary threads (no active goal) get the same treatment: resume the
+      // interrupted task so the user does not have to re-explain it. Gated by
+      // the per-thread cooldown and the master switch.
+      if (threadIds.length > 0 && runtime.resumeInterruptedTurns) {
+        const resumed = await runtime.resumeInterruptedTurns(threadIds)
+        if (resumed > 0) {
+          console.warn(`[kun] auto-resumed ${resumed} interrupted turn(s) after restart`)
+        }
+      }
     })
     .catch((error) => {
       console.warn('[kun] orphaned turn reconciliation failed:', error)
@@ -139,12 +149,29 @@ export async function startKunServe(
     .catch((error) => {
       console.warn('[kun] orphaned child-run reconciliation failed:', error)
     })
+  // Memory-pressure monitor: fold idle histories at the warning watermark and
+  // request a graceful (resumable) shutdown at the critical watermark instead
+  // of letting the OS hard-kill the runtime with OOM.
+  const memoryMonitor = runtime.threadStore && options.runtime?.memoryPressure?.enabled !== false
+    ? startMemoryPressureMonitor({
+        config: options.runtime?.memoryPressure,
+        threadStore: runtime.threadStore,
+        turnService: runtime.turnService,
+        events: runtime.events,
+        instanceId,
+        requestShutdown: async () => {
+          await runtime.requestShutdown?.(instanceId).catch(() => false)
+          return true
+        }
+      })
+    : null
   return {
     ...server,
     runtime,
     instanceId,
     shutdownRequested,
     close: async () => {
+      memoryMonitor?.stop()
       await settleCleanupSteps([
         async () => { await runtime.shutdown?.() },
         () => server.close(),

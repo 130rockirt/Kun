@@ -287,6 +287,7 @@ class CompatMessageProjector {
       case 'user_message':
         return { role: 'user', content: userMessageTextWithComposerContexts(item) }
       case 'goal_context':
+      case 'interruption_note':
         return {
           role: 'system',
           content: item.text,

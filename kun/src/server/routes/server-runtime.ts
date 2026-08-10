@@ -1,5 +1,6 @@
 import type { ThreadService } from '../../services/thread-service.js'
 import type { TurnService } from '../../services/turn-service.js'
+import type { ThreadStore } from '../../ports/thread-store.js'
 import type { TurnRunOutcome } from '../../loop/turn-execution-types.js'
 import type { UsageService } from '../../services/usage-service.js'
 import type { ReviewService } from '../../services/review-service.js'
@@ -245,6 +246,17 @@ export type ServerRuntime = {
    * of goals resumed. Optional so embedders without the agent loop can omit it.
    */
   resumeInterruptedGoals?(threadIds: readonly string[]): Promise<number>
+  /**
+   * Relaunch continuation turns for ordinary threads (no active goal) whose
+   * in-flight turn was just reconciled to `failed` after a runtime restart.
+   * Optional so embedders without the agent loop can omit it.
+   */
+  resumeInterruptedTurns?(threadIds: readonly string[]): Promise<number>
+  /**
+   * Canonical thread store, exposed for maintenance sweeps (e.g. the
+   * memory-pressure monitor compacting idle thread histories).
+   */
+  threadStore?: ThreadStore
   runReview?(input: {
     threadId: string
     turnId: string

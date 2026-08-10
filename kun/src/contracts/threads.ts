@@ -270,6 +270,12 @@ export const ThreadSchema = z.object({
   forkedFromTurnCount: z.number().int().nonnegative().optional(),
   goal: ThreadGoalSchema.optional(),
   todos: ThreadTodoListSchema.optional(),
+  /**
+   * ISO timestamp of the last time this thread was auto-resumed after a
+   * runtime restart. Used as a cooldown gate so a crash loop cannot burn
+   * model budget by auto-resuming the same thread on every boot.
+   */
+  lastAutoResumeAt: z.string().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
   turns: z.array(TurnSchema).default([])

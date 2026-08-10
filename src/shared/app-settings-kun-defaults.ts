@@ -448,6 +448,9 @@ export function defaultKunRuntimeTuningSettings(): KunRuntimeTuningSettingsV1 {
     },
     toolArgumentRepair: {
       maxStringBytes: 512 * 1024
+    },
+    interruptedTurnResume: {
+      enabled: true
     }
   }
 }

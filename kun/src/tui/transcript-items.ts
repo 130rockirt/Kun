@@ -427,6 +427,7 @@ export class ItemComponent implements Component {
     const contentWidth = Math.max(8, width - 2)
     switch (item.kind) {
       case 'goal_context':
+      case 'interruption_note':
         return []
       case 'user_message': {
         const body = plainLines(item.displayText ?? item.text, Math.max(8, contentWidth - 2), 0)

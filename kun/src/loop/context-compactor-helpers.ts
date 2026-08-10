@@ -233,6 +233,7 @@ function extractDurableOutlineLines(history: TurnItem[]): string[] {
         lines.push(...durableTextLines('User request', item.text, { fallback: true }))
         break
       case 'goal_context':
+      case 'interruption_note':
         break
       case 'assistant_text':
         lines.push(...durableTextLines('Assistant finding', item.text))
@@ -326,6 +327,7 @@ function summarizeItem(item: TurnItem): string {
     case 'user_message':
       return `- User: ${clipText(item.text)}`
     case 'goal_context':
+    case 'interruption_note':
       return ''
     case 'assistant_text':
       return `- Assistant: ${clipText(item.text)}`

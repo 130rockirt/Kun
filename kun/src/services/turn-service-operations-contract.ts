@@ -99,6 +99,8 @@ export interface TurnServiceOperations {
     turnId?: string
     request: CompactRequest
     signal?: AbortSignal
+    /** Marks this compaction as automatic (memory-pressure sweep), not user-requested. */
+    auto?: boolean
   }): Promise<CompactResponse>;
   finishTurn(input: {
     threadId: string

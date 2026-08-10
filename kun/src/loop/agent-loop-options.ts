@@ -28,6 +28,7 @@ import type { TokenEconomyConfig } from './token-economy.js'
 import type { ToolStormBreakerOptions } from './tool-storm-breaker.js'
 import type { TurnLimitsConfig } from './turn-limits.js'
 import type { GoalTurnCoordinatorOptions } from './goal-turn-coordinator.js'
+import type { InterruptedTurnResumeOptions } from './interrupted-turn-coordinator.js'
 
 export type AgentLoopOptions = {
   threadStore: ThreadStore
@@ -82,6 +83,13 @@ export type AgentLoopOptions = {
    * inject a synchronous timer and small caps for determinism.
    */
   goalResume?: GoalTurnCoordinatorOptions
+  /**
+   * Tuning + test seams for interrupted-turn auto-resume after a runtime
+   * restart (ordinary threads without an active goal). `enabled` defaults to
+   * true; `cooldownMs` bounds how soon the same thread can be auto-resumed
+   * again after a crash so a restart loop cannot burn model budget.
+   */
+  interruptedResume?: InterruptedTurnResumeOptions
   /**
    * Hard allow-list intersected into every tool context for this loop. Used
    * by read-only subagents to clamp the inherited tool host to investigation

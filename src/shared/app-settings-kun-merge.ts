@@ -276,6 +276,10 @@ export function mergeKunRuntimeSettings(
           toolArgumentRepair: {
             ...currentRuntimeTuning.toolArgumentRepair,
             ...(patch.runtimeTuning.toolArgumentRepair ?? {})
+          },
+          interruptedTurnResume: {
+            ...currentRuntimeTuning.interruptedTurnResume,
+            ...(patch.runtimeTuning.interruptedTurnResume ?? {})
           }
         }
       : {})

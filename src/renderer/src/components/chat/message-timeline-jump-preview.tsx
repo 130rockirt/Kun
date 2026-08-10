@@ -235,11 +235,26 @@ export function resultPreviewSourcesForTurn(turn: Turn): ExtensionResultPreviewS
 }
 
 /** Non-interactive runtime error rendered directly in the conversation flow. */
-export function TimelineRuntimeError({ block }: { block: TurnRuntimeErrorBlock }): ReactElement {
+export function TimelineRuntimeError({
+  block,
+  onContinue
+}: {
+  block: TurnRuntimeErrorBlock
+  /** Optional "continue the interrupted task" action shown for restart interrupts. */
+  onContinue?: () => void
+}): ReactElement {
   const { t } = useTranslation('common')
-  const message = block.text.trim() || block.detail?.trim() || block.code?.trim() || ''
   const code = block.code?.trim() ?? ''
   const detail = block.detail?.trim() ?? ''
+  // Restart interrupts get friendly localized copy; the raw runtime message
+  // stays available in the collapsible detail.
+  const localizedMessage =
+    code === 'orphaned_after_restart'
+      ? t('turnInterruptedByRestart')
+      : code === 'interrupted_turn_auto_resume'
+        ? t('autoResumingInterruptedTask')
+        : ''
+  const message = (localizedMessage || block.text.trim() || block.detail?.trim() || block.code?.trim() || '')
   const showCode = Boolean(code && !message.toLowerCase().includes(code.toLowerCase()))
 
   return (
@@ -276,6 +291,16 @@ export function TimelineRuntimeError({ block }: { block: TurnRuntimeErrorBlock }
               {detail}
             </pre>
           </details>
+        ) : null}
+        {onContinue && code === 'orphaned_after_restart' ? (
+          <button
+            type="button"
+            data-testid="timeline-runtime-error-continue"
+            onClick={onContinue}
+            className="mt-2 inline-flex items-center gap-1.5 rounded-md border border-orange-300/60 bg-orange-100/60 px-2.5 py-1 text-[12.5px] font-medium text-orange-900 transition-colors hover:bg-orange-200/70 dark:border-orange-700/60 dark:bg-orange-900/40 dark:text-orange-100 dark:hover:bg-orange-800/50"
+          >
+            {t('continueInterruptedTask')}
+          </button>
         ) : null}
       </div>
     </div>

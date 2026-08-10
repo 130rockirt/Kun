@@ -114,6 +114,7 @@ export function createServerRuntimeComposition(
   return {
     threadService,
     turnService,
+    threadStore: stores.threadStore,
     toolCancellationService,
     reviewService,
     usageService,
@@ -204,6 +205,9 @@ export function createServerRuntimeComposition(
     },
     resumeInterruptedGoals(threadIds) {
       return agent.loop.resumeInterruptedGoals(threadIds)
+    },
+    resumeInterruptedTurns(threadIds) {
+      return agent.loop.resumeInterruptedTurns(threadIds)
     },
     runReview(input) {
       return runReview(input)
@@ -373,6 +377,7 @@ export function createServerRuntimeComposition(
             modelConnectionOAuth.close()
             eventStreamRegistry.closeAll()
             agent.loop.shutdownGoalResume()
+            agent.loop.shutdownInterruptedResume()
 	          await backgroundShellRuntime.shutdown()
 	          await extensionJobs.handleRuntimeShutdown()
 	          extensionMediaJobs.dispose()

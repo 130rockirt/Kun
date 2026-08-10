@@ -73,6 +73,29 @@ export function makeGoalContextItem(input: {
   }
 }
 
+export function makeInterruptionNoteItem(input: {
+  id: string
+  turnId: string
+  threadId: string
+  sourceTurnId: string
+  text: string
+  createdAt?: string
+}): TurnItem {
+  const createdAt = input.createdAt ?? new Date().toISOString()
+  return {
+    id: input.id,
+    turnId: input.turnId,
+    threadId: input.threadId,
+    role: 'system',
+    status: 'completed',
+    createdAt,
+    finishedAt: createdAt,
+    kind: 'interruption_note',
+    sourceTurnId: input.sourceTurnId,
+    text: input.text
+  }
+}
+
 export function makeAssistantTextItem(input: {
   id: string
   turnId: string

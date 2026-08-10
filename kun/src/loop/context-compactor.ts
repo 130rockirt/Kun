@@ -177,12 +177,13 @@ export class ContextCompactor {
     summaryItem: TurnItem
     replacedTokens: number
   } {
-    // Goal context is durable model history, but it is neither conversation
-    // content nor an instruction that a compaction summary may paraphrase.
-    // Pull it out before calculating frozen/head/tail boundaries so exactly
-    // one original record survives after the newly-created summary.
-    const goalContexts = input.history.filter((item) => item.kind === 'goal_context')
-    const compactableInput = input.history.filter((item) => item.kind !== 'goal_context')
+    // Internal model records (goal context and interruption checkpoints) are
+    // durable model history, but neither is conversation content nor an
+    // instruction that a compaction summary may paraphrase. Pull them out
+    // before calculating frozen/head/tail boundaries so exactly one original
+    // record survives after the newly-created summary.
+    const internalRecords = input.history.filter(isInternalModelRecord)
+    const compactableInput = input.history.filter((item) => !isInternalModelRecord(item))
     const frozenMessageCount = normalizeFrozenMessageCount(
       input.frozenMessageCount,
       compactableInput.length
@@ -191,7 +192,7 @@ export class ContextCompactor {
     const history = trimTrailingToolCalls(compactableInput.slice(frozenMessageCount))
     // Preserve exact order on no-op paths. It avoids a needless cache miss on
     // a short goal turn merely because compaction was considered.
-    const unchangedNext = goalContexts.length > 0 ? [...input.history] : [...frozen, ...history]
+    const unchangedNext = internalRecords.length > 0 ? [...input.history] : [...frozen, ...history]
     const requestedKeepRecent = Math.max(0, input.keepRecent ?? 4)
     const keepRecent =
       history.length <= 1 ? history.length : Math.min(requestedKeepRecent, history.length - 1)
@@ -283,7 +284,7 @@ export class ContextCompactor {
       digestMarker,
       sourceItemIds: head.map((item) => item.id)
     })
-    return { next: [...frozen, summaryItem, ...goalContexts, ...tail], summaryItem, replacedTokens }
+    return { next: [...frozen, summaryItem, ...internalRecords, ...tail], summaryItem, replacedTokens }
   }
 
   /** Hard cap used by the loop to enforce an upper bound on the conversation. */
@@ -301,4 +302,8 @@ export class ContextCompactor {
     }, profiles)
   }
 }
+function isInternalModelRecord(item: TurnItem): boolean {
+  return item.kind === 'goal_context' || item.kind === 'interruption_note'
+}
+
 export { extractSkillPins, trimTrailingToolCalls } from './context-compactor-helpers.js'

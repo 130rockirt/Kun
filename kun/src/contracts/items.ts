@@ -106,6 +106,24 @@ export const GoalContextTurnItem = TurnItemBase.extend({
 })
 export type GoalContextTurnItem = z.infer<typeof GoalContextTurnItem>
 
+/**
+ * Durable, model-visible checkpoint written when a turn is interrupted by a
+ * runtime restart or host shutdown. It records what the task was doing (first
+ * user request, last assistant progress, recently completed tool calls) so an
+ * auto-resumed turn can pick up where the work stopped instead of asking the
+ * user to repeat themselves. Like goal context it is canonical session
+ * history, never renderer content.
+ */
+export const InterruptionNoteTurnItem = TurnItemBase.extend({
+  kind: z.literal('interruption_note'),
+  role: z.literal('system'),
+  status: z.literal('completed'),
+  /** Stable id of the interrupted turn this note describes. */
+  sourceTurnId: z.string().min(1),
+  text: z.string()
+})
+export type InterruptionNoteTurnItem = z.infer<typeof InterruptionNoteTurnItem>
+
 export const AssistantTextTurnItem = TurnItemBase.extend({
   kind: z.literal('assistant_text'),
   text: z.string()
@@ -228,6 +246,7 @@ export type ErrorTurnItem = z.infer<typeof ErrorTurnItem>
 export const TurnItem = z.discriminatedUnion('kind', [
   UserTurnItem,
   GoalContextTurnItem,
+  InterruptionNoteTurnItem,
   AssistantTextTurnItem,
   AssistantReasoningTurnItem,
   ToolCallTurnItem,
@@ -244,10 +263,16 @@ export type TurnItemKind = TurnItem['kind']
 
 /** Internal history records must never be projected through public thread APIs. */
 export function isPublicTurnItem(item: TurnItem): boolean {
-  return item.kind !== 'goal_context'
+  return item.kind !== 'goal_context' && item.kind !== 'interruption_note'
 }
 
-/** Exact private strings to remove from any diagnostic request capture. */
+/**
+ * Exact private strings to remove from any diagnostic request capture. Covers
+ * both internal record kinds: the active-goal instruction and interruption
+ * checkpoints are model-only context that must not leak into debug traces.
+ */
 export function goalContextTexts(items: readonly TurnItem[]): string[] {
-  return [...new Set(items.flatMap((item) => item.kind === 'goal_context' ? [item.text] : []))]
+  return [...new Set(items.flatMap((item) =>
+    item.kind === 'goal_context' || item.kind === 'interruption_note' ? [item.text] : []
+  ))]
 }
