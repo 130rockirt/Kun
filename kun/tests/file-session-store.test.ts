@@ -46,6 +46,7 @@ describe('FileSessionStore', () => {
   it('keeps appended usage events when best-effort compaction fails', async () => {
     const sessionStore = new FileSessionStore({
       dataDir,
+      compactionDelayMs: 0,
       usageEventCompaction: {
         maxBytes: 1,
         retentionDays: 365,
@@ -89,11 +90,43 @@ describe('FileSessionStore', () => {
       model: 'deepseek-chat',
       usage: usage(3)
     })).resolves.toBeUndefined()
+    await sessionStore.flushScheduledCompaction('thr_usage_compact')
 
     const events = await sessionStore.loadEventsSince('thr_usage_compact', 0)
     expect(events.map((event) => event.seq)).toEqual([1, 2, 3])
     expect(compactUsageEventsJsonlFileMock).toHaveBeenCalled()
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('usage event compaction failed'))
+  })
+
+  it('schedules item compaction without blocking cold loadItems', async () => {
+    const sessionStore = new FileSessionStore({
+      dataDir,
+      compactionDelayMs: 60_000,
+      itemHistoryCompactionMinBytes: 1
+    })
+    const threadId = 'thr_schedule_items'
+    for (let index = 0; index < 5; index += 1) {
+      await sessionStore.appendItem(threadId, {
+        id: 'item_1',
+        kind: 'assistant_text',
+        turnId: 'turn_1',
+        threadId,
+        role: 'assistant',
+        status: 'completed',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        text: `v${index}-${'x'.repeat(256)}`
+      })
+    }
+    sessionStore.clearThreadMemory(threadId)
+    const items = await sessionStore.loadItems(threadId)
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({ text: expect.stringContaining('v4-') })
+    // Debounced rewrite has not run yet; source still has multiple append lines.
+    const raw = await (await import('node:fs/promises')).readFile(
+      join(dataDir, 'threads', threadId, 'messages.jsonl'),
+      'utf8'
+    )
+    expect(raw.trim().split('\n').length).toBeGreaterThan(1)
   })
 
   it('loadEventsSince streams a high sinceSeq without requiring a full-array filter', async () => {

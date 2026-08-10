@@ -117,8 +117,13 @@ async publishTransientItem(this: TurnService, threadId: string, item: TurnItem):
   },
 
 async compactItemHistory(this: TurnService, threadId: string): Promise<void> {
-    if (!this['deps'].sessionStore.compactItems) return
-    await this['deps'].sessionStore.compactItems(threadId).catch((error) => {
+    const store = this['deps'].sessionStore
+    if (store.scheduleItemHistoryCompaction) {
+      store.scheduleItemHistoryCompaction(threadId)
+      return
+    }
+    if (!store.compactItems) return
+    await store.compactItems(threadId).catch((error) => {
       console.warn(
         `[kun] item history compaction skipped for ${threadId}: ` +
         `${error instanceof Error ? error.message : String(error)}`

@@ -100,6 +100,15 @@ export interface SessionStore {
     threadId: string,
     options?: { force?: boolean }
   ): Promise<ItemHistoryCompactionResult>
+  /**
+   * Queue a coalesced background item-history compaction. Live turns should
+   * prefer this over awaiting `compactItems` so lease heartbeats stay responsive.
+   */
+  scheduleItemHistoryCompaction?(threadId: string): void
+  /** Queue a coalesced background usage-event compaction for oversized logs. */
+  scheduleUsageEventCompaction?(threadId: string): void
+  /** Flush pending scheduled compaction for one thread or the whole store. */
+  flushScheduledCompaction?(threadId?: string): Promise<void>
   loadEventsSince(threadId: string, sinceSeq: number): Promise<RuntimeEvent[]>
   /**
    * Optional cross-process live feed. The normal EventBus remains the fast

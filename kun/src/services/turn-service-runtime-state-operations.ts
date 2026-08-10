@@ -115,12 +115,17 @@ async reconcileOrphanedTurns(this: TurnService): Promise<string[]> {
       if (!metadata?.turns.some((turn) => turn.status === 'running' || turn.status === 'queued')) {
         continue
       }
-      await this['deps'].sessionStore.compactItems?.(summary.id).catch((error) => {
-        console.warn(
-          `[kun] item history compaction skipped for ${summary.id}: ` +
-          `${error instanceof Error ? error.message : String(error)}`
-        )
-      })
+      const store = this['deps'].sessionStore
+      if (store.scheduleItemHistoryCompaction) {
+        store.scheduleItemHistoryCompaction(summary.id)
+      } else {
+        await store.compactItems?.(summary.id).catch((error) => {
+          console.warn(
+            `[kun] item history compaction skipped for ${summary.id}: ` +
+            `${error instanceof Error ? error.message : String(error)}`
+          )
+        })
+      }
       const thread = await this['deps'].threadStore.get(summary.id).catch(() => null)
       if (!thread) continue
       for (const turn of thread.turns) {

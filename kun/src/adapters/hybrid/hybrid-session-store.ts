@@ -71,6 +71,18 @@ export class HybridSessionStore implements SessionStore {
     return this.delegate.compactItems(threadId, options)
   }
 
+  scheduleItemHistoryCompaction(threadId: string): void {
+    this.delegate.scheduleItemHistoryCompaction(threadId)
+  }
+
+  scheduleUsageEventCompaction(threadId: string): void {
+    this.delegate.scheduleUsageEventCompaction(threadId)
+  }
+
+  async flushScheduledCompaction(threadId?: string): Promise<void> {
+    await this.delegate.flushScheduledCompaction(threadId)
+  }
+
   async loadEventsSince(threadId: string, sinceSeq: number): Promise<RuntimeEvent[]> {
     return this.delegate.loadEventsSince(threadId, sinceSeq)
   }
