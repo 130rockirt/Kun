@@ -25,6 +25,10 @@ import {
   resolveTrayQuotaAnchorBounds,
   resolveTrayQuotaPopoverPosition
 } from './tray-quota-position'
+import {
+  resolveTrayQuotaWindowPlatformOptions,
+  resolveTrayQuotaWorkspaceOptions
+} from './tray-quota-window-options'
 import { TRAY_PROVIDER_QUOTA_CHANNELS } from '../shared/tray-provider-quota'
 import { syncLoginItemSettings } from './desktop-behavior'
 import { resolveNamedPreloadPath } from './main-paths'
@@ -206,11 +210,10 @@ async function ensureTrayQuotaWindow(): Promise<BrowserWindow> {
     minimizable: false,
     maximizable: false,
     fullscreenable: false,
-    skipTaskbar: true,
     alwaysOnTop: true,
     hasShadow: true,
     roundedCorners: true,
-    ...(process.platform === 'darwin' ? { type: 'panel' as const } : {}),
+    ...resolveTrayQuotaWindowPlatformOptions(process.platform),
     webPreferences: {
       preload: resolveNamedPreloadPath(__dirname, 'tray-quota'),
       contextIsolation: true,
@@ -219,7 +222,7 @@ async function ensureTrayQuotaWindow(): Promise<BrowserWindow> {
   })
   mainState.trayQuotaWindow = window
   positionTrayQuotaWindow(window)
-  window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
+  window.setVisibleOnAllWorkspaces(true, resolveTrayQuotaWorkspaceOptions(process.platform))
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   window.webContents.on('will-navigate', (event) => event.preventDefault())
   window.webContents.on('preload-error', (_event, preloadPath, error) => {
