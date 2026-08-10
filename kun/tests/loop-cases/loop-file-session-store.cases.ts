@@ -243,6 +243,7 @@ describe('FileSessionStore', () => {
   it('compacts usage events by retention window while preserving a carryover baseline', async () => {
     const sessionStore = new FileSessionStore({
       dataDir,
+      compactionDelayMs: 0,
       usageEventCompaction: {
         maxBytes: 1,
         retentionDays: 365,
@@ -310,6 +311,7 @@ describe('FileSessionStore', () => {
       model: 'deepseek-reasoner',
       usage: usage(7)
     })
+    await sessionStore.flushScheduledCompaction('thr_usage_compact')
 
     const events = await sessionStore.loadEventsSince('thr_usage_compact', 0)
     expect(events.map((event) => event.seq)).toEqual([1, 3, 5, 6, 7])

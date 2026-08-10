@@ -208,6 +208,9 @@ export class LifecycleFencedSessionStore implements SessionStore {
   readonly loadUsageRecords?: (options?: { threadId?: string }) => Promise<SessionUsageRecord[]>
   readonly loadLatestUsageSnapshots?: (options?: { threadIds?: string[] }) => Promise<SessionLatestUsageSnapshot[]>
   readonly compactItems?: SessionStore['compactItems']
+  readonly scheduleItemHistoryCompaction?: SessionStore['scheduleItemHistoryCompaction']
+  readonly scheduleUsageEventCompaction?: SessionStore['scheduleUsageEventCompaction']
+  readonly flushScheduledCompaction?: SessionStore['flushScheduledCompaction']
   readonly loadItemPage?: SessionStore['loadItemPage']
 
   constructor(
@@ -242,6 +245,18 @@ export class LifecycleFencedSessionStore implements SessionStore {
           afterBytes: 0,
           itemCount: 0
         }, () => raw.compactItems!(threadId, options))
+    }
+    if (raw.scheduleItemHistoryCompaction) {
+      this.scheduleItemHistoryCompaction = (threadId) =>
+        raw.scheduleItemHistoryCompaction!(threadId)
+    }
+    if (raw.scheduleUsageEventCompaction) {
+      this.scheduleUsageEventCompaction = (threadId) =>
+        raw.scheduleUsageEventCompaction!(threadId)
+    }
+    if (raw.flushScheduledCompaction) {
+      this.flushScheduledCompaction = (threadId) =>
+        raw.flushScheduledCompaction!(threadId)
     }
     if (raw.loadItemPage) {
       this.loadItemPage = (threadId, options) => raw.loadItemPage!(threadId, options)

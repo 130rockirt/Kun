@@ -27,6 +27,7 @@ import { isPathBelowDirectory } from './path-containment.js'
 import {
   buildPublicItemHistoryPage
 } from '../../services/item-history-page.js'
+import { SessionCompactionScheduler } from './session-compaction-scheduler.js'
 
 export { readLatestItemsFromJsonl } from './file-session-jsonl.js'
 
@@ -72,6 +73,7 @@ export class FileSessionStore implements SessionStore {
   private nextItemHistoryRevision = 0
   private readonly highestSeqCache = new Map<string, { seq: number; size: number; mtimeMs: number }>()
   private readonly writeQueues = new Map<string, Promise<unknown>>()
+  private readonly compactionScheduler: SessionCompactionScheduler
 
   constructor(options: {
     dataDir: string
@@ -82,6 +84,7 @@ export class FileSessionStore implements SessionStore {
     }
     itemsCacheMaxBytes?: number
     itemHistoryCompactionMinBytes?: number
+    compactionDelayMs?: number
   }) {
     this.dataDir = resolve(options.dataDir, 'threads')
     this.itemsCacheMaxBytes = Math.max(
@@ -105,6 +108,26 @@ export class FileSessionStore implements SessionStore {
       ),
       nowIso: options.usageEventCompaction?.nowIso ?? (() => new Date().toISOString())
     }
+    this.compactionScheduler = new SessionCompactionScheduler({
+      delayMs: options.compactionDelayMs,
+      run: async (threadId, kind) => {
+        if (kind === 'items') {
+          await this.compactItems(threadId)
+          return
+        }
+        await this.compactUsageEventsIfLarge(threadId)
+      },
+      onError: (threadId, kind, error) => {
+        if (kind === 'usage') {
+          warnUsageCompaction(threadId, error)
+          return
+        }
+        const message = error instanceof Error ? error.message : String(error)
+        console.warn(
+          `[kun] item history compaction skipped for ${threadId}; keeping source log: ${message}`
+        )
+      }
+    })
   }
 
   async appendEvent(threadId: string, event: RuntimeEvent): Promise<void> {
@@ -115,12 +138,10 @@ export class FileSessionStore implements SessionStore {
       await appendFile(path, `${JSON.stringify(event)}\n`, { encoding: 'utf-8', mode: 0o600 })
       const info = await stat(path)
       this.cacheHighestSeq(threadId, event.seq, info, { preserveHigher: true })
-      if (event.kind === 'usage') {
-        await this.compactUsageEventsIfLarge(threadId).catch((error) => {
-          warnUsageCompaction(threadId, error)
-        })
-      }
     })
+    // Never await usage compaction on the live append path — a multi-hundred-MB
+    // events.jsonl rewrite would starve lease heartbeats (#621 family).
+    if (event.kind === 'usage') this.scheduleUsageEventCompaction(threadId)
   }
 
   async appendItem(threadId: string, item: TurnItem): Promise<void> {
@@ -196,9 +217,70 @@ export class FileSessionStore implements SessionStore {
     options: { force?: boolean } = {}
   ): Promise<ItemHistoryCompactionResult> {
     assertSafeThreadId(threadId)
-    return this.withThreadWrite(threadId, () =>
-      this.compactItemsUnlocked(threadId, options)
-    )
+    const path = this.messagesPath(threadId)
+    const info = await stat(path).catch(() => null)
+    if (!info) {
+      return { compacted: false, beforeBytes: 0, afterBytes: 0, itemCount: 0 }
+    }
+    if (!options.force && info.size < this.itemHistoryCompactionMinBytes) {
+      return {
+        compacted: false,
+        beforeBytes: info.size,
+        afterBytes: info.size,
+        itemCount: this.itemsCache.get(threadId)?.length ?? 0
+      }
+    }
+    // Scan unlocked so appendItem/updateItem are not queued behind a 350MB parse.
+    const revisionBefore = this.itemHistoryRevision(threadId)
+    const parsed = await readLatestItemsFromJsonl(path, { rejectMalformed: true })
+    const contents = parsed.items.map((item) => JSON.stringify(item)).join('\n')
+    const output = contents ? `${contents}\n` : ''
+    const afterBytes = Buffer.byteLength(output, 'utf-8')
+    if (afterBytes >= info.size) {
+      this.cacheItems(threadId, parsed.items)
+      return {
+        compacted: false,
+        beforeBytes: info.size,
+        afterBytes: info.size,
+        itemCount: parsed.items.length
+      }
+    }
+    return this.withThreadWrite(threadId, async () => {
+      if (this.itemHistoryRevision(threadId) !== revisionBefore) {
+        // A concurrent append invalidated the snapshot; coalesce another pass.
+        this.scheduleItemHistoryCompaction(threadId)
+        return {
+          compacted: false,
+          beforeBytes: info.size,
+          afterBytes: info.size,
+          itemCount: parsed.items.length
+        }
+      }
+      await this.atomicWrite(path, output)
+      this.bumpItemsVersion(threadId)
+      this.cacheItems(threadId, parsed.items)
+      this.bumpItemHistoryRevision(threadId)
+      return {
+        compacted: true,
+        beforeBytes: info.size,
+        afterBytes,
+        itemCount: parsed.items.length
+      }
+    })
+  }
+
+  scheduleItemHistoryCompaction(threadId: string): void {
+    if (!isSafeThreadId(threadId)) return
+    this.compactionScheduler.schedule(threadId, 'items')
+  }
+
+  scheduleUsageEventCompaction(threadId: string): void {
+    if (!isSafeThreadId(threadId)) return
+    this.compactionScheduler.schedule(threadId, 'usage')
+  }
+
+  async flushScheduledCompaction(threadId?: string): Promise<void> {
+    await this.compactionScheduler.flush(threadId)
   }
 
   async loadEventsSince(threadId: string, sinceSeq: number): Promise<RuntimeEvent[]> {
@@ -302,14 +384,8 @@ export class FileSessionStore implements SessionStore {
     }
     const info = await stat(this.messagesPath(threadId)).catch(() => null)
     if (info && info.size >= this.itemHistoryCompactionMinBytes) {
-      await this.compactItemsUnlocked(threadId).catch((error) => {
-        console.warn(
-          `[kun] item history compaction skipped for ${threadId}; keeping source log: ` +
-          `${error instanceof Error ? error.message : String(error)}`
-        )
-      })
-      const compactedCache = this.itemsCache.get(threadId)
-      if (compactedCache) return [...compactedCache]
+      // Defer rewrite; still return a cold deduped projection for this caller.
+      this.scheduleItemHistoryCompaction(threadId)
     }
     const startedAt = performance.now()
     const { items: ordered, rawCount } = await readLatestItemsFromJsonl(
@@ -371,6 +447,7 @@ export class FileSessionStore implements SessionStore {
   }
 
   async resetMemory(): Promise<void> {
+    await this.compactionScheduler.cancelPending().catch(() => undefined)
     this.itemsCache.clear()
     this.itemsCacheBytes.clear()
     this.itemsCacheVersion.clear()
@@ -494,47 +571,6 @@ export class FileSessionStore implements SessionStore {
     let total = 0
     for (const bytes of this.itemsCacheBytes.values()) total += bytes
     return total
-  }
-
-  private async compactItemsUnlocked(
-    threadId: string,
-    options: { force?: boolean } = {}
-  ): Promise<ItemHistoryCompactionResult> {
-    const path = this.messagesPath(threadId)
-    const info = await stat(path).catch(() => null)
-    if (!info) {
-      return { compacted: false, beforeBytes: 0, afterBytes: 0, itemCount: 0 }
-    }
-    if (!options.force && info.size < this.itemHistoryCompactionMinBytes) {
-      return {
-        compacted: false,
-        beforeBytes: info.size,
-        afterBytes: info.size,
-        itemCount: this.itemsCache.get(threadId)?.length ?? 0
-      }
-    }
-    const parsed = await readLatestItemsFromJsonl(path, { rejectMalformed: true })
-    const contents = parsed.items.map((item) => JSON.stringify(item)).join('\n')
-    const output = contents ? `${contents}\n` : ''
-    const afterBytes = Buffer.byteLength(output, 'utf-8')
-    this.cacheItems(threadId, parsed.items)
-    if (afterBytes >= info.size) {
-      return {
-        compacted: false,
-        beforeBytes: info.size,
-        afterBytes: info.size,
-        itemCount: parsed.items.length
-      }
-    }
-    await this.atomicWrite(path, output)
-    this.bumpItemsVersion(threadId)
-    this.bumpItemHistoryRevision(threadId)
-    return {
-      compacted: true,
-      beforeBytes: info.size,
-      afterBytes,
-      itemCount: parsed.items.length
-    }
   }
 
   private threadDir(threadId: string): string {

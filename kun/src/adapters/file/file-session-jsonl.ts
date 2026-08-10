@@ -5,9 +5,12 @@ import type { RuntimeEvent } from '../../contracts/events.js'
 import { isPublicTurnItem, type TurnItem } from '../../contracts/items.js'
 import type { ItemHistoryPage, ItemHistoryPageOptions } from '../../ports/session-store.js'
 import { buildPublicItemHistoryPage, timelineSafeItem } from '../../services/item-history-page.js'
+import { yieldToEventLoop } from '../hybrid/hybrid-thread-support.js'
 
 const MS_PER_DAY = 86_400_000
 const DEFAULT_ITEM_HISTORY_MAX_RECORD_BYTES = 16 * 1024 * 1024
+/** Let lease/heartbeat timers run while parsing large append-only logs. */
+const YIELD_EVERY_LINES = 64
 
 export function compactUsageEvents(
   events: RuntimeEvent[],
@@ -41,6 +44,7 @@ export async function compactUsageEventsJsonlFile(
   for await (const record of iterateJsonlEventRecords(path, options.maxRecordBytes)) {
     if (record.event?.kind === 'usage') usageByIndex.set(lineIndex, record.event)
     lineIndex += 1
+    if (lineIndex % YIELD_EVERY_LINES === 0) await yieldToEventLoop()
   }
   if (usageByIndex.size === 0) return false
 
@@ -161,6 +165,7 @@ async function rewriteJsonlKeepingLines(
         await writeLine(record.line)
       }
       lineIndex += 1
+      if (lineIndex % YIELD_EVERY_LINES === 0) await yieldToEventLoop()
     }
   } catch (error) {
     writer.destroy()
@@ -230,8 +235,9 @@ export async function readLatestItemsFromJsonl(
   let remainder = ''
   let rawCount = 0
   let malformedCount = 0
+  let linesSinceYield = 0
 
-  const acceptLine = (line: string): void => {
+  const acceptLine = async (line: string): Promise<void> => {
     if (!line.trim()) return
     if (Buffer.byteLength(line, 'utf-8') > maxRecordBytes) {
       throw new Error(`item history record exceeds ${maxRecordBytes} bytes`)
@@ -248,6 +254,11 @@ export async function readLatestItemsFromJsonl(
     } catch {
       malformedCount += 1
     }
+    linesSinceYield += 1
+    if (linesSinceYield >= YIELD_EVERY_LINES) {
+      linesSinceYield = 0
+      await yieldToEventLoop()
+    }
   }
 
   try {
@@ -259,7 +270,7 @@ export async function readLatestItemsFromJsonl(
       remainder += typeof chunk === 'string' ? chunk : chunk.toString('utf-8')
       let newline = remainder.indexOf('\n')
       while (newline >= 0) {
-        acceptLine(remainder.slice(0, newline))
+        await acceptLine(remainder.slice(0, newline))
         remainder = remainder.slice(newline + 1)
         newline = remainder.indexOf('\n')
       }
@@ -267,7 +278,7 @@ export async function readLatestItemsFromJsonl(
         throw new Error(`item history record exceeds ${maxRecordBytes} bytes`)
       }
     }
-    acceptLine(remainder)
+    await acceptLine(remainder)
   } catch (error) {
     if ((error as { code?: string }).code !== 'ENOENT') throw error
   }
