@@ -21,6 +21,7 @@ import {
   existsSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
   writeFileSync
@@ -39,10 +40,30 @@ import {
   registerAppIpcHandlers
 } from './register-app-ipc-handlers'
 
+const officeDocumentServiceMocks = vi.hoisted(() => ({
+  readWorkspaceOfficePreview: vi.fn()
+}))
+const officeCliResourceMocks = vi.hoisted(() => ({
+  resolveOfficeCliBinary: vi.fn()
+}))
+
+vi.mock('../services/office-document-service', () => ({
+  readLocalOfficeDocument: vi.fn(),
+  readWorkspaceOfficePreview: officeDocumentServiceMocks.readWorkspaceOfficePreview
+}))
+
+vi.mock('../officecli-resources', () => ({
+  resolveOfficeCliBinary: officeCliResourceMocks.resolveOfficeCliBinary
+}))
+
 const electronMock = getAppIpcElectronMock()
 
 describe('registerAppIpcHandlers workspace and MCP', () => {
-  beforeEach(resetAppIpcHandlerTestState)
+  beforeEach(() => {
+    resetAppIpcHandlerTestState()
+    officeDocumentServiceMocks.readWorkspaceOfficePreview.mockReset()
+    officeCliResourceMocks.resolveOfficeCliBinary.mockReset()
+  })
   afterEach(cleanupAppIpcHandlerTestState)
 
   it('saves generated files to a user-selected path', async () => {
@@ -180,6 +201,148 @@ describe('registerAppIpcHandlers workspace and MCP', () => {
       expect(sender.listenerCount('destroyed')).toBe(1)
       await expect(unwatchHandler?.({}, secondResult.watchId)).resolves.toBe(true)
       expect(sender.listenerCount('destroyed')).toBe(0)
+    } finally {
+      rmSync(temp, { recursive: true, force: true })
+    }
+  })
+
+  it('watches binary files in signal mode without sending their contents', async () => {
+    const temp = mkdtempSync(join(tmpdir(), 'kun-watch-signal-'))
+    const target = join(temp, 'report.docx')
+    writeFileSync(target, Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x00, 0xff]))
+    const resolvedTarget = realpathSync(target)
+    const sender = Object.assign(new EventEmitter(), {
+      id: 74,
+      send: vi.fn(),
+      isDestroyed: () => false
+    })
+
+    try {
+      registerAppIpcHandlers(registerOptions())
+      const watchHandler = handlers.get('file:watch-workspace')
+      const unwatchHandler = handlers.get('file:unwatch-workspace')
+      const result = await watchHandler?.({ sender }, {
+        path: 'report.docx',
+        workspaceRoot: temp,
+        mode: 'signal'
+      }) as {
+        ok: boolean
+        watchId?: string
+        mode?: string
+        path?: string
+        size?: number
+        mtimeMs?: number
+        content?: string
+      }
+
+      expect(result).toMatchObject({
+        ok: true,
+        mode: 'signal',
+        path: resolvedTarget,
+        size: 6,
+        content: ''
+      })
+      expect(result.mtimeMs).toEqual(expect.any(Number))
+      expect(result.watchId).toBeTruthy()
+
+      const staged = join(temp, '.report.tmp')
+      writeFileSync(staged, Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x01, 0xff, 0x7f]))
+      renameSync(staged, target)
+      await vi.waitFor(() => {
+        expect(sender.send).toHaveBeenCalledWith(
+          'file:workspace-changed',
+          expect.objectContaining({
+            ok: true,
+            mode: 'signal',
+            path: resolvedTarget,
+            size: 7,
+            content: '',
+            truncated: false
+          })
+        )
+      }, { timeout: 5_000 })
+      const event = (sender.send as ReturnType<typeof vi.fn>).mock.calls.find((call) =>
+        call[0] === 'file:workspace-changed' && (call[1] as { mode?: string }).mode === 'signal'
+      )?.[1] as { mtimeMs?: number } | undefined
+      expect(event?.mtimeMs).toEqual(expect.any(Number))
+
+      await expect(unwatchHandler?.({}, result.watchId)).resolves.toBe(true)
+    } finally {
+      rmSync(temp, { recursive: true, force: true })
+    }
+  })
+
+  it('reads Office previews through the trusted, workspace-bounded IPC route', async () => {
+    const temp = mkdtempSync(join(tmpdir(), 'kun-office-preview-'))
+    const target = join(temp, 'report.docx')
+    writeFileSync(target, 'office-preview-source')
+    const resolvedTarget = realpathSync(target)
+    const mainFrame = { processId: 10, routingId: 20 }
+    const sender = Object.assign(new EventEmitter(), {
+      id: 76,
+      mainFrame,
+      isDestroyed: () => false
+    })
+    const preview = {
+      ok: true as const,
+      path: resolvedTarget,
+      name: 'report.docx',
+      format: 'docx' as const,
+      mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      size: 21,
+      mtimeMs: 1,
+      sourceSha256: 'b'.repeat(64),
+      documentText: 'Preview text',
+      truncated: false
+    }
+
+    try {
+      officeCliResourceMocks.resolveOfficeCliBinary.mockReturnValue('/tmp/officecli')
+      officeDocumentServiceMocks.readWorkspaceOfficePreview.mockResolvedValue(preview)
+      registerAppIpcHandlers(registerOptions({
+        getMainWindow: () => ({
+          isDestroyed: () => false,
+          webContents: sender
+        }) as never
+      }))
+      const handler = handlers.get('file:read-workspace-office-preview')!
+      const payload = {
+        path: 'report.docx',
+        workspaceRoot: temp,
+        expectedSha256: 'a'.repeat(64),
+        page: 2,
+        sheetIndex: 1
+      }
+
+      await expect(handler({ sender, senderFrame: mainFrame }, payload)).resolves.toEqual(preview)
+      expect(officeDocumentServiceMocks.readWorkspaceOfficePreview).toHaveBeenCalledWith(
+        {
+          path: resolvedTarget,
+          expectedSha256: payload.expectedSha256,
+          page: payload.page,
+          sheetIndex: payload.sheetIndex
+        },
+        expect.objectContaining({ binaryPath: '/tmp/officecli' })
+      )
+      const dependencies = officeDocumentServiceMocks.readWorkspaceOfficePreview.mock.calls[0]?.[1] as {
+        signal?: AbortSignal
+      }
+      expect(typeof dependencies.signal?.addEventListener).toBe('function')
+
+      await expect(handler({ sender, senderFrame: mainFrame }, {
+        ...payload,
+        path: '../outside.docx'
+      })).resolves.toMatchObject({ ok: false })
+      await expect(handler({ sender, senderFrame: mainFrame }, {
+        ...payload,
+        expectedSha256: 'not-a-sha'
+      })).rejects.toThrow(/expectedSha256/)
+      expect(officeDocumentServiceMocks.readWorkspaceOfficePreview).toHaveBeenCalledTimes(1)
+
+      await expect(handler({
+        sender: { id: 99 },
+        senderFrame: { processId: 99, routingId: 99 }
+      }, payload)).rejects.toThrow(/trusted workbench frame/)
     } finally {
       rmSync(temp, { recursive: true, force: true })
     }

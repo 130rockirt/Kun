@@ -90,7 +90,9 @@ import type {
 } from './workspace-file'
 import type {
   LocalOfficeDocumentReadResult,
-  LocalOfficeDocumentTarget
+  LocalOfficeDocumentTarget,
+  WorkspaceOfficePreviewResult,
+  WorkspaceOfficePreviewTarget
 } from './office-document'
 import type { ProjectDesignMdOfficialLintResult } from './project-design-md'
 import type {
@@ -356,6 +358,9 @@ export type KunGuiApi = ExtensionIpcApi & {
   readLocalOfficeDocument: (
     options: LocalOfficeDocumentTarget
   ) => Promise<LocalOfficeDocumentReadResult>
+  readWorkspaceOfficePreview: (
+    options: WorkspaceOfficePreviewTarget
+  ) => Promise<WorkspaceOfficePreviewResult>
   resolveKunApproval: (request: KunProtectedApprovalRequest) => Promise<KunProtectedApprovalResult>
   restartRuntime: () => Promise<void>
   fetchUpstreamModels: () => Promise<UpstreamModelsResult>

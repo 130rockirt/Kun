@@ -19,7 +19,7 @@ import type {
   WorkspacePdfReadResult,
   WorkspacePreviewLeaseResult
 } from '@shared/workspace-file'
-import type { LocalOfficeDocumentReadResult } from '@shared/office-document'
+import type { WorkspaceOfficePreviewResult } from '@shared/office-document'
 import { workspaceFilePreviewKind } from '../lib/workspace-text-preview'
 import {
   ResolvedPreviewImage,
@@ -27,6 +27,7 @@ import {
   markdownRehypePlugins,
   type CachedTextDraft
 } from './workspace-file-preview-support'
+import { WorkspaceOfficePreview } from './WorkspaceOfficePreview'
 
 type Translate = (key: string, values?: Record<string, unknown>) => string
 type PreviewKind = ReturnType<typeof workspaceFilePreviewKind>
@@ -37,7 +38,12 @@ type WorkspaceFilePreviewBodyProps = {
   loading: boolean
   imageResult: WorkspaceImageReadResult | null
   pdfResult: WorkspacePdfReadResult | null
-  officeResult: LocalOfficeDocumentReadResult | null
+  officeResult: WorkspaceOfficePreviewResult | null
+  officeAgentEditing: boolean
+  officeRefreshError: string | null
+  officeNavigation: { page: number; sheetIndex: number }
+  setOfficePreviewPage: (page: number) => void
+  setOfficePreviewSheet: (sheetIndex: number) => void
   previewLease: WorkspacePreviewLeaseResult | null
   previewKind: PreviewKind
   currentFileName: string
@@ -78,6 +84,11 @@ export function WorkspaceFilePreviewBody(props: WorkspaceFilePreviewBodyProps): 
     imageResult,
     pdfResult,
     officeResult,
+    officeAgentEditing,
+    officeRefreshError,
+    officeNavigation,
+    setOfficePreviewPage,
+    setOfficePreviewSheet,
     previewLease,
     previewKind,
     currentFileName,
@@ -120,7 +131,7 @@ export function WorkspaceFilePreviewBody(props: WorkspaceFilePreviewBodyProps): 
               {t('filePreviewEmpty')}
             </div>
           </div>
-        ) : loading ? (
+        ) : loading && !officeResult?.ok ? (
           <div className="flex flex-1 items-center justify-center gap-2 text-[12px] text-ds-muted">
             <Loader2 className="h-4 w-4 animate-spin" strokeWidth={1.8} />
             {t('filePreviewLoading')}
@@ -158,37 +169,16 @@ export function WorkspaceFilePreviewBody(props: WorkspaceFilePreviewBodyProps): 
             </Suspense>
           </div>
         ) : officeResult?.ok ? (
-          <div
-            ref={scrollRef}
-            onScroll={handlePreviewScroll}
-            className="min-h-0 flex-1 overflow-auto bg-ds-surface-subtle p-5"
-          >
-            <div className="mx-auto flex max-w-4xl flex-col gap-3">
-              <div className="flex flex-wrap items-center gap-2 text-[11px] text-ds-muted">
-                <span className="rounded-md border border-ds-border-muted bg-ds-card px-2 py-1 font-semibold uppercase">
-                  {officeResult.format}
-                </span>
-                {officeResult.pageCount ? (
-                  <span>{t('filePreviewOfficePages', {
-                    defaultValue: '{{count}} pages',
-                    count: officeResult.pageCount
-                  })}</span>
-                ) : null}
-                {officeResult.truncated ? <span>{t('filePreviewTruncated')}</span> : null}
-              </div>
-              {officeResult.visualPreview ? (
-                <img
-                  src={`data:${officeResult.visualPreview.mimeType};base64,${officeResult.visualPreview.dataBase64}`}
-                  alt={currentFileName}
-                  className="mx-auto block max-h-full max-w-full rounded-lg border border-ds-border-muted bg-white object-contain shadow-sm"
-                />
-              ) : (
-                <pre className="whitespace-pre-wrap rounded-lg border border-ds-border-muted bg-ds-card p-4 text-[12px] leading-6 text-ds-ink">
-                  {officeResult.documentText || officeResult.previewUnavailableReason || t('filePreviewFailed')}
-                </pre>
-              )}
-            </div>
-          </div>
+          <WorkspaceOfficePreview
+            t={t}
+            result={officeResult}
+            fileName={currentFileName}
+            loading={loading || officeAgentEditing}
+            refreshError={officeRefreshError}
+            navigation={officeNavigation}
+            onPageChange={setOfficePreviewPage}
+            onSheetChange={setOfficePreviewSheet}
+          />
         ) : previewLease?.ok && previewKind === 'audio' ? (
           <div className="flex min-h-0 flex-1 items-center justify-center p-6">
             <div className="w-full max-w-xl rounded-xl border border-ds-border-muted bg-ds-card p-5 shadow-sm">

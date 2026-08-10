@@ -35,7 +35,7 @@ import type {
   WorkspacePdfReadResult,
   WorkspacePreviewLeaseResult
 } from '@shared/workspace-file'
-import type { LocalOfficeDocumentReadResult } from '@shared/office-document'
+import type { WorkspaceOfficePreviewResult } from '@shared/office-document'
 import { formatFilePathForDisplay } from '../lib/diff-stats'
 import { languageFromFilePath } from '../lib/code-highlighting'
 import {
@@ -110,7 +110,7 @@ type WorkspaceFilePreviewChromeProps = {
   breadcrumbSegments: string[]
   imageResult: WorkspaceImageReadResult | null
   pdfResult: WorkspacePdfReadResult | null
-  officeResult: LocalOfficeDocumentReadResult | null
+  officeResult: WorkspaceOfficePreviewResult | null
   language: string
 }
 

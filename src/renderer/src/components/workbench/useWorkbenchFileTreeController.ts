@@ -13,6 +13,11 @@ import {
   removeBrowserStorageItem,
   writeBrowserStorageItem
 } from '../../lib/browser-storage'
+import {
+  LIVE_OFFICE_PREVIEW_EVENT,
+  normalizeLiveOfficePreviewPath,
+  type LiveOfficePreviewDetail
+} from '../../lib/live-office-preview'
 import type { ChatFileTreeReference } from '../chat/ChatFileTreePanel'
 import type { RightPanelMode } from '../chat/WorkbenchTopBar'
 import { BUILTIN_RIGHT_PANEL_IDS } from '../../extensions/contribution-ids'
@@ -36,6 +41,11 @@ export const PINNED_FILE_PREVIEW_TARGETS_KEY = 'kun.filePreview.pinnedTargets'
 export const PRESERVE_FILE_PREVIEW_TARGETS_KEY = 'kun.filePreview.preserveAcrossThreads'
 export const LEGACY_PINNED_FILE_PREVIEW_TARGETS_KEY = 'kun.issue781.pinnedPreviewTabs'
 const MAX_PINNED_FILE_PREVIEW_TARGETS = 200
+
+type OfficePreviewTurnState = {
+  focused: boolean
+  suppressed: boolean
+}
 
 export { workspaceFileTargetKey } from '../../lib/workspace-file-target-key'
 
@@ -178,6 +188,9 @@ export function useWorkbenchFileTreeController({
   const preserveFilePreviewTargetsRef = useRef(preserveFilePreviewTargets)
   const filePreviewTargetRef = useRef(filePreviewTarget)
   const previousActiveThreadIdRef = useRef(activeThreadId)
+  const previousRightPanelModeRef = useRef(rightPanelMode)
+  const officePreviewTurnsRef = useRef(new Map<string, OfficePreviewTurnState>())
+  const latestOfficePreviewTurnRef = useRef('')
   filePreviewTargetRef.current = filePreviewTarget
   const fileTreeWorkspaceRoot = useMemo(
     () => normalizeWorkspaceRoot(threads.find((thread) => thread.id === activeThreadId)?.workspace || workspaceRoot),
@@ -226,7 +239,17 @@ export function useWorkbenchFileTreeController({
     setFilePreviewTarget(target)
   }, [setFilePreviewTarget])
 
-  function openWorkspaceFilePreviewTarget(target: WorkspaceFileTarget): void {
+  function suppressCurrentOfficePreviewFocus(): void {
+    const turnId = latestOfficePreviewTurnRef.current
+    if (!turnId) return
+    const current = officePreviewTurnsRef.current.get(turnId) ?? { focused: false, suppressed: false }
+    officePreviewTurnsRef.current.set(turnId, { ...current, suppressed: true })
+  }
+
+  const upsertWorkspaceFilePreviewTarget = useCallback((
+    target: WorkspaceFileTarget,
+    options: { activate: boolean }
+  ): void => {
     const nextTarget = {
       ...target,
       workspaceRoot: target.workspaceRoot ?? fileTreeWorkspaceRoot
@@ -238,9 +261,16 @@ export function useWorkbenchFileTreeController({
     const next = existingIndex >= 0
       ? current.map((item, index) => index === existingIndex ? nextTarget : item)
       : [...current, nextTarget]
-    updateOpenFilePreviewTargets(next)
+    openFilePreviewTargetsRef.current = next
+    setOpenFilePreviewTargets(next)
+    if (!options.activate) return
     selectFilePreviewTarget(nextTarget)
     setRightPanelMode(BUILTIN_RIGHT_PANEL_IDS.file)
+  }, [fileTreeWorkspaceRoot, selectFilePreviewTarget, setRightPanelMode])
+
+  function openWorkspaceFilePreviewTarget(target: WorkspaceFileTarget): void {
+    suppressCurrentOfficePreviewFocus()
+    upsertWorkspaceFilePreviewTarget(target, { activate: true })
   }
 
   function previewWorkspaceFileFromSidebar(path: string): void {
@@ -250,6 +280,7 @@ export function useWorkbenchFileTreeController({
   }
 
   function closeWorkspaceFilePreviewTarget(target: WorkspaceFileTarget): void {
+    suppressCurrentOfficePreviewFocus()
     const next = closeFilePreviewTarget(
       openFilePreviewTargetsRef.current,
       pinnedFilePreviewTargetKeysRef.current,
@@ -276,6 +307,7 @@ export function useWorkbenchFileTreeController({
   }
 
   function closeOtherWorkspaceFilePreviewTargets(target: WorkspaceFileTarget): void {
+    suppressCurrentOfficePreviewFocus()
     const next = closeOtherFilePreviewTargets(
       openFilePreviewTargetsRef.current,
       target,
@@ -311,6 +343,7 @@ export function useWorkbenchFileTreeController({
   }
 
   function clearFilePreviewTargets(): void {
+    suppressCurrentOfficePreviewFocus()
     updateOpenFilePreviewTargets([])
     updatePinnedFilePreviewTargetKeys([])
     selectFilePreviewTarget(null)
@@ -331,9 +364,41 @@ export function useWorkbenchFileTreeController({
   }, [filePreviewTarget, rightPanelMode])
 
   useEffect(() => {
+    const previous = previousRightPanelModeRef.current
+    previousRightPanelModeRef.current = rightPanelMode
+    if (previous === BUILTIN_RIGHT_PANEL_IDS.file && rightPanelMode !== BUILTIN_RIGHT_PANEL_IDS.file) {
+      suppressCurrentOfficePreviewFocus()
+    }
+  }, [rightPanelMode])
+
+  useEffect(() => {
+    const onLiveOfficePreview = (rawEvent: Event): void => {
+      if (route !== 'chat') return
+      const detail = (rawEvent as CustomEvent<LiveOfficePreviewDetail>).detail
+      if (!detail?.path || !detail.workspaceRoot) return
+      if (normalizeWorkspaceRoot(detail.workspaceRoot) !== fileTreeWorkspaceRoot) return
+      const path = normalizeLiveOfficePreviewPath(detail.path, detail.workspaceRoot)
+      if (!path) return
+      const turnId = detail.turnId || `office-preview:${detail.path}`
+      const state = officePreviewTurnsRef.current.get(turnId) ?? { focused: false, suppressed: false }
+      const activate = !state.focused && !state.suppressed
+      officePreviewTurnsRef.current.set(turnId, { ...state, focused: state.focused || activate })
+      latestOfficePreviewTurnRef.current = turnId
+      upsertWorkspaceFilePreviewTarget({
+        path,
+        workspaceRoot: detail.workspaceRoot
+      }, { activate })
+    }
+    window.addEventListener(LIVE_OFFICE_PREVIEW_EVENT, onLiveOfficePreview)
+    return () => window.removeEventListener(LIVE_OFFICE_PREVIEW_EVENT, onLiveOfficePreview)
+  }, [fileTreeWorkspaceRoot, route, upsertWorkspaceFilePreviewTarget])
+
+  useEffect(() => {
     const previousThreadId = previousActiveThreadIdRef.current
     previousActiveThreadIdRef.current = activeThreadId
     if (previousThreadId === activeThreadId) return
+    officePreviewTurnsRef.current.clear()
+    latestOfficePreviewTurnRef.current = ''
 
     const retained = retainFilePreviewTargets(
       openFilePreviewTargetsRef.current,

@@ -8,6 +8,9 @@ import {
   randomUUID
 } from 'node:crypto'
 import {
+  stat
+} from 'node:fs/promises'
+import {
   isAbsolute,
   join,
   resolve
@@ -31,6 +34,7 @@ import {
   workspaceFileTargetPayloadSchema,
   workspaceFileWatchPayloadSchema,
   workspaceFileWritePayloadSchema,
+  workspaceOfficePreviewTargetPayloadSchema,
   workspacePreviewLeaseReleasePayloadSchema,
   workspacePreviewLeaseTargetPayloadSchema
 } from './app-ipc-schemas'
@@ -54,7 +58,8 @@ import {
   readLocalPdfText
 } from '../services/write-pdf-text-service'
 import {
-  readLocalOfficeDocument
+  readLocalOfficeDocument,
+  readWorkspaceOfficePreview
 } from '../services/office-document-service'
 import {
   resolveOfficeCliBinary
@@ -69,6 +74,10 @@ import {
   parseIpcPayload,
   saveWorkspaceFileAs
 } from './app-ipc-handler-utils'
+import type {
+  WorkspaceFileWatchMode,
+  WorkspaceFileWatchPayload
+} from '../../shared/workspace-file'
 
 const extensionArtifactActionSchema = z.strictObject({
   artifactId: z.string().min(16).max(512).regex(/^[A-Za-z0-9_-]+$/),
@@ -90,6 +99,7 @@ type WorkspaceFileWatchRecord = {
   sender: WebContents
   path: string
   workspaceRoot: string
+  mode: WorkspaceFileWatchMode
   timer: ReturnType<typeof setTimeout> | null
 }
 
@@ -98,6 +108,38 @@ type WorkspaceFileWatchSenderRecord = {
   onDestroyed: () => void
 }
 
+type WorkspaceFileSignalResult =
+  | {
+      ok: true
+      path: string
+      size: number
+      mtimeMs: number
+    }
+  | { ok: false; message: string }
+
+async function readWorkspaceFileSignal(
+  payload: WorkspaceFileWatchPayload
+): Promise<WorkspaceFileSignalResult> {
+  const resolved = await resolveWorkspaceFile(payload)
+  if (!resolved.ok) return resolved
+  try {
+    const fileInfo = await stat(resolved.path)
+    if (!fileInfo.isFile()) {
+      return { ok: false, message: 'Path must point to a regular workspace file.' }
+    }
+    return {
+      ok: true,
+      path: resolved.path,
+      size: fileInfo.size,
+      mtimeMs: fileInfo.mtimeMs
+    }
+  } catch (error) {
+    return {
+      ok: false,
+      message: error instanceof Error ? error.message : String(error)
+    }
+  }
+}
 
 export function registerAppFileIpcHandlers(options: RegisterAppIpcHandlersOptions): void {
   const { getMainWindow, runtimeRequest, logError } = options
@@ -154,6 +196,40 @@ export function registerAppFileIpcHandlers(options: RegisterAppIpcHandlersOption
     if (!record) return
     const changedAt = new Date().toISOString()
     try {
+      if (record.mode === 'signal') {
+        const result = await readWorkspaceFileSignal({
+          path: record.path,
+          workspaceRoot: record.workspaceRoot,
+          mode: 'signal'
+        })
+        const latest = workspaceFileWatchers.get(watchId)
+        if (!latest || latest.sender.isDestroyed()) return
+        if (result.ok) {
+          latest.sender.send('file:workspace-changed', {
+            ok: true,
+            mode: 'signal',
+            watchId,
+            workspaceRoot: latest.workspaceRoot,
+            path: result.path,
+            content: '',
+            size: result.size,
+            mtimeMs: result.mtimeMs,
+            truncated: false,
+            changedAt
+          })
+          return
+        }
+        latest.sender.send('file:workspace-changed', {
+          ok: false,
+          mode: 'signal',
+          watchId,
+          workspaceRoot: latest.workspaceRoot,
+          path: latest.path,
+          message: result.message,
+          changedAt
+        })
+        return
+      }
       const result = await readWorkspaceFile({
         path: record.path,
         workspaceRoot: record.workspaceRoot
@@ -186,6 +262,7 @@ export function registerAppFileIpcHandlers(options: RegisterAppIpcHandlersOption
       if (!latest || latest.sender.isDestroyed()) return
       latest.sender.send('file:workspace-changed', {
         ok: false,
+        ...(latest.mode === 'signal' ? { mode: 'signal' as const } : {}),
         watchId,
         workspaceRoot: latest.workspaceRoot,
         path: latest.path,
@@ -320,6 +397,45 @@ export function registerAppFileIpcHandlers(options: RegisterAppIpcHandlersOption
       event.sender.removeListener('destroyed', cancelWhenRendererCloses)
     }
   })
+  ipcMain.handle('file:read-workspace-office-preview', async (event, payload: unknown) => {
+    assertTrustedWorkbenchSender(event, getMainWindow)
+    const target = parseIpcPayload(
+      'file:read-workspace-office-preview',
+      workspaceOfficePreviewTargetPayloadSchema,
+      payload
+    )
+    const resolved = await resolveWorkspaceFile(target)
+    if (!resolved.ok) return resolved
+    const binaryPath = resolveOfficeCliBinary({
+      isPackaged: app.isPackaged,
+      resourcesPath: process.resourcesPath,
+      appRoot: app.getAppPath(),
+      explicitPath: process.env.KUN_OFFICECLI_BINARY
+    })
+    if (!binaryPath) {
+      return {
+        ok: false as const,
+        code: 'officecli_unavailable',
+        message: 'Office document support is unavailable because the bundled OfficeCLI binary was not found.'
+      }
+    }
+    const abortController = new AbortController()
+    const cancelWhenRendererCloses = (): void => abortController.abort()
+    event.sender.once('destroyed', cancelWhenRendererCloses)
+    try {
+      return await readWorkspaceOfficePreview({
+        path: resolved.path,
+        expectedSha256: target.expectedSha256,
+        page: target.page,
+        sheetIndex: target.sheetIndex
+      }, {
+        binaryPath,
+        signal: abortController.signal
+      })
+    } finally {
+      event.sender.removeListener('destroyed', cancelWhenRendererCloses)
+    }
+  })
   ipcMain.handle('file:save-as', async (_, payload: unknown) =>
     saveWorkspaceFileAs(payload, getMainWindow)
   )
@@ -411,23 +527,33 @@ export function registerAppFileIpcHandlers(options: RegisterAppIpcHandlersOption
   )
   ipcMain.handle('file:watch-workspace', async (event, payload: unknown) => {
     const request = parseIpcPayload('file:watch-workspace', workspaceFileWatchPayloadSchema, payload)
-    const initial = await readWorkspaceFile(request)
+    const mode = request.mode ?? 'content'
     let watchedPath: string
-    let initialContent: string
-    let initialSize: number
-    let initialTruncated: boolean
-    if (initial.ok) {
+    let initialContent = ''
+    let initialSize = 0
+    let initialMtimeMs = 0
+    let initialTruncated = false
+    let isImageWatch = false
+    if (mode === 'signal') {
+      const initial = await readWorkspaceFileSignal(request)
+      if (!initial.ok) return initial
       watchedPath = initial.path
-      initialContent = initial.content
       initialSize = initial.size
-      initialTruncated = initial.truncated
+      initialMtimeMs = initial.mtimeMs
     } else {
-      const initialImage = await readWorkspaceImage(request)
-      if (!initialImage.ok) return initial
-      watchedPath = initialImage.path
-      initialContent = ''
-      initialSize = initialImage.size
-      initialTruncated = false
+      const initial = await readWorkspaceFile(request)
+      if (initial.ok) {
+        watchedPath = initial.path
+        initialContent = initial.content
+        initialSize = initial.size
+        initialTruncated = initial.truncated
+      } else {
+        const initialImage = await readWorkspaceImage(request)
+        if (!initialImage.ok) return initial
+        watchedPath = initialImage.path
+        initialSize = initialImage.size
+        isImageWatch = true
+      }
     }
 
     const watchId = randomUUID()
@@ -462,6 +588,7 @@ export function registerAppFileIpcHandlers(options: RegisterAppIpcHandlersOption
             if (!latest.sender.isDestroyed()) {
               latest.sender.send('file:workspace-changed', {
                 ok: false,
+                ...(latest.mode === 'signal' ? { mode: 'signal' as const } : {}),
                 watchId,
                 workspaceRoot: latest.workspaceRoot,
                 path: latest.path,
@@ -484,6 +611,7 @@ export function registerAppFileIpcHandlers(options: RegisterAppIpcHandlersOption
         sender: event.sender,
         path: watchedPath,
         workspaceRoot: request.workspaceRoot,
+        mode,
         timer: null
       })
       retainWorkspaceFileWatchSender(event.sender)
@@ -491,7 +619,15 @@ export function registerAppFileIpcHandlers(options: RegisterAppIpcHandlersOption
       // the first read but before the directory watch starts. Re-read only
       // after the watch is live, so callers never bootstrap a stale SVG and a
       // later write is still delivered by the watcher.
-      if (initial.ok) {
+      if (mode === 'signal') {
+        const refreshed = await readWorkspaceFileSignal(request)
+        if (!refreshed.ok) {
+          disposeWorkspaceFileWatch(watchId)
+          return refreshed
+        }
+        initialSize = refreshed.size
+        initialMtimeMs = refreshed.mtimeMs
+      } else if (!isImageWatch) {
         const refreshed = await readWorkspaceFile(request)
         if (!refreshed.ok) {
           disposeWorkspaceFileWatch(watchId)
@@ -513,6 +649,19 @@ export function registerAppFileIpcHandlers(options: RegisterAppIpcHandlersOption
         return { ok: false as const, message: watchFatalMessage }
       }
       watchReady = true
+      if (mode === 'signal') {
+        return {
+          ok: true as const,
+          mode: 'signal' as const,
+          watchId,
+          path: watchedPath,
+          content: '',
+          size: initialSize,
+          mtimeMs: initialMtimeMs,
+          truncated: false as const,
+          startedAt: new Date().toISOString()
+        }
+      }
       return {
         ok: true as const,
         watchId,

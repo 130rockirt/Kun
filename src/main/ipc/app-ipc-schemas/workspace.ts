@@ -191,6 +191,21 @@ export const workspaceFileTargetPayloadSchema = z
   })
   .strict()
 
+/**
+ * Unlike generic file reads, Office previews are always scoped to an
+ * explicitly selected workspace. This prevents a renderer from using the
+ * preview renderer as an arbitrary local-file reader.
+ */
+export const workspaceOfficePreviewTargetPayloadSchema = z
+  .object({
+    path: trimmedString(MAX_PATH_LENGTH),
+    workspaceRoot: workspaceRootSchema,
+    expectedSha256: z.string().trim().regex(/^[a-f0-9]{64}$/i).optional(),
+    page: z.number().int().min(1).max(100_000).optional(),
+    sheetIndex: z.number().int().min(0).max(100_000).optional()
+  })
+  .strict()
+
 export const workspaceFileRevealTargetPayloadSchema = workspaceFileTargetPayloadSchema.extend({
   workspaceRoot: trimmedString(MAX_PATH_LENGTH)
 })
@@ -297,7 +312,8 @@ export const workspaceEntryDeletePayloadSchema = z
 export const workspaceFileWatchPayloadSchema = z
   .object({
     path: trimmedString(MAX_PATH_LENGTH),
-    workspaceRoot: trimmedString(MAX_PATH_LENGTH)
+    workspaceRoot: trimmedString(MAX_PATH_LENGTH),
+    mode: z.enum(['content', 'signal']).optional()
   })
   .strict()
 

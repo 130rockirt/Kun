@@ -190,8 +190,8 @@ const api = {
     ipcRenderer.invoke('runtime:attachment:upload-image', request),
   captureDevPreviewRegion: (request) =>
     ipcRenderer.invoke('dev-preview:capture-region', request),
-  readLocalOfficeDocument: (options) =>
-    ipcRenderer.invoke('file:read-local-office-document', options),
+  readLocalOfficeDocument: (options) => ipcRenderer.invoke('file:read-local-office-document', options),
+  readWorkspaceOfficePreview: (options) => ipcRenderer.invoke('file:read-workspace-office-preview', options),
   resolveKunApproval: (request) => ipcRenderer.invoke('approval:decide', request),
   restartRuntime: () => ipcRenderer.invoke('runtime:restart'),
   fetchUpstreamModels: () => ipcRenderer.invoke('upstream:models'),

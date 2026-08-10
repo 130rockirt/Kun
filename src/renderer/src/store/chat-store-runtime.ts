@@ -99,6 +99,7 @@ import {
   goalTimelineText,
   isDetachedSubagentToolEvent,
   notifyWriteWorkspaceFileRefresh,
+  publishLiveOfficePreviewForToolEvent,
   releaseThreadWorktreeIfNeeded,
   runtimeErrorPayloadToError,
   runtimeStatusText,
@@ -457,6 +458,7 @@ export function buildThreadEventSink(
     },
     onTool: (event) => {
       if (!isCurrentStream()) return
+      publishLiveOfficePreviewForToolEvent(get(), event, boundThreadId || undefined)
       runEffects([{ type: 'refresh_write_workspace', event }])
       resetBusyRecoveryAttempts()
       if (!get().busy && !event.updateOnly && !isDetachedSubagentToolEvent(event)) {

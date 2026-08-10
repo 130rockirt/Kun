@@ -1,51 +1,13 @@
-import type {
-  WorkspaceFileReadResult,
-  WorkspaceFileTarget,
-  WorkspaceImageReadResult,
-  WorkspacePdfReadResult,
-  WorkspacePreviewLeaseResult
-} from '@shared/workspace-file'
-import type { LocalOfficeDocumentReadResult } from '@shared/office-document'
-import {
-  Check,
-  ChevronRight,
-  Code2,
-  Copy,
-  Eye,
-  ExternalLink,
-  FileCode2,
-  Files,
-  FolderOpen,
-  FolderSearch,
-  Loader2,
-  Maximize2,
-  Minimize2,
-  PanelRightClose,
-  Pencil,
-  Pin,
-  RotateCcw,
-  Save,
-  X
-} from 'lucide-react'
-import { createPortal } from 'react-dom'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
-import { harden } from 'rehype-harden'
-import rehypeRaw from 'rehype-raw'
-import type { PluggableList } from 'unified'
+import type { WorkspaceFileTarget } from '@shared/workspace-file'
 import {
   useEffect,
-  lazy,
-  Suspense,
   useMemo,
   useRef,
   useState,
-  type ComponentPropsWithoutRef,
   type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type ReactElement,
-  type ReactNode,
   type UIEvent as ReactUIEvent,
   type WheelEvent as ReactWheelEvent
 } from 'react'
@@ -57,16 +19,7 @@ import {
   languageFromFilePath,
   renderFallbackCodeHtml
 } from '../lib/code-highlighting'
-import {
-  isWorkspaceRasterImagePreviewPath,
-  workspaceFilePreviewKind
-} from '../lib/workspace-text-preview'
-import { workspaceFileTargetKey } from '../lib/workspace-file-target-key'
-import { readBrowserStorageItem, writeBrowserStorageItem } from '../lib/browser-storage'
-import {
-  initialWriteMarkdownImageSrc,
-  loadWriteMarkdownImage
-} from '../write/markdown-image'
+import { workspaceFilePreviewKind } from '../lib/workspace-text-preview'
 
 export {
   PREVIEW_SCROLL_POSITIONS_KEY,
@@ -154,6 +107,11 @@ export function WorkspaceFilePreviewPanel({
     imageResult,
     pdfResult,
     officeResult,
+    officeAgentEditing,
+    officeRefreshError,
+    officeNavigation,
+    setOfficePreviewPage,
+    setOfficePreviewSheet,
     previewLease,
     loading,
     setLoading
@@ -645,6 +603,11 @@ export function WorkspaceFilePreviewPanel({
           imageResult={imageResult}
           pdfResult={pdfResult}
           officeResult={officeResult}
+          officeAgentEditing={officeAgentEditing}
+          officeRefreshError={officeRefreshError}
+          officeNavigation={officeNavigation}
+          setOfficePreviewPage={setOfficePreviewPage}
+          setOfficePreviewSheet={setOfficePreviewSheet}
           previewLease={previewLease}
           previewKind={previewKind}
           currentFileName={currentFileName}

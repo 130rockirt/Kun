@@ -75,7 +75,14 @@ export type WorkspaceEntryDeletePayload = {
 export type WorkspaceFileWatchPayload = {
   path: string
   workspaceRoot: string
+  /**
+   * Content watches return a text/image preview payload. Signal watches only
+   * report stable file metadata, which keeps binary Office files out of IPC.
+   */
+  mode?: WorkspaceFileWatchMode
 }
+
+export type WorkspaceFileWatchMode = 'content' | 'signal'
 
 export type WorkspaceClipboardImageSavePayload = {
   workspaceRoot: string
@@ -299,6 +306,8 @@ export type WorkspaceEntryDeleteResult =
 export type WorkspaceFileWatchResult =
   | {
       ok: true
+      /** Omitted at runtime for legacy content watches. */
+      mode?: 'content'
       watchId: string
       path: string
       content: string
@@ -306,7 +315,20 @@ export type WorkspaceFileWatchResult =
       truncated: boolean
       startedAt: string
     }
-  | { ok: false; message: string }
+  | {
+      ok: true
+      /** No file bytes are read or transferred for signal watches. */
+      mode: 'signal'
+      watchId: string
+      path: string
+      /** Kept empty so existing content-watch callers remain source-compatible. */
+      content: ''
+      size: number
+      mtimeMs: number
+      truncated: false
+      startedAt: string
+    }
+  | { ok: false; message: string; mode?: WorkspaceFileWatchMode }
 
 export type WorkspaceClipboardImageSaveResult =
   | {
@@ -320,6 +342,8 @@ export type WorkspaceClipboardImageSaveResult =
 export type WorkspaceFileChangePayload =
   | {
       ok: true
+      /** Omitted at runtime for legacy content watches. */
+      mode?: 'content'
       watchId: string
       workspaceRoot: string
       path: string
@@ -329,7 +353,22 @@ export type WorkspaceFileChangePayload =
       changedAt: string
     }
   | {
+      ok: true
+      /** No file bytes are read or transferred for signal watches. */
+      mode: 'signal'
+      watchId: string
+      workspaceRoot: string
+      path: string
+      /** Kept empty so existing content-watch callers remain source-compatible. */
+      content: ''
+      size: number
+      mtimeMs: number
+      truncated: false
+      changedAt: string
+    }
+  | {
       ok: false
+      mode?: WorkspaceFileWatchMode
       watchId: string
       workspaceRoot: string
       path: string

@@ -12,12 +12,12 @@ import type {
   WorkspacePdfReadResult,
   WorkspacePreviewLeaseResult
 } from '@shared/workspace-file'
-import type { LocalOfficeDocumentReadResult } from '@shared/office-document'
 import {
   isWorkspaceRasterImagePreviewPath,
   workspaceFilePreviewKind
 } from '../lib/workspace-text-preview'
 import type { CachedTextDraft } from './workspace-file-preview-support'
+import { useWorkspaceOfficePreview } from './useWorkspaceOfficePreview'
 
 type Translate = (key: string, values?: Record<string, unknown>) => string
 type PreviewKind = ReturnType<typeof workspaceFilePreviewKind>
@@ -56,16 +56,27 @@ export function useWorkspaceFilePreviewLoad({
   const [result, setResult] = useState<WorkspaceFileReadResult | null>(null)
   const [imageResult, setImageResult] = useState<WorkspaceImageReadResult | null>(null)
   const [pdfResult, setPdfResult] = useState<WorkspacePdfReadResult | null>(null)
-  const [officeResult, setOfficeResult] = useState<LocalOfficeDocumentReadResult | null>(null)
   const [previewLease, setPreviewLease] = useState<WorkspacePreviewLeaseResult | null>(null)
   const [loading, setLoading] = useState(false)
+  const {
+    officeResult,
+    officeLoading,
+    officeAgentEditing,
+    officeRefreshError,
+    officeNavigation,
+    setOfficePreviewPage,
+    setOfficePreviewSheet
+  } = useWorkspaceOfficePreview({
+    target,
+    workspaceRoot,
+    enabled: previewKind === 'office'
+  })
 
   useEffect(() => {
     if (!target) {
       setResult(null)
       setImageResult(null)
       setPdfResult(null)
-      setOfficeResult(null)
       setPreviewLease(null)
       setLoading(false)
       return
@@ -83,7 +94,6 @@ export function useWorkspaceFilePreviewLoad({
     setResult(null)
     setImageResult(null)
     setPdfResult(null)
-    setOfficeResult(null)
     setPreviewLease(null)
 
     const readTarget = {
@@ -134,23 +144,7 @@ export function useWorkspaceFilePreviewLoad({
     }
 
     if (previewKind === 'office') {
-      void (async () => {
-        const resolved = await window.kunGui.resolveWorkspaceFile(readTarget)
-        if (!resolved.ok) {
-          setOfficeResult(resolved)
-          return
-        }
-        const next = await window.kunGui.readLocalOfficeDocument({ path: resolved.path })
-        if (!cancelled) setOfficeResult(next)
-      })()
-        .catch((error) => {
-          if (!cancelled) {
-            setOfficeResult({ ok: false, message: error instanceof Error ? error.message : String(error) })
-          }
-        })
-        .finally(() => {
-          if (!cancelled) setLoading(false)
-        })
+      setLoading(false)
       return () => {
         cancelled = true
       }
@@ -249,8 +243,13 @@ export function useWorkspaceFilePreviewLoad({
     imageResult,
     pdfResult,
     officeResult,
+    officeAgentEditing,
+    officeRefreshError,
+    officeNavigation,
+    setOfficePreviewPage,
+    setOfficePreviewSheet,
     previewLease,
-    loading,
+    loading: previewKind === 'office' ? officeLoading : loading,
     setLoading
   }
 }

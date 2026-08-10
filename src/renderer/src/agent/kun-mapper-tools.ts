@@ -158,6 +158,28 @@ export function applyCommandResultMeta(meta: Record<string, unknown>, item: Core
   }
 }
 
+function officeEditSha256(item: CoreTurnItemJson, ...keys: string[]): string | undefined {
+  const value = readItemStructuredString(item, ...keys)
+  return value && /^[a-f0-9]{64}$/i.test(value) ? value.toLowerCase() : undefined
+}
+
+export function applyOfficeEditMeta(
+  meta: Record<string, unknown>,
+  item: CoreTurnItemJson,
+  payload: Record<string, unknown>
+): void {
+  if (item.toolName !== 'office_edit') return
+
+  const expectedSha256 = officeEditSha256(item, 'expectedSha256', 'expected_sha256')
+  const beforeSha256 = officeEditSha256(item, 'beforeSha256', 'before_sha256')
+  const afterSha256 = officeEditSha256(item, 'afterSha256', 'after_sha256')
+  const previewInvalidated = payload.previewInvalidated ?? payload.preview_invalidated
+  if (expectedSha256) meta.expectedSha256 = expectedSha256
+  if (beforeSha256) meta.beforeSha256 = beforeSha256
+  if (afterSha256) meta.afterSha256 = afterSha256
+  if (typeof previewInvalidated === 'boolean') meta.previewInvalidated = previewInvalidated
+}
+
 export function inferToolPresentation(item: CoreTurnItemJson): {
   toolKind: ToolBlock['toolKind']
   filePath?: string
@@ -283,6 +305,7 @@ export function toolBlockFromItem(item: CoreTurnItemJson, child?: CoreChildRunti
   }
   const presentation = inferToolPresentation(item)
   const payload = payloadFor(item)
+  applyOfficeEditMeta(meta, item, payload)
   if (presentation.command) meta.command = presentation.command
   if (presentation.toolKind === 'command_execution' || item.toolName === 'background_shell') {
     applyCommandResultMeta(meta, item)

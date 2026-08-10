@@ -241,7 +241,8 @@ export const TOOL_KIND_BY_NAME: ReadonlyMap<string, ToolBlock['toolKind']> = new
   ['edit_file', 'file_change'],
   ['apply_patch', 'file_change'],
   ['create_file', 'file_change'],
-  ['create_plan', 'file_change']
+  ['create_plan', 'file_change'],
+  ['office_edit', 'file_change']
 ])
 
 export function payloadFor(item: CoreTurnItemJson): Record<string, unknown> {

@@ -26,6 +26,7 @@ import {
   markWriteThread
 } from '../write/write-thread-registry'
 import { useWriteWorkspaceStore } from '../write/write-workspace-store'
+import { LIVE_OFFICE_PREVIEW_EVENT } from '../lib/live-office-preview'
 import {
   markSddAssistantThread,
   normalizeSddThreadRegistry
@@ -437,5 +438,94 @@ describe('thread event sink binding', () => {
       reviewAsDiff: true
     })
     useWriteWorkspaceStore.setState(originalWriteState, true)
+  })
+
+  it('publishes scoped Office file lifecycle events from structured tool payloads', () => {
+    const dispatchEvent = vi.fn()
+    class PreviewEvent<T> {
+      constructor(readonly type: string, readonly init: { detail: T }) {}
+
+      get detail(): T {
+        return this.init.detail
+      }
+    }
+    vi.stubGlobal('window', { dispatchEvent })
+    vi.stubGlobal('CustomEvent', PreviewEvent)
+    const expectedSha256 = 'a'.repeat(64)
+    const afterSha256 = 'b'.repeat(64)
+    const failedExpectedSha256 = 'c'.repeat(64)
+    const { set, get } = makeSinkHarness({
+      route: 'chat',
+      workspaceRoot: '/workspace/project',
+      activeThreadId: 'thread-current',
+      currentTurnId: 'turn-current'
+    })
+    const sink = buildThreadEventSink(set, get, { threadId: 'thread-current' })
+
+    sink.onTool({
+      itemId: 'tool-office-success',
+      turnId: 'turn-current',
+      summary: 'office_edit',
+      status: 'running',
+      toolKind: 'file_change',
+      filePath: 'reports/brief.docx',
+      meta: { toolName: 'office_edit', expectedSha256 }
+    })
+    sink.onTool({
+      itemId: 'tool-office-success',
+      turnId: 'turn-current',
+      summary: 'office_edit',
+      status: 'success',
+      toolKind: 'file_change',
+      meta: { toolName: 'office_edit', afterSha256, previewInvalidated: true }
+    })
+    sink.onTool({
+      itemId: 'tool-office-failed',
+      turnId: 'turn-current',
+      summary: 'office_edit',
+      status: 'running',
+      toolKind: 'file_change',
+      filePath: 'reports/failed.xlsx',
+      meta: { toolName: 'office_edit', expectedSha256: failedExpectedSha256 }
+    })
+    sink.onTool({
+      itemId: 'tool-office-failed',
+      turnId: 'turn-current',
+      summary: 'office_edit',
+      status: 'error',
+      toolKind: 'file_change',
+      meta: { toolName: 'office_edit' }
+    })
+
+    expect(dispatchEvent.mock.calls.map(([event]) => event)).toEqual([
+      expect.objectContaining({
+        type: LIVE_OFFICE_PREVIEW_EVENT,
+        detail: expect.objectContaining({
+          path: 'reports/brief.docx',
+          workspaceRoot: '/workspace/project',
+          turnId: 'turn-current',
+          phase: 'editing',
+          expectedSha256
+        })
+      }),
+      expect.objectContaining({
+        detail: expect.objectContaining({ phase: 'committed', expectedSha256: afterSha256 })
+      }),
+      expect.objectContaining({
+        detail: expect.objectContaining({
+          path: 'reports/failed.xlsx',
+          phase: 'editing',
+          expectedSha256: failedExpectedSha256
+        })
+      }),
+      expect.objectContaining({
+        detail: expect.objectContaining({
+          path: 'reports/failed.xlsx',
+          phase: 'failed',
+          expectedSha256: failedExpectedSha256
+        })
+      })
+    ])
+    vi.unstubAllGlobals()
   })
 })

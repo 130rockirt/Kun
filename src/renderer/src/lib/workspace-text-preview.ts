@@ -74,7 +74,7 @@ const RASTER_IMAGE_PREVIEW_EXTENSIONS = new Set([
 ])
 
 const PDF_PREVIEW_EXTENSIONS = new Set(['.pdf'])
-const OFFICE_PREVIEW_EXTENSIONS = new Set(['.docx', '.xlsx', '.pptx'])
+const OFFICE_PREVIEW_EXTENSIONS = new Set(['.doc', '.docx', '.ppt', '.pptx', '.xls', '.xlsx'])
 const AUDIO_PREVIEW_EXTENSIONS = new Set(['.aac', '.flac', '.m4a', '.mp3', '.oga', '.ogg', '.wav'])
 const VIDEO_PREVIEW_EXTENSIONS = new Set(['.m4v', '.mov', '.mp4', '.ogv', '.webm'])
 

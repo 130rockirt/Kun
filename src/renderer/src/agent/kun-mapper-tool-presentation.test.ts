@@ -131,6 +131,55 @@ describe('tool presentation inference', () => {
     })
   })
 
+  it('maps office edits as file changes and retains their structured preview hashes', () => {
+    const expectedSha256 = 'a'.repeat(64)
+    const beforeSha256 = 'b'.repeat(64)
+    const afterSha256 = 'c'.repeat(64)
+    const call = chatBlockFromItem({
+      id: 'item_office_call',
+      turnId: 'turn_1',
+      threadId: 'thr_1',
+      role: 'tool',
+      status: 'running',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      kind: 'tool_call',
+      toolName: 'office_edit',
+      callId: 'call_office_edit',
+      arguments: { path: 'reports/brief.docx', expectedSha256, operations: [] }
+    })
+    const result = chatBlockFromItem({
+      id: 'item_office_result',
+      turnId: 'turn_1',
+      threadId: 'thr_1',
+      role: 'tool',
+      status: 'completed',
+      createdAt: '2024-01-01T00:00:01.000Z',
+      kind: 'tool_result',
+      toolName: 'office_edit',
+      callId: 'call_office_edit',
+      output: {
+        path: 'reports/brief.docx',
+        before_sha256: beforeSha256,
+        after_sha256: afterSha256,
+        preview_invalidated: true
+      }
+    })
+
+    expect(call).toMatchObject({
+      toolKind: 'file_change',
+      filePath: 'reports/brief.docx',
+      meta: { toolName: 'office_edit', expectedSha256 }
+    })
+    expect(result).toMatchObject({
+      toolKind: 'file_change',
+      filePath: 'reports/brief.docx',
+      meta: { toolName: 'office_edit', beforeSha256, afterSha256, previewInvalidated: true }
+    })
+    expect(mergeChatBlocks([call!, result!])[0]).toMatchObject({
+      meta: { expectedSha256, beforeSha256, afterSha256, previewInvalidated: true }
+    })
+  })
+
   it('surfaces final output and destination path aliases for generated artifacts', () => {
     const ppt = chatBlockFromItem({
       id: 'item_ppt',

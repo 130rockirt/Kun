@@ -15,6 +15,7 @@ import { getProvider } from '../agent/registry'
 import { rendererRuntimeClient } from '../agent/runtime-client'
 import i18n from '../i18n'
 import { describeRuntimeError, formatRuntimeError, getRuntimeErrorCode } from '../lib/format-runtime-error'
+import { isOfficePreviewPath, publishLiveOfficePreview } from '../lib/live-office-preview'
 import {
   isClawWorkspacePath,
   isInternalDeepSeekGuiWorkspace,
@@ -233,6 +234,56 @@ export function notifyWriteWorkspaceFileRefresh(
     animate: true,
     force: true,
     reviewAsDiff: true
+  })
+}
+
+function toolEventMetaString(meta: Record<string, unknown> | undefined, key: string): string | undefined {
+  const value = meta?.[key]
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined
+}
+
+function toolEventSha256(meta: Record<string, unknown> | undefined, key: string): string | undefined {
+  const value = toolEventMetaString(meta, key)
+  return value && /^[a-f0-9]{64}$/i.test(value) ? value.toLowerCase() : undefined
+}
+
+export function publishLiveOfficePreviewForToolEvent(
+  state: ChatState,
+  event: ToolEventPayload,
+  boundThreadId?: string
+): void {
+  const activeThreadId = state.activeThreadId?.trim()
+  const workspaceRoot = state.threads.find((thread) => thread.id === activeThreadId)?.workspace?.trim()
+    || state.workspaceRoot?.trim()
+  if (
+    state.route !== 'chat' ||
+    !activeThreadId ||
+    !workspaceRoot ||
+    (boundThreadId && activeThreadId !== boundThreadId) ||
+    event.toolKind !== 'file_change'
+  ) return
+
+  const current = state.blocks.find((block) => block.kind === 'tool' && block.id === event.itemId)
+  const path = event.filePath ?? (current?.kind === 'tool' ? current.filePath : undefined)
+  if (!isOfficePreviewPath(path)) return
+
+  const meta = { ...(current?.kind === 'tool' ? current.meta : {}), ...(event.meta ?? {}) }
+  const toolName = toolEventMetaString(meta, 'toolName')
+  const turnId = event.turnId?.trim() ?? (current?.kind === 'tool' ? current.turnId?.trim() : undefined) ?? state.currentTurnId?.trim()
+  if (!turnId) return
+
+  const phase = event.status === 'running' ? 'editing' : event.status === 'success' ? 'committed' : 'failed'
+  const expectedSha256 = toolName === 'office_edit'
+    ? phase === 'committed'
+      ? toolEventSha256(meta, 'afterSha256')
+      : toolEventSha256(meta, 'expectedSha256')
+    : undefined
+  publishLiveOfficePreview({
+    path,
+    workspaceRoot,
+    turnId,
+    phase,
+    ...(expectedSha256 ? { expectedSha256 } : {})
   })
 }
 
