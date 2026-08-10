@@ -100,12 +100,14 @@ export function harness(options: {
   madeProgress?: boolean
   latestItems?: TurnItem[]
   graphResults?: Array<{ output: unknown; isError: boolean }>
+  ordinaryResults?: Array<{ output: unknown; isError: boolean }>
   dispatchOutcomes?: ToolDispatchOutcome[]
 } = {}) {
   const effects: string[] = []
   const items: TurnItem[] = []
   const sessionItems = [...(options.latestItems ?? [])]
   const graphResults = [...(options.graphResults ?? [])]
+  const ordinaryResults = [...(options.ordinaryResults ?? [])]
   const dispatchOutcomes = [...(options.dispatchOutcomes ?? [])]
   let requiredToolGate: {
     toolName: string
@@ -124,11 +126,10 @@ export function harness(options: {
     effects.push('dispatch')
     dispatches.push(input)
     for (const call of input.calls) {
-      if (
-        call.toolName !== GRAPH_CREATE_RUN_TOOL_NAME &&
-        call.toolName !== GRAPH_DEFINE_PLAN_TOOL_NAME
-      ) continue
-      const result = graphResults.shift()
+      const result = (
+        call.toolName === GRAPH_CREATE_RUN_TOOL_NAME ||
+        call.toolName === GRAPH_DEFINE_PLAN_TOOL_NAME
+      ) ? graphResults.shift() : ordinaryResults.shift()
       if (!result) continue
       sessionItems.push(makeToolResultItem({
         id: `item_${call.callId}`,

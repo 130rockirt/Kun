@@ -106,7 +106,6 @@ export class RoundOutcomeCoordinator extends RoundOutcomeRecoveryPhase {
     this.lastNoToolTextByTurn.delete(input.turnId)
     this.goalNoToolRecoveryStepsByTurn.delete(input.turnId)
     this.emptyPostToolRecoveryStepsByTurn.delete(input.turnId)
-    this.postToolFailureRecoveryStepsByTurn.delete(input.turnId)
     if (input.toolCallsDisabled) {
       const message =
         'Tool calls are disabled during final-answer recovery; the provider-emitted calls were not executed.'
@@ -218,6 +217,7 @@ export class RoundOutcomeCoordinator extends RoundOutcomeRecoveryPhase {
       }
       return this.advanceToolSuppressionRecovery(input)
     }
+    await this.updatePostToolFailureRecoveryAfterDispatch(input, dispatchableToolCalls)
     this.toolSuppressionRecoveryStepsByTurn.delete(input.turnId)
     if (input.prepared.dedicatedSvgTurn && completedToolCalls.some((call) =>
       call.toolName === DESIGN_SVG_EDIT_TOOL_NAME ||

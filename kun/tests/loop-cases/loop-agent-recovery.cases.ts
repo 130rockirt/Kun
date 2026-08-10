@@ -527,13 +527,13 @@ describe('AgentLoop', () => {
     ]))
   })
 
-  it('recovers an ordinary turn when the model only announces progress after a tool failure', async () => {
+  it('continues after three failed searches and an investigation status', async () => {
     let calls = 0
     let executions = 0
     const requests: ModelRequest[] = []
-    const fragile = LocalToolHost.defineTool({
-      name: 'fragile',
-      description: 'Fails unless retried with a valid attempt',
+    const search = LocalToolHost.defineTool({
+      name: 'search',
+      description: 'Fails until a later retry',
       inputSchema: {
         type: 'object',
         properties: { attempt: { type: 'number' } },
@@ -542,7 +542,7 @@ describe('AgentLoop', () => {
       policy: 'auto',
       execute: async (args) => {
         executions += 1
-        return args.attempt === 2
+        return args.attempt === 4
           ? { output: { ok: true } }
           : { output: { error: 'simulated failure' }, isError: true }
       }
@@ -554,27 +554,27 @@ describe('AgentLoop', () => {
         async *stream(request: ModelRequest): AsyncIterable<ModelStreamChunk> {
           requests.push(request)
           calls += 1
-          if (calls === 1) {
+          if (calls <= 3) {
             yield {
               kind: 'tool_call_complete',
-              callId: 'call_fragile_1',
-              toolName: 'fragile',
-              arguments: { attempt: 1 }
+              callId: `call_search_${calls}`,
+              toolName: 'search',
+              arguments: { attempt: calls }
             }
             yield { kind: 'completed', stopReason: 'tool_calls' }
             return
           }
-          if (calls === 2) {
-            yield { kind: 'assistant_text_delta', text: '接下来我会尝试其他参数' }
+          if (calls === 4) {
+            yield { kind: 'assistant_text_delta', text: '我来调查失败原因。先定位关键参数。' }
             yield { kind: 'completed', stopReason: 'stop' }
             return
           }
-          if (calls === 3) {
+          if (calls === 5) {
             yield {
               kind: 'tool_call_complete',
-              callId: 'call_fragile_2',
-              toolName: 'fragile',
-              arguments: { attempt: 2 }
+              callId: 'call_search_4',
+              toolName: 'search',
+              arguments: { attempt: 4 }
             }
             yield { kind: 'completed', stopReason: 'tool_calls' }
             return
@@ -584,7 +584,7 @@ describe('AgentLoop', () => {
         }
       },
       {
-        tools: [fragile],
+        tools: [search],
         toolStorm: { enabled: false },
         compactor: new ContextCompactor({ softThreshold: 1_000_000, hardThreshold: 1_100_000 })
       }
@@ -595,15 +595,15 @@ describe('AgentLoop', () => {
     const items = await h.sessionStore.loadItems(h.threadId)
 
     expect(status).toBe('completed')
-    expect(calls).toBe(4)
-    expect(executions).toBe(2)
-    expect(requests[2]?.contextInstructions?.join('\n')).toContain('Tool failure recovery')
-    const failedResult = requests[2]?.history.find(
-      (item) => item.kind === 'tool_result' && item.toolName === 'fragile'
+    expect(calls).toBe(6)
+    expect(executions).toBe(4)
+    expect(requests[4]?.contextInstructions?.join('\n')).toContain('Tool failure recovery')
+    const failedResult = requests[4]?.history.find(
+      (item) => item.kind === 'tool_result' && item.toolName === 'search'
     )
     expect(failedResult?.kind === 'tool_result' ? failedResult.isError : false).toBe(true)
     expect(items).toEqual(expect.arrayContaining([
-      expect.objectContaining({ kind: 'tool_result', toolName: 'fragile', isError: false })
+      expect.objectContaining({ kind: 'tool_result', toolName: 'search', isError: false })
     ]))
   })
 
@@ -634,7 +634,7 @@ describe('AgentLoop', () => {
             yield { kind: 'completed', stopReason: 'tool_calls' }
             return
           }
-          yield { kind: 'assistant_text_delta', text: '接下来我会继续排查' }
+          yield { kind: 'assistant_text_delta', text: '我来调查失败原因。先定位关键参数。' }
           yield { kind: 'completed', stopReason: 'stop' }
         }
       },

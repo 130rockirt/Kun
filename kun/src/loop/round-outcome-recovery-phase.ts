@@ -1,4 +1,5 @@
 import { makeErrorItem } from '../domain/item.js'
+import type { ToolResultTurnItem } from '../contracts/items.js'
 import type { ToolCallLike } from '../ports/tool-host.js'
 import { CREATE_PLAN_TOOL_NAME } from '../adapters/tool/create-plan-tool.js'
 import { GRAPH_DEFINE_PLAN_TOOL_NAME } from '../adapters/tool/graph-define-plan-tool.js'
@@ -73,18 +74,51 @@ export abstract class RoundOutcomeRecoveryPhase extends RoundOutcomeRequiredTool
   }
 
   /**
-   * Whether this turn already contains a failed ordinary tool result that is
-   * not owned by a dedicated completion gate. The history snapshot is the
-   * same model-visible projection the next request would see, so the check
-   * stays aligned with what the model itself observes.
+   * Whether the latest ordinary tool result in this turn failed. A later
+   * successful ordinary result resolves the recovery episode, even though the
+   * durable history still retains the earlier failure for auditability.
    */
   protected hasFailedOrdinaryToolResult(input: RoundOutcomeInput): boolean {
-    return input.prepared.history.some(
-      (item) =>
+    for (let index = input.prepared.history.length - 1; index >= 0; index -= 1) {
+      const item = input.prepared.history[index]
+      if (
+        item?.turnId === input.turnId &&
+        item.kind === 'tool_result' &&
+        !POST_TOOL_FAILURE_EXCLUDED_TOOL_NAMES.has(item.toolName)
+      ) return item.isError === true
+    }
+    return false
+  }
+
+  /**
+   * A recovery-stage tool batch only resets the post-failure budget after an
+   * ordinary tool actually succeeds. If every ordinary result failed, consume
+   * the final-answer stage now so further failed retries cannot spin forever.
+   */
+  protected async updatePostToolFailureRecoveryAfterDispatch(
+    input: RoundOutcomeInput,
+    calls: readonly ToolCallLike[]
+  ): Promise<void> {
+    const recoverySteps = this.postToolFailureRecoverySteps(input.turnId)
+    if (recoverySteps === 0) return
+    const callIds = new Set(calls
+      .filter((call) => !POST_TOOL_FAILURE_EXCLUDED_TOOL_NAMES.has(call.toolName))
+      .map((call) => call.callId))
+    if (callIds.size === 0) return
+    const results = (await this.deps.sessionStore.loadItems(input.threadId)).filter(
+      (item): item is ToolResultTurnItem =>
         item.turnId === input.turnId &&
         item.kind === 'tool_result' &&
-        item.isError === true &&
-        !POST_TOOL_FAILURE_EXCLUDED_TOOL_NAMES.has(item.toolName)
+        callIds.has(item.callId)
+    )
+    if (results.length === 0) return
+    if (results.some((result) => result.isError !== true)) {
+      this.postToolFailureRecoveryStepsByTurn.delete(input.turnId)
+      return
+    }
+    this.postToolFailureRecoveryStepsByTurn.set(
+      input.turnId,
+      Math.min(POST_TOOL_FAILURE_MAX_RECOVERY_STEPS, recoverySteps + 1)
     )
   }
 

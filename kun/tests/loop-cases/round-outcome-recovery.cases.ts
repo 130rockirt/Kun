@@ -307,11 +307,17 @@ describe('RoundOutcomeCoordinator', () => {
     ])
   })
 
-  it('recovers once when the model announces progress after an ordinary tool failure', async () => {
+  it('recovers the Chinese investigation status after ordinary tool failures', async () => {
     const h = harness()
-    const failed = failedToolResult('read')
-    const progress = input(completed({ text: '接下来我会继续排查' }), {
-      prepared: prepared({ history: [failed] })
+    const failures = [
+      failedToolResult('grep_page_context'),
+      failedToolResult('grep_stream_manager'),
+      failedToolResult('grep_context')
+    ]
+    const progress = input(completed({
+      text: '我来调查页面上下文从前端到后端的完整链路。先定位关键符号。'
+    }), {
+      prepared: prepared({ history: failures })
     })
 
     await expect(h.coordinator.resolve(progress)).resolves.toBe('continue')
@@ -343,8 +349,8 @@ describe('RoundOutcomeCoordinator', () => {
     ])
   })
 
-  it('resets the recovery counter when the model calls a tool again', async () => {
-    const h = harness()
+  it('resets the recovery counter only after a successful ordinary tool result', async () => {
+    const h = harness({ ordinaryResults: [{ output: { text: 'ok' }, isError: false }] })
     const failed = failedToolResult('read')
     const progress = input(completed({ text: 'Let me check the result' }), {
       prepared: prepared({ history: [failed] })
@@ -363,6 +369,27 @@ describe('RoundOutcomeCoordinator', () => {
       prepared: prepared({ history: [failed] })
     }))).resolves.toBe('continue')
     expect(h.coordinator.postToolFailureRecoverySteps(turnId)).toBe(0)
+  })
+
+  it('spends the final-answer recovery stage when the retry tool also fails', async () => {
+    const h = harness({ ordinaryResults: [{ output: { error: 'retry failed' }, isError: true }] })
+    const failed = failedToolResult('grep')
+    const progress = input(completed({ text: '我来调查调用链。' }), {
+      prepared: prepared({ history: [failed] })
+    })
+    await expect(h.coordinator.resolve(progress)).resolves.toBe('continue')
+    const call = {
+      callId: 'call_grep_retry',
+      toolName: 'grep',
+      toolKind: 'tool_call' as const,
+      arguments: { pattern: 'needle' }
+    }
+    await expect(h.coordinator.resolve(input(completed({ toolCalls: [call] }), {
+      prepared: prepared({ history: [failed] })
+    }))).resolves.toBe('continue')
+    expect(h.coordinator.postToolFailureRecoverySteps(turnId)).toBe(2)
+    await expect(h.coordinator.resolve(progress)).resolves.toBe('failed')
+    expect(h.failures.at(-1)).toMatchObject({ code: 'post_tool_failure_recovery_exhausted' })
   })
 
   it('accepts a clear final answer after a tool failure without recovery', async () => {
