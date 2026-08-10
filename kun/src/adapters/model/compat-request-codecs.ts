@@ -2,6 +2,7 @@ import type { ModelCapabilityMetadata } from '../../contracts/capabilities.js'
 import type { ModelEndpointFormat } from '../../contracts/model-endpoint-format.js'
 import type { ToolCallProviderMetadata } from '../../contracts/items.js'
 import type { ModelRequest, ModelToolSpec } from '../../ports/model-client.js'
+import { isFixedSamplingModel } from './fixed-sampling.js'
 import { isDeepSeekHost, isGeminiOpenAiHost } from './model-error-probe.js'
 
 export const COMPAT_HISTORY_CONTEXT = Symbol('compat-history-context')
@@ -114,8 +115,7 @@ export class CompatRequestCodecs {
       messages: this.deps.splitOpenAiMessages(input.messages)
     }
     if (input.maxTokens !== undefined) body.max_tokens = input.maxTokens
-    if (input.request.temperature !== undefined) body.temperature = input.request.temperature
-    if (input.request.topP !== undefined) body.top_p = input.request.topP
+    applySamplingParams(body, input)
     if (input.request.responseFormat === 'json_object') body.response_format = { type: 'json_object' }
     if (input.stream && input.includeStreamUsage !== false) body.stream_options = { include_usage: true }
     const nativeDeepSeekHost = isDeepSeekHost(input.baseUrl)
@@ -218,8 +218,7 @@ export class CompatRequestCodecs {
     ) {
       body.service_tier = 'priority'
     }
-    if (input.request.temperature !== undefined) body.temperature = input.request.temperature
-    if (input.request.topP !== undefined) body.top_p = input.request.topP
+    applySamplingParams(body, input)
     if (input.request.responseFormat === 'json_object') body.text = { format: { type: 'json_object' } }
     const reasoning = this.deps.responsesReasoning(
       input.request.reasoningEffort,
@@ -268,8 +267,7 @@ export class CompatRequestCodecs {
     if (systemText) {
       body.system = [{ type: 'text', text: systemText, cache_control: { type: 'ephemeral' } }]
     }
-    if (input.request.temperature !== undefined) body.temperature = input.request.temperature
-    if (input.request.topP !== undefined) body.top_p = input.request.topP
+    applySamplingParams(body, input)
     if (!requiredToolChoice) {
       this.deps.applyAnthropicReasoning(body, input.request.reasoningEffort, input.reasoning)
     }
@@ -290,6 +288,12 @@ function namedToolChoice(input: CompatRequestCodecInput): string | undefined {
     throw new Error(`required_tool_unsupported: required tool ${JSON.stringify(name)} is not advertised`)
   }
   return name
+}
+
+function applySamplingParams(body: Record<string, unknown>, input: CompatRequestCodecInput): void {
+  if (isFixedSamplingModel(input.model, input.request.providerId)) return
+  if (input.request.temperature !== undefined) body.temperature = input.request.temperature
+  if (input.request.topP !== undefined) body.top_p = input.request.topP
 }
 
 function isAzureOpenAiEndpoint(baseUrl: string): boolean {

@@ -616,5 +616,8 @@
   "mcpFormBackToForm": "Back to form",
   "mcpFormInvalidJson": "The config could not be parsed, so the form is unavailable. Fix the JSON below to continue. ({{error}})",
   "mcpFormName": "Name",
-  "mcpFormNamePlaceholder": "my-tool"
+  "mcpFormNamePlaceholder": "my-tool",
+  "kunResetDefaultModel": "Emergency model reset",
+  "kunResetDefaultModelDesc": "If the local agent cannot start or chat because the current default model is incompatible, reset it to {{model}} without deleting other settings.",
+  "kunResetDefaultModelAction": "Reset to {{model}}"
 }

@@ -616,5 +616,8 @@
   "mcpFormBackToForm": "Назад к форме",
   "mcpFormInvalidJson": "Не удалось разобрать конфиг. Исправьте JSON ниже. ({{error}})",
   "mcpFormName": "Имя",
-  "mcpFormNamePlaceholder": "мой инструмент"
+  "mcpFormNamePlaceholder": "мой инструмент",
+  "kunResetDefaultModel": "Аварийный сброс модели",
+  "kunResetDefaultModelDesc": "Если локальный агент недоступен из‑за несовместимой модели по умолчанию, сбросьте её на {{model}} без удаления остальных настроек.",
+  "kunResetDefaultModelAction": "Сбросить на {{model}}"
 }

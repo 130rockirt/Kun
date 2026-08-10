@@ -264,7 +264,7 @@ function providerReasoningCapability(
   ) {
     return reasoning(['low', 'medium', 'high', 'max'], 'high', 'anthropic-thinking')
   }
-  if (provider.includes('kimi-code') && (model === 'k3' || model.endsWith('/k3'))) {
+  if (isKimiK3Model(model, provider)) {
     return reasoning(['low', 'high', 'max'], 'high', 'openai-chat-completions')
   }
   if (
@@ -584,4 +584,18 @@ function uniqueModelCapabilityValues<T extends string>(values: readonly T[]): T[
 function normalizeModelId(model: string | undefined): string {
   const normalized = model?.trim().toLowerCase() ?? ''
   return normalized === 'auto' ? '' : normalized
+}
+
+function isKimiK3Model(model: string, provider: string): boolean {
+  const basename = model.split('/').at(-1) ?? model
+  if (
+    basename === 'k3' ||
+    basename.startsWith('k3-') ||
+    basename === 'kimi-k3' ||
+    basename.startsWith('kimi-k3-')
+  ) {
+    return true
+  }
+  if (!(provider.includes('kimi-code') || provider.includes('moonshot'))) return false
+  return basename === 'k3' || basename.startsWith('k3-') || basename.includes('kimi-k3')
 }

@@ -48,6 +48,15 @@ describe('format runtime error', () => {
     expect(formatRuntimeError(error)).not.toBe(i18n.t('common:runtimeFetchFailed'))
   })
 
+  it('routes fixed-sampling provider errors to Agents settings for recovery', () => {
+    const view = describeRuntimeError(new Error(JSON.stringify({
+      code: 'http_400',
+      message: 'model request failed with status 400: invalid temperature: only 1 is allowed for this model'
+    })))
+
+    expect(view.settingsAction).toBe('agents')
+  })
+
   it('localizes thread_busy without exposing its runtime owner in the primary message', () => {
     const owner = 'af197738-2317-49bb-b9b0-d6d5e7b24cdd'
     const view = describeRuntimeError(new Error(JSON.stringify({

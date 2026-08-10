@@ -130,11 +130,18 @@ function localizedRuntimeSummary(code: string | null, text: string): string | nu
   return null
 }
 
-function shouldOpenAgentsSettings(code: string | null): boolean {
-  return code === 'missing_api_key' ||
+function shouldOpenAgentsSettings(code: string | null, text = ''): boolean {
+  if (
+    code === 'missing_api_key' ||
     code === 'runtime_offline' ||
     code === 'runtime_auth_required' ||
     code === 'runtime_port_conflict'
+  ) {
+    return true
+  }
+  // Fixed-sampling models (e.g. Kimi K3) reject temperature/top_p and can brick
+  // the local agent until the user changes the default model in Agents settings.
+  return /\b(temperature|top[_ ]?p|sampling)\b/i.test(text)
 }
 
 export function describeRuntimeError(error: unknown): RuntimeErrorView {
@@ -169,7 +176,7 @@ export function describeRuntimeError(error: unknown): RuntimeErrorView {
     message,
     ...(details.length > 0 ? { detail: details.join('\n\n') } : {}),
     ...(errorCode ? { code: errorCode } : {}),
-    ...(shouldOpenAgentsSettings(errorCode) ? { settingsAction: 'agents' as const } : {})
+    ...(shouldOpenAgentsSettings(errorCode, redactedText) ? { settingsAction: 'agents' as const } : {})
   }
 }
 

@@ -616,5 +616,8 @@
   "mcpFormBackToForm": "フォームに戻る",
   "mcpFormInvalidJson": "The config could not be parsed, so the form is unavailable. Fix the JSON below to continue. ({{error}})",
   "mcpFormName": "名前",
-  "mcpFormNamePlaceholder": "私のツール"
+  "mcpFormNamePlaceholder": "私のツール",
+  "kunResetDefaultModel": "緊急モデルリセット",
+  "kunResetDefaultModelDesc": "既定モデルの非互換でローカルエージェントが使えない場合、他の設定を消さずに {{model}} へ戻します。",
+  "kunResetDefaultModelAction": "{{model}} に戻す"
 }

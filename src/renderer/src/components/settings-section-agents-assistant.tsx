@@ -3,10 +3,12 @@ import type {
 } from '@shared/app-settings'
 import {
   DEFAULT_KUN_DATA_DIR,
+  DEFAULT_KUN_MODEL,
   DEFAULT_MODEL_PROVIDER_ID,
   DEFAULT_PROMPT_OPTIMIZATION_PROMPT,
   MIN_KUN_LOCAL_PORT
 } from '@shared/app-settings'
+import { persistComposerModel } from '../store/chat-store-helpers'
 import { isKunRuntimeInsecure } from '@shared/app-settings-kun-migration'
 import { type ReactElement } from 'react'
 import { formatCompactNumber } from '../hooks/use-thread-usage'
@@ -76,6 +78,22 @@ export function AgentsAssistantSettingsPanel({ view }: { view: Record<string, an
                           updateKun({ model: next || (activeProviderModels[0] ?? kun.model) })
                         }}
                       />
+                    }
+                  />
+                  <SettingRow
+                    title={t('kunResetDefaultModel')}
+                    description={t('kunResetDefaultModelDesc', { model: DEFAULT_KUN_MODEL })}
+                    control={
+                      <button
+                        type="button"
+                        className="rounded-xl border border-ds-border bg-ds-main/60 px-3 py-2 text-[13px] font-medium text-ds-ink transition hover:border-accent/40 hover:bg-ds-main"
+                        onClick={() => {
+                          updateKun({ model: DEFAULT_KUN_MODEL })
+                          persistComposerModel(DEFAULT_KUN_MODEL)
+                        }}
+                      >
+                        {t('kunResetDefaultModelAction', { model: DEFAULT_KUN_MODEL })}
+                      </button>
                     }
                   />
                   <SettingRow

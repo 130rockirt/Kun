@@ -15,7 +15,9 @@ import {
   readLimitedResponseJson,
   readLimitedResponseText,
   reasoningFromMessage,
+  shouldRetryWithoutSamplingParams,
   shouldRetryWithoutStreamUsage,
+  stripSamplingFromBody,
   warnModelTraceFailure
 } from './compat-model-support.js'
 import { resolveModelEndpointFormat, usesChatCompletionsShape, type ModelEndpointFormat } from '../../contracts/model-endpoint-format.js'
@@ -217,8 +219,15 @@ export class CompatModelClient extends CompatModelStreamingClient implements Mod
         return
       }
       const text = errorBody.text
-      if (usesChatCompletionsShape(endpointFormat) && shouldRetryWithoutStreamUsage(response.status, text, body)) {
-        const retryBody = this.buildRequestBody(request, stream, { endpointFormat, includeStreamUsage: false })
+      const retryBody = shouldRetryWithoutSamplingParams(response.status, text, body)
+        ? stripSamplingFromBody(body)
+        : (
+          usesChatCompletionsShape(endpointFormat) &&
+            shouldRetryWithoutStreamUsage(response.status, text, body)
+            ? this.buildRequestBody(request, stream, { endpointFormat, includeStreamUsage: false })
+            : null
+        )
+      if (retryBody) {
         const fallbackResult = await post(retryBody, 'stream_options_fallback')
         if (fallbackResult.kind === 'error') {
           yield { kind: 'error', message: fallbackResult.message, failure: fallbackResult.failure }

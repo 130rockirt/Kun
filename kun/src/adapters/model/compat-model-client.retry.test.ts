@@ -486,4 +486,40 @@ describe('CompatModelClient refreshed credentials', () => {
     expect(calls).toBe(1)
     expect(chunks).toContainEqual(expect.objectContaining({ kind: 'error', code: 'http_401' }))
   })
+
+  it('retries once after stripping temperature/top_p on fixed-sampling 400s', async () => {
+    const bodies: Array<Record<string, unknown>> = []
+    let calls = 0
+    const fetchImpl = (async (_url: string, init?: RequestInit) => {
+      calls += 1
+      bodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>)
+      if (calls === 1) {
+        return Response.json({
+          error: { message: 'invalid temperature: only 1 is allowed for this model' }
+        }, { status: 400 })
+      }
+      return okJson()
+    }) as unknown as typeof fetch
+    const samplingClient = new CompatModelClient({
+      baseUrl: 'https://provider.example/v1',
+      apiKey: 'sk-test',
+      model: 'custom-fixed-model',
+      endpointFormat: 'chat_completions',
+      nonStreaming: true,
+      fetchImpl
+    })
+
+    const chunks = await drain(samplingClient.stream({
+      ...request(),
+      model: 'custom-fixed-model',
+      temperature: 0,
+      topP: 1
+    }))
+
+    expect(calls).toBe(2)
+    expect(bodies[0]).toMatchObject({ temperature: 0, top_p: 1 })
+    expect(bodies[1]).not.toHaveProperty('temperature')
+    expect(bodies[1]).not.toHaveProperty('top_p')
+    expect(chunks.at(-1)).toEqual({ kind: 'completed', stopReason: 'stop' })
+  })
 })

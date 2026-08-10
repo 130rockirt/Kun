@@ -616,5 +616,8 @@
   "mcpFormBackToForm": "वापस फार्म में",
   "mcpFormInvalidJson": "The config could not be parsed, so the form is unavailable. Fix the JSON below to continue. ({{error}})",
   "mcpFormName": "नाम",
-  "mcpFormNamePlaceholder": "मेरा उपकरण"
+  "mcpFormNamePlaceholder": "मेरा उपकरण",
+  "kunResetDefaultModel": "आपातकालीन मॉडल रीसेट",
+  "kunResetDefaultModelDesc": "अगर असंगत डिफ़ॉल्ट मॉडल से लोकल एजेंट काम न करे, तो अन्य सेटिंग हटाए बिना {{model}} पर रीसेट करें।",
+  "kunResetDefaultModelAction": "{{model}} पर रीसेट"
 }
