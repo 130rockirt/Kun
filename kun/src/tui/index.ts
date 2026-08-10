@@ -5,9 +5,9 @@ import { KUN_TUI_USAGE, parseTuiOptions } from './options.js'
 import {
   hasUnpublishedGuiRuntime,
   readGuiSharedSettings,
-  syncGuiProviderCatalogToConfig,
   type GuiConfigSyncResult
 } from '../cli/gui-settings-bridge.js'
+import { importGuiProviderCatalogForTui } from './gui-catalog-startup.js'
 import type { TerminalInput, TerminalOutput } from './pi-terminal.js'
 import { checkStandaloneTuiUpdateOnce } from '../cli/self-update.js'
 
@@ -85,10 +85,16 @@ export async function runTuiCommand(argv: readonly string[], io: TuiCommandIo): 
     let guiConfigSync: GuiConfigSyncResult | null = null
     let guiConfigWarning = ''
     if (guiSettings && !parsed.options.url) {
-      try {
-        guiConfigSync = await syncGuiProviderCatalogToConfig(parsed.options.dataDir, guiSettings)
-      } catch (error) {
-        guiConfigWarning = `could not import GUI model catalog: ${error instanceof Error ? error.message : String(error)}`
+      // Skip config.json rewrite when a live shared runtime already owns the
+      // data dir (GUI+TUI coexistence). Registry is the catalog authority.
+      const imported = await importGuiProviderCatalogForTui({
+        dataDir: parsed.options.dataDir,
+        settings: guiSettings,
+        fetch: io.fetch ?? fetch
+      })
+      guiConfigSync = imported.sync
+      if (imported.warning) {
+        guiConfigWarning = imported.warning
         io.stderr.write(`kun tui: ${guiConfigWarning}\n`)
       }
     }
