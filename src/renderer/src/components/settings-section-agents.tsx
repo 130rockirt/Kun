@@ -55,6 +55,10 @@ import {
   Workflow,
   Wrench
 } from 'lucide-react'
+import {
+  type CodeAgentPresetV1
+} from '@shared/app-settings'
+import { CodeAgentPresetsEditor } from './settings-code-agent-presets'
 import { GuiUpdateControl } from './settings-gui-update'
 import { McpServersEditor } from './mcp/McpServersEditor'
 import {
@@ -228,6 +232,10 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
     splitSettingsList,
     listSettingsText
   } = ctx
+  const codeAgentPresets: CodeAgentPresetV1[] = form?.codeAgentPresets ?? []
+  const updateCodeAgentPresets = (next: CodeAgentPresetV1[]): void => {
+    update({ codeAgentPresets: next })
+  }
   const productionManagedDataDir = typeof window !== 'undefined' &&
     window.kunGui?.appEnvironment?.flavor === 'production'
   const windowsStorageManagement = productionManagedDataDir && window.kunGui?.platform === 'win32'
@@ -578,6 +586,17 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
                         onChange={(e) => update({ codePromptPrefix: e.target.value })}
                         placeholder={t('codePromptPrefixPlaceholder')}
                         className="min-h-[110px] w-full resize-y rounded-xl border border-ds-border bg-ds-main/60 px-3 py-3 text-[14px] leading-6 text-ds-ink outline-none focus:border-accent/40 focus:ring-1 focus:ring-accent/25"
+                      />
+                    }
+                  />
+                  <SettingRow
+                    title={t('codeAgentPresets')}
+                    description={t('codeAgentPresetsDesc')}
+                    wideControl
+                    control={
+                      <CodeAgentPresetsEditor
+                        presets={codeAgentPresets}
+                        onChange={updateCodeAgentPresets}
                       />
                     }
                   />
