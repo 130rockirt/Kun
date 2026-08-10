@@ -46,9 +46,9 @@ const DEFAULT_ITEMS_CACHE_MAX_BYTES = 16 * 1024 * 1024
 const DEFAULT_ITEM_HISTORY_COMPACTION_MIN_BYTES = 4 * 1024 * 1024
 const HIGHEST_SEQ_CACHE_MAX_THREADS = 256
 const ITEM_HISTORY_REVISION_MAX_THREADS = 512
-// A model tool argument may contain 1 MiB of raw JSON. Invalid JSON is kept in
-// a `__raw` string for safe tool failure, whose escaping can nearly double the
-// persisted item event. Keep replay finite while allowing that valid envelope.
+// A valid model tool argument may contain 1 MiB of JSON, whose escaping can
+// nearly double the persisted item event. Unresolved `__raw` strings are
+// summarized before persistence, while replay remains bounded for valid calls.
 export const DEFAULT_EVENT_REPLAY_MAX_RECORD_BYTES = 4 * 1024 * 1024
 
 /**

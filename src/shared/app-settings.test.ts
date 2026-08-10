@@ -288,3 +288,43 @@ function clawChannel(provider: ClawImProvider, label: string, name = label): Cla
     updatedAt: now
   }
 }
+
+describe('lab PPT settings', () => {
+  it('preserves explicit image-first disablement across partial and configured patches', () => {
+    const disabled = mergeKunRuntimeSettings(defaultKunRuntimeSettings(), {
+      lab: {
+        pptAgent: {
+          enabled: false,
+          imageFirst: false
+        }
+      }
+    })
+    expect(disabled.lab.pptAgent).toEqual({
+      enabled: false,
+      model: '',
+      providerId: '',
+      fast: false,
+      imageFirst: false
+    })
+
+    const configured = mergeKunRuntimeSettings(defaultKunRuntimeSettings(), {
+      lab: {
+        pptAgent: {
+          model: 'gpt-5.4',
+          providerId: 'codex-2',
+          reasoningEffort: 'high',
+          fast: true,
+          imageFirst: false
+        }
+      }
+    })
+    expect(configured.lab.pptAgent).toEqual({
+      enabled: true,
+      model: 'gpt-5.4',
+      providerId: 'codex-2',
+      reasoningEffort: 'high',
+      fast: true,
+      imageFirst: false
+    })
+  })
+})

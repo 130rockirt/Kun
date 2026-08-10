@@ -192,6 +192,33 @@ describe('CursorSdkEventMapper', () => {
     expect([...started, ...finished].some((event) => event.kind === 'tool_call_ready')).toBe(false)
   })
 
+  test('omits unresolved raw arguments from durable Cursor tool-call events', () => {
+    const subject = mapper()
+    const raw = '{"plan":{"title":"private-cursor-event-marker"'
+
+    const events = subject.map({
+      type: 'tool_call',
+      agent_id: 'agent',
+      run_id: 'run',
+      call_id: 'call_raw',
+      name: 'graph_define_plan',
+      status: 'running',
+      args: { __raw: raw }
+    })
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        kind: 'tool_call_started',
+        item: expect.objectContaining({
+          kind: 'tool_call',
+          arguments: {},
+          summary: expect.stringContaining(`${Buffer.byteLength(raw, 'utf8')} UTF-8 bytes`)
+        })
+      })
+    ])
+    expect(JSON.stringify(events)).not.toContain('private-cursor-event-marker')
+  })
+
   test('extracts successful Cursor updateTodos results for Kun thread state', () => {
     expect(cursorTodosRequestFromMessage({
       type: 'tool_call',

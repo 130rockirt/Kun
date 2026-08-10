@@ -375,7 +375,6 @@ describe('DelegationRuntime detached children', () => {
           enabled: true,
           useExistingAgents: true,
           maxParallel: 1,
-          maxChildRuns: 10,
           defaultToolPolicy: 'readOnly',
           profiles: {}
         },

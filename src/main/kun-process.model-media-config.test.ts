@@ -316,14 +316,14 @@ describe('syncGuiManagedKunConfig', () => {
       idleTimeoutMs: 300000
     })
     // Subagents have no GUI enable toggle: they default ON so delegate_task + the
-    // built-in profiles are always offered. maxParallel/maxChildRuns must be >=1 or
-    // DelegationRuntime can never run a child. This locks the default against regressions.
+    // built-in profiles are always offered. maxParallel remains the live queue
+    // concurrency control; there is no cumulative child-run limit.
     expect(parsed.capabilities.subagents).toMatchObject({
       enabled: true,
       useExistingAgents: true,
-      maxParallel: 256,
-      maxChildRuns: 25
+      maxParallel: 256
     })
+    expect(parsed.capabilities.subagents).not.toHaveProperty('maxChildRuns')
     expect(parsed.capabilities.web).toMatchObject({ enabled: true, fetchEnabled: true })
     expect(parsed.capabilities.mcp.search).toMatchObject({ enabled: false, mode: 'auto' })
     expect(parsed.capabilities.imageGen).toEqual({

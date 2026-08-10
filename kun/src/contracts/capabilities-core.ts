@@ -350,8 +350,8 @@ export const SubagentsCapabilityConfig = CapabilityToggleConfig.extend({
   useExistingAgents: z.boolean().default(true),
   /** Max children running at once; extra spawns queue instead of erroring. */
   maxParallel: z.number().int().nonnegative().default(256),
-  /** Hard cap on total children per parent thread. */
-  maxChildRuns: z.number().int().nonnegative().default(0),
+  // Accept the removed cumulative limit so old configs keep loading, but ignore it.
+  maxChildRuns: z.number().int().nonnegative().optional(),
   /**
    * Tool policy applied to children that do not resolve a profile. Defaults to
    * `inherit` so a delegated subagent follows the MAIN agent's tools AND
@@ -379,5 +379,9 @@ export const SubagentsCapabilityConfig = CapabilityToggleConfig.extend({
       })
     }
   })
-  .transform(({ defaultStepLimit: _legacyDefaultStepLimit, ...config }) => config)
+  .transform(({
+    maxChildRuns: _legacyMaxChildRuns,
+    defaultStepLimit: _legacyDefaultStepLimit,
+    ...config
+  }) => config)
 export type SubagentsCapabilityConfig = z.output<typeof SubagentsCapabilityConfig>

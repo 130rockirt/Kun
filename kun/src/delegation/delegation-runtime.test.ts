@@ -241,7 +241,6 @@ describe('DelegationRuntime model provider selection', () => {
         config: SubagentsCapabilityConfig.parse({
           enabled: true,
           maxParallel: 1,
-          maxChildRuns: 10,
           profiles: {
             auditor: {
               name: 'Security Auditor',
@@ -305,7 +304,6 @@ describe('DelegationRuntime model provider selection', () => {
         config: SubagentsCapabilityConfig.parse({
           enabled: true,
           maxParallel: 1,
-          maxChildRuns: 10,
           profiles: {
             general: {
               model: 'deepseek-v4-pro',
@@ -348,7 +346,6 @@ describe('DelegationRuntime model provider selection', () => {
         config: SubagentsCapabilityConfig.parse({
           enabled: true,
           maxParallel: 1,
-          maxChildRuns: 10,
           profiles: { general: { toolPolicy: 'inherit' } }
         }),
         store: new FileDelegationStore(dir),
@@ -388,8 +385,7 @@ describe('DelegationRuntime model provider selection', () => {
       const runtime = new DelegationRuntime({
         config: SubagentsCapabilityConfig.parse({
           enabled: true,
-          maxParallel: 1,
-          maxChildRuns: 10
+          maxParallel: 1
         }),
         store: new FileDelegationStore(dir),
         executor: async (input) => {
@@ -445,8 +441,7 @@ describe('DelegationRuntime model provider selection', () => {
       const runtime = new DelegationRuntime({
         config: SubagentsCapabilityConfig.parse({
           enabled: true,
-          maxParallel: 1,
-          maxChildRuns: 10
+          maxParallel: 1
         }),
         store: new FileDelegationStore(dir),
         executor: async (input) => {
@@ -485,7 +480,6 @@ describe('DelegationRuntime model provider selection', () => {
       expect(() => SubagentsCapabilityConfig.parse({
         enabled: true,
         maxParallel: 1,
-        maxChildRuns: 10,
         profiles: { partial: { model: 'deepseek-v4-pro' } }
       })).toThrow(/model and providerId must be configured together/)
 
@@ -494,7 +488,6 @@ describe('DelegationRuntime model provider selection', () => {
         config: SubagentsCapabilityConfig.parse({
           enabled: true,
           maxParallel: 1,
-          maxChildRuns: 10,
           profiles: {}
         }),
         store: new FileDelegationStore(dir),
@@ -534,8 +527,7 @@ describe('DelegationRuntime model provider selection', () => {
 function subagentConfig() {
   return SubagentsCapabilityConfig.parse({
     enabled: true,
-    maxParallel: 1,
-    maxChildRuns: 10
+    maxParallel: 1
   })
 }
 

@@ -67,6 +67,7 @@ describe('cli', () => {
     expect(config.skills.enabled).toBe(false)
     expect(config.subagents.useExistingAgents).toBe(true)
     expect(config.subagents.maxParallel).toBe(256)
+    expect(config.subagents).not.toHaveProperty('maxChildRuns')
     expect(config.attachments.allowedMimeTypes).toContain('image/png')
     expect(config.attachments.textFallbackMaxBase64Bytes).toBe(512 * 1024)
     expect(config.attachments.textFallbackMaxImageDimension).toBe(1280)
@@ -77,7 +78,7 @@ describe('cli', () => {
     expect(config.imageGen.maxReferenceImages).toBe(4)
   })
 
-  it('ignores legacy subagent step-limit config fields', () => {
+  it('ignores legacy subagent cumulative and step-limit config fields', () => {
     const config = KunCapabilitiesConfig.parse({
       subagents: {
         enabled: true,
@@ -90,9 +91,9 @@ describe('cli', () => {
     expect(config.subagents).toMatchObject({
       enabled: true,
       useExistingAgents: true,
-      maxParallel: 2,
-      maxChildRuns: 4
+      maxParallel: 2
     })
+    expect('maxChildRuns' in config.subagents).toBe(false)
     expect('defaultStepLimit' in config.subagents).toBe(false)
   })
 
@@ -101,7 +102,6 @@ describe('cli', () => {
       subagents: {
         enabled: true,
         maxParallel: 3,
-        maxChildRuns: 10,
         defaultProfile: 'reviewer',
         profiles: {
           reviewer: {
@@ -127,11 +127,11 @@ describe('cli', () => {
 
   it('rejects a defaultProfile that is not defined in profiles', () => {
     expect(() => KunCapabilitiesConfig.parse({
-      subagents: { enabled: true, maxParallel: 1, maxChildRuns: 1, defaultProfile: 'ghost' }
+      subagents: { enabled: true, maxParallel: 1, defaultProfile: 'ghost' }
     })).toThrow(/defaultProfile/)
     for (const inheritedName of ['constructor', 'toString', '__proto__']) {
       expect(KunCapabilitiesConfig.safeParse({
-        subagents: { enabled: true, maxParallel: 1, maxChildRuns: 1, defaultProfile: inheritedName }
+        subagents: { enabled: true, maxParallel: 1, defaultProfile: inheritedName }
       }).success).toBe(false)
     }
   })
@@ -160,11 +160,11 @@ describe('cli', () => {
     expect(manifest.subagents).toMatchObject({
       useExistingAgents: false,
       maxParallel: 2,
-      maxChildRuns: 6,
       defaultToolPolicy: 'inherit',
       defaultProfile: 'reviewer',
       profiles: [{ name: 'reviewer', model: 'deepseek-v4-pro', toolPolicy: 'readOnly' }]
     })
+    expect(manifest.subagents).not.toHaveProperty('maxChildRuns')
   })
 
   it('resolves model capability fields from configured profiles', () => {

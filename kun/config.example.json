@@ -95,8 +95,7 @@
     },
     "subagents": {
       "enabled": false,
-      "maxParallel": 0,
-      "maxChildRuns": 0
+      "maxParallel": 0
     },
     "attachments": {
       "enabled": false,

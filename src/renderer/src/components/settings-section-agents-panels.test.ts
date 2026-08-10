@@ -342,7 +342,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
           web: { status: 'available', provider: 'brave-search' },
           instructions: { status: 'available', lastSourceCount: 1 },
           skills: { status: 'available' },
-          subagents: { status: 'available' },
+          subagents: { status: 'available', enabled: true, maxParallel: 7 },
           attachments: { status: 'available' },
           memory: { status: 'available' }
         }
@@ -372,6 +372,8 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
     expect(html).toContain('available')
     expect(html).toContain('2/2')
     expect(html).toContain('brave-search')
+    expect(html).toContain('7∥')
+    expect(html).not.toContain('25 max')
     expect(html).toContain('Instructions')
     expect(html).toContain('AGENTS.md instructions')
     expect(html).toContain('Providers')

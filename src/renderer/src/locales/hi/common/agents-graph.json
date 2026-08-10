@@ -8,7 +8,7 @@
     "delegatableCount": "{{count}} सौंपने योग्य भूमिकाएँ",
     "configuredCount": "{{count}} कॉन्फ़िगर किए गए",
     "showingCount": "{{visible}} / {{total}} दिखाए जा रहे हैं",
-    "policySummary": "कतार और सत्र सीमाएँ",
+    "policySummary": "कतार और समवर्ती नियंत्रण",
     "search": "उप-एजेंट खोजें",
     "searchPlaceholder": "नाम, क्षमता या परिदृश्य खोजें",
     "clearSearch": "खोज साफ़ करें",

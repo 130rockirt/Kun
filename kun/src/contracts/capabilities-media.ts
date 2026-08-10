@@ -229,7 +229,6 @@ export const RuntimeCapabilityManifest = z
     subagents: RuntimeCapabilityState.extend({
       useExistingAgents: z.boolean(),
       maxParallel: z.number().int().nonnegative(),
-      maxChildRuns: z.number().int().nonnegative(),
       defaultToolPolicy: SubagentToolPolicy,
       defaultProfile: z.string().optional(),
       profiles: z
@@ -427,7 +426,6 @@ export function buildRuntimeCapabilityManifest(input: {
       ),
       useExistingAgents: config.subagents.useExistingAgents,
       maxParallel: config.subagents.maxParallel,
-      maxChildRuns: config.subagents.maxChildRuns,
       defaultToolPolicy: config.subagents.defaultToolPolicy,
       ...(config.subagents.defaultProfile ? { defaultProfile: config.subagents.defaultProfile } : {}),
       profiles: Object.entries(config.subagents.profiles).map(([name, profile]) => ({

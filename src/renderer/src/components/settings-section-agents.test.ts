@@ -1,12 +1,23 @@
 import {
-  DEFAULT_MODEL_PROVIDER_ID, defaultKunRuntimeSettings,
+  DEFAULT_MODEL_PROVIDER_ID,
+  PptAgentSettingsPanel,
+  act,
+  createElement,
+  createRenderer,
+  defaultKunRuntimeSettings,
   defaultModelProviderSettings,
-  describe, expect,
+  describe,
+  expect,
   getModelProviderPreset,
   it,
   modelProviderPresetProfile,
   modelProvidersSettingsPatch,
-  type ModelProviderProfileV1
+  t,
+  useChatStore,
+  type ModelProviderModelGroup,
+  type ModelProviderModelProfileV1,
+  type ModelProviderProfileV1,
+  type ReactTestRenderer
 } from './settings-section-agents.test-support'
 
 
@@ -129,4 +140,68 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
       })
     }))
   })
+
+  it('gates the PPT fast toggle on Codex priority support', async () => {
+    const codexModelProfile: ModelProviderModelProfileV1 = {
+      inputModalities: ['text'],
+      outputModalities: ['text'],
+      supportsToolCalling: true,
+      messageParts: ['text'],
+      serviceTiers: ['priority']
+    }
+    const modelProviders: ModelProviderProfileV1[] = [{
+      id: 'codex-2',
+      name: 'Codex',
+      apiKey: '',
+      baseUrl: '',
+      endpointFormat: 'chat_completions',
+      models: ['gpt-5.4'],
+      presetSource: { presetId: 'codex', mode: 'api' },
+      modelProfiles: { 'gpt-5.4': codexModelProfile }
+    }]
+    const groups: ModelProviderModelGroup[] = [{
+      providerId: 'codex-2',
+      presetSource: 'codex',
+      label: 'Codex',
+      modelIds: ['gpt-5.4'],
+      modelProfiles: { 'gpt-5.4': codexModelProfile }
+    }]
+    const mount = async (): Promise<ReactTestRenderer> => {
+      let renderer!: ReactTestRenderer
+      await act(async () => {
+        renderer = createRenderer(createElement(PptAgentSettingsPanel, {
+          t,
+          value: {
+            exploreAgent: { enabled: true, model: '', providerId: '', fast: false },
+            pptAgent: {
+              enabled: true,
+              model: 'gpt-5.4',
+              providerId: 'codex-2',
+              fast: true,
+              imageFirst: true
+            }
+          },
+          modelProviders,
+          leadProviderId: 'codex-2',
+          leadModel: 'gpt-5.4',
+          selectControlClass: 'select',
+          onChange: () => undefined
+        }))
+      })
+      return renderer
+    }
+
+    useChatStore.setState({ composerModelGroups: groups })
+    let renderer = await mount()
+    let switches = renderer.root.findAllByProps({ role: 'switch' })
+    expect(switches.map((node) => node.props['aria-checked'])).toEqual([true, true, true])
+    expect(switches.map((node) => node.props['aria-disabled'])).toEqual([false, false, false])
+
+    useChatStore.setState({ composerModelGroups: [] })
+    renderer = await mount()
+    switches = renderer.root.findAllByProps({ role: 'switch' })
+    expect(switches.map((node) => node.props['aria-checked'])).toEqual([true, true, false])
+    expect(switches.map((node) => node.props['aria-disabled'])).toEqual([false, false, true])
+  })
+
 })

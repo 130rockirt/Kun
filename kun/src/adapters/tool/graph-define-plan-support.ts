@@ -94,6 +94,16 @@ export function toPlanningIssue(
   }
 }
 
+export function hostPlanningIssue(): GraphPlanningIssueV1 {
+  return {
+    code: 'graph_planning_host_error',
+    path: [],
+    message: 'Graph planning could not persist or commit the draft because the host encountered an error.',
+    repairHint: 'Retry the Graph build. If the problem persists, check Graph runtime availability.',
+    validExample: MINIMAL_VALID_PLAN_EXAMPLE
+  }
+}
+
 export function planningError(
   code: string,
   error: string,

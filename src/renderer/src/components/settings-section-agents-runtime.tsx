@@ -465,7 +465,7 @@ export function AgentsRuntimeSettingsPanel({ view }: { view: Record<string, any>
                           {runtimeInfo?.capabilities?.subagents?.enabled ? (
                             <div className="rounded-xl border border-ds-border-muted bg-ds-main/40 px-3 py-2">
                               Subagents: <span className="font-mono text-ds-ink">
-                                {runtimeInfo?.capabilities?.subagents?.maxParallel ?? 0}∥ · {runtimeInfo?.capabilities?.subagents?.maxChildRuns ?? 0} max
+                                {runtimeInfo?.capabilities?.subagents?.maxParallel ?? 0}∥
                                 {runtimeInfo?.capabilities?.subagents?.defaultToolPolicy ? ` · ${runtimeInfo.capabilities.subagents.defaultToolPolicy}` : ''}
                                 {runtimeInfo?.capabilities?.subagents?.profiles?.length ? ` · ${runtimeInfo.capabilities.subagents.profiles.length} profile(s)` : ''}
                               </span>

@@ -431,7 +431,6 @@ describe('DelegationRuntime', () => {
     enabled?: boolean
     useExistingAgents?: boolean
     maxParallel?: number
-    maxChildRuns?: number
     defaultToolPolicy?: 'readOnly' | 'inherit'
     defaultProfile?: string
     profiles?: Record<string, Partial<SubagentProfileConfig>>
@@ -457,7 +456,6 @@ describe('DelegationRuntime', () => {
         enabled: options.enabled ?? true,
         useExistingAgents: options.useExistingAgents ?? true,
         maxParallel: options.maxParallel ?? 1,
-        maxChildRuns: options.maxChildRuns ?? 3,
         ...(options.defaultToolPolicy ? { defaultToolPolicy: options.defaultToolPolicy } : {}),
         ...(defaultProfile ? { defaultProfile } : {}),
         profiles

@@ -259,7 +259,6 @@ export type CoreRuntimeCapabilityManifestJson = {
   subagents: CoreRuntimeCapabilityStateJson & {
     useExistingAgents?: boolean
     maxParallel: number
-    maxChildRuns: number
     defaultToolPolicy?: 'readOnly' | 'inherit'
     defaultProfile?: string
     profiles?: Array<{ name: string; model?: string; toolPolicy: 'readOnly' | 'inherit' }>

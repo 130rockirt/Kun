@@ -76,7 +76,7 @@ describe('DelegationRuntime', () => {
     expect(result.status).toBe('completed')
   })
 
-  it('denies disabled delegation and exhausted child budgets', async () => {
+  it('denies disabled delegation', async () => {
     const disabled = createRuntime({ enabled: false })
     await expect(disabled.runChild({
       parentThreadId: 'thr_1',
@@ -84,20 +84,47 @@ describe('DelegationRuntime', () => {
       prompt: 'x',
       signal: new AbortController().signal
     })).rejects.toThrow(/disabled/)
+  })
 
-    const budgeted = createRuntime({ maxChildRuns: 1 })
-    await budgeted.runChild({
-      parentThreadId: 'thr_1',
-      parentTurnId: 'turn_1',
-      prompt: 'first',
+  it('ignores the legacy cumulative child limit for one parent thread', async () => {
+    const runtime = createRuntime({ legacyMaxChildRuns: 25 })
+    const results = []
+    for (let index = 0; index < 26; index += 1) {
+      results.push(await runtime.runChild({
+        parentThreadId: 'thr_unbounded',
+        parentTurnId: `turn_${index}`,
+        prompt: `task ${index}`,
+        signal: new AbortController().signal
+      }))
+    }
+
+    expect(results.every((record) => record.status === 'completed')).toBe(true)
+    expect((await runtime.diagnostics('thr_unbounded')).childRuns).toHaveLength(26)
+  })
+
+  it('keeps spawning after restart when the parent already has persisted child history', async () => {
+    const firstRuntime = createRuntime({ legacyMaxChildRuns: 25, idNamespace: 'before_restart' })
+    for (let index = 0; index < 26; index += 1) {
+      await firstRuntime.runChild({
+        parentThreadId: 'thr_restart',
+        parentTurnId: `turn_before_restart_${index}`,
+        prompt: `before restart ${index}`,
+        signal: new AbortController().signal
+      })
+    }
+
+    const restartedRuntime = createRuntime({ legacyMaxChildRuns: 25, idNamespace: 'after_restart' })
+    const afterRestart = await restartedRuntime.runChild({
+      parentThreadId: 'thr_restart',
+      parentTurnId: 'turn_after_restart',
+      prompt: 'after restart',
       signal: new AbortController().signal
     })
-    await expect(budgeted.runChild({
-      parentThreadId: 'thr_1',
-      parentTurnId: 'turn_1',
-      prompt: 'second',
-      signal: new AbortController().signal
-    })).rejects.toThrow(/limit/)
+
+    expect(afterRestart.status).toBe('completed')
+    const childRuns = (await restartedRuntime.diagnostics('thr_restart')).childRuns
+    expect(childRuns).toHaveLength(27)
+    expect(new Set(childRuns.map((record) => record.id)).size).toBe(27)
   })
 
   it('records high child usage without enforcing an execution budget', async () => {
@@ -610,7 +637,8 @@ describe('DelegationRuntime', () => {
     enabled?: boolean
     useExistingAgents?: boolean
     maxParallel?: number
-    maxChildRuns?: number
+    legacyMaxChildRuns?: number
+    idNamespace?: string
     defaultToolPolicy?: 'readOnly' | 'inherit'
     defaultProfile?: string
     profiles?: Record<string, Partial<SubagentProfileConfig>>
@@ -636,7 +664,9 @@ describe('DelegationRuntime', () => {
         enabled: options.enabled ?? true,
         useExistingAgents: options.useExistingAgents ?? true,
         maxParallel: options.maxParallel ?? 1,
-        maxChildRuns: options.maxChildRuns ?? 3,
+        ...(options.legacyMaxChildRuns !== undefined
+          ? { maxChildRuns: options.legacyMaxChildRuns }
+          : {}),
         ...(options.defaultToolPolicy ? { defaultToolPolicy: options.defaultToolPolicy } : {}),
         ...(defaultProfile ? { defaultProfile } : {}),
         profiles
@@ -649,7 +679,9 @@ describe('DelegationRuntime', () => {
       events: recorder,
       eventBus: bus,
       nowIso: () => '2026-06-03T00:00:00.000Z',
-      idGenerator: () => `child_${++idSeq}_${Math.random().toString(36).slice(2, 6)}`,
+      idGenerator: () => options.idNamespace
+        ? `child_${options.idNamespace}_${++idSeq}`
+        : `child_${++idSeq}_${Math.random().toString(36).slice(2, 6)}`,
       recordExternalUsage: options.recordExternalUsage,
       executor: options.executor ?? (async ({ prompt }) => ({
         summary: `done: ${prompt}`,

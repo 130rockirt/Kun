@@ -282,8 +282,7 @@ Shape:
     },
     "subagents": {
       "enabled": false,
-      "maxParallel": 2,
-      "maxChildRuns": 4
+      "maxParallel": 2
     },
     "attachments": {
       "enabled": false,
@@ -331,7 +330,7 @@ Feature flags are intentionally explicit:
 - `capabilities.skills` scans configured roots for `skill.json` manifests and, when `legacySkillMd` is true, older `SKILL.md` directories.
 - `capabilities.attachments` stores image bytes outside thread logs and allows turns to reference `attachmentIds`. Vision-capable models receive image parts; text-only models receive a bounded compressed base64 text fallback.
 - `capabilities.memory` stores long-term records under the data dir, retrieves scoped matches before turns, and exposes `memory_create`, `memory_update`, and `memory_delete` tools.
-- `capabilities.subagents` exposes `delegate_task` with `maxParallel` and `maxChildRuns` concurrency budgets.
+- `capabilities.subagents` exposes `delegate_task`; `maxParallel` limits simultaneous children and queues overflow in FIFO order. A parent thread has no cumulative child-run limit. Legacy `maxChildRuns` config values are accepted when loading old files but are ignored.
   Workspace overlays under `<workspace>/.kun/agents/*.md` enter automatic
   BM25/LLM routing (id/name/description only), appear in Settings and the
   workbench subagent sidebar with a Custom tag, default to read-only, and may

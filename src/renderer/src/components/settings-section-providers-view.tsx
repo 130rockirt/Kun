@@ -1,5 +1,6 @@
-import type {
-  ModelProviderProfileV1
+import {
+  DEFAULT_MODEL_PROVIDER_ID,
+  type ModelProviderProfileV1
 } from '@shared/app-settings'
 import {
   AlertCircle,
@@ -244,7 +245,9 @@ export function ProvidersSettingsView({ view }: { view: Record<string, any> }): 
                 {probeNotice ? <InlineNoticeView notice={probeNotice} /> : null}
                 <ProviderConnectionAdvancedPanels view={view} />
                 <ProviderModelsCapabilitiesPanels view={view} />
-                {!isDraftActive && activeTab === 'advanced' ? (
+                {!isDraftActive &&
+                activeTab === 'advanced' &&
+                activeProvider.id !== DEFAULT_MODEL_PROVIDER_ID ? (
                   <DetailSection title={t('modelProviderSectionDanger')}>
                     <div className="flex flex-wrap items-center gap-3">
                       <button

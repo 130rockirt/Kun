@@ -1,4 +1,4 @@
-import { appendFile, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -10,7 +10,6 @@ import {
   type GraphSupervisionObligationV1
 } from '../contracts/graph.js'
 import { FileGraphRunStore } from './graph-run-store.js'
-import { checksumJson } from './graph-run-store-support.js'
 import { GraphSupervisor } from './graph-supervisor.js'
 import {
   graphSupervisionObligationForSignal,
@@ -309,6 +308,7 @@ describe('GraphSupervisor durable supervision obligations', () => {
       expect(obligation).toMatchObject({
         state: 'retry_scheduled',
         deliveryAttempts: index + 1,
+        consecutiveDeliveryFailures: index + 1,
         lastError: 'EIO while resuming the source Lead'
       })
       expect(obligation.lastDeliveredSeq).toBeUndefined()
@@ -594,6 +594,50 @@ describe('GraphSupervisor durable supervision obligations', () => {
       resolvedAt: harness.nowIso()
     })
     expect(await durableEventTypes(harness.store)).toContain('supervision_obligation_resolved')
+    await supervisor.stop()
+  })
+
+  it('holds non-actionable obligations when an earlier attention transition turns human', async () => {
+    const harness = await persistentHarness()
+    let run = await transitionRunToRunning(harness)
+    run = await appendEvent(harness, {
+      type: 'run_status_changed',
+      payload: {
+        from: 'running',
+        to: 'awaiting_supervision',
+        reason: 'test supervision hold'
+      }
+    }, 'awaiting-supervision-for-attention-hold')
+    const attention = graphSupervisionObligationForSignal(run, HELP_SIGNAL, harness.nowIso())
+    run = await appendEvent(harness, {
+      type: 'supervision_attention_required',
+      payload: {
+        obligation: {
+          ...attention,
+          state: 'needs_attention',
+          attentionReason: 'Human attention must remain authoritative.'
+        }
+      }
+    }, 'attention-before-held-obligation')
+    const held = graphSupervisionObligationForSignal(run, {
+      runId: run.id,
+      reason: 'scheduler_error',
+      nodeIds: [],
+      digest: 'Hold this scheduler obligation while attention remains.'
+    }, harness.nowIso())
+    run = await appendEvent(harness, {
+      type: 'supervision_obligation_opened',
+      payload: { obligation: held }
+    }, 'pending-obligation-held-for-attention')
+
+    const supervisor = supervisorFor(harness)
+    await supervisor.sweepObligations()
+    run = (await harness.store.get(run.id))!
+    expect(run.status).toBe('awaiting_human')
+    expect(run.supervisionObligations.find((entry) =>
+      entry.id === attention.id)?.state).toBe('needs_attention')
+    expect(run.supervisionObligations.find((entry) =>
+      entry.id === held.id)?.state).toBe('pending')
     await supervisor.stop()
   })
 

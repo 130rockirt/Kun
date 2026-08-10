@@ -262,12 +262,6 @@ export class DelegationRuntimeRun extends DelegationRuntimeBase {
       (input.inheritSessionDefaults === true ? input.inheritedServiceTier : undefined)
     const returnFormat = input.returnFormat ?? 'summary'
 
-    // Reserve against the per-thread child-count limit before persisting anything.
-    await this.ensureSeeded(input.parentThreadId)
-    if (!this.reserveChild(input.parentThreadId)) {
-      throw new Error('delegation child-run limit exhausted')
-    }
-
     const queuedAt = this.now()
     const id = this.options.idGenerator?.() ?? `child_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
     let record = ChildRunRecord.parse({

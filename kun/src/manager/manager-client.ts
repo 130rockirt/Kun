@@ -18,6 +18,7 @@ import {
   ThreadExecutionBusyError,
   type ThreadExecutionLeasePort
 } from '../ports/thread-execution-lease.js'
+import { GraphRunConflictError } from '../graph/graph-run-store.js'
 import { isLoopbackHost } from '../server/loopback-host.js'
 import {
   readRuntimeDiscovery,
@@ -672,13 +673,27 @@ export async function forwardRequestToExecutionOwner(input: {
 import {
   delay,
   processIsAlive,
-  requestManagerJson,
   requestManagerResponse,
   requireManagerJson,
   safeManagerUrl
 } from './manager-client-support.js'
 export {
   defaultManagerControlDirForTests,
-  requestManagerJson,
   requestManagerResponse
 } from './manager-client-support.js'
+
+export async function requestManagerJson(
+  manager: ServiceManagerConnection,
+  path: string,
+  options: { method?: string; body?: unknown; fetch?: typeof fetch; timeoutMs?: number }
+): Promise<unknown> {
+  const response = await requestManagerResponse(manager, path, options)
+  if (response.status === 409) {
+    const conflict = z.object({
+      code: z.literal('graph_run_conflict'),
+      message: z.string()
+    }).safeParse(await response.clone().json().catch(() => null))
+    if (conflict.success) throw new GraphRunConflictError(conflict.data.message)
+  }
+  return requireManagerJson(response)
+}

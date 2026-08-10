@@ -259,12 +259,18 @@ const subagentsPatchSchema = z
     enabled: z.boolean().optional(),
     useExistingAgents: z.boolean().optional(),
     maxParallel: z.number().int().positive().max(256).optional(),
+    // Compatibility input only. The transform below prevents old persisted or
+    // renderer-supplied cumulative limits from reaching effective settings.
     maxChildRuns: z.number().int().nonnegative().max(10_000).optional(),
     defaultToolPolicy: z.enum(['readOnly', 'inherit']).optional(),
     defaultProfile: z.string().max(128).optional(),
     profiles: z.array(subagentProfilePatchSchema).max(200).optional()
   })
   .passthrough()
+  .transform(({ maxChildRuns: legacyMaxChildRuns, ...effective }) => {
+    void legacyMaxChildRuns
+    return effective
+  })
 
 export const kunRuntimePatchSchema = z.object({
   binaryPath: defaultPathSchema,

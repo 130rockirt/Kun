@@ -39,6 +39,7 @@ function obligation(
     digest: 'Private executor result that must never cross the projection boundary.',
     state,
     deliveryAttempts: 2,
+    consecutiveDeliveryFailures: 0,
     noProgressCount: 0,
     lastProgressSeq: 1,
     createdAt: '2026-07-31T00:00:00.000Z',

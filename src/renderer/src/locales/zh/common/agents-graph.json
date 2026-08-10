@@ -8,7 +8,7 @@
     "delegatableCount": "{{count}} 个可委派角色",
     "configuredCount": "已配置 {{count}}",
     "showingCount": "显示 {{visible}} / {{total}}",
-    "policySummary": "队列与会话上限",
+    "policySummary": "队列与并发",
     "search": "搜索子代理",
     "searchPlaceholder": "搜索名称、能力或场景",
     "clearSearch": "清除搜索",

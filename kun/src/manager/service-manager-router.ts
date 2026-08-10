@@ -16,6 +16,7 @@ import { acquireRuntimeDataDirLease } from '../server/runtime-data-dir-lease.js'
 import { readJsonBody } from '../server/read-json-body.js'
 import { jsonResponse, type JsonResponse } from '../server/response.js'
 import { Router } from '../server/router.js'
+import { GraphRunConflictError } from '../graph/graph-run-store.js'
 import { KUN_VERSION } from '../version.js'
 import {
   KUN_MANAGER_PROTOCOL_VERSION,
@@ -354,6 +355,9 @@ export function buildServiceManagerRouter(input: {
         return jsonResponse({ result })
       } catch (error) {
         if (error instanceof z.ZodError) return validation('invalid graph-store request', error.issues)
+        if (error instanceof GraphRunConflictError) {
+          return jsonResponse({ code: 'graph_run_conflict', message: error.message }, 409)
+        }
         throw error
       }
     }

@@ -26,6 +26,7 @@ import {
   sweepGraphStalls,
   synthesizeGraphRunSummary
 } from './graph-supervisor-runtime-support.js'
+import { startGraphSupervisionDeliveryHeartbeat } from './graph-supervision-delivery-heartbeat.js'
 import { graphSupervisionObligationIsActionable, graphSupervisionSignalForObligation } from './graph-supervision-obligation.js'
 import {
   graphSupervisionProjection,
@@ -51,6 +52,7 @@ type DeferredSupervision = {
   input: SupervisionSignal
   mode: 'signal' | 'redeliver'
 }
+type StopDeliveryHeartbeat = () => Promise<void>
 
 export class GraphSupervisor implements GraphSupervisionPort {
   private started = false
@@ -59,6 +61,7 @@ export class GraphSupervisor implements GraphSupervisionPort {
   private readonly flushes = new Map<string, ActiveFlush>()
   private readonly latestQueuedInputs = new Map<string, SupervisionSignal>()
   private readonly deferred = new Map<string, DeferredSupervision>()
+  private readonly activeDeliveryHeartbeats = new Set<StopDeliveryHeartbeat>()
   private readonly nowIso: () => string
   private readonly nowMs: () => number
   private readonly nextId: (prefix: string) => string
@@ -346,6 +349,7 @@ export class GraphSupervisor implements GraphSupervisionPort {
       () => this.obligations.claim(runId, [...pending.obligationIds])
     )
     if (!claimed || claimed.obligations.length === 0) return
+    if (this.stopped) return
     const { run, obligations } = claimed
     if (!this.options.leadTurn) {
       await this.scheduleDeliveryRetry(
@@ -360,13 +364,26 @@ export class GraphSupervisor implements GraphSupervisionPort {
         (entry.target.kind === 'lead' || entry.target.kind === 'run') &&
         (entry.status === 'persisted' || entry.status === 'delivered'))
       .map((entry) => entry.steeringId)
+    const stopHeartbeat = startGraphSupervisionDeliveryHeartbeat({
+      runId,
+      renew: () => this.obligations.renewDeliveryLeases(runId, obligations)
+    })
+    this.activeDeliveryHeartbeats.add(stopHeartbeat)
     try {
-      const rawDelivery = await this.options.leadTurn({
-        run,
-        reasons: [...pending.reasons],
-        nodeIds: [...pending.nodeIds],
-        digest: pending.digests.join('\n').slice(0, 16_384)
-      })
+      let rawDelivery: GraphLeadDeliveryResult | void
+      try {
+        rawDelivery = await this.options.leadTurn({
+          run,
+          reasons: [...pending.reasons],
+          nodeIds: [...pending.nodeIds],
+          digest: pending.digests.join('\n').slice(0, 16_384)
+        })
+      } finally {
+        // Finish any in-flight renewal before committing the delivery outcome,
+        // so the heartbeat cannot race its own token-fenced state transition.
+        this.activeDeliveryHeartbeats.delete(stopHeartbeat)
+        await stopHeartbeat()
+      }
       const delivery: GraphLeadDeliveryResult = rawDelivery ?? {
         status: 'delivered',
         sourceTurnId: run.sourceTurnId,
@@ -374,15 +391,24 @@ export class GraphSupervisor implements GraphSupervisionPort {
         executionActive: this.options.isLeadTurnActive?.(run) ?? false
       }
       if (delivery.status === 'delivered') {
-        await acknowledgeGraphLeadSteering({
-          store: this.options.store,
-          runId,
-          steeringIds: deliveredSteeringIds,
-          nextId: this.nextId
-        })
-        await this.obligations.recordDelivered(runId, obligations, delivery)
-        if (delivery.parkedWithPendingSupervision || !delivery.executionActive) {
-          await this.rearmAfterNoProgress(runId, obligations.map((entry) => entry.id))
+        // Persist the token-fenced delivery before acknowledging steering. If
+        // steering acknowledgement fails, the catch path cannot move this
+        // awaiting_action obligation backwards; its durable wake drives the
+        // next delivery attempt instead.
+        const recorded = await this.obligations.recordDelivered(runId, obligations, delivery)
+        if (recorded.length > 0) {
+          await acknowledgeGraphLeadSteering({
+            store: this.options.store,
+            runId,
+            steeringIds: deliveredSteeringIds,
+            nextId: this.nextId
+          })
+        }
+        if (
+          recorded.length > 0 &&
+          (delivery.parkedWithPendingSupervision || !delivery.executionActive)
+        ) {
+          await this.rearmAfterNoProgress(runId, recorded.map((entry) => entry.id))
         }
         return
       }
@@ -394,7 +420,7 @@ export class GraphSupervisor implements GraphSupervisionPort {
         await this.obligations.markNeedsAttention(runId, obligations, delivery.reason)
         return
       }
-      await this.obligations.resolve(runId, obligations)
+      await this.obligations.resolveDelivery(runId, obligations)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       await this.scheduleDeliveryRetry(runId, obligations, message)
@@ -433,45 +459,16 @@ export class GraphSupervisor implements GraphSupervisionPort {
     obligationId?: string,
     idempotencyKey?: string
   ): Promise<GraphRunV1 | null> {
-    const run = await this.options.store.get(runId)
-    if (!run) return null
-    if (isTerminalRunStatus(run.status)) return run
-    const targets = run.supervisionObligations.filter((obligation) =>
-      obligation.state !== 'resolved' &&
-      (!obligationId || obligation.id === obligationId))
-    for (const obligation of targets) {
-      const updated = await this.obligations.update(
-        runId,
-        obligation.id,
-        (_latest, current) => {
-          if (current.state === 'resolved') return null
-          if (current.state === 'delivering' && futureGraphTimestamp(current.leaseUntil, this.nowMs())) {
-            return null
-          }
-          if (
-            current.state === 'awaiting_action' &&
-            this.options.isLeadTurnActive?.(_latest)
-          ) return null
-          const next = {
-            ...current,
-            state: 'retry_scheduled' as const,
-            nextWakeAt: this.nowIso(),
-            updatedAt: this.nowIso()
-          }
-          delete next.leaseUntil
-          return next
-        },
-        'manual-wake',
-        idempotencyKey
-          ? `manual-wake:${idempotencyKey}:${obligation.id}`
-          : undefined
+    const queued = await this.withRunQueue(
+      runId,
+      () => this.obligations.wake(runId, obligationId, idempotencyKey)
+    )
+    if (queued === null) return null
+    for (const obligation of queued) {
+      this.queuePending(
+        graphSupervisionSignalForObligation(runId, obligation),
+        [obligation.id]
       )
-      if (updated?.changed) {
-        this.queuePending(
-          graphSupervisionSignalForObligation(runId, updated.obligation),
-          [updated.obligation.id]
-        )
-      }
     }
     return this.options.store.get(runId)
   }
@@ -592,16 +589,17 @@ export class GraphSupervisor implements GraphSupervisionPort {
           continue
         }
         if (!graphSupervisionObligationIsActionable(run, obligation)) {
+          if (
+            run.status === 'awaiting_human' &&
+            run.supervisionObligations.some((entry) =>
+              entry.state === 'needs_attention')
+          ) continue
           await this.obligations.resolve(run.id, [obligation])
           continue
         }
         if (obligation.state === 'delivering') {
           if (!futureGraphTimestamp(obligation.leaseUntil, this.nowMs())) {
-            await this.obligations.scheduleRetry(
-              run.id,
-              [obligation],
-              'Graph supervision delivery lease expired.'
-            )
+            await this.obligations.expireDeliveryLeases(run.id, [obligation])
           }
           continue
         }
@@ -640,6 +638,9 @@ export class GraphSupervisor implements GraphSupervisionPort {
 
   async stop(): Promise<void> {
     this.stopped = true
+    const stoppingHeartbeats = [...this.activeDeliveryHeartbeats]
+      .map((stopHeartbeat) => stopHeartbeat())
+    this.activeDeliveryHeartbeats.clear()
     this.quiesceReviews()
     if (this.sweepTimer) clearInterval(this.sweepTimer)
     if (this.obligationSweepTimer) clearInterval(this.obligationSweepTimer)
@@ -648,6 +649,7 @@ export class GraphSupervisor implements GraphSupervisionPort {
     this.clearPending()
     this.latestQueuedInputs.clear()
     this.deferred.clear()
+    await Promise.allSettled(stoppingHeartbeats)
     await Promise.allSettled([
       ...this.queues.values(),
       ...[...this.flushes.values()].map((state) => state.promise)
