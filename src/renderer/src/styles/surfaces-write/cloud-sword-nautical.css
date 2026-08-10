@@ -317,15 +317,8 @@ html[data-ui-plugin="lv-dongbin-cloud-sword"] .ds-composer-primary-action {
 }
 
 html[data-ui-plugin="lv-dongbin-cloud-sword"] .ds-composer-footer {
-  border-color: #a87934;
-  border-top-color: #123b35;
-  background:
-    repeating-linear-gradient(
-      135deg,
-      rgba(221, 190, 125, 0.055) 0 2px,
-      transparent 2px 10px
-    ),
-    linear-gradient(180deg, #1b5048, #0d342f);
+  border-top-color: rgba(168, 121, 52, 0.5);
+  background: rgba(13, 52, 47, 0.24);
   color: #e8d8ae;
 }
 

@@ -173,10 +173,6 @@
     width: 2rem;
   }
 
-  .ds-composer-footer {
-    margin-top: 0.25rem;
-    min-height: 1.5rem;
-  }
 }
 
 @container (max-width: 520px) {
@@ -244,36 +240,8 @@
   min-width: 0;
 }
 
-.ds-composer-footer {
-  flex-wrap: nowrap;
-  overflow: visible;
-}
-
-.ds-composer-footer-left {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
 .ds-git-branch-picker {
   max-width: 100%;
-}
-
-.ds-composer-usage {
-  flex: 0 1 auto;
-  width: max-content;
-}
-
-.ds-composer-usage-tokens {
-  min-width: 0;
-}
-
-.ds-composer-footer-hint {
-  flex: 0 1 auto;
-  max-width: min(14rem, 34%);
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 /*
@@ -354,24 +322,8 @@
     display: none;
   }
 
-  .ds-composer-footer {
-    padding-inline: 0.5rem;
-  }
-
-  .ds-composer-footer-left {
-    flex-basis: 100%;
-  }
-
-  .ds-composer-footer-hint {
-    display: none;
-  }
-
   .ds-git-branch-picker {
     flex: 1 1 180px;
-  }
-
-  .ds-composer-usage {
-    flex: 0 1 100%;
   }
 }
 
@@ -393,36 +345,8 @@
 
 }
 
-@container (max-width: 620px) {
-  .ds-composer-usage-cost,
-  .ds-composer-usage-cost-separator {
-    display: none;
-  }
-}
-
-@container (max-width: 520px) {
-  .ds-composer-usage-cache,
-  .ds-composer-usage-cache-separator {
-    display: none;
-  }
-}
-
-@container (max-width: 440px) {
-  .ds-composer-usage-context-savings,
-  .ds-composer-usage-context-savings-separator {
-    display: none;
-  }
-}
-
 @container (max-width: 390px) {
   .ds-composer-intent-label {
-    display: none;
-  }
-}
-
-@container (max-width: 360px) {
-  .ds-composer-usage-turns,
-  .ds-composer-usage-turns-separator {
     display: none;
   }
 }

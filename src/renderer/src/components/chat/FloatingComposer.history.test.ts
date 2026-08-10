@@ -179,6 +179,7 @@ describe('FloatingComposer input history and shortcut hint', () => {
       const html = renderToStaticMarkup(createElement(FloatingComposer, baseComposerProps()))
       expect(html).toContain('Enter to send · Shift+Enter for newline')
       expect(html).toContain('Ask the agent… (Shift+Enter for newline)')
+      expect(html.indexOf('ds-chat-composer')).toBeLessThan(html.indexOf('ds-composer-footer'))
     } finally {
       await i18n.changeLanguage(previousLanguage)
     }

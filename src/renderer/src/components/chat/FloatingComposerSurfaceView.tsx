@@ -1,6 +1,7 @@
 import type { ReactElement } from 'react'
 import type { ComposerFileReference } from '../../lib/composer-file-references'
 import type { DesignComposerContext } from '../../design/design-composer-context'
+import { FloatingComposerFooterView } from './FloatingComposerFooterView'
 import type { FloatingComposerRenderContext } from './floating-composer-view-context'
 
 export function FloatingComposerSurfaceView({
@@ -435,6 +436,7 @@ export function FloatingComposerSurfaceView({
               )}
             </div>
           </div>
+          <FloatingComposerFooterView context={context} />
         </div>
     </>
   )

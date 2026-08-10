@@ -151,7 +151,6 @@ import { useFloatingComposerActions } from './use-floating-composer-actions'
 import type { FloatingComposerRenderContext } from './floating-composer-view-context'
 import { FloatingComposerStackView } from './FloatingComposerStackView'
 import { FloatingComposerSurfaceView } from './FloatingComposerSurfaceView'
-import { FloatingComposerFooterView } from './FloatingComposerFooterView'
 
 export type { ComposerFileReference } from '../../lib/composer-file-references'
 export type { ComposerExecutionSettings } from './FloatingComposerExecutionPicker'
@@ -679,7 +678,6 @@ export function FloatingComposer({
         <FloatingComposerStackView context={renderContext} />
         <FloatingComposerSurfaceView context={renderContext} />
       </div>
-      <FloatingComposerFooterView context={renderContext} />
     </div>
   )
 }

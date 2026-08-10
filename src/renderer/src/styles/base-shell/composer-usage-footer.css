@@ -1,0 +1,113 @@
+.ds-composer-footer {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  height: 3.25rem;
+  min-width: 0;
+  margin: 0.25rem -0.75rem -0.5rem;
+  padding: 0.5rem 0.75rem;
+  overflow: hidden;
+  border-top: 1px solid var(--ds-border-muted);
+}
+
+.ds-composer-footer-left {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.ds-composer-usage {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  height: 2.25rem;
+  padding: 0 0.375rem;
+  overflow: hidden;
+  border: 0;
+  border-radius: 0.5rem;
+  background: transparent;
+  color: var(--ds-muted);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  line-height: 1.25rem;
+  white-space: nowrap;
+  transition: background-color 140ms ease, color 140ms ease;
+}
+
+.ds-composer-usage:hover {
+  background: var(--ds-hover);
+  color: var(--ds-ink);
+}
+
+.ds-composer-usage:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ds-accent) 30%, transparent);
+}
+
+.ds-composer-usage-label {
+  margin-left: 0.375rem;
+  color: var(--ds-muted);
+}
+
+.ds-composer-usage-metric {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  margin-left: 0.75rem;
+  padding-left: 0.75rem;
+  border-left: 1px solid color-mix(in srgb, var(--ds-border-muted) 88%, transparent);
+  color: var(--ds-ink);
+}
+
+.ds-composer-usage-cache {
+  gap: 0.375rem;
+}
+
+.ds-composer-usage-cache-indicator {
+  width: 0.375rem;
+  height: 0.375rem;
+  flex: 0 0 auto;
+  border-radius: 9999px;
+  background: var(--ds-accent);
+}
+
+.ds-composer-footer-hint {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: min(22rem, 38%);
+  overflow: hidden;
+  color: var(--ds-faint);
+  font-size: 0.78125rem;
+  font-weight: 500;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@container (max-width: 760px) {
+  .ds-composer-footer-hint {
+    display: none;
+  }
+}
+
+@container (max-width: 640px) {
+  .ds-composer-usage-label {
+    display: none;
+  }
+}
+
+@container (max-width: 560px) {
+  .ds-composer-usage-ttft,
+  .ds-composer-usage-tps {
+    display: none;
+  }
+}
+
+@container (max-width: 460px) {
+  .ds-composer-usage-turns {
+    display: none;
+  }
+}
