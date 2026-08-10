@@ -195,18 +195,37 @@ export function registerMainIpc(services: MainServices): void {
     }
 
     const fetchModels = async () => {
-      const settings = await withRegistryCredentials(await mainState.store.load())
-      const shared = await runtimeRequest(settings, '/v1/model-connections', { method: 'GET' })
-      if (shared.ok) {
-        try {
-          const live = modelListFromSharedConnections(
-            JSON.parse(shared.body) as unknown,
-            getModelProviderSettings(settings).localGateway.name
-          )
-          if (live) return live
-        } catch {
-          // Fall back to the compatibility settings projection below.
+      const storedSettings = await mainState.store.load()
+      let settings = storedSettings
+      try {
+        settings = await withRegistryCredentials(storedSettings)
+      } catch (error) {
+        // Model names are not secret. Retain the saved catalog while a
+        // protected credential read is temporarily unavailable, rather than
+        // making the composer claim that every provider is unconfigured.
+        logWarn('upstream-models', 'Falling back to saved model catalog after credential projection failed.', {
+          message: error instanceof Error ? error.message : String(error)
+        })
+      }
+      try {
+        const shared = await runtimeRequest(settings, '/v1/model-connections', { method: 'GET' })
+        if (shared.ok) {
+          try {
+            const live = modelListFromSharedConnections(
+              JSON.parse(shared.body) as unknown,
+              getModelProviderSettings(settings).localGateway.name
+            )
+            if (live) return live
+          } catch {
+            // Fall back to the compatibility settings projection below.
+          }
         }
+      } catch (error) {
+        // The runtime can be restarting while the renderer opens. The saved
+        // model catalog keeps the picker usable until the next live sync.
+        logWarn('upstream-models', 'Falling back to saved model catalog after runtime lookup failed.', {
+          message: error instanceof Error ? error.message : String(error)
+        })
       }
       const key = resolveConfiguredApiKey(settings)
       return fetchUpstreamModelIds(settings, key)
