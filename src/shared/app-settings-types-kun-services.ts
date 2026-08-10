@@ -207,6 +207,14 @@ export type KunToolArgumentRepairSettingsV1 = {
   maxStringBytes: number
 }
 
+export type KunInterruptedTurnResumeSettingsV1 = {
+  /**
+   * Auto-resume ordinary threads (no active goal) whose turn was interrupted
+   * by a runtime restart or host shutdown. Defaults to true.
+   */
+  enabled: boolean
+}
+
 export type KunRuntimeTuningSettingsV1 = {
   /** Tracks one-time migrations when runtime tuning defaults change. */
   defaultsVersion: number
@@ -224,6 +232,7 @@ export type KunRuntimeTuningSettingsV1 = {
   streamIdleTimeoutMs: number
   toolStorm: KunToolStormSettingsV1
   toolArgumentRepair: KunToolArgumentRepairSettingsV1
+  interruptedTurnResume: KunInterruptedTurnResumeSettingsV1
 }
 
 export type KunLlmDebugSettingsV1 = {
@@ -250,6 +259,7 @@ export type KunRuntimeTuningSettingsPatchV1 = {
   streamIdleTimeoutMs?: number
   toolStorm?: Partial<KunToolStormSettingsV1>
   toolArgumentRepair?: Partial<KunToolArgumentRepairSettingsV1>
+  interruptedTurnResume?: Partial<KunInterruptedTurnResumeSettingsV1>
 }
 
 export type KunTokenEconomySettingsPatchV1 = Partial<

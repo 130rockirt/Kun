@@ -136,6 +136,7 @@ export async function runInteractiveProviderCli(
 function appendItem(lines: string[], item: TurnItem): void {
   switch (item.kind) {
     case 'goal_context':
+    case 'interruption_note':
       // Internal model context is intentionally absent from exports.
       break
     case 'user_message':

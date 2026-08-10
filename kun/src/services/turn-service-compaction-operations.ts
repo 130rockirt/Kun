@@ -63,6 +63,8 @@ async compact(this: TurnService, input: {
     turnId?: string
     request: CompactRequest
     signal?: AbortSignal
+    /** Marks this compaction as automatic (memory-pressure sweep), not user-requested. */
+    auto?: boolean
   }): Promise<CompactResponse> {
     const thread = await this['deps'].threadStore.get(input.threadId)
     if (!thread) throw new Error(`thread not found: ${input.threadId}`)
@@ -97,9 +99,9 @@ async compact(this: TurnService, input: {
           budgetTokens: input.request.budgetTokens,
           reason: input.request.reason,
           summaryItemId,
-          // Mark this as a user-requested (`/compact`) compaction so the GUI
-          // renders it as a manual rather than automatic compaction.
-          auto: false
+          // `auto` marks a memory-pressure sweep; `false` marks a user-run
+          // (`/compact`) compaction so the GUI renders the right kind.
+          auto: input.auto === true
         })
         if (result.replacedTokens === 0) {
           return { changed: false, items: snapshot.items, value: result }
@@ -113,7 +115,7 @@ async compact(this: TurnService, input: {
             threadId: input.threadId,
             turnId,
             itemId: result.summaryItem.id,
-            auto: false
+            auto: input.auto === true
           })
         }
         // A conflicting model-backed summary describes the old snapshot, so
@@ -216,7 +218,7 @@ async compact(this: TurnService, input: {
               prefix,
               budgetTokens: input.request.budgetTokens,
               reason: input.request.reason,
-              auto: false,
+              auto: input.auto === true,
               summaryOverride: modelSummary,
               summaryItemId
             })
@@ -253,7 +255,7 @@ async compact(this: TurnService, input: {
         itemId: result.summaryItem.id,
         summary: result.summaryItem.kind === 'compaction' ? result.summaryItem.summary : '',
         replacedTokens: result.replacedTokens,
-        auto: false,
+        auto: input.auto === true,
         pinnedConstraints: prefix.pinnedConstraints,
         ...(result.summaryItem.kind === 'compaction' && result.summaryItem.sourceDigest
           ? { sourceDigest: result.summaryItem.sourceDigest }

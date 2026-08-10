@@ -124,6 +124,7 @@ function timelinePreviewItem(item: TurnItem, maxBytes: number): TurnItem {
         details: { __timelineTruncated: true }
       }
     case 'goal_context':
+    case 'interruption_note':
       return item
   }
 }
@@ -206,6 +207,15 @@ function minimalTimelineItem(item: TurnItem): TurnItem {
         kind: item.kind,
         role: 'system',
         status: 'completed',
+        text: marker
+      }
+    case 'interruption_note':
+      return {
+        ...minimalTimelineItemBase(item),
+        kind: item.kind,
+        role: 'system',
+        status: 'completed',
+        sourceTurnId: truncateText(item.sourceTurnId, 1_024),
         text: marker
       }
   }

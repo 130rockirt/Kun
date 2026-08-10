@@ -38,6 +38,7 @@ function fewShotText(item: TurnItem): string {
   switch (item.kind) {
     case 'user_message':
     case 'goal_context':
+    case 'interruption_note':
     case 'assistant_text':
     case 'assistant_reasoning':
       return item.text

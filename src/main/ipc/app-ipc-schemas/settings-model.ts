@@ -344,6 +344,9 @@ export const kunRuntimePatchSchema = z.object({
     }).strict().optional(),
     toolArgumentRepair: z.object({
       maxStringBytes: z.number().int().positive().max(16 * 1024 * 1024).optional()
+    }).strict().optional(),
+    interruptedTurnResume: z.object({
+      enabled: z.boolean().optional()
     }).strict().optional()
   }).strict().optional(),
   llmDebug: z.object({

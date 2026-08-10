@@ -309,6 +309,9 @@ export function normalizeKunRuntimeTuningSettings(
         defaults.toolArgumentRepair.maxStringBytes,
         16 * 1024 * 1024
       )
+    },
+    interruptedTurnResume: {
+      enabled: migrated.interruptedTurnResume?.enabled !== false
     }
   }
 }

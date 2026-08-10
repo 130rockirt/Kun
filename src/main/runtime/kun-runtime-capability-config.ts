@@ -175,6 +175,10 @@ export function runtimeTuningConfigForRuntime(
     toolArgumentRepair: {
       ...objectValue(existing.toolArgumentRepair),
       maxStringBytes: value.toolArgumentRepair.maxStringBytes
+    },
+    interruptedTurnResume: {
+      ...objectValue(existing.interruptedTurnResume),
+      enabled: value.interruptedTurnResume.enabled
     }
   }
 }

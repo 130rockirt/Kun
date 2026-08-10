@@ -186,6 +186,34 @@ export const RuntimeTuningConfigSchema = z
       })
       .strict()
       .optional(),
+    /**
+     * Auto-resume ordinary threads (no active goal) whose turn was
+     * interrupted by a runtime restart or host shutdown. Defaults to enabled;
+     * set `enabled: false` to require the user to manually ask the agent to
+     * continue.
+     */
+    interruptedTurnResume: z
+      .object({
+        enabled: z.boolean().optional()
+      })
+      .strict()
+      .optional(),
+    /**
+     * kun serve memory-pressure monitor. Level 1 (warnRssBytes) folds idle
+     * thread histories via automatic compaction; level 2 (criticalRssBytes)
+     * requests a graceful shutdown so running turns are suspended and resumed
+     * after restart instead of being hard-killed by OOM.
+     */
+    memoryPressure: z
+      .object({
+        enabled: z.boolean().optional(),
+        pollIntervalMs: PositiveInt.max(3_600_000).optional(),
+        warnRssBytes: z.number().int().positive().max(2 ** 53).optional(),
+        criticalRssBytes: z.number().int().positive().max(2 ** 53).optional(),
+        maxCompactionsPerSweep: PositiveInt.max(64).optional()
+      })
+      .strict()
+      .optional(),
     /** Hard runtime bounds for native and delegated Agent SDK turns. */
     turnLimits: z
       .object({

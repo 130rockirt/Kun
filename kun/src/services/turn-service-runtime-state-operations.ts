@@ -39,7 +39,7 @@ import {
 } from '../loop/compaction-summary.js'
 import type { ContextCompactionConfig } from '../loop/model-context-profile.js'
 import { reserveExtensionModelRequest } from '../loop/turn-budget-gate.js'
-import { makeGoalContextItem, makeUserItem, makeErrorItem } from '../domain/item.js'
+import { makeGoalContextItem, makeUserItem, makeErrorItem, makeInterruptionNoteItem } from '../domain/item.js'
 import { appendTurnItem, createTurnRecord, finishTurn, replaceTurnItem, startTurn as startTurnRecord } from '../domain/turn.js'
 import { finalizeTurnItems } from '../domain/turn-item-finalization.js'
 import { touchThread } from '../domain/thread.js'
@@ -53,7 +53,8 @@ import { ThreadItemProjectionService } from './thread-item-projection.js'
 import { ComposerContextAttachmentSchema } from '../contracts/composer-context.js'
 import {
   goalContextInstruction,
-  goalContextKey
+  goalContextKey,
+  buildInterruptionNoteText
 } from '../loop/continuation-instructions.js'
 import { type TurnService, type TurnServiceDeps, TurnConflictError, TurnCapacityError, type TerminalTurnStatus, type TurnSettlement, type GraphLeadSuspensionResult, type GraphLeadResumeResult, HOST_SHUTDOWN_TURN_SUSPENSION_CODE, hostShutdownTurnSuspensionReason, isHostShutdownTurnSuspension, DEFAULT_MAX_CONCURRENT_TURNS, fingerprintStartTurnRequest, canonicalizeFingerprintValue, isActiveTurn, terminalStatus, threadStatusFromTurns, threadStatusAfterTurnTransition, normalizeMaxConcurrentTurns, firstNonBlank, modelForManualCompaction } from './turn-service-core.js'
 
@@ -123,6 +124,9 @@ async reconcileOrphanedTurns(this: TurnService): Promise<string[]> {
       })
       const thread = await this['deps'].threadStore.get(summary.id).catch(() => null)
       if (!thread) continue
+      // Load once per thread: the interrupted turn's checkpoint is derived
+      // from its persisted items (intent, progress, completed tool work).
+      const sessionItems = await this['deps'].sessionStore.loadItems(summary.id).catch(() => [])
       for (const turn of thread.turns) {
         if (turn.status !== 'running' && turn.status !== 'queued') continue
         if (this['inflightTurns'].has(turn.id)) continue
@@ -181,6 +185,14 @@ async reconcileOrphanedTurns(this: TurnService): Promise<string[]> {
             severity: 'warning'
           })
           reconciledThreadIds.add(thread.id)
+          // Persist a model-visible checkpoint so the auto-resumed turn can
+          // pick up where the work stopped without the user repeating it.
+          await recordInterruptionCheckpoint(this, {
+            threadId: thread.id,
+            turnId: turn.id,
+            fallbackPrompt: turn.prompt,
+            sessionItems
+          })
         } catch {
           // Best-effort sweep; one unreadable thread must not stop the rest.
         }
@@ -305,4 +317,107 @@ async updateTurnMetadata(this: TurnService,
       )
     }))
   },
+}
+
+/**
+ * Best-effort, model-visible checkpoint for one interrupted turn. Writes an
+ * `interruption_note` internal record (replacing any older note on the same
+ * thread) so an auto-resumed turn can continue the original request without
+ * the user repeating it. Never touches the renderer projection: the note is
+ * canonical session history only, exactly like `goal_context`.
+ */
+async function recordInterruptionCheckpoint(
+  service: TurnService,
+  input: {
+    threadId: string
+    turnId: string
+    fallbackPrompt: string
+    sessionItems: TurnItem[]
+  }
+): Promise<void> {
+  const noteText = buildInterruptionNoteText(extractInterruptionSummary(input))
+  if (!noteText.trim()) return
+  const now = service['deps'].nowIso()
+  const note = makeInterruptionNoteItem({
+    id: `item_${input.turnId}_interruption_note`,
+    turnId: input.turnId,
+    threadId: input.threadId,
+    sourceTurnId: input.turnId,
+    text: noteText,
+    createdAt: now
+  })
+  try {
+    await rewriteItemHistoryWithRetry({
+      sessionStore: service['deps'].sessionStore,
+      threadId: input.threadId,
+      maxAttempts: 2,
+      build: (snapshot) => {
+        const withoutNotes = snapshot.items.filter((item) => item.kind !== 'interruption_note')
+        return {
+          changed: withoutNotes.length !== snapshot.items.length,
+          items: [...withoutNotes, note],
+          value: undefined
+        }
+      }
+    })
+  } catch (error) {
+    console.warn(
+      `[kun] interruption checkpoint write failed for ${input.threadId}: ` +
+      `${error instanceof Error ? error.message : String(error)}`
+    )
+  }
+}
+
+const MAX_INTERRUPTION_TOOL_DETAIL_CHARS = 240
+const MAX_INTERRUPTION_TOOL_CALLS = 8
+
+function extractInterruptionSummary(input: {
+  turnId: string
+  fallbackPrompt: string
+  sessionItems: TurnItem[]
+}): {
+  userRequest: string
+  lastAssistantText?: string
+  recentToolCalls: Array<{ toolName: string; detail: string }>
+} {
+  const turnItems = input.sessionItems.filter((item) => item.turnId === input.turnId)
+  let userRequest = ''
+  for (const item of turnItems) {
+    if (item.kind === 'user_message' && item.text.trim()) {
+      userRequest = item.text.trim()
+      break
+    }
+  }
+  if (!userRequest) userRequest = input.fallbackPrompt.trim()
+  let lastAssistantText = ''
+  for (let index = turnItems.length - 1; index >= 0; index -= 1) {
+    const item = turnItems[index]
+    if (item.kind === 'assistant_text' && item.text.trim()) {
+      lastAssistantText = item.text.trim()
+      break
+    }
+  }
+  const recentToolCalls: Array<{ toolName: string; detail: string }> = []
+  const seenCallIds = new Set<string>()
+  for (const item of turnItems) {
+    if (item.kind !== 'tool_call' || item.status !== 'completed') continue
+    if (seenCallIds.has(item.callId)) continue
+    seenCallIds.add(item.callId)
+    const rawDetail = item.summary?.trim() || JSON.stringify(item.arguments)
+    recentToolCalls.push({
+      toolName: item.toolName,
+      detail: boundText(rawDetail, MAX_INTERRUPTION_TOOL_DETAIL_CHARS)
+    })
+    if (recentToolCalls.length >= MAX_INTERRUPTION_TOOL_CALLS) break
+  }
+  return {
+    userRequest,
+    ...(lastAssistantText ? { lastAssistantText } : {}),
+    recentToolCalls
+  }
+}
+
+function boundText(value: string, maxChars: number): string {
+  if (value.length <= maxChars) return value
+  return `${value.slice(0, maxChars)}…`
 }

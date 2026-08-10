@@ -275,6 +275,9 @@ export async function createRuntimeAgentComposition(
 	    ...(core.activeOptions.runtime?.toolStorm ? { toolStorm: core.activeOptions.runtime.toolStorm } : {}),
 	    ...(core.activeOptions.runtime?.turnLimits ? { turnLimits: core.activeOptions.runtime.turnLimits } : {}),
 	    ...(core.activeOptions.runtime?.toolArgumentRepair ? { toolArgumentRepair: core.activeOptions.runtime.toolArgumentRepair } : {}),
+	    ...(core.activeOptions.runtime?.interruptedTurnResume
+	      ? { interruptedResume: core.activeOptions.runtime.interruptedTurnResume }
+	      : {}),
 	    ...(services.resolvedHooks.length ? { hooks: services.resolvedHooks } : {}),
 		    ...(services.attachmentStore ? { attachmentStore: services.attachmentStore } : {}),
 	    artifactStore,

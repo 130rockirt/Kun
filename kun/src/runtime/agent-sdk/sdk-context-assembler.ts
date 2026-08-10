@@ -151,13 +151,15 @@ function isTerminal(item: TurnItem): boolean {
 }
 
 function renderChunk(items: readonly TurnItem[]): string {
-  // goal_context is intentionally an internal item. Keep it in the delegated
-  // provider transcript without making generic session summaries expose it to
-  // public clients.
+  // Internal records are intentionally model-only. Keep them in the delegated
+  // provider transcript without making generic session summaries expose them
+  // to public clients.
   return items
     .map((item) => item.kind === 'goal_context'
       ? `[active goal] ${item.text.trim()}`
-      : buildSessionTranscript([item], 16 * 1024 * 1024).trim())
+      : item.kind === 'interruption_note'
+        ? `[interrupted task note] ${item.text.trim()}`
+        : buildSessionTranscript([item], 16 * 1024 * 1024).trim())
     .filter((line) => line.length > 0)
     .join('\n')
     .trim()

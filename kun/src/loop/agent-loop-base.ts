@@ -27,6 +27,9 @@ import {
   GoalTurnCoordinator
 } from './goal-turn-coordinator.js'
 import {
+  InterruptedTurnCoordinator
+} from './interrupted-turn-coordinator.js'
+import {
   type TurnLifecycleHookDeps
 } from './turn-lifecycle-hooks.js'
 import {
@@ -78,6 +81,7 @@ export abstract class AgentLoopBase {
     signal: AbortSignal | undefined
   }>()
   protected readonly goalTurns: GoalTurnCoordinator
+  protected readonly interruptedTurns: InterruptedTurnCoordinator
 
   abstract runTurn(threadId: string, turnId: string): Promise<TurnRunOutcome>
 
@@ -129,6 +133,15 @@ export abstract class AgentLoopBase {
       nowMs: () => opts.nowMs?.() ?? Date.now(),
       runTurn: (threadId, turnId) => this.runTurn(threadId, turnId),
       ...(opts.goalResume ? { goalResume: opts.goalResume } : {})
+    })
+    this.interruptedTurns = new InterruptedTurnCoordinator({
+      threadStore: opts.threadStore,
+      turns: opts.turns,
+      events: opts.events,
+      nowIso: opts.nowIso,
+      nowMs: () => opts.nowMs?.() ?? Date.now(),
+      runTurn: (threadId, turnId) => this.runTurn(threadId, turnId),
+      ...(opts.interruptedResume ? { interruptedResume: opts.interruptedResume } : {})
     })
     this.modelRoundEngine = new ModelRoundEngine({
       model: opts.model,
@@ -235,6 +248,21 @@ export abstract class AgentLoopBase {
   /** Cancel any pending goal auto-resume timers (called on runtime shutdown). */
   shutdownGoalResume(): void {
     this.goalTurns.shutdown()
+  }
+
+  /** Cancel any pending interrupted-turn resume timers (runtime shutdown). */
+  shutdownInterruptedResume(): void {
+    this.interruptedTurns.shutdown()
+  }
+
+  /**
+   * Resume ordinary threads whose in-flight turn was interrupted by a runtime
+   * restart (no active goal — goal threads use `resumeInterruptedGoals`).
+   * Gated by the per-thread cooldown and the master switch so a crash loop
+   * cannot burn model budget by resuming the same thread on every boot.
+   */
+  async resumeInterruptedTurns(threadIds: readonly string[]): Promise<number> {
+    return this.interruptedTurns.resumeInterruptedTurns(threadIds)
   }
 
   /**

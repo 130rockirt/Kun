@@ -10,6 +10,43 @@ export function goalContinuationInstruction(goal: ThreadGoal | undefined): strin
 }
 
 /**
+ * Model-visible checkpoint text written when a turn is interrupted by a
+ * runtime restart or host shutdown. It lets an auto-resumed turn pick up
+ * where the work stopped instead of asking the user to repeat the request.
+ * The summary is deliberately compact (bounded parts) so it stays cheap in
+ * the cache prefix and survives compaction like goal context.
+ */
+export function buildInterruptionNoteText(input: {
+  /** First non-empty user request of the interrupted turn (fallback: turn prompt). */
+  userRequest: string
+  /** Last non-empty assistant text before the interruption. */
+  lastAssistantText?: string
+  /** Recently completed tool calls: toolName + bounded summary/arguments. */
+  recentToolCalls: Array<{ toolName: string; detail: string }>
+}): string {
+  const parts = [
+    'The task in this conversation was interrupted before it was finished (the runtime stopped or restarted).',
+    'Continue the original request below instead of asking the user to repeat it.',
+    'Review the conversation history, verify the current state, and pick up where the work left off.',
+    'If the requested end state is already achieved, verify it against the actual state and report completion.',
+    '',
+    '<original_request>',
+    escapeXmlText(input.userRequest),
+    '</original_request>'
+  ]
+  if (input.lastAssistantText?.trim()) {
+    parts.push('', 'Latest progress before the interruption:', '', escapeXmlText(input.lastAssistantText.trim()))
+  }
+  if (input.recentToolCalls.length > 0) {
+    parts.push('', 'Recently completed tool work:')
+    for (const call of input.recentToolCalls.slice(0, 8)) {
+      parts.push(`- ${escapeXmlText(call.toolName)}: ${escapeXmlText(call.detail)}`)
+    }
+  }
+  return parts.join('\n')
+}
+
+/**
  * Stable model history for an active goal. Runtime token/time accounting is
  * intentionally absent: it changes on every model step and belongs to the
  * host's budget gate, not a cache-sensitive prompt snapshot.

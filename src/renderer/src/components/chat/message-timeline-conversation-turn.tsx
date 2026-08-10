@@ -79,6 +79,7 @@ export function ConversationTurn({
   const { t } = useTranslation('common')
   const forkThreadFromTurn = useChatStore((s) => s.forkThreadFromTurn)
   const rollbackWorkspaceToCheckpoint = useChatStore((s) => s.rollbackWorkspaceToCheckpoint)
+  const sendMessage = useChatStore((s) => s.sendMessage)
   const [forking, setForking] = useState(false)
   const [rollingBackCheckpointId, setRollingBackCheckpointId] = useState<string | null>(null)
   // Inline Review Plan card: surfaced under a turn that produced a
@@ -301,7 +302,17 @@ export function ConversationTurn({
       ))}
 
       {runtimeErrorBlocks.map((block) => (
-        <TimelineRuntimeError key={block.id} block={block} />
+        <TimelineRuntimeError
+          key={block.id}
+          block={block}
+          onContinue={
+            !isProcessing && allowMainThreadActions
+              ? () => {
+                  void sendMessage(t('continueInterruptedTaskPrompt'))
+                }
+              : undefined
+          }
+        />
       ))}
 
       {!isProcessing && devPreviewCard ? devPreviewCard : null}

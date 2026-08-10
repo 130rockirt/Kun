@@ -238,6 +238,9 @@ describe('syncGuiManagedKunConfig', () => {
           },
           toolArgumentRepair: {
             maxStringBytes: 262144
+          },
+          interruptedTurnResume: {
+            enabled: true
           }
         },
         mcpSearch: {

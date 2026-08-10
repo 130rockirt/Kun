@@ -553,8 +553,9 @@ function boundedProjection(items: TurnItem[]): Array<Record<string, unknown>> {
   let retainedChars = 0
   for (const item of items) {
     // Internal model history must not enter Graph's user-visible supervision
-    // transcript. Goal context has a separate durable record in the session.
-    if (item.kind === 'goal_context') continue
+    // transcript. Goal context and interruption checkpoints have their own
+    // durable records in the session.
+    if (item.kind === 'goal_context' || item.kind === 'interruption_note') continue
     const projected = projectItem(item)
     const chars = JSON.stringify(projected).length
     if (retainedChars + chars > MAX_PROJECTION_CHARS) break
@@ -575,6 +576,7 @@ function projectItem(item: TurnItem): Record<string, unknown> {
   }
   switch (item.kind) {
     case 'goal_context':
+    case 'interruption_note':
       return base
     case 'user_message':
     case 'assistant_text':
