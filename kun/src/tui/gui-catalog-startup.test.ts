@@ -7,11 +7,14 @@ import {
 } from './gui-catalog-startup.js'
 
 const settings = {
+  settingsPath: '/tmp/kun-settings.json',
   dataDir: '/tmp/kun-data',
+  defaultModel: '',
+  defaultProviderId: '',
   providers: [],
-  model: '',
-  providerId: ''
-} as GuiSharedSettings
+  legacyRuntimePort: 18899,
+  legacyRuntimeToken: ''
+} satisfies GuiSharedSettings
 
 const syncResult = {
   changed: true,

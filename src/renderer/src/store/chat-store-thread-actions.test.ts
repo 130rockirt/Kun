@@ -154,6 +154,7 @@ describe('chat-store-thread-actions queued messages', () => {
     const pendingSettings = deferredValue<{
       agents: { kun: { providerId: string; model: string } }
       codePromptPrefix: string
+      chatWelcomeMessage: string
     }>()
     const sendUserMessage = vi.fn()
     registryMock.getProvider.mockReturnValue({
@@ -185,7 +186,7 @@ describe('chat-store-thread-actions queued messages', () => {
     state.route = 'chat'
     pendingSettings.resolve({
       agents: { kun: { providerId: 'deepseek', model: 'deepseek-v4-pro' } },
-      codePromptPrefix: ''
+      codePromptPrefix: '',
       chatWelcomeMessage: ''
     })
 
@@ -209,7 +210,7 @@ describe('chat-store-thread-actions queued messages', () => {
       kunGui: {
         getSettings: vi.fn(async () => ({
           agents: { kun: { providerId: 'deepseek', model: 'deepseek-v4-pro' } },
-          codePromptPrefix: ''
+          codePromptPrefix: '',
           chatWelcomeMessage: ''
         })),
         workspaceDirectoryExists: vi.fn(async () => true),
