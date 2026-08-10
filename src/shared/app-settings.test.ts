@@ -41,6 +41,9 @@ import {
   normalizeAppSettings,
   KUN_RUNTIME_TUNING_DEFAULTS_VERSION,
   normalizeChatContentMaxWidth,
+  normalizeChatWelcomeMessage,
+  resolveChatWelcomeTitle,
+  CHAT_WELCOME_MESSAGE_MAX_LENGTH,
   normalizeComposerSendKey,
   isComposerSendHotkey,
   normalizeGitBranchPrefix,
@@ -86,6 +89,7 @@ function settings(): AppSettingsV1 {
     terminal: defaultTerminalSettings(),
     guiUpdate: { channel: 'stable' },
     codePromptPrefix: '',
+    chatWelcomeMessage: '',
     disabledSkillIds: []
   }
 }
@@ -214,6 +218,26 @@ describe('chat content max width', () => {
     expect(normalizeChatContentMaxWidth(896)).toBe(896)
     expect(normalizeChatContentMaxWidth(1300)).toBe(1200)
     expect(normalizeChatContentMaxWidth(905)).toBe(904)
+  })
+})
+
+describe('chat welcome message', () => {
+  it('trims, clamps length, and falls back to the locale title when empty', () => {
+    expect(normalizeChatWelcomeMessage('  hello  ')).toBe('hello')
+    expect(normalizeChatWelcomeMessage('   ')).toBe('')
+    expect(normalizeChatWelcomeMessage(undefined)).toBe('')
+    expect(normalizeChatWelcomeMessage('x'.repeat(CHAT_WELCOME_MESSAGE_MAX_LENGTH + 20))).toHaveLength(
+      CHAT_WELCOME_MESSAGE_MAX_LENGTH
+    )
+    expect(resolveChatWelcomeTitle('', 'default title')).toBe('default title')
+    expect(resolveChatWelcomeTitle('Custom greeting', 'default title')).toBe('Custom greeting')
+  })
+
+  it('persists through normalizeAppSettings', () => {
+    const normalized = normalizeAppSettings({
+      chatWelcomeMessage: '  今天想和炮一起做什么？  '
+    } as never)
+    expect(normalized.chatWelcomeMessage).toBe('今天想和炮一起做什么？')
   })
 })
 

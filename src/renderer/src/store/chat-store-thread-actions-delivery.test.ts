@@ -174,6 +174,7 @@ describe('chat-store-thread-actions queued messages', () => {
           agents: { kun: { providerId: 'deepseek', model: 'deepseek-v4-pro' } },
           workspaceRoot: '/workspace/deepseek-gui',
           codePromptPrefix: ''
+          chatWelcomeMessage: ''
         })),
         workspaceDirectoryExists: vi.fn(async () => true),
         logError: vi.fn(async () => undefined)
@@ -237,6 +238,7 @@ describe('chat-store-thread-actions queued messages', () => {
         getSettings: vi.fn(async () => ({
           agents: { kun: { providerId: 'deepseek', model: 'deepseek-v4-pro' } },
           codePromptPrefix: ''
+          chatWelcomeMessage: ''
         })),
         logError: vi.fn(async () => undefined)
       }
@@ -292,6 +294,7 @@ describe('chat-store-thread-actions queued messages', () => {
         getSettings: vi.fn(async () => ({
           agents: { kun: { providerId: 'deepseek', model: 'deepseek-v4-pro' } },
           codePromptPrefix: ''
+          chatWelcomeMessage: ''
         })),
         logError: vi.fn(async () => undefined)
       }
@@ -326,6 +329,7 @@ describe('chat-store-thread-actions queued messages', () => {
         getSettings: vi.fn(async () => ({
           agents: { kun: { providerId: 'deepseek', model: 'deepseek-v4-pro' } },
           codePromptPrefix: ''
+          chatWelcomeMessage: ''
         })),
         logError: vi.fn(async () => undefined)
       }
@@ -380,6 +384,7 @@ describe('chat-store-thread-actions queued messages', () => {
         getSettings: vi.fn(async () => ({
           agents: { kun: { providerId: 'deepseek', model: 'deepseek-v4-pro' } },
           codePromptPrefix: ''
+          chatWelcomeMessage: ''
         })),
         logError: vi.fn(async () => undefined)
       }
@@ -447,6 +452,7 @@ describe('chat-store-thread-actions queued messages', () => {
     const setSettings = vi.fn(async () => ({
       agents: { kun: { providerId: 'minimax-token-plan', model: 'MiniMax-M3' } },
       codePromptPrefix: ''
+      chatWelcomeMessage: ''
     }))
     const restartRuntime = vi.fn(async () => undefined)
     vi.stubGlobal('window', {
@@ -454,6 +460,7 @@ describe('chat-store-thread-actions queued messages', () => {
         getSettings: vi.fn(async () => ({
           agents: { kun: { providerId: 'deepseek', model: 'deepseek-v4-pro' } },
           codePromptPrefix: ''
+          chatWelcomeMessage: ''
         })),
         setSettings,
         restartRuntime,
@@ -507,6 +514,7 @@ describe('chat-store-thread-actions queued messages', () => {
           workspaceRoot: '/workspace/deepseek-gui',
           agents: { kun: { providerId: 'deepseek', model: 'deepseek-v4-pro' } },
           codePromptPrefix: ''
+          chatWelcomeMessage: ''
         })),
         logError: vi.fn(async () => undefined)
       }

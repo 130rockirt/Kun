@@ -63,6 +63,7 @@ function settingsForPort(port: number): AppSettingsV1 {
     terminal: defaultTerminalSettings(),
     guiUpdate: { channel: 'stable' },
     codePromptPrefix: '',
+    chatWelcomeMessage: '',
     disabledSkillIds: []
   }
 }

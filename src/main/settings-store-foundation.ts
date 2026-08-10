@@ -292,6 +292,7 @@ export const defaultSettings = (): AppSettingsV1 => ({
     channel: DEFAULT_GUI_UPDATE_CHANNEL
   },
   codePromptPrefix: '',
+  chatWelcomeMessage: '',
   disabledSkillIds: [],
   write: defaultWriteSettings(),
   claw: defaultClawSettings(),

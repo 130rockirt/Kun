@@ -167,6 +167,7 @@ export function settings(): AppSettingsV1 {
     terminal: defaultTerminalSettings(),
     guiUpdate: { channel: 'stable' },
     codePromptPrefix: '',
+    chatWelcomeMessage: '',
     disabledSkillIds: []
   }
 }

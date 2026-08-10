@@ -8,7 +8,8 @@ import {
   RefreshCw,
   Settings
 } from 'lucide-react'
-import type { ClawImChannelV1 } from '@shared/app-settings'
+import { resolveChatWelcomeTitle, type ClawImChannelV1 } from '@shared/app-settings'
+import { useChatWelcomeMessageSetting } from '../../lib/chat-welcome-message-settings'
 import { KunStateFigure } from './AnimatedWorkLogo'
 
 /**
@@ -123,6 +124,8 @@ function RuntimeWakeHero({
 
 function ChatEmptyHero(): ReactElement {
   const { t } = useTranslation('common')
+  const customWelcome = useChatWelcomeMessageSetting()
+  const title = resolveChatWelcomeTitle(customWelcome, t('emptyHeroTitle'))
 
   return (
     <div className="ds-chat-empty-hero ds-no-drag mx-auto flex min-h-[min(620px,calc(100dvh-220px))] w-full items-center justify-center px-6 py-10 text-center">
@@ -131,7 +134,7 @@ function ChatEmptyHero(): ReactElement {
           id="chat-empty-hero-title"
           className="max-w-[620px] text-[24px] font-medium leading-tight tracking-[-0.025em] text-ds-ink sm:text-[28px]"
         >
-          {t('emptyHeroTitle')}
+          {title}
         </h1>
         <p className="mt-3 max-w-[680px] text-[13px] leading-6 text-ds-muted">
           {t('emptyHeroSub')}

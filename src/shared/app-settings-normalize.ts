@@ -151,6 +151,7 @@ export function normalizeAppSettings(settings: AppSettingsV1): AppSettingsV1 {
       )
     },
     codePromptPrefix: typeof maybeSettings.codePromptPrefix === 'string' ? maybeSettings.codePromptPrefix : '',
+    chatWelcomeMessage: normalizeChatWelcomeMessage(maybeSettings.chatWelcomeMessage),
     disabledSkillIds: normalizeDisabledSkillIds(maybeSettings.disabledSkillIds)
   }
 }
@@ -279,6 +280,23 @@ export function normalizeCursorSpotlightColor(value: unknown): string {
   if (typeof value !== 'string') return DEFAULT_CURSOR_SPOTLIGHT_COLOR
   const color = value.trim()
   return /^#[0-9a-fA-F]{6}$/.test(color) ? color.toLowerCase() : DEFAULT_CURSOR_SPOTLIGHT_COLOR
+}
+
+/** Max length for the empty-chat welcome title shown in the UI. */
+export const CHAT_WELCOME_MESSAGE_MAX_LENGTH = 200
+
+export function normalizeChatWelcomeMessage(value: unknown): string {
+  if (typeof value !== 'string') return ''
+  const trimmed = value.trim()
+  if (!trimmed) return ''
+  return trimmed.length > CHAT_WELCOME_MESSAGE_MAX_LENGTH
+    ? trimmed.slice(0, CHAT_WELCOME_MESSAGE_MAX_LENGTH)
+    : trimmed
+}
+
+export function resolveChatWelcomeTitle(custom: unknown, fallback: string): string {
+  const normalized = normalizeChatWelcomeMessage(custom)
+  return normalized || fallback
 }
 
 function normalizeDisabledSkillIds(value: unknown): string[] {

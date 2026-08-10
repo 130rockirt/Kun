@@ -141,6 +141,7 @@ function buildSettings(
     terminal: defaultTerminalSettings(),
     guiUpdate: { channel: 'stable' },
     codePromptPrefix: '',
+    chatWelcomeMessage: '',
     disabledSkillIds: []
   }
   return patch ? patch(base) : base
