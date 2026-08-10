@@ -11,12 +11,33 @@ export function monotonicToolStatus(
   return current !== 'running' && incoming === 'running' ? current : incoming
 }
 
+/**
+ * Returns only text that is not already present in the projected assistant /
+ * reasoning buffer. Content-aware rules catch cumulative snapshots and full
+ * final-text redelivery (new seq, same body) that seq floors alone cannot.
+ */
 export function unseenDeltaText(
   delta: ThreadDeltaEvent,
   blocks: ChatBlock[],
   liveText: string,
   liveItemId: string | undefined
 ): string {
+  if (!delta.text) return ''
+
+  const blockKind = delta.kind === 'agent_message' ? 'assistant' : 'reasoning'
+  const hydrated = delta.itemId
+    ? blocks.find((block) => block.kind === blockKind && block.id === delta.itemId)
+    : undefined
+  const hydratedText = hydrated && (
+    hydrated.kind === 'assistant' || hydrated.kind === 'reasoning'
+  ) ? hydrated.text : ''
+  const projectedText = hydratedText + (
+    delta.itemId && liveItemId === delta.itemId ? liveText : ''
+  )
+
+  const contentAware = unseenAssistantFragment(projectedText, delta.text)
+  if (contentAware !== null) return contentAware
+
   const offset = delta.deltaOffset
   if (
     !delta.itemId ||
@@ -25,20 +46,12 @@ export function unseenDeltaText(
     offset < 0
   ) {
     // Legacy events have no stable item-relative position and retain the
-    // original append-only projection semantics.
+    // original append-only projection semantics for genuinely new text.
     return delta.text
   }
 
-  const blockKind = delta.kind === 'agent_message' ? 'assistant' : 'reasoning'
-  const hydrated = blocks.find(
-    (block) => block.kind === blockKind && block.id === delta.itemId
-  )
-  const hydratedText = hydrated && (
-    hydrated.kind === 'assistant' || hydrated.kind === 'reasoning'
-  ) ? hydrated.text : ''
-  const projectedText = hydratedText + (
-    liveItemId === delta.itemId ? liveText : ''
-  )
+  if (offset > projectedText.length) return delta.text
+
   const overlapLength = Math.min(
     delta.text.length,
     Math.max(0, projectedText.length - offset)
@@ -47,12 +60,23 @@ export function unseenDeltaText(
     overlapLength > 0 &&
     projectedText.slice(offset, offset + overlapLength) !== delta.text.slice(0, overlapLength)
   ) {
-    // The offset is only a deduplication hint. If the projected prefix does
-    // not actually contain this fragment, preserve the payload instead of
-    // silently trimming potentially new content.
-    return delta.text
+    // Offset is only a dedup hint. Prefer dropping a mismatched fragment over
+    // fail-open appending the full body (Answer×N in one bubble).
+    if (projectedText.includes(delta.text)) return ''
+    return offset === projectedText.length ? delta.text : ''
   }
   return delta.text.slice(overlapLength)
+}
+
+/** Shared content-idempotent merge for assistant/reasoning stream fragments. */
+export function unseenAssistantFragment(
+  projectedText: string,
+  fragment: string
+): string | null {
+  if (!fragment) return ''
+  if (projectedText === fragment || projectedText.startsWith(fragment)) return ''
+  if (fragment.startsWith(projectedText)) return fragment.slice(projectedText.length)
+  return null
 }
 
 export function flushLiveProjection(

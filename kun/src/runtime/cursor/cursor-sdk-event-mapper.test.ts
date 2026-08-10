@@ -108,6 +108,45 @@ describe('CursorSdkEventMapper', () => {
     ])
   })
 
+  test('emits only unseen suffixes for cumulative assistant snapshots', () => {
+    const subject = mapper()
+    const first = subject.map({
+      type: 'assistant',
+      agent_id: 'agent',
+      run_id: 'run',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'Hello' }] }
+    })
+    const duplicate = subject.map({
+      type: 'assistant',
+      agent_id: 'agent',
+      run_id: 'run',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'Hello' }] }
+    })
+    const extended = subject.map({
+      type: 'assistant',
+      agent_id: 'agent',
+      run_id: 'run',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'Hello world' }] }
+    })
+
+    expect(first).toEqual([
+      expect.objectContaining({
+        kind: 'assistant_text_delta',
+        deltaOffset: 0,
+        item: expect.objectContaining({ text: 'Hello' })
+      })
+    ])
+    expect(duplicate).toEqual([])
+    expect(extended).toEqual([
+      expect.objectContaining({
+        kind: 'assistant_text_delta',
+        deltaOffset: 5,
+        item: expect.objectContaining({ text: ' world' })
+      })
+    ])
+    expect(subject.runningTextItem).toEqual(expect.objectContaining({ text: 'Hello world' }))
+  })
+
   test('projects Cursor-owned tool lifecycle without a Kun-ready redispatch event', () => {
     const subject = mapper()
     const started = subject.map({

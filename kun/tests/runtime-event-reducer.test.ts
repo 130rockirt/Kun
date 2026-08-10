@@ -338,4 +338,126 @@ describe('runtime event reducer', () => {
       })
     ])
   })
+
+  it('does not concatenate full-text delta redelivery into Answer×N', () => {
+    const answer = '任务完成总结：已写入报告。'
+    const events: RuntimeEvent[] = [
+      baseEvent({
+        kind: 'turn_started',
+        seq: 1,
+        turnId: 'turn-1',
+        approvalPolicy: 'on-request',
+        sandboxMode: 'workspace-write',
+        approvalReviewer: 'agent'
+      }),
+      baseEvent({
+        kind: 'assistant_text_delta',
+        seq: 2,
+        turnId: 'turn-1',
+        itemId: 'item-1',
+        deltaOffset: 0,
+        item: {
+          id: 'item-1',
+          turnId: 'turn-1',
+          threadId: 'thread-1',
+          role: 'assistant',
+          status: 'running',
+          createdAt: timestamp,
+          kind: 'assistant_text',
+          text: answer
+        }
+      }),
+      baseEvent({
+        kind: 'assistant_text_delta',
+        seq: 3,
+        turnId: 'turn-1',
+        itemId: 'item-1',
+        deltaOffset: answer.length,
+        item: {
+          id: 'item-1',
+          turnId: 'turn-1',
+          threadId: 'thread-1',
+          role: 'assistant',
+          status: 'running',
+          createdAt: timestamp,
+          kind: 'assistant_text',
+          text: answer
+        }
+      }),
+      baseEvent({
+        kind: 'assistant_text_delta',
+        seq: 4,
+        turnId: 'turn-1',
+        itemId: 'item-1',
+        deltaOffset: answer.length,
+        item: {
+          id: 'item-1',
+          turnId: 'turn-1',
+          threadId: 'thread-1',
+          role: 'assistant',
+          status: 'completed',
+          createdAt: timestamp,
+          finishedAt: timestamp,
+          kind: 'assistant_text',
+          text: answer
+        }
+      })
+    ]
+
+    const projection = replayRuntimeEvents(events)
+    expect(projection.items).toEqual([
+      expect.objectContaining({
+        id: 'item-1',
+        kind: 'assistant_text',
+        text: answer
+      })
+    ])
+  })
+
+  it('extends cumulative assistant snapshots instead of appending the full body', () => {
+    const events: RuntimeEvent[] = [
+      baseEvent({
+        kind: 'assistant_text_delta',
+        seq: 1,
+        turnId: 'turn-1',
+        itemId: 'item-1',
+        deltaOffset: 0,
+        item: {
+          id: 'item-1',
+          turnId: 'turn-1',
+          threadId: 'thread-1',
+          role: 'assistant',
+          status: 'running',
+          createdAt: timestamp,
+          kind: 'assistant_text',
+          text: 'Hello'
+        }
+      }),
+      baseEvent({
+        kind: 'assistant_text_delta',
+        seq: 2,
+        turnId: 'turn-1',
+        itemId: 'item-1',
+        deltaOffset: 5,
+        item: {
+          id: 'item-1',
+          turnId: 'turn-1',
+          threadId: 'thread-1',
+          role: 'assistant',
+          status: 'running',
+          createdAt: timestamp,
+          kind: 'assistant_text',
+          text: 'Hello world'
+        }
+      })
+    ]
+
+    const projection = replayRuntimeEvents(events)
+    expect(projection.items).toEqual([
+      expect.objectContaining({
+        id: 'item-1',
+        text: 'Hello world'
+      })
+    ])
+  })
 })

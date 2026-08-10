@@ -138,7 +138,7 @@ describe('chat projection reducer', () => {
     expect(projected.lastSeq).toBe(202)
   })
 
-  it('appends the complete delta when offset overlap does not match projected text', () => {
+  it('drops mismatched offset fragments instead of fail-open appending full text', () => {
     const initial = {
       ...state(),
       blocks: [{
@@ -166,12 +166,11 @@ describe('chat projection reducer', () => {
       }]
     }])
 
-    expect(projected.liveAssistant).toBe('X world')
-    expect(projected.liveAssistantItemId).toBe('assistant_1')
-    expect(projected.busy).toBe(true)
+    expect(projected.liveAssistant).toBe('')
+    expect(projected.blocks).toEqual(initial.blocks)
   })
 
-  it('keeps legacy no-offset deltas on their original append path', () => {
+  it('suppresses legacy no-offset full-text redelivery already present in the hydrated block', () => {
     const initial = {
       ...state(),
       blocks: [{
@@ -198,7 +197,115 @@ describe('chat projection reducer', () => {
       }]
     }])
 
-    expect(projected.liveAssistant).toBe('Hydrated answer')
+    expect(projected.liveAssistant).toBe('')
+    expect(projected.blocks).toEqual(initial.blocks)
+  })
+
+  it('does not concatenate a full final reply when redelivered at the live tip offset', () => {
+    const answer = '可视化辅助选项：1. 图表 2. 表格'
+    const initial = {
+      ...state(),
+      blocks: [],
+      busy: true,
+      lastSeq: 200,
+      liveDeltaSeqFloor: 200,
+      liveAssistant: answer,
+      liveAssistantItemId: 'assistant_1',
+      liveAssistantTurnId: 'turn_1'
+    }
+
+    const projected = project(initial, [{
+      type: 'deltas_received',
+      deltas: [
+        {
+          seq: 201,
+          deltaOffset: answer.length,
+          threadId: 'thread_1',
+          turnId: 'turn_1',
+          itemId: 'assistant_1',
+          kind: 'agent_message',
+          text: answer
+        },
+        {
+          seq: 202,
+          deltaOffset: answer.length,
+          threadId: 'thread_1',
+          turnId: 'turn_1',
+          itemId: 'assistant_1',
+          kind: 'agent_message',
+          text: answer
+        },
+        {
+          seq: 203,
+          deltaOffset: answer.length,
+          threadId: 'thread_1',
+          turnId: 'turn_1',
+          itemId: 'assistant_1',
+          kind: 'agent_message',
+          text: answer
+        }
+      ]
+    }])
+
+    expect(projected.liveAssistant).toBe(answer)
+  })
+
+  it('extends cumulative snapshot deltas with only the unseen suffix', () => {
+    const initial = {
+      ...state(),
+      blocks: [],
+      busy: true,
+      lastSeq: 200,
+      liveDeltaSeqFloor: 200,
+      liveAssistant: 'Hello',
+      liveAssistantItemId: 'assistant_1',
+      liveAssistantTurnId: 'turn_1'
+    }
+
+    const projected = project(initial, [{
+      type: 'deltas_received',
+      deltas: [{
+        seq: 201,
+        deltaOffset: 5,
+        threadId: 'thread_1',
+        turnId: 'turn_1',
+        itemId: 'assistant_1',
+        kind: 'agent_message',
+        text: 'Hello world'
+      }]
+    }])
+
+    expect(projected.liveAssistant).toBe('Hello world')
+  })
+
+  it('keeps legacy no-offset deltas appending genuinely new text', () => {
+    const initial = {
+      ...state(),
+      blocks: [{
+        kind: 'assistant' as const,
+        id: 'assistant_1',
+        turnId: 'turn_1',
+        text: 'Hello'
+      }],
+      busy: false,
+      lastSeq: 200,
+      liveDeltaSeqFloor: 200,
+      liveAssistant: ''
+    }
+
+    const projected = project(initial, [{
+      type: 'deltas_received',
+      deltas: [{
+        seq: 201,
+        threadId: 'thread_1',
+        turnId: 'turn_1',
+        itemId: 'assistant_1',
+        kind: 'agent_message',
+        text: ' world'
+      }]
+    }])
+
+    expect(projected.liveAssistant).toBe(' world')
     expect(projected.liveAssistantItemId).toBe('assistant_1')
     expect(projected.busy).toBe(true)
   })
