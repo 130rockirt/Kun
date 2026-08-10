@@ -33,6 +33,7 @@ import type { ApprovalReviewPort } from '../ports/approval-review.js'
 import type { SessionStore } from '../ports/session-store.js'
 import type { ThreadStore } from '../ports/thread-store.js'
 import type { ToolHost } from '../ports/tool-host.js'
+import { findSessionEvent } from '../adapters/session-event-query.js'
 import type { DelegatedTurnRuntime } from '../runtime/delegated-turn-runtime.js'
 import type { SkillRuntime } from '../skills/skill-runtime.js'
 import type { InstructionRuntime } from '../instructions/instruction-runtime.js'
@@ -378,14 +379,15 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
     // Treating those as fatal wrongly marked the whole subagent "failed" for a
     // single denied `bash` call. Genuine failures are caught by the `status`
     // check below; here we only honor non-warning (fatal) error events.
-    const runtimeError = (await sessionStore.loadEventsSince(thread.id, 0))
-      .find(
-        (event) =>
-          event.kind === 'error' &&
-          event.turnId === started.turnId &&
-          event.severity !== 'warning' &&
-          event.severity !== 'info'
-      )
+    const runtimeError = await findSessionEvent(
+      sessionStore,
+      thread.id,
+      (event) =>
+        event.kind === 'error' &&
+        event.turnId === started.turnId &&
+        event.severity !== 'warning' &&
+        event.severity !== 'info'
+    )
     if (runtimeError?.kind === 'error') {
       throw new Error(runtimeError.message)
     }

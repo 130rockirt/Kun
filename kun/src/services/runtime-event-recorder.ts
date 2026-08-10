@@ -183,13 +183,25 @@ export class RuntimeEventRecorder {
   private async loadRecentGraphEvents(threadId: string): Promise<void> {
     if (this.graphEventsLoaded.has(threadId)) return
     const highWater = await this.options.sessionStore.highestSeq(threadId).catch(() => 0)
-    const recent = await this.options.sessionStore
-      .loadEventsSince(threadId, Math.max(0, highWater - 4_096))
-      .catch(() => [])
-    for (const event of recent) {
-      if (event.kind === 'graph_event') {
-        this.rememberGraphEvent(threadId, event.graph.eventId, event)
+    const sinceSeq = Math.max(0, highWater - 4_096)
+    try {
+      if (this.options.sessionStore.iterateEventsSince) {
+        for await (const event of this.options.sessionStore.iterateEventsSince(threadId, sinceSeq)) {
+          if (event.kind === 'graph_event') {
+            this.rememberGraphEvent(threadId, event.graph.eventId, event)
+          }
+        }
+      } else {
+        const recent = await this.options.sessionStore.loadEventsSince(threadId, sinceSeq)
+        for (const event of recent) {
+          if (event.kind === 'graph_event') {
+            this.rememberGraphEvent(threadId, event.graph.eventId, event)
+          }
+        }
       }
+    } catch {
+      // Best-effort hydration for graph-event idempotency; a missing or
+      // unreadable log must not block recording a new graph event.
     }
     this.graphEventsLoaded.add(threadId)
   }

@@ -6,12 +6,24 @@ import type { UsageSnapshot } from '../src/contracts/usage.js'
 import type { TurnItem } from '../src/contracts/items.js'
 
 const atomicWriteFileMock = vi.hoisted(() => vi.fn())
+const compactUsageEventsJsonlFileMock = vi.hoisted(() => vi.fn())
 
 vi.mock('../src/adapters/file/atomic-write.js', () => ({
   atomicWriteFile: atomicWriteFileMock
 }))
 
+vi.mock('../src/adapters/file/file-session-jsonl.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/adapters/file/file-session-jsonl.js')>()
+  compactUsageEventsJsonlFileMock.mockImplementation(actual.compactUsageEventsJsonlFile)
+  return {
+    ...actual,
+    compactUsageEventsJsonlFile: (...args: Parameters<typeof actual.compactUsageEventsJsonlFile>) =>
+      compactUsageEventsJsonlFileMock(...args)
+  }
+})
+
 const { FileSessionStore } = await import('../src/adapters/file/file-session-store.js')
+const jsonl = await import('../src/adapters/file/file-session-jsonl.js')
 
 describe('FileSessionStore', () => {
   let dataDir = ''
@@ -21,6 +33,8 @@ describe('FileSessionStore', () => {
     dataDir = await mkdtemp(join(tmpdir(), 'kun-session-'))
     atomicWriteFileMock.mockReset()
     atomicWriteFileMock.mockResolvedValue(undefined)
+    compactUsageEventsJsonlFileMock.mockReset()
+    compactUsageEventsJsonlFileMock.mockImplementation(jsonl.compactUsageEventsJsonlFile)
     warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
   })
 
@@ -65,7 +79,7 @@ describe('FileSessionStore', () => {
 
     const error = new Error('operation not permitted') as Error & { code: string }
     error.code = 'EPERM'
-    atomicWriteFileMock.mockRejectedValueOnce(error)
+    compactUsageEventsJsonlFileMock.mockRejectedValueOnce(error)
 
     await expect(sessionStore.appendEvent('thr_usage_compact', {
       kind: 'usage',
@@ -78,8 +92,23 @@ describe('FileSessionStore', () => {
 
     const events = await sessionStore.loadEventsSince('thr_usage_compact', 0)
     expect(events.map((event) => event.seq)).toEqual([1, 2, 3])
-    expect(atomicWriteFileMock).toHaveBeenCalledTimes(1)
+    expect(compactUsageEventsJsonlFileMock).toHaveBeenCalled()
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('usage event compaction failed'))
+  })
+
+  it('loadEventsSince streams a high sinceSeq without requiring a full-array filter', async () => {
+    const sessionStore = new FileSessionStore({ dataDir })
+    const threadId = 'thr_stream_load'
+    for (let seq = 1; seq <= 40; seq += 1) {
+      await sessionStore.appendEvent(threadId, {
+        kind: 'heartbeat',
+        seq,
+        timestamp: `2026-01-01T00:00:${String(seq).padStart(2, '0')}.000Z`,
+        threadId
+      })
+    }
+    const events = await sessionStore.loadEventsSince(threadId, 35)
+    expect(events.map((event) => event.seq)).toEqual([36, 37, 38, 39, 40])
   })
 
   it('caches the event high-water mark until the event file changes', async () => {

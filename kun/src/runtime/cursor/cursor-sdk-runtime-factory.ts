@@ -36,6 +36,7 @@ import type {
   UserInputResolution
 } from '../../ports/user-input-gate.js'
 import { awaitAbortableGate } from '../../services/interactive-gate.js'
+import { sessionEventExists } from '../../adapters/session-event-query.js'
 import type { SkillRuntime } from '../../skills/skill-runtime.js'
 import {
   DEFAULT_APPROVAL_REVIEWER,
@@ -195,7 +196,9 @@ export function createCursorSdkRuntime(
         finishedAt: nowIso(),
         ...(resolution.status === 'submitted' ? { answers: resolution.answers } : {})
       } as Partial<TurnItem>)
-      const alreadyRecorded = (await deps.sessionStore.loadEventsSince(threadId, 0)).some(
+      const alreadyRecorded = await sessionEventExists(
+        deps.sessionStore,
+        threadId,
         (event) => event.kind === 'user_input_resolved' && event.inputId === input.id
       )
       if (!alreadyRecorded) {

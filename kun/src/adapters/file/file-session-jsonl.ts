@@ -1,5 +1,6 @@
-import { createReadStream } from 'node:fs'
-import type { FileHandle } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
+import { createReadStream, createWriteStream } from 'node:fs'
+import { rename, rm, type FileHandle } from 'node:fs/promises'
 import type { RuntimeEvent } from '../../contracts/events.js'
 import { isPublicTurnItem, type TurnItem } from '../../contracts/items.js'
 import type { ItemHistoryPage, ItemHistoryPageOptions } from '../../ports/session-store.js'
@@ -14,28 +15,71 @@ export function compactUsageEvents(
 ): RuntimeEvent[] {
   const cutoffMs = Date.parse(options.nowIso) - options.retentionDays * MS_PER_DAY
   if (!Number.isFinite(cutoffMs)) return events
-
-  let latestUsageIndex = -1
-  let latestBeforeCutoffIndex = -1
+  const usageByIndex = new Map<number, RuntimeEvent>()
   for (let index = 0; index < events.length; index += 1) {
     const event = events[index]
-    if (event?.kind !== 'usage') continue
+    if (event?.kind === 'usage') usageByIndex.set(index, event)
+  }
+  if (usageByIndex.size === 0) return events
+  const keepUsage = retainedUsageIndexes(usageByIndex, cutoffMs)
+  return events.filter((event, index) => event.kind !== 'usage' || keepUsage.has(index))
+}
+
+/**
+ * Compact usage rows in an events.jsonl without materializing the whole file.
+ * Pass 1 keeps only usage events in memory; pass 2 streams a filtered rewrite.
+ */
+export async function compactUsageEventsJsonlFile(
+  path: string,
+  options: { nowIso: string; retentionDays: number; maxRecordBytes: number }
+): Promise<boolean> {
+  const cutoffMs = Date.parse(options.nowIso) - options.retentionDays * MS_PER_DAY
+  if (!Number.isFinite(cutoffMs)) return false
+
+  const usageByIndex = new Map<number, RuntimeEvent>()
+  let lineIndex = 0
+  for await (const record of iterateJsonlEventRecords(path, options.maxRecordBytes)) {
+    if (record.event?.kind === 'usage') usageByIndex.set(lineIndex, record.event)
+    lineIndex += 1
+  }
+  if (usageByIndex.size === 0) return false
+
+  const keepUsageIndexes = retainedUsageIndexes(usageByIndex, cutoffMs)
+  if (keepUsageIndexes.size === usageByIndex.size) return false
+
+  const tmp = `${path}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`
+  try {
+    await rewriteJsonlKeepingLines(path, tmp, {
+      maxRecordBytes: options.maxRecordBytes,
+      keepLine: (event, index) => event.kind !== 'usage' || keepUsageIndexes.has(index)
+    })
+    await rename(tmp, path)
+    return true
+  } catch (error) {
+    await rm(tmp, { force: true }).catch(() => undefined)
+    throw error
+  }
+}
+
+function retainedUsageIndexes(
+  usageByIndex: Map<number, RuntimeEvent>,
+  cutoffMs: number
+): Set<number> {
+  const usageIndexes = [...usageByIndex.keys()].sort((a, b) => a - b)
+  let latestUsageIndex = -1
+  let latestBeforeCutoffIndex = -1
+  for (const index of usageIndexes) {
     latestUsageIndex = index
+    const event = usageByIndex.get(index)!
     const timestamp = Date.parse(event.timestamp)
     if (Number.isFinite(timestamp) && timestamp < cutoffMs) {
       latestBeforeCutoffIndex = index
     }
   }
-  if (latestUsageIndex < 0) return events
-
   const keep = new Set<number>()
   const latestUsageIndexByBucket = new Map<string, number>()
-  for (let index = 0; index < events.length; index += 1) {
-    const event = events[index]
-    if (event.kind !== 'usage') {
-      keep.add(index)
-      continue
-    }
+  for (const index of usageIndexes) {
+    const event = usageByIndex.get(index)!
     if (!shouldRetainUsageEvent(event, index, {
       cutoffMs,
       latestUsageIndex,
@@ -51,8 +95,81 @@ export function compactUsageEvents(
     keep.add(index)
     latestUsageIndexByBucket.set(bucket, index)
   }
+  return keep
+}
 
-  return events.filter((_event, index) => keep.has(index))
+async function* iterateJsonlEventRecords(
+  path: string,
+  maxRecordBytes: number
+): AsyncIterable<{ line: string; event: RuntimeEvent | null }> {
+  let remainder = ''
+  try {
+    const stream = createReadStream(path, {
+      encoding: 'utf-8',
+      highWaterMark: Math.min(maxRecordBytes, 64 * 1024)
+    })
+    for await (const chunk of stream) {
+      remainder += typeof chunk === 'string' ? chunk : chunk.toString('utf-8')
+      let newline = remainder.indexOf('\n')
+      while (newline >= 0) {
+        const line = remainder.slice(0, newline)
+        remainder = remainder.slice(newline + 1)
+        if (line.trim()) {
+          yield { line, event: parseReplayEventRecord(line, maxRecordBytes) }
+        }
+        newline = remainder.indexOf('\n')
+      }
+      if (Buffer.byteLength(remainder, 'utf-8') > maxRecordBytes) {
+        throw new Error(`event replay record exceeds ${maxRecordBytes} bytes`)
+      }
+    }
+    if (remainder.trim()) {
+      yield { line: remainder, event: parseReplayEventRecord(remainder, maxRecordBytes) }
+    }
+  } catch (error) {
+    if ((error as { code?: string }).code === 'ENOENT') return
+    throw error
+  }
+}
+
+async function rewriteJsonlKeepingLines(
+  sourcePath: string,
+  targetPath: string,
+  options: {
+    maxRecordBytes: number
+    keepLine: (event: RuntimeEvent, index: number) => boolean
+  }
+): Promise<void> {
+  const writer = createWriteStream(targetPath, { encoding: 'utf-8', mode: 0o600 })
+  const writeLine = (line: string): Promise<void> => new Promise((resolve, reject) => {
+    if (writer.write(`${line}\n`)) {
+      resolve()
+      return
+    }
+    writer.once('error', reject)
+    writer.once('drain', () => {
+      writer.off('error', reject)
+      resolve()
+    })
+  })
+  let lineIndex = 0
+  try {
+    for await (const record of iterateJsonlEventRecords(sourcePath, options.maxRecordBytes)) {
+      if (record.event && options.keepLine(record.event, lineIndex)) {
+        await writeLine(record.line)
+      } else if (!record.event) {
+        await writeLine(record.line)
+      }
+      lineIndex += 1
+    }
+  } catch (error) {
+    writer.destroy()
+    throw error
+  }
+  await new Promise<void>((resolve, reject) => {
+    writer.once('error', reject)
+    writer.end(() => resolve())
+  })
 }
 
 function shouldRetainUsageEvent(

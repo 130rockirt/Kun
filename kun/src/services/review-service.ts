@@ -25,6 +25,7 @@ import { RandomIdGenerator } from '../ports/id-generator.js'
 import type { ModelClient } from '../ports/model-client.js'
 import type { ThreadStore } from '../ports/thread-store.js'
 import type { RuntimeTuningConfig } from '../config/kun-config.js'
+import { findSessionEvent } from '../adapters/session-event-query.js'
 import { RuntimeEventRecorder } from './runtime-event-recorder.js'
 import { ThreadService } from './thread-service.js'
 import { TurnService } from './turn-service.js'
@@ -245,8 +246,11 @@ export class ReviewService {
     else input.signal.addEventListener('abort', abortChild, { once: true })
     try {
       const status = await loop.runTurn(childThread.id, started.turnId)
-      const runtimeError = (await sessionStore.loadEventsSince(childThread.id, 0))
-        .find((event) => event.kind === 'error' && event.turnId === started.turnId)
+      const runtimeError = await findSessionEvent(
+        sessionStore,
+        childThread.id,
+        (event) => event.kind === 'error' && event.turnId === started.turnId
+      )
       if (runtimeError?.kind === 'error') throw new Error(runtimeError.message)
       const items = await sessionStore.loadItems(childThread.id)
       const text = summarizeReviewTurn(items, started.turnId)

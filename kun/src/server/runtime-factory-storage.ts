@@ -16,11 +16,11 @@ import {
   type SessionStore,
   type ThreadStore,
   UsageService,
-  type UsageEvent,
   FileMemoryStore,
   type MemoryStore
 } from './runtime-factory-dependencies.js'
 import type { KunServeRuntimeOptions } from './runtime-factory-types.js'
+import { findLatestUsageEvent } from '../adapters/session-event-query.js'
 
 export async function createPersistentStores(input: {
   dataDir: string
@@ -73,12 +73,7 @@ export async function seedUsageCarryover(input: {
   }
   const threadSummaries = await input.threadStore.list()
   await Promise.all(threadSummaries.map(async (thread) => {
-    const events = await input.sessionStore.loadEventsSince(thread.id, 0)
-    const latestUsage = events.reduce<UsageEvent | null>((latest, event) => {
-      if (event.kind !== 'usage') return latest
-      if (!latest || event.seq > latest.seq) return event
-      return latest
-    }, null)
+    const latestUsage = await findLatestUsageEvent(input.sessionStore, thread.id)
     if (latestUsage) input.usageService.seedThread(thread.id, latestUsage.usage)
   }))
 }

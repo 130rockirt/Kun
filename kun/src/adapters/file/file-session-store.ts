@@ -14,9 +14,8 @@ import type { RuntimeEvent } from '../../contracts/events.js'
 import type { TurnItem } from '../../contracts/items.js'
 import { assertSafeThreadId, isSafeThreadId } from '../../contracts/thread-id.js'
 import type { AgentSession } from '../../domain/session.js'
-import { readJsonl } from './file-thread-store.js'
 import {
-  compactUsageEvents,
+  compactUsageEventsJsonlFile,
   parseReplayEventRecord,
   readItemPageFromJsonl,
   readLatestItemsFromJsonl,
@@ -204,10 +203,14 @@ export class FileSessionStore implements SessionStore {
 
   async loadEventsSince(threadId: string, sinceSeq: number): Promise<RuntimeEvent[]> {
     if (!isSafeThreadId(threadId)) return []
-    const all = await readJsonl<RuntimeEvent>(this.eventsPath(threadId))
-    return all
-      .filter((event) => event.seq > sinceSeq)
-      .sort((a, b) => a.seq - b.seq)
+    // Stream forward so callers that only need a tail never allocate the full
+    // append-only log. Sort remains for stores that historically emitted out of
+    // order; healthy writers already append in seq order.
+    const events: RuntimeEvent[] = []
+    for await (const event of this.iterateEventsSince(threadId, sinceSeq)) {
+      events.push(event)
+    }
+    return events.sort((a, b) => a.seq - b.seq)
   }
 
   async *iterateEventsSince(
@@ -579,14 +582,15 @@ export class FileSessionStore implements SessionStore {
     const path = this.eventsPath(threadId)
     const info = await stat(path).catch(() => null)
     if (!info || info.size <= this.usageEventCompaction.maxBytes) return
-    const events = await readJsonl<RuntimeEvent>(path)
-    const compacted = compactUsageEvents(events, {
+    const compacted = await compactUsageEventsJsonlFile(path, {
       nowIso: this.usageEventCompaction.nowIso(),
-      retentionDays: this.usageEventCompaction.retentionDays
+      retentionDays: this.usageEventCompaction.retentionDays,
+      maxRecordBytes: DEFAULT_EVENT_REPLAY_MAX_RECORD_BYTES
     })
-    if (compacted.length >= events.length) return
-    const contents = compacted.map((event) => JSON.stringify(event)).join('\n')
-    await this.atomicWrite(path, contents ? `${contents}\n` : '')
+    if (!compacted) return
+    // Size/mtime changed; drop the stale high-water cache entry so the next
+    // highestSeq() rescans against the rewritten file.
+    this.highestSeqCache.delete(threadId)
   }
 
   /** Used by the loop during shutdown to verify the file actually exists. */

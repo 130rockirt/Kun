@@ -28,6 +28,7 @@ import type { TurnService } from '../../services/turn-service.js'
 import type { TurnRunOutcome } from '../../loop/turn-execution-types.js'
 import type { SessionStore } from '../../ports/session-store.js'
 import type { ThreadStore } from '../../ports/thread-store.js'
+import { sessionEventExists } from '../../adapters/session-event-query.js'
 import type { CapabilityRegistry } from '../../adapters/tool/capability-registry.js'
 import type { ToolHost, ToolHostContext } from '../../ports/tool-host.js'
 import {
@@ -227,7 +228,9 @@ export function createAgentSdkFactoryContext(deps: AgentSdkRuntimeFactoryDeps) {
           finishedAt: nowIso(),
           ...(resolution.status === 'submitted' ? { answers: resolution.answers } : {})
         } as Partial<TurnItem>)
-        const alreadyRecorded = (await deps.sessionStore.loadEventsSince(threadId, 0)).some(
+        const alreadyRecorded = await sessionEventExists(
+          deps.sessionStore,
+          threadId,
           (event) => event.kind === 'user_input_resolved' && event.inputId === input.id
         )
         if (!alreadyRecorded) {

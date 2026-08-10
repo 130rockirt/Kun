@@ -16,6 +16,7 @@ import type { UsageEvent } from '../../contracts/events.js'
 import type { ThreadRecord, ThreadSummary } from '../../contracts/threads.js'
 import type { ServerRuntime } from './server-runtime.js'
 import { jsonResponse, type JsonResponse } from '../response.js'
+import { collectSessionEventsOfKind } from '../../adapters/session-event-query.js'
 
 type UsageThreadSource = {
   id: string
@@ -214,10 +215,11 @@ async function loadUsageRecordsForSource(
   if (!thread) return []
   const records: ThreadUsageRecord[] = []
   let latestPersisted = emptyUsageSnapshot()
-  const events = await runtime.sessionStore.loadEventsSince(thread.id, 0)
-  const usageEvents = events
-    .filter((event): event is UsageEvent => event.kind === 'usage')
-    .sort((a, b) => a.seq - b.seq)
+  const usageEvents = (await collectSessionEventsOfKind(
+    runtime.sessionStore,
+    thread.id,
+    'usage'
+  )).sort((a, b) => a.seq - b.seq)
 
   for (const event of usageEvents) {
     const delta = diffUsage(event.usage, latestPersisted)
