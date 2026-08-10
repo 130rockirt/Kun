@@ -10,6 +10,7 @@ import {
   composerModeForThread,
   composerReasoningEffortForSelection,
   persistComposerMode,
+  persistComposerPersonaId,
   persistComposerProviderId,
   providerIdForComposerModel,
   providerIdMatchesComposerModel,
@@ -61,6 +62,7 @@ export function createAppActions(options: CreateAppActionsOptions): Pick<
   | 'setComposerReasoningEffort'
   | 'setComposerFastMode'
   | 'setComposerAgentId'
+  | 'setComposerPersonaId'
   | 'loadComposerModels'
   | 'setRoute'
   | 'openWrite'
@@ -176,6 +178,12 @@ export function createAppActions(options: CreateAppActionsOptions): Pick<
 
     setComposerAgentId: (agentId) => {
       set({ composerAgentId: agentId.trim() })
+    },
+
+    setComposerPersonaId: (presetId) => {
+      const normalized = presetId.trim()
+      set({ composerPersonaId: normalized })
+      persistComposerPersonaId(normalized)
     },
 
     loadComposerModels: async () => {
@@ -396,6 +404,7 @@ export function createAppActions(options: CreateAppActionsOptions): Pick<
         workspaceLabel: workspaceLabelFromPath(workspaceRoot),
         conversationWorkspaceRoot: settings.conversationWorkspaceRoot || '',
         disabledSkillIds: settings.disabledSkillIds,
+        codeAgentPresets: settings.codeAgentPresets,
         graphEnabled: settings.agents.kun.graph?.enabled === true,
         composerOrchestration:
           settings.agents.kun.graph?.enabled === true && get().composerOrchestration === 'graph'

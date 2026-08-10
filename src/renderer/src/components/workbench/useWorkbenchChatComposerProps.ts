@@ -28,6 +28,9 @@ type UseWorkbenchChatComposerPropsInput = {
   composerModelGroups: ComposerProps['composerModelGroups']
   composerReasoningEffort: ComposerProps['composerReasoningEffort']
   composerFastMode: NonNullable<ComposerProps['composerFastMode']>
+  composerPersonaId: NonNullable<ComposerProps['composerPersonaId']>
+  codeAgentPresets: NonNullable<ComposerProps['codeAgentPresets']>
+  setComposerPersonaId: NonNullable<ComposerProps['onComposerPersonaChange']>
   setComposerReasoningEffort: ComposerProps['onComposerReasoningEffortChange']
   setComposerFastMode: NonNullable<ComposerProps['onComposerFastModeChange']>
   setClawChannelModel: (channelId: string, modelId: string, providerId?: string) => void | Promise<unknown>
@@ -96,6 +99,9 @@ export function useWorkbenchChatComposerProps({
   composerModelGroups,
   composerReasoningEffort,
   composerFastMode,
+  composerPersonaId,
+  codeAgentPresets,
+  setComposerPersonaId,
   setComposerReasoningEffort,
   setComposerFastMode,
   setClawChannelModel,
@@ -217,6 +223,12 @@ export function useWorkbenchChatComposerProps({
     onNewCommand: () => void createThread({ workspaceRoot: activeSkillWorkspace, forceNew: true }),
     onReviewCommand: reviewActiveThread,
     onExecutionSettingsChange: updateComposerExecutionSettings,
+    // Personas are Code-mode only: Write has its own agent presets, and SDD
+    // drafts run a fixed prompt contract.
+    composerPersonaId: route === 'chat' && !activeSddDraft ? composerPersonaId : undefined,
+    codeAgentPresets: route === 'chat' && !activeSddDraft ? codeAgentPresets : undefined,
+    onComposerPersonaChange:
+      route === 'chat' && !activeSddDraft ? setComposerPersonaId : undefined,
     onBtwCommand: (seedText) => {
       if (seedText?.trim()) {
         void spawnSideConversation(seedText)
@@ -226,6 +238,9 @@ export function useWorkbenchChatComposerProps({
     }
   }), [
     activeClawChannelId,
+    codeAgentPresets,
+    composerPersonaId,
+    setComposerPersonaId,
     activeClawChannelModel,
     activeSddDraft,
     activeSkillWorkspace,

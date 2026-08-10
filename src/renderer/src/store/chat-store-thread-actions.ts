@@ -1240,6 +1240,7 @@ export function createThreadActions(
             ...(overrides?.guiPlan ? { guiPlan: overrides.guiPlan } : {}),
             ...(overrides?.guiDesignCanvas ? { guiDesignCanvas: true } : {}),
             ...(overrides?.guiDesignMode ? { guiDesignMode: true } : {}),
+            ...(overrides?.persona?.trim() ? { persona: overrides.persona.trim() } : {}),
             ...(overrides?.agentSurface ? { agentSurface: overrides.agentSurface } : {}),
             ...(overrides?.guiDesignArtifact ? { guiDesignArtifact: overrides.guiDesignArtifact } : {}),
             ...(writeContext ? { writeContext } : {}),
@@ -1318,6 +1319,9 @@ export function createThreadActions(
         : undefined
     const guiDesignCanvas = (queued?.guiDesignCanvas ?? overrides?.guiDesignCanvas) === true
     const guiDesignMode = (queued?.guiDesignMode ?? overrides?.guiDesignMode) === true
+    // A queued message keeps the persona active when it was queued, not the one
+    // selected by the time the queue drains.
+    const persona = (queued?.persona ?? overrides?.persona)?.trim() ?? ''
     const orchestration = queued?.orchestration ??
       overrides?.orchestration ??
       (mode === 'agent' && get().route === 'chat' && get().graphEnabled
@@ -1581,6 +1585,7 @@ export function createThreadActions(
         ...((queued?.guiPlan ?? overrides?.guiPlan) ? { guiPlan: queued?.guiPlan ?? overrides?.guiPlan } : {}),
         ...(guiDesignCanvas ? { guiDesignCanvas: true } : {}),
         ...(guiDesignMode ? { guiDesignMode: true } : {}),
+        ...(persona ? { persona } : {}),
         ...((queued?.guiDesignArtifact ?? overrides?.guiDesignArtifact)
           ? { guiDesignArtifact: queued?.guiDesignArtifact ?? overrides?.guiDesignArtifact }
           : {}),

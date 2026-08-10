@@ -18,6 +18,7 @@ import {
 import type { WriteRetrievalContext } from '@shared/write-retrieval'
 import { composeWritePrompt } from '../../write/quoted-selection'
 import { resolveWriteAgentPreset } from '../../write/agent-presets'
+import { resolveCodeAgentPersona } from '../chat/code-agent-presets'
 import { parseGuiPlanCommand } from '../../plan/plan-command'
 import { normalizeWorkspaceRoot } from '../../lib/workspace-path'
 import {
@@ -736,9 +737,15 @@ export function useWorkbenchComposerSubmitController({
         outboundDisplay = codeCanvasRoute.displayText
         outboundGuiDesignCanvas = true
       }
+      const chatState = useChatStore.getState()
+      const persona = resolveCodeAgentPersona(
+        chatState.codeAgentPresets,
+        chatState.composerPersonaId
+      )
       void sendMessage(outboundText, composerMode === 'plan' ? 'plan' : 'agent', {
         ...(outboundDisplay ? { displayText: outboundDisplay } : {}),
         ...(outboundGuiDesignCanvas ? { guiDesignCanvas: true } : {}),
+        ...(persona ? { persona } : {}),
         ...(reasoningEffort ? { reasoningEffort } : {}),
         ...(serviceTier ? { serviceTier } : {}),
         ...(attachmentIds.length ? { attachmentIds } : {}),
