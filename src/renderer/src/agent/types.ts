@@ -122,6 +122,14 @@ export type RuntimeChildMetadata = {
   toolInvocations?: number
   durationMs?: number
   queuedMs?: number
+  summaryTruncated?: boolean
+  resultRef?: {
+    artifactId: string
+    byteSize: number
+    lineCount: number
+    mimeType: 'text/markdown'
+  }
+  resultUnavailableReason?: string
   totalTokens?: number
   cacheHitRate?: number | null
   costUsd?: number
@@ -493,7 +501,7 @@ export type RuntimeStatusEventPayload = {
   attempt?: number
   maxAttempts?: number
   delayMs?: number
-  retryReason?: 'network' | 'stream_transport'
+  retryReason?: 'network' | 'stream_transport' | 'context_overflow'
   changeKind?: 'additive' | 'breaking'
   toolName?: string
   callId?: string

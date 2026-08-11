@@ -42,6 +42,11 @@ import { ThreadService } from '../services/thread-service.js'
 import { TurnService } from '../services/turn-service.js'
 import { UsageService } from '../services/usage-service.js'
 import type { ChildRunExecutor } from './delegation-runtime.js'
+import {
+  ChildResultExecutionError,
+  childResultSource,
+  materializeChildResult
+} from './child-result-materializer.js'
 
 export type ChildDelegatedRuntimeFactory = (input: {
   threads: ThreadService
@@ -392,7 +397,12 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
       throw new Error(runtimeError.message)
     }
     const items = await sessionStore.loadItems(thread.id)
-    const summary = summarizeChildTurn(items, started.turnId, status)
+    const result = await materializeChildResult({
+      content: childResultSource(items, started.turnId, status),
+      childId: thread.id,
+      parentThreadId: input.parentThreadId,
+      ...(options.artifactStore ? { artifactStore: options.artifactStore } : {})
+    })
     const toolInvocations = items.filter(
       (item) => item.turnId === started.turnId && item.kind === 'tool_call'
     ).length
@@ -402,10 +412,10 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
     const reviewBundle = childReviewBundle(items, started.turnId)
     const deckArtifact = childDeckArtifact(items, started.turnId)
     if (status !== 'completed') {
-      throw new Error(summary || `child agent ${status}`)
+      throw new ChildResultExecutionError(result.summary || `child agent ${status}`, result)
     }
     return {
-      summary,
+      ...result,
       ...(reviewBundle !== undefined ? { reviewBundle } : {}),
       ...(deckArtifact !== undefined ? { deckArtifact } : {}),
       ...(evidence ? { evidence } : {}),
@@ -512,43 +522,4 @@ function toolEvidenceTarget(args: Record<string, unknown>): string {
 function childThreadTitle(childId: string, label?: string, profile?: string): string {
   const suffix = label?.trim() || profile?.trim() || childId
   return `Child agent: ${suffix}`
-}
-
-function summarizeChildTurn(
-  items: readonly TurnItem[],
-  turnId: string,
-  status: 'completed' | 'failed' | 'aborted'
-): string {
-  const turnItems = items.filter((item) => item.turnId === turnId)
-  const assistantText = turnItems
-    .filter((item): item is Extract<TurnItem, { kind: 'assistant_text' }> => item.kind === 'assistant_text')
-    .map((item) => item.text.trim())
-    .filter(Boolean)
-    .join('\n\n')
-    .trim()
-  if (assistantText) return assistantText
-  const errors = turnItems
-    .filter((item): item is Extract<TurnItem, { kind: 'error' }> => item.kind === 'error')
-    .map((item) => item.message.trim())
-    .filter(Boolean)
-    .join('\n')
-    .trim()
-  if (errors) return errors
-  const toolResult = [...turnItems]
-    .reverse()
-    .find((item): item is Extract<TurnItem, { kind: 'tool_result' }> => item.kind === 'tool_result')
-  if (toolResult) return stringifySummary(toolResult.output)
-  return status === 'completed'
-    ? 'Child agent completed without a text response.'
-    : `Child agent ${status}.`
-}
-
-function stringifySummary(value: unknown): string {
-  if (typeof value === 'string') return value.trim()
-  if (value == null) return ''
-  try {
-    return JSON.stringify(value)
-  } catch {
-    return String(value)
-  }
 }

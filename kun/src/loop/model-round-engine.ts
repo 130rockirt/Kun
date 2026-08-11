@@ -23,11 +23,21 @@ import {
 } from './model-stream-collector.js'
 import type { LoopTelemetry } from './loop-telemetry.js'
 import type { TurnExecutionFailure } from './turn-execution-types.js'
+import {
+  modelContextOverflowError,
+  normalizeModelContextOverflowError,
+  type ModelContextOverflowError
+} from './model-context-overflow.js'
 
 export type ModelRoundStreamResult =
   | { kind: 'completed'; snapshot: ModelStreamSnapshot }
   | { kind: 'tool_calls'; snapshot: ModelStreamSnapshot }
   | { kind: 'aborted' }
+  | {
+      kind: 'context_overflow'
+      error: ModelContextOverflowError
+      partialOutput: boolean
+    }
   | { kind: 'failed' }
 
 export type ModelRoundEngineInput = {
@@ -114,6 +124,7 @@ export class ModelRoundEngine {
     let queuedReasoningChars = 0
     let queuedTextChars = 0
     let selectedRoute: ModelRouteTargetMetadata | undefined
+    let contextOverflow: ModelContextOverflowError | undefined
     const persistAccumulatedResponse = async (): Promise<void> => {
       if (collector.reasoning && collector.reasoning !== persistedReasoningText) {
         const nextReasoning = collector.reasoning
@@ -378,6 +389,8 @@ export class ModelRoundEngine {
               break
             }
             case 'model_error':
+              contextOverflow = modelContextOverflowError(intent.message, intent.code)
+              if (contextOverflow) break
               this.deps.rememberFailure(input.turnId, {
                 error: intent.message,
                 ...(intent.code ? { code: intent.code } : {}),
@@ -403,6 +416,14 @@ export class ModelRoundEngine {
         streamFailure = flushError
       }
       await persistAccumulatedResponse()
+      const overflow = normalizeModelContextOverflowError(streamFailure)
+      if (overflow) {
+        return {
+          kind: 'context_overflow',
+          error: overflow,
+          partialOutput: Boolean(collector.text || collector.reasoning || collector.toolCallCount)
+        }
+      }
       throw streamFailure
     } finally {
       deltaEvents.dispose()
@@ -422,7 +443,16 @@ export class ModelRoundEngine {
       reasoningBytes: Buffer.byteLength(snapshot.reasoning, 'utf8')
     })
     await persistAccumulatedResponse()
-    if (snapshot.stopReason === 'error') return { kind: 'failed' }
+    if (snapshot.stopReason === 'error') {
+      if (contextOverflow) {
+        return {
+          kind: 'context_overflow',
+          error: contextOverflow,
+          partialOutput: Boolean(snapshot.text || snapshot.reasoning || snapshot.toolCalls.length)
+        }
+      }
+      return { kind: 'failed' }
+    }
     return snapshot.toolCalls.length > 0
       ? { kind: 'tool_calls', snapshot }
       : { kind: 'completed', snapshot }

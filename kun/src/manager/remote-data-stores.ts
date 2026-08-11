@@ -112,6 +112,8 @@ const ArtifactMetaSchema = z.object({
   origin: z.string().optional(),
   origins: z.array(z.string()).optional(),
   originHistoryComplete: z.literal(true).optional(),
+  retention: z.literal('linked').optional(),
+  linkedOwners: z.array(z.string()).optional(),
   createdAt: z.string()
 }).strict()
 const ArtifactSummarySchema = z.object({
@@ -327,6 +329,13 @@ export class ManagerRemoteArtifactStore implements ArtifactStore {
 
   async put(input: PutArtifactInput): Promise<PutArtifactResult> {
     return PutArtifactResultSchema.parse(await this.call('put', { input })) as PutArtifactResult
+  }
+
+  async releaseOwner(ownerId: string): Promise<{ released: number; deleted: number }> {
+    return z.object({
+      released: z.number().int().nonnegative(),
+      deleted: z.number().int().nonnegative()
+    }).strict().parse(await this.call('releaseOwner', { ownerId }))
   }
 
   async delete(id: string): Promise<void> {

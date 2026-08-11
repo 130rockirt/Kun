@@ -228,6 +228,10 @@ export async function createRuntimeAgentComposition(
       backgroundShellRuntime.stopThread(threadId),
       Promise.resolve(delegationRuntime?.abortDetachedChildrenForThread(threadId) ?? 0)
     ])
+    await delegationRuntime?.cleanupThreadDeletion(
+      threadId,
+      (childId) => threadService.delete(childId)
+    )
   }
   const sdkRuntime = new ReplaceableDelegatedTurnRuntime(buildMainDelegatedRuntime({
     options: core.activeOptions,

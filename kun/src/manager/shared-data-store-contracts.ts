@@ -113,6 +113,7 @@ export type ManagerSessionStoreOperation =
 
 export type ManagerArtifactStoreOperation =
   | 'put'
+  | 'releaseOwner'
   | 'delete'
   | 'list'
   | 'get'

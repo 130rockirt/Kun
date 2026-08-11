@@ -28,6 +28,7 @@ import {
 } from '../contracts/events.js'
 import type { EventBus } from '../ports/event-bus.js'
 import type { ThreadStore } from '../ports/thread-store.js'
+import type { ArtifactStore } from '../artifacts/artifact-store.js'
 import type { TurnService } from '../services/turn-service.js'
 import { loadWorkspaceAgentProfiles } from './workspace-agents.js'
 import type { SubagentRoutingDocument } from './subagent-router.js'
@@ -61,6 +62,10 @@ import {
   subtractChildUsage,
   toUsageSnapshot
 } from './delegation-runtime-support.js'
+import {
+  CHILD_RESULT_PREVIEW_CHARS,
+  ChildResultExecutionError
+} from './child-result-materializer.js'
 
 export type SlotWaiter = {
   resolve: () => void
@@ -120,6 +125,7 @@ export abstract class DelegationRuntimeBase {
     eventBus?: EventBus
     threadStore?: ThreadStore
     turns?: TurnService
+    artifactStore?: ArtifactStore
     nowIso?: () => string
     idGenerator?: () => string
     executor?: ChildRunExecutor
@@ -342,6 +348,11 @@ export abstract class DelegationRuntimeBase {
         ...(record.toolInvocations !== undefined ? { toolInvocations: record.toolInvocations } : {}),
         ...(record.durationMs !== undefined ? { durationMs: record.durationMs } : {}),
         ...(record.queuedMs !== undefined ? { queuedMs: record.queuedMs } : {}),
+        ...(record.summaryTruncated ? { summaryTruncated: true } : {}),
+        ...(record.resultRef ? { resultRef: record.resultRef } : {}),
+        ...(record.resultUnavailableReason
+          ? { resultUnavailableReason: record.resultUnavailableReason }
+          : {}),
         ...(usage.totalTokens > 0 ? { totalTokens: usage.totalTokens } : {}),
         ...(usage.cacheHitRate !== undefined && usage.cacheHitRate !== null ? { cacheHitRate: usage.cacheHitRate } : {}),
         ...(usage.costUsd !== undefined ? { costUsd: usage.costUsd } : {}),
@@ -456,7 +467,7 @@ export abstract class DelegationRuntimeBase {
       record = await this.commitChildState(args.state, (current) => ChildRunRecord.parse({
         ...current,
         status: 'aborted',
-        error: errorMessage(error),
+        error: errorMessage(error).slice(0, CHILD_RESULT_PREVIEW_CHARS),
         updatedAt: this.now()
       }))
       return record
@@ -516,6 +527,9 @@ export abstract class DelegationRuntimeBase {
         ...current,
         status: contractError ? 'failed' : 'completed',
         summary: result.summary,
+        summaryTruncated: result.summaryTruncated,
+        resultRef: result.resultRef,
+        resultUnavailableReason: result.resultUnavailableReason,
         reviewBundle: result.reviewBundle ?? current.reviewBundle,
         reviewBundleParentTurnId: result.reviewBundle !== undefined
           ? args.parentTurnId
@@ -539,10 +553,19 @@ export abstract class DelegationRuntimeBase {
       return record
     } catch (error) {
       const finishedAt = this.now()
+      const childResult = error instanceof ChildResultExecutionError
+        ? error.result
+        : undefined
       record = await this.commitChildState(args.state, (current) => ChildRunRecord.parse({
         ...current,
         status: args.signal.aborted ? 'aborted' : 'failed',
-        error: errorMessage(error),
+        ...(childResult ? {
+          summary: childResult.summary,
+          summaryTruncated: childResult.summaryTruncated,
+          resultRef: childResult.resultRef,
+          resultUnavailableReason: childResult.resultUnavailableReason
+        } : {}),
+        error: errorMessage(error).slice(0, CHILD_RESULT_PREVIEW_CHARS),
         durationMs: (current.durationMs ?? 0) + elapsedMs(startedAt, finishedAt),
         updatedAt: finishedAt
       }))

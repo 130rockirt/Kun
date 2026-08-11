@@ -60,6 +60,7 @@ import { memoryInstructions } from './memory-instructions.js'
 import { modelCapabilitiesForModel } from './model-context-profile.js'
 import type { ModelRoundEngine } from './model-round-engine.js'
 import { modelClientDiagnostics } from './model-client-diagnostics.js'
+import { recoverModelContextOverflow } from './model-context-overflow-recovery.js'
 import { composeModelRequest, effectiveOutputBudgetTokens } from './model-request-composer.js'
 import { estimateModelRequestInputTokenBreakdown } from './model-request-estimator.js'
 import type { ModelRoutingService } from './model-routing-service.js'
@@ -128,7 +129,8 @@ export class ModelStepService extends ModelStepPreparationService {
     turnId: string,
     signal: AbortSignal,
     stepIndex = 0,
-    maxToolCallsPerStep = normalizeTurnLimits(this.deps.turnLimits).maxToolCallsPerStep
+    maxToolCallsPerStep = normalizeTurnLimits(this.deps.turnLimits).maxToolCallsPerStep,
+    contextOverflowRetryAttempt = 0
   ): Promise<ModelRoundOutcome> {
     const preparation = await this.prepareModelStep(
       threadId,
@@ -549,6 +551,18 @@ export class ModelStepService extends ModelStepPreparationService {
         return { markdown: `\n![generated image](${relativePath})\n` }
       }
     })
+    if (streamed.kind === 'context_overflow') {
+      return recoverModelContextOverflow({
+        deps: this.deps, streamed, history, model, providerId, accountId, serviceTier,
+        signal, threadId, turnId, clientSurface: prepared.clientSurface,
+        toolSpecs: requestToolSpecs, requestOverheadTokens, requestInputTokens: inputTokens,
+        outputBudgetTokens, requestHardCapTokens, retryAttempt: contextOverflowRetryAttempt,
+        retry: () => this.run(
+          threadId, turnId, signal, stepIndex, maxToolCallsPerStep,
+          contextOverflowRetryAttempt + 1
+        )
+      })
+    }
     if (routeSelectionDeferred && streamed.kind === 'tool_calls' && !streamRouteResolved) {
       const message = 'route pool emitted tool calls without resolving a concrete model target'
       this.deps.rememberFailure(turnId, {

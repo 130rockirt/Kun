@@ -302,7 +302,9 @@ export function runtimeStatusText(event: RuntimeStatusEventPayload): string {
       ? 'common:modelNetworkRetryStatus'
       : event.retryReason === 'stream_transport'
         ? 'common:modelStreamRetryStatus'
-        : 'common:modelRequestRetryStatus'
+        : event.retryReason === 'context_overflow'
+          ? 'common:modelContextOverflowRetryStatus'
+          : 'common:modelRequestRetryStatus'
     return i18n.t(key, {
       status: event.status ?? '',
       attempt: event.attempt ?? 0,

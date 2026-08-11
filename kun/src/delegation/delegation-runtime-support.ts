@@ -228,6 +228,16 @@ export function formatDetachedChildNotice(record: ChildRunRecord): string {
   if (record.summary?.trim()) {
     lines.push(`<summary>${escapeXml(record.summary.trim())}</summary>`)
   }
+  if (record.resultRef) {
+    lines.push(
+      `<result_artifact id="${escapeXml(record.resultRef.artifactId)}" ` +
+      `bytes="${record.resultRef.byteSize}" lines="${record.resultRef.lineCount}" ` +
+      'mime_type="text/markdown">Use read_artifact with bounded ranges.</result_artifact>'
+    )
+  }
+  if (record.resultUnavailableReason?.trim()) {
+    lines.push(`<result_unavailable>${escapeXml(record.resultUnavailableReason.trim())}</result_unavailable>`)
+  }
   if (record.error?.trim()) {
     lines.push(`<error>${escapeXml(record.error.trim())}</error>`)
   }

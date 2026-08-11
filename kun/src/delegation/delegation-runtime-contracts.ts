@@ -1,4 +1,4 @@
-import { chmod, mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { z } from 'zod'
@@ -57,6 +57,14 @@ const ChildRunUsage = z.object({
 
 const ChildReturnFormat = z.enum(['summary', 'evidence'])
 export type ChildReturnFormat = z.infer<typeof ChildReturnFormat>
+
+export const ChildResultRef = z.object({
+  artifactId: z.string().min(1),
+  byteSize: z.number().int().nonnegative(),
+  lineCount: z.number().int().nonnegative(),
+  mimeType: z.literal('text/markdown')
+}).strict()
+export type ChildResultRef = z.infer<typeof ChildResultRef>
 
 export const ChildSecuritySnapshot = z.object({
   /** Immutable parent workspace boundary; also used as the child working directory. */
@@ -162,6 +170,12 @@ export const ChildRunRecord = z.object({
   detached: z.boolean().optional(),
   status: z.enum(['queued', 'running', 'completed', 'failed', 'aborted']),
   summary: z.string().optional(),
+  /** True when summary is only a bounded preview of the child result. */
+  summaryTruncated: z.boolean().optional(),
+  /** Full oversized Markdown result stored outside the parent model context. */
+  resultRef: ChildResultRef.optional(),
+  /** Safe reason the full result could not be externalized. */
+  resultUnavailableReason: z.string().min(1).max(500).optional(),
   /** Structured PPT review result captured from the child tool stream. */
   reviewBundle: z.unknown().optional(),
   /** Parent turn that produced reviewBundle; distinguishes a fresh bundle from the preserved prior revision. */
@@ -256,6 +270,9 @@ export type ChildRunExecutor = (input: {
   signal: AbortSignal
 }) => Promise<{
   summary: string
+  summaryTruncated?: boolean
+  resultRef?: ChildResultRef
+  resultUnavailableReason?: string
   usage?: ChildRunRecord['usage']
   toolInvocations?: number
   prefixReused?: boolean
@@ -309,6 +326,13 @@ export class FileDelegationStore {
       if (isNotFound(error)) return undefined
       throw error
     }
+  }
+
+  async delete(childId: string): Promise<void> {
+    await this.ensureRoot()
+    await withManagerDataMutex(`delegation-run:${childId}`, async () => {
+      await rm(join(this.rootDir, `${childId}.json`), { force: true })
+    })
   }
 
   async list(parentThreadId?: string): Promise<ChildRunRecord[]> {
