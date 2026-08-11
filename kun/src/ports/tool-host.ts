@@ -12,7 +12,7 @@ import type {
   TurnClientSurface
 } from '../contracts/turns.js'
 import type { ArtifactStore } from '../artifacts/artifact-store.js'
-import type { ExtensionToolCatalogEpoch } from '../contracts/threads.js'
+import type { ExtensionToolCatalogEpoch, KnowledgeBaseMount } from '../contracts/threads.js'
 import type {
   UserInputRequest,
   UserInputResolution
@@ -139,6 +139,8 @@ export type ToolHostContext = {
   subagentResume?: SubagentResumeRequest
   /** Additional explicitly trusted workspace roots for this persisted thread. */
   additionalWorkspaces?: readonly string[]
+  /** User-mounted, read-only knowledge sources exposed only through knowledge tools. */
+  knowledgeBases?: readonly KnowledgeBaseMount[]
   /** Initiating client surface used to hide providers that require a desktop workbench. */
   clientSurface?: TurnClientSurface
   /**

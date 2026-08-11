@@ -364,6 +364,7 @@ export abstract class RoundOutcomeRecoveryPhase extends RoundOutcomeRequiredTool
       messageSource: prepared.messageSource,
       subagentResume: prepared.subagentResume,
       additionalWorkspaces: prepared.additionalWorkspaces,
+      knowledgeBases: prepared.knowledgeBases,
       clientSurface: prepared.clientSurface,
       threadMode: prepared.mode,
       activePlanContext: prepared.activePlanContext,

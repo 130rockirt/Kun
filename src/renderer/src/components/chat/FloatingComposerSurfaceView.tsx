@@ -3,6 +3,7 @@ import type { ComposerFileReference } from '../../lib/composer-file-references'
 import type { DesignComposerContext } from '../../design/design-composer-context'
 import { FloatingComposerFooterView } from './FloatingComposerFooterView'
 import type { FloatingComposerRenderContext } from './floating-composer-view-context'
+import { KnowledgeBasePicker } from './KnowledgeBasePicker'
 
 export function FloatingComposerSurfaceView({
   context
@@ -43,6 +44,7 @@ export function FloatingComposerSurfaceView({
             data-composer-workspace-controls
           >
             <WorkspaceProjectPicker currentWorkspaceRoot={effectiveWorkspaceRoot} />
+            <KnowledgeBasePicker />
             <GitBranchPicker
               workspaceRoot={effectiveWorkspaceRoot}
               useWorktreePool={useWorktreePool}

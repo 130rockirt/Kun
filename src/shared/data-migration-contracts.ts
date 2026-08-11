@@ -263,7 +263,7 @@ export const DataMigrationReferenceDescriptorSchema = z.object({
 export type DataMigrationReferenceDescriptor = z.infer<typeof DataMigrationReferenceDescriptorSchema>
 
 export const DATA_MIGRATION_REFERENCE_DESCRIPTORS_V1 = Object.freeze([
-  { component: 'thread', schemaVersion: 1, kind: 'workspace-root', jsonPointerPatterns: ['/workspace'], required: true },
+  { component: 'thread', schemaVersion: 1, kind: 'workspace-root', jsonPointerPatterns: ['/workspace', '/knowledgeBases/*/root'], required: true },
   { component: 'thread', schemaVersion: 1, kind: 'thread-id', jsonPointerPatterns: ['/id'], required: true },
   { component: 'thread', schemaVersion: 1, kind: 'parent-thread-id', jsonPointerPatterns: ['/parentThreadId', '/forkedFromThreadId'], required: false },
   { component: 'thread', schemaVersion: 1, kind: 'provider-id', jsonPointerPatterns: ['/providerId'], required: false },

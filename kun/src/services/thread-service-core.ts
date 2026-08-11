@@ -13,6 +13,7 @@ import type {
   ThreadRelation,
   ThreadStatus,
   ThreadUpdateStatus,
+  KnowledgeBaseMount,
   ThreadTodoItem,
   ThreadTodoList,
   ThreadTodoSource,
@@ -181,6 +182,7 @@ export interface ThreadService {
     summary?: string
     workspace?: string
     additionalWorkspaces?: string[]
+    knowledgeBases?: KnowledgeBaseMount[]
     mode?: ThreadMode
     /** Archive or unarchive only; execution and deletion states are internal. */
     status?: ThreadUpdateStatus

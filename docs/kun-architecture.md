@@ -10,6 +10,10 @@ agent 切换都不再是产品表面。
 Graph 编排、自进化项目 Agent、恢复与治理仍运行在同一个 Kun 边界内，完整设计与
 运维说明见 [`docs/graph-mode.md`](./graph-mode.md)。
 
+Write 工作区可以按线程挂载为 Code 的只读、无向量结构知识库。索引、工具、权限边界
+与检索流程见 [`docs/knowledge-bases.md`](./knowledge-bases.md)。知识库挂载不会扩大
+普通文件工具或 sandbox 的可写根。
+
 ## 客户端能力边界
 
 每个 turn 持久化发起端 `clientSurface`，取值为 `gui`、`tui`、`cli`、

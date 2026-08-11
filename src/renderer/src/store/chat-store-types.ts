@@ -11,6 +11,8 @@ import type {
   ThreadTodoList,
   ThreadTodoStatus,
   ThreadUsageSnapshot,
+  KnowledgeBaseIndexStatus,
+  KnowledgeBaseMount,
   UserFileReference,
   UserInputAnswer
 } from '../agent/types'
@@ -269,6 +271,7 @@ export type ChatState = {
   runtimeStatus: KunRuntimeStatusPayload | null
   codeWorkspaceRoots: string[]
   threads: NormalizedThread[]
+  knowledgeBaseStatuses: Record<string, KnowledgeBaseIndexStatus[]>
   threadSearch: string
   showArchivedThreads: boolean
   activeThreadId: string | null
@@ -438,6 +441,9 @@ export type ChatState = {
   clearWorkspace: () => Promise<void>
   deleteWorkspace: (workspacePath: string) => Promise<void>
   refreshThreads: () => Promise<void>
+  setThreadKnowledgeBases: (threadId: string, mounts: KnowledgeBaseMount[]) => Promise<boolean>
+  refreshThreadKnowledgeBases: (threadId?: string) => Promise<void>
+  reindexThreadKnowledgeBase: (threadId: string, knowledgeBaseId: string) => Promise<boolean>
   setThreadSearch: (query: string) => void
   setShowArchivedThreads: (show: boolean) => void
   createThread: (options?: {

@@ -27,6 +27,13 @@ export type CoreThreadSummaryJson = {
   /** Optional whole-conversation summary produced by the summarize route. */
   summary?: string
   workspace?: string
+  knowledgeBases?: Array<{
+    id: string
+    root: string
+    name: string
+    source: 'write-workspace'
+    access: 'read-only'
+  }>
   model: string
   mode: string
   status: CoreThreadStatus

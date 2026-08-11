@@ -76,6 +76,7 @@ export function threadFromCore(thread: CoreThreadSummaryJson): NormalizedThread 
     model: thread.model,
     mode: thread.mode,
     workspace: thread.workspace,
+    knowledgeBases: thread.knowledgeBases?.map((mount) => ({ ...mount })),
     status: thread.status,
     approvalPolicy: normalizeApprovalPolicy(thread.approvalPolicy),
     sandboxMode: normalizeSandboxMode(thread.sandboxMode),

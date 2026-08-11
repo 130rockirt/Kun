@@ -38,6 +38,7 @@ export function createToolExecutionContext(
     ...(input.messageSource ? { messageSource: input.messageSource } : {}),
     ...(input.subagentResume ? { subagentResume: input.subagentResume } : {}),
     ...(input.additionalWorkspaces?.length ? { additionalWorkspaces: input.additionalWorkspaces } : {}),
+    ...(input.knowledgeBases?.length ? { knowledgeBases: input.knowledgeBases } : {}),
     clientSurface: input.clientSurface,
     threadMode: input.threadMode,
     ...(input.activePlanContext ? { guiPlan: input.activePlanContext } : {}),

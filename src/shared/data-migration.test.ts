@@ -253,6 +253,11 @@ describe('typed reference registry and component migrators', () => {
       kind: 'workspace-file',
       jsonPointerPatterns: ['/write/*/filePaths/*']
     }))
+    expect(DATA_MIGRATION_REFERENCE_DESCRIPTORS_V1).toContainEqual(expect.objectContaining({
+      component: 'thread',
+      kind: 'workspace-root',
+      jsonPointerPatterns: ['/workspace', '/knowledgeBases/*/root']
+    }))
   })
 
   it('applies a deterministic contiguous migrator chain', () => {

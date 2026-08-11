@@ -199,6 +199,13 @@ export const ThreadLifecycleEvent = RuntimeEventBase.extend({
   mode: z.enum(['agent', 'plan']).optional(),
   workspace: z.string().optional(),
   additionalWorkspaces: z.array(z.string()).optional(),
+  knowledgeBases: z.array(z.object({
+    id: z.string(),
+    root: z.string(),
+    name: z.string(),
+    source: z.literal('write-workspace'),
+    access: z.literal('read-only')
+  })).optional(),
   approvalPolicy: ApprovalPolicySchema.optional(),
   approvalReviewer: ApprovalReviewerSchema.optional(),
   sandboxMode: SandboxModeSchema.optional(),

@@ -40,6 +40,10 @@ import { ERRORS } from './runtime-error.js'
 import type { ServerRuntime } from './server-runtime.js'
 import type { ApprovalConsentVerifier } from '../approval-consent.js'
 import { authorize } from './route-auth.js'
+import {
+  getThreadKnowledgeBases,
+  reindexThreadKnowledgeBase
+} from './knowledge-bases.js'
 
 export function registerThreadRoutes(
   router: Router,
@@ -73,6 +77,18 @@ export function registerThreadRoutes(
       runtime.sessionStore,
       runtime.userInputGate,
       runtime.approvalGate
+    )
+  })
+  router.add('GET', '/v1/threads/:id/knowledge-bases', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return getThreadKnowledgeBases(runtime.knowledgeBaseService, ctx.params.id)
+  })
+  router.add('POST', '/v1/threads/:id/knowledge-bases/:knowledgeBaseId/reindex', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return reindexThreadKnowledgeBase(
+      runtime.knowledgeBaseService,
+      ctx.params.id,
+      ctx.params.knowledgeBaseId
     )
   })
   router.add('GET', '/v1/threads/:id', async (request, ctx) => {

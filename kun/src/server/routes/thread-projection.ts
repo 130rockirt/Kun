@@ -19,6 +19,7 @@ export function projectTimelineThread(thread: ThreadRecord): ThreadRecord {
     ...thread,
     ...(thread.summary ? { summary: truncateTimelineText(thread.summary, 64 * 1024) } : {}),
     additionalWorkspaces: thread.additionalWorkspaces?.slice(0, 32),
+    knowledgeBases: thread.knowledgeBases?.slice(0, 8),
     // These snapshots are model/runtime inputs, not renderer timeline data.
     extensionProfile: undefined,
     toolCatalogEpoch: undefined,
