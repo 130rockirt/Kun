@@ -78,7 +78,8 @@ export function createServerRuntimeComposition(
     reviewService,
     attachmentPruneTimer,
     migrationService,
-    migrationImportService
+    migrationImportService,
+    knowledgeBaseService
   } = services
   const { delegationRuntime } = registryComposition
   const {
@@ -139,6 +140,7 @@ export function createServerRuntimeComposition(
 	    },
 	    migrationService,
 	    migrationImportService,
+	    knowledgeBaseService,
 	    get delegationRuntime() {
 	      return delegationRuntime
 	    },

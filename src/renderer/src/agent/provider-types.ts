@@ -25,6 +25,8 @@ import type {
   CompactionEventPayload,
   DelegatedRuntimeState,
   NormalizedThread,
+  KnowledgeBaseMount,
+  KnowledgeBaseIndexStatus,
   RequestContextSnapshot,
   ReviewEventPayload,
   ReviewTarget,
@@ -227,6 +229,12 @@ export interface AgentProvider {
    */
   renameThread(threadId: string, title: string, auto?: boolean): Promise<void>
   updateThreadWorkspace?(threadId: string, workspace: string): Promise<void>
+  updateThreadKnowledgeBases?(threadId: string, mounts: KnowledgeBaseMount[]): Promise<NormalizedThread>
+  getThreadKnowledgeBases?(threadId: string): Promise<{
+    mounts: KnowledgeBaseMount[]
+    statuses: KnowledgeBaseIndexStatus[]
+  }>
+  reindexThreadKnowledgeBase?(threadId: string, knowledgeBaseId: string): Promise<KnowledgeBaseIndexStatus>
   updateThreadPinned?(threadId: string, pinned: boolean): Promise<void>
   archiveThread?(threadId: string, archived: boolean): Promise<void>
   deleteThread(threadId: string): Promise<void>

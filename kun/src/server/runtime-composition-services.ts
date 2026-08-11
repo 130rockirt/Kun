@@ -16,6 +16,8 @@ import {
   createTaskGraphTool,
   buildMcpToolProviders,
   buildMemoryToolProviders,
+  KnowledgeBaseService,
+  buildKnowledgeToolProvider,
   buildSkillToolProviders,
   buildWebToolProviders,
   buildImageGenToolProviders,
@@ -254,6 +256,11 @@ export async function createRuntimeServices(
 	  }, 60 * 60 * 1_000)
 	  attachmentPruneTimer.unref()
 	  let memoryStore = createPersistentMemoryStore(core.activeOptions, nowIso)
+  const knowledgeBaseService = new KnowledgeBaseService({
+    dataDir: core.activeOptions.dataDir,
+    threadStore,
+    nowIso
+  })
 	  const migrationService = new RuntimeMigrationService({
 	    rootDir: join(core.activeOptions.dataDir, 'migrations', 'exports'),
 	    threads: threadService,
@@ -378,6 +385,7 @@ export async function createRuntimeServices(
     ...mcpProviders.providers,
     ...webProviders.providers,
     ...buildMemoryToolProviders(memoryStore),
+    buildKnowledgeToolProvider(knowledgeBaseService),
     ...buildSkillToolProviders(skillRuntime),
     ...imageGenProviders.providers,
     ...speechGenProviders.providers,
@@ -423,6 +431,7 @@ export async function createRuntimeServices(
     attachmentPruneTimer,
     migrationService,
     migrationImportService,
+    knowledgeBaseService,
     designCanvasProvider,
     officeCliProviders,
     taskGraphTool,

@@ -325,6 +325,12 @@ export async function updateThread(
         404
       )
     }
+    if (error instanceof Error && /cannot be changed while the thread is running/i.test(error.message)) {
+      return jsonResponse({ code: 'conflict', message: error.message }, 409)
+    }
+    if (error instanceof Error && /knowledge base|absolute roots|overlap|primary workspace|unique/i.test(error.message)) {
+      return jsonResponse({ code: 'validation_error', message: error.message }, 400)
+    }
     throw error
   }
 }

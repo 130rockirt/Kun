@@ -96,6 +96,7 @@ import type { ModelConnectionOAuthService } from '../../services/model-connectio
 import type { OfficialProviderAuthService } from '../../services/official-provider-cli.js'
 import type { ProviderQuotaService } from '../../services/provider-quota-service.js'
 import type { ToolCancellationService } from '../../services/tool-cancellation-service.js'
+import type { KnowledgeBaseService } from '../../knowledge/knowledge-base-service.js'
 
 export type RuntimeToolDiagnostics = {
   providers: ToolProviderPolicy[]
@@ -185,6 +186,7 @@ export type ServerRuntime = {
   toolHost?: ToolHost
   attachmentStore?: AttachmentStore
   memoryStore?: MemoryStore
+  knowledgeBaseService?: KnowledgeBaseService
   migrationService?: RuntimeMigrationService
   migrationImportService?: RuntimeMigrationImportService
   /**

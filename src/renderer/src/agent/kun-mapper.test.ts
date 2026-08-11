@@ -48,6 +48,26 @@ describe('runtime projection action normalization', () => {
     expect(thread.agentSurface).toBe('design')
   })
 
+  it('preserves read-only knowledge-base mounts from thread summaries', () => {
+    const thread = threadFromCore({
+      id: 'thread_kb',
+      title: 'Knowledge task',
+      model: 'model_1',
+      mode: 'agent',
+      status: 'idle',
+      knowledgeBases: [{
+        id: 'kb_docs', root: '/Users/demo/docs', name: 'Docs',
+        source: 'write-workspace', access: 'read-only'
+      }],
+      createdAt: '2026-07-29T00:00:00.000Z',
+      updatedAt: '2026-07-29T00:00:00.000Z'
+    })
+
+    expect(thread.knowledgeBases).toEqual([expect.objectContaining({
+      id: 'kb_docs', access: 'read-only'
+    })])
+  })
+
   it('defaults a legacy thread without reviewer metadata to manual user review', () => {
     const thread = threadFromCore({
       id: 'thread_1',

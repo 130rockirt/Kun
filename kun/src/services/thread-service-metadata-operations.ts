@@ -13,6 +13,7 @@ import type {
   ThreadRelation,
   ThreadStatus,
   ThreadUpdateStatus,
+  KnowledgeBaseMount,
   ThreadTodoItem,
   ThreadTodoList,
   ThreadTodoSource,
@@ -29,6 +30,7 @@ import type { Turn } from '../contracts/turns.js'
 import { isPublicTurnItem, type TurnItem } from '../contracts/items.js'
 import {
   createThreadRecord,
+  normalizeKnowledgeBaseMounts,
   resolveThreadAgentSurface,
   toThreadSummary,
   touchThread
@@ -120,6 +122,7 @@ async create(this: ThreadService,
       ...(request.titleAuto !== undefined ? { titleAuto: request.titleAuto } : {}),
       workspace: request.workspace,
       additionalWorkspaces: request.additionalWorkspaces,
+      knowledgeBases: request.knowledgeBases,
       model: request.model,
       ...(request.agentSurface ? { agentSurface: request.agentSurface } : {}),
       ...(request.providerId?.trim() ? { providerId: request.providerId.trim() } : {}),
@@ -152,6 +155,7 @@ async create(this: ThreadService,
       kind: 'thread_created',
       threadId: thread.id,
       title: thread.title,
+      knowledgeBases: thread.knowledgeBases,
       approvalPolicy: thread.approvalPolicy,
       sandboxMode: thread.sandboxMode,
       approvalReviewer: thread.approvalReviewer
@@ -165,6 +169,7 @@ async update(this: ThreadService, threadId: string, patch: {
     summary?: string
     workspace?: string
     additionalWorkspaces?: string[]
+    knowledgeBases?: KnowledgeBaseMount[]
     mode?: ThreadMode
     /** Archive or unarchive only; execution and deletion states are internal. */
     status?: ThreadUpdateStatus
@@ -192,6 +197,17 @@ async update(this: ThreadService, threadId: string, patch: {
         standardPatch.additionalWorkspaces = [...new Set(
           standardPatch.additionalWorkspaces.map((entry) => entry.trim()).filter(Boolean)
         )].filter((entry) => entry !== (standardPatch.workspace ?? current.workspace))
+      }
+      if (standardPatch.knowledgeBases !== undefined) {
+        if (current.status === 'running') {
+          throw new Error('knowledge bases cannot be changed while the thread is running')
+        }
+      }
+      if (standardPatch.knowledgeBases !== undefined || standardPatch.workspace !== undefined) {
+        standardPatch.knowledgeBases = normalizeKnowledgeBaseMounts(
+          standardPatch.knowledgeBases ?? current.knowledgeBases,
+          standardPatch.workspace ?? current.workspace
+        )
       }
       const merged: ThreadRecord = { ...current, ...standardPatch }
       if (status === 'archived') {
@@ -231,6 +247,7 @@ async update(this: ThreadService, threadId: string, patch: {
       mode: updated.mode,
       workspace: updated.workspace,
       additionalWorkspaces: updated.additionalWorkspaces,
+      knowledgeBases: updated.knowledgeBases,
       approvalPolicy: updated.approvalPolicy,
       sandboxMode: updated.sandboxMode,
       approvalReviewer: updated.approvalReviewer,

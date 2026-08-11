@@ -78,6 +78,8 @@ export { FileArtifactStore, type ArtifactStore } from '../artifacts/artifact-sto
 export { createTaskGraphTool } from '../adapters/tool/task-graph-tool.js'
 export { buildMcpToolProviders } from '../adapters/tool/mcp-tool-provider.js'
 export { buildMemoryToolProviders } from '../adapters/tool/memory-tool-provider.js'
+export { KnowledgeBaseService } from '../knowledge/knowledge-base-service.js'
+export { buildKnowledgeToolProvider } from '../knowledge/knowledge-tools.js'
 export { buildSkillToolProviders } from '../adapters/tool/skill-tool-provider.js'
 export { buildDelegationToolProviders } from '../adapters/tool/delegation-tool-provider.js'
 export { buildComponentDesignToolProviders } from '../adapters/tool/component-design-tool-provider.js'

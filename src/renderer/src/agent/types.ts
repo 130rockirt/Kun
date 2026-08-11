@@ -213,6 +213,7 @@ export type NormalizedThread = {
   model: string
   mode: string
   workspace?: string
+  knowledgeBases?: KnowledgeBaseMount[]
   status?: string
   approvalPolicy?: ApprovalPolicy
   sandboxMode?: SandboxMode
@@ -241,6 +242,23 @@ export type NormalizedThread = {
   forkedFromTurnCount?: number
   goal?: ThreadGoal | null
   todos?: ThreadTodoList | null
+}
+
+export type KnowledgeBaseMount = {
+  id: string
+  root: string
+  name: string
+  source: 'write-workspace'
+  access: 'read-only'
+}
+
+export type KnowledgeBaseIndexStatus = {
+  id: string
+  state: 'pending' | 'indexing' | 'ready' | 'stale' | 'unavailable' | 'error'
+  documentCount: number
+  nodeCount: number
+  lastIndexedAt?: string
+  error?: string
 }
 
 export type ThreadGoalStatus =

@@ -139,6 +139,7 @@ async fork(this: ThreadService, threadId: string, options: ForkThreadOptions = {
       title: options.title?.trim() || defaultTitle,
       workspace: current.workspace,
       additionalWorkspaces: current.additionalWorkspaces,
+      knowledgeBases: current.knowledgeBases,
       model: current.model,
       agentSurface: resolveThreadAgentSurface(current),
       ...(current.providerId ? { providerId: current.providerId } : {}),

@@ -2,6 +2,8 @@ import type {
   AgentProvider,
   ChatBlock,
   NormalizedThread,
+  KnowledgeBaseMount,
+  KnowledgeBaseIndexStatus,
   ReviewTarget,
   ThreadEventSink,
   ThreadListOptions,
@@ -213,6 +215,52 @@ export class KunRuntimeThreadServices extends KunRuntimeProviderServices {
     if (!response.ok) {
       throw runtimeErrorToError(readRuntimeError(response.body, 'update thread workspace failed'))
     }
+  }
+
+  async updateThreadKnowledgeBases(
+    threadId: string,
+    mounts: KnowledgeBaseMount[]
+  ): Promise<NormalizedThread> {
+    const response = await rendererRuntimeClient.runtimeRequest(
+      kunThreadPath(threadId),
+      'PATCH',
+      JSON.stringify({ knowledgeBases: mounts })
+    )
+    if (!response.ok) {
+      throw runtimeErrorToError(readRuntimeError(response.body, 'update thread knowledge bases failed'))
+    }
+    return threadFromCore(readRuntimeJson<CoreThreadJson>(
+      response.body,
+      'runtime returned an invalid thread response'
+    ))
+  }
+
+  async getThreadKnowledgeBases(threadId: string): Promise<{
+    mounts: KnowledgeBaseMount[]
+    statuses: KnowledgeBaseIndexStatus[]
+  }> {
+    const response = await rendererRuntimeClient.runtimeRequest(
+      `${kunThreadPath(threadId)}/knowledge-bases`,
+      'GET'
+    )
+    if (!response.ok) {
+      throw runtimeErrorToError(readRuntimeError(response.body, 'get thread knowledge bases failed'))
+    }
+    return readRuntimeJson(response.body, 'runtime returned invalid knowledge base status')
+  }
+
+  async reindexThreadKnowledgeBase(
+    threadId: string,
+    knowledgeBaseId: string
+  ): Promise<KnowledgeBaseIndexStatus> {
+    const response = await rendererRuntimeClient.runtimeRequest(
+      `${kunThreadPath(threadId)}/knowledge-bases/${encodeURIComponent(knowledgeBaseId)}/reindex`,
+      'POST'
+    )
+    if (!response.ok) {
+      throw runtimeErrorToError(readRuntimeError(response.body, 'reindex knowledge base failed'))
+    }
+    return readRuntimeJson(response.body, 'runtime returned invalid knowledge base status')
   }
 
   async updateThreadPinned(threadId: string, pinned: boolean): Promise<void> {
