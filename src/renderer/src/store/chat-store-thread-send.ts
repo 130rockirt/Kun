@@ -212,6 +212,7 @@ export async function sendThreadMessage(
       createClientTurnRequestId()
     const expectedThreadId = (queued?.expectedThreadId ?? overrides?.expectedThreadId ?? '').trim()
     const requestedAgentSurface = queued?.agentSurface ?? overrides?.agentSurface
+    const persona = (queued?.persona ?? overrides?.persona)?.trim() ?? ''
     const expectedThreadStillActive = (): boolean => Boolean(
       !expectedThreadId ||
       (
@@ -348,6 +349,7 @@ export async function sendThreadMessage(
           ...((queued?.guiPlan ?? overrides?.guiPlan) ? { guiPlan: queued?.guiPlan ?? overrides?.guiPlan } : {}),
           ...((queued?.guiDesignCanvas ?? overrides?.guiDesignCanvas) ? { guiDesignCanvas: true } : {}),
           ...((queued?.guiDesignMode ?? overrides?.guiDesignMode) ? { guiDesignMode: true } : {}),
+          ...(persona ? { persona } : {}),
           ...(requestedAgentSurface ? { agentSurface: requestedAgentSurface } : {}),
           ...((queued?.guiDesignArtifact ?? overrides?.guiDesignArtifact)
             ? { guiDesignArtifact: queued?.guiDesignArtifact ?? overrides?.guiDesignArtifact }
@@ -498,6 +500,7 @@ export async function sendThreadMessage(
       serviceTier,
       guiDesignCanvas,
       guiDesignMode,
+      persona,
       orchestration,
       userModelChip,
       submittedMessageForQueue

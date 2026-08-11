@@ -12,6 +12,7 @@ import { persistComposerModel } from '../store/chat-store-helpers'
 import { isKunRuntimeInsecure } from '@shared/app-settings-kun-migration'
 import { type ReactElement } from 'react'
 import { formatCompactNumber } from '../hooks/use-thread-usage'
+import { CodeAgentPresetsEditor } from './settings-code-agent-presets'
 import {
   AdvancedSettingsDisclosure,
   ModelSelect,
@@ -106,6 +107,17 @@ export function AgentsAssistantSettingsPanel({ view }: { view: Record<string, an
                         onChange={(e) => update({ codePromptPrefix: e.target.value })}
                         placeholder={t('codePromptPrefixPlaceholder')}
                         className="min-h-[110px] w-full resize-y rounded-xl border border-ds-border bg-ds-main/60 px-3 py-3 text-[14px] leading-6 text-ds-ink outline-none focus:border-accent/40 focus:ring-1 focus:ring-accent/25"
+                      />
+                    }
+                  />
+                  <SettingRow
+                    title={t('codeAgentPresets')}
+                    description={t('codeAgentPresetsDesc')}
+                    wideControl
+                    control={
+                      <CodeAgentPresetsEditor
+                        presets={form?.codeAgentPresets ?? []}
+                        onChange={(next) => update({ codeAgentPresets: next })}
                       />
                     }
                   />

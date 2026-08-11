@@ -71,6 +71,7 @@ function settings(dataDir: string, model = 'settings-model'): AppSettingsV1 {
     guiUpdate: { channel: 'stable' },
     codePromptPrefix: '',
     chatWelcomeMessage: '',
+    codeAgentPresets: [],
     disabledSkillIds: []
   }
 }

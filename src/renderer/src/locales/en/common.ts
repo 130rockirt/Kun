@@ -5,6 +5,7 @@ import commandsSdd from './common/commands-sdd.json'
 import sddFrameworks from './common/sdd-frameworks.json'
 import sddMcp from './common/sdd-mcp.json'
 import agentsGraph from './common/agents-graph.json'
+import codePersonas from './common/code-personas.json'
 
 const common = {
   ...shellWorkflow,
@@ -14,6 +15,7 @@ const common = {
   ...sddFrameworks,
   ...sddMcp,
   ...agentsGraph,
+  ...codePersonas,
 }
 
 export default common

@@ -64,6 +64,7 @@ function settingsForPort(port: number): AppSettingsV1 {
     guiUpdate: { channel: 'stable' },
     codePromptPrefix: '',
     chatWelcomeMessage: '',
+    codeAgentPresets: [],
     disabledSkillIds: []
   }
 }

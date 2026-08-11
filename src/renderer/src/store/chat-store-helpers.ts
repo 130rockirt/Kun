@@ -37,6 +37,7 @@ export { normalizeTurnModelMap } from './chat-store-helper-storage'
 
 const COMPOSER_MODEL_STORAGE_KEY = 'kun.composerModel'
 const COMPOSER_PROVIDER_STORAGE_KEY = 'kun.composerProviderId'
+const COMPOSER_PERSONA_STORAGE_KEY = 'kun.composerPersonaId'
 const COMPOSER_REASONING_EFFORT_STORAGE_KEY = 'kun.composerReasoningEffortByModel.v1'
 const COMPOSER_FAST_MODE_STORAGE_KEY = 'kun.composerFastMode.v1'
 const COMPOSER_MODE_STORAGE_KEY = 'kun.composerMode'
@@ -130,6 +131,19 @@ export function readStoredComposerFastMode(): boolean {
 
 export function persistComposerFastMode(enabled: boolean): void {
   writeBrowserStorageItem(COMPOSER_FAST_MODE_STORAGE_KEY, enabled ? 'true' : 'false')
+}
+
+/**
+ * The stored id is not validated against the preset catalog here: settings load
+ * after the store initializes, and a preset deleted while selected resolves to
+ * an empty persona at send time (`resolveCodeAgentPersona`).
+ */
+export function readStoredComposerPersonaId(): string {
+  return readBrowserStorageItem(COMPOSER_PERSONA_STORAGE_KEY)?.trim() ?? ''
+}
+
+export function persistComposerPersonaId(presetId: string): void {
+  writeBrowserStorageItem(COMPOSER_PERSONA_STORAGE_KEY, presetId.trim())
 }
 
 export function composerReasoningEffortForSelection(

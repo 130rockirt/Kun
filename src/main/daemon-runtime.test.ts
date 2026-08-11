@@ -75,6 +75,7 @@ function settingsWith(daemons: SessionDaemonV1[], enabled = true): AppSettingsV1
     guiUpdate: { channel: 'stable' },
     codePromptPrefix: '',
     chatWelcomeMessage: '',
+    codeAgentPresets: [],
     disabledSkillIds: []
   }
 }

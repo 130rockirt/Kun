@@ -58,6 +58,7 @@ function settings(workspaceRoot: string, nestedRoot = workspaceRoot): AppSetting
     guiUpdate: { channel: 'stable' },
     codePromptPrefix: 'portable prompt',
     chatWelcomeMessage: '',
+    codeAgentPresets: [],
     disabledSkillIds: ['example']
   }
 }

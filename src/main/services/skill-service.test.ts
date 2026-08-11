@@ -357,6 +357,7 @@ describe('skill-service', () => {
       guiUpdate: { channel: 'stable' },
       codePromptPrefix: '',
       chatWelcomeMessage: '',
+      codeAgentPresets: [],
       disabledSkillIds: []
     }
   }

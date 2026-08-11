@@ -195,6 +195,17 @@ describe('FloatingComposer input history and shortcut hint', () => {
     expect(html).toMatch(/<button[^>]*disabled=""[^>]*aria-label="Send"/)
   })
 
+  it('renders the persona picker when a legacy preset has no icon field', () => {
+    const html = renderToStaticMarkup(createElement(FloatingComposer, baseComposerProps({
+      composerPersonaId: 'doubter',
+      codeAgentPresets: [{ id: 'doubter' }],
+      onComposerPersonaChange: () => undefined
+    })))
+
+    expect(html).toContain('data-composer-persona="doubter"')
+    expect(html).toContain('lucide-search-check')
+  })
+
   it('restores previous sent text with ArrowUp when the caret is on the first line', async () => {
     const storage = new MemoryStorage()
     storage.setItem(COMPOSER_INPUT_HISTORY_STORAGE_KEY, JSON.stringify(['previous prompt']))

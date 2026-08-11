@@ -26,6 +26,7 @@ export function FloatingComposerSurfaceView({
     handlePromptOptimizationClick, hideModelPicker, input, isComposerDirectoryReference, mode,
     modelControlVariant, modelPickerMode, onComposerFastModeChange, onComposerModelChange,
     onComposerReasoningEffortChange, onConfigureProviders, onExecutionSettingsChange, onInterrupt,
+    onComposerPersonaChange, codeAgentPresets, composerPersonaId, resolvedCodeAgentPresets, FloatingComposerPersonaPicker,
     onRemoveAttachment, onRemoveContextChip, onRemoveFileReference, onToggleWorktreeMode,
     onWorktreeBranchChange, openSettings, orchestration, placeholder, primaryActionDisabled,
     primaryActionLabel, primaryActionLoading, promptOptimizationBusy, promptOptimizationError,
@@ -297,6 +298,15 @@ export function FloatingComposerSurfaceView({
                     disabled={!canCompose || busy}
                     onChange={onExecutionSettingsChange}
                     onOpenPermissionSettings={() => openSettings('agents')}
+                  />
+                ) : null}
+                {codeAgentPresets && onComposerPersonaChange ? (
+                  <FloatingComposerPersonaPicker
+                    presets={resolvedCodeAgentPresets}
+                    activePresetId={composerPersonaId ?? ''}
+                    disabled={!canCompose}
+                    onSelect={onComposerPersonaChange}
+                    onOpenPersonaSettings={() => openSettings('agents')}
                   />
                 ) : null}
               </div>

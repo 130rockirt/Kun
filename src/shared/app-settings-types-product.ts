@@ -298,6 +298,28 @@ export type WriteAgentPresetV1 = {
   persona: string
 }
 
+export const CODE_AGENT_PRESET_MAX_COUNT = 12
+export const CODE_AGENT_PRESET_NAME_MAX_CHARS = 40
+/** Lucide icon names are PascalCase ASCII; the longest today is ~40 chars. */
+export const CODE_AGENT_PRESET_ICON_MAX_CHARS = 64
+/** Kept in sync with the runtime cap (`TURN_PERSONA_MAX_CHARS` in kun/src/contracts/turns.ts). */
+export const CODE_AGENT_PERSONA_MAX_CHARS = 2000
+/**
+ * A named, reusable stance for the Code agent (skeptic, explorer, minimalist…).
+ * The persona text is sent per turn and guides tone and working style only — it
+ * never grants tools or relaxes policy.
+ */
+export type CodeAgentPresetV1 = {
+  /** Stable id; built-in ids get localized name/persona fallbacks. */
+  id: string
+  /** Display name; empty = localized default for built-in ids. */
+  name: string
+  /** Lucide icon name shown in the composer picker; unknown/empty renders a fallback. */
+  icon: string
+  /** Persona text framing the agent. Empty = localized default for built-in ids. */
+  persona: string
+}
+
 export type WriteSettingsV1 = {
   defaultWorkspaceRoot: string
   activeWorkspaceRoot: string
@@ -546,6 +568,8 @@ export type AppSettingsV1 = {
    * (`emptyHeroTitle`).
    */
   chatWelcomeMessage: string
+  /** Selectable Code-agent personas. Replaced wholesale on patch. */
+  codeAgentPresets: CodeAgentPresetV1[]
   /** User-disabled skill IDs. Disabled skills are hidden from command surfaces. */
   disabledSkillIds: string[]
 }

@@ -77,6 +77,7 @@ function createSettings(binaryPath: string): AppSettingsV1 {
     guiUpdate: { channel: 'stable' },
     codePromptPrefix: '',
     chatWelcomeMessage: '',
+    codeAgentPresets: [],
     disabledSkillIds: []
   }
 }

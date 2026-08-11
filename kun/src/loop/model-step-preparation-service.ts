@@ -17,6 +17,7 @@ import { buildToolPreferenceInstruction } from '../prompt/kun-system-prompt.js'
 import {
   buildClientSurfaceInstruction,
   buildKunTurnContextInstructions,
+  buildPersonaBlockContent,
   type KunTurnContextBlock
 } from '../prompt/kun-prompt-context.js'
 import { effectiveHistoryAfterLatestCompaction } from './compaction-history.js'
@@ -555,6 +556,9 @@ export abstract class ModelStepPreparationService {
       }).map((content) => kunContextBlock('attachment-reference', 'reference', content)),
       ...memoryInstructions(memories)
         .map((content) => kunContextBlock('memory', 'user', content)),
+      ...(turn?.persona?.trim()
+        ? [kunContextBlock('persona', 'user', buildPersonaBlockContent(turn.persona))]
+        : []),
       ...(skillResolution.catalogInstruction
         ? [kunContextBlock('skill-catalog', 'skill', skillResolution.catalogInstruction)]
         : []),

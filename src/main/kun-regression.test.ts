@@ -136,6 +136,7 @@ describe('Kun single-agent regression', () => {
       guiUpdate: { channel: 'stable' },
       codePromptPrefix: '',
       chatWelcomeMessage: '',
+      codeAgentPresets: [],
       disabledSkillIds: []
     }
 

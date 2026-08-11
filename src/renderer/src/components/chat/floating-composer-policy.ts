@@ -1,6 +1,6 @@
 import type { ReactElement } from 'react'
 import type { ModelProviderModelGroup } from '@shared/kun-gui-api'
-import type { KunSpeechToTextSettingsV1 } from '@shared/app-settings'
+import type { KunSpeechToTextSettingsV1, CodeAgentPresetV1 } from '@shared/app-settings'
 import { isSpeechToTextConfigured } from '@shared/speech-to-text'
 import type { AttachmentReference, ChatBlock, ReviewTarget } from '../../agent/types'
 import type { AppRoute } from '../../store/chat-store-types'
@@ -97,10 +97,14 @@ export type FloatingComposerProps = {
   composerModelGroups?: ModelProviderModelGroup[]
   composerReasoningEffort?: string
   composerFastMode?: boolean
+  /** Selected Code-persona preset id; undefined hides the picker (non-Code surfaces). */
+  composerPersonaId?: string
+  codeAgentPresets?: readonly CodeAgentPresetV1[]
   showProviderInModelLabel?: boolean
   onComposerModelChange: (modelId: string, providerId?: string) => void
   onComposerReasoningEffortChange?: (effort: ComposerReasoningEffort) => void
   onComposerFastModeChange?: (enabled: boolean) => void
+  onComposerPersonaChange?: (presetId: string) => void
   onConfigureProviders?: () => void
   hideModelPicker?: boolean
   modelPickerMode?: 'select' | 'combobox'

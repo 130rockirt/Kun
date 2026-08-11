@@ -47,6 +47,7 @@ import { normalizeClawSettings } from './app-settings-claw'
 import { normalizeScheduleSettings } from './app-settings-schedule'
 import { normalizeWorkflowSettings } from './app-settings-workflow'
 import { normalizeWriteSettings } from './app-settings-write'
+import { normalizeCodeAgentPresets } from './app-settings-code-agents'
 import { normalizeDesignSettings } from './app-settings-design'
 import { normalizeTerminalSettings, type TerminalSettingsPatchV1 } from './app-settings-terminal'
 
@@ -152,6 +153,7 @@ export function normalizeAppSettings(settings: AppSettingsV1): AppSettingsV1 {
     },
     codePromptPrefix: typeof maybeSettings.codePromptPrefix === 'string' ? maybeSettings.codePromptPrefix : '',
     chatWelcomeMessage: normalizeChatWelcomeMessage(maybeSettings.chatWelcomeMessage),
+    codeAgentPresets: normalizeCodeAgentPresets(maybeSettings.codeAgentPresets),
     disabledSkillIds: normalizeDisabledSkillIds(maybeSettings.disabledSkillIds)
   }
 }

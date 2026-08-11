@@ -141,6 +141,7 @@ function buildSettings(
     guiUpdate: { channel: 'stable' },
     codePromptPrefix: '',
     chatWelcomeMessage: '',
+    codeAgentPresets: [],
     disabledSkillIds: []
   }
   return patch ? patch(base) : base

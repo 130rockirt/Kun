@@ -94,6 +94,8 @@ import {
   FloatingComposerExecutionPicker,
   type ComposerExecutionSettings
 } from './FloatingComposerExecutionPicker'
+import { FloatingComposerPersonaPicker } from './FloatingComposerPersonaPicker'
+import { resolveCodeAgentPreset } from './code-agent-presets'
 import {
   FloatingComposerAttachments,
   handleComposerImagePaste
@@ -193,10 +195,13 @@ export function FloatingComposer({
   composerModelGroups = EMPTY_MODEL_GROUPS,
   composerReasoningEffort,
   composerFastMode,
+  composerPersonaId,
+  codeAgentPresets,
   showProviderInModelLabel = false,
   onComposerModelChange,
   onComposerReasoningEffortChange,
   onComposerFastModeChange,
+  onComposerPersonaChange,
   onConfigureProviders,
   hideModelPicker = false,
   modelPickerMode = 'select',
@@ -404,6 +409,11 @@ export function FloatingComposer({
     && Boolean(onExecutionSettingsChange)
   const stretchModelPicker =
     compact && modelPickerMode === 'combobox' && !showToolbarStartControls && !hideModelPicker
+  // Resolution reads i18n, so memoize per catalog identity rather than per render.
+  const resolvedCodeAgentPresets = useMemo(
+    () => (codeAgentPresets ?? []).map((preset) => resolveCodeAgentPreset(preset)),
+    [codeAgentPresets]
+  )
   const draft = useComposerDraft({ input, canCompose: canEditComposer })
   const inputHistory = useComposerInputHistory()
   const slashQuery = getSlashQuery(input)
@@ -658,6 +668,7 @@ export function FloatingComposer({
     formatPercent, formatTps, formatTtftSeconds, goalBannerLabel, goalElapsedLabel, goalInputMode, goalMenuChecked, goalPanelOpen,
     goalPanelRef, graphEnabled, graphPlanningNeedsCorrection, hideModelPicker, highlightedSlashCommand, i18n, input, isComposerDirectoryReference,
     mode, modelControlVariant, modelPickerMode, onComposerFastModeChange, onComposerModelChange, onComposerReasoningEffortChange, onConfigureProviders, onExecutionSettingsChange,
+    onComposerPersonaChange, codeAgentPresets, composerPersonaId, resolvedCodeAgentPresets, FloatingComposerPersonaPicker,
     onGuideQueuedMessage, onInterrupt, onOpenGraph, onOpenGraphChild, onPickAttachments, onRemoveAttachment, onRemoveContextChip, onRemoveFileReference,
     onRemoveQueuedMessage, onToggleWorktreeMode, onWorktreeBranchChange, openSettings, orchestration, pendingUserInputBlock, placeholder, primaryActionDisabled,
     primaryActionLabel, primaryActionLoading, promptOptimizationBusy, promptOptimizationError, promptOptimizationSettings, queuedMessages, reorderQueuedMessage, returnQueuedMessageToComposer,

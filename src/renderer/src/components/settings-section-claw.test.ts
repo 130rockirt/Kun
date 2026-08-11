@@ -118,6 +118,7 @@ function buildSettings(): AppSettingsV1 {
     guiUpdate: { channel: 'stable' },
     codePromptPrefix: '',
     chatWelcomeMessage: '',
+    codeAgentPresets: [],
     disabledSkillIds: []
   }
   settings.claw.enabled = true

@@ -188,6 +188,7 @@ async startTurn(this: TurnService, input: {
             guiDesignCanvas: input.request.guiDesignCanvas,
             guiDesignMode: input.request.guiDesignMode,
             agentSurface: input.request.agentSurface,
+            persona: input.request.persona,
             guiDesignArtifact: input.request.guiDesignArtifact,
             mode: input.request.mode,
             orchestration: input.request.orchestration,

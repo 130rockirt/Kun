@@ -54,6 +54,7 @@ function settings(workspaceRoot: string): AppSettingsV1 {
     terminal: defaultTerminalSettings(),
     codePromptPrefix: '',
     chatWelcomeMessage: '',
+    codeAgentPresets: [],
     disabledSkillIds: []
   }
 }

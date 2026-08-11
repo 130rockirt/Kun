@@ -1,6 +1,7 @@
 import {
   mergeComposerPickList,
   readStoredComposerFastMode,
+  readStoredComposerPersonaId,
   readStoredComposerMode
 } from './chat-store-helpers'
 import { defaultConversationWorkspaceRoot } from '../lib/workspace-path'
@@ -64,9 +65,11 @@ export function createInitialChatStoreState(workingDirectoryLabel: string) {
     composerReasoningEffort: 'max' as const,
     composerFastMode: readStoredComposerFastMode(),
     composerAgentId: '',
+    composerPersonaId: readStoredComposerPersonaId(),
     composerPickList: mergeComposerPickList(false, []),
     composerModelGroups: [],
     disabledSkillIds: [],
+    codeAgentPresets: [],
     queuedMessages: [],
     extensionComposerContexts: [],
     watchTurnCompletion: {},

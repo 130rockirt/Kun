@@ -68,6 +68,7 @@ function createSettings(patch: Partial<AppSettingsV1['write']['inlineCompletion'
     },
     codePromptPrefix: '',
     chatWelcomeMessage: '',
+    codeAgentPresets: [],
     disabledSkillIds: [],
     claw: defaultClawSettings()
   }

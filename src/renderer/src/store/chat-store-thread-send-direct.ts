@@ -73,6 +73,7 @@ type PreparedThreadSend = {
   serviceTier: QueuedUserMessage['serviceTier']
   guiDesignCanvas: boolean
   guiDesignMode: boolean
+  persona: string
   orchestration: NonNullable<QueuedUserMessage['orchestration']>
   userModelChip: string | undefined
   submittedMessageForQueue: QueuedUserMessage
@@ -113,6 +114,7 @@ export async function performPreparedThreadSend(input: PreparedThreadSend): Prom
     serviceTier,
     guiDesignCanvas,
     guiDesignMode,
+    persona,
     orchestration,
     userModelChip,
     submittedMessageForQueue
@@ -386,6 +388,7 @@ export async function performPreparedThreadSend(input: PreparedThreadSend): Prom
         ...((queued?.guiPlan ?? overrides?.guiPlan) ? { guiPlan: queued?.guiPlan ?? overrides?.guiPlan } : {}),
         ...(guiDesignCanvas ? { guiDesignCanvas: true } : {}),
         ...(guiDesignMode ? { guiDesignMode: true } : {}),
+        ...(persona ? { persona } : {}),
         ...((queued?.guiDesignArtifact ?? overrides?.guiDesignArtifact)
           ? { guiDesignArtifact: queued?.guiDesignArtifact ?? overrides?.guiDesignArtifact }
           : {}),

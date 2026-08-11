@@ -23,6 +23,7 @@ import {
   normalizeScheduleSettings,
   normalizeWorkflowSettings,
   normalizeWriteSettings,
+  normalizeCodeAgentPresets,
   normalizeTerminalSettings,
   normalizeChatContentMaxWidth,
   normalizeChatWelcomeMessage,
@@ -182,6 +183,7 @@ export function coerceRendererSettings(settings: AppSettingsV1): AppSettingsV1 {
     },
     codePromptPrefix: typeof raw.codePromptPrefix === 'string' ? raw.codePromptPrefix : '',
     chatWelcomeMessage: normalizeChatWelcomeMessage(raw.chatWelcomeMessage),
+    codeAgentPresets: normalizeCodeAgentPresets(raw.codeAgentPresets),
     disabledSkillIds: normalizeDisabledSkillIds(raw.disabledSkillIds)
   }
 }
