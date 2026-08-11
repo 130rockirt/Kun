@@ -26,6 +26,7 @@ vi.mock('xlsx', () => ({
 
 import { WorkspaceDocxPreview } from './WorkspaceDocxPreview'
 import { WorkspacePptxPreview } from './WorkspacePptxPreview'
+import { MAX_MOUNTED_PPTX_THUMBNAILS } from './WorkspacePptxThumbnailRail'
 import { WorkspaceSpreadsheetPreview } from './WorkspaceSpreadsheetPreview'
 import {
   openWorkspaceOfficeExternalLink,
@@ -33,6 +34,7 @@ import {
 } from './workspace-office-external-link'
 
 type MockPptxPreviewer = {
+  host: HTMLElement
   slideCount: number
   preview: ReturnType<typeof vi.fn>
   renderSingleSlide: ReturnType<typeof vi.fn>
@@ -63,6 +65,8 @@ describe('browser Office renderers', () => {
   let dom: JSDOM
   let renderer: ReactTestRenderer | undefined
   let pptxInstances: MockPptxPreviewer[]
+  let pptxSlideCount: number
+  let scrollIntoView: ReturnType<typeof vi.fn>
 
   beforeEach(() => {
     ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -73,9 +77,13 @@ describe('browser Office renderers', () => {
     vi.stubGlobal('document', dom.window.document)
     vi.stubGlobal('Element', dom.window.Element)
     vi.stubGlobal('HTMLElement', dom.window.HTMLElement)
+    const browserWindow = dom.window as unknown as typeof globalThis
+    vi.stubGlobal('Event', browserWindow.Event)
+    vi.stubGlobal('KeyboardEvent', browserWindow.KeyboardEvent)
+    scrollIntoView = vi.fn()
     Object.defineProperty(dom.window.HTMLElement.prototype, 'scrollIntoView', {
       configurable: true,
-      value: vi.fn()
+      value: scrollIntoView
     })
     libraryMocks.renderDocx.mockReset()
     libraryMocks.renderDocx.mockImplementation(async (_data, body: HTMLElement) => {
@@ -86,14 +94,10 @@ describe('browser Office renderers', () => {
       body.append(first, second)
     })
     pptxInstances = []
+    pptxSlideCount = 3
     libraryMocks.initPptx.mockReset()
-    libraryMocks.initPptx.mockImplementation(() => {
-      const instance = {
-        slideCount: 3,
-        preview: vi.fn(async () => undefined),
-        renderSingleSlide: vi.fn(),
-        destroy: vi.fn()
-      }
+    libraryMocks.initPptx.mockImplementation((host: HTMLElement) => {
+      const instance = createMockPptxPreviewer(host, pptxSlideCount)
       pptxInstances.push(instance)
       return instance
     })
@@ -112,6 +116,7 @@ describe('browser Office renderers', () => {
     if (renderer) await act(async () => renderer?.unmount())
     renderer = undefined
     dom.window.close()
+    vi.useRealTimers()
     vi.unstubAllGlobals()
   })
 
@@ -165,7 +170,7 @@ describe('browser Office renderers', () => {
     expect(JSON.stringify(renderer!.toJSON())).toContain('broken refresh')
   })
 
-  it('owns PPTX slide navigation and destroys superseded, failed, and unmounted instances', async () => {
+  it('owns both PPTX previewers and destroys all source-scoped state before replacement', async () => {
     await act(async () => {
       renderer = create(createElement(WorkspacePptxPreview, {
         result: preview('presentation'),
@@ -173,9 +178,26 @@ describe('browser Office renderers', () => {
       }), { createNodeMock })
       await flushPromises()
     })
+    expect(libraryMocks.initPptx).toHaveBeenNthCalledWith(
+      1,
+      expect.any(dom.window.HTMLElement),
+      { width: 960, height: 540, mode: 'slide' }
+    )
+    expect(libraryMocks.initPptx).toHaveBeenNthCalledWith(
+      2,
+      expect.any(dom.window.HTMLElement),
+      { width: 160, height: 90, mode: 'slide' }
+    )
     const first = pptxInstances[0]!
+    const firstThumbnails = pptxInstances[1]!
     await act(async () => renderer?.root.findByProps({ 'aria-label': 'Next slide' }).props.onClick())
     expect(first.renderSingleSlide).toHaveBeenCalledWith(1)
+    const securedMainLink = first.host.querySelector('a')!
+    expect(securedMainLink.getAttribute('href')).toBe('#')
+    expect(securedMainLink.hasAttribute('target')).toBe(false)
+    const securedThumbnailLink = firstThumbnails.host.querySelector('a')!
+    expect(securedThumbnailLink.getAttribute('href')).toBe('#')
+    expect(securedThumbnailLink.hasAttribute('ping')).toBe(false)
 
     await act(async () => {
       renderer?.update(createElement(WorkspacePptxPreview, {
@@ -185,16 +207,13 @@ describe('browser Office renderers', () => {
       await flushPromises()
     })
     expect(first.destroy).toHaveBeenCalledTimes(1)
+    expect(firstThumbnails.destroy).toHaveBeenCalledTimes(1)
 
-    const second = pptxInstances[1]!
+    const second = pptxInstances[2]!
+    const secondThumbnails = pptxInstances[3]!
     const previewFailure = new Error('presentation parse failed')
-    libraryMocks.initPptx.mockImplementationOnce(() => {
-      const instance = {
-        slideCount: 1,
-        preview: vi.fn(async () => { throw previewFailure }),
-        renderSingleSlide: vi.fn(),
-        destroy: vi.fn()
-      }
+    libraryMocks.initPptx.mockImplementationOnce((host: HTMLElement) => {
+      const instance = createMockPptxPreviewer(host, 1, previewFailure)
       pptxInstances.push(instance)
       return instance
     })
@@ -205,14 +224,180 @@ describe('browser Office renderers', () => {
       }))
       await flushPromises()
     })
-    const failed = pptxInstances[2]!
-    expect(failed.destroy).toHaveBeenCalled()
-    expect(second.destroy).not.toHaveBeenCalled()
+    const failed = pptxInstances[4]!
+    const unusedFailedThumbnails = pptxInstances[5]!
+    expect(failed.destroy).toHaveBeenCalledTimes(1)
+    expect(unusedFailedThumbnails.destroy).toHaveBeenCalledTimes(1)
+    expect(second.destroy).toHaveBeenCalledTimes(1)
+    expect(secondThumbnails.destroy).toHaveBeenCalledTimes(1)
     expect(JSON.stringify(renderer!.toJSON())).toContain('presentation parse failed')
 
     await act(async () => renderer?.unmount())
     renderer = undefined
     expect(second.destroy).toHaveBeenCalledTimes(1)
+    expect(secondThumbnails.destroy).toHaveBeenCalledTimes(1)
+  })
+
+  it('virtualizes a long PPTX rail to sixteen static thumbnails and syncs the active slide', async () => {
+    pptxSlideCount = 50
+    await act(async () => {
+      renderer = create(createElement(WorkspacePptxPreview, {
+        result: preview('presentation'),
+        loading: false
+      }), { createNodeMock })
+      await flushPromises()
+    })
+
+    const thumbnailButtons = renderer!.root.findAll((node) => (
+      typeof node.props['data-pptx-thumbnail-index'] === 'number'
+    ))
+    expect(thumbnailButtons).toHaveLength(50)
+    expect(thumbnailButtons.filter((node) => node.props['data-thumbnail-state'] === 'ready'))
+      .toHaveLength(MAX_MOUNTED_PPTX_THUMBNAILS)
+    expect(thumbnailButtons.filter((node) => node.props['data-thumbnail-state'] === 'placeholder'))
+      .toHaveLength(50 - MAX_MOUNTED_PPTX_THUMBNAILS)
+    expect(pptxInstances[1]!.renderSingleSlide.mock.calls.map(([index]) => index))
+      .toEqual(Array.from({ length: MAX_MOUNTED_PPTX_THUMBNAILS }, (_, index) => index))
+
+    scrollIntoView.mockClear()
+    await act(async () => renderer?.root.findByProps({ 'aria-label': 'Go to slide 10' }).props.onClick())
+    expect(pptxInstances[0]!.renderSingleSlide).toHaveBeenCalledWith(9)
+    expect(renderer!.root.findByProps({ 'aria-label': 'Go to slide 10' }).props['aria-current']).toBe('page')
+    expect(scrollIntoView).toHaveBeenCalled()
+
+    await act(async () => {
+      renderer?.root.findByProps({ 'aria-label': 'Go to slide 50' }).props.onClick()
+      await flushPromises()
+    })
+    expect(pptxInstances[0]!.renderSingleSlide).toHaveBeenCalledWith(49)
+    expect(renderer!.root.findByProps({ 'aria-label': 'Go to slide 50' }).props['data-thumbnail-state'])
+      .toBe('ready')
+    expect(renderer!.root.findAll((node) => node.props['data-thumbnail-state'] === 'ready'))
+      .toHaveLength(MAX_MOUNTED_PPTX_THUMBNAILS)
+  })
+
+  it('uses IntersectionObserver to release old thumbnail DOM before mounting a new window', async () => {
+    pptxSlideCount = 50
+    let observerCallback: IntersectionObserverCallback | undefined
+    vi.stubGlobal('IntersectionObserver', class {
+      readonly root = null
+      readonly rootMargin = ''
+      readonly thresholds = [0]
+      constructor(callback: IntersectionObserverCallback) {
+        observerCallback = callback
+      }
+      observe(): void {}
+      unobserve(): void {}
+      disconnect(): void {}
+      takeRecords(): IntersectionObserverEntry[] { return [] }
+    })
+    await act(async () => {
+      renderer = create(createElement(WorkspacePptxPreview, {
+        result: preview('presentation'),
+        loading: false
+      }), { createNodeMock })
+      await flushPromises()
+    })
+
+    const entries = [
+      ...Array.from({ length: 16 }, (_, index) => intersectionEntry(index, false)),
+      ...Array.from({ length: 16 }, (_, index) => intersectionEntry(index + 34, true))
+    ]
+    await act(async () => {
+      observerCallback?.(entries, {} as IntersectionObserver)
+      await flushPromises()
+    })
+    const ready = renderer!.root.findAll((node) => node.props['data-thumbnail-state'] === 'ready')
+    expect(ready).toHaveLength(MAX_MOUNTED_PPTX_THUMBNAILS)
+    expect(ready.map((node) => node.props['data-pptx-thumbnail-index']))
+      .toEqual(Array.from({ length: 16 }, (_, index) => index + 34))
+  })
+
+  it('supports presentation keys while leaving editable controls untouched', async () => {
+    await act(async () => {
+      renderer = create(createElement(WorkspacePptxPreview, {
+        result: preview('presentation'),
+        loading: false
+      }), { createNodeMock })
+      await flushPromises()
+    })
+    const main = pptxInstances[0]!
+    main.renderSingleSlide.mockClear()
+
+    await dispatchKey('ArrowRight')
+    await dispatchKey('PageDown')
+    await dispatchKey('End')
+    await dispatchKey('Home')
+    await dispatchKey(' ')
+    expect(main.renderSingleSlide.mock.calls.map(([index]) => index)).toEqual([1, 2, 2, 0, 1])
+
+    const input = document.createElement('input')
+    const editable = document.createElement('div')
+    editable.setAttribute('contenteditable', 'true')
+    document.body.append(input, editable)
+    await dispatchKey('ArrowRight', input)
+    await dispatchKey('ArrowRight', editable)
+    expect(main.renderSingleSlide).toHaveBeenCalledTimes(5)
+  })
+
+  it('uses the Fullscreen API and hides audience controls after two seconds', async () => {
+    vi.useFakeTimers()
+    let fullscreenElement: Element | null = null
+    Object.defineProperty(document, 'fullscreenElement', {
+      configurable: true,
+      get: () => fullscreenElement
+    })
+    const requestFullscreen = vi.fn(function (this: HTMLElement) {
+      fullscreenElement = this
+      document.dispatchEvent(new Event('fullscreenchange'))
+      return Promise.resolve()
+    })
+    const exitFullscreen = vi.fn(() => {
+      fullscreenElement = null
+      document.dispatchEvent(new Event('fullscreenchange'))
+      return Promise.resolve()
+    })
+    Object.defineProperty(dom.window.HTMLElement.prototype, 'requestFullscreen', {
+      configurable: true,
+      value: requestFullscreen
+    })
+    Object.defineProperty(document, 'exitFullscreen', {
+      configurable: true,
+      value: exitFullscreen
+    })
+
+    await act(async () => {
+      renderer = create(createElement(WorkspacePptxPreview, {
+        result: preview('presentation'),
+        loading: false
+      }), { createNodeMock })
+      await flushPromises()
+    })
+    await act(async () => {
+      renderer?.root.findByProps({ 'aria-label': 'Enter fullscreen' }).props.onClick()
+      await flushPromises()
+    })
+    expect(requestFullscreen).toHaveBeenCalledTimes(1)
+    expect(renderer!.root.findByProps({ 'data-pptx-fullscreen': 'true' })).toBeTruthy()
+    expect(renderer!.root.findAllByProps({ 'aria-label': 'Slide thumbnails' })).toHaveLength(0)
+    expect(renderer!.root.findByProps({ 'data-pptx-fullscreen-controls': 'visible' })).toBeTruthy()
+
+    await act(async () => {
+      vi.advanceTimersByTime(2_000)
+    })
+    expect(renderer!.root.findByProps({ 'data-pptx-fullscreen-controls': 'hidden' })).toBeTruthy()
+    await act(async () => renderer?.root.findByProps({ 'data-pptx-fullscreen': 'true' }).props.onPointerMove())
+    expect(renderer!.root.findByProps({ 'data-pptx-fullscreen-controls': 'visible' })).toBeTruthy()
+
+    await act(async () => {
+      renderer?.root.findByProps({ 'aria-label': 'Exit fullscreen' }).props.onClick()
+      await flushPromises()
+    })
+    expect(exitFullscreen).toHaveBeenCalledTimes(1)
+    expect(renderer!.root.findByProps({ 'data-pptx-fullscreen': 'false' })).toBeTruthy()
+
+    await dispatchKey('f')
+    expect(requestFullscreen).toHaveBeenCalledTimes(2)
   })
 
   it('loads SheetJS with XLS codepages and keeps worksheet and zoom controls local', async () => {
@@ -243,9 +428,56 @@ function createNodeMock(element: { type: unknown }): HTMLElement | null {
 }
 
 async function flushPromises(): Promise<void> {
-  await Promise.resolve()
-  await Promise.resolve()
-  await Promise.resolve()
+  for (let index = 0; index < 40; index += 1) await Promise.resolve()
+}
+
+async function dispatchKey(
+  key: string,
+  target: Window | HTMLElement = window
+): Promise<void> {
+  await act(async () => {
+    target.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }))
+    await flushPromises()
+  })
+}
+
+function intersectionEntry(index: number, isIntersecting: boolean): IntersectionObserverEntry {
+  const target = document.createElement('div')
+  target.setAttribute('data-pptx-thumbnail-index', String(index))
+  return { target, isIntersecting } as unknown as IntersectionObserverEntry
+}
+
+function createMockPptxPreviewer(
+  host: HTMLElement,
+  slideCount: number,
+  previewError?: Error
+): MockPptxPreviewer {
+  const wrapper = document.createElement('div')
+  wrapper.className = 'pptx-preview-wrapper'
+  host.append(wrapper)
+  const renderSlide = (slideIndex: number): void => {
+    wrapper.querySelector('.pptx-preview-slide-wrapper')?.remove()
+    const slide = document.createElement('div')
+    slide.className = `pptx-preview-slide-wrapper pptx-preview-slide-wrapper-${slideIndex}`
+    const anchor = document.createElement('a')
+    anchor.href = `https://example.test/slide-${slideIndex + 1}`
+    anchor.target = '_blank'
+    anchor.setAttribute('ping', 'https://example.test/ping')
+    anchor.textContent = `Slide ${slideIndex + 1}`
+    slide.append(anchor)
+    wrapper.append(slide)
+  }
+  const instance: MockPptxPreviewer = {
+    host,
+    slideCount,
+    preview: vi.fn(async () => {
+      if (previewError) throw previewError
+      renderSlide(0)
+    }),
+    renderSingleSlide: vi.fn(renderSlide),
+    destroy: vi.fn()
+  }
+  return instance
 }
 
 function encodeColumn(column: number): string {

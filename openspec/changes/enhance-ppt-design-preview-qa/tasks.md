@@ -19,10 +19,10 @@
 
 ## 4. Workspace PPTX Presentation
 
-- [ ] 4.1 Split PPTX preview coordination into bounded renderer lifecycle, filmstrip, keyboard, and fullscreen helpers
-- [ ] 4.2 Add the 16-item IntersectionObserver thumbnail cap, static safe clones, current-slide synchronization, and placeholders
-- [ ] 4.3 Add keyboard navigation, editable-focus exemptions, audience fullscreen, two-second controls, and complete cleanup
-- [ ] 4.4 Cover long-deck bounds, source replacement, navigation, fullscreen, link hardening, and failure cleanup with renderer tests
+- [x] 4.1 Split PPTX preview coordination into bounded renderer lifecycle, filmstrip, keyboard, and fullscreen helpers
+- [x] 4.2 Add the 16-item IntersectionObserver thumbnail cap, static safe clones, current-slide synchronization, and placeholders
+- [x] 4.3 Add keyboard navigation, editable-focus exemptions, audience fullscreen, two-second controls, and complete cleanup
+- [x] 4.4 Cover long-deck bounds, source replacement, navigation, fullscreen, link hardening, and failure cleanup with renderer tests
 
 ## 5. Geometry QA Core
 
