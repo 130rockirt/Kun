@@ -3,9 +3,13 @@ import { isAbsolute, relative, resolve } from 'node:path'
 import { DOMParser, type Document, type Element, type Node } from '@xmldom/xmldom'
 import * as yauzl from 'yauzl'
 import {
+  PPT_REVIEW_MANIFEST_VERSION,
   createPptReviewManifest,
+  pptReviewContentHash,
   pptReviewPromptHash
 } from '../../ppt/ppt-review-manifest.js'
+import type { PptReviewManifestV1 } from '../../ppt/ppt-review-manifest.js'
+import { pptDirectionSlidesFingerprint } from '../../ppt/ppt-direction-workflow.js'
 import {
   pptGovernanceSnapshotFingerprint,
   type PptDesignGovernanceSnapshot
@@ -119,9 +123,35 @@ export function reviewSlideRevision(
     revision: slide.revision + 1,
     status: update.imagePath ? 'ready' : 'failed',
     attempts: slide.attempts + 1,
+    contentHash: pptReviewContentHash(update.prompt),
     ...(styleSpec ? { promptHash: pptReviewPromptHash(styleSpec, update.prompt) } : {}),
     ...(update.error ? { lastError: update.error } : {})
   }
+}
+
+export function directionReviewIdentityError(
+  manifest: PptReviewManifestV1 | undefined,
+  scope: NonNullable<ToolHostContext['pptWorkflowScope']>,
+  updates?: readonly ReviewBundleSlideInput[]
+): string {
+  if (scope.action !== 'select_direction') return ''
+  if (
+    !manifest || manifest.version !== PPT_REVIEW_MANIFEST_VERSION ||
+    !manifest.directions?.selectedDirectionId || !manifest.governance ||
+    !scope.directionContext ||
+    scope.directionContext.slidesFingerprint !== pptDirectionSlidesFingerprint(manifest.slides)
+  ) return 'selected direction slide content does not match host-owned authority'
+  if (!updates) return ''
+  if (updates.length !== manifest.slides.length) {
+    return 'selected direction review must cover every host-owned slide'
+  }
+  const byId = new Map(updates.flatMap((slide) => slide.slideId ? [[slide.slideId, slide]] : []))
+  if (byId.size !== updates.length || manifest.slides.some((slide) => {
+    const update = byId.get(slide.slideId)
+    return !update || update.title !== slide.title ||
+      pptReviewContentHash(update.prompt) !== (slide.contentHash ?? '')
+  })) return 'selected direction review must preserve stable slide ids, titles, and content'
+  return ''
 }
 
 type PreviewRendererOutput = {

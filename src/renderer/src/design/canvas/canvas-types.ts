@@ -187,6 +187,15 @@ export type CanvasPptReviewRef = {
   role: 'slide-frame' | 'preview-image' | 'annotation'
 }
 
+export type CanvasPptDirectionRef = {
+  workflowId: string
+  childId: string
+  directionId: string
+  revision: number
+  parentThreadId?: string
+  role: 'direction-card' | 'preview-image' | 'summary'
+}
+
 export type CanvasShape = {
   id: string
   type: ShapeType
@@ -234,6 +243,8 @@ export type CanvasShape = {
   overrides?: Record<string, unknown>
   /** Stable source identity for a PPT visual-review card on the whiteboard. */
   pptReviewRef?: CanvasPptReviewRef
+  /** Stable source identity for a proposed PPT visual direction. */
+  pptDirectionRef?: CanvasPptDirectionRef
   textContent?: string
   fontSize?: number
   fontFamily?: string

@@ -1,21 +1,21 @@
 ## 1. Change Setup
 
-- [ ] 1.1 Validate the clean worktree dependency, PPT, Office-preview, Kun-build, and typecheck baseline
+- [x] 1.1 Validate the clean worktree dependency, PPT, Office-preview, Kun-build, and typecheck baseline
 - [x] 1.2 Create and validate proposal, design, capability specs, and this task checklist
 
 ## 2. Visual Direction Contracts and Governance
 
-- [ ] 2.1 Add manifest-v3 direction phases, candidate/bundle schemas, selection state, and legacy manifest compatibility
-- [ ] 2.2 Add conservative direction-gate classification and persist required/bypass evidence from the exact source request
-- [ ] 2.3 Add managed tools for creating/revising direction bundles and reading validated direction selection
-- [ ] 2.4 Require selected candidate equivalence in `ppt_submit_design_plan` and block review/export before required selection
-- [ ] 2.5 Retain fresh direction bundles separately on child runs and add `select_direction` / `revise_directions` provider actions
+- [x] 2.1 Add manifest-v3 direction phases, candidate/bundle schemas, selection state, and legacy manifest compatibility
+- [x] 2.2 Add conservative direction-gate classification and persist required/bypass evidence from the exact source request
+- [x] 2.3 Add managed tools for creating/revising direction bundles and reading validated direction selection
+- [x] 2.4 Require selected candidate equivalence in `ppt_submit_design_plan` and block review/export before required selection
+- [x] 2.5 Retain fresh direction bundles separately on child runs and add `select_direction` / `revise_directions` provider actions
 
 ## 3. Visual Direction Renderer
 
-- [ ] 3.1 Add structured direction composer context and canvas shape references with strict workflow/child/revision identity
-- [ ] 3.2 Render and update a three-column direction board with summaries, preview triptychs, and one recommendation
-- [ ] 3.3 Collect selected direction context for follow-up turns and cover selection, fallback, stale, forged, and revision behavior with tests
+- [x] 3.1 Add structured direction composer context and canvas shape references with strict workflow/child/revision identity
+- [x] 3.2 Render and update a three-column direction board with summaries, preview triptychs, and one recommendation
+- [x] 3.3 Collect selected direction context for follow-up turns and cover selection, fallback, stale, forged, and revision behavior with tests
 
 ## 4. Workspace PPTX Presentation
 

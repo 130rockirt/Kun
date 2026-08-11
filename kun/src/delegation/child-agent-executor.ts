@@ -33,6 +33,7 @@ import type { ApprovalGate } from '../ports/approval-gate.js'
 import type { ApprovalReviewPort } from '../ports/approval-review.js'
 import type { PptWorkflowScope } from '../ports/tool-host.js'
 import {
+  childDirectionBundle,
   childDeckArtifact,
   childReviewBundle
 } from './child-ppt-result-extraction.js'
@@ -397,7 +398,8 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
       console.warn(`[kun] foreground subagent abort bridge armed child=${thread.id} turn=${started.turnId} parentThread=${input.parentThreadId} parentTurn=${input.parentTurnId}`)
       input.signal.addEventListener('abort', abortChild, { once: true })
     }
-    let status: 'completed' | 'failed' | 'aborted'
+    let status: 'completed' | 'failed' | 'aborted' = input.signal.aborted ? 'aborted' : 'failed'
+    let executionError: unknown
     try {
       const outcome = await loop.runTurn(thread.id, started.turnId)
       if (
@@ -407,10 +409,29 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
         throw new Error(`non-Graph child turn suspended unexpectedly: ${started.turnId}`)
       }
       status = outcome
+    } catch (error) {
+      executionError = error
+      status = input.signal.aborted ? 'aborted' : 'failed'
     } finally {
       input.signal.removeEventListener('abort', abortChild)
     }
     console.warn(`[kun] foreground subagent turn settled child=${thread.id} turn=${started.turnId} status=${status}`)
+    const items = await sessionStore.loadItems(thread.id)
+    const result = await materializeChildResult({
+      content: childResultSource(items, started.turnId, status),
+      childId: thread.id,
+      parentThreadId: input.parentThreadId,
+      ...(options.artifactStore ? { artifactStore: options.artifactStore } : {})
+    })
+    const reviewBundle = childReviewBundle(items, started.turnId)
+    const directionBundle = childDirectionBundle(items, started.turnId)
+    const deckArtifact = childDeckArtifact(items, started.turnId)
+    const structuredResult = {
+      ...result,
+      ...(directionBundle !== undefined ? { directionBundle } : {}),
+      ...(reviewBundle !== undefined ? { reviewBundle } : {}),
+      ...(deckArtifact !== undefined ? { deckArtifact } : {})
+    }
     // Only a FATAL error fails the child. Recoverable tool errors — a tool
     // rejected by the child's read-only policy, or a tool that crashed — are
     // recorded as `severity: 'warning'` error events but the loop hands the
@@ -428,28 +449,23 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
         event.severity !== 'info'
     )
     if (runtimeError?.kind === 'error') {
-      throw new Error(runtimeError.message)
+      throw new ChildResultExecutionError(runtimeError.message, structuredResult)
     }
-    const items = await sessionStore.loadItems(thread.id)
-    const result = await materializeChildResult({
-      content: childResultSource(items, started.turnId, status),
-      childId: thread.id,
-      parentThreadId: input.parentThreadId,
-      ...(options.artifactStore ? { artifactStore: options.artifactStore } : {})
-    })
+    if (executionError !== undefined) {
+      throw new ChildResultExecutionError(childExecutionErrorMessage(executionError), structuredResult)
+    }
     const toolInvocations = items.filter(
       (item) => item.turnId === started.turnId && item.kind === 'tool_call'
     ).length
     const evidence = input.returnFormat === 'evidence'
       ? childToolEvidence(items, started.turnId)
       : undefined
-    const reviewBundle = childReviewBundle(items, started.turnId)
-    const deckArtifact = childDeckArtifact(items, started.turnId)
     if (status !== 'completed') {
-      throw new ChildResultExecutionError(result.summary || `child agent ${status}`, result)
+      throw new ChildResultExecutionError(result.summary || `child agent ${status}`, structuredResult)
     }
     return {
       ...result,
+      ...(directionBundle !== undefined ? { directionBundle } : {}),
       ...(reviewBundle !== undefined ? { reviewBundle } : {}),
       ...(deckArtifact !== undefined ? { deckArtifact } : {}),
       ...(evidence ? { evidence } : {}),
@@ -527,4 +543,8 @@ function toolEvidenceTarget(args: Record<string, unknown>): string {
 function childThreadTitle(childId: string, label?: string, profile?: string): string {
   const suffix = label?.trim() || profile?.trim() || childId
   return `Child agent: ${suffix}`
+}
+
+function childExecutionErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }

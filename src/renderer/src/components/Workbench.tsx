@@ -55,6 +55,7 @@ import { useDesignWorkspaceStore } from '../design/design-workspace-store'
 import { useCodeCanvasDesignSurface } from '../design/code-canvas-design-surface'
 import { requestCodeCanvasPanelOpen } from '../lib/code-canvas-panel-event'
 import { isPptReviewBundle } from '../design/canvas/ppt-review-board'
+import { isPptDirectionBundle } from '../design/canvas/ppt-direction-board'
 import { designDocumentComposerFileReferences } from '../design/design-document-file-reference'
 import {
   readBrowserStorageItem,
@@ -176,8 +177,8 @@ export function Workbench(): ReactElement {
       if (pptReviewOpenBlockIdsRef.current.has(block.id)) return false
       if (block.kind !== 'tool' || block.status !== 'success' || block.meta?.toolName !== 'ppt_agent' || !block.detail) return false
       try {
-        const payload = JSON.parse(block.detail) as { reviewBundle?: unknown }
-        return isPptReviewBundle(payload.reviewBundle)
+        const payload = JSON.parse(block.detail) as { reviewBundle?: unknown; directionBundle?: unknown }
+        return isPptReviewBundle(payload.reviewBundle) || isPptDirectionBundle(payload.directionBundle)
       } catch {
         return false
       }

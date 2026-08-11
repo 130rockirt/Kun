@@ -150,6 +150,15 @@ const PptReviewRefSchema = z.object({
   role: z.enum(['slide-frame', 'preview-image', 'annotation'])
 }).strict()
 
+const PptDirectionRefSchema = z.object({
+  workflowId: z.string().min(1),
+  childId: z.string().min(1),
+  directionId: z.string().min(1),
+  revision: z.number().int().positive(),
+  parentThreadId: z.string().min(1).optional(),
+  role: z.enum(['direction-card', 'preview-image', 'summary'])
+}).strict()
+
 const PartialShapeSchema = z
   .object({
     type: ShapeTypeSchema,
@@ -172,6 +181,7 @@ const PartialShapeSchema = z
     lineHeight: z.number().positive().optional(),
     imageUrl: z.string().optional(),
     pptReviewRef: PptReviewRefSchema.optional(),
+    pptDirectionRef: PptDirectionRefSchema.optional(),
     aiImageHolder: z.boolean().optional(),
     clipContent: z.boolean().optional(),
     points: z.array(PointSchema).optional(),
@@ -207,6 +217,7 @@ const PatchSchema = z
     lineHeight: z.number().positive().optional(),
     imageUrl: z.string().optional(),
     pptReviewRef: PptReviewRefSchema.optional(),
+    pptDirectionRef: PptDirectionRefSchema.optional(),
     aiImageHolder: z.boolean().optional(),
     clipContent: z.boolean().optional(),
     points: z.array(PointSchema).optional(),

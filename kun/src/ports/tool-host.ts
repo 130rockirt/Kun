@@ -112,11 +112,32 @@ export type KunActionApprovalGrant = {
  * dedicated workflow host.
  */
 export type PptWorkflowScope = Readonly<{
-  action: 'start' | 'revise_previews' | 'retry_failed' | 'approve_and_build'
+  action: 'start' | 'select_direction' | 'revise_directions' | 'revise_previews' | 'retry_failed' | 'approve_and_build'
   workflowId: string
   projectDir: string
   parentThreadId: string
   previewMode: 'image-first' | 'editable'
+  directionGate?: Readonly<{
+    required: boolean
+    reason: 'existing-presentation' | 'explicit-skip' | 'design-reference' | 'complete-visual-system' | 'underspecified-new-deck'
+    basis: string
+    sourceHash: string
+  }>
+  directionContext?: Readonly<{
+    childId: string
+    directions: ReadonlyArray<{
+      directionId: string
+      revision: number
+    }>
+    authority: ReadonlyArray<{
+      directionId: string
+      revision: number
+      recommended: boolean
+      planFingerprint: string
+      candidateFingerprint: string
+    }>
+    slidesFingerprint: string
+  }>
   reviewContext?: Readonly<{
     childId: string
     slides: ReadonlyArray<{

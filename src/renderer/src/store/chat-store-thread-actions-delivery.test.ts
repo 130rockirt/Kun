@@ -513,7 +513,7 @@ describe('chat-store-thread-actions queued messages', () => {
     )
   })
 
-  it('forwards only first-party PPT review contexts from the Write route', async () => {
+  it('forwards only first-party PPT review and direction contexts from the Write route', async () => {
     const provider = {
       sendUserMessage: vi.fn(async () => ({
         threadId: 'thr_existing', turnId: 'turn_1', userMessageItemId: 'user_1'
@@ -547,13 +547,22 @@ describe('chat-store-thread-actions queued messages', () => {
         viewContributionId: 'extension:acme.test/view', workspaceId: 'b'.repeat(64)
       }
     }
+    const pptDirection = {
+      ...pptReview,
+      id: 'ppt-direction',
+      attachmentId: `dev-preview-context:${'d'.repeat(64)}`,
+      reference: {
+        kind: 'ppt-direction', schemaVersion: 1, workflowId: 'workflow-a', childId: 'child-a',
+        directions: [{ directionId: 'signal', revision: 2 }]
+      }
+    }
 
     await expect(actions.sendMessage('批准', 'agent', {
-      composerContexts: [pptReview, unrelated]
+      composerContexts: [pptReview, pptDirection, unrelated]
     })).resolves.toBe(true)
 
     expect(provider.sendUserMessage).toHaveBeenCalledWith(
-      'thr_existing', '批准', expect.objectContaining({ composerContexts: [pptReview] })
+      'thr_existing', '批准', expect.objectContaining({ composerContexts: [pptReview, pptDirection] })
     )
   })
 

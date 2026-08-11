@@ -4,11 +4,13 @@ import type { ToolHostContext } from '../../ports/tool-host.js'
 import {
   createPptDesignGovernanceState,
   currentPptGovernanceSnapshot,
+  designPlanStyleSpec,
   PptDesignPlanInput,
   PptPolicyExceptionRule,
   pptDesignGovernancePath,
   pptGovernanceReadinessErrors,
   readPptDesignGovernance,
+  recordPptDirectionGate,
   resolvePptDesignGovernanceStore,
   recordPptGuideRead,
   submitPptDesignPlan,
@@ -17,12 +19,25 @@ import {
   type PptDesignGovernanceState,
   type PptDesignGovernanceStore
 } from '../../ppt/ppt-design-governance.js'
+import {
+  pptDirectionCandidateFingerprint,
+  pptDirectionPlanFingerprint,
+  pptDirectionSlidesFingerprint,
+  samePptDirectionPlan
+} from '../../ppt/ppt-direction-workflow.js'
+import {
+  PPT_REVIEW_MANIFEST_VERSION,
+  readPptReviewManifest,
+  reviewManifestPath,
+  writePptReviewManifest
+} from '../../ppt/ppt-review-manifest.js'
 import { loadPptCoreDesignPolicy, type PptCoreDesignPolicy } from '../../ppt/ppt-design-policy.js'
 import { LocalToolHost, type LocalTool } from './local-tool-host.js'
 import { resolveWorkspacePath, withToolBoundary } from './builtin-tool-utils.js'
 import { withFileMutationQueue } from './file-mutation-queue.js'
 import { assertPptScopedMutationPath } from './ppt-agent-physical-path.js'
 import { assertCanWritePath } from './sandbox-policy.js'
+import { pptDirectionPreviewIntegrityError } from './ppt-agent-direction-integrity.js'
 import {
   assertPptWorkflowBinding,
   integerArg,
@@ -96,6 +111,44 @@ export async function requireCurrentPptGovernance(input: {
   return { state, snapshot: currentPptGovernanceSnapshot(state, policy), policy, store }
 }
 
+export async function requirePptDirectionGovernance(input: {
+  options: PptAgentLocalToolOptions
+  context: ToolHostContext
+  workspaceRoot: string
+  projectDir: string
+  workflowId: string
+}): Promise<{
+  state: PptDesignGovernanceState
+  policy: PptCoreDesignPolicy
+  store: PptDesignGovernanceStore
+}> {
+  assertPptWorkflowBinding({
+    context: input.context,
+    workflowId: input.workflowId,
+    projectDir: relative(input.workspaceRoot, input.projectDir).replaceAll('\\', '/') || '.'
+  })
+  const toolchain = await requireToolchainDirectory(input.options)
+  const policy = await loadPptCoreDesignPolicy(toolchain)
+  const store = await governanceStore(input.options, input.context, input.workspaceRoot, input.projectDir)
+  const state = await readPptDesignGovernance(store)
+  const errors = pptGovernanceReadinessErrors(state, policy).filter(
+    (message) => !message.startsWith('submit a complete design plan')
+  )
+  if (!state || errors.length > 0) {
+    throw new Error(`PPT direction governance is incomplete: ${errors.join('; ')}`)
+  }
+  if (state.childId !== input.context.threadId || state.workflowId !== input.workflowId) {
+    throw new Error('PPT direction governance belongs to another workflow or child thread')
+  }
+  if (!state.directionGate?.required) {
+    throw new Error('PPT visual directions are unavailable because this workflow bypassed direction selection')
+  }
+  if (state.designPlan) {
+    throw new Error('PPT visual directions cannot coexist with an authoritative design plan')
+  }
+  return { state, policy, store }
+}
+
 function createPptReadGuideTool(
   options: PptAgentLocalToolOptions,
   shouldAdvertise: ShouldAdvertise
@@ -133,7 +186,7 @@ function createPptReadGuideTool(
       if (options.enabled?.() === false) return disabledResult()
       assertPptWorkflowBinding({
         context,
-        actions: ['start', 'revise_previews', 'retry_failed']
+        actions: ['start', 'revise_directions', 'revise_previews', 'retry_failed']
       })
       const requested = stringArg(args.path).replaceAll('\\', '/')
       if (!requested || isAbsolute(requested) || extname(requested).toLowerCase() !== '.md') {
@@ -162,7 +215,7 @@ function createPptReadGuideTool(
           return errorResult('workflowId and projectDir are required for governed category guide reads')
         }
         assertPptWorkflowBinding({ context, workflowId, projectDir: projectArg })
-        const project = await resolveProjectDir(projectArg, context)
+        const project = await resolvePptProjectDir(projectArg, context)
         const store = await governanceStore(
           options,
           context,
@@ -176,15 +229,24 @@ function createPptReadGuideTool(
             throw new Error('PPT design governance must resume the original workflow and child thread')
           }
           const state = !existing || existing.policy.sha256 !== policy.sha256
-            ? createPptDesignGovernanceState({
+              ? createPptDesignGovernanceState({
                 workflowId,
                 childId: context.threadId,
                 binding: store.identity,
-                policy
+                policy,
+                ...(context.pptWorkflowScope?.directionGate
+                  ? { directionGate: context.pptWorkflowScope.directionGate }
+                  : {}),
+                ...(context.pptWorkflowScope?.directionGate?.required
+                  ? { directionSourceRequest: await options.resolveSourceRequest?.(context) ?? context.approvalIntent }
+                  : {})
               })
             : existing
+          const gatedState = context.pptWorkflowScope?.directionGate
+            ? recordPptDirectionGate(state, context.pptWorkflowScope.directionGate)
+            : state
           const next = recordPptGuideRead({
-            state,
+            state: gatedState,
             path: requested,
             startLine: startIndex + 1,
             endLine,
@@ -245,13 +307,13 @@ function createPptSubmitDesignPlanTool(
         context,
         workflowId,
         projectDir: projectArg,
-        actions: ['start', 'revise_previews', 'retry_failed']
+        actions: ['start', 'select_direction', 'revise_previews', 'retry_failed']
       })
       const parsed = PptDesignPlanInput.safeParse(args.plan)
       if (!parsed.success) {
         return errorResult(`invalid design plan: ${parsed.error.issues.map(formatIssue).join('; ')}`)
       }
-      const project = await resolveProjectDir(projectArg, context)
+      const project = await resolvePptProjectDir(projectArg, context)
       const store = await governanceStore(
         options,
         context,
@@ -274,13 +336,121 @@ function createPptSubmitDesignPlanTool(
           (message) => !message.startsWith('submit a complete design plan')
         )
         if (readiness.length > 0) return errorResult(`PPT design governance is incomplete: ${readiness.join('; ')}`)
-        const next = submitPptDesignPlan({
-          state: existing,
-          plan: parsed.data,
-          sourceRequest,
-          policy
-        })
-        await writePptDesignGovernance(store, next)
+        const directionManifest = existing.directionGate?.required
+          ? await readPptReviewManifest(project.projectDir)
+          : undefined
+        if (existing.directionGate?.required) {
+          if (context.pptWorkflowScope?.action !== 'select_direction') {
+            return errorResult('a gated visual direction can be promoted only by select_direction')
+          }
+          if (
+            !directionManifest ||
+            directionManifest.version !== PPT_REVIEW_MANIFEST_VERSION ||
+            directionManifest.workflowId !== workflowId ||
+            directionManifest.childId !== context.threadId ||
+            directionManifest.parentThreadId !== context.pptWorkflowScope.parentThreadId ||
+            directionManifest.projectDir !== context.pptWorkflowScope.projectDir ||
+            directionManifest.previewMode !== context.pptWorkflowScope.previewMode ||
+            (directionManifest.phase !== 'awaiting_direction' && !directionManifest.governance) ||
+            !directionManifest.directions?.selectedDirectionId
+          ) return errorResult('select one persisted visual direction before submitting the design plan')
+          const previewError = await pptDirectionPreviewIntegrityError(directionManifest, context)
+          if (previewError) return errorResult(previewError)
+          const selected = directionManifest.directions.candidates.find((candidate) =>
+            candidate.directionId === directionManifest.directions?.selectedDirectionId)
+          const authority = context.pptWorkflowScope.directionContext?.authority ?? []
+          const requested = context.pptWorkflowScope.directionContext?.directions ?? []
+          const expectedDirectionId = requested[0]?.directionId ??
+            authority.find((candidate) => candidate.recommended)?.directionId
+          const trusted = authority.find((candidate) => candidate.directionId === selected?.directionId)
+          const authorityIds = new Set(authority.map((candidate) => candidate.directionId))
+          const authorityMismatch =
+            authority.length !== 3 ||
+            authorityIds.size !== authority.length ||
+            authority.length !== directionManifest.directions.candidates.length ||
+            context.pptWorkflowScope.directionContext?.slidesFingerprint !==
+              pptDirectionSlidesFingerprint(directionManifest.slides) ||
+            directionManifest.directions.candidates.some((candidate) => {
+              const expected = authority.find((item) => item.directionId === candidate.directionId)
+              return !expected || expected.revision !== candidate.revision ||
+                expected.recommended !== candidate.recommended ||
+                expected.planFingerprint !== pptDirectionPlanFingerprint(candidate.plan) ||
+                expected.candidateFingerprint !== pptDirectionCandidateFingerprint(candidate)
+            })
+          if (
+            authorityMismatch || !selected || !trusted || trusted.revision !== selected.revision ||
+            selected.directionId !== expectedDirectionId ||
+            trusted.recommended !== selected.recommended ||
+            trusted.planFingerprint !== pptDirectionPlanFingerprint(selected.plan) ||
+            trusted.candidateFingerprint !== pptDirectionCandidateFingerprint(selected) ||
+            !samePptDirectionPlan(selected.plan, parsed.data)
+          ) {
+            return errorResult('design plan must exactly match the validated selected direction')
+          }
+          if (existing.designPlan && !samePptDirectionPlan(existing.designPlan, selected.plan)) {
+            return errorResult('the selected direction design plan is already governed and cannot be replaced')
+          }
+        }
+        const authoritativeSourceRequest = existing.directionGate?.required
+          ? existing.directionSourceRequest
+          : sourceRequest
+        if (!authoritativeSourceRequest) {
+          return errorResult('the original direction source request is unavailable')
+        }
+        const reconcileSelectedDirection = existing.directionGate?.required === true && existing.designPlan !== undefined
+        if (reconcileSelectedDirection && directionManifest?.governance) {
+          return {
+            output: {
+              workflowId,
+              category: existing.selectedCategory,
+              categoryGuide: existing.categoryGuide,
+              policy: existing.policy,
+              planRevision: existing.planRevision,
+              planFingerprint: existing.designPlan?.fingerprint,
+              validated: true
+            }
+          }
+        }
+        const next = reconcileSelectedDirection
+          ? existing
+          : submitPptDesignPlan({
+              state: existing,
+              plan: parsed.data,
+              sourceRequest: authoritativeSourceRequest,
+              policy
+            })
+        if (!reconcileSelectedDirection) await writePptDesignGovernance(store, next)
+        if (directionManifest) {
+          const snapshot = currentPptGovernanceSnapshot(next, policy)
+          await withFileMutationQueue(reviewManifestPath(project.projectDir), async () => {
+            const current = await readPptReviewManifest(project.projectDir)
+            if (
+              !current || current.version !== PPT_REVIEW_MANIFEST_VERSION ||
+              current.workflowId !== workflowId || current.childId !== context.threadId ||
+              !current.directions ||
+              current.directions?.selectedDirectionId !== directionManifest.directions?.selectedDirectionId ||
+              context.pptWorkflowScope?.directionContext?.slidesFingerprint !==
+                pptDirectionSlidesFingerprint(current.slides) ||
+              current.directions?.candidates.some((candidate) => {
+                const expected = context.pptWorkflowScope?.directionContext?.authority.find(
+                  (item) => item.directionId === candidate.directionId)
+                return !expected || expected.revision !== candidate.revision ||
+                  expected.recommended !== candidate.recommended ||
+                  expected.planFingerprint !== pptDirectionPlanFingerprint(candidate.plan) ||
+                  expected.candidateFingerprint !== pptDirectionCandidateFingerprint(candidate)
+              })
+            ) throw new Error('selected PPT direction changed while the design plan was being submitted')
+            await writePptReviewManifest(project.projectDir, {
+              ...current,
+              phase: 'planning',
+              governance: snapshot,
+              styleSpec: {
+                ...designPlanStyleSpec(snapshot.designPlan),
+                fingerprint: snapshot.designPlan.fingerprint
+              }
+            })
+          })
+        }
         return {
           output: {
             workflowId,
@@ -297,7 +467,7 @@ function createPptSubmitDesignPlanTool(
   })
 }
 
-async function resolveProjectDir(
+export async function resolvePptProjectDir(
   projectArg: string,
   context: ToolHostContext
 ): Promise<{ workspaceRoot: string; projectDir: string }> {
@@ -338,7 +508,7 @@ async function governanceStore(
   })
 }
 
-function designPlanInputSchema(): Record<string, unknown> {
+export function designPlanInputSchema(): Record<string, unknown> {
   const color = { type: 'string', pattern: '^#[0-9A-Fa-f]{6}$' }
   return {
     type: 'object',

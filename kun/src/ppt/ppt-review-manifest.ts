@@ -1,18 +1,34 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
-import { dirname, isAbsolute, relative, resolve, win32 } from 'node:path'
+import { dirname, isAbsolute, relative, resolve } from 'node:path'
 import { z } from 'zod'
 import { PptDesignGovernanceSnapshot } from './ppt-design-governance.js'
+import {
+  PPT_GEOMETRY_QA_RELATIVE_PATH,
+  PptGeometryQaCounts,
+  PptGeometryQaIssueV1
+} from './ppt-geometry-qa-report.js'
+import {
+  PptDirectionBundleV1,
+  PptDirectionState,
+  PptWorkspaceRelativePath,
+  pptDirectionCandidateFingerprint,
+  pptDirectionPlanFingerprint,
+  pptDirectionSlidesFingerprint,
+  pptDirectionSummary,
+  samePptDirectionPlan
+} from './ppt-direction-workflow.js'
 
-export const PPT_REVIEW_MANIFEST_VERSION = 2 as const
+export const PPT_REVIEW_MANIFEST_VERSION = 3 as const
+export const PPT_REVIEW_GOVERNED_MANIFEST_VERSION = 2 as const
 export const PPT_REVIEW_LEGACY_MANIFEST_VERSION = 1 as const
 
-const WorkspaceRelativePath = z.string().min(1).refine(isPortableWorkspaceRelativePath, {
-  message: 'path must be workspace-relative and must not escape the workspace'
-})
+const WorkspaceRelativePath = PptWorkspaceRelativePath
 
 export const PptWorkflowPhase = z.enum([
   'planning',
+  'awaiting_direction',
+  'revising_directions',
   'generating_previews',
   'awaiting_review',
   'revising_previews',
@@ -45,6 +61,13 @@ export const PptStyleSpec = z.object({
 }).strict()
 export type PptStyleSpec = z.infer<typeof PptStyleSpec>
 
+export const PptGeometryQaManifestProjection = z.object({
+  reportPath: z.literal(PPT_GEOMETRY_QA_RELATIVE_PATH),
+  attempt: z.number().int().min(0).max(2),
+  counts: PptGeometryQaCounts
+}).strict()
+export type PptGeometryQaManifestProjection = z.infer<typeof PptGeometryQaManifestProjection>
+
 export const PptReviewSlide = z.object({
   slideId: z.string().min(1),
   index: z.number().int().nonnegative(),
@@ -56,13 +79,22 @@ export const PptReviewSlide = z.object({
   status: PptReviewSlideStatus,
   attempts: z.number().int().nonnegative(),
   lastError: z.string().min(1).optional(),
+  qaIssues: z.array(PptGeometryQaIssueV1).optional(),
+  contentHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   promptHash: z.string().min(1)
-}).strict()
+}).strict().superRefine((slide, ctx) => {
+  slide.qaIssues?.forEach((issue, index) => {
+    if (issue.slideIndex !== slide.index) {
+      ctx.addIssue({ code: 'custom', path: ['qaIssues', index, 'slideIndex'], message: 'QA issue must belong to this slide' })
+    }
+  })
+})
 export type PptReviewSlide = z.infer<typeof PptReviewSlide>
 
 export const PptReviewManifestV1 = z.object({
   version: z.union([
     z.literal(PPT_REVIEW_LEGACY_MANIFEST_VERSION),
+    z.literal(PPT_REVIEW_GOVERNED_MANIFEST_VERSION),
     z.literal(PPT_REVIEW_MANIFEST_VERSION)
   ]),
   workflowId: z.string().min(1),
@@ -77,11 +109,14 @@ export const PptReviewManifestV1 = z.object({
     slideCount: z.number().int().positive()
   }).strict(),
   styleSpec: PptStyleSpec,
+  directions: PptDirectionState.optional(),
   governance: PptDesignGovernanceSnapshot.optional(),
+  qa: PptGeometryQaManifestProjection.optional(),
   validatedExport: z.object({
     output: WorkspaceRelativePath,
     planFingerprint: z.string().regex(/^[a-f0-9]{64}$/),
-    slides: z.number().int().positive()
+    slides: z.number().int().positive(),
+    qa: PptGeometryQaManifestProjection.optional()
   }).strict().optional(),
   slides: z.array(PptReviewSlide).min(1),
   board: z.object({
@@ -89,11 +124,51 @@ export const PptReviewManifestV1 = z.object({
     lastAppliedRevision: z.number().int().nonnegative()
   }).strict().optional()
 }).strict().superRefine((manifest, ctx) => {
-  if (manifest.version === PPT_REVIEW_MANIFEST_VERSION && !manifest.governance) {
+  if (manifest.version === PPT_REVIEW_GOVERNED_MANIFEST_VERSION && !manifest.governance) {
     ctx.addIssue({ code: 'custom', path: ['governance'], message: 'version 2 manifests require design governance' })
   }
-  if (manifest.version === PPT_REVIEW_MANIFEST_VERSION && !manifest.previewMode) {
-    ctx.addIssue({ code: 'custom', path: ['previewMode'], message: 'version 2 manifests require a stable preview mode' })
+  if (manifest.version >= PPT_REVIEW_GOVERNED_MANIFEST_VERSION && !manifest.previewMode) {
+    ctx.addIssue({ code: 'custom', path: ['previewMode'], message: 'governed manifests require a stable preview mode' })
+  }
+  if (manifest.version !== PPT_REVIEW_MANIFEST_VERSION && manifest.directions) {
+    ctx.addIssue({ code: 'custom', path: ['directions'], message: 'visual directions require manifest version 3' })
+  }
+  if (manifest.version === PPT_REVIEW_MANIFEST_VERSION) {
+    const directionPhase = manifest.phase === 'awaiting_direction' || manifest.phase === 'revising_directions'
+    if (directionPhase && (!manifest.directions || manifest.governance)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['directions'],
+        message: 'direction phases require candidates and must not claim design governance'
+      })
+    }
+    if (directionPhase && (manifest.validatedExport || manifest.qa)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['validatedExport'],
+        message: 'direction phases cannot claim export or geometry QA validation'
+      })
+    }
+    if (!directionPhase && !manifest.governance) {
+      ctx.addIssue({ code: 'custom', path: ['governance'], message: 'version 3 review phases require design governance' })
+    }
+    if (manifest.directions && manifest.governance) {
+      const selected = manifest.directions.candidates.find((candidate) =>
+        candidate.directionId === manifest.directions?.selectedDirectionId)
+      if (!selected) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['directions', 'selectedDirectionId'],
+          message: 'governed version 3 directions require one validated selection'
+        })
+      } else if (!samePptDirectionPlan(selected.plan, manifest.governance.designPlan)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['directions', 'selectedDirectionId'],
+          message: 'selected direction does not match the governed design plan'
+        })
+      }
+    }
   }
   if (
     manifest.validatedExport &&
@@ -104,6 +179,35 @@ export const PptReviewManifestV1 = z.object({
       code: 'custom',
       path: ['validatedExport', 'planFingerprint'],
       message: 'validated export must use the current governed design plan'
+    })
+  }
+  if (manifest.validatedExport?.qa && manifest.validatedExport.qa.counts.errors > 0) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['validatedExport', 'qa', 'counts', 'errors'],
+      message: 'validated export cannot contain geometry QA errors'
+    })
+  }
+  if (manifest.validatedExport?.qa && manifest.qa &&
+    JSON.stringify(manifest.validatedExport.qa) !== JSON.stringify(manifest.qa)) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['validatedExport', 'qa'],
+      message: 'validated export QA must match the current manifest QA projection'
+    })
+  }
+  if (manifest.validatedExport?.qa && !manifest.qa) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['validatedExport', 'qa'],
+      message: 'validated export QA requires the current manifest QA projection'
+    })
+  }
+  if (manifest.phase === 'completed' && manifest.qa && manifest.qa.counts.errors > 0) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['qa', 'counts', 'errors'],
+      message: 'completed PPT workflow cannot contain geometry QA errors'
     })
   }
   if (manifest.deck.slideCount !== manifest.slides.length) {
@@ -129,6 +233,30 @@ export const PptReviewManifestV1 = z.object({
     if (!indexes.has(index)) {
       ctx.addIssue({ code: 'custom', path: ['slides'], message: 'slide indexes must be contiguous from zero' })
       break
+    }
+  }
+  const projectedIssues = manifest.slides.flatMap((slide) => slide.qaIssues ?? [])
+  if (!manifest.qa && projectedIssues.length > 0) {
+    ctx.addIssue({ code: 'custom', path: ['slides'], message: 'slide QA issues require a manifest QA projection' })
+  }
+  if (manifest.qa) {
+    if (manifest.slides.some((slide) => slide.qaIssues === undefined)) {
+      ctx.addIssue({ code: 'custom', path: ['slides'], message: 'QA projection must replace issues for every slide' })
+    }
+    const projectedCounts = {
+      errors: projectedIssues.filter((issue) => issue.severity === 'error').length,
+      warnings: projectedIssues.filter((issue) => issue.severity === 'warning').length,
+      unchecked: projectedIssues.filter((issue) => issue.severity === 'unchecked').length,
+      total: projectedIssues.length
+    }
+    for (const key of ['errors', 'warnings', 'unchecked', 'total'] as const) {
+      if (projectedCounts[key] !== manifest.qa.counts[key]) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['qa', 'counts', key],
+          message: `manifest QA count must match slide issues (${projectedCounts[key]})`
+        })
+      }
     }
   }
 })
@@ -157,7 +285,8 @@ export const PptReviewBundleV1 = z.object({
     previewPath: WorkspaceRelativePath.optional(),
     revision: z.number().int().nonnegative(),
     status: z.enum(['ready', 'failed']),
-    error: z.string().min(1).optional()
+    error: z.string().min(1).optional(),
+    qaIssues: z.array(PptGeometryQaIssueV1).optional()
   }).strict()).min(1)
 }).strict().superRefine((bundle, ctx) => {
   const slideIds = new Set<string>()
@@ -174,6 +303,15 @@ export const PptReviewBundleV1 = z.object({
     if (slide.status === 'ready' && !slide.previewPath) {
       ctx.addIssue({ code: 'custom', path: ['slides', position, 'previewPath'], message: 'ready slides require previewPath' })
     }
+    slide.qaIssues?.forEach((issue, issueIndex) => {
+      if (issue.slideIndex !== slide.index) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['slides', position, 'qaIssues', issueIndex, 'slideIndex'],
+          message: 'QA issue must belong to this slide'
+        })
+      }
+    })
   }
   for (let index = 0; index < bundle.slides.length; index += 1) {
     if (!indexes.has(index)) {
@@ -209,9 +347,11 @@ export function createPptReviewManifest(input: {
   childId: string
   projectDir: string
   previewMode?: PptPreviewMode
+  phase?: PptWorkflowPhase
   deckTitle: string
   styleSpec: Omit<PptStyleSpec, 'fingerprint'> & { fingerprint?: string }
   governance?: PptDesignGovernanceSnapshot
+  directions?: PptDirectionState
   slides: Array<{ slideId?: string; title: string; layoutSpecPath?: string; prompt: string }>
 }): PptReviewManifestV1 {
   const workflowId = input.workflowId?.trim() || `ppt_${randomUUID()}`
@@ -220,15 +360,18 @@ export function createPptReviewManifest(input: {
     fingerprint: input.styleSpec.fingerprint?.trim() || fingerprint(input.styleSpec)
   })
   return PptReviewManifestV1.parse({
-    version: input.governance ? PPT_REVIEW_MANIFEST_VERSION : PPT_REVIEW_LEGACY_MANIFEST_VERSION,
+    version: input.governance || input.directions
+      ? PPT_REVIEW_MANIFEST_VERSION
+      : PPT_REVIEW_LEGACY_MANIFEST_VERSION,
     workflowId,
     parentThreadId: input.parentThreadId,
     childId: input.childId,
     projectDir: input.projectDir,
     ...(input.governance ? { previewMode: input.previewMode ?? 'editable' } : input.previewMode ? { previewMode: input.previewMode } : {}),
-    phase: 'planning',
+    phase: input.phase ?? 'planning',
     deck: { title: input.deckTitle, aspectRatio: '16:9', slideCount: input.slides.length },
     styleSpec,
+    ...(input.directions ? { directions: input.directions } : {}),
     ...(input.governance ? { governance: input.governance } : {}),
     slides: input.slides.map((slide, index) => ({
       slideId: slide.slideId?.trim() || `${workflowId}-slide-${index + 1}`,
@@ -238,7 +381,46 @@ export function createPptReviewManifest(input: {
       revision: 0,
       status: 'pending',
       attempts: 0,
+      contentHash: pptReviewContentHash(slide.prompt),
       promptHash: pptReviewPromptHash(styleSpec, slide.prompt)
+    }))
+  })
+}
+
+export function toPptDirectionBundle(
+  manifest: PptReviewManifestV1,
+  manifestPath: string
+): PptDirectionBundleV1 {
+  if (manifest.version !== PPT_REVIEW_MANIFEST_VERSION || !manifest.previewMode || !manifest.directions) {
+    throw new Error('PPT review manifest has no governed visual directions')
+  }
+  const recommended = manifest.directions.candidates.find((candidate) => candidate.recommended)
+  return PptDirectionBundleV1.parse({
+    schemaVersion: 1,
+    workflowId: manifest.workflowId,
+    childId: manifest.childId,
+    manifestPath,
+    previewMode: manifest.previewMode,
+    deckTitle: manifest.deck.title,
+    phase: 'awaiting_direction',
+    recommendedDirectionId: recommended?.directionId,
+    slidesFingerprint: pptDirectionSlidesFingerprint(manifest.slides),
+    slides: manifest.slides.map((slide) => ({
+      slideId: slide.slideId,
+      index: slide.index,
+      title: slide.title,
+      promptHash: slide.contentHash ?? slide.promptHash
+    })),
+    directions: manifest.directions.candidates.map((candidate) => ({
+      directionId: candidate.directionId,
+      name: candidate.name,
+      rationale: candidate.rationale,
+      revision: candidate.revision,
+      recommended: candidate.recommended,
+      planFingerprint: pptDirectionPlanFingerprint(candidate.plan),
+      candidateFingerprint: pptDirectionCandidateFingerprint(candidate),
+      ...pptDirectionSummary(candidate.plan),
+      previews: candidate.previews
     }))
   })
 }
@@ -294,13 +476,14 @@ export function toPptReviewBundle(
       ...(slide.previewPath ? { previewPath: slide.previewPath } : {}),
       revision: slide.revision,
       status: slide.status === 'failed' ? 'failed' : 'ready',
-      ...(slide.lastError ? { error: slide.lastError } : {})
+      ...(slide.lastError ? { error: slide.lastError } : {}),
+      ...(slide.qaIssues ? { qaIssues: slide.qaIssues } : {})
     }))
   })
 }
 
 export function assertWorkspaceRelativePath(path: string, workspaceRoot: string): string {
-  if (!isPortableWorkspaceRelativePath(path)) throw new Error('path must be workspace-relative')
+  if (!PptWorkspaceRelativePath.safeParse(path).success) throw new Error('path must be workspace-relative')
   const absolute = resolve(workspaceRoot, path)
   const outside = relative(workspaceRoot, absolute)
   if (outside.startsWith('..') || isAbsolute(outside)) throw new Error('path escapes the active workspace')
@@ -311,18 +494,14 @@ export function pptReviewPromptHash(styleSpec: PptStyleSpec, prompt: string): st
   return fingerprint({ styleSpec, prompt })
 }
 
+export function pptReviewContentHash(prompt: string): string {
+  return fingerprint({ prompt })
+}
+
 function fingerprint(value: unknown): string {
   return createHash('sha256').update(JSON.stringify(value)).digest('hex')
 }
 
 function isMissing(error: unknown): boolean {
   return typeof error === 'object' && error !== null && 'code' in error && (error as { code?: unknown }).code === 'ENOENT'
-}
-
-function isPortableWorkspaceRelativePath(value: string): boolean {
-  const path = value.trim()
-  if (!path || isAbsolute(path) || win32.isAbsolute(path)) return false
-  if (/^[A-Za-z][A-Za-z0-9+.-]*:/.test(path)) return false
-  const segments = path.replaceAll('\\', '/').split('/')
-  return !segments.includes('..')
 }

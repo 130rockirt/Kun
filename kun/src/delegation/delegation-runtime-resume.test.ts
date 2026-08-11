@@ -228,6 +228,51 @@ describe('DelegationRuntime resume handling', () => {
     }
   })
 
+  it('resumes a PPT workflow that has directions but no slide review yet', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'kun-delegation-direction-resume-'))
+    try {
+      let call = 0
+      const runtime = new DelegationRuntime({
+        config: subagentConfig(),
+        store: new FileDelegationStore(dir),
+        idGenerator: () => 'child_ppt_direction',
+        executor: async (input) => {
+          call += 1
+          return call === 1
+            ? {
+                summary: 'directions ready',
+                directionBundle: { childId: input.childId, workflowId: 'workflow-direction' }
+              }
+            : { summary: 'selection resumed' }
+        }
+      })
+      const first = await runtime.runChild({
+        parentThreadId: 'parent',
+        parentTurnId: 'turn-1',
+        prompt: 'generate directions',
+        workspace: '/workspace',
+        inlineProfile: {
+          id: 'ppt', source: 'builtin',
+          profile: { mode: 'subagent', toolPolicy: 'inherit', allowedTools: ['generate_image'] }
+        },
+        security: { sandboxRoot: '/workspace', memoryEnabled: false },
+        signal: new AbortController().signal
+      })
+
+      await expect(runtime.resumeChild({
+        childId: first.id,
+        parentThreadId: 'parent',
+        parentTurnId: 'turn-2',
+        prompt: 'select the recommendation',
+        expectedProfile: 'ppt',
+        expectedWorkflowId: 'workflow-direction',
+        signal: new AbortController().signal
+      })).resolves.toMatchObject({ id: first.id, summary: 'selection resumed' })
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
   it('rejects concurrent follow-ups for the same persistent child', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'kun-delegation-resume-lock-'))
     try {

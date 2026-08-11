@@ -13,6 +13,11 @@ import { useDesignWorkspaceStore } from '../design-workspace-store'
 import { requestCodeCanvasPanelOpen } from '../../lib/code-canvas-panel-event'
 import { isPptReviewBundle, pptReviewBoardOps } from './ppt-review-board'
 import {
+  isPptDirectionBundle,
+  pptDirectionBoardOps,
+  pptDirectionCleanupOps
+} from './ppt-direction-board'
+import {
   applySvgArtifactToolBlock,
   shouldApplyDesignCanvasToolBlock,
   type SvgArtifactRequestHandler
@@ -321,18 +326,30 @@ export function useApplyShapeOpsLive(
         return
       }
       const reviewBundle = isRecord(parsed) ? parsed.reviewBundle : undefined
+      const directionBundle = isRecord(parsed) ? parsed.directionBundle : undefined
       const isPptReview = block.meta?.toolName === 'ppt_agent' && isPptReviewBundle(reviewBundle)
-      if (!isPptReview && !shouldApplyDesignCanvasToolBlock(block)) return
-      if (isPptReview) {
+      const isPptDirection = block.meta?.toolName === 'ppt_agent' && isPptDirectionBundle(directionBundle)
+      if (!isPptReview && !isPptDirection && !shouldApplyDesignCanvasToolBlock(block)) return
+      if (isPptReview || isPptDirection) {
         const canvasShapes = Object.values(useCanvasShapeStore.getState().document.objects)
         const parentThreadId = targetThreadId ?? useChatStore.getState().activeThreadId ?? undefined
+        const boardOps = isPptReviewBundle(reviewBundle)
+          ? [
+              ...pptDirectionCleanupOps(reviewBundle.workflowId, reviewBundle.childId, canvasShapes),
+              ...pptReviewBoardOps(reviewBundle, canvasShapes, parentThreadId)
+            ]
+          : isPptDirectionBundle(directionBundle)
+            ? pptDirectionBoardOps(directionBundle, canvasShapes, parentThreadId)
+            : []
+        const boardKey = `${isPptReview ? 'ppt-review' : 'ppt-direction'}:${block.id}`
         const { affectedIds, errors } = applyCanvasOpBlocks(
-          [pptReviewBoardOps(reviewBundle, canvasShapes, parentThreadId)], `ppt-review:${block.id}`, executeOptions)
+          [boardOps], boardKey, executeOptions)
         appliedToolBlockIds.add(block.id)
         if (errors.length > 0) errorsThisTurn.push(...errors)
         if (affectedIds.length > 0) {
           for (const id of affectedIds) affectedThisTurn.add(id)
-          useCanvasSelectionStore.getState().select([...affectedThisTurn])
+          if (isPptDirection) useCanvasSelectionStore.getState().clearSelection()
+          else useCanvasSelectionStore.getState().select([...affectedThisTurn])
           useDesignAssistantStore.getState().markAiAffected(affectedIds)
           requestCodeCanvasPanelOpen()
           framedThisTurn = true

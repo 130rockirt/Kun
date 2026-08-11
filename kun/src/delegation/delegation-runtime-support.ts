@@ -402,6 +402,26 @@ export function persistedReviewIdentityError(
   return ''
 }
 
+export function persistedPptWorkflowIdentityError(
+  reviewBundle: unknown,
+  directionBundle: unknown,
+  childId: string,
+  workflowId: string
+): string {
+  const bundles = [reviewBundle, directionBundle].filter((value) =>
+    value !== undefined && value !== null)
+  if (bundles.length === 0) return `child run ${childId} has no persisted PPT workflow`
+  for (const value of bundles) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return `child run ${childId} has an invalid persisted PPT workflow`
+    }
+    const bundle = value as Record<string, unknown>
+    if (bundle.childId !== childId) return `child run ${childId} has a mismatched PPT workflow owner`
+    if (bundle.workflowId !== workflowId) return `child run ${childId} does not own PPT workflow ${workflowId}`
+  }
+  return ''
+}
+
 export function subtractChildUsage(
   next: ChildRunRecord['usage'],
   previous: ChildRunRecord['usage']

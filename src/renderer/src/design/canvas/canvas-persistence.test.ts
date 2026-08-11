@@ -55,6 +55,27 @@ describe('canvas-persistence round-trip', () => {
     expect(parsed?.objects[frame.id]?.htmlArtifactId).toBeUndefined()
   })
 
+  it('preserves PPT review and visual-direction identities across reload', () => {
+    const doc = createEmptyDocument()
+    const review = createDefaultShape('frame', 0, 0)
+    review.pptReviewRef = {
+      workflowId: 'workflow-a', childId: 'child-a', slideId: 'slide-1', revision: 2,
+      parentThreadId: 'thread-a', role: 'slide-frame'
+    }
+    const direction = createDefaultShape('image', 20, 20)
+    direction.pptDirectionRef = {
+      workflowId: 'workflow-a', childId: 'child-a', directionId: 'direction-b', revision: 3,
+      parentThreadId: 'thread-a', role: 'preview-image'
+    }
+    doc.objects[review.id] = { ...review, parentId: doc.rootId }
+    doc.objects[direction.id] = { ...direction, parentId: doc.rootId }
+    doc.objects[doc.rootId] = { ...doc.objects[doc.rootId], children: [review.id, direction.id] }
+
+    const parsed = parseCanvasDocument(serializeCanvasDocument(doc))!
+    expect(parsed.objects[review.id].pptReviewRef).toEqual(review.pptReviewRef)
+    expect(parsed.objects[direction.id].pptDirectionRef).toEqual(direction.pptDirectionRef)
+  })
+
   it('does not invent htmlArtifactId for plain frames', () => {
     const doc = createEmptyDocument()
     const reloaded = parseCanvasDocument(serializeCanvasDocument(doc))

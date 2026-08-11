@@ -65,7 +65,7 @@ import {
   isNotFound,
   normalizeInheritedReasoningEffort,
   notifyLifecycle,
-  persistedReviewIdentityError,
+  persistedPptWorkflowIdentityError,
   resolveChildModelSelection,
   sameChildActivity,
   sameModelRoute
@@ -186,12 +186,13 @@ export class DelegationRuntime extends DelegationRuntimeRun {
       throw new Error(`child run ${input.childId} is not a ${input.expectedProfile} child`)
     }
     if (input.expectedWorkflowId) {
-      const reviewIdentityError = persistedReviewIdentityError(
+      const workflowIdentityError = persistedPptWorkflowIdentityError(
         previous.reviewBundle,
+        previous.directionBundle,
         previous.id,
         input.expectedWorkflowId
       )
-      if (reviewIdentityError) throw new Error(reviewIdentityError)
+      if (workflowIdentityError) throw new Error(workflowIdentityError)
     }
     const profileSnapshot = previous.profileSnapshot
     const storedSecurity = previous.security

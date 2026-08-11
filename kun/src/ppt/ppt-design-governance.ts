@@ -51,6 +51,19 @@ export const PPT_CATEGORY_GUIDE_PATHS: Readonly<Record<PptDesignCategory, string
 
 const HexColor = z.string().regex(/^#[0-9A-Fa-f]{6}$/)
 
+const PptPersistedDirectionGate = z.object({
+  required: z.boolean(),
+  reason: z.enum([
+    'existing-presentation',
+    'explicit-skip',
+    'design-reference',
+    'complete-visual-system',
+    'underspecified-new-deck'
+  ]),
+  basis: z.string().trim().min(1).max(240),
+  sourceHash: z.string().regex(/^[a-f0-9]{64}$/)
+}).strict()
+
 export const PptBackgroundTreatment = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('solid') }).strict(),
   z.object({ kind: z.literal('gradient'), stops: z.array(HexColor).min(2).max(8) }).strict(),
@@ -186,6 +199,8 @@ export const PptDesignGovernanceState = z.object({
   guideReads: z.array(GuideReadProgress).default([]),
   selectedCategory: PptDesignCategory.optional(),
   categoryGuide: z.string().min(1).optional(),
+  directionGate: PptPersistedDirectionGate.optional(),
+  directionSourceRequest: z.string().trim().min(1).max(100_000).optional(),
   designPlan: PptDesignPlan.optional(),
   planRevision: z.number().int().nonnegative().default(0),
   reviewedPlanFingerprint: z.string().regex(/^[a-f0-9]{64}$/).optional(),
@@ -239,6 +254,8 @@ export function createPptDesignGovernanceState(input: {
   childId: string
   binding: PptDesignGovernanceStore['identity']
   policy: PptCoreDesignPolicy
+  directionGate?: z.infer<typeof PptPersistedDirectionGate>
+  directionSourceRequest?: string
 }): PptDesignGovernanceState {
   return PptDesignGovernanceState.parse({
     version: PPT_DESIGN_GOVERNANCE_VERSION,
@@ -250,8 +267,26 @@ export function createPptDesignGovernanceState(input: {
     },
     policy: policyIdentity(input.policy),
     guideReads: [],
+    ...(input.directionGate ? { directionGate: input.directionGate } : {}),
+    ...(input.directionSourceRequest ? { directionSourceRequest: input.directionSourceRequest } : {}),
     planRevision: 0
   })
+}
+
+export function recordPptDirectionGate(
+  state: PptDesignGovernanceState,
+  gate: z.infer<typeof PptPersistedDirectionGate>
+): PptDesignGovernanceState {
+  const parsed = PptPersistedDirectionGate.parse(gate)
+  if (state.directionGate && (
+    state.directionGate.required !== parsed.required ||
+    state.directionGate.reason !== parsed.reason ||
+    state.directionGate.basis !== parsed.basis ||
+    state.directionGate.sourceHash !== parsed.sourceHash
+  )) {
+    throw new Error('PPT visual-direction gate is immutable within a workflow')
+  }
+  return PptDesignGovernanceState.parse({ ...state, directionGate: parsed })
 }
 
 export function recordPptGuideRead(input: {

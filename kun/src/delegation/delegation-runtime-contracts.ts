@@ -236,6 +236,10 @@ export const ChildRunRecord = z.object({
   reviewBundle: z.unknown().optional(),
   /** Parent turn that produced reviewBundle; distinguishes a fresh bundle from the preserved prior revision. */
   reviewBundleParentTurnId: z.string().min(1).optional(),
+  /** Structured pre-review visual directions captured independently from slide review. */
+  directionBundle: z.unknown().optional(),
+  /** Parent turn that produced directionBundle. */
+  directionBundleParentTurnId: z.string().min(1).optional(),
   /** Structured validated PPT export captured from the child tool stream. */
   deckArtifact: z.unknown().optional(),
   /** Parent turn that produced deckArtifact. */
@@ -342,6 +346,7 @@ export type ChildRunExecutor = (input: {
   prefixReused?: boolean
   inheritedHistoryItems?: number
   reviewBundle?: unknown
+  directionBundle?: unknown
   deckArtifact?: unknown
   evidence?: string[]
 }>

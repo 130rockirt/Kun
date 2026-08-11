@@ -13,7 +13,7 @@ async function sha256Hex(value: string): Promise<string> {
 export async function createDevPreviewComposerContextAttachment(input: {
   workspaceRoot: string
   threadId: string
-  kind: 'element' | 'issue' | 'ppt-review'
+  kind: 'element' | 'issue' | 'ppt-review' | 'ppt-direction'
   title: string
   summary: string
   reference: JsonObject

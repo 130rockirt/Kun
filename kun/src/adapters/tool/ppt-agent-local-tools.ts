@@ -18,6 +18,7 @@ import {
 } from './ppt-agent-governance-tools.js'
 import {
   MAX_EXPORT_OUTPUT_CHARS,
+  directionReviewIdentityError,
   governanceProjectionMatches,
   integerArg,
   parsePreviewRendererOutput,
@@ -39,6 +40,11 @@ import {
 } from './ppt-agent-asset-tool.js'
 import { createPptExportTool, PPT_EXPORT_TOOL_NAME } from './ppt-agent-export-tool.js'
 import {
+  buildPptAgentDirectionTools,
+  PPT_CREATE_DIRECTION_BUNDLE_TOOL_NAME,
+  PPT_READ_DIRECTION_SELECTION_TOOL_NAME
+} from './ppt-agent-direction-tools.js'
+import {
   assertPptScopedExistingPath,
   assertPptScopedMutationPath
 } from './ppt-agent-physical-path.js'
@@ -49,6 +55,7 @@ export { PPT_EXPORT_TOOL_NAME }
 export { PPT_READ_GUIDE_TOOL_NAME, PPT_SUBMIT_DESIGN_PLAN_TOOL_NAME }
 export { PPT_READ_REVIEW_CONTEXT_TOOL_NAME }
 export { PPT_IMPORT_ASSET_TOOL_NAME }
+export { PPT_CREATE_DIRECTION_BUNDLE_TOOL_NAME, PPT_READ_DIRECTION_SELECTION_TOOL_NAME }
 
 const execFileAsync = promisify(execFile)
 
@@ -63,6 +70,7 @@ export function buildPptAgentLocalTools(options: PptAgentLocalToolOptions = {}):
     options.enabled?.() !== false && context.pptWorkflowScope !== undefined
   return [
     ...buildPptAgentGovernanceTools(options, shouldAdvertise),
+    ...buildPptAgentDirectionTools(options, shouldAdvertise),
     createPptReadReviewContextTool(shouldAdvertise, () => options.enabled?.() !== false),
     createPptImportAssetTool(options, shouldAdvertise),
     createPptExportTool(options, shouldAdvertise),
@@ -105,7 +113,7 @@ function createPptGeneratePreviewsTool(
       }
       const scope = assertPptWorkflowBinding({
         context,
-        actions: ['start', 'revise_previews', 'retry_failed'],
+        actions: ['start', 'select_direction', 'revise_previews', 'retry_failed'],
         previewMode: 'editable'
       })
       const inputArg = stringArg(args.input)
@@ -213,6 +221,8 @@ function createPptGeneratePreviewsTool(
         ) {
           throw new Error('PPT preview manifest does not match the authoritative host governance state')
         }
+        const directionIdentityError = directionReviewIdentityError(existingManifest, scope)
+        if (directionIdentityError) throw new Error(directionIdentityError)
         const manifest = createPptReviewManifest({
           ...(governance
             ? { workflowId: governance.state.workflowId }
@@ -240,6 +250,7 @@ function createPptGeneratePreviewsTool(
                 chartTreatment: 'native editable PPT elements'
               },
           ...(governance ? { governance: governance.snapshot } : {}),
+          ...(existingManifest?.directions ? { directions: existingManifest.directions } : {}),
           slides: images.map((image, index) => ({
             ...(existingManifest?.slides[index] ? { slideId: existingManifest.slides[index].slideId } : {}),
             title: existingManifest?.slides[index]?.title || `P${index + 1}`,
@@ -253,6 +264,9 @@ function createPptGeneratePreviewsTool(
           ...(governance ? { governance: governance.snapshot } : {}),
           slides: manifest.slides.map((slide, index) => ({
             ...slide,
+            ...(scope.action === 'select_direction' && existingManifest?.slides[index]?.contentHash
+              ? { contentHash: existingManifest.slides[index].contentHash }
+              : {}),
             previewPath: relative(workspaceRoot, renderedImages[index].physicalPath).replaceAll('\\\\', '/'),
             revision: (existingManifest?.slides[index]?.revision ?? 0) + 1,
             status: 'ready' as const,
@@ -336,9 +350,9 @@ function createPptCreateReviewBundleTool(
       if (options.enabled?.() === false) {
         return { output: { error: 'PPT Agent is disabled in Lab settings' }, isError: true }
       }
-      assertPptWorkflowBinding({
+      const scope = assertPptWorkflowBinding({
         context,
-        actions: ['start', 'revise_previews', 'retry_failed'],
+        actions: ['start', 'select_direction', 'revise_previews', 'retry_failed'],
         previewMode: 'image-first'
       })
       const workflowId = stringArg(args.workflowId)
@@ -439,6 +453,8 @@ function createPptCreateReviewBundleTool(
         if (governance && existing && existing.previewMode !== 'image-first') {
           return { output: { error: 'PPT image-first review cannot resume an editable preview manifest' }, isError: true }
         }
+        const directionIdentityError = directionReviewIdentityError(existing, scope, resolvedSlides)
+        if (directionIdentityError) return { output: { error: directionIdentityError }, isError: true }
         if (
           governance &&
           existing &&

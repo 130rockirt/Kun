@@ -104,7 +104,7 @@ function makeSourceReader(options: SourceReaderOptions = {}): PptAgentTurnReader
   return {
     getTurn: async (threadId, turnId): Promise<Turn | null> => {
       if (options.missing) return null
-      const prompt = options.prompt?.(turnId) ?? `exact user request for ${turnId}`
+      const prompt = options.prompt?.(turnId) ?? `exact user request for ${turnId}; skip direction options and directly generate`
       const composerContexts = (options.review?.(turnId) ?? []).map((review, index) => ({
         schemaVersion: 1 as const,
         id: `preview-ppt-review-${String(index + 1).padStart(24, '0')}`,
@@ -306,7 +306,7 @@ describe('ppt_agent tool provider', () => {
       received = { ...input, signal: undefined }
       return originalRunChild(input)
     }) as typeof runtime.runChild
-    const exactPrompt = '帮我给 Kun 写一个介绍的 PPT'
+    const exactPrompt = '帮我给 Kun 写一个介绍的 PPT，直接生成，不需要方向选择'
     const fileReferences = [{
       path: '/workspace/brief.md',
       relativePath: 'brief.md',
@@ -418,7 +418,7 @@ describe('ppt_agent tool provider', () => {
     const sourceReader = makeSourceReader({
       prompt: (turnId) => turnId === 'turn_followup'
         ? '把封面标题放大一些'
-        : '创建一个发布会介绍 PPT',
+        : '创建一个发布会介绍 PPT，直接生成，不需要方向选择',
       review: (turnId) => turnId === 'turn_followup' && activeChildId
         ? [{
             workflowId: activeWorkflowId,
@@ -438,7 +438,7 @@ describe('ppt_agent tool provider', () => {
       isError: false,
       output: { phase: 'awaiting_review', workflowId: expect.stringMatching(/^ppt_/), reviewBundle: {} }
     })
-    expect(calls[0]?.prompt).toBe('创建一个发布会介绍 PPT')
+    expect(calls[0]?.prompt).toBe('创建一个发布会介绍 PPT，直接生成，不需要方向选择')
     expect(String(calls[0]?.controlPrompt)).toContain('Do not create PPTD or PPTX yet')
     expect(calls[0]?.blockedTools).toContain('ppt_export')
     const childId = (started.output as { childId: string }).childId
@@ -496,7 +496,7 @@ describe('ppt_agent tool provider', () => {
     })
     let activeChildId = ''
     const sourceReader = makeSourceReader({
-      prompt: (turnId) => turnId === 'turn-approved' ? '同意，生成 PPTX' : '创建一个 deck',
+      prompt: (turnId) => turnId === 'turn-approved' ? '同意，生成 PPTX' : '创建一个 deck，直接生成，不需要方向选择',
       review: (turnId) => turnId === 'turn_main' || !activeChildId
         ? []
         : [{ workflowId: 'ppt_workflow', childId: activeChildId }]

@@ -1,31 +1,23 @@
-import { z } from 'zod'
 import { randomUUID } from 'node:crypto'
 import {
-  ChildSourceEnvelope,
-  type ChildSecuritySnapshot,
   type DelegationRuntime
 } from '../../delegation/delegation-runtime.js'
-import {
-  PPT_AGENT_PROFILE
-} from '../../delegation/builtin-profiles.js'
-import { intersectChildSecurity } from '../../delegation/delegation-runtime-support.js'
-import {
-  ModelReasoningEffort,
-  type SubagentProfileConfig
-} from '../../contracts/capabilities.js'
-import type { ToolExecutionUpdate, ToolHostContext } from '../../ports/tool-host.js'
+import { ModelReasoningEffort } from '../../contracts/capabilities.js'
+import type { ToolHostContext } from '../../ports/tool-host.js'
 import type { TurnService } from '../../services/turn-service.js'
-import type { UserTurnItem } from '../../contracts/items.js'
 import type { CapabilityToolProvider } from './capability-registry.js'
 import { LocalToolHost } from './local-tool-host.js'
 import type { PptPreviewMode } from '../../ppt/ppt-review-manifest.js'
+import { classifyPptDirectionGate } from '../../ppt/ppt-direction-workflow.js'
 import {
   formatPptCoreDesignPolicyControl,
   loadPptCoreDesignPolicy
 } from '../../ppt/ppt-design-policy.js'
 import { requireToolchainDirectory } from './ppt-agent-local-tools-support.js'
 import { validatePersistedPptReviewIdentity } from './ppt-agent-review-context.js'
+import { validatePersistedPptDirectionIdentity } from './ppt-agent-direction-context.js'
 import {
+  directionBundleContractError,
   reviewBundleContractError,
   validatedDeckArtifact
 } from './ppt-agent-output-contracts.js'
@@ -37,8 +29,23 @@ import {
   initialPptPreviewMode,
   managedPptProviderUnavailable,
   pptAgentAction,
-  visualWorkflowInstruction
+  visualWorkflowInstruction,
+  type PptAgentAction
 } from './ppt-agent-workflow-control.js'
+import {
+  PPT_AGENT_ALLOWED_TOOLS,
+  buildPptProviderProfile,
+  childPptSourceEnvelope,
+  emitPptLifecycleUpdate,
+  pptProviderChildSecurity,
+  resolvePptProviderSource,
+  scopePptDirectionContext,
+  scopePptReviewContext,
+  stringValue,
+  type PptProviderDirectionContext,
+  type PptProviderReviewContext,
+  type PptProviderSourceEnvelope
+} from './ppt-agent-provider-support.js'
 
 export const PPT_AGENT_TOOL_NAME = 'ppt_agent' as const
 export const PPT_AGENT_PROVIDER_ID = 'ppt-agent' as const
@@ -61,22 +68,9 @@ export type PptAgentToolConfig = {
 
 export type PptAgentTurnReader = Pick<TurnService, 'getTurn'>
 
-const PptReviewContextV1 = z.object({
-  kind: z.literal('ppt-review'),
-  schemaVersion: z.literal(1),
-  workflowId: z.string().min(1),
-  childId: z.string().min(1),
-  slides: z.array(z.object({
-    slideId: z.string().min(1),
-    revision: z.number().int().nonnegative(),
-    annotations: z.array(z.string().trim().min(1).max(2_048)).optional()
-  }).strict()).min(1)
-}).strict()
-export type PptReviewContextV1 = z.infer<typeof PptReviewContextV1>
-
-export type PptSourceEnvelope = z.infer<typeof ChildSourceEnvelope> & {
-  reviewContexts: PptReviewContextV1[]
-}
+export type PptReviewContextV1 = PptProviderReviewContext
+export type PptDirectionContextV1 = PptProviderDirectionContext
+export type PptSourceEnvelope = PptProviderSourceEnvelope
 
 /**
  * First-class PPT allow-list. Full file authoring plus the managed `ppt_export`
@@ -87,24 +81,7 @@ export type PptSourceEnvelope = z.infer<typeof ChildSourceEnvelope> & {
  * child design-tool results never reach the canvas (verdict B), and the child
  * must not spin up further children.
  */
-export const PPT_AGENT_ALLOWED_TOOLS = [
-  'read',
-  'grep',
-  'glob',
-  'ls',
-  'write',
-  'edit',
-  'ppt_read_guide',
-  'ppt_read_review_context',
-  'ppt_submit_design_plan',
-  'ppt_import_asset',
-  'ppt_export',
-  'ppt_generate_previews',
-  'ppt_create_review_bundle',
-  'web_fetch',
-  'web_search',
-  'generate_image'
-] as const
+export { PPT_AGENT_ALLOWED_TOOLS }
 
 const PPT_AGENT_DESCRIPTION = [
   'Use `ppt_agent` for any presentation/PPT task: create, edit, replicate, or read a deck.',
@@ -146,8 +123,8 @@ export function buildPptAgentToolProvider(
             properties: {
               action: {
                 type: 'string',
-                enum: ['start', 'revise_previews', 'retry_failed', 'approve_and_build'],
-                description: 'Workflow action. Defaults to start; review follow-ups resume the original PPT child.'
+                enum: ['start', 'select_direction', 'revise_directions', 'revise_previews', 'retry_failed', 'approve_and_build'],
+                description: 'Workflow action. Defaults to start; direction and review follow-ups resume the original PPT child.'
               },
               childId: { type: 'string', description: 'Existing PPT child id required for a review follow-up.' },
               workflowId: { type: 'string', description: 'Persisted PPT review workflow id required for a review follow-up.' },
@@ -173,7 +150,7 @@ export function buildPptAgentToolProvider(
                 isError: true
               }
             }
-            const source = await resolvePptSourceEnvelope(turns, context)
+            const source = await resolvePptProviderSource(turns, context)
             if (!source.ok) {
               return {
                 output: { phase: 'source_unavailable', error: source.error },
@@ -214,13 +191,74 @@ export function buildPptAgentToolProvider(
             if (action !== 'start' && (!childId || !workflowId)) {
               return { output: { error: 'childId and workflowId are required for PPT review follow-ups' }, isError: true }
             }
-            const scopedReview = scopedPptReviewContext(source.value.reviewContexts, action, childId, workflowId)
+            const directionAction = action === 'select_direction' || action === 'revise_directions'
+            const directionGate = action === 'start'
+              ? classifyPptDirectionGate({
+                  prompt: source.value.prompt,
+                  fileReferences: source.value.fileReferences,
+                  attachmentIds: source.value.attachmentIds
+                })
+              : undefined
+            if (directionGate?.required && resolvedCfg.imageGenAvailable !== true) {
+              return {
+                output: {
+                  workflowId,
+                  projectDir,
+                  phase: 'unavailable',
+                  error: 'Visual direction selection requires generate_image; configure an image-generation model or provide an explicit design authority'
+                },
+                isError: true
+              }
+            }
+            const scopedDirection = scopePptDirectionContext(
+              source.value.directionContexts, action, childId, workflowId)
+            if (!scopedDirection.ok) {
+              return { output: { phase: 'source_unavailable', error: scopedDirection.error }, isError: true }
+            }
+            const scopedReview = scopePptReviewContext(source.value.reviewContexts, action, childId, workflowId)
             if (!scopedReview.ok) {
               return { output: { phase: 'source_unavailable', error: scopedReview.error }, isError: true }
             }
             let persistedPreviewMode: PptPreviewMode | undefined
             let persistedPlanFingerprint: string | undefined
-            if (action !== 'start') {
+            let directionAuthority: Array<{
+              directionId: string
+              revision: number
+              recommended: boolean
+              planFingerprint: string
+              candidateFingerprint: string
+            }> | undefined
+            let directionSlidesFingerprint: string | undefined
+            if (directionAction) {
+              const selectedDirectionCount = scopedDirection.value?.directions.length ?? 0
+              const acceptedDirection = selectedDirectionCount === 0
+                ? explicitlyAcceptsRecommendedDirection(source.value.prompt)
+                : explicitlyAcceptsSelectedDirection(source.value.prompt)
+              if (action === 'select_direction' && !acceptedDirection) {
+                return {
+                  output: {
+                    phase: 'source_unavailable',
+                    error: selectedDirectionCount === 0
+                      ? 'PPT source unavailable: select a direction card or explicitly accept the recommended direction'
+                      : 'PPT source unavailable: explicitly adopt the selected direction before promotion'
+                  },
+                  isError: true
+                }
+              }
+              const identity = await validatePersistedPptDirectionIdentity(
+                runtime,
+                context.threadId,
+                childId,
+                workflowId,
+                scopedDirection.value
+              )
+              if (!identity.ok) {
+                return { output: { phase: 'source_unavailable', error: identity.error }, isError: true }
+              }
+              persistedPreviewMode = identity.previewMode
+              directionAuthority = identity.authority
+              directionSlidesFingerprint = identity.bundle.slidesFingerprint
+            } else if (action !== 'start') {
               if (!scopedReview.value) {
                 return { output: { phase: 'source_unavailable', error: 'PPT source unavailable: review context is required' }, isError: true }
               }
@@ -248,7 +286,7 @@ export function buildPptAgentToolProvider(
             if (
               action !== 'start' &&
               action !== 'approve_and_build' &&
-              previewMode === 'image-first' &&
+              (previewMode === 'image-first' || action === 'revise_directions') &&
               resolvedCfg.imageGenAvailable !== true
             ) {
               return {
@@ -258,7 +296,9 @@ export function buildPptAgentToolProvider(
                   projectDir,
                   phase: 'failed_recoverable',
                   mode: 'visual-first',
-                  error: 'PPT image-first review cannot continue because generate_image is currently unavailable; retry after restoring the image-generation capability'
+                  error: action === 'revise_directions'
+                    ? 'PPT visual directions cannot be revised because generate_image is currently unavailable; retry after restoring the image-generation capability'
+                    : 'PPT image-first review cannot continue because generate_image is currently unavailable; retry after restoring the image-generation capability'
                 },
                 isError: true
               }
@@ -267,7 +307,7 @@ export function buildPptAgentToolProvider(
             const policyControl = formatPptCoreDesignPolicyControl(
               await loadPptCoreDesignPolicy(toolchain)
             )
-            const inlineProfile = buildPptInlineProfile(resolvedCfg)
+            const inlineProfile = buildPptProviderProfile(resolvedCfg)
             const fallbackNotice = imageFirstFallbackNotice(resolvedCfg, action)
             const workflowInstruction = visualWorkflowInstruction(
               resolvedCfg,
@@ -276,7 +316,8 @@ export function buildPptAgentToolProvider(
               workflowId,
               context.threadId,
               projectDir,
-              scopedReview.value !== undefined
+              scopedReview.value !== undefined,
+              directionGate?.required === true
             )
             const executionBlockedTools = blocksPptExport(action)
               ? ['ppt_export']
@@ -287,6 +328,23 @@ export function buildPptAgentToolProvider(
               projectDir,
               parentThreadId: context.threadId,
               previewMode,
+              ...(directionGate ? { directionGate } : {}),
+              ...(directionAction
+                ? {
+                    directionContext: {
+                      childId,
+                      directions: scopedDirection.value?.directions ?? [],
+                      authority: directionAuthority?.map((direction) => ({
+                        directionId: direction.directionId,
+                        revision: direction.revision,
+                        recommended: direction.recommended,
+                        planFingerprint: direction.planFingerprint,
+                        candidateFingerprint: direction.candidateFingerprint
+                      })) ?? [],
+                      slidesFingerprint: directionSlidesFingerprint ?? ''
+                    }
+                  }
+                : {}),
               ...(scopedReview.value
                 ? {
                     reviewContext: {
@@ -303,7 +361,7 @@ export function buildPptAgentToolProvider(
               workflowInstruction,
               deliverableInstruction(deliverable, action)
             ].filter(Boolean).join('\n\n')
-            const childSecurity = pptChildSecurity(context, workspace, projectDir)
+            const childSecurity = pptProviderChildSecurity(context, workspace, projectDir)
             const record = action === 'start'
               ? await runtime.runChild({
               parentThreadId: context.threadId,
@@ -311,7 +369,7 @@ export function buildPptAgentToolProvider(
               launcher: 'ppt_agent',
               label: title,
               prompt: source.value.prompt,
-              source: childSourceEnvelope(source.value),
+              source: childPptSourceEnvelope(source.value),
               controlPrompt,
               pptWorkflowScope,
               workspace,
@@ -347,7 +405,7 @@ export function buildPptAgentToolProvider(
               ...(context.clientSurface ? { clientSurface: context.clientSurface } : {}),
               returnFormat: 'summary',
               onQueued: async (childId, profile, metadata) => {
-                await emitPptLifecycle(onUpdate, {
+                await emitPptLifecycleUpdate(onUpdate, {
                   childId,
                   status: 'queued',
                   title,
@@ -363,7 +421,7 @@ export function buildPptAgentToolProvider(
                 })
               },
               onRunning: async (childId, profile, metadata) => {
-                await emitPptLifecycle(onUpdate, {
+                await emitPptLifecycleUpdate(onUpdate, {
                   childId,
                   status: 'running',
                   title,
@@ -385,7 +443,7 @@ export function buildPptAgentToolProvider(
                 parentThreadId: context.threadId,
                 parentTurnId: context.turnId,
                 prompt: source.value.prompt,
-                source: childSourceEnvelope(source.value),
+                source: childPptSourceEnvelope(source.value),
                 controlPrompt,
                 pptWorkflowScope,
                 expectedProfile: 'ppt',
@@ -394,14 +452,14 @@ export function buildPptAgentToolProvider(
                 security: childSecurity,
                 ...(executionBlockedTools ? { executionBlockedTools } : {}),
                 signal: context.abortSignal,
-                onQueued: async (resumedChildId, profile, metadata) => emitPptLifecycle(onUpdate, {
+                onQueued: async (resumedChildId, profile, metadata) => emitPptLifecycleUpdate(onUpdate, {
                   childId: resumedChildId,
                   status: 'queued',
                   title,
                   profile,
                   metadata
                 }),
-                onRunning: async (resumedChildId, profile, metadata) => emitPptLifecycle(onUpdate, {
+                onRunning: async (resumedChildId, profile, metadata) => emitPptLifecycleUpdate(onUpdate, {
                   childId: resumedChildId,
                   status: 'running',
                   title,
@@ -409,18 +467,35 @@ export function buildPptAgentToolProvider(
                   metadata
                 })
               })
-            const reviewExpected = action !== 'approve_and_build'
-            const currentReviewBundle = reviewExpected && record.reviewBundleParentTurnId === context.turnId
+            const directionExpected = (action === 'start' && directionGate?.required === true) || action === 'revise_directions'
+            const freshReviewBundle = record.reviewBundleParentTurnId === context.turnId
               ? record.reviewBundle
               : undefined
+            const freshReviewPhase = freshReviewBundle && typeof freshReviewBundle === 'object' &&
+              !Array.isArray(freshReviewBundle) && 'phase' in freshReviewBundle
+              ? freshReviewBundle.phase
+              : undefined
+            const recoverableQaReview = action === 'approve_and_build' &&
+              freshReviewPhase === 'failed_recoverable'
+            const completedQaReview = action === 'approve_and_build' && freshReviewPhase === 'completed'
+            const reviewExpected = !directionExpected && (action !== 'approve_and_build' || recoverableQaReview)
+            const currentDirectionBundle = directionExpected && record.directionBundleParentTurnId === context.turnId
+              ? record.directionBundle
+              : undefined
+            const currentReviewBundle = reviewExpected || completedQaReview ? freshReviewBundle : undefined
+            const directionContractError = directionExpected && currentDirectionBundle === undefined
+              ? 'PPT child completed without the required visual direction bundle'
+              : directionBundleContractError(currentDirectionBundle, record.id, workflowId, projectDir, previewMode)
             const reviewContractError = reviewExpected && currentReviewBundle === undefined
               ? 'PPT child completed without the required visual review bundle'
-              : reviewBundleContractError(currentReviewBundle, record.id, workflowId, projectDir, previewMode)
+              : currentReviewBundle === undefined
+                ? ''
+                : reviewBundleContractError(currentReviewBundle, record.id, workflowId, projectDir, previewMode)
             const deckArtifact = record.deckArtifactParentTurnId === context.turnId
               ? record.deckArtifact
               : undefined
             const deckExpected = deliverable === 'pptx' && action === 'approve_and_build'
-            const deckContractError = deckExpected && !validatedDeckArtifact(
+            const deckContractError = deckExpected && !recoverableQaReview && !validatedDeckArtifact(
               deckArtifact,
               workflowId,
               projectDir,
@@ -428,8 +503,10 @@ export function buildPptAgentToolProvider(
             )
               ? 'PPT child completed without a validated PPTX export'
               : ''
-            const contractError = reviewContractError || deckContractError
-            const failed = record.status === 'failed' || record.status === 'aborted' || Boolean(contractError)
+            const contractError = directionContractError || reviewContractError || deckContractError
+            const hasFreshStructuredResult = currentDirectionBundle !== undefined || currentReviewBundle !== undefined
+            const childFailed = record.status === 'failed' || record.status === 'aborted'
+            const failed = Boolean(contractError) || (childFailed && !hasFreshStructuredResult)
             const resolvedModel =
               record.model?.trim() ||
               (typeof context.actingModelRoute?.model === 'string'
@@ -448,10 +525,19 @@ export function buildPptAgentToolProvider(
                 status: record.status,
                 title,
                 summary: record.summary ?? '',
-                phase: failed ? 'failed_recoverable' : currentReviewBundle ? 'awaiting_review' : 'completed',
+                phase: recoverableQaReview
+                  ? 'failed_recoverable'
+                  : failed
+                  ? 'failed_recoverable'
+                  : currentDirectionBundle
+                    ? 'awaiting_direction'
+                    : currentReviewBundle && action !== 'approve_and_build'
+                      ? 'awaiting_review'
+                      : 'completed',
                 mode: previewMode === 'editable' ? 'direct' : 'visual-first',
                 deliverable,
                 ...(fallbackNotice ? { fallbackNotice } : {}),
+                ...(currentDirectionBundle !== undefined ? { directionBundle: currentDirectionBundle } : {}),
                 ...(currentReviewBundle !== undefined ? { reviewBundle: currentReviewBundle } : {}),
                 ...(deckArtifact !== undefined ? { deckArtifact } : {}),
                 toolInvocations: record.toolInvocations ?? 0,
@@ -460,7 +546,9 @@ export function buildPptAgentToolProvider(
                 profileName,
                 ...(resolvedModel ? { model: resolvedModel } : {}),
                 ...(record.durationMs !== undefined ? { durationMs: record.durationMs } : {}),
-                ...(failed ? { error: contractError || record.error || record.status } : {})
+                ...(failed || recoverableQaReview
+                  ? { error: contractError || record.error || (recoverableQaReview ? 'PPT geometry QA requires review' : record.status) }
+                  : {})
               },
               isError: failed
             }
@@ -471,177 +559,26 @@ export function buildPptAgentToolProvider(
   ]
 }
 
-type PptSourceResolution<T> =
-  | { ok: true; value: T }
-  | { ok: false; error: string }
-
-async function resolvePptSourceEnvelope(
-  turns: PptAgentTurnReader | undefined,
-  context: ToolHostContext
-): Promise<PptSourceResolution<PptSourceEnvelope>> {
-  if (!turns) {
-    return { ok: false, error: 'PPT source unavailable: active turn reader is not configured' }
-  }
-  const turn = await turns.getTurn(context.threadId, context.turnId).catch(() => null)
-  if (!turn) {
-    return {
-      ok: false,
-      error: `PPT source unavailable: active turn ${context.threadId}/${context.turnId} was not found`
-    }
-  }
-  const userItems = turn.items.filter((item): item is UserTurnItem =>
-    item.turnId === context.turnId && item.kind === 'user_message')
-  if (userItems.length !== 1) {
-    return {
-      ok: false,
-      error: userItems.length === 0
-        ? `PPT source unavailable: active turn ${context.threadId}/${context.turnId} has no user message`
-        : 'PPT source unavailable: the active turn received mid-turn steering; start a new turn and retry so no user request is silently merged or discarded'
-    }
-  }
-  const userItem = userItems[0]
-  const composerContexts = userItem.composerContexts ?? turn.composerContexts ?? []
-  const reviewContexts: PptReviewContextV1[] = []
-  for (const composerContext of composerContexts) {
-    if (
-      !('source' in composerContext.provenance) ||
-      composerContext.provenance.source !== 'dev-preview' ||
-      composerContext.reference.kind !== 'ppt-review'
-    ) continue
-    const parsed = PptReviewContextV1.safeParse(composerContext.reference)
-    if (!parsed.success) {
-      return {
-        ok: false,
-        error: `PPT source unavailable: invalid structured review context ${composerContext.id}`
-      }
-    }
-    reviewContexts.push(parsed.data)
-  }
-  const parsedSource = ChildSourceEnvelope.safeParse({
-    prompt: turn.prompt,
-    ...(userItem.displayText !== undefined ? { displayText: userItem.displayText } : {}),
-    attachmentIds: userItem.attachmentIds ?? turn.attachmentIds,
-    composerContexts,
-    fileReferences: userItem.fileReferences ?? [],
-    agentSurface: turn.agentSurface ?? context.agentSurface
-  })
-  if (!parsedSource.success) {
-    return { ok: false, error: 'PPT source unavailable: active turn source is invalid' }
-  }
-  return { ok: true, value: { ...parsedSource.data, reviewContexts } }
+function explicitlyAcceptsRecommendedDirection(prompt: string): boolean {
+  if (/\?/.test(prompt) || /[？吗呢]\s*$/.test(prompt)) return false
+  if (
+    /\b(?:do not|don't|never|refuse(?:d)? to|might|maybe|may|not|no)\b.{0,24}\b(?:accept|adopt|use|choose|go with|proceed with|recommended|recommendation)\b/i.test(prompt) ||
+    /(?:不要|不接受|不采用|别|不要按|拒绝|可能|也许|暂不).{0,12}(?:推荐|建议).{0,8}(?:方向|方案|风格)?/i.test(prompt)
+  ) return false
+  const normalized = prompt.trim()
+  return /^(?:please\s+)?(?:accept|adopt|use|choose|go with|proceed with)\b.{0,24}\b(?:the )?(?:recommended|recommendation)(?:\s+(?:direction|style|concept|option))?\b[\s.!]*$/i.test(normalized) ||
+    /^(?:请)?(?:采用|接受|选择|使用|按).{0,12}(?:推荐|建议).{0,8}(?:方向|方案|风格)?[。！!\s]*$/i.test(normalized)
 }
 
-function childSourceEnvelope(
-  source: PptSourceEnvelope
-): z.infer<typeof ChildSourceEnvelope> {
-  const composerContexts = source.composerContexts.filter((context) =>
-    context.reference.kind !== 'ppt-review')
-  return ChildSourceEnvelope.parse({
-    prompt: source.prompt,
-    ...(source.displayText !== undefined ? { displayText: source.displayText } : {}),
-    attachmentIds: source.attachmentIds,
-    composerContexts,
-    fileReferences: source.fileReferences,
-    ...(source.agentSurface ? { agentSurface: source.agentSurface } : {})
-  })
+function explicitlyAcceptsSelectedDirection(prompt: string): boolean {
+  if (rejectsDirectionAcceptance(prompt)) return false
+  const normalized = prompt.trim()
+  return /^(?:please\s+)?(?:accept|adopt|use|choose|go with|proceed with)\b.{0,28}\b(?:this(?:\s+selected)?|that(?:\s+selected)?|the selected|my selected|whiteboard)\s+(?:direction|style|concept|direction choice|card)\b[\s.!]*$/i.test(normalized) ||
+    /^(?:请)?(?:采用|接受|选择|使用|按).{0,12}(?:这个|该|已选|选中|白板中的?)(?:方向|方案|风格|卡片)[。！!\s]*$/i.test(normalized)
 }
 
-function scopedPptReviewContext(
-  contexts: readonly PptReviewContextV1[],
-  action: 'start' | 'revise_previews' | 'retry_failed' | 'approve_and_build',
-  childId: string,
-  workflowId: string
-): PptSourceResolution<PptReviewContextV1 | undefined> {
-  if (action === 'start') return { ok: true, value: undefined }
-  const matching = contexts.filter((context) =>
-    context.childId === childId && context.workflowId === workflowId)
-  if (matching.length === 1) return { ok: true, value: matching[0] }
-  if (matching.length > 1) {
-    return { ok: false, error: `PPT source unavailable: duplicate review context for workflow ${workflowId}` }
-  }
-  return {
-    ok: false,
-    error: contexts.length > 0
-      ? `PPT source unavailable: review context does not match child ${childId} and workflow ${workflowId}`
-      : `PPT source unavailable: review context is required for workflow ${workflowId}`
-  }
-}
-
-async function emitPptLifecycle(
-  onUpdate: ((update: ToolExecutionUpdate) => Promise<void> | void) | undefined,
-  args: {
-    childId: string
-    status: 'queued' | 'running'
-    title: string
-    profile?: string
-    metadata?: { profileName?: string; model?: string; reasoningEffort?: string }
-  }
-): Promise<void> {
-  await onUpdate?.({
-    output: {
-      childId: args.childId,
-      status: args.status,
-      title: args.title,
-      profile: args.profile ?? 'ppt',
-      profileName: args.metadata?.profileName?.trim() || 'PPT Agent',
-      ...(args.metadata?.model ? { model: args.metadata.model } : {}),
-      ...(args.metadata?.reasoningEffort ? { reasoningEffort: args.metadata.reasoningEffort } : {})
-    },
-    isError: false
-  })
-}
-
-function buildPptInlineProfile(
-  cfg: PptAgentToolConfig
-): { id: string; profile: SubagentProfileConfig; source: 'builtin' } {
-  const model = cfg.model?.trim()
-  const providerId = cfg.providerId?.trim()
-  const reasoningEffort = ModelReasoningEffort.safeParse(cfg.reasoningEffort).success
-    ? cfg.reasoningEffort
-    : undefined
-  return {
-    id: 'ppt',
-    source: 'builtin',
-    profile: {
-      mode: 'subagent',
-      toolPolicy: 'inherit',
-      skillsEnabled: false,
-      allowedTools: [...PPT_AGENT_ALLOWED_TOOLS],
-      blockedTools: ['delegate_task', 'generate_subagent', 'load_skill'],
-      systemPrompt: PPT_AGENT_PROFILE.systemPrompt,
-      ...(model && providerId ? { model, providerId } : {}),
-      ...(reasoningEffort ? { reasoningEffort } : {})
-    }
-  }
-}
-
-function pptChildSecurity(
-  context: ToolHostContext,
-  workspace: string,
-  projectDir: string
-): ChildSecuritySnapshot {
-  const inherited = {
-    sandboxRoot: workspace,
-    ...(context.allowedProviderIds ? { allowedProviderIds: [...context.allowedProviderIds] } : {}),
-    ...(context.allowedToolNames ? { allowedToolNames: [...context.allowedToolNames] } : {}),
-    ...(context.allowedSkillIds ? { allowedSkillIds: [...context.allowedSkillIds] } : {}),
-    ...(context.allowedReadPaths ? { allowedReadPaths: [...context.allowedReadPaths] } : {}),
-    ...(context.allowedWritePaths ? { allowedWritePaths: [...context.allowedWritePaths] } : {}),
-    ...(context.allowedArtifactIds ? { allowedArtifactIds: [...context.allowedArtifactIds] } : {}),
-    ...(context.blockedProviderIds ? { blockedProviderIds: [...context.blockedProviderIds] } : {}),
-    ...(context.blockedToolNames ? { blockedToolNames: [...context.blockedToolNames] } : {}),
-    ...(context.blockedSkillIds ? { blockedSkillIds: [...context.blockedSkillIds] } : {}),
-    instructionsEnabled: false,
-    memoryEnabled: false
-  }
-  return intersectChildSecurity(inherited, {
-    sandboxRoot: workspace,
-    allowedWritePaths: [projectDir, '.kun/images', 'presentations'],
-    instructionsEnabled: false,
-    memoryEnabled: false
-  })
-}
-
-function stringValue(value: unknown): string {
-  return typeof value === 'string' ? value.trim() : ''
+function rejectsDirectionAcceptance(prompt: string): boolean {
+  return /\?/.test(prompt) || /[？吗呢]\s*$/.test(prompt) ||
+    /\b(?:do not|don't|never|refuse(?:d)? to|might|maybe|may|not|no)\b.{0,32}\b(?:accept|adopt|use|choose|go with|proceed with|direction|style|concept|recommended|recommendation)\b/i.test(prompt) ||
+    /(?:不要|不接受|不采用|别|不要按|拒绝|可能|也许|暂不).{0,16}(?:方向|方案|风格|卡片|推荐|建议)/i.test(prompt)
 }

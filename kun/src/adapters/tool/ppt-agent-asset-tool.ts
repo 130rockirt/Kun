@@ -52,7 +52,7 @@ export function createPptImportAssetTool(
       }
       const scope = assertPptWorkflowBinding({
         context,
-        actions: ['start', 'revise_previews', 'retry_failed', 'approve_and_build']
+        actions: ['start', 'select_direction', 'revise_previews', 'retry_failed', 'approve_and_build']
       })
       const sourceArg = stringArg(args.source).replaceAll('\\', '/')
       if (!sourceArg.startsWith('.kun/images/') || sourceArg.includes('/../')) {

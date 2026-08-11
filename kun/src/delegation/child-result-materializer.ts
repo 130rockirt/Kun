@@ -2,6 +2,8 @@ import type { TurnItem } from '../contracts/items.js'
 import type { ArtifactStore } from '../artifacts/artifact-store.js'
 import { ContextEstimator } from '../loop/context-estimator.js'
 import type { ChildResultRef } from './delegation-runtime-contracts.js'
+import { PptReviewBundleV1 } from '../ppt/ppt-review-manifest.js'
+import { PptDirectionBundleV1 } from '../ppt/ppt-direction-workflow.js'
 
 export const CHILD_RESULT_MAX_BYTES = 50 * 1_024
 export const CHILD_RESULT_MAX_LINES = 2_000
@@ -16,16 +18,47 @@ export type MaterializedChildResult = {
   summaryTruncated?: boolean
   resultRef?: ChildResultRef
   resultUnavailableReason?: string
+  directionBundle?: unknown
+  reviewBundle?: unknown
+  deckArtifact?: unknown
 }
 
 export class ChildResultExecutionError extends Error {
+  readonly result: MaterializedChildResult
+
   constructor(
     message: string,
-    readonly result: MaterializedChildResult
+    result: MaterializedChildResult
   ) {
     super(message)
     this.name = 'ChildResultExecutionError'
+    this.result = validatedFailureResult(result)
   }
+}
+
+function validatedFailureResult(result: MaterializedChildResult): MaterializedChildResult {
+  const direction = PptDirectionBundleV1.safeParse(result.directionBundle)
+  const review = PptReviewBundleV1.safeParse(result.reviewBundle)
+  return {
+    summary: result.summary,
+    ...(result.summaryTruncated !== undefined ? { summaryTruncated: result.summaryTruncated } : {}),
+    ...(result.resultRef ? { resultRef: result.resultRef } : {}),
+    ...(result.resultUnavailableReason ? { resultUnavailableReason: result.resultUnavailableReason } : {}),
+    ...(direction.success ? { directionBundle: direction.data } : {}),
+    ...(review.success ? { reviewBundle: review.data } : {}),
+    ...(isValidatedDeckArtifact(result.deckArtifact) ? { deckArtifact: result.deckArtifact } : {})
+  }
+}
+
+function isValidatedDeckArtifact(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const artifact = value as Record<string, unknown>
+  return artifact.validated === true &&
+    typeof artifact.output === 'string' &&
+    artifact.output.toLowerCase().endsWith('.pptx') &&
+    Number.isInteger(artifact.slides) &&
+    Number(artifact.slides) > 0 &&
+    artifact.editableSlides === artifact.slides
 }
 
 export function childResultOwnerIds(parentThreadId: string, childId: string): string[] {

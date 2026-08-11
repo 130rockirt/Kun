@@ -1,4 +1,13 @@
-import type { CanvasAgentNote, CanvasDocument, CanvasEmbeddedArtifact, CanvasRunningAppFrame, CanvasShape, Point } from './canvas-types'
+import type {
+  CanvasAgentNote,
+  CanvasDocument,
+  CanvasEmbeddedArtifact,
+  CanvasPptDirectionRef,
+  CanvasPptReviewRef,
+  CanvasRunningAppFrame,
+  CanvasShape,
+  Point
+} from './canvas-types'
 import { ROOT_SHAPE_ID } from './canvas-types'
 import { normalizeRunningAppUrl } from './running-app-frame'
 import type { DesignOperation, DesignOperationJournalEntry } from '../graph/design-graph-types'
@@ -91,6 +100,34 @@ function parseEmbeddedArtifact(raw: unknown): CanvasEmbeddedArtifact | null {
   return { id: raw.id.trim(), kind: raw.kind, ...(versionId ? { versionId } : {}) }
 }
 
+function parsePptReviewRef(raw: unknown): CanvasPptReviewRef | null {
+  if (!isObj(raw) || typeof raw.workflowId !== 'string' || typeof raw.childId !== 'string' ||
+    typeof raw.slideId !== 'string' || !Number.isInteger(raw.revision) || Number(raw.revision) < 0) return null
+  if (raw.role !== 'slide-frame' && raw.role !== 'preview-image' && raw.role !== 'annotation') return null
+  return {
+    workflowId: raw.workflowId,
+    childId: raw.childId,
+    slideId: raw.slideId,
+    revision: Number(raw.revision),
+    ...(typeof raw.parentThreadId === 'string' ? { parentThreadId: raw.parentThreadId } : {}),
+    role: raw.role
+  }
+}
+
+function parsePptDirectionRef(raw: unknown): CanvasPptDirectionRef | null {
+  if (!isObj(raw) || typeof raw.workflowId !== 'string' || typeof raw.childId !== 'string' ||
+    typeof raw.directionId !== 'string' || !Number.isInteger(raw.revision) || Number(raw.revision) < 1) return null
+  if (raw.role !== 'direction-card' && raw.role !== 'preview-image' && raw.role !== 'summary') return null
+  return {
+    workflowId: raw.workflowId,
+    childId: raw.childId,
+    directionId: raw.directionId,
+    revision: Number(raw.revision),
+    ...(typeof raw.parentThreadId === 'string' ? { parentThreadId: raw.parentThreadId } : {}),
+    role: raw.role
+  }
+}
+
 function parseShape(raw: unknown, id: string): CanvasShape | null {
   if (!isObj(raw)) return null
   const type = raw.type
@@ -150,6 +187,8 @@ function parseShape(raw: unknown, id: string): CanvasShape | null {
   const agentNote = parseCanvasAgentNote(raw.agentNote)
   const runningApp = parseRunningAppFrame(raw.runningApp)
   const embeddedArtifact = parseEmbeddedArtifact(raw.embeddedArtifact)
+  const pptReviewRef = parsePptReviewRef(raw.pptReviewRef)
+  const pptDirectionRef = parsePptDirectionRef(raw.pptDirectionRef)
   return {
     id,
     type: type as CanvasShape['type'],
@@ -198,6 +237,8 @@ function parseShape(raw: unknown, id: string): CanvasShape | null {
       arrowheadEnd: raw.arrowheadEnd as CanvasShape['arrowheadEnd']
     }),
     ...(Array.isArray(raw.points) && { points: raw.points as Point[] }),
+    ...(pptReviewRef ? { pptReviewRef } : {}),
+    ...(pptDirectionRef ? { pptDirectionRef } : {}),
     // Effects / layout / constraints are passed through structurally — the
     // executor's Zod schema is the source of truth on write, so loading trusts
     // the on-disk shape and only guards the container kind to avoid crashes.

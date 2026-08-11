@@ -2,6 +2,28 @@ import {
   PptReviewBundleV1,
   type PptPreviewMode
 } from '../../ppt/ppt-review-manifest.js'
+import { PptDirectionBundleV1 } from '../../ppt/ppt-direction-workflow.js'
+
+export function directionBundleContractError(
+  value: unknown,
+  childId: string,
+  workflowId: string,
+  projectDir: string,
+  previewMode: PptPreviewMode
+): string {
+  if (value === undefined) return ''
+  const parsed = PptDirectionBundleV1.safeParse(value)
+  if (!parsed.success) return 'PPT child returned an invalid visual direction bundle'
+  const bundle = parsed.data
+  if (bundle.childId !== childId || bundle.workflowId !== workflowId) {
+    return 'PPT visual direction bundle does not belong to the active child workflow'
+  }
+  if (bundle.manifestPath.replaceAll('\\', '/') !== `${projectDir}/.kun-ppt-review/manifest.json`) {
+    return 'PPT visual direction bundle does not belong to the host-managed project'
+  }
+  if (bundle.previewMode !== previewMode) return 'PPT visual direction bundle changed the workflow preview mode'
+  return ''
+}
 
 export function reviewBundleContractError(
   value: unknown,
@@ -25,7 +47,12 @@ export function reviewBundleContractError(
   if (bundle.previewMode !== previewMode) {
     return 'PPT visual review bundle changed the workflow preview mode'
   }
-  if (bundle.phase !== 'awaiting_review') return 'PPT visual review bundle is not awaiting review'
+  const completedQaProjection = bundle.phase === 'completed' &&
+    bundle.slides.every((slide) =>
+      slide.qaIssues !== undefined && slide.qaIssues.every((issue) => issue.severity !== 'error'))
+  if (bundle.phase !== 'awaiting_review' && bundle.phase !== 'failed_recoverable' && !completedQaProjection) {
+    return 'PPT visual review bundle is neither awaiting review, recoverable after QA, nor a completed QA projection'
+  }
   return ''
 }
 

@@ -551,6 +551,10 @@ export abstract class DelegationRuntimeBase {
         summaryTruncated: result.summaryTruncated,
         resultRef: result.resultRef,
         resultUnavailableReason: result.resultUnavailableReason,
+        directionBundle: result.directionBundle ?? current.directionBundle,
+        directionBundleParentTurnId: result.directionBundle !== undefined
+          ? args.parentTurnId
+          : current.directionBundleParentTurnId,
         reviewBundle: result.reviewBundle ?? current.reviewBundle,
         reviewBundleParentTurnId: result.reviewBundle !== undefined
           ? args.parentTurnId
@@ -577,6 +581,12 @@ export abstract class DelegationRuntimeBase {
       const childResult = error instanceof ChildResultExecutionError
         ? error.result
         : undefined
+      const failedDirectionBundle = ownedPptChildBundle(childResult?.directionBundle, record.id)
+        ? childResult?.directionBundle
+        : undefined
+      const failedReviewBundle = ownedPptChildBundle(childResult?.reviewBundle, record.id)
+        ? childResult?.reviewBundle
+        : undefined
       record = await this.commitChildState(args.state, (current) => ChildRunRecord.parse({
         ...current,
         status: args.signal.aborted ? 'aborted' : 'failed',
@@ -587,6 +597,18 @@ export abstract class DelegationRuntimeBase {
           summaryTruncated: childResult.summaryTruncated,
           resultRef: childResult.resultRef,
           resultUnavailableReason: childResult.resultUnavailableReason
+        } : {}),
+        ...(failedDirectionBundle !== undefined ? {
+          directionBundle: failedDirectionBundle,
+          directionBundleParentTurnId: args.parentTurnId
+        } : {}),
+        ...(failedReviewBundle !== undefined ? {
+          reviewBundle: failedReviewBundle,
+          reviewBundleParentTurnId: args.parentTurnId
+        } : {}),
+        ...(childResult?.deckArtifact !== undefined ? {
+          deckArtifact: childResult.deckArtifact,
+          deckArtifactParentTurnId: args.parentTurnId
         } : {}),
         error: errorMessage(error).slice(0, CHILD_RESULT_PREVIEW_CHARS),
         durationMs: (current.durationMs ?? 0) + elapsedMs(startedAt, finishedAt),
@@ -637,4 +659,9 @@ export abstract class DelegationRuntimeBase {
     await operation
     return committed
   }
+}
+
+function ownedPptChildBundle(value: unknown, childId: string): boolean {
+  return typeof value === 'object' && value !== null && !Array.isArray(value) &&
+    (value as Record<string, unknown>).childId === childId
 }

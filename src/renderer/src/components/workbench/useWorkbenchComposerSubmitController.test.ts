@@ -18,6 +18,7 @@ vi.mock('react-i18next', () => ({
 
 import { useChatStore } from '../../store/chat-store'
 import { useCanvasShapeStore } from '../../design/canvas/canvas-shape-store'
+import { useCanvasSelectionStore } from '../../design/canvas/canvas-selection-store'
 import { createDefaultShape, createEmptyDocument } from '../../design/canvas/canvas-types'
 import { clearWriteWorkspaceSaveQueueForTests } from '../../write/write-save-coordinator'
 import { useWriteWorkspaceStore } from '../../write/write-workspace-store'
@@ -132,15 +133,39 @@ function activatePptReviewCanvas(): void {
   })
 }
 
+function activatePptDirectionCanvas(): void {
+  const document = createEmptyDocument()
+  const directions = ['editorial', 'signal', 'warm'].map((directionId, index) => ({
+    ...createDefaultShape('frame', index * 504, 0),
+    id: `direction-${directionId}`,
+    pptDirectionRef: {
+      workflowId: 'workflow-a', childId: 'child-a', directionId, revision: directionId === 'signal' ? 2 : 1,
+      parentThreadId: 'thr_mapped', role: 'direction-card' as const
+    }
+  }))
+  useCanvasShapeStore.setState({
+    document: {
+      ...document,
+      objects: Object.fromEntries([
+        ...Object.entries(document.objects),
+        ...directions.map((shape) => [shape.id, shape] as const)
+      ])
+    }
+  })
+  useCanvasSelectionStore.getState().select(['direction-signal'])
+}
+
 describe('useWorkbenchComposerSubmitController', () => {
   beforeEach(() => {
     vi.stubGlobal('window', { kunGui: {} })
     useChatStore.setState({ route: 'write', runtimeConnection: 'ready' })
     activateTextFile()
+    useCanvasSelectionStore.getState().clearSelection()
   })
 
   afterEach(() => {
     useCanvasShapeStore.getState().resetDocument()
+    useCanvasSelectionStore.getState().clearSelection()
     useWriteWorkspaceStore.getState().resetWorkspace()
     clearWriteWorkspaceSaveQueueForTests()
     vi.unstubAllGlobals()
@@ -476,6 +501,26 @@ describe('useWorkbenchComposerSubmitController', () => {
       slides: [{ slideId: 'slide-2', revision: 3, annotations: ['Make the headline larger'] }]
     })
     expect(JSON.stringify(composerContexts)).not.toContain('preview.png')
+  })
+
+  it('sends only the selected PPT direction identity as structured context', async () => {
+    useChatStore.setState({ route: 'chat' })
+    activatePptDirectionCanvas()
+    const sendMessage = vi.fn(async () => true)
+    const controller = useWorkbenchComposerSubmitController(controllerParams({
+      route: 'chat', input: '采用这个方向', getAttachmentScope: () => 'chat', sendMessage
+    }))
+
+    controller.handleSend()
+
+    await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledOnce())
+    const [prompt, , options] = sendMessage.mock.calls[0] as unknown as Parameters<ControllerParams['sendMessage']>
+    expect(prompt).toBe('采用这个方向')
+    expect(options?.composerContexts).toHaveLength(1)
+    expect(options?.composerContexts?.[0]?.reference).toEqual({
+      kind: 'ppt-direction', schemaVersion: 1, workflowId: 'workflow-a', childId: 'child-a',
+      directions: [{ directionId: 'signal', revision: 2 }]
+    })
   })
 
   it('keeps Write review feedback structured instead of appending it to the writing prompt', async () => {

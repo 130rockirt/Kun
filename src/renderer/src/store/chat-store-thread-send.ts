@@ -191,7 +191,7 @@ function routeComposerContexts(
     return primary.filter((context) =>
       'source' in context.provenance &&
       context.provenance.source === 'dev-preview' &&
-      context.reference.kind === 'ppt-review')
+      (context.reference.kind === 'ppt-review' || context.reference.kind === 'ppt-direction'))
   }
   return []
 }
