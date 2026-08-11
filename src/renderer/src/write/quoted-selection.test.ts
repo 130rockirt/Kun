@@ -119,7 +119,8 @@ describe('write quoted selections', () => {
     expect(quote).not.toBeNull()
     const prompt = composeWritePrompt('Please revise it.', quote ? [quote] : [])
     expect(prompt.startsWith('[写作上下文]')).toBe(true)
-    expect(prompt).toContain('仅当当前激活的技能明确要求结构化确认')
+    expect(prompt).toContain('仅当当前激活的专用工作流明确要求结构化确认')
+    expect(prompt).toContain('PPT 视觉评审')
     expect(prompt.indexOf('[引用片段] a.md')).toBeGreaterThan(prompt.indexOf('[写作上下文]'))
     expect(prompt.endsWith('Please revise it.')).toBe(true)
     vi.restoreAllMocks()
@@ -149,7 +150,7 @@ describe('write quoted selections', () => {
     expect(parsed?.userInput).toBe('帮我改成中文')
     expect(parsed?.context?.workspaceRoot).toBe('/tmp/workspace')
     expect(parsed?.context?.activeFile).toBe('welcome.md')
-    expect(parsed?.context?.lines.some((line) => line.includes('仅当当前激活的技能明确要求结构化确认'))).toBe(true)
+    expect(parsed?.context?.lines.some((line) => line.includes('仅当当前激活的专用工作流明确要求结构化确认'))).toBe(true)
     expect(parsed?.quotes).toHaveLength(1)
     expect(parsed?.quotes[0]).toMatchObject({
       sourceTitle: 'welcome.md',

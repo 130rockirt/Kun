@@ -2,8 +2,10 @@ import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname, isAbsolute, relative, resolve, win32 } from 'node:path'
 import { z } from 'zod'
+import { PptDesignGovernanceSnapshot } from './ppt-design-governance.js'
 
-export const PPT_REVIEW_MANIFEST_VERSION = 1 as const
+export const PPT_REVIEW_MANIFEST_VERSION = 2 as const
+export const PPT_REVIEW_LEGACY_MANIFEST_VERSION = 1 as const
 
 const WorkspaceRelativePath = z.string().min(1).refine(isPortableWorkspaceRelativePath, {
   message: 'path must be workspace-relative and must not escape the workspace'
@@ -26,6 +28,9 @@ export type PptWorkflowPhase = z.infer<typeof PptWorkflowPhase>
 
 export const PptReviewSlideStatus = z.enum(['pending', 'generating', 'ready', 'failed', 'approved'])
 export type PptReviewSlideStatus = z.infer<typeof PptReviewSlideStatus>
+
+export const PptPreviewMode = z.enum(['image-first', 'editable'])
+export type PptPreviewMode = z.infer<typeof PptPreviewMode>
 
 export const PptStyleSpec = z.object({
   fingerprint: z.string().min(1),
@@ -56,11 +61,15 @@ export const PptReviewSlide = z.object({
 export type PptReviewSlide = z.infer<typeof PptReviewSlide>
 
 export const PptReviewManifestV1 = z.object({
-  version: z.literal(PPT_REVIEW_MANIFEST_VERSION),
+  version: z.union([
+    z.literal(PPT_REVIEW_LEGACY_MANIFEST_VERSION),
+    z.literal(PPT_REVIEW_MANIFEST_VERSION)
+  ]),
   workflowId: z.string().min(1),
   parentThreadId: z.string().min(1),
   childId: z.string().min(1),
   projectDir: WorkspaceRelativePath,
+  previewMode: PptPreviewMode.optional(),
   phase: PptWorkflowPhase,
   deck: z.object({
     title: z.string().min(1),
@@ -68,12 +77,35 @@ export const PptReviewManifestV1 = z.object({
     slideCount: z.number().int().positive()
   }).strict(),
   styleSpec: PptStyleSpec,
+  governance: PptDesignGovernanceSnapshot.optional(),
+  validatedExport: z.object({
+    output: WorkspaceRelativePath,
+    planFingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+    slides: z.number().int().positive()
+  }).strict().optional(),
   slides: z.array(PptReviewSlide).min(1),
   board: z.object({
     artifactId: z.string().min(1),
     lastAppliedRevision: z.number().int().nonnegative()
   }).strict().optional()
 }).strict().superRefine((manifest, ctx) => {
+  if (manifest.version === PPT_REVIEW_MANIFEST_VERSION && !manifest.governance) {
+    ctx.addIssue({ code: 'custom', path: ['governance'], message: 'version 2 manifests require design governance' })
+  }
+  if (manifest.version === PPT_REVIEW_MANIFEST_VERSION && !manifest.previewMode) {
+    ctx.addIssue({ code: 'custom', path: ['previewMode'], message: 'version 2 manifests require a stable preview mode' })
+  }
+  if (
+    manifest.validatedExport &&
+    manifest.governance &&
+    manifest.validatedExport.planFingerprint !== manifest.governance.designPlan.fingerprint
+  ) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['validatedExport', 'planFingerprint'],
+      message: 'validated export must use the current governed design plan'
+    })
+  }
   if (manifest.deck.slideCount !== manifest.slides.length) {
     ctx.addIssue({
       code: 'custom',
@@ -106,8 +138,17 @@ export const PptReviewBundleV1 = z.object({
   workflowId: z.string().min(1),
   childId: z.string().min(1),
   manifestPath: WorkspaceRelativePath,
+  previewMode: PptPreviewMode.optional(),
   deckTitle: z.string().min(1),
   styleFingerprint: z.string().min(1),
+  designGovernance: z.object({
+    policyVersion: z.string().min(1),
+    policyHash: z.string().regex(/^[a-f0-9]{64}$/),
+    category: z.string().min(1),
+    categoryGuide: z.string().min(1),
+    planFingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+    planRevision: z.number().int().positive()
+  }).strict().optional(),
   phase: PptWorkflowPhase,
   slides: z.array(z.object({
     slideId: z.string().min(1),
@@ -167,8 +208,10 @@ export function createPptReviewManifest(input: {
   parentThreadId: string
   childId: string
   projectDir: string
+  previewMode?: PptPreviewMode
   deckTitle: string
   styleSpec: Omit<PptStyleSpec, 'fingerprint'> & { fingerprint?: string }
+  governance?: PptDesignGovernanceSnapshot
   slides: Array<{ slideId?: string; title: string; layoutSpecPath?: string; prompt: string }>
 }): PptReviewManifestV1 {
   const workflowId = input.workflowId?.trim() || `ppt_${randomUUID()}`
@@ -177,14 +220,16 @@ export function createPptReviewManifest(input: {
     fingerprint: input.styleSpec.fingerprint?.trim() || fingerprint(input.styleSpec)
   })
   return PptReviewManifestV1.parse({
-    version: PPT_REVIEW_MANIFEST_VERSION,
+    version: input.governance ? PPT_REVIEW_MANIFEST_VERSION : PPT_REVIEW_LEGACY_MANIFEST_VERSION,
     workflowId,
     parentThreadId: input.parentThreadId,
     childId: input.childId,
     projectDir: input.projectDir,
+    ...(input.governance ? { previewMode: input.previewMode ?? 'editable' } : input.previewMode ? { previewMode: input.previewMode } : {}),
     phase: 'planning',
     deck: { title: input.deckTitle, aspectRatio: '16:9', slideCount: input.slides.length },
     styleSpec,
+    ...(input.governance ? { governance: input.governance } : {}),
     slides: input.slides.map((slide, index) => ({
       slideId: slide.slideId?.trim() || `${workflowId}-slide-${index + 1}`,
       index,
@@ -226,8 +271,21 @@ export function toPptReviewBundle(
     workflowId: manifest.workflowId,
     childId: manifest.childId,
     manifestPath,
+    ...(manifest.previewMode ? { previewMode: manifest.previewMode } : {}),
     deckTitle: manifest.deck.title,
     styleFingerprint: manifest.styleSpec.fingerprint,
+    ...(manifest.governance
+      ? {
+          designGovernance: {
+            policyVersion: manifest.governance.policy.version,
+            policyHash: manifest.governance.policy.sha256,
+            category: manifest.governance.category,
+            categoryGuide: manifest.governance.categoryGuide,
+            planFingerprint: manifest.governance.designPlan.fingerprint,
+            planRevision: manifest.governance.planRevision
+          }
+        }
+      : {}),
     phase: manifest.phase,
     slides: manifest.slides.map((slide) => ({
       slideId: slide.slideId,

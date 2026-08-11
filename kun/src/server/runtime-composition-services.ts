@@ -332,7 +332,10 @@ export async function createRuntimeServices(
       ...buildPptMasterLocalTools(),
       ...buildPptAgentLocalTools({
         enabled: () => core.activeOptions.lab?.pptAgent?.enabled !== false,
-        toolchainDirectory: () => process.env.KUN_PPT_TOOLCHAIN_DIR
+        toolchainDirectory: () => process.env.KUN_PPT_TOOLCHAIN_DIR,
+        governanceDirectory: () => join(core.activeOptions.dataDir, 'ppt-governance'),
+        resolveSourceRequest: async (context) =>
+          (await turnService.getTurn(context.threadId, context.turnId))?.prompt
       })
     ]
   }

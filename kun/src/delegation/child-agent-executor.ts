@@ -26,10 +26,16 @@ import { SteeringQueue } from '../loop/steering-queue.js'
 import type { TokenEconomyConfig } from '../loop/token-economy.js'
 import type { MemoryStore } from '../memory/memory-store.js'
 import type { ArtifactStore } from '../artifacts/artifact-store.js'
+import type { AttachmentStore } from '../attachments/attachment-store.js'
 import type { ModelClient } from '../ports/model-client.js'
 import { RandomIdGenerator } from '../ports/id-generator.js'
 import type { ApprovalGate } from '../ports/approval-gate.js'
 import type { ApprovalReviewPort } from '../ports/approval-review.js'
+import type { PptWorkflowScope } from '../ports/tool-host.js'
+import {
+  childDeckArtifact,
+  childReviewBundle
+} from './child-ppt-result-extraction.js'
 import type { SessionStore } from '../ports/session-store.js'
 import type { ThreadStore } from '../ports/thread-store.js'
 import type { ToolHost } from '../ports/tool-host.js'
@@ -67,7 +73,9 @@ export type ChildDelegatedRuntimeFactory = (input: {
   blockedProviderIds?: readonly string[]
   blockedSkillIds?: readonly string[]
   skillsEnabled: boolean
+  instructionsEnabled: boolean
   memoryEnabled: boolean
+  pptWorkflowScope?: PptWorkflowScope
 }) => DelegatedTurnRuntime | undefined
 
 export type ChildAgentExecutorOptions = {
@@ -90,6 +98,7 @@ export type ChildAgentExecutorOptions = {
   skillRuntime?: SkillRuntime
   instructionRuntime?: InstructionRuntime
   memoryStore?: MemoryStore
+  attachmentStore?: () => AttachmentStore | undefined
   artifactStore?: ArtifactStore
   /** Runtime-owned approval channel shared with the HTTP decision endpoint. */
   approvalGate?: ApprovalGate
@@ -121,6 +130,7 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
       ...(input.blockedSkills ?? [])
     ])
     const nowIso = options.nowIso ?? (() => new Date().toISOString())
+    const attachmentStore = options.attachmentStore?.()
     // Persist into the main runtime's stores + event bus when supplied, so the
     // child session is queryable and streams live; otherwise stay isolated in
     // throwaway in-memory stores (preserves test behavior). The recorder is
@@ -157,6 +167,7 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
       steering,
       compactor,
       ids,
+      ...(attachmentStore ? { attachmentStore: () => attachmentStore } : {}),
       nowIso
     })
     const threads = new ThreadService({
@@ -186,7 +197,17 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
     // conventions stay) on a distinct fingerprint, so same-agent calls still
     // hit the prompt cache; cross-agent reuse is intentionally given up.
     // omitBasePrompt replaces the base with the role prompt when present.
-    const rolePrompt = input.systemPrompt?.trim()
+    const source = input.source
+    if (source && source.prompt !== input.prompt) {
+      throw new Error('child source prompt must exactly match the delegated prompt')
+    }
+    if (source?.agentSurface && input.agentSurface && source.agentSurface !== input.agentSurface) {
+      throw new Error('child source surface must match the delegated surface')
+    }
+    const agentSurface = source?.agentSurface ?? input.agentSurface
+    const rolePrompt = [input.systemPrompt?.trim(), input.controlPrompt?.trim()]
+      .filter((value): value is string => Boolean(value))
+      .join('\n\n')
     const childPrefix = rolePrompt
       ? setSystemPrompt(
         options.prefix,
@@ -229,7 +250,9 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
       ...(blockedProviderIds.length ? { blockedProviderIds } : {}),
       ...(blockedSkillIds.length ? { blockedSkillIds } : {}),
       skillsEnabled: input.skillsEnabled !== false,
-      memoryEnabled: input.security?.memoryEnabled !== false
+      instructionsEnabled: input.security?.instructionsEnabled !== false,
+      memoryEnabled: input.security?.memoryEnabled !== false,
+      ...(input.pptWorkflowScope ? { pptWorkflowScope: input.pptWorkflowScope } : {})
     })
     const loop = new AgentLoop({
       threadStore,
@@ -261,13 +284,17 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
       ...(input.security?.allowedArtifactIds
         ? { allowedArtifactIds: input.security.allowedArtifactIds }
         : {}),
+      ...(input.pptWorkflowScope ? { pptWorkflowScope: input.pptWorkflowScope } : {}),
       ...(blockedToolNames.length ? { blockedToolNames } : {}),
       ...(blockedProviderIds.length ? { blockedProviderIds } : {}),
       ...(blockedSkillIds.length ? { blockedSkillIds } : {}),
       ...(options.modelCapabilities ? { modelCapabilities: options.modelCapabilities } : {}),
       ...(input.skillsEnabled !== false && options.skillRuntime ? { skillRuntime: options.skillRuntime } : {}),
-      ...(options.instructionRuntime ? { instructionRuntime: options.instructionRuntime } : {}),
+      ...(options.instructionRuntime && input.security?.instructionsEnabled !== false
+        ? { instructionRuntime: options.instructionRuntime }
+        : {}),
       ...(options.memoryStore && input.security?.memoryEnabled !== false ? { memoryStore: options.memoryStore } : {}),
+      ...(attachmentStore ? { attachmentStore } : {}),
       ...(options.artifactStore ? { artifactStore: options.artifactStore } : {}),
       ...(options.contextCompaction ? { contextCompaction: options.contextCompaction } : {}),
       ...(options.tokenEconomy ? { tokenEconomy: options.tokenEconomy } : {}),
@@ -313,7 +340,9 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
     }
     // A profile preamble rides in the prompt body (not the system prompt) so
     // the cached stable prefix stays byte-identical to the main agent's.
-    const promptBase = input.promptPreamble?.trim()
+    const promptBase = source
+      ? source.prompt
+      : input.promptPreamble?.trim()
       ? `${input.promptPreamble.trim()}\n\n${input.prompt}`
       : input.prompt
     const prompt = input.returnFormat === 'evidence'
@@ -334,6 +363,10 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
       threadId: thread.id,
       request: {
         prompt,
+        ...(source?.displayText !== undefined ? { displayText: source.displayText } : {}),
+        ...(source?.attachmentIds.length ? { attachmentIds: source.attachmentIds } : {}),
+        ...(source?.composerContexts.length ? { composerContexts: source.composerContexts } : {}),
+        ...(source?.fileReferences.length ? { fileReferences: source.fileReferences } : {}),
         model,
         clientSurface: input.guiDesignCanvas ? 'gui' : input.clientSurface ?? 'api',
         ...(input.providerId ? { providerId: input.providerId } : {}),
@@ -345,6 +378,7 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
         reasoningEffort: normalizeRoleReasoningEffort(input.reasoningEffort),
         ...(input.serviceTier ? { serviceTier: input.serviceTier } : {}),
         ...(input.guiDesignCanvas ? { guiDesignCanvas: true } : {}),
+        ...(agentSurface ? { agentSurface } : {}),
         // Child runs have no independent interactive surface for structured prompts.
         disableUserInput: true
       }
@@ -423,39 +457,10 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
       toolInvocations,
       // A role system prompt changes the immutable prefix fingerprint. Only a
       // child with no role prompt can report exact main-prefix reuse.
-      prefixReused: !input.systemPrompt?.trim(),
+      prefixReused: !input.systemPrompt?.trim() && !input.controlPrompt?.trim(),
       inheritedHistoryItems: 0
     }
   }
-}
-
-function childReviewBundle(items: readonly TurnItem[], turnId: string): unknown | undefined {
-  const result = [...items]
-    .reverse()
-    .find((item): item is Extract<TurnItem, { kind: 'tool_result' }> =>
-      item.turnId === turnId &&
-      item.kind === 'tool_result' &&
-      !item.isError &&
-      isRecord(item.output) &&
-      'reviewBundle' in item.output)
-  return result && isRecord(result.output) ? result.output.reviewBundle : undefined
-}
-
-function childDeckArtifact(items: readonly TurnItem[], turnId: string): unknown | undefined {
-  const exportCallIds = new Set(items
-    .filter((item): item is Extract<TurnItem, { kind: 'tool_call' }> =>
-      item.turnId === turnId && item.kind === 'tool_call' && item.toolName === 'ppt_export')
-    .map((item) => item.callId))
-  const result = [...items]
-    .reverse()
-    .find((item): item is Extract<TurnItem, { kind: 'tool_result' }> =>
-      item.turnId === turnId &&
-      item.kind === 'tool_result' &&
-      exportCallIds.has(item.callId) &&
-      !item.isError &&
-      isRecord(item.output) &&
-      item.output.validated === true)
-  return result?.output
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

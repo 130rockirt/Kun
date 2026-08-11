@@ -87,7 +87,9 @@ export function createRuntimeRegistry(
           turnLimits: core.activeOptions.runtime?.turnLimits,
           approvalGate,
           approvalReview: approvalReviewService,
-          instructionRuntime: services.instructionRuntime,
+          ...(child.instructionsEnabled
+            ? { instructionRuntime: services.instructionRuntime }
+            : {}),
           allowSdkBuiltins: false,
           toolContextBoundary: {
             ...(child.allowedProviderIds ? { allowedProviderIds: child.allowedProviderIds } : {}),
@@ -96,6 +98,7 @@ export function createRuntimeRegistry(
             ...(child.allowedReadPaths ? { allowedReadPaths: child.allowedReadPaths } : {}),
             ...(child.allowedWritePaths ? { allowedWritePaths: child.allowedWritePaths } : {}),
             ...(child.allowedArtifactIds ? { allowedArtifactIds: child.allowedArtifactIds } : {}),
+            ...(child.pptWorkflowScope ? { pptWorkflowScope: child.pptWorkflowScope } : {}),
             ...(child.blockedProviderIds ? { blockedProviderIds: child.blockedProviderIds } : {}),
             ...(child.blockedToolNames ? { blockedToolNames: child.blockedToolNames } : {}),
             ...(child.blockedSkillIds ? { blockedSkillIds: child.blockedSkillIds } : {})
@@ -167,7 +170,9 @@ export function createRuntimeRegistry(
           enforceReadOnly: child.toolPolicy === 'readOnly',
           approvalGate,
           approvalReview: approvalReviewService,
-          instructionRuntime: services.instructionRuntime,
+          ...(child.instructionsEnabled
+            ? { instructionRuntime: services.instructionRuntime }
+            : {}),
           toolContextBoundary: {
             ...(child.allowedProviderIds ? { allowedProviderIds: child.allowedProviderIds } : {}),
             ...(child.allowedToolNames ? { allowedToolNames: child.allowedToolNames } : {}),
@@ -175,6 +180,7 @@ export function createRuntimeRegistry(
             ...(child.allowedReadPaths ? { allowedReadPaths: child.allowedReadPaths } : {}),
             ...(child.allowedWritePaths ? { allowedWritePaths: child.allowedWritePaths } : {}),
             ...(child.allowedArtifactIds ? { allowedArtifactIds: child.allowedArtifactIds } : {}),
+            ...(child.pptWorkflowScope ? { pptWorkflowScope: child.pptWorkflowScope } : {}),
             ...(child.blockedProviderIds ? { blockedProviderIds: child.blockedProviderIds } : {}),
             ...(child.blockedToolNames ? { blockedToolNames: child.blockedToolNames } : {}),
             ...(child.blockedSkillIds ? { blockedSkillIds: child.blockedSkillIds } : {})
@@ -224,7 +230,8 @@ export function createRuntimeRegistry(
           threadStore,
           events,
 	          ...(core.activeOptions.runtime ? { runtime: core.activeOptions.runtime } : {}),
-          ...(services.memoryStore ? { memoryStore: services.memoryStore } : {}),
+	          ...(services.memoryStore ? { memoryStore: services.memoryStore } : {}),
+          attachmentStore: () => services.attachmentStore,
           artifactStore,
           nowIso
         }),
@@ -337,8 +344,13 @@ export function createRuntimeRegistry(
         ...core.activeOptions.lab?.pptAgent,
         imageGenAvailable: services.imageGenProviders.available,
         imageGenReason: services.imageGenProviders.diagnostics.find((diagnostic) => diagnostic.reason)?.reason,
-        imageGenSupportsReferenceEdit: protocolSupportsImageEdit(core.activeOptions.capabilities?.imageGen?.protocol)
-      })
+        imageGenSupportsReferenceEdit: protocolSupportsImageEdit(core.activeOptions.capabilities?.imageGen?.protocol),
+        toolIncompatibleProviderIds: [
+          ...new Set([...antigravityProviderIds, ...cursorSdkProviderIds])
+        ],
+        defaultProviderLacksManagedTools: defaultIsAntigravity || defaultIsCursorSdk
+      }),
+      turnService
     ),
     ...buildComponentDesignToolProviders(delegationRuntime)
   ])

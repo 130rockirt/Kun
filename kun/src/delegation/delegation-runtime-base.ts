@@ -30,6 +30,7 @@ import type { EventBus } from '../ports/event-bus.js'
 import type { ThreadStore } from '../ports/thread-store.js'
 import type { ArtifactStore } from '../artifacts/artifact-store.js'
 import type { TurnService } from '../services/turn-service.js'
+import type { PptWorkflowScope } from '../ports/tool-host.js'
 import { loadWorkspaceAgentProfiles } from './workspace-agents.js'
 import type { SubagentRoutingDocument } from './subagent-router.js'
 import { BUILTIN_SUBAGENT_PROFILES } from './builtin-profiles.js'
@@ -46,6 +47,7 @@ import {
   type ChildRunExecutor,
   type ChildReturnFormat,
   type ChildRunLifecycleMetadata,
+  type ChildSourceEnvelope,
   type ChildSecuritySnapshot
 } from './delegation-runtime-contracts.js'
 import {
@@ -451,6 +453,7 @@ export abstract class DelegationRuntimeBase {
     sandboxMode: SandboxMode | undefined
     approvalReviewer: ApprovalReviewer
     clientSurface: TurnClientSurface | undefined
+    agentSurface: 'code' | 'write' | 'design' | undefined
     guiDesignCanvas: boolean
     resolvedReasoningEffort: string | undefined
     resolvedServiceTier: 'priority' | undefined
@@ -462,6 +465,9 @@ export abstract class DelegationRuntimeBase {
     parentThreadId: string
     parentTurnId: string
     prompt: string
+    source: ChildSourceEnvelope | undefined
+    controlPrompt: string | undefined
+    pptWorkflowScope: PptWorkflowScope | undefined
     resumeChild?: boolean
     signal: AbortSignal
   }): Promise<ChildRunRecord> {
@@ -506,6 +512,9 @@ export abstract class DelegationRuntimeBase {
         ...(args.label ? { label: args.label } : {}),
         ...(args.profileName ? { profile: args.profileName } : {}),
         prompt: args.prompt,
+        ...(args.source ? { source: args.source } : {}),
+        ...(args.controlPrompt ? { controlPrompt: args.controlPrompt } : {}),
+        ...(args.pptWorkflowScope ? { pptWorkflowScope: args.pptWorkflowScope } : {}),
         workspace: args.workspace,
         model: args.resolvedModel,
         ...(args.resolvedProviderId ? { providerId: args.resolvedProviderId } : {}),
@@ -523,6 +532,7 @@ export abstract class DelegationRuntimeBase {
         ...(args.sandboxMode ? { sandboxMode: args.sandboxMode } : {}),
         approvalReviewer: args.approvalReviewer,
         ...(args.clientSurface ? { clientSurface: args.clientSurface } : {}),
+        ...(args.agentSurface ? { agentSurface: args.agentSurface } : {}),
         ...(args.promptPreamble ? { promptPreamble: args.promptPreamble } : {}),
         ...(args.guiDesignCanvas ? { guiDesignCanvas: true } : {}),
         ...(args.resolvedReasoningEffort ? { reasoningEffort: args.resolvedReasoningEffort } : {}),

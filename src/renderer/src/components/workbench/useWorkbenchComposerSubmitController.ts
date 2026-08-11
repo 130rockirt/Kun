@@ -21,8 +21,7 @@ import {
 import { loadWorkspaceDirectoryContextFiles } from '../../lib/workspace-file-index'
 import { resolveCodeCanvasComposerRoute } from '../../design/canvas/code-canvas'
 import { useCanvasSelectionStore } from '../../design/canvas/canvas-selection-store'
-import { useCanvasShapeStore } from '../../design/canvas/canvas-shape-store'
-import { serializeActivePptReviewContexts } from '../../design/canvas/ppt-review-board'
+import { activePptReviewComposerContexts } from './workbench-ppt-review-context'
 import { composerReasoningEffortRequestValue } from '../chat/FloatingComposerModelPicker'
 import { serviceTierForComposerSelection } from '../chat/composer-fast-mode'
 import type { ComposerFileReference } from '../chat/FloatingComposer'
@@ -80,7 +79,6 @@ export function useWorkbenchComposerSubmitController({
   appendLocalClawTurn
 }: UseWorkbenchComposerSubmitControllerParams): WorkbenchComposerSubmitController {
   const { t } = useTranslation('common')
-
   const mirrorClawCommand = useCallback(async (userText: string, replyText: string): Promise<void> => {
     if (!activeThreadId || typeof window.kunGui?.mirrorClawChannelMessage !== 'function') return
     const userResult = await window.kunGui.mirrorClawChannelMessage(
@@ -374,6 +372,7 @@ export function useWorkbenchComposerSubmitController({
         model,
         providerId
       )
+      const pptReviewContexts = await activePptReviewComposerContexts(writeWorkspaceRoot, activeThreadId)
       const sent = await sendMessage(prompt, composerMode === 'plan' ? 'plan' : 'agent', {
         ...(!v && documentAttachments.length > 0
           ? { displayText: t('composerFileOnlyDisplay', { count: documentAttachments.length }) }
@@ -386,6 +385,7 @@ export function useWorkbenchComposerSubmitController({
         ...(serviceTier ? { serviceTier } : {}),
         ...(attachmentIds.length ? { attachmentIds } : {}),
         ...(publicAttachments.length ? { attachments: publicAttachments } : {}),
+        ...(pptReviewContexts.length ? { composerContexts: pptReviewContexts } : {}),
         writeContext: {
           workspaceRoot: writeWorkspaceRoot,
           activeFilePath: writeActiveFilePath,
@@ -405,6 +405,7 @@ export function useWorkbenchComposerSubmitController({
     })()
   }, [
     attachmentUploadEnabled,
+    activeThreadId,
     removeComposerAttachments,
     composerAttachments,
     composerMode,
@@ -635,14 +636,9 @@ export function useWorkbenchComposerSubmitController({
         outboundDisplay = codeCanvasRoute.displayText
         outboundGuiDesignCanvas = true
       }
-      const pptReviews = serializeActivePptReviewContexts(
-        Object.values(useCanvasShapeStore.getState().document.objects),
-        activeThreadId ?? undefined
-      )
-      if (route === 'chat' && pptReviews.length > 0) {
-        outboundText = `${outboundText}\n\n[PPT visual review context]\n${JSON.stringify({ userFeedback: v, workflows: pptReviews })}`
-        outboundDisplay = v || outboundDisplay
-      }
+      const pptReviewContexts = route === 'chat'
+        ? await activePptReviewComposerContexts(workspaceRoot, activeThreadId)
+        : []
       void sendMessage(outboundText, composerMode === 'plan' ? 'plan' : 'agent', {
         ...(outboundDisplay ? { displayText: outboundDisplay } : {}),
         ...(outboundGuiDesignCanvas ? { guiDesignCanvas: true } : {}),
@@ -650,7 +646,8 @@ export function useWorkbenchComposerSubmitController({
         ...(serviceTier ? { serviceTier } : {}),
         ...(attachmentIds.length ? { attachmentIds } : {}),
         ...(publicAttachments.length ? { attachments: publicAttachments } : {}),
-        ...(userFileReferences.length ? { fileReferences: userFileReferences } : {})
+        ...(userFileReferences.length ? { fileReferences: userFileReferences } : {}),
+        ...(pptReviewContexts.length ? { composerContexts: pptReviewContexts } : {})
       })
     })()
   }, [

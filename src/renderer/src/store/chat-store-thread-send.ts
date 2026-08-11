@@ -141,7 +141,10 @@ import {
 import { GitCheckpointAvailabilityCache } from '../lib/git-checkpoint-availability'
 import { readDesignThreadRegistry } from '../design/design-thread-registry'
 import { readSddThreadRegistry } from '../sdd/sdd-thread-registry'
-import type { ComposerContextAttachment } from '@kun/extension-api'
+import {
+  MAX_COMPOSER_CONTEXT_ATTACHMENTS,
+  type ComposerContextAttachment
+} from '@kun/extension-api'
 import { mergeChatBlocks } from '../agent/kun-mapper'
 import {
   activeChatWorkspaceRoot,
@@ -162,6 +165,36 @@ import {
   type ThreadActionRuntime
 } from './chat-store-thread-actions-support'
 import { performPreparedThreadSend } from './chat-store-thread-send-direct'
+
+function mergeTurnComposerContexts(
+  primary: readonly ComposerContextAttachment[],
+  pending: readonly ComposerContextAttachment[]
+): ComposerContextAttachment[] {
+  const merged: ComposerContextAttachment[] = []
+  const seen = new Set<string>()
+  for (const context of [...primary, ...pending]) {
+    if (seen.has(context.attachmentId)) continue
+    seen.add(context.attachmentId)
+    merged.push(context)
+    if (merged.length === MAX_COMPOSER_CONTEXT_ATTACHMENTS) break
+  }
+  return merged
+}
+
+function routeComposerContexts(
+  route: ChatState['route'],
+  primary: readonly ComposerContextAttachment[],
+  pending: readonly ComposerContextAttachment[]
+): ComposerContextAttachment[] {
+  if (route === 'chat') return mergeTurnComposerContexts(primary, pending)
+  if (route === 'write') {
+    return primary.filter((context) =>
+      'source' in context.provenance &&
+      context.provenance.source === 'dev-preview' &&
+      context.reference.kind === 'ppt-review')
+  }
+  return []
+}
 
 export async function sendThreadMessage(
   context: StoreActionContext,
@@ -285,9 +318,11 @@ export async function sendThreadMessage(
         reference.relativePath.trim().length > 0 &&
         reference.name.trim().length > 0
       )
-      const composerContexts = state.route === 'chat'
-        ? queued?.composerContexts ?? overrides?.composerContexts ?? pendingComposerContexts(state)
-        : []
+      const composerContexts = queued?.composerContexts ?? routeComposerContexts(
+            state.route,
+            overrides?.composerContexts ?? [],
+            pendingComposerContexts(state)
+          )
       const orchestration = queued?.orchestration ?? overrides?.orchestration ??
         (mode === 'agent' && state.route === 'chat' && state.graphEnabled
           ? state.composerOrchestration
@@ -352,9 +387,11 @@ export async function sendThreadMessage(
         reference.name.trim().length > 0
       ) ??
       []
-    const composerContexts = queued?.composerContexts ?? (get().route === 'chat'
-      ? overrides?.composerContexts ?? pendingComposerContexts(get())
-      : [])
+    const composerContexts = queued?.composerContexts ?? routeComposerContexts(
+          get().route,
+          overrides?.composerContexts ?? [],
+          pendingComposerContexts(get())
+        )
     let activeThreadId = get().activeThreadId
     if (!expectedThreadStillActive()) {
       set({

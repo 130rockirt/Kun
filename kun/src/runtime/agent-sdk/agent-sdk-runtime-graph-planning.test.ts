@@ -381,29 +381,33 @@ describe('AgentSdkRuntime.runTurn', () => {
     })
   })
 
-  test('bridges Kun read tools when Graph disables all overlapping SDK built-ins', async () => {
+  test('bridges scoped PPT file tools and keeps the child user prompt exact', async () => {
     let options: {
       tools?: unknown[]
       allowedTools?: string[]
       mcpServers?: Record<string, unknown>
     } = {}
-    const sdk = fakeSdk(svgSdkTextAttempt('planning paused'), (value) => {
-      options = value as typeof options
+    const exactPrompt = '  Build the exact deck request.\nDo not rewrite this.  '
+    let providerPrompt: unknown
+    const sdk = fakeSdkAttempts([svgSdkTextAttempt('planning paused')], (input) => {
+      providerPrompt = input.prompt
+      options = input.options as typeof options
     })
     const { deps } = makeDeps({
       loadSdk: async () => sdk,
       loadTurnContext: async () => ({
         workspace: '/ws',
-        userText: 'inspect and define the Graph',
+        userText: exactPrompt,
+        preserveExactUserPrompt: true,
         approvalPolicy: 'auto',
         sandboxMode: 'workspace-write',
         allowSdkBuiltins: false,
         bridgeKunBuiltinOverlaps: true,
-        bridgeableTools: [{
-          name: 'read',
-          description: 'Read a file',
-          inputSchema: { type: 'object' }
-        }]
+        historyTranscript: '[user] must not be composed',
+        contextInstructions: ['Kun terminal TUI', 'Kun-managed capabilities are available'],
+        bridgeableTools: ['read', 'write', 'edit', 'grep', 'glob', 'ls'].map((name) => ({
+          name, description: `${name} safely`, inputSchema: { type: 'object' }
+        }))
       })
     })
 
@@ -412,8 +416,11 @@ describe('AgentSdkRuntime.runTurn', () => {
     ).resolves.toBe('completed')
 
     expect(options.tools).toEqual([])
-    expect(options.allowedTools).toContain('mcp__kun__read')
+    expect(options.allowedTools).toEqual(expect.arrayContaining(
+      ['read', 'write', 'edit', 'grep', 'glob', 'ls'].map((name) => `mcp__kun__${name}`)
+    ))
     expect(options.mcpServers).toHaveProperty('kun')
+    expect(providerPrompt).toBe(exactPrompt)
   })
 
   test('gives Graph planning one real SDK recovery exchange before parking prose-only output', async () => {

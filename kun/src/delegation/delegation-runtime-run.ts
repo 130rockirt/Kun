@@ -29,6 +29,7 @@ import {
 import type { EventBus } from '../ports/event-bus.js'
 import type { ThreadStore } from '../ports/thread-store.js'
 import type { TurnService } from '../services/turn-service.js'
+import type { PptWorkflowScope } from '../ports/tool-host.js'
 import { loadWorkspaceAgentProfiles } from './workspace-agents.js'
 import type { SubagentRoutingDocument } from './subagent-router.js'
 import { BUILTIN_SUBAGENT_PROFILES } from './builtin-profiles.js'
@@ -39,6 +40,7 @@ import { withManagerDataMutex } from '../manager/data-mutex.js'
 import {
   ChildRunRecord,
   ChildRoutingMetadata,
+  ChildSourceEnvelope,
   ChildSecuritySnapshot,
   profileAvailableOnSurface,
   type ChildReturnFormat,
@@ -78,6 +80,11 @@ export class DelegationRuntimeRun extends DelegationRuntimeBase {
     launcher?: ChildRunLauncher
     label?: string
     prompt: string
+    /** Exact active parent turn source forwarded by a first-class host. */
+    source?: ChildSourceEnvelope
+    /** Trusted host workflow control kept outside the child user message. */
+    controlPrompt?: string
+    pptWorkflowScope?: PptWorkflowScope
     workspace?: string
     model?: string
     providerId?: string
@@ -120,6 +127,8 @@ export class DelegationRuntimeRun extends DelegationRuntimeBase {
     toolPolicyCeiling?: 'readOnly'
     /** Immutable parent capability boundary captured by delegate_task. */
     security?: ChildSecuritySnapshot
+    /** Trusted deny-list for this execution only; it is not persisted as child authority. */
+    executionBlockedTools?: string[]
     /** Forward GUI design-canvas scope into the child turn when present. */
     guiDesignCanvas?: boolean
     returnFormat?: ChildReturnFormat
@@ -147,6 +156,8 @@ export class DelegationRuntimeRun extends DelegationRuntimeBase {
     if (!config.enabled) throw new Error('delegation is disabled by config')
     if (input.signal.aborted) throw new Error('child run aborted before routing completed')
     const security = input.security ? ChildSecuritySnapshot.parse(input.security) : undefined
+    const source = input.source ? ChildSourceEnvelope.parse(input.source) : undefined
+    const controlPrompt = input.controlPrompt?.trim() || undefined
     // The parent boundary is authoritative. A model/profile cannot replace the
     // workspace-write root by supplying another child working directory.
     const workspace = security?.sandboxRoot ?? input.workspace
@@ -243,7 +254,8 @@ export class DelegationRuntimeRun extends DelegationRuntimeBase {
     const resolvedBlockedTools = [...new Set([
       'delegate_task',
       'generate_subagent',
-      ...(profile?.blockedTools ?? [])
+      ...(profile?.blockedTools ?? []),
+      ...(input.executionBlockedTools ?? [])
     ])]
     const resolvedBlockedMcpServers = profile?.blockedMcpServers
     const resolvedBlockedSkills = profile?.blockedSkills
@@ -274,6 +286,8 @@ export class DelegationRuntimeRun extends DelegationRuntimeBase {
       agentSurface,
       label: input.label,
       prompt: input.prompt,
+      ...(source ? { source } : {}),
+      ...(controlPrompt ? { controlPrompt } : {}),
       workspace,
       model: resolvedModel,
       providerId: resolvedProviderId,
@@ -359,6 +373,7 @@ export class DelegationRuntimeRun extends DelegationRuntimeBase {
         sandboxMode: input.sandboxMode,
         approvalReviewer,
         clientSurface: input.clientSurface,
+        agentSurface,
         guiDesignCanvas: input.guiDesignCanvas === true,
         resolvedReasoningEffort,
         resolvedServiceTier,
@@ -370,6 +385,9 @@ export class DelegationRuntimeRun extends DelegationRuntimeBase {
         parentThreadId: input.parentThreadId,
         parentTurnId: input.parentTurnId,
         prompt: input.prompt,
+        source,
+        controlPrompt,
+        pptWorkflowScope: input.pptWorkflowScope,
         signal: detachedController.signal
       })
         .then((settled) => this.notifyDetachedChild(settled))
@@ -424,6 +442,7 @@ export class DelegationRuntimeRun extends DelegationRuntimeBase {
       sandboxMode: input.sandboxMode,
       approvalReviewer,
       clientSurface: input.clientSurface,
+      agentSurface,
       guiDesignCanvas: input.guiDesignCanvas === true,
       resolvedReasoningEffort,
       resolvedServiceTier,
@@ -435,6 +454,9 @@ export class DelegationRuntimeRun extends DelegationRuntimeBase {
       parentThreadId: input.parentThreadId,
       parentTurnId: input.parentTurnId,
       prompt: input.prompt,
+      source,
+      controlPrompt,
+      pptWorkflowScope: input.pptWorkflowScope,
       signal: controller.signal
     })
     const first = await Promise.race([

@@ -1,7 +1,8 @@
 import { constants } from 'node:fs'
 import { open, stat, type FileHandle } from 'node:fs/promises'
 import { dirname } from 'node:path'
-import { LocalToolHost, type LocalTool } from './local-tool-host.js'
+import { LocalToolHost } from './local-tool-host-core.js'
+import type { LocalTool } from './local-tool-host-types.js'
 import {
   applyEditsToNormalizedContent,
   detectLineEnding,
@@ -17,7 +18,7 @@ import type { EditLocalToolOptions, WriteLocalToolOptions } from './builtin-tool
 import type { ApprovedExternalWriteTarget, ToolHostContext } from '../../ports/tool-host.js'
 import { defaultEditLocalToolOperations, defaultWriteLocalToolOperations } from './builtin-tool-operations.js'
 import { parseEditInstructions, resolveWorkspacePath, withToolBoundary } from './builtin-tool-utils.js'
-import { assertCanWritePath } from './sandbox-policy.js'
+import { assertCanWritePath, assertDelegatedWritePathPhysicalScope } from './sandbox-policy.js'
 import { resolvePathThroughSymlinks, sameFilesystemPath } from './workspace-path.js'
 
 function approvedExternalTarget(
@@ -140,6 +141,7 @@ export function createWriteLocalTool(_options: WriteLocalToolOptions = {}): Loca
       }
       const { absolutePath, relativePath } = await resolveWorkspacePath(rawPath, context)
       assertCanWritePath(absolutePath, context)
+      await assertDelegatedWritePathPhysicalScope(absolutePath, context)
       return withFileMutationQueue(absolutePath, async () => {
         const externalTarget = approvedExternalTarget(absolutePath, context)
         if (externalTarget) {
@@ -150,7 +152,9 @@ export function createWriteLocalTool(_options: WriteLocalToolOptions = {}): Loca
             await handle.close()
           }
         } else {
+          await assertDelegatedWritePathPhysicalScope(absolutePath, context)
           await mkdirOp(dirname(absolutePath))
+          await assertDelegatedWritePathPhysicalScope(absolutePath, context)
           await writeFileOp(absolutePath, content)
         }
         return {
@@ -210,12 +214,14 @@ export function createEditLocalTool(_options: EditLocalToolOptions = {}): LocalT
       }
       const { absolutePath, relativePath } = await resolveWorkspacePath(rawPath, context)
       assertCanWritePath(absolutePath, context)
+      await assertDelegatedWritePathPhysicalScope(absolutePath, context)
       return withFileMutationQueue(absolutePath, async () => {
         const externalTarget = approvedExternalTarget(absolutePath, context)
         const handle = externalTarget
           ? await openVerifiedExternalTarget(externalTarget, 'edit', openExternalOp)
           : undefined
         try {
+          if (!externalTarget) await assertDelegatedWritePathPhysicalScope(absolutePath, context)
           const rawSource = handle
             ? await handle.readFile({ encoding: 'utf8' })
             : await readFileOp(absolutePath)
@@ -228,6 +234,7 @@ export function createEditLocalTool(_options: EditLocalToolOptions = {}): LocalT
             if (!externalTarget) throw new Error('external edit handle is missing its approved target')
             await writeTextToHandle(handle, next, externalTarget)
           } else {
+            await assertDelegatedWritePathPhysicalScope(absolutePath, context)
             await writeFileOp(absolutePath, next)
           }
           const diff = generateDisplayDiff(baseContent, newContent)

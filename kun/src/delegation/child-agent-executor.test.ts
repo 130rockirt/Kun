@@ -7,8 +7,11 @@ import { InMemoryEventBus } from '../adapters/in-memory-event-bus.js'
 import { InMemorySessionStore } from '../adapters/in-memory-session-store.js'
 import { InMemoryThreadStore } from '../adapters/in-memory-thread-store.js'
 import { LocalToolHost, echoTool } from '../adapters/tool/local-tool-host.js'
+import type { AttachmentStore } from '../attachments/attachment-store.js'
 import { createImmutablePrefix } from '../cache/immutable-prefix.js'
 import { makeAssistantTextItem } from '../domain/item.js'
+import { InstructionRuntime } from '../instructions/instruction-runtime.js'
+import type { MemoryStore } from '../memory/memory-store.js'
 import type { ModelClient, ModelRequest, ModelStreamChunk } from '../ports/model-client.js'
 import { RuntimeEventRecorder } from '../services/runtime-event-recorder.js'
 import { createChildAgentExecutor } from './child-agent-executor.js'
@@ -98,16 +101,68 @@ class HistoryModel implements ModelClient {
   }
 }
 
+function makeAttachmentStore(): AttachmentStore {
+  const now = '2026-07-08T00:00:00.000Z'
+  const metadata = {
+    id: 'att_111111111111111111111111',
+    name: 'brief.md',
+    kind: 'document' as const,
+    mimeType: 'text/markdown',
+    byteSize: 12,
+    hash: 'a'.repeat(64),
+    documentText: 'launch brief',
+    documentFormat: 'text' as const,
+    threadIds: [] as string[],
+    workspaces: [] as string[],
+    createdAt: now,
+    updatedAt: now
+  }
+  return {
+    create: async () => metadata,
+    get: async (id) => id === metadata.id ? metadata : null,
+    bindScope: async () => metadata,
+    bindScopes: async (ids) => ids.map(() => metadata),
+    resolveContent: async () => ({ ...metadata, data: Buffer.from('launch brief') }),
+    textFallbackPolicy: () => ({
+      textFallbackMaxBase64Bytes: 1_000_000,
+      textFallbackMaxImageDimension: 4_096,
+      textFallbackPreferredMimeType: 'image/webp'
+    }),
+    diagnostics: async () => ({ enabled: true, rootDir: '/tmp', count: 1, totalBytes: 12 })
+  }
+}
+
 describe('createChildAgentExecutor', () => {
   it('appends a resumed turn to the same child thread with its prior history', async () => {
     const model = new HistoryModel()
     const sessionStore = new InMemorySessionStore()
     const threadStore = new InMemoryThreadStore()
+    let instructionCalls = 0
+    const instructionRuntime = new InstructionRuntime(undefined)
+    instructionRuntime.resolveTurn = async () => {
+      instructionCalls += 1
+      return {
+        instruction: 'AGENTS SHOULD NEVER ENTER THIS PPT CHILD',
+        sources: [],
+        injectedBytes: 42
+      }
+    }
+    let memoryCalls = 0
+    const memoryStore = {
+      retrieve: async () => {
+        memoryCalls += 1
+        return []
+      },
+      setLastInjected: () => undefined
+    } as unknown as MemoryStore
     const executor = createChildAgentExecutor({
       model,
       toolHost: new LocalToolHost({ tools: [] }),
       prefix: createImmutablePrefix({ systemPrompt: 'test system prompt' }),
       defaultModel: model.model,
+      instructionRuntime,
+      memoryStore,
+      attachmentStore: () => makeAttachmentStore(),
       sessionStore,
       threadStore
     })
@@ -119,24 +174,96 @@ describe('createChildAgentExecutor', () => {
       signal: new AbortController().signal
     }
 
-    await executor({
+    const initialPrompt = 'inspect the original task'
+    const initial = await executor({
       ...common,
       parentTurnId: 'turn_initial',
-      prompt: 'inspect the original task'
+      prompt: initialPrompt,
+      source: {
+        prompt: initialPrompt,
+        displayText: initialPrompt,
+        attachmentIds: ['att_111111111111111111111111'],
+        composerContexts: [{
+          schemaVersion: 1,
+          id: 'preview-ppt-review-111111111111111111111111',
+          title: 'PPT review',
+          summary: 'Selected opening slide',
+          reference: {
+            kind: 'ppt-review',
+            schemaVersion: 1,
+            workflowId: 'ppt_workflow',
+            childId: 'child_history',
+            slides: [{ slideId: 'slide-1', revision: 1 }]
+          },
+          revision: 1,
+          generation: 1,
+          attachmentId: `dev-preview-context:${'1'.repeat(64)}`,
+          provenance: { source: 'dev-preview', workspaceId: 'a'.repeat(64) }
+        }],
+        fileReferences: [{
+          path: '/tmp/workspace/brief.md',
+          relativePath: 'brief.md',
+          name: 'brief.md',
+          kind: 'file'
+        }],
+        agentSurface: 'write'
+      },
+      controlPrompt: 'HOST PPT CONTROL: plan automatically',
+      agentSurface: 'write',
+      security: {
+        sandboxRoot: '/tmp/workspace',
+        instructionsEnabled: false,
+        memoryEnabled: false
+      }
     })
-    await executor({
+    const continuedPrompt = 'continue without repeating completed work'
+    const continued = await executor({
       ...common,
       parentTurnId: 'turn_resume',
-      prompt: 'continue without repeating completed work',
+      prompt: continuedPrompt,
+      source: {
+        prompt: continuedPrompt,
+        attachmentIds: [],
+        composerContexts: [],
+        fileReferences: [],
+        agentSurface: 'design'
+      },
+      controlPrompt: 'HOST PPT CONTROL: revise previews',
+      agentSurface: 'design',
+      security: {
+        sandboxRoot: '/tmp/workspace',
+        instructionsEnabled: false,
+        memoryEnabled: false
+      },
       resumeChild: true
     })
 
-    expect((await threadStore.get('child_history'))?.turns).toHaveLength(2)
+    const childThread = await threadStore.get('child_history')
+    expect(childThread?.turns).toHaveLength(2)
+    expect(childThread?.turns.map((turn) => turn.agentSurface)).toEqual(['write', 'design'])
+    const userMessages = childThread?.turns.flatMap((turn) =>
+      turn.items.filter((item) => item.kind === 'user_message')) ?? []
+    expect(userMessages.map((item) => item.text)).toEqual([initialPrompt, continuedPrompt])
+    expect(userMessages[0]).toMatchObject({
+      attachmentIds: ['att_111111111111111111111111'],
+      composerContexts: [{ reference: { kind: 'ppt-review', workflowId: 'ppt_workflow' } }],
+      fileReferences: [{ relativePath: 'brief.md', name: 'brief.md' }]
+    })
     expect(model.requests).toHaveLength(2)
     expect(model.requests[1]?.threadId).toBe('child_history')
-    expect(JSON.stringify(model.requests[1]?.history)).toContain('inspect the original task')
+    expect(JSON.stringify(model.requests[0]?.history)).toContain(initialPrompt)
+    expect(JSON.stringify(model.requests[0]?.history)).not.toContain('HOST PPT CONTROL')
+    expect(model.requests[0]?.systemPrompt).toContain('HOST PPT CONTROL: plan automatically')
+    expect(model.requests[0]?.attachmentDocuments).toEqual([
+      expect.objectContaining({ id: 'att_111111111111111111111111', text: 'launch brief' })
+    ])
+    expect(JSON.stringify(model.requests[1]?.history)).toContain(initialPrompt)
     expect(JSON.stringify(model.requests[1]?.history)).toContain('initial child conclusion')
-    expect(JSON.stringify(model.requests[1]?.history)).toContain('continue without repeating completed work')
+    expect(JSON.stringify(model.requests[1]?.history)).toContain(continuedPrompt)
+    expect(initial.inheritedHistoryItems).toBe(0)
+    expect(continued.inheritedHistoryItems).toBe(0)
+    expect(instructionCalls).toBe(0)
+    expect(memoryCalls).toBe(0)
   })
 
   it('aborts the child model stream when the parent delegation signal is aborted', async () => {

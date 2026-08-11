@@ -12,7 +12,7 @@ import {
 } from '../contracts/policy.js'
 import type { InstructionRuntime, InstructionTurnResolution } from '../instructions/instruction-runtime.js'
 import type { MemoryStore } from '../memory/memory-store.js'
-import type { GuiPlanContext, ToolHost, ToolHostContext } from '../ports/tool-host.js'
+import type { GuiPlanContext, PptWorkflowScope, ToolHost, ToolHostContext } from '../ports/tool-host.js'
 import type { SkillRuntime, SkillTurnResolution } from '../skills/skill-runtime.js'
 import { SVG_ARTIFACT_ALLOWED_TOOL_NAMES } from './design-mode.js'
 import { InteractiveToolBridge } from './interactive-tool-bridge.js'
@@ -84,6 +84,7 @@ export type TurnContextResolverDeps = {
   allowedReadPaths?: readonly string[]
   allowedWritePaths?: readonly string[]
   allowedArtifactIds?: readonly string[]
+  pptWorkflowScope?: PptWorkflowScope
   blockedProviderIds?: readonly string[]
   blockedToolNames?: readonly string[]
   blockedSkillIds?: readonly string[]
@@ -196,6 +197,7 @@ export class TurnContextResolver {
       ...(this.deps.allowedReadPaths ? { allowedReadPaths: this.deps.allowedReadPaths } : {}),
       ...(this.deps.allowedWritePaths ? { allowedWritePaths: this.deps.allowedWritePaths } : {}),
       ...(this.deps.allowedArtifactIds ? { allowedArtifactIds: this.deps.allowedArtifactIds } : {}),
+      ...(this.deps.pptWorkflowScope ? { pptWorkflowScope: this.deps.pptWorkflowScope } : {}),
       ...(this.deps.blockedProviderIds ? { blockedProviderIds: this.deps.blockedProviderIds } : {}),
       ...(this.deps.blockedToolNames ? { blockedToolNames: this.deps.blockedToolNames } : {}),
       ...(this.deps.blockedSkillIds ? { blockedSkillIds: this.deps.blockedSkillIds } : {}),

@@ -199,6 +199,9 @@ describe('createAgentSdkRuntime turn context', () => {
     const executionContexts: Array<{
       allowedToolNames?: readonly string[]
       allowedProviderIds?: readonly string[]
+      allowedReadPaths?: readonly string[]
+      allowedWritePaths?: readonly string[]
+      pptWorkflowScope?: { workflowId: string }
       blockedToolNames?: readonly string[]
       blockedProviderIds?: readonly string[]
       blockedSkillIds?: readonly string[]
@@ -249,6 +252,7 @@ describe('createAgentSdkRuntime turn context', () => {
           role: 'user',
           status: 'completed',
           text: 'inspect',
+          composerContexts: [{ id: 'must-not-enter-the-prompt' }],
           createdAt: '2026-07-10T00:00:00.000Z'
         }]
       } as never,
@@ -272,6 +276,12 @@ describe('createAgentSdkRuntime turn context', () => {
       toolContextBoundary: {
         allowedProviderIds: ['builtin'],
         allowedToolNames: ['read'],
+        allowedReadPaths: ['.kun/ppt/ppt_test', '.kun/images'],
+        allowedWritePaths: ['.kun/ppt/ppt_test', 'presentations'],
+        pptWorkflowScope: {
+          action: 'start', workflowId: 'ppt_test', projectDir: '.kun/ppt/ppt_test',
+          parentThreadId: 'parent', previewMode: 'editable'
+        },
         blockedProviderIds: ['mcp:private'],
         blockedToolNames: ['write'],
         blockedSkillIds: ['blocked-skill']
@@ -282,6 +292,9 @@ describe('createAgentSdkRuntime turn context', () => {
         loadTurnContext(threadId: string, turnId: string): Promise<{
           bridgeableTools: Array<{ name: string }>
           allowSdkBuiltins?: boolean
+          bridgeKunBuiltinOverlaps?: boolean
+          preserveExactUserPrompt?: boolean
+          userText: string
           contextInstructions?: string[]
         } | null>
         executeKunTool(
@@ -296,9 +309,12 @@ describe('createAgentSdkRuntime turn context', () => {
     const context = await deps.loadTurnContext('th', 'tn')
     expect(context).toMatchObject({
       allowSdkBuiltins: false,
+      bridgeKunBuiltinOverlaps: true,
+      preserveExactUserPrompt: true,
+      userText: 'inspect',
       bridgeableTools: [{ name: 'read' }]
     })
-    expect(context?.contextInstructions?.join('\n')).toContain('Kun terminal TUI')
+    expect(context?.contextInstructions).toBeUndefined()
     await expect(deps.executeKunTool('th', 'tn', 'read', {})).resolves.toEqual({
       output: 'safe',
       isError: false
@@ -310,6 +326,9 @@ describe('createAgentSdkRuntime turn context', () => {
       expect.objectContaining({
         allowedProviderIds: ['builtin'],
         allowedToolNames: ['read'],
+        allowedReadPaths: ['.kun/ppt/ppt_test', '.kun/images'],
+        allowedWritePaths: ['.kun/ppt/ppt_test', 'presentations'],
+        pptWorkflowScope: expect.objectContaining({ workflowId: 'ppt_test' }),
         blockedProviderIds: ['mcp:private'],
         blockedToolNames: ['write'],
         blockedSkillIds: ['blocked-skill'],

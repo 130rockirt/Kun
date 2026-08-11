@@ -80,6 +80,14 @@ describe('DelegationRuntime resume handling', () => {
         parentTurnId: 'turn-1',
         label: 'PPT review',
         prompt: 'generate previews',
+        source: {
+          prompt: 'generate previews',
+          attachmentIds: [],
+          composerContexts: [],
+          fileReferences: [],
+          agentSurface: 'write'
+        },
+        agentSurface: 'write',
         workspace: '/workspace',
         inlineProfile: {
           id: 'ppt',
@@ -99,6 +107,13 @@ describe('DelegationRuntime resume handling', () => {
         parentThreadId: 'parent',
         parentTurnId: 'turn-2',
         prompt: 'revise slide 2',
+        source: {
+          prompt: 'revise slide 2',
+          attachmentIds: [],
+          composerContexts: [],
+          fileReferences: [],
+          agentSurface: 'design'
+        },
         signal: new AbortController().signal
       })
 
@@ -107,6 +122,7 @@ describe('DelegationRuntime resume handling', () => {
         id: 'child_ppt',
         parentTurnId: 'turn-2',
         prompt: 'revise slide 2',
+        agentSurface: 'design',
         summary: 'revised',
         resumeCount: 1,
         reviewBundle: { revision: 2 },
@@ -121,6 +137,7 @@ describe('DelegationRuntime resume handling', () => {
         parentThreadId: 'parent',
         parentTurnId: 'turn-2',
         workspace: '/workspace',
+        agentSurface: 'design',
         systemPrompt: 'PPT child',
         allowedTools: ['generate_image']
       })
