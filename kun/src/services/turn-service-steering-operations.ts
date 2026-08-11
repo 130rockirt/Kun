@@ -51,6 +51,7 @@ import { withThreadStoreMutation } from './thread-mutation-coordinator.js'
 import type { ThreadLifecycleFence } from './thread-lifecycle-fence.js'
 import { ThreadItemProjectionService } from './thread-item-projection.js'
 import { ComposerContextAttachmentSchema } from '../contracts/composer-context.js'
+import { validateAndBindImageSteeringAttachments } from '../loop/turn-steering-attachments.js'
 import {
   goalContextInstruction,
   goalContextKey
@@ -64,7 +65,10 @@ async steerTurn(this: TurnService, input: {
     text: string
     displayText?: string
     messageSource?: UserMessageSource
+    attachmentIds?: string[]
   }): Promise<void> {
+    const requestedAttachmentIds = (input.attachmentIds ?? []).map((id) => id.trim())
+    let acceptedAttachmentIds: string[] = []
     let holdsGraphResumeFence = false
     try {
       for (;;) {
@@ -85,10 +89,31 @@ async steerTurn(this: TurnService, input: {
             }
             return 'resume_graph' as const
           }
+          let attachmentIds: string[] = []
+          try {
+            attachmentIds = await validateAndBindImageSteeringAttachments({
+              attachmentIds: input.attachmentIds ?? [],
+              turn,
+              steeringEntries: [
+                { attachmentIds: this['deps'].steering.drainedAttachmentIds(input.turnId) },
+                ...this['deps'].steering.peek(input.turnId),
+                { attachmentIds: requestedAttachmentIds }
+              ],
+              attachmentStore: this['deps'].attachmentStore?.(),
+              threadId: input.threadId,
+              workspace: current?.workspace
+            })
+          } catch (error) {
+            throw new TurnConflictError(
+              error instanceof Error ? error.message : 'invalid steering attachments'
+            )
+          }
+          acceptedAttachmentIds = attachmentIds
           const accepted = this['deps'].steering.enqueue(input.turnId, {
             text: input.text,
             ...(input.displayText ? { displayText: input.displayText } : {}),
-            ...(input.messageSource ? { messageSource: input.messageSource } : {})
+            ...(input.messageSource ? { messageSource: input.messageSource } : {}),
+            ...(attachmentIds.length ? { attachmentIds } : {})
           })
           if (!accepted) {
             if (this['deps'].steering.isSealed(input.turnId)) {
@@ -117,7 +142,8 @@ async steerTurn(this: TurnService, input: {
       turnId: input.turnId,
       text: input.text,
       ...(input.displayText ? { displayText: input.displayText } : {}),
-      ...(input.messageSource ? { messageSource: input.messageSource } : {})
+      ...(input.messageSource ? { messageSource: input.messageSource } : {}),
+      ...(acceptedAttachmentIds.length ? { attachmentIds: acceptedAttachmentIds } : {})
     })
   },
 
@@ -188,6 +214,26 @@ async replaceSteering(this: TurnService, input: {
       if (!turn) throw new Error(`turn not found: ${input.turnId}`)
       if (turn.status !== 'running' || !this['inflightTurns'].has(input.turnId)) {
         throw new TurnConflictError(`turn is not active: ${input.turnId}`)
+      }
+      const replacementAttachmentIds = [...new Set(
+        input.entries.flatMap((entry) => entry.attachmentIds ?? [])
+      )]
+      try {
+        await validateAndBindImageSteeringAttachments({
+          attachmentIds: replacementAttachmentIds,
+          turn,
+          steeringEntries: [
+            { attachmentIds: this['deps'].steering.drainedAttachmentIds(input.turnId) },
+            ...input.entries
+          ],
+          attachmentStore: this['deps'].attachmentStore?.(),
+          threadId: input.threadId,
+          workspace: current?.workspace
+        })
+      } catch (error) {
+        throw new TurnConflictError(
+          error instanceof Error ? error.message : 'invalid steering attachments'
+        )
       }
       if (!this['deps'].steering.replace(input.turnId, input.entries)) {
         throw new TurnConflictError(`turn is no longer accepting steering or the replacement exceeds its capacity: ${input.turnId}`)

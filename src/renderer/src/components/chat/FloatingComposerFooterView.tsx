@@ -8,11 +8,12 @@ export function FloatingComposerFooterView({
 }): ReactElement | null {
   const {
     BarChart3, FloatingComposerUsageHistory, activeThreadId, compact,
-    cumulativeCacheHitRate, footerHint, formatCompactNumber, formatCost, formatPercent, formatTps,
+    primaryCacheHitRate, footerHint, formatCompactNumber, formatCost, formatPercent, formatTps,
     formatTtftSeconds, i18n, showUsageHistoryFooter, t, threadUsage, threadUsageState,
     timingThreadUsage
   } = context
   if (compact) return null
+  const latestCacheHitRate = threadUsage ? primaryCacheHitRate(threadUsage) : null
 
   return (
     <div className="ds-composer-footer ds-no-drag">
@@ -51,11 +52,11 @@ export function FloatingComposerFooterView({
                     tokens: formatCompactNumber(threadUsage.totalTokens)
                   })}
                 </span>
-                {threadUsage.turns > 1 ? (
+                {latestCacheHitRate != null ? (
                   <span className="ds-composer-usage-metric ds-composer-usage-cache shrink-0 tabular-nums">
                     <span className="ds-composer-usage-cache-indicator" aria-hidden="true" />
                     {t('sessionUsageFooterCache', {
-                      cache: formatPercent(cumulativeCacheHitRate(threadUsage))
+                      cache: formatPercent(latestCacheHitRate)
                     })}
                   </span>
                 ) : null}

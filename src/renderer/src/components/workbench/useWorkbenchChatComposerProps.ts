@@ -210,6 +210,8 @@ export function useWorkbenchChatComposerProps({
       ...(message.deliveryState ? { deliveryState: message.deliveryState } : {}),
       ...(message.deliveryTurnId ? { deliveryTurnId: message.deliveryTurnId } : {}),
       ...(message.displayText ? { displayText: message.displayText } : {}),
+      ...(message.attachmentIds?.length ? { attachmentIds: message.attachmentIds } : {}),
+      ...(message.attachments?.length ? { attachments: message.attachments } : {}),
       guidanceEligible: canGuideQueuedMessage(message)
     })),
     onRemoveQueuedMessage: removeQueuedMessage,

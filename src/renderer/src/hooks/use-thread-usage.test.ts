@@ -34,15 +34,15 @@ describe('thread usage formatting', () => {
     expect(formatCost(0.00000001, 'en')).toBe('$<0.0001')
   })
 
-  it('prefers latest-turn cache hit rate for compact cache chips', () => {
+  it('uses only the latest LLM request cache hit rate for active conversation displays', () => {
     expect(primaryCacheHitRate({ cacheHitRate: 0.4, lastTurnCacheHitRate: 0.95 })).toBe(0.95)
-    expect(primaryCacheHitRate({ cacheHitRate: 0.4, lastTurnCacheHitRate: null })).toBe(0.4)
+    expect(primaryCacheHitRate({ cacheHitRate: 0.4, lastTurnCacheHitRate: null })).toBeNull()
     expect(primaryCacheHitRate({ cacheHitRate: null, lastTurnCacheHitRate: null })).toBeNull()
   })
 
   it('derives the cumulative cache rate from tokens to match the overall usage panel (#654)', () => {
     // Last-turn rate could be 0 while the thread cumulative is non-zero — the
-    // chip must show the token-derived cumulative so it matches the overall panel.
+    // aggregate panel keeps using the token-derived cumulative value.
     expect(cumulativeCacheHitRate({ cachedTokens: 41, cacheMissTokens: 959, cacheHitRate: 0 })).toBeCloseTo(0.041, 3)
     // Falls back to the provided rate when there is no token telemetry.
     expect(cumulativeCacheHitRate({ cachedTokens: 0, cacheMissTokens: 0, cacheHitRate: 0.8 })).toBe(0.8)

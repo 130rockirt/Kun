@@ -63,7 +63,7 @@ import {
   formatCompactNumber,
   formatCost,
   formatPercent,
-  cumulativeCacheHitRate,
+  primaryCacheHitRate,
   formatTtftSeconds,
   formatTps,
   useThreadUsageState
@@ -663,7 +663,7 @@ export function FloatingComposer({
     canCompose, canEditComposer, canOpenComposerMenu, canOpenGoalPanel, canOptimizePrompt, canPickAttachment, canPickDesignReference, canPickFileReference,
     canPickLocalFileReference, canSetGoalPanelDraft, canToggleGraphMode, canTogglePlanMode, canToggleWorktreeMode, clearActiveThreadGoal, compact, composerFastMode,
     composerMenuButtonRef, composerMenuOpen, composerMenuPanelRef, composerModel, composerModelGroups, composerPickList, composerProviderId, composerReasoningEffort,
-    contextChips, cumulativeCacheHitRate, currentTurnOrchestration, dictation, draft, effectiveWorkspaceRoot, executionSettings, executionSettingsApplying,
+    contextChips, primaryCacheHitRate, currentTurnOrchestration, dictation, draft, effectiveWorkspaceRoot, executionSettings, executionSettingsApplying,
     fileInputRef, fileMentions, fileReferenceEnabled, fileReferences, filteredSlashCommands, footerHint, formatCompactNumber, formatCost,
     formatPercent, formatTps, formatTtftSeconds, goalBannerLabel, goalElapsedLabel, goalInputMode, goalMenuChecked, goalPanelOpen,
     goalPanelRef, graphEnabled, graphPlanningNeedsCorrection, hideModelPicker, highlightedSlashCommand, i18n, input, isComposerDirectoryReference,

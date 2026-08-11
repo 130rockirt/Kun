@@ -40,6 +40,10 @@ export type ExtensionPrincipal = Readonly<{
   viewContributionId?: string
 }>
 
+export type ExtensionAgentRuntimeConfig = Readonly<{
+  defaultBinding: ExtensionProviderBinding
+}>
+
 export type ExtensionAuthorizationRequest = Readonly<{
   operation: 'createRun' | 'getRun' | 'listOwn' | 'subscribe' | 'steer' | 'cancel'
   permission: string
@@ -200,9 +204,17 @@ export class ExtensionAgentService {
     this.maximumBudget = completeBudget(options.maximumBudget, MAXIMUM_BUDGET)
   }
 
-  updateRuntimeConfig(input: { defaultBinding: ExtensionProviderBinding }): void {
+  stageRuntimeConfig(input: ExtensionAgentRuntimeConfig): ExtensionAgentRuntimeConfig {
     validateBinding(input.defaultBinding)
+    return { defaultBinding: { ...input.defaultBinding } }
+  }
+
+  publishRuntimeConfig(input: ExtensionAgentRuntimeConfig): void {
     this.defaultBinding = { ...input.defaultBinding }
+  }
+
+  updateRuntimeConfig(input: ExtensionAgentRuntimeConfig): void {
+    this.publishRuntimeConfig(this.stageRuntimeConfig(input))
   }
 
   async createRun(

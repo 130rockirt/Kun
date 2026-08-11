@@ -265,7 +265,8 @@ export function createThreadQueueActions(
       return false
     }
     const provider = getProvider()
-    if (!guidingGraphTurn && typeof provider.steerUserMessage !== 'function') {
+    const requiresNativeSteering = !guidingGraphTurn || Boolean(guidance.attachmentIds?.length)
+    if (requiresNativeSteering && typeof provider.steerUserMessage !== 'function') {
       set({ error: i18n.t('common:guideQueuedMessageUnsupported') })
       return false
     }
@@ -273,7 +274,7 @@ export function createThreadQueueActions(
     threadActionSharedState.guidingQueuedMessageIds.add(id)
     const requestStartedAt = Date.now()
     try {
-      const graphSteered = guidingGraphTurn
+      const graphSteered = guidingGraphTurn && !guidance.attachmentIds?.length
         ? await useGraphStore.getState().steerSourceTurn(
             guidanceThreadId,
             guidanceTurnId,
@@ -285,11 +286,15 @@ export function createThreadQueueActions(
           set({ error: i18n.t('common:guideQueuedMessageUnsupported') })
           return false
         }
+        const steerOptions = {
+          ...(guidance.displayText ? { displayText: guidance.displayText } : {}),
+          ...(guidance.attachmentIds?.length ? { attachmentIds: guidance.attachmentIds } : {})
+        }
         await provider.steerUserMessage(
           guidanceThreadId,
           guidanceTurnId,
           guidance.text,
-          guidance.displayText ? { displayText: guidance.displayText } : undefined
+          Object.keys(steerOptions).length > 0 ? steerOptions : undefined
         )
       }
       const requestCompletedAt = Date.now()
@@ -315,6 +320,13 @@ export function createThreadQueueActions(
           requestCompletedAt
         )
         const displayText = guidance.displayText ?? guidance.text
+        const optimisticMeta = {
+          ...(guidance.displayText && guidance.displayText !== guidance.text
+            ? { displayText: guidance.displayText }
+            : {}),
+          ...(guidance.attachmentIds?.length ? { attachmentIds: guidance.attachmentIds } : {}),
+          ...(message.attachments?.length ? { attachments: message.attachments } : {})
+        }
         return {
           queuedMessages: current.queuedMessages.filter((candidate) => candidate.id !== id),
           blocks: runtimeMessageAlreadyVisible
@@ -328,9 +340,7 @@ export function createThreadQueueActions(
                   createdAt: new Date(requestCompletedAt).toISOString(),
                   text: displayText,
                   ...(message.modelLabel ? { modelLabel: message.modelLabel } : {}),
-                  ...(guidance.displayText && guidance.displayText !== guidance.text
-                    ? { meta: { displayText: guidance.displayText } }
-                    : {})
+                  ...(Object.keys(optimisticMeta).length > 0 ? { meta: optimisticMeta } : {})
                 }
               ],
           error: null

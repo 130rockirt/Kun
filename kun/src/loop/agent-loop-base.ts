@@ -312,7 +312,8 @@ export abstract class AgentLoopBase {
         threadId,
         text: entry.text,
         ...(entry.displayText ? { displayText: entry.displayText } : {}),
-        ...(entry.messageSource ? { messageSource: entry.messageSource } : {})
+        ...(entry.messageSource ? { messageSource: entry.messageSource } : {}),
+        ...(entry.attachmentIds?.length ? { attachmentIds: entry.attachmentIds } : {})
       })
       await this.opts.turns.applyItem(threadId, item)
     }

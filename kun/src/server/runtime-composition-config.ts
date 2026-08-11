@@ -27,6 +27,7 @@ import {
   DEFAULT_APPROVAL_REVIEWER,
   AgentLoop,
   type AgentLoopOptions,
+  type DelegationRuntime,
   modelCapabilitiesForModel,
   modelContextProfilesFromConfig,
   DEFAULT_QUALITY_CONFIG,
@@ -58,6 +59,30 @@ import {
   createPersistentAttachmentStore,
   createPersistentMemoryStore
 } from './runtime-factory-storage.js'
+
+type DelegationConfig = ReturnType<typeof mergeBuiltinSubagentProfiles>
+
+/**
+ * Provider builders snapshot a few config-backed DelegationRuntime properties
+ * while constructing their schemas. Expose the staged values without mutating
+ * the live runtime before the new runtime generation is committed.
+ */
+function delegationRuntimeConfigView(
+  runtime: DelegationRuntime | undefined,
+  config: DelegationConfig | undefined
+): DelegationRuntime | undefined {
+  if (!runtime || !config) return undefined
+  return new Proxy(runtime, {
+    get(target, property) {
+      if (property === 'enabled') return () => config.enabled
+      if (property === 'useExistingAgents') return config.useExistingAgents
+      if (property === 'defaultProfileName') return config.defaultProfile
+      if (property === 'defaultToolPolicy') return config.defaultToolPolicy
+      const value = Reflect.get(target, property, target)
+      return typeof value === 'function' ? value.bind(target) : value
+    }
+  })
+}
 
 export function createRuntimeConfigController(
   extensions: Awaited<ReturnType<typeof createRuntimeExtensionComposition>>
@@ -137,73 +162,90 @@ export function createRuntimeConfigController(
   let capabilities = registryComposition.capabilities
   let loopOptions = agent.loopOptions
   let loop = agent.loop
-	  const startedAt = activeOptions.startedAt ?? nowIso()
-	  const rebuildCapabilities = (): typeof capabilities => buildRuntimeCapabilityManifest({
-	    config: activeOptions.capabilities,
-	    model: modelCapabilities(activeOptions.model),
+	  const capabilitySnapshot = () => ({
+	    options: activeOptions,
+	    mcp: mcpProviders,
+	    web: webProviders,
+	    skills: skillRuntime,
+	    instructions: instructionRuntime,
+	    attachments: attachmentStore,
+	    memory: memoryStore,
+	    subagentsAvailable: Boolean(delegationRuntime?.enabled()),
+	    imageGen: imageGenProviders,
+	    speechGen: speechGenProviders,
+	    musicGen: musicGenProviders,
+	    videoGen: videoGenProviders,
+	    computerUse: computerUseProviders,
+	    browserUse: browserUseProviders
+	  })
+	  const buildCapabilities = (snapshot: ReturnType<typeof capabilitySnapshot>): typeof capabilities => buildRuntimeCapabilityManifest({
+	    config: snapshot.options.capabilities,
+	    model: modelCapabilities(snapshot.options.model),
 	    mcp: {
-	      configuredServers: Object.keys(activeOptions.capabilities?.mcp.servers ?? {}).length,
-	      connectedServers: mcpProviders.connectedServers,
-	      toolCount: mcpProviders.toolCount,
-	      lastError: mcpProviders.diagnostics.find((diagnostic) => diagnostic.lastError)?.lastError,
+	      configuredServers: Object.keys(snapshot.options.capabilities?.mcp.servers ?? {}).length,
+	      connectedServers: snapshot.mcp.connectedServers,
+	      toolCount: snapshot.mcp.toolCount,
+	      lastError: snapshot.mcp.diagnostics.find((diagnostic) => diagnostic.lastError)?.lastError,
 	      search: {
-	        active: mcpProviders.search.active,
-	        indexedToolCount: mcpProviders.search.indexedToolCount,
-	        advertisedToolCount: mcpProviders.search.advertisedToolCount
+	        active: snapshot.mcp.search.active,
+	        indexedToolCount: snapshot.mcp.search.indexedToolCount,
+	        advertisedToolCount: snapshot.mcp.search.advertisedToolCount
 	      }
 	    },
 	    web: {
-	      fetchAvailable: webProviders.fetchAvailable,
-	      searchAvailable: webProviders.searchAvailable,
-	      provider: webProviders.provider,
-	      reason: webProviders.diagnostics.find((diagnostic) => diagnostic.reason)?.reason
+	      fetchAvailable: snapshot.web.fetchAvailable,
+	      searchAvailable: snapshot.web.searchAvailable,
+	      provider: snapshot.web.provider,
+	      reason: snapshot.web.diagnostics.find((diagnostic) => diagnostic.reason)?.reason
 	    },
 	    skills: {
-	      configuredRoots: activeOptions.capabilities?.skills.roots.length,
-	      discoveredSkills: skillRuntime.count(),
-	      reason: skillRuntime.diagnostics().validationErrors[0]?.message
+	      configuredRoots: snapshot.options.capabilities?.skills.roots.length,
+	      discoveredSkills: snapshot.skills.count(),
+	      reason: snapshot.skills.diagnostics().validationErrors[0]?.message
 	    },
 	    instructions: {
-	      available: instructionRuntime.enabled(),
-	      lastSourceCount: instructionRuntime.diagnostics().lastInjection?.sources.length ?? 0,
-	      lastInjectedBytes: instructionRuntime.diagnostics().lastInjection?.injectedBytes ?? 0
+	      available: snapshot.instructions.enabled(),
+	      lastSourceCount: snapshot.instructions.diagnostics().lastInjection?.sources.length ?? 0,
+	      lastInjectedBytes: snapshot.instructions.diagnostics().lastInjection?.injectedBytes ?? 0
 	    },
 	    attachments: {
-	      available: Boolean(attachmentStore)
+	      available: Boolean(snapshot.attachments)
 	    },
 	    memory: {
-	      available: Boolean(memoryStore)
+	      available: Boolean(snapshot.memory)
 	    },
 	    subagents: {
-	      available: Boolean(delegationRuntime?.enabled())
+	      available: snapshot.subagentsAvailable
 	    },
 	    imageGen: {
-	      available: imageGenProviders.available,
-	      reason: imageGenProviders.diagnostics.find((diagnostic) => diagnostic.reason)?.reason,
-	      supportsReferenceEdit: protocolSupportsImageEdit(activeOptions.capabilities?.imageGen?.protocol)
+	      available: snapshot.imageGen.available,
+	      reason: snapshot.imageGen.diagnostics.find((diagnostic) => diagnostic.reason)?.reason,
+	      supportsReferenceEdit: protocolSupportsImageEdit(snapshot.options.capabilities?.imageGen?.protocol)
 	    },
 	    speechGen: {
-	      available: speechGenProviders.available,
-	      reason: speechGenProviders.diagnostics.find((diagnostic) => diagnostic.reason)?.reason
+	      available: snapshot.speechGen.available,
+	      reason: snapshot.speechGen.diagnostics.find((diagnostic) => diagnostic.reason)?.reason
 	    },
 	    musicGen: {
-	      available: musicGenProviders.available,
-	      reason: musicGenProviders.diagnostics.find((diagnostic) => diagnostic.reason)?.reason
+	      available: snapshot.musicGen.available,
+	      reason: snapshot.musicGen.diagnostics.find((diagnostic) => diagnostic.reason)?.reason
 	    },
 	    videoGen: {
-	      available: videoGenProviders.available,
-	      reason: videoGenProviders.diagnostics.find((diagnostic) => diagnostic.reason)?.reason
+	      available: snapshot.videoGen.available,
+	      reason: snapshot.videoGen.diagnostics.find((diagnostic) => diagnostic.reason)?.reason
 	    },
 	    computerUse: {
-	      available: computerUseProviders.available,
-	      reason: computerUseProviders.diagnostics.find((diagnostic) => diagnostic.reason)?.reason
+	      available: snapshot.computerUse.available,
+	      reason: snapshot.computerUse.diagnostics.find((diagnostic) => diagnostic.reason)?.reason
 	    },
 	    browserUse: {
-	      available: browserUseProviders.available,
-	      interactionRequired: browserUseProviders.interactionRequired,
-	      reason: browserUseProviders.reason
+	      available: snapshot.browserUse.available,
+	      interactionRequired: snapshot.browserUse.interactionRequired,
+	      reason: snapshot.browserUse.reason
 	    }
 	  })
+	  const startedAt = activeOptions.startedAt ?? nowIso()
+	  const rebuildCapabilities = (): typeof capabilities => buildCapabilities(capabilitySnapshot())
 	  let applyConfigQueue: Promise<RuntimeConfigApplyResponse> = Promise.resolve({ ok: true })
 	  const applyConfig = (request: RuntimeConfigApplyRequest): Promise<RuntimeConfigApplyResponse> => {
 	    const task = applyConfigQueue
@@ -324,6 +366,13 @@ export function createRuntimeConfigController(
 	      binaryPath: process.env.KUN_OFFICECLI_BINARY,
 	      profileDir: join(nextOptions.dataDir, 'officecli-profile')
 	    })
+	    const nextSubagentConfig = nextOptions.capabilities?.subagents
+	      ? mergeBuiltinSubagentProfiles(nextOptions.capabilities.subagents)
+	      : undefined
+	    const nextDelegationRuntime = delegationRuntimeConfigView(
+	      delegationRuntime,
+	      nextSubagentConfig
+	    )
 	    const nextBaseToolProviders = [
 	      {
 	        id: 'builtin',
@@ -381,13 +430,13 @@ export function createRuntimeConfigController(
 	        available: true,
 	        tools: [taskGraphTool]
 	      },
-	      ...buildDelegationToolProviders(delegationRuntime, subagentRouter),
+	      ...buildDelegationToolProviders(nextDelegationRuntime, subagentRouter),
 	      ...buildExploreAgentToolProvider(
-	        delegationRuntime,
+	        nextDelegationRuntime,
 	        () => activeOptions.lab?.exploreAgent
 	      ),
 	      ...buildPptAgentToolProvider(
-	        delegationRuntime,
+	        nextDelegationRuntime,
 	        () => ({
 	          ...nextOptions.lab?.pptAgent,
 	          imageGenAvailable: nextImageGenProviders.available,
@@ -470,9 +519,32 @@ export function createRuntimeConfigController(
 	    }
 	    const nextLoop = new AgentLoop(nextLoopOptions)
 	    const previousMcpProviders = mcpProviders
+	    const graphChanged = !isDeepStrictEqual(activeOptions.graph, nextOptions.graph)
+	    const nextApprovalReviewClients = buildApprovalReviewClients(nextOptions, nextModelClients)
+	    const nextExtensionAgentConfig = extensionAgent.stageRuntimeConfig({
+	      defaultBinding: { providerId: 'default', modelId: nextOptions.model }
+	    })
+	    const nextCapabilities = buildCapabilities({
+	      options: nextOptions,
+	      mcp: nextMcpProviders,
+	      web: nextWebProviders,
+	      skills: nextSkillRuntime,
+	      instructions: nextInstructionRuntime,
+	      attachments: nextAttachmentStore,
+	      memory: nextMemoryStore,
+	      subagentsAvailable: nextSubagentConfig?.enabled === true,
+	      imageGen: nextImageGenProviders,
+	      speechGen: nextSpeechGenProviders,
+	      musicGen: nextMusicGenProviders,
+	      videoGen: nextVideoGenProviders,
+	      computerUse: nextComputerUseProviders,
+	      browserUse: nextBrowserUseProviders
+	    })
+	    // This is the final throwing preflight. No await occurs between this
+	    // snapshot and publication, so live extension registrations cannot drift.
+	    const stagedExtensionRegistry = extensionTools.stageRegistry(nextRegistry)
 	    activeOptions = nextOptions
     core.activeOptions = activeOptions
-	    await graphRuntime.reconfigureBackgroundServices()
 	    modelProfiles = nextModelProfiles
 	    providerModelProfiles = nextProviderModelProfiles
 	    tokenEconomy = nextTokenEconomy
@@ -481,12 +553,10 @@ export function createRuntimeConfigController(
     core.tokenEconomy = tokenEconomy
 	    refreshDelegatedProviderIds()
 	    directModelClient.replace(nextModelClients)
-	    approvalReviewModelClient.replace(
-	      buildApprovalReviewClients(activeOptions, nextModelClients)
-	    )
+	    approvalReviewModelClient.replace(nextApprovalReviewClients)
 	    modelClient.replacePools(activeOptions.routePools ?? [])
-	    if (delegationRuntime && activeOptions.capabilities?.subagents) {
-	      delegationRuntime.replaceConfig(mergeBuiltinSubagentProfiles(activeOptions.capabilities.subagents))
+	    if (delegationRuntime && nextSubagentConfig) {
+	      delegationRuntime.replaceConfig(nextSubagentConfig)
 	    }
 	    skillRuntime = nextSkillRuntime
 	    instructionRuntime = nextInstructionRuntime
@@ -504,7 +574,7 @@ export function createRuntimeConfigController(
 	    baseToolProviders = nextBaseToolProviders
 	    childRegistry = nextChildRegistry
 	    registry = nextRegistry
-	    extensionTools.rebindRegistry(registry)
+	    extensionTools.publishStagedRegistry(stagedExtensionRegistry)
 	    childToolHost.replaceRuntimeComponents({ registry: childRegistry, hooks: resolvedHooks })
 	    toolHost.replaceRuntimeComponents({ registry, hooks: resolvedHooks })
 	    sdkRuntime.replace(nextDelegatedRuntime)
@@ -514,9 +584,7 @@ export function createRuntimeConfigController(
 	      model: timedModelClient,
 	      maxConcurrentTurns: activeOptions.runtime?.turnLimits?.maxConcurrentTurns
 	    })
-	    extensionAgent.updateRuntimeConfig({
-	      defaultBinding: { providerId: 'default', modelId: activeOptions.model }
-	    })
+	    extensionAgent.publishRuntimeConfig(nextExtensionAgentConfig)
 	    extensionPreparations.clear()
 	    threadService.updateRuntimeDefaults({
 	      approvalPolicy: activeOptions.approvalPolicy,
@@ -537,7 +605,7 @@ export function createRuntimeConfigController(
 	    })
 	    loopOptions = nextLoopOptions
 	    loop = nextLoop
-	    capabilities = rebuildCapabilities()
+	    capabilities = nextCapabilities
     services.instructionRuntime = instructionRuntime
     services.mcpProviders = mcpProviders
     services.skillRuntime = skillRuntime
@@ -557,6 +625,12 @@ export function createRuntimeConfigController(
     registryComposition.capabilities = capabilities
     agent.loopOptions = loopOptions
     agent.loop = loop
+	    stagedGenerationCommitted = true
+	    if (graphChanged) {
+	      await graphRuntime.reconfigureBackgroundServices().catch((error) => {
+	        console.warn('[kun] Graph background-service reconcile failed after config apply:', error)
+	      })
+	    }
 	    void mcpProviders.startBackgroundReconnect((provider) => {
 	      try {
 	        registry.registerProvider(provider)
@@ -568,11 +642,16 @@ export function createRuntimeConfigController(
 	      } catch {
 	        // ignore duplicate/colliding registration
 	      }
+	    }).catch((error) => {
+	      console.warn('[kun] MCP background reconnect failed after config apply:', error)
 	    })
 	    void previousMcpProviders.close().catch(() => undefined)
-	    stagedGenerationCommitted = true
 	    return { ok: true }
 	    } catch (error) {
+	      if (stagedGenerationCommitted) {
+	        console.warn('[kun] Runtime config post-commit reconciliation failed:', error)
+	        return { ok: true }
+	      }
 	      return {
 	        ok: false,
 	        code: 'invalid_config',

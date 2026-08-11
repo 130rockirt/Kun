@@ -53,7 +53,10 @@ describe('POST /v1/threads/:id/turns/:turnId/steer execution', () => {
       new Request('http://kun.local/v1/threads/thread_graph_planning/turns/turn_graph_planning/steer', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ text: 'Continue building the Graph.' })
+        body: JSON.stringify({
+          text: 'Continue building the Graph.',
+          attachmentIds: ['att_0123456789abcdef01234567']
+        })
       }),
       onSteered
     ) as JsonResponse
@@ -62,7 +65,8 @@ describe('POST /v1/threads/:id/turns/:turnId/steer execution', () => {
     expect(turns.steerTurn).toHaveBeenCalledWith({
       threadId: 'thread_graph_planning',
       turnId: 'turn_graph_planning',
-      text: 'Continue building the Graph.'
+      text: 'Continue building the Graph.',
+      attachmentIds: ['att_0123456789abcdef01234567']
     })
     expect(onSteered).toHaveBeenCalledWith({
       threadId: 'thread_graph_planning',

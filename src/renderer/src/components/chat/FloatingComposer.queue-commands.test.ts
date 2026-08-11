@@ -128,9 +128,35 @@ describe('FloatingComposer queued guidance', () => {
       expect(html).toContain('Use compact logo')
       expect(html.match(/>Guide</g)).toHaveLength(2)
       expect(html).toContain('Add this input to the agent&#x27;s next model interaction')
-      expect(html).toContain('Only plain-text follow-ups can guide')
+      expect(html).toContain('Only plain-text or image follow-ups can guide')
       expect(html).toContain('disabled=""')
       expect(html).not.toContain('These messages will send automatically')
+    } finally {
+      await i18n.changeLanguage(previousLanguage)
+    }
+  })
+
+  it('enables image guidance, renders an image indicator, and keeps Edit disabled', async () => {
+    const previousLanguage = i18n.language
+    await i18n.changeLanguage('en')
+    try {
+      const message = {
+        id: 'q-image',
+        text: 'use this reference',
+        attachmentIds: ['att_image'],
+        attachments: [{ id: 'att_image', kind: 'image' as const, name: 'reference.png' }]
+      }
+      const html = renderToStaticMarkup(createElement(FloatingComposerQueuedMessages, {
+        messages: [message],
+        onGuide: () => undefined,
+        onRemove: () => undefined,
+        onEdit: () => undefined
+      }))
+
+      expect(html).toContain('data-queued-message-images="1"')
+      expect(html).toContain('reference.png')
+      expect(html).not.toContain('disabled=""')
+      expect(canEditQueuedComposerMessage(message)).toBe(false)
     } finally {
       await i18n.changeLanguage(previousLanguage)
     }
@@ -351,7 +377,7 @@ describe('FloatingComposer queued guidance', () => {
 
       expect(html).toContain('aria-label="Guide"')
       expect(html).toContain('disabled=""')
-      expect(html).toContain('Only plain-text follow-ups can guide')
+      expect(html).toContain('Only plain-text or image follow-ups can guide')
     } finally {
       await i18n.changeLanguage(previousLanguage)
     }

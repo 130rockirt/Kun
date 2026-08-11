@@ -66,4 +66,28 @@ describe('SteeringQueue', () => {
     expect(queue.replace('turn_a', [{ text: 'too-long!' }])).toBe(false)
     expect(queue.peek('turn_a')).toEqual([{ text: 'new' }, { text: 'next' }])
   })
+
+  it('preserves attachment ids by value and includes them in byte accounting', () => {
+    const attachmentIds = ['att_0123456789abcdef01234567']
+    const queue = new SteeringQueue({ maxBytesPerTurn: 128 })
+
+    expect(queue.enqueue('turn_image', { text: 'inspect', attachmentIds })).toBe(true)
+    attachmentIds[0] = 'mutated'
+    const peeked = queue.peek('turn_image')
+    peeked[0]!.attachmentIds![0] = 'also-mutated'
+
+    expect(queue.drain('turn_image')).toEqual([{
+      text: 'inspect',
+      attachmentIds: ['att_0123456789abcdef01234567']
+    }])
+    expect(queue.drainedAttachmentIds('turn_image')).toEqual([
+      'att_0123456789abcdef01234567'
+    ])
+    queue.clear('turn_image')
+    expect(queue.drainedAttachmentIds('turn_image')).toEqual([])
+    expect(new SteeringQueue({ maxBytesPerTurn: 8 }).enqueue('turn_small', {
+      text: 'x',
+      attachmentIds: ['att_0123456789abcdef01234567']
+    })).toBe(false)
+  })
 })

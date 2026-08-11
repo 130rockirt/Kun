@@ -87,16 +87,15 @@ export function formatPercent(value: number | null): string {
 export function primaryCacheHitRate(
   usage: Pick<ThreadUsageSummary, 'cacheHitRate' | 'lastTurnCacheHitRate'>
 ): number | null {
-  return usage.lastTurnCacheHitRate ?? usage.cacheHitRate
+  return usage.lastTurnCacheHitRate
 }
 
 /**
  * Cumulative thread cache hit rate derived from token counts — the SAME formula
  * the overall usage panel uses (cachedTokens / (cachedTokens + cacheMissTokens)).
- * This keeps the conversation bottom bar consistent with the overall stats
- * (issue #654): the last-turn rate could read 0% while the thread cumulative is
- * non-zero. Falls back to the backend-provided `cacheHitRate` when no token
- * telemetry is available.
+ * Aggregate usage surfaces use this value; active-conversation displays use the
+ * latest request instead. Falls back to the backend-provided `cacheHitRate` when
+ * no token telemetry is available.
  */
 export function cumulativeCacheHitRate(
   usage: Pick<ThreadUsageSummary, 'cachedTokens' | 'cacheMissTokens' | 'cacheHitRate'>

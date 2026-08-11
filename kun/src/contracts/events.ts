@@ -29,6 +29,7 @@ import {
   TurnReasoningEffortSchema,
   TurnServiceTierSchema
 } from './turns.js'
+import { MAX_TURN_ATTACHMENT_IDS } from './attachments.js'
 
 /**
  * Persisted runtime events. Every event has a per-thread `seq` so the
@@ -217,6 +218,7 @@ export const TurnLifecycleEvent = RuntimeEventBase.extend({
   text: z.string().optional(),
   displayText: z.string().optional(),
   messageSource: UserMessageSource.optional(),
+  attachmentIds: z.array(z.string().min(1)).max(MAX_TURN_ATTACHMENT_IDS).optional(),
   message: z.string().optional(),
   code: z.string().optional(),
   details: z.unknown().optional(),

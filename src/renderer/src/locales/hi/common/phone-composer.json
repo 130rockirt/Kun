@@ -548,7 +548,7 @@
   "guideQueuedMessagePending": "मार्गदर्शन",
   "guideQueuedMessageHint": "इस इनपुट को एजेंट के अगले मॉडल इंटरैक्शन में जोड़ें",
   "guideQueuedMessageGraphHint": "इस इनपुट को वर्तमान Graph Lead को भेजें",
-  "guideQueuedMessageTextOnly": "केवल सादा-पाठ अनुवर्ती ही वर्तमान मोड़ का मार्गदर्शन कर सकता है। यह संदेश कतारबद्ध रहेगा.",
+  "guideQueuedMessageTextOnly": "केवल सादा-पाठ या चित्र अनुवर्ती ही वर्तमान मोड़ का मार्गदर्शन कर सकता है। यह संदेश कतारबद्ध रहेगा।",
   "guideQueuedMessageNoActiveTurn": "सक्रिय मोड़ तैयार नहीं है या पहले ही समाप्त हो चुका है। यह संदेश अभी भी कतारबद्ध है.",
   "guideQueuedMessageUnsupported": "यह एजेंट रनिंग टर्न के दौरान मार्गदर्शन स्वीकार नहीं कर सकता। यह संदेश अभी भी कतारबद्ध है.",
   "guideQueuedMessageFailed": "Could not guide the current turn: {{message}}. This message is still queued.",
