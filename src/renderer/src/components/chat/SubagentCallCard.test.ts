@@ -25,6 +25,7 @@ vi.mock('react-i18next', () => {
     subagentOpenSession: 'Open sub-session',
     subagentOpenSessionShort: 'Open',
     subagentGeneratedBadge: 'Generated',
+    subagentResultExternalized: 'Externalized',
     exploreKindBadge: 'Explore',
     exploreTaskDefaultTitle: 'Explore task',
     exploreViewProcess: 'View explore process',
@@ -149,6 +150,33 @@ describe('SubagentCallCard route metadata', () => {
     expect(metadata.props['data-agent-id']).toBe('generated:ipc-investigator:12345678')
     expect(metadata.props['data-model']).toBe('gpt-5.6-terra')
     expect(instanceText(metadata)).toContain('IPC Investigator (generated:ipc-investigator:12345678)')
+  })
+
+  it('shows externalized result metadata without changing child-session navigation', async () => {
+    selectThread.mockClear()
+    await act(async () => {
+      renderer = create(createElement(SubagentCallCard, {
+        block: childBlock(undefined, {
+          summary: 'bounded preview',
+          summaryTruncated: true,
+          resultRef: {
+            artifactId: 'art_large_result',
+            byteSize: 90_000,
+            lineCount: 2_500,
+            mimeType: 'text/markdown'
+          }
+        })
+      }))
+    })
+
+    expect(renderer!.root.findByProps({
+      'data-testid': 'subagent-result-externalized'
+    })).toBeDefined()
+    await act(async () => {
+      renderer!.root.findByProps({ 'data-testid': 'explore-open-process-button' })
+        .props.onClick({ stopPropagation: () => undefined })
+    })
+    expect(selectThread).toHaveBeenCalledWith('child_tool_delegate')
   })
 
   it('restores a persisted PPT agent result and opens its child session', async () => {

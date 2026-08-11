@@ -74,6 +74,9 @@ export function SubagentCallCard({
   const activity = useMemo(() => readChildActivityFromBlock(block), [block])
   const status = resolveStatus(block, child, detail)
   const detached = child.detached === true || detail.detached === true
+  const resultRef = child.resultRef ?? detail.resultRef
+  const resultExternalized = Boolean(resultRef)
+  const resultUnavailableReason = child.resultUnavailableReason ?? detail.resultUnavailableReason
   const generated = detail.generated === true || (child.childProfile?.startsWith('generated:') ?? false)
   const animate = !reducedMotion && onScreen && status === 'running'
   const isExplore = block.kind === 'tool' && isExploreToolBlock(block as ToolBlock)
@@ -220,6 +223,15 @@ export function SubagentCallCard({
             <span className="truncate text-[14px] font-semibold text-ds-ink" title={taskTitle}>{taskTitle}</span>
             {generated ? <GeneratedPill t={t} /> : null}
             {detached ? <BackgroundPill t={t} /> : null}
+            {resultExternalized ? (
+              <span
+                className="whitespace-nowrap rounded-full bg-amber-500/10 px-2 py-[2px] text-[10.5px] font-semibold text-amber-700 dark:text-amber-300"
+                title={resultRef?.artifactId}
+                data-testid="subagent-result-externalized"
+              >
+                {t('subagentResultExternalized', { defaultValue: 'Externalized' })}
+              </span>
+            ) : null}
             {!compact || !inGroup ? <StatusPill status={status} t={t} /> : null}
           </div>
           <AgentModelMetadata
@@ -344,6 +356,20 @@ export function SubagentCallCard({
             {detail.toolPolicy ? (
               <MetaChip>
                 {detail.toolPolicy === 'readOnly' ? t('subagentPolicyReadOnly') : t('subagentPolicyFull')}
+              </MetaChip>
+            ) : null}
+            {resultRef ? (
+              <MetaChip title={resultRef.artifactId}>
+                {t('subagentResultSize', {
+                  defaultValue: '{{lines}} lines · {{bytes}} bytes',
+                  lines: resultRef.lineCount,
+                  bytes: resultRef.byteSize
+                })}
+              </MetaChip>
+            ) : null}
+            {resultUnavailableReason ? (
+              <MetaChip title={resultUnavailableReason}>
+                {t('subagentResultUnavailable', { defaultValue: 'Full result unavailable' })}
               </MetaChip>
             ) : null}
           </div>

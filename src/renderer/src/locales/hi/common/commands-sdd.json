@@ -165,6 +165,7 @@
   "runtimeStreamRecovering": "रनटाइम इवेंट स्ट्रीम पुनर्प्राप्त किया जा रहा है...",
   "toolUploadWaitStatus": "Waiting for model after {{count}} tool result(s)…",
   "modelRequestRetryStatus": "Model request returned HTTP {{status}}; retrying {{attempt}}/{{max}} in about {{seconds}}s…",
+  "modelContextOverflowRetryStatus": "मॉडल संदर्भ सीमा पूरी हुई; इतिहास संकुचित करके एक बार फिर प्रयास किया जा रहा है…",
   "modelNetworkRetryStatus": "Model provider connection failed; retrying {{attempt}}/{{max}} in about {{seconds}}s…",
   "modelStreamRetryStatus": "Model response transport was interrupted; retrying {{attempt}}/{{max}} in about {{seconds}}s…",
   "toolCatalogChangedStatus": "टूल कैटलॉग बदल गया; कुन ने सक्रिय टूल सूची को ताज़ा किया।",

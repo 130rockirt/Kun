@@ -45,6 +45,7 @@ import {
 } from './delegation-runtime-contracts.js'
 import { DelegationRuntimeRun } from './delegation-runtime-run.js'
 import type { ChildExecutionState } from './delegation-runtime-base.js'
+import { childResultOwnerIds } from './child-result-materializer.js'
 import {
   addChildUsage,
   childActivityFromEvent,
@@ -67,6 +68,41 @@ import {
 } from './delegation-runtime-support.js'
 
 export class DelegationRuntime extends DelegationRuntimeRun {
+  /**
+   * Reclaim child-run projections and linked result artifacts for a deleted
+   * parent or side thread. Every operation is idempotent so nested side-thread
+   * deletion and a partially completed prior attempt are safe.
+   */
+  async cleanupThreadDeletion(
+    threadId: string,
+    deleteSideThread?: (childId: string) => Promise<boolean>
+  ): Promise<number> {
+    const children = await this.options.store.list(threadId)
+    await this.releaseArtifactOwner(`thread:${threadId}`)
+    await this.releaseArtifactOwner(`child:${threadId}`)
+    await this.options.store.delete(threadId).catch(() => undefined)
+    for (const child of children) {
+      if (child.id !== threadId) {
+        await deleteSideThread?.(child.id).catch(() => false)
+      }
+      for (const ownerId of childResultOwnerIds(threadId, child.id)) {
+        await this.releaseArtifactOwner(ownerId)
+      }
+      await this.options.store.delete(child.id).catch(() => undefined)
+    }
+    return children.length
+  }
+
+  private async releaseArtifactOwner(ownerId: string): Promise<void> {
+    try {
+      await this.options.artifactStore?.releaseOwner?.(ownerId)
+    } catch (error) {
+      console.warn(
+        `[kun] linked child artifact cleanup failed owner=${ownerId}: ${errorMessage(error)}`
+      )
+    }
+  }
+
   async resumeChild(input: {
     childId: string
     parentThreadId: string

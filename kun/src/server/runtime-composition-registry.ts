@@ -197,6 +197,7 @@ export function createRuntimeRegistry(
 	        eventBus,
 	        threadStore,
 	        turns: turnService,
+	        artifactStore,
 	        nowIso,
 	        executor: createChildAgentExecutor({
 	          model: timedModelClient,

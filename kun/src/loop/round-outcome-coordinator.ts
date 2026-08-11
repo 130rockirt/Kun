@@ -34,6 +34,7 @@ export {
 export class RoundOutcomeCoordinator extends RoundOutcomeRecoveryPhase {
   async resolve(input: RoundOutcomeInput): Promise<ModelRoundOutcome> {
     if (input.streamed.kind === 'aborted') return 'aborted'
+    if (input.streamed.kind === 'context_overflow') return 'failed'
     if (input.streamed.kind === 'failed') return 'failed'
 
     const streamSnapshot = input.streamed.snapshot

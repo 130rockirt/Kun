@@ -167,6 +167,14 @@ export type CoreChildRuntimeMetadataJson = {
   toolInvocations?: number
   durationMs?: number
   queuedMs?: number
+  summaryTruncated?: boolean
+  resultRef?: {
+    artifactId: string
+    byteSize: number
+    lineCount: number
+    mimeType: 'text/markdown'
+  }
+  resultUnavailableReason?: string
   totalTokens?: number
   cacheHitRate?: number | null
   costUsd?: number

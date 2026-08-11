@@ -165,6 +165,7 @@
   "runtimeStreamRecovering": "正在恢复运行时事件流…",
   "toolUploadWaitStatus": "已收到 {{count}} 个工具结果，正在等待模型继续…",
   "modelRequestRetryStatus": "模型请求返回 HTTP {{status}}，正在第 {{attempt}}/{{max}} 次重试，约 {{seconds}} 秒后继续…",
+  "modelContextOverflowRetryStatus": "模型上下文已超限，已压缩历史并重试一次…",
   "modelNetworkRetryStatus": "模型供应商连接失败，正在第 {{attempt}}/{{max}} 次重试，约 {{seconds}} 秒后继续…",
   "modelStreamRetryStatus": "模型响应传输中断，正在第 {{attempt}}/{{max}} 次重试，约 {{seconds}} 秒后继续…",
   "toolCatalogChangedStatus": "工具目录已变化；Kun 已刷新当前工具列表。",

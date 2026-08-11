@@ -142,6 +142,14 @@ const RuntimeEventBase = z.object({
     toolInvocations: z.number().int().nonnegative().optional(),
     durationMs: z.number().int().nonnegative().optional(),
     queuedMs: z.number().int().nonnegative().optional(),
+    summaryTruncated: z.boolean().optional(),
+    resultRef: z.object({
+      artifactId: z.string().min(1),
+      byteSize: z.number().int().nonnegative(),
+      lineCount: z.number().int().nonnegative(),
+      mimeType: z.literal('text/markdown')
+    }).strict().optional(),
+    resultUnavailableReason: z.string().min(1).max(500).optional(),
     totalTokens: z.number().int().nonnegative().optional(),
     cacheHitRate: z.number().min(0).max(1).nullable().optional(),
     costUsd: z.number().nonnegative().optional(),
@@ -304,7 +312,7 @@ export const ModelRequestRetryEvent = RuntimeEventBase.extend({
   attempt: z.number().int().positive(),
   maxAttempts: z.number().int().positive(),
   delayMs: z.number().int().nonnegative(),
-  reason: z.enum(['network', 'stream_transport']).optional()
+  reason: z.enum(['network', 'stream_transport', 'context_overflow']).optional()
 })
 export type ModelRequestRetryEvent = z.infer<typeof ModelRequestRetryEvent>
 

@@ -92,6 +92,66 @@ function runStoreContract(name: string, make: () => Promise<{ store: ArtifactSto
         await cleanup?.()
       }
     })
+
+    it('merges linked owners and deletes only after the final owner is released', async () => {
+      const { store, cleanup } = await make()
+      try {
+        const first = await store.put({
+          content: 'linked child result',
+          linkedOwners: ['thread:parent', 'child:one']
+        })
+        const second = await store.put({
+          content: 'linked child result',
+          linkedOwners: ['child:two']
+        })
+        expect(second.deduped).toBe(true)
+        expect((await store.stat(first.meta.id))?.linkedOwners).toEqual([
+          'thread:parent',
+          'child:one',
+          'child:two'
+        ])
+
+        expect(await store.releaseOwner?.('child:one')).toEqual({ released: 1, deleted: 0 })
+        expect(await store.get(first.meta.id)).toBe('linked child result')
+        expect(await store.releaseOwner?.('thread:parent')).toEqual({ released: 1, deleted: 0 })
+        expect(await store.releaseOwner?.('child:two')).toEqual({ released: 1, deleted: 1 })
+        expect(await store.get(first.meta.id)).toBeNull()
+      } finally {
+        await cleanup?.()
+      }
+    })
+
+    it('never adopts or reclaims a legacy unlinked artifact', async () => {
+      const { store, cleanup } = await make()
+      try {
+        const legacy = await store.put({ content: 'legacy shared content' })
+        await store.put({
+          content: 'legacy shared content',
+          linkedOwners: ['child:new']
+        })
+        expect(await store.stat(legacy.meta.id)).not.toHaveProperty('retention')
+        expect(await store.releaseOwner?.('child:new')).toEqual({ released: 0, deleted: 0 })
+        expect(await store.get(legacy.meta.id)).toBe('legacy shared content')
+      } finally {
+        await cleanup?.()
+      }
+    })
+
+    it('promotes a linked artifact to ordinary retention when an unlinked caller dedupes it', async () => {
+      const { store, cleanup } = await make()
+      try {
+        const linked = await store.put({
+          content: 'later shared outside the child session',
+          linkedOwners: ['child:one']
+        })
+        await store.put({ content: 'later shared outside the child session' })
+        expect(await store.stat(linked.meta.id)).not.toHaveProperty('retention')
+        expect(await store.releaseOwner?.('child:one')).toEqual({ released: 0, deleted: 0 })
+        expect(await store.get(linked.meta.id)).toBe('later shared outside the child session')
+      } finally {
+        await cleanup?.()
+      }
+    })
   })
 }
 

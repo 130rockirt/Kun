@@ -29,6 +29,10 @@ export type StoredArtifactMeta = {
   origins?: string[]
   /** Absent on legacy metadata whose historical dedupe owners are unknown. */
   originHistoryComplete?: true
+  /** Only explicitly linked artifacts participate in owner-based reclamation. */
+  retention?: 'linked'
+  /** Stable session/run owner ids for linked artifact lifetime. */
+  linkedOwners?: string[]
   createdAt: string
 }
 
@@ -37,6 +41,8 @@ export type PutArtifactInput = {
   mimeType?: string
   source?: ArtifactSourceKind
   origin?: string
+  /** Non-empty owners opt a newly-created artifact into linked retention. */
+  linkedOwners?: string[]
   /** Inline preview budget handed to the model. Default 4000. */
   maxInlineChars?: number
 }
@@ -59,6 +65,7 @@ export type ReadRangeOptions = {
 
 export interface ArtifactStore {
   put(input: PutArtifactInput): Promise<PutArtifactResult>
+  releaseOwner?(ownerId: string): Promise<{ released: number; deleted: number }>
   delete?(id: string): Promise<void>
   list?(): Promise<StoredArtifactMeta[]>
   get(id: string): Promise<string | null>
@@ -133,6 +140,7 @@ export async function readArtifactBounded(
 function buildMeta(input: PutArtifactInput, id: string, nowIso: () => string): StoredArtifactMeta {
   const byteSize = Buffer.byteLength(input.content, 'utf8')
   const lineCount = input.content.length === 0 ? 0 : input.content.split('\n').length
+  const linkedOwners = normalizeOwners(input.linkedOwners)
   return {
     id,
     byteSize,
@@ -142,8 +150,44 @@ function buildMeta(input: PutArtifactInput, id: string, nowIso: () => string): S
     ...(input.origin ? { origin: input.origin } : {}),
     origins: input.origin ? [input.origin] : [],
     originHistoryComplete: true,
+    ...(linkedOwners.length > 0 ? { retention: 'linked' as const, linkedOwners } : {}),
     createdAt: nowIso()
   }
+}
+
+function mergeMeta(meta: StoredArtifactMeta, input: PutArtifactInput): StoredArtifactMeta {
+  let next = meta
+  if (input.origin && !next.origins?.includes(input.origin)) {
+    next = {
+      ...next,
+      origins: [...(next.origins ?? [next.origin].filter(Boolean) as string[]), input.origin]
+    }
+  }
+  // Never adopt a legacy/unlinked artifact into automatic retention merely
+  // because identical content is later produced by a child result.
+  if (next.retention === 'linked') {
+    const incomingOwners = normalizeOwners(input.linkedOwners)
+    if (incomingOwners.length === 0) {
+      // A normal put is an unscoped retention claim. Promote the deduplicated
+      // artifact to ordinary retention so releasing child owners cannot delete
+      // content now referenced by an unrelated subsystem.
+      const { retention: _retention, linkedOwners: _linkedOwners, ...unlinked } = next
+      next = unlinked
+    } else {
+      const linkedOwners = normalizeOwners([
+        ...(next.linkedOwners ?? []),
+        ...incomingOwners
+      ])
+      if (linkedOwners.length !== (next.linkedOwners?.length ?? 0)) {
+        next = { ...next, linkedOwners }
+      }
+    }
+  }
+  return next
+}
+
+function normalizeOwners(values: readonly string[] | undefined): string[] {
+  return [...new Set((values ?? []).map((value) => value.trim()).filter(Boolean))]
 }
 
 function sliceContent(content: string, options: ReadRangeOptions): string {
@@ -179,14 +223,10 @@ export class InMemoryArtifactStore implements ArtifactStore {
     if (!deduped) {
       this.contents.set(id, input.content)
       this.metas.set(id, buildMeta(input, id, this.nowIso))
-    } else if (input.origin) {
+    } else {
       const current = this.metas.get(id)!
-      if (!current.origins?.includes(input.origin)) {
-        this.metas.set(id, {
-          ...current,
-          origins: [...(current.origins ?? [current.origin].filter(Boolean) as string[]), input.origin]
-        })
-      }
+      const next = mergeMeta(current, input)
+      if (next !== current) this.metas.set(id, next)
     }
     return { meta: this.metas.get(id)!, summary, deduped }
   }
@@ -198,6 +238,24 @@ export class InMemoryArtifactStore implements ArtifactStore {
   async delete(id: string): Promise<void> {
     this.contents.delete(id)
     this.metas.delete(id)
+  }
+
+  async releaseOwner(ownerId: string): Promise<{ released: number; deleted: number }> {
+    let released = 0
+    let deleted = 0
+    for (const [id, current] of this.metas) {
+      if (current.retention !== 'linked' || !current.linkedOwners?.includes(ownerId)) continue
+      released += 1
+      const linkedOwners = current.linkedOwners.filter((owner) => owner !== ownerId)
+      if (linkedOwners.length === 0) {
+        this.contents.delete(id)
+        this.metas.delete(id)
+        deleted += 1
+      } else {
+        this.metas.set(id, { ...current, linkedOwners })
+      }
+    }
+    return { released, deleted }
   }
 
   async list(): Promise<StoredArtifactMeta[]> {
@@ -275,14 +333,9 @@ export class FileArtifactStore implements ArtifactStore {
         }
       } else {
         meta = (await this.stat(id)) ?? buildMeta(input, id, this.nowIso)
-        if (input.origin && !meta.origins?.includes(input.origin)) {
-          meta = {
-            ...meta,
-            origins: [
-              ...(meta.origins ?? [meta.origin].filter(Boolean) as string[]),
-              input.origin
-            ]
-          }
+        const next = mergeMeta(meta, input)
+        if (next !== meta) {
+          meta = next
           await writeFile(this.metaPath(id), JSON.stringify(meta), {
             encoding: 'utf8',
             mode: 0o600
@@ -309,6 +362,32 @@ export class FileArtifactStore implements ArtifactStore {
         rm(this.contentPath(id), { force: true }),
         rm(this.metaPath(id), { force: true })
       ])
+    })
+  }
+
+  async releaseOwner(ownerId: string): Promise<{ released: number; deleted: number }> {
+    return this.enqueueWrite(async () => {
+      let released = 0
+      let deleted = 0
+      const metas = await this.list()
+      for (const current of metas) {
+        if (current.retention !== 'linked' || !current.linkedOwners?.includes(ownerId)) continue
+        released += 1
+        const linkedOwners = current.linkedOwners.filter((owner) => owner !== ownerId)
+        if (linkedOwners.length === 0) {
+          await Promise.all([
+            rm(this.contentPath(current.id), { force: true }),
+            rm(this.metaPath(current.id), { force: true })
+          ])
+          deleted += 1
+          continue
+        }
+        await writeFile(this.metaPath(current.id), JSON.stringify({ ...current, linkedOwners }), {
+          encoding: 'utf8',
+          mode: 0o600
+        })
+      }
+      return { released, deleted }
     })
   }
 

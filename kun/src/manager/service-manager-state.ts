@@ -61,7 +61,7 @@ export const SessionStoreOperationSchema = z.enum([
   'loadUsageRecords', 'loadLatestUsageSnapshots', 'resetMemory', 'clearThreadMemory'
 ])
 export const ArtifactStoreOperationSchema = z.enum([
-  'put', 'delete', 'list', 'get', 'readRange', 'stat'
+  'put', 'releaseOwner', 'delete', 'list', 'get', 'readRange', 'stat'
 ])
 export const MemoryStoreOperationSchema = z.enum([
   'create', 'createWithId', 'update', 'delete', 'purge', 'list', 'retrieve', 'diagnostics'

@@ -34,6 +34,14 @@ export type DelegateDetail = {
   /** Narrow explore query from the initial tool arguments payload. */
   query?: string
   summary?: string
+  summaryTruncated?: boolean
+  resultRef?: {
+    artifactId: string
+    byteSize: number
+    lineCount: number
+    mimeType: 'text/markdown'
+  }
+  resultUnavailableReason?: string
   error?: string
   profile?: string
   profileName?: string
@@ -74,12 +82,23 @@ export function parseDelegateDetail(detail: string | undefined): DelegateDetail 
       : undefined
   const num = (v: unknown): number | undefined =>
     typeof v === 'number' && Number.isFinite(v) ? v : undefined
+  const resultRef = obj.resultRef && typeof obj.resultRef === 'object'
+    ? obj.resultRef as Record<string, unknown>
+    : undefined
+  const artifactId = str(resultRef?.artifactId)
+  const byteSize = num(resultRef?.byteSize)
+  const lineCount = num(resultRef?.lineCount)
   return {
     childId: str(obj.childId),
     status: status(obj.status),
     title: str(obj.title),
     query: str(obj.query),
     summary: str(obj.summary),
+    summaryTruncated: obj.summaryTruncated === true,
+    ...(artifactId && byteSize !== undefined && lineCount !== undefined
+      ? { resultRef: { artifactId, byteSize, lineCount, mimeType: 'text/markdown' } }
+      : {}),
+    resultUnavailableReason: str(obj.resultUnavailableReason),
     error: str(obj.error),
     profile: str(obj.profile),
     profileName: str(obj.profileName),
@@ -108,6 +127,9 @@ export type ChildMeta = {
   durationMs?: number
   queuedMs?: number
   totalTokens?: number
+  summaryTruncated?: boolean
+  resultRef?: DelegateDetail['resultRef']
+  resultUnavailableReason?: string
   detached?: boolean
 }
 
@@ -133,6 +155,11 @@ export function readChildMeta(block: ChatBlock): ChildMeta {
     durationMs: typeof child.durationMs === 'number' ? child.durationMs : undefined,
     queuedMs: typeof child.queuedMs === 'number' ? child.queuedMs : undefined,
     totalTokens: typeof child.totalTokens === 'number' ? child.totalTokens : undefined,
+    summaryTruncated: child.summaryTruncated === true,
+    ...(child.resultRef && typeof child.resultRef === 'object'
+      ? { resultRef: child.resultRef as DelegateDetail['resultRef'] }
+      : {}),
+    resultUnavailableReason: str(child.resultUnavailableReason),
     detached: child.detached === true
   }
 }

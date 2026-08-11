@@ -155,10 +155,20 @@ export class ManagerSharedDataStore extends ManagerSharedDataStoreCore {
             mimeType: z.string().min(1).optional(),
             source: z.enum(['mcp', 'web', 'bash', 'attachment', 'remote-log', 'tool', 'other']).optional(),
             origin: z.string().min(1).optional(),
+            linkedOwners: z.array(z.string().min(1).max(512)).max(64).optional(),
             maxInlineChars: z.number().int().nonnegative().optional()
           }).strict()
         }).strict().parse(value)
         return this.artifactStore.put(body.input)
+      }
+      case 'releaseOwner': {
+        const body = z.object({
+          ownerId: z.string().min(1).max(512)
+        }).strict().parse(value)
+        return this.artifactStore.releaseOwner?.(body.ownerId) ?? {
+          released: 0,
+          deleted: 0
+        }
       }
       case 'delete': {
         const { id } = parseArtifactId(value)
