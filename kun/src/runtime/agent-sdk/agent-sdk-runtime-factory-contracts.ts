@@ -184,6 +184,7 @@ export interface AgentSdkRuntimeFactoryDeps {
     | 'allowedReadPaths'
     | 'allowedWritePaths'
     | 'allowedArtifactIds'
+    | 'pptWorkflowScope'
     | 'blockedProviderIds'
     | 'blockedToolNames'
     | 'blockedSkillIds'

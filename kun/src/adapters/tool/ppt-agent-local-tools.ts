@@ -1,9 +1,8 @@
 import { execFile } from 'node:child_process'
-import { createRequire } from 'node:module'
-import { randomUUID } from 'node:crypto'
-import { access, mkdir, readFile, realpath, rename, rm, stat } from 'node:fs/promises'
-import { extname, isAbsolute, relative, resolve, dirname, join } from 'node:path'
+import { access, mkdir } from 'node:fs/promises'
+import { relative, resolve } from 'node:path'
 import { createPptReviewManifest, readPptReviewManifest, reviewManifestPath, toPptReviewBundle, writePptReviewManifest } from '../../ppt/ppt-review-manifest.js'
+import { designPlanStyleSpec, markPptGovernanceReviewed, writePptDesignGovernance } from '../../ppt/ppt-design-governance.js'
 import { promisify } from 'node:util'
 import type { ToolHostContext } from '../../ports/tool-host.js'
 import { LocalToolHost, type LocalTool } from './local-tool-host.js'
@@ -11,30 +10,47 @@ import { resolveWorkspacePath, withToolBoundary } from './builtin-tool-utils.js'
 import { withFileMutationQueue } from './file-mutation-queue.js'
 import { assertCanWritePath } from './sandbox-policy.js'
 import {
+  buildPptAgentGovernanceTools,
+  PPT_READ_GUIDE_TOOL_NAME,
+  PPT_SUBMIT_DESIGN_PLAN_TOOL_NAME,
+  requireCurrentPptGovernance,
+  requiresPptDesignGovernance
+} from './ppt-agent-governance-tools.js'
+import {
   MAX_EXPORT_OUTPUT_CHARS,
+  governanceProjectionMatches,
   integerArg,
-  isInside,
   parsePreviewRendererOutput,
   parseReviewSlides,
+  assertPptWorkflowBinding,
   requireToolchainDirectory,
   reviewSlideRevision,
   stringArg,
-  truncate,
-  validatePptx,
   type PptAgentLocalToolOptions,
   type ReviewBundleSlideInput
 } from './ppt-agent-local-tools-support.js'
+import {
+  createPptReadReviewContextTool,
+  PPT_READ_REVIEW_CONTEXT_TOOL_NAME
+} from './ppt-agent-review-context-tool.js'
+import {
+  createPptImportAssetTool,
+  PPT_IMPORT_ASSET_TOOL_NAME
+} from './ppt-agent-asset-tool.js'
+import { createPptExportTool, PPT_EXPORT_TOOL_NAME } from './ppt-agent-export-tool.js'
+import {
+  assertPptScopedExistingPath,
+  assertPptScopedMutationPath
+} from './ppt-agent-physical-path.js'
 
-export const PPT_EXPORT_TOOL_NAME = 'ppt_export'
-export const PPT_READ_GUIDE_TOOL_NAME = 'ppt_read_guide'
 export const PPT_GENERATE_PREVIEWS_TOOL_NAME = 'ppt_generate_previews'
 export const PPT_CREATE_REVIEW_BUNDLE_TOOL_NAME = 'ppt_create_review_bundle'
+export { PPT_EXPORT_TOOL_NAME }
+export { PPT_READ_GUIDE_TOOL_NAME, PPT_SUBMIT_DESIGN_PLAN_TOOL_NAME }
+export { PPT_READ_REVIEW_CONTEXT_TOOL_NAME }
+export { PPT_IMPORT_ASSET_TOOL_NAME }
 
 const execFileAsync = promisify(execFile)
-const runtimeRequire = createRequire(import.meta.url)
-const MAX_GUIDE_BYTES = 512 * 1024
-const DEFAULT_GUIDE_LINES = 180
-const MAX_GUIDE_LINES = 400
 
 /**
  * Safe, first-party PPT helpers used by the Lab-gated PPT agent. They expose
@@ -43,234 +59,16 @@ const MAX_GUIDE_LINES = 400
  * active workspace for input/output files.
  */
 export function buildPptAgentLocalTools(options: PptAgentLocalToolOptions = {}): LocalTool[] {
-  const shouldAdvertise = (_context: ToolHostContext): boolean => options.enabled?.() !== false
+  const shouldAdvertise = (context: ToolHostContext): boolean =>
+    options.enabled?.() !== false && context.pptWorkflowScope !== undefined
   return [
-    createPptReadGuideTool(options, shouldAdvertise),
+    ...buildPptAgentGovernanceTools(options, shouldAdvertise),
+    createPptReadReviewContextTool(shouldAdvertise, () => options.enabled?.() !== false),
+    createPptImportAssetTool(options, shouldAdvertise),
     createPptExportTool(options, shouldAdvertise),
     createPptGeneratePreviewsTool(options, shouldAdvertise),
     createPptCreateReviewBundleTool(options, shouldAdvertise)
   ]
-}
-
-function createPptReadGuideTool(
-  options: PptAgentLocalToolOptions,
-  shouldAdvertise: (context: ToolHostContext) => boolean
-): LocalTool {
-  return LocalToolHost.defineTool({
-    name: PPT_READ_GUIDE_TOOL_NAME,
-    description: 'Read a bounded section of Kun\'s bundled PPTD format or slide-design guide. Paths are relative to the trusted reference directory, for example pptd.md, slides_categories.md, or slides_categories/product.md.',
-    toolKind: 'tool_call',
-    policy: 'auto',
-    sideEffect: 'read-only',
-    shouldAdvertise,
-    inputSchema: {
-      type: 'object',
-      properties: {
-        path: {
-          type: 'string',
-          description: 'Relative Markdown path inside the bundled PPT reference directory.'
-        },
-        start_line: {
-          type: 'integer',
-          minimum: 1,
-          description: 'One-based first line. Defaults to 1.'
-        },
-        max_lines: {
-          type: 'integer',
-          minimum: 1,
-          maximum: MAX_GUIDE_LINES,
-          description: `Maximum lines to return. Defaults to ${DEFAULT_GUIDE_LINES}.`
-        }
-      },
-      required: ['path'],
-      additionalProperties: false
-    },
-    execute: async (args) => withToolBoundary(async () => {
-      if (options.enabled?.() === false) {
-        return { output: { error: 'PPT Agent is disabled in Lab settings' }, isError: true }
-      }
-      const requested = stringArg(args.path)
-      if (!requested || isAbsolute(requested) || extname(requested).toLowerCase() !== '.md') {
-        return { output: { error: 'path must be a relative .md file inside the PPT reference directory' }, isError: true }
-      }
-      const toolchain = await requireToolchainDirectory(options)
-      const referenceRoot = resolve(toolchain, 'reference')
-      const target = resolve(referenceRoot, requested)
-      if (!isInside(referenceRoot, target)) {
-        return { output: { error: 'path escapes the PPT reference directory' }, isError: true }
-      }
-      const info = await stat(target)
-      if (!info.isFile() || info.size > MAX_GUIDE_BYTES) {
-        return { output: { error: `guide must be a file no larger than ${MAX_GUIDE_BYTES} bytes` }, isError: true }
-      }
-      const content = await readFile(target, 'utf8')
-      const lines = content.split(/\r?\n/)
-      const startLine = integerArg(args.start_line, 1, Number.MAX_SAFE_INTEGER, 1)
-      const maxLines = integerArg(args.max_lines, 1, MAX_GUIDE_LINES, DEFAULT_GUIDE_LINES)
-      const startIndex = Math.min(startLine - 1, lines.length)
-      const selected = lines.slice(startIndex, startIndex + maxLines)
-      const truncated = startIndex + selected.length < lines.length
-      return {
-        output: {
-          path: requested.replaceAll('\\', '/'),
-          start_line: startIndex + 1,
-          end_line: startIndex + selected.length,
-          total_lines: lines.length,
-          content: selected.join('\n'),
-          truncated,
-          ...(truncated ? { next_line: startIndex + selected.length + 1 } : {})
-        }
-      }
-    })
-  })
-}
-
-function createPptExportTool(
-  options: PptAgentLocalToolOptions,
-  shouldAdvertise: (context: ToolHostContext) => boolean
-): LocalTool {
-  return LocalToolHost.defineTool({
-    name: PPT_EXPORT_TOOL_NAME,
-    description: [
-      'Export a workspace PPTD project to an editable .pptx with Kun\'s bundled offline WASM exporter.',
-      'The tool performs ZIP/OpenXML structure and editability checks, rejects raster-only pages, counts slides, and verifies the requested fade transition before publishing the output.',
-      'It requires no Python, browser, cookie, network access, or arbitrary shell command.'
-    ].join(' '),
-    toolKind: 'file_change',
-    policy: 'auto',
-    sideEffect: 'unknown',
-    effects: {
-      network: false,
-      externalWrite: false,
-      processExecution: true,
-      guiAutomation: false
-    },
-    shouldAdvertise,
-    inputSchema: {
-      type: 'object',
-      properties: {
-        input: {
-          type: 'string',
-          description: 'Workspace-relative deck.pptd path or PPTD project directory.'
-        },
-        output: {
-          type: 'string',
-          description: 'Workspace-relative .pptx destination.'
-        },
-        transition: {
-          type: 'string',
-          enum: ['fade', 'none'],
-          description: 'Per-slide transition. Defaults to fade.'
-        },
-        force: {
-          type: 'boolean',
-          description: 'Replace an existing output file. Defaults to false.'
-        }
-      },
-      required: ['input', 'output'],
-      additionalProperties: false
-    },
-    execute: async (args, context) => withToolBoundary(async () => {
-      if (options.enabled?.() === false) {
-        return { output: { error: 'PPT Agent is disabled in Lab settings' }, isError: true }
-      }
-      const inputArg = stringArg(args.input)
-      const outputArg = stringArg(args.output)
-      if (!inputArg || !outputArg) {
-        return { output: { error: 'input and output are required' }, isError: true }
-      }
-      if (extname(outputArg).toLowerCase() !== '.pptx') {
-        return { output: { error: 'output must end in .pptx' }, isError: true }
-      }
-
-      const input = await resolveWorkspacePath(inputArg, context, { enforceWorkspaceBoundary: true })
-      const output = await resolveWorkspacePath(outputArg, context, { enforceWorkspaceBoundary: true })
-      assertCanWritePath(output.absolutePath, context)
-      const inputInfo = await stat(input.absolutePath)
-      const canonicalInput = await realpath(input.absolutePath)
-      const workspaceRoot = await realpath(input.workspaceRoot)
-      if (!isInside(workspaceRoot, canonicalInput)) {
-        return { output: { error: 'input resolves outside the active workspace' }, isError: true }
-      }
-      if (!inputInfo.isDirectory() && extname(input.absolutePath).toLowerCase() !== '.pptd') {
-        return { output: { error: 'input must be a PPTD project directory or .pptd manifest' }, isError: true }
-      }
-
-      return withFileMutationQueue(output.absolutePath, async () => {
-        if (context.abortSignal.aborted) throw new Error('PPT export aborted before start')
-        if (args.force !== true) {
-          try {
-            await access(output.absolutePath)
-            return { output: { error: 'output already exists; pass force=true to replace it' }, isError: true }
-          } catch {
-            // Expected for a new output path.
-          }
-        }
-
-        const toolchain = await requireToolchainDirectory(options)
-      const exporter = resolve(toolchain, 'scripts', 'local-export', 'export-pptd.mjs')
-      const wasm = resolve(toolchain, 'scripts', 'local-export', 'pptd_wasm_bg.wasm')
-      await Promise.all([access(exporter), access(wasm)])
-      await mkdir(dirname(output.absolutePath), { recursive: true })
-      const temporaryOutput = join(
-        dirname(output.absolutePath),
-        `.${randomUUID()}.${output.absolutePath.split(/[\\/]/).pop()}.tmp.pptx`
-      )
-      assertCanWritePath(temporaryOutput, context)
-      const transition = args.transition === 'none' ? 'none' : 'fade'
-
-      try {
-        const result = await execFileAsync(
-          process.execPath,
-          [
-            exporter,
-            input.absolutePath,
-            '--output',
-            temporaryOutput,
-            '--no-sign',
-            '--local-images-only',
-            '--transition',
-            transition,
-            '--wasm',
-            wasm
-          ],
-          {
-            cwd: inputInfo.isDirectory() ? input.absolutePath : dirname(input.absolutePath),
-            env: {
-              ...process.env,
-              ELECTRON_RUN_AS_NODE: '1',
-              KIMI_COOKIE: '',
-              KIMI_ORIGIN: 'http://127.0.0.1',
-              KUN_PPT_YAML_MODULE: runtimeRequire.resolve('yaml')
-            },
-            timeout: 5 * 60 * 1_000,
-            maxBuffer: MAX_EXPORT_OUTPUT_CHARS * 4,
-            signal: context.abortSignal
-          }
-        )
-        const validation = await validatePptx(temporaryOutput, transition)
-        if (args.force === true) await rm(output.absolutePath, { force: true })
-        await rename(temporaryOutput, output.absolutePath)
-        return {
-          output: {
-            output: output.relativePath,
-            absolutePath: output.absolutePath,
-            exporter: 'local-wasm-patched',
-            slides: validation.slides,
-            editableSlides: validation.editableSlides,
-            fadeTransitions: validation.fadeTransitions,
-            bytes: validation.bytes,
-            transition,
-            validated: true,
-            log: truncate(`${result.stdout ?? ''}${result.stderr ?? ''}`)
-          }
-        }
-        } finally {
-          await rm(temporaryOutput, { force: true }).catch(() => undefined)
-        }
-      })
-    })
-  })
 }
 
 function createPptGeneratePreviewsTool(
@@ -292,6 +90,7 @@ function createPptGeneratePreviewsTool(
     inputSchema: {
       type: 'object',
       properties: {
+        workflowId: { type: 'string', description: 'Host-owned governed PPT workflow id.' },
         parentThreadId: { type: 'string', description: 'Owning parent chat thread id supplied by ppt_agent.' },
         input: { type: 'string', description: 'Workspace-relative deck.pptd path or PPTD project directory.' },
         output: { type: 'string', description: 'Optional workspace-relative preview directory. Defaults to <project>/.kun-ppt-review/previews.' },
@@ -304,61 +103,143 @@ function createPptGeneratePreviewsTool(
       if (options.enabled?.() === false) {
         return { output: { error: 'PPT Agent is disabled in Lab settings' }, isError: true }
       }
+      const scope = assertPptWorkflowBinding({
+        context,
+        actions: ['start', 'revise_previews', 'retry_failed'],
+        previewMode: 'editable'
+      })
       const inputArg = stringArg(args.input)
       const parentThreadId = stringArg(args.parentThreadId)
       if (!parentThreadId || !inputArg) {
         return { output: { error: 'parentThreadId and input are required' }, isError: true }
       }
       const input = await resolveWorkspacePath(inputArg, context, { enforceWorkspaceBoundary: true })
-      const inputInfo = await stat(input.absolutePath)
-      const projectDir = inputInfo.isDirectory() ? input.absolutePath : dirname(input.absolutePath)
-      const workspaceRoot = await realpath(input.workspaceRoot)
-      const canonicalProject = await realpath(projectDir)
-      if (!isInside(workspaceRoot, canonicalProject)) {
-        return { output: { error: 'input resolves outside the active workspace' }, isError: true }
+      const lexicalProject = resolve(input.workspaceRoot, scope.projectDir)
+      const inspectProject = () => assertPptScopedExistingPath({
+        workspaceRoot: input.workspaceRoot, scopeRoot: lexicalProject, targetPath: lexicalProject,
+        label: 'PPT project', expected: 'directory', recursive: true
+      })
+      const inspectInput = () => assertPptScopedExistingPath({
+        workspaceRoot: input.workspaceRoot, scopeRoot: lexicalProject, targetPath: input.absolutePath,
+        label: 'PPT preview input', expected: 'file-or-directory'
+      })
+      const [projectProof, inputProof] = await Promise.all([inspectProject(), inspectInput()])
+      const workspaceRoot = projectProof.physicalWorkspaceRoot
+      const projectDir = projectProof.physicalPath
+      const workflowId = stringArg(args.workflowId)
+      if (requiresPptDesignGovernance(context) && !workflowId) {
+        return { output: { error: 'workflowId is required for governed PPT previews' }, isError: true }
       }
+      const governance = requiresPptDesignGovernance(context)
+        ? await requireCurrentPptGovernance({
+            options,
+            context,
+            workspaceRoot,
+            projectDir,
+            workflowId
+          })
+        : undefined
+      assertPptWorkflowBinding({
+        context,
+        workflowId,
+        projectDir: relative(workspaceRoot, projectDir).replaceAll('\\', '/') || '.',
+        parentThreadId
+      })
       const requestedOutput = stringArg(args.output)
       const output = requestedOutput
         ? await resolveWorkspacePath(requestedOutput, context, { enforceWorkspaceBoundary: true })
         : await resolveWorkspacePath(
-            `${relative(workspaceRoot, projectDir).replaceAll('\\\\', '/') || '.'}/.kun-ppt-review/previews`,
+            `${scope.projectDir.replaceAll('\\', '/')}/.kun-ppt-review/previews`,
             context,
             { enforceWorkspaceBoundary: true }
           )
       assertCanWritePath(output.absolutePath, context)
+      const inspectOutput = (existing = false) => existing
+        ? assertPptScopedExistingPath({
+            workspaceRoot: input.workspaceRoot, scopeRoot: lexicalProject, targetPath: output.absolutePath,
+            label: 'PPT preview output', expected: 'directory', recursive: true
+          })
+        : assertPptScopedMutationPath({
+            workspaceRoot: input.workspaceRoot, scopeRoot: lexicalProject, targetPath: output.absolutePath,
+            label: 'PPT preview output', expected: 'directory'
+          })
+      await inspectOutput()
       return withFileMutationQueue(output.absolutePath, async () => {
+        const [currentProject, currentInput] = await Promise.all([inspectProject(), inspectInput()])
+        const currentOutput = await inspectOutput()
         const toolchain = await requireToolchainDirectory(options)
         const renderer = resolve(toolchain, 'scripts', 'export_images.py')
         await access(renderer)
         const result = await execFileAsync(
           'python3',
-          [renderer, input.absolutePath, '--output', output.absolutePath, '--force'],
+          [renderer, currentInput.physicalPath, '--output', currentOutput.physicalPath, '--force'],
           {
-            cwd: projectDir,
+            cwd: currentProject.physicalPath,
             timeout: 5 * 60 * 1_000,
             maxBuffer: MAX_EXPORT_OUTPUT_CHARS * 8,
             signal: context.abortSignal
           }
         )
         const rendered = parsePreviewRendererOutput(`${result.stdout ?? ''}`)
+        await inspectOutput(true)
         const images = rendered.images
         if (images.length === 0) throw new Error('preview renderer produced no page images')
+        const renderedImages = await Promise.all(images.map((image) => assertPptScopedExistingPath({
+          workspaceRoot: input.workspaceRoot, scopeRoot: output.absolutePath,
+          targetPath: resolve(output.absolutePath, image.image), label: 'PPT rendered preview', expected: 'file'
+        })))
+        const overview = await assertPptScopedExistingPath({
+          workspaceRoot: input.workspaceRoot, scopeRoot: output.absolutePath,
+          targetPath: resolve(output.absolutePath, rendered.overview), label: 'PPT preview overview', expected: 'file'
+        })
+        if (governance && images.length !== governance.snapshot.designPlan.pageStrategy.pageCount) {
+          throw new Error(
+            `preview slide count ${images.length} does not match governed page count ${governance.snapshot.designPlan.pageStrategy.pageCount}`
+          )
+        }
         const existingManifest = await readPptReviewManifest(projectDir)
+        if (
+          governance &&
+          existingManifest &&
+          (
+            existingManifest.workflowId !== workflowId ||
+            existingManifest.childId !== context.threadId ||
+            existingManifest.previewMode !== 'editable' ||
+            (
+              governance.state.reviewedPlanFingerprint === governance.snapshot.designPlan.fingerprint &&
+              !governanceProjectionMatches(existingManifest.governance, governance.snapshot)
+            )
+          )
+        ) {
+          throw new Error('PPT preview manifest does not match the authoritative host governance state')
+        }
         const manifest = createPptReviewManifest({
-          ...(existingManifest ? { workflowId: existingManifest.workflowId } : {}),
+          ...(governance
+            ? { workflowId: governance.state.workflowId }
+            : existingManifest
+              ? { workflowId: existingManifest.workflowId }
+              : {}),
           parentThreadId,
           childId: context.threadId,
           projectDir: relative(workspaceRoot, projectDir).replaceAll('\\\\', '/'),
-          deckTitle: inputInfo.isDirectory() ? input.absolutePath.split(/[\\\\/]/).pop() || 'PPT review' : input.absolutePath.split(/[\\\\/]/).slice(-2, -1)[0] || 'PPT review',
-          styleSpec: existingManifest?.styleSpec ?? {
-            fonts: [],
-            colorTokens: {},
-            typeScale: {},
-            spacingScale: [],
-            backgroundLanguage: 'PPT visual-first review',
-            imageTreatment: 'approved generated assets',
-            chartTreatment: 'native editable PPT elements'
-          },
+          previewMode: 'editable',
+          deckTitle: inputProof.kind === 'directory' ? input.absolutePath.split(/[\\\\/]/).pop() || 'PPT review' : input.absolutePath.split(/[\\\\/]/).slice(-2, -1)[0] || 'PPT review',
+          styleSpec: governance
+            ? {
+                ...designPlanStyleSpec(governance.snapshot.designPlan),
+                fingerprint: governance.snapshot.designPlan.fingerprint
+              }
+            : existingManifest?.styleSpec ?? {
+                fingerprint: 'legacy-preview-style',
+                fonts: [],
+                colorTokens: {},
+                typeScale: {},
+                spacingScale: [],
+                backgroundLanguage: 'PPT visual-first review',
+                imageTreatment: 'approved generated assets',
+                chartTreatment: 'native editable PPT elements'
+              },
+          ...(governance ? { governance: governance.snapshot } : {}),
           slides: images.map((image, index) => ({
             ...(existingManifest?.slides[index] ? { slideId: existingManifest.slides[index].slideId } : {}),
             title: existingManifest?.slides[index]?.title || `P${index + 1}`,
@@ -369,21 +250,33 @@ function createPptGeneratePreviewsTool(
         const nextManifest = {
           ...manifest,
           phase: 'awaiting_review' as const,
+          ...(governance ? { governance: governance.snapshot } : {}),
           slides: manifest.slides.map((slide, index) => ({
             ...slide,
-            previewPath: relative(workspaceRoot, resolve(output.absolutePath, images[index].image)).replaceAll('\\\\', '/'),
+            previewPath: relative(workspaceRoot, renderedImages[index].physicalPath).replaceAll('\\\\', '/'),
             revision: (existingManifest?.slides[index]?.revision ?? 0) + 1,
             status: 'ready' as const,
             attempts: (existingManifest?.slides[index]?.attempts ?? 0) + 1
           }))
         }
+        await assertPptScopedMutationPath({
+          workspaceRoot: input.workspaceRoot, scopeRoot: lexicalProject,
+          targetPath: resolve(lexicalProject, '.kun-ppt-review', 'manifest.json'),
+          label: 'PPT review manifest', expected: 'file'
+        })
         await writePptReviewManifest(projectDir, nextManifest)
+        if (governance) {
+          await writePptDesignGovernance(
+            governance.store,
+            markPptGovernanceReviewed(governance.state, governance.snapshot.designPlan.fingerprint)
+          )
+        }
         const manifestPath = relative(workspaceRoot, resolve(projectDir, '.kun-ppt-review/manifest.json')).replaceAll('\\\\', '/')
         return {
           output: {
             ...toPptReviewBundle(nextManifest, manifestPath),
             output: output.relativePath,
-            overview: relative(workspaceRoot, rendered.overview).replaceAll('\\\\', '/'),
+            overview: relative(workspaceRoot, overview.physicalPath).replaceAll('\\\\', '/'),
             renderer: rendered.exporter,
             reviewBundle: toPptReviewBundle(nextManifest, manifestPath)
           }
@@ -412,7 +305,7 @@ function createPptCreateReviewBundleTool(
     inputSchema: {
       type: 'object',
       properties: {
-        workflowId: { type: 'string', description: 'Existing workflow id required when revising previews.' },
+        workflowId: { type: 'string', description: 'Host-owned workflow id; required for governed creation and all revisions.' },
         parentThreadId: { type: 'string', description: 'Owning parent chat thread id supplied by ppt_agent.' },
         projectDir: { type: 'string', description: 'Workspace-relative directory reserved for this PPT project.' },
         deckTitle: { type: 'string', description: 'Deck title.' },
@@ -443,6 +336,11 @@ function createPptCreateReviewBundleTool(
       if (options.enabled?.() === false) {
         return { output: { error: 'PPT Agent is disabled in Lab settings' }, isError: true }
       }
+      assertPptWorkflowBinding({
+        context,
+        actions: ['start', 'revise_previews', 'retry_failed'],
+        previewMode: 'image-first'
+      })
       const workflowId = stringArg(args.workflowId)
       const parentThreadId = stringArg(args.parentThreadId)
       const projectArg = stringArg(args.projectDir)
@@ -452,27 +350,76 @@ function createPptCreateReviewBundleTool(
       if (!parentThreadId || !projectArg || !deckTitle || pageCount === 0 || slides.length === 0) {
         return { output: { error: 'parentThreadId, projectDir, deckTitle, pageCount, and valid slides are required' }, isError: true }
       }
+      assertPptWorkflowBinding({ context, workflowId, projectDir: projectArg, parentThreadId })
       const project = await resolveWorkspacePath(projectArg, context, { enforceWorkspaceBoundary: true })
       assertCanWritePath(project.absolutePath, context)
-      await mkdir(project.absolutePath, { recursive: true })
-      const workspaceRoot = await realpath(project.workspaceRoot)
-      const projectDir = await realpath(project.absolutePath)
-      if (!isInside(workspaceRoot, projectDir)) {
-        return { output: { error: 'projectDir resolves outside the active workspace' }, isError: true }
+      const inspectProjectMutation = () => assertPptScopedMutationPath({
+        workspaceRoot: project.workspaceRoot, scopeRoot: project.absolutePath,
+        targetPath: project.absolutePath, label: 'PPT project directory', expected: 'directory'
+      })
+      await inspectProjectMutation()
+      const projectProof = await withFileMutationQueue(project.absolutePath, async () => {
+        await inspectProjectMutation()
+        await mkdir(project.absolutePath, { recursive: true })
+        return assertPptScopedExistingPath({
+          workspaceRoot: project.workspaceRoot, scopeRoot: project.absolutePath,
+          targetPath: project.absolutePath, label: 'PPT project', expected: 'directory', recursive: true
+        })
+      })
+      const workspaceRoot = projectProof.physicalWorkspaceRoot
+      const projectDir = projectProof.physicalPath
+      assertPptWorkflowBinding({
+        context,
+        workflowId,
+        projectDir: relative(workspaceRoot, projectDir).replaceAll('\\', '/') || '.',
+        parentThreadId
+      })
+      if (requiresPptDesignGovernance(context) && !workflowId) {
+        return { output: { error: 'workflowId is required for governed PPT review bundles' }, isError: true }
       }
-      const resolvedSlides = await Promise.all(slides.map(async (slide) => {
+      const governance = requiresPptDesignGovernance(context)
+        ? await requireCurrentPptGovernance({ options, context, workspaceRoot, projectDir, workflowId })
+        : undefined
+      if (governance && pageCount !== governance.snapshot.designPlan.pageStrategy.pageCount) {
+        return {
+          output: {
+            error: `pageCount ${pageCount} does not match governed page count ${governance.snapshot.designPlan.pageStrategy.pageCount}`
+          },
+          isError: true
+        }
+      }
+      const imageRoot = await resolveWorkspacePath('.kun/images', context, { enforceWorkspaceBoundary: true })
+      const resolveSlides = () => Promise.all(slides.map(async (slide) => {
         if (!slide.imagePath) return slide
         if (!slide.imagePath.replaceAll('\\', '/').startsWith('.kun/images/')) {
           throw new Error(`imagePath must come from generate_image: ${slide.imagePath}`)
         }
         const image = await resolveWorkspacePath(slide.imagePath, context, { enforceWorkspaceBoundary: true })
-        const info = await stat(image.absolutePath)
-        if (!info.isFile() || info.size === 0 || !/\.(?:png|jpe?g|webp)$/i.test(image.relativePath)) {
+        const proof = await assertPptScopedExistingPath({
+          workspaceRoot: image.workspaceRoot, scopeRoot: imageRoot.absolutePath,
+          targetPath: image.absolutePath, label: 'PPT review image source', expected: 'file'
+        })
+        if (!proof.bytes || !/\.(?:png|jpe?g|webp)$/i.test(image.relativePath)) {
           throw new Error(`slide image must be an existing PNG, JPEG, or WebP file: ${slide.imagePath}`)
         }
         return { ...slide, imagePath: image.relativePath }
       }))
+      const resolvedSlides = await resolveSlides()
+      const manifestTarget = resolve(project.absolutePath, '.kun-ppt-review', 'manifest.json')
+      await assertPptScopedMutationPath({
+        workspaceRoot: project.workspaceRoot, scopeRoot: project.absolutePath,
+        targetPath: manifestTarget, label: 'PPT review manifest', expected: 'file'
+      })
       return withFileMutationQueue(reviewManifestPath(projectDir), async () => {
+        await assertPptScopedExistingPath({
+          workspaceRoot: project.workspaceRoot, scopeRoot: project.absolutePath,
+          targetPath: project.absolutePath, label: 'PPT project', expected: 'directory', recursive: true
+        })
+        await assertPptScopedMutationPath({
+          workspaceRoot: project.workspaceRoot, scopeRoot: project.absolutePath,
+          targetPath: manifestTarget, label: 'PPT review manifest', expected: 'file'
+        })
+        await resolveSlides()
         const existing = await readPptReviewManifest(projectDir)
         if (!existing && resolvedSlides.length !== pageCount) {
           return { output: { error: `initial review must cover all ${pageCount} slides; received ${resolvedSlides.length}` }, isError: true }
@@ -489,23 +436,64 @@ function createPptCreateReviewBundleTool(
         if (existing && (existing.childId !== context.threadId || existing.parentThreadId !== parentThreadId)) {
           return { output: { error: 'PPT review revisions must resume the original child and parent thread' }, isError: true }
         }
-        const styleSummary = stringArg(args.styleSummary)
-        const styleSpec = existing?.styleSpec ?? {
-          fonts: [],
-          colorTokens: {},
-          typeScale: {},
-          spacingScale: [],
-          backgroundLanguage: styleSummary || 'Consistent 16:9 generated slide visual system',
-          imageTreatment: 'full-slide generated visual concepts',
-          chartTreatment: 'native editable PPT elements in the approved deck'
+        if (governance && existing && existing.previewMode !== 'image-first') {
+          return { output: { error: 'PPT image-first review cannot resume an editable preview manifest' }, isError: true }
         }
+        if (
+          governance &&
+          existing &&
+          governance.state.reviewedPlanFingerprint === governance.snapshot.designPlan.fingerprint &&
+          !governanceProjectionMatches(existing.governance, governance.snapshot)
+        ) {
+          return {
+            output: { error: 'PPT review manifest does not match the authoritative host governance state' },
+            isError: true
+          }
+        }
+        const planChanged = Boolean(
+          governance &&
+          existing &&
+          existing.governance?.designPlan.fingerprint !== governance.snapshot.designPlan.fingerprint
+        )
+        if (
+          planChanged &&
+          (
+            resolvedSlides.length !== existing!.slides.length ||
+            resolvedSlides.some((slide) => !slide.slideId) ||
+            existing!.slides.some((slide) => !resolvedSlides.some((update) => update.slideId === slide.slideId))
+          )
+        ) {
+          return {
+            output: { error: 'the design plan changed; create a fresh review revision covering every stable slideId' },
+            isError: true
+          }
+        }
+        const styleSummary = stringArg(args.styleSummary)
+        const styleSpec = governance
+          ? {
+              ...designPlanStyleSpec(governance.snapshot.designPlan),
+              fingerprint: governance.snapshot.designPlan.fingerprint
+            }
+          : existing?.styleSpec ?? {
+              fingerprint: 'legacy-generated-style',
+              fonts: [],
+              colorTokens: {},
+              typeScale: {},
+              spacingScale: [],
+              backgroundLanguage: styleSummary || 'Consistent 16:9 generated slide visual system',
+              imageTreatment: 'full-slide generated visual concepts',
+              chartTreatment: 'native editable PPT elements in the approved deck'
+            }
         if (!existing) {
           const manifest = createPptReviewManifest({
+            ...(governance ? { workflowId: governance.state.workflowId } : {}),
             parentThreadId,
             childId: context.threadId,
             projectDir: relative(workspaceRoot, projectDir).replaceAll('\\', '/') || '.',
+            previewMode: 'image-first',
             deckTitle,
             styleSpec,
+            ...(governance ? { governance: governance.snapshot } : {}),
             slides: resolvedSlides.map((slide) => ({ title: slide.title, prompt: slide.prompt }))
           })
           const nextManifest = {
@@ -514,6 +502,12 @@ function createPptCreateReviewBundleTool(
             slides: manifest.slides.map((slide, index) => reviewSlideRevision(slide, resolvedSlides[index]))
           }
           await writePptReviewManifest(projectDir, nextManifest)
+          if (governance) {
+            await writePptDesignGovernance(
+              governance.store,
+              markPptGovernanceReviewed(governance.state, governance.snapshot.designPlan.fingerprint)
+            )
+          }
           const manifestPath = relative(workspaceRoot, reviewManifestPath(projectDir)).replaceAll('\\', '/')
           return { output: { reviewBundle: toPptReviewBundle(nextManifest, manifestPath), manifestPath } }
         }
@@ -530,12 +524,20 @@ function createPptCreateReviewBundleTool(
         const nextManifest = {
           ...existing,
           phase: 'awaiting_review' as const,
+          ...(governance ? { governance: governance.snapshot, styleSpec } : {}),
+          validatedExport: undefined,
           slides: existing.slides.map((slide) => {
             const update = updates.get(slide.slideId)
-            return update ? reviewSlideRevision(slide, update, existing.styleSpec) : slide
+            return update ? reviewSlideRevision(slide, update, styleSpec) : slide
           })
         }
         await writePptReviewManifest(projectDir, nextManifest)
+        if (governance) {
+          await writePptDesignGovernance(
+            governance.store,
+            markPptGovernanceReviewed(governance.state, governance.snapshot.designPlan.fingerprint)
+          )
+        }
         const manifestPath = relative(workspaceRoot, reviewManifestPath(projectDir)).replaceAll('\\', '/')
         return { output: { reviewBundle: toPptReviewBundle(nextManifest, manifestPath), manifestPath } }
       })

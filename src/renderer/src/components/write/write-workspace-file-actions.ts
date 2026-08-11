@@ -116,27 +116,9 @@ export function createWriteWorkspaceFileActions({
         showExportNotice({ tone: 'error', message: t('writePptSaveFailed') })
         return
       }
-      if (typeof window.kunGui?.ensurePptMaster !== 'function') {
-        showExportNotice({ tone: 'error', message: t('writePptUnavailable') })
-        return
-      }
-
-      const ensured = await window.kunGui.ensurePptMaster()
-      if (!ensured.ok) {
-        showExportNotice({
-          tone: 'error',
-          message: t('writePptInstallFailed', { message: ensured.message })
-        })
-        return
-      }
-
       const latest = useWriteWorkspaceStore.getState()
       if (latest.workspaceRoot !== sourceWorkspace || latest.activeFilePath !== sourcePath) {
         showExportNotice({ tone: 'error', message: t('writePptSourceChanged') })
-        return
-      }
-      if (!await flushSave(sourceWorkspace)) {
-        showExportNotice({ tone: 'error', message: t('writePptSaveFailed') })
         return
       }
 
@@ -147,7 +129,7 @@ export function createWriteWorkspaceFileActions({
     } catch (error) {
       showExportNotice({
         tone: 'error',
-        message: t('writePptInstallFailed', {
+        message: t('writePptUnavailable', {
           message: error instanceof Error ? error.message : String(error)
         })
       })

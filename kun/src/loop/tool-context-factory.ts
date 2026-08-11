@@ -1,5 +1,5 @@
 import type { ArtifactStore } from '../artifacts/artifact-store.js'
-import type { ToolHostContext } from '../ports/tool-host.js'
+import type { PptWorkflowScope, ToolHostContext } from '../ports/tool-host.js'
 import type { ToolDispatchInput } from './turn-execution-types.js'
 import type { InteractiveToolBridge } from './interactive-tool-bridge.js'
 
@@ -10,6 +10,7 @@ export type ToolExecutionContextFactoryDeps = {
   allowedReadPaths?: readonly string[]
   allowedWritePaths?: readonly string[]
   allowedArtifactIds?: readonly string[]
+  pptWorkflowScope?: PptWorkflowScope
   blockedProviderIds?: readonly string[]
   blockedToolNames?: readonly string[]
   blockedSkillIds?: readonly string[]
@@ -66,6 +67,7 @@ export function createToolExecutionContext(
     ...(deps.allowedReadPaths ? { allowedReadPaths: deps.allowedReadPaths } : {}),
     ...(deps.allowedWritePaths ? { allowedWritePaths: deps.allowedWritePaths } : {}),
     ...(deps.allowedArtifactIds ? { allowedArtifactIds: deps.allowedArtifactIds } : {}),
+    ...(deps.pptWorkflowScope ? { pptWorkflowScope: deps.pptWorkflowScope } : {}),
     ...(deps.blockedProviderIds ? { blockedProviderIds: deps.blockedProviderIds } : {}),
     ...(deps.blockedToolNames ? { blockedToolNames: deps.blockedToolNames } : {}),
     ...(deps.blockedSkillIds ? { blockedSkillIds: deps.blockedSkillIds } : {}),

@@ -105,6 +105,28 @@ export type KunActionApprovalGrant = {
   expiresAt: string
 }
 
+/**
+ * Host-minted capability for one managed PPT child execution. Models cannot
+ * supply or persist this scope; PPT-only tools require it at discovery and
+ * execution time so the main agent and unrelated children cannot bypass the
+ * dedicated workflow host.
+ */
+export type PptWorkflowScope = Readonly<{
+  action: 'start' | 'revise_previews' | 'retry_failed' | 'approve_and_build'
+  workflowId: string
+  projectDir: string
+  parentThreadId: string
+  previewMode: 'image-first' | 'editable'
+  reviewContext?: Readonly<{
+    childId: string
+    slides: ReadonlyArray<{
+      slideId: string
+      revision: number
+      annotations?: readonly string[]
+    }>
+  }>
+}>
+
 export type ToolHostContext = {
   threadId: string
   turnId: string
@@ -198,6 +220,8 @@ export type ToolHostContext = {
   kunActionApprovalGrant?: Readonly<KunActionApprovalGrant>
   /** Host-injected active tool-call id. Callers cannot supply or persist it. */
   activeToolCallId?: string
+  /** Managed PPT authority injected only into the dedicated PPT child loop. */
+  pptWorkflowScope?: PptWorkflowScope
   /** Kun runtime data root; used to allow sandbox-safe reads of background shell output files. */
   runtimeDataDir?: string
   /** Store used to offload oversized tool results from model context. */

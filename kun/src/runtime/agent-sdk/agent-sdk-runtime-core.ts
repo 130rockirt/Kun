@@ -293,13 +293,15 @@ export class AgentSdkRuntime {
 
       // A compatible native session already owns prior context. Portable
       // history is sent only when seeding a new generation.
-      const composeTurnText = (): string => composeSdkPromptText({
-        ...(!resumeSessionId && ctx.historyTranscript
-          ? { historyTranscript: ctx.historyTranscript }
-          : {}),
-        userText: ctx.userText,
-        ...(ctx.contextInstructions?.length ? { instructionBlocks: ctx.contextInstructions } : {})
-      })
+      const composeTurnText = (): string => ctx.preserveExactUserPrompt
+        ? ctx.userText
+        : composeSdkPromptText({
+            ...(!resumeSessionId && ctx.historyTranscript
+              ? { historyTranscript: ctx.historyTranscript }
+              : {}),
+            userText: ctx.userText,
+            ...(ctx.contextInstructions?.length ? { instructionBlocks: ctx.contextInstructions } : {})
+          })
       const capabilities = agentSdkCapabilities()
       await this.deps.recordEvent({
         kind: 'delegated_runtime',

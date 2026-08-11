@@ -356,13 +356,39 @@ describe('chat-store-thread-actions queued messages', () => {
       }
     }]
 
-    await expect(actions.sendMessage('Please refine this edit', 'agent')).resolves.toBe(true)
+    const reviewContext = {
+      schemaVersion: 1 as const,
+      id: 'preview-ppt-review-000000000000000000000001',
+      title: 'PPT visual review',
+      summary: 'One reviewed slide',
+      reference: {
+        kind: 'ppt-review',
+        schemaVersion: 1,
+        workflowId: 'ppt_workflow',
+        childId: 'child_ppt',
+        slides: [{ slideId: 'slide-1', revision: 1 }]
+      },
+      revision: 1,
+      generation: 1,
+      attachmentId: `dev-preview-context:${'c'.repeat(64)}`,
+      provenance: {
+        source: 'dev-preview' as const,
+        workspaceId: 'd'.repeat(64)
+      }
+    }
+
+    await expect(actions.sendMessage('Please refine this edit', 'agent', {
+      composerContexts: [reviewContext]
+    })).resolves.toBe(true)
 
     expect(provider.sendUserMessage).toHaveBeenCalledWith(
       'thr_existing',
       'Please refine this edit',
       expect.objectContaining({
-        composerContexts: [expect.objectContaining({ id: 'selection', revision: 4, generation: 2 })]
+        composerContexts: [
+          reviewContext,
+          expect.objectContaining({ id: 'selection', revision: 4, generation: 2 })
+        ]
       })
     )
     expect(state.extensionComposerContexts).toEqual([])
@@ -484,6 +510,50 @@ describe('chat-store-thread-actions queued messages', () => {
       'thr_existing',
       'make a prototype',
       expect.objectContaining({ model: 'MiniMax-M3', providerId: 'minimax-token-plan' })
+    )
+  })
+
+  it('forwards only first-party PPT review contexts from the Write route', async () => {
+    const provider = {
+      sendUserMessage: vi.fn(async () => ({
+        threadId: 'thr_existing', turnId: 'turn_1', userMessageItemId: 'user_1'
+      })),
+      subscribeThreadEvents: vi.fn(async () => undefined)
+    }
+    registryMock.getProvider.mockReturnValue(provider)
+    vi.stubGlobal('window', {
+      kunGui: {
+        getSettings: vi.fn(async () => ({ workspaceRoot: '/workspace/deepseek-gui' })),
+        workspaceDirectoryExists: vi.fn(async () => true),
+        logError: vi.fn(async () => undefined)
+      }
+    })
+    const { actions, state } = buildHarness()
+    state.route = 'write'
+    state.busy = false
+    state.ensureWriteThreadForWorkspace = vi.fn(async () => 'thr_existing') as never
+    const pptReview = {
+      schemaVersion: 1 as const, id: 'ppt-review', title: 'PPT review', summary: 'One slide',
+      reference: { kind: 'ppt-review', workflowId: 'workflow-a', childId: 'child-a', slides: [] },
+      revision: 1, generation: 1,
+      attachmentId: `dev-preview-context:${'a'.repeat(64)}`,
+      provenance: { source: 'dev-preview' as const, workspaceId: 'b'.repeat(64) }
+    }
+    const unrelated = {
+      ...pptReview, id: 'unrelated', attachmentId: `extension-context:${'c'.repeat(64)}`,
+      reference: { kind: 'issue', issueId: 'issue-1' },
+      provenance: {
+        extensionId: 'acme.test', extensionVersion: '1.0.0',
+        viewContributionId: 'extension:acme.test/view', workspaceId: 'b'.repeat(64)
+      }
+    }
+
+    await expect(actions.sendMessage('批准', 'agent', {
+      composerContexts: [pptReview, unrelated]
+    })).resolves.toBe(true)
+
+    expect(provider.sendUserMessage).toHaveBeenCalledWith(
+      'thr_existing', '批准', expect.objectContaining({ composerContexts: [pptReview] })
     )
   })
 

@@ -29,6 +29,7 @@ import {
 import type { EventBus } from '../ports/event-bus.js'
 import type { ThreadStore } from '../ports/thread-store.js'
 import type { TurnService } from '../services/turn-service.js'
+import type { PptWorkflowScope } from '../ports/tool-host.js'
 import { loadWorkspaceAgentProfiles } from './workspace-agents.js'
 import type { SubagentRoutingDocument } from './subagent-router.js'
 import { BUILTIN_SUBAGENT_PROFILES } from './builtin-profiles.js'
@@ -38,6 +39,7 @@ import { AtomicJsonFile, isManagerAtomicJsonPath } from '../extensions/atomic-js
 import { withManagerDataMutex } from '../manager/data-mutex.js'
 import {
   ChildRunRecord,
+  ChildSourceEnvelope,
   ChildSecuritySnapshot,
   isGenericChildLauncher,
   type ChildReturnFormat,
@@ -110,6 +112,9 @@ export class DelegationRuntime extends DelegationRuntimeRun {
     parentThreadId: string
     parentTurnId: string
     prompt: string
+    source?: ChildSourceEnvelope
+    controlPrompt?: string
+    pptWorkflowScope?: PptWorkflowScope
     expectedProfile?: string
     expectedWorkflowId?: string
     expectedResumeCount?: number
@@ -117,6 +122,8 @@ export class DelegationRuntime extends DelegationRuntimeRun {
     requireResumable?: boolean
     /** Current parent boundary; the resumed child receives its intersection with the stored snapshot. */
     security?: ChildSecuritySnapshot
+    /** Trusted deny-list for this resume execution only. */
+    executionBlockedTools?: string[]
     signal: AbortSignal
     onQueued?: (childId: string, profile?: string, metadata?: ChildRunLifecycleMetadata) => Promise<void> | void
     onRunning?: (childId: string, profile?: string, metadata?: ChildRunLifecycleMetadata) => Promise<void> | void
@@ -137,12 +144,16 @@ export class DelegationRuntime extends DelegationRuntimeRun {
     parentThreadId: string
     parentTurnId: string
     prompt: string
+    source?: ChildSourceEnvelope
+    controlPrompt?: string
+    pptWorkflowScope?: PptWorkflowScope
     expectedProfile?: string
     expectedWorkflowId?: string
     expectedResumeCount?: number
     expectedLaunchers?: readonly ChildRunLauncher[]
     requireResumable?: boolean
     security?: ChildSecuritySnapshot
+    executionBlockedTools?: string[]
     signal: AbortSignal
     onQueued?: (childId: string, profile?: string, metadata?: ChildRunLifecycleMetadata) => Promise<void> | void
     onRunning?: (childId: string, profile?: string, metadata?: ChildRunLifecycleMetadata) => Promise<void> | void
@@ -190,6 +201,9 @@ export class DelegationRuntime extends DelegationRuntimeRun {
     const security = input.security
       ? intersectChildSecurity(storedSecurity, ChildSecuritySnapshot.parse(input.security))
       : storedSecurity
+    const source = input.source ? ChildSourceEnvelope.parse(input.source) : undefined
+    const controlPrompt = input.controlPrompt?.trim() || undefined
+    const agentSurface = source?.agentSurface ?? previous.agentSurface
     const workspace = security.sandboxRoot
     if (input.signal.aborted) throw new Error('child resume aborted before start')
 
@@ -197,6 +211,9 @@ export class DelegationRuntime extends DelegationRuntimeRun {
     const record = ChildRunRecord.parse({
       ...previous,
       prompt: input.prompt,
+      source,
+      controlPrompt,
+      agentSurface,
       parentTurnId: input.parentTurnId,
       status: 'queued',
       terminationReason: undefined,
@@ -233,7 +250,12 @@ export class DelegationRuntime extends DelegationRuntimeRun {
         resolvedSystemPrompt: profileSnapshot.systemPrompt,
         resolvedOmitBasePrompt: profileSnapshot.omitBasePrompt === true,
         resolvedAllowedTools: profileSnapshot.allowedTools,
-        resolvedBlockedTools: [...new Set(['delegate_task', 'generate_subagent', ...(profileSnapshot.blockedTools ?? [])])],
+        resolvedBlockedTools: [...new Set([
+          'delegate_task',
+          'generate_subagent',
+          ...(profileSnapshot.blockedTools ?? []),
+          ...(input.executionBlockedTools ?? [])
+        ])],
         resolvedBlockedMcpServers: profileSnapshot.blockedMcpServers,
         resolvedBlockedSkills: profileSnapshot.blockedSkills,
         skillsEnabled: profileSnapshot.skillsEnabled !== false,
@@ -242,6 +264,7 @@ export class DelegationRuntime extends DelegationRuntimeRun {
         sandboxMode: record.sandboxMode,
         approvalReviewer: record.approvalReviewer,
         clientSurface: undefined,
+        agentSurface,
         guiDesignCanvas: false,
         resolvedReasoningEffort: record.reasoningEffort,
         resolvedServiceTier: record.serviceTier,
@@ -253,6 +276,9 @@ export class DelegationRuntime extends DelegationRuntimeRun {
         parentThreadId: record.parentThreadId,
         parentTurnId: input.parentTurnId,
         prompt: input.prompt,
+        source,
+        controlPrompt,
+        pptWorkflowScope: input.pptWorkflowScope,
         resumeChild: true,
         signal: controller.signal
       })

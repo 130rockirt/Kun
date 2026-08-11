@@ -88,6 +88,7 @@ export interface CursorSdkRuntimeFactoryDeps extends Omit<
     | 'allowedReadPaths'
     | 'allowedWritePaths'
     | 'allowedArtifactIds'
+    | 'pptWorkflowScope'
     | 'blockedProviderIds'
     | 'blockedToolNames'
     | 'blockedSkillIds'

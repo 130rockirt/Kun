@@ -457,6 +457,8 @@ export function intersectChildSecurity(
     ...unionOptionalList('blockedProviderIds', stored, current),
     ...unionOptionalList('blockedToolNames', stored, current),
     ...unionOptionalList('blockedSkillIds', stored, current),
+    instructionsEnabled:
+      stored.instructionsEnabled !== false && current.instructionsEnabled !== false,
     memoryEnabled: stored.memoryEnabled && current.memoryEnabled
   })
 }

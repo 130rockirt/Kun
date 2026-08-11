@@ -1,5 +1,6 @@
 export {
   ChildRunRecord,
+  ChildSourceEnvelope,
   FileDelegationStore,
   profileAvailableOnSurface,
   type ChildReturnFormat,

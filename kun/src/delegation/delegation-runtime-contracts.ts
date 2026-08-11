@@ -21,6 +21,13 @@ import {
 import type { RuntimeEventRecorder } from '../services/runtime-event-recorder.js'
 import type { UsageSnapshot } from '../contracts/usage.js'
 import type { TurnClientSurface } from '../contracts/turns.js'
+import type { PptWorkflowScope } from '../ports/tool-host.js'
+import { MAX_TURN_ATTACHMENT_IDS } from '../contracts/attachments.js'
+import {
+  ComposerContextAttachmentSchema,
+  MAX_COMPOSER_CONTEXT_ATTACHMENTS
+} from '../contracts/composer-context.js'
+import { UserFileReferenceSchema } from '../contracts/items.js'
 import {
   ChildRunActivity,
   type ChildRunActivity as ChildRunActivityValue,
@@ -86,6 +93,23 @@ export function isGenericChildLauncher(launcher: ChildRunLauncher | undefined): 
   return launcher === 'delegate_task' || launcher === 'explore_agent'
 }
 
+/**
+ * Exact user-authored turn source forwarded into a child. Host-owned control
+ * instructions deliberately live outside this envelope so they cannot replace
+ * or amend the child user message.
+ */
+export const ChildSourceEnvelope = z.object({
+  prompt: z.string().min(1),
+  displayText: z.string().optional(),
+  attachmentIds: z.array(z.string().min(1)).max(MAX_TURN_ATTACHMENT_IDS).default([]),
+  composerContexts: z.array(ComposerContextAttachmentSchema)
+    .max(MAX_COMPOSER_CONTEXT_ATTACHMENTS)
+    .default([]),
+  fileReferences: z.array(UserFileReferenceSchema).default([]),
+  agentSurface: z.enum(['code', 'write', 'design']).optional()
+}).strict()
+export type ChildSourceEnvelope = z.infer<typeof ChildSourceEnvelope>
+
 export const ChildSecuritySnapshot = z.object({
   /** Immutable parent workspace boundary; also used as the child working directory. */
   sandboxRoot: z.string().min(1),
@@ -100,6 +124,8 @@ export const ChildSecuritySnapshot = z.object({
   blockedProviderIds: z.array(z.string().min(1)).optional(),
   blockedToolNames: z.array(z.string().min(1)).optional(),
   blockedSkillIds: z.array(z.string().min(1)).optional(),
+  /** Whether workspace/global AGENTS instructions may enter this child. */
+  instructionsEnabled: z.boolean().optional(),
   memoryEnabled: z.boolean().default(false)
 }).strict()
 export type ChildSecuritySnapshot = z.infer<typeof ChildSecuritySnapshot>
@@ -158,6 +184,10 @@ export const ChildRunRecord = z.object({
   agentSurface: z.enum(['code', 'write', 'design']).optional(),
   label: z.string().optional(),
   prompt: z.string().min(1),
+  /** Exact active parent turn source, when a first-class host forwards it. */
+  source: ChildSourceEnvelope.optional(),
+  /** Trusted host workflow control kept separate from the user message. */
+  controlPrompt: z.string().min(1).optional(),
   workspace: z.string().optional(),
   model: z.string().optional(),
   /** Resolved provider id the child routed through, when one was selected. */
@@ -261,11 +291,19 @@ export type ChildRunExecutor = (input: {
   /** Resolved subagent profile id (e.g. `general`, `explore`); used for the child thread title. */
   profile?: string
   prompt: string
+  /** Exact active parent turn source; never synthesized by the parent model. */
+  source?: ChildSourceEnvelope
+  /** Trusted host control appended to the child system prompt. */
+  controlPrompt?: string
+  /** Host-minted PPT capability for this execution only. */
+  pptWorkflowScope?: PptWorkflowScope
   workspace?: string
   model?: string
   providerId?: string
   accountId?: string
   clientSurface?: TurnClientSurface
+  /** Product surface inherited from the active parent turn. */
+  agentSurface?: 'code' | 'write' | 'design'
   systemPrompt?: string
   /** When true with a non-empty systemPrompt, skip prepending the Kun base prefix. */
   omitBasePrompt?: boolean

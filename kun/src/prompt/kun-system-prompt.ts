@@ -202,10 +202,10 @@ export function buildToolPreferenceInstruction(
 
   if (pptAgentAvailable) {
     bullets.push(
-      'Use `ppt_agent(action="start")` for any presentation/PPT task: create, edit, replicate, or read a deck. Give it a clear deck goal (topic, content, page count, style, and deliverable). Inspect its structured phase instead of assuming one call always returns a PPTX.'
+      'Use `ppt_agent(action="start")` for presentation/PPT tasks that require native PPTX or do not request another explicit presentation format. When the user explicitly asks for Presentation Studio or `.kun-ppt.html` and its direct extension tools are advertised, keep that HTML workflow separate. Pass only workflow control and a concise UI title. Never rewrite, summarize, supplement, or invent the presentation request in tool arguments: the host forwards the exact active user turn and its attachments to the PPT child. Inspect the structured phase instead of assuming one call always returns a PPTX.'
     )
     bullets.push(
-      'When `ppt_agent` returns `phase="awaiting_review"`, the visual bundle is opened automatically on the parent whiteboard: stop final export, invite the user to review, and retain its childId/workflowId/deliverable. For changes or failed pages, call `ppt_agent(action="revise_previews"|"retry_failed", childId, workflowId, deliverable, reviewContext)`; after explicit approval, call `ppt_agent(action="approve_and_build", childId, workflowId, deliverable)` so the same PPT child builds the editable deliverable. Never replace an active review workflow with a new PPT child.'
+      'When `ppt_agent` returns `phase="awaiting_review"`, the visual bundle is opened automatically on the parent whiteboard: stop final export, invite the user to review, and retain its childId/workflowId. For changes or failed pages, call `ppt_agent(action="revise_previews"|"retry_failed", childId, workflowId)`; after explicit approval, call `ppt_agent(action="approve_and_build", childId, workflowId)` so the same PPT child builds the editable deliverable. Review feedback is taken from the exact active turn and structured canvas context; do not copy it into tool arguments. Never replace an active review workflow with a new PPT child.'
     )
     if (names.has('delegate_task')) {
       bullets.push(

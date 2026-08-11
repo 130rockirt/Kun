@@ -144,9 +144,11 @@ export function createAgentSdkTurnRuntimeDeps(
         .find((item) => item.turnId === turnId && item.kind === 'user_message')
       const userText =
         userItem && 'text' in userItem ? String((userItem as { text?: unknown }).text ?? '') : ''
-      const modelUserText = userItem?.kind === 'user_message'
-        ? userMessageTextWithComposerContexts(userItem)
-        : userText
+      const managedPptScope = deps.allowSdkBuiltins === false &&
+        deps.toolContextBoundary?.pptWorkflowScope !== undefined
+      const modelUserText = managedPptScope || userItem?.kind !== 'user_message'
+        ? userText
+        : userMessageTextWithComposerContexts(userItem)
       const attachmentIds =
         (userItem as { attachmentIds?: string[] } | undefined)?.attachmentIds ?? []
       const images = await resolveImages(threadId, thread.workspace, attachmentIds)
@@ -322,16 +324,18 @@ export function createAgentSdkTurnRuntimeDeps(
       }))
       const bridgedTools = selectBridgeableTools(
         bridgeableTools,
-        graphPolicy || plan.planMode ? { overlap: new Set() } : undefined
+        graphPolicy || plan.planMode || managedPptScope ? { overlap: new Set() } : undefined
       )
 
       // This is the portable rebase handoff. Compatible consecutive turns use
       // the official SDK resume id and do not send this transcript again.
-      const historyTranscript = buildHistoryTranscript(
-        items,
-        turnId,
-        deps.historyTranscriptMaxBytes ?? DEFAULT_SDK_HISTORY_TRANSCRIPT_MAX_BYTES
-      )
+      const historyTranscript = managedPptScope
+        ? ''
+        : buildHistoryTranscript(
+            items,
+            turnId,
+            deps.historyTranscriptMaxBytes ?? DEFAULT_SDK_HISTORY_TRANSCRIPT_MAX_BYTES
+          )
 
       // A plan turn suppresses goal/todo continuation and injects the plan-mode
       // instruction telling the model to call create_plan (now advertised above).
@@ -360,7 +364,7 @@ export function createAgentSdkTurnRuntimeDeps(
         })
       }
 
-      const contextInstructions = [
+      const contextInstructions = managedPptScope ? [] : [
         buildClientSurfaceInstruction(clientSurface),
         ...(thread.additionalWorkspaces?.length
           ? [`Additional workspace roots explicitly added by the user:\n${thread.additionalWorkspaces.map((path) => `- ${JSON.stringify(path)}`).join('\n')}`]
@@ -432,6 +436,7 @@ export function createAgentSdkTurnRuntimeDeps(
         workspace: thread.workspace,
         additionalWorkspaces: thread.additionalWorkspaces,
         userText: modelUserText,
+        ...(managedPptScope ? { preserveExactUserPrompt: true } : {}),
         threadPersona: thread.systemPrompt?.trim() || undefined,
         approvalPolicy,
         sandboxMode,
@@ -442,12 +447,8 @@ export function createAgentSdkTurnRuntimeDeps(
           graphPolicy || planMode || turn?.guiDesignArtifact?.kind === 'svg'
             ? false
             : deps.allowSdkBuiltins ?? true,
-        ...(graphPolicy
-          ? {
-              bridgeKunBuiltinOverlaps: true,
-              graphPhase: graphPolicy.phase
-            }
-          : {}),
+        ...(graphPolicy || managedPptScope ? { bridgeKunBuiltinOverlaps: true } : {}),
+        ...(graphPolicy ? { graphPhase: graphPolicy.phase } : {}),
         ...(turn?.guiDesignArtifact?.kind === 'svg' ? { requireSvgCompletion: true } : {}),
         // Claude Code only accepts Anthropic models; coerce a thread's non-Claude
         // model (e.g. an old deepseek thread now routed to the subscription) to

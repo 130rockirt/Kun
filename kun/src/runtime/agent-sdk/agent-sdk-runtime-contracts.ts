@@ -43,6 +43,8 @@ export interface SdkTurnContext {
   additionalWorkspaces?: readonly string[]
   /** The user's prompt for this turn. */
   userText: string
+  /** Send userText byte-for-byte instead of composing portable context into the user prompt. */
+  preserveExactUserPrompt?: boolean
   /** Thread-level persona appended to the system prompt. */
   threadPersona?: string
   approvalPolicy: ApprovalPolicy

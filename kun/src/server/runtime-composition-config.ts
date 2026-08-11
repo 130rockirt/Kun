@@ -89,6 +89,8 @@ export function createRuntimeConfigController(
     modelClient,
     timedModelClient,
     subagentRouter,
+    antigravityProviderIds,
+    cursorSdkProviderIds,
     resolveCapabilityProviderCredential,
     oauthEncryptor
   } = model
@@ -99,7 +101,9 @@ export function createRuntimeConfigController(
     pruneUnsentAttachments,
     designCanvasProvider,
     taskGraphTool,
-    childToolHost
+    childToolHost,
+    defaultIsAntigravity,
+    defaultIsCursorSdk
   } = services
   const { delegationRuntime } = registryComposition
   const {
@@ -305,7 +309,10 @@ export function createRuntimeConfigController(
 	        ...buildPptMasterLocalTools(),
 	        ...buildPptAgentLocalTools({
 	          enabled: () => nextOptions.lab?.pptAgent?.enabled !== false,
-	          toolchainDirectory: () => process.env.KUN_PPT_TOOLCHAIN_DIR
+	          toolchainDirectory: () => process.env.KUN_PPT_TOOLCHAIN_DIR,
+	          governanceDirectory: () => join(nextOptions.dataDir, 'ppt-governance'),
+	          resolveSourceRequest: async (context) =>
+	            (await turnService.getTurn(context.threadId, context.turnId))?.prompt
 	        })
 	      ]
 	    }
@@ -385,8 +392,13 @@ export function createRuntimeConfigController(
 	          ...nextOptions.lab?.pptAgent,
 	          imageGenAvailable: nextImageGenProviders.available,
 	          imageGenReason: nextImageGenProviders.diagnostics.find((diagnostic) => diagnostic.reason)?.reason,
-	          imageGenSupportsReferenceEdit: protocolSupportsImageEdit(nextOptions.capabilities?.imageGen?.protocol)
-	        })
+	          imageGenSupportsReferenceEdit: protocolSupportsImageEdit(nextOptions.capabilities?.imageGen?.protocol),
+	          toolIncompatibleProviderIds: [
+	            ...new Set([...antigravityProviderIds, ...cursorSdkProviderIds])
+	          ],
+	          defaultProviderLacksManagedTools: defaultIsAntigravity || defaultIsCursorSdk
+	        }),
+	        turnService
 	      ),
 	      ...buildComponentDesignToolProviders(delegationRuntime)
 	    ])
