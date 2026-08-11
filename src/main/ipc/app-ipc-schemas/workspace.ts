@@ -200,9 +200,7 @@ export const workspaceOfficePreviewTargetPayloadSchema = z
   .object({
     path: trimmedString(MAX_PATH_LENGTH),
     workspaceRoot: workspaceRootSchema,
-    expectedSha256: z.string().trim().regex(/^[a-f0-9]{64}$/i).optional(),
-    page: z.number().int().min(1).max(100_000).optional(),
-    sheetIndex: z.number().int().min(0).max(100_000).optional()
+    expectedSha256: z.string().trim().regex(/^[a-f0-9]{64}$/i).optional()
   })
   .strict()
 

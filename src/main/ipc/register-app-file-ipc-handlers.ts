@@ -58,9 +58,9 @@ import {
   readLocalPdfText
 } from '../services/write-pdf-text-service'
 import {
-  readLocalOfficeDocument,
-  readWorkspaceOfficePreview
+  readLocalOfficeDocument
 } from '../services/office-document-service'
+import { readWorkspaceOfficePreview } from '../services/office-workspace-preview-service'
 import {
   resolveOfficeCliBinary
 } from '../officecli-resources'
@@ -406,30 +406,14 @@ export function registerAppFileIpcHandlers(options: RegisterAppIpcHandlersOption
     )
     const resolved = await resolveWorkspaceFile(target)
     if (!resolved.ok) return resolved
-    const binaryPath = resolveOfficeCliBinary({
-      isPackaged: app.isPackaged,
-      resourcesPath: process.resourcesPath,
-      appRoot: app.getAppPath(),
-      explicitPath: process.env.KUN_OFFICECLI_BINARY
-    })
-    if (!binaryPath) {
-      return {
-        ok: false as const,
-        code: 'officecli_unavailable',
-        message: 'Office document support is unavailable because the bundled OfficeCLI binary was not found.'
-      }
-    }
     const abortController = new AbortController()
     const cancelWhenRendererCloses = (): void => abortController.abort()
     event.sender.once('destroyed', cancelWhenRendererCloses)
     try {
       return await readWorkspaceOfficePreview({
         path: resolved.path,
-        expectedSha256: target.expectedSha256,
-        page: target.page,
-        sheetIndex: target.sheetIndex
+        expectedSha256: target.expectedSha256
       }, {
-        binaryPath,
         signal: abortController.signal
       })
     } finally {

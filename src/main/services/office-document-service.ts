@@ -6,7 +6,6 @@ import { tmpdir } from 'node:os'
 import { pathToFileURL } from 'node:url'
 import { app, BrowserWindow } from 'electron'
 import sharp from 'sharp'
-import yauzl from 'yauzl'
 import {
   MAX_RUNTIME_DOCUMENT_SOURCE_BYTES,
   MAX_RUNTIME_DOCUMENT_TEXT_CHARS,
@@ -16,11 +15,12 @@ import {
   officeDocumentPreviewFormatFromName,
   officeDocumentPreviewMimeType,
   type LegacyOfficeDocumentFormat,
+  type OfficeDocumentReadFailure,
+  type OfficeDocumentReadSuccess,
   type LocalOfficeDocumentReadResult,
   type LocalOfficeDocumentTarget,
   type OfficeDocumentFormat,
-  type WorkspaceOfficePreviewResult,
-  type WorkspaceOfficePreviewTarget,
+  type OfficeDocumentPreviewFormat,
   type OfficeDocumentVisualPreview
 } from '../../shared/office-document'
 import {
@@ -39,12 +39,12 @@ import {
   createOfficeDocumentSnapshot,
   type OfficeDocumentSnapshot
 } from './office-document-snapshot'
+import { assertOoxmlPackageType } from './office-document-ooxml'
 
 const OFFICECLI_TIMEOUT_MS = 60_000
 const OFFICECLI_MAX_OUTPUT_BYTES = 2 * 1024 * 1024
 const OFFICECLI_MAX_CONCURRENCY = 2
 const OFFICECLI_VERSION = '1.0.141'
-const OOXML_CONTENT_TYPES_MAX_BYTES = 256 * 1024
 // The runtime's default preview/fallback limit is measured in Base64
 // characters. 384 KiB encodes to exactly 512 KiB, so keep the binary side at
 // or below that decoded ceiling.
@@ -59,7 +59,11 @@ type OfficeCliResult = {
   exitCode: number
 }
 
-type OfficePreviewSelection = Pick<WorkspaceOfficePreviewTarget, 'page' | 'sheetIndex'>
+type OfficePreviewSelection = { page?: number; sheetIndex?: number }
+
+type OfficeDocumentSemanticReadResult =
+  | OfficeDocumentReadSuccess<OfficeDocumentPreviewFormat>
+  | OfficeDocumentReadFailure
 
 export type OfficeDocumentServiceDependencies = {
   binaryPath?: string
@@ -76,12 +80,6 @@ export type OfficeDocumentServiceDependencies = {
   'resolveLibreOfficeBinary' | 'runLibreOffice' | 'temporaryDirectory'
 >
 
-const EXPECTED_MAIN_CONTENT_TYPE: Record<OfficeDocumentFormat, string> = {
-  docx: 'wordprocessingml.document.main+xml',
-  xlsx: 'spreadsheetml.sheet.main+xml',
-  pptx: 'presentationml.presentation.main+xml'
-}
-
 export async function readLocalOfficeDocument(
   target: LocalOfficeDocumentTarget,
   dependencies: OfficeDocumentServiceDependencies = {}
@@ -97,7 +95,7 @@ async function readOfficeDocument(
   dependencies: OfficeDocumentServiceDependencies,
   allowLegacy: boolean,
   previewSelection: OfficePreviewSelection = {}
-): Promise<WorkspaceOfficePreviewResult> {
+): Promise<OfficeDocumentSemanticReadResult> {
   let conversion: LegacyOfficeDocumentConversion | undefined
   let sourceSnapshot: OfficeDocumentSnapshot | undefined
   try {
@@ -260,28 +258,6 @@ async function readOfficeDocument(
   } finally {
     await conversion?.cleanup().catch(() => undefined)
     await sourceSnapshot?.cleanup().catch(() => undefined)
-  }
-}
-
-/**
- * The caller resolves and authorizes workspace paths before invoking this
- * helper. `expectedSha256` makes a stale watcher render explicit instead of
- * accidentally replacing the newest tab content.
- */
-export async function readWorkspaceOfficePreview(
-  target: Pick<WorkspaceOfficePreviewTarget, 'path' | 'expectedSha256' | 'page' | 'sheetIndex'>,
-  dependencies: OfficeDocumentServiceDependencies = {}
-): Promise<WorkspaceOfficePreviewResult> {
-  const result = await readOfficeDocument({ path: target.path }, dependencies, true, {
-    page: target.page,
-    sheetIndex: target.sheetIndex
-  })
-  if (!result.ok || !target.expectedSha256?.trim()) return result
-  if (result.sourceSha256.toLowerCase() === target.expectedSha256.trim().toLowerCase()) return result
-  return {
-    ok: false,
-    code: 'source_changed',
-    message: 'Office document changed before its preview could be prepared.'
   }
 }
 
@@ -590,61 +566,6 @@ function officePreviewCachePath(sourceSha256: string, page?: number, sheetIndex?
     'office-preview',
     `${sourceSha256}${selection}-${OFFICECLI_VERSION}.json`
   )
-}
-
-async function assertOoxmlPackageType(filePath: string, format: OfficeDocumentFormat): Promise<void> {
-  const contentTypes = await readOoxmlContentTypes(filePath)
-  if (!contentTypes.includes(EXPECTED_MAIN_CONTENT_TYPE[format])) {
-    throw new Error(`File content does not match the .${format} OOXML format.`)
-  }
-}
-
-async function readOoxmlContentTypes(filePath: string): Promise<string> {
-  return new Promise<string>((resolve, reject) => {
-    yauzl.open(filePath, { lazyEntries: true, autoClose: true }, (openError, zip) => {
-      if (openError || !zip) {
-        reject(openError ?? new Error('Could not open OOXML package.'))
-        return
-      }
-      let settled = false
-      const finish = (callback: () => void): void => {
-        if (settled) return
-        settled = true
-        callback()
-      }
-      zip.once('error', (error) => finish(() => reject(error)))
-      zip.once('end', () => finish(() => reject(new Error('OOXML package is missing [Content_Types].xml.'))))
-      zip.on('entry', (entry) => {
-        if (entry.fileName !== '[Content_Types].xml') {
-          zip.readEntry()
-          return
-        }
-        if (entry.uncompressedSize > OOXML_CONTENT_TYPES_MAX_BYTES) {
-          finish(() => reject(new Error('OOXML content types manifest is unexpectedly large.')))
-          return
-        }
-        zip.openReadStream(entry, (streamError, stream) => {
-          if (streamError || !stream) {
-            finish(() => reject(streamError ?? new Error('Could not read OOXML content types.')))
-            return
-          }
-          const chunks: Buffer[] = []
-          let total = 0
-          stream.on('data', (chunk: Buffer) => {
-            total += chunk.length
-            if (total > OOXML_CONTENT_TYPES_MAX_BYTES) {
-              stream.destroy(new Error('OOXML content types manifest exceeds the read limit.'))
-              return
-            }
-            chunks.push(chunk)
-          })
-          stream.once('error', (error) => finish(() => reject(error)))
-          stream.once('end', () => finish(() => resolve(Buffer.concat(chunks).toString('utf8'))))
-        })
-      })
-      zip.readEntry()
-    })
-  })
 }
 
 function extractPageCount(raw: string, format: OfficeDocumentFormat): number | undefined {

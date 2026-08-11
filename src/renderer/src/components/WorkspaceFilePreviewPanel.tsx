@@ -109,9 +109,6 @@ export function WorkspaceFilePreviewPanel({
     officeResult,
     officeAgentEditing,
     officeRefreshError,
-    officeNavigation,
-    setOfficePreviewPage,
-    setOfficePreviewSheet,
     previewLease,
     loading,
     setLoading
@@ -605,9 +602,6 @@ export function WorkspaceFilePreviewPanel({
           officeResult={officeResult}
           officeAgentEditing={officeAgentEditing}
           officeRefreshError={officeRefreshError}
-          officeNavigation={officeNavigation}
-          setOfficePreviewPage={setOfficePreviewPage}
-          setOfficePreviewSheet={setOfficePreviewSheet}
           previewLease={previewLease}
           previewKind={previewKind}
           currentFileName={currentFileName}

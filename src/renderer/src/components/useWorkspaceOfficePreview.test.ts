@@ -2,6 +2,7 @@ import { createElement } from 'react'
 import { act, create, type ReactTestRenderer } from 'react-test-renderer'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { WorkspaceOfficePreviewResult } from '@shared/office-document'
+import type { WorkspaceFileChangePayload } from '@shared/workspace-file'
 import type { LiveOfficePreviewDetail } from '../lib/live-office-preview'
 import {
   LIVE_OFFICE_PREVIEW_EVENT,
@@ -27,14 +28,13 @@ function preview(sha: string, text: string): WorkspaceOfficePreviewResult {
     ok: true,
     path: '/repo/reports/brief.docx',
     name: 'brief.docx',
-    format: 'docx',
-    mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    sourceFormat: 'docx',
+    renderFormat: 'docx',
+    viewer: 'word',
     size: 128,
     mtimeMs: 100,
     sourceSha256: sha,
-    documentText: text,
-    truncated: false,
-    sanitizedHtml: `<article>${text}</article>`
+    data: new TextEncoder().encode(text)
   }
 }
 
@@ -54,6 +54,7 @@ describe('useWorkspaceOfficePreview', () => {
   let renderer: ReactTestRenderer
   let readWorkspaceOfficePreview: ReturnType<typeof vi.fn>
   let listeners: Map<string, Set<(event: Event) => void>>
+  let workspaceChangeListener: ((event: WorkspaceFileChangePayload) => void) | undefined
 
   const emit = async (detail: LiveOfficePreviewDetail): Promise<void> => {
     await act(async () => {
@@ -80,6 +81,7 @@ describe('useWorkspaceOfficePreview', () => {
   beforeEach(() => {
     ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
     listeners = new Map()
+    workspaceChangeListener = undefined
     readWorkspaceOfficePreview = vi.fn()
     const addEventListener = (type: string, listener: EventListenerOrEventListenerObject): void => {
       const callback = typeof listener === 'function' ? listener : listener.handleEvent.bind(listener)
@@ -96,7 +98,10 @@ describe('useWorkspaceOfficePreview', () => {
         readWorkspaceOfficePreview,
         watchWorkspaceFile: vi.fn(async () => ({ ok: true, watchId: 'office-watch' })),
         unwatchWorkspaceFile: vi.fn(async () => ({ ok: true })),
-        onWorkspaceFileChanged: vi.fn(() => () => undefined)
+        onWorkspaceFileChanged: vi.fn((listener: (event: WorkspaceFileChangePayload) => void) => {
+          workspaceChangeListener = listener
+          return () => { workspaceChangeListener = undefined }
+        })
       },
       addEventListener,
       removeEventListener,
@@ -116,7 +121,7 @@ describe('useWorkspaceOfficePreview', () => {
       .mockResolvedValueOnce(preview('a'.repeat(64), 'before'))
       .mockResolvedValueOnce({ ok: false, code: 'source_changed', message: 'Source changed during render.' })
     await mount()
-    expect(latestPreview.officeResult).toMatchObject({ ok: true, documentText: 'before' })
+    expect(latestPreview.officeResult).toMatchObject({ ok: true, sourceSha256: 'a'.repeat(64) })
 
     await emit({
       path: 'reports/brief.docx',
@@ -125,7 +130,7 @@ describe('useWorkspaceOfficePreview', () => {
       phase: 'editing'
     })
     expect(latestPreview.officeAgentEditing).toBe(true)
-    expect(latestPreview.officeResult).toMatchObject({ ok: true, documentText: 'before' })
+    expect(latestPreview.officeResult).toMatchObject({ ok: true, sourceSha256: 'a'.repeat(64) })
 
     await emit({
       path: 'reports/brief.docx',
@@ -139,12 +144,10 @@ describe('useWorkspaceOfficePreview', () => {
     expect(readWorkspaceOfficePreview).toHaveBeenLastCalledWith({
       path: 'reports/brief.docx',
       workspaceRoot: '/repo',
-      page: 1,
-      sheetIndex: 0,
       expectedSha256: 'b'.repeat(64)
     })
     expect(latestPreview.officeAgentEditing).toBe(false)
-    expect(latestPreview.officeResult).toMatchObject({ ok: true, documentText: 'before' })
+    expect(latestPreview.officeResult).toMatchObject({ ok: true, sourceSha256: 'a'.repeat(64) })
     expect(latestPreview.officeRefreshError).toBe('Source changed during render.')
   })
 
@@ -169,11 +172,38 @@ describe('useWorkspaceOfficePreview', () => {
     expect(readWorkspaceOfficePreview).toHaveBeenLastCalledWith({
       path: 'reports/brief.docx',
       workspaceRoot: '/repo',
-      page: 1,
-      sheetIndex: 0,
       expectedSha256: 'd'.repeat(64)
     })
-    expect(latestPreview.officeResult).toMatchObject({ ok: true, documentText: 'after' })
+    expect(latestPreview.officeResult).toMatchObject({ ok: true, sourceSha256: 'd'.repeat(64) })
+  })
+
+  it('coalesces signal-only watcher bursts after an atomic or continuous write', async () => {
+    readWorkspaceOfficePreview
+      .mockResolvedValueOnce(preview('a'.repeat(64), 'before'))
+      .mockResolvedValueOnce(preview('b'.repeat(64), 'after'))
+    await mount()
+
+    const changed: WorkspaceFileChangePayload = {
+      ok: true,
+      mode: 'signal',
+      watchId: 'office-watch',
+      workspaceRoot: '/repo',
+      path: 'reports/brief.docx',
+      content: '',
+      size: 129,
+      mtimeMs: 101,
+      truncated: false,
+      changedAt: new Date().toISOString()
+    }
+    await act(async () => {
+      workspaceChangeListener?.(changed)
+      workspaceChangeListener?.({ ...changed, mtimeMs: 102 })
+      workspaceChangeListener?.({ ...changed, mtimeMs: 103 })
+    })
+    await waitForRefresh()
+
+    expect(readWorkspaceOfficePreview).toHaveBeenCalledTimes(2)
+    expect(latestPreview.officeResult).toMatchObject({ ok: true, sourceSha256: 'b'.repeat(64) })
   })
 
   it('discards an older render when a newer Office revision completes first', async () => {
@@ -206,13 +236,13 @@ describe('useWorkspaceOfficePreview', () => {
       currentRender.resolve(preview('c'.repeat(64), 'current'))
       await Promise.resolve()
     })
-    expect(latestPreview.officeResult).toMatchObject({ ok: true, documentText: 'current' })
+    expect(latestPreview.officeResult).toMatchObject({ ok: true, sourceSha256: 'c'.repeat(64) })
 
     await act(async () => {
       staleRender.resolve(preview('b'.repeat(64), 'stale'))
       await Promise.resolve()
     })
-    expect(latestPreview.officeResult).toMatchObject({ ok: true, documentText: 'current' })
+    expect(latestPreview.officeResult).toMatchObject({ ok: true, sourceSha256: 'c'.repeat(64) })
   })
 
   it('inherits an editing state cached before the preview hook mounts', async () => {
@@ -227,7 +257,7 @@ describe('useWorkspaceOfficePreview', () => {
     await mount()
 
     expect(latestPreview.officeAgentEditing).toBe(true)
-    expect(latestPreview.officeResult).toMatchObject({ ok: true, documentText: 'before' })
+    expect(latestPreview.officeResult).toMatchObject({ ok: true, sourceSha256: 'a'.repeat(64) })
   })
 
   it('accepts an absolute committed path after a relative Office edit call', async () => {
@@ -254,31 +284,18 @@ describe('useWorkspaceOfficePreview', () => {
     expect(readWorkspaceOfficePreview).toHaveBeenLastCalledWith({
       path: 'reports/brief.docx',
       workspaceRoot: '/repo',
-      page: 1,
-      sheetIndex: 0,
       expectedSha256: 'b'.repeat(64)
     })
-    expect(latestPreview.officeResult).toMatchObject({ ok: true, documentText: 'after' })
+    expect(latestPreview.officeResult).toMatchObject({ ok: true, sourceSha256: 'b'.repeat(64) })
   })
 
-  it('requests a selected page or worksheet through the preview IPC contract', async () => {
-    readWorkspaceOfficePreview
-      .mockResolvedValueOnce(preview('a'.repeat(64), 'before'))
-      .mockResolvedValueOnce(preview('a'.repeat(64), 'selected'))
+  it('keeps page and worksheet navigation out of the binary IPC contract', async () => {
+    readWorkspaceOfficePreview.mockResolvedValueOnce(preview('a'.repeat(64), 'before'))
     await mount()
 
-    await act(async () => {
-      latestPreview.setOfficePreviewPage(2)
-      latestPreview.setOfficePreviewSheet(1)
-      await Promise.resolve()
-      await Promise.resolve()
-    })
-
-    expect(readWorkspaceOfficePreview).toHaveBeenLastCalledWith({
+    expect(readWorkspaceOfficePreview).toHaveBeenCalledWith({
       path: 'reports/brief.docx',
-      workspaceRoot: '/repo',
-      page: 2,
-      sheetIndex: 1
+      workspaceRoot: '/repo'
     })
   })
 })

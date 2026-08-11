@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { createWriteStream } from 'node:fs'
-import { access, mkdtemp, readFile, rename, rm, truncate, writeFile } from 'node:fs/promises'
+import { access, mkdir, mkdtemp, readFile, rm, truncate, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -13,9 +13,9 @@ import {
 } from '../../shared/office-document'
 import {
   isBenignOoxmlSchemaFailure,
-  readLocalOfficeDocument,
-  readWorkspaceOfficePreview
+  readLocalOfficeDocument
 } from './office-document-service'
+import { readWorkspaceOfficePreview } from './office-workspace-preview-service'
 import {
   LIBREOFFICE_UNAVAILABLE_MESSAGE,
   type LegacyOfficeDocumentConversionDependencies
@@ -51,6 +51,22 @@ async function ooxmlFixture(
       .once('error', rejectWrite)
     zip.end()
   })
+  return filePath
+}
+
+async function legacyFixture(extension: LegacyOfficeDocumentFormat): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), 'kun-office-legacy-'))
+  roots.push(root)
+  const filePath = join(root, `fixture.${extension}`)
+  const marker = {
+    doc: 'WordDocument',
+    xls: 'Workbook',
+    ppt: 'PowerPoint Document'
+  }[extension]
+  const source = Buffer.alloc(2_048)
+  Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]).copy(source)
+  Buffer.from(`${marker}\0`, 'utf16le').copy(source, 512)
+  await writeFile(filePath, source)
   return filePath
 }
 
@@ -107,75 +123,77 @@ describe('Office document intake', () => {
     expect(renderHtml).toHaveBeenCalledWith(expect.stringContaining('<body>Workbook</body>'))
   })
 
-  it('uses OfficeCLI page render flags for a selected stable preview', async () => {
+  it('returns modern workspace bytes without invoking OfficeCLI', async () => {
     const docxPath = await ooxmlFixture('docx')
     const pptxPath = await ooxmlFixture('pptx')
-    const runOfficeCli = vi.fn(async (args: string[]) => {
-      if (args[0] === 'validate') return { stdout: '{"valid":true}', stderr: '', exitCode: 0 }
-      if (args[2] === 'stats') {
-        return {
-          stdout: args[1]?.endsWith('.docx') ? '{"pageCount":4}' : '{"slideCount":5}',
-          stderr: '',
-          exitCode: 0
-        }
-      }
-      if (args[2] === 'html') return { stdout: '<html><body>Preview</body></html>', stderr: '', exitCode: 0 }
-      return { stdout: 'Document content', stderr: '', exitCode: 0 }
-    })
-    const renderHtml = vi.fn(async () => ({
-      dataBase64: Buffer.from('preview').toString('base64'),
-      mimeType: 'image/webp' as const,
-      byteSize: 7
-    }))
 
-    const docx = await readWorkspaceOfficePreview({ path: docxPath, page: 3 }, { runOfficeCli, renderHtml })
-    const pptx = await readWorkspaceOfficePreview({ path: pptxPath, page: 4 }, { runOfficeCli, renderHtml })
+    const docx = await readWorkspaceOfficePreview({ path: docxPath })
+    const pptx = await readWorkspaceOfficePreview({ path: pptxPath })
 
-    expect(docx).toMatchObject({ ok: true, pageCount: 4, previewSelection: { page: 3 } })
-    expect(pptx).toMatchObject({ ok: true, pageCount: 5, previewSelection: { page: 4 } })
-    const commands = runOfficeCli.mock.calls.map(([args]) => [args[0], args[2], ...args.slice(3)])
-    expect(commands).toContainEqual(['view', 'html', '--page', '3'])
-    expect(commands).toContainEqual(['view', 'html', '--page', '4'])
+    expect(docx).toMatchObject({ ok: true, sourceFormat: 'docx', renderFormat: 'docx', viewer: 'word' })
+    expect(pptx).toMatchObject({ ok: true, sourceFormat: 'pptx', renderFormat: 'pptx', viewer: 'presentation' })
+    if (docx.ok) expect(Buffer.from(docx.data)).toEqual(await readFile(docxPath))
+    if (pptx.ok) expect(Buffer.from(pptx.data)).toEqual(await readFile(pptxPath))
   })
 
-  it('exposes and statically selects OfficeCLI worksheet tabs without enabling scripts', async () => {
+  it('returns XLSX bytes for browser-side worksheet navigation', async () => {
     const filePath = await ooxmlFixture('xlsx')
-    const runOfficeCli = vi.fn(async (args: string[]) => {
-      if (args[0] === 'validate') return { stdout: '{"valid":true}', stderr: '', exitCode: 0 }
-      if (args[2] === 'stats') return { stdout: '{"sheetCount":2}', stderr: '', exitCode: 0 }
-      if (args[2] === 'html') {
-        return {
-          stdout: [
-            '<html><head></head><body><div class="sheet-content active" data-sheet="0">Summary</div>',
-            '<div class="sheet-content" data-sheet="1">Data</div>',
-            '<div class="sheet-tabs"><div class="sheet-tab active" data-sheet="0" onclick="switchSheet(0)">Summary</div>',
-            '<div class="sheet-tab" data-sheet="1" onclick="switchSheet(1)">Data</div></div><script>switchSheet()</script></body></html>'
-          ].join(''),
-          stderr: '',
-          exitCode: 0
-        }
-      }
-      return { stdout: 'Sheet content', stderr: '', exitCode: 0 }
-    })
-
-    const result = await readWorkspaceOfficePreview({ path: filePath, sheetIndex: 1 }, {
-      runOfficeCli,
-      renderHtml: vi.fn(async () => ({
-        dataBase64: Buffer.from('preview').toString('base64'),
-        mimeType: 'image/webp' as const,
-        byteSize: 7
-      }))
-    })
+    const result = await readWorkspaceOfficePreview({ path: filePath })
 
     expect(result).toMatchObject({
       ok: true,
-      sheetNames: ['Summary', 'Data'],
-      previewSelection: { sheetIndex: 1 }
+      sourceFormat: 'xlsx',
+      renderFormat: 'xlsx',
+      viewer: 'spreadsheet'
     })
-    if (!result.ok) return
-    expect(result.sanitizedHtml).toContain('data-kun-office-sheet="1"')
-    expect(result.sanitizedHtml).toContain('.sheet-content[data-sheet="1"]{display:block!important}')
-    expect(result.sanitizedHtml).not.toMatch(/<script|onclick=/i)
+  })
+
+  it('rejects empty, oversized, non-file, and disguised workspace sources', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-office-invalid-'))
+    roots.push(root)
+    const empty = join(root, 'empty.xlsx')
+    const oversized = join(root, 'large.pptx')
+    const disguised = join(root, 'disguised.docx')
+    const directory = join(root, 'directory.docx')
+    await writeFile(empty, '')
+    await writeFile(disguised, 'not an OOXML package')
+    await writeFile(oversized, 'x')
+    await truncate(oversized, MAX_RUNTIME_DOCUMENT_SOURCE_BYTES + 1)
+    await mkdir(directory)
+
+    await expect(readWorkspaceOfficePreview({ path: empty })).resolves.toMatchObject({
+      ok: false,
+      code: 'empty_file'
+    })
+    await expect(readWorkspaceOfficePreview({ path: oversized })).resolves.toMatchObject({
+      ok: false,
+      code: 'file_too_large'
+    })
+    await expect(readWorkspaceOfficePreview({ path: directory })).resolves.toMatchObject({
+      ok: false,
+      code: 'not_a_file'
+    })
+    await expect(readWorkspaceOfficePreview({ path: disguised })).resolves.toMatchObject({
+      ok: false,
+      code: 'invalid_office_document'
+    })
+  })
+
+  it('reports password-protected OOXML compound packages explicitly', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-office-encrypted-'))
+    roots.push(root)
+    const filePath = join(root, 'protected.docx')
+    const source = Buffer.alloc(2_048)
+    Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]).copy(source)
+    Buffer.from('EncryptedPackage\0', 'utf16le').copy(source, 512)
+    Buffer.from('EncryptionInfo\0', 'utf16le').copy(source, 1_024)
+    await writeFile(filePath, source)
+
+    await expect(readWorkspaceOfficePreview({ path: filePath })).resolves.toEqual({
+      ok: false,
+      code: 'encrypted_office_document',
+      message: 'Password-protected or encrypted Office documents cannot be previewed.'
+    })
   })
 
   it('rejects an OOXML package whose declared content does not match its extension', async () => {
@@ -341,16 +359,11 @@ describe('Office document intake', () => {
   })
 
   it('returns a stable, actionable error when legacy preview conversion lacks LibreOffice', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'kun-office-legacy-'))
-    roots.push(root)
-    const filePath = join(root, 'legacy.doc')
-    const original = Buffer.from('legacy Office source')
-    await writeFile(filePath, original)
-    const runOfficeCli = vi.fn()
+    const filePath = await legacyFixture('doc')
+    const original = await readFile(filePath)
 
     const result = await readWorkspaceOfficePreview({ path: filePath }, {
-      resolveLibreOfficeBinary: () => undefined,
-      runOfficeCli
+      resolveLibreOfficeBinary: () => undefined
     })
 
     expect(result).toEqual({
@@ -359,15 +372,11 @@ describe('Office document intake', () => {
       message: LIBREOFFICE_UNAVAILABLE_MESSAGE
     })
     expect(await readFile(filePath)).toEqual(original)
-    expect(runOfficeCli).not.toHaveBeenCalled()
   })
 
   it('renders legacy sources from a temporary OOXML copy without modifying the source', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'kun-office-legacy-'))
-    roots.push(root)
-    const legacyPath = join(root, 'legacy.doc')
-    const original = Buffer.from('legacy Office source')
-    await writeFile(legacyPath, original)
+    const legacyPath = await legacyFixture('doc')
+    const original = await readFile(legacyPath)
     const convertedPath = await ooxmlFixture('docx')
     const cleanup = vi.fn(async () => undefined)
     const convertLegacyDocument = vi.fn(async (
@@ -381,20 +390,15 @@ describe('Office document intake', () => {
     }))
 
     const result = await readWorkspaceOfficePreview({ path: legacyPath }, {
-      convertLegacyDocument,
-      runOfficeCli: successfulRun(),
-      renderHtml: vi.fn(async () => ({
-        dataBase64: Buffer.from('preview').toString('base64'),
-        mimeType: 'image/webp' as const,
-        byteSize: 7
-      }))
+      convertLegacyDocument
     })
 
     expect(result).toMatchObject({
       ok: true,
       path: legacyPath,
-      format: 'doc',
-      mimeType: 'application/msword',
+      sourceFormat: 'doc',
+      renderFormat: 'docx',
+      viewer: 'word',
       convertedFromLegacy: true
     })
     expect(convertLegacyDocument).toHaveBeenCalledWith(
@@ -409,44 +413,52 @@ describe('Office document intake', () => {
     if (snapshotPath) await expect(access(snapshotPath)).rejects.toThrow()
   })
 
-  it('renders from an immutable snapshot when the source is replaced mid-render', async () => {
-    const filePath = await ooxmlFixture('xlsx')
-    const source = await readFile(filePath)
-    const replacement = Buffer.from('replacement written after the source snapshot')
-    const replacementPath = `${filePath}.replacement`
-    let snapshotPath = ''
-    const runOfficeCli = vi.fn(async (args: string[]) => {
-      const renderPath = args[1]
-      if (!snapshotPath) snapshotPath = renderPath ?? ''
-      expect(renderPath).toBe(snapshotPath)
-      if (args[0] === 'validate') {
-        await writeFile(replacementPath, replacement)
-        await rename(replacementPath, filePath)
-        return { stdout: '{"valid":true}', stderr: '', exitCode: 0 }
-      }
-      if (args[2] === 'stats') return { stdout: '{"sheetCount":1}', stderr: '', exitCode: 0 }
-      if (args[2] === 'html') return { stdout: '<html><body>Snapshot</body></html>', stderr: '', exitCode: 0 }
-      return { stdout: 'Snapshot semantic text', stderr: '', exitCode: 0 }
+  it('maps PPT to PPTX and cleans conversion resources when converted validation fails', async () => {
+    const legacyPath = await legacyFixture('ppt')
+    const original = await readFile(legacyPath)
+    const invalidConvertedPath = await ooxmlFixture('xlsx')
+    const cleanup = vi.fn(async () => undefined)
+    const convertLegacyDocument = vi.fn(async () => ({
+      path: invalidConvertedPath,
+      format: 'pptx' as const,
+      cleanup
+    }))
+
+    const result = await readWorkspaceOfficePreview({ path: legacyPath }, {
+      convertLegacyDocument
     })
 
+    expect(result).toMatchObject({
+      ok: false,
+      code: 'invalid_office_document',
+      message: expect.stringContaining('does not match the .pptx')
+    })
+    expect(convertLegacyDocument).toHaveBeenCalledWith(
+      expect.stringContaining('kun-office-source-'),
+      'ppt',
+      expect.any(Object)
+    )
+    expect(cleanup).toHaveBeenCalledTimes(1)
+    expect(await readFile(legacyPath)).toEqual(original)
+  })
+
+  it('passes legacy XLS bytes directly to the spreadsheet viewer', async () => {
+    const filePath = await legacyFixture('xls')
+    const source = await readFile(filePath)
+    const resolveLibreOfficeBinary = vi.fn()
+
     const result = await readWorkspaceOfficePreview({ path: filePath }, {
-      runOfficeCli,
-      renderHtml: vi.fn(async () => ({
-        dataBase64: Buffer.from('preview').toString('base64'),
-        mimeType: 'image/webp' as const,
-        byteSize: 7
-      }))
+      resolveLibreOfficeBinary
     })
 
     expect(result).toMatchObject({
       ok: true,
-      sourceSha256: createHash('sha256').update(source).digest('hex'),
-      documentText: 'Snapshot semantic text'
+      sourceFormat: 'xls',
+      renderFormat: 'xls',
+      viewer: 'spreadsheet'
     })
-    expect(snapshotPath).toContain('kun-office-source-')
-    expect(snapshotPath).not.toBe(filePath)
-    expect(await readFile(filePath)).toEqual(replacement)
-    await expect(access(snapshotPath)).rejects.toThrow()
+    if (result.ok) expect(Buffer.from(result.data)).toEqual(source)
+    expect(resolveLibreOfficeBinary).not.toHaveBeenCalled()
   })
 
   it('rejects a workspace preview that was rendered from a stale source SHA', async () => {
@@ -454,13 +466,6 @@ describe('Office document intake', () => {
     const result = await readWorkspaceOfficePreview({
       path: filePath,
       expectedSha256: '0'.repeat(64)
-    }, {
-      runOfficeCli: successfulRun(),
-      renderHtml: vi.fn(async () => ({
-        dataBase64: Buffer.from('preview').toString('base64'),
-        mimeType: 'image/webp' as const,
-        byteSize: 7
-      }))
     })
 
     expect(result).toEqual({

@@ -41,9 +41,6 @@ type WorkspaceFilePreviewBodyProps = {
   officeResult: WorkspaceOfficePreviewResult | null
   officeAgentEditing: boolean
   officeRefreshError: string | null
-  officeNavigation: { page: number; sheetIndex: number }
-  setOfficePreviewPage: (page: number) => void
-  setOfficePreviewSheet: (sheetIndex: number) => void
   previewLease: WorkspacePreviewLeaseResult | null
   previewKind: PreviewKind
   currentFileName: string
@@ -86,9 +83,6 @@ export function WorkspaceFilePreviewBody(props: WorkspaceFilePreviewBodyProps): 
     officeResult,
     officeAgentEditing,
     officeRefreshError,
-    officeNavigation,
-    setOfficePreviewPage,
-    setOfficePreviewSheet,
     previewLease,
     previewKind,
     currentFileName,
@@ -170,14 +164,9 @@ export function WorkspaceFilePreviewBody(props: WorkspaceFilePreviewBodyProps): 
           </div>
         ) : officeResult?.ok ? (
           <WorkspaceOfficePreview
-            t={t}
             result={officeResult}
-            fileName={currentFileName}
             loading={loading || officeAgentEditing}
             refreshError={officeRefreshError}
-            navigation={officeNavigation}
-            onPageChange={setOfficePreviewPage}
-            onSheetChange={setOfficePreviewSheet}
           />
         ) : previewLease?.ok && previewKind === 'audio' ? (
           <div className="flex min-h-0 flex-1 items-center justify-center p-6">

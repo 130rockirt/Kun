@@ -62,10 +62,7 @@ export function useWorkspaceFilePreviewLoad({
     officeResult,
     officeLoading,
     officeAgentEditing,
-    officeRefreshError,
-    officeNavigation,
-    setOfficePreviewPage,
-    setOfficePreviewSheet
+    officeRefreshError
   } = useWorkspaceOfficePreview({
     target,
     workspaceRoot,
@@ -245,9 +242,6 @@ export function useWorkspaceFilePreviewLoad({
     officeResult,
     officeAgentEditing,
     officeRefreshError,
-    officeNavigation,
-    setOfficePreviewPage,
-    setOfficePreviewSheet,
     previewLease,
     loading: previewKind === 'office' ? officeLoading : loading,
     setLoading

@@ -17,7 +17,7 @@ function SharedModelConnectionsLifecycle(): null {
     let disposed = false
     let revision = 0
     let modelCatalogLoaded = false
-    let timer: ReturnType<typeof window.setTimeout> | undefined
+    let timer: number | undefined
     const poll = async (): Promise<void> => {
       try {
         const previousRevision = revision

@@ -154,7 +154,7 @@ export function useVoiceDictation({
   const analyserRef = useRef<AnalyserNode | null>(null)
   const levelDataRef = useRef<Uint8Array<ArrayBuffer> | null>(null)
   const stopIntentRef = useRef<VoiceDictationIntent>('insert')
-  const maxDurationTimerRef = useRef<ReturnType<typeof window.setTimeout> | null>(null)
+  const maxDurationTimerRef = useRef<number | null>(null)
   const startedAtRef = useRef(0)
   const onTextRef = useRef(onText)
   const mountedRef = useRef(true)

@@ -48,7 +48,10 @@ const officeCliResourceMocks = vi.hoisted(() => ({
 }))
 
 vi.mock('../services/office-document-service', () => ({
-  readLocalOfficeDocument: vi.fn(),
+  readLocalOfficeDocument: vi.fn()
+}))
+
+vi.mock('../services/office-workspace-preview-service', () => ({
   readWorkspaceOfficePreview: officeDocumentServiceMocks.readWorkspaceOfficePreview
 }))
 
@@ -287,17 +290,16 @@ describe('registerAppIpcHandlers workspace and MCP', () => {
       ok: true as const,
       path: resolvedTarget,
       name: 'report.docx',
-      format: 'docx' as const,
-      mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      sourceFormat: 'docx' as const,
+      renderFormat: 'docx' as const,
+      viewer: 'word' as const,
       size: 21,
       mtimeMs: 1,
       sourceSha256: 'b'.repeat(64),
-      documentText: 'Preview text',
-      truncated: false
+      data: new Uint8Array([1, 2, 3])
     }
 
     try {
-      officeCliResourceMocks.resolveOfficeCliBinary.mockReturnValue('/tmp/officecli')
       officeDocumentServiceMocks.readWorkspaceOfficePreview.mockResolvedValue(preview)
       registerAppIpcHandlers(registerOptions({
         getMainWindow: () => ({
@@ -309,21 +311,18 @@ describe('registerAppIpcHandlers workspace and MCP', () => {
       const payload = {
         path: 'report.docx',
         workspaceRoot: temp,
-        expectedSha256: 'a'.repeat(64),
-        page: 2,
-        sheetIndex: 1
+        expectedSha256: 'a'.repeat(64)
       }
 
       await expect(handler({ sender, senderFrame: mainFrame }, payload)).resolves.toEqual(preview)
       expect(officeDocumentServiceMocks.readWorkspaceOfficePreview).toHaveBeenCalledWith(
         {
           path: resolvedTarget,
-          expectedSha256: payload.expectedSha256,
-          page: payload.page,
-          sheetIndex: payload.sheetIndex
+          expectedSha256: payload.expectedSha256
         },
-        expect.objectContaining({ binaryPath: '/tmp/officecli' })
+        expect.not.objectContaining({ binaryPath: expect.anything() })
       )
+      expect(officeCliResourceMocks.resolveOfficeCliBinary).not.toHaveBeenCalled()
       const dependencies = officeDocumentServiceMocks.readWorkspaceOfficePreview.mock.calls[0]?.[1] as {
         signal?: AbortSignal
       }

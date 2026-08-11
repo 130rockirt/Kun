@@ -54,15 +54,11 @@ export type LocalOfficeDocumentTarget = {
 export type WorkspaceOfficePreviewTarget = {
   path: string
   workspaceRoot: string
-  /** Reject a completed preview when it was rendered from an older source. */
+  /** Reject a completed read when it came from an older source. */
   expectedSha256?: string
-  /** One-based Word page or PowerPoint slide selected for the preview. */
-  page?: number
-  /** Zero-based worksheet selected from an OfficeCLI workbook HTML preview. */
-  sheetIndex?: number
 }
 
-type OfficeDocumentReadSuccess<Format extends OfficeDocumentPreviewFormat> = {
+export type OfficeDocumentReadSuccess<Format extends OfficeDocumentPreviewFormat> = {
   ok: true
   path: string
   name: string
@@ -92,20 +88,37 @@ type OfficeDocumentReadSuccess<Format extends OfficeDocumentPreviewFormat> = {
   validationWarning?: string
 }
 
-type OfficeDocumentReadFailure = { ok: false; code?: string; message: string }
+export type OfficeDocumentReadFailure = { ok: false; code?: string; message: string }
 
 /** Existing direct attachment reader: intentionally modern OOXML only. */
 export type LocalOfficeDocumentReadResult =
   | OfficeDocumentReadSuccess<OfficeDocumentFormat>
   | OfficeDocumentReadFailure
 
-/**
- * Workspace previews extend the direct reader with legacy-format support. The
- * separate name keeps the workspace-bounded IPC contract distinct from the
- * modern-only attachment ingestion API.
- */
+export type WorkspaceOfficeRenderFormat = OfficeDocumentFormat | 'xls'
+export type WorkspaceOfficeViewer = 'word' | 'spreadsheet' | 'presentation'
+
+export type WorkspaceOfficePreviewSuccess = {
+  ok: true
+  path: string
+  name: string
+  /** Original on-disk format. */
+  sourceFormat: OfficeDocumentPreviewFormat
+  /** Format consumed by the browser-side viewer. */
+  renderFormat: WorkspaceOfficeRenderFormat
+  viewer: WorkspaceOfficeViewer
+  size: number
+  mtimeMs: number
+  sourceSha256: string
+  /** Structured-clone binary payload; never a renderer-readable file URL. */
+  data: Uint8Array
+  /** Present only when DOC/PPT was rendered from a private converted copy. */
+  convertedFromLegacy?: true
+}
+
+/** Workspace-only binary preview contract, separate from attachment intake. */
 export type WorkspaceOfficePreviewResult =
-  | OfficeDocumentReadSuccess<OfficeDocumentPreviewFormat>
+  | WorkspaceOfficePreviewSuccess
   | OfficeDocumentReadFailure
 
 export const OFFICE_DOCUMENT_MIME_TYPES: Record<OfficeDocumentFormat, string> = {

@@ -41,8 +41,6 @@ export function useWorkspaceOfficePreview({
   const [loading, setLoading] = useState(false)
   const [agentEditing, setAgentEditing] = useState(false)
   const [refreshError, setRefreshError] = useState<string | null>(null)
-  const [page, setPage] = useState(1)
-  const [sheetIndex, setSheetIndex] = useState(0)
   const requestIdRef = useRef(0)
   const previousTargetKeyRef = useRef('')
   const officeResultRef = useRef<WorkspaceOfficePreviewResult | null>(null)
@@ -70,8 +68,6 @@ export function useWorkspaceOfficePreview({
       setOfficeResult(null)
       setRefreshError(null)
       setAgentEditing(false)
-      setPage(1)
-      setSheetIndex(0)
     }
 
     let disposed = false
@@ -90,8 +86,6 @@ export function useWorkspaceOfficePreview({
         const next = await window.kunGui.readWorkspaceOfficePreview({
           path: readTarget.path,
           workspaceRoot: readTarget.workspaceRoot,
-          page,
-          sheetIndex,
           ...(expectedSha ? { expectedSha256: expectedSha } : {})
         })
         if (disposed || requestId !== requestIdRef.current) return
@@ -197,23 +191,12 @@ export function useWorkspaceOfficePreview({
       removeWatchListener()
       if (watchId) void window.kunGui.unwatchWorkspaceFile(watchId)
     }
-  }, [enabled, page, sheetIndex, target, workspaceRoot])
-
-  useEffect(() => {
-    if (!officeResult?.ok || !officeResult.pageCount) return
-    setPage((current) => Math.min(current, officeResult.pageCount ?? current))
-    if (officeResult.sheetNames?.length) {
-      setSheetIndex((current) => Math.min(current, officeResult.sheetNames?.length ?? current))
-    }
-  }, [officeResult])
+  }, [enabled, target, workspaceRoot])
 
   return {
     officeResult,
     officeLoading: loading,
     officeAgentEditing: agentEditing,
-    officeRefreshError: refreshError,
-    officeNavigation: { page, sheetIndex },
-    setOfficePreviewPage: (nextPage: number) => setPage(Math.max(1, Math.floor(nextPage))),
-    setOfficePreviewSheet: (nextSheetIndex: number) => setSheetIndex(Math.max(0, Math.floor(nextSheetIndex)))
+    officeRefreshError: refreshError
   }
 }

@@ -14,7 +14,7 @@ const LIBREOFFICE_MAX_OUTPUT_BYTES = 256 * 1024
 
 export const LIBREOFFICE_UNAVAILABLE_CODE = 'libreoffice_unavailable'
 export const LIBREOFFICE_UNAVAILABLE_MESSAGE =
-  'LibreOffice is required to preview legacy .doc, .xls, and .ppt files. Install LibreOffice or set KUN_LIBREOFFICE_BINARY.'
+  'LibreOffice is required to preview legacy .doc and .ppt files. Install LibreOffice or set KUN_LIBREOFFICE_BINARY.'
 
 export type LibreOfficeRunResult = {
   stdout: string
