@@ -10,7 +10,11 @@ import {
   writeJoinPath,
   writeRelativeToWorkspace
 } from '../../write/write-workspace-store'
-import { writeDocumentKey } from '../../write/write-editor-layout'
+import {
+  isWriteEditorLayoutSplit,
+  writeDocumentKey,
+  writeEditorGroupFlex
+} from '../../write/write-editor-layout'
 import { WriteEditorGroupContent } from './WriteEditorGroupContent'
 import { WriteEditorTabBar } from './WriteEditorTabBar'
 
@@ -77,7 +81,9 @@ export function WriteEditorGroups({
     recordRecentEdits,
     refreshWorkspace,
     setFileError,
-    setReviewActive
+    setReviewActive,
+    assistantOpen,
+    setAssistantOpen
   } = useWriteWorkspaceStore(useShallow((state) => ({
     workspaceRoot: state.workspaceRoot,
     rootDirectory: state.rootDirectory,
@@ -100,10 +106,13 @@ export function WriteEditorGroups({
     recordRecentEdits: state.recordRecentEdits,
     refreshWorkspace: state.refreshWorkspace,
     setFileError: state.setFileError,
-    setReviewActive: state.setReviewActive
+    setReviewActive: state.setReviewActive,
+    assistantOpen: state.assistantOpen,
+    setAssistantOpen: state.setAssistantOpen
   })))
   const [quickOpenGroupId, setQuickOpenGroupId] = useState<'primary' | 'secondary' | null>(null)
   const [quickOpenQuery, setQuickOpenQuery] = useState('')
+  const splitActive = isWriteEditorLayoutSplit(editorLayout)
   const quickOpenFiles = useMemo(() => {
     const byPath = new Map<string, string>()
     for (const entries of Object.values(entriesByDir)) {
@@ -160,7 +169,7 @@ export function WriteEditorGroups({
     <div
       ref={hostRef}
       className="write-editor-groups relative flex h-full min-h-0 min-w-0 overflow-hidden rounded-[18px]"
-      data-orientation={editorLayout.orientation === 'vertical' ? 'vertical' : 'horizontal'}
+      data-orientation={splitActive ? editorLayout.orientation : 'single'}
     >
       {editorLayout.groups.map((group, index) => {
         const path = group.activePath
@@ -172,7 +181,7 @@ export function WriteEditorGroups({
             key={group.id}
             className="write-editor-group flex min-h-0 min-w-0 flex-col"
             data-focused={focused}
-            style={{ flex: `${index === 0 ? editorLayout.ratio : 1 - editorLayout.ratio} 1 0%` }}
+            style={{ flex: writeEditorGroupFlex(editorLayout, index) }}
           >
             <WriteEditorTabBar
               group={group}
@@ -194,7 +203,15 @@ export function WriteEditorGroups({
               onQuickOpen={() => quickOpen(group.id)}
               onSplit={(orientation) => splitEditorGroup(orientation, path ?? undefined)}
               onCloseGroup={() => closeEditorGroup(group.id)}
-              hasSecondGroup={editorLayout.groups.length === 2}
+              hasSecondGroup={splitActive}
+              assistantOpen={assistantOpen}
+              showAssistantToggle={
+                !splitActive ||
+                (editorLayout.orientation === 'horizontal'
+                  ? group.id === 'secondary'
+                  : group.id === 'primary')
+              }
+              onToggleAssistant={() => setAssistantOpen(!assistantOpen)}
             />
             {focused ? focusedToolbar : null}
             <WriteEditorGroupContent
@@ -239,7 +256,7 @@ export function WriteEditorGroups({
             />
           </section>
         )
-        if (index === 0 || editorLayout.groups.length === 1) return pane
+        if (index === 0 || !splitActive) return pane
         return (
           <div key={`${group.id}-with-divider`} className="contents">
             <div

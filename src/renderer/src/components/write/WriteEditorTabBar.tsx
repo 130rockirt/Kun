@@ -22,6 +22,7 @@ import type {
 } from '../../write/write-workspace-store'
 import { writeBasenameFromPath } from '../../write/write-workspace-store'
 import { SidebarTitlebarToggleButton } from '../sidebar/SidebarPrimitives'
+import { WriteAssistantPanelToggleIcon } from './WriteAssistantIcons'
 
 type Props = {
   group: WriteEditorGroup
@@ -38,6 +39,9 @@ type Props = {
   onSplit: (orientation: 'horizontal' | 'vertical') => void
   onCloseGroup: () => void
   hasSecondGroup: boolean
+  assistantOpen: boolean
+  showAssistantToggle: boolean
+  onToggleAssistant: () => void
 }
 
 function fileIcon(document: WriteDocumentSession | undefined): ReactElement {
@@ -66,7 +70,10 @@ export function WriteEditorTabBar({
   onQuickOpen,
   onSplit,
   onCloseGroup,
-  hasSecondGroup
+  hasSecondGroup,
+  assistantOpen,
+  showAssistantToggle,
+  onToggleAssistant
 }: Props): ReactElement {
   const { t } = useTranslation('common')
   const [addOpen, setAddOpen] = useState(false)
@@ -189,6 +196,22 @@ export function WriteEditorTabBar({
         <button type="button" className="write-tabbar-action" onClick={() => onSplit('horizontal')} title={t('writeSplitRight')} aria-label={t('writeSplitRight')}>
           <PanelRight className="h-4 w-4" />
         </button>
+        {showAssistantToggle ? (
+          <>
+            <span className="write-tabbar-action-divider" aria-hidden="true" />
+            <button
+              type="button"
+              className="write-tabbar-action write-assistant-toggle"
+              data-active={assistantOpen}
+              aria-pressed={assistantOpen}
+              onClick={onToggleAssistant}
+              title={t('writeToggleAssistant')}
+              aria-label={t('writeToggleAssistant')}
+            >
+              <WriteAssistantPanelToggleIcon className="h-[18px] w-[18px]" />
+            </button>
+          </>
+        ) : null}
         <button type="button" className="write-tabbar-action" onClick={() => setOverflowOpen((open) => !open)} title={t('writeMoreActions')} aria-label={t('writeMoreActions')}>
           <MoreHorizontal className="h-4 w-4" />
         </button>

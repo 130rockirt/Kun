@@ -18,6 +18,46 @@
   color: var(--ds-text);
 }
 
+.write-tabbar-action-divider {
+  height: 20px;
+  width: 1px;
+  margin-inline: 3px;
+  background: var(--ds-border-muted);
+}
+
+.write-assistant-toggle {
+  position: relative;
+  color: var(--ds-text-muted);
+}
+
+.write-assistant-toggle::after {
+  content: '';
+  position: absolute;
+  right: 5px;
+  bottom: -7px;
+  left: 5px;
+  height: 2px;
+  border-radius: 999px 999px 0 0;
+  background: var(--ds-accent);
+  opacity: 0;
+  transform: scaleX(0.55);
+  transition: opacity 140ms ease, transform 140ms ease;
+}
+
+.write-assistant-toggle[data-active='true'] {
+  background: color-mix(in srgb, var(--ds-accent) 9%, var(--ds-surface-card));
+  color: var(--ds-text);
+}
+
+.write-assistant-toggle[data-active='true']::after {
+  opacity: 1;
+  transform: scaleX(1);
+}
+
+.write-assistant-toggle-sparkle {
+  stroke: var(--ds-accent);
+}
+
 .write-tabbar-menu-item {
   display: flex;
   width: 100%;
@@ -43,6 +83,12 @@
   flex-direction: column;
 }
 
+.write-editor-groups[data-orientation='single'] > .write-editor-group {
+  flex: 1 1 100% !important;
+  width: 100%;
+  height: 100%;
+}
+
 .write-editor-group {
   min-width: 0;
   min-height: 0;
@@ -62,11 +108,11 @@
   background: transparent;
 }
 
-.write-editor-groups[data-orientation='horizontal'] > .write-editor-divider {
+.write-editor-groups[data-orientation='horizontal'] .write-editor-divider {
   cursor: col-resize;
 }
 
-.write-editor-groups[data-orientation='vertical'] > .write-editor-divider {
+.write-editor-groups[data-orientation='vertical'] .write-editor-divider {
   cursor: row-resize;
 }
 
@@ -79,11 +125,11 @@
   transition: background-color 140ms ease;
 }
 
-.write-editor-groups[data-orientation='horizontal'] > .write-editor-divider::after {
+.write-editor-groups[data-orientation='horizontal'] .write-editor-divider::after {
   width: 1px;
 }
 
-.write-editor-groups[data-orientation='vertical'] > .write-editor-divider::after {
+.write-editor-groups[data-orientation='vertical'] .write-editor-divider::after {
   height: 1px;
 }
 

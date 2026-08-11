@@ -7,6 +7,7 @@ import type {
   WriteDocumentSession,
   WriteEditorGroup,
   WriteEditorGroupId,
+  WriteEditorLayoutOrientation,
   WriteEditorLayoutV1,
   WriteEditorTab,
   WritePreviewMode,
@@ -28,6 +29,21 @@ export function emptyWriteEditorLayout(): WriteEditorLayoutV1 {
     focusedGroupId: 'primary',
     groups: [emptyWriteEditorGroup('primary')]
   }
+}
+
+export function isWriteEditorLayoutSplit(layout: WriteEditorLayoutV1): boolean {
+  return layout.groups.length === 2 && (
+    layout.orientation === 'horizontal' || layout.orientation === 'vertical'
+  )
+}
+
+export function writeEditorGroupFlex(
+  layout: WriteEditorLayoutV1,
+  groupIndex: number
+): string {
+  if (!isWriteEditorLayoutSplit(layout)) return '1 1 100%'
+  const share = groupIndex === 0 ? layout.ratio : 1 - layout.ratio
+  return `${share} 1 0%`
 }
 
 export function writeDocumentKey(path: string): string {
@@ -200,24 +216,52 @@ function normalizeStoredTab(value: unknown, workspaceRoot: string): WriteEditorT
   }
 }
 
+function isStoredEditorGroup(value: unknown): value is Partial<WriteEditorGroup> {
+  return Boolean(value) && typeof value === 'object' && Array.isArray(
+    (value as Partial<WriteEditorGroup>).tabs
+  )
+}
+
+function normalizeStoredGroup(
+  value: Partial<WriteEditorGroup>,
+  id: WriteEditorGroupId,
+  workspaceRoot: string
+): WriteEditorGroup {
+  const tabs = (value.tabs ?? [])
+    .map((tab) => normalizeStoredTab(tab, workspaceRoot))
+    .filter((tab): tab is WriteEditorTab => Boolean(tab))
+    .filter((tab, index, items) => items.findIndex((candidate) => candidate.path === tab.path) === index)
+  const requestedActive = normalizePath(typeof value.activePath === 'string' ? value.activePath : '')
+  return {
+    id,
+    tabs,
+    activePath: tabs.some((tab) => tab.path === requestedActive)
+      ? requestedActive
+      : tabs[0]?.path ?? null
+  }
+}
+
 export function readWriteEditorLayout(workspaceRoot: string): WriteEditorLayoutV1 | null {
   const raw = readBrowserStorageItem(layoutStorageKey(workspaceRoot))
   if (!raw) return null
   try {
     const parsed = JSON.parse(raw) as Partial<WriteEditorLayoutV1>
     if (parsed.version !== 1 || !Array.isArray(parsed.groups)) return null
-    const groups = parsed.groups.slice(0, 2).map((group, index): WriteEditorGroup => {
-      const id: WriteEditorGroupId = index === 0 ? 'primary' : 'secondary'
-      const tabs = Array.isArray(group?.tabs)
-        ? group.tabs.map((tab) => normalizeStoredTab(tab, workspaceRoot)).filter((tab): tab is WriteEditorTab => Boolean(tab))
-        : []
-      const requestedActive = normalizePath(typeof group?.activePath === 'string' ? group.activePath : '')
-      return { id, tabs, activePath: tabs.some((tab) => tab.path === requestedActive) ? requestedActive : tabs[0]?.path ?? null }
-    })
-    if (groups.length === 0) groups.push(emptyWriteEditorGroup('primary'))
-    const orientation = groups.length === 1
-      ? 'single'
-      : parsed.orientation === 'vertical' ? 'vertical' : 'horizontal'
+    const storedGroups = parsed.groups as unknown[]
+    const splitOrientation = parsed.orientation === 'horizontal' || parsed.orientation === 'vertical'
+    const primary = isStoredEditorGroup(storedGroups[0])
+      ? normalizeStoredGroup(storedGroups[0], 'primary', workspaceRoot)
+      : emptyWriteEditorGroup('primary')
+    const secondary = isStoredEditorGroup(storedGroups[1])
+      ? normalizeStoredGroup(storedGroups[1], 'secondary', workspaceRoot)
+      : null
+    const restoreSplit = splitOrientation && isStoredEditorGroup(storedGroups[0]) && secondary !== null
+    const groups = restoreSplit
+      ? [primary, secondary]
+      : [primary]
+    const orientation: WriteEditorLayoutOrientation = restoreSplit
+      ? parsed.orientation as Exclude<WriteEditorLayoutOrientation, 'single'>
+      : 'single'
     const focusedGroupId = parsed.focusedGroupId === 'secondary' && groups.length > 1 ? 'secondary' : 'primary'
     const ratio = Number.isFinite(parsed.ratio) ? Math.min(0.75, Math.max(0.25, Number(parsed.ratio))) : 0.5
     return { version: 1, orientation, ratio, focusedGroupId, groups }

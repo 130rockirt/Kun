@@ -1,0 +1,66 @@
+.write-assistant-panel {
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--ds-surface-card) 96%, transparent),
+    color-mix(in srgb, var(--ds-bg-main) 94%, transparent)
+  );
+  box-shadow: -1px 0 0 color-mix(in srgb, var(--ds-border-muted) 78%, transparent);
+}
+
+.write-assistant-header,
+.write-assistant-footer {
+  background: color-mix(in srgb, var(--ds-surface-card) 92%, transparent);
+}
+
+.write-assistant-body {
+  background:
+    radial-gradient(circle at 50% 6%, color-mix(in srgb, var(--ds-accent) 4%, transparent), transparent 34%),
+    color-mix(in srgb, var(--ds-bg-main) 88%, transparent);
+}
+
+.write-assistant-ready {
+  min-height: 238px;
+}
+
+.write-assistant-action-row {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 4px;
+  text-align: left;
+  transition:
+    background-color 140ms ease,
+    box-shadow 140ms ease;
+}
+
+.write-assistant-action-row:hover {
+  background: color-mix(in srgb, var(--ds-surface-hover) 72%, transparent);
+  box-shadow: inset 2px 0 color-mix(in srgb, var(--ds-accent) 62%, transparent);
+}
+
+.write-assistant-action-row:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--ds-accent) 55%, transparent);
+  outline-offset: -2px;
+}
+
+.write-assistant-footer .ds-composer-shell.ds-chat-composer {
+  border-color: color-mix(in srgb, var(--ds-border) 88%, transparent);
+  border-radius: 16px;
+  box-shadow:
+    0 8px 24px color-mix(in srgb, var(--ds-text) 6%, transparent),
+    inset 0 1px 0 color-mix(in srgb, white 62%, transparent);
+}
+
+[data-theme='dark'] .write-assistant-footer .ds-composer-shell.ds-chat-composer {
+  box-shadow:
+    0 8px 24px rgba(0, 0, 0, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.055);
+}
+
+@media (max-height: 760px) {
+  .write-assistant-ready {
+    min-height: 178px;
+    padding-top: 24px;
+  }
+}

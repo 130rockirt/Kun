@@ -10,7 +10,6 @@ import {
   Loader2,
   Presentation,
   Save,
-  Sparkles,
   WandSparkles
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -38,7 +37,6 @@ type Props = {
   activeFilePath: string
   documentStatsLabel: string | null
   inlineCompletionEnabled: boolean
-  assistantOpen: boolean
   exportInFlight: boolean
   exportMenuOpen: boolean
   exportMenuRef: RefObject<HTMLDivElement | null>
@@ -60,7 +58,6 @@ type Props = {
   saveLabel: string
   saveStatus: WriteSaveStatus
   reviewActive?: boolean
-  setAssistantOpen: (open: boolean) => void
   setExportMenuOpen: (open: boolean | ((open: boolean) => boolean)) => void
   setModeMenuOpen: (open: boolean | ((open: boolean) => boolean)) => void
   setPreviewMode: (mode: WritePreviewMode) => void
@@ -77,7 +74,6 @@ export function WriteWorkspaceToolbar({
   activeFilePath,
   documentStatsLabel,
   inlineCompletionEnabled,
-  assistantOpen,
   exportInFlight,
   exportMenuOpen,
   exportMenuRef,
@@ -99,7 +95,6 @@ export function WriteWorkspaceToolbar({
   saveLabel,
   saveStatus,
   reviewActive = false,
-  setAssistantOpen,
   setExportMenuOpen,
   setModeMenuOpen,
   setPreviewMode
@@ -142,17 +137,7 @@ export function WriteWorkspaceToolbar({
               <span>{t('writeReadOnly')}</span>
             </div>
 
-            <div className="write-pdf-topbar-actions">
-              <button
-                type="button"
-                onClick={() => setAssistantOpen(!assistantOpen)}
-                className={toolbarIconButtonClass(assistantOpen)}
-                title={t('writeToggleAssistant')}
-                aria-label={t('writeToggleAssistant')}
-              >
-                <Sparkles className="h-4 w-4" strokeWidth={1.85} />
-              </button>
-            </div>
+            <div className="write-pdf-topbar-actions" />
           </div>
         </header>
       </div>
@@ -285,15 +270,6 @@ export function WriteWorkspaceToolbar({
               ) : (
                 <Presentation className="h-4 w-4" strokeWidth={1.85} />
               )}
-            </button>
-            <button
-              type="button"
-              onClick={() => setAssistantOpen(!assistantOpen)}
-              className={toolbarIconButtonClass(assistantOpen)}
-              title={t('writeToggleAssistant')}
-              aria-label={t('writeToggleAssistant')}
-            >
-              <Sparkles className="h-4 w-4" strokeWidth={1.85} />
             </button>
             <button
               type="button"

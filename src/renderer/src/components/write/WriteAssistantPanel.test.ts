@@ -77,6 +77,9 @@ describe('WriteAssistantPanel', () => {
     expect(html).toContain('Style Guide')
     expect(html).toContain('/skill:style-guide')
     expect(html).not.toContain('Disabled Skill')
+    expect(html).toContain('write-assistant-ready')
+    expect(html.match(/write-assistant-action-row/g)).toHaveLength(3)
+    expect(html).toContain('Current file')
   })
 
   it('offers guidance for queued plain-text messages', () => {

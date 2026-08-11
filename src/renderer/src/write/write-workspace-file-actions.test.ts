@@ -11,7 +11,7 @@ import {
   saveWriteThreadRegistry
 } from './write-thread-registry'
 import type { NormalizedThread } from '../agent/types'
-import { createWriteDocumentSession } from './write-editor-layout'
+import { createWriteDocumentSession, persistWriteEditorLayout } from './write-editor-layout'
 
 class MemoryStorage {
   private values = new Map<string, string>()
@@ -141,6 +141,64 @@ afterEach(() => {
 })
 
 describe('write workspace file actions', () => {
+  it('keeps normal multi-file navigation in one editor group', async () => {
+    installDsGui({
+      readWorkspaceFile: vi.fn(async ({ path }: { path: string }) => ({
+        ok: true as const,
+        path,
+        content: path,
+        size: path.length,
+        truncated: false as const
+      }))
+    })
+    const { actions, get, set } = createHarness()
+    set({ workspaceRoot: '/tmp/write' })
+
+    await actions.openFile('/tmp/write', '/tmp/write/a.md')
+    await actions.openFile('/tmp/write', '/tmp/write/b.md')
+
+    expect(get().editorLayout).toMatchObject({
+      orientation: 'single',
+      groups: [{
+        id: 'primary',
+        activePath: '/tmp/write/b.md',
+        tabs: [{ path: '/tmp/write/a.md' }, { path: '/tmp/write/b.md' }]
+      }]
+    })
+  })
+
+  it('collapses a restored split when its secondary file no longer exists', async () => {
+    const storage = new MemoryStorage()
+    vi.stubGlobal('window', {
+      localStorage: storage,
+      kunGui: {
+        listWorkspaceDirectory: vi.fn(async () => ({ ok: true as const, root: '/tmp/write', entries: [] })),
+        readWorkspaceFile: vi.fn(async ({ path }: { path: string }) => path.endsWith('/a.md')
+          ? { ok: true as const, path, content: 'a', size: 1, truncated: false as const }
+          : { ok: false as const, message: 'missing' })
+      }
+    })
+    persistWriteEditorLayout('/tmp/write', {
+      version: 1,
+      orientation: 'horizontal',
+      ratio: 0.5,
+      focusedGroupId: 'secondary',
+      groups: [
+        { id: 'primary', activePath: '/tmp/write/a.md', tabs: [{ path: '/tmp/write/a.md', viewMode: 'live' }] },
+        { id: 'secondary', activePath: '/tmp/write/missing.md', tabs: [{ path: '/tmp/write/missing.md', viewMode: 'preview' }] }
+      ]
+    })
+    const { actions, get } = createHarness()
+
+    await actions.initializeWorkspace('/tmp/write')
+
+    expect(get().editorLayout).toMatchObject({
+      orientation: 'single',
+      focusedGroupId: 'primary',
+      groups: [{ id: 'primary', activePath: '/tmp/write/a.md' }]
+    })
+  })
+
   it('refreshes an initialized workspace without resetting the active draft', async () => {
     const listWorkspaceDirectory = vi.fn(async () => ({
       ok: true as const,

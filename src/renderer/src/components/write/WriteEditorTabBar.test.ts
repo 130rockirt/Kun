@@ -16,6 +16,7 @@ describe('WriteEditorTabBar', () => {
   it('activates and closes tabs through accessible tab controls', () => {
     const onActivate = vi.fn()
     const onClose = vi.fn()
+    const onToggleAssistant = vi.fn()
     const document = createWriteDocumentSession({
       path: '/work/draft.md',
       kind: 'text',
@@ -43,7 +44,10 @@ describe('WriteEditorTabBar', () => {
         onQuickOpen: noop,
         onSplit: noop,
         onCloseGroup: noop,
-        hasSecondGroup: false
+        hasSecondGroup: false,
+        assistantOpen: true,
+        showAssistantToggle: true,
+        onToggleAssistant
       }))
     })
     const tab = renderer.root.findByProps({ role: 'tab' })
@@ -61,5 +65,10 @@ describe('WriteEditorTabBar', () => {
     const close = renderer.root.findByProps({ 'aria-label': 'writeCloseTab' })
     act(() => close.props.onClick({ stopPropagation: noop }))
     expect(onClose).toHaveBeenCalledWith('/work/draft.md')
+    const assistantToggle = renderer.root.findByProps({ 'aria-label': 'writeToggleAssistant' })
+    expect(assistantToggle.props['aria-pressed']).toBe(true)
+    expect(assistantToggle.props['data-active']).toBe(true)
+    act(() => assistantToggle.props.onClick())
+    expect(onToggleAssistant).toHaveBeenCalledOnce()
   })
 })

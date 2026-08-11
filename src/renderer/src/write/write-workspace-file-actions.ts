@@ -25,6 +25,7 @@ import {
 import {
   addTabToGroup,
   createWriteDocumentSession,
+  emptyWriteEditorGroup,
   persistWriteEditorLayout,
   projectFocusedDocument,
   readWriteEditorLayout,
@@ -94,6 +95,52 @@ function openDocumentState(
   const editorLayout = addTabToGroup(state.editorLayout, groupId, document.path, viewMode)
   persistWriteEditorLayout(state.workspaceRoot, editorLayout)
   return { documentsByPath, editorLayout, ...projectFocusedDocument(editorLayout, documentsByPath) }
+}
+
+function removeFailedRestoredTab(
+  layout: WriteWorkspaceState['editorLayout'],
+  groupId: WriteEditorGroupId,
+  path: string
+): WriteWorkspaceState['editorLayout'] {
+  return {
+    ...layout,
+    groups: layout.groups.map((group) => group.id === groupId
+      ? {
+          ...group,
+          tabs: group.tabs.filter((tab) => !pathsEqual(tab.path, path)),
+          activePath: pathsEqual(group.activePath ?? '', path) ? null : group.activePath
+        }
+      : group)
+  }
+}
+
+function finishRestoredLayout(
+  layout: WriteWorkspaceState['editorLayout'],
+  unavailableGroups: Set<WriteEditorGroupId>
+): WriteWorkspaceState['editorLayout'] {
+  const available = layout.groups.filter((group) => !unavailableGroups.has(group.id))
+  if (available.length === 0) {
+    return { ...layout, orientation: 'single', focusedGroupId: 'primary', groups: [emptyWriteEditorGroup('primary')] }
+  }
+  if (available.length === 1) {
+    return {
+      ...layout,
+      orientation: 'single',
+      focusedGroupId: 'primary',
+      groups: [{ ...available[0], id: 'primary' }]
+    }
+  }
+  const groups = available.slice(0, 2).map((group, index) => ({
+    ...group,
+    id: index === 0 ? 'primary' as const : 'secondary' as const
+  }))
+  return {
+    ...layout,
+    groups,
+    focusedGroupId: groups.some((group) => group.id === layout.focusedGroupId)
+      ? layout.focusedGroupId
+      : 'primary'
+  }
 }
 
 async function prepareActiveFileForNavigation(
@@ -179,13 +226,39 @@ export function createWriteFileActions({
       const restoredLayout = readWriteEditorLayout(normalized)
       if (restoredLayout) {
         set({ editorLayout: restoredLayout })
+        let validatedLayout = restoredLayout
+        const unavailableGroups = new Set<WriteEditorGroupId>()
         for (const group of restoredLayout.groups) {
-          if (!group.activePath) continue
-          const mode = group.tabs.find((tab) => tab.path === group.activePath)?.viewMode ?? 'rich'
-          await get().openFile(normalized, group.activePath, { groupId: group.id, viewMode: mode })
+          const candidates = [
+            ...group.tabs.filter((tab) => pathsEqual(tab.path, group.activePath ?? '')),
+            ...group.tabs.filter((tab) => !pathsEqual(tab.path, group.activePath ?? ''))
+          ]
+          if (candidates.length === 0) continue
+          let openedPath: string | null = null
+          for (const tab of candidates) {
+            await get().openFile(normalized, tab.path, { groupId: group.id, viewMode: tab.viewMode })
+            if (!navigationIsCurrent(generation, normalized)) return
+            if (get().documentsByPath[writeDocumentKey(tab.path)]) {
+              openedPath = tab.path
+              break
+            }
+            validatedLayout = removeFailedRestoredTab(validatedLayout, group.id, tab.path)
+          }
+          if (openedPath) {
+            validatedLayout = {
+              ...validatedLayout,
+              groups: validatedLayout.groups.map((candidate) => candidate.id === group.id
+                ? { ...candidate, activePath: openedPath }
+                : candidate)
+            }
+          } else {
+            unavailableGroups.add(group.id)
+          }
         }
+        validatedLayout = finishRestoredLayout(validatedLayout, unavailableGroups)
         const documentsByPath = get().documentsByPath
-        set({ editorLayout: restoredLayout, ...projectFocusedDocument(restoredLayout, documentsByPath) })
+        persistWriteEditorLayout(normalized, validatedLayout)
+        set({ editorLayout: validatedLayout, ...projectFocusedDocument(validatedLayout, documentsByPath) })
         return
       }
       const remembered = readRememberedActiveFile(normalized)

@@ -340,6 +340,7 @@ export function createWriteEditorGroupActions(
 
     setSplitRatio: (ratio) => {
       const state = get()
+      if (state.editorLayout.groups.length < 2) return
       const editorLayout = { ...state.editorLayout, ratio: Math.min(0.75, Math.max(0.25, ratio)) }
       persist(state.workspaceRoot, editorLayout)
       set({ editorLayout })

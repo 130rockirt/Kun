@@ -5,9 +5,7 @@ import {
   FileText,
   ListTodo,
   MessageSquareQuote,
-  PanelRightClose,
   Plus,
-  Sparkles,
   X
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -17,11 +15,13 @@ import type { QueuedUserMessage } from '../../store/chat-store-types'
 import type { ModelProviderModelGroup } from '@shared/kun-gui-api'
 import {
   useWriteWorkspaceStore,
+  writeBasenameFromPath,
   writeRelativeToWorkspace
 } from '../../write/write-workspace-store'
 import { LazyMessageTimeline } from '../chat/LazyMessageTimeline'
 import { FloatingComposer } from '../chat/FloatingComposer'
 import type { ComposerReasoningEffort } from '../chat/FloatingComposerModelPicker'
+import { WriteAssistantSparkleIcon } from './WriteAssistantIcons'
 
 type Props = {
   input: string
@@ -133,6 +133,7 @@ export function WriteAssistantPanel({
   const activeFileLabel = activeFilePath
     ? writeRelativeToWorkspace(workspaceRoot, activeFilePath)
     : t('writeNoFileOpen')
+  const activeFileName = activeFilePath ? writeBasenameFromPath(activeFilePath) : activeFileLabel
   const canCreateConversation = runtimeConnection === 'ready' && !busy
   const hasTimeline =
     blocks.length > 0 || liveReasoning.trim().length > 0 || liveAssistant.trim().length > 0
@@ -155,19 +156,10 @@ export function WriteAssistantPanel({
       className={`write-assistant-panel ds-sidebar-surface ds-no-drag flex min-h-0 flex-col border-l border-ds-border-muted backdrop-blur-xl ${className}`}
     >
       <div className="write-assistant-header ds-sidebar-surface-chrome shrink-0 border-b border-ds-border-muted">
-        <div className="flex h-12 min-w-0 items-center gap-2 px-4">
-          <button
-            type="button"
-            onClick={onCollapse}
-            className="ds-sidebar-toggle-button shrink-0"
-            aria-label={t('rightPanelCollapse')}
-            title={t('rightPanelCollapse')}
-          >
-            <PanelRightClose className="h-4 w-4" strokeWidth={1.85} />
-          </button>
-          <div className="flex min-w-0 flex-1 items-center gap-2 rounded-[12px] bg-ds-surface-subtle px-3 py-1.5 dark:bg-white/8">
-            <Sparkles className="h-4 w-4 shrink-0 text-accent" strokeWidth={1.8} />
-            <span className="min-w-0 truncate text-[13px] font-medium text-ds-ink">
+        <div className="flex h-14 min-w-0 items-center gap-1.5 px-4">
+          <div className="flex min-w-0 flex-1 items-center gap-2.5">
+            <WriteAssistantSparkleIcon className="h-[19px] w-[19px] shrink-0 text-accent" />
+            <span className="min-w-0 truncate text-[14px] font-semibold tracking-[-0.01em] text-ds-ink">
               {t('writeAssistant')}
             </span>
           </div>
@@ -190,10 +182,22 @@ export function WriteAssistantPanel({
           >
             <Plus className="h-4 w-4" strokeWidth={2.1} />
           </button>
+          <button
+            type="button"
+            onClick={onCollapse}
+            className="ds-sidebar-toggle-button ml-0.5 shrink-0"
+            aria-label={t('rightPanelCollapse')}
+            title={t('rightPanelCollapse')}
+          >
+            <X className="h-4 w-4" strokeWidth={1.85} />
+          </button>
         </div>
-        <div className="min-w-0 px-4 pb-3">
-          <div className="truncate rounded-full border border-ds-border-muted bg-ds-surface-subtle px-3 py-1.5 text-[11.5px] font-medium text-ds-muted dark:bg-white/6">
-            {activeFileLabel}
+        <div className="min-w-0 border-t border-ds-border-muted/70 px-4 py-2.5">
+          <div className="flex min-w-0 items-center gap-2 text-[11.5px] font-medium text-ds-muted" title={activeFileLabel}>
+            <FileText className="h-3.5 w-3.5 shrink-0 text-ds-faint" strokeWidth={1.8} />
+            <span className="shrink-0">{t('writePromptActiveFile')}</span>
+            <span className="text-ds-faint" aria-hidden="true">·</span>
+            <span className="min-w-0 truncate">{activeFileName}</span>
           </div>
         </div>
       </div>
@@ -212,24 +216,24 @@ export function WriteAssistantPanel({
             compactCards
           />
         ) : (
-          <div className="flex min-h-full flex-col justify-end px-5 py-5">
-            <div className="mb-auto rounded-[24px] border border-ds-border bg-ds-card/95 p-4 shadow-sm">
-              <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-accent/10 text-accent">
-                <Sparkles className="h-5 w-5" strokeWidth={1.9} />
+          <div className="flex min-h-full flex-col px-4 py-5">
+            <div className="write-assistant-ready flex flex-col items-center px-3 pb-8 pt-12 text-center">
+              <div className="flex h-12 w-12 items-center justify-center rounded-[16px] border border-accent/12 bg-accent/[0.07] text-accent shadow-[inset_0_1px_0_rgba(255,255,255,0.62)]">
+                <WriteAssistantSparkleIcon className="h-6 w-6" />
               </div>
-              <h3 className="mt-4 text-[18px] font-semibold tracking-[-0.035em] text-ds-ink">
+              <h3 className="mt-5 text-[17px] font-semibold tracking-[-0.025em] text-ds-ink">
                 {t('writeAssistantEmptyTitle')}
               </h3>
-              <p className="mt-2 text-[13px] leading-6 text-ds-muted">
+              <p className="mt-2 max-w-[270px] text-[12.5px] leading-5 text-ds-muted">
                 {t('writeAssistantEmptySub')}
               </p>
             </div>
 
-            <div className="mt-3 grid gap-2">
+            <div className="write-assistant-actions mt-auto overflow-hidden border-y border-ds-border-muted">
               <button
                 type="button"
                 onClick={() => setAssistantPrompt(t('writeAssistantSummarizePrompt', { file: activeFileLabel }))}
-                className="flex items-center gap-3 rounded-2xl border border-ds-border bg-ds-card px-3 py-3 text-left transition hover:border-accent/25 hover:bg-ds-hover"
+                className="write-assistant-action-row"
               >
                 <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-sky-500/10 text-sky-600 dark:text-sky-300">
                   <FileText className="h-4 w-4" strokeWidth={1.9} />
@@ -242,7 +246,7 @@ export function WriteAssistantPanel({
               <button
                 type="button"
                 onClick={() => setAssistantPrompt(t('writeAssistantOutlinePrompt', { file: activeFileLabel }))}
-                className="flex items-center gap-3 rounded-2xl border border-ds-border bg-ds-card px-3 py-3 text-left transition hover:border-accent/25 hover:bg-ds-hover"
+                className="write-assistant-action-row border-t border-ds-border-muted"
               >
                 <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-300">
                   <ListTodo className="h-4 w-4" strokeWidth={1.9} />
@@ -261,7 +265,7 @@ export function WriteAssistantPanel({
                     setAssistantPrompt(t('writeAssistantPolishSelectionPrompt'))
                   }
                 }}
-                className="flex items-center gap-3 rounded-2xl border border-ds-border bg-ds-card px-3 py-3 text-left transition hover:border-accent/25 hover:bg-ds-hover"
+                className="write-assistant-action-row border-t border-ds-border-muted"
               >
                 <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-amber-500/10 text-amber-600 dark:text-amber-300">
                   <MessageSquareQuote className="h-4 w-4" strokeWidth={1.9} />
@@ -280,7 +284,7 @@ export function WriteAssistantPanel({
         )}
       </div>
 
-      <div className="write-assistant-footer ds-sidebar-surface-chrome shrink-0 border-t border-ds-border-muted px-4 pb-4 pt-3">
+      <div className="write-assistant-footer ds-sidebar-surface-chrome shrink-0 border-t border-ds-border-muted px-3 pb-3 pt-3">
         {quotedSelections.length > 0 ? (
           <div className="mb-3 flex flex-col gap-1.5">
             {quotedSelections.map((quote) => (

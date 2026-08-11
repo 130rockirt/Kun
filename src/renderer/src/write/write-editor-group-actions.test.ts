@@ -68,6 +68,15 @@ afterEach(() => {
 })
 
 describe('write editor group actions', () => {
+  it('does not apply a split ratio while the layout still has one group', () => {
+    useWriteWorkspaceStore.getState().setSplitRatio(0.25)
+    expect(useWriteWorkspaceStore.getState().editorLayout).toMatchObject({
+      orientation: 'single',
+      ratio: 0.5,
+      groups: [{ id: 'primary' }]
+    })
+  })
+
   it('splits the active document into a preview occurrence', () => {
     useWriteWorkspaceStore.getState().splitEditorGroup('horizontal')
     const state = useWriteWorkspaceStore.getState()
