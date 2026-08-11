@@ -45,9 +45,9 @@ const EXPLORE_AGENT_PROMPT_PREAMBLE = [
 
 const EXPLORE_AGENT_DESCRIPTION = [
   'Use this first for any repository or project exploration: locating files or symbols, searching code or keywords, tracing call paths or dependencies, understanding architecture or behavior, or gathering context before a change.',
-  'Complex questions MUST be split into multiple parallel explore_agent calls with non-overlapping scopes (for example one call for API wiring, another for UI, another for tests). Never pack a whole-repo investigation into a single call.',
-  'Each call needs a short distinct title (2-6 words) for the UI plus a narrow, self-contained query that states what evidence to return.',
-  '即使后续需要修改文件，也必须先调用 explore_agent；它优先于主代理直接使用 read/grep/glob/ls/repo_map/find/bash，并应为独立调查面并行发起多个调用。',
+  'Submit one batch containing 2-4 non-overlapping tasks for a complex investigation (for example API wiring, UI, and tests). Each task needs a short distinct title plus a narrow, self-contained query that states what evidence to return.',
+  'Tasks in one batch run concurrently when policy and global capacity allow. If an investigation depends on evidence from this batch, submit it in a later explore_agent batch.',
+  '即使后续需要修改文件，也必须先调用 explore_agent；它优先于主代理直接使用 read/grep/glob/ls/repo_map/find/bash，复杂问题应在一个批次中提交 2-4 个独立调查任务。',
   'Only use direct inspection tools for narrow follow-up verification after this tool returns, or when explore_agent is unavailable or fails.',
   '它可以运行 bash 与只读探索工具（read/grep/glob/ls/repo_map/find/web_fetch/web_search），但始终不会修改文件。'
 ].join(' ')
@@ -81,20 +81,35 @@ export function buildExploreAgentToolProvider(
           inputSchema: {
             type: 'object',
             properties: {
-              title: {
-                type: 'string',
-                description: 'Distinct 2-6 word UI title for this exploration (shown in the parallel explore list).'
-              },
-              query: {
-                type: 'string',
-                description: 'Narrow, self-contained investigation request: what to locate or explain, and which file:line evidence or concise conclusion to return. Do not restate the whole user question if multiple explores are running in parallel.'
+              tasks: {
+                type: 'array',
+                minItems: 1,
+                maxItems: 4,
+                description: 'One wave of 1-4 independent exploration tasks. Use 2-4 non-overlapping tasks for complex investigations and a later batch for dependent follow-ups.',
+                items: {
+                  type: 'object',
+                  properties: {
+                    title: {
+                      type: 'string',
+                      minLength: 1,
+                      description: 'Distinct short UI title for this exploration task.'
+                    },
+                    query: {
+                      type: 'string',
+                      minLength: 1,
+                      description: 'Narrow, self-contained investigation request, including the file:line evidence or concise conclusion to return.'
+                    }
+                  },
+                  required: ['title', 'query'],
+                  additionalProperties: false
+                }
               },
               workspace: {
                 type: 'string',
                 description: 'Optional workspace root to explore. Defaults to the parent turn workspace.'
               }
             },
-            required: ['title', 'query'],
+            required: ['tasks'],
             additionalProperties: false
           },
           policy: 'auto',
@@ -108,139 +123,132 @@ export function buildExploreAgentToolProvider(
                 isError: true
               }
             }
-            const title = stringValue(args.title)
-            const query = stringValue(args.query)
-            if (!title) return { output: { error: 'title is required' }, isError: true }
-            if (!query) return { output: { error: 'query is required' }, isError: true }
+            const parsedTasks = parseExploreTasks(args.tasks)
+            if ('error' in parsedTasks) {
+              return { output: { error: parsedTasks.error }, isError: true }
+            }
             const workspace = stringValue(args.workspace) || context.workspace
             const resolvedCfg = cfg ?? {}
             const inlineProfile = buildExploreInlineProfile(resolvedCfg)
-            const record = await runtime.runChild({
-              parentThreadId: context.threadId,
-              parentTurnId: context.turnId,
-              label: title,
-              prompt: query,
-              workspace,
-              inlineProfile,
-              agentSurface: context.agentSurface ?? 'code',
-              // Follow the parent session's model/provider/reasoning/service
-              // tier unless the Lab settings configure an explicit override.
-              inheritSessionDefaults: true,
-              ...(resolvedCfg.fast === true ? { serviceTier: 'priority' as const } : {}),
-              ...(context.serviceTier ? { inheritedServiceTier: context.serviceTier } : {}),
-              ...(context.actingModelRoute?.model
-                ? { inheritedModel: context.actingModelRoute.model }
-                : context.model?.id?.trim()
-                  ? { inheritedModel: context.model.id.trim() }
-                  : {}),
-              ...(context.actingModelRoute?.providerId
-                ? { inheritedProviderId: context.actingModelRoute.providerId }
-                : context.modelProviderId?.trim()
-                  ? { inheritedProviderId: context.modelProviderId.trim() }
-                  : {}),
-              ...(context.actingModelRoute?.accountId
-                ? { inheritedAccountId: context.actingModelRoute.accountId }
-                : {}),
-              ...(context.reasoningEffort?.trim()
-                ? { inheritedReasoningEffort: context.reasoningEffort.trim() }
-                : {}),
-              security: {
-                sandboxRoot: workspace,
-                ...(context.allowedProviderIds
-                  ? { allowedProviderIds: [...context.allowedProviderIds] }
-                  : {}),
-                ...(context.allowedToolNames
-                  ? { allowedToolNames: [...context.allowedToolNames] }
-                  : {}),
-                ...(context.allowedSkillIds
-                  ? { allowedSkillIds: [...context.allowedSkillIds] }
-                  : {}),
-                ...(context.allowedReadPaths
-                  ? { allowedReadPaths: [...context.allowedReadPaths] }
-                  : {}),
-                ...(context.allowedWritePaths
-                  ? { allowedWritePaths: [...context.allowedWritePaths] }
-                  : {}),
-                ...(context.allowedArtifactIds
-                  ? { allowedArtifactIds: [...context.allowedArtifactIds] }
-                  : {}),
-                ...(context.blockedProviderIds
-                  ? { blockedProviderIds: [...context.blockedProviderIds] }
-                  : {}),
-                ...(context.blockedToolNames
-                  ? { blockedToolNames: [...context.blockedToolNames] }
-                  : {}),
-                ...(context.blockedSkillIds
-                  ? { blockedSkillIds: [...context.blockedSkillIds] }
-                  : {}),
-                memoryEnabled: context.memoryPolicy?.enabled === true
-              },
-              approvalPolicy: context.approvalPolicy,
-              ...(context.sandboxMode ? { sandboxMode: context.sandboxMode } : {}),
-              approvalReviewer: context.approvalReviewer ?? 'user',
-              ...(context.clientSurface ? { clientSurface: context.clientSurface } : {}),
-              returnFormat: 'summary',
-              onQueued: async (childId, profile, metadata) => {
-                await emitExploreLifecycle(onUpdate, {
-                  childId,
-                  status: 'queued',
-                  title,
-                  profile,
-                  metadata: {
-                    ...metadata,
-                    profileName: metadata?.profileName?.trim() || 'Repository Explorer',
-                    model: metadata?.model?.trim() ||
-                      context.actingModelRoute?.model?.trim() ||
-                      context.model?.id?.trim() ||
-                      undefined
-                  }
+            const batch = new ExploreBatchState(parsedTasks.tasks, onUpdate)
+            await batch.emit()
+            const runTask = async (task: ExploreTask, index: number): Promise<void> => {
+              try {
+                const record = await runtime.runChild({
+                  parentThreadId: context.threadId,
+                  parentTurnId: context.turnId,
+                  label: task.title,
+                  prompt: task.query,
+                  workspace,
+                  inlineProfile,
+                  agentSurface: context.agentSurface ?? 'code',
+                  // Follow the parent session's model/provider/reasoning/service
+                  // tier unless the Lab settings configure an explicit override.
+                  inheritSessionDefaults: true,
+                  ...(resolvedCfg.fast === true ? { serviceTier: 'priority' as const } : {}),
+                  ...(context.serviceTier ? { inheritedServiceTier: context.serviceTier } : {}),
+                  ...(context.actingModelRoute?.model
+                    ? { inheritedModel: context.actingModelRoute.model }
+                    : context.model?.id?.trim()
+                      ? { inheritedModel: context.model.id.trim() }
+                      : {}),
+                  ...(context.actingModelRoute?.providerId
+                    ? { inheritedProviderId: context.actingModelRoute.providerId }
+                    : context.modelProviderId?.trim()
+                      ? { inheritedProviderId: context.modelProviderId.trim() }
+                      : {}),
+                  ...(context.actingModelRoute?.accountId
+                    ? { inheritedAccountId: context.actingModelRoute.accountId }
+                    : {}),
+                  ...(context.reasoningEffort?.trim()
+                    ? { inheritedReasoningEffort: context.reasoningEffort.trim() }
+                    : {}),
+                  security: {
+                    sandboxRoot: workspace,
+                    ...(context.allowedProviderIds
+                      ? { allowedProviderIds: [...context.allowedProviderIds] }
+                      : {}),
+                    ...(context.allowedToolNames
+                      ? { allowedToolNames: [...context.allowedToolNames] }
+                      : {}),
+                    ...(context.allowedSkillIds
+                      ? { allowedSkillIds: [...context.allowedSkillIds] }
+                      : {}),
+                    ...(context.allowedReadPaths
+                      ? { allowedReadPaths: [...context.allowedReadPaths] }
+                      : {}),
+                    ...(context.allowedWritePaths
+                      ? { allowedWritePaths: [...context.allowedWritePaths] }
+                      : {}),
+                    ...(context.allowedArtifactIds
+                      ? { allowedArtifactIds: [...context.allowedArtifactIds] }
+                      : {}),
+                    ...(context.blockedProviderIds
+                      ? { blockedProviderIds: [...context.blockedProviderIds] }
+                      : {}),
+                    ...(context.blockedToolNames
+                      ? { blockedToolNames: [...context.blockedToolNames] }
+                      : {}),
+                    ...(context.blockedSkillIds
+                      ? { blockedSkillIds: [...context.blockedSkillIds] }
+                      : {}),
+                    memoryEnabled: context.memoryPolicy?.enabled === true
+                  },
+                  approvalPolicy: context.approvalPolicy,
+                  ...(context.sandboxMode ? { sandboxMode: context.sandboxMode } : {}),
+                  approvalReviewer: context.approvalReviewer ?? 'user',
+                  ...(context.clientSurface ? { clientSurface: context.clientSurface } : {}),
+                  returnFormat: 'summary',
+                  onQueued: async (childId, _profile, metadata) => {
+                    await batch.update(index, {
+                      childId,
+                      status: 'queued',
+                      profileName: metadata?.profileName?.trim() || 'Repository Explorer',
+                      model: resolveExploreModel(metadata?.model, context)
+                    })
+                  },
+                  onRunning: async (childId, _profile, metadata) => {
+                    await batch.update(index, {
+                      childId,
+                      status: 'running',
+                      profileName: metadata?.profileName?.trim() || 'Repository Explorer',
+                      model: resolveExploreModel(metadata?.model, context)
+                    })
+                  },
+                  signal: context.abortSignal
                 })
-              },
-              onRunning: async (childId, profile, metadata) => {
-                await emitExploreLifecycle(onUpdate, {
-                  childId,
-                  status: 'running',
-                  title,
-                  profile,
-                  metadata: {
-                    ...metadata,
-                    profileName: metadata?.profileName?.trim() || 'Repository Explorer',
-                    model: metadata?.model?.trim() ||
-                      context.actingModelRoute?.model?.trim() ||
-                      context.model?.id?.trim() ||
-                      undefined
-                  }
+                const failed = record.status === 'failed' || record.status === 'aborted'
+                await batch.update(index, {
+                  childId: record.id,
+                  status: record.status,
+                  summary: record.summary,
+                  error: failed ? record.error ?? record.status : undefined,
+                  model: resolveExploreModel(record.model, context),
+                  profileName: record.profileSnapshot?.name?.trim() || 'Repository Explorer',
+                  toolInvocations: record.toolInvocations,
+                  durationMs: record.durationMs,
+                  usage: record.usage
                 })
-              },
-              signal: context.abortSignal
-            })
-            const failed = record.status === 'failed' || record.status === 'aborted'
-            const resolvedModel =
-              record.model?.trim() ||
-              (typeof context.actingModelRoute?.model === 'string'
-                ? context.actingModelRoute.model.trim()
-                : '') ||
-              context.model?.id?.trim() ||
-              ''
-            const profileName =
-              record.profileSnapshot?.name?.trim() ||
-              'Repository Explorer'
-            return {
-              output: {
-                childId: record.id,
-                status: record.status,
-                title,
-                summary: record.summary ?? '',
-                toolInvocations: record.toolInvocations ?? 0,
-                usage: record.usage,
-                profile: 'explore',
-                profileName,
-                ...(resolvedModel ? { model: resolvedModel } : {}),
-                ...(record.durationMs !== undefined ? { durationMs: record.durationMs } : {}),
-                ...(failed ? { error: record.error ?? record.status } : {})
-              },
-              isError: failed
+              } catch (error) {
+                await batch.update(index, {
+                  status: context.abortSignal.aborted ? 'aborted' : 'failed',
+                  error: errorMessage(error)
+                })
+              }
             }
+            if (requiresSerialExploreBatch(context.approvalPolicy)) {
+              for (const [index, task] of parsedTasks.tasks.entries()) {
+                if (context.abortSignal.aborted) {
+                  await batch.abortRemaining(index)
+                  break
+                }
+                await Promise.allSettled([runTask(task, index)])
+              }
+            } else {
+              await Promise.allSettled(parsedTasks.tasks.map(runTask))
+            }
+            const output = batch.output()
+            return { output, isError: output.status === 'failed' }
           }
         })
       ]
@@ -248,28 +256,145 @@ export function buildExploreAgentToolProvider(
   ]
 }
 
-async function emitExploreLifecycle(
-  onUpdate: ((update: ToolExecutionUpdate) => Promise<void> | void) | undefined,
-  args: {
-    childId: string
-    status: 'queued' | 'running'
-    title: string
-    profile?: string
-    metadata?: { profileName?: string; model?: string; reasoningEffort?: string }
+type ExploreTask = { title: string; query: string }
+type ExploreChildStatus = 'queued' | 'running' | 'completed' | 'failed' | 'aborted'
+type ExploreBatchStatus = 'running' | 'completed' | 'partial' | 'failed'
+
+type ExploreChildOutput = ExploreTask & {
+  index: number
+  childId?: string
+  status: ExploreChildStatus
+  summary?: string
+  error?: string
+  model?: string
+  profile: 'explore'
+  profileName: string
+  toolInvocations?: number
+  durationMs?: number
+  usage?: object
+}
+
+type ExploreBatchOutput = {
+  status: ExploreBatchStatus
+  total: number
+  completed: number
+  failed: number
+  children: ExploreChildOutput[]
+}
+
+class ExploreBatchState {
+  private readonly children: ExploreChildOutput[]
+  private emission = Promise.resolve()
+
+  constructor(
+    tasks: ExploreTask[],
+    private readonly onUpdate: ((update: ToolExecutionUpdate) => Promise<void> | void) | undefined
+  ) {
+    this.children = tasks.map((task, index) => ({
+      index,
+      ...task,
+      status: 'queued',
+      profile: 'explore',
+      profileName: 'Repository Explorer'
+    }))
   }
-): Promise<void> {
-  await onUpdate?.({
-    output: {
-      childId: args.childId,
-      status: args.status,
-      title: args.title,
-      profile: args.profile ?? 'explore',
-      profileName: args.metadata?.profileName?.trim() || 'Repository Explorer',
-      ...(args.metadata?.model ? { model: args.metadata.model } : {}),
-      ...(args.metadata?.reasoningEffort ? { reasoningEffort: args.metadata.reasoningEffort } : {})
-    },
-    isError: false
-  })
+
+  output(): ExploreBatchOutput {
+    const children = this.children.map((child) => ({ ...child }))
+    const completed = children.filter((child) => child.status === 'completed').length
+    const failed = children.filter((child) =>
+      child.status === 'failed' || child.status === 'aborted'
+    ).length
+    const terminal = completed + failed
+    const status: ExploreBatchStatus = terminal < children.length
+      ? 'running'
+      : completed === children.length
+        ? 'completed'
+        : completed > 0
+          ? 'partial'
+          : 'failed'
+    return { status, total: children.length, completed, failed, children }
+  }
+
+  async emit(): Promise<void> {
+    if (!this.onUpdate) return
+    const snapshot = this.output()
+    this.emission = this.emission.then(async () => {
+      await this.onUpdate?.({ output: snapshot, isError: false })
+    })
+    await this.emission
+  }
+
+  async update(index: number, patch: Partial<ExploreChildOutput>): Promise<void> {
+    const current = this.children[index]
+    if (!current || !canAdvanceExploreStatus(current.status, patch.status)) return
+    this.children[index] = compactExploreChild({ ...current, ...patch })
+    await this.emit()
+  }
+
+  async abortRemaining(startIndex: number): Promise<void> {
+    for (let index = startIndex; index < this.children.length; index += 1) {
+      await this.update(index, {
+        status: 'aborted',
+        error: 'parent turn aborted before child started'
+      })
+    }
+  }
+}
+
+function canAdvanceExploreStatus(
+  current: ExploreChildStatus,
+  next: ExploreChildStatus | undefined
+): boolean {
+  if (!next) return true
+  const rank: Record<ExploreChildStatus, number> = {
+    queued: 0,
+    running: 1,
+    completed: 2,
+    failed: 2,
+    aborted: 2
+  }
+  return rank[next] >= rank[current] && rank[current] < 2
+}
+
+function compactExploreChild(child: ExploreChildOutput): ExploreChildOutput {
+  return Object.fromEntries(
+    Object.entries(child).filter(([, value]) => value !== undefined)
+  ) as ExploreChildOutput
+}
+
+function parseExploreTasks(value: unknown): { tasks: ExploreTask[] } | { error: string } {
+  if (!Array.isArray(value)) return { error: 'tasks must be an array with 1-4 items' }
+  if (value.length < 1) return { error: 'tasks must contain at least 1 item' }
+  if (value.length > 4) return { error: 'tasks must contain at most 4 items' }
+  const tasks: ExploreTask[] = []
+  for (const [index, candidate] of value.entries()) {
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) {
+      return { error: `tasks[${index}] must be an object` }
+    }
+    const task = candidate as Record<string, unknown>
+    const title = stringValue(task.title)
+    const query = stringValue(task.query)
+    if (!title) return { error: `tasks[${index}].title is required` }
+    if (!query) return { error: `tasks[${index}].query is required` }
+    tasks.push({ title, query })
+  }
+  return { tasks }
+}
+
+function requiresSerialExploreBatch(approvalPolicy: ToolHostContext['approvalPolicy']): boolean {
+  return approvalPolicy === 'always' || approvalPolicy === 'untrusted' || approvalPolicy === 'never'
+}
+
+function resolveExploreModel(model: string | undefined, context: ToolHostContext): string | undefined {
+  return model?.trim() ||
+    context.actingModelRoute?.model?.trim() ||
+    context.model?.id?.trim() ||
+    undefined
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }
 
 function buildExploreInlineProfile(

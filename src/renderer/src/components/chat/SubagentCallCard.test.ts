@@ -46,6 +46,9 @@ vi.mock('react-i18next', () => {
         if (typeof fallback === 'object' && fallback && 'count' in fallback && key === 'exploreViewProcessSteps') {
           return `View explore process · ${fallback.count} steps`
         }
+        if (typeof fallback === 'object' && fallback && 'count' in fallback && key === 'subagentSteps') {
+          return `${fallback.count} steps`
+        }
         return labels[key] ?? (typeof fallback === 'string' ? fallback : fallback?.defaultValue) ?? key
       }
     })
@@ -274,6 +277,36 @@ describe('SubagentCallCard route metadata', () => {
       openButtons[0].props.onClick({ stopPropagation() {} })
     })
     expect(onOpenChildThread).toHaveBeenCalledWith('child_a')
+  })
+
+  it('expands one aggregate explore result into live independent cards', async () => {
+    const onOpenChildThread = vi.fn()
+    await act(async () => {
+      renderer = create(createElement(SubagentGroup, {
+        onOpenChildThread,
+        blocks: [exploreBatchBlock()]
+      }))
+    })
+
+    const cards = renderer!.root.findAllByProps({ 'data-testid': 'subagent-call-card' })
+    const text = instanceText(renderer!.root)
+    expect(renderer!.root.findByProps({ 'data-testid': 'explore-independent-stack' })).toBeTruthy()
+    expect(cards).toHaveLength(3)
+    expect(cards.map((card) => card.props['data-explore'])).toEqual(['true', 'true', 'true'])
+    expect(text).toContain('Runtime wiring')
+    expect(text).toContain('Renderer cards')
+    expect(text).toContain('Failure path')
+    expect(text).toContain('Done')
+    expect(text).toContain('Running')
+    expect(text).toContain('Failed')
+    expect(text).toContain('4 steps')
+    expect(text).not.toContain('subagents')
+
+    const openButtons = renderer!.root.findAllByProps({ 'data-testid': 'explore-open-process-button' })
+    await act(async () => {
+      openButtons[1].props.onClick({ stopPropagation() {} })
+    })
+    expect(onOpenChildThread).toHaveBeenCalledWith('child_renderer')
   })
 
   it('prefers explore title and live activity on a running explore_agent card', async () => {
@@ -583,6 +616,63 @@ function exploreChildBlock(input: {
         childSeq: input.childSeq
       }
     }
+  }
+}
+
+function exploreBatchBlock(): ToolBlock {
+  return {
+    kind: 'tool',
+    id: 'tool_explore_batch',
+    turnId: 'turn_parent',
+    createdAt: '2026-08-07T00:00:00.000Z',
+    summary: 'explore_agent',
+    status: 'running',
+    toolKind: 'tool_call',
+    detail: JSON.stringify({
+      status: 'running',
+      total: 3,
+      completed: 1,
+      failed: 1,
+      children: [
+        {
+          index: 0,
+          childId: 'child_runtime',
+          title: 'Runtime wiring',
+          query: 'Trace the runtime path',
+          status: 'completed',
+          summary: 'Runtime path located.',
+          model: 'gpt-5.6-sol',
+          profile: 'explore',
+          profileName: 'Repository Explorer',
+          toolInvocations: 4,
+          durationMs: 2_000,
+          usage: { totalTokens: 120 }
+        },
+        {
+          index: 1,
+          childId: 'child_renderer',
+          title: 'Renderer cards',
+          query: 'Inspect renderer cards',
+          status: 'running',
+          model: 'gpt-5.6-sol',
+          profile: 'explore',
+          profileName: 'Repository Explorer',
+          toolInvocations: 2
+        },
+        {
+          index: 2,
+          childId: 'child_failure',
+          title: 'Failure path',
+          query: 'Inspect failure behavior',
+          status: 'failed',
+          error: 'Provider timeout',
+          profile: 'explore',
+          profileName: 'Repository Explorer',
+          toolInvocations: 1
+        }
+      ]
+    }),
+    meta: { toolName: 'explore_agent' }
   }
 }
 

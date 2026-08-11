@@ -34,6 +34,7 @@ import {
   hashHue,
   isTerminal,
   parseDelegateDetail,
+  parseExploreBatchChildren,
   readChildMeta,
   resolveStatus,
   useOnScreen,
@@ -424,7 +425,8 @@ export function SubagentGroup({
   const reducedMotion = useSubagentReducedMotion()
   const [tickNow, setTickNow] = useState(() => Date.now())
 
-  const sorted = [...blocks].sort((a, b) => {
+  const expandedBlocks = blocks.flatMap(expandExploreBatchBlock)
+  const sorted = [...expandedBlocks].sort((a, b) => {
     const sa = readChildMeta(a).childSeq ?? 0
     const sb = readChildMeta(b).childSeq ?? 0
     return sa - sb
@@ -444,8 +446,8 @@ export function SubagentGroup({
   useEffect(() => {
     if (!anyRunning) return
     setTickNow(Date.now())
-    const id = window.setInterval(() => setTickNow(Date.now()), 1000)
-    return () => window.clearInterval(id)
+    const id = globalThis.setInterval(() => setTickNow(Date.now()), 1000)
+    return () => globalThis.clearInterval(id)
   }, [anyRunning])
 
   if (sorted.length === 0) return null
@@ -550,4 +552,44 @@ export function SubagentGroup({
       ) : null}
     </section>
   )
+}
+
+function expandExploreBatchBlock(block: ChatBlock): ChatBlock[] {
+  if (block.kind !== 'tool' || !isExploreToolBlock(block as ToolBlock)) return [block]
+  const tool = block as ToolBlock
+  const children = parseExploreBatchChildren(tool.detail)
+  if (children.length === 0) return [block]
+  return children.map((child) => ({
+    ...tool,
+    id: `${tool.id}:explore:${child.index}`,
+    summary: child.title,
+    status: child.status === 'completed'
+      ? 'success'
+      : child.status === 'failed' || child.status === 'aborted'
+        ? 'error'
+        : 'running',
+    detail: JSON.stringify({
+      ...child,
+      ...(typeof child.totalTokens === 'number'
+        ? { usage: { totalTokens: child.totalTokens } }
+        : {})
+    }),
+    meta: {
+      ...tool.meta,
+      toolName: 'explore_agent',
+      child: {
+        childId: child.childId,
+        childLabel: child.title,
+        childProfile: 'explore',
+        childProfileName: child.profileName,
+        childModel: child.model,
+        childStatus: child.status,
+        childSeq: child.index,
+        parentTurnId: tool.turnId,
+        toolInvocations: child.toolInvocations,
+        durationMs: child.durationMs,
+        totalTokens: child.totalTokens
+      }
+    }
+  }))
 }

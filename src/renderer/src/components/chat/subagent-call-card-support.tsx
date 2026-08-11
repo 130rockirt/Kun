@@ -48,6 +48,15 @@ export type DelegateDetail = {
   generatedAgentName?: string
 }
 
+export type ExploreBatchChildDetail = DelegateDetail & {
+  index: number
+  title: string
+  query: string
+  status: NonNullable<DelegateDetail['status']>
+  profile: 'explore'
+  profileName: string
+}
+
 export function parseDelegateDetail(detail: string | undefined): DelegateDetail {
   if (!detail || !detail.trim()) return {}
   let raw: unknown
@@ -93,6 +102,45 @@ export function parseDelegateDetail(detail: string | undefined): DelegateDetail 
     generated: routing?.selectedKind === 'generated' || str(obj.profile)?.startsWith('generated:') === true,
     generatedAgentName: str(generatedAgent?.name) ?? str(routingAgent?.name)
   }
+}
+
+/** Parse the new aggregate explore result without changing legacy scalar parsing. */
+export function parseExploreBatchChildren(detail: string | undefined): ExploreBatchChildDetail[] {
+  if (!detail || !detail.trim()) return []
+  let raw: unknown
+  try {
+    raw = JSON.parse(detail)
+  } catch {
+    return []
+  }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return []
+  const children = (raw as Record<string, unknown>).children
+  if (!Array.isArray(children) || children.length < 1 || children.length > 4) return []
+  const parsed: ExploreBatchChildDetail[] = []
+  const seen = new Set<number>()
+  for (const candidate of children) {
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return []
+    const child = candidate as Record<string, unknown>
+    const detailValue = parseDelegateDetail(JSON.stringify(child))
+    const index = child.index
+    if (!Number.isInteger(index) || (index as number) < 0 || (index as number) > 3 || seen.has(index as number)) {
+      return []
+    }
+    if (!detailValue.title || !detailValue.query || !detailValue.status || detailValue.profile !== 'explore') {
+      return []
+    }
+    seen.add(index as number)
+    parsed.push({
+      ...detailValue,
+      index: index as number,
+      title: detailValue.title,
+      query: detailValue.query,
+      status: detailValue.status,
+      profile: 'explore',
+      profileName: detailValue.profileName || 'Repository Explorer'
+    })
+  }
+  return parsed.sort((left, right) => left.index - right.index)
 }
 
 export type ChildMeta = {

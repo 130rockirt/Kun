@@ -191,7 +191,7 @@ export function buildToolPreferenceInstruction(
       )
     }
     bullets.push(
-      'Issue multiple `explore_agent` calls together when the exploration questions are independent; keep dependent investigation sequential.'
+      'For a complex investigation, make one `explore_agent` call with 2-4 non-overlapping tasks so the child runs can proceed in parallel. Put any investigation that depends on this evidence in a later batch.'
     )
     if (names.has('delegate_task')) {
       bullets.push(
