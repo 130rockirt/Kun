@@ -29,6 +29,7 @@ import type {
   PreparedTurnContext,
   ResolvedTurnAttachments
 } from './turn-execution-types.js'
+import { collectTurnAttachmentIds } from './turn-steering-attachments.js'
 
 const EMPTY_SKILL_RESOLUTION: SkillTurnResolution = {
   activeSkillIds: [],
@@ -116,7 +117,7 @@ export class TurnContextResolver {
     // I/O together so model dispatch pays the slowest branch, not their sum.
     const [attachments, skillResolution, instructionResolution, memories] = await Promise.all([
       this.deps.resolveAttachments({
-        attachmentIds: input.turn.attachmentIds ?? [],
+        attachmentIds: collectTurnAttachmentIds(input.turn),
         threadId: input.threadId,
         workspace,
         modelCapabilities: input.modelCapabilities

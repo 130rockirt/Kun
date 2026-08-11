@@ -560,7 +560,7 @@ describe('KunRuntimeProvider', () => {
     )
   })
 
-  it('posts mid-turn guidance with its user-facing display text', async () => {
+  it('posts mid-turn guidance with display text and image attachment ids', async () => {
     const runtimeRequest = vi.fn(async () => ({
       ok: true,
       status: 200,
@@ -573,7 +573,10 @@ describe('KunRuntimeProvider', () => {
       'thr_1',
       'turn_1',
       'use the compact logo instead',
-      { displayText: 'Use the compact logo instead' }
+      {
+        displayText: 'Use the compact logo instead',
+        attachmentIds: ['att_0123456789abcdef01234567']
+      }
     )
 
     expect(runtimeRequest).toHaveBeenCalledWith(
@@ -581,7 +584,8 @@ describe('KunRuntimeProvider', () => {
       'POST',
       JSON.stringify({
         text: 'use the compact logo instead',
-        displayText: 'Use the compact logo instead'
+        displayText: 'Use the compact logo instead',
+        attachmentIds: ['att_0123456789abcdef01234567']
       })
     )
   })

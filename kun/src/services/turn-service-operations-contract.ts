@@ -80,6 +80,7 @@ export interface TurnServiceOperations {
     text: string
     displayText?: string
     messageSource?: UserMessageSource
+    attachmentIds?: string[]
   }): Promise<void>;
   steeringQueue(input: { threadId: string; turnId: string }): Promise<SteeringEntry[]>;
   replaceSteering(input: {

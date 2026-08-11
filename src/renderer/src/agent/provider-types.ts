@@ -212,7 +212,7 @@ export interface AgentProvider {
     threadId: string,
     turnId: string,
     text: string,
-    options?: { displayText?: string }
+    options?: { displayText?: string; attachmentIds?: string[] }
   ): Promise<void>
   interruptTurn(threadId: string, turnId: string, options?: { discard?: boolean }): Promise<void>
   cancelToolCall?(

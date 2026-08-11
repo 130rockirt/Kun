@@ -44,6 +44,26 @@ describe('canGuideQueuedMessage', () => {
     })
   })
 
+  it('allows image attachments while rejecting documents and unbound metadata', () => {
+    expect(queuedMessageGuidancePayload({
+      text: 'Use this reference',
+      attachmentIds: ['att_image'],
+      attachments: [{ id: 'att_image', kind: 'image' }]
+    })).toEqual({
+      text: 'Use this reference',
+      attachmentIds: ['att_image']
+    })
+    expect(queuedMessageGuidancePayload({
+      text: 'Read this document',
+      attachmentIds: ['att_document'],
+      attachments: [{ id: 'att_document', kind: 'document' }]
+    })).toBeNull()
+    expect(queuedMessageGuidancePayload({
+      text: 'Missing attachment id',
+      attachments: [{ id: 'att_image', kind: 'image' }]
+    })).toBeNull()
+  })
+
   it('keeps targeted Design artifacts and canvas prompts without visible text queued', () => {
     expect(canGuideQueuedMessage({
       id: 'q-design-svg',

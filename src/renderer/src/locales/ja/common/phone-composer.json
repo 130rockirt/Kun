@@ -548,7 +548,7 @@
   "guideQueuedMessagePending": "導き",
   "guideQueuedMessageHint": "この入力をエージェントの次のモデル インタラクションに追加します",
   "guideQueuedMessageGraphHint": "この入力を現在の Graph Lead に送信します",
-  "guideQueuedMessageTextOnly": "現在のターンを導くことができるのは、プレーンテキストのフォローアップだけです。このメッセージはキューに残ったままになります。",
+  "guideQueuedMessageTextOnly": "現在のターンを導くことができるのは、プレーンテキストまたは画像のフォローアップだけです。このメッセージはキューに残ります。",
   "guideQueuedMessageNoActiveTurn": "アクティブなターンの準備ができていないか、すでに終了しています。このメッセージはまだキューに入れられています。",
   "guideQueuedMessageUnsupported": "このエージェントは実行ターン中はガイダンスを受け入れることができません。このメッセージはまだキューに入れられています。",
   "guideQueuedMessageFailed": "現在のターンをガイドできませんでした: {{message}}。このメッセージはまだキューに入れられています。",

@@ -144,6 +144,7 @@ export abstract class DelegationRuntimeBase {
       ...this.options,
       config
     }
+    this.drainSlotWaiters()
   }
 
   enabled(): boolean {
@@ -157,7 +158,7 @@ export abstract class DelegationRuntimeBase {
   /** Acquire a parallel slot, queueing (FIFO) when the runtime is saturated. */
   protected acquireSlot(signal: AbortSignal): Promise<void> {
     if (signal.aborted) return Promise.reject(new Error('aborted while queued'))
-    if (this.active < this.parallelLimit) {
+    if (this.slotWaiters.length === 0 && this.active < this.parallelLimit) {
       this.active += 1
       return Promise.resolve()
     }
@@ -170,21 +171,33 @@ export abstract class DelegationRuntimeBase {
           const index = this.slotWaiters.indexOf(waiter)
           if (index >= 0) this.slotWaiters.splice(index, 1)
           reject(new Error('aborted while queued'))
+          this.drainSlotWaiters()
         }
       }
       signal.addEventListener('abort', waiter.onAbort, { once: true })
       this.slotWaiters.push(waiter)
+      this.drainSlotWaiters()
     })
   }
 
-  /** Hand the freed slot to the next waiter, or shrink the active count. */
+  /** Free one occupied slot, then admit queued children under the current limit. */
   protected releaseSlot(): void {
-    const next = this.slotWaiters.shift()
-    if (next) {
+    this.active = Math.max(0, this.active - 1)
+    this.drainSlotWaiters()
+  }
+
+  /** Fill newly available capacity from the existing FIFO before later arrivals. */
+  private drainSlotWaiters(): void {
+    while (this.enabled() && this.active < this.parallelLimit) {
+      const next = this.slotWaiters.shift()
+      if (!next) return
       next.signal.removeEventListener('abort', next.onAbort)
-      next.resolve() // slot is handed over directly; `active` stays the same
-    } else {
-      this.active = Math.max(0, this.active - 1)
+      if (next.signal.aborted) {
+        next.reject(new Error('aborted while queued'))
+        continue
+      }
+      this.active += 1
+      next.resolve()
     }
   }
 
@@ -487,58 +500,59 @@ export abstract class DelegationRuntimeBase {
     }
 
     const startedAt = this.now()
-    const queuedMs = elapsedMs(args.queuedAt, startedAt)
-    record = await this.commitChildState(args.state, (current) => ChildRunRecord.parse({
-      ...current,
-      status: 'running',
-      terminationReason: undefined,
-      resumable: false,
-      startedAt,
-      queuedMs,
-      updatedAt: startedAt
-    }))
-    await notifyLifecycle(args.onRunning, record)
-    const unsubscribeActivity = this.options.eventBus?.subscribe(record.id, (event) => {
-      void this.projectChildActivity(args.state, event)
-    })
-    const usageBeforeRun = record.usage
+    let unsubscribeActivity: (() => void) | undefined
     try {
+      const queuedMs = elapsedMs(args.queuedAt, startedAt)
+      record = await this.commitChildState(args.state, (current) => ChildRunRecord.parse({
+        ...current,
+        status: 'running',
+        terminationReason: undefined,
+        resumable: false,
+        startedAt,
+        queuedMs,
+        updatedAt: startedAt
+      }))
+      await notifyLifecycle(args.onRunning, record)
+      unsubscribeActivity = this.options.eventBus?.subscribe(record.id, (event) => {
+        void this.projectChildActivity(args.state, event)
+      })
+      const usageBeforeRun = record.usage
       const executor: ChildRunExecutor = this.options.executor ?? defaultExecutor
       const result = await executeWithParentSignal(args.signal, (signal) => executor({
-        ...(args.resumeChild ? { resumeChild: true } : {}),
-        childId: record.id,
-        parentThreadId: args.parentThreadId,
-        parentTurnId: args.parentTurnId,
-        ...(args.label ? { label: args.label } : {}),
-        ...(args.profileName ? { profile: args.profileName } : {}),
-        prompt: args.prompt,
-        ...(args.source ? { source: args.source } : {}),
-        ...(args.controlPrompt ? { controlPrompt: args.controlPrompt } : {}),
-        ...(args.pptWorkflowScope ? { pptWorkflowScope: args.pptWorkflowScope } : {}),
-        workspace: args.workspace,
-        model: args.resolvedModel,
-        ...(args.resolvedProviderId ? { providerId: args.resolvedProviderId } : {}),
-        ...(args.resolvedAccountId ? { accountId: args.resolvedAccountId } : {}),
-        ...(args.resolvedSystemPrompt ? { systemPrompt: args.resolvedSystemPrompt } : {}),
-        ...(args.resolvedOmitBasePrompt ? { omitBasePrompt: true } : {}),
-        ...(args.resolvedAllowedTools ? { allowedTools: args.resolvedAllowedTools } : {}),
-        ...(args.security ? { security: args.security } : {}),
-        ...(args.resolvedBlockedTools ? { blockedTools: args.resolvedBlockedTools } : {}),
-        ...(args.resolvedBlockedMcpServers ? { blockedMcpServers: args.resolvedBlockedMcpServers } : {}),
-        ...(args.resolvedBlockedSkills ? { blockedSkills: args.resolvedBlockedSkills } : {}),
-        skillsEnabled: args.skillsEnabled,
-        toolPolicy: args.toolPolicy,
-        ...(args.approvalPolicy ? { approvalPolicy: args.approvalPolicy } : {}),
-        ...(args.sandboxMode ? { sandboxMode: args.sandboxMode } : {}),
-        approvalReviewer: args.approvalReviewer,
-        ...(args.clientSurface ? { clientSurface: args.clientSurface } : {}),
-        ...(args.agentSurface ? { agentSurface: args.agentSurface } : {}),
-        ...(args.promptPreamble ? { promptPreamble: args.promptPreamble } : {}),
-        ...(args.guiDesignCanvas ? { guiDesignCanvas: true } : {}),
-        ...(args.resolvedReasoningEffort ? { reasoningEffort: args.resolvedReasoningEffort } : {}),
-        ...(args.resolvedServiceTier ? { serviceTier: args.resolvedServiceTier } : {}),
-        returnFormat: args.returnFormat,
-        signal
+          ...(args.resumeChild ? { resumeChild: true } : {}),
+          childId: record.id,
+          parentThreadId: args.parentThreadId,
+          parentTurnId: args.parentTurnId,
+          ...(args.label ? { label: args.label } : {}),
+          ...(args.profileName ? { profile: args.profileName } : {}),
+          prompt: args.prompt,
+          ...(args.source ? { source: args.source } : {}),
+          ...(args.controlPrompt ? { controlPrompt: args.controlPrompt } : {}),
+          ...(args.pptWorkflowScope ? { pptWorkflowScope: args.pptWorkflowScope } : {}),
+          workspace: args.workspace,
+          model: args.resolvedModel,
+          ...(args.resolvedProviderId ? { providerId: args.resolvedProviderId } : {}),
+          ...(args.resolvedAccountId ? { accountId: args.resolvedAccountId } : {}),
+          ...(args.resolvedSystemPrompt ? { systemPrompt: args.resolvedSystemPrompt } : {}),
+          ...(args.resolvedOmitBasePrompt ? { omitBasePrompt: true } : {}),
+          ...(args.resolvedAllowedTools ? { allowedTools: args.resolvedAllowedTools } : {}),
+          ...(args.security ? { security: args.security } : {}),
+          ...(args.resolvedBlockedTools ? { blockedTools: args.resolvedBlockedTools } : {}),
+          ...(args.resolvedBlockedMcpServers ? { blockedMcpServers: args.resolvedBlockedMcpServers } : {}),
+          ...(args.resolvedBlockedSkills ? { blockedSkills: args.resolvedBlockedSkills } : {}),
+          skillsEnabled: args.skillsEnabled,
+          toolPolicy: args.toolPolicy,
+          ...(args.approvalPolicy ? { approvalPolicy: args.approvalPolicy } : {}),
+          ...(args.sandboxMode ? { sandboxMode: args.sandboxMode } : {}),
+          approvalReviewer: args.approvalReviewer,
+          ...(args.clientSurface ? { clientSurface: args.clientSurface } : {}),
+          ...(args.agentSurface ? { agentSurface: args.agentSurface } : {}),
+          ...(args.promptPreamble ? { promptPreamble: args.promptPreamble } : {}),
+          ...(args.guiDesignCanvas ? { guiDesignCanvas: true } : {}),
+          ...(args.resolvedReasoningEffort ? { reasoningEffort: args.resolvedReasoningEffort } : {}),
+          ...(args.resolvedServiceTier ? { serviceTier: args.resolvedServiceTier } : {}),
+          returnFormat: args.returnFormat,
+          signal
       }))
       const finishedAt = this.now()
       const contractError = childContractError(args.returnFormat, result.evidence)
@@ -616,8 +630,13 @@ export abstract class DelegationRuntimeBase {
       }))
       return record
     } finally {
-      unsubscribeActivity?.()
-      this.releaseSlot()
+      try {
+        unsubscribeActivity?.()
+      } catch (error) {
+        console.warn('[kun] child activity subscription cleanup failed:', error)
+      } finally {
+        this.releaseSlot()
+      }
     }
   }
 

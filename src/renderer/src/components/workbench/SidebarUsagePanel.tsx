@@ -8,10 +8,10 @@ import {
   usageTotalsFromBuckets
 } from '../chat/InitialSessionUsageHeatmap'
 import {
-  cumulativeCacheHitRate,
   formatCompactNumber,
   formatCost,
   formatPercent,
+  primaryCacheHitRate,
   useThreadUsageState
 } from '../../hooks/use-thread-usage'
 import {
@@ -146,7 +146,7 @@ export function SidebarUsagePanel({
                 },
                 {
                   label: t('usageQuotaMetricCache'),
-                  value: formatPercent(cumulativeCacheHitRate(currentUsage))
+                  value: formatPercent(primaryCacheHitRate(currentUsage))
                 },
                 {
                   label: t('usageQuotaMetricTurns'),

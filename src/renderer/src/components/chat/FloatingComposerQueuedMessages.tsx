@@ -10,6 +10,7 @@ import {
 import {
   CornerDownRight,
   GripVertical,
+  ImageIcon,
   ListPlus,
   Loader2,
   MoreHorizontal,
@@ -79,7 +80,7 @@ export type QueuedComposerMessage = {
   guidanceEligible?: boolean
   mode?: string
   attachmentIds?: readonly string[]
-  attachments?: readonly unknown[]
+  attachments?: readonly { name?: string; kind?: 'image' | 'document' }[]
   fileReferences?: readonly unknown[]
   composerContexts?: readonly unknown[]
   guiPlan?: unknown
@@ -89,7 +90,7 @@ export type QueuedComposerMessage = {
   writeContext?: unknown
 }
 
-/** True when the text-only steer contract can preserve the whole queued payload. */
+/** True when the steer contract can preserve the whole queued payload. */
 export function canGuideQueuedComposerMessage(message: QueuedComposerMessage): boolean {
   return queuedMessageGuidancePayload(message) !== null
 }
@@ -99,6 +100,8 @@ export function canEditQueuedComposerMessage(message: QueuedComposerMessage): bo
   return Boolean(
     message.guidanceEligible !== false &&
     message.mode !== 'plan' &&
+    !message.attachmentIds?.length &&
+    !message.attachments?.length &&
     canGuideQueuedComposerMessage(message)
   )
 }
@@ -309,6 +312,17 @@ export function FloatingComposerQueuedMessages({
                 : t('guideQueuedMessageHint')
               : t('guideQueuedMessageTextOnly')
           const editMessage = onEdit && canEditQueuedComposerMessage(message) ? onEdit : null
+          const imageAttachments = message.attachments?.filter(
+            (attachment) => attachment.kind !== 'document'
+          ) ?? []
+          const imageCount = imageAttachments.length > 0
+            ? imageAttachments.length
+            : message.attachments?.length
+              ? 0
+              : message.attachmentIds?.length ?? 0
+          const imageNames = imageAttachments
+            ?.map((attachment) => attachment.name?.trim())
+            .filter((name): name is string => Boolean(name)) ?? []
           const canReorder = Boolean(onReorder && visibleMessages.length > 1 && !guiding)
           const messageDropTarget = dropTarget?.id === message.id ? dropTarget : null
           return (
@@ -357,6 +371,18 @@ export function FloatingComposerQueuedMessages({
                 <div className="truncate text-[14px] leading-5 text-ds-ink">
                   {message.displayText ?? message.text}
                 </div>
+                {imageCount > 0 ? (
+                  <div
+                    data-queued-message-images={imageCount}
+                    className="mt-0.5 flex min-w-0 items-center gap-1 text-[11px] leading-4 text-ds-faint"
+                    aria-label={`${t('composerImageOnlyDisplay')} (${imageCount})`}
+                    title={imageNames.join(', ') || undefined}
+                  >
+                    <ImageIcon className="h-3 w-3 shrink-0" strokeWidth={1.8} />
+                    <span>{imageCount}</span>
+                    {imageNames[0] ? <span className="truncate">{imageNames[0]}</span> : null}
+                  </div>
+                ) : null}
                 {paused ? (
                   <div className="truncate text-[11px] leading-4 text-ds-faint">
                     {t('queuedMessagePaused')}

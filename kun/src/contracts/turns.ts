@@ -355,14 +355,22 @@ export type StartTurnResponse = z.infer<typeof StartTurnResponse>
 export const SteerTurnRequest = z.object({
   text: z.string().min(1),
   displayText: z.string().optional(),
-  messageSource: UserMessageSource.optional()
+  messageSource: UserMessageSource.optional(),
+  attachmentIds: z.array(z.string().trim().min(1)).max(MAX_TURN_ATTACHMENT_IDS).refine(
+    (ids) => new Set(ids).size === ids.length,
+    { message: 'attachmentIds must not contain duplicates' }
+  ).optional()
 })
 export type SteerTurnRequest = z.infer<typeof SteerTurnRequest>
 
 export const SteeringEntrySchema = z.object({
   text: z.string().trim().min(1),
   displayText: z.string().trim().min(1).optional(),
-  messageSource: UserMessageSource.optional()
+  messageSource: UserMessageSource.optional(),
+  attachmentIds: z.array(z.string().trim().min(1)).max(MAX_TURN_ATTACHMENT_IDS).refine(
+    (ids) => new Set(ids).size === ids.length,
+    { message: 'attachmentIds must not contain duplicates' }
+  ).optional()
 }).strict()
 export type SteeringEntry = z.infer<typeof SteeringEntrySchema>
 

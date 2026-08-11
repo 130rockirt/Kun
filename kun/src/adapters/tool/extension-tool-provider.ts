@@ -104,6 +104,11 @@ export type ExtensionToolRegistryOptions = {
   isManifestDeclared?: (principal: ExtensionPrincipal, declaration: ExtensionToolDeclaration) => boolean
 }
 
+export type StagedExtensionToolRegistry = Readonly<{
+  registry: CapabilityRegistry
+  providerIds: readonly string[]
+}>
+
 export type ActiveRegistration = {
   registrationKey: string
   principal: ExtensionPrincipal
@@ -221,13 +226,26 @@ export class ExtensionToolRegistry {
   /** Rebind live extension registrations after Kun rebuilds its base registry. */
   rebindRegistry(registry: CapabilityRegistry): void {
     if (this.options.registry === registry) return
-    for (const providerId of this.providerIds) {
-      this.options.registry.unregisterProvider(providerId)
-    }
-    this.options.registry = registry
-    this.gatewayDispatchHost.replaceRuntimeComponents({ registry })
+    this.publishStagedRegistry(this.stageRegistry(registry))
+  }
+
+  /** Preflight extension providers on an unpublished registry generation. */
+  stageRegistry(registry: CapabilityRegistry): StagedExtensionToolRegistry {
+    const providers = this.activeProviders()
+    for (const provider of providers) registry.replaceProvider(provider)
+    return { registry, providerIds: providers.map((provider) => provider.id) }
+  }
+
+  /** Publish a previously validated registry without rebuilding providers. */
+  publishStagedRegistry(staged: StagedExtensionToolRegistry): void {
+    if (this.options.registry === staged.registry) return
+    // Registries are generation snapshots pinned by LocalToolHost for an
+    // active turn. Never mutate the previous generation during publication:
+    // it must keep the exact catalog that was advertised to that turn.
+    this.options.registry = staged.registry
+    this.gatewayDispatchHost.replaceRuntimeComponents({ registry: staged.registry })
     this.providerIds.clear()
-    this.syncProviders()
+    for (const providerId of staged.providerIds) this.providerIds.add(providerId)
   }
 
   list(extensionId?: string, workspace?: string): Array<{
@@ -423,6 +441,19 @@ export class ExtensionToolRegistry {
   }
 
   private syncProviders(): void {
+    const providers = this.activeProviders()
+    const activeProviderIds = new Set(providers.map((provider) => provider.id))
+    for (const providerId of this.providerIds) {
+      if (!activeProviderIds.has(providerId)) this.options.registry.unregisterProvider(providerId)
+    }
+    this.providerIds.clear()
+    for (const provider of providers) {
+      this.options.registry.replaceProvider(provider)
+      this.providerIds.add(provider.id)
+    }
+  }
+
+  private activeProviders(): CapabilityToolProvider[] {
     const grouped = new Map<string, Map<string, ActiveRegistration>>()
     for (const registration of this.registrations.values()) {
       const registrations = grouped.get(registration.principal.extensionId) ?? new Map<string, ActiveRegistration>()
@@ -431,14 +462,7 @@ export class ExtensionToolRegistry {
       }
       grouped.set(registration.principal.extensionId, registrations)
     }
-    const activeProviderIds = new Set([
-      ...[...grouped.keys()].map(extensionProviderId),
-      EXTENSION_GATEWAY_PROVIDER_ID
-    ])
-    for (const providerId of this.providerIds) {
-      if (!activeProviderIds.has(providerId)) this.options.registry.unregisterProvider(providerId)
-    }
-    this.providerIds.clear()
+    const providers: CapabilityToolProvider[] = []
     for (const [extensionId, registrations] of grouped) {
       const provider: CapabilityToolProvider = {
         id: extensionProviderId(extensionId),
@@ -449,11 +473,10 @@ export class ExtensionToolRegistry {
           .sort((a, b) => a.canonicalToolId.localeCompare(b.canonicalToolId))
           .map((registration) => this.localTool(registration.canonicalToolId, registration))
       }
-      this.options.registry.replaceProvider(provider)
-      this.providerIds.add(provider.id)
+      providers.push(provider)
     }
-    this.options.registry.replaceProvider(this.progressiveGatewayProvider())
-    this.providerIds.add(EXTENSION_GATEWAY_PROVIDER_ID)
+    providers.push(this.progressiveGatewayProvider())
+    return providers
   }
 
   private progressiveGatewayProvider(): CapabilityToolProvider {

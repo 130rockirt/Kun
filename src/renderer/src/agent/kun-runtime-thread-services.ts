@@ -146,13 +146,18 @@ export class KunRuntimeThreadServices extends KunRuntimeProviderServices {
     threadId: string,
     turnId: string,
     text: string,
-    options?: { displayText?: string }
+    options?: { displayText?: string; attachmentIds?: string[] }
   ): Promise<void> {
     const displayText = options?.displayText?.trim()
+    const attachmentIds = options?.attachmentIds?.map((id) => id.trim()).filter(Boolean) ?? []
     const response = await rendererRuntimeClient.runtimeRequest(
       kunThreadSteerPath(threadId, turnId),
       'POST',
-      JSON.stringify({ text, ...(displayText ? { displayText } : {}) })
+      JSON.stringify({
+        text,
+        ...(displayText ? { displayText } : {}),
+        ...(attachmentIds.length ? { attachmentIds } : {})
+      })
     )
     if (!response.ok) {
       throw runtimeErrorToError(readRuntimeError(response.body, 'failed to queue message'))

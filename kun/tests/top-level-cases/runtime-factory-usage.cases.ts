@@ -138,6 +138,141 @@ describe('runtime factory usage carryover', () => {
     }
   })
 
+  it('hot-applies subagent mode and availability in the same runtime generation', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'kun-runtime-subagents-apply-'))
+    tempDirs.push(dataDir)
+    const subagentCapabilities = (enabled: boolean, useExistingAgents: boolean) =>
+      KunCapabilitiesConfig.parse({ subagents: { enabled, useExistingAgents } })
+    const runtime = await createKunServeRuntime({
+      host: '127.0.0.1',
+      port: 0,
+      dataDir,
+      runtimeToken: 'tok',
+      apiKey: 'sk-default',
+      baseUrl: 'https://api.example.test/v1',
+      model: 'model-before',
+      approvalPolicy: 'auto',
+      sandboxMode: 'danger-full-access',
+      tokenEconomyMode: false,
+      insecure: false,
+      storage: { backend: 'file' },
+      capabilities: subagentCapabilities(true, true)
+    })
+
+    let listedTurn = 0
+    const listTools = async () => {
+      const toolHost = runtime.toolHost
+      expect(toolHost).toBeDefined()
+      if (!toolHost) throw new Error('Expected the Kun runtime tool host to be available')
+      return await toolHost.listTools({
+        threadId: 'thr_subagents_apply',
+        turnId: `turn_subagents_apply_${++listedTurn}`,
+        workspace: dataDir,
+        threadMode: 'agent',
+        clientSurface: 'gui',
+        approvalPolicy: 'auto',
+        abortSignal: new AbortController().signal,
+        awaitApproval: async () => 'allow'
+      })
+    }
+    const delegateProperties = async () => {
+      const delegate = (await listTools()).find((tool) => tool.name === 'delegate_task')
+      expect(delegate).toBeDefined()
+      return delegate?.inputSchema.properties as Record<string, unknown>
+    }
+
+    try {
+      expect(await delegateProperties()).toMatchObject({ profile: expect.any(Object) })
+      expect(await delegateProperties()).not.toHaveProperty('custom_agent')
+
+      const modelConnections = runtime.modelConnections
+      expect(modelConnections).toBeDefined()
+      if (!modelConnections) throw new Error('Expected model connections to be available')
+      const initialize = vi.spyOn(modelConnections, 'initialize')
+      initialize.mockRejectedValueOnce(new Error('staged subagent config failed'))
+      await expect(runtime.applyConfig({
+        capabilities: subagentCapabilities(true, false)
+      })).resolves.toEqual({
+        ok: false,
+        code: 'invalid_config',
+        message: 'staged subagent config failed'
+      })
+      expect(runtime.delegationRuntime?.useExistingAgents).toBe(true)
+      expect(await delegateProperties()).toMatchObject({ profile: expect.any(Object) })
+      expect(await delegateProperties()).not.toHaveProperty('custom_agent')
+      initialize.mockRestore()
+
+      const extensionTools = runtime.extensionPlatform?.tools
+      expect(extensionTools).toBeDefined()
+      if (!extensionTools) throw new Error('Expected extension tools to be available')
+      const extensionStage = vi.spyOn(extensionTools, 'stageRegistry')
+      extensionStage.mockImplementationOnce(() => {
+        throw new Error('extension registry preflight failed')
+      })
+      await expect(runtime.applyConfig({
+        capabilities: subagentCapabilities(true, false)
+      })).resolves.toEqual({
+        ok: false,
+        code: 'invalid_config',
+        message: 'extension registry preflight failed'
+      })
+      expect(runtime.info().capabilities.subagents.useExistingAgents).toBe(true)
+      expect(runtime.delegationRuntime?.useExistingAgents).toBe(true)
+      expect(await delegateProperties()).toMatchObject({ profile: expect.any(Object) })
+      expect(await delegateProperties()).not.toHaveProperty('custom_agent')
+      extensionStage.mockRestore()
+
+      const currentGraph = runtime.graph?.config()
+      expect(currentGraph).toBeDefined()
+      if (!currentGraph || !runtime.graph) throw new Error('Expected Graph runtime services')
+      const reconfigureLearning = vi.spyOn(runtime.graph.learning, 'reconfigure')
+      reconfigureLearning.mockRejectedValueOnce(new Error('graph reconfigure failed'))
+      const nextGraph = {
+        ...currentGraph,
+        routing: {
+          ...currentGraph.routing,
+          recallLimit: currentGraph.routing.recallLimit + 1
+        }
+      }
+      await expect(runtime.applyConfig({
+        capabilities: subagentCapabilities(true, false),
+        graph: nextGraph
+      })).resolves.toEqual({ ok: true })
+      expect(runtime.graph.config()).toEqual(nextGraph)
+      expect(runtime.info().capabilities.subagents.useExistingAgents).toBe(false)
+      expect(runtime.delegationRuntime?.useExistingAgents).toBe(false)
+      expect(await delegateProperties()).toMatchObject({ custom_agent: expect.any(Object) })
+      expect(await delegateProperties()).not.toHaveProperty('profile')
+      reconfigureLearning.mockRestore()
+
+      expect(await runtime.applyConfig({
+        capabilities: subagentCapabilities(false, false)
+      })).toEqual({ ok: true })
+      expect(runtime.delegationRuntime?.enabled()).toBe(false)
+      expect((await listTools()).map((tool) => tool.name)).not.toEqual(expect.arrayContaining([
+        'delegate_task',
+        'list_subagent_profiles',
+        'explore_agent',
+        'ppt_agent'
+      ]))
+
+      expect(await runtime.applyConfig({
+        capabilities: subagentCapabilities(true, true)
+      })).toEqual({ ok: true })
+      expect(runtime.delegationRuntime?.enabled()).toBe(true)
+      expect(await delegateProperties()).toMatchObject({ profile: expect.any(Object) })
+      expect(await delegateProperties()).not.toHaveProperty('custom_agent')
+      expect((await listTools()).map((tool) => tool.name)).toEqual(expect.arrayContaining([
+        'delegate_task',
+        'list_subagent_profiles',
+        'explore_agent',
+        'ppt_agent'
+      ]))
+    } finally {
+      await runtime.shutdown?.()
+    }
+  })
+
   it('keeps explore_agent advertised across Lab hot-apply toggles', async () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'kun-runtime-explore-lab-'))
     tempDirs.push(dataDir)

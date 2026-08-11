@@ -412,7 +412,7 @@ describe('createChildAgentExecutor', () => {
       model: {
         provider: 'fallback', model: 'fallback-model',
         async *stream(): AsyncIterable<ModelStreamChunk> {
-          throw new Error('fallback model must not run')
+          yield await Promise.reject(new Error('fallback model must not run'))
         }
       },
       toolHost: new LocalToolHost({ tools: [] }),

@@ -13,7 +13,7 @@ import {
   formatCacheMissReason,
   formatCost,
   formatPercent,
-  cumulativeCacheHitRate,
+  primaryCacheHitRate,
   useThreadUsage
 } from '../hooks/use-thread-usage'
 
@@ -318,7 +318,7 @@ export function SessionHeader({
                       }
                     )}
                   >
-                    {t('sessionUsageCache', { cache: formatPercent(cumulativeCacheHitRate(threadUsage)) })}
+                    {t('sessionUsageCache', { cache: formatPercent(primaryCacheHitRate(threadUsage)) })}
                   </span>
                 </>
               ) : null}

@@ -27,29 +27,34 @@ function translate(key: string, values: Record<string, unknown> = {}): string {
   return text[key] ?? key
 }
 
-function renderFooter(overrides: Record<string, unknown> = {}): string {
-  const usage = {
+function usageSummary(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
     totalTokens: 11_900_000,
     costUsd: 1.25,
     costCny: null,
-    cacheHitRate: 0.81,
-    lastTurnCacheHitRate: null,
-    cachedTokens: 810,
-    cacheMissTokens: 190,
+    cacheHitRate: 0.41,
+    lastTurnCacheHitRate: 0.95,
+    cachedTokens: 410,
+    cacheMissTokens: 590,
     turns: 278,
     avgTtftMs: 6200,
-    avgTokensPerSecond: 121.9
+    avgTokensPerSecond: 121.9,
+    ...overrides
   }
+}
+
+function renderFooter(overrides: Record<string, unknown> = {}): string {
+  const usage = usageSummary()
   const context = {
     BarChart3: () => createElement('svg'),
     FloatingComposerUsageHistory: UsageHistory,
     activeThreadId: 'thread-1',
     compact: false,
-    cumulativeCacheHitRate: () => 0.81,
+    primaryCacheHitRate: (value: { lastTurnCacheHitRate: number | null }) => value.lastTurnCacheHitRate,
     footerHint: 'Enter to send · Shift+Enter for newline',
     formatCompactNumber: (value: number) => value === 11_900_000 ? '11.9M' : String(value),
     formatCost: () => '$1.25',
-    formatPercent: () => '81%',
+    formatPercent: (value: number | null) => value == null ? '-' : `${Math.round(value * 100)}%`,
     formatTps: () => '121.9',
     formatTtftSeconds: () => '6.2s',
     i18n: { language: 'en' },
@@ -74,7 +79,18 @@ describe('FloatingComposerFooterView', () => {
     expect(html).toContain('ds-composer-usage-ttft')
     expect(html).toContain('ds-composer-usage-tps')
     expect(html).toContain('ds-composer-usage-cache-indicator')
+    expect(html).toContain('95% cache')
+    expect(html).not.toContain('41% cache')
     expect(html).not.toContain('ds-composer-usage-cost')
+  })
+
+  it('omits cache when latest-request telemetry is unavailable instead of using cumulative usage', () => {
+    const html = renderFooter({
+      threadUsage: usageSummary({ lastTurnCacheHitRate: null, cacheHitRate: 0.81 })
+    })
+
+    expect(html).not.toContain('ds-composer-usage-cache')
+    expect(html).not.toContain('81% cache')
   })
 
   it('keeps loading and unavailable states in the same history trigger', () => {

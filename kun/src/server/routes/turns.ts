@@ -87,7 +87,10 @@ export async function steerTurn(
       turnId,
       text: parsed.data.text,
       ...(parsed.data.displayText ? { displayText: parsed.data.displayText } : {}),
-      ...(parsed.data.messageSource ? { messageSource: parsed.data.messageSource } : {})
+      ...(parsed.data.messageSource ? { messageSource: parsed.data.messageSource } : {}),
+      ...(parsed.data.attachmentIds?.length
+        ? { attachmentIds: parsed.data.attachmentIds }
+        : {})
     })
     onSteered?.({ threadId, turnId })
   } catch (error) {

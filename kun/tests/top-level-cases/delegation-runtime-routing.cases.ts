@@ -102,6 +102,14 @@ describe('DelegationRuntime', () => {
     expect((await runtime.diagnostics('thr_unbounded')).childRuns).toHaveLength(26)
   })
 
+  it('allows the first child when a legacy config carries maxChildRuns zero', async () => {
+    const runtime = createRuntime({ legacyMaxChildRuns: 0 })
+    await expect(runtime.runChild({
+      parentThreadId: 'thr_legacy_zero', parentTurnId: 'turn_first',
+      prompt: 'first task', signal: new AbortController().signal
+    })).resolves.toMatchObject({ status: 'completed' })
+  })
+
   it('keeps spawning after restart when the parent already has persisted child history', async () => {
     const firstRuntime = createRuntime({ legacyMaxChildRuns: 25, idNamespace: 'before_restart' })
     for (let index = 0; index < 26; index += 1) {
