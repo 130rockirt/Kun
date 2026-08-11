@@ -11,6 +11,24 @@ export function monotonicToolStatus(
   return current !== 'running' && incoming === 'running' ? current : incoming
 }
 
+export function isNewChildAttempt(
+  current: Pick<ToolBlock, 'meta' | 'detail'>,
+  incoming: Pick<ToolEventPayload, 'meta' | 'detail'>
+): boolean {
+  const currentCount = toolProjectionResumeCount(current)
+  const incomingCount = toolProjectionResumeCount(incoming)
+  return incomingCount !== undefined && incomingCount > (currentCount ?? 0)
+}
+
+export function isStaleChildAttempt(
+  current: Pick<ToolBlock, 'meta' | 'detail'>,
+  incoming: Pick<ToolEventPayload, 'meta' | 'detail'>
+): boolean {
+  const currentCount = toolProjectionResumeCount(current) ?? 0
+  const incomingCount = toolProjectionResumeCount(incoming) ?? 0
+  return currentCount > incomingCount
+}
+
 /**
  * Returns only text that is not already present in the projected assistant /
  * reasoning buffer. Content-aware rules catch cumulative snapshots and full
@@ -210,14 +228,16 @@ export function mergeToolProjectionEvents(
   base: ToolEventPayload,
   update: ToolEventPayload
 ): ToolEventPayload {
-  const status = monotonicToolStatus(base.status, update.status)
+  const newAttempt = isNewChildAttempt(base, update)
+  const staleAttempt = isStaleChildAttempt(base, update)
+  const status = newAttempt ? update.status : monotonicToolStatus(base.status, update.status)
   // The pending update may be an older queued/running lifecycle snapshot that
   // raced ahead of the settled tool result. Keep terminal summary/detail intact
   // instead of replacing them with the minimal lifecycle payload.
-  const staleRunning = status !== update.status
+  const staleRunning = staleAttempt || (!newAttempt && status !== update.status)
   return {
     ...base,
-    turnId: update.turnId ?? base.turnId,
+    turnId: staleAttempt ? base.turnId : (update.turnId ?? base.turnId),
     createdAt: base.createdAt ?? update.createdAt,
     summary: staleRunning ? base.summary : (update.summary || base.summary),
     status,
@@ -258,10 +278,15 @@ function mergeChildMetadata(
   current: Record<string, unknown>,
   incoming: Record<string, unknown>
 ): Record<string, unknown> {
+  const currentResumeCount = childResumeCount(current) ?? 0
+  const incomingResumeCount = childResumeCount(incoming) ?? 0
+  if (currentResumeCount > incomingResumeCount) return { ...incoming, ...current }
   const merged = { ...current, ...incoming }
   const currentStatus = current.childStatus
   const incomingStatus = incoming.childStatus
+  const newAttempt = incomingResumeCount > currentResumeCount
   if (
+    !newAttempt &&
     typeof currentStatus === 'string' &&
     typeof incomingStatus === 'string' &&
     isTerminalChildStatus(currentStatus) &&
@@ -270,6 +295,18 @@ function mergeChildMetadata(
     merged.childStatus = currentStatus
   }
   return merged
+}
+
+function childResumeCount(value: unknown): number | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const count = (value as Record<string, unknown>).resumeCount
+  return typeof count === 'number' && Number.isInteger(count) && count >= 0 ? count : undefined
+}
+
+function toolProjectionResumeCount(
+  value: Pick<ToolBlock, 'meta' | 'detail'> | Pick<ToolEventPayload, 'meta' | 'detail'>
+): number | undefined {
+  return childResumeCount(value.meta?.child) ?? childResumeCount(detailRecord(value.detail))
 }
 
 function isTerminalChildStatus(status: string): boolean {

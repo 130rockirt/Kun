@@ -379,6 +379,9 @@ export async function performPreparedThreadSend(input: PreparedThreadSend): Prom
         ...(!channel && composerAccountId ? { accountId: composerAccountId } : {}),
         ...(reasoningEffort ? { reasoningEffort } : {}),
         ...(!channel && serviceTier ? { serviceTier } : {}),
+        ...((queued?.subagentResume ?? overrides?.subagentResume)
+          ? { subagentResume: queued?.subagentResume ?? overrides?.subagentResume }
+          : {}),
         ...(runtimeDisplayText ? { displayText: runtimeDisplayText } : {}),
         ...((queued?.guiPlan ?? overrides?.guiPlan) ? { guiPlan: queued?.guiPlan ?? overrides?.guiPlan } : {}),
         ...(guiDesignCanvas ? { guiDesignCanvas: true } : {}),

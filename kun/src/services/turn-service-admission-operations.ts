@@ -172,6 +172,7 @@ async startTurn(this: TurnService, input: {
             clientRequestFingerprint: requestFingerprint,
             prompt: input.request.prompt,
             messageSource: input.request.messageSource,
+            subagentResume: input.request.subagentResume,
             model: turnModel,
             providerId: turnProviderId,
             accountId: turnAccountId,

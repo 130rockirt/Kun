@@ -304,6 +304,7 @@ export abstract class GraphAttemptScheduler {
       const child = await delegation.runChild({
         parentThreadId: initialRun.threadId,
         parentTurnId: initialRun.sourceTurnId,
+        launcher: 'graph',
         label: initialRun.nodes[nodeId].node.title,
         prompt: context.prompt,
         workspace: attempt.assignment.workspaceRoot,

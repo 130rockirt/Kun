@@ -156,6 +156,10 @@ export type CoreChildRuntimeMetadataJson = {
   childLabel?: string
   childStatus: 'queued' | 'running' | 'completed' | 'failed' | 'aborted'
   childSeq: number
+  childLauncher?: 'delegate_task' | 'explore_agent' | 'ppt_agent' | 'component_design' | 'graph'
+  childTerminationReason?: 'manual_stop' | 'runtime_restart' | 'child_error'
+  resumable?: boolean
+  resumeCount?: number
   detached?: boolean
   childModel?: string
   childProviderId?: string
@@ -231,7 +235,7 @@ export type CoreTurnItemJson = {
   displayText?: string
   guiDesignCanvas?: boolean
   guiDesignMode?: boolean
-  messageSource?: 'background_shell' | 'background_subagent' | 'graph_runtime'
+  messageSource?: 'background_shell' | 'background_subagent' | 'graph_runtime' | 'subagent_resume'
   toolName?: string
   callId?: string
   cancelRequestedAt?: string

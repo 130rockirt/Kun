@@ -66,6 +66,26 @@ export const ChildResultRef = z.object({
 }).strict()
 export type ChildResultRef = z.infer<typeof ChildResultRef>
 
+export const ChildRunLauncher = z.enum([
+  'delegate_task',
+  'explore_agent',
+  'ppt_agent',
+  'component_design',
+  'graph'
+])
+export type ChildRunLauncher = z.infer<typeof ChildRunLauncher>
+
+export const ChildRunTerminationReason = z.enum([
+  'manual_stop',
+  'runtime_restart',
+  'child_error'
+])
+export type ChildRunTerminationReason = z.infer<typeof ChildRunTerminationReason>
+
+export function isGenericChildLauncher(launcher: ChildRunLauncher | undefined): boolean {
+  return launcher === 'delegate_task' || launcher === 'explore_agent'
+}
+
 export const ChildSecuritySnapshot = z.object({
   /** Immutable parent workspace boundary; also used as the child working directory. */
   sandboxRoot: z.string().min(1),
@@ -168,7 +188,13 @@ export const ChildRunRecord = z.object({
   approvalReviewer: ApprovalReviewerSchema.default(DEFAULT_APPROVAL_REVIEWER),
   /** True when this child is detached from the parent turn lifecycle. */
   detached: z.boolean().optional(),
+  /** First-class caller that owns recovery policy for this child. */
+  launcher: ChildRunLauncher.optional(),
   status: z.enum(['queued', 'running', 'completed', 'failed', 'aborted']),
+  /** Why the latest attempt ended; cleared when another attempt starts. */
+  terminationReason: ChildRunTerminationReason.optional(),
+  /** Durable eligibility for the generic delegate_task resume path. */
+  resumable: z.boolean().optional(),
   summary: z.string().optional(),
   /** True when summary is only a bounded preview of the child result. */
   summaryTruncated: z.boolean().optional(),

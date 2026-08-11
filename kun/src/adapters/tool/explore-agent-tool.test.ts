@@ -292,6 +292,7 @@ describe('explore_agent tool provider', () => {
       prompt: 'where is main defined',
       workspace: '/workspace',
       label: 'Locate main symbol',
+      launcher: 'explore_agent',
       agentSurface: 'code',
       inheritSessionDefaults: true,
       inheritedModel: 'main-model',

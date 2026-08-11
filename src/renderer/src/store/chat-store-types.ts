@@ -50,6 +50,7 @@ export type QueuedUserMessage = {
   modelLabel?: string
   reasoningEffort?: string
   serviceTier?: 'priority'
+  subagentResume?: { childId: string; expectedResumeCount: number }
   /** Renderer-only guard that prevents a scoped send from falling back to another thread. */
   expectedThreadId?: string
   attachmentIds?: string[]
@@ -119,6 +120,8 @@ export type SendMessageOverrides = {
   modelLabel?: string
   reasoningEffort?: string
   serviceTier?: 'priority'
+  /** Structured one-click resume identity forwarded to Kun. */
+  subagentResume?: { childId: string; expectedResumeCount: number }
   /** Renderer-only guard that prevents Design/Write-style sends from changing thread identity. */
   expectedThreadId?: string
   displayText?: string

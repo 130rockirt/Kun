@@ -39,8 +39,10 @@ import { withManagerDataMutex } from '../manager/data-mutex.js'
 import {
   ChildRunRecord,
   ChildSecuritySnapshot,
+  isGenericChildLauncher,
   type ChildReturnFormat,
   type ChildRunExecutor,
+  type ChildRunLauncher,
   type ChildRunLifecycleMetadata
 } from './delegation-runtime-contracts.js'
 import { DelegationRuntimeRun } from './delegation-runtime-run.js'
@@ -110,6 +112,9 @@ export class DelegationRuntime extends DelegationRuntimeRun {
     prompt: string
     expectedProfile?: string
     expectedWorkflowId?: string
+    expectedResumeCount?: number
+    expectedLaunchers?: readonly ChildRunLauncher[]
+    requireResumable?: boolean
     /** Current parent boundary; the resumed child receives its intersection with the stored snapshot. */
     security?: ChildSecuritySnapshot
     signal: AbortSignal
@@ -134,6 +139,9 @@ export class DelegationRuntime extends DelegationRuntimeRun {
     prompt: string
     expectedProfile?: string
     expectedWorkflowId?: string
+    expectedResumeCount?: number
+    expectedLaunchers?: readonly ChildRunLauncher[]
+    requireResumable?: boolean
     security?: ChildSecuritySnapshot
     signal: AbortSignal
     onQueued?: (childId: string, profile?: string, metadata?: ChildRunLifecycleMetadata) => Promise<void> | void
@@ -146,6 +154,22 @@ export class DelegationRuntime extends DelegationRuntimeRun {
     }
     if (previous.status === 'queued' || previous.status === 'running') {
       throw new Error(`child run ${input.childId} is still running`)
+    }
+    if (
+      input.expectedResumeCount !== undefined &&
+      (previous.resumeCount ?? 0) !== input.expectedResumeCount
+    ) {
+      throw new Error(
+        `child run ${input.childId} resume count changed from ${input.expectedResumeCount} to ${previous.resumeCount ?? 0}`
+      )
+    }
+    if (input.expectedLaunchers && (
+      !previous.launcher || !input.expectedLaunchers.includes(previous.launcher)
+    )) {
+      throw new Error(`child run ${input.childId} is owned by ${previous.launcher ?? 'a legacy launcher'}`)
+    }
+    if (input.requireResumable && previous.resumable !== true) {
+      throw new Error(`child run ${input.childId} is not resumable`)
     }
     if (input.expectedProfile && previous.profile !== input.expectedProfile) {
       throw new Error(`child run ${input.childId} is not a ${input.expectedProfile} child`)
@@ -175,6 +199,8 @@ export class DelegationRuntime extends DelegationRuntimeRun {
       prompt: input.prompt,
       parentTurnId: input.parentTurnId,
       status: 'queued',
+      terminationReason: undefined,
+      resumable: false,
       summary: undefined,
       evidence: undefined,
       error: undefined,
@@ -323,6 +349,8 @@ export class DelegationRuntime extends DelegationRuntimeRun {
       const updated = ChildRunRecord.parse({
         ...record,
         status: 'failed',
+        terminationReason: 'runtime_restart',
+        resumable: isGenericChildLauncher(record.launcher),
         error: record.error ?? 'Subagent run was interrupted by a runtime restart.',
         updatedAt: this.now()
       })
@@ -335,5 +363,15 @@ export class DelegationRuntime extends DelegationRuntimeRun {
       }
     }
     return reconciled
+  }
+
+  /** Parent threads whose interrupted generic child must wait for an explicit user resume. */
+  async resumableParentThreadIds(): Promise<string[]> {
+    const records = await this.options.store.list()
+    return [...new Set(
+      records
+        .filter((record) => record.resumable === true && isGenericChildLauncher(record.launcher))
+        .map((record) => record.parentThreadId)
+    )]
   }
 }

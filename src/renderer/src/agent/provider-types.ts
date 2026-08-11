@@ -136,6 +136,7 @@ export interface AgentProvider {
       accountId?: string
       reasoningEffort?: string
       serviceTier?: 'priority'
+      subagentResume?: { childId: string; expectedResumeCount: number }
       displayText?: string
       guiPlan?: {
         operation: 'draft' | 'refine'

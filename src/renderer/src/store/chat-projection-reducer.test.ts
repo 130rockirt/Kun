@@ -227,6 +227,91 @@ describe('chat projection reducer', () => {
     }
   )
 
+  it('accepts a newer resume attempt while rejecting stale lifecycle replay', () => {
+    const initial = {
+      ...state(),
+      blocks: [{
+        kind: 'tool' as const,
+        id: 'tool_1',
+        turnId: 'turn_initial',
+        summary: 'delegate_task',
+        status: 'error' as const,
+        detail: JSON.stringify({ childId: 'child_1', status: 'failed', resumeCount: 0 }),
+        meta: {
+          toolName: 'delegate_task',
+          child: {
+            parentThreadId: 'thread_1',
+            parentTurnId: 'turn_initial',
+            childId: 'child_1',
+            childStatus: 'failed',
+            resumable: true,
+            resumeCount: 0
+          }
+        }
+      }]
+    }
+    const resumed = project(initial, [{
+      type: 'tool_updated',
+      seq: 200,
+      payload: {
+        itemId: 'child_lifecycle_child_1',
+        summary: 'delegate_task',
+        status: 'running',
+        updateOnly: true,
+        detail: JSON.stringify({ childId: 'child_1', status: 'running', resumeCount: 1 }),
+        meta: {
+          child: {
+            parentThreadId: 'thread_1',
+            parentTurnId: 'turn_resume',
+            childId: 'child_1',
+            childStatus: 'running',
+            resumable: false,
+            resumeCount: 1
+          }
+        }
+      }
+    }])
+
+    expect(resumed.blocks[0]).toMatchObject({
+      kind: 'tool',
+      status: 'running',
+      meta: { child: { parentTurnId: 'turn_resume', childStatus: 'running', resumeCount: 1 } }
+    })
+    const settled = project(resumed, [{
+      type: 'tool_updated',
+      payload: {
+        itemId: 'tool_resume', summary: 'delegate_task', status: 'success',
+        detail: JSON.stringify({ childId: 'child_1', status: 'completed', resumeCount: 1, summary: 'resumed conclusion' }),
+        meta: { toolName: 'delegate_task' }
+      }
+    }])
+    expect(settled.blocks[0]).toMatchObject({ status: 'success', detail: expect.stringContaining('resumed conclusion') })
+    const replayed = project(settled, [{
+      type: 'tool_updated',
+      seq: 201,
+      payload: {
+        itemId: 'child_lifecycle_child_1',
+        summary: 'delegate_task',
+        status: 'running',
+        updateOnly: true,
+        detail: JSON.stringify({ childId: 'child_1', status: 'running', resumeCount: 0 }),
+        meta: {
+          child: {
+            parentThreadId: 'thread_1',
+            parentTurnId: 'turn_initial',
+            childId: 'child_1',
+            childStatus: 'running',
+            resumeCount: 0
+          }
+        }
+      }
+    }])
+    expect(replayed.blocks[0]).toMatchObject({
+      status: 'success',
+      meta: { child: { resumeCount: 1 } }
+    })
+  })
+
   it('clears current-turn orchestration when a Graph turn completes', () => {
     const projected = project({
       ...state(),

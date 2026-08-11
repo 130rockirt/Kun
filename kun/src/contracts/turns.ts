@@ -21,6 +21,11 @@ import { GraphPlanningDraftStatusSchema } from './graph-planning.js'
  * literals must stay in sync with `ThreadMode` in `threads.ts`.
  */
 const TurnModeSchema = z.enum(['agent', 'plan'])
+export const SubagentResumeRequestSchema = z.object({
+  childId: z.string().trim().min(1).max(256),
+  expectedResumeCount: z.number().int().nonnegative()
+}).strict()
+export type SubagentResumeRequest = z.infer<typeof SubagentResumeRequestSchema>
 export const TurnReasoningEffortSchema = z.enum(['auto', 'off', 'low', 'medium', 'high', 'max'])
 export type TurnReasoningEffort = z.infer<typeof TurnReasoningEffortSchema>
 /** Canonical Codex/API request value. The legacy UI label is "fast". */
@@ -156,6 +161,8 @@ export const TurnSchema = z.object({
   status: TurnStatus,
   prompt: z.string(),
   messageSource: UserMessageSource.optional(),
+  /** Explicit one-click continuation request for an interrupted generic child. */
+  subagentResume: SubagentResumeRequestSchema.optional(),
   model: z.string().optional(),
   providerId: z.string().optional(),
   accountId: z.string().min(1).optional(),
@@ -242,6 +249,8 @@ export const StartTurnRequest = z.object({
   clientRequestId: z.string().trim().min(1).max(256).optional(),
   displayText: z.string().optional(),
   messageSource: UserMessageSource.optional(),
+  /** Binds this turn to one interrupted child and its last observed attempt. */
+  subagentResume: SubagentResumeRequestSchema.optional(),
   model: z.string().optional(),
   providerId: z.string().optional(),
   accountId: z.string().min(1).optional(),

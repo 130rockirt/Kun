@@ -437,6 +437,7 @@ export class KunRuntimeProvider extends KunRuntimeThreadServices implements Agen
       accountId?: string
       reasoningEffort?: string
       serviceTier?: 'priority'
+      subagentResume?: { childId: string; expectedResumeCount: number }
       displayText?: string
       guiPlan?: {
         operation: 'draft' | 'refine'
@@ -483,6 +484,10 @@ export class KunRuntimeProvider extends KunRuntimeThreadServices implements Agen
       approvalPolicy: runtime.approvalPolicy,
       sandboxMode: runtime.sandboxMode,
       approvalReviewer: runtime.approvalReviewer
+    }
+    if (options?.subagentResume) {
+      body.subagentResume = options.subagentResume
+      body.messageSource = 'subagent_resume'
     }
     if (options?.reasoningEffort?.trim()) {
       body.reasoningEffort = options.reasoningEffort.trim()

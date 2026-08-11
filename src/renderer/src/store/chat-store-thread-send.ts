@@ -277,6 +277,7 @@ export async function sendThreadMessage(
       const serviceTier = (queued?.serviceTier ?? overrides?.serviceTier) === 'priority'
         ? 'priority' as const
         : undefined
+      const subagentResume = queued?.subagentResume ?? overrides?.subagentResume
       const attachmentIds = queued?.attachmentIds ?? overrides?.attachmentIds?.filter((id) => id.trim().length > 0)
       const attachments = queued?.attachments ?? overrides?.attachments?.filter((attachment) => attachment.id.trim().length > 0)
       const fileReferences = queued?.fileReferences ?? overrides?.fileReferences?.filter((reference) =>
@@ -307,6 +308,7 @@ export async function sendThreadMessage(
           ...(userModelChip ? { modelLabel: userModelChip } : {}),
           ...(reasoningEffort ? { reasoningEffort } : {}),
           ...(serviceTier ? { serviceTier } : {}),
+          ...(subagentResume ? { subagentResume } : {}),
           ...(expectedThreadId ? { expectedThreadId } : {}),
           ...((queued?.guiPlan ?? overrides?.guiPlan) ? { guiPlan: queued?.guiPlan ?? overrides?.guiPlan } : {}),
           ...((queued?.guiDesignCanvas ?? overrides?.guiDesignCanvas) ? { guiDesignCanvas: true } : {}),
@@ -388,6 +390,7 @@ export async function sendThreadMessage(
       (queued?.serviceTier ?? overrides?.serviceTier) === 'priority'
         ? 'priority' as const
         : undefined
+    const subagentResume = queued?.subagentResume ?? overrides?.subagentResume
     const guiDesignCanvas = (queued?.guiDesignCanvas ?? overrides?.guiDesignCanvas) === true
     const guiDesignMode = (queued?.guiDesignMode ?? overrides?.guiDesignMode) === true
     const orchestration = queued?.orchestration ??
@@ -411,6 +414,7 @@ export async function sendThreadMessage(
       ...(userModelChip ? { modelLabel: userModelChip } : {}),
       ...(reasoningEffort ? { reasoningEffort } : {}),
       ...(serviceTier ? { serviceTier } : {}),
+      ...(subagentResume ? { subagentResume } : {}),
       ...(expectedThreadId ? { expectedThreadId } : {}),
       ...((queued?.guiPlan ?? overrides?.guiPlan) ? { guiPlan: queued?.guiPlan ?? overrides?.guiPlan } : {}),
       ...(guiDesignCanvas ? { guiDesignCanvas: true } : {}),

@@ -83,7 +83,62 @@ class PptExportModel implements ModelClient {
   }
 }
 
+class HistoryModel implements ModelClient {
+  readonly provider = 'test'
+  readonly model = 'history-child-model'
+  readonly requests: ModelRequest[] = []
+
+  async *stream(request: ModelRequest): AsyncIterable<ModelStreamChunk> {
+    this.requests.push(request)
+    yield {
+      kind: 'assistant_text_delta',
+      text: this.requests.length === 1 ? 'initial child conclusion' : 'continued child conclusion'
+    }
+    yield { kind: 'completed', stopReason: 'stop' }
+  }
+}
+
 describe('createChildAgentExecutor', () => {
+  it('appends a resumed turn to the same child thread with its prior history', async () => {
+    const model = new HistoryModel()
+    const sessionStore = new InMemorySessionStore()
+    const threadStore = new InMemoryThreadStore()
+    const executor = createChildAgentExecutor({
+      model,
+      toolHost: new LocalToolHost({ tools: [] }),
+      prefix: createImmutablePrefix({ systemPrompt: 'test system prompt' }),
+      defaultModel: model.model,
+      sessionStore,
+      threadStore
+    })
+    const common = {
+      childId: 'child_history',
+      parentThreadId: 'parent',
+      workspace: '/tmp/workspace',
+      toolPolicy: 'readOnly' as const,
+      signal: new AbortController().signal
+    }
+
+    await executor({
+      ...common,
+      parentTurnId: 'turn_initial',
+      prompt: 'inspect the original task'
+    })
+    await executor({
+      ...common,
+      parentTurnId: 'turn_resume',
+      prompt: 'continue without repeating completed work',
+      resumeChild: true
+    })
+
+    expect((await threadStore.get('child_history'))?.turns).toHaveLength(2)
+    expect(model.requests).toHaveLength(2)
+    expect(model.requests[1]?.threadId).toBe('child_history')
+    expect(JSON.stringify(model.requests[1]?.history)).toContain('inspect the original task')
+    expect(JSON.stringify(model.requests[1]?.history)).toContain('initial child conclusion')
+    expect(JSON.stringify(model.requests[1]?.history)).toContain('continue without repeating completed work')
+  })
+
   it('aborts the child model stream when the parent delegation signal is aborted', async () => {
     const sessionStore = new InMemorySessionStore()
     const threadStore = new InMemoryThreadStore()

@@ -20,6 +20,7 @@ import type {
 } from '../ports/tool-host.js'
 import type {
   ActingTurnModelRoute,
+  SubagentResumeRequest,
   TurnClientSurface
 } from '../contracts/turns.js'
 
@@ -68,7 +69,8 @@ export type PreparedTurnContext = Readonly<{
   turnId: string
   workspace: string
   orchestration: 'direct' | 'graph'
-  messageSource?: 'background_shell' | 'background_subagent' | 'graph_runtime'
+  messageSource?: 'background_shell' | 'background_subagent' | 'graph_runtime' | 'subagent_resume'
+  subagentResume?: SubagentResumeRequest
   additionalWorkspaces?: readonly string[]
   clientSurface: TurnClientSurface
   model: string
@@ -109,7 +111,8 @@ export type ToolTurnContextInput = {
   workspace: string
   workspaceCheckpointRequestId?: string
   orchestration?: 'direct' | 'graph'
-  messageSource?: 'background_shell' | 'background_subagent' | 'graph_runtime'
+  messageSource?: 'background_shell' | 'background_subagent' | 'graph_runtime' | 'subagent_resume'
+  subagentResume?: SubagentResumeRequest
   additionalWorkspaces?: readonly string[]
   clientSurface: TurnClientSurface
   threadMode?: 'agent' | 'plan'

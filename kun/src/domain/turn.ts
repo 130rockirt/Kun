@@ -5,6 +5,7 @@ import type {
   Turn,
   TurnClientSurface,
   TurnReasoningEffort,
+  SubagentResumeRequest,
   TurnServiceTier,
   TurnStatus
 } from '../contracts/turns.js'
@@ -27,6 +28,7 @@ export function createTurnRecord(input: {
   clientRequestFingerprint?: string
   prompt: string
   messageSource?: UserMessageSource
+  subagentResume?: SubagentResumeRequest
   model?: string
   providerId?: string
   accountId?: string
@@ -70,6 +72,7 @@ export function createTurnRecord(input: {
     status: input.status ?? 'queued',
     prompt: input.prompt,
     ...(input.messageSource ? { messageSource: input.messageSource } : {}),
+    ...(input.subagentResume ? { subagentResume: { ...input.subagentResume } } : {}),
     orchestration: input.orchestration ?? 'direct',
     steering: [],
     items: [],

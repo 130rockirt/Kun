@@ -343,6 +343,10 @@ export function normalizeChildMetadata(
     ...(child.childToolPolicy ? { childToolPolicy: child.childToolPolicy } : {}),
     childStatus: child.childStatus,
     childSeq: child.childSeq,
+    ...(child.childLauncher ? { childLauncher: child.childLauncher } : {}),
+    ...(child.childTerminationReason ? { childTerminationReason: child.childTerminationReason } : {}),
+    ...(child.resumable !== undefined ? { resumable: child.resumable } : {}),
+    ...(child.resumeCount !== undefined ? { resumeCount: child.resumeCount } : {}),
     ...(child.detached !== undefined ? { detached: child.detached } : {}),
     ...(child.prefixReused !== undefined ? { prefixReused: child.prefixReused } : {}),
     ...(child.inheritedHistoryItems !== undefined ? { inheritedHistoryItems: child.inheritedHistoryItems } : {}),
@@ -459,7 +463,8 @@ export function applyRuntimeDisclosureMeta(
   if (
     item.messageSource === 'background_shell' ||
     item.messageSource === 'background_subagent' ||
-    item.messageSource === 'graph_runtime'
+    item.messageSource === 'graph_runtime' ||
+    item.messageSource === 'subagent_resume'
   ) {
     meta.messageSource = item.messageSource
   }

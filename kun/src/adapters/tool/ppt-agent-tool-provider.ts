@@ -188,6 +188,7 @@ export function buildPptAgentToolProvider(
               ? await runtime.runChild({
               parentThreadId: context.threadId,
               parentTurnId: context.turnId,
+              launcher: 'ppt_agent',
               label: title,
               prompt,
               workspace,

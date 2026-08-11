@@ -49,6 +49,33 @@ class HangingModel implements ModelClient {
 }
 
 describe('DelegationRuntime abort handling', () => {
+  it('does not make an ordinary child failure resumable', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'kun-delegation-failure-'))
+    try {
+      const runtime = new DelegationRuntime({
+        config: subagentConfig(),
+        store: new FileDelegationStore(dir),
+        executor: async () => { throw new Error('provider rejected the request') }
+      })
+
+      const record = await runtime.runChild({
+        parentThreadId: 'parent',
+        parentTurnId: 'turn',
+        launcher: 'delegate_task',
+        prompt: 'ordinary business failure',
+        signal: new AbortController().signal
+      })
+
+      expect(record).toMatchObject({
+        status: 'failed',
+        terminationReason: 'child_error',
+        resumable: false
+      })
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
   it('does not abort detached children when the parent signal aborts', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'kun-delegation-'))
     try {
@@ -107,6 +134,7 @@ describe('DelegationRuntime abort handling', () => {
       await runtime.runChild({
         parentThreadId: 'thr_delete',
         parentTurnId: 'turn_delete',
+        launcher: 'delegate_task',
         prompt: 'background work',
         detach: true,
         signal: new AbortController().signal
@@ -126,7 +154,12 @@ describe('DelegationRuntime abort handling', () => {
       releaseAbortCleanup()
       expect(await aborting).toBe(1)
       expect(await runtime.abortDetachedChildrenForThread('thr_delete')).toBe(0)
-      expect((await store.list())[0]?.status).toBe('aborted')
+      expect((await store.list())[0]).toMatchObject({
+        status: 'aborted',
+        terminationReason: 'manual_stop',
+        resumable: true,
+        detached: true
+      })
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

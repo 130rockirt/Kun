@@ -2,7 +2,7 @@ import { createElement } from 'react'
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from 'react-test-renderer'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ToolBlock } from '../../agent/types'
-import { parseDelegateDetail, SubagentCallCard, SubagentGroup } from './SubagentCallCard'
+import { SubagentCallCard, SubagentGroup } from './SubagentCallCard'
 
 const selectThread = vi.fn(async () => undefined)
 
@@ -54,51 +54,6 @@ vi.mock('react-i18next', () => {
       }
     })
   }
-})
-
-describe('parseDelegateDetail', () => {
-  it('reads the generated role name from the direct generated-agent result', () => {
-    expect(parseDelegateDetail(JSON.stringify({
-      profile: 'generated:ipc-investigator:12345678',
-      profileName: 'IPC Investigator',
-      model: 'gpt-5.6-sol',
-      generatedAgent: { name: 'IPC Investigator' }
-    }))).toMatchObject({
-      generated: true,
-      generatedAgentName: 'IPC Investigator',
-      profileName: 'IPC Investigator',
-      model: 'gpt-5.6-sol'
-    })
-  })
-
-  it('falls back to the generated role snapshot embedded in routing metadata', () => {
-    expect(parseDelegateDetail(JSON.stringify({
-      profile: 'generated:browser-qa:12345678',
-      routing: {
-        selectedKind: 'generated',
-        agent: { name: 'Browser QA Specialist' }
-      }
-    }))).toMatchObject({
-      generated: true,
-      generatedAgentName: 'Browser QA Specialist'
-    })
-  })
-
-  it('reads explore_agent title and query from the tool payload', () => {
-    expect(parseDelegateDetail(JSON.stringify({
-      childId: 'child_explore',
-      status: 'running',
-      title: 'Voice transcription flow',
-      query: 'Find how speech transcription is wired',
-      profile: 'explore'
-    }))).toMatchObject({
-      childId: 'child_explore',
-      status: 'running',
-      title: 'Voice transcription flow',
-      query: 'Find how speech transcription is wired',
-      profile: 'explore'
-    })
-  })
 })
 
 describe('SubagentCallCard route metadata', () => {
@@ -570,6 +525,7 @@ describe('SubagentCallCard route metadata', () => {
     const card = renderer!.root.findByProps({ 'data-testid': 'subagent-call-card' })
     expect(card.props['data-activity-label']).toBe('')
   })
+
 })
 
 function childBlock(

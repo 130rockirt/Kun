@@ -40,6 +40,7 @@ import { withManagerDataMutex } from '../manager/data-mutex.js'
 import {
   ChildRunRecord,
   FileDelegationStore,
+  isGenericChildLauncher,
   profileAvailableOnSurface,
   type ChildRunAggregate,
   type ChildRunExecutor,
@@ -337,6 +338,10 @@ export abstract class DelegationRuntimeBase {
         childLabel: record.label,
         childStatus: record.status,
         childSeq: this.stableChildSeq(record),
+        ...(record.launcher ? { childLauncher: record.launcher } : {}),
+        ...(record.terminationReason ? { childTerminationReason: record.terminationReason } : {}),
+        resumable: record.resumable === true,
+        resumeCount: record.resumeCount ?? 0,
         ...(record.detached ? { detached: true } : {}),
         ...(record.model ? { childModel: record.model } : {}),
         ...(record.providerId ? { childProviderId: record.providerId } : {}),
@@ -467,6 +472,8 @@ export abstract class DelegationRuntimeBase {
       record = await this.commitChildState(args.state, (current) => ChildRunRecord.parse({
         ...current,
         status: 'aborted',
+        terminationReason: 'manual_stop',
+        resumable: isGenericChildLauncher(current.launcher),
         error: errorMessage(error).slice(0, CHILD_RESULT_PREVIEW_CHARS),
         updatedAt: this.now()
       }))
@@ -478,6 +485,8 @@ export abstract class DelegationRuntimeBase {
     record = await this.commitChildState(args.state, (current) => ChildRunRecord.parse({
       ...current,
       status: 'running',
+      terminationReason: undefined,
+      resumable: false,
       startedAt,
       queuedMs,
       updatedAt: startedAt
@@ -526,6 +535,8 @@ export abstract class DelegationRuntimeBase {
       record = await this.commitChildState(args.state, (current) => ChildRunRecord.parse({
         ...current,
         status: contractError ? 'failed' : 'completed',
+        terminationReason: contractError ? 'child_error' : undefined,
+        resumable: false,
         summary: result.summary,
         summaryTruncated: result.summaryTruncated,
         resultRef: result.resultRef,
@@ -559,6 +570,8 @@ export abstract class DelegationRuntimeBase {
       record = await this.commitChildState(args.state, (current) => ChildRunRecord.parse({
         ...current,
         status: args.signal.aborted ? 'aborted' : 'failed',
+        terminationReason: args.signal.aborted ? 'manual_stop' : 'child_error',
+        resumable: args.signal.aborted && isGenericChildLauncher(current.launcher),
         ...(childResult ? {
           summary: childResult.summary,
           summaryTruncated: childResult.summaryTruncated,

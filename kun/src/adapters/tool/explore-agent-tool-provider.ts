@@ -137,6 +137,7 @@ export function buildExploreAgentToolProvider(
                 const record = await runtime.runChild({
                   parentThreadId: context.threadId,
                   parentTurnId: context.turnId,
+                  launcher: 'explore_agent',
                   label: task.title,
                   prompt: task.query,
                   workspace,
@@ -227,7 +228,16 @@ export function buildExploreAgentToolProvider(
                   profileName: record.profileSnapshot?.name?.trim() || 'Repository Explorer',
                   toolInvocations: record.toolInvocations,
                   durationMs: record.durationMs,
-                  usage: record.usage
+                  usage: record.usage,
+                  parentThreadId: record.parentThreadId,
+                  parentTurnId: record.parentTurnId,
+                  launcher: 'explore_agent',
+                  terminationReason: record.terminationReason,
+                  resumable: record.resumable === true,
+                  resumeCount: record.resumeCount ?? 0,
+                  summaryTruncated: record.summaryTruncated,
+                  resultRef: record.resultRef,
+                  resultUnavailableReason: record.resultUnavailableReason
                 })
               } catch (error) {
                 await batch.update(index, {
@@ -272,6 +282,20 @@ type ExploreChildOutput = ExploreTask & {
   toolInvocations?: number
   durationMs?: number
   usage?: object
+  parentThreadId?: string
+  parentTurnId?: string
+  launcher?: 'explore_agent'
+  terminationReason?: 'manual_stop' | 'runtime_restart' | 'child_error'
+  resumable?: boolean
+  resumeCount?: number
+  summaryTruncated?: boolean
+  resultRef?: {
+    artifactId: string
+    byteSize: number
+    lineCount: number
+    mimeType: 'text/markdown'
+  }
+  resultUnavailableReason?: string
 }
 
 type ExploreBatchOutput = {

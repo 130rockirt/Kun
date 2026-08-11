@@ -19,7 +19,7 @@ import { SequentialIdGenerator } from '../ports/id-generator.js'
 import { RuntimeEventRecorder } from '../services/runtime-event-recorder.js'
 import { TurnService } from '../services/turn-service.js'
 import { createChildAgentExecutor } from './child-agent-executor.js'
-import { DelegationRuntime, FileDelegationStore } from './delegation-runtime.js'
+import { ChildRunRecord, DelegationRuntime, FileDelegationStore } from './delegation-runtime.js'
 import type { ChildRunExecutor } from './delegation-runtime.js'
 
 class HangingModel implements ModelClient {
@@ -254,6 +254,130 @@ describe('DelegationRuntime resume handling', () => {
       })).rejects.toThrow('is still running')
       releaseResume()
       await expect(running).resolves.toMatchObject({ summary: 'revised', resumeCount: 1 })
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('enforces generic ownership, resumable state, and optimistic resume count', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'kun-delegation-generic-resume-'))
+    try {
+      const store = new FileDelegationStore(dir)
+      await store.upsert(ChildRunRecord.parse({
+        id: 'child_generic',
+        parentThreadId: 'parent',
+        parentTurnId: 'turn-1',
+        launcher: 'delegate_task',
+        prompt: 'inspect the repository',
+        workspace: '/workspace',
+        profile: 'general',
+        profileSnapshot: { mode: 'subagent', toolPolicy: 'inherit' },
+        security: { sandboxRoot: '/workspace', memoryEnabled: false },
+        status: 'aborted',
+        terminationReason: 'manual_stop',
+        resumable: true,
+        resumeCount: 0,
+        usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+        createdAt: '2026-08-11T00:00:00.000Z',
+        updatedAt: '2026-08-11T00:00:01.000Z'
+      }))
+      const runtime = new DelegationRuntime({
+        config: subagentConfig(),
+        store,
+        executor: async () => ({ summary: 'finished' })
+      })
+
+      await expect(runtime.resumeChild({
+        childId: 'child_generic',
+        parentThreadId: 'another_parent',
+        parentTurnId: 'turn-2',
+        prompt: 'cross-parent resume',
+        expectedResumeCount: 0,
+        expectedLaunchers: ['delegate_task'],
+        requireResumable: true,
+        signal: new AbortController().signal
+      })).rejects.toThrow('does not belong to this parent thread')
+
+      const resumed = await runtime.resumeChild({
+        childId: 'child_generic',
+        parentThreadId: 'parent',
+        parentTurnId: 'turn-2',
+        prompt: 'continue',
+        expectedResumeCount: 0,
+        expectedLaunchers: ['delegate_task', 'explore_agent'],
+        requireResumable: true,
+        signal: new AbortController().signal
+      })
+      expect(resumed).toMatchObject({
+        id: 'child_generic',
+        parentTurnId: 'turn-2',
+        status: 'completed',
+        resumable: false,
+        resumeCount: 1
+      })
+
+      await expect(runtime.resumeChild({
+        childId: 'child_generic',
+        parentThreadId: 'parent',
+        parentTurnId: 'turn-3',
+        prompt: 'duplicate',
+        expectedResumeCount: 0,
+        expectedLaunchers: ['delegate_task'],
+        requireResumable: true,
+        signal: new AbortController().signal
+      })).rejects.toThrow('resume count changed from 0 to 1')
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('marks only generic orphaned children resumable after restart', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'kun-delegation-restart-resume-'))
+    try {
+      const store = new FileDelegationStore(dir)
+      const base = {
+        parentTurnId: 'turn-1',
+        prompt: 'work',
+        workspace: '/workspace',
+        profileSnapshot: { mode: 'subagent' as const, toolPolicy: 'inherit' as const },
+        security: { sandboxRoot: '/workspace', memoryEnabled: false },
+        status: 'running' as const,
+        usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+        createdAt: '2026-08-11T00:00:00.000Z',
+        updatedAt: '2026-08-11T00:00:01.000Z'
+      }
+      await store.upsert(ChildRunRecord.parse({
+        ...base,
+        id: 'child_generic_restart',
+        parentThreadId: 'parent_generic',
+        launcher: 'explore_agent',
+        detached: true
+      }))
+      await store.upsert(ChildRunRecord.parse({
+        ...base,
+        id: 'child_graph_restart',
+        parentThreadId: 'parent_graph',
+        launcher: 'graph'
+      }))
+      const runtime = new DelegationRuntime({ config: subagentConfig(), store })
+
+      await expect(runtime.reconcileOrphanedChildRuns()).resolves.toBe(2)
+      await expect(runtime.resumableParentThreadIds()).resolves.toEqual(['parent_generic'])
+      await expect(store.get('child_generic_restart')).resolves.toMatchObject({
+        status: 'failed', terminationReason: 'runtime_restart', resumable: true
+      })
+      await expect(store.get('child_graph_restart')).resolves.toMatchObject({
+        status: 'failed', terminationReason: 'runtime_restart', resumable: false
+      })
+      await expect(runtime.resumeChild({
+        childId: 'child_graph_restart',
+        parentThreadId: 'parent_graph',
+        parentTurnId: 'turn-2',
+        prompt: 'generic resume must not own Graph',
+        expectedLaunchers: ['delegate_task', 'explore_agent'],
+        requireResumable: true,
+        signal: new AbortController().signal
+      })).rejects.toThrow('is owned by graph')
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

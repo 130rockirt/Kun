@@ -242,6 +242,7 @@ export function buildComponentDesignToolProviders(
           const record = await runtime.runChild({
             parentThreadId: context.threadId,
             parentTurnId: context.turnId,
+            launcher: 'component_design',
             label: `设计 ${args.title}`,
             prompt: buildComponentDesignerPrompt({
               ...args,

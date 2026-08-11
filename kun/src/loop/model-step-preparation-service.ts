@@ -72,6 +72,7 @@ import {
   kunContextBlock,
   modelHistoryRoutesByTurnId,
   prefixVolatilityStageDetails,
+  subagentResumeToolGate,
   toolCatalogPolicyScope
 } from './model-step-preparation-helpers.js'
 
@@ -392,8 +393,11 @@ export abstract class ModelStepPreparationService {
     const svgCompletion = turn?.guiDesignArtifact?.kind === 'svg'
       ? svgArtifactCompletionState(historyItems, turnId)
       : null
+    const subagentResumeGate = subagentResumeToolGate(turn, historyItems, turnId)
     const hardRequiredToolName =
-      svgCompletion?.mutationSucceeded &&
+      subagentResumeGate.requiredToolName
+        ? subagentResumeGate.requiredToolName
+        : svgCompletion?.mutationSucceeded &&
             !svgCompletion.validationAfterMutation
         ? DESIGN_SVG_VALIDATE_TOOL_NAME
         : undefined
@@ -484,6 +488,13 @@ export abstract class ModelStepPreparationService {
       ),
       ...(runtimeContextInstruction
         ? [kunContextBlock('runtime-context', 'runtime', runtimeContextInstruction)]
+        : []),
+      ...(subagentResumeGate.instruction
+        ? [kunContextBlock(
+            'subagent-resume',
+            'runtime',
+            subagentResumeGate.instruction
+          )]
         : []),
       ...(thread?.additionalWorkspaces?.length
         ? [kunContextBlock(

@@ -43,6 +43,7 @@ import {
   profileAvailableOnSurface,
   type ChildReturnFormat,
   type ChildRunExecutor,
+  type ChildRunLauncher,
   type ChildRunLifecycleMetadata
 } from './delegation-runtime-contracts.js'
 import {
@@ -73,6 +74,8 @@ export class DelegationRuntimeRun extends DelegationRuntimeBase {
   async runChild(input: {
     parentThreadId: string
     parentTurnId: string
+    /** First-class caller that owns recovery policy for this child. */
+    launcher?: ChildRunLauncher
     label?: string
     prompt: string
     workspace?: string
@@ -289,7 +292,9 @@ export class DelegationRuntimeRun extends DelegationRuntimeBase {
       approvalReviewer,
       returnFormat,
       ...(input.detach ? { detached: true } : {}),
+      ...(input.launcher ? { launcher: input.launcher } : {}),
       status: 'queued',
+      resumable: false,
       childSeq: this.nextChildSeq(id),
       createdAt: queuedAt,
       updatedAt: queuedAt
@@ -310,6 +315,8 @@ export class DelegationRuntimeRun extends DelegationRuntimeBase {
         record = ChildRunRecord.parse({
           ...record,
           status: 'aborted',
+          terminationReason: 'manual_stop',
+          resumable: input.launcher === 'delegate_task' || input.launcher === 'explore_agent',
           error: 'child run aborted before detached execution started',
           updatedAt: this.now()
         })

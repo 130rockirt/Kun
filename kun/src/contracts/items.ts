@@ -69,7 +69,8 @@ export type UserFileReference = z.infer<typeof UserFileReferenceSchema>
 export const UserMessageSource = z.enum([
   'background_shell',
   'background_subagent',
-  'graph_runtime'
+  'graph_runtime',
+  'subagent_resume'
 ])
 export type UserMessageSource = z.infer<typeof UserMessageSource>
 

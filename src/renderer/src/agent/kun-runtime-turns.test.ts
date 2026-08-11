@@ -127,6 +127,35 @@ describe('KunRuntimeProvider', () => {
     )
   })
 
+  it('posts structured subagent resume metadata with its dedicated message source', async () => {
+    const runtimeRequest = vi.fn(async () => ({
+      ok: true,
+      status: 202,
+      body: JSON.stringify({ threadId: 'thr_1', turnId: 'turn_resume', userMessageItemId: 'item_resume' })
+    }))
+    installDsGui({ runtimeRequest })
+
+    await new KunRuntimeProvider().sendUserMessage('thr_1', 'fixed backend prompt', {
+      clientRequestId: 'subagent-resume:2:child_1',
+      displayText: 'Continue interrupted subagent',
+      subagentResume: { childId: 'child_1', expectedResumeCount: 2 }
+    })
+
+    expect(runtimeRequest).toHaveBeenCalledWith(
+      '/v1/threads/thr_1/turns',
+      'POST',
+      JSON.stringify({
+        prompt: 'fixed backend prompt',
+        clientRequestId: 'subagent-resume:2:child_1',
+        clientSurface: 'gui',
+        ...DEFAULT_EXECUTION_SETTINGS,
+        subagentResume: { childId: 'child_1', expectedResumeCount: 2 },
+        messageSource: 'subagent_resume',
+        displayText: 'Continue interrupted subagent'
+      })
+    )
+  })
+
   it('posts per-turn provider ids with Kun turn requests when provided', async () => {
     const runtimeRequest = vi.fn(async () => ({
       ok: true,

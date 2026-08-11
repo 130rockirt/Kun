@@ -44,6 +44,8 @@ export type ChatProjectionReducerContext = {
 import { reduceLateChatProjection } from './chat-projection-reducer-late'
 import {
   flushLiveProjection,
+  isNewChildAttempt,
+  isStaleChildAttempt,
   isDetachedSubagentToolEvent,
   isUserInputInterruptError,
   mergeToolProjectionMeta,
@@ -294,14 +296,16 @@ export function reduceChatProjection(
       if (index >= 0) {
         const current = state.blocks[index]
         if (current.kind !== 'tool') return base
-        const nextStatus = monotonicToolStatus(current.status, event.status)
+        const newAttempt = isNewChildAttempt(current, event)
+        const staleAttempt = isStaleChildAttempt(current, event)
+        const nextStatus = newAttempt ? event.status : monotonicToolStatus(current.status, event.status)
         // A stale queued/running lifecycle snapshot must never replace the
         // terminal summary/detail of an already settled tool block.
-        const staleRunning = nextStatus !== event.status
+        const staleRunning = staleAttempt || (!newAttempt && nextStatus !== event.status)
         const blocks = [...state.blocks]
         blocks[index] = {
           ...current,
-          turnId: event.turnId ?? current.turnId,
+          turnId: staleAttempt ? current.turnId : (event.turnId ?? current.turnId),
           summary: staleRunning ? current.summary : (event.summary || current.summary),
           status: nextStatus,
           toolKind: event.toolKind ?? current.toolKind,

@@ -28,7 +28,13 @@ export const KNOWN_POSE_IDS = new Set([
 export type DelegateDetail = {
   /** The child thread id — always present in the tool result, unlike `meta.child`. */
   childId?: string
+  parentThreadId?: string
+  parentTurnId?: string
   status?: 'queued' | 'running' | 'completed' | 'failed' | 'aborted'
+  launcher?: 'delegate_task' | 'explore_agent' | 'ppt_agent' | 'component_design' | 'graph'
+  terminationReason?: 'manual_stop' | 'runtime_restart' | 'child_error'
+  resumable?: boolean
+  resumeCount?: number
   /** Short UI title from explore_agent (or early lifecycle updates). */
   title?: string
   /** Narrow explore query from the initial tool arguments payload. */
@@ -99,7 +105,19 @@ export function parseDelegateDetail(detail: string | undefined): DelegateDetail 
   const lineCount = num(resultRef?.lineCount)
   return {
     childId: str(obj.childId),
+    parentThreadId: str(obj.parentThreadId),
+    parentTurnId: str(obj.parentTurnId),
     status: status(obj.status),
+    launcher: obj.launcher === 'delegate_task' || obj.launcher === 'explore_agent' ||
+      obj.launcher === 'ppt_agent' || obj.launcher === 'component_design' || obj.launcher === 'graph'
+      ? obj.launcher
+      : undefined,
+    terminationReason: obj.terminationReason === 'manual_stop' ||
+      obj.terminationReason === 'runtime_restart' || obj.terminationReason === 'child_error'
+      ? obj.terminationReason
+      : undefined,
+    resumable: typeof obj.resumable === 'boolean' ? obj.resumable : undefined,
+    resumeCount: num(obj.resumeCount),
     title: str(obj.title),
     query: str(obj.query),
     summary: str(obj.summary),
@@ -170,6 +188,11 @@ export type ChildMeta = {
   childModel?: string
   childStatus?: string
   childSeq?: number
+  childLauncher?: DelegateDetail['launcher']
+  childTerminationReason?: DelegateDetail['terminationReason']
+  resumable?: boolean
+  resumeCount?: number
+  parentThreadId?: string
   parentTurnId?: string
   toolInvocations?: number
   durationMs?: number
@@ -198,6 +221,17 @@ export function readChildMeta(block: ChatBlock): ChildMeta {
     childModel: str(child.childModel),
     childStatus: str(child.childStatus),
     childSeq: typeof child.childSeq === 'number' ? child.childSeq : undefined,
+    childLauncher: child.childLauncher === 'delegate_task' || child.childLauncher === 'explore_agent' ||
+      child.childLauncher === 'ppt_agent' || child.childLauncher === 'component_design' || child.childLauncher === 'graph'
+      ? child.childLauncher
+      : undefined,
+    childTerminationReason: child.childTerminationReason === 'manual_stop' ||
+      child.childTerminationReason === 'runtime_restart' || child.childTerminationReason === 'child_error'
+      ? child.childTerminationReason
+      : undefined,
+    resumable: typeof child.resumable === 'boolean' ? child.resumable : undefined,
+    resumeCount: typeof child.resumeCount === 'number' ? child.resumeCount : undefined,
+    parentThreadId: str(child.parentThreadId),
     parentTurnId: str(child.parentTurnId),
     toolInvocations: typeof child.toolInvocations === 'number' ? child.toolInvocations : undefined,
     durationMs: typeof child.durationMs === 'number' ? child.durationMs : undefined,
@@ -210,6 +244,10 @@ export function readChildMeta(block: ChatBlock): ChildMeta {
     resultUnavailableReason: str(child.resultUnavailableReason),
     detached: child.detached === true
   }
+}
+
+export function subagentResumeRequestId(childId: string, resumeCount: number): string {
+  return `subagent-resume:${resumeCount}:${childId}`.slice(0, 256)
 }
 
 /**

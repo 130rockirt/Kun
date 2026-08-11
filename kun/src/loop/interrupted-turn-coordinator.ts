@@ -94,6 +94,7 @@ export class InterruptedTurnCoordinator {
     if (!this.enabled) return false
     const thread = await this.deps.threadStore.get(threadId)
     if (!thread) return false
+    if (thread.relation === 'side') return false
     // A still-active goal owns its own resume path; never double-resume.
     if (thread.goal && thread.goal.status === 'active') return false
     const lastResumeAt = thread.lastAutoResumeAt

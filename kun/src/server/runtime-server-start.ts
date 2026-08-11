@@ -14,6 +14,7 @@ import { createKunServeRuntime } from './runtime-composition.js'
 import { settleCleanupSteps } from './runtime-factory-cleanup.js'
 import { startMemoryPressureMonitor } from './memory-pressure-monitor.js'
 import type { KunServeHandle, KunServeRuntimeOptions } from './runtime-factory-types.js'
+import { reconcileRuntimeAfterRestart } from './runtime-restart-reconciliation.js'
 
 export async function startKunServe(
   options: KunServeRuntimeOptions
@@ -112,42 +113,9 @@ export async function startKunServe(
   // clients stop spinning on them, without delaying readiness. Then resume
   // goals that were interrupted mid-run so an active goal doesn't sit "in
   // progress" forever with nothing running (KunAgent/Kun#370).
-  if (!options.serviceManager) void runtime.turnService
-    .reconcileOrphanedTurns()
-    .then(async (threadIds) => {
-      if (threadIds.length > 0) {
-        console.warn(`[kun] marked orphaned turn(s) on ${threadIds.length} thread(s) as failed after restart`)
-      }
-      if (threadIds.length > 0 && runtime.resumeInterruptedGoals) {
-        const resumed = await runtime.resumeInterruptedGoals(threadIds)
-        if (resumed > 0) {
-          console.warn(`[kun] auto-resumed ${resumed} interrupted goal(s) after restart`)
-        }
-      }
-      // Ordinary threads (no active goal) get the same treatment: resume the
-      // interrupted task so the user does not have to re-explain it. Gated by
-      // the per-thread cooldown and the master switch.
-      if (threadIds.length > 0 && runtime.resumeInterruptedTurns) {
-        const resumed = await runtime.resumeInterruptedTurns(threadIds)
-        if (resumed > 0) {
-          console.warn(`[kun] auto-resumed ${resumed} interrupted turn(s) after restart`)
-        }
-      }
-    })
+  if (!options.serviceManager) void reconcileRuntimeAfterRestart(runtime)
     .catch((error) => {
       console.warn('[kun] orphaned turn reconciliation failed:', error)
-    })
-  // Settle subagent (child-run) records left 'queued'/'running' by the previous
-  // process, so a restart doesn't leave them stuck in-flight forever (#621).
-  if (!options.serviceManager) void runtime.delegationRuntime
-    ?.reconcileOrphanedChildRuns()
-    .then((count) => {
-      if (count > 0) {
-        console.warn(`[kun] marked ${count} orphaned subagent run(s) as failed after restart`)
-      }
-    })
-    .catch((error) => {
-      console.warn('[kun] orphaned child-run reconciliation failed:', error)
     })
   // Memory-pressure monitor: fold idle histories at the warning watermark and
   // request a graceful (resumable) shutdown at the critical watermark instead

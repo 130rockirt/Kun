@@ -1,4 +1,4 @@
-import type { ActingTurnModelRoute } from '../contracts/turns.js'
+import type { ActingTurnModelRoute, Turn } from '../contracts/turns.js'
 import type { TurnItem } from '../contracts/items.js'
 import type {
   KunTurnContextAuthority,
@@ -18,6 +18,33 @@ export function hasSuccessfulToolResult(
     item.toolName === toolName &&
     item.status === 'completed' &&
     item.isError !== true)
+}
+
+export function hasToolResult(
+  items: readonly TurnItem[],
+  turnId: string,
+  toolName: string
+): boolean {
+  return items.some((item) =>
+    item.turnId === turnId &&
+    item.kind === 'tool_result' &&
+    item.toolName === toolName)
+}
+
+export function subagentResumeToolGate(
+  turn: Pick<Turn, 'subagentResume'>,
+  items: readonly TurnItem[],
+  turnId: string
+): { requiredToolName?: 'delegate_task'; instruction?: string } {
+  const request = turn.subagentResume
+  if (!request || hasToolResult(items, turnId, 'delegate_task')) return {}
+  return {
+    requiredToolName: 'delegate_task',
+    instruction: `This turn must continue child ${JSON.stringify(request.childId)}. ` +
+      'Call delegate_task as the first action with resumeChildId set to that exact id, ' +
+      `expectedResumeCount set to ${request.expectedResumeCount}, and a concise continuation prompt. ` +
+      'Do not create a new child and do not call another tool first.'
+  }
 }
 
 export function sameActingModelRoute(

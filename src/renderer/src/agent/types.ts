@@ -116,6 +116,10 @@ export type RuntimeChildMetadata = {
   childToolPolicy?: 'readOnly' | 'inherit'
   childStatus: 'queued' | 'running' | 'completed' | 'failed' | 'aborted'
   childSeq: number
+  childLauncher?: 'delegate_task' | 'explore_agent' | 'ppt_agent' | 'component_design' | 'graph'
+  childTerminationReason?: 'manual_stop' | 'runtime_restart' | 'child_error'
+  resumable?: boolean
+  resumeCount?: number
   detached?: boolean
   prefixReused?: boolean
   inheritedHistoryItems?: number
@@ -157,7 +161,7 @@ export type RuntimeDisclosureMetadata = {
   /** Persisted turn routing hint so edit/resend can rebuild live canvas context. */
   guiDesignCanvas?: boolean
   guiDesignMode?: boolean
-  messageSource?: 'background_shell' | 'background_subagent' | 'graph_runtime' // client-only rendering hint; never sent to the runtime
+  messageSource?: 'background_shell' | 'background_subagent' | 'graph_runtime' | 'subagent_resume' // client-only rendering hint
   turnId?: string
   workspaceCheckpointId?: string
   attachmentIds?: string[]

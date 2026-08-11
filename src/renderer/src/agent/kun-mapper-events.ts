@@ -154,7 +154,12 @@ export function childLifecycleToolEventFromRuntimeEvent(event: CoreRuntimeEventJ
     detail: JSON.stringify({
       childId: child.childId,
       status: child.childStatus,
-      detached: child.detached === true
+      detached: child.detached === true,
+      resumable: child.resumable === true,
+      resumeCount: child.resumeCount ?? 0,
+      launcher: child.childLauncher,
+      terminationReason: child.childTerminationReason,
+      parentTurnId: child.parentTurnId
     }),
     meta: { child }
   }

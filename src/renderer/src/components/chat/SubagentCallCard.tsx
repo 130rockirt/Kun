@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Check, ChevronDown, ChevronRight, Eye, Hourglass, Loader2 } from 'lucide-react'
+import { Check, ChevronDown, ChevronRight, Eye, Hourglass, Loader2, RotateCcw } from 'lucide-react'
 import type { ChatBlock, ToolBlock } from '../../agent/types'
 import { useChatStore } from '../../store/chat-store'
 import { BUILTIN_AGENT_CATALOG_BY_ID } from '../../../../../kun/src/delegation/builtin-agent-catalog'
@@ -37,6 +37,7 @@ import {
   parseExploreBatchChildren,
   readChildMeta,
   resolveStatus,
+  subagentResumeRequestId,
   useOnScreen,
   type CardStatus,
   type OpenChildThreadHandler
@@ -44,6 +45,12 @@ import {
 
 export { parseDelegateDetail } from './subagent-call-card-support'
 export type { OpenChildThreadHandler } from './subagent-call-card-support'
+
+const SUBAGENT_RESUME_PROMPT = [
+  'Continue the interrupted delegated task in the existing child session.',
+  'Review its history and current workspace state, avoid repeating completed work,',
+  'and finish the original delegated task or report a concrete blocker.'
+].join(' ')
 
 export function SubagentCallCard({
   block,
@@ -63,6 +70,8 @@ export function SubagentCallCard({
 }): ReactElement | null {
   const { t } = useTranslation('common')
   const selectThread = useChatStore((s) => s.selectThread)
+  const sendMessage = useChatStore((s) => s.sendMessage)
+  const parentBusy = useChatStore((s) => s.busy)
   const reducedMotion = useSubagentReducedMotion()
   const ref = useRef<HTMLElement | null>(null)
   const onScreen = useOnScreen(ref)
@@ -80,7 +89,10 @@ export function SubagentCallCard({
   const resultUnavailableReason = child.resultUnavailableReason ?? detail.resultUnavailableReason
   const generated = detail.generated === true || (child.childProfile?.startsWith('generated:') ?? false)
   const animate = !reducedMotion && onScreen && status === 'running'
-  const isExplore = block.kind === 'tool' && isExploreToolBlock(block as ToolBlock)
+  const launcher = child.childLauncher || detail.launcher
+  const isExplore = launcher === 'explore_agent' || (
+    block.kind === 'tool' && isExploreToolBlock(block as ToolBlock)
+  )
 
   // Profile id: prefer the live `childProfile` from the runtime metadata (set on
   // the first queued/running event) so the agent type shows immediately; the
@@ -161,7 +173,33 @@ export function SubagentCallCard({
   const hasBody = Boolean(detail.summary?.trim() || detail.error?.trim())
   const [conclusionExpanded, setConclusionExpanded] = useState(false)
   const [peekOpen, setPeekOpen] = useState(false)
+  const [resuming, setResuming] = useState(false)
+  const resumeObservedBusy = useRef(false)
   const expanded = hasBody && !peekOpen && conclusionExpanded
+  const resumeCount = child.resumeCount ?? detail.resumeCount ?? 0
+  const attemptParentTurnId = child.parentTurnId || detail.parentTurnId
+  const canResume = Boolean(
+    childId &&
+    status === 'failed' &&
+    (child.resumable ?? detail.resumable) === true &&
+    (!attemptParentTurnId || !block.turnId || attemptParentTurnId === block.turnId)
+  )
+
+  useEffect(() => {
+    if (!canResume) setResuming(false)
+  }, [canResume])
+  useEffect(() => {
+    if (!resuming) {
+      resumeObservedBusy.current = false
+      return
+    }
+    if (parentBusy) {
+      resumeObservedBusy.current = true
+    } else if (resumeObservedBusy.current) {
+      resumeObservedBusy.current = false
+      setResuming(false)
+    }
+  }, [parentBusy, resuming])
 
   const canJump = Boolean(childId)
   const openChild = (): void => {
@@ -176,6 +214,20 @@ export function SubagentCallCard({
   const toggleConclusion = (): void => {
     if (!hasBody) return
     setConclusionExpanded((value) => !value)
+  }
+  const resumeChild = async (): Promise<void> => {
+    if (!canResume || !childId || resuming || parentBusy || !sendMessage) return
+    setResuming(true)
+    const accepted = await sendMessage(SUBAGENT_RESUME_PROMPT, 'agent', {
+      clientRequestId: subagentResumeRequestId(childId, resumeCount),
+      ...(child.parentThreadId || detail.parentThreadId
+        ? { expectedThreadId: child.parentThreadId || detail.parentThreadId }
+        : {}),
+      displayText: t('subagentResumeDisplayText', { defaultValue: 'Continue interrupted subagent' }),
+      orchestration: 'direct',
+      subagentResume: { childId, expectedResumeCount: resumeCount }
+    }).catch(() => false)
+    if (!accepted) setResuming(false)
   }
 
   // Stagger sweep/pulse per child so a swarm reads as independent.
@@ -269,6 +321,27 @@ export function SubagentCallCard({
                   : ''}
           </span>
         </span>
+        {canResume ? (
+          <button
+            type="button"
+            disabled={resuming || parentBusy}
+            onClick={(e) => {
+              e.stopPropagation()
+              void resumeChild()
+            }}
+            className="flex h-7 shrink-0 items-center gap-1 rounded-md bg-emerald-500/10 px-2 text-[11px] font-semibold text-emerald-700 transition hover:bg-emerald-500/15 disabled:cursor-not-allowed disabled:opacity-50 dark:text-emerald-300"
+            aria-label={t('subagentResumeAction', { defaultValue: 'Continue subagent' })}
+            title={t('subagentResumeAction', { defaultValue: 'Continue subagent' })}
+            data-testid="subagent-resume-button"
+          >
+            {resuming ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={2} />
+            ) : (
+              <RotateCcw className="h-3.5 w-3.5" strokeWidth={2} />
+            )}
+            <span>{t('subagentResumeShort', { defaultValue: 'Continue' })}</span>
+          </button>
+        ) : null}
         {childId ? (
           <button
             type="button"

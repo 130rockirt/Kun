@@ -8,6 +8,7 @@ import type { TurnItem } from '../contracts/items.js'
 import type { ModelCapabilityMetadata } from '../contracts/capabilities.js'
 import type {
   ActingTurnModelRoute,
+  SubagentResumeRequest,
   TurnClientSurface
 } from '../contracts/turns.js'
 import type { ArtifactStore } from '../artifacts/artifact-store.js'
@@ -111,7 +112,9 @@ export type ToolHostContext = {
   /** Pending desktop checkpoint gate for the first workspace mutation. */
   workspaceCheckpointRequestId?: string
   orchestration?: 'direct' | 'graph'
-  messageSource?: 'background_shell' | 'background_subagent' | 'graph_runtime'
+  messageSource?: 'background_shell' | 'background_subagent' | 'graph_runtime' | 'subagent_resume'
+  /** Structured child identity bound to a one-click resume turn. */
+  subagentResume?: SubagentResumeRequest
   /** Additional explicitly trusted workspace roots for this persisted thread. */
   additionalWorkspaces?: readonly string[]
   /** Initiating client surface used to hide providers that require a desktop workbench. */

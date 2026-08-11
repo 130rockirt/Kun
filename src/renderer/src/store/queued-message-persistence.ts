@@ -56,6 +56,23 @@ function normalizeQueuedMessage(value: unknown): QueuedUserMessage | null {
   const expectedThreadId = normalizedString(source.expectedThreadId)
   if (expectedThreadId) normalized.expectedThreadId = expectedThreadId
   else delete normalized.expectedThreadId
+  const resume = source.subagentResume
+  if (resume && typeof resume === 'object' && !Array.isArray(resume)) {
+    const childId = normalizedString((resume as Record<string, unknown>).childId)
+    const expectedResumeCount = (resume as Record<string, unknown>).expectedResumeCount
+    if (
+      childId &&
+      typeof expectedResumeCount === 'number' &&
+      Number.isInteger(expectedResumeCount) &&
+      expectedResumeCount >= 0
+    ) {
+      normalized.subagentResume = { childId, expectedResumeCount }
+    } else {
+      delete normalized.subagentResume
+    }
+  } else {
+    delete normalized.subagentResume
+  }
   return normalized
 }
 

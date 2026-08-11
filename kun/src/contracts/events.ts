@@ -128,6 +128,10 @@ const RuntimeEventBase = z.object({
     childLabel: z.string().optional(),
     childStatus: z.enum(['queued', 'running', 'completed', 'failed', 'aborted']),
     childSeq: z.number().int().nonnegative(),
+    childLauncher: z.enum(['delegate_task', 'explore_agent', 'ppt_agent', 'component_design', 'graph']).optional(),
+    childTerminationReason: z.enum(['manual_stop', 'runtime_restart', 'child_error']).optional(),
+    resumable: z.boolean().optional(),
+    resumeCount: z.number().int().nonnegative().optional(),
     detached: z.boolean().optional(),
     // Observability metrics carried alongside the child lifecycle event so
     // the GUI can show prefix reuse, tool fan-out, timing, and cost per
