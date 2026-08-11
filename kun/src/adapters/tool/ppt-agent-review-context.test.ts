@@ -3,6 +3,7 @@ import type { DelegationRuntime } from '../../delegation/delegation-runtime.js'
 import { TurnSchema, type Turn } from '../../contracts/turns.js'
 import type { ToolHostContext } from '../../ports/tool-host.js'
 import type { PptReviewBundleV1 } from '../../ppt/ppt-review-manifest.js'
+import { createPptGeometryQaReport } from '../../ppt/ppt-geometry-qa-report.js'
 import {
   buildPptAgentToolProvider,
   type PptAgentTurnReader,
@@ -109,7 +110,8 @@ function makeTurnReader(slides: PptReviewContextV1['slides']): PptAgentTurnReade
 
 function makeRuntime(
   onResume?: (input: Record<string, unknown>) => void,
-  bundle: PptReviewBundleV1 = persistedBundle
+  bundle: PptReviewBundleV1 = persistedBundle,
+  resumedBundle: PptReviewBundleV1 = bundle
 ): DelegationRuntime {
   return {
     enabled: () => true,
@@ -124,7 +126,7 @@ function makeRuntime(
       return {
         id: CHILD_ID,
         status: 'completed',
-        reviewBundle: bundle,
+        reviewBundle: resumedBundle,
         reviewBundleParentTurnId: baseContext.turnId,
         deckArtifact: {
           output: 'presentations/review-deck.pptx',
@@ -235,6 +237,43 @@ describe('ppt_agent structured review freshness', () => {
       reviewContext: {
         childId: CHILD_ID,
         slides: [{ slideId: 'slide-1', revision: 2, annotations: [annotation] }]
+      }
+    })
+  })
+
+  it('returns a completed warning projection beside the validated deck without failing approval', async () => {
+    const warning = createPptGeometryQaReport({
+      slideCount: 2,
+      issues: [{
+        rule: 'text.minimum_font_size', severity: 'warning', slideIndex: 0, shapeId: 'caption-1',
+        rect: { x: 0.1, y: 0.8, width: 0.3, height: 0.1 },
+        message: 'Caption is below the governed size', repairHint: 'Increase the caption size'
+      }]
+    }).issues[0]
+    const completedBundle: PptReviewBundleV1 = {
+      ...persistedBundle,
+      phase: 'completed',
+      slides: persistedBundle.slides.map((slide) => ({
+        ...slide,
+        qaIssues: slide.index === 0 ? [warning] : []
+      }))
+    }
+    const result = await tool(
+      makeRuntime(undefined, persistedBundle, completedBundle),
+      [{ slideId: 'slide-1', revision: 2 }]
+    ).execute({
+      action: 'approve_and_build', childId: CHILD_ID, workflowId: WORKFLOW_ID
+    }, baseContext)
+
+    expect(result).toMatchObject({
+      isError: false,
+      output: {
+        phase: 'completed',
+        deckArtifact: { validated: true, output: 'presentations/review-deck.pptx' },
+        reviewBundle: {
+          phase: 'completed',
+          slides: [{ qaIssues: [{ severity: 'warning', shapeId: 'caption-1' }] }, { qaIssues: [] }]
+        }
       }
     })
   })

@@ -26,16 +26,16 @@
 
 ## 5. Geometry QA Core
 
-- [ ] 5.1 Add the versioned geometry-report schema, normalized issue identity, atomic report persistence, and manifest projection
-- [ ] 5.2 Extend OOXML parsing for shape classification, bounds, explicit text metrics, grouping, relationships, crop data, and image dimensions
-- [ ] 5.3 Implement bounds, overflow, overlap, footer, aspect-ratio, and minimum-font rules with exemptions and focused fixtures
+- [x] 5.1 Add the versioned geometry-report schema, normalized issue identity, atomic report persistence, and manifest projection
+- [x] 5.2 Extend OOXML parsing for shape classification, bounds, explicit text metrics, grouping, relationships, crop data, and image dimensions
+- [x] 5.3 Implement bounds, overflow, overlap, footer, aspect-ratio, and minimum-font rules with exemptions and focused fixtures
 
 ## 6. Geometry QA Workflow and Board
 
-- [ ] 6.1 Compose geometry QA with existing export checks, block errors, publish warnings, and expose validated QA summaries
-- [ ] 6.2 Persist bounded QA attempts and return `failed_recoverable` review data after two unsuccessful repairs
-- [ ] 6.3 Project slide-local QA markers and severity counts onto the review board while replacing stale markers
-- [ ] 6.4 Cover report replacement, export gating, retry exhaustion, warning publication, and board-marker updates with tests
+- [x] 6.1 Compose geometry QA with existing export checks, block errors, publish warnings, and expose validated QA summaries
+- [x] 6.2 Persist bounded QA attempts and return `failed_recoverable` review data after two unsuccessful repairs
+- [x] 6.3 Project slide-local QA markers and severity counts onto the review board while replacing stale markers
+- [x] 6.4 Cover report replacement, export gating, retry exhaustion, warning publication, and board-marker updates with tests
 
 ## 7. Final Verification and Delivery
 

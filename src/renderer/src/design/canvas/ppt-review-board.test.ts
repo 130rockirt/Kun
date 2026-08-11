@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import { createDefaultShape, type CanvasShape } from './canvas-types'
+import { ShapeOpSchema } from './shape-ops'
 import {
   isPptReviewBundle,
   pptReviewBoardOps,
   serializeActivePptReviewContexts,
-  type PptReviewBundle
+  type PptReviewBundle,
+  type PptReviewQaIssue
 } from './ppt-review-board'
 
 const bundle: PptReviewBundle = {
@@ -26,6 +28,31 @@ const bundle: PptReviewBundle = {
 
 function shape(type: CanvasShape['type'], name: string, id: string): CanvasShape {
   return { ...createDefaultShape(type, 0, 0), id, name }
+}
+
+function qaIssue(
+  severity: PptReviewQaIssue['severity'],
+  issueId: string,
+  rect = { x: 0.25, y: 0.2, width: 0.1, height: 0.2 }
+): PptReviewQaIssue {
+  return {
+    issueId,
+    rule: 'objects.overlap',
+    severity,
+    slideIndex: 0,
+    shapeId: `shape-${severity}`,
+    rect,
+    message: `${severity} geometry issue`,
+    repairHint: `Repair the ${severity} issue`
+  }
+}
+
+function materializeAdds(ops: unknown[]): CanvasShape[] {
+  return ops.flatMap((value, index) => {
+    const op = value as { op: string; shape?: Partial<CanvasShape> & Pick<CanvasShape, 'type' | 'name'> }
+    if (op.op !== 'add' || !op.shape) return []
+    return [{ ...createDefaultShape(op.shape.type, 0, 0), ...op.shape, id: `added-${index}` } as CanvasShape]
+  })
 }
 
 describe('PPT review board', () => {
@@ -68,6 +95,63 @@ describe('PPT review board', () => {
     expect(ops.filter((op) => op.op === 'add' && op.shape?.name?.endsWith(':frame'))).toHaveLength(0)
   })
 
+  it('maps actionable QA issues onto numbered red and amber preview markers', () => {
+    const qaBundle: PptReviewBundle = {
+      ...bundle,
+      phase: 'failed_recoverable',
+      slides: [{
+        ...bundle.slides[0],
+        qaIssues: [
+          qaIssue('error', 'pptqa_aaaaaaaaaaaaaaaaaaaaaaaa'),
+          qaIssue('warning', 'pptqa_bbbbbbbbbbbbbbbbbbbbbbbb', { x: 0.8, y: 0.8, width: 0.2, height: 0.2 }),
+          qaIssue('unchecked', 'pptqa_cccccccccccccccccccccccc')
+        ]
+      }]
+    }
+    expect(isPptReviewBundle(qaBundle)).toBe(true)
+    expect(isPptReviewBundle({ ...qaBundle, phase: 'completed' })).toBe(true)
+    expect(isPptReviewBundle({ ...bundle, phase: 'completed' })).toBe(false)
+    const ops = pptReviewBoardOps(qaBundle, [], 'thread-a')
+    expect(ops.every((op) => ShapeOpSchema.safeParse(op).success)).toBe(true)
+    const markers = materializeAdds(ops).filter((item) => item.pptReviewRef?.role === 'annotation')
+    const badges = markers.filter((item) => item.type === 'ellipse')
+    const numbers = markers.filter((item) => item.type === 'text')
+    expect(badges).toHaveLength(2)
+    expect(numbers.map((item) => item.textContent)).toEqual(['1', '2'])
+    expect(badges.map((item) => item.fills[0])).toEqual([
+      { type: 'solid', color: '#DC2626', opacity: 1 },
+      { type: 'solid', color: '#D97706', opacity: 1 }
+    ])
+    expect(badges[0].x).toBeCloseTo(136.2)
+    expect(badges[0].y).toBeCloseTo(73.2)
+    expect(markers.some((item) => item.name.includes('cccccccc'))).toBe(false)
+    expect(badges[0].agentNote?.body).toContain('Fix: Repair the error issue')
+    const status = materializeAdds(ops).find((item) => item.name.endsWith(':status'))
+    expect(status?.textContent).toBe('Revision 1 · QA 1 error · 1 warning · 1 unchecked')
+  })
+
+  it('clears stale QA markers and resets counts when qaIssues becomes empty', () => {
+    const withIssues: PptReviewBundle = {
+      ...bundle,
+      slides: [{
+        ...bundle.slides[0],
+        qaIssues: [qaIssue('error', 'pptqa_aaaaaaaaaaaaaaaaaaaaaaaa')]
+      }]
+    }
+    const existing = materializeAdds(pptReviewBoardOps(withIssues, [], 'thread-a'))
+    const cleared: PptReviewBundle = {
+      ...bundle,
+      slides: [{ ...bundle.slides[0], qaIssues: [] }]
+    }
+    const ops = pptReviewBoardOps(cleared, existing, 'thread-a') as Array<{
+      op: string; id?: string; patch?: Partial<CanvasShape>
+    }>
+    const markerIds = new Set(existing.filter((item) => item.name.includes(':qa:')).map((item) => item.id))
+    expect(ops.filter((op) => op.op === 'delete').map((op) => op.id)).toEqual([...markerIds])
+    expect(ops.find((op) => op.op === 'update' && op.id === 'added-3')?.patch?.textContent)
+      .toBe('Revision 1 · QA 0 errors · 0 warnings · 0 unchecked')
+  })
+
   it('rejects malformed or stale review bundles before they reach the canvas', () => {
     expect(isPptReviewBundle(bundle)).toBe(true)
     expect(isPptReviewBundle({ ...bundle, phase: 'completed' })).toBe(false)
@@ -86,6 +170,18 @@ describe('PPT review board', () => {
     expect(isPptReviewBundle({
       ...bundle,
       slides: [{ ...bundle.slides[0], index: 1 }]
+    })).toBe(false)
+    expect(isPptReviewBundle({
+      ...bundle,
+      slides: [{ ...bundle.slides[0], qaIssues: [
+        qaIssue('error', 'pptqa_aaaaaaaaaaaaaaaaaaaaaaaa', { x: 0.95, y: 0, width: 0.1, height: 0.1 })
+      ] }]
+    })).toBe(false)
+    expect(isPptReviewBundle({
+      ...bundle,
+      slides: [{ ...bundle.slides[0], qaIssues: [
+        { ...qaIssue('error', 'pptqa_aaaaaaaaaaaaaaaaaaaaaaaa'), slideIndex: 1 }
+      ] }]
     })).toBe(false)
   })
 
@@ -111,9 +207,21 @@ describe('PPT review board', () => {
       height: 40,
       textContent: 'Make the headline larger'
     }
+    const qaMarker = {
+      ...shape('text', 'ppt-review:ppt_workflow:slide-1:qa:pptqa_aaaaaaaaaaaaaaaaaaaaaaaa:number', 'qa-1'),
+      x: 40,
+      y: 40,
+      width: 22,
+      height: 22,
+      textContent: '1',
+      pptReviewRef: {
+        workflowId: 'ppt_workflow', childId: 'child_ppt', slideId: 'slide-1', revision: 2,
+        parentThreadId: 'thread-a', role: 'annotation' as const
+      }
+    }
 
-    expect(serializeActivePptReviewContexts([frame, preview, annotation], 'thread-b')).toEqual([])
-    expect(serializeActivePptReviewContexts([frame, preview, annotation], 'thread-a')).toEqual([{
+    expect(serializeActivePptReviewContexts([frame, preview, annotation, qaMarker], 'thread-b')).toEqual([])
+    expect(serializeActivePptReviewContexts([frame, preview, annotation, qaMarker], 'thread-a')).toEqual([{
       workflowId: 'ppt_workflow',
       childId: 'child_ppt',
       slides: [{

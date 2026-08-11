@@ -5,10 +5,17 @@ import { createRequire } from 'node:module'
 import { dirname, extname, join, relative, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import {
+  PPT_REVIEW_GOVERNED_MANIFEST_VERSION,
   PPT_REVIEW_MANIFEST_VERSION,
   readPptReviewManifest,
+  toPptReviewBundle,
   writePptReviewManifest
 } from '../../ppt/ppt-review-manifest.js'
+import { auditPptGeometryParts } from '../../ppt/ppt-geometry-qa.js'
+import {
+  PPT_GEOMETRY_QA_RELATIVE_PATH,
+  writePptGeometryQaReport
+} from '../../ppt/ppt-geometry-qa-report.js'
 import {
   markPptGovernanceExported,
   writePptDesignGovernance
@@ -34,6 +41,11 @@ import {
   assertPptScopedExistingPath,
   assertPptScopedMutationPath
 } from './ppt-agent-physical-path.js'
+import {
+  nextPptGeometryQaAttempt,
+  pptGeometryQaFailureOutput,
+  projectPptGeometryQaReport
+} from './ppt-agent-export-qa.js'
 import { assertCanWritePath } from './sandbox-policy.js'
 import { LocalToolHost, type LocalTool } from './local-tool-host.js'
 
@@ -50,7 +62,8 @@ export function createPptExportTool(
     name: PPT_EXPORT_TOOL_NAME,
     description: [
       'Export a workspace PPTD project to an editable .pptx with Kun\'s bundled offline WASM exporter.',
-      'The tool performs ZIP/OpenXML structure and editability checks, rejects raster-only pages, counts slides, and verifies the requested fade transition before publishing the output.',
+      'The tool performs ZIP/OpenXML structure, editability, transition, and deterministic geometry QA before publishing the output.',
+      'Geometry errors return shape-local repair guidance and permit at most two repair retries; warning-only decks are published with a truthful QA summary.',
       'Validated outputs are published only inside the workspace presentations directory.'
     ].join(' '),
     toolKind: 'file_change',
@@ -128,10 +141,15 @@ export function createPptExportTool(
           })
         : undefined
       const reviewManifest = governance ? await readPptReviewManifest(projectProof.physicalPath) : undefined
+      const qaRetry = reviewManifest?.phase === 'validating_deck' &&
+        reviewManifest.qa !== undefined &&
+        reviewManifest.qa.counts.errors > 0 &&
+        nextPptGeometryQaAttempt(reviewManifest) !== undefined
       if (governance && (
         !reviewManifest ||
-        reviewManifest.version !== PPT_REVIEW_MANIFEST_VERSION ||
-        reviewManifest.phase !== 'awaiting_review' ||
+        reviewManifest.version < PPT_REVIEW_GOVERNED_MANIFEST_VERSION ||
+        reviewManifest.version > PPT_REVIEW_MANIFEST_VERSION ||
+        (reviewManifest.phase !== 'awaiting_review' && !qaRetry) ||
         reviewManifest.workflowId !== governance.state.workflowId ||
         reviewManifest.childId !== context.threadId ||
         governance.state.reviewedPlanFingerprint !== governance.snapshot.designPlan.fingerprint ||
@@ -211,6 +229,74 @@ export function createPptExportTool(
               `exported slide count ${validation.slides} does not match governed page count ${governance.snapshot.designPlan.pageStrategy.pageCount}`
             )
           }
+          const qaAttempt = nextPptGeometryQaAttempt(reviewManifest)
+          if (qaAttempt === undefined) {
+            return {
+              output: {
+                error: 'PPT geometry QA repair budget is exhausted; revise the review before exporting again',
+                validated: false,
+                phase: 'failed_recoverable',
+                ...(reviewManifest?.qa ? { qa: reviewManifest.qa } : {})
+              },
+              isError: true
+            }
+          }
+          const qaReport = auditPptGeometryParts(validation.geometryParts, {
+            attempt: qaAttempt,
+            ...(governance ? {
+              captionSizePt: governance.snapshot.designPlan.typeScale.caption,
+              pageMarginPt: governance.snapshot.designPlan.spacingRhythm.pageMargin
+            } : {}),
+            coverSlideIndexes: [0]
+          })
+          const qaTarget = resolve(lexicalProject, PPT_GEOMETRY_QA_RELATIVE_PATH)
+          await assertPptScopedMutationPath({
+            workspaceRoot: input.workspaceRoot,
+            scopeRoot: lexicalProject,
+            targetPath: qaTarget,
+            label: 'PPT geometry QA report',
+            expected: 'file'
+          })
+          await writePptGeometryQaReport(currentProject.physicalPath, qaReport)
+          const qaDisposition = reviewManifest
+            ? projectPptGeometryQaReport(reviewManifest, qaReport)
+            : undefined
+          if (qaDisposition && qaReport.counts.errors > 0) {
+            await assertPptScopedMutationPath({
+              workspaceRoot: input.workspaceRoot,
+              scopeRoot: lexicalProject,
+              targetPath: resolve(lexicalProject, '.kun-ppt-review', 'manifest.json'),
+              label: 'PPT review manifest',
+              expected: 'file'
+            })
+            await writePptReviewManifest(currentProject.physicalPath, qaDisposition.manifest)
+          }
+          if (qaReport.counts.errors > 0) {
+            const manifestPath = relative(
+              currentProject.physicalWorkspaceRoot,
+              resolve(currentProject.physicalPath, '.kun-ppt-review', 'manifest.json')
+            ).replaceAll('\\', '/')
+            const reviewBundle = qaDisposition?.exhausted
+              ? toPptReviewBundle(qaDisposition.manifest, manifestPath)
+              : undefined
+            return {
+              output: qaDisposition
+                ? pptGeometryQaFailureOutput({ report: qaReport, disposition: qaDisposition, reviewBundle })
+                : {
+                    error: `PPT geometry QA found ${qaReport.counts.errors} error(s)`,
+                    validated: false,
+                    phase: 'failed_recoverable',
+                    qa: {
+                      reportPath: PPT_GEOMETRY_QA_RELATIVE_PATH,
+                      attempt: qaReport.attempt,
+                      counts: qaReport.counts
+                    },
+                    issues: qaReport.issues,
+                    repairAttemptsRemaining: 0
+                  },
+              isError: true
+            }
+          }
           currentOutput = await inspectOutput()
           if (args.force === true && currentOutput.exists) {
             await rm(currentOutput.physicalPath)
@@ -224,6 +310,7 @@ export function createPptExportTool(
             label: 'PPT presentations output',
             expected: 'file'
           })
+          let completedReviewBundle: ReturnType<typeof toPptReviewBundle> | undefined
           if (governance) {
             const manifestTarget = resolve(lexicalProject, '.kun-ppt-review', 'manifest.json')
             await assertPptScopedMutationPath({
@@ -237,16 +324,23 @@ export function createPptExportTool(
               governance.store,
               markPptGovernanceExported(governance.state, governance.snapshot.designPlan.fingerprint)
             )
-            if (reviewManifest) {
-              await writePptReviewManifest(currentProject.physicalPath, {
-                ...reviewManifest,
+            if (qaDisposition) {
+              const completedManifest = {
+                ...qaDisposition.manifest,
                 phase: 'completed',
                 validatedExport: {
                   output: output.relativePath,
                   planFingerprint: governance.snapshot.designPlan.fingerprint,
-                  slides: validation.slides
+                  slides: validation.slides,
+                  qa: qaDisposition.projection
                 }
-              })
+              } as const
+              await writePptReviewManifest(currentProject.physicalPath, completedManifest)
+              const manifestPath = relative(
+                currentProject.physicalWorkspaceRoot,
+                resolve(currentProject.physicalPath, '.kun-ppt-review', 'manifest.json')
+              ).replaceAll('\\', '/')
+              completedReviewBundle = toPptReviewBundle(completedManifest, manifestPath)
             }
           }
           return {
@@ -260,6 +354,13 @@ export function createPptExportTool(
               bytes: validation.bytes,
               transition,
               validated: true,
+              phase: 'completed',
+              qa: qaDisposition?.projection ?? {
+                reportPath: PPT_GEOMETRY_QA_RELATIVE_PATH,
+                attempt: qaReport.attempt,
+                counts: qaReport.counts
+              },
+              ...(completedReviewBundle ? { reviewBundle: completedReviewBundle } : {}),
               ...(governance ? {
                 workflowId: governance.state.workflowId,
                 projectDir: relative(currentProject.physicalWorkspaceRoot, currentProject.physicalPath).replaceAll('\\', '/') || '.',

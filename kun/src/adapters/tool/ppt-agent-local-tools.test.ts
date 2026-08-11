@@ -125,7 +125,7 @@ afterEach(async () => {
 })
 
 describe('PPT agent local tools', () => {
-  it('exports and validates a real one-slide PPTX with fade', async () => {
+  it('exports and validates a real one-slide PPTX from a version-2 governed manifest', async () => {
     const root = await mkdtemp(join(tmpdir(), 'kun-ppt-export-'))
     roots.push(root)
     await mkdir(join(root, 'pages'))
@@ -156,6 +156,9 @@ describe('PPT agent local tools', () => {
     ].join('\n'))
 
     await governForExport(root, '.', 'ppt_workflow', 1)
+    const governedManifestPath = join(root, '.kun-ppt-review', 'manifest.json')
+    const governedManifest = JSON.parse(await readFile(governedManifestPath, 'utf8'))
+    await writeFile(governedManifestPath, `${JSON.stringify({ ...governedManifest, version: 2 }, null, 2)}\n`)
     const tool = governedTools().find((candidate) => candidate.name === PPT_EXPORT_TOOL_NAME)
     expect(tool).toBeDefined()
 
@@ -566,7 +569,7 @@ describe('PPT agent local tools', () => {
       await readFile(join(root, projectDir, '.kun-ppt-review', 'manifest.json'), 'utf8')
     ) as { version: number; governance: { policy: { version: string }; designPlan: { fingerprint: string } } }
     expect(manifest).toMatchObject({
-      version: 2,
+      version: 3,
       governance: { policy: { version: '1.0.0' }, designPlan: { fingerprint: expect.stringMatching(/^[a-f0-9]{64}$/) } }
     })
 

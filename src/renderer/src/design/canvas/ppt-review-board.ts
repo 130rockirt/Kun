@@ -8,6 +8,20 @@ export type PptReviewSlideBundle = {
   revision: number
   status: 'ready' | 'failed'
   error?: string
+  qaIssues?: PptReviewQaIssue[]
+}
+
+export type PptReviewQaIssue = {
+  issueId: string
+  rule: 'bounds.out_of_slide' | 'text.overflow' | 'objects.overlap' | 'footer.safe_zone' |
+    'image.aspect_ratio' | 'text.minimum_font_size'
+  severity: 'error' | 'warning' | 'unchecked'
+  slideIndex: number
+  shapeId: string
+  relatedShapeId?: string
+  rect: { x: number; y: number; width: number; height: number }
+  message: string
+  repairHint: string
 }
 
 export type PptReviewBundle = {
@@ -16,7 +30,7 @@ export type PptReviewBundle = {
   manifestPath: string
   deckTitle: string
   styleFingerprint: string
-  phase: string
+  phase: 'awaiting_review' | 'failed_recoverable' | 'completed'
   slides: PptReviewSlideBundle[]
 }
 
@@ -25,6 +39,11 @@ const CARD_HEIGHT = 270
 const CARD_GAP_X = 56
 const CARD_GAP_Y = 88
 const COLUMNS = 3
+const QA_MARKER_SIZE = 22
+const QA_RULES = new Set([
+  'bounds.out_of_slide', 'text.overflow', 'objects.overlap', 'footer.safe_zone',
+  'image.aspect_ratio', 'text.minimum_font_size'
+])
 
 export function isPptReviewBundle(value: unknown): value is PptReviewBundle {
   if (!isRecord(value) || !Array.isArray(value.slides)) return false
@@ -34,11 +53,12 @@ export function isPptReviewBundle(value: unknown): value is PptReviewBundle {
     !workspaceRelativePath(value.manifestPath) ||
     !nonEmptyString(value.deckTitle) ||
     !nonEmptyString(value.styleFingerprint) ||
-    value.phase !== 'awaiting_review' ||
+    (value.phase !== 'awaiting_review' && value.phase !== 'failed_recoverable' && value.phase !== 'completed') ||
     value.slides.length === 0
   ) return false
   const slideIds = new Set<string>()
   const indexes = new Set<number>()
+  const issueIds = new Set<string>()
   for (const slide of value.slides) {
     if (
       !isRecord(slide) ||
@@ -53,11 +73,21 @@ export function isPptReviewBundle(value: unknown): value is PptReviewBundle {
       slideIds.has(slide.slideId) ||
       indexes.has(Number(slide.index))
     ) return false
+    if (slide.qaIssues !== undefined) {
+      if (!Array.isArray(slide.qaIssues)) return false
+      for (const issue of slide.qaIssues) {
+        if (!isPptReviewQaIssue(issue, Number(slide.index)) || issueIds.has(issue.issueId)) return false
+        issueIds.add(issue.issueId)
+      }
+    }
     slideIds.add(slide.slideId)
     indexes.add(Number(slide.index))
   }
   for (let index = 0; index < value.slides.length; index += 1) {
     if (!indexes.has(index)) return false
+  }
+  if (value.phase === 'completed' && value.slides.some((slide) => !isRecord(slide) || !Array.isArray(slide.qaIssues))) {
+    return false
   }
   return true
 }
@@ -68,16 +98,24 @@ export function pptReviewBoardOps(
   parentThreadId?: string
 ): unknown[] {
   const byName = new Map(shapes.map((shape) => [shape.name, shape]))
-  return bundle.slides.flatMap((slide): unknown[] => {
+  const expectedQaMarkers = new Set(bundle.slides.flatMap((slide) =>
+    (slide.qaIssues ?? []).filter((issue) => issue.severity !== 'unchecked').flatMap((issue) => [
+      `${reviewKey(bundle.workflowId, slide.slideId)}:qa:${issue.issueId}:badge`,
+      `${reviewKey(bundle.workflowId, slide.slideId)}:qa:${issue.issueId}:number`
+    ])))
+  const qaCleanup = shapes
+    .filter((shape) => shape.pptReviewRef?.workflowId === bundle.workflowId &&
+      shape.pptReviewRef.childId === bundle.childId && shape.pptReviewRef.role === 'annotation' &&
+      shape.name.includes(':qa:') && !expectedQaMarkers.has(shape.name))
+    .map((shape) => ({ op: 'delete', id: shape.id }))
+  const slideOps = bundle.slides.flatMap((slide): unknown[] => {
     const col = slide.index % COLUMNS
     const row = Math.floor(slide.index / COLUMNS)
     const x = col * (CARD_WIDTH + CARD_GAP_X)
     const y = row * (CARD_HEIGHT + CARD_GAP_Y)
     const key = reviewKey(bundle.workflowId, slide.slideId)
     const label = `P${slide.index + 1} · ${slide.title}`
-    const status = slide.status === 'failed'
-      ? `Preview failed${slide.error ? `: ${slide.error}` : ''}`
-      : `Revision ${slide.revision} · visual review`
+    const status = reviewStatus(slide)
     const frame = byName.get(`${key}:frame`)
     const preview = byName.get(`${key}:preview`)
     const title = byName.get(`${key}:title`)
@@ -126,7 +164,7 @@ export function pptReviewBoardOps(
       height: 18,
       textContent: status,
       fontSize: 12,
-      fontColor: slide.status === 'failed' ? '#FCA5A5' : '#9CA3AF'
+      fontColor: reviewStatusColor(slide)
     }
     const framePatch = shapePatch(frameShape)
     const previewPatch = shapePatch(previewShape)
@@ -156,9 +194,11 @@ export function pptReviewBoardOps(
         : {
         op: 'add',
         shape: statusShape
-      }
+      },
+      ...qaMarkerOps(bundle, slide, x + 8, y + 8, byName, parentThreadId)
     ]
   })
+  return [...qaCleanup, ...slideOps]
 }
 
 export type SerializedPptReviewContext = {
@@ -190,6 +230,7 @@ export function serializeActivePptReviewContexts(
       const annotations = slide.frame
         ? shapes
             .filter((shape) => shape.type === 'text' &&
+              shape.pptReviewRef?.role !== 'annotation' &&
               !shape.name.endsWith(':title') &&
               !shape.name.endsWith(':status') &&
               shape.x >= slide.frame!.x &&
@@ -220,7 +261,8 @@ export function serializePptReviewContext(
     slides: bundle.slides.map((slide) => {
       const prefix = `${reviewKey(bundle.workflowId, slide.slideId)}:`
       const annotations = shapes
-        .filter((shape) => shape.name.startsWith(prefix) && shape.type === 'text' && !shape.name.endsWith(':title') && !shape.name.endsWith(':status'))
+        .filter((shape) => shape.name.startsWith(prefix) && shape.type === 'text' &&
+          shape.pptReviewRef?.role !== 'annotation' && !shape.name.endsWith(':title') && !shape.name.endsWith(':status'))
         .map((shape) => shape.textContent?.trim() ?? '')
         .filter(Boolean)
       const image = byName.get(`${prefix}preview`)
@@ -238,7 +280,7 @@ export function serializePptReviewContext(
 function reviewRef(
   bundle: PptReviewBundle,
   slide: PptReviewSlideBundle,
-  role: 'slide-frame' | 'preview-image',
+  role: 'slide-frame' | 'preview-image' | 'annotation',
   parentThreadId?: string
 ): NonNullable<CanvasShape['pptReviewRef']> {
   return {
@@ -249,6 +291,82 @@ function reviewRef(
     ...(parentThreadId ? { parentThreadId } : {}),
     role
   }
+}
+
+function qaMarkerOps(
+  bundle: PptReviewBundle,
+  slide: PptReviewSlideBundle,
+  previewX: number,
+  previewY: number,
+  byName: ReadonlyMap<string, CanvasShape>,
+  parentThreadId?: string
+): unknown[] {
+  return (slide.qaIssues ?? []).filter((issue) => issue.severity !== 'unchecked')
+    .flatMap((issue, index) => {
+      const key = `${reviewKey(bundle.workflowId, slide.slideId)}:qa:${issue.issueId}`
+      const color = issue.severity === 'error' ? '#DC2626' : '#D97706'
+      const centerX = previewX + (issue.rect.x + issue.rect.width / 2) * (CARD_WIDTH - 16)
+      const centerY = previewY + (issue.rect.y + issue.rect.height / 2) * (CARD_HEIGHT - 16)
+      const x = clamp(centerX - QA_MARKER_SIZE / 2, previewX, previewX + CARD_WIDTH - 16 - QA_MARKER_SIZE)
+      const y = clamp(centerY - QA_MARKER_SIZE / 2, previewY, previewY + CARD_HEIGHT - 16 - QA_MARKER_SIZE)
+      const ref = reviewRef(bundle, slide, 'annotation', parentThreadId)
+      const note = {
+        kind: 'critique' as const,
+        body: `${issue.message}\nFix: ${issue.repairHint}`,
+        source: 'critic' as const,
+        severity: issue.severity
+      }
+      const badge = {
+        type: 'ellipse', name: `${key}:badge`, x, y, width: QA_MARKER_SIZE, height: QA_MARKER_SIZE,
+        fills: [{ type: 'solid', color, opacity: 1 }],
+        strokes: [{ color: '#FFFFFF', width: 2, opacity: 1, position: 'inside' }],
+        pptReviewRef: ref, agentNote: note
+      }
+      const number = {
+        type: 'text', name: `${key}:number`, x, y: y + 2, width: QA_MARKER_SIZE, height: QA_MARKER_SIZE - 2,
+        textContent: String(index + 1), fontSize: 11, fontWeight: 700, textAlign: 'center' as const,
+        lineHeight: 1, fontColor: '#FFFFFF', pptReviewRef: ref, agentNote: note
+      }
+      const badgeShape = byName.get(badge.name)
+      const numberShape = byName.get(number.name)
+      return [
+        badgeShape ? { op: 'update', id: badgeShape.id, patch: shapePatch(badge) } : { op: 'add', shape: badge },
+        numberShape ? { op: 'update', id: numberShape.id, patch: shapePatch(number) } : { op: 'add', shape: number }
+      ]
+    })
+}
+
+function reviewStatus(slide: PptReviewSlideBundle): string {
+  const base = slide.status === 'failed'
+    ? `Preview failed${slide.error ? `: ${slide.error}` : ''}`
+    : `Revision ${slide.revision}`
+  if (slide.qaIssues === undefined) return `${base} · visual review`
+  const errors = slide.qaIssues.filter((issue) => issue.severity === 'error').length
+  const warnings = slide.qaIssues.filter((issue) => issue.severity === 'warning').length
+  const unchecked = slide.qaIssues.filter((issue) => issue.severity === 'unchecked').length
+  return `${base} · QA ${errors} error${errors === 1 ? '' : 's'} · ${warnings} warning${warnings === 1 ? '' : 's'} · ${unchecked} unchecked`
+}
+
+function reviewStatusColor(slide: PptReviewSlideBundle): string {
+  if (slide.status === 'failed' || slide.qaIssues?.some((issue) => issue.severity === 'error')) return '#FCA5A5'
+  if (slide.qaIssues?.some((issue) => issue.severity === 'warning')) return '#FBBF24'
+  return '#9CA3AF'
+}
+
+function isPptReviewQaIssue(value: unknown, slideIndex: number): value is PptReviewQaIssue {
+  if (!isRecord(value) || typeof value.issueId !== 'string' || !/^pptqa_[a-f0-9]{24}$/.test(value.issueId) ||
+    typeof value.rule !== 'string' || !QA_RULES.has(value.rule) ||
+    (value.severity !== 'error' && value.severity !== 'warning' && value.severity !== 'unchecked') ||
+    value.slideIndex !== slideIndex || !nonEmptyString(value.shapeId) ||
+    (value.relatedShapeId !== undefined && !nonEmptyString(value.relatedShapeId)) ||
+    !nonEmptyString(value.message) || !nonEmptyString(value.repairHint) || !isRecord(value.rect)) return false
+  const { x, y, width, height } = value.rect
+  return [x, y, width, height].every((number) => typeof number === 'number' && Number.isFinite(number) && number >= 0 && number <= 1) &&
+    Number(x) + Number(width) <= 1.000_001 && Number(y) + Number(height) <= 1.000_001
+}
+
+function clamp(value: number, minimum: number, maximum: number): number {
+  return Math.min(Math.max(value, minimum), maximum)
 }
 
 function reviewKey(workflowId: string, slideId: string): string {

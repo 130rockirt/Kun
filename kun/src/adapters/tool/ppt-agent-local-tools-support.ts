@@ -1,7 +1,6 @@
 import { stat } from 'node:fs/promises'
 import { isAbsolute, relative, resolve } from 'node:path'
 import { DOMParser, type Document, type Element, type Node } from '@xmldom/xmldom'
-import * as yauzl from 'yauzl'
 import {
   PPT_REVIEW_MANIFEST_VERSION,
   createPptReviewManifest,
@@ -14,11 +13,11 @@ import {
   pptGovernanceSnapshotFingerprint,
   type PptDesignGovernanceSnapshot
 } from '../../ppt/ppt-design-governance.js'
+import { readPptxGeometryParts } from '../../ppt/ppt-geometry-qa-archive.js'
+import type { PptxGeometryParts } from '../../ppt/ppt-geometry-qa-ooxml.js'
 import type { ToolHostContext } from '../../ports/tool-host.js'
 
 export const MAX_EXPORT_OUTPUT_CHARS = 16_000
-const MAX_PPTX_BYTES = 500 * 1024 * 1024
-const MAX_SLIDE_XML_BYTES = 8 * 1024 * 1024
 const FULL_SLIDE_RASTER_COVERAGE = 0.9
 const MIN_NATIVE_AREA_RATIO = 0.005
 const MIN_NATIVE_FONT_SIZE = 600
@@ -485,49 +484,23 @@ function rasterCoverage(document: Document, size: SlideSize): { pictures: number
 export async function validatePptx(
   path: string,
   transition: 'fade' | 'none'
-): Promise<{ slides: number; editableSlides: number; fadeTransitions: number; bytes: number }> {
-  const info = await stat(path)
-  if (!info.isFile() || info.size <= 0 || info.size > MAX_PPTX_BYTES) {
-    throw new Error(`exported PPTX has an invalid size: ${info.size}`)
-  }
-  let archive: yauzl.ZipFile | undefined
-  let hasContentTypes = false
-  let presentationXml: string | undefined
-  const slideXml: Array<{ name: string; xml: string }> = []
-  let slides = 0
+): Promise<{
+  slides: number
+  editableSlides: number
+  fadeTransitions: number
+  bytes: number
+  geometryParts: PptxGeometryParts
+}> {
+  const geometryParts = await readPptxGeometryParts(path)
+  const slides = geometryParts.slides.length
   let editableSlides = 0
   let fadeTransitions = 0
-  try {
-    archive = await yauzl.openPromise(path, {
-      lazyEntries: true,
-      decodeStrings: true,
-      validateEntrySizes: true,
-      strictFileNames: true,
-      autoClose: false
-    })
-    for await (const entry of archive.eachEntry()) {
-      if (entry.fileName === '[Content_Types].xml') hasContentTypes = true
-      const isPresentation = entry.fileName === 'ppt/presentation.xml'
-      const isSlide = /^ppt\/slides\/slide\d+\.xml$/.test(entry.fileName)
-      if (!isPresentation && !isSlide) continue
-      if (entry.uncompressedSize > MAX_SLIDE_XML_BYTES) throw new Error(`XML is unexpectedly large: ${entry.fileName}`)
-      const stream = await archive.openReadStreamPromise(entry)
-      const chunks: Buffer[] = []
-      for await (const chunk of stream) chunks.push(Buffer.from(chunk))
-      const xml = Buffer.concat(chunks).toString('utf8')
-      if (isPresentation) presentationXml = xml
-      else slideXml.push({ name: entry.fileName, xml })
-    }
-  } finally {
-    archive?.close()
-  }
-  slides = slideXml.length
-  if (!hasContentTypes || !presentationXml || slides === 0) {
+  if (!geometryParts.contentTypesXml || !geometryParts.packageBytes || slides === 0) {
     throw new Error('exported file is not a valid PPTX presentation package')
   }
-  const size = slideSizeFromPresentation(presentationXml)
-  for (const slide of slideXml) {
-    const document = parseOfficeXml(slide.xml, slide.name)
+  const size = slideSizeFromPresentation(geometryParts.presentationXml)
+  for (const slide of geometryParts.slides) {
+    const document = parseOfficeXml(slide.xml, slide.path)
     if (/<p:transition\b[^>]*>[\s\S]*?<p:fade\b/.test(slide.xml)) fadeTransitions += 1
     const raster = rasterCoverage(document, size)
     if (slideHasMeaningfulNativeContent(
@@ -542,14 +515,20 @@ export async function validatePptx(
       const dominance = raster.coverage >= FULL_SLIDE_RASTER_COVERAGE
         ? ` (raster coverage ${Math.round(raster.coverage * 100)}%)`
         : ''
-      throw new Error(`editable deck verification failed: ${slide.name} contains only raster image content${dominance}; native overlays are empty, hidden, or too small`)
+      throw new Error(`editable deck verification failed: ${slide.path} contains only raster image content${dominance}; native overlays are empty, hidden, or too small`)
     }
-    throw new Error(`editable deck verification failed: ${slide.name} has no meaningful native text, shape, chart, table, or diagram content`)
+    throw new Error(`editable deck verification failed: ${slide.path} has no meaningful native text, shape, chart, table, or diagram content`)
   }
   if (transition === 'fade' && fadeTransitions !== slides) {
     throw new Error(`fade transition verification failed: ${fadeTransitions}/${slides} slides`)
   }
-  return { slides, editableSlides, fadeTransitions, bytes: info.size }
+  return {
+    slides,
+    editableSlides,
+    fadeTransitions,
+    bytes: geometryParts.packageBytes,
+    geometryParts
+  }
 }
 
 export async function requireToolchainDirectory(options: PptAgentLocalToolOptions): Promise<string> {
