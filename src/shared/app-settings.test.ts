@@ -46,6 +46,7 @@ import {
   CHAT_WELCOME_MESSAGE_MAX_LENGTH,
   normalizeComposerSendKey,
   isComposerSendHotkey,
+  normalizeCheckpointCleanupSettings,
   normalizeGitBranchPrefix,
   applyGitBranchPrefix,
   parseClawUserPromptForDisplay,
@@ -167,6 +168,13 @@ describe('notification settings', () => {
       mainAgentTurnComplete: false,
       subagentTurnComplete: true
     })
+  })
+})
+
+describe('Git checkpoint creation settings', () => {
+  it('defaults creation off while preserving an explicit opt-in', () => {
+    expect(normalizeCheckpointCleanupSettings().createEnabled).toBe(false)
+    expect(normalizeCheckpointCleanupSettings({ createEnabled: true }).createEnabled).toBe(true)
   })
 })
 

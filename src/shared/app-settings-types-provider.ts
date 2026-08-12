@@ -278,8 +278,8 @@ export const DEFAULT_CHECKPOINT_CLEANUP_INTERVAL_DAYS: CheckpointCleanupInterval
 // do not accumulate. Users who want to keep every checkpoint can opt out in settings.
 export const DEFAULT_CHECKPOINT_CLEANUP_ENABLED = true
 
-/** Create Git checkpoints on send unless the user explicitly opts out. */
-export const DEFAULT_GIT_CHECKPOINT_CREATE_ENABLED = true
+/** Keep Git checkpoint creation opt-in so storage does not grow unexpectedly. */
+export const DEFAULT_GIT_CHECKPOINT_CREATE_ENABLED = false
 
 export const DEFAULT_GIT_BRANCH_PREFIX = 'codex/'
 
