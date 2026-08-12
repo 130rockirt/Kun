@@ -100,7 +100,7 @@ export function registerAppSettingsIpcHandlers(options: RegisterAppIpcHandlersOp
     acquireRuntimeRequestLease,
     getRuntimeSettingsSyncStatus,
     restartRuntime,
-    restartAllKunProcesses,
+    restartKunServe,
     logError,
     logInfo: logInfoHandler = () => undefined
   } = options
@@ -282,7 +282,7 @@ export function registerAppSettingsIpcHandlers(options: RegisterAppIpcHandlersOp
       {
         userDataDir: app.getPath('userData'),
         proxyUrl: resolveModelProviderProxyUrl(await store.load()),
-        restartRuntime
+        restartRuntime: restartKunServe
       },
       (state) => getMainWindow()?.webContents.send('claude-subscription:sdk-progress', state)
     )
@@ -506,21 +506,21 @@ export function registerAppSettingsIpcHandlers(options: RegisterAppIpcHandlersOp
   })
 
   ipcMain.handle('runtime:restart', async () => restartRuntime())
-  ipcMain.handle('runtime:restart-all', async (event): Promise<{ accepted: boolean; error?: string }> => {
+  ipcMain.handle('runtime:restart-serve', async (event): Promise<{ accepted: boolean; error?: string }> => {
     assertTrustedWorkbenchSender(event, getMainWindow)
     const parent = getMainWindow()
     if (!parent || parent.isDestroyed()) throw new Error('Kun restart window is unavailable.')
     const chinese = app.getLocale?.().toLowerCase().startsWith('zh') === true
     const confirmation = await showMainWindowMessageBox(parent, {
       type: 'warning',
-      title: chinese ? '重启所有 Kun 进程' : 'Restart all Kun processes',
+      title: chinese ? '重启 Kun 服务' : 'Restart Kun service',
       message: chinese
-        ? '终止所有旧 Kun 进程并重新打开应用？'
-        : 'Stop every old Kun process and reopen the app?',
+        ? '停止当前 Kun 服务并启动新的服务？'
+        : 'Stop the current Kun service and start a new one?',
       detail: chinese
-        ? 'production、development 运行时和 Service Manager 都会被终止。正在运行的任务、待审批操作及 TUI/CLI 会话将被中断；对话记录和设置不会删除。'
-        : 'Production and development runtimes plus the Service Manager will stop. Active tasks, pending approvals, and TUI/CLI sessions will be interrupted. Conversations and settings are preserved.',
-      buttons: chinese ? ['全部重启', '取消'] : ['Restart all', 'Cancel'],
+        ? '仅当前 Kun serve 会被替换。正在运行的任务和待审批操作会中断；桌面应用、Service Manager、另一个运行时和对话记录不会删除。'
+        : 'Only the current Kun serve will be replaced. Active tasks and pending approvals will be interrupted; the desktop app, Service Manager, other runtime flavor, and conversations are preserved.',
+      buttons: chinese ? ['重启服务', '取消'] : ['Restart service', 'Cancel'],
       defaultId: 1,
       cancelId: 1,
       noLink: true,
@@ -528,18 +528,18 @@ export function registerAppSettingsIpcHandlers(options: RegisterAppIpcHandlersOp
     })
     if (confirmation.response !== 0) return { accepted: false }
     try {
-      await restartAllKunProcesses()
+      await restartKunServe()
       return { accepted: true }
     } catch (error) {
-      logError('runtime-restart-all', 'Failed to restart all Kun processes', {
+      logError('runtime-restart-serve', 'Failed to restart the current Kun serve', {
         message: error instanceof Error ? error.message : String(error)
       })
       await showMainWindowMessageBox(parent, {
         type: 'error',
         title: chinese ? 'Kun 重启失败' : 'Kun restart failed',
         message: chinese
-          ? '未能终止全部 Kun 进程。'
-          : 'Kun could not stop every managed process.',
+          ? '未能替换当前 Kun 服务。'
+          : 'Kun could not replace the current service.',
         detail: chinese
           ? '请查看日志后重试；应用和数据未被删除。'
           : 'Check the logs and retry. The app and its data were not removed.',

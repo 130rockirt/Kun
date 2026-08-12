@@ -26,6 +26,7 @@ import {
   runtimeMatchesExpectedBuild,
   stopSharedRuntime
 } from '../../../kun/src/cli/shared-runtime.js'
+import { stopSharedRuntimeForReplacement } from './kun-serve-replacement'
 import {
   resolveCliRuntimeFlavor,
   runtimeBuildIdForFlavor
@@ -58,6 +59,15 @@ export const kunRuntimeAdapter = {
 
   ensureRunning(settings: AppSettingsV1): Promise<void> {
     return ensureResolvedKunRuntime(settings)
+  },
+
+  /**
+   * Start a fresh current-flavor owner after an explicit replacement. This
+   * bypasses normal active-turn reuse and verifies the bundled build before
+   * returning, so an updater cannot silently reconnect to an older serve.
+   */
+  ensureReplacementRunning(settings: AppSettingsV1): Promise<void> {
+    return ensureReplacementKunRuntime(settings)
   },
 
   /**
@@ -98,6 +108,45 @@ export const kunRuntimeAdapter = {
     await stopKunChildAndWait()
   },
 
+  /**
+   * Explicitly remove the current shared serve before a user-confirmed restart
+   * or an application-file update. Unlike ordinary health recovery, this may
+   * use a narrowly verified termination fallback when graceful shutdown fails.
+   */
+  async stopSharedForReplacementAndWait(settings: AppSettingsV1): Promise<void> {
+    const dataDir = expandDataDir(getKunRuntimeSettings(settings).dataDir)
+    await stopSharedRuntimeForReplacement(dataDir, fetch, sharedRuntimeScope(dataDir))
+    resolvedConnection = null
+    await stopKunChildAndWait()
+  },
+
+  /**
+   * A packaged production app owns the bundled build after an install/update.
+   * Custom binaries and development runtimes retain their normal attach policy.
+   */
+  async requiresBundledBuildReplacement(settings: AppSettingsV1): Promise<boolean> {
+    const runtime = getKunRuntimeSettings(settings)
+    const dataDir = expandDataDir(runtime.dataDir)
+    const runtimeFlavor = resolveCliRuntimeFlavor({ env: process.env })
+    const expectedBuildId = expectedKunRuntimeBuildId(
+      await resolveKunRuntimeBuildId(resolveKunExecutable(appRoot(), runtime.binaryPath)),
+      runtimeFlavor
+    )
+    const inspected = await inspectSharedRuntime(
+      dataDir,
+      fetch,
+      sharedRuntimeScope(dataDir, runtimeFlavor)
+    ).catch(() => null)
+    if (!inspected) return false
+    return bundledRuntimeBuildReplacementRequired({
+      isPackaged: app.isPackaged,
+      hasCustomBinary: Boolean(runtime.binaryPath.trim()),
+      runtimeFlavor,
+      expectedBuildId,
+      discoveredBuildId: inspected.discovery.buildId
+    })
+  },
+
   reclaimPort(port: number): Promise<{ ok: true } | { ok: false; message: string }> {
     return reclaimKunPort(port)
   },
@@ -133,11 +182,30 @@ async function ensureResolvedKunRuntime(settings: AppSettingsV1): Promise<void> 
   resolvedConnection = connection?.discovery ?? null
 }
 
+async function ensureReplacementKunRuntime(settings: AppSettingsV1): Promise<void> {
+  const connection = await startKunSharedRuntime(settings, { forceReplace: true })
+  resolvedConnection = connection?.discovery ?? null
+}
+
 export function expectedKunRuntimeBuildId(
   sourceBuildId: string | undefined,
   runtimeFlavor: ReturnType<typeof resolveCliRuntimeFlavor>
 ): string | undefined {
   return runtimeBuildIdForFlavor(sourceBuildId, runtimeFlavor)
+}
+
+export function bundledRuntimeBuildReplacementRequired(input: {
+  isPackaged: boolean
+  hasCustomBinary: boolean
+  runtimeFlavor: ReturnType<typeof resolveCliRuntimeFlavor>
+  expectedBuildId: string | undefined
+  discoveredBuildId: string | undefined
+}): boolean {
+  return input.isPackaged &&
+    !input.hasCustomBinary &&
+    input.runtimeFlavor === 'production' &&
+    Boolean(input.expectedBuildId) &&
+    input.discoveredBuildId !== input.expectedBuildId
 }
 
 async function refreshResolvedKunRuntime(settings: AppSettingsV1): Promise<boolean> {

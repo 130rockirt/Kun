@@ -306,7 +306,7 @@ describe('shared runtime discovery validation', () => {
     }
   })
 
-  it('defers a build handover while the elected runtime has an active turn', async () => {
+  it('defers a normal build handover but not an explicit replacement while the runtime has an active turn', async () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'kun-shared-runtime-active-build-'))
     const discovery = record({ buildId: 'a'.repeat(64) })
     const capabilities = buildRuntimeCapabilityManifest({
@@ -357,6 +357,19 @@ describe('shared runtime discovery validation', () => {
       expect(resolved.discovery.instanceId).toBe(discovery.instanceId)
       expect(resolved.activeTurnCount).toBe(1)
       expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false)
+
+      await expect(ensureSharedRuntime({
+        dataDir,
+        expectedBuildId: 'b'.repeat(64),
+        forceReplace: true,
+        fetch: fetchImpl,
+        launch: {
+          command: process.execPath,
+          args: ['-e', 'process.exit(99)'],
+          runAsNode: false
+        }
+      })).rejects.toThrow('runtime shutdown failed with HTTP 500')
+      expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1)
     } finally {
       await rm(dataDir, { recursive: true, force: true })
     }

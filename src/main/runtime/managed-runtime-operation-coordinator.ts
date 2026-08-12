@@ -15,6 +15,11 @@ type RestartOperation = Deferred<void> & {
   operation: () => Promise<void>
 }
 
+type ReplaceOperation = Deferred<void> & {
+  kind: 'replace'
+  operation: () => Promise<void>
+}
+
 type SettingsApplyOperation = Deferred<void> & {
   kind: 'settings'
   coalesceKey: string
@@ -25,6 +30,7 @@ type SettingsApplyOperation = Deferred<void> & {
 type ManagedRuntimeOperation<Settings> =
   | EnsureOperation<Settings>
   | RestartOperation
+  | ReplaceOperation
   | SettingsApplyOperation
 
 function createDeferred<Value>(): Deferred<Value> {
@@ -89,6 +95,23 @@ export class ManagedRuntimeOperationCoordinator<Settings> {
 
     const deferred = createDeferred<void>()
     const queued: RestartOperation = { kind: 'restart', operation, ...deferred }
+    this.queue.push(queued)
+    this.startDrain()
+    return queued.promise
+  }
+
+  /**
+   * An explicit serve replacement is intentionally distinct from a normal
+   * restart. A watchdog restart must never cause a user-confirmed replacement
+   * to lose its verified cleanup policy, while repeated explicit clicks still
+   * share one operation.
+   */
+  replace(operation: () => Promise<void>): Promise<void> {
+    const tail = this.tailOperation()
+    if (tail?.kind === 'replace') return tail.promise
+
+    const deferred = createDeferred<void>()
+    const queued: ReplaceOperation = { kind: 'replace', operation, ...deferred }
     this.queue.push(queued)
     this.startDrain()
     return queued.promise

@@ -171,7 +171,11 @@ export const runtimeShutdown = new ManagedRuntimeShutdownCoordinator(async () =>
   // install must stop it so old application files can be replaced safely.
   if (runtimeShutdown.isUpdateInstallQuit || runtimeShutdown.isStorageRelocationQuit) {
     const settings = await mainState.store.load()
-    await kunRuntimeAdapter.stopSharedAndWait(settings)
+    if (runtimeShutdown.isUpdateInstallQuit) {
+      await kunRuntimeAdapter.stopSharedForReplacementAndWait(settings)
+    } else {
+      await kunRuntimeAdapter.stopSharedAndWait(settings)
+    }
     if (runtimeShutdown.isUpdateInstallQuit) {
       await mainState.shutdownActiveServiceManagerForUpdate()
     }

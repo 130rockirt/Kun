@@ -29,7 +29,7 @@ describe('WorkbenchTopActions', () => {
       })
     )
 
-    expect(html).toContain(`data-tooltip="Stop all old Kun runtimes and restart the desktop app"`)
+    expect(html).toContain(`data-tooltip="Replace the current Kun service"`)
     expect(html).toContain(`aria-label="Restart Kun"`)
     expect(html).toContain('rounded-full bg-amber-500')
     expect(html).toContain(`data-tooltip="Choose default editor"`)
@@ -51,9 +51,9 @@ describe('WorkbenchTopActions', () => {
     )
   })
 
-  it('routes the explicit restart-all action through the preload bridge', async () => {
-    const restartAllKunProcesses = vi.fn(async () => ({ accepted: false }))
-    vi.stubGlobal('window', { kunGui: { restartAllKunProcesses } })
+  it('routes the explicit serve restart through the preload bridge', async () => {
+    const restartKunServe = vi.fn(async () => ({ accepted: false }))
+    vi.stubGlobal('window', { kunGui: { restartKunServe } })
     let renderer!: ReturnType<typeof createRenderer>
 
     await act(async () => {
@@ -65,7 +65,7 @@ describe('WorkbenchTopActions', () => {
       await Promise.resolve()
     })
 
-    expect(restartAllKunProcesses).toHaveBeenCalledOnce()
+    expect(restartKunServe).toHaveBeenCalledOnce()
     act(() => renderer.unmount())
   })
 

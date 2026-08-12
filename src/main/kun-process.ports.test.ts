@@ -308,3 +308,18 @@ describe('parseListeningPidsFromNetstat', () => {
     expect(parseListeningPidsFromNetstat(output, 9999)).toEqual([])
   })
 })
+
+describe('terminateVerifiedPid', () => {
+  it('does not signal a process when the caller can no longer verify its identity', async () => {
+    const { terminateVerifiedPid } = await import('./kun-process-ports')
+    const kill = vi.spyOn(process, 'kill')
+
+    await expect(terminateVerifiedPid(
+      987_654,
+      async () => false,
+      async () => false
+    )).resolves.toBe(false)
+
+    expect(kill).not.toHaveBeenCalled()
+  })
+})

@@ -18,6 +18,7 @@ import {
 } from '../../shared/app-settings'
 import {
   acquireRuntimeRequestLease,
+  bundledRuntimeBuildReplacementRequired,
   expectedKunRuntimeBuildId,
   getRuntimeAuthToken,
   kunRuntimeAdapter,
@@ -380,6 +381,39 @@ describe('runtimeRequestViaHost', () => {
 })
 
 describe('kunRuntimeAdapter.resolveConnection', () => {
+  it('requires a packaged production build handoff only for a bundled build mismatch', () => {
+    const expectedBuildId = 'b'.repeat(64)
+
+    expect(bundledRuntimeBuildReplacementRequired({
+      isPackaged: true,
+      hasCustomBinary: false,
+      runtimeFlavor: 'production',
+      expectedBuildId,
+      discoveredBuildId: 'a'.repeat(64)
+    })).toBe(true)
+    expect(bundledRuntimeBuildReplacementRequired({
+      isPackaged: true,
+      hasCustomBinary: false,
+      runtimeFlavor: 'production',
+      expectedBuildId,
+      discoveredBuildId: expectedBuildId
+    })).toBe(false)
+    expect(bundledRuntimeBuildReplacementRequired({
+      isPackaged: true,
+      hasCustomBinary: true,
+      runtimeFlavor: 'production',
+      expectedBuildId,
+      discoveredBuildId: 'a'.repeat(64)
+    })).toBe(false)
+    expect(bundledRuntimeBuildReplacementRequired({
+      isPackaged: true,
+      hasCustomBinary: false,
+      runtimeFlavor: 'development',
+      expectedBuildId,
+      discoveredBuildId: 'a'.repeat(64)
+    })).toBe(false)
+  })
+
   it('compares development runtimes using their flavor-namespaced build identity', () => {
     const sourceBuildId = 'd'.repeat(64)
 

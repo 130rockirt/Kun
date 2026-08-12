@@ -358,7 +358,8 @@ export function startKunChild(settings: AppSettingsV1): Promise<void> {
  * terminate active turns or disconnect other clients.
  */
 export async function startKunSharedRuntime(
-  settings: AppSettingsV1
+  settings: AppSettingsV1,
+  options: { forceReplace?: boolean } = {}
 ): Promise<SharedRuntimeConnection | null> {
   const runtime = resolveKunRuntimeSettings(settings)
   if (!runtime.autoStart) return null
@@ -398,6 +399,7 @@ export async function startKunSharedRuntime(
     runtimeFlavor,
     manager,
     ...(launch.expectedBuildId ? { expectedBuildId: launch.expectedBuildId } : {}),
+    ...(options.forceReplace ? { forceReplace: true } : {}),
     launch: {
       command: launch.command,
       args: launch.args,

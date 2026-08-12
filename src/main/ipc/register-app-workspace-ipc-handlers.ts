@@ -76,7 +76,7 @@ function isManagedPptMasterSkillRootDisabled(settings: AppSettingsV1): boolean {
 }
 
 export function registerAppWorkspaceIpcHandlers(options: RegisterAppIpcHandlersOptions): void {
-  const { store, getMainWindow, restartRuntime } = options
+  const { store, getMainWindow, restartKunServe } = options
   const nativeDialogs = options.nativeDialogs ?? new NativeDialogCoordinator()
   const showMainWindowMessageBox = (
     parent: BrowserWindow,
@@ -265,7 +265,7 @@ export function registerAppWorkspaceIpcHandlers(options: RegisterAppIpcHandlersO
       // SkillRuntime discovers both skill entries and local tools only at
       // construction time. Reload even after a repair-only ensure: a prior
       // dependency install may have failed after the venv was created.
-      await restartRuntime()
+      await restartKunServe()
       return result
     } catch (error) {
       return {

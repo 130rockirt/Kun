@@ -153,6 +153,62 @@ export async function restartRuntime(settings: AppSettingsV1): Promise<void> {
 }
 
 async function restartRuntimeOnce(settings: AppSettingsV1): Promise<void> {
+  await restartRuntimeAfterStopping(
+    settings,
+    () => kunRuntimeAdapter.stopSharedAndWait(settings)
+  )
+}
+
+/**
+ * Replace the current shared serve after an explicit user or installer action.
+ * Ordinary restarts keep their conservative shared-runtime stop behavior so a
+ * watchdog cannot terminate an unresponsive turn by accident.
+ */
+export async function replaceKunServe(settings: AppSettingsV1): Promise<void> {
+  const requested = runtimeSupervisor.latestOr(settings)
+  if (!managedKunHostCanAutoStart(requested)) {
+    runtimeSupervisor.setManagedRuntimeExpected(false)
+  }
+  return runtimeSupervisor.replace(
+    () => replaceKunServeOnce(requested)
+  )
+}
+
+async function replaceKunServeOnce(settings: AppSettingsV1): Promise<void> {
+  await restartRuntimeAfterStopping(
+    settings,
+    () => kunRuntimeAdapter.stopSharedForReplacementAndWait(settings),
+    (launchSettings) => kunRuntimeAdapter.ensureReplacementRunning(launchSettings)
+  )
+}
+
+/**
+ * A packaged bundle becomes authoritative after an update or manual install.
+ * When automatic startup is disabled, remove the verified old serve but honor
+ * the user's preference not to launch a replacement until they enable it.
+ */
+export async function reconcileBundledRuntimeAfterInstall(
+  settings: AppSettingsV1
+): Promise<void> {
+  mainState.assertCanonicalRuntimeMigrationReady()
+  const requested = runtimeSupervisor.latestOr(settings)
+  if (!(await kunRuntimeAdapter.requiresBundledBuildReplacement(requested))) return
+  if (getKunRuntimeSettings(requested).autoStart) {
+    await replaceKunServe(requested)
+    return
+  }
+  await runtimeSupervisor.replace(async () => {
+    await waitForKunStartupSettled()
+    await kunRuntimeAdapter.stopSharedForReplacementAndWait(requested)
+  })
+}
+
+async function restartRuntimeAfterStopping(
+  settings: AppSettingsV1,
+  stop: () => Promise<void>,
+  ensure: (settings: AppSettingsV1) => Promise<void> = (launchSettings) =>
+    kunRuntimeAdapter.ensureRunning(launchSettings)
+): Promise<void> {
   mainState.assertCanonicalRuntimeMigrationReady()
   // Don't tear down a child that is still completing its startup; wait for it
   // to settle so a restart trigger that races a boot doesn't reset the clock
@@ -168,11 +224,11 @@ async function restartRuntimeOnce(settings: AppSettingsV1): Promise<void> {
   }
 
   const adapter = kunRuntimeAdapter
-  await adapter.stopSharedAndWait(settings)
+  await stop()
   const launchSettings = await resolveManagedKunLaunchSettings(settings, 'runtime-restart')
 
   try {
-    await adapter.ensureRunning(launchSettings)
+    await ensure(launchSettings)
   } catch (e) {
     console.error('[kun-gui] failed to restart kun:', e)
     throw e

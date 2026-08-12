@@ -24,6 +24,7 @@ import {
 } from './main-runtime-health'
 import {
   ensureRuntime,
+  reconcileBundledRuntimeAfterInstall,
   restartRuntime
 } from './main-runtime-startup'
 import { createWindow } from './main-window'
@@ -89,14 +90,15 @@ export function startMainApp(): void {
     })
 
     setTimeout(() => {
-      void resolveManagedRuntimeStartupTarget(
-        initial,
-        managedKunHostCanAutoStart(initial),
-        {
-          ensure: ensureRuntime,
-          resolveExisting: (settings) => kunRuntimeAdapter.resolveConnection(settings)
-        }
-      )
+      void reconcileBundledRuntimeAfterInstall(initial)
+        .then(() => resolveManagedRuntimeStartupTarget(
+          initial,
+          managedKunHostCanAutoStart(initial),
+          {
+            ensure: ensureRuntime,
+            resolveExisting: (settings) => kunRuntimeAdapter.resolveConnection(settings)
+          }
+        ))
         .then((current) => {
           if (!current) return
           runtimeSupervisor.enqueueSettingsApply(async () => {

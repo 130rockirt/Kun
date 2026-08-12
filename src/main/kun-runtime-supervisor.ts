@@ -181,6 +181,10 @@ export class KunRuntimeSupervisor<Settings> {
     return this.operations.restart(operation)
   }
 
+  replace(operation: () => Promise<void>): Promise<void> {
+    return this.operations.replace(operation)
+  }
+
   enqueueSettingsApply(
     operation: () => Promise<void>,
     onError: (error: unknown) => void,

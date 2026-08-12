@@ -320,16 +320,16 @@ describe('registerAppIpcHandlers UI plugins and runtime', () => {
     expect(restartRuntime).toHaveBeenCalledTimes(1)
   })
 
-  it('restarts every managed Kun process only after trusted confirmation', async () => {
+  it('restarts only the current Kun serve after trusted confirmation', async () => {
     const mainFrame = { processId: 10, routingId: 20 }
     const contents = { id: 7, mainFrame }
     const mainWindow = { isDestroyed: () => false, webContents: contents }
-    const restartAllKunProcesses = vi.fn(async () => undefined)
+    const restartKunServe = vi.fn(async () => undefined)
     registerAppIpcHandlers(registerOptions({
       getMainWindow: () => mainWindow as never,
-      restartAllKunProcesses
+      restartKunServe
     }))
-    const handler = handlers.get('runtime:restart-all')
+    const handler = handlers.get('runtime:restart-serve')
 
     await expect(handler?.({
       sender: contents,
@@ -340,20 +340,20 @@ describe('registerAppIpcHandlers UI plugins and runtime', () => {
     await expect(handler?.({ sender: contents, senderFrame: mainFrame })).resolves.toEqual({
       accepted: false
     })
-    expect(restartAllKunProcesses).not.toHaveBeenCalled()
+    expect(restartKunServe).not.toHaveBeenCalled()
 
     electronMock.showMessageBox.mockResolvedValueOnce({ response: 0 })
     await expect(handler?.({ sender: contents, senderFrame: mainFrame })).resolves.toEqual({
       accepted: true
     })
-    expect(restartAllKunProcesses).toHaveBeenCalledOnce()
+    expect(restartKunServe).toHaveBeenCalledOnce()
     expect(electronMock.showMessageBox).toHaveBeenLastCalledWith(
       mainWindow,
       expect.objectContaining({
         type: 'warning',
         defaultId: 1,
         cancelId: 1,
-        detail: expect.stringContaining('TUI/CLI')
+        detail: expect.stringContaining('Service Manager')
       })
     )
   })
@@ -362,20 +362,20 @@ describe('registerAppIpcHandlers UI plugins and runtime', () => {
     const userDataDir = mkdtempSync(join(tmpdir(), 'kun-agent-sdk-ipc-'))
     const binaryName = process.platform === 'win32' ? 'claude.exe' : 'claude'
     const binaryPath = join(userDataDir, 'agent-sdk', binaryName)
-    const restartRuntime = vi.fn(async () => undefined)
+    const restartKunServe = vi.fn(async () => undefined)
     electronMock.userDataPath = userDataDir
     mkdirSync(join(userDataDir, 'agent-sdk'), { recursive: true })
     writeFileSync(binaryPath, 'claude binary')
 
     try {
-      registerAppIpcHandlers(registerOptions({ restartRuntime }))
+      registerAppIpcHandlers(registerOptions({ restartKunServe }))
 
       await expect(handlers.get('claude-subscription:sdk-install')?.({})).resolves.toMatchObject({
         status: 'restarting'
       })
       await Promise.resolve()
       await Promise.resolve()
-      expect(restartRuntime).toHaveBeenCalledTimes(1)
+      expect(restartKunServe).toHaveBeenCalledTimes(1)
     } finally {
       rmSync(userDataDir, { recursive: true, force: true })
     }

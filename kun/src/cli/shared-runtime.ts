@@ -248,6 +248,12 @@ export async function ensureSharedRuntime(input: {
   controlDir?: string
   manager?: ServiceManagerConnection
   expectedBuildId?: string
+  /**
+   * An explicit user or installer handoff must not reuse a compatible owner.
+   * This intentionally permits replacement of an active turn, unlike the
+   * ordinary ensure path that preserves it across a build handoff.
+   */
+  forceReplace?: boolean
   env?: Record<string, string | undefined>
   fetch?: typeof fetch
   timeoutMs?: number
@@ -269,16 +275,20 @@ export async function ensureSharedRuntime(input: {
     runtimeFlavor
   )
   const existing = await inspectSharedRuntime(input.dataDir, fetchImpl, scope)
-  const reusable = reusableRuntimeConnection(existing, expectedBuildId)
+  const reusable = input.forceReplace
+    ? null
+    : reusableRuntimeConnection(existing, expectedBuildId)
   if (reusable) return reusable
   assertRuntimeCanBeReplaced(existing)
   const launch = () => withRuntimeStartLock(discoveryDir, async () => {
     const elected = await inspectSharedRuntime(input.dataDir, fetchImpl, scope)
-    const electedReusable = reusableRuntimeConnection(elected, expectedBuildId)
+    const electedReusable = input.forceReplace
+      ? null
+      : reusableRuntimeConnection(elected, expectedBuildId)
     if (electedReusable) return electedReusable
     assertRuntimeCanBeReplaced(elected)
     if (elected?.connection) {
-      await stopSharedRuntime(input.dataDir, fetchImpl, scope)
+      await stopInspectedSharedRuntime(input.dataDir, elected, fetchImpl, scope)
     }
     const stale = await readRuntimeDiscovery(discoveryDir, runtimeFlavor).catch(() => null)
     if (stale) {
@@ -519,6 +529,17 @@ export async function stopSharedRuntime(
     }
     return false
   }
+  return stopInspectedSharedRuntime(dataDir, inspected, fetchImpl, scope)
+}
+
+async function stopInspectedSharedRuntime(
+  dataDir: string,
+  inspected: SharedRuntimeInspection,
+  fetchImpl: typeof fetch,
+  scope: SharedRuntimeScope
+): Promise<boolean> {
+  const runtimeFlavor = scope.runtimeFlavor ?? 'production'
+  const discoveryDir = runtimeDiscoveryDirectory(dataDir, runtimeFlavor, scope.controlDir)
   const record = inspected.discovery
   const live = inspected.connection
   if (!live) {

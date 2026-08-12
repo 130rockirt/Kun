@@ -186,13 +186,56 @@ export async function terminateStalePid(pid: number): Promise<boolean> {
   return true
 }
 
+/**
+ * Terminate a process only while a caller can still prove that its identity is
+ * the intended target. A PID can be reused between a graceful signal and a
+ * forced signal, so Unix rechecks the caller's proof before escalating to
+ * SIGKILL. The replacement lifecycle supplies proof from exact runtime
+ * discovery, the expected command shape, and the recorded listening port.
+ */
+export async function terminateVerifiedPid(
+  pid: number,
+  verifyTarget: () => Promise<boolean>,
+  waitForExit: (pid: number, timeoutMs: number) => Promise<boolean> = waitForPidExit
+): Promise<boolean> {
+  if (!(await verifyTarget())) return false
+  if (process.platform === 'win32') {
+    try {
+      await execFileAsync('taskkill', ['/PID', String(pid), '/T', '/F'], {
+        windowsHide: true,
+        timeout: 5_000
+      })
+    } catch {
+      return waitForExit(pid, 0)
+    }
+    return waitForExit(pid, 2_000)
+  }
+
+  try {
+    process.kill(pid, 'SIGTERM')
+  } catch {
+    return waitForExit(pid, 0)
+  }
+  if (await waitForExit(pid, 2_000)) return true
+  // Do not escalate after PID reuse or an identity change.
+  if (!(await verifyTarget())) return false
+  try {
+    process.kill(pid, 'SIGKILL')
+  } catch {
+    return waitForExit(pid, 0)
+  }
+  return waitForExit(pid, 2_000)
+}
+
 export async function waitForPidExit(pid: number, timeoutMs: number): Promise<boolean> {
   const deadline = Date.now() + timeoutMs
   for (;;) {
     try {
       process.kill(pid, 0)
-    } catch {
-      return true
+    } catch (error) {
+      // EPERM means the process still exists but belongs to an identity we
+      // cannot signal. Treat only a missing PID as an exit.
+      if ((error as NodeJS.ErrnoException).code === 'ESRCH') return true
     }
     if (Date.now() >= deadline) return false
     await sleep(100)
