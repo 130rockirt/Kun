@@ -201,7 +201,7 @@ describe('composeModelRequest', () => {
     expect(composed.request.history.filter(
       (item) => item.kind === 'tool_result' && isModelVisibleImageOutput(item.output)
     )).toHaveLength(3)
-    expect(composed.request.contextInstructions?.at(-1)).toContain('Token economy mode is enabled')
+    expect(composed.request.contextInstructions).toEqual(['existing instruction'])
     expect(composed.request.history.find((item) => item.id === 'older_text')).toEqual(olderText)
     expect(composed.rawInputTokens).toBeGreaterThan(composed.sentInputTokens)
     expect(composed.sentInputTokens).toBe(estimateModelRequestInputTokens(composed.request))

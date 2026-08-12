@@ -4,7 +4,9 @@ import { emptyUsageSnapshot } from '../src/contracts/usage.js'
 import { makeUserItem } from '../src/domain/item.js'
 import { createThreadRecord } from '../src/domain/thread.js'
 import { ContextCompactor } from '../src/loop/context-compactor.js'
+import { projectCompatMessages } from '../src/adapters/model/compat-message-projector.js'
 import type { ModelRequest, ModelStreamChunk } from '../src/ports/model-client.js'
+import { TOKEN_ECONOMY_INSTRUCTION } from '../src/loop/token-economy.js'
 import { decideApproval } from '../src/server/routes/approvals.js'
 import { bootstrapThread, makeHarness } from './loop-test-harness.js'
 import {
@@ -128,6 +130,52 @@ describe('AgentLoop transcript characterization', () => {
     expect((await harness.sessionStore.loadItems(harness.threadId))
       .filter((item) => item.kind === 'model_context')
       .some((item) => item.text.includes(hostControl))).toBe(false)
+  })
+
+  it('keeps consecutive token-economy wire messages append-only', async () => {
+    const model = new ScriptedCapturingModel([
+      [{ kind: 'assistant_text_delta', text: 'first' }, { kind: 'completed', stopReason: 'stop' }],
+      [{ kind: 'assistant_text_delta', text: 'second' }, { kind: 'completed', stopReason: 'stop' }]
+    ])
+    const harness = makeHarness(model, {
+      tools: [],
+      tokenEconomy: { enabled: true },
+      compactor: new ContextCompactor({ softThreshold: 100_000, hardThreshold: 120_000 })
+    })
+    await harness.threadStore.upsert(createThreadRecord({
+      id: harness.threadId, title: 'cache continuity', workspace: '/tmp', model: 'fake'
+    }))
+    const first = await harness.turns.startTurn({
+      threadId: harness.threadId,
+      request: { prompt: 'hi' }
+    })
+    await expect(harness.loop.runTurn(harness.threadId, first.turnId)).resolves.toBe('completed')
+    const second = await harness.turns.startTurn({
+      threadId: harness.threadId,
+      request: { prompt: 'hi' }
+    })
+    await expect(harness.loop.runTurn(harness.threadId, second.turnId)).resolves.toBe('completed')
+
+    const firstRequest = model.requests[0]
+    const secondRequest = model.requests[1]
+    expect(firstRequest).toBeDefined()
+    expect(secondRequest).toBeDefined()
+    if (!firstRequest || !secondRequest) return
+    const projectionOptions = { thinkingMode: false, supportsImages: false }
+    const firstMessages = projectCompatMessages(firstRequest, projectionOptions)
+    const secondMessages = projectCompatMessages(secondRequest, projectionOptions)
+
+    expect(secondMessages.slice(0, firstMessages.length)).toEqual(firstMessages)
+    expect(firstRequest.contextInstructions ?? []).toEqual([])
+    expect(secondRequest.contextInstructions ?? []).toEqual([])
+    const firstContexts = firstRequest.history.filter((item) => item.kind === 'model_context')
+    const secondContexts = secondRequest.history.filter((item) => item.kind === 'model_context')
+    expect(firstContexts).toHaveLength(1)
+    expect(firstContexts[0]?.kind === 'model_context' ? firstContexts[0].text : '')
+      .toContain(TOKEN_ECONOMY_INSTRUCTION)
+    expect(secondContexts).toHaveLength(2)
+    expect(secondContexts[1]?.kind === 'model_context' ? secondContexts[1].text : '')
+      .not.toContain(TOKEN_ECONOMY_INSTRUCTION)
   })
 
   it('replays a tool round-trip with request history and execution order intact', async () => {

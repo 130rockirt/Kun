@@ -77,13 +77,12 @@ import {
   modelHistoryRoutesByTurnId,
   prefixVolatilityStageDetails,
   subagentResumeToolGate,
+  tokenEconomyContextBlocks,
   toolCatalogPolicyScope
 } from './model-step-preparation-helpers.js'
 import { failRequiredToolConstraint } from './model-step-failure.js'
-
 export abstract class ModelStepPreparationService {
   protected readonly turnToolCatalogs = new TurnToolCatalogFreezer()
-
   constructor(protected readonly deps: ModelStepServiceDeps) {}
 
   protected async prepareModelStep(
@@ -505,6 +504,7 @@ export abstract class ModelStepPreparationService {
         'runtime',
         buildClientSurfaceInstruction(prepared.clientSurface)
       ),
+      ...tokenEconomyContextBlocks(this.deps.tokenEconomy),
       ...(runtimeContextInstruction
         ? [kunContextBlock('runtime-context', 'runtime', runtimeContextInstruction)]
         : []),

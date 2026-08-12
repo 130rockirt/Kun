@@ -112,28 +112,95 @@ describe('append-only model context history', () => {
     expect(first.item.text).toContain('Persona before restart')
   })
 
-  it('starts each user turn with a scoped full capsule without mutating prior history', () => {
+  it('carries unchanged block state across user turns without duplicating content', () => {
     const first = resolveModelContextUpdate({
       threadId: base.threadId,
       turnId: 'turn-one',
       stepIndex: 0,
-      contextBlocks: [{ kind: 'persona', authority: 'user', content: 'Persona one' }],
+      contextBlocks: [{ kind: 'client-surface', authority: 'runtime', content: 'GUI surface' }],
       history: [],
       createdAt: base.createdAt
     })
     expect(first).not.toBeNull()
     if (!first) return
+    const unchanged = resolveModelContextUpdate({
+      threadId: base.threadId,
+      turnId: 'turn-two',
+      stepIndex: 0,
+      contextBlocks: [{ kind: 'client-surface', authority: 'runtime', content: 'GUI surface' }],
+      history: [first.item],
+      createdAt: base.createdAt
+    })
+    expect(unchanged).toBeNull()
+    expect(first.item.text).toContain('GUI surface')
+  })
+
+  it('appends only changed and removed block state across user turns', () => {
+    const first = resolveModelContextUpdate({
+      threadId: base.threadId,
+      turnId: 'turn-one',
+      stepIndex: 0,
+      contextBlocks: [
+        { kind: 'client-surface', authority: 'runtime', content: 'GUI surface' },
+        { kind: 'runtime-context', authority: 'runtime', content: 'Initial runtime' },
+        { kind: 'tool-guidance', authority: 'runtime', content: 'Use read first' }
+      ],
+      history: [],
+      createdAt: base.createdAt
+    })
+    expect(first).not.toBeNull()
+    if (!first) return
+
     const second = resolveModelContextUpdate({
       threadId: base.threadId,
       turnId: 'turn-two',
       stepIndex: 0,
-      contextBlocks: [{ kind: 'persona', authority: 'user', content: 'Persona two' }],
+      contextBlocks: [
+        { kind: 'client-surface', authority: 'runtime', content: 'GUI surface' },
+        { kind: 'tool-guidance', authority: 'runtime', content: 'Use grep first' }
+      ],
       history: [first.item],
       createdAt: base.createdAt
     })
-    expect(second?.item.text).toContain('Persona two')
-    expect(second?.item.text).not.toContain('Persona one')
-    expect(first.item.text).toContain('Persona one')
+
+    expect(second?.item.text).toContain('Use grep first')
+    expect(second?.item.text).not.toContain('GUI surface')
+    expect(second?.item.text).toContain(
+      'kind="runtime-context" authority="runtime" state="inactive"'
+    )
+    expect(first.item.text).toContain('Initial runtime')
+  })
+
+  it('writes one thread-wide baseline after legacy turn-scoped context', () => {
+    const first = resolveModelContextUpdate({
+      threadId: base.threadId,
+      turnId: 'turn-one',
+      stepIndex: 0,
+      contextBlocks: [{ kind: 'client-surface', authority: 'runtime', content: 'GUI surface' }],
+      history: [],
+      createdAt: base.createdAt
+    })
+    expect(first).not.toBeNull()
+    if (!first) return
+    const legacyItem = {
+      ...first.item,
+      text: first.item.text.replace(
+        'Active block state persists across later model steps and user turns until a later update for the same key replaces it or marks it inactive.',
+        'Scope: turn "turn-one", model step 0.'
+      )
+    }
+
+    const migrated = resolveModelContextUpdate({
+      threadId: base.threadId,
+      turnId: 'turn-two',
+      stepIndex: 0,
+      contextBlocks: [{ kind: 'client-surface', authority: 'runtime', content: 'GUI surface' }],
+      history: [legacyItem],
+      createdAt: base.createdAt
+    })
+
+    expect(migrated?.item.text).toContain('GUI surface')
+    expect(migrated?.item.text).toContain('Active block state persists across later model steps')
   })
 
   it('can keep request-local host control out of a durable capsule', () => {

@@ -6,6 +6,11 @@ import type {
 } from '../prompt/kun-prompt-context.js'
 import type { PrefixVolatilityFinding } from '../cache/prefix-volatility.js'
 import type { PreparedTurnContext } from './turn-execution-types.js'
+import {
+  normalizeTokenEconomyConfig,
+  TOKEN_ECONOMY_INSTRUCTION,
+  type TokenEconomyConfig
+} from './token-economy.js'
 
 export function hasSuccessfulToolResult(
   items: readonly TurnItem[],
@@ -94,6 +99,15 @@ export function kunContextBlock(
   content: string
 ): KunTurnContextBlock {
   return { kind, authority, content }
+}
+
+export function tokenEconomyContextBlocks(
+  config: TokenEconomyConfig | undefined
+): KunTurnContextBlock[] {
+  const economy = normalizeTokenEconomyConfig(config)
+  return economy.enabled && economy.conciseResponses
+    ? [kunContextBlock('token-economy', 'runtime', TOKEN_ECONOMY_INSTRUCTION)]
+    : []
 }
 
 export function buildToolCatalogDriftMessage(toolCatalog: {
