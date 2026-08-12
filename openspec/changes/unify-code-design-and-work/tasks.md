@@ -80,3 +80,12 @@
 
   - Evidence (2026-08-13): the focused task-surface and Design-prompt suites passed 19/19 tests, including the new activation-before-return regression. The production build, lint, file-line gate, and `git diff --check` passed; lint retained only 25 existing warnings outside this change.
   - The full typecheck was run in both the fix worktree and the unchanged local `develop` worktree. Both reported the same existing errors in `FloatingComposer.queue-commands.test.ts` and `settings-section-model-routes-support.tsx`, confirming no new typecheck failure from this remediation.
+
+## 10. Design Task Presentation And Whiteboard Delivery Remediation
+
+- [x] 10.1 Add sidebar regression tests for Code-owned Design conversations restored through `lockedTaskSurface` and `designProfile`, while preserving Code and legacy Design behavior.
+- [x] 10.2 Render the task icon and accessible label from the durable locked task mode.
+- [x] 10.3 Add a Code-whiteboard regression for renderer tool output that completes before the thread document is ready, including idempotent remount behavior.
+- [x] 10.4 Bind live replay to the expected Code document and durably replay missed tool results, then run focused tests, typecheck/build, lint, the file-line gate, OpenSpec validation, and diff checks.
+
+  - Evidence (2026-08-13): 96 focused Design canvas, embedded-canvas, shared-task-list, and task-surface files passed 773/773 tests. The production build, lint, file-line gate, strict OpenSpec validation, and `git diff --check` passed; lint retained only 25 existing warnings. Full typecheck was run in both the fix worktree and unchanged local `develop`; both reported the same existing errors in `FloatingComposer.queue-commands.test.ts` and `settings-section-model-routes-support.tsx`.

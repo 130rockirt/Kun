@@ -267,7 +267,11 @@ describe('replayActiveCanvasTurn', () => {
     expect(replayState.currentTurnId).toBe('turn-1')
     expect(replayState.currentTurnUserId).toBe('user-1')
     expect(applyToolBlock).toHaveBeenCalledTimes(1)
-    expect(applyToolBlock).toHaveBeenCalledWith(toolBlock)
+    expect(applyToolBlock).toHaveBeenCalledWith(toolBlock, {
+      blocks: replayState.blocks,
+      replayKey: 'thread-code\0turn-1\0code-canvas\0tool:tool-late',
+      turnId: 'turn-1'
+    })
     expect(processStreaming).toHaveBeenCalledTimes(1)
   })
 

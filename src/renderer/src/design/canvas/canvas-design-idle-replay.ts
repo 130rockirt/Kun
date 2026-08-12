@@ -13,8 +13,10 @@ import {
   type DurableDesignCanvasTurnCompletion
 } from './canvas-design-turn-replay'
 import { useCanvasSelectionStore } from './canvas-selection-store'
+import { useCanvasShapeStore } from './canvas-shape-store'
 import type { ExecuteOpsOptions, OpError } from './shape-ops'
 import { isDesignMotionRendererToolName } from './motion-ops'
+import { replayDurableCodeCanvasToolBlocks } from './canvas-code-turn-replay'
 
 type IdleChatState = {
   activeThreadId: string | null
@@ -115,6 +117,38 @@ export function replayIdleDesignCanvas(options: {
       if (affectedIds.length > 0) useCanvasSelectionStore.getState().select(affectedIds)
       setLastCanvasOpErrors([...options.errors], options.errorKey)
       options.onTurnReplayed?.(completion, affectedIds)
+    }
+  })
+}
+
+export function replayIdleCodeCanvas(options: {
+  state: IdleChatState
+  threadId?: string | null
+  ready: boolean
+  errorKey?: string
+  affectedIds: Set<string>
+  errors: OpError[]
+  resetTurn: () => void
+  applyToolBlock: (
+    block: ToolBlock,
+    replay: { blocks: readonly ChatBlock[]; replayKey: string; turnId: string }
+  ) => void
+}): void {
+  const { state, threadId } = options
+  if (!threadId || !options.ready || state.activeThreadId !== threadId) return
+  if (state.currentTurnId || state.busy || threadHasPendingRuntimeWork(state.blocks)) return
+  replayDurableCodeCanvasToolBlocks({
+    threadId,
+    blocks: state.blocks,
+    document: useCanvasShapeStore.getState().document,
+    onTurnStart: options.resetTurn,
+    onToolBlock: (block, blocks, replayKey, turnId) =>
+      options.applyToolBlock(block, { blocks, replayKey, turnId }),
+    onTurnComplete: (turnId) => {
+      const affectedIds = [...options.affectedIds]
+      if (affectedIds.length > 0) useCanvasSelectionStore.getState().select(affectedIds)
+      setLastCanvasOpErrors([...options.errors], options.errorKey)
+      useCanvasShapeStore.getState().recordRendererReplayWatermark(turnId)
     }
   })
 }

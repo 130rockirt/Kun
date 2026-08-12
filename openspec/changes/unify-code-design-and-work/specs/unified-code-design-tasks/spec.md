@@ -7,6 +7,15 @@ The application SHALL expose Code and Work as the only top-level workspace modes
 - **WHEN** a Code conversation contains Code turns, Design turns, or both
 - **THEN** it appears once in the Code workbench list without navigating to a standalone Design route
 
+#### Scenario: Shared task list identifies Design conversations
+- **WHEN** a Code-owned conversation is locked to Design through its task surface or Design profile
+- **THEN** the task list renders the Design icon and accessible Design label instead of the Code icon
+
+#### Scenario: Code whiteboard receives completed renderer tool results
+- **WHEN** a canvas tool result completes before the Code whiteboard document finishes loading
+- **THEN** the renderer replays the result into the matching conversation whiteboard after that document becomes active
+- **AND** durable replay receipts prevent an already delivered result from being applied twice
+
 #### Scenario: Top-level navigation
 - **WHEN** the user views the workspace-mode selector
 - **THEN** it contains Code and Work and does not contain a standalone Design tab

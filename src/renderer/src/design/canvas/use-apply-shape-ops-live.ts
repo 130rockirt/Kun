@@ -31,16 +31,13 @@ import {
   activeCanvasTurnMatchesThread,
   blocksForActiveCanvasTurn,
   canvasReplayStateForStoreUpdate,
-  designCanvasReplayContextForActiveTurn,
+  canvasReplayContextForActiveTurn,
   replayActiveCanvasTurn,
   type CanvasDesignDocumentTarget,
   type CanvasTurnReplayState
 } from './canvas-design-turn-replay'
-import {
-  applyDurableCanvasOpsSince,
-  replayIdleCanvasToolBlocks,
-  replayIdleDesignCanvas
-} from './canvas-design-idle-replay'
+import { applyDurableCanvasOpsSince, replayIdleCanvasToolBlocks, replayIdleCodeCanvas,
+  replayIdleDesignCanvas } from './canvas-design-idle-replay'
 import {
   commitReadyCanvasReplayBarriers,
   activeCanvasUserId,
@@ -114,7 +111,8 @@ export function useApplyShapeOpsLive(
   onCanvasExportRequested?: CanvasAgentExportRequestHandler,
   designDocumentTarget?: CanvasDesignDocumentTarget,
   expectedCanvasDocumentKey?: string,
-  pptProjection?: PptCanvasProjectionOptions
+  pptProjection?: PptCanvasProjectionOptions,
+  durableReplaySurface?: 'code'
 ): void {
   const onScreenCreatedRef = useRef(onScreenCreated)
   onScreenCreatedRef.current = onScreenCreated
@@ -201,7 +199,7 @@ export function useApplyShapeOpsLive(
     // `frameOnFirst` gently brings the build area into view exactly once per turn
     // (the first batch), then leaves the camera alone so the live build is smooth.
     const applyFrom = (text: string, frameOnFirst: boolean): void => {
-      const replay = designCanvasReplayContextForActiveTurn(
+      const replay = canvasReplayContextForActiveTurn(
         useChatStore.getState(), targetThreadId, activeDesignTarget, 'assistant'
       )
       const { affectedIds, errors, totalBlocks } = replay
@@ -567,9 +565,13 @@ export function useApplyShapeOpsLive(
       // Hand this turn's op errors to the next canvas turn so the agent can fix
       // them. Always set (even []) so a clean turn clears stale errors.
       setLastCanvasOpErrors([...errorsThisTurn], errorKey)
-      if (completedTurnId && activeDesignTarget && replayThreadId) {
+      if (completedTurnId && replayThreadId && (activeDesignTarget || durableReplaySurface === 'code')) {
         const barrier = ensureReplayBarrier(completedTurnId)
-        enqueueTurnScreens({ turnId: completedTurnId, blocks: durableTurnBlocks, affectedIds: all })
+        if (activeDesignTarget) {
+          enqueueTurnScreens({
+            turnId: completedTurnId, blocks: durableTurnBlocks, affectedIds: all
+          })
+        }
         if (barrier) barrier.replayComplete = true
         commitReadyWatermarks()
       }
@@ -579,24 +581,34 @@ export function useApplyShapeOpsLive(
       scheduleSvgDrain(120)
     }
 
-    const replayIdle = (state: ReturnType<typeof useChatStore.getState>): void =>
+    const replayIdle = (state: ReturnType<typeof useChatStore.getState>): void => {
+      if (!activeDesignTarget) {
+        if (durableReplaySurface === 'code') replayIdleCodeCanvas({
+            state, threadId: targetThreadId, ready: canvasDocumentReady(), errorKey,
+            affectedIds: affectedThisTurn, errors: errorsThisTurn, resetTurn, applyToolBlock
+          })
+        else if (!state.currentTurnId && canvasDocumentReady() &&
+          activeCanvasTurnMatchesThread(state, targetThreadId)) {
+          replayIdleCanvasToolBlocks(
+            state.blocks, applyToolBlock, (block) => void applySvgToolBlock(block)
+          )
+        }
+        return
+      }
       replayIdleDesignCanvas({
         state, threadId: targetThreadId, target: activeDesignTarget,
         ready: canvasDocumentReady(), executeOptions, errorKey,
         affectedIds: affectedThisTurn, errors: errorsThisTurn, resetTurn, applyToolBlock,
         onTurnReplayed: (completion, affectedIds) => {
           const barrier = ensureReplayBarrier(completion.turnId)
-          enqueueTurnScreens({
-            turnId: completion.turnId,
-            blocks: completion.blocks,
-            affectedIds
-          })
+          enqueueTurnScreens({ turnId: completion.turnId, blocks: completion.blocks, affectedIds })
           if (barrier) barrier.replayComplete = true
           commitReadyWatermarks()
           if (pendingScreens.length > 0) scheduleScreenDrain(0)
           if (pendingSvgToolBlocks.size > 0) scheduleSvgDrain(0)
         }
       })
+    }
 
     // If this hook becomes enabled after a turn has already started (common for
     // the first Code-canvas send, where the thread id appears after sendMessage),
@@ -611,12 +623,6 @@ export function useApplyShapeOpsLive(
         initialState, applyToolBlock, processStreaming, targetThreadId, activeDesignTarget
       )
       replayIdle(initialState)
-      if (!activeDesignTarget && !initialState.currentTurnId &&
-        activeCanvasTurnMatchesThread(initialState, targetThreadId)) {
-        replayIdleCanvasToolBlocks(
-          initialState.blocks, applyToolBlock, (block) => void applySvgToolBlock(block)
-        )
-      }
     }
 
     const unsubscribe = useChatStore.subscribe((state, prev) => {
@@ -635,7 +641,7 @@ export function useApplyShapeOpsLive(
         for (const block of blocksForActiveCanvasTurn(replayState)) {
           if (block.kind === 'tool') applyToolBlock(
             block,
-            designCanvasReplayContextForActiveTurn(
+            canvasReplayContextForActiveTurn(
               replayState, targetThreadId, activeDesignTarget, `tool:${block.id}`
             ) ?? undefined
           )
@@ -643,9 +649,6 @@ export function useApplyShapeOpsLive(
       }
       if (!state.currentTurnId && state.blocks !== prev.blocks) {
         replayIdle(state)
-        if (!activeDesignTarget) replayIdleCanvasToolBlocks(
-          state.blocks, applyToolBlock, (block) => void applySvgToolBlock(block)
-        )
       }
       if (state.currentTurnId && state.liveAssistant !== prev.liveAssistant) {
         scheduleStreaming()
@@ -691,6 +694,7 @@ export function useApplyShapeOpsLive(
     designDocumentTarget?.boardArtifactId,
     expectedCanvasDocumentKey,
     pptProjectionWorkflowId,
-    pptProjectionChildId
+    pptProjectionChildId,
+    durableReplaySurface
   ])
 }

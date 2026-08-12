@@ -209,7 +209,9 @@ export function ThreadRow({
     ? t('sidebarThreadWorktree', { branch: worktreeRecord.branch || 'worktree' })
     : ''
   const updatedLabel = formatRelativeTime(thread.updatedAt, locale)
-  const isDesignTask = thread.agentSurface === 'design'
+  const isDesignTask = thread.agentSurface === 'design' ||
+    thread.lockedTaskSurface === 'design' ||
+    (!thread.lockedTaskSurface && Boolean(thread.designProfile))
   const taskTypeLabel = isDesignTask ? t('taskTypeDesign') : t('taskTypeCode')
   const ariaLabel = [
     thread.title,

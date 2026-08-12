@@ -160,7 +160,7 @@ export function replayActiveCanvasTurn(
   if (!state.currentTurnId) return
   for (const block of blocksForActiveCanvasTurn(state)) {
     if (block.kind !== 'tool') continue
-    const replay = designCanvasReplayContextForActiveTurn(
+    const replay = canvasReplayContextForActiveTurn(
       state, targetThreadId, designDocumentTarget, `tool:${block.id}`
     )
     if (replay) applyToolBlock(block, replay)
@@ -230,6 +230,14 @@ export function designCanvasReplayKey(options: {
   ].join('\0')
 }
 
+export function codeCanvasReplayKey(options: {
+  threadId: string
+  turnId: string
+  source: string
+}): string {
+  return [options.threadId, options.turnId, 'code-canvas', options.source].join('\0')
+}
+
 export function placeGeneratedImagesForTurn(options: {
   blocks: readonly ChatBlock[]
   primaryImageLane: boolean
@@ -296,6 +304,38 @@ export function designCanvasReplayContextForActiveTurn(
       source
     })
   }
+}
+
+export function codeCanvasReplayContextForActiveTurn(
+  state: CanvasTurnReplayState,
+  threadId: string | null | undefined,
+  source: string
+): CanvasDesignReplayContext | null {
+  if (!threadId) return null
+  const user = activeUserBlock(state)
+  if (!user || user.kind !== 'user') return null
+  const start = state.blocks.indexOf(user)
+  if (start < 0) return null
+  let end = start + 1
+  while (end < state.blocks.length && state.blocks[end].kind !== 'user') end += 1
+  const blocks = state.blocks.slice(start, end)
+  const turnId = designCanvasTurnId(user, blocks, state.currentTurnId)
+  return {
+    blocks,
+    turnId,
+    replayKey: codeCanvasReplayKey({ threadId, turnId, source })
+  }
+}
+
+export function canvasReplayContextForActiveTurn(
+  state: CanvasTurnReplayState,
+  threadId: string | null | undefined,
+  target: CanvasDesignDocumentTarget | undefined,
+  source: string
+): CanvasDesignReplayContext | null {
+  return target
+    ? designCanvasReplayContextForActiveTurn(state, threadId, target, source)
+    : codeCanvasReplayContextForActiveTurn(state, threadId, source)
 }
 
 export function replayDurableDesignCanvasTurns(options: {

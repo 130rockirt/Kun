@@ -168,7 +168,11 @@ export function CodeCanvasPanel({
     feedbackKey,
     activeThreadId,
     undefined,
-    exportCanvas
+    exportCanvas,
+    undefined,
+    expectedDocumentKey,
+    undefined,
+    'code'
   )
 
   const designDoc = designMode && surface
