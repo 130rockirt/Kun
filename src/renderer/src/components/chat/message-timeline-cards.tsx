@@ -43,25 +43,30 @@ export function ReviewPlanCard({
     <div
       data-review-plan-card
       title={relativePath}
-      className="flex min-h-[64px] w-full flex-wrap items-center gap-3 rounded-[18px] border border-ds-border-muted bg-white/[0.78] px-4 py-3 shadow-[0_12px_34px_rgba(20,47,95,0.07)] backdrop-blur-xl dark:border-white/[0.09] dark:bg-white/[0.045]"
+      className="flex w-full flex-col gap-5 rounded-[26px] border border-ds-border-muted/80 bg-ds-card/95 px-6 py-5 shadow-[0_16px_40px_rgba(20,47,95,0.055)] dark:border-white/[0.08] dark:bg-ds-card/90"
     >
-      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-accent/20 bg-accent/10 text-accent">
-        <ListTodo className="h-5 w-5" strokeWidth={1.9} />
+      <div className="flex min-w-0 flex-wrap items-center gap-4">
+        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-accent-soft/80 text-accent">
+          <ListTodo className="h-5 w-5" strokeWidth={1.8} />
+        </div>
+        <div className="min-w-[220px] flex-1">
+          <div className="text-[12.5px] font-medium text-accent">
+            {t('reviewPlanCardStatus')}
+          </div>
+          <div className="mt-0.5 break-words text-[15px] font-medium text-ds-ink">{title}</div>
+          <div className="mt-0.5 text-[12px] text-ds-muted">{t('reviewPlanCardHint')}</div>
+        </div>
+        {onOpen ? (
+          <button
+            type="button"
+            onClick={onOpen}
+            className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full bg-ds-card-muted/70 px-3.5 text-[12.5px] font-medium text-ds-ink transition hover:bg-ds-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
+          >
+            <FileEdit className="h-3.5 w-3.5" strokeWidth={1.8} />
+            {t('reviewPlanOpen')}
+          </button>
+        ) : null}
       </div>
-      <div className="min-w-0 flex-1">
-        <div className="truncate text-[14.5px] font-semibold text-ds-ink">{title}</div>
-        <div className="mt-0.5 truncate text-[12.5px] text-ds-muted">{t('reviewPlanCardHint')}</div>
-      </div>
-      {onOpen ? (
-        <button
-          type="button"
-          onClick={onOpen}
-          className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border border-ds-border bg-ds-card px-3 text-[13px] font-medium text-ds-ink transition hover:bg-ds-hover"
-        >
-          <FileEdit className="h-3.5 w-3.5" strokeWidth={1.9} />
-          {t('reviewPlanOpen')}
-        </button>
-      ) : null}
       {onBuild ? (
         <PlanBuildActions
           disabled={busy}

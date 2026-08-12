@@ -92,7 +92,7 @@ describe('plan build actions', () => {
     resetPlanWorktreeStoreForTests()
   })
 
-  it('renders responsive Direct and Graph actions and reports the selected orchestration', async () => {
+  it('selects a rounded card build mode before starting the requested orchestration', async () => {
     const onBuild = vi.fn()
     let renderer: ReactTestRenderer
 
@@ -109,21 +109,37 @@ describe('plan build actions', () => {
 
     const card = renderer!.root.findByProps({ 'data-review-plan-card': true })
     const actions = renderer!.root.findByProps({ 'data-plan-build-actions-variant': 'card' })
-    expect(card.props.className).toContain('flex-wrap')
+    const start = renderer!.root.findByProps({ 'data-plan-build-start': true })
+    expect(card.props.className).toContain('rounded-[26px]')
+    expect(card.props.className).toContain('flex-col')
     expect(actions.props.className).toContain('flex-wrap')
 
     const direct = renderer!.root.findByProps({ 'data-plan-build-orchestration': 'direct' })
     const graph = renderer!.root.findByProps({ 'data-plan-build-orchestration': 'graph' })
     expect(direct.props.disabled).toBe(false)
     expect(graph.props.disabled).toBe(false)
-    expect(direct.props['aria-label']).toBe('Direct build')
-    expect(graph.props['aria-label']).toBe('Graph build')
+    expect(direct.props['aria-pressed']).toBe(true)
+    expect(graph.props['aria-pressed']).toBe(false)
+    expect(start.props.disabled).toBe(false)
+    expect(JSON.stringify(renderer!.toJSON())).toContain('Plan ready')
+    expect(JSON.stringify(renderer!.toJSON())).toContain('Start build')
 
     await act(async () => {
-      direct.props.onClick()
       graph.props.onClick()
     })
-    expect(onBuild.mock.calls).toEqual([['direct'], ['graph']])
+    expect(renderer!.root.findByProps({ 'data-plan-build-orchestration': 'direct' })
+      .props['aria-pressed']).toBe(false)
+    expect(renderer!.root.findByProps({ 'data-plan-build-orchestration': 'graph' })
+      .props['aria-pressed']).toBe(true)
+
+    await act(async () => {
+      renderer!.root.findByProps({ 'data-plan-build-start': true }).props.onClick()
+      renderer!.root.findByProps({ 'data-plan-build-orchestration': 'direct' }).props.onClick()
+    })
+    await act(async () => {
+      renderer!.root.findByProps({ 'data-plan-build-start': true }).props.onClick()
+    })
+    expect(onBuild.mock.calls).toEqual([['graph'], ['direct']])
 
     act(() => renderer!.unmount())
   })
