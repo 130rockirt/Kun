@@ -87,7 +87,10 @@ export { buildWebToolProviders } from '../adapters/tool/web-tool-provider.js'
 export { buildImageGenToolProviders, protocolSupportsImageEdit } from '../adapters/tool/image-gen-tool-provider.js'
 export { buildComputerUseToolProviders } from '../adapters/tool/computer-use-tool-provider.js'
 export { buildBrowserUseToolProviders } from '../adapters/tool/browser-use-tool-provider.js'
-export { buildOfficeCliToolProviders } from '../adapters/tool/office-cli-tool-provider.js'
+export {
+  buildOfficeCliToolProviders,
+  createConfiguredOfficeCliRunner
+} from '../adapters/tool/office-cli-tool-provider.js'
 export {
   buildMusicGenToolProviders,
   buildSpeechGenToolProviders,

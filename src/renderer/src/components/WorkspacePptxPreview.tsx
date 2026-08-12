@@ -26,6 +26,7 @@ import {
   emptyWorkspaceOfficeSelection,
   selectionFromOfficeDom
 } from './workspace-office-selection'
+import { subscribeKnowledgeSourceNavigation } from '../lib/knowledge-source-navigation'
 
 const PPTX_WIDTH = 960
 const PPTX_HEIGHT = 540
@@ -192,6 +193,12 @@ export function WorkspacePptxPreview({
       setRenderError(errorMessage(cause))
     }
   }, [onSelectionChange, result.sourceFormat, slideCount])
+
+  useEffect(() => subscribeKnowledgeSourceNavigation(result.path, (location) => {
+    if (location.kind !== 'presentation' || !previewerRef.current) return false
+    goToSlide(location.slideStart)
+    return true
+  }), [goToSlide, result.path, slideCount])
 
   const scheduleControlsHide = useCallback((): void => {
     clearControlsTimer(controlsTimerRef)

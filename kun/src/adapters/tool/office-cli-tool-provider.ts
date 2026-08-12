@@ -212,6 +212,17 @@ export class OfficeCliRunner {
   }
 }
 
+export function createConfiguredOfficeCliRunner(options: {
+  binaryPath?: string
+  profileDir: string
+}): OfficeCliRunner | undefined {
+  const binaryPath = options.binaryPath?.trim()
+  if (!binaryPath || !existsSync(binaryPath)) return undefined
+  const runner = new OfficeCliRunner({ binaryPath, profileDir: options.profileDir })
+  void runner.diagnose()
+  return runner
+}
+
 export function buildOfficeCliToolProviders(options: {
   binaryPath?: string
   profileDir: string

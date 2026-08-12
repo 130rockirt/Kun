@@ -11,6 +11,7 @@ import type {
   WriteEditorSelectionState,
   WriteSelectionPageRect
 } from './WriteMarkdownEditor'
+import { subscribeKnowledgeSourceNavigation } from '../../lib/knowledge-source-navigation'
 
 GlobalWorkerOptions.workerSrc = pdfWorkerUrl
 
@@ -142,6 +143,12 @@ export function WritePdfViewer({
     setPageInput(String(clamped))
     pageRefs.current.get(clamped)?.scrollIntoView({ block: 'start', behavior: 'smooth' })
   }, [pageCount])
+
+  useEffect(() => subscribeKnowledgeSourceNavigation(filePath, (location) => {
+    if (location.kind !== 'pdf' || !pdfDocument) return false
+    scrollToPage(location.pageStart)
+    return true
+  }), [filePath, pdfDocument, scrollToPage])
 
   const updateCurrentPageFromScroll = useCallback((): void => {
     const scroller = scrollerRef.current

@@ -21,6 +21,7 @@ import {
   buildComputerUseToolProviders,
   buildBrowserUseToolProviders,
   buildOfficeCliToolProviders,
+  createConfiguredOfficeCliRunner,
   buildMusicGenToolProviders,
   buildSpeechGenToolProviders,
   buildVideoGenToolProviders,
@@ -363,9 +364,14 @@ export function createRuntimeConfigController(
 	      ...buildBuiltinHooks({ quality: nextOptions.quality ?? DEFAULT_QUALITY_CONFIG }),
 	      ...resolveConfiguredHooks(nextOptions.hooks)
 	    ]
-	    const nextOfficeCliProviders = buildOfficeCliToolProviders({
+	    const nextOfficeCliRunner = createConfiguredOfficeCliRunner({
 	      binaryPath: process.env.KUN_OFFICECLI_BINARY,
 	      profileDir: join(nextOptions.dataDir, 'officecli-profile')
+	    })
+	    const nextOfficeCliProviders = buildOfficeCliToolProviders({
+	      binaryPath: process.env.KUN_OFFICECLI_BINARY,
+	      profileDir: join(nextOptions.dataDir, 'officecli-profile'),
+	      ...(nextOfficeCliRunner ? { runner: nextOfficeCliRunner } : {})
 	    })
 	    const nextSubagentConfig = nextOptions.capabilities?.subagents
 	      ? mergeBuiltinSubagentProfiles(nextOptions.capabilities.subagents)
@@ -572,6 +578,9 @@ export function createRuntimeConfigController(
 	    videoGenProviders = nextVideoGenProviders
 	    computerUseProviders = nextComputerUseProviders
 	    browserUseProviders = nextBrowserUseProviders
+	    services.knowledgeBaseService.setOfficeExtractorDependencies({
+	      ...(nextOfficeCliRunner ? { officeCli: nextOfficeCliRunner } : {})
+	    })
 	    resolvedHooks = nextResolvedHooks
 	    baseToolProviders = nextBaseToolProviders
 	    childRegistry = nextChildRegistry

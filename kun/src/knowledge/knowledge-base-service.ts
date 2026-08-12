@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { readFile, realpath, stat } from 'node:fs/promises'
+import { lstat, readFile, realpath, stat } from 'node:fs/promises'
 import { isAbsolute, join, relative, resolve } from 'node:path'
 import { atomicWriteFile } from '../adapters/file/atomic-write.js'
 import type {
@@ -9,6 +9,14 @@ import type {
 } from '../contracts/threads.js'
 import type { ThreadStore } from '../ports/thread-store.js'
 import { buildKnowledgeIndex, extractPdfPages, scanKnowledgeSources } from './knowledge-indexer.js'
+import {
+  KnowledgeOfficeArtifactStore,
+  sha256KnowledgeSource
+} from './knowledge-office-artifact-store.js'
+import {
+  KnowledgeOfficeExtractorRegistry,
+  type KnowledgeOfficeExtractorDependencies
+} from './knowledge-office-extractor.js'
 import {
   KNOWLEDGE_INDEX_SCHEMA_VERSION,
   type KnowledgeBrowseResult,
@@ -38,6 +46,7 @@ export class KnowledgeBaseError extends Error {
 type KnowledgeBaseServiceOptions = {
   dataDir: string
   threadStore: Pick<ThreadStore, 'get'>
+  officeExtractor?: KnowledgeOfficeExtractorRegistry
   nowIso?: () => string
 }
 
@@ -47,10 +56,16 @@ export class KnowledgeBaseService {
   private readonly indexCache = new Map<string, { index: StoredKnowledgeIndex; checkedAt: number }>()
   private readonly statuses = new Map<string, KnowledgeBaseIndexStatus>()
   private readonly nowIso: () => string
+  private readonly officeExtractor: KnowledgeOfficeExtractorRegistry
 
   constructor(private readonly options: KnowledgeBaseServiceOptions) {
     this.indexDir = join(options.dataDir, 'knowledge-indexes')
     this.nowIso = options.nowIso ?? (() => new Date().toISOString())
+    this.officeExtractor = options.officeExtractor ?? new KnowledgeOfficeExtractorRegistry()
+  }
+
+  setOfficeExtractorDependencies(dependencies: KnowledgeOfficeExtractorDependencies): void {
+    this.officeExtractor.setDependencies(dependencies)
   }
 
   async listForThread(threadId: string): Promise<{
@@ -161,9 +176,12 @@ export class KnowledgeBaseService {
     for (const node of nodes) {
       if (remaining <= 0) break
       const sourcePath = await this.safeSourcePath(mount, node.relativePath!)
+      const document = index.documents.find((candidate) => candidate.relativePath === node.relativePath)
       const text = node.location!.kind === 'text'
         ? await readTextLocation(sourcePath, node.location!.lineStart, node.location!.lineEnd)
-        : await readPdfLocation(sourcePath, node.location!.pageStart, node.location!.pageEnd)
+        : node.location!.kind === 'pdf'
+          ? await readPdfLocation(sourcePath, node.location!.pageStart, node.location!.pageEnd)
+          : await this.readOfficeEvidence(mount, index, node, document, sourcePath)
       const cap = Math.min(MAX_EVIDENCE_CHARS, remaining)
       const clipped = clip(text, cap)
       remaining -= clipped.text.length
@@ -174,6 +192,9 @@ export class KnowledgeBaseService {
         structuralPath: structuralPath(index, node.id),
         relativePath: node.relativePath!,
         location: node.location!,
+        ...(document?.format ? { format: document.format } : {}),
+        ...(document?.sourceSha256 ? { sourceSha256: document.sourceSha256 } : {}),
+        ...(document?.truncated !== undefined ? { documentTruncated: document.truncated } : {}),
         text: clipped.text,
         truncated: clipped.truncated
       })
@@ -208,24 +229,35 @@ export class KnowledgeBaseService {
   }
 
   private async buildOrLoad(mount: KnowledgeBaseMount, force: boolean): Promise<StoredKnowledgeIndex> {
-    this.statuses.set(mountKey(mount), status(mount.id, 'indexing'))
+    const key = mountKey(mount)
+    let previous = this.indexCache.get(key)?.index ?? null
+    this.statuses.set(key, status(mount.id, 'indexing', undefined, previous ?? undefined))
     try {
+      previous ??= await this.readStored(mount)
       const scan = await scanKnowledgeSources(mount.root)
-      const stored = force ? null : await this.readStored(mount)
+      const stored = force ? null : previous
       if (stored?.fingerprint === scan.fingerprint && stored.root === scan.root) {
-        this.indexCache.set(mountKey(mount), { index: stored, checkedAt: Date.now() })
-        this.statuses.set(mountKey(mount), this.readyStatus(mount, stored))
+        this.indexCache.set(key, { index: stored, checkedAt: Date.now() })
+        this.statuses.set(key, this.readyStatus(mount, stored))
         return stored
       }
-      const built = await buildKnowledgeIndex(scan, this.nowIso)
+      const artifacts = this.artifactStore(mount)
+      await artifacts.prune(new Set(previous?.documents.flatMap((document) =>
+        document.artifactKey ? [document.artifactKey] : []) ?? []))
+      const built = await buildKnowledgeIndex(scan, this.nowIso, { officeArtifacts: artifacts })
+      const retainedArtifacts = new Set(built.documents.flatMap((document) =>
+        document.artifactKey ? [document.artifactKey] : []))
+      await artifacts.assertRetainedBudget(retainedArtifacts)
       await atomicWriteFile(this.indexPath(mount), `${JSON.stringify(built)}\n`)
-      this.indexCache.set(mountKey(mount), { index: built, checkedAt: Date.now() })
-      this.statuses.set(mountKey(mount), this.readyStatus(mount, built))
+      await artifacts.prune(retainedArtifacts)
+      this.indexCache.set(key, { index: built, checkedAt: Date.now() })
+      this.statuses.set(key, this.readyStatus(mount, built))
       return built
     } catch (error) {
-      this.indexCache.delete(mountKey(mount))
+      if (previous) this.indexCache.set(key, { index: previous, checkedAt: 0 })
+      else this.indexCache.delete(key)
       const state = isUnavailable(error) ? 'unavailable' : 'error'
-      this.statuses.set(mountKey(mount), status(mount.id, state, message(error)))
+      this.statuses.set(key, status(mount.id, state, message(error), previous ?? undefined))
       throw new KnowledgeBaseError(`knowledge base ${mount.name} is unavailable: ${message(error)}`, 'unavailable')
     }
   }
@@ -275,11 +307,64 @@ export class KnowledgeBaseService {
     if (isAbsolute(relativePath)) throw new KnowledgeBaseError('absolute source paths are not allowed', 'invalid')
     const root = await realpath(resolve(mount.root))
     const candidate = resolve(root, relativePath)
+    if (!isInside(root, candidate)) throw new KnowledgeBaseError('knowledge source escaped its root', 'invalid')
+    const lexicalInfo = await lstat(candidate)
+    if (lexicalInfo.isSymbolicLink() || !lexicalInfo.isFile()) {
+      throw new KnowledgeBaseError('knowledge source is not a regular non-symbolic file', 'invalid')
+    }
     const physical = await realpath(candidate)
     if (!isInside(root, physical)) throw new KnowledgeBaseError('knowledge source escaped its root', 'invalid')
     const info = await stat(physical)
     if (!info.isFile()) throw new KnowledgeBaseError('knowledge source is not a file', 'invalid')
     return physical
+  }
+
+  private artifactStore(mount: KnowledgeBaseMount): KnowledgeOfficeArtifactStore {
+    return new KnowledgeOfficeArtifactStore(
+      this.options.dataDir,
+      mountKey(mount),
+      mount.root,
+      this.officeExtractor
+    )
+  }
+
+  private async readOfficeEvidence(
+    mount: KnowledgeBaseMount,
+    index: StoredKnowledgeIndex,
+    node: KnowledgeNode,
+    document: StoredKnowledgeIndex['documents'][number] | undefined,
+    sourcePath: string
+  ): Promise<string> {
+    if (!document?.sourceSha256 || !document.artifactKey || !node.evidenceKey) {
+      throw new KnowledgeBaseError('Office knowledge evidence metadata is incomplete', 'unavailable')
+    }
+    const before = await sourceIdentity(sourcePath)
+    const actualSha256 = await sha256KnowledgeSource(sourcePath)
+    if (actualSha256 !== document.sourceSha256) {
+      this.markSourceStale(mount, index, `Source changed since indexing: ${document.relativePath}`)
+      throw new KnowledgeBaseError('Office source changed since indexing; reindexing is required', 'unavailable')
+    }
+    const artifact = await this.artifactStore(mount).read(document.artifactKey)
+    if (!artifact || artifact.sourceSha256 !== actualSha256) {
+      this.markSourceStale(mount, index, `Derived evidence is unavailable: ${document.relativePath}`)
+      throw new KnowledgeBaseError('Office derived evidence is unavailable; reindexing is required', 'unavailable')
+    }
+    const chunk = artifact.chunks.find((candidate) => candidate.key === node.evidenceKey)
+    if (!chunk) throw new KnowledgeBaseError('Office evidence node is unavailable', 'unavailable')
+    const currentPath = await this.safeSourcePath(mount, document.relativePath)
+    const after = await sourceIdentity(currentPath)
+    if (currentPath !== sourcePath || before !== after) {
+      this.markSourceStale(mount, index, `Source changed during evidence read: ${document.relativePath}`)
+      throw new KnowledgeBaseError('Office source changed during evidence read; reindexing is required', 'unavailable')
+    }
+    return chunk.text
+  }
+
+  private markSourceStale(mount: KnowledgeBaseMount, index: StoredKnowledgeIndex, reason: string): void {
+    const key = mountKey(mount)
+    this.indexCache.set(key, { index, checkedAt: 0 })
+    this.statuses.set(key, status(mount.id, 'stale', reason, index))
+    this.schedule(mount, true)
   }
 
   private async requireThread(threadId: string): Promise<ThreadRecord> {
@@ -301,11 +386,23 @@ function status(
   error?: string,
   index?: StoredKnowledgeIndex
 ): KnowledgeBaseIndexStatus {
+  const formatCounts = index?.documents.reduce<Record<string, number>>((counts, document) => {
+    const format = document.format ?? 'unknown'
+    counts[format] = (counts[format] ?? 0) + 1
+    return counts
+  }, {})
   return {
     id,
     state,
     documentCount: index?.documents.length ?? 0,
     nodeCount: index ? Object.keys(index.nodes).length : 0,
+    ...(index ? {
+      availableDocumentCount: index.documents.filter((document) => document.available).length,
+      unavailableDocumentCount: index.documents.filter((document) => !document.available).length,
+      truncatedDocumentCount: index.documents.filter((document) => document.truncated).length,
+      formatCounts,
+      diagnostics: index.diagnostics.slice(0, 20)
+    } : {}),
     ...(index ? { lastIndexedAt: index.builtAt } : {}),
     ...(error ? { error: error.slice(0, 1_000) } : {})
   }
@@ -336,6 +433,11 @@ async function readPdfLocation(path: string, start: number, end: number): Promis
   const pages = new Set<number>()
   for (let page = start; page <= end; page += 1) pages.add(page)
   return (await extractPdfPages(path, pages)).map((page) => `[Page ${page.page}]\n${page.text}`).join('\n\n')
+}
+
+async function sourceIdentity(path: string): Promise<string> {
+  const info = await stat(path, { bigint: true })
+  return `${info.dev}:${info.ino}:${info.size}:${info.mtimeNs}`
 }
 
 function scoreNode(node: KnowledgeNode, terms: readonly string[]): number {

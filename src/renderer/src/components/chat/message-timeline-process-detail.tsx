@@ -16,6 +16,7 @@ import {
   summarizeBackgroundShellToolBlock
 } from './message-timeline-tools'
 import { InjectedMemoryMetaChip } from './injected-memory-meta-chip'
+import { KnowledgeEvidenceDetail, parseKnowledgeEvidence } from './KnowledgeEvidenceDetail'
 
 export function toolNameForBlock(block: ToolBlock): string {
   const rawSummary = block.summary?.trim() ?? ''
@@ -411,6 +412,13 @@ export function ProcessEntryDetail({
           </pre>
         </div>
       )
+    }
+    if (
+      block.kind === 'tool' &&
+      toolNameForBlock(block) === 'knowledge_read' &&
+      parseKnowledgeEvidence(block).length > 0
+    ) {
+      return <KnowledgeEvidenceDetail block={block} />
     }
     return (
       <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words font-mono text-[12px] leading-6 text-ds-ink">

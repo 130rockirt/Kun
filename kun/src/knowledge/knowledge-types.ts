@@ -1,8 +1,30 @@
 import type { KnowledgeBaseIndexStatus, KnowledgeBaseMount } from '../contracts/threads.js'
 
-export const KNOWLEDGE_INDEX_SCHEMA_VERSION = 1
+export const KNOWLEDGE_INDEX_SCHEMA_VERSION = 2
+export const KNOWLEDGE_OFFICE_ARTIFACT_VERSION = 1
+export const KNOWLEDGE_OFFICE_EXTRACTOR_VERSION = 'office-v1'
 
-export type KnowledgeNodeKind = 'root' | 'directory' | 'document' | 'section' | 'range' | 'page'
+export type KnowledgeNodeKind =
+  | 'root'
+  | 'directory'
+  | 'document'
+  | 'section'
+  | 'range'
+  | 'page'
+  | 'slide'
+  | 'worksheet'
+  | 'cell-range'
+
+export type KnowledgeSourceFormat =
+  | 'markdown'
+  | 'text'
+  | 'pdf'
+  | 'doc'
+  | 'docx'
+  | 'xls'
+  | 'xlsx'
+  | 'ppt'
+  | 'pptx'
 
 export type KnowledgeTextLocation = {
   kind: 'text'
@@ -16,7 +38,32 @@ export type KnowledgePdfLocation = {
   pageEnd: number
 }
 
-export type KnowledgeSourceLocation = KnowledgeTextLocation | KnowledgePdfLocation
+export type KnowledgeWordLocation = {
+  kind: 'word'
+  paragraphStart: number
+  paragraphEnd: number
+  pageStart?: number
+  pageEnd?: number
+}
+
+export type KnowledgePresentationLocation = {
+  kind: 'presentation'
+  slideStart: number
+  slideEnd: number
+}
+
+export type KnowledgeSpreadsheetLocation = {
+  kind: 'spreadsheet'
+  sheetName: string
+  range: string
+}
+
+export type KnowledgeSourceLocation =
+  | KnowledgeTextLocation
+  | KnowledgePdfLocation
+  | KnowledgeWordLocation
+  | KnowledgePresentationLocation
+  | KnowledgeSpreadsheetLocation
 
 export type KnowledgeNode = {
   id: string
@@ -27,6 +74,7 @@ export type KnowledgeNode = {
   childIds: string[]
   relativePath?: string
   location?: KnowledgeSourceLocation
+  evidenceKey?: string
 }
 
 export type KnowledgeReferenceEdge = {
@@ -41,6 +89,11 @@ export type KnowledgeDocument = {
   size: number
   mtimeMs: number
   available: boolean
+  format?: KnowledgeSourceFormat
+  sourceSha256?: string
+  artifactKey?: string
+  extractorVersion?: string
+  truncated?: boolean
   error?: string
 }
 
@@ -67,6 +120,26 @@ export type KnowledgeSourceScan = {
   root: string
   fingerprint: string
   files: KnowledgeSourceFile[]
+  diagnostics: string[]
+}
+
+export type KnowledgeOfficeEvidenceChunk = {
+  key: string
+  kind: Extract<KnowledgeNodeKind, 'section' | 'range' | 'slide' | 'worksheet' | 'cell-range'>
+  title: string
+  summary: string
+  parentKey?: string
+  location: KnowledgeWordLocation | KnowledgePresentationLocation | KnowledgeSpreadsheetLocation
+  text: string
+}
+
+export type KnowledgeOfficeArtifact = {
+  version: typeof KNOWLEDGE_OFFICE_ARTIFACT_VERSION
+  extractorVersion: typeof KNOWLEDGE_OFFICE_EXTRACTOR_VERSION
+  sourceSha256: string
+  format: Extract<KnowledgeSourceFormat, 'doc' | 'docx' | 'xls' | 'xlsx' | 'ppt' | 'pptx'>
+  truncated: boolean
+  chunks: KnowledgeOfficeEvidenceChunk[]
   diagnostics: string[]
 }
 
@@ -98,6 +171,9 @@ export type KnowledgeEvidence = {
   structuralPath: string[]
   relativePath: string
   location: KnowledgeSourceLocation
+  format?: KnowledgeSourceFormat
+  sourceSha256?: string
+  documentTruncated?: boolean
   text: string
   truncated: boolean
 }

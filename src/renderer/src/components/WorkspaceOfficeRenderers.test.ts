@@ -13,7 +13,12 @@ const libraryMocks = vi.hoisted(() => ({
 
 vi.mock('docx-preview', () => ({ renderAsync: libraryMocks.renderDocx }))
 vi.mock('pptx-preview', () => ({ init: libraryMocks.initPptx }))
-vi.mock('xlsx/dist/cpexcel.full.mjs', () => ({ default: { codepages: true } }))
+vi.mock('xlsx/dist/cpexcel.full.mjs', () => ({
+  cptable: { 936: true },
+  utils: {},
+  version: 'test',
+  $$typeof: undefined
+}))
 vi.mock('xlsx', () => ({
   read: libraryMocks.readWorkbook,
   set_cptable: libraryMocks.setCodepage,
@@ -37,6 +42,7 @@ import {
   secureWorkspaceOfficeLinks
 } from './workspace-office-external-link'
 import { selectionFromOfficeDom } from './workspace-office-selection'
+import { requestKnowledgeSourceNavigation } from '../lib/knowledge-source-navigation'
 
 type MockPptxPreviewer = {
   host: HTMLElement
@@ -100,6 +106,8 @@ describe('browser Office renderers', () => {
       second.className = 'docx'
       first.textContent = 'First page text'
       second.textContent = 'Second page text'
+      first.append(document.createElement('p'))
+      second.append(document.createElement('p'))
       renderedDocxPages = [first, second]
       body.append(first, second)
     })
@@ -152,6 +160,12 @@ describe('browser Office renderers', () => {
       expect.objectContaining({ renderAltChunks: false, breakPages: true, useBase64URL: true })
     )
     expect(renderer!.root.findByProps({ 'aria-label': 'Page 1 of 2' })).toBeTruthy()
+    scrollIntoView.mockClear()
+    await act(async () => requestKnowledgeSourceNavigation({
+      filePath: '/repo/fixture.docx',
+      location: { kind: 'word', paragraphStart: 2, paragraphEnd: 2 }
+    }))
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: 'center' })
     await act(async () => renderer?.root.findByProps({ 'aria-label': 'Next page' }).props.onClick())
     expect(renderer!.root.findByProps({ 'aria-label': 'Page 2 of 2' })).toBeTruthy()
     await act(async () => renderer?.root.findByProps({ 'aria-label': 'Zoom in' }).props.onClick())
@@ -242,6 +256,11 @@ describe('browser Office renderers', () => {
     const firstThumbnails = pptxInstances[1]!
     await act(async () => renderer?.root.findByProps({ 'aria-label': 'Next slide' }).props.onClick())
     expect(first.renderSingleSlide).toHaveBeenCalledWith(1)
+    await act(async () => requestKnowledgeSourceNavigation({
+      filePath: '/repo/fixture.pptx',
+      location: { kind: 'presentation', slideStart: 3, slideEnd: 3 }
+    }))
+    expect(first.renderSingleSlide).toHaveBeenCalledWith(2)
     const securedMainLink = first.host.querySelector('a')!
     expect(securedMainLink.getAttribute('href')).toBe('#')
     expect(securedMainLink.hasAttribute('target')).toBe(false)
@@ -494,13 +513,17 @@ describe('browser Office renderers', () => {
       await flushPromises()
     })
 
-    expect(libraryMocks.setCodepage).toHaveBeenCalledWith({ codepages: true })
+    expect(libraryMocks.setCodepage).toHaveBeenCalledWith(expect.objectContaining({
+      cptable: { 936: true },
+      version: 'test'
+    }))
     expect(libraryMocks.readWorkbook).toHaveBeenCalledWith(
       expect.any(Uint8Array),
       expect.objectContaining({ type: 'array', dense: false, cellFormula: true })
     )
-    await act(async () => renderer?.root.findByProps({ 'aria-label': 'Worksheet' }).props.onChange({
-      target: { value: '1' }
+    await act(async () => requestKnowledgeSourceNavigation({
+      filePath: '/repo/fixture.xls',
+      location: { kind: 'spreadsheet', sheetName: 'Data', range: 'A1:B2' }
     }))
     expect(JSON.stringify(renderer!.toJSON())).toContain('Data')
     await act(async () => renderer?.root.findByProps({ 'aria-label': 'Zoom in' }).props.onClick())

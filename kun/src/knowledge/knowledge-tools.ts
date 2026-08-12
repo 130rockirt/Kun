@@ -5,7 +5,7 @@ import type { KnowledgeBaseService } from './knowledge-base-service.js'
 const EFFECTS = {
   network: false,
   externalWrite: false,
-  processExecution: false,
+  processExecution: true,
   guiAutomation: false
 } as const
 
@@ -97,8 +97,8 @@ function readTool(service: KnowledgeBaseService): LocalTool {
   return {
     name: 'knowledge_read',
     description:
-      'Read exact evidence for up to six document, section, paragraph, or PDF-page nodes ' +
-      'from a knowledge base mounted on this thread. Returns source-relative citations and locations.',
+      'Read exact evidence for up to six text, PDF, Word paragraph, PowerPoint slide, or spreadsheet-range nodes ' +
+      'from a knowledge base mounted on this thread. Returns source-relative citations, source format, SHA-256, and precise locations.',
     inputSchema: {
       type: 'object',
       properties: {

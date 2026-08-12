@@ -1,6 +1,6 @@
-import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, rm, symlink, truncate, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { extname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { buildKnowledgeIndex, scanKnowledgeSources } from './knowledge-indexer.js'
 
@@ -50,5 +50,70 @@ describe('vectorless knowledge index', () => {
 
     const scan = await scanKnowledgeSources(root)
     expect(scan.files.map((file) => file.relativePath)).toEqual(['safe.md'])
+  })
+
+  it('scans all six Office formats, skips lock files, and builds precise Office nodes', async () => {
+    const root = await tempRoot('kun-kb-office-index-')
+    const zipHeader = Buffer.from([0x50, 0x4b, 0x03, 0x04, 1, 2, 3, 4])
+    const oleHeader = Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1, 1])
+    for (const extension of ['docx', 'xlsx', 'pptx']) await writeFile(join(root, `modern.${extension}`), zipHeader)
+    for (const extension of ['doc', 'xls', 'ppt']) await writeFile(join(root, `legacy.${extension}`), oleHeader)
+    await writeFile(join(root, '~$draft.docx'), zipHeader)
+    await writeFile(join(root, 'misleading.docx'), oleHeader)
+    await writeFile(join(root, 'empty.docx'), '')
+    await writeFile(join(root, 'oversized.docx'), zipHeader)
+    await truncate(join(root, 'oversized.docx'), 10 * 1024 * 1024 + 1)
+
+    const scan = await scanKnowledgeSources(root)
+    expect(scan.files.map((file) => file.relativePath)).toEqual([
+      'legacy.doc', 'legacy.ppt', 'legacy.xls', 'modern.docx', 'modern.pptx', 'modern.xlsx'
+    ])
+    expect(scan.diagnostics).toEqual(expect.arrayContaining([
+      expect.stringContaining('misleading.docx'),
+      expect.stringContaining('empty.docx'),
+      expect.stringContaining('oversized.docx')
+    ]))
+    const index = await buildKnowledgeIndex(scan, undefined, {
+      officeArtifacts: {
+        loadOrExtract: async (file) => {
+          const format = extname(file.relativePath).slice(1) as 'doc' | 'docx' | 'xls' | 'xlsx' | 'ppt' | 'pptx'
+          const presentation = format === 'ppt' || format === 'pptx'
+          const spreadsheet = format === 'xls' || format === 'xlsx'
+          return {
+            artifactKey: `${'a'.repeat(64)}.${format}.office-v1.json`,
+            reused: false,
+            artifact: {
+              version: 1,
+              extractorVersion: 'office-v1',
+              sourceSha256: 'a'.repeat(64),
+              format,
+              truncated: false,
+              diagnostics: [],
+              chunks: [{
+                key: 'content:1',
+                kind: presentation ? 'slide' : spreadsheet ? 'cell-range' : 'range',
+                title: presentation ? 'Slide 1' : spreadsheet ? 'A1:B2' : 'Paragraphs 1-2',
+                summary: 'Office evidence',
+                location: presentation
+                  ? { kind: 'presentation', slideStart: 1, slideEnd: 1 }
+                  : spreadsheet
+                    ? { kind: 'spreadsheet', sheetName: 'Sheet1', range: 'A1:B2' }
+                    : { kind: 'word', paragraphStart: 1, paragraphEnd: 2 },
+                text: 'Office evidence'
+              }]
+            }
+          }
+        }
+      }
+    })
+
+    expect(index.version).toBe(2)
+    expect(index.documents).toHaveLength(6)
+    expect(index.documents.every((document) => document.available && document.artifactKey)).toBe(true)
+    expect(Object.values(index.nodes)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'slide', location: { kind: 'presentation', slideStart: 1, slideEnd: 1 } }),
+      expect.objectContaining({ kind: 'cell-range', location: { kind: 'spreadsheet', sheetName: 'Sheet1', range: 'A1:B2' } }),
+      expect.objectContaining({ kind: 'range', location: { kind: 'word', paragraphStart: 1, paragraphEnd: 2 } })
+    ]))
   })
 })

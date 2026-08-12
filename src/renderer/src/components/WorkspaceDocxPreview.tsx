@@ -11,6 +11,7 @@ import {
   pageFromDocxNode,
   selectionFromOfficeDom
 } from './workspace-office-selection'
+import { subscribeKnowledgeSourceNavigation } from '../lib/knowledge-source-navigation'
 
 export function WorkspaceDocxPreview({
   result,
@@ -101,6 +102,15 @@ export function WorkspaceDocxPreview({
     setPage(safePage)
     docxPages(bodyRef.current)[safePage - 1]?.scrollIntoView({ block: 'start' })
   }
+
+  useEffect(() => subscribeKnowledgeSourceNavigation(result.path, (location) => {
+    if (location.kind !== 'word') return false
+    const paragraphs = bodyRef.current?.querySelectorAll<HTMLElement>('p')
+    const target = paragraphs?.[Math.max(0, location.paragraphStart - 1)]
+    if (!target) return false
+    target.scrollIntoView({ block: 'center' })
+    return true
+  }), [pageCount, result.path])
 
   const onScroll = (): void => {
     const viewport = scrollRef.current

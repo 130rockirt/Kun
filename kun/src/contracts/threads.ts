@@ -96,6 +96,11 @@ export const KnowledgeBaseIndexStatusSchema = z.object({
   state: KnowledgeBaseIndexStateSchema,
   documentCount: z.number().int().nonnegative(),
   nodeCount: z.number().int().nonnegative(),
+  availableDocumentCount: z.number().int().nonnegative().optional(),
+  unavailableDocumentCount: z.number().int().nonnegative().optional(),
+  truncatedDocumentCount: z.number().int().nonnegative().optional(),
+  formatCounts: z.record(z.string(), z.number().int().nonnegative()).optional(),
+  diagnostics: z.array(z.string().max(500)).max(20).optional(),
   lastIndexedAt: z.string().optional(),
   error: z.string().max(1_000).optional()
 })

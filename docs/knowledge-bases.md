@@ -33,6 +33,15 @@ Supported sources:
 - Markdown: `.md`, `.markdown`, `.mdx`
 - Plain text: `.txt`
 - PDF: `.pdf` (text layer only; no OCR in the Kun indexer)
+- Word: `.docx`, plus `.doc` when local LibreOffice conversion is available
+- Presentations: `.pptx`, plus `.ppt` when local LibreOffice conversion is available
+- Spreadsheets: `.xls`, `.xlsx` (parsed directly with sparse SheetJS traversal)
+
+Office sources use a 10 MiB per-file limit. Temporary lock files, disguised
+container families, macro-enabled OOXML, malformed/encrypted packages, and
+archive-limit violations are reported as unavailable documents. Missing
+OfficeCLI affects Word and PowerPoint only; missing LibreOffice affects legacy
+DOC/PPT only, so text, PDF, XLS, and XLSX sources continue to index.
 
 The generated graph contains:
 
@@ -41,6 +50,11 @@ The generated graph contains:
 - Markdown heading nodes with exact line ranges;
 - plain-text paragraph nodes with exact line ranges;
 - PDF page nodes with exact page numbers;
+- Word section and paragraph-range nodes (paragraphs are canonical; pages are
+  only optional rendering hints);
+- presentation nodes with exact slide numbers;
+- worksheet and bounded sparse cell-range nodes with normalized `Sheet!A1:C3`
+  locations, formatted values, merge coverage, and formula annotations;
 - Markdown and Wiki-link reference edges between indexed documents.
 
 Node ids are deterministic hashes of structural source locations. A source
@@ -50,16 +64,23 @@ workspace. Status is one of `pending`, `indexing`, `ready`, `stale`,
 `unavailable`, or `error`. Concurrent requests for the same root share one
 in-flight build.
 
+Schema-v2 indexes reference bounded Office evidence under
+`knowledge-artifacts/<mount-key>/`. Artifacts are keyed by the exact source
+SHA-256, format, and extractor version, written atomically, reused across
+rebuilds, and pruned only after a new index is published. `knowledge_read`
+recomputes the current Office source SHA before serving a chunk; a mismatch
+returns stale/unavailable instead of cached text and schedules a rebuild.
+
 ## Retrieval flow
 
 ```text
 User mounts Write workspace on Code thread
   -> bounded canonical-path scan
-  -> directory/document/section/page graph
+  -> directory/document/section/page/slide/worksheet/range graph
   -> knowledge_catalog(query?)
   -> knowledge_browse(mount_id, node_id?)
   -> knowledge_read(mount_id, node_ids)
-  -> bounded evidence with relative path + line/page citation
+  -> bounded evidence with relative path + format-aware citation + source SHA
 ```
 
 `knowledge_catalog` lists authorized mount ids and root node ids. An optional
@@ -71,7 +92,8 @@ edges. The model chooses where to navigate next, which provides the
 PageIndex-style reasoning loop.
 
 `knowledge_read` accepts at most six authorized node ids and returns bounded
-source evidence with a structural breadcrumb and exact line/page location.
+source evidence with a structural breadcrumb and an exact line, page, paragraph,
+slide, or worksheet/A1 location.
 Absolute roots are not returned to the model. Every result marks source text as
 untrusted evidence, not executable instructions.
 
@@ -91,6 +113,9 @@ Renderer routes:
 The Code composer picker is sourced from Write workspaces. It can add a new
 directory to Write and mount it in one operation, shows index freshness, and
 can switch to the matching Write workspace for source inspection.
+Office status additionally reports usable, unavailable, and truncated document
+counts, per-format totals, and bounded actionable diagnostics. Office evidence
+cards open the cited source in the existing read-only Write preview.
 
 ## Security invariants
 

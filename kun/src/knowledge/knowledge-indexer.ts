@@ -1,12 +1,22 @@
 import { createHash } from 'node:crypto'
 import { readFile, readdir, realpath, stat } from 'node:fs/promises'
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from 'node:path'
+import type { KnowledgeOfficeArtifactLoader } from './knowledge-office-artifact-store.js'
+import {
+  isTemporaryOfficeSource,
+  KNOWLEDGE_OFFICE_EXTENSIONS,
+  MAX_KNOWLEDGE_OFFICE_FILE_BYTES,
+  officeKnowledgeFormat,
+  validateOfficeSourceHeader
+} from './knowledge-office-source.js'
 import {
   KNOWLEDGE_INDEX_SCHEMA_VERSION,
   type KnowledgeDocument,
   type KnowledgeNode,
+  type KnowledgeOfficeArtifact,
   type KnowledgeReferenceEdge,
   type KnowledgeSourceFile,
+  type KnowledgeSourceFormat,
   type KnowledgeSourceScan,
   type StoredKnowledgeIndex
 } from './knowledge-types.js'
@@ -17,7 +27,10 @@ const MAX_FILE_BYTES = 8 * 1024 * 1024
 const MAX_TOTAL_BYTES = 64 * 1024 * 1024
 const MAX_NODES = 12_000
 const MAX_PDF_PAGES = 300
-const SUPPORTED_EXTENSIONS = new Set(['.md', '.markdown', '.mdx', '.txt', '.pdf'])
+const SUPPORTED_EXTENSIONS = new Set([
+  '.md', '.markdown', '.mdx', '.txt', '.pdf',
+  ...KNOWLEDGE_OFFICE_EXTENSIONS
+])
 const SKIP_DIRECTORIES = new Set([
   '.git', '.hg', '.svn', '.cache', '.idea', '.next', '.turbo', '.venv', '.vscode',
   'build', 'coverage', 'dist', 'node_modules', 'out', 'target', 'temp', 'tmp', 'vendor', 'venv'
@@ -45,7 +58,7 @@ export async function scanKnowledgeSources(rootInput: string): Promise<Knowledge
     for (const entry of entries) {
       entriesSeen += 1
       if (entriesSeen > MAX_SCAN_ENTRIES || files.length >= MAX_FILES) break
-      if (entry.name === '.DS_Store' || entry.isSymbolicLink()) continue
+      if (entry.name === '.DS_Store' || entry.isSymbolicLink() || isTemporaryOfficeSource(entry.name)) continue
       const path = join(directory, entry.name)
       if (entry.isDirectory()) {
         if (!entry.name.startsWith('.') && !SKIP_DIRECTORIES.has(entry.name)) stack.push(path)
@@ -63,17 +76,33 @@ export async function scanKnowledgeSources(rootInput: string): Promise<Knowledge
         pushDiagnostic(diagnostics, `Skipped source outside knowledge root: ${displayPath(lexicalRoot, path)}`)
         continue
       }
-      if (info.size > MAX_FILE_BYTES || bytesSeen + info.size > MAX_TOTAL_BYTES) {
+      const fileLimit = KNOWLEDGE_OFFICE_EXTENSIONS.has(extname(entry.name).toLocaleLowerCase())
+        ? MAX_KNOWLEDGE_OFFICE_FILE_BYTES
+        : MAX_FILE_BYTES
+      if (info.size <= 0) {
+        pushDiagnostic(diagnostics, `Skipped empty source: ${displayPath(lexicalRoot, path)}`)
+        continue
+      }
+      if (info.size > fileLimit || bytesSeen + info.size > MAX_TOTAL_BYTES) {
         pushDiagnostic(diagnostics, `Skipped oversized source: ${displayPath(lexicalRoot, path)}`)
         continue
       }
-      bytesSeen += info.size
-      files.push({
+      const source = {
         absolutePath: path,
         relativePath: normalizeRelative(relative(lexicalRoot, path)),
         size: info.size,
         mtimeMs: Math.floor(info.mtimeMs)
-      })
+      }
+      if (KNOWLEDGE_OFFICE_EXTENSIONS.has(extname(entry.name).toLocaleLowerCase())) {
+        try {
+          await validateOfficeSourceHeader(source)
+        } catch (error) {
+          pushDiagnostic(diagnostics, `Skipped invalid Office source ${source.relativePath}: ${message(error)}`)
+          continue
+        }
+      }
+      bytesSeen += info.size
+      files.push(source)
     }
   }
   if (files.length >= MAX_FILES) pushDiagnostic(diagnostics, `Index file limit reached (${MAX_FILES})`)
@@ -89,7 +118,8 @@ export async function scanKnowledgeSources(rootInput: string): Promise<Knowledge
 
 export async function buildKnowledgeIndex(
   scan: KnowledgeSourceScan,
-  nowIso: () => string = () => new Date().toISOString()
+  nowIso: () => string = () => new Date().toISOString(),
+  options: { officeArtifacts?: KnowledgeOfficeArtifactLoader } = {}
 ): Promise<StoredKnowledgeIndex> {
   const nodes: Record<string, KnowledgeNode> = {}
   const documents: KnowledgeDocument[] = []
@@ -117,12 +147,24 @@ export async function buildKnowledgeIndex(
       relativePath: file.relativePath,
       size: file.size,
       mtimeMs: file.mtimeMs,
+      format: sourceFormat(file.relativePath),
       available: true
     }
     try {
       const extension = extname(file.relativePath).toLocaleLowerCase()
       const availableNodes = Math.max(0, MAX_NODES - Object.keys(nodes).length)
-      if (extension === '.pdf') {
+      if (officeKnowledgeFormat(file.relativePath)) {
+        if (!options.officeArtifacts) throw new Error('Office knowledge extraction is not configured')
+        const loaded = await options.officeArtifacts.loadOrExtract(file)
+        indexOfficeArtifact(file, loaded.artifact, documentNode, nodes, availableNodes)
+        document.sourceSha256 = loaded.artifact.sourceSha256
+        document.artifactKey = loaded.artifactKey
+        document.extractorVersion = loaded.artifact.extractorVersion
+        document.truncated = loaded.artifact.truncated
+        for (const diagnostic of loaded.artifact.diagnostics) {
+          pushDiagnostic(diagnostics, `${file.relativePath}: ${diagnostic}`)
+        }
+      } else if (extension === '.pdf') {
         await indexPdf(file, documentNode, nodes, availableNodes)
       } else {
         const buffer = await readFile(file.absolutePath)
@@ -161,6 +203,30 @@ export async function buildKnowledgeIndex(
     nodes,
     references,
     diagnostics
+  }
+}
+
+function indexOfficeArtifact(
+  file: KnowledgeSourceFile,
+  artifact: KnowledgeOfficeArtifact,
+  documentNode: KnowledgeNode,
+  nodes: Record<string, KnowledgeNode>,
+  availableNodes: number
+): void {
+  const accepted = artifact.chunks.slice(0, availableNodes)
+  const ids = new Map(accepted.map((chunk) => [
+    chunk.key,
+    nodeId(chunk.kind, `${file.relativePath}:${chunk.key}`)
+  ]))
+  for (const chunk of accepted) {
+    const id = ids.get(chunk.key)!
+    const parentId = chunk.parentKey ? ids.get(chunk.parentKey) ?? documentNode.id : documentNode.id
+    nodes[id] = {
+      ...node(id, chunk.kind, chunk.title, clip(chunk.summary, 280), parentId, file.relativePath),
+      location: chunk.location,
+      evidenceKey: chunk.key
+    }
+    nodes[parentId]!.childIds.push(id)
   }
 }
 
@@ -397,6 +463,15 @@ function clip(value: string, max: number): string {
 
 function normalizeRelative(value: string): string {
   return value.replaceAll('\\', '/') || '.'
+}
+
+function sourceFormat(path: string): KnowledgeSourceFormat {
+  const officeFormat = officeKnowledgeFormat(path)
+  if (officeFormat) return officeFormat
+  const extension = extname(path).toLocaleLowerCase()
+  if (extension === '.pdf') return 'pdf'
+  if (extension === '.txt') return 'text'
+  return 'markdown'
 }
 
 function displayPath(root: string, path: string): string {

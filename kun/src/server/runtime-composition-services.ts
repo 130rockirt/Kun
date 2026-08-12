@@ -24,6 +24,7 @@ import {
   buildComputerUseToolProviders,
   buildBrowserUseToolProviders,
   buildOfficeCliToolProviders,
+  createConfiguredOfficeCliRunner,
   buildMusicGenToolProviders,
   buildSpeechGenToolProviders,
   buildVideoGenToolProviders,
@@ -255,11 +256,18 @@ export async function createRuntimeServices(
 	      })
 	  }, 60 * 60 * 1_000)
 	  attachmentPruneTimer.unref()
-	  let memoryStore = createPersistentMemoryStore(core.activeOptions, nowIso)
+  let memoryStore = createPersistentMemoryStore(core.activeOptions, nowIso)
+  const officeCliRunner = createConfiguredOfficeCliRunner({
+    binaryPath: process.env.KUN_OFFICECLI_BINARY,
+    profileDir: join(core.activeOptions.dataDir, 'officecli-profile')
+  })
   const knowledgeBaseService = new KnowledgeBaseService({
     dataDir: core.activeOptions.dataDir,
     threadStore,
     nowIso
+  })
+  knowledgeBaseService.setOfficeExtractorDependencies({
+    ...(officeCliRunner ? { officeCli: officeCliRunner } : {})
   })
 	  const migrationService = new RuntimeMigrationService({
 	    rootDir: join(core.activeOptions.dataDir, 'migrations', 'exports'),
@@ -348,7 +356,8 @@ export async function createRuntimeServices(
   }
   const officeCliProviders = buildOfficeCliToolProviders({
     binaryPath: process.env.KUN_OFFICECLI_BINARY,
-    profileDir: join(core.activeOptions.dataDir, 'officecli-profile')
+    profileDir: join(core.activeOptions.dataDir, 'officecli-profile'),
+    ...(officeCliRunner ? { runner: officeCliRunner } : {})
   })
 	  const taskGraphTool = createTaskGraphTool({ rootDir: join(core.activeOptions.dataDir, 'task-graphs') })
 	  let baseToolProviders = [

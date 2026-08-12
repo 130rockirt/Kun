@@ -185,6 +185,7 @@ export function KnowledgeBasePicker(): ReactElement {
                     <span className="min-w-0 flex-1">
                       <span className="block truncate text-[14px] font-medium text-ds-ink">{workspaceLabelFromPath(root)}</span>
                       <span className="block truncate text-[11px] text-ds-faint">{root}</span>
+                      {status ? <StatusSummary status={status} /> : null}
                     </span>
                   </button>
                   {mount && status ? <StatusBadge status={status} /> : null}
@@ -231,6 +232,25 @@ export function KnowledgeBasePicker(): ReactElement {
         </div>
       ) : null}
     </div>
+  )
+}
+
+function StatusSummary({ status }: { status: KnowledgeBaseIndexStatus }): ReactElement | null {
+  const { t } = useTranslation('common')
+  if (!status.availableDocumentCount && !status.unavailableDocumentCount) return null
+  const officeFormats = Object.entries(status.formatCounts ?? {})
+    .filter(([format, count]) => ['doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx'].includes(format) && count > 0)
+    .map(([format, count]) => `${format.toUpperCase()} ${count}`)
+    .join(' · ')
+  return (
+    <span className="mt-0.5 block truncate text-[10px] text-ds-faint" title={status.diagnostics?.join('\n')}>
+      {t('knowledgeBaseIndexSummary', {
+        available: status.availableDocumentCount ?? 0,
+        unavailable: status.unavailableDocumentCount ?? 0
+      })}
+      {status.truncatedDocumentCount ? ` · ${t('knowledgeBaseTruncatedCount', { count: status.truncatedDocumentCount })}` : ''}
+      {officeFormats ? ` · ${officeFormats}` : ''}
+    </span>
   )
 }
 

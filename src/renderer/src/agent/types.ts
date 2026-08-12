@@ -257,6 +257,11 @@ export type KnowledgeBaseIndexStatus = {
   state: 'pending' | 'indexing' | 'ready' | 'stale' | 'unavailable' | 'error'
   documentCount: number
   nodeCount: number
+  availableDocumentCount?: number
+  unavailableDocumentCount?: number
+  truncatedDocumentCount?: number
+  formatCounts?: Record<string, number>
+  diagnostics?: string[]
   lastIndexedAt?: string
   error?: string
 }

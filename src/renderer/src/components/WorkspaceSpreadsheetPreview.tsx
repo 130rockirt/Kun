@@ -9,6 +9,7 @@ import {
   buildSpreadsheetWindow,
   readSpreadsheetRange
 } from './workspace-spreadsheet-model'
+import { subscribeKnowledgeSourceNavigation } from '../lib/knowledge-source-navigation'
 
 type SheetJs = typeof import('xlsx')
 
@@ -59,7 +60,7 @@ export function WorkspaceSpreadsheetPreview({
       .then(async (xlsx) => {
         if (result.renderFormat === 'xls') {
           const codepage = await import('xlsx/dist/cpexcel.full.mjs')
-          xlsx.set_cptable(codepage.default)
+          xlsx.set_cptable(codepage)
         }
         const workbook = xlsx.read(result.data, {
           type: 'array',
@@ -171,6 +172,22 @@ export function WorkspaceSpreadsheetPreview({
       setColumnStart(range.s.c)
     }
   }
+
+  useEffect(() => subscribeKnowledgeSourceNavigation(result.path, (location) => {
+    if (location.kind !== 'spreadsheet' || !parsed) return false
+    const nextSheetIndex = parsed.workbook.SheetNames.indexOf(location.sheetName)
+    if (nextSheetIndex < 0) return false
+    let range
+    try {
+      range = parsed.xlsx.utils.decode_range(location.range)
+    } catch {
+      return false
+    }
+    setSheetIndex(nextSheetIndex)
+    setRowStart(range.s.r)
+    setColumnStart(range.s.c)
+    return true
+  }), [parsed, result.path])
 
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-ds-surface-subtle">
