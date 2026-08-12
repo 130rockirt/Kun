@@ -47,7 +47,18 @@ describe('queued-message-persistence', () => {
       }
     ], storage)
     saveQueuedMessagesForThread('thread-b', [
-      { id: 'q-2', text: 'review the result', deliveryState: 'pending' }
+      {
+        id: 'q-2',
+        text: 'review the result',
+        deliveryState: 'pending',
+        writeContext: {
+          workspaceRoot: '/workspace/deepseek-gui',
+          activeFilePath: '/workspace/deepseek-gui/draft.md',
+          documentEpoch: 4,
+          contentRevision: 2,
+          threadId: 'thread-b'
+        }
+      }
     ], storage)
 
     expect(queuedMessagesForThread('thread-a', storage)).toEqual([
@@ -65,7 +76,17 @@ describe('queued-message-persistence', () => {
       })
     ])
     expect(queuedMessagesForThread('thread-b', storage)).toEqual([
-      expect.objectContaining({ id: 'q-2', deliveryState: 'pending' })
+      expect.objectContaining({
+        id: 'q-2',
+        deliveryState: 'pending',
+        writeContext: {
+          workspaceRoot: '/workspace/deepseek-gui',
+          activeFilePath: '/workspace/deepseek-gui/draft.md',
+          documentEpoch: 4,
+          contentRevision: 2,
+          threadId: 'thread-b'
+        }
+      })
     ])
   })
 
@@ -146,6 +167,36 @@ describe('queued-message-persistence', () => {
     expect(readQueuedMessageRegistry(storage)).toEqual(emptyQueuedMessageRegistry())
 
     storage.setItem('kun.queuedMessages.v1', '{broken')
+    expect(readQueuedMessageRegistry(storage)).toEqual(emptyQueuedMessageRegistry())
+
+    storage.setItem('kun.queuedMessages.v1', JSON.stringify({
+      version: 1,
+      threads: {
+        'thread-a': {
+          messages: [{ id: 'q-bad', text: 'unsafe', writeContext: { threadId: 'thread-a' } }]
+        }
+      }
+    }))
+    expect(readQueuedMessageRegistry(storage)).toEqual(emptyQueuedMessageRegistry())
+
+    storage.setItem('kun.queuedMessages.v1', JSON.stringify({
+      version: 1,
+      threads: {
+        'thread-a': {
+          messages: [{
+            id: 'q-wrong-thread',
+            text: 'unsafe',
+            writeContext: {
+              workspaceRoot: '/workspace/deepseek-gui',
+              activeFilePath: '/workspace/deepseek-gui/draft.md',
+              documentEpoch: 4,
+              contentRevision: 2,
+              threadId: 'thread-b'
+            }
+          }]
+        }
+      }
+    }))
     expect(readQueuedMessageRegistry(storage)).toEqual(emptyQueuedMessageRegistry())
   })
 })

@@ -42,12 +42,36 @@ function normalizeDesignImagePlacementTarget(
   }
 }
 
+function normalizeWriteContext(
+  value: unknown
+): QueuedUserMessage['writeContext'] | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const source = value as Record<string, unknown>
+  const workspaceRoot = normalizedString(source.workspaceRoot)
+  const activeFilePath = source.activeFilePath === null
+    ? null
+    : normalizedString(source.activeFilePath)
+  const documentEpoch = source.documentEpoch
+  const contentRevision = source.contentRevision
+  const threadId = normalizedString(source.threadId)
+  if (
+    !workspaceRoot || !threadId ||
+    (activeFilePath !== null && !activeFilePath) ||
+    typeof documentEpoch !== 'number' || !Number.isInteger(documentEpoch) || documentEpoch < 0 ||
+    typeof contentRevision !== 'number' || !Number.isInteger(contentRevision) || contentRevision < 0
+  ) return undefined
+  return { workspaceRoot, activeFilePath, documentEpoch, contentRevision, threadId }
+}
+
 function normalizeQueuedMessage(value: unknown): QueuedUserMessage | null {
   if (!value || typeof value !== 'object') return null
   const source = value as Record<string, unknown>
   const id = normalizedString(source.id)
   const text = normalizedString(source.text)
   if (!id || !text) return null
+  const hasWriteContext = source.writeContext !== undefined
+  const writeContext = normalizeWriteContext(source.writeContext)
+  if (hasWriteContext && !writeContext) return null
 
   const deliveryState: QueuedMessageDeliveryState =
     source.deliveryState === 'paused' || source.deliveryState === 'starting' || source.deliveryState === 'in_flight'
@@ -80,6 +104,8 @@ function normalizeQueuedMessage(value: unknown): QueuedUserMessage | null {
   else delete normalized.clientRequestId
   if (source.waitForRuntimeAdmission === true) normalized.waitForRuntimeAdmission = true
   else delete normalized.waitForRuntimeAdmission
+  if (writeContext) normalized.writeContext = writeContext
+  else delete normalized.writeContext
   const placementTarget = normalizeDesignImagePlacementTarget(source.designImagePlacementTarget)
   if (placementTarget) normalized.designImagePlacementTarget = placementTarget
   else delete normalized.designImagePlacementTarget
@@ -120,6 +146,9 @@ export function normalizeQueuedMessageRegistry(raw: unknown): QueuedMessageRegis
     const seenIds = new Set<string>()
     const messages = record.messages.flatMap((message) => {
       const normalized = normalizeQueuedMessage(message)
+      if (normalized?.writeContext && normalized.writeContext.threadId !== threadId) {
+        return []
+      }
       if (!normalized || seenIds.has(normalized.id)) return []
       seenIds.add(normalized.id)
       return [normalized]

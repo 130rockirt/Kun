@@ -72,6 +72,7 @@ import {
   type ComposerFileReference
 } from '../../lib/composer-file-references'
 import { filesUnderDirectory } from '../../lib/workspace-file-index'
+import { composeWritePrompt } from '../../write/quoted-selection'
 import type { ModelProviderModelGroup } from '@shared/kun-gui-api'
 
 const DEEPSEEK_PROVIDER_GROUP = {
@@ -378,6 +379,38 @@ describe('FloatingComposer queued guidance', () => {
       expect(html).toContain('aria-label="Guide"')
       expect(html).toContain('disabled=""')
       expect(html).toContain('Only plain-text or image follow-ups can guide')
+    } finally {
+      await i18n.changeLanguage(previousLanguage)
+    }
+  })
+
+  it('shows only the user input for a queued Write prompt', async () => {
+    const previousLanguage = i18n.language
+    await i18n.changeLanguage('en')
+    const prompt = composeWritePrompt('Make the title shorter.', [], {
+      workspaceRoot: '/workspace/deepseek-gui',
+      activeFilePath: '/workspace/deepseek-gui/draft.md'
+    })
+    try {
+      const html = renderToStaticMarkup(createElement(FloatingComposerQueuedMessages, {
+        messages: [{
+          id: 'q-write',
+          text: prompt,
+          writeContext: {
+            workspaceRoot: '/workspace/deepseek-gui',
+            activeFilePath: '/workspace/deepseek-gui/draft.md',
+            documentEpoch: 4,
+            contentRevision: 2,
+            threadId: 'thr_write'
+          }
+        }],
+        onGuide: () => undefined,
+        onRemove: () => undefined
+      }))
+
+      expect(html).toContain('Make the title shorter.')
+      expect(html).not.toContain('/workspace/deepseek-gui')
+      expect(html).toContain('disabled=""')
     } finally {
       await i18n.changeLanguage(previousLanguage)
     }

@@ -20,6 +20,7 @@ import {
 import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import { queuedMessageGuidancePayload } from '../../store/queued-message-guidance'
+import { parseWritePromptForDisplay } from '../../write/quoted-selection'
 
 const QUEUED_MENU_WIDTH = 176
 const QUEUED_MENU_HEIGHT = 48
@@ -104,6 +105,16 @@ export function canEditQueuedComposerMessage(message: QueuedComposerMessage): bo
     !message.attachments?.length &&
     canGuideQueuedComposerMessage(message)
   )
+}
+
+function queuedComposerMessageDisplayText(message: QueuedComposerMessage): string {
+  const displayText = message.displayText?.trim()
+  if (displayText) return displayText
+  if (message.writeContext) {
+    const userInput = parseWritePromptForDisplay(message.text)?.userInput.trim()
+    if (userInput) return userInput
+  }
+  return message.text
 }
 
 type Props = {
@@ -369,7 +380,7 @@ export function FloatingComposerQueuedMessages({
               )}
               <div className="min-w-0 flex-1">
                 <div className="truncate text-[14px] leading-5 text-ds-ink">
-                  {message.displayText ?? message.text}
+                  {queuedComposerMessageDisplayText(message)}
                 </div>
                 {imageCount > 0 ? (
                   <div

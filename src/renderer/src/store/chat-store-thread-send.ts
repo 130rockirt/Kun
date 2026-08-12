@@ -347,12 +347,6 @@ export async function sendThreadMessage(
     const hasPendingActiveTurn = threadHasPendingRuntimeWork(get().blocks)
     if (get().busy || hasPendingActiveTurn) {
       const state = get()
-      // Write keeps a file-identity contract that cannot safely survive a
-      // deferred queue. Plan turns may queue like normal chat messages.
-      if (writeContext) {
-        set({ error: i18n.t('common:composerQueuePlaceholder') })
-        return false
-      }
       const activeThreadId = state.activeThreadId
       const threadSnap = activeThreadId
         ? state.threads.find((thread) => thread.id === activeThreadId)
