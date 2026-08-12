@@ -124,6 +124,7 @@ const LANGUAGE_ALIASES: Record<string, string> = {
 }
 
 const FILE_EXTENSION_LANGUAGES: Record<string, string> = {
+  astro: 'astro',
   bash: 'bash',
   c: 'c',
   cc: 'cpp',
@@ -131,11 +132,21 @@ const FILE_EXTENSION_LANGUAGES: Record<string, string> = {
   cpp: 'cpp',
   cs: 'cs',
   css: 'css',
+  cts: 'ts',
+  csv: 'csv',
+  cxx: 'cpp',
+  dart: 'dart',
   diff: 'diff',
+  env: 'dotenv',
+  fish: 'fish',
   go: 'go',
   h: 'c',
+  hh: 'cpp',
   hpp: 'cpp',
+  hxx: 'cpp',
+  htm: 'html',
   html: 'html',
+  ini: 'ini',
   java: 'java',
   js: 'js',
   json: 'json',
@@ -143,21 +154,28 @@ const FILE_EXTENSION_LANGUAGES: Record<string, string> = {
   jsx: 'jsx',
   kt: 'kotlin',
   kts: 'kotlin',
+  less: 'less',
+  log: 'log',
   lua: 'lua',
   md: 'md',
   mjs: 'js',
+  mts: 'ts',
   patch: 'diff',
   php: 'php',
   ps1: 'powershell',
   psd1: 'powershell',
   psm1: 'powershell',
   py: 'python',
+  pyi: 'python',
   rb: 'ruby',
   rs: 'rust',
+  sass: 'sass',
   scss: 'scss',
   sh: 'shell',
   sql: 'sql',
+  svelte: 'svelte',
   swift: 'swift',
+  svg: 'xml',
   toml: 'toml',
   ts: 'ts',
   tsx: 'tsx',
@@ -169,8 +187,15 @@ const FILE_EXTENSION_LANGUAGES: Record<string, string> = {
 }
 
 const FILE_NAME_LANGUAGES: Record<string, string> = {
+  '.editorconfig': 'properties',
+  '.npmrc': 'properties',
+  '.prettierrc': 'json',
   dockerfile: 'dockerfile',
-  makefile: 'makefile'
+  gemfile: 'ruby',
+  justfile: 'just',
+  makefile: 'makefile',
+  procfile: 'shell',
+  rakefile: 'ruby'
 }
 
 const DOWNLOAD_EXTENSIONS: Record<string, string> = {
@@ -287,6 +312,8 @@ export function languageFromFilePath(path: string): string {
   const fileName = path.split(/[/\\]/).filter(Boolean).pop()?.toLowerCase() ?? ''
   const byName = FILE_NAME_LANGUAGES[fileName]
   if (byName) return byName
+  if (fileName.startsWith('.env.')) return 'dotenv'
+  if (fileName.startsWith('dockerfile.')) return 'dockerfile'
 
   const extension = fileName.includes('.') ? fileName.split('.').pop() ?? '' : ''
   return FILE_EXTENSION_LANGUAGES[extension] ?? ''

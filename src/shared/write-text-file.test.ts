@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
+  isWriteCodeFileExtension,
+  isWriteCodeFileName,
+  isWriteCodeFilePath,
   isWriteImageFileExtension,
   isWriteImageFilePath,
   isWriteOfficeFileExtension,
@@ -23,6 +26,56 @@ describe('write text file helpers', () => {
   it('rejects non-write file extensions', () => {
     expect(isWriteTextFileExtension('.json')).toBe(false)
     expect(isWriteTextFileExtension('.png')).toBe(false)
+  })
+
+  it('classifies common source and configuration files separately from writing text', () => {
+    for (const [path, extension] of [
+      ['/tmp/workspace/app.tsx', '.tsx'],
+      ['/tmp/workspace/config.mts', '.mts'],
+      ['/tmp/workspace/types.pyi', '.pyi'],
+      ['/tmp/workspace/header.hxx', '.hxx'],
+      ['/tmp/workspace/service.py', '.py'],
+      ['/tmp/workspace/config.json', '.json'],
+      ['/tmp/workspace/styles.css', '.css']
+    ]) {
+      expect(isWriteCodeFileExtension(extension)).toBe(true)
+      expect(isWriteCodeFilePath(path)).toBe(true)
+      expect(isWriteWorkspaceFilePath(path)).toBe(true)
+      expect(isWriteTextFilePath(path)).toBe(false)
+    }
+    expect(isWriteCodeFileExtension('.TS')).toBe(true)
+    expect(isWriteCodeFileExtension('.zip')).toBe(false)
+  })
+
+  it('recognizes well-known extensionless and dotfile names case-insensitively', () => {
+    for (const name of [
+      'Dockerfile',
+      'Dockerfile.dev',
+      'Makefile',
+      '.gitignore',
+      '.env',
+      '.env.local'
+    ]) {
+      expect(isWriteCodeFileName(name)).toBe(true)
+      expect(isWriteCodeFilePath(`/tmp/workspace/${name}`)).toBe(true)
+      expect(isWriteWorkspaceFilePath(`/tmp/workspace/${name}`)).toBe(true)
+      expect(isWriteWorkspaceEntry({
+        name,
+        path: `/tmp/workspace/${name}`,
+        type: 'file',
+        ext: ''
+      })).toBe(true)
+    }
+    expect(isWriteCodeFileName('DOCKERFILE')).toBe(true)
+    expect(isWriteCodeFileName('MAKEFILE')).toBe(true)
+  })
+
+  it('keeps Markdown and plain text in the editable writing classification', () => {
+    for (const path of ['/tmp/workspace/brief.md', '/tmp/workspace/notes.TXT']) {
+      expect(isWriteTextFilePath(path)).toBe(true)
+      expect(isWriteCodeFilePath(path)).toBe(false)
+      expect(isWriteWorkspaceFilePath(path)).toBe(true)
+    }
   })
 
   it('accepts common image extensions for preview', () => {
@@ -61,6 +114,28 @@ describe('write text file helpers', () => {
     expect(isWriteWorkspaceFilePath('/tmp/folder/no-ext')).toBe(false)
   })
 
+  it('keeps existing Office and media classifications out of code files', () => {
+    for (const path of [
+      '/tmp/workspace/hero.png',
+      '/tmp/workspace/paper.pdf',
+      '/tmp/workspace/deck.pptx'
+    ]) {
+      expect(isWriteWorkspaceFilePath(path)).toBe(true)
+      expect(isWriteCodeFilePath(path)).toBe(false)
+    }
+  })
+
+  it('rejects unsupported binary archive paths and entries', () => {
+    expect(isWriteCodeFilePath('/tmp/workspace/archive.zip')).toBe(false)
+    expect(isWriteWorkspaceFilePath('/tmp/workspace/archive.zip')).toBe(false)
+    expect(isWriteWorkspaceEntry({
+      name: 'archive.zip',
+      path: '/tmp/workspace/archive.zip',
+      type: 'file',
+      ext: '.zip'
+    })).toBe(false)
+  })
+
   it('allows directories but filters unsupported files from the write tree', () => {
     expect(isWriteWorkspaceEntry({
       name: 'docs',
@@ -97,6 +172,6 @@ describe('write text file helpers', () => {
       path: '/tmp/data.json',
       type: 'file',
       ext: '.json'
-    })).toBe(false)
+    })).toBe(true)
   })
 })

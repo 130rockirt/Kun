@@ -16,6 +16,21 @@ describe('code highlighting languages', () => {
     expect(languageFromFilePath('Module.psd1')).toBe('powershell')
     expect(extensionForLanguage('powershell')).toBe('ps1')
   })
+
+  it('maps Work preview extensions to available bundled grammars', () => {
+    expect(languageFromFilePath('/repo/page.astro')).toBe('astro')
+    expect(languageFromFilePath('/repo/report.csv')).toBe('csv')
+    expect(languageFromFilePath('/repo/settings.env')).toBe('dotenv')
+    expect(languageFromFilePath('/repo/index.htm')).toBe('html')
+    expect(languageFromFilePath('/repo/icon.svg')).toBe('xml')
+    expect(languageFromFilePath('/repo/component.svelte')).toBe('svelte')
+    expect(languageFromFilePath('/repo/Gemfile')).toBe('ruby')
+    expect(languageFromFilePath('/repo/Justfile')).toBe('just')
+    expect(languageFromFilePath('/repo/types.d.mts')).toBe('ts')
+    expect(languageFromFilePath('/repo/stubs.pyi')).toBe('python')
+    expect(languageFromFilePath('/repo/Dockerfile.dev')).toBe('dockerfile')
+    expect(languageFromFilePath('/repo/.env.local')).toBe('dotenv')
+  })
 })
 
 describe('code highlighting cache', () => {

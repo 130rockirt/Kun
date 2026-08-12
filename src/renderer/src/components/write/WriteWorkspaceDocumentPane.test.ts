@@ -20,6 +20,12 @@ vi.mock('../WorkspaceOfficePreview', () => ({
     'data-office-preview-mock': 'true'
   })
 }))
+vi.mock('../WorkspaceCodePreview', () => ({
+  WorkspaceCodePreview: (props: object) => createElement('div', {
+    ...props,
+    'data-code-preview-mock': 'true'
+  })
+}))
 
 const noop = (): void => undefined
 
@@ -210,5 +216,25 @@ describe('WriteWorkspaceDocumentPane focus mode', () => {
       onPresentationViewChange,
       presentationKeyboardActive: false
     })
+  })
+
+  it('renders code files through the inert code preview instead of the writing editor', async () => {
+    await act(async () => {
+      renderer.update(createElement(WriteWorkspaceDocumentPane, {
+        ...paneProps(false, onFocusModeChange),
+        activeFilePath: '/repo/src/main.ts',
+        activeFileIsCode: true,
+        activeFileIsText: false,
+        fileContent: 'export const answer = 42\n',
+        isMarkdown: false,
+        editorVisible: false
+      }))
+    })
+
+    expect(renderer.root.findByProps({ 'data-code-preview-mock': 'true' }).props).toMatchObject({
+      path: '/repo/src/main.ts',
+      content: 'export const answer = 42\n'
+    })
+    expect(renderer.root.findAllByProps({ 'data-office-preview-mock': 'true' })).toHaveLength(0)
   })
 })

@@ -93,4 +93,92 @@ describe('useWriteEditorGroupFileWatches', () => {
     })
     expect(unwatchWorkspaceFile).toHaveBeenCalledWith('watch-1')
   })
+
+  it('refreshes a read-only code document from text watch snapshots', async () => {
+    let onChanged: ((payload: {
+      watchId: string
+      ok: true
+      path: string
+      content: string
+      size: number
+      truncated: boolean
+    }) => void) | undefined
+    const watchWorkspaceFile = vi.fn(async () => ({
+      ok: true as const,
+      watchId: 'watch-code',
+      path: '/work/app.ts',
+      content: 'const baseline = true\n',
+      size: 22,
+      truncated: false,
+      startedAt: '2026-08-13T00:00:00.000Z'
+    }))
+    vi.stubGlobal('window', {
+      kunGui: {
+        watchWorkspaceFile,
+        unwatchWorkspaceFile: vi.fn(async () => true),
+        onWorkspaceFileChanged: vi.fn((listener: typeof onChanged) => {
+          onChanged = listener
+          return vi.fn()
+        })
+      }
+    })
+    vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+    const document = createWriteDocumentSession({
+      path: '/work/app.ts',
+      kind: 'code',
+      fileContent: 'const initial = true\n',
+      persistedContent: 'const initial = true\n'
+    })
+    useWriteWorkspaceStore.setState({
+      workspaceRoot: '/work',
+      documentsByPath: { '/work/app.ts': document },
+      editorLayout: {
+        version: 1,
+        orientation: 'single',
+        ratio: 0.5,
+        focusedGroupId: 'primary',
+        groups: [{
+          id: 'primary',
+          tabs: [{ path: '/work/app.ts', viewMode: 'source' }],
+          activePath: '/work/app.ts'
+        }]
+      }
+    })
+
+    let renderer!: ReactTestRenderer
+    await act(async () => {
+      renderer = create(createElement(WatchHarness))
+      await flushPromises()
+    })
+
+    expect(useWriteWorkspaceStore.getState().documentsByPath['/work/app.ts']).toMatchObject({
+      kind: 'code',
+      fileContent: 'const baseline = true\n',
+      persistedContent: 'const baseline = true\n',
+      saveStatus: 'saved'
+    })
+
+    await act(async () => {
+      onChanged?.({
+        watchId: 'watch-code',
+        ok: true,
+        path: '/work/app.ts',
+        content: 'const refreshed = true\n',
+        size: 23,
+        truncated: false
+      })
+      await flushPromises()
+    })
+
+    expect(useWriteWorkspaceStore.getState().documentsByPath['/work/app.ts']).toMatchObject({
+      kind: 'code',
+      fileContent: 'const refreshed = true\n',
+      persistedContent: 'const refreshed = true\n',
+      fileSize: 23,
+      fileTruncated: false,
+      saveStatus: 'saved'
+    })
+
+    await act(async () => renderer.unmount())
+  })
 })

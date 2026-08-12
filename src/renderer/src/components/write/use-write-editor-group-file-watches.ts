@@ -85,16 +85,35 @@ export function useWriteEditorGroupFileWatches({ workspaceRoot, editorLayout }: 
           useWriteWorkspaceStore.setState((current) => {
             const key = writeDocumentKey(path)
             const latest = current.documentsByPath[key]
-            if (!latest || latest.kind !== 'text') return {}
+            if (!latest || (latest.kind !== 'text' && latest.kind !== 'code')) return {}
             if (snapshot.message) {
               const documentsByPath = {
                 ...current.documentsByPath,
-                [key]: { ...latest, fileError: snapshot.message, saveStatus: 'error' as const }
+                [key]: {
+                  ...latest,
+                  fileError: snapshot.message,
+                  saveStatus: latest.kind === 'text' ? 'error' as const : 'saved' as const
+                }
               }
               return { documentsByPath, ...projectFocusedDocument(current.editorLayout, documentsByPath) }
             }
             if (typeof snapshot.content !== 'string') return {}
             const content = snapshot.content
+            if (latest.kind === 'code') {
+              const documentsByPath = {
+                ...current.documentsByPath,
+                [key]: {
+                  ...latest,
+                  fileContent: content,
+                  persistedContent: content,
+                  fileSize: snapshot.size ?? content.length,
+                  fileTruncated: snapshot.truncated === true,
+                  fileError: null,
+                  saveStatus: 'saved' as const
+                }
+              }
+              return { documentsByPath, ...projectFocusedDocument(current.editorLayout, documentsByPath) }
+            }
             if (isWriteWorkspaceSaveContentPending(workspaceRoot, path, content)) return {}
             const dirty = latest.fileContent !== latest.persistedContent
             if (dirty && content !== latest.persistedContent && content !== latest.fileContent) {

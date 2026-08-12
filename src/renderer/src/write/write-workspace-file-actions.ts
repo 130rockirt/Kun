@@ -1,5 +1,6 @@
 import i18n from '../i18n'
 import {
+  isWriteCodeFilePath,
   isWriteImageFilePath,
   isWriteOfficeFilePath,
   isWritePdfFilePath,
@@ -38,6 +39,12 @@ import {
   writeDocumentKey
 } from './write-editor-layout'
 import { pathsUnderRenamedEntry } from './write-editor-group-actions'
+import {
+  ensureMarkdownRenameExtension,
+  projectRenamedDocumentKind,
+  renamedWritingDocumentKind,
+  withoutLoadingDirs
+} from './write-workspace-path-kinds'
 
 type WriteFileActions = Pick<
   WriteWorkspaceState,
@@ -60,32 +67,6 @@ type WriteFileActionContext = {
 
 function formatActionError(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
-}
-
-function extensionFromWritePath(path: string): string {
-  const normalized = path.replaceAll('\\', '/')
-  const slash = normalized.lastIndexOf('/')
-  const dot = normalized.lastIndexOf('.')
-  return dot > slash ? normalized.slice(dot) : ''
-}
-
-function ensureMarkdownRenameExtension(path: string, newName: string): string {
-  if (extensionFromWritePath(newName)) return newName
-  const currentExtension = extensionFromWritePath(path)
-  return /^(?:\.md|\.markdown|\.mdx)$/i.test(currentExtension)
-    ? `${newName}${currentExtension.toLowerCase()}`
-    : newName
-}
-
-function withoutLoadingDirs(
-  loadingDirs: Record<string, boolean>,
-  keys: Array<string | undefined>
-): Record<string, boolean> {
-  const next = { ...loadingDirs }
-  for (const key of keys) {
-    if (key) delete next[key]
-  }
-  return next
 }
 
 function openDocumentState(
@@ -450,6 +431,26 @@ export function createWriteFileActions({
           return
         }
 
+        if (isWriteCodeFilePath(path)) {
+          const result = await window.kunGui.readWorkspaceFile({ path, workspaceRoot })
+          if (!fileRequestIsCurrent(groupId, generation, workspaceRoot)) return
+          if (!result.ok) {
+            set({ fileLoading: false, fileError: result.message })
+            return
+          }
+          rememberActiveFile(workspaceRoot, result.path)
+          set((state) => openDocumentState(state, createWriteDocumentSession({
+            path: result.path,
+            kind: 'code',
+            fileContent: result.content,
+            persistedContent: result.content,
+            fileSize: result.size,
+            fileTruncated: result.truncated,
+            documentEpoch: nextWriteDocumentEpoch(state.documentEpoch)
+          }), groupId, 'source'))
+          return
+        }
+
         const result = await window.kunGui.readWorkspaceFile({ path, workspaceRoot })
         if (!fileRequestIsCurrent(groupId, generation, workspaceRoot)) return
         if (!result.ok) {
@@ -531,15 +532,34 @@ export function createWriteFileActions({
     renameEntry: async (workspaceRoot, path, newName) => {
       cancelExternalSyncAnimation()
       const nextName = ensureMarkdownRenameExtension(path, newName.trim())
+      const plannedPath = `${writeDirnameFromPath(path)}/${nextName}`
+      const renamedDocument = get().documentsByPath[writeDocumentKey(path)]
+      const textToCodeRename = renamedDocument?.kind === 'text' && isWriteCodeFilePath(plannedPath)
+      if (textToCodeRename && renamedDocument.saveStatus !== 'saved') {
+        const saved = await get().saveDocument(workspaceRoot, path)
+        if (!saved || !workspaceIsCurrent(workspaceRoot)) return null
+      }
+      if (textToCodeRename) {
+        set((state) => projectRenamedDocumentKind(state, path, 'text', 'code'))
+      }
+      const renameLocked = textToCodeRename &&
+        get().documentsByPath[writeDocumentKey(path)]?.kind === 'code'
+      const restoreRenameLock = (): void => {
+        if (renameLocked && workspaceIsCurrent(workspaceRoot)) {
+          set((state) => projectRenamedDocumentKind(state, path, 'code', 'text'))
+        }
+      }
       let result: Awaited<ReturnType<typeof window.kunGui.renameWorkspaceEntry>>
       try {
         result = await window.kunGui.renameWorkspaceEntry({ workspaceRoot, path, newName: nextName })
       } catch (error) {
+        restoreRenameLock()
         if (workspaceIsCurrent(workspaceRoot)) set({ fileError: formatActionError(error) })
         return null
       }
       if (!workspaceIsCurrent(workspaceRoot)) return null
       if (!result.ok) {
+        restoreRenameLock()
         set({ fileError: result.message })
         return null
       }
@@ -579,13 +599,23 @@ export function createWriteFileActions({
           const epoch = nextPath === document.path
             ? document.documentEpoch
             : nextWriteDocumentEpoch(document.documentEpoch)
+          const kind = renamedWritingDocumentKind(document.kind, nextPath)
+          const becameCode = kind === 'code' && (
+            document.kind === 'text' || (renameLocked && pathsEqual(document.path, result.previousPath))
+          )
           documentsByPath[writeDocumentKey(nextPath)] = {
             ...document,
             path: nextPath,
+            kind,
             documentEpoch: epoch,
-            pendingAgentReview: document.pendingAgentReview
+            saveStatus: becameCode ? 'saved' : document.saveStatus,
+            pendingAgentReview: becameCode
+              ? null
+              : document.pendingAgentReview
               ? { ...document.pendingAgentReview, filePath: nextPath, documentEpoch: epoch }
-              : null
+              : null,
+            reviewActive: becameCode ? false : document.reviewActive,
+            selection: becameCode ? emptySelection() : document.selection
           }
         }
         persistWriteEditorLayout(workspaceRoot, editorLayout)

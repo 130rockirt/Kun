@@ -1,8 +1,12 @@
 import type { ReactElement, ReactNode } from 'react'
-import { ChevronDown, ChevronRight, FileText, FilePlus2, Folder, FolderPlus, FolderSearch, Image, Pencil, RefreshCw, Trash2 } from 'lucide-react'
+import { ChevronDown, ChevronRight, FileCode2, FileText, FilePlus2, Folder, FolderPlus, FolderSearch, Image, Pencil, RefreshCw, Trash2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import type { WorkspaceEntry } from '@shared/workspace-file'
-import { isWriteImageFileExtension, isWriteWorkspaceEntry } from '@shared/write-text-file'
+import {
+  isWriteCodeFileName,
+  isWriteImageFileExtension,
+  isWriteWorkspaceEntry
+} from '@shared/write-text-file'
 import {
   SidebarIconButton,
   SidebarSectionHeader,
@@ -62,6 +66,10 @@ function isImageEntry(entry: WorkspaceEntry): boolean {
   return entry.type === 'file' && isWriteImageFileExtension(entry.ext)
 }
 
+function isCodeEntry(entry: WorkspaceEntry): boolean {
+  return entry.type === 'file' && isWriteCodeFileName(entry.name)
+}
+
 type TreeActionButtonProps = {
   title: string
   children: ReactNode
@@ -118,6 +126,7 @@ export function WriteFileTree({
       const loading = isDirectory && loadingDirs[entry.path]
       const selected = !isDirectory && selectedFilePath === entry.path
       const imageEntry = isImageEntry(entry)
+      const codeEntry = isCodeEntry(entry)
       const row = (
         <div key={entry.path}>
           <SidebarTreeRow
@@ -182,6 +191,8 @@ export function WriteFileTree({
               <Folder className="h-3.5 w-3.5 shrink-0 text-ds-muted" strokeWidth={1.75} />
             ) : imageEntry ? (
               <Image className={`h-3.5 w-3.5 shrink-0 ${selected ? 'text-accent' : 'text-emerald-600/75 dark:text-emerald-300/80'}`} strokeWidth={1.8} />
+            ) : codeEntry ? (
+              <FileCode2 className={`h-3.5 w-3.5 shrink-0 ${selected ? 'text-accent' : 'text-sky-600/75 dark:text-sky-300/80'}`} strokeWidth={1.8} />
             ) : (
               <FileText className={`h-3.5 w-3.5 shrink-0 ${selected ? 'text-accent' : 'text-ds-faint/90'}`} strokeWidth={1.8} />
             )}

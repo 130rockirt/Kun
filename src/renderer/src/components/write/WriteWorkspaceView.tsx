@@ -199,8 +199,11 @@ export function WriteWorkspaceView({
   const activeFileIsImage = activeFileKind === 'image'
   const activeFileIsPdf = activeFileKind === 'pdf'
   const activeFileIsOffice = activeFileKind === 'office'
+  const activeFileIsCode = activeFileKind === 'code'
   const activeFileIsText = activeFileKind === 'text'
-  const isMarkdown = activeFilePath && activeFileIsText ? isMarkdownFile(activeFilePath) : true
+  const isMarkdown = activeFileIsCode
+    ? false
+    : activeFilePath && activeFileIsText ? isMarkdownFile(activeFilePath) : true
   const isPresentationSource = activeFileIsText && isPresentationMarkdownPath(activeFilePath)
   const renderSafety = getWriteRenderSafety({
     isMarkdown,
@@ -487,6 +490,7 @@ export function WriteWorkspaceView({
         activeFileIsImage={activeFileIsImage}
         activeFileIsPdf={activeFileIsPdf}
         activeFileIsOffice={activeFileIsOffice}
+        activeFileIsCode={activeFileIsCode}
         activeFileIsText={activeFileIsText}
         activeFileLabel={activeFileLabel}
         activeFileName={activeFileName}

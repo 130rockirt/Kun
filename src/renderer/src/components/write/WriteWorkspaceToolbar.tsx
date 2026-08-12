@@ -32,6 +32,7 @@ type Props = {
   activeFileIsImage: boolean
   activeFileIsPdf?: boolean
   activeFileIsOffice?: boolean
+  activeFileIsCode?: boolean
   activeFileIsText: boolean
   activeFileLabel: string
   activeFileName: string
@@ -70,6 +71,7 @@ export function WriteWorkspaceToolbar({
   activeFileIsImage,
   activeFileIsPdf = false,
   activeFileIsOffice = false,
+  activeFileIsCode = false,
   activeFileIsText,
   activeFileLabel,
   activeFileName,
@@ -102,7 +104,7 @@ export function WriteWorkspaceToolbar({
   setPreviewMode
 }: Props): ReactElement {
   const { t } = useTranslation('common')
-  if (activeFileIsPdf || activeFileIsOffice) {
+  if (activeFileIsPdf || activeFileIsOffice || activeFileIsCode) {
     return (
       <div className={embedded ? 'shrink-0' : `ds-stage-inset shrink-0 -mr-3 sm:-mr-4 md:-mr-6 lg:-mr-8 ${leftSidebarCollapsed ? 'ds-window-controls-safe-inset' : '-ml-3 sm:-ml-4 md:-ml-6 lg:-ml-8'}`}>
         <header className={`ds-topbar-surface write-pdf-topbar relative z-10 flex min-h-[52px] w-full items-stretch overflow-visible ${embedded ? 'rounded-none border-x-0 border-t-0' : 'mt-3 rounded-[18px]'}`}>
@@ -120,7 +122,9 @@ export function WriteWorkspaceToolbar({
                 />
               ) : null}
               <span className="write-pdf-topbar-file-icon">
-                <FileText className="h-4 w-4" strokeWidth={1.9} />
+                {activeFileIsCode
+                  ? <FileCode2 className="h-4 w-4" strokeWidth={1.9} />
+                  : <FileText className="h-4 w-4" strokeWidth={1.9} />}
               </span>
               <div className="min-w-0 flex-1 leading-none">
                 <div className="truncate text-[15px] font-semibold text-ds-ink">
@@ -137,7 +141,9 @@ export function WriteWorkspaceToolbar({
               <span>
                 {activeFileIsOffice
                   ? t('writeOfficePreview')
-                  : t('writePdfPreview')}
+                  : activeFileIsCode
+                    ? t('writeModeSource')
+                    : t('writePdfPreview')}
               </span>
               <span className="write-pdf-topbar-dot" aria-hidden="true" />
               <span>{t('writeReadOnly')}</span>

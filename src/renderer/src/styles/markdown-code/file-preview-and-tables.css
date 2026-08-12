@@ -112,6 +112,21 @@
   user-select: none;
 }
 
+.ds-file-preview-line-numbers {
+  min-width: 3.25rem;
+  margin: 0;
+  padding: 0 0.75rem;
+  border: 0;
+  background: transparent;
+  color: var(--ds-text-faint);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  line-height: var(--ds-file-preview-row-height);
+  text-align: right;
+  user-select: none;
+  white-space: pre;
+}
+
 .ds-file-preview-line-number.is-active {
   color: var(--ds-accent);
   background: color-mix(in srgb, var(--ds-accent-soft) 62%, transparent);

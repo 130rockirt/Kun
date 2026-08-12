@@ -10,7 +10,7 @@ import type { WriteRecentEdit } from './recent-edits'
 
 export type WritePreviewMode = 'rich' | 'source' | 'live' | 'preview'
 export type WriteSaveStatus = 'saved' | 'dirty' | 'saving' | 'error'
-export type WriteActiveFileKind = 'text' | 'image' | 'pdf' | 'office'
+export type WriteActiveFileKind = 'text' | 'code' | 'image' | 'pdf' | 'office'
 export type WriteEditorGroupId = 'primary' | 'secondary'
 export type WriteEditorLayoutOrientation = 'single' | 'horizontal' | 'vertical'
 

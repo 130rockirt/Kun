@@ -98,7 +98,9 @@ export function WriteEditorGroupContent({
   const path = document?.path ?? requestedPath
   const kind = document?.kind ?? null
   const content = document?.fileContent ?? ''
-  const markdown = path && kind === 'text' ? isMarkdownFile(path) : true
+  const markdown = kind === 'code'
+    ? false
+    : path && kind === 'text' ? isMarkdownFile(path) : true
   const renderSafety = getWriteRenderSafety({
     isMarkdown: markdown,
     contentLength: content.length,
@@ -128,6 +130,7 @@ export function WriteEditorGroupContent({
         activeFileIsImage={kind === 'image'}
         activeFileIsPdf={kind === 'pdf'}
         activeFileIsOffice={kind === 'office'}
+        activeFileIsCode={kind === 'code'}
         activeFileIsText={kind === 'text'}
         fileLoading={Boolean(requestedPath && !document) || document?.fileLoading === true}
         fileContent={content}

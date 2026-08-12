@@ -15,6 +15,7 @@ import { WriteWorkspaceStart } from './WriteWorkspaceStart'
 import { WriteImagePreview } from './WriteImagePreview'
 import { WritePdfViewer } from './WritePdfViewer'
 import { WorkspaceOfficePreview } from '../WorkspaceOfficePreview'
+import { WorkspaceCodePreview } from '../WorkspaceCodePreview'
 import type {
   WorkspaceOfficePreviewSuccess,
   WorkspacePresentationViewReference,
@@ -32,6 +33,7 @@ type Props = {
   activeFileIsImage: boolean
   activeFileIsPdf: boolean
   activeFileIsOffice?: boolean
+  activeFileIsCode?: boolean
   activeFileIsText: boolean
   fileLoading: boolean
   fileContent: string
@@ -95,6 +97,7 @@ export function WriteWorkspaceDocumentPane({
   activeFileIsImage,
   activeFileIsPdf,
   activeFileIsOffice = false,
+  activeFileIsCode = false,
   activeFileIsText,
   fileLoading,
   fileContent,
@@ -253,6 +256,29 @@ export function WriteWorkspaceDocumentPane({
     return (
       <div className="flex h-full min-h-[320px] items-center justify-center px-8 text-center text-[13px] leading-6 text-ds-muted">
         {officeRefreshError ?? t('filePreviewLoading')}
+      </div>
+    )
+  }
+
+  if (activeFileIsCode) {
+    return (
+      <div className="flex h-full min-h-0 min-w-0 flex-col">
+        {renderSafety.notice !== 'none' ? (
+          <div className="shrink-0 border-b border-amber-200/80 bg-amber-50/90 px-5 py-3 text-[12.5px] leading-5 text-amber-900 dark:border-amber-800/60 dark:bg-amber-950/35 dark:text-amber-100 sm:px-6">
+            <div className="font-semibold">{fileGuardMessage}</div>
+            {fileGuardDetail ? (
+              <div className="mt-1 text-amber-800/90 dark:text-amber-100/90">{fileGuardDetail}</div>
+            ) : null}
+          </div>
+        ) : null}
+        <WorkspaceCodePreview
+          path={activeFilePath}
+          content={fileContent}
+          className="min-h-0 flex-1"
+          limitMessage={renderSafety.notice === 'none'
+            ? t('writeLargeFileTruncated')
+            : undefined}
+        />
       </div>
     )
   }
