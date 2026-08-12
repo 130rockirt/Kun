@@ -7,6 +7,7 @@ import type {
 import { useTranslation } from 'react-i18next'
 import type {
   WriteDocumentSession,
+  WorkWhiteboard,
   WritePreviewMode
 } from '../../write/write-workspace-store'
 import { getWriteRenderSafety } from '../../write/write-render-safety'
@@ -14,6 +15,7 @@ import type { WriteRecentEdit } from '../../write/recent-edits'
 import type { WriteRichEditorHandle } from '../../write/tiptap/WriteRichEditor'
 import type { WriteEditorSelectionState, WriteMarkdownEditorHandle } from './WriteMarkdownEditor'
 import { WriteWorkspaceDocumentPane } from './WriteWorkspaceDocumentPane'
+import { WorkWhiteboardSurface } from './WorkWhiteboardSurface'
 import {
   isMarkdownFile,
   useDebouncedValue,
@@ -22,6 +24,7 @@ import {
 
 type Props = {
   document: WriteDocumentSession | undefined
+  whiteboard?: WorkWhiteboard
   requestedPath: string | null
   viewMode: WritePreviewMode
   workspaceRoot: string
@@ -39,7 +42,9 @@ type Props = {
   onFocusModeChange: (active: boolean) => void
   onFocus: () => void
   onAskAssistant: (prompt: string) => void
+  onOpenWorkspaceFile?: (path: string) => void
   onCreateDraft: () => void
+  onCreateWhiteboard?: () => void
   onPickWorkspace: () => void
   onRefreshWorkspace: () => void
   onContentChange: (content: string) => void
@@ -47,7 +52,7 @@ type Props = {
   onSelectionChange: (selection: WriteEditorSelectionState) => void
   onSaveShortcut: () => void
   onImagePasteSaved: () => void
-  onImagePasteError: (message: string) => void
+  onImagePasteError: (message: string | null) => void
   onPresentationViewChange: (
     view: WorkspacePresentationViewReference | null,
     source: WorkspacePresentationViewSource
@@ -59,6 +64,7 @@ type Props = {
 
 export function WriteEditorGroupContent({
   document,
+  whiteboard,
   requestedPath,
   viewMode,
   workspaceRoot,
@@ -76,7 +82,9 @@ export function WriteEditorGroupContent({
   onFocusModeChange,
   onFocus,
   onAskAssistant,
+  onOpenWorkspaceFile,
   onCreateDraft,
+  onCreateWhiteboard,
   onPickWorkspace,
   onRefreshWorkspace,
   onContentChange,
@@ -121,6 +129,30 @@ export function WriteEditorGroupContent({
   const resolvedMarkdownRef = markdownHandleRef ?? localMarkdownRef
 
   const stableRecentEdits = useMemo(() => recentEdits, [recentEdits])
+
+  if (whiteboard) {
+    return (
+      <div className="min-h-0 min-w-0 flex-1" onPointerDown={onFocus}>
+        <WorkWhiteboardSurface
+          workspaceRoot={whiteboard.workspaceRoot || workspaceRoot}
+          boardId={whiteboard.id}
+          activeThreadId={whiteboard.threadId}
+          writable={focused}
+          title={whiteboard.title}
+          sourcePath={whiteboard.sourcePath}
+          workflowId={whiteboard.workflowId}
+          childId={whiteboard.childId}
+          phase={whiteboard.phase}
+          outputPath={whiteboard.outputPath}
+          onActivate={onFocus}
+          onRequestAssistant={onAskAssistant}
+          onPptProjectionOpenRequested={onFocus}
+          onOpenOutput={onOpenWorkspaceFile}
+          onError={onImagePasteError}
+        />
+      </div>
+    )
+  }
 
   return (
     <div className="min-h-0 min-w-0 flex-1" onPointerDown={onFocus}>
@@ -174,6 +206,7 @@ export function WriteEditorGroupContent({
         previewPaneRef={previewPaneRef}
         onAskAssistant={onAskAssistant}
         onCreateDraft={onCreateDraft}
+        onCreateWhiteboard={onCreateWhiteboard}
         onPickWorkspace={onPickWorkspace}
         onRefreshWorkspace={onRefreshWorkspace}
         onContentChange={onContentChange}

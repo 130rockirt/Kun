@@ -4,7 +4,10 @@ import type { WorkspaceFileTarget } from '@shared/workspace-file'
 import type { AppRoute } from '../store/chat-store-types'
 import { removeBrowserStorageItem } from '../lib/browser-storage'
 import { WORKSPACE_FILE_PREVIEW_EVENT, type WorkspaceFilePreviewDetail } from '../lib/workspace-file-preview'
-import { CODE_CANVAS_OPEN_REQUEST_EVENT } from '../lib/code-canvas-panel-event'
+import {
+  CODE_CANVAS_OPEN_REQUEST_EVENT,
+  canvasOpenRequestDetail
+} from '../lib/code-canvas-panel-event'
 import {
   BUILTIN_RIGHT_PANEL_IDS,
   type RightPanelMode
@@ -220,7 +223,8 @@ export function useWorkbenchLayout({
   }, [ensureInitialCodePanelWidth, workspaceRoot])
 
   useEffect(() => {
-    const onCanvasOpenRequest = (): void => {
+    const onCanvasOpenRequest = (event: Event): void => {
+      if (canvasOpenRequestDetail(event)?.target === 'write') return
       ensureInitialCodePanelWidth()
       setCodeRightTabs((current) => openCodeRightTab(current, BUILTIN_RIGHT_PANEL_IDS.canvas))
     }

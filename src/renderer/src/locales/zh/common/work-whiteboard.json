@@ -1,0 +1,20 @@
+{
+  "workWhiteboardPhaseBlank": "白板",
+  "workWhiteboardPhaseDirections": "方向评审",
+  "workWhiteboardPhaseReview": "逐页评审",
+  "workWhiteboardPhaseComplete": "已完成导出",
+  "workWhiteboardSource": "来源：{{name}}",
+  "workWhiteboardActivate": "激活白板",
+  "workWhiteboardInactiveHint": "激活这个编辑器组后即可编辑白板。",
+  "workWhiteboardLeaseHint": "另一块白板正在编辑中，切换到这里后继续。",
+  "workWhiteboardRegenerateDirections": "重新生成方向",
+  "workWhiteboardAdoptDirection": "采用选中方向并继续",
+  "workWhiteboardModifySlides": "修改选中页",
+  "workWhiteboardApproveExport": "通过并导出",
+  "workWhiteboardSelectDirectionHint": "请先选择一个方向卡片。",
+  "workWhiteboardSelectSlidesHint": "请先选择一个或多个页面卡片。",
+  "workWhiteboardCanvasLoadingHint": "请等待白板加载完成后再通过并导出。",
+  "workWhiteboardQaBlockingHint": "请先解决阻断级 QA 问题，再通过并导出。",
+  "workWhiteboardImagePrompt": "请生成或修改这块 Work 白板中当前选中的图片占位。",
+  "workWhiteboardOpenPptx": "打开 PPTX"
+}

@@ -17,7 +17,7 @@ import {
   type DesignThreadRegistry
 } from '../../design/design-thread-registry'
 import { formatWorkspacePickerError } from '../../lib/format-workspace-picker-error'
-import { normalizeWorkspaceRoot } from '../../lib/workspace-path'
+import { normalizeWorkspaceRoot, workspaceRootScopeKey } from '../../lib/workspace-path'
 import type { RightPanelMode } from '../chat/WorkbenchTopBar'
 import { BUILTIN_RIGHT_PANEL_IDS } from '../../extensions/contribution-ids'
 import {
@@ -465,9 +465,28 @@ export function useWorkbenchNavigationController({
   const startNewWriteAssistantConversation = useCallback((): void => {
     const writeState = useWriteWorkspaceStore.getState()
     const writeWorkspaceRoot = writeState.workspaceRoot || workspaceRoot
+    const activeBoardId = writeState.activeWhiteboardId
+    const activeBoard = activeBoardId ? writeState.whiteboards[activeBoardId] ?? null : null
     setInput('')
     writeState.clearQuotedSelections()
-    void createWriteThread(writeWorkspaceRoot, writeState.activeFilePath ?? undefined)
+    // PPT review boards are canonically tied to the task that created their
+    // workflow. A generic New conversation must not replace that parent
+    // identity (or create an unrelated Write task with no board to own it).
+    if (activeBoard?.workflowId) return
+    const writeWorkspaceScope = workspaceRootScopeKey(writeWorkspaceRoot)
+    void createWriteThread(writeWorkspaceRoot, writeState.activeFilePath ?? undefined).then((threadId) => {
+      if (!activeBoardId || !threadId) return
+      const latest = useWriteWorkspaceStore.getState()
+      const latestBoard = latest.whiteboards[activeBoardId]
+      if (
+        latest.activeWhiteboardId !== activeBoardId ||
+        workspaceRootScopeKey(latest.workspaceRoot) !== writeWorkspaceScope ||
+        !latestBoard ||
+        workspaceRootScopeKey(latestBoard.workspaceRoot) !== writeWorkspaceScope ||
+        latestBoard.workflowId
+      ) return
+      void latest.bindWhiteboardThread(activeBoardId, threadId)
+    })
   }, [createWriteThread, setInput, workspaceRoot])
 
   const pickWriteAssistantWorkspace = useCallback(async (): Promise<void> => {

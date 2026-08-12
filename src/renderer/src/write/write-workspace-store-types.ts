@@ -15,16 +15,42 @@ export type WriteEditorGroupId = 'primary' | 'secondary'
 export type WriteEditorLayoutOrientation = 'single' | 'horizontal' | 'vertical'
 
 export type WriteEditorTab = {
+  kind?: 'file'
   path: string
   viewMode: WritePreviewMode
   cursorOffset?: number
   scrollTop?: number
 }
 
+export type WriteWhiteboardTab = {
+  kind: 'whiteboard'
+  boardId: string
+  viewMode: 'rich'
+}
+
+export type WriteEditorItem = WriteEditorTab | WriteWhiteboardTab
+
 export type WriteEditorGroup = {
   id: WriteEditorGroupId
-  tabs: WriteEditorTab[]
+  tabs: WriteEditorItem[]
   activePath: string | null
+}
+
+export type WorkWhiteboardPhase = 'blank' | 'directions' | 'review' | 'complete'
+
+export type WorkWhiteboard = {
+  id: string
+  title: string
+  workspaceRoot: string
+  threadId: string | null
+  sourcePath?: string
+  workflowId?: string
+  childId?: string
+  outputPath?: string
+  phase: WorkWhiteboardPhase
+  revision: number
+  createdAt: string
+  updatedAt: string
 }
 
 export type WriteEditorLayoutV1 = {
@@ -95,10 +121,13 @@ export type WriteWorkspaceState = {
   loadingDirs: Record<string, boolean>
   treeError: string | null
   documentsByPath: Record<string, WriteDocumentSession>
+  whiteboards: Record<string, WorkWhiteboard>
+  whiteboardsLoading: boolean
   editorLayout: WriteEditorLayoutV1
   presentationViewByGroup: Partial<Record<WriteEditorGroupId, WorkspacePresentationViewReference>>
   activeFilePath: string | null
   activeFileKind: WriteActiveFileKind | null
+  activeWhiteboardId: string | null
   fileContent: string
   imageDataUrl: string
   imageMimeType: string
@@ -148,6 +177,32 @@ export type WriteWorkspaceState = {
     path: string,
     options?: { groupId?: WriteEditorGroupId; viewMode?: WritePreviewMode }
   ) => Promise<void>
+  loadWhiteboards: (workspaceRoot: string) => Promise<void>
+  createWhiteboard: (workspaceRoot: string, options?: {
+    groupId?: WriteEditorGroupId
+    title?: string
+    sourcePath?: string
+    threadId?: string
+    workflowId?: string
+    childId?: string
+  }) => Promise<WorkWhiteboard | null>
+  openWhiteboard: (boardId: string, groupId?: WriteEditorGroupId) => void
+  findOrCreatePptWhiteboard: (input: {
+    workspaceRoot: string
+    threadId: string
+    workflowId: string
+    childId?: string
+    sourcePath?: string
+  }) => Promise<WorkWhiteboard | null>
+  renameWhiteboard: (boardId: string, title: string) => Promise<boolean>
+  deleteWhiteboard: (boardId: string) => Promise<boolean>
+  bindWhiteboardThread: (boardId: string, threadId: string) => Promise<boolean>
+  updateWhiteboardPptState: (boardId: string, patch: {
+    phase?: WorkWhiteboardPhase
+    outputPath?: string
+    childId?: string
+    revision?: number
+  }) => Promise<boolean>
   activateTab: (groupId: WriteEditorGroupId, path: string) => void
   closeTab: (groupId: WriteEditorGroupId, path: string, force?: boolean) => Promise<boolean>
   moveTab: (path: string, fromGroupId: WriteEditorGroupId, toGroupId: WriteEditorGroupId, index?: number) => void

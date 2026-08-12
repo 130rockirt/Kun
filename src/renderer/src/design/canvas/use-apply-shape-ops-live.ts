@@ -8,13 +8,11 @@ import { useCanvasShapeStore } from './canvas-shape-store'
 import type { ExecuteOpsOptions, OpError } from './shape-ops'
 import { useDesignAssistantStore } from '../design-assistant-store'
 import { useDesignWorkspaceStore } from '../design-workspace-store'
-import { requestCodeCanvasPanelOpen } from '../../lib/code-canvas-panel-event'
-import { isPptReviewBundle, pptReviewBoardOps } from './ppt-review-board'
 import {
-  isPptDirectionBundle,
-  pptDirectionBoardOps,
-  pptDirectionCleanupOps
-} from './ppt-direction-board'
+  projectPptCanvasBundle,
+  resolvePptCanvasProjection,
+  type PptCanvasProjectionOptions
+} from './ppt-canvas-projection'
 import {
   applySvgArtifactToolBlock,
   shouldApplyDesignCanvasToolBlock,
@@ -27,10 +25,7 @@ import {
   extractMotionOpsFromValue,
   isDesignMotionRendererToolName
 } from './motion-ops'
-import {
-  rewriteGeneratedImageUrlsForTurn,
-  type GeneratedImageFallbackTarget
-} from './canvas-generated-image-replay'
+import { rewriteGeneratedImageUrlsForTurn, type GeneratedImageFallbackTarget } from './canvas-generated-image-replay'
 import {
   activeCanvasTurnMatchesDesignTarget,
   activeCanvasTurnMatchesThread,
@@ -54,7 +49,6 @@ import {
   enqueueCanvasTurnScreens,
   ensureCanvasReplayBarrier,
   hasDispatchedScreenFollowup,
-  takeNextReadyScreenGeneration,
   placeLiveCanvasTurnImages,
   recordReadyCanvasReplayWatermarks,
   markFailedSvgForRetry,
@@ -80,6 +74,10 @@ export {
   replayActiveCanvasTurn
 } from './canvas-design-turn-replay'
 export { shouldReplayIdleCanvasToolBlock } from './canvas-design-idle-replay'
+export type {
+  PptCanvasProjectionOpenRequest,
+  PptCanvasProjectionOptions
+} from './ppt-canvas-projection'
 export {
   commitReadyCanvasReplayBarriers,
   hasDispatchedScreenFollowup,
@@ -88,10 +86,6 @@ export {
 export type { CanvasScreenCreatedHandler } from './canvas-design-replay-support'
 /** Coalesce per-token `liveAssistant` deltas so we re-parse at most this often. */
 const STREAM_THROTTLE_MS = 120
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
 
 /**
  * Apply the `design_canvas` / legacy ```shapeops``` blocks the chat agent emits
@@ -119,7 +113,8 @@ export function useApplyShapeOpsLive(
   onSvgArtifactRequested?: SvgArtifactRequestHandler,
   onCanvasExportRequested?: CanvasAgentExportRequestHandler,
   designDocumentTarget?: CanvasDesignDocumentTarget,
-  expectedCanvasDocumentKey?: string
+  expectedCanvasDocumentKey?: string,
+  pptProjection?: PptCanvasProjectionOptions
 ): void {
   const onScreenCreatedRef = useRef(onScreenCreated)
   onScreenCreatedRef.current = onScreenCreated
@@ -127,6 +122,10 @@ export function useApplyShapeOpsLive(
   onSvgArtifactRequestedRef.current = onSvgArtifactRequested
   const designDocumentTargetRef = useRef(designDocumentTarget)
   designDocumentTargetRef.current = designDocumentTarget
+  const onPptProjectionOpenRequestedRef = useRef(pptProjection?.onOpenRequested)
+  onPptProjectionOpenRequestedRef.current = pptProjection?.onOpenRequested
+  const pptProjectionWorkflowId = pptProjection?.workflowId?.trim() || undefined
+  const pptProjectionChildId = pptProjection?.childId?.trim() || undefined
   useEffect(() => {
     if (!enabled) return
     const activeDesignTarget = designDocumentTargetRef.current
@@ -292,35 +291,28 @@ export function useApplyShapeOpsLive(
       } catch {
         return
       }
-      const reviewBundle = isRecord(parsed) ? parsed.reviewBundle : undefined
-      const directionBundle = isRecord(parsed) ? parsed.directionBundle : undefined
-      const isPptReview = block.meta?.toolName === 'ppt_agent' && isPptReviewBundle(reviewBundle)
-      const isPptDirection = block.meta?.toolName === 'ppt_agent' && isPptDirectionBundle(directionBundle)
-      if (!isPptReview && !isPptDirection && !shouldApplyDesignCanvasToolBlock(block)) return
-      if (isPptReview || isPptDirection) {
-        const canvasShapes = Object.values(useCanvasShapeStore.getState().document.objects)
-        const parentThreadId = targetThreadId ?? useChatStore.getState().activeThreadId ?? undefined
-        const boardOps = isPptReviewBundle(reviewBundle)
-          ? [
-              ...pptDirectionCleanupOps(reviewBundle.workflowId, reviewBundle.childId, canvasShapes),
-              ...pptReviewBoardOps(reviewBundle, canvasShapes, parentThreadId)
-            ]
-          : isPptDirectionBundle(directionBundle)
-            ? pptDirectionBoardOps(directionBundle, canvasShapes, parentThreadId)
-            : []
-        const boardKey = `${isPptReview ? 'ppt-review' : 'ppt-direction'}:${block.id}`
-        const { affectedIds, errors } = applyCanvasOpBlocks(
-          [boardOps], boardKey, executeOptions)
-        appliedToolBlockIds.add(block.id)
-        if (errors.length > 0) errorsThisTurn.push(...errors)
-        if (affectedIds.length > 0) {
-          for (const id of affectedIds) affectedThisTurn.add(id)
-          if (isPptDirection) useCanvasSelectionStore.getState().clearSelection()
-          else useCanvasSelectionStore.getState().select([...affectedThisTurn])
-          useDesignAssistantStore.getState().markAiAffected(affectedIds)
-          requestCodeCanvasPanelOpen()
-          framedThisTurn = true
+      const pptCanvasProjection = resolvePptCanvasProjection(
+        typeof block.meta?.toolName === 'string' ? block.meta.toolName : undefined,
+        parsed,
+        pptProjectionWorkflowId,
+        pptProjectionChildId
+      )
+      if (!pptCanvasProjection && !shouldApplyDesignCanvasToolBlock(block)) return
+      if (pptCanvasProjection) {
+        if (pptCanvasProjection.kind === 'filtered') {
+          appliedToolBlockIds.add(block.id)
+          return
         }
+        appliedToolBlockIds.add(block.id)
+        if (projectPptCanvasBundle({
+          blockId: block.id,
+          projection: pptCanvasProjection,
+          targetThreadId,
+          executeOptions,
+          affectedThisTurn,
+          errorsThisTurn,
+          onOpenRequested: onPptProjectionOpenRequestedRef.current
+        })) framedThisTurn = true
         return
       }
       const chatState = useChatStore.getState()
@@ -612,17 +604,19 @@ export function useApplyShapeOpsLive(
     // next store change.
     const initialState = useChatStore.getState()
     if (initialState.currentTurnId) captureGeneratedImageFallbackTarget(initialState)
+    // Do not replay historical tool results into the singleton store until this
+    // host owns the expected document; document-sync will replay after it loads.
     if (canvasDocumentReady()) {
       replayActiveCanvasTurn(
         initialState, applyToolBlock, processStreaming, targetThreadId, activeDesignTarget
       )
-    }
-    replayIdle(initialState)
-    if (!activeDesignTarget && !initialState.currentTurnId &&
-      activeCanvasTurnMatchesThread(initialState, targetThreadId)) {
-      replayIdleCanvasToolBlocks(
-        initialState.blocks, applyToolBlock, (block) => void applySvgToolBlock(block)
-      )
+      replayIdle(initialState)
+      if (!activeDesignTarget && !initialState.currentTurnId &&
+        activeCanvasTurnMatchesThread(initialState, targetThreadId)) {
+        replayIdleCanvasToolBlocks(
+          initialState.blocks, applyToolBlock, (block) => void applySvgToolBlock(block)
+        )
+      }
     }
 
     const unsubscribe = useChatStore.subscribe((state, prev) => {
@@ -695,6 +689,8 @@ export function useApplyShapeOpsLive(
     onCanvasExportRequested,
     designDocumentTarget?.documentId,
     designDocumentTarget?.boardArtifactId,
-    expectedCanvasDocumentKey
+    expectedCanvasDocumentKey,
+    pptProjectionWorkflowId,
+    pptProjectionChildId
   ])
 }

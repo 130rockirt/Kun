@@ -29,15 +29,36 @@ describe('WriteWorkspaceStart', () => {
   })
 
   it('offers document and Office starters after onboarding', () => {
-    const html = renderToStaticMarkup(createElement(WriteWorkspaceStart, baseProps))
+    const html = renderToStaticMarkup(createElement(WriteWorkspaceStart, {
+      ...baseProps,
+      onCreateWhiteboard: () => undefined
+    }))
 
     expect(html).toContain('New draft')
+    expect(html).toContain('New whiteboard')
     expect(html).toContain('Generate a document plan')
     expect(html).toContain('Summarize a document')
     expect(html).toContain('Ask about a PDF')
     expect(html).toContain('Analyze a spreadsheet')
     expect(html).toContain('Create a presentation')
     expect(html).not.toContain('Use Kun default space')
+  })
+
+  it('creates a whiteboard from the Work start page', async () => {
+    const onCreateWhiteboard = vi.fn()
+    let renderer!: ReactTestRenderer
+    await act(async () => {
+      renderer = create(createElement(WriteWorkspaceStart, {
+        ...baseProps,
+        onCreateWhiteboard
+      }))
+    })
+    const button = renderer.root.findAllByType('button').find((candidate) =>
+      candidate.findAllByType('span').some((span) => span.children.includes('New whiteboard'))
+    )
+    expect(button).toBeDefined()
+    await act(async () => button!.props.onClick())
+    expect(onCreateWhiteboard).toHaveBeenCalledOnce()
   })
 
   it('keeps workspace initialization failures visible in the main panel', () => {

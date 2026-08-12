@@ -13,6 +13,11 @@ import type { CanvasDocument, CanvasTool, Rect, ViewBox } from '../../../../desi
 import { embeddedArtifactOf, isHtmlFrame, shapeBounds, shapeGeometry } from '../../../../design/canvas/canvas-types'
 import type { CanvasMotionDocument } from '../../../../design/motion/canvas-motion-types'
 import { createEmptyMotionDocument } from '../../../../design/motion/model'
+import type { CanvasSurface } from '../../../../design/canvas/canvas-surface'
+import {
+  isDesignCanvasSurface,
+  isDiagramCanvasSurface
+} from '../../../../design/canvas/canvas-surface'
 
 const CANVAS_VIEWPORT_STORAGE_PREFIX = 'kun.design.canvasViewport'
 const IMAGE_ANNOTATION_ACTION_WIDTH = 112
@@ -20,26 +25,26 @@ const IMAGE_ANNOTATION_ACTION_HEIGHT = 30
 const IMAGE_ANNOTATION_ACTION_GAP = 10
 const IMAGE_ANNOTATION_ACTION_MARGIN = 8
 
-export function shouldRenderDesignArtifactOverlays(surface: 'design' | 'code'): boolean {
-  return surface === 'design'
+export function shouldRenderDesignArtifactOverlays(surface: CanvasSurface): boolean {
+  return isDesignCanvasSurface(surface)
 }
 
-export function shouldRenderCanvasMinimap(surface: 'design' | 'code'): boolean {
-  return surface === 'design'
+export function shouldRenderCanvasMinimap(surface: CanvasSurface): boolean {
+  return isDesignCanvasSurface(surface)
 }
 
 export function shouldSyncCanvasHtmlFrames(
-  surface: 'design' | 'code',
+  surface: CanvasSurface,
   syncHtmlScreens: boolean
 ): boolean {
-  return surface === 'design' && syncHtmlScreens
+  return isDesignCanvasSurface(surface) && syncHtmlScreens
 }
 
 export function shouldOpenImageAnnotation(
-  surface: 'design' | 'code',
+  surface: CanvasSurface,
   shape: CanvasDocument['objects'][string] | undefined
 ): boolean {
-  return (surface === 'design' || surface === 'code') && shape?.type === 'image' && Boolean(shape.imageUrl)
+  return Boolean(surface && shape?.type === 'image' && shape.imageUrl)
 }
 
 export type SelectedImageAnnotationAction = {
@@ -57,7 +62,7 @@ function clamp(value: number, min: number, max: number): number {
 }
 
 export function resolveSelectedImageAnnotationAction(
-  surface: 'design' | 'code',
+  surface: CanvasSurface,
   doc: CanvasDocument,
   selectedIds: ReadonlySet<string>,
   viewport: {
@@ -123,7 +128,7 @@ export function resolveSelectedImageAnnotationAction(
 }
 
 export function shouldToggleHtmlFrameInteractiveOnDoubleClick(
-  surface: 'design' | 'code',
+  surface: CanvasSurface,
   shape: CanvasDocument['objects'][string] | undefined
 ): boolean {
   return shouldRenderDesignArtifactOverlays(surface) && Boolean(shape && isHtmlFrame(shape))
@@ -146,7 +151,7 @@ function targetInside(root: HTMLElement | null, target: unknown): boolean {
 }
 
 export function shouldHandleCanvasKeyboardEvent(
-  _surface: 'design' | 'code',
+  surface: CanvasSurface,
   eventTarget: EventTarget | null,
   root: HTMLElement | null,
   activeElement?: Element | null
@@ -155,13 +160,14 @@ export function shouldHandleCanvasKeyboardEvent(
   if (eventElement && typeof eventElement.closest === 'function' && eventElement.closest('[data-motion-timeline]')) {
     return false
   }
+  if (isDesignCanvasSurface(surface)) return true
   const active = activeElement ?? (typeof document !== 'undefined' ? document.activeElement : null)
   return targetInside(root, eventTarget) || targetInside(root, active)
 }
 
 export function shouldHandleCanvasKeyboardRelease(
   key: string,
-  surface: 'design' | 'code',
+  surface: CanvasSurface,
   eventTarget: EventTarget | null,
   root: HTMLElement | null,
   activeElement?: Element | null
@@ -411,9 +417,18 @@ const toolFactories: Record<CanvasTool, () => CanvasToolHandler> = {
   hand: createHandTool
 }
 
-export function createCanvasTool(tool: CanvasTool, surface: 'design' | 'code'): CanvasToolHandler {
-  if (tool === 'image') return createAiImageTool({ openAssistant: surface === 'design' })
-  if (surface === 'code') {
+export function createCanvasTool(
+  tool: CanvasTool,
+  surface: CanvasSurface,
+  options: { onRequestAssistant?: () => void } = {}
+): CanvasToolHandler {
+  if (tool === 'image') {
+    return createAiImageTool({
+      openAssistant: isDesignCanvasSurface(surface),
+      onRequestAssistant: options.onRequestAssistant
+    })
+  }
+  if (isDiagramCanvasSurface(surface)) {
     switch (tool) {
       case 'rect': return createRectTool('diagram')
       case 'ellipse': return createEllipseTool('diagram')

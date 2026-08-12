@@ -44,10 +44,12 @@ import { useDesignAgentActionRunner } from '../useDesignAgentActionRunner'
 import { DesignAgentActionMenu } from './DesignAgentActionMenu'
 import { CanvasLayersPanel } from './CanvasLayersPanel'
 import type { DesignExportFormat } from '@shared/design-export'
+import type { CanvasSurface } from '../../../design/canvas/canvas-surface'
+import { isDesignCanvasSurface } from '../../../design/canvas/canvas-surface'
 
 type Props = {
   workspaceRoot: string
-  surface?: 'design' | 'code'
+  surface?: CanvasSurface
   designTargetDisabled?: boolean
   prototypePlayable?: boolean
   onOpenPrototypePlayer?: () => void
@@ -55,6 +57,7 @@ type Props = {
   onRequestCanvasCritique?: (promptSeed: string) => void
   onExportCanvas?: (format: CanvasExportFormat) => Promise<void>
   onExportPrototype?: (format: DesignExportFormat) => Promise<void>
+  onError?: (message: string | null) => void
 }
 
 type ToolButton = {
@@ -95,7 +98,8 @@ function CanvasToolbarInner({
   onOpenAgentSettings,
   onRequestCanvasCritique,
   onExportCanvas,
-  onExportPrototype
+  onExportPrototype,
+  onError
 }: Props) {
   const { t } = useTranslation('common')
   const canvasDocument = useCanvasShapeStore((s) => s.document)
@@ -120,7 +124,8 @@ function CanvasToolbarInner({
   const [exportBusy, setExportBusy] = useState(false)
   const [exportError, setExportError] = useState<string | null>(null)
   const runAgentAction = useDesignAgentActionRunner(onRequestCanvasCritique)
-  const designSurface = surface === 'design'
+  const reportError = onError ?? setFileError
+  const designSurface = isDesignCanvasSurface(surface)
   const visibleTools = designSurface
     ? designSurfaceTools
     : tools.filter((tool) => tool.id !== 'screen')
@@ -170,15 +175,15 @@ function CanvasToolbarInner({
   const importImage = useCallback((): void => {
     if (imageImportBusy) return
     setImageImportBusy(true)
-    setFileError(null)
+    reportError(null)
     void importWorkspaceImageToCanvas({ workspaceRoot, vbox })
       .then((result) => {
         if (!result.ok && !result.canceled) {
-          setFileError(result.message ?? t('canvasToolUploadFailed'))
+          reportError(result.message ?? t('canvasToolUploadFailed'))
         }
       })
       .finally(() => setImageImportBusy(false))
-  }, [imageImportBusy, setFileError, t, vbox, workspaceRoot])
+  }, [imageImportBusy, reportError, t, vbox, workspaceRoot])
 
   const requestAgentAction = useCallback((action: DesignAgentAction): void => {
     runAgentAction(action)
@@ -189,31 +194,31 @@ function CanvasToolbarInner({
     if (!onExportCanvas || exportBusy) return
     setExportBusy(true)
     setExportError(null)
-    setFileError(null)
+    reportError(null)
     void onExportCanvas(format)
       .then(() => setExportOpen(false))
       .catch((error) => {
         const message = error instanceof Error ? error.message : String(error)
         setExportError(message)
-        setFileError(message)
+        reportError(message)
       })
       .finally(() => setExportBusy(false))
-  }, [exportBusy, onExportCanvas, setFileError])
+  }, [exportBusy, onExportCanvas, reportError])
 
   const requestPrototypeExport = useCallback((format: DesignExportFormat): void => {
     if (!onExportPrototype || exportBusy) return
     setExportBusy(true)
     setExportError(null)
-    setFileError(null)
+    reportError(null)
     void onExportPrototype(format)
       .then(() => setExportOpen(false))
       .catch((error) => {
         const message = error instanceof Error ? error.message : String(error)
         setExportError(message)
-        setFileError(message)
+        reportError(message)
       })
       .finally(() => setExportBusy(false))
-  }, [exportBusy, onExportPrototype, setFileError])
+  }, [exportBusy, onExportPrototype, reportError])
 
   const iconBtnBase =
     'inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-45'
@@ -230,7 +235,7 @@ function CanvasToolbarInner({
     <div className="relative pointer-events-auto">
       <div className="design-canvas-toolbar flex flex-col items-center gap-1 rounded-full border border-ds-border bg-white/82 px-1.5 py-1.5 shadow-[0_16px_42px_rgba(20,47,95,0.13)] backdrop-blur-2xl dark:bg-ds-card/84 dark:shadow-none">
         {visibleTools.map((tool) => {
-          const label = t(surface === 'code' && tool.codeLabelKey ? tool.codeLabelKey : tool.labelKey)
+          const label = t(!designSurface && tool.codeLabelKey ? tool.codeLabelKey : tool.labelKey)
           return (
             <button
               key={tool.id}
@@ -271,8 +276,8 @@ function CanvasToolbarInner({
           className={`${iconBtnBase} ${btnInactive}`}
           onClick={importImage}
           disabled={imageImportBusy}
-          title={t(surface === 'code' ? 'codeCanvasToolUploadImage' : 'canvasToolUploadImage')}
-          aria-label={t(surface === 'code' ? 'codeCanvasToolUploadImage' : 'canvasToolUploadImage')}
+          title={t(!designSurface ? 'codeCanvasToolUploadImage' : 'canvasToolUploadImage')}
+          aria-label={t(!designSurface ? 'codeCanvasToolUploadImage' : 'canvasToolUploadImage')}
         >
           <ImagePlus className="h-4 w-4" strokeWidth={1.9} />
         </button>

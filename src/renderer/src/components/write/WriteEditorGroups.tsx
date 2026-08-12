@@ -12,6 +12,9 @@ import {
 } from '../../write/write-workspace-store'
 import {
   isWriteEditorLayoutSplit,
+  isWriteFileTab,
+  isWriteWhiteboardTab,
+  writeEditorItemForKey,
   writeDocumentKey,
   writeEditorGroupFlex
 } from '../../write/write-editor-layout'
@@ -63,6 +66,7 @@ export function WriteEditorGroups({
     rootDirectory,
     entriesByDir,
     documentsByPath,
+    whiteboards,
     editorLayout,
     settingsError,
     treeError,
@@ -74,6 +78,7 @@ export function WriteEditorGroups({
     closeEditorGroup,
     setSplitRatio,
     openFile,
+    createWhiteboard,
     setDocumentContent,
     saveDocument,
     setSelection,
@@ -90,6 +95,7 @@ export function WriteEditorGroups({
     rootDirectory: state.rootDirectory,
     entriesByDir: state.entriesByDir,
     documentsByPath: state.documentsByPath,
+    whiteboards: state.whiteboards,
     editorLayout: state.editorLayout,
     settingsError: state.settingsError,
     treeError: state.treeError,
@@ -101,6 +107,7 @@ export function WriteEditorGroups({
     closeEditorGroup: state.closeEditorGroup,
     setSplitRatio: state.setSplitRatio,
     openFile: state.openFile,
+    createWhiteboard: state.createWhiteboard,
     setDocumentContent: state.setDocumentContent,
     saveDocument: state.saveDocument,
     setSelection: state.setSelection,
@@ -175,9 +182,11 @@ export function WriteEditorGroups({
       data-orientation={splitActive ? editorLayout.orientation : 'single'}
     >
       {editorLayout.groups.map((group, index) => {
-        const path = group.activePath
+        const activeKey = group.activePath
+        const tab = writeEditorItemForKey(group, activeKey)
+        const path = tab && isWriteFileTab(tab) ? tab.path : null
+        const board = tab && isWriteWhiteboardTab(tab) ? whiteboards[tab.boardId] : undefined
         const document = path ? documentsByPath[writeDocumentKey(path)] : undefined
-        const tab = path ? group.tabs.find((candidate) => candidate.path === path) : undefined
         const focused = editorLayout.focusedGroupId === group.id
         const pane = (
           <section
@@ -189,20 +198,24 @@ export function WriteEditorGroups({
             <WriteEditorTabBar
               group={group}
               documentsByPath={documentsByPath}
+              whiteboards={whiteboards}
               focused={focused}
               primary={group.id === 'primary'}
               leftSidebarCollapsed={leftSidebarCollapsed}
               onToggleLeftSidebar={onToggleLeftSidebar}
               onActivate={(nextPath) => {
-                if (documentsByPath[writeDocumentKey(nextPath)]) activateTab(group.id, nextPath)
+                const nextItem = writeEditorItemForKey(group, nextPath)
+                if (nextItem && isWriteWhiteboardTab(nextItem)) activateTab(group.id, nextPath)
+                else if (documentsByPath[writeDocumentKey(nextPath)]) activateTab(group.id, nextPath)
                 else void openFile(workspaceRoot, nextPath, {
                   groupId: group.id,
-                  viewMode: group.tabs.find((item) => item.path === nextPath)?.viewMode
+                  viewMode: nextItem?.viewMode
                 })
               }}
               onClose={(nextPath) => void closeTab(group.id, nextPath)}
               onMove={moveTab}
               onCreateDraft={() => { focusEditorGroup(group.id); onCreateDraft() }}
+              onCreateWhiteboard={() => { void createWhiteboard(workspaceRoot, { groupId: group.id }) }}
               onQuickOpen={() => quickOpen(group.id)}
               onSplit={(orientation) => splitEditorGroup(orientation, path ?? undefined)}
               onCloseGroup={() => closeEditorGroup(group.id)}
@@ -216,9 +229,10 @@ export function WriteEditorGroups({
               }
               onToggleAssistant={() => setAssistantOpen(!assistantOpen)}
             />
-            {focused && document?.kind !== 'image' ? focusedToolbar : null}
+            {focused && document && document.kind !== 'image' ? focusedToolbar : null}
             <WriteEditorGroupContent
               document={document}
+              whiteboard={board}
               requestedPath={path}
               viewMode={tab?.viewMode ?? 'rich'}
               workspaceRoot={workspaceRoot}
@@ -236,7 +250,14 @@ export function WriteEditorGroups({
               onFocusModeChange={onFocusModeChange}
               onFocus={() => { if (!focused) focusEditorGroup(group.id) }}
               onAskAssistant={onAskAssistant}
+              onOpenWorkspaceFile={(nextPath) => {
+                const resolvedPath = nextPath.startsWith('/') || /^[A-Za-z]:[\\/]/.test(nextPath)
+                  ? nextPath
+                  : writeJoinPath(workspaceRoot, nextPath)
+                void openFile(workspaceRoot, resolvedPath)
+              }}
               onCreateDraft={onCreateDraft}
+              onCreateWhiteboard={() => { void createWhiteboard(workspaceRoot, { groupId: group.id }) }}
               onPickWorkspace={onPickWorkspace}
               onRefreshWorkspace={() => void refreshWorkspace(workspaceRoot)}
               onContentChange={(content) => { if (path) setDocumentContent(path, content) }}

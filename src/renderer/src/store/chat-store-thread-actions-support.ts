@@ -374,7 +374,16 @@ export function withoutConsumedComposerContexts(
 
 export function activeWriteMessageContextMatches(context: WriteAssistantMessageContext): boolean {
   const state = useWriteWorkspaceStore.getState()
+  const whiteboardMatches = context.whiteboardId
+    ? Boolean(
+        Number.isInteger(context.whiteboardRevision) &&
+        state.activeWhiteboardId === context.whiteboardId &&
+        state.whiteboards[context.whiteboardId]?.revision === context.whiteboardRevision &&
+        state.whiteboards[context.whiteboardId]?.threadId === (context.threadId ?? null)
+      )
+    : state.activeWhiteboardId === null
   return (
+    whiteboardMatches &&
     writeFileKey(state.workspaceRoot) === writeFileKey(context.workspaceRoot) &&
     writeFileKey(state.activeFilePath) === writeFileKey(context.activeFilePath) &&
     state.documentEpoch === context.documentEpoch &&

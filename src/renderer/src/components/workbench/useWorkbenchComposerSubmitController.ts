@@ -4,15 +4,9 @@ import { useChatStore } from '../../store/chat-store'
 import { providerIdForComposerModel } from '../../store/chat-store-helpers'
 import { parseClawCommand } from '@shared/claw-commands'
 import { useWriteWorkspaceStore } from '../../write/write-workspace-store'
-import {
-  captureWriteDocumentContext,
-  writeDocumentContextMatches
-} from '../../write/write-document-context'
+import { captureWriteDocumentContext, writeDocumentContextMatches } from '../../write/write-document-context'
 import type { WriteRetrievalContext } from '@shared/write-retrieval'
-import {
-  composeWritePrompt,
-  type WriteOfficeDocumentContext
-} from '../../write/quoted-selection'
+import { composeWritePrompt, type WriteOfficeDocumentContext } from '../../write/quoted-selection'
 import { writeDocumentKey } from '../../write/write-editor-layout'
 import { selectFocusedPresentationView } from '../../write/write-presentation-view-state'
 import { createWorkspaceOfficeViewPositionAttachment } from '../../lib/workspace-office-view-context'
@@ -30,6 +24,13 @@ import { useCanvasSelectionStore } from '../../design/canvas/canvas-selection-st
 import { planWorktreeComposerAccess } from '../../plan/plan-worktree-composer-access'
 import { usePlanWorktreeStore } from '../../plan/plan-worktree-store'
 import { activePptReviewComposerContexts } from './workbench-ppt-review-context'
+import {
+  activeWorkWhiteboardForSend,
+  activeWorkWhiteboardComposerContexts,
+  buildActiveWorkWhiteboardPrompt,
+  workWhiteboardMessageFence,
+  workWhiteboardSnapshotMatches
+} from './workbench-write-whiteboard-context'
 import { composerReasoningEffortRequestValue } from '../chat/FloatingComposerModelPicker'
 import { serviceTierForComposerSelection } from '../chat/composer-fast-mode'
 import type { ComposerFileReference } from '../chat/FloatingComposer'
@@ -40,8 +41,11 @@ import {
   stripTransientAttachmentFields
 } from './workbench-composer-prompts'
 import { readWorkbenchComposerFileContextEntries } from './workbench-composer-file-context'
+import { restoreWorkbenchWritePrompt } from './workbench-write-prompt-state'
 export type { WorkbenchComposerSubmitController } from './workbench-composer-submit-types'
-import { listClawComposerModelOptions, resolveClawComposerModelByIndex,
+import {
+  listClawComposerModelOptions,
+  resolveClawComposerModelByIndex,
   type UseWorkbenchComposerSubmitControllerParams,
   type WorkbenchComposerSubmitController
 } from './workbench-composer-submit-types'
@@ -98,7 +102,6 @@ export function useWorkbenchComposerSubmitController({
       'assistant'
     )
   }, [activeThreadId])
-
   const clawHelpText = useCallback((): string =>
     [
       t('clawHelpTitle'),
@@ -132,7 +135,6 @@ export function useWorkbenchComposerSubmitController({
         : [t('clawModelListEmpty')])
     ].join('\n')
   }, [activeClawChannelModel, activeClawChannelProviderId, composerModelGroups, t])
-
   const readComposerFileContextEntries = useCallback(async (
     references: ComposerFileReference[],
     workspace: string
@@ -141,7 +143,6 @@ export function useWorkbenchComposerSubmitController({
     workspace,
     (key, options) => t(key, options)
   ), [t])
-
   const sendWritePrompt = useCallback((value: string): void => {
     const v = value.trim()
     const attachmentScope = getAttachmentScope()
@@ -155,6 +156,11 @@ export function useWorkbenchComposerSubmitController({
       return
     }
     const writeState = useWriteWorkspaceStore.getState()
+    const activeWhiteboard = activeWorkWhiteboardForSend(writeState)
+    if (activeWhiteboard === undefined) {
+      setError(t('writeWhiteboardAssistantPreparing'))
+      return
+    }
     const activePresentationView = selectFocusedPresentationView(writeState)
     const writePresentationView = activePresentationView ? { ...activePresentationView } : null
     const writeWorkspaceRoot = writeState.workspaceRoot || workspaceRoot
@@ -178,21 +184,12 @@ export function useWorkbenchComposerSubmitController({
       if (writeDocumentContext) return writeDocumentContextMatches(latest, writeDocumentContext)
       return (
         normalizeWorkspaceRoot(latest.workspaceRoot || workspaceRoot) === normalizeWorkspaceRoot(writeWorkspaceRoot) &&
+        workWhiteboardSnapshotMatches(latest, activeWhiteboard) &&
         latest.activeFilePath === writeActiveFilePath &&
         latest.documentEpoch === writeDocumentEpoch
       )
     }
-    const restorePrompt = (): void => {
-      // The composer state is shared across routes. Never prepend a stale
-      // Write prompt to text the user has started composing in Chat/Design.
-      if (useChatStore.getState().route !== 'write') return
-      setInput((current) => {
-        if (!v) return current
-        if (!current) return v
-        if (current.trim() === v || current.startsWith(`${v}\n\n`)) return current
-        return `${v}\n\n${current}`
-      })
-    }
+    const restorePrompt = (): void => restoreWorkbenchWritePrompt(v, setInput)
     const writeDraftStillMatches = (): boolean => {
       const latest = useWriteWorkspaceStore.getState()
       return (
@@ -313,13 +310,19 @@ export function useWorkbenchComposerSubmitController({
         (preset) => preset.id === writeState.assistantAgentPresetId
       )
       const agentPersona = activeAgentPreset ? resolveWriteAgentPreset(activeAgentPreset).persona : ''
-      const prompt = composeWritePrompt(messageText, quotedSelections, {
+      const basePrompt = composeWritePrompt(messageText, quotedSelections, {
         workspaceRoot: writeWorkspaceRoot,
         activeFilePath: writeActiveFilePath,
         retrieval,
         officeDocument,
         ...(agentPersona ? { agentPersona } : {})
       })
+      const prompt = await buildActiveWorkWhiteboardPrompt(
+        basePrompt,
+        messageText,
+        writeWorkspaceRoot,
+        activeWhiteboard
+      )
       const model = writeState.assistantModel.trim()
       const providerId =
         writeState.assistantProviderId.trim() || providerIdForComposerModel(composerModelGroups, model)
@@ -333,7 +336,11 @@ export function useWorkbenchComposerSubmitController({
       const viewContexts = writePresentationView
         ? [await createWorkspaceOfficeViewPositionAttachment({ workspaceRoot: writeWorkspaceRoot, view: writePresentationView })]
         : []
-      const pptReviewContexts = await activePptReviewComposerContexts(writeWorkspaceRoot, activeThreadId)
+      const pptReviewContexts = await activeWorkWhiteboardComposerContexts(
+        writeWorkspaceRoot,
+        activeWhiteboard,
+        activeThreadId
+      )
       const composerContexts = [...viewContexts, ...pptReviewContexts]
       if (officeDocument && !writeOfficeSemanticContextMatches(officeDocument)) {
         restorePrompt()
@@ -355,11 +362,13 @@ export function useWorkbenchComposerSubmitController({
           ...(attachmentIds.length ? { attachmentIds } : {}),
           ...(publicAttachments.length ? { attachments: publicAttachments } : {}),
           ...(composerContexts.length ? { composerContexts } : {}),
+          ...(activeWhiteboard ? { guiDesignCanvas: true } : {}),
           writeContext: {
             workspaceRoot: writeWorkspaceRoot,
             activeFilePath: writeActiveFilePath,
             documentEpoch: writeDocumentEpoch,
-            contentRevision: writeContentRevision
+            contentRevision: writeContentRevision,
+            ...workWhiteboardMessageFence(activeWhiteboard)
           }
         }
       )
@@ -390,7 +399,6 @@ export function useWorkbenchComposerSubmitController({
     t,
     workspaceRoot
   ])
-
   const handleSend = useCallback((): void => {
     void (async (): Promise<void> => {
       const v = input.trim()
@@ -415,7 +423,8 @@ export function useWorkbenchComposerSubmitController({
         const activeThread = threads.find((thread) => thread.id === activeThreadId)
         const access = planWorktreeComposerAccess(
           activeThread,
-          usePlanWorktreeStore.getState().plans
+          usePlanWorktreeStore.getState().plans,
+          activeThreadId
         )
         if (!access.writable) {
           setError(access.reason ?? 'This isolated plan task is currently read-only.')
@@ -684,6 +693,5 @@ export function useWorkbenchComposerSubmitController({
     threads,
     workspaceRoot
   ])
-
   return { handleSend, sendWritePrompt }
 }

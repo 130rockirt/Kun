@@ -277,7 +277,11 @@ export function imageMimeTypeFromPath(path: string): string {
 }
 
 export function filterWriteEntries(entries: WorkspaceEntry[]): WorkspaceEntry[] {
-  return entries.filter(isWriteWorkspaceEntry)
+  return entries.filter((entry) => {
+    if (!isWriteWorkspaceEntry(entry)) return false
+    const name = entry.path.replaceAll('\\', '/').split('/').filter(Boolean).at(-1) ?? ''
+    return name !== '.kun-write' && name !== '.kun-canvas' && name !== '.kun-design'
+  })
 }
 
 export function initialState(): Pick<
@@ -289,10 +293,13 @@ export function initialState(): Pick<
   | 'loadingDirs'
   | 'treeError'
   | 'documentsByPath'
+  | 'whiteboards'
+  | 'whiteboardsLoading'
   | 'editorLayout'
   | 'presentationViewByGroup'
   | 'activeFilePath'
   | 'activeFileKind'
+  | 'activeWhiteboardId'
   | 'fileContent'
   | 'imageDataUrl'
   | 'imageMimeType'
@@ -321,6 +328,8 @@ export function initialState(): Pick<
     loadingDirs: {},
     treeError: null,
     documentsByPath: {},
+    whiteboards: {},
+    whiteboardsLoading: false,
     presentationViewByGroup: {},
     editorLayout: {
       version: 1,
@@ -331,6 +340,7 @@ export function initialState(): Pick<
     },
     activeFilePath: null,
     activeFileKind: null,
+    activeWhiteboardId: null,
     fileContent: '',
     imageDataUrl: '',
     imageMimeType: '',

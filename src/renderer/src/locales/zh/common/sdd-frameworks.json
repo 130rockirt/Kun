@@ -154,6 +154,7 @@
   "writeAssistantCurrentView": "当前视图",
   "writeAssistantSlidePosition": "第 {{slide}} / {{slideCount}} 张",
   "writeAssistantSaveBeforeSendFailed": "请先成功保存当前可编辑文档，再发送给办公助手。",
+  "writeWhiteboardAssistantPreparing": "白板助手仍在准备中，请稍后重试。",
   "writeExternalChangeConflict": "文件在你有未保存修改时发生了外部变化。当前草稿已保留，请先审阅或保存后再继续。",
   "writeAssistantEmptyTitle": "办公助手待命中",
   "writeAssistantEmptySub": "选中 Markdown、PDF 或 Office 内容即可引用，或从下面选择一个文档操作。",

@@ -484,9 +484,28 @@ const _pendingSaves = new Map<string, {
   path: string
   content: string
 }>()
+const _inFlightSaves = new Map<string, Set<Promise<unknown>>>()
+const _cancelledSaveKeys = new Set<string>()
 
 function canvasSaveKey(workspaceRoot: string, artifactId: string, baseDir: string | undefined): string {
   return canvasDocumentKey(workspaceRoot, artifactId, baseDir)
+}
+
+function writePendingCanvasDocument(
+  key: string,
+  pending: { workspaceRoot: string; path: string; content: string }
+): Promise<void> {
+  const write = writeDesignWorkspaceFile(pending).then(() => undefined)
+  const writes = _inFlightSaves.get(key) ?? new Set<Promise<unknown>>()
+  writes.add(write)
+  _inFlightSaves.set(key, writes)
+  void write.finally(() => {
+    const current = _inFlightSaves.get(key)
+    if (!current) return
+    current.delete(write)
+    if (current.size === 0) _inFlightSaves.delete(key)
+  }).catch(() => undefined)
+  return write
 }
 
 export function persistCanvasDocument(
@@ -498,6 +517,7 @@ export function persistCanvasDocument(
   if (!workspaceRoot) return
 
   const key = canvasSaveKey(workspaceRoot, artifactId, baseDir)
+  if (_cancelledSaveKeys.has(key)) return
   const existingTimer = _saveTimers.get(key)
   if (existingTimer) clearTimeout(existingTimer)
   _pendingSaves.set(key, {
@@ -509,9 +529,33 @@ export function persistCanvasDocument(
     _saveTimers.delete(key)
     const pending = _pendingSaves.get(key)
     _pendingSaves.delete(key)
-    if (pending) void writeDesignWorkspaceFile(pending)
+    if (pending && !_cancelledSaveKeys.has(key)) void writePendingCanvasDocument(key, pending)
   }, 600)
   _saveTimers.set(key, timer)
+}
+
+/**
+ * Permanently retires one canvas persistence key for this renderer lifetime.
+ *
+ * A Work whiteboard delete removes the board directory while its mounted
+ * viewport may still have a debounced save queued.  Cancelling only the timer
+ * is insufficient: a just-started write can recreate `canvas.json` after the
+ * directory deletion.  This helper suppresses future writes for the retired
+ * identity and waits for a write already handed to the persistence coordinator.
+ */
+export async function cancelPendingCanvasDocument(
+  workspaceRoot: string,
+  artifactId: string,
+  baseDir?: string
+): Promise<void> {
+  const key = canvasSaveKey(workspaceRoot, artifactId, baseDir)
+  _cancelledSaveKeys.add(key)
+  const timer = _saveTimers.get(key)
+  if (timer) clearTimeout(timer)
+  _saveTimers.delete(key)
+  _pendingSaves.delete(key)
+  const writes = _inFlightSaves.get(key)
+  if (writes?.size) await Promise.all([...writes])
 }
 
 export async function flushPendingCanvasDocuments(workspaceRoot?: string): Promise<void> {
@@ -530,9 +574,18 @@ export async function flushPendingCanvasDocuments(workspaceRoot?: string): Promi
       if (timer) clearTimeout(timer)
       _saveTimers.delete(key)
       _pendingSaves.delete(key)
-      await writeDesignWorkspaceFile(pending)
+      if (!_cancelledSaveKeys.has(key)) await writePendingCanvasDocument(key, pending)
     }))
   }
+}
+
+/** Test-only cleanup for the debounced persistence module state. */
+export function clearCanvasDocumentPersistenceForTests(): void {
+  for (const timer of _saveTimers.values()) clearTimeout(timer)
+  _saveTimers.clear()
+  _pendingSaves.clear()
+  _inFlightSaves.clear()
+  _cancelledSaveKeys.clear()
 }
 
 export async function loadCanvasDocument(

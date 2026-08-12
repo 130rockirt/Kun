@@ -22,6 +22,7 @@ describe('CanvasViewport surface behavior', () => {
   it('only exposes the design canvas fill layers to UI plugin backgrounds', () => {
     expect(canvasViewportBackgroundFillClass('design')).toBe('ds-stage-design-canvas-fill')
     expect(canvasViewportBackgroundFillClass('code')).toBe('')
+    expect(canvasViewportBackgroundFillClass('work')).toBe('')
   })
 
   it('renders the initialized empty canvas while a historical document is still loading', () => {
@@ -30,11 +31,13 @@ describe('CanvasViewport surface behavior', () => {
 
   it('keeps design artifact overlays out of the code canvas', () => {
     expect(shouldRenderDesignArtifactOverlays('code')).toBe(false)
+    expect(shouldRenderDesignArtifactOverlays('work')).toBe(false)
     expect(shouldRenderDesignArtifactOverlays('design')).toBe(true)
   })
 
   it('keeps the minimap out of the code sidebar canvas', () => {
     expect(shouldRenderCanvasMinimap('code')).toBe(false)
+    expect(shouldRenderCanvasMinimap('work')).toBe(false)
     expect(shouldRenderCanvasMinimap('design')).toBe(true)
   })
 
@@ -42,6 +45,7 @@ describe('CanvasViewport surface behavior', () => {
     expect(shouldSyncCanvasHtmlFrames('design', true)).toBe(true)
     expect(shouldSyncCanvasHtmlFrames('design', false)).toBe(false)
     expect(shouldSyncCanvasHtmlFrames('code', true)).toBe(false)
+    expect(shouldSyncCanvasHtmlFrames('work', true)).toBe(false)
   })
 
   it('allows filled images to open annotation on design and code canvases', () => {
@@ -52,6 +56,7 @@ describe('CanvasViewport surface behavior', () => {
 
     expect(shouldOpenImageAnnotation('design', image)).toBe(true)
     expect(shouldOpenImageAnnotation('code', image)).toBe(true)
+    expect(shouldOpenImageAnnotation('work', image)).toBe(true)
     expect(shouldOpenImageAnnotation('code', emptyImage)).toBe(false)
     expect(shouldOpenImageAnnotation('code', rect)).toBe(false)
   })
@@ -166,6 +171,7 @@ describe('CanvasViewport surface behavior', () => {
 
     expect(shouldToggleHtmlFrameInteractiveOnDoubleClick('design', htmlFrame)).toBe(true)
     expect(shouldToggleHtmlFrameInteractiveOnDoubleClick('code', htmlFrame)).toBe(false)
+    expect(shouldToggleHtmlFrameInteractiveOnDoubleClick('work', htmlFrame)).toBe(false)
     expect(shouldToggleHtmlFrameInteractiveOnDoubleClick('design', plainFrame)).toBe(false)
     expect(shouldToggleHtmlFrameInteractiveOnDoubleClick('design', undefined)).toBe(false)
   })
@@ -177,7 +183,7 @@ describe('CanvasViewport surface behavior', () => {
     expect(resolveCanvasDesignSystemBaseDir('.kun-design/doc-1', undefined)).toBe('.kun-design/doc-1')
   })
 
-  it('scopes keyboard shortcuts on both canvas surfaces to the whiteboard tree', () => {
+  it('keeps design shortcuts global and scopes code/work shortcuts to the whiteboard tree', () => {
     const inside = {}
     const activeInside = {}
     const outside = {}
@@ -189,11 +195,11 @@ describe('CanvasViewport surface behavior', () => {
     expect(shouldHandleCanvasKeyboardEvent('code', outside as EventTarget, root, activeInside as Element)).toBe(true)
     expect(shouldHandleCanvasKeyboardEvent('code', outside as EventTarget, root, null)).toBe(false)
     expect(shouldHandleCanvasKeyboardEvent('code', inside as EventTarget, null, null)).toBe(false)
-    expect(shouldHandleCanvasKeyboardEvent('design', inside as EventTarget, root, null)).toBe(true)
-    expect(shouldHandleCanvasKeyboardEvent('design', outside as EventTarget, root, activeInside as Element)).toBe(true)
-    expect(shouldHandleCanvasKeyboardEvent('design', outside as EventTarget, root, null)).toBe(false)
+    expect(shouldHandleCanvasKeyboardEvent('design', null, null, null)).toBe(true)
     expect(shouldHandleCanvasKeyboardRelease(' ', 'design', outside as EventTarget, root, null)).toBe(true)
-    expect(shouldHandleCanvasKeyboardRelease('a', 'design', outside as EventTarget, root, null)).toBe(false)
+    expect(shouldHandleCanvasKeyboardRelease('a', 'design', outside as EventTarget, root, null)).toBe(true)
+    expect(shouldHandleCanvasKeyboardEvent('work', inside as EventTarget, root, null)).toBe(true)
+    expect(shouldHandleCanvasKeyboardEvent('work', outside as EventTarget, root, null)).toBe(false)
   })
 
   it('prunes selection state to shapes that still exist after document sync', () => {

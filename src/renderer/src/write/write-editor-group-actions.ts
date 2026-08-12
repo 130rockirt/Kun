@@ -2,6 +2,7 @@ import i18n from '../i18n'
 import type {
   WriteDocumentSession,
   WriteEditorGroupId,
+  WriteEditorItem,
   WriteEditorLayoutOrientation,
   WritePreviewMode,
   WriteWorkspaceGet,
@@ -9,14 +10,18 @@ import type {
   WriteWorkspaceState
 } from './write-workspace-store-types'
 import {
-  addTabToGroup,
+  addEditorItemToGroup,
   captureFocusedDocument,
   clearWriteOfficeSelections,
   focusedWriteGroup,
   persistWriteEditorLayout,
   projectFocusedDocument,
+  isWriteFileTab,
   tabViewMode,
-  writeDocumentKey
+  writeDocumentKey,
+  writeEditorItemForKey,
+  writeEditorItemKey,
+  writeWhiteboardIdFromTabKey
 } from './write-editor-layout'
 import { enqueueWriteWorkspaceSave, flushWriteWorkspaceSaveQueue } from './write-save-coordinator'
 import { normalizePath, pathsEqual } from './write-workspace-store-helpers'
@@ -60,37 +65,53 @@ function updateDocument(
 }
 
 function documentReferenceCount(state: WriteWorkspaceState, path: string): number {
+  if (writeWhiteboardIdFromTabKey(path)) return 0
   const key = writeDocumentKey(path)
   return state.editorLayout.groups.reduce(
-    (count, group) => count + group.tabs.filter((tab) => writeDocumentKey(tab.path) === key).length,
+    (count, group) => count + group.tabs.filter((tab) => (
+      isWriteFileTab(tab) && writeDocumentKey(tab.path) === key
+    )).length,
     0
   )
+}
+
+function requestedItemKey(value: string): string {
+  return writeWhiteboardIdFromTabKey(value) ? value : writeDocumentKey(value)
 }
 
 function removeTabFromGroup(
   state: WriteWorkspaceState,
   groupId: WriteEditorGroupId,
-  path: string
+  requestedKey: string
 ): Pick<WriteWorkspaceState, 'editorLayout' | 'documentsByPath'> {
-  const key = writeDocumentKey(path)
+  const key = requestedItemKey(requestedKey)
+  const targetGroup = state.editorLayout.groups.find((group) => group.id === groupId)
+  const removedItem: WriteEditorItem | null = targetGroup
+    ? writeEditorItemForKey(targetGroup, key)
+    : null
   const groups = state.editorLayout.groups.map((group) => {
     if (group.id !== groupId) return group
-    const index = group.tabs.findIndex((tab) => writeDocumentKey(tab.path) === key)
+    const index = group.tabs.findIndex((tab) => writeEditorItemKey(tab) === key)
     if (index < 0) return group
     const tabs = group.tabs.filter((_, tabIndex) => tabIndex !== index)
-    const nextActive = group.activePath && writeDocumentKey(group.activePath) !== key
+    const nextActive = group.activePath && requestedItemKey(group.activePath) !== key
       ? group.activePath
-      : tabs[Math.min(index, Math.max(0, tabs.length - 1))]?.path ?? null
+      : tabs[Math.min(index, Math.max(0, tabs.length - 1))]
+        ? writeEditorItemKey(tabs[Math.min(index, Math.max(0, tabs.length - 1))])
+        : null
     return { ...group, tabs, activePath: nextActive }
   })
   let editorLayout = { ...state.editorLayout, groups }
   if (editorLayout.focusedGroupId === groupId && !groups.some((group) => group.id === groupId)) {
     editorLayout = { ...editorLayout, focusedGroupId: groups[0]?.id ?? 'primary' }
   }
-  const stillReferenced = groups.some((group) => group.tabs.some((tab) => writeDocumentKey(tab.path) === key))
+  const stillReferenced = groups.some((group) => group.tabs.some((tab) => writeEditorItemKey(tab) === key))
   if (stillReferenced) return { editorLayout, documentsByPath: state.documentsByPath }
+  if (!removedItem || !isWriteFileTab(removedItem)) {
+    return { editorLayout, documentsByPath: state.documentsByPath }
+  }
   const documentsByPath = { ...state.documentsByPath }
-  delete documentsByPath[key]
+  delete documentsByPath[writeDocumentKey(removedItem.path)]
   return { editorLayout, documentsByPath }
 }
 
@@ -181,9 +202,9 @@ export function createWriteEditorGroupActions(
     activateTab: (groupId, path) => {
       const rawState = get()
       const state = { ...rawState, documentsByPath: captureFocusedDocument(rawState) }
-      const key = writeDocumentKey(path)
+      const key = requestedItemKey(path)
       const group = state.editorLayout.groups.find((candidate) => candidate.id === groupId)
-      if (!group?.tabs.some((tab) => writeDocumentKey(tab.path) === key)) return
+      if (!group?.tabs.some((tab) => writeEditorItemKey(tab) === key)) return
       const editorLayout = {
         ...state.editorLayout,
         focusedGroupId: groupId,
@@ -198,21 +219,22 @@ export function createWriteEditorGroupActions(
     closeTab: async (groupId, path, force = false) => {
       const rawSnapshot = get()
       const snapshot = { ...rawSnapshot, documentsByPath: captureFocusedDocument(rawSnapshot) }
-      const document = snapshot.documentsByPath[writeDocumentKey(path)]
+      const filePath = writeWhiteboardIdFromTabKey(path) ? null : path
+      const document = filePath ? snapshot.documentsByPath[writeDocumentKey(filePath)] : undefined
       const lastReference = documentReferenceCount(snapshot, path) <= 1
       const needsDecision = lastReference && document && (
         document.saveStatus === 'dirty' || document.saveStatus === 'error' || document.reviewActive
       )
       if (needsDecision && !force) {
         if (snapshot.autoSaveEnabled && document.kind === 'text') {
-          const saved = await saveDocument(snapshot.workspaceRoot, path, { resolveExternalConflict: 'keep-local' })
+          const saved = await saveDocument(snapshot.workspaceRoot, filePath ?? path, { resolveExternalConflict: 'keep-local' })
           if (!saved) return false
         } else {
           const saveBeforeClosing = document.kind === 'text' && window.confirm(
             i18n.t('common:writeSaveUnsavedTabConfirm')
           )
           if (saveBeforeClosing) {
-            const saved = await saveDocument(snapshot.workspaceRoot, path, { resolveExternalConflict: 'keep-local' })
+            const saved = await saveDocument(snapshot.workspaceRoot, filePath ?? path, { resolveExternalConflict: 'keep-local' })
             if (!saved) return false
           } else if (!window.confirm(i18n.t('common:writeCloseUnsavedTabConfirm'))) {
             return false
@@ -231,12 +253,12 @@ export function createWriteEditorGroupActions(
       const rawState = get()
       const state = { ...rawState, documentsByPath: captureFocusedDocument(rawState) }
       if (fromGroupId === toGroupId) {
-        const key = writeDocumentKey(path)
+        const key = requestedItemKey(path)
         const groups = state.editorLayout.groups.map((group) => {
           if (group.id !== fromGroupId) return group
-          const tab = group.tabs.find((candidate) => writeDocumentKey(candidate.path) === key)
+          const tab = group.tabs.find((candidate) => writeEditorItemKey(candidate) === key)
           if (!tab) return group
-          const tabs = group.tabs.filter((candidate) => writeDocumentKey(candidate.path) !== key)
+          const tabs = group.tabs.filter((candidate) => writeEditorItemKey(candidate) !== key)
           tabs.splice(Math.min(Math.max(index ?? tabs.length, 0), tabs.length), 0, tab)
           return { ...group, tabs }
         })
@@ -246,17 +268,21 @@ export function createWriteEditorGroupActions(
         return
       }
       const from = state.editorLayout.groups.find((group) => group.id === fromGroupId)
-      const tab = from?.tabs.find((candidate) => pathsEqual(candidate.path, path))
+      const key = requestedItemKey(path)
+      const tab = from?.tabs.find((candidate) => writeEditorItemKey(candidate) === key)
       if (!tab) return
-      let editorLayout = addTabToGroup(state.editorLayout, toGroupId, tab.path, tab.viewMode)
+      let editorLayout = addEditorItemToGroup(state.editorLayout, toGroupId, tab, index)
       editorLayout = {
         ...editorLayout,
         groups: editorLayout.groups.map((group) => group.id === fromGroupId
           ? {
               ...group,
-              tabs: group.tabs.filter((candidate) => !pathsEqual(candidate.path, path)),
-              activePath: pathsEqual(group.activePath ?? '', path)
-                ? group.tabs.find((candidate) => !pathsEqual(candidate.path, path))?.path ?? null
+              tabs: group.tabs.filter((candidate) => writeEditorItemKey(candidate) !== key),
+              activePath: requestedItemKey(group.activePath ?? '') === key
+                ? (() => {
+                    const fallback = group.tabs.find((candidate) => writeEditorItemKey(candidate) !== key)
+                    return fallback ? writeEditorItemKey(fallback) : null
+                  })()
                 : group.activePath
             }
           : group)
@@ -284,13 +310,21 @@ export function createWriteEditorGroupActions(
         return
       }
       const source = focusedWriteGroup(state.editorLayout)
-      const path = requestedPath ?? source.activePath
-      const secondaryTabs = path ? [{ path, viewMode: 'preview' as const }] : []
+      const key = requestedPath ? requestedItemKey(requestedPath) : source.activePath
+      const sourceItem = writeEditorItemForKey(source, key)
+      const secondaryItem: WriteEditorItem | null = sourceItem
+        ? isWriteFileTab(sourceItem) ? { ...sourceItem, viewMode: 'preview' } : sourceItem
+        : key && !writeWhiteboardIdFromTabKey(key) ? { path: key, viewMode: 'preview' } : null
+      const secondaryTabs = secondaryItem ? [secondaryItem] : []
       const editorLayout = {
         ...state.editorLayout,
         orientation,
         focusedGroupId: 'secondary' as const,
-        groups: [source, { id: 'secondary' as const, tabs: secondaryTabs, activePath: path ?? null }]
+        groups: [source, {
+          id: 'secondary' as const,
+          tabs: secondaryTabs,
+          activePath: secondaryItem ? writeEditorItemKey(secondaryItem) : null
+        }]
       }
       persist(state.workspaceRoot, editorLayout)
       set(withProjection(clearWriteOfficeSelections(state.documentsByPath), editorLayout))
@@ -305,9 +339,14 @@ export function createWriteEditorGroupActions(
       if (!closing || !survivor) return
       const tabs = [...survivor.tabs]
       for (const tab of closing.tabs) {
-        if (!tabs.some((candidate) => pathsEqual(candidate.path, tab.path))) tabs.push(tab)
+        if (!tabs.some((candidate) => writeEditorItemKey(candidate) === writeEditorItemKey(tab))) tabs.push(tab)
       }
-      const primary = { ...survivor, id: 'primary' as const, tabs, activePath: survivor.activePath ?? tabs[0]?.path ?? null }
+      const primary = {
+        ...survivor,
+        id: 'primary' as const,
+        tabs,
+        activePath: survivor.activePath ?? (tabs[0] ? writeEditorItemKey(tabs[0]) : null)
+      }
       const editorLayout = {
         ...state.editorLayout,
         orientation: 'single' as const,
@@ -324,7 +363,12 @@ export function createWriteEditorGroupActions(
       const editorLayout = {
         ...state.editorLayout,
         groups: state.editorLayout.groups.map((group) => group.id === groupId
-          ? { ...group, tabs: group.tabs.map((tab) => pathsEqual(tab.path, path) ? { ...tab, viewMode: mode } : tab) }
+          ? {
+              ...group,
+              tabs: group.tabs.map((tab) => isWriteFileTab(tab) && pathsEqual(tab.path, path)
+                ? { ...tab, viewMode: mode }
+                : tab)
+            }
           : group)
       }
       persist(state.workspaceRoot, editorLayout)

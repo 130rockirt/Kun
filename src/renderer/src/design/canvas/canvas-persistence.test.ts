@@ -3,8 +3,10 @@ import {
   MAX_CANVAS_CHILDREN_PER_SHAPE,
   MAX_CANVAS_DOCUMENT_OBJECTS,
   MAX_CANVAS_GRAPH_DEPTH,
+  cancelPendingCanvasDocument,
   canvasDocumentKey,
   canvasDocPath,
+  clearCanvasDocumentPersistenceForTests,
   flushPendingCanvasDocuments,
   parseCanvasDocument,
   persistCanvasDocument,
@@ -364,6 +366,7 @@ describe('canvas-persistence round-trip', () => {
 
 describe('persistCanvasDocument debounce', () => {
   afterEach(() => {
+    clearCanvasDocumentPersistenceForTests()
     vi.useRealTimers()
     vi.unstubAllGlobals()
   })
@@ -441,5 +444,32 @@ describe('persistCanvasDocument debounce', () => {
       workspaceRoot: '/workspace',
       content: serializeCanvasDocument(latestDoc)
     })
+  })
+
+  it('retires a deleted canvas so a queued or later stale save cannot recreate it', async () => {
+    vi.useFakeTimers()
+    let finishWrite: ((value: { ok: true }) => void) | undefined
+    const writeWorkspaceFile = vi.fn(() => new Promise<{ ok: true }>((resolve) => {
+      finishWrite = resolve
+    }))
+    vi.stubGlobal('window', { kunGui: { writeWorkspaceFile } })
+
+    persistCanvasDocument('/workspace', 'deleted-board', createEmptyDocument(), '.kun-write/whiteboards')
+    vi.advanceTimersByTime(600)
+    expect(writeWorkspaceFile).toHaveBeenCalledOnce()
+
+    let cancelled = false
+    const cancel = cancelPendingCanvasDocument('/workspace', 'deleted-board', '.kun-write/whiteboards')
+      .then(() => { cancelled = true })
+    await Promise.resolve()
+    expect(cancelled).toBe(false)
+
+    finishWrite?.({ ok: true })
+    await cancel
+
+    // A late store subscription for the unmounted board must be a no-op too.
+    persistCanvasDocument('/workspace', 'deleted-board', createEmptyDocument(), '.kun-write/whiteboards')
+    vi.advanceTimersByTime(600)
+    expect(writeWorkspaceFile).toHaveBeenCalledOnce()
   })
 })

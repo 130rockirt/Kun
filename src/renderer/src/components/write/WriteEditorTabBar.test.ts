@@ -71,4 +71,55 @@ describe('WriteEditorTabBar', () => {
     act(() => assistantToggle.props.onClick())
     expect(onToggleAssistant).toHaveBeenCalledOnce()
   })
+
+  it('creates and labels a first-class whiteboard tab', () => {
+    const onCreateWhiteboard = vi.fn()
+    const onActivate = vi.fn()
+    let renderer!: ReactTestRenderer
+    act(() => {
+      renderer = create(createElement(WriteEditorTabBar, {
+        group: {
+          id: 'primary',
+          tabs: [{ kind: 'whiteboard', boardId: 'board-1', viewMode: 'rich' }],
+          activePath: 'whiteboard:board-1'
+        },
+        documentsByPath: {},
+        whiteboards: {
+          'board-1': {
+            id: 'board-1', title: 'Pitch map', workspaceRoot: '/work', threadId: 'thread-1',
+            phase: 'blank', revision: 0, createdAt: '2026-08-13', updatedAt: '2026-08-13'
+          }
+        },
+        focused: true,
+        primary: true,
+        leftSidebarCollapsed: false,
+        onToggleLeftSidebar: noop,
+        onActivate,
+        onClose: noop,
+        onMove: noop,
+        onCreateDraft: noop,
+        onCreateWhiteboard,
+        onQuickOpen: noop,
+        onSplit: noop,
+        onCloseGroup: noop,
+        hasSecondGroup: false,
+        assistantOpen: false,
+        showAssistantToggle: true,
+        onToggleAssistant: noop
+      }))
+    })
+    const tab = renderer.root.findByProps({ role: 'tab' })
+    expect(tab.findAllByType('span').some((span) => span.children.includes('Pitch map'))).toBe(true)
+    act(() => tab.props.onClick())
+    expect(onActivate).toHaveBeenCalledWith('whiteboard:board-1')
+
+    const add = renderer.root.findByProps({ 'aria-label': 'writeAddTab' })
+    act(() => add.props.onClick())
+    const createBoard = renderer.root.findAllByType('button').find((button) =>
+      button.children.some((child) => child === 'writeCreateWhiteboard')
+    )
+    expect(createBoard).toBeDefined()
+    act(() => createBoard!.props.onClick())
+    expect(onCreateWhiteboard).toHaveBeenCalledOnce()
+  })
 })

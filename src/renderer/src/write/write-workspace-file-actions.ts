@@ -8,7 +8,7 @@ import {
 } from '@shared/write-text-file'
 import { writePathToFileUrl } from '@shared/write-markdown-resource'
 import type { WriteWorkspaceGet, WriteWorkspaceSet, WriteWorkspaceState } from './write-workspace-store-types'
-import type { WriteDocumentSession, WriteEditorGroupId, WritePreviewMode } from './write-workspace-store-types'
+import type { WriteEditorGroupId } from './write-workspace-store-types'
 import { nextWriteDocumentEpoch } from './write-document-context'
 import {
   emptySelection,
@@ -29,16 +29,24 @@ import {
   saveWriteThreadRegistry
 } from './write-thread-registry'
 import {
-  addTabToGroup,
-  clearWriteOfficeSelections,
   createWriteDocumentSession,
-  emptyWriteEditorGroup,
+  isWriteFileTab,
+  isWriteWhiteboardTab,
   persistWriteEditorLayout,
   projectFocusedDocument,
   readWriteEditorLayout,
-  writeDocumentKey
+  writeDocumentKey,
+  writeEditorItemKey,
+  writeWhiteboardIdFromTabKey
 } from './write-editor-layout'
 import { pathsUnderRenamedEntry } from './write-editor-group-actions'
+import {
+  finishRestoredWriteLayout,
+  formatWriteFileActionError,
+  openWriteDocumentState,
+  prepareActiveWriteFileForNavigation,
+  removeFailedRestoredWriteTab
+} from './write-workspace-file-action-helpers'
 import {
   ensureMarkdownRenameExtension,
   projectRenamedDocumentKind,
@@ -63,87 +71,6 @@ type WriteFileActionContext = {
   set: WriteWorkspaceSet
   get: WriteWorkspaceGet
   cancelExternalSyncAnimation: () => void
-}
-
-function formatActionError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
-}
-
-function openDocumentState(
-  state: WriteWorkspaceState,
-  document: WriteDocumentSession,
-  groupId: WriteEditorGroupId,
-  viewMode: WritePreviewMode
-): Partial<WriteWorkspaceState> {
-  const documentsByPath = {
-    ...clearWriteOfficeSelections(state.documentsByPath),
-    [writeDocumentKey(document.path)]: document
-  }
-  const editorLayout = addTabToGroup(state.editorLayout, groupId, document.path, viewMode)
-  persistWriteEditorLayout(state.workspaceRoot, editorLayout)
-  return { documentsByPath, editorLayout, ...projectFocusedDocument(editorLayout, documentsByPath) }
-}
-
-function removeFailedRestoredTab(
-  layout: WriteWorkspaceState['editorLayout'],
-  groupId: WriteEditorGroupId,
-  path: string
-): WriteWorkspaceState['editorLayout'] {
-  return {
-    ...layout,
-    groups: layout.groups.map((group) => group.id === groupId
-      ? {
-          ...group,
-          tabs: group.tabs.filter((tab) => !pathsEqual(tab.path, path)),
-          activePath: pathsEqual(group.activePath ?? '', path) ? null : group.activePath
-        }
-      : group)
-  }
-}
-
-function finishRestoredLayout(
-  layout: WriteWorkspaceState['editorLayout'],
-  unavailableGroups: Set<WriteEditorGroupId>
-): WriteWorkspaceState['editorLayout'] {
-  const available = layout.groups.filter((group) => !unavailableGroups.has(group.id))
-  if (available.length === 0) {
-    return { ...layout, orientation: 'single', focusedGroupId: 'primary', groups: [emptyWriteEditorGroup('primary')] }
-  }
-  if (available.length === 1) {
-    return {
-      ...layout,
-      orientation: 'single',
-      focusedGroupId: 'primary',
-      groups: [{ ...available[0], id: 'primary' }]
-    }
-  }
-  const groups = available.slice(0, 2).map((group, index) => ({
-    ...group,
-    id: index === 0 ? 'primary' as const : 'secondary' as const
-  }))
-  return {
-    ...layout,
-    groups,
-    focusedGroupId: groups.some((group) => group.id === layout.focusedGroupId)
-      ? layout.focusedGroupId
-      : 'primary'
-  }
-}
-
-async function prepareActiveFileForNavigation(
-  get: WriteWorkspaceGet,
-  workspaceRoot: string
-): Promise<boolean> {
-  const state = get()
-  const dirtyDocuments = Object.values(state.documentsByPath).filter(
-    (document) => document.kind === 'text' && document.saveStatus !== 'saved'
-  )
-  if (dirtyDocuments.length === 0) return true
-  if (state.autoSaveEnabled) return get().saveAllDocuments(workspaceRoot)
-  if (window.confirm(i18n.t('common:writeSaveAllUnsavedConfirm'))) {
-    return get().saveAllDocuments(workspaceRoot)
-  }
-  return window.confirm(i18n.t('common:writeDiscardUnsavedChangesConfirm'))
 }
 
 export function createWriteFileActions({
@@ -197,7 +124,7 @@ export function createWriteFileActions({
         return
       }
       if (current.workspaceRoot && current.workspaceRoot !== normalized) {
-        const canLeaveCurrentFile = await prepareActiveFileForNavigation(get, current.workspaceRoot)
+        const canLeaveCurrentFile = await prepareActiveWriteFileForNavigation(get, current.workspaceRoot)
         if (!canLeaveCurrentFile || generation !== navigationGeneration) return
       }
 
@@ -210,6 +137,8 @@ export function createWriteFileActions({
       const root = await get().loadDirectory(normalized)
       if (!root || !navigationIsCurrent(generation, normalized)) return
       set((state) => ({ rootDirectory: root, expandedDirs: new Set([...state.expandedDirs, root]) }))
+      await get().loadWhiteboards(normalized)
+      if (!navigationIsCurrent(generation, normalized)) return
       const restoredLayout = readWriteEditorLayout(normalized)
       if (restoredLayout) {
         set({ editorLayout: restoredLayout })
@@ -217,32 +146,41 @@ export function createWriteFileActions({
         const unavailableGroups = new Set<WriteEditorGroupId>()
         for (const group of restoredLayout.groups) {
           const candidates = [
-            ...group.tabs.filter((tab) => pathsEqual(tab.path, group.activePath ?? '')),
-            ...group.tabs.filter((tab) => !pathsEqual(tab.path, group.activePath ?? ''))
+            ...group.tabs.filter((tab) => writeEditorItemKey(tab) === group.activePath),
+            ...group.tabs.filter((tab) => writeEditorItemKey(tab) !== group.activePath)
           ]
           if (candidates.length === 0) continue
-          let openedPath: string | null = null
+          let openedKey: string | null = null
           for (const tab of candidates) {
+            const itemKey = writeEditorItemKey(tab)
+            if (isWriteWhiteboardTab(tab)) {
+              if (get().whiteboards[tab.boardId]) {
+                openedKey = itemKey
+                break
+              }
+              validatedLayout = removeFailedRestoredWriteTab(validatedLayout, group.id, itemKey)
+              continue
+            }
             await get().openFile(normalized, tab.path, { groupId: group.id, viewMode: tab.viewMode })
             if (!navigationIsCurrent(generation, normalized)) return
             if (get().documentsByPath[writeDocumentKey(tab.path)]) {
-              openedPath = tab.path
+              openedKey = itemKey
               break
             }
-            validatedLayout = removeFailedRestoredTab(validatedLayout, group.id, tab.path)
+            validatedLayout = removeFailedRestoredWriteTab(validatedLayout, group.id, itemKey)
           }
-          if (openedPath) {
+          if (openedKey) {
             validatedLayout = {
               ...validatedLayout,
               groups: validatedLayout.groups.map((candidate) => candidate.id === group.id
-                ? { ...candidate, activePath: openedPath }
+                ? { ...candidate, activePath: openedKey }
                 : candidate)
             }
           } else {
             unavailableGroups.add(group.id)
           }
         }
-        validatedLayout = finishRestoredLayout(validatedLayout, unavailableGroups)
+        validatedLayout = finishRestoredWriteLayout(validatedLayout, unavailableGroups)
         const documentsByPath = get().documentsByPath
         persistWriteEditorLayout(normalized, validatedLayout)
         set({ editorLayout: validatedLayout, ...projectFocusedDocument(validatedLayout, documentsByPath) })
@@ -273,7 +211,7 @@ export function createWriteFileActions({
         if (!requestIsCurrent()) return null
         set((state) => ({
           loadingDirs: withoutLoadingDirs(state.loadingDirs, [targetKey, requestedRoot]),
-          treeError: formatActionError(error)
+          treeError: formatWriteFileActionError(error)
         }))
         return null
       }
@@ -362,7 +300,7 @@ export function createWriteFileActions({
       const existing = get().documentsByPath[writeDocumentKey(path)]
       if (existing) {
         rememberActiveFile(workspaceRoot, existing.path)
-        set((state) => openDocumentState(state, existing, groupId, viewMode))
+        set((state) => openWriteDocumentState(state, existing, groupId, viewMode))
         return
       }
       set({ fileLoading: true, fileError: null })
@@ -375,7 +313,7 @@ export function createWriteFileActions({
             return
           }
           rememberActiveFile(workspaceRoot, result.path)
-          set((state) => openDocumentState(state, createWriteDocumentSession({
+          set((state) => openWriteDocumentState(state, createWriteDocumentSession({
             path: result.path,
             kind: 'image',
             imageDataUrl: result.dataUrl,
@@ -394,7 +332,7 @@ export function createWriteFileActions({
             return
           }
           rememberActiveFile(workspaceRoot, result.path)
-          set((state) => openDocumentState(state, createWriteDocumentSession({
+          set((state) => openWriteDocumentState(state, createWriteDocumentSession({
             path: result.path,
             kind: 'pdf',
             pdfDataBase64: result.dataBase64,
@@ -411,7 +349,7 @@ export function createWriteFileActions({
           if (!fileRequestIsCurrent(groupId, generation, workspaceRoot)) return
           if (!result.ok) {
             rememberActiveFile(workspaceRoot, path)
-            set((state) => openDocumentState(state, createWriteDocumentSession({
+            set((state) => openWriteDocumentState(state, createWriteDocumentSession({
               path,
               kind: 'office',
               officeRefreshError: result.message,
@@ -421,7 +359,7 @@ export function createWriteFileActions({
             return
           }
           rememberActiveFile(workspaceRoot, result.path)
-          set((state) => openDocumentState(state, createWriteDocumentSession({
+          set((state) => openWriteDocumentState(state, createWriteDocumentSession({
             path: result.path,
             kind: 'office',
             officePreview: result,
@@ -439,7 +377,7 @@ export function createWriteFileActions({
             return
           }
           rememberActiveFile(workspaceRoot, result.path)
-          set((state) => openDocumentState(state, createWriteDocumentSession({
+        set((state) => openWriteDocumentState(state, createWriteDocumentSession({
             path: result.path,
             kind: 'code',
             fileContent: result.content,
@@ -458,7 +396,7 @@ export function createWriteFileActions({
           return
         }
         rememberActiveFile(workspaceRoot, result.path)
-        set((state) => openDocumentState(state, createWriteDocumentSession({
+        set((state) => openWriteDocumentState(state, createWriteDocumentSession({
           path: result.path,
           kind: 'text',
           fileContent: result.content,
@@ -471,7 +409,7 @@ export function createWriteFileActions({
         if (!fileRequestIsCurrent(groupId, generation, workspaceRoot)) return
         if (isWriteImageFilePath(path) && isMissingImageIpc(error)) {
           rememberActiveFile(workspaceRoot, path)
-          set((state) => openDocumentState(state, createWriteDocumentSession({
+          set((state) => openWriteDocumentState(state, createWriteDocumentSession({
             path,
             kind: 'image',
             imageDataUrl: writePathToFileUrl(path),
@@ -494,7 +432,7 @@ export function createWriteFileActions({
       try {
         result = await window.kunGui.createWorkspaceFile({ workspaceRoot, path, content })
       } catch (error) {
-        if (workspaceIsCurrent(workspaceRoot)) set({ fileError: formatActionError(error) })
+        if (workspaceIsCurrent(workspaceRoot)) set({ fileError: formatWriteFileActionError(error) })
         return null
       }
       if (!workspaceIsCurrent(workspaceRoot)) return null
@@ -512,7 +450,7 @@ export function createWriteFileActions({
       try {
         result = await window.kunGui.createWorkspaceDirectory({ workspaceRoot, path })
       } catch (error) {
-        if (workspaceIsCurrent(workspaceRoot)) set({ fileError: formatActionError(error) })
+        if (workspaceIsCurrent(workspaceRoot)) set({ fileError: formatWriteFileActionError(error) })
         return null
       }
       if (!workspaceIsCurrent(workspaceRoot)) return null
@@ -554,7 +492,7 @@ export function createWriteFileActions({
         result = await window.kunGui.renameWorkspaceEntry({ workspaceRoot, path, newName: nextName })
       } catch (error) {
         restoreRenameLock()
-        if (workspaceIsCurrent(workspaceRoot)) set({ fileError: formatActionError(error) })
+        if (workspaceIsCurrent(workspaceRoot)) set({ fileError: formatWriteFileActionError(error) })
         return null
       }
       if (!workspaceIsCurrent(workspaceRoot)) return null
@@ -584,13 +522,12 @@ export function createWriteFileActions({
           ...state.editorLayout,
           groups: state.editorLayout.groups.map((group) => ({
             ...group,
-            activePath: group.activePath
+            activePath: group.activePath && !writeWhiteboardIdFromTabKey(group.activePath)
               ? pathsUnderRenamedEntry(group.activePath, result.previousPath, result.path)
-              : null,
-            tabs: group.tabs.map((tab) => ({
-              ...tab,
-              path: pathsUnderRenamedEntry(tab.path, result.previousPath, result.path)
-            }))
+              : group.activePath,
+            tabs: group.tabs.map((tab) => isWriteFileTab(tab)
+              ? { ...tab, path: pathsUnderRenamedEntry(tab.path, result.previousPath, result.path) }
+              : tab)
           }))
         }
         const documentsByPath: WriteWorkspaceState['documentsByPath'] = {}
@@ -643,7 +580,7 @@ export function createWriteFileActions({
       try {
         result = await window.kunGui.deleteWorkspaceEntry({ workspaceRoot, path })
       } catch (error) {
-        if (workspaceIsCurrent(workspaceRoot)) set({ fileError: formatActionError(error) })
+        if (workspaceIsCurrent(workspaceRoot)) set({ fileError: formatWriteFileActionError(error) })
         return false
       }
       if (!workspaceIsCurrent(workspaceRoot)) return false
@@ -666,13 +603,15 @@ export function createWriteFileActions({
           return normalized === deletedPath || normalized.startsWith(`${deletedPath}/`)
         }
         const groups = state.editorLayout.groups.map((group) => {
-          const tabs = group.tabs.filter((tab) => !removed(tab.path))
+          const tabs = group.tabs.filter((tab) => !isWriteFileTab(tab) || !removed(tab.path))
           return {
             ...group,
             tabs,
-            activePath: group.activePath && !removed(group.activePath)
+            activePath: group.activePath && (
+              writeWhiteboardIdFromTabKey(group.activePath) || !removed(group.activePath)
+            )
               ? group.activePath
-              : tabs[0]?.path ?? null
+              : tabs[0] ? writeEditorItemKey(tabs[0]) : null
           }
         })
         const editorLayout = { ...state.editorLayout, groups }

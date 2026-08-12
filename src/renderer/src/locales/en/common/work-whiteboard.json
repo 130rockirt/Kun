@@ -1,0 +1,20 @@
+{
+  "workWhiteboardPhaseBlank": "Whiteboard",
+  "workWhiteboardPhaseDirections": "Direction review",
+  "workWhiteboardPhaseReview": "Slide review",
+  "workWhiteboardPhaseComplete": "Export complete",
+  "workWhiteboardSource": "Source: {{name}}",
+  "workWhiteboardActivate": "Activate whiteboard",
+  "workWhiteboardInactiveHint": "Activate this editor group to edit the whiteboard.",
+  "workWhiteboardLeaseHint": "Another whiteboard is active. Switch here to continue editing.",
+  "workWhiteboardRegenerateDirections": "Regenerate directions",
+  "workWhiteboardAdoptDirection": "Use selected direction and continue",
+  "workWhiteboardModifySlides": "Modify selected slides",
+  "workWhiteboardApproveExport": "Approve and export",
+  "workWhiteboardSelectDirectionHint": "Select a direction card first.",
+  "workWhiteboardSelectSlidesHint": "Select one or more slide cards first.",
+  "workWhiteboardCanvasLoadingHint": "Wait for this whiteboard to finish loading before approving export.",
+  "workWhiteboardQaBlockingHint": "Resolve blocking QA issues before approving export.",
+  "workWhiteboardImagePrompt": "Generate or revise the selected image placeholder on this Work whiteboard.",
+  "workWhiteboardOpenPptx": "Open PPTX"
+}
