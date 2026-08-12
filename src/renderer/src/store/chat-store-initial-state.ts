@@ -67,6 +67,7 @@ export function createInitialChatStoreState(workingDirectoryLabel: string) {
     composerFastMode: readStoredComposerFastMode(),
     composerAgentId: '',
     composerPersonaId: readStoredComposerPersonaId(),
+    composerPersonaEnabled: true,
     composerPickList: mergeComposerPickList(false, []),
     composerModelGroups: [],
     disabledSkillIds: [],

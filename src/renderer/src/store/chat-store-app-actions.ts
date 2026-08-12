@@ -405,6 +405,7 @@ export function createAppActions(options: CreateAppActionsOptions): Pick<
         conversationWorkspaceRoot: settings.conversationWorkspaceRoot || '',
         disabledSkillIds: settings.disabledSkillIds,
         codeAgentPresets: settings.codeAgentPresets,
+        composerPersonaEnabled: settings.codeAgentPersonaEnabled !== false,
         graphEnabled: settings.agents.kun.graph?.enabled === true,
         composerOrchestration:
           settings.agents.kun.graph?.enabled === true && get().composerOrchestration === 'graph'

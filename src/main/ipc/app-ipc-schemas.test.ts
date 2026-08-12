@@ -337,6 +337,17 @@ describe('app-ipc-schemas runtime', () => {
     })).toThrow(/runtime request path is not allowed/)
   })
 
+  it('accepts only POST requests for one encoded Kun subagent abort endpoint', () => {
+    expect(runtimeRequestPayloadSchema.parse({
+      path: '/v1/delegation/abort/child%2Fone',
+      method: 'POST'
+    }).path).toBe('/v1/delegation/abort/child%2Fone')
+    expect(() => runtimeRequestPayloadSchema.parse({
+      path: '/v1/delegation/abort/child%2Fone',
+      method: 'GET'
+    })).toThrow(/runtime request path is not allowed/)
+  })
+
   it('accepts only the modeled Kun Graph workbench endpoints', () => {
     for (const payload of [
       { path: '/v1/graphs?thread_id=thread_1', method: 'GET' },

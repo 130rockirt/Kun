@@ -212,7 +212,11 @@ export async function sendThreadMessage(
       createClientTurnRequestId()
     const expectedThreadId = (queued?.expectedThreadId ?? overrides?.expectedThreadId ?? '').trim()
     const requestedAgentSurface = queued?.agentSurface ?? overrides?.agentSurface
-    const persona = (queued?.persona ?? overrides?.persona)?.trim() ?? ''
+    const persona = resolveTurnPersona(
+      get().composerPersonaEnabled,
+      queued?.persona,
+      overrides?.persona
+    )
     const expectedThreadStillActive = (): boolean => Boolean(
       !expectedThreadId ||
       (
@@ -505,4 +509,12 @@ export async function sendThreadMessage(
       userModelChip,
       submittedMessageForQueue
     })
+}
+
+export function resolveTurnPersona(
+  enabled: boolean,
+  queuedPersona: string | undefined,
+  overridePersona: string | undefined
+): string {
+  return enabled ? (queuedPersona ?? overridePersona)?.trim() ?? '' : ''
 }

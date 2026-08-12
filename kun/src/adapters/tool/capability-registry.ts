@@ -7,6 +7,7 @@ import type {
 import type { LocalTool } from './local-tool-host.js'
 import { isToolAdvertisedInSandbox } from './sandbox-policy.js'
 import { isToolAllowedInOrchestration } from '../../graph/graph-tool-boundary.js'
+import { PLAN_MODE_ALLOWED_GENERATION_TOOL_NAMES } from './plan-mode-tool-policy.js'
 
 export type CapabilityToolRecord = {
   provider: ToolProviderPolicy
@@ -194,6 +195,7 @@ export class CapabilityRegistry {
     if (
       isPlanModeContext(context) &&
       !PLAN_MODE_ALLOWED_TOOL_NAMES.has(toolName) &&
+      !PLAN_MODE_ALLOWED_GENERATION_TOOL_NAMES.has(toolName) &&
       tool.sideEffect !== 'read-only'
     ) {
       return false

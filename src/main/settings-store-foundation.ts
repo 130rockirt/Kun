@@ -294,6 +294,7 @@ export const defaultSettings = (): AppSettingsV1 => ({
   },
   codePromptPrefix: '',
   chatWelcomeMessage: '',
+  codeAgentPersonaEnabled: true,
   codeAgentPresets: defaultCodeAgentPresets(),
   disabledSkillIds: [],
   write: defaultWriteSettings(),

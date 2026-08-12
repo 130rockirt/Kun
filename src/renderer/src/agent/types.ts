@@ -117,7 +117,7 @@ export type RuntimeChildMetadata = {
   childStatus: 'queued' | 'running' | 'completed' | 'failed' | 'aborted'
   childSeq: number
   childLauncher?: 'delegate_task' | 'explore_agent' | 'ppt_agent' | 'component_design' | 'graph'
-  childTerminationReason?: 'manual_stop' | 'runtime_restart' | 'child_error'
+  childTerminationReason?: 'user_stop' | 'manual_stop' | 'runtime_restart' | 'child_error'
   resumable?: boolean
   resumeCount?: number
   detached?: boolean

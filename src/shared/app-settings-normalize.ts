@@ -153,6 +153,7 @@ export function normalizeAppSettings(settings: AppSettingsV1): AppSettingsV1 {
     },
     codePromptPrefix: typeof maybeSettings.codePromptPrefix === 'string' ? maybeSettings.codePromptPrefix : '',
     chatWelcomeMessage: normalizeChatWelcomeMessage(maybeSettings.chatWelcomeMessage),
+    codeAgentPersonaEnabled: maybeSettings.codeAgentPersonaEnabled !== false,
     codeAgentPresets: normalizeCodeAgentPresets(maybeSettings.codeAgentPresets),
     disabledSkillIds: normalizeDisabledSkillIds(maybeSettings.disabledSkillIds)
   }

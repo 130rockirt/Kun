@@ -285,7 +285,7 @@ type ExploreChildOutput = ExploreTask & {
   parentThreadId?: string
   parentTurnId?: string
   launcher?: 'explore_agent'
-  terminationReason?: 'manual_stop' | 'runtime_restart' | 'child_error'
+  terminationReason?: 'user_stop' | 'manual_stop' | 'runtime_restart' | 'child_error'
   resumable?: boolean
   resumeCount?: number
   summaryTruncated?: boolean

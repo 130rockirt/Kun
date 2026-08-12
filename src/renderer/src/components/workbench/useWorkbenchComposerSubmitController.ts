@@ -600,10 +600,12 @@ export function useWorkbenchComposerSubmitController({
         ? await activePptReviewComposerContexts(workspaceRoot, activeThreadId)
         : []
       const chatState = useChatStore.getState()
-      const persona = resolveCodeAgentPersona(
-        chatState.codeAgentPresets,
-        chatState.composerPersonaId
-      )
+      const persona = chatState.composerPersonaEnabled
+        ? resolveCodeAgentPersona(
+            chatState.codeAgentPresets,
+            chatState.composerPersonaId
+          )
+        : ''
       void sendMessage(outboundText, composerMode === 'plan' ? 'plan' : 'agent', {
         ...(outboundDisplay ? { displayText: outboundDisplay } : {}),
         ...(outboundGuiDesignCanvas ? { guiDesignCanvas: true } : {}),

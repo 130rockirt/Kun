@@ -19,6 +19,7 @@ import {
   Monitor,
   Presentation,
   Search,
+  UserRound,
   Workflow
 } from 'lucide-react'
 import { useEffect, useState, type ReactElement, type ReactNode } from 'react'
@@ -33,13 +34,14 @@ import {
 } from './settings-section-agent-panels'
 import { GraphModeSettingsPanel } from './settings-section-graph-panel'
 import { ExploreAgentSettingsPanel } from './settings-section-lab-explore'
+import { ComposerPersonaSettingsPanel } from './settings-section-lab-persona'
 import { PptAgentSettingsPanel } from './settings-section-lab-ppt'
 
-type LaboratorySettingsPanel = 'computer' | 'browser' | 'graph' | 'explore' | 'ppt'
+type LaboratorySettingsPanel = 'persona' | 'computer' | 'browser' | 'graph' | 'explore' | 'ppt'
 
 export function LaboratorySettingsSection({ ctx }: { ctx: Record<string, any> }): ReactElement {
-  const { t, form, kun, updateKun, selectControlClass, runtimeInfo } = ctx
-  const [activePanel, setActivePanel] = useState<LaboratorySettingsPanel>('computer')
+  const { t, form, kun, update, updateKun, selectControlClass, runtimeInfo } = ctx
+  const [activePanel, setActivePanel] = useState<LaboratorySettingsPanel>('persona')
   const provider = form.provider ?? defaultModelProviderSettings()
   const modelProviders = provider.providers as ModelProviderProfileV1[]
   const activeProviderId = kun.providerId?.trim() || DEFAULT_MODEL_PROVIDER_ID
@@ -76,6 +78,7 @@ export function LaboratorySettingsSection({ ctx }: { ctx: Record<string, any> })
         baseId="laboratory-settings"
         ariaLabel={t('agentsQuickLaboratory')}
         items={[
+          { id: 'persona', label: t('labComposerPersonaTitle'), icon: UserRound },
           { id: 'computer', label: t('computerUseTitle'), icon: Monitor },
           { id: 'browser', label: t('browserUseSettingsTitle'), icon: Globe2 },
           { id: 'graph', label: t('graphSettingsTitle'), icon: Workflow },
@@ -85,6 +88,21 @@ export function LaboratorySettingsSection({ ctx }: { ctx: Record<string, any> })
         value={activePanel}
         onChange={setActivePanel}
       />
+
+      <SettingsTabPanel<LaboratorySettingsPanel>
+        baseId="laboratory-settings"
+        tabId="persona"
+        active={activePanel === 'persona'}
+        className="[&>div]:mt-0"
+      >
+        <ComposerPersonaSettingsPanel
+          t={t}
+          enabled={form.codeAgentPersonaEnabled !== false}
+          presets={form.codeAgentPresets ?? []}
+          onEnabledChange={(enabled) => update({ codeAgentPersonaEnabled: enabled })}
+          onPresetsChange={(next) => update({ codeAgentPresets: next })}
+        />
+      </SettingsTabPanel>
 
       <SettingsTabPanel<LaboratorySettingsPanel>
         baseId="laboratory-settings"

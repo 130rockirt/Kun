@@ -29,6 +29,7 @@ type UseWorkbenchChatComposerPropsInput = {
   composerReasoningEffort: ComposerProps['composerReasoningEffort']
   composerFastMode: NonNullable<ComposerProps['composerFastMode']>
   composerPersonaId: NonNullable<ComposerProps['composerPersonaId']>
+  composerPersonaEnabled: boolean
   codeAgentPresets: NonNullable<ComposerProps['codeAgentPresets']>
   setComposerPersonaId: NonNullable<ComposerProps['onComposerPersonaChange']>
   setComposerReasoningEffort: ComposerProps['onComposerReasoningEffortChange']
@@ -100,6 +101,7 @@ export function useWorkbenchChatComposerProps({
   composerReasoningEffort,
   composerFastMode,
   composerPersonaId,
+  composerPersonaEnabled,
   codeAgentPresets,
   setComposerPersonaId,
   setComposerReasoningEffort,
@@ -227,10 +229,14 @@ export function useWorkbenchChatComposerProps({
     onExecutionSettingsChange: updateComposerExecutionSettings,
     // Personas are Code-mode only: Write has its own agent presets, and SDD
     // drafts run a fixed prompt contract.
-    composerPersonaId: route === 'chat' && !activeSddDraft ? composerPersonaId : undefined,
-    codeAgentPresets: route === 'chat' && !activeSddDraft ? codeAgentPresets : undefined,
+    composerPersonaId:
+      route === 'chat' && !activeSddDraft && composerPersonaEnabled ? composerPersonaId : undefined,
+    codeAgentPresets:
+      route === 'chat' && !activeSddDraft && composerPersonaEnabled ? codeAgentPresets : undefined,
     onComposerPersonaChange:
-      route === 'chat' && !activeSddDraft ? setComposerPersonaId : undefined,
+      route === 'chat' && !activeSddDraft && composerPersonaEnabled
+        ? setComposerPersonaId
+        : undefined,
     onBtwCommand: (seedText) => {
       if (seedText?.trim()) {
         void spawnSideConversation(seedText)
@@ -242,6 +248,7 @@ export function useWorkbenchChatComposerProps({
     activeClawChannelId,
     codeAgentPresets,
     composerPersonaId,
+    composerPersonaEnabled,
     setComposerPersonaId,
     activeClawChannelModel,
     activeSddDraft,

@@ -270,7 +270,7 @@ export function FloatingComposerSurfaceView({
                     activePresetId={composerPersonaId ?? ''}
                     disabled={!canCompose}
                     onSelect={onComposerPersonaChange}
-                    onOpenPersonaSettings={() => openSettings('agents')}
+                    onOpenPersonaSettings={() => openSettings('laboratory')}
                   />
                 ) : null}
               </div>

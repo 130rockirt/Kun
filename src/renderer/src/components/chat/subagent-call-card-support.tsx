@@ -32,7 +32,7 @@ export type DelegateDetail = {
   parentTurnId?: string
   status?: 'queued' | 'running' | 'completed' | 'failed' | 'aborted'
   launcher?: 'delegate_task' | 'explore_agent' | 'ppt_agent' | 'component_design' | 'graph'
-  terminationReason?: 'manual_stop' | 'runtime_restart' | 'child_error'
+  terminationReason?: 'user_stop' | 'manual_stop' | 'runtime_restart' | 'child_error'
   resumable?: boolean
   resumeCount?: number
   /** Short UI title from explore_agent (or early lifecycle updates). */
@@ -112,7 +112,7 @@ export function parseDelegateDetail(detail: string | undefined): DelegateDetail 
       obj.launcher === 'ppt_agent' || obj.launcher === 'component_design' || obj.launcher === 'graph'
       ? obj.launcher
       : undefined,
-    terminationReason: obj.terminationReason === 'manual_stop' ||
+    terminationReason: obj.terminationReason === 'user_stop' || obj.terminationReason === 'manual_stop' ||
       obj.terminationReason === 'runtime_restart' || obj.terminationReason === 'child_error'
       ? obj.terminationReason
       : undefined,
@@ -225,7 +225,7 @@ export function readChildMeta(block: ChatBlock): ChildMeta {
       child.childLauncher === 'ppt_agent' || child.childLauncher === 'component_design' || child.childLauncher === 'graph'
       ? child.childLauncher
       : undefined,
-    childTerminationReason: child.childTerminationReason === 'manual_stop' ||
+    childTerminationReason: child.childTerminationReason === 'user_stop' || child.childTerminationReason === 'manual_stop' ||
       child.childTerminationReason === 'runtime_restart' || child.childTerminationReason === 'child_error'
       ? child.childTerminationReason
       : undefined,
@@ -260,13 +260,16 @@ export function resolveStatus(block: ChatBlock, child: ChildMeta, detail?: Deleg
   const cs = child.childStatus
   const blockStatus =
     'status' in block && typeof block.status === 'string' ? block.status : undefined
+  const userStopped = (child.childTerminationReason ?? detail?.terminationReason) === 'user_stop'
 
   // A terminal child event is the most specific signal and can still turn a
   // superficially successful tool result into a failed child card.
   if (cs === 'completed') return 'done'
-  if (cs === 'failed' || cs === 'aborted') return 'failed'
+  if (cs === 'aborted') return userStopped ? 'stopped' : 'failed'
+  if (cs === 'failed') return 'failed'
   if (detail?.status === 'completed') return 'done'
-  if (detail?.status === 'failed' || detail?.status === 'aborted') return 'failed'
+  if (detail?.status === 'aborted') return userStopped ? 'stopped' : 'failed'
+  if (detail?.status === 'failed') return 'failed'
 
   // The tool projection is monotonic: success/error means the child settled,
   // even if a stale lifecycle snapshot still says queued/running.
@@ -327,6 +330,10 @@ export function StatusPill({ status, t }: { status: CardStatus; t: (k: string) =
       return (
         <span className={`${base} text-ds-success bg-ds-success-soft`}>{t('subagentStatusDone')}</span>
       )
+    case 'stopped':
+      return (
+        <span className={`${base} bg-ds-card-muted text-ds-muted`}>{t('subagentStatusStopped')}</span>
+      )
     case 'failed':
       return (
         <span className={`${base} text-ds-danger bg-ds-danger-soft`}>{t('subagentStatusFailed')}</span>
@@ -340,6 +347,18 @@ export function StatusPill({ status, t }: { status: CardStatus; t: (k: string) =
     default:
       return null
   }
+}
+
+export function subagentStatusText(status: CardStatus, t: (key: string) => string): string {
+  const keys: Record<CardStatus, string> = {
+    queued: 'subagentStatusQueued',
+    running: 'subagentStatusRunning',
+    done: 'subagentStatusDone',
+    stopped: 'subagentStatusStopped',
+    failed: 'subagentStatusFailed',
+    'awaiting-permission': 'subagentStatusAwaiting'
+  }
+  return t(keys[status])
 }
 
 export function BackgroundPill({ t }: { t: (k: string) => string }): ReactElement {

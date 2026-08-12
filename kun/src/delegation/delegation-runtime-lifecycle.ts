@@ -52,6 +52,7 @@ import type { ChildExecutionState } from './delegation-runtime-base.js'
 import { childResultOwnerIds } from './child-result-materializer.js'
 import {
   addChildUsage,
+  abortChildForUser,
   childActivityFromEvent,
   childContractError,
   childLifecycleMetadata,
@@ -322,20 +323,17 @@ export class DelegationRuntime extends DelegationRuntimeRun {
     return true
   }
 
-  /**
-   * Abort a detached child by id. Returns `true` when a running detached
-   * job was signalled, `false` otherwise. Synchronous (in-flight) runs
-   * are unaffected — the caller can abort their own parent signal instead.
-   */
+  /** Abort one active child without interrupting its parent or siblings. */
   abortChild(childId: string): boolean {
-    const controller = this.detachedAborts.get(childId)
+    const controller = this.detachedAborts.get(childId) ??
+      this.foregroundChildren.get(childId)?.controller
     if (!controller) {
-      console.warn(`[kun] detached subagent abort requested but no running child found child=${childId}`)
+      console.warn(`[kun] subagent user stop requested but no active child found child=${childId}`)
       return false
     }
-    console.warn(`[kun] detached subagent abort requested child=${childId}`)
-    controller.abort()
-    console.warn(`[kun] detached subagent abort signal fired child=${childId}`)
+    console.warn(`[kun] subagent user stop requested child=${childId}`)
+    abortChildForUser(controller)
+    console.warn(`[kun] subagent user stop signal fired child=${childId}`)
     return true
   }
 

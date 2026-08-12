@@ -183,7 +183,12 @@ function updateProvider(
 describe('runtimeSettingsApplyMode', () => {
   it('ignores UI-only settings', () => {
     const prev = settings()
-    const next = { ...prev, uiFontScale: 0.9, theme: 'dark' as const }
+    const next = {
+      ...prev,
+      uiFontScale: 0.9,
+      theme: 'dark' as const,
+      codeAgentPersonaEnabled: false
+    }
 
     expect(runtimeSettingsApplyMode(prev, next)).toBe('none')
   })

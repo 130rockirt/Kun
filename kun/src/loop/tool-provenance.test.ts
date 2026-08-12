@@ -12,6 +12,15 @@ const readTool: ModelToolSpec = {
   providerId: 'builtin'
 }
 
+const generateImageTool: ModelToolSpec = {
+  name: 'generate_image',
+  description: 'Generate an image.',
+  inputSchema: { type: 'object', properties: { prompt: { type: 'string' } } },
+  toolKind: 'file_change',
+  providerKind: 'image',
+  providerId: 'imageGen'
+}
+
 describe('model tool provenance', () => {
   it('survives token economy compaction and plan-mode filtering', () => {
     expect(compactToolSpec(readTool)).toMatchObject({
@@ -36,5 +45,22 @@ describe('model tool provenance', () => {
     expect(buildToolCatalogFingerprint([readTool]).fingerprint).toBe(
       buildToolCatalogFingerprint([withoutProvenance]).fingerprint
     )
+  })
+
+  it('keeps image generation available throughout a plan-mode turn', () => {
+    const mutationTool: ModelToolSpec = {
+      ...generateImageTool,
+      name: 'write',
+      providerKind: 'built-in',
+      providerId: 'builtin'
+    }
+
+    for (const createPlanSatisfied of [false, true]) {
+      expect(resolvePlanModeToolSpecs([generateImageTool, mutationTool], {
+        planTurnActive: true,
+        createPlanSatisfied,
+        stepIndex: createPlanSatisfied ? 1 : 0
+      })).toEqual([generateImageTool])
+    }
   })
 })

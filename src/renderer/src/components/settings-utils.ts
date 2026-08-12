@@ -183,6 +183,7 @@ export function coerceRendererSettings(settings: AppSettingsV1): AppSettingsV1 {
     },
     codePromptPrefix: typeof raw.codePromptPrefix === 'string' ? raw.codePromptPrefix : '',
     chatWelcomeMessage: normalizeChatWelcomeMessage(raw.chatWelcomeMessage),
+    codeAgentPersonaEnabled: raw.codeAgentPersonaEnabled !== false,
     codeAgentPresets: normalizeCodeAgentPresets(raw.codeAgentPresets),
     disabledSkillIds: normalizeDisabledSkillIds(raw.disabledSkillIds)
   }

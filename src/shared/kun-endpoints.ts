@@ -87,6 +87,7 @@ export const KUN_DELEGATION_PROFILES_PATH = '/v1/delegation/profiles'
 export const KUN_DELEGATION_PROFILES_TEMPLATE = '/v1/delegation/profiles'
 export const KUN_DELEGATION_DIAGNOSTICS_PATH = '/v1/delegation/diagnostics'
 export const KUN_DELEGATION_DIAGNOSTICS_TEMPLATE = '/v1/delegation/diagnostics'
+export const KUN_DELEGATION_ABORT_TEMPLATE = '/v1/delegation/abort/{id}'
 export function kunDelegationProfilesPath(workspace?: string): string {
   if (!workspace?.trim()) return KUN_DELEGATION_PROFILES_PATH
   return `${KUN_DELEGATION_PROFILES_PATH}?workspace=${encodeURIComponent(workspace.trim())}`
@@ -94,6 +95,9 @@ export function kunDelegationProfilesPath(workspace?: string): string {
 export function kunDelegationDiagnosticsPath(parentThreadId?: string): string {
   if (!parentThreadId?.trim()) return KUN_DELEGATION_DIAGNOSTICS_PATH
   return `${KUN_DELEGATION_DIAGNOSTICS_PATH}?parent_thread_id=${encodeURIComponent(parentThreadId.trim())}`
+}
+export function kunDelegationAbortPath(childId: string): string {
+  return `/v1/delegation/abort/${encodeURIComponent(childId)}`
 }
 
 export const KUN_GRAPHS_PATH = '/v1/graphs'

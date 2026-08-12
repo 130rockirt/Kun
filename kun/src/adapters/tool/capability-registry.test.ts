@@ -133,6 +133,28 @@ describe('CapabilityRegistry Graph orchestration policy', () => {
 })
 
 describe('CapabilityRegistry Plan mode policy', () => {
+  it('keeps image generation visible in Agent, Plan, and Graph modes on every workbench surface', () => {
+    const registry = new CapabilityRegistry([{
+      id: 'imageGen',
+      kind: 'image',
+      enabled: true,
+      available: true,
+      tools: [tool('generate_image')]
+    }])
+    const modes = [
+      context([], 'agent', 'direct'),
+      context([], 'plan', 'direct'),
+      context([], 'agent', 'graph')
+    ]
+
+    for (const modeContext of modes) {
+      for (const agentSurface of ['code', 'write', 'design'] as const) {
+        expect(registry.listTools({ ...modeContext, agentSurface }).map((spec) => spec.name))
+          .toEqual(['generate_image'])
+      }
+    }
+  })
+
   it('allows host-classified read-only tools and blocks unknown external tools', () => {
     const registry = new CapabilityRegistry([{
       id: 'mcp:test',
@@ -154,6 +176,7 @@ describe('CapabilityRegistry Plan mode policy', () => {
       tool('read', 'read-only'),
       tool('write'),
       tool('edit'),
+      tool('generate_image'),
       tool('create_plan'),
       tool('user_input'),
       tool('request_user_input')
@@ -162,10 +185,12 @@ describe('CapabilityRegistry Plan mode policy', () => {
 
     expect(registry.listTools(planContext).map((spec) => spec.name)).toEqual([
       'read',
+      'generate_image',
       'create_plan',
       'user_input',
       'request_user_input'
     ])
+    expect(registry.resolveTool('generate_image', planContext).provider.id).toBe('builtin')
     for (const name of ['write', 'edit']) {
       expect(() => registry.resolveTool(name, planContext))
         .toThrow(`tool ${name} is not advertised by active tool policy`)

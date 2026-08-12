@@ -361,6 +361,8 @@ export type ChatState = {
    * sent per turn, so switching it never rewrites earlier turns.
    */
   composerPersonaId: string
+  /** Whether the experimental composer persona picker and turn override are active. */
+  composerPersonaEnabled: boolean
   /** Mirror of `AppSettingsV1.codeAgentPresets` for composer-side resolution. */
   codeAgentPresets: CodeAgentPresetV1[]
   disabledSkillIds: string[]

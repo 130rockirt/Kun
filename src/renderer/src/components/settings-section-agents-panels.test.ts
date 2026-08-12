@@ -154,6 +154,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
       .findAllByProps({ role: 'tab' })
       .filter((tab) => String(tab.props.id ?? '').startsWith('laboratory-settings-tab-'))
     expect(laboratoryTabs.map(instanceText)).toEqual([
+      'Personas',
       'Computer control',
       'Browser',
       'Graph mode',
@@ -161,8 +162,9 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
       'PPT agent'
     ])
     expect(laboratoryTabs.map((tab) => tab.props['aria-selected']))
-      .toEqual([true, false, false, false, false])
+      .toEqual([true, false, false, false, false, false])
     expect(laboratoryTabs.map((tab) => tab.props['aria-controls'])).toEqual([
+      'laboratory-settings-panel-persona',
       'laboratory-settings-panel-computer',
       'laboratory-settings-panel-browser',
       'laboratory-settings-panel-graph',
@@ -173,9 +175,29 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
     const laboratoryPanels = renderer.root
       .findAllByProps({ role: 'tabpanel' })
       .filter((panel) => String(panel.props.id ?? '').startsWith('laboratory-settings-panel-'))
-    expect(laboratoryPanels).toHaveLength(5)
+    expect(laboratoryPanels).toHaveLength(6)
     expect(laboratoryPanels.map((panel) => panel.props.hidden))
-      .toEqual([false, true, true, true, true])
+      .toEqual([false, true, true, true, true, true])
+  })
+
+  it('updates the composer persona experiment from the laboratory switch', () => {
+    const update = vi.fn()
+    let renderer!: ReactTestRenderer
+    act(() => {
+      renderer = createRenderer(createElement(LaboratorySettingsSection, {
+        ctx: { ...baseCtx(), update }
+      }))
+    })
+
+    const personaPanel = renderer.root.findByProps({
+      id: 'laboratory-settings-panel-persona'
+    })
+    expect(instanceText(personaPanel)).toContain('Enable composer personas')
+    const toggle = personaPanel.findByProps({ role: 'switch' })
+    expect(toggle.props['aria-checked']).toBe(true)
+
+    act(() => toggle.props.onClick())
+    expect(update).toHaveBeenCalledWith({ codeAgentPersonaEnabled: false })
   })
 
   it('renders the explore_agent lab panel and gates fast mode on Codex priority models', () => {

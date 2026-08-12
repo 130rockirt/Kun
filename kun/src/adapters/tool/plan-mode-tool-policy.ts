@@ -6,6 +6,16 @@ export type PlanModeToolBlock = {
   message: string
 }
 
+/**
+ * Generated media is a deliberate Plan-mode exception: users should be able
+ * to create or iterate an image without switching the conversation back to
+ * Agent mode. Keep this list narrow because these tools persist workspace
+ * artifacts even though they do not modify project source files.
+ */
+export const PLAN_MODE_ALLOWED_GENERATION_TOOL_NAMES: ReadonlySet<string> = new Set([
+  'generate_image'
+])
+
 export function isPlanModeToolContext(
   context: Pick<ToolHostContext, 'threadMode' | 'guiPlan'>
 ): boolean {
@@ -23,7 +33,11 @@ export async function planModeToolBlock(
   context: ToolHostContext
 ): Promise<PlanModeToolBlock | null> {
   if (!isPlanModeToolContext(context)) return null
-  if (tool.name === 'create_plan' || tool.toolKind !== 'file_change') return null
+  if (
+    tool.name === 'create_plan' ||
+    PLAN_MODE_ALLOWED_GENERATION_TOOL_NAMES.has(tool.name) ||
+    tool.toolKind !== 'file_change'
+  ) return null
   return {
     code: 'plan_mode_write_blocked',
     message:

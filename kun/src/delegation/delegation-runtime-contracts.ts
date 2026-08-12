@@ -83,6 +83,7 @@ export const ChildRunLauncher = z.enum([
 export type ChildRunLauncher = z.infer<typeof ChildRunLauncher>
 
 export const ChildRunTerminationReason = z.enum([
+  'user_stop',
   'manual_stop',
   'runtime_restart',
   'child_error'

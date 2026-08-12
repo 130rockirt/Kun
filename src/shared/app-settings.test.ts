@@ -106,6 +106,16 @@ describe('application locale settings', () => {
   })
 })
 
+describe('composer persona experiment settings', () => {
+  it('keeps legacy snapshots enabled and preserves explicit disablement', () => {
+    expect(normalizeAppSettings(settings()).codeAgentPersonaEnabled).toBe(true)
+    expect(normalizeAppSettings({
+      ...settings(),
+      codeAgentPersonaEnabled: false
+    }).codeAgentPersonaEnabled).toBe(false)
+  })
+})
+
 describe('design workspace settings', () => {
   it('migrates a legacy default workspace into the Design workspace list', () => {
     expect(normalizeDesignSettings({ defaultWorkspaceRoot: ' /tmp/design/ ' })).toMatchObject({

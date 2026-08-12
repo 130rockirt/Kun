@@ -53,11 +53,11 @@ import {
 } from './delegation-runtime-contracts.js'
 import {
   aggregateChildRuns,
+  childAbortOutcome,
   childActivityFromEvent,
   childContractError,
   defaultExecutor,
   elapsedMs,
-  errorMessage,
   executeWithParentSignal,
   formatDetachedChildDisplayText,
   formatDetachedChildNotice,
@@ -419,7 +419,8 @@ export abstract class DelegationRuntimeBase {
   }
 
   protected async notifyDetachedChild(record: ChildRunRecord): Promise<void> {
-    if (record.status !== 'completed' && record.status !== 'failed') return
+    if (record.status === 'aborted' && record.terminationReason !== 'user_stop') return
+    if (record.status !== 'completed' && record.status !== 'failed' && record.status !== 'aborted') return
     if (!this.options.threadStore || !this.options.turns || !this.runTurn) return
     const thread = await this.options.threadStore.get(record.parentThreadId)
     if (!thread) return
@@ -498,13 +499,13 @@ export abstract class DelegationRuntimeBase {
     try {
       await this.acquireSlot(args.signal)
     } catch (error) {
-      const runtimeRestart = isHostShutdownTurnSuspension(args.signal)
+      const abort = childAbortOutcome(args.signal, isHostShutdownTurnSuspension(args.signal), error)
       record = await this.commitChildState(args.state, (current) => ChildRunRecord.parse({
         ...current,
-        status: runtimeRestart ? 'failed' : 'aborted',
-        terminationReason: runtimeRestart ? 'runtime_restart' : 'manual_stop',
+        status: abort.terminationReason === 'runtime_restart' ? 'failed' : 'aborted',
+        terminationReason: abort.terminationReason,
         resumable: isGenericChildLauncher(current.launcher),
-        error: errorMessage(error).slice(0, CHILD_RESULT_PREVIEW_CHARS),
+        error: abort.error.slice(0, CHILD_RESULT_PREVIEW_CHARS),
         updatedAt: this.now()
       }))
       return record
@@ -604,6 +605,7 @@ export abstract class DelegationRuntimeBase {
     } catch (error) {
       const finishedAt = this.now()
       const runtimeRestart = isHostShutdownTurnSuspension(args.signal)
+      const abort = childAbortOutcome(args.signal, runtimeRestart, error)
       const childResult = error instanceof ChildResultExecutionError
         ? error.result
         : undefined
@@ -616,7 +618,7 @@ export abstract class DelegationRuntimeBase {
       record = await this.commitChildState(args.state, (current) => ChildRunRecord.parse({
         ...current,
         status: runtimeRestart ? 'failed' : args.signal.aborted ? 'aborted' : 'failed',
-        terminationReason: runtimeRestart ? 'runtime_restart' : args.signal.aborted ? 'manual_stop' : 'child_error',
+        terminationReason: args.signal.aborted || runtimeRestart ? abort.terminationReason : 'child_error',
         resumable: args.signal.aborted && isGenericChildLauncher(current.launcher),
         ...(childResult ? {
           summary: childResult.summary,
@@ -636,7 +638,7 @@ export abstract class DelegationRuntimeBase {
           deckArtifact: childResult.deckArtifact,
           deckArtifactParentTurnId: args.parentTurnId
         } : {}),
-        error: errorMessage(error).slice(0, CHILD_RESULT_PREVIEW_CHARS),
+        error: abort.error.slice(0, CHILD_RESULT_PREVIEW_CHARS),
         durationMs: (current.durationMs ?? 0) + elapsedMs(startedAt, finishedAt),
         updatedAt: finishedAt
       }))

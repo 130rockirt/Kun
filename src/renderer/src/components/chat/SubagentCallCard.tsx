@@ -37,11 +37,12 @@ import {
   parseExploreBatchChildren,
   readChildMeta,
   resolveStatus,
+  subagentStatusText,
   subagentResumeRequestId,
   useOnScreen,
-  type CardStatus,
   type OpenChildThreadHandler
 } from './subagent-call-card-support'
+import { SubagentStopControl } from './SubagentStopControl'
 
 export { parseDelegateDetail } from './subagent-call-card-support'
 export type { OpenChildThreadHandler } from './subagent-call-card-support'
@@ -180,7 +181,7 @@ export function SubagentCallCard({
   const attemptParentTurnId = child.parentTurnId || detail.parentTurnId
   const canResume = Boolean(
     childId &&
-    status === 'failed' &&
+    (status === 'failed' || status === 'stopped') &&
     (child.resumable ?? detail.resumable) === true &&
     (!attemptParentTurnId || !block.turnId || attemptParentTurnId === block.turnId)
   )
@@ -243,7 +244,7 @@ export function SubagentCallCard({
       ref={ref as React.RefObject<HTMLElement>}
       className={`${shellClass}${failBorder}`}
       style={{ ['--ds-subagent-stagger' as string]: staggerDelay }}
-      aria-label={`${taskTitle} · ${agentIdentity}${model ? ` · ${model}` : ''} · ${pillText(status, t)}`}
+      aria-label={`${taskTitle} · ${agentIdentity}${model ? ` · ${model}` : ''} · ${subagentStatusText(status, t)}`}
       data-testid="subagent-call-card"
       data-explore={isExplore ? 'true' : 'false'}
       data-activity-label={activityLine ?? ''}
@@ -342,6 +343,11 @@ export function SubagentCallCard({
             <span>{t('subagentResumeShort', { defaultValue: 'Continue' })}</span>
           </button>
         ) : null}
+        <SubagentStopControl
+          childId={childId}
+          active={status === 'queued' || status === 'running' || status === 'awaiting-permission'}
+          t={t}
+        />
         {childId ? (
           <button
             type="button"
@@ -457,7 +463,7 @@ export function SubagentCallCard({
           childId={childId}
           title={taskTitle}
           elapsedLabel={elapsed}
-          statusLabel={pillText(status, t)}
+          statusLabel={subagentStatusText(status, t)}
           activity={activity}
           summary={detail.summary}
           onClose={() => setPeekOpen(false)}
@@ -473,23 +479,6 @@ export function SubagentCallCard({
       ) : null}
     </section>
   )
-}
-
-function pillText(status: CardStatus, t: (k: string) => string): string {
-  switch (status) {
-    case 'queued':
-      return t('subagentStatusQueued')
-    case 'running':
-      return t('subagentStatusRunning')
-    case 'done':
-      return t('subagentStatusDone')
-    case 'failed':
-      return t('subagentStatusFailed')
-    case 'awaiting-permission':
-      return t('subagentStatusAwaiting')
-    default:
-      return ''
-  }
 }
 
 /** Best-effort task one-liner from a generic delegate/explore summary string. */

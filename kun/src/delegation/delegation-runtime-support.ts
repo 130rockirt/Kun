@@ -168,6 +168,28 @@ export async function executeWithParentSignal<T>(
   return execute(parentSignal)
 }
 
+export const USER_INITIATED_CHILD_ABORT_REASON = 'kun:user-stop'
+
+export function abortChildForUser(controller: AbortController): void {
+  controller.abort(USER_INITIATED_CHILD_ABORT_REASON)
+}
+
+export function isUserInitiatedChildAbort(signal: AbortSignal): boolean {
+  return signal.aborted && signal.reason === USER_INITIATED_CHILD_ABORT_REASON
+}
+
+export function childAbortOutcome(
+  signal: AbortSignal,
+  runtimeRestart: boolean,
+  error: unknown
+): { terminationReason: 'user_stop' | 'manual_stop' | 'runtime_restart'; error: string } {
+  const userStop = isUserInitiatedChildAbort(signal)
+  return {
+    terminationReason: runtimeRestart ? 'runtime_restart' : userStop ? 'user_stop' : 'manual_stop',
+    error: userStop ? 'Subagent was stopped by the user.' : errorMessage(error)
+  }
+}
+
 export function childContractError(
   returnFormat: ChildReturnFormat,
   evidence: string[] | undefined
@@ -214,6 +236,9 @@ export function normalizeInheritedReasoningEffort(value: string | undefined): z.
 
 export function formatDetachedChildDisplayText(record: ChildRunRecord): string {
   const label = record.label?.trim() || record.profile?.trim() || record.id
+  if (record.terminationReason === 'user_stop') {
+    return `Background subagent ${label} was stopped by the user`
+  }
   return `Background subagent ${label} ${record.status}`
 }
 
@@ -223,8 +248,11 @@ export function formatDetachedChildNotice(record: ChildRunRecord): string {
     '<background_subagent_completed>',
     `<child_id>${escapeXml(record.id)}</child_id>`,
     `<label>${escapeXml(label)}</label>`,
-    `<status>${record.status === 'failed' ? 'failed' : 'completed'}</status>`
+    `<status>${record.status}</status>`
   ]
+  if (record.terminationReason) {
+    lines.push(`<termination_reason>${record.terminationReason}</termination_reason>`)
+  }
   if (record.summary?.trim()) {
     lines.push(`<summary>${escapeXml(record.summary.trim())}</summary>`)
   }

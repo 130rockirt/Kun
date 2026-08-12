@@ -568,6 +568,8 @@ export type AppSettingsV1 = {
    * (`emptyHeroTitle`).
    */
   chatWelcomeMessage: string
+  /** Experimental Code composer persona picker. Legacy snapshots omit it and are treated as enabled. */
+  codeAgentPersonaEnabled?: boolean
   /** Selectable Code-agent personas. Replaced wholesale on patch. */
   codeAgentPresets: CodeAgentPresetV1[]
   /** User-disabled skill IDs. Disabled skills are hidden from command surfaces. */

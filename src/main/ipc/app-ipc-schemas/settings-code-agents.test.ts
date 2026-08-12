@@ -25,4 +25,11 @@ describe('settings:set codeAgentPresets payload', () => {
     })
     expect(parsed.success).toBe(false)
   })
+
+  it('accepts the experimental composer persona switch', () => {
+    const parsed = settingsPatchSchema.safeParse({
+      codeAgentPersonaEnabled: false
+    })
+    expect(parsed.success).toBe(true)
+  })
 })
