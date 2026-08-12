@@ -98,6 +98,10 @@ Kun 的缓存命中率要按 provider 原生 usage 字段优先计算和优化�
   重启或 resume 后 runtime usage 面板不重新从 0 计算。
 - 动态上下文必须追加在稳定前缀之后。compaction、resume、fork、plan context
   也不得改写稳定系统前缀。
+- Work turn 按 `agentSurface: write` 追加稳定的 Work mode system instruction；Renderer
+  持久化的用户正文只保留用户原话。当前资源、精确选区、检索/Office 摘录和白板快照
+  通过有界 `composerContexts` 引用随 turn 传入，不再把工作区、工具手册或画布规则拼进
+  可见 user message。
 - 自动压缩同时考虑输入压力和请求总预算：压缩触发不仅比较历史/请求输入与
   soft/hard 输入阈值，还会把为模型输出保留的预算（`maxOutputTokens`）计入
   `input + output` 总预算，并与发送前硬上限（上下文窗口的 85% 或模型
@@ -273,7 +277,9 @@ Renderer 只应展示 Kun。需要删除或保持删除的 UI 面包括：
   设计稿、原型和设计流程图落在 `.kun-design/`，在右侧白板中预览和迭代。
 - Work：办公助手和 inline completion 读取同一份 Kun API key /
   base URL 配置。内部 Write thread registry 只把办公线程识别为 Kun
-  thread，不再区分旧运行时会话。
+  thread，不再区分旧运行时会话。白板只缓存其绑定 thread 的 session title：
+  新建时 session 携带初始标题并允许首轮自动命名，运行时标题变化会回写白板索引，
+  手动改名则先锁定 session title，再更新白板缓存。
 - 连接手机：定时任务、飞书/Lark/微信、IM webhook 创建或复用 Kun thread。
   代码内部仍沿用 `claw` route / settings key / runtime 文件名，作为旧命名兼容。
   `threadId` / `localThreadId` 字段只作为旧 settings 兼容字段存在，真正

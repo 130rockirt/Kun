@@ -444,7 +444,11 @@ export type ChatState = {
   openWrite: (options?: { activationGuard?: () => boolean }) => Promise<void>
   openCode: (options?: { activationGuard?: () => boolean }) => Promise<void>
   ensureWriteThreadForWorkspace: (workspaceRoot?: string, activeFilePath?: string) => Promise<string | null>
-  createWriteThread: (workspaceRoot?: string, activeFilePath?: string) => Promise<string | null>
+  createWriteThread: (
+    workspaceRoot?: string,
+    activeFilePath?: string,
+    title?: string
+  ) => Promise<string | null>
   ensureDesignThreadForWorkspace: (workspaceRoot?: string, docId?: string) => Promise<string | null>
   createDesignThread: (
     workspaceRoot?: string,

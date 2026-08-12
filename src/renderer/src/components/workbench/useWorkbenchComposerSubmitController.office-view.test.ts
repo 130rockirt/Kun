@@ -107,8 +107,13 @@ describe('Work presentation view submission', () => {
 
     await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledOnce())
     const [prompt, , options] = sendMessage.mock.calls[0] as unknown as Parameters<ControllerParams['sendMessage']>
-    expect(prompt).not.toContain('Whole presentation outline')
-    expect(options?.composerContexts).toHaveLength(2)
+    expect(prompt).toBe('explain this slide')
+    expect(options?.composerContexts).toHaveLength(3)
+    expect(options?.composerContexts?.find((context) => (
+      context.reference.kind === 'work-reference-resource'
+    ))?.reference).toMatchObject({
+      locator: 'deck.pptx', resourceKind: 'office', access: 'read-only'
+    })
     expect(options?.composerContexts?.find((context) => (
       context.reference.kind === 'office-view-position'
     ))?.reference).toMatchObject({

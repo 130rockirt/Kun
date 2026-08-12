@@ -387,7 +387,7 @@ describe('FloatingComposer queued guidance', () => {
   it('shows only the user input for a queued Write prompt', async () => {
     const previousLanguage = i18n.language
     await i18n.changeLanguage('en')
-    const prompt = composeWritePrompt('Make the title shorter.', [], {
+    const prompt = composeWritePrompt('Make the title shorter.', {
       workspaceRoot: '/workspace/deepseek-gui',
       activeFilePath: '/workspace/deepseek-gui/draft.md'
     })

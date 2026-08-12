@@ -474,7 +474,11 @@ export function useWorkbenchNavigationController({
     // identity (or create an unrelated Write task with no board to own it).
     if (activeBoard?.workflowId) return
     const writeWorkspaceScope = workspaceRootScopeKey(writeWorkspaceRoot)
-    void createWriteThread(writeWorkspaceRoot, writeState.activeFilePath ?? undefined).then((threadId) => {
+    void createWriteThread(
+      writeWorkspaceRoot,
+      writeState.activeFilePath ?? undefined,
+      activeBoard?.title
+    ).then((threadId) => {
       if (!activeBoardId || !threadId) return
       const latest = useWriteWorkspaceStore.getState()
       const latestBoard = latest.whiteboards[activeBoardId]

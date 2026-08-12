@@ -6,7 +6,7 @@ import { parseClawCommand } from '@shared/claw-commands'
 import { useWriteWorkspaceStore } from '../../write/write-workspace-store'
 import { captureWriteDocumentContext, writeDocumentContextMatches } from '../../write/write-document-context'
 import type { WriteRetrievalContext } from '@shared/write-retrieval'
-import { composeWritePrompt, type WriteOfficeDocumentContext } from '../../write/quoted-selection'
+import type { WriteOfficeDocumentContext } from '../../write/quoted-selection'
 import { writeDocumentKey } from '../../write/write-editor-layout'
 import { selectFocusedPresentationView } from '../../write/write-presentation-view-state'
 import { createWorkspaceOfficeViewPositionAttachment } from '../../lib/workspace-office-view-context'
@@ -29,7 +29,6 @@ import { activePptReviewComposerContexts } from './workbench-ppt-review-context'
 import {
   activeWorkWhiteboardForSend,
   activeWorkWhiteboardComposerContexts,
-  buildActiveWorkWhiteboardPrompt,
   workWhiteboardMessageFence,
   workWhiteboardSnapshotMatches
 } from './workbench-write-whiteboard-context'
@@ -45,6 +44,7 @@ import {
 import { readWorkbenchComposerFileContextEntries } from './workbench-composer-file-context'
 import { mirrorWorkbenchClawCommand } from './workbench-claw-message-mirror'
 import { restoreWorkbenchWritePrompt } from './workbench-write-prompt-state'
+import { activeWriteResourceReference } from './workbench-write-resource-context'
 export type { WorkbenchComposerSubmitController } from './workbench-composer-submit-types'
 import {
   listClawComposerModelOptions,
@@ -292,25 +292,13 @@ export function useWorkbenchComposerSubmitController({
         restorePrompt()
         return
       }
-      const messageText = buildComposerDocumentContextPrompt(
-        v || (documentAttachments.length > 0 ? t('composerFileOnlyPrompt') : t('composerImageOnlyPrompt')),
-        documentAttachments
+      const messageText = v || (
+        documentAttachments.length > 0 ? t('composerFileOnlyPrompt') : t('composerImageOnlyPrompt')
       )
       const activeAgentPreset = writeState.agentPresets.find(
         (preset) => preset.id === writeState.assistantAgentPresetId
       )
       const agentPersona = activeAgentPreset ? resolveWriteAgentPreset(activeAgentPreset).persona : ''
-      const basePrompt = composeWritePrompt(messageText, {
-        workspaceRoot: writeWorkspaceRoot,
-        activeFilePath: writeActiveFilePath,
-        officeReadOnly: writeActiveDocument?.kind === 'office'
-      })
-      const prompt = await buildActiveWorkWhiteboardPrompt(
-        basePrompt,
-        messageText,
-        writeWorkspaceRoot,
-        activeWhiteboard
-      )
       const model = writeState.assistantModel.trim()
       const providerId =
         writeState.assistantProviderId.trim() || providerIdForComposerModel(composerModelGroups, model)
@@ -326,19 +314,33 @@ export function useWorkbenchComposerSubmitController({
         const viewContexts = writePresentationView
           ? [await createWorkspaceOfficeViewPositionAttachment({ workspaceRoot: writeWorkspaceRoot, view: writePresentationView })]
           : []
-        const pptReviewContexts = await activeWorkWhiteboardComposerContexts(
+        const whiteboardContexts = await activeWorkWhiteboardComposerContexts(
           writeWorkspaceRoot,
           activeWhiteboard,
           activeThreadId
         )
         const referenceContexts = await createWriteTurnReferenceAttachments({
           workspaceRoot: writeWorkspaceRoot,
+          activeResource: activeWriteResourceReference(
+            writeWorkspaceRoot, writeActiveFilePath, writeState.activeFileKind,
+            writeActiveDocument?.officePreview?.sourceFormat
+          ),
           selections: quotedSelections,
           retrieval,
           officeDocument,
           query: v
         })
-        composerContexts = mergeWriteComposerContexts(referenceContexts, viewContexts, pptReviewContexts)
+        const whiteboardReference = whiteboardContexts.filter((context) => (
+          context.reference.kind === 'work-reference-whiteboard'
+        ))
+        const pptReviewContexts = whiteboardContexts.filter((context) => (
+          context.reference.kind !== 'work-reference-whiteboard'
+        ))
+        composerContexts = mergeWriteComposerContexts(
+          [...whiteboardReference, ...referenceContexts],
+          viewContexts,
+          pptReviewContexts
+        )
       } catch (error) {
         recoverWriteReferenceContextError(error, setError, restorePrompt)
         return
@@ -348,7 +350,7 @@ export function useWorkbenchComposerSubmitController({
         return
       }
       const sent = await sendMessage(
-        prompt,
+        messageText,
         writeActiveDocument?.kind === 'office' ? 'agent' : composerMode === 'plan' ? 'plan' : 'agent',
         {
           ...(!v && documentAttachments.length > 0

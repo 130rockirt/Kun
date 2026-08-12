@@ -10,6 +10,7 @@ import {
   activeWriteThreadForWorkspace,
   readWriteThreadRegistry
 } from '../../write/write-thread-registry'
+import { workWhiteboardSessionTitleUpdates } from '../../write/work-whiteboard-session-title'
 
 type WorkbenchWriteAssistantRuntimeOptions = {
   composerPickList: string[]
@@ -30,6 +31,7 @@ export function useWorkbenchWriteAssistantRuntime({
   const activeWhiteboard = useWriteWorkspaceStore((s) =>
     s.activeWhiteboardId ? s.whiteboards[s.activeWhiteboardId] ?? null : null
   )
+  const whiteboards = useWriteWorkspaceStore((s) => s.whiteboards)
   const setWriteAssistantModel = useWriteWorkspaceStore((s) => s.setAssistantModel)
   const route = useChatStore((s) => s.route)
   const runtimeConnection = useChatStore((s) => s.runtimeConnection)
@@ -72,7 +74,7 @@ export function useWorkbenchWriteAssistantRuntime({
       }
       if (pendingBoardIdRef.current === activeWhiteboardId) return
       pendingBoardIdRef.current = activeWhiteboardId
-      void chatState.createWriteThread(writeWorkspaceRoot).then(async (threadId) => {
+      void chatState.createWriteThread(writeWorkspaceRoot, undefined, activeWhiteboard.title).then(async (threadId) => {
         if (threadId) {
           await useWriteWorkspaceStore.getState().bindWhiteboardThread(activeWhiteboardId, threadId)
         }
@@ -116,6 +118,20 @@ export function useWorkbenchWriteAssistantRuntime({
     threads,
     writeWorkspaceRoot
   ])
+
+  useEffect(() => {
+    const updates = workWhiteboardSessionTitleUpdates(whiteboards, threads, writeWorkspaceRoot)
+    if (updates.length === 0) return
+    void (async () => {
+      for (const update of updates) {
+        const state = useWriteWorkspaceStore.getState()
+        const latest = state.whiteboards[update.boardId]
+        if (latest && latest.title !== update.title) {
+          await state.renameWhiteboard(update.boardId, update.title)
+        }
+      }
+    })()
+  }, [threads, whiteboards, writeWorkspaceRoot])
 
   return {
     resolvedWriteAssistantProviderId,

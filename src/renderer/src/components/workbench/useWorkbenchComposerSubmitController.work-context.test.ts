@@ -70,9 +70,15 @@ describe('useWorkbenchComposerSubmitController Work context', () => {
     })
     const firstPrompt = sendMessage.mock.calls[0]?.[0] ?? ''
     const firstOptions = sendMessage.mock.calls[0]?.[2]
-    expect(firstPrompt).not.toContain('Semantic Office body')
-    expect(firstPrompt).toContain('禁止调用 edit、write 或 office_edit')
+    expect(firstPrompt).toBe('summarize')
     const firstContexts = (firstOptions?.composerContexts ?? []) as ComposerContextAttachment[]
+    expect(firstContexts.find((context) => (
+      context.reference.kind === 'work-reference-resource'
+    ))?.reference).toMatchObject({
+      locator: 'report.docx',
+      resourceKind: 'office',
+      access: 'read-only'
+    })
     const officeContext = firstContexts.find((context) => context.reference.kind === 'work-reference-office')
     expect(officeContext?.reference).toMatchObject({
       sourceName: 'report.docx',
@@ -110,7 +116,7 @@ describe('useWorkbenchComposerSubmitController Work context', () => {
     controller.sendWritePrompt('explain')
     await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledOnce())
     expect(readWorkspaceOfficeSemantic).not.toHaveBeenCalled()
-    expect(sendMessage.mock.calls[0]?.[0]).not.toContain('Only this paragraph')
+    expect(sendMessage.mock.calls[0]?.[0]).toBe('explain')
     const quotedContexts = (sendMessage.mock.calls[0]?.[2]?.composerContexts ?? []) as ComposerContextAttachment[]
     expect(quotedContexts.find((context) => context.reference.kind === 'work-reference-quotes')?.reference)
       .toMatchObject({ quotes: [{ text: 'Only this paragraph' }] })

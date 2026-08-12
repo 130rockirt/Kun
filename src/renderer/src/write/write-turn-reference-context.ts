@@ -20,9 +20,19 @@ const MAX_RETRIEVAL_KEYWORDS = 4
 const MAX_RETRIEVAL_KEYWORD_CHARS = 64
 
 type WorkReferenceKind =
+  | 'work-reference-resource'
   | 'work-reference-quotes'
   | 'work-reference-retrieval'
   | 'work-reference-office'
+  | 'work-reference-whiteboard'
+
+export type WriteActiveResourceReference = {
+  sourceName: string
+  locator: string
+  resourceKind: 'text' | 'code' | 'image' | 'pdf' | 'office'
+  access: 'read-write' | 'read-only'
+  sourceFormat?: string
+}
 
 function utf8Bytes(value: string): number {
   return new TextEncoder().encode(value).byteLength
@@ -269,6 +279,7 @@ export function selectWriteOfficeExcerpt(
 
 export async function createWriteTurnReferenceAttachments(input: {
   workspaceRoot: string
+  activeResource?: WriteActiveResourceReference | undefined
   selections: readonly WriteQuotedSelection[]
   retrieval: WriteRetrievalContext | null
   officeDocument: WriteOfficeDocumentContext | null
@@ -279,6 +290,30 @@ export async function createWriteTurnReferenceAttachments(input: {
   const selections = normalizeWriteQuotedSelections(input.selections)
   const retrieval = filterWriteRetrievalAgainstQuotes(input.retrieval, selections)
   const attachments: ComposerContextAttachment[] = []
+  if (input.activeResource) {
+    const resource = input.activeResource
+    attachments.push(await createAttachment({
+      workspaceRoot: input.workspaceRoot,
+      kind: 'work-reference-resource',
+      title: `Current Work resource · ${pathFreeSourceName(resource.sourceName)}`,
+      summary: resource.access === 'read-write'
+        ? 'Active workspace-relative editing target'
+        : 'Active read-only resource',
+      reference: {
+        kind: 'work-reference-resource',
+        schemaVersion: 1,
+        sourceName: pathFreeSourceName(resource.sourceName),
+        locator: pathSafeEvidenceText(clipUnicode(resource.locator, 1_024)),
+        resourceKind: resource.resourceKind,
+        access: resource.access,
+        ...(resource.sourceFormat
+          ? { sourceFormat: clipUnicode(resource.sourceFormat, 32) }
+          : {})
+      },
+      provenance: 'workspace-view',
+      now
+    }))
+  }
   if (selections.length > 0) {
     attachments.push(await createAttachment({
       workspaceRoot: input.workspaceRoot,
@@ -386,9 +421,11 @@ export function isWriteTurnReferenceAttachment(
   if (!parsed.success) return false
   const kind = parsed.data.reference.kind
   return (
+    kind === 'work-reference-resource' ||
     kind === 'work-reference-quotes' ||
     kind === 'work-reference-retrieval' ||
-    kind === 'work-reference-office'
+    kind === 'work-reference-office' ||
+    kind === 'work-reference-whiteboard'
   ) && (
     ('source' in parsed.data.provenance && parsed.data.provenance.source === 'workspace-selection') ||
     ('source' in parsed.data.provenance && parsed.data.provenance.source === 'workspace-view')

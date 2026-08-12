@@ -234,13 +234,20 @@ describe('useWorkbenchComposerSubmitController PPT context', () => {
 
     await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledOnce())
     const [prompt, , options] = sendMessage.mock.calls[0] as unknown as Parameters<ControllerParams['sendMessage']>
-    expect(prompt).toContain('批准当前版本')
-    expect(prompt).toContain('Work central whiteboard override:')
+    expect(prompt).toBe('批准当前版本')
+    expect(prompt).not.toContain('Work central whiteboard override:')
     expect(prompt).not.toContain('Make the headline larger')
     expect(options?.guiDesignCanvas).toBe(true)
-    expect(options?.composerContexts?.[0]?.reference).toMatchObject({
+    expect(options?.composerContexts?.find((context) => (
+      context.reference.kind === 'ppt-review'
+    ))?.reference).toMatchObject({
       kind: 'ppt-review', workflowId: 'workflow-a', childId: 'child-a',
       slides: [{ slideId: 'slide-2', revision: 3, annotations: ['Make the headline larger'] }]
+    })
+    expect(options?.composerContexts?.find((context) => (
+      context.reference.kind === 'work-reference-whiteboard'
+    ))?.reference).toMatchObject({
+      kind: 'work-reference-whiteboard', boardId: 'board-ppt-review'
     })
     expect(options?.writeContext).toMatchObject({
       whiteboardId: 'board-ppt-review', whiteboardRevision: 3, threadId: 'thr_mapped'
@@ -259,7 +266,9 @@ describe('useWorkbenchComposerSubmitController PPT context', () => {
 
     await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledOnce())
     const [, , options] = sendMessage.mock.calls[0] as unknown as Parameters<ControllerParams['sendMessage']>
-    expect(options?.composerContexts?.[0]?.reference).toEqual({
+    expect(options?.composerContexts?.find((context) => (
+      context.reference.kind === 'ppt-direction'
+    ))?.reference).toEqual({
       kind: 'ppt-direction', schemaVersion: 1, workflowId: 'workflow-a', childId: 'child-a',
       directions: [{ directionId: 'signal', revision: 2 }]
     })
@@ -276,6 +285,9 @@ describe('useWorkbenchComposerSubmitController PPT context', () => {
 
     await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledOnce())
     const [, , options] = sendMessage.mock.calls[0] as unknown as Parameters<ControllerParams['sendMessage']>
-    expect(options?.composerContexts).toBeUndefined()
+    expect(options?.composerContexts).toHaveLength(1)
+    expect(options?.composerContexts?.[0]?.reference).toMatchObject({
+      kind: 'work-reference-resource', locator: 'draft.md', access: 'read-write'
+    })
   })
 })

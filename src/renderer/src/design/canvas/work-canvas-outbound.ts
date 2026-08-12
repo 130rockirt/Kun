@@ -1,27 +1,39 @@
-import { defaultFrameSizeForDesignTarget, type DesignContext } from '../design-context'
-import { buildCodeCanvasTurnPrompt } from '../design-turn-prompt'
+import {
+  ComposerContextAttachmentSchema,
+  ComposerContextReferenceSchema,
+  type ComposerContextAttachment,
+  type JsonObject
+} from '@kun/extension-api'
+import {
+  defaultFrameSizeForDesignTarget,
+  normalizeDesignTarget,
+  type DesignContext
+} from '../design-context'
 import { takeLastCanvasOpErrors } from './apply-shape-ops'
-import type { CanvasSnapshot } from './canvas-snapshot'
+import type {
+  CanvasPlacementRect,
+  CanvasSnapshot,
+  CanvasSnapshotShape
+} from './canvas-snapshot'
 import type { CanvasDocument, ViewBox } from './canvas-types'
-import { loadDesignSystem } from './design-system-persistence'
-import { createEmptyDesignSystem, type DesignSystem } from './design-system-types'
 import type { OpError } from './shape-ops'
 import {
   resolveWorkCanvasIdentity,
   snapshotWorkCanvasForPrompt
 } from './work-canvas'
 
+const MAX_REFERENCE_SHAPES = 18
+const MAX_REFERENCE_POINTS = 2
+
 export type WorkCanvasOutboundDeps = {
   snapshotForPrompt?: typeof snapshotWorkCanvasForPrompt
-  loadDesignSystemForPrompt?: (workspaceRoot: string, baseDir: string) => Promise<DesignSystem>
   takeLastErrors?: (key: string) => OpError[]
 }
 
-export type BuildWorkCanvasOutboundTextOptions = WorkCanvasOutboundDeps & {
-  baseText: string
-  canvasBrief: string
+export type BuildWorkCanvasReferenceContextOptions = WorkCanvasOutboundDeps & {
   workspaceRoot: string
   boardId: string
+  boardRevision: number
   currentDocument: CanvasDocument
   currentDocumentKey?: string | null
   selectedIds: ReadonlySet<string>
@@ -30,7 +42,7 @@ export type BuildWorkCanvasOutboundTextOptions = WorkCanvasOutboundDeps & {
 }
 
 async function readSnapshot(
-  options: BuildWorkCanvasOutboundTextOptions
+  options: BuildWorkCanvasReferenceContextOptions
 ): Promise<CanvasSnapshot | undefined> {
   const snapshotForPrompt = options.snapshotForPrompt ?? snapshotWorkCanvasForPrompt
   return snapshotForPrompt({
@@ -44,41 +56,168 @@ async function readSnapshot(
   })
 }
 
-async function readDesignSystem(
-  options: BuildWorkCanvasOutboundTextOptions,
-  baseDir: string
-): Promise<DesignSystem> {
-  if (options.loadDesignSystemForPrompt) {
-    return options.loadDesignSystemForPrompt(options.workspaceRoot, baseDir)
-  }
-  return (await loadDesignSystem(options.workspaceRoot, baseDir)) ?? createEmptyDesignSystem()
+function compactText(value: string, maxChars: number): string {
+  const normalized = value
+    .replace(/\r\n?/g, '\n')
+    .split('')
+    .map((character) => {
+      const code = character.charCodeAt(0)
+      return (code < 32 && code !== 9 && code !== 10) || code === 127 ? ' ' : character
+    })
+    .join('')
+    .trim()
+    .slice(0, maxChars)
+  const safe = /[\uD800-\uDBFF]$/.test(normalized) ? normalized.slice(0, -1) : normalized
+  return /^(?:file:|\/|\\\\|[A-Za-z]:[\\/])/i.test(safe)
+    ? `[verbatim reference]\n${safe}`
+    : safe
 }
 
-/** Adds the active Work board's complete ShapeOps context to a composer turn. */
-export async function buildWorkCanvasOutboundText(
-  options: BuildWorkCanvasOutboundTextOptions
-): Promise<string> {
+function compactRect(rect: CanvasPlacementRect): JsonObject {
+  return { x: rect.x, y: rect.y, w: rect.w, h: rect.h }
+}
+
+function compactShape(shape: CanvasSnapshotShape): JsonObject {
+  const result: JsonObject = {
+    id: compactText(shape.id, 128),
+    name: compactText(shape.name, 128),
+    type: shape.type,
+    x: shape.x,
+    y: shape.y,
+    w: shape.w,
+    h: shape.h,
+    parentName: shape.parentName === null ? null : compactText(shape.parentName, 128)
+  }
+  if (shape.rotation !== undefined) result.rotation = shape.rotation
+  if (shape.selected) result.selected = true
+  if (shape.inView) result.inView = true
+  if (shape.nearSelection) result.nearSelection = true
+  if (shape.textContent) result.text = compactText(shape.textContent, 320)
+  if (shape.imageUrl) result.imageUrl = compactText(shape.imageUrl, 360)
+  if (shape.fill) result.fill = shape.fill
+  if (shape.gradient) result.gradient = compactText(shape.gradient, 160)
+  if (shape.stroke) result.stroke = shape.stroke
+  if (shape.fontColor) result.fontColor = shape.fontColor
+  if (shape.cornerRadius !== undefined) result.cornerRadius = shape.cornerRadius
+  if (shape.shadow) result.shadow = compactText(shape.shadow, 160)
+  if (shape.layout) result.layout = compactText(shape.layout, 160)
+  if (shape.points?.length) {
+    const points = shape.points.length <= MAX_REFERENCE_POINTS
+      ? shape.points
+      : [shape.points[0], shape.points.at(-1)!]
+    result.points = points.map((point) => ({ x: point.x, y: point.y }))
+  }
+  return result
+}
+
+function compactSnapshot(
+  snapshot: CanvasSnapshot | undefined,
+  shapeLimit = MAX_REFERENCE_SHAPES
+): JsonObject {
+  if (!snapshot) {
+    return { shapeCount: 0, includedShapeCount: 0, omittedShapeCount: 0, shapes: [] }
+  }
+  const shapes = snapshot.shapes.slice(0, shapeLimit).map(compactShape)
+  const placement = snapshot.placement
+    ? {
+        empty: snapshot.placement.empty,
+        ...(snapshot.placement.viewBox
+          ? { viewBounds: compactRect(snapshot.placement.viewBox) }
+          : {}),
+        ...(snapshot.placement.contentBounds
+          ? { contentBounds: compactRect(snapshot.placement.contentBounds) }
+          : {}),
+        ...(snapshot.placement.selectedBounds
+          ? { selectedBounds: compactRect(snapshot.placement.selectedBounds) }
+          : {}),
+        occupiedFrames: snapshot.placement.occupiedFrames.slice(0, 12).map((frame) => ({
+          id: compactText(frame.id, 128),
+          name: compactText(frame.name, 128),
+          ...compactRect(frame)
+        })),
+        defaultFrame: {
+          w: snapshot.placement.defaultScreen.w,
+          h: snapshot.placement.defaultScreen.h
+        },
+        recommendedSlots: snapshot.placement.recommendedSlots.slice(0, 3).map((slot) => ({
+          label: compactText(slot.label, 128),
+          reason: compactText(slot.reason, 240),
+          ...compactRect(slot)
+        }))
+      }
+    : undefined
+  return {
+    shapeCount: snapshot.shapeCount,
+    includedShapeCount: shapes.length,
+    omittedShapeCount: Math.max(0, snapshot.shapeCount - shapes.length) + (snapshot.omitted ?? 0),
+    shapes,
+    ...(placement ? { placement } : {})
+  }
+}
+
+function compactErrors(errors: readonly OpError[]): JsonObject[] {
+  return errors.slice(0, 8).map((error) => ({
+    code: error.code,
+    message: compactText(error.message, 320),
+    ...(error.suggestion ? { suggestion: compactText(error.suggestion, 320) } : {})
+  }))
+}
+
+async function sha256Hex(value: string): Promise<string> {
+  const digest = await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(value))
+  return [...new Uint8Array(digest)]
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('')
+}
+
+function boundedWhiteboardReference(input: {
+  boardId: string
+  designTarget: string
+  snapshot: CanvasSnapshot | undefined
+  errors: readonly OpError[]
+}): JsonObject {
+  for (let shapeLimit = MAX_REFERENCE_SHAPES; shapeLimit >= 0; shapeLimit -= 1) {
+    const reference: JsonObject = {
+      kind: 'work-reference-whiteboard',
+      schemaVersion: 1,
+      boardId: compactText(input.boardId, 128),
+      designTarget: input.designTarget,
+      snapshot: compactSnapshot(input.snapshot, shapeLimit),
+      ...(input.errors.length ? { previousErrors: compactErrors(input.errors) } : {})
+    }
+    if (ComposerContextReferenceSchema.safeParse(reference).success) return reference
+  }
+  throw new Error('The current Work whiteboard reference exceeds the bounded context budget.')
+}
+
+/**
+ * Captures only volatile Work-board facts as a bounded composer reference. The
+ * stable operating rules live in WORK_MODE_INSTRUCTION inside the Kun runtime.
+ */
+export async function buildWorkCanvasReferenceContext(
+  options: BuildWorkCanvasReferenceContextOptions
+): Promise<ComposerContextAttachment> {
   const identity = resolveWorkCanvasIdentity(options.workspaceRoot, options.boardId)
-  const [snapshot, designSystem] = await Promise.all([
-    readSnapshot(options),
-    readDesignSystem(options, identity.designSystemBaseDir)
-  ])
-  const previousOpErrors = (options.takeLastErrors ?? takeLastCanvasOpErrors)(identity.errorKey)
-  const canvasPrompt = buildCodeCanvasTurnPrompt({
-    workspaceRoot: options.workspaceRoot,
-    text: options.canvasBrief,
-    designContext: options.designContext,
-    canvasFeedbackKey: identity.errorKey,
-    canvasDesignSystem: designSystem,
-    ...(previousOpErrors.length > 0 ? { previousOpErrors } : {}),
-    ...(snapshot ? { canvasSnapshot: snapshot } : {})
+  const snapshot = await readSnapshot(options)
+  const errors = (options.takeLastErrors ?? takeLastCanvasOpErrors)(identity.errorKey)
+  const reference = boundedWhiteboardReference({
+    boardId: identity.boardId,
+    designTarget: normalizeDesignTarget(options.designContext.designTarget),
+    snapshot,
+    errors
   })
-  const workOverride = [
-    'Work central whiteboard override:',
-    `- The durable board id is \`${identity.boardId}\`; keep all ShapeOps scoped to this open Work editor resource.`,
-    '- This board can hold general editable diagrams, notes, image placeholders, PPT direction cards, and slide-review cards.',
-    '- Use the current selection when the user says “this”, “selected direction”, or “selected slides”; never infer selection from another canvas.',
-    '- PPT review actions must preserve workflow, child, slide/direction, and revision identities already present on shapes.'
-  ].join('\n')
-  return `${options.baseText}\n\n${canvasPrompt}\n\n${workOverride}`
+  const workspaceId = await sha256Hex(options.workspaceRoot.trim() || '__default__')
+  const referenceId = await sha256Hex(JSON.stringify({ workspaceId, reference }))
+  const selectedCount = snapshot?.shapes.filter((shape) => shape.selected).length ?? 0
+  return ComposerContextAttachmentSchema.parse({
+    schemaVersion: 1,
+    id: `work-whiteboard-${referenceId.slice(0, 24)}`,
+    title: 'Current Work whiteboard',
+    summary: `${snapshot?.shapeCount ?? 0} shapes · ${selectedCount} selected`,
+    reference,
+    revision: Math.max(0, Math.floor(options.boardRevision)),
+    generation: 0,
+    attachmentId: `workspace-view-context:${referenceId}`,
+    provenance: { source: 'workspace-view', workspaceId }
+  })
 }

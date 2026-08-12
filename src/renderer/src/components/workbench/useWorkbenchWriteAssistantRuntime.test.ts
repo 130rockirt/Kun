@@ -73,7 +73,28 @@ describe('useWorkbenchWriteAssistantRuntime whiteboard binding', () => {
     const renderer = await mount()
 
     await vi.waitFor(() => expect(bindWhiteboardThread).toHaveBeenCalledWith('board-1', 'thread-new'))
-    expect(createWriteThread).toHaveBeenCalledWith('/work')
+    expect(createWriteThread).toHaveBeenCalledWith('/work', undefined, 'Pitch')
+    await act(async () => renderer.unmount())
+  })
+
+  it('persists a generated session title as the whiteboard name', async () => {
+    const renameWhiteboard = vi.fn(async () => true)
+    useWriteWorkspaceStore.setState({ renameWhiteboard })
+    useChatStore.setState({
+      route: 'write',
+      runtimeConnection: 'ready',
+      activeThreadId: 'thread-board',
+      threads: [{
+        id: 'thread-board', title: 'FastAPI architecture', updatedAt: now,
+        model: 'deepseek-v4', mode: 'agent', workspace: '/work', agentSurface: 'write'
+      }]
+    })
+    const renderer = await mount()
+
+    await vi.waitFor(() => expect(renameWhiteboard).toHaveBeenCalledWith(
+      'board-1',
+      'FastAPI architecture'
+    ))
     await act(async () => renderer.unmount())
   })
 })

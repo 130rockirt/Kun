@@ -30,6 +30,7 @@ import {
   writeJoinPath,
   writeRelativeToWorkspace
 } from '../../write/write-workspace-store'
+import { renameWorkWhiteboardSession } from '../../write/work-whiteboard-session-title'
 import { ConnectPhoneSidebarPanel } from '../chat/ConnectPhoneView'
 import { WorkspaceModeTabs } from '../chat/WorkspaceModeTabs'
 import {
@@ -80,6 +81,7 @@ export function WriteSidebar({
   const deleteClawChannel = useChatStore((s) => s.deleteClawChannel)
   const ensureWriteThreadForWorkspace = useChatStore((s) => s.ensureWriteThreadForWorkspace)
   const createWriteThread = useChatStore((s) => s.createWriteThread)
+  const renameThread = useChatStore((s) => s.renameThread)
   const runtimeConnection = useChatStore((s) => s.runtimeConnection)
   const [entryDialog, setEntryDialog] = useState<EntryDialog | null>(null)
   const [collapsedWorkspaces, setCollapsedWorkspaces] = useState<Record<string, boolean>>({})
@@ -257,7 +259,14 @@ export function WriteSidebar({
         setEntryDialog(null)
         return
       }
-      if (await renameWhiteboard(entryDialog.board.id, value)) setEntryDialog(null)
+      if (await renameWorkWhiteboardSession({
+        board: entryDialog.board,
+        title: value,
+        renameSession: renameThread,
+        readSessionTitle: (threadId) => useChatStore.getState().threads
+          .find((thread) => thread.id === threadId)?.title ?? null,
+        renameWhiteboard
+      })) setEntryDialog(null)
       return
     }
 
@@ -302,8 +311,9 @@ export function WriteSidebar({
       await pickWriteWorkspace()
       return
     }
-    const threadId = runtimeConnection === 'ready' ? await createWriteThread(workspaceRoot) : null
-    await createWhiteboard(workspaceRoot, { threadId: threadId ?? undefined })
+    const title = t('writeUntitledWhiteboard')
+    const threadId = runtimeConnection === 'ready' ? await createWriteThread(workspaceRoot, undefined, title) : null
+    await createWhiteboard(workspaceRoot, { title, threadId: threadId ?? undefined })
   }
 
   const selectWorkspaceAndThread = async (workspacePath: string): Promise<void> => {

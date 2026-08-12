@@ -480,6 +480,7 @@ describe('write assistant file conversation selection', () => {
     expect(createThread).toHaveBeenCalledWith({
       workspace,
       title: 'Write Assistant',
+      titleAuto: true,
       mode: 'agent',
       agentSurface: 'write'
     })

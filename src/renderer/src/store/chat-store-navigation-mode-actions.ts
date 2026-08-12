@@ -361,7 +361,7 @@ export function createNavigationModeActions(
     return get().createWriteThread(targetWorkspace, targetFilePath)
   },
 
-  createWriteThread: async (workspaceRoot, activeFilePath) => {
+  createWriteThread: async (workspaceRoot, activeFilePath, title) => {
     const targetWorkspace = normalizeWorkspaceRoot(workspaceRoot) || (await readActiveWriteWorkspace(get().workspaceRoot))
     if (!targetWorkspace) {
       set({ error: i18n.t('common:workspaceRequiredToCreateThread') })
@@ -387,7 +387,8 @@ export function createNavigationModeActions(
         : undefined
       const thread = await p.createThread({
         workspace: targetWorkspace,
-        title: WRITE_ASSISTANT_THREAD_TITLE,
+        title: title?.trim() || WRITE_ASSISTANT_THREAD_TITLE,
+        titleAuto: true,
         mode: 'agent',
         agentSurface: 'write',
         ...(personaProfile?.providerId?.trim()

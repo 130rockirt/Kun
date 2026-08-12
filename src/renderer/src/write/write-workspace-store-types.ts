@@ -40,6 +40,7 @@ export type WorkWhiteboardPhase = 'blank' | 'directions' | 'review' | 'complete'
 
 export type WorkWhiteboard = {
   id: string
+  /** Cached display copy of the bound Work session title. */
   title: string
   workspaceRoot: string
   threadId: string | null

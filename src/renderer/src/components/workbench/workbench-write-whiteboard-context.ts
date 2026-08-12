@@ -6,7 +6,7 @@ import { activePptReviewComposerContexts } from './workbench-ppt-review-context'
 import { useCanvasShapeStore } from '../../design/canvas/canvas-shape-store'
 import { useCanvasSelectionStore } from '../../design/canvas/canvas-selection-store'
 import { useCanvasViewportStore } from '../../design/canvas/canvas-viewport-store'
-import { buildWorkCanvasOutboundText } from '../../design/canvas/work-canvas-outbound'
+import { buildWorkCanvasReferenceContext } from '../../design/canvas/work-canvas-outbound'
 import { useDesignWorkspaceStore } from '../../design/design-workspace-store'
 
 export function activeWorkWhiteboard(state: WriteWorkspaceState): WorkWhiteboard | null {
@@ -36,15 +36,32 @@ export async function activeWorkWhiteboardComposerContexts(
   board: WorkWhiteboard | null,
   fallbackThreadId: string | null
 ) {
-  if (!board?.workflowId) return []
-  return activePptReviewComposerContexts(workspaceRoot, board.threadId || fallbackThreadId, {
-    expectedDocumentKey: canvasDocumentKey(
-      workspaceRoot,
-      workWhiteboardArtifactId(board.id),
-      workWhiteboardBaseDir()
-    ),
-    workflowId: board.workflowId
+  if (!board) return []
+  const canvas = useCanvasShapeStore.getState()
+  const whiteboard = await buildWorkCanvasReferenceContext({
+    workspaceRoot,
+    boardId: board.id,
+    boardRevision: board.revision,
+    currentDocument: canvas.document,
+    currentDocumentKey: canvas.documentKey,
+    selectedIds: useCanvasSelectionStore.getState().selectedIds,
+    viewBox: useCanvasViewportStore.getState().vbox,
+    designContext: useDesignWorkspaceStore.getState().designContext
   })
+  if (!board.workflowId) return [whiteboard]
+  const ppt = await activePptReviewComposerContexts(
+    workspaceRoot,
+    board.threadId || fallbackThreadId,
+    {
+      expectedDocumentKey: canvasDocumentKey(
+        workspaceRoot,
+        workWhiteboardArtifactId(board.id),
+        workWhiteboardBaseDir()
+      ),
+      workflowId: board.workflowId
+    }
+  )
+  return [whiteboard, ...ppt]
 }
 
 export function workWhiteboardMessageFence(
@@ -56,25 +73,4 @@ export function workWhiteboardMessageFence(
     whiteboardRevision: board.revision,
     ...(board.threadId ? { threadId: board.threadId } : {})
   }
-}
-
-export async function buildActiveWorkWhiteboardPrompt(
-  baseText: string,
-  canvasBrief: string,
-  workspaceRoot: string,
-  board: WorkWhiteboard | null
-): Promise<string> {
-  if (!board) return baseText
-  const canvas = useCanvasShapeStore.getState()
-  return buildWorkCanvasOutboundText({
-    baseText,
-    canvasBrief,
-    workspaceRoot,
-    boardId: board.id,
-    currentDocument: canvas.document,
-    currentDocumentKey: canvas.documentKey,
-    selectedIds: useCanvasSelectionStore.getState().selectedIds,
-    viewBox: useCanvasViewportStore.getState().vbox,
-    designContext: useDesignWorkspaceStore.getState().designContext
-  })
 }

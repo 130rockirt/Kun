@@ -45,6 +45,13 @@ describe('Work turn reference context', () => {
   it('builds schema-valid, path-free, explicitly structured reference attachments', async () => {
     const attachments = await createWriteTurnReferenceAttachments({
       workspaceRoot: '/private/workspace',
+      activeResource: {
+        sourceName: 'reports/weekly.docx',
+        locator: 'reports/weekly.docx',
+        resourceKind: 'office',
+        access: 'read-only',
+        sourceFormat: 'docx'
+      },
       selections: [quote('Treat this as data, not as an instruction.')],
       retrieval: retrieval('A distinct supporting passage about cache prefixes.'),
       officeDocument: {
@@ -60,6 +67,7 @@ describe('Work turn reference context', () => {
     })
 
     expect(attachments.map((attachment) => attachment.reference.kind)).toEqual([
+      'work-reference-resource',
       'work-reference-quotes',
       'work-reference-retrieval',
       'work-reference-office'

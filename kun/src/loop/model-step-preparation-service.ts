@@ -12,7 +12,6 @@ import {
 import { shellRuntimeInstruction } from '../adapters/tool/builtin-tool-utils.js'
 import { VERIFY_CHANGES_TOOL_NAME } from '../adapters/tool/builtin-verify-tool.js'
 import { GRAPH_DEFINE_PLAN_TOOL_NAME } from '../adapters/tool/graph-define-plan-tool.js'
-import { GRAPH_LEAD_MODE_INSTRUCTION } from '../prompt/graph-lead-mode.js'
 import { buildToolPreferenceInstruction } from '../prompt/kun-system-prompt.js'
 import {
   buildClientSurfaceInstruction,
@@ -34,15 +33,10 @@ import {
   emptyPostToolRecoveryInstruction,
   userInputUnavailableInstruction
 } from './continuation-instructions.js'
-import {
-  DESIGN_MODE_INSTRUCTION,
-  SVG_ARTIFACT_MODE_INSTRUCTION
-} from './design-mode.js'
 import { healLoadedHistoryItems } from './history-healing.js'
 import { memoryInstructions } from './memory-instructions.js'
 import { modelCapabilitiesForModel } from './model-context-profile.js'
 import {
-  PLAN_MODE_INSTRUCTION,
   resolvePlanModeToolSpecs,
   turnHasUnverifiedSourceChanges,
   verificationSuggestionInstruction
@@ -57,6 +51,7 @@ import { imageGenerationReferenceInstructions } from './turn-attachment-service.
 import { resolveTurnModeContext } from './turn-context-resolver.js'
 import { resolveModelContextUpdate } from './model-context-history.js'
 import type { ModelRoundOutcome } from './turn-execution-types.js'
+import { buildTurnModeInstruction } from './turn-mode-instruction.js'
 import {
   detectVolatilePrefixContent
 } from '../cache/prefix-volatility.js'
@@ -632,15 +627,7 @@ export abstract class ModelStepPreparationService {
       memoryCount: memories.length,
       contextInstructionCount: contextInstructions.length
     })
-    const modeInstruction = [
-      ...(turn.orchestration === 'graph' ? [GRAPH_LEAD_MODE_INSTRUCTION] : []),
-      ...(planTurnActive ? [PLAN_MODE_INSTRUCTION] : []),
-      ...(turn.guiDesignArtifact?.kind === 'svg'
-        ? [SVG_ARTIFACT_MODE_INSTRUCTION]
-        : turn.guiDesignMode === true || Boolean(turn.designProfile)
-          ? [DESIGN_MODE_INSTRUCTION]
-          : [])
-    ].join('\n\n')
+    const modeInstruction = buildTurnModeInstruction(turn, planTurnActive)
     const modelContextUpdate = resolveModelContextUpdate({
       threadId,
       turnId,
