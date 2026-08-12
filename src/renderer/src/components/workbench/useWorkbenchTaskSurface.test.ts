@@ -1,4 +1,4 @@
-import { createElement } from 'react'
+import { createElement, useState } from 'react'
 import { act, create, type ReactTestRenderer } from 'react-test-renderer'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { DesignTaskProfile } from '../../agent/design-task-profile'
@@ -327,6 +327,81 @@ describe('workbench task mode', () => {
     await expect(runtime!.rollbackProvisionalThread('thread-created-for-send'))
       .resolves.toBe(true)
     expect(deleteThread).toHaveBeenCalledWith('thread-created-for-send')
+    await act(async () => renderer.unmount())
+  })
+
+  it('preserves the pending Design intent while the first thread activates', async () => {
+    const workspaceScope = workbenchTaskIntentScope(null, '/workspace')
+    writeWorkbenchTaskIntent(workspaceScope, {
+      surface: 'design',
+      profile: { outputMedium: 'html', target: 'web', preset: 'none' }
+    })
+    const existingDocument = {
+      id: 'doc-existing', title: 'Existing', createdAt: '2026-08-13T00:00:00.000Z',
+      updatedAt: '2026-08-13T00:00:00.000Z', order: 0, artifacts: [], activeArtifactId: null
+    }
+    const provisionalDocument = {
+      id: 'doc-provisional', title: 'Pending', createdAt: '2026-08-13T00:00:00.000Z',
+      updatedAt: '2026-08-13T00:00:00.000Z', order: 1, artifacts: [], activeArtifactId: null
+    }
+    useDesignWorkspaceStore.setState({
+      workspaceRoot: '/workspace',
+      documents: [existingDocument, provisionalDocument],
+      activeDocumentId: provisionalDocument.id,
+      artifacts: [],
+      activeArtifactId: null,
+      drawingCreationOpen: true,
+      drawingCreationReturnDocumentId: existingDocument.id,
+      drawingCreationDocumentId: provisionalDocument.id,
+      drawingCreationSubmitting: true
+    })
+
+    let activateThread!: (thread: NormalizedThread) => void
+    let releaseCreation!: () => void
+    const creationGate = new Promise<void>((resolve) => { releaseCreation = resolve })
+    const createdThread = codeThread({ id: 'thread-first-design' })
+    const createThread = vi.fn(async () => {
+      activateThread(createdThread)
+      await creationGate
+      return createdThread.id
+    })
+    let runtime: ReturnType<typeof useWorkbenchTaskSurface> | null = null
+    const Harness = () => {
+      const [thread, setThread] = useState<NormalizedThread | null>(null)
+      activateThread = setThread
+      runtime = useWorkbenchTaskSurface({
+        activeThreadId: thread?.id ?? null,
+        threads: thread ? [thread] : [],
+        workspaceRoot: '/workspace',
+        activeSkillWorkspace: '/workspace',
+        createThread,
+        deleteThread: vi.fn(async () => undefined),
+        setComposerMode: vi.fn(),
+        setComposerOrchestration: vi.fn()
+      })
+      return null
+    }
+    let renderer!: ReactTestRenderer
+    await act(async () => { renderer = create(createElement(Harness)) })
+
+    let ensureRequest!: Promise<string | null>
+    await act(async () => {
+      ensureRequest = runtime!.ensureDesignThread('/workspace', provisionalDocument.id)
+      await Promise.resolve()
+    })
+
+    expect(runtime!.taskSurface).toBe('design')
+    expect(useDesignWorkspaceStore.getState().activeDocumentId).toBe(provisionalDocument.id)
+
+    await act(async () => {
+      releaseCreation()
+      await ensureRequest
+    })
+    expect(readWorkbenchTaskIntent(
+      workbenchTaskIntentScope(createdThread.id, '/workspace'),
+      '/workspace'
+    ).surface).toBe('design')
+    expect(runtime!.taskSurface).toBe('design')
     await act(async () => renderer.unmount())
   })
 

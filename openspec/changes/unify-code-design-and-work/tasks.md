@@ -72,3 +72,11 @@
 
   - Evidence (2026-08-13): 88 focused Design canvas files passed 709/709 tests, including replay recovery, graph integrity, annotation, export, clipboard, shortcuts, resize, and composer routing. Web TypeScript and the production build passed.
   - `npm run lint`, `npm run check:file-lines`, and `git diff --check` passed. Lint retained only existing repository warnings outside this change; the full `npm run typecheck` remained blocked by pre-existing Kun dependency/type baselines, while the affected renderer TypeScript project passed cleanly.
+
+## 9. First Design Send Race Remediation
+
+- [x] 9.1 Add a renderer regression test that activates a newly created Code-owned conversation before `createThread` resolves and verifies the pending Design intent and provisional document survive.
+- [x] 9.2 Preserve the pending Design task surface across first-thread activation, then run focused tests, renderer typecheck/build, lint, the file-line gate, and diff checks.
+
+  - Evidence (2026-08-13): the focused task-surface and Design-prompt suites passed 19/19 tests, including the new activation-before-return regression. The production build, lint, file-line gate, and `git diff --check` passed; lint retained only 25 existing warnings outside this change.
+  - The full typecheck was run in both the fix worktree and the unchanged local `develop` worktree. Both reported the same existing errors in `FloatingComposer.queue-commands.test.ts` and `settings-section-model-routes-support.tsx`, confirming no new typecheck failure from this remediation.

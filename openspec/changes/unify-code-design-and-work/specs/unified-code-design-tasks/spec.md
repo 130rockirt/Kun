@@ -26,6 +26,10 @@ The composer SHALL allow Code or Design selection only before the first accepted
 - **WHEN** local validation or runtime admission rejects the first turn
 - **THEN** the draft and selector remain editable and no committed empty Design document is left behind
 
+#### Scenario: First Design send activates a new conversation
+- **WHEN** the empty workbench sends its first Design turn and the new Code-owned conversation becomes active before thread creation returns
+- **THEN** the pending Design selection and provisional document remain active until the draft is bound to the new conversation
+
 #### Scenario: Thread ownership remains Code
 - **WHEN** a Design turn is accepted in a Code-owned thread
 - **THEN** the turn uses the Design capability surface while `thread.agentSurface` remains `code`

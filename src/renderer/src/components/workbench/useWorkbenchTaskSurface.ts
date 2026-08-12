@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { NormalizedThread } from '../../agent/types'
 import type { DesignTaskProfile } from '../../agent/design-task-profile'
 import type { ChatState } from '../../store/chat-store-types'
@@ -58,6 +58,7 @@ export function useWorkbenchTaskSurface(input: {
 }) {
   const draftWorkspace = normalizeWorkspaceRoot(input.activeSkillWorkspace || input.workspaceRoot)
   const provisionalDesignThreadIdsRef = useRef(new Set<string>())
+  const [pendingDesignThreadIntent, setPendingDesignThreadIntent] = useState(false)
   const ensuredDesignTaskIdRef = useRef<string | null>(null)
   const restoreGenerationRef = useRef(0)
   const activeThread = useMemo<ThreadWithDesignProfile | null>(() => (
@@ -96,7 +97,9 @@ export function useWorkbenchTaskSurface(input: {
             ? 'code'
             : hasPersistedDraft
               ? effectiveDraft.surface
-              : 'code'
+              : pendingDesignThreadIntent
+                ? 'design'
+                : 'code'
   const profile: DesignTaskComposerProfile = lockedProfile
       ? {
         outputMedium: lockedProfile.outputMedium,
@@ -262,17 +265,26 @@ export function useWorkbenchTaskSurface(input: {
         ? stateThread.id
         : null
     if (!threadId) {
-      threadId = await input.createThread({
-        workspaceRoot,
-        forceNew: true,
-        agentSurface: 'code'
-      })
-      if (threadId) {
-        provisionalDesignThreadIdsRef.current.add(threadId)
-        writeWorkbenchTaskIntent(workbenchTaskIntentScope(threadId, workspaceRoot), {
-          surface: 'design',
-          profile: effectiveDraft.profile
+      // createThread activates the new Code-owned conversation before it
+      // returns. Preserve the Design fallback during that gap so the task-mode
+      // effect cannot cancel the provisional drawing before its per-thread
+      // draft is persisted.
+      setPendingDesignThreadIntent(true)
+      try {
+        threadId = await input.createThread({
+          workspaceRoot,
+          forceNew: true,
+          agentSurface: 'code'
         })
+        if (threadId) {
+          provisionalDesignThreadIdsRef.current.add(threadId)
+          writeWorkbenchTaskIntent(workbenchTaskIntentScope(threadId, workspaceRoot), {
+            surface: 'design',
+            profile: effectiveDraft.profile
+          })
+        }
+      } finally {
+        setPendingDesignThreadIntent(false)
       }
     }
     if (!threadId) return null
