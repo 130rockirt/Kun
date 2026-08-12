@@ -105,6 +105,8 @@ type Props = {
   onRuntimeQualityFindings?: (payload: DesignRuntimeQualityPayload) => void
   onRequestQualityRepair?: (payload: DesignRuntimeQualityPayload) => void
   onRequestAssistant?: () => void
+  /** Reports whether the current canvas document loaded safely for guarded actions. */
+  onDocumentLoadStateChange?: (loaded: boolean) => void
   onError?: (message: string | null) => void
 }
 
@@ -132,6 +134,7 @@ export function CanvasViewport({
   onRuntimeQualityFindings,
   onRequestQualityRepair,
   onRequestAssistant,
+  onDocumentLoadStateChange,
   onError
 }: Props) {
   const { t } = useTranslation('common')
@@ -263,6 +266,7 @@ export function CanvasViewport({
     designTarget,
     designSystemPersistenceEnabled: canvasSurfacePersistsDesignSystem(surface),
     persistenceEnabled: !readOnly,
+    onDocumentLoadStateChange,
     onError
   })
   const selectedHtmlArtifactId = useMemo(() => {

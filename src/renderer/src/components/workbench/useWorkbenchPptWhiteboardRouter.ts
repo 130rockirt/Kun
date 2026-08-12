@@ -7,6 +7,7 @@ import {
   pptCanvasOpenRequestForBlock,
   routePptCanvasOpenRequest
 } from './workbench-ppt-whiteboard-routing'
+import { workspaceRootScopeKey } from '../../lib/workspace-path'
 
 export function useWorkbenchPptWhiteboardRouter(input: {
   activeThreadId: string | null
@@ -16,8 +17,16 @@ export function useWorkbenchPptWhiteboardRouter(input: {
   workspaceRoot: string
 }): void {
   const handledBlockIdsRef = useRef(new Set<string>())
+  const requestGenerationRef = useRef(0)
   useEffect(() => {
     if (input.route !== 'chat' && input.route !== 'write') return
+    const requestGeneration = ++requestGenerationRef.current
+    let cancelled = false
+    const requestIsCurrent = (workspaceRoot: string): boolean => {
+      if (cancelled || requestGenerationRef.current !== requestGeneration) return false
+      return workspaceRootScopeKey(useWriteWorkspaceStore.getState().workspaceRoot) ===
+        workspaceRootScopeKey(workspaceRoot)
+    }
     const writeState = useWriteWorkspaceStore.getState()
     const activeThread = input.activeThreadId
       ? input.threads.find((thread) => thread.id === input.activeThreadId) ?? null
@@ -39,12 +48,17 @@ export function useWorkbenchPptWhiteboardRouter(input: {
     for (const request of requests) handledBlockIdsRef.current.add(request.blockId)
     void (async () => {
       for (const request of requests) {
+        if (request.target === 'write' && !requestIsCurrent(request.workspaceRoot)) {
+          handledBlockIdsRef.current.delete(request.blockId)
+          continue
+        }
         const opened = await routePptCanvasOpenRequest(request, {
           openCode: (detail) => {
             const { target: _target, ...codeDetail } = detail
             requestCodeCanvasPanelOpen(codeDetail)
           },
           openWork: async (detail) => {
+            if (!requestIsCurrent(detail.workspaceRoot)) return false
             const store = useWriteWorkspaceStore.getState()
             const board = await store.findOrCreatePptWhiteboard({
               workspaceRoot: detail.workspaceRoot,
@@ -54,6 +68,7 @@ export function useWorkbenchPptWhiteboardRouter(input: {
               sourcePath: detail.sourcePath
             })
             if (!board) return false
+            if (!requestIsCurrent(detail.workspaceRoot)) return false
             if (detail.pptState && !await useWriteWorkspaceStore.getState().updateWhiteboardPptState(
               board.id,
               { ...detail.pptState, childId: detail.childId }
@@ -64,5 +79,8 @@ export function useWorkbenchPptWhiteboardRouter(input: {
         if (!opened) handledBlockIdsRef.current.delete(request.blockId)
       }
     })()
+    return () => {
+      cancelled = true
+    }
   }, [input.activeThreadId, input.blocks, input.route, input.threads, input.workspaceRoot])
 }

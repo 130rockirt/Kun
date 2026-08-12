@@ -141,6 +141,7 @@ export function WriteEditorGroupContent({
           title={whiteboard.title}
           sourcePath={whiteboard.sourcePath}
           workflowId={whiteboard.workflowId}
+          childId={whiteboard.childId}
           phase={whiteboard.phase}
           outputPath={whiteboard.outputPath}
           onActivate={onFocus}

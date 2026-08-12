@@ -144,6 +144,7 @@ export function useApplyShapeOpsLive(
   const onPptProjectionOpenRequestedRef = useRef(pptProjection?.onOpenRequested)
   onPptProjectionOpenRequestedRef.current = pptProjection?.onOpenRequested
   const pptProjectionWorkflowId = pptProjection?.workflowId?.trim() || undefined
+  const pptProjectionChildId = pptProjection?.childId?.trim() || undefined
   useEffect(() => {
     if (!enabled) return
     const activeDesignTarget = designDocumentTargetRef.current
@@ -299,7 +300,8 @@ export function useApplyShapeOpsLive(
       const pptCanvasProjection = resolvePptCanvasProjection(
         typeof block.meta?.toolName === 'string' ? block.meta.toolName : undefined,
         parsed,
-        pptProjectionWorkflowId
+        pptProjectionWorkflowId,
+        pptProjectionChildId
       )
       if (!pptCanvasProjection && !shouldApplyDesignCanvasToolBlock(block)) return
       if (pptCanvasProjection) {
@@ -663,6 +665,7 @@ export function useApplyShapeOpsLive(
     designDocumentTarget?.documentId,
     designDocumentTarget?.boardArtifactId,
     expectedCanvasDocumentKey,
-    pptProjectionWorkflowId
+    pptProjectionWorkflowId,
+    pptProjectionChildId
   ])
 }

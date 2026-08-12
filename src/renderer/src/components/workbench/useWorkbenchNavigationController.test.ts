@@ -109,6 +109,14 @@ class MemoryStorage {
   }
 }
 
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((nextResolve) => {
+    resolve = nextResolve
+  })
+  return { promise, resolve }
+}
+
 type NavigationProps = UseWorkbenchNavigationControllerParams
 
 function makeProps(overrides: Partial<NavigationProps> = {}): NavigationProps {
@@ -515,5 +523,70 @@ describe('workbench navigation controller Work whiteboards', () => {
 
     expect(createWriteThread).toHaveBeenCalledWith('/workspace', undefined)
     expect(bindWhiteboardThread).toHaveBeenCalledWith('board-1', 'thread-new')
+  })
+
+  it('keeps a workflow-bound PPT board on its original parent task', async () => {
+    const now = '2026-08-13T00:00:00.000Z'
+    const bindWhiteboardThread = vi.fn(async () => true)
+    const createWriteThread = vi.fn(async () => 'thread-new')
+    useWriteWorkspaceStore.setState({
+      workspaceRoot: '/workspace',
+      activeFilePath: null,
+      activeWhiteboardId: 'board-ppt',
+      whiteboards: {
+        'board-ppt': {
+          id: 'board-ppt', title: 'Pitch review', workspaceRoot: '/workspace', threadId: 'thread-parent',
+          workflowId: 'workflow-pitch', phase: 'review', revision: 2,
+          createdAt: now, updatedAt: now
+        }
+      },
+      bindWhiteboardThread
+    })
+    await renderController(makeProps({ route: 'write', createWriteThread }))
+
+    await act(async () => latestController.startNewWriteAssistantConversation())
+
+    expect(createWriteThread).not.toHaveBeenCalled()
+    expect(bindWhiteboardThread).not.toHaveBeenCalled()
+  })
+
+  it('does not bind a newly created task after the Write workspace changes', async () => {
+    const now = '2026-08-13T00:00:00.000Z'
+    const creatingThread = deferred<string | null>()
+    const createWriteThread = vi.fn(() => creatingThread.promise)
+    const bindWhiteboardThread = vi.fn(async () => true)
+    useWriteWorkspaceStore.setState({
+      workspaceRoot: '/workspace',
+      activeFilePath: null,
+      activeWhiteboardId: 'board-1',
+      whiteboards: {
+        'board-1': {
+          id: 'board-1', title: 'Notes', workspaceRoot: '/workspace', threadId: 'thread-old',
+          phase: 'blank', revision: 0, createdAt: now, updatedAt: now
+        }
+      },
+      bindWhiteboardThread
+    })
+    await renderController(makeProps({ route: 'write', createWriteThread }))
+
+    await act(async () => latestController.startNewWriteAssistantConversation())
+    expect(createWriteThread).toHaveBeenCalledWith('/workspace', undefined)
+
+    // Reusing the same id models a restored board in the newly selected
+    // workspace; the captured workspace scope must still block the old task.
+    useWriteWorkspaceStore.setState({
+      workspaceRoot: '/other-workspace',
+      activeWhiteboardId: 'board-1',
+      whiteboards: {
+        'board-1': {
+          id: 'board-1', title: 'Other notes', workspaceRoot: '/other-workspace', threadId: 'thread-other',
+          phase: 'blank', revision: 0, createdAt: now, updatedAt: now
+        }
+      }
+    })
+    creatingThread.resolve('thread-new')
+    await act(async () => { await Promise.resolve() })
+
+    expect(bindWhiteboardThread).not.toHaveBeenCalled()
   })
 })

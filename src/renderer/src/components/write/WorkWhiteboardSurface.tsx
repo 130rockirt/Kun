@@ -1,5 +1,6 @@
 import {
   useCallback,
+  useEffect,
   useId,
   useLayoutEffect,
   useMemo,
@@ -37,6 +38,7 @@ export type WorkWhiteboardSurfaceProps = {
   title?: string
   sourcePath?: string
   workflowId?: string
+  childId?: string
   phase?: WorkWhiteboardPhase
   outputPath?: string
   onActivate?: () => void
@@ -150,6 +152,7 @@ function WorkWhiteboardStatus({ board }: { board: Pick<WorkWhiteboard, 'title' |
 function WorkWhiteboardActions({
   phase,
   outputPath,
+  approvalReady = false,
   approveBlocked,
   hasSelectedDirection,
   hasSelectedSlides,
@@ -158,6 +161,7 @@ function WorkWhiteboardActions({
 }: {
   phase: WorkWhiteboardPhase
   outputPath?: string
+  approvalReady?: boolean
   approveBlocked?: boolean
   hasSelectedDirection?: boolean
   hasSelectedSlides?: boolean
@@ -188,9 +192,12 @@ function WorkWhiteboardActions({
         const isApproveAction = action.labelKey === 'workWhiteboardApproveExport'
         const missingDirection = action.labelKey === 'workWhiteboardAdoptDirection' && !hasSelectedDirection
         const missingSlides = action.labelKey === 'workWhiteboardModifySlides' && !hasSelectedSlides
-        const disabled = (isApproveAction && approveBlocked) || missingDirection || missingSlides
-        const disabledTitle = isApproveAction && approveBlocked
-          ? t('workWhiteboardQaBlockingHint')
+        const approvalBlocked = isApproveAction && (!approvalReady || approveBlocked)
+        const disabled = approvalBlocked || missingDirection || missingSlides
+        const disabledTitle = isApproveAction && !approvalReady
+          ? t('workWhiteboardCanvasLoadingHint')
+          : isApproveAction && approveBlocked
+            ? t('workWhiteboardQaBlockingHint')
           : missingDirection
             ? t('workWhiteboardSelectDirectionHint')
             : missingSlides ? t('workWhiteboardSelectSlidesHint') : undefined
@@ -206,7 +213,9 @@ function WorkWhiteboardActions({
             }`}
             disabled={disabled}
             title={disabledTitle}
-            onClick={() => onRequestAssistant(action.prompt)}
+            onClick={() => {
+              if (!disabled) onRequestAssistant(action.prompt)
+            }}
           >
             <Icon className="h-3.5 w-3.5 shrink-0" strokeWidth={1.9} />
             <span className="truncate">{t(action.labelKey)}</span>
@@ -227,8 +236,13 @@ function MountedWorkWhiteboard(props: WorkWhiteboardSurfaceProps): ReactElement 
   const document = useCanvasShapeStore((state) => state.document)
   const documentKey = useCanvasShapeStore((state) => state.documentKey)
   const selectedIds = useCanvasSelectionStore((state) => state.selectedIds)
+  const [canvasDocumentLoaded, setCanvasDocumentLoaded] = useState(false)
   const activeDocument = documentKey === identity.documentKey
   const approveBlocked = activeDocument && workCanvasHasBlockingQaNotes(document, props.workflowId)
+  const approvalReady = canvasDocumentLoaded && activeDocument
+  useEffect(() => {
+    setCanvasDocumentLoaded(false)
+  }, [identity.documentKey])
   const pptSelection = useMemo(
     () => activeDocument
       ? workCanvasPptSelectionState(document, selectedIds, props.workflowId)
@@ -244,6 +258,9 @@ function MountedWorkWhiteboard(props: WorkWhiteboardSurfaceProps): ReactElement 
   const handleImageAssistant = useCallback(() => {
     requestAssistant?.(t('workWhiteboardImagePrompt'))
   }, [requestAssistant, t])
+  const handleDocumentLoadStateChange = useCallback((loaded: boolean) => {
+    setCanvasDocumentLoaded(loaded)
+  }, [])
   useApplyShapeOpsLive(
     Boolean(props.activeThreadId),
     undefined,
@@ -256,6 +273,7 @@ function MountedWorkWhiteboard(props: WorkWhiteboardSurfaceProps): ReactElement 
     identity.documentKey,
     {
       workflowId: workCanvasPptWorkflowGate(props.boardId, props.workflowId),
+      childId: props.childId,
       onOpenRequested: props.onPptProjectionOpenRequested
     }
   )
@@ -269,6 +287,7 @@ function MountedWorkWhiteboard(props: WorkWhiteboardSurfaceProps): ReactElement 
         designSystemBaseDir={identity.designSystemBaseDir}
         surface="work"
         onRequestAssistant={handleImageAssistant}
+        onDocumentLoadStateChange={handleDocumentLoadStateChange}
         onError={props.onError}
       />
       <PropertiesPanel surface="work" />
@@ -280,6 +299,7 @@ function MountedWorkWhiteboard(props: WorkWhiteboardSurfaceProps): ReactElement 
       <WorkWhiteboardActions
         phase={phase}
         outputPath={props.outputPath}
+        approvalReady={approvalReady}
         approveBlocked={approveBlocked}
         hasSelectedDirection={pptSelection.direction}
         hasSelectedSlides={pptSelection.slides}

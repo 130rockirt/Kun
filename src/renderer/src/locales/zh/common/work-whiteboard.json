@@ -13,6 +13,7 @@
   "workWhiteboardApproveExport": "通过并导出",
   "workWhiteboardSelectDirectionHint": "请先选择一个方向卡片。",
   "workWhiteboardSelectSlidesHint": "请先选择一个或多个页面卡片。",
+  "workWhiteboardCanvasLoadingHint": "请等待白板加载完成后再通过并导出。",
   "workWhiteboardQaBlockingHint": "请先解决阻断级 QA 问题，再通过并导出。",
   "workWhiteboardImagePrompt": "请生成或修改这块 Work 白板中当前选中的图片占位。",
   "workWhiteboardOpenPptx": "打开 PPTX"

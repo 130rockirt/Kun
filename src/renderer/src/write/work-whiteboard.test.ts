@@ -31,6 +31,14 @@ const readWorkspaceFile = vi.fn(async (): Promise<WorkspaceFileReadResult> => ({
   message: 'missing'
 }))
 
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((nextResolve) => {
+    resolve = nextResolve
+  })
+  return { promise, resolve }
+}
+
 beforeEach(() => {
   writeWorkspaceFile.mockClear()
   deleteWorkspaceEntry.mockClear()
@@ -122,6 +130,37 @@ describe('Work whiteboard registry', () => {
     expect(content.indexOf('board-earlier')).toBeLessThan(content.indexOf('board-later'))
   })
 
+  it('does not apply a whiteboard create after the active workspace changes', async () => {
+    const pendingWrite = deferred<{
+      ok: true
+      path: string
+      savedAt: string
+    }>()
+    writeWorkspaceFile.mockImplementationOnce(() => pendingWrite.promise)
+
+    const creating = useWriteWorkspaceStore.getState().createWhiteboard('/work', {
+      title: 'Stale board'
+    })
+    await vi.waitFor(() => expect(writeWorkspaceFile).toHaveBeenCalledTimes(1))
+
+    useWriteWorkspaceStore.setState({
+      ...initialState(),
+      workspaceRoot: '/other-workspace',
+      rootDirectory: '/other-workspace'
+    })
+    pendingWrite.resolve({
+      ok: true,
+      path: WORK_WHITEBOARD_INDEX,
+      savedAt: '2026-08-13T00:00:00.000Z'
+    })
+
+    await expect(creating).resolves.toBeNull()
+    const state = useWriteWorkspaceStore.getState()
+    expect(state.workspaceRoot).toBe('/other-workspace')
+    expect(state.whiteboards).toEqual({})
+    expect(state.activeWhiteboardId).toBeNull()
+  })
+
   it('creates, updates, binds, and deletes a board without a pseudo file session', async () => {
     const board = await useWriteWorkspaceStore.getState().createWhiteboard('/work', {
       title: 'Presentation review',
@@ -164,6 +203,36 @@ describe('Work whiteboard registry', () => {
     expect(deleteWorkspaceEntry).toHaveBeenCalledWith({
       workspaceRoot: '/work',
       path: `.kun-write/whiteboards/${board.id}`
+    })
+  })
+
+  it('keeps a canonical PPT board bound to its original child and parent thread', async () => {
+    const board = await useWriteWorkspaceStore.getState().createWhiteboard('/work', {
+      title: 'PPT review', threadId: 'thread-original', workflowId: 'workflow-a', childId: 'child-a'
+    })
+    expect(board).not.toBeNull()
+    if (!board) return
+
+    const state = useWriteWorkspaceStore.getState()
+    await expect(state.updateWhiteboardPptState(board.id, {
+      phase: 'review', childId: 'child-a', revision: 4
+    })).resolves.toBe(true)
+    await expect(state.updateWhiteboardPptState(board.id, {
+      phase: 'directions', childId: 'child-a', revision: 5
+    })).resolves.toBe(true)
+    await expect(state.updateWhiteboardPptState(board.id, {
+      phase: 'directions', childId: 'late-child', revision: 6
+    })).resolves.toBe(true)
+    await expect(state.bindWhiteboardThread(board.id, 'late-thread')).resolves.toBe(true)
+    await expect(state.findOrCreatePptWhiteboard({
+      workspaceRoot: '/work', threadId: 'thread-original', workflowId: 'workflow-a', childId: 'late-child'
+    })).resolves.toBeNull()
+
+    expect(useWriteWorkspaceStore.getState().whiteboards[board.id]).toMatchObject({
+      threadId: 'thread-original',
+      phase: 'review',
+      childId: 'child-a',
+      revision: 4
     })
   })
 })

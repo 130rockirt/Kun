@@ -19,7 +19,8 @@ vi.mock('../design/canvas/CanvasViewport', async () => {
     CanvasViewport: (props: Record<string, unknown>) => createElement('div', {
       'data-mock-canvas': props.artifactId,
       'data-mock-surface': props.surface,
-      'data-mock-base-dir': props.baseDir
+      'data-mock-base-dir': props.baseDir,
+      onDocumentLoadStateChange: props.onDocumentLoadStateChange
     })
   }
 })
@@ -74,6 +75,17 @@ async function render(element: ReturnType<typeof createElement>): Promise<ReactT
     await Promise.resolve()
   })
   return renderer!
+}
+
+function markCanvasDocumentLoaded(view: ReactTestRenderer, boardId = 'board-1'): void {
+  const canvas = view.root.findByProps({ 'data-mock-canvas': boardId })
+  const expectedKey = canvasDocumentKey('/work', boardId, '.kun-write/whiteboards')
+  act(() => {
+    if (useCanvasShapeStore.getState().documentKey !== expectedKey) {
+      useCanvasShapeStore.getState().loadDocument(createEmptyDocument(), expectedKey)
+    }
+    canvas.props.onDocumentLoadStateChange(true)
+  })
 }
 
 describe('WorkWhiteboardSurface', () => {
@@ -149,11 +161,35 @@ describe('WorkWhiteboardSurface', () => {
     const view = await render(createElement(WorkWhiteboardSurface, {
       ...baseProps, writable: true, onRequestAssistant: vi.fn()
     }))
+    markCanvasDocumentLoaded(view)
     const approve = view.root.findByProps({
       'data-work-whiteboard-action': 'workWhiteboardApproveExport'
     })
     expect(approve.props.disabled).toBe(true)
     expect(approve.props.title).toContain('Resolve blocking QA issues')
+  })
+
+  it('fails closed until the expected board document has settled', async () => {
+    const onRequestAssistant = vi.fn()
+    const view = await render(createElement(WorkWhiteboardSurface, {
+      ...baseProps, writable: true, onRequestAssistant
+    }))
+    const approve = view.root.findByProps({
+      'data-work-whiteboard-action': 'workWhiteboardApproveExport'
+    })
+
+    expect(approve.props.disabled).toBe(true)
+    expect(approve.props.title).toContain('finish loading')
+    act(() => approve.props.onClick())
+    expect(onRequestAssistant).not.toHaveBeenCalled()
+
+    markCanvasDocumentLoaded(view)
+    const settledApprove = view.root.findByProps({
+      'data-work-whiteboard-action': 'workWhiteboardApproveExport'
+    })
+    expect(settledApprove.props.disabled).toBe(false)
+    act(() => settledApprove.props.onClick())
+    expect(onRequestAssistant).toHaveBeenCalledOnce()
   })
 
   it('requires an active-workflow selection for selection-based review actions', async () => {

@@ -8,16 +8,16 @@ import { useCanvasShapeStore } from './canvas-shape-store'
 import { createEmptyDocument } from './canvas-types'
 import { useApplyShapeOpsLive } from './use-apply-shape-ops-live'
 
-function directionBundle(workflowId = 'workflow-a'): Record<string, unknown> {
+function directionBundle(workflowId = 'workflow-a', revision = 1, childId = 'child-a'): Record<string, unknown> {
   return {
-    schemaVersion: 1, workflowId, childId: 'child-a',
+    schemaVersion: 1, workflowId, childId,
     manifestPath: 'deck/.kun-ppt-review/manifest.json', previewMode: 'image-first',
     deckTitle: 'Direction deck', phase: 'awaiting_direction', recommendedDirectionId: 'signal',
     slides: [{ slideId: 'slide-1', index: 0, title: 'Opening' }],
     directions: ['editorial', 'signal', 'warm'].map((directionId, index) => ({
       directionId, name: `${directionId} direction`,
       rationale: `A distinct ${directionId} visual direction for this presentation.`,
-      revision: 1, recommended: directionId === 'signal',
+      revision, recommended: directionId === 'signal',
       fonts: [`Display ${index}`, `Body ${index}`],
       colors: ['#0F172A', '#F8FAFC', '#22C55E', '#F59E0B'],
       layout: `${index + 2}-column grid`, background: 'solid', imagery: 'editorial photography',
@@ -28,6 +28,17 @@ function directionBundle(workflowId = 'workflow-a'): Record<string, unknown> {
   }
 }
 
+function reviewBundle(workflowId = 'workflow-a', revision = 1, childId = 'child-a'): Record<string, unknown> {
+  return {
+    workflowId, childId, manifestPath: 'deck/.kun-ppt-review/manifest.json',
+    deckTitle: 'Review deck', styleFingerprint: 'style-a', phase: 'awaiting_review',
+    slides: [{
+      slideId: 'slide-1', index: 0, title: 'Opening', previewPath: `.kun/images/opening-v${revision}.png`,
+      revision, status: 'ready'
+    }]
+  }
+}
+
 function DirectionReplayHarness(): null {
   useApplyShapeOpsLive(true, undefined, undefined, undefined, 'thread-a')
   return null
@@ -35,10 +46,12 @@ function DirectionReplayHarness(): null {
 
 function FilteredDirectionReplayHarness({
   workflowId,
+  childId,
   expectedDocumentKey,
   onOpenRequested
 }: {
   workflowId: string
+  childId?: string
   expectedDocumentKey?: string
   onOpenRequested: (request: {
     blockId: string
@@ -50,7 +63,7 @@ function FilteredDirectionReplayHarness({
   useApplyShapeOpsLive(
     true, undefined, undefined, undefined, 'thread-a',
     undefined, undefined, undefined, expectedDocumentKey,
-    { workflowId, onOpenRequested }
+    { workflowId, childId, onOpenRequested }
   )
   return null
 }
@@ -145,6 +158,150 @@ describe('PPT canvas projection replay', () => {
     expect(Object.values(useCanvasShapeStore.getState().document.objects)
       .filter((shape) => shape.pptDirectionRef)).toEqual([])
     expect(onOpenRequested).not.toHaveBeenCalled()
+    await restoreAfterReplay(renderer, previous)
+  })
+
+  it('does not project a foreign child into an empty canonical Work board', async () => {
+    const previous = useChatStore.getState()
+    const block: ToolBlock = {
+      kind: 'tool', id: 'direction-foreign-child', summary: 'Foreign directions', status: 'success',
+      meta: { toolName: 'ppt_agent', sourceItemKind: 'tool_result' },
+      detail: JSON.stringify({ directionBundle: directionBundle('workflow-a', 1, 'child-b') })
+    }
+    const onOpenRequested = vi.fn()
+    useCanvasShapeStore.getState().loadDocument(createEmptyDocument(), 'work-board-a')
+    useChatStore.setState({
+      activeThreadId: 'thread-a', currentTurnId: null, busy: false, blocks: [block]
+    })
+
+    let renderer: ReturnType<typeof create> | undefined
+    await act(async () => {
+      renderer = create(createElement(FilteredDirectionReplayHarness, {
+        workflowId: 'workflow-a', childId: 'child-a', expectedDocumentKey: 'work-board-a', onOpenRequested
+      }))
+    })
+    expect(Object.values(useCanvasShapeStore.getState().document.objects)
+      .filter((shape) => shape.pptDirectionRef)).toEqual([])
+    expect(onOpenRequested).not.toHaveBeenCalled()
+    await restoreAfterReplay(renderer, previous)
+  })
+
+  it('advances from a direction bundle to the first review even when revision counters differ', async () => {
+    const previous = useChatStore.getState()
+    const tool = (id: string, detail: Record<string, unknown>): ToolBlock => ({
+      kind: 'tool', id, summary: 'PPT output', status: 'success',
+      meta: { toolName: 'ppt_agent', sourceItemKind: 'tool_result' }, detail: JSON.stringify(detail)
+    })
+    useCanvasShapeStore.getState().resetDocument()
+    useChatStore.setState({
+      activeThreadId: 'thread-a', currentTurnId: null, busy: false,
+      blocks: [
+        tool('direction-new', { directionBundle: directionBundle('workflow-a', 2) }),
+        tool('review-first', { reviewBundle: reviewBundle('workflow-a', 1) })
+      ]
+    })
+
+    let renderer: ReturnType<typeof create> | undefined
+    await act(async () => { renderer = create(createElement(DirectionReplayHarness)) })
+    const shapes = Object.values(useCanvasShapeStore.getState().document.objects)
+    expect(shapes.filter((shape) => shape.pptDirectionRef)).toHaveLength(0)
+    expect(shapes.filter((shape) => shape.pptReviewRef)).toHaveLength(2)
+    expect(shapes.every((shape) => !shape.pptReviewRef || shape.pptReviewRef.revision === 1)).toBe(true)
+    await restoreAfterReplay(renderer, previous)
+  })
+
+  it('keeps review cards when a stale direction bundle is replayed later', async () => {
+    const previous = useChatStore.getState()
+    const tool = (id: string, detail: Record<string, unknown>): ToolBlock => ({
+      kind: 'tool', id, summary: 'PPT output', status: 'success',
+      meta: { toolName: 'ppt_agent', sourceItemKind: 'tool_result' }, detail: JSON.stringify(detail)
+    })
+    useCanvasShapeStore.getState().resetDocument()
+    useChatStore.setState({
+      activeThreadId: 'thread-a', currentTurnId: null, busy: false,
+      blocks: [
+        tool('review-new', { reviewBundle: reviewBundle('workflow-a', 2) }),
+        tool('direction-stale', { directionBundle: directionBundle('workflow-a', 1) })
+      ]
+    })
+
+    let renderer: ReturnType<typeof create> | undefined
+    await act(async () => { renderer = create(createElement(DirectionReplayHarness)) })
+    const shapes = Object.values(useCanvasShapeStore.getState().document.objects)
+    expect(shapes.filter((shape) => shape.pptReviewRef)).toHaveLength(2)
+    expect(shapes.every((shape) => !shape.pptReviewRef || shape.pptReviewRef.revision === 2)).toBe(true)
+    expect(shapes.filter((shape) => shape.pptDirectionRef)).toHaveLength(0)
+    await restoreAfterReplay(renderer, previous)
+  })
+
+  it('keeps a newer review when an older review bundle is replayed later', async () => {
+    const previous = useChatStore.getState()
+    const tool = (id: string, detail: Record<string, unknown>): ToolBlock => ({
+      kind: 'tool', id, summary: 'PPT output', status: 'success',
+      meta: { toolName: 'ppt_agent', sourceItemKind: 'tool_result' }, detail: JSON.stringify(detail)
+    })
+    useCanvasShapeStore.getState().resetDocument()
+    useChatStore.setState({
+      activeThreadId: 'thread-a', currentTurnId: null, busy: false,
+      blocks: [
+        tool('review-new', { reviewBundle: reviewBundle('workflow-a', 3) }),
+        tool('review-stale', { reviewBundle: reviewBundle('workflow-a', 2) })
+      ]
+    })
+
+    let renderer: ReturnType<typeof create> | undefined
+    await act(async () => { renderer = create(createElement(DirectionReplayHarness)) })
+    const shapes = Object.values(useCanvasShapeStore.getState().document.objects)
+    expect(shapes.filter((shape) => shape.pptReviewRef)).toHaveLength(2)
+    expect(shapes.every((shape) => !shape.pptReviewRef || shape.pptReviewRef.revision === 3)).toBe(true)
+    await restoreAfterReplay(renderer, previous)
+  })
+
+  it('keeps newer directions when an older direction bundle is replayed later', async () => {
+    const previous = useChatStore.getState()
+    const tool = (id: string, detail: Record<string, unknown>): ToolBlock => ({
+      kind: 'tool', id, summary: 'PPT output', status: 'success',
+      meta: { toolName: 'ppt_agent', sourceItemKind: 'tool_result' }, detail: JSON.stringify(detail)
+    })
+    useCanvasShapeStore.getState().resetDocument()
+    useChatStore.setState({
+      activeThreadId: 'thread-a', currentTurnId: null, busy: false,
+      blocks: [
+        tool('direction-new', { directionBundle: directionBundle('workflow-a', 3) }),
+        tool('direction-stale', { directionBundle: directionBundle('workflow-a', 2) })
+      ]
+    })
+
+    let renderer: ReturnType<typeof create> | undefined
+    await act(async () => { renderer = create(createElement(DirectionReplayHarness)) })
+    const refs = Object.values(useCanvasShapeStore.getState().document.objects)
+      .flatMap((shape) => shape.pptDirectionRef ? [shape.pptDirectionRef] : [])
+    expect(refs).not.toHaveLength(0)
+    expect(refs.every((ref) => ref.revision === 3)).toBe(true)
+    await restoreAfterReplay(renderer, previous)
+  })
+
+  it('rejects a delayed bundle with another child identity for the same workflow', async () => {
+    const previous = useChatStore.getState()
+    const tool = (id: string, detail: Record<string, unknown>): ToolBlock => ({
+      kind: 'tool', id, summary: 'PPT output', status: 'success',
+      meta: { toolName: 'ppt_agent', sourceItemKind: 'tool_result' }, detail: JSON.stringify(detail)
+    })
+    useCanvasShapeStore.getState().resetDocument()
+    useChatStore.setState({
+      activeThreadId: 'thread-a', currentTurnId: null, busy: false,
+      blocks: [
+        tool('direction-original', { directionBundle: directionBundle('workflow-a', 1, 'child-a') }),
+        tool('direction-foreign', { directionBundle: directionBundle('workflow-a', 2, 'child-b') })
+      ]
+    })
+
+    let renderer: ReturnType<typeof create> | undefined
+    await act(async () => { renderer = create(createElement(DirectionReplayHarness)) })
+    const refs = Object.values(useCanvasShapeStore.getState().document.objects)
+      .flatMap((shape) => shape.pptDirectionRef ? [shape.pptDirectionRef] : [])
+    expect(refs).not.toHaveLength(0)
+    expect(refs.every((ref) => ref.childId === 'child-a' && ref.revision === 1)).toBe(true)
     await restoreAfterReplay(renderer, previous)
   })
 })

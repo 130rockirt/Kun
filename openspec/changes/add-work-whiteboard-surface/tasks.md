@@ -30,4 +30,4 @@
 - [x] 5.1 Add unit tests for typed layout migration, whiteboard registry CRUD, thread binding, hidden storage, and single-canvas ownership
 - [x] 5.2 Add component tests for sidebar/menu/start-page creation, central canvas and assistant coexistence, split-group handoff, reload, and responsive behavior
 - [x] 5.3 Add PPT integration tests for canonical-board reuse, direction/review projection, stale and duplicate replay, QA gating, and final PPTX navigation
-- [ ] 5.4 Run renderer typecheck, focused Vitest suites, file-size validation, top-level typecheck, and build; record any unrelated baseline failures
+- [x] 5.4 Run renderer typecheck, focused Vitest suites, file-size validation, top-level typecheck, and build; record any unrelated baseline failures

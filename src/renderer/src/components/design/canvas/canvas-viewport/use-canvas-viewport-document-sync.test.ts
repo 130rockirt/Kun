@@ -91,4 +91,23 @@ describe('loadCanvasDocumentWithinDeadline', () => {
     expect(persistence.persistCanvasDocument).not.toHaveBeenCalled()
     await act(async () => renderer.unmount())
   })
+
+  it('does not certify a rejected read as safe for approval actions', async () => {
+    persistence.loadCanvasDocument.mockRejectedValue(new Error('read failed'))
+    const onDocumentLoadStateChange = vi.fn()
+    const Harness = () => {
+      useCanvasViewportDocumentSync({
+        workspaceRoot: '/workspace', artifactId: 'board', viewportStorageKey: 'view',
+        documentKey: 'approval-board', htmlFrameSyncEnabled: false,
+        designArtifacts: [], persistenceEnabled: false, onDocumentLoadStateChange
+      })
+      return null
+    }
+    let renderer!: ReactTestRenderer
+    await act(async () => { renderer = create(createElement(Harness)) })
+    await act(async () => { await Promise.resolve() })
+
+    expect(onDocumentLoadStateChange).toHaveBeenLastCalledWith(false)
+    await act(async () => renderer.unmount())
+  })
 })
