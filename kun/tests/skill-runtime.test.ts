@@ -6,6 +6,7 @@ import { CapabilityRegistry } from '../src/adapters/tool/capability-registry.js'
 import { LocalToolHost } from '../src/adapters/tool/local-tool-host.js'
 import { KunCapabilitiesConfig } from '../src/contracts/capabilities.js'
 import type { ModelClient, ModelRequest } from '../src/ports/model-client.js'
+import { modelRequestContextText } from '../src/loop/model-request-context.js'
 import { SkillRuntime } from '../src/skills/skill-runtime.js'
 import { bootstrapThread, makeHarness } from './loop-test-harness.js'
 
@@ -578,7 +579,7 @@ describe('SkillRuntime', () => {
 
     await h.loop.runTurn(h.threadId, h.turnId)
 
-    expect(seenRequest?.contextInstructions?.join('\n')).toContain('Always inspect the diff first.')
+    expect(seenRequest ? modelRequestContextText(seenRequest) : '').toContain('Always inspect the diff first.')
     expect(seenRequest?.tools.map((tool) => tool.name)).toEqual(['read'])
     const turn = await h.turns.getTurn(h.threadId, h.turnId)
     expect(turn?.activeSkillIds).toEqual(['review'])

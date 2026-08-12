@@ -166,14 +166,14 @@ const api = {
   readWorkspaceOfficeSemantic: (options) => ipcRenderer.invoke('file:read-workspace-office-semantic', options),
   resolveKunApproval: (request) => ipcRenderer.invoke('approval:decide', request),
   restartRuntime: () => ipcRenderer.invoke('runtime:restart'),
+  restartAllKunProcesses: () => ipcRenderer.invoke('runtime:restart-all'),
   fetchUpstreamModels: () => ipcRenderer.invoke('upstream:models'),
   probeModelProvider: (payload) => ipcRenderer.invoke('provider:probe', payload),
   listProviderQuotas: () => ipcRenderer.invoke('provider:quota:list'),
   fetchModelsDevCatalog: (payload) => ipcRenderer.invoke('provider:models-dev-catalog', payload),
   optimizePrompt: (payload) => ipcRenderer.invoke('prompt:optimize', payload),
   getClawStatus: () => ipcRenderer.invoke('claw:status'),
-  runClawTask: (taskId) =>
-    ipcRenderer.invoke('claw:task:run', taskId),
+  runClawTask: (taskId) => ipcRenderer.invoke('claw:task:run', taskId),
   getScheduleStatus: () => ipcRenderer.invoke('schedule:status'),
   runScheduleTask: (taskId) =>
     ipcRenderer.invoke('schedule:task:run', taskId),

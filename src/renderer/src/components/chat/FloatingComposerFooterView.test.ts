@@ -1,6 +1,7 @@
 import { createElement, type ReactNode } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
+import { primaryCacheHitRate } from '../../hooks/use-thread-usage'
 import { readStylesheetBundle } from '../../testing/stylesheet-bundle'
 import { FloatingComposerFooterView } from './FloatingComposerFooterView'
 
@@ -50,7 +51,7 @@ function renderFooter(overrides: Record<string, unknown> = {}): string {
     FloatingComposerUsageHistory: UsageHistory,
     activeThreadId: 'thread-1',
     compact: false,
-    primaryCacheHitRate: (value: { lastTurnCacheHitRate: number | null }) => value.lastTurnCacheHitRate,
+    primaryCacheHitRate,
     footerHint: 'Enter to send · Shift+Enter for newline',
     formatCompactNumber: (value: number) => value === 11_900_000 ? '11.9M' : String(value),
     formatCost: () => '$1.25',
@@ -90,6 +91,16 @@ describe('FloatingComposerFooterView', () => {
     })
 
     expect(html).not.toContain('ds-composer-usage-cache')
+    expect(html).not.toContain('81% cache')
+  })
+
+  it('omits cache when the latest-request cache hit rate is zero', () => {
+    const html = renderFooter({
+      threadUsage: usageSummary({ lastTurnCacheHitRate: 0, cacheHitRate: 0.81 })
+    })
+
+    expect(html).not.toContain('ds-composer-usage-cache')
+    expect(html).not.toContain('0% cache')
     expect(html).not.toContain('81% cache')
   })
 

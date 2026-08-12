@@ -56,7 +56,7 @@ export { sharedModelConnectionHasUsableCredential } from '../lib/provider-creden
 
 
 export function buildProvidersViewModel(scope: Record<string, any>): Record<string, any> {
-  const { t, showApiKey, sharedConnections, revealedCredential, credentialRevealPendingProviderId, setSelectedProviderId, addProviderQuery, subscriptionRegion, providerListQuery, probeStates, cursorAccounts, pendingImport, draftProvider, activeProvider, sharedConnectionFor, hasConfiguredCredential, activeKunProviderId, closeAddProviderDialog, addPresetModelProvider } = scope
+  const { t, showApiKey, sharedConnections, revealedCredential, credentialRevealPendingProviderId, setSelectedProviderId, addProviderQuery, subscriptionRegion, providerListQuery, probeStates, cursorAccounts, pendingImport, draftProvider, activeProvider, sharedConnectionFor, hasConfiguredCredential, activeKunProviderId, closeAddProviderDialog, addPresetModelProvider, updateProviderProxy, setGlobalNetworkOpen } = scope
   const modelProviders = scope.modelProviders as ModelProviderProfileV1[]
   const displayProviders = scope.displayProviders as ModelProviderProfileV1[]
   const activeProbe = activeProvider ? probeStates[activeProvider.id] : undefined
@@ -72,7 +72,28 @@ export function buildProvidersViewModel(scope: Record<string, any>): Record<stri
       return { tone: 'info', message: t('modelProviderTesting') }
     }
     if (activeProbe.status === 'error') {
-      return { tone: 'error', message: t('modelProviderTestFailed', { message: activeProbe.message ?? '' }) }
+      const technicalMessage = t('modelProviderTestFailed', { message: activeProbe.message ?? '' })
+      const suggestedProxyUrl = activeProbe.suggestedProxyUrl?.trim()
+      return {
+        tone: 'error',
+        message: suggestedProxyUrl
+          ? `${technicalMessage}\n${t('modelProviderSystemProxyDetected', { proxy: suggestedProxyUrl })}`
+          : technicalMessage,
+        copy: {
+          label: t('modelProviderCopyError'),
+          copiedLabel: t('modelProviderErrorCopied'),
+          text: technicalMessage
+        },
+        action: suggestedProxyUrl
+          ? {
+              label: t('modelProviderUseDetectedProxy'),
+              onClick: () => {
+                updateProviderProxy({ enabled: true, url: suggestedProxyUrl })
+                setGlobalNetworkOpen(true)
+              }
+            }
+          : undefined
+      }
     }
     return {
       tone: 'success',

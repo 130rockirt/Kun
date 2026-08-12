@@ -5,6 +5,7 @@ import {
   makeAssistantTextItem,
   makeCompactionItem,
   makeGoalContextItem,
+  makeModelContextItem,
   makeToolCallItem,
   makeToolResultItem,
   makeUserItem
@@ -14,6 +15,68 @@ import { ContextCompactor } from './context-compactor.js'
 import { modelContextProfilesFromConfig } from './model-context-profile.js'
 
 describe('ContextCompactor', () => {
+  it('folds historical capsules while preserving the complete active turn capsule', () => {
+    const threadId = 'thr_model_context_compaction'
+    const activeTurnId = 'turn_active'
+    const historicalContext = makeModelContextItem({
+      id: 'context_historical',
+      threadId,
+      turnId: 'turn_historical',
+      stepIndex: 0,
+      contentDigest: 'historic-digest',
+      blocks: [],
+      text: 'Historical persona capsule'
+    })
+    const activeUser = makeUserItem({
+      id: 'active_user',
+      threadId,
+      turnId: activeTurnId,
+      text: 'Current request'
+    })
+    const activeContextText = 'Current persona capsule'
+    const activeContext = makeModelContextItem({
+      id: 'context_active',
+      threadId,
+      turnId: activeTurnId,
+      stepIndex: 0,
+      contentDigest: 'active-digest',
+      blocks: [],
+      text: activeContextText
+    })
+    const result = new ContextCompactor().compact({
+      threadId,
+      turnId: activeTurnId,
+      history: [
+        makeUserItem({
+          id: 'historical_user',
+          threadId,
+          turnId: 'turn_historical',
+          text: 'Historical request'
+        }),
+        historicalContext,
+        makeAssistantTextItem({
+          id: 'historical_assistant',
+          threadId,
+          turnId: 'turn_historical',
+          text: 'Historical answer',
+          status: 'completed'
+        }),
+        activeUser,
+        activeContext
+      ],
+      prefix: createImmutablePrefix(),
+      keepRecent: 1,
+      mode: 'force'
+    })
+
+    expect(result.replacedTokens).toBeGreaterThan(0)
+    expect(result.next).not.toContainEqual(expect.objectContaining({ id: historicalContext.id }))
+    expect(result.next).toContainEqual(activeUser)
+    expect(result.next).toContainEqual(activeContext)
+    expect(result.summaryItem.kind === 'compaction' ? result.summaryItem.summary : '')
+      .not.toContain('Historical persona capsule')
+  })
+
   it('keeps goal context once outside compaction sources across repeated folds', () => {
     const threadId = 'thr_goal_context_compaction'
     const turnId = 'turn_goal_context_compaction'

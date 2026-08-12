@@ -96,6 +96,8 @@ import {
   validateRuntimeSettingsForApply
 } from './main-runtime-settings'
 import { ensureRuntime, restartRuntime } from './main-runtime-startup'
+import { runtimeSupervisor } from './main-runtime-health'
+import { stopAllKunBackgroundProcesses } from './restart-all-kun-processes'
 import {
   destroyTrayQuotaPopover,
   notifyTrayQuotaRefresh,
@@ -308,6 +310,22 @@ export function registerMainIpc(services: MainServices): void {
       restartRuntime: async () => {
         const settings = await mainState.store.load()
         await restartRuntime(settings)
+      },
+      restartAllKunProcesses: async () => {
+        runtimeSupervisor.setManagedRuntimeExpected(false)
+        try {
+          await runtimeShutdown.stopForQuit()
+          const manager = mainState.activeServiceManager ?? serviceManager
+          const report = await stopAllKunBackgroundProcesses(manager)
+          logInfo('runtime-restart-all', 'Stopped all Kun background processes before relaunch.', report)
+          if (mainState.activeServiceManager === manager) mainState.activeServiceManager = null
+          app.relaunch()
+          mainState.mainWindow?.destroy()
+          app.exit(0)
+        } catch (error) {
+          runtimeSupervisor.setManagedRuntimeExpected(true)
+          throw error
+        }
       },
       fetchUpstreamModels: fetchModels,
       getClawRuntime: () => mainState.clawRuntime,

@@ -105,6 +105,7 @@ type WorkspaceFilePreviewChromeProps = {
   openInSystem: () => void
   revealInFileManager: () => void
   copyContent: () => Promise<void>
+  copyContentAvailable: boolean
   copied: boolean
   onClose: () => void
   breadcrumbSegments: string[]
@@ -167,6 +168,7 @@ export function WorkspaceFilePreviewChrome(props: WorkspaceFilePreviewChromeProp
     openInSystem,
     revealInFileManager,
     copyContent,
+    copyContentAvailable,
     copied,
     onClose,
     breadcrumbSegments,
@@ -470,7 +472,7 @@ export function WorkspaceFilePreviewChrome(props: WorkspaceFilePreviewChromeProp
           <button
             type="button"
             onClick={() => void copyContent()}
-            disabled={!result?.ok}
+            disabled={!copyContentAvailable}
             className="ds-code-sidebar-icon-button"
             title={copied ? t('copySuccess') : t('filePreviewCopyContent')}
             aria-label={copied ? t('copySuccess') : t('filePreviewCopyContent')}

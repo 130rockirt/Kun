@@ -253,7 +253,15 @@ export function TimelineRuntimeError({
       ? t('turnInterruptedByRestart')
       : code === 'interrupted_turn_auto_resume'
         ? t('autoResumingInterruptedTask')
-        : ''
+        : code === 'memory_pressure_critical'
+          ? t('runtimeRestartingForMemoryPressure', {
+              defaultValue: 'Agent Runtime is restarting because memory usage reached a critical level. The current task will be recovered after restart.'
+            })
+          : code === 'memory_pressure_warning'
+            ? t('runtimeMemoryPressureWarning', {
+                defaultValue: 'Agent Runtime memory usage is high. New subagents are temporarily limited while memory is reclaimed.'
+              })
+            : ''
   const message = (localizedMessage || block.text.trim() || block.detail?.trim() || block.code?.trim() || '')
   const showCode = Boolean(code && !message.toLowerCase().includes(code.toLowerCase()))
 

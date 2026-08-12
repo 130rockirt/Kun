@@ -378,6 +378,19 @@ export function useProviderProbeOperations(scope: Record<string, any>): Record<s
         probe(),
         fetchModelsDevCatalogFor(target)
       ])
+      if (!result.ok && result.suggestedProxyUrl) {
+        setProbeStates((previous) => ({
+          ...previous,
+          [target.id]: {
+            fingerprint,
+            mode,
+            status: 'error',
+            message: result.message,
+            suggestedProxyUrl: result.suggestedProxyUrl
+          }
+        }))
+        return
+      }
       openModelImport({
         target,
         fingerprint,
@@ -395,7 +408,13 @@ export function useProviderProbeOperations(scope: Record<string, any>): Record<s
     if (!result.ok) {
       setProbeStates((previous) => ({
         ...previous,
-        [target.id]: { fingerprint, mode, status: 'error', message: result.message }
+        [target.id]: {
+          fingerprint,
+          mode,
+          status: 'error',
+          message: result.message,
+          suggestedProxyUrl: result.suggestedProxyUrl
+        }
       }))
       return
     }

@@ -196,7 +196,7 @@ Changelog 记录公开 Extension API，而不是 Kun 内部重构。每项包含
 下面的 public surface 快照由文档门禁从 package 入口、公开 export 和可达 `.d.ts` 计算。只有在本节已经解释兼容性影响后才更新快照；不能把更新 hash 当成 Changelog 条目。
 
 <!-- BEGIN GENERATED SDK PUBLIC SURFACE SNAPSHOTS -->
-<!-- sdk-surface-snapshot @kun/extension-api@1.2.0 sha256:cc5a1819fbdfa928bfdb0a5913779cf080165841992d008ef7b2680199467e42 -->
+<!-- sdk-surface-snapshot @kun/extension-api@1.2.0 sha256:257f85cddba6ed5025266aca8f51cd5253867136b4c9c14ae8a4058c731f1149 -->
 <!-- sdk-surface-snapshot @kun/extension-react@1.2.0 sha256:e2099a64dc22c05056dca0c599bafdfb22702b6d57e9b60edd2154b165323322 -->
 <!-- sdk-surface-snapshot @kun/extension-test@1.2.0 sha256:fccbdd3fb3400ce179f8d6c3ae1d191bfe3488ef125577423f3d2b3f4fad851d -->
 <!-- END GENERATED SDK PUBLIC SURFACE SNAPSHOTS -->
@@ -220,6 +220,7 @@ Added:
 
 Changed:
 
+- `ComposerContextProvenance` 新增 Host 生成的 `workspace-selection` 变体，供内置文件预览把有界、无路径的文档选区作为一次性对话上下文；扩展请求结构和已有 provenance 无需迁移。
 - `ModelProviderRequest.generation.toolChoice` 除 `auto` / `none` / `required` 外新增 `{ type: 'tool', name }`，允许请求强制选择已声明的具名工具；该字段仍为可选，既有请求无需迁移。
 - `ViewContribution.showInRightRail` 是默认 `true` 的可选布尔字段。右侧栏 View 可设为 `false`，继续由扩展管理页或命令打开，但不在 Code 右侧图标栏常驻；既有 Manifest 无需迁移。
 - `MediaApi.readText()` 的公开 `MAX_MEDIA_TEXT_BYTES` 从 512 KiB 提升到 2 MiB，并继续要求严格 UTF-8、调用者可收紧的 `maxBytes`、opaque handle 与无路径结果。

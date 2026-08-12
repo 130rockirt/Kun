@@ -53,6 +53,19 @@ describe('bounded composer context API', () => {
     }).success).toBe(false)
   })
 
+  it('accepts first-party workspace document selections', () => {
+    const selectionAttachment = {
+      ...request,
+      attachmentId: `workspace-selection-context:${'e'.repeat(64)}`,
+      provenance: { source: 'workspace-selection', workspaceId: 'f'.repeat(64) }
+    } as const
+    expect(ComposerContextAttachmentSchema.parse(selectionAttachment)).toEqual(selectionAttachment)
+    expect(ComposerContextAttachmentSchema.safeParse({
+      ...selectionAttachment,
+      attachmentId: `document-context:${'e'.repeat(64)}`
+    }).success).toBe(false)
+  })
+
   it('rejects absolute paths, path fields, excessive depth, and oversized references', () => {
     expect(ComposerContextAttachmentRequestSchema.safeParse({
       ...request,

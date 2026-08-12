@@ -46,7 +46,7 @@ import type { SkillRuntime } from '../skills/skill-runtime.js'
 import type { InstructionRuntime } from '../instructions/instruction-runtime.js'
 import { RuntimeEventRecorder } from '../services/runtime-event-recorder.js'
 import { ThreadService } from '../services/thread-service.js'
-import { TurnService } from '../services/turn-service.js'
+import { isHostShutdownTurnSuspension, TurnService } from '../services/turn-service.js'
 import { UsageService } from '../services/usage-service.js'
 import type { ChildRunExecutor } from './delegation-runtime.js'
 import {
@@ -386,6 +386,7 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
     })
     const abortChild = (): void => {
       console.warn(`[kun] foreground subagent parent abort received child=${thread.id} turn=${started.turnId} parentThread=${input.parentThreadId} parentTurn=${input.parentTurnId}`)
+      if (isHostShutdownTurnSuspension(input.signal)) return
       void turns.interruptTurn({
         threadId: thread.id,
         turnId: started.turnId

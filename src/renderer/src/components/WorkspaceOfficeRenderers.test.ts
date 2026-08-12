@@ -1,4 +1,4 @@
-import { createElement } from 'react'
+import { createElement, type ReactElement } from 'react'
 import { act, create, type ReactTestRenderer } from 'react-test-renderer'
 import { JSDOM } from 'jsdom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -29,7 +29,7 @@ vi.mock('xlsx', () => ({
   }
 }))
 
-import { WorkspaceDocxPreview } from './WorkspaceDocxPreview'
+import { fittedDocxPreviewZoom, WorkspaceDocxPreview } from './WorkspaceDocxPreview'
 import { WorkspacePptxPreview } from './WorkspacePptxPreview'
 import { MAX_MOUNTED_PPTX_THUMBNAILS } from './WorkspacePptxThumbnailRail'
 import {
@@ -51,6 +51,8 @@ type MockPptxPreviewer = {
   renderSingleSlide: ReturnType<typeof vi.fn>
   destroy: ReturnType<typeof vi.fn>
 }
+
+let docxViewportWidth = 360
 
 function preview(
   viewer: WorkspaceOfficePreviewSuccess['viewer'],
@@ -100,8 +102,12 @@ describe('browser Office renderers', () => {
     libraryMocks.renderDocx.mockReset()
     renderedDocxPages = []
     libraryMocks.renderDocx.mockImplementation(async (_data, body: HTMLElement) => {
+      const wrapper = document.createElement('div')
       const first = document.createElement('section')
       const second = document.createElement('section')
+      wrapper.className = 'docx-wrapper'
+      wrapper.style.paddingLeft = '30px'
+      wrapper.style.paddingRight = '30px'
       first.className = 'docx'
       second.className = 'docx'
       first.textContent = 'First page text'
@@ -109,8 +115,12 @@ describe('browser Office renderers', () => {
       first.append(document.createElement('p'))
       second.append(document.createElement('p'))
       renderedDocxPages = [first, second]
-      body.append(first, second)
+      Object.defineProperty(first, 'offsetWidth', { configurable: true, value: 816 })
+      Object.defineProperty(second, 'offsetWidth', { configurable: true, value: 816 })
+      wrapper.append(first, second)
+      body.append(wrapper)
     })
+    docxViewportWidth = 360
     pptxInstances = []
     pptxSlideCount = 3
     libraryMocks.initPptx.mockReset()
@@ -144,6 +154,13 @@ describe('browser Office renderers', () => {
     vi.unstubAllGlobals()
   })
 
+  it('fits DOCX pages to narrow preview widths without enlarging wide pages', () => {
+    expect(fittedDocxPreviewZoom(328, 876)).toBe(0.37)
+    expect(fittedDocxPreviewZoom(608, 876)).toBe(0.69)
+    expect(fittedDocxPreviewZoom(1_000, 876)).toBe(1)
+    expect(fittedDocxPreviewZoom(0, 876)).toBe(1)
+  })
+
   it('renders DOCX safely, navigates pages, zooms, and retains old DOM after refresh failure', async () => {
     await act(async () => {
       renderer = create(createElement(WorkspaceDocxPreview, {
@@ -166,10 +183,24 @@ describe('browser Office renderers', () => {
       location: { kind: 'word', paragraphStart: 2, paragraphEnd: 2 }
     }))
     expect(scrollIntoView).toHaveBeenCalledWith({ block: 'center' })
+    expect(renderer!.root.findByProps({ className: 'workspace-docx-preview select-text' })).toBeTruthy()
+    expect(renderer!.root.findByProps({ 'aria-label': 'Reset zoom' }).children.join('')).toBe('37%')
+    docxViewportWidth = 640
+    await act(async () => {
+      window.dispatchEvent(new Event('resize'))
+    })
+    expect(renderer!.root.findByProps({ 'aria-label': 'Reset zoom' }).children.join('')).toBe('69%')
     await act(async () => renderer?.root.findByProps({ 'aria-label': 'Next page' }).props.onClick())
     expect(renderer!.root.findByProps({ 'aria-label': 'Page 2 of 2' })).toBeTruthy()
     await act(async () => renderer?.root.findByProps({ 'aria-label': 'Zoom in' }).props.onClick())
-    expect(renderer!.root.findByProps({ 'aria-label': 'Reset zoom' }).children.join('')).toBe('110%')
+    expect(renderer!.root.findByProps({ 'aria-label': 'Reset zoom' }).children.join('')).toBe('80%')
+    docxViewportWidth = 360
+    await act(async () => {
+      window.dispatchEvent(new Event('resize'))
+    })
+    expect(renderer!.root.findByProps({ 'aria-label': 'Reset zoom' }).children.join('')).toBe('80%')
+    await act(async () => renderer?.root.findByProps({ 'aria-label': 'Reset zoom' }).props.onClick())
+    expect(renderer!.root.findByProps({ 'aria-label': 'Reset zoom' }).children.join('')).toBe('37%')
 
     const anchor = document.createElement('a')
     const linkContainer = document.createElement('div')
@@ -210,7 +241,7 @@ describe('browser Office renderers', () => {
       }), { createNodeMock })
       await flushPromises()
     })
-    const body = renderedDocxPages[0]!.parentElement!
+    const body = renderedDocxPages[0]!.parentElement!.parentElement!
     document.body.append(body)
     const pages = renderedDocxPages
     const range = document.createRange()
@@ -218,6 +249,13 @@ describe('browser Office renderers', () => {
     range.setEnd(pages[1]!.firstChild!, 6)
     window.getSelection()!.removeAllRanges()
     window.getSelection()!.addRange(range)
+    expect(selectionFromOfficeDom(body, 'word', 'docx', (node) => ({
+      page: renderedDocxPages.findIndex((candidate) => candidate.contains(node)) + 1
+    }))).toEqual(expect.objectContaining({
+      pageStart: 1,
+      pageEnd: 2,
+      text: expect.stringContaining('First page text')
+    }))
     await act(async () => { document.dispatchEvent(new Event('selectionchange')) })
 
     expect(onSelectionChange).toHaveBeenLastCalledWith(expect.objectContaining({
@@ -575,8 +613,19 @@ describe('browser Office renderers', () => {
   })
 })
 
-function createNodeMock(element: { type: unknown }): HTMLElement | null {
-  return typeof element.type === 'string' ? document.createElement(element.type) : null
+function createNodeMock(element: ReactElement<unknown>): HTMLElement | null {
+  if (typeof element.type !== 'string') return null
+  const props = element.props as { className?: string }
+  const node = document.createElement(element.type)
+  if (props.className === 'min-h-0 flex-1 overflow-auto p-4') {
+    node.style.paddingLeft = '16px'
+    node.style.paddingRight = '16px'
+    Object.defineProperty(node, 'clientWidth', {
+      configurable: true,
+      get: () => docxViewportWidth
+    })
+  }
+  return node
 }
 
 async function flushPromises(): Promise<void> {

@@ -92,6 +92,29 @@ describe('DelegationRuntime live concurrency reconfiguration', () => {
     await expect(third).resolves.toMatchObject({ status: 'completed' })
   })
 
+  it('temporarily caps admission under memory pressure without rewriting config', async () => {
+    const gates = [deferred<void>(), deferred<void>(), deferred<void>()]
+    const started: string[] = []
+    const runtime = createRuntime({
+      maxParallel: 3,
+      executor: async ({ prompt }) => {
+        started.push(prompt)
+        await gates[Number(prompt) - 1]!.promise
+        return { summary: prompt }
+      }
+    })
+    runtime.setMemoryPressureParallelLimit(1)
+    const signal = new AbortController().signal
+    const runs = ['1', '2', '3'].map((prompt) => run(runtime, prompt, signal))
+    await waitFor(() => started.length === 1)
+    expect(started).toEqual(['1'])
+
+    runtime.setMemoryPressureParallelLimit(undefined)
+    await waitFor(() => started.length === 3)
+    gates.forEach((gate) => gate.resolve())
+    await Promise.all(runs)
+  })
+
   it('keeps queued children paused while delegation is disabled', async () => {
     const firstGate = deferred<void>()
     const startOrder: string[] = []

@@ -236,8 +236,8 @@ export class DelegationRuntime extends DelegationRuntimeRun {
 
     const state: ChildExecutionState = { record, commits: Promise.resolve() }
     const controller = new AbortController()
-    const abortFromParent = (): void => controller.abort()
-    if (input.signal.aborted) controller.abort()
+    const abortFromParent = (): void => controller.abort(input.signal.reason)
+    if (input.signal.aborted) controller.abort(input.signal.reason)
     else input.signal.addEventListener('abort', abortFromParent, { once: true })
     try {
       return await this.executeChild({

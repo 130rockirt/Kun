@@ -6,9 +6,13 @@ export const OFFICE_PREVIEW_MIN_ZOOM = 0.6
 export const OFFICE_PREVIEW_MAX_ZOOM = 1.6
 export const OFFICE_PREVIEW_ZOOM_STEP = 0.1
 
-export function nextOfficePreviewZoom(current: number, delta: number): number {
+export function nextOfficePreviewZoom(
+  current: number,
+  delta: number,
+  minZoom = OFFICE_PREVIEW_MIN_ZOOM
+): number {
   return Math.max(
-    OFFICE_PREVIEW_MIN_ZOOM,
+    minZoom,
     Math.min(OFFICE_PREVIEW_MAX_ZOOM, Math.round((current + delta) * 10) / 10)
   )
 }
@@ -19,7 +23,9 @@ export function WorkspaceOfficePreviewToolbar({
   refreshError,
   viewerError,
   zoom,
+  minZoom = OFFICE_PREVIEW_MIN_ZOOM,
   onZoomChange,
+  onResetZoom,
   children
 }: {
   result: WorkspaceOfficePreviewSuccess
@@ -27,7 +33,9 @@ export function WorkspaceOfficePreviewToolbar({
   refreshError?: string | null
   viewerError?: string | null
   zoom: number
+  minZoom?: number
   onZoomChange: (zoom: number) => void
+  onResetZoom?: () => void
   children?: ReactNode
 }): ReactElement {
   return (
@@ -48,8 +56,8 @@ export function WorkspaceOfficePreviewToolbar({
           type="button"
           aria-label="Zoom out"
           className="rounded p-1 hover:bg-ds-hover disabled:opacity-40"
-          disabled={zoom <= OFFICE_PREVIEW_MIN_ZOOM}
-          onClick={() => onZoomChange(nextOfficePreviewZoom(zoom, -OFFICE_PREVIEW_ZOOM_STEP))}
+          disabled={zoom <= minZoom}
+          onClick={() => onZoomChange(nextOfficePreviewZoom(zoom, -OFFICE_PREVIEW_ZOOM_STEP, minZoom))}
         >
           <Minus className="h-3.5 w-3.5" />
         </button>
@@ -57,7 +65,7 @@ export function WorkspaceOfficePreviewToolbar({
           type="button"
           aria-label="Reset zoom"
           className="min-w-10 rounded px-1 py-0.5 hover:bg-ds-hover"
-          onClick={() => onZoomChange(1)}
+          onClick={() => onResetZoom ? onResetZoom() : onZoomChange(1)}
         >
           {Math.round(zoom * 100)}%
         </button>
@@ -66,7 +74,7 @@ export function WorkspaceOfficePreviewToolbar({
           aria-label="Zoom in"
           className="rounded p-1 hover:bg-ds-hover disabled:opacity-40"
           disabled={zoom >= OFFICE_PREVIEW_MAX_ZOOM}
-          onClick={() => onZoomChange(nextOfficePreviewZoom(zoom, OFFICE_PREVIEW_ZOOM_STEP))}
+          onClick={() => onZoomChange(nextOfficePreviewZoom(zoom, OFFICE_PREVIEW_ZOOM_STEP, minZoom))}
         >
           <Plus className="h-3.5 w-3.5" />
         </button>

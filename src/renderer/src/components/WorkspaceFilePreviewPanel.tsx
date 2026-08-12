@@ -93,6 +93,7 @@ export function WorkspaceFilePreviewPanel({
   const tabMenuTriggerRef = useRef<HTMLElement | null>(null)
   const tabButtonRefs = useRef(new Map<string, HTMLButtonElement>())
   const copyResetRef = useRef<number | null>(null)
+  const panelRef = useRef<HTMLElement>(null)
   const textDraftsRef = useRef(new Map<string, CachedTextDraft>())
   const [dirtyTargetKeys, setDirtyTargetKeys] = useState<Set<string>>(() => new Set())
   const activeTargetKey = targetKey(target)
@@ -399,9 +400,10 @@ export function WorkspaceFilePreviewPanel({
   }
 
   const copyContent = async (): Promise<void> => {
-    if (!result?.ok || !navigator?.clipboard?.writeText) return
+    const content = result?.ok ? textDraft : renderedDocxPreviewText(panelRef.current)
+    if (!content || !navigator?.clipboard?.writeText) return
     try {
-      await navigator.clipboard.writeText(textDraft)
+      await navigator.clipboard.writeText(content)
       setCopied(true)
       if (copyResetRef.current !== null) window.clearTimeout(copyResetRef.current)
       copyResetRef.current = window.setTimeout(() => setCopied(false), COPY_RESET_MS)
@@ -409,6 +411,10 @@ export function WorkspaceFilePreviewPanel({
       setCopied(false)
     }
   }
+
+  const copyContentAvailable = Boolean(
+    result?.ok || (officeResult?.ok && officeResult.viewer === 'word')
+  )
 
   const saveText = async (force = false): Promise<boolean> => {
     if (!target || !result?.ok || !textDirty || savingText) return false
@@ -529,6 +535,7 @@ export function WorkspaceFilePreviewPanel({
         onClick={() => setReadingMode(false)}
       />
       <aside
+        ref={panelRef}
         data-kun-workspace-root={(target?.workspaceRoot ?? workspaceRoot).replaceAll('\\', '/')}
         data-reading-mode={readingMode ? 'true' : 'false'}
         className={`ds-no-drag ds-code-sidebar flex min-h-0 flex-col border-l border-ds-border-muted ${readingMode ? 'is-reading' : ''} ${className ?? ''}`}
@@ -585,6 +592,7 @@ export function WorkspaceFilePreviewPanel({
           openInSystem={openInSystem}
           revealInFileManager={revealInFileManager}
           copyContent={copyContent}
+          copyContentAvailable={copyContentAvailable}
           copied={copied}
           onClose={onClose}
           breadcrumbSegments={breadcrumbSegments}
@@ -654,4 +662,10 @@ export function WorkspaceFilePreviewPanel({
       />
     </>
   )
+}
+
+export function renderedDocxPreviewText(container: ParentNode | null): string {
+  const preview = container?.querySelector<HTMLElement>('.workspace-docx-preview')
+  if (!preview) return ''
+  return (preview.innerText || preview.textContent || '').replaceAll('\u00a0', ' ').trim()
 }

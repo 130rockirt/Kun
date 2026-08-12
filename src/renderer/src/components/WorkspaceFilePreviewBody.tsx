@@ -28,6 +28,7 @@ import {
   type CachedTextDraft
 } from './workspace-file-preview-support'
 import { WorkspaceOfficePreview } from './WorkspaceOfficePreview'
+import { attachWorkspaceDocumentQuote } from '../lib/attach-workspace-document-quote'
 
 type Translate = (key: string, values?: Record<string, unknown>) => string
 type PreviewKind = ReturnType<typeof workspaceFilePreviewKind>
@@ -167,6 +168,10 @@ export function WorkspaceFilePreviewBody(props: WorkspaceFilePreviewBodyProps): 
             result={officeResult}
             loading={loading || officeAgentEditing}
             refreshError={officeRefreshError}
+            onQuoteSelection={(draft) => attachWorkspaceDocumentQuote({
+              workspaceRoot: target.workspaceRoot ?? workspaceRoot,
+              draft
+            })}
           />
         ) : previewLease?.ok && previewKind === 'audio' ? (
           <div className="flex min-h-0 flex-1 items-center justify-center p-6">

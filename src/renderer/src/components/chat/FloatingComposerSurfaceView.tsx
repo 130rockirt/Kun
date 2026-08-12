@@ -1,7 +1,7 @@
 import type { ReactElement } from 'react'
 import type { ComposerFileReference } from '../../lib/composer-file-references'
-import type { DesignComposerContext } from '../../design/design-composer-context'
 import { FloatingComposerFooterView } from './FloatingComposerFooterView'
+import { FloatingComposerContextChips } from './FloatingComposerContextChips'
 import type { FloatingComposerRenderContext } from './floating-composer-view-context'
 import { KnowledgeBasePicker } from './KnowledgeBasePicker'
 
@@ -13,8 +13,8 @@ export function FloatingComposerSurfaceView({
   const {
     FileText, FloatingComposerAgentPicker, FloatingComposerAttachments,
     FloatingComposerContextCapacity, FloatingComposerExecutionPicker, FloatingComposerModelPicker,
-    Folder, GitBranchPicker, ListTodo, Loader2, Mic, Monitor, Plus, Puzzle, Send, Share2, Sparkles,
-    Square, Target, TypeIcon, VoiceRecordingStrip, WorkspaceProjectPicker, X, activeThreadGoal,
+    Folder, GitBranchPicker, ListTodo, Loader2, Mic, Plus, Send, Share2, Sparkles,
+    Square, Target, VoiceRecordingStrip, WorkspaceProjectPicker, X, activeThreadGoal,
     activeThreadId, attachmentUploadEnabled, attachmentUploadError, attachments, busy,
     canChangeModel, canCompose, canEditComposer, canOpenComposerMenu, canOptimizePrompt,
     canToggleWorktreeMode, compact, composerFastMode, composerMenuButtonRef, composerMenuOpen,
@@ -36,6 +36,7 @@ export function FloatingComposerSurfaceView({
     showVoiceDictation, showWorkspaceControls, side, stretchModelPicker, t, useWorktreePool,
     worktreeBranch
   } = context
+  const documentQuoteAttached = contextChips.some((chip: { kind: string }) => chip.kind === 'document-quote')
   return (
     <>
         {showWorkspaceControls ? (
@@ -65,46 +66,7 @@ export function FloatingComposerSurfaceView({
           onDrop={handleComposerDrop}
         >
           {contextChips.length > 0 ? (
-            <div className="flex flex-wrap items-center gap-2 px-1">
-            {contextChips.map((chip: DesignComposerContext) => {
-                const Icon =
-                  chip.kind === 'extension-context'
-                    ? Puzzle
-                    : chip.kind === 'design-target' || chip.kind === 'canvas-selection'
-                    ? Target
-                    : chip.kind === 'html-element'
-                      ? TypeIcon
-                      : Monitor
-                const title = chip.detail ? `${chip.label} - ${chip.detail}` : chip.label
-                const removable = chip.removable !== false && Boolean(onRemoveContextChip)
-                return (
-                  <span
-                    key={chip.id}
-                    className="ds-no-drag inline-flex h-7 max-w-full items-center gap-1.5 rounded-full border border-ds-border bg-ds-subtle px-2.5 text-[12px] font-medium text-ds-muted"
-                    title={title}
-                  >
-                    <Icon className="h-3.5 w-3.5 shrink-0 text-accent" strokeWidth={1.8} />
-                    <span className="max-w-52 truncate text-ds-ink">{chip.label}</span>
-                    {chip.detail ? (
-                      <span className="hidden max-w-44 truncate text-ds-faint sm:inline">
-                        {chip.detail}
-                      </span>
-                    ) : null}
-                    {removable ? (
-                      <button
-                        type="button"
-                        onClick={() => onRemoveContextChip?.(chip.id)}
-                        className="rounded-full p-0.5 text-ds-faint transition hover:bg-ds-hover hover:text-ds-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
-                        aria-label={t('composerRemoveContext', 'Remove context')}
-                        title={t('composerRemoveContext', 'Remove context')}
-                      >
-                        <X className="h-3 w-3" strokeWidth={2} />
-                      </button>
-                    ) : null}
-                  </span>
-                )
-              })}
-            </div>
+            <FloatingComposerContextChips chips={contextChips} onRemove={onRemoveContextChip} t={t} />
           ) : null}
           <textarea
             ref={draft.textareaRef}
@@ -112,7 +74,7 @@ export function FloatingComposerSurfaceView({
             className={`ds-composer-textarea ds-no-drag block w-full min-w-0 resize-none break-words bg-transparent px-1 py-2.5 text-[15px] leading-[1.45] text-ds-ink placeholder:text-ds-faint focus:outline-none [overflow-wrap:anywhere] ${
               canEditComposer ? '' : 'opacity-80'
             } ${compact ? 'text-[14px] py-2' : 'min-h-[40px]'}`}
-            placeholder={placeholder}
+            placeholder={documentQuoteAttached ? t('composerDocumentQuotePlaceholder') : placeholder}
             value={input}
             disabled={!canEditComposer}
             onChange={(e) => {

@@ -283,6 +283,7 @@ export function registerOptions(overrides: Partial<Parameters<typeof import('./r
       at: '2026-07-22T00:00:00.000Z'
     }),
     restartRuntime: vi.fn(async () => undefined),
+    restartAllKunProcesses: vi.fn(async () => undefined),
     fetchUpstreamModels: vi.fn() as never,
     getClawRuntime: () => null,
     getScheduleRuntime: () => null,

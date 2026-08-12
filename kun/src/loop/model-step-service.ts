@@ -11,7 +11,6 @@ import { makeErrorItem } from '../domain/item.js'
 import { repairModelHistoryItemsForModel } from '../domain/model-history-repair.js'
 import { memoryPreview } from '../shared/memory-preview.js'
 import type { IdGenerator } from '../ports/id-generator.js'
-import type { ModelClient, ModelToolSpec } from '../ports/model-client.js'
 import type { SessionStore } from '../ports/session-store.js'
 import type { ThreadStore } from '../ports/thread-store.js'
 import type { GuiPlanContext } from '../ports/tool-host.js'
@@ -32,6 +31,7 @@ import { buildToolPreferenceInstruction } from '../prompt/kun-system-prompt.js'
 import {
   buildClientSurfaceInstruction,
   buildKunTurnContextInstructions,
+  buildThreadProfileInstruction,
   type KunTurnContextAuthority,
   type KunTurnContextBlock
 } from '../prompt/kun-prompt-context.js'
@@ -80,11 +80,6 @@ import {
 } from './round-outcome-coordinator.js'
 import { svgArtifactCompletionState } from './svg-artifact-completion.js'
 import {
-  rehydrateGeneratedImagesForForward,
-  rehydrateTransientBrowserUseOutputsForForward,
-  MAX_FORWARDED_GENERATED_IMAGES
-} from './tool-result-image.js'
-import {
   attachmentRequestPipelineDetails,
   imageGenerationReferenceInstructions,
   type TurnAttachmentService
@@ -107,12 +102,13 @@ import {
   shouldVerifyImmutablePrefix,
   verifyImmutablePrefix
 } from '../cache/immutable-prefix.js'
-import { buildToolCatalogFingerprint } from '../cache/tool-catalog-fingerprint.js'
+import { buildPromptCachePartition } from '../cache/prompt-cache-partition.js'
 import { rewriteItemHistoryWithRetry } from '../services/history-commit-coordinator.js'
 import { TurnToolCatalogFreezer } from './turn-tool-catalog.js'
 import { ModelStepPreparationService } from './model-step-preparation-service.js'
 import type { ModelStepServiceDeps } from './model-step-service-types.js'
 import { sameActingModelRoute } from './model-step-preparation-helpers.js'
+import { composeForwardedModelRequest } from './forwarded-model-request.js'
 export type { ModelStepServiceDeps } from './model-step-service-types.js'
 export { buildExtensionProfileInstruction } from './model-step-preparation-helpers.js'
 
@@ -159,7 +155,6 @@ export class ModelStepService extends ModelStepPreparationService {
       attachments,
       toolContext,
       skillResolution,
-      toolCatalog,
       toolProviderMetadata,
       streamToolMetadata,
       toolProviderKinds,
@@ -168,11 +163,24 @@ export class ModelStepService extends ModelStepPreparationService {
       softRequiredToolName,
       forceToolSuppressionFinalAnswerRecovery,
       requestToolSpecs,
+      promptCachePhase,
       svgCompletion,
       contextInstructions,
       skillContextInstructions,
       modeInstruction
     } = preparation
+    const clientDiagnostics = modelClientDiagnostics(this.deps.model, providerId)
+    const threadProfileInstruction = buildThreadProfileInstruction(thread.systemPrompt)
+    const promptCachePartition = buildPromptCachePartition({
+      model,
+      providerId,
+      endpointFormat: modelCapabilities.endpointFormat ?? clientDiagnostics.endpointFormat,
+      responsesMode: modelCapabilities.responsesMode,
+      phase: promptCachePhase,
+      immutablePrefixFingerprint: this.deps.prefix.fingerprint,
+      ...(threadProfileInstruction ? { threadProfileInstruction } : {}),
+      tools: requestToolSpecs
+    })
     // Automatic compaction must see every non-history part of the request that
     // will actually be sent. Building the same request with empty history gives
     // us an authoritative overhead estimate for system/thread prompts, dynamic
@@ -186,6 +194,7 @@ export class ModelStepService extends ModelStepPreparationService {
       ...(accountId ? { accountId } : {}),
       ...(modelRoute.reasoningEffort ? { reasoningEffort: modelRoute.reasoningEffort } : {}),
       ...(serviceTier ? { serviceTier } : {}),
+      promptCachePartition: promptCachePartition.hash,
       immutablePrefix: this.deps.prefix,
       ...(thread.systemPrompt !== undefined ? { threadSystemPrompt: thread.systemPrompt } : {}),
       ...(modeInstruction ? { modeInstruction } : {}),
@@ -284,15 +293,16 @@ export class ModelStepService extends ModelStepPreparationService {
     let fallbackCompactionAttempted = false
     let fallbackCompactionApplied = false
     let replacedTokens = firstCompaction.replacedTokens
-    let composedRequest = await this.composeForwardedRequest({
+    let composedRequest = await composeForwardedModelRequest({
       history,
       threadId,
       thread,
       turnId,
       model,
+      modelCapabilities,
       providerId,
       accountId,
-      modelRoute,
+      reasoningEffort: modelRoute.reasoningEffort,
       serviceTier,
       modeInstruction,
       contextInstructions,
@@ -300,6 +310,10 @@ export class ModelStepService extends ModelStepPreparationService {
       requestToolSpecs,
       attachments,
       hardRequiredToolName,
+      promptCachePartition: promptCachePartition.hash,
+      immutablePrefix: this.deps.prefix,
+      tokenEconomy: this.deps.tokenEconomy,
+      turnAttachments: this.deps.turnAttachments,
       signal
     })
     if (signal.aborted) return 'aborted'
@@ -343,15 +357,16 @@ export class ModelStepService extends ModelStepPreparationService {
       history = await projectCompactedGoalHistory(fallbackCompaction.history)
       fallbackCompactionApplied = fallbackCompaction.compacted
       replacedTokens += fallbackCompaction.replacedTokens
-      composedRequest = await this.composeForwardedRequest({
+      composedRequest = await composeForwardedModelRequest({
         history,
         threadId,
         thread,
         turnId,
         model,
+        modelCapabilities,
         providerId,
         accountId,
-        modelRoute,
+        reasoningEffort: modelRoute.reasoningEffort,
         serviceTier,
         modeInstruction,
         contextInstructions,
@@ -359,6 +374,10 @@ export class ModelStepService extends ModelStepPreparationService {
         requestToolSpecs,
         attachments,
         hardRequiredToolName,
+        promptCachePartition: promptCachePartition.hash,
+        immutablePrefix: this.deps.prefix,
+        tokenEconomy: this.deps.tokenEconomy,
+        turnAttachments: this.deps.turnAttachments,
         signal
       })
       if (signal.aborted) return 'aborted'
@@ -467,15 +486,27 @@ export class ModelStepService extends ModelStepPreparationService {
         sentInputTokens
       })
     }
-    const clientDiagnostics = modelClientDiagnostics(this.deps.model, request.providerId)
+    const replayedMessageAttachments = Object.values(request.messageAttachments ?? {})
+    const replayedAttachmentCount = replayedMessageAttachments.reduce(
+      (count, entry) => count + entry.images.length + entry.textFallbacks.length + entry.documents.length,
+      0
+    )
+    const unavailableAttachmentCount = replayedMessageAttachments.reduce(
+      (count, entry) => count + entry.unavailable.length,
+      0
+    )
     const cacheSignature: CacheRequestSignature = {
       model: request.model,
       providerId: request.providerId?.trim() || clientDiagnostics.provider || 'default',
-      endpointFormat: clientDiagnostics.endpointFormat || 'unknown',
-      prefixFingerprint: this.deps.prefix.fingerprint,
-      toolCatalogFingerprint: toolCatalog.fingerprint,
+      endpointFormat: promptCachePartition.protocolVariant,
+      prefixFingerprint: promptCachePartition.stableInstructionFingerprint,
+      toolCatalogFingerprint: promptCachePartition.toolCatalogFingerprint,
+      partitionHash: promptCachePartition.hash,
+      partitionPhase: promptCachePartition.phase,
+      unavailableAttachmentCount,
       activeSkillIds: skillResolution.activeSkillIds
     }
+    const modelContextCount = request.history.filter((item) => item.kind === 'model_context').length
     let effectiveActingModelRoute: ActingTurnModelRoute = actingModelRoute
     let streamRouteResolved = false
     const streamed = await this.deps.modelRoundEngine.run({
@@ -494,6 +525,12 @@ export class ModelStepService extends ModelStepPreparationService {
         ...clientDiagnostics,
         historyItems: request.history.length,
         toolCount: request.tools.length,
+        promptCachePartition: promptCachePartition.hash,
+        promptCachePhase: promptCachePartition.phase,
+        modelContextCount,
+        replayedAttachmentMessageCount: replayedMessageAttachments.length,
+        replayedAttachmentCount,
+        unavailableAttachmentCount,
         ...(request.requiredToolName ? { requiredToolName: request.requiredToolName } : {}),
         ...attachmentRequestPipelineDetails({
           attachmentIds: turn?.attachmentIds ?? [],
@@ -604,61 +641,6 @@ export class ModelStepService extends ModelStepPreparationService {
       toolKinds,
       toolProviderKinds,
       svgCompletion
-    })
-  }
-
-  private async composeForwardedRequest(input: {
-    history: TurnItem[]
-    threadId: string
-    thread: import('../contracts/threads.js').ThreadRecord
-    turnId: string
-    model: string
-    providerId?: string
-    accountId?: string
-    modelRoute: { model: string; reasoningEffort?: string }
-    serviceTier?: 'priority'
-    modeInstruction?: string
-    contextInstructions: readonly string[]
-    historyRoutesByTurnId: Readonly<Record<string, import('../ports/model-client.js').ModelHistoryRoute>>
-    requestToolSpecs: readonly ModelToolSpec[]
-    attachments: import('./turn-execution-types.js').ResolvedTurnAttachments
-    hardRequiredToolName?: string
-    signal: AbortSignal
-  }): Promise<import('./model-request-composer.js').ComposedModelRequest> {
-    // Forward the just-generated image(s) back to a vision-capable model so it
-    // can self-review and regenerate if the result is off. Bytes come from the
-    // already-persisted attachment/file; the persisted tool output keeps NO
-    // base64 (only this transient request copy carries it).
-    const forwardHistory = await rehydrateGeneratedImagesForForward(
-      rehydrateTransientBrowserUseOutputsForForward(input.history),
-      (output) => this.deps.turnAttachments.resolveGeneratedImageForForward(
-        output,
-        input.threadId,
-        input.thread.workspace
-      ),
-      MAX_FORWARDED_GENERATED_IMAGES
-    )
-    return composeModelRequest({
-      threadId: input.thread.id,
-      turnId: input.turnId,
-      model: input.model,
-      ...(input.providerId ? { providerId: input.providerId } : {}),
-      ...(input.accountId ? { accountId: input.accountId } : {}),
-      ...(input.modelRoute.reasoningEffort ? { reasoningEffort: input.modelRoute.reasoningEffort } : {}),
-      ...(input.serviceTier ? { serviceTier: input.serviceTier } : {}),
-      immutablePrefix: this.deps.prefix,
-      ...(input.thread.systemPrompt !== undefined
-        ? { threadSystemPrompt: input.thread.systemPrompt }
-        : {}),
-      ...(input.modeInstruction ? { modeInstruction: input.modeInstruction } : {}),
-      contextInstructions: input.contextInstructions,
-      history: forwardHistory,
-      historyRoutesByTurnId: input.historyRoutesByTurnId,
-      attachments: input.attachments,
-      tools: input.requestToolSpecs,
-      ...(input.hardRequiredToolName ? { requiredToolName: input.hardRequiredToolName } : {}),
-      ...(this.deps.tokenEconomy ? { tokenEconomy: this.deps.tokenEconomy } : {}),
-      signal: input.signal
     })
   }
 

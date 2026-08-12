@@ -11,6 +11,7 @@ import {
   type ModelCapabilityMetadata
 } from '../../src/contracts/capabilities.js'
 import { modelCapabilitiesForModel } from '../../src/loop/model-context-profile.js'
+import { modelRequestContextText } from '../../src/loop/model-request-context.js'
 import type { ModelClient, ModelRequest } from '../../src/ports/model-client.js'
 import type { LocalTool } from '../../src/adapters/tool/local-tool-host.js'
 import { dispatchRequest } from '../../src/server/http-server.js'
@@ -65,14 +66,14 @@ describe('Attachment store and multimodal input', () => {
 
     await h.loop.runTurn(h.threadId, h.turnId)
 
-    expect(seenRequests.at(-1)?.attachments?.[0]).toMatchObject({
+    expect(Object.values(seenRequests.at(-1)?.messageAttachments ?? {})[0]?.images[0]).toMatchObject({
       id: attachment.id,
       mimeType: 'image/png',
       dataBase64: expect.any(String),
       localFilePath
     })
-    expect(seenRequests.at(-1)?.contextInstructions?.join('\n')).toContain('reference_image_paths')
-    expect(seenRequests.at(-1)?.contextInstructions?.join('\n')).toContain('assets/shot.png')
+    expect(modelRequestContextText(seenRequests.at(-1)!)).toContain('reference_image_paths')
+    expect(modelRequestContextText(seenRequests.at(-1)!)).toContain('assets/shot.png')
 
     const textOnly = makeHarness(model, {
       attachmentStore: store,
@@ -84,14 +85,14 @@ describe('Attachment store and multimodal input', () => {
     })
     expect(await textOnly.loop.runTurn(textOnly.threadId, textOnly.turnId)).toBe('completed')
     expect(seenRequests.at(-1)?.attachments).toBeUndefined()
-    expect(seenRequests.at(-1)?.attachmentTextFallbacks?.[0]).toMatchObject({
+    expect(Object.values(seenRequests.at(-1)?.messageAttachments ?? {})[0]?.textFallbacks[0]).toMatchObject({
       id: attachment.id,
       mimeType: 'image/png',
       dataBase64: expect.any(String),
       localFilePath,
       wasCompressed: false
     })
-    expect(seenRequests.at(-1)?.contextInstructions?.join('\n') ?? '').not.toContain('reference_image_paths')
+    expect(modelRequestContextText(seenRequests.at(-1)!)).not.toContain('reference_image_paths')
   })
 
   it('does not expose image reference paths outside the active workspace', async () => {
@@ -125,7 +126,7 @@ describe('Attachment store and multimodal input', () => {
     })
 
     expect(await h.loop.runTurn(h.threadId, h.turnId)).toBe('completed')
-    const instructions = seenRequests.at(-1)?.contextInstructions?.join('\n') ?? ''
+    const instructions = modelRequestContextText(seenRequests.at(-1)!)
     expect(instructions).toContain(`attachment ID ${attachment.id}`)
     expect(instructions).toContain('reference_attachment_ids')
     expect(instructions).not.toContain(localFilePath)
@@ -166,7 +167,7 @@ describe('Attachment store and multimodal input', () => {
       attachmentIds: [attachment.id]
     })
     expect(seenRequests.at(-1)?.attachments).toBeUndefined()
-    expect(seenRequests.at(-1)?.attachmentTextFallbacks?.[0]).toMatchObject({
+    expect(Object.values(seenRequests.at(-1)?.messageAttachments ?? {})[0]?.textFallbacks[0]).toMatchObject({
       id: attachment.id,
       mimeType: 'image/png',
       dataBase64: expect.any(String),
@@ -412,7 +413,7 @@ describe('Attachment store and multimodal input', () => {
 
     expect(await h.loop.runTurn(h.threadId, h.turnId)).toBe('completed')
     expect(seenRequests.at(-1)?.attachments).toBeUndefined()
-    expect(seenRequests.at(-1)?.attachmentDocuments?.[0]).toMatchObject({
+    expect(Object.values(seenRequests.at(-1)?.messageAttachments ?? {})[0]?.documents[0]).toMatchObject({
       id: doc.id,
       mimeType: 'application/pdf',
       text: 'The deployment runbook lives here.',

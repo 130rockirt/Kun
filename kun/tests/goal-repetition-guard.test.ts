@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { LocalToolHost, buildDefaultLocalTools } from '../src/adapters/tool/local-tool-host.js'
 import { GET_GOAL_TOOL_NAME, UPDATE_GOAL_TOOL_NAME } from '../src/adapters/tool/goal-tools.js'
 import type { ModelRequest, ModelStreamChunk } from '../src/ports/model-client.js'
+import { modelRequestContextText } from '../src/loop/model-request-context.js'
 import { bootstrapThread, makeHarness, type Harness } from './loop-test-harness.js'
 
 function makeGoalTools(getHarness: () => Harness) {
@@ -79,7 +80,7 @@ describe('goal continuation repetition guard', () => {
     expect(calls).toBe(5)
     expect((await h.threads.getGoal(h.threadId))?.status).toBe('active')
     expect(requests.some((request) =>
-      request.contextInstructions?.some((line) => line.includes('Goal continuation recovery:'))
+      modelRequestContextText(request).includes('Goal continuation recovery:')
     )).toBe(true)
     const stops = await loadRepetitionStops(h)
     expect(stops).toHaveLength(1)
@@ -156,7 +157,7 @@ describe('goal continuation repetition guard', () => {
     expect(status).toBe('completed')
     expect(calls).toBe(4)
     expect((await h.threads.getGoal(h.threadId))?.status).toBe('complete')
-    expect(requests[2]?.contextInstructions?.join('\n')).toContain('Goal continuation recovery:')
+    expect(modelRequestContextText(requests[2]!)).toContain('Goal continuation recovery:')
     expect(await loadRepetitionStops(h)).toHaveLength(0)
   })
 

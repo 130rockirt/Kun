@@ -139,14 +139,21 @@ export const DevPreviewComposerContextProvenanceSchema = z.strictObject({
   source: z.literal('dev-preview'),
   workspaceId: z.string().regex(/^[a-f0-9]{64}$/)
 })
+const WorkspaceSelectionComposerContextProvenanceSchema = z.strictObject({
+  source: z.literal('workspace-selection'),
+  workspaceId: z.string().regex(/^[a-f0-9]{64}$/)
+})
 export const ComposerContextProvenanceSchema = z.union([
   ExtensionComposerContextProvenanceSchema,
-  DevPreviewComposerContextProvenanceSchema
+  DevPreviewComposerContextProvenanceSchema,
+  WorkspaceSelectionComposerContextProvenanceSchema
 ])
 export type ComposerContextProvenance = z.infer<typeof ComposerContextProvenanceSchema>
 
 export const ComposerContextAttachmentSchema = ComposerContextAttachmentRequestSchema.extend({
-  attachmentId: z.string().regex(/^(?:extension-context|dev-preview-context):[a-f0-9]{64}$/),
+  attachmentId: z.string().regex(
+    /^(?:extension-context|dev-preview-context|workspace-selection-context):[a-f0-9]{64}$/
+  ),
   provenance: ComposerContextProvenanceSchema
 })
 export type ComposerContextAttachment = z.infer<typeof ComposerContextAttachmentSchema>

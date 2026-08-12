@@ -175,8 +175,17 @@ export function registerThreadRoutes(
       runtime.turnService,
       ctx.params.id,
       request,
-      ({ threadId, turnId, reviewItemId }, target, model, providerId, accountId) => {
-        runtime.runReview?.({ threadId, turnId, reviewItemId, target, model, providerId, accountId })
+      ({ threadId, turnId, reviewItemId }, target, model, providerId, accountId, reasoningEffort) => {
+        runtime.runReview?.({
+          threadId,
+          turnId,
+          reviewItemId,
+          target,
+          model,
+          providerId,
+          accountId,
+          reasoningEffort
+        })
       }
     )
   })

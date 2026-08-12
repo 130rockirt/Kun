@@ -136,10 +136,14 @@ describe('AgentLoop image steering', () => {
     await expect(loop.runTurn(threadId, started.turnId)).resolves.toBe('completed')
 
     const request = model.requests.find((candidate) =>
-      candidate.attachments?.some((attachment) => attachment.id === image.id)
+      Object.values(candidate.messageAttachments ?? {}).some((attachments) =>
+        attachments.images.some((attachment) => attachment.id === image.id)
+      )
     )
+    expect(Object.values(request?.messageAttachments ?? {})[0]?.images).toEqual([
+      expect.objectContaining({ id: image.id, name: 'reference.png' })
+    ])
     expect(request).toMatchObject({
-      attachments: [expect.objectContaining({ id: image.id, name: 'reference.png' })],
       history: expect.arrayContaining([
         expect.objectContaining({
           kind: 'user_message',

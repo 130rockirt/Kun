@@ -72,6 +72,7 @@ function fewShotCacheShape(item: TurnItem): unknown {
       }
     case 'assistant_reasoning':
     case 'goal_context':
+    case 'model_context':
     case 'interruption_note':
     case 'approval':
     case 'user_input':

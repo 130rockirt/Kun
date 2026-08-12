@@ -328,10 +328,11 @@ async interruptActiveTurns(this: TurnService): Promise<number> {
     return settled.filter((result) => result.status === 'fulfilled').length
   },
 
-/**
-   * Stop process-local work for shutdown without turning a durable Graph Lead
-   * into a user cancellation. Direct turns keep their existing abort behavior;
-   * Graph turns remain running and are resumed from durable state on restart.
+  /**
+   * Stop process-local work for shutdown without turning a durable turn into a
+   * user cancellation. Direct turns remain running so restart reconciliation
+   * can create a checkpoint and resume them; Graph turns retain their durable
+   * planning/supervision lifecycle.
    */
 async suspendActiveTurnsForShutdown(this: TurnService): Promise<number> {
     const active = this['deps'].inflight.list()
@@ -348,18 +349,11 @@ async suspendTurnForHostShutdown(this: TurnService, input: {
     turnId: string
   }): Promise<void> {
     const turn = await this.getTurn(input.threadId, input.turnId)
-    if (
-      turn?.status !== 'running' ||
-      turn.orchestration !== 'graph'
-    ) {
-      if (turn?.status === 'running' || turn?.status === 'queued') {
-        await this.interruptTurn(input)
-      }
-      return
-    }
+    if (turn?.status !== 'running') return
     const controller = this['inflightTurns'].get(input.turnId)
     controller?.abort(hostShutdownTurnSuspensionReason())
     try {
+      if (turn.orchestration !== 'graph') return
       const attached = await this['deps'].resolveGraphLeadRun?.(input)
       if (attached) {
         await this.suspendGraphLeadTurn({

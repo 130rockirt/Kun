@@ -14,7 +14,7 @@ import { compileExtensionJsonSchema } from '../../extensions/json-schema-validat
 import type { ExtensionPrincipal } from '../../services/extension-agent-service.js'
 import type { ModelRequest, ModelStreamChunk } from '../../ports/model-client.js'
 import { projectCompatMessages } from './compat-message-projector.js'
-import type { CompatChatMessage } from './compat-request-codecs.js'
+import { COMPAT_HISTORY_CONTEXT, type CompatChatMessage } from './compat-request-codecs.js'
 import { TOOL_ARGUMENT_PART_COMPACTION_WINDOW } from './model-stream-resource-budget.js'
 import type { ExtensionModelProviderDiagnostic } from './extension-model-provider.js'
 
@@ -127,16 +127,31 @@ export async function resolveProviderModel(
 
 export function assertModelRequestCapabilities(request: ModelRequest, model: ProviderModel): void {
   const capabilities = model.capabilities
+  const historicalAttachments = Object.values(request.messageAttachments ?? {})
+  const historicalImageCount = historicalAttachments.reduce(
+    (count, attachments) => count + attachments.images.length,
+    0
+  )
+  const historicalDocumentCount = historicalAttachments.reduce(
+    (count, attachments) => count + attachments.documents.length,
+    0
+  )
   if (request.tools.length > 0 && !capabilities.tools) {
     throw new Error(`extension provider model does not support tools: ${model.id}`)
   }
   if (request.reasoningEffort && request.reasoningEffort !== 'off' && !capabilities.reasoning) {
     throw new Error(`extension provider model does not support reasoning: ${model.id}`)
   }
-  if ((request.attachments?.length ?? 0) > 0 && !capabilities.input.includes('image')) {
+  if (
+    ((request.attachments?.length ?? 0) > 0 || historicalImageCount > 0) &&
+    !capabilities.input.includes('image')
+  ) {
     throw new Error(`extension provider model does not support image input: ${model.id}`)
   }
-  if ((request.attachmentDocuments?.length ?? 0) > 0 && !capabilities.input.includes('file')) {
+  if (
+    ((request.attachmentDocuments?.length ?? 0) > 0 || historicalDocumentCount > 0) &&
+    !capabilities.input.includes('file')
+  ) {
     throw new Error(`extension provider model does not support document input: ${model.id}`)
   }
   if (!capabilities.output.includes('text') && !capabilities.tools) {
@@ -157,7 +172,11 @@ export function normalizeModelRequest(
   for (const message of projected) {
     if (message.role === 'system') {
       const text = compatText(message.content)
-      if (text) instructions.push(text)
+      if (text && message[COMPAT_HISTORY_CONTEXT] === true) {
+        messages.push({ role: 'user', content: [{ type: 'text', text }] })
+      } else if (text) {
+        instructions.push(text)
+      }
       continue
     }
     const metadata: Record<string, unknown> = {}

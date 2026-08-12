@@ -87,7 +87,10 @@ export function formatPercent(value: number | null): string {
 export function primaryCacheHitRate(
   usage: Pick<ThreadUsageSummary, 'cacheHitRate' | 'lastTurnCacheHitRate'>
 ): number | null {
-  return usage.lastTurnCacheHitRate
+  const latestRate = usage.lastTurnCacheHitRate
+  return latestRate != null && Number.isFinite(latestRate) && latestRate > 0
+    ? latestRate
+    : null
 }
 
 /**

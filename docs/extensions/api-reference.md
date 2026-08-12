@@ -90,7 +90,7 @@ Manifest 工具的 `outputSchema` 描述并验证 `ToolResult.content`，不是�
 <!-- BEGIN GENERATED SDK EXPORTS -->
 | SDK 包 | 版本 | 公开入口 | 公开导出数 | 公开 surface SHA-256 |
 | --- | --- | --- | --- | --- |
-| `@kun/extension-api` | `1.2.0` | `.`<br>`./manifest.schema.json` | 497 | `cc5a1819fbdfa928bfdb0a5913779cf080165841992d008ef7b2680199467e42` |
+| `@kun/extension-api` | `1.2.0` | `.`<br>`./manifest.schema.json` | 497 | `257f85cddba6ed5025266aca8f51cd5253867136b4c9c14ae8a4058c731f1149` |
 | `@kun/extension-react` | `1.2.0` | `.` | 22 | `e2099a64dc22c05056dca0c599bafdfb22702b6d57e9b60edd2154b165323322` |
 | `@kun/extension-test` | `1.2.0` | `.` | 16 | `fccbdd3fb3400ce179f8d6c3ae1d191bfe3488ef125577423f3d2b3f4fad851d` |
 

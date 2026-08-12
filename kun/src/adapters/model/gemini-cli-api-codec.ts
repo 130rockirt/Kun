@@ -2,7 +2,11 @@ import { randomUUID } from 'node:crypto'
 import type { ToolCallProviderMetadata } from '../../contracts/items.js'
 import type { UsageSnapshot } from '../../contracts/usage.js'
 import type { ModelRequest } from '../../ports/model-client.js'
-import type { CompatChatMessage, CompatChatMessageContentPart } from './compat-request-codecs.js'
+import {
+  COMPAT_HISTORY_CONTEXT,
+  type CompatChatMessage,
+  type CompatChatMessageContentPart
+} from './compat-request-codecs.js'
 import { projectCompatMessages } from './compat-message-projector.js'
 import { IncrementalSseFrameBuffer } from './incremental-sse-frame-buffer.js'
 import { parseRetryAfterMs, retryDelayMs } from './compat-retry-policy.js'
@@ -135,7 +139,11 @@ function messagesToGemini(
   for (const message of messages) {
     if (message.role === 'system') {
       const text = compatContentText(message.content).trim()
-      if (text) systems.push(text)
+      if (text && message[COMPAT_HISTORY_CONTEXT] === true) {
+        appendGeminiContent(contents, { role: 'user', parts: [{ text }] })
+      } else if (text) {
+        systems.push(text)
+      }
       continue
     }
     if (message.role === 'tool') {

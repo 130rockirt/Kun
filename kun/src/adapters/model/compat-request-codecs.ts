@@ -2,6 +2,7 @@ import type { ModelCapabilityMetadata } from '../../contracts/capabilities.js'
 import type { ModelEndpointFormat } from '../../contracts/model-endpoint-format.js'
 import type { ToolCallProviderMetadata } from '../../contracts/items.js'
 import type { ModelRequest, ModelToolSpec } from '../../ports/model-client.js'
+import { promptCacheKey } from '../../cache/prompt-cache-partition.js'
 import { isFixedSamplingModel } from './fixed-sampling.js'
 import { isDeepSeekHost, isGeminiOpenAiHost } from './model-error-probe.js'
 
@@ -208,7 +209,14 @@ export class CompatRequestCodecs {
             parallel_tool_calls: false
           }
         : input.isCodex ? { instructions: instructions || ' ', store: false } : {}),
-      ...(useThreadPromptCacheKey ? { prompt_cache_key: input.request.threadId } : {})
+      ...(useThreadPromptCacheKey
+        ? {
+            prompt_cache_key: promptCacheKey(
+              input.request.threadId,
+              input.request.promptCachePartition
+            )
+          }
+        : {})
     }
     if (input.maxTokens !== undefined && !input.isCodex) body.max_output_tokens = input.maxTokens
     if (

@@ -54,6 +54,7 @@ import { GRAPH_CREATE_RUN_TOOL_NAME } from './round-outcome-coordinator.js'
 import { svgArtifactCompletionState } from './svg-artifact-completion.js'
 import { imageGenerationReferenceInstructions } from './turn-attachment-service.js'
 import { resolveTurnModeContext } from './turn-context-resolver.js'
+import { resolveModelContextUpdate } from './model-context-history.js'
 import type { ModelRoundOutcome } from './turn-execution-types.js'
 import {
   detectVolatilePrefixContent
@@ -63,6 +64,7 @@ import {
   verifyImmutablePrefix
 } from '../cache/immutable-prefix.js'
 import { buildToolCatalogFingerprint } from '../cache/tool-catalog-fingerprint.js'
+import { resolvePromptCachePhase } from '../cache/prompt-cache-partition.js'
 import { rewriteItemHistoryWithRetry } from '../services/history-commit-coordinator.js'
 import { TurnToolCatalogFreezer } from './turn-tool-catalog.js'
 import type { ModelStepServiceDeps } from './model-step-service-types.js'
@@ -76,6 +78,7 @@ import {
   subagentResumeToolGate,
   toolCatalogPolicyScope
 } from './model-step-preparation-helpers.js'
+import { failRequiredToolConstraint } from './model-step-failure.js'
 
 export abstract class ModelStepPreparationService {
   protected readonly turnToolCatalogs = new TurnToolCatalogFreezer()
@@ -198,7 +201,7 @@ export abstract class ModelStepPreparationService {
         toolResultCount
       })
     }
-    const items = repairModelHistoryItemsForModel(
+    const routingItems = repairModelHistoryItemsForModel(
       effectiveHistoryAfterLatestCompaction(historyItems)
     )
     const inheritedProviderAccount = resolveCoherentProviderAccount({
@@ -218,7 +221,7 @@ export abstract class ModelStepPreparationService {
           threadId,
           turnId,
           latestRequest: turn?.prompt ?? '',
-          items,
+          items: routingItems,
           signal,
           ...(routeProviderId ? { providerId: routeProviderId } : {}),
           ...(routeAccountId ? { accountId: routeAccountId } : {}),
@@ -454,12 +457,19 @@ export abstract class ModelStepPreparationService {
       : forceFinalAnswerRecovery
         ? []
         : planningToolSpecs
+    const promptCachePhase = resolvePromptCachePhase({
+      svg: turn.guiDesignArtifact?.kind === 'svg',
+      design: turn.guiDesignMode === true,
+      graph: turn.orchestration === 'graph',
+      graphActive: graphCreateSatisfied,
+      plan: planTurnActive
+    })
     if (hardRequiredToolName && (
       requestToolSpecs.length !== 1 ||
       requestToolSpecs[0]?.name !== hardRequiredToolName ||
       !modelCapabilities.supportsToolCalling
     )) {
-      return this.failRequiredToolConstraint({
+      return failRequiredToolConstraint(this.deps, {
         threadId,
         turnId,
         code: modelCapabilities.supportsToolCalling
@@ -603,9 +613,6 @@ export abstract class ModelStepPreparationService {
         : [])
     ]
     const contextInstructions = buildKunTurnContextInstructions(contextBlocks)
-    const skillContextInstructions = buildKunTurnContextInstructions(
-      contextBlocks.filter((block) => block.authority === 'skill')
-    ).slice(1)
     await this.deps.recordPipelineStage(threadId, turnId, 'input_remembered', {
       memoryCount: memories.length,
       contextInstructionCount: contextInstructions.length
@@ -619,6 +626,23 @@ export abstract class ModelStepPreparationService {
           ? [DESIGN_MODE_INSTRUCTION]
           : [])
     ].join('\n\n')
+    const modelContextUpdate = resolveModelContextUpdate({
+      threadId,
+      turnId,
+      stepIndex,
+      ...(modeInstruction ? { modeInstruction } : {}),
+      contextBlocks,
+      history: historyItems,
+      createdAt: this.deps.nowIso()
+    })
+    if (modelContextUpdate && !modelContextUpdate.existing) {
+      await this.deps.sessionStore.appendItem(threadId, modelContextUpdate.item)
+      await this.deps.threadItems.syncFromSession(threadId)
+      historyItems = [...historyItems, modelContextUpdate.item]
+    }
+    const items = repairModelHistoryItemsForModel(
+      effectiveHistoryAfterLatestCompaction(historyItems)
+    )
     return {
       thread,
       turn,
@@ -648,36 +672,12 @@ export abstract class ModelStepPreparationService {
       softRequiredToolName,
       forceToolSuppressionFinalAnswerRecovery,
       requestToolSpecs,
+      promptCachePhase,
       svgCompletion,
-      contextInstructions,
-      skillContextInstructions,
-      modeInstruction
+      contextInstructions: [],
+      skillContextInstructions: [],
+      modeInstruction: undefined
     }
   }
 
-  protected async failRequiredToolConstraint(input: {
-    threadId: string
-    turnId: string
-    code: 'required_tool_unavailable' | 'required_tool_unsupported'
-    message: string
-  }): Promise<'failed'> {
-    this.deps.rememberFailure(input.turnId, { error: input.message, code: input.code, severity: 'error' })
-    await this.deps.events.record({
-      kind: 'error',
-      threadId: input.threadId,
-      turnId: input.turnId,
-      message: input.message,
-      code: input.code,
-      severity: 'error'
-    })
-    await this.deps.turns.applyItem(input.threadId, makeErrorItem({
-      id: this.deps.ids.next('item_error'),
-      threadId: input.threadId,
-      turnId: input.turnId,
-      message: input.message,
-      code: input.code,
-      severity: 'error'
-    }))
-    return 'failed'
-  }
 }

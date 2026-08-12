@@ -320,6 +320,44 @@ describe('registerAppIpcHandlers UI plugins and runtime', () => {
     expect(restartRuntime).toHaveBeenCalledTimes(1)
   })
 
+  it('restarts every managed Kun process only after trusted confirmation', async () => {
+    const mainFrame = { processId: 10, routingId: 20 }
+    const contents = { id: 7, mainFrame }
+    const mainWindow = { isDestroyed: () => false, webContents: contents }
+    const restartAllKunProcesses = vi.fn(async () => undefined)
+    registerAppIpcHandlers(registerOptions({
+      getMainWindow: () => mainWindow as never,
+      restartAllKunProcesses
+    }))
+    const handler = handlers.get('runtime:restart-all')
+
+    await expect(handler?.({
+      sender: contents,
+      senderFrame: { processId: 10, routingId: 21 }
+    })).rejects.toThrow(/trusted workbench frame/)
+
+    electronMock.showMessageBox.mockResolvedValueOnce({ response: 1 })
+    await expect(handler?.({ sender: contents, senderFrame: mainFrame })).resolves.toEqual({
+      accepted: false
+    })
+    expect(restartAllKunProcesses).not.toHaveBeenCalled()
+
+    electronMock.showMessageBox.mockResolvedValueOnce({ response: 0 })
+    await expect(handler?.({ sender: contents, senderFrame: mainFrame })).resolves.toEqual({
+      accepted: true
+    })
+    expect(restartAllKunProcesses).toHaveBeenCalledOnce()
+    expect(electronMock.showMessageBox).toHaveBeenLastCalledWith(
+      mainWindow,
+      expect.objectContaining({
+        type: 'warning',
+        defaultId: 1,
+        cancelId: 1,
+        detail: expect.stringContaining('TUI/CLI')
+      })
+    )
+  })
+
   it('restarts Kun after an already-downloaded Claude SDK is provisioned through IPC', async () => {
     const userDataDir = mkdtempSync(join(tmpdir(), 'kun-agent-sdk-ipc-'))
     const binaryName = process.platform === 'win32' ? 'claude.exe' : 'claude'

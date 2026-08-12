@@ -1,8 +1,8 @@
-import type { OAuthDiscoveryState } from '@modelcontextprotocol/sdk/client/auth.js'
 import type {
-  OAuthClientInformationMixed,
-  OAuthTokens
-} from '@modelcontextprotocol/sdk/shared/auth.js'
+  OAuthDiscoveryState,
+  StoredOAuthClientInformation,
+  StoredOAuthTokens
+} from '@modelcontextprotocol/client'
 import { AtomicJsonFile } from '../../extensions/atomic-json.js'
 import type { SecretEncryptor } from '../../security/secret-store.js'
 import { isEncryptedEnvelope } from '../../security/secret-store.js'
@@ -21,8 +21,8 @@ import { isEncryptedEnvelope } from '../../security/secret-store.js'
  *   server is not authorized instead of showing a bare "error".
  */
 export type McpOAuthState = {
-  clientInformation?: OAuthClientInformationMixed
-  tokens?: OAuthTokens
+  clientInformation?: StoredOAuthClientInformation
+  tokens?: StoredOAuthTokens
   codeVerifier?: string
   discoveryState?: OAuthDiscoveryState
   /** Epoch milliseconds when the current tokens were saved. */

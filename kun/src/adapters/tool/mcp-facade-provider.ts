@@ -92,7 +92,10 @@ function createReadResourceTool(connected: McpFacadeConnectionState[]): LocalToo
       if (!uri) return { output: { error: 'uri is required' }, isError: true }
       const state = selectSingleUsableServer(connected, context, 'readResource', stringArg(args.serverId))
       if (!state) return unavailableOutput('readResource')
-      const result = await state.client.readResource?.({ uri }, { signal: context.abortSignal, timeout: state.server.timeoutMs })
+      const result = await state.client.readResource?.(
+        { uri },
+        { signal: context.abortSignal, timeout: state.server.timeoutMs, context }
+      )
       return { output: { serverId: state.serverId, uri, result } }
     }
   })
@@ -176,7 +179,7 @@ function createGetPromptTool(connected: McpFacadeConnectionState[]): LocalTool {
       if (!state) return unavailableOutput('getPrompt')
       const result = await state.client.getPrompt?.(
         { name, arguments: objectArg(args.arguments) },
-        { signal: context.abortSignal, timeout: state.server.timeoutMs }
+        { signal: context.abortSignal, timeout: state.server.timeoutMs, context }
       )
       return { output: { serverId: state.serverId, name, result } }
     }

@@ -15,6 +15,7 @@ import type { ApprovalRequest } from '../../src/domain/approval.js'
 import { InflightTracker } from '../../src/loop/inflight-tracker.js'
 import { SteeringQueue } from '../../src/loop/steering-queue.js'
 import { ContextCompactor } from '../../src/loop/context-compactor.js'
+import { modelRequestContextText } from '../../src/loop/model-request-context.js'
 import {
   AgentLoop,
   buildRuntimeContextInstruction,
@@ -161,7 +162,7 @@ describe('AgentLoop interruption', () => {
         request.tools.map((tool) => tool.name).join(',') === 'graph_define_plan'
       )).toBe(true)
       expect(model.requests.every((request) =>
-        request.modeInstruction?.includes('Graph Mode is active') === true
+        modelRequestContextText(request).includes('Graph Mode is active')
       )).toBe(true)
       expect(model.requests[1]?.history).toEqual(expect.arrayContaining([
         expect.objectContaining({
@@ -269,8 +270,8 @@ describe('AgentLoop interruption', () => {
 
     await expect(harness.loop.runTurn(harness.threadId, harness.turnId)).resolves.toBe('completed')
     expect(model.requests).toHaveLength(4)
-    expect(model.requests[0].modeInstruction).toContain('dedicated Kun SVG artifact turn')
-    expect(model.requests[0].modeInstruction).not.toContain('PLAN MODE')
+    expect(modelRequestContextText(model.requests[0])).toContain('dedicated Kun SVG artifact turn')
+    expect(modelRequestContextText(model.requests[0])).not.toContain('PLAN MODE')
     expect(model.requests[0].tools.map((tool) => tool.name)).toEqual([
       'design_svg_edit', 'design_svg_validate'
     ])

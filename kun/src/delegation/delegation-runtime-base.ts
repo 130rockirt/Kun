@@ -30,6 +30,7 @@ import type { EventBus } from '../ports/event-bus.js'
 import type { ThreadStore } from '../ports/thread-store.js'
 import type { ArtifactStore } from '../artifacts/artifact-store.js'
 import type { TurnService } from '../services/turn-service.js'
+import { isHostShutdownTurnSuspension } from '../services/turn-service.js'
 import type { PptWorkflowScope } from '../ports/tool-host.js'
 import { loadWorkspaceAgentProfiles } from './workspace-agents.js'
 import type { SubagentRoutingDocument } from './subagent-router.js'
@@ -96,6 +97,7 @@ export type ForegroundChildControl = {
 
 export abstract class DelegationRuntimeBase {
   protected active = 0
+  private memoryPressureParallelLimit: number | undefined
   protected childSeq = 0
   protected readonly childSeqById = new Map<string, number>()
   /** Children waiting for a parallel slot, in FIFO order. */
@@ -147,12 +149,20 @@ export abstract class DelegationRuntimeBase {
     this.drainSlotWaiters()
   }
 
+  setMemoryPressureParallelLimit(limit?: number): void {
+    this.memoryPressureParallelLimit = limit === undefined ? undefined : Math.max(1, Math.floor(limit))
+    this.drainSlotWaiters()
+  }
+
   enabled(): boolean {
     return this.options.config.enabled
   }
   /** Concurrency ceiling; clamps to at least 1 so an enabled runtime never deadlocks. */
   protected get parallelLimit(): number {
-    return Math.max(1, this.options.config.maxParallel)
+    return Math.max(1, Math.min(
+      this.options.config.maxParallel,
+      this.memoryPressureParallelLimit ?? Number.POSITIVE_INFINITY
+    ))
   }
 
   /** Acquire a parallel slot, queueing (FIFO) when the runtime is saturated. */
@@ -488,10 +498,11 @@ export abstract class DelegationRuntimeBase {
     try {
       await this.acquireSlot(args.signal)
     } catch (error) {
+      const runtimeRestart = isHostShutdownTurnSuspension(args.signal)
       record = await this.commitChildState(args.state, (current) => ChildRunRecord.parse({
         ...current,
-        status: 'aborted',
-        terminationReason: 'manual_stop',
+        status: runtimeRestart ? 'failed' : 'aborted',
+        terminationReason: runtimeRestart ? 'runtime_restart' : 'manual_stop',
         resumable: isGenericChildLauncher(current.launcher),
         error: errorMessage(error).slice(0, CHILD_RESULT_PREVIEW_CHARS),
         updatedAt: this.now()
@@ -592,6 +603,7 @@ export abstract class DelegationRuntimeBase {
       return record
     } catch (error) {
       const finishedAt = this.now()
+      const runtimeRestart = isHostShutdownTurnSuspension(args.signal)
       const childResult = error instanceof ChildResultExecutionError
         ? error.result
         : undefined
@@ -603,8 +615,8 @@ export abstract class DelegationRuntimeBase {
         : undefined
       record = await this.commitChildState(args.state, (current) => ChildRunRecord.parse({
         ...current,
-        status: args.signal.aborted ? 'aborted' : 'failed',
-        terminationReason: args.signal.aborted ? 'manual_stop' : 'child_error',
+        status: runtimeRestart ? 'failed' : args.signal.aborted ? 'aborted' : 'failed',
+        terminationReason: runtimeRestart ? 'runtime_restart' : args.signal.aborted ? 'manual_stop' : 'child_error',
         resumable: args.signal.aborted && isGenericChildLauncher(current.launcher),
         ...(childResult ? {
           summary: childResult.summary,

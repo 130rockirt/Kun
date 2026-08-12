@@ -45,6 +45,13 @@
   background: var(--ds-sidebar-surface-bg);
 }
 
+.workspace-docx-preview,
+.workspace-docx-preview * {
+  cursor: text;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
 .ds-file-preview-svg,
 .ds-file-preview-image {
   background-color: #fff;

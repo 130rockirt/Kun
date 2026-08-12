@@ -10,7 +10,7 @@ import type {
   ThreadUsageSnapshot,
   UserInputAnswer
 } from './types'
-import { getKunRuntimeSettings } from '@shared/app-settings'
+import { getKunRuntimeSettings, type ModelReasoningEffort } from '@shared/app-settings'
 import {
   KUN_ATTACHMENT_DIAGNOSTICS_PATH,
   KUN_ATTACHMENTS_PATH,
@@ -112,7 +112,12 @@ export class KunRuntimeThreadServices extends KunRuntimeProviderServices {
   async reviewThread(
     threadId: string,
     target: ReviewTarget,
-    options?: { model?: string; providerId?: string; accountId?: string }
+    options?: {
+      model?: string
+      providerId?: string
+      accountId?: string
+      reasoningEffort?: ModelReasoningEffort
+    }
   ): Promise<{ turnId: string; threadId: string; userMessageItemId?: string; reviewItemId?: string }> {
     const body: Record<string, unknown> = { target }
     if (options?.model?.trim()) {
@@ -123,6 +128,9 @@ export class KunRuntimeThreadServices extends KunRuntimeProviderServices {
     }
     if (options?.accountId?.trim()) {
       body.accountId = options.accountId.trim()
+    }
+    if (options?.reasoningEffort) {
+      body.reasoningEffort = options.reasoningEffort
     }
     const response = await rendererRuntimeClient.runtimeRequest(
       kunThreadReviewPath(threadId),

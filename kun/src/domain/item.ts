@@ -1,5 +1,6 @@
 import type {
   ToolCallProviderMetadata,
+  ModelContextBlockState,
   TurnItem,
   UserMessageSource
 } from '../contracts/items.js'
@@ -70,6 +71,34 @@ export function makeGoalContextItem(input: {
     finishedAt: createdAt,
     kind: 'goal_context',
     ...(input.goalKey ? { goalKey: input.goalKey } : {}),
+    text: input.text
+  }
+}
+
+export function makeModelContextItem(input: {
+  id: string
+  turnId: string
+  threadId: string
+  stepIndex: number
+  contentDigest: string
+  blocks: ModelContextBlockState[]
+  text: string
+  createdAt?: string
+}): TurnItem {
+  const createdAt = input.createdAt ?? new Date().toISOString()
+  return {
+    id: input.id,
+    turnId: input.turnId,
+    threadId: input.threadId,
+    role: 'system',
+    status: 'completed',
+    createdAt,
+    finishedAt: createdAt,
+    kind: 'model_context',
+    formatVersion: 1,
+    stepIndex: input.stepIndex,
+    contentDigest: input.contentDigest,
+    blocks: input.blocks.map((block) => ({ ...block })),
     text: input.text
   }
 }

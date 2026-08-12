@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { AttachmentContent, AttachmentStore } from '../attachments/attachment-store.js'
 import type { ModelCapabilityMetadata } from '../contracts/capabilities.js'
+import { makeUserItem } from '../domain/item.js'
 import {
   TurnAttachmentService,
   imageGenerationReferenceInstructions
@@ -205,6 +206,85 @@ describe('TurnAttachmentService', () => {
     })).resolves.toMatchObject({
       imageAttachments: [{ dataBase64: second.data.toString('base64') }]
     })
+  })
+
+  it('replays retained attachments by their owning user-message item', async () => {
+    const first = imageAttachment({ id: 'att_first', data: Buffer.from('first') })
+    const second = officeDocumentAttachment({ id: 'att_second' })
+    const attachmentStore = {
+      resolveContent: vi.fn(async (id: string) => id === first.id ? first : second),
+      textFallbackPolicy: () => ({
+        textFallbackMaxBase64Bytes: 1_024,
+        textFallbackMaxImageDimension: 1_024,
+        textFallbackPreferredMimeType: 'image/jpeg'
+      })
+    } as unknown as AttachmentStore
+    const service = new TurnAttachmentService(attachmentStore)
+    const items = [
+      makeUserItem({
+        id: 'user-first', threadId: 'thread_1', turnId: 'turn-first', text: 'first',
+        attachmentIds: [first.id]
+      }),
+      makeUserItem({
+        id: 'user-second', threadId: 'thread_1', turnId: 'turn-second', text: 'second',
+        attachmentIds: [second.id]
+      })
+    ]
+    const resolved = await service.resolveHistoryAttachments({
+      items,
+      threadId: 'thread_1',
+      workspace: '/workspace',
+      modelCapabilities: {
+        id: 'vision', inputModalities: ['text', 'image'], outputModalities: ['text'],
+        supportsToolCalling: true, messageParts: ['text', 'image_url']
+      }
+    })
+
+    expect(resolved['user-first']?.images).toEqual([
+      expect.objectContaining({ id: first.id, dataBase64: first.data.toString('base64') })
+    ])
+    expect(resolved['user-second']?.documents).toEqual([
+      expect.objectContaining({ id: second.id, documentFormat: 'xlsx' })
+    ])
+    expect(Object.values(resolved).flatMap((entry) => entry.unavailable)).toEqual([])
+  })
+
+  it('uses a deterministic unavailable marker and keeps resolving other messages', async () => {
+    const available = imageAttachment({ id: 'att_available' })
+    const attachmentStore = {
+      resolveContent: vi.fn(async (id: string) => {
+        if (id === 'att_missing') throw new Error('missing')
+        return available
+      }),
+      textFallbackPolicy: () => ({
+        textFallbackMaxBase64Bytes: 1_024,
+        textFallbackMaxImageDimension: 1_024,
+        textFallbackPreferredMimeType: 'image/jpeg'
+      })
+    } as unknown as AttachmentStore
+    const service = new TurnAttachmentService(attachmentStore)
+    const resolved = await service.resolveHistoryAttachments({
+      items: [makeUserItem({
+        id: 'user-mixed', threadId: 'thread_1', turnId: 'turn-mixed', text: 'mixed',
+        attachmentIds: ['att_missing', available.id]
+      })],
+      threadId: 'thread_1',
+      workspace: '/workspace',
+      modelCapabilities: {
+        id: 'vision', inputModalities: ['image'], outputModalities: ['text'],
+        supportsToolCalling: true, messageParts: ['image_url']
+      }
+    })
+
+    expect(resolved['user-mixed']?.unavailable).toEqual([{
+      id: 'att_missing',
+      text: expect.stringContaining('AttachmentId: att_missing')
+    }])
+    expect(resolved['user-mixed']?.images).toHaveLength(1)
+    expect(resolved['user-mixed']?.order).toEqual([
+      { kind: 'unavailable', index: 0 },
+      { kind: 'image', index: 0 }
+    ])
   })
 
   it('supplies attachment IDs for temporary images and paths for workspace images', () => {

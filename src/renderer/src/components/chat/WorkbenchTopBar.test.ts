@@ -1,7 +1,7 @@
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { act, create as createRenderer } from 'react-test-renderer'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import i18n from '../../i18n'
 import { WorkbenchSideRail, WorkbenchTopActions } from './WorkbenchTopBar'
 import { ExtensionContributionsSchema } from '@kun/extension-api'
@@ -15,7 +15,11 @@ describe('WorkbenchTopActions', () => {
     await i18n.changeLanguage('en')
   })
 
-  it('renders editor, terminal, and right workspace actions for the top bar', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('renders restart, editor, terminal, and right workspace actions for the top bar', () => {
     const html = renderToStaticMarkup(
       createElement(WorkbenchTopActions, {
         terminalOpen: false,
@@ -25,6 +29,9 @@ describe('WorkbenchTopActions', () => {
       })
     )
 
+    expect(html).toContain(`data-tooltip="Stop all old Kun runtimes and restart the desktop app"`)
+    expect(html).toContain(`aria-label="Restart Kun"`)
+    expect(html).toContain('rounded-full bg-amber-500')
     expect(html).toContain(`data-tooltip="Choose default editor"`)
     expect(html).toContain(`aria-label="Choose default editor"`)
     expect(html).toContain(`data-tooltip="Terminal"`)
@@ -39,6 +46,27 @@ describe('WorkbenchTopActions', () => {
     expect(html.indexOf('data-tooltip="Terminal"')).toBeLessThan(
       html.indexOf('data-tooltip="Toggle right workspace"')
     )
+    expect(html.indexOf('data-tooltip="Toggle right workspace"')).toBeLessThan(
+      html.indexOf('aria-label="Restart Kun"')
+    )
+  })
+
+  it('routes the explicit restart-all action through the preload bridge', async () => {
+    const restartAllKunProcesses = vi.fn(async () => ({ accepted: false }))
+    vi.stubGlobal('window', { kunGui: { restartAllKunProcesses } })
+    let renderer!: ReturnType<typeof createRenderer>
+
+    await act(async () => {
+      renderer = createRenderer(createElement(WorkbenchTopActions, {}))
+    })
+    const button = renderer.root.findByProps({ 'aria-label': 'Restart Kun' })
+    await act(async () => {
+      button.props.onClick()
+      await Promise.resolve()
+    })
+
+    expect(restartAllKunProcesses).toHaveBeenCalledOnce()
+    act(() => renderer.unmount())
   })
 })
 

@@ -127,6 +127,7 @@ export function SessionHeader({
     runtimeConnection === 'ready' && !compact,
     `${active?.updatedAt ?? ''}:${busy ? 'busy' : 'idle'}`
   )
+  const latestCacheHitRate = threadUsage ? primaryCacheHitRate(threadUsage) : null
   const forkedFromTitle = active?.forkedFromTitle?.trim() ?? ''
   const forkLabel =
     active?.forkedFromThreadId
@@ -300,26 +301,23 @@ export function SessionHeader({
                       cost: formatCost(threadUsage.costUsd, i18n.language, threadUsage.costCny)
                     })}
                   </span>
-                  <span
-                    className="inline-flex items-center rounded-full border border-ds-border bg-ds-card/70 px-2.5 py-1 font-medium text-ds-muted"
-                    title={t(
-                      threadUsage.lastTurnCacheHitRate != null
-                        ? 'sessionUsageCacheTitleWithLatest'
-                        : 'sessionUsageCacheTitle',
-                      {
+                  {latestCacheHitRate != null ? (
+                    <span
+                      className="inline-flex items-center rounded-full border border-ds-border bg-ds-card/70 px-2.5 py-1 font-medium text-ds-muted"
+                      title={t('sessionUsageCacheTitleWithLatest', {
                         cache: formatPercent(threadUsage.cacheHitRate),
-                        latestCache: formatPercent(threadUsage.lastTurnCacheHitRate),
+                        latestCache: formatPercent(latestCacheHitRate),
                         cacheableCache: formatPercent(threadUsage.lastTurnCacheableHitRate ?? null),
                         totalInputCache: formatPercent(threadUsage.lastTurnTotalInputHitRate ?? null),
                         cached: formatCompactNumber(threadUsage.cachedTokens),
                         miss: formatCompactNumber(threadUsage.cacheMissTokens),
                         reasons: threadUsage.cacheMissReasons?.map(formatCacheMissReason).join(', ') || '-',
                         suggestions: threadUsage.cacheSuggestions?.join(' ') || '-'
-                      }
-                    )}
-                  >
-                    {t('sessionUsageCache', { cache: formatPercent(primaryCacheHitRate(threadUsage)) })}
-                  </span>
+                      })}
+                    >
+                      {t('sessionUsageCache', { cache: formatPercent(latestCacheHitRate) })}
+                    </span>
+                  ) : null}
                 </>
               ) : null}
             </div>

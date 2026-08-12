@@ -48,6 +48,7 @@ export type ModelRequestComposerInput = Readonly<{
   accountId?: string
   reasoningEffort?: string
   serviceTier?: 'priority'
+  promptCachePartition?: string
   immutablePrefix: ImmutablePrefix
   threadSystemPrompt?: string
   modeInstruction?: string
@@ -57,6 +58,7 @@ export type ModelRequestComposerInput = Readonly<{
   attachments: ResolvedTurnAttachments
   tools: readonly ModelToolSpec[]
   requiredToolName?: string
+  messageAttachments?: ModelRequest['messageAttachments']
   tokenEconomy?: TokenEconomyConfig
   signal: AbortSignal
 }>
@@ -100,10 +102,16 @@ export function composeModelRequest(input: ModelRequestComposerInput): ComposedM
     ...(input.attachments.documents.length
       ? { attachmentDocuments: [...input.attachments.documents] }
       : {}),
+    ...(input.messageAttachments
+      ? { messageAttachments: input.messageAttachments }
+      : {}),
     tools: [...input.tools],
     ...(input.requiredToolName ? { requiredToolName: input.requiredToolName } : {}),
     ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}),
     ...(input.serviceTier ? { serviceTier: input.serviceTier } : {}),
+    ...(input.promptCachePartition
+      ? { promptCachePartition: input.promptCachePartition }
+      : {}),
     abortSignal: input.signal
   }
   const rawInputTokens = tokenEconomy.enabled

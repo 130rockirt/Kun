@@ -27,7 +27,7 @@ const MAX_FROZEN_MCP_CATALOGS = 256
 export type McpSearchClientLike = {
   callTool(
     input: { name: string; arguments: Record<string, unknown> },
-    options?: { signal?: AbortSignal; timeout?: number }
+    options?: { signal?: AbortSignal; timeout?: number; context?: ToolHostContext }
   ): Promise<unknown>
 }
 
@@ -223,7 +223,7 @@ function createMcpSearchTools(
         const callArgs = objectArg(args.arguments)
         const result = await record.client.callTool(
           { name: record.descriptor.name, arguments: callArgs },
-          { signal: context.abortSignal, timeout: record.server.timeoutMs }
+          { signal: context.abortSignal, timeout: record.server.timeoutMs, context }
         )
         return {
           output: {
@@ -256,7 +256,7 @@ function createMcpSearchTools(
         const callArgs = objectArg(args.arguments)
         const result = await record.client.callTool(
           { name: record.descriptor.name, arguments: callArgs },
-          { signal: context.abortSignal, timeout: record.server.timeoutMs }
+          { signal: context.abortSignal, timeout: record.server.timeoutMs, context }
         )
         return {
           output: {

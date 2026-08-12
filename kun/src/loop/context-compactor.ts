@@ -211,9 +211,26 @@ export class ContextCompactor {
         replacedTokens: 0
       }
     }
-    const tailStart = keepRecent === 0
+    let tailStart = keepRecent === 0
       ? history.length
       : repairTailStartForToolResults(history, history.length - keepRecent)
+    const activeContextIndex = history.findIndex(
+      (item) => item.kind === 'model_context' && item.turnId === input.turnId
+    )
+    if (activeContextIndex >= 0) {
+      let activeTurnStart = activeContextIndex
+      for (let index = activeContextIndex - 1; index >= 0; index -= 1) {
+        const item = history[index]
+        if (item?.turnId === input.turnId && item.kind === 'user_message') {
+          activeTurnStart = index
+          break
+        }
+      }
+      tailStart = Math.min(
+        tailStart,
+        activeTurnStart
+      )
+    }
     if (tailStart === 0) {
       return {
         next: unchangedNext,

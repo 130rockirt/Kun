@@ -6,11 +6,13 @@ import {
   type ReactElement,
   type ReactNode
 } from 'react'
-import { ChevronDown, Eye, EyeOff, Loader2, type LucideIcon } from 'lucide-react'
+import { Check, ChevronDown, Copy, Eye, EyeOff, Loader2, type LucideIcon } from 'lucide-react'
 
 export type InlineNotice = {
   tone: 'success' | 'error' | 'info'
   message: string
+  copy?: { label: string; copiedLabel: string; text?: string }
+  action?: { label: string; onClick: () => void }
 }
 
 export function SecretInput({
@@ -266,6 +268,7 @@ export function InlineNoticeView({
 }: {
   notice: InlineNotice
 }): ReactElement {
+  const [copied, setCopied] = useState(false)
   const className =
     notice.tone === 'error'
       ? 'border-red-300/80 bg-red-50 text-red-800 dark:border-red-800/70 dark:bg-red-950/25 dark:text-red-200'
@@ -278,10 +281,39 @@ export function InlineNoticeView({
     // a full URL or a 300-char response body) wrapping inside the container
     // instead of forcing horizontal overflow that stretches the settings panel
     // — the success notice is short so the bug only ever showed on failure (#617).
-    <div
-      className={`min-w-0 break-words rounded-[var(--ds-radius-card)] border px-3 py-2 text-[12px] leading-5 ${className}`}
-    >
-      {notice.message}
+    <div className={`flex min-w-0 items-start gap-2 rounded-[var(--ds-radius-card)] border px-3 py-2 text-[12px] leading-5 ${className}`}>
+      <span className="min-w-0 flex-1 whitespace-pre-wrap break-words">{notice.message}</span>
+      {notice.action || notice.copy ? (
+        <span className="flex shrink-0 items-center gap-1.5">
+          {notice.action ? (
+            <button
+              type="button"
+              className="rounded-md border border-current/20 px-2 py-0.5 font-medium transition hover:bg-current/10"
+              onClick={notice.action.onClick}
+            >
+              {notice.action.label}
+            </button>
+          ) : null}
+          {notice.copy ? (
+            <button
+              type="button"
+              aria-label={copied ? notice.copy.copiedLabel : notice.copy.label}
+              title={copied ? notice.copy.copiedLabel : notice.copy.label}
+              className="inline-flex h-7 items-center gap-1 rounded-md border border-current/20 px-2 font-medium transition hover:bg-current/10"
+              onClick={() => {
+                if (!navigator.clipboard?.writeText) return
+                void navigator.clipboard.writeText(notice.copy?.text ?? notice.message).then(() => {
+                  setCopied(true)
+                  window.setTimeout(() => setCopied(false), 1_400)
+                }).catch(() => undefined)
+              }}
+            >
+              {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+              <span>{copied ? notice.copy.copiedLabel : notice.copy.label}</span>
+            </button>
+          ) : null}
+        </span>
+      ) : null}
     </div>
   )
 }

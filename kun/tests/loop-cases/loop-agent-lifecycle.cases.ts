@@ -14,6 +14,7 @@ import { ContextCompactor } from '../../src/loop/context-compactor.js'
 import { COMPACTION_SYSTEM_PROMPT } from '../../src/loop/compaction-summary.js'
 import { effectiveHistoryAfterLatestCompaction } from '../../src/loop/compaction-history.js'
 import { resolveModelContextProfile } from '../../src/loop/model-context-profile.js'
+import { modelRequestContextText } from '../../src/loop/model-request-context.js'
 import { isPlanClarifyingQuestion } from '../../src/loop/agent-loop.js'
 import { LoopTelemetry } from '../../src/loop/loop-telemetry.js'
 import {
@@ -132,9 +133,9 @@ describe('AgentLoop', () => {
     const request = observedRequest as ModelRequest | null
     if (!request) throw new Error('expected model request')
     expect(request.tools.map((tool) => tool.name)).toContain('bash')
-    expect(request.contextInstructions?.join('\n')).toContain('<shell_environment>')
-    expect(request.contextInstructions?.join('\n')).toContain('<syntax>')
-    expect(request.contextInstructions?.join('\n')).not.toContain('Specialized MCP tools are available')
+    expect(modelRequestContextText(request)).toContain('<shell_environment>')
+    expect(modelRequestContextText(request)).toContain('<syntax>')
+    expect(modelRequestContextText(request)).not.toContain('Specialized MCP tools are available')
   })
 
   it('prefers specialized MCP tools only when they are advertised', async () => {
@@ -176,7 +177,7 @@ describe('AgentLoop', () => {
 
     const request = observedRequest as ModelRequest | null
     if (!request) throw new Error('expected model request')
-    const instructions = request.contextInstructions?.join('\n') ?? ''
+    const instructions = modelRequestContextText(request)
     expect(instructions).toContain('Specialized source-code MCP tools are available')
     expect(instructions).toContain('`mcp_semantic_find_symbol`')
     expect(instructions).toContain('before broad scans')

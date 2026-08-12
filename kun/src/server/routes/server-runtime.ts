@@ -267,6 +267,7 @@ export type ServerRuntime = {
     model?: string
     providerId?: string
     accountId?: string
+    reasoningEffort?: 'auto' | 'off' | 'low' | 'medium' | 'high' | 'max'
   }): Promise<'completed' | 'failed' | 'aborted'> | void
   runtimeToken: string
   insecure: boolean

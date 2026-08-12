@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ModelRequest, ModelStreamChunk } from '../src/ports/model-client.js'
+import { modelRequestContextText } from '../src/loop/model-request-context.js'
 import { bootstrapThread, makeHarness } from './loop-test-harness.js'
 
 describe('agent loop: disableUserInput turns (IM bridges)', () => {
@@ -37,7 +38,7 @@ describe('agent loop: disableUserInput turns (IM bridges)', () => {
       const advertised = request.tools.map((tool) => tool.name)
       expect(advertised).toContain('user_input')
       expect(advertised).toContain('request_user_input')
-      expect(request.contextInstructions?.join(' ')).toMatch(/Do not call either tool/)
+      expect(modelRequestContextText(request)).toMatch(/Do not call either tool/)
     }
 
     const result = (await h.sessionStore.loadItems(h.threadId)).find(
@@ -69,7 +70,7 @@ describe('agent loop: disableUserInput turns (IM bridges)', () => {
     const advertised = seenRequests[0]?.tools.map((tool) => tool.name) ?? []
     expect(advertised).toContain('user_input')
     expect(advertised).toContain('request_user_input')
-    expect(seenRequests[0]?.contextInstructions?.join(' ') ?? '').not.toMatch(
+    expect(modelRequestContextText(seenRequests[0]!)).not.toMatch(
       /Do not call either tool/
     )
   })

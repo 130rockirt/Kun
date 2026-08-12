@@ -25,6 +25,9 @@ function makeDeps(overrides: Partial<MemoryPressureMonitorDeps> = {}): MemoryPre
         { id: 'thread-2', status: 'running', relation: 'primary', updatedAt: '2026-08-10T00:00:00.000Z' }
       ]
     } as unknown as MemoryPressureMonitorDeps['threadStore'],
+    sessionStore: {
+      resetMemory: vi.fn().mockResolvedValue(undefined)
+    },
     turnService: {
       compact
     } as unknown as MemoryPressureMonitorDeps['turnService'],
@@ -64,7 +67,33 @@ describe('startMemoryPressureMonitor', () => {
     monitor.stop()
 
     expect(deps.requestShutdown).toHaveBeenCalledWith('instance-1')
+    expect(deps.events.record).toHaveBeenCalledWith(expect.objectContaining({
+      threadId: 'thread-2',
+      code: 'memory_pressure_critical',
+      details: expect.objectContaining({
+        event: 'runtime_shutdown',
+        reason: 'memory_pressure',
+        rssMiB: 0,
+        affectedThreadIds: ['thread-2']
+      })
+    }))
     vi.restoreAllMocks()
+  })
+
+  it('temporarily reduces subagent concurrency and restores it after pressure clears', async () => {
+    const memoryUsage = vi.spyOn(process, 'memoryUsage')
+      .mockReturnValueOnce({ rss: 150 } as never)
+      .mockReturnValue({ rss: 50 } as never)
+    const setSubagentParallelLimit = vi.fn()
+    const deps = makeDeps({ setSubagentParallelLimit })
+    const monitor = startMemoryPressureMonitor(deps)
+
+    await new Promise((resolve) => setTimeout(resolve, 40))
+    monitor.stop()
+
+    expect(setSubagentParallelLimit).toHaveBeenCalledWith(2)
+    expect(setSubagentParallelLimit).toHaveBeenCalledWith(undefined)
+    memoryUsage.mockRestore()
   })
 
   it('stops polling after stop()', async () => {

@@ -197,6 +197,43 @@ describe('mcp tool provider reliability', () => {
     })
   })
 
+  it('publishes the negotiated protocol diagnostics and replaces them after reconnect', async () => {
+    const first = new MockMcpClient([descriptor], vi.fn(async () => ({ stale: true })))
+    Object.assign(first, {
+      protocolEra: 'legacy',
+      protocolVersion: '2025-11-25',
+      serverInfo: { name: 'fixture', version: '1.0.0' },
+      serverCapabilities: { tools: {} }
+    })
+    const second = new MockMcpClient([descriptor], vi.fn(async () => ({ fresh: true })))
+    Object.assign(second, {
+      protocolEra: 'modern',
+      protocolVersion: '2026-07-28',
+      serverInfo: { name: 'fixture', version: '2.0.0' },
+      serverCapabilities: { tools: {}, resources: {} }
+    })
+    const built = await buildMcpToolProviders(config, {
+      clientFactory: vi.fn()
+        .mockResolvedValueOnce(first)
+        .mockResolvedValueOnce(second)
+    })
+    expect(built.diagnostics[0]).toMatchObject({
+      protocolEra: 'legacy',
+      protocolVersion: '2025-11-25',
+      serverInfo: { version: '1.0.0' }
+    })
+
+    first.lifecycle.onClose?.()
+    const tool = built.providers[0]!.tools.find((item) => item.name === 'mcp_call')!
+    await tool.execute({ toolId: 'mcp_docs_lookup', arguments: {} }, context)
+    expect(built.diagnostics[0]).toMatchObject({
+      protocolEra: 'modern',
+      protocolVersion: '2026-07-28',
+      serverInfo: { version: '2.0.0' },
+      serverCapabilities: { resources: {} }
+    })
+  })
+
   it('does not mark deterministic tool errors as offline', async () => {
     const client = new MockMcpClient([descriptor], vi.fn(async () => {
       throw new Error('Invalid arguments: query is required')

@@ -18,6 +18,7 @@ import {
 import { GRAPH_DEFINE_PLAN_INPUT_JSON_SCHEMA } from '../../src/adapters/tool/graph-mode-tool-provider.js'
 
 import { createCompatRequestCodecs, normalizeToolSpecs } from '../../src/adapters/model/compat-request-builder.js'
+import { COMPAT_HISTORY_CONTEXT } from '../../src/adapters/model/compat-request-codecs.js'
 
 type CapturedCall = { url: string; body: Record<string, unknown> }
 
@@ -412,8 +413,78 @@ it('keeps custom prompt cache routing scoped to GPT-5.6 Responses requests', () 
     expect(build('gpt-5.6-sol', 'chat_completions')).not.toHaveProperty('prompt_cache_key')
     expect(build('gpt-5.6-sol', 'messages')).not.toHaveProperty('prompt_cache_key')
     expect(build('gpt-5.5-codex', 'responses')).not.toHaveProperty('prompt_cache_key')
-    expect(build('gpt-5.60-preview', 'responses')).not.toHaveProperty('prompt_cache_key')
+  expect(build('gpt-5.60-preview', 'responses')).not.toHaveProperty('prompt_cache_key')
   })
+
+it('appends the runtime cache partition to Codex and GPT-5.6 cache keys', () => {
+  const codecs = createCompatRequestCodecs()
+  const build = (partition: string) => codecs.build({
+    request: { ...request('gpt-5.6-sol'), promptCachePartition: partition },
+    model: 'gpt-5.6-sol',
+    messages: [],
+    tools: [],
+    stream: true,
+    endpointFormat: 'responses',
+    baseUrl: 'https://provider.example/v1',
+    isCodex: false,
+    isCodexLite: false,
+    codexNativeImageGeneration: false
+  })
+
+  expect(build('agent-partition').prompt_cache_key).toBe('t1:agent-partition')
+  expect(build('plan-partition').prompt_cache_key).toBe('t1:plan-partition')
+  expect(build('agent-partition').prompt_cache_key).toBe('t1:agent-partition')
+})
+
+it('keeps append-only model context out of Codex developer instructions across codecs', () => {
+  const codecs = createCompatRequestCodecs()
+  const messages = [
+    { role: 'system' as const, content: 'stable contract' },
+    { role: 'user' as const, content: 'current message' },
+    {
+      role: 'system' as const,
+      content: 'persona and runtime capsule',
+      [COMPAT_HISTORY_CONTEXT]: true as const
+    }
+  ]
+  const build = (
+    endpointFormat: 'chat_completions' | 'responses' | 'messages',
+    isCodexLite = false
+  ) => codecs.build({
+    request: request('gpt-5.6-sol'),
+    model: 'gpt-5.6-sol',
+    messages,
+    tools: [],
+    stream: true,
+    endpointFormat,
+    baseUrl: isCodexLite
+      ? 'https://chatgpt.com/backend-api/codex'
+      : 'https://provider.example/v1',
+    isCodex: isCodexLite,
+    isCodexLite,
+    codexNativeImageGeneration: false
+  })
+
+  const lite = build('responses', true)
+  const liteInput = lite.input as Array<Record<string, unknown>>
+  expect(JSON.stringify(liteInput[1])).toContain('stable contract')
+  expect(JSON.stringify(liteInput[1])).not.toContain('persona and runtime capsule')
+  expect(JSON.stringify(liteInput.slice(2))).toContain('persona and runtime capsule')
+
+  const chat = build('chat_completions')
+  expect((chat.messages as Array<{ role: string; content: string }>).map((message) => [
+    message.role, message.content
+  ])).toEqual([
+    ['system', 'stable contract'],
+    ['user', 'current message'],
+    ['system', 'persona and runtime capsule']
+  ])
+
+  const anthropic = build('messages')
+  expect(JSON.stringify(anthropic.system)).toContain('stable contract')
+  expect(JSON.stringify(anthropic.system)).not.toContain('persona and runtime capsule')
+  expect(JSON.stringify(anthropic.messages)).toContain('persona and runtime capsule')
+})
 
 it('routes an override model to the Anthropic Messages endpoint while others use chat completions', async () => {
     const calls: CapturedCall[] = []

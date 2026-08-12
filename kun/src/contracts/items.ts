@@ -107,6 +107,42 @@ export const GoalContextTurnItem = TurnItemBase.extend({
 })
 export type GoalContextTurnItem = z.infer<typeof GoalContextTurnItem>
 
+export const ModelContextAuthority = z.enum([
+  'runtime',
+  'user',
+  'workspace',
+  'skill',
+  'extension',
+  'reference'
+])
+export type ModelContextAuthority = z.infer<typeof ModelContextAuthority>
+
+export const ModelContextBlockState = z.object({
+  key: z.string().min(1),
+  kind: z.string().min(1),
+  authority: ModelContextAuthority,
+  state: z.enum(['active', 'inactive']),
+  digest: z.string().min(1).optional()
+}).strict()
+export type ModelContextBlockState = z.infer<typeof ModelContextBlockState>
+
+/**
+ * Exact, private model-visible context appended before a model dispatch.
+ * The rendered text is persisted so a restart never regenerates already-sent
+ * time, persona, mode, workspace, Skill, or recovery bytes differently.
+ */
+export const ModelContextTurnItem = TurnItemBase.extend({
+  kind: z.literal('model_context'),
+  role: z.literal('system'),
+  status: z.literal('completed'),
+  formatVersion: z.literal(1),
+  stepIndex: z.number().int().nonnegative(),
+  contentDigest: z.string().min(1),
+  blocks: z.array(ModelContextBlockState),
+  text: z.string().min(1)
+})
+export type ModelContextTurnItem = z.infer<typeof ModelContextTurnItem>
+
 /**
  * Durable, model-visible checkpoint written when a turn is interrupted by a
  * runtime restart or host shutdown. It records what the task was doing (first
@@ -247,6 +283,7 @@ export type ErrorTurnItem = z.infer<typeof ErrorTurnItem>
 export const TurnItem = z.discriminatedUnion('kind', [
   UserTurnItem,
   GoalContextTurnItem,
+  ModelContextTurnItem,
   InterruptionNoteTurnItem,
   AssistantTextTurnItem,
   AssistantReasoningTurnItem,
@@ -264,16 +301,18 @@ export type TurnItemKind = TurnItem['kind']
 
 /** Internal history records must never be projected through public thread APIs. */
 export function isPublicTurnItem(item: TurnItem): boolean {
-  return item.kind !== 'goal_context' && item.kind !== 'interruption_note'
+  return item.kind !== 'goal_context' && item.kind !== 'model_context' &&
+    item.kind !== 'interruption_note'
 }
 
 /**
  * Exact private strings to remove from any diagnostic request capture. Covers
- * both internal record kinds: the active-goal instruction and interruption
- * checkpoints are model-only context that must not leak into debug traces.
+ * all internal record kinds: active-goal instructions, append-only model
+ * context, and interruption checkpoints must not leak into debug traces.
  */
 export function goalContextTexts(items: readonly TurnItem[]): string[] {
   return [...new Set(items.flatMap((item) =>
-    item.kind === 'goal_context' || item.kind === 'interruption_note' ? [item.text] : []
+    item.kind === 'goal_context' || item.kind === 'model_context' ||
+      item.kind === 'interruption_note' ? [item.text] : []
   ))]
 }

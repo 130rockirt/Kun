@@ -5,15 +5,18 @@ import {
   describeProviderProbeError,
   parseModelIds,
   probeModelProvider,
-  providerProbeHeaders
+  providerProbeHeaders,
+  resolveElectronSystemProxyUrl
 } from './provider-connection'
 
-const electronNetFetch = vi.hoisted(() => vi.fn())
-vi.mock('electron', () => ({ net: { fetch: electronNetFetch } }))
+const electronResolveProxy = vi.hoisted(() => vi.fn())
+vi.mock('electron', () => ({
+  session: { defaultSession: { resolveProxy: electronResolveProxy } }
+}))
 
 beforeEach(() => {
-  electronNetFetch.mockReset()
-  electronNetFetch.mockImplementation((input: string, init?: RequestInit) => fetch(input, init))
+  electronResolveProxy.mockReset()
+  electronResolveProxy.mockResolvedValue('DIRECT')
 })
 
 afterEach(() => {
@@ -46,13 +49,10 @@ describe('providerProbeHeaders', () => {
 })
 
 describe('provider probe network transport', () => {
-  it('uses Electron Chromium networking before Node fetch when no proxy is configured', async () => {
-    electronNetFetch.mockResolvedValue(new Response(JSON.stringify({
+  it('uses the same Node transport as the model runtime when no proxy is configured', async () => {
+    const nodeFetch = vi.fn(async () => new Response(JSON.stringify({
       data: [{ id: 'openai/gpt-5.4' }]
     }), { status: 200 }))
-    const nodeFetch = vi.fn(async () => {
-      throw new Error('Node fetch should not run')
-    })
     vi.stubGlobal('fetch', nodeFetch)
 
     await expect(probeModelProvider({
@@ -61,48 +61,13 @@ describe('provider probe network transport', () => {
       endpointFormat: 'chat_completions'
     })).resolves.toMatchObject({ ok: true, modelIds: ['openai/gpt-5.4'] })
 
-    expect(electronNetFetch).toHaveBeenCalledWith(
+    expect(nodeFetch).toHaveBeenCalledWith(
       'https://zenmux.ai/api/v1/models',
       expect.objectContaining({ method: 'GET' })
     )
-    expect(nodeFetch).not.toHaveBeenCalled()
   })
 
-  it('falls back to Node fetch when Chromium networking rejects the request', async () => {
-    electronNetFetch.mockRejectedValue(new Error('net::ERR_FAILED'))
-    const nodeFetch = vi.fn(async () => new Response(JSON.stringify({
-      data: [{ id: 'anthropic/claude-sonnet-4.6' }]
-    }), { status: 200 }))
-    vi.stubGlobal('fetch', nodeFetch)
-
-    await expect(probeModelProvider({
-      baseUrl: 'https://zenmux.ai/api/v1',
-      apiKey: 'sk-ss-v1-test',
-      endpointFormat: 'chat_completions'
-    })).resolves.toMatchObject({
-      ok: true,
-      modelIds: ['anthropic/claude-sonnet-4.6']
-    })
-    expect(nodeFetch).toHaveBeenCalledOnce()
-  })
-
-  it('hedges with Node fetch when Chromium networking remains pending', async () => {
-    electronNetFetch.mockImplementation(() => new Promise(() => undefined))
-    const nodeFetch = vi.fn(async () => new Response(JSON.stringify({
-      data: [{ id: 'google/gemini-3-pro' }]
-    }), { status: 200 }))
-    vi.stubGlobal('fetch', nodeFetch)
-
-    await expect(probeModelProvider({
-      baseUrl: 'https://zenmux.ai/api/v1',
-      apiKey: 'sk-ai-v1-test',
-      endpointFormat: 'chat_completions'
-    })).resolves.toMatchObject({ ok: true, modelIds: ['google/gemini-3-pro'] })
-    expect(nodeFetch).toHaveBeenCalledOnce()
-  })
-
-  it('surfaces both Chromium and Node root causes when both transports fail', async () => {
-    electronNetFetch.mockRejectedValue(new Error('net::ERR_NAME_NOT_RESOLVED'))
+  it('surfaces the Node root cause when the runtime transport fails', async () => {
     const dns = Object.assign(new Error('getaddrinfo ENOTFOUND zenmux.ai'), { code: 'ENOTFOUND' })
     vi.stubGlobal('fetch', vi.fn(async () => {
       throw new TypeError('fetch failed', { cause: dns })
@@ -115,9 +80,38 @@ describe('provider probe network transport', () => {
     })
     expect(result).toMatchObject({ ok: false })
     if (!result.ok) {
-      expect(result.message).toContain('net::ERR_NAME_NOT_RESOLVED')
       expect(result.message).toContain('getaddrinfo ENOTFOUND zenmux.ai')
     }
+  })
+
+  it('suggests the resolved system proxy when it can reach the provider', async () => {
+    electronResolveProxy.mockResolvedValue('PROXY 127.0.0.1:10808; DIRECT')
+    const fetcher = vi.fn(async (_url: string | URL, _init: RequestInit | undefined, proxyUrl: string) => {
+      if (!proxyUrl) throw Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' })
+      return new Response(JSON.stringify({ data: [{ id: 'openai/gpt-5.4' }] }), { status: 200 })
+    })
+
+    const result = await probeModelProvider({
+      baseUrl: 'https://zenmux.ai/api/v1',
+      apiKey: 'sk-ai-v1-test',
+      endpointFormat: 'chat_completions'
+    }, undefined, fetcher)
+
+    expect(result).toMatchObject({
+      ok: false,
+      suggestedProxyUrl: 'http://127.0.0.1:10808/'
+    })
+    expect(fetcher).toHaveBeenLastCalledWith(
+      'https://zenmux.ai/api/v1/models',
+      expect.objectContaining({ method: 'GET' }),
+      'http://127.0.0.1:10808/'
+    )
+  })
+
+  it('parses SOCKS system proxy rules and ignores DIRECT fallbacks', async () => {
+    electronResolveProxy.mockResolvedValue('SOCKS5 127.0.0.1:7891; DIRECT')
+    await expect(resolveElectronSystemProxyUrl('https://zenmux.ai/api/v1/models'))
+      .resolves.toBe('socks5://127.0.0.1:7891')
   })
 
   it('formats nested network causes without leaking a bare fetch failed message', () => {

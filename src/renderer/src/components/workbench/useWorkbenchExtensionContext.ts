@@ -6,6 +6,7 @@ import {
 } from '../../extensions/use-contributions'
 import type { ExtensionContributionLoadContext } from '../../extensions/contribution-load-coordinator'
 import type { useWorkbenchChatStoreState } from './useWorkbenchChatStoreState'
+import type { DesignComposerContext } from '../../design/design-composer-context'
 
 type WorkbenchState = ReturnType<typeof useWorkbenchChatStoreState>
 
@@ -47,17 +48,10 @@ export function useWorkbenchExtensionContext({
     )
   }, [activeThreadId, extensionComposerContexts, extensionWorkspaceRoot, route])
 
-  const extensionComposerContextChips = useMemo(() => activeComposerContextEvents.map((event) => ({
-    id: event.attachment.attachmentId,
-    kind: ('source' in event.attachment.provenance && event.attachment.provenance.source === 'dev-preview'
-      ? event.attachment.reference.kind === 'issue'
-        ? 'dev-preview-issue'
-        : 'dev-preview-element'
-      : 'extension-context') as 'extension-context' | 'dev-preview-element' | 'dev-preview-issue',
-    label: event.attachment.title,
-    detail: event.attachment.summary,
-    removable: true
-  })), [activeComposerContextEvents])
+  const extensionComposerContextChips = useMemo(
+    () => activeComposerContextEvents.map(composerContextChip),
+    [activeComposerContextEvents]
+  )
 
   const selectedPreviewElementCount = useMemo(() => activeComposerContextEvents.filter((event) =>
     'source' in event.attachment.provenance &&
@@ -80,4 +74,47 @@ export function useWorkbenchExtensionContext({
     extensionWorkspaceRoot,
     selectedPreviewElementCount
   }
+}
+
+export function composerContextChip(
+  event: WorkbenchState['extensionComposerContexts'][number]
+): DesignComposerContext {
+  const { attachment } = event
+  if (
+    'source' in attachment.provenance &&
+    attachment.provenance.source === 'workspace-selection' &&
+    attachment.reference.kind === 'document-quote'
+  ) {
+    const text = stringValue(attachment.reference.text)
+    const pageStart = numberValue(attachment.reference.pageStart)
+    const pageEnd = numberValue(attachment.reference.pageEnd)
+    const charCount = numberValue(attachment.reference.charCount)
+    if (text && pageStart && pageEnd && charCount !== null) {
+      return {
+        id: attachment.attachmentId,
+        kind: 'document-quote',
+        label: attachment.title,
+        removable: true,
+        quote: { text, pageStart, pageEnd, charCount }
+      }
+    }
+  }
+  const kind = 'source' in attachment.provenance && attachment.provenance.source === 'dev-preview'
+    ? attachment.reference.kind === 'issue' ? 'dev-preview-issue' : 'dev-preview-element'
+    : 'extension-context'
+  return {
+    id: attachment.attachmentId,
+    kind,
+    label: attachment.title,
+    detail: attachment.summary,
+    removable: true
+  }
+}
+
+function stringValue(value: unknown): string | null {
+  return typeof value === 'string' && value.length > 0 ? value : null
+}
+
+function numberValue(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
 }

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { InMemoryEventBus } from '../adapters/in-memory-event-bus.js'
 import { InMemorySessionStore } from '../adapters/in-memory-session-store.js'
 import { InMemoryThreadStore } from '../adapters/in-memory-thread-store.js'
-import { makeAssistantTextItem, makeGoalContextItem, makeUserItem } from '../domain/item.js'
+import { makeAssistantTextItem, makeGoalContextItem, makeModelContextItem, makeUserItem } from '../domain/item.js'
 import { createThreadRecord } from '../domain/thread.js'
 import { createTurnRecord } from '../domain/turn.js'
 import { SequentialIdGenerator } from '../ports/id-generator.js'
@@ -78,6 +78,40 @@ async function seedGoalContextThread(
 }
 
 describe('ThreadService goal context persistence', () => {
+  it('keeps private model context through fork and resume without exposing it in turns', async () => {
+    const harness = createHarness()
+    const source = await seedGoalContextThread(harness)
+    const context = makeModelContextItem({
+      id: 'item_model_context',
+      threadId: source.threadId,
+      turnId: source.turnId,
+      stepIndex: 0,
+      contentDigest: 'digest',
+      blocks: [{
+        key: 'persona:user:0', kind: 'persona', authority: 'user',
+        state: 'active', digest: 'persona-digest'
+      }],
+      text: 'Persisted persona capsule',
+      createdAt: '2026-08-06T00:00:01.500Z'
+    })
+    if (context.kind !== 'model_context') throw new Error('expected model context')
+    await harness.sessionStore.appendItem(source.threadId, context)
+
+    const fork = await harness.service.fork(source.threadId)
+    const resumed = await harness.service.resumeSession(source.threadId)
+
+    for (const target of [fork, resumed.thread]) {
+      expect(target.turns[0]?.items.some((item) => item.kind === 'model_context')).toBe(false)
+      expect(await harness.sessionStore.loadItems(target.id)).toContainEqual(expect.objectContaining({
+        id: context.id,
+        kind: 'model_context',
+        threadId: target.id,
+        text: context.text,
+        blocks: context.blocks
+      }))
+    }
+  })
+
   it('keeps canonical goal context ordered through fork and resume without exposing it in turns', async () => {
     const harness = createHarness()
     const source = await seedGoalContextThread(harness)

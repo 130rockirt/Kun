@@ -12,6 +12,7 @@ import type {
 import type {
   ApprovalPolicy,
   ApprovalReviewer,
+  ModelReasoningEffort,
   SandboxMode
 } from '@shared/app-settings'
 import type { ComposerContextAttachment } from '@kun/extension-api'
@@ -168,7 +169,12 @@ export interface AgentProvider {
   reviewThread?(
     threadId: string,
     target: ReviewTarget,
-    options?: { model?: string; providerId?: string; accountId?: string }
+    options?: {
+      model?: string
+      providerId?: string
+      accountId?: string
+      reasoningEffort?: ModelReasoningEffort
+    }
   ): Promise<{ turnId: string; threadId: string; userMessageItemId?: string; reviewItemId?: string }>
   getRuntimeInfo?(): Promise<CoreRuntimeInfoJson>
   getToolDiagnostics?(): Promise<CoreRuntimeToolDiagnosticsJson>

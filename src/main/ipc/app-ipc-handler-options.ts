@@ -47,6 +47,7 @@ export type RegisterAppIpcHandlersOptions = {
   acquireRuntimeRequestLease: () => Promise<ProtectedRuntimeRequestLease>
   getRuntimeSettingsSyncStatus: () => KunRuntimeSettingsSyncStatusPayload
   restartRuntime: () => Promise<void>
+  restartAllKunProcesses: () => Promise<void>
   fetchUpstreamModels: () => Promise<UpstreamModelsResult>
   getClawRuntime: () => ClawRuntime | null
   getScheduleRuntime: () => ScheduleRuntime | null

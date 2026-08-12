@@ -368,6 +368,7 @@ export type KunGuiApi = ExtensionIpcApi & {
   ) => Promise<WorkspaceOfficeSemanticResult>
   resolveKunApproval: (request: KunProtectedApprovalRequest) => Promise<KunProtectedApprovalResult>
   restartRuntime: () => Promise<void>
+  restartAllKunProcesses: () => Promise<{ accepted: boolean; error?: string }>
   fetchUpstreamModels: () => Promise<UpstreamModelsResult>
   probeModelProvider: (payload: ModelProviderProbeRequest) => Promise<ModelProviderProbeResult>
   listProviderQuotas: () => Promise<ProviderQuotaListResult>

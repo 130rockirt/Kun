@@ -124,13 +124,16 @@ export async function startKunServe(
     ? startMemoryPressureMonitor({
         config: options.runtime?.memoryPressure,
         threadStore: runtime.threadStore,
+        sessionStore: runtime.sessionStore,
         turnService: runtime.turnService,
         events: runtime.events,
         instanceId,
         requestShutdown: async () => {
           await runtime.requestShutdown?.(instanceId).catch(() => false)
           return true
-        }
+        },
+        setSubagentParallelLimit: (limit) =>
+          runtime.delegationRuntime?.setMemoryPressureParallelLimit(limit)
       })
     : null
   return {

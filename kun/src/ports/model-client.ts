@@ -82,15 +82,13 @@ export type ModelRequest = {
    */
   threadProfileInstruction?: string
   /**
-   * Optional mode-scoped instruction (e.g. Plan mode guidance). Emitted
-   * after the byte-stable `systemPrompt` and optional thread profile so
-   * the cached prefix stays unchanged while the mode note still rides at
-   * the front of the request.
+   * Legacy/direct-caller mode instruction. Native AgentLoop requests persist
+   * mode policy as chronological `model_context` history instead.
    */
   modeInstruction?: string
   /**
-   * Dynamic per-turn system instructions, such as active Skill
-   * guidance. These are intentionally outside the immutable prefix.
+   * Legacy/direct-caller dynamic context. Native AgentLoop requests persist
+   * the rendered blocks as chronological `model_context` history instead.
    */
   contextInstructions?: string[]
   prefix: TurnItem[]
@@ -104,6 +102,8 @@ export type ModelRequest = {
   attachments?: ModelInputAttachment[]
   attachmentTextFallbacks?: ModelTextAttachmentFallback[]
   attachmentDocuments?: ModelDocumentAttachment[]
+  /** Transient attachment payloads keyed by their persisted user-message id. */
+  messageAttachments?: Readonly<Record<string, ModelMessageAttachments>>
   tools: ModelToolSpec[]
   /**
    * Hard named-tool constraint. The caller MUST expose this tool alone and
@@ -131,6 +131,8 @@ export type ModelRequest = {
   reasoningEffort?: string
   /** Optional provider request class, captured from the initiating turn. */
   serviceTier?: TurnServiceTier
+  /** Short runtime-owned namespace for provider-native prompt caches. */
+  promptCachePartition?: string
   abortSignal: AbortSignal
 }
 
@@ -168,6 +170,26 @@ export type ModelDocumentAttachment = {
   truncated?: boolean
   localFilePath?: string
 }
+
+export type ModelUnavailableAttachment = {
+  id: string
+  text: string
+}
+
+export type ModelMessageAttachments = {
+  images: ModelInputAttachment[]
+  textFallbacks: ModelTextAttachmentFallback[]
+  documents: ModelDocumentAttachment[]
+  unavailable: ModelUnavailableAttachment[]
+  /** Original per-message attachment order across wire representation kinds. */
+  order?: ModelMessageAttachmentOrderEntry[]
+}
+
+export type ModelMessageAttachmentOrderEntry =
+  | { kind: 'image'; index: number }
+  | { kind: 'text_fallback'; index: number }
+  | { kind: 'document'; index: number }
+  | { kind: 'unavailable'; index: number }
 
 export type ModelToolSpec = {
   name: string

@@ -8,8 +8,10 @@ import { LocalToolHost } from '../adapters/tool/local-tool-host.js'
 import { createImmutablePrefix } from '../cache/immutable-prefix.js'
 import { normalizeRoleReasoningEffort } from '../loop/reasoning-effort.js'
 import type { ModelCapabilityMetadata } from '../contracts/capabilities.js'
+import type { RuntimeEvent } from '../contracts/events.js'
 import type { TurnItem } from '../contracts/items.js'
 import type { ReviewTarget } from '../contracts/review.js'
+import type { TurnReasoningEffort } from '../contracts/turns.js'
 import { AgentLoop } from '../loop/agent-loop.js'
 import { ContextCompactor } from '../loop/context-compactor.js'
 import { InflightTracker } from '../loop/inflight-tracker.js'
@@ -33,6 +35,15 @@ import { UsageService } from './usage-service.js'
 import { resolveReviewTargetPrompt } from '../review/git-review-target.js'
 import { parseReviewOutput, renderReviewOutput } from '../review/review-output.js'
 import { KUN_REVIEW_PROMPT } from '../review/review-prompt.js'
+import { ReviewEventProjector } from '../review/review-event-projector.js'
+
+// A review runs as a hidden child turn. Keep a dedicated ceiling so a tool
+// loop cannot leave the visible parent turn looking busy for the 24-hour
+// generic default; stricter runtime limits still win below.
+const DEFAULT_REVIEW_MAX_STEPS = 32
+const DEFAULT_REVIEW_MAX_WALL_TIME_MS = 15 * 60_000
+const DEFAULT_REVIEW_MAX_TOOL_CALLS_PER_STEP = 64
+const MAX_REVIEW_PROGRESS_UPDATES = 24
 
 export type ReviewServiceDeps = {
   threadStore: ThreadStore
@@ -48,7 +59,7 @@ export type ReviewServiceDeps = {
   profilesForProvider?: (
     providerId: string | undefined
   ) => readonly ModelContextProfile[]
-  /** Reasoning depth for the code-review model call. Invalid/missing => 'off'. */
+  /** Fallback reasoning depth for review calls that do not specify one. */
   reasoningEffort?: string
   roleModel?: string
   roleProviderId?: string
@@ -79,6 +90,7 @@ export class ReviewService {
     model?: string
     providerId?: string
     accountId?: string
+    reasoningEffort?: TurnReasoningEffort
   }): Promise<'completed' | 'failed' | 'aborted'> {
     const signal = this.deps.turns.getAbortController(input.turnId)
     if (!signal) {
@@ -90,6 +102,7 @@ export class ReviewService {
       return 'aborted'
     }
     try {
+      await this.publishProgress(input, 'Preparing the review target...')
       const thread = await this.deps.threadStore.get(input.threadId)
       if (!thread) throw new Error(`thread not found: ${input.threadId}`)
       const resolved = await resolveReviewTargetPrompt({
@@ -100,14 +113,23 @@ export class ReviewService {
         await this.abortReview(input)
         return 'aborted'
       }
-      const rawReviewText = await this.runIsolatedReviewer({
-        prompt: resolved.prompt,
-        workspace: thread.workspace ?? '',
-        model: input.model?.trim() || this.deps.roleModel?.trim() || thread.model || this.deps.defaultModel,
-        providerId: input.providerId?.trim() || this.deps.roleProviderId?.trim() || thread.providerId?.trim(),
-        accountId: input.accountId?.trim() || this.deps.roleAccountId?.trim() || thread.accountId?.trim(),
-        signal
-      })
+      const eventProjector = new ReviewEventProjector(this.deps.turns, input)
+      let rawReviewText: string
+      try {
+        rawReviewText = await this.runIsolatedReviewer({
+          prompt: resolved.prompt,
+          workspace: thread.workspace ?? '',
+          model: input.model?.trim() || this.deps.roleModel?.trim() || thread.model || this.deps.defaultModel,
+          providerId: input.providerId?.trim() || this.deps.roleProviderId?.trim() || thread.providerId?.trim(),
+          accountId: input.accountId?.trim() || this.deps.roleAccountId?.trim() || thread.accountId?.trim(),
+          reasoningEffort: input.reasoningEffort,
+          onEvent: (event) => eventProjector.enqueue(event),
+          onProgress: (message) => this.publishProgress(input, message),
+          signal
+        })
+      } finally {
+        await eventProjector.drain()
+      }
       if (signal.aborted) {
         await this.abortReview(input)
         return 'aborted'
@@ -144,6 +166,9 @@ export class ReviewService {
     model: string
     providerId?: string
     accountId?: string
+    reasoningEffort?: TurnReasoningEffort
+    onEvent?: (event: RuntimeEvent) => void
+    onProgress?: (message: string) => void | Promise<void>
     signal: AbortSignal
   }): Promise<string> {
     const nowIso = this.deps.nowIso
@@ -208,6 +233,7 @@ export class ReviewService {
         this.deps.modelCapabilities?.(model, input.providerId) ?? modelCapabilitiesForModel(model),
       ...(this.deps.contextCompaction ? { contextCompaction: this.deps.contextCompaction } : {}),
       ...(this.deps.tokenEconomy ? { tokenEconomy: this.deps.tokenEconomy } : {}),
+      turnLimits: reviewTurnLimits(this.deps.runtime),
       ...(this.deps.runtime?.toolStorm ? { toolStorm: this.deps.runtime.toolStorm } : {}),
       ...(this.deps.runtime?.toolArgumentRepair ? { toolArgumentRepair: this.deps.runtime.toolArgumentRepair } : {})
     })
@@ -226,39 +252,76 @@ export class ReviewService {
       // and can read files outside the reviewed workspace.
       sandboxMode: 'read-only'
     })
-    const started = await turns.startTurn({
-      threadId: childThread.id,
-      request: {
-        prompt: input.prompt,
-        model: input.model,
-        ...(input.providerId?.trim() ? { providerId: input.providerId.trim() } : {}),
-        mode: 'agent',
-        reasoningEffort: normalizeRoleReasoningEffort(this.deps.reasoningEffort)
-      }
+    let progressUpdates = 0
+    let progressQueue = Promise.resolve()
+    const reportedProgress = new Set<string>()
+    const queueProgress = (message: string): void => {
+      if (!input.onProgress || reportedProgress.has(message)) return
+      if (progressUpdates >= MAX_REVIEW_PROGRESS_UPDATES) return
+      reportedProgress.add(message)
+      progressUpdates += 1
+      progressQueue = progressQueue
+        .then(() => input.onProgress?.(message))
+        .then(() => undefined)
+        .catch(() => undefined)
+    }
+    const unsubscribe = eventBus.subscribe(childThread.id, (event) => {
+      input.onEvent?.(event)
+      const message = reviewProgressForEvent(event)
+      if (message) queueProgress(message)
     })
-    const abortChild = (): void => {
-      void turns.interruptTurn({
-        threadId: childThread.id,
-        turnId: started.turnId
-      }).catch(() => undefined)
-    }
-    if (input.signal.aborted) abortChild()
-    else input.signal.addEventListener('abort', abortChild, { once: true })
+    queueProgress('Starting the read-only reviewer...')
     try {
-      const status = await loop.runTurn(childThread.id, started.turnId)
-      const runtimeError = await findSessionEvent(
-        sessionStore,
-        childThread.id,
-        (event) => event.kind === 'error' && event.turnId === started.turnId
-      )
-      if (runtimeError?.kind === 'error') throw new Error(runtimeError.message)
-      const items = await sessionStore.loadItems(childThread.id)
-      const text = summarizeReviewTurn(items, started.turnId)
-      if (status !== 'completed') throw new Error(text || `reviewer ${status}`)
-      return text
+      const started = await turns.startTurn({
+        threadId: childThread.id,
+        request: {
+          prompt: input.prompt,
+          model: input.model,
+          ...(input.providerId?.trim() ? { providerId: input.providerId.trim() } : {}),
+          ...(input.accountId?.trim() ? { accountId: input.accountId.trim() } : {}),
+          mode: 'agent',
+          reasoningEffort: normalizeRoleReasoningEffort(
+            input.reasoningEffort ?? this.deps.reasoningEffort
+          )
+        }
+      })
+      const abortChild = (): void => {
+        void turns.interruptTurn({
+          threadId: childThread.id,
+          turnId: started.turnId
+        }).catch(() => undefined)
+      }
+      if (input.signal.aborted) abortChild()
+      else input.signal.addEventListener('abort', abortChild, { once: true })
+      try {
+        const status = await loop.runTurn(childThread.id, started.turnId)
+        const runtimeError = await findSessionEvent(
+          sessionStore,
+          childThread.id,
+          (event) => event.kind === 'error' && event.turnId === started.turnId
+        )
+        if (runtimeError?.kind === 'error') throw new Error(runtimeError.message)
+        const items = await sessionStore.loadItems(childThread.id)
+        const text = summarizeReviewTurn(items, started.turnId)
+        if (status !== 'completed') throw new Error(text || `reviewer ${status}`)
+        return text
+      } finally {
+        input.signal.removeEventListener('abort', abortChild)
+      }
     } finally {
-      input.signal.removeEventListener('abort', abortChild)
+      unsubscribe()
+      await progressQueue
     }
+  }
+
+  private async publishProgress(
+    input: { threadId: string; reviewItemId: string },
+    message: string
+  ): Promise<void> {
+    await this.deps.turns.updateItem(input.threadId, input.reviewItemId, {
+      status: 'running',
+      reviewText: message
+    } as Partial<TurnItem>).catch(() => undefined)
   }
 
   private async failReview(
@@ -293,6 +356,50 @@ export class ReviewService {
       turnId: input.turnId,
       status: 'aborted'
     })
+  }
+}
+
+function reviewTurnLimits(runtime: RuntimeTuningConfig | undefined): {
+  maxSteps: number
+  maxWallTimeMs: number
+  maxToolCallsPerStep: number
+} {
+  const configured = runtime?.turnLimits
+  return {
+    maxSteps: Math.min(configured?.maxSteps ?? DEFAULT_REVIEW_MAX_STEPS, DEFAULT_REVIEW_MAX_STEPS),
+    maxWallTimeMs: Math.min(
+      configured?.maxWallTimeMs ?? DEFAULT_REVIEW_MAX_WALL_TIME_MS,
+      DEFAULT_REVIEW_MAX_WALL_TIME_MS
+    ),
+    maxToolCallsPerStep: Math.min(
+      configured?.maxToolCallsPerStep ?? DEFAULT_REVIEW_MAX_TOOL_CALLS_PER_STEP,
+      DEFAULT_REVIEW_MAX_TOOL_CALLS_PER_STEP
+    )
+  }
+}
+
+function reviewProgressForEvent(event: RuntimeEvent): string | undefined {
+  switch (event.kind) {
+    case 'pipeline_stage':
+      return event.stage === 'pre_send' ? 'Sending the review request...' : undefined
+    case 'assistant_reasoning_delta':
+      return 'Analyzing the changed code...'
+    case 'assistant_text_delta':
+      return 'Formatting review findings...'
+    case 'tool_call_started':
+      return event.item.kind === 'tool_call'
+        ? `Inspecting the workspace with ${event.item.toolName}...`
+        : 'Inspecting the workspace...'
+    case 'tool_call_ready':
+      return `Inspecting the workspace with ${event.toolName}...`
+    case 'model_request_retry':
+      return `Retrying the review model request (${event.attempt}/${event.maxAttempts})...`
+    case 'tool_result_upload_wait':
+      return 'Waiting for review tool results...'
+    case 'compaction_started':
+      return 'Compacting the review context...'
+    default:
+      return undefined
   }
 }
 

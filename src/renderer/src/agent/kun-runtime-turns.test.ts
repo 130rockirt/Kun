@@ -370,6 +370,40 @@ describe('KunRuntimeProvider', () => {
     )
   })
 
+  it('posts the selected model route and reasoning effort for reviews', async () => {
+    const runtimeRequest = vi.fn(async () => ({
+      ok: true,
+      status: 202,
+      body: JSON.stringify({
+        threadId: 'thr_1',
+        turnId: 'turn_review',
+        userMessageItemId: 'item_user_review',
+        reviewItemId: 'item_review'
+      })
+    }))
+    installDsGui({ runtimeRequest })
+    const provider = new KunRuntimeProvider()
+
+    await provider.reviewThread('thr_1', { kind: 'uncommittedChanges' }, {
+      model: 'gpt-5.6-terra',
+      providerId: 'codex',
+      accountId: 'account-1',
+      reasoningEffort: 'max'
+    })
+
+    expect(runtimeRequest).toHaveBeenCalledWith(
+      '/v1/threads/thr_1/review',
+      'POST',
+      JSON.stringify({
+        target: { kind: 'uncommittedChanges' },
+        model: 'gpt-5.6-terra',
+        providerId: 'codex',
+        accountId: 'account-1',
+        reasoningEffort: 'max'
+      })
+    )
+  })
+
   it('posts attachment ids with Kun turn requests when provided', async () => {
     const runtimeRequest = vi.fn(async () => ({
       ok: true,

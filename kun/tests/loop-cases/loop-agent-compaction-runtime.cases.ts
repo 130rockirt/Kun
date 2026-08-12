@@ -473,12 +473,12 @@ describe('AgentLoop', () => {
             yield {
               kind: 'usage',
               usage: {
-                promptTokens: 12,
+                promptTokens: 1_200,
                 completionTokens: 1,
-                totalTokens: 13,
+                totalTokens: 1_201,
                 cachedTokens: 0,
                 cacheHitTokens: 0,
-                cacheMissTokens: 12,
+                cacheMissTokens: 1_200,
                 cacheHitRate: 0,
                 turns: 1
               }
@@ -497,10 +497,26 @@ describe('AgentLoop', () => {
       },
       {
         tools: [echoTool],
-        compactor: new ContextCompactor({ softThreshold: 10, hardThreshold: 20 })
+        compactor: new ContextCompactor({ softThreshold: 1_000, hardThreshold: 2_000 })
       }
     )
     await bootstrapThread(h)
+    const activeTurnItems = await h.sessionStore.loadItems(h.threadId)
+    await h.sessionStore.rewriteItems(h.threadId, [
+      makeUserItem({
+        id: 'historic_user',
+        turnId: 'turn_historic',
+        threadId: h.threadId,
+        text: `historic request eligible for compaction ${'x'.repeat(800)}`
+      }),
+      makeAssistantTextItem({
+        id: 'historic_assistant',
+        turnId: 'turn_historic',
+        threadId: h.threadId,
+        text: `historic response eligible for compaction ${'y'.repeat(800)}`
+      }),
+      ...activeTurnItems
+    ])
 
     const status = await h.loop.runTurn(h.threadId, h.turnId)
     const secondHistory = seenHistory[1] ?? []
@@ -508,7 +524,7 @@ describe('AgentLoop', () => {
 
     expect(status).toBe('completed')
     expect(seenHistory[0]?.some((item) => item.kind === 'compaction')).toBe(false)
-    expect(secondHistory[0]?.kind).toBe('compaction')
+    expect(secondHistory.some((item) => item.kind === 'compaction')).toBe(true)
     expect(secondHistory.some((item) => item.kind === 'tool_result')).toBe(true)
     expect(
       secondHistory.some((item) =>

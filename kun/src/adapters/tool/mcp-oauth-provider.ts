@@ -1,12 +1,11 @@
 import {
   type OAuthClientProvider,
-  type OAuthDiscoveryState
-} from '@modelcontextprotocol/sdk/client/auth.js'
-import type {
-  OAuthClientInformationMixed,
-  OAuthClientMetadata,
-  OAuthTokens
-} from '@modelcontextprotocol/sdk/shared/auth.js'
+  type OAuthClientInformationContext,
+  type OAuthDiscoveryState,
+  type OAuthClientMetadata,
+  type StoredOAuthClientInformation,
+  type StoredOAuthTokens
+} from '@modelcontextprotocol/client'
 import { spawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { createServer } from 'node:http'
@@ -60,7 +59,7 @@ type McpOAuthDiagnosticDetail = Omit<
 export class FileMcpOAuthProvider implements OAuthClientProvider {
   readonly clientMetadataUrl?: string
   private readonly store: FileMcpOAuthStore
-  private pendingAuthorizationCode: Promise<string> | null = null
+  private pendingAuthorizationCallback: Promise<URLSearchParams> | null = null
   private pendingState: string | null = null
 
   constructor(
@@ -96,24 +95,35 @@ export class FileMcpOAuthProvider implements OAuthClientProvider {
     }
   }
 
-  async clientInformation(): Promise<OAuthClientInformationMixed | undefined> {
+  async clientInformation(ctx?: OAuthClientInformationContext): Promise<StoredOAuthClientInformation | undefined> {
     const configured = this.configuredClientInformation()
     if (configured) return configured
-    return (await this.store.read()).clientInformation
+    return issuerCompatible((await this.store.read()).clientInformation, ctx?.issuer)
   }
 
-  async saveClientInformation(clientInformation: OAuthClientInformationMixed): Promise<void> {
+  async saveClientInformation(
+    clientInformation: StoredOAuthClientInformation,
+    ctx?: OAuthClientInformationContext
+  ): Promise<void> {
     if (this.configuredClientInformation()) return
-    await this.store.update((state) => ({ ...state, clientInformation }))
+    await this.store.update((state) => ({
+      ...state,
+      clientInformation: stampIssuer(clientInformation, ctx?.issuer)
+    }))
   }
 
-  async tokens(): Promise<OAuthTokens | undefined> {
-    return (await this.store.read()).tokens
+  async tokens(ctx?: OAuthClientInformationContext): Promise<StoredOAuthTokens | undefined> {
+    const tokens = (await this.store.read()).tokens
+    return ctx ? issuerCompatible(tokens, ctx.issuer) : tokens
   }
 
-  async saveTokens(tokens: OAuthTokens): Promise<void> {
+  async saveTokens(tokens: StoredOAuthTokens, ctx?: OAuthClientInformationContext): Promise<void> {
     await this.store.update((state) => {
-      const next: McpOAuthState = { ...state, tokens, tokensObtainedAt: this.now() }
+      const next: McpOAuthState = {
+        ...state,
+        tokens: stampIssuer(tokens, ctx?.issuer),
+        tokensObtainedAt: this.now()
+      }
       // A fresh token set means the prior authorization failure (if any) is
       // resolved; clear it so diagnostics flip from "error" to "authorized".
       delete next.lastError
@@ -141,31 +151,39 @@ export class FileMcpOAuthProvider implements OAuthClientProvider {
       throw new Error(`MCP OAuth authorization URL must use http or https for server "${this.serverId}"`)
     }
     const callback = this.startCallbackServer()
-    this.pendingAuthorizationCode = callback.code
+    this.pendingAuthorizationCallback = callback.params
     try {
       await callback.ready
       await this.openExternal(authorizationUrl)
     } catch (error) {
       callback.cancel()
-      this.pendingAuthorizationCode = null
+      this.pendingAuthorizationCallback = null
       this.pendingState = null
       throw error
     }
   }
 
-  async waitForAuthorizationCode(): Promise<string> {
-    const authorizationCode = this.pendingAuthorizationCode
-    if (!authorizationCode) {
+  async waitForAuthorizationCallback(): Promise<URLSearchParams> {
+    const callbackParams = this.pendingAuthorizationCallback
+    if (!callbackParams) {
       throw new Error(`MCP OAuth authorization was not started for server "${this.serverId}"`)
     }
     try {
-      return await authorizationCode
+      return await callbackParams
     } finally {
-      if (this.pendingAuthorizationCode === authorizationCode) {
-        this.pendingAuthorizationCode = null
+      if (this.pendingAuthorizationCallback === callbackParams) {
+        this.pendingAuthorizationCallback = null
         this.pendingState = null
       }
     }
+  }
+
+  /** Backward-compatible helper for callers that only need the OAuth code. */
+  async waitForAuthorizationCode(): Promise<string> {
+    const params = await this.waitForAuthorizationCallback()
+    const code = params.get('code')
+    if (!code) throw new Error(`MCP OAuth callback did not include a code for server "${this.serverId}"`)
+    return code
   }
 
   async saveCodeVerifier(codeVerifier: string): Promise<void> {
@@ -251,7 +269,7 @@ export class FileMcpOAuthProvider implements OAuthClientProvider {
     await this.store.clear()
   }
 
-  private configuredClientInformation(): OAuthClientInformationMixed | undefined {
+  private configuredClientInformation(): StoredOAuthClientInformation | undefined {
     if (!this.server.oauth?.clientId) return undefined
     return {
       client_id: this.server.oauth.clientId,
@@ -263,16 +281,16 @@ export class FileMcpOAuthProvider implements OAuthClientProvider {
     return this.server.oauth?.redirectPort ?? defaultMcpOAuthRedirectPort(this.serverId, this.server.url ?? '')
   }
 
-  private startCallbackServer(): { code: Promise<string>; ready: Promise<void>; cancel: () => void } {
+  private startCallbackServer(): { params: Promise<URLSearchParams>; ready: Promise<void>; cancel: () => void } {
     const timeoutMs = this.server.oauth?.callbackTimeoutMs ?? 120_000
-    let resolveCode!: (code: string) => void
-    let rejectCode!: (error: Error) => void
+    let resolveParams!: (params: URLSearchParams) => void
+    let rejectParams!: (error: Error) => void
     let completed = false
     let listening = false
     let timer: ReturnType<typeof setTimeout> | undefined
-    const codePromise = new Promise<string>((resolve, reject) => {
-      resolveCode = resolve
-      rejectCode = reject
+    const paramsPromise = new Promise<URLSearchParams>((resolve, reject) => {
+      resolveParams = resolve
+      rejectParams = reject
     })
     const closeServer = () => {
       if (timer) clearTimeout(timer)
@@ -281,17 +299,17 @@ export class FileMcpOAuthProvider implements OAuthClientProvider {
         listening = false
       }
     }
-    const resolveOnce = (code: string) => {
+    const resolveOnce = (params: URLSearchParams) => {
       if (completed) return
       completed = true
       closeServer()
-      resolveCode(code)
+      resolveParams(params)
     }
     const rejectOnce = (error: Error) => {
       if (completed) return
       completed = true
       closeServer()
-      rejectCode(error)
+      rejectParams(error)
     }
     const server = createServer((request, response) => {
       const url = new URL(request.url ?? '/', this.redirectUrl)
@@ -311,7 +329,7 @@ export class FileMcpOAuthProvider implements OAuthClientProvider {
       if (code) {
         response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
         response.end('<!doctype html><title>Kun OAuth</title><p>Authorization complete. You can close this window.</p>')
-        resolveOnce(code)
+        resolveOnce(new URLSearchParams(url.searchParams))
       } else {
         response.writeHead(400, { 'content-type': 'text/html; charset=utf-8' })
         response.end('<!doctype html><title>Kun OAuth</title><p>Authorization failed.</p>')
@@ -332,15 +350,28 @@ export class FileMcpOAuthProvider implements OAuthClientProvider {
       })
     })
     timer.unref()
-    codePromise.finally(() => {
+    paramsPromise.finally(() => {
       if (timer) clearTimeout(timer)
     }).catch(() => undefined)
     return {
-      code: codePromise,
+      params: paramsPromise,
       ready,
       cancel: () => rejectOnce(new Error(`MCP OAuth authorization was cancelled for server "${this.serverId}"`))
     }
   }
+}
+
+function issuerCompatible<T extends { issuer?: string }>(
+  value: T | undefined,
+  issuer: string | undefined
+): T | undefined {
+  if (!value || !issuer || !value.issuer || value.issuer === issuer) return value
+  return undefined
+}
+
+function stampIssuer<T extends { issuer?: string }>(value: T, issuer: string | undefined): T {
+  if (!issuer || value.issuer === issuer) return value
+  return { ...value, issuer }
 }
 
 export function createMcpOAuthProvider(

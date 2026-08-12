@@ -50,17 +50,18 @@ describe('AgentLoop transcript characterization', () => {
       model: 'transcript-model',
       reasoningEffort: 'high',
       tools: [],
-      history: [
+      history: expect.arrayContaining([
         expect.objectContaining({
           kind: 'user_message',
           role: 'user',
           status: 'completed',
           text: 'Assess the request.'
         })
-      ]
+      ])
     })
     expect(transcript.sessionItems).toEqual([
       expect.objectContaining({ kind: 'user_message', text: 'Assess the request.' }),
+      expect.objectContaining({ kind: 'model_context' }),
       expect.objectContaining({ kind: 'assistant_reasoning', text: 'First inspect the request.' }),
       expect.objectContaining({ kind: 'assistant_text', text: 'The request is healthy.' })
     ])
@@ -86,6 +87,7 @@ describe('AgentLoop transcript characterization', () => {
       turns: [expect.objectContaining({ status: 'completed' })]
     })
     expect(transcript.thread).toMatchObject({ id: 'thr_1', status: 'idle' })
+    expect(JSON.stringify(transcript.thread)).not.toContain('model_context')
     expect(transcript.turn).toMatchObject({ id: 'turn_1', status: 'completed' })
     expect(transcript.toolExecutionOrder).toEqual([])
   })
@@ -142,8 +144,10 @@ describe('AgentLoop transcript characterization', () => {
     ])
     expect(transcript.modelRequests[1]?.history.map((item) => item.kind)).toEqual([
       'user_message',
+      'model_context',
       'tool_call',
-      'tool_result'
+      'tool_result',
+      'model_context'
     ])
     expect(transcript.toolExecutionOrder).toEqual([
       {
@@ -156,8 +160,10 @@ describe('AgentLoop transcript characterization', () => {
     ])
     expect(transcript.sessionItems.map((item) => item.kind)).toEqual([
       'user_message',
+      'model_context',
       'tool_call',
       'tool_result',
+      'model_context',
       'assistant_text'
     ])
     expect(transcript.events.map((event) => event.kind)).toEqual(expect.arrayContaining([

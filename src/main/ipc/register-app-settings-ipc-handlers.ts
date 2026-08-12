@@ -100,6 +100,7 @@ export function registerAppSettingsIpcHandlers(options: RegisterAppIpcHandlersOp
     acquireRuntimeRequestLease,
     getRuntimeSettingsSyncStatus,
     restartRuntime,
+    restartAllKunProcesses,
     logError,
     logInfo: logInfoHandler = () => undefined
   } = options
@@ -505,6 +506,54 @@ export function registerAppSettingsIpcHandlers(options: RegisterAppIpcHandlersOp
   })
 
   ipcMain.handle('runtime:restart', async () => restartRuntime())
+  ipcMain.handle('runtime:restart-all', async (event): Promise<{ accepted: boolean; error?: string }> => {
+    assertTrustedWorkbenchSender(event, getMainWindow)
+    const parent = getMainWindow()
+    if (!parent || parent.isDestroyed()) throw new Error('Kun restart window is unavailable.')
+    const chinese = app.getLocale?.().toLowerCase().startsWith('zh') === true
+    const confirmation = await showMainWindowMessageBox(parent, {
+      type: 'warning',
+      title: chinese ? '重启所有 Kun 进程' : 'Restart all Kun processes',
+      message: chinese
+        ? '终止所有旧 Kun 进程并重新打开应用？'
+        : 'Stop every old Kun process and reopen the app?',
+      detail: chinese
+        ? 'production、development 运行时和 Service Manager 都会被终止。正在运行的任务、待审批操作及 TUI/CLI 会话将被中断；对话记录和设置不会删除。'
+        : 'Production and development runtimes plus the Service Manager will stop. Active tasks, pending approvals, and TUI/CLI sessions will be interrupted. Conversations and settings are preserved.',
+      buttons: chinese ? ['全部重启', '取消'] : ['Restart all', 'Cancel'],
+      defaultId: 1,
+      cancelId: 1,
+      noLink: true,
+      normalizeAccessKeys: true
+    })
+    if (confirmation.response !== 0) return { accepted: false }
+    try {
+      await restartAllKunProcesses()
+      return { accepted: true }
+    } catch (error) {
+      logError('runtime-restart-all', 'Failed to restart all Kun processes', {
+        message: error instanceof Error ? error.message : String(error)
+      })
+      await showMainWindowMessageBox(parent, {
+        type: 'error',
+        title: chinese ? 'Kun 重启失败' : 'Kun restart failed',
+        message: chinese
+          ? '未能终止全部 Kun 进程。'
+          : 'Kun could not stop every managed process.',
+        detail: chinese
+          ? '请查看日志后重试；应用和数据未被删除。'
+          : 'Check the logs and retry. The app and its data were not removed.',
+        buttons: [chinese ? '知道了' : 'OK'],
+        defaultId: 0,
+        cancelId: 0,
+        noLink: true
+      })
+      return {
+        accepted: true,
+        error: chinese ? '重启失败，请查看日志后重试。' : 'Restart failed. Check the logs and retry.'
+      }
+    }
+  })
   ipcMain.handle('runtime:settings-sync-status:get', () => getRuntimeSettingsSyncStatus())
 
 }

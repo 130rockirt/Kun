@@ -14,6 +14,7 @@ import { ContextCompactor } from '../../src/loop/context-compactor.js'
 import { COMPACTION_SYSTEM_PROMPT } from '../../src/loop/compaction-summary.js'
 import { effectiveHistoryAfterLatestCompaction } from '../../src/loop/compaction-history.js'
 import { resolveModelContextProfile } from '../../src/loop/model-context-profile.js'
+import { modelRequestContextText } from '../../src/loop/model-request-context.js'
 import { isPlanClarifyingQuestion } from '../../src/loop/agent-loop.js'
 import { LoopTelemetry } from '../../src/loop/loop-telemetry.js'
 import {
@@ -172,7 +173,7 @@ describe('AgentLoop', () => {
         provider: 'catalog-drift',
         model: 'catalog-drift',
         async *stream(request: ModelRequest): AsyncIterable<ModelStreamChunk> {
-          seenInstructions.push(request.contextInstructions ?? [])
+          seenInstructions.push([modelRequestContextText(request)])
           seenToolNames.push((request.tools ?? []).map((tool) => tool.name))
           modelCalls += 1
           if (modelCalls === 1) {

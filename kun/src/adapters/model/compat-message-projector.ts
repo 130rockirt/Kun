@@ -115,7 +115,8 @@ class CompatMessageProjector {
       const message = this.itemToMessage(
         item,
         thinkingMode && item?.turnId === activeTurnId,
-        supportsImages
+        supportsImages,
+        item?.kind === 'user_message' ? request.messageAttachments?.[item.id] : undefined
       )
       if (message) out.push(message)
     }
@@ -282,11 +283,20 @@ class CompatMessageProjector {
    * get a text summary instead. Defaults to true when no capability
    * resolver is configured (the runtime always sets one).
    */
-  private itemToMessage(item: TurnItem, thinkingMode: boolean, supportsImages: boolean): CompatChatMessage | null {
+  private itemToMessage(
+    item: TurnItem,
+    thinkingMode: boolean,
+    supportsImages: boolean,
+    messageAttachments?: NonNullable<ModelRequest['messageAttachments']>[string]
+  ): CompatChatMessage | null {
     switch (item.kind) {
       case 'user_message':
-        return { role: 'user', content: userMessageTextWithComposerContexts(item) }
+        return userMessageWithAttachments(
+          userMessageTextWithComposerContexts(item),
+          messageAttachments
+        )
       case 'goal_context':
+      case 'model_context':
       case 'interruption_note':
         return {
           role: 'system',
@@ -320,7 +330,11 @@ class CompatMessageProjector {
           : null
       case 'review':
         return item.status === 'completed' && item.reviewText?.trim()
-          ? { role: 'system', content: `Code review result from an earlier turn:\n${item.reviewText}` }
+          ? {
+              role: 'system',
+              content: `Code review result from an earlier turn:\n${item.reviewText}`,
+              [COMPAT_HISTORY_CONTEXT]: true
+            }
           : null
       case 'approval':
       case 'user_input':
@@ -440,6 +454,79 @@ function healToolMessagePairs(messages: CompatChatMessage[]): CompatChatMessage[
   return healed
 }
 
+function userMessageWithAttachments(
+  text: string,
+  attachments: NonNullable<ModelRequest['messageAttachments']>[string] | undefined
+): CompatChatMessage {
+  const message: CompatChatMessage = { role: 'user', content: text }
+  if (!attachments) return message
+  if (attachments.order?.length) {
+    for (const entry of attachments.order) {
+      switch (entry.kind) {
+        case 'image': {
+          const image = attachments.images[entry.index]
+          if (image) attachImagesToMessage(message, [image])
+          break
+        }
+        case 'text_fallback': {
+          const fallback = attachments.textFallbacks[entry.index]
+          if (fallback) appendTextToMessage(message, formatAttachmentTextFallback(fallback))
+          break
+        }
+        case 'document': {
+          const document = attachments.documents[entry.index]
+          if (document) appendTextToMessage(message, formatAttachmentDocument(document))
+          break
+        }
+        case 'unavailable': {
+          const unavailable = attachments.unavailable[entry.index]
+          if (unavailable) appendTextToMessage(message, unavailable.text)
+          break
+        }
+      }
+    }
+    return message
+  }
+  attachImagesToMessage(message, attachments.images)
+  appendTextToMessage(message, attachments.textFallbacks.map(formatAttachmentTextFallback).join('\n\n'))
+  appendTextToMessage(message, attachments.documents.map(formatAttachmentDocument).join('\n\n'))
+  appendTextToMessage(message, attachments.unavailable.map((item) => item.text).join('\n\n'))
+  return message
+}
+
+function attachImagesToMessage(
+  message: CompatChatMessage,
+  attachments: NonNullable<ModelRequest['attachments']>
+): void {
+  if (attachments.length === 0) return
+  const parts: CompatChatMessageContentPart[] = []
+  if (typeof message.content === 'string' && message.content) {
+    parts.push({ type: 'text', text: message.content })
+  } else if (Array.isArray(message.content)) {
+    parts.push(...message.content)
+  }
+  for (const attachment of attachments) {
+    parts.push({
+      type: 'image_url',
+      image_url: { url: `data:${attachment.mimeType};base64,${attachment.dataBase64}` }
+    })
+  }
+  message.content = parts
+}
+
+function appendTextToMessage(message: CompatChatMessage, text: string): void {
+  if (!text) return
+  if (typeof message.content === 'string') {
+    message.content = message.content ? `${message.content}\n\n${text}` : text
+    return
+  }
+  if (Array.isArray(message.content)) {
+    message.content.push({ type: 'text', text })
+    return
+  }
+  message.content = text
+}
+
 function attachImagesToLatestUserMessage(
   messages: CompatChatMessage[],
   attachments: NonNullable<ModelRequest['attachments']>
@@ -447,19 +534,7 @@ function attachImagesToLatestUserMessage(
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index]
     if (message.role !== 'user') continue
-    const parts: CompatChatMessageContentPart[] = []
-    if (typeof message.content === 'string' && message.content) {
-      parts.push({ type: 'text', text: message.content })
-    }
-    for (const attachment of attachments) {
-      parts.push({
-        type: 'image_url',
-        image_url: {
-          url: `data:${attachment.mimeType};base64,${attachment.dataBase64}`
-        }
-      })
-    }
-    message.content = parts
+    attachImagesToMessage(message, attachments)
     return
   }
 }
@@ -472,15 +547,7 @@ function attachTextFallbacksToLatestUserMessage(
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index]
     if (message.role !== 'user') continue
-    if (typeof message.content === 'string') {
-      message.content = message.content ? `${message.content}\n\n${text}` : text
-      return
-    }
-    if (Array.isArray(message.content)) {
-      message.content.push({ type: 'text', text })
-      return
-    }
-    message.content = text
+    appendTextToMessage(message, text)
     return
   }
 }
@@ -493,15 +560,7 @@ function attachDocumentsToLatestUserMessage(
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index]
     if (message.role !== 'user') continue
-    if (typeof message.content === 'string') {
-      message.content = message.content ? `${message.content}\n\n${text}` : text
-      return
-    }
-    if (Array.isArray(message.content)) {
-      message.content.push({ type: 'text', text })
-      return
-    }
-    message.content = text
+    appendTextToMessage(message, text)
     return
   }
 }

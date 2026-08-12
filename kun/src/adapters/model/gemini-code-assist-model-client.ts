@@ -9,9 +9,10 @@ import {
   compatHttpFailureLog
 } from './compat-http-diagnostics.js'
 import { projectCompatMessages } from './compat-message-projector.js'
-import type {
-  CompatChatMessage,
-  CompatChatMessageContentPart
+import {
+  COMPAT_HISTORY_CONTEXT,
+  type CompatChatMessage,
+  type CompatChatMessageContentPart
 } from './compat-request-codecs.js'
 import { normalizeToolSpecs } from './compat-request-builder.js'
 import { IncrementalSseFrameBuffer } from './incremental-sse-frame-buffer.js'
@@ -366,11 +367,18 @@ export function buildGeminiCodeAssistRequest(input: {
     supportsImages: input.supportsImages ?? true
   })
   const systemText = messages
-    .filter((message) => message.role === 'system')
+    .filter((message) =>
+      message.role === 'system' && message[COMPAT_HISTORY_CONTEXT] !== true
+    )
     .map((message) => plainText(message.content).trim())
     .filter(Boolean)
     .join('\n\n')
-  const contents = geminiContents(messages.filter((message) => message.role !== 'system'))
+  const contents = geminiContents(messages.flatMap((message) => {
+    if (message.role !== 'system') return [message]
+    return message[COMPAT_HISTORY_CONTEXT] === true
+      ? [{ ...message, role: 'user' as const }]
+      : []
+  }))
   const tools = normalizeToolSpecs(input.request.tools)
   const generationConfig: Record<string, unknown> = {}
   if (input.request.maxTokens !== undefined) generationConfig.maxOutputTokens = input.request.maxTokens

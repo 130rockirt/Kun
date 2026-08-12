@@ -57,6 +57,27 @@ describe('cache diagnostics', () => {
     ]))
   })
 
+  it('reports a cache partition switch separately from stable-prefix drift', () => {
+    const result = diagnoseCacheUsage({
+      usage: { promptTokens: 100, cacheHitTokens: 0, cacheMissTokens: 100 },
+      previous: { ...stable, partitionHash: 'agent', partitionPhase: 'agent' },
+      current: { ...stable, partitionHash: 'plan', partitionPhase: 'plan' }
+    })
+    expect(result.reasons).toContain('cache_partition_changed')
+    expect(result.reasons).not.toContain('stable_prefix_changed')
+    expect(result.reasons).not.toContain('tool_catalog_changed')
+  })
+
+  it('records an explicit boundary when retained attachment content is unavailable', () => {
+    const result = diagnoseCacheUsage({
+      usage: { promptTokens: 100, cacheHitTokens: 80, cacheMissTokens: 20 },
+      previous: stable,
+      current: { ...stable, unavailableAttachmentCount: 1 }
+    })
+    expect(result.reasons).toContain('attachment_history_unavailable')
+    expect(result.suggestions.join(' ')).toContain('deterministic placeholders')
+  })
+
   it('does not invent rates when provider cache metrics are unavailable', () => {
     const result = diagnoseCacheUsage({
       usage: { promptTokens: 900 },

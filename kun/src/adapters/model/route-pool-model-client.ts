@@ -369,7 +369,12 @@ function targetSupportsRequest(
   resolve: (model: string, providerId?: string) => ModelCapabilityMetadata
 ): boolean {
   const capability = resolve(target.modelId, target.providerId)
-  if (request.attachments?.length && !capability.inputModalities.includes('image')) return false
+  const hasHistoricalImages = Object.values(request.messageAttachments ?? {})
+    .some((attachments) => attachments.images.length > 0)
+  if (
+    ((request.attachments?.length ?? 0) > 0 || hasHistoricalImages) &&
+    !capability.inputModalities.includes('image')
+  ) return false
   if (request.tools.length > 0 && !capability.supportsToolCalling) return false
   if (request.reasoningEffort && request.reasoningEffort !== 'off' && !capability.reasoning) return false
   if (request.maxTokens && capability.maxOutputTokens && request.maxTokens > capability.maxOutputTokens) return false

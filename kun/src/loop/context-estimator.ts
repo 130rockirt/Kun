@@ -71,6 +71,7 @@ export class ContextEstimator {
     switch (item.kind) {
       case 'user_message':
       case 'goal_context':
+      case 'model_context':
       case 'interruption_note':
       case 'assistant_text':
       case 'assistant_reasoning':

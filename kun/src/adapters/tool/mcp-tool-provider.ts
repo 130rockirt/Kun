@@ -325,7 +325,7 @@ export async function buildMcpToolProviders(
           const records: McpSearchCatalogRecord[] = []
           const previousFingerprint = catalogState.catalogFingerprint
           for (const state of connected) {
-            const listed = await refreshMcpConnectionCatalog(state)
+            const listed = await refreshMcpConnectionCatalog(state, 'refresh')
             records.push(...listed.map((tool) => createMcpSearchCatalogRecord(state, tool)))
           }
           catalogState.records = records

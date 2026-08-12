@@ -14,6 +14,7 @@ import { ContextCompactor } from '../../src/loop/context-compactor.js'
 import { COMPACTION_SYSTEM_PROMPT } from '../../src/loop/compaction-summary.js'
 import { effectiveHistoryAfterLatestCompaction } from '../../src/loop/compaction-history.js'
 import { resolveModelContextProfile } from '../../src/loop/model-context-profile.js'
+import { modelRequestContextText } from '../../src/loop/model-request-context.js'
 import { isPlanClarifyingQuestion } from '../../src/loop/agent-loop.js'
 import { LoopTelemetry } from '../../src/loop/loop-telemetry.js'
 import {
@@ -229,8 +230,8 @@ describe('AgentLoop', () => {
     expect(echoExecutions).toBe(2)
     expect(alternateExecutions).toBe(1)
     expect(requests[3]?.tools.map((tool) => tool.name)).toContain('alternate_lookup')
-    expect(requests[3]?.contextInstructions?.join('\n')).toContain('Tool-loop recovery:')
-    expect(requests[4]?.contextInstructions?.join('\n')).not.toContain('Tool-loop recovery:')
+    expect(modelRequestContextText(requests[3]!)).toContain('Tool-loop recovery:')
+    expect(modelRequestContextText(requests[4]!)).not.toContain('Tool-loop recovery:')
     expect((await h.turns.getTurn(h.threadId, h.turnId))?.status).toBe('completed')
     expect(h.inflight.size()).toBe(0)
   })
@@ -295,7 +296,7 @@ describe('AgentLoop', () => {
     expect(calls).toBe(5)
     expect(requests[3]?.tools).toHaveLength(1)
     expect(requests[4]?.tools).toHaveLength(0)
-    expect(requests[4]?.contextInstructions?.join('\n'))
+    expect(modelRequestContextText(requests[4]!))
       .toContain('Tool-loop final-answer recovery:')
     const items = await h.sessionStore.loadItems(h.threadId)
     expect(items).toContainEqual(expect.objectContaining({

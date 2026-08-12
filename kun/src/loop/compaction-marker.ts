@@ -18,6 +18,7 @@ function compactionDigestShape(item: TurnItem): unknown {
     case 'user_message':
       return { kind: item.kind, text: item.text }
     case 'goal_context':
+    case 'model_context':
     case 'interruption_note':
       return { kind: item.kind, text: item.text }
     case 'assistant_text':

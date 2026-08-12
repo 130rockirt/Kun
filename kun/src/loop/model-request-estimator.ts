@@ -51,6 +51,7 @@ export function estimateModelRequestInputTokenBreakdown(
     estimateTextFallbacks(request.attachmentTextFallbacks) +
     estimateDocuments(request.attachmentDocuments) +
     estimateImageAttachments(request.attachments) +
+    estimateMessageAttachments(request.messageAttachments) +
     estimateText(request.requiredToolName) +
     estimateText(request.reasoningEffort) +
     estimateText(request.serviceTier)
@@ -62,6 +63,17 @@ export function estimateModelRequestInputTokenBreakdown(
     other,
     total: tools + system + skills + messages + other
   }
+}
+
+function estimateMessageAttachments(
+  attachments: ModelRequest['messageAttachments']
+): number {
+  if (!attachments) return 0
+  return Object.values(attachments).reduce((sum, entry) => sum +
+    estimateImageAttachments(entry.images) +
+    estimateTextFallbacks(entry.textFallbacks) +
+    estimateDocuments(entry.documents) +
+    estimateText(entry.unavailable.map((item) => item.text).join('\n')), 0)
 }
 
 /**

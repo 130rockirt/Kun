@@ -6,6 +6,7 @@ import { LocalToolHost, type LocalTool } from './local-tool-host.js'
 import { catalogFingerprint, canUseMcpServer, isMcpServerTrusted, isMcpServerVisible, normalizeMcpToolName } from './mcp-naming.js'
 import { isMcpAuthorizationRequiredError } from './mcp-transport.js'
 import { errorMessage, formatMcpConnectionError } from './mcp-stdio-environment.js'
+import { projectMcpSchemaForModel } from './mcp-schema-projection.js'
 import type { McpClientLike, McpServerDiagnostic, McpToolDescriptor } from './mcp-types.js'
 import type { McpSearchCatalogRecord, McpSearchCatalogState } from './mcp-tool-search.js'
 import type { McpBackgroundReconnectOptions, McpConnectionState } from './mcp-tool-provider.js'
@@ -139,7 +140,7 @@ export function createMcpLocalTool(
   return LocalToolHost.defineTool({
     name: normalizeMcpToolName(state.serverId, descriptor.name),
     description: descriptor.description ?? `MCP tool ${descriptor.name} from ${state.serverId}`,
-    inputSchema: descriptor.inputSchema ?? { type: 'object' },
+    inputSchema: projectMcpSchemaForModel(descriptor.inputSchema),
     // An MCP server is a separate executable or remote authority. Its own
     // annotations are unauthenticated metadata, so it must not bypass the
     // host command sandbox by masquerading as a harmless tool call.
@@ -165,7 +166,7 @@ export function createMcpLocalTool(
       const result = await callMcpToolWithReconnect(
         state,
         { name: descriptor.name, arguments: args },
-        context.abortSignal,
+        context,
         state.server.timeoutMs,
         isMcpReplaySafe(descriptor.annotations)
       )
@@ -181,14 +182,23 @@ export function createMcpLocalTool(
   })
 }
 
-export async function listAllMcpTools(client: McpClientLike, timeout: number): Promise<McpToolDescriptor[]> {
+export async function listAllMcpTools(
+  client: McpClientLike,
+  timeout: number,
+  cacheMode: 'use' | 'refresh' | 'bypass' = 'use'
+): Promise<McpToolDescriptor[]> {
   const tools: McpToolDescriptor[] = []
+  const seenCursors = new Set<string>()
   let cursor: string | undefined
   do {
-    const listed = await client.listTools({ cursor, timeout })
+    const listed = await client.listTools({ cursor, timeout, cacheMode })
     tools.push(...listed.tools)
     cursor = listed.nextCursor
-  } while (cursor)
+    if (cursor !== undefined) {
+      if (seenCursors.has(cursor)) throw new Error('MCP tools/list returned a repeated pagination cursor')
+      seenCursors.add(cursor)
+    }
+  } while (cursor !== undefined)
   return tools
 }
 
@@ -202,7 +212,7 @@ export function createMcpSearchCatalogRecord(
     server: state.server,
     client: {
       callTool: (input, options) =>
-        callMcpToolWithReconnect(state, input, options?.signal, options?.timeout, isMcpReplaySafe(descriptor.annotations))
+        callMcpToolWithReconnect(state, input, options?.context, options?.timeout, isMcpReplaySafe(descriptor.annotations))
     },
     descriptor,
     normalizedName: normalizeMcpToolName(state.serverId, descriptor.name),
@@ -210,8 +220,11 @@ export function createMcpSearchCatalogRecord(
   }
 }
 
-export async function refreshMcpConnectionCatalog(state: McpConnectionState): Promise<McpToolDescriptor[]> {
-  const listed = await listAllMcpTools(state.client, state.server.timeoutMs)
+export async function refreshMcpConnectionCatalog(
+  state: McpConnectionState,
+  cacheMode: 'use' | 'refresh' | 'bypass' = 'use'
+): Promise<McpToolDescriptor[]> {
+  const listed = await listAllMcpTools(state.client, state.server.timeoutMs, cacheMode)
   state.toolNames = listed.map((tool) => tool.name).sort((a, b) => a.localeCompare(b))
   const nextFingerprint = catalogFingerprint(listed.map((tool) => tool.name))
   state.catalogDrift = Boolean(state.catalogFingerprint && state.catalogFingerprint !== nextFingerprint)
@@ -224,11 +237,12 @@ export async function refreshMcpConnectionCatalog(state: McpConnectionState): Pr
 async function callMcpToolWithReconnect(
   state: McpConnectionState,
   input: { name: string; arguments: Record<string, unknown> },
-  signal: AbortSignal | undefined,
+  context: ToolHostContext | undefined,
   timeout = state.server.timeoutMs,
   /** Whether this call is locally known to be replay-safe after a drop. */
   replaySafe = false
 ): Promise<unknown> {
+  const signal = context?.abortSignal
   // Track whether the request actually reached `callTool`. A failure while
   // (re)connecting BEFORE the request was sent means the tool definitely did
   // not run, so retrying it on the fresh connection is always safe.
@@ -236,7 +250,7 @@ async function callMcpToolWithReconnect(
   try {
     await ensureMcpConnectionForCall(state, signal)
     sentToServer = true
-    return await state.client.callTool(input, { signal, timeout })
+    return await state.client.callTool(input, { signal, timeout, context })
   } catch (error) {
     if (signal?.aborted) throw error
     // Deterministic server-side failures (validation errors, bad
@@ -253,7 +267,7 @@ async function callMcpToolWithReconnect(
       // Either the request never left (safe) or a locally trusted allow-list
       // marked it replay-safe — replay it on the reconnected client.
       const client = await reconnectMcpConnection(state, signal)
-      return client.callTool(input, { signal, timeout })
+      return client.callTool(input, { signal, timeout, context })
     }
     // A non-idempotent tool dropped mid-flight: it may already have run on the
     // server. Preserve that primary fact even when reconnect also fails: future
@@ -492,6 +506,10 @@ export function syncMcpDiagnostic(
     status,
     toolCount,
     toolNames: [...state.toolNames],
+    ...(state.client.protocolEra ? { protocolEra: state.client.protocolEra } : {}),
+    ...(state.client.protocolVersion ? { protocolVersion: state.client.protocolVersion } : {}),
+    ...(state.client.serverInfo ? { serverInfo: state.client.serverInfo } : {}),
+    ...(state.client.serverCapabilities ? { serverCapabilities: state.client.serverCapabilities } : {}),
     ...(state.catalogFingerprint ? { catalogFingerprint: state.catalogFingerprint } : {}),
     ...(state.catalogDrift !== undefined ? { catalogDrift: state.catalogDrift } : {}),
     ...(state.lastConnectedAt ? { lastConnectedAt: state.lastConnectedAt } : {}),

@@ -15,6 +15,7 @@ import { KunCapabilitiesConfig } from '../../src/contracts/capabilities.js'
 import { createChildAgentExecutor } from '../../src/delegation/child-agent-executor.js'
 import { InstructionRuntime } from '../../src/instructions/instruction-runtime.js'
 import type { ModelClient, ModelRequest, ModelStreamChunk } from '../../src/ports/model-client.js'
+import { modelRequestContextText } from '../../src/loop/model-request-context.js'
 import { RuntimeEventRecorder } from '../../src/services/runtime-event-recorder.js'
 import { SkillRuntime } from '../../src/skills/skill-runtime.js'
 import { model } from '../support/child-agent-executor-fixtures.js'
@@ -75,12 +76,12 @@ describe('child agent executor', () => {
       threadId: 'child_1',
       model: 'child-test',
       systemPrompt: 'child system',
-      history: [
+      history: expect.arrayContaining([
         expect.objectContaining({
           kind: 'user_message',
           text: 'Research the issue'
         })
-      ]
+      ])
     })
     expect(seen[0]?.tools).toEqual([])
   })
@@ -119,7 +120,7 @@ describe('child agent executor', () => {
         signal: new AbortController().signal
       })
 
-      expect(seen[0]?.contextInstructions?.join('\n')).toContain('Child workspace rule.')
+      expect(modelRequestContextText(seen[0]!)).toContain('Child workspace rule.')
     } finally {
       await rm(root, { recursive: true, force: true })
     }
@@ -224,7 +225,7 @@ describe('child agent executor', () => {
         signal: new AbortController().signal
       })
 
-      expect(seen[0]?.contextInstructions?.join('\n') ?? '').not.toContain('HIDDEN SKILL INSTRUCTION')
+      expect(modelRequestContextText(seen[0]!)).not.toContain('HIDDEN SKILL INSTRUCTION')
       expect(seen[0]?.tools?.map((tool) => tool.name) ?? []).not.toContain('load_skill')
     } finally {
       await rm(root, { recursive: true, force: true })

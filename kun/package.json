@@ -84,7 +84,7 @@
     "@google/gemini-cli": "0.53.0",
     "@kun/extension-api": "file:../packages/extension-api",
     "@kun/provider-catalog": "file:../packages/provider-catalog",
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/client": "^2.0.0",
     "@xmldom/xmldom": "^0.9.10",
     "ajv": "^8.20.0",
     "better-sqlite3": "^12.10.0",

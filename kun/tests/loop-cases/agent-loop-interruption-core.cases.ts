@@ -15,6 +15,7 @@ import type { ApprovalRequest } from '../../src/domain/approval.js'
 import { InflightTracker } from '../../src/loop/inflight-tracker.js'
 import { SteeringQueue } from '../../src/loop/steering-queue.js'
 import { ContextCompactor } from '../../src/loop/context-compactor.js'
+import { modelRequestContextText } from '../../src/loop/model-request-context.js'
 import {
   AgentLoop,
   buildRuntimeContextInstruction,
@@ -113,7 +114,8 @@ describe('AgentLoop interruption', () => {
     expect(model.requests.length).toBeGreaterThan(0)
     expect(model.requests[0]?.history.map((item) => item.kind)).toEqual([
       'user_message',
-      'goal_context'
+      'goal_context',
+      'model_context'
     ])
     const goalContext = model.requests[0]?.history[1]
     expect(goalContext).toMatchObject({
@@ -124,7 +126,7 @@ describe('AgentLoop interruption', () => {
       throw new Error('expected goal context in model history')
     }
     expect(goalContext.text).not.toContain('Tokens used')
-    expect(model.requests[0]?.contextInstructions?.join('\n') ?? '').not.toContain('active thread goal')
+    expect(modelRequestContextText(model.requests[0]!)).not.toContain('active thread goal')
     expect(model.requests.every((request) =>
       request.history.filter((item) => item.kind === 'goal_context').length === 1
     )).toBe(true)
@@ -271,16 +273,13 @@ describe('AgentLoop interruption', () => {
     await expect(loop.runTurn(threadId, started.turnId)).resolves.toBe('completed')
 
     expect(model.requests).toHaveLength(1)
-    expect(model.requests[0]?.modeInstruction).toContain('SINGLE SCREEN')
-    expect(model.requests[0]?.modeInstruction).toContain('COMPLETE MULTI-SCREEN EXPERIENCE')
-    expect(model.requests[0]?.modeInstruction).toContain('MODIFY EXISTING DESIGN')
-    expect(model.requests[0]?.contextInstructions?.[0]).toContain(
-      'Kun assembled the following dynamic context'
-    )
-    expect(model.requests[0]?.contextInstructions).toEqual(expect.arrayContaining([
-      expect.stringContaining('<kun_context_block kind="runtime-context" authority="runtime">'),
-      expect.stringContaining('Current opened project absolute path: `/tmp/workspace`')
-    ]))
+    const designContext = modelRequestContextText(model.requests[0]!)
+    expect(designContext).toContain('SINGLE SCREEN')
+    expect(designContext).toContain('COMPLETE MULTI-SCREEN EXPERIENCE')
+    expect(designContext).toContain('MODIFY EXISTING DESIGN')
+    expect(designContext).toContain('Kun append-only model context update')
+    expect(designContext).toContain('kind="runtime-context" authority="runtime"')
+    expect(designContext).toContain('Current opened project absolute path: `/tmp/workspace`')
   })
 
   it('keeps the source turn active until its GraphRun is terminal (#1031)', async () => {
@@ -387,30 +386,28 @@ describe('AgentLoop interruption', () => {
       .some((event) => event.kind === 'error' && event.code === 'turn_step_limit')).toBe(false)
     expect(model.requests).toHaveLength(3)
     expect(model.requests[0]?.requiredToolName).toBeUndefined()
-    expect(model.requests[0]?.modeInstruction).toContain('Graph Mode is active')
-    expect(model.requests[0]?.modeInstruction).toContain(
+    expect(modelRequestContextText(model.requests[0]!)).toContain('Graph Mode is active')
+    expect(modelRequestContextText(model.requests[0]!)).toContain(
       'You are the source Graph Lead: the original main agent'
     )
-    expect(model.requests[0]?.modeInstruction).toContain('## Required operating loop')
+    expect(modelRequestContextText(model.requests[0]!)).toContain('## Required operating loop')
     expect(model.requests[0]?.tools.map((tool) => tool.name)).toEqual(['graph_define_plan'])
     expect(model.requests[1]?.requiredToolName).toBeUndefined()
     expect(model.requests[1]?.tools.map((tool) => tool.name)).toEqual(['graph_define_plan'])
-    expect(model.requests[1]?.contextInstructions).toEqual(expect.arrayContaining([
-      expect.stringContaining('did not call `graph_define_plan`')
-    ]))
+    expect(modelRequestContextText(model.requests[1]!)).toContain('did not call `graph_define_plan`')
     expect(model.requests[2]?.requiredToolName).toBeUndefined()
     expect(model.requests[2]?.tools.map((tool) => tool.name)).toEqual([
       'graph_define_plan',
       'graph_control_run',
       'graph_supervise_node'
     ])
-    expect(model.requests[2]?.modeInstruction).toContain(
+    expect(modelRequestContextText(model.requests[2]!)).toContain(
       'You are the source Graph Lead: the original main agent'
     )
-    expect(model.requests[2]?.modeInstruction).toContain(
+    expect(modelRequestContextText(model.requests[2]!)).toContain(
       'Use `graph_supervise_node overview`'
     )
-    expect(model.requests[2]?.modeInstruction).toContain(
+    expect(modelRequestContextText(model.requests[2]!)).toContain(
       'Do not treat dispatch or one milestone as completion'
     )
     expect(model.requests[2]?.history).toEqual(expect.arrayContaining([

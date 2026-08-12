@@ -362,6 +362,7 @@ export type ProbeState = {
   latencyMs?: number
   total?: number
   message?: string
+  suggestedProxyUrl?: string
 }
 
 export function isCodexProvider(provider: Pick<ModelProviderProfileV1, 'id' | 'presetSource'>): boolean {

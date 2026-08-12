@@ -36,6 +36,7 @@ describe('thread usage formatting', () => {
 
   it('uses only the latest LLM request cache hit rate for active conversation displays', () => {
     expect(primaryCacheHitRate({ cacheHitRate: 0.4, lastTurnCacheHitRate: 0.95 })).toBe(0.95)
+    expect(primaryCacheHitRate({ cacheHitRate: 0.4, lastTurnCacheHitRate: 0 })).toBeNull()
     expect(primaryCacheHitRate({ cacheHitRate: 0.4, lastTurnCacheHitRate: null })).toBeNull()
     expect(primaryCacheHitRate({ cacheHitRate: null, lastTurnCacheHitRate: null })).toBeNull()
   })

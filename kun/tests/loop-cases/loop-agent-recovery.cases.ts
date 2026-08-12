@@ -14,6 +14,7 @@ import { ContextCompactor } from '../../src/loop/context-compactor.js'
 import { COMPACTION_SYSTEM_PROMPT } from '../../src/loop/compaction-summary.js'
 import { effectiveHistoryAfterLatestCompaction } from '../../src/loop/compaction-history.js'
 import { resolveModelContextProfile } from '../../src/loop/model-context-profile.js'
+import { modelRequestContextText } from '../../src/loop/model-request-context.js'
 import { isPlanClarifyingQuestion } from '../../src/loop/agent-loop.js'
 import { LoopTelemetry } from '../../src/loop/loop-telemetry.js'
 import {
@@ -409,7 +410,7 @@ describe('AgentLoop', () => {
 
     expect(status).toBe('completed')
     expect(calls).toBe(3)
-    expect(requests[2]?.contextInstructions?.join('\n')).toContain('Tool continuation recovery')
+    expect(modelRequestContextText(requests[2]!)).toContain('Tool continuation recovery')
     expect(items).toEqual(expect.arrayContaining([
       expect.objectContaining({
         kind: 'assistant_text',
@@ -459,7 +460,7 @@ describe('AgentLoop', () => {
     expect(status).toBe('failed')
     expect(calls).toBe(4)
     expect(requests[3]?.tools).toEqual([])
-    expect(requests[3]?.contextInstructions?.join('\n')).toContain('Tool final-answer recovery')
+    expect(modelRequestContextText(requests[3]!)).toContain('Tool final-answer recovery')
     expect(items).toEqual(expect.arrayContaining([
       expect.objectContaining({
         kind: 'error',
@@ -515,7 +516,7 @@ describe('AgentLoop', () => {
     expect(calls).toBe(4)
     expect(requests[2]?.tools.map((tool) => tool.name)).toContain('write_helper')
     expect(requests[3]?.tools).toEqual([])
-    expect(requests[3]?.contextInstructions?.join('\n')).toContain('Tool final-answer recovery')
+    expect(modelRequestContextText(requests[3]!)).toContain('Tool final-answer recovery')
     expect(items).toEqual(expect.arrayContaining([
       expect.objectContaining({
         kind: 'assistant_text',
@@ -597,7 +598,7 @@ describe('AgentLoop', () => {
     expect(status).toBe('completed')
     expect(calls).toBe(6)
     expect(executions).toBe(4)
-    expect(requests[4]?.contextInstructions?.join('\n')).toContain('Tool failure recovery')
+    expect(modelRequestContextText(requests[4]!)).toContain('Tool failure recovery')
     const failedResult = requests[4]?.history.find(
       (item) => item.kind === 'tool_result' && item.toolName === 'search'
     )
@@ -648,7 +649,7 @@ describe('AgentLoop', () => {
     expect(status).toBe('failed')
     expect(calls).toBe(4)
     expect(requests[3]?.tools).toEqual([])
-    expect(requests[3]?.contextInstructions?.join('\n'))
+    expect(modelRequestContextText(requests[3]!))
       .toContain('Tool failure final-answer recovery')
     expect(items).toEqual(expect.arrayContaining([
       expect.objectContaining({ code: 'post_tool_failure_recovery_exhausted' })

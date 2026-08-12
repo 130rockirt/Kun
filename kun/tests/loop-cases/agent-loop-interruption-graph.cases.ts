@@ -15,6 +15,7 @@ import type { ApprovalRequest } from '../../src/domain/approval.js'
 import { InflightTracker } from '../../src/loop/inflight-tracker.js'
 import { SteeringQueue } from '../../src/loop/steering-queue.js'
 import { ContextCompactor } from '../../src/loop/context-compactor.js'
+import { modelRequestContextText } from '../../src/loop/model-request-context.js'
 import {
   AgentLoop,
   buildRuntimeContextInstruction,
@@ -281,7 +282,7 @@ describe('AgentLoop interruption', () => {
     await expect(racedContinuation!).resolves.toBe('completed')
     expect((await turns.getTurn(threadId, started.turnId))?.status).toBe('completed')
     expect(model.requests).toHaveLength(2)
-    expect(model.requests[1]?.modeInstruction).toContain('Graph Mode is active')
+    expect(modelRequestContextText(model.requests[1]!)).toContain('Graph Mode is active')
     expect(model.requests[1]?.history).toEqual(expect.arrayContaining([
       expect.objectContaining({
         kind: 'user_message',
@@ -381,9 +382,7 @@ describe('AgentLoop interruption', () => {
     await expect(loop.runTurn(threadId, started.turnId)).resolves.toBe('suspended')
     expect(model.requests).toHaveLength(2)
     expect(model.requests.every((request) => request.requiredToolName === undefined)).toBe(true)
-    expect(model.requests[1]?.contextInstructions).toEqual(expect.arrayContaining([
-      expect.stringContaining('did not call `graph_define_plan`')
-    ]))
+    expect(modelRequestContextText(model.requests[1]!)).toContain('did not call `graph_define_plan`')
     const turn = await turns.getTurn(threadId, started.turnId)
     expect(turn?.status).toBe('running')
     expect(turn?.graphPlanningLifecycle).toMatchObject({
@@ -511,10 +510,10 @@ describe('AgentLoop interruption', () => {
     expect(model.requests).toHaveLength(3)
     expect(model.requests[1]?.requiredToolName).toBeUndefined()
     expect(model.requests[1]?.tools.map((tool) => tool.name)).toEqual(['graph_define_plan'])
-    expect(model.requests[1]?.modeInstruction).toContain('structured issues')
-    expect(model.requests[1]?.modeInstruction).toContain('repository-relative paths')
-    expect(model.requests[1]?.modeInstruction).toContain('actual next tool arguments')
-    expect(model.requests[1]?.modeInstruction).toContain('Explanatory prose')
+    expect(modelRequestContextText(model.requests[1]!)).toContain('structured issues')
+    expect(modelRequestContextText(model.requests[1]!)).toContain('repository-relative paths')
+    expect(modelRequestContextText(model.requests[1]!)).toContain('actual next tool arguments')
+    expect(modelRequestContextText(model.requests[1]!)).toContain('Explanatory prose')
     expect(model.requests[1]?.history).toEqual(expect.arrayContaining([
       expect.objectContaining({
         kind: 'tool_result',

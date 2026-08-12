@@ -255,7 +255,7 @@ describe('createChildAgentExecutor', () => {
     expect(JSON.stringify(model.requests[0]?.history)).toContain(initialPrompt)
     expect(JSON.stringify(model.requests[0]?.history)).not.toContain('HOST PPT CONTROL')
     expect(model.requests[0]?.systemPrompt).toContain('HOST PPT CONTROL: plan automatically')
-    expect(model.requests[0]?.attachmentDocuments).toEqual([
+    expect(Object.values(model.requests[0]?.messageAttachments ?? {})[0]?.documents).toEqual([
       expect.objectContaining({ id: 'att_111111111111111111111111', text: 'launch brief' })
     ])
     expect(JSON.stringify(model.requests[1]?.history)).toContain(initialPrompt)

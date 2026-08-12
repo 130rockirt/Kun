@@ -100,6 +100,10 @@ export function WorkbenchTopActions({
   const [failedIconIds, setFailedIconIds] = useState<Set<string>>(() => new Set())
   const [guiUpdateState, setGuiUpdateState] = useState<GuiUpdateState>({ status: 'idle' })
   const [applyingGuiUpdate, setApplyingGuiUpdate] = useState(false)
+  const [restartingAllKun, setRestartingAllKun] = useState(false)
+  const [restartAllKunError, setRestartAllKunError] = useState('')
+  const restartAllKunAvailable =
+    typeof window !== 'undefined' && typeof window.kunGui?.restartAllKunProcesses === 'function'
   const editorMenuRef = useRef<HTMLDivElement>(null)
   const selectedEditor = useMemo(
     () => editors.find((editor) => editor.id === selectedEditorId) ?? editors[0],
@@ -275,6 +279,24 @@ export function WorkbenchTopActions({
     }
   }
 
+  const restartAllKunProcesses = async (): Promise<void> => {
+    if (restartingAllKun || !restartAllKunAvailable) return
+    setRestartAllKunError('')
+    setRestartingAllKun(true)
+    try {
+      const result = await window.kunGui.restartAllKunProcesses()
+      if (result.error) setRestartAllKunError(result.error)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      setRestartAllKunError(message)
+      if (typeof window.kunGui?.logError === 'function') {
+        await window.kunGui.logError('runtime-restart-all', 'Top bar Kun restart failed', { message })
+      }
+    } finally {
+      setRestartingAllKun(false)
+    }
+  }
+
   const renderGuiUpdateIcon = (): ReactElement => {
     if (guiUpdateState.status === 'downloading' || guiUpdateState.status === 'installing' || applyingGuiUpdate) {
       return <Loader2 className="h-4 w-4 animate-spin" strokeWidth={2} />
@@ -379,6 +401,30 @@ export function WorkbenchTopActions({
           <PanelRight className={TOPBAR_ICON_CLASS} strokeWidth={1.75} />
         </button>
       ) : null}
+
+      <button
+        type="button"
+        onClick={() => void restartAllKunProcesses()}
+        disabled={restartingAllKun || !restartAllKunAvailable}
+        className="ds-topbar-action-button inline-flex h-8 shrink-0 items-center gap-1.5 rounded-xl border border-amber-200/75 bg-white/70 px-2.5 text-[11.5px] font-semibold text-ds-muted shadow-[0_1px_2px_rgba(15,23,42,0.04),inset_0_1px_0_rgba(255,255,255,0.72)] backdrop-blur-sm transition hover:border-amber-300/90 hover:bg-amber-50/90 hover:text-ds-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400/25 disabled:cursor-not-allowed disabled:opacity-50 dark:border-amber-800/55 dark:bg-amber-950/15 dark:text-ds-muted dark:shadow-none dark:hover:border-amber-700/80 dark:hover:bg-amber-950/35 dark:hover:text-amber-100"
+        data-tooltip={restartingAllKun
+          ? t('restartAllKunProcessesRestarting')
+          : restartAllKunError || t('restartAllKunProcessesTooltip')}
+        aria-label={restartingAllKun
+          ? t('restartAllKunProcessesRestarting')
+          : t('restartAllKunProcesses')}
+      >
+        {restartingAllKun ? (
+          <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-600/80" strokeWidth={2} />
+        ) : (
+          <RefreshCw className="h-3.5 w-3.5 text-amber-600/80" strokeWidth={1.85} />
+        )}
+        <span>{restartingAllKun ? t('restartAllKunProcessesRestarting') : t('restartAllKunProcesses')}</span>
+        <span
+          aria-hidden="true"
+          className={`h-1.5 w-1.5 rounded-full bg-amber-500 ${restartingAllKun ? 'animate-pulse' : ''}`}
+        />
+      </button>
     </div>
   )
 }

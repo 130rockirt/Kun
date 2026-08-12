@@ -14,6 +14,7 @@ import { ContextCompactor } from '../../src/loop/context-compactor.js'
 import { COMPACTION_SYSTEM_PROMPT } from '../../src/loop/compaction-summary.js'
 import { effectiveHistoryAfterLatestCompaction } from '../../src/loop/compaction-history.js'
 import { resolveModelContextProfile } from '../../src/loop/model-context-profile.js'
+import { modelRequestContextText } from '../../src/loop/model-request-context.js'
 import { isPlanClarifyingQuestion } from '../../src/loop/agent-loop.js'
 import { LoopTelemetry } from '../../src/loop/loop-telemetry.js'
 import {
@@ -224,7 +225,7 @@ describe('AgentLoop', () => {
         model: model.model
       })
       expect(requests[2]?.requiredToolName).toBeUndefined()
-      expect(requests[2]?.modeInstruction).toContain('You are in Plan mode.')
+      expect(modelRequestContextText(requests[2]!)).toContain('You are in Plan mode.')
       expect(requests[2]?.history).toEqual(expect.arrayContaining([
         expect.objectContaining({
           kind: 'user_message',

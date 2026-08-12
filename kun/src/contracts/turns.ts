@@ -13,6 +13,10 @@ import {
 } from './composer-context.js'
 import { GraphOrchestrationStrategySchema } from './graph.js'
 import { GraphPlanningDraftStatusSchema } from './graph-planning.js'
+import { TurnReasoningEffortSchema } from './turn-reasoning.js'
+
+export { TurnReasoningEffortSchema } from './turn-reasoning.js'
+export type { TurnReasoningEffort } from './turn-reasoning.js'
 
 /**
  * Upper bound for a turn-scoped persona. Personas are short stance/voice
@@ -33,8 +37,6 @@ export const SubagentResumeRequestSchema = z.object({
   expectedResumeCount: z.number().int().nonnegative()
 }).strict()
 export type SubagentResumeRequest = z.infer<typeof SubagentResumeRequestSchema>
-export const TurnReasoningEffortSchema = z.enum(['auto', 'off', 'low', 'medium', 'high', 'max'])
-export type TurnReasoningEffort = z.infer<typeof TurnReasoningEffortSchema>
 /** Canonical Codex/API request value. The legacy UI label is "fast". */
 export const TurnServiceTierSchema = z.literal('priority')
 export type TurnServiceTier = z.infer<typeof TurnServiceTierSchema>

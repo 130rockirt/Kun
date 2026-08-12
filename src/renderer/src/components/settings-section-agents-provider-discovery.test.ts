@@ -443,6 +443,46 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
       expect(rendererText(renderer)).not.toContain('No handler registered')
     })
 
+    it('offers the detected system proxy and lets users copy the probe error', async () => {
+      probeModelProvider.mockResolvedValueOnce({
+        ok: false,
+        message: 'Request failed: read ECONNRESET',
+        suggestedProxyUrl: 'http://127.0.0.1:10808/'
+      })
+      const clipboardWrite = vi.fn(async () => undefined)
+      vi.stubGlobal('navigator', { clipboard: { writeText: clipboardWrite } })
+      const settings = defaultModelProviderSettings()
+      const zenmux = modelProviderPresetProfile(getModelProviderPreset('zenmux')!, 'sk-ai-v1-test')
+      const update = vi.fn()
+      const renderer = await mountProviders({
+        ...baseCtx(),
+        provider: { ...settings, providers: [...settings.providers, zenmux] },
+        kun: { ...defaultKunRuntimeSettings(), providerId: zenmux.id, model: 'auto' },
+        update
+      })
+
+      await act(async () => {
+        findButton(renderer, 'Test connection').props.onClick()
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+
+      expect(rendererText(renderer)).toContain(
+        'System proxy http://127.0.0.1:10808/ can reach this provider.'
+      )
+      await act(async () => findButton(renderer, 'Copy error').props.onClick())
+      expect(clipboardWrite).toHaveBeenCalledWith(
+        'Connection failed: Request failed: read ECONNRESET'
+      )
+
+      await act(async () => findButton(renderer, 'Use detected proxy').props.onClick())
+      expect(update).toHaveBeenCalledWith({
+        provider: {
+          proxy: { enabled: true, url: 'http://127.0.0.1:10808/' }
+        }
+      })
+    })
+
     it('imports Cursor mixed-vendor context, vision, and SDK aliases', async () => {
       cursorSubscriptionDiscover.mockResolvedValueOnce({
         account: { apiKeyName: 'test-key', userEmail: 'cursor@example.com' },

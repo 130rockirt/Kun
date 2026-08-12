@@ -189,6 +189,11 @@ export function createThreadReviewActions(
       composerProviderId,
       composerModel
     )
+    const composerReasoningEffort = composerReasoningEffortForSelection(
+      get().composerModelGroups,
+      composerModel,
+      composerProviderId
+    )
     let activeThreadId = get().activeThreadId
     try {
       if (!activeThreadId) {
@@ -253,7 +258,8 @@ export function createThreadReviewActions(
       const { turnId, userMessageItemId } = await p.reviewThread(activeThreadId, target, {
         ...(composerModel ? { model: composerModel } : {}),
         ...(composerProviderId ? { providerId: composerProviderId } : {}),
-        ...(composerAccountId ? { accountId: composerAccountId } : {})
+        ...(composerAccountId ? { accountId: composerAccountId } : {}),
+        reasoningEffort: composerReasoningEffort
       })
       if (userMessageItemId && userModelChip) {
         rememberTurnModel(activeThreadId, userMessageItemId, userModelChip)

@@ -102,7 +102,11 @@ export function subscribeThreadEventsWithRecovery(
     .then(() => {
       if (signal.aborted) return
       const state = get()
-      if (state.activeThreadId !== threadId || !state.busy) return
+      // The selected thread must remain subscribed even after its parent turn
+      // settles. Runtime restart reconciliation can publish child
+      // `runtime_restart` events after the parent became non-busy; stopping
+      // recovery here leaves those cards permanently stuck at queued/running.
+      if (state.activeThreadId !== threadId) return
       scheduleSseRecovery(threadId, terminalError, get)
     })
 }
@@ -129,7 +133,7 @@ function scheduleSseRecovery(
   state.timer = setTimeout(() => {
     state.timer = undefined
     const current = get()
-    if (current.activeThreadId !== threadId || !current.busy) {
+    if (current.activeThreadId !== threadId) {
       sseRecoveries.delete(threadId)
       return
     }

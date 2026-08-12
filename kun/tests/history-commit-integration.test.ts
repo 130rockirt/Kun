@@ -153,7 +153,7 @@ describe('revision-aware history integrations', () => {
 
     const threadItems = (await h.threadStore.get(h.threadId))?.turns.flatMap((turn) => turn.items) ?? []
     expect([...threadItems.map((item) => item.id)].sort()).toEqual(
-      [...sessionItems.map((item) => item.id)].sort()
+      [...sessionItems.filter((item) => item.kind !== 'model_context').map((item) => item.id)].sort()
     )
     const sessionById = new Map(sessionItems.map((item) => [item.id, item]))
     for (const threadItem of threadItems) {

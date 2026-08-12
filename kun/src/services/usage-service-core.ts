@@ -266,5 +266,11 @@ export const CACHE_REGRESSION_COOLDOWN_TURNS = 5
  * regression *cause* we want to detect, not a reason to reset the baseline.
  */
 export function cacheHistoryKey(threadId: string, signature: CacheRequestSignature): string {
-  return `${threadId}::${signature.providerId}::${signature.model}::${signature.endpointFormat}`
+  return [
+    threadId,
+    signature.providerId,
+    signature.model,
+    signature.endpointFormat,
+    signature.partitionHash ?? 'legacy'
+  ].join('::')
 }

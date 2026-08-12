@@ -1,4 +1,4 @@
-import { net } from 'electron'
+import { session } from 'electron'
 import {
   isCustomModelEndpointFormat,
   normalizeModelEndpointFormat,
@@ -47,86 +47,19 @@ const MAX_MODEL_ID_LENGTH = 512
 // provider is reachable at all, not wait out another full timeout (which would
 // make a failed test connection take up to 20s).
 const DIRECT_PROBE_TIMEOUT_MS = 5_000
-const CHROMIUM_PROBE_HEAD_START_MS = 250
 const ANTHROPIC_VERSION = '2023-06-01'
 
 type ProviderProbeFetch = typeof fetchWithOptionalProxy
 
-/**
- * Provider discovery is a desktop UI operation. Without an explicit model
- * proxy, prefer Chromium's network stack so system proxy/PAC and desktop TLS
- * behavior match links opened by the app. Node fetch remains a fallback for
- * environments where Electron net is unavailable or rejects the request.
- */
 export async function fetchProviderProbe(
   input: string | URL,
   init: RequestInit | undefined,
   proxyUrl: string
 ): Promise<Response> {
-  if (proxyUrl.trim()) return fetchWithOptionalProxy(input, init, proxyUrl)
-  if (typeof net?.fetch !== 'function') return fetchWithOptionalProxy(input, init, '')
-
-  const chromiumController = new AbortController()
-  const chromiumRequest = net.fetch(
-    input.toString(),
-    withProbeTransportSignal(init, chromiumController)
-  ) as Promise<Response>
-  let headStartTimer: ReturnType<typeof setTimeout> | undefined
-  const earlyChromiumResult = await Promise.race([
-    chromiumRequest.then(
-      (response) => ({ kind: 'response' as const, response }),
-      (error: unknown) => ({ kind: 'error' as const, error })
-    ),
-    new Promise<{ kind: 'pending' }>((resolve) => {
-      headStartTimer = setTimeout(
-        () => resolve({ kind: 'pending' }),
-        CHROMIUM_PROBE_HEAD_START_MS
-      )
-    })
-  ])
-  if (headStartTimer) clearTimeout(headStartTimer)
-  if (earlyChromiumResult.kind === 'response') return earlyChromiumResult.response
-
-  const nodeController = new AbortController()
-  const nodeRequest = fetchWithOptionalProxy(
-    input,
-    withProbeTransportSignal(init, nodeController),
-    ''
-  )
-  if (earlyChromiumResult.kind === 'error') {
-    try {
-      return await nodeRequest
-    } catch (nodeError) {
-      throw new AggregateError(
-        [earlyChromiumResult.error, nodeError],
-        'Chromium and Node network requests both failed'
-      )
-    }
-  }
-
-  try {
-    const winner = await Promise.any([
-      chromiumRequest.then((response) => ({ transport: 'chromium' as const, response })),
-      nodeRequest.then((response) => ({ transport: 'node' as const, response }))
-    ])
-    if (winner.transport === 'chromium') nodeController.abort()
-    else chromiumController.abort()
-    return winner.response
-  } catch (error) {
-    const causes = error instanceof AggregateError ? error.errors : [error]
-    throw new AggregateError(causes, 'Chromium and Node network requests both failed')
-  }
-}
-
-function withProbeTransportSignal(
-  init: RequestInit | undefined,
-  controller: AbortController
-): RequestInit | undefined {
-  if (!init) return { signal: controller.signal }
-  const signal = init.signal
-    ? AbortSignal.any([init.signal, controller.signal])
-    : controller.signal
-  return { ...init, signal }
+  // Keep the probe on the same transport as real model requests. Otherwise a
+  // Chromium/system-proxy success can hide that the Node-based Kun runtime is
+  // still unable to reach the provider.
+  return fetchWithOptionalProxy(input, init, proxyUrl)
 }
 
 export function providerProbeHeaders(
@@ -228,6 +161,15 @@ export async function probeModelProvider(
         message: `${message} The configured model-request proxy failed, but a direct connection reached the provider. Disable or update the proxy in Settings > Providers.`
       }
     }
+    if (!proxyUrl) {
+      const systemProxyUrl = await resolveElectronSystemProxyUrl(url)
+      if (
+        systemProxyUrl &&
+        await providerReachable(url, endpointFormat, request.apiKey, fetcher, systemProxyUrl)
+      ) {
+        return { ok: false, message, suggestedProxyUrl: systemProxyUrl }
+      }
+    }
     return { ok: false, message }
   }
   const latencyMs = Date.now() - startedAt
@@ -280,17 +222,56 @@ async function directProviderReachable(
   apiKey: string,
   fetcher: ProviderProbeFetch
 ): Promise<boolean> {
+  return providerReachable(url, endpointFormat, apiKey, fetcher, '')
+}
+
+async function providerReachable(
+  url: string,
+  endpointFormat: ModelEndpointFormat,
+  apiKey: string,
+  fetcher: ProviderProbeFetch,
+  proxyUrl: string
+): Promise<boolean> {
   try {
     const response = await fetcher(url, {
       method: 'GET',
       headers: providerProbeHeaders(endpointFormat, apiKey),
       signal: AbortSignal.timeout(DIRECT_PROBE_TIMEOUT_MS)
-    }, '')
+    }, proxyUrl)
     await response.body?.cancel().catch(() => undefined)
     return true
   } catch {
     return false
   }
+}
+
+export async function resolveElectronSystemProxyUrl(url: string): Promise<string> {
+  try {
+    const rules = await session.defaultSession.resolveProxy(url)
+    for (const entry of rules.split(';')) {
+      const [kind = '', target = ''] = entry.trim().split(/\s+/, 2)
+      if (!target || kind.toUpperCase() === 'DIRECT') continue
+      const protocol = kind.toUpperCase() === 'HTTPS'
+        ? 'https:'
+        : kind.toUpperCase() === 'SOCKS' || kind.toUpperCase() === 'SOCKS5'
+          ? 'socks5:'
+          : kind.toUpperCase() === 'SOCKS4'
+            ? 'socks4:'
+            : kind.toUpperCase() === 'PROXY'
+              ? 'http:'
+              : ''
+      if (!protocol) continue
+      const candidate = new URL(`${protocol}//${target}`)
+      if (!candidate.hostname || !candidate.port) continue
+      return candidate.toString()
+    }
+  } catch (error) {
+    logWarn('provider-probe', 'Failed to resolve the desktop system proxy.', {
+      requestUrl: url,
+      message: describeProviderProbeError(error)
+    })
+  }
+  return ''
 }
 
 export function parseModelIds(body: string): string[] {

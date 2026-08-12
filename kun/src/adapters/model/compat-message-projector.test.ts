@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   makeAssistantReasoningItem,
   makeGoalContextItem,
+  makeModelContextItem,
   makeToolCallItem,
   makeToolResultItem,
   makeUserItem
@@ -163,6 +164,85 @@ describe('compat composer context projection', () => {
       content: 'Goal objective stays in append-only history.'
     })
     expect(goal?.[COMPAT_HISTORY_CONTEXT]).toBe(true)
+  })
+
+  it('keeps prior wire history intact when a later turn selects another persona', () => {
+    const firstUser = makeUserItem({
+      id: 'persona-user-one', threadId: 'thread-personas', turnId: 'turn-one', text: 'First request'
+    })
+    const firstContext = makeModelContextItem({
+      id: 'persona-context-one', threadId: 'thread-personas', turnId: 'turn-one',
+      stepIndex: 0, contentDigest: 'first', createdAt: '2026-08-12T00:00:00.000Z',
+      blocks: [{ key: 'persona:user:0', kind: 'persona', authority: 'user', state: 'active', digest: 'one' }],
+      text: 'Persona one capsule'
+    })
+    const firstRequest: ModelRequest = {
+      threadId: 'thread-personas', turnId: 'turn-one', model: 'test-model',
+      systemPrompt: 'stable-system-prefix', prefix: [], history: [firstUser, firstContext],
+      tools: [], abortSignal: new AbortController().signal
+    }
+    const firstWire = projectCompatMessages(firstRequest, {
+      thinkingMode: false, supportsImages: false
+    })
+    const secondUser = makeUserItem({
+      id: 'persona-user-two', threadId: 'thread-personas', turnId: 'turn-two', text: 'Second request'
+    })
+    const secondContext = makeModelContextItem({
+      id: 'persona-context-two', threadId: 'thread-personas', turnId: 'turn-two',
+      stepIndex: 0, contentDigest: 'second', createdAt: '2026-08-12T00:01:00.000Z',
+      blocks: [{ key: 'persona:user:0', kind: 'persona', authority: 'user', state: 'active', digest: 'two' }],
+      text: 'Persona two capsule'
+    })
+    const secondWire = projectCompatMessages({
+      ...firstRequest,
+      turnId: 'turn-two',
+      history: [...firstRequest.history, secondUser, secondContext]
+    }, { thinkingMode: false, supportsImages: false })
+
+    expect(secondWire.slice(0, firstWire.length)).toEqual(firstWire)
+    expect(secondWire.slice(firstWire.length).map((message) => [message.role, message.content]))
+      .toEqual([
+        ['user', 'Second request'],
+        ['system', 'Persona two capsule']
+      ])
+    expect(secondWire.at(-1)?.[COMPAT_HISTORY_CONTEXT]).toBe(true)
+  })
+
+  it('replays images and documents on the user message that originally owned them', () => {
+    const first = makeUserItem({
+      id: 'attachment-user-one', threadId: 'thread-attachments', turnId: 'turn-one',
+      text: 'Inspect image', attachmentIds: ['image-one']
+    })
+    const second = makeUserItem({
+      id: 'attachment-user-two', threadId: 'thread-attachments', turnId: 'turn-two',
+      text: 'Inspect document', attachmentIds: ['document-two']
+    })
+    const messages = projectCompatMessages({
+      threadId: 'thread-attachments', turnId: 'turn-two', model: 'vision-model',
+      prefix: [], history: [first, second], tools: [],
+      messageAttachments: {
+        [first.id]: {
+          images: [{ id: 'image-one', name: 'one.png', mimeType: 'image/png', dataBase64: 'aW1hZ2U=' }],
+          textFallbacks: [], documents: [], unavailable: []
+        },
+        [second.id]: {
+          images: [], textFallbacks: [],
+          documents: [{
+            id: 'document-two', name: 'two.txt', mimeType: 'text/plain',
+            text: 'document body', byteSize: 13
+          }],
+          unavailable: []
+        }
+      },
+      abortSignal: new AbortController().signal
+    }, { thinkingMode: false, supportsImages: true })
+
+    expect(messages[0]?.content).toEqual([
+      { type: 'text', text: 'Inspect image' },
+      { type: 'image_url', image_url: { url: 'data:image/png;base64,aW1hZ2U=' } }
+    ])
+    expect(String(messages[1]?.content)).toContain('Inspect document')
+    expect(String(messages[1]?.content)).toContain('document body')
   })
 
   it('replays complete historical DeepSeek tool rounds only on the identical route', () => {
