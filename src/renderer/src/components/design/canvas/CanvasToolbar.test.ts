@@ -29,6 +29,22 @@ describe('CanvasToolbar prototype playback', () => {
     expect(html).not.toContain('aria-label="Play prototype"')
   })
 
+  it('uses the diagram toolset on the central Work whiteboard', () => {
+    const html = renderToStaticMarkup(
+      createElement(CanvasToolbar, {
+        workspaceRoot: '/workspace',
+        surface: 'work',
+        onExportCanvas: async () => {}
+      })
+    )
+
+    expect(html).toContain('aria-label="Select"')
+    expect(html).toContain('aria-label="AI image"')
+    expect(html).toContain('aria-label="Export whiteboard"')
+    expect(html).not.toContain('aria-label="Screen"')
+    expect(html).not.toContain('aria-label="Play prototype"')
+  })
+
   it('shows agent action seeds on the design canvas', () => {
     const html = renderToStaticMarkup(
       createElement(CanvasToolbar, {

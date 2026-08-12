@@ -12,11 +12,13 @@ import {
   Plus,
   RefreshCw,
   Settings,
+  Shapes,
   Smartphone,
   Trash2
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import type { WorkspaceEntry } from '@shared/workspace-file'
+import type { WorkWhiteboard } from '../../write/write-workspace-store'
 import { confirmDialog } from '../../lib/confirm-dialog'
 import { formatWorkspacePickerError } from '../../lib/format-workspace-picker-error'
 import { revealWorkspacePathInFileManager } from '../../lib/open-workspace-path'
@@ -39,6 +41,7 @@ import {
 } from '../sidebar/SidebarPrimitives'
 import { SidebarFocusModeControl } from '../sidebar/SidebarFocusModeControl'
 import { WriteFileTree } from './WriteFileTree'
+import { WorkWhiteboardSidebarSection } from './WorkWhiteboardSidebarSection'
 
 type Props = {
   activeView: 'chat' | 'write' | 'claw' | 'schedule' | 'workflow'
@@ -56,6 +59,8 @@ type EntryDialog =
   | { kind: 'create-folder'; parentDirectory?: string; value: string }
   | { kind: 'rename'; entry: WorkspaceEntry; value: string }
   | { kind: 'delete'; entry: WorkspaceEntry }
+  | { kind: 'rename-whiteboard'; board: WorkWhiteboard; value: string }
+  | { kind: 'delete-whiteboard'; board: WorkWhiteboard }
 
 type Translate = (key: string, opts?: Record<string, unknown>) => string
 
@@ -74,10 +79,12 @@ export function WriteSidebar({
   const addClawChannel = useChatStore((s) => s.addClawChannel)
   const deleteClawChannel = useChatStore((s) => s.deleteClawChannel)
   const ensureWriteThreadForWorkspace = useChatStore((s) => s.ensureWriteThreadForWorkspace)
+  const createWriteThread = useChatStore((s) => s.createWriteThread)
   const runtimeConnection = useChatStore((s) => s.runtimeConnection)
   const [entryDialog, setEntryDialog] = useState<EntryDialog | null>(null)
   const [collapsedWorkspaces, setCollapsedWorkspaces] = useState<Record<string, boolean>>({})
   const [revealError, setRevealError] = useState<string | null>(null)
+  const [whiteboardMenuId, setWhiteboardMenuId] = useState<string | null>(null)
   const revealErrorTimerRef = useRef<number | null>(null)
   // Field-level subscription: the sidebar must not re-render on fileContent or
   // selection updates, which fire on every keystroke in the editor.
@@ -92,6 +99,8 @@ export function WriteSidebar({
     loadingDirs,
     treeError,
     activeFilePath,
+    activeWhiteboardId,
+    whiteboards,
     loadWriteSettings,
     selectWriteWorkspace,
     addWriteWorkspace,
@@ -103,7 +112,11 @@ export function WriteSidebar({
     renameEntry,
     deleteEntry,
     refreshWorkspace,
-    setFileError
+    setFileError,
+    createWhiteboard,
+    openWhiteboard,
+    renameWhiteboard,
+    deleteWhiteboard
   } = useWriteWorkspaceStore(
     useShallow((s) => ({
       defaultWorkspaceRoot: s.defaultWorkspaceRoot,
@@ -116,6 +129,8 @@ export function WriteSidebar({
       loadingDirs: s.loadingDirs,
       treeError: s.treeError,
       activeFilePath: s.activeFilePath,
+      activeWhiteboardId: s.activeWhiteboardId,
+      whiteboards: s.whiteboards,
       loadWriteSettings: s.loadWriteSettings,
       selectWriteWorkspace: s.selectWriteWorkspace,
       addWriteWorkspace: s.addWriteWorkspace,
@@ -127,7 +142,11 @@ export function WriteSidebar({
       renameEntry: s.renameEntry,
       deleteEntry: s.deleteEntry,
       refreshWorkspace: s.refreshWorkspace,
-      setFileError: s.setFileError
+      setFileError: s.setFileError,
+      createWhiteboard: s.createWhiteboard,
+      openWhiteboard: s.openWhiteboard,
+      renameWhiteboard: s.renameWhiteboard,
+      deleteWhiteboard: s.deleteWhiteboard
     }))
   )
 
@@ -218,6 +237,12 @@ export function WriteSidebar({
     event.preventDefault()
     if (!entryDialog) return
 
+    if (entryDialog.kind === 'delete-whiteboard') {
+      const ok = await deleteWhiteboard(entryDialog.board.id)
+      if (ok) setEntryDialog(null)
+      return
+    }
+
     if (entryDialog.kind === 'delete') {
       const ok = await deleteEntry(workspaceRoot, entryDialog.entry.path)
       if (ok) setEntryDialog(null)
@@ -226,6 +251,15 @@ export function WriteSidebar({
 
     const value = entryDialog.value.trim()
     if (!value) return
+
+    if (entryDialog.kind === 'rename-whiteboard') {
+      if (value === entryDialog.board.title) {
+        setEntryDialog(null)
+        return
+      }
+      if (await renameWhiteboard(entryDialog.board.id, value)) setEntryDialog(null)
+      return
+    }
 
     if (entryDialog.kind === 'rename') {
       if (value === entryDialog.entry.name) {
@@ -261,6 +295,15 @@ export function WriteSidebar({
     } catch (error) {
       setFileError(formatWorkspacePickerError(error))
     }
+  }
+
+  const createWorkWhiteboard = async (): Promise<void> => {
+    if (!workspaceRoot.trim()) {
+      await pickWriteWorkspace()
+      return
+    }
+    const threadId = runtimeConnection === 'ready' ? await createWriteThread(workspaceRoot) : null
+    await createWhiteboard(workspaceRoot, { threadId: threadId ?? undefined })
   }
 
   const selectWorkspaceAndThread = async (workspacePath: string): Promise<void> => {
@@ -330,6 +373,11 @@ export function WriteSidebar({
           variant="accent"
         />
         <SidebarCommandRow
+          icon={<Shapes className="h-4 w-4 text-accent" strokeWidth={1.8} />}
+          label={t('writeCreateWhiteboard', { defaultValue: 'New whiteboard' })}
+          onClick={() => void createWorkWhiteboard()}
+        />
+        <SidebarCommandRow
           icon={<FolderOpen className="h-4 w-4" strokeWidth={1.75} />}
           label={t('writeAddWorkspace')}
           onClick={() => void pickWriteWorkspace()}
@@ -350,6 +398,25 @@ export function WriteSidebar({
         />
       ) : (
       <div className="ds-no-drag flex min-h-0 flex-1 flex-col">
+        <WorkWhiteboardSidebarSection
+          whiteboards={Object.values(whiteboards)}
+          activeWhiteboardId={activeWhiteboardId}
+          openMenuId={whiteboardMenuId}
+          label={t('writeWhiteboards', { defaultValue: 'Whiteboards' })}
+          moreActionsLabel={t('writeMoreActions')}
+          renameLabel={t('writeRenameEntry')}
+          deleteLabel={t('writeEntryDialogDelete')}
+          onOpen={openWhiteboard}
+          onToggleMenu={(boardId) => setWhiteboardMenuId((current) => current === boardId ? null : boardId)}
+          onRename={(board) => {
+            setWhiteboardMenuId(null)
+            setEntryDialog({ kind: 'rename-whiteboard', board, value: board.title })
+          }}
+          onDelete={(board) => {
+            setWhiteboardMenuId(null)
+            setEntryDialog({ kind: 'delete-whiteboard', board })
+          }}
+        />
         <SidebarSectionHeader
           label={t('writeSpaces')}
           actions={
@@ -513,7 +580,7 @@ export function WriteSidebar({
         onClose={() => setEntryDialog(null)}
         onValueChange={(value) =>
           setEntryDialog((current) => {
-            if (!current || current.kind === 'delete') return current
+            if (!current || current.kind === 'delete' || current.kind === 'delete-whiteboard') return current
             return { ...current, value }
           })
         }
@@ -529,22 +596,27 @@ function entryDialogTitle(dialog: EntryDialog, t: Translate): string {
   if (dialog.kind === 'create-file') return t('writeCreateFile')
   if (dialog.kind === 'create-folder') return t('writeCreateFolder')
   if (dialog.kind === 'rename') return t('writeRenameEntry')
+  if (dialog.kind === 'rename-whiteboard') return t('writeRenameEntry')
+  if (dialog.kind === 'delete-whiteboard') return t('writeEntryDialogDelete')
   return dialog.entry.type === 'directory' ? t('writeDeleteFolder') : t('writeDeleteFile')
 }
 
 function entryDialogSubmitLabel(dialog: EntryDialog, t: Translate): string {
-  if (dialog.kind === 'rename') return t('writeEntryDialogRename')
-  if (dialog.kind === 'delete') return t('writeEntryDialogDelete')
+  if (dialog.kind === 'rename' || dialog.kind === 'rename-whiteboard') return t('writeEntryDialogRename')
+  if (dialog.kind === 'delete' || dialog.kind === 'delete-whiteboard') return t('writeEntryDialogDelete')
   return t('writeEntryDialogCreate')
 }
 
 function entryDialogDescription(dialog: EntryDialog, t: Translate): string {
+  if (dialog.kind === 'delete-whiteboard') {
+    return t('writeDeleteWhiteboardConfirm', { name: dialog.board.title, defaultValue: `Delete “${dialog.board.title}”? Source documents and exported presentations will be kept.` })
+  }
   if (dialog.kind === 'delete') {
     return dialog.entry.type === 'directory'
       ? t('writeDeleteFolderConfirm', { name: dialog.entry.name })
       : t('writeDeleteFileConfirm', { name: dialog.entry.name })
   }
-  if (dialog.kind === 'rename') return t('writeRenameEntryPrompt')
+  if (dialog.kind === 'rename' || dialog.kind === 'rename-whiteboard') return t('writeRenameEntryPrompt')
   if (dialog.kind === 'create-file') return t('writeCreateFilePrompt')
   return t('writeCreateFolderPrompt')
 }
@@ -562,7 +634,7 @@ function WriteEntryDialog({
   onSubmit: (event: FormEvent<HTMLFormElement>) => void
   t: Translate
 }): ReactElement {
-  const deleting = dialog.kind === 'delete'
+  const deleting = dialog.kind === 'delete' || dialog.kind === 'delete-whiteboard'
   return (
     <div
       className="ds-no-drag fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/18 px-4 backdrop-blur-[2px] dark:bg-black/35"

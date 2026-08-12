@@ -12,6 +12,7 @@ const DEFAULT_AI_IMAGE_HEIGHT = 220
 
 type AiImageToolOptions = {
   openAssistant?: boolean
+  onRequestAssistant?: () => void
 }
 
 export function createAiImageTool(options: AiImageToolOptions = {}): CanvasToolHandler {
@@ -62,7 +63,8 @@ export function createAiImageTool(options: AiImageToolOptions = {}): CanvasToolH
 
       useCanvasViewportStore.getState().setActiveTool('select')
       useCanvasSelectionStore.getState().setSnapGuides([])
-      if (openAssistant) useDesignWorkspaceStore.getState().setCanvasAssistantOpen(true)
+      if (options.onRequestAssistant) options.onRequestAssistant()
+      else if (openAssistant) useDesignWorkspaceStore.getState().setCanvasAssistantOpen(true)
       commitCreatedShapeUndo(creationUndo, 'create-ai-image')
       previewId = null
       creationUndo = null

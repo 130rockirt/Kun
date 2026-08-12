@@ -465,9 +465,15 @@ export function useWorkbenchNavigationController({
   const startNewWriteAssistantConversation = useCallback((): void => {
     const writeState = useWriteWorkspaceStore.getState()
     const writeWorkspaceRoot = writeState.workspaceRoot || workspaceRoot
+    const activeBoardId = writeState.activeWhiteboardId
     setInput('')
     writeState.clearQuotedSelections()
-    void createWriteThread(writeWorkspaceRoot, writeState.activeFilePath ?? undefined)
+    void createWriteThread(writeWorkspaceRoot, writeState.activeFilePath ?? undefined).then((threadId) => {
+      if (!activeBoardId || !threadId) return
+      const latest = useWriteWorkspaceStore.getState()
+      if (latest.activeWhiteboardId !== activeBoardId) return
+      void latest.bindWhiteboardThread(activeBoardId, threadId)
+    })
   }, [createWriteThread, setInput, workspaceRoot])
 
   const pickWriteAssistantWorkspace = useCallback(async (): Promise<void> => {

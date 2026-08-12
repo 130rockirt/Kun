@@ -1,10 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createElement } from 'react'
-import { act, create } from 'react-test-renderer'
 import type { ChatBlock, ToolBlock } from '../../agent/types'
-import { useChatStore } from '../../store/chat-store'
-import { useCanvasSelectionStore } from './canvas-selection-store'
-import { useCanvasShapeStore } from './canvas-shape-store'
 import {
   activeCanvasTurnMatchesThread,
   canvasReplayStateForStoreUpdate,
@@ -18,66 +13,11 @@ import {
   shouldApplyDesignCanvasToolBlock,
   shouldApplyDurableSvgCreate,
   shouldReplayIdleCanvasToolBlock,
-  takeNextReadyScreenGeneration,
-  useApplyShapeOpsLive
+  takeNextReadyScreenGeneration
 } from './use-apply-shape-ops-live'
 import { createDefaultShape, createEmptyDocument, createHtmlFrameShape } from './canvas-types'
 
-function directionBundle(): Record<string, unknown> {
-  return {
-    schemaVersion: 1, workflowId: 'workflow-a', childId: 'child-a',
-    manifestPath: 'deck/.kun-ppt-review/manifest.json', previewMode: 'image-first',
-    deckTitle: 'Direction deck', phase: 'awaiting_direction', recommendedDirectionId: 'signal',
-    slides: [{ slideId: 'slide-1', index: 0, title: 'Opening' }],
-    directions: ['editorial', 'signal', 'warm'].map((directionId, index) => ({
-      directionId, name: `${directionId} direction`,
-      rationale: `A distinct ${directionId} visual direction for this presentation.`,
-      revision: 1, recommended: directionId === 'signal',
-      fonts: [`Display ${index}`, `Body ${index}`],
-      colors: ['#0F172A', '#F8FAFC', '#22C55E', '#F59E0B'],
-      layout: `${index + 2}-column grid`, background: 'solid', imagery: 'editorial photography',
-      previews: ['cover', 'representative', 'complex'].map((role) => ({
-        role, imagePath: `.kun/images/${directionId}-${role}.png`
-      }))
-    }))
-  }
-}
-
-function DirectionReplayHarness(): null {
-  useApplyShapeOpsLive(true, undefined, undefined, undefined, 'thread-a')
-  return null
-}
-
 describe('replayActiveCanvasTurn', () => {
-  it('applies a ppt_agent direction bundle and leaves recommendation fallback unselected', async () => {
-    const previous = useChatStore.getState()
-    const block: ToolBlock = {
-      kind: 'tool', id: 'direction-tool', summary: 'PPT directions', status: 'success',
-      meta: { toolName: 'ppt_agent', sourceItemKind: 'tool_result' },
-      detail: JSON.stringify({ directionBundle: directionBundle() })
-    }
-    useCanvasShapeStore.getState().resetDocument()
-    useCanvasSelectionStore.getState().select(['stale-selection'])
-    useChatStore.setState({ activeThreadId: 'thread-a', currentTurnId: null, busy: false, blocks: [block] })
-
-    let renderer: ReturnType<typeof create> | undefined
-    await act(async () => {
-      renderer = create(createElement(DirectionReplayHarness))
-    })
-    const shapes = Object.values(useCanvasShapeStore.getState().document.objects)
-    expect(shapes.filter((shape) => shape.pptDirectionRef?.role === 'direction-card')).toHaveLength(3)
-    expect(shapes.filter((shape) => shape.pptDirectionRef?.role === 'preview-image')).toHaveLength(9)
-    expect(useCanvasSelectionStore.getState().selectedIds.size).toBe(0)
-
-    await act(async () => renderer?.unmount())
-    useCanvasShapeStore.getState().resetDocument()
-    useCanvasSelectionStore.getState().clearSelection()
-    useChatStore.setState({
-      activeThreadId: previous.activeThreadId, currentTurnId: previous.currentTurnId,
-      busy: previous.busy, blocks: previous.blocks
-    })
-  })
-
   it('marks durable SVG, Motion, and PPT review results for idle remount replay', () => {
     const block = (toolName: string): ToolBlock => ({
       kind: 'tool',

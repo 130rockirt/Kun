@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  addEditorItemToGroup,
   addTabToGroup,
   createWriteDocumentSession,
   emptyWriteEditorLayout,
@@ -68,6 +69,26 @@ describe('write editor layout', () => {
     })
   })
 
+  it('projects a typed whiteboard item without treating its key as a file path', () => {
+    const layout = addEditorItemToGroup(emptyWriteEditorLayout(), 'primary', {
+      kind: 'whiteboard',
+      boardId: 'board-1',
+      viewMode: 'rich'
+    })
+
+    expect(layout.groups[0]).toMatchObject({
+      activePath: 'whiteboard:board-1',
+      tabs: [{ kind: 'whiteboard', boardId: 'board-1' }]
+    })
+    expect(projectFocusedDocument(layout, {})).toMatchObject({
+      activeFilePath: null,
+      activeFileKind: null,
+      activeWhiteboardId: 'board-1',
+      fileLoading: false,
+      saveStatus: 'saved'
+    })
+  })
+
   it('restores layout metadata but rejects paths outside the workspace', () => {
     const storage = new MemoryStorage()
     vi.stubGlobal('window', { localStorage: storage })
@@ -83,6 +104,56 @@ describe('write editor layout', () => {
       }]
     }
     persistWriteEditorLayout('/work', layout)
+    expect(readWriteEditorLayout('/work')?.groups[0]).toEqual({
+      id: 'primary',
+      activePath: '/work/a.md',
+      tabs: [{ path: '/work/a.md', viewMode: 'live' }]
+    })
+  })
+
+  it('restores mixed legacy file and typed whiteboard tabs', () => {
+    const storage = new MemoryStorage()
+    vi.stubGlobal('window', { localStorage: storage })
+    persistWriteEditorLayout('/work', {
+      ...emptyWriteEditorLayout(),
+      groups: [{
+        id: 'primary',
+        activePath: 'whiteboard:board-1',
+        tabs: [
+          { path: '/work/a.md', viewMode: 'live' },
+          { kind: 'whiteboard', boardId: 'board-1', viewMode: 'rich' }
+        ]
+      }]
+    })
+
+    expect(readWriteEditorLayout('/work')?.groups[0]).toEqual({
+      id: 'primary',
+      activePath: 'whiteboard:board-1',
+      tabs: [
+        { path: '/work/a.md', viewMode: 'live' },
+        { kind: 'whiteboard', boardId: 'board-1', viewMode: 'rich' }
+      ]
+    })
+  })
+
+  it('drops malformed whiteboard identities during layout normalization', () => {
+    const storage = new MemoryStorage()
+    vi.stubGlobal('window', { localStorage: storage })
+    storage.setItem(layoutStorageKey('/work'), JSON.stringify({
+      version: 1,
+      orientation: 'single',
+      ratio: 0.5,
+      focusedGroupId: 'primary',
+      groups: [{
+        id: 'primary',
+        activePath: 'whiteboard:../escape',
+        tabs: [
+          { kind: 'whiteboard', boardId: '../escape', viewMode: 'rich' },
+          { path: '/work/a.md', viewMode: 'live' }
+        ]
+      }]
+    }))
+
     expect(readWriteEditorLayout('/work')?.groups[0]).toEqual({
       id: 'primary',
       activePath: '/work/a.md',

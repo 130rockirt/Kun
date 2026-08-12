@@ -126,6 +126,9 @@ export type WriteAssistantMessageContext = {
   activeFilePath: string | null
   documentEpoch: number
   contentRevision: number
+  /** Present for a first-class Work whiteboard send; fences async sends across board switches. */
+  whiteboardId?: string
+  whiteboardRevision?: number
   /** Filled after the first explicit ensure; queued sends keep this identity. */
   threadId?: string
 }

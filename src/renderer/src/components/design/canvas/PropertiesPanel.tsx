@@ -60,19 +60,21 @@ import {
 import { MotionKeyframeControls } from './properties-panel/MotionKeyframeControls'
 import { useCanvasMotionStore } from '../../../design/motion/canvas-motion-store'
 import { evaluateMotionTarget } from '../../../design/motion/evaluator'
+import type { CanvasSurface } from '../../../design/canvas/canvas-surface'
+import { isDesignCanvasSurface } from '../../../design/canvas/canvas-surface'
 
 export { propertiesPanelShellClass, propertiesPanelTriggerClass } from './properties-panel/shell'
 
 type Props = {
-  surface?: 'design' | 'code'
+  surface?: CanvasSurface
   onImplementDesign?: (artifact: DesignArtifact) => void
 }
 
 export function shouldShowImageAnnotationAction(
-  surface: 'design' | 'code',
+  surface: CanvasSurface,
   filledImageSelected: boolean
 ): boolean {
-  return (surface === 'design' || surface === 'code') && filledImageSelected
+  return Boolean(surface && filledImageSelected)
 }
 
 export function nextInspectorOpenForSelection(
@@ -87,20 +89,20 @@ export function nextInspectorOpenForSelection(
 }
 
 export function shouldPromoteHtmlFrameInspectorUpdateToManual(
-  surface: 'design' | 'code',
+  surface: CanvasSurface,
   patch: Partial<CanvasShape>
 ): boolean {
-  return surface === 'design' && !patch.devicePreset && (patch.width !== undefined || patch.height !== undefined)
+  return isDesignCanvasSurface(surface) && !patch.devicePreset && (patch.width !== undefined || patch.height !== undefined)
 }
 
 export function commitInspectorUpdate(
-  surface: 'design' | 'code',
+  surface: CanvasSurface,
   label: string,
   ids: string[],
   patch: Partial<CanvasShape>
 ): void {
   const motionState = useCanvasMotionStore.getState()
-  if (surface === 'design' && motionState.open && motionState.playing) return
+  if (isDesignCanvasSurface(surface) && motionState.open && motionState.playing) return
   const beforeDoc = useCanvasShapeStore.getState().document
   const editableIds = filterEditableShapeIds(beforeDoc, ids)
   commitUpdate(label, ids, patch)
@@ -343,7 +345,7 @@ function PropertiesPanelInner({ surface = 'design', onImplementDesign }: Props):
           value={rot}
           onCommit={(n) => updateAll('set-rotation', { rotation: ((n % 360) + 360) % 360 })}
         />
-        {surface === 'design' && shapes.length === 1 ? (
+        {isDesignCanvasSurface(surface) && shapes.length === 1 ? (
           <MotionKeyframeControls shape={shapes[0]} />
         ) : null}
       </Section>
@@ -383,7 +385,7 @@ function PropertiesPanelInner({ surface = 'design', onImplementDesign }: Props):
         </Section>
       )}
 
-      {surface === 'design' && singleHtmlFrame && (
+      {isDesignCanvasSurface(surface) && singleHtmlFrame && (
         <Section title={t('canvasInspectorScreen', 'Screen')}>
           <div className="flex items-center gap-1 rounded-[10px] bg-ds-hover/35 p-0.5 dark:bg-white/5">
             {DEVICE_PRESETS.map(({ id, icon: Icon, w: dw, h: dh }) => {

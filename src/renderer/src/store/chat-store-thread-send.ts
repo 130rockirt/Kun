@@ -326,10 +326,21 @@ export async function sendThreadMessage(
     }
     const p = getProvider()
     if (writeContext || get().route === 'write') {
-      const writeThreadId = await get().ensureWriteThreadForWorkspace(
-        writeContext?.workspaceRoot,
-        writeContext ? writeContext.activeFilePath ?? '' : undefined
-      )
+      const boardThreadId = writeContext?.whiteboardId
+        ? writeContext.threadId?.trim() || null
+        : null
+      const boardThread = boardThreadId
+        ? get().threads.find((thread) => thread.id === boardThreadId) ?? null
+        : null
+      const boardWorkspace = normalizeWorkspaceRoot(writeContext?.workspaceRoot)
+      const writeThreadId = boardThreadId
+        ? boardThread && normalizeWorkspaceRoot(boardThread.workspace) === boardWorkspace
+          ? boardThreadId
+          : null
+        : await get().ensureWriteThreadForWorkspace(
+            writeContext?.workspaceRoot,
+            writeContext ? writeContext.activeFilePath ?? '' : undefined
+          )
       if (!writeThreadId) return false
       if (writeContext?.threadId && writeThreadId !== writeContext.threadId) return false
       // ensureWriteThreadForWorkspace may await selectThread. If the user

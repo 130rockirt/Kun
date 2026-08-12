@@ -154,6 +154,7 @@
   "writeAssistantCurrentView": "Current view",
   "writeAssistantSlidePosition": "Slide {{slide}} of {{slideCount}}",
   "writeAssistantSaveBeforeSendFailed": "Save the current editable document before sending it to the Work assistant.",
+  "writeWhiteboardAssistantPreparing": "The whiteboard assistant is still preparing. Try again in a moment.",
   "writeExternalChangeConflict": "The file changed on disk while you had unsaved edits. Your draft was preserved; review or save it before continuing.",
   "writeAssistantEmptyTitle": "Work assistant is ready",
   "writeAssistantEmptySub": "Select Markdown, PDF, or Office content to quote it, or start with a document action below.",

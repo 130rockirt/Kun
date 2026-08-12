@@ -26,12 +26,17 @@ export function useWorkbenchWriteAssistantRuntime({
   const writeAssistantProviderId = useWriteWorkspaceStore((s) => s.assistantProviderId)
   const writeWorkspaceRoot = useWriteWorkspaceStore((s) => s.workspaceRoot)
   const activeWriteFilePath = useWriteWorkspaceStore((s) => s.activeFilePath)
+  const activeWhiteboardId = useWriteWorkspaceStore((s) => s.activeWhiteboardId)
+  const activeWhiteboard = useWriteWorkspaceStore((s) =>
+    s.activeWhiteboardId ? s.whiteboards[s.activeWhiteboardId] ?? null : null
+  )
   const setWriteAssistantModel = useWriteWorkspaceStore((s) => s.setAssistantModel)
   const route = useChatStore((s) => s.route)
   const runtimeConnection = useChatStore((s) => s.runtimeConnection)
   const activeThreadId = useChatStore((s) => s.activeThreadId)
   const threads = useChatStore((s) => s.threads)
   const pendingThreadIdRef = useRef<string | null>(null)
+  const pendingBoardIdRef = useRef<string | null>(null)
   const writeAssistantPickList = useMemo(() => {
     return buildComposerAssistantPickList({
       composerPickList
@@ -48,6 +53,34 @@ export function useWorkbenchWriteAssistantRuntime({
   useEffect(() => {
     if (route !== 'write' || !writeWorkspaceRoot) return
     const chatState = useChatStore.getState()
+    if (activeWhiteboardId && activeWhiteboard) {
+      if (runtimeConnection !== 'ready') {
+        if (activeThreadId) chatState.clearActiveThreadSelection()
+        return
+      }
+      const boundThread = activeWhiteboard.threadId
+        ? threads.find((thread) => thread.id === activeWhiteboard.threadId) ?? null
+        : null
+      if (boundThread?.id === activeThreadId) return
+      if (boundThread) {
+        if (pendingThreadIdRef.current === boundThread.id) return
+        pendingThreadIdRef.current = boundThread.id
+        void chatState.selectWriteThread(boundThread.id, writeWorkspaceRoot).finally(() => {
+          if (pendingThreadIdRef.current === boundThread.id) pendingThreadIdRef.current = null
+        })
+        return
+      }
+      if (pendingBoardIdRef.current === activeWhiteboardId) return
+      pendingBoardIdRef.current = activeWhiteboardId
+      void chatState.createWriteThread(writeWorkspaceRoot).then(async (threadId) => {
+        if (threadId) {
+          await useWriteWorkspaceStore.getState().bindWhiteboardThread(activeWhiteboardId, threadId)
+        }
+      }).finally(() => {
+        if (pendingBoardIdRef.current === activeWhiteboardId) pendingBoardIdRef.current = null
+      })
+      return
+    }
     if (!activeWriteFilePath) {
       if (activeThreadId) chatState.clearActiveThreadSelection()
       return
@@ -73,7 +106,16 @@ export function useWorkbenchWriteAssistantRuntime({
     } else if (activeThreadId) {
       chatState.clearActiveThreadSelection()
     }
-  }, [activeThreadId, activeWriteFilePath, route, runtimeConnection, threads, writeWorkspaceRoot])
+  }, [
+    activeThreadId,
+    activeWhiteboard,
+    activeWhiteboardId,
+    activeWriteFilePath,
+    route,
+    runtimeConnection,
+    threads,
+    writeWorkspaceRoot
+  ])
 
   return {
     resolvedWriteAssistantProviderId,

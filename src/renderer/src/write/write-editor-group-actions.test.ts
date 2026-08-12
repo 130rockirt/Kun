@@ -119,4 +119,83 @@ describe('write editor group actions', () => {
     expect(state.documentsByPath['/work/a.md'].saveStatus).toBe('saved')
     expect(state.documentsByPath['/work/b.md'].fileContent).toBe('saved b')
   })
+
+  it('activates and closes a whiteboard tab without reading or deleting a file session', async () => {
+    const board = {
+      id: 'board-1',
+      title: 'Review board',
+      workspaceRoot: '/work',
+      threadId: null,
+      phase: 'blank' as const,
+      revision: 0,
+      createdAt: '2026-08-13T00:00:00.000Z',
+      updatedAt: '2026-08-13T00:00:00.000Z'
+    }
+    useWriteWorkspaceStore.setState((state) => ({
+      whiteboards: { [board.id]: board },
+      editorLayout: {
+        ...state.editorLayout,
+        groups: [{
+          ...state.editorLayout.groups[0],
+          tabs: [
+            ...state.editorLayout.groups[0].tabs,
+            { kind: 'whiteboard', boardId: board.id, viewMode: 'rich' }
+          ]
+        }]
+      }
+    }))
+
+    useWriteWorkspaceStore.getState().activateTab('primary', 'whiteboard:board-1')
+    let state = useWriteWorkspaceStore.getState()
+    expect(state.activeWhiteboardId).toBe('board-1')
+    expect(state.activeFilePath).toBeNull()
+    expect(Object.keys(state.documentsByPath)).toEqual(['/work/a.md', '/work/b.md'])
+
+    await expect(state.closeTab('primary', 'whiteboard:board-1')).resolves.toBe(true)
+    state = useWriteWorkspaceStore.getState()
+    expect(state.activeWhiteboardId).toBeNull()
+    expect(state.activeFilePath).toBe('/work/b.md')
+    expect(state.whiteboards['board-1']).toBe(board)
+    expect(Object.keys(state.documentsByPath)).toEqual(['/work/a.md', '/work/b.md'])
+  })
+
+  it('moves a typed whiteboard item between groups without creating a pseudo document', () => {
+    useWriteWorkspaceStore.setState((state) => ({
+      editorLayout: {
+        ...state.editorLayout,
+        orientation: 'horizontal',
+        groups: [
+          {
+            id: 'primary',
+            activePath: 'whiteboard:board-1',
+            tabs: [{ kind: 'whiteboard', boardId: 'board-1', viewMode: 'rich' }]
+          },
+          {
+            id: 'secondary',
+            activePath: '/work/b.md',
+            tabs: [{ path: '/work/b.md', viewMode: 'preview' }]
+          }
+        ]
+      }
+    }))
+
+    useWriteWorkspaceStore.getState().moveTab(
+      'whiteboard:board-1',
+      'primary',
+      'secondary',
+      0
+    )
+    const state = useWriteWorkspaceStore.getState()
+    expect(state.editorLayout.focusedGroupId).toBe('secondary')
+    expect(state.editorLayout.groups[0]).toMatchObject({ tabs: [], activePath: null })
+    expect(state.editorLayout.groups[1]).toMatchObject({
+      activePath: 'whiteboard:board-1',
+      tabs: [
+        { kind: 'whiteboard', boardId: 'board-1' },
+        { path: '/work/b.md' }
+      ]
+    })
+    expect(state.activeWhiteboardId).toBe('board-1')
+    expect(state.documentsByPath['whiteboard:board-1']).toBeUndefined()
+  })
 })

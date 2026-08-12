@@ -17,9 +17,6 @@ vi.mock('react-i18next', () => ({
 }))
 
 import { useChatStore } from '../../store/chat-store'
-import { useCanvasShapeStore } from '../../design/canvas/canvas-shape-store'
-import { useCanvasSelectionStore } from '../../design/canvas/canvas-selection-store'
-import { createDefaultShape, createEmptyDocument } from '../../design/canvas/canvas-types'
 import { clearWriteWorkspaceSaveQueueForTests } from '../../write/write-save-coordinator'
 import { useWriteWorkspaceStore } from '../../write/write-workspace-store'
 import { createWriteDocumentSession, writeDocumentKey } from '../../write/write-editor-layout'
@@ -152,65 +149,14 @@ function activateOfficeFile(): void {
   })
 }
 
-function activatePptReviewCanvas(): void {
-  const document = createEmptyDocument()
-  const reviewRef = {
-    workflowId: 'workflow-a', childId: 'child-a', slideId: 'slide-2',
-    revision: 3, parentThreadId: 'thr_mapped'
-  }
-  const frame = {
-    ...createDefaultShape('frame', 0, 0), id: 'review-frame', width: 480, height: 318,
-    pptReviewRef: { ...reviewRef, role: 'slide-frame' as const }
-  }
-  const preview = {
-    ...createDefaultShape('image', 0, 0), id: 'review-preview', imageUrl: '/tmp/write/preview.png',
-    pptReviewRef: { ...reviewRef, role: 'preview-image' as const }
-  }
-  const annotation = {
-    ...createDefaultShape('text', 20, 20), id: 'review-note', width: 180, height: 40,
-    textContent: 'Make the headline larger'
-  }
-  useCanvasShapeStore.setState({
-    document: {
-      ...document,
-      objects: { ...document.objects, [frame.id]: frame, [preview.id]: preview, [annotation.id]: annotation }
-    }
-  })
-}
-
-function activatePptDirectionCanvas(): void {
-  const document = createEmptyDocument()
-  const directions = ['editorial', 'signal', 'warm'].map((directionId, index) => ({
-    ...createDefaultShape('frame', index * 504, 0),
-    id: `direction-${directionId}`,
-    pptDirectionRef: {
-      workflowId: 'workflow-a', childId: 'child-a', directionId, revision: directionId === 'signal' ? 2 : 1,
-      parentThreadId: 'thr_mapped', role: 'direction-card' as const
-    }
-  }))
-  useCanvasShapeStore.setState({
-    document: {
-      ...document,
-      objects: Object.fromEntries([
-        ...Object.entries(document.objects),
-        ...directions.map((shape) => [shape.id, shape] as const)
-      ])
-    }
-  })
-  useCanvasSelectionStore.getState().select(['direction-signal'])
-}
-
 describe('useWorkbenchComposerSubmitController', () => {
   beforeEach(() => {
     vi.stubGlobal('window', { kunGui: {} })
     useChatStore.setState({ route: 'write', runtimeConnection: 'ready' })
     activateTextFile()
-    useCanvasSelectionStore.getState().clearSelection()
   })
 
   afterEach(() => {
-    useCanvasShapeStore.getState().resetDocument()
-    useCanvasSelectionStore.getState().clearSelection()
     useWriteWorkspaceStore.getState().resetWorkspace()
     clearWriteWorkspaceSaveQueueForTests()
     vi.unstubAllGlobals()
@@ -590,71 +536,6 @@ describe('useWorkbenchComposerSubmitController', () => {
       'agent',
       expect.objectContaining({ serviceTier: 'priority' })
     ))
-  })
-
-  it('sends PPT visual review as structured context without mutating the user prompt', async () => {
-    useChatStore.setState({ route: 'chat' })
-    activatePptReviewCanvas()
-    const sendMessage = vi.fn(async () => true)
-    const controller = useWorkbenchComposerSubmitController(controllerParams({
-      route: 'chat', input: '把第二页标题再大一点', getAttachmentScope: () => 'chat', sendMessage
-    }))
-
-    controller.handleSend()
-
-    await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledOnce())
-    const [prompt, , options] = sendMessage.mock.calls[0] as unknown as Parameters<ControllerParams['sendMessage']>
-    const composerContexts = options?.composerContexts
-    expect(prompt).toBe('把第二页标题再大一点')
-    expect(prompt).not.toContain('PPT visual review context')
-    expect(composerContexts).toHaveLength(1)
-    expect(composerContexts?.[0]?.reference).toEqual({
-      kind: 'ppt-review',
-      schemaVersion: 1,
-      workflowId: 'workflow-a',
-      childId: 'child-a',
-      slides: [{ slideId: 'slide-2', revision: 3, annotations: ['Make the headline larger'] }]
-    })
-    expect(JSON.stringify(composerContexts)).not.toContain('preview.png')
-  })
-
-  it('sends only the selected PPT direction identity as structured context', async () => {
-    useChatStore.setState({ route: 'chat' })
-    activatePptDirectionCanvas()
-    const sendMessage = vi.fn(async () => true)
-    const controller = useWorkbenchComposerSubmitController(controllerParams({
-      route: 'chat', input: '采用这个方向', getAttachmentScope: () => 'chat', sendMessage
-    }))
-
-    controller.handleSend()
-
-    await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledOnce())
-    const [prompt, , options] = sendMessage.mock.calls[0] as unknown as Parameters<ControllerParams['sendMessage']>
-    expect(prompt).toBe('采用这个方向')
-    expect(options?.composerContexts).toHaveLength(1)
-    expect(options?.composerContexts?.[0]?.reference).toEqual({
-      kind: 'ppt-direction', schemaVersion: 1, workflowId: 'workflow-a', childId: 'child-a',
-      directions: [{ directionId: 'signal', revision: 2 }]
-    })
-  })
-
-  it('keeps Write review feedback structured instead of appending it to the writing prompt', async () => {
-    activatePptReviewCanvas()
-    const sendMessage = vi.fn(async () => true)
-    const controller = useWorkbenchComposerSubmitController(controllerParams({
-      input: '批准当前版本', sendMessage
-    }))
-
-    controller.sendWritePrompt('批准当前版本')
-
-    await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledOnce())
-    const [prompt, , options] = sendMessage.mock.calls[0] as unknown as Parameters<ControllerParams['sendMessage']>
-    expect(prompt).toContain('批准当前版本')
-    expect(prompt).not.toContain('Make the headline larger')
-    expect(options?.composerContexts?.[0]?.reference).toMatchObject({
-      kind: 'ppt-review', workflowId: 'workflow-a', childId: 'child-a',
-      slides: [{ slideId: 'slide-2', revision: 3, annotations: ['Make the headline larger'] }]
-    })
   })
 
   it('snapshots the priority service tier for an eligible Codex Write send', async () => {

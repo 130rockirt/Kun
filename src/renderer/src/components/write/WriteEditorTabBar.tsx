@@ -13,6 +13,7 @@ import {
   PanelTop,
   Plus,
   Search,
+  Shapes,
   Presentation,
   X
 } from 'lucide-react'
@@ -20,15 +21,21 @@ import { useTranslation } from 'react-i18next'
 import type {
   WriteDocumentSession,
   WriteEditorGroup,
-  WriteEditorGroupId
+  WriteEditorGroupId,
+  WorkWhiteboard
 } from '../../write/write-workspace-store'
 import { writeBasenameFromPath } from '../../write/write-workspace-store'
+import {
+  isWriteWhiteboardTab,
+  writeEditorItemKey
+} from '../../write/write-editor-layout'
 import { SidebarTitlebarToggleButton } from '../sidebar/SidebarPrimitives'
 import { WriteAssistantPanelToggleIcon } from './WriteAssistantIcons'
 
 type Props = {
   group: WriteEditorGroup
   documentsByPath: Record<string, WriteDocumentSession>
+  whiteboards?: Record<string, WorkWhiteboard>
   focused: boolean
   primary: boolean
   leftSidebarCollapsed: boolean
@@ -37,6 +44,7 @@ type Props = {
   onClose: (path: string) => void
   onMove: (path: string, from: WriteEditorGroupId, to: WriteEditorGroupId, index?: number) => void
   onCreateDraft: () => void
+  onCreateWhiteboard?: () => void
   onQuickOpen: () => void
   onSplit: (orientation: 'horizontal' | 'vertical') => void
   onCloseGroup: () => void
@@ -63,6 +71,7 @@ function statusMark(document: WriteDocumentSession | undefined): ReactElement | 
 export function WriteEditorTabBar({
   group,
   documentsByPath,
+  whiteboards = {},
   focused,
   primary,
   leftSidebarCollapsed,
@@ -71,6 +80,7 @@ export function WriteEditorTabBar({
   onClose,
   onMove,
   onCreateDraft,
+  onCreateWhiteboard = () => undefined,
   onQuickOpen,
   onSplit,
   onCloseGroup,
@@ -108,19 +118,21 @@ export function WriteEditorTabBar({
         }}
       >
         {group.tabs.map((tab, index) => {
-          const document = documentsByPath[tab.path]
-          const active = group.activePath === tab.path
+          const key = writeEditorItemKey(tab)
+          const board = isWriteWhiteboardTab(tab) ? whiteboards[tab.boardId] : undefined
+          const document = isWriteWhiteboardTab(tab) ? undefined : documentsByPath[tab.path]
+          const active = group.activePath === key
           return (
             <div
-              key={tab.path}
+              key={key}
               role="tab"
               aria-selected={active}
               tabIndex={active ? 0 : -1}
               draggable
               onDragStart={(event) => {
-                dragPathRef.current = tab.path
+                dragPathRef.current = key
                 event.dataTransfer.effectAllowed = 'move'
-                event.dataTransfer.setData('application/x-kun-write-tab', tab.path)
+                event.dataTransfer.setData('application/x-kun-write-tab', key)
                 event.dataTransfer.setData('application/x-kun-write-group', group.id)
               }}
               onDragOver={(event) => event.preventDefault()}
@@ -131,12 +143,12 @@ export function WriteEditorTabBar({
                 const from = event.dataTransfer.getData('application/x-kun-write-group') as WriteEditorGroupId
                 if (path && from) onMove(path, from, group.id, index)
               }}
-              onClick={() => onActivate(tab.path)}
+              onClick={() => onActivate(key)}
               onKeyDown={(event) => {
                 if (event.target !== event.currentTarget) return
                 if (event.key === 'Enter' || event.key === ' ') {
                   event.preventDefault()
-                  onActivate(tab.path)
+                  onActivate(key)
                   return
                 }
                 if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
@@ -151,17 +163,19 @@ export function WriteEditorTabBar({
                       : Math.min(tabs.length - 1, current + 1)
                 tabs[next]?.focus()
                 const nextTab = group.tabs[next]
-                if (nextTab) onActivate(nextTab.path)
+                if (nextTab) onActivate(writeEditorItemKey(nextTab))
               }}
               onAuxClick={(event) => {
-                if (event.button === 1) onClose(tab.path)
+                if (event.button === 1) onClose(key)
               }}
               className={`group relative flex max-w-[220px] shrink-0 cursor-default items-center gap-2 border-r border-ds-border-muted px-3 text-[12.5px] transition ${
                 active ? 'bg-ds-card font-semibold text-ds-ink' : 'bg-ds-hover/35 text-ds-muted hover:bg-ds-hover/70'
               }`}
             >
-              <span className={active ? 'text-accent' : 'text-ds-faint'}>{fileIcon(document)}</span>
-              <span className="min-w-0 truncate">{writeBasenameFromPath(tab.path)}</span>
+              <span className={active ? 'text-accent' : 'text-ds-faint'}>
+                {board ? <Shapes className="h-3.5 w-3.5" strokeWidth={1.9} /> : fileIcon(document)}
+              </span>
+              <span className="min-w-0 truncate">{board?.title ?? (isWriteWhiteboardTab(tab) ? t('rightPanelWhiteboard') : writeBasenameFromPath(tab.path))}</span>
               <span className="flex h-5 w-5 shrink-0 items-center justify-center">
                 <span className="group-hover:hidden">{statusMark(document)}</span>
                 <button
@@ -171,7 +185,7 @@ export function WriteEditorTabBar({
                   aria-label={t('writeCloseTab')}
                   onClick={(event) => {
                     event.stopPropagation()
-                    onClose(tab.path)
+                    onClose(key)
                   }}
                 >
                   <X className="h-3.5 w-3.5" />
@@ -192,6 +206,10 @@ export function WriteEditorTabBar({
             <button type="button" className="write-tabbar-menu-item" onClick={() => { setAddOpen(false); onCreateDraft() }}>
               <FilePlus2 className="h-4 w-4" />{t('writeNewMarkdown')}
             </button>
+            <button type="button" className="write-tabbar-menu-item" onClick={() => { setAddOpen(false); onCreateWhiteboard() }}>
+              <Shapes className="h-4 w-4" />{t('writeCreateWhiteboard', { defaultValue: 'New whiteboard' })}
+            </button>
+            <div className="my-1 h-px bg-ds-border-muted" />
             <button type="button" className="write-tabbar-menu-item" onClick={() => { setAddOpen(false); onQuickOpen() }}>
               <Search className="h-4 w-4" />{t('writeQuickOpen')}
             </button>
@@ -234,9 +252,10 @@ export function WriteEditorTabBar({
             ) : null}
             {group.tabs.length > 0 ? <div className="my-1 h-px bg-ds-border-muted" /> : null}
             {group.tabs.map((tab) => (
-              <button key={tab.path} type="button" className="write-tabbar-menu-item" onClick={() => { setOverflowOpen(false); onActivate(tab.path) }}>
-                {fileIcon(documentsByPath[tab.path])}<span className="min-w-0 flex-1 truncate">{writeBasenameFromPath(tab.path)}</span>
-                {group.activePath === tab.path ? <ChevronDown className="h-3.5 w-3.5 text-accent" /> : null}
+              <button key={writeEditorItemKey(tab)} type="button" className="write-tabbar-menu-item" onClick={() => { setOverflowOpen(false); onActivate(writeEditorItemKey(tab)) }}>
+                {isWriteWhiteboardTab(tab) ? <Shapes className="h-3.5 w-3.5" /> : fileIcon(documentsByPath[tab.path])}
+                <span className="min-w-0 flex-1 truncate">{isWriteWhiteboardTab(tab) ? whiteboards[tab.boardId]?.title ?? t('rightPanelWhiteboard') : writeBasenameFromPath(tab.path)}</span>
+                {group.activePath === writeEditorItemKey(tab) ? <ChevronDown className="h-3.5 w-3.5 text-accent" /> : null}
               </button>
             ))}
           </div>

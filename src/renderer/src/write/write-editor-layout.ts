@@ -7,9 +7,11 @@ import type {
   WriteDocumentSession,
   WriteEditorGroup,
   WriteEditorGroupId,
+  WriteEditorItem,
   WriteEditorLayoutOrientation,
   WriteEditorLayoutV1,
   WriteEditorTab,
+  WriteWhiteboardTab,
   WritePreviewMode,
   WriteWorkspaceState
 } from './write-workspace-store-types'
@@ -48,6 +50,36 @@ export function writeEditorGroupFlex(
 
 export function writeDocumentKey(path: string): string {
   return normalizePath(path)
+}
+
+const WRITE_WHITEBOARD_TAB_PREFIX = 'whiteboard:'
+
+export function isWriteWhiteboardTab(item: WriteEditorItem): item is WriteWhiteboardTab {
+  return item.kind === 'whiteboard'
+}
+
+export function isWriteFileTab(item: WriteEditorItem): item is WriteEditorTab {
+  return !isWriteWhiteboardTab(item)
+}
+
+export function writeEditorItemKey(item: WriteEditorItem): string {
+  return isWriteWhiteboardTab(item)
+    ? `${WRITE_WHITEBOARD_TAB_PREFIX}${item.boardId}`
+    : writeDocumentKey(item.path)
+}
+
+export function writeWhiteboardIdFromTabKey(key: string | null | undefined): string | null {
+  if (!key?.startsWith(WRITE_WHITEBOARD_TAB_PREFIX)) return null
+  return key.slice(WRITE_WHITEBOARD_TAB_PREFIX.length).trim() || null
+}
+
+export function writeEditorItemForKey(
+  group: WriteEditorGroup,
+  key: string | null | undefined
+): WriteEditorItem | null {
+  if (!key) return null
+  const normalizedKey = writeWhiteboardIdFromTabKey(key) ? key : writeDocumentKey(key)
+  return group.tabs.find((item) => writeEditorItemKey(item) === normalizedKey) ?? null
 }
 
 export function clearWriteOfficeSelections(
@@ -103,21 +135,50 @@ export function activePathForGroup(layout: WriteEditorLayoutV1, groupId: WriteEd
   return layout.groups.find((group) => group.id === groupId)?.activePath ?? null
 }
 
+export function activeWriteEditorItem(
+  layout: WriteEditorLayoutV1,
+  groupId: WriteEditorGroupId
+): WriteEditorItem | null {
+  const group = layout.groups.find((candidate) => candidate.id === groupId)
+  return group ? writeEditorItemForKey(group, group.activePath) : null
+}
+
 export function tabViewMode(layout: WriteEditorLayoutV1, groupId: WriteEditorGroupId, path: string): WritePreviewMode {
   const key = writeDocumentKey(path)
-  return layout.groups.find((group) => group.id === groupId)?.tabs.find((tab) => writeDocumentKey(tab.path) === key)?.viewMode ?? 'rich'
+  const tab = layout.groups.find((group) => group.id === groupId)?.tabs.find((item) => (
+    isWriteFileTab(item) && writeDocumentKey(item.path) === key
+  ))
+  return tab?.viewMode ?? 'rich'
 }
 
 export function projectFocusedDocument(
   layout: WriteEditorLayoutV1,
   documentsByPath: Record<string, WriteDocumentSession>
 ): Partial<WriteWorkspaceState> {
-  const path = focusedWriteGroup(layout).activePath
+  const group = focusedWriteGroup(layout)
+  const activeKey = group.activePath
+  const activeItem = writeEditorItemForKey(group, activeKey)
+  const boardId = activeItem && isWriteWhiteboardTab(activeItem)
+    ? activeItem.boardId
+    : writeWhiteboardIdFromTabKey(activeKey)
+  if (boardId) {
+    return {
+      activeFilePath: null,
+      activeFileKind: null,
+      activeWhiteboardId: boardId,
+      fileContent: '', imageDataUrl: '', imageMimeType: '', pdfDataBase64: '', pdfMimeType: '',
+      pdfMtimeMs: 0, fileSize: 0, fileTruncated: false, fileError: null, fileLoading: false,
+      saveStatus: 'saved', persistedContent: '', pendingAgentReview: null, reviewActive: false,
+      contentRevision: 0, selection: emptySelection(), quotedSelections: [], recentEdits: [], previewMode: 'rich'
+    }
+  }
+  const path = activeItem && isWriteFileTab(activeItem) ? activeItem.path : activeKey
   const document = path ? documentsByPath[writeDocumentKey(path)] : undefined
   if (!document) {
     return {
       activeFilePath: null,
       activeFileKind: null,
+      activeWhiteboardId: null,
       fileContent: '',
       imageDataUrl: '',
       imageMimeType: '',
@@ -142,6 +203,7 @@ export function projectFocusedDocument(
   return {
     activeFilePath: document.path,
     activeFileKind: document.kind,
+    activeWhiteboardId: null,
     fileContent: document.fileContent,
     imageDataUrl: document.imageDataUrl,
     imageMimeType: document.imageMimeType,
@@ -204,11 +266,26 @@ export function addTabToGroup(
   viewMode: WritePreviewMode = 'rich'
 ): WriteEditorLayoutV1 {
   const normalized = writeDocumentKey(path)
+  return addEditorItemToGroup(layout, groupId, { path: normalized, viewMode })
+}
+
+export function addEditorItemToGroup(
+  layout: WriteEditorLayoutV1,
+  groupId: WriteEditorGroupId,
+  item: WriteEditorItem,
+  index?: number
+): WriteEditorLayoutV1 {
+  const key = writeEditorItemKey(item)
   const groups = layout.groups.map((group) => {
     if (group.id !== groupId) return group
-    const existing = group.tabs.find((tab) => writeDocumentKey(tab.path) === normalized)
-    const tabs = existing ? group.tabs : [...group.tabs, { path: normalized, viewMode }]
-    return { ...group, tabs, activePath: normalized }
+    const existing = group.tabs.find((candidate) => writeEditorItemKey(candidate) === key)
+    if (existing) return { ...group, activePath: key }
+    const tabs = [...group.tabs]
+    const targetIndex = Number.isInteger(index)
+      ? Math.min(Math.max(Number(index), 0), tabs.length)
+      : tabs.length
+    tabs.splice(targetIndex, 0, item)
+    return { ...group, tabs, activePath: key }
   })
   return { ...layout, focusedGroupId: groupId, groups }
 }
@@ -235,6 +312,19 @@ function normalizeStoredTab(value: unknown, workspaceRoot: string): WriteEditorT
   }
 }
 
+function normalizeStoredItem(value: unknown, workspaceRoot: string): WriteEditorItem | null {
+  if (value && typeof value === 'object') {
+    const candidate = value as Partial<WriteEditorItem> & { boardId?: unknown }
+    if (candidate.kind === 'whiteboard' && typeof candidate.boardId === 'string') {
+      const boardId = candidate.boardId.trim()
+      return /^[a-zA-Z0-9_-]+$/.test(boardId)
+        ? { kind: 'whiteboard', boardId, viewMode: 'rich' }
+        : null
+    }
+  }
+  return normalizeStoredTab(value, workspaceRoot)
+}
+
 function isStoredEditorGroup(value: unknown): value is Partial<WriteEditorGroup> {
   return Boolean(value) && typeof value === 'object' && Array.isArray(
     (value as Partial<WriteEditorGroup>).tabs
@@ -247,16 +337,17 @@ function normalizeStoredGroup(
   workspaceRoot: string
 ): WriteEditorGroup {
   const tabs = (value.tabs ?? [])
-    .map((tab) => normalizeStoredTab(tab, workspaceRoot))
-    .filter((tab): tab is WriteEditorTab => Boolean(tab))
-    .filter((tab, index, items) => items.findIndex((candidate) => candidate.path === tab.path) === index)
-  const requestedActive = normalizePath(typeof value.activePath === 'string' ? value.activePath : '')
+    .map((tab) => normalizeStoredItem(tab, workspaceRoot))
+    .filter((tab): tab is WriteEditorItem => Boolean(tab))
+    .filter((tab, index, items) => items.findIndex((candidate) => writeEditorItemKey(candidate) === writeEditorItemKey(tab)) === index)
+  const rawActive = typeof value.activePath === 'string' ? value.activePath : ''
+  const requestedActive = writeWhiteboardIdFromTabKey(rawActive) ? rawActive : normalizePath(rawActive)
   return {
     id,
     tabs,
-    activePath: tabs.some((tab) => tab.path === requestedActive)
+    activePath: tabs.some((tab) => writeEditorItemKey(tab) === requestedActive)
       ? requestedActive
-      : tabs[0]?.path ?? null
+      : tabs[0] ? writeEditorItemKey(tabs[0]) : null
   }
 }
 

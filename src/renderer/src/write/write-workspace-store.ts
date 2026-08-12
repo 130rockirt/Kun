@@ -18,6 +18,7 @@ import { createWriteSettingsActions } from './write-workspace-settings-actions'
 import { createWriteFileActions } from './write-workspace-file-actions'
 import { createWriteEditorGroupActions } from './write-editor-group-actions'
 import { createWritePresentationViewActions } from './write-presentation-view-state'
+import { createWorkWhiteboardActions } from './work-whiteboard'
 import { writeDocumentKey } from './write-editor-layout'
 import { writeBrowserStorageItem } from '../lib/browser-storage'
 import {
@@ -51,13 +52,17 @@ import {
   writeRelativeToWorkspace
 } from './write-workspace-store-helpers'
 export type {
+  WorkWhiteboard,
+  WorkWhiteboardPhase,
   WriteActiveFileKind,
   WriteDocumentSession,
   WriteEditorGroup,
   WriteEditorGroupId,
+  WriteEditorItem,
   WriteEditorLayoutOrientation,
   WriteEditorLayoutV1,
   WriteEditorTab,
+  WriteWhiteboardTab,
   WritePreviewMode,
   WriteSaveStatus,
   WriteWorkspaceState
@@ -81,6 +86,7 @@ function cancelExternalSyncAnimation(): void {
 export const useWriteWorkspaceStore = create<WriteWorkspaceState>((set, get) => {
   const editorGroupActions = createWriteEditorGroupActions(set, get)
   const presentationViewActions = createWritePresentationViewActions(set, get)
+  const whiteboardActions = createWorkWhiteboardActions(set, get)
   return ({
   defaultWorkspaceRoot: '',
   workspaceRoots: [],
@@ -125,6 +131,7 @@ export const useWriteWorkspaceStore = create<WriteWorkspaceState>((set, get) => 
   }),
   ...editorGroupActions,
   ...presentationViewActions,
+  ...whiteboardActions,
 
   setFileContent: (content) => {
     cancelExternalSyncAnimation()

@@ -10,6 +10,7 @@ import {
 } from '../../design/design-thread-registry'
 import { useCodeCanvasDesignSurface } from '../../design/code-canvas-design-surface'
 import { useDesignWorkspaceStore } from '../../design/design-workspace-store'
+import { useWriteWorkspaceStore } from '../../write/write-workspace-store'
 import { markSddAssistantThread } from '../../sdd/sdd-thread-registry'
 import type { SddDraft } from '../../sdd/sdd-draft-store'
 import { useSddDraftStore } from '../../sdd/sdd-draft-store'
@@ -480,5 +481,39 @@ describe('workbench navigation controller Connect Phone return', () => {
     })
     expect(props.openCode).toHaveBeenCalled()
     expect(props.setRoute).not.toHaveBeenCalledWith('claw')
+  })
+})
+
+describe('workbench navigation controller Work whiteboards', () => {
+  afterEach(() => {
+    useWriteWorkspaceStore.getState().resetWorkspace()
+    vi.restoreAllMocks()
+  })
+
+  it('rebinds New conversation to the active whiteboard without racing a board switch', async () => {
+    const now = '2026-08-13T00:00:00.000Z'
+    const bindWhiteboardThread = vi.fn(async () => true)
+    useWriteWorkspaceStore.setState({
+      workspaceRoot: '/workspace',
+      activeFilePath: null,
+      activeWhiteboardId: 'board-1',
+      whiteboards: {
+        'board-1': {
+          id: 'board-1', title: 'Pitch', workspaceRoot: '/workspace', threadId: 'thread-old',
+          phase: 'blank', revision: 0, createdAt: now, updatedAt: now
+        }
+      },
+      bindWhiteboardThread
+    })
+    const createWriteThread = vi.fn(async () => 'thread-new')
+    await renderController(makeProps({ route: 'write', createWriteThread }))
+
+    await act(async () => {
+      latestController.startNewWriteAssistantConversation()
+      await Promise.resolve()
+    })
+
+    expect(createWriteThread).toHaveBeenCalledWith('/workspace', undefined)
+    expect(bindWhiteboardThread).toHaveBeenCalledWith('board-1', 'thread-new')
   })
 })
