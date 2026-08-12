@@ -51,7 +51,8 @@ import {
   isSddAssistantThread,
   type SddThreadRegistry
 } from '../sdd/sdd-thread-registry'
-import { isDesignThreadId, type DesignThreadRegistry } from '../design/design-thread-registry'
+import type { DesignThreadRegistry } from '../design/design-thread-registry'
+import { isDesignWorkbenchThread } from '../design/design-task-classification'
 import { readThreadWorktreeRegistry, saveThreadWorktreeRegistry, forgetThreadWorktree } from '../lib/thread-worktree-registry'
 import { notifySddChatTranscriptMirror } from '../sdd/sdd-chat-transcript'
 import { notifyDesignChatTranscriptMirror } from '../design/design-chat-transcript'
@@ -177,10 +178,10 @@ export function isCodeSidebarThread(
   sddRegistry?: SddThreadRegistry
 ): boolean {
   const workspace = normalizeWorkspaceRoot(thread.workspace)
+  const designTask = isDesignWorkbenchThread(thread.id, thread, designRegistry)
   return Boolean(workspace) &&
     thread.agentSurface !== 'write' &&
-    thread.agentSurface !== 'design' &&
-    !isDesignThreadId(thread.id, designRegistry) &&
+    (thread.agentSurface !== 'design' || designTask) &&
     !isInternalTemporaryWorkspace(thread.workspace) &&
     !isInternalDeepSeekGuiWorkspace(thread.workspace) &&
     !isClawWorkspacePath(thread.workspace) &&

@@ -9,7 +9,7 @@ Kun currently presents Code, Write, and Design as separate top-level workspaces 
 - Bind every Code conversation that uses Design to one durable Design document rendered by Code's right-side whiteboard, while preserving the full HTML, SVG, motion, image, multi-screen, and design-system pipeline.
 - Add Design-only composer controls for output medium (`HTML` or `AI image`), target (`Web` or `App`), and Kun's existing design-system presets. The complete profile is locked with the task's first accepted Design turn.
 - Make HTML the default interactive output. AI-image tasks produce raster assets on the whiteboard and never silently fall back to HTML; HTML tasks may still use generated images as supporting assets.
-- Remove the standalone Design stage, sidebar, and assistant from the new workflow. Legacy design files remain on disk, but legacy Design conversations are not migrated into the new task list.
+- Remove the standalone Design stage, sidebar, and assistant from the new workflow. Legacy design files remain on disk, and project-owned legacy Design conversations appear in the unified Code task list without rewriting their runtime records or document bindings.
 - Redesign the empty task surface around a single intent-aware composer and starter actions inspired by the supplied WorkBuddy interaction structure.
 
 ## Capabilities

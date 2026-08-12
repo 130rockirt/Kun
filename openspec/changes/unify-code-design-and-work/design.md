@@ -41,6 +41,12 @@ Each Code conversation that enters Design binds to exactly one `DesignDocument`,
 
 Every Design canvas mutation is scoped by thread, turn, document, and board artifact. Closing the right panel changes presentation only; it does not clear the binding. Durable replay applies missed operations idempotently when the panel reopens.
 
+### Keep legacy Design conversations in the unified task list
+
+Project-owned legacy conversations identified by `agentSurface: 'design'` or the persisted Design thread registry remain first-class entries in the Code task list. Their existing registry document binding is authoritative, so selecting the owning conversation restores its original writable `.kun-design` document through the same full canvas surface used by Code-owned Design tasks. This changes presentation and navigation only: no thread ownership, profile, registry, or artifact data is migrated or duplicated.
+
+One task classifier is shared by the list, icon, navigation, return-memory, and canvas restoration paths. Durable `lockedTaskSurface` takes precedence over an optional profile for Code-owned conversations, while explicit legacy ownership remains Design. If a Design task target is still hydrating, the right panel stays in the Design loading state instead of mounting the lightweight Code canvas.
+
 ### Treat HTML and AI image as primary output lanes
 
 `html` is the default and uses the existing screen factory and linked HTML continuation. The continuation is rendered as progress within the originating turn rather than another user message. `image` requires the runtime image-generation capability, advertises the raster lane, and prohibits HTML-screen fallback.
@@ -62,7 +68,7 @@ Only user-facing mode, workspace, assistant, onboarding, settings, and documenta
 - **[Risk] Shape operations replay onto the wrong document.** → Persist document/board target on each Design turn and require it in live and replay filters.
 - **[Risk] Image generation disappears after an AI-image profile is locked.** → Keep the profile locked, preserve the draft, block Design submission with the runtime capability reason, and link to Image Generation settings; never switch to HTML silently.
 - **[Risk] Existing extensions depend on `workbench:design` or `workbench:write`.** → Derive Design context from the active task surface and keep the stable Write token unchanged.
-- **[Risk] Old Design conversations become inaccessible.** → Leave their runtime records and files untouched; this release deliberately does not migrate or delete them.
+- **[Risk] Old Design conversations become inaccessible.** → Include project-owned legacy Design conversations in the unified task list and restore their existing registry document without migrating or deleting runtime records or files.
 
 ## Migration Plan
 
@@ -71,6 +77,7 @@ Only user-facing mode, workspace, assistant, onboarding, settings, and documenta
 3. Mount the full Design document surface in the Code right workspace and route locked Design-task turns through it.
 4. Ship the unified composer/list/empty state and remove standalone Design entry points from the new flow.
 5. Apply Work display aliases without rewriting saved settings or threads.
+6. Include legacy Design conversations in the shared list and bind both legacy and Code-owned Design tasks to the reusable full Design canvas.
 
 Rollback removes the new UI entry points while leaving optional thread/turn metadata and `.kun-design` content readable by the previous version.
 

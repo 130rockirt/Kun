@@ -87,11 +87,11 @@ import {
   activeDesignThreadForWorkspace,
   designDocKey,
   forgetDesignThread,
-  isDesignThreadId,
   markDesignThread,
   readDesignThreadRegistry,
   saveDesignThreadRegistry
 } from '../design/design-thread-registry'
+import { isLegacyDesignWorkbenchThread } from '../design/design-task-classification'
 import { persistDesignChatMetaForDoc } from '../design/design-chat-transcript'
 import {
   isSddAssistantThread,
@@ -478,12 +478,8 @@ export function createNavigationWorkspaceActions(
           activeId ? get().threads.find((thread) => thread.id === activeId) ?? null : null,
           sddThreadRegistry
         )
-      const activeThreadIsLegacyDesign = Boolean(
-        activeId && (
-          activeRawThread?.agentSurface === 'design' ||
-          isDesignThreadId(activeId, designRegistry)
-        )
-      )
+      const activeThreadIsLegacyDesign = Boolean(activeId &&
+        isLegacyDesignWorkbenchThread(activeId, activeRawThread, designRegistry))
       const activeThreadFilteredFromCodeSidebar =
         get().route === 'chat' &&
         activeId != null &&

@@ -11,6 +11,15 @@ The application SHALL expose Code and Work as the only top-level workspace modes
 - **WHEN** a Code-owned conversation is locked to Design through its task surface or Design profile
 - **THEN** the task list renders the Design icon and accessible Design label instead of the Code icon
 
+#### Scenario: Legacy Design conversation remains visible
+- **WHEN** a project-owned conversation is identified by `agentSurface: 'design'` or the persisted Design thread registry
+- **THEN** it appears once in the Code workbench task list with the Design icon and accessible Design label
+- **AND** its runtime ownership and persisted Design document binding are not rewritten
+
+#### Scenario: Returning to a Design conversation
+- **WHEN** the user selects a Design conversation, reloads the workbench, or returns from another workspace mode
+- **THEN** the conversation remains an eligible Code-workbench return target and restores its Design task identity
+
 #### Scenario: Code whiteboard receives completed renderer tool results
 - **WHEN** a canvas tool result completes before the Code whiteboard document finishes loading
 - **THEN** the renderer replays the result into the matching conversation whiteboard after that document becomes active

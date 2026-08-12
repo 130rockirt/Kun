@@ -12,7 +12,14 @@ import { designContextFromTaskProfile } from '../../design/design-task-profile-i
 import { useCodeCanvasDesignSurface } from '../../design/code-canvas-design-surface'
 import { requestCodeCanvasPanelOpen } from '../../lib/code-canvas-panel-event'
 import { normalizeWorkspaceRoot } from '../../lib/workspace-path'
-import { isDesignThreadId, readDesignThreadRegistry } from '../../design/design-thread-registry'
+import {
+  designDocRefForThreadId,
+  readDesignThreadRegistry
+} from '../../design/design-thread-registry'
+import {
+  isDesignWorkbenchThread,
+  isLegacyDesignWorkbenchThread
+} from '../../design/design-task-classification'
 import {
   useWorkbenchTaskIntent,
   hasWorkbenchTaskIntent,
@@ -81,25 +88,24 @@ export function useWorkbenchTaskSurface(input: {
       : draft
   ), [draft, draftNeedsImageFallback])
   const hasPersistedDraft = hasWorkbenchTaskIntent(draftScope)
-  const legacyDesignThread = Boolean(activeThread && (
-    activeThread.agentSurface === 'design' ||
-    isDesignThreadId(activeThread.id, readDesignThreadRegistry())
-  ))
-  const taskSurface: ComposerTaskSurface = legacyDesignThread
+  const designRegistry = readDesignThreadRegistry()
+  const legacyDesignThread = Boolean(activeThread &&
+    isLegacyDesignWorkbenchThread(activeThread.id, activeThread, designRegistry))
+  const durableDesignThread = Boolean(activeThread &&
+    isDesignWorkbenchThread(activeThread.id, activeThread, designRegistry))
+  const taskSurface: ComposerTaskSurface = durableDesignThread
     ? 'design'
-    : activeThread?.lockedTaskSurface === 'design'
-      ? 'design'
-      : activeThread?.lockedTaskSurface === 'code'
-        ? 'code'
-        : lockedProfile
-          ? 'design'
-          : activeThread?.latestTurnId
-            ? 'code'
-            : hasPersistedDraft
-              ? effectiveDraft.surface
-              : pendingDesignThreadIntent
-                ? 'design'
-                : 'code'
+    : activeThread?.lockedTaskSurface === 'code'
+      ? 'code'
+      : lockedProfile
+        ? 'design'
+        : activeThread?.latestTurnId
+          ? 'code'
+          : hasPersistedDraft
+            ? effectiveDraft.surface
+            : pendingDesignThreadIntent
+              ? 'design'
+              : 'code'
   const profile: DesignTaskComposerProfile = lockedProfile
       ? {
         outputMedium: lockedProfile.outputMedium,
@@ -117,11 +123,18 @@ export function useWorkbenchTaskSurface(input: {
   const designProfileLocked = workbenchDesignProfileIsLocked(activeThread)
   const lockedProfileRef = useRef(lockedProfile)
   lockedProfileRef.current = lockedProfile
-  const restoreDesignDocumentId = lockedProfile?.documentTarget.documentId ?? ''
-  const restoreDesignTaskId = !legacyDesignThread && restoreDesignDocumentId
+  const legacyDesignRef = activeThread
+    ? designDocRefForThreadId(activeThread.id, designRegistry)
+    : null
+  const restoreDesignDocumentId = legacyDesignRef?.docId ??
+    lockedProfile?.documentTarget.documentId ?? ''
+  const restoreDesignTaskId = restoreDesignDocumentId ? activeThread?.id ?? '' : ''
+  const restoreDesignWorkspace = normalizeWorkspaceRoot(
+    legacyDesignRef?.workspaceRoot || activeThread?.workspace || input.workspaceRoot
+  )
+  const unresolvedLegacyDesignTaskId = legacyDesignThread && !legacyDesignRef
     ? activeThread?.id ?? ''
     : ''
-  const restoreDesignWorkspace = normalizeWorkspaceRoot(activeThread?.workspace || input.workspaceRoot)
 
   useEffect(() => {
     if (taskSurface === 'code') useDesignWorkspaceStore.getState().cancelDrawingCreation()
@@ -143,11 +156,42 @@ export function useWorkbenchTaskSurface(input: {
   }, [restoreDesignDocumentId, restoreDesignTaskId, restoreDesignWorkspace, taskSurface])
 
   useEffect(() => {
+    if (!unresolvedLegacyDesignTaskId || !restoreDesignWorkspace) return
+    let cancelled = false
+    const restoreLegacyDefaultDocument = async (): Promise<void> => {
+      const store = useDesignWorkspaceStore.getState()
+      if (normalizeWorkspaceRoot(store.workspaceRoot) !== restoreDesignWorkspace) {
+        store.setWorkspaceRoot(restoreDesignWorkspace)
+      }
+      await useDesignWorkspaceStore.getState().rehydrateArtifacts().catch(() => undefined)
+      if (cancelled) return
+      const restored = useDesignWorkspaceStore.getState()
+      const registryRef = designDocRefForThreadId(
+        unresolvedLegacyDesignTaskId,
+        readDesignThreadRegistry()
+      )
+      const documentId = registryRef?.docId ?? restored.activeDocumentId
+      if (!documentId) return
+      useCodeCanvasDesignSurface.getState().showDesignDocument(
+        unresolvedLegacyDesignTaskId,
+        registryRef?.workspaceRoot ?? restoreDesignWorkspace,
+        documentId
+      )
+      if (restored.documents.some((document) => document.id === documentId)) {
+        restored.switchActiveDocument(documentId)
+      }
+      requestCodeCanvasPanelOpen()
+    }
+    void restoreLegacyDefaultDocument()
+    return () => { cancelled = true }
+  }, [restoreDesignWorkspace, unresolvedLegacyDesignTaskId])
+
+  useEffect(() => {
     const generation = ++restoreGenerationRef.current
     const targetIsCurrent = (): boolean => generation === restoreGenerationRef.current
     const profileToRestore = lockedProfileRef.current
-    if (!restoreDesignTaskId || !restoreDesignDocumentId || !profileToRestore) {
-      if (!legacyDesignThread) ensuredDesignTaskIdRef.current = null
+    if (!restoreDesignTaskId || !restoreDesignDocumentId) {
+      ensuredDesignTaskIdRef.current = null
       return
     }
     provisionalDesignThreadIdsRef.current.delete(restoreDesignTaskId)
@@ -161,33 +205,34 @@ export function useWorkbenchTaskSurface(input: {
       restoreDesignDocumentId
     )
     const store = useDesignWorkspaceStore.getState()
-    const restoreProfileExecutionContext = (): void => {
+    const restoreDesignExecutionContext = (): void => {
       if (!targetIsCurrent()) return
       const restored = useDesignWorkspaceStore.getState()
-      restored.updateDesignContext(designContextFromTaskProfile(profileToRestore))
+      if (profileToRestore) {
+        restored.updateDesignContext(designContextFromTaskProfile(profileToRestore))
+      }
       if (restored.documents.some(
         (document) => document.id === restoreDesignDocumentId
       )) {
         restored.switchActiveDocument(restoreDesignDocumentId)
       }
     }
-    restoreProfileExecutionContext()
+    restoreDesignExecutionContext()
     if (normalizeWorkspaceRoot(store.workspaceRoot) !== workspace) {
       store.setWorkspaceRoot(workspace)
-      restoreProfileExecutionContext()
+      restoreDesignExecutionContext()
       void useDesignWorkspaceStore.getState().loadDesignSettings().then(
-        () => { if (targetIsCurrent()) restoreProfileExecutionContext() }
+        () => { if (targetIsCurrent()) restoreDesignExecutionContext() }
       )
     } else if (store.documents.some((document) => document.id === restoreDesignDocumentId)) {
-      restoreProfileExecutionContext()
+      restoreDesignExecutionContext()
     } else {
       void store.rehydrateArtifacts().then(() => {
-        if (targetIsCurrent()) restoreProfileExecutionContext()
+        if (targetIsCurrent()) restoreDesignExecutionContext()
       })
     }
     requestCodeCanvasPanelOpen()
   }, [
-    legacyDesignThread,
     restoreDesignDocumentId,
     restoreDesignTaskId,
     restoreDesignWorkspace
@@ -255,10 +300,8 @@ export function useWorkbenchTaskSurface(input: {
     const stateThread = stateThreadId
       ? input.threads.find((thread) => thread.id === stateThreadId)
       : null
-    const stateThreadIsLegacyDesign = Boolean(stateThread && (
-      stateThread.agentSurface === 'design' ||
-      isDesignThreadId(stateThread.id, readDesignThreadRegistry())
-    ))
+    const stateThreadIsLegacyDesign = Boolean(stateThread &&
+      isLegacyDesignWorkbenchThread(stateThread.id, stateThread, readDesignThreadRegistry()))
     let threadId =
       stateThread && !stateThreadIsLegacyDesign && stateThread.agentSurface !== 'write' &&
       normalizeWorkspaceRoot(stateThread.workspace) === normalizeWorkspaceRoot(workspaceRoot)

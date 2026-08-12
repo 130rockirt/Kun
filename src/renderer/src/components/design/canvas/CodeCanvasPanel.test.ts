@@ -38,4 +38,18 @@ describe('CodeCanvasPanel', () => {
     expect(html).toContain('data-code-canvas-titlebar="true"')
     expect(html).not.toContain('border-b border-ds-border-muted bg-white/92')
   })
+
+  it('keeps a classified Design task in its Design loading state before target hydration', () => {
+    const html = renderToStaticMarkup(
+      createElement(CodeCanvasPanel, {
+        workspaceRoot: '/workspace',
+        activeThreadId: 'design-thread',
+        designTaskActive: true,
+        onCollapse: () => {}
+      })
+    )
+
+    expect(html).toContain('Loading')
+    expect(html).not.toContain('Open or start a conversation to use the whiteboard.')
+  })
 })

@@ -12,10 +12,10 @@ import { useSddDraftStore } from '../../sdd/sdd-draft-store'
 import { markSddAssistantThread } from '../../sdd/sdd-thread-registry'
 import {
   designDocRefForThreadId,
-  isDesignThreadId,
   readDesignThreadRegistry,
   type DesignThreadRegistry
 } from '../../design/design-thread-registry'
+import { isDesignWorkbenchThread } from '../../design/design-task-classification'
 import { formatWorkspacePickerError } from '../../lib/format-workspace-picker-error'
 import { normalizeWorkspaceRoot, workspaceRootScopeKey } from '../../lib/workspace-path'
 import type { RightPanelMode } from '../chat/WorkbenchTopBar'
@@ -95,14 +95,20 @@ export function isWorkbenchDesignThread(
   thread: NormalizedThread | null,
   registry: DesignThreadRegistry = readDesignThreadRegistry()
 ): boolean {
-  return thread?.agentSurface === 'design' || isDesignThreadId(threadId, registry)
+  return isDesignWorkbenchThread(threadId, thread, registry)
+}
+
+type WorkbenchDesignDocumentRef = {
+  workspaceRoot: string
+  docId: string
+  boardArtifactId?: string
 }
 
 export function designDocumentRefForWorkbenchThread(
   threadId: string,
   thread: NormalizedThread | null,
   registry: DesignThreadRegistry = readDesignThreadRegistry()
-): { workspaceRoot: string; docId: string; boardArtifactId?: string } | null {
+): WorkbenchDesignDocumentRef | null {
   // Registry-owned threads belong to the legacy standalone Design workflow.
   // Keep their existing document binding authoritative and never rewrite it
   // from newer optional runtime metadata.
@@ -183,16 +189,18 @@ export function useWorkbenchNavigationController({
       const thread = threads.find((item) => item.id === id) ?? null
       const designRegistry = readDesignThreadRegistry()
       if (isWorkbenchDesignThread(id, thread, designRegistry)) {
-        const runtimeOrLegacyRef = designDocumentRefForWorkbenchThread(id, thread, designRegistry)
-        const cachedSurface = useCodeCanvasDesignSurface.getState().surface
-        const designRef = runtimeOrLegacyRef ?? (
-          cachedSurface?.threadId === id
+        const cachedDesignRef = (): WorkbenchDesignDocumentRef | null => {
+          const cachedSurface = useCodeCanvasDesignSurface.getState().surface
+          return cachedSurface?.threadId === id
             ? {
                 workspaceRoot: cachedSurface.workspaceRoot,
                 docId: cachedSurface.documentId
               }
             : null
-        )
+        }
+        let designRef: WorkbenchDesignDocumentRef | null =
+          designDocumentRefForWorkbenchThread(id, thread, designRegistry) ??
+          cachedDesignRef()
 
         if (useSddDraftStore.getState().activeDraft) {
           dismissActiveSddDraft({ closeAssistant: true })
@@ -211,6 +219,49 @@ export function useWorkbenchNavigationController({
         requestCodeCanvasPanelOpen()
         await selectThread(id, { selectionGuard: isCurrentRequest })
         if (!isCurrentRequest()) return
+        if (!designRef) {
+          const hydratedThread = useChatStore.getState().threads.find((item) => item.id === id) ?? null
+          designRef = designDocumentRefForWorkbenchThread(id, hydratedThread, designRegistry) ??
+            cachedDesignRef()
+          if (designRef) {
+            useCodeCanvasDesignSurface.getState().showDesignDocument(
+              id,
+              designRef.workspaceRoot,
+              designRef.docId
+            )
+          }
+        }
+        if (!designRef) {
+          const hydratedThread = useChatStore.getState().threads.find((item) => item.id === id) ?? thread
+          const fallbackWorkspace = normalizeWorkspaceRoot(hydratedThread?.workspace)
+          if (fallbackWorkspace) {
+            const designStore = useDesignWorkspaceStore.getState()
+            designStore.setWorkspaceRoot(fallbackWorkspace)
+            await useDesignWorkspaceStore.getState().rehydrateArtifacts().catch(() => undefined)
+            if (!isCurrentRequest()) return
+            const restoredState = useDesignWorkspaceStore.getState()
+            const restoredRef = designDocumentRefForWorkbenchThread(
+              id,
+              hydratedThread,
+              readDesignThreadRegistry()
+            )
+            const restoredDocumentId = restoredRef?.docId ?? restoredState.activeDocumentId
+            if (restoredDocumentId) {
+              designRef = {
+                workspaceRoot: restoredRef?.workspaceRoot ?? fallbackWorkspace,
+                docId: restoredDocumentId,
+                ...(restoredRef?.boardArtifactId
+                  ? { boardArtifactId: restoredRef.boardArtifactId }
+                  : {})
+              }
+              useCodeCanvasDesignSurface.getState().showDesignDocument(
+                id,
+                designRef.workspaceRoot,
+                designRef.docId
+              )
+            }
+          }
+        }
         if (!designRef) return
 
         const designStore = useDesignWorkspaceStore.getState()

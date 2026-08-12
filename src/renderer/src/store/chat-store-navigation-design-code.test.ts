@@ -358,7 +358,7 @@ describe('chat-store navigation workspace selection', () => {
     expect(harness.state.composerAgentId).toBe('')
   })
 
-  it('openCode leaves a registered legacy Design deep link for the latest Code task', async () => {
+  it('openCode keeps a registered legacy Design task active in the shared workbench', async () => {
     const storage = new MemoryStorage()
     saveDesignThreadRegistry(
       markDesignThread(
@@ -391,12 +391,11 @@ describe('chat-store navigation workspace selection', () => {
     await harness.actions.openCode()
 
     expect(harness.state.route).toBe('chat')
-    expect(harness.selectThread).toHaveBeenCalledWith('thr_code', {
-      selectionGuard: expect.any(Function)
-    })
+    expect(harness.state.activeThreadId).toBe('thr_design')
+    expect(harness.selectThread).not.toHaveBeenCalled()
   })
 
-  it('openCode leaves a standalone Design deep link for the latest Code task', async () => {
+  it('openCode keeps a standalone Design task active in the shared workbench', async () => {
     const harness = buildHarness()
     harness.state.activeThreadId = 'thr_design_durable'
     harness.state.workspaceRoot = '/Users/zxy/project'
@@ -420,12 +419,11 @@ describe('chat-store navigation workspace selection', () => {
     await harness.actions.openCode()
 
     expect(harness.state.route).toBe('chat')
-    expect(harness.selectThread).toHaveBeenCalledWith('thr_code', {
-      selectionGuard: expect.any(Function)
-    })
+    expect(harness.state.activeThreadId).toBe('thr_design_durable')
+    expect(harness.selectThread).not.toHaveBeenCalled()
   })
 
-  it('openCode leaves a legacy design assistant deep link for a Code task', async () => {
+  it('openCode keeps a migrated legacy Design task active in the shared workbench', async () => {
     const storage = new MemoryStorage()
     storage.setItem(
       'kun.design-assistant.threadRegistry.v1',
@@ -453,9 +451,8 @@ describe('chat-store navigation workspace selection', () => {
     await harness.actions.openCode()
 
     expect(harness.state.route).toBe('chat')
-    expect(harness.selectThread).toHaveBeenCalledWith('thr_code', {
-      selectionGuard: expect.any(Function)
-    })
+    expect(harness.state.activeThreadId).toBe('thr_legacy_design')
+    expect(harness.selectThread).not.toHaveBeenCalled()
   })
 
   it('openCode clears an internal design workspace thread when no Code thread is available', async () => {

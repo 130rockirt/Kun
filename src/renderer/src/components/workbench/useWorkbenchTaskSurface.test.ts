@@ -4,6 +4,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { DesignTaskProfile } from '../../agent/design-task-profile'
 import type { NormalizedThread } from '../../agent/types'
 import { useDesignWorkspaceStore } from '../../design/design-workspace-store'
+import { useCodeCanvasDesignSurface } from '../../design/code-canvas-design-surface'
+import {
+  emptyDesignThreadRegistry,
+  markDesignThread,
+  saveDesignThreadRegistry
+} from '../../design/design-thread-registry'
 import { useChatStore } from '../../store/chat-store'
 import {
   useWorkbenchTaskSurface,
@@ -54,6 +60,12 @@ describe('workbench task mode', () => {
       localStorage,
       kunGui: undefined,
       dispatchEvent: vi.fn(() => true)
+    })
+    useCodeCanvasDesignSurface.setState({ surface: null })
+    useDesignWorkspaceStore.setState({
+      workspaceRoot: '',
+      documents: [],
+      activeDocumentId: null
     })
   })
 
@@ -484,8 +496,15 @@ describe('workbench task mode', () => {
     await act(async () => renderer.unmount())
   })
 
-  it('keeps legacy standalone Design threads read-only', async () => {
+  it('keeps legacy standalone Design mode locked and restores its original canvas', async () => {
     const legacy = codeThread({ id: 'legacy-design', agentSurface: 'design' })
+    saveDesignThreadRegistry(markDesignThread(
+      '/workspace',
+      'legacy-document',
+      legacy.id,
+      emptyDesignThreadRegistry()
+    ), window.localStorage)
+    vi.spyOn(useDesignWorkspaceStore.getState(), 'rehydrateArtifacts').mockResolvedValue()
     let runtime: ReturnType<typeof useWorkbenchTaskSurface> | null = null
     const Harness = () => {
       runtime = useWorkbenchTaskSurface({
@@ -504,8 +523,61 @@ describe('workbench task mode', () => {
     await act(async () => { renderer = create(createElement(Harness)) })
     expect(runtime!.taskSurface).toBe('design')
     expect(runtime!.taskSurfaceTransitioning).toBe(true)
+    expect(useCodeCanvasDesignSurface.getState().surface).toEqual({
+      threadId: legacy.id,
+      workspaceRoot: '/workspace',
+      documentId: 'legacy-document'
+    })
     act(() => runtime!.onTaskSurfaceChange('code'))
     expect(runtime!.taskSurface).toBe('design')
+    await act(async () => renderer.unmount())
+  })
+
+  it('restores the legacy default document when the old registry has no document id', async () => {
+    const legacy = codeThread({ id: 'legacy-default', agentSurface: 'design' })
+    saveDesignThreadRegistry(markDesignThread(
+      '/workspace',
+      '',
+      legacy.id,
+      emptyDesignThreadRegistry()
+    ), window.localStorage)
+    vi.spyOn(useDesignWorkspaceStore.getState(), 'rehydrateArtifacts').mockImplementation(async () => {
+      useDesignWorkspaceStore.setState({
+        workspaceRoot: '/workspace',
+        documents: [{
+          id: 'migrated-default',
+          title: 'Legacy drawing',
+          titleOrigin: 'generated',
+          createdAt: '2026-08-13T00:00:00.000Z',
+          updatedAt: '2026-08-13T00:00:00.000Z',
+          order: 0,
+          artifacts: [],
+          activeArtifactId: null
+        }],
+        activeDocumentId: 'migrated-default'
+      })
+    })
+    const Harness = () => {
+      useWorkbenchTaskSurface({
+        activeThreadId: legacy.id,
+        threads: [legacy],
+        workspaceRoot: '/workspace',
+        activeSkillWorkspace: '/workspace',
+        createThread: vi.fn(async () => 'unexpected'),
+        deleteThread: vi.fn(async () => undefined),
+        setComposerMode: vi.fn(),
+        setComposerOrchestration: vi.fn()
+      })
+      return null
+    }
+    let renderer!: ReactTestRenderer
+    await act(async () => { renderer = create(createElement(Harness)) })
+
+    expect(useCodeCanvasDesignSurface.getState().surface).toEqual({
+      threadId: legacy.id,
+      workspaceRoot: '/workspace',
+      documentId: 'migrated-default'
+    })
     await act(async () => renderer.unmount())
   })
 })

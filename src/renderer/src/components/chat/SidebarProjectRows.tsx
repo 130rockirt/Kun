@@ -22,6 +22,7 @@ import {
   Trash2
 } from 'lucide-react'
 import type { NormalizedThread } from '../../agent/types'
+import { isDesignWorkbenchThread } from '../../design/design-task-classification'
 import { formatRelativeTime } from '../../lib/format-relative-time'
 import type { SddDraftHistoryItem } from '../../sdd/sdd-draft-history'
 import type { SddDraft } from '../../sdd/sdd-draft-store'
@@ -209,9 +210,7 @@ export function ThreadRow({
     ? t('sidebarThreadWorktree', { branch: worktreeRecord.branch || 'worktree' })
     : ''
   const updatedLabel = formatRelativeTime(thread.updatedAt, locale)
-  const isDesignTask = thread.agentSurface === 'design' ||
-    thread.lockedTaskSurface === 'design' ||
-    (!thread.lockedTaskSurface && Boolean(thread.designProfile))
+  const isDesignTask = isDesignWorkbenchThread(thread.id, thread)
   const taskTypeLabel = isDesignTask ? t('taskTypeDesign') : t('taskTypeCode')
   const ariaLabel = [
     thread.title,

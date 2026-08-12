@@ -43,7 +43,7 @@
 - [x] 7.2 Make first Design-profile admission retry-safe and crash-safe so only an accepted Design turn can lock the profile.
 - [x] 7.3 Make Design fork, side-fork, and resume commit/cleanup ordering safe, and expose session-only Design metadata needed to clone a recovery target.
 - [x] 7.4 Keep a per-thread pre-send mode draft, restore the locked Code/Design mode from runtime history/profile metadata, and remove the selector after the first accepted turn.
-- [x] 7.5 Keep legacy standalone Design conversations out of the unified Code list while preserving read-only/deep-link access to their existing document bindings.
+- [x] 7.5 Preserve legacy standalone Design records and document bindings during the initial unified-workbench transition without migrating or deleting their data.
 - [x] 7.6 Persist the resolved root `DESIGN.md` style snapshot or deterministic parsed equivalent in the locked profile and identify its source in the composer.
 - [x] 7.7 Make Design document cloning replay-safe, prevent historical-turn forks from pairing truncated chat with future canvas state, and add fault-injection coverage.
 - [x] 7.8 Place every successful primary AI-image result idempotently even when the same turn also applies ShapeOps.
@@ -89,3 +89,14 @@
 - [x] 10.4 Bind live replay to the expected Code document and durably replay missed tool results, then run focused tests, typecheck/build, lint, the file-line gate, OpenSpec validation, and diff checks.
 
   - Evidence (2026-08-13): 96 focused Design canvas, embedded-canvas, shared-task-list, and task-surface files passed 773/773 tests. The production build, lint, file-line gate, strict OpenSpec validation, and `git diff --check` passed; lint retained only 25 existing warnings. Full typecheck was run in both the fix worktree and unchanged local `develop`; both reported the same existing errors in `FloatingComposer.queue-commands.test.ts` and `settings-section-model-routes-support.tsx`.
+
+## 11. Design Session List And Canvas Restoration Remediation
+
+- [x] 11.1 Revise the unified task-list and embedded-whiteboard contracts so project-owned legacy and Code-owned Design conversations share the list and restore the full Design surface without data migration.
+- [x] 11.2 Centralize Design task classification and apply it to sidebar filtering, task icons, navigation, selection memory, and Code-workbench return behavior.
+- [x] 11.3 Restore legacy registry and Code-owned profile targets through the full Design document canvas, keeping a Design loading state while the target hydrates.
+- [x] 11.4 Add focused regressions and run targeted tests, typecheck, full tests, lint, build, file-line gate, strict OpenSpec validation, and diff checks.
+
+  - Evidence (2026-08-13): 8 focused sidebar, navigation, task-surface, canvas, and store files passed 92/92 tests. `npm run build`, `npm run lint`, `npm run check:file-lines`, strict OpenSpec validation, and `git diff --check` passed; lint retained only existing warnings outside this change.
+  - Full renderer/main tests passed 7133 tests with 11 failures, and full Kun tests passed 4386 tests with 21 failures. Every renderer/main failure file was reproduced on unchanged local `develop`; the remaining baselines cover Design's existing 701-line boundary, locale parity, provider/settings/packaging expectations, dev-preview policy, worktree admission, ToolStormBreaker/loop recovery, native ABI loading, and unrelated timing/overlay expectations.
+  - Kun TypeScript passed. Full typecheck was run in both the fix worktree and unchanged local `develop`; both reported only the same existing DOM-versus-React `KeyboardEvent` errors in `settings-section-model-routes-support.tsx`.

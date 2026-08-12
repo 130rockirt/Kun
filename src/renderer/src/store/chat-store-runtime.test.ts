@@ -80,6 +80,8 @@ function makeThread(overrides: Partial<NormalizedThread> & Pick<NormalizedThread
     mode: overrides.mode ?? 'agent',
     workspace: overrides.workspace ?? '/workspace/deepseek-gui',
     ...(overrides.agentSurface ? { agentSurface: overrides.agentSurface } : {}),
+    ...(overrides.lockedTaskSurface ? { lockedTaskSurface: overrides.lockedTaskSurface } : {}),
+    ...(overrides.designProfile ? { designProfile: overrides.designProfile } : {}),
     ...(overrides.archived !== undefined ? { archived: overrides.archived } : {}),
     ...(overrides.status ? { status: overrides.status } : {}),
     ...(overrides.relation ? { relation: overrides.relation } : {}),
@@ -134,7 +136,7 @@ describe('code thread classification', () => {
     expect(isCodeThread(archived)).toBe(false)
   })
 
-  it('keeps legacy registered Design threads out of the unified Code task list', () => {
+  it('includes legacy registered Design threads in the unified Code task list', () => {
     const designRegistry = markDesignThread(
       '/workspace/deepseek-gui',
       'login-screen',
@@ -143,11 +145,11 @@ describe('code thread classification', () => {
     )
     const design = makeThread({ id: 'thr_design' })
 
-    expect(isCodeSidebarThread(design, [], undefined, designRegistry)).toBe(false)
-    expect(isCodeThread(design, [], undefined, designRegistry)).toBe(false)
+    expect(isCodeSidebarThread(design, [], undefined, designRegistry)).toBe(true)
+    expect(isCodeThread(design, [], undefined, designRegistry)).toBe(true)
   })
 
-  it('keeps standalone Design threads out of the unified Code task list', () => {
+  it('includes standalone Design threads in the unified Code task list', () => {
     const designTask = makeThread({
       id: 'thr_design_durable',
       title: 'Renamed by the user',
@@ -159,13 +161,13 @@ describe('code thread classification', () => {
       [],
       emptyWriteThreadRegistry(),
       emptyDesignThreadRegistry()
-    )).toBe(false)
+    )).toBe(true)
     expect(isCodeThread(
       designTask,
       [],
       emptyWriteThreadRegistry(),
       emptyDesignThreadRegistry()
-    )).toBe(false)
+    )).toBe(true)
   })
 
   it('includes Code-owned tasks that have an accepted Design profile', () => {

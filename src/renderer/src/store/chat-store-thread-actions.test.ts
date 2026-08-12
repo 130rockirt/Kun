@@ -522,7 +522,7 @@ describe('chat-store-thread-actions queued messages', () => {
     expect(state.lastCodeThreadId).toBe('thr_code')
   })
 
-  it('does not record a standalone Design thread as Code-workbench memory', async () => {
+  it('records a standalone Design thread as Code-workbench memory', async () => {
     registryMock.getProvider.mockReturnValue({
       getThreadDetail: vi.fn(async () => ({ blocks: [], latestSeq: 0, threadStatus: 'idle' })),
       subscribeThreadEvents: vi.fn(async () => undefined)
@@ -540,7 +540,7 @@ describe('chat-store-thread-actions queued messages', () => {
     await actions.selectThread('thr_design')
 
     expect(state.activeThreadId).toBe('thr_design')
-    expect(state.lastCodeThreadId).toBe('thr_code_memory')
+    expect(state.lastCodeThreadId).toBe('thr_design')
   })
 
   it('snapshots active-turn model and reasoning selections into the next queued input', async () => {

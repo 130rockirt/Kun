@@ -263,6 +263,7 @@ export function useWorkbenchShellRuntime(context: Context): {
     canvas: {
       workspaceRoot: activeCodeCanvasWorkspace,
       activeThreadId,
+      designTaskActive: taskSurface === 'design',
       busy,
       onOpenAgentSettings: () => openSettings('design'),
       onImplementDesign: implementDesignInCode,

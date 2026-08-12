@@ -47,6 +47,8 @@ type Props = Pick<
 > & {
   workspaceRoot: string
   activeThreadId: string | null
+  /** Keeps a classified Design task on the full Design surface while its target hydrates. */
+  designTaskActive?: boolean
   onCollapse: () => void
   className?: string
 }
@@ -76,6 +78,7 @@ export function codeCanvasPanelTitlebarClass(): string {
 export function CodeCanvasPanel({
   workspaceRoot,
   activeThreadId,
+  designTaskActive = false,
   onCollapse,
   className,
   busy,
@@ -94,16 +97,18 @@ export function CodeCanvasPanel({
   const activationGenerationRef = useRef(0)
   const activeThreadIdRef = useRef(activeThreadId)
   activeThreadIdRef.current = activeThreadId
-  const designMode = Boolean(
+  const matchingDesignSurface = Boolean(
     surface &&
     surface.threadId === activeThreadId &&
     normalizeDesignWorkspaceRoot(surface.workspaceRoot) === normalizeDesignWorkspaceRoot(workspaceRoot)
   )
+  const designMode = matchingDesignSurface || Boolean(designTaskActive && activeThreadId)
+  const activeDesignSurface = matchingDesignSurface ? surface : null
 
   // Activate the requested 设计稿 so the design store projects its artifacts
   // (the board + linked HTML frames for that document).
   useEffect(() => {
-    if (!designMode || !surface) return
+    if (!matchingDesignSurface || !surface) return
     const generation = ++activationGenerationRef.current
     const restoreLatestSurface = (): void => {
       const latest = useCodeCanvasDesignSurface.getState().surface
@@ -135,7 +140,7 @@ export function CodeCanvasPanel({
         })
       }
     }
-  }, [designMode, surface])
+  }, [activeThreadId, matchingDesignSurface, surface])
 
   const ready = Boolean(workspaceRoot && activeThreadId)
   const artifactId = activeThreadId ? codeCanvasArtifactId(activeThreadId) : ''
@@ -175,22 +180,23 @@ export function CodeCanvasPanel({
     'code'
   )
 
-  const designDoc = designMode && surface
-    ? designDocuments.find((document) => document.id === surface.documentId) ?? null
+  const designDoc = activeDesignSurface
+    ? designDocuments.find((document) => document.id === activeDesignSurface.documentId) ?? null
     : null
   const designDocTitle = designDoc ? displayDrawingTitle(designDoc, t('designUntitledDrawing')) : ''
   const returnToCanonicalDocument = useCallback(() => {
-    if (!surface?.canonicalDocumentId || !activeThreadId) return
+    if (!activeDesignSurface?.canonicalDocumentId || !activeThreadId) return
     useCodeCanvasDesignSurface.getState().showDesignDocument(
       activeThreadId,
       workspaceRoot,
-      surface.canonicalDocumentId,
-      { canonicalDocumentId: surface.canonicalDocumentId }
+      activeDesignSurface.canonicalDocumentId,
+      { canonicalDocumentId: activeDesignSurface.canonicalDocumentId }
     )
-  }, [activeThreadId, surface?.canonicalDocumentId, workspaceRoot])
+  }, [activeDesignSurface, activeThreadId, workspaceRoot])
   const continueHistoricalDocument = useCallback(() => {
     if (
-      continuingHistorical || !surface?.readOnly || surface.canonicalDocumentId ||
+      continuingHistorical || !activeDesignSurface?.readOnly ||
+      activeDesignSurface.canonicalDocumentId ||
       !activeThreadId || !designDoc
     ) return
     const board = findDesignBoardArtifact(designDoc.artifacts)
@@ -235,7 +241,7 @@ export function CodeCanvasPanel({
         setContinuingHistorical(false)
       }
     })()
-  }, [activeThreadId, continuingHistorical, designDoc, surface, workspaceRoot])
+  }, [activeDesignSurface, activeThreadId, continuingHistorical, designDoc, workspaceRoot])
 
   if (designMode) {
     return (
@@ -256,12 +262,12 @@ export function CodeCanvasPanel({
               <span className="min-w-0 truncate text-[12.5px] font-medium text-ds-ink">
                 {designDocTitle || t('rightPanelWhiteboard')}
               </span>
-              {surface?.readOnly ? (
+              {activeDesignSurface?.readOnly ? (
                 <span className="shrink-0 rounded-full bg-ds-surface-subtle px-2 py-0.5 text-[10.5px] text-ds-muted">
                   {t('designViewPreview')}
                 </span>
               ) : null}
-              {surface?.readOnly && surface.canonicalDocumentId ? (
+              {activeDesignSurface?.readOnly && activeDesignSurface.canonicalDocumentId ? (
                 <button
                   type="button"
                   onClick={returnToCanonicalDocument}
@@ -269,7 +275,7 @@ export function CodeCanvasPanel({
                 >
                   {t('designReturnToTaskWhiteboard', { defaultValue: 'Return to task whiteboard' })}
                 </button>
-              ) : surface?.readOnly ? (
+              ) : activeDesignSurface?.readOnly ? (
                 <button
                   type="button"
                   disabled={continuingHistorical}
@@ -290,7 +296,7 @@ export function CodeCanvasPanel({
               workspaceRoot={workspaceRoot}
               documentId={designDoc.id}
               activeThreadId={activeThreadId}
-              readOnly={surface?.readOnly === true}
+              readOnly={activeDesignSurface?.readOnly === true}
               busy={busy}
               onOpenAgentSettings={onOpenAgentSettings}
               onImplementDesign={onImplementDesign}

@@ -11,6 +11,19 @@ The Code right workspace SHALL mount the bound Design document with the existing
 - **WHEN** the user collapses, focuses, resizes, or reopens the whiteboard
 - **THEN** the task, locked profile, selected document, and artifact state remain unchanged
 
+#### Scenario: Code-owned Design task restoration
+- **WHEN** a Code-owned conversation is classified as Design by its locked task surface or Design profile
+- **THEN** selecting it restores the profile document and board in the full Design surface instead of the lightweight Code canvas
+
+#### Scenario: Legacy Design task restoration
+- **WHEN** the user selects a legacy Design conversation that owns an existing registry document binding
+- **THEN** the right whiteboard opens that original writable `.kun-design` document in the full Design surface
+- **AND** cross-task document previews retain their existing read-only continuation behavior
+
+#### Scenario: Design target hydration
+- **WHEN** a Design conversation is active before its document target finishes hydrating
+- **THEN** the right whiteboard renders a Design loading state and never falls back to the lightweight Code canvas
+
 ### Requirement: HTML and AI image are distinct primary lanes
 HTML SHALL be the default primary medium; AI-image tasks SHALL generate raster assets on the whiteboard and SHALL NOT silently create HTML screens.
 

@@ -67,6 +67,27 @@ describe('workbench thread navigation surface', () => {
     )).toBe(false)
   })
 
+  it('identifies Code-owned Design tasks from their durable mode', () => {
+    expect(isWorkbenchDesignThread(
+      'thr_design',
+      { ...thread('code'), lockedTaskSurface: 'design' },
+      emptyDesignThreadRegistry()
+    )).toBe(true)
+    expect(isWorkbenchDesignThread(
+      'thr_design',
+      { ...thread('code'), lockedTaskSurface: 'code', designProfile: {
+        version: 1,
+        documentTarget: { documentId: 'runtime-document', boardArtifactId: 'board-1' },
+        outputMedium: 'html',
+        target: 'web',
+        preset: 'none',
+        context: { tone: [] },
+        lockedAtTurnId: 'turn-1'
+      } },
+      emptyDesignThreadRegistry()
+    )).toBe(false)
+  })
+
   it('resolves the runtime profile document for a Code-owned Design turn', () => {
     const designTask: NormalizedThread = {
       ...thread('code'),
@@ -240,7 +261,8 @@ describe('workbench navigation controller Design tasks', () => {
       .spyOn(useDesignWorkspaceStore.getState(), 'rehydrateArtifacts')
       .mockResolvedValue()
     const designTask: NormalizedThread = {
-      ...thread('design'),
+      ...thread('code'),
+      lockedTaskSurface: 'design',
       designProfile: {
         version: 1,
         documentTarget: { documentId: 'runtime-document', boardArtifactId: 'board-1' },
@@ -305,6 +327,45 @@ describe('workbench navigation controller Design tasks', () => {
       documentId: 'legacy-document'
     })
     expect(readDesignThreadRegistry(storage)).toEqual(registry)
+  })
+
+  it('restores a legacy default drawing after the pre-document registry hydrates', async () => {
+    const storage = new MemoryStorage()
+    const registry = markDesignThread(
+      '/workspace/project',
+      '',
+      'thr_design',
+      emptyDesignThreadRegistry()
+    )
+    saveDesignThreadRegistry(registry, storage)
+    vi.stubGlobal('window', { localStorage: storage, dispatchEvent: vi.fn(() => true) })
+    vi.spyOn(useDesignWorkspaceStore.getState(), 'rehydrateArtifacts').mockImplementation(async () => {
+      useDesignWorkspaceStore.setState({
+        workspaceRoot: '/workspace/project',
+        documents: [{
+          id: 'legacy-default',
+          title: 'Legacy drawing',
+          titleOrigin: 'generated',
+          createdAt: '2026-08-13T00:00:00.000Z',
+          updatedAt: '2026-08-13T00:00:00.000Z',
+          order: 0,
+          artifacts: [],
+          activeArtifactId: null
+        }],
+        activeDocumentId: 'legacy-default'
+      })
+    })
+    const props = makeProps({ threads: [thread()] })
+
+    await renderController(props)
+    await openThreadAndFlush('thr_design')
+
+    expectSelected(props.selectThread, 'thr_design')
+    expect(useCodeCanvasDesignSurface.getState().surface).toEqual({
+      threadId: 'thr_design',
+      workspaceRoot: '/workspace/project',
+      documentId: 'legacy-default'
+    })
   })
 })
 

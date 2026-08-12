@@ -3,9 +3,9 @@ import { browserStorage, type BrowserStorageLike } from '../lib/browser-storage'
 import { normalizeWorkspaceRoot } from '../lib/workspace-path'
 
 /**
- * Thin design-thread registry — keeps design-assistant threads out of the
- * code-thread sidebar and lets each 设计稿 (design document) reuse its own
- * thread. Records are keyed by a composite (workspace + 设计稿) scope so that
+ * Thin design-thread registry — preserves each legacy 设计稿 (design document)
+ * conversation and its original document binding in the unified Code task
+ * list. Records are keyed by a composite (workspace + 设计稿) scope so that
  * switching 设计稿 switches the conversation. Legacy per-workspace records are
  * re-keyed onto the default 设计稿 by {@link migrateRegistryToDoc}.
  */
