@@ -109,6 +109,7 @@ function transcriptLine(item: TurnItem): string {
       return `[user] ${clip(userMessageTextWithComposerContexts(item), 2_000)}`
     case 'goal_context':
     case 'model_context':
+    case 'runtime_context_source':
     case 'interruption_note':
       // These are model-only execution records. Delegated SDK transcript
       // assembly handles active goal context explicitly; public session

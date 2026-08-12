@@ -270,7 +270,9 @@ export class DelegatedSessionCoordinator {
 }
 
 export function delegatedHistoryDigest(items: readonly TurnItem[]): string {
-  const effective = effectiveHistoryAfterLatestCompaction(items)
+  const effective = effectiveHistoryAfterLatestCompaction(
+    items.filter((item) => item.kind !== 'runtime_context_source')
+  )
   return sha256(stableStringify(effective.map(digestItem)))
 }
 
@@ -303,7 +305,9 @@ export function priorItemsForDelegatedTurn(
   items: readonly TurnItem[],
   currentTurnId: string
 ): TurnItem[] {
-  const prior = items.filter((item) => item.turnId !== currentTurnId)
+  const prior = items.filter((item) =>
+    item.turnId !== currentTurnId && item.kind !== 'runtime_context_source'
+  )
   const priorGoalKeys = new Set(
     prior
       .filter((item): item is Extract<TurnItem, { kind: 'goal_context' }> => item.kind === 'goal_context')

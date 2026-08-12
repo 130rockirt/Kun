@@ -19,6 +19,10 @@ export const MAX_INDEX_BUILD_MS = 250
 
 export const MAX_ASSISTANT_INDEX_BUILD_MS = 2_500
 
+const MAX_FRESH_INDEX_BUILD_ATTEMPTS = 3
+
+const MAX_STABLE_FILE_READ_ATTEMPTS = 2
+
 export const MAX_SCAN_ENTRIES = 8_000
 
 export const MAX_INDEX_FILES = 160
@@ -125,6 +129,8 @@ export type WorkspaceIndex = {
   workspaceRoot: string
   builtAt: number
   files: number
+  /** Filesystem identity captured with the chunks so active-file saves invalidate cached text. */
+  fileSignatures: Map<string, string>
   chunks: IndexedChunk[]
   averageLength: number
   documentFrequency: Map<string, number>
@@ -141,6 +147,28 @@ export const indexCache = new Map<string, WorkspaceIndex>()
 
 export const inFlightIndexCache = new Map<string, Promise<WorkspaceIndex>>()
 
+type WriteRetrievalIndexTestHooks = {
+  afterFileRead?: (path: string) => void | Promise<void>
+  beforeIndexBuild?: (workspaceRoot: string) => void | Promise<void>
+  beforeIndexReturn?: (workspaceRoot: string) => void | Promise<void>
+}
+
+let testHooks: WriteRetrievalIndexTestHooks = {}
+
+export function setWriteRetrievalIndexTestHooks(hooks: WriteRetrievalIndexTestHooks): void {
+  testHooks = hooks
+}
+
+export const indexBuildGenerations = new Map<string, number>()
+
+function currentIndexBuildGeneration(cacheKey: string): number {
+  return indexBuildGenerations.get(cacheKey) ?? 0
+}
+
+function invalidateInFlightIndexBuild(cacheKey: string): void {
+  indexBuildGenerations.set(cacheKey, currentIndexBuildGeneration(cacheKey) + 1)
+}
+
 export function pruneIndexCache(now: number): void {
   for (const [key, index] of indexCache) {
     if (now - index.builtAt > INDEX_CACHE_TTL_MS) indexCache.delete(key)
@@ -155,6 +183,41 @@ export function pruneIndexCache(now: number): void {
 export type WorkspaceIndexOptions = {
   includePdf: boolean
   buildMs: number
+  /** Paths whose cached chunks must still match the live file before reuse. */
+  freshPaths?: string[]
+}
+
+async function fileSignature(path: string): Promise<string> {
+  try {
+    const info = await stat(path)
+    return [info.dev, info.ino, info.size, info.mtimeMs, info.ctimeMs].join(':')
+  } catch {
+    return 'missing'
+  }
+}
+
+async function cachedIndexMatchesFreshPaths(
+  index: WorkspaceIndex,
+  paths: readonly string[]
+): Promise<boolean> {
+  const candidates = [...new Set(paths.map(resolveComparablePath).filter(Boolean))]
+  for (const path of candidates) {
+    const captured = index.fileSignatures.get(path)
+    const live = await fileSignature(path)
+    if (captured === undefined ? live !== 'missing' : captured !== live) return false
+  }
+  return true
+}
+
+async function captureFileSignatures(paths: readonly string[]): Promise<Map<string, string>> {
+  return new Map(await Promise.all(paths.map(async (path) => [path, await fileSignature(path)] as const)))
+}
+
+function fileSignaturesMatch(
+  left: ReadonlyMap<string, string>,
+  right: ReadonlyMap<string, string>
+): boolean {
+  return left.size === right.size && [...left].every(([path, signature]) => right.get(path) === signature)
 }
 
 export function deadlineExceeded(deadline: number): boolean {
@@ -422,7 +485,9 @@ export async function readIndexableFile(path: string, deadline: number): Promise
       const bytes = buffer.subarray(0, bytesRead)
       if (bytes.includes(0)) return ''
       if (deadlineExceeded(deadline)) return ''
-      return bytes.toString('utf8')
+      const text = bytes.toString('utf8')
+      await testHooks.afterFileRead?.(path)
+      return text
   } finally {
     await handle.close()
   }
@@ -436,9 +501,17 @@ export async function buildWorkspaceIndex(
   workspaceRoot: string,
   options: WorkspaceIndexOptions
 ): Promise<WorkspaceIndex> {
+  await testHooks.beforeIndexBuild?.(workspaceRoot)
   const deadline = Date.now() + options.buildMs
-  const files = await scanWorkspaceFiles(workspaceRoot, deadline, options.includePdf)
+  const scannedFiles = await scanWorkspaceFiles(workspaceRoot, deadline, options.includePdf)
+  const prioritizedFreshPaths = (options.freshPaths ?? [])
+    .map(resolveComparablePath)
+    .filter((path) => (
+      path && isWithinWorkspace(workspaceRoot, path) && isIndexedFile(path, options.includePdf)
+    ))
+  const files = [...new Set([...prioritizedFreshPaths, ...scannedFiles])].slice(0, MAX_INDEX_FILES)
   const chunks: IndexedChunk[] = []
+  const fileSignatures = new Map<string, string>()
   let indexedFiles = 0
 
   for (const path of files) {
@@ -446,11 +519,18 @@ export async function buildWorkspaceIndex(
     try {
       const relativePath = normalizeRelativePath(relative(workspaceRoot, path) || basename(path))
       const ext = extname(path).toLowerCase()
-      const fileChunks = isWritePdfFileExtension(ext)
-        ? await chunkPdf(path, workspaceRoot, relativePath)
-        : chunkMarkdown(path, relativePath, await readIndexableFile(path, deadline))
-      if (fileChunks.length > 0) indexedFiles += 1
-      chunks.push(...fileChunks.slice(0, Math.max(0, MAX_INDEX_CHUNKS - chunks.length)))
+      for (let attempt = 0; attempt < MAX_STABLE_FILE_READ_ATTEMPTS; attempt += 1) {
+        const signatureBefore = await fileSignature(path)
+        const fileChunks = isWritePdfFileExtension(ext)
+          ? await chunkPdf(path, workspaceRoot, relativePath)
+          : chunkMarkdown(path, relativePath, await readIndexableFile(path, deadline))
+        const signatureAfter = await fileSignature(path)
+        if (signatureBefore !== signatureAfter) continue
+        fileSignatures.set(resolveComparablePath(path), signatureAfter)
+        if (fileChunks.length > 0) indexedFiles += 1
+        chunks.push(...fileChunks.slice(0, Math.max(0, MAX_INDEX_CHUNKS - chunks.length)))
+        break
+      }
     } catch {
       /* Ignore unreadable files and keep completion responsive. */
     }
@@ -465,14 +545,35 @@ export async function buildWorkspaceIndex(
     }
   }
 
-  return {
+  const index = {
     workspaceRoot,
     builtAt: Date.now(),
     files: indexedFiles,
+    fileSignatures,
     chunks,
     averageLength: chunks.length > 0 ? tokenCount / chunks.length : 1,
     documentFrequency
   }
+  await testHooks.beforeIndexReturn?.(workspaceRoot)
+  return index
+}
+
+async function buildWorkspaceIndexWithFreshPaths(
+  workspaceRoot: string,
+  options: WorkspaceIndexOptions,
+  freshPaths: readonly string[]
+): Promise<WorkspaceIndex> {
+  if (freshPaths.length === 0) return buildWorkspaceIndex(workspaceRoot, options)
+  for (let attempt = 0; attempt < MAX_FRESH_INDEX_BUILD_ATTEMPTS; attempt += 1) {
+    const before = await captureFileSignatures(freshPaths)
+    const index = await buildWorkspaceIndex(workspaceRoot, options)
+    const after = await captureFileSignatures(freshPaths)
+    if (
+      fileSignaturesMatch(before, after) &&
+      await cachedIndexMatchesFreshPaths(index, freshPaths)
+    ) return index
+  }
+  throw new Error('The current file changed while Work retrieval was indexing it. Please retry.')
 }
 
 export async function loadWorkspaceIndex(
@@ -480,25 +581,43 @@ export async function loadWorkspaceIndex(
   options: WorkspaceIndexOptions
 ): Promise<WorkspaceIndex> {
   const cacheKey = workspaceIndexCacheKey(workspaceRoot, options.includePdf)
+  const freshPaths = [...new Set(
+    (options.freshPaths ?? [])
+      .map(resolveComparablePath)
+      .filter((path) => path && isIndexedFile(path, options.includePdf))
+  )]
   pruneIndexCache(Date.now())
   const cached = indexCache.get(cacheKey)
-  if (cached) {
+  if (cached && await cachedIndexMatchesFreshPaths(cached, freshPaths)) {
     indexCache.delete(cacheKey)
     indexCache.set(cacheKey, cached)
     return cached
   }
+  if (cached) indexCache.delete(cacheKey)
   const existing = inFlightIndexCache.get(cacheKey)
-  if (existing) return existing
+  if (existing) {
+    const index = await existing
+    if (await cachedIndexMatchesFreshPaths(index, freshPaths)) return index
+    if (indexCache.get(cacheKey) === index) indexCache.delete(cacheKey)
+    if (inFlightIndexCache.get(cacheKey) === existing) {
+      inFlightIndexCache.delete(cacheKey)
+      invalidateInFlightIndexBuild(cacheKey)
+    }
+    return loadWorkspaceIndex(workspaceRoot, options)
+  }
 
-  const build = buildWorkspaceIndex(workspaceRoot, options)
+  const buildGeneration = currentIndexBuildGeneration(cacheKey)
+  const build = buildWorkspaceIndexWithFreshPaths(workspaceRoot, options, freshPaths)
     .then((index) => {
-      indexCache.delete(cacheKey)
-      indexCache.set(cacheKey, index)
-      pruneIndexCache(Date.now())
+      if (currentIndexBuildGeneration(cacheKey) === buildGeneration) {
+        indexCache.delete(cacheKey)
+        indexCache.set(cacheKey, index)
+        pruneIndexCache(Date.now())
+      }
       return index
     })
     .finally(() => {
-      inFlightIndexCache.delete(cacheKey)
+      if (inFlightIndexCache.get(cacheKey) === build) inFlightIndexCache.delete(cacheKey)
     })
 
   inFlightIndexCache.set(cacheKey, build)

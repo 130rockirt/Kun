@@ -139,6 +139,7 @@ import {
   subscribeThreadEventsWithRecovery
 } from './chat-store-thread-action-helpers'
 import { GitCheckpointAvailabilityCache } from '../lib/git-checkpoint-availability'
+import { primaryAgentAvailableOnSurface } from '../lib/subagent-profile-surface'
 import { isDesignThreadId, readDesignThreadRegistry } from '../design/design-thread-registry'
 import { readSddThreadRegistry } from '../sdd/sdd-thread-registry'
 import type { ComposerContextAttachment } from '@kun/extension-api'
@@ -181,20 +182,18 @@ export function createThreadCreationActions(
       const activeThread = get().activeThreadId
         ? get().threads.find((thread) => thread.id === get().activeThreadId)
         : null
+      const requestedAgentSurface = options.conversation ? 'code' : options.agentSurface ?? 'code'
       const pickedAgentId = options.agentId?.trim() || get().composerAgentId?.trim() || ''
       const personaProfile = pickedAgentId
         ? settings.agents?.kun?.subagents?.profiles?.find(
           (profile) => profile.id === pickedAgentId &&
-            profile.enabled &&
-            (profile.mode === 'primary' || profile.mode === 'all')
+            primaryAgentAvailableOnSurface(profile, requestedAgentSurface)
         )
         : undefined
       const initialModel = personaProfile?.model?.trim() || runtime.model.trim()
       const initialProviderId = personaProfile?.providerId?.trim() ||
         (personaProfile?.model?.trim() ? '' : runtime.providerId.trim())
       const initialSelectionSource = personaProfile ? 'user' as const : 'default' as const
-      const requestedAgentSurface = options.agentSurface ?? 'code'
-
       // 对话会话:不绑定项目文件夹,在 conversationWorkspaceRoot 下自动创建
       // 一个时间戳子目录作为工作目录(主进程负责实际建目录)。
       if (options.conversation) {
@@ -233,6 +232,7 @@ export function createThreadCreationActions(
         const activate = activationAllowed()
         set((s) => ({
           ...(activate ? { activeThreadId: t.id } : {}),
+          ...(pickedAgentId && !options.agentId ? { composerAgentId: '' } : {}),
           threads: s.threads.some((thread) => thread.id === t.id) ? s.threads : [t, ...s.threads]
         }))
         if (activate) {
@@ -360,6 +360,7 @@ export function createThreadCreationActions(
       const activate = activationAllowed()
       set((s) => ({
         ...(activate ? { activeThreadId: t.id } : {}),
+        ...(pickedAgentId && !options.agentId ? { composerAgentId: '' } : {}),
         codeWorkspaceRoots: rememberCodeWorkspaceRoots(
           s.codeWorkspaceRoots,
           [acquiredWorktree?.projectPath ?? workspaceRoot]

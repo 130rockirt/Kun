@@ -54,7 +54,7 @@ export function insertCompactionIntoVisibleHistory(input: {
 
 function isInternalRecord(item: TurnItem): boolean {
   return item.kind === 'goal_context' || item.kind === 'model_context' ||
-    item.kind === 'interruption_note'
+    item.kind === 'runtime_context_source' || item.kind === 'interruption_note'
 }
 
 function uniqueInternalRecords(items: readonly TurnItem[]): TurnItem[] {

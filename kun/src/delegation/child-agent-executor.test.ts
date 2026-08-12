@@ -9,6 +9,7 @@ import { InMemoryThreadStore } from '../adapters/in-memory-thread-store.js'
 import { LocalToolHost, echoTool } from '../adapters/tool/local-tool-host.js'
 import type { AttachmentStore } from '../attachments/attachment-store.js'
 import { createImmutablePrefix } from '../cache/immutable-prefix.js'
+import { isPublicTurnItem } from '../contracts/items.js'
 import { makeAssistantTextItem, makeToolCallItem, makeToolResultItem } from '../domain/item.js'
 import { InstructionRuntime } from '../instructions/instruction-runtime.js'
 import type { MemoryStore } from '../memory/memory-store.js'
@@ -253,16 +254,49 @@ describe('createChildAgentExecutor', () => {
     expect(model.requests).toHaveLength(2)
     expect(model.requests[1]?.threadId).toBe('child_history')
     expect(JSON.stringify(model.requests[0]?.history)).toContain(initialPrompt)
-    expect(JSON.stringify(model.requests[0]?.history)).not.toContain('HOST PPT CONTROL')
-    expect(model.requests[0]?.systemPrompt).toContain('HOST PPT CONTROL: plan automatically')
+    // Host control is turn-local private input: it is sent with this request,
+    // but must not become replayable history or part of the stable prefix.
+    expect(JSON.stringify(model.requests[0]?.history)).not.toContain('HOST PPT CONTROL: plan automatically')
+    expect(JSON.stringify(model.requests[0]?.contextInstructions)).toContain('HOST PPT CONTROL: plan automatically')
+    expect(model.requests[0]?.redactedRequestValues).toContain('HOST PPT CONTROL: plan automatically')
+    expect(JSON.stringify([model.requests[0]?.prefix, model.requests[1]?.prefix])).not.toContain('HOST PPT CONTROL')
+    expect(model.requests[0]?.systemPrompt).toBe('test system prompt')
+    expect(model.requests[1]?.systemPrompt).toBe('test system prompt')
+    expect(model.requests[0]?.promptCachePartition).toBe(model.requests[1]?.promptCachePartition)
+    const firstKinds = model.requests[0]?.history.map((item) => item.kind) ?? []
+    const firstUserIndex = firstKinds.indexOf('user_message')
+    const firstContextIndex = firstKinds.indexOf('model_context')
+    expect(firstUserIndex).toBeGreaterThanOrEqual(0)
+    expect(firstContextIndex).toBeGreaterThan(firstUserIndex)
+    const firstContext = model.requests[0]?.history.find((item) => item.kind === 'model_context')
+    expect(firstContext).toMatchObject({
+      blocks: expect.arrayContaining([
+        expect.objectContaining({ kind: 'client-surface', state: 'active' }),
+        expect.objectContaining({ kind: 'runtime-context', state: 'active' })
+      ])
+    })
+    expect(firstContext?.blocks).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'host-control' })
+    ]))
+    const canonicalItems = await sessionStore.loadItems('child_history')
+    const privateSources = canonicalItems.filter((item) => item.kind === 'runtime_context_source')
+    expect(privateSources).toHaveLength(2)
+    expect(privateSources.every((item) => !isPublicTurnItem(item))).toBe(true)
     expect(Object.values(model.requests[0]?.messageAttachments ?? {})[0]?.documents).toEqual([
       expect.objectContaining({ id: 'att_111111111111111111111111', text: 'launch brief' })
     ])
     expect(JSON.stringify(model.requests[1]?.history)).toContain(initialPrompt)
     expect(JSON.stringify(model.requests[1]?.history)).toContain('initial child conclusion')
     expect(JSON.stringify(model.requests[1]?.history)).toContain(continuedPrompt)
+    expect(JSON.stringify(model.requests[1]?.history)).not.toContain('HOST PPT CONTROL: plan automatically')
+    expect(JSON.stringify(model.requests[1]?.history)).not.toContain('HOST PPT CONTROL: revise previews')
+    expect(JSON.stringify(model.requests[1]?.contextInstructions)).not.toContain('HOST PPT CONTROL: plan automatically')
+    expect(JSON.stringify(model.requests[1]?.contextInstructions)).toContain('HOST PPT CONTROL: revise previews')
+    expect(model.requests[1]?.redactedRequestValues).toEqual(['HOST PPT CONTROL: revise previews'])
     expect(initial.inheritedHistoryItems).toBe(0)
     expect(continued.inheritedHistoryItems).toBe(0)
+    expect(initial.prefixReused).toBe(true)
+    expect(continued.prefixReused).toBe(true)
     expect(instructionCalls).toBe(0)
     expect(memoryCalls).toBe(0)
   })

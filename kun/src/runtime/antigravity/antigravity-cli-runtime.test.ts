@@ -12,6 +12,7 @@ import type { RuntimeEvent } from '../../contracts/events.js'
 import { TurnSchema } from '../../contracts/turns.js'
 import { createRuntimeEventProjection, replayRuntimeEvents } from '../../domain/runtime-event-reducer.js'
 import { makeUserItem } from '../../domain/item.js'
+import { makeInternalTurnRuntimeContextSource } from '../../domain/internal-turn-runtime-context.js'
 import { createThreadRecord } from '../../domain/thread.js'
 import { ContextCompactor } from '../../loop/context-compactor.js'
 import { InflightTracker } from '../../loop/inflight-tracker.js'
@@ -444,6 +445,70 @@ describe('AntigravityCliRuntime', () => {
     )
   })
 
+  it('appends a turn persona to the prompt without changing the stable system identity', async () => {
+    const threadStore = new InMemoryThreadStore()
+    const sessionStore = new InMemorySessionStore()
+    const turn = TurnSchema.parse({
+      id: 'turn-persona', threadId: 'thread-persona', status: 'running',
+      prompt: 'Review this draft', persona: 'Write with a precise editorial voice.',
+      model: 'gemini-3.6-flash', createdAt: '2026-08-13T00:00:00.000Z'
+    })
+    await threadStore.upsert({
+      ...createThreadRecord({
+        id: turn.threadId, title: 'Persona', workspace: '/tmp', model: turn.model!,
+        providerId: 'gemini-subscription', systemPrompt: 'Stable thread profile', status: 'running'
+      }),
+      turns: [turn]
+    })
+    await sessionStore.appendItem(turn.threadId, makeUserItem({
+      id: 'item-user-persona', threadId: turn.threadId, turnId: turn.id, text: turn.prompt
+    }))
+    const oldHostControl = 'Old private Antigravity host control.'
+    await sessionStore.appendItem(turn.threadId, makeInternalTurnRuntimeContextSource({
+      threadId: turn.threadId, turnId: 'turn-old',
+      context: { kind: 'host-control', content: oldHostControl },
+      createdAt: '2026-08-12T00:00:00.000Z'
+    }))
+    const currentHostControl = 'Current private Antigravity host control.'
+    await sessionStore.appendItem(turn.threadId, makeInternalTurnRuntimeContextSource({
+      threadId: turn.threadId,
+      turnId: turn.id,
+      context: { kind: 'host-control', content: currentHostControl },
+      createdAt: '2026-08-13T00:00:00.000Z'
+    }))
+    let prompt = ''
+    const debugSink = new LlmDebugRecorder()
+    const runtime = new AntigravityCliRuntime({
+      providerConfigs: {}, providerIds: new Set(['gemini-subscription']),
+      defaultIsAntigravity: false, systemPrompt: 'Stable Kun system prompt',
+      threadStore, sessionStore,
+      turns: {
+        applyItem: vi.fn(async () => undefined),
+        applyAssistantDelta: vi.fn(async () => undefined),
+        updateTurnMetadata: vi.fn(async () => undefined),
+        finishTurn: vi.fn(async () => undefined)
+      } as unknown as TurnService,
+      events: { record: vi.fn(async () => undefined) } as unknown as RuntimeEventRecorder,
+      ids: { next: () => 'item-assistant-persona' },
+      debugSink,
+      spawnFn: successfulSpawn('done\n', (args) => { prompt = args[1] ?? '' })
+    })
+
+    await expect(runtime.runTurn(
+      turn.threadId, turn.id, new AbortController().signal, 'gemini-subscription'
+    )).resolves.toBe('completed')
+    expect(prompt).toContain('<kun_context_block kind="persona" authority="user">')
+    expect(prompt).toContain('Write with a precise editorial voice.')
+    expect(prompt).toContain('<kun_context_block kind="host-control" authority="runtime">')
+    expect(prompt).toContain(currentHostControl)
+    expect(prompt).not.toContain(oldHostControl)
+    expect(prompt).toContain('Stable Kun system prompt')
+    expect(prompt).toContain('Stable thread profile')
+    const trace = (await debugSink.listThread(turn.threadId)).records[0]
+    expect(trace?.request?.body.text).not.toContain(currentHostControl)
+    expect(trace?.request?.body.text).toContain('[REDACTED]')
+  })
+
   it('preserves pending Graph supervision without launching the unsupported CLI', async () => {
     const threadStore = new InMemoryThreadStore()
     const sessionStore = new InMemorySessionStore()
@@ -597,8 +662,6 @@ describe('AntigravityCliRuntime', () => {
     expect(args).toEqual(expect.arrayContaining(['--mode', 'plan', '--sandbox']))
     expect(args).not.toContain('--dangerously-skip-permissions')
   })
-
-
 })
 
 function successfulSpawn(

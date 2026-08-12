@@ -42,6 +42,7 @@ import {
 import { resolveProjectWorkspacePath } from '../lib/worktree-project-path'
 import { readThreadWorktreeRegistry } from '../lib/thread-worktree-registry'
 import { buildClawRuntimePrompt } from '@shared/app-settings'
+import { primaryAgentAvailableOnSurface } from '../lib/subagent-profile-surface'
 import type { ChatState, ChatStoreGet, ChatStoreSet } from './chat-store-types'
 import { invalidateThreadSnapshot } from './thread-snapshot-cache'
 import {
@@ -377,11 +378,26 @@ export function createNavigationModeActions(
     }
     try {
       const p = getProvider()
+      const pickedAgentId = get().composerAgentId?.trim() ?? ''
+      const personaProfile = pickedAgentId
+        ? (await rendererRuntimeClient.getSettings()).agents?.kun?.subagents?.profiles?.find(
+          (profile) => profile.id === pickedAgentId &&
+            primaryAgentAvailableOnSurface(profile, 'write')
+        )
+        : undefined
       const thread = await p.createThread({
         workspace: targetWorkspace,
         title: WRITE_ASSISTANT_THREAD_TITLE,
         mode: 'agent',
-        agentSurface: 'write'
+        agentSurface: 'write',
+        ...(personaProfile?.providerId?.trim()
+          ? { providerId: personaProfile.providerId.trim() }
+          : {}),
+        ...(personaProfile?.model?.trim() ? { model: personaProfile.model.trim() } : {}),
+        ...(personaProfile ? {
+          agentId: personaProfile.id,
+          ...(personaProfile.systemPrompt ? { systemPrompt: personaProfile.systemPrompt } : {})
+        } : {})
       })
       saveWriteThreadRegistry(markWriteThread(
         targetWorkspace,
@@ -391,6 +407,7 @@ export function createNavigationModeActions(
       ))
       set((s) => ({
         route: 'write',
+        ...(pickedAgentId ? { composerAgentId: '' } : {}),
         threads: s.threads.some((item) => item.id === thread.id) ? s.threads : [thread, ...s.threads],
         error: null
       }))
@@ -481,8 +498,7 @@ export function createNavigationModeActions(
       const personaProfile = pickedAgentId
         ? (await rendererRuntimeClient.getSettings()).agents?.kun?.subagents?.profiles?.find(
           (profile) => profile.id === pickedAgentId &&
-            profile.enabled &&
-            (profile.mode === 'primary' || profile.mode === 'all')
+            primaryAgentAvailableOnSurface(profile, 'design')
         )
         : undefined
       const thread = await provider.createThread({
@@ -549,6 +565,7 @@ export function createNavigationModeActions(
               activeThreadRelation: 'primary' as const
             }
           : {}),
+        ...(pickedAgentId ? { composerAgentId: '' } : {}),
         threads: s.threads.some((item) => item.id === thread.id) ? s.threads : [thread, ...s.threads],
         ...(activate ? { error: null } : {})
       }))

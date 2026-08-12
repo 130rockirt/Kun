@@ -26,6 +26,7 @@ export async function composeForwardedModelRequest(input: {
   serviceTier?: 'priority'
   modeInstruction?: string
   contextInstructions: readonly string[]
+  redactedRequestValues?: readonly string[]
   historyRoutesByTurnId: Readonly<Record<string, ModelHistoryRoute>>
   requestToolSpecs: readonly ModelToolSpec[]
   attachments: ResolvedTurnAttachments
@@ -73,6 +74,9 @@ export async function composeForwardedModelRequest(input: {
       : {}),
     ...(input.modeInstruction ? { modeInstruction: input.modeInstruction } : {}),
     contextInstructions: input.contextInstructions,
+    ...(input.redactedRequestValues?.length
+      ? { redactedRequestValues: input.redactedRequestValues }
+      : {}),
     history: forwardHistory,
     historyRoutesByTurnId: input.historyRoutesByTurnId,
     attachments: requestAttachments,

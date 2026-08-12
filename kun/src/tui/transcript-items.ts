@@ -428,6 +428,7 @@ export class ItemComponent implements Component {
     switch (item.kind) {
       case 'goal_context':
       case 'model_context':
+      case 'runtime_context_source':
       case 'interruption_note':
         return []
       case 'user_message': {

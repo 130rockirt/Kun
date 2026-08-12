@@ -4,6 +4,7 @@ import {
   MIN_WRITE_AUTOSAVE_DELAY_MS,
   MIN_KUN_LOCAL_PORT,
   SCHEDULE_MODEL_IDS,
+  WRITE_AGENT_PERSONA_MAX_CHARS,
   WINDOW_CLOSE_ACTIONS
 } from '../../../shared/app-settings'
 import { GUI_UPDATE_CHANNELS } from '../../../shared/gui-update'
@@ -148,7 +149,7 @@ const writeAgentPresetSchema = z.object({
   id: trimmedString(64),
   name: z.string().max(64).optional(),
   emoji: z.string().max(16).optional(),
-  persona: z.string().max(4_000).optional()
+  persona: z.string().max(WRITE_AGENT_PERSONA_MAX_CHARS).optional()
 }).strict()
 
 const codeAgentPresetSchema = z.object({

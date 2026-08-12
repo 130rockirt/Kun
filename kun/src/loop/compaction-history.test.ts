@@ -10,6 +10,7 @@ import {
   insertCompactionIntoVisibleHistory,
   placeCompactionsChronologically
 } from './compaction-history.js'
+import { makeInternalTurnRuntimeContextSource } from '../domain/internal-turn-runtime-context.js'
 
 describe('compaction history projection', () => {
   it('keeps the full visible transcript while projecting model history from the latest compaction', () => {
@@ -114,6 +115,31 @@ describe('compaction history projection', () => {
       summary.id,
       goal.id,
       tail.id
+    ])
+  })
+
+  it('keeps a private runtime context source after compaction', () => {
+    const threadId = 'thread_host_context'
+    const turnId = 'turn_host_context'
+    const head = makeUserItem({ id: 'host_head', threadId, turnId, text: 'old context' })
+    const source = makeInternalTurnRuntimeContextSource({
+      threadId,
+      turnId,
+      context: { kind: 'host-control', content: 'private workflow control' },
+      createdAt: '2026-08-13T00:00:00.000Z'
+    })
+    const tail = makeUserItem({ id: 'host_tail', threadId, turnId, text: 'current request' })
+    const summary = makeCompactionItem({
+      id: 'host_summary', threadId, turnId, summary: 'earlier work',
+      replacedTokens: 100, pinnedConstraints: []
+    })
+    const visible = insertCompactionIntoVisibleHistory({
+      visibleItems: [head, source, tail],
+      compactedItems: [summary, source, tail],
+      summaryItem: summary
+    })
+    expect(effectiveHistoryAfterLatestCompaction(visible).map((item) => item.id)).toEqual([
+      summary.id, source.id, tail.id
     ])
   })
 

@@ -107,13 +107,56 @@ describe('Work presentation view submission', () => {
 
     await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledOnce())
     const [prompt, , options] = sendMessage.mock.calls[0] as unknown as Parameters<ControllerParams['sendMessage']>
-    expect(prompt).toContain('Whole presentation outline')
-    expect(options?.composerContexts).toHaveLength(1)
-    expect(options?.composerContexts?.[0]?.reference).toMatchObject({
+    expect(prompt).not.toContain('Whole presentation outline')
+    expect(options?.composerContexts).toHaveLength(2)
+    expect(options?.composerContexts?.find((context) => (
+      context.reference.kind === 'office-view-position'
+    ))?.reference).toMatchObject({
       kind: 'office-view-position', sourceName: 'deck.pptx',
       sourceSha256: 'a'.repeat(64),
       location: { kind: 'presentation', slide: 3, slideCount: 9 }
     })
+    expect(options?.composerContexts?.find((context) => (
+      context.reference.kind === 'work-reference-office'
+    ))?.reference).toMatchObject({
+      kind: 'work-reference-office',
+      sourceName: 'deck.pptx',
+      segments: ['Whole presentation outline']
+    })
     expect(JSON.stringify(options?.composerContexts)).not.toContain('/workspace/deck.pptx')
+  })
+
+  it('restores the prompt when creating the presentation view context fails', async () => {
+    vi.stubGlobal('window', {
+      kunGui: {
+        readWorkspaceOfficeSemantic: vi.fn(async () => ({
+          ok: true as const,
+          path: '/workspace/deck.pptx',
+          name: 'deck.pptx',
+          sourceFormat: 'pptx' as const,
+          sourceSha256: 'a'.repeat(64),
+          text: 'Whole presentation outline',
+          truncated: false
+        }))
+      }
+    })
+    vi.stubGlobal('crypto', {
+      subtle: { digest: vi.fn(async () => { throw new Error('view context digest failed') }) }
+    })
+    const setInput = vi.fn()
+    const setError = vi.fn()
+    const sendMessage = vi.fn(async () => true)
+    const controller = useWorkbenchComposerSubmitController(controllerParams({
+      input: 'Keep this prompt', setInput, setError, sendMessage
+    }))
+
+    controller.sendWritePrompt('Keep this prompt')
+
+    await vi.waitFor(() => expect(setError).toHaveBeenCalledWith('view context digest failed'))
+    expect(sendMessage).not.toHaveBeenCalled()
+    expect(setInput).toHaveBeenCalledWith('')
+    const restore = setInput.mock.calls.find(([value]) => typeof value === 'function')?.[0]
+    expect(restore).toBeTypeOf('function')
+    expect(restore('')).toBe('Keep this prompt')
   })
 })

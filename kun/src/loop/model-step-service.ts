@@ -166,6 +166,7 @@ export class ModelStepService extends ModelStepPreparationService {
       promptCachePhase,
       svgCompletion,
       contextInstructions,
+      redactedRequestValues,
       skillContextInstructions,
       modeInstruction
     } = preparation
@@ -199,6 +200,7 @@ export class ModelStepService extends ModelStepPreparationService {
       ...(thread.systemPrompt !== undefined ? { threadSystemPrompt: thread.systemPrompt } : {}),
       ...(modeInstruction ? { modeInstruction } : {}),
       contextInstructions,
+      redactedRequestValues,
       history: [],
       historyRoutesByTurnId,
       attachments,
@@ -306,6 +308,7 @@ export class ModelStepService extends ModelStepPreparationService {
       serviceTier,
       modeInstruction,
       contextInstructions,
+      redactedRequestValues,
       historyRoutesByTurnId,
       requestToolSpecs,
       attachments,
@@ -370,6 +373,7 @@ export class ModelStepService extends ModelStepPreparationService {
         serviceTier,
         modeInstruction,
         contextInstructions,
+        redactedRequestValues,
         historyRoutesByTurnId,
         requestToolSpecs,
         attachments,

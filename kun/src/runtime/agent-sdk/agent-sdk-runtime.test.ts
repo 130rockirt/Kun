@@ -463,6 +463,22 @@ describe('AgentSdkRuntime.runTurn', () => {
     expect(persistedKinds).toContain('assistant_text')
   })
 
+  test('does not checkpoint a session carrying request-local dynamic context', async () => {
+    const { deps, sessions } = makeDeps({
+      loadTurnContext: async () => ({
+        workspace: '/ws', userText: 'dynamic request', approvalPolicy: 'auto',
+        bridgeableTools: [], contextInstructions: ['private turn context'],
+        disableNativeContinuation: true
+      }),
+      loadSdk: async () => fakeSdk(STREAM)
+    })
+
+    await expect(new AgentSdkRuntime(deps).runTurn(
+      'th', 'tn', new AbortController().signal
+    )).resolves.toBe('completed')
+    expect(sessions).toEqual([])
+  })
+
   test('publishes a sanitized Claude SDK trace to Agent Perspective', async () => {
     const debugSink = new LlmDebugRecorder()
     const internalGoalText = 'Internal active goal must not be exposed through the SDK trace.'

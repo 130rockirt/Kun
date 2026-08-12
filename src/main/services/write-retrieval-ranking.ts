@@ -23,6 +23,7 @@ import {
   clipTail,
   compactText,
   inFlightIndexCache,
+  indexBuildGenerations,
   indexCache,
   isWithinWorkspace,
   loadWorkspaceIndex,
@@ -254,7 +255,10 @@ export async function retrieveWriteContext(
 
   const index = await loadWorkspaceIndex(workspaceRoot, {
     includePdf: true,
-    buildMs: MAX_ASSISTANT_INDEX_BUILD_MS
+    buildMs: MAX_ASSISTANT_INDEX_BUILD_MS,
+    ...(request.includeCurrentFile !== false && currentFilePath
+      ? { freshPaths: [currentFilePath] }
+      : {})
   })
   if (index.chunks.length === 0) return null
 
@@ -283,4 +287,5 @@ export async function retrieveWriteContext(
 export function clearWriteRetrievalCache(): void {
   indexCache.clear()
   inFlightIndexCache.clear()
+  indexBuildGenerations.clear()
 }

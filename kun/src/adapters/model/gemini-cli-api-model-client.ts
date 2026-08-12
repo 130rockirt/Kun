@@ -428,7 +428,10 @@ export class GeminiCliApiModelClient implements ModelClient {
         ...(tool.providerKind ? { providerKind: tool.providerKind } : {}),
         ...(tool.providerId ? { providerId: tool.providerId } : {})
       })),
-      redactedRequestValues: goalContextTexts(request.history)
+      redactedRequestValues: [
+        ...goalContextTexts(request.history),
+        ...(request.redactedRequestValues ?? [])
+      ]
     }) ?? null
   }
 

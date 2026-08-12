@@ -237,21 +237,23 @@ describe('createAgentSdkRuntime turn context', () => {
     const sdkTurn = {
       id: 'tn',
       prompt: 'inspect',
+      persona: 'Use a concise presenter voice.',
       clientSurface: 'tui'
     } as ThreadRecord['turns'][number]
+    const hostControl = 'Private PPT host control.'
     const runtime = createAgentSdkRuntime({
       registry,
       toolHost: host,
       turns: { updateTurnMetadata: async () => undefined } as never,
       sessionStore: {
         loadItems: async () => [{
-          id: 'item_user',
-          turnId: 'tn',
-          threadId: 'th',
-          kind: 'user_message',
-          role: 'user',
-          status: 'completed',
-          text: 'inspect',
+          id: 'item_private', turnId: 'tn', threadId: 'th',
+          kind: 'runtime_context_source', role: 'system', status: 'completed',
+          contextKind: 'host-control', content: hostControl,
+          createdAt: '2026-07-10T00:00:00.000Z'
+        }, {
+          id: 'item_user', turnId: 'tn', threadId: 'th', kind: 'user_message',
+          role: 'user', status: 'completed', text: 'inspect',
           composerContexts: [{ id: 'must-not-enter-the-prompt' }],
           createdAt: '2026-07-10T00:00:00.000Z'
         }]
@@ -310,11 +312,12 @@ describe('createAgentSdkRuntime turn context', () => {
     expect(context).toMatchObject({
       allowSdkBuiltins: false,
       bridgeKunBuiltinOverlaps: true,
-      preserveExactUserPrompt: true,
       userText: 'inspect',
       bridgeableTools: [{ name: 'read' }]
     })
-    expect(context?.contextInstructions).toBeUndefined()
+    expect(context?.preserveExactUserPrompt).toBeUndefined()
+    expect(context?.contextInstructions?.join('\n')).toContain(hostControl)
+    expect(context?.contextInstructions?.join('\n')).toContain('Use a concise presenter voice.')
     await expect(deps.executeKunTool('th', 'tn', 'read', {})).resolves.toEqual({
       output: 'safe',
       isError: false

@@ -370,6 +370,65 @@ describe('TurnService startTurn', () => {
       expect((await threadStore.list()).find((thread) => thread.id === existing.id)?.agentSurface).toBe('code')
     })
 
+  it('claims only a strictly identifiable legacy Work thread on its next Work send', async () => {
+      const sessionStore = new InMemorySessionStore()
+      const threadStore = new InMemoryThreadStore()
+      const eventBus = new InMemoryEventBus()
+      const nowIso = () => '2026-08-01T00:00:00.000Z'
+      const service = new TurnService({
+        threadStore,
+        sessionStore,
+        events: new RuntimeEventRecorder({
+          eventBus,
+          sessionStore,
+          allocateSeq: (threadId) => eventBus.allocateSeq(threadId),
+          nowIso
+        }),
+        inflight: new InflightTracker(),
+        steering: new SteeringQueue(),
+        compactor: new ContextCompactor(),
+        ids: new SequentialIdGenerator(),
+        nowIso
+      })
+      const legacy = createThreadRecord({
+        id: 'thr_legacy_work',
+        title: 'Write Assistant',
+        workspace: '/tmp/write',
+        model: 'test-model'
+      })
+      const legacyTurn = finishTurn(createTurnRecord({
+        id: 'turn_legacy_work',
+        threadId: legacy.id,
+        prompt: '[写作上下文]\n交互限制: 当前 GUI 无法提交 request_user_input 的 HTTP 响应；需要更多信息时，直接用普通文本向用户提问，不要调用 request_user_input。\n\n请润色当前文档',
+        model: legacy.model
+      }), 'completed', nowIso())
+      const legacyUserItem = makeUserItem({
+        id: 'item_legacy_work',
+        turnId: legacyTurn.id,
+        threadId: legacy.id,
+        text: legacyTurn.prompt
+      })
+      await threadStore.upsert({
+        ...legacy,
+        turns: [{ ...legacyTurn, items: [legacyUserItem] }]
+      })
+      expect((await threadStore.list()).find((thread) => thread.id === legacy.id)?.agentSurface)
+        .toBe('write')
+
+      const started = await service.startTurn({
+        threadId: legacy.id,
+        request: {
+          prompt: '[写作上下文]\n交互限制: 当前 GUI 无法提交 request_user_input 的 HTTP 响应；需要更多信息时，直接用普通文本向用户提问，不要调用 request_user_input。\n\n继续修改',
+          model: 'test-model',
+          agentSurface: 'write'
+        }
+      })
+
+      expect((await threadStore.get(legacy.id))?.agentSurface).toBe('write')
+      expect(started).toMatchObject({ agentSurface: 'write', threadAgentSurface: 'write' })
+      await service.interruptTurn({ threadId: legacy.id, turnId: started.turnId })
+    })
+
   it('binds submitted attachments to the final thread before persisting the turn', async () => {
       const root = await mkdtemp(join(tmpdir(), 'kun-turn-attachment-'))
       try {

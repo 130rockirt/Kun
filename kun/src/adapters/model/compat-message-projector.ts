@@ -55,7 +55,16 @@ class CompatMessageProjector {
       request
     ))
     for (const instruction of request.contextInstructions ?? []) {
-      if (instruction.trim()) out.push({ role: 'system', content: instruction })
+      // Request-level context is deliberately chronological rather than part
+      // of the provider's stable instructions/prompt-cache prefix. Responses
+      // codecs preserve marked system records in `input` for this purpose.
+      if (instruction.trim()) {
+        out.push({
+          role: 'system',
+          content: instruction,
+          [COMPAT_HISTORY_CONTEXT]: true
+        })
+      }
     }
     if (request.attachments?.length) attachImagesToLatestUserMessage(out, request.attachments)
     if (request.attachmentTextFallbacks?.length) {
@@ -303,6 +312,8 @@ class CompatMessageProjector {
           content: item.text,
           [COMPAT_HISTORY_CONTEXT]: true
         }
+      case 'runtime_context_source':
+        return null
       case 'assistant_text':
         return {
           role: 'assistant',

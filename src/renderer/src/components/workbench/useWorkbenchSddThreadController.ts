@@ -32,6 +32,7 @@ import {
 } from '../../sdd/sdd-chat-transcript'
 import type { RightPanelMode } from '../chat/WorkbenchTopBar'
 import { BUILTIN_RIGHT_PANEL_IDS } from '../../extensions/contribution-ids'
+import type { WriteQuotedSelection } from '../../write/quoted-selection'
 
 const SDD_ASSISTANT_TITLE_SYNC_DELAY_MS = 900
 
@@ -117,7 +118,7 @@ export type WorkbenchSddThreadController = {
   ) => Promise<SddDraft | null>
   openSddAssistantPanel: () => Promise<void>
   openSddRequirementDraftFromHistory: (draft: SddDraft) => Promise<void>
-  quoteToSddAssistant: (prompt: string) => void
+  quoteToSddAssistant: (prompt: string, selection?: WriteQuotedSelection) => void
   renameSddAssistantThreadToDraft: (threadId: string, draft: SddDraft) => Promise<void>
   startNewSddAssistantConversation: () => void
   startNewSddRequirement: () => Promise<void>
@@ -365,12 +366,14 @@ export function useWorkbenchSddThreadController({
     await openSddAssistantPanel()
   }, [openSddAssistantPanel, rightPanelMode, setRightPanelMode])
 
-  const quoteToSddAssistant = useCallback((prompt: string): void => {
+  const quoteToSddAssistant = useCallback((prompt: string, selection?: WriteQuotedSelection): void => {
     const trimmed = prompt.trim()
-    if (!trimmed) return
-    setInput(input.trim() ? `${input.trim()}\n\n${trimmed}` : trimmed)
+    if (!trimmed && !selection) return
+    if (selection) useSddDraftStore.getState().addAssistantQuotedSelection(selection)
+    const visiblePrompt = trimmed || t('writeAssistantPolishSelectionPrompt')
+    setInput(input.trim() ? `${input.trim()}\n\n${visiblePrompt}` : visiblePrompt)
     void openSddAssistantPanel()
-  }, [input, openSddAssistantPanel, setInput])
+  }, [input, openSddAssistantPanel, setInput, t])
 
   const startNewSddRequirement = useCallback(async (): Promise<void> => {
     const targetWorkspace = resolveSddRequirementWorkspace(codeThreads, activeThreadId, workspaceRoot)
@@ -472,6 +475,7 @@ export function useWorkbenchSddThreadController({
     const draft = useSddDraftStore.getState().activeDraft
     if (!draft) return
     forceNewSddAssistantThreadRef.current = true
+    useSddDraftStore.getState().clearAssistantQuotedSelections()
     setInput('')
     useChatStore.getState().clearActiveThreadSelection()
     setRightPanelMode(BUILTIN_RIGHT_PANEL_IDS.sddAi)

@@ -161,6 +161,18 @@ export const ModelContextTurnItem = TurnItemBase.extend({
 })
 export type ModelContextTurnItem = z.infer<typeof ModelContextTurnItem>
 
+export const INTERNAL_RUNTIME_CONTEXT_MAX_CHARS = 32_768
+
+/** Private host input projected into request-only context for its owning turn. */
+export const RuntimeContextSourceTurnItem = TurnItemBase.extend({
+  kind: z.literal('runtime_context_source'),
+  role: z.literal('system'),
+  status: z.literal('completed'),
+  contextKind: z.literal('host-control'),
+  content: z.string().trim().min(1).max(INTERNAL_RUNTIME_CONTEXT_MAX_CHARS)
+})
+export type RuntimeContextSourceTurnItem = z.infer<typeof RuntimeContextSourceTurnItem>
+
 /**
  * Durable, model-visible checkpoint written when a turn is interrupted by a
  * runtime restart or host shutdown. It records what the task was doing (first
@@ -302,6 +314,7 @@ export const TurnItem = z.discriminatedUnion('kind', [
   UserTurnItem,
   GoalContextTurnItem,
   ModelContextTurnItem,
+  RuntimeContextSourceTurnItem,
   InterruptionNoteTurnItem,
   AssistantTextTurnItem,
   AssistantReasoningTurnItem,
@@ -320,7 +333,7 @@ export type TurnItemKind = TurnItem['kind']
 /** Internal history records must never be projected through public thread APIs. */
 export function isPublicTurnItem(item: TurnItem): boolean {
   return item.kind !== 'goal_context' && item.kind !== 'model_context' &&
-    item.kind !== 'interruption_note'
+    item.kind !== 'runtime_context_source' && item.kind !== 'interruption_note'
 }
 
 /**

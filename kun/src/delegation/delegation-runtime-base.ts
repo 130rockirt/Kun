@@ -32,7 +32,12 @@ import type { ArtifactStore } from '../artifacts/artifact-store.js'
 import type { TurnService } from '../services/turn-service.js'
 import { isHostShutdownTurnSuspension } from '../services/turn-service.js'
 import type { PptWorkflowScope } from '../ports/tool-host.js'
-import { loadWorkspaceAgentProfiles } from './workspace-agents.js'
+import {
+  applyWorkspaceAgentSurfaceFallback,
+  loadWorkspaceAgentCatalogProfiles,
+  loadWorkspaceAgentProfiles
+} from './workspace-agents.js'
+import type { WorkspaceAgentCatalogProfile } from './workspace-agents.js'
 import type { SubagentRoutingDocument } from './subagent-router.js'
 import { BUILTIN_SUBAGENT_PROFILES } from './builtin-profiles.js'
 import { BUILTIN_AGENT_CATALOG_BY_ID } from './builtin-agent-catalog.js'
@@ -228,37 +233,8 @@ export abstract class DelegationRuntimeBase {
    * Returned separately from `listProfiles()` so Settings/Sidebar can merge
    * them without rewriting persistent GUI settings.
    */
-  async listWorkspaceProfiles(workspace: string): Promise<Array<{
-    id: string
-    source: 'workspace'
-    filePath: string
-    name?: string
-    description?: string
-    mode: SubagentMode
-    toolPolicy: SubagentToolPolicy
-    color?: string
-    systemPrompt?: string
-    promptPreamble?: string
-    allowedTools?: string[]
-    blockedTools?: string[]
-    omitBasePrompt?: boolean
-  }>> {
-    const overlay = await loadWorkspaceAgentProfiles(workspace)
-    return overlay.map((entry) => ({
-      id: entry.id,
-      source: 'workspace' as const,
-      filePath: entry.filePath,
-      ...(entry.profile.name ? { name: entry.profile.name } : {}),
-      ...(entry.profile.description ? { description: entry.profile.description } : {}),
-      mode: entry.profile.mode,
-      toolPolicy: entry.profile.toolPolicy,
-      ...(entry.profile.color ? { color: entry.profile.color } : {}),
-      ...(entry.profile.systemPrompt ? { systemPrompt: entry.profile.systemPrompt } : {}),
-      ...(entry.profile.promptPreamble ? { promptPreamble: entry.profile.promptPreamble } : {}),
-      ...(entry.profile.allowedTools ? { allowedTools: entry.profile.allowedTools } : {}),
-      ...(entry.profile.blockedTools ? { blockedTools: entry.profile.blockedTools } : {}),
-      ...(entry.profile.omitBasePrompt ? { omitBasePrompt: true } : {})
-    }))
+  async listWorkspaceProfiles(workspace: string): Promise<WorkspaceAgentCatalogProfile[]> {
+    return loadWorkspaceAgentCatalogProfiles(workspace, this.options.config.profiles)
   }
 
   /** Resolve one explicit profile once so routing and execution share a snapshot. */
@@ -272,8 +248,9 @@ export abstract class DelegationRuntimeBase {
     if (workspace) {
       const hit = (await loadWorkspaceAgentProfiles(workspace)).find((entry) => entry.id === id)
       if (hit) {
-        return profileAvailableOnSurface(hit.profile, agentSurface)
-          ? { id, source: 'workspace', profile: hit.profile }
+        const profile = applyWorkspaceAgentSurfaceFallback(hit, this.options.config.profiles[id])
+        return profileAvailableOnSurface(profile, agentSurface)
+          ? { id, source: 'workspace', profile }
           : undefined
       }
     }
@@ -303,7 +280,10 @@ export abstract class DelegationRuntimeBase {
     if (workspace) {
       const overlay = await loadWorkspaceAgentProfiles(workspace)
       for (const entry of overlay) {
-        profiles.set(entry.id, entry.profile)
+        profiles.set(
+          entry.id,
+          applyWorkspaceAgentSurfaceFallback(entry, this.options.config.profiles[entry.id])
+        )
         sources.set(entry.id, 'workspace')
       }
     }
@@ -339,7 +319,11 @@ export abstract class DelegationRuntimeBase {
     childRuns: ChildRunRecord[]
     aggregates: ChildRunAggregate[]
   }> {
-    const childRuns = await this.options.store.list(parentThreadId)
+    const childRuns = (await this.options.store.list(parentThreadId)).map((record) => {
+      const visible = { ...record }
+      delete visible.controlPrompt
+      return visible
+    })
     return {
       enabled: this.options.config.enabled,
       active: this.active,

@@ -53,6 +53,7 @@ export type ModelRequestComposerInput = Readonly<{
   threadSystemPrompt?: string
   modeInstruction?: string
   contextInstructions: readonly string[]
+  redactedRequestValues?: readonly string[]
   history: readonly TurnItem[]
   historyRoutesByTurnId?: Readonly<Record<string, ModelHistoryRoute>>
   attachments: ResolvedTurnAttachments
@@ -89,6 +90,9 @@ export function composeModelRequest(input: ModelRequestComposerInput): ComposedM
     ...(input.modeInstruction ? { modeInstruction: input.modeInstruction } : {}),
     ...(input.contextInstructions.length
       ? { contextInstructions: [...input.contextInstructions] }
+      : {}),
+    ...(input.redactedRequestValues?.length
+      ? { redactedRequestValues: [...input.redactedRequestValues] }
       : {}),
     prefix: input.immutablePrefix.fewShots,
     history: capToolResultImages([...input.history], MAX_FORWARDED_TOOL_IMAGES),

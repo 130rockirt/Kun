@@ -602,7 +602,9 @@ export class AgentSdkRuntime {
       // A successful resumed query still advances the already validated native
       // session, so retain that ID instead of downgrading the binding.
       const sessionId = mapper.getSessionId() ?? resumeSessionId
-      if (sessionId) await this.deps.saveSessionId(threadId, turnId, sessionId)
+      if (sessionId && !ctx.disableNativeContinuation) {
+        await this.deps.saveSessionId(threadId, turnId, sessionId)
+      }
 
       if (signal.aborted) {
         await this.deps.finishTurn(threadId, turnId, 'aborted')

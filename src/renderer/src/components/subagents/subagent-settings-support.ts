@@ -145,6 +145,7 @@ type WorkspaceAgentJson = {
   promptPreamble?: string
   allowedTools?: string[]
   blockedTools?: string[]
+  surfaces?: KunSubagentSurfaceV1[]
 }
 
 function workspaceProfileToKun(entry: WorkspaceAgentJson): KunSubagentProfileV1 {
@@ -160,9 +161,7 @@ function workspaceProfileToKun(entry: WorkspaceAgentJson): KunSubagentProfileV1 
     promptPreamble: entry.promptPreamble,
     allowedTools: entry.allowedTools,
     blockedTools: entry.blockedTools,
-    // Workspace markdown roles are available on every surface unless the file
-    // later gains an explicit surfaces field; shared keeps them in the base pool.
-    surfaces: ['shared']
+    surfaces: entry.surfaces ?? ['code']
   }
 }
 
@@ -202,6 +201,13 @@ async function loadWorkspaceAgentCatalog(workspaceRoot: string): Promise<Workspa
           : {}),
         ...(Array.isArray(rec.blockedTools)
           ? { blockedTools: rec.blockedTools.filter((item): item is string => typeof item === 'string') }
+          : {}),
+        ...(Array.isArray(rec.surfaces)
+          ? {
+              surfaces: rec.surfaces.filter((item): item is KunSubagentSurfaceV1 =>
+                item === 'shared' || item === 'code' || item === 'write' || item === 'design'
+              )
+            }
           : {})
       }]
     })

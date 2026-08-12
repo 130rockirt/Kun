@@ -1,8 +1,7 @@
 import {
   GRAPH_CONTRACT_VERSION,
   type GraphNodeAttemptV1,
-  type GraphRunV1,
-  type TurnItem
+  type GraphRunV1
 } from '../../contracts/index.js'
 import {
   graphPhysicalPathsEqual,
@@ -15,12 +14,15 @@ import { GRAPH_LEAD_TOOL_NAMES } from '../../graph/graph-tool-boundary.js'
 import type { SessionStore } from '../../ports/session-store.js'
 import type { ThreadStore } from '../../ports/thread-store.js'
 import type { ToolHostContext } from '../../ports/tool-host.js'
+import {
+  boundedGraphSupervisionProjection,
+  boundedGraphSupervisionText,
+  graphAttemptSummary
+} from './graph-lead-supervision-projection.js'
 import { LocalToolHost, type LocalTool } from './local-tool-host.js'
 
 const DEFAULT_ITEM_LIMIT = 20
 const MAX_ITEM_LIMIT = 50
-const MAX_PROJECTION_CHARS = 32_768
-const MAX_ITEM_VALUE_CHARS = 6_000
 const MAX_WAIT_MS = 60_000
 const DEFAULT_OVERVIEW_NODE_LIMIT = 20
 const MAX_OVERVIEW_NODE_LIMIT = 50
@@ -224,14 +226,16 @@ async function inspectRunOverview(
       nodeId,
       title: projection?.node.title ?? nodeId,
       nodeStatus: projection?.status ?? 'missing',
-      attempt: attemptSummary(attempt),
+      attempt: graphAttemptSummary(attempt),
       latestReport: latestReport
         ? {
             id: latestReport.id,
             type: latestReport.type,
             priority: latestReport.priority,
             summary: latestReport.summary,
-            details: latestReport.details ? boundedText(latestReport.details) : null,
+            details: latestReport.details
+              ? boundedGraphSupervisionText(latestReport.details)
+              : null,
             replyRequired: latestReport.replyRequired,
             status: latestReport.status,
             createdAt: latestReport.createdAt
@@ -278,7 +282,7 @@ async function inspectRunOverview(
         turnStatus: childTurn?.status ?? null,
         runtimeActivity: runtimeActivity ?? null
       },
-      transcriptTail: boundedProjection(
+      transcriptTail: boundedGraphSupervisionProjection(
         attemptItems.slice(-page.perWorkerLimit)
       )
     }
@@ -382,7 +386,7 @@ async function inspectAttempt(
       runStatus: run.status,
       nodeId,
       nodeStatus: projection.status,
-      attempt: attemptSummary(attempt),
+      attempt: graphAttemptSummary(attempt),
       transcript: { items: [], nextCursor: page.afterItemId || null, hasMore: false },
       notice: 'No child session exists for this node yet.'
     }
@@ -405,7 +409,7 @@ async function inspectAttempt(
     ? attemptItems.slice(afterIndex + 1)
     : attemptItems.slice(-page.limit)
   const selected = candidates.slice(0, page.limit)
-  const projected = boundedProjection(selected)
+  const projected = boundedGraphSupervisionProjection(selected)
   const childTurn = attempt.childTurnId
     ? thread.turns.find((turn) => turn.id === attempt.childTurnId)
     : [...thread.turns].reverse().find((turn) => turn.status === 'running') ??
@@ -415,7 +419,7 @@ async function inspectAttempt(
     runStatus: run.status,
     nodeId,
     nodeStatus: projection.status,
-    attempt: attemptSummary(attempt),
+    attempt: graphAttemptSummary(attempt),
     child: {
       threadId: attempt.childThreadId,
       turnId: childTurn?.id ?? null,
@@ -548,89 +552,6 @@ async function authorizedLead(
   return run
 }
 
-function boundedProjection(items: TurnItem[]): Array<Record<string, unknown>> {
-  const output: Array<Record<string, unknown>> = []
-  let retainedChars = 0
-  for (const item of items) {
-    // Internal model history must not enter Graph's user-visible supervision
-    // transcript. Goal context and interruption checkpoints have their own
-    // durable records in the session.
-    if (item.kind === 'goal_context' || item.kind === 'model_context' ||
-      item.kind === 'interruption_note') continue
-    const projected = projectItem(item)
-    const chars = JSON.stringify(projected).length
-    if (retainedChars + chars > MAX_PROJECTION_CHARS) break
-    output.push(projected)
-    retainedChars += chars
-  }
-  return output
-}
-
-function projectItem(item: TurnItem): Record<string, unknown> {
-  const base = {
-    id: item.id,
-    turnId: item.turnId,
-    kind: item.kind,
-    role: item.role,
-    status: item.status,
-    createdAt: item.createdAt
-  }
-  switch (item.kind) {
-    case 'goal_context':
-    case 'model_context':
-    case 'interruption_note':
-      return base
-    case 'user_message':
-    case 'assistant_text':
-    case 'assistant_reasoning':
-      return { ...base, text: boundedText(item.text) }
-    case 'tool_call':
-      return {
-        ...base,
-        toolName: item.toolName,
-        summary: item.summary ? boundedText(item.summary) : undefined,
-        arguments: boundedValue(item.arguments)
-      }
-    case 'tool_result':
-      return {
-        ...base,
-        toolName: item.toolName,
-        isError: item.isError,
-        output: boundedValue(item.output)
-      }
-    case 'approval':
-      return { ...base, toolName: item.toolName, summary: boundedText(item.summary) }
-    case 'user_input':
-      return { ...base, prompt: boundedText(item.prompt), inputStatus: item.status }
-    case 'compaction':
-      return { ...base, summary: boundedText(item.summary) }
-    case 'review':
-      return { ...base, title: boundedText(item.title), reviewText: boundedText(item.reviewText ?? '') }
-    case 'error':
-      return { ...base, message: boundedText(item.message), code: item.code }
-  }
-}
-
-function boundedValue(value: unknown): unknown {
-  const serialized = JSON.stringify(value)
-  if (serialized === undefined) return null
-  if (serialized.length <= MAX_ITEM_VALUE_CHARS) return value
-  return `${serialized.slice(0, MAX_ITEM_VALUE_CHARS)}…[truncated]`
-}
-
-function attemptSummary(attempt: GraphNodeAttemptV1 | undefined): Record<string, unknown> | null {
-  return attempt
-    ? {
-        id: attempt.id,
-        attemptNumber: attempt.attemptNumber,
-        status: attempt.status,
-        startedAt: attempt.startedAt ?? null,
-        finishedAt: attempt.finishedAt ?? null,
-        normalizedFailure: attempt.normalizedFailure ?? null
-      }
-    : null
-}
-
 function requireRuntimePorts(options: {
   threads?: Pick<ThreadStore, 'get'>
   sessions?: Pick<SessionStore, 'loadItems'>
@@ -687,12 +608,6 @@ function waitArg(value: unknown): number {
 
 function stringArg(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
-}
-
-function boundedText(value: string): string {
-  return value.length <= MAX_ITEM_VALUE_CHARS
-    ? value
-    : `${value.slice(0, MAX_ITEM_VALUE_CHARS)}…[truncated]`
 }
 
 function errorMessage(error: unknown): string {

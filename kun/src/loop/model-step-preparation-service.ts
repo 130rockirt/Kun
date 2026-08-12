@@ -17,9 +17,9 @@ import { buildToolPreferenceInstruction } from '../prompt/kun-system-prompt.js'
 import {
   buildClientSurfaceInstruction,
   buildKunTurnContextInstructions,
-  buildPersonaBlockContent,
   type KunTurnContextBlock
 } from '../prompt/kun-prompt-context.js'
+import { projectTurnDynamicContext } from '../prompt/turn-persona-context.js'
 import { buildDesignTaskProfileInstruction } from '../prompt/design-task-profile.js'
 import { effectiveHistoryAfterLatestCompaction } from './compaction-history.js'
 import { resolveCoherentProviderAccount } from './compaction-summary.js'
@@ -184,6 +184,13 @@ export abstract class ModelStepPreparationService {
       ? undefined
       : (await this.deps.threadStore.get(threadId))?.goal
     historyItems = filterGoalContextsForActiveGoal(historyItems, goalForHistory)
+    const turnDynamicContext = projectTurnDynamicContext({
+      turnId,
+      persona: turn.persona,
+      items: historyItems
+    })
+    // Source records feed context assembly only, never model/router/tool history.
+    historyItems = [...turnDynamicContext.historyItems]
     await this.deps.recordPipelineStage(
       threadId,
       turnId,
@@ -501,6 +508,7 @@ export abstract class ModelStepPreparationService {
       ...(runtimeContextInstruction
         ? [kunContextBlock('runtime-context', 'runtime', runtimeContextInstruction)]
         : []),
+      ...turnDynamicContext.blocks.filter((block) => block.authority === 'runtime'),
       ...(subagentResumeGate.instruction
         ? [kunContextBlock(
             'subagent-resume',
@@ -580,9 +588,7 @@ export abstract class ModelStepPreparationService {
       }).map((content) => kunContextBlock('attachment-reference', 'reference', content)),
       ...memoryInstructions(memories)
         .map((content) => kunContextBlock('memory', 'user', content)),
-      ...(turn?.persona?.trim()
-        ? [kunContextBlock('persona', 'user', buildPersonaBlockContent(turn.persona))]
-        : []),
+      ...turnDynamicContext.blocks.filter((block) => block.authority === 'user'),
       ...(turn.designProfile
         ? [kunContextBlock(
             'design-task-profile',
@@ -640,7 +646,8 @@ export abstract class ModelStepPreparationService {
       turnId,
       stepIndex,
       ...(modeInstruction ? { modeInstruction } : {}),
-      contextBlocks,
+      contextBlocks: contextBlocks.filter((block) =>
+        block.kind !== 'persona' && block.kind !== 'host-control'),
       history: historyItems,
       createdAt: this.deps.nowIso()
     })
@@ -683,7 +690,8 @@ export abstract class ModelStepPreparationService {
       requestToolSpecs,
       promptCachePhase,
       svgCompletion,
-      contextInstructions: [],
+      contextInstructions: turnDynamicContext.instructions,
+      redactedRequestValues: turnDynamicContext.privateValues,
       skillContextInstructions: [],
       modeInstruction: undefined
     }

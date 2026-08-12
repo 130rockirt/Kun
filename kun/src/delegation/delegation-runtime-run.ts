@@ -30,7 +30,10 @@ import type { EventBus } from '../ports/event-bus.js'
 import type { ThreadStore } from '../ports/thread-store.js'
 import type { TurnService } from '../services/turn-service.js'
 import type { PptWorkflowScope } from '../ports/tool-host.js'
-import { loadWorkspaceAgentProfiles } from './workspace-agents.js'
+import {
+  applyWorkspaceAgentSurfaceFallback,
+  loadWorkspaceAgentProfiles
+} from './workspace-agents.js'
 import type { SubagentRoutingDocument } from './subagent-router.js'
 import { BUILTIN_SUBAGENT_PROFILES } from './builtin-profiles.js'
 import { BUILTIN_AGENT_CATALOG_BY_ID } from './builtin-agent-catalog.js'
@@ -191,7 +194,7 @@ export class DelegationRuntimeRun extends DelegationRuntimeBase {
       const overlay = await loadWorkspaceAgentProfiles(workspace)
       const hit = overlay.find((entry) => entry.id === profileName)
       if (hit) {
-        profile = hit.profile
+        profile = applyWorkspaceAgentSurfaceFallback(hit, configuredProfile)
         profileSource = 'workspace'
       }
     }
@@ -276,6 +279,7 @@ export class DelegationRuntimeRun extends DelegationRuntimeBase {
       input.serviceTier ??
       (input.inheritSessionDefaults === true ? input.inheritedServiceTier : undefined)
     const returnFormat = input.returnFormat ?? 'summary'
+    const clientSurface = input.guiDesignCanvas ? 'gui' : input.clientSurface ?? 'api'
 
     const queuedAt = this.now()
     const id = this.options.idGenerator?.() ?? `child_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
@@ -284,10 +288,10 @@ export class DelegationRuntimeRun extends DelegationRuntimeBase {
       parentThreadId: input.parentThreadId,
       parentTurnId: input.parentTurnId,
       agentSurface,
+      clientSurface,
       label: input.label,
       prompt: input.prompt,
       ...(source ? { source } : {}),
-      ...(controlPrompt ? { controlPrompt } : {}),
       workspace,
       model: resolvedModel,
       providerId: resolvedProviderId,
@@ -372,7 +376,7 @@ export class DelegationRuntimeRun extends DelegationRuntimeBase {
         approvalPolicy: input.approvalPolicy,
         sandboxMode: input.sandboxMode,
         approvalReviewer,
-        clientSurface: input.clientSurface,
+        clientSurface,
         agentSurface,
         guiDesignCanvas: input.guiDesignCanvas === true,
         resolvedReasoningEffort,
@@ -441,7 +445,7 @@ export class DelegationRuntimeRun extends DelegationRuntimeBase {
       approvalPolicy: input.approvalPolicy,
       sandboxMode: input.sandboxMode,
       approvalReviewer,
-      clientSurface: input.clientSurface,
+      clientSurface,
       agentSurface,
       guiDesignCanvas: input.guiDesignCanvas === true,
       resolvedReasoningEffort,

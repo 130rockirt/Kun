@@ -203,6 +203,7 @@ describe('chat-store navigation workspace selection', () => {
                   name: 'Codex',
                   enabled: true,
                   mode: 'primary',
+                  surfaces: ['design'],
                   providerId: 'codex',
                   model: 'gpt-5.6-luna',
                   systemPrompt: 'Design with Codex.'
@@ -235,11 +236,126 @@ describe('chat-store navigation workspace selection', () => {
     expect(harness.state.route).toBe('chat')
     expect(harness.state.blocks).toEqual([])
     expect(harness.state.busy).toBe(false)
+    expect(harness.state.composerAgentId).toBe('')
     expect(harness.selectThread).not.toHaveBeenCalled()
     expect(harness.refreshThreads).not.toHaveBeenCalled()
     expect(readDesignThreadRegistry(storage).workspaces[
       `/Users/zxy/project${String.fromCharCode(0)}drawing-new`
     ]?.activeThreadId).toBe('thr_design_new')
+  })
+
+  it('does not bind a Work-only primary Agent to a Design thread', async () => {
+    const created = thread({
+      id: 'thr_design_default',
+      title: 'Design Assistant',
+      workspace: '/Users/zxy/project'
+    })
+    const createThread = vi.fn(async (_request: unknown) => created)
+    registryMock.getProvider.mockReturnValue({ createThread, deleteThread: vi.fn() })
+    vi.stubGlobal('window', {
+      localStorage: new MemoryStorage(),
+      kunGui: {
+        workspaceDirectoryExists: vi.fn(async () => true),
+        readWorkspaceFile: vi.fn(async () => ({ ok: false as const, error: 'missing' })),
+        writeWorkspaceFile: vi.fn(async (payload: { path: string; content: string }) => ({
+          ok: true as const, path: payload.path, size: payload.content.length
+        })),
+        getSettings: vi.fn(async () => ({
+          agents: { kun: { subagents: { profiles: [{
+            id: 'work-primary', name: 'Work', enabled: true, mode: 'primary',
+            surfaces: ['write'], toolPolicy: 'inherit'
+          }] } } }
+        }))
+      }
+    })
+    const harness = buildHarness()
+    harness.state.composerAgentId = 'work-primary'
+
+    await harness.actions.createDesignThread('/Users/zxy/project', 'drawing-no-work-persona')
+
+    expect(createThread).toHaveBeenCalledWith(expect.objectContaining({ agentSurface: 'design' }))
+    expect(createThread.mock.calls[0]?.[0]).not.toHaveProperty('agentId')
+    expect(harness.state.composerAgentId).toBe('')
+  })
+
+  it('creates Work with a write-visible primary Agent and consumes the selection', async () => {
+    const storage = new MemoryStorage()
+    const created = thread({
+      id: 'thr_write_new',
+      title: 'Write Assistant',
+      workspace: '/Users/zxy/write'
+    })
+    const createThread = vi.fn(async () => created)
+    registryMock.getProvider.mockReturnValue({ createThread })
+    vi.stubGlobal('window', {
+      localStorage: storage,
+      kunGui: {
+        workspaceDirectoryExists: vi.fn(async () => true),
+        getSettings: vi.fn(async () => ({
+          agents: {
+            kun: {
+              subagents: {
+                profiles: [{
+                  id: 'work-primary',
+                  name: 'Work specialist',
+                  enabled: true,
+                  mode: 'primary',
+                  surfaces: ['write'],
+                  providerId: 'provider-work',
+                  model: 'work-model',
+                  systemPrompt: 'Work carefully.'
+                }]
+              }
+            }
+          }
+        }))
+      }
+    })
+    const harness = buildHarness()
+    harness.state.composerAgentId = 'work-primary'
+
+    await expect(harness.actions.createWriteThread('/Users/zxy/write'))
+      .resolves.toBe('thr_write_new')
+
+    expect(createThread).toHaveBeenCalledWith(expect.objectContaining({
+      workspace: '/Users/zxy/write',
+      agentSurface: 'write',
+      agentId: 'work-primary',
+      providerId: 'provider-work',
+      model: 'work-model',
+      systemPrompt: 'Work carefully.'
+    }))
+    expect(harness.state.composerAgentId).toBe('')
+  })
+
+  it('does not bind a Code-only primary Agent to a Work thread', async () => {
+    const created = thread({
+      id: 'thr_write_default',
+      title: 'Write Assistant',
+      workspace: '/Users/zxy/write'
+    })
+    const createThread = vi.fn(async (_request: unknown) => created)
+    registryMock.getProvider.mockReturnValue({ createThread })
+    vi.stubGlobal('window', {
+      localStorage: new MemoryStorage(),
+      kunGui: {
+        workspaceDirectoryExists: vi.fn(async () => true),
+        getSettings: vi.fn(async () => ({
+          agents: { kun: { subagents: { profiles: [{
+            id: 'code-primary', name: 'Code', enabled: true, mode: 'primary',
+            surfaces: ['code'], toolPolicy: 'inherit'
+          }] } } }
+        }))
+      }
+    })
+    const harness = buildHarness()
+    harness.state.composerAgentId = 'code-primary'
+
+    await harness.actions.createWriteThread('/Users/zxy/write')
+
+    expect(createThread).toHaveBeenCalledWith(expect.objectContaining({ agentSurface: 'write' }))
+    expect(createThread.mock.calls[0]?.[0]).not.toHaveProperty('agentId')
+    expect(harness.state.composerAgentId).toBe('')
   })
 
   it('openCode leaves a registered legacy Design deep link for the latest Code task', async () => {

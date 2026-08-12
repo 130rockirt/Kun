@@ -63,6 +63,7 @@ describe('requirement sidebar thread classification', () => {
 })
 
 let latestController: WorkbenchSddThreadController
+const setInput = vi.fn()
 
 function ControllerHarness(): null {
   latestController = useWorkbenchSddThreadController({
@@ -76,7 +77,7 @@ function ControllerHarness(): null {
     selectThread: vi.fn(async () => undefined),
     setComposerMode: vi.fn(),
     setError: vi.fn(),
-    setInput: vi.fn(),
+    setInput,
     setRightPanelMode: vi.fn(),
     setRightSidebarWidth: vi.fn(),
     setRoute: vi.fn()
@@ -105,6 +106,7 @@ describe('new requirement workspace', () => {
     })
     useChatStore.setState({ activeThreadId: null, threads: [] })
     useSddDraftStore.getState().clearActiveDraft()
+    setInput.mockClear()
     await act(async () => {
       renderer = create(createElement(ControllerHarness))
     })
@@ -126,5 +128,59 @@ describe('new requirement workspace', () => {
     expect(createWorkspaceFile).toHaveBeenCalledWith(expect.objectContaining({
       workspaceRoot: '/workspace/current'
     }))
+  })
+
+  it('queues an editor selection outside the visible Requirement AI input', async () => {
+    const draft = {
+      id: 'draft-quoted',
+      workspaceRoot: '/workspace/current',
+      relativePath: '.kunsdd/requirements/quoted/requirement.md',
+      absolutePath: '/workspace/current/.kunsdd/requirements/quoted/requirement.md',
+      createdAt: '2026-08-13T00:00:00.000Z',
+      updatedAt: '2026-08-13T00:00:00.000Z'
+    }
+    useSddDraftStore.getState().setActiveDraft(draft, '# Requirement')
+
+    await act(async () => {
+      latestController.quoteToSddAssistant('', {
+        id: 'quote-1',
+        text: 'Private quoted text',
+        sourceTitle: draft.relativePath,
+        sourceFilePath: draft.absolutePath,
+        lineStart: 2,
+        lineEnd: 2,
+        charCount: 19,
+        createdAt: '2026-08-13T00:00:00.000Z'
+      })
+    })
+
+    const visibleInput = String(setInput.mock.calls.at(-1)?.[0] ?? '')
+    expect(visibleInput.trim()).not.toBe('')
+    expect(visibleInput).not.toContain('Private quoted text')
+    expect(visibleInput).not.toContain('/workspace/current')
+    expect(useSddDraftStore.getState().assistantQuotedSelections).toMatchObject([{
+      id: 'quote-1', text: 'Private quoted text'
+    }])
+  })
+
+  it('starts a fresh Requirement AI conversation without carrying pending quotes', () => {
+    const draft = {
+      id: 'draft-new-conversation',
+      workspaceRoot: '/workspace/current',
+      relativePath: '.kunsdd/requirements/new/requirement.md',
+      createdAt: '2026-08-13T00:00:00.000Z',
+      updatedAt: '2026-08-13T00:00:00.000Z'
+    }
+    useSddDraftStore.getState().setActiveDraft(draft, '# Requirement')
+    useSddDraftStore.getState().addAssistantQuotedSelection({
+      id: 'pending-quote', text: 'Do not carry this reference', sourceTitle: draft.relativePath,
+      sourceFilePath: '/workspace/current/.kunsdd/requirements/new/requirement.md',
+      charCount: 27, createdAt: '2026-08-13T00:00:00.000Z'
+    })
+
+    latestController.startNewSddAssistantConversation()
+
+    expect(useSddDraftStore.getState().assistantQuotedSelections).toEqual([])
+    expect(setInput).toHaveBeenCalledWith('')
   })
 })

@@ -15,6 +15,14 @@ export const WRITE_RETRIEVAL_END = '[/相关文献上下文]'
 export const WRITE_OFFICE_CONTEXT_HEADING = '[Office 文档上下文]'
 export const WRITE_OFFICE_CONTEXT_END = '[/Office 文档上下文]'
 
+export const MAX_WRITE_QUOTED_SELECTION_COUNT = 4
+export const MAX_WRITE_QUOTED_SELECTION_CHARS = 2_000
+export const MAX_WRITE_QUOTED_SELECTION_TOTAL_CHARS = 6_000
+// Leave ample room for JSON escaping and per-reference metadata under the
+// ComposerContext 16 KiB envelope.
+export const MAX_WRITE_QUOTED_SELECTION_TOTAL_BYTES = 5_000
+const WRITE_QUOTE_FORMULA_SEPARATOR = '\n\n[公式注释]\n'
+
 const OFFICE_SOURCE_KINDS = ['pdf', 'word', 'presentation', 'spreadsheet'] as const
 const OFFICE_SOURCE_FORMATS = ['doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx'] as const
 
@@ -42,6 +50,115 @@ export type WriteQuotedSelection = {
   createdAt: string
 }
 
+function clipUnicode(value: string, maxChars: number): string {
+  const clipped = value.slice(0, Math.max(0, maxChars))
+  return /[\uD800-\uDBFF]$/.test(clipped) ? clipped.slice(0, -1) : clipped
+}
+
+function utf8Bytes(value: string): number {
+  return new TextEncoder().encode(value).byteLength
+}
+
+function clipUtf8(value: string, maxBytes: number): string {
+  if (maxBytes <= 0) return ''
+  if (utf8Bytes(value) <= maxBytes) return value
+  const chars = Array.from(value)
+  let low = 0
+  let high = chars.length
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2)
+    if (utf8Bytes(chars.slice(0, middle).join('')) <= maxBytes) low = middle
+    else high = middle - 1
+  }
+  return chars.slice(0, low).join('')
+}
+
+function sanitizeReferenceText(value: string): string {
+  return value
+    .replace(/\r\n?/g, '\n')
+    .split('')
+    .map((character) => {
+      const code = character.charCodeAt(0)
+      return (code < 32 && code !== 9 && code !== 10) || code === 127 ? ' ' : character
+    })
+    .join('')
+    .trim()
+}
+
+function quoteContent(selection: WriteQuotedSelection): string {
+  const formulas = selection.formulas?.map((formula) => formula.trim()).filter(Boolean) ?? []
+  return formulas.length > 0
+    ? `${selection.text}${WRITE_QUOTE_FORMULA_SEPARATOR}${formulas.join('\n')}`
+    : selection.text
+}
+
+function quoteSignature(selection: WriteQuotedSelection): string {
+  const location = [
+    selection.lineStart, selection.lineEnd, selection.pageStart, selection.pageEnd,
+    selection.slide, selection.sheetName, selection.cellRange
+  ].filter((value) => value != null).join(':')
+  return [
+    normalizePath(selection.sourceFilePath).toLowerCase(),
+    location,
+    selection.text.replace(/\s+/g, ' ').trim().toLowerCase()
+  ].join('|')
+}
+
+/**
+ * Keep committed Work references bounded before they enter state or a turn.
+ * Newer selections win when the count/aggregate budget is exhausted.
+ */
+export function normalizeWriteQuotedSelections(
+  selections: readonly WriteQuotedSelection[]
+): WriteQuotedSelection[] {
+  const normalized: WriteQuotedSelection[] = []
+  const seen = new Set<string>()
+  let totalChars = 0
+  let totalBytes = 0
+  for (let index = selections.length - 1; index >= 0; index -= 1) {
+    if (normalized.length >= MAX_WRITE_QUOTED_SELECTION_COUNT) break
+    const selection = selections[index]
+    if (!selection) continue
+    const signature = quoteSignature(selection)
+    if (seen.has(signature)) continue
+    const remainingChars = MAX_WRITE_QUOTED_SELECTION_TOTAL_CHARS - totalChars
+    const remainingBytes = MAX_WRITE_QUOTED_SELECTION_TOTAL_BYTES - totalBytes
+    if (remainingChars <= 0 || remainingBytes <= 0) break
+    const text = clipUtf8(
+      clipUnicode(sanitizeReferenceText(selection.text), Math.min(MAX_WRITE_QUOTED_SELECTION_CHARS, remainingChars)),
+      remainingBytes
+    ).trim()
+    if (!text) continue
+    const textChars = Array.from(text).length
+    const hasFormulas = Boolean(selection.formulas?.some((formula) => formula.trim()))
+    const formulaOverheadChars = hasFormulas ? Array.from(WRITE_QUOTE_FORMULA_SEPARATOR).length : 0
+    const formulaOverheadBytes = hasFormulas ? utf8Bytes(WRITE_QUOTE_FORMULA_SEPARATOR) : 0
+    const remainingFormulaChars = Math.max(0, Math.min(
+      MAX_WRITE_QUOTED_SELECTION_CHARS - textChars - formulaOverheadChars,
+      remainingChars - textChars - formulaOverheadChars
+    ))
+    const formulas = remainingFormulaChars > 0 && hasFormulas
+      ? [clipUtf8(
+          clipUnicode(selection.formulas!.join('\n').trim(), remainingFormulaChars),
+          Math.max(0, remainingBytes - utf8Bytes(text) - formulaOverheadBytes)
+        )]
+          .filter(Boolean)
+      : undefined
+    const next: WriteQuotedSelection = {
+      ...selection,
+      text,
+      ...(formulas?.length ? { formulas } : { formulas: undefined }),
+      charCount: Array.from(text).length
+    }
+    const content = quoteContent(next)
+    totalChars += Array.from(content).length
+    totalBytes += utf8Bytes(content)
+    seen.add(signature)
+    normalized.push(next)
+  }
+  return normalized.reverse()
+}
+
 function normalizePath(value: string): string {
   return value.replaceAll('\\', '/').replace(/\/+$/, '')
 }
@@ -66,11 +183,11 @@ export function quotedSelectionFromEditor(
   workspaceRoot: string,
   now = Date.now()
 ): WriteQuotedSelection | null {
-  const text = selection.text.trim()
+  const text = sanitizeReferenceText(selection.text)
   if (!text || selection.charCount <= 0) return null
   const first = selection.ranges[0]
   const last = selection.ranges[selection.ranges.length - 1]
-  return {
+  const selectionQuote: WriteQuotedSelection = {
     id: `quote-${now}-${Math.random().toString(36).slice(2)}`,
     text,
     sourceKind: selection.sourceKind ?? 'text',
@@ -98,6 +215,7 @@ export function quotedSelectionFromEditor(
     charCount: selection.charCount,
     createdAt: new Date(now).toISOString()
   }
+  return normalizeWriteQuotedSelections([selectionQuote])[0] ?? null
 }
 
 export function formatWriteQuotedSelectionForPrompt(selection: WriteQuotedSelection): string {
@@ -156,11 +274,7 @@ export function formatWriteQuotedSelectionForPrompt(selection: WriteQuotedSelect
 type WritePromptContext = {
   workspaceRoot?: string
   activeFilePath?: string | null
-  retrieval?: WriteRetrievalContext | null
-  officeDocument?: WriteOfficeDocumentContext | null
-  /** Active writing-agent persona; folded into the context block so it frames the
-   * model without showing as raw text in the user's message bubble. */
-  agentPersona?: string
+  officeReadOnly?: boolean
 }
 
 export type WriteOfficeDocumentContext = {
@@ -265,19 +379,15 @@ export function formatWriteOfficeDocumentContextForPrompt(
 
 export function composeWritePrompt(
   input: string,
-  selections: WriteQuotedSelection[],
   context: WritePromptContext = {}
 ): string {
   const body = input.trim()
   const contextLines: string[] = []
   contextLines.push(WRITE_ASSISTANT_INTERACTION_RULE)
-  if (context.officeDocument) {
+  if (context.officeReadOnly) {
     contextLines.push(
       '只读 Office 约定: 当前 Office 文件只能预览和讨论。禁止调用 edit、write 或 office_edit 修改它；总结、提纲、解释、润色、精简、评审和改写都必须只在回复中给出结果。'
     )
-  }
-  if (context.agentPersona?.trim()) {
-    contextLines.push(`当前写作 Agent 人设（请严格遵循）：${context.agentPersona.trim()}`)
   }
   if (context.workspaceRoot?.trim()) {
     contextLines.push(`工作空间: ${context.workspaceRoot.trim()}`)
@@ -288,10 +398,7 @@ export function composeWritePrompt(
   const contextText = contextLines.length > 0
     ? `[写作上下文]\n${contextLines.join('\n')}`
     : ''
-  const quoteText = selections.map(formatWriteQuotedSelectionForPrompt).join('\n\n')
-  const retrievalText = formatWriteRetrievalContextForPrompt(context.retrieval)
-  const officeText = formatWriteOfficeDocumentContextForPrompt(context.officeDocument)
-  return [contextText, quoteText, officeText, retrievalText, body].filter(Boolean).join('\n\n')
+  return [contextText, body].filter(Boolean).join('\n\n')
 }
 
 function parseContextBlock(text: string): WritePromptDisplayContext {

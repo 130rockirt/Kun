@@ -4,6 +4,7 @@ import { isAbsolute, join, relative, resolve, sep } from 'node:path'
 import {
   SUBAGENT_READ_ONLY_TOOL_NAMES,
   SubagentProfileConfig,
+  SubagentSurface,
   type SubagentMode,
   type SubagentToolPolicy
 } from '../contracts/capabilities.js'
@@ -20,6 +21,7 @@ import {
  *     name: Code Reviewer
  *     description: One-line "when to use"
  *     mode: subagent          # subagent | primary | all
+ *     surfaces: [code, write] # shared | code | write | design
  *     toolPolicy: readOnly    # default readOnly; set inherit for write tools
  *     allowedTools: [read, grep]
  *     omit_base_prompt: false # when true, role prompt replaces Kun base
@@ -40,7 +42,26 @@ export type WorkspaceAgentProfile = {
   id: string
   source: 'workspace'
   filePath: string
+  /** Distinguishes an omitted surface field from an explicit declaration. */
+  surfacesDeclared: boolean
   profile: SubagentProfileConfig
+}
+
+export type WorkspaceAgentCatalogProfile = {
+  id: string
+  source: 'workspace'
+  filePath: string
+  name?: string
+  description?: string
+  mode: SubagentMode
+  toolPolicy: SubagentToolPolicy
+  color?: string
+  systemPrompt?: string
+  promptPreamble?: string
+  allowedTools?: string[]
+  blockedTools?: string[]
+  omitBasePrompt?: boolean
+  surfaces?: NonNullable<SubagentProfileConfig['surfaces']>
 }
 
 const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/
@@ -90,6 +111,33 @@ export async function loadWorkspaceAgentProfiles(workspace: string): Promise<Wor
   return results
 }
 
+/** Renderer-facing workspace roster with configured surface fallback applied. */
+export async function loadWorkspaceAgentCatalogProfiles(
+  workspace: string,
+  configuredProfiles: Readonly<Record<string, SubagentProfileConfig>>
+): Promise<WorkspaceAgentCatalogProfile[]> {
+  const overlay = await loadWorkspaceAgentProfiles(workspace)
+  return overlay.map((entry) => {
+    const profile = applyWorkspaceAgentSurfaceFallback(entry, configuredProfiles[entry.id])
+    return {
+      id: entry.id,
+      source: 'workspace',
+      filePath: entry.filePath,
+      ...(profile.name ? { name: profile.name } : {}),
+      ...(profile.description ? { description: profile.description } : {}),
+      mode: profile.mode,
+      toolPolicy: profile.toolPolicy,
+      ...(profile.surfaces ? { surfaces: profile.surfaces } : {}),
+      ...(profile.color ? { color: profile.color } : {}),
+      ...(profile.systemPrompt ? { systemPrompt: profile.systemPrompt } : {}),
+      ...(profile.promptPreamble ? { promptPreamble: profile.promptPreamble } : {}),
+      ...(profile.allowedTools ? { allowedTools: profile.allowedTools } : {}),
+      ...(profile.blockedTools ? { blockedTools: profile.blockedTools } : {}),
+      ...(profile.omitBasePrompt ? { omitBasePrompt: true } : {})
+    }
+  })
+}
+
 async function readWorkspaceAgentFile(path: string): Promise<string | null> {
   let handle: FileHandle | undefined
   try {
@@ -124,7 +172,11 @@ function isPathInside(root: string, candidate: string): boolean {
   return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))
 }
 
-function parseAgentMarkdown(text: string, defaultId: string): { id: string; profile: SubagentProfileConfig } | null {
+function parseAgentMarkdown(text: string, defaultId: string): {
+  id: string
+  surfacesDeclared: boolean
+  profile: SubagentProfileConfig
+} | null {
   const match = FRONTMATTER_RE.exec(text)
   if (!match) return null
   const yamlRaw = match[1] ?? ''
@@ -135,6 +187,12 @@ function parseAgentMarkdown(text: string, defaultId: string): { id: string; prof
   const omitBase = boolField(fields, 'omit_base_prompt') === true || boolField(fields, 'omitBasePrompt') === true
   const systemPromptFromBody = body || undefined
   const toolPolicy = normalizeToolPolicy(fields.toolPolicy)
+  const surfaceValues = parseListField(fields, 'surfaces') ??
+    (/^\[\s*\]$/.test(fields.surfaces?.trim() ?? '') ? [] : undefined)
+  const surfaces = surfaceValues
+    ? SubagentSurface.array().max(4).safeParse(surfaceValues)
+    : undefined
+  if (surfaces && !surfaces.success) return null
   const requestedAllowedTools = parseListField(fields, 'allowedTools')
   const safeReadOnlyTools = new Set<string>(SUBAGENT_READ_ONLY_TOOL_NAMES)
   const localReadTools = new Set<string>(WORKSPACE_AGENT_LOCAL_READ_TOOLS)
@@ -147,6 +205,10 @@ function parseAgentMarkdown(text: string, defaultId: string): { id: string; prof
     ...(fields.description ? { description: fields.description } : {}),
     ...(fields.color ? { color: fields.color } : {}),
     mode: normalizeMode(fields.mode),
+    // A new workspace-only agent is code-scoped unless it explicitly opts
+    // into another product surface. Same-id overlays may inherit the
+    // configured profile's surface later in the runtime merge.
+    surfaces: surfaces?.data ?? ['code'],
     ...(fields.systemPrompt ? { systemPrompt: fields.systemPrompt } : systemPromptFromBody ? { systemPrompt: systemPromptFromBody } : {}),
     ...(omitBase ? { omitBasePrompt: true } : {}),
     ...(fields.promptPreamble ? { promptPreamble: fields.promptPreamble } : {}),
@@ -168,7 +230,19 @@ function parseAgentMarkdown(text: string, defaultId: string): { id: string; prof
   }
   const parsed = SubagentProfileConfig.safeParse(raw)
   if (!parsed.success) return null
-  return { id, profile: parsed.data }
+  return { id, surfacesDeclared: Boolean(surfaceValues), profile: parsed.data }
+}
+
+/** Preserve configured visibility when a same-id workspace overlay omits surfaces. */
+export function applyWorkspaceAgentSurfaceFallback(
+  entry: WorkspaceAgentProfile,
+  configured: SubagentProfileConfig | undefined
+): SubagentProfileConfig {
+  if (entry.surfacesDeclared || !configured) return entry.profile
+  return {
+    ...entry.profile,
+    surfaces: configured.surfaces ?? ['shared']
+  }
 }
 
 function normalizeMode(value: string | undefined): SubagentMode {

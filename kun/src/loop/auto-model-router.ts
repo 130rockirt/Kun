@@ -288,6 +288,7 @@ function routerRoleForItem(item: TurnItem): string {
       return 'tool'
     case 'goal_context':
     case 'model_context':
+    case 'runtime_context_source':
     case 'interruption_note':
     case 'compaction':
       return 'system'
@@ -305,6 +306,8 @@ function routerTextForItem(item: TurnItem): string {
     case 'assistant_text':
     case 'assistant_reasoning':
       return item.text
+    case 'runtime_context_source':
+      return item.content
     case 'tool_call':
       return `[tool call: ${item.toolName}]`
     case 'tool_result':

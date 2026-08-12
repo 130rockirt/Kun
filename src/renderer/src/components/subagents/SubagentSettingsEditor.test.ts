@@ -7,6 +7,7 @@ import {
   type KunSubagentProfileV1
 } from '@shared/app-settings'
 import { SubagentSettingsEditor } from './SubagentSettingsEditor'
+import { workspaceProfileToKun } from './subagent-settings-support'
 
 const loadComposerModels = vi.fn(async () => undefined)
 let mockRoute = 'chat'
@@ -105,6 +106,17 @@ describe('SubagentSettingsEditor', () => {
     }
     loadComposerModels.mockClear()
     mockRoute = 'chat'
+  })
+
+  it('keeps runtime workspace surface visibility in the settings roster', () => {
+    expect(workspaceProfileToKun({
+      id: 'writer', source: 'workspace', filePath: '/tmp/writer.md',
+      mode: 'subagent', toolPolicy: 'readOnly', surfaces: ['write']
+    }).surfaces).toEqual(['write'])
+    expect(workspaceProfileToKun({
+      id: 'legacy', source: 'workspace', filePath: '/tmp/legacy.md',
+      mode: 'subagent', toolPolicy: 'readOnly'
+    }).surfaces).toEqual(['code'])
   })
 
   it('renders the settings policy, built-in roster, custom profiles, and automatic roles', async () => {

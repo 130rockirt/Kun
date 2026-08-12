@@ -5,6 +5,7 @@ export type {
   WriteRetrievalSnippetLocation
 } from '../../shared/write-retrieval'
 export { tokenizeWriteRetrievalText } from './write-retrieval-index'
+export { setWriteRetrievalIndexTestHooks } from './write-retrieval-index'
 export {
   clearWriteRetrievalCache,
   retrieveWriteContext,

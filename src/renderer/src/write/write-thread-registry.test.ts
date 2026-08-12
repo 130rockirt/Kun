@@ -262,6 +262,29 @@ describe('write-thread-registry', () => {
     expect(isWriteThreadId('elsewhere', registry)).toBe(false)
   })
 
+  it('uses explicit surface metadata before legacy title inference', () => {
+    const workspace = '/Users/zxy/.deepseekgui/write_workspace'
+    const registry = hydrateWriteThreadRegistry(
+      [
+        {
+          ...thread('owned-write', '/Users/zxy/code/project'),
+          title: 'Renamed by the user',
+          agentSurface: 'write'
+        },
+        {
+          ...thread('title-collision', workspace),
+          title: WRITE_ASSISTANT_THREAD_TITLE,
+          agentSurface: 'code'
+        }
+      ],
+      [workspace],
+      markWriteThread(workspace, 'title-collision', emptyWriteThreadRegistry())
+    )
+
+    expect(isWriteThreadId('owned-write', registry)).toBe(true)
+    expect(isWriteThreadId('title-collision', registry)).toBe(false)
+  })
+
   it('hydrates legacy tilde write assistant threads under the configured absolute workspace', () => {
     const legacyThread = {
       ...thread('legacy-write-thread', '~/.deepseekgui/write_workspace'),

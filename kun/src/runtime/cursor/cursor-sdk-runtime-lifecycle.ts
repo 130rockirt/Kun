@@ -6,6 +6,7 @@ import { resolveTurnClientSurface } from '../../loop/turn-context-resolver.js'
 import { normalizeTurnLimits } from '../../loop/turn-limits.js'
 import type { TurnRunOutcome } from '../../loop/turn-execution-types.js'
 import { buildClientSurfaceInstruction } from '../../prompt/kun-prompt-context.js'
+import { projectTurnDynamicContext } from '../../prompt/turn-persona-context.js'
 import { buildHistoryTranscript, composeSdkPromptText, DEFAULT_SDK_HISTORY_TRANSCRIPT_MAX_BYTES } from '../agent-sdk/sdk-context-assembler.js'
 import { filterGoalContextsForGoalKey, goalContextKey } from '../../loop/continuation-instructions.js'
 import { delegatedCapabilityFingerprint, delegatedCredentialIdentity, priorItemsForDelegatedTurn, type DelegatedSessionPreparation } from '../delegated-session-binding.js'
@@ -185,7 +186,13 @@ export async function runCursorSdkTurnOwned(
       ? undefined
       : (await deps.threadStore.get(threadId))?.goal
     const goalContextKeyForHistory = goalContextKey(latestGoal)
-    const historyItems = filterGoalContextsForGoalKey(canonicalHistory, goalContextKeyForHistory)
+    const filteredHistory = filterGoalContextsForGoalKey(canonicalHistory, goalContextKeyForHistory)
+    const turnDynamicContext = projectTurnDynamicContext({
+      turnId,
+      persona: turn.persona,
+      items: filteredHistory
+    })
+    const historyItems = [...turnDynamicContext.historyItems]
     const historyTranscript = buildHistoryTranscript(
       historyItems,
       turnId,
@@ -195,7 +202,8 @@ export async function runCursorSdkTurnOwned(
       deps.systemPrompt?.trim(),
       buildClientSurfaceInstruction(resolveTurnClientSurface(turn)),
       thread.systemPrompt?.trim(),
-      ...kunContext.instructionBlocks
+      ...kunContext.instructionBlocks,
+      ...turnDynamicContext.instructions
     ].filter((value, index, all): value is string =>
       Boolean(value) && all.indexOf(value) === index
     )
@@ -276,7 +284,10 @@ export async function runCursorSdkTurnOwned(
       userText,
       instructionBlocks
     })
-    let prompt = buildPrompt(!preparation?.resumed)
+    const resumeNativeSession = Boolean(
+      preparation?.resumed && turnDynamicContext.instructions.length === 0
+    )
+    let prompt = buildPrompt(!resumeNativeSession)
     let sdkMessage: string | SDKUserMessage = resolvedImages.images.length > 0
       ? { text: prompt, images: resolvedImages.images }
       : prompt
@@ -286,7 +297,7 @@ export async function runCursorSdkTurnOwned(
       turnId,
       providerKind: 'cursor-sdk',
       providerId: resolvedProviderId,
-      phase: preparation?.resumed ? 'resumed' : 'rebased',
+      phase: resumeNativeSession ? 'resumed' : 'rebased',
       ...(preparation?.rebaseReason ? { reason: preparation.rebaseReason } : {}),
       capabilities
     })
@@ -317,7 +328,7 @@ export async function runCursorSdkTurnOwned(
         nativeHistory: resumed ? 'unknown' : 'none'
       })
     }
-    await recordContextSnapshot(preparation?.resumed === true)
+    await recordContextSnapshot(resumeNativeSession)
     const limits = normalizeTurnLimits(deps.turnLimits)
     const mapper = new CursorSdkEventMapper({
       threadId,
@@ -370,7 +381,7 @@ export async function runCursorSdkTurnOwned(
         }
       }
       if (deps.sessionCoordinator && !sdk.JsonlLocalAgentStore) {
-        if (preparation?.resumed) {
+        if (resumeNativeSession && preparation?.resumed) {
           preparation = await deps.sessionCoordinator.rejectResume(preparation)
         }
         capabilities = { ...capabilities, nativeResume: false }
@@ -389,7 +400,7 @@ export async function runCursorSdkTurnOwned(
         )
       }
       attachIsolatedStore()
-      if (preparation?.resumed && preparation.nativeSessionId) {
+      if (resumeNativeSession && preparation?.nativeSessionId) {
         try {
           agent = await Promise.race([
             sdk.Agent.resume(preparation.nativeSessionId, options),
@@ -440,7 +451,10 @@ export async function runCursorSdkTurnOwned(
           provider: resolvedProviderId,
           model,
           prompt: attemptPrompt,
-          redactedRequestValues: goalContextTexts(historyItems),
+          redactedRequestValues: [
+            ...goalContextTexts(historyItems),
+            ...turnDynamicContext.privateValues
+          ],
           instructions: instructionBlocks,
           tools: kunContext.tools,
           images: recoveryContinuesAcceptedRun ? [] : resolvedImages.summaries,
@@ -448,10 +462,10 @@ export async function runCursorSdkTurnOwned(
           sandboxEnabled: options.local?.sandboxOptions?.enabled !== false,
           delegated: {
             providerKind: 'cursor-sdk',
-            phase: preparation?.resumed || recoveryContinuesAcceptedRun ? 'resumed' : 'rebased',
+            phase: resumeNativeSession || recoveryContinuesAcceptedRun ? 'resumed' : 'rebased',
             ...(preparation?.rebaseReason ? { reason: preparation.rebaseReason } : {}),
             contextManagement: 'sdk-managed',
-            nativeHistory: preparation?.resumed || recoveryContinuesAcceptedRun
+            nativeHistory: resumeNativeSession || recoveryContinuesAcceptedRun
               ? 'unknown'
               : 'none',
             capabilities
@@ -617,7 +631,9 @@ export async function runCursorSdkTurnOwned(
               goalContextKeyForHistory
             ),
             lastCommittedTurnId: turnId,
-            nativeSessionId: agent.agentId
+            nativeSessionId: turnDynamicContext.instructions.length > 0
+              ? undefined
+              : agent.agentId
           })
         } catch {
           // The canonical Kun turn is already durable. A checkpoint write

@@ -19,7 +19,7 @@ import { SequentialIdGenerator } from '../ports/id-generator.js'
 import { RuntimeEventRecorder } from '../services/runtime-event-recorder.js'
 import { TurnService } from '../services/turn-service.js'
 import { createChildAgentExecutor } from './child-agent-executor.js'
-import { DelegationRuntime, FileDelegationStore } from './delegation-runtime.js'
+import { ChildRunRecord, DelegationRuntime, FileDelegationStore } from './delegation-runtime.js'
 import type { ChildRunExecutor } from './delegation-runtime.js'
 
 class HangingModel implements ModelClient {
@@ -49,6 +49,34 @@ class HangingModel implements ModelClient {
 }
 
 describe('DelegationRuntime abort handling', () => {
+  it('redacts legacy host control from diagnostics without rewriting the store', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'kun-delegation-diagnostics-'))
+    try {
+      const store = new FileDelegationStore(dir)
+      await store.upsert(ChildRunRecord.parse({
+        id: 'legacy-child',
+        parentThreadId: 'parent',
+        parentTurnId: 'turn',
+        prompt: 'legacy task',
+        controlPrompt: 'PRIVATE LEGACY HOST CONTROL',
+        status: 'completed',
+        createdAt: '2026-08-01T00:00:00.000Z',
+        updatedAt: '2026-08-01T00:00:01.000Z'
+      }))
+      const runtime = new DelegationRuntime({
+        config: subagentConfig(),
+        store,
+        executor: async () => ({ summary: 'unused' })
+      })
+
+      expect((await store.get('legacy-child'))?.controlPrompt).toBe('PRIVATE LEGACY HOST CONTROL')
+      expect((await runtime.diagnostics('parent')).childRuns[0]).not.toHaveProperty('controlPrompt')
+      expect((await store.get('legacy-child'))?.controlPrompt).toBe('PRIVATE LEGACY HOST CONTROL')
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
   it('does not make an ordinary child failure resumable', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'kun-delegation-failure-'))
     try {

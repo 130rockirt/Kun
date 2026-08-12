@@ -51,6 +51,10 @@ function normalizeTools(tools: ImmutablePrefix['tools']): ImmutablePrefix['tools
     .sort((a, b) => a.name.localeCompare(b.name))
 }
 
+function prefixFewShots(items: readonly TurnItem[]): TurnItem[] {
+  return items.filter((item) => item.kind !== 'runtime_context_source')
+}
+
 function fewShotCacheShape(item: TurnItem): unknown {
   switch (item.kind) {
     case 'user_message':
@@ -73,6 +77,7 @@ function fewShotCacheShape(item: TurnItem): unknown {
     case 'assistant_reasoning':
     case 'goal_context':
     case 'model_context':
+    case 'runtime_context_source':
     case 'interruption_note':
     case 'approval':
     case 'user_input':
@@ -109,7 +114,7 @@ export function createImmutablePrefix(input?: {
   const systemPrompt = input?.systemPrompt ?? ''
   const tools = normalizeTools(input?.tools ?? [])
   const pinnedConstraints = [...(input?.pinnedConstraints ?? [])]
-  const fewShots = [...(input?.fewShots ?? [])]
+  const fewShots = prefixFewShots(input?.fewShots ?? [])
   return {
     systemPrompt,
     tools,
@@ -128,7 +133,7 @@ function mutate(
   const pinnedConstraints = patch.pinnedConstraints
     ? [...patch.pinnedConstraints]
     : prefix.pinnedConstraints
-  const fewShots = patch.fewShots ? [...patch.fewShots] : prefix.fewShots
+  const fewShots = patch.fewShots ? prefixFewShots(patch.fewShots) : prefix.fewShots
   const systemPrompt = patch.systemPrompt ?? prefix.systemPrompt
   const next: ImmutablePrefix = {
     ...prefix,
@@ -163,6 +168,9 @@ export function setFewShots(prefix: ImmutablePrefix, fewShots: TurnItem[]): Immu
 }
 
 export function verifyImmutablePrefix(prefix: ImmutablePrefix): string {
+  if (prefix.fewShots.some((item) => item.kind === 'runtime_context_source')) {
+    throw new Error('immutable prefix cannot contain private runtime context')
+  }
   const expected = buildFingerprint(prefix)
   if (expected !== prefix.fingerprint) {
     throw new Error(

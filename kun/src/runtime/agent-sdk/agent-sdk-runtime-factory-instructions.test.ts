@@ -203,6 +203,8 @@ describe('createAgentSdkRuntime turn context', () => {
       await mkdir(workspace, { recursive: true })
       await writeFile(join(workspace, 'AGENTS.md'), 'SDK workspace rule.', 'utf8')
       const updatedMetadata: unknown[] = []
+      const currentHostControl = 'Current private PPT host control.'
+      const oldHostControl = 'Old private PPT host control.'
       const runtime = createAgentSdkRuntime({
         registry: { listTools: () => [] } as never,
         turns: {
@@ -211,16 +213,20 @@ describe('createAgentSdkRuntime turn context', () => {
           }
         } as never,
         sessionStore: {
-          loadItems: async () => [{
-            id: 'item_user',
-            turnId: 'tn',
-            threadId: 'th',
-            kind: 'user_message',
-            role: 'user',
-            status: 'completed',
-            text: 'hello',
-            createdAt: '2026-07-03T00:00:00.000Z'
-          }]
+          loadItems: async () => [
+            runtimeSource('old-turn', oldHostControl),
+            runtimeSource('tn', currentHostControl),
+            {
+              id: 'item_user',
+              turnId: 'tn',
+              threadId: 'th',
+              kind: 'user_message',
+              role: 'user',
+              status: 'completed',
+              text: 'hello',
+              createdAt: '2026-07-03T00:00:00.000Z'
+            }
+          ]
         } as never,
         threadStore: {
           get: async () => threadWith({
@@ -230,6 +236,7 @@ describe('createAgentSdkRuntime turn context', () => {
             turns: [{
               id: 'tn',
               prompt: 'hello',
+              persona: 'Write with a precise editorial voice.',
               actingModelRoute: undefined
             } as ThreadRecord['turns'][number]]
           })
@@ -251,6 +258,8 @@ describe('createAgentSdkRuntime turn context', () => {
         deps: {
           loadTurnContext(threadId: string, turnId: string): Promise<{
             contextInstructions?: string[]
+            historyTranscript?: string
+            redactedRequestValues?: string[]
             actingModelRoute?: {
               model: string
               providerId?: string
@@ -263,6 +272,17 @@ describe('createAgentSdkRuntime turn context', () => {
       const ctx = await deps.loadTurnContext('th', 'tn')
 
       expect(ctx?.contextInstructions?.join('\n')).toContain('SDK workspace rule.')
+      expect(ctx?.contextInstructions?.join('\n')).toContain(
+        '<kun_context_block kind="persona" authority="user">'
+      )
+      expect(ctx?.contextInstructions?.join('\n')).toContain('Write with a precise editorial voice.')
+      expect(ctx?.contextInstructions?.join('\n')).toContain(
+        '<kun_context_block kind="host-control" authority="runtime">'
+      )
+      expect(ctx?.contextInstructions?.join('\n')).toContain(currentHostControl)
+      expect(ctx?.contextInstructions?.join('\n')).not.toContain(oldHostControl)
+      expect(ctx?.historyTranscript).toBeUndefined()
+      expect(ctx?.redactedRequestValues).toEqual([currentHostControl])
       expect(ctx?.actingModelRoute).toEqual({
         model: 'claude-haiku-4-5',
         providerId: 'claude-subscription'
@@ -289,3 +309,17 @@ describe('createAgentSdkRuntime turn context', () => {
     }
   })
 })
+
+function runtimeSource(turnId: string, content: string) {
+  return {
+    id: `item-${turnId}`,
+    threadId: 'th',
+    turnId,
+    kind: 'runtime_context_source' as const,
+    role: 'system' as const,
+    status: 'completed' as const,
+    contextKind: 'host-control' as const,
+    content,
+    createdAt: '2026-07-03T00:00:00.000Z'
+  }
+}

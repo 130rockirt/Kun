@@ -23,7 +23,6 @@ import type { WriteBlockType } from '../../write/block-type'
 import { createWriteRecentEdit } from '../../write/recent-edits'
 import { resolveWriteQuickActions, type ResolvedWriteQuickAction } from '../../write/quick-actions'
 import {
-  formatWriteQuotedSelectionForPrompt,
   quotedSelectionFromEditor
 } from '../../write/quoted-selection'
 import { parseImageMarkdownLine } from '../../write/selected-image'
@@ -50,6 +49,7 @@ import {
   type WriteNotice
 } from '../write/write-workspace-view-utils'
 import { SidebarTitlebarToggleButton } from '../sidebar/SidebarPrimitives'
+import type { WriteEditorSelectionState } from '../write/WriteMarkdownEditor'
 
 export { SddAssistantToggleButton } from './SddDraftEditorParts'
 import { SddDraftEditorContent } from './SddDraftEditorContent'
@@ -63,6 +63,19 @@ import {
   statusKey,
   type Props
 } from './SddDraftEditorParts'
+
+export function prepareSddAssistantSelection(input: {
+  prompt: string
+  selection: WriteEditorSelectionState
+  filePath: string
+  workspaceRoot: string
+}) {
+  return {
+    prompt: input.prompt.trim(),
+    selection: quotedSelectionFromEditor(input.selection, input.filePath, input.workspaceRoot)
+  }
+}
+
 export function SddDraftEditorView({
   leftSidebarCollapsed,
   assistantOpen,
@@ -276,21 +289,19 @@ export function SddDraftEditorView({
   )
 
   const submitToAssistant = (prompt: string): void => {
-    const trimmed = prompt.trim()
-    if (!trimmed) return
-    const quoted = quotedSelectionFromEditor(selection, editorFilePath, draftWorkspaceRoot)
-    const fullPrompt = quoted
-      ? `${formatWriteQuotedSelectionForPrompt(quoted)}\n\n${trimmed}`
-      : trimmed
+    const prepared = prepareSddAssistantSelection({
+      prompt, selection, filePath: editorFilePath, workspaceRoot: draftWorkspaceRoot
+    })
+    if (!prepared.prompt) return
     setSelection({ text: '', ranges: [], charCount: 0 })
-    onAssistantQuote(fullPrompt)
+    onAssistantQuote(prepared.prompt, prepared.selection ?? undefined)
   }
 
   const quoteSelectionToAssistant = (): void => {
     const quoted = quotedSelectionFromEditor(selection, editorFilePath, draftWorkspaceRoot)
     if (!quoted) return
     setSelection({ text: '', ranges: [], charCount: 0 })
-    onAssistantQuote(formatWriteQuotedSelectionForPrompt(quoted))
+    onAssistantQuote('', quoted)
   }
 
   const runQuickAction = (quickAction: ResolvedWriteQuickAction): void => {

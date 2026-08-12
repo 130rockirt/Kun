@@ -135,4 +135,19 @@ describe('append-only model context history', () => {
     expect(second?.item.text).not.toContain('Persona one')
     expect(first.item.text).toContain('Persona one')
   })
+
+  it('can keep request-local host control out of a durable capsule', () => {
+    const requestBlocks = [
+      { kind: 'runtime-context', authority: 'runtime' as const, content: 'Stable runtime' },
+      { kind: 'host-control', authority: 'runtime' as const, content: 'Private turn control' }
+    ]
+    const persisted = resolveModelContextUpdate({
+      ...base,
+      stepIndex: 0,
+      contextBlocks: requestBlocks.filter((block) => block.kind !== 'host-control'),
+      history: []
+    })
+    expect(persisted?.item.text).toContain('Stable runtime')
+    expect(persisted?.item.text).not.toContain('Private turn control')
+  })
 })

@@ -57,6 +57,10 @@ import {
 } from '../loop/continuation-instructions.js'
 import { type TurnService, type TurnServiceDeps, TurnConflictError, TurnCapacityError, type TerminalTurnStatus, type TurnSettlement, type GraphLeadSuspensionResult, type GraphLeadResumeResult, HOST_SHUTDOWN_TURN_SUSPENSION_CODE, hostShutdownTurnSuspensionReason, isHostShutdownTurnSuspension, DEFAULT_MAX_CONCURRENT_TURNS, fingerprintStartTurnRequest, hashPlanBuildAdmissionCapability, canonicalizeFingerprintValue, isActiveTurn, terminalStatus, threadStatusFromTurns, threadStatusAfterTurnTransition, normalizeMaxConcurrentTurns, firstNonBlank, modelForManualCompaction } from './turn-service-core.js'
 import { resolveDesignTurnAdmission } from './turn-service-design-admission.js'
+import {
+  InternalTurnRuntimeContext,
+  makeInternalTurnRuntimeContextSource
+} from '../domain/internal-turn-runtime-context.js'
 
 export const turnServiceAdmissionOperations = {
 updateRuntimeConfig(this: TurnService,
@@ -77,9 +81,14 @@ async startTurn(this: TurnService, input: {
   }, options: {
     /** Internal extension-broker accounting baseline; not part of StartTurnRequest. */
     extensionBudgetTokenBaseline?: number
+    /** Private host-authored context; never accepted from HTTP or projected to clients. */
+    runtimeContext?: import('../domain/internal-turn-runtime-context.js').InternalTurnRuntimeContext
     /** Runs only for a newly admitted turn, never for an idempotent replay. */
     onAdmitted?: (response: StartTurnResponse) => void
   } = {}): Promise<StartTurnResponse> {
+    const runtimeContext = options.runtimeContext
+      ? InternalTurnRuntimeContext.parse(options.runtimeContext)
+      : undefined
     const requestFingerprint = fingerprintStartTurnRequest(input.request)
     const replay = await this['findIdempotentStart'](input, requestFingerprint)
     if (replay) return replay
@@ -247,6 +256,14 @@ async startTurn(this: TurnService, input: {
             turns: [...thread.turns, startedTurn]
           }
           await this['deps'].threadStore.upsert({ ...next, updatedAt: this['deps'].nowIso() })
+          if (runtimeContext) {
+            await this['deps'].sessionStore.appendItem(input.threadId, makeInternalTurnRuntimeContextSource({
+              threadId: input.threadId,
+              turnId,
+              context: runtimeContext,
+              createdAt: this['deps'].nowIso()
+            }))
+          }
           await this['deps'].sessionStore.appendItem(input.threadId, userItem)
           this['inflightTurns'].set(turnId, controller)
           this['deps'].inflight.begin({ id: turnId, kind: 'model', threadId: input.threadId, turnId })

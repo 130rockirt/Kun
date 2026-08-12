@@ -383,6 +383,8 @@ describe('Cursor SDK runtime factory', () => {
     const updatedMetadata: unknown[] = []
     let bridgedToolResult: unknown
     const debugSink = new LlmDebugRecorder()
+    const currentHostControl = 'Current private Cursor host control.'
+    const oldHostControl = 'Old private Cursor host control.'
     const agent = {
       agentId: 'agent_1',
       model: { id: 'auto' },
@@ -418,7 +420,12 @@ describe('Cursor SDK runtime factory', () => {
       approvalPolicy: 'always',
       sandboxMode: 'workspace-write',
       systemPrompt: 'Thread persona',
-      turns: [{ id: 'turn_1', model: 'auto', mode: 'agent' }]
+      turns: [{
+        id: 'turn_1',
+        model: 'auto',
+        mode: 'agent',
+        persona: 'Write with a precise editorial voice.'
+      }]
     }
     const userItem = {
       id: 'user_1',
@@ -454,7 +461,11 @@ describe('Cursor SDK runtime factory', () => {
       systemPrompt: 'Kun canonical system prompt',
       threadStore: { get: async () => thread } as never,
       sessionStore: {
-        loadItems: async () => [userItem],
+        loadItems: async () => [
+          runtimeSource('turn_old', oldHostControl),
+          runtimeSource('turn_1', currentHostControl),
+          userItem
+        ],
         loadEventsSince: async () => []
       } as never,
       turns: {
@@ -498,6 +509,16 @@ describe('Cursor SDK runtime factory', () => {
     ])
     expect(String(sentMessages[0])).toContain('Kun canonical system prompt')
     expect(String(sentMessages[0])).toContain('Thread persona')
+    expect(String(sentMessages[0])).toContain(
+      '<kun_context_block kind="persona" authority="user">'
+    )
+    expect(String(sentMessages[0])).toContain('Write with a precise editorial voice.')
+    expect(String(sentMessages[0])).toContain(
+      '<kun_context_block kind="host-control" authority="runtime">'
+    )
+    expect(String(sentMessages[0])).toContain(currentHostControl)
+    expect(String(sentMessages[0])).not.toContain(oldHostControl)
+    expect(JSON.stringify(createOptions[0])).not.toContain(currentHostControl)
     expect(String(sentMessages[0])).toContain('Workspace AGENTS.md instruction')
     expect(String(sentMessages[0])).toContain('Prefer Cursor built-in tools')
     expect(String(sentMessages[0])).toContain('Kun-managed capabilities are available')
@@ -550,6 +571,8 @@ describe('Cursor SDK runtime factory', () => {
     }))
 
     const trace = debugSink.snapshot()[0]?.exchanges[0]
+    expect(trace?.request?.body.text).not.toContain(currentHostControl)
+    expect(trace?.request?.body.text).toContain('[REDACTED]')
     expect(trace?.toolCatalog).toEqual(expect.arrayContaining([
       {
         name: 'mcp_call_tool',
@@ -566,3 +589,17 @@ describe('Cursor SDK runtime factory', () => {
 
 
 })
+
+function runtimeSource(turnId: string, content: string) {
+  return {
+    id: `item-${turnId}`,
+    threadId: 'thread_1',
+    turnId,
+    role: 'system' as const,
+    status: 'completed' as const,
+    createdAt: '2026-07-25T00:00:00.000Z',
+    kind: 'runtime_context_source' as const,
+    contextKind: 'host-control' as const,
+    content
+  }
+}

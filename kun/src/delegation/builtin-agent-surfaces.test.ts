@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -68,6 +68,58 @@ describe('built-in subagent surfaces', () => {
       expect(designIds).toContain('component-designer')
       await expect(runtime.resolveProfileSnapshot('write-copy-editor', undefined, 'code')).resolves.toBeUndefined()
       await expect(runtime.resolveProfileSnapshot('write-copy-editor', undefined, 'write')).resolves.toBeDefined()
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('parses workspace surfaces and safely scopes omitted values', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'kun-workspace-agent-surfaces-'))
+    try {
+      const agentsDir = join(dir, '.kun', 'agents')
+      await mkdir(agentsDir, { recursive: true })
+      await writeFile(join(agentsDir, 'fresh.md'), [
+        '---', 'name: Fresh', 'surfaces: [write]', '---', 'Write specialist.'
+      ].join('\n'))
+      await writeFile(join(agentsDir, 'general.md'), [
+        '---', 'name: Local general', '---', 'Local instructions.'
+      ].join('\n'))
+      await writeFile(join(agentsDir, 'code-only.md'), [
+        '---', 'name: Code only', '---', 'Code instructions.'
+      ].join('\n'))
+      await writeFile(join(agentsDir, 'disabled.md'), [
+        '---', 'name: Disabled', 'surfaces: []', '---', 'Disabled instructions.'
+      ].join('\n'))
+      await writeFile(join(agentsDir, 'code-reviewer.md'), [
+        '---', 'name: Disabled reviewer', 'surfaces: []', '---', 'Local reviewer instructions.'
+      ].join('\n'))
+      const runtime = new DelegationRuntime({
+        config: mergeBuiltinSubagentProfiles(SubagentsCapabilityConfig.parse({ enabled: true })),
+        store: new FileDelegationStore(join(dir, 'runs')),
+        executor: async () => ({ summary: 'unused' })
+      })
+
+      const writeIds = new Set((await runtime.listRoutingProfiles(dir, 'write')).map((item) => item.id))
+      const codeIds = new Set((await runtime.listRoutingProfiles(dir, 'code')).map((item) => item.id))
+      expect(writeIds).toContain('fresh')
+      expect(codeIds).not.toContain('fresh')
+      expect(codeIds).toContain('code-only')
+      expect(writeIds).not.toContain('code-only')
+      expect(codeIds).not.toContain('disabled')
+      expect(writeIds).not.toContain('disabled')
+      // Explicit empty surfaces disable even a same-id configured profile.
+      expect(codeIds).not.toContain('code-reviewer')
+      await expect(runtime.resolveProfileSnapshot('code-reviewer', dir, 'code')).resolves.toBeUndefined()
+      expect(await runtime.listWorkspaceProfiles(dir)).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: 'disabled', surfaces: [] }),
+        expect.objectContaining({ id: 'code-reviewer', surfaces: [] })
+      ]))
+      // Same-id omission inherits configured general's shared visibility.
+      expect(writeIds).toContain('general')
+      expect(await runtime.resolveProfileSnapshot('general', dir, 'write')).toMatchObject({
+        source: 'workspace',
+        profile: { surfaces: ['shared'], systemPrompt: 'Local instructions.' }
+      })
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

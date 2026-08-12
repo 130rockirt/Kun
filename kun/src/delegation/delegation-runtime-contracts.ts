@@ -183,11 +183,13 @@ export const ChildRunRecord = z.object({
   parentThreadId: z.string().min(1),
   parentTurnId: z.string().min(1),
   agentSurface: z.enum(['code', 'write', 'design']).optional(),
+  /** Initiating client surface retained so resumed children keep the same tool plane. */
+  clientSurface: z.enum(['gui', 'tui', 'cli', 'api', 'im', 'extension']).optional(),
   label: z.string().optional(),
   prompt: z.string().min(1),
   /** Exact active parent turn source, when a first-class host forwards it. */
   source: ChildSourceEnvelope.optional(),
-  /** Trusted host workflow control kept separate from the user message. */
+  /** Legacy read compatibility. New child runs keep host control only in private session context. */
   controlPrompt: z.string().min(1).optional(),
   workspace: z.string().optional(),
   model: z.string().optional(),
@@ -298,7 +300,7 @@ export type ChildRunExecutor = (input: {
   prompt: string
   /** Exact active parent turn source; never synthesized by the parent model. */
   source?: ChildSourceEnvelope
-  /** Trusted host control appended to the child system prompt. */
+  /** Trusted host control emitted as private chronological model context. */
   controlPrompt?: string
   /** Host-minted PPT capability for this execution only. */
   pptWorkflowScope?: PptWorkflowScope

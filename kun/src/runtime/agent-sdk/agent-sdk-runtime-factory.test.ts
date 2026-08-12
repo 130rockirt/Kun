@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createAgentSdkRuntime, resolveTurnPlanContext, waitForGate } from './agent-sdk-runtime-factory.js'
 import { KunCapabilitiesConfig } from '../../contracts/capabilities.js'
+import type { TurnItem } from '../../contracts/items.js'
 import type { ThreadRecord } from '../../contracts/threads.js'
 import type { UserInputGate, UserInputRequest, UserInputResolution } from '../../ports/user-input-gate.js'
 import { InstructionRuntime } from '../../instructions/instruction-runtime.js'
@@ -139,7 +140,7 @@ describe('createAgentSdkRuntime delegated session binding', () => {
   test('restores a compatible Claude session and scopes OAuth state under Kun data', async () => {
     const root = await mkdtemp(join(tmpdir(), 'kun-claude-binding-'))
     try {
-      let items = [{
+      let items: TurnItem[] = [{
         id: 'item_t1',
         turnId: 't1',
         threadId: 'th',
@@ -223,6 +224,22 @@ describe('createAgentSdkRuntime delegated session binding', () => {
       const second = await restartedDeps.loadTurnContext('th', 't2')
       expect(second?.resumeSessionId).toBe('session_persisted')
       expect(second?.historyTranscript).toContain('first')
+
+      items = [...items, {
+        id: 'item_private_t2', turnId: 't2', threadId: 'th',
+        kind: 'runtime_context_source', role: 'system', status: 'completed',
+        contextKind: 'host-control', content: 'private current host control',
+        createdAt: '2026-07-25T00:01:00.000Z'
+      }]
+      thread = {
+        ...thread,
+        turns: thread.turns.map((turn) => turn.id === 't2'
+          ? { ...turn, persona: 'Be precise.' }
+          : turn)
+      }
+      const isolated = await restartedDeps.loadTurnContext('th', 't2')
+      expect(isolated?.resumeSessionId).toBeUndefined()
+      expect(isolated?.historyTranscript).toContain('first')
     } finally {
       await rm(root, { recursive: true, force: true })
     }

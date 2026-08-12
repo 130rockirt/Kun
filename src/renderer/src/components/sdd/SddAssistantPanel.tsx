@@ -36,6 +36,7 @@ import { FloatingComposer } from '../chat/FloatingComposer'
 import type { ComposerReasoningEffort } from '../chat/FloatingComposerModelPicker'
 import { SubagentReturnBar } from '../chat/message-timeline-empty'
 import { SidebarTitlebarToggleButton } from '../sidebar/SidebarPrimitives'
+import { useSddDraftStore } from '../../sdd/sdd-draft-store'
 
 const FRAMEWORK_ICONS: Record<string, LucideIcon> = {
   clarify: Lightbulb,
@@ -151,6 +152,15 @@ export function SddAssistantPanel({
     s.threads.find((thread) => thread.id === s.activeThreadParentId)?.title?.trim() ?? ''
   )
   const selectThread = useChatStore((s) => s.selectThread)
+  const quotedSelections = useSddDraftStore((s) => s.assistantQuotedSelections)
+  const removeQuotedSelection = useSddDraftStore((s) => s.removeAssistantQuotedSelection)
+  const contextChips = quotedSelections.map((selection) => ({
+    id: selection.id,
+    kind: 'extension-context' as const,
+    label: selection.sourceTitle,
+    detail: t('writePromptReference'),
+    removable: true
+  }))
   const hasTimeline =
     blocks.length > 0 || liveReasoning.trim().length > 0 || liveAssistant.trim().length > 0
   const canCreateConversation = runtimeConnection === 'ready' && !busy
@@ -308,9 +318,11 @@ export function SddAssistantPanel({
             attachmentUploadEnabled={attachmentUploadEnabled}
             attachmentUploadBusy={attachmentUploadBusy}
             attachmentUploadError={attachmentUploadError}
+            contextChips={contextChips}
             onPickAttachments={onPickAttachments}
             onPasteClipboardImage={onPasteClipboardImage}
             onRemoveAttachment={onRemoveAttachment}
+            onRemoveContextChip={removeQuotedSelection}
             onSend={onSend}
             onInterrupt={onInterrupt}
             onConfigureProviders={onConfigureProviders}

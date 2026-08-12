@@ -5,6 +5,7 @@ import { parseSddRequirementBlocks } from '@shared/sdd-trace'
 import type { SddDesignContext } from '../../sdd/sdd-draft-store'
 import { SDD_DESIGN_TONE_OPTIONS } from '../../sdd/sdd-design-context'
 import type { WriteSelectedImage } from '../write/WriteMarkdownEditor'
+import type { WriteQuotedSelection } from '../../write/quoted-selection'
 
 export const SDD_AUTOSAVE_MS = 650
 export const PROTOTYPE_POLL_INTERVAL_MS = 4_000
@@ -42,8 +43,8 @@ export type Props = {
   assistantOpen: boolean
   onToggleLeftSidebar: () => void
   onToggleAssistant: () => void
-  /** Quote-and-ask from the selection toolbar: opens the assistant panel with the prompt queued. */
-  onAssistantQuote: (prompt: string) => void
+  /** Queue plain user text and an optional structured selection reference. */
+  onAssistantQuote: (prompt: string, selection?: WriteQuotedSelection) => void
   /** Dispatch a prototype-generation turn to the sidebar assistant (handles
    * the vision-model gate and image attachment). Resolves false when nothing
    * was sent (cancelled, busy plan, no thread). */

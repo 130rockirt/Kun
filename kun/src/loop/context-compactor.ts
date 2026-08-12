@@ -320,7 +320,8 @@ export class ContextCompactor {
   }
 }
 function isInternalModelRecord(item: TurnItem): boolean {
-  return item.kind === 'goal_context' || item.kind === 'interruption_note'
+  return item.kind === 'goal_context' || item.kind === 'runtime_context_source' ||
+    item.kind === 'interruption_note'
 }
 
 export { extractSkillPins, trimTrailingToolCalls } from './context-compactor-helpers.js'

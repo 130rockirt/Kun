@@ -234,6 +234,7 @@ function extractDurableOutlineLines(history: TurnItem[]): string[] {
         break
       case 'goal_context':
       case 'model_context':
+      case 'runtime_context_source':
       case 'interruption_note':
         break
       case 'assistant_text':
@@ -329,6 +330,7 @@ function summarizeItem(item: TurnItem): string {
       return `- User: ${clipText(item.text)}`
     case 'goal_context':
     case 'model_context':
+    case 'runtime_context_source':
     case 'interruption_note':
       return ''
     case 'assistant_text':

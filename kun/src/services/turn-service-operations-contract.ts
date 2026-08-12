@@ -50,6 +50,7 @@ import { rewriteItemHistoryWithRetry } from './history-commit-coordinator.js'
 import { withThreadStoreMutation } from './thread-mutation-coordinator.js'
 import type { ThreadLifecycleFence } from './thread-lifecycle-fence.js'
 import { ThreadItemProjectionService } from './thread-item-projection.js'
+import type { InternalTurnRuntimeContext } from '../domain/internal-turn-runtime-context.js'
 import { ComposerContextAttachmentSchema } from '../contracts/composer-context.js'
 import {
   goalContextInstruction,
@@ -67,6 +68,8 @@ export interface TurnServiceOperations {
   }, options?: {
     /** Internal extension-broker accounting baseline; not part of StartTurnRequest. */
     extensionBudgetTokenBaseline?: number
+    /** Private host-authored context; never accepted from HTTP or projected to clients. */
+    runtimeContext?: InternalTurnRuntimeContext
     /** Runs only for a newly admitted turn, never for an idempotent replay. */
     onAdmitted?: (response: StartTurnResponse) => void
   } ): Promise<StartTurnResponse>;

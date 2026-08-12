@@ -206,9 +206,7 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
       throw new Error('child source surface must match the delegated surface')
     }
     const agentSurface = source?.agentSurface ?? input.agentSurface
-    const rolePrompt = [input.systemPrompt?.trim(), input.controlPrompt?.trim()]
-      .filter((value): value is string => Boolean(value))
-      .join('\n\n')
+    const rolePrompt = input.systemPrompt?.trim()
     const childPrefix = rolePrompt
       ? setSystemPrompt(
         options.prefix,
@@ -383,6 +381,10 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
         // Child runs have no independent interactive surface for structured prompts.
         disableUserInput: true
       }
+    }, {
+      ...(input.controlPrompt?.trim()
+        ? { runtimeContext: { kind: 'host-control', content: input.controlPrompt.trim() } }
+        : {})
     })
     const abortChild = (): void => {
       console.warn(`[kun] foreground subagent parent abort received child=${thread.id} turn=${started.turnId} parentThread=${input.parentThreadId} parentTurn=${input.parentTurnId}`)
@@ -472,9 +474,9 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
       ...(evidence ? { evidence } : {}),
       usage: usage.forThread(thread.id),
       toolInvocations,
-      // A role system prompt changes the immutable prefix fingerprint. Only a
-      // child with no role prompt can report exact main-prefix reuse.
-      prefixReused: !input.systemPrompt?.trim() && !input.controlPrompt?.trim(),
+      // Only a stable role system prompt changes the immutable prefix.
+      // Host workflow control is private chronological model context.
+      prefixReused: !input.systemPrompt?.trim(),
       inheritedHistoryItems: 0
     }
   }

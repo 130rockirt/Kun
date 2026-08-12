@@ -45,7 +45,10 @@ export class CompatModelClient extends CompatModelStreamingClient implements Mod
         ...(tool.providerKind ? { providerKind: tool.providerKind } : {}),
         ...(tool.providerId ? { providerId: tool.providerId } : {})
       })),
-      redactedRequestValues: goalContextTexts(request.history)
+      redactedRequestValues: [
+        ...goalContextTexts(request.history),
+        ...(request.redactedRequestValues ?? [])
+      ]
     }, warnModelTraceFailure)
     if (!round) {
       yield* this.streamInner(request, null)

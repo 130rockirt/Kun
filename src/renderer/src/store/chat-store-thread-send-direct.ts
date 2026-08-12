@@ -39,6 +39,20 @@ import {
 } from './chat-store-thread-actions-support'
 import type { PreparedThreadSend } from './chat-store-thread-send-direct-types'
 
+export function runtimePromptForSurface(input: {
+  channel: ReturnType<typeof activeClawChannel>
+  requestedAgentSurface: PreparedThreadSend['requestedAgentSurface']
+  writeContext: PreparedThreadSend['writeContext']
+  settings: Parameters<typeof buildClawRuntimePrompt>[0] & Parameters<typeof buildCodeRuntimePrompt>[0]
+  prompt: string
+}): string {
+  if (input.channel) {
+    return buildClawRuntimePrompt(input.settings, input.prompt, { channel: input.channel })
+  }
+  if (input.requestedAgentSurface === 'write' || input.writeContext) return input.prompt
+  return buildCodeRuntimePrompt(input.settings, input.prompt)
+}
+
 export async function performPreparedThreadSend(input: PreparedThreadSend): Promise<boolean> {
   let {
     activeThreadId,
@@ -305,12 +319,13 @@ export async function performPreparedThreadSend(input: PreparedThreadSend): Prom
           ).catch(() => undefined)
         })
       }
-      let runtimeText: string
-      if (channel) {
-        runtimeText = buildClawRuntimePrompt(settings, trimmedText, { channel })
-      } else {
-        runtimeText = buildCodeRuntimePrompt(settings, trimmedText)
-      }
+      const runtimeText = runtimePromptForSurface({
+        channel,
+        requestedAgentSurface,
+        writeContext,
+        settings,
+        prompt: trimmedText
+      })
       const runtimeDisplayText = channel ? displayText : (userDisplayText ?? trimmedText)
       if (!expectedThreadStillActive()) {
         const current = get()

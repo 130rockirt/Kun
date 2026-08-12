@@ -11,4 +11,9 @@ describe('composer persona experiment gate', () => {
     expect(resolveTurnPersona(false, undefined, 'override')).toBe('')
     expect(resolveTurnPersona(false, 'queued', 'override')).toBe('')
   })
+
+  it('keeps a bounded Work persona when the Code experiment is disabled', () => {
+    expect(resolveTurnPersona(false, undefined, '  Work editor  ', true)).toBe('Work editor')
+    expect(resolveTurnPersona(false, undefined, 'p'.repeat(2_100), true)).toHaveLength(2_000)
+  })
 })

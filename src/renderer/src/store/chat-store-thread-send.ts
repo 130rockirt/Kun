@@ -144,6 +144,7 @@ import { readDesignThreadRegistry } from '../design/design-thread-registry'
 import { isDesignThreadId } from '../design/design-thread-registry'
 import { readSddThreadRegistry } from '../sdd/sdd-thread-registry'
 import { isWorkspaceOfficeViewPositionAttachment } from '../lib/workspace-office-view-context'
+import { isWriteTurnReferenceAttachment } from '../write/write-turn-reference-context'
 import {
   MAX_COMPOSER_CONTEXT_ATTACHMENTS,
   type ComposerContextAttachment
@@ -194,11 +195,15 @@ function routeComposerContexts(
   if (route === 'chat') return mergeTurnComposerContexts(primary, pending)
   if (route === 'write') {
     const currentView = primary.find(isWorkspaceOfficeViewPositionAttachment)
+    const references = primary.filter(isWriteTurnReferenceAttachment)
     const pptContexts = primary.filter((context) =>
       'source' in context.provenance &&
       context.provenance.source === 'dev-preview' &&
       (context.reference.kind === 'ppt-review' || context.reference.kind === 'ppt-direction'))
-    return mergeTurnComposerContexts(currentView ? [currentView, ...pptContexts] : pptContexts, [])
+    return mergeTurnComposerContexts(
+      [...references, ...(currentView ? [currentView] : []), ...pptContexts],
+      []
+    )
   }
   return []
 }
@@ -265,7 +270,8 @@ export async function sendThreadMessage(
     const persona = resolveTurnPersona(
       get().composerPersonaEnabled,
       queued?.persona,
-      overrides?.persona
+      overrides?.persona,
+      requestedAgentSurface === 'write' || Boolean(queued?.writeContext ?? overrides?.writeContext)
     )
     const expectedThreadStillActive = (): boolean => Boolean(
       !expectedThreadId ||
@@ -537,6 +543,7 @@ export async function sendThreadMessage(
       ...((queued?.guiPlan ?? overrides?.guiPlan) ? { guiPlan: queued?.guiPlan ?? overrides?.guiPlan } : {}),
       ...(guiDesignCanvas ? { guiDesignCanvas: true } : {}),
       ...(guiDesignMode ? { guiDesignMode: true } : {}),
+      ...(persona ? { persona } : {}),
       ...(requestedAgentSurface ? { agentSurface: requestedAgentSurface } : {}),
       ...(designProfile ? { designProfile } : {}),
       ...(designDocumentTarget ? { designDocumentTarget } : {}),
@@ -601,7 +608,10 @@ export async function sendThreadMessage(
 export function resolveTurnPersona(
   enabled: boolean,
   queuedPersona: string | undefined,
-  overridePersona: string | undefined
+  overridePersona: string | undefined,
+  workTurn = false
 ): string {
-  return enabled ? (queuedPersona ?? overridePersona)?.trim() ?? '' : ''
+  return enabled || workTurn
+    ? ((queuedPersona ?? overridePersona)?.trim() ?? '').slice(0, 2_000)
+    : ''
 }

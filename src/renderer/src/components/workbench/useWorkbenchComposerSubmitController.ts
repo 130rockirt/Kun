@@ -15,6 +15,8 @@ import {
   writeOfficeSemanticContextMatches
 } from '../../write/write-office-semantic-context'
 import { resolveWriteAgentPreset } from '../../write/agent-presets'
+import { createWriteTurnReferenceAttachments, mergeWriteComposerContexts } from '../../write/write-turn-reference-context'
+import { recoverWriteReferenceContextError } from '../../write/write-reference-context-error'
 import { resolveCodeAgentPersona } from '../chat/code-agent-presets'
 import { parseGuiPlanCommand } from '../../plan/plan-command'
 import { normalizeWorkspaceRoot } from '../../lib/workspace-path'
@@ -41,6 +43,7 @@ import {
   stripTransientAttachmentFields
 } from './workbench-composer-prompts'
 import { readWorkbenchComposerFileContextEntries } from './workbench-composer-file-context'
+import { mirrorWorkbenchClawCommand } from './workbench-claw-message-mirror'
 import { restoreWorkbenchWritePrompt } from './workbench-write-prompt-state'
 export type { WorkbenchComposerSubmitController } from './workbench-composer-submit-types'
 import {
@@ -88,20 +91,10 @@ export function useWorkbenchComposerSubmitController({
   appendLocalClawTurn
 }: UseWorkbenchComposerSubmitControllerParams): WorkbenchComposerSubmitController {
   const { t } = useTranslation('common')
-  const mirrorClawCommand = useCallback(async (userText: string, replyText: string): Promise<void> => {
-    if (!activeThreadId || typeof window.kunGui?.mirrorClawChannelMessage !== 'function') return
-    const userResult = await window.kunGui.mirrorClawChannelMessage(
-      activeThreadId,
-      userText,
-      'user'
-    )
-    if (!userResult.ok) return
-    await window.kunGui.mirrorClawChannelMessage(
-      activeThreadId,
-      replyText,
-      'assistant'
-    )
-  }, [activeThreadId])
+  const mirrorClawCommand = useCallback(
+    (userText: string, replyText: string) => mirrorWorkbenchClawCommand(activeThreadId, userText, replyText),
+    [activeThreadId]
+  )
   const clawHelpText = useCallback((): string =>
     [
       t('clawHelpTitle'),
@@ -270,10 +263,7 @@ export function useWorkbenchComposerSubmitController({
         }
         officeDocument = loaded.context
       }
-      const retrievalQuery = [
-        ...quotedSelections.map((selection) => selection.text),
-        v
-      ].join('\n\n').trim()
+      const retrievalQuery = v.trim()
       let retrieval: WriteRetrievalContext | null = null
       if (retrievalQuery && typeof window.kunGui?.retrieveWriteContext === 'function') {
         try {
@@ -282,7 +272,7 @@ export function useWorkbenchComposerSubmitController({
             currentFilePath: writeActiveFilePath ?? undefined,
             query: retrievalQuery,
             maxSnippets: 4,
-            includeCurrentFile: true
+            includeCurrentFile: quotedSelections.length === 0
           })
           if (result.ok) retrieval = result.context
         } catch (error) {
@@ -310,12 +300,10 @@ export function useWorkbenchComposerSubmitController({
         (preset) => preset.id === writeState.assistantAgentPresetId
       )
       const agentPersona = activeAgentPreset ? resolveWriteAgentPreset(activeAgentPreset).persona : ''
-      const basePrompt = composeWritePrompt(messageText, quotedSelections, {
+      const basePrompt = composeWritePrompt(messageText, {
         workspaceRoot: writeWorkspaceRoot,
         activeFilePath: writeActiveFilePath,
-        retrieval,
-        officeDocument,
-        ...(agentPersona ? { agentPersona } : {})
+        officeReadOnly: writeActiveDocument?.kind === 'office'
       })
       const prompt = await buildActiveWorkWhiteboardPrompt(
         basePrompt,
@@ -333,15 +321,28 @@ export function useWorkbenchComposerSubmitController({
         model,
         providerId
       )
-      const viewContexts = writePresentationView
-        ? [await createWorkspaceOfficeViewPositionAttachment({ workspaceRoot: writeWorkspaceRoot, view: writePresentationView })]
-        : []
-      const pptReviewContexts = await activeWorkWhiteboardComposerContexts(
-        writeWorkspaceRoot,
-        activeWhiteboard,
-        activeThreadId
-      )
-      const composerContexts = [...viewContexts, ...pptReviewContexts]
+      let composerContexts: ReturnType<typeof mergeWriteComposerContexts>
+      try {
+        const viewContexts = writePresentationView
+          ? [await createWorkspaceOfficeViewPositionAttachment({ workspaceRoot: writeWorkspaceRoot, view: writePresentationView })]
+          : []
+        const pptReviewContexts = await activeWorkWhiteboardComposerContexts(
+          writeWorkspaceRoot,
+          activeWhiteboard,
+          activeThreadId
+        )
+        const referenceContexts = await createWriteTurnReferenceAttachments({
+          workspaceRoot: writeWorkspaceRoot,
+          selections: quotedSelections,
+          retrieval,
+          officeDocument,
+          query: v
+        })
+        composerContexts = mergeWriteComposerContexts(referenceContexts, viewContexts, pptReviewContexts)
+      } catch (error) {
+        recoverWriteReferenceContextError(error, setError, restorePrompt)
+        return
+      }
       if (officeDocument && !writeOfficeSemanticContextMatches(officeDocument)) {
         restorePrompt()
         return
@@ -363,6 +364,7 @@ export function useWorkbenchComposerSubmitController({
           ...(publicAttachments.length ? { attachments: publicAttachments } : {}),
           ...(composerContexts.length ? { composerContexts } : {}),
           ...(activeWhiteboard ? { guiDesignCanvas: true } : {}),
+          ...(agentPersona ? { persona: agentPersona } : {}),
           writeContext: {
             workspaceRoot: writeWorkspaceRoot,
             activeFilePath: writeActiveFilePath,
@@ -423,8 +425,7 @@ export function useWorkbenchComposerSubmitController({
         const activeThread = threads.find((thread) => thread.id === activeThreadId)
         const access = planWorktreeComposerAccess(
           activeThread,
-          usePlanWorktreeStore.getState().plans,
-          activeThreadId
+          usePlanWorktreeStore.getState().plans
         )
         if (!access.writable) {
           setError(access.reason ?? 'This isolated plan task is currently read-only.')

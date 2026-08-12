@@ -11,6 +11,7 @@ import {
   sameDesignDocumentTarget,
   sameDesignTaskProfile
 } from '../domain/design-task-profile.js'
+import { legacyThreadCanClaimWrite } from '../domain/thread.js'
 import { resolveThreadLockedTaskSurface } from '../domain/task-surface-lock.js'
 import {
   DesignProfileLockedError,
@@ -25,6 +26,8 @@ export type DesignTurnAdmission = {
   locksSurface: boolean
   locksProfile: boolean
 }
+
+export { legacyThreadCanClaimWrite } from '../domain/thread.js'
 
 /**
  * Resolve all task/profile ownership before any attachment binding, document
@@ -41,7 +44,10 @@ export function resolveDesignTurnAdmission(input: {
   // Code owns unified workbench records, while the first accepted turn owns
   // the immutable Code/Design task mode. Legacy standalone Design and Work
   // records remain fixed to their persisted thread surface.
-  const lockedTaskSurface = resolveThreadLockedTaskSurface(input.thread)
+  const legacyWriteClaim = requestedSurface === 'write' && legacyThreadCanClaimWrite(input.thread)
+  const lockedTaskSurface = legacyWriteClaim
+    ? undefined
+    : resolveThreadLockedTaskSurface(input.thread)
   if (
     lockedTaskSurface &&
     requestedSurface &&
@@ -53,7 +59,9 @@ export function resolveDesignTurnAdmission(input: {
   // Legacy records may not have ownership metadata. Claim those on their
   // first explicit surfaced turn; unified workbench threads are created as
   // Code-owned before this point and therefore keep that ownership in Design.
-  const locksSurface = !threadSurface && Boolean(requestedSurface)
+  const locksSurface = !threadSurface && Boolean(requestedSurface) && (
+    input.thread.turns.length === 0 || legacyWriteClaim
+  )
   // Legacy callers that omit the mode inherit the already-selected task mode.
   // Before the first turn, an explicitly Code-owned workbench still defaults
   // to Code while remaining editable in the renderer.

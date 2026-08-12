@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { LocalToolHost, requestUserInputTool } from '../src/adapters/tool/local-tool-host.js'
 import { emptyUsageSnapshot } from '../src/contracts/usage.js'
 import { makeUserItem } from '../src/domain/item.js'
+import { createThreadRecord } from '../src/domain/thread.js'
 import { ContextCompactor } from '../src/loop/context-compactor.js'
 import type { ModelRequest, ModelStreamChunk } from '../src/ports/model-client.js'
 import { decideApproval } from '../src/server/routes/approvals.js'
@@ -90,6 +91,43 @@ describe('AgentLoop transcript characterization', () => {
     expect(JSON.stringify(transcript.thread)).not.toContain('model_context')
     expect(transcript.turn).toMatchObject({ id: 'turn_1', status: 'completed' })
     expect(transcript.toolExecutionOrder).toEqual([])
+  })
+
+  it('injects host control only on its owning native turn', async () => {
+    const hostControl = 'Private PPT host control for turn one.'
+    const model = new ScriptedCapturingModel([
+      [{ kind: 'assistant_text_delta', text: 'first' }, { kind: 'completed', stopReason: 'stop' }],
+      [{ kind: 'assistant_text_delta', text: 'second' }, { kind: 'completed', stopReason: 'stop' }]
+    ])
+    const harness = makeHarness(model, {
+      tools: [],
+      compactor: new ContextCompactor({ softThreshold: 100_000, hardThreshold: 120_000 })
+    })
+    await harness.threadStore.upsert(createThreadRecord({
+      id: harness.threadId, title: 'native host control', workspace: '/tmp', model: 'fake'
+    }))
+    const first = await harness.turns.startTurn({
+      threadId: harness.threadId,
+      request: { prompt: 'first request' }
+    }, { runtimeContext: { kind: 'host-control', content: hostControl } })
+    await expect(harness.loop.runTurn(harness.threadId, first.turnId)).resolves.toBe('completed')
+    const second = await harness.turns.startTurn({
+      threadId: harness.threadId,
+      request: { prompt: 'second request' }
+    })
+    await expect(harness.loop.runTurn(harness.threadId, second.turnId)).resolves.toBe('completed')
+
+    expect(model.requests[0]?.contextInstructions?.join('\n')).toContain(hostControl)
+    expect(model.requests[0]?.redactedRequestValues).toEqual([hostControl])
+    expect(JSON.stringify(model.requests[0]?.history)).not.toContain(hostControl)
+    expect(model.requests[1]?.contextInstructions?.join('\n') ?? '').not.toContain(hostControl)
+    expect(model.requests[1]?.redactedRequestValues ?? []).toEqual([])
+    expect(JSON.stringify(model.requests[1]?.history)).not.toContain(hostControl)
+    expect(JSON.stringify(await harness.sessionStore.loadItems(harness.threadId)))
+      .toContain(hostControl)
+    expect((await harness.sessionStore.loadItems(harness.threadId))
+      .filter((item) => item.kind === 'model_context')
+      .some((item) => item.text.includes(hostControl))).toBe(false)
   })
 
   it('replays a tool round-trip with request history and execution order intact', async () => {

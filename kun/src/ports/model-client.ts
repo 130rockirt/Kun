@@ -91,6 +91,8 @@ export type ModelRequest = {
    * the rendered blocks as chronological `model_context` history instead.
    */
   contextInstructions?: string[]
+  /** Exact private request-local strings removed from retained diagnostics only. */
+  redactedRequestValues?: string[]
   prefix: TurnItem[]
   history: TurnItem[]
   /**

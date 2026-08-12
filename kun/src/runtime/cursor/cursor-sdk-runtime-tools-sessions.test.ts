@@ -33,7 +33,6 @@ import {
   delegatedHistoryDigest
 } from '../delegated-session-binding.js'
 import { goalContextKey } from '../../loop/continuation-instructions.js'
-
 function messages(values: SDKMessage[]): AsyncGenerator<SDKMessage, void> {
   return (async function* () {
     for (const value of values) yield value
@@ -76,7 +75,6 @@ function fakeRun(input: {
     createdAt: 1
   }
 }
-
 function harness(input: {
   apiKey?: string
   credentialSourceId?: string
@@ -285,7 +283,6 @@ function harness(input: {
     dispose
   }
 }
-
 describe('CursorSdkRuntime', () => {
   test('injects Kun instructions and custom tools into Cursor capabilities, context, and traces', async () => {
     const debugSink = new LlmDebugRecorder()
@@ -455,7 +452,47 @@ describe('CursorSdkRuntime', () => {
     expect(String(h.sentMessages[0])).toContain('current only')
     expect(String(h.sentMessages[0])).not.toContain('portable old context')
   })
-
+  test('rebases request-local dynamic context', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-cursor-dynamic-rebase-'))
+    const coordinator = new DelegatedSessionCoordinator(new FileDelegatedSessionBindingStore(root))
+    const route = {
+      providerKind: 'cursor-sdk' as const, providerId: 'cursor-subscription',
+      credentialIdentity: delegatedCredentialIdentity({
+        providerId: 'cursor-subscription', credentialSecret: 'cursor-secret'
+      }),
+      workspace: '/tmp/cursor-workspace', model: 'auto',
+      capabilityFingerprint: delegatedCapabilityFingerprint({
+        systemPrompt: 'Kun system prompt', threadPersona: '', mode: 'agent', sandbox: false,
+        approvalPolicy: 'auto', sandboxMode: 'danger-full-access', settingSources: [],
+        capabilities: cursorSdkCapabilities()
+      }), continuationMode: 'native' as const
+    }
+    const prepared = await coordinator.prepare({ threadId: 'thread_1', route, priorItems: [] })
+    await coordinator.commit({
+      preparation: prepared, committedItems: [], lastCommittedTurnId: 'turn_old',
+      nativeSessionId: 'agent_persisted'
+    })
+    const hostControl = 'Current private host control.'
+    const h = harness({
+      sessionCoordinator: coordinator,
+      thread: { turns: [{ id: 'turn_1', model: 'auto', persona: 'Be precise.' }] },
+      items: [{
+        id: 'private', threadId: 'thread_1', turnId: 'turn_1', role: 'system',
+        status: 'completed', createdAt: '2026-08-13T00:00:00.000Z',
+        kind: 'runtime_context_source', contextKind: 'host-control', content: hostControl
+      }, {
+        id: 'user_1', threadId: 'thread_1', turnId: 'turn_1', role: 'user',
+        status: 'completed', createdAt: '2026-08-13T00:00:00.000Z',
+        kind: 'user_message', text: 'current request'
+      }]
+    })
+    await expect(h.runtime.runTurn(
+      'thread_1', 'turn_1', new AbortController().signal, 'cursor-subscription'
+    )).resolves.toBe('completed')
+    expect(h.resumedAgentIds).toEqual([])
+    expect(String(h.sentMessages[0])).toContain(hostControl)
+    expect((await coordinator.store.load('thread_1'))?.nativeSessionId).toBeUndefined()
+  })
   test('rebases a native session when the current turn introduces active goal context', async () => {
     const root = await mkdtemp(join(tmpdir(), 'kun-cursor-goal-rebase-'))
     const coordinator = new DelegatedSessionCoordinator(

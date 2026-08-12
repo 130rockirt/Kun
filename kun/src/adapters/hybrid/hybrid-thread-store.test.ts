@@ -1,10 +1,15 @@
-import { afterEach, describe, expect, it } from 'vitest'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { HybridThreadStore } from './hybrid-thread-store.js'
 import type { UsageEvent } from '../../contracts/events.js'
 import type { UsageSnapshot } from '../../contracts/usage.js'
+import type { ThreadRecord } from '../../contracts/threads.js'
+import { makeUserItem } from '../../domain/item.js'
+import { createThreadRecord } from '../../domain/thread.js'
+import { appendTurnItem, createTurnRecord } from '../../domain/turn.js'
+import { stripThreadItemBodies } from './hybrid-thread-projection.js'
 
 const roots: string[] = []
 
@@ -14,10 +19,10 @@ afterEach(async () => {
   }
 })
 
-async function createStore(): Promise<HybridThreadStore> {
+async function createStore(): Promise<{ root: string; store: HybridThreadStore }> {
   const root = await mkdtemp(join(tmpdir(), 'kun-hybrid-usage-'))
   roots.push(root)
-  return new HybridThreadStore({ dataDir: root })
+  return { root, store: new HybridThreadStore({ dataDir: root }) }
 }
 
 function usageEvent(seq: number, usage: UsageSnapshot): UsageEvent {
@@ -33,7 +38,7 @@ function usageEvent(seq: number, usage: UsageSnapshot): UsageEvent {
 
 describe('HybridThreadStore usage timing persistence', () => {
   it('keeps cumulative TTFT/TPS averages after the differential fold', async () => {
-    const store = await createStore()
+    const { store } = await createStore()
     try {
       await store.noteEvent(usageEvent(1, {
         promptTokens: 100,
@@ -76,7 +81,7 @@ describe('HybridThreadStore usage timing persistence', () => {
   })
 
   it('defaults timing aggregates to null when snapshots omit them', async () => {
-    const store = await createStore()
+    const { store } = await createStore()
     try {
       await store.noteEvent(usageEvent(1, {
         promptTokens: 10,
@@ -95,3 +100,63 @@ describe('HybridThreadStore usage timing persistence', () => {
     }
   })
 })
+
+describe('HybridThreadStore filesystem surface fallback', () => {
+  it('hydrates only legacy Work candidates before classifying summaries', async () => {
+    const { root, store } = await createStore()
+    const legacy = legacyWorkThread('thread_legacy_work', 'Write Assistant')
+    const code = legacyWorkThread('thread_code', 'Repository notes')
+    await Promise.all([writeThreadDocument(root, legacy), writeThreadDocument(root, code)])
+    await store.ready()
+    // Exercise the JSONL listing path regardless of whether this host has a
+    // usable better-sqlite3 native module.
+    store.close()
+    const fallback = store as unknown as {
+      readThreadFromDisk(threadId: string): Promise<ThreadRecord | null>
+    }
+    const fullRead = vi.spyOn(fallback, 'readThreadFromDisk')
+
+    try {
+      const summaries = await store.list({ includeArchived: true })
+      expect(summaries).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: legacy.id, agentSurface: 'write' }),
+        expect.objectContaining({ id: code.id, agentSurface: 'code' })
+      ]))
+      expect(fullRead).toHaveBeenCalledTimes(1)
+      expect(fullRead).toHaveBeenCalledWith(legacy.id)
+    } finally {
+      fullRead.mockRestore()
+      store.close()
+    }
+  })
+})
+
+function legacyWorkThread(id: string, title: string): ThreadRecord {
+  const turnId = `${id}_turn`
+  const prompt = '[写作上下文]\n交互约定: 需要更多信息时通常直接用普通文本向用户提问。仅当当前激活的专用工作流明确要求结构化确认（例如 PPT 视觉评审）时，调用该工作流提供的确认工具；其他写作任务不要滥用结构化交互。\n\n润色当前文件'
+  const item = makeUserItem({
+    id: `${id}_user`,
+    threadId: id,
+    turnId,
+    text: prompt
+  })
+  return {
+    ...createThreadRecord({ id, title, workspace: '/tmp/workspace', model: 'test-model' }),
+    turns: [appendTurnItem(createTurnRecord({
+      id: turnId, threadId: id, prompt, status: 'completed'
+    }), item)]
+  }
+}
+
+async function writeThreadDocument(root: string, thread: ThreadRecord): Promise<void> {
+  const dir = join(root, 'threads', thread.id)
+  await mkdir(dir, { recursive: true })
+  await Promise.all([
+    writeFile(join(dir, 'metadata.jsonl'), `${JSON.stringify({
+      kind: 'thread_metadata', version: 1, timestamp: thread.updatedAt,
+      thread: stripThreadItemBodies(thread)
+    })}\n`),
+    writeFile(join(dir, 'messages.jsonl'), thread.turns.flatMap((turn) => turn.items)
+      .map((item) => JSON.stringify(item)).join('\n').concat('\n'))
+  ])
+}

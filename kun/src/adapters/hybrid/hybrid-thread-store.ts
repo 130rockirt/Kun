@@ -9,7 +9,7 @@ import {
 import type { RuntimeEvent } from '../../contracts/events.js'
 import type { ThreadStore, ThreadStoreListOptions } from '../../ports/thread-store.js'
 import type { SessionLatestUsageSnapshot, SessionUsageRecord } from '../../ports/session-store.js'
-import { resolveThreadAgentSurface, toThreadSummary } from '../../domain/thread.js'
+import { legacyWorkThreadTitleMatches, resolveThreadAgentSurface, toThreadSummary } from '../../domain/thread.js'
 import { assertSafeThreadId, isSafeThreadId } from '../../contracts/thread-id.js'
 import { readJsonl } from '../file/file-thread-store.js'
 import { stripThreadItemBodies, type ThreadMetadataLine } from './hybrid-thread-projection.js'
@@ -20,6 +20,7 @@ import {
   type ThreadIndexRecord,
   type ThreadRow
 } from './hybrid-thread-index-mapping.js'
+import { requiresLegacyWorkThreadHydration } from './hybrid-thread-legacy-surface.js'
 import { HybridThreadIndexRepository } from './hybrid-thread-index.js'
 import { HybridThreadBackfillCoordinator } from './hybrid-thread-backfill.js'
 import {
@@ -496,15 +497,14 @@ export class HybridThreadStore implements ThreadStore {
     return this.index?.find(threadId) ?? null
   }
 
-  /**
-   * Old SQLite indexes predate durable surface ownership. Resolve a null cell
-   * once from canonical metadata, including conservative homogeneous-history
-   * inference, then persist even the Code fallback so later lists stay index-only.
-   */
+  /** Reconcile legacy Work rows even if an older index cached a Code fallback. */
   private async ensureRowAgentSurface(row: ThreadRow): Promise<ThreadRow> {
-    if (row.agent_surface !== null) return row
-    const thread = await this.readThreadMetadataFromDisk(row.id)
+    if (row.agent_surface !== null && (
+      row.agent_surface !== 'code' || !legacyWorkThreadTitleMatches(row.title)
+    )) return row
+    const thread = await this.readThreadFromDisk(row.id)
     const agentSurface = thread ? resolveThreadAgentSurface(thread) : 'code'
+    if (row.agent_surface === agentSurface) return row
     if (this.db) {
       try {
         this.cachedStatement('UPDATE threads SET agent_surface = @agent_surface WHERE id = @id')
@@ -640,7 +640,8 @@ export class HybridThreadStore implements ThreadStore {
   private async listFromFilesystem(): Promise<ThreadSummary[]> {
     const summaries: ThreadSummary[] = []
     for (const threadId of await this.threadIdsFromFilesystem()) {
-      const thread = await this.readThreadMetadataFromDisk(threadId)
+      const metadata = await this.readThreadMetadataFromDisk(threadId)
+      const thread = metadata && requiresLegacyWorkThreadHydration(metadata) ? await this.readThreadFromDisk(threadId) ?? metadata : metadata
       if (thread) summaries.push(toThreadSummary(thread))
     }
     return summaries.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))

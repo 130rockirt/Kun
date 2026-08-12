@@ -280,7 +280,8 @@ export const WRITE_AGENT_PRESET_MAX_COUNT = 12
 
 export const WRITE_AGENT_PRESET_NAME_MAX_CHARS = 40
 
-export const WRITE_AGENT_PERSONA_MAX_CHARS = 4000
+/** Kept in sync with the runtime turn-persona contract. */
+export const WRITE_AGENT_PERSONA_MAX_CHARS = 2000
 
 /**
  * A named, reusable writing-assistant persona (plot coordinator, line editor,

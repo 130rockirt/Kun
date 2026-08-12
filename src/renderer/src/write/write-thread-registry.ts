@@ -19,7 +19,7 @@ export type WriteThreadRegistry = {
 }
 
 type WriteThreadCandidate = Pick<NormalizedThread, 'id' | 'workspace'> &
-  Partial<Pick<NormalizedThread, 'title' | 'updatedAt' | 'archived'>>
+  Partial<Pick<NormalizedThread, 'title' | 'updatedAt' | 'archived' | 'agentSurface'>>
 
 const WRITE_THREAD_REGISTRY_KEY = 'kun.write.threadRegistry.v1'
 
@@ -85,6 +85,8 @@ export function writeThreadLooksLikeAssistant(
   writeWorkspaceRoots: string[]
 ): boolean {
   if (!thread.id?.trim()) return false
+  if (thread.agentSurface === 'write') return true
+  if (thread.agentSurface === 'code' || thread.agentSurface === 'design') return false
   const titleMatches = writeAssistantTitleMatches(thread.title) || writeContextTitleMatches(thread.title)
   if (!titleMatches) return false
   const workspaceKey = writeWorkspaceKey(thread.workspace)
@@ -200,9 +202,11 @@ export function isWriteThreadId(
 }
 
 export function isWriteAssistantThread(
-  thread: Pick<NormalizedThread, 'id'> & Partial<Pick<NormalizedThread, 'title'>>,
+  thread: Pick<NormalizedThread, 'id'> & Partial<Pick<NormalizedThread, 'title' | 'agentSurface'>>,
   registry: WriteThreadRegistry = readWriteThreadRegistry()
 ): boolean {
+  if (thread.agentSurface === 'write') return true
+  if (thread.agentSurface === 'code' || thread.agentSurface === 'design') return false
   return isWriteThreadId(thread.id, registry) ||
     writeAssistantTitleMatches(thread.title) ||
     writeContextTitleMatches(thread.title)
@@ -235,7 +239,12 @@ export function hydrateWriteThreadRegistry(
   writeWorkspaceRoots: string[],
   registry: WriteThreadRegistry = readWriteThreadRegistry()
 ): WriteThreadRegistry {
-  const normalized = normalizeWriteThreadRegistry(registry)
+  let normalized = normalizeWriteThreadRegistry(registry)
+  for (const thread of threads) {
+    if (thread.agentSurface === 'code' || thread.agentSurface === 'design') {
+      normalized = forgetWriteThread(thread.id, normalized)
+    }
+  }
   const writeWorkspaceKeys = [
     ...new Set(writeWorkspaceRoots.map((workspaceRoot) => writeWorkspaceKey(workspaceRoot)).filter(Boolean))
   ]
@@ -392,10 +401,14 @@ export function forgetWriteFileThreads(
 }
 
 export function pruneWriteThreadRegistry(
-  threads: Pick<NormalizedThread, 'id' | 'workspace'>[],
+  threads: Array<Pick<NormalizedThread, 'id' | 'workspace'> & Partial<Pick<NormalizedThread, 'agentSurface'>>>,
   registry: WriteThreadRegistry = readWriteThreadRegistry()
 ): WriteThreadRegistry {
-  const known = new Set(threads.map((thread) => thread.id))
+  const known = new Set(
+    threads
+      .filter((thread) => thread.agentSurface !== 'code' && thread.agentSurface !== 'design')
+      .map((thread) => thread.id)
+  )
   const workspaces: WriteThreadRegistry['workspaces'] = {}
   for (const [workspaceRoot, record] of Object.entries(registry.workspaces)) {
     const threadIds = record.threadIds.filter((id) => known.has(id))
@@ -429,6 +442,7 @@ export function activeWriteThreadForWorkspace(
     .map((id) => threads.find((thread) => thread.id === id) ?? null)
     .filter((thread): thread is NormalizedThread => Boolean(thread))
     .filter((thread) => thread.archived !== true)
+    .filter((thread) => thread.agentSurface !== 'code' && thread.agentSurface !== 'design')
     .filter((thread) =>
       writeWorkspacePathsMatch(writeWorkspaceForThreadId(thread.id, registry) || thread.workspace, key)
     )

@@ -4,6 +4,7 @@ import { FloatingComposerFooterView } from './FloatingComposerFooterView'
 import { FloatingComposerContextChips } from './FloatingComposerContextChips'
 import type { FloatingComposerRenderContext } from './floating-composer-view-context'
 import { KnowledgeBasePicker } from './KnowledgeBasePicker'
+import { composerAgentPickerSurface } from '../../lib/subagent-profile-surface'
 
 export function FloatingComposerSurfaceView({
   context
@@ -394,7 +395,11 @@ export function FloatingComposerSurfaceView({
                     />
                   )}
                   {hideModelPicker || side ? null : (
-                    <FloatingComposerAgentPicker compact={compact} disabled={!canCompose || busy} />
+                    <FloatingComposerAgentPicker
+                      compact={compact}
+                      disabled={!canCompose || busy}
+                      surface={composerAgentPickerSurface(route, taskSurface)}
+                    />
                   )}
                   {!side && showVoiceDictation ? (
                     <button

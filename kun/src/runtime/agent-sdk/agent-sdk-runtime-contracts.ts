@@ -69,6 +69,8 @@ export interface SdkTurnContext {
   claudeConfigDir?: string
   /** Opaque, non-secret coordinator token for committing a successful turn. */
   sessionPreparation?: DelegatedSessionPreparation
+  /** Expire this provider-native session after request-local dynamic context. */
+  disableNativeContinuation?: boolean
   contextProfile?: {
     contextWindowTokens: number
     softThresholdTokens: number

@@ -10,7 +10,7 @@ import {
   DEFAULT_WRITE_INLINE_LONG_COMPLETION_MIN_ACCEPT_SCORE,
   defaultWriteSelectionAssistSettings
 } from '@shared/app-settings'
-import { quotedSelectionFromEditor } from './quoted-selection'
+import { normalizeWriteQuotedSelections, quotedSelectionFromEditor } from './quoted-selection'
 import { writeSelectionStatesEqual } from './write-selection'
 import { trimWriteRecentEdits } from './recent-edits'
 import type { WriteWorkspaceState } from './write-workspace-store-types'
@@ -616,7 +616,7 @@ export const useWriteWorkspaceStore = create<WriteWorkspaceState>((set, get) => 
     const quote = quotedSelectionFromEditor(state.selection, state.activeFilePath, workspaceRoot)
     if (!quote) return
     set((current) => {
-      const quotedSelections = [...current.quotedSelections, quote]
+      const quotedSelections = normalizeWriteQuotedSelections([...current.quotedSelections, quote])
       const selection = emptySelection()
       const key = current.activeFilePath ? writeDocumentKey(current.activeFilePath) : ''
       const document = key ? current.documentsByPath[key] : undefined

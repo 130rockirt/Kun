@@ -29,12 +29,14 @@ function context(input: {
 describe('Write composer context routing', () => {
   it('admits only valid first-party current-view and PPT workflow contexts', () => {
     const currentView = context({ id: 'current', source: 'workspace-view', kind: 'office-view-position' })
+    const workReference = context({ id: 'workref', source: 'workspace-view', kind: 'work-reference-office' })
     const forgedView = context({ id: 'forged', source: 'dev-preview', kind: 'office-view-position' })
     const review = context({ id: 'review', source: 'dev-preview', kind: 'ppt-review' })
     const unrelated = context({ id: 'issue', source: 'dev-preview', kind: 'issue' })
 
-    expect(routeComposerContextsForTests('write', [forgedView, review, unrelated, currentView], []))
-      .toEqual([currentView, review])
+    expect(routeComposerContextsForTests(
+      'write', [forgedView, review, unrelated, currentView, workReference], []
+    )).toEqual([workReference, currentView, review])
   })
 
   it('keeps one current view first and caps the routed contexts at eight', () => {

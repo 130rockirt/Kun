@@ -87,6 +87,7 @@ import { userMessageTextWithComposerContexts } from '../../domain/composer-conte
 import { mkdir } from 'node:fs/promises'
 import { resolveTurnClientSurface } from '../../loop/turn-context-resolver.js'
 import { buildClientSurfaceInstruction } from '../../prompt/kun-prompt-context.js'
+import { projectTurnDynamicContext } from '../../prompt/turn-persona-context.js'
 import {
   delegatedCapabilityFingerprint,
   delegatedCredentialIdentity,
@@ -252,6 +253,12 @@ export function createAgentSdkTurnRuntimeDeps(
         : (await deps.threadStore.get(threadId))?.goal
       const goalContextKeyForHistory = goalContextKey(goalForHistory)
       items = filterGoalContextsForGoalKey(items, goalContextKeyForHistory)
+      const turnDynamicContext = projectTurnDynamicContext({
+        turnId,
+        persona: turn.persona,
+        items
+      })
+      items = [...turnDynamicContext.historyItems]
       const graphPolicy = delegatedGraphTurnPolicy(turn)
       // An Agent SDK query pins its in-process MCP schemas at startup and
       // cannot add tools after `load_skill` returns. Pre-bridge schemas gated
@@ -364,7 +371,9 @@ export function createAgentSdkTurnRuntimeDeps(
         })
       }
 
-      const contextInstructions = managedPptScope ? [] : [
+      const contextInstructions = managedPptScope ? [
+        ...turnDynamicContext.instructions
+      ] : [
         buildClientSurfaceInstruction(clientSurface),
         ...(thread.additionalWorkspaces?.length
           ? [`Additional workspace roots explicitly added by the user:\n${thread.additionalWorkspaces.map((path) => `- ${JSON.stringify(path)}`).join('\n')}`]
@@ -379,6 +388,7 @@ export function createAgentSdkTurnRuntimeDeps(
         ...(instructionResolution?.instruction ? [instructionResolution.instruction] : []),
         ...(todoInstruction ? [todoInstruction] : []),
         ...memoryBlocks,
+        ...turnDynamicContext.instructions,
         ...(skillResolution?.catalogInstruction ? [skillResolution.catalogInstruction] : []),
         ...(skillResolution?.instructions ?? []),
         ...(bridgedTools.length ? [CLAUDE_KUN_TOOL_INSTRUCTION] : [])
@@ -436,7 +446,9 @@ export function createAgentSdkTurnRuntimeDeps(
         workspace: thread.workspace,
         additionalWorkspaces: thread.additionalWorkspaces,
         userText: modelUserText,
-        ...(managedPptScope ? { preserveExactUserPrompt: true } : {}),
+        ...(managedPptScope && turnDynamicContext.instructions.length === 0
+          ? { preserveExactUserPrompt: true }
+          : {}),
         threadPersona: thread.systemPrompt?.trim() || undefined,
         approvalPolicy,
         sandboxMode,
@@ -455,19 +467,27 @@ export function createAgentSdkTurnRuntimeDeps(
         // the runtime default so the turn doesn't fail "model may not exist".
         model,
         ...(turn?.reasoningEffort ? { reasoningEffort: turn.reasoningEffort } : {}),
-        ...(preparation?.nativeSessionId
+        ...(preparation?.nativeSessionId && turnDynamicContext.instructions.length === 0
           ? { resumeSessionId: preparation.nativeSessionId }
           : {}),
         ...(claudeConfigDir ? { claudeConfigDir } : {}),
         ...(preparation ? { sessionPreparation: preparation } : {}),
+        ...(turnDynamicContext.instructions.length
+          ? { disableNativeContinuation: true }
+          : {}),
         ...(deps.contextProfile
           ? { contextProfile: deps.contextProfile(model ?? 'claude-default') }
           : {}),
         oauthToken: token || undefined,
         ...(images.length ? { images } : {}),
         bridgeableTools,
-        ...(goalContextTexts(items).length
-          ? { redactedRequestValues: goalContextTexts(items) }
+        ...([...goalContextTexts(items), ...turnDynamicContext.privateValues].length
+          ? {
+              redactedRequestValues: [
+                ...goalContextTexts(items),
+                ...turnDynamicContext.privateValues
+              ]
+            }
           : {}),
         ...(historyTranscript ? { historyTranscript } : {}),
         ...(contextInstructions.length ? { contextInstructions } : {}),

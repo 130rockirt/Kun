@@ -9,6 +9,7 @@ import {
 } from '../../domain/item.js'
 import type { ModelRequest } from '../../ports/model-client.js'
 import { projectCompatMessages } from './compat-message-projector.js'
+import { createCompatRequestCodecs } from './compat-request-builder.js'
 import { COMPAT_HISTORY_CONTEXT } from './compat-request-codecs.js'
 
 const composerContextFixture = {
@@ -126,6 +127,55 @@ describe('compat composer context projection', () => {
     // the persona only appends after it. This is what makes switching cheap.
     expect(withPersona.slice(0, withoutPersona.length)).toEqual(withoutPersona)
     expect(withPersona[withPersona.length - 1]?.[1]).toContain('kind="persona"')
+  })
+
+  it('keeps request-local host control in Codex Responses input, not instructions', () => {
+    const request: ModelRequest = {
+      threadId: 'thread-codex-context',
+      turnId: 'turn-codex-context',
+      model: 'gpt-5.6',
+      systemPrompt: 'stable-system-prefix',
+      prefix: [],
+      history: [makeUserItem({
+        id: 'context-user',
+        threadId: 'thread-codex-context',
+        turnId: 'turn-codex-context',
+        text: 'Revise the selected slide.'
+      })],
+      contextInstructions: [
+        'turn-context-preamble',
+        '<kun_context_block kind="host-control">PRIVATE HOST CONTROL</kun_context_block>'
+      ],
+      promptCachePartition: 'stable-partition',
+      tools: [],
+      abortSignal: new AbortController().signal
+    }
+    const messages = projectCompatMessages(request, {
+      thinkingMode: false,
+      supportsImages: false
+    })
+    const dynamic = messages.filter((message) => (
+      String(message.content).includes('PRIVATE HOST CONTROL')
+    ))
+    expect(dynamic).toHaveLength(1)
+    expect(dynamic[0]?.[COMPAT_HISTORY_CONTEXT]).toBe(true)
+
+    const wire = createCompatRequestCodecs().build({
+      request,
+      model: request.model,
+      messages,
+      tools: [],
+      stream: false,
+      endpointFormat: 'responses',
+      baseUrl: 'https://api.openai.com/v1',
+      isCodex: true,
+      isCodexLite: false,
+      codexNativeImageGeneration: false
+    })
+    expect(wire.instructions).toBe('stable-system-prefix')
+    expect(JSON.stringify(wire.instructions)).not.toContain('PRIVATE HOST CONTROL')
+    expect(JSON.stringify(wire.input)).toContain('PRIVATE HOST CONTROL')
+    expect(wire.prompt_cache_key).toBe('thread-codex-context:stable-partition')
   })
 
   it('projects durable goal context as history rather than a per-request instruction', () => {

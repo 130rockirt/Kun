@@ -3,6 +3,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { harden } from 'rehype-harden'
 import { isExplicitWriteResourceUrl } from '@shared/write-markdown-resource'
+import type { WriteRetrievalContext } from '@shared/write-retrieval'
 import {
   resolveWriteMarkdownResource,
   resolveWriteMarkdownResourcePath,
@@ -15,9 +16,13 @@ import {
   WRITE_QUOTE_ORIGINAL_START,
   WRITE_OFFICE_CONTEXT_END,
   WRITE_RETRIEVAL_END,
+  MAX_WRITE_QUOTED_SELECTION_CHARS,
+  MAX_WRITE_QUOTED_SELECTION_COUNT,
   composeWritePrompt,
+  formatWriteOfficeDocumentContextForPrompt,
   formatWriteQuotedSelectionForPrompt,
   formatWriteRetrievalContextForPrompt,
+  normalizeWriteQuotedSelections,
   parseWritePromptForDisplay,
   quotedSelectionFromEditor
 } from './quoted-selection'
@@ -131,7 +136,11 @@ describe('write quoted selections', () => {
       }
     ]
 
-    const parsed = parseWritePromptForDisplay(composeWritePrompt('解释这些内容', quotes))
+    const parsed = parseWritePromptForDisplay([
+      '[写作上下文]\n旧版本上下文',
+      quotes.map(formatWriteQuotedSelectionForPrompt).join('\n\n'),
+      '解释这些内容'
+    ].join('\n\n'))
 
     expect(parsed?.quotes).toMatchObject([
       { sourceKind: 'word', sourceFormat: 'docx', pageStart: 2, pageEnd: 3 },
@@ -148,6 +157,27 @@ describe('write quoted selections', () => {
       ranges: [],
       charCount: 0
     }, '/tmp/workspace/notes.md', '/tmp/workspace')).toBeNull()
+  })
+
+  it('caps, deduplicates, and prefers recent quoted selections', () => {
+    const selections = Array.from({ length: 7 }, (_, index) => ({
+      id: `quote-${index}`,
+      text: index === 6 ? 'x'.repeat(3_000) : `selection ${index}`,
+      sourceTitle: 'notes.md',
+      sourceFilePath: '/tmp/workspace/notes.md',
+      lineStart: index + 1,
+      lineEnd: index + 1,
+      charCount: index === 6 ? 3_000 : 11,
+      createdAt: `2026-08-13T00:00:0${index}.000Z`
+    }))
+    selections.push({ ...selections[6]!, id: 'duplicate' })
+
+    const normalized = normalizeWriteQuotedSelections(selections)
+
+    expect(normalized).toHaveLength(MAX_WRITE_QUOTED_SELECTION_COUNT)
+    expect(normalized.at(-1)?.id).toBe('duplicate')
+    expect(normalized.at(-1)?.text).toHaveLength(MAX_WRITE_QUOTED_SELECTION_CHARS)
+    expect(normalized.some((selection) => selection.id === 'quote-6')).toBe(false)
   })
 
   it('composes prompt with committed quote context first', () => {
@@ -168,19 +198,21 @@ describe('write quoted selections', () => {
     }, '/tmp/workspace/a.md', '/tmp/workspace', Date.parse('2026-05-24T00:00:00.000Z'))
 
     expect(quote).not.toBeNull()
-    const prompt = composeWritePrompt('Please revise it.', quote ? [quote] : [])
+    const prompt = composeWritePrompt('Please revise it.', {
+      workspaceRoot: '/tmp/workspace',
+      activeFilePath: '/tmp/workspace/a.md'
+    })
     expect(prompt.startsWith('[写作上下文]')).toBe(true)
     expect(prompt).toContain('仅当当前激活的专用工作流明确要求结构化确认')
     expect(prompt).toContain('PPT 视觉评审')
-    expect(prompt.indexOf('[引用片段] a.md')).toBeGreaterThan(prompt.indexOf('[写作上下文]'))
+    expect(prompt).not.toContain('A useful quote')
+    expect(prompt).not.toContain('[引用片段]')
     expect(prompt.endsWith('Please revise it.')).toBe(true)
     vi.restoreAllMocks()
   })
 
   it('parses write prompt metadata for compact timeline display', () => {
-    const prompt = composeWritePrompt(
-      '帮我改成中文',
-      [{
+    const quote = {
         id: 'quote-1',
         text: "Hi, I'm zxy. Glad to meet you.",
         sourceTitle: 'welcome.md',
@@ -189,19 +221,19 @@ describe('write quoted selections', () => {
         lineEnd: 10,
         charCount: 31,
         createdAt: '2026-05-24T00:00:00.000Z'
-      }],
-      {
-        workspaceRoot: '/tmp/workspace',
-        activeFilePath: '/tmp/workspace/welcome.md'
-      }
-    )
+    }
+    const prompt = [
+      '[写作上下文]\n工作空间: /tmp/workspace\n当前文件: welcome.md',
+      formatWriteQuotedSelectionForPrompt(quote),
+      '帮我改成中文'
+    ].join('\n\n')
 
     const parsed = parseWritePromptForDisplay(prompt)
 
     expect(parsed?.userInput).toBe('帮我改成中文')
     expect(parsed?.context?.workspaceRoot).toBe('/tmp/workspace')
     expect(parsed?.context?.activeFile).toBe('welcome.md')
-    expect(parsed?.context?.lines.some((line) => line.includes('仅当当前激活的专用工作流明确要求结构化确认'))).toBe(true)
+    expect(parsed?.context?.lines).toContain('当前文件: welcome.md')
     expect(parsed?.quotes).toHaveLength(1)
     expect(parsed?.quotes[0]).toMatchObject({
       sourceTitle: 'welcome.md',
@@ -214,13 +246,7 @@ describe('write quoted selections', () => {
   })
 
   it('adds retrieval snippets with PDF page locations to assistant prompts', () => {
-    const prompt = composeWritePrompt(
-      '解释这段论文',
-      [],
-      {
-        workspaceRoot: '/tmp/workspace',
-        activeFilePath: '/tmp/workspace/papers/study.pdf',
-        retrieval: {
+    const retrieval: WriteRetrievalContext = {
           source: 'bm25-keyword',
           query: 'retrieval quality',
           keywords: ['retrieval', 'quality'],
@@ -240,9 +266,8 @@ describe('write quoted selections', () => {
             pageStart: 3,
             pageEnd: 3
           }]
-        }
-      }
-    )
+    }
+    const prompt = formatWriteRetrievalContextForPrompt(retrieval)
 
     expect(prompt).toContain('[相关文献上下文]')
     expect(prompt).toContain('papers/study.pdf 第3页')
@@ -252,13 +277,7 @@ describe('write quoted selections', () => {
   })
 
   it('collapses retrieval context out of the displayed user input', () => {
-    const prompt = composeWritePrompt(
-      '帮我看看这篇文章讲什么内容\n\n再总结三条要点',
-      [],
-      {
-        workspaceRoot: '/tmp/workspace',
-        activeFilePath: '/tmp/workspace/papers/study.pdf',
-        retrieval: {
+    const retrieval: WriteRetrievalContext = {
           source: 'bm25-keyword',
           query: 'feature development',
           keywords: ['feature', 'development'],
@@ -282,9 +301,12 @@ describe('write quoted selections', () => {
               location: { kind: 'pdf', pageStart: 1, pageEnd: 2 }
             }
           ]
-        }
-      }
-    )
+    }
+    const prompt = [
+      '[写作上下文]\n工作空间: /tmp/workspace\n当前文件: papers/study.pdf',
+      formatWriteRetrievalContextForPrompt(retrieval),
+      '帮我看看这篇文章讲什么内容\n\n再总结三条要点'
+    ].join('\n\n')
 
     const parsed = parseWritePromptForDisplay(prompt)
 
@@ -305,22 +327,28 @@ describe('write quoted selections', () => {
   })
 
   it('collapses whole Office semantics into a source card and adds a read-only contract', () => {
-    const prompt = composeWritePrompt('总结三点', [], {
+    const officeDocument = {
+      sourceTitle: 'report.docx',
+      sourceFilePath: '/tmp/workspace/report.docx',
+      sourceFormat: 'docx' as const,
+      sourceSha256: 'a'.repeat(64),
+      text: '很长的文档语义正文',
+      truncated: true
+    }
+    const currentPrompt = composeWritePrompt('总结三点', {
       workspaceRoot: '/tmp/workspace',
       activeFilePath: '/tmp/workspace/report.docx',
-      officeDocument: {
-        sourceTitle: 'report.docx',
-        sourceFilePath: '/tmp/workspace/report.docx',
-        sourceFormat: 'docx',
-        sourceSha256: 'a'.repeat(64),
-        text: '很长的文档语义正文',
-        truncated: true
-      }
+      officeReadOnly: true
     })
-
-    expect(prompt).toContain('禁止调用 edit、write 或 office_edit')
-    expect(prompt).toContain(WRITE_OFFICE_CONTEXT_END)
-    const parsed = parseWritePromptForDisplay(prompt)
+    expect(currentPrompt).toContain('禁止调用 edit、write 或 office_edit')
+    expect(currentPrompt).not.toContain('很长的文档语义正文')
+    const legacyPrompt = [
+      '[写作上下文]\n旧版本上下文',
+      formatWriteOfficeDocumentContextForPrompt(officeDocument),
+      '总结三点'
+    ].join('\n\n')
+    expect(legacyPrompt).toContain(WRITE_OFFICE_CONTEXT_END)
+    const parsed = parseWritePromptForDisplay(legacyPrompt)
     expect(parsed?.userInput).toBe('总结三点')
     expect(parsed?.userInput).not.toContain('很长的文档语义正文')
     expect(parsed?.officeDocument).toMatchObject({

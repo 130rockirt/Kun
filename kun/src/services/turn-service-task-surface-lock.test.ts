@@ -3,7 +3,7 @@ import type { DesignTaskProfileInput } from '../contracts/design-task-profile.js
 import { createThreadRecord } from '../domain/thread.js'
 import { createTurnRecord } from '../domain/turn.js'
 import { TaskSurfaceLockedError } from './turn-service-core.js'
-import { resolveDesignTurnAdmission } from './turn-service-design-admission.js'
+import { legacyThreadCanClaimWrite, resolveDesignTurnAdmission } from './turn-service-design-admission.js'
 
 const profile: DesignTaskProfileInput = {
   version: 1,
@@ -118,5 +118,27 @@ describe('turn task-surface lock', () => {
       request: { prompt: 'Start in Code', agentSurface: 'code' },
       turnId: 'turn_code'
     })).toMatchObject({ effectiveSurface: 'code', locksProfile: false })
+  })
+
+  it('does not let a title collision or ordinary legacy Code history claim Work', () => {
+    const collision = createThreadRecord({
+      id: 'thr_title_collision',
+      title: 'Write Assistant',
+      workspace: '/tmp/workspace',
+      model: 'test'
+    })
+    collision.turns.push(createTurnRecord({
+      id: 'turn_code',
+      threadId: collision.id,
+      prompt: 'Inspect the repository',
+      model: collision.model
+    }))
+
+    expect(legacyThreadCanClaimWrite(collision)).toBe(false)
+    expect(() => resolveDesignTurnAdmission({
+      thread: collision,
+      request: { prompt: 'try Work', agentSurface: 'write' },
+      turnId: 'turn_rejected'
+    })).toThrow(TaskSurfaceLockedError)
   })
 })

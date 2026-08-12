@@ -86,6 +86,17 @@ describe('ImmutablePrefix', () => {
     expect(a.fingerprint).toBe(b.fingerprint)
   })
 
+  it('filters private runtime context from immutable few-shots', () => {
+    const privateSource = {
+      id: 'private', threadId: 'th', turnId: 'turn', role: 'system' as const,
+      status: 'completed' as const, createdAt: '2026-08-13T00:00:00.000Z',
+      kind: 'runtime_context_source' as const, contextKind: 'host-control' as const,
+      content: 'private host control'
+    }
+    expect(createImmutablePrefix({ fewShots: [privateSource] }).fewShots).toEqual([])
+    expect(setFewShots(createImmutablePrefix(), [privateSource]).fewShots).toEqual([])
+  })
+
   it('throws when the prefix is mutated without an explicit mutator', () => {
     const prefix = createImmutablePrefix({ systemPrompt: 'hi' })
     prefix.systemPrompt = 'hello'

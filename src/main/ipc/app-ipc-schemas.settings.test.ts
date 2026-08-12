@@ -106,6 +106,15 @@ describe('app-ipc-schemas settings', () => {
     expect(payload.disabledSkillIds).toEqual(['test-skill-08'])
   })
 
+  it('keeps saved Work personas within the runtime turn-persona limit', () => {
+    expect(settingsPatchSchema.parse({
+      write: { agentPresets: [{ id: 'editor', persona: 'p'.repeat(2_000) }] }
+    }).write?.agentPresets?.[0]?.persona).toHaveLength(2_000)
+    expect(() => settingsPatchSchema.parse({
+      write: { agentPresets: [{ id: 'editor', persona: 'p'.repeat(2_001) }] }
+    })).toThrow()
+  })
+
   it('rejects invalid plan execution settings', () => {
     expect(() => settingsPatchSchema.parse({
       agents: { kun: { planExecution: { useWorktreeByDefault: 'yes' } } }

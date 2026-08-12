@@ -18,6 +18,7 @@ import type { TurnRunOutcome } from '../../loop/turn-execution-types.js'
 import type { SessionStore } from '../../ports/session-store.js'
 import type { ThreadStore } from '../../ports/thread-store.js'
 import { buildClientSurfaceInstruction } from '../../prompt/kun-prompt-context.js'
+import { projectTurnDynamicContext } from '../../prompt/turn-persona-context.js'
 import type {
   ModelRequestTraceDelegated,
   ModelRequestTraceRecord
@@ -225,11 +226,18 @@ export class AntigravityCliRuntime implements DelegatedTurnRuntime {
       : (await this.deps.threadStore.get(threadId))?.goal
     const goalContextKeyForHistory = goalContextKey(goalForHistory)
     items = filterGoalContextsForGoalKey(items, goalContextKeyForHistory)
+    const turnDynamicContext = projectTurnDynamicContext({
+      turnId,
+      persona: turn.persona,
+      items
+    })
+    items = [...turnDynamicContext.historyItems]
 
     const instructionBlocks = [
       this.deps.systemPrompt?.trim(),
       buildClientSurfaceInstruction(resolveTurnClientSurface(turn)),
-      thread.systemPrompt?.trim()
+      thread.systemPrompt?.trim(),
+      ...turnDynamicContext.instructions
     ].filter((value, index, all): value is string =>
       Boolean(value) && all.indexOf(value) === index
     )
@@ -371,7 +379,10 @@ export class AntigravityCliRuntime implements DelegatedTurnRuntime {
       provider: resolvedProviderId,
       model,
       prompt,
-      redactedRequestValues: goalContextTexts(items),
+      redactedRequestValues: [
+        ...goalContextTexts(items),
+        ...turnDynamicContext.privateValues
+      ],
       effort,
       planMode,
       approvalPolicy,

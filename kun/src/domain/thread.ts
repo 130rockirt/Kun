@@ -34,6 +34,13 @@ import { resolveThreadLockedTaskSurface } from './task-surface-lock.js'
  */
 export type ThreadEntity = ThreadRecord
 
+const LEGACY_WRITE_THREAD_TITLE = 'Write Assistant'
+const LEGACY_WRITE_CONTEXT_HEADING = '[写作上下文]'
+const LEGACY_WRITE_INTERACTION_LIMIT =
+  '交互限制: 当前 GUI 无法提交 request_user_input 的 HTTP 响应；需要更多信息时，直接用普通文本向用户提问，不要调用 request_user_input。'
+const LEGACY_WRITE_INTERACTION_AGREEMENT =
+  '交互约定: 需要更多信息时通常直接用普通文本向用户提问。仅当当前激活的专用工作流明确要求结构化确认（例如 PPT 视觉评审）时，调用该工作流提供的确认工具；其他写作任务不要滥用结构化交互。'
+
 export function createThreadRecord(input: {
   id: string
   title: string
@@ -236,17 +243,52 @@ function pathsOverlap(left: string, right: string): boolean {
     (!rightToLeft.startsWith('..') && !isAbsolute(rightToLeft))
 }
 
+export function legacyWorkThreadTitleMatches(title: string): boolean {
+  const normalized = title.trim()
+  return normalized === LEGACY_WRITE_THREAD_TITLE ||
+    normalized.startsWith(LEGACY_WRITE_CONTEXT_HEADING)
+}
+
+function legacyWorkEnvelope(text: string): boolean {
+  if (!text.startsWith(`${LEGACY_WRITE_CONTEXT_HEADING}\n`)) return false
+  const separator = text.indexOf('\n\n')
+  if (separator < 0) return false
+  const context = text.slice(LEGACY_WRITE_CONTEXT_HEADING.length + 1, separator)
+  // Match the exact host-authored interaction line from either Work generation.
+  // The edit rule was introduced independently and cannot identify every valid
+  // historical record.
+  return context.includes(LEGACY_WRITE_INTERACTION_LIMIT) ||
+    context.includes(LEGACY_WRITE_INTERACTION_AGREEMENT)
+}
+
+/** A narrow compatibility proof for pre-surface Work/Reasonix records. */
+export function legacyThreadCanClaimWrite(thread: ThreadEntity): boolean {
+  if (
+    thread.agentSurface ||
+    thread.designProfile ||
+    thread.turns.length === 0 ||
+    !legacyWorkThreadTitleMatches(thread.title) ||
+    thread.turns.some((turn) => turn.agentSurface !== undefined)
+  ) return false
+  return thread.turns.every((turn) => turn.items.some((item) =>
+    item.kind === 'user_message' &&
+    item.agentSurface === undefined &&
+    item.threadAgentSurface === undefined &&
+    legacyWorkEnvelope(item.text)
+  ))
+}
+
 /**
- * Resolves legacy ownership without allowing one stray turn to steal a Code
- * conversation. An explicit thread value is authoritative; otherwise only a
- * non-empty history whose every turn names the same non-Code surface is
- * inferred as Write or Design. Empty, mixed, and partially annotated history
- * remains Code.
+ * Resolves legacy ownership without allowing a title or prompt alone to steal
+ * a Code conversation. Explicit metadata wins. Otherwise only homogeneous
+ * non-Code turn metadata, or a fully identifiable legacy Work record, can be
+ * inferred. Empty, mixed, and partially annotated history remains Code.
  */
 export function resolveThreadAgentSurface(
-  thread: Pick<ThreadEntity, 'agentSurface' | 'turns'>
+  thread: ThreadEntity
 ): ThreadAgentSurface {
   if (thread.agentSurface) return thread.agentSurface
+  if (legacyThreadCanClaimWrite(thread)) return 'write'
   if (thread.turns.length === 0) return 'code'
   const candidate = thread.turns[0]?.agentSurface
   if (candidate !== 'write' && candidate !== 'design') return 'code'

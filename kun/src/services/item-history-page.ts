@@ -68,6 +68,7 @@ function timelinePreviewItem(item: TurnItem, maxBytes: number): TurnItem {
     case 'assistant_reasoning':
       return { ...item, text: truncateText(item.text, textLimit) }
     case 'model_context':
+    case 'runtime_context_source':
       return item
     case 'tool_call':
       return {
@@ -142,6 +143,7 @@ function minimalTimelineItem(item: TurnItem): TurnItem {
     case 'assistant_reasoning':
       return { ...minimalTimelineItemBase(item), kind: item.kind, text: marker }
     case 'model_context':
+    case 'runtime_context_source':
       return item
     case 'tool_call':
       return {

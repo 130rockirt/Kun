@@ -88,6 +88,7 @@ describe('DelegationRuntime resume handling', () => {
           agentSurface: 'write'
         },
         agentSurface: 'write',
+        guiDesignCanvas: true,
         workspace: '/workspace',
         inlineProfile: {
           id: 'ppt',
@@ -138,6 +139,7 @@ describe('DelegationRuntime resume handling', () => {
         parentTurnId: 'turn-2',
         workspace: '/workspace',
         agentSurface: 'design',
+        clientSurface: 'gui',
         systemPrompt: 'PPT child',
         allowedTools: ['generate_image']
       })
