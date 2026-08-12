@@ -269,7 +269,7 @@ export function useWorkbenchShellRuntime(context: Context): {
       onUseElementAsContext: handleDesignHtmlElementAsContext,
       onScreenCreated: (shapeId, userPrompt, brief) => {
         selectCanvasShape(shapeId)
-        void sendDesignPrompt(brief?.trim() || userPrompt || 'Design this screen', {
+        return sendDesignPrompt(brief?.trim() || userPrompt || 'Design this screen', {
           screenShapeId: shapeId
         })
       },

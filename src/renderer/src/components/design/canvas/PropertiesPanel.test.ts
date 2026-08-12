@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   commitInspectorUpdate,
+  buildScreenModifyPrompt,
   nextInspectorOpenForSelection,
   propertiesPanelShellClass,
   propertiesPanelTriggerClass,
@@ -83,6 +84,10 @@ afterEach(() => {
 })
 
 describe('PropertiesPanel surface layout', () => {
+  it('seeds screen modification in the production composer', () => {
+    expect(buildScreenModifyPrompt('Checkout')).toContain('Modify the selected screen "Checkout"')
+  })
+
   it('uses a compact inspector shell on the code whiteboard', () => {
     const className = propertiesPanelShellClass('code')
 

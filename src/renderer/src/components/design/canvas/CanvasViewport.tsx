@@ -14,7 +14,6 @@ import type { DesignHtmlElementContext } from '../../../design/design-composer-c
 import { useDesignWorkspaceStore } from '../../../design/design-workspace-store'
 import type { DesignRuntimeQualityPayload } from '../../../design/design-html-quality'
 import { CanvasWorkspaceContext } from '../../../design/canvas/canvas-workspace-context'
-import { exportCanvasFromSvg, type CanvasExportFormat } from '../../../design/canvas/canvas-export'
 import {
   handleCanvasKeyDown,
   handleCanvasKeyUp,
@@ -42,6 +41,7 @@ import {
   canvasViewportStorageKey,
   createCanvasTool,
   shouldHandleCanvasKeyboardEvent,
+  shouldHandleCanvasKeyboardRelease,
   shouldOpenImageAnnotation,
   shouldRenderCanvasMinimap,
   shouldRenderDesignArtifactOverlays,
@@ -64,10 +64,13 @@ import {
   useCanvasMotionPreview
 } from '../../../design/motion/canvas-motion-preview'
 import { CanvasMotionDock } from './CanvasMotionDock'
+import { PrototypeFlowOverlay } from './PrototypeFlowOverlay'
+import { useCanvasViewportExports } from './canvas-viewport/canvas-viewport-export'
 
 export {
   resolveCanvasDesignSystemBaseDir,
   shouldHandleCanvasKeyboardEvent,
+  shouldHandleCanvasKeyboardRelease,
   shouldOpenImageAnnotation,
   resolveSelectedImageAnnotationAction,
   shouldRenderCanvasMinimap,
@@ -266,6 +269,13 @@ export function CanvasViewport({
     () => resolvePreferredPrototypeArtifactId(designArtifacts, selectedHtmlArtifactId, activeArtifactId),
     [activeArtifactId, designArtifacts, selectedHtmlArtifactId]
   )
+  const { exportCanvas, exportPrototype } = useCanvasViewportExports({
+    svgRef,
+    containerRef,
+    workspaceRoot,
+    designArtifacts,
+    initialPrototypeArtifactId
+  })
   const annotationDocument = useMemo(() => {
     if (!designMotionOpen || !motionFrameId || motionTimeMs === null) return document
     return {
@@ -351,13 +361,13 @@ export function CanvasViewport({
     (e: React.PointerEvent) => {
       if (e.button !== 0 && e.button !== 1) return
       e.preventDefault()
-      if (surface === 'code') rootRef.current?.focus({ preventScroll: true })
+      rootRef.current?.focus({ preventScroll: true })
       e.currentTarget.setPointerCapture(e.pointerId)
       const pointerTool = e.button === 1 ? middlePanTool : tool
       activePointerToolRef.current = pointerTool
       pointerTool.onPointerDown(makePointerEvent(e))
     },
-    [middlePanTool, tool, makePointerEvent, surface]
+    [middlePanTool, tool, makePointerEvent]
   )
 
   const onPointerMove = useCallback(
@@ -462,11 +472,19 @@ export function CanvasViewport({
     const onKeyDown = (e: KeyboardEvent): void => {
       if (designMotionPlaying || readOnly) return
       if (!shouldHandleCanvasKeyboardEvent(surface, e.target, rootRef.current)) return
-      handleCanvasKeyDown(e)
+      handleCanvasKeyDown(e, {
+        workspaceRoot,
+        documentKey: useCanvasShapeStore.getState().documentKey
+      })
     }
     const onKeyUp = (e: KeyboardEvent): void => {
+      // Always release the temporary Hand even if focus moved off-canvas.
+      if (e.key === ' ') {
+        handleCanvasKeyUp(e)
+        return
+      }
       if (designMotionPlaying || readOnly) return
-      if (!shouldHandleCanvasKeyboardEvent(surface, e.target, rootRef.current)) return
+      if (!shouldHandleCanvasKeyboardRelease(e.key, surface, e.target, rootRef.current)) return
       handleCanvasKeyUp(e)
     }
     window.addEventListener('keydown', onKeyDown)
@@ -481,27 +499,11 @@ export function CanvasViewport({
   const viewBoxStr = `${vbox.x} ${vbox.y} ${vbox.width} ${vbox.height}`
   const cursor = activeTool === 'hand' ? 'grab' : tool.cursor
   const root = document.objects[document.rootId]
-  const exportCanvas = useCallback(async (format: CanvasExportFormat): Promise<void> => {
-    const sourceSvg = svgRef.current
-    if (!sourceSvg) throw new Error(t('canvasExportUnavailable'))
-    const backgroundColor = containerRef.current
-      ? getComputedStyle(containerRef.current).backgroundColor
-      : '#ffffff'
-    await exportCanvasFromSvg({
-      sourceSvg,
-      document: useCanvasShapeStore.getState().document,
-      format,
-      workspaceRoot,
-      filename: 'kun-whiteboard',
-      backgroundColor
-    })
-  }, [t, workspaceRoot])
-
   return (
     <CanvasWorkspaceContext.Provider value={workspaceValue}>
       <div
         ref={rootRef}
-        tabIndex={surface === 'code' ? -1 : undefined}
+        tabIndex={-1}
         className={`ds-no-drag relative h-full w-full overflow-hidden bg-[#f8fafc] text-[#1e1e1e] outline-none dark:bg-[#111318] dark:text-[#e9ecef] ${canvasViewportBackgroundFillClass(surface)}`}
         style={{
           '--canvas-motion-dock-height': '264px',
@@ -540,7 +542,8 @@ export function CanvasViewport({
             }}
             onOpenAgentSettings={onOpenAgentSettings}
             onRequestCanvasCritique={requestCanvasCritique}
-            onExportCanvas={surface === 'code' ? exportCanvas : undefined}
+            onExportCanvas={exportCanvas}
+            onExportPrototype={surface === 'design' ? exportPrototype : undefined}
           /> : null}
         </div>
         <div
@@ -612,6 +615,13 @@ export function CanvasViewport({
                     />
                   )
                 })}
+                {surface === 'design' ? (
+                  <PrototypeFlowOverlay
+                    artifacts={designArtifacts}
+                    objects={document.objects}
+                    zoom={zoom}
+                  />
+                ) : null}
               </g>
 
               {!designMotionPlaying ? (

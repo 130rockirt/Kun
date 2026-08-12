@@ -4,6 +4,7 @@ import {
   resolveCanvasDesignSystemBaseDir,
   shouldRenderCanvasMinimap,
   shouldHandleCanvasKeyboardEvent,
+  shouldHandleCanvasKeyboardRelease,
   shouldRenderDesignArtifactOverlays,
   shouldOpenImageAnnotation,
   resolveSelectedImageAnnotationAction,
@@ -176,11 +177,7 @@ describe('CanvasViewport surface behavior', () => {
     expect(resolveCanvasDesignSystemBaseDir('.kun-design/doc-1', undefined)).toBe('.kun-design/doc-1')
   })
 
-  it('keeps design canvas keyboard shortcuts global', () => {
-    expect(shouldHandleCanvasKeyboardEvent('design', null, null, null)).toBe(true)
-  })
-
-  it('scopes code canvas keyboard shortcuts to the whiteboard tree', () => {
+  it('scopes keyboard shortcuts on both canvas surfaces to the whiteboard tree', () => {
     const inside = {}
     const activeInside = {}
     const outside = {}
@@ -192,6 +189,11 @@ describe('CanvasViewport surface behavior', () => {
     expect(shouldHandleCanvasKeyboardEvent('code', outside as EventTarget, root, activeInside as Element)).toBe(true)
     expect(shouldHandleCanvasKeyboardEvent('code', outside as EventTarget, root, null)).toBe(false)
     expect(shouldHandleCanvasKeyboardEvent('code', inside as EventTarget, null, null)).toBe(false)
+    expect(shouldHandleCanvasKeyboardEvent('design', inside as EventTarget, root, null)).toBe(true)
+    expect(shouldHandleCanvasKeyboardEvent('design', outside as EventTarget, root, activeInside as Element)).toBe(true)
+    expect(shouldHandleCanvasKeyboardEvent('design', outside as EventTarget, root, null)).toBe(false)
+    expect(shouldHandleCanvasKeyboardRelease(' ', 'design', outside as EventTarget, root, null)).toBe(true)
+    expect(shouldHandleCanvasKeyboardRelease('a', 'design', outside as EventTarget, root, null)).toBe(false)
   })
 
   it('prunes selection state to shapes that still exist after document sync', () => {

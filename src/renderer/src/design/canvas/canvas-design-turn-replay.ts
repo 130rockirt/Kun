@@ -24,6 +24,7 @@ export type DurableDesignCanvasTurn = {
 export type CanvasDesignReplayContext = {
   blocks: readonly ChatBlock[]
   replayKey: string
+  turnId: string
 }
 
 export type CanvasTurnReplayState = {
@@ -287,6 +288,7 @@ export function designCanvasReplayContextForActiveTurn(
   const blocks = state.blocks.slice(start, end)
   return {
     blocks,
+    turnId: designCanvasTurnId(user, blocks, state.currentTurnId),
     replayKey: designCanvasReplayKey({
       threadId,
       turnId: designCanvasTurnId(user, blocks, state.currentTurnId),
@@ -302,7 +304,12 @@ export function replayDurableDesignCanvasTurns(options: {
   target: CanvasDesignDocumentTarget
   onTurnStart: () => void
   onAssistantText: (text: string, replayKey: string) => void
-  onToolBlock: (block: ToolBlock, turnBlocks: readonly ChatBlock[], replayKey: string) => void
+  onToolBlock: (
+    block: ToolBlock,
+    turnBlocks: readonly ChatBlock[],
+    replayKey: string,
+    turnId: string
+  ) => void
   onTurnComplete: (completion: DurableDesignCanvasTurnCompletion) => void
 }): void {
   const durableTurns = durableDesignCanvasTurns(options.blocks, options.target)
@@ -325,7 +332,9 @@ export function replayDurableDesignCanvasTurns(options: {
       .join('\n')
     if (assistantText) options.onAssistantText(assistantText, key('assistant'))
     for (const block of turn.blocks) {
-      if (block.kind === 'tool') options.onToolBlock(block, turn.blocks, key(`tool:${block.id}`))
+      if (block.kind === 'tool') {
+        options.onToolBlock(block, turn.blocks, key(`tool:${block.id}`), turn.turnId)
+      }
     }
     const placementTarget = designImagePlacementTargetFromUserBlock(
       turn.blocks.find((block) => block.kind === 'user')
@@ -339,7 +348,6 @@ export function replayDurableDesignCanvasTurns(options: {
       ...(placementTarget ? { placementTarget } : {}),
       replayKeyForImage: (completionIdentity) => key(`image:${completionIdentity}`)
     })
-    useCanvasShapeStore.getState().recordRendererReplayWatermark(turn.turnId)
   }
 }
 

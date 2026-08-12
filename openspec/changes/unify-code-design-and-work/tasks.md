@@ -58,3 +58,17 @@
 
   - Evidence (2026-08-13): `npm run typecheck`, `npm run build`, `npm run lint`, `npm run check:file-lines`, and `git diff --check` passed. Focused Kun suites passed 46/46 tests; focused renderer/main suites passed 143/143 tests across admission, guidance, Design delivery, fork/resume, Plan recovery, canvas/empty-state, and extracted-file regressions.
   - Full Kun tests passed 4352 tests. Remaining failures were verified baseline/environment failures in ToolStormBreaker/loop recovery, native `node-pty` and `better-sqlite3` ABI loading, TUI/goal timing, and unrelated legacy expectations. The top-level full run passed 6896 tests before focused fixes; remaining unrelated baselines cover locale parity, provider/packaging expectations, dev-preview policy, and settings UI lifecycle.
+
+## 8. Embedded Whiteboard Review Remediation
+
+- [x] 8.1 Preserve a valid acyclic shape tree during reparenting and retain same-document undo history across background hydration.
+- [x] 8.2 Make HTML/SVG follow-up generation recoverable when a Design replay is interrupted before asynchronous work finishes.
+- [x] 8.3 Scope clipboard and asynchronous image paste operations to the initiating document/workspace and prefer a current system image over stale internal shapes.
+- [x] 8.4 Restore image annotation, main-composer actions, focused shortcuts, and all supported drawing/layer controls on the embedded Design route.
+- [x] 8.5 Restore Design whiteboard export, including user and agent entry points, without silently omitting rendered artifact previews.
+- [x] 8.6 Keep automatic sizing until a resize actually changes geometry, expose the supported resize axes, and mount prototype-flow visualization.
+- [x] 8.7 Add focused regression coverage for graph integrity, replay recovery, document races, route gating, export, shortcuts, and resize behavior.
+- [x] 8.8 Run focused suites, typecheck, build, lint, file-line gate, and diff checks; record any verified baseline-only failures.
+
+  - Evidence (2026-08-13): 88 focused Design canvas files passed 709/709 tests, including replay recovery, graph integrity, annotation, export, clipboard, shortcuts, resize, and composer routing. Web TypeScript and the production build passed.
+  - `npm run lint`, `npm run check:file-lines`, and `git diff --check` passed. Lint retained only existing repository warnings outside this change; the full `npm run typecheck` remained blocked by pre-existing Kun dependency/type baselines, while the affected renderer TypeScript project passed cleanly.

@@ -296,6 +296,7 @@ export function WorkbenchChatStage({
             className={`ds-composer-dock ds-no-drag relative flex shrink-0 justify-center px-2 pt-0 sm:px-4 md:px-6 lg:px-8 ${
               emptyTaskLayout ? 'pb-0' : 'pb-3'
             }`}
+            data-primary-floating-composer
             data-usage-history-boundary
           >
             {showReturnBar ? (

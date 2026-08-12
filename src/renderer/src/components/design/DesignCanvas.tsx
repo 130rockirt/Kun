@@ -13,7 +13,11 @@ type CanvasProps = {
   busy?: boolean
   onOpenAgentSettings?: () => void
   onImplementDesign?: (artifact: DesignArtifact) => void
-  onScreenCreated?: (shapeId: string, userPrompt: string, brief?: string) => void
+  onScreenCreated?: (
+    shapeId: string,
+    userPrompt: string,
+    brief?: string
+  ) => boolean | void | Promise<boolean | void>
   onSvgCreated?: (
     artifactId: string,
     shapeId: string,

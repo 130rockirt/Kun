@@ -17,7 +17,7 @@ export type ImportedImageDimensions = {
 
 export type CanvasImageImportResult =
   | { ok: true; shapeId: string }
-  | { ok: false; canceled?: boolean; message?: string }
+  | { ok: false; canceled?: boolean; reason?: 'no-image' | 'document-changed'; message?: string }
 
 function finitePositive(value: number | undefined): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0
@@ -73,14 +73,19 @@ export async function pasteClipboardImageToCanvas(options: {
    */
   workspaceRoot?: string
   imageDirectory?: string
+  /** Captured when paste starts; prevents a late clipboard read from mutating another board. */
+  expectedDocumentKey?: string | null
 }): Promise<CanvasImageImportResult> {
+  const expectedDocumentKey = options.expectedDocumentKey !== undefined
+    ? options.expectedDocumentKey
+    : useCanvasShapeStore.getState().documentKey
   if (typeof window.kunGui?.readClipboardImage !== 'function') {
-    return { ok: false, message: 'Clipboard image reading is unavailable.' }
+    return { ok: false, reason: 'no-image', message: 'Clipboard image reading is unavailable.' }
   }
 
   const image = await window.kunGui.readClipboardImage()
   if (!image.ok) {
-    return { ok: false, message: image.message }
+    return { ok: false, reason: 'no-image', message: image.message }
   }
 
   // Prefer persisting to disk so shape.imageUrl is a workspace-relative path
@@ -122,6 +127,10 @@ export async function pasteClipboardImageToCanvas(options: {
   shape.width = bounds.width
   shape.height = bounds.height
   shape.imageUrl = persistedRelativePath ?? dataUrl
+
+  if (useCanvasShapeStore.getState().documentKey !== expectedDocumentKey) {
+    return { ok: false, reason: 'document-changed' }
+  }
 
   useCanvasShapeStore.getState().addShape(shape)
   useCanvasSelectionStore.getState().select([shape.id])

@@ -5,9 +5,7 @@ import { collectAssistantTextForTurn, threadHasPendingRuntimeWork } from '../../
 import { applyCanvasOpBlocks, applyCanvasOpsSince, extractCanvasOpBlocksFromValue, setLastCanvasOpErrors } from './apply-shape-ops'
 import { useCanvasSelectionStore } from './canvas-selection-store'
 import { useCanvasShapeStore } from './canvas-shape-store'
-import { takeScreenBrief } from './screen-artifact-bridge'
 import type { ExecuteOpsOptions, OpError } from './shape-ops'
-import { isHtmlFrame, isImplicitImageSlot, type CanvasDocument } from './canvas-types'
 import { useDesignAssistantStore } from '../design-assistant-store'
 import { useDesignWorkspaceStore } from '../design-workspace-store'
 import { requestCodeCanvasPanelOpen } from '../../lib/code-canvas-panel-event'
@@ -30,7 +28,6 @@ import {
   isDesignMotionRendererToolName
 } from './motion-ops'
 import {
-  resolveGeneratedImageFallbackTarget,
   rewriteGeneratedImageUrlsForTurn,
   type GeneratedImageFallbackTarget
 } from './canvas-generated-image-replay'
@@ -39,9 +36,7 @@ import {
   activeCanvasTurnMatchesThread,
   blocksForActiveCanvasTurn,
   canvasReplayStateForStoreUpdate,
-  designImagePlacementTargetFromUserBlock,
   designCanvasReplayContextForActiveTurn,
-  placeGeneratedImagesForTurn,
   replayActiveCanvasTurn,
   type CanvasDesignDocumentTarget,
   type CanvasTurnReplayState
@@ -51,6 +46,22 @@ import {
   replayIdleCanvasToolBlocks,
   replayIdleDesignCanvas
 } from './canvas-design-idle-replay'
+import {
+  commitReadyCanvasReplayBarriers,
+  activeCanvasUserId,
+  captureCanvasGeneratedImageFallback,
+  dispatchNextPendingScreen,
+  enqueueCanvasTurnScreens,
+  ensureCanvasReplayBarrier,
+  hasDispatchedScreenFollowup,
+  takeNextReadyScreenGeneration,
+  placeLiveCanvasTurnImages,
+  recordReadyCanvasReplayWatermarks,
+  markFailedSvgForRetry,
+  type CanvasReplayBarrierState,
+  type CanvasScreenCreatedHandler,
+  type PendingScreenGeneration
+} from './canvas-design-replay-support'
 
 export {
   hasDispatchedSvgFollowup, shouldApplyDesignCanvasToolBlock,
@@ -69,69 +80,17 @@ export {
   replayActiveCanvasTurn
 } from './canvas-design-turn-replay'
 export { shouldReplayIdleCanvasToolBlock } from './canvas-design-idle-replay'
+export {
+  commitReadyCanvasReplayBarriers,
+  hasDispatchedScreenFollowup,
+  takeNextReadyScreenGeneration
+} from './canvas-design-replay-support'
+export type { CanvasScreenCreatedHandler } from './canvas-design-replay-support'
 /** Coalesce per-token `liveAssistant` deltas so we re-parse at most this often. */
 const STREAM_THROTTLE_MS = 120
-export type PendingScreenGeneration = {
-  shapeId: string
-  userPrompt: string
-  brief?: string
-}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-function userTextForCanvasFallback(block: ChatBlock | null | undefined): string {
-  if (!block || block.kind !== 'user') return ''
-  const displayText = block.meta?.displayText
-  return typeof displayText === 'string' && displayText.trim() ? displayText : block.text
-}
-
-function userBlockForActiveCanvasTurn(
-  state: CanvasTurnReplayState
-): Extract<ChatBlock, { kind: 'user' }> | null {
-  if (state.currentTurnUserId) {
-    const block = state.blocks.find((candidate) => candidate.kind === 'user' && candidate.id === state.currentTurnUserId)
-    if (block?.kind === 'user') return block
-  }
-  for (let i = state.blocks.length - 1; i >= 0; i -= 1) {
-    const block = state.blocks[i]
-    if (block.kind === 'user') return block
-  }
-  return null
-}
-
-function userBlockUsesPrimaryImageLane(block: ChatBlock | null | undefined): boolean {
-  if (block?.kind !== 'user') return false
-  const profile = block.meta?.designProfile
-  return Boolean(profile && profile.outputMedium === 'image')
-}
-
-export function takeNextReadyScreenGeneration({
-  pendingScreens,
-  document,
-  currentTurnId,
-  busy = false,
-  pendingRuntimeWork = false,
-  htmlArtifactIds
-}: {
-  pendingScreens: PendingScreenGeneration[]
-  document: CanvasDocument
-  currentTurnId: string | null
-  busy?: boolean
-  pendingRuntimeWork?: boolean
-  htmlArtifactIds?: ReadonlySet<string>
-}): PendingScreenGeneration | null {
-  if (currentTurnId || busy || pendingRuntimeWork) return null
-  while (pendingScreens.length > 0) {
-    const next = pendingScreens.shift()
-    if (!next) continue
-    const shape = document.objects[next.shapeId]
-    if (!shape || !isHtmlFrame(shape) || !shape.htmlArtifactId) continue
-    if (htmlArtifactIds && !htmlArtifactIds.has(shape.htmlArtifactId)) continue
-    return next
-  }
-  return null
 }
 
 /**
@@ -153,7 +112,7 @@ export function takeNextReadyScreenGeneration({
  */
 export function useApplyShapeOpsLive(
   enabled: boolean,
-  onScreenCreated?: (shapeId: string, userPrompt: string, brief?: string) => void,
+  onScreenCreated?: CanvasScreenCreatedHandler,
   executeOptions?: ExecuteOpsOptions,
   errorKey?: string,
   targetThreadId?: string | null,
@@ -184,6 +143,10 @@ export function useApplyShapeOpsLive(
     const appliedToolBlockIds = new Set<string>()
     const processingSvgToolBlockIds = new Set<string>()
     const pendingSvgToolBlocks = new Map<string, ToolBlock>()
+    const svgSourceTurnIds = new Map<string, string>()
+    const svgRetryCounts = new Map<string, number>()
+    const replayBarriers = new Map<string, CanvasReplayBarrierState>()
+    let disposed = false
     let generatedImageFallbackTarget: GeneratedImageFallbackTarget | null = null
     let generatedImagePlacementTargetId: string | null = null
 
@@ -207,20 +170,21 @@ export function useApplyShapeOpsLive(
       generatedImagePlacementTargetId = null
     }
 
-    const captureGeneratedImageFallbackTarget = (state: CanvasTurnReplayState): void => {
-      const userBlock = userBlockForActiveCanvasTurn(state)
-      generatedImageFallbackTarget = resolveGeneratedImageFallbackTarget({
-        document: useCanvasShapeStore.getState().document,
-        selectedIds: useCanvasSelectionStore.getState().selectedIds,
-        userText: userTextForCanvasFallback(userBlock)
+    const ensureReplayBarrier = (turnId: string): CanvasReplayBarrierState | null =>
+      ensureCanvasReplayBarrier(replayBarriers, turnId)
+
+    const commitReadyWatermarks = (): void => {
+      recordReadyCanvasReplayWatermarks({
+        disposed,
+        barriers: replayBarriers,
+        record: (turnId) => useCanvasShapeStore.getState().recordRendererReplayWatermark(turnId)
       })
-      const selectedIds = useCanvasSelectionStore.getState().selectedIds
-      if (selectedIds.size !== 1) return
-      const [selectedId] = [...selectedIds]
-      const selected = useCanvasShapeStore.getState().document.objects[selectedId]
-      if (selected && (selected.aiImageHolder || isImplicitImageSlot(selected))) {
-        generatedImagePlacementTargetId = selected.id
-      }
+    }
+
+    const captureGeneratedImageFallbackTarget = (state: CanvasTurnReplayState): void => {
+      const captured = captureCanvasGeneratedImageFallback(state)
+      generatedImageFallbackTarget = captured.fallback
+      generatedImagePlacementTargetId = captured.placementTargetId
     }
 
     // The in-progress (or just-completed) turn's full assistant text. Using the
@@ -230,13 +194,7 @@ export function useApplyShapeOpsLive(
     // never stream and the cursor would drift from the turn-complete flush.
     const assembledTurnText = (): string => {
       const s = useChatStore.getState()
-      let userId: string | null = null
-      for (let i = s.blocks.length - 1; i >= 0; i -= 1) {
-        if (s.blocks[i].kind === 'user') {
-          userId = s.blocks[i].id
-          break
-        }
-      }
+      const userId = activeCanvasUserId(s.blocks)
       return userId ? collectAssistantTextForTurn(s.blocks, userId, s.liveAssistant) : s.liveAssistant
     }
 
@@ -278,7 +236,11 @@ export function useApplyShapeOpsLive(
       applyFrom(assembledTurnText(), true)
     }
 
-    const applySvgToolBlock = async (block: ToolBlock, allowLegacy = false): Promise<void> => {
+    const applySvgToolBlock = async (
+      block: ToolBlock,
+      allowLegacy = false,
+      sourceTurnId = svgSourceTurnIds.get(block.id) ?? ''
+    ): Promise<void> => {
       const onRequest = onSvgArtifactRequestedRef.current
       if (!onRequest) return
       const chatState = useChatStore.getState()
@@ -299,17 +261,27 @@ export function useApplyShapeOpsLive(
           scheduleSvgDrain()
         },
         onRequest
-      })
+      }).catch(() => ({ status: 'failed' as const, shapeIds: [] }))
       if (result.shapeIds.length > 0) {
         useCanvasSelectionStore.getState().select(result.shapeIds)
         useDesignAssistantStore.getState().markAiAffected(result.shapeIds)
         framedThisTurn = true
       }
+      if ((result.status === 'applied' || result.status === 'ignored') && sourceTurnId) {
+        ensureReplayBarrier(sourceTurnId)?.pendingSvgBlockIds.delete(block.id)
+        svgSourceTurnIds.delete(block.id)
+        commitReadyWatermarks()
+      } else if (result.status === 'failed' && sourceTurnId) {
+        markFailedSvgForRetry({
+          blockId: block.id, block, retryCounts: svgRetryCounts,
+          pendingBlocks: pendingSvgToolBlocks, schedule: () => scheduleSvgDrain(400)
+        })
+      }
     }
 
     const applyToolBlock = (
       block: ToolBlock,
-      replay?: { blocks: readonly ChatBlock[]; replayKey: string }
+      replay?: { blocks: readonly ChatBlock[]; replayKey: string; turnId: string }
     ): void => {
       if (appliedToolBlockIds.has(block.id)) return
       const detail = block.detail?.trim()
@@ -396,8 +368,13 @@ export function useApplyShapeOpsLive(
         // queue that is discarded on thread switches. Stable-id results are
         // also replayed below after remount/restart when the artifact is absent
         // or still pending without a corresponding follow-up user turn.
+        const sourceTurnId = replay?.turnId || chatState.currentTurnId || block.turnId || ''
+        if (sourceTurnId) {
+          svgSourceTurnIds.set(block.id, sourceTurnId)
+          ensureReplayBarrier(sourceTurnId)?.pendingSvgBlockIds.add(block.id)
+        }
         if (chatState.currentTurnId) pendingSvgToolBlocks.set(block.id, block)
-        else void applySvgToolBlock(block, true)
+        else void applySvgToolBlock(block, true, sourceTurnId)
         return
       }
       const revisionError = designSystemToolRevisionError(block.meta?.toolName, parsed)
@@ -473,18 +450,20 @@ export function useApplyShapeOpsLive(
       }
       const blocks = [...pendingSvgToolBlocks.values()]
       pendingSvgToolBlocks.clear()
-      for (const block of blocks) void applySvgToolBlock(block, true)
+      for (const block of blocks) {
+        void applySvgToolBlock(block, true, svgSourceTurnIds.get(block.id) ?? '')
+      }
     }
 
     // Kick off the next queued screen's HTML generation — but only while the
     // thread is fully idle, so the per-screen turns run strictly one at a time.
     // Turn completion and busy/currentTurnId clearing can land in separate store
     // ticks, so this function re-schedules itself instead of consuming too early.
-    function drainPendingScreens(): void {
+    async function drainPendingScreens(): Promise<void> {
       if (pendingScreens.length === 0) return
       const chatState = useChatStore.getState()
       const pendingRuntimeWork = threadHasPendingRuntimeWork(chatState.blocks)
-      const next = takeNextReadyScreenGeneration({
+      const result = await dispatchNextPendingScreen({
         pendingScreens,
         document: useCanvasShapeStore.getState().document,
         currentTurnId: chatState.currentTurnId,
@@ -494,33 +473,64 @@ export function useApplyShapeOpsLive(
           useDesignWorkspaceStore.getState().artifacts
             .filter((artifact) => artifact.kind === 'html')
             .map((artifact) => artifact.id)
-        )
+        ),
+        onDrop: (dropped) => {
+          if (!dropped.sourceTurnId) return
+          ensureReplayBarrier(dropped.sourceTurnId)?.pendingScreenIds.delete(dropped.shapeId)
+          commitReadyWatermarks()
+        },
+        onDispatch: (pending) => {
+          useCanvasSelectionStore.getState().select([pending.shapeId])
+          return onScreenCreatedRef.current?.(
+            pending.shapeId, pending.userPrompt, pending.brief
+          ) ?? false
+        }
       })
-      if (!next) {
+      if (disposed) return
+      if (result.status === 'failed' && (result.pending?.attempts ?? 0) < 2) {
+        scheduleScreenDrain(400)
+        return
+      }
+      if (result.status === 'blocked') {
         if (pendingScreens.length > 0 && (chatState.currentTurnId || chatState.busy || pendingRuntimeWork)) {
           scheduleScreenDrain()
         }
         return
       }
-      useCanvasSelectionStore.getState().select([next.shapeId])
-      onScreenCreatedRef.current?.(next.shapeId, next.userPrompt, next.brief)
+      const dispatched = result.status === 'dispatched' ? result.pending : undefined
+      if (dispatched?.sourceTurnId) {
+        ensureReplayBarrier(dispatched.sourceTurnId)?.pendingScreenIds.delete(dispatched.shapeId)
+        commitReadyWatermarks()
+      }
     }
 
     // Final pass once the turn completes: apply any block that finished exactly at
     // the end, then do a single camera fit + kick off screen-HTML generation.
+    const enqueueTurnScreens = (options: {
+      turnId: string
+      blocks: readonly ChatBlock[]
+      affectedIds: readonly string[]
+    }): void => {
+      const barrier = ensureReplayBarrier(options.turnId)
+      if (!barrier || !onScreenCreatedRef.current) return
+      enqueueCanvasTurnScreens({
+        ...options,
+        document: useCanvasShapeStore.getState().document,
+        artifacts: useDesignWorkspaceStore.getState().artifacts,
+        chatBlocks: useChatStore.getState().blocks,
+        seenIds: screenGenSeen,
+        pendingScreens,
+        pendingScreenIds: barrier.pendingScreenIds
+      })
+    }
+
     const finalizeTurn = (completedTurnId?: string): void => {
       if (trailingTimer) {
         clearTimeout(trailingTimer)
         trailingTimer = null
       }
       const s = useChatStore.getState()
-      let userId: string | null = null
-      for (let i = s.blocks.length - 1; i >= 0; i -= 1) {
-        if (s.blocks[i].kind === 'user') {
-          userId = s.blocks[i].id
-          break
-        }
-      }
+      const userId = activeCanvasUserId(s.blocks)
       if (userId) {
         const text = collectAssistantTextForTurn(s.blocks, userId, s.liveAssistant)
         applyFrom(text, false)
@@ -541,26 +551,17 @@ export function useApplyShapeOpsLive(
             blocks: s.blocks
           })
         : []
-      const userBlock = userId ? s.blocks.find((block) => block.id === userId) : null
-      const primaryImageLane = userBlockUsesPrimaryImageLane(userBlock)
+      const userBlock = userId ? s.blocks.find((block) => block.id === userId) : undefined
+      const durableTurnBlocks = userBlock ? [userBlock, ...turnBlocks] : turnBlocks
       const replayThreadId = targetThreadId ?? s.activeThreadId
-      const placementTarget = designImagePlacementTargetFromUserBlock(userBlock) ??
-        (generatedImageFallbackTarget
-        ? {
-            id: generatedImageFallbackTarget.id,
-            expectedImageUrl: generatedImageFallbackTarget.imageUrl
-          }
-        : generatedImagePlacementTargetId
-          ? { id: generatedImagePlacementTargetId }
-          : undefined)
-      const placedImages = placeGeneratedImagesForTurn({
-        blocks: turnBlocks,
-        primaryImageLane,
+      const placedImages = placeLiveCanvasTurnImages({
+        blocks: durableTurnBlocks,
         affectedIds: [...affectedThisTurn],
-        ...(replayThreadId ? { threadId: replayThreadId } : {}),
-        ...(completedTurnId ? { turnId: completedTurnId } : {}),
-        ...(activeDesignTarget ? { target: activeDesignTarget } : {}),
-        ...(placementTarget ? { placementTarget } : {})
+        threadId: replayThreadId,
+        turnId: completedTurnId,
+        target: activeDesignTarget,
+        fallback: generatedImageFallbackTarget,
+        fallbackPlacementTargetId: generatedImagePlacementTargetId
       })
       for (const placed of placedImages) affectedThisTurn.add(placed)
       if (placedImages.length > 0) {
@@ -570,28 +571,15 @@ export function useApplyShapeOpsLive(
       if (all.length > 0) {
         useCanvasSelectionStore.getState().select(all)
         useDesignAssistantStore.getState().markAiAffected(all)
-        if (onScreenCreatedRef.current) {
-          const doc = useCanvasShapeStore.getState().document
-          const userBlock = userId ? s.blocks.find((b) => b.id === userId) : null
-          const userPrompt = userBlock?.kind === 'user' ? (userBlock.text ?? '') : ''
-          // Queue EVERY newly created screen frame (not just the first) so a turn
-          // that adds several screens generates HTML for all of them — the drain
-          // below runs them sequentially.
-          for (const id of all) {
-            const shape = doc.objects[id]
-            if (shape && isHtmlFrame(shape) && !screenGenSeen.has(id)) {
-              screenGenSeen.add(id)
-              const brief = takeScreenBrief(id)
-              pendingScreens.push({ shapeId: id, userPrompt, ...(brief ? { brief } : {}) })
-            }
-          }
-        }
       }
       // Hand this turn's op errors to the next canvas turn so the agent can fix
       // them. Always set (even []) so a clean turn clears stale errors.
       setLastCanvasOpErrors([...errorsThisTurn], errorKey)
       if (completedTurnId && activeDesignTarget && replayThreadId) {
-        useCanvasShapeStore.getState().recordRendererReplayWatermark(completedTurnId)
+        const barrier = ensureReplayBarrier(completedTurnId)
+        enqueueTurnScreens({ turnId: completedTurnId, blocks: durableTurnBlocks, affectedIds: all })
+        if (barrier) barrier.replayComplete = true
+        commitReadyWatermarks()
       }
       resetTurn()
       // Let chat/runtime state settle before starting the follow-up HTML turn.
@@ -603,7 +591,19 @@ export function useApplyShapeOpsLive(
       replayIdleDesignCanvas({
         state, threadId: targetThreadId, target: activeDesignTarget,
         ready: canvasDocumentReady(), executeOptions, errorKey,
-        affectedIds: affectedThisTurn, errors: errorsThisTurn, resetTurn, applyToolBlock
+        affectedIds: affectedThisTurn, errors: errorsThisTurn, resetTurn, applyToolBlock,
+        onTurnReplayed: (completion, affectedIds) => {
+          const barrier = ensureReplayBarrier(completion.turnId)
+          enqueueTurnScreens({
+            turnId: completion.turnId,
+            blocks: completion.blocks,
+            affectedIds
+          })
+          if (barrier) barrier.replayComplete = true
+          commitReadyWatermarks()
+          if (pendingScreens.length > 0) scheduleScreenDrain(0)
+          if (pendingSvgToolBlocks.size > 0) scheduleSvgDrain(0)
+        }
       })
 
     // If this hook becomes enabled after a turn has already started (common for
@@ -680,6 +680,7 @@ export function useApplyShapeOpsLive(
     })
 
     return () => {
+      disposed = true
       if (trailingTimer) clearTimeout(trailingTimer)
       if (screenDrainTimer) clearTimeout(screenDrainTimer)
       if (svgDrainTimer) clearTimeout(svgDrainTimer)

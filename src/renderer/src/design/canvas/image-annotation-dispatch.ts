@@ -30,6 +30,7 @@ export type ApplyImageAnnotationStatus =
   | 'unsupported-save'
   | 'save-failed'
   | 'shape-missing'
+  | 'document-changed'
   | 'sent-code'
   | 'sent-design'
 
@@ -58,6 +59,13 @@ export type ApplyImageAnnotationOptions = {
 
 export function isCodeCanvasDocumentKey(documentKey: string | null | undefined): boolean {
   return Boolean(documentKey?.includes(`\0${CODE_CANVAS_DIR}/`))
+}
+
+export function isDesignCanvasDocumentKey(documentKey: string | null | undefined): boolean {
+  return Boolean(
+    documentKey?.includes('\0.kun-design/') ||
+    documentKey?.includes('/.kun-design/')
+  )
 }
 
 function defaultSaveWorkspaceImageBytes(): SaveWorkspaceImageBytes | undefined {
@@ -105,6 +113,12 @@ export async function applyImageAnnotationResult(
     }
 
     const shapeStore = (options.getCanvasShapeState ?? useCanvasShapeStore.getState)()
+    if (
+      options.currentDocumentKey &&
+      shapeStore.documentKey !== options.currentDocumentKey
+    ) {
+      return 'document-changed'
+    }
     const shape = shapeStore.document.objects[shapeId]
     if (!shape) return 'shape-missing'
 
@@ -131,13 +145,25 @@ export async function applyImageAnnotationResult(
     })
     const setTimer =
       options.setTimeout ?? ((callback: () => void, delayMs: number) => window.setTimeout(callback, delayMs))
+    const sendIfDocumentUnchanged = (send: () => void): void => {
+      if (
+        options.currentDocumentKey &&
+        (options.getCanvasShapeState ?? useCanvasShapeStore.getState)().documentKey !==
+          options.currentDocumentKey
+      ) return
+      send()
+    }
     if (isCodeCanvasAnnotation) {
       setTimer(() => {
-        void options.sendCodeCanvasPrompt(prompt, { displayText })
+        sendIfDocumentUnchanged(() => {
+          void options.sendCodeCanvasPrompt(prompt, { displayText })
+        })
       }, 60)
       return 'sent-code'
     }
-    setTimer(() => options.sendDesignPrompt(prompt, { displayText }), 60)
+    setTimer(() => sendIfDocumentUnchanged(
+      () => options.sendDesignPrompt(prompt, { displayText })
+    ), 60)
     return 'sent-design'
   } finally {
     options.setAnnotationBusy(false)
