@@ -364,17 +364,17 @@ export class FileGraphWriteCoordinator {
         await this.persist(state)
         return { outcome: 'needs_human', record, reason: record.lastError }
       }
-      const dirtyFiles = await workingTreeChangedFiles(record.repositoryRoot)
       const graphOwned = new Set(state.worktrees
         .filter((entry) =>
           entry.worktreeId !== record.worktreeId &&
           (entry.state === 'accepted' || entry.state === 'cleaned'))
         .flatMap((entry) => entry.changedFiles))
-      const unknownDirty = dirtyFiles.filter((path) => !graphOwned.has(path))
-      if (unknownDirty.length) {
+      const overlappingDirty = (await workingTreeChangedFiles(record.repositoryRoot))
+        .filter((path) => !graphOwned.has(path) && scopesOverlap([path], record.changedFiles))
+      if (overlappingDirty.length) {
         record.state = 'conflict'
         record.lastError =
-          `repository contains uncommitted changes not owned by Graph: ${unknownDirty.slice(0, 20).join(', ')}`
+          `repository contains uncommitted changes overlapping Graph patch: ${overlappingDirty.slice(0, 20).join(', ')}`
         record.updatedAt = this.nowIso()
         await this.persist(state)
         return { outcome: 'needs_human', record, reason: record.lastError }
