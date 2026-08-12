@@ -81,6 +81,19 @@ export function applyPendingHtmlFrameAspectResize({
   return { ...bounds, height: Math.max(BOARD_HTML_FRAME_MIN_HEIGHT, aspectHeight) }
 }
 
+export function selectionResizeHandles(bounds: Rect): { pos: ResizeHandle; cx: number; cy: number }[] {
+  return [
+    { pos: 'nw', cx: bounds.x, cy: bounds.y },
+    { pos: 'n', cx: bounds.x + bounds.width / 2, cy: bounds.y },
+    { pos: 'ne', cx: bounds.x + bounds.width, cy: bounds.y },
+    { pos: 'e', cx: bounds.x + bounds.width, cy: bounds.y + bounds.height / 2 },
+    { pos: 'se', cx: bounds.x + bounds.width, cy: bounds.y + bounds.height },
+    { pos: 's', cx: bounds.x + bounds.width / 2, cy: bounds.y + bounds.height },
+    { pos: 'sw', cx: bounds.x, cy: bounds.y + bounds.height },
+    { pos: 'w', cx: bounds.x, cy: bounds.y + bounds.height / 2 }
+  ]
+}
+
 function SelectionOverlayInner({
   selectedIds,
   hoverTargetId,
@@ -166,24 +179,6 @@ function SelectionOverlayInner({
       }
 
       const htmlFrameSizeMode = handle === 'e' || handle === 'w' ? 'manual-width-auto-height' : 'manual'
-
-      // Entering resize is an explicit user sizing action. Horizontal-only
-      // resizing locks the viewport width while leaving height content-driven;
-      // vertical/corner resizing locks the whole frame.
-      const designStore = useDesignWorkspaceStore.getState()
-      for (const [id, start] of shapeStarts) {
-        const shape = store.document.objects[id]
-        if (!shape || !isHtmlFrame(shape) || !shape.htmlArtifactId) continue
-        designStore.updateArtifactNode(shape.htmlArtifactId, {
-          x: Math.round(start.x),
-          y: Math.round(start.y),
-          width: Math.round(start.width),
-          height: Math.round(start.height),
-          sizeMode: htmlFrameSizeMode,
-          viewMode:
-            designStore.artifacts.find((item) => item.id === shape.htmlArtifactId)?.node?.viewMode ?? 'preview'
-        })
-      }
 
       resizeStateRef.current = {
         handle,
@@ -393,14 +388,7 @@ function SelectionOverlayInner({
     [editableSelectedIds, objects]
   )
 
-  const resizeHandles: { pos: ResizeHandle; cx: number; cy: number }[] = bounds
-    ? [
-        { pos: 'nw', cx: bounds.x, cy: bounds.y },
-        { pos: 'ne', cx: bounds.x + bounds.width, cy: bounds.y },
-        { pos: 'se', cx: bounds.x + bounds.width, cy: bounds.y + bounds.height },
-        { pos: 'sw', cx: bounds.x, cy: bounds.y + bounds.height }
-      ]
-    : []
+  const resizeHandles = bounds ? selectionResizeHandles(bounds) : []
   const rotateHandle = bounds
     ? { cx: bounds.x + bounds.width / 2, cy: bounds.y - ro }
     : null

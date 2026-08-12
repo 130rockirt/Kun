@@ -184,7 +184,13 @@ export function executeBasicShapeOp(
         })
         return true
       }
-      store.reparentShape(op.id, op.newParentId, op.index)
+      if (!store.reparentShape(op.id, op.newParentId, op.index)) {
+        errors.push({
+          code: 'INVALID_OP',
+          message: `Cannot reparent "${op.id}" below "${op.newParentId}" because the target is not a valid container or would create a cycle.`
+        })
+        return true
+      }
       affectedIds.add(op.id)
       if (objectHasLayout(op.newParentId)) reflowFrame(op.newParentId, affectedIds)
       break

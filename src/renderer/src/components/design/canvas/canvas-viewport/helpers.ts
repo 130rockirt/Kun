@@ -146,7 +146,7 @@ function targetInside(root: HTMLElement | null, target: unknown): boolean {
 }
 
 export function shouldHandleCanvasKeyboardEvent(
-  surface: 'design' | 'code',
+  _surface: 'design' | 'code',
   eventTarget: EventTarget | null,
   root: HTMLElement | null,
   activeElement?: Element | null
@@ -155,9 +155,18 @@ export function shouldHandleCanvasKeyboardEvent(
   if (eventElement && typeof eventElement.closest === 'function' && eventElement.closest('[data-motion-timeline]')) {
     return false
   }
-  if (surface === 'design') return true
   const active = activeElement ?? (typeof document !== 'undefined' ? document.activeElement : null)
   return targetInside(root, eventTarget) || targetInside(root, active)
+}
+
+export function shouldHandleCanvasKeyboardRelease(
+  key: string,
+  surface: 'design' | 'code',
+  eventTarget: EventTarget | null,
+  root: HTMLElement | null,
+  activeElement?: Element | null
+): boolean {
+  return key === ' ' || shouldHandleCanvasKeyboardEvent(surface, eventTarget, root, activeElement)
 }
 
 export function canvasViewportStorageKey(workspaceRoot: string, artifactId: string, baseDir?: string): string {

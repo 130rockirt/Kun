@@ -419,6 +419,24 @@ describe('group / ungroup ops', () => {
     )
   })
 
+  it('reports an invalid ShapeOp instead of creating a parent cycle', () => {
+    const store = useCanvasShapeStore.getState()
+    const frame = createDefaultShape('frame', 0, 0)
+    const group = createDefaultShape('group', 20, 20)
+    store.addShape(frame)
+    store.addShape(group, frame.id)
+    useCanvasUndoStore.getState().clear()
+
+    const result = executeOps([{ op: 'reparent', id: frame.id, newParentId: group.id }])
+
+    expect(result.ok).toBe(false)
+    expect(result.errors[0]).toMatchObject({ code: 'INVALID_OP' })
+    expect(useCanvasShapeStore.getState().document.objects[frame.id].parentId).toBe(
+      useCanvasShapeStore.getState().document.rootId
+    )
+    expect(useCanvasUndoStore.getState().undoStack).toHaveLength(0)
+  })
+
   it('groups shapes, wrapping them in a group sized to their bounds', () => {
     const r1 = executeOps([
       { op: 'add', shape: { type: 'rect', x: 0, y: 0, width: 50, height: 50 } },

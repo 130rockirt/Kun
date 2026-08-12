@@ -31,6 +31,30 @@ export type DesignComposerContextState = {
   ) => void
 }
 
+export function focusActiveDesignComposer(browserDocument: Document = document): boolean {
+  const selectors = [
+    '[data-primary-floating-composer] [data-floating-composer] textarea:not(:disabled)',
+    '[data-floating-composer] textarea:not(:disabled)',
+    '[data-design-rail-composer] textarea:not(:disabled)'
+  ]
+  for (const selector of selectors) {
+    const textareas = browserDocument.querySelectorAll<HTMLTextAreaElement>(selector)
+    for (const textarea of textareas) {
+      if (textarea.closest('[hidden], [aria-hidden="true"]')) continue
+      const visibilityCheck = textarea as HTMLTextAreaElement & {
+        checkVisibility?: (options?: { checkOpacity?: boolean; checkVisibilityCSS?: boolean }) => boolean
+      }
+      if (
+        typeof visibilityCheck.checkVisibility === 'function' &&
+        !visibilityCheck.checkVisibility({ checkOpacity: false, checkVisibilityCSS: true })
+      ) continue
+      textarea.focus()
+      return true
+    }
+  }
+  return false
+}
+
 export function useDesignComposerContextState({
   route,
   canvasDocument,
@@ -114,7 +138,7 @@ export function useDesignComposerContextState({
       if (promptSeed) {
         setInput((current) => (current.trim() ? current : promptSeed))
         requestAnimationFrame(() => {
-          document.querySelector<HTMLTextAreaElement>('[data-design-rail-composer] textarea')?.focus()
+          focusActiveDesignComposer()
         })
       }
     },

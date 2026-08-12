@@ -7,6 +7,7 @@ import {
   designCanvasReplayKey,
   durableDesignCanvasTurns,
   ensureGeneratedImageOnCanvas,
+  replayDurableDesignCanvasTurns,
   toolBlockMatchesDesignTarget
 } from './canvas-design-turn-replay'
 import { createDefaultShape } from './canvas-types'
@@ -72,6 +73,26 @@ describe('Design canvas turn target matching', () => {
     expect(designCanvasReplayKey({
       threadId: 'thread_design', turnId: 'turn_design', target, source: 'tool:shape'
     })).toBe('thread_design\0turn_design\0doc_design\0board_design\0tool:shape')
+  })
+
+  it('leaves durable watermark commit to the async follow-up coordinator', () => {
+    useCanvasShapeStore.getState().resetDocument()
+    const blocks: ChatBlock[] = [
+      { ...userBlock('user_design', target), turnId: 'turn_design' },
+      { kind: 'assistant', id: 'assistant_design', turnId: 'turn_design', text: 'done' }
+    ]
+
+    replayDurableDesignCanvasTurns({
+      threadId: 'thread_design',
+      blocks,
+      target,
+      onTurnStart: () => undefined,
+      onAssistantText: () => undefined,
+      onToolBlock: () => undefined,
+      onTurnComplete: () => undefined
+    })
+
+    expect(useCanvasShapeStore.getState().document.rendererReplayWatermarkTurnId).toBeUndefined()
   })
 })
 

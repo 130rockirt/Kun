@@ -665,6 +665,7 @@ export function FloatingComposer({
   return (
     <div
       ref={composerRootRef}
+      data-floating-composer
       className={compact
         ? 'ds-floating-composer ds-no-drag pointer-events-auto w-full pb-0 pt-0'
         : 'ds-floating-composer ds-no-drag ds-chat-column-inset ds-chat-content-max-width pointer-events-auto w-full pb-3 pt-0'}

@@ -66,6 +66,7 @@ export { propertiesPanelShellClass, propertiesPanelTriggerClass } from './proper
 type Props = {
   surface?: 'design' | 'code'
   onImplementDesign?: (artifact: DesignArtifact) => void
+  onRequestModify?: (promptSeed: string) => void
 }
 
 export function shouldShowImageAnnotationAction(
@@ -124,7 +125,15 @@ export function commitInspectorUpdate(
   }
 }
 
-function PropertiesPanelInner({ surface = 'design', onImplementDesign }: Props): ReactElement | null {
+export function buildScreenModifyPrompt(title: string): string {
+  return `Modify the selected screen "${title}". Preserve its current direction and describe the exact changes to make.`
+}
+
+function PropertiesPanelInner({
+  surface = 'design',
+  onImplementDesign,
+  onRequestModify
+}: Props): ReactElement | null {
   const { t } = useTranslation('common')
   const selectedIds = useCanvasSelectionStore((s) => s.selectedIds)
   const document = useCanvasShapeStore((s) => s.document)
@@ -134,7 +143,6 @@ function PropertiesPanelInner({ surface = 'design', onImplementDesign }: Props):
   const pinned = useDesignWorkspaceStore((s) => s.canvasInspectorPinned)
   const setPinned = useDesignWorkspaceStore((s) => s.setCanvasInspectorPinned)
   const setDesignIntentMode = useDesignWorkspaceStore((s) => s.setDesignIntentMode)
-  const setCanvasAssistantOpen = useDesignWorkspaceStore((s) => s.setCanvasAssistantOpen)
   const [inspectorOpen, setInspectorOpen] = useState(false)
   const lastSelectionKeyRef = useRef('')
 
@@ -278,13 +286,10 @@ function PropertiesPanelInner({ surface = 'design', onImplementDesign }: Props):
       : null
 
   const requestScreenModify = (): void => {
+    if (!singleHtmlFrame) return
     setDesignIntentMode('modify')
-    setCanvasAssistantOpen(true)
-    requestAnimationFrame(() => {
-      globalThis.document
-        .querySelector<HTMLTextAreaElement>('[data-design-rail-composer] textarea')
-        ?.focus()
-    })
+    const title = linkedArtifact?.title || singleHtmlFrame.name
+    onRequestModify?.(t('canvasModifyScreenPrompt', buildScreenModifyPrompt(title), { title }))
   }
 
   // AI image holder: only fillable boxes (image/frame/rect) can be a slot the
@@ -417,7 +422,8 @@ function PropertiesPanelInner({ surface = 'design', onImplementDesign }: Props):
             <button
               type="button"
               onClick={requestScreenModify}
-              className="flex h-8 items-center justify-center gap-1.5 rounded-[8px] bg-ds-hover/35 text-[11.5px] font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
+              disabled={!onRequestModify}
+              className="flex h-8 items-center justify-center gap-1.5 rounded-[8px] bg-ds-hover/35 text-[11.5px] font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-not-allowed disabled:opacity-45"
             >
               <PenLine className="h-3.5 w-3.5" strokeWidth={1.8} />
               {t('designProjectModify')}

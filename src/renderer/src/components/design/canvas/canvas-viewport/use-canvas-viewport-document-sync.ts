@@ -172,7 +172,7 @@ export function useCanvasViewportDocumentSync({
           }
         }
         applyingDocumentLoad = true
-        useCanvasShapeStore.getState().loadDocument(doc, documentKey)
+        useCanvasShapeStore.getState().loadDocument(doc, documentKey, { preserveUndo: true })
         applyingDocumentLoad = false
         const storedView = readStoredCanvasViewport(viewportStorageKey)
         if (storedView) {

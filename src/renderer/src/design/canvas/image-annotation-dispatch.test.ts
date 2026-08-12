@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   applyImageAnnotationResult,
-  isCodeCanvasDocumentKey
+  isCodeCanvasDocumentKey,
+  isDesignCanvasDocumentKey
 } from './image-annotation-dispatch'
 import { createDefaultShape, createEmptyDocument } from './canvas-types'
 import type { DesignArtifact } from '../design-types'
@@ -25,6 +26,7 @@ function fakeCanvasState() {
   document.objects[image.id] = image
   return {
     document,
+    documentKey: 'design-doc',
     updateShape: vi.fn((id: string, patch: Partial<typeof image>) => {
       Object.assign(document.objects[id] ?? {}, patch)
     })
@@ -77,6 +79,11 @@ describe('image annotation dispatch', () => {
     expect(isCodeCanvasDocumentKey('workspace/.kun-design/doc/canvas.json')).toBe(false)
   })
 
+  it('detects embedded Design document keys', () => {
+    expect(isDesignCanvasDocumentKey(`workspace\0.kun-design/doc/board/canvas.json`)).toBe(true)
+    expect(isDesignCanvasDocumentKey(`workspace\0.kun-canvas/code-thread/canvas.json`)).toBe(false)
+  })
+
   it('saves the annotated image and routes a design repair turn', async () => {
     const canvasState = fakeCanvasState()
     const designState = fakeDesignState()
@@ -117,7 +124,10 @@ describe('image annotation dispatch', () => {
     const status = await applyImageAnnotationResult({
       ...options,
       currentDocumentKey: `workspace\0.kun-canvas/code-thread/canvas.json`,
-      getCanvasShapeState: () => canvasState,
+      getCanvasShapeState: () => ({
+        ...canvasState,
+        documentKey: `workspace\0.kun-canvas/code-thread/canvas.json`
+      }),
       getDesignState: () => designState
     })
 
@@ -131,5 +141,38 @@ describe('image annotation dispatch', () => {
     )
     expect(options.sendDesignPrompt).not.toHaveBeenCalled()
     expect(designState.setActiveArtifact).not.toHaveBeenCalled()
+  })
+
+  it('does not apply a saved annotation after the active canvas changes', async () => {
+    const canvasState = fakeCanvasState()
+    const options = baseOptions()
+    const status = await applyImageAnnotationResult({
+      ...options,
+      currentDocumentKey: 'original-design-doc',
+      getCanvasShapeState: () => canvasState
+    })
+
+    expect(status).toBe('document-changed')
+    expect(canvasState.updateShape).not.toHaveBeenCalled()
+    expect(options.sendDesignPrompt).not.toHaveBeenCalled()
+  })
+
+  it('does not send the delayed repair prompt after the active canvas changes', async () => {
+    const canvasState = fakeCanvasState()
+    const options = baseOptions()
+    let pendingSend!: () => void
+    const status = await applyImageAnnotationResult({
+      ...options,
+      getCanvasShapeState: () => canvasState,
+      setTimeout: vi.fn((callback: () => void) => {
+        pendingSend = callback
+        return 1
+      })
+    })
+
+    expect(status).toBe('sent-design')
+    canvasState.documentKey = 'next-design-doc'
+    pendingSend()
+    expect(options.sendDesignPrompt).not.toHaveBeenCalled()
   })
 })

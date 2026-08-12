@@ -1,4 +1,4 @@
-import { useEffect, type ReactElement } from 'react'
+import { useCallback, useEffect, type ReactElement } from 'react'
 import type { DesignArtifact } from '../../../design/design-types'
 import type { DesignHtmlElementContext } from '../../../design/design-composer-context'
 import type { DesignRuntimeQualityPayload } from '../../../design/design-html-quality'
@@ -13,6 +13,10 @@ import { canvasDocumentKey } from '../../../design/canvas/canvas-persistence'
 import { useSvgArtifactStatusMonitor } from '../../../design/svg/use-svg-artifact-status-monitor'
 import { CanvasViewport } from './CanvasViewport'
 import { PropertiesPanel } from './PropertiesPanel'
+import {
+  exportActiveCanvasToWorkspace,
+  type CanvasAgentExportRequest
+} from '../../../design/canvas/canvas-export'
 
 export type DesignDocumentCanvasSurfaceProps = {
   workspaceRoot: string
@@ -24,7 +28,11 @@ export type DesignDocumentCanvasSurfaceProps = {
   busy?: boolean
   onOpenAgentSettings?: () => void
   onImplementDesign?: (artifact: DesignArtifact) => void
-  onScreenCreated?: (shapeId: string, userPrompt: string, brief?: string) => void
+  onScreenCreated?: (
+    shapeId: string,
+    userPrompt: string,
+    brief?: string
+  ) => boolean | void | Promise<boolean | void>
   onSvgCreated?: (
     artifactId: string,
     shapeId: string,
@@ -97,6 +105,20 @@ export function DesignDocumentCanvasSurface({
     return () => setScreenCreationFactory(null)
   }, [boardArtifact, documentId, documentIsActive, readOnly])
 
+  const exportCanvas = useCallback(
+    (request: CanvasAgentExportRequest) => {
+      if (!boardArtifact) throw new Error('The Design whiteboard is not open')
+      return exportActiveCanvasToWorkspace({
+        request,
+        workspaceRoot,
+        surface: 'design',
+        artifactId: boardArtifact.id,
+        expectedDocumentKey: expectedCanvasDocumentKey
+      })
+    },
+    [boardArtifact, expectedCanvasDocumentKey, workspaceRoot]
+  )
+
   useApplyShapeOpsLive(
     Boolean(boardArtifact && activeThreadId && documentId && documentIsActive && !readOnly),
     onScreenCreated,
@@ -139,7 +161,7 @@ export function DesignDocumentCanvasSurface({
           }
         }
       : undefined,
-    undefined,
+    boardArtifact ? exportCanvas : undefined,
     boardArtifact && documentId
       ? { documentId, boardArtifactId: boardArtifact.id }
       : undefined,
@@ -172,7 +194,13 @@ export function DesignDocumentCanvasSurface({
         onRuntimeQualityFindings={onRuntimeQualityFindings}
         onRequestQualityRepair={onRequestQualityRepair}
       />
-      {!readOnly ? <PropertiesPanel surface="design" onImplementDesign={onImplementDesign} /> : null}
+      {!readOnly ? (
+        <PropertiesPanel
+          surface="design"
+          onImplementDesign={onImplementDesign}
+          onRequestModify={(promptSeed) => onUseElementAsContext?.(null, promptSeed)}
+        />
+      ) : null}
     </div>
   )
 }

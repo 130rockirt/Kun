@@ -1,7 +1,13 @@
 import { getCanvasDocumentContentBounds } from './canvas-placement'
 import { loadWorkspaceImageDataUrl } from './canvas-image-source'
 import { useCanvasShapeStore } from './canvas-shape-store'
-import type { CanvasDocument, CanvasShape, Rect } from './canvas-types'
+import {
+  isArtifactFrame,
+  isRunningAppFrame,
+  type CanvasDocument,
+  type CanvasShape,
+  type Rect
+} from './canvas-types'
 
 export type CanvasExportFormat = 'svg' | 'png'
 
@@ -46,6 +52,37 @@ export function canvasExportBounds(document: CanvasDocument, padding = EXPORT_PA
     width: bounds.width + safePadding * 2,
     height: bounds.height + safePadding * 2
   }
+}
+
+export function canvasExportPortalFrameNames(document: CanvasDocument): string[] {
+  const root = document.objects[document.rootId]
+  if (!root) return []
+  const names: string[] = []
+  const visited = new Set<string>()
+  const visit = (shapeId: string): void => {
+    if (visited.has(shapeId)) return
+    visited.add(shapeId)
+    const shape = document.objects[shapeId]
+    if (!shape?.visible) return
+    if (isArtifactFrame(shape) || isRunningAppFrame(shape)) {
+      names.push(shape.name.trim() || shape.id)
+    }
+    for (const childId of shape.children) visit(childId)
+  }
+  for (const childId of root.children) visit(childId)
+  return names
+}
+
+export function canvasPortalExportError(
+  document: CanvasDocument,
+  mode: 'agent' | 'png'
+): string | null {
+  const names = canvasExportPortalFrameNames(document)
+  if (names.length === 0) return null
+  const detail = names.join(', ')
+  return mode === 'agent'
+    ? `Whiteboard export cannot capture live HTML/SVG prototype previews (${detail}). Export the prototype source as HTML or PDF instead.`
+    : `Board PNG cannot include live HTML/SVG prototype previews (${detail}). Export the prototype as HTML or PDF, or export the editable board SVG instead.`
 }
 
 /** Keep normal diagrams crisp at 2x while bounding large-board canvas memory. */
@@ -295,10 +332,15 @@ export async function exportCanvasToWorkspace(options: {
   request: CanvasAgentExportRequest
   workspaceRoot: string
   backgroundColor?: string
+  rejectPortalPreviews?: boolean
 }): Promise<CanvasAgentExportResult> {
   const request = extractCanvasAgentExportRequest({ exportRequest: options.request })
   if (!request) throw new Error('Whiteboard export request is invalid')
   if (!options.workspaceRoot.trim()) throw new Error('Whiteboard export requires a workspace')
+  if (options.rejectPortalPreviews) {
+    const portalError = canvasPortalExportError(options.document, 'agent')
+    if (portalError) throw new Error(portalError)
+  }
   const blob = await canvasExportBlob({
     sourceSvg: options.sourceSvg,
     document: options.document,
@@ -343,9 +385,10 @@ function waitForCanvasPaint(browserDocument: Document): Promise<void> {
   return new Promise((resolve) => view.requestAnimationFrame(() => resolve()))
 }
 
-export async function exportActiveCodeCanvasToWorkspace(options: {
+export async function exportActiveCanvasToWorkspace(options: {
   request: CanvasAgentExportRequest
   workspaceRoot: string
+  surface: 'code' | 'design'
   artifactId?: string
   expectedDocumentKey?: string
   browserDocument?: Document
@@ -357,12 +400,12 @@ export async function exportActiveCodeCanvasToWorkspace(options: {
   await waitForCanvasPaint(browserDocument)
   await waitForCanvasPaint(browserDocument)
   const sourceSvg = Array.from(
-    browserDocument.querySelectorAll<SVGSVGElement>('svg[data-canvas-surface="code"]')
+    browserDocument.querySelectorAll<SVGSVGElement>(`svg[data-canvas-surface="${options.surface}"]`)
   ).find((candidate) => !options.artifactId || candidate.dataset.canvasArtifactId === options.artifactId)
-  if (!sourceSvg) throw new Error('The Code whiteboard is not open')
+  if (!sourceSvg) throw new Error(`The ${options.surface === 'code' ? 'Code' : 'Design'} whiteboard is not open`)
   const shapeState = useCanvasShapeStore.getState()
   if (options.expectedDocumentKey && shapeState.documentKey !== options.expectedDocumentKey) {
-    throw new Error('The Code whiteboard changed before export could finish')
+    throw new Error(`The ${options.surface === 'code' ? 'Code' : 'Design'} whiteboard changed before export could finish`)
   }
   const backgroundColor = sourceSvg.parentElement
     ? getComputedStyle(sourceSvg.parentElement).backgroundColor
@@ -372,8 +415,15 @@ export async function exportActiveCodeCanvasToWorkspace(options: {
     document: shapeState.document,
     request: options.request,
     workspaceRoot: options.workspaceRoot,
-    backgroundColor
+    backgroundColor,
+    rejectPortalPreviews: options.surface === 'design'
   })
+}
+
+export async function exportActiveCodeCanvasToWorkspace(
+  options: Omit<Parameters<typeof exportActiveCanvasToWorkspace>[0], 'surface'>
+): Promise<CanvasAgentExportResult> {
+  return exportActiveCanvasToWorkspace({ ...options, surface: 'code' })
 }
 
 export async function exportCanvasFromSvg(options: {

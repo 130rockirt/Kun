@@ -9,7 +9,8 @@ import {
 import {
   ensureGeneratedImageOnCanvas,
   replayDurableDesignCanvasTurns,
-  type CanvasDesignDocumentTarget
+  type CanvasDesignDocumentTarget,
+  type DurableDesignCanvasTurnCompletion
 } from './canvas-design-turn-replay'
 import { useCanvasSelectionStore } from './canvas-selection-store'
 import type { ExecuteOpsOptions, OpError } from './shape-ops'
@@ -73,7 +74,11 @@ export function replayIdleDesignCanvas(options: {
   resetTurn: () => void
   applyToolBlock: (
     block: ToolBlock,
-    replay: { blocks: readonly ChatBlock[]; replayKey: string }
+    replay: { blocks: readonly ChatBlock[]; replayKey: string; turnId: string }
+  ) => void
+  onTurnReplayed?: (
+    completion: DurableDesignCanvasTurnCompletion,
+    affectedIds: readonly string[]
   ) => void
 }): void {
   const { state, threadId, target } = options
@@ -90,8 +95,8 @@ export function replayIdleDesignCanvas(options: {
       result.affectedIds.forEach((id) => options.affectedIds.add(id))
       options.errors.push(...result.errors)
     },
-    onToolBlock: (block, blocks, replayKey) =>
-      options.applyToolBlock(block, { blocks, replayKey }),
+    onToolBlock: (block, blocks, replayKey, turnId) =>
+      options.applyToolBlock(block, { blocks, replayKey, turnId }),
     onTurnComplete: (completion) => {
       if (completion.primaryAiImage) {
         for (const image of completion.generatedImages) {
@@ -109,6 +114,7 @@ export function replayIdleDesignCanvas(options: {
       const affectedIds = [...options.affectedIds]
       if (affectedIds.length > 0) useCanvasSelectionStore.getState().select(affectedIds)
       setLastCanvasOpErrors([...options.errors], options.errorKey)
+      options.onTurnReplayed?.(completion, affectedIds)
     }
   })
 }

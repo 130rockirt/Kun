@@ -41,6 +41,27 @@ const KEY_TO_TOOL: Record<string, CanvasTool> = {
   h: 'hand'
 }
 
+export type CanvasShortcutContext = {
+  workspaceRoot?: string
+  documentKey?: string | null
+}
+
+export async function pastePreferredCanvasClipboard(
+  context: CanvasShortcutContext = {}
+): Promise<'image' | 'shapes' | 'none' | 'document-changed'> {
+  const documentKey = context.documentKey ?? useCanvasShapeStore.getState().documentKey
+  const workspaceRoot = context.workspaceRoot ?? pasteWorkspaceRoot ?? undefined
+  const result = await pasteClipboardImageToCanvas({
+    vbox: useCanvasViewportStore.getState().vbox,
+    expectedDocumentKey: documentKey,
+    ...(workspaceRoot ? { workspaceRoot } : {})
+  })
+  if (result.ok) return 'image'
+  if (result.reason === 'document-changed') return 'document-changed'
+  if (useCanvasShapeStore.getState().documentKey !== documentKey) return 'document-changed'
+  return pasteCanvasShapeClipboard({ workspaceRoot, documentKey }).length > 0 ? 'shapes' : 'none'
+}
+
 function editableSelection(): string[] {
   const doc = useCanvasShapeStore.getState().document
   return filterEditableShapeIds(doc, useCanvasSelectionStore.getState().selectedIds)
@@ -143,7 +164,7 @@ function duplicateSelection(): boolean {
   return true
 }
 
-export function handleCanvasKeyDown(e: KeyboardEvent): boolean {
+export function handleCanvasKeyDown(e: KeyboardEvent, context: CanvasShortcutContext = {}): boolean {
   const meta = e.metaKey || e.ctrlKey
   const shift = e.shiftKey
   const tag = (e.target as HTMLElement)?.tagName?.toLowerCase()
@@ -171,27 +192,25 @@ export function handleCanvasKeyDown(e: KeyboardEvent): boolean {
 
   if (meta && key === 'c') {
     e.preventDefault()
-    copyCanvasSelectionToClipboard()
+    copyCanvasSelectionToClipboard(context)
     return true
   }
 
   if (meta && key === 'x') {
     e.preventDefault()
-    cutCanvasSelectionToClipboard()
+    cutCanvasSelectionToClipboard(context)
     return true
   }
 
   if (meta && key === 'v') {
     e.preventDefault()
-    if (hasCanvasShapeClipboard()) {
-      pasteCanvasShapeClipboard()
+    const clipboardImageAvailable = typeof window !== 'undefined' &&
+      typeof window.kunGui?.readClipboardImage === 'function'
+    if (!clipboardImageAvailable && hasCanvasShapeClipboard()) {
+      pasteCanvasShapeClipboard(context)
       return true
     }
-    const vbox = useCanvasViewportStore.getState().vbox
-    void pasteClipboardImageToCanvas({
-      vbox,
-      ...(pasteWorkspaceRoot ? { workspaceRoot: pasteWorkspaceRoot } : {})
-    })
+    void pastePreferredCanvasClipboard(context)
     return true
   }
 

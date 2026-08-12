@@ -45,13 +45,30 @@ describe('DesignImageAnnotationOverlay', () => {
     })?.workspaceRoot).toBe('/code')
   })
 
-  it('hides outside design/code-canvas contexts and while an SDD draft is active', () => {
+  it('shows the embedded Design editor on the production chat route', () => {
+    expect(resolveImageAnnotationOverlayModel({
+      route: 'chat',
+      activeSddDraft: false,
+      canvasDocumentKey: `workspace\0.kun-design/doc/board/canvas.json`,
+      canvasDocument: imageDocument(),
+      annotatingShapeId: 'image_1',
+      activeCodeCanvasWorkspace: '/code',
+      designWorkspaceRoot: '/design',
+      fallbackWorkspaceRoot: '/fallback'
+    })).toEqual({
+      imageUrl: '.deepseekgui-images/image.png',
+      workspaceRoot: '/design',
+      title: 'Annotated image'
+    })
+  })
+
+  it('hides unrelated chat contexts and while an SDD draft is active', () => {
     const document = imageDocument()
 
     expect(resolveImageAnnotationOverlayModel({
       route: 'chat',
       activeSddDraft: false,
-      canvasDocumentKey: 'workspace/.kun-design/doc/canvas.json',
+      canvasDocumentKey: 'workspace/notes/document.md',
       canvasDocument: document,
       annotatingShapeId: 'image_1',
       activeCodeCanvasWorkspace: '/code'
