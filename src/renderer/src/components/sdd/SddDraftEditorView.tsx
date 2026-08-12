@@ -126,9 +126,7 @@ export function SddDraftEditorView({
   const editorPaneRef = useRef<HTMLDivElement | null>(null)
   const richHandleRef = useRef<WriteRichEditorHandle | null>(null)
   const markdownHandleRef = useRef<WriteMarkdownEditorHandle | null>(null)
-  const inlineAgentTextareaRef = useRef<HTMLTextAreaElement | null>(null)
   const noticeTimerRef = useRef<number | null>(null)
-  const [inlineAgentValue, setInlineAgentValue] = useState('')
   const [inlineEditInFlight, setInlineEditInFlight] = useState(false)
   const [pointerSelecting, setPointerSelecting] = useState(false)
   const [notice, setNotice] = useState<WriteNotice | null>(null)
@@ -166,12 +164,6 @@ export function SddDraftEditorView({
       window.removeEventListener('pointercancel', handleUp)
     }
   }, [])
-
-  // Reset the AI-edit draft whenever the selection changes; the menu input is
-  // always present and must not carry stale text over.
-  useEffect(() => {
-    setInlineAgentValue('')
-  }, [selection.charCount, selection.text])
 
   useEffect(() => {
     if (!notice) return
@@ -291,8 +283,14 @@ export function SddDraftEditorView({
       ? `${formatWriteQuotedSelectionForPrompt(quoted)}\n\n${trimmed}`
       : trimmed
     setSelection({ text: '', ranges: [], charCount: 0 })
-    setInlineAgentValue('')
     onAssistantQuote(fullPrompt)
+  }
+
+  const quoteSelectionToAssistant = (): void => {
+    const quoted = quotedSelectionFromEditor(selection, editorFilePath, draftWorkspaceRoot)
+    if (!quoted) return
+    setSelection({ text: '', ranges: [], charCount: 0 })
+    onAssistantQuote(formatWriteQuotedSelectionForPrompt(quoted))
   }
 
   const runQuickAction = (quickAction: ResolvedWriteQuickAction): void => {
@@ -388,7 +386,6 @@ export function SddDraftEditorView({
           return
         }
         setSelection({ text: '', ranges: [], charCount: 0 })
-        setInlineAgentValue('')
         setOperationStatus('idle')
         setNotice({ tone: 'success', message: t('writeInlineEditApplied') })
         return
@@ -426,7 +423,6 @@ export function SddDraftEditorView({
       setContent(nextContent)
       if (inlineEditRecord) recordRecentEdits([inlineEditRecord])
       setSelection({ text: '', ranges: [], charCount: 0 })
-      setInlineAgentValue('')
       setOperationStatus('idle')
       setNotice({ tone: 'success', message: t('writeInlineEditApplied') })
     } catch (err) {
@@ -492,12 +488,7 @@ export function SddDraftEditorView({
       setSelection={setSelection}
       setOperationStatus={setOperationStatus}
       selectionAction={selectionAction}
-      inlineAgentValue={inlineAgentValue}
-      inlineEditInFlight={inlineEditInFlight}
-      inlineAgentTextareaRef={inlineAgentTextareaRef}
-      setInlineAgentValue={setInlineAgentValue}
-      submitToAssistant={submitToAssistant}
-      submitInlineEdit={submitInlineEdit}
+      quoteSelectionToAssistant={quoteSelectionToAssistant}
       applyInlineFormat={applyInlineFormat}
       selection={selection}
       applyBlockType={applyBlockType}

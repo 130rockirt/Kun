@@ -8,8 +8,6 @@ type Params = {
   completeOnboarding: () => void
   activeFilePath: string | null
   previewMode: string
-  selectionCharCount: number
-  selectionText: string
   editorPaneRef: RefObject<HTMLDivElement | null>
   exportMenuRef: RefObject<HTMLDivElement | null>
   modeMenuRef: RefObject<HTMLDivElement | null>
@@ -19,7 +17,6 @@ type Params = {
   exportNotice: WriteNotice | null
   setExportMenuOpen: (open: boolean) => void
   setModeMenuOpen: (open: boolean) => void
-  setInlineAgentValue: (value: string) => void
   setPointerSelecting: (selecting: boolean) => void
   setExportNotice: (notice: WriteNotice | null) => void
 }
@@ -31,8 +28,6 @@ export function useWriteWorkspaceViewEffects({
   completeOnboarding,
   activeFilePath,
   previewMode,
-  selectionCharCount,
-  selectionText,
   editorPaneRef,
   exportMenuRef,
   modeMenuRef,
@@ -42,7 +37,6 @@ export function useWriteWorkspaceViewEffects({
   exportNotice,
   setExportMenuOpen,
   setModeMenuOpen,
-  setInlineAgentValue,
   setPointerSelecting,
   setExportNotice
 }: Params): void {
@@ -56,10 +50,6 @@ export function useWriteWorkspaceViewEffects({
 
   useEffect(() => setExportMenuOpen(false), [activeFilePath, setExportMenuOpen])
   useEffect(() => setModeMenuOpen(false), [activeFilePath, previewMode, setModeMenuOpen])
-
-  useEffect(() => {
-    setInlineAgentValue('')
-  }, [selectionCharCount, selectionText, setInlineAgentValue])
 
   useEffect(() => {
     const handleDown = (event: PointerEvent): void => {

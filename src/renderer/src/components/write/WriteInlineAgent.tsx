@@ -2,12 +2,10 @@ import {
   useLayoutEffect,
   useRef,
   useState,
-  type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
   type MouseEvent as ReactMouseEvent,
   type ReactElement,
-  type ReactNode,
-  type RefObject
+  type ReactNode
 } from 'react'
 import {
   AppWindow,
@@ -24,7 +22,6 @@ import {
   Lightbulb,
   List,
   ListOrdered,
-  Loader2,
   MessageSquareQuote,
   Pilcrow,
   Quote,
@@ -50,13 +47,6 @@ import {
 
 type Props = {
   action: WriteInlineAgentPosition
-  value: string
-  inFlight: boolean
-  textareaRef: RefObject<HTMLTextAreaElement | null>
-  onValueChange: (value: string) => void
-  onSubmitPrompt: (value: string) => void
-  onApplyEdit: (value: string) => void
-  askOnly?: boolean
   preferAbove?: boolean
   /** Inline markdown formatting + block types; hidden for read-only or non-markdown files. */
   formattingEnabled?: boolean
@@ -87,11 +77,6 @@ type Props = {
   /** A raster image is selected instead of text: only image-aware actions
    * apply, everything text-oriented is hidden. */
   imageMode?: boolean
-  /** Called when the AI-edit textarea gains focus so the parent can freeze the
-   * selection state and keep the toolbar visible while the user types. */
-  onTextareaFocus?: () => void
-  /** Called when the AI-edit textarea loses focus so the parent can unfreeze. */
-  onTextareaBlur?: () => void
   /** Raises the selection surface above Write's distraction-free shell. */
   focusMode?: boolean
 }
@@ -172,13 +157,6 @@ function quickActionIcon(id: string): LucideIcon {
 
 export function WriteInlineAgent({
   action,
-  value,
-  inFlight,
-  textareaRef,
-  onValueChange,
-  onSubmitPrompt,
-  onApplyEdit,
-  askOnly = false,
   preferAbove = false,
   formattingEnabled = false,
   onApplyFormat,
@@ -198,8 +176,6 @@ export function WriteInlineAgent({
   prototypeEnabled = false,
   onGeneratePrototype,
   imageMode = false,
-  onTextareaFocus,
-  onTextareaBlur,
   focusMode = false
 }: Props): ReactElement {
   const { t } = useTranslation('common')
@@ -220,7 +196,6 @@ export function WriteInlineAgent({
   const showInfographic = !imageMode && infographicEnabled && Boolean(onGenerateInfographic)
   const showDesignDraft = designDraftEnabled && Boolean(onGenerateDesignDraft)
   const showPrototype = prototypeEnabled && Boolean(onGeneratePrototype)
-  const showComposer = !imageMode
   const activeBlock = BLOCK_TYPE_META[blockType] ?? BLOCK_TYPE_META.paragraph
   const ActiveBlockIcon = activeBlock.icon
 
@@ -258,45 +233,18 @@ export function WriteInlineAgent({
     action.coordinateScale,
     action.left,
     action.width,
-    value,
-    inFlight,
     showFormatting,
     showBlockSelector,
     showQuoteSelection,
     showInfographic,
     showDesignDraft,
     showPrototype,
-    showComposer,
     blockMenuOpen,
     quickActions.length,
     preferAbove,
     viewport.height,
     viewport.width
   ])
-
-  const handleKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>): void => {
-    if (event.key === 'Escape') {
-      event.preventDefault()
-      if (inFlight) return
-      onValueChange('')
-      return
-    }
-    if (
-      event.key !== 'Enter' ||
-      event.shiftKey ||
-      event.nativeEvent.isComposing ||
-      (!event.metaKey && !event.ctrlKey)
-    ) return
-    event.preventDefault()
-    // A multiline composer must keep plain Enter available for writing.
-    // Command/Ctrl + Enter runs the primary action: rewrite editable text in
-    // place, or ask the sidebar assistant for read-only selections.
-    if (askOnly) {
-      onSubmitPrompt(value)
-      return
-    }
-    onApplyEdit(value)
-  }
 
   return (
     <div
@@ -526,76 +474,6 @@ export function WriteInlineAgent({
           </div>
         ) : null}
 
-        {showComposer ? (
-        <form
-          className="write-inline-agent-edit"
-          onSubmit={(event) => {
-            event.preventDefault()
-            if (askOnly) {
-              onSubmitPrompt(value)
-            } else {
-              onApplyEdit(value)
-            }
-          }}
-        >
-          <div className="write-inline-agent-edit-header">
-            <span className="write-inline-agent-edit-icon">
-              <Sparkles className="h-4 w-4" strokeWidth={1.9} />
-            </span>
-            <span className="write-inline-agent-edit-title">{t('writeInlineAgentAskAi')}</span>
-          </div>
-          <textarea
-            ref={textareaRef}
-            rows={4}
-            value={value}
-            placeholder={t('writeInlineAgentPlaceholder')}
-            aria-label={t('writeInlineAgentPlaceholder')}
-            spellCheck={false}
-            className="write-inline-agent-input"
-            disabled={inFlight}
-            onChange={(event) => onValueChange(event.target.value)}
-            onKeyDown={handleKeyDown}
-            onFocus={onTextareaFocus}
-            onBlur={onTextareaBlur}
-          />
-          <div className="write-inline-agent-edit-footer">
-            <span className="write-inline-agent-selection-chip">
-              <MessageSquareQuote className="h-3.5 w-3.5 shrink-0" strokeWidth={1.85} />
-              <span className="truncate">{t('writeSelectionNoLineInfo')}</span>
-            </span>
-            <div className="write-inline-agent-footer-actions">
-              <span className="write-inline-agent-shortcut" aria-hidden="true">⌘/Ctrl ↵</span>
-              {!askOnly ? (
-                <button
-                  type="button"
-                  className="write-inline-agent-secondary"
-                  aria-label={t('writeInlineAgentSend')}
-                  title={t('writeInlineAgentSend')}
-                  disabled={!value.trim() || inFlight}
-                  onClick={() => onSubmitPrompt(value)}
-                >
-                  <MessageSquareQuote className="h-4 w-4" strokeWidth={1.9} />
-                </button>
-              ) : null}
-              <button
-                type="submit"
-                className="write-inline-agent-submit"
-                aria-label={inFlight ? t('writeInlineEditApplying') : t(askOnly ? 'writeInlineAgentSend' : 'writeInlineEditApply')}
-                title={inFlight ? t('writeInlineEditApplying') : t(askOnly ? 'writeInlineAgentSend' : 'writeInlineEditApply')}
-                disabled={!value.trim() || inFlight}
-              >
-                {inFlight ? (
-                  <Loader2 className="h-4 w-4 animate-spin" strokeWidth={2} />
-                ) : askOnly ? (
-                  <MessageSquareQuote className="h-4 w-4" strokeWidth={2} />
-                ) : (
-                  <Sparkles className="h-4 w-4" strokeWidth={2} />
-                )}
-              </button>
-            </div>
-          </div>
-        </form>
-        ) : null}
       </div>
     </div>
   )

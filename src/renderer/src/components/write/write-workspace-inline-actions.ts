@@ -48,7 +48,6 @@ type Params = {
   richHandleRef: RefObject<WriteRichEditorHandle | null>
   markdownHandleRef: RefObject<WriteMarkdownEditorHandle | null>
   setAssistantOpen: WriteWorkspaceState['setAssistantOpen']
-  setInlineAgentValue: (value: string) => void
   setInlineEditInFlight: (value: boolean) => void
   setFileContent: WriteWorkspaceState['setFileContent']
   setFileError: WriteWorkspaceState['setFileError']
@@ -76,7 +75,6 @@ export function createWriteWorkspaceInlineActions({
   richHandleRef,
   markdownHandleRef,
   setAssistantOpen,
-  setInlineAgentValue,
   setInlineEditInFlight,
   setFileContent,
   setFileError,
@@ -92,7 +90,6 @@ export function createWriteWorkspaceInlineActions({
     // context in sendWritePrompt) so it never shows as raw text in the bubble.
     quoteCurrentSelection(workspaceRoot)
     setAssistantOpen(true)
-    setInlineAgentValue('')
     if (onSubmitPrompt) {
       onSubmitPrompt(trimmed)
       return
@@ -103,7 +100,6 @@ export function createWriteWorkspaceInlineActions({
   const quoteSelectionToAssistant = (): void => {
     if (!workspaceReady || !activeFilePath) return
     quoteCurrentSelection(workspaceRoot)
-    setInlineAgentValue('')
   }
 
   // Edit-mode quick actions rewrite the selection in place through the
@@ -209,7 +205,6 @@ export function createWriteWorkspaceInlineActions({
           return
         }
         setSelection({ text: '', ranges: [], charCount: 0 })
-        setInlineAgentValue('')
         setFileError(null)
         showExportNotice({ tone: 'success', message: t('writeInlineEditApplied') })
         return
@@ -264,7 +259,6 @@ export function createWriteWorkspaceInlineActions({
         if (inlineEditRecord) recordRecentEdits([inlineEditRecord])
       }
       setSelection({ text: '', ranges: [], charCount: 0 })
-      setInlineAgentValue('')
       setFileError(null)
       showExportNotice({
         tone: 'success',
@@ -459,7 +453,6 @@ export function createWriteWorkspaceInlineActions({
     generateInfographic,
     quoteSelectionToAssistant,
     runQuickAction,
-    submitInlineAgent,
     submitInlineEdit
   }
 }

@@ -24,7 +24,7 @@ import { WriteWorkspaceEmptyState } from './WriteWorkspaceEmptyState'
 import { WriteWorkspaceToolbar } from './WriteWorkspaceToolbar'
 import { WriteInlineAgent } from './WriteInlineAgent'
 import { resolveWriteAgentPreset } from '../../write/agent-presets'
-import type { WriteEditorSelectionState, WriteMarkdownEditorHandle } from './WriteMarkdownEditor'
+import type { WriteMarkdownEditorHandle } from './WriteMarkdownEditor'
 import {
   WRITE_RICH_CLIPBOARD_ACTION,
   formatSaveLabel,
@@ -183,13 +183,9 @@ export function WriteWorkspaceView({
   const modeMenuRef = useRef<HTMLDivElement | null>(null)
   const editorPaneRef = useRef<HTMLDivElement | null>(null)
   const exportNoticeTimerRef = useRef<number | null>(null)
-  const inlineAgentTextareaRef = useRef<HTMLTextAreaElement | null>(null)
   const richHandleRef = useRef<WriteRichEditorHandle | null>(null)
   const markdownHandleRef = useRef<WriteMarkdownEditorHandle | null>(null)
-  const [inlineAgentValue, setInlineAgentValue] = useState('')
   const [pointerSelecting, setPointerSelecting] = useState(false)
-  const [inlineAgentFocused, setInlineAgentFocused] = useState(false)
-  const selectionBeforeFocusRef = useRef<WriteEditorSelectionState | null>(null)
   const resolvedAgentPresets = agentPresets.map((preset) => resolveWriteAgentPreset(preset))
   const [inlineEditInFlight, setInlineEditInFlight] = useState(false)
   const [modeMenuOpen, setModeMenuOpen] = useState(false)
@@ -238,16 +234,10 @@ export function WriteWorkspaceView({
     : activeFileIsPdf ? t('writePdfPreview')
     : activeFileIsOffice ? t('writeOfficePreview')
     : renderSafety.readOnly ? t('writeReadOnly') : formatSaveLabel(saveStatus, t)
-  // When the inline agent textarea is focused the editor loses focus and may
-  // report an empty selection (TipTap fires onSelectionUpdate on blur). Use
-  // the selection captured at focus-time so the toolbar stays visible while
-  // the user types their prompt.
-  const effectiveSelection =
-    inlineAgentFocused && selectionBeforeFocusRef.current ? selectionBeforeFocusRef.current : selection
   // Only surface the toolbar once the selection gesture settles: while the
   // pointer is down (dragging to select) it stays hidden to avoid flicker.
-  const selectionAction = effectiveSelection.charCount > 0 && !pointerSelecting
-    ? inlineAgentPosition(effectiveSelection, { compact: activeFileIsPdf || activeFileIsOffice })
+  const selectionAction = selection.charCount > 0 && !pointerSelecting
+    ? inlineAgentPosition(selection, { compact: activeFileIsPdf || activeFileIsOffice })
     : null
   const activeFileLabel = activeFilePath
     ? writeRelativeToWorkspace(workspaceRoot, activeFilePath)
@@ -352,25 +342,12 @@ export function WriteWorkspaceView({
     setAssistantOpen(true)
     setInput(input.trim() ? `${input.trim()}\n\n${prompt}` : prompt)
   }
-
-
-  const handleInlineAgentFocus = useCallback((): void => {
-    selectionBeforeFocusRef.current = selection
-    setInlineAgentFocused(true)
-  }, [selection])
-
-  const handleInlineAgentBlur = useCallback((): void => {
-    setInlineAgentFocused(false)
-    selectionBeforeFocusRef.current = null
-  }, [])
-
   const {
     applyBlockType,
     applyInlineFormat,
     generateInfographic,
     quoteSelectionToAssistant,
     runQuickAction,
-    submitInlineAgent,
     submitInlineEdit
   } = createWriteWorkspaceInlineActions({
     t,
@@ -390,7 +367,6 @@ export function WriteWorkspaceView({
     richHandleRef,
     markdownHandleRef,
     setAssistantOpen,
-    setInlineAgentValue,
     setInlineEditInFlight,
     setFileContent,
     setFileError,
@@ -443,8 +419,6 @@ export function WriteWorkspaceView({
     completeOnboarding,
     activeFilePath,
     previewMode,
-    selectionCharCount: selection.charCount,
-    selectionText: selection.text,
     editorPaneRef,
     exportMenuRef,
     modeMenuRef,
@@ -454,7 +428,6 @@ export function WriteWorkspaceView({
     exportNotice,
     setExportMenuOpen,
     setModeMenuOpen,
-    setInlineAgentValue,
     setPointerSelecting,
     setExportNotice
   })
@@ -576,17 +549,10 @@ export function WriteWorkspaceView({
       {selectionAction && activeFilePath && (activeFileIsText || activeFileIsPdf || activeFileIsOffice) ? (
         <WriteInlineAgent
           action={selectionAction}
-          value={inlineAgentValue}
-          inFlight={inlineEditInFlight}
-          textareaRef={inlineAgentTextareaRef}
-          onValueChange={setInlineAgentValue}
-          onSubmitPrompt={submitInlineAgent}
-          onApplyEdit={(value) => activeFileIsPdf || activeFileIsOffice ? submitInlineAgent(value) : void submitInlineEdit(value)}
-          askOnly={activeFileIsPdf || activeFileIsOffice}
           preferAbove={activeFileIsPdf || activeFileIsOffice}
           formattingEnabled={activeFileIsText && isMarkdown && !renderSafety.readOnly}
           onApplyFormat={applyInlineFormat}
-          blockType={effectiveSelection.blockType}
+          blockType={selection.blockType}
           onSetBlockType={applyBlockType}
           quickActions={inlineQuickActions}
           onQuickAction={runQuickAction}
@@ -597,8 +563,6 @@ export function WriteWorkspaceView({
           onOpenAgentSettings={onOpenAgentSettings}
           infographicEnabled={activeFileIsText && imageGenReady && isMarkdown && !renderSafety.readOnly}
           onGenerateInfographic={generateInfographic}
-          onTextareaFocus={handleInlineAgentFocus}
-          onTextareaBlur={handleInlineAgentBlur}
           focusMode={documentFocusMode}
         />
       ) : null}

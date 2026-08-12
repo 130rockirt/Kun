@@ -1,9 +1,7 @@
 import type {
-  Dispatch,
   MutableRefObject,
   ReactElement,
-  RefObject,
-  SetStateAction
+  RefObject
 } from 'react'
 import { ArrowRight, FileText, Loader2, Palette, Save, X } from 'lucide-react'
 import type { WriteInfographicKind } from '@shared/write-infographic'
@@ -79,12 +77,7 @@ type SddDraftEditorContentProps = {
   setSelection: (selection: WriteEditorSelectionState) => void
   setOperationStatus: (status: 'idle' | 'upgrading' | 'error', error?: string) => void
   selectionAction: WriteInlineAgentPosition | null
-  inlineAgentValue: string
-  inlineEditInFlight: boolean
-  inlineAgentTextareaRef: RefObject<HTMLTextAreaElement | null>
-  setInlineAgentValue: Dispatch<SetStateAction<string>>
-  submitToAssistant: (prompt: string) => void
-  submitInlineEdit: (prompt: string) => Promise<void>
+  quoteSelectionToAssistant: () => void
   applyInlineFormat: (kind: WriteInlineFormatKind) => void
   selection: WriteEditorSelectionState
   applyBlockType: (type: WriteBlockType) => void
@@ -130,12 +123,7 @@ export function SddDraftEditorContent({
   setSelection,
   setOperationStatus,
   selectionAction,
-  inlineAgentValue,
-  inlineEditInFlight,
-  inlineAgentTextareaRef,
-  setInlineAgentValue,
-  submitToAssistant,
-  submitInlineEdit,
+  quoteSelectionToAssistant,
   applyInlineFormat,
   selection,
   applyBlockType,
@@ -331,18 +319,13 @@ export function SddDraftEditorContent({
       {selectionAction ? (
         <WriteInlineAgent
           action={selectionAction}
-          value={inlineAgentValue}
-          inFlight={inlineEditInFlight}
-          textareaRef={inlineAgentTextareaRef}
-          onValueChange={setInlineAgentValue}
-          onSubmitPrompt={submitToAssistant}
-          onApplyEdit={(value) => void submitInlineEdit(value)}
           formattingEnabled={!readOnly}
           onApplyFormat={applyInlineFormat}
           blockType={selection.blockType}
           onSetBlockType={applyBlockType}
           quickActions={inlineQuickActions}
           onQuickAction={runQuickAction}
+          onQuoteSelection={quoteSelectionToAssistant}
           infographicEnabled={imageGenReady && !readOnly}
           onGenerateInfographic={() => generateImage('infographic')}
           designDraftEnabled={imageGenReady && !readOnly}
