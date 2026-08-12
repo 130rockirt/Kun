@@ -2,7 +2,7 @@ import type { ModelRoutePoolV1 } from '@shared/app-settings'
 import type { KunRuntimeSettingsSyncStatusPayload } from '@shared/kun-gui-api'
 import type { TFunction } from 'i18next'
 import { Check, Clipboard, Code2, X } from 'lucide-react'
-import { useEffect, useState, type DragEvent, type ReactElement } from 'react'
+import { useCallback, useEffect, useState, type DragEvent, type KeyboardEvent, type ReactElement } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Toggle } from './settings-controls'
 import type {
@@ -198,6 +198,68 @@ export function Field({ label, children }: { label: string; children: ReactEleme
 export function ToggleRow({ label, checked, onChange }: { label: string; checked: boolean; onChange: (value: boolean) => void }): ReactElement { return <div className="flex items-center justify-between"><span>{label}</span><Toggle checked={checked} onChange={onChange} ariaLabel={label} /></div> }
 export function uniqueValue(base: string, values: Set<string>): string { let value = base; let i = 2; while (values.has(value)) value = `${base}-${i++}`; return value }
 export function parseCodes(value: string): number[] { return [...new Set(value.split(/[\s,]+/).map(Number).filter((code) => Number.isInteger(code) && code >= 400 && code <= 599))] }
+export function validCodes(value: string): boolean {
+  return value.split(/[\s,]+/).filter(Boolean).every((item) => /^\d{3}$/.test(item) && Number(item) >= 400 && Number(item) <= 599)
+}
+export function useValidatedTextDraft({
+  scopeId,
+  value,
+  validate,
+  onCommit
+}: {
+  scopeId: string
+  value: string
+  validate: (value: string) => string | undefined
+  onCommit: (value: string) => void
+}): {
+  draft: string
+  error: string
+  onChange: (value: string) => void
+  onFocus: () => void
+  onBlur: () => void
+  onKeyDown: (event: KeyboardEvent<HTMLInputElement>) => void
+} {
+  const [draft, setDraft] = useState(value)
+  const [error, setError] = useState('')
+  const [focused, setFocused] = useState(false)
+  useEffect(() => {
+    setDraft(value)
+    setError('')
+    setFocused(false)
+  }, [scopeId])
+  useEffect(() => {
+    if (!focused) {
+      setDraft(value)
+      setError('')
+    }
+  }, [focused, value])
+  const commit = useCallback((): boolean => {
+    const normalized = draft.trim()
+    const nextError = validate(normalized)
+    if (nextError) {
+      setError(nextError)
+      return false
+    }
+    setError('')
+    if (normalized !== value) onCommit(normalized)
+    return true
+  }, [draft, onCommit, validate, value])
+  return {
+    draft,
+    error,
+    onChange: setDraft,
+    onFocus: () => setFocused(true),
+    onBlur: () => { if (commit()) setFocused(false) },
+    onKeyDown: (event) => {
+      if (event.key !== 'Enter') return
+      event.preventDefault()
+      if (commit()) {
+        setFocused(false)
+        event.currentTarget.blur()
+      }
+    }
+  }
+}
 export function reorderTarget(event: DragEvent, destination: number, pool: ModelRoutePoolV1, update: (patch: Partial<ModelRoutePoolV1>) => void): void { event.preventDefault(); const source = Number(event.dataTransfer.getData('text/route-target-index')); if (!Number.isInteger(source) || source === destination) return; const targets = [...pool.targets]; const [moved] = targets.splice(source, 1); targets.splice(destination, 0, moved); update({ targets }) }
 export function runtimePoolMatches(selected: ModelRoutePoolV1 | undefined, runtime: ModelRoutePoolV1 | undefined): boolean {
   if (!selected || !runtime) return false
@@ -234,7 +296,7 @@ export function runtimeConfigurationMatches(
   status: RouteStatus | null
 ): boolean {
   if (!status || status.localGateway?.enabled !== expectedGatewayEnabled) return false
-  const runtimePools = status.pools ?? []
+  const runtimePools = status.configuredPools ?? status.pools ?? []
   return expectedPools.length === runtimePools.length &&
     expectedPools.every((pool, index) => runtimePoolMatches(pool, runtimePools[index]))
 }

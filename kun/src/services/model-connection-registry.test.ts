@@ -146,6 +146,31 @@ async function registry(
 }
 
 describe('ModelConnectionRegistry', () => {
+  it('reconciles explicit gateway globals even after the registry already exists', async () => {
+    const { value } = await registry()
+    const connected = await value.connect(deepseekConnection())
+    const routePools = [{
+      id: 'local-route-1',
+      name: 'Local route',
+      modelId: 'local-chat',
+      enabled: true,
+      strategy: 'priority' as const,
+      targets: [{ id: 'target-1', providerId: 'deepseek', modelId: 'deepseek-chat', enabled: true, weight: 1 }],
+      failurePolicy: { failoverHttpStatusCodes: [429, 503], failoverOnNetworkError: true, failoverOnTimeout: true, failoverOnAuthError: true },
+      healthPolicy: { failureThreshold: 3, cooldownMs: 60_000, halfOpenMaxAttempts: 1 }
+    }]
+
+    const applied = await value.initialize([], {
+      proxy: { enabled: false, url: '' },
+      routePools,
+      localModelGateway: { enabled: true }
+    })
+
+    expect(applied.revision).toBeGreaterThan(connected.revision)
+    expect(applied.routePools).toEqual(routePools)
+    expect(applied.localModelGateway).toEqual({ enabled: true })
+  })
+
   it.each([
       {
         label: 'an origin root',

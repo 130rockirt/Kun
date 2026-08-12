@@ -188,6 +188,7 @@ export function createServerRuntimeComposition(
 	    modelGateway: {
 	      enabled: () => config.activeOptions.localModelGateway?.enabled === true,
 	      pools: () => modelClient.routePools(),
+	      configuredPools: () => modelClient.configuredPools(),
 	      health: routeHealth,
 	      tests: routePoolTests
 	    },

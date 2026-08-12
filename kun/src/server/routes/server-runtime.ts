@@ -226,6 +226,7 @@ export type ServerRuntime = {
   modelGateway?: {
     enabled(): boolean
     pools(): ModelRoutePoolConfig[]
+    configuredPools(): ModelRoutePoolConfig[]
     health: RoutePoolHealthStore
     tests: RoutePoolTestService
   }

@@ -208,6 +208,7 @@ export class RoutePoolModelClient implements ModelClient {
   readonly provider = 'route-pool'
   get model(): string { return this.direct.model }
   private pools = new Map<string, ModelRoutePoolConfig>()
+  private configured: ModelRoutePoolConfig[] = []
   private readonly roundRobin = new Map<string, number>()
 
   constructor(
@@ -221,6 +222,7 @@ export class RoutePoolModelClient implements ModelClient {
   }
 
   replacePools(pools: readonly ModelRoutePoolConfig[]): void {
+    this.configured = pools.map((pool) => structuredClone(pool))
     this.pools = new Map(pools.filter((pool) => pool.enabled).map((pool) => [pool.modelId.toLowerCase(), structuredClone(pool)]))
     this.roundRobin.clear()
     this.health.prune([...this.pools.values()])
@@ -228,6 +230,10 @@ export class RoutePoolModelClient implements ModelClient {
 
   routePools(): ModelRoutePoolConfig[] {
     return [...this.pools.values()].map((pool) => structuredClone(pool))
+  }
+
+  configuredPools(): ModelRoutePoolConfig[] {
+    return structuredClone(this.configured)
   }
 
   selectsRouteTargetDuringStream(

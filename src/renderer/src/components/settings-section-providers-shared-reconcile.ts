@@ -565,11 +565,11 @@ export function projectSharedModelConnections(
     provider: {
       providers,
       proxy: snapshot.proxy ?? current.proxy,
-      routePools: snapshot.routePools ?? current.routePools,
-      localGateway: {
-        ...current.localGateway,
-        enabled: snapshot.localModelGateway?.enabled ?? current.localGateway.enabled
-      }
+      // Route pools and the local gateway are edited as one AppSettings draft.
+      // A registry snapshot may lag that draft while its globals are being
+      // persisted, so it must never replace the renderer's intended config.
+      routePools: current.routePools,
+      localGateway: current.localGateway
     },
     kun: hasUsableDefault
       ? { providerId: defaultProviderId!, model: defaultModel! }

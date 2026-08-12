@@ -31,11 +31,12 @@ export async function gatewayResponses(runtime: ServerRuntime, request: Request)
 
 export function routePoolStatus(runtime: ServerRuntime): JsonResponse {
   if (!runtime.modelGateway) {
-    return jsonResponse({ localGateway: { enabled: false }, pools: [], metrics: {}, events: [], tests: [] })
+    return jsonResponse({ localGateway: { enabled: false }, pools: [], configuredPools: [], metrics: {}, events: [], tests: [] })
   }
   return jsonResponse({
     localGateway: { enabled: runtime.modelGateway.enabled() },
     pools: runtime.modelGateway.pools(),
+    configuredPools: runtime.modelGateway.configuredPools(),
     ...runtime.modelGateway.health.snapshot(),
     tests: runtime.modelGateway.tests.list()
   })

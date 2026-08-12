@@ -8,7 +8,7 @@ import {
 import { KUN_MODEL_ROUTES_PATH, kunModelRouteTestPath } from '@shared/kun-endpoints'
 import type { KunRuntimeSettingsSyncStatusPayload } from '@shared/kun-gui-api'
 import type { TFunction } from 'i18next'
-import { Activity, AlertTriangle, Boxes, Check, ChevronDown, Clipboard, Code2, GripVertical, Loader2, Play, Plus, Route, Server, Trash2 } from 'lucide-react'
+import { Activity, AlertTriangle, Boxes, Check, ChevronDown, Clipboard, Code2, Loader2, Play, Plus, Route, Server, Trash2 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState, type ReactElement } from 'react'
 import { useTranslation } from 'react-i18next'
 import { SettingsSubTabs, SettingsTabPanel, Toggle } from './settings-controls'
@@ -24,19 +24,22 @@ import {
   formatTarget,
   inputClass,
   parseCodes,
-  reorderTarget,
   routeStatusError,
   runtimeConfigurationMatches,
   runtimePoolMatches,
   testProgress,
   testStatusClass,
   testStatusLabel,
-  uniqueValue
+  uniqueValue,
+  useValidatedTextDraft,
+  validCodes
 } from './settings-section-model-routes-support'
+import { ModelRouteTargets } from './settings-section-model-routes-targets'
 
 export type RouteStatus = {
   localGateway?: { enabled: boolean }
   pools?: ModelRoutePoolV1[]
+  configuredPools?: ModelRoutePoolV1[]
   metrics?: Record<string, { successes: number; failures: number; ewmaLatencyMs?: number; lastError?: string }>
   events?: Array<{ at: string; poolId: string; targetId: string; providerId: string; modelId: string; result: string; latencyMs: number; testId?: string; category?: string; message?: string }>
   tests?: RoutePoolTestRecord[]
@@ -194,6 +197,24 @@ export function ModelRoutesSettings({
     if (!selected) return
     onChange({ ...settings, routePools: settings.routePools.map((pool) => pool.id === selected.id ? { ...pool, ...patch } : pool) })
   }
+  const modelIdDraft = useValidatedTextDraft({
+    scopeId: selected?.id ?? '',
+    value: selected?.modelId ?? '',
+    validate: (value) => {
+      if (!value) return t('modelRoutes.publicModelIdRequired')
+      const duplicate = settings.routePools.some((pool) => pool.id !== selected?.id && pool.modelId.trim().toLowerCase() === value.toLowerCase())
+      return duplicate ? t('modelRoutes.publicModelIdDuplicate', { modelId: value }) : undefined
+    },
+    onCommit: (modelId) => updatePool({ modelId })
+  })
+  const failoverCodesDraft = useValidatedTextDraft({
+    scopeId: selected?.id ?? '',
+    value: selected?.failurePolicy.failoverHttpStatusCodes.join(', ') ?? '',
+    validate: (value) => validCodes(value) ? undefined : t('modelRoutes.failoverStatusesInvalid'),
+    onCommit: (value) => updatePool({
+      failurePolicy: { ...selected!.failurePolicy, failoverHttpStatusCodes: parseCodes(value) }
+    })
+  })
 
   const addPool = (): void => {
     const provider = settings.providers.find((candidate) => candidate.models.length > 0)
@@ -219,6 +240,7 @@ export function ModelRoutesSettings({
 
   const removePool = (): void => {
     if (!selected) return
+    if (typeof globalThis.confirm === 'function' && !globalThis.confirm(t('modelRoutes.confirmDeleteModel', { modelId: selected.modelId }))) return
     const next = settings.routePools.filter((pool) => pool.id !== selected.id)
     onChange({ ...settings, routePools: next })
     setSelectedId(next[0]?.id ?? '')
@@ -248,7 +270,7 @@ export function ModelRoutesSettings({
   const selectedTests = useMemo(() => (status?.tests ?? []).filter((test) => test.poolId === selected?.id), [selected?.id, status?.tests])
   const latestTest = selectedTests[0]
   const activeTest = latestTest?.status === 'queued' || latestTest?.status === 'running'
-  const runtimePool = status?.pools?.find((pool) => pool.id === selected?.id)
+  const runtimePool = (status?.configuredPools ?? status?.pools)?.find((pool) => pool.id === selected?.id)
   const selectedHasExecutableTarget = Boolean(executableSelected?.enabled && executableSelected.targets.some((target) => target.enabled))
   const persistenceReady = saveStatus !== 'saving' && saveStatus !== 'error'
   const runtimeReady = Boolean(
@@ -301,8 +323,9 @@ export function ModelRoutesSettings({
               ? t('modelRoutes.runtimeSyncing')
               : t('modelRoutes.runtimeWaitingForSync')
   const gatewayBaseUrl = `${publicBaseUrl.replace(/\/$/, '')}/v1`
-  const sampleModelId = selected?.modelId || settings.routePools.find((pool) => pool.enabled)?.modelId || 'your-public-model-id'
-  const curlExample = buildGatewayCurlExample(gatewayBaseUrl, sampleModelId, t)
+  const sampleModelId = executablePools.find((pool) => pool.enabled && pool.targets.some((target) => target.enabled))?.modelId
+  const apiExampleModelId = sampleModelId || 'your-public-model-id'
+  const curlExample = buildGatewayCurlExample(gatewayBaseUrl, apiExampleModelId, t)
   const copyGatewayText = async (value: string, kind: 'base-url' | 'curl' | 'api-example'): Promise<void> => {
     try {
       await navigator.clipboard.writeText(value)
@@ -314,7 +337,7 @@ export function ModelRoutesSettings({
   }
 
   return (
-    <div className="grid min-h-[620px] gap-4 p-4 lg:grid-cols-[280px_minmax(0,1fr)]">
+    <div className="grid content-start auto-rows-min gap-4 p-4 lg:grid-cols-[280px_minmax(0,1fr)]">
       <div className="lg:col-span-2">
         <SettingsSubTabs<ModelRouteSettingsTab>
           baseId="model-routes-settings"
@@ -426,7 +449,7 @@ export function ModelRoutesSettings({
             </div>
           </div>
           <div className="flex items-end gap-2 lg:flex-col lg:items-stretch lg:justify-center">
-            <button type="button" onClick={() => void copyGatewayText(curlExample, 'curl')} className="inline-flex h-8 items-center justify-center gap-1.5 rounded-lg bg-accent px-3 text-[11.5px] font-semibold text-white hover:opacity-90">
+            <button type="button" disabled={!sampleModelId} title={!sampleModelId ? t('modelRoutes.copyCurlUnavailable') : undefined} onClick={() => void copyGatewayText(curlExample, 'curl')} className="inline-flex h-8 items-center justify-center gap-1.5 rounded-lg bg-accent px-3 text-[11.5px] font-semibold text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-45">
               {copiedValue === 'curl' ? <Check className="h-3.5 w-3.5" /> : <Clipboard className="h-3.5 w-3.5" />}
               {copiedValue === 'curl' ? t('modelRoutes.copied') : t('modelRoutes.copyCurl')}
             </button>
@@ -438,7 +461,7 @@ export function ModelRoutesSettings({
         </section>
         {apiDocsOpen ? <LocalGatewayApiDialog
           baseUrl={gatewayBaseUrl}
-          modelId={sampleModelId}
+          modelId={apiExampleModelId}
           copied={copiedValue === 'api-example'}
           onClose={() => setApiDocsOpen(false)}
           onCopy={(value) => void copyGatewayText(value, 'api-example')}
@@ -494,52 +517,11 @@ export function ModelRoutesSettings({
           </div>
 
           <div className="grid gap-3 md:grid-cols-2">
-            <Field label={t('modelRoutes.publicModelId')}><input value={selected.modelId} onChange={(event) => updatePool({ modelId: event.target.value })} className={inputClass} spellCheck={false} /></Field>
+            <div><Field label={t('modelRoutes.publicModelId')}><input aria-label={t('modelRoutes.publicModelId')} value={modelIdDraft.draft} onChange={(event) => modelIdDraft.onChange(event.target.value)} onFocus={modelIdDraft.onFocus} onBlur={modelIdDraft.onBlur} onKeyDown={modelIdDraft.onKeyDown} className={inputClass} spellCheck={false} /></Field>{modelIdDraft.error ? <p className="mt-1 text-[11px] text-red-600">{modelIdDraft.error}</p> : null}</div>
             <Field label={t('modelRoutes.loadStrategy')}><select value={selected.strategy} onChange={(event) => updatePool({ strategy: event.target.value as ModelRouteStrategy })} className={inputClass}>{strategies.map((strategy) => <option key={strategy.id} value={strategy.id}>{strategy.label}</option>)}</select></Field>
           </div>
 
-          <section className="grid gap-3">
-            <div className="flex items-center justify-between"><h3 className="text-[13px] font-semibold text-ds-ink">{t('modelRoutes.routeTargets')}</h3><button type="button" onClick={() => {
-              const provider = settings.providers.find((candidate) => candidate.models.length > 0)
-              if (!provider) return
-              updatePool({ targets: [...selected.targets, { id: `${selected.id}-target-${Date.now().toString(36)}`, providerId: provider.id, modelId: provider.models[0], enabled: true, weight: 1 }] })
-            }} className="inline-flex items-center gap-1 rounded-full border border-ds-border px-3 py-1.5 text-[12px] text-ds-muted"><Plus className="h-3.5 w-3.5" /> {t('modelRoutes.addTarget')}</button></div>
-            <div className="grid gap-2">
-              {selected.targets.map((target, index) => {
-                const resolution = resolveModelRouteTargetReference(target, settings.providers)
-                const provider = resolution.provider
-                const metric = status?.metrics?.[`${selected.id}:${target.id}`]
-                return (
-                  <div key={target.id} draggable onDragStart={(event) => event.dataTransfer.setData('text/route-target-index', String(index))} onDragOver={(event) => event.preventDefault()} onDrop={(event) => reorderTarget(event, index, selected, updatePool)} className={`grid items-center gap-2 rounded-xl border bg-ds-card p-3 md:grid-cols-[24px_28px_minmax(150px,1fr)_minmax(150px,1fr)_80px_110px_32px] ${resolution.status === 'valid' ? 'border-ds-border' : 'border-amber-300/80'}`}>
-                    <GripVertical className="h-4 w-4 cursor-grab text-ds-faint" />
-                    <span className="grid h-6 w-6 place-items-center rounded-full bg-ds-main text-[11px] text-ds-muted">{index + 1}</span>
-                    <select value={target.providerId} onChange={(event) => {
-                      const nextProvider = settings.providers.find((candidate) => candidate.id === event.target.value)
-                      updatePool({ targets: selected.targets.map((item) => item.id === target.id ? { ...item, providerId: event.target.value, modelId: nextProvider?.models[0] ?? '' } : item) })
-                    }} className={compactInputClass}>
-                      {resolution.status === 'provider-missing' ? <option value={target.providerId}>{t('modelRoutes.providerDeleted', { providerId: target.providerId })}</option> : null}
-                      {settings.providers.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-                    </select>
-                    <select value={target.modelId} onChange={(event) => updatePool({ targets: selected.targets.map((item) => item.id === target.id ? { ...item, modelId: event.target.value } : item) })} className={compactInputClass}>
-                      {resolution.status !== 'valid' ? <option value={target.modelId}>{resolution.status === 'provider-missing' ? t('modelRoutes.originalModel', { modelId: target.modelId }) : t('modelRoutes.modelDeleted', { modelId: target.modelId })}</option> : null}
-                      {(provider?.models ?? []).map((model) => <option key={model} value={model}>{model}</option>)}
-                    </select>
-                    <input type="number" min={1} max={100} title={t('modelRoutes.weight')} value={target.weight} onChange={(event) => updatePool({ targets: selected.targets.map((item) => item.id === target.id ? { ...item, weight: Number(event.target.value) || 1 } : item) })} className={compactInputClass} />
-                    <div className="text-[11px] text-ds-muted">{metric?.ewmaLatencyMs ? `${Math.round(metric.ewmaLatencyMs)} ms` : t('modelRoutes.notProbed')}<br /><span className="text-ds-faint">{metric ? t('modelRoutes.successCount', { successes: metric.successes, total: metric.successes + metric.failures }) : ''}</span></div>
-                    <button type="button" onClick={() => updatePool({ targets: selected.targets.filter((item) => item.id !== target.id) })} className="rounded-full p-1.5 text-ds-faint hover:bg-red-50 hover:text-red-600"><Trash2 className="h-4 w-4" /></button>
-                    {resolution.status !== 'valid' ? (
-                      <div className="flex items-center gap-1.5 text-[11px] text-amber-700 md:col-span-5 md:col-start-3">
-                        <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-                        {resolution.status === 'provider-missing'
-                          ? t('modelRoutes.providerMissingWarning', { providerId: target.providerId })
-                          : t('modelRoutes.modelMissingWarning', { modelId: target.modelId, providerId: target.providerId })}
-                      </div>
-                    ) : null}
-                  </div>
-                )
-              })}
-            </div>
-          </section>
+          <ModelRouteTargets settings={settings} pool={selected} metrics={status?.metrics} onUpdate={updatePool} t={t} />
 
               <div className="flex justify-end">
                 <button type="button" onClick={removePool} className="inline-flex items-center gap-2 rounded-full border border-red-200 px-3 py-2 text-[12px] text-red-600">
@@ -567,7 +549,7 @@ export function ModelRoutesSettings({
                   <ToggleRow label={t('modelRoutes.networkError')} checked={selected.failurePolicy.failoverOnNetworkError} onChange={(value) => updatePool({ failurePolicy: { ...selected.failurePolicy, failoverOnNetworkError: value } })} />
                   <ToggleRow label={t('modelRoutes.requestTimeout')} checked={selected.failurePolicy.failoverOnTimeout} onChange={(value) => updatePool({ failurePolicy: { ...selected.failurePolicy, failoverOnTimeout: value } })} />
                   <ToggleRow label={t('modelRoutes.credentialError')} checked={selected.failurePolicy.failoverOnAuthError} onChange={(value) => updatePool({ failurePolicy: { ...selected.failurePolicy, failoverOnAuthError: value } })} />
-                  <Field label={t('modelRoutes.failoverStatuses')}><input value={selected.failurePolicy.failoverHttpStatusCodes.join(', ')} onChange={(event) => updatePool({ failurePolicy: { ...selected.failurePolicy, failoverHttpStatusCodes: parseCodes(event.target.value) } })} className={compactInputClass} /></Field>
+                  <div><Field label={t('modelRoutes.failoverStatuses')}><input aria-label={t('modelRoutes.failoverStatuses')} value={failoverCodesDraft.draft} onChange={(event) => failoverCodesDraft.onChange(event.target.value)} onFocus={failoverCodesDraft.onFocus} onBlur={failoverCodesDraft.onBlur} onKeyDown={failoverCodesDraft.onKeyDown} className={compactInputClass} /></Field>{failoverCodesDraft.error ? <p className="mt-1 text-[11px] text-red-600">{failoverCodesDraft.error}</p> : null}</div>
                   <p className="text-[11px] text-ds-faint">{t('modelRoutes.afterStreamNoRetry')}</p>
                 </div>
               </section>

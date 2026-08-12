@@ -44,6 +44,7 @@ function runtime(enabled = true): ServerRuntime {
     modelGateway: {
       enabled: () => enabled,
       pools: () => pools,
+      configuredPools: () => pools,
       health,
       tests
     }
@@ -66,7 +67,8 @@ describe('local OpenAI model gateway', () => {
   it('reports the effective local gateway state with route status', () => {
     expect(JSON.parse(routePoolStatus(runtime(true)).body)).toMatchObject({
       localGateway: { enabled: true },
-      pools: expect.arrayContaining([expect.objectContaining({ id: 'pool' })])
+      pools: expect.arrayContaining([expect.objectContaining({ id: 'pool' })]),
+      configuredPools: expect.arrayContaining([expect.objectContaining({ id: 'pool' })])
     })
     expect(JSON.parse(routePoolStatus(runtime(false)).body)).toMatchObject({
       localGateway: { enabled: false }

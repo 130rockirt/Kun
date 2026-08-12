@@ -313,6 +313,32 @@ describe('shared model connection settings projection', () => {
     expect(projected.kun).toEqual({ providerId: '' })
   })
 
+  it('keeps the in-progress route and local gateway configuration over a stale registry snapshot', () => {
+    const current = defaultModelProviderSettings()
+    current.localGateway = { name: 'My local relay', enabled: true }
+    current.routePools = [{
+      id: 'local-route-1',
+      name: 'Local route',
+      modelId: 'local-chat',
+      enabled: true,
+      strategy: 'priority',
+      targets: [{ id: 'target-1', providerId: 'deepseek', modelId: 'deepseek-chat', enabled: true, weight: 1 }],
+      failurePolicy: { failoverHttpStatusCodes: [429, 503], failoverOnNetworkError: true, failoverOnTimeout: true, failoverOnAuthError: true },
+      healthPolicy: { failureThreshold: 3, cooldownMs: 60_000, halfOpenMaxAttempts: 1 }
+    }]
+
+    const projected = projectSharedModelConnections(current, {
+      schemaVersion: 1,
+      revision: 9,
+      providers: [],
+      routePools: [],
+      localModelGateway: { enabled: false }
+    })
+
+    expect(projected.provider.routePools).toEqual(current.routePools)
+    expect(projected.provider.localGateway).toEqual(current.localGateway)
+  })
+
   it('drops invalid shared capability limits before projecting AppSettings', () => {
     const projected = projectSharedModelConnections(defaultModelProviderSettings(), {
       schemaVersion: 1,

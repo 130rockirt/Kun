@@ -466,7 +466,11 @@ export function createRuntimeConfigController(
 	    // the registry-owned default. Current GUI/TUI clients use revisioned
 	    // registry writes directly; this path only adds/reconciles catalogs.
 	    const registryBeforeApply = await modelConnections.snapshot()
-	    await modelConnections.initialize(modelConnectionSeedsForOptions(nextOptions))
+	    await modelConnections.initialize(modelConnectionSeedsForOptions(nextOptions), {
+	      proxy: { enabled: Boolean(nextOptions.modelProxyUrl), url: nextOptions.modelProxyUrl ?? '' },
+	      routePools: nextOptions.routePools ?? [],
+	      localModelGateway: nextOptions.localModelGateway ?? { enabled: false }
+	    })
 	    if (registryBeforeApply.providers.length === 0 && request.modelSelection) {
 	      await modelConnections.synchronizeDefaultSelection(request.modelSelection)
 	    }

@@ -110,14 +110,34 @@ async initialize(this: ModelConnectionRegistry,
         current = await this['file'].read(emptyDocument)
       }
     }
-    if (newRegistry && globals) {
-      current = await this['file'].update(emptyDocument, (document) => ({
-        ...document,
-        revision: document.revision + 1,
-        proxy: globals.proxy ?? document.proxy,
-        routePools: globals.routePools ?? document.routePools,
-        localModelGateway: globals.localModelGateway ?? document.localModelGateway
-      }))
+    if (globals) {
+      const nextProxy = globals.proxy ?? current.proxy
+      const nextRoutePools = globals.routePools ?? current.routePools
+      const nextLocalModelGateway = globals.localModelGateway ?? current.localModelGateway
+      if (JSON.stringify({
+        proxy: current.proxy,
+        routePools: current.routePools,
+        localModelGateway: current.localModelGateway
+      }) !== JSON.stringify({
+        proxy: nextProxy,
+        routePools: nextRoutePools,
+        localModelGateway: nextLocalModelGateway
+      })) {
+        current = await this['file'].update(emptyDocument, (document) => {
+          const proxy = globals.proxy ?? document.proxy
+          const routePools = globals.routePools ?? document.routePools
+          const localModelGateway = globals.localModelGateway ?? document.localModelGateway
+          if (JSON.stringify({ proxy: document.proxy, routePools: document.routePools, localModelGateway: document.localModelGateway }) ===
+            JSON.stringify({ proxy, routePools, localModelGateway })) return document
+          return {
+            ...document,
+            revision: document.revision + 1,
+            proxy,
+            routePools,
+            localModelGateway
+          }
+        })
+      }
     }
     await this['retryLegacyCredentialSourceRetirements']()
     await this['applyLatest']()

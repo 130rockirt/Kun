@@ -141,6 +141,14 @@ describe('RoutePoolModelClient', () => {
     expect(client.routePools()[0].strategy).toBe('adaptive')
   })
 
+  it('retains disabled pools as configured state without exposing them to routing', () => {
+    const disabled = { ...pool(), enabled: false }
+    const client = new RoutePoolModelClient(new FakeDirect(() => []), [disabled], capability)
+
+    expect(client.routePools()).toEqual([])
+    expect(client.configuredPools()).toEqual([disabled])
+  })
+
   it('opens a circuit and returns an aggregate exhaustion error', async () => {
     const direct = new FakeDirect(() => [{ kind: 'error', message: 'down', failure: { category: 'unavailable', httpStatus: 503, failoverAllowed: true } }])
     const client = new RoutePoolModelClient(direct, [pool()], capability)
