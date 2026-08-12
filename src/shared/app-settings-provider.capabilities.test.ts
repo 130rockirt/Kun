@@ -50,9 +50,36 @@ import {
   type AppSettingsV1,
   type ModelProviderModelProfileV1
 } from './app-settings'
+import { normalizeModelProviderModelProfile } from './app-settings-provider-capabilities'
 import { settings } from './app-settings-provider.test-support'
 
 describe('model provider settings', () => {
+  it('drops out-of-range model limits while preserving valid metadata and exact boundaries', () => {
+    expect(normalizeModelProviderModelProfile({
+      contextWindowTokens: 1_020_000,
+      maxOutputTokens: 1_020_000,
+      inputModalities: ['text', 'image'],
+      outputModalities: ['text'],
+      supportsToolCalling: true,
+      messageParts: ['text', 'image_url']
+    })).toEqual(expect.objectContaining({
+      contextWindowTokens: 1_020_000,
+      inputModalities: ['text', 'image'],
+      messageParts: ['text', 'image_url']
+    }))
+    expect(normalizeModelProviderModelProfile({
+      contextWindowTokens: 1_020_000,
+      maxOutputTokens: 1_020_000
+    }).maxOutputTokens).toBeUndefined()
+    expect(normalizeModelProviderModelProfile({
+      contextWindowTokens: 10_000_000,
+      maxOutputTokens: 1_000_000
+    })).toEqual(expect.objectContaining({
+      contextWindowTokens: 10_000_000,
+      maxOutputTokens: 1_000_000
+    }))
+  })
+
 it('backfills preset model capabilities for stale stored providers', () => {
     const base = settings()
     const resolved = resolveKunRuntimeSettings({

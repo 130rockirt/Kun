@@ -167,6 +167,45 @@ describe('probeModelProvider', () => {
     )
   })
 
+  it('discovers provider/model ids for both ZenMux credential families', async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({
+        object: 'list',
+        data: [
+          { id: 'openai/gpt-5.4' },
+          { id: 'anthropic/claude-sonnet-4.6' }
+        ]
+      }), { status: 200 })
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    for (const apiKey of ['sk-ai-v1-api', 'sk-ss-v1-plan']) {
+      await expect(probeModelProvider({
+        baseUrl: 'https://zenmux.ai/api/v1',
+        apiKey,
+        endpointFormat: 'chat_completions'
+      })).resolves.toMatchObject({
+        ok: true,
+        modelIds: ['openai/gpt-5.4', 'anthropic/claude-sonnet-4.6']
+      })
+    }
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    for (const [index, apiKey] of ['sk-ai-v1-api', 'sk-ss-v1-plan'].entries()) {
+      expect(fetchMock).toHaveBeenNthCalledWith(
+        index + 1,
+        'https://zenmux.ai/api/v1/models',
+        expect.objectContaining({
+          method: 'GET',
+          headers: {
+            Accept: 'application/json',
+            Authorization: `Bearer ${apiKey}`
+          }
+        })
+      )
+    }
+  })
+
   it('parses top-level arrays and provider-specific models envelopes without changing wire IDs', () => {
     expect(parseModelIds(JSON.stringify([
       { id: 'MiniMaxAI/MiniMax-M3' },

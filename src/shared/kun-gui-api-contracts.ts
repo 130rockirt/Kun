@@ -435,6 +435,13 @@ export type ModelsDevCatalogModelHint = {
   aliases?: string[]
 }
 
+export type ModelsDevCatalogMetadataIssue = {
+  field: 'contextWindowTokens' | 'maxOutputTokens'
+  code: 'out_of_range'
+  rawValue: number
+  maxAllowed: number
+}
+
 export type ModelsDevCatalogModel = {
   id: string
   providerKey?: string
@@ -446,6 +453,8 @@ export type ModelsDevCatalogModel = {
   toolCalling?: boolean
   contextWindowTokens?: number
   maxOutputTokens?: number
+  /** Import-only diagnostics for catalog fields omitted by the sanitizer. */
+  metadataIssues?: ModelsDevCatalogMetadataIssue[]
 }
 
 export type ModelsDevCatalogRequest = {
@@ -524,11 +533,22 @@ export type GrokOAuthCredentials = {
   clientId?: string
 }
 
-export type GrokBrowserAuthErrorCode = 'port_in_use'
+export type GrokBrowserAuthErrorCode =
+  | 'port_in_use'
+  | 'discovery_failed'
+  | 'callback_failed'
+  | 'browser_open_failed'
+  | 'token_exchange_failed'
+  | 'timeout'
+  | 'cancelled'
 
 export type GrokBrowserAuthResult =
   | { ok: true; credentials: GrokOAuthCredentials }
-  | { ok: false; message: string; code?: GrokBrowserAuthErrorCode }
+  | {
+      ok: false
+      message: string
+      code?: GrokBrowserAuthErrorCode
+    }
 
 export type GrokBrowserAuthCancelResult = { ok: true }
 

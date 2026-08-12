@@ -28,6 +28,8 @@ import {
 } from './write-workspace-view-utils'
 
 type Props = {
+  embedded?: boolean
+  showSidebarToggle?: boolean
   activeFileIsImage: boolean
   activeFileIsPdf?: boolean
   activeFileIsText: boolean
@@ -65,6 +67,8 @@ type Props = {
 }
 
 export function WriteWorkspaceToolbar({
+  embedded = false,
+  showSidebarToggle = true,
   activeFileIsImage,
   activeFileIsPdf = false,
   activeFileIsText,
@@ -103,19 +107,21 @@ export function WriteWorkspaceToolbar({
   const { t } = useTranslation('common')
   if (activeFileIsPdf) {
     return (
-      <div className={`ds-stage-inset shrink-0 -mr-3 sm:-mr-4 md:-mr-6 lg:-mr-8 ${leftSidebarCollapsed ? 'ds-window-controls-safe-inset' : '-ml-3 sm:-ml-4 md:-ml-6 lg:-ml-8'}`}>
-        <header className="ds-topbar-surface write-pdf-topbar relative z-10 mt-3 flex min-h-[52px] w-full items-stretch overflow-visible rounded-[18px]">
+      <div className={embedded ? 'shrink-0' : `ds-stage-inset shrink-0 -mr-3 sm:-mr-4 md:-mr-6 lg:-mr-8 ${leftSidebarCollapsed ? 'ds-window-controls-safe-inset' : '-ml-3 sm:-ml-4 md:-ml-6 lg:-ml-8'}`}>
+        <header className={`ds-topbar-surface write-pdf-topbar relative z-10 flex min-h-[52px] w-full items-stretch overflow-visible ${embedded ? 'rounded-none border-x-0 border-t-0' : 'mt-3 rounded-[18px]'}`}>
           <div className="write-pdf-topbar-grid grid w-full min-w-0 items-center gap-2 px-3 py-2 sm:px-4 md:pl-5 md:pr-3">
             <div
               className={`flex min-w-0 items-center gap-2.5 ${
                 leftSidebarCollapsed ? 'ds-window-controls-collapsed-titlebar-inset' : ''
               }`}
             >
-              <SidebarTitlebarToggleButton
-                onClick={onToggleLeftSidebar}
-                title={leftSidebarCollapsed ? t('sidebarExpand') : t('sidebarCollapse')}
-                ariaLabel={leftSidebarCollapsed ? t('sidebarExpand') : t('sidebarCollapse')}
-              />
+              {showSidebarToggle ? (
+                <SidebarTitlebarToggleButton
+                  onClick={onToggleLeftSidebar}
+                  title={leftSidebarCollapsed ? t('sidebarExpand') : t('sidebarCollapse')}
+                  ariaLabel={leftSidebarCollapsed ? t('sidebarExpand') : t('sidebarCollapse')}
+                />
+              ) : null}
               <span className="write-pdf-topbar-file-icon">
                 <FileText className="h-4 w-4" strokeWidth={1.9} />
               </span>
@@ -154,19 +160,21 @@ export function WriteWorkspaceToolbar({
   }
 
   return (
-    <div className={`ds-stage-inset shrink-0 -mr-3 sm:-mr-4 md:-mr-6 lg:-mr-8 ${leftSidebarCollapsed ? 'ds-window-controls-safe-inset' : '-ml-3 sm:-ml-4 md:-ml-6 lg:-ml-8'}`}>
-      <header className="ds-topbar-surface relative z-10 mt-3 flex min-h-[56px] w-full items-stretch overflow-visible rounded-[18px]">
+    <div className={embedded ? 'shrink-0' : `ds-stage-inset shrink-0 -mr-3 sm:-mr-4 md:-mr-6 lg:-mr-8 ${leftSidebarCollapsed ? 'ds-window-controls-safe-inset' : '-ml-3 sm:-ml-4 md:-ml-6 lg:-ml-8'}`}>
+      <header className={`ds-topbar-surface relative z-10 flex min-h-[56px] w-full items-stretch overflow-visible ${embedded ? 'rounded-none border-x-0 border-t-0' : 'mt-3 rounded-[18px]'}`}>
         <div className="write-workspace-toolbar-grid grid w-full min-w-0 items-center gap-2 px-3 py-2 sm:px-4 md:pl-5 md:pr-2 lg:gap-4">
           <div
             className={`flex min-w-0 items-center gap-2.5 ${
               leftSidebarCollapsed ? 'ds-window-controls-collapsed-titlebar-inset' : ''
             }`}
           >
-            <SidebarTitlebarToggleButton
-              onClick={onToggleLeftSidebar}
-              title={leftSidebarCollapsed ? t('sidebarExpand') : t('sidebarCollapse')}
-              ariaLabel={leftSidebarCollapsed ? t('sidebarExpand') : t('sidebarCollapse')}
-            />
+            {showSidebarToggle ? (
+              <SidebarTitlebarToggleButton
+                onClick={onToggleLeftSidebar}
+                title={leftSidebarCollapsed ? t('sidebarExpand') : t('sidebarCollapse')}
+                ariaLabel={leftSidebarCollapsed ? t('sidebarExpand') : t('sidebarCollapse')}
+              />
+            ) : null}
             <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent/10 text-accent">
               <FilePenLine className="h-4 w-4" strokeWidth={1.9} />
             </span>

@@ -49,6 +49,7 @@ import {
   splitSettingsList
 } from './settings-utils'
 import { SettingsViewLayout } from './settings-view-layout'
+import type { SettingsSaveIssue } from './settings-save-error'
 import {
   settingsCategoryDescriptionKey,
   settingsCategoryLabelKey,
@@ -99,6 +100,7 @@ export function SettingsView(): ReactElement {
   const [clawWorkspacePickerError, setClawWorkspacePickerError] = useState<string | null>(null)
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle')
   const [saveError, setSaveError] = useState<string | null>(null)
+  const [saveIssue, setSaveIssue] = useState<SettingsSaveIssue | null>(null)
   const [showApiKey, setShowApiKey] = useState(false)
   const [showRuntimeToken, setShowRuntimeToken] = useState(false)
   const [logPath, setLogPath] = useState('')
@@ -241,7 +243,7 @@ export function SettingsView(): ReactElement {
 
   const { scheduleSave, flushPendingSave, goBack, openOnboardingPreview } = useSettingsPersistence({
     closeSettings, openInitialSetup, applyI18n, reloadUiSettings, probeRuntime, form, setForm,
-    setSaveStatus, setSaveError, saveTimer, statusTimer, draftVersion, pendingSnapshotRef,
+    setSaveStatus, setSaveError, setSaveIssue, saveTimer, statusTimer, draftVersion, pendingSnapshotRef,
     persistedSettingsRef, flushOnUnmountRef, settingsPlatform, settingsHomeDir
   })
 
@@ -453,6 +455,7 @@ export function SettingsView(): ReactElement {
     kun,
     saveStatus,
     saveError,
+    saveIssue,
     retrySave: () => { void flushPendingSave() },
     update,
     updateKun,
@@ -561,7 +564,7 @@ export function SettingsView(): ReactElement {
   }
 
   return <SettingsViewLayout view={{
-    t, workspaceRoot, extensionWorkspaceRoot, category, setCategory, saveStatus, saveError,
+    t, workspaceRoot, extensionWorkspaceRoot, category, setCategory, saveStatus, saveError, saveIssue,
     writeDebugModalOpen, setWriteDebugModalOpen, writeCompletionDebugEntries,
     writeCompletionDebugSelectedId, setWriteCompletionDebugSelectedId, writeDebugLoading,
     writeDebugError, extensionSettingsService, extensionSettingsContributions,

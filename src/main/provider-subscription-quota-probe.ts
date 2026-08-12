@@ -117,7 +117,7 @@ export async function runSubscriptionQuotaProbe(
     }
   }
   if (kind === 'grok-subscription') {
-    let credential = await runtime.resolveGrokCredential(provider)
+    let credential = await runtime.resolveGrokCredential(provider, undefined, context)
     if (!credential) {
       throw new ProviderQuotaMissingCredentialError(
         'Connect Grok in Settings or run `grok login` before refreshing quota.'
@@ -130,7 +130,11 @@ export async function runSubscriptionQuotaProbe(
       }
     } catch (error) {
       if (!(error instanceof ProviderQuotaAuthorizationError)) throw error
-      const refreshed = await runtime.resolveGrokCredential(provider, credential.accessToken)
+      const refreshed = await runtime.resolveGrokCredential(
+        provider,
+        credential.accessToken,
+        context
+      )
       if (!refreshed || refreshed.accessToken === credential.accessToken) {
         throw new ProviderQuotaMissingCredentialError(
           'The Grok login expired. Connect Grok in Settings or run `grok login` again.'

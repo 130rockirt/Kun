@@ -22,6 +22,7 @@ import {
 } from './resolve-kun-binary'
 import { resolveCodexOAuthApiKey } from './codex-auth'
 import { ensureFreshGrokCredentials } from './grok-auth'
+import { fetchWithOptionalProxy } from './proxy-fetch'
 import {
   KunConfigSchema,
   type KunConfig,
@@ -485,7 +486,10 @@ async function prepareKunLaunch(
     insecure: isKunRuntimeInsecure(runtime)
   })
   const command = resolveNodeScriptCommand(resolution.command)
-  const runtimeApiKey = (await ensureFreshGrokCredentials(runtime.apiKey)).apiKey
+  const runtimeApiKey = (await ensureFreshGrokCredentials(runtime.apiKey, {
+    fetcher: fetchWithOptionalProxy,
+    proxyUrl: resolveModelProviderProxyUrl(settings)
+  })).apiKey
   const defaultClientApiKey = resolveCodexOAuthApiKey(runtimeApiKey).apiKey
   const activeProviderKind = (getModelProviderSettings(settings).providers as ModelProviderProfileV1[]).find(
     (provider) => provider.id?.trim() === getKunRuntimeSettings(settings).providerId.trim()

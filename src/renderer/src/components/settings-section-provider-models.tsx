@@ -46,11 +46,13 @@ export function ProviderModelsManager({
   provider,
   t,
   selectControlClass,
+  focusModelId,
   onChange
 }: {
   provider: ModelProviderProfileV1
   t: Translate
   selectControlClass: string
+  focusModelId?: string
   onChange: (next: ModelProviderProfileV1) => void
 }): ReactElement {
   const [editor, setEditor] = useState<EditorState | null>(null)
@@ -64,6 +66,11 @@ export function ProviderModelsManager({
   // user can search, select-all-visible, search again, select-all-visible, then
   // delete. Reset when the user navigates to a different provider.
   const [selected, setSelected] = useState<Set<string>>(new Set())
+  useEffect(() => {
+    if (!focusModelId || !provider.models.some((model) => model === focusModelId)) return
+    setQuery(focusModelId)
+    setPage(0)
+  }, [focusModelId, provider.models])
   useEffect(() => {
     setSelected(new Set())
   }, [provider.id])

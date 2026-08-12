@@ -313,6 +313,43 @@ describe('shared model connection settings projection', () => {
     expect(projected.kun).toEqual({ providerId: '' })
   })
 
+  it('drops invalid shared capability limits before projecting AppSettings', () => {
+    const projected = projectSharedModelConnections(defaultModelProviderSettings(), {
+      schemaVersion: 1,
+      revision: 6,
+      providers: [{
+        id: 'zenmux',
+        accountId: 'account:zenmux',
+        name: 'ZenMux',
+        kind: 'http',
+        authType: 'api-key',
+        baseUrl: 'https://zenmux.ai/api/v1',
+        endpointFormat: 'chat_completions',
+        configured: true,
+        models: ['qwen/qwen3.5-flash'],
+        modelCapabilities: {
+          'qwen/qwen3.5-flash': {
+            id: 'qwen/qwen3.5-flash',
+            inputModalities: ['text', 'image'],
+            outputModalities: ['text'],
+            supportsToolCalling: true,
+            messageParts: ['text', 'image_url'],
+            contextWindowTokens: 1_020_000,
+            maxOutputTokens: 1_020_000
+          }
+        }
+      }]
+    })
+    const profile = projected.provider.providers.find((provider) => provider.id === 'zenmux')
+      ?.modelProfiles['qwen/qwen3.5-flash']
+
+    expect(profile).toMatchObject({
+      contextWindowTokens: 1_020_000,
+      inputModalities: ['text', 'image']
+    })
+    expect(profile?.maxOutputTokens).toBeUndefined()
+  })
+
   it('does not restore a provider while its canonical deletion is pending', () => {
     const current = defaultModelProviderSettings()
     const projected = projectSharedModelConnections(current, {

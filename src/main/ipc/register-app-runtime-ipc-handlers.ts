@@ -17,6 +17,7 @@ import {
   type ScheduleRunResult,
   type ScheduleRuntimeStatus,
   type ScheduleTaskFromTextResult,
+  resolveModelProviderProxyUrl,
   type WorkflowCodeCheckResult,
   type WorkflowNodeTestResult,
   type WorkflowRunResult,
@@ -60,6 +61,7 @@ import {
   submitGrokBrowserAuthCode,
   cancelGrokBrowserAuth
 } from '../grok-auth'
+import { fetchWithOptionalProxy } from '../proxy-fetch'
 import {
   checkWorkflowCode
 } from '../workflow-runtime'
@@ -347,9 +349,19 @@ export function registerAppRuntimeIpcHandlers(options: RegisterAppIpcHandlersOpt
   })
 
   ipcMain.handle('grok:auth:browser', async () => {
-    return startGrokBrowserAuth(async (url: string) => {
+    const proxyUrl = resolveModelProviderProxyUrl(await store.load())
+    const result = await startGrokBrowserAuth(async (url: string) => {
       await shell.openExternal(url)
-    })
+    }, { fetcher: fetchWithOptionalProxy, proxyUrl })
+    if (!result.ok) {
+      options.logError('grok-auth', 'Grok browser authentication failed.', {
+        code: result.code ?? 'unknown',
+        platform: process.platform,
+        proxyEnabled: Boolean(proxyUrl),
+        message: result.message
+      })
+    }
+    return result
   })
 
   ipcMain.handle('grok:auth:browser:paste', async (_, payload: unknown) => {

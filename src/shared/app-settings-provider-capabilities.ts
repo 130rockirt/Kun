@@ -62,6 +62,10 @@ import {
   type VideoGenerationProtocol
 } from './app-settings-types'
 import { normalizeModelEndpointFormat, type ModelEndpointFormat } from '../../kun/src/contracts/model-endpoint-format.js'
+import {
+  MAX_MODEL_CONTEXT_WINDOW_TOKENS,
+  MAX_MODEL_OUTPUT_TOKENS
+} from '../../kun/src/contracts/capabilities.js'
 import { getKunRuntimeSettings } from './app-settings-kun'
 import { normalizeDeepseekBaseUrl } from './app-settings-normalizers'
 import { DEFAULT_COMPOSER_MODEL_IDS } from './default-composer-models'
@@ -117,8 +121,14 @@ export function normalizeModelProviderModelProfile(
   const defaultMessageParts: ModelProviderMessagePartSupport[] = inputModalities.includes('image')
     ? ['text', 'image_url']
     : ['text']
-  const contextWindowTokens = boundedPositiveInteger(input?.contextWindowTokens)
-  const maxOutputTokens = boundedPositiveInteger(input?.maxOutputTokens)
+  const contextWindowTokens = boundedPositiveInteger(
+    input?.contextWindowTokens,
+    MAX_MODEL_CONTEXT_WINDOW_TOKENS
+  )
+  const maxOutputTokens = boundedPositiveInteger(
+    input?.maxOutputTokens,
+    MAX_MODEL_OUTPUT_TOKENS
+  )
   const reasoning = normalizeModelReasoningCapability(input?.reasoning)
   const serviceTiers = normalizeModelServiceTiers(input?.serviceTiers)
   const endpointFormat = normalizeOptionalModelEndpointFormat(input?.endpointFormat)
@@ -237,8 +247,13 @@ export function normalizeModelMessageParts(
   return out.length > 0 ? out : [...fallback]
 }
 
-export function boundedPositiveInteger(value: unknown): number | undefined {
-  return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : undefined
+export function boundedPositiveInteger(value: unknown, maximum = Number.MAX_SAFE_INTEGER): number | undefined {
+  return typeof value === 'number' &&
+    Number.isSafeInteger(value) &&
+    value > 0 &&
+    value <= maximum
+    ? value
+    : undefined
 }
 
 export function normalizeModelProviderImageCapability(

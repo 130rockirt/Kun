@@ -42,9 +42,8 @@ const DEFAULT_WRITE_ASSISTANT_MODEL = DEFAULT_KUN_MODEL
 
 export function readStoredPreviewMode(): WritePreviewMode {
   const raw = readBrowserStorageItem(WRITE_PREVIEW_MODE_KEY)
-  return raw === 'rich' || raw === 'source' || raw === 'live' || raw === 'split' || raw === 'preview'
-    ? raw
-    : 'rich'
+  if (raw === 'split') return 'source'
+  return raw === 'rich' || raw === 'source' || raw === 'live' || raw === 'preview' ? raw : 'rich'
 }
 
 export function readStoredAssistantOpen(): boolean {
@@ -289,6 +288,8 @@ export function initialState(): Pick<
   | 'expandedDirs'
   | 'loadingDirs'
   | 'treeError'
+  | 'documentsByPath'
+  | 'editorLayout'
   | 'activeFilePath'
   | 'activeFileKind'
   | 'fileContent'
@@ -318,6 +319,14 @@ export function initialState(): Pick<
     expandedDirs: new Set(),
     loadingDirs: {},
     treeError: null,
+    documentsByPath: {},
+    editorLayout: {
+      version: 1,
+      orientation: 'single',
+      ratio: 0.5,
+      focusedGroupId: 'primary',
+      groups: [{ id: 'primary', tabs: [], activePath: null }]
+    },
     activeFilePath: null,
     activeFileKind: null,
     fileContent: '',

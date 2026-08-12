@@ -24,6 +24,7 @@ import { materializeLegacyProviderCredential } from './legacy-provider-credentia
 import type { ExtensionCredentialStore } from './extension-credential-store.js'
 import { createProxyFetch } from '../adapters/model/proxy-fetch.js'
 import { type ModelConnectionRegistry, StoredProfileSchema, DeletedProfileTombstoneSchema, CredentialTransactionPreviousSchema, CredentialTransactionSchema, CredentialRefCleanupEntrySchema, RegistryDocumentSchema, type RegistryDocument, type StoredProfile, type CredentialTransaction, type PreparedCredentialSecret, type ModelConnectionSeed, type AuthenticatedModelConnectionInput, MODEL_CONNECTION_CREDENTIAL_SOURCE_PREFIX, isModelConnectionCredentialSourceId, modelConnectionCredentialSourceId, providerIdFromCredentialSource, ModelConnectionConflictError, type MaterializedModelConnections, type ProjectedCredentialHealth, credentialHealth, readLatestIfChanged, parseCredentialOperationToken, previousCredentialState, boundedCredentialHighWater, appendCredentialRefs, requireCredentialTransaction, credentialReferenceIsLive, processIsAlive, emptyDocument, configuredFallback, reconcileSeedProfile, sameStoredProfile, project, isProfileUsable, mergeProjectedCapability, assertRevision, requireProfile, capabilitiesForModels, sameCapabilities, allocateId, normalizeProviderId, preparedCredentialSecretTimerKey, uniqueModels, sameModels, probeModels, modelsUrl } from './model-connection-registry-core.js'
+import { repairRegistryModelCapabilityLimits } from './model-capability-limits.js'
 
 export const modelConnectionRegistryConnectionOperations = {
 async initialize(this: ModelConnectionRegistry,
@@ -35,6 +36,12 @@ async initialize(this: ModelConnectionRegistry,
     }
   ): Promise<ModelConnectionSnapshot> {
     let current = await this['file'].read(emptyDocument)
+    if (repairRegistryModelCapabilityLimits(current)) {
+      current = await this['file'].update(emptyDocument, (document) => {
+        const repaired = repairRegistryModelCapabilityLimits(document)
+        return repaired ? { ...repaired, revision: document.revision + 1 } : document
+      })
+    }
     await this['recoverExpiredCredentialTransactions'](current)
     await this['drainCredentialRefCleanup']()
     current = await this['file'].read(emptyDocument)

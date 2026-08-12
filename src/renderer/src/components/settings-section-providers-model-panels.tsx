@@ -49,7 +49,7 @@ export { sharedModelConnectionHasUsableCredential } from '../lib/provider-creden
 
 
 export function ProviderModelsCapabilitiesPanels({ view }: { view: Record<string, any> }): ReactElement {
-  const { t, selectControlClass, activeTab, expandedCapabilities, activeProvider, isDraftActive, setCapabilityExpanded, updateModelProvider, updateModelProviderImage, removeModelProviderImage, updateModelProviderSpeech, removeModelProviderSpeech, updateModelProviderTextToSpeech, removeModelProviderTextToSpeech, updateModelProviderMusic, removeModelProviderMusic, updateModelProviderVideo, removeModelProviderVideo, activeImageBaseUrlInvalid, activeSpeechBaseUrlInvalid, activeSpeechToggleDisabled, activeTextToSpeechBaseUrlInvalid, activeMusicBaseUrlInvalid, activeVideoBaseUrlInvalid, openModelImport, probeBusy, activeProbeBlocked, runProbe, activeProbe, patchProviderProfile } = view
+  const { t, selectControlClass, activeTab, expandedCapabilities, activeProvider, saveIssue, isDraftActive, setCapabilityExpanded, updateModelProvider, updateModelProviderImage, removeModelProviderImage, updateModelProviderSpeech, removeModelProviderSpeech, updateModelProviderTextToSpeech, removeModelProviderTextToSpeech, updateModelProviderMusic, removeModelProviderMusic, updateModelProviderVideo, removeModelProviderVideo, activeImageBaseUrlInvalid, activeSpeechBaseUrlInvalid, activeSpeechToggleDisabled, activeTextToSpeechBaseUrlInvalid, activeMusicBaseUrlInvalid, activeVideoBaseUrlInvalid, openModelImport, probeBusy, activeProbeBlocked, runProbe, activeProbe, patchProviderProfile } = view
   return (
     <>
                 <SettingsTabPanel<ProviderTaskTab>
@@ -79,6 +79,7 @@ export function ProviderModelsCapabilitiesPanels({ view }: { view: Record<string
                     provider={activeProvider}
                     t={t}
                     selectControlClass={selectControlClass}
+                    focusModelId={saveIssue?.providerId === activeProvider.id ? saveIssue.modelId : undefined}
                     onChange={(next) => patchProviderProfile(activeProvider, () => next)}
                   />
                 </DetailSection>

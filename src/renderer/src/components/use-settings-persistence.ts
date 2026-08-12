@@ -12,15 +12,17 @@ import {
   diffSettingsPatch,
   hasValidPort
 } from './settings-utils'
+import { parseSettingsSaveIssue } from './settings-save-error'
 
 type SettingsPatch = AppSettingsPatch
 
 export function useSettingsPersistence(scope: Record<string, any>): Record<string, any> {
-  const { closeSettings, openInitialSetup, applyI18n, reloadUiSettings, probeRuntime, form, setForm, setSaveStatus, setSaveError, saveTimer, statusTimer, draftVersion, pendingSnapshotRef, persistedSettingsRef, flushOnUnmountRef, settingsPlatform, settingsHomeDir } = scope
+  const { closeSettings, openInitialSetup, applyI18n, reloadUiSettings, probeRuntime, form, setForm, setSaveStatus, setSaveError, setSaveIssue, saveTimer, statusTimer, draftVersion, pendingSnapshotRef, persistedSettingsRef, flushOnUnmountRef, settingsPlatform, settingsHomeDir } = scope
   const persistSettings = async (snapshot: AppSettingsV1, version: number): Promise<void> => {
     if (!hasValidPort(snapshot)) return
     setSaveStatus('saving')
     setSaveError(null)
+    setSaveIssue(null)
 
     try {
       const expandedSnapshot = expandSettingsHomePathsForUse(snapshot, settingsHomeDir, settingsPlatform)
@@ -55,6 +57,7 @@ export function useSettingsPersistence(scope: Record<string, any>): Record<strin
       if (version !== draftVersion.current) return
       const message = e instanceof Error ? e.message : String(e)
       setSaveError(message)
+      setSaveIssue(parseSettingsSaveIssue(message, snapshot))
       setSaveStatus('error')
       void window.kunGui?.logError?.('settings', 'Failed to apply settings', { message }).catch(() => undefined)
     }
@@ -68,6 +71,7 @@ export function useSettingsPersistence(scope: Record<string, any>): Record<strin
     if (statusTimer.current) window.clearTimeout(statusTimer.current)
     statusTimer.current = null
     setSaveError(null)
+    setSaveIssue(null)
 
     if (!hasValidPort(next)) {
       pendingSnapshotRef.current = null

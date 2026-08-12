@@ -1,0 +1,99 @@
+.write-editor-tabbar {
+  container-type: inline-size;
+}
+
+.write-tabbar-action {
+  display: inline-flex;
+  height: 30px;
+  width: 30px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  color: var(--ds-text-muted);
+  transition: background-color 140ms ease, color 140ms ease;
+}
+
+.write-tabbar-action:hover {
+  background: var(--ds-hover);
+  color: var(--ds-text);
+}
+
+.write-tabbar-menu-item {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 8px;
+  border-radius: 8px;
+  padding: 7px 9px;
+  text-align: left;
+  color: var(--ds-text);
+  font-size: 12.5px;
+  transition: background-color 140ms ease;
+}
+
+.write-tabbar-menu-item:hover {
+  background: var(--ds-hover);
+}
+
+.write-editor-groups[data-orientation='horizontal'] {
+  flex-direction: row;
+}
+
+.write-editor-groups[data-orientation='vertical'] {
+  flex-direction: column;
+}
+
+.write-editor-group {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--ds-border-muted);
+  background: var(--ds-card);
+}
+
+.write-editor-group[data-focused='true'] {
+  border-color: color-mix(in srgb, var(--ds-accent) 36%, var(--ds-border-muted));
+}
+
+.write-editor-divider {
+  position: relative;
+  z-index: 10;
+  flex: 0 0 6px;
+  background: transparent;
+}
+
+.write-editor-groups[data-orientation='horizontal'] > .write-editor-divider {
+  cursor: col-resize;
+}
+
+.write-editor-groups[data-orientation='vertical'] > .write-editor-divider {
+  cursor: row-resize;
+}
+
+.write-editor-divider::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  background: var(--ds-border-muted);
+  transition: background-color 140ms ease;
+}
+
+.write-editor-groups[data-orientation='horizontal'] > .write-editor-divider::after {
+  width: 1px;
+}
+
+.write-editor-groups[data-orientation='vertical'] > .write-editor-divider::after {
+  height: 1px;
+}
+
+.write-editor-divider:hover::after,
+.write-editor-divider:focus-visible::after {
+  background: var(--ds-accent);
+}
+
+@container (max-width: 620px) {
+  .write-editor-tabbar [role='tab'] {
+    max-width: 148px;
+  }
+}

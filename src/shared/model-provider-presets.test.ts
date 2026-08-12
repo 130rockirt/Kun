@@ -5,6 +5,10 @@ import {
   type ProviderCatalogPreset
 } from '@kun/provider-catalog'
 import {
+  getModelProviderPreset,
+  modelProviderPresetAccountProfile,
+  modelProviderPresetProfile,
+  modelProviderTokenPlanProfile,
   MODEL_PROVIDER_PRESETS,
   tokenPlanProviderId
 } from './model-provider-presets'
@@ -47,5 +51,38 @@ describe('shared model provider preset catalog', () => {
         .filter((preset) => preset.tokenPlan)
         .map((preset) => tokenPlanProviderId(preset.id))
     )
+  })
+
+  it('builds independent ZenMux API and Builder Plan profiles', () => {
+    const preset = getModelProviderPreset('zenmux')
+    expect(preset).not.toBeNull()
+
+    const api = modelProviderPresetProfile(preset!, 'sk-ai-v1-api')
+    const plan = modelProviderTokenPlanProfile(preset!, 'sk-ss-v1-plan')
+    expect(api).toMatchObject({
+      id: 'zenmux',
+      name: 'ZenMux API',
+      presetSource: { presetId: 'zenmux', mode: 'api' },
+      apiKey: 'sk-ai-v1-api',
+      baseUrl: 'https://zenmux.ai/api/v1',
+      endpointFormat: 'chat_completions',
+      models: []
+    })
+    expect(plan).toMatchObject({
+      id: 'zenmux-token-plan',
+      name: 'ZenMux Builder Plan (Coding Plan)',
+      presetSource: { presetId: 'zenmux', mode: 'token-plan' },
+      apiKey: 'sk-ss-v1-plan',
+      baseUrl: 'https://zenmux.ai/api/v1',
+      endpointFormat: 'chat_completions',
+      models: []
+    })
+    expect(preset?.tokenPlan?.keyPrefix).toBe('sk-ss-v1-')
+
+    expect(modelProviderPresetAccountProfile(preset!, 'token-plan', [plan!])).toMatchObject({
+      id: 'zenmux-token-plan-2',
+      name: 'ZenMux Builder Plan (Coding Plan) 2',
+      presetSource: { presetId: 'zenmux', mode: 'token-plan' }
+    })
   })
 })

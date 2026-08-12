@@ -1,6 +1,7 @@
 import type {
   ModelProviderProfileV1
 } from '@shared/app-settings'
+import type { GrokBrowserAuthResult } from '@shared/kun-gui-api'
 import {
   Loader2,
   LogIn
@@ -20,6 +21,33 @@ export { sharedModelConnectionHasUsableCredential } from '../lib/provider-creden
 import { parseGrokIdentity } from './settings-section-providers-profile'
 
 export type GrokLoginPhase = 'idle' | 'browser' | 'error'
+
+type GrokBrowserAuthFailure = Extract<GrokBrowserAuthResult, { ok: false }>
+
+export function formatGrokBrowserAuthFailure(
+  result: GrokBrowserAuthFailure,
+  t: (key: string, params?: Record<string, unknown>) => string
+): string {
+  const key = result.code === 'discovery_failed'
+    ? 'grokAuthErrorDiscovery'
+    : result.code === 'browser_open_failed'
+      ? 'grokAuthErrorBrowserOpen'
+      : result.code === 'token_exchange_failed'
+        ? 'grokAuthErrorTokenExchange'
+        : result.code === 'timeout'
+          ? 'grokAuthErrorTimeout'
+          : result.code === 'cancelled'
+            ? 'grokAuthErrorCancelled'
+            : result.code === 'port_in_use' || result.code === 'callback_failed'
+              ? 'grokAuthErrorCallback'
+              : ''
+  if (!key) return result.message
+  const guidance = t(key)
+  const detail = result.message.trim()
+  return detail && detail !== guidance && result.code !== 'cancelled'
+    ? `${guidance} ${detail}`
+    : guidance
+}
 
 export function GrokLoginSection({
   provider,
@@ -73,12 +101,12 @@ export function GrokLoginSection({
         setPasteCode('')
         onCredentialChange(JSON.stringify(result.credentials))
         setPhase('idle')
-      } else if (result.message === '已取消登录') {
+      } else if (result.code === 'cancelled') {
         setPhase('idle')
         setError('')
       } else {
         setPhase('error')
-        setError(result.message)
+        setError(formatGrokBrowserAuthFailure(result, t))
       }
     } catch (err) {
       if (!isCurrentLoginRun(runId)) return
@@ -103,7 +131,7 @@ export function GrokLoginSection({
       // On success, startGrokBrowserAuth's promise also resolves and the browser
       // phase handler will store credentials. On failure keep the paste form open.
       if (!result.ok) {
-        setError(result.message)
+        setError(formatGrokBrowserAuthFailure(result, t))
         setPasteBusy(false)
       }
     } catch (err) {

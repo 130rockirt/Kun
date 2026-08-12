@@ -11,6 +11,8 @@ import {
   MODEL_REASONING_EFFORTS,
   MODEL_REASONING_REQUEST_PROTOCOLS,
   MODEL_SERVICE_TIERS,
+  MAX_MODEL_CONTEXT_WINDOW_TOKENS,
+  MAX_MODEL_OUTPUT_TOKENS,
   MAX_WRITE_AUTOSAVE_DELAY_MS,
   MIN_WRITE_AUTOSAVE_DELAY_MS,
   MIN_KUN_LOCAL_PORT,
@@ -114,8 +116,8 @@ const modelReasoningRequestProtocolSchema = z.enum(MODEL_REASONING_REQUEST_PROTO
 const modelServiceTierSchema = z.enum(MODEL_SERVICE_TIERS)
 const modelProfilePatchShape = {
   aliases: z.array(modelIdSchema).max(50).optional(),
-  contextWindowTokens: z.number().int().positive().max(10_000_000).optional(),
-  maxOutputTokens: z.number().int().positive().max(1_000_000).optional(),
+  contextWindowTokens: z.number().int().positive().max(MAX_MODEL_CONTEXT_WINDOW_TOKENS).optional(),
+  maxOutputTokens: z.number().int().positive().max(MAX_MODEL_OUTPUT_TOKENS).optional(),
   inputModalities: z.array(modelProviderInputModalitySchema).max(8).optional(),
   outputModalities: z.array(modelProviderInputModalitySchema).max(8).optional(),
   supportsToolCalling: z.boolean().optional(),

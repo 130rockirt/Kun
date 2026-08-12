@@ -6,6 +6,7 @@ import {
   grokCliMediaHeaders,
   grokCliProxyHeaders
 } from '../../kun/src/adapters/model/provider-cli-identity.js'
+import { fetchWithOptionalProxy } from './proxy-fetch'
 
 /** Matches the public Grok CLI OAuth client (xai-grok-shell GrokComConfig::default). */
 export const GROK_OAUTH_CLIENT_ID = 'b1a00492-073a-47ea-816f-4c329264a828'
@@ -46,11 +47,27 @@ export type GrokOAuthCredentials = {
   clientId?: string
 }
 
-export type GrokBrowserAuthErrorCode = 'port_in_use'
+export type GrokBrowserAuthErrorCode =
+  | 'port_in_use'
+  | 'discovery_failed'
+  | 'callback_failed'
+  | 'browser_open_failed'
+  | 'token_exchange_failed'
+  | 'timeout'
+  | 'cancelled'
 
 export type GrokBrowserAuthResult =
   | { ok: true; credentials: GrokOAuthCredentials }
-  | { ok: false; message: string; code?: GrokBrowserAuthErrorCode }
+  | {
+      ok: false
+      message: string
+      code?: GrokBrowserAuthErrorCode
+    }
+
+export type GrokAuthTransport = {
+  fetcher?: typeof fetchWithOptionalProxy
+  proxyUrl?: string
+}
 
 type OidcDiscovery = {
   authorization_endpoint: string
@@ -62,6 +79,7 @@ type PendingBrowserSession = {
   redirectUri: string
   codeVerifier: string
   state: string
+  transport: GrokAuthTransport
   server: Server | null
   settled: boolean
   resolve: (result: GrokBrowserAuthResult) => void
@@ -69,6 +87,26 @@ type PendingBrowserSession = {
 }
 
 let pendingBrowserSession: PendingBrowserSession | null = null
+
+export function sanitizeGrokAuthError(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error)
+  return raw
+    .replace(/(https?:\/\/)[^/@\s]+@/gi, '$1[redacted]@')
+    .replace(/([?&](?:code|state|token|access_token|refresh_token|code_verifier)=)[^&#\s]*/gi, '$1[redacted]')
+    .replace(/(Bearer)\s+[^\s,;]+/gi, '$1 [redacted]')
+    .replace(/("(?:access_token|refresh_token|id_token|code|code_verifier|state)"\s*:\s*")[^"]*/gi, '$1[redacted]')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 300)
+}
+
+function authFetch(
+  input: string | URL,
+  init: RequestInit | undefined,
+  transport: GrokAuthTransport
+): Promise<Response> {
+  return (transport.fetcher ?? fetchWithOptionalProxy)(input, init, transport.proxyUrl ?? '')
+}
 
 function parseJwtClaims(token: string): Record<string, unknown> | undefined {
   const part = token.split('.')[1]
@@ -120,16 +158,17 @@ function summarizeAuthErrorBody(text: string): string {
 async function postForm(
   url: string,
   body: Record<string, string>,
-  extraHeaders: Record<string, string> = {}
+  extraHeaders: Record<string, string> = {},
+  transport: GrokAuthTransport = {}
 ): Promise<Record<string, unknown>> {
-  const res = await fetch(url, {
+  const res = await authFetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded',
       ...extraHeaders
     },
     body: new URLSearchParams(body).toString()
-  })
+  }, transport)
   const text = await res.text()
   if (!res.ok) {
     const detail = summarizeAuthErrorBody(text)
@@ -142,9 +181,16 @@ async function postForm(
   }
 }
 
-async function discoverOidc(issuer: string = GROK_OAUTH_ISSUER): Promise<OidcDiscovery> {
+async function discoverOidc(
+  issuer: string = GROK_OAUTH_ISSUER,
+  transport: GrokAuthTransport = {}
+): Promise<OidcDiscovery> {
   const url = `${issuer.replace(/\/$/, '')}/.well-known/openid-configuration`
-  const res = await fetch(url, { method: 'GET', headers: { Accept: 'application/json' } })
+  const res = await authFetch(
+    url,
+    { method: 'GET', headers: { Accept: 'application/json' } },
+    transport
+  )
   const text = await res.text()
   if (!res.ok) {
     throw new Error(`Grok subscription auth: discovery failed (${res.status}) from ${url}`)
@@ -290,7 +336,7 @@ export function parseGrokPastedAuthInput(input: string): { code: string; state: 
 }
 
 async function exchangeAuthorizationCode(
-  session: Pick<PendingBrowserSession, 'tokenEndpoint' | 'redirectUri' | 'codeVerifier'>,
+  session: Pick<PendingBrowserSession, 'tokenEndpoint' | 'redirectUri' | 'codeVerifier' | 'transport'>,
   code: string
 ): Promise<GrokOAuthCredentials> {
   const tokens = await postForm(
@@ -302,7 +348,8 @@ async function exchangeAuthorizationCode(
       client_id: GROK_OAUTH_CLIENT_ID,
       code_verifier: session.codeVerifier
     },
-    { 'x-grok-client-version': GROK_CLIENT_VERSION }
+    { 'x-grok-client-version': GROK_CLIENT_VERSION },
+    session.transport
   )
   const creds = credentialsFromTokens(tokens)
   if (!creds) throw new Error('令牌交换返回的数据不完整')
@@ -315,12 +362,22 @@ async function exchangeAuthorizationCode(
  * matching grok-build's Path A + Path B design.
  */
 export async function startGrokBrowserAuth(
-  openBrowser: (url: string) => void | Promise<void>
+  openBrowser: (url: string) => void | Promise<void>,
+  transport: GrokAuthTransport = {}
 ): Promise<GrokBrowserAuthResult> {
   cancelGrokBrowserAuth()
 
   try {
-    const discovery = await discoverOidc()
+    let discovery: OidcDiscovery
+    try {
+      discovery = await discoverOidc(GROK_OAUTH_ISSUER, transport)
+    } catch (error) {
+      return {
+        ok: false,
+        code: 'discovery_failed',
+        message: sanitizeGrokAuthError(error)
+      }
+    }
     const pkce = generatePkce()
     const state = base64UrlEncode(randomBytes(32))
     const nonce = base64UrlEncode(randomBytes(16))
@@ -330,7 +387,11 @@ export async function startGrokBrowserAuth(
       let server: Server | null = null
 
       const timeout = setTimeout(() => {
-        settleBrowserSession({ ok: false, message: '授权超时，请重试' })
+        settleBrowserSession({
+          ok: false,
+          code: 'timeout',
+          message: '授权超时，请重试'
+        })
       }, GROK_OAUTH_TIMEOUT_MS)
 
       const sessionShell: PendingBrowserSession = {
@@ -338,6 +399,7 @@ export async function startGrokBrowserAuth(
         redirectUri: '',
         codeVerifier: pkce.verifier,
         state,
+        transport,
         server: null,
         settled: false,
         resolve,
@@ -362,13 +424,13 @@ export async function startGrokBrowserAuth(
         if (oauthError) {
           const message = url.searchParams.get('error_description') || oauthError
           res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }).end(renderGrokErrorHtml(message))
-          settleBrowserSession({ ok: false, message })
+          settleBrowserSession({ ok: false, code: 'callback_failed', message })
           return
         }
         if (!code || returnedState !== state) {
           const message = !code ? '缺少授权码' : '状态校验失败（可能的 CSRF）'
           res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' }).end(renderGrokErrorHtml(message))
-          settleBrowserSession({ ok: false, message })
+          settleBrowserSession({ ok: false, code: 'callback_failed', message })
           return
         }
         void exchangeAuthorizationCode(current, code)
@@ -377,9 +439,9 @@ export async function startGrokBrowserAuth(
             settleBrowserSession({ ok: true, credentials: creds })
           })
           .catch((err: unknown) => {
-            const message = err instanceof Error ? err.message : String(err)
+            const message = sanitizeGrokAuthError(err)
             res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }).end(renderGrokErrorHtml(message))
-            settleBrowserSession({ ok: false, message })
+            settleBrowserSession({ ok: false, code: 'token_exchange_failed', message })
           })
       })
 
@@ -390,7 +452,7 @@ export async function startGrokBrowserAuth(
         settleBrowserSession(
           err.code === 'EADDRINUSE'
             ? { ok: false, message, code: 'port_in_use' }
-            : { ok: false, message }
+            : { ok: false, message: sanitizeGrokAuthError(err), code: 'callback_failed' }
         )
       }
 
@@ -399,7 +461,11 @@ export async function startGrokBrowserAuth(
         server?.off('error', onListenError)
         const addr = server?.address()
         if (!addr || typeof addr === 'string') {
-          settleBrowserSession({ ok: false, message: '无法绑定本地回调端口' })
+          settleBrowserSession({
+            ok: false,
+            code: 'callback_failed',
+            message: '无法绑定本地回调端口'
+          })
           return
         }
         activePort = addr.port
@@ -418,15 +484,15 @@ export async function startGrokBrowserAuth(
         void Promise.resolve(openBrowser(authorizeUrl)).catch((err: unknown) => {
           settleBrowserSession({
             ok: false,
-            message: err instanceof Error ? err.message : String(err)
+            code: 'browser_open_failed',
+            message: sanitizeGrokAuthError(err)
           })
         })
       })
     })
   } catch (error) {
     cancelGrokBrowserAuth()
-    const message = error instanceof Error ? error.message : String(error)
-    return { ok: false, message }
+    return { ok: false, code: 'callback_failed', message: sanitizeGrokAuthError(error) }
   }
 }
 
@@ -456,15 +522,15 @@ export async function submitGrokBrowserAuthCode(pasted: string): Promise<GrokBro
     settleBrowserSession({ ok: true, credentials })
     return { ok: true, credentials }
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
+    const message = sanitizeGrokAuthError(error)
     // Do not settle on paste exchange failure — user can retry paste or wait for loopback.
-    return { ok: false, message }
+    return { ok: false, code: 'token_exchange_failed', message }
   }
 }
 
 export function cancelGrokBrowserAuth(): void {
   if (!pendingBrowserSession) return
-  settleBrowserSession({ ok: false, message: '已取消登录' })
+  settleBrowserSession({ ok: false, code: 'cancelled', message: '已取消登录' })
 }
 
 export function isGrokBrowserAuthPending(): boolean {
@@ -472,13 +538,14 @@ export function isGrokBrowserAuthPending(): boolean {
 }
 
 export async function refreshGrokToken(
-  credentials: GrokOAuthCredentials
+  credentials: GrokOAuthCredentials,
+  transport: GrokAuthTransport = {}
 ): Promise<GrokOAuthCredentials | null> {
   try {
     const issuer = (credentials.issuer || GROK_OAUTH_ISSUER).replace(/\/$/, '')
     let tokenEndpoint = `${issuer}/oauth2/token`
     try {
-      const discovery = await discoverOidc(issuer)
+      const discovery = await discoverOidc(issuer, transport)
       tokenEndpoint = discovery.token_endpoint
     } catch {
       /* fall back to /oauth2/token */
@@ -490,7 +557,8 @@ export async function refreshGrokToken(
         refresh_token: credentials.refreshToken,
         client_id: credentials.clientId || GROK_OAUTH_CLIENT_ID
       },
-      { 'x-grok-client-version': GROK_CLIENT_VERSION }
+      { 'x-grok-client-version': GROK_CLIENT_VERSION },
+      transport
     )
     // Refresh responses sometimes omit refresh_token — keep the previous one.
     if (typeof tokens.refresh_token !== 'string' || !tokens.refresh_token) {
@@ -525,7 +593,10 @@ export function isGrokCredentialExpired(
  * Refresh when within the early-invalidation window. Returns updated encoded
  * credentials when refreshed; otherwise the original raw string.
  */
-export async function ensureFreshGrokCredentials(rawApiKey: string): Promise<{
+export async function ensureFreshGrokCredentials(
+  rawApiKey: string,
+  transport: GrokAuthTransport = {}
+): Promise<{
   apiKey: string
   refreshed: boolean
   credentials: GrokOAuthCredentials | null
@@ -538,7 +609,7 @@ export async function ensureFreshGrokCredentials(rawApiKey: string): Promise<{
   if (!isGrokCredentialExpired(credentials)) {
     return { apiKey: key, refreshed: false, credentials }
   }
-  const next = await refreshGrokToken(credentials)
+  const next = await refreshGrokToken(credentials, transport)
   if (!next) {
     return { apiKey: key, refreshed: false, credentials }
   }

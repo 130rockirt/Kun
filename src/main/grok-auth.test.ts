@@ -13,6 +13,7 @@ import {
   parseGrokCredentials,
   parseGrokPastedAuthInput,
   resolveGrokOAuthApiKey,
+  sanitizeGrokAuthError,
   startGrokBrowserAuth,
   submitGrokBrowserAuthCode
 } from './grok-auth'
@@ -115,6 +116,51 @@ describe('startGrokBrowserAuth', () => {
     expect(tokenRequests[0]?.clientVersion).toBe(GROK_CLIENT_VERSION)
   })
 
+  it('uses the configured proxy for discovery and authorization-code exchange', async () => {
+    const proxyUrl = 'http://proxy.example:7890'
+    const requests: Array<{ url: string; proxyUrl: string }> = []
+    const fetcher = vi.fn(async (input: string | URL, _init: RequestInit | undefined, proxy: string) => {
+      const url = String(input)
+      requests.push({ url, proxyUrl: proxy })
+      return new Response(JSON.stringify(
+        url.includes('openid-configuration') ? discoveryBody() : successfulTokenBody()
+      ), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    })
+
+    const result = await startGrokBrowserAuth(async (url) => {
+      const authUrl = new URL(url)
+      const redirectUri = authUrl.searchParams.get('redirect_uri')
+      const state = authUrl.searchParams.get('state')
+      if (!redirectUri || !state) throw new Error('missing OAuth redirect data')
+      await hitCallback(redirectUri, state)
+    }, { fetcher, proxyUrl })
+
+    expect(result.ok).toBe(true)
+    expect(requests).toHaveLength(2)
+    expect(requests.every((request) => request.proxyUrl === proxyUrl)).toBe(true)
+    expect(requests[0]?.url).toContain('openid-configuration')
+    expect(requests[1]?.url).toContain('/oauth2/token')
+  })
+
+  it('classifies browser launch failures and redacts transport secrets', async () => {
+    mockDiscoveryAndToken()
+    const result = await startGrokBrowserAuth(async () => {
+      throw new Error(
+        'open failed via http://alice:secret@127.0.0.1:7890/callback?code=abc&state=xyz Bearer private-token'
+      )
+    })
+
+    expect(result).toMatchObject({ ok: false, code: 'browser_open_failed' })
+    if (!result.ok) {
+      expect(result.message).not.toContain('alice')
+      expect(result.message).not.toContain('secret')
+      expect(result.message).not.toContain('abc')
+      expect(result.message).not.toContain('xyz')
+      expect(result.message).not.toContain('private-token')
+      expect(result.message).toContain('[redacted]')
+    }
+  })
+
   it('completes browser OAuth when the user pastes a bare authorization code', async () => {
     const tokenRequests = mockDiscoveryAndToken()
     const browserPromise = startGrokBrowserAuth(async () => {
@@ -167,6 +213,7 @@ describe('startGrokBrowserAuth', () => {
 
     expect(result).toMatchObject({ ok: false })
     if (!result.ok) {
+      expect(result.code).toBe('token_exchange_failed')
       expect(result.message).toContain('returned 403: access_denied: team disallowed')
     }
   })
@@ -178,6 +225,18 @@ describe('parseGrokPastedAuthInput', () => {
     expect(
       parseGrokPastedAuthInput('http://127.0.0.1:1234/callback?code=xyz&state=st')
     ).toEqual({ code: 'xyz', state: 'st' })
+  })
+})
+
+describe('sanitizeGrokAuthError', () => {
+  it('removes proxy credentials and OAuth query secrets', () => {
+    const message = sanitizeGrokAuthError(
+      'http://user:pass@proxy.local/callback?code=code-secret&state=state-secret'
+    )
+    expect(message).not.toContain('user')
+    expect(message).not.toContain('pass')
+    expect(message).not.toContain('code-secret')
+    expect(message).not.toContain('state-secret')
   })
 })
 
@@ -259,5 +318,27 @@ describe('credential helpers and refresh', () => {
     expect(result.credentials?.refreshToken).toBe('new-refresh')
     expect(parseGrokCredentials(result.apiKey)?.email).toBe('new@example.com')
     expect(tokenRequests[0]?.clientVersion).toBe(GROK_CLIENT_VERSION)
+  })
+
+  it('uses the configured proxy for discovery and refresh exchange', async () => {
+    const proxyUrl = 'socks5://127.0.0.1:1080'
+    const observedProxies: string[] = []
+    const fetcher = vi.fn(async (input: string | URL, _init: RequestInit | undefined, proxy: string) => {
+      observedProxies.push(proxy)
+      return new Response(JSON.stringify(
+        String(input).includes('openid-configuration') ? discoveryBody() : successfulTokenBody()
+      ), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    })
+    const raw = encodeGrokCredentials({
+      kind: 'grok-oauth',
+      accessToken: 'old-access',
+      refreshToken: 'old-refresh',
+      expiresAt: Date.now() + 60_000
+    })
+
+    const result = await ensureFreshGrokCredentials(raw, { fetcher, proxyUrl })
+
+    expect(result.refreshed).toBe(true)
+    expect(observedProxies).toEqual([proxyUrl, proxyUrl])
   })
 })

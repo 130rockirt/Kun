@@ -4,9 +4,61 @@ import type { WriteEditorSelectionState } from '../components/write/WriteMarkdow
 import type { WriteQuotedSelection } from './quoted-selection'
 import type { WriteRecentEdit } from './recent-edits'
 
-export type WritePreviewMode = 'rich' | 'source' | 'live' | 'split' | 'preview'
+export type WritePreviewMode = 'rich' | 'source' | 'live' | 'preview'
 export type WriteSaveStatus = 'saved' | 'dirty' | 'saving' | 'error'
 export type WriteActiveFileKind = 'text' | 'image' | 'pdf'
+export type WriteEditorGroupId = 'primary' | 'secondary'
+export type WriteEditorLayoutOrientation = 'single' | 'horizontal' | 'vertical'
+
+export type WriteEditorTab = {
+  path: string
+  viewMode: WritePreviewMode
+  cursorOffset?: number
+  scrollTop?: number
+}
+
+export type WriteEditorGroup = {
+  id: WriteEditorGroupId
+  tabs: WriteEditorTab[]
+  activePath: string | null
+}
+
+export type WriteEditorLayoutV1 = {
+  version: 1
+  orientation: WriteEditorLayoutOrientation
+  ratio: number
+  focusedGroupId: WriteEditorGroupId
+  groups: WriteEditorGroup[]
+}
+
+export type WriteDocumentSession = {
+  path: string
+  kind: WriteActiveFileKind
+  fileContent: string
+  imageDataUrl: string
+  imageMimeType: string
+  pdfDataBase64: string
+  pdfMimeType: string
+  pdfMtimeMs: number
+  fileSize: number
+  fileTruncated: boolean
+  fileError: string | null
+  fileLoading: boolean
+  saveStatus: WriteSaveStatus
+  documentEpoch: number
+  contentRevision: number
+  persistedContent: string
+  pendingAgentReview: {
+    workspaceRoot: string
+    filePath: string
+    documentEpoch: number
+    nextContent: string
+  } | null
+  reviewActive: boolean
+  selection: WriteEditorSelectionState
+  quotedSelections: WriteQuotedSelection[]
+  recentEdits: WriteRecentEdit[]
+}
 
 export type WriteWorkspaceState = {
   defaultWorkspaceRoot: string
@@ -31,6 +83,8 @@ export type WriteWorkspaceState = {
   expandedDirs: Set<string>
   loadingDirs: Record<string, boolean>
   treeError: string | null
+  documentsByPath: Record<string, WriteDocumentSession>
+  editorLayout: WriteEditorLayoutV1
   activeFilePath: string | null
   activeFileKind: WriteActiveFileKind | null
   fileContent: string
@@ -77,7 +131,27 @@ export type WriteWorkspaceState = {
   loadDirectory: (workspaceRoot: string, path?: string) => Promise<string | null>
   toggleDirectory: (workspaceRoot: string, path: string) => Promise<void>
   refreshWorkspace: (workspaceRoot: string) => Promise<void>
-  openFile: (workspaceRoot: string, path: string) => Promise<void>
+  openFile: (
+    workspaceRoot: string,
+    path: string,
+    options?: { groupId?: WriteEditorGroupId; viewMode?: WritePreviewMode }
+  ) => Promise<void>
+  activateTab: (groupId: WriteEditorGroupId, path: string) => void
+  closeTab: (groupId: WriteEditorGroupId, path: string, force?: boolean) => Promise<boolean>
+  moveTab: (path: string, fromGroupId: WriteEditorGroupId, toGroupId: WriteEditorGroupId, index?: number) => void
+  focusEditorGroup: (groupId: WriteEditorGroupId) => void
+  splitEditorGroup: (orientation: Exclude<WriteEditorLayoutOrientation, 'single'>, path?: string) => void
+  closeEditorGroup: (groupId: WriteEditorGroupId) => void
+  setTabViewMode: (groupId: WriteEditorGroupId, path: string, mode: WritePreviewMode) => void
+  setSplitOrientation: (orientation: Exclude<WriteEditorLayoutOrientation, 'single'>) => void
+  setSplitRatio: (ratio: number) => void
+  setDocumentContent: (path: string, content: string) => void
+  saveDocument: (
+    workspaceRoot: string,
+    path: string,
+    options?: { resolveExternalConflict?: 'keep-local' }
+  ) => Promise<boolean>
+  saveAllDocuments: (workspaceRoot: string) => Promise<boolean>
   setFileContent: (content: string) => void
   syncActiveFileFromDisk: (
     workspaceRoot: string,

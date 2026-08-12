@@ -95,7 +95,7 @@ export function modelProviderTokenPlanProfile(
   const resolvedBaseUrl = baseUrl.trim() || tokenPlan.baseUrl
   return {
     id: tokenPlanProviderId(preset.id),
-    name: `${preset.name} Token Plan`,
+    name: tokenPlan.displayName?.trim() || `${preset.name} Token Plan`,
     presetSource: { presetId: preset.id, mode: 'token-plan' },
     apiKey: apiKey.trim(),
     baseUrl: resolvedBaseUrl,

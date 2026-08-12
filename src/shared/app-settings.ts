@@ -16,3 +16,7 @@ export * from './app-settings-domain'
 export * from './browser-use'
 export * from './keyboard-shortcuts'
 export * from './model-provider-presets'
+export {
+  MAX_MODEL_CONTEXT_WINDOW_TOKENS,
+  MAX_MODEL_OUTPUT_TOKENS
+} from '../../kun/src/contracts/capabilities.js'

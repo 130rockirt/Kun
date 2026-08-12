@@ -315,11 +315,12 @@ export function jwtExpiryMs(token: string): number {
 
 export async function resolveGrokCredential(
   provider: ModelProviderProfileV1,
-  rejectedAccessToken?: string
+  rejectedAccessToken?: string,
+  context?: SubscriptionProbeContext
 ): Promise<GrokQuotaCredential | undefined> {
   const configured = parseGrokCredentials(provider.apiKey.trim())
   if (configured) {
-    return refreshableGrokQuotaCredential(configured, rejectedAccessToken)
+    return refreshableGrokQuotaCredential(configured, rejectedAccessToken, context)
   }
   const configuredToken = provider.apiKey.trim()
   if (configuredToken && !configuredToken.startsWith('{') && configuredToken !== rejectedAccessToken) {
@@ -363,7 +364,7 @@ export async function resolveGrokCredential(
         ...(stringValue(entry?.user_id) ? { userId: stringValue(entry?.user_id) } : {}),
         ...(stringValue(entry?.oidc_issuer) ? { issuer: stringValue(entry?.oidc_issuer) } : {}),
         ...(stringValue(entry?.oidc_client_id) ? { clientId: stringValue(entry?.oidc_client_id) } : {})
-      }, rejectedAccessToken)
+      }, rejectedAccessToken, context)
       if (credential) return credential
       continue
     }
@@ -378,7 +379,8 @@ export async function resolveGrokCredential(
 
 export async function refreshableGrokQuotaCredential(
   source: GrokOAuthCredentials,
-  rejectedAccessToken?: string
+  rejectedAccessToken?: string,
+  context?: SubscriptionProbeContext
 ): Promise<GrokQuotaCredential | undefined> {
   const cached = grokQuotaCredentialCache.get(source.refreshToken)
   const credential = cached ?? source
@@ -388,7 +390,9 @@ export async function refreshableGrokQuotaCredential(
   if (!rejectedCurrentToken && !isGrokCredentialExpired(credential)) {
     return grokQuotaCredential(credential)
   }
-  const refreshed = await refreshGrokToken(credential)
+  const refreshed = await refreshGrokToken(credential, context
+    ? { fetcher: context.fetcher, proxyUrl: context.proxyUrl }
+    : {})
   if (!refreshed) {
     if (!rejectedCurrentToken && credential.expiresAt > Date.now()) {
       return grokQuotaCredential(credential)

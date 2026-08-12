@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -279,6 +279,67 @@ describe('ModelConnectionRegistry', () => {
           }
         }
       })
+    })
+
+  it('repairs historical out-of-range model limits once without changing provider identity or selection', async () => {
+      const { dataDir, value, credentials } = await registry()
+      const connected = await value.connect({
+        expectedRevision: 0,
+        id: 'zenmux',
+        name: 'ZenMux',
+        baseUrl: 'https://zenmux.ai/api/v1',
+        credential: 'secret',
+        models: ['qwen/qwen3.5-flash'],
+        modelCapabilities: {
+          'qwen/qwen3.5-flash': {
+            id: 'qwen/qwen3.5-flash',
+            inputModalities: ['text', 'image'],
+            outputModalities: ['text'],
+            supportsToolCalling: true,
+            contextWindowTokens: 1_020_000,
+            maxOutputTokens: 1_000_000,
+            messageParts: ['text', 'image_url']
+          }
+        },
+        selectedModel: 'qwen/qwen3.5-flash',
+        probe: false,
+        select: true
+      })
+      const registryPath = join(dataDir, 'model-connections.v1.json')
+      const historical = JSON.parse(await readFile(registryPath, 'utf8')) as {
+        revision: number
+        profiles: Record<string, {
+          credentialRef?: string
+          modelCapabilities?: Record<string, { maxOutputTokens?: number }>
+        }>
+      }
+      const credentialRef = historical.profiles.zenmux?.credentialRef
+      historical.profiles.zenmux!.modelCapabilities!['qwen/qwen3.5-flash']!.maxOutputTokens = 1_020_000
+      await writeFile(registryPath, `${JSON.stringify(historical, null, 2)}\n`)
+
+      const restarted = new ModelConnectionRegistry({
+        dataDir,
+        credentials,
+        inspectCredentialSource: async () => 'ready'
+      })
+      const repaired = await restarted.initialize()
+      expect(repaired.revision).toBe(connected.revision + 1)
+      expect(repaired.defaultProviderId).toBe('zenmux')
+      expect(repaired.defaultModel).toBe('qwen/qwen3.5-flash')
+      expect(repaired.providers[0]?.models).toEqual(['qwen/qwen3.5-flash'])
+      expect(repaired.providers[0]?.modelCapabilities?.['qwen/qwen3.5-flash']).toMatchObject({
+        contextWindowTokens: 1_020_000,
+        inputModalities: ['text', 'image']
+      })
+      expect(repaired.providers[0]?.modelCapabilities?.['qwen/qwen3.5-flash']?.maxOutputTokens)
+        .toBeUndefined()
+      const persisted = JSON.parse(await readFile(registryPath, 'utf8')) as typeof historical
+      expect(persisted.profiles.zenmux?.credentialRef).toBe(credentialRef)
+      expect(persisted.profiles.zenmux?.modelCapabilities?.['qwen/qwen3.5-flash']?.maxOutputTokens)
+        .toBeUndefined()
+
+      const repeated = await restarted.initialize()
+      expect(repeated.revision).toBe(repaired.revision)
     })
 
   it('fills missing reasoning from the selected provider without replacing stored model metadata', async () => {

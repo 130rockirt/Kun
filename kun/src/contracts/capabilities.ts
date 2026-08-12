@@ -1,5 +1,7 @@
 export {
   RUNTIME_CAPABILITY_CONTRACT_VERSION,
+  MAX_MODEL_CONTEXT_WINDOW_TOKENS,
+  MAX_MODEL_OUTPUT_TOKENS,
   RuntimeCapabilityStatus,
   RuntimeCapabilityState,
   ModelInputModality,

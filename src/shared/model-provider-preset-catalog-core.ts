@@ -377,6 +377,25 @@ export const MODEL_PROVIDER_PRESETS_CORE: ModelProviderPreset[] = [
     apiKeyUrl: 'https://opencode.ai/auth'
   },
 {
+    id: 'zenmux',
+    name: 'ZenMux API',
+    subscriptionRegion: 'united-states',
+    baseUrl: 'https://zenmux.ai/api/v1',
+    endpointFormat: 'chat_completions',
+    // ZenMux rotates a large aggregate catalog; Settings imports the live /models list.
+    models: [],
+    tokenPlan: {
+      displayName: 'ZenMux Builder Plan (Coding Plan)',
+      baseUrl: 'https://zenmux.ai/api/v1',
+      endpointFormat: 'chat_completions',
+      models: [],
+      keyPrefix: 'sk-ss-v1-',
+      apiKeyUrl: 'https://zenmux.ai/platform/subscription'
+    },
+    docsUrl: 'https://zenmux.ai/docs/guide/quickstart',
+    apiKeyUrl: 'https://zenmux.ai/platform/pay-as-you-go'
+  },
+{
     id: 'moonshot-cn',
     name: 'Moonshot CN',
     baseUrl: 'https://api.moonshot.cn/v1',

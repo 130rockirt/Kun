@@ -67,6 +67,7 @@ function windowCloseLabels(locale: AppSettingsV1['locale']): {
   quit: string
   cancel: string
   remember: string
+  trayUnavailable: string
 } {
   if (locale === 'zh') {
     return {
@@ -76,7 +77,8 @@ function windowCloseLabels(locale: AppSettingsV1['locale']): {
       minimizeToTray: '最小化到托盘',
       quit: '退出应用',
       cancel: '取消',
-      remember: '记住我的选择，不再询问'
+      remember: '记住我的选择，不再询问',
+      trayUnavailable: '系统托盘当前不可用。为避免窗口消失后无法恢复，本次只能退出或取消。'
     }
   }
   return {
@@ -86,7 +88,8 @@ function windowCloseLabels(locale: AppSettingsV1['locale']): {
     minimizeToTray: 'Minimize to tray',
     quit: 'Quit app',
     cancel: 'Cancel',
-    remember: 'Remember my choice and do not ask again'
+    remember: 'Remember my choice and do not ask again',
+    trayUnavailable: 'The system tray is unavailable. To keep the window recoverable, this close can only quit or be cancelled.'
   }
 }
 
@@ -337,35 +340,47 @@ export function syncTray(settings: AppSettingsV1): void {
       mainState.tray = null
       mainState.trayMenu = null
     }
+    mainState.trayAvailable = false
     return
   }
 
-  if (!mainState.tray) {
-    // Tray 优先用专门的托盘图(在 16x16/24x24 任务栏尺寸下更清晰的剪影);
-    // 托盘图加载失败时回退到主应用图,这样不会看到 electron 默认占位。
-    const traySource = prepareTrayIcon(pickTrayIcon(trayIcon, appIcon))
-    const createdTray = new Tray(traySource.isEmpty() ? nativeImage.createEmpty() : traySource)
-    mainState.tray = createdTray
-    createdTray.on('click', () => {
-      void toggleTrayQuotaPopover().catch((error) => {
-        logWarn('tray-quota', 'Failed to toggle tray quota popover.', {
-          message: error instanceof Error ? error.message : String(error)
+  try {
+    if (!mainState.tray) {
+      // Tray 优先用专门的托盘图(在 16x16/24x24 任务栏尺寸下更清晰的剪影);
+      // 托盘图加载失败时回退到主应用图,这样不会看到 electron 默认占位。
+      const traySource = prepareTrayIcon(pickTrayIcon(trayIcon, appIcon))
+      const createdTray = new Tray(traySource.isEmpty() ? nativeImage.createEmpty() : traySource)
+      mainState.tray = createdTray
+      createdTray.on('click', () => {
+        void toggleTrayQuotaPopover().catch((error) => {
+          logWarn('tray-quota', 'Failed to toggle tray quota popover.', {
+            message: error instanceof Error ? error.message : String(error)
+          })
         })
       })
-    })
-    createdTray.on('double-click', () => {
-      hideTrayQuotaPopover()
-      revealMainWindow()
-    })
-    createdTray.on('right-click', showTrayMenu)
-  }
+      createdTray.on('double-click', () => {
+        hideTrayQuotaPopover()
+        revealMainWindow()
+      })
+      createdTray.on('right-click', showTrayMenu)
+    }
 
-  const currentTray = mainState.tray
-  if (!currentTray) return
-  currentTray.setToolTip(appEnvironment.appName)
-  mainState.trayMenu = createTrayMenu(settings, [])
-  currentTray.setContextMenu(null)
-  notifyTrayQuotaRefresh()
+    const currentTray = mainState.tray
+    if (!currentTray) return
+    currentTray.setToolTip(appEnvironment.appName)
+    mainState.trayMenu = createTrayMenu(settings, [])
+    currentTray.setContextMenu(null)
+    mainState.trayAvailable = true
+    notifyTrayQuotaRefresh()
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    mainState.trayAvailable = false
+    if (mainState.tray && !mainState.tray.isDestroyed()) mainState.tray.destroy()
+    mainState.tray = null
+    mainState.trayMenu = null
+    console.warn('[kun-gui] tray initialization failed; continuing without tray:', error)
+    logWarn('tray', 'Tray initialization failed; continuing without tray.', { message })
+  }
 }
 
 async function saveWindowCloseActionPreference(closeAction: WindowCloseAction): Promise<void> {
@@ -380,6 +395,7 @@ async function promptWindowCloseAction(window: BrowserWindow): Promise<void> {
   try {
     const settings = await mainState.store.load()
     const labels = windowCloseLabels(settings.locale)
+    const trayAvailable = mainState.trayAvailable
     const result = await nativeDialogCoordinator.run(window.webContents, async () => {
       if (window.isDestroyed()) {
         throw new Error('Close-window prompt parent was destroyed.')
@@ -388,15 +404,24 @@ async function promptWindowCloseAction(window: BrowserWindow): Promise<void> {
         type: 'question',
         title: labels.title,
         message: labels.message,
-        detail: labels.detail,
-        buttons: [labels.minimizeToTray, labels.quit, labels.cancel],
-        defaultId: 0,
-        cancelId: 2,
+        detail: trayAvailable ? labels.detail : labels.trayUnavailable,
+        buttons: trayAvailable
+          ? [labels.minimizeToTray, labels.quit, labels.cancel]
+          : [labels.quit, labels.cancel],
+        defaultId: trayAvailable ? 0 : 1,
+        cancelId: trayAvailable ? 2 : 1,
         noLink: true,
-        checkboxLabel: labels.remember,
+        checkboxLabel: trayAvailable ? labels.remember : undefined,
         checkboxChecked: false
       })
     })
+    if (!trayAvailable) {
+      if (result.response === 0) {
+        runtimeShutdown.requestQuit()
+        app.quit()
+      }
+      return
+    }
     if (result.response === 0) {
       if (result.checkboxChecked) {
         await saveWindowCloseActionPreference('tray')
@@ -424,7 +449,8 @@ export function handleMainWindowClose(window: BrowserWindow, event: Electron.Eve
   const decision = resolveMainWindowCloseDecision({
     closeAction: mainState.appBehavior.closeAction,
     isQuitting: runtimeShutdown.isQuitRequested,
-    isUpdateInstallQuitting: runtimeShutdown.isUpdateInstallQuit
+    isUpdateInstallQuitting: runtimeShutdown.isUpdateInstallQuit,
+    trayAvailable: mainState.trayAvailable
   })
   if (decision === 'allow') return
 

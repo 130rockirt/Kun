@@ -267,6 +267,7 @@ const labels: Record<string, string> = {
   proxyEnabled: 'Use proxy for model requests',
   proxyUrlDesc: 'Route model requests through a global proxy.',
   proxyUrlPlaceholder: 'http://127.0.0.1:7890',
+  proxyUrlInvalid: 'Enter a complete proxy URL.',
   baseUrlPlaceholder: 'https://api.example.com/v1',
   autoApplyHint: 'Changes apply automatically',
   applying: 'Applying…',

@@ -5,6 +5,7 @@ import { GeneralSettingsSection } from './settings-section-general'
 import {
   SettingsSidebar
 } from './SettingsSidebar'
+import { settingsSaveIssueMessage } from './settings-save-error'
 
 const ProvidersSettingsSection = lazy(() =>
   import('./settings-section-providers').then((module) => ({ default: module.ProvidersSettingsSection }))
@@ -90,7 +91,13 @@ function SettingsSectionFallback(): ReactElement {
 }
 
 export function SettingsViewLayout({ view }: { view: Record<string, any> }): ReactElement {
-  const { t, workspaceRoot, extensionWorkspaceRoot, category, setCategory, saveStatus, saveError, writeDebugModalOpen, setWriteDebugModalOpen, writeCompletionDebugEntries, writeCompletionDebugSelectedId, setWriteCompletionDebugSelectedId, writeDebugLoading, writeDebugError, extensionSettingsService, extensionSettingsContributions, extensionSettingsAvailable, settingsScrollerRef, markAgentsSectionReady, categoryTitle, categoryDescription, loadWriteDebugEntries, portError, flushPendingSave, goBack, clearWriteDebugEntries, settingsSectionContext } = view
+  const { t, workspaceRoot, extensionWorkspaceRoot, category, setCategory, saveStatus, saveError, saveIssue, writeDebugModalOpen, setWriteDebugModalOpen, writeCompletionDebugEntries, writeCompletionDebugSelectedId, setWriteCompletionDebugSelectedId, writeDebugLoading, writeDebugError, extensionSettingsService, extensionSettingsContributions, extensionSettingsAvailable, settingsScrollerRef, markAgentsSectionReady, categoryTitle, categoryDescription, loadWriteDebugEntries, portError, flushPendingSave, goBack, clearWriteDebugEntries, settingsSectionContext } = view
+  const saveIssueSummary = saveIssue?.kind === 'provider-model-limit'
+    ? settingsSaveIssueMessage(saveIssue, t)
+    : saveError
+  const viewProblemModel = (): void => {
+    setCategory('providers')
+  }
   return (
     <div className="ds-settings-surface ds-drag flex h-full min-h-0 w-full min-w-0 bg-ds-main">
       <SettingsSidebar
@@ -122,7 +129,7 @@ export function SettingsViewLayout({ view }: { view: Record<string, any> }): Rea
               </p>
             </div>
             {category !== 'extensions' && category !== 'dataMigration' && category !== 'storage' && category !== 'uninstall' ? <span
-              title={saveStatus === 'error' && saveError ? saveError : undefined}
+              title={saveStatus === 'error' && saveIssueSummary ? saveIssueSummary : undefined}
               className={`shrink-0 rounded-full px-3 py-1 text-[12px] font-medium ${
                 portError
                   ? 'bg-amber-500/15 text-amber-700 dark:text-amber-200'
@@ -150,7 +157,18 @@ export function SettingsViewLayout({ view }: { view: Record<string, any> }): Rea
               role="alert"
               className="mb-5 rounded-[var(--ds-radius-card)] border border-red-200 bg-red-50 px-4 py-3 text-[13px] leading-5 text-red-800 dark:border-red-500/25 dark:bg-red-500/10 dark:text-red-200"
             >
-              {saveError}
+              <div>{saveIssueSummary}</div>
+              {saveIssue?.kind === 'provider-model-limit' ? (
+                <div className="mt-2 flex flex-wrap items-center gap-3">
+                  <button type="button" className="font-semibold underline underline-offset-2" onClick={viewProblemModel}>
+                    {t('providerModelSaveViewProblem')}
+                  </button>
+                  <details className="text-[11px] opacity-80">
+                    <summary className="cursor-pointer">{t('providerModelSaveTechnicalDetails')}</summary>
+                    <div className="mt-1 break-all font-mono">{saveError}</div>
+                  </details>
+                </div>
+              ) : null}
             </div>
           ) : null}
 
@@ -203,16 +221,20 @@ export function SettingsViewLayout({ view }: { view: Record<string, any> }): Rea
           <div className="min-w-0">
             <div className="text-[13px] font-semibold">{t('applyFailed')}</div>
             <div className="mt-0.5 truncate text-[12px] text-red-800/85 dark:text-red-100/80">
-              {saveError}
+              {saveIssueSummary}
             </div>
           </div>
           <button
             type="button"
             className="shrink-0 rounded-xl bg-red-600 px-3 py-2 text-[12px] font-semibold text-white shadow-sm transition hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-60"
-            disabled={Boolean(portError)}
-            onClick={() => void flushPendingSave()}
+            disabled={saveIssue?.kind === 'provider-model-limit' ? false : Boolean(portError)}
+            onClick={saveIssue?.kind === 'provider-model-limit'
+              ? viewProblemModel
+              : () => void flushPendingSave()}
           >
-            {t('retrySave')}
+            {saveIssue?.kind === 'provider-model-limit'
+              ? t('providerModelSaveViewProblem')
+              : t('retrySave')}
           </button>
         </div>
       ) : null}

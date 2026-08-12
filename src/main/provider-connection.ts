@@ -74,6 +74,7 @@ export async function probeModelProvider(
   fetcher: ProviderProbeFetch = fetchWithOptionalProxy
 ): Promise<ModelProviderProbeResult> {
   const baseUrl = request.baseUrl.trim()
+  const proxyUrl = settings ? resolveModelProviderProxyUrl(settings) : ''
   if (!/^https?:\/\//i.test(baseUrl)) {
     return { ok: false, message: 'Base URL must start with http:// or https://.' }
   }
@@ -102,7 +103,7 @@ export async function probeModelProvider(
     if (!isGrokOAuthCredentials(rawKey)) {
       return { ok: false, message: 'Grok 订阅凭据格式无效，请重新登录。' }
     }
-    const fresh = await ensureFreshGrokCredentials(rawKey)
+    const fresh = await ensureFreshGrokCredentials(rawKey, { fetcher, proxyUrl })
     const creds = fresh.credentials ?? parseGrokCredentials(fresh.apiKey)
     if (!creds) {
       return { ok: false, message: 'Grok 订阅凭据已损坏，请重新登录。' }
@@ -121,7 +122,6 @@ export async function probeModelProvider(
   }
   const url = upstreamOpenAiModelsUrl(baseUrl)
   const startedAt = Date.now()
-  const proxyUrl = settings ? resolveModelProviderProxyUrl(settings) : ''
   let res: Response
   let text: string
   try {

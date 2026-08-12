@@ -515,6 +515,12 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
       expect(instanceText(renderer.root.findByProps({ role: 'dialog' }))).toContain('Xiaomi')
       expect(instanceText(renderer.root.findByProps({ role: 'dialog' }))).not.toContain('MiniMax')
 
+      await act(async () => searchInput.props.onChange({ target: { value: 'zenmux' } }))
+      expect(instanceText(renderer.root.findByProps({ role: 'dialog' }))).toContain('ZenMux API')
+      expect(instanceText(renderer.root.findByProps({ role: 'dialog' })))
+        .toContain('ZenMux Builder Plan (Coding Plan)')
+      expect(instanceText(renderer.root.findByProps({ role: 'dialog' }))).not.toContain('Xiaomi')
+
       await act(async () => findButtonContaining(renderer, 'Custom provider…').props.onClick())
       expect(renderer.root.findAllByProps({ role: 'dialog' })).toHaveLength(0)
       expect(rendererText(renderer)).toContain('Unsaved')

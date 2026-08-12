@@ -96,7 +96,7 @@ export function logWarn(category: string, message: string, detail?: unknown): vo
 
 export function logInfo(category: string, message: string, detail?: unknown): void {
   const full = detail !== undefined
-    ? `${message} 鈥?detail: ${safeStringify(detail)}`
+    ? `${message} - detail: ${safeStringify(detail)}`
     : message
   void writeLogLine('info', category, full)
 }

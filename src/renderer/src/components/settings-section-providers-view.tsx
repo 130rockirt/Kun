@@ -1,5 +1,6 @@
 import {
   DEFAULT_MODEL_PROVIDER_ID,
+  normalizeProxyUrl,
   type ModelProviderProfileV1
 } from '@shared/app-settings'
 import {
@@ -52,10 +53,11 @@ import { ProviderConnectionAdvancedPanels } from './settings-section-providers-c
 import { ProviderModelsCapabilitiesPanels } from './settings-section-providers-model-panels'
 
 export function ProvidersSettingsView({ view }: { view: Record<string, any> }): ReactElement {
-  const { t, kun, update, showApiKey, selectControlClass, saveStatus, saveError, retrySave, zh, provider, sharedConnections, sharedConnectionsError, credentialRevealError, setSelectedProviderId, addMenuOpen, addProviderQuery, setAddProviderQuery, subscriptionRegion, setSubscriptionRegion, providerListQuery, setProviderListQuery, activeTab, setActiveTab, workspaceMode, setWorkspaceMode, expandedCapabilities, addProviderButtonRef, addProviderDialogRef, pendingImport, setPendingImport, displayProviders, activeRetry, isDraftActive, canEditActiveProviderId, activeKunProviderId, providerProxy, selectSharedModel, updateProviderProxy, setCapabilityExpanded, openAddProviderDialog, closeAddProviderDialog, handleAddProviderDialogKeyDown, handleSubscriptionRegionTabKeyDown, patchProviderProfile, updateModelProvider, updateActiveProviderCredential, toggleActiveProviderCredentialVisibility, updateModelProviderImage, removeModelProviderImage, updateModelProviderSpeech, removeModelProviderSpeech, updateModelProviderTextToSpeech, removeModelProviderTextToSpeech, updateModelProviderMusic, removeModelProviderMusic, updateModelProviderVideo, removeModelProviderVideo, updateModelProviderId, commitProviderDraft, cancelProviderDraft, addModelProvider, removeModelProvider, runProbe, importPickedModels, activeProbe, probeBusy, probeNotice, activeBaseUrlInvalid, activeImageBaseUrlInvalid, activeSpeechBaseUrlInvalid, activeSpeechToggleDisabled, activeTextToSpeechBaseUrlInvalid, activeMusicBaseUrlInvalid, activeVideoBaseUrlInvalid, activeMissingCredential, providerSetupNeedsApiKey, activeProbeBlocked, activeCursorAccount, activeCursorAccountFresh, activeCursorApiKeyUrl, activeSharedConnection, activeCredentialNeedsReplacement, activeApiKeyPlaceholder, activeApiKeyValue, activeCredentialRevealBusy, activeTokenPlanRegions, filteredProviders, grouped, renderProviderButton, planAddEntries, apiAddEntries, showPlanAddGroup, renderAddEntry, pendingImportProvider } = view
+  const { t, kun, update, showApiKey, selectControlClass, saveStatus, saveError, retrySave, zh, provider, sharedConnections, sharedConnectionsError, credentialRevealError, setSelectedProviderId, addMenuOpen, addProviderQuery, setAddProviderQuery, subscriptionRegion, setSubscriptionRegion, providerListQuery, setProviderListQuery, activeTab, setActiveTab, workspaceMode, setWorkspaceMode, globalNetworkOpen, setGlobalNetworkOpen, expandedCapabilities, addProviderButtonRef, addProviderDialogRef, pendingImport, setPendingImport, displayProviders, activeRetry, isDraftActive, canEditActiveProviderId, activeKunProviderId, providerProxy, selectSharedModel, updateProviderProxy, setCapabilityExpanded, openAddProviderDialog, closeAddProviderDialog, handleAddProviderDialogKeyDown, handleSubscriptionRegionTabKeyDown, patchProviderProfile, updateModelProvider, updateActiveProviderCredential, toggleActiveProviderCredentialVisibility, updateModelProviderImage, removeModelProviderImage, updateModelProviderSpeech, removeModelProviderSpeech, updateModelProviderTextToSpeech, removeModelProviderTextToSpeech, updateModelProviderMusic, removeModelProviderMusic, updateModelProviderVideo, removeModelProviderVideo, updateModelProviderId, commitProviderDraft, cancelProviderDraft, addModelProvider, removeModelProvider, runProbe, importPickedModels, activeProbe, probeBusy, probeNotice, activeBaseUrlInvalid, activeImageBaseUrlInvalid, activeSpeechBaseUrlInvalid, activeSpeechToggleDisabled, activeTextToSpeechBaseUrlInvalid, activeMusicBaseUrlInvalid, activeVideoBaseUrlInvalid, activeMissingCredential, providerSetupNeedsApiKey, activeProbeBlocked, activeCursorAccount, activeCursorAccountFresh, activeCursorApiKeyUrl, activeSharedConnection, activeCredentialNeedsReplacement, activeApiKeyPlaceholder, activeApiKeyValue, activeCredentialRevealBusy, activeTokenPlanRegions, filteredProviders, grouped, renderProviderButton, planAddEntries, apiAddEntries, showPlanAddGroup, renderAddEntry, pendingImportProvider } = view
   const activeProvider = view.activeProvider as ModelProviderProfileV1 | undefined
   const planProviders = view.planProviders as ModelProviderProfileV1[]
   const apiProviders = view.apiProviders as ModelProviderProfileV1[]
+  const providerProxyInvalid = providerProxy.enabled === true && !normalizeProxyUrl(providerProxy.url)
   return (
     <>
       {providerSetupNeedsApiKey ? (
@@ -313,7 +315,11 @@ export function ProvidersSettingsView({ view }: { view: Record<string, any> }): 
           />
         </SettingsTabPanel>
       </section>
-      <details className="group rounded-2xl border border-ds-border bg-ds-card/95 shadow-sm">
+      <details
+        className="group rounded-2xl border border-ds-border bg-ds-card/95 shadow-sm"
+        open={globalNetworkOpen === true}
+        onToggle={(event) => setGlobalNetworkOpen(event.currentTarget.open)}
+      >
         <summary className="flex cursor-pointer list-none items-center justify-between gap-4 px-5 py-4 [&::-webkit-details-marker]:hidden">
           <div>
             <div className="flex flex-wrap items-center gap-2">
@@ -336,12 +342,19 @@ export function ProvidersSettingsView({ view }: { view: Record<string, any> }): 
               />
             </label>
             <input
-              className={textInputClass}
+              className={`${textInputClass} ${providerProxyInvalid ? 'border-red-400/70 focus:border-red-500/70 focus:ring-red-500/15' : ''}`}
               placeholder={t('proxyUrlPlaceholder')}
               value={providerProxy.url}
               spellCheck={false}
+              aria-invalid={providerProxyInvalid}
+              aria-describedby={providerProxyInvalid ? 'provider-proxy-url-error' : undefined}
               onChange={(e) => updateProviderProxy({ url: e.target.value })}
             />
+            {providerProxyInvalid ? (
+              <div className="md:col-start-2" id="provider-proxy-url-error">
+                <InlineNoticeView notice={{ tone: 'error', message: t('proxyUrlInvalid') }} />
+              </div>
+            ) : null}
         </div>
       </details>
       {addMenuOpen ? (

@@ -5,6 +5,8 @@ import type {
 } from '@shared/app-settings'
 import {
   DEFAULT_MODEL_PROVIDER_ID,
+  MAX_MODEL_CONTEXT_WINDOW_TOKENS,
+  MAX_MODEL_OUTPUT_TOKENS,
   defaultModelRequestRetrySettings
 } from '@shared/app-settings'
 import {
@@ -451,18 +453,22 @@ export function sharedModelProfiles(
       existing?.modelProfiles[model.trim().toLowerCase()]
     const capability = connection.modelCapabilities?.[model] ??
       connection.modelCapabilities?.[model.trim().toLowerCase()]
+    const contextWindowTokens = boundedSharedModelLimit(
+      capability?.contextWindowTokens ?? previous?.contextWindowTokens,
+      MAX_MODEL_CONTEXT_WINDOW_TOKENS
+    )
+    const maxOutputTokens = boundedSharedModelLimit(
+      capability?.maxOutputTokens ?? previous?.maxOutputTokens,
+      MAX_MODEL_OUTPUT_TOKENS
+    )
     return [model, {
       ...(previous?.aliases ? { aliases: [...previous.aliases] } : {}),
       inputModalities: capability?.inputModalities ?? previous?.inputModalities ?? ['text'],
       outputModalities: capability?.outputModalities ?? previous?.outputModalities ?? ['text'],
       supportsToolCalling: capability?.supportsToolCalling ?? previous?.supportsToolCalling ?? true,
       messageParts: capability?.messageParts ?? previous?.messageParts ?? ['text'],
-      ...(capability?.contextWindowTokens ?? previous?.contextWindowTokens
-        ? { contextWindowTokens: capability?.contextWindowTokens ?? previous?.contextWindowTokens }
-        : {}),
-      ...(capability?.maxOutputTokens ?? previous?.maxOutputTokens
-        ? { maxOutputTokens: capability?.maxOutputTokens ?? previous?.maxOutputTokens }
-        : {}),
+      ...(contextWindowTokens ? { contextWindowTokens } : {}),
+      ...(maxOutputTokens ? { maxOutputTokens } : {}),
       ...(capability?.reasoning ?? previous?.reasoning
         ? { reasoning: capability?.reasoning ?? previous?.reasoning }
         : {}),
@@ -474,6 +480,15 @@ export function sharedModelProfiles(
         : {})
     }]
   }))
+}
+
+function boundedSharedModelLimit(value: unknown, maximum: number): number | undefined {
+  return typeof value === 'number' &&
+    Number.isSafeInteger(value) &&
+    value > 0 &&
+    value <= maximum
+    ? value
+    : undefined
 }
 
 export function projectSharedModelConnections(

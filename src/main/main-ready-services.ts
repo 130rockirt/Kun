@@ -1,6 +1,5 @@
 import {
   app,
-  dialog,
   ipcMain,
   nativeTheme,
   powerSaveBlocker,
@@ -136,12 +135,9 @@ export async function initializeMainServices(): Promise<MainServices | null> {
       resourcesPath: process.resourcesPath
     })
     if (!installHealth.ok) {
-      dialog.showErrorBox(
-        'Kun installation needs repair',
-        `The installed application is incomplete (${installHealth.missing.join(', ')}). Reinstall Kun and try again.`
+      throw new Error(
+        `Kun installation needs repair. The installed application is incomplete (${installHealth.missing.join(', ')}). Reinstall Kun and try again.`
       )
-      app.quit()
-      return null
     }
 
     try {
@@ -351,7 +347,6 @@ export async function initializeMainServices(): Promise<MainServices | null> {
     setKunUnexpectedExitHandler(handleUnexpectedKunExit)
     mainState.appBehavior = initial.appBehavior
     syncLoginItemSettings(initial)
-    syncTray(initial)
     mainState.logDir = resolveLogDirectory(app)
     configureLogger({
       dir: mainState.logDir,
@@ -359,6 +354,7 @@ export async function initializeMainServices(): Promise<MainServices | null> {
       retentionDays: initial.log.retentionDays
     })
     traceStartup('logger configured')
+    syncTray(initial)
     let ownsDesktopBackgroundServices = false
     const startDesktopBackgroundServices = async (): Promise<void> => {
       if (mainState.scheduleRuntime || mainState.workflowRuntime || mainState.clawRuntime || mainState.telegramRuntime || mainState.daemonRuntime) return

@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { assertManagerAtomicJsonPath, AtomicJsonFile } from '../extensions/atomic-json.js'
 import type { ServeProviderConfig } from '../config/kun-config.js'
 import type { ModelCapabilityMetadata } from '../contracts/capabilities.js'
+import { normalizeModelCapabilityMetadata } from './model-capability-limits.js'
 import {
   ModelConnectionConnectRequestSchema,
   ModelConnectionCredentialCommitRequestSchema,
@@ -507,10 +508,12 @@ export function mergeProjectedCapability(
   profile: Pick<ModelConnectionProfile, 'id' | 'endpointFormat'>,
   model: string
 ): ModelCapabilityMetadata | undefined {
-  if (!stored) return derived
+  if (!stored) return normalizeModelCapabilityMetadata(derived)
   const serviceTiers = stored.serviceTiers ?? derived?.serviceTiers
   if (!derived?.reasoning || stored.reasoning === derived.reasoning) {
-    return serviceTiers ? { ...stored, serviceTiers: [...serviceTiers] } : stored
+    return normalizeModelCapabilityMetadata(
+      serviceTiers ? { ...stored, serviceTiers: [...serviceTiers] } : stored
+    )
   }
   const placeholder = stored.reasoning?.requestProtocol === 'none' &&
     derived.reasoning.requestProtocol !== 'none' &&
@@ -526,13 +529,15 @@ export function mergeProjectedCapability(
         model.trim().toLowerCase().endsWith('grok-4.5'))
     )
   if (!stored.reasoning || placeholder || chatResponsesMismatch) {
-    return {
+    return normalizeModelCapabilityMetadata({
       ...stored,
       reasoning: derived.reasoning,
       ...(serviceTiers ? { serviceTiers: [...serviceTiers] } : {})
-    }
+    })
   }
-  return serviceTiers ? { ...stored, serviceTiers: [...serviceTiers] } : stored
+  return normalizeModelCapabilityMetadata(
+    serviceTiers ? { ...stored, serviceTiers: [...serviceTiers] } : stored
+  )
 }
 
 export function assertRevision(
@@ -565,7 +570,10 @@ export function capabilitiesForModels(
 ): Record<string, ModelCapabilityMetadata> {
   return Object.fromEntries(models.flatMap((model) => {
     const capability = input[model] ?? input[model.trim().toLowerCase()]
-    return capability ? [[model, { ...capability, id: model }]] : []
+    const normalized = capability
+      ? normalizeModelCapabilityMetadata({ ...capability, id: model })
+      : undefined
+    return normalized ? [[model, normalized]] : []
   }))
 }
 

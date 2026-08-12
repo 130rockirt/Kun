@@ -135,21 +135,24 @@ export function buildProvidersViewModel(scope: Record<string, any>): Record<stri
   const activeCredentialNeedsReplacement =
     activeSharedConnection?.credentialStatus === 'missing' ||
     activeSharedConnection?.credentialStatus === 'unreadable'
+  const activeTokenPlan = activeProvider
+    ? tokenPlanPresetForProfile(activeProvider)?.tokenPlan
+    : undefined
   const activeApiKeyPlaceholder =
     !activeCredentialNeedsReplacement && (
       Boolean(activeProvider?.apiKey.trim()) ||
       sharedModelConnectionHasUsableCredential(activeSharedConnection)
     )
       ? '••••••••••••'
-      : t('modelProviderApiKeyPlaceholder')
+      : activeTokenPlan?.keyPrefix
+        ? `${activeTokenPlan.keyPrefix}...`
+        : t('modelProviderApiKeyPlaceholder')
   const activeApiKeyValue = showApiKey && revealedCredential?.providerId === activeProvider?.id
     ? revealedCredential.credential
     : activeProvider?.apiKey ?? ''
   const activeCredentialRevealBusy =
     credentialRevealPendingProviderId === activeProvider?.id
-  const activeTokenPlanRegions = activeProvider
-    ? tokenPlanPresetForProfile(activeProvider)?.tokenPlan?.regions ?? []
-    : []
+  const activeTokenPlanRegions = activeTokenPlan?.regions ?? []
 
   const normalizedProviderListQuery = providerListQuery.trim().toLowerCase()
   const filteredProviders = normalizedProviderListQuery
@@ -242,7 +245,7 @@ export function buildProvidersViewModel(scope: Record<string, any>): Record<stri
         preset,
         mode: 'token-plan',
         profileId: tokenPlanProviderId(preset.id),
-        label: `${preset.name} · Token Plan`,
+        label: preset.tokenPlan.displayName?.trim() || `${preset.name} · Token Plan`,
         group: 'subscription',
         region: preset.subscriptionRegion
       })

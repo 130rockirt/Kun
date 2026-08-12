@@ -1,9 +1,9 @@
-import { app, dialog } from 'electron'
+import { app } from 'electron'
 import { shouldStartHidden } from './desktop-behavior'
 import { maybePromptCliInstall } from './cli-install-service'
 import { managedKunHostCanAutoStart } from './managed-runtime-startup-policy'
 import { kunRuntimeAdapter } from './runtime/kun-adapter'
-import { pruneOnStartup, logWarn } from './logger'
+import { configureLogger, logError, logInfo, pruneOnStartup, logWarn } from './logger'
 import {
   gotSingleInstanceLock,
   mainState,
@@ -27,9 +27,13 @@ import {
   restartRuntime
 } from './main-runtime-startup'
 import { createWindow } from './main-window'
+import { MainWindowActivationCoordinator } from './main-window-activation'
 import { initializeMainServices } from './main-ready-services'
 import { registerMainIpc } from './main-ready-ipc'
 import { revealMainWindow } from './main-tray'
+import { resolveLogDirectory } from './main-paths'
+import { showStartupFailureWindow } from './startup-failure-window'
+import { sanitizeStartupFailureMessage } from './startup-failure-content'
 
 export function startMainApp(): void {
   mainState.createWindow = createWindow
@@ -37,6 +41,23 @@ export function startMainApp(): void {
   mainState.restartRuntime = restartRuntime
   mainState.assertCanonicalRuntimeMigrationReady = assertCanonicalRuntimeMigrationReady
   mainState.shutdownActiveServiceManagerForUpdate = shutdownActiveServiceManagerForUpdate
+
+  try {
+    mainState.logDir = resolveLogDirectory(app)
+    configureLogger({ dir: mainState.logDir, enabled: true })
+    logInfo('startup', 'Desktop startup entered.', {
+      platform: process.platform,
+      packaged: app.isPackaged
+    })
+  } catch (error) {
+    console.warn('[kun-gui] failed to configure bootstrap startup logging:', error)
+  }
+
+  const activation = new MainWindowActivationCoordinator(
+    () => mainState.mainWindow,
+    revealMainWindow
+  )
+  app.on('second-instance', () => activation.requestReveal())
 
   app.whenReady().then(async () => {
     traceStartup('app.whenReady:start')
@@ -51,6 +72,7 @@ export function startMainApp(): void {
       suppressInitialShow: shouldStartHidden(initial),
       useSystemTitleBar: initial.appBehavior.useSystemTitleBar
     })
+    activation.windowAvailable()
     void maybePromptCliInstall(() => mainState.mainWindow).catch((error) => {
       console.warn('[kun-gui] CLI install prompt failed:', error)
     })
@@ -92,18 +114,25 @@ export function startMainApp(): void {
       void kunRuntimeAdapter.resolveConnection(initial)
     }
 
-    app.on('second-instance', () => {
-      revealMainWindow()
-    })
-
     app.on('activate', () => {
       if (!mainState.mainWindow || mainState.mainWindow.isDestroyed()) createWindow()
       else revealMainWindow()
     })
   }).catch((error) => {
-    const message = error instanceof Error ? error.message : String(error)
-    console.error('[kun-gui] startup failed:', error)
-    dialog.showErrorBox('Kun failed to start', message)
-    app.quit()
+    const message = sanitizeStartupFailureMessage(error)
+    console.error('[kun-gui] startup failed:', message)
+    logError('startup', 'Desktop startup failed.', {
+      platform: process.platform,
+      packaged: app.isPackaged,
+      message
+    })
+    const recoveryWindow = showStartupFailureWindow(error, mainState.logDir)
+    if (recoveryWindow) {
+      mainState.mainWindow = recoveryWindow
+      recoveryWindow.on('closed', () => {
+        if (mainState.mainWindow === recoveryWindow) mainState.mainWindow = null
+      })
+      activation.windowAvailable()
+    }
   })
 }

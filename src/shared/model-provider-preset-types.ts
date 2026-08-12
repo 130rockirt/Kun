@@ -31,6 +31,7 @@ export type ModelProviderPresetId =
   | 'volcengine-agent-plan'
   | 'volcengine-coding-plan'
   | 'opencode-go'
+  | 'zenmux'
   | 'codex'
   | 'claude-subscription'
   | 'gemini-subscription'
@@ -156,6 +157,8 @@ export type ModelProviderSubscriptionRegion = 'china' | 'united-states'
  * endpoint, so each capability may carry a separate base URL.
  */
 export type ModelProviderTokenPlanPreset = {
+  /** Optional product-specific name used instead of the generic "Token Plan" label. */
+  displayName?: string
   baseUrl: string
   /** Regional clusters. When present, baseUrl must equal the first region's baseUrl. */
   regions?: ModelProviderTokenPlanRegion[]

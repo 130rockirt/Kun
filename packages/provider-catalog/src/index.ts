@@ -23,6 +23,8 @@ export type ProviderCatalogEndpointFormat =
   | 'custom_endpoint'
 
 export type ProviderCatalogTokenPlan = {
+  /** Optional product-specific name used instead of the generic "Token Plan" label. */
+  displayName?: string
   baseUrl: string
   regions?: ReadonlyArray<{ id: string; baseUrl: string }>
   endpointFormat: ProviderCatalogEndpointFormat
@@ -366,6 +368,27 @@ export const PROVIDER_CATALOG = [
     credentialUrl: 'https://opencode.ai/auth'
   },
   {
+    id: 'zenmux',
+    name: 'ZenMux API',
+    category: 'api',
+    kind: 'http',
+    authFlow: 'api-key',
+    authType: 'api-key',
+    baseUrl: 'https://zenmux.ai/api/v1',
+    endpointFormat: 'chat_completions',
+    // ZenMux rotates a large aggregate catalog; Settings imports the live /models list.
+    models: [],
+    docsUrl: 'https://zenmux.ai/docs/guide/quickstart',
+    credentialUrl: 'https://zenmux.ai/platform/pay-as-you-go',
+    tokenPlan: {
+      displayName: 'ZenMux Builder Plan (Coding Plan)',
+      baseUrl: 'https://zenmux.ai/api/v1',
+      endpointFormat: 'chat_completions',
+      models: [],
+      credentialUrl: 'https://zenmux.ai/platform/subscription'
+    }
+  },
+  {
     id: 'moonshot-cn',
     name: 'Moonshot CN',
     category: 'api',
@@ -550,6 +573,7 @@ export function providerCatalogEntries(): ProviderCatalogEntry[] {
       credentialUrl: preset.credentialUrl
     }
     if (!preset.tokenPlan) return [base]
+    const tokenPlanName = preset.tokenPlan.displayName?.trim() || `${preset.name} Token Plan`
     return [
       base,
       {
@@ -557,8 +581,8 @@ export function providerCatalogEntries(): ProviderCatalogEntry[] {
         presetSource: tokenPlanProviderId(preset.id),
         presetId: preset.id,
         mode: 'token-plan',
-        label: `${preset.name} · Token Plan`,
-        name: `${preset.name} Token Plan`,
+        label: preset.tokenPlan.displayName?.trim() || `${preset.name} · Token Plan`,
+        name: tokenPlanName,
         category: 'subscription',
         kind: 'http',
         authFlow: 'api-key',

@@ -6,6 +6,7 @@ import {
   baseCtx,
   beforeEach,
   clickProviderTab,
+  createElement,
   defaultKunRuntimeSettings,
   defaultModelProviderSettings,
   describe, expect,
@@ -15,6 +16,7 @@ import {
   instanceText,
   it,
   modelProviderPresetProfile,
+  ProvidersSettingsSection,
   renderProviders,
   rendererText,
   resetSharedProviderMutationCoordinatorForTests,
@@ -479,6 +481,37 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
         .some((button) => instanceText(button).trim() === 'Remove provider')).toBe(false)
       expect(rendererText(renderer)).toContain('Needs configuration')
       expect(findButton(renderer, 'Test connection').props.disabled).toBe(true)
+    })
+
+    it('keeps the global proxy editor open and preserves incomplete input across rerenders', async () => {
+      const update = vi.fn()
+      const provider = {
+        ...defaultModelProviderSettings(),
+        proxy: { enabled: true, url: 'http://127.0.0.1:7890' }
+      }
+      const ctx = { ...baseCtx(), provider, update }
+      const renderer = await mountProviders(ctx)
+      let details = renderer.root.findByType('details')
+
+      await act(async () => details.props.onToggle({ currentTarget: { open: true } }))
+      expect(renderer.root.findByType('details').props.open).toBe(true)
+
+      const proxyInput = renderer.root.findByProps({ placeholder: 'http://127.0.0.1:7890' })
+      await act(async () => proxyInput.props.onChange({ target: { value: 'http:' } }))
+      expect(update).toHaveBeenLastCalledWith({
+        provider: { proxy: { enabled: true, url: 'http:' } }
+      })
+
+      await act(async () => {
+        renderer.update(createElement(ProvidersSettingsSection, {
+          ctx: { ...ctx, provider: { ...provider, proxy: { enabled: true, url: 'http:' } } }
+        }))
+      })
+      details = renderer.root.findByType('details')
+      expect(details.props.open).toBe(true)
+      expect(renderer.root.findByProps({ placeholder: 'http://127.0.0.1:7890' }).props.value)
+        .toBe('http:')
+      expect(renderer.root.findByProps({ id: 'provider-proxy-url-error' })).toBeTruthy()
     })
   })
 })

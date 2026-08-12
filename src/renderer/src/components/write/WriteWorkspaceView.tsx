@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import {
-  Columns2,
   Eye,
   FileCode2,
   Type
@@ -15,35 +14,27 @@ import {
   type WritePreviewMode,
   type WriteSaveStatus,
   writeBasenameFromPath,
-  writeJoinPath,
   writeRelativeToWorkspace
 } from '../../write/write-workspace-store'
-import { pathsEqual } from '../../write/write-workspace-store-helpers'
 import { getWriteRenderSafety } from '../../write/write-render-safety'
 import { resolveWriteQuickActions } from '../../write/quick-actions'
 import type { WriteRichEditorHandle } from '../../write/tiptap/WriteRichEditor'
-import { useWriteSplitScrollSync } from './use-write-split-scroll-sync'
 import { useWriteWorkspaceLifecycle } from './use-write-workspace-lifecycle'
 import { WriteWorkspaceEmptyState } from './WriteWorkspaceEmptyState'
 import { WriteWorkspaceToolbar } from './WriteWorkspaceToolbar'
 import { WriteInlineAgent } from './WriteInlineAgent'
-import { WriteWorkspaceDocumentPane } from './WriteWorkspaceDocumentPane'
 import { resolveWriteAgentPreset } from '../../write/agent-presets'
 import type { WriteEditorSelectionState, WriteMarkdownEditorHandle } from './WriteMarkdownEditor'
 import {
-  WRITE_EXPORT_NOTICE_MS,
-  writePreviewDebounceMs,
   WRITE_RICH_CLIPBOARD_ACTION,
-  exportFormatLabel,
   formatSaveLabel,
   isInlineCompletionToggleShortcut,
   inlineAgentPosition,
   isMarkdownFile,
   computeWriteDocumentStats,
-  useDebouncedValue,
   type WriteNotice
 } from './write-workspace-view-utils'
-import { buildWritePresentationPrompt, isPresentationMarkdownPath } from '../../write/write-presentation'
+import { isPresentationMarkdownPath } from '../../write/write-presentation'
 import {
   isWriteFocusModeFormControl,
   writeFocusModeFloatingLayerClassName,
@@ -57,6 +48,8 @@ import {
 import { createWriteWorkspaceInlineActions } from './write-workspace-inline-actions'
 import { createWriteWorkspaceFileActions } from './write-workspace-file-actions'
 import { useWriteWorkspaceViewEffects } from './use-write-workspace-view-effects'
+import { WriteEditorGroups } from './WriteEditorGroups'
+import { useWriteEditorGroupFileWatches } from './use-write-editor-group-file-watches'
 
 type Props = {
   leftSidebarCollapsed: boolean; onToggleLeftSidebar: () => void
@@ -86,9 +79,9 @@ export function WriteWorkspaceView({
     settingsLoading,
     settingsError,
     workspaceRoot,
+    editorLayout,
     activeFilePath,
     activeFileKind,
-    documentEpoch,
     autoSaveEnabled,
     autoSaveDelayMs,
     rootDirectory,
@@ -100,11 +93,6 @@ export function WriteWorkspaceView({
     selectionAssist,
     imageGenReady,
     fileContent,
-    imageDataUrl,
-    imageMimeType,
-    pdfDataBase64,
-    pdfMimeType,
-    pdfMtimeMs,
     fileSize,
     fileTruncated,
     fileError,
@@ -135,7 +123,8 @@ export function WriteWorkspaceView({
     pendingAgentReview,
     clearPendingAgentReview,
     reviewActive,
-    setReviewActive
+    setReviewActive,
+    saveAllDocuments
   } = useWriteWorkspaceStore(
     useShallow((s) => ({
       defaultWorkspaceRoot: s.defaultWorkspaceRoot,
@@ -143,9 +132,9 @@ export function WriteWorkspaceView({
       settingsLoading: s.settingsLoading,
       settingsError: s.settingsError,
       workspaceRoot: s.workspaceRoot,
+      editorLayout: s.editorLayout,
       activeFilePath: s.activeFilePath,
       activeFileKind: s.activeFileKind,
-      documentEpoch: s.documentEpoch,
       autoSaveEnabled: s.autoSaveEnabled,
       autoSaveDelayMs: s.autoSaveDelayMs,
       rootDirectory: s.rootDirectory,
@@ -164,11 +153,6 @@ export function WriteWorkspaceView({
       setReviewActive: s.setReviewActive,
       imageGenReady: s.imageGenReady,
       fileContent: s.fileContent,
-      imageDataUrl: s.imageDataUrl,
-      imageMimeType: s.imageMimeType,
-      pdfDataBase64: s.pdfDataBase64,
-      pdfMimeType: s.pdfMimeType,
-      pdfMtimeMs: s.pdfMtimeMs,
       fileSize: s.fileSize,
       fileTruncated: s.fileTruncated,
       fileError: s.fileError,
@@ -192,14 +176,14 @@ export function WriteWorkspaceView({
       setAssistantOpen: s.setAssistantOpen,
       setSelection: s.setSelection,
       recordRecentEdits: s.recordRecentEdits,
-      quoteCurrentSelection: s.quoteCurrentSelection
+      quoteCurrentSelection: s.quoteCurrentSelection,
+      saveAllDocuments: s.saveAllDocuments
     }))
   )
   const saveTimerRef = useRef<number | null>(null)
   const exportMenuRef = useRef<HTMLDivElement | null>(null)
   const modeMenuRef = useRef<HTMLDivElement | null>(null)
   const editorPaneRef = useRef<HTMLDivElement | null>(null)
-  const previewPaneRef = useRef<HTMLDivElement | null>(null)
   const exportNoticeTimerRef = useRef<number | null>(null)
   const inlineAgentTextareaRef = useRef<HTMLTextAreaElement | null>(null)
   const richHandleRef = useRef<WriteRichEditorHandle | null>(null)
@@ -250,7 +234,6 @@ export function WriteWorkspaceView({
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [activeFileIsText, renderSafety.readOnly, toggleInlineCompletion])
-  const debouncedPreviewContent = useDebouncedValue(fileContent, writePreviewDebounceMs(fileContent.length))
   const saveLabel = activeFileIsImage
     ? t('writeImagePreview')
     : activeFileIsPdf ? t('writePdfPreview')
@@ -313,19 +296,6 @@ export function WriteWorkspaceView({
     !reviewActive &&
     !busy
   )
-  const fileGuardMessage = renderSafety.notice === 'truncated'
-    ? t('writeLargeFileTruncated')
-    : renderSafety.notice === 'large-file'
-      ? t('writeLargeFileSafeMode')
-      : ''
-  const fileGuardDetail = renderSafety.notice === 'large-file' ? t('writeLargeFileSafeModeSub') : ''
-
-  useWriteSplitScrollSync({
-    enabled: workspaceReady && previewMode === 'split' && activeFileIsText,
-    editorRootRef: editorPaneRef,
-    previewRef: previewPaneRef,
-    rebindKey: activeFilePath ?? 'write-preview'
-  })
 
   useWriteWorkspaceLifecycle({
     workspaceRoot,
@@ -351,6 +321,22 @@ export function WriteWorkspaceView({
     clearPendingAgentReview,
     setReviewActive
   })
+  useWriteEditorGroupFileWatches({ workspaceRoot, editorLayout })
+
+  useEffect(() => {
+    const handleBeforeUnload = (event: BeforeUnloadEvent): void => {
+      const state = useWriteWorkspaceStore.getState()
+      const hasDirtyDocuments = Object.values(state.documentsByPath).some(
+        (document) => document.kind === 'text' && document.saveStatus !== 'saved'
+      )
+      if (!hasDirtyDocuments) return
+      if (state.autoSaveEnabled) void saveAllDocuments(workspaceRoot)
+      event.preventDefault()
+      event.returnValue = ''
+    }
+    window.addEventListener('beforeunload', handleBeforeUnload)
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload)
+  }, [saveAllDocuments, workspaceRoot])
 
   const showExportNotice = (notice: WriteNotice): void => {
     setExportNotice(notice)
@@ -481,14 +467,6 @@ export function WriteWorkspaceView({
     )
   }
 
-  const editorVisible = activeFileIsText && previewMode !== 'preview'
-  const previewVisible = activeFileIsText && (previewMode === 'split' || previewMode === 'preview')
-  const editorWidth = previewMode === 'split'
-    ? 'min-w-0 flex-1 basis-1/2 border-r border-ds-border-muted'
-    : 'min-w-0 flex-1'
-  const previewWidth = previewMode === 'split'
-    ? 'min-w-0 flex-1 basis-1/2'
-    : 'min-w-0 flex-1'
   // Edit-mode quick actions rewrite the document, so drop them on read-only
   // files; chat-mode actions (which only quote into the sidebar) still apply.
   const inlineQuickActions = resolveWriteQuickActions(selectionAssist.quickActions, t).filter(
@@ -499,7 +477,6 @@ export function WriteWorkspaceView({
     previewMode === 'source' ||
     ((previewMode === 'live' || previewMode === 'rich') && !renderSafety.livePreviewEnabled) ||
     (previewMode === 'rich' && !richModeActive)
-  const editorAppearance = sourceModeActive ? 'source' : 'live'
 
   const modeMenuItems: Array<{ mode: WritePreviewMode; label: string; shortLabel: string; icon: ReactElement; active: boolean }> = [
     {
@@ -517,13 +494,6 @@ export function WriteWorkspaceView({
       active: sourceModeActive
     },
     {
-      mode: 'split',
-      label: t('writeModeSplit'),
-      shortLabel: t('writeModeSplit'),
-      icon: <Columns2 className="h-4 w-4" strokeWidth={1.85} />,
-      active: previewMode === 'split'
-    },
-    {
       mode: 'preview',
       label: t('writeModePreview'),
       shortLabel: t('writeModePreview'),
@@ -532,9 +502,10 @@ export function WriteWorkspaceView({
     }
   ]
 
-  return (
-    <div className={`write-workspace-view ds-no-drag flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden px-3 sm:px-4 md:px-6 lg:px-8 ${documentFocusMode ? 'is-focus-mode' : ''}`}>
-      <WriteWorkspaceToolbar
+  const focusedToolbar = (
+    <WriteWorkspaceToolbar
+        embedded
+        showSidebarToggle={false}
         activeFileIsImage={activeFileIsImage}
         activeFileIsPdf={activeFileIsPdf}
         activeFileIsText={activeFileIsText}
@@ -573,71 +544,30 @@ export function WriteWorkspaceView({
         onToggleInlineCompletion={toggleInlineCompletion}
         onToggleLeftSidebar={onToggleLeftSidebar}
       />
-      <div className="flex min-h-0 min-w-0 flex-1 gap-3 overflow-hidden pb-3 pt-3">
-        <div className={writeFocusModeShellClassName(documentFocusMode)}>
-          <WriteWorkspaceDocumentPane
-            activeFilePath={activeFilePath}
-            documentEpoch={documentEpoch}
-            activeFileIsImage={activeFileIsImage}
-            activeFileIsPdf={activeFileIsPdf}
-            activeFileIsText={activeFileIsText}
-            fileLoading={fileLoading}
-            fileContent={fileContent}
-            imageDataUrl={imageDataUrl}
-            imageMimeType={imageMimeType}
-            pdfDataBase64={pdfDataBase64}
-            pdfMimeType={pdfMimeType}
-            pdfMtimeMs={pdfMtimeMs}
-            fileSize={fileSize}
-            workspaceRoot={workspaceRoot}
-            workspaceName={workspaceName}
-            workspacePathLabel={workspacePathLabel}
-            workspaceError={settingsError ?? treeError}
-            renderSafety={renderSafety}
-            fileGuardMessage={fileGuardMessage}
-            fileGuardDetail={fileGuardDetail}
-            editorVisible={editorVisible}
-            previewVisible={previewVisible}
-            editorWidth={editorWidth}
-            previewWidth={previewWidth}
-            editorAppearance={editorAppearance}
-            richModeActive={richModeActive}
-            richHandleRef={richHandleRef}
-            markdownHandleRef={markdownHandleRef}
-            onMarkdownReviewStateChange={setReviewActive}
-            focusMode={documentFocusMode}
-            onFocusModeChange={setDocumentFocusMode}
-            onboarding={onboardingDecision === 'show'}
-            workspaceLoading={
-              onboardingDecision === 'pending' && !settingsError && !treeError
-            }
-            debouncedPreviewContent={debouncedPreviewContent}
-            isMarkdown={isMarkdown}
-            inlineCompletion={inlineCompletion}
-            inlineCompletionApiReady={inlineCompletionApiReady}
-            recentEdits={recentEdits}
-            editorPaneRef={editorPaneRef}
-            previewPaneRef={previewPaneRef}
-            onAskAssistant={() => setAssistantPrompt(t('writeStartAskAiPrompt'))}
-            onCreateDraft={() => void createDraftFile()}
-            onPickWorkspace={() => void pickWriteWorkspace()}
-            onRefreshWorkspace={() => void refreshWorkspace(workspaceRoot)}
-            onContentChange={setFileContent}
-            onDocumentEdit={recordRecentEdits}
-            onSelectionChange={setSelection}
-            onSaveShortcut={() => {
-              if (renderSafety.readOnly) return
-              if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current)
-              void flushSave(workspaceRoot, { resolveExternalConflict: 'keep-local' })
-            }}
-            onImagePasteSaved={() => {
-              setFileError(null)
-              void refreshWorkspace(workspaceRoot)
-            }}
-            onImagePasteError={(message) => setFileError(message)}
-          />
-        </div>
+  )
 
+  return (
+    <div className={`write-workspace-view ds-no-drag flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden px-3 sm:px-4 md:px-6 lg:px-8 ${documentFocusMode ? 'is-focus-mode' : ''}`}>
+      <div className={`min-h-0 min-w-0 flex-1 overflow-hidden pb-3 pt-3 ${writeFocusModeShellClassName(documentFocusMode)}`}>
+        <WriteEditorGroups
+          workspaceName={workspaceName}
+          workspacePathLabel={workspacePathLabel}
+          workspaceError={settingsError ?? treeError}
+          inlineCompletion={inlineCompletion}
+          inlineCompletionApiReady={inlineCompletionApiReady}
+          leftSidebarCollapsed={leftSidebarCollapsed}
+          onToggleLeftSidebar={onToggleLeftSidebar}
+          focusMode={documentFocusMode}
+          onFocusModeChange={setDocumentFocusMode}
+          richHandleRef={richHandleRef}
+          markdownHandleRef={markdownHandleRef}
+          editorPaneRef={editorPaneRef}
+          focusedToolbar={focusedToolbar}
+          onboardingDecision={onboardingDecision}
+          onAskAssistant={() => setAssistantPrompt(t('writeStartAskAiPrompt'))}
+          onCreateDraft={() => void createDraftFile()}
+          onPickWorkspace={() => void pickWriteWorkspace()}
+        />
       </div>
       {selectionAction && activeFilePath && (activeFileIsText || activeFileIsPdf) ? (
         <WriteInlineAgent

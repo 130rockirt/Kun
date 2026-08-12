@@ -176,8 +176,12 @@ export function formErrorMessage(t: Translate, error: ProviderModelFormError): s
       return t(`providerModelErrorDuplicate${duplicateKindSuffix(error.kind)}`)
     case 'invalidContextWindow':
       return t('providerModelErrorContext')
+    case 'contextWindowTooLarge':
+      return t('providerModelErrorContextTooLarge', { max: error.maximum.toLocaleString() })
     case 'invalidMaxOutput':
       return t('providerModelErrorMaxOutput')
+    case 'maxOutputTooLarge':
+      return t('providerModelErrorMaxOutputTooLarge', { max: error.maximum.toLocaleString() })
     case 'noReasoningEfforts':
       return t('providerModelErrorNoEfforts')
   }

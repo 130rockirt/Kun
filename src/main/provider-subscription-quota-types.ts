@@ -94,7 +94,8 @@ export type SubscriptionQuotaRuntime = {
   ): Promise<CodexQuotaCredential | undefined>
   resolveGrokCredential(
     provider: ModelProviderProfileV1,
-    rejectedAccessToken?: string
+    rejectedAccessToken?: string,
+    context?: SubscriptionProbeContext
   ): Promise<GrokQuotaCredential | undefined>
   resolveCursorSession(): Promise<CursorQuotaSession | undefined>
   resolveAntigravityCredential(

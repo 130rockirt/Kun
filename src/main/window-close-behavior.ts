@@ -6,11 +6,12 @@ export type MainWindowCloseState = {
   closeAction?: WindowCloseAction
   isQuitting: boolean
   isUpdateInstallQuitting: boolean
+  trayAvailable?: boolean
 }
 
 export function resolveMainWindowCloseDecision(state: MainWindowCloseState): MainWindowCloseDecision {
   if (state.isQuitting || state.isUpdateInstallQuitting) return 'allow'
   if (state.closeAction === 'quit') return 'allow'
-  if (state.closeAction === 'tray') return 'hide-to-tray'
+  if (state.closeAction === 'tray' && state.trayAvailable !== false) return 'hide-to-tray'
   return 'prompt'
 }

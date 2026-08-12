@@ -348,6 +348,7 @@ export const mainState = {
   workflowRuntime: null as WorkflowRuntime | null,
   appBehavior: normalizeAppBehaviorSettings() as AppBehaviorConfigV1,
   tray: null as Tray | null,
+  trayAvailable: false,
   trayMenu: null as Menu | null,
   trayMenuOpenPromise: null as Promise<void> | null,
   trayQuotaWindow: null as BrowserWindow | null,

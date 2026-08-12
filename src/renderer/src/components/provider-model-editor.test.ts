@@ -295,6 +295,22 @@ describe('provider-model-editor', () => {
       target
     )).toContainEqual({ code: 'invalidMaxOutput' })
     expect(validateProviderModelForm(
+      chatForm(target, { modelId: 'ok', contextWindowTokens: 10_000_001 }),
+      target
+    )).toContainEqual({ code: 'contextWindowTooLarge', maximum: 10_000_000 })
+    expect(validateProviderModelForm(
+      chatForm(target, { modelId: 'ok', maxOutputTokens: 1_000_001 }),
+      target
+    )).toContainEqual({ code: 'maxOutputTooLarge', maximum: 1_000_000 })
+    expect(validateProviderModelForm(
+      chatForm(target, {
+        modelId: 'ok',
+        contextWindowTokens: 10_000_000,
+        maxOutputTokens: 1_000_000
+      }),
+      target
+    )).toEqual([])
+    expect(validateProviderModelForm(
       chatForm(target, { modelId: 'ok', reasoningEnabled: true, reasoningEfforts: [] }),
       target
     )).toContainEqual({ code: 'noReasoningEfforts' })

@@ -2,6 +2,8 @@ import { z } from 'zod'
 import { MODEL_ENDPOINT_FORMATS } from './model-endpoint-format.js'
 
 export const RUNTIME_CAPABILITY_CONTRACT_VERSION = 1
+export const MAX_MODEL_CONTEXT_WINDOW_TOKENS = 10_000_000
+export const MAX_MODEL_OUTPUT_TOKENS = 1_000_000
 
 export const RuntimeCapabilityStatus = z.enum(['available', 'disabled', 'unavailable', 'interaction-required'])
 export type RuntimeCapabilityStatus = z.infer<typeof RuntimeCapabilityStatus>

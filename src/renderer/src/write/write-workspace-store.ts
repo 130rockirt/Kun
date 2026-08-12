@@ -16,6 +16,8 @@ import { trimWriteRecentEdits } from './recent-edits'
 import type { WriteWorkspaceState } from './write-workspace-store-types'
 import { createWriteSettingsActions } from './write-workspace-settings-actions'
 import { createWriteFileActions } from './write-workspace-file-actions'
+import { createWriteEditorGroupActions } from './write-editor-group-actions'
+import { writeDocumentKey } from './write-editor-layout'
 import { writeBrowserStorageItem } from '../lib/browser-storage'
 import {
   captureWriteDocumentContext,
@@ -47,7 +49,18 @@ import {
   writeJoinPath,
   writeRelativeToWorkspace
 } from './write-workspace-store-helpers'
-export type { WriteActiveFileKind, WritePreviewMode, WriteSaveStatus, WriteWorkspaceState } from './write-workspace-store-types'
+export type {
+  WriteActiveFileKind,
+  WriteDocumentSession,
+  WriteEditorGroup,
+  WriteEditorGroupId,
+  WriteEditorLayoutOrientation,
+  WriteEditorLayoutV1,
+  WriteEditorTab,
+  WritePreviewMode,
+  WriteSaveStatus,
+  WriteWorkspaceState
+} from './write-workspace-store-types'
 export { writeBasenameFromPath, writeDirnameFromPath, writeJoinPath, writeRelativeToWorkspace } from './write-workspace-store-helpers'
 
 const MAX_ANIMATED_EXTERNAL_SYNC_CHARS = 120_000
@@ -64,7 +77,9 @@ function cancelExternalSyncAnimation(): void {
 }
 
 
-export const useWriteWorkspaceStore = create<WriteWorkspaceState>((set, get) => ({
+export const useWriteWorkspaceStore = create<WriteWorkspaceState>((set, get) => {
+  const editorGroupActions = createWriteEditorGroupActions(set, get)
+  return ({
   defaultWorkspaceRoot: '',
   workspaceRoots: [],
   autoSaveEnabled: true,
@@ -106,9 +121,15 @@ export const useWriteWorkspaceStore = create<WriteWorkspaceState>((set, get) => 
     get,
     cancelExternalSyncAnimation
   }),
+  ...editorGroupActions,
 
   setFileContent: (content) => {
     cancelExternalSyncAnimation()
+    const activePath = get().activeFilePath
+    if (activePath && get().documentsByPath[writeDocumentKey(activePath)]) {
+      get().setDocumentContent(activePath, content)
+      return
+    }
     set((state) => ({
       fileContent: content,
       contentRevision: state.contentRevision + 1,
@@ -119,9 +140,30 @@ export const useWriteWorkspaceStore = create<WriteWorkspaceState>((set, get) => 
     }))
   },
 
-  setReviewActive: (active) => set({ reviewActive: active === true }),
+  setReviewActive: (active) => set((state) => {
+    const reviewActive = active === true
+    if (!state.activeFilePath) return { reviewActive }
+    const key = writeDocumentKey(state.activeFilePath)
+    const document = state.documentsByPath[key]
+    return {
+      reviewActive,
+      documentsByPath: document
+        ? { ...state.documentsByPath, [key]: { ...document, reviewActive } }
+        : state.documentsByPath
+    }
+  }),
 
-  clearPendingAgentReview: () => set({ pendingAgentReview: null }),
+  clearPendingAgentReview: () => set((state) => {
+    if (!state.activeFilePath) return { pendingAgentReview: null }
+    const key = writeDocumentKey(state.activeFilePath)
+    const document = state.documentsByPath[key]
+    return {
+      pendingAgentReview: null,
+      documentsByPath: document
+        ? { ...state.documentsByPath, [key]: { ...document, pendingAgentReview: null } }
+        : state.documentsByPath
+    }
+  }),
 
   syncActiveFileFromDisk: async (workspaceRoot, options = {}) => {
     const snapshot = get()
@@ -381,6 +423,10 @@ export const useWriteWorkspaceStore = create<WriteWorkspaceState>((set, get) => 
   },
 
   flushSave: async (workspaceRoot, options = {}) => {
+    const activePath = get().activeFilePath
+    if (activePath && get().documentsByPath[writeDocumentKey(activePath)]) {
+      return get().saveDocument(workspaceRoot, activePath, options)
+    }
     for (;;) {
       const state = get()
       if (!state.activeFilePath || state.activeFileKind !== 'text') return true
@@ -482,11 +528,27 @@ export const useWriteWorkspaceStore = create<WriteWorkspaceState>((set, get) => 
   },
 
   setFileError: (message) => {
-    set({ fileError: message })
+    set((state) => {
+      if (!state.activeFilePath) return { fileError: message }
+      const key = writeDocumentKey(state.activeFilePath)
+      const document = state.documentsByPath[key]
+      return {
+        fileError: message,
+        documentsByPath: document
+          ? { ...state.documentsByPath, [key]: { ...document, fileError: message } }
+          : state.documentsByPath
+      }
+    })
   },
 
   setPreviewMode: (mode) => {
     writeBrowserStorageItem(WRITE_PREVIEW_MODE_KEY, mode)
+    const state = get()
+    const group = state.editorLayout.groups.find((candidate) => candidate.id === state.editorLayout.focusedGroupId)
+    if (group?.activePath) {
+      state.setTabViewMode(group.id, group.activePath, mode)
+      return
+    }
     set({ previewMode: mode })
   },
 
@@ -509,14 +571,33 @@ export const useWriteWorkspaceStore = create<WriteWorkspaceState>((set, get) => 
 
   setSelection: (selection) => {
     if (writeSelectionStatesEqual(get().selection, selection)) return
-    set({ selection })
+    set((state) => {
+      if (!state.activeFilePath) return { selection }
+      const key = writeDocumentKey(state.activeFilePath)
+      const document = state.documentsByPath[key]
+      return {
+        selection,
+        documentsByPath: document
+          ? { ...state.documentsByPath, [key]: { ...document, selection } }
+          : state.documentsByPath
+      }
+    })
   },
 
   recordRecentEdits: (edits) => {
     if (edits.length === 0) return
-    set((state) => ({
-      recentEdits: trimWriteRecentEdits([...state.recentEdits, ...edits])
-    }))
+    set((state) => {
+      const recentEdits = trimWriteRecentEdits([...state.recentEdits, ...edits])
+      if (!state.activeFilePath) return { recentEdits }
+      const key = writeDocumentKey(state.activeFilePath)
+      const document = state.documentsByPath[key]
+      return {
+        recentEdits,
+        documentsByPath: document
+          ? { ...state.documentsByPath, [key]: { ...document, recentEdits } }
+          : state.documentsByPath
+      }
+    })
   },
 
   quoteCurrentSelection: (workspaceRoot) => {
@@ -545,4 +626,5 @@ export const useWriteWorkspaceStore = create<WriteWorkspaceState>((set, get) => 
       documentEpoch: nextWriteDocumentEpoch(state.documentEpoch)
     }))
   }
-}))
+  })
+})

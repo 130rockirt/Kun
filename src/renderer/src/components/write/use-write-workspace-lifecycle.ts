@@ -1,7 +1,6 @@
 import { useEffect, useRef, type MutableRefObject } from 'react'
 import { useWriteWorkspaceStore, type WriteWorkspaceState } from '../../write/write-workspace-store'
 import { writeDocumentContextMatches } from '../../write/write-document-context'
-import { startWriteWorkspaceFileWatch } from '../../write/write-file-watch'
 import type { WriteMarkdownEditorHandle } from './WriteMarkdownEditor'
 import i18n from '../../i18n'
 
@@ -164,34 +163,4 @@ export function useWriteWorkspaceLifecycle({
     if (autoSaveEnabledRef.current) void useWriteWorkspaceStore.getState().flushSave(workspaceRoot)
   }, [saveTimerRef, workspaceRoot])
 
-  useEffect(() => {
-    if (!activeFilePath || !workspaceRoot.trim() || (!activeFileIsText && !activeFileIsImage)) return
-    if (
-      typeof window.kunGui?.watchWorkspaceFile !== 'function' ||
-      typeof window.kunGui?.unwatchWorkspaceFile !== 'function' ||
-      typeof window.kunGui?.onWorkspaceFileChanged !== 'function'
-    ) return
-
-    return startWriteWorkspaceFileWatch({
-      api: window.kunGui,
-      workspaceRoot,
-      path: activeFilePath,
-      kind: activeFileIsImage ? 'image' : 'text',
-      onTextSnapshot: (snapshot) => {
-        void syncActiveFileFromDisk(workspaceRoot, snapshot)
-      },
-      onImageChanged: (path) => {
-        void syncActiveImageFromDisk(workspaceRoot, path)
-      },
-      onError: setFileError
-    })
-  }, [
-    activeFileIsImage,
-    activeFileIsText,
-    activeFilePath,
-    setFileError,
-    syncActiveFileFromDisk,
-    syncActiveImageFromDisk,
-    workspaceRoot
-  ])
 }
