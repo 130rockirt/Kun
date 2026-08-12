@@ -1,5 +1,3 @@
-import type { AgentProvider } from '../agent/provider-types'
-import { getProvider } from '../agent/registry'
 import i18n from '../i18n'
 import { formatRuntimeError } from '../lib/format-runtime-error'
 import {
@@ -21,13 +19,7 @@ import type {
   IsolatedPlanBuildResult
 } from './chat-store-types'
 
-type PlanBuildProvider = Pick<
-  AgentProvider,
-  'forkThread'
->
-
 export type PlanWorktreeActionDependencies = {
-  getProvider?: () => PlanBuildProvider
   getApi?: () => PlanWorktreeApi
 }
 
@@ -52,15 +44,14 @@ function failure(
 
 /**
  * Own the renderer half of one isolated build transaction. The operation map
- * prevents a double click from forking two execution threads after the host's
- * idempotent prepare call returns the same durable run.
+ * prevents a double click from repeating the host-owned atomic prepare and
+ * execution-thread binding transaction.
  */
 export function createPlanWorktreeActions(
   { set, get }: { set: ChatStoreSet; get: ChatStoreGet },
   dependencies: PlanWorktreeActionDependencies = {}
 ): Pick<ChatState, 'startIsolatedPlanBuild'> {
   const inFlight = new Map<string, Promise<IsolatedPlanBuildResult>>()
-  const providerForBuild = dependencies.getProvider ?? getProvider
   const apiForBuild = dependencies.getApi ?? hostApi
 
   const execute = async (input: IsolatedPlanBuildRequest): Promise<IsolatedPlanBuildResult> => {
@@ -73,10 +64,6 @@ export function createPlanWorktreeActions(
       }
       if (state.activeThreadId !== input.sourceThreadId) {
         throw new Error(i18n.t('common:planWorktreeSourceThreadChanged'))
-      }
-      const provider = providerForBuild()
-      if (typeof provider.forkThread !== 'function') {
-        throw new Error(i18n.t('common:runtimeFeatureUnsupported'))
       }
       const api = apiForBuild()
       run = await api.prepare({
@@ -92,32 +79,15 @@ export function createPlanWorktreeActions(
         orchestration: input.orchestration,
         ...(input.branchPrefix ? { branchPrefix: input.branchPrefix } : {})
       })
-      // A prior request may have committed the deterministic Kun fork before
-      // its HTTP response or renderer attachment was observed. Let the host
-      // discover and verify that link before asking Kun to fork again.
+      // Main creates and binds the execution fork before prepare resolves.
+      // Reconcile recovers a response-loss replay without exposing a renderer
+      // fallback that could start a foreign first turn.
       run = await api.reconcile({ runId: run.runId })
-      if (run.executionThreadId) {
-        executionThreadId = run.executionThreadId
-      } else {
-        const forked = await provider.forkThread(input.sourceThreadId, {
-          relation: 'side',
-          workspace: run.executionWorkspace ?? run.worktreePath,
-          planBuildRunId: run.runId,
-          planBuildAgentSurface: 'code'
-        })
-        executionThreadId = forked.id
-
-        // Persist the minimum recovery link immediately after the fork succeeds.
-        // A renderer/app crash during goal creation or admission must still leave
-        // a host-authoritative path back to the execution thread and worktree.
-        run = await api.attachThread({
-          runId: run.runId,
-          executionThreadId: forked.id
-        })
+      executionThreadId = run.executionThreadId
+      if (!executionThreadId) {
+        throw new Error('Main did not durably bind the isolated execution thread.')
       }
-
       const linkedThreadId = executionThreadId
-      if (!linkedThreadId) throw new Error('Kun did not return an execution thread.')
 
       const parent = state.threads.find((thread) => thread.id === input.sourceThreadId) ?? {
         id: input.sourceThreadId,
@@ -160,20 +130,6 @@ export function createPlanWorktreeActions(
       return { ok: true, run, executionThreadId: linkedThreadId }
     } catch (error) {
       const message = formatRuntimeError(error)
-      // A fork can exist even when goal creation, selection, or admission
-      // failed. Link it after the failed admission path whenever possible so
-      // the retained worktree remains recoverable without starting a fallback
-      // turn in the source checkout.
-      if (run && executionThreadId && !run.executionThreadId) {
-        try {
-          run = await apiForBuild().attachThread({
-            runId: run.runId,
-            executionThreadId
-          })
-        } catch {
-          // The durable preparing/executing record is still the authority.
-        }
-      }
       set({ error: message })
       return failure(message, run, executionThreadId)
     }

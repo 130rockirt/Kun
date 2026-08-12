@@ -10,6 +10,19 @@ import { RuntimeEventRecorder } from './runtime-event-recorder.js'
 import { ThreadService } from './thread-service.js'
 
 const nowIso = () => '2026-08-06T00:00:00.000Z'
+const planBuildAdmissionFingerprint = 'a'.repeat(64)
+const planBuildAdmissionCapability = 'A'.repeat(43)
+
+function planBuildForkOptions(runId: string, workspace: string) {
+  return {
+    relation: 'side' as const,
+    workspace,
+    planBuildRunId: runId,
+    planBuildAgentSurface: 'code' as const,
+    planBuildAdmissionFingerprint,
+    planBuildAdmissionCapability
+  }
+}
 
 function createHarness() {
   const threadStore = new InMemoryThreadStore()
@@ -212,12 +225,10 @@ describe('ThreadService goal context persistence', () => {
       costBudgetUsd: 12
     })
 
-    const fork = await harness.service.fork(source.threadId, {
-      relation: 'side',
-      workspace: '/tmp/isolated-plan-worktree',
-      planBuildRunId: 'run-plan-1',
-      planBuildAgentSurface: 'code'
-    })
+    const fork = await harness.service.fork(
+      source.threadId,
+      planBuildForkOptions('run-plan-1', '/tmp/isolated-plan-worktree')
+    )
 
     expect(fork).toMatchObject({
       relation: 'side',
@@ -225,9 +236,12 @@ describe('ThreadService goal context persistence', () => {
       workspace: '/tmp/isolated-plan-worktree',
       additionalWorkspaces: [],
       planBuildRunId: 'run-plan-1',
+      planBuildAdmissionFingerprint,
+      planBuildAdmissionCapabilityHash: expect.stringMatching(/^[a-f0-9]{64}$/),
       approvalReviewer: 'user',
       costBudgetUsd: 12
     })
+    expect(fork).not.toHaveProperty('planBuildAdmissionCapability')
 
     const ordinaryFork = await harness.service.fork(source.threadId)
     expect(ordinaryFork.additionalWorkspaces).toEqual(['/tmp/source-shared'])
@@ -258,12 +272,10 @@ describe('ThreadService goal context persistence', () => {
       }))
     })
 
-    const fork = await harness.service.fork(source.threadId, {
-      relation: 'side',
-      workspace: '/tmp/code-plan-from-design-history',
-      planBuildRunId: 'run-code-from-design',
-      planBuildAgentSurface: 'code'
-    })
+    const fork = await harness.service.fork(
+      source.threadId,
+      planBuildForkOptions('run-code-from-design', '/tmp/code-plan-from-design-history')
+    )
 
     expect(fork.agentSurface).toBe('code')
     expect(fork.designProfile).toBeUndefined()
@@ -274,12 +286,7 @@ describe('ThreadService goal context persistence', () => {
   it('returns the committed plan fork for concurrent and response-loss retries', async () => {
     const harness = createHarness()
     const source = await seedGoalContextThread(harness)
-    const request = {
-      relation: 'side' as const,
-      workspace: '/tmp/isolated-plan-worktree',
-      planBuildRunId: 'run-plan-response-loss',
-      planBuildAgentSurface: 'code' as const
-    }
+    const request = planBuildForkOptions('run-plan-response-loss', '/tmp/isolated-plan-worktree')
 
     const [first, concurrentRetry] = await Promise.all([
       harness.service.fork(source.threadId, request),
@@ -294,6 +301,22 @@ describe('ThreadService goal context persistence', () => {
     const matching = (await harness.threadStore.list({ includeSide: true }))
       .filter((thread) => thread.planBuildRunId === request.planBuildRunId)
     expect(matching).toHaveLength(1)
+  })
+
+  it('rejects a deterministic plan-fork retry with a different admission binding', async () => {
+    const harness = createHarness()
+    const source = await seedGoalContextThread(harness)
+    const request = planBuildForkOptions('run-plan-binding', '/tmp/isolated-plan-worktree')
+    await harness.service.fork(source.threadId, request)
+
+    await expect(harness.service.fork(source.threadId, {
+      ...request,
+      planBuildAdmissionFingerprint: 'b'.repeat(64)
+    })).rejects.toThrow('different source or workspace')
+    await expect(harness.service.fork(source.threadId, {
+      ...request,
+      planBuildAdmissionCapability: 'B'.repeat(43)
+    })).rejects.toThrow('different source or workspace')
   })
 
   it('deduplicates cloned history when retrying after a pre-commit crash', async () => {
@@ -314,12 +337,7 @@ describe('ThreadService goal context persistence', () => {
       })
     }
     const source = await seedGoalContextThread(harness)
-    const request = {
-      relation: 'side' as const,
-      workspace: '/tmp/precommit-retry',
-      planBuildRunId: 'run-plan-precommit',
-      planBuildAgentSurface: 'code' as const
-    }
+    const request = planBuildForkOptions('run-plan-precommit', '/tmp/precommit-retry')
 
     await expect(harness.service.fork(source.threadId, request))
       .rejects.toThrow('injected plan fork commit failure')
@@ -340,25 +358,19 @@ describe('ThreadService goal context persistence', () => {
       workspace: '/tmp',
       model: 'm'
     }))
-    await harness.service.fork(source.threadId, {
-      relation: 'side',
-      workspace: '/tmp/isolated-plan-worktree',
-      planBuildRunId: 'run-plan-immutable',
-      planBuildAgentSurface: 'code'
-    })
+    await harness.service.fork(
+      source.threadId,
+      planBuildForkOptions('run-plan-immutable', '/tmp/isolated-plan-worktree')
+    )
 
-    await expect(harness.service.fork(source.threadId, {
-      relation: 'side',
-      workspace: '/tmp/another-worktree',
-      planBuildRunId: 'run-plan-immutable',
-      planBuildAgentSurface: 'code'
-    })).rejects.toThrow('different source or workspace')
-    await expect(harness.service.fork('thr_other_source', {
-      relation: 'side',
-      workspace: '/tmp/isolated-plan-worktree',
-      planBuildRunId: 'run-plan-immutable',
-      planBuildAgentSurface: 'code'
-    })).rejects.toThrow('different source or workspace')
+    await expect(harness.service.fork(
+      source.threadId,
+      planBuildForkOptions('run-plan-immutable', '/tmp/another-worktree')
+    )).rejects.toThrow('different source or workspace')
+    await expect(harness.service.fork(
+      'thr_other_source',
+      planBuildForkOptions('run-plan-immutable', '/tmp/isolated-plan-worktree')
+    )).rejects.toThrow('different source or workspace')
   })
 
   it('recovers a legacy raw mirror into canonical fork and resume history without exposing the context', async () => {

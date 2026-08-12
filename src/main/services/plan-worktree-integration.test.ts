@@ -211,6 +211,39 @@ describe('plan worktree integration', () => {
     ])).rejects.toThrow()
   })
 
+  it('moves a frozen execution transcript before removing its worktree', async () => {
+    const h = await harness('fenced-rebind-order')
+    const run = await h.coordinator.prepare(prepareRequest(h.source))
+    await writeFile(join(run.worktreePath, 'implemented.txt'), 'done\n', 'utf8')
+    await h.coordinator.attachThread({
+      runId: run.runId,
+      executionThreadId: 'thread-fenced',
+      executionTurnId: 'turn-execution'
+    })
+    const transitions: Array<{ workspace?: string; frozen: boolean }> = []
+    const integration = verifiedIntegration({
+      store: h.store,
+      managedRoot: h.managedRoot,
+      setAdmissionFence: async (request) => {
+        transitions.push({ workspace: request.workspace, frozen: request.frozen })
+      },
+      beforeExecutionBranchDelete: async () => {
+        expect(transitions.at(-1)).toMatchObject({ frozen: true })
+        expect(transitions.at(-1)?.workspace).toBeTruthy()
+      }
+    })
+
+    const completed = await integration.finalize({ runId: run.runId, completion: completion() })
+
+    expect(completed.status).toBe('completed')
+    expect(transitions).toEqual([
+      { workspace: undefined, frozen: true },
+      { workspace: completed.executionWorkspace, frozen: true },
+      { workspace: completed.executionWorkspace, frozen: false }
+    ])
+    expect(await missing(run.worktreePath)).toBe(true)
+  })
+
   it('rebases inside the isolated worktree when the target advances', async () => {
     const h = await harness('rebase')
     const run = await h.coordinator.prepare(prepareRequest(h.source))

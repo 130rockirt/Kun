@@ -2,6 +2,10 @@ import { useEffect, type ReactElement } from 'react'
 import { usePlanWorktreeStore } from './plan-worktree-store'
 
 const RECONCILE_INTERVAL_MS = 5_000
+const RECOVERABLE_ADMISSION_ATTENTION_REASONS = new Set([
+  'thread_attach_failed',
+  'turn_admission_failed'
+])
 
 /**
  * App-wide recovery loop. It is intentionally independent of the currently
@@ -30,7 +34,10 @@ export function PlanWorktreeGlobalRecovery({
             let latest = await window.kunGui.planWorktree.reconcile({ runId: run.runId })
             if (
               latest.executionThreadId && !latest.executionTurnId &&
-              (latest.status === 'executing' || latest.status === 'needs_attention')
+              (latest.status === 'executing' || (
+                latest.status === 'needs_attention' &&
+                RECOVERABLE_ADMISSION_ATTENTION_REASONS.has(latest.attentionReason ?? '')
+              ))
             ) {
               latest = await window.kunGui.planWorktree.resumeAdmission({ runId: latest.runId })
             }

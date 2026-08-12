@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { PlanWorktreeRunRecord } from '../../shared/plan-worktree'
 import { PlanWorktreeCoordinator } from '../services/plan-worktree-coordinator'
 import { PlanWorktreeRunStore } from '../services/plan-worktree-run-store'
+import { planWorktreeStartTurnFingerprint } from '../services/plan-worktree-runtime-admission'
 import {
   cleanupAppIpcHandlerTestState,
   handlers,
@@ -83,6 +84,66 @@ describe('plan worktree IPC handlers', () => {
     expect(settled).toBe(true)
   })
 
+  it('has Main create and bind the execution fork without exposing its capability', async () => {
+    const store = new PlanWorktreeRunStore(userDataPath)
+    const record = runRecord()
+    await store.save(record)
+    let forked = false
+    let forkBody: Record<string, unknown> | undefined
+    const runtimeRequest = vi.fn(async (path: string, method = 'GET', body?: string) => {
+      if (path.startsWith('/v1/threads?')) {
+        return {
+          ok: true,
+          status: 200,
+          body: JSON.stringify({ threads: forked ? [executionThreadIdentity(record)] : [] })
+        }
+      }
+      if (method === 'POST' && path.endsWith('/fork')) {
+        forked = true
+        forkBody = JSON.parse(body ?? '{}') as Record<string, unknown>
+        return { ok: true, status: 201, body: JSON.stringify(executionThreadIdentity(record)) }
+      }
+      if (path === '/v1/threads/thread-execution') {
+        return {
+          ok: true,
+          status: 200,
+          body: JSON.stringify({
+            ...executionThreadIdentity(record),
+            forkedFromTurnCount: 0,
+            turns: []
+          })
+        }
+      }
+      throw new Error(`unexpected runtime request: ${method} ${path}`)
+    })
+    vi.spyOn(PlanWorktreeCoordinator.prototype, 'prepare').mockResolvedValue(record)
+    registerAppIpcHandlers(registerOptions({ userDataPath, runtimeRequest }))
+
+    const prepared = await handlers.get('plan-worktree:prepare')?.({}, {
+      operationId: record.operationId,
+      planId: record.planId,
+      planRelativePath: record.planRelativePath,
+      planTitle: record.planTitle,
+      goalObjective: record.goalObjective,
+      executionPrompt: record.executionPrompt,
+      executionDisplayText: record.executionDisplayText,
+      sourceThreadId: record.sourceThreadId,
+      sourceWorkspaceRoot: record.sourceWorkspaceRoot,
+      orchestration: record.orchestration
+    }) as PlanWorktreeRunRecord
+
+    expect(prepared).toMatchObject({ executionThreadId: 'thread-execution' })
+    expect(prepared.admissionCapability).toBeUndefined()
+    expect(forkBody).toEqual(expect.objectContaining({
+      relation: 'side',
+      workspace: record.worktreePath,
+      planBuildRunId: record.runId,
+      planBuildAgentSurface: 'code',
+      planBuildAdmissionCapability: record.admissionCapability,
+      planBuildAdmissionFingerprint: planWorktreeStartTurnFingerprint(record)
+    }))
+  })
+
   it('verifies side-fork identity before persisting immutable attachment metadata', async () => {
     const store = new PlanWorktreeRunStore(userDataPath)
     const record = runRecord()
@@ -91,11 +152,7 @@ describe('plan worktree IPC handlers', () => {
       ok: true,
       status: 200,
       body: JSON.stringify({
-        id: 'thread-execution',
-        workspace: record.worktreePath,
-        relation: 'side',
-        parentThreadId: record.sourceThreadId,
-        planBuildRunId: record.runId,
+        ...executionThreadIdentity(record),
         forkedFromTurnCount: 1,
         turns: [{ id: 'turn-source' }, { id: 'turn-execution' }]
       })
@@ -153,6 +210,83 @@ describe('plan worktree IPC handlers', () => {
       executionTurnId: 'turn-later'
     })).rejects.toMatchObject({ reason: 'thread_attach_failed' })
     expect((await store.get(record.runId))?.executionTurnId).toBeUndefined()
+  })
+
+  it('accepts the exact origin when the runtime timeline redacts its prompt', async () => {
+    const store = new PlanWorktreeRunStore(userDataPath)
+    const record = runRecord()
+    await store.save(record)
+    const runtimeRequest = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      body: JSON.stringify({
+        ...executionThreadIdentity(record),
+        forkedFromTurnCount: 1,
+        turns: [
+          { id: 'turn-source', status: 'completed' },
+          { ...executionOrigin(record), status: 'running' }
+        ]
+      })
+    }))
+    registerAppIpcHandlers(registerOptions({ userDataPath, runtimeRequest }))
+
+    const attached = await handlers.get('plan-worktree:attach-thread')?.({}, {
+      runId: record.runId,
+      executionThreadId: 'thread-execution',
+      executionTurnId: 'turn-execution'
+    }) as PlanWorktreeRunRecord
+
+    expect(attached.executionTurnId).toBe('turn-execution')
+  })
+
+  it('serializes duplicate admission recovery and never reactivates the completed goal', async () => {
+    const store = new PlanWorktreeRunStore(userDataPath)
+    const record = { ...runRecord(), executionThreadId: 'thread-execution' }
+    await store.save(record)
+    let admitted = false
+    let goalStatus = 'active'
+    let goalPosts = 0
+    let turnPosts = 0
+    const runtimeRequest = vi.fn(async (path: string, method = 'GET') => {
+      if (method === 'POST' && path.endsWith('/goal')) {
+        goalPosts += 1
+        goalStatus = 'active'
+        return { ok: true, status: 200, body: JSON.stringify({}) }
+      }
+      if (method === 'POST' && path.endsWith('/turns')) {
+        turnPosts += 1
+        admitted = true
+        goalStatus = 'complete'
+        return {
+          ok: true,
+          status: 202,
+          body: JSON.stringify({ threadId: 'thread-execution', turnId: 'turn-execution' })
+        }
+      }
+      return {
+        ok: true,
+        status: 200,
+        body: JSON.stringify({
+          ...executionThreadIdentity(record),
+          forkedFromTurnCount: 0,
+          goal: { objective: record.goalObjective, status: goalStatus },
+          turns: admitted ? [{ ...executionOrigin(record), status: 'completed' }] : []
+        })
+      }
+    })
+    registerAppIpcHandlers(registerOptions({ userDataPath, runtimeRequest }))
+
+    const resume = handlers.get('plan-worktree:resume-admission')!
+    const [first, second] = await Promise.all([
+      resume({}, { runId: record.runId }),
+      resume({}, { runId: record.runId })
+    ]) as PlanWorktreeRunRecord[]
+
+    expect(first.executionTurnId).toBe('turn-execution')
+    expect(second.executionTurnId).toBe('turn-execution')
+    expect(goalPosts).toBe(1)
+    expect(turnPosts).toBe(1)
+    expect(goalStatus).toBe('complete')
   })
 
   it('adopts the unique side thread and origin turn when Kun comes online later', async () => {
@@ -230,15 +364,22 @@ function executionThreadIdentity(record: PlanWorktreeRunRecord) {
     workspace: record.worktreePath,
     relation: 'side',
     parentThreadId: record.sourceThreadId,
-    planBuildRunId: record.runId
+    planBuildRunId: record.runId,
+    ...(record.admissionCapability ? {
+      planBuildAdmissionFingerprint: planWorktreeStartTurnFingerprint(record),
+      planBuildAdmissionCapabilityHash: createHash('sha256')
+        .update(record.admissionCapability)
+        .digest('hex')
+    } : {})
   }
 }
 
 function executionOrigin(record: PlanWorktreeRunRecord) {
   return {
     id: 'turn-execution',
-    prompt: record.executionPrompt,
+    prompt: '',
     clientRequestId: record.admissionClientRequestId,
+    clientRequestFingerprint: planWorktreeStartTurnFingerprint(record),
     orchestration: record.orchestration,
     agentSurface: 'code'
   }
@@ -258,6 +399,7 @@ function runRecord(): PlanWorktreeRunRecord {
     executionDisplayText: 'Build IPC',
     executionPromptSha256: createHash('sha256').update(executionPrompt).digest('hex'),
     admissionClientRequestId: 'plan-build:run-ipc',
+    admissionCapability: 'a'.repeat(43),
     sourceThreadId: 'thread-source',
     orchestration: 'direct',
     sourceWorkspaceRoot: '/repo',

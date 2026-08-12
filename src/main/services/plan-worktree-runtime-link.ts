@@ -1,11 +1,15 @@
-import { createHash } from 'node:crypto'
 import { z } from 'zod'
 import type {
   PlanWorktreeAttachThreadRequest,
   PlanWorktreeRunRecord
 } from '../../shared/plan-worktree'
 import type { RuntimeRequestResult } from '../../shared/kun-gui-api'
+import { currentExecutionWorkspace } from './plan-worktree-admission-fence'
 import { PlanWorktreeCoordinatorError } from './plan-worktree-coordinator'
+import {
+  matchesPlanWorktreeAdmission,
+  matchesPlanWorktreeAdmissionBinding
+} from './plan-worktree-runtime-admission'
 
 type RuntimeRequest = (
   path: string,
@@ -19,7 +23,9 @@ const ThreadIdentitySchema = z.object({
   workspace: z.string().min(1),
   relation: z.enum(['primary', 'fork', 'side']),
   parentThreadId: z.string().optional(),
-  planBuildRunId: z.string().optional()
+  planBuildRunId: z.string().optional(),
+  planBuildAdmissionFingerprint: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  planBuildAdmissionCapabilityHash: z.string().regex(/^[a-f0-9]{64}$/).optional()
 }).passthrough()
 
 const ThreadDetailSchema = ThreadIdentitySchema.extend({
@@ -29,6 +35,7 @@ const ThreadDetailSchema = ThreadIdentitySchema.extend({
   turns: z.array(z.object({
     id: z.string().min(1),
     clientRequestId: z.string().optional(),
+    clientRequestFingerprint: z.string().regex(/^[a-f0-9]{64}$/).optional(),
     prompt: z.string().optional(),
     orchestration: z.enum(['direct', 'graph']).default('direct'),
     agentSurface: z.enum(['code', 'write', 'design']).optional()
@@ -61,7 +68,9 @@ export function createPlanWorktreeRuntimeLinkResolver(runtimeRequest: RuntimeReq
         )
       }
       if (candidates.length === 0) return null
-      assertIdentity(record, candidates[0]!)
+      // Thread summaries intentionally omit the host admission binding; the
+      // detailed projection below proves it before anything is attached.
+      assertIdentity(record, candidates[0]!, false)
       threadId = candidates[0]!.id
     }
 
@@ -115,28 +124,27 @@ function matchesDurableAdmission(
   record: PlanWorktreeRunRecord,
   turn: z.infer<typeof ThreadDetailSchema>['turns'][number]
 ): boolean {
-  if (!record.executionPrompt || !record.executionPromptSha256
-    || !record.admissionClientRequestId) return false
-  return turn.clientRequestId === record.admissionClientRequestId
-    && turn.orchestration === record.orchestration
-    && turn.agentSurface === 'code'
-    && typeof turn.prompt === 'string'
-    && createHash('sha256').update(turn.prompt).digest('hex') === record.executionPromptSha256
+  return matchesPlanWorktreeAdmission(record, turn)
 }
 
 function assertIdentity(
   record: PlanWorktreeRunRecord,
-  thread: z.infer<typeof ThreadIdentitySchema>
+  thread: z.infer<typeof ThreadIdentitySchema>,
+  requireAdmissionBinding = true
 ): void {
-  const expectedWorkspace = record.cleanup.threadRebound
-    ? record.sourceWorkspaceRoot
-    : record.executionWorkspace ?? record.worktreePath
+  const expectedWorkspace = currentExecutionWorkspace(record)
   if (thread.workspace !== expectedWorkspace || thread.relation !== 'side'
     || thread.parentThreadId !== record.sourceThreadId
     || thread.planBuildRunId !== record.runId) {
     throw new PlanWorktreeCoordinatorError(
       'external_state_changed',
       'The recovered Kun thread does not match the durable plan-worktree identity.'
+    )
+  }
+  if (requireAdmissionBinding && !matchesPlanWorktreeAdmissionBinding(record, thread)) {
+    throw new PlanWorktreeCoordinatorError(
+      'external_state_changed',
+      'The recovered Kun thread does not match the durable plan-build admission binding.'
     )
   }
 }

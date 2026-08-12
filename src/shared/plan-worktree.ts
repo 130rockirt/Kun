@@ -151,6 +151,12 @@ export const PlanWorktreeRunRecordSchema = z.object({
   executionDisplayText: executionDisplayText.optional(),
   executionPromptSha256: z.string().regex(/^[0-9a-f]{64}$/).optional(),
   admissionClientRequestId: z.string().trim().min(1).max(256).optional(),
+  /**
+   * Host-only proof for the first execution turn. It is intentionally
+   * optional so records written before this admission hardening remain
+   * readable, but new unbound records fail closed before turn admission.
+   */
+  admissionCapability: z.string().regex(/^[A-Za-z0-9_-]{43,128}$/).optional(),
   sourceThreadId: boundedId,
   executionThreadId: boundedId.optional(),
   executionTurnId: boundedId.optional(),

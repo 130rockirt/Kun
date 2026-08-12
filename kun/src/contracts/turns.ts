@@ -278,6 +278,12 @@ export const StartTurnRequest = z.object({
   prompt: z.string().min(1),
   /** Retry-stable client-generated admission key, scoped to this thread. */
   clientRequestId: z.string().trim().min(1).max(256).optional(),
+  /**
+   * Opaque one-time host proof for the first turn in a managed plan-build
+   * fork. It contributes to the canonical request fingerprint but is never
+   * copied into a durable Turn record.
+   */
+  planBuildAdmissionCapability: z.string().trim().regex(/^[A-Za-z0-9_-]{43,128}$/).optional(),
   displayText: z.string().optional(),
   messageSource: UserMessageSource.optional(),
   /** Binds this turn to one interrupted child and its last observed attempt. */

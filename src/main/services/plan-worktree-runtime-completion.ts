@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto'
 import { z } from 'zod'
 import type {
   PlanWorktreeAttentionReason,
@@ -6,6 +5,11 @@ import type {
   PlanWorktreeRunRecord
 } from '../../shared/plan-worktree'
 import type { RuntimeRequestResult } from '../../shared/kun-gui-api'
+import { currentExecutionWorkspace } from './plan-worktree-admission-fence'
+import {
+  matchesPlanWorktreeAdmission,
+  matchesPlanWorktreeAdmissionBinding
+} from './plan-worktree-runtime-admission'
 
 type RuntimeRequest = (
   path: string,
@@ -17,6 +21,7 @@ type RuntimeRequest = (
 const RuntimeTurnSchema = z.object({
   id: z.string().min(1),
   clientRequestId: z.string().optional(),
+  clientRequestFingerprint: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   prompt: z.string().optional(),
   status: z.enum(['queued', 'running', 'completed', 'failed', 'aborted']),
   orchestration: z.enum(['direct', 'graph']).default('direct'),
@@ -29,6 +34,8 @@ const RuntimeThreadSchema = z.object({
   relation: z.enum(['primary', 'fork', 'side']),
   parentThreadId: z.string().optional(),
   planBuildRunId: z.string().optional(),
+  planBuildAdmissionFingerprint: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  planBuildAdmissionCapabilityHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   forkedFromTurnCount: z.number().int().nonnegative().optional(),
   goal: z.object({
     objective: z.string().min(1),
@@ -153,12 +160,7 @@ function matchesDurableAdmission(
   record: PlanWorktreeRunRecord,
   turn: z.infer<typeof RuntimeTurnSchema>
 ): boolean {
-  if (!record.executionPromptSha256 || !record.admissionClientRequestId) return false
-  return turn.clientRequestId === record.admissionClientRequestId
-    && turn.orchestration === record.orchestration
-    && turn.agentSurface === 'code'
-    && typeof turn.prompt === 'string'
-    && createHash('sha256').update(turn.prompt).digest('hex') === record.executionPromptSha256
+  return matchesPlanWorktreeAdmission(record, turn)
 }
 
 function assertThreadIdentity(
@@ -167,10 +169,16 @@ function assertThreadIdentity(
 ): void {
   if (thread.id !== record.executionThreadId || thread.planBuildRunId !== record.runId
     || thread.relation !== 'side' || thread.parentThreadId !== record.sourceThreadId
-    || thread.workspace !== (record.executionWorkspace ?? record.worktreePath)) {
+    || thread.workspace !== currentExecutionWorkspace(record)) {
     throw new PlanWorktreeRuntimeCompletionError(
       'external_state_changed',
       'The runtime execution thread no longer matches the durable plan-worktree identity.'
+    )
+  }
+  if (!matchesPlanWorktreeAdmissionBinding(record, thread)) {
+    throw new PlanWorktreeRuntimeCompletionError(
+      'external_state_changed',
+      'The runtime execution thread no longer matches the durable plan-build admission binding.'
     )
   }
 }

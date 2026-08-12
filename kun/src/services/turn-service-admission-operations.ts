@@ -55,7 +55,7 @@ import {
   goalContextInstruction,
   goalContextKey
 } from '../loop/continuation-instructions.js'
-import { type TurnService, type TurnServiceDeps, TurnConflictError, TurnCapacityError, type TerminalTurnStatus, type TurnSettlement, type GraphLeadSuspensionResult, type GraphLeadResumeResult, HOST_SHUTDOWN_TURN_SUSPENSION_CODE, hostShutdownTurnSuspensionReason, isHostShutdownTurnSuspension, DEFAULT_MAX_CONCURRENT_TURNS, fingerprintStartTurnRequest, canonicalizeFingerprintValue, isActiveTurn, terminalStatus, threadStatusFromTurns, threadStatusAfterTurnTransition, normalizeMaxConcurrentTurns, firstNonBlank, modelForManualCompaction } from './turn-service-core.js'
+import { type TurnService, type TurnServiceDeps, TurnConflictError, TurnCapacityError, type TerminalTurnStatus, type TurnSettlement, type GraphLeadSuspensionResult, type GraphLeadResumeResult, HOST_SHUTDOWN_TURN_SUSPENSION_CODE, hostShutdownTurnSuspensionReason, isHostShutdownTurnSuspension, DEFAULT_MAX_CONCURRENT_TURNS, fingerprintStartTurnRequest, hashPlanBuildAdmissionCapability, canonicalizeFingerprintValue, isActiveTurn, terminalStatus, threadStatusFromTurns, threadStatusAfterTurnTransition, normalizeMaxConcurrentTurns, firstNonBlank, modelForManualCompaction } from './turn-service-core.js'
 import { resolveDesignTurnAdmission } from './turn-service-design-admission.js'
 
 export const turnServiceAdmissionOperations = {
@@ -99,6 +99,7 @@ async startTurn(this: TurnService, input: {
         if (!thread) throw new Error(`thread not found: ${input.threadId}`)
         const replay = this['idempotentStartFromThread'](thread, input.request, requestFingerprint)
         if (replay) return { kind: 'replay' as const, response: replay }
+        assertPlanBuildOriginAdmission(thread, input.request, requestFingerprint)
         // Archival is an overlay on the execution-derived thread state. It
         // deliberately permits an already-running turn to settle, but it
         // must not admit a new one while the thread remains archived.
@@ -520,4 +521,66 @@ async rewindThread(this: TurnService, input: {
       }
     })
   },
+}
+
+/**
+ * Reserve the first post-fork turn in a managed plan-build side thread for
+ * Main's exact durable request. The client-visible run id alone is
+ * predictable, so it is paired with a canonical request fingerprint and a
+ * one-time host capability whose raw value is never persisted.
+ */
+function assertPlanBuildOriginAdmission(
+  thread: ThreadRecord,
+  request: StartTurnRequest,
+  requestFingerprint: string | undefined
+): void {
+  if (thread.relation !== 'side' || !thread.planBuildRunId) return
+  const boundary = thread.forkedFromTurnCount
+  if (boundary === undefined || boundary > thread.turns.length) {
+    throw new TurnConflictError('plan-build thread has no valid fork boundary')
+  }
+
+  const expectedClientRequestId = `plan-build:${thread.planBuildRunId}`
+  const binding = planBuildAdmissionBinding(thread)
+  const origin = thread.turns[boundary]
+  if (origin) {
+    if (
+      origin.clientRequestId !== expectedClientRequestId ||
+      origin.mode !== 'agent' ||
+      origin.orchestration !== 'direct' && origin.orchestration !== 'graph' ||
+      origin.clientSurface !== 'gui' ||
+      origin.agentSurface !== 'code' ||
+      binding !== undefined && origin.clientRequestFingerprint !== binding.fingerprint
+    ) {
+      throw new TurnConflictError('plan-build thread has a foreign post-fork origin')
+    }
+    return
+  }
+
+  if (!binding) {
+    throw new TurnConflictError('plan-build thread is missing a durable admission binding')
+  }
+  if (
+    request.clientRequestId !== expectedClientRequestId ||
+    request.mode !== 'agent' ||
+    request.orchestration !== 'direct' && request.orchestration !== 'graph' ||
+    request.clientSurface !== 'gui' ||
+    request.agentSurface !== 'code' ||
+    requestFingerprint !== binding.fingerprint ||
+    !request.planBuildAdmissionCapability ||
+    hashPlanBuildAdmissionCapability(request.planBuildAdmissionCapability.trim())
+      !== binding.capabilityHash
+  ) {
+    throw new TurnConflictError(
+      'the first post-fork turn must use the durable plan-build admission identity'
+    )
+  }
+}
+
+function planBuildAdmissionBinding(
+  thread: ThreadRecord
+): { fingerprint: string; capabilityHash: string } | undefined {
+  const fingerprint = thread.planBuildAdmissionFingerprint
+  const capabilityHash = thread.planBuildAdmissionCapabilityHash
+  return fingerprint && capabilityHash ? { fingerprint, capabilityHash } : undefined
 }

@@ -17,6 +17,7 @@ function runRecord(): PlanWorktreeRunRecord {
     executionPromptSha256: 'a'.repeat(64),
     admissionClientRequestId: 'plan-build:run-1',
     sourceThreadId: 'thread-source',
+    executionThreadId: 'thread-execution',
     orchestration: 'direct',
     sourceWorkspaceRoot: '/repo',
     sourceCheckoutRoot: '/repo',
@@ -56,16 +57,10 @@ function request() {
 describe('isolated plan build renderer transaction', () => {
   let state: ChatState
   let order: string[]
-  let provider: {
-    forkThread: ReturnType<typeof vi.fn>
-    setThreadGoal: ReturnType<typeof vi.fn>
-    sendUserMessage: ReturnType<typeof vi.fn>
-  }
   let api: {
     prepare: ReturnType<typeof vi.fn>
     reconcile: ReturnType<typeof vi.fn>
     resumeAdmission: ReturnType<typeof vi.fn>
-    attachThread: ReturnType<typeof vi.fn>
   }
 
   beforeEach(() => {
@@ -92,26 +87,6 @@ describe('isolated plan build renderer transaction', () => {
       }),
       error: null
     } as unknown as ChatState
-    provider = {
-      forkThread: vi.fn(async () => {
-        order.push('fork')
-        return {
-          id: 'thread-execution',
-          title: 'Execution',
-          updatedAt: '2026-08-12T00:00:00.000Z',
-          model: 'model',
-          mode: 'agent'
-        }
-      }),
-      setThreadGoal: vi.fn(async () => {
-        order.push('goal')
-        return { threadId: 'thread-execution' }
-      }),
-      sendUserMessage: vi.fn(async () => {
-        order.push('admit')
-        return { turnId: 'turn-execution', threadId: 'thread-execution' }
-      })
-    }
     api = {
       prepare: vi.fn(async () => {
         order.push('prepare')
@@ -123,15 +98,7 @@ describe('isolated plan build renderer transaction', () => {
       }),
       resumeAdmission: vi.fn(async () => {
         order.push('resume-admission')
-        return { ...runRecord(), executionThreadId: 'thread-execution', executionTurnId: 'turn-execution' }
-      }),
-      attachThread: vi.fn(async (input: { executionTurnId?: string }) => {
-        order.push(input.executionTurnId ? 'attach-turn' : 'attach-thread')
-        return {
-          ...runRecord(),
-          executionThreadId: 'thread-execution',
-          ...(input.executionTurnId ? { executionTurnId: input.executionTurnId } : {})
-        }
+        return { ...runRecord(), executionTurnId: 'turn-execution' }
       })
     }
   })
@@ -143,14 +110,11 @@ describe('isolated plan build renderer transaction', () => {
     }
     return createPlanWorktreeActions(
       { set, get: () => state },
-      {
-        getProvider: () => provider as never,
-        getApi: () => api as never
-      }
+      { getApi: () => api as never }
     )
   }
 
-  it('durably attaches immediately after fork, then creates the goal and admits the exact prompt', async () => {
+  it('uses the Main-bound execution thread, then admits the exact prompt', async () => {
     const result = await actions().startIsolatedPlanBuild(request())
 
     expect(result).toMatchObject({
@@ -161,18 +125,10 @@ describe('isolated plan build renderer transaction', () => {
     expect(order).toEqual([
       'prepare',
       'reconcile',
-      'fork',
-      'attach-thread',
       'resume-admission',
       'refresh',
       'select'
     ])
-    expect(provider.forkThread).toHaveBeenCalledWith('thread-source', {
-      relation: 'side',
-      workspace: '/managed/run-1/repo',
-      planBuildRunId: 'run-1',
-      planBuildAgentSurface: 'code'
-    })
     expect(api.prepare).toHaveBeenCalledWith(expect.objectContaining({
       executionPrompt: 'EXACT EMBEDDED PLAN',
       executionDisplayText: 'Direct build'
@@ -180,7 +136,7 @@ describe('isolated plan build renderer transaction', () => {
     expect(state.sendMessage).not.toHaveBeenCalled()
   })
 
-  it('retains the durable thread link and never falls back when host admission fails', async () => {
+  it('retains the Main-bound thread and never falls back when admission fails', async () => {
     api.resumeAdmission.mockImplementationOnce(async () => {
       order.push('resume-admission')
       throw new Error('goal failed')
@@ -193,30 +149,27 @@ describe('isolated plan build renderer transaction', () => {
       executionThreadId: 'thread-execution',
       run: { executionThreadId: 'thread-execution' }
     })
-    expect(order).toEqual(['prepare', 'reconcile', 'fork', 'attach-thread', 'resume-admission'])
-    expect(provider.sendUserMessage).not.toHaveBeenCalled()
+    expect(order).toEqual(['prepare', 'reconcile', 'resume-admission'])
     expect(state.sendMessage).not.toHaveBeenCalled()
     expect(state.activeThreadId).toBe('thread-source')
   })
 
-  it('keeps the first durable attachment when exact turn admission fails', async () => {
-    api.resumeAdmission.mockImplementationOnce(async () => {
-      order.push('resume-admission')
-      throw new Error('turn admission failed')
+  it('fails closed when Main does not return a durable execution-thread binding', async () => {
+    api.reconcile.mockImplementationOnce(async () => {
+      order.push('reconcile')
+      return { ...runRecord(), executionThreadId: undefined }
     })
 
     const result = await actions().startIsolatedPlanBuild(request())
 
-    expect(result).toMatchObject({
-      ok: false,
-      run: { executionThreadId: 'thread-execution' }
-    })
-    expect(order).toEqual(['prepare', 'reconcile', 'fork', 'attach-thread', 'resume-admission'])
-    expect(api.attachThread).toHaveBeenCalledTimes(1)
+    expect(result).toMatchObject({ ok: false, run: { runId: 'run-1' } })
+    if (!result.ok) expect(result.message).toContain('durably bind')
+    expect(order).toEqual(['prepare', 'reconcile'])
+    expect(api.resumeAdmission).not.toHaveBeenCalled()
     expect(state.sendMessage).not.toHaveBeenCalled()
   })
 
-  it('adopts a committed fork and origin turn before retrying the fork operation', async () => {
+  it('adopts a Main-recovered origin turn without requesting a second admission', async () => {
     api.reconcile.mockImplementationOnce(async () => {
       order.push('reconcile')
       return {
@@ -234,9 +187,7 @@ describe('isolated plan build renderer transaction', () => {
       run: { executionTurnId: 'turn-recovered' }
     })
     expect(order).toEqual(['prepare', 'reconcile', 'refresh', 'select'])
-    expect(provider.forkThread).not.toHaveBeenCalled()
-    expect(provider.setThreadGoal).not.toHaveBeenCalled()
-    expect(provider.sendUserMessage).not.toHaveBeenCalled()
-    expect(api.attachThread).not.toHaveBeenCalled()
+    expect(api.resumeAdmission).not.toHaveBeenCalled()
+    expect(state.sendMessage).not.toHaveBeenCalled()
   })
 })

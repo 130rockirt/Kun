@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto'
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { realpath } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { isAbsolute, join, relative, resolve } from 'node:path'
@@ -44,6 +44,7 @@ export type PlanWorktreeCoordinatorOptions = {
   managedRoot?: string
   now?: () => Date
   createRunId?: () => string
+  createAdmissionCapability?: () => string
   locks?: PlanWorktreeLockManager
   verifyExecutionThread: (
     record: PlanWorktreeRunRecord,
@@ -88,6 +89,7 @@ export class PlanWorktreeCoordinator {
   private readonly managedRoot: string
   private readonly now: () => Date
   private readonly createRunId: () => string
+  private readonly createAdmissionCapability: () => string
   private readonly locks: PlanWorktreeLockManager
   private readonly verifyExecutionThread: NonNullable<
     PlanWorktreeCoordinatorOptions['verifyExecutionThread']
@@ -99,6 +101,8 @@ export class PlanWorktreeCoordinator {
     this.managedRoot = resolve(options.managedRoot ?? join(homedir(), '.kun', 'worktrees'))
     this.now = options.now ?? (() => new Date())
     this.createRunId = options.createRunId ?? randomUUID
+    this.createAdmissionCapability = options.createAdmissionCapability
+      ?? (() => randomBytes(32).toString('base64url'))
     this.locks = options.locks ?? new PlanWorktreeLockManager()
     this.verifyExecutionThread = options.verifyExecutionThread
     this.recoverExecutionLink = options.recoverExecutionLink
@@ -209,6 +213,7 @@ export class PlanWorktreeCoordinator {
         executionDisplayText: request.executionDisplayText,
         executionPromptSha256: createHash('sha256').update(request.executionPrompt).digest('hex'),
         admissionClientRequestId: `plan-build:${runId}`,
+        admissionCapability: this.createAdmissionCapability(),
         sourceThreadId: request.sourceThreadId,
         orchestration: request.orchestration,
         sourceWorkspaceRoot: request.sourceWorkspaceRoot,
@@ -358,7 +363,11 @@ export class PlanWorktreeCoordinator {
     if (record.status === 'completed' || record.status === 'cancelled') {
       return { record, threadAbsent: !record.executionThreadId }
     }
-    if (record.executionThreadId && record.executionTurnId) {
+    // Re-verify only the narrow legacy false alarms caused by Hybrid's
+    // redacted prompt projection. Other fully-linked runs can remain a cheap
+    // no-op, while this path proves the recorded origin before clearing it.
+    if (record.executionThreadId && record.executionTurnId
+      && !isRecoverableExecutionLinkAttention(record)) {
       return { record, threadAbsent: false }
     }
     try {
@@ -406,6 +415,8 @@ export class PlanWorktreeCoordinator {
     if (record.status === 'completed' || record.status === 'cancelled') return record
     await this.verifyExecutionThread(record, request)
     const recoversAttachFailure = record.attentionReason === 'thread_attach_failed'
+      || (request.executionTurnId !== undefined
+        && isRecoverableExecutionLinkAttention(record))
     const addsMetadata = record.executionThreadId !== request.executionThreadId
       || (request.executionTurnId !== undefined
         && record.executionTurnId !== request.executionTurnId)
@@ -562,4 +573,22 @@ export class PlanWorktreeCoordinator {
     if (!record) throw new Error(`Unknown plan worktree run: ${runId}`)
     return record
   }
+}
+
+/**
+ * Older Hybrid metadata projections redacted `turn.prompt`, which made a
+ * correct recovered origin look foreign to the old prompt-hash verifier.
+ * Only clear this narrow historical attention state after verification above
+ * has proved the exact immutable turn; genuine foreign origins still fail the
+ * verifier and remain retained.
+ */
+function isRecoverableExecutionLinkAttention(record: PlanWorktreeRunRecord): boolean {
+  const legacyFalseAlarms = new Set([
+    'A foreign turn was admitted before the durable plan-build origin.',
+    'The attached turn is not the first admitted turn after the fork boundary.',
+    'The execution origin does not match the durable plan admission identity.'
+  ])
+  return record.status === 'needs_attention'
+    && record.attentionReason === 'external_state_changed'
+    && legacyFalseAlarms.has(record.attentionMessage ?? '')
 }

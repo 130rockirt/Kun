@@ -59,7 +59,7 @@ export class PlanWorktreeCleanup {
           updatedAt: this.options.timestamp()
         })
       }
-      if (!this.options.fence.enabled && !current.cleanup.threadRebound) {
+      if (!current.cleanup.threadRebound) {
         current = await this.options.fence.move(current, current.sourceWorkspaceRoot, true)
       }
       if (!current.cleanup.worktreeRemoved) {
@@ -102,7 +102,7 @@ export class PlanWorktreeCleanup {
   async provenCleanup(record: PlanWorktreeRunRecord): Promise<PlanWorktreeRunRecord> {
     let current = record
     try {
-      if (!this.options.fence.enabled && !current.cleanup.threadRebound) {
+      if (!current.cleanup.threadRebound) {
         current = await this.options.fence.move(current, current.sourceWorkspaceRoot, true)
       }
       if (current.cleanupIntent === 'integration_completed' && current.integratedHead) {

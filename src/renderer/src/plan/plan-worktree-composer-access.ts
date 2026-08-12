@@ -11,21 +11,28 @@ export type PlanWorktreeComposerAccess = {
 
 export function planWorktreeRunForThread(
   thread: NormalizedThread | undefined,
-  plans: Record<string, PlanWorktreePlanState>
+  plans: Record<string, PlanWorktreePlanState>,
+  activeThreadId?: string | null
 ): PlanWorktreeRunRecord | undefined {
   const runId = thread?.planBuildRunId?.trim()
-  if (!runId) return undefined
-  return Object.values(plans).find((entry) => entry.run?.runId === runId)?.run
+  if (runId) {
+    return Object.values(plans).find((entry) => entry.run?.runId === runId)?.run
+  }
+  const executionThreadId = activeThreadId?.trim() || thread?.id
+  if (!executionThreadId) return undefined
+  return Object.values(plans).find((entry) =>
+    entry.run?.executionThreadId === executionThreadId)?.run
 }
 
 export async function hydratePlanWorktreeComposerRun(
   thread: NormalizedThread | undefined,
   plans: Record<string, PlanWorktreePlanState>,
   getRun: (runId: string) => Promise<PlanWorktreeRunRecord | null>,
-  upsertRun: (run: PlanWorktreeRunRecord) => void
+  upsertRun: (run: PlanWorktreeRunRecord) => void,
+  activeThreadId?: string | null
 ): Promise<boolean> {
   const runId = thread?.planBuildRunId?.trim()
-  if (!runId || planWorktreeRunForThread(thread, plans)) return false
+  if (!runId || planWorktreeRunForThread(thread, plans, activeThreadId)) return false
   const run = await getRun(runId)
   if (!run || run.runId !== runId) return false
   upsertRun(run)
@@ -52,13 +59,21 @@ function executionWorkspaceMatches(
 
 export function planWorktreeComposerAccess(
   thread: NormalizedThread | undefined,
-  plans: Record<string, PlanWorktreePlanState>
+  plans: Record<string, PlanWorktreePlanState>,
+  activeThreadId?: string | null
 ): PlanWorktreeComposerAccess {
   const runId = thread?.planBuildRunId?.trim()
-  if (!thread || !runId) return { writable: true }
+  const run = planWorktreeRunForThread(thread, plans, activeThreadId)
+  if (!run) {
+    if (!runId) return { writable: true }
+    return {
+      writable: false,
+      reason: 'This isolated plan task is waiting for its durable execution state to recover.'
+    }
+  }
 
-  const run = planWorktreeRunForThread(thread, plans)
-  if (!run || run.executionThreadId !== thread.id) {
+  const executionThreadId = activeThreadId?.trim() || thread?.id
+  if (!executionThreadId || run.executionThreadId !== executionThreadId) {
     return {
       writable: false,
       reason: 'This isolated plan task is waiting for its durable execution state to recover.'
@@ -72,7 +87,9 @@ export function planWorktreeComposerAccess(
     return { writable: true, run }
   }
 
-  const stillBound = executionWorkspaceMatches(thread, run) && !run.cleanup.worktreeRemoved
+  const stillBound = (thread
+    ? executionWorkspaceMatches(thread, run)
+    : true) && !run.cleanup.worktreeRemoved
   if (
     run.status === 'executing' &&
     Boolean(run.executionTurnId) &&

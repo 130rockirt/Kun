@@ -99,6 +99,8 @@ export type ForkThreadOptions = {
   workspace?: string
   planBuildRunId?: string
   planBuildAgentSurface?: 'code'
+  planBuildAdmissionFingerprint?: string
+  planBuildAdmissionCapability?: string
   designDocumentTarget?: DesignDocumentTarget
   designCloneOperationId?: string
 }

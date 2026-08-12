@@ -26,7 +26,7 @@ export function isolatedExecutionWorkspace(record: PlanWorktreeRunRecord): strin
 }
 
 export function currentExecutionWorkspace(record: PlanWorktreeRunRecord): string {
-  if (record.cleanup.threadRebound) return record.sourceWorkspaceRoot
+  if (record.cleanup.threadRebound) return record.executionWorkspace ?? record.sourceWorkspaceRoot
   return record.executionWorkspace ?? isolatedExecutionWorkspace(record)
 }
 
@@ -105,15 +105,18 @@ export class PlanWorktreeAdmissionFence {
     workspace: string
   ): Promise<PlanWorktreeRunRecord> {
     const canonicalWorkspace = await realpath(workspace).catch(() => resolve(workspace))
+    const canonicalSourceWorkspace = await realpath(record.sourceWorkspaceRoot)
+      .catch(() => resolve(record.sourceWorkspaceRoot))
     if (record.executionThreadId && this.setFence) {
       const current = record.admissionTransition
         ? await this.completeTransition(record)
         : record
+      const targetThreadRebound = canonicalWorkspace === canonicalSourceWorkspace
       const transition = {
-        operationId: `fence-release:${record.runId}:${canonicalWorkspace === record.sourceWorkspaceRoot ? 'source' : 'isolated'}`,
+        operationId: `fence-release:${record.runId}:${targetThreadRebound ? 'source' : 'isolated'}`,
         expectedWorkspace: currentExecutionWorkspace(current),
         targetWorkspace: canonicalWorkspace,
-        targetThreadRebound: canonicalWorkspace === record.sourceWorkspaceRoot,
+        targetThreadRebound,
         targetFrozen: false
       }
       const pending = await this.store.save({

@@ -67,6 +67,8 @@ export function createThreadRecord(input: {
   relation?: ThreadRelation
   parentThreadId?: string
   planBuildRunId?: string
+  planBuildAdmissionFingerprint?: string
+  planBuildAdmissionCapabilityHash?: string
   planBuildAdmissionFrozen?: boolean
   forkedFromThreadId?: string
   forkedFromTitle?: string
@@ -113,6 +115,12 @@ export function createThreadRecord(input: {
     relation: input.relation ?? 'primary',
     ...(input.parentThreadId ? { parentThreadId: input.parentThreadId } : {}),
     ...(input.planBuildRunId ? { planBuildRunId: input.planBuildRunId } : {}),
+    ...(input.planBuildAdmissionFingerprint
+      ? { planBuildAdmissionFingerprint: input.planBuildAdmissionFingerprint }
+      : {}),
+    ...(input.planBuildAdmissionCapabilityHash
+      ? { planBuildAdmissionCapabilityHash: input.planBuildAdmissionCapabilityHash }
+      : {}),
     ...(input.planBuildAdmissionFrozen !== undefined
       ? { planBuildAdmissionFrozen: input.planBuildAdmissionFrozen }
       : {}),

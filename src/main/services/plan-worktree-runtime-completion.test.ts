@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { createHash } from 'node:crypto'
 import type { PlanWorktreeCompletionSnapshot, PlanWorktreeRunRecord } from '../../shared/plan-worktree'
 import { createPlanWorktreeRuntimeCompletionVerifier } from './plan-worktree-runtime-completion'
+import { planWorktreeStartTurnFingerprint } from './plan-worktree-runtime-admission'
 
 function record(orchestration: 'direct' | 'graph' = 'direct'): PlanWorktreeRunRecord {
   const executionPrompt = 'Exact authoritative plan prompt'
@@ -80,11 +81,13 @@ function originTurn(
   status: string,
   orchestration: 'direct' | 'graph' = 'direct'
 ): Record<string, unknown> {
+  const durable = record(orchestration)
   return {
     id: 'turn-execution',
     status,
-    prompt: 'Exact authoritative plan prompt',
+    prompt: '',
     clientRequestId: 'plan-build:run-1',
+    clientRequestFingerprint: planWorktreeStartTurnFingerprint(durable),
     orchestration,
     agentSurface: 'code'
   }

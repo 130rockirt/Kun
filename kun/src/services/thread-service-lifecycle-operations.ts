@@ -151,8 +151,12 @@ async fork(this: ThreadService, threadId: string, options: ForkThreadOptions = {
     if (Boolean(options.designDocumentTarget) !== Boolean(options.designCloneOperationId)) {
       throw new Error('a Design clone target requires a stable clone operation id')
     }
-    if (options.planBuildRunId && options.planBuildAgentSurface !== 'code') {
-      throw new Error('isolated plan execution requires an explicit Code capability intent')
+    if (options.planBuildRunId && (
+      options.planBuildAgentSurface !== 'code'
+      || !options.planBuildAdmissionFingerprint?.trim()
+      || !options.planBuildAdmissionCapability?.trim()
+    )) {
+      throw new Error('plan build fork requires a durable admission binding')
     }
     if (!current.designProfile && options.designDocumentTarget) {
       throw new Error('a Design document target can only fork a locked Design task')
@@ -253,7 +257,15 @@ async fork(this: ThreadService, threadId: string, options: ForkThreadOptions = {
         : {}),
       relation,
       parentThreadId: current.id,
-      ...(options.planBuildRunId ? { planBuildRunId: options.planBuildRunId } : {}),
+      ...(options.planBuildRunId
+        ? {
+            planBuildRunId: options.planBuildRunId,
+            planBuildAdmissionFingerprint: options.planBuildAdmissionFingerprint!.trim(),
+            planBuildAdmissionCapabilityHash: hashPlanBuildAdmissionCapability(
+              options.planBuildAdmissionCapability!.trim()
+            )
+          }
+        : {}),
       forkedFromThreadId: current.id,
       forkedFromTitle: current.title,
       forkedAt: now,
@@ -545,6 +557,10 @@ function planBuildForkThreadId(planBuildRunId: string): string {
   return `thr_plan_${digest}`
 }
 
+function hashPlanBuildAdmissionCapability(capability: string): string {
+  return createHash('sha256').update(capability, 'utf8').digest('hex')
+}
+
 function designCloneThreadId(operationId: string): string {
   const digest = createHash('sha256').update(operationId).digest('hex').slice(0, 32)
   return `thr_design_${digest}`
@@ -590,12 +606,17 @@ function validateExistingPlanBuildFork(
   options: ForkThreadOptions
 ): ThreadRecord {
   const requestedWorkspace = resolve(options.workspace!.trim())
+  const requestedFingerprint = options.planBuildAdmissionFingerprint?.trim()
+  const requestedCapability = options.planBuildAdmissionCapability?.trim()
   const matches = existing.planBuildRunId === options.planBuildRunId
     && existing.relation === 'side'
     && existing.parentThreadId === sourceThreadId
     && existing.forkedFromThreadId === sourceThreadId
     && resolve(existing.workspace) === requestedWorkspace
     && resolveThreadAgentSurface(existing) === 'code'
+    && existing.planBuildAdmissionFingerprint === requestedFingerprint
+    && Boolean(requestedCapability)
+    && existing.planBuildAdmissionCapabilityHash === hashPlanBuildAdmissionCapability(requestedCapability ?? '')
     && !existing.designProfile
   if (!matches) {
     throw new Error(

@@ -171,7 +171,11 @@ import {
 
 function activeThreadAcceptsPlanWorktreeInput(state: ChatState): boolean {
   const thread = state.threads.find((candidate) => candidate.id === state.activeThreadId)
-  return planWorktreeComposerAccess(thread, usePlanWorktreeStore.getState().plans).writable
+  return planWorktreeComposerAccess(
+    thread,
+    usePlanWorktreeStore.getState().plans,
+    state.activeThreadId
+  ).writable
 }
 
 export function createThreadQueueActions(

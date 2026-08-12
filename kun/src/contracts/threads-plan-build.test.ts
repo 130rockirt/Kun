@@ -1,18 +1,25 @@
 import { describe, expect, it } from 'vitest'
 import { ForkThreadRequest } from './threads.js'
 
+const planBuildAdmissionFingerprint = 'a'.repeat(64)
+const planBuildAdmissionCapability = 'A'.repeat(43)
+
 describe('ForkThreadRequest plan build linkage', () => {
-  it('accepts an absolute side-fork workspace paired with a bounded run id', () => {
+  it('accepts an absolute side fork with a bound first-turn admission proof', () => {
     expect(ForkThreadRequest.parse({
       relation: 'side',
       workspace: '/tmp/isolated-plan',
       planBuildRunId: 'run-plan-1',
-      planBuildAgentSurface: 'code'
+      planBuildAgentSurface: 'code',
+      planBuildAdmissionFingerprint,
+      planBuildAdmissionCapability
     })).toMatchObject({
       relation: 'side',
       workspace: '/tmp/isolated-plan',
       planBuildRunId: 'run-plan-1',
-      planBuildAgentSurface: 'code'
+      planBuildAgentSurface: 'code',
+      planBuildAdmissionFingerprint,
+      planBuildAdmissionCapability
     })
   })
 
@@ -21,7 +28,9 @@ describe('ForkThreadRequest plan build linkage', () => {
       relation: 'fork',
       workspace: '/tmp/isolated-plan',
       planBuildRunId: 'run-plan-1',
-      planBuildAgentSurface: 'code'
+      planBuildAgentSurface: 'code',
+      planBuildAdmissionFingerprint,
+      planBuildAdmissionCapability
     })).toThrow()
     expect(() => ForkThreadRequest.parse({
       relation: 'side',
@@ -31,7 +40,16 @@ describe('ForkThreadRequest plan build linkage', () => {
       relation: 'side',
       workspace: 'relative/path',
       planBuildRunId: 'run-plan-1',
-      planBuildAgentSurface: 'code'
+      planBuildAgentSurface: 'code',
+      planBuildAdmissionFingerprint,
+      planBuildAdmissionCapability
+    })).toThrow()
+    expect(() => ForkThreadRequest.parse({
+      relation: 'side',
+      workspace: '/tmp/isolated-plan',
+      planBuildRunId: 'run-plan-1',
+      planBuildAgentSurface: 'code',
+      planBuildAdmissionFingerprint
     })).toThrow()
   })
 })

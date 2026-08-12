@@ -67,4 +67,28 @@ describe('worktree execution submit guard', () => {
     expect(sendMessage).not.toHaveBeenCalled()
     expect(setError).toHaveBeenCalledWith(expect.stringContaining('read-only'))
   })
+
+  it('rejects a submit before durable admission when the side-thread summary is missing', async () => {
+    const { executionTurnId: _executionTurnId, ...pending } = readOnlyRun()
+    usePlanWorktreeStore.getState().upsertRun({ ...pending, status: 'executing' })
+    const sendMessage = vi.fn(async () => true)
+    const setError = vi.fn()
+    useWorkbenchComposerSubmitController(params({ threads: [], sendMessage, setError })).handleSend()
+
+    await Promise.resolve()
+    expect(sendMessage).not.toHaveBeenCalled()
+    expect(setError).toHaveBeenCalledWith(expect.stringContaining('resume'))
+  })
+
+  it('allows continuation after durable admission when the side-thread summary is missing', async () => {
+    usePlanWorktreeStore.getState().upsertRun({ ...readOnlyRun(), status: 'executing' })
+    const sendMessage = vi.fn(async () => true)
+    useWorkbenchComposerSubmitController(params({ threads: [], sendMessage })).handleSend()
+
+    await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledWith(
+      'continue',
+      'agent',
+      expect.any(Object)
+    ))
+  })
 })

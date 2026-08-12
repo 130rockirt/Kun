@@ -73,7 +73,8 @@ describe('PlanWorktreeCoordinator preparation', () => {
     expect(prepared).toMatchObject({
       status: 'executing',
       targetBranch: 'feature/source',
-      executionBranch: 'codex/auth-flow-runfixed'
+      executionBranch: 'codex/auth-flow-runfixed',
+      admissionCapability: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/)
     })
     expect((await runGit(prepared.worktreePath, ['rev-parse', 'HEAD'])).stdout.trim())
       .toBe(prepared.baseCommit)
@@ -350,6 +351,41 @@ describe('PlanWorktreeCoordinator preparation', () => {
       executionTurnId: 'turn-recovered'
     })
     expect(recovered).toHaveBeenCalledTimes(1)
+  })
+
+  it('repairs the legacy redacted-prompt false alarm after proving the exact origin', async () => {
+    const source = await repository('recover-redacted-origin')
+    const store = new PlanWorktreeRunStore(await temp('recover-redacted-origin-data'))
+    const recovered = vi.fn(async (record: PlanWorktreeRunRecord) => ({
+      runId: record.runId,
+      executionThreadId: 'thread-recovered',
+      executionTurnId: 'turn-recovered'
+    }))
+    const coordinator = new PlanWorktreeCoordinator({
+      store,
+      managedRoot: await temp('recover-redacted-origin-managed'),
+      createRunId: () => 'run-recover-redacted-origin',
+      verifyExecutionThread: allowExecutionThread,
+      recoverExecutionLink: recovered
+    })
+    const prepared = await coordinator.prepare(request(source))
+    await store.save({
+      ...prepared,
+      executionThreadId: 'thread-recovered',
+      executionTurnId: 'turn-recovered',
+      status: 'needs_attention',
+      attentionReason: 'external_state_changed',
+      attentionMessage: 'A foreign turn was admitted before the durable plan-build origin.'
+    })
+
+    await expect(coordinator.reconcileExecutionLink(prepared.runId)).resolves.toMatchObject({
+      status: 'executing',
+      executionThreadId: 'thread-recovered',
+      executionTurnId: 'turn-recovered',
+      attentionReason: undefined,
+      attentionMessage: undefined
+    })
+    expect(recovered).toHaveBeenCalledOnce()
   })
 
   it('does not overwrite an unrelated retained recovery reason when Kun is offline', async () => {

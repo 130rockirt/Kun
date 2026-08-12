@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { createHash } from 'node:crypto'
 import type { PlanWorktreeRunRecord } from '../../shared/plan-worktree'
 import { createPlanWorktreeRuntimeLinkResolver } from './plan-worktree-runtime-link'
+import { planWorktreeStartTurnFingerprint } from './plan-worktree-runtime-admission'
 
 function record(patch: Partial<PlanWorktreeRunRecord> = {}): PlanWorktreeRunRecord {
   const executionPrompt = 'Exact authoritative plan prompt'
@@ -41,10 +42,14 @@ function record(patch: Partial<PlanWorktreeRunRecord> = {}): PlanWorktreeRunReco
 }
 
 function origin(id = 'turn-execution') {
+  const durable = record()
   return {
     id,
-    prompt: 'Exact authoritative plan prompt',
+    // GET /v1/threads/:id uses the metadata projection, which may redact the
+    // original prompt while retaining the canonical admission fingerprint.
+    prompt: '',
     clientRequestId: 'plan-build:run-1',
+    clientRequestFingerprint: planWorktreeStartTurnFingerprint(durable),
     orchestration: 'direct',
     agentSurface: 'code'
   }
@@ -113,6 +118,23 @@ describe('plan worktree runtime link recovery', () => {
       executionThreadId: 'thread-execution',
       executionTurnId: 'turn-a'
     })
+  })
+
+  it('rejects a redacted origin whose canonical admission fingerprint differs', async () => {
+    const runtimeRequest = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      body: JSON.stringify({
+        ...identity(),
+        forkedFromTurnCount: 0,
+        goal: { objective: 'Implement and validate Auth', status: 'active' },
+        turns: [{ ...origin(), clientRequestFingerprint: 'b'.repeat(64) }]
+      })
+    }))
+
+    await expect(createPlanWorktreeRuntimeLinkResolver(runtimeRequest)(record({
+      executionThreadId: 'thread-execution'
+    }))).rejects.toMatchObject({ reason: 'external_state_changed' })
   })
 
   it('refuses to adopt a turn whose runtime goal differs from the durable objective', async () => {

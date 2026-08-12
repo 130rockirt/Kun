@@ -106,5 +106,7 @@ describe('plan worktree lifecycle recovery actions', () => {
   it('offers exact admission recovery after the execution thread was attached', async () => {
     const text = await renderRun(record('executing', { executionTurnId: undefined }))
     expect(text).toContain('Resume execution')
+    expect(text).not.toContain('Continue implementation')
+    expect(text).not.toContain('Open conversation')
   })
 })

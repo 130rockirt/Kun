@@ -347,6 +347,10 @@ export const ThreadSchema = z.object({
   relation: ThreadRelation.default('primary'),
   parentThreadId: z.string().optional(),
   planBuildRunId: z.string().trim().min(1).max(160).optional(),
+  /** Canonical first-turn request hash bound when a managed plan fork is created. */
+  planBuildAdmissionFingerprint: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  /** SHA-256 digest of the one-time host capability; the raw capability is never persisted. */
+  planBuildAdmissionCapabilityHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   /** Host-owned fence that blocks new turn admission during integration/cleanup. */
   planBuildAdmissionFrozen: z.boolean().optional(),
   forkedFromThreadId: z.string().optional(),
@@ -485,6 +489,10 @@ export const ForkThreadRequest = z
       .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/).optional(),
     /** Explicitly strips mutable Design ownership from a Code plan executor. */
     planBuildAgentSurface: z.literal('code').optional(),
+    /** Exact canonical StartTurnRequest fingerprint reserved for the first execution turn. */
+    planBuildAdmissionFingerprint: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+    /** Opaque host capability. Kun persists only its SHA-256 digest. */
+    planBuildAdmissionCapability: z.string().trim().regex(/^[A-Za-z0-9_-]{43,128}$/).optional(),
     /** Independently cloned board target prepared by the Design client before fork. */
     designDocumentTarget: DesignDocumentTargetSchema.optional(),
     /** Stable client operation used to retry the same Design clone/thread atomically. */
@@ -502,6 +510,12 @@ export const ForkThreadRequest = z
   })
   .refine((value) => Boolean(value.planBuildRunId) === Boolean(value.planBuildAgentSurface), {
     message: 'planBuildRunId and planBuildAgentSurface must be supplied together'
+  })
+  .refine((value) => Boolean(value.planBuildRunId) === Boolean(value.planBuildAdmissionFingerprint), {
+    message: 'planBuildRunId and planBuildAdmissionFingerprint must be supplied together'
+  })
+  .refine((value) => Boolean(value.planBuildRunId) === Boolean(value.planBuildAdmissionCapability), {
+    message: 'planBuildRunId and planBuildAdmissionCapability must be supplied together'
   })
   .refine((value) => Boolean(value.designDocumentTarget) === Boolean(value.designCloneOperationId), {
     message: 'designDocumentTarget and designCloneOperationId must be supplied together'

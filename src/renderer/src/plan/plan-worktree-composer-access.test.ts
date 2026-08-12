@@ -74,6 +74,19 @@ describe('isolated plan execution composer access', () => {
     ).writable).toBe(false)
   })
 
+  it('uses the active side-thread id when its summary is absent', () => {
+    const pending = run('executing', { executionTurnId: undefined })
+    expect(planWorktreeComposerAccess(undefined, plans(pending), thread.id)).toMatchObject({
+      writable: false,
+      run: { runId: pending.runId }
+    })
+    expect(planWorktreeComposerAccess(
+      undefined,
+      plans(run('executing')),
+      thread.id
+    ).writable).toBe(true)
+  })
+
   it('restores ordinary input only after a terminal execution thread is rebound', () => {
     expect(planWorktreeComposerAccess(thread, plans(run('completed'))).writable).toBe(false)
     expect(planWorktreeComposerAccess(thread, plans(run('completed', {

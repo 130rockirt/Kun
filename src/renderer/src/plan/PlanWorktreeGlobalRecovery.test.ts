@@ -100,4 +100,34 @@ describe('global plan-worktree recovery', () => {
       .toBe('turn-execution')
     act(() => renderer?.unmount())
   })
+
+  it('does not auto-resume an externally changed execution thread', async () => {
+    const externallyChanged = {
+      ...run,
+      status: 'needs_attention' as const,
+      attentionReason: 'external_state_changed' as const,
+      executionThreadId: 'thread-execution'
+    }
+    const resumeAdmission = vi.fn()
+    vi.stubGlobal('window', {
+      setInterval,
+      clearInterval,
+      kunGui: {
+        planWorktree: {
+          list: vi.fn(async () => [externallyChanged]),
+          reconcile: vi.fn(async () => externallyChanged),
+          resumeAdmission
+        }
+      }
+    })
+    let renderer: ReactTestRenderer | undefined
+    await act(async () => {
+      renderer = create(createElement(PlanWorktreeGlobalRecovery, { runtimeReady: true }))
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(resumeAdmission).not.toHaveBeenCalled()
+    act(() => renderer?.unmount())
+  })
 })

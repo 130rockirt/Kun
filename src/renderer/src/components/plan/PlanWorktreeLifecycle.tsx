@@ -170,7 +170,7 @@ export function PlanWorktreeLifecycle({
       {run ? (
         <div className="mt-2 flex flex-wrap items-center gap-1.5">
           <RecoveryButton label={t('planWorktreeOpenSourceThread')} onClick={openSourceThread} />
-          {run.executionThreadId ? (
+          {run.executionThreadId && run.executionTurnId ? (
             <RecoveryButton
               label={run.status === 'executing'
                 ? t('planWorktreeContinueImplementation')

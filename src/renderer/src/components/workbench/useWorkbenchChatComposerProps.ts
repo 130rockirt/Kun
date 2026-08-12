@@ -196,8 +196,8 @@ export function useWorkbenchChatComposerProps({
   const worktreePlans = usePlanWorktreeStore((state) => state.plans)
   const upsertWorktreeRun = usePlanWorktreeStore((state) => state.upsertRun)
   const worktreeComposerAccess = useMemo(
-    () => planWorktreeComposerAccess(activeThread, worktreePlans),
-    [activeThread, worktreePlans]
+    () => planWorktreeComposerAccess(activeThread, worktreePlans, activeThreadId),
+    [activeThread, activeThreadId, worktreePlans]
   )
   useEffect(() => {
     let cancelled = false
@@ -207,10 +207,11 @@ export function useWorkbenchChatComposerProps({
       (runId) => window.kunGui.planWorktree.get({ runId }),
       (run) => {
         if (!cancelled) upsertWorktreeRun(run)
-      }
+      },
+      activeThreadId
     ).catch(() => undefined)
     return () => { cancelled = true }
-  }, [activeThread, upsertWorktreeRun, worktreePlans])
+  }, [activeThread, activeThreadId, upsertWorktreeRun, worktreePlans])
   return useMemo(() => {
     const designTaskActive = route === 'chat' && !activeSddDraft && taskSurface === 'design'
     return ({
