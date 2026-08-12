@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next'
 import type { ChatBlock, RuntimeChildActivity, ToolBlock } from '../../agent/types'
 import { formatChildActivityLabel } from './explore-peek-summary'
 import { useChatStore } from '../../store/chat-store'
-import { deriveTurnSections } from './derive-turn-sections'
+import { deriveTurnSections, groupTurnProcessTimeline } from './derive-turn-sections'
 import { GeneratedFilesPanel, MessageBubble } from './message-timeline-bubbles'
 import { PresentationFilesPanel } from './PresentationFilesPanel'
 import { presentationFileArtifactsForTurn } from './presentation-file-artifacts'
@@ -101,8 +101,11 @@ export function ConversationTurn({
 
   const {
     processBlocks,
+    processTimelineBlocks,
     assistantContentBlocks,
     runtimeErrorBlocks,
+    runtimeErrorsBeforeFinalContent,
+    runtimeErrorsAfterFinalContent,
     componentPrototypeBlocks,
     generatedFileBlocks,
     turnFileChanges
@@ -137,13 +140,22 @@ export function ConversationTurn({
     [turn.blocks]
   )
 
-  const processSections = useMemo(
-    () => (isProcessing || workExpanded ? groupProcessSections(workProcessBlocks) : []),
-    [isProcessing, workProcessBlocks, workExpanded]
+  const processTimelineEntries = useMemo(
+    () => isProcessing
+      ? groupTurnProcessTimeline(processTimelineBlocks)
+      : workExpanded
+        ? groupProcessSections(workProcessBlocks).map((section) => ({
+            kind: 'process' as const,
+            section
+          }))
+        : [],
+    [isProcessing, processTimelineBlocks, workProcessBlocks, workExpanded]
   )
   const reasoningSectionCount = useMemo(
-    () => processSections.filter((section) => section.kind === 'reasoning').length,
-    [processSections]
+    () => processTimelineEntries.filter(
+      (entry) => entry.kind === 'process' && entry.section.kind === 'reasoning'
+    ).length,
+    [processTimelineEntries]
   )
   const forkTurnId =
     turn.user?.turnId?.trim() ||
@@ -233,12 +245,14 @@ export function ConversationTurn({
             collapsible={!isProcessing && workProcessBlocks.length > 0}
             onToggle={() => setWorkExpandedOverride((value) => !(value ?? false))}
           />
-          {processSections.length > 0 ? (
+          {processTimelineEntries.length > 0 ? (
             <div className="flex flex-col gap-1">
-              {processSections.map((section) => (
+              {processTimelineEntries.map((entry) => entry.kind === 'runtime_error' ? (
+                <TimelineRuntimeError key={entry.block.id} block={entry.block} />
+              ) : (
                 <ProcessSectionRow
-                  key={section.id}
-                  section={section}
+                  key={entry.section.id}
+                  section={entry.section}
                   processing={isProcessing}
                   reasoningDurationMs={reasoningDurationMs}
                   singleReasoningSection={reasoningSectionCount === 1}
@@ -253,6 +267,10 @@ export function ConversationTurn({
           ) : null}
         </div>
       ) : null}
+
+      {runtimeErrorsBeforeFinalContent.map((block) => (
+        <TimelineRuntimeError key={block.id} block={block} />
+      ))}
 
       {componentPrototypeBlocks.map((block) => (
         <ComponentPrototypeCard
@@ -301,7 +319,7 @@ export function ConversationTurn({
         <ReviewSummaryCard key={review.id} review={review} />
       ))}
 
-      {runtimeErrorBlocks.map((block) => (
+      {runtimeErrorsAfterFinalContent.map((block) => (
         <TimelineRuntimeError
           key={block.id}
           block={block}

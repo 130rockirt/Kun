@@ -187,6 +187,64 @@ describe('deriveTurnSections', () => {
     ])
   })
 
+  it('keeps a live runtime error at its chronological process position', () => {
+    const result = processingSections({
+      blocks: [
+        { kind: 'reasoning', id: 'reasoning_before', text: 'Checking memory.' },
+        {
+          kind: 'system',
+          id: 'error_memory',
+          text: 'Memory usage is high.',
+          code: 'memory_pressure_warning',
+          severity: 'warning',
+          runtimeError: true
+        },
+        {
+          kind: 'tool',
+          id: 'tool_after',
+          summary: 'create plan',
+          status: 'running',
+          toolKind: 'tool_call'
+        }
+      ]
+    })
+
+    expect(result.processBlocks.map((block) => block.id)).toEqual([
+      'reasoning_before',
+      'tool_after'
+    ])
+    expect(result.processTimelineBlocks.map((block) => block.id)).toEqual([
+      'reasoning_before',
+      'error_memory',
+      'tool_after'
+    ])
+  })
+
+  it('keeps settled runtime errors on the correct side of the final answer', () => {
+    const result = sections([
+      {
+        kind: 'system',
+        id: 'warning_before',
+        text: 'Memory usage is high.',
+        runtimeError: true
+      },
+      { kind: 'assistant', id: 'answer', text: 'Finished after reclaiming memory.' },
+      {
+        kind: 'system',
+        id: 'error_after',
+        text: 'The follow-up operation failed.',
+        runtimeError: true
+      }
+    ])
+
+    expect(result.runtimeErrorsBeforeFinalContent.map((block) => block.id)).toEqual([
+      'warning_before'
+    ])
+    expect(result.runtimeErrorsAfterFinalContent.map((block) => block.id)).toEqual([
+      'error_after'
+    ])
+  })
+
   it('keeps ordinary system statuses in process work', () => {
     const result = sections([{
       kind: 'system',

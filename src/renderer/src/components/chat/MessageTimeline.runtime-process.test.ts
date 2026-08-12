@@ -265,6 +265,51 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
     expect(html).toContain('is-active')
   })
 
+  it('leaves a live runtime warning before process work that happened later', () => {
+    const html = renderToStaticMarkup(
+      createElement(ConversationTurn, {
+        turn: {
+          user: {
+            kind: 'user',
+            id: 'user_runtime_timeline',
+            text: 'keep working'
+          },
+          blocks: [
+            {
+              kind: 'reasoning',
+              id: 'reasoning_before_warning',
+              text: 'Checking current memory use.'
+            },
+            {
+              kind: 'system',
+              id: 'memory_warning',
+              text: 'Memory use is high.',
+              code: 'memory_pressure_warning',
+              severity: 'warning',
+              runtimeError: true
+            },
+            toolBlock({
+              id: 'tool_after_warning',
+              summary: 'AFTER_WARNING_PROCESS_STEP',
+              status: 'running',
+              meta: { toolName: 'custom_tool' }
+            })
+          ]
+        },
+        isProcessing: true,
+        liveReasoning: '',
+        live: '',
+        filePreviewWorkspaceRoot: '/tmp/project',
+        viewportRef: { current: null }
+      })
+    )
+
+    const warningIndex = html.indexOf('data-testid="timeline-runtime-error"')
+    const laterProcessIndex = html.indexOf('AFTER_WARNING_PROCESS_STEP')
+    expect(warningIndex).toBeGreaterThanOrEqual(0)
+    expect(laterProcessIndex).toBeGreaterThan(warningIndex)
+  })
+
   it('keeps intermediate text visible while compact activity details remain collapsed', () => {
     const blocks: ChatBlock[] = [
       {
