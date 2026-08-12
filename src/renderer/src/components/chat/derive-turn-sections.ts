@@ -9,14 +9,26 @@ import {
   splitThink,
   type Turn
 } from './message-timeline-turns'
+import {
+  groupProcessSections,
+  type ProcessSection
+} from './message-timeline-process-grouping'
 
 export type TurnAssistantBlock = Extract<ChatBlock, { kind: 'assistant' }>
 export type TurnRuntimeErrorBlock = Extract<ChatBlock, { kind: 'system' }> & { runtimeError: true }
 
+export type TurnProcessTimelineEntry =
+  | { kind: 'process'; section: ProcessSection }
+  | { kind: 'runtime_error'; block: TurnRuntimeErrorBlock }
+
 export type TurnSections = {
   processBlocks: ChatBlock[]
+  /** Active-turn process blocks plus runtime errors in their original order. */
+  processTimelineBlocks: ChatBlock[]
   assistantContentBlocks: TurnAssistantBlock[]
   runtimeErrorBlocks: TurnRuntimeErrorBlock[]
+  runtimeErrorsBeforeFinalContent: TurnRuntimeErrorBlock[]
+  runtimeErrorsAfterFinalContent: TurnRuntimeErrorBlock[]
   componentPrototypeBlocks: ToolBlock[]
   generatedFileBlocks: ToolBlock[]
   turnFileChanges: ToolBlock[]
@@ -92,6 +104,37 @@ function findLastAssistantContentIndex(blocks: ChatBlock[]): number {
 }
 
 /**
+ * Preserve a live turn's chronological position around durable runtime errors
+ * while retaining the existing grouping for uninterrupted process runs.
+ */
+export function groupTurnProcessTimeline(
+  blocks: ChatBlock[]
+): TurnProcessTimelineEntry[] {
+  const entries: TurnProcessTimelineEntry[] = []
+  let pendingProcessBlocks: ChatBlock[] = []
+
+  const flushProcessBlocks = (): void => {
+    if (pendingProcessBlocks.length === 0) return
+    entries.push(...groupProcessSections(pendingProcessBlocks).map((section) => ({
+      kind: 'process' as const,
+      section
+    })))
+    pendingProcessBlocks = []
+  }
+
+  for (const block of blocks) {
+    if (block.kind === 'system' && block.runtimeError === true) {
+      flushProcessBlocks()
+      entries.push({ kind: 'runtime_error', block: block as TurnRuntimeErrorBlock })
+    } else {
+      pendingProcessBlocks.push(block)
+    }
+  }
+  flushProcessBlocks()
+  return entries
+}
+
+/**
  * Pure derivation of a turn's three view slices:
  *  - `processBlocks`: chronological assistant/reasoning/tool/compaction/
  *    approval trace. It contains the whole active stream while processing and
@@ -112,27 +155,40 @@ export function deriveTurnSections({
   workspaceRoot
 }: DeriveTurnSectionsInput): TurnSections {
   const processBlocks: ChatBlock[] = []
+  const processTimelineBlocks: ChatBlock[] = []
   const assistantContentBlocks: TurnAssistantBlock[] = []
   const runtimeErrorBlocks: TurnRuntimeErrorBlock[] = []
+  const runtimeErrorsBeforeFinalContent: TurnRuntimeErrorBlock[] = []
+  const runtimeErrorsAfterFinalContent: TurnRuntimeErrorBlock[] = []
   const finalAssistantContentIndex = isProcessing
     ? -1
     : findLastAssistantContentIndex(turn.blocks)
 
   for (const [index, block] of turn.blocks.entries()) {
     if (block.kind === 'system' && block.runtimeError === true) {
-      runtimeErrorBlocks.push(block as TurnRuntimeErrorBlock)
+      const runtimeErrorBlock = block as TurnRuntimeErrorBlock
+      runtimeErrorBlocks.push(runtimeErrorBlock)
+      if (isProcessing) {
+        processTimelineBlocks.push(runtimeErrorBlock)
+      } else if (finalAssistantContentIndex >= 0 && index < finalAssistantContentIndex) {
+        runtimeErrorsBeforeFinalContent.push(runtimeErrorBlock)
+      } else {
+        runtimeErrorsAfterFinalContent.push(runtimeErrorBlock)
+      }
       continue
     }
     if (block.kind === 'assistant') {
       const split = splitThink(block.text)
       if (split.think) {
-        processBlocks.push({
+        const reasoningBlock: ChatBlock = {
           kind: 'reasoning',
           id: `${block.id}-think`,
           turnId: block.turnId,
           createdAt: block.createdAt,
           text: split.think
-        })
+        }
+        processBlocks.push(reasoningBlock)
+        processTimelineBlocks.push(reasoningBlock)
       }
       if (split.content.trim()) {
         const contentBlock: TurnAssistantBlock = { ...block, text: split.content }
@@ -140,12 +196,14 @@ export function deriveTurnSections({
           assistantContentBlocks.push(contentBlock)
         } else {
           processBlocks.push(contentBlock)
+          processTimelineBlocks.push(contentBlock)
         }
       }
       continue
     }
     if (isProcessBlock(block)) {
       processBlocks.push(block)
+      processTimelineBlocks.push(block)
     }
   }
 
@@ -153,18 +211,22 @@ export function deriveTurnSections({
   // them in this same projection makes text, thought, and tool work read as one
   // downward timeline instead of splitting assistant output into another lane.
   if (isProcessing && liveProcessText.trim()) {
-    processBlocks.push({
+    const liveReasoningBlock: ChatBlock = {
       kind: 'reasoning',
       id: 'live-reasoning',
       text: liveProcessText
-    })
+    }
+    processBlocks.push(liveReasoningBlock)
+    processTimelineBlocks.push(liveReasoningBlock)
   }
   if (isProcessing && liveContent.trim()) {
-    processBlocks.push({
+    const liveAssistantBlock: ChatBlock = {
       kind: 'assistant',
       id: 'live-assistant',
       text: liveContent
-    })
+    }
+    processBlocks.push(liveAssistantBlock)
+    processTimelineBlocks.push(liveAssistantBlock)
   }
 
   const turnFileChanges: ToolBlock[] = isProcessing
@@ -200,8 +262,11 @@ export function deriveTurnSections({
 
   return {
     processBlocks,
+    processTimelineBlocks,
     assistantContentBlocks,
     runtimeErrorBlocks,
+    runtimeErrorsBeforeFinalContent,
+    runtimeErrorsAfterFinalContent,
     componentPrototypeBlocks,
     generatedFileBlocks,
     turnFileChanges
