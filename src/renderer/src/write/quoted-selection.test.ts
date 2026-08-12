@@ -13,6 +13,7 @@ import {
 import {
   WRITE_QUOTE_ORIGINAL_END,
   WRITE_QUOTE_ORIGINAL_START,
+  WRITE_OFFICE_CONTEXT_END,
   WRITE_RETRIEVAL_END,
   composeWritePrompt,
   formatWriteQuotedSelectionForPrompt,
@@ -89,6 +90,56 @@ describe('write quoted selections', () => {
       rects: [{ page: 2, x: 12, y: 48, width: 220, height: 18 }]
     })
     vi.restoreAllMocks()
+  })
+
+  it('serializes and parses Word, slide, and spreadsheet locations', () => {
+    const base = {
+      id: 'office-quote',
+      sourceFilePath: '/tmp/workspace/source',
+      charCount: 8,
+      createdAt: '2026-08-12T00:00:00.000Z'
+    }
+    const quotes = [
+      {
+        ...base,
+        text: 'Word text',
+        sourceKind: 'word' as const,
+        sourceFormat: 'docx' as const,
+        sourceTitle: 'report.docx',
+        pageStart: 2,
+        pageEnd: 3
+      },
+      {
+        ...base,
+        id: 'slide-quote',
+        text: 'Slide text',
+        sourceKind: 'presentation' as const,
+        sourceFormat: 'pptx' as const,
+        sourceTitle: 'deck.pptx',
+        slide: 4
+      },
+      {
+        ...base,
+        id: 'sheet-quote',
+        text: 'A\tB\n1\t2',
+        sourceKind: 'spreadsheet' as const,
+        sourceFormat: 'xlsx' as const,
+        sourceTitle: 'budget.xlsx',
+        sheetName: '预算',
+        cellRange: 'A1:B2',
+        formulas: ['B2: =SUM(B1:B1)']
+      }
+    ]
+
+    const parsed = parseWritePromptForDisplay(composeWritePrompt('解释这些内容', quotes))
+
+    expect(parsed?.quotes).toMatchObject([
+      { sourceKind: 'word', sourceFormat: 'docx', pageStart: 2, pageEnd: 3 },
+      { sourceKind: 'presentation', sourceFormat: 'pptx', slide: 4 },
+      { sourceKind: 'spreadsheet', sourceFormat: 'xlsx', sheetName: '预算', cellRange: 'A1:B2' }
+    ])
+    expect(parsed?.quotes[2]?.text).toContain('[公式注释]')
+    expect(parsed?.quotes[2]?.text).toContain('B2: =SUM(B1:B1)')
   })
 
   it('does not create a quote for empty selections', () => {
@@ -250,6 +301,34 @@ describe('write quoted selections', () => {
     expect(parsed?.retrieval?.snippets[1]).toMatchObject({
       location: 'papers/study.pdf 第1-2页',
       text: 'SWE-Dev provides runnable environments with developer-authored tests.'
+    })
+  })
+
+  it('collapses whole Office semantics into a source card and adds a read-only contract', () => {
+    const prompt = composeWritePrompt('总结三点', [], {
+      workspaceRoot: '/tmp/workspace',
+      activeFilePath: '/tmp/workspace/report.docx',
+      officeDocument: {
+        sourceTitle: 'report.docx',
+        sourceFilePath: '/tmp/workspace/report.docx',
+        sourceFormat: 'docx',
+        sourceSha256: 'a'.repeat(64),
+        text: '很长的文档语义正文',
+        truncated: true
+      }
+    })
+
+    expect(prompt).toContain('禁止调用 edit、write 或 office_edit')
+    expect(prompt).toContain(WRITE_OFFICE_CONTEXT_END)
+    const parsed = parseWritePromptForDisplay(prompt)
+    expect(parsed?.userInput).toBe('总结三点')
+    expect(parsed?.userInput).not.toContain('很长的文档语义正文')
+    expect(parsed?.officeDocument).toMatchObject({
+      sourceTitle: 'report.docx',
+      sourceFormat: 'docx',
+      sourceSha256: 'a'.repeat(64),
+      charCount: 9,
+      truncated: true
     })
   })
 })

@@ -14,6 +14,7 @@ import { DiffView } from '../DiffView'
 import { formatDuration } from './message-timeline-tools'
 import type { PlanBuildOrchestration } from '../../plan/plan-build'
 import { PlanBuildActions } from '../plan/PlanBuildActions'
+import { WritePromptOfficeDocumentCard } from './WritePromptOfficeDocumentCard'
 
 /**
  * Inline "Review Plan" card rendered under a turn whose `create_plan`
@@ -491,6 +492,9 @@ function writePromptMetaSummary(
   if (display.retrieval && display.retrieval.snippets.length > 0) {
     parts.push(t('writePromptRetrievalCount', { count: display.retrieval.snippets.length }))
   }
+  if (display.officeDocument) {
+    parts.push(t('writePromptOfficeContext'))
+  }
   if (display.context) {
     parts.push(t('writePromptContextShort'))
   }
@@ -551,6 +555,10 @@ export function WritePromptMetaDisclosure({
             <WritePromptQuoteCard key={`${quote.sourceTitle}-${index}`} quote={quote} />
           ))}
 
+          {display.officeDocument ? (
+            <WritePromptOfficeDocumentCard document={display.officeDocument} />
+          ) : null}
+
           {display.retrieval && display.retrieval.snippets.length > 0 ? (
             <WritePromptRetrievalCard retrieval={display.retrieval} />
           ) : null}
@@ -572,7 +580,11 @@ function WritePromptQuoteCard({ quote }: { quote: WritePromptDisplayQuote }): Re
         ? t('writePromptReferencePage', { page: quote.pageStart })
         : t('writePromptReferencePages', { start: quote.pageStart, end: quote.pageEnd })
       : null
-  const rangeLabel = lineLabel ?? pageLabel
+  const slideLabel = quote.slide != null ? `Slide ${quote.slide}` : null
+  const cellLabel = quote.sheetName && quote.cellRange
+    ? `${quote.sheetName}!${quote.cellRange}`
+    : null
+  const rangeLabel = lineLabel ?? pageLabel ?? slideLabel ?? cellLabel
 
   return (
     <figure className="rounded-xl border border-accent/15 bg-accent/[0.055] px-3 py-2.5 text-left shadow-sm">

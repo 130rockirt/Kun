@@ -23,6 +23,15 @@ export const WRITE_PDF_FILE_EXTENSIONS = new Set([
   '.pdf'
 ])
 
+export const WRITE_OFFICE_FILE_EXTENSIONS = new Set([
+  '.doc',
+  '.docx',
+  '.xls',
+  '.xlsx',
+  '.ppt',
+  '.pptx'
+])
+
 export function isWriteTextFileExtension(ext: string): boolean {
   return WRITE_TEXT_FILE_EXTENSIONS.has(ext.trim().toLowerCase())
 }
@@ -33,6 +42,10 @@ export function isWriteImageFileExtension(ext: string): boolean {
 
 export function isWritePdfFileExtension(ext: string): boolean {
   return WRITE_PDF_FILE_EXTENSIONS.has(ext.trim().toLowerCase())
+}
+
+export function isWriteOfficeFileExtension(ext: string): boolean {
+  return WRITE_OFFICE_FILE_EXTENSIONS.has(ext.trim().toLowerCase())
 }
 
 function extensionFromPath(path: string): string {
@@ -56,13 +69,19 @@ export function isWritePdfFilePath(path: string): boolean {
   return isWritePdfFileExtension(extensionFromPath(path))
 }
 
+export function isWriteOfficeFilePath(path: string): boolean {
+  return isWriteOfficeFileExtension(extensionFromPath(path))
+}
+
 export function isWriteWorkspaceFilePath(path: string): boolean {
-  return isWriteTextFilePath(path) || isWriteImageFilePath(path) || isWritePdfFilePath(path)
+  return isWriteTextFilePath(path) || isWriteImageFilePath(path) ||
+    isWritePdfFilePath(path) || isWriteOfficeFilePath(path)
 }
 
 export function isWriteWorkspaceEntry(entry: WorkspaceEntry): boolean {
   return entry.type === 'directory' ||
     isWriteTextFileExtension(entry.ext) ||
     isWriteImageFileExtension(entry.ext) ||
-    isWritePdfFileExtension(entry.ext)
+    isWritePdfFileExtension(entry.ext) ||
+    isWriteOfficeFileExtension(entry.ext)
 }

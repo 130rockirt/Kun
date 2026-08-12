@@ -12,18 +12,7 @@ import {
 } from './write-thread-registry'
 import type { NormalizedThread } from '../agent/types'
 import { createWriteDocumentSession, persistWriteEditorLayout } from './write-editor-layout'
-
-class MemoryStorage {
-  private values = new Map<string, string>()
-
-  getItem(key: string): string | null {
-    return this.values.get(key) ?? null
-  }
-
-  setItem(key: string, value: string): void {
-    this.values.set(key, value)
-  }
-}
+import { MemoryStorage } from './write-workspace-file-actions-test-support'
 
 function writeThread(id: string, workspace: string): NormalizedThread {
   return {
@@ -141,6 +130,42 @@ afterEach(() => {
 })
 
 describe('write workspace file actions', () => {
+  it('opens Office files as shared read-only sessions in the requested group', async () => {
+    const result = {
+      ok: true as const,
+      path: '/tmp/write/deck.pptx',
+      name: 'deck.pptx',
+      sourceFormat: 'pptx' as const,
+      renderFormat: 'pptx' as const,
+      viewer: 'presentation' as const,
+      size: 500,
+      mtimeMs: 1,
+      sourceSha256: 'a'.repeat(64),
+      data: new Uint8Array([1, 2, 3])
+    }
+    const readWorkspaceOfficePreview = vi.fn(async () => result)
+    installDsGui({ readWorkspaceOfficePreview })
+    const { actions, get, set } = createHarness()
+    set({ workspaceRoot: '/tmp/write' })
+
+    await actions.openFile('/tmp/write', result.path)
+
+    expect(readWorkspaceOfficePreview).toHaveBeenCalledWith({
+      path: result.path,
+      workspaceRoot: '/tmp/write'
+    })
+    expect(get()).toMatchObject({
+      activeFilePath: result.path,
+      activeFileKind: 'office',
+      saveStatus: 'saved'
+    })
+    expect(get().documentsByPath[result.path]).toMatchObject({
+      kind: 'office',
+      officePreview: result,
+      officeSemanticText: ''
+    })
+  })
+
   it('keeps normal multi-file navigation in one editor group', async () => {
     installDsGui({
       readWorkspaceFile: vi.fn(async ({ path }: { path: string }) => ({

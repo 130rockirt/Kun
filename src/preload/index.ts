@@ -1,8 +1,8 @@
 import { contextBridge, ipcRenderer, webFrame, webUtils } from 'electron'
 import type { KunGuiApi } from '../shared/kun-gui-api'
-import type { AppEnvironmentInfo } from '../shared/app-environment'
 import { normalizeDesktopTitleBarMode } from '../shared/desktop-title-bar'
 import { registerExtensionContentScriptPreload } from './extension-content-script'
+import { parseAppEnvironment } from './app-environment'
 
 registerExtensionContentScriptPreload({ contextBridge, ipcRenderer, webFrame })
 
@@ -28,35 +28,6 @@ const desktopTitleBarMode = normalizeDesktopTitleBarMode(
     .find((arg) => arg.startsWith(DESKTOP_TITLE_BAR_MODE_ARG))
     ?.slice(DESKTOP_TITLE_BAR_MODE_ARG.length)
 )
-
-function parseAppEnvironment(encoded: string | undefined): AppEnvironmentInfo {
-  if (encoded) {
-    try {
-      const parsed = JSON.parse(decodeURIComponent(encoded)) as Partial<AppEnvironmentInfo>
-      if (
-        (parsed.flavor === 'production' || parsed.flavor === 'development') &&
-        parsed.runtimeFlavor === parsed.flavor &&
-        typeof parsed.appName === 'string' &&
-        typeof parsed.appId === 'string' &&
-        typeof parsed.profilePath === 'string' &&
-        typeof parsed.isPackaged === 'boolean'
-      ) {
-        return Object.freeze(parsed as AppEnvironmentInfo)
-      }
-    } catch {
-      // Fall through to a safe production-shaped snapshot. Main always sends
-      // the argument; the fallback keeps isolated renderer tests compatible.
-    }
-  }
-  return Object.freeze({
-    flavor: 'production',
-    appName: 'Kun',
-    appId: 'com.xingyuzhong.deepseekgui',
-    runtimeFlavor: 'production',
-    profilePath: '',
-    isPackaged: false
-  })
-}
 
 const api = {
   platform: process.platform,
@@ -192,6 +163,7 @@ const api = {
     ipcRenderer.invoke('dev-preview:capture-region', request),
   readLocalOfficeDocument: (options) => ipcRenderer.invoke('file:read-local-office-document', options),
   readWorkspaceOfficePreview: (options) => ipcRenderer.invoke('file:read-workspace-office-preview', options),
+  readWorkspaceOfficeSemantic: (options) => ipcRenderer.invoke('file:read-workspace-office-semantic', options),
   resolveKunApproval: (request) => ipcRenderer.invoke('approval:decide', request),
   restartRuntime: () => ipcRenderer.invoke('runtime:restart'),
   fetchUpstreamModels: () => ipcRenderer.invoke('upstream:models'),

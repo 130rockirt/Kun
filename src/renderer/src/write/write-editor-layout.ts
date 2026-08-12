@@ -50,6 +50,18 @@ export function writeDocumentKey(path: string): string {
   return normalizePath(path)
 }
 
+export function clearWriteOfficeSelections(
+  documents: Record<string, WriteDocumentSession>
+): Record<string, WriteDocumentSession> {
+  let changed = false
+  const next = Object.fromEntries(Object.entries(documents).map(([key, document]) => {
+    if (document.kind !== 'office' || document.selection.charCount === 0) return [key, document]
+    changed = true
+    return [key, { ...document, selection: emptySelection() }]
+  }))
+  return changed ? next : documents
+}
+
 export function createWriteDocumentSession(input: Partial<WriteDocumentSession> & Pick<WriteDocumentSession, 'path' | 'kind'>): WriteDocumentSession {
   return {
     path: normalizePath(input.path),
@@ -60,6 +72,13 @@ export function createWriteDocumentSession(input: Partial<WriteDocumentSession> 
     pdfDataBase64: input.pdfDataBase64 ?? '',
     pdfMimeType: input.pdfMimeType ?? '',
     pdfMtimeMs: input.pdfMtimeMs ?? 0,
+    officePreview: input.officePreview ?? null,
+    officeLoading: input.officeLoading ?? false,
+    officeRefreshError: input.officeRefreshError ?? null,
+    officeAgentEditing: input.officeAgentEditing ?? false,
+    officeSemanticText: input.officeSemanticText ?? '',
+    officeSemanticSha256: input.officeSemanticSha256 ?? '',
+    officeSemanticTruncated: input.officeSemanticTruncated ?? false,
     fileSize: input.fileSize ?? 0,
     fileTruncated: input.fileTruncated ?? false,
     fileError: input.fileError ?? null,

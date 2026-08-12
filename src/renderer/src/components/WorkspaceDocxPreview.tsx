@@ -1,20 +1,27 @@
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { useEffect, useRef, useState, type ReactElement } from 'react'
-import type { WorkspaceOfficePreviewSuccess } from '@shared/office-document'
+import type { WorkspaceOfficePreviewSuccess, WorkspaceOfficeSelection } from '@shared/office-document'
 import { WorkspaceOfficePreviewToolbar } from './WorkspaceOfficePreviewToolbar'
 import {
   openWorkspaceOfficeExternalLink,
   secureWorkspaceOfficeLinks
 } from './workspace-office-external-link'
+import {
+  emptyWorkspaceOfficeSelection,
+  pageFromDocxNode,
+  selectionFromOfficeDom
+} from './workspace-office-selection'
 
 export function WorkspaceDocxPreview({
   result,
   loading,
-  refreshError
+  refreshError,
+  onSelectionChange
 }: {
   result: WorkspaceOfficePreviewSuccess
   loading: boolean
   refreshError?: string | null
+  onSelectionChange?: (selection: WorkspaceOfficeSelection) => void
 }): ReactElement {
   const bodyRef = useRef<HTMLDivElement>(null)
   const styleRef = useRef<HTMLDivElement>(null)
@@ -57,6 +64,30 @@ export function WorkspaceDocxPreview({
     }
   }, [result.data, result.sourceSha256])
 
+  useEffect(() => {
+    if (!onSelectionChange) return
+    const empty = (): void => onSelectionChange(
+      emptyWorkspaceOfficeSelection('word', result.sourceFormat)
+    )
+    const sync = (): void => {
+      const body = bodyRef.current
+      const selection = window.getSelection()
+      if (!body || !selection?.anchorNode || !body.contains(selection.anchorNode)) return
+      onSelectionChange(selectionFromOfficeDom(
+        body,
+        'word',
+        result.sourceFormat,
+        (node) => ({ page: pageFromDocxNode(node, body) })
+      ))
+    }
+    empty()
+    document.addEventListener('selectionchange', sync)
+    return () => {
+      document.removeEventListener('selectionchange', sync)
+      empty()
+    }
+  }, [onSelectionChange, result.sourceFormat, result.sourceSha256, zoom])
+
   useEffect(() => () => {
     renderIdRef.current += 1
     bodyRef.current?.replaceChildren()
@@ -65,6 +96,8 @@ export function WorkspaceDocxPreview({
 
   const goToPage = (next: number): void => {
     const safePage = Math.min(pageCount, Math.max(1, next))
+    onSelectionChange?.(emptyWorkspaceOfficeSelection('word', result.sourceFormat))
+    window.getSelection()?.removeAllRanges()
     setPage(safePage)
     docxPages(bodyRef.current)[safePage - 1]?.scrollIntoView({ block: 'start' })
   }

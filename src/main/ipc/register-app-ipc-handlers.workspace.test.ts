@@ -41,7 +41,8 @@ import {
 } from './register-app-ipc-handlers'
 
 const officeDocumentServiceMocks = vi.hoisted(() => ({
-  readWorkspaceOfficePreview: vi.fn()
+  readWorkspaceOfficePreview: vi.fn(),
+  readWorkspaceOfficeSemantic: vi.fn()
 }))
 const officeCliResourceMocks = vi.hoisted(() => ({
   resolveOfficeCliBinary: vi.fn()
@@ -55,6 +56,10 @@ vi.mock('../services/office-workspace-preview-service', () => ({
   readWorkspaceOfficePreview: officeDocumentServiceMocks.readWorkspaceOfficePreview
 }))
 
+vi.mock('../services/office-workspace-semantic-service', () => ({
+  readWorkspaceOfficeSemantic: officeDocumentServiceMocks.readWorkspaceOfficeSemantic
+}))
+
 vi.mock('../officecli-resources', () => ({
   resolveOfficeCliBinary: officeCliResourceMocks.resolveOfficeCliBinary
 }))
@@ -65,6 +70,7 @@ describe('registerAppIpcHandlers workspace and MCP', () => {
   beforeEach(() => {
     resetAppIpcHandlerTestState()
     officeDocumentServiceMocks.readWorkspaceOfficePreview.mockReset()
+    officeDocumentServiceMocks.readWorkspaceOfficeSemantic.mockReset()
     officeCliResourceMocks.resolveOfficeCliBinary.mockReset()
   })
   afterEach(cleanupAppIpcHandlerTestState)
@@ -342,6 +348,58 @@ describe('registerAppIpcHandlers workspace and MCP', () => {
         sender: { id: 99 },
         senderFrame: { processId: 99, routingId: 99 }
       }, payload)).rejects.toThrow(/trusted workbench frame/)
+    } finally {
+      rmSync(temp, { recursive: true, force: true })
+    }
+  })
+
+  it('reads bounded Office semantics through the same workspace and SHA gate', async () => {
+    const temp = mkdtempSync(join(tmpdir(), 'kun-office-semantic-'))
+    const target = join(temp, 'report.docx')
+    writeFileSync(target, 'office-semantic-source')
+    const resolvedTarget = realpathSync(target)
+    const mainFrame = { processId: 10, routingId: 20 }
+    const sender = Object.assign(new EventEmitter(), {
+      id: 77,
+      mainFrame,
+      isDestroyed: () => false
+    })
+    const semantic = {
+      ok: true as const,
+      path: resolvedTarget,
+      name: 'report.docx',
+      sourceFormat: 'docx' as const,
+      sourceSha256: 'c'.repeat(64),
+      text: 'semantic text',
+      truncated: false
+    }
+
+    try {
+      officeCliResourceMocks.resolveOfficeCliBinary.mockReturnValue('/tmp/officecli')
+      officeDocumentServiceMocks.readWorkspaceOfficeSemantic.mockResolvedValue(semantic)
+      registerAppIpcHandlers(registerOptions({
+        getMainWindow: () => ({
+          isDestroyed: () => false,
+          webContents: sender
+        }) as never
+      }))
+      const handler = handlers.get('file:read-workspace-office-semantic')!
+      const payload = {
+        path: 'report.docx',
+        workspaceRoot: temp,
+        expectedSha256: 'a'.repeat(64)
+      }
+
+      await expect(handler({ sender, senderFrame: mainFrame }, payload)).resolves.toEqual(semantic)
+      expect(officeDocumentServiceMocks.readWorkspaceOfficeSemantic).toHaveBeenCalledWith(
+        { path: resolvedTarget, expectedSha256: payload.expectedSha256 },
+        expect.objectContaining({ binaryPath: '/tmp/officecli', signal: expect.any(AbortSignal) })
+      )
+      await expect(handler({ sender, senderFrame: mainFrame }, {
+        ...payload,
+        path: '../outside.docx'
+      })).resolves.toMatchObject({ ok: false })
+      expect(officeDocumentServiceMocks.readWorkspaceOfficeSemantic).toHaveBeenCalledTimes(1)
     } finally {
       rmSync(temp, { recursive: true, force: true })
     }

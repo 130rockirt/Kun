@@ -1,12 +1,13 @@
 import type { WriteAgentPresetV1, WriteInlineCompletionSettingsV1, WriteSelectionAssistSettingsV1 } from '@shared/app-settings'
 import type { WorkspaceEntry } from '@shared/workspace-file'
+import type { WorkspaceOfficePreviewSuccess } from '@shared/office-document'
 import type { WriteEditorSelectionState } from '../components/write/WriteMarkdownEditor'
 import type { WriteQuotedSelection } from './quoted-selection'
 import type { WriteRecentEdit } from './recent-edits'
 
 export type WritePreviewMode = 'rich' | 'source' | 'live' | 'preview'
 export type WriteSaveStatus = 'saved' | 'dirty' | 'saving' | 'error'
-export type WriteActiveFileKind = 'text' | 'image' | 'pdf'
+export type WriteActiveFileKind = 'text' | 'image' | 'pdf' | 'office'
 export type WriteEditorGroupId = 'primary' | 'secondary'
 export type WriteEditorLayoutOrientation = 'single' | 'horizontal' | 'vertical'
 
@@ -40,6 +41,13 @@ export type WriteDocumentSession = {
   pdfDataBase64: string
   pdfMimeType: string
   pdfMtimeMs: number
+  officePreview: WorkspaceOfficePreviewSuccess | null
+  officeLoading: boolean
+  officeRefreshError: string | null
+  officeAgentEditing: boolean
+  officeSemanticText: string
+  officeSemanticSha256: string
+  officeSemanticTruncated: boolean
   fileSize: number
   fileTruncated: boolean
   fileError: string | null

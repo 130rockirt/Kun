@@ -1,5 +1,10 @@
 import i18n from '../i18n'
-import { isWriteImageFilePath, isWritePdfFilePath, isWriteWorkspaceFilePath } from '@shared/write-text-file'
+import {
+  isWriteImageFilePath,
+  isWriteOfficeFilePath,
+  isWritePdfFilePath,
+  isWriteWorkspaceFilePath
+} from '@shared/write-text-file'
 import { writePathToFileUrl } from '@shared/write-markdown-resource'
 import type { WriteWorkspaceGet, WriteWorkspaceSet, WriteWorkspaceState } from './write-workspace-store-types'
 import type { WriteDocumentSession, WriteEditorGroupId, WritePreviewMode } from './write-workspace-store-types'
@@ -24,6 +29,7 @@ import {
 } from './write-thread-registry'
 import {
   addTabToGroup,
+  clearWriteOfficeSelections,
   createWriteDocumentSession,
   emptyWriteEditorGroup,
   persistWriteEditorLayout,
@@ -89,7 +95,7 @@ function openDocumentState(
   viewMode: WritePreviewMode
 ): Partial<WriteWorkspaceState> {
   const documentsByPath = {
-    ...state.documentsByPath,
+    ...clearWriteOfficeSelections(state.documentsByPath),
     [writeDocumentKey(document.path)]: document
   }
   const editorLayout = addTabToGroup(state.editorLayout, groupId, document.path, viewMode)
@@ -413,6 +419,31 @@ export function createWriteFileActions({
             pdfDataBase64: result.dataBase64,
             pdfMimeType: result.mimeType,
             pdfMtimeMs: result.mtimeMs,
+            fileSize: result.size,
+            documentEpoch: nextWriteDocumentEpoch(state.documentEpoch)
+          }), groupId, viewMode))
+          return
+        }
+
+        if (isWriteOfficeFilePath(path)) {
+          const result = await window.kunGui.readWorkspaceOfficePreview({ path, workspaceRoot })
+          if (!fileRequestIsCurrent(groupId, generation, workspaceRoot)) return
+          if (!result.ok) {
+            rememberActiveFile(workspaceRoot, path)
+            set((state) => openDocumentState(state, createWriteDocumentSession({
+              path,
+              kind: 'office',
+              officeRefreshError: result.message,
+              fileError: result.message,
+              documentEpoch: nextWriteDocumentEpoch(state.documentEpoch)
+            }), groupId, viewMode))
+            return
+          }
+          rememberActiveFile(workspaceRoot, result.path)
+          set((state) => openDocumentState(state, createWriteDocumentSession({
+            path: result.path,
+            kind: 'office',
+            officePreview: result,
             fileSize: result.size,
             documentEpoch: nextWriteDocumentEpoch(state.documentEpoch)
           }), groupId, viewMode))

@@ -27,11 +27,16 @@ vi.mock('xlsx', () => ({
 import { WorkspaceDocxPreview } from './WorkspaceDocxPreview'
 import { WorkspacePptxPreview } from './WorkspacePptxPreview'
 import { MAX_MOUNTED_PPTX_THUMBNAILS } from './WorkspacePptxThumbnailRail'
-import { WorkspaceSpreadsheetPreview } from './WorkspaceSpreadsheetPreview'
+import {
+  WorkspaceSpreadsheetPreview,
+  normalizeSpreadsheetSelection,
+  spreadsheetRangeLabel
+} from './WorkspaceSpreadsheetPreview'
 import {
   openWorkspaceOfficeExternalLink,
   secureWorkspaceOfficeLinks
 } from './workspace-office-external-link'
+import { selectionFromOfficeDom } from './workspace-office-selection'
 
 type MockPptxPreviewer = {
   host: HTMLElement
@@ -67,6 +72,7 @@ describe('browser Office renderers', () => {
   let pptxInstances: MockPptxPreviewer[]
   let pptxSlideCount: number
   let scrollIntoView: ReturnType<typeof vi.fn>
+  let renderedDocxPages: HTMLElement[]
 
   beforeEach(() => {
     ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -86,11 +92,15 @@ describe('browser Office renderers', () => {
       value: scrollIntoView
     })
     libraryMocks.renderDocx.mockReset()
+    renderedDocxPages = []
     libraryMocks.renderDocx.mockImplementation(async (_data, body: HTMLElement) => {
       const first = document.createElement('section')
       const second = document.createElement('section')
       first.className = 'docx'
       second.className = 'docx'
+      first.textContent = 'First page text'
+      second.textContent = 'Second page text'
+      renderedDocxPages = [first, second]
       body.append(first, second)
     })
     pptxInstances = []
@@ -105,7 +115,13 @@ describe('browser Office renderers', () => {
     libraryMocks.readWorkbook.mockReturnValue({
       SheetNames: ['Summary', 'Data'],
       Sheets: {
-        Summary: { A1: { t: 's', v: 'Summary' }, '!ref': 'A1:B2' },
+        Summary: {
+          A1: { t: 's', v: 'Summary', w: 'Summary' },
+          B1: { t: 's', v: '<img src=x onerror=alert(1)>', w: '<img src=x onerror=alert(1)>' },
+          A2: { t: 's', v: 'Value', w: 'Value' },
+          B2: { t: 'n', v: 12, w: '12', f: 'SUM(B1:B1)' },
+          '!ref': 'A1:B2'
+        },
         Data: { A1: { t: 's', v: 'Data' }, '!ref': 'A1:A1' }
       }
     })
@@ -168,6 +184,40 @@ describe('browser Office renderers', () => {
     })
     expect(renderer!.root.findByProps({ 'aria-label': 'Page 2 of 2' })).toBeTruthy()
     expect(JSON.stringify(renderer!.toJSON())).toContain('broken refresh')
+  })
+
+  it('reports a cross-page Word selection and keeps it when focus moves outside the document', async () => {
+    const onSelectionChange = vi.fn()
+    await act(async () => {
+      renderer = create(createElement(WorkspaceDocxPreview, {
+        result: preview('word'),
+        loading: false,
+        onSelectionChange
+      }), { createNodeMock })
+      await flushPromises()
+    })
+    const body = renderedDocxPages[0]!.parentElement!
+    document.body.append(body)
+    const pages = renderedDocxPages
+    const range = document.createRange()
+    range.setStart(pages[0]!.firstChild!, 0)
+    range.setEnd(pages[1]!.firstChild!, 6)
+    window.getSelection()!.removeAllRanges()
+    window.getSelection()!.addRange(range)
+    await act(async () => { document.dispatchEvent(new Event('selectionchange')) })
+
+    expect(onSelectionChange).toHaveBeenLastCalledWith(expect.objectContaining({
+      sourceKind: 'word',
+      pageStart: 1,
+      pageEnd: 2,
+      text: expect.stringContaining('First page text')
+    }))
+
+    const outside = document.createElement('textarea')
+    document.body.append(outside)
+    outside.focus()
+    await act(async () => { document.dispatchEvent(new Event('selectionchange')) })
+    expect(onSelectionChange).toHaveBeenLastCalledWith(expect.objectContaining({ pageStart: 1, pageEnd: 2 }))
   })
 
   it('owns both PPTX previewers and destroys all source-scoped state before replacement', async () => {
@@ -236,6 +286,41 @@ describe('browser Office renderers', () => {
     renderer = undefined
     expect(second.destroy).toHaveBeenCalledTimes(1)
     expect(secondThumbnails.destroy).toHaveBeenCalledTimes(1)
+  })
+
+  it('reports only current-slide PPT text and clears selection when navigating', async () => {
+    const onSelectionChange = vi.fn()
+    await act(async () => {
+      renderer = create(createElement(WorkspacePptxPreview, {
+        result: preview('presentation'),
+        loading: false,
+        onSelectionChange
+      }), { createNodeMock })
+      await flushPromises()
+    })
+    const main = pptxInstances[0]!
+    document.body.append(main.host)
+    const anchor = main.host.querySelector('a')!
+    const range = document.createRange()
+    range.selectNodeContents(anchor)
+    window.getSelection()!.removeAllRanges()
+    window.getSelection()!.addRange(range)
+    expect(selectionFromOfficeDom(main.host, 'presentation', 'pptx', () => ({ slide: 1 })))
+      .toEqual(expect.objectContaining({
+      sourceKind: 'presentation',
+      slide: 1,
+      text: 'Slide 1'
+    }))
+
+    const callsBeforeNavigation = onSelectionChange.mock.calls.length
+    await act(async () => renderer?.root.findByProps({ 'aria-label': 'Next slide' }).props.onClick())
+    expect(onSelectionChange.mock.calls.length).toBeGreaterThan(callsBeforeNavigation)
+    expect(onSelectionChange).toHaveBeenLastCalledWith(expect.objectContaining({
+      sourceKind: 'presentation',
+      text: '',
+      charCount: 0
+    }))
+    expect(window.getSelection()?.rangeCount).toBe(0)
   })
 
   it('virtualizes a long PPTX rail to sixteen static thumbnails and syncs the active slide', async () => {
@@ -420,6 +505,50 @@ describe('browser Office renderers', () => {
     expect(JSON.stringify(renderer!.toJSON())).toContain('Data')
     await act(async () => renderer?.root.findByProps({ 'aria-label': 'Zoom in' }).props.onClick())
     expect(renderer!.root.findByProps({ 'aria-label': 'Reset zoom' }).children.join('')).toBe('110%')
+  })
+
+  it('creates Excel-style rectangular selections with TSV, formulas, and escaped cell text', async () => {
+    const onSelectionChange = vi.fn()
+    await act(async () => {
+      renderer = create(createElement(WorkspaceSpreadsheetPreview, {
+        result: preview('spreadsheet'),
+        loading: false,
+        onSelectionChange
+      }))
+      await flushPromises()
+    })
+    const rect = { left: 1, right: 20, top: 2, bottom: 12, width: 19, height: 10 }
+    await act(async () => {
+      renderer?.root.findByProps({ 'data-office-sheet-cell': '0:0' }).props.onPointerDown({
+        button: 0,
+        preventDefault: vi.fn(),
+        currentTarget: { getBoundingClientRect: () => rect }
+      })
+      renderer?.root.findByProps({ 'data-office-sheet-cell': '1:1' }).props.onPointerEnter({
+        currentTarget: { getBoundingClientRect: () => rect }
+      })
+      await flushPromises()
+    })
+
+    expect(onSelectionChange).toHaveBeenLastCalledWith(expect.objectContaining({
+      sourceKind: 'spreadsheet',
+      sheetName: 'Summary',
+      cellRange: 'A1:B2',
+      text: 'Summary\t<img src=x onerror=alert(1)>\nValue\t12',
+      formulas: ['B2: =SUM(B1:B1)']
+    }))
+    expect(renderer!.root.findByProps({ 'data-office-sheet-cell': '0:1' }).children).toEqual([
+      '<img src=x onerror=alert(1)>'
+    ])
+  })
+
+  it('normalizes reverse and merged-cell spreadsheet ranges', () => {
+    const range = normalizeSpreadsheetSelection(
+      { row: 8, column: 5, rowEnd: 9, columnEnd: 7 },
+      { row: 2, column: 1, rowEnd: 2, columnEnd: 1 }
+    )
+    expect(range).toEqual({ rowStart: 2, rowEnd: 9, columnStart: 1, columnEnd: 7 })
+    expect(range && spreadsheetRangeLabel(range)).toBe('B3:H10')
   })
 })
 

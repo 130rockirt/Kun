@@ -202,6 +202,7 @@ export function WriteWorkspaceView({
   const workspaceReady = workspaceRoot.trim().length > 0
   const activeFileIsImage = activeFileKind === 'image'
   const activeFileIsPdf = activeFileKind === 'pdf'
+  const activeFileIsOffice = activeFileKind === 'office'
   const activeFileIsText = activeFileKind === 'text'
   const isMarkdown = activeFilePath && activeFileIsText ? isMarkdownFile(activeFilePath) : true
   const isPresentationSource = activeFileIsText && isPresentationMarkdownPath(activeFilePath)
@@ -235,6 +236,7 @@ export function WriteWorkspaceView({
   const saveLabel = activeFileIsImage
     ? t('writeImagePreview')
     : activeFileIsPdf ? t('writePdfPreview')
+    : activeFileIsOffice ? t('writeOfficePreview')
     : renderSafety.readOnly ? t('writeReadOnly') : formatSaveLabel(saveStatus, t)
   // When the inline agent textarea is focused the editor loses focus and may
   // report an empty selection (TipTap fires onSelectionUpdate on blur). Use
@@ -244,8 +246,9 @@ export function WriteWorkspaceView({
     inlineAgentFocused && selectionBeforeFocusRef.current ? selectionBeforeFocusRef.current : selection
   // Only surface the toolbar once the selection gesture settles: while the
   // pointer is down (dragging to select) it stays hidden to avoid flicker.
-  const selectionAction =
-    effectiveSelection.charCount > 0 && !pointerSelecting ? inlineAgentPosition(effectiveSelection, { compact: activeFileIsPdf }) : null
+  const selectionAction = effectiveSelection.charCount > 0 && !pointerSelecting
+    ? inlineAgentPosition(effectiveSelection, { compact: activeFileIsPdf || activeFileIsOffice })
+    : null
   const activeFileLabel = activeFilePath
     ? writeRelativeToWorkspace(workspaceRoot, activeFilePath)
     : t('writeNoFileOpen')
@@ -467,9 +470,13 @@ export function WriteWorkspaceView({
 
   // Edit-mode quick actions rewrite the document, so drop them on read-only
   // files; chat-mode actions (which only quote into the sidebar) still apply.
-  const inlineQuickActions = resolveWriteQuickActions(selectionAssist.quickActions, t).filter(
-    (quickAction) => quickAction.mode !== 'edit' || (activeFileIsText && !renderSafety.readOnly)
-  )
+  const inlineQuickActions = resolveWriteQuickActions(selectionAssist.quickActions, t)
+    .filter((quickAction) => (
+      quickAction.mode !== 'edit' || activeFileIsOffice || (activeFileIsText && !renderSafety.readOnly)
+    ))
+    .map((quickAction) => activeFileIsOffice
+      ? { ...quickAction, mode: 'chat' as const }
+      : quickAction)
   const liveModeActive = previewMode === 'live' && renderSafety.livePreviewEnabled
   const sourceModeActive =
     previewMode === 'source' ||
@@ -506,6 +513,7 @@ export function WriteWorkspaceView({
         showSidebarToggle={false}
         activeFileIsImage={activeFileIsImage}
         activeFileIsPdf={activeFileIsPdf}
+        activeFileIsOffice={activeFileIsOffice}
         activeFileIsText={activeFileIsText}
         activeFileLabel={activeFileLabel}
         activeFileName={activeFileName}
@@ -565,7 +573,7 @@ export function WriteWorkspaceView({
           onPickWorkspace={() => void pickWriteWorkspace()}
         />
       </div>
-      {selectionAction && activeFilePath && (activeFileIsText || activeFileIsPdf) ? (
+      {selectionAction && activeFilePath && (activeFileIsText || activeFileIsPdf || activeFileIsOffice) ? (
         <WriteInlineAgent
           action={selectionAction}
           value={inlineAgentValue}
@@ -573,9 +581,9 @@ export function WriteWorkspaceView({
           textareaRef={inlineAgentTextareaRef}
           onValueChange={setInlineAgentValue}
           onSubmitPrompt={submitInlineAgent}
-          onApplyEdit={(value) => activeFileIsPdf ? submitInlineAgent(value) : void submitInlineEdit(value)}
-          askOnly={activeFileIsPdf}
-          preferAbove={activeFileIsPdf}
+          onApplyEdit={(value) => activeFileIsPdf || activeFileIsOffice ? submitInlineAgent(value) : void submitInlineEdit(value)}
+          askOnly={activeFileIsPdf || activeFileIsOffice}
+          preferAbove={activeFileIsPdf || activeFileIsOffice}
           formattingEnabled={activeFileIsText && isMarkdown && !renderSafety.readOnly}
           onApplyFormat={applyInlineFormat}
           blockType={effectiveSelection.blockType}

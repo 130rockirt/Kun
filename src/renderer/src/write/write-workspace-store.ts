@@ -605,19 +605,48 @@ export const useWriteWorkspaceStore = create<WriteWorkspaceState>((set, get) => 
     if (!state.activeFilePath) return
     const quote = quotedSelectionFromEditor(state.selection, state.activeFilePath, workspaceRoot)
     if (!quote) return
-    set((current) => ({
-      assistantOpen: true,
-      quotedSelections: [...current.quotedSelections, quote],
-      selection: emptySelection()
-    }))
+    set((current) => {
+      const quotedSelections = [...current.quotedSelections, quote]
+      const selection = emptySelection()
+      const key = current.activeFilePath ? writeDocumentKey(current.activeFilePath) : ''
+      const document = key ? current.documentsByPath[key] : undefined
+      return {
+        assistantOpen: true,
+        quotedSelections,
+        selection,
+        documentsByPath: document
+          ? {
+              ...current.documentsByPath,
+              [key]: { ...document, quotedSelections, selection }
+            }
+          : current.documentsByPath
+      }
+    })
   },
 
   removeQuotedSelection: (id) =>
-    set((state) => ({
-      quotedSelections: state.quotedSelections.filter((selection) => selection.id !== id)
-    })),
+    set((state) => {
+      const quotedSelections = state.quotedSelections.filter((selection) => selection.id !== id)
+      const key = state.activeFilePath ? writeDocumentKey(state.activeFilePath) : ''
+      const document = key ? state.documentsByPath[key] : undefined
+      return {
+        quotedSelections,
+        documentsByPath: document
+          ? { ...state.documentsByPath, [key]: { ...document, quotedSelections } }
+          : state.documentsByPath
+      }
+    }),
 
-  clearQuotedSelections: () => set({ quotedSelections: [] }),
+  clearQuotedSelections: () => set((state) => {
+    const key = state.activeFilePath ? writeDocumentKey(state.activeFilePath) : ''
+    const document = key ? state.documentsByPath[key] : undefined
+    return {
+      quotedSelections: [],
+      documentsByPath: document
+        ? { ...state.documentsByPath, [key]: { ...document, quotedSelections: [] } }
+        : state.documentsByPath
+    }
+  }),
 
   resetWorkspace: () => {
     cancelExternalSyncAnimation()

@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import {
   isWriteImageFileExtension,
   isWriteImageFilePath,
+  isWriteOfficeFileExtension,
+  isWriteOfficeFilePath,
   isWritePdfFileExtension,
   isWritePdfFilePath,
   isWriteTextFileExtension,
@@ -37,6 +39,15 @@ describe('write text file helpers', () => {
     expect(isWritePdfFilePath('/tmp/papers/study.PDF')).toBe(true)
   })
 
+  it('accepts all six Office formats as read-only Write files', () => {
+    for (const extension of ['.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx']) {
+      expect(isWriteOfficeFileExtension(extension)).toBe(true)
+      expect(isWriteOfficeFilePath(`/tmp/workspace/sample${extension}`)).toBe(true)
+      expect(isWriteWorkspaceFilePath(`/tmp/workspace/sample${extension}`)).toBe(true)
+    }
+    expect(isWriteOfficeFileExtension('.docm')).toBe(false)
+  })
+
   it('checks file paths with extension matching', () => {
     expect(isWriteTextFilePath('/tmp/draft.md')).toBe(true)
     expect(isWriteTextFilePath('/tmp/notes.TXT')).toBe(true)
@@ -46,6 +57,7 @@ describe('write text file helpers', () => {
     expect(isWriteImageFilePath('/tmp/img/hero.PNG')).toBe(true)
     expect(isWriteWorkspaceFilePath('/tmp/img/hero.PNG')).toBe(true)
     expect(isWriteWorkspaceFilePath('/tmp/papers/study.pdf')).toBe(true)
+    expect(isWriteWorkspaceFilePath('/tmp/slides/deck.PPTX')).toBe(true)
     expect(isWriteWorkspaceFilePath('/tmp/folder/no-ext')).toBe(false)
   })
 
@@ -73,6 +85,12 @@ describe('write text file helpers', () => {
       path: '/tmp/paper.pdf',
       type: 'file',
       ext: '.pdf'
+    })).toBe(true)
+    expect(isWriteWorkspaceEntry({
+      name: 'deck.pptx',
+      path: '/tmp/deck.pptx',
+      type: 'file',
+      ext: '.pptx'
     })).toBe(true)
     expect(isWriteWorkspaceEntry({
       name: 'data.json',

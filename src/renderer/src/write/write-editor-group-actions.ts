@@ -11,6 +11,7 @@ import type {
 import {
   addTabToGroup,
   captureFocusedDocument,
+  clearWriteOfficeSelections,
   focusedWriteGroup,
   persistWriteEditorLayout,
   projectFocusedDocument,
@@ -191,7 +192,7 @@ export function createWriteEditorGroupActions(
         )
       }
       persist(state.workspaceRoot, editorLayout)
-      set(withProjection(state.documentsByPath, editorLayout))
+      set(withProjection(clearWriteOfficeSelections(state.documentsByPath), editorLayout))
     },
 
     closeTab: async (groupId, path, force = false) => {
@@ -222,7 +223,7 @@ export function createWriteEditorGroupActions(
       const state = { ...rawState, documentsByPath: captureFocusedDocument(rawState) }
       const next = removeTabFromGroup(state, groupId, path)
       persist(state.workspaceRoot, next.editorLayout)
-      set(withProjection(next.documentsByPath, next.editorLayout))
+      set(withProjection(clearWriteOfficeSelections(next.documentsByPath), next.editorLayout))
       return true
     },
 
@@ -261,7 +262,7 @@ export function createWriteEditorGroupActions(
           : group)
       }
       persist(state.workspaceRoot, editorLayout)
-      set(withProjection(state.documentsByPath, editorLayout))
+      set(withProjection(clearWriteOfficeSelections(state.documentsByPath), editorLayout))
     },
 
     focusEditorGroup: (groupId) => {
@@ -270,7 +271,7 @@ export function createWriteEditorGroupActions(
       if (!state.editorLayout.groups.some((group) => group.id === groupId)) return
       const editorLayout = { ...state.editorLayout, focusedGroupId: groupId }
       persist(state.workspaceRoot, editorLayout)
-      set(withProjection(state.documentsByPath, editorLayout))
+      set(withProjection(clearWriteOfficeSelections(state.documentsByPath), editorLayout))
     },
 
     splitEditorGroup: (orientation, requestedPath) => {
@@ -292,7 +293,7 @@ export function createWriteEditorGroupActions(
         groups: [source, { id: 'secondary' as const, tabs: secondaryTabs, activePath: path ?? null }]
       }
       persist(state.workspaceRoot, editorLayout)
-      set(withProjection(state.documentsByPath, editorLayout))
+      set(withProjection(clearWriteOfficeSelections(state.documentsByPath), editorLayout))
     },
 
     closeEditorGroup: (groupId) => {
@@ -314,7 +315,7 @@ export function createWriteEditorGroupActions(
         groups: [primary]
       }
       persist(state.workspaceRoot, editorLayout)
-      set(withProjection(state.documentsByPath, editorLayout))
+      set(withProjection(clearWriteOfficeSelections(state.documentsByPath), editorLayout))
     },
 
     setTabViewMode: (groupId, path, mode) => {

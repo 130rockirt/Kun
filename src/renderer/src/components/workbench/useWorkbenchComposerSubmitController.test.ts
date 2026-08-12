@@ -22,6 +22,8 @@ import { useCanvasSelectionStore } from '../../design/canvas/canvas-selection-st
 import { createDefaultShape, createEmptyDocument } from '../../design/canvas/canvas-types'
 import { clearWriteWorkspaceSaveQueueForTests } from '../../write/write-save-coordinator'
 import { useWriteWorkspaceStore } from '../../write/write-workspace-store'
+import { createWriteDocumentSession, writeDocumentKey } from '../../write/write-editor-layout'
+import { WRITE_OFFICE_CONTEXT_HEADING } from '../../write/quoted-selection'
 import { useWorkbenchComposerSubmitController } from './useWorkbenchComposerSubmitController'
 import type { ModelProviderModelGroup } from '@shared/kun-gui-api'
 
@@ -100,6 +102,49 @@ function activateTextFile(): void {
     reviewActive: false,
     pendingAgentReview: null,
     quotedSelections: [],
+    agentPresets: [],
+    assistantAgentPresetId: '',
+    assistantModel: '',
+    assistantProviderId: ''
+  })
+}
+
+function activateOfficeFile(): void {
+  const path = '/tmp/write/report.docx'
+  const preview = {
+    ok: true as const,
+    path,
+    name: 'report.docx',
+    sourceFormat: 'docx' as const,
+    renderFormat: 'docx' as const,
+    viewer: 'word' as const,
+    size: 128,
+    mtimeMs: 1,
+    sourceSha256: 'a'.repeat(64),
+    data: new Uint8Array([1, 2, 3])
+  }
+  const document = createWriteDocumentSession({
+    path,
+    kind: 'office',
+    officePreview: preview,
+    fileSize: preview.size,
+    documentEpoch: 4
+  })
+  useWriteWorkspaceStore.setState({
+    workspaceRoot: '/tmp/write',
+    activeFilePath: path,
+    activeFileKind: 'office',
+    fileContent: '',
+    persistedContent: '',
+    fileTruncated: false,
+    documentEpoch: 4,
+    contentRevision: 0,
+    saveStatus: 'saved',
+    fileError: null,
+    reviewActive: false,
+    pendingAgentReview: null,
+    quotedSelections: [],
+    documentsByPath: { [writeDocumentKey(path)]: document },
     agentPresets: [],
     assistantAgentPresetId: '',
     assistantModel: '',
@@ -191,7 +236,7 @@ describe('useWorkbenchComposerSubmitController', () => {
     vi.stubGlobal('window', { kunGui: { writeWorkspaceFile } })
     useWriteWorkspaceStore.getState().setFileContent('latest local draft')
     const input = inputHarness('revise it')
-    const sendMessage = vi.fn(async () => true)
+    const sendMessage = vi.fn(async (..._args: Parameters<ControllerParams['sendMessage']>) => true)
     const controller = useWorkbenchComposerSubmitController(controllerParams({
       input: 'revise it',
       sendMessage,
@@ -241,7 +286,7 @@ describe('useWorkbenchComposerSubmitController', () => {
     const olderSave = useWriteWorkspaceStore.getState().flushSave('/tmp/write')
     await vi.waitFor(() => expect(writeWorkspaceFile).toHaveBeenCalledTimes(1))
     useWriteWorkspaceStore.getState().setFileContent('saved draft')
-    const sendMessage = vi.fn(async () => true)
+    const sendMessage = vi.fn(async (..._args: Parameters<ControllerParams['sendMessage']>) => true)
     const controller = useWorkbenchComposerSubmitController(controllerParams({
       input: 'summarize the undo',
       sendMessage,
@@ -399,6 +444,76 @@ describe('useWorkbenchComposerSubmitController', () => {
     controller.sendWritePrompt('what is this?')
 
     await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledOnce())
+  })
+
+  it('uses whole Office semantics without a quote and exact selection context with a quote', async () => {
+    activateOfficeFile()
+    const readWorkspaceOfficeSemantic = vi.fn(async () => ({
+      ok: true as const,
+      path: '/tmp/write/report.docx',
+      name: 'report.docx',
+      sourceFormat: 'docx' as const,
+      sourceSha256: 'a'.repeat(64),
+      text: 'Semantic Office body',
+      truncated: false
+    }))
+    vi.stubGlobal('window', { kunGui: { readWorkspaceOfficeSemantic } })
+    const sendMessage = vi.fn(async (..._args: Parameters<ControllerParams['sendMessage']>) => true)
+    const controller = useWorkbenchComposerSubmitController(controllerParams({
+      composerMode: 'plan',
+      input: 'summarize',
+      sendMessage,
+      setInput: inputHarness('summarize').setInput
+    }))
+
+    controller.sendWritePrompt('summarize')
+
+    await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledOnce())
+    expect(readWorkspaceOfficeSemantic).toHaveBeenCalledWith({
+      path: '/tmp/write/report.docx',
+      workspaceRoot: '/tmp/write',
+      expectedSha256: 'a'.repeat(64)
+    })
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.stringContaining('Semantic Office body'),
+      'agent',
+      expect.any(Object)
+    )
+    expect(sendMessage.mock.calls[0]?.[0]).toContain('禁止调用 edit、write 或 office_edit')
+    expect(useWriteWorkspaceStore.getState().documentsByPath['/tmp/write/report.docx']).toMatchObject({
+      officeSemanticText: 'Semantic Office body',
+      officeSemanticSha256: 'a'.repeat(64)
+    })
+    const quote = {
+      id: 'word-quote',
+      text: 'Only this paragraph',
+      sourceKind: 'word' as const,
+      sourceFormat: 'docx' as const,
+      sourceTitle: 'report.docx',
+      sourceFilePath: '/tmp/write/report.docx',
+      pageStart: 2,
+      pageEnd: 2,
+      charCount: 19,
+      createdAt: '2026-08-12T00:00:00.000Z'
+    }
+    const current = useWriteWorkspaceStore.getState()
+    useWriteWorkspaceStore.setState({
+      quotedSelections: [quote],
+      documentsByPath: {
+        ...current.documentsByPath,
+        '/tmp/write/report.docx': {
+          ...current.documentsByPath['/tmp/write/report.docx']!,
+          quotedSelections: [quote]
+        }
+      }
+    })
+    readWorkspaceOfficeSemantic.mockClear()
+    sendMessage.mockClear()
+    controller.sendWritePrompt('explain')
+    await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledOnce())
+    expect(readWorkspaceOfficeSemantic).not.toHaveBeenCalled()
+    expect(sendMessage.mock.calls[0]?.[0]).toContain('Only this paragraph')
+    expect(sendMessage.mock.calls[0]?.[0]).not.toContain(WRITE_OFFICE_CONTEXT_HEADING)
   })
 
   it('consumes only captured quote and attachment ids after a successful send', async () => {

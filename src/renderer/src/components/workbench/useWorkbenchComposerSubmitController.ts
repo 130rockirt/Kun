@@ -9,17 +9,20 @@ import {
   writeDocumentContextMatches
 } from '../../write/write-document-context'
 import type { WriteRetrievalContext } from '@shared/write-retrieval'
-import { composeWritePrompt } from '../../write/quoted-selection'
+import {
+  composeWritePrompt,
+  type WriteOfficeDocumentContext
+} from '../../write/quoted-selection'
+import { writeDocumentKey } from '../../write/write-editor-layout'
+import {
+  loadWriteOfficeSemanticContext,
+  writeOfficeSemanticContextMatches
+} from '../../write/write-office-semantic-context'
 import { resolveWriteAgentPreset } from '../../write/agent-presets'
 import { resolveCodeAgentPersona } from '../chat/code-agent-presets'
 import { parseGuiPlanCommand } from '../../plan/plan-command'
 import { normalizeWorkspaceRoot } from '../../lib/workspace-path'
-import {
-  buildComposerFileContextPrompt,
-  isComposerDirectoryReference,
-  type ComposerFileContextEntry
-} from '../../lib/composer-file-references'
-import { loadWorkspaceDirectoryContextFiles } from '../../lib/workspace-file-index'
+import { buildComposerFileContextPrompt } from '../../lib/composer-file-references'
 import { resolveCodeCanvasComposerRoute } from '../../design/canvas/code-canvas'
 import { useCanvasSelectionStore } from '../../design/canvas/canvas-selection-store'
 import { activePptReviewComposerContexts } from './workbench-ppt-review-context'
@@ -27,16 +30,12 @@ import { composerReasoningEffortRequestValue } from '../chat/FloatingComposerMod
 import { serviceTierForComposerSelection } from '../chat/composer-fast-mode'
 import type { ComposerFileReference } from '../chat/FloatingComposer'
 import { BUILTIN_RIGHT_PANEL_IDS } from '../../extensions/contribution-ids'
-import { officeDocumentFormatFromName } from '@shared/office-document'
 import {
-  COMPOSER_DIRECTORY_CONTEXT_MAX_FILES,
-  COMPOSER_FILE_CONTEXT_MAX_TOTAL_CHARS,
   buildComposerDocumentContextPrompt,
-  clipComposerFileContext,
-  composerToolReferencePlaceholder,
   composerReferencesToUserFileReferences,
   stripTransientAttachmentFields
 } from './workbench-composer-prompts'
+import { readWorkbenchComposerFileContextEntries } from './workbench-composer-file-context'
 export type { WorkbenchComposerSubmitController } from './workbench-composer-submit-types'
 import { listClawComposerModelOptions, resolveClawComposerModelByIndex,
   type UseWorkbenchComposerSubmitControllerParams,
@@ -132,90 +131,11 @@ export function useWorkbenchComposerSubmitController({
   const readComposerFileContextEntries = useCallback(async (
     references: ComposerFileReference[],
     workspace: string
-  ): Promise<ComposerFileContextEntry[]> => {
-    const entries: ComposerFileContextEntry[] = []
-    const seen = new Set<string>()
-    let remainingChars = COMPOSER_FILE_CONTEXT_MAX_TOTAL_CHARS
-
-    const contextKey = (path: string): string =>
-      path.trim().replaceAll('\\', '/').replace(/\/+/g, '/').toLowerCase()
-
-    const appendFileEntry = async (
-      reference: ComposerFileReference,
-      strict: boolean
-    ): Promise<void> => {
-      if (remainingChars <= 0) return
-      const key = contextKey(reference.relativePath || reference.path)
-      if (seen.has(key)) return
-      const officeFormat = officeDocumentFormatFromName(reference.name || reference.path)
-      if (officeFormat) {
-        const content = composerToolReferencePlaceholder(reference, officeFormat)
-        const clipped = clipComposerFileContext(content, remainingChars, false)
-        remainingChars -= clipped.consumed
-        seen.add(key)
-        entries.push({
-          relativePath: reference.relativePath,
-          content: clipped.content,
-          ...(clipped.truncated ? { truncated: true } : {})
-        })
-        return
-      }
-      const result = await window.kunGui.readWorkspaceFile({
-        ...(reference.workspaceRoot === null
-          ? {}
-          : { workspaceRoot: reference.workspaceRoot || workspace }),
-        path: reference.workspaceRoot === null
-          ? reference.path
-          : (reference.relativePath || reference.path)
-      })
-      if (!result.ok) {
-        if (!strict) return
-        if (/binary|cannot be previewed|too large|only supports text/i.test(result.message)) {
-          const content = composerToolReferencePlaceholder(reference)
-          const clipped = clipComposerFileContext(content, remainingChars, false)
-          remainingChars -= clipped.consumed
-          seen.add(key)
-          entries.push({
-            relativePath: reference.relativePath,
-            content: clipped.content,
-            ...(clipped.truncated ? { truncated: true } : {})
-          })
-          return
-        }
-        throw new Error(t('composerFileReadFailed', {
-          path: reference.relativePath,
-          message: result.message
-        }))
-      }
-      seen.add(key)
-      const clipped = clipComposerFileContext(result.content, remainingChars, result.truncated)
-      remainingChars -= clipped.consumed
-      entries.push({
-        relativePath: reference.relativePath,
-        content: clipped.content,
-        ...(clipped.truncated ? { truncated: true } : {})
-      })
-    }
-
-    for (const reference of references) {
-      if (remainingChars <= 0) break
-      if (isComposerDirectoryReference(reference)) {
-        const directoryWorkspace = reference.workspaceRoot || workspace
-        const dirFiles = await loadWorkspaceDirectoryContextFiles(
-          directoryWorkspace,
-          reference.relativePath,
-          COMPOSER_DIRECTORY_CONTEXT_MAX_FILES
-        ).catch(() => [])
-        for (const file of dirFiles) {
-          if (remainingChars <= 0) break
-          await appendFileEntry({ ...file, workspaceRoot: directoryWorkspace }, false)
-        }
-        continue
-      }
-      await appendFileEntry(reference, true)
-    }
-    return entries
-  }, [t])
+  ) => readWorkbenchComposerFileContextEntries(
+    references,
+    workspace,
+    (key, options) => t(key, options)
+  ), [t])
 
   const sendWritePrompt = useCallback((value: string): void => {
     const v = value.trim()
@@ -236,6 +156,9 @@ export function useWorkbenchComposerSubmitController({
       workspaceRoot: writeWorkspaceRoot
     })
     const writeActiveFilePath = writeState.activeFilePath
+    const writeActiveDocument = writeActiveFilePath
+      ? writeState.documentsByPath[writeDocumentKey(writeActiveFilePath)]
+      : undefined
     const writeDocumentEpoch = writeState.documentEpoch
     const writeContentRevision = writeState.contentRevision
     const quotedSelections = writeState.quotedSelections.map((selection) => ({
@@ -317,6 +240,32 @@ export function useWorkbenchComposerSubmitController({
         restorePrompt()
         return
       }
+      let officeDocument: WriteOfficeDocumentContext | null = null
+      const hasOfficeQuote = quotedSelections.some((selection) => (
+        selection.sourceKind === 'word' ||
+        selection.sourceKind === 'presentation' ||
+        selection.sourceKind === 'spreadsheet'
+      ))
+      if (writeActiveDocument?.kind === 'office' && !hasOfficeQuote) {
+        const previewSha = writeActiveDocument.officePreview?.sourceSha256 ?? ''
+        const loaded = writeActiveFilePath && previewSha
+          ? await loadWriteOfficeSemanticContext({
+              path: writeActiveFilePath,
+              workspaceRoot: writeWorkspaceRoot,
+              expectedSha256: previewSha,
+              contextStillMatches: writeContextStillMatches
+            })
+          : { ok: false as const, stale: false, message: 'The Office preview is not ready.' }
+        if (!loaded.ok) {
+          if (loaded.message) {
+            useWriteWorkspaceStore.getState().setFileError(loaded.message)
+            setError(loaded.message)
+          }
+          restorePrompt()
+          return
+        }
+        officeDocument = loaded.context
+      }
       const retrievalQuery = [
         ...quotedSelections.map((selection) => selection.text),
         v
@@ -361,6 +310,7 @@ export function useWorkbenchComposerSubmitController({
         workspaceRoot: writeWorkspaceRoot,
         activeFilePath: writeActiveFilePath,
         retrieval,
+        officeDocument,
         ...(agentPersona ? { agentPersona } : {})
       })
       const model = writeState.assistantModel.trim()
@@ -374,26 +324,34 @@ export function useWorkbenchComposerSubmitController({
         providerId
       )
       const pptReviewContexts = await activePptReviewComposerContexts(writeWorkspaceRoot, activeThreadId)
-      const sent = await sendMessage(prompt, composerMode === 'plan' ? 'plan' : 'agent', {
-        ...(!v && documentAttachments.length > 0
-          ? { displayText: t('composerFileOnlyDisplay', { count: documentAttachments.length }) }
-          : !v && attachmentIds.length > 0
-            ? { displayText: t('composerImageOnlyDisplay') }
-            : {}),
-        ...(model ? { model } : {}),
-        ...(providerId ? { providerId } : {}),
-        ...(reasoningEffort ? { reasoningEffort } : {}),
-        ...(serviceTier ? { serviceTier } : {}),
-        ...(attachmentIds.length ? { attachmentIds } : {}),
-        ...(publicAttachments.length ? { attachments: publicAttachments } : {}),
-        ...(pptReviewContexts.length ? { composerContexts: pptReviewContexts } : {}),
-        writeContext: {
-          workspaceRoot: writeWorkspaceRoot,
-          activeFilePath: writeActiveFilePath,
-          documentEpoch: writeDocumentEpoch,
-          contentRevision: writeContentRevision
+      if (officeDocument && !writeOfficeSemanticContextMatches(officeDocument)) {
+        restorePrompt()
+        return
+      }
+      const sent = await sendMessage(
+        prompt,
+        writeActiveDocument?.kind === 'office' ? 'agent' : composerMode === 'plan' ? 'plan' : 'agent',
+        {
+          ...(!v && documentAttachments.length > 0
+            ? { displayText: t('composerFileOnlyDisplay', { count: documentAttachments.length }) }
+            : !v && attachmentIds.length > 0
+              ? { displayText: t('composerImageOnlyDisplay') }
+              : {}),
+          ...(model ? { model } : {}),
+          ...(providerId ? { providerId } : {}),
+          ...(reasoningEffort ? { reasoningEffort } : {}),
+          ...(serviceTier ? { serviceTier } : {}),
+          ...(attachmentIds.length ? { attachmentIds } : {}),
+          ...(publicAttachments.length ? { attachments: publicAttachments } : {}),
+          ...(pptReviewContexts.length ? { composerContexts: pptReviewContexts } : {}),
+          writeContext: {
+            workspaceRoot: writeWorkspaceRoot,
+            activeFilePath: writeActiveFilePath,
+            documentEpoch: writeDocumentEpoch,
+            contentRevision: writeContentRevision
+          }
         }
-      })
+      )
       if (sent) {
         // Consume only the captured ids. Quotes/attachments added while the
         // runtime starts remain in the composer, even if the active file moved.
@@ -416,6 +374,7 @@ export function useWorkbenchComposerSubmitController({
     getAttachmentScope,
     sendMessage,
     setAttachmentUploadError,
+    setError,
     setInput,
     t,
     workspaceRoot

@@ -1,4 +1,4 @@
-import { useEffect, type MutableRefObject, type ReactElement, type RefObject } from 'react'
+import { useCallback, useEffect, useRef, type MutableRefObject, type ReactElement, type RefObject } from 'react'
 import { Maximize2, Minimize2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import type { WriteInlineCompletionSettingsV1 } from '@shared/app-settings'
@@ -14,6 +14,9 @@ import { WriteMarkdownPreview } from './WriteMarkdownPreview'
 import { WriteWorkspaceStart } from './WriteWorkspaceStart'
 import { WriteImagePreview } from './WriteImagePreview'
 import { WritePdfViewer } from './WritePdfViewer'
+import { WorkspaceOfficePreview } from '../WorkspaceOfficePreview'
+import type { WorkspaceOfficePreviewSuccess } from '@shared/office-document'
+import { writeSelectionFromOffice } from '../../write/write-office-selection'
 import {
   isWriteFocusModeFormControl,
   isWriteFocusModeShortcut
@@ -24,6 +27,7 @@ type Props = {
   documentEpoch: number
   activeFileIsImage: boolean
   activeFileIsPdf: boolean
+  activeFileIsOffice?: boolean
   activeFileIsText: boolean
   fileLoading: boolean
   fileContent: string
@@ -32,6 +36,10 @@ type Props = {
   pdfDataBase64: string
   pdfMimeType: string
   pdfMtimeMs: number
+  officePreview?: WorkspaceOfficePreviewSuccess | null
+  officeLoading?: boolean
+  officeRefreshError?: string | null
+  officeAgentEditing?: boolean
   fileSize: number
   workspaceRoot: string
   workspaceName: string
@@ -77,6 +85,7 @@ export function WriteWorkspaceDocumentPane({
   documentEpoch,
   activeFileIsImage,
   activeFileIsPdf,
+  activeFileIsOffice = false,
   activeFileIsText,
   fileLoading,
   fileContent,
@@ -85,6 +94,10 @@ export function WriteWorkspaceDocumentPane({
   pdfDataBase64,
   pdfMimeType: _pdfMimeType,
   pdfMtimeMs,
+  officePreview = null,
+  officeLoading = false,
+  officeRefreshError = null,
+  officeAgentEditing = false,
   fileSize,
   workspaceRoot,
   workspaceName,
@@ -125,6 +138,11 @@ export function WriteWorkspaceDocumentPane({
   workspaceLoading = false
 }: Props): ReactElement {
   const { t } = useTranslation('common')
+  const selectionCallbackRef = useRef(onSelectionChange)
+  selectionCallbackRef.current = onSelectionChange
+  const handleOfficeSelection = useCallback((next: import('@shared/office-document').WorkspaceOfficeSelection) => {
+    selectionCallbackRef.current(writeSelectionFromOffice(next))
+  }, [])
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent): void => {
@@ -202,6 +220,27 @@ export function WriteWorkspaceDocumentPane({
         viewerRef={editorPaneRef}
         onSelectionChange={onSelectionChange}
       />
+    )
+  }
+
+  if (activeFileIsOffice && officePreview) {
+    return (
+      <div ref={editorPaneRef} className="flex h-full min-h-0 min-w-0 flex-col">
+        <WorkspaceOfficePreview
+          result={officePreview}
+          loading={officeLoading || officeAgentEditing}
+          refreshError={officeRefreshError}
+          onSelectionChange={handleOfficeSelection}
+        />
+      </div>
+    )
+  }
+
+  if (activeFileIsOffice) {
+    return (
+      <div className="flex h-full min-h-[320px] items-center justify-center px-8 text-center text-[13px] leading-6 text-ds-muted">
+        {officeRefreshError ?? t('filePreviewLoading')}
+      </div>
     )
   }
 

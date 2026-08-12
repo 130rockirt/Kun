@@ -5,6 +5,8 @@ import {
   writeDocumentKey
 } from '../../write/write-editor-layout'
 import { startWriteWorkspaceFileWatch } from '../../write/write-file-watch'
+import { startWriteOfficeSessionWatch } from '../../write/write-office-session-watch'
+import { emptySelection } from '../../write/write-workspace-store-helpers'
 import { isWriteWorkspaceSaveContentPending } from '../../write/write-save-coordinator'
 import {
   useWriteWorkspaceStore,
@@ -36,6 +38,44 @@ export function useWriteEditorGroupFileWatches({ workspaceRoot, editorLayout }: 
     const cleanups = paths.flatMap((path) => {
       const document = state.documentsByPath[writeDocumentKey(path)]
       if (!document || document.kind === 'pdf') return []
+      if (document.kind === 'office') {
+        return [startWriteOfficeSessionWatch({
+          api: window.kunGui,
+          workspaceRoot,
+          path,
+          callbacks: {
+            onLoading: (officeLoading) => patchOfficeDocument(path, { officeLoading }),
+            onAgentEditing: (officeAgentEditing) => patchOfficeDocument(path, { officeAgentEditing }),
+            onRefreshError: (officeRefreshError) => patchOfficeDocument(path, { officeRefreshError }),
+            onPreview: (officePreview) => {
+              useWriteWorkspaceStore.setState((current) => {
+                const key = writeDocumentKey(path)
+                const latest = current.documentsByPath[key]
+                if (!latest || latest.kind !== 'office') return {}
+                const sourceChanged = latest.officePreview?.sourceSha256 !== officePreview.sourceSha256
+                const documentsByPath = {
+                  ...current.documentsByPath,
+                  [key]: {
+                    ...latest,
+                    officePreview,
+                    officeLoading: false,
+                    officeRefreshError: null,
+                    fileError: null,
+                    fileSize: officePreview.size,
+                    ...(sourceChanged ? {
+                      officeSemanticText: '',
+                      officeSemanticSha256: '',
+                      officeSemanticTruncated: false,
+                      selection: emptySelection()
+                    } : {})
+                  }
+                }
+                return { documentsByPath, ...projectFocusedDocument(current.editorLayout, documentsByPath) }
+              })
+            }
+          }
+        })]
+      }
       return [startWriteWorkspaceFileWatch({
         api: window.kunGui,
         workspaceRoot,
@@ -124,4 +164,23 @@ export function useWriteEditorGroupFileWatches({ workspaceRoot, editorLayout }: 
     })
     return () => cleanups.forEach((cleanup) => cleanup())
   }, [visibleKey, workspaceRoot])
+}
+
+function patchOfficeDocument(
+  path: string,
+  patch: Partial<Pick<
+    import('../../write/write-workspace-store').WriteDocumentSession,
+    'officeLoading' | 'officeAgentEditing' | 'officeRefreshError'
+  >>
+): void {
+  useWriteWorkspaceStore.setState((current) => {
+    const key = writeDocumentKey(path)
+    const latest = current.documentsByPath[key]
+    if (!latest || latest.kind !== 'office') return {}
+    const documentsByPath = {
+      ...current.documentsByPath,
+      [key]: { ...latest, ...patch }
+    }
+    return { documentsByPath, ...projectFocusedDocument(current.editorLayout, documentsByPath) }
+  })
 }

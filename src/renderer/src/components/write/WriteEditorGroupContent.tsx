@@ -118,6 +118,7 @@ export function WriteEditorGroupContent({
         documentEpoch={document?.documentEpoch ?? 0}
         activeFileIsImage={kind === 'image'}
         activeFileIsPdf={kind === 'pdf'}
+        activeFileIsOffice={kind === 'office'}
         activeFileIsText={kind === 'text'}
         fileLoading={Boolean(requestedPath && !document) || document?.fileLoading === true}
         fileContent={content}
@@ -126,6 +127,10 @@ export function WriteEditorGroupContent({
         pdfDataBase64={document?.pdfDataBase64 ?? ''}
         pdfMimeType={document?.pdfMimeType ?? ''}
         pdfMtimeMs={document?.pdfMtimeMs ?? 0}
+        officePreview={document?.officePreview ?? null}
+        officeLoading={document?.officeLoading ?? false}
+        officeRefreshError={document?.officeRefreshError ?? null}
+        officeAgentEditing={document?.officeAgentEditing ?? false}
         fileSize={document?.fileSize ?? 0}
         workspaceRoot={workspaceRoot}
         workspaceName={workspaceName}

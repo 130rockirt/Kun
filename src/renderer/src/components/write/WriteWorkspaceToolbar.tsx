@@ -31,6 +31,7 @@ type Props = {
   showSidebarToggle?: boolean
   activeFileIsImage: boolean
   activeFileIsPdf?: boolean
+  activeFileIsOffice?: boolean
   activeFileIsText: boolean
   activeFileLabel: string
   activeFileName: string
@@ -68,6 +69,7 @@ export function WriteWorkspaceToolbar({
   showSidebarToggle = true,
   activeFileIsImage,
   activeFileIsPdf = false,
+  activeFileIsOffice = false,
   activeFileIsText,
   activeFileLabel,
   activeFileName,
@@ -100,7 +102,7 @@ export function WriteWorkspaceToolbar({
   setPreviewMode
 }: Props): ReactElement {
   const { t } = useTranslation('common')
-  if (activeFileIsPdf) {
+  if (activeFileIsPdf || activeFileIsOffice) {
     return (
       <div className={embedded ? 'shrink-0' : `ds-stage-inset shrink-0 -mr-3 sm:-mr-4 md:-mr-6 lg:-mr-8 ${leftSidebarCollapsed ? 'ds-window-controls-safe-inset' : '-ml-3 sm:-ml-4 md:-ml-6 lg:-ml-8'}`}>
         <header className={`ds-topbar-surface write-pdf-topbar relative z-10 flex min-h-[52px] w-full items-stretch overflow-visible ${embedded ? 'rounded-none border-x-0 border-t-0' : 'mt-3 rounded-[18px]'}`}>
@@ -132,7 +134,11 @@ export function WriteWorkspaceToolbar({
 
             <div className="write-pdf-topbar-status">
               <BookOpen className="h-4 w-4" strokeWidth={1.85} />
-              <span>{t('writePdfPreview')}</span>
+              <span>
+                {activeFileIsOffice
+                  ? t('writeOfficePreview')
+                  : t('writePdfPreview')}
+              </span>
               <span className="write-pdf-topbar-dot" aria-hidden="true" />
               <span>{t('writeReadOnly')}</span>
             </div>

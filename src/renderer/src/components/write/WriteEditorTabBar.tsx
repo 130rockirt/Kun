@@ -3,6 +3,7 @@ import {
   AlertCircle,
   ChevronDown,
   FileImage,
+  FileSpreadsheet,
   FilePlus2,
   FileText,
   Loader2,
@@ -12,6 +13,7 @@ import {
   PanelTop,
   Plus,
   Search,
+  Presentation,
   X
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -46,6 +48,8 @@ type Props = {
 
 function fileIcon(document: WriteDocumentSession | undefined): ReactElement {
   if (document?.kind === 'image') return <FileImage className="h-3.5 w-3.5" strokeWidth={1.9} />
+  if (document?.officePreview?.viewer === 'spreadsheet') return <FileSpreadsheet className="h-3.5 w-3.5" strokeWidth={1.9} />
+  if (document?.officePreview?.viewer === 'presentation') return <Presentation className="h-3.5 w-3.5" strokeWidth={1.9} />
   return <FileText className="h-3.5 w-3.5" strokeWidth={1.9} />
 }
 

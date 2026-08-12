@@ -121,6 +121,43 @@ export type WorkspaceOfficePreviewResult =
   | WorkspaceOfficePreviewSuccess
   | OfficeDocumentReadFailure
 
+export type WorkspaceOfficeSelection = {
+  sourceKind: WorkspaceOfficeViewer
+  sourceFormat: OfficeDocumentPreviewFormat
+  text: string
+  charCount: number
+  anchorRect?: {
+    left: number
+    right: number
+    top: number
+    bottom: number
+    width: number
+    height: number
+  }
+  pageStart?: number
+  pageEnd?: number
+  slide?: number
+  sheetName?: string
+  cellRange?: string
+  formulas?: string[]
+}
+
+export type WorkspaceOfficeSemanticTarget = WorkspaceOfficePreviewTarget
+
+export type WorkspaceOfficeSemanticSuccess = {
+  ok: true
+  path: string
+  name: string
+  sourceFormat: OfficeDocumentPreviewFormat
+  sourceSha256: string
+  text: string
+  truncated: boolean
+}
+
+export type WorkspaceOfficeSemanticResult =
+  | WorkspaceOfficeSemanticSuccess
+  | OfficeDocumentReadFailure
+
 export const OFFICE_DOCUMENT_MIME_TYPES: Record<OfficeDocumentFormat, string> = {
   docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',

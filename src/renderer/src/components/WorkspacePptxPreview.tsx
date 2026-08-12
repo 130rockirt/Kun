@@ -11,7 +11,7 @@ import {
   useState,
   type ReactElement
 } from 'react'
-import type { WorkspaceOfficePreviewSuccess } from '@shared/office-document'
+import type { WorkspaceOfficePreviewSuccess, WorkspaceOfficeSelection } from '@shared/office-document'
 import { WorkspaceOfficePreviewToolbar } from './WorkspaceOfficePreviewToolbar'
 import {
   WorkspacePptxThumbnailRail,
@@ -22,6 +22,10 @@ import {
   openWorkspaceOfficeExternalLink,
   secureWorkspaceOfficeLinks
 } from './workspace-office-external-link'
+import {
+  emptyWorkspaceOfficeSelection,
+  selectionFromOfficeDom
+} from './workspace-office-selection'
 
 const PPTX_WIDTH = 960
 const PPTX_HEIGHT = 540
@@ -32,11 +36,13 @@ const FULLSCREEN_CONTROLS_TIMEOUT_MS = 2_000
 export function WorkspacePptxPreview({
   result,
   loading,
-  refreshError
+  refreshError,
+  onSelectionChange
 }: {
   result: WorkspaceOfficePreviewSuccess
   loading: boolean
   refreshError?: string | null
+  onSelectionChange?: (selection: WorkspaceOfficeSelection) => void
 }): ReactElement {
   const rootRef = useRef<HTMLDivElement>(null)
   const hostRef = useRef<HTMLDivElement>(null)
@@ -149,17 +155,43 @@ export function WorkspacePptxPreview({
     thumbnailEngineHostRef.current?.replaceChildren()
   }, [])
 
+  useEffect(() => {
+    if (!onSelectionChange) return
+    const empty = (): void => onSelectionChange(
+      emptyWorkspaceOfficeSelection('presentation', result.sourceFormat)
+    )
+    const sync = (): void => {
+      const host = hostRef.current
+      const selection = window.getSelection()
+      if (!host || !selection?.anchorNode || !host.contains(selection.anchorNode)) return
+      onSelectionChange(selectionFromOfficeDom(
+        host,
+        'presentation',
+        result.sourceFormat,
+        () => ({ slide })
+      ))
+    }
+    empty()
+    document.addEventListener('selectionchange', sync)
+    return () => {
+      document.removeEventListener('selectionchange', sync)
+      empty()
+    }
+  }, [onSelectionChange, result.sourceFormat, result.sourceSha256, slide, zoom])
+
   const goToSlide = useCallback((next: number): void => {
     const safeSlide = Math.min(slideCount, Math.max(1, next))
     try {
       previewerRef.current?.renderSingleSlide(safeSlide - 1)
       if (hostRef.current) secureWorkspaceOfficeLinks(hostRef.current)
       setSlide(safeSlide)
+      onSelectionChange?.(emptyWorkspaceOfficeSelection('presentation', result.sourceFormat))
+      window.getSelection()?.removeAllRanges()
       setRenderError(null)
     } catch (cause) {
       setRenderError(errorMessage(cause))
     }
-  }, [slideCount])
+  }, [onSelectionChange, result.sourceFormat, slideCount])
 
   const scheduleControlsHide = useCallback((): void => {
     clearControlsTimer(controlsTimerRef)

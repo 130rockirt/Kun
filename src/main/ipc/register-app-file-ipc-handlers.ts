@@ -35,6 +35,7 @@ import {
   workspaceFileWatchPayloadSchema,
   workspaceFileWritePayloadSchema,
   workspaceOfficePreviewTargetPayloadSchema,
+  workspaceOfficeSemanticTargetPayloadSchema,
   workspacePreviewLeaseReleasePayloadSchema,
   workspacePreviewLeaseTargetPayloadSchema
 } from './app-ipc-schemas'
@@ -61,6 +62,7 @@ import {
   readLocalOfficeDocument
 } from '../services/office-document-service'
 import { readWorkspaceOfficePreview } from '../services/office-workspace-preview-service'
+import { readWorkspaceOfficeSemantic } from '../services/office-workspace-semantic-service'
 import {
   resolveOfficeCliBinary
 } from '../officecli-resources'
@@ -414,6 +416,35 @@ export function registerAppFileIpcHandlers(options: RegisterAppIpcHandlersOption
         path: resolved.path,
         expectedSha256: target.expectedSha256
       }, {
+        signal: abortController.signal
+      })
+    } finally {
+      event.sender.removeListener('destroyed', cancelWhenRendererCloses)
+    }
+  })
+  ipcMain.handle('file:read-workspace-office-semantic', async (event, payload: unknown) => {
+    assertTrustedWorkbenchSender(event, getMainWindow)
+    const target = parseIpcPayload(
+      'file:read-workspace-office-semantic',
+      workspaceOfficeSemanticTargetPayloadSchema,
+      payload
+    )
+    const resolved = await resolveWorkspaceFile(target)
+    if (!resolved.ok) return resolved
+    const abortController = new AbortController()
+    const cancelWhenRendererCloses = (): void => abortController.abort()
+    event.sender.once('destroyed', cancelWhenRendererCloses)
+    try {
+      return await readWorkspaceOfficeSemantic({
+        path: resolved.path,
+        expectedSha256: target.expectedSha256
+      }, {
+        binaryPath: resolveOfficeCliBinary({
+          isPackaged: app.isPackaged,
+          resourcesPath: process.resourcesPath,
+          appRoot: app.getAppPath(),
+          explicitPath: process.env.KUN_OFFICECLI_BINARY
+        }),
         signal: abortController.signal
       })
     } finally {

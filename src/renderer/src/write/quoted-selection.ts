@@ -3,6 +3,8 @@ import type {
   WriteSelectionPageRect
 } from '../components/write/WriteMarkdownEditor'
 import type { WriteRetrievalContext, WriteRetrievalSnippet } from '@shared/write-retrieval'
+import type { OfficeDocumentPreviewFormat } from '@shared/office-document'
+import type { WriteSelectionSourceKind } from '../components/write/write-markdown-editor-types'
 
 export const WRITE_QUOTE_ORIGINAL_START = '[引用原文]'
 export const WRITE_QUOTE_ORIGINAL_END = '[/引用原文]'
@@ -10,6 +12,11 @@ export const WRITE_CONTEXT_HEADING = '[写作上下文]'
 export const WRITE_QUOTE_HEADING = '[引用片段]'
 export const WRITE_RETRIEVAL_HEADING = '[相关文献上下文]'
 export const WRITE_RETRIEVAL_END = '[/相关文献上下文]'
+export const WRITE_OFFICE_CONTEXT_HEADING = '[Office 文档上下文]'
+export const WRITE_OFFICE_CONTEXT_END = '[/Office 文档上下文]'
+
+const OFFICE_SOURCE_KINDS = ['pdf', 'word', 'presentation', 'spreadsheet'] as const
+const OFFICE_SOURCE_FORMATS = ['doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx'] as const
 
 const WRITE_ASSISTANT_INTERACTION_RULE =
   '交互约定: 需要更多信息时通常直接用普通文本向用户提问。仅当当前激活的专用工作流明确要求结构化确认（例如 PPT 视觉评审）时，调用该工作流提供的确认工具；其他写作任务不要滥用结构化交互。\n' +
@@ -18,13 +25,18 @@ const WRITE_ASSISTANT_INTERACTION_RULE =
 export type WriteQuotedSelection = {
   id: string
   text: string
-  sourceKind?: 'text' | 'pdf'
+  sourceKind?: WriteSelectionSourceKind
+  sourceFormat?: OfficeDocumentPreviewFormat
   sourceTitle: string
   sourceFilePath: string
   lineStart?: number
   lineEnd?: number
   pageStart?: number
   pageEnd?: number
+  slide?: number
+  sheetName?: string
+  cellRange?: string
+  formulas?: string[]
   rects?: WriteSelectionPageRect[]
   charCount: number
   createdAt: string
@@ -61,16 +73,25 @@ export function quotedSelectionFromEditor(
   return {
     id: `quote-${now}-${Math.random().toString(36).slice(2)}`,
     text,
-    sourceKind: selection.sourceKind === 'pdf' ? 'pdf' : 'text',
+    sourceKind: selection.sourceKind ?? 'text',
+    ...(selection.sourceFormat ? { sourceFormat: selection.sourceFormat } : {}),
     sourceTitle: relativeWritePath(workspaceRoot, filePath),
     sourceFilePath: filePath,
-    ...(selection.sourceKind === 'pdf'
+    ...(selection.sourceKind === 'pdf' || selection.sourceKind === 'word'
       ? {
           pageStart: selection.pageStart ?? first?.page,
           pageEnd: selection.pageEnd ?? last?.page,
           ...(selection.rects?.length ? { rects: selection.rects } : {})
         }
-      : {
+      : selection.sourceKind === 'presentation'
+        ? { slide: selection.slide }
+        : selection.sourceKind === 'spreadsheet'
+          ? {
+              sheetName: selection.sheetName,
+              cellRange: selection.cellRange,
+              ...(selection.formulas?.length ? { formulas: selection.formulas } : {})
+            }
+          : {
           ...(first ? { lineStart: first.startLine } : {}),
           ...(last ? { lineEnd: last.endLine } : {})
         }),
@@ -80,14 +101,39 @@ export function quotedSelectionFromEditor(
 }
 
 export function formatWriteQuotedSelectionForPrompt(selection: WriteQuotedSelection): string {
-  if (selection.sourceKind === 'pdf' && selection.pageStart != null && selection.pageEnd != null) {
+  const originalText = selection.formulas?.length
+    ? `${selection.text}\n\n[公式注释]\n${selection.formulas.join('\n')}`
+    : selection.text
+  const sourceSuffix = selection.sourceKind && selection.sourceKind !== 'text'
+    ? ` 来源: ${selection.sourceKind}${selection.sourceFormat ? ` 格式: ${selection.sourceFormat}` : ''}`
+    : ''
+  if (
+    (selection.sourceKind === 'pdf' || selection.sourceKind === 'word') &&
+    selection.pageStart != null && selection.pageEnd != null
+  ) {
     const pageLabel = selection.pageStart === selection.pageEnd
       ? `第${selection.pageStart}页`
       : `第${selection.pageStart}-${selection.pageEnd}页`
     return [
-      `[引用片段] ${selection.sourceTitle}（${pageLabel}，共${selection.charCount}字）路径: ${selection.sourceFilePath}`,
+      `[引用片段] ${selection.sourceTitle}（${pageLabel}，共${selection.charCount}字）${sourceSuffix} 路径: ${selection.sourceFilePath}`,
       WRITE_QUOTE_ORIGINAL_START,
-      selection.text,
+      originalText,
+      WRITE_QUOTE_ORIGINAL_END
+    ].join('\n')
+  }
+  if (selection.sourceKind === 'presentation' && selection.slide != null) {
+    return [
+      `[引用片段] ${selection.sourceTitle}（第${selection.slide}张幻灯片，共${selection.charCount}字）${sourceSuffix} 路径: ${selection.sourceFilePath}`,
+      WRITE_QUOTE_ORIGINAL_START,
+      originalText,
+      WRITE_QUOTE_ORIGINAL_END
+    ].join('\n')
+  }
+  if (selection.sourceKind === 'spreadsheet' && selection.sheetName && selection.cellRange) {
+    return [
+      `[引用片段] ${selection.sourceTitle}（${selection.sheetName}!${selection.cellRange}，共${selection.charCount}字）${sourceSuffix} 路径: ${selection.sourceFilePath}`,
+      WRITE_QUOTE_ORIGINAL_START,
+      originalText,
       WRITE_QUOTE_ORIGINAL_END
     ].join('\n')
   }
@@ -95,14 +141,14 @@ export function formatWriteQuotedSelectionForPrompt(selection: WriteQuotedSelect
     return [
       `[引用片段] ${selection.sourceTitle}（第${selection.lineStart}-${selection.lineEnd}行，共${selection.charCount}字）路径: ${selection.sourceFilePath}`,
       WRITE_QUOTE_ORIGINAL_START,
-      selection.text,
+      originalText,
       WRITE_QUOTE_ORIGINAL_END
     ].join('\n')
   }
   return [
     `[引用片段] ${selection.sourceTitle}（共${selection.charCount}字）路径: ${selection.sourceFilePath}`,
     WRITE_QUOTE_ORIGINAL_START,
-    selection.text,
+    originalText,
     WRITE_QUOTE_ORIGINAL_END
   ].join('\n')
 }
@@ -111,9 +157,19 @@ type WritePromptContext = {
   workspaceRoot?: string
   activeFilePath?: string | null
   retrieval?: WriteRetrievalContext | null
+  officeDocument?: WriteOfficeDocumentContext | null
   /** Active writing-agent persona; folded into the context block so it frames the
    * model without showing as raw text in the user's message bubble. */
   agentPersona?: string
+}
+
+export type WriteOfficeDocumentContext = {
+  sourceTitle: string
+  sourceFilePath: string
+  sourceFormat: OfficeDocumentPreviewFormat
+  sourceSha256: string
+  text: string
+  truncated: boolean
 }
 
 export type WritePromptDisplayContext = {
@@ -125,11 +181,15 @@ export type WritePromptDisplayContext = {
 export type WritePromptDisplayQuote = {
   sourceTitle: string
   sourceFilePath?: string
-  sourceKind?: 'text' | 'pdf'
+  sourceKind?: WriteSelectionSourceKind
+  sourceFormat?: OfficeDocumentPreviewFormat
   lineStart?: number
   lineEnd?: number
   pageStart?: number
   pageEnd?: number
+  slide?: number
+  sheetName?: string
+  cellRange?: string
   charCount?: number
   text: string
 }
@@ -147,11 +207,16 @@ export type WritePromptDisplayRetrieval = {
   snippets: WritePromptDisplayRetrievalSnippet[]
 }
 
+export type WritePromptDisplayOfficeDocument = Omit<WriteOfficeDocumentContext, 'text'> & {
+  charCount: number
+}
+
 export type WritePromptDisplay = {
   userInput: string
   context: WritePromptDisplayContext | null
   quotes: WritePromptDisplayQuote[]
   retrieval: WritePromptDisplayRetrieval | null
+  officeDocument: WritePromptDisplayOfficeDocument | null
 }
 
 function formatWriteRetrievalSnippetLocation(snippet: WriteRetrievalSnippet): string {
@@ -186,6 +251,18 @@ export function formatWriteRetrievalContextForPrompt(retrieval: WriteRetrievalCo
   return lines.join('\n')
 }
 
+export function formatWriteOfficeDocumentContextForPrompt(
+  document: WriteOfficeDocumentContext | null | undefined
+): string {
+  if (!document?.text.trim()) return ''
+  return [
+    WRITE_OFFICE_CONTEXT_HEADING,
+    `来源: ${document.sourceTitle}; 格式: ${document.sourceFormat}; SHA-256: ${document.sourceSha256}; 截断: ${document.truncated ? '是' : '否'}; 路径: ${document.sourceFilePath}`,
+    document.text.trim(),
+    WRITE_OFFICE_CONTEXT_END
+  ].join('\n')
+}
+
 export function composeWritePrompt(
   input: string,
   selections: WriteQuotedSelection[],
@@ -194,6 +271,11 @@ export function composeWritePrompt(
   const body = input.trim()
   const contextLines: string[] = []
   contextLines.push(WRITE_ASSISTANT_INTERACTION_RULE)
+  if (context.officeDocument) {
+    contextLines.push(
+      '只读 Office 约定: 当前 Office 文件只能预览和讨论。禁止调用 edit、write 或 office_edit 修改它；总结、提纲、解释、润色、精简、评审和改写都必须只在回复中给出结果。'
+    )
+  }
   if (context.agentPersona?.trim()) {
     contextLines.push(`当前写作 Agent 人设（请严格遵循）：${context.agentPersona.trim()}`)
   }
@@ -208,7 +290,8 @@ export function composeWritePrompt(
     : ''
   const quoteText = selections.map(formatWriteQuotedSelectionForPrompt).join('\n\n')
   const retrievalText = formatWriteRetrievalContextForPrompt(context.retrieval)
-  return [contextText, quoteText, retrievalText, body].filter(Boolean).join('\n\n')
+  const officeText = formatWriteOfficeDocumentContextForPrompt(context.officeDocument)
+  return [contextText, quoteText, officeText, retrievalText, body].filter(Boolean).join('\n\n')
 }
 
 function parseContextBlock(text: string): WritePromptDisplayContext {
@@ -250,8 +333,18 @@ function splitFirstSection(text: string): { head: string; rest: string } {
 function parseQuoteHeader(header: string): Omit<WritePromptDisplayQuote, 'text'> {
   const body = header.replace(WRITE_QUOTE_HEADING, '').trim()
   const pathSplit = body.match(/^(.*?)\s*路径:\s*(.+)$/)
-  const titleAndMeta = (pathSplit?.[1] ?? body).trim()
+  const rawTitleAndMeta = (pathSplit?.[1] ?? body).trim()
   const sourceFilePath = pathSplit?.[2]?.trim()
+  const sourceMeta = rawTitleAndMeta.match(
+    /^(.*?)\s+来源:\s*(pdf|word|presentation|spreadsheet)(?:\s+格式:\s*(doc|docx|xls|xlsx|ppt|pptx))?$/
+  )
+  const titleAndMeta = (sourceMeta?.[1] ?? rawTitleAndMeta).trim()
+  const sourceKind = sourceMeta?.[2] && OFFICE_SOURCE_KINDS.includes(sourceMeta[2] as typeof OFFICE_SOURCE_KINDS[number])
+    ? sourceMeta[2] as WriteSelectionSourceKind
+    : undefined
+  const sourceFormat = sourceMeta?.[3] && OFFICE_SOURCE_FORMATS.includes(sourceMeta[3] as OfficeDocumentPreviewFormat)
+    ? sourceMeta[3] as OfficeDocumentPreviewFormat
+    : undefined
   const pdfMetaMatch = titleAndMeta.match(/^(.*?)（第(\d+)(?:[-–—](\d+))?页，共(\d+)字）$/)
   if (pdfMetaMatch) {
     const pageStart = Number.parseInt(pdfMetaMatch[2] ?? '', 10)
@@ -259,10 +352,39 @@ function parseQuoteHeader(header: string): Omit<WritePromptDisplayQuote, 'text'>
     const charCount = Number.parseInt(pdfMetaMatch[4] ?? '', 10)
     return {
       sourceTitle: (pdfMetaMatch[1] ?? titleAndMeta).trim(),
-      sourceKind: 'pdf',
+      sourceKind: sourceKind === 'word' ? 'word' : 'pdf',
+      ...(sourceFormat ? { sourceFormat } : {}),
       ...(sourceFilePath ? { sourceFilePath } : {}),
       ...(Number.isFinite(pageStart) ? { pageStart } : {}),
       ...(Number.isFinite(pageEnd) ? { pageEnd } : {}),
+      ...(Number.isFinite(charCount) ? { charCount } : {})
+    }
+  }
+
+  const slideMetaMatch = titleAndMeta.match(/^(.*?)（第(\d+)张幻灯片，共(\d+)字）$/)
+  if (slideMetaMatch) {
+    const slide = Number.parseInt(slideMetaMatch[2] ?? '', 10)
+    const charCount = Number.parseInt(slideMetaMatch[3] ?? '', 10)
+    return {
+      sourceTitle: (slideMetaMatch[1] ?? titleAndMeta).trim(),
+      sourceKind: 'presentation',
+      ...(sourceFormat ? { sourceFormat } : {}),
+      ...(sourceFilePath ? { sourceFilePath } : {}),
+      ...(Number.isFinite(slide) ? { slide } : {}),
+      ...(Number.isFinite(charCount) ? { charCount } : {})
+    }
+  }
+
+  const sheetMetaMatch = titleAndMeta.match(/^(.*?)（(.+)!([A-Z]+\d+:[A-Z]+\d+)，共(\d+)字）$/)
+  if (sheetMetaMatch) {
+    const charCount = Number.parseInt(sheetMetaMatch[4] ?? '', 10)
+    return {
+      sourceTitle: (sheetMetaMatch[1] ?? titleAndMeta).trim(),
+      sourceKind: 'spreadsheet',
+      ...(sourceFormat ? { sourceFormat } : {}),
+      ...(sourceFilePath ? { sourceFilePath } : {}),
+      sheetName: sheetMetaMatch[2]?.trim(),
+      cellRange: sheetMetaMatch[3]?.trim(),
       ...(Number.isFinite(charCount) ? { charCount } : {})
     }
   }
@@ -280,6 +402,35 @@ function parseQuoteHeader(header: string): Omit<WritePromptDisplayQuote, 'text'>
     ...(Number.isFinite(lineStart) ? { lineStart } : {}),
     ...(Number.isFinite(lineEnd) ? { lineEnd } : {}),
     ...(Number.isFinite(charCount) ? { charCount } : {})
+  }
+}
+
+function consumeOfficeDocumentSection(text: string): {
+  document: WritePromptDisplayOfficeDocument | null
+  rest: string
+} {
+  if (!text.startsWith(WRITE_OFFICE_CONTEXT_HEADING)) return { document: null, rest: text }
+  const endIndex = text.indexOf(WRITE_OFFICE_CONTEXT_END)
+  if (endIndex < 0) return { document: null, rest: text }
+  const content = text.slice(WRITE_OFFICE_CONTEXT_HEADING.length, endIndex).trim()
+  const firstLineEnd = content.indexOf('\n')
+  if (firstLineEnd < 0) return { document: null, rest: text }
+  const metadata = content.slice(0, firstLineEnd).trim()
+  const semanticText = content.slice(firstLineEnd + 1).trim()
+  const match = metadata.match(
+    /^来源:\s*(.*?);\s*格式:\s*(doc|docx|xls|xlsx|ppt|pptx);\s*SHA-256:\s*([a-f0-9]{64});\s*截断:\s*(是|否);\s*路径:\s*(.+)$/i
+  )
+  if (!match) return { document: null, rest: text }
+  return {
+    document: {
+      sourceTitle: match[1]?.trim() ?? '',
+      sourceFormat: match[2] as OfficeDocumentPreviewFormat,
+      sourceSha256: match[3]?.toLowerCase() ?? '',
+      truncated: match[4] === '是',
+      sourceFilePath: match[5]?.trim() ?? '',
+      charCount: Array.from(semanticText).length
+    },
+    rest: text.slice(endIndex + WRITE_OFFICE_CONTEXT_END.length).trimStart()
   }
 }
 
@@ -369,7 +520,8 @@ export function parseWritePromptForDisplay(text: string): WritePromptDisplay | n
   if (
     !normalized.includes(WRITE_CONTEXT_HEADING) &&
     !normalized.includes(WRITE_QUOTE_HEADING) &&
-    !normalized.includes(WRITE_RETRIEVAL_HEADING)
+    !normalized.includes(WRITE_RETRIEVAL_HEADING) &&
+    !normalized.includes(WRITE_OFFICE_CONTEXT_HEADING)
   ) {
     return null
   }
@@ -392,6 +544,13 @@ export function parseWritePromptForDisplay(text: string): WritePromptDisplay | n
     rest = consumed.rest
   }
 
+  let officeDocument: WritePromptDisplayOfficeDocument | null = null
+  if (rest.startsWith(WRITE_OFFICE_CONTEXT_HEADING)) {
+    const consumed = consumeOfficeDocumentSection(rest)
+    officeDocument = consumed.document
+    rest = consumed.rest
+  }
+
   let retrieval: WritePromptDisplayRetrieval | null = null
   if (rest.startsWith(WRITE_RETRIEVAL_HEADING)) {
     const endIndex = rest.indexOf(WRITE_RETRIEVAL_END)
@@ -401,12 +560,13 @@ export function parseWritePromptForDisplay(text: string): WritePromptDisplay | n
     }
   }
 
-  if (!context && quotes.length === 0 && !retrieval) return null
+  if (!context && quotes.length === 0 && !retrieval && !officeDocument) return null
 
   return {
     userInput: rest.trim(),
     context,
     quotes,
-    retrieval
+    retrieval,
+    officeDocument
   }
 }

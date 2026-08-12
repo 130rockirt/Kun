@@ -137,7 +137,7 @@ export function WriteAssistantPanel({
   const canCreateConversation = runtimeConnection === 'ready' && !busy
   const hasTimeline =
     blocks.length > 0 || liveReasoning.trim().length > 0 || liveAssistant.trim().length > 0
-  const selectionIsPdf = selection.sourceKind === 'pdf'
+  const selectionIsReadOnly = selection.sourceKind != null && selection.sourceKind !== 'text'
 
   const setAssistantPrompt = (prompt: string): void => {
     setInput(input.trim() ? `${input.trim()}\n\n${prompt}` : prompt)
@@ -147,7 +147,7 @@ export function WriteAssistantPanel({
     if (!workspaceRoot.trim()) return
     quoteCurrentSelection(workspaceRoot)
     if (!input.trim()) {
-      setInput(t(selectionIsPdf ? 'writeAssistantExplainPdfSelectionPrompt' : 'writeAssistantPolishSelectionPrompt'))
+      setInput(t(selectionIsReadOnly ? 'writeAssistantExplainPdfSelectionPrompt' : 'writeAssistantPolishSelectionPrompt'))
     }
   }
 
@@ -272,10 +272,10 @@ export function WriteAssistantPanel({
                 </span>
                 <span className="min-w-0">
                   <span className="block text-[13.5px] font-semibold text-ds-ink">
-                    {t(selectionIsPdf ? 'writeAssistantExplainPdfSelection' : 'writeAssistantPolishSelection')}
+                    {t(selectionIsReadOnly ? 'writeAssistantExplainPdfSelection' : 'writeAssistantPolishSelection')}
                   </span>
                   <span className="mt-0.5 block truncate text-[12px] text-ds-faint">
-                    {t(selectionIsPdf ? 'writeAssistantExplainPdfSelectionSub' : 'writeAssistantPolishSelectionSub')}
+                    {t(selectionIsReadOnly ? 'writeAssistantExplainPdfSelectionSub' : 'writeAssistantPolishSelectionSub')}
                   </span>
                 </span>
               </button>
@@ -295,8 +295,12 @@ export function WriteAssistantPanel({
                 <MessageSquareQuote className="h-3.5 w-3.5 shrink-0 text-accent" strokeWidth={1.9} />
                 <span className="min-w-0 flex-1 truncate">
                   {quote.sourceTitle}
-                  {quote.sourceKind === 'pdf' && quote.pageStart != null && quote.pageEnd != null
+                  {(quote.sourceKind === 'pdf' || quote.sourceKind === 'word') && quote.pageStart != null && quote.pageEnd != null
                     ? ` · p.${quote.pageStart === quote.pageEnd ? quote.pageStart : `${quote.pageStart}-${quote.pageEnd}`}`
+                    : quote.sourceKind === 'presentation' && quote.slide != null
+                      ? ` · Slide ${quote.slide}`
+                      : quote.sourceKind === 'spreadsheet' && quote.sheetName && quote.cellRange
+                        ? ` · ${quote.sheetName}!${quote.cellRange}`
                     : quote.lineStart != null && quote.lineEnd != null ? ` · ${quote.lineStart}-${quote.lineEnd}` : ''}
                 </span>
                 <button

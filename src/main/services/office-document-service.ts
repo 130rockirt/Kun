@@ -267,6 +267,24 @@ function semanticViewArgs(filePath: string, format: OfficeDocumentFormat): strin
   return ['view', filePath, 'outline']
 }
 
+export async function extractOfficeDocumentSemanticText(
+  filePath: string,
+  format: OfficeDocumentFormat,
+  options: {
+    binaryPath: string
+    signal?: AbortSignal
+    runOfficeCli?: (args: string[]) => Promise<OfficeCliResult>
+  }
+): Promise<string> {
+  const result = options.runOfficeCli
+    ? await options.runOfficeCli(semanticViewArgs(filePath, format))
+    : await runOfficeCli(options.binaryPath, semanticViewArgs(filePath, format), options.signal)
+  assertOfficeCliSuccess(result, 'Office document text extraction failed')
+  const text = result.stdout.trim()
+  if (!text) throw new Error('OfficeCLI returned no semantic document content.')
+  return text
+}
+
 function officeHtmlViewArgs(
   filePath: string,
   format: OfficeDocumentFormat,

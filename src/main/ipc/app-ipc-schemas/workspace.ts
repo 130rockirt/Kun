@@ -204,6 +204,8 @@ export const workspaceOfficePreviewTargetPayloadSchema = z
   })
   .strict()
 
+export const workspaceOfficeSemanticTargetPayloadSchema = workspaceOfficePreviewTargetPayloadSchema
+
 export const workspaceFileRevealTargetPayloadSchema = workspaceFileTargetPayloadSchema.extend({
   workspaceRoot: trimmedString(MAX_PATH_LENGTH)
 })

@@ -1,4 +1,12 @@
 import type { WriteBlockType } from '../../write/block-type'
+import type { OfficeDocumentPreviewFormat } from '@shared/office-document'
+
+export type WriteSelectionSourceKind =
+  | 'text'
+  | 'pdf'
+  | 'word'
+  | 'presentation'
+  | 'spreadsheet'
 
 export type WriteSelectionAnchorRect = {
   left: number
@@ -35,9 +43,14 @@ export type WriteEditorSelectionState = {
   charCount: number
   anchorRect?: WriteSelectionAnchorRect
   rects?: WriteSelectionPageRect[]
-  sourceKind?: 'text' | 'pdf'
+  sourceKind?: WriteSelectionSourceKind
+  sourceFormat?: OfficeDocumentPreviewFormat
   pageStart?: number
   pageEnd?: number
+  slide?: number
+  sheetName?: string
+  cellRange?: string
+  formulas?: string[]
   /** Block type of the line at the selection start (selection toolbar). */
   blockType?: WriteBlockType
   /** Set when a single raster image is selected (TipTap node selection or a
