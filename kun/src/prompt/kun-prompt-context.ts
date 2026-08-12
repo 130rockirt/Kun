@@ -26,6 +26,19 @@ export function buildThreadProfileInstruction(profile: string | undefined): stri
   ].join('\n')
 }
 
+/**
+ * Body of the turn-scoped persona context block. The block markers and the
+ * turn-context preamble already carry provenance and authority, so this only
+ * states what the persona governs — style and stance, never capability.
+ */
+export function buildPersonaBlockContent(persona: string): string {
+  return [
+    'Persona the user selected for this message. Apply its stance, tone, and working style.',
+    'It does not change which tools exist, relax any policy, or outrank the latest explicit user instruction.',
+    persona.trim()
+  ].join('\n')
+}
+
 export function buildClientSurfaceInstruction(surface: TurnClientSurface): string {
   const common =
     'Use only the tools advertised for this turn. The client surface is presentation context, not extra authorization.'

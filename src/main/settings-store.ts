@@ -18,6 +18,7 @@ import {
   DEFAULT_WRITE_WORKSPACE_ROOT,
   DEFAULT_WRITE_WELCOME_FILE_NAME,
   defaultClawSettings,
+  defaultCodeAgentPresets,
   defaultKunRuntimeSettings,
   defaultModelProviderSettings,
   defaultDesignSettings,
@@ -288,6 +289,7 @@ const defaultSettings = (): AppSettingsV1 => ({
     channel: DEFAULT_GUI_UPDATE_CHANNEL
   },
   codePromptPrefix: '',
+  codeAgentPresets: defaultCodeAgentPresets(),
   disabledSkillIds: [],
   write: defaultWriteSettings(),
   claw: defaultClawSettings(),

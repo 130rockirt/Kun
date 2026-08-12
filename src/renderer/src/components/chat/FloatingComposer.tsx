@@ -36,7 +36,7 @@ import {
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import type { ModelProviderModelGroup } from '@shared/kun-gui-api'
-import type { KunSpeechToTextSettingsV1 } from '@shared/app-settings'
+import type { CodeAgentPresetV1, KunSpeechToTextSettingsV1 } from '@shared/app-settings'
 import { isSpeechToTextConfigured } from '@shared/speech-to-text'
 import type { AttachmentReference, ChatBlock, ReviewTarget } from '../../agent/types'
 import { useChatStore } from '../../store/chat-store'
@@ -94,6 +94,8 @@ import {
   FloatingComposerExecutionPicker,
   type ComposerExecutionSettings
 } from './FloatingComposerExecutionPicker'
+import { FloatingComposerPersonaPicker } from './FloatingComposerPersonaPicker'
+import { resolveCodeAgentPreset } from './code-agent-presets'
 import {
   FloatingComposerAttachments,
   handleComposerImagePaste
@@ -222,10 +224,14 @@ type Props = {
   composerModelGroups?: ModelProviderModelGroup[]
   composerReasoningEffort?: string
   composerFastMode?: boolean
+  /** Selected Code-persona preset id; undefined hides the picker (non-Code surfaces). */
+  composerPersonaId?: string
+  codeAgentPresets?: readonly CodeAgentPresetV1[]
   showProviderInModelLabel?: boolean
   onComposerModelChange: (modelId: string, providerId?: string) => void
   onComposerReasoningEffortChange?: (effort: ComposerReasoningEffort) => void
   onComposerFastModeChange?: (enabled: boolean) => void
+  onComposerPersonaChange?: (presetId: string) => void
   onConfigureProviders?: () => void
   hideModelPicker?: boolean
   modelPickerMode?: 'select' | 'combobox'
@@ -358,6 +364,9 @@ export function FloatingComposer({
   onComposerModelChange,
   onComposerReasoningEffortChange,
   onComposerFastModeChange,
+  composerPersonaId,
+  codeAgentPresets,
+  onComposerPersonaChange,
   onConfigureProviders,
   hideModelPicker = false,
   modelPickerMode = 'select',
@@ -563,6 +572,11 @@ export function FloatingComposer({
     && Boolean(onExecutionSettingsChange)
   const stretchModelPicker =
     compact && modelPickerMode === 'combobox' && !showToolbarStartControls && !hideModelPicker
+  // Resolution reads i18n, so memoize per catalog identity rather than per render.
+  const resolvedCodeAgentPresets = useMemo(
+    () => (codeAgentPresets ?? []).map((preset) => resolveCodeAgentPreset(preset)),
+    [codeAgentPresets]
+  )
   const draft = useComposerDraft({ input, canCompose: canEditComposer })
   const inputHistory = useComposerInputHistory()
   const slashQuery = getSlashQuery(input)
@@ -1828,6 +1842,15 @@ export function FloatingComposer({
                     disabled={!canCompose || busy}
                     onChange={onExecutionSettingsChange}
                     onOpenPermissionSettings={() => openSettings('agents')}
+                  />
+                ) : null}
+                {codeAgentPresets && onComposerPersonaChange ? (
+                  <FloatingComposerPersonaPicker
+                    presets={resolvedCodeAgentPresets}
+                    activePresetId={composerPersonaId ?? ''}
+                    disabled={!canCompose}
+                    onSelect={onComposerPersonaChange}
+                    onOpenPersonaSettings={() => openSettings('agents')}
                   />
                 ) : null}
               </div>

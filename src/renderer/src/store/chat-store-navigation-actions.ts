@@ -705,6 +705,7 @@ export function createNavigationActions(
                 : channels.find((channel) => channel.enabled)?.id ?? ''
               set({
                 disabledSkillIds: settings.disabledSkillIds,
+                codeAgentPresets: settings.codeAgentPresets,
                 clawChannels: channels,
                 activeClawChannelId: activeChannelId
               })
@@ -733,6 +734,7 @@ export function createNavigationActions(
           workspaceLabel: workspaceLabelFromPath(workspaceRoot),
           conversationWorkspaceRoot: settings.conversationWorkspaceRoot || '',
           disabledSkillIds: settings.disabledSkillIds,
+          codeAgentPresets: settings.codeAgentPresets,
           graphEnabled: settings.agents.kun.graph?.enabled === true,
           composerOrchestration: 'direct',
           clawChannels: settings.claw.channels,

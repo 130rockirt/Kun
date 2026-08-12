@@ -30,6 +30,7 @@ import {
   normalizeScheduleSettings,
   normalizeWorkflowSettings,
   normalizeWriteSettings,
+  normalizeCodeAgentPresets,
   normalizeTerminalSettings,
   normalizeChatContentMaxWidth,
   normalizeComposerSendKey,
@@ -176,6 +177,7 @@ export function coerceRendererSettings(settings: AppSettingsV1): AppSettingsV1 {
       channel: normalizeGuiUpdateChannel(raw.guiUpdate?.channel ?? DEFAULT_GUI_UPDATE_CHANNEL)
     },
     codePromptPrefix: typeof raw.codePromptPrefix === 'string' ? raw.codePromptPrefix : '',
+    codeAgentPresets: normalizeCodeAgentPresets(raw.codeAgentPresets),
     disabledSkillIds: normalizeDisabledSkillIds(raw.disabledSkillIds)
   }
 }

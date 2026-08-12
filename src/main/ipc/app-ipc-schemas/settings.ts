@@ -565,6 +565,14 @@ const writeAgentPresetSchema = z.object({
   persona: z.string().max(4_000).optional()
 }).strict()
 
+const codeAgentPresetSchema = z.object({
+  id: trimmedString(64),
+  name: z.string().max(64).optional(),
+  /** Lucide icon name (PascalCase); unknown names render a fallback icon. */
+  icon: z.string().max(64).optional(),
+  persona: z.string().max(2_000).optional()
+}).strict()
+
 const writeSettingsPatchSchema = z.object({
   defaultWorkspaceRoot: defaultPathSchema,
   activeWorkspaceRoot: defaultPathSchema,
@@ -1402,6 +1410,7 @@ const settingsPatchObjectSchema = z.object({
     channel: z.enum(GUI_UPDATE_CHANNELS).optional()
   }).strict().optional(),
   codePromptPrefix: z.string().max(MAX_CHANNEL_TEXT_LENGTH).optional(),
+  codeAgentPresets: z.array(codeAgentPresetSchema).max(24).optional(),
   disabledSkillIds: z.array(trimmedString(128)).max(512).optional()
 }).strict()
 

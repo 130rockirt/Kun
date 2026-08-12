@@ -23,6 +23,7 @@ import type {
   ClawImProvider,
   ClawImSettingsV1,
   ClawModel,
+  CodeAgentPresetV1,
   ModelReasoningEffort
 } from '@shared/app-settings'
 import type { ModelProviderModelGroup } from '@shared/kun-gui-api'
@@ -68,6 +69,8 @@ export type QueuedUserMessage = {
   guiDesignCanvas?: boolean
   /** True only for the product Design surface; Code whiteboards leave this unset. */
   guiDesignMode?: boolean
+  /** Turn-scoped persona text resolved from the composer preset. */
+  persona?: string
   agentSurface?: 'code' | 'write' | 'design'
   guiDesignArtifact?: GuiDesignArtifactMessageContext
   writeContext?: WriteAssistantMessageContext
@@ -119,6 +122,8 @@ export type SendMessageOverrides = {
   guiPlan?: GuiPlanMessageContext
   guiDesignCanvas?: boolean
   guiDesignMode?: boolean
+  /** Turn-scoped persona text resolved from the composer preset. */
+  persona?: string
   agentSurface?: 'code' | 'write' | 'design'
   guiDesignArtifact?: GuiDesignArtifactMessageContext
   attachmentIds?: string[]
@@ -334,6 +339,13 @@ export type ChatState = {
    * thread / next-turn override. Empty = use the runtime default.
    */
   composerAgentId: string
+  /**
+   * Selected Code-persona preset id. Empty = no persona. Resolved to text and
+   * sent per turn, so switching it never rewrites earlier turns.
+   */
+  composerPersonaId: string
+  /** Mirror of `AppSettingsV1.codeAgentPresets` for composer-side resolution. */
+  codeAgentPresets: CodeAgentPresetV1[]
   disabledSkillIds: string[]
   queuedMessages: QueuedUserMessage[]
   /** Host-authenticated, workspace-scoped context awaiting one main-chat turn. */
@@ -356,6 +368,7 @@ export type ChatState = {
   setComposerReasoningEffort: (effort: ModelReasoningEffort) => void
   setComposerFastMode: (enabled: boolean) => void
   setComposerAgentId: (agentId: string) => void
+  setComposerPersonaId: (presetId: string) => void
   loadComposerModels: () => Promise<void>
   setRoute: (r: AppRoute) => void
   openWrite: () => Promise<void>

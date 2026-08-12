@@ -94,6 +94,39 @@ describe('compat composer context projection', () => {
     ])
   })
 
+  it('keeps the stable prefix and history byte-identical when a persona changes', () => {
+    const requestFor = (personaBlock?: string): ModelRequest => ({
+      threadId: 'thread-persona',
+      turnId: 'turn-persona',
+      model: 'test-model',
+      systemPrompt: 'stable-system-prefix',
+      modeInstruction: 'mode-instruction',
+      prefix: [],
+      history: [makeUserItem({
+        id: 'item-persona',
+        threadId: 'thread-persona',
+        turnId: 'turn-persona',
+        text: 'user-history'
+      })],
+      ...(personaBlock ? { contextInstructions: ['turn-context-preamble', personaBlock] } : {}),
+      tools: [],
+      abortSignal: new AbortController().signal
+    })
+    const project = (personaBlock?: string): Array<[string, unknown]> =>
+      projectCompatMessages(requestFor(personaBlock), {
+        thinkingMode: false,
+        supportsImages: false
+      }).map((message) => [message.role, message.content])
+
+    const withoutPersona = project()
+    const withPersona = project('<kun_context_block kind="persona" authority="user">skeptic</kun_context_block>')
+
+    // Everything the provider caches — prefix, mode, and history — is untouched;
+    // the persona only appends after it. This is what makes switching cheap.
+    expect(withPersona.slice(0, withoutPersona.length)).toEqual(withoutPersona)
+    expect(withPersona[withPersona.length - 1]?.[1]).toContain('kind="persona"')
+  })
+
   it('projects durable goal context as history rather than a per-request instruction', () => {
     const request: ModelRequest = {
       threadId: 'thread-goal',

@@ -3002,6 +3002,17 @@ describe('FloatingComposer input history and shortcut hint', () => {
     }
   })
 
+  it('renders the persona picker when a legacy preset has no icon field', () => {
+    const html = renderToStaticMarkup(createElement(FloatingComposer, baseComposerProps({
+      composerPersonaId: 'doubter',
+      codeAgentPresets: [{ id: 'doubter' }],
+      onComposerPersonaChange: () => undefined
+    })))
+
+    expect(html).toContain('data-composer-persona="doubter"')
+    expect(html).toContain('lucide-search-check')
+  })
+
   it('hard-disables editing and submission for external destructive operations', () => {
     const html = renderToStaticMarkup(createElement(FloatingComposer, baseComposerProps({
       disabled: true,

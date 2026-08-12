@@ -111,6 +111,7 @@ function buildSettings(): AppSettingsV1 {
     terminal: defaultTerminalSettings(),
     guiUpdate: { channel: 'stable' },
     codePromptPrefix: '',
+    codeAgentPresets: [],
     disabledSkillIds: []
   }
   settings.claw.enabled = true
