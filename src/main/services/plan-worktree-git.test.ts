@@ -36,7 +36,7 @@ afterEach(async () => {
 })
 
 describe('plan worktree Git preflight', () => {
-  it('captures the exact clean branch and commit', async () => {
+  it('captures the current branch HEAD even when the source checkout has changes', async () => {
     const root = await initRepository('clean')
     const result = await preflightPlanWorktree({ workspaceRoot: join(root, 'nested') })
 
@@ -53,6 +53,15 @@ describe('plan worktree Git preflight', () => {
       sourceIsLinkedWorktree: false
     })
     expect(nested.baseCommit).toMatch(/^[0-9a-f]{40}$/)
+
+    await writeFile(join(root, 'README.md'), '# changed locally\n', 'utf8')
+    await writeFile(join(root, 'untracked.txt'), 'untracked\n', 'utf8')
+    const dirty = await preflightPlanWorktree({ workspaceRoot: root })
+    expect(dirty).toMatchObject({
+      eligible: true,
+      baseCommit: nested.baseCommit,
+      targetBranch: 'feature/source'
+    })
   })
 
   it('supports a linked source worktree without substituting the primary checkout', async () => {
@@ -71,12 +80,7 @@ describe('plan worktree Git preflight', () => {
     })
   })
 
-  it('rejects dirty, detached, unborn, invalid-prefix, and in-progress sources', async () => {
-    const dirty = await initRepository('dirty')
-    await writeFile(join(dirty, 'new.txt'), 'dirty', 'utf8')
-    expect((await preflightPlanWorktree({ workspaceRoot: dirty })).attentionReason)
-      .toBe('dirty_source_checkout')
-
+  it('rejects detached, unborn, invalid-prefix, and in-progress sources', async () => {
     const detached = await initRepository('detached')
     await runGit(detached, ['checkout', '--detach'])
     expect((await preflightPlanWorktree({ workspaceRoot: detached })).attentionReason)

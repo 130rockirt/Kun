@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, realpath, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -55,8 +55,11 @@ afterEach(async () => {
 })
 
 describe('PlanWorktreeCoordinator preparation', () => {
-  it('prepares from the captured HEAD and deduplicates operation ids', async () => {
+  it('prepares from the captured HEAD, excluding source checkout changes, and deduplicates operation ids', async () => {
     const source = await repository('prepare')
+    const baseCommit = (await runGit(source, ['rev-parse', 'HEAD'])).stdout.trim()
+    await writeFile(join(source, 'README.md'), '# changed locally\n', 'utf8')
+    await writeFile(join(source, 'untracked.txt'), 'untracked\n', 'utf8')
     const userData = await temp('user-data')
     const managedRoot = await temp('managed')
     const coordinator = new PlanWorktreeCoordinator({
@@ -77,25 +80,14 @@ describe('PlanWorktreeCoordinator preparation', () => {
       admissionCapability: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/)
     })
     expect((await runGit(prepared.worktreePath, ['rev-parse', 'HEAD'])).stdout.trim())
-      .toBe(prepared.baseCommit)
+      .toBe(baseCommit)
+    expect(prepared.baseCommit).toBe(baseCommit)
     expect((await runGit(prepared.worktreePath, ['branch', '--show-current'])).stdout.trim())
       .toBe(prepared.executionBranch)
-  })
-
-  it('fails closed on an ineligible dirty source', async () => {
-    const source = await repository('dirty')
-    await writeFile(join(source, 'dirty.txt'), 'dirty', 'utf8')
-    const coordinator = new PlanWorktreeCoordinator({
-      store: new PlanWorktreeRunStore(await temp('dirty-data')),
-      managedRoot: await temp('dirty-managed'),
-      createRunId: () => 'run-dirty',
-      verifyExecutionThread: allowExecutionThread,
-      recoverExecutionLink: noRecoveredExecutionLink
-    })
-    await expect(coordinator.prepare(request(source))).rejects.toMatchObject({
-      reason: 'dirty_source_checkout'
-    })
-    expect(await coordinator.list({ includeCompleted: true })).toEqual([])
+    await expect(readFile(join(prepared.worktreePath, 'README.md'), 'utf8'))
+      .resolves.toBe('# repository\n')
+    await expect(readFile(join(prepared.worktreePath, 'untracked.txt'), 'utf8'))
+      .rejects.toMatchObject({ code: 'ENOENT' })
   })
 
   it('rejects a managed path collision without deleting it', async () => {

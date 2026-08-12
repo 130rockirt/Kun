@@ -180,18 +180,6 @@ export async function preflightPlanWorktree(
         anchors
       )
     }
-    const status = (await runGit(
-      sourceCheckoutRoot,
-      ['status', '--porcelain=v1', '--untracked-files=all']
-    )).stdout
-    if (status.trim()) {
-      return failure(
-        request,
-        'dirty_source_checkout',
-        'The source checkout has tracked or untracked changes.',
-        anchors
-      )
-    }
     if (!(await validateBranchPrefix(sourceCheckoutRoot, request.branchPrefix))) {
       return failure(request, 'invalid_branch_prefix', 'The configured Git branch prefix is invalid.', anchors)
     }
