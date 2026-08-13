@@ -19,6 +19,7 @@ describe('write presentation helpers', () => {
     expect(prompt).toContain('唯一内容来源 Markdown：/workspace/季度复盘.md')
     expect(prompt).toContain('最终文件：presentations/季度复盘.pptx')
     expect(prompt).toContain('先生成完整预览供评审')
+    expect(prompt).toContain('跳过视觉方向选择')
     expect(prompt).toContain('若当前回合没有提供 `ppt_agent`')
     expect(prompt).toContain('不要改用旧版 PPT 技能、通用子代理')
     expect(prompt).toContain('不要修改、重命名或移动来源 Markdown')

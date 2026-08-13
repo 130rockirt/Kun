@@ -71,7 +71,7 @@ import {
   kunContextBlock,
   modelHistoryRoutesByTurnId,
   prefixVolatilityStageDetails,
-  subagentResumeToolGate,
+  requiredWorkflowToolGate,
   tokenEconomyContextBlocks,
   toolCatalogPolicyScope
 } from './model-step-preparation-helpers.js'
@@ -399,14 +399,13 @@ export abstract class ModelStepPreparationService {
     const svgCompletion = turn?.guiDesignArtifact?.kind === 'svg'
       ? svgArtifactCompletionState(historyItems, turnId)
       : null
-    const subagentResumeGate = subagentResumeToolGate(turn, historyItems, turnId)
-    const hardRequiredToolName =
-      subagentResumeGate.requiredToolName
-        ? subagentResumeGate.requiredToolName
-        : svgCompletion?.mutationSucceeded &&
-            !svgCompletion.validationAfterMutation
+    const workflowGate = requiredWorkflowToolGate(
+      turn, toolContext.pptWorkflowScope, historyItems, turnId,
+      svgCompletion?.mutationSucceeded && !svgCompletion.validationAfterMutation
         ? DESIGN_SVG_VALIDATE_TOOL_NAME
         : undefined
+    )
+    const hardRequiredToolName = workflowGate.requiredToolName
     // Plan creation is deliberately a soft completion condition. A Plan turn
     // may investigate, ask for user input, or stop on a genuine clarification
     // before its prose is materialized through create_plan.
@@ -504,11 +503,11 @@ export abstract class ModelStepPreparationService {
         ? [kunContextBlock('runtime-context', 'runtime', runtimeContextInstruction)]
         : []),
       ...turnDynamicContext.blocks.filter((block) => block.authority === 'runtime'),
-      ...(subagentResumeGate.instruction
+      ...(workflowGate.subagentResumeInstruction
         ? [kunContextBlock(
             'subagent-resume',
             'runtime',
-            subagentResumeGate.instruction
+            workflowGate.subagentResumeInstruction
           )]
         : []),
       ...(thread?.additionalWorkspaces?.length

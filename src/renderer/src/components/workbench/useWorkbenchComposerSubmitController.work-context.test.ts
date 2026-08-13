@@ -138,6 +138,23 @@ describe('useWorkbenchComposerSubmitController Work context', () => {
     expect(sendMessage.mock.calls[0]?.[2]).toMatchObject({ persona: 'Be a precise editor.' })
   })
 
+  it('forwards the active Work file as a structured source reference', async () => {
+    const sendMessage = vi.fn(async (..._args: Parameters<ControllerParams['sendMessage']>) => true)
+    const controller = useWorkbenchComposerSubmitController(controllerParams({ sendMessage }))
+
+    controller.sendWritePrompt('Create a presentation from this document')
+
+    await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledOnce())
+    expect(sendMessage.mock.calls[0]?.[2]).toMatchObject({
+      fileReferences: [{
+        path: '/tmp/write/draft.md',
+        relativePath: 'draft.md',
+        name: 'draft.md',
+        kind: 'file'
+      }]
+    })
+  })
+
   it('does not retrieve the current file when an exact quote is already attached', async () => {
     const exactQuote = {
       id: 'quote-1', text: 'Exact quoted paragraph', sourceTitle: 'draft.md',

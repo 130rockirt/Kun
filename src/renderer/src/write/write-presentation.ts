@@ -30,7 +30,7 @@ export function buildWritePresentationPrompt(input: {
     `工作区：${input.workspaceRoot}`,
     `最终文件：presentations/${deckName}.pptx`,
     '',
-    '请根据内容和演示设计规范自动确定结构与视觉方案，先生成完整预览供评审，获得批准后再导出 PPTX。',
+    '这是 Work 一键生成：请跳过视觉方向选择，根据内容和演示设计规范自动确定结构与视觉方案，先生成完整预览供评审，获得批准后再导出 PPTX。',
     '若当前回合没有提供 `ppt_agent`，请明确告知该功能未启用；不要改用旧版 PPT 技能、通用子代理或其他生成路径。',
     '不要修改、重命名或移动来源 Markdown。'
   ].join('\n')

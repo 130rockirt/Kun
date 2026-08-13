@@ -328,6 +328,11 @@ export function buildPptAgentToolProvider(
               projectDir,
               parentThreadId: context.threadId,
               previewMode,
+              ...(action === 'start' &&
+              source.value.agentSurface === 'write' &&
+              source.value.fileReferences.some((file) => /\.(?:md|markdown)$/i.test(file.name))
+                ? { sourceReadRequired: true }
+                : {}),
               ...(directionGate ? { directionGate } : {}),
               ...(directionAction
                 ? {
@@ -547,7 +552,11 @@ export function buildPptAgentToolProvider(
                 ...(resolvedModel ? { model: resolvedModel } : {}),
                 ...(record.durationMs !== undefined ? { durationMs: record.durationMs } : {}),
                 ...(failed || recoverableQaReview
-                  ? { error: contractError || record.error || (recoverableQaReview ? 'PPT geometry QA requires review' : record.status) }
+                  ? { error: formatPptChildError(
+                      contractError,
+                      record.error,
+                      recoverableQaReview ? 'PPT geometry QA requires review' : record.status
+                    ) }
                   : {})
               },
               isError: failed
@@ -557,6 +566,13 @@ export function buildPptAgentToolProvider(
       ]
     }
   ]
+}
+
+function formatPptChildError(contractError: string, childError: string | undefined, fallback: string): string {
+  const detail = childError?.trim()
+  if (!contractError) return detail || fallback
+  if (!detail || detail === contractError) return contractError
+  return `${contractError}. Child error: ${detail}`
 }
 
 function explicitlyAcceptsRecommendedDirection(prompt: string): boolean {

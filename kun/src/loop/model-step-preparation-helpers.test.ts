@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { makeToolResultItem } from '../domain/item.js'
-import { subagentResumeToolGate } from './model-step-preparation-helpers.js'
+import {
+  pptSourceReadToolGate,
+  requiredWorkflowToolGate,
+  subagentResumeToolGate
+} from './model-step-preparation-helpers.js'
 
 describe('subagentResumeToolGate', () => {
   const request = { childId: 'child_resume', expectedResumeCount: 2 }
@@ -26,5 +30,50 @@ describe('subagentResumeToolGate', () => {
     })
 
     expect(subagentResumeToolGate({ subagentResume: request }, [result], 'turn_resume')).toEqual({})
+  })
+})
+
+describe('requiredWorkflowToolGate', () => {
+  it('keeps a delegated resume ahead of the Work PPT source-read gate', () => {
+    const gate = requiredWorkflowToolGate(
+      { subagentResume: { childId: 'child_resume', expectedResumeCount: 1 } },
+      {
+        action: 'start', workflowId: 'ppt_workflow', projectDir: '.kun/ppt/ppt_workflow',
+        parentThreadId: 'thread_parent', previewMode: 'image-first', sourceReadRequired: true
+      },
+      [],
+      'turn_resume',
+      undefined
+    )
+
+    expect(gate.requiredToolName).toBe('delegate_task')
+    expect(gate.subagentResumeInstruction).toContain('child_resume')
+  })
+})
+
+describe('pptSourceReadToolGate', () => {
+  const scope = {
+    action: 'start' as const,
+    workflowId: 'ppt_workflow',
+    projectDir: '.kun/ppt/ppt_workflow',
+    parentThreadId: 'thread_parent',
+    previewMode: 'image-first' as const,
+    sourceReadRequired: true
+  }
+
+  it('hard-requires reading the Work Markdown before presentation planning', () => {
+    const gate = pptSourceReadToolGate(scope, [], 'turn_ppt')
+
+    expect(gate.requiredToolName).toBe('read')
+    expect(gate.instruction).toContain('Markdown source')
+  })
+
+  it('releases the gate once the read call has a result', () => {
+    const result = makeToolResultItem({
+      id: 'result_source', threadId: 'thread_child', turnId: 'turn_ppt',
+      callId: 'call_source', toolName: 'read', output: '# Source', isError: false
+    })
+
+    expect(pptSourceReadToolGate(scope, [result], 'turn_ppt')).toEqual({})
   })
 })

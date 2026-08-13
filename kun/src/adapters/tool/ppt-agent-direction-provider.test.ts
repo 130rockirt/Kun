@@ -218,6 +218,34 @@ describe('ppt_agent visual direction lifecycle', () => {
     })
   })
 
+  it('keeps the child failure detail alongside a missing visual direction bundle', async () => {
+    const failedRuntime = {
+      enabled: () => true,
+      runChild: async (input: Record<string, unknown>) => ({
+        id: childId,
+        parentTurnId: input.parentTurnId,
+        status: 'failed',
+        summary: '',
+        error: 'image provider request timed out',
+        usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 }
+      })
+    } as unknown as DelegationRuntime
+    const ppt = buildPptAgentToolProvider(failedRuntime, () => ({
+      enabled: true, imageFirst: true, imageGenAvailable: true
+    }), sourceReader({ workflowId: () => '' }))[0].tools[0]
+
+    const result = await ppt.execute({ title: 'Review deck' }, {
+      ...baseContext,
+      agentSurface: 'code'
+    })
+
+    expect(result).toMatchObject({
+      isError: true,
+      output: { error: expect.stringContaining('PPT child completed without the required visual direction bundle') }
+    })
+    expect((result.output as { error: string }).error).toContain('image provider request timed out')
+  })
+
   it('validates one selected card, strips it from child source, and resumes into slide review', async () => {
     const fake = fakeRuntime()
     let activeWorkflow = ''

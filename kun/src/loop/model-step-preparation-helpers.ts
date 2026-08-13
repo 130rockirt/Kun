@@ -1,5 +1,6 @@
 import type { ActingTurnModelRoute, Turn } from '../contracts/turns.js'
 import type { TurnItem } from '../contracts/items.js'
+import type { PptWorkflowScope } from '../ports/tool-host.js'
 import type {
   KunTurnContextAuthority,
   KunTurnContextBlock
@@ -49,6 +50,47 @@ export function subagentResumeToolGate(
       'Call delegate_task as the first action with resumeChildId set to that exact id, ' +
       `expectedResumeCount set to ${request.expectedResumeCount}, and a concise continuation prompt. ` +
       'Do not create a new child and do not call another tool first.'
+  }
+}
+
+/**
+ * A Work presentation has an explicit Markdown source. Make the first child
+ * round read it instead of allowing the model to spend a full round reasoning
+ * about a path it never opened. The ordinary `read` tool remains available
+ * after this one host-enforced source inspection.
+ */
+export function pptSourceReadToolGate(
+  scope: PptWorkflowScope | undefined,
+  items: readonly TurnItem[],
+  turnId: string
+): { requiredToolName?: 'read'; instruction?: string } {
+  if (
+    !scope?.sourceReadRequired ||
+    scope.action !== 'start' ||
+    hasToolResult(items, turnId, 'read')
+  ) return {}
+  return {
+    requiredToolName: 'read',
+    instruction: 'This Work PPT request has a declared Markdown source. Call `read` on that source file first. Do not plan slides, generate images, or answer in prose before reading it.'
+  }
+}
+
+export function requiredWorkflowToolGate(
+  turn: Pick<Turn, 'subagentResume'>,
+  scope: PptWorkflowScope | undefined,
+  items: readonly TurnItem[],
+  turnId: string,
+  svgValidationToolName: string | undefined
+): { requiredToolName?: string; subagentResumeInstruction?: string } {
+  const subagentResumeGate = subagentResumeToolGate(turn, items, turnId)
+  const pptSourceReadGate = pptSourceReadToolGate(scope, items, turnId)
+  return {
+    requiredToolName: subagentResumeGate.requiredToolName ??
+      pptSourceReadGate.requiredToolName ??
+      svgValidationToolName,
+    ...(subagentResumeGate.instruction
+      ? { subagentResumeInstruction: subagentResumeGate.instruction }
+      : {})
   }
 }
 

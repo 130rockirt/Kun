@@ -45,6 +45,7 @@ import { readWorkbenchComposerFileContextEntries } from './workbench-composer-fi
 import { mirrorWorkbenchClawCommand } from './workbench-claw-message-mirror'
 import { restoreWorkbenchWritePrompt } from './workbench-write-prompt-state'
 import { activeWriteResourceReference } from './workbench-write-resource-context'
+import { workbenchWriteSourceReference } from './workbench-write-source-reference'
 export type { WorkbenchComposerSubmitController } from './workbench-composer-submit-types'
 import {
   listClawComposerModelOptions,
@@ -154,14 +155,14 @@ export function useWorkbenchComposerSubmitController({
       setError(t('writeWhiteboardAssistantPreparing'))
       return
     }
-    const activePresentationView = selectFocusedPresentationView(writeState)
-    const writePresentationView = activePresentationView ? { ...activePresentationView } : null
+    const writePresentationView = selectFocusedPresentationView(writeState)
     const writeWorkspaceRoot = writeState.workspaceRoot || workspaceRoot
     const writeDocumentContext = captureWriteDocumentContext({
       ...writeState,
       workspaceRoot: writeWorkspaceRoot
     })
     const writeActiveFilePath = writeState.activeFilePath
+    const activeWriteFileReference = workbenchWriteSourceReference(writeWorkspaceRoot, writeActiveFilePath)
     const writeActiveDocument = writeActiveFilePath
       ? writeState.documentsByPath[writeDocumentKey(writeActiveFilePath)]
       : undefined
@@ -365,6 +366,7 @@ export function useWorkbenchComposerSubmitController({
           ...(attachmentIds.length ? { attachmentIds } : {}),
           ...(publicAttachments.length ? { attachments: publicAttachments } : {}),
           ...(composerContexts.length ? { composerContexts } : {}),
+          ...(activeWriteFileReference ? { fileReferences: [activeWriteFileReference] } : {}),
           ...(activeWhiteboard ? { guiDesignCanvas: true } : {}),
           ...(agentPersona ? { persona: agentPersona } : {}),
           writeContext: {

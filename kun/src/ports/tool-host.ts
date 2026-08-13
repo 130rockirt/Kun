@@ -117,6 +117,8 @@ export type PptWorkflowScope = Readonly<{
   projectDir: string
   parentThreadId: string
   previewMode: 'image-first' | 'editable'
+  /** Work-originated source must be read before the child plans the deck. */
+  sourceReadRequired?: boolean
   directionGate?: Readonly<{
     required: boolean
     reason: 'existing-presentation' | 'explicit-skip' | 'design-reference' | 'complete-visual-system' | 'underspecified-new-deck'
