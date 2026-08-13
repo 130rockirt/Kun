@@ -309,7 +309,7 @@ export function registerThreadRoutes(
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
     if (!runtime.canvasReceipts) return ERRORS.unavailable('canvas receipt registry is not available')
     return receiveCanvasReceipt({
-      receiptKey: ctx.params.id,
+      threadId: ctx.params.id,
       request,
       receipts: runtime.canvasReceipts
     })
