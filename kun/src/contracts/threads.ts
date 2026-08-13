@@ -415,6 +415,8 @@ export const ThreadSummarySchema = ThreadSchema.pick({
   relation: true,
   parentThreadId: true,
   planBuildRunId: true,
+  planBuildAdmissionFingerprint: true,
+  planBuildAdmissionCapabilityHash: true,
   planBuildAdmissionFrozen: true,
   forkedFromThreadId: true,
   forkedFromTitle: true,

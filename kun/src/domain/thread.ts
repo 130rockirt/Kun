@@ -187,6 +187,12 @@ export function toThreadSummary(
     relation: thread.relation ?? 'primary',
     ...(thread.parentThreadId ? { parentThreadId: thread.parentThreadId } : {}),
     ...(thread.planBuildRunId ? { planBuildRunId: thread.planBuildRunId } : {}),
+    ...(thread.planBuildAdmissionFingerprint
+      ? { planBuildAdmissionFingerprint: thread.planBuildAdmissionFingerprint }
+      : {}),
+    ...(thread.planBuildAdmissionCapabilityHash
+      ? { planBuildAdmissionCapabilityHash: thread.planBuildAdmissionCapabilityHash }
+      : {}),
     ...(thread.planBuildAdmissionFrozen !== undefined
       ? { planBuildAdmissionFrozen: thread.planBuildAdmissionFrozen }
       : {}),

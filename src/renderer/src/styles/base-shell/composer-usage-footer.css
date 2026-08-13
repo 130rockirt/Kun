@@ -74,6 +74,51 @@
   background: var(--ds-accent);
 }
 
+.ds-composer-usage-cache-value {
+  display: inline-grid;
+  min-width: 4.5rem;
+  overflow: hidden;
+  line-height: 1.25rem;
+  vertical-align: bottom;
+}
+
+.ds-composer-usage-cache-value-in,
+.ds-composer-usage-cache-value-out {
+  grid-area: 1 / 1;
+  white-space: nowrap;
+}
+
+.ds-composer-usage-cache-value:has(.ds-composer-usage-cache-value-out)
+  .ds-composer-usage-cache-value-in {
+  animation: ds-composer-cache-value-in 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.ds-composer-usage-cache-value-out {
+  animation: ds-composer-cache-value-out 180ms cubic-bezier(0.4, 0, 1, 1) both;
+}
+
+@keyframes ds-composer-cache-value-in {
+  from {
+    opacity: 0;
+    transform: translateY(0.35rem);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes ds-composer-cache-value-out {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-0.25rem);
+  }
+}
+
 .ds-composer-footer-hint {
   flex: 0 1 auto;
   min-width: 0;
@@ -85,6 +130,13 @@
   text-align: right;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ds-composer-usage-cache-value-in,
+  .ds-composer-usage-cache-value-out {
+    animation: none !important;
+  }
 }
 
 @container (max-width: 760px) {

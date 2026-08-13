@@ -39,6 +39,12 @@ const extensionMetadata = {
   }
 }
 
+const planBuildAdmissionMetadata = {
+  planBuildRunId: 'run_plan_1',
+  planBuildAdmissionFingerprint: 'a'.repeat(64),
+  planBuildAdmissionCapabilityHash: 'b'.repeat(64)
+}
+
 describe('extension thread metadata', () => {
   it('survives the contract and public summary projection', () => {
     const thread = createThreadRecord({
@@ -69,5 +75,23 @@ describe('extension thread metadata', () => {
     )
 
     expect(summaryFromRow(row)).toMatchObject(extensionMetadata)
+  })
+
+  it('keeps a plan-build admission binding in public and indexed summaries', () => {
+    const thread = createThreadRecord({
+      id: 'thr_plan_admission',
+      title: 'Plan executor',
+      workspace: '/workspace',
+      model: 'deepseek-chat',
+      createdAt: '2026-07-11T00:00:00.000Z',
+      ...planBuildAdmissionMetadata
+    })
+    const row = rowFromIndexRecord(
+      { thread, messageCount: 0, eventSeqHighWater: 0, preview: '' },
+      { metadataPath: 'thread.json', messagesPath: 'messages.jsonl', eventsPath: 'events.jsonl' }
+    )
+
+    expect(toThreadSummary(thread)).toMatchObject(planBuildAdmissionMetadata)
+    expect(summaryFromRow(row)).toMatchObject(planBuildAdmissionMetadata)
   })
 })

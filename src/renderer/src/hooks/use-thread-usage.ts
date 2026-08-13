@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { parseUsageResponse } from './usage-response'
 
 export type ThreadUsageSummary = {
@@ -28,6 +28,22 @@ export type ThreadUsageState = {
   usage: ThreadUsageSummary | null
   loading: boolean
   loaded: boolean
+}
+
+export function retainPendingThreadUsage(
+  previous: ThreadUsageSummary | null,
+  next: ThreadUsageSummary | null
+): ThreadUsageSummary | null {
+  if (!next) return previous
+  if (next.lastTurnCacheHitRate != null || previous?.lastTurnCacheHitRate == null) return next
+  return {
+    ...next,
+    lastTurnCacheHitRate: previous.lastTurnCacheHitRate,
+    lastTurnCacheableHitRate: previous.lastTurnCacheableHitRate,
+    lastTurnTotalInputHitRate: previous.lastTurnTotalInputHitRate,
+    cacheMissReasons: previous.cacheMissReasons,
+    cacheSuggestions: previous.cacheSuggestions
+  }
 }
 
 function usageNumber(value: unknown): number {
@@ -218,6 +234,7 @@ export function useThreadUsageState(
   enabled: boolean,
   refreshKey: unknown
 ): ThreadUsageState {
+  const activeThreadRef = useRef<string | null>(null)
   const [state, setState] = useState<ThreadUsageState>({
     usage: null,
     loading: false,
@@ -226,17 +243,30 @@ export function useThreadUsageState(
 
   useEffect(() => {
     let cancelled = false
+    const nextThreadId = threadId ?? null
+    const threadChanged = activeThreadRef.current !== nextThreadId
+    activeThreadRef.current = nextThreadId
     if (!threadId || !enabled) {
       setState({ usage: null, loading: false, loaded: false })
       return
     }
-    setState((current) => ({ ...current, loading: true }))
+    setState((current) => threadChanged
+      ? { usage: null, loading: true, loaded: false }
+      : { ...current, loading: true })
     void loadThreadUsage(threadId)
       .then((usage) => {
-        if (!cancelled) setState({ usage, loading: false, loaded: true })
+        if (!cancelled) {
+          setState((current) => ({
+            usage: retainPendingThreadUsage(current.usage, usage),
+            loading: false,
+            loaded: true
+          }))
+        }
       })
       .catch(() => {
-        if (!cancelled) setState({ usage: null, loading: false, loaded: true })
+        if (!cancelled) {
+          setState((current) => ({ ...current, loading: false, loaded: true }))
+        }
       })
     return () => {
       cancelled = true

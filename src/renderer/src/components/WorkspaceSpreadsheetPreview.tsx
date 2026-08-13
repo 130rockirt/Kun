@@ -1,5 +1,5 @@
 import { ChevronLeft, ChevronRight } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
 import type { WorkBook } from 'xlsx'
 import type { WorkspaceOfficePreviewSuccess, WorkspaceOfficeSelection } from '@shared/office-document'
 import { WorkspaceOfficePreviewToolbar } from './WorkspaceOfficePreviewToolbar'
@@ -44,6 +44,7 @@ export function WorkspaceSpreadsheetPreview({
   onSelectionChange?: (selection: WorkspaceOfficeSelection) => void
 }): ReactElement {
   const draggingRef = useRef(false)
+  const tableRef = useRef<HTMLTableElement | null>(null)
   const [parsed, setParsed] = useState<ParsedWorkbook | null>(null)
   const [sheetIndex, setSheetIndex] = useState(0)
   const [rowStart, setRowStart] = useState(0)
@@ -98,7 +99,7 @@ export function WorkspaceSpreadsheetPreview({
     [selectionEnd, selectionStart]
   )
 
-  const clearSelection = (): void => {
+  const clearSelection = useCallback((): void => {
     draggingRef.current = false
     setSelectionStart(null)
     setSelectionEnd(null)
@@ -111,7 +112,27 @@ export function WorkspaceSpreadsheetPreview({
         charCount: 0
       })
     }
-  }
+  }, [onSelectionChange, result.sourceFormat])
+
+  const selectionActive = selectionStart !== null && selectionEnd !== null
+
+  // Dismiss the selection (and the floating writing-assistant menu it anchors)
+  // when the pointer lands outside the table and outside that menu. The menu
+  // opts out of this with `data-selection-ignore` so its buttons keep working.
+  useEffect(() => {
+    if (!selectionActive) return
+    const handlePointerDown = (event: PointerEvent): void => {
+      const target = event.target as Element | null
+      if (!target) return
+      if (typeof target.closest === 'function' && target.closest('[data-selection-ignore="true"]')) {
+        return
+      }
+      if (tableRef.current?.contains(target)) return
+      clearSelection()
+    }
+    window.addEventListener('pointerdown', handlePointerDown, true)
+    return () => window.removeEventListener('pointerdown', handlePointerDown, true)
+  }, [selectionActive, clearSelection])
 
   useEffect(() => {
     const finish = (): void => { draggingRef.current = false }
@@ -157,8 +178,7 @@ export function WorkspaceSpreadsheetPreview({
   useEffect(() => {
     clearSelection()
     // Clear selection whenever the source or rendered worksheet window changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [result.sourceSha256, sheetIndex, rowStart, columnStart])
+  }, [clearSelection, result.sourceSha256, sheetIndex, rowStart, columnStart])
 
   const selectSheet = (nextSheetIndex: number): void => {
     if (!parsed) return
@@ -237,7 +257,7 @@ export function WorkspaceSpreadsheetPreview({
       <div className="min-h-0 flex-1 overflow-auto p-4">
         {tableWindow ? (
           <div className="origin-top-left" style={{ width: `${100 / zoom}%`, transform: `scale(${zoom})` }}>
-            <table className="border-collapse bg-white text-[11px] text-slate-900 shadow-sm">
+            <table ref={tableRef} className="border-collapse bg-white text-[11px] text-slate-900 shadow-sm">
               <thead>
                 <tr>
                   <th className="sticky left-0 top-0 z-20 min-w-12 border border-slate-300 bg-slate-100 px-2 py-1" />

@@ -50,6 +50,7 @@ export function rowFromIndexRecord(record: ThreadIndexRecord, paths: {
     goal_json: thread.goal ? JSON.stringify(thread.goal) : null,
     todos_json: thread.todos ? JSON.stringify(thread.todos) : null,
     extension_metadata_json: thread.ownerExtensionId || thread.planBuildRunId
+      || thread.planBuildAdmissionFingerprint || thread.planBuildAdmissionCapabilityHash
       || thread.planBuildAdmissionFrozen !== undefined ? JSON.stringify({
       ownerExtensionId: thread.ownerExtensionId,
       ownerExtensionVersion: thread.ownerExtensionVersion,
@@ -59,6 +60,8 @@ export function rowFromIndexRecord(record: ThreadIndexRecord, paths: {
       extensionBudget: thread.extensionBudget,
       toolCatalogEpoch: thread.toolCatalogEpoch,
       planBuildRunId: thread.planBuildRunId,
+      planBuildAdmissionFingerprint: thread.planBuildAdmissionFingerprint,
+      planBuildAdmissionCapabilityHash: thread.planBuildAdmissionCapabilityHash,
       planBuildAdmissionFrozen: thread.planBuildAdmissionFrozen
     }) : null,
     created_at: thread.createdAt, updated_at: thread.updatedAt,
@@ -96,6 +99,7 @@ export function summaryFromRow(row: ThreadRow): ThreadSummary {
 type ExtensionThreadMetadata = Pick<ThreadRecord,
   'ownerExtensionId' | 'ownerExtensionVersion' | 'accountId' | 'extensionVisibility'
   | 'extensionProfile' | 'extensionBudget' | 'toolCatalogEpoch' | 'planBuildRunId'
+  | 'planBuildAdmissionFingerprint' | 'planBuildAdmissionCapabilityHash'
   | 'planBuildAdmissionFrozen'>
 
 export function filterThreadSummaries(summaries: ThreadSummary[], options: ThreadStoreListOptions): ThreadSummary[] {

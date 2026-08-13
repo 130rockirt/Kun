@@ -1,5 +1,49 @@
-import type { ReactElement } from 'react'
+import { useEffect, useState, type ReactElement } from 'react'
 import type { FloatingComposerRenderContext } from './floating-composer-view-context'
+
+type AnimatedCacheValueState = {
+  current: string
+  previous: string | null
+  revision: number
+}
+
+function AnimatedCacheValue({ value }: { value: string }): ReactElement {
+  const [state, setState] = useState<AnimatedCacheValueState>({
+    current: value,
+    previous: null,
+    revision: 0
+  })
+
+  useEffect(() => {
+    setState((current) => current.current === value
+      ? current
+      : { current: value, previous: current.current, revision: current.revision + 1 })
+  }, [value])
+
+  useEffect(() => {
+    if (state.previous == null) return
+    const revision = state.revision
+    const timer = window.setTimeout(() => {
+      setState((current) => current.revision === revision
+        ? { ...current, previous: null }
+        : current)
+    }, 220)
+    return () => window.clearTimeout(timer)
+  }, [state.previous, state.revision])
+
+  return (
+    <span className="ds-composer-usage-cache-value" aria-live="polite" aria-atomic="true">
+      {state.previous != null ? (
+        <span className="ds-composer-usage-cache-value-out" aria-hidden="true">
+          {state.previous}
+        </span>
+      ) : null}
+      <span key={state.revision} className="ds-composer-usage-cache-value-in">
+        {state.current}
+      </span>
+    </span>
+  )
+}
 
 export function FloatingComposerFooterView({
   context
@@ -55,9 +99,11 @@ export function FloatingComposerFooterView({
                 {latestCacheHitRate != null ? (
                   <span className="ds-composer-usage-metric ds-composer-usage-cache shrink-0 tabular-nums">
                     <span className="ds-composer-usage-cache-indicator" aria-hidden="true" />
-                    {t('sessionUsageFooterCache', {
-                      cache: formatPercent(latestCacheHitRate)
-                    })}
+                    <AnimatedCacheValue
+                      value={t('sessionUsageFooterCache', {
+                        cache: formatPercent(latestCacheHitRate)
+                      })}
+                    />
                   </span>
                 ) : null}
                 <span className="ds-composer-usage-metric ds-composer-usage-turns shrink-0 tabular-nums">

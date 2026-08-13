@@ -1,11 +1,38 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cumulativeCacheHitRate, formatCost, loadThreadUsage, primaryCacheHitRate } from './use-thread-usage'
+import {
+  cumulativeCacheHitRate,
+  formatCost,
+  loadThreadUsage,
+  primaryCacheHitRate,
+  retainPendingThreadUsage,
+  type ThreadUsageSummary
+} from './use-thread-usage'
 
 type RuntimeRequest = (path: string, method?: string) => Promise<{ ok: boolean; status: number; body: string }>
 
 function threadUsagePath(threadId: string): string {
   const params = new URLSearchParams({ group_by: 'thread', thread_id: threadId })
   return `/v1/usage?${params.toString()}`
+}
+
+function usageSummary(overrides: Partial<ThreadUsageSummary> = {}): ThreadUsageSummary {
+  return {
+    inputTokens: 100,
+    outputTokens: 20,
+    reasoningTokens: 0,
+    cachedTokens: 80,
+    cacheMissTokens: 20,
+    cacheHitRate: 0.8,
+    lastTurnCacheHitRate: 0.8,
+    totalTokens: 120,
+    costUsd: null,
+    costCny: null,
+    tokenEconomySavingsTokens: 0,
+    turns: 1,
+    avgTtftMs: null,
+    avgTokensPerSecond: null,
+    ...overrides
+  }
 }
 
 function setRuntimeRequest(runtimeRequest: RuntimeRequest): void {
@@ -39,6 +66,32 @@ describe('thread usage formatting', () => {
     expect(primaryCacheHitRate({ cacheHitRate: 0.4, lastTurnCacheHitRate: 0 })).toBeNull()
     expect(primaryCacheHitRate({ cacheHitRate: 0.4, lastTurnCacheHitRate: null })).toBeNull()
     expect(primaryCacheHitRate({ cacheHitRate: null, lastTurnCacheHitRate: null })).toBeNull()
+  })
+
+  it('retains the last confirmed cache result while refreshed telemetry is pending', () => {
+    const previous = usageSummary({
+      lastTurnCacheHitRate: 0.95,
+      lastTurnCacheableHitRate: 0.95,
+      cacheMissReasons: ['cold_request']
+    })
+    const pending = usageSummary({
+      inputTokens: 180,
+      lastTurnCacheHitRate: null,
+      lastTurnCacheableHitRate: null,
+      cacheMissReasons: []
+    })
+
+    expect(retainPendingThreadUsage(previous, pending)).toMatchObject({
+      inputTokens: 180,
+      lastTurnCacheHitRate: 0.95,
+      lastTurnCacheableHitRate: 0.95,
+      cacheMissReasons: ['cold_request']
+    })
+    expect(retainPendingThreadUsage(previous, usageSummary({ lastTurnCacheHitRate: 0.72 })))
+      .toMatchObject({ lastTurnCacheHitRate: 0.72 })
+    expect(retainPendingThreadUsage(previous, usageSummary({ lastTurnCacheHitRate: 0 })))
+      .toMatchObject({ lastTurnCacheHitRate: 0 })
+    expect(retainPendingThreadUsage(previous, null)).toBe(previous)
   })
 
   it('derives the cumulative cache rate from tokens to match the overall usage panel (#654)', () => {

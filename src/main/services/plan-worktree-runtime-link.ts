@@ -68,8 +68,8 @@ export function createPlanWorktreeRuntimeLinkResolver(runtimeRequest: RuntimeReq
         )
       }
       if (candidates.length === 0) return null
-      // Thread summaries intentionally omit the host admission binding; the
-      // detailed projection below proves it before anything is attached.
+      // Older index rows can omit the admission binding; the detailed
+      // projection below proves it before anything is attached.
       assertIdentity(record, candidates[0]!, false)
       threadId = candidates[0]!.id
     }
