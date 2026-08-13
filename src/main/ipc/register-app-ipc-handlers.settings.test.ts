@@ -131,6 +131,7 @@ describe('registerAppIpcHandlers settings and approvals', () => {
       { providerId }
     )).resolves.toEqual({ providerId, credential: 'provider-secret-0' })
     expect(withRegistryCredentials).toHaveBeenCalledOnce()
+    expect(withRegistryCredentials).toHaveBeenCalledWith(stored, [providerId])
   })
 
   it('rejects untrusted provider credential reveal before loading protected settings', async () => {

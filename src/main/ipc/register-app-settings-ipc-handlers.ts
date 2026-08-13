@@ -202,7 +202,7 @@ export function registerAppSettingsIpcHandlers(options: RegisterAppIpcHandlersOp
       if (!stored.provider.providers.some((provider) => provider.id === providerId)) {
         throw new Error(`Provider profile "${providerId}" is unavailable`)
       }
-      const projected = await withRegistryCredentials(stored)
+      const projected = await withRegistryCredentials(stored, [providerId])
       const credential = projected.provider.providers
         .find((provider) => provider.id === providerId)
         ?.apiKey.trim() ?? ''

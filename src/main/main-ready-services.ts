@@ -115,7 +115,10 @@ import {
 export interface MainServices {
   initial: AppSettingsV1
   serviceManager: Awaited<ReturnType<typeof ensureKunServiceManager>>
-  withRegistryCredentials: (settings: AppSettingsV1) => Promise<AppSettingsV1>
+  withRegistryCredentials: (
+    settings: AppSettingsV1,
+    providerIds?: readonly string[]
+  ) => Promise<AppSettingsV1>
   browserUseManager: ReturnType<typeof configureBrowserUseHost>
   extensionDescriptors: ExtensionDescriptorResolver
   workspacePreviewProtocols: WorkspacePreviewProtocolRegistry
@@ -214,8 +217,11 @@ export async function initializeMainServices(): Promise<MainServices | null> {
     const credentialMigration = mainState.canonicalRuntimeMigration?.status === 'blocked'
       ? undefined
       : new LegacyProviderSettingsMigrationCoordinator()
-    const withRegistryCredentials = (settings: AppSettingsV1): Promise<AppSettingsV1> =>
-      credentialMigration?.withRegistryCredentials(settings) ?? Promise.resolve(settings)
+    const withRegistryCredentials = (
+      settings: AppSettingsV1,
+      providerIds?: readonly string[]
+    ): Promise<AppSettingsV1> =>
+      credentialMigration?.withRegistryCredentials(settings, providerIds) ?? Promise.resolve(settings)
     mainState.store = credentialMigration
       ? new JsonSettingsStore(productionSettingsUserDataPath, {
           credentialMigration,

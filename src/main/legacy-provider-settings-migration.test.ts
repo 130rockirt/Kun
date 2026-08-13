@@ -50,6 +50,52 @@ describe('LegacyProviderSettingsMigrationCoordinator', () => {
     expect(settings.provider.providers[0]?.apiKey).toBe('stale-settings-key')
   })
 
+  it('projects one requested provider without resolving unrelated credentials', async () => {
+    const defaults = await new JsonSettingsStore(
+      await mkdtemp(join(tmpdir(), 'kun-targeted-registry-projection-'))
+    ).load()
+    const defaultProvider = defaults.provider.providers[0]!
+    const targetProvider = {
+      ...defaultProvider,
+      id: 'opencode-go-2',
+      name: 'OpenCode Go 2',
+      apiKey: ''
+    }
+    const unrelatedProvider = {
+      ...defaultProvider,
+      id: 'grok-subscription',
+      name: 'Grok subscription',
+      apiKey: ''
+    }
+    const settings: AppSettingsV1 = {
+      ...defaults,
+      provider: {
+        ...defaults.provider,
+        providers: [defaultProvider, unrelatedProvider, targetProvider]
+      }
+    }
+    const resolve = vi.fn(async (providerId: string) => {
+      if (providerId === unrelatedProvider.id) {
+        throw new Error('unrelated OAuth refresh failed')
+      }
+      return {
+        authoritative: true,
+        apiKey: providerId === targetProvider.id ? 'target-provider-key' : ''
+      }
+    })
+
+    const projected = await projectRegistryCredentials(
+      settings,
+      resolve,
+      [targetProvider.id]
+    )
+
+    expect(projected.provider.providers.find((provider) => provider.id === targetProvider.id)?.apiKey)
+      .toBe('target-provider-key')
+    expect(resolve).toHaveBeenCalledTimes(1)
+    expect(resolve).toHaveBeenCalledWith(targetProvider.id)
+  })
+
   it('does not initialize protected stores in the canonical legacy directory', async () => {
     const runtimeFactory = vi.fn()
     const coordinator = new LegacyProviderSettingsMigrationCoordinator(runtimeFactory)

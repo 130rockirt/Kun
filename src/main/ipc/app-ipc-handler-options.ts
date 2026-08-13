@@ -33,7 +33,10 @@ export type ProtectedRuntimeRequestLease = Readonly<{
 
 export type RegisterAppIpcHandlersOptions = {
   store: JsonSettingsStore
-  withRegistryCredentials?: (settings: AppSettingsV1) => Promise<AppSettingsV1>
+  withRegistryCredentials?: (
+    settings: AppSettingsV1,
+    providerIds?: readonly string[]
+  ) => Promise<AppSettingsV1>
   getMainWindow: () => BrowserWindow | null
   applySettingsPatch: (partial: AppSettingsPatch) => Promise<AppSettingsV1>
   saveSettingsPatch: (partial: AppSettingsPatch) => Promise<AppSettingsV1>

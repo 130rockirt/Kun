@@ -166,23 +166,32 @@ export class LegacyProviderSettingsMigrationCoordinator {
    * Registry credentials never enter ordinary settings or bulk renderer IPC;
    * the trusted workbench may request one provider explicitly for UI reveal.
    */
-  async withRegistryCredentials(settings: AppSettingsV1): Promise<AppSettingsV1> {
+  async withRegistryCredentials(
+    settings: AppSettingsV1,
+    providerIds?: readonly string[]
+  ): Promise<AppSettingsV1> {
     const dataDir = resolveSettingsDataDir(settings)
     assertManagedKunDataDirIsCurrent(dataDir)
     const { resolveRegistryCredential } = await this.runtime(dataDir)
-    return projectRegistryCredentials(settings, resolveRegistryCredential)
+    return projectRegistryCredentials(settings, resolveRegistryCredential, providerIds)
   }
 }
 
 export async function projectRegistryCredentials(
   settings: AppSettingsV1,
-  resolve: (providerId: string) => Promise<{ authoritative: boolean; apiKey: string }>
+  resolve: (providerId: string) => Promise<{ authoritative: boolean; apiKey: string }>,
+  providerIds?: readonly string[]
 ): Promise<AppSettingsV1> {
   const providerSettings = getModelProviderSettings(settings)
   const selectedProviderId = getKunRuntimeSettings(settings).providerId
+  const requestedProviderIds = providerIds ? new Set(providerIds) : null
   let registrySelectedProvider = false
   const providers: ModelProviderProfileV1[] = []
   for (const provider of providerSettings.providers) {
+    if (requestedProviderIds && !requestedProviderIds.has(provider.id)) {
+      providers.push(provider)
+      continue
+    }
     const state = await resolve(provider.id)
     if (!state.authoritative) {
       providers.push(provider)
