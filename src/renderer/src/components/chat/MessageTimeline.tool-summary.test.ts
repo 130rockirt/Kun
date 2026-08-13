@@ -212,7 +212,7 @@ describe('MessageTimeline tool summaries', () => {
         }),
         t
       )
-    ).toBe('Explore agent Voice transcription flow')
+    ).toBe('Fast context Voice transcription flow')
   })
 
   it('does not repeat a raw summary that matches the generated tool label', () => {

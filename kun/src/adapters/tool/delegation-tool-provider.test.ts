@@ -361,7 +361,7 @@ describe('delegate_task observability output', () => {
       parentThreadId: 'thread_parent',
       parentTurnId: 'turn_parent',
       expectedResumeCount: 1,
-      expectedLaunchers: ['delegate_task', 'fast_context'],
+      expectedLaunchers: ['delegate_task'],
       requireResumable: true,
       prompt: expect.stringContaining('persisted child session')
     }))

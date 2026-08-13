@@ -158,7 +158,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
       'Computer control',
       'Browser',
       'Graph mode',
-      'Explore agent',
+      'Fast Context',
       'PPT agent'
     ])
     expect(laboratoryTabs.map((tab) => tab.props['aria-selected']))

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   defaultKunRuntimeSettings,
+  getKunRuntimeSettings,
   normalizeAppSettings,
   type AppSettingsV1
 } from '../shared/app-settings'
@@ -16,6 +17,7 @@ const harness = vi.hoisted(() => {
   const probeRuntimeApi = vi.fn(async () => ({ ok: true as const }))
   const noteRuntimeHealthy = vi.fn()
   const waitForKunStartupSettled = vi.fn(async () => undefined)
+  const killStaleKunOnPort = vi.fn(async () => false)
   const mainState = {
     assertCanonicalRuntimeMigrationReady: vi.fn()
   }
@@ -30,6 +32,7 @@ const harness = vi.hoisted(() => {
   return {
     ensureReplacementRunning,
     ensureRunning,
+    killStaleKunOnPort,
     mainState,
     noteRuntimeHealthy,
     probeRuntimeApi,
@@ -58,6 +61,9 @@ vi.mock('./kun-process', () => ({
   isKunChildRunning: () => false,
   waitForKunStartupSettled: harness.waitForKunStartupSettled
 }))
+vi.mock('./kun-process-ports', () => ({
+  killStaleKunOnPort: harness.killStaleKunOnPort
+}))
 vi.mock('./managed-runtime-startup-policy', () => ({
   managedKunHostCanAutoStart: (settings: AppSettingsV1) => settings.agents.kun.autoStart
 }))
@@ -76,6 +82,7 @@ vi.mock('./main-runtime-health', () => ({
 }))
 
 import {
+  ensureKunServeFreshOnStartup,
   reconcileBundledRuntimeAfterInstall,
   replaceKunServe
 } from './main-runtime-startup'
@@ -105,6 +112,8 @@ beforeEach(() => {
   harness.probeRuntimeApi.mockClear()
   harness.noteRuntimeHealthy.mockClear()
   harness.waitForKunStartupSettled.mockClear()
+  harness.killStaleKunOnPort.mockReset()
+  harness.killStaleKunOnPort.mockResolvedValue(false)
   harness.mainState.assertCanonicalRuntimeMigrationReady.mockClear()
   harness.runtimeSupervisor.restart.mockClear()
   harness.runtimeSupervisor.replace.mockClear()
@@ -138,5 +147,46 @@ describe('explicit Kun serve replacement', () => {
     expect(harness.stopSharedForReplacementAndWait).toHaveBeenCalledWith(current)
     expect(harness.ensureReplacementRunning).toHaveBeenCalledWith(current)
     expect(harness.ensureRunning).not.toHaveBeenCalled()
+  })
+})
+
+describe('startup Kun serve restart', () => {
+  it('replaces the shared serve on every GUI launch when automatic startup is enabled', async () => {
+    const current = settings()
+
+    const result = await ensureKunServeFreshOnStartup(current)
+
+    expect(result).toBe(current)
+    expect(harness.runtimeSupervisor.setManagedRuntimeExpected).toHaveBeenCalledWith(true)
+    expect(harness.killStaleKunOnPort).toHaveBeenCalledWith(getKunRuntimeSettings(current).port)
+    expect(harness.runtimeSupervisor.replace).toHaveBeenCalledOnce()
+    expect(harness.stopSharedForReplacementAndWait).toHaveBeenCalledWith(current)
+    expect(harness.ensureReplacementRunning).toHaveBeenCalledWith(current)
+    expect(harness.ensureRunning).not.toHaveBeenCalled()
+  })
+
+  it('reclaims the configured port from a stale serve before the replacement launch', async () => {
+    harness.killStaleKunOnPort.mockResolvedValue(true)
+    const current = settings()
+
+    await ensureKunServeFreshOnStartup(current)
+
+    expect(harness.killStaleKunOnPort).toHaveBeenCalledWith(getKunRuntimeSettings(current).port)
+    expect(harness.runtimeSupervisor.replace).toHaveBeenCalledOnce()
+  })
+
+  it('attaches without replacing when automatic startup is disabled', async () => {
+    const current = {
+      ...settings(),
+      agents: { kun: { ...settings().agents.kun, autoStart: false } }
+    }
+
+    const result = await ensureKunServeFreshOnStartup(current)
+
+    expect(result).toBe(current)
+    expect(harness.runtimeSupervisor.setManagedRuntimeExpected).not.toHaveBeenCalled()
+    expect(harness.killStaleKunOnPort).not.toHaveBeenCalled()
+    expect(harness.runtimeSupervisor.replace).not.toHaveBeenCalled()
+    expect(harness.stopSharedForReplacementAndWait).not.toHaveBeenCalled()
   })
 })

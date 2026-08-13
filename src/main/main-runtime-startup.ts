@@ -9,6 +9,7 @@ import {
   isKunChildRunning,
   waitForKunStartupSettled
 } from './kun-process'
+import { killStaleKunOnPort } from './kun-process-ports'
 import { managedKunHostCanAutoStart } from './managed-runtime-startup-policy'
 import { logWarn } from './logger'
 import {
@@ -138,6 +139,38 @@ export async function ensureKunRuntime(settings: AppSettingsV1): Promise<AppSett
   }
   noteRuntimeHealthy('ensure', launchSettings)
   return launchSettings
+}
+
+/**
+ * Startup restart policy: every GUI launch replaces the shared serve with a
+ * fresh process built from the current bundle before any client attaches.
+ * A serve left behind by a previous app run (older build, stale discovery,
+ * or legacy GUI-private process) must never serve the new version. Unlike
+ * the ordinary ensure path, this intentionally replaces an active turn — the
+ * GUI is the authoritative owner once the app is open.
+ *
+ * Automatic-startup disabled: attach-only, exactly like a plain ensure.
+ */
+export async function ensureKunServeFreshOnStartup(
+  settings: AppSettingsV1
+): Promise<AppSettingsV1> {
+  const requested = runtimeSupervisor.latestOr(settings)
+  if (!managedKunHostCanAutoStart(requested)) return requested
+  runtimeSupervisor.setManagedRuntimeExpected(true)
+  // A legacy GUI-private serve (or a manual `kun serve`) from a previous app
+  // run can still hold the configured port without shared discovery. Reclaim
+  // it before the replacement launch so the historical process cannot block
+  // or shadow the fresh runtime. Non-Kun listeners are never touched.
+  const runtime = getKunRuntimeSettings(requested)
+  const reclaimed = await killStaleKunOnPort(runtime.port)
+  if (reclaimed) {
+    logWarn(
+      'runtime-start',
+      `reclaimed configured port ${runtime.port} from a stale kun serve before startup`
+    )
+  }
+  await replaceKunServe(requested)
+  return requested
 }
 
 export async function restartRuntime(settings: AppSettingsV1): Promise<void> {

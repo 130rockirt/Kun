@@ -55,7 +55,7 @@ const labels: Record<string, string> = {
   labComposerPersonaTitle: 'Personas',
   labComposerPersonaEnabled: 'Enable composer personas',
   labComposerPersonaEnabledDesc: 'Composer persona description',
-  labExploreTitle: 'Explore agent',
+  labExploreTitle: 'Fast Context',
   labExploreDescription: 'Exploration tool description',
   labExploreEnabled: 'Enable fast_context',
   labExploreEnabledDesc: 'Enable description',

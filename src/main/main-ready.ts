@@ -23,6 +23,7 @@ import {
   runtimeSupervisor
 } from './main-runtime-health'
 import {
+  ensureKunServeFreshOnStartup,
   ensureRuntime,
   reconcileBundledRuntimeAfterInstall,
   restartRuntime
@@ -95,7 +96,7 @@ export function startMainApp(): void {
           initial,
           managedKunHostCanAutoStart(initial),
           {
-            ensure: ensureRuntime,
+            ensure: ensureKunServeFreshOnStartup,
             resolveExisting: (settings) => kunRuntimeAdapter.resolveConnection(settings)
           }
         ))
