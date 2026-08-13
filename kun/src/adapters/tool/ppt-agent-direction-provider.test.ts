@@ -258,7 +258,7 @@ describe('ppt_agent visual direction lifecycle', () => {
     const fake = fakeRuntime()
     let workflowId = ''
     const result = await tool(fake, sourceReader({ workflowId: () => workflowId }))
-      .execute({}, baseContext)
+      .execute({ title: 'Direction deck' }, baseContext)
     workflowId = (result.output as { workflowId: string }).workflowId
     expect(result).toMatchObject({
       isError: false,
@@ -319,7 +319,7 @@ describe('ppt_agent visual direction lifecycle', () => {
     fake.omitInitialDirection()
     let workflowId = ''
     const ppt = tool(fake, sourceReader({ workflowId: () => workflowId }))
-    const started = await ppt.execute({}, baseContext)
+    const started = await ppt.execute({ title: 'Review deck' }, baseContext)
     workflowId = (started.output as { workflowId: string }).workflowId
     expect(started).toMatchObject({
       isError: true,
@@ -355,7 +355,7 @@ describe('ppt_agent visual direction lifecycle', () => {
         : []
     })
     const ppt = tool(fake, reader)
-    const started = await ppt.execute({}, baseContext)
+    const started = await ppt.execute({ title: 'Review deck' }, baseContext)
     activeWorkflow = (started.output as { workflowId: string }).workflowId
     const selected = await ppt.execute({
       action: 'select_direction', childId, workflowId: activeWorkflow
@@ -388,7 +388,7 @@ describe('ppt_agent visual direction lifecycle', () => {
         : []
     })
     const ppt = tool(fake, reader)
-    const started = await ppt.execute({}, baseContext)
+    const started = await ppt.execute({ title: 'Review deck' }, baseContext)
     activeWorkflow = (started.output as { workflowId: string }).workflowId
     await expect(ppt.execute({
       action: 'revise_directions', childId, workflowId: activeWorkflow
@@ -413,7 +413,7 @@ describe('ppt_agent visual direction lifecycle', () => {
     const fake = fakeRuntime()
     let activeWorkflow = ''
     const ppt = tool(fake, sourceReader({ workflowId: () => activeWorkflow }))
-    const started = await ppt.execute({}, baseContext)
+    const started = await ppt.execute({ title: 'Review deck' }, baseContext)
     activeWorkflow = (started.output as { workflowId: string }).workflowId
     fake.failWithFreshRevision()
 
@@ -437,7 +437,7 @@ describe('ppt_agent visual direction lifecycle', () => {
         workflowId: () => activeWorkflow,
         prompt: (turnId) => turnId === 'turn_start' ? 'Create a new Kun launch presentation.' : prompt
       }))
-      const started = await ppt.execute({}, baseContext)
+      const started = await ppt.execute({ title: 'Review deck' }, baseContext)
       activeWorkflow = (started.output as { workflowId: string }).workflowId
       await expect(ppt.execute({
         action: 'select_direction', childId, workflowId: activeWorkflow
@@ -462,7 +462,7 @@ describe('ppt_agent visual direction lifecycle', () => {
         workflowId: () => activeWorkflow,
         prompt: (turnId) => turnId === 'turn_start' ? 'Create a new Kun launch presentation.' : prompt
       }))
-      const started = await ppt.execute({}, baseContext)
+      const started = await ppt.execute({ title: 'Review deck' }, baseContext)
       activeWorkflow = (started.output as { workflowId: string }).workflowId
       await expect(ppt.execute({
         action: 'select_direction', childId, workflowId: activeWorkflow
@@ -482,7 +482,7 @@ describe('ppt_agent visual direction lifecycle', () => {
         ? 'Create a new Kun launch presentation.'
         : '采用第 3 个方向，继续生成逐页预览。'
     }))
-    const started = await ppt.execute({}, baseContext)
+    const started = await ppt.execute({ title: 'Review deck' }, baseContext)
     activeWorkflow = (started.output as { workflowId: string }).workflowId
 
     await expect(ppt.execute({
@@ -510,7 +510,7 @@ describe('ppt_agent visual direction lifecycle', () => {
         ? { workflowId: activeWorkflow, childId, answer: '3. Direction 3' }
         : undefined
     }))
-    const started = await ppt.execute({}, baseContext)
+    const started = await ppt.execute({ title: 'Review deck' }, baseContext)
     activeWorkflow = (started.output as { workflowId: string }).workflowId
 
     await expect(ppt.execute({
@@ -541,7 +541,7 @@ describe('ppt_agent visual direction lifecycle', () => {
           ]
         : []
     }))
-    const started = await ppt.execute({}, baseContext)
+    const started = await ppt.execute({ title: 'Review deck' }, baseContext)
     activeWorkflow = (started.output as { workflowId: string }).workflowId
     await expect(ppt.execute({
       action: 'revise_directions', childId, workflowId: activeWorkflow
@@ -566,7 +566,7 @@ describe('ppt_agent visual direction lifecycle', () => {
             }]
           : []
       }))
-      const started = await ppt.execute({}, baseContext)
+      const started = await ppt.execute({ title: 'Review deck' }, baseContext)
       activeWorkflow = (started.output as { workflowId: string }).workflowId
       await expect(ppt.execute({
         action: 'select_direction', childId, workflowId: activeWorkflow

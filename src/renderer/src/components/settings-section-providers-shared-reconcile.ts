@@ -10,6 +10,9 @@ import {
   defaultModelRequestRetrySettings
 } from '@shared/app-settings'
 import {
+  modelProviderRequiresApiKey
+} from '@shared/app-settings-provider-core'
+import {
   type PendingSharedProviderCatalog,
   type PendingSharedProviderDeletion,
   type PendingSharedProviderName
@@ -542,7 +545,17 @@ export function projectSharedModelConnections(
       if (projectedIds.has(provider.id)) return false
       if (pendingDeletions.get(provider.id) != null) return false
       if (provider.id === DEFAULT_MODEL_PROVIDER_ID) return true
-      return pendingCatalogs.get(provider.id) != null
+      if (pendingCatalogs.get(provider.id) != null) return true
+      // Mirror the sync loop's skip conditions: key-requiring presets
+      // committed without a credential ("configure later"), and providers
+      // whose baseUrl is still empty, are never connected to the registry,
+      // so a registry projection must not drop them from AppSettings.
+      const baseUrlOptional =
+        provider.kind === 'agent-sdk' ||
+        provider.kind === 'antigravity-cli' ||
+        provider.kind === 'cursor-sdk'
+      return (modelProviderRequiresApiKey(provider) && !provider.apiKey.trim()) ||
+        (!baseUrlOptional && !provider.baseUrl.trim())
     })
     .map((provider) => {
       const pendingCatalog = pendingCatalogs.get(provider.id)

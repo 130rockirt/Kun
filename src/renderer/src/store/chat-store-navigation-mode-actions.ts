@@ -361,7 +361,7 @@ export function createNavigationModeActions(
     return get().createWriteThread(targetWorkspace, targetFilePath)
   },
 
-  createWriteThread: async (workspaceRoot, activeFilePath, title) => {
+  createWriteThread: async (workspaceRoot, activeFilePath, options = {}) => {
     const targetWorkspace = normalizeWorkspaceRoot(workspaceRoot) || (await readActiveWriteWorkspace(get().workspaceRoot))
     if (!targetWorkspace) {
       set({ error: i18n.t('common:workspaceRequiredToCreateThread') })
@@ -387,8 +387,11 @@ export function createNavigationModeActions(
         : undefined
       const thread = await p.createThread({
         workspace: targetWorkspace,
-        title: title?.trim() || WRITE_ASSISTANT_THREAD_TITLE,
-        titleAuto: true,
+        title: options.title?.trim() || WRITE_ASSISTANT_THREAD_TITLE,
+        // An explicit board title locks the session name so the backend titler
+        // cannot overwrite the user-visible whiteboard name; otherwise keep the
+        // provisional auto-title upgrade path for ordinary file threads.
+        titleAuto: options.title?.trim() ? (options.titleAuto ?? false) : true,
         mode: 'agent',
         agentSurface: 'write',
         ...(personaProfile?.providerId?.trim()

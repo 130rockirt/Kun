@@ -300,6 +300,66 @@ describe('shared model connection settings projection', () => {
     })
   })
 
+  it('retains a key-requiring preset committed without a credential', () => {
+    const current = defaultModelProviderSettings()
+    current.providers.push({
+      ...current.providers[0]!,
+      id: 'moonshot-cn',
+      name: 'Moonshot',
+      apiKey: '',
+      baseUrl: 'https://api.moonshot.cn/v1'
+    })
+
+    const projected = projectSharedModelConnections(current, {
+      schemaVersion: 1,
+      revision: 3,
+      providers: []
+    })
+
+    const retained = projected.provider.providers.find((provider) => provider.id === 'moonshot-cn')
+    expect(retained).toMatchObject({ apiKey: '', baseUrl: 'https://api.moonshot.cn/v1' })
+  })
+
+  it('retains a local provider whose required baseUrl is still empty', () => {
+    const current = defaultModelProviderSettings()
+    current.providers.push({
+      ...current.providers[0]!,
+      id: 'custom-provider-2',
+      name: 'Custom',
+      apiKey: '',
+      baseUrl: ''
+    })
+
+    const projected = projectSharedModelConnections(current, {
+      schemaVersion: 1,
+      revision: 4,
+      providers: []
+    })
+
+    expect(projected.provider.providers.some((provider) => provider.id === 'custom-provider-2'))
+      .toBe(true)
+  })
+
+  it('drops providers the sync loop can connect once they are configured elsewhere', () => {
+    const current = defaultModelProviderSettings()
+    current.providers.push({
+      ...current.providers[0]!,
+      id: 'moonshot-cn',
+      name: 'Moonshot',
+      apiKey: 'sk-live',
+      baseUrl: 'https://api.moonshot.cn/v1'
+    })
+
+    const projected = projectSharedModelConnections(current, {
+      schemaVersion: 1,
+      revision: 5,
+      providers: []
+    })
+
+    expect(projected.provider.providers.some((provider) => provider.id === 'moonshot-cn'))
+      .toBe(false)
+  })
+
   it('clears the GUI provider without emitting an invalid empty model', () => {
     const projected = projectSharedModelConnections(defaultModelProviderSettings(), {
       schemaVersion: 1,

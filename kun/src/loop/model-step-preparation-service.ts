@@ -471,7 +471,6 @@ export abstract class ModelStepPreparationService {
         : planningToolSpecs
     const promptCachePhase = resolvePromptCachePhase({
       svg: turn.guiDesignArtifact?.kind === 'svg',
-      design: turn.guiDesignMode === true || Boolean(turn.designProfile),
       graph: turn.orchestration === 'graph',
       graphActive: graphCreateSatisfied,
       plan: planTurnActive

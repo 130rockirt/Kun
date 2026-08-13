@@ -286,6 +286,7 @@ describe('workbench plan build orchestration', () => {
         [plan.id]: {
           initialized: true,
           recoveryChecked: true,
+          featureEnabled: true,
           useWorktree: true,
           building: false,
           preflight: {

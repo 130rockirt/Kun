@@ -63,7 +63,7 @@ describe('useWorkbenchWriteAssistantRuntime whiteboard binding', () => {
     await act(async () => renderer.unmount())
   })
 
-  it('creates and persists a missing board thread', async () => {
+  it('creates and persists a missing board thread with a locked title', async () => {
     const createWriteThread = vi.fn(async () => 'thread-new')
     const bindWhiteboardThread = vi.fn(async () => true)
     useWriteWorkspaceStore.setState({ bindWhiteboardThread })
@@ -73,11 +73,14 @@ describe('useWorkbenchWriteAssistantRuntime whiteboard binding', () => {
     const renderer = await mount()
 
     await vi.waitFor(() => expect(bindWhiteboardThread).toHaveBeenCalledWith('board-1', 'thread-new'))
-    expect(createWriteThread).toHaveBeenCalledWith('/work', undefined, 'Pitch')
+    expect(createWriteThread).toHaveBeenCalledWith('/work', undefined, {
+      title: 'Pitch',
+      titleAuto: false
+    })
     await act(async () => renderer.unmount())
   })
 
-  it('does not repeat a title write when SSE rebuilds the same thread projection', async () => {
+  it('never mirrors a generated session title back into the whiteboard registry', async () => {
     const renameWhiteboard = vi.fn(async () => true)
     useWriteWorkspaceStore.setState({ renameWhiteboard })
     const thread = {
@@ -89,63 +92,17 @@ describe('useWorkbenchWriteAssistantRuntime whiteboard binding', () => {
     })
     const renderer = await mount()
 
-    await vi.waitFor(() => expect(renameWhiteboard).toHaveBeenCalledOnce())
-    await act(async () => {
-      useChatStore.setState({ threads: [{ ...thread }] })
-      await Promise.resolve()
-    })
-
-    expect(renameWhiteboard).toHaveBeenCalledOnce()
-    await act(async () => renderer.unmount())
-  })
-
-  it('syncs a later generated title after the prior target was persisted', async () => {
-    const renameWhiteboard = vi.fn(async () => true)
-    useWriteWorkspaceStore.setState({ renameWhiteboard })
-    const thread = {
-      id: 'thread-board', title: 'FastAPI architecture', updatedAt: now,
-      model: 'deepseek-v4', mode: 'agent' as const, workspace: '/work', agentSurface: 'write' as const
-    }
-    useChatStore.setState({
-      route: 'write', runtimeConnection: 'ready', activeThreadId: 'thread-board', threads: [thread]
-    })
-    const renderer = await mount()
-
-    await vi.waitFor(() => expect(renameWhiteboard).toHaveBeenCalledWith(
-      'board-1',
-      'FastAPI architecture'
-    ))
     await act(async () => {
       useChatStore.setState({ threads: [{ ...thread, title: 'FastAPI deployment' }] })
       await Promise.resolve()
     })
-
-    await vi.waitFor(() => expect(renameWhiteboard).toHaveBeenLastCalledWith(
-      'board-1',
-      'FastAPI deployment'
-    ))
-    expect(renameWhiteboard).toHaveBeenCalledTimes(2)
-    await act(async () => renderer.unmount())
-  })
-
-  it('persists a generated session title as the whiteboard name', async () => {
-    const renameWhiteboard = vi.fn(async () => true)
-    useWriteWorkspaceStore.setState({ renameWhiteboard })
-    useChatStore.setState({
-      route: 'write',
-      runtimeConnection: 'ready',
-      activeThreadId: 'thread-board',
-      threads: [{
-        id: 'thread-board', title: 'FastAPI architecture', updatedAt: now,
-        model: 'deepseek-v4', mode: 'agent', workspace: '/work', agentSurface: 'write'
-      }]
+    await act(async () => {
+      useChatStore.setState({ threads: [{ ...thread, title: 'Yet another generated title' }] })
+      await Promise.resolve()
     })
-    const renderer = await mount()
 
-    await vi.waitFor(() => expect(renameWhiteboard).toHaveBeenCalledWith(
-      'board-1',
-      'FastAPI architecture'
-    ))
+    expect(renameWhiteboard).not.toHaveBeenCalled()
+    expect(useWriteWorkspaceStore.getState().whiteboards['board-1']?.title).toBe('Pitch')
     await act(async () => renderer.unmount())
   })
 })

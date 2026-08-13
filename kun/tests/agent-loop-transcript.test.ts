@@ -7,6 +7,7 @@ import { ContextCompactor } from '../src/loop/context-compactor.js'
 import { projectCompatMessages } from '../src/adapters/model/compat-message-projector.js'
 import type { ModelRequest, ModelStreamChunk } from '../src/ports/model-client.js'
 import { TOKEN_ECONOMY_INSTRUCTION } from '../src/loop/token-economy.js'
+import { modelRequestContextText } from '../src/loop/model-request-context.js'
 import { decideApproval } from '../src/server/routes/approvals.js'
 import { bootstrapThread, makeHarness } from './loop-test-harness.js'
 import {
@@ -176,6 +177,83 @@ describe('AgentLoop transcript characterization', () => {
     expect(secondContexts).toHaveLength(2)
     expect(secondContexts[1]?.kind === 'model_context' ? secondContexts[1].text : '')
       .not.toContain(TOKEN_ECONOMY_INSTRUCTION)
+  })
+
+  it('keeps the cache prefix stable when a GUI thread switches from Code to Design', async () => {
+    const model = new ScriptedCapturingModel([
+      [{ kind: 'assistant_text_delta', text: 'code done' }, { kind: 'completed', stopReason: 'stop' }],
+      [{ kind: 'assistant_text_delta', text: 'design done' }, { kind: 'completed', stopReason: 'stop' }]
+    ])
+    const codeTool = LocalToolHost.defineTool({
+      name: 'code_only',
+      description: 'Code-only workbench tool.',
+      inputSchema: { type: 'object', properties: {} },
+      policy: 'auto',
+      shouldAdvertise: (context) => context.agentSurface === 'code',
+      execute: async () => ({ output: { ok: true } })
+    })
+    const designTool = LocalToolHost.defineTool({
+      name: 'design_only',
+      description: 'Design-only workbench tool.',
+      inputSchema: { type: 'object', properties: {} },
+      policy: 'auto',
+      shouldAdvertise: (context) =>
+        context.agentSurface === 'design' && context.guiDesignMode === true,
+      execute: async () => ({ output: { ok: true } })
+    })
+    const harness = makeHarness(model, {
+      tools: [designTool, codeTool],
+      compactor: new ContextCompactor({ softThreshold: 100_000, hardThreshold: 120_000 })
+    })
+    await harness.threadStore.upsert(createThreadRecord({
+      id: harness.threadId, title: 'mode switch cache', workspace: '/tmp', model: 'fake'
+    }))
+    const codeTurn = await harness.turns.startTurn({
+      threadId: harness.threadId,
+      request: { prompt: 'implement it', clientSurface: 'gui', agentSurface: 'code' }
+    })
+    await expect(harness.loop.runTurn(harness.threadId, codeTurn.turnId)).resolves.toBe('completed')
+    const designDocumentTarget = {
+      documentId: 'doc_mode_switch',
+      boardArtifactId: 'board_mode_switch'
+    }
+    const designTurn = await harness.turns.startTurn({
+      threadId: harness.threadId,
+      request: {
+        prompt: 'now design it',
+        clientSurface: 'gui',
+        agentSurface: 'design',
+        guiDesignCanvas: true,
+        guiDesignMode: true,
+        designProfile: {
+          version: 1,
+          documentTarget: designDocumentTarget,
+          outputMedium: 'html',
+          target: 'web',
+          preset: 'none',
+          context: { tone: [] }
+        },
+        designDocumentTarget
+      }
+    })
+    await expect(harness.loop.runTurn(harness.threadId, designTurn.turnId)).resolves.toBe('completed')
+
+    const [codeRequest, designRequest] = model.requests
+    expect(codeRequest).toBeDefined()
+    expect(designRequest).toBeDefined()
+    if (!codeRequest || !designRequest) return
+    expect(codeRequest.tools.map((tool) => tool.name)).toEqual(['code_only', 'design_only'])
+    expect(designRequest.tools).toEqual(codeRequest.tools)
+    expect(designRequest.systemPrompt).toBe(codeRequest.systemPrompt)
+    expect(designRequest.prefix).toEqual(codeRequest.prefix)
+    expect(designRequest.promptCachePartition).toBe(codeRequest.promptCachePartition)
+    expect(designRequest.modeInstruction).toBeUndefined()
+    expect(modelRequestContextText(designRequest)).toContain('Kun Design mode')
+
+    const projectionOptions = { thinkingMode: false, supportsImages: false }
+    const codeMessages = projectCompatMessages(codeRequest, projectionOptions)
+    const designMessages = projectCompatMessages(designRequest, projectionOptions)
+    expect(designMessages.slice(0, codeMessages.length)).toEqual(codeMessages)
   })
 
   it('replays a tool round-trip with request history and execution order intact', async () => {

@@ -8,7 +8,7 @@ import type { PlanWorktreeRunRecord } from '@shared/plan-worktree'
 import { readThreadWorktreeRegistry } from '../lib/thread-worktree-registry'
 import { usePlanWorktreeStore } from '../plan/plan-worktree-store'
 import { PlanWorktreeLifecycle } from './plan/PlanWorktreeLifecycle'
-import { SettingsCard, SettingRow, Toggle } from './settings-controls'
+import { SettingsCard, SettingRow } from './settings-controls'
 
 type WorktreeDisplayRow = GitBranchWorktreeRow & {
   threadTitle: string
@@ -111,19 +111,6 @@ export function WorktreeSettingsSection({ ctx }: { ctx: Record<string, any> }): 
 
   return (
     <SettingsCard title={t('sectionWorktree')}>
-      <SettingRow
-        title={t('planWorktreeDefaultTitle')}
-        description={t('planWorktreeDefaultDesc')}
-        control={
-          <Toggle
-            checked={ctx.kun?.planExecution?.useWorktreeByDefault ?? false}
-            ariaLabel={t('planWorktreeDefaultTitle')}
-            onChange={(useWorktreeByDefault) => ctx.updateKun({
-              planExecution: { useWorktreeByDefault }
-            })}
-          />
-        }
-      />
       <SettingRow
         title={t('gitBranchPrefix')}
         description={t('gitBranchPrefixDesc')}

@@ -91,3 +91,43 @@ export function createToolDiscoveryContext(
         })
   }
 }
+
+/**
+ * Normal Code and Design turns share one model-visible workbench catalog so
+ * switching the next-turn intent does not invalidate the provider's cached
+ * prefix. Execution still uses the original turn context and therefore keeps
+ * every tool's `shouldAdvertise` predicate as an enforcement backstop.
+ *
+ * Plan, Graph, Work, and dedicated SVG turns retain their narrower catalogs
+ * because those are real capability phases rather than presentation modes.
+ */
+export function modelToolDiscoveryContexts(context: ToolHostContext): ToolHostContext[] {
+  const surface = context.agentSurface ?? 'code'
+  if (
+    context.clientSurface !== 'gui' ||
+    context.threadMode !== 'agent' ||
+    context.orchestration === 'graph' ||
+    context.guiPlan ||
+    context.guiDesignArtifact?.kind === 'svg' ||
+    (surface !== 'code' && surface !== 'design')
+  ) {
+    return [context]
+  }
+
+  const {
+    agentSurface: _agentSurface,
+    guiDesignArtifact: _guiDesignArtifact,
+    guiDesignCanvas: _guiDesignCanvas,
+    guiDesignMode: _guiDesignMode,
+    ...stableContext
+  } = context
+  return [
+    { ...stableContext, agentSurface: 'code', guiDesignCanvas: true },
+    {
+      ...stableContext,
+      agentSurface: 'design',
+      guiDesignCanvas: true,
+      guiDesignMode: true
+    }
+  ]
+}

@@ -20,6 +20,7 @@ import {
 } from '../../write/write-editor-layout'
 import { WriteEditorGroupContent } from './WriteEditorGroupContent'
 import { WriteEditorTabBar } from './WriteEditorTabBar'
+import { WorkWhiteboardTitleDialog } from './WorkWhiteboardTitleDialog'
 
 type Props = {
   workspaceName: string
@@ -122,6 +123,8 @@ export function WriteEditorGroups({
   })))
   const [quickOpenGroupId, setQuickOpenGroupId] = useState<'primary' | 'secondary' | null>(null)
   const [quickOpenQuery, setQuickOpenQuery] = useState('')
+  const [pendingWhiteboardGroupId, setPendingWhiteboardGroupId] = useState<'primary' | 'secondary' | null>(null)
+  const [creatingWhiteboard, setCreatingWhiteboard] = useState(false)
   const splitActive = isWriteEditorLayoutSplit(editorLayout)
   const quickOpenFiles = useMemo(() => {
     const byPath = new Map<string, string>()
@@ -153,6 +156,16 @@ export function WriteEditorGroups({
     setQuickOpenGroupId(null)
     setQuickOpenQuery('')
     void openFile(workspaceRoot, path, { groupId })
+  }
+
+  const submitWhiteboardTitle = (title: string): void => {
+    const groupId = pendingWhiteboardGroupId
+    if (!groupId) return
+    setCreatingWhiteboard(true)
+    void createWhiteboard(workspaceRoot, { title, groupId }).then((board) => {
+      setCreatingWhiteboard(false)
+      if (board) setPendingWhiteboardGroupId(null)
+    })
   }
 
   const beginResize = (event: import('react').PointerEvent<HTMLDivElement>): void => {
@@ -215,7 +228,7 @@ export function WriteEditorGroups({
               onClose={(nextPath) => void closeTab(group.id, nextPath)}
               onMove={moveTab}
               onCreateDraft={() => { focusEditorGroup(group.id); onCreateDraft() }}
-              onCreateWhiteboard={() => { void createWhiteboard(workspaceRoot, { groupId: group.id }) }}
+              onCreateWhiteboard={() => { focusEditorGroup(group.id); setPendingWhiteboardGroupId(group.id) }}
               onQuickOpen={() => quickOpen(group.id)}
               onSplit={(orientation) => splitEditorGroup(orientation, path ?? undefined)}
               onCloseGroup={() => closeEditorGroup(group.id)}
@@ -257,7 +270,7 @@ export function WriteEditorGroups({
                 void openFile(workspaceRoot, resolvedPath)
               }}
               onCreateDraft={onCreateDraft}
-              onCreateWhiteboard={() => { void createWhiteboard(workspaceRoot, { groupId: group.id }) }}
+              onCreateWhiteboard={() => { focusEditorGroup(group.id); setPendingWhiteboardGroupId(group.id) }}
               onPickWorkspace={onPickWorkspace}
               onRefreshWorkspace={() => void refreshWorkspace(workspaceRoot)}
               onContentChange={(content) => { if (path) setDocumentContent(path, content) }}
@@ -335,6 +348,15 @@ export function WriteEditorGroups({
             ))}
           </div>
         </div>
+      ) : null}
+      {pendingWhiteboardGroupId ? (
+        <WorkWhiteboardTitleDialog
+          submitting={creatingWhiteboard}
+          onSubmit={submitWhiteboardTitle}
+          onClose={() => {
+            if (!creatingWhiteboard) setPendingWhiteboardGroupId(null)
+          }}
+        />
       ) : null}
     </div>
   )

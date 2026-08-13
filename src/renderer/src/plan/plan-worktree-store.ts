@@ -24,6 +24,7 @@ export type PlanWorktreePreflightState =
 export type PlanWorktreePlanState = {
   initialized: boolean
   recoveryChecked: boolean
+  featureEnabled: boolean
   useWorktree: boolean
   branchPrefix?: string
   preflight: PlanWorktreePreflightState
@@ -35,7 +36,8 @@ export type PlanWorktreePlanState = {
 
 type PlanWorktreeUiState = {
   plans: Record<string, PlanWorktreePlanState>
-  initializePlan: (planId: string, useWorktree: boolean, branchPrefix?: string) => void
+  initializePlan: (planId: string, featureEnabled: boolean, branchPrefix?: string) => void
+  syncFeatureEnabled: (featureEnabled: boolean, branchPrefix?: string) => void
   setUseWorktree: (planId: string, useWorktree: boolean) => void
   retryPreflight: (planId: string) => void
   completeRecovery: (planId: string, run?: PlanWorktreeRunRecord) => void
@@ -69,6 +71,7 @@ function emptyPlanState(): PlanWorktreePlanState {
   return {
     initialized: false,
     recoveryChecked: false,
+    featureEnabled: false,
     useWorktree: false,
     preflight: { status: 'idle', contextKey: '' },
     building: false
@@ -123,28 +126,52 @@ function updateCanonicalRun(
 export const usePlanWorktreeStore = create<PlanWorktreeUiState>((set, get) => ({
   plans: {},
 
-  initializePlan: (planId, useWorktree, branchPrefix) => {
+  initializePlan: (planId, featureEnabled, branchPrefix) => {
     set((state) => ({
       plans: updatePlan(state.plans, planId, (current) => current.initialized
         ? current
         : {
             ...current,
             initialized: true,
-            useWorktree,
+            featureEnabled,
+            useWorktree: featureEnabled,
             ...(branchPrefix?.trim() ? { branchPrefix: branchPrefix.trim() } : {})
           })
     }))
   },
 
+  syncFeatureEnabled: (featureEnabled, branchPrefix) => {
+    const normalizedPrefix = branchPrefix?.trim()
+    set((state) => ({
+      plans: Object.fromEntries(Object.entries(state.plans).map(([planId, current]) => {
+        const featureChanged = current.featureEnabled !== featureEnabled
+        return [planId, {
+          ...current,
+          featureEnabled,
+          useWorktree: featureChanged ? featureEnabled : current.useWorktree,
+          ...(normalizedPrefix ? { branchPrefix: normalizedPrefix } : {}),
+          ...(featureChanged
+            ? { preflight: { status: 'idle' as const, contextKey: '' } }
+            : {})
+        }]
+      }))
+    }))
+  },
+
   setUseWorktree: (planId, useWorktree) => {
     set((state) => ({
-      plans: updatePlan(state.plans, planId, (current) => ({
-        ...current,
-        initialized: true,
-        useWorktree,
-        buildError: undefined,
-        ...(!useWorktree ? { preflight: { status: 'idle' as const, contextKey: '' } } : {})
-      }))
+      plans: updatePlan(state.plans, planId, (current) => {
+        const nextUseWorktree = current.featureEnabled && useWorktree
+        return {
+          ...current,
+          initialized: true,
+          useWorktree: nextUseWorktree,
+          buildError: undefined,
+          ...(!nextUseWorktree
+            ? { preflight: { status: 'idle' as const, contextKey: '' } }
+            : {})
+        }
+      })
     }))
   },
 
@@ -219,7 +246,7 @@ export const usePlanWorktreeStore = create<PlanWorktreeUiState>((set, get) => ({
   beginBuild: (planId) => {
     const current = get().plans[planId]
     if (
-      !current?.initialized || current.building ||
+      !current?.initialized || !current.featureEnabled || !current.useWorktree || current.building ||
       (current.run !== undefined && !planWorktreeRunIsTerminal(current.run))
     ) return null
     const nextOperationId = planWorktreeRunIsTerminal(current.run)

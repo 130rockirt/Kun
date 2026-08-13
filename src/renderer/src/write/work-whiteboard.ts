@@ -71,6 +71,11 @@ export function workWhiteboardArtifactId(boardId: string): string {
   return boardId.trim()
 }
 
+/** Unified whiteboard title rule: trimmed, non-empty, at most 160 chars. */
+export function normalizeWorkWhiteboardTitle(raw: string | undefined | null): string {
+  return raw?.trim().slice(0, 160) ?? ''
+}
+
 export function workWhiteboardBaseDir(): string {
   return WORK_WHITEBOARD_DIR
 }
@@ -265,13 +270,18 @@ export function createWorkWhiteboardActions(set: WriteWorkspaceSet, get: WriteWo
       }
     },
 
-    createWhiteboard: async (workspaceRoot, options = {}) => {
+    createWhiteboard: async (workspaceRoot, options) => {
       const normalizedWorkspaceRoot = normalizePath(workspaceRoot.trim())
+      const title = normalizeWorkWhiteboardTitle(options.title)
       if (!normalizedWorkspaceRoot || !workspaceIsCurrent(get, normalizedWorkspaceRoot)) return null
+      if (!title) {
+        set({ fileError: i18n.t('common:writeWhiteboardTitleRequired') })
+        return null
+      }
       const now = new Date().toISOString()
       const board: WorkWhiteboard = {
         id: uniqueBoardId(),
-        title: options.title?.trim() || i18n.t('common:writeUntitledWhiteboard'),
+        title,
         workspaceRoot: normalizedWorkspaceRoot,
         threadId: options.threadId?.trim() || null,
         ...(options.sourcePath?.trim() ? { sourcePath: normalizePath(options.sourcePath) } : {}),
@@ -336,10 +346,11 @@ export function createWorkWhiteboardActions(set: WriteWorkspaceSet, get: WriteWo
       // identity is safer than creating a second canonical board or retargeting
       // the board that contains the original workflow's selections.
       if (canonicalBoards.length > 0) return null
+      const fallbackTitle = input.sourcePath
+        ? `${input.sourcePath.split('/').pop()?.replace(/\.[^.]+$/, '')} · ${i18n.t('common:writePresentationReview')}`
+        : i18n.t('common:writePresentationReview')
       return get().createWhiteboard(workspaceRoot, {
-        title: input.sourcePath
-          ? `${input.sourcePath.split('/').pop()?.replace(/\.[^.]+$/, '')} · ${i18n.t('common:writePresentationReview')}`
-          : i18n.t('common:writePresentationReview'),
+        title: normalizeWorkWhiteboardTitle(input.title) || fallbackTitle,
         sourcePath: input.sourcePath,
         threadId: input.threadId,
         workflowId: input.workflowId,
@@ -349,7 +360,7 @@ export function createWorkWhiteboardActions(set: WriteWorkspaceSet, get: WriteWo
 
     renameWhiteboard: (boardId, title) => updateBoard(boardId, (board) => ({
       ...board,
-      title: title.trim() || board.title,
+      title: normalizeWorkWhiteboardTitle(title) || board.title,
       updatedAt: new Date().toISOString()
     })),
 

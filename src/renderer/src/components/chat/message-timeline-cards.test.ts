@@ -166,6 +166,27 @@ describe('plan build actions', () => {
     act(() => renderer!.unmount())
   })
 
+  it('hides isolated-worktree controls while the Laboratory experiment is off', async () => {
+    usePlanWorktreeStore.getState().initializePlan('plan-disabled', false)
+    let renderer: ReactTestRenderer
+
+    await act(async () => {
+      renderer = create(createElement(PlanBuildActions, {
+        disabled: false,
+        graphEnabled: true,
+        variant: 'panel',
+        planId: 'plan-disabled',
+        onBuild: vi.fn()
+      }))
+    })
+
+    expect(renderer!.root.findAllByProps({ role: 'switch' })).toHaveLength(0)
+    expect(renderer!.root.findByProps({
+      'data-plan-build-orchestration': 'direct'
+    }).props.disabled).toBe(false)
+    act(() => renderer!.unmount())
+  })
+
   it('shares one isolation override between panel and inline card actions', async () => {
     const store = usePlanWorktreeStore.getState()
     store.initializePlan('plan-shared', true)

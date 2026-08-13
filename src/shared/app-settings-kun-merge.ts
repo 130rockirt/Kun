@@ -302,12 +302,21 @@ export function mergeKunRuntimeSettings(
   const nextRoleModelSlots = mergeOptionalModelSlot(current, patch)
   const nextRoleReasoningSlots = mergeOptionalReasoningSlot(current, patch)
   const nextSubagents = mergeKunSubagentsSettings(current.subagents, patch?.subagents)
-  const nextLab = mergeKunLabSettings(current.lab, patch?.lab)
+  const currentLab = current.lab as Partial<KunLabSettingsV1> | undefined
+  const planWorktreeEnabled = patch?.lab?.planWorktree?.enabled
+    ?? patch?.planExecution?.useWorktreeByDefault
+    ?? currentLab?.planWorktree?.enabled
+    ?? current.planExecution?.useWorktreeByDefault
+    ?? false
+  const nextLab = mergeKunLabSettings(current.lab, {
+    ...(patch?.lab ?? {}),
+    planWorktree: {
+      ...(patch?.lab?.planWorktree ?? {}),
+      enabled: planWorktreeEnabled
+    }
+  })
   const nextPlanExecution = {
-    useWorktreeByDefault:
-      patch?.planExecution?.useWorktreeByDefault
-      ?? current.planExecution?.useWorktreeByDefault
-      ?? false
+    useWorktreeByDefault: nextLab.planWorktree.enabled
   }
   // Do not let the nested partial patch leak through the broad object spread;
   // `nextSubagents` below is the fully materialized authoritative value.
@@ -424,7 +433,8 @@ export function defaultKunLabSettings(): KunLabSettingsV1 {
       providerId: '',
       fast: false,
       imageFirst: true
-    }
+    },
+    planWorktree: { enabled: false }
   }
 }
 
@@ -438,7 +448,13 @@ export function mergeKunLabSettings(
   current: KunLabSettingsV1 | undefined,
   patch: KunLabSettingsPatchV1 | undefined
 ): KunLabSettingsV1 {
-  const base = current ?? defaultKunLabSettings()
+  const defaults = defaultKunLabSettings()
+  const legacyCurrent = current as Partial<KunLabSettingsV1> | undefined
+  const base: KunLabSettingsV1 = {
+    fastContext: legacyCurrent?.fastContext ?? defaults.fastContext,
+    pptAgent: legacyCurrent?.pptAgent ?? defaults.pptAgent,
+    planWorktree: legacyCurrent?.planWorktree ?? defaults.planWorktree
+  }
   if (!patch) return base
   // Legacy migration: older settings wrote `exploreAgent`; treat it as the
   // current `fastContext` key so persisted Lab config keeps its value.
@@ -451,6 +467,9 @@ export function mergeKunLabSettings(
     pptAgent: {
       ...mergeLabAgentSettings(base.pptAgent, patch.pptAgent),
       imageFirst: patch.pptAgent?.imageFirst ?? base.pptAgent.imageFirst
+    },
+    planWorktree: {
+      enabled: patch.planWorktree?.enabled ?? base.planWorktree.enabled
     }
   }
 }

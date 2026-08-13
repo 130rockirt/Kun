@@ -40,7 +40,7 @@ export type WorkWhiteboardPhase = 'blank' | 'directions' | 'review' | 'complete'
 
 export type WorkWhiteboard = {
   id: string
-  /** Cached display copy of the bound Work session title. */
+  /** The whiteboard's own canonical display title. */
   title: string
   workspaceRoot: string
   threadId: string | null
@@ -179,9 +179,9 @@ export type WriteWorkspaceState = {
     options?: { groupId?: WriteEditorGroupId; viewMode?: WritePreviewMode }
   ) => Promise<void>
   loadWhiteboards: (workspaceRoot: string) => Promise<void>
-  createWhiteboard: (workspaceRoot: string, options?: {
+  createWhiteboard: (workspaceRoot: string, options: {
+    title: string
     groupId?: WriteEditorGroupId
-    title?: string
     sourcePath?: string
     threadId?: string
     workflowId?: string
@@ -192,6 +192,7 @@ export type WriteWorkspaceState = {
     workspaceRoot: string
     threadId: string
     workflowId: string
+    title: string
     childId?: string
     sourcePath?: string
   }) => Promise<WorkWhiteboard | null>

@@ -294,11 +294,68 @@ describe('Work whiteboard registry', () => {
     })).resolves.toBe(true)
     await expect(state.bindWhiteboardThread(board.id, 'late-thread')).resolves.toBe(true)
     await expect(state.findOrCreatePptWhiteboard({
-      workspaceRoot: '/work', threadId: 'thread-original', workflowId: 'workflow-a', childId: 'late-child'
+      workspaceRoot: '/work', threadId: 'thread-original', workflowId: 'workflow-a',
+      title: 'PPT review', childId: 'late-child'
     })).resolves.toBeNull()
 
     expect(useWriteWorkspaceStore.getState().whiteboards[board.id]).toMatchObject({
       threadId: 'thread-original', phase: 'review', childId: 'child-a', revision: 4
     })
+  })
+
+  it('rejects a blank title without touching storage', async () => {
+    seedRegistry({})
+
+    await expect(useWriteWorkspaceStore.getState().createWhiteboard('/work', { title: '   ' }))
+      .resolves.toBeNull()
+
+    expect(createWorkspaceDirectory).not.toHaveBeenCalled()
+    expect(createWorkspaceFile).not.toHaveBeenCalled()
+    expect(writeWorkspaceFile).not.toHaveBeenCalled()
+    expect(useWriteWorkspaceStore.getState().whiteboards).toEqual({})
+    expect(useWriteWorkspaceStore.getState().activeWhiteboardId).toBeNull()
+    expect(useWriteWorkspaceStore.getState().fileError).toBeTruthy()
+  })
+
+  it('truncates an over-long title to 160 characters', async () => {
+    seedRegistry({})
+
+    const board = await useWriteWorkspaceStore.getState().createWhiteboard('/work', {
+      title: `  ${'x'.repeat(200)}  `
+    })
+
+    expect(board?.title).toBe('x'.repeat(160))
+    expect(parseWorkWhiteboardRegistry(files.get(WORK_WHITEBOARD_INDEX)!, '/work')[board!.id])
+      .toMatchObject({ title: 'x'.repeat(160) })
+  })
+
+  it('creates the canonical PPT board with the provided title', async () => {
+    seedRegistry({})
+
+    const board = await useWriteWorkspaceStore.getState().findOrCreatePptWhiteboard({
+      workspaceRoot: '/work', threadId: 'thread-a', workflowId: 'workflow-a',
+      title: '  Text completion landscape  ', childId: 'child-a'
+    })
+
+    expect(board).toMatchObject({ title: 'Text completion landscape', workflowId: 'workflow-a' })
+
+    const reopened = await useWriteWorkspaceStore.getState().findOrCreatePptWhiteboard({
+      workspaceRoot: '/work', threadId: 'thread-a', workflowId: 'workflow-a',
+      title: 'A different later title', childId: 'child-a'
+    })
+    expect(reopened?.id).toBe(board!.id)
+    expect(useWriteWorkspaceStore.getState().whiteboards[board!.id]?.title)
+      .toBe('Text completion landscape')
+  })
+
+  it('falls back to the source-based presentation title for legacy results', async () => {
+    seedRegistry({})
+
+    const board = await useWriteWorkspaceStore.getState().findOrCreatePptWhiteboard({
+      workspaceRoot: '/work', threadId: 'thread-a', workflowId: 'workflow-a',
+      title: '', sourcePath: '/work/brief.md'
+    })
+
+    expect(board?.title).toBe('brief · Presentation review')
   })
 })

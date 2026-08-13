@@ -43,8 +43,31 @@ describe('plan worktree UI state', () => {
     state.initializePlan('plan-b', true, 'codex/')
 
     expect(usePlanWorktreeStore.getState().plans).toMatchObject({
-      'plan-a': { initialized: true, useWorktree: false, branchPrefix: 'codex/' },
-      'plan-b': { initialized: true, useWorktree: true }
+      'plan-a': { initialized: true, featureEnabled: true, useWorktree: false, branchPrefix: 'codex/' },
+      'plan-b': { initialized: true, featureEnabled: true, useWorktree: true }
+    })
+  })
+
+  it('forces isolation off with the experiment and restores it only on explicit opt-in', () => {
+    const state = usePlanWorktreeStore.getState()
+    state.initializePlan('plan-a', true, 'codex/')
+    state.setUseWorktree('plan-a', false)
+
+    state.syncFeatureEnabled(true)
+    expect(usePlanWorktreeStore.getState().plans['plan-a']?.useWorktree).toBe(false)
+
+    state.syncFeatureEnabled(false)
+    expect(usePlanWorktreeStore.getState().plans['plan-a']).toMatchObject({
+      featureEnabled: false,
+      useWorktree: false,
+      preflight: { status: 'idle' }
+    })
+    expect(usePlanWorktreeStore.getState().beginBuild('plan-a')).toBeNull()
+
+    state.syncFeatureEnabled(true)
+    expect(usePlanWorktreeStore.getState().plans['plan-a']).toMatchObject({
+      featureEnabled: true,
+      useWorktree: true
     })
   })
 
@@ -94,11 +117,13 @@ describe('plan worktree UI state', () => {
     usePlanWorktreeStore.setState({
       plans: {
         [recovered.planId]: {
-          initialized: false, recoveryChecked: true, useWorktree: true, building: false,
+          initialized: false, recoveryChecked: true, featureEnabled: true,
+          useWorktree: true, building: false,
           preflight: { status: 'idle', contextKey: '' }, run: recovered
         },
         [guiPlanId]: {
-          initialized: true, recoveryChecked: false, useWorktree: true, building: false,
+          initialized: true, recoveryChecked: false, featureEnabled: true,
+          useWorktree: true, building: false,
           preflight: { status: 'idle', contextKey: '' }
         }
       }

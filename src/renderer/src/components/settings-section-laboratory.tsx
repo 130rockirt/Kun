@@ -15,6 +15,7 @@ import type {
   ComputerUsePermissionState
 } from '@shared/kun-gui-api'
 import {
+  GitBranch,
   Globe2,
   Monitor,
   Presentation,
@@ -25,8 +26,10 @@ import {
 import { useEffect, useState, type ReactElement, type ReactNode } from 'react'
 import {
   SettingRow,
+  SettingsCard,
   SettingsTabPanel,
-  SettingsTabs
+  SettingsTabs,
+  Toggle
 } from './settings-controls'
 import {
   BrowserUseSettingsPanel,
@@ -37,7 +40,14 @@ import { FastContextSettingsPanel } from './settings-section-lab-fast-context'
 import { ComposerPersonaSettingsPanel } from './settings-section-lab-persona'
 import { PptAgentSettingsPanel } from './settings-section-lab-ppt'
 
-type LaboratorySettingsPanel = 'persona' | 'computer' | 'browser' | 'graph' | 'explore' | 'ppt'
+type LaboratorySettingsPanel =
+  | 'persona'
+  | 'computer'
+  | 'browser'
+  | 'graph'
+  | 'worktree'
+  | 'explore'
+  | 'ppt'
 
 export function LaboratorySettingsSection({ ctx }: { ctx: Record<string, any> }): ReactElement {
   const { t, form, kun, update, updateKun, selectControlClass, runtimeInfo } = ctx
@@ -83,6 +93,7 @@ export function LaboratorySettingsSection({ ctx }: { ctx: Record<string, any> })
           { id: 'computer', label: t('computerUseTitle'), icon: Monitor },
           { id: 'browser', label: t('browserUseSettingsTitle'), icon: Globe2 },
           { id: 'graph', label: t('graphSettingsTitle'), icon: Workflow },
+          { id: 'worktree', label: t('labPlanWorktreeTitle'), icon: GitBranch },
           { id: 'explore', label: t('labExploreTitle'), icon: Search },
           { id: 'ppt', label: t('labPptTitle'), icon: Presentation }
         ]}
@@ -150,6 +161,32 @@ export function LaboratorySettingsSection({ ctx }: { ctx: Record<string, any> })
           selectControlClass={selectControlClass}
           onChange={(patch) => updateKun({ graph: patch })}
         />
+      </SettingsTabPanel>
+
+      <SettingsTabPanel<LaboratorySettingsPanel>
+        baseId="laboratory-settings"
+        tabId="worktree"
+        active={activePanel === 'worktree'}
+        className="[&>div]:mt-0"
+      >
+        <SettingsCard
+          title={t('labPlanWorktreeTitle')}
+          description={t('labPlanWorktreeDescription')}
+        >
+          <SettingRow
+            title={t('labPlanWorktreeEnabled')}
+            description={t('labPlanWorktreeEnabledDesc')}
+            control={(
+              <Toggle
+                checked={lab.planWorktree?.enabled ?? false}
+                ariaLabel={t('labPlanWorktreeEnabled')}
+                onChange={(enabled) => updateKun({
+                  lab: { planWorktree: { enabled } }
+                })}
+              />
+            )}
+          />
+        </SettingsCard>
       </SettingsTabPanel>
 
       <SettingsTabPanel<LaboratorySettingsPanel>

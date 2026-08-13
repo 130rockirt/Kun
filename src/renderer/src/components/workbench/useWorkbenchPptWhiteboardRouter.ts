@@ -64,6 +64,7 @@ export function useWorkbenchPptWhiteboardRouter(input: {
               workspaceRoot: detail.workspaceRoot,
               threadId: detail.threadId,
               workflowId: detail.workflowId,
+              title: detail.title,
               childId: detail.childId,
               sourcePath: detail.sourcePath
             })

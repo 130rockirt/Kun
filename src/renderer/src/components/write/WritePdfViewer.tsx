@@ -63,6 +63,15 @@ export function WritePdfViewer({
   const pageCount = pdfDocument?.numPages ?? 0
   const rootRef = viewerRef ?? localViewerRef
 
+  // The PDF loading task must be rebuilt only when the underlying resource
+  // changes. Parent layers (editor groups) recreate the notify callback on
+  // every render, so keep it in a ref and expose a stable publisher instead.
+  const selectionCallbackRef = useRef(onSelectionChange)
+  selectionCallbackRef.current = onSelectionChange
+  const publishSelection = useCallback((selection: WriteEditorSelectionState): void => {
+    selectionCallbackRef.current(selection)
+  }, [])
+
   useEffect(() => {
     let cancelled = false
     setLoading(true)
@@ -70,7 +79,7 @@ export function WritePdfViewer({
     setPdfDocument(null)
     setPageTexts([])
     setCommittedSelectionRects([])
-    onSelectionChange(emptyPdfSelection())
+    publishSelection(emptyPdfSelection())
     const task = getDocument({
       data: bytesFromBase64(dataBase64),
       isEvalSupported: false
@@ -94,7 +103,7 @@ export function WritePdfViewer({
       cancelled = true
       task.destroy()
     }
-  }, [dataBase64, filePath, mtimeMs, onSelectionChange])
+  }, [dataBase64, filePath, mtimeMs, publishSelection])
 
   useEffect(() => {
     return () => {
@@ -104,8 +113,8 @@ export function WritePdfViewer({
 
   useEffect(() => {
     setCommittedSelectionRects([])
-    onSelectionChange(emptyPdfSelection())
-  }, [onSelectionChange, scale])
+    publishSelection(emptyPdfSelection())
+  }, [publishSelection, scale])
 
   const searchMatches = useMemo(() => {
     const query = searchQuery.trim().toLowerCase()
@@ -197,13 +206,13 @@ export function WritePdfViewer({
     const root = rootRef.current
     if (!root) return
     const next = selectionFromPdf(root)
-    onSelectionChange(next)
+    publishSelection(next)
     if (next.text.trim()) {
       setCommittedSelectionRects(next.rects ?? [])
     } else {
       setCommittedSelectionRects([])
     }
-  }, [onSelectionChange, rootRef])
+  }, [publishSelection, rootRef])
 
   const syncSelectionSoon = useCallback((): void => {
     if (selectionSyncTimerRef.current != null) {
@@ -253,8 +262,8 @@ export function WritePdfViewer({
 
   const beginPdfSelection = useCallback((): void => {
     setCommittedSelectionRects([])
-    onSelectionChange(emptyPdfSelection())
-  }, [onSelectionChange])
+    publishSelection(emptyPdfSelection())
+  }, [publishSelection])
 
   return (
     <div

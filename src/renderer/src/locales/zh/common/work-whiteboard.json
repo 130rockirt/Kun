@@ -17,5 +17,8 @@
   "workWhiteboardCanvasLoadingHint": "请等待白板加载完成后再通过并导出。",
   "workWhiteboardQaBlockingHint": "请先解决阻断级 QA 问题，再通过并导出。",
   "workWhiteboardImagePrompt": "请生成或修改这块 Work 白板中当前选中的图片占位。",
-  "workWhiteboardOpenPptx": "打开 PPTX"
+  "workWhiteboardOpenPptx": "打开 PPTX",
+  "writeNewWhiteboardTitlePlaceholder": "例如：FastAPI 服务架构",
+  "writeWhiteboardTitleTooLong": "标题最多 {{max}} 个字符。",
+  "writeWhiteboardTitleRequired": "请先输入白板标题。"
 }

@@ -35,19 +35,21 @@ export function PlanBuildActions({
   useEffect(() => {
     if (!graphEnabled) setSelectedOrchestration('direct')
   }, [graphEnabled])
+  const featureEnabled = worktree?.featureEnabled === true
+  const settingsPending = Boolean(resolvedPlanId && !worktree?.initialized)
   const isolatedBlocked = Boolean(
-    resolvedPlanId && (!worktree?.initialized || (worktree.useWorktree && (
+    featureEnabled && worktree?.useWorktree && (
       worktree.preflight.status !== 'ready' || !worktree.preflight.result.eligible
-    )))
+    )
   )
-  const buildDisabled = disabled || Boolean(worktree?.building) || isolatedBlocked || Boolean(
+  const buildDisabled = disabled || settingsPending || Boolean(worktree?.building) || isolatedBlocked || Boolean(
     worktree?.run && !planWorktreeRunIsTerminal(worktree.run)
   )
   const orchestrationDisabled = disabled || Boolean(worktree?.building) || Boolean(
     worktree?.run && !planWorktreeRunIsTerminal(worktree.run)
   )
 
-  const worktreeControl = resolvedPlanId && worktree?.initialized ? (
+  const worktreeControl = resolvedPlanId && worktree?.initialized && featureEnabled ? (
     <div
       data-plan-worktree-control
       className={variant === 'card'
@@ -131,11 +133,6 @@ export function PlanBuildActions({
           </div>
         )}
       </div>
-    </div>
-  ) : resolvedPlanId ? (
-    <div className="inline-flex min-w-[220px] flex-1 items-center gap-1.5 text-[11px] text-ds-muted">
-      <Loader2 className="h-3 w-3 animate-spin" />
-      {t('planWorktreeChecking')}
     </div>
   ) : null
 

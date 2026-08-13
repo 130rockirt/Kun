@@ -33,7 +33,8 @@ function run(
 function plans(value: PlanWorktreeRunRecord): Record<string, PlanWorktreePlanState> {
   return {
     'plan-a': {
-      initialized: true, recoveryChecked: true, useWorktree: true, building: false,
+      initialized: true, recoveryChecked: true, featureEnabled: true,
+      useWorktree: true, building: false,
       preflight: { status: 'idle', contextKey: '' }, run: value
     }
   }

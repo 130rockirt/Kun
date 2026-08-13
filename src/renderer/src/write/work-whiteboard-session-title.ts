@@ -1,26 +1,12 @@
-import type { NormalizedThread } from '../agent/types'
 import type { WorkWhiteboard } from './write-workspace-store-types'
 
-type SessionTitleThread = Pick<NormalizedThread, 'id' | 'title'>
-
-export type WorkWhiteboardSessionTitleUpdate = {
-  boardId: string
-  title: string
-}
-
-export function workWhiteboardSessionTitleUpdates(
-  whiteboards: Record<string, WorkWhiteboard>,
-  threads: readonly SessionTitleThread[],
-  workspaceRoot: string
-): WorkWhiteboardSessionTitleUpdate[] {
-  const titlesByThreadId = new Map(threads.map((thread) => [thread.id, thread.title.trim()]))
-  return Object.values(whiteboards).flatMap((board) => {
-    if (board.workspaceRoot !== workspaceRoot || !board.threadId) return []
-    const title = titlesByThreadId.get(board.threadId) ?? ''
-    return title && title !== board.title ? [{ boardId: board.id, title }] : []
-  })
-}
-
+/**
+ * Explicit rename path shared by the sidebar dialog and the
+ * `work_rename_whiteboard` renderer hook. A rename is user/agent intent, so it
+ * updates the bound session and the whiteboard together. This is intentionally
+ * the ONLY thread -> board title write: automatic session titles never flow
+ * back into the whiteboard registry.
+ */
 export async function renameWorkWhiteboardSession(input: {
   board: WorkWhiteboard
   title: string

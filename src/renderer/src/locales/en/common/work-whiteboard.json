@@ -17,5 +17,8 @@
   "workWhiteboardCanvasLoadingHint": "Wait for this whiteboard to finish loading before approving export.",
   "workWhiteboardQaBlockingHint": "Resolve blocking QA issues before approving export.",
   "workWhiteboardImagePrompt": "Generate or revise the selected image placeholder on this Work whiteboard.",
-  "workWhiteboardOpenPptx": "Open PPTX"
+  "workWhiteboardOpenPptx": "Open PPTX",
+  "writeNewWhiteboardTitlePlaceholder": "e.g. FastAPI service architecture",
+  "writeWhiteboardTitleTooLong": "Title must be at most {{max}} characters.",
+  "writeWhiteboardTitleRequired": "Enter a title before creating the whiteboard."
 }

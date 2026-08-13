@@ -219,6 +219,8 @@ describe('buildToolPreferenceInstruction', () => {
 
     expect(instruction).toContain('phase="awaiting_review"')
     expect(instruction).toContain('phase="awaiting_direction"')
+    expect(instruction).toContain('ppt_agent(action="start", title="...")')
+    expect(instruction).toContain('`title` is required on start')
     expect(instruction).toContain('preview surface, not a required input surface')
     expect(instruction).toContain('one direction name/number')
     expect(instruction).toContain('action="revise_previews"|"retry_failed"')

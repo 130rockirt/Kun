@@ -24,8 +24,12 @@ import {
   todoContinuationInstruction
 } from './continuation-instructions.js'
 import { isStalePlanContext } from './plan-mode.js'
-import { createToolDiscoveryContext } from './tool-discovery-context-factory.js'
+import {
+  createToolDiscoveryContext,
+  modelToolDiscoveryContexts
+} from './tool-discovery-context-factory.js'
 import type {
+  DiscoveredTool,
   PreparedTurnContext,
   ResolvedTurnAttachments
 } from './turn-execution-types.js'
@@ -210,7 +214,10 @@ export class TurnContextResolver {
       ...(this.deps.fastContextTaskCount ? { fastContextTaskCount: this.deps.fastContextTaskCount } : {}),
       interactiveToolBridge: this.deps.interactiveToolBridge
     })
-    const tools = await this.deps.toolHost.listTools(toolDiscoveryContext)
+    const tools = await listModelTools(
+      this.deps.toolHost,
+      modelToolDiscoveryContexts(toolDiscoveryContext)
+    )
     return {
       threadId: input.threadId,
       turnId: input.turnId,
@@ -250,6 +257,19 @@ export class TurnContextResolver {
       tools
     }
   }
+}
+
+async function listModelTools(
+  toolHost: Pick<ToolHost, 'listTools'>,
+  contexts: readonly ToolHostContext[]
+): Promise<DiscoveredTool[]> {
+  const byName = new Map<string, DiscoveredTool>()
+  for (const context of contexts) {
+    for (const tool of await toolHost.listTools(context)) {
+      if (!byName.has(tool.name)) byName.set(tool.name, tool)
+    }
+  }
+  return [...byName.values()]
 }
 
 export function resolveTurnClientSurface(turn: Pick<

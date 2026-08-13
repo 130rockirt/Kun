@@ -528,7 +528,9 @@ export function useWorkbenchNavigationController({
     void createWriteThread(
       writeWorkspaceRoot,
       writeState.activeFilePath ?? undefined,
-      activeBoard?.title
+      activeBoard
+        ? { title: activeBoard.title, titleAuto: false }
+        : undefined
     ).then((threadId) => {
       if (!activeBoardId || !threadId) return
       const latest = useWriteWorkspaceStore.getState()

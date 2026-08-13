@@ -334,7 +334,7 @@ export function useWorkbenchPlanController({
       return
     }
     const isolation = usePlanWorktreeStore.getState().plans[plan.id]
-    const useWorktree = isolation?.useWorktree ?? true
+    const useWorktree = isolation?.featureEnabled === true && isolation.useWorktree === true
     if (useWorktree) {
       const contextKey = planWorktreeContextKey({
         planId: plan.id,

@@ -114,6 +114,21 @@ describe('ppt_agent tool provider', () => {
     expect((disabled.output as { error: string }).error).toContain('disabled in Lab settings')
     expect(ran).toBe(false)
   })
+  it('requires a short UI title on start', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'ppt-agent-tool-'))
+    let ran = false
+    const runtime = makeRuntime(dir, async () => {
+      ran = true
+      return { summary: 'unexpected' }
+    })
+    const tool = makeTool(runtime, () => ({ enabled: true }))
+
+    const missingTitle = await tool.execute({ action: 'start' }, baseContext)
+    expect(missingTitle).toMatchObject({ isError: true, output: {
+      error: expect.stringContaining('requires a short UI title')
+    } })
+    expect(ran).toBe(false)
+  })
   it('fails closed before starting a child for a managed-tool-incompatible provider', async () => {
     dir = await mkdtemp(join(tmpdir(), 'ppt-agent-tool-'))
     let ran = false
@@ -121,7 +136,7 @@ describe('ppt_agent tool provider', () => {
     const tool = makeTool(runtime, () => ({
       enabled: true, toolIncompatibleProviderIds: ['cursor-sdk']
     }))
-    const result = await tool.execute({}, {
+    const result = await tool.execute({ title: 'Review deck' }, {
       ...baseContext, actingModelRoute: { model: 'cursor-agent', providerId: 'cursor-sdk' }
     })
     expect(result).toMatchObject({ isError: true, output: { phase: 'unavailable', error: 'The selected provider cannot execute Kun managed PPT tools; configure a tool-capable PPT Agent model in Lab settings' } })

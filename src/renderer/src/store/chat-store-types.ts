@@ -463,7 +463,7 @@ export type ChatState = {
   createWriteThread: (
     workspaceRoot?: string,
     activeFilePath?: string,
-    title?: string
+    options?: { title?: string; titleAuto?: boolean }
   ) => Promise<string | null>
   ensureDesignThreadForWorkspace: (workspaceRoot?: string, docId?: string) => Promise<string | null>
   createDesignThread: (

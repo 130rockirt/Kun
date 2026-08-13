@@ -20,6 +20,8 @@ export type WorkCanvasOpenRequestDetail = {
   threadId: string
   workflowId: string
   childId: string
+  /** Canonical title for the whiteboard this workflow creates (payload.title > deckTitle > legacy fallback). */
+  title: string
   sourcePath?: string
   pptState?: {
     phase: 'directions' | 'review' | 'complete'

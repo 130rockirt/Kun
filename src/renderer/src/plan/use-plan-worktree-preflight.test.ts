@@ -93,10 +93,53 @@ describe('plan worktree preflight hook', () => {
 
     expect(usePlanWorktreeStore.getState().plans[plan.id]).toMatchObject({
       initialized: true,
+      featureEnabled: false,
       useWorktree: false,
       preflight: { status: 'idle' }
     })
     expect(preflight).not.toHaveBeenCalled()
+    act(() => renderer!.unmount())
+  })
+
+  it('refreshes an initialized plan after the Laboratory experiment is enabled', async () => {
+    const enabledKun = defaultKunRuntimeSettings()
+    enabledKun.lab.planWorktree.enabled = true
+    const settings = normalizeAppSettings({
+      version: 1,
+      agents: { kun: enabledKun }
+    } as unknown as AppSettingsV1)
+    const preflight = vi.fn(async () => result('feature/source'))
+    vi.stubGlobal('window', {
+      kunGui: {
+        getSettings: vi.fn(async () => settings),
+        planWorktree: {
+          preflight,
+          list: vi.fn(async () => [])
+        }
+      }
+    })
+    const plan = createGuiPlanArtifact({
+      workspaceRoot: '/repo',
+      threadId: 'thread-a',
+      relativePath: '.kunsdd/plan/demo.md',
+      sourceRequest: 'Demo'
+    })
+    usePlanWorktreeStore.getState().initializePlan(plan.id, false, 'codex/')
+    let renderer: ReactTestRenderer
+    function Harness(): null {
+      usePlanWorktreePreflight(plan, 'thread-a')
+      return null
+    }
+    await act(async () => {
+      renderer = create(createElement(Harness))
+    })
+
+    expect(usePlanWorktreeStore.getState().plans[plan.id]).toMatchObject({
+      featureEnabled: true,
+      useWorktree: true,
+      preflight: { status: 'ready' }
+    })
+    expect(preflight).toHaveBeenCalledOnce()
     act(() => renderer!.unmount())
   })
 

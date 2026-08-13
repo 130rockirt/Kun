@@ -11,7 +11,8 @@ import {
   cleanupAppIpcHandlerTestState,
   handlers,
   registerOptions,
-  resetAppIpcHandlerTestState
+  resetAppIpcHandlerTestState,
+  settings
 } from './register-app-ipc-handlers.test-support'
 import { registerAppIpcHandlers } from './register-app-ipc-handlers'
 
@@ -84,6 +85,16 @@ describe('plan worktree IPC handlers', () => {
     expect(settled).toBe(true)
   })
 
+  it('blocks new isolated builds while the Laboratory experiment is disabled', async () => {
+    const runtimeRequest = vi.fn()
+    registerAppIpcHandlers(registerOptions({ userDataPath, runtimeRequest }))
+
+    await expect(handlers.get('plan-worktree:preflight')?.({}, {
+      workspaceRoot: '/repo'
+    })).rejects.toThrow(/Settings > Laboratory/)
+    expect(runtimeRequest).not.toHaveBeenCalled()
+  })
+
   it('has Main create and bind the execution fork without exposing its capability', async () => {
     const store = new PlanWorktreeRunStore(userDataPath)
     const record = runRecord()
@@ -120,7 +131,13 @@ describe('plan worktree IPC handlers', () => {
       throw new Error(`unexpected runtime request: ${method} ${path}`)
     })
     vi.spyOn(PlanWorktreeCoordinator.prototype, 'prepare').mockResolvedValue(record)
-    registerAppIpcHandlers(registerOptions({ userDataPath, runtimeRequest }))
+    const enabledSettings = settings()
+    enabledSettings.agents.kun.lab.planWorktree.enabled = true
+    registerAppIpcHandlers(registerOptions({
+      userDataPath,
+      runtimeRequest,
+      store: { load: vi.fn(async () => enabledSettings) } as never
+    }))
 
     const prepared = await handlers.get('plan-worktree:prepare')?.({}, {
       operationId: record.operationId,

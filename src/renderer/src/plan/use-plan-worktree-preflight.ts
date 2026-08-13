@@ -1,7 +1,8 @@
 import { useEffect } from 'react'
-import { DEFAULT_GIT_BRANCH_PREFIX } from '@shared/app-settings'
+import { DEFAULT_GIT_BRANCH_PREFIX, type AppSettingsV1 } from '@shared/app-settings'
 import { getKunRuntimeSettings } from '../../../shared/app-settings-kun-defaults'
 import { rendererRuntimeClient } from '../agent/runtime-client'
+import { SETTINGS_CHANGED_EVENT } from '../lib/keyboard-shortcut-settings'
 import { normalizeWorkspaceRoot } from '../lib/workspace-path'
 import type { PlanWorktreeRunRecord } from '@shared/plan-worktree'
 import type { GuiPlanArtifact } from './plan-store'
@@ -39,28 +40,44 @@ export function usePlanWorktreePreflight(
   const state = usePlanWorktreeStore((store) => planId ? store.plans[planId] : undefined)
 
   useEffect(() => {
-    if (!plan || state?.initialized) return
+    if (typeof window.addEventListener !== 'function') return
+    const onSettingsChanged = (event: Event): void => {
+      const settings = (event as CustomEvent<AppSettingsV1>).detail
+      if (!settings) return
+      const kun = getKunRuntimeSettings(settings)
+      usePlanWorktreeStore.getState().syncFeatureEnabled(
+        kun.lab.planWorktree.enabled,
+        settings.gitBranchPrefix || DEFAULT_GIT_BRANCH_PREFIX
+      )
+    }
+    window.addEventListener(SETTINGS_CHANGED_EVENT, onSettingsChanged)
+    return () => window.removeEventListener(SETTINGS_CHANGED_EVENT, onSettingsChanged)
+  }, [])
+
+  useEffect(() => {
+    if (!plan) return
     let cancelled = false
     void rendererRuntimeClient.getSettings().then((settings) => {
       if (cancelled) return
       const kun = getKunRuntimeSettings(settings)
-      usePlanWorktreeStore.getState().initializePlan(
-        plan.id,
-        kun.planExecution?.useWorktreeByDefault ?? false,
-        settings.gitBranchPrefix || DEFAULT_GIT_BRANCH_PREFIX
-      )
+      const store = usePlanWorktreeStore.getState()
+      const branchPrefix = settings.gitBranchPrefix || DEFAULT_GIT_BRANCH_PREFIX
+      if (store.plans[plan.id]?.initialized) {
+        store.syncFeatureEnabled(kun.lab.planWorktree.enabled, branchPrefix)
+      } else {
+        store.initializePlan(plan.id, kun.lab.planWorktree.enabled, branchPrefix)
+      }
     }).catch(() => {
       if (cancelled) return
       // Keep current-workspace execution as the product default when settings
       // cannot be loaded; isolation can still be enabled explicitly afterward.
-      usePlanWorktreeStore.getState().initializePlan(
-        plan.id,
-        false,
-        DEFAULT_GIT_BRANCH_PREFIX
-      )
+      const store = usePlanWorktreeStore.getState()
+      if (!store.plans[plan.id]?.initialized) {
+        store.initializePlan(plan.id, false, DEFAULT_GIT_BRANCH_PREFIX)
+      }
     })
     return () => { cancelled = true }
-  }, [plan, sourceThreadId, state?.initialized])
+  }, [plan])
 
   useEffect(() => {
     if (!plan || !state?.initialized || state.recoveryChecked) return
@@ -85,7 +102,7 @@ export function usePlanWorktreePreflight(
   }, [plan, sourceThreadId, state?.initialized, state?.recoveryChecked])
 
   useEffect(() => {
-    if (!plan || !state?.initialized || !state.useWorktree) return
+    if (!plan || !state?.initialized || !state.featureEnabled || !state.useWorktree) return
     const contextKey = planWorktreeContextKey({
       planId: plan.id,
       workspaceRoot: plan.workspaceRoot,
@@ -124,7 +141,15 @@ export function usePlanWorktreePreflight(
         error instanceof Error ? error.message : String(error)
       )
     })
-  }, [plan, sourceThreadId, state?.branchPrefix, state?.initialized, state?.preflight, state?.useWorktree])
+  }, [
+    plan,
+    sourceThreadId,
+    state?.branchPrefix,
+    state?.featureEnabled,
+    state?.initialized,
+    state?.preflight,
+    state?.useWorktree
+  ])
 
   return state
 }

@@ -7,7 +7,6 @@ export type PromptCachePhase =
   | 'plan'
   | 'graph-planning'
   | 'graph-active'
-  | 'design'
   | 'svg'
 
 export type PromptCachePartition = Readonly<{
@@ -20,13 +19,11 @@ export type PromptCachePartition = Readonly<{
 
 export function resolvePromptCachePhase(input: {
   svg: boolean
-  design: boolean
   graph: boolean
   graphActive: boolean
   plan: boolean
 }): PromptCachePhase {
   if (input.svg) return 'svg'
-  if (input.design) return 'design'
   if (input.graph) return input.graphActive ? 'graph-active' : 'graph-planning'
   return input.plan ? 'plan' : 'agent'
 }

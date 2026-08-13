@@ -208,7 +208,7 @@ describe('provider mutation lifecycle across settings remounts', () => {
     ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = false
   })
 
-  it('shows the delete action for the default API provider', async () => {
+  it('hides the delete action for the default API provider', async () => {
     const { settings, provider } = providerFixture('deepseek')
     const runtimeRequest = vi.fn(async (path: string) => {
       if (path.includes('/events?')) return new Promise<never>(() => undefined)
@@ -220,7 +220,8 @@ describe('provider mutation lifecycle across settings remounts', () => {
     await flush()
     await clickTab(renderer, 'modelProviderTabAdvanced')
 
-    expect(findButton(renderer, 'modelProviderRemove')).toBeTruthy()
+    expect(rendererText(renderer)).not.toContain('modelProviderRemove')
+    expect(rendererText(renderer)).not.toContain('modelProviderSectionDanger')
   })
 
   it('shows safe replacement guidance for an unreadable protected credential', async () => {

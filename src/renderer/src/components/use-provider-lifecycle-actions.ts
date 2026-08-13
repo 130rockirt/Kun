@@ -232,6 +232,10 @@ export function useProviderLifecycleActions(scope: Record<string, any>): Record<
   }
 
   const removeModelProvider = async (id: string): Promise<void> => {
+    // The bundled default provider is the always-available fallback; deleting
+    // it would leave new sessions without a provider, so it stays configurable
+    // but not removable (the danger zone is hidden for it as well).
+    if (id === DEFAULT_MODEL_PROVIDER_ID) return
     const target = modelProviders.find((item) => item.id === id)
     if (!target) return
     const usedByChat = activeKunProviderId === id

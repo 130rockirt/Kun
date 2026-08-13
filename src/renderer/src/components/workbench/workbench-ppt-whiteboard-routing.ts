@@ -95,10 +95,19 @@ export function pptCanvasOpenRequestForBlock(
   if (input.route === 'write') {
     const workspaceRoot = input.workspaceRoot.trim()
     if (!workspaceRoot) return null
+    // Title priority: the main agent's UI title, then the structured deck
+    // title, then the legacy source-based fallback so historical tool results
+    // stay replayable.
+    const title = normalizePptBoardTitle(
+      nonEmptyString(payload.title) ? payload.title : undefined,
+      direction?.deckTitle ?? review?.deckTitle,
+      input.sourcePath
+    )
     return {
       target: 'write',
       ...common,
       workspaceRoot,
+      title,
       ...(input.sourcePath?.trim() ? { sourcePath: input.sourcePath.trim() } : {}),
       pptState: {
         phase: bundle.phase,
@@ -108,6 +117,21 @@ export function pptCanvasOpenRequestForBlock(
     }
   }
   return { target: 'code', ...common }
+}
+
+function normalizePptBoardTitle(
+  payloadTitle: string | undefined,
+  deckTitle: string | undefined,
+  sourcePath: string | null | undefined
+): string {
+  const fromPayload = payloadTitle?.trim().slice(0, 160)
+  if (fromPayload) return fromPayload
+  const fromDeck = deckTitle?.trim().slice(0, 160)
+  if (fromDeck) return fromDeck
+  const sourceStem = sourcePath?.trim()
+    ? sourcePath.split('/').pop()?.replace(/\.[^.]+$/, '')
+    : ''
+  return sourceStem ? `${sourceStem} · Presentation review` : 'Presentation review'
 }
 
 function record(value: unknown): Record<string, unknown> | null {

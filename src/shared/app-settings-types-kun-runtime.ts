@@ -128,16 +128,24 @@ export type KunLabPptAgentSettingsV1 = {
   imageFirst: boolean
 }
 
+/** Experimental gate for isolated GUI plan builds. */
+export type KunLabPlanWorktreeSettingsV1 = {
+  /** Expose and allow isolated plan-worktree execution. Default false. */
+  enabled: boolean
+}
+
 /** Experimental Lab feature settings written into Kun config `lab`. */
 export type KunLabSettingsV1 = {
   fastContext: KunLabFastContextSettingsV1
   pptAgent: KunLabPptAgentSettingsV1
+  planWorktree: KunLabPlanWorktreeSettingsV1
 }
 
 /** Partial settings patch for the Lab section. Nested fields merge with current values. */
 export type KunLabSettingsPatchV1 = {
   fastContext?: Partial<KunLabFastContextSettingsV1>
   pptAgent?: Partial<KunLabPptAgentSettingsV1>
+  planWorktree?: Partial<KunLabPlanWorktreeSettingsV1>
 }
 
 export const KUN_GRAPH_ROLLOUT_STAGES = [
@@ -288,7 +296,7 @@ export type KunGraphSettingsPatchV1 = Partial<
 }
 
 export type KunPlanExecutionSettingsV1 = {
-  /** Run reviewed GUI plans in a host-managed isolated Git worktree by default. */
+  /** Compatibility alias for lab.planWorktree.enabled. */
   useWorktreeByDefault: boolean
 }
 

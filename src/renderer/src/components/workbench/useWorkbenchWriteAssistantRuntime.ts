@@ -10,7 +10,6 @@ import {
   activeWriteThreadForWorkspace,
   readWriteThreadRegistry
 } from '../../write/write-thread-registry'
-import { workWhiteboardSessionTitleUpdates } from '../../write/work-whiteboard-session-title'
 
 type WorkbenchWriteAssistantRuntimeOptions = {
   composerPickList: string[]
@@ -31,7 +30,6 @@ export function useWorkbenchWriteAssistantRuntime({
   const activeWhiteboard = useWriteWorkspaceStore((s) =>
     s.activeWhiteboardId ? s.whiteboards[s.activeWhiteboardId] ?? null : null
   )
-  const whiteboards = useWriteWorkspaceStore((s) => s.whiteboards)
   const setWriteAssistantModel = useWriteWorkspaceStore((s) => s.setAssistantModel)
   const route = useChatStore((s) => s.route)
   const runtimeConnection = useChatStore((s) => s.runtimeConnection)
@@ -39,11 +37,6 @@ export function useWorkbenchWriteAssistantRuntime({
   const threads = useChatStore((s) => s.threads)
   const pendingThreadIdRef = useRef<string | null>(null)
   const pendingBoardIdRef = useRef<string | null>(null)
-  // Thread projections replace `threads` for each SSE event. Keep pending
-  // whiteboard title writes keyed to their workspace and bound thread so a
-  // stream cannot enqueue the same registry update more than once.
-  const desiredWhiteboardTitlesRef = useRef(new Map<string, string>())
-  const syncingWhiteboardTitlesRef = useRef(new Set<string>())
   const writeAssistantPickList = useMemo(() => {
     return buildComposerAssistantPickList({
       composerPickList
@@ -79,7 +72,13 @@ export function useWorkbenchWriteAssistantRuntime({
       }
       if (pendingBoardIdRef.current === activeWhiteboardId) return
       pendingBoardIdRef.current = activeWhiteboardId
-      void chatState.createWriteThread(writeWorkspaceRoot, undefined, activeWhiteboard.title).then(async (threadId) => {
+      // The board title is the whiteboard's own canonical metadata; seed the
+      // bound session with it and lock the session title (titleAuto: false) so
+      // the backend titler cannot overwrite the user-visible board name.
+      void chatState.createWriteThread(writeWorkspaceRoot, undefined, {
+        title: activeWhiteboard.title,
+        titleAuto: false
+      }).then(async (threadId) => {
         if (threadId) {
           await useWriteWorkspaceStore.getState().bindWhiteboardThread(activeWhiteboardId, threadId)
         }
@@ -123,62 +122,6 @@ export function useWorkbenchWriteAssistantRuntime({
     threads,
     writeWorkspaceRoot
   ])
-
-  useEffect(() => {
-    const boardSyncKey = (boardId: string, threadId: string): string =>
-      `${writeWorkspaceRoot}\u0000${boardId}\u0000${threadId}`
-    const activeKeys = new Set(
-      Object.values(whiteboards).flatMap((board) =>
-        board.workspaceRoot === writeWorkspaceRoot && board.threadId
-          ? [boardSyncKey(board.id, board.threadId)]
-          : []
-      )
-    )
-    for (const key of desiredWhiteboardTitlesRef.current.keys()) {
-      if (!activeKeys.has(key)) desiredWhiteboardTitlesRef.current.delete(key)
-    }
-
-    const updates = workWhiteboardSessionTitleUpdates(whiteboards, threads, writeWorkspaceRoot)
-    for (const update of updates) {
-      const board = whiteboards[update.boardId]
-      const threadId = board?.threadId
-      if (!board || !threadId || board.workspaceRoot !== writeWorkspaceRoot) continue
-      const key = boardSyncKey(update.boardId, threadId)
-      if (desiredWhiteboardTitlesRef.current.get(key) === update.title) continue
-      desiredWhiteboardTitlesRef.current.set(key, update.title)
-      if (syncingWhiteboardTitlesRef.current.has(key)) continue
-
-      syncingWhiteboardTitlesRef.current.add(key)
-      void (async () => {
-        try {
-          while (true) {
-            const title = desiredWhiteboardTitlesRef.current.get(key)
-            if (!title) return
-            const state = useWriteWorkspaceStore.getState()
-            const latest = state.whiteboards[update.boardId]
-            if (
-              !latest ||
-              latest.workspaceRoot !== writeWorkspaceRoot ||
-              latest.threadId !== threadId
-            ) {
-              desiredWhiteboardTitlesRef.current.delete(key)
-              return
-            }
-            if (latest.title !== title) {
-              const renamed = await state.renameWhiteboard(update.boardId, title)
-              if (!renamed) {
-                desiredWhiteboardTitlesRef.current.delete(key)
-                return
-              }
-            }
-            if (desiredWhiteboardTitlesRef.current.get(key) === title) return
-          }
-        } finally {
-          syncingWhiteboardTitlesRef.current.delete(key)
-        }
-      })()
-    }
-  }, [threads, whiteboards, writeWorkspaceRoot])
 
   return {
     resolvedWriteAssistantProviderId,

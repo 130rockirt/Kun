@@ -1,9 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { WorkWhiteboard } from './write-workspace-store-types'
-import {
-  renameWorkWhiteboardSession,
-  workWhiteboardSessionTitleUpdates
-} from './work-whiteboard-session-title'
+import { renameWorkWhiteboardSession } from './work-whiteboard-session-title'
 
 const board = (overrides: Partial<WorkWhiteboard> = {}): WorkWhiteboard => ({
   id: 'board-1',
@@ -18,14 +15,6 @@ const board = (overrides: Partial<WorkWhiteboard> = {}): WorkWhiteboard => ({
 })
 
 describe('Work whiteboard session titles', () => {
-  it('treats the bound session title as the canonical whiteboard name', () => {
-    expect(workWhiteboardSessionTitleUpdates(
-      { 'board-1': board() },
-      [{ id: 'thread-1', title: 'FastAPI architecture' }],
-      '/work'
-    )).toEqual([{ boardId: 'board-1', title: 'FastAPI architecture' }])
-  })
-
   it('renames the session before updating the whiteboard cache', async () => {
     let sessionTitle = 'Untitled whiteboard'
     const renameSession = vi.fn(async (_threadId: string, title: string) => { sessionTitle = title })
@@ -54,5 +43,21 @@ describe('Work whiteboard session titles', () => {
     })).resolves.toBe(false)
 
     expect(renameWhiteboard).not.toHaveBeenCalled()
+  })
+
+  it('updates an unbound whiteboard without touching any session', async () => {
+    const renameSession = vi.fn(async () => undefined)
+    const renameWhiteboard = vi.fn(async () => true)
+
+    await expect(renameWorkWhiteboardSession({
+      board: board({ threadId: null }),
+      title: 'Standalone board',
+      renameSession,
+      readSessionTitle: () => null,
+      renameWhiteboard
+    })).resolves.toBe(true)
+
+    expect(renameSession).not.toHaveBeenCalled()
+    expect(renameWhiteboard).toHaveBeenCalledWith('board-1', 'Standalone board')
   })
 })

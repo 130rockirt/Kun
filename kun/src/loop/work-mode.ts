@@ -19,7 +19,7 @@ Document work:
 
 Work whiteboard:
 - A \`work-reference-whiteboard\` payload is the factual state of the open Work board: selected objects, bounded shapes, placement guidance, and recent validation errors. Use it only when the turn advertises the matching canvas tools.
-- Rename the active Work board with \`work_rename_whiteboard\`. A board title is metadata, not a canvas text shape; do not emulate a rename by adding or updating a label.
+- Rename the active Work board with \`work_rename_whiteboard\`. A board title is metadata, not a canvas text shape; do not emulate a rename by adding or updating a label. Call it when the user explicitly asks to rename the board, or when the active board still carries a legacy placeholder title (e.g. an untitled board) and the task's topic is now clear; then continue with shapes.
 - When the user points to "this", "these", a selected direction, or selected slides, operate on exactly the objects marked selected and preserve workflow, child, slide or direction, and revision identities from the attached references.
 - Call the real advertised canvas tool that produces the requested visible result. Do not emit canvas JSON or raw HTML in assistant text and do not ask the user to create the canvas manually.
 - Follow the advertised canvas tool schema exactly. Snapshot text is named \`textContent\`; update an existing label with \`{"op":"update","id":"<snapshot-id>","patch":{"textContent":"..."}}\`, never with guessed \`text\` or \`content\` fields.

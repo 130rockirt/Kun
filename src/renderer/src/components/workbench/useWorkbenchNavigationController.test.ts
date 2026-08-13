@@ -587,7 +587,10 @@ describe('workbench navigation controller Work whiteboards', () => {
       await Promise.resolve()
     })
 
-    expect(createWriteThread).toHaveBeenCalledWith('/workspace', undefined, 'Pitch')
+    expect(createWriteThread).toHaveBeenCalledWith('/workspace', undefined, {
+      title: 'Pitch',
+      titleAuto: false
+    })
     expect(bindWhiteboardThread).toHaveBeenCalledWith('board-1', 'thread-new')
   })
 
@@ -636,7 +639,10 @@ describe('workbench navigation controller Work whiteboards', () => {
     await renderController(makeProps({ route: 'write', createWriteThread }))
 
     await act(async () => latestController.startNewWriteAssistantConversation())
-    expect(createWriteThread).toHaveBeenCalledWith('/workspace', undefined, 'Notes')
+    expect(createWriteThread).toHaveBeenCalledWith('/workspace', undefined, {
+      title: 'Notes',
+      titleAuto: false
+    })
 
     // Reusing the same id models a restored board in the newly selected
     // workspace; the captured workspace scope must still block the old task.

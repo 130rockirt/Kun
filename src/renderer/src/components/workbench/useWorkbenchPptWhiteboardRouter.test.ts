@@ -95,9 +95,40 @@ describe('useWorkbenchPptWhiteboardRouter', () => {
     expect(findOrCreatePptWhiteboard.mock.calls.map(([input]) => input.workflowId)).toEqual([
       'workflow-a', 'workflow-b'
     ])
+    expect(findOrCreatePptWhiteboard.mock.calls.map(([input]) => input.title)).toEqual([
+      'Direction deck', 'Direction deck'
+    ])
     expect(updateWhiteboardPptState).toHaveBeenNthCalledWith(
       1, 'board-workflow-a', expect.objectContaining({ phase: 'directions', revision: 3 })
     )
+    await act(async () => renderer?.unmount())
+  })
+
+  it('passes the main agent UI title into the canonical board creation', async () => {
+    const findOrCreatePptWhiteboard = vi.fn(async (input: FindPptBoardInput) => ({
+      id: 'board-workflow-a', title: input.title, workspaceRoot: '/work',
+      threadId: input.threadId, workflowId: input.workflowId, childId: input.childId,
+      phase: 'blank' as const, revision: 0,
+      createdAt: '2026-08-13T00:00:00.000Z', updatedAt: '2026-08-13T00:00:00.000Z'
+    }))
+    const updateWhiteboardPptState = vi.fn(async () => true)
+    useWriteWorkspaceStore.setState({
+      workspaceRoot: '/work',
+      findOrCreatePptWhiteboard,
+      updateWhiteboardPptState
+    })
+    const blocks = [tool('direction-a', {
+      title: 'Text completion landscape',
+      directionBundle: directionBundle('workflow-a')
+    })]
+
+    let renderer: ReturnType<typeof create> | undefined
+    await act(async () => { renderer = create(createElement(RouterHarness, { blocks })) })
+    await vi.waitFor(() => expect(updateWhiteboardPptState).toHaveBeenCalledTimes(1))
+
+    expect(findOrCreatePptWhiteboard).toHaveBeenCalledWith(expect.objectContaining({
+      title: 'Text completion landscape'
+    }))
     await act(async () => renderer?.unmount())
   })
 

@@ -393,8 +393,6 @@
   "uiPluginCharacterScaleLarger": "放大形象",
   "worktree": "工作树",
   "sectionWorktree": "Git 工作树",
-  "planWorktreeDefaultTitle": "计划构建默认使用隔离工作树",
-  "planWorktreeDefaultDesc": "基于当前分支创建工作树，在其中实现；仅在结构化成功后合入并清理。每个计划可单独切换，不会修改此默认值。",
   "planWorktreeManagedRuns": "托管的计划构建",
   "planWorktreeManaged": "托管计划构建",
   "gitBranchPrefix": "新分支前缀",

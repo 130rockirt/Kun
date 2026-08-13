@@ -92,8 +92,9 @@ export { PPT_AGENT_ALLOWED_TOOLS }
 const PPT_AGENT_DESCRIPTION = [
   'Use `ppt_agent` for any presentation/PPT task: create, edit, replicate, or read a deck.',
   'It reads the exact active user turn and its attachments from the host; never restate, summarize, expand, or invent presentation content in tool arguments.',
-  'For later review actions, pass only the original childId and workflowId so the same PPT child continues with its saved visual plan. Structured review selections are resolved from the active turn context.',
-  'An optional short title is display metadata only and never enters the child request.',
+  'For `action="start"`, pass a required short `title` (2-6 words, at most 160 characters) naming the task for UI surfaces; follow-up actions need only the original childId and workflowId.',
+  'Structured review selections are resolved from the active turn context.',
+  'The short title is display metadata only and never enters the child request.',
   'The child writes deck files under the workspace; the parent owns deliverable verification (deck structure, .pptx export, per-page fade).',
   'PPT 演示文稿任务（创建/编辑/复刻/读取）都应优先交给 ppt_agent；主代理只传工作流控制，不得改写用户内容。'
 ].join(' ')
@@ -136,7 +137,8 @@ export function buildPptAgentToolProvider(
               workflowId: { type: 'string', description: 'Persisted PPT review workflow id required for a review follow-up.' },
               title: {
                 type: 'string',
-                description: 'Optional 2-6 word UI title. This metadata is never sent as presentation content.'
+                maxLength: 160,
+                description: 'Required for action="start": a short 2-6 word UI title (at most 160 characters) naming this task. Optional display metadata; never sent as presentation content. Follow-up actions do not repeat it.'
               }
             },
             required: [],
@@ -163,7 +165,16 @@ export function buildPptAgentToolProvider(
                 isError: true
               }
             }
-            const title = stringValue(args.title) || 'Presentation'
+            const action = pptAgentAction(args.action)
+            const title = stringValue(args.title)
+            if (action === 'start' && !title) {
+              return {
+                output: {
+                  error: 'ppt_agent requires a short UI title for action="start"; retry the call with a 2-6 word title naming the task'
+                },
+                isError: true
+              }
+            }
             const workspace = context.workspace
             const configuredCfg = cfg ?? {}
             const effectiveProvider = effectivePptProviderId(configuredCfg, context)
@@ -186,7 +197,6 @@ export function buildPptAgentToolProvider(
                 ? { imageGenReason: 'generate_image is unavailable in the current tool policy' }
                 : {})
             }
-            const action = pptAgentAction(args.action)
             const childId = stringValue(args.childId)
             const requestedWorkflowId = stringValue(args.workflowId)
             const workflowId = action === 'start'
@@ -438,7 +448,7 @@ export function buildPptAgentToolProvider(
               parentThreadId: context.threadId,
               parentTurnId: context.turnId,
               launcher: 'ppt_agent',
-              label: title,
+              label: title ?? 'Presentation',
               prompt: source.value.prompt,
               source: childPptSourceEnvelope(source.value),
               controlPrompt,
@@ -594,7 +604,7 @@ export function buildPptAgentToolProvider(
                 workflowId,
                 projectDir,
                 status: record.status,
-                title,
+                title: title ?? '',
                 summary: record.summary ?? '',
                 phase: recoverableQaReview
                   ? 'failed_recoverable'

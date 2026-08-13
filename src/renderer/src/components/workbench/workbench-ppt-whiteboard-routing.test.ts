@@ -64,6 +64,7 @@ describe('PPT canvas open routing', () => {
     })).toEqual({
       target: 'write', reason: 'ppt-direction', blockId: 'tool-a', workspaceRoot: '/work',
       threadId: 'thread-a', workflowId: 'workflow-a', childId: 'child-a', sourcePath: '/work/brief.md',
+      title: 'Direction deck',
       pptState: { phase: 'directions', revision: 1 }
     })
   })
@@ -101,6 +102,34 @@ describe('PPT canvas open routing', () => {
     await expect(routePptCanvasOpenRequest(request, { openCode, openWork })).resolves.toBe(false)
     expect(openWork).toHaveBeenCalledWith(request)
     expect(openCode).not.toHaveBeenCalled()
+  })
+
+  it('prefers the payload title over the structured deck title', () => {
+    expect(pptCanvasOpenRequestForBlock(tool({
+      title: '  Text completion landscape  ', directionBundle: directionBundle()
+    }), {
+      route: 'write', workspaceRoot: '/work', threadId: 'thread-a'
+    })).toMatchObject({
+      target: 'write', title: 'Text completion landscape'
+    })
+  })
+
+  it('falls back to the source-based legacy title when no title fields exist', () => {
+    expect(pptCanvasOpenRequestForBlock(tool({
+      childId: 'child-a', workflowId: 'workflow-a', phase: 'completed',
+      deckArtifact: { output: 'presentations/final.pptx' }
+    }), {
+      route: 'write', workspaceRoot: '/work', threadId: 'thread-a', sourcePath: '/work/quarterly-brief.md'
+    })).toMatchObject({
+      title: 'quarterly-brief · Presentation review'
+    })
+    expect(pptCanvasOpenRequestForBlock(tool({
+      childId: 'child-a', workflowId: 'workflow-a', phase: 'completed'
+    }), {
+      route: 'write', workspaceRoot: '/work', threadId: 'thread-a'
+    })).toMatchObject({
+      title: 'Presentation review'
+    })
   })
 
   it('projects completed output metadata onto the bound Work whiteboard', () => {

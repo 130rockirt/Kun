@@ -393,8 +393,6 @@
   "uiPluginCharacterScaleLarger": "Make character larger",
   "worktree": "Worktrees",
   "sectionWorktree": "Git worktrees",
-  "planWorktreeDefaultTitle": "Plan builds use isolated worktrees by default",
-  "planWorktreeDefaultDesc": "Prepare a branch worktree from the current branch, implement there, then integrate and clean up only after structured success. Each plan can override this without changing the default.",
   "planWorktreeManagedRuns": "Managed plan builds",
   "planWorktreeManaged": "Managed plan build",
   "gitBranchPrefix": "New branch prefix",

@@ -98,6 +98,10 @@ Kun 的缓存命中率要按 provider 原生 usage 字段优先计算和优化�
   重启或 resume 后 runtime usage 面板不重新从 0 计算。
 - 动态上下文必须追加在稳定前缀之后。compaction、resume、fork、plan context
   也不得改写稳定系统前缀。
+- 普通 Code 与 Design 回合共享同一个 Agent 缓存分区和同一份工作台工具 schema 并集；
+  模式规则、Design profile 与画布快照只作为 append-only `model_context` 追加在历史末尾。
+  工具执行仍按当前回合的真实 surface / canvas 状态重新校验，所以稳定 schema 不会扩大执行权限。
+  Plan、Graph 与专用 SVG 回合属于真实能力阶段，继续使用独立分区和受限工具目录。
 - Work turn 按 `agentSurface: write` 追加稳定的 Work mode system instruction；Renderer
   持久化的用户正文只保留用户原话。当前资源、精确选区、检索/Office 摘录和白板快照
   通过有界 `composerContexts` 引用随 turn 传入，不再把工作区、工具手册或画布规则拼进

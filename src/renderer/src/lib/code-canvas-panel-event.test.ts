@@ -34,7 +34,8 @@ describe('requestCodeCanvasPanelOpen', () => {
       workspaceRoot: '/work',
       threadId: 'thread-a',
       workflowId: 'workflow-a',
-      childId: 'child-a'
+      childId: 'child-a',
+      title: 'Pitch deck review'
     })
 
     const event = dispatchEvent.mock.calls[0]?.[0] as Event
@@ -45,7 +46,8 @@ describe('requestCodeCanvasPanelOpen', () => {
       workspaceRoot: '/work',
       threadId: 'thread-a',
       workflowId: 'workflow-a',
-      childId: 'child-a'
+      childId: 'child-a',
+      title: 'Pitch deck review'
     })
   })
 })

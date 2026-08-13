@@ -1,5 +1,6 @@
 import { ipcMain } from 'electron'
 import { z } from 'zod'
+import { getKunRuntimeSettings } from '../../shared/app-settings-kun-defaults'
 import {
   PlanWorktreeAttachThreadRequestSchema,
   PlanWorktreeDiscardRequestSchema,
@@ -106,6 +107,14 @@ export function registerAppPlanWorktreeIpcHandlers(
     const recovery = await startupRecovery
     if (recovery.error) throw recovery.error
     return operation()
+  }
+  const requirePlanWorktreeExperiment = async (): Promise<void> => {
+    const settings = await options.store.load()
+    if (!getKunRuntimeSettings(settings).lab.planWorktree.enabled) {
+      throw new Error(
+        'Isolated plan builds are disabled. Enable the experiment in Settings > Laboratory.'
+      )
+    }
   }
   const recoverExecutionLink = async (runId: string): Promise<PlanWorktreeRunRecord> =>
     coordinator.reconcileExecutionLink(runId)
@@ -231,6 +240,7 @@ export function registerAppPlanWorktreeIpcHandlers(
   const prepareExecutionThread = async (
     request: Parameters<PlanWorktreeCoordinator['prepare']>[0]
   ): Promise<PlanWorktreeRunRecord> => {
+    await requirePlanWorktreeExperiment()
     await requirePlanBuildAdmissionBindingSupport()
     const prepared = await coordinator.prepare(request)
     try {
@@ -243,12 +253,14 @@ export function registerAppPlanWorktreeIpcHandlers(
   }
 
   ipcMain.handle('plan-worktree:preflight', async (_, payload: unknown) => {
-    await requirePlanBuildAdmissionBindingSupport()
-    return coordinator.preflight(parseIpcPayload(
+    const request = parseIpcPayload(
       'plan-worktree:preflight',
       PlanWorktreePreflightRequestSchema,
       payload
-    ))
+    )
+    await requirePlanWorktreeExperiment()
+    await requirePlanBuildAdmissionBindingSupport()
+    return coordinator.preflight(request)
   })
   ipcMain.handle('plan-worktree:prepare', async (_, payload: unknown) =>
     afterStartupRecovery(async () => publicRun(await prepareExecutionThread(parseIpcPayload(
