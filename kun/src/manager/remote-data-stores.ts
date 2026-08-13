@@ -30,7 +30,12 @@ import {
   type MemoryCreateRequest,
   type MemoryUpdateRequest
 } from '../contracts/memory.js'
-import { ThreadSchema, ThreadSummarySchema, type ThreadRecord } from '../contracts/threads.js'
+import {
+  ThreadSchema,
+  ThreadSchemaReadable,
+  ThreadSummarySchema,
+  type ThreadRecord
+} from '../contracts/threads.js'
 import type { AgentSession } from '../domain/session.js'
 import type { MemoryAccess, MemoryStore } from '../memory/memory-store.js'
 import type {
@@ -168,11 +173,11 @@ export class ManagerRemoteThreadStore implements ThreadStore {
   }
 
   async get(threadId: string) {
-    return ThreadSchema.nullable().parse(await this.call('get', { threadId }))
+    return ThreadSchemaReadable.nullable().parse(await this.call('get', { threadId }))
   }
 
   async getMetadata(threadId: string) {
-    return ThreadSchema.nullable().parse(await this.call('getMetadata', { threadId }))
+    return ThreadSchemaReadable.nullable().parse(await this.call('getMetadata', { threadId }))
   }
 
   async touch(threadId: string, updatedAt: string) {
