@@ -71,17 +71,35 @@ export type ExploreBatchChildDetail = DelegateDetail & {
   profileName: string
 }
 
+/** A bounded, renderer-safe projection of Fast Context's source evidence. */
+export type FastContextEvidence = {
+  path: string
+  ranges: Array<[number, number]>
+  excerpt?: string
+  reason?: string
+}
+
+export type FastContextEvidenceTask = {
+  index: number
+  title: string
+  query: string
+  evidence: FastContextEvidence[]
+  conclusion?: string
+  uncertainties: string[]
+}
+
+export type FastContextEvidencePack = {
+  version: 1
+  tasks: FastContextEvidenceTask[]
+  uncertainties: string[]
+  evidenceCount: number
+}
+
 export function parseDelegateDetail(detail: string | undefined): DelegateDetail {
-  if (!detail || !detail.trim()) return {}
-  let raw: unknown
-  try {
-    raw = JSON.parse(detail)
-  } catch {
-    return {}
-  }
-  if (!raw || typeof raw !== 'object') return {}
-  const obj = raw as Record<string, unknown>
-  const usage = obj.usage && typeof obj.usage === 'object' ? (obj.usage as Record<string, unknown>) : undefined
+  const obj = parseDetailObject(detail)
+  if (!obj) return {}
+  const child = recordValue(obj.child)
+  const usage = recordValue(obj.usage) ?? recordValue(child?.usage)
   const routing = obj.routing && typeof obj.routing === 'object' ? (obj.routing as Record<string, unknown>) : undefined
   const generatedAgent = obj.generatedAgent && typeof obj.generatedAgent === 'object'
     ? (obj.generatedAgent as Record<string, unknown>)
@@ -97,48 +115,155 @@ export function parseDelegateDetail(detail: string | undefined): DelegateDetail 
       : undefined
   const num = (v: unknown): number | undefined =>
     typeof v === 'number' && Number.isFinite(v) ? v : undefined
-  const resultRef = obj.resultRef && typeof obj.resultRef === 'object'
-    ? obj.resultRef as Record<string, unknown>
-    : undefined
+  const evidencePack = parseFastContextEvidencePack(detail)
+  const singleTask = evidencePack?.tasks.length === 1 ? evidencePack.tasks[0] : undefined
+  const resultRef = recordValue(obj.resultRef) ?? recordValue(child?.resultRef)
   const artifactId = str(resultRef?.artifactId)
   const byteSize = num(resultRef?.byteSize)
   const lineCount = num(resultRef?.lineCount)
   return {
-    childId: str(obj.childId),
-    parentThreadId: str(obj.parentThreadId),
-    parentTurnId: str(obj.parentTurnId),
-    status: status(obj.status),
+    childId: str(obj.childId) ?? str(child?.childId),
+    parentThreadId: str(obj.parentThreadId) ?? str(child?.parentThreadId),
+    parentTurnId: str(obj.parentTurnId) ?? str(child?.parentTurnId),
+    status: status(obj.status) ?? status(child?.status),
     launcher: obj.launcher === 'delegate_task' || obj.launcher === 'explore_agent' ||
       obj.launcher === 'ppt_agent' || obj.launcher === 'component_design' || obj.launcher === 'graph'
       ? obj.launcher
+      : child?.launcher === 'delegate_task' || child?.launcher === 'explore_agent' ||
+          child?.launcher === 'ppt_agent' || child?.launcher === 'component_design' || child?.launcher === 'graph'
+        ? child.launcher
       : undefined,
     terminationReason: obj.terminationReason === 'user_stop' || obj.terminationReason === 'manual_stop' ||
       obj.terminationReason === 'runtime_restart' || obj.terminationReason === 'child_error'
       ? obj.terminationReason
+      : child?.terminationReason === 'user_stop' || child?.terminationReason === 'manual_stop' ||
+          child?.terminationReason === 'runtime_restart' || child?.terminationReason === 'child_error'
+        ? child.terminationReason
       : undefined,
-    resumable: typeof obj.resumable === 'boolean' ? obj.resumable : undefined,
-    resumeCount: num(obj.resumeCount),
-    title: str(obj.title),
-    query: str(obj.query),
-    summary: str(obj.summary),
-    summaryTruncated: obj.summaryTruncated === true,
+    resumable: typeof obj.resumable === 'boolean'
+      ? obj.resumable
+      : typeof child?.resumable === 'boolean' ? child.resumable : undefined,
+    resumeCount: num(obj.resumeCount) ?? num(child?.resumeCount),
+    title: str(obj.title) ?? str(child?.title) ?? singleTask?.title,
+    query: str(obj.query) ?? str(child?.query) ?? singleTask?.query,
+    summary: str(obj.summary) ?? str(child?.summary),
+    summaryTruncated: obj.summaryTruncated === true || child?.summaryTruncated === true,
     ...(artifactId && byteSize !== undefined && lineCount !== undefined
       ? { resultRef: { artifactId, byteSize, lineCount, mimeType: 'text/markdown' } }
       : {}),
-    resultUnavailableReason: str(obj.resultUnavailableReason),
-    error: str(obj.error),
-    profile: str(obj.profile),
-    profileName: str(obj.profileName),
-    model: str(obj.model),
-    toolPolicy: str(obj.toolPolicy),
-    toolInvocations: num(obj.toolInvocations),
-    durationMs: num(obj.durationMs),
-    queuedMs: num(obj.queuedMs),
+    resultUnavailableReason: str(obj.resultUnavailableReason) ?? str(child?.resultUnavailableReason),
+    error: str(obj.error) ?? str(child?.error),
+    profile: str(obj.profile) ?? str(child?.profile),
+    profileName: str(obj.profileName) ?? str(child?.profileName),
+    model: str(obj.model) ?? str(child?.model),
+    toolPolicy: str(obj.toolPolicy) ?? str(child?.toolPolicy),
+    toolInvocations: num(obj.toolInvocations) ?? num(child?.toolInvocations),
+    durationMs: num(obj.durationMs) ?? num(child?.durationMs),
+    queuedMs: num(obj.queuedMs) ?? num(child?.queuedMs),
     totalTokens: usage ? num(usage.totalTokens) : undefined,
-    detached: obj.detached === true,
-    generated: routing?.selectedKind === 'generated' || str(obj.profile)?.startsWith('generated:') === true,
+    detached: obj.detached === true || child?.detached === true,
+    generated: routing?.selectedKind === 'generated' ||
+      (str(obj.profile) ?? str(child?.profile))?.startsWith('generated:') === true,
     generatedAgentName: str(generatedAgent?.name) ?? str(routingAgent?.name)
   }
+}
+
+/**
+ * Parse the single-child Fast Context evidence contract. Invalid subtrees are
+ * ignored rather than rendered, so a malformed persisted detail never makes a
+ * timeline card fail to mount.
+ */
+export function parseFastContextEvidencePack(detail: string | undefined): FastContextEvidencePack | undefined {
+  const obj = parseDetailObject(detail)
+  const rawPack = recordValue(obj?.evidencePack)
+  if (!rawPack || rawPack.version !== 1 || !Array.isArray(rawPack.tasks)) return undefined
+  if (rawPack.tasks.length < 1 || rawPack.tasks.length > 4) return undefined
+  const tasks: FastContextEvidenceTask[] = []
+  const seenIndexes = new Set<number>()
+  for (const rawTask of rawPack.tasks) {
+    const task = parseFastContextEvidenceTask(rawTask)
+    if (!task || seenIndexes.has(task.index)) return undefined
+    seenIndexes.add(task.index)
+    tasks.push(task)
+  }
+  return {
+    version: 1,
+    tasks: tasks.sort((left, right) => left.index - right.index),
+    uncertainties: stringList(rawPack.uncertainties, 12, 320),
+    evidenceCount: tasks.reduce((count, task) => count + task.evidence.length, 0)
+  }
+}
+
+function parseFastContextEvidenceTask(value: unknown): FastContextEvidenceTask | undefined {
+  const rawTask = recordValue(value)
+  const index = rawTask?.index
+  const title = boundedString(rawTask?.title, 160)
+  const query = boundedString(rawTask?.query, 800)
+  if (!Number.isInteger(index) || (index as number) < 0 || (index as number) > 3 || !title || !query) return undefined
+  const evidence = Array.isArray(rawTask.evidence)
+    ? rawTask.evidence.flatMap((item) => {
+      const parsed = parseFastContextEvidence(item)
+      return parsed ? [parsed] : []
+    }).slice(0, 30)
+    : []
+  return {
+    index: index as number,
+    title,
+    query,
+    evidence,
+    conclusion: boundedString(rawTask.conclusion, 1_600),
+    uncertainties: stringList(rawTask.uncertainties, 8, 320)
+  }
+}
+
+function parseFastContextEvidence(value: unknown): FastContextEvidence | undefined {
+  const rawEvidence = recordValue(value)
+  const path = boundedString(rawEvidence?.path, 600)
+  if (!path || !Array.isArray(rawEvidence?.ranges)) return undefined
+  const ranges = rawEvidence.ranges.flatMap((value) => {
+    if (!Array.isArray(value) || value.length !== 2) return []
+    const [start, end] = value
+    return Number.isInteger(start) && Number.isInteger(end) && start > 0 && end >= start
+      ? [[start, end] as [number, number]]
+      : []
+  }).slice(0, 12)
+  if (ranges.length === 0) return undefined
+  return {
+    path,
+    ranges,
+    excerpt: boundedString(rawEvidence.excerpt, 1_000),
+    reason: boundedString(rawEvidence.reason, 500)
+  }
+}
+
+function parseDetailObject(detail: string | undefined): Record<string, unknown> | undefined {
+  if (!detail || !detail.trim()) return undefined
+  try {
+    return recordValue(JSON.parse(detail))
+  } catch {
+    return undefined
+  }
+}
+
+function recordValue(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined
+}
+
+function boundedString(value: unknown, maxLength: number): string | undefined {
+  if (typeof value !== 'string') return undefined
+  const normalized = value.trim()
+  return normalized ? normalized.slice(0, maxLength) : undefined
+}
+
+function stringList(value: unknown, maxItems: number, maxLength: number): string[] {
+  return Array.isArray(value)
+    ? value.flatMap((item) => {
+      const parsed = boundedString(item, maxLength)
+      return parsed ? [parsed] : []
+    }).slice(0, maxItems)
+    : []
 }
 
 /** Parse the new aggregate explore result without changing legacy scalar parsing. */

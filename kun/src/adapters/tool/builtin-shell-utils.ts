@@ -1,11 +1,13 @@
 import { existsSync } from 'node:fs'
 import { spawn, spawnSync, type ChildProcess, type SpawnOptions } from 'node:child_process'
-import { win32 } from 'node:path'
+import { createRequire } from 'node:module'
+import { posix, win32 } from 'node:path'
 import type { ShellConfig } from './builtin-tool-types.js'
 import { resolveWindowsShellCandidates, WINDOWS_POWERSHELL_COMMAND_ARGS, windowsSystemRoot } from './windows-shell-resolver.js'
 
 type SpawnSyncLike = typeof spawnSync
 type SpawnLike = typeof spawn
+const runtimeRequire = createRequire(import.meta.url)
 const POWERSHELL_UTF8_OUTPUT_PREAMBLE = [
   '$OutputEncoding = [System.Text.UTF8Encoding]::new($false)',
   '[Console]::OutputEncoding = $OutputEncoding',
@@ -512,6 +514,87 @@ export function resolveExecutable(
   return null
 }
 
+export type CursorSdkRipgrepResolverOptions = {
+  platform?: NodeJS.Platform
+  arch?: string
+  /** Test seam for resolving the packaged platform dependency without PATH. */
+  resolvePackage?: (specifier: string) => string
+  fileExists?: (path: string) => boolean
+  responds?: (candidate: string) => boolean
+}
+
+export type RipgrepExecutableResolverOptions = CursorSdkRipgrepResolverOptions & {
+  candidates?: string[]
+  lookup?: SpawnSyncLike
+}
+
+const cursorSdkRipgrepCache = new Map<string, string | null>()
+
+/**
+ * Maps the current Node target to Cursor SDK's optional platform package.
+ * The SDK owns these binaries, so resolving its package manifest is reliable
+ * in both source checkouts and Electron's unpacked application resources.
+ */
+export function cursorSdkRipgrepPackageName(
+  platform: NodeJS.Platform = process.platform,
+  arch: string = process.arch
+): string | null {
+  if (!['darwin', 'linux', 'win32'].includes(platform)) return null
+  if (arch !== 'x64' && arch !== 'arm64') return null
+  // Cursor currently publishes no Windows ARM64 binary.
+  if (platform === 'win32' && arch !== 'x64') return null
+  return `@cursor/sdk-${platform}-${arch}`
+}
+
+/**
+ * Resolves Cursor SDK's bundled ripgrep by module location, never through
+ * PATH. This is important for Electron launches, whose inherited PATH is
+ * commonly much smaller than an interactive shell's PATH.
+ */
+export function resolveCursorSdkRipgrep(options: CursorSdkRipgrepResolverOptions = {}): string | null {
+  const platform = options.platform ?? process.platform
+  const arch = options.arch ?? process.arch
+  const packageName = cursorSdkRipgrepPackageName(platform, arch)
+  if (!packageName) return null
+  const cacheKey = `${platform}:${arch}`
+  const usesRuntimeDefaults = !options.resolvePackage && !options.fileExists && !options.responds
+  if (usesRuntimeDefaults && cursorSdkRipgrepCache.has(cacheKey)) {
+    return cursorSdkRipgrepCache.get(cacheKey) ?? null
+  }
+  const resolvePackage = options.resolvePackage ?? ((specifier: string) => runtimeRequire.resolve(specifier))
+  const fileExists = options.fileExists ?? existsSync
+  const responds = options.responds ?? executableResponds
+  let resolved: string | null = null
+  try {
+    const manifestPath = resolvePackage(`${packageName}/package.json`)
+    const pathApi = platform === 'win32' ? win32 : posix
+    const binaryPath = pathApi.join(
+      pathApi.dirname(manifestPath),
+      'bin',
+      platform === 'win32' ? 'rg.exe' : 'rg'
+    )
+    if (fileExists(binaryPath) && responds(binaryPath)) resolved = binaryPath
+  } catch {
+    // Optional platform dependencies are intentionally absent on unsupported
+    // targets and source installations can omit optional packages.
+  }
+  if (usesRuntimeDefaults) cursorSdkRipgrepCache.set(cacheKey, resolved)
+  return resolved
+}
+
+/** Prefer the packaged Cursor SDK binary, then preserve normal executable fallback. */
+export function resolveRipgrepExecutable(options: RipgrepExecutableResolverOptions = {}): string | null {
+  const bundled = resolveCursorSdkRipgrep(options)
+  if (bundled) return bundled
+  return resolveExecutable(
+    options.candidates ?? ['rg'],
+    options.platform,
+    options.lookup,
+    options.fileExists,
+    options.responds
+  )
+}
+
 function executableResponds(candidate: string): boolean {
   const probe = spawnSync(candidate, ['--version'], {
     encoding: 'utf8',
@@ -527,8 +610,8 @@ export const DEFAULT_SPAWN_CAPTURE_MAX_BYTES = 1024 * 1024
 export async function spawnCapture(
   file: string,
   args: string[],
-  options: { cwd: string; signal?: AbortSignal; maxOutputBytes?: number }
-): Promise<{ stdout: string; stderr: string; exitCode: number | null; outputTruncated: boolean }> {
+  options: { cwd: string; signal?: AbortSignal; maxOutputBytes?: number; timeoutMs?: number }
+): Promise<{ stdout: string; stderr: string; exitCode: number | null; outputTruncated: boolean; timedOut: boolean }> {
   const maxOutputBytes = normalizePositiveInteger(options.maxOutputBytes, DEFAULT_SPAWN_CAPTURE_MAX_BYTES)
   const child = spawn(file, args, {
     cwd: options.cwd,
@@ -542,6 +625,8 @@ export async function spawnCapture(
   let outputTruncated = false
   let outputTerminationRequested = false
   let forceKillTimer: ReturnType<typeof setTimeout> | undefined
+  let timeoutTimer: ReturnType<typeof setTimeout> | undefined
+  let timedOut = false
   const stopForOutputLimit = () => {
     if (outputTerminationRequested) return
     outputTerminationRequested = true
@@ -566,6 +651,16 @@ export async function spawnCapture(
   }
   const onAbort = () => terminateSpawnTree(child)
   options.signal?.addEventListener('abort', onAbort, { once: true })
+  const timeoutMs = options.timeoutMs === undefined
+    ? undefined
+    : normalizePositiveInteger(options.timeoutMs, 1)
+  if (timeoutMs !== undefined) {
+    timeoutTimer = setTimeout(() => {
+      timedOut = true
+      stopForOutputLimit()
+    }, timeoutMs)
+    timeoutTimer.unref?.()
+  }
   child.stdout?.on('data', (chunk: Buffer | string) => {
     appendOutput(stdout, chunk)
   })
@@ -578,13 +673,15 @@ export async function spawnCapture(
   }).finally(() => {
     options.signal?.removeEventListener('abort', onAbort)
     if (forceKillTimer) clearTimeout(forceKillTimer)
+    if (timeoutTimer) clearTimeout(timeoutTimer)
   })
   if (options.signal?.aborted) throw new Error('command aborted')
   return {
     stdout: Buffer.concat(stdout).toString('utf8'),
     stderr: Buffer.concat(stderr).toString('utf8'),
     exitCode,
-    outputTruncated
+    outputTruncated,
+    timedOut
   }
 }
 

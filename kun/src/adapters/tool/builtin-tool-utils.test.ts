@@ -2,11 +2,14 @@ import { statSync } from 'node:fs'
 import { EventEmitter } from 'node:events'
 import { describe, expect, it, vi } from 'vitest'
 import {
+  cursorSdkRipgrepPackageName,
   createShellCommandRunner,
   globToRegExp,
   makeListEntry,
   normalizeToolPath,
+  resolveCursorSdkRipgrep,
   resolveExecutable,
+  resolveRipgrepExecutable,
   ShellSpawnError,
   shellConfig,
   shellCommandArgs,
@@ -225,6 +228,45 @@ describe('resolveExecutable', () => {
       () => false,
       () => true
     )).toBe('/opt/homebrew/bin/rg')
+  })
+})
+
+describe('Cursor SDK ripgrep resolution', () => {
+  it('resolves the packaged binary directly without a PATH lookup', () => {
+    const packageName = cursorSdkRipgrepPackageName('darwin', 'arm64')
+    expect(packageName).toBe('@cursor/sdk-darwin-arm64')
+    const resolvePackage = vi.fn((specifier: string) => {
+      expect(specifier).toBe(`${packageName}/package.json`)
+      return '/Applications/Kun.app/Contents/Resources/app.asar.unpacked/kun/node_modules/@cursor/sdk-darwin-arm64/package.json'
+    })
+    const responds = vi.fn(() => true)
+
+    expect(resolveCursorSdkRipgrep({
+      platform: 'darwin',
+      arch: 'arm64',
+      resolvePackage,
+      fileExists: (path) => path.endsWith('/bin/rg'),
+      responds
+    })).toBe('/Applications/Kun.app/Contents/Resources/app.asar.unpacked/kun/node_modules/@cursor/sdk-darwin-arm64/bin/rg')
+    expect(resolvePackage).toHaveBeenCalledOnce()
+    expect(responds).toHaveBeenCalledWith(expect.stringContaining('/bin/rg'))
+  })
+
+  it('falls back to normal executable lookup when the packaged platform dependency is absent', () => {
+    expect(resolveRipgrepExecutable({
+      platform: 'linux',
+      arch: 'x64',
+      candidates: ['rg'],
+      resolvePackage: () => { throw new Error('optional package unavailable') },
+      lookup: lookup({ 'which rg': '/usr/local/bin/rg\n' }),
+      fileExists: () => false,
+      responds: () => true
+    })).toBe('/usr/local/bin/rg')
+  })
+
+  it('does not claim a package for unsupported Cursor SDK targets', () => {
+    expect(cursorSdkRipgrepPackageName('win32', 'arm64')).toBeNull()
+    expect(cursorSdkRipgrepPackageName('freebsd', 'x64')).toBeNull()
   })
 })
 
