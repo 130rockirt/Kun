@@ -265,7 +265,7 @@ export function registerAppSettingsIpcHandlers(options: RegisterAppIpcHandlersOp
     }
     const storedSettings = await store.load()
     expectedProvider(storedSettings)
-    const projectedSettings = await withRegistryCredentials(storedSettings)
+    const projectedSettings = await withRegistryCredentials(storedSettings, [id])
     return expectedProvider(projectedSettings).apiKey.trim() || undefined
   }
   // Claude Pro/Max subscription login. The official CLI owns browser OAuth and

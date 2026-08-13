@@ -120,6 +120,11 @@ describe('registerAppIpcHandlers security and provider', () => {
       apiKey: 'registry-cursor-secret'
     }))
     expect(withRegistryCredentials).toHaveBeenCalledTimes(3)
+    expect(withRegistryCredentials.mock.calls).toEqual([
+      [stored, ['claude-subscription']],
+      [stored, ['claude-subscription']],
+      [stored, ['cursor-subscription']]
+    ])
   })
 
   it('rejects untrusted Registry credential lookups before loading protected settings', async () => {
