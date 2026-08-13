@@ -195,6 +195,26 @@ describe('FloatingComposer input history and shortcut hint', () => {
     expect(html).toMatch(/<button[^>]*disabled=""[^>]*aria-label="Send"/)
   })
 
+  it('removes the Code/Design selector from a locked conversation', () => {
+    const lockedCode = renderToStaticMarkup(createElement(FloatingComposer, baseComposerProps({
+      taskSurface: 'code',
+      taskSurfaceLocked: true,
+      designTaskProfile: { outputMedium: 'html', target: 'web', preset: 'none' }
+    })))
+    const lockedDesign = renderToStaticMarkup(createElement(FloatingComposer, baseComposerProps({
+      taskSurface: 'design',
+      taskSurfaceLocked: true,
+      designProfileLocked: true,
+      designTaskProfile: { outputMedium: 'html', target: 'web', preset: 'none' }
+    })))
+
+    expect(lockedCode).not.toContain('data-task-surface-selector')
+    expect(lockedCode).not.toContain('ds-composer-task-profile')
+    expect(lockedDesign).not.toContain('data-task-surface-selector')
+    expect(lockedDesign).toContain('ds-composer-task-profile')
+    expect(lockedDesign).toContain('data-task-surface="design"')
+  })
+
   it('renders the persona picker when a legacy preset has no icon field', () => {
     const html = renderToStaticMarkup(createElement(FloatingComposer, baseComposerProps({
       composerPersonaId: 'doubter',

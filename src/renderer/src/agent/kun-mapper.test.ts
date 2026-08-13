@@ -38,6 +38,15 @@ describe('runtime projection action normalization', () => {
       id: 'thread_design',
       title: 'Landing page',
       agentSurface: 'design',
+      designProfile: {
+        version: 1,
+        documentTarget: { documentId: 'doc_1', boardArtifactId: 'board_1' },
+        outputMedium: 'html',
+        target: 'web',
+        preset: 'ios',
+        context: { tone: ['calm'] },
+        lockedAtTurnId: 'turn_1'
+      },
       model: 'model_1',
       mode: 'agent',
       status: 'idle',
@@ -46,6 +55,26 @@ describe('runtime projection action normalization', () => {
     })
 
     expect(thread.agentSurface).toBe('design')
+    expect(thread.designProfile).toMatchObject({
+      documentTarget: { documentId: 'doc_1', boardArtifactId: 'board_1' },
+      lockedAtTurnId: 'turn_1'
+    })
+  })
+
+  it('projects the locked task mode before thread detail hydration', () => {
+    const thread = threadFromCore({
+      id: 'thread_locked_code',
+      title: 'Existing Code task',
+      agentSurface: 'code',
+      lockedTaskSurface: 'code',
+      model: 'model_1',
+      mode: 'agent',
+      status: 'idle',
+      createdAt: '2026-08-13T00:00:00.000Z',
+      updatedAt: '2026-08-13T00:00:00.000Z'
+    })
+
+    expect(thread.lockedTaskSurface).toBe('code')
   })
 
   it('preserves read-only knowledge-base mounts from thread summaries', () => {
@@ -66,6 +95,47 @@ describe('runtime projection action normalization', () => {
     expect(thread.knowledgeBases).toEqual([expect.objectContaining({
       id: 'kb_docs', access: 'read-only'
     })])
+  })
+
+  it('projects an accepted Design profile lock from turn_started metadata', async () => {
+    const onThreadUpdated = vi.fn()
+    const designProfile = {
+      version: 1 as const,
+      documentTarget: { documentId: 'doc_live', boardArtifactId: 'board_live' },
+      outputMedium: 'html' as const,
+      target: 'web' as const,
+      preset: 'geist' as const,
+      context: { tone: [] },
+      lockedAtTurnId: 'turn_live'
+    }
+    await dispatchKunRuntimeEvent({
+      kind: 'turn_started',
+      seq: 4,
+      threadId: 'thread_live',
+      turnId: 'turn_live',
+      agentSurface: 'design',
+      threadAgentSurface: 'code',
+      designProfile
+    }, { ...makeSink(), onThreadUpdated }, async () => undefined)
+
+    expect(onThreadUpdated).toHaveBeenCalledWith({
+      threadId: 'thread_live',
+      agentSurface: 'code',
+      designProfile
+    })
+  })
+
+  it('does not project a Design turn intent as durable thread ownership', async () => {
+    const onThreadUpdated = vi.fn()
+    await dispatchKunRuntimeEvent({
+      kind: 'turn_started',
+      seq: 5,
+      threadId: 'thread_live',
+      turnId: 'turn_live',
+      agentSurface: 'design'
+    }, { ...makeSink(), onThreadUpdated }, async () => undefined)
+
+    expect(onThreadUpdated).not.toHaveBeenCalled()
   })
 
   it('defaults a legacy thread without reviewer metadata to manual user review', () => {

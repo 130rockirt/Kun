@@ -422,4 +422,23 @@ describe('Kun extension metadata mapping', () => {
       meta: { messageSource: 'graph_runtime' }
     })
   })
+
+  it('preserves Design continuation source for hidden progress turns', () => {
+    const block = chatBlockFromItem({
+      id: 'item_design_continuation',
+      turnId: 'turn_logo',
+      threadId: 'thr_design',
+      role: 'user',
+      status: 'completed',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      kind: 'user_message',
+      text: 'Internal logo prompt',
+      messageSource: 'design_continuation'
+    })
+
+    expect(block).toMatchObject({
+      kind: 'user',
+      meta: { messageSource: 'design_continuation' }
+    })
+  })
 })

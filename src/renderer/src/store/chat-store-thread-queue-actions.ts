@@ -47,7 +47,10 @@ import type {
   QueuedUserMessage,
   WriteAssistantMessageContext
 } from './chat-store-types'
-import { queuedMessageGuidancePayload } from './queued-message-guidance'
+import {
+  queuedMessageGuidancePayload,
+  queuedMessageMatchesRunningTurn
+} from './queued-message-guidance'
 import { currentTurnStartGeneration } from './turn-start-fence'
 import {
   isPendingQueuedMessage,
@@ -98,6 +101,8 @@ import {
 } from '../write/write-thread-registry'
 import { useWriteWorkspaceStore } from '../write/write-workspace-store'
 import { useGraphStore } from '../graph/graph-store'
+import { planWorktreeComposerAccess } from '../plan/plan-worktree-composer-access'
+import { usePlanWorktreeStore } from '../plan/plan-worktree-store'
 import {
   clearBusyWatchdog,
   resetBusyRecoveryAttempts,
@@ -152,6 +157,8 @@ import {
   localConversationErrorBlock,
   pendingComposerContexts,
   pendingQueuedMessage,
+  hasRuntimeTurnAdmissionWaiter,
+  settleRuntimeTurnAdmission,
   prependOlderHistoryBlocks,
   startingQueuedSubmission,
   threadActionSharedState,
@@ -161,6 +168,11 @@ import {
   type StoreActionContext,
   type ThreadActionRuntime
 } from './chat-store-thread-actions-support'
+
+function activeThreadAcceptsPlanWorktreeInput(state: ChatState): boolean {
+  const thread = state.threads.find((candidate) => candidate.id === state.activeThreadId)
+  return planWorktreeComposerAccess(thread, usePlanWorktreeStore.getState().plans).writable
+}
 
 export function createThreadQueueActions(
   context: StoreActionContext,
@@ -189,8 +201,26 @@ export function createThreadQueueActions(
         }
         const next = queuedMessages.find(isPendingQueuedMessage)
         if (!next || state.busy) return
+        if (!activeThreadAcceptsPlanWorktreeInput(state)) return
+        if (
+          next.waitForRuntimeAdmission &&
+          !hasRuntimeTurnAdmissionWaiter(next.clientRequestId)
+        ) {
+          set({ queuedMessages: queuedMessages.filter((message) => message.id !== next.id) })
+          runtime.persistActiveQueuedMessages()
+          continue
+        }
         const started = await get().sendMessage(next.text, next.mode, { queued: next })
-        if (!started) return
+        if (!started) {
+          if (next.waitForRuntimeAdmission) {
+            set((current) => ({
+              queuedMessages: current.queuedMessages.filter((message) => message.id !== next.id)
+            }))
+            runtime.persistActiveQueuedMessages()
+          }
+          settleRuntimeTurnAdmission(next.clientRequestId, false)
+          return
+        }
       }
     } finally {
       threadActionSharedState.drainingQueuedMessages = false
@@ -198,10 +228,14 @@ export function createThreadQueueActions(
   },
 
   removeQueuedMessage: (id) => {
+    const removed = get().queuedMessages.find((message) => message.id === id)
     set((s) => ({
       queuedMessages: s.queuedMessages.filter((message) => message.id !== id)
     }))
     runtime.persistActiveQueuedMessages()
+    if (removed?.waitForRuntimeAdmission) {
+      settleRuntimeTurnAdmission(removed.clientRequestId, false)
+    }
   },
 
   reorderQueuedMessage: (id, targetId, position) => {
@@ -230,6 +264,10 @@ export function createThreadQueueActions(
     const state = get()
     const message = state.queuedMessages.find((candidate) => candidate.id === id)
     if (!message) return false
+    if (!activeThreadAcceptsPlanWorktreeInput(state)) {
+      set({ error: 'This isolated plan task is read-only in its current lifecycle state.' })
+      return false
+    }
     if (message.deliveryState === 'paused') {
       if (state.busy) return false
       set((current) => ({
@@ -249,6 +287,24 @@ export function createThreadQueueActions(
     if (!state.busy || !state.activeThreadId || !state.currentTurnId) {
       set({ error: i18n.t('common:guideQueuedMessageNoActiveTurn') })
       if (!state.busy) void get().drainQueuedMessages()
+      return false
+    }
+    const runningUser = state.blocks.find((block) => block.kind === 'user' && (
+      block.id === state.currentTurnUserId || block.turnId === state.currentTurnId
+    ))
+    const activeThread = state.threads.find((thread) => thread.id === state.activeThreadId)
+    const runningRouting = runningUser?.kind === 'user' && runningUser.meta
+      ? runningUser.meta
+      : {
+          agentSurface: activeThread?.lockedTaskSurface ?? activeThread?.agentSurface,
+          designProfile: activeThread?.designProfile,
+          designDocumentTarget: activeThread?.designProfile?.documentTarget
+        }
+    if (!queuedMessageMatchesRunningTurn(
+      message,
+      runningRouting
+    )) {
+      set({ error: i18n.t('common:guideQueuedMessageUnsupported') })
       return false
     }
     const guidanceThreadId = state.activeThreadId

@@ -88,9 +88,13 @@ export function useWorkbenchDerivedState({
   )
   const codeThreads = useMemo(() => {
     const designRegistry = readDesignThreadRegistry()
-    return threads.filter((thread) =>
-      isCodeSidebarThread(thread, clawChannels, undefined, designRegistry)
-    )
+    return threads
+      .filter((thread) => isCodeSidebarThread(
+        thread,
+        clawChannels,
+        undefined,
+        designRegistry
+      ))
   }, [clawChannels, threads])
 
   useEffect(() => {

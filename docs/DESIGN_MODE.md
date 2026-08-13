@@ -1,7 +1,7 @@
 # Design mode (设计模式)
 
-Design mode is the third top-level workspace mode, alongside **code** (`chat`) and
-**write**. It is an AI design workstation: you describe a UI, an agent produces a
+Design mode is a Design task type inside the **Code** (`chat`) workbench, alongside
+the top-level **Work** workspace. It is an AI design workstation: you describe a UI, an agent produces a
 single-file interactive artifact, a live canvas renders it, and you iterate — with
 a first-class, two-way bridge to the coding agent that ships it.
 
@@ -30,12 +30,12 @@ Product positioning:
 |---|---|---|
 | **Code** | Work against a real repository, edit files, run commands, review changes, and ship implementation. | Code diffs, plans, todos, reviews, runnable app changes. |
 | **Design** | Turn requirements, references, or existing UI into visual direction before implementation. | UI drafts, interactive HTML prototypes, graph artifacts, exported prototypes, shared `DESIGN_SYSTEM.md`. |
-| **Write** | Draft, edit, polish, and export long-form Markdown documents. | Markdown workspaces, inline completions/edits, `HTML / PDF / DOC / DOCX` exports. |
+| **Work** | Draft, edit, polish, and export office documents. | Document workspaces, inline completions/edits, `HTML / PDF / DOC / DOCX` exports. |
 
 Design mode is therefore not a legacy painting shortcut. It is the design leg
 of Kun's requirement -> design -> plan -> code -> verify loop, sharing the same
 runtime, provider configuration, approvals, and thread mechanics as Code and
-Write.
+Work.
 
 Positioning: this is the only one of the surveyed tools where design lives **inside
 the coding-agent IDE** with an organic design↔code loop (see §11).
@@ -44,14 +44,14 @@ the coding-agent IDE** with an organic design↔code loop (see §11).
 
 ## 2. Architecture
 
-Design mode renders inside `Workbench`, exactly like write mode — `AppShell` only
+Design mode renders inside the Code `Workbench`, alongside Work — `AppShell` only
 forks `settings` vs `Workbench`, so no shell change was needed.
 
 - **Route**: `AppRoute` gains `'design'`; `openDesign` / `ensureDesignThreadForWorkspace`
-  / `createDesignThread` mirror the write-mode navigation actions
+  / `createDesignThread` historically mirrored the internal `write` navigation actions
   (`chat-store-navigation-actions.ts`). The design thread is tracked in a thin
   registry (`design/design-thread-registry.ts`).
-- **Tabs**: `WorkspaceModeTabs` renders three buttons (code / write / design).
+- **Tabs**: `WorkspaceModeTabs` renders Code / Work; the shared composer selects Code / Design task type.
 - **Three panes** (`components/design/`):
   - `DesignSidebar` — mode tabs + artifact list (per-kind icons, version count,
     implement / delete / rename, provenance + drift badges) + "New design" / "New
@@ -195,7 +195,7 @@ multi-card settings tab.
 
 `design:export-prototype` (main IPC, mirrors `write:export`) exports the current
 prototype to a standalone **HTML** file or a **PDF** (rendered via a hidden
-`BrowserWindow` + `printToPDF`, reusing the write-mode pipeline), through a native save
+`BrowserWindow` + `printToPDF`, reusing the internal Work export pipeline), through a native save
 dialog that defaults to the artifact title. Buttons live on the canvas toolbar.
 
 ---

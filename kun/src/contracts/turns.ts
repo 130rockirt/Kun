@@ -14,6 +14,12 @@ import {
 import { GraphOrchestrationStrategySchema } from './graph.js'
 import { GraphPlanningDraftStatusSchema } from './graph-planning.js'
 import { TurnReasoningEffortSchema } from './turn-reasoning.js'
+import {
+  DesignDocumentTargetSchema,
+  DesignImagePlacementTargetSchema,
+  DesignTaskProfileInputSchema,
+  DesignTaskProfileSchema
+} from './design-task-profile.js'
 
 export { TurnReasoningEffortSchema } from './turn-reasoning.js'
 export type { TurnReasoningEffort } from './turn-reasoning.js'
@@ -165,8 +171,14 @@ export const TurnSchema = z.object({
   clientRequestId: z.string().trim().min(1).max(256).optional(),
   /** SHA-256 of the canonical start request bound to clientRequestId. */
   clientRequestFingerprint: z.string().regex(/^[a-f0-9]{64}$/).optional(),
-  /** Set only after the durable start/item events have both been recorded. */
+  /** Set when the user item and any first-turn ownership locks are durably committed. */
   admissionCompletedAt: z.string().optional(),
+  /**
+   * Marks a start record whose user item/profile commit has not reached the
+   * durable admission boundary yet. Missing is intentional for committed and
+   * legacy turns so restart recovery never mistakes old history for debris.
+   */
+  admissionPending: z.literal(true).optional(),
   status: TurnStatus,
   prompt: z.string(),
   messageSource: UserMessageSource.optional(),
@@ -226,6 +238,10 @@ export const TurnSchema = z.object({
   guiDesignMode: z.boolean().optional(),
   /** Product surface that owns this turn. Missing legacy values behave as Code. */
   agentSurface: z.enum(['code', 'write', 'design']).optional(),
+  /** Effective immutable Design profile snapshotted at admission. */
+  designProfile: DesignTaskProfileSchema.optional(),
+  /** Explicit replay target duplicated from the effective Design profile. */
+  designDocumentTarget: DesignDocumentTargetSchema.optional(),
   /**
    * Turn-scoped persona text chosen by the user in the composer. Rendered as
    * a `user`-authority dynamic context block after history, so it never
@@ -331,6 +347,12 @@ export const StartTurnRequest = z.object({
   guiDesignMode: z.boolean().optional(),
   /** Product surface used to scope subagent discovery and execution. */
   agentSurface: z.enum(['code', 'write', 'design']).optional(),
+  /** Candidate profile for the first Design turn, or a matching later-turn snapshot. */
+  designProfile: DesignTaskProfileInputSchema.optional(),
+  /** Canvas routing target; when supplied it must match designProfile.documentTarget. */
+  designDocumentTarget: DesignDocumentTargetSchema.optional(),
+  /** Frozen target for durable placement of a generated primary image. */
+  designImagePlacementTarget: DesignImagePlacementTargetSchema.optional(),
   /** Reserved first-class SVG artifact for structured SVG tools. */
   guiDesignArtifact: GuiDesignArtifactContextSchema.optional(),
   /**
@@ -344,13 +366,55 @@ export const StartTurnRequest = z.object({
    * IM-only tool exposure separately from generic headless turns.
    */
   imContext: z.boolean().optional()
+}).superRefine((value, ctx) => {
+  if (Boolean(value.designProfile) !== Boolean(value.designDocumentTarget)) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['designDocumentTarget'],
+      message: 'designProfile and designDocumentTarget must be supplied together'
+    })
+  }
+  if (
+    value.designProfile &&
+    value.designDocumentTarget &&
+    (
+      value.designProfile.documentTarget.documentId !== value.designDocumentTarget.documentId ||
+      value.designProfile.documentTarget.boardArtifactId !== value.designDocumentTarget.boardArtifactId
+    )
+  ) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['designDocumentTarget'],
+      message: 'designDocumentTarget must match designProfile.documentTarget'
+    })
+  }
+  if (value.designProfile && value.agentSurface && value.agentSurface !== 'design') {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['agentSurface'],
+      message: 'a Design profile requires agentSurface design'
+    })
+  }
+  if (value.designImagePlacementTarget && value.designProfile?.outputMedium !== 'image') {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['designImagePlacementTarget'],
+      message: 'image placement requires an image Design profile'
+    })
+  }
 })
 export type StartTurnRequest = z.input<typeof StartTurnRequest>
 
 export const StartTurnResponse = z.object({
   threadId: z.string().min(1),
   turnId: z.string().min(1),
-  userMessageItemId: z.string().min(1)
+  userMessageItemId: z.string().min(1),
+  /** Durable thread ownership; distinct from the effective surface of this turn. */
+  threadAgentSurface: z.enum(['code', 'write', 'design']).optional(),
+  /** Effective surface for this turn. */
+  agentSurface: z.enum(['code', 'write', 'design']).optional(),
+  designProfile: DesignTaskProfileSchema.optional(),
+  designDocumentTarget: DesignDocumentTargetSchema.optional()
 })
 export type StartTurnResponse = z.infer<typeof StartTurnResponse>
 

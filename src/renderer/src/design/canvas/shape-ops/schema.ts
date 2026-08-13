@@ -518,6 +518,8 @@ export type ExecuteResult = {
 }
 
 export type ExecuteOpsOptions = {
+  /** Durable identity used to make renderer replay idempotent after remount/reload. */
+  replayKey?: string
   /** Select ids before the undo group closes so redo restores the post-op selection. */
   selectAfter?: (affectedIds: string[]) => string[]
   /** One-shot lint findings key, used to keep Code sidebar feedback separate from Design mode. */

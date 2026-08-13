@@ -201,7 +201,7 @@ async function ensureKunSkillEntry(skillDir: string): Promise<void> {
     id: 'ppt-master',
     name: 'PPT Master',
     version: PPT_MASTER_VERSION,
-    description: 'Create native, editable PPTX presentations from Markdown in Write mode.',
+    description: 'Create native, editable PPTX presentations from Markdown in Work.',
     entry: 'SKILL.md',
     triggers: {},
     priority: 20
@@ -340,23 +340,23 @@ function formatCommandOutput(output: string): string {
 // model exactly when to read the detailed sections through its normal tools.
 const KUN_PPT_MASTER_SKILL = `---
 name: ppt-master
-description: Create native, editable PPTX presentations from Markdown in Write mode.
+description: Create native, editable PPTX presentations from Markdown in Work.
 ---
 
-# PPT Master for Kun Write
+# PPT Master for Kun Work
 
 This package is the PPT Master workflow. The full upstream guide is at
 \`PPT_MASTER_UPSTREAM.md\` in this same directory. Use \`ppt_master_read_guide\`
 to read only the relevant sections when you need detailed template, image, SVG,
 or export rules. Do not try to load that entire file into one response.
 
-## Write-mode contract
+## Work contract
 
 - The user's prompt identifies the Markdown source and workspace. Read that file
   before planning. Treat it as read-only: never edit, rename, or move it.
 - Create the project below \`<workspace>/.kun-presentations/\`, and import the
   source with \`project_manager.py import-sources ... --copy\`. This overrides
-  upstream's \`--move\` default for the Kun Write integration.
+  upstream's \`--move\` default for the Kun Work integration.
 - Put the final canonical PPTX in \`<workspace>/presentations/\`. Keep SVG,
   project files, images, and backups under \`.kun-presentations/\`.
 - Use the \`ppt_master_run\` tool for every PPT Master script step. It is the
@@ -377,7 +377,7 @@ or export rules. Do not try to load that entire file into one response.
 2. Only after it returns \`approval_token\`, pass that token to every
    \`ppt_master_run\` call. Initialize the project and import the source. Use
    the returned project path, write the design
-   specification. In this Write integration, do not start live-preview servers
+   specification. In this Work integration, do not start live-preview servers
    and do not acquire web or AI images; use only source-provided assets or
    intentional SVG/typographic placeholders.
 3. Write \`design_spec.md\`, \`spec_lock.md\`, and \`notes/total.md\` in the
@@ -389,6 +389,6 @@ or export rules. Do not try to load that entire file into one response.
    the final response.
 
 For an existing PPTX, template fill, animations, narration, or non-Markdown
-sources, read the route table in \`workflows/routing.md\` first. In normal Write
+sources, read the route table in \`workflows/routing.md\` first. In normal Work
 use, favor the Markdown-to-new-deck route above.
 `

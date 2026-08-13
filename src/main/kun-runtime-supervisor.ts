@@ -189,6 +189,10 @@ export class KunRuntimeSupervisor<Settings> {
     this.operations.enqueueSettingsApply(operation, onError, coalesceKey)
   }
 
+  waitForIdle(): Promise<void> {
+    return this.operations.waitForIdle()
+  }
+
   publish(status: Omit<KunRuntimeStatus, 'at'>): void {
     const full: KunRuntimeStatus = { ...status, at: new Date().toISOString() }
     this.currentStatus = full

@@ -45,6 +45,10 @@ const INPUT_SCHEMA = {
       type: 'string',
       description: 'Absolute HTTP or HTTPS URL for open. The host enforces public/local origin policy before loading.'
     },
+    newTab: {
+      type: 'boolean',
+      description: 'For open only. Set true to create and activate a new isolated tab within the configured tab limit.'
+    },
     ref: {
       type: 'string',
       description: 'Opaque element ref from the latest structured snapshot. Selectors and coordinates are not accepted.'
@@ -120,7 +124,7 @@ const TOOL_DESCRIPTION = [
   'Exact examples: {"action":"open","url":"https://example.com"} and {"action":"snapshot"}.',
   'There is no navigate or goto action; use open with a credential-free HTTP(S) URL.',
   'Use only opaque refs from the latest snapshot; for click/type/select/press also copy the snapshot sessionId/tabId/documentGeneration/origin/sanitizedUrl and that node\'s exact role/name into expectedTarget.',
-  'Main compares expectedTarget with the live ref immediately before execution; navigation, page mutation, or manual takeover makes refs stale.',
+  'Main compares expectedTarget with the live ref immediately before execution; navigation, target changes, or manual takeover make refs stale.',
   'Validated low-risk public interactions may execute automatically; local or strict policy can require a live allow-once decision.',
   'Credentials, payment, MFA, CAPTCHA, upload/download, clipboard, cookies/storage, scripts, selectors, and CDP are unavailable.',
   'Take a new snapshot after every interaction and stop when the requested browsing task is complete.'
@@ -174,7 +178,9 @@ export function buildBrowserUseToolProviders(
     policy: 'auto',
     effects: {
       network: true,
-      externalWrite: false,
+      // The fixed interaction catalog can submit page state. Main performs the
+      // target-aware check, while static metadata must remain conservative.
+      externalWrite: true,
       processExecution: false,
       guiAutomation: true
     },

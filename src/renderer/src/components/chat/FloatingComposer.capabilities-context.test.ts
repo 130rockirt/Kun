@@ -103,7 +103,7 @@ const CODEX_PROVIDER_GROUP: ModelProviderModelGroup = {
 }
 
 describe('FloatingComposer capability controls', () => {
-  it('uses goal mode input as the objective and lets both intent badges cancel', async () => {
+  it('uses Code intent controls while omitting them from Design', async () => {
     const previousLanguage = i18n.language
     const originalGoalSetter = useChatStore.getState().setActiveThreadGoal
     const setActiveThreadGoal = vi.fn(async () => true)
@@ -112,6 +112,7 @@ describe('FloatingComposer capability controls', () => {
     const onSend = vi.fn()
     let goalRenderer: ReturnType<typeof createRenderer> | undefined
     let planRenderer: ReturnType<typeof createRenderer> | undefined
+    let designRenderer: ReturnType<typeof createRenderer> | undefined
 
     await i18n.changeLanguage('en')
     useChatStore.setState({
@@ -213,6 +214,29 @@ describe('FloatingComposer capability controls', () => {
         planBadge.props.onClick()
       })
       expect(setMode).toHaveBeenLastCalledWith('agent')
+
+      await act(async () => {
+        designRenderer = createRenderer(createElement(FloatingComposer, {
+          ...props,
+          taskSurface: 'design',
+          mode: 'plan',
+          orchestration: 'graph',
+          graphEnabled: true,
+          onOrchestrationChange: () => undefined,
+          onNewCommand: () => undefined
+        }))
+      })
+      const renderedDesign = designRenderer!
+      expect(renderedDesign.root.findAllByProps({ 'data-composer-plan-mode-badge': true })).toHaveLength(0)
+      expect(renderedDesign.root.findAllByProps({ 'data-composer-graph-active': true })).toHaveLength(0)
+      expect(renderedDesign.root.findAllByProps({ 'data-composer-goal-mode-badge': true })).toHaveLength(0)
+      const designPlusButton = renderedDesign.root.findAllByType('button').find(
+        (button) => String(button.props.className).includes('ds-composer-menu-button')
+      )
+      await act(async () => designPlusButton!.props.onClick())
+      expect(renderedDesign.root.findAllByProps({ 'data-composer-plan-menu-item': true })).toHaveLength(0)
+      expect(renderedDesign.root.findAllByProps({ 'data-composer-graph-menu-item': true })).toHaveLength(0)
+      expect(renderedDesign.root.findAllByProps({ 'data-composer-goal-menu-item': true })).toHaveLength(0)
     } finally {
       if (goalRenderer) {
         await act(async () => {
@@ -222,6 +246,11 @@ describe('FloatingComposer capability controls', () => {
       if (planRenderer) {
         await act(async () => {
           planRenderer!.unmount()
+        })
+      }
+      if (designRenderer) {
+        await act(async () => {
+          designRenderer!.unmount()
         })
       }
       useChatStore.setState({ setActiveThreadGoal: originalGoalSetter })

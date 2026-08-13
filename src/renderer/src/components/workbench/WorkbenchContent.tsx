@@ -10,6 +10,8 @@ import {
 } from '../../extensions/ControlledContributionSurfaces'
 import { extensionWorkbenchClient } from '../../extensions/extension-workbench-client'
 import { resolveCommandOpenView } from '../../extensions/ExtensionWorkbenchSurfaces'
+import { normalizeWorkbenchRoute } from './workbench-route'
+import { PlanWorktreeGlobalRecovery } from '../../plan/PlanWorktreeGlobalRecovery'
 
 type Context = Record<string, any>
 
@@ -20,16 +22,11 @@ export function WorkbenchContent({ context }: { context: Context }): ReactElemen
     connectPhoneSidebarOpen, activeExtensionLeftSidebar, extensionWorkspaceRoot,
     selectExtensionSurface, runtimeConnection, threadSearch, showArchivedThreads, focusModeEnabled,
     updateFocusMode, setThreadSearch, openThread, renameThread, pinThread, archiveThread,
-    deleteThread, deleteDrawing, startNewChat, startNewChatInWorkspace, startNewSddRequirement,
+    deleteThread, startNewChat, startNewChatInWorkspace,
     openSettings, openPluginsView, openExtensionsView, toggleTheme, toggleConnectPhone,
-    openCodeMode, openWriteMode, openDesignMode, openScheduleView, openWorkflowView,
-    startNewConversation, beginLeftResize, toggleLeftSidebar, busy, implementDesignInCode,
-    handleDesignHtmlElementAsContext, selectCanvasShape, sendDesignPrompt,
-    handleDesignRuntimeQualityFindings, handleDesignQualityRepairRequest, rightPanelSharedProps,
-    designWorkspaceRoot, workspaceRoot, designAssistantModel, resolvedDesignAssistantProviderId,
-    designAssistantPickList, setDesignAssistantModel, designComposerReasoningEffort,
-    composerFastMode, setDesignComposerReasoningEffort, setComposerFastMode, designContextChips,
-    removeDesignContextChip, input, rightPanel, writeRuntimeBanner, setInput, sendWritePrompt,
+    openCodeMode, openWriteMode, openScheduleView, openWorkflowView,
+    startNewConversation, beginLeftResize, toggleLeftSidebar, busy,
+    input, rightPanel, writeRuntimeBanner, setInput, sendWritePrompt,
     conversationRuntimeBanner, activeSddDraft, rightPanelMode, toggleSddAssistantPanel,
     quoteToSddAssistant, sendSddPrototypeTurn, exploreSddRequirementInDesign, handleSddNextStep,
     dismissActiveSddDraft, sddDraftOperationStatus, stageInsetClass,
@@ -42,10 +39,12 @@ export function WorkbenchContent({ context }: { context: Context }): ReactElemen
     toggleCodeRightWorkspace, linkedSddDraft, openLinkedSddDraft, extensionTopBarActions,
     extensionComposerActions, extensionMessageActions, extensionMessageContextMenus,
     extensionAttachmentContextMenus, extensionCommands, extensionResultPreviews,
+    messageContributionsForSurface,
     extensionSurfaceItems, openExtensionSurface, openCodeRightTool, currentSideRunningCount,
     extensionRightRailItems, selectRightRailExtension, imageAnnotationHost, planOverlay,
     openManagedExtensionView, activeExtensionAuxiliaryPanel, workspaceContextMenu, activeGuiPlan
   } = context
+  const normalizedRoute = normalizeWorkbenchRoute(route)
   return (
     <div
       ref={shellRef}
@@ -75,15 +74,16 @@ export function WorkbenchContent({ context }: { context: Context }): ReactElemen
         })
       }}
     >
+      <PlanWorktreeGlobalRecovery runtimeReady={runtimeConnection === 'ready'} />
       <WorkbenchLeftSidebar
         collapsed={leftSidebarCollapsed || activeExtensionCenterView?.point === 'views.fullPage'}
         width={leftSidebarWidth}
-        route={route}
+        route={normalizedRoute}
         codeThreads={codeThreads}
         activeThreadId={activeThreadId}
         sidebarView={sidebarView}
         connectPhoneSidebarOpen={connectPhoneSidebarOpen}
-        extensionsActive={route === 'extensions'}
+        extensionsActive={normalizedRoute === 'extensions'}
         extensionView={activeExtensionLeftSidebar}
         workspaceRoot={extensionWorkspaceRoot}
         onCloseExtensionView={() => selectExtensionSurface(null)}
@@ -98,11 +98,9 @@ export function WorkbenchContent({ context }: { context: Context }): ReactElemen
         onPinThread={pinThread}
         onArchiveThread={(id) => archiveThread(id, true)}
         onDeleteThread={deleteThread}
-        onDeleteDrawing={deleteDrawing}
         onRestoreThread={(id) => archiveThread(id, false)}
         onNewChat={startNewChat}
         onNewChatInWorkspace={startNewChatInWorkspace}
-        onNewRequirement={() => void startNewSddRequirement()}
         onOpenSettings={(section) => openSettings(section)}
         onOpenPlugins={openPluginsView}
         onOpenExtensions={openExtensionsView}
@@ -110,7 +108,6 @@ export function WorkbenchContent({ context }: { context: Context }): ReactElemen
         onToggleConnectPhone={toggleConnectPhone}
         onCodeOpen={openCodeMode}
         onWriteOpen={openWriteMode}
-        onDesignOpen={openDesignMode}
         onScheduleOpen={openScheduleView}
         onWorkflowOpen={openWorkflowView}
         onNewConversation={startNewConversation}
@@ -130,51 +127,10 @@ export function WorkbenchContent({ context }: { context: Context }): ReactElemen
         </main>
       ) : (
       <WorkbenchStageRouter
-        route={route}
+        route={normalizedRoute}
         leftSidebarCollapsed={leftSidebarCollapsed}
         onToggleLeftSidebar={toggleLeftSidebar}
         onOpenThread={openThread}
-        design={{
-          leftSidebarCollapsed,
-          onToggleLeftSidebar: toggleLeftSidebar,
-          busy,
-          onOpenAgentSettings: () => openSettings('design'),
-          onImplementDesign: implementDesignInCode,
-          onUseElementAsContext: handleDesignHtmlElementAsContext,
-          onScreenCreated: (shapeId, userPrompt, brief) => {
-            selectCanvasShape(shapeId)
-            // Prefer the agent's expanded screen brief over the raw user prompt.
-            const screenPrompt = brief?.trim() || userPrompt || 'Design this screen'
-            sendDesignPrompt(screenPrompt, { screenShapeId: shapeId })
-          },
-          onSvgCreated: async (artifactId, shapeId, userPrompt, brief) => {
-            selectCanvasShape(shapeId)
-            return sendDesignPrompt(brief || userPrompt || 'Create this SVG motion design', {
-              svgArtifactId: artifactId
-            })
-          },
-          onRuntimeQualityFindings: handleDesignRuntimeQualityFindings,
-          onRequestQualityRepair: handleDesignQualityRepairRequest,
-          drawingStart: {
-            ...rightPanelSharedProps,
-            leftSidebarCollapsed,
-            onToggleLeftSidebar: toggleLeftSidebar,
-            workspaceRoot: designWorkspaceRoot || workspaceRoot,
-            composerModel: designAssistantModel,
-            composerProviderId: resolvedDesignAssistantProviderId,
-            composerPickList: designAssistantPickList,
-            setComposerModel: setDesignAssistantModel,
-            composerReasoningEffort: designComposerReasoningEffort,
-            composerFastMode,
-            setComposerReasoningEffort: setDesignComposerReasoningEffort,
-            setComposerFastMode,
-            queuedMessages: [],
-            contextChips: designContextChips.filter((chip: any) => chip.kind === 'design-target'),
-            onRemoveContextChip: removeDesignContextChip,
-            onSend: () => void sendDesignPrompt(input)
-          },
-          rightPanel
-        }}
         write={{
           runtimeBanner: writeRuntimeBanner,
           leftSidebarCollapsed,
@@ -186,7 +142,7 @@ export function WorkbenchContent({ context }: { context: Context }): ReactElemen
           rightPanel
         }}
         conversation={{
-          route,
+          route: normalizedRoute,
           runtimeBanner: conversationRuntimeBanner,
           activeSddDraft: Boolean(activeSddDraft),
           sdd: {
@@ -257,6 +213,7 @@ export function WorkbenchContent({ context }: { context: Context }): ReactElemen
             extensionAttachmentContextMenus,
             extensionCommands,
             extensionResultPreviews,
+            messageContributionsForSurface,
             onExtensionCommand: async (commandId, context) => {
               const result = await extensionWorkbenchClient.invokeCommand(
                 commandId,

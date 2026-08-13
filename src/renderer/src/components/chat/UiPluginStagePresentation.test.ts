@@ -280,10 +280,10 @@ describe('UiPluginStagePresentation', () => {
   it('keeps the Grand Line conversation card and composer status rail visually connected', async () => {
     const nodeFs = 'node:fs/promises'
     const { readFile } = await import(/* @vite-ignore */ nodeFs)
-    const [css, workbenchStage, sidebar, executionPicker] = await Promise.all([
+    const [css, workbenchStage, sidebarFocusMode, executionPicker] = await Promise.all([
       readStylesheetBundle(new URL('../../styles/surfaces-write.css', import.meta.url)),
       readFile(new URL('../workbench/WorkbenchChatStage.tsx', import.meta.url), 'utf8'),
-      readFile(new URL('./Sidebar.tsx', import.meta.url), 'utf8'),
+      readFile(new URL('../sidebar/SidebarFocusModeControl.tsx', import.meta.url), 'utf8'),
       readFile(new URL('./FloatingComposerExecutionPicker.tsx', import.meta.url), 'utf8')
     ])
 
@@ -323,9 +323,9 @@ describe('UiPluginStagePresentation', () => {
     expect(css).toContain(
       '.ds-message-timeline-content :is(.text-ds-ink, .text-ds-muted, .text-ds-faint)'
     )
-    expect(sidebar).toContain('ds-sidebar-focus-row')
-    expect(sidebar).toContain('ds-sidebar-mascot-slot')
-    expect(sidebar).toContain('ds-focus-mode-toggle-track')
+    expect(sidebarFocusMode).toContain('ds-sidebar-focus-row')
+    expect(sidebarFocusMode).toContain('ds-sidebar-mascot-slot')
+    expect(sidebarFocusMode).toContain('ds-focus-mode-toggle-track')
     expect(executionPicker).toContain('ds-composer-permission-menu')
     expect(executionPicker).toContain('ds-composer-permission-option')
     expect(executionPicker).toContain('data-permission-mode={mode}')

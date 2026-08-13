@@ -1,9 +1,19 @@
 import { randomUUID } from 'node:crypto'
 import { request as httpRequest } from 'node:http'
 import { describe, expect, it, vi } from 'vitest'
-import { signBrowserUseKunApprovalGrant } from '../../../kun/src/contracts/browser-use'
+import {
+  BrowserUseBridgeResponse,
+  BrowserUseHostChallengeResponse,
+  signBrowserUseKunApprovalGrant,
+  verifyBrowserUseBridgeResponse,
+  verifyBrowserUseHostChallenge
+} from '../../../kun/src/contracts/browser-use'
+import { encryptBrowserUseActionEnvelope } from '../../../kun/src/contracts/browser-use-bridge-crypto'
 import { ToolOperationJournal } from '../../../kun/src/reliability/operation-journal'
-import { BrowserUseBridgeService } from './browser-use-bridge-service'
+import {
+  BrowserUseBridgeService,
+  parseDeclaredContentLength
+} from './browser-use-bridge-service'
 
 const expectedTarget = {
   sessionId: 'session-1234567890',
@@ -53,7 +63,7 @@ async function rawRequest(
     token?: string
     contentType?: string
     body?: string
-    contentLength?: number
+    contentLength?: number | string
   } = {}
 ): Promise<{ status: number | undefined; body: unknown }> {
   const parsed = new URL(url)
@@ -88,22 +98,172 @@ async function rawRequest(
   })
 }
 
+async function sealedActionRequest(
+  launch: { url: string; token: string; approvalSigningKey: string },
+  options: {
+    host?: string
+    token?: string
+    contentType?: string
+    body?: string
+  } = {}
+): Promise<{ status: number | undefined; body: unknown }> {
+  const request = JSON.parse(options.body ?? '{}') as unknown
+  const envelope = encryptBrowserUseActionEnvelope({
+    bridgeToken: options.token ?? launch.token,
+    request
+  }, launch.approvalSigningKey)
+  return rawRequest(`${launch.url}/v1/actions`, {
+    ...(options.host ? { host: options.host } : {}),
+    contentType: options.contentType ?? 'application/json',
+    body: JSON.stringify(envelope)
+  })
+}
+
 describe('BrowserUseBridgeService', () => {
+  it('proves host identity without bearer/action disclosure and authenticates results', async () => {
+    const manager = fakeManager()
+    const service = new BrowserUseBridgeService(manager as never)
+    const launch = await service.start()
+    const nonce = randomUUID()
+    try {
+      const challenge = await rawRequest(`${launch.url}/v1/challenge`, {
+        contentType: 'application/json',
+        body: JSON.stringify({ contractVersion: 2, nonce })
+      })
+      const challengeProof = BrowserUseHostChallengeResponse.parse(challenge.body)
+      expect(challenge.status).toBe(200)
+      expect(challengeProof.nonce).toBe(nonce)
+      expect(verifyBrowserUseHostChallenge(
+        challengeProof,
+        launch.approvalSigningKey
+      )).toBe(true)
+      expect(manager.execute).not.toHaveBeenCalled()
+
+      const requestId = randomUUID()
+      const action = await sealedActionRequest(launch, {
+        body: JSON.stringify({
+          contractVersion: 2,
+          requestId,
+          threadId: 'thread-1',
+          turnId: 'turn-1',
+          action: { action: 'snapshot' }
+        })
+      })
+      const response = BrowserUseBridgeResponse.parse(action.body)
+      expect(action.status).toBe(200)
+      expect(verifyBrowserUseBridgeResponse(
+        response,
+        launch.approvalSigningKey
+      )).toBe(true)
+      expect(verifyBrowserUseBridgeResponse(response, 'o'.repeat(43))).toBe(false)
+    } finally {
+      await service.stop()
+    }
+  })
+
+  it('strictly rejects malformed challenges and declared lengths', async () => {
+    const manager = fakeManager()
+    const service = new BrowserUseBridgeService(manager as never)
+    const launch = await service.start()
+    try {
+      await expect(rawRequest(`${launch.url}/v1/challenge`, {
+        contentType: 'application/json',
+        body: JSON.stringify({
+          contractVersion: 2,
+          nonce: randomUUID(),
+          action: { action: 'snapshot' }
+        })
+      })).resolves.toMatchObject({ status: 400, body: { error: 'invalid_request' } })
+
+      await expect(rawRequest(`${launch.url}/v1/challenge`, {
+        contentType: 'application/json',
+        contentLength: '9007199254740992',
+        body: '{}'
+      })).resolves.toMatchObject({ status: 400, body: { error: 'invalid_content_length' } })
+
+      expect(parseDeclaredContentLength('-1')).toBeNull()
+      expect(parseDeclaredContentLength('NaN')).toBeNull()
+      expect(manager.execute).not.toHaveBeenCalled()
+    } finally {
+      await service.stop()
+    }
+  })
+
+  it('rejects tampered encrypted action envelopes without executing', async () => {
+    const manager = fakeManager()
+    const service = new BrowserUseBridgeService(manager as never)
+    const launch = await service.start()
+    const envelope = encryptBrowserUseActionEnvelope({
+      bridgeToken: launch.token,
+      request: {
+        contractVersion: 2,
+        requestId: randomUUID(),
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        action: { action: 'snapshot' }
+      }
+    }, launch.approvalSigningKey)
+    try {
+      for (const tampered of [
+        { ...envelope, ciphertext: flipBase64UrlCharacter(envelope.ciphertext) },
+        { ...envelope, authTag: flipBase64UrlCharacter(envelope.authTag) }
+      ]) {
+        await expect(rawRequest(`${launch.url}/v1/actions`, {
+          contentType: 'application/json',
+          body: JSON.stringify(tampered)
+        })).resolves.toMatchObject({ status: 400, body: { error: 'invalid_envelope' } })
+      }
+      expect(manager.execute).not.toHaveBeenCalled()
+    } finally {
+      await service.stop()
+    }
+  })
+
+  it('does not let a slow challenge body hold host shutdown open', async () => {
+    const manager = fakeManager()
+    const service = new BrowserUseBridgeService(manager as never)
+    const launch = await service.start()
+    const parsed = new URL(`${launch.url}/v1/challenge`)
+    const request = httpRequest({
+      host: parsed.hostname,
+      port: Number(parsed.port),
+      path: parsed.pathname,
+      method: 'POST',
+      headers: {
+        host: parsed.host,
+        'content-type': 'application/json',
+        'content-length': '1024'
+      }
+    })
+    request.on('error', () => undefined)
+    request.write('{')
+    request.flushHeaders()
+    try {
+      await vi.waitFor(() => {
+        expect((service as unknown as { activeRequests: number }).activeRequests).toBe(1)
+      })
+      await expect(Promise.race([
+        service.stop().then(() => 'stopped'),
+        new Promise<string>((resolve) => setTimeout(() => resolve('timed-out'), 500))
+      ])).resolves.toBe('stopped')
+    } finally {
+      request.destroy()
+      await service.stop()
+    }
+  })
+
   it('requires exact Host, launch bearer, method, path, and content type', async () => {
     const manager = fakeManager()
     const service = new BrowserUseBridgeService(manager as never)
     const launch = await service.start()
     try {
-      await expect(rawRequest(`${launch.url}/v1/actions`, {
+      await expect(sealedActionRequest(launch, {
         host: 'evil.example',
-        token: launch.token,
-        contentType: 'application/json',
         body: '{}'
       })).resolves.toMatchObject({ status: 400, body: { error: 'invalid_host' } })
 
-      await expect(rawRequest(`${launch.url}/v1/actions`, {
-        token: 'wrong-token',
-        contentType: 'application/json',
+      await expect(sealedActionRequest(launch, {
+        token: 'w'.repeat(43),
         body: '{}'
       })).resolves.toMatchObject({ status: 401, body: { error: 'unauthorized' } })
 
@@ -129,9 +289,7 @@ describe('BrowserUseBridgeService', () => {
     const service = new BrowserUseBridgeService(manager as never)
     const launch = await service.start()
     try {
-      const invalid = await rawRequest(`${launch.url}/v1/actions`, {
-        token: launch.token,
-        contentType: 'application/json',
+      const invalid = await sealedActionRequest(launch, {
         body: JSON.stringify({
           contractVersion: 2,
           requestId: randomUUID(),
@@ -147,9 +305,7 @@ describe('BrowserUseBridgeService', () => {
       })
       expect(invalid).toMatchObject({ status: 400, body: { error: 'invalid_request' } })
 
-      const modeInjection = await rawRequest(`${launch.url}/v1/actions`, {
-        token: launch.token,
-        contentType: 'application/json',
+      const modeInjection = await sealedActionRequest(launch, {
         body: JSON.stringify({
           contractVersion: 2,
           requestId: randomUUID(),
@@ -166,9 +322,7 @@ describe('BrowserUseBridgeService', () => {
       expect(manager.execute).not.toHaveBeenCalled()
 
       const requestId = randomUUID()
-      const valid = await rawRequest(`${launch.url}/v1/actions`, {
-        token: launch.token,
-        contentType: 'application/json',
+      const valid = await sealedActionRequest(launch, {
         body: JSON.stringify({
           contractVersion: 2,
           requestId,
@@ -221,9 +375,7 @@ describe('BrowserUseBridgeService', () => {
       kunApprovalGrant: value
     })
     try {
-      await expect(rawRequest(`${launch.url}/v1/actions`, {
-        token: launch.token,
-        contentType: 'application/json',
+      await expect(sealedActionRequest(launch, {
         body: JSON.stringify({
           contractVersion: 2,
           requestId: randomUUID(),
@@ -233,9 +385,7 @@ describe('BrowserUseBridgeService', () => {
         })
       })).resolves.toMatchObject({ status: 400, body: { error: 'invalid_request' } })
 
-      await expect(rawRequest(`${launch.url}/v1/actions`, {
-        token: launch.token,
-        contentType: 'application/json',
+      await expect(sealedActionRequest(launch, {
         body: requestBody(randomUUID(), {
           ...grant,
           argumentsHash: 'f'.repeat(64)
@@ -246,9 +396,7 @@ describe('BrowserUseBridgeService', () => {
       })
       expect(manager.execute).not.toHaveBeenCalled()
 
-      await expect(rawRequest(`${launch.url}/v1/actions`, {
-        token: launch.token,
-        contentType: 'application/json',
+      await expect(sealedActionRequest(launch, {
         body: requestBody(randomUUID(), {
           ...grant,
           id: `appr_${'f'.repeat(32)}`,
@@ -259,27 +407,21 @@ describe('BrowserUseBridgeService', () => {
         body: { error: 'approval_grant_invalid' }
       })
 
-      await expect(rawRequest(`${launch.url}/v1/actions`, {
-        token: launch.token,
-        contentType: 'application/json',
+      await expect(sealedActionRequest(launch, {
         body: requestBody(randomUUID(), grant, { threadId: 'thread-substituted' })
       })).resolves.toMatchObject({
         status: 400,
         body: { error: 'approval_grant_invalid' }
       })
 
-      await expect(rawRequest(`${launch.url}/v1/actions`, {
-        token: launch.token,
-        contentType: 'application/json',
+      await expect(sealedActionRequest(launch, {
         body: requestBody(randomUUID(), grant, { turnId: 'turn-substituted' })
       })).resolves.toMatchObject({
         status: 400,
         body: { error: 'approval_grant_invalid' }
       })
 
-      await expect(rawRequest(`${launch.url}/v1/actions`, {
-        token: launch.token,
-        contentType: 'application/json',
+      await expect(sealedActionRequest(launch, {
         body: requestBody(randomUUID(), grant, {
           action: { action: 'open', url: 'https://substituted.example/path' }
         })
@@ -289,9 +431,7 @@ describe('BrowserUseBridgeService', () => {
       })
       expect(manager.execute).not.toHaveBeenCalled()
 
-      await expect(rawRequest(`${launch.url}/v1/actions`, {
-        token: launch.token,
-        contentType: 'application/json',
+      await expect(sealedActionRequest(launch, {
         body: requestBody(randomUUID())
       })).resolves.toMatchObject({ status: 200 })
       expect(manager.execute).toHaveBeenCalledWith(
@@ -303,9 +443,7 @@ describe('BrowserUseBridgeService', () => {
         'agent'
       )
 
-      await expect(rawRequest(`${launch.url}/v1/actions`, {
-        token: launch.token,
-        contentType: 'application/json',
+      await expect(sealedActionRequest(launch, {
         body: requestBody(randomUUID())
       })).resolves.toMatchObject({
         status: 409,
@@ -328,9 +466,7 @@ describe('BrowserUseBridgeService', () => {
     }
     const grant = approvalGrant(action, launch.approvalSigningKey)
     try {
-      const result = await rawRequest(`${launch.url}/v1/actions`, {
-        token: launch.token,
-        contentType: 'application/json',
+      const result = await sealedActionRequest(launch, {
         body: JSON.stringify({
           contractVersion: 2,
           requestId: randomUUID(),
@@ -379,3 +515,7 @@ describe('BrowserUseBridgeService', () => {
     }
   })
 })
+
+function flipBase64UrlCharacter(value: string): string {
+  return `${value.startsWith('A') ? 'B' : 'A'}${value.slice(1)}`
+}

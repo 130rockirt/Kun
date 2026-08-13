@@ -643,6 +643,7 @@ describe('chat-store-thread-actions queued messages', () => {
     const { actions, state } = buildHarness()
     state.currentTurnId = 'turn_design_active'
     state.currentTurnUserId = 'user-design-original'
+    state.threads[0]!.lockedTaskSurface = 'design'
     state.queuedMessages = [{
       id: 'q-design-guide',
       text: 'Expanded internal Design prompt with canvas state and file instructions',

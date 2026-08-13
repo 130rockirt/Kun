@@ -1,5 +1,8 @@
 import { useChatStore } from "../../store/chat-store"
-import { collectAssistantTextForTurn } from "../../store/chat-store-runtime-helpers"
+import {
+  collectAssistantTextForTurn,
+  threadHasPendingRuntimeWork
+} from "../../store/chat-store-runtime-helpers"
 import type { ChatBlock, ToolBlock } from "../../agent/types"
 import type { SendMessageOverrides } from "../../store/chat-store-types"
 import {
@@ -33,9 +36,18 @@ import {
   buildParallelDesignPagesPrompt,
   type ParallelDesignPageJob
 } from "../design-turn-prompt"
-import { createDesignArtifactId, defaultDesignArtifactNode, type DesignDirection } from "../design-types"
+import {
+  createDesignArtifactId,
+  defaultDesignArtifactNode,
+  type DesignArtifact,
+  type DesignDirection
+} from "../design-types"
 import type { ParallelDesignPageState } from "../design-workspace-store-types"
 import { useDesignWorkspaceStore } from "../design-workspace-store"
+import type {
+  DesignDocumentTarget,
+  DesignTaskProfileInput
+} from '../../agent/design-task-profile'
 
 export type SendMessageFn = (
   text: string,
@@ -53,10 +65,15 @@ export type RunDesignPagesDeps = {
   reasoningEffort?: string
   serviceTier?: 'priority'
   expectedThreadId?: string
+  designProfile?: DesignTaskProfileInput
+  designDocumentTarget?: DesignDocumentTarget
+  waitForRuntimeAdmission?: boolean
   generationPrompt?: string
   designContext?: DesignContext
   /** Reports whether the first runtime send was accepted, before waiting for that turn to finish. */
   onFirstSendSettled?: (sent: boolean) => void
+  /** Runs immediately before the first runtime request crosses the process boundary. */
+  onFirstSendStarting?: () => void | Promise<void>
   /**
    * When false, skip the design.md / design-system / logo foundation and just
    * plan + generate pages (the legacy flow). Defaults to true.
@@ -79,6 +96,71 @@ export type RunDesignPagesDeps = {
     /** Canvas card title for the logo artifact. */
     logoTitle?: () => string
   }
+}
+
+/** Immutable owner of one multi-page run. Global workspace/chat projections are
+ * only safe to read while they still point at this exact owner. */
+export type DesignPagesRunIdentity = {
+  workspaceRoot: string
+  threadId: string
+  documentId: string
+  boardArtifactId: string
+}
+
+export function captureDesignPagesRunIdentity(
+  deps: Pick<
+    RunDesignPagesDeps,
+    'workspaceRoot' | 'expectedThreadId' | 'designProfile' | 'designDocumentTarget'
+  >
+): DesignPagesRunIdentity | null {
+  const chat = useChatStore.getState()
+  const design = useDesignWorkspaceStore.getState()
+  const workspaceRoot = (design.workspaceRoot || deps.workspaceRoot).trim()
+  const threadId = (deps.expectedThreadId || chat.activeThreadId || '').trim()
+  const documentId = (deps.designDocumentTarget?.documentId || design.activeDocumentId || '').trim()
+  const document = design.documents.find((candidate) => candidate.id === documentId)
+  const boardArtifactId = (
+    deps.designDocumentTarget?.boardArtifactId ||
+    document?.artifacts.find((artifact) => artifact.kind === 'canvas')?.id ||
+    ''
+  ).trim()
+  if (!workspaceRoot || !threadId || !documentId || !boardArtifactId || !document) return null
+  const profileTarget = deps.designProfile?.documentTarget
+  if (
+    profileTarget &&
+    (profileTarget.documentId !== documentId || profileTarget.boardArtifactId !== boardArtifactId)
+  ) return null
+  if (!document.artifacts.some((artifact) => artifact.id === boardArtifactId && artifact.kind === 'canvas')) {
+    return null
+  }
+  return { workspaceRoot, threadId, documentId, boardArtifactId }
+}
+
+export function designPagesRunIdentityMatches(identity: DesignPagesRunIdentity): boolean {
+  const chat = useChatStore.getState()
+  const design = useDesignWorkspaceStore.getState()
+  const document = design.documents.find((candidate) => candidate.id === identity.documentId)
+  return (
+    chat.activeThreadId === identity.threadId &&
+    (design.workspaceRoot || identity.workspaceRoot) === identity.workspaceRoot &&
+    design.activeDocumentId === identity.documentId &&
+    Boolean(document?.artifacts.some(
+      (artifact) => artifact.id === identity.boardArtifactId && artifact.kind === 'canvas'
+    ))
+  )
+}
+
+/** Multi-step orchestration cannot enter the ordinary composer queue because a
+ * boolean queued result has no admitted turn id to await safely. */
+export function designPagesRunCanStartTurn(identity: DesignPagesRunIdentity): boolean {
+  if (!designPagesRunIdentityMatches(identity)) return false
+  const chat = useChatStore.getState()
+  return !chat.busy && !chat.currentTurnId && !threadHasPendingRuntimeWork(chat.blocks)
+}
+
+export function designPagesRunArtifacts(identity: DesignPagesRunIdentity): DesignArtifact[] {
+  return useDesignWorkspaceStore.getState().documents
+    .find((document) => document.id === identity.documentId)?.artifacts ?? []
 }
 
 export const PLAN_TIMEOUT_MS = 180_000
@@ -189,25 +271,29 @@ export async function writeWorkspaceTextFile(
  */
 export async function waitForTurnComplete(
   signal: { cancelled: boolean },
-  timeoutMs: number
-): Promise<'complete' | 'timeout' | 'cancelled'> {
+  timeoutMs: number,
+  identity?: DesignPagesRunIdentity
+): Promise<'complete' | 'timeout' | 'cancelled' | 'context-changed'> {
   const startedAt = Date.now()
   let sawActive = false
   // Give the send a moment to register a turn before we start judging idleness.
   const graceMs = 9000
   for (;;) {
     if (signal.cancelled) return 'cancelled'
-    const turnId = useChatStore.getState().currentTurnId
+    if (identity && !designPagesRunIdentityMatches(identity)) return 'context-changed'
+    const chat = useChatStore.getState()
+    const turnId = chat.currentTurnId
     if (turnId) sawActive = true
-    else if (sawActive) return 'complete'
-    else if (Date.now() - startedAt > graceMs) return 'complete'
+    else if (sawActive && !chat.busy) return 'complete'
+    else if (!chat.busy && Date.now() - startedAt > graceMs) return 'complete'
     if (Date.now() - startedAt > timeoutMs) return 'timeout'
     await delay(220)
   }
 }
 
 /** Assistant text for the most recently completed turn (the last user block). */
-export function assistantTextForLastTurn(): string {
+export function assistantTextForLastTurn(identity?: DesignPagesRunIdentity): string {
+  if (identity && !designPagesRunIdentityMatches(identity)) return ''
   const s = useChatStore.getState()
   let userId: string | null = null
   for (let i = s.blocks.length - 1; i >= 0; i -= 1) {
@@ -220,7 +306,8 @@ export function assistantTextForLastTurn(): string {
   return collectAssistantTextForTurn(s.blocks, userId, s.liveAssistant)
 }
 
-export function blocksForLastTurn(): ChatBlock[] {
+export function blocksForLastTurn(identity?: DesignPagesRunIdentity): ChatBlock[] {
+  if (identity && !designPagesRunIdentityMatches(identity)) return []
   const s = useChatStore.getState()
   let userIndex = -1
   for (let i = s.blocks.length - 1; i >= 0; i -= 1) {
@@ -341,10 +428,12 @@ export function deriveParallelDesignPageStatesFromBlocks(
 
 export function syncParallelPageStates(
   jobs: ParallelDesignPageJob[],
-  toolArtifactIds: Map<string, string>
-): ParallelDesignPageState[] {
+  toolArtifactIds: Map<string, string>,
+  identity?: DesignPagesRunIdentity
+): ParallelDesignPageState[] | null {
+  if (identity && !designPagesRunIdentityMatches(identity)) return null
   const states = deriveParallelDesignPageStatesFromBlocks(
-    blocksForLastTurn(),
+    blocksForLastTurn(identity),
     jobs,
     useDesignWorkspaceStore.getState().parallelPageStates,
     toolArtifactIds
@@ -375,9 +464,17 @@ export async function runTurn(opts: {
   timeoutMs: number
   artifactId?: string
   onSendSettled?: (sent: boolean) => void
-}): Promise<'complete' | 'cancelled' | 'timeout' | 'send-failed'> {
+  beforeSend?: () => void | Promise<void>
+  identity?: DesignPagesRunIdentity
+}): Promise<'complete' | 'cancelled' | 'timeout' | 'send-failed' | 'context-changed'> {
+  if (opts.identity && !designPagesRunIdentityMatches(opts.identity)) return 'context-changed'
+  if (opts.identity && !designPagesRunCanStartTurn(opts.identity)) {
+    opts.onSendSettled?.(false)
+    return 'send-failed'
+  }
   let sent: boolean
   try {
+    await opts.beforeSend?.()
     sent = await opts.sendMessage(opts.prompt, 'agent', opts.overrides)
   } catch (error) {
     opts.onSendSettled?.(false)
@@ -385,10 +482,11 @@ export async function runTurn(opts: {
   }
   opts.onSendSettled?.(sent)
   if (!sent) return 'send-failed'
-  const result = await waitForTurnComplete(opts.signal, opts.timeoutMs)
+  const result = await waitForTurnComplete(opts.signal, opts.timeoutMs, opts.identity)
   if (result !== 'complete') return result
+  if (opts.identity && !designPagesRunIdentityMatches(opts.identity)) return 'context-changed'
   if (opts.artifactId) {
-    const summary = extractAgentDesignSummary(assistantTextForLastTurn())
+    const summary = extractAgentDesignSummary(assistantTextForLastTurn(opts.identity))
     if (summary) {
       useDesignWorkspaceStore.getState().setVersionSummary(opts.artifactId, `${opts.artifactId}-v1`, summary)
     }
@@ -402,7 +500,9 @@ export async function createFoundationCard(opts: {
   workspaceRoot: string
   role: DesignFoundationRole
   title: string
+  identity?: DesignPagesRunIdentity
 }): Promise<{ id: string; relativePath: string } | null> {
+  if (opts.identity && !designPagesRunIdentityMatches(opts.identity)) return null
   const id = createDesignArtifactId()
   const relativePath = `.kun-design/${opts.docId}/${id}/v1.html`
   const createdAt = new Date().toISOString()
@@ -419,7 +519,12 @@ export async function createFoundationCard(opts: {
     role: opts.role,
     node: defaultDesignArtifactNode(index)
   })
+  if (opts.identity && (
+    !designPagesRunIdentityMatches(opts.identity) ||
+    !designPagesRunArtifacts(opts.identity).some((artifact) => artifact.id === id)
+  )) return null
   useDesignWorkspaceStore.getState().setActiveArtifact(id)
   const prep = await prepareDesignPreviewFile(opts.workspaceRoot, relativePath)
+  if (opts.identity && !designPagesRunIdentityMatches(opts.identity)) return null
   return prep.ok ? { id, relativePath } : null
 }

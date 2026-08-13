@@ -290,6 +290,7 @@ export function initialState(): Pick<
   | 'treeError'
   | 'documentsByPath'
   | 'editorLayout'
+  | 'presentationViewByGroup'
   | 'activeFilePath'
   | 'activeFileKind'
   | 'fileContent'
@@ -320,6 +321,7 @@ export function initialState(): Pick<
     loadingDirs: {},
     treeError: null,
     documentsByPath: {},
+    presentationViewByGroup: {},
     editorLayout: {
       version: 1,
       orientation: 'single',

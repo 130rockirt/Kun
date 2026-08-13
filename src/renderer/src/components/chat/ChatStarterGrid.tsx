@@ -1,5 +1,5 @@
 import type { ReactElement } from 'react'
-import { Bug, FolderOpen, Lightbulb } from 'lucide-react'
+import { Bug, FolderOpen, Image, LayoutTemplate, Lightbulb, Workflow } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 type SuggestionTone = 'blue' | 'emerald' | 'violet'
@@ -39,6 +39,65 @@ const CHAT_STARTERS: Array<{
     promptKey: 'promptPlanPrompt'
   }
 ]
+
+const DESIGN_STARTERS: Array<{ icon: ReactElement; titleKey: string }> = [
+  {
+    icon: <LayoutTemplate className="h-3.5 w-3.5" strokeWidth={1.8} />,
+    titleKey: 'designStarterPage'
+  },
+  {
+    icon: <Image className="h-3.5 w-3.5" strokeWidth={1.8} />,
+    titleKey: 'designStarterScreenshot'
+  },
+  {
+    icon: <Workflow className="h-3.5 w-3.5" strokeWidth={1.8} />,
+    titleKey: 'designStarterDiagram'
+  }
+]
+
+const CODE_STARTERS: Array<{ icon: ReactElement; titleKey: string }> = [
+  {
+    icon: <FolderOpen className="h-3.5 w-3.5" strokeWidth={1.8} />,
+    titleKey: 'codeStarterUnderstand'
+  },
+  {
+    icon: <Lightbulb className="h-3.5 w-3.5" strokeWidth={1.8} />,
+    titleKey: 'codeStarterBuild'
+  },
+  {
+    icon: <Bug className="h-3.5 w-3.5" strokeWidth={1.8} />,
+    titleKey: 'codeStarterFix'
+  }
+]
+
+export function TaskStarterChips({
+  taskSurface,
+  onSelectSuggestion
+}: {
+  taskSurface: 'code' | 'design'
+  onSelectSuggestion?: (prompt: string) => void
+}): ReactElement {
+  const { t } = useTranslation('common')
+  const starters = taskSurface === 'design' ? DESIGN_STARTERS : CODE_STARTERS
+  return (
+    <div className="mt-6 flex max-w-[720px] flex-wrap items-center justify-center gap-2" data-task-starters={taskSurface}>
+      {starters.map((starter) => {
+        const prompt = t(starter.titleKey)
+        return (
+          <button
+            key={starter.titleKey}
+            type="button"
+            onClick={() => onSelectSuggestion?.(prompt)}
+            className="ds-chip inline-flex h-9 items-center gap-2 rounded-full px-3.5 text-[12.5px] font-medium text-ds-muted transition hover:text-ds-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
+          >
+            {starter.icon}
+            {prompt}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
 
 export function ChatStarterGrid({
   onSelectSuggestion,

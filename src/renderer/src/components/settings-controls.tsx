@@ -116,6 +116,7 @@ export type SettingsTabsProps<T extends string> = {
   onChange: (value: T) => void
   baseId: string
   ariaLabel: string
+  contentSized?: boolean
 }
 
 type SettingsTabVariant = 'primary' | 'secondary'
@@ -126,6 +127,7 @@ function SettingsTabList<T extends string>({
   onChange,
   baseId,
   ariaLabel,
+  contentSized = false,
   variant
 }: SettingsTabsProps<T> & {
   variant: SettingsTabVariant
@@ -166,7 +168,9 @@ function SettingsTabList<T extends string>({
       className={
         secondary
           ? 'ds-settings-subtabs flex w-full min-w-0 items-center gap-1 overflow-x-auto rounded-full border border-ds-border-muted bg-ds-main/60 p-1'
-          : 'ds-settings-tabs grid w-full grid-flow-col auto-cols-[minmax(8rem,1fr)] gap-1 overflow-x-auto rounded-full border border-ds-border bg-ds-main p-1'
+          : `ds-settings-tabs grid w-full grid-flow-col gap-1 overflow-x-auto rounded-full border border-ds-border bg-ds-main p-1 ${
+              contentSized ? 'auto-cols-max' : 'auto-cols-[minmax(8rem,1fr)]'
+            }`
       }
     >
       {items.map((item, index) => {
@@ -193,7 +197,9 @@ function SettingsTabList<T extends string>({
                       ? 'border-ds-border bg-ds-card text-ds-ink'
                       : 'border-transparent text-ds-muted hover:bg-ds-hover hover:text-ds-ink'
                   }`
-                : `group flex h-9 min-w-0 items-center justify-center gap-2 rounded-full border px-3 text-[13px] font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 ${
+                : `group flex h-9 items-center justify-center gap-2 rounded-full border px-3 text-[13px] font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 ${
+                    contentSized ? 'min-w-max whitespace-nowrap' : 'min-w-0'
+                  } ${
                     active
                       ? 'border-ds-border bg-ds-card text-ds-ink'
                       : 'border-transparent text-ds-muted hover:bg-ds-hover hover:text-ds-ink'
@@ -207,7 +213,7 @@ function SettingsTabList<T extends string>({
                 strokeWidth={1.9}
               />
             ) : null}
-            <span className={secondary ? '' : 'truncate'}>{item.label}</span>
+            <span className={secondary || contentSized ? '' : 'truncate'}>{item.label}</span>
           </button>
         )
       })}

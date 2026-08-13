@@ -196,4 +196,5 @@ describe('WriteAssistantPanel', () => {
     expect(html).toContain('aria-label="Reasoning: High"')
     expect(html).toContain('aria-label="Fast mode on"')
   })
+
 })

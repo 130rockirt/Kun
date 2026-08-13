@@ -404,14 +404,14 @@ describe('chat-store app actions composer model loading', () => {
     actions.openSettings('general')
     expect(state.route).toBe('settings')
     expect(state.settingsSection).toBe('general')
-    expect(state.settingsReturnRoute).toBe('design')
+    expect(state.settingsReturnRoute).toBe('chat')
 
     // 设置页内部重复打开(切分类/再点设置)不得覆盖原返回目标。
     state.route = 'settings'
     actions.openSettings('providers')
     expect(state.route).toBe('settings')
     expect(state.settingsSection).toBe('providers')
-    expect(state.settingsReturnRoute).toBe('design')
+    expect(state.settingsReturnRoute).toBe('chat')
   })
 
   it.each(['write', 'design', 'claw', 'plugins', 'extensions', 'schedule', 'workflow', 'chat'] as const)(
@@ -428,11 +428,12 @@ describe('chat-store app actions composer model loading', () => {
 
       actions.openSettings('general')
       expect(state.route).toBe('settings')
-      expect(state.settingsReturnRoute).toBe(returnRoute)
+      const expectedRoute = returnRoute === 'design' ? 'chat' : returnRoute
+      expect(state.settingsReturnRoute).toBe(expectedRoute)
 
       actions.closeSettings()
 
-      expect(state.route).toBe(returnRoute)
+      expect(state.route).toBe(expectedRoute)
       // closeSettings 不经过 open*/setRoute 之外的重选会话逻辑,选择保持不变。
       expect(state.activeThreadId).toBe('thread-a')
     }

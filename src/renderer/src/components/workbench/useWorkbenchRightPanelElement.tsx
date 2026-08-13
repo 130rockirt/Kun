@@ -99,7 +99,19 @@ type WorkbenchRightPanelElementOptions = Pick<
     | 'onAttachContext'
     | 'onDocumentChange'
   >
-  canvas: Pick<CanvasPanelProps, 'workspaceRoot' | 'activeThreadId'>
+  canvas: Pick<
+    CanvasPanelProps,
+    | 'workspaceRoot'
+    | 'activeThreadId'
+    | 'busy'
+    | 'onOpenAgentSettings'
+    | 'onImplementDesign'
+    | 'onScreenCreated'
+    | 'onSvgCreated'
+    | 'onUseElementAsContext'
+    | 'onRuntimeQualityFindings'
+    | 'onRequestQualityRepair'
+  >
   file: Pick<
     FilePanelProps,
     | 'target'
@@ -217,8 +229,7 @@ export function useWorkbenchRightPanelElement({
       }}
       planPanel={<WorkbenchPlanPanel {...planPanelProps} />}
       canvas={{
-        workspaceRoot: canvas.workspaceRoot,
-        activeThreadId: canvas.activeThreadId,
+        ...canvas,
         onCollapse
       }}
       file={{

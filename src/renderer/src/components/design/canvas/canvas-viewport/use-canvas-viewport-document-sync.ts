@@ -43,6 +43,7 @@ type UseCanvasViewportDocumentSyncArgs = {
   designArtifacts: DesignArtifact[]
   designTarget?: DesignTarget
   designSystemPersistenceEnabled?: boolean
+  persistenceEnabled?: boolean
 }
 
 export const CANVAS_DOCUMENT_LOAD_TIMEOUT_MS = 4_000
@@ -113,7 +114,8 @@ export function useCanvasViewportDocumentSync({
   htmlFrameSyncEnabled,
   designArtifacts,
   designTarget,
-  designSystemPersistenceEnabled = true
+  designSystemPersistenceEnabled = true,
+  persistenceEnabled = true
 }: UseCanvasViewportDocumentSyncArgs): boolean {
   const [docLoaded, setDocLoaded] = useState(false)
 
@@ -158,7 +160,7 @@ export function useCanvasViewportDocumentSync({
           initialDocument
         )
         let addedFrameIds: string[] = []
-        if (htmlFrameSyncEnabled) {
+        if (htmlFrameSyncEnabled && persistenceEnabled) {
           const synced = syncDesignArtifactsToBoardDocument(doc, useDesignWorkspaceStore.getState().artifacts)
           doc = synced.document
           addedFrameIds = synced.addedFrameIds
@@ -208,7 +210,8 @@ export function useCanvasViewportDocumentSync({
       })
     }
 
-    const unsubscribe = useCanvasShapeStore.subscribe((state, prev) => {
+    const unsubscribe = persistenceEnabled
+      ? useCanvasShapeStore.subscribe((state, prev) => {
       if (cancelled || applyingDocumentLoad) return
       if (state.document === prev.document) return
       persistCanvasDocument(workspaceRoot, artifactId, state.document, baseDir)
@@ -245,10 +248,11 @@ export function useCanvasViewportDocumentSync({
         }
       }
       scheduleArtifactFrameNodeSync(state.document, nodeSyncTimer, setNodeSyncTimer, isCancelled)
-    })
+        })
+      : () => undefined
 
     const unsubscribeDesignSystem = useDesignSystemStore.subscribe((state, prev) => {
-      if (cancelled || !designSystemPersistenceEnabled) return
+      if (cancelled || !designSystemPersistenceEnabled || !persistenceEnabled) return
       if (state.system === prev.system) return
       persistDesignSystem(workspaceRoot, state.system, resolvedDesignSystemBaseDir)
     })
@@ -260,7 +264,7 @@ export function useCanvasViewportDocumentSync({
       unsubscribe()
       unsubscribeDesignSystem()
     }
-  }, [workspaceRoot, artifactId, baseDir, designSystemPersistenceEnabled, documentKey, htmlFrameSyncEnabled, resolvedDesignSystemBaseDir, viewportStorageKey])
+  }, [workspaceRoot, artifactId, baseDir, designSystemPersistenceEnabled, documentKey, htmlFrameSyncEnabled, persistenceEnabled, resolvedDesignSystemBaseDir, viewportStorageKey])
 
   const designArtifactSyncKey = useMemo(() => {
     if (!htmlFrameSyncEnabled) return ''
@@ -268,7 +272,7 @@ export function useCanvasViewportDocumentSync({
   }, [designArtifacts, designTarget, htmlFrameSyncEnabled])
 
   useEffect(() => {
-    if (!docLoaded || !htmlFrameSyncEnabled || !artifactId || !workspaceRoot) return
+    if (!persistenceEnabled || !docLoaded || !htmlFrameSyncEnabled || !artifactId || !workspaceRoot) return
     const current = useCanvasShapeStore.getState().document
     const synced = syncDesignArtifactsToBoardDocument(current, useDesignWorkspaceStore.getState().artifacts)
     if (
@@ -300,7 +304,7 @@ export function useCanvasViewportDocumentSync({
       const bounds = boundsForShapeIds(synced.document, synced.addedFrameIds)
       if (bounds) useCanvasViewportStore.getState().zoomToFit(bounds, 72, { maxZoom: 1, minZoom: 0.04 })
     }
-  }, [artifactId, baseDir, designArtifactSyncKey, docLoaded, documentKey, htmlFrameSyncEnabled, workspaceRoot])
+  }, [artifactId, baseDir, designArtifactSyncKey, docLoaded, documentKey, htmlFrameSyncEnabled, persistenceEnabled, workspaceRoot])
 
   useEffect(() => {
     if (!docLoaded || !artifactId || !workspaceRoot) return

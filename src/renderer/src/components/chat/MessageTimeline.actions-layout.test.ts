@@ -19,6 +19,7 @@ import {
   generatedMediaScrollAvailability,
   turnMetricsLabel
 } from './message-timeline-bubbles'
+import { WorkMetaRow } from './message-timeline-cards'
 import {
   describeProcessSection,
   ProcessSectionRow,
@@ -107,6 +108,29 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
 
   it('lets the composer stack reserve space without moving the live progress row', () => {
     expect(liveTurnProgressClass()).not.toContain('mb-16 md:mb-20')
+  })
+
+  it('keeps user actions attached to the message bubble', () => {
+    const html = renderToStaticMarkup(createElement(MessageBubble, {
+      block: { kind: 'user', id: 'user_1', text: 'Create a spreadsheet' }
+    }))
+    expect(html).toContain('data-user-message-actions="inline"')
+    expect(html.indexOf('ds-user-message-bubble')).toBeLessThan(
+      html.indexOf('data-user-message-actions="inline"')
+    )
+  })
+
+  it('labels an active turn as processing even after timing starts', () => {
+    const html = renderToStaticMarkup(createElement(WorkMetaRow, {
+      processing: true,
+      stepCount: 0,
+      durationMs: 15,
+      expanded: true,
+      collapsible: false,
+      onToggle: () => undefined
+    }))
+    expect(html).toMatch(/Processing|处理中|processing/)
+    expect(html).not.toMatch(/Processed|已处理/)
   })
 
   it('renders the fork action before copy in completed assistant response actions', () => {

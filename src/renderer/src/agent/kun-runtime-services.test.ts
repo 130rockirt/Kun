@@ -473,4 +473,36 @@ describe('KunRuntimeProvider', () => {
     )
   })
 
+  it('reads session-only Design metadata before cloning a resume target', async () => {
+    const metadata = {
+      sessionId: 'sess_design',
+      sourceAgentSurface: 'design' as const,
+      workspace: '/tmp/design-workspace',
+      sourceDesignProfile: {
+        version: 1 as const,
+        documentTarget: { documentId: 'doc_source', boardArtifactId: 'board_main' },
+        outputMedium: 'html' as const,
+        target: 'web' as const,
+        preset: 'none' as const,
+        context: { tone: [] },
+        lockedAtTurnId: 'turn_lock'
+      },
+      sourceDesignDocumentTarget: { documentId: 'doc_source', boardArtifactId: 'board_main' },
+      requiresIndependentDesignTarget: true
+    }
+    const runtimeRequest = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      body: JSON.stringify(metadata)
+    }))
+    installDsGui({ runtimeRequest })
+    const provider = new KunRuntimeProvider()
+
+    await expect(provider.getResumeSessionMetadata('sess_design')).resolves.toEqual(metadata)
+    expect(runtimeRequest).toHaveBeenCalledWith(
+      '/v1/sessions/sess_design/resume-metadata',
+      'GET'
+    )
+  })
+
 })

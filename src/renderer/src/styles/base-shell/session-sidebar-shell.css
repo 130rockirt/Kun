@@ -19,7 +19,6 @@
 
 .ds-workbench-top-actions {
   z-index: 30;
-  margin-right: clamp(4.5rem, 14cqw, 12rem);
 }
 
 .ds-topbar-action-button {
@@ -98,9 +97,6 @@
     overflow-x: auto;
   }
 
-  .ds-workbench-top-actions {
-    margin-right: 0;
-  }
 }
 
 @container (max-width: 760px) {

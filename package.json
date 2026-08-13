@@ -109,6 +109,7 @@
     "file-uri-to-path": "2.0.0",
     "html-to-docx": "^1.8.0",
     "ipaddr.js": "^2.4.0",
+    "jszip": "3.10.1",
     "node-pty": "^1.1.0",
     "openclaw": "file:vendor/openclaw-shim",
     "pdfjs-dist": "^5.4.394",

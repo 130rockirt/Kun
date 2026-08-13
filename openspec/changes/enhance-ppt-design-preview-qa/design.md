@@ -67,6 +67,14 @@ Alternative considered: visual-only image comparison. Rejected because it is non
 
 `PptReviewBundleV1.slides[].qaIssues` is optional. Existing review frames remain authoritative for slide identity. Board projection adds deterministic issue markers and a per-slide error/warning summary keyed by workflow, slide, revision, rule, and issue ordinal. Reapplying a bundle replaces obsolete markers instead of accumulating duplicates.
 
+### 7. Browser-preview compatibility repairs are ephemeral
+
+`pptx-preview@1.0.7` aborts package discovery when a theme has a singleton line-style node or `[Content_Types].xml` declares a missing part. The workspace viewer retries failed model loading with an in-memory ZIP copy that expands only the singleton parser shape and removes only declarations whose parts do not exist. The source PPTX remains byte-for-byte unchanged. The viewer validates slide-layout and master inheritance before rendering so incomplete packages produce a bounded error instead of an unhandled `background` property failure.
+
+### 8. Preview chrome adapts to the deck and viewport
+
+Single-slide decks omit the filmstrip and redundant page controls. Multi-slide decks retain the bounded renderer in a compact rail whose static clones scale to the available card instead of exposing the renderer's fixed staging dimensions. The main canvas initially fits both available width and height with conservative padding, stays centered when smaller than the viewport, preserves explicit user zoom, and returns to automatic fit when zoom is reset.
+
 ## Risks / Trade-offs
 
 - [Direction generation triples early image-generation work] → Generate only three representative pages per direction, require the gate only for underspecified new decks, and reuse stable IDs during revision.

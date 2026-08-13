@@ -1,5 +1,5 @@
 import { createServer, request as httpRequest } from 'node:http'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   BrowserUseNetworkPolicyError,
   BrowserUsePolicyProxy,
@@ -93,6 +93,9 @@ describe('BrowserUsePolicyProxy', () => {
       mode: 'public',
       onPolicyEvent: (event) => events.push(event)
     })
+    const internals = proxy as unknown as { leave: () => void }
+    const originalLeave = internals.leave.bind(proxy)
+    const leaveSpy = vi.spyOn(internals, 'leave').mockImplementation(originalLeave)
     const proxyUrl = new URL(await proxy.start())
     try {
       const status = await new Promise<number | undefined>((resolve, reject) => {
@@ -114,6 +117,7 @@ describe('BrowserUsePolicyProxy', () => {
         sanitizedUrl: 'http://127.0.0.1:9/private',
         code: 'non_public_destination'
       })
+      expect(leaveSpy).toHaveBeenCalledOnce()
     } finally {
       await proxy.stop()
     }
@@ -185,6 +189,9 @@ describe('BrowserUsePolicyProxy', () => {
       exactLocalOrigin: origin,
       connectTimeoutMs: 100
     })
+    const internals = proxy as unknown as { leave: () => void }
+    const originalLeave = internals.leave.bind(proxy)
+    const leaveSpy = vi.spyOn(internals, 'leave').mockImplementation(originalLeave)
     const proxyUrl = new URL(await proxy.start())
     try {
       const status = await new Promise<number | undefined>((resolve, reject) => {
@@ -201,8 +208,85 @@ describe('BrowserUsePolicyProxy', () => {
         request.end()
       })
       expect(status).toBe(502)
+      expect(leaveSpy).toHaveBeenCalledOnce()
     } finally {
       await proxy.stop()
+    }
+  })
+
+  it('releases a completed HTTP response exactly once', async () => {
+    const upstream = createServer((_request, response) => response.end('ok'))
+    await new Promise<void>((resolve) => upstream.listen(0, '127.0.0.1', resolve))
+    const address = upstream.address()
+    if (!address || typeof address === 'string') throw new Error('test server did not bind')
+    const origin = `http://127.0.0.1:${address.port}`
+    const proxy = new BrowserUsePolicyProxy({
+      mode: 'local-development',
+      exactLocalOrigin: origin,
+      maxConcurrentConnections: 1
+    })
+    const internals = proxy as unknown as { leave: () => void }
+    const originalLeave = internals.leave.bind(proxy)
+    const leaveSpy = vi.spyOn(internals, 'leave').mockImplementation(originalLeave)
+    const proxyUrl = new URL(await proxy.start())
+    try {
+      const status = await new Promise<number | undefined>((resolve, reject) => {
+        const request = httpRequest({
+          host: proxyUrl.hostname,
+          port: Number(proxyUrl.port),
+          method: 'GET',
+          path: `${origin}/ok`
+        }, (response) => {
+          response.resume()
+          response.once('end', () => resolve(response.statusCode))
+        })
+        request.once('error', reject)
+        request.end()
+      })
+      expect(status).toBe(200)
+      expect(leaveSpy).toHaveBeenCalledOnce()
+    } finally {
+      await proxy.stop()
+      await new Promise<void>((resolve) => upstream.close(() => resolve()))
+    }
+  })
+
+  it('releases an aborted downstream HTTP request exactly once', async () => {
+    let markUpstreamReceived!: () => void
+    const upstreamReceived = new Promise<void>((resolve) => {
+      markUpstreamReceived = resolve
+    })
+    const upstream = createServer(() => markUpstreamReceived())
+    await new Promise<void>((resolve) => upstream.listen(0, '127.0.0.1', resolve))
+    const address = upstream.address()
+    if (!address || typeof address === 'string') throw new Error('test server did not bind')
+    const origin = `http://127.0.0.1:${address.port}`
+    const proxy = new BrowserUsePolicyProxy({
+      mode: 'local-development',
+      exactLocalOrigin: origin,
+      maxConcurrentConnections: 1
+    })
+    const internals = proxy as unknown as { leave: () => void }
+    const originalLeave = internals.leave.bind(proxy)
+    const leaveSpy = vi.spyOn(internals, 'leave').mockImplementation(originalLeave)
+    const proxyUrl = new URL(await proxy.start())
+    try {
+      const requestClosed = new Promise<void>((resolve) => {
+        const request = httpRequest({
+          host: proxyUrl.hostname,
+          port: Number(proxyUrl.port),
+          method: 'GET',
+          path: `${origin}/slow`
+        })
+        request.once('error', () => resolve())
+        request.end()
+        void upstreamReceived.then(() => request.destroy())
+      })
+      await requestClosed
+      await vi.waitFor(() => expect(leaveSpy).toHaveBeenCalledOnce())
+    } finally {
+      await proxy.stop()
+      await new Promise<void>((resolve) => upstream.close(() => resolve()))
     }
   })
 })

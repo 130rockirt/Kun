@@ -13,7 +13,17 @@ import { rendererRuntimeClient } from '../../agent/runtime-client'
 import { workspaceLabelFromPath } from '../../lib/workspace-label'
 import { normalizeWorkspaceRoot, workspaceRootIdentityKey } from '../../lib/workspace-path'
 import { useChatStore } from '../../store/chat-store'
+import type { ChatState } from '../../store/chat-store-types'
 import { useWriteWorkspaceStore } from '../../write/write-workspace-store'
+
+const EMPTY_KNOWLEDGE_BASE_STATUSES: KnowledgeBaseIndexStatus[] = []
+
+export function selectKnowledgeBaseStatuses(
+  state: Pick<ChatState, 'activeThreadId' | 'knowledgeBaseStatuses'>
+): KnowledgeBaseIndexStatus[] {
+  if (!state.activeThreadId) return EMPTY_KNOWLEDGE_BASE_STATUSES
+  return state.knowledgeBaseStatuses[state.activeThreadId] ?? EMPTY_KNOWLEDGE_BASE_STATUSES
+}
 
 export function knowledgeBaseIdForRoot(root: string): string {
   const value = workspaceRootIdentityKey(normalizeWorkspaceRoot(root))
@@ -47,9 +57,7 @@ export function KnowledgeBasePicker(): ReactElement {
   const activeThread = useChatStore((state) =>
     state.threads.find((thread) => thread.id === state.activeThreadId)
   )
-  const statuses = useChatStore((state) =>
-    state.activeThreadId ? state.knowledgeBaseStatuses[state.activeThreadId] ?? [] : []
-  )
+  const statuses = useChatStore(selectKnowledgeBaseStatuses)
   const busy = useChatStore((state) => state.busy)
   const runtimeReady = useChatStore((state) => state.runtimeConnection === 'ready')
   const setMounts = useChatStore((state) => state.setThreadKnowledgeBases)

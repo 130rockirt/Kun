@@ -337,7 +337,7 @@ export function createAppActions(options: CreateAppActionsOptions): Pick<
       return task
     },
 
-    setRoute: (route) => set({ route }),
+    setRoute: (route) => set({ route: route === 'design' ? 'chat' : route }),
 
     openWrite: async () => {
       set({ route: 'write' })
@@ -347,12 +347,14 @@ export function createAppActions(options: CreateAppActionsOptions): Pick<
       set((state) => ({
         route: 'settings',
         settingsSection: section,
-        settingsReturnRoute: state.route === 'settings' ? state.settingsReturnRoute : state.route
+        settingsReturnRoute: state.route === 'settings'
+          ? state.settingsReturnRoute === 'design' ? 'chat' : state.settingsReturnRoute
+          : state.route === 'design' ? 'chat' : state.route
       })),
 
     closeSettings: () =>
       set((state) => ({
-        route: state.settingsReturnRoute
+        route: state.settingsReturnRoute === 'design' ? 'chat' : state.settingsReturnRoute
       })),
 
     openPlugins: (host?: PluginHostRoute) =>
@@ -374,7 +376,7 @@ export function createAppActions(options: CreateAppActionsOptions): Pick<
       set({ route: 'workflow' })
     },
     openDesign: () => {
-      set({ route: 'design' })
+      set({ route: 'chat' })
     },
 
     openInitialSetup: (mode: InitialSetupMode = 'required') =>

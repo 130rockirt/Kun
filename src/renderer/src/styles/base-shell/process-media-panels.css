@@ -265,6 +265,28 @@ body.ds-workbench-resizing webview {
   box-shadow: 0 0 12px color-mix(in srgb, var(--ds-accent) 16%, transparent);
 }
 
+/* Work is an edge-to-edge three-pane surface. Keep the resize target generous
+   without spending layout width on a visible gutter between panes. */
+.ds-workbench-divider--flush {
+  width: 1px;
+  flex-basis: 1px;
+}
+
+.ds-workbench-divider--flush::before {
+  inset-block: 0;
+  right: -4px;
+  left: -4px;
+  background: transparent;
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.ds-workbench-divider--flush::after {
+  top: 0;
+  bottom: 0;
+  box-shadow: none;
+}
+
 .ds-stage-inset {
   --ds-stage-inset-inline: 0px;
   padding-inline: 0;

@@ -135,6 +135,25 @@ async reconcileOrphanedTurns(this: TurnService): Promise<string[]> {
       for (const turn of thread.turns) {
         if (turn.status !== 'running' && turn.status !== 'queued') continue
         if (this['inflightTurns'].has(turn.id)) continue
+        if (
+          turn.admissionPending ||
+          (!turn.admissionCompletedAt && thread.designProfile?.lockedAtTurnId === turn.id)
+        ) {
+          // This turn never crossed the admission boundary. Removing its
+          // provisional item/profile is recovery, not a failed user turn, so
+          // it must not create an interruption checkpoint or goal resume.
+          const rolledBack = await this['rollbackPendingAdmission'](
+            thread.id,
+            turn.id
+          ).catch(() => false)
+          if (!rolledBack) {
+            await this.interruptTurn({
+              threadId: thread.id,
+              turnId: turn.id
+            }).catch(() => undefined)
+          }
+          continue
+        }
         if (turn.status === 'running' && turn.orchestration === 'graph') {
           const durablePlanning = await this['deps'].resolveGraphPlanningDraft?.({
             threadId: thread.id,

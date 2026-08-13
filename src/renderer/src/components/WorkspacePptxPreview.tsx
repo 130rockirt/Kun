@@ -11,7 +11,12 @@ import {
   useState,
   type ReactElement
 } from 'react'
-import type { WorkspaceOfficePreviewSuccess, WorkspaceOfficeSelection } from '@shared/office-document'
+import type {
+  WorkspaceOfficePreviewSuccess,
+  WorkspaceOfficeSelection,
+  WorkspacePresentationViewReference,
+  WorkspacePresentationViewSource
+} from '@shared/office-document'
 import { WorkspaceOfficePreviewToolbar } from './WorkspaceOfficePreviewToolbar'
 import {
   WorkspacePptxThumbnailRail,
@@ -27,31 +32,48 @@ import {
   selectionFromOfficeDom
 } from './workspace-office-selection'
 import { subscribeKnowledgeSourceNavigation } from '../lib/knowledge-source-navigation'
+import {
+  assertRenderablePptxPreviewModel,
+  preparePptxPreviewPackage
+} from './workspace-pptx-preview-compat'
 
 const PPTX_WIDTH = 960
 const PPTX_HEIGHT = 540
 const THUMBNAIL_WIDTH = 160
 const THUMBNAIL_HEIGHT = 90
+const PPTX_CANVAS_PADDING = 48
+export const PPTX_PREVIEW_MIN_ZOOM = 0.25
 const FULLSCREEN_CONTROLS_TIMEOUT_MS = 2_000
 
 export function WorkspacePptxPreview({
   result,
   loading,
   refreshError,
-  onSelectionChange
+  onSelectionChange,
+  onPresentationViewChange,
+  keyboardActive = true
 }: {
   result: WorkspaceOfficePreviewSuccess
   loading: boolean
   refreshError?: string | null
   onSelectionChange?: (selection: WorkspaceOfficeSelection) => void
+  onPresentationViewChange?: (
+    view: WorkspacePresentationViewReference | null,
+    source: WorkspacePresentationViewSource
+  ) => void
+  keyboardActive?: boolean
 }): ReactElement {
   const rootRef = useRef<HTMLDivElement>(null)
   const hostRef = useRef<HTMLDivElement>(null)
+  const canvasViewportRef = useRef<HTMLDivElement>(null)
   const thumbnailEngineHostRef = useRef<HTMLDivElement>(null)
   const previewerRef = useRef<PptxPreviewer | null>(null)
   const thumbnailSessionRef = useRef<PptxThumbnailSession | null>(null)
   const renderIdRef = useRef(0)
   const controlsTimerRef = useRef<number | null>(null)
+  const fitToViewportRef = useRef(true)
+  const presentationViewChangeRef = useRef(onPresentationViewChange)
+  presentationViewChangeRef.current = onPresentationViewChange
   const [thumbnailSession, setThumbnailSession] = useState<PptxThumbnailSession | null>(null)
   const [slide, setSlide] = useState(1)
   const [slideCount, setSlideCount] = useState(1)
@@ -62,7 +84,36 @@ export function WorkspacePptxPreview({
   const [controlsVisible, setControlsVisible] = useState(true)
   const [fullscreenScale, setFullscreenScale] = useState(1)
 
+  const clearPresentationView = useCallback((): void => {
+    presentationViewChangeRef.current?.(null, {
+      path: result.path,
+      sourceSha256: result.sourceSha256
+    })
+  }, [result.path, result.sourceSha256])
+
+  const emitPresentationView = useCallback((nextSlide: number, nextSlideCount: number): void => {
+    const source = { path: result.path, sourceSha256: result.sourceSha256 }
+    presentationViewChangeRef.current?.({
+      kind: 'presentation',
+      path: result.path,
+      sourceName: result.name,
+      sourceFormat: result.sourceFormat === 'ppt' ? 'ppt' : 'pptx',
+      sourceSha256: result.sourceSha256,
+      slide: nextSlide,
+      slideCount: nextSlideCount
+    }, source)
+  }, [result.name, result.path, result.sourceFormat, result.sourceSha256])
+
+  const fitToViewport = useCallback((): void => {
+    if (!fitToViewportRef.current) return
+    const viewport = canvasViewportRef.current
+    if (!viewport) return
+    const nextZoom = fittedPptxPreviewZoom(viewport.clientWidth, viewport.clientHeight)
+    setZoom((current) => Math.abs(current - nextZoom) < 0.001 ? current : nextZoom)
+  }, [])
+
   useEffect(() => {
+    clearPresentationView()
     const host = hostRef.current
     const thumbnailHost = thumbnailEngineHostRef.current
     if (!host || !thumbnailHost) return
@@ -98,8 +149,8 @@ export function WorkspacePptxPreview({
           mode: 'slide'
         })
         const data = asArrayBuffer(result.data)
-        await stagedPreviewer.preview(data)
-        await stagedThumbnailPreviewer.preview(data)
+        const previewData = await loadMainPptxPreview(stagedPreviewer, data)
+        await loadPptxPreviewModel(stagedThumbnailPreviewer, previewData, false)
         if (renderId !== renderIdRef.current) {
           disposeStagedPreview(stagedPreviewer, staging)
           disposeStagedPreview(stagedThumbnailPreviewer, thumbnailStaging)
@@ -124,7 +175,9 @@ export function WorkspacePptxPreview({
         const count = Math.max(1, stagedPreviewer.slideCount)
         setSlideCount(count)
         setSlide(1)
+        emitPresentationView(1, count)
         setRenderError(null)
+        fitToViewport()
       })
       .catch((cause) => {
         disposeStagedPreview(stagedPreviewer, staging)
@@ -135,6 +188,7 @@ export function WorkspacePptxPreview({
       })
 
     return () => {
+      clearPresentationView()
       renderIdRef.current += 1
       if (stagedPreviewer !== previewerRef.current) {
         disposeStagedPreview(stagedPreviewer, staging)
@@ -143,7 +197,25 @@ export function WorkspacePptxPreview({
         disposeStagedPreview(stagedThumbnailPreviewer, thumbnailStaging)
       }
     }
-  }, [result.data, result.sourceSha256])
+  }, [clearPresentationView, emitPresentationView, fitToViewport, result.data, result.sourceSha256])
+
+  useEffect(() => {
+    fitToViewportRef.current = true
+    fitToViewport()
+  }, [fitToViewport, result.path])
+
+  useEffect(() => {
+    const viewport = canvasViewportRef.current
+    if (!viewport) return
+    fitToViewport()
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', fitToViewport)
+      return () => window.removeEventListener('resize', fitToViewport)
+    }
+    const observer = new ResizeObserver(fitToViewport)
+    observer.observe(viewport)
+    return () => observer.disconnect()
+  }, [fitToViewport, slideCount])
 
   useEffect(() => () => {
     renderIdRef.current += 1
@@ -183,16 +255,19 @@ export function WorkspacePptxPreview({
   const goToSlide = useCallback((next: number): void => {
     const safeSlide = Math.min(slideCount, Math.max(1, next))
     try {
-      previewerRef.current?.renderSingleSlide(safeSlide - 1)
+      const previewer = previewerRef.current
+      if (!previewer) return
+      previewer.renderSingleSlide(safeSlide - 1)
       if (hostRef.current) secureWorkspaceOfficeLinks(hostRef.current)
       setSlide(safeSlide)
+      emitPresentationView(safeSlide, slideCount)
       onSelectionChange?.(emptyWorkspaceOfficeSelection('presentation', result.sourceFormat))
       window.getSelection()?.removeAllRanges()
       setRenderError(null)
     } catch (cause) {
       setRenderError(errorMessage(cause))
     }
-  }, [onSelectionChange, result.sourceFormat, slideCount])
+  }, [emitPresentationView, onSelectionChange, result.sourceFormat, slideCount])
 
   useEffect(() => subscribeKnowledgeSourceNavigation(result.path, (location) => {
     if (location.kind !== 'presentation' || !previewerRef.current) return false
@@ -256,6 +331,7 @@ export function WorkspacePptxPreview({
   }, [])
 
   useEffect(() => {
+    if (!keyboardActive) return
     const handleKeyDown = (event: KeyboardEvent): void => {
       if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) return
       if (isEditableKeyboardTarget(event.target)) return
@@ -276,10 +352,18 @@ export function WorkspacePptxPreview({
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [goToSlide, slide, slideCount, toggleFullscreen])
+  }, [goToSlide, keyboardActive, slide, slideCount, toggleFullscreen])
 
   const scale = isFullscreen ? fullscreenScale : zoom
   const viewerError = renderError || interactionError
+  const changeZoom = (nextZoom: number): void => {
+    fitToViewportRef.current = false
+    setZoom(nextZoom)
+  }
+  const resetZoom = (): void => {
+    fitToViewportRef.current = true
+    fitToViewport()
+  }
 
   return (
     <div
@@ -295,13 +379,17 @@ export function WorkspacePptxPreview({
           refreshError={refreshError}
           viewerError={viewerError}
           zoom={zoom}
-          onZoomChange={setZoom}
+          minZoom={PPTX_PREVIEW_MIN_ZOOM}
+          onZoomChange={changeZoom}
+          onResetZoom={resetZoom}
         >
-          <PptxSlideControls
-            slide={slide}
-            slideCount={slideCount}
-            onSelectSlide={goToSlide}
-          />
+          {slideCount > 1 ? (
+            <PptxSlideControls
+              slide={slide}
+              slideCount={slideCount}
+              onSelectSlide={goToSlide}
+            />
+          ) : null}
           <button
             type="button"
             aria-label="Enter fullscreen"
@@ -313,7 +401,7 @@ export function WorkspacePptxPreview({
         </WorkspaceOfficePreviewToolbar>
       ) : null}
       <div className="flex min-h-0 flex-1">
-        {!isFullscreen ? (
+        {!isFullscreen && slideCount > 1 ? (
           <WorkspacePptxThumbnailRail
             session={thumbnailSession}
             slideCount={slideCount}
@@ -321,24 +409,30 @@ export function WorkspacePptxPreview({
             onSelectSlide={goToSlide}
           />
         ) : null}
-        <div className={`min-h-0 min-w-0 flex-1 ${isFullscreen ? 'flex items-center justify-center overflow-hidden' : 'overflow-auto p-4'}`}>
-          <div
-            className="mx-auto shrink-0"
-            style={{ width: `${PPTX_WIDTH * scale}px`, height: `${PPTX_HEIGHT * scale}px` }}
-          >
+        <div
+          ref={canvasViewportRef}
+          data-pptx-canvas-viewport="true"
+          className={`min-h-0 min-w-0 flex-1 ${isFullscreen ? 'overflow-hidden' : 'overflow-auto'}`}
+        >
+          <div className={`flex min-h-full items-center justify-center ${isFullscreen ? 'min-w-full' : 'min-w-max p-6'}`}>
             <div
-              className="origin-top-left"
-              style={{
-                width: `${PPTX_WIDTH}px`,
-                minHeight: `${PPTX_HEIGHT}px`,
-                transform: `scale(${scale})`
-              }}
+              className={`shrink-0 overflow-hidden ${isFullscreen ? '' : 'rounded-sm shadow-[0_12px_32px_rgba(15,23,42,0.14)] ring-1 ring-black/5'}`}
+              style={{ width: `${PPTX_WIDTH * scale}px`, height: `${PPTX_HEIGHT * scale}px` }}
             >
               <div
-                ref={hostRef}
-                onClick={openWorkspaceOfficeExternalLink}
-                className="workspace-pptx-preview [&_.pptx-preview-wrapper-next]:hidden [&_.pptx-preview-wrapper-pagination]:hidden [&_.pptx-preview-wrapper-pre]:hidden"
-              />
+                className="origin-top-left"
+                style={{
+                  width: `${PPTX_WIDTH}px`,
+                  minHeight: `${PPTX_HEIGHT}px`,
+                  transform: `scale(${scale})`
+                }}
+              >
+                <div
+                  ref={hostRef}
+                  onClick={openWorkspaceOfficeExternalLink}
+                  className="workspace-pptx-preview [&_.pptx-preview-wrapper-next]:hidden [&_.pptx-preview-wrapper-pagination]:hidden [&_.pptx-preview-wrapper-pre]:hidden"
+                />
+              </div>
             </div>
           </div>
         </div>
@@ -418,6 +512,31 @@ function asArrayBuffer(data: Uint8Array): ArrayBuffer {
   return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer
 }
 
+async function loadMainPptxPreview(
+  previewer: PptxPreviewer,
+  data: ArrayBuffer
+): Promise<ArrayBuffer> {
+  try {
+    await loadPptxPreviewModel(previewer, data, true)
+    return data
+  } catch (originalError) {
+    const compatibleData = await preparePptxPreviewPackage(data)
+    if (compatibleData === data) throw originalError
+    await loadPptxPreviewModel(previewer, compatibleData, true)
+    return compatibleData
+  }
+}
+
+async function loadPptxPreviewModel(
+  previewer: PptxPreviewer,
+  data: ArrayBuffer,
+  renderFirstSlide: boolean
+): Promise<void> {
+  const model = await previewer.load(data)
+  assertRenderablePptxPreviewModel(model)
+  if (renderFirstSlide) previewer.renderSingleSlide(0)
+}
+
 function removeOtherChildren(host: HTMLElement, current: HTMLElement): void {
   for (const child of Array.from(host.children)) {
     if (child !== current) child.remove()
@@ -444,4 +563,16 @@ function isEditableKeyboardTarget(target: EventTarget | null): boolean {
 function errorMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error)
   return message || 'This PowerPoint presentation could not be rendered.'
+}
+
+export function fittedPptxPreviewZoom(viewportWidth: number, viewportHeight: number): number {
+  if (!Number.isFinite(viewportWidth) || !Number.isFinite(viewportHeight)
+    || viewportWidth <= PPTX_CANVAS_PADDING || viewportHeight <= PPTX_CANVAS_PADDING) {
+    return 1
+  }
+  const fitted = Math.floor(Math.min(
+    (viewportWidth - PPTX_CANVAS_PADDING) / PPTX_WIDTH,
+    (viewportHeight - PPTX_CANVAS_PADDING) / PPTX_HEIGHT
+  ) * 100) / 100
+  return Math.max(PPTX_PREVIEW_MIN_ZOOM, Math.min(1, fitted))
 }

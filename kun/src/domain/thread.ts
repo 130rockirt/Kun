@@ -4,16 +4,19 @@ import {
   type KnowledgeBaseMount,
   type ThreadMode,
   type ThreadRecord,
+  type ThreadSummary,
   type ThreadGoal,
   type ThreadTodoList,
   type ThreadRelation,
   type ThreadStatus,
   type ThreadAgentSurface,
+  type DesignCloneOperation,
   type ExtensionAgentProfileSnapshot,
   type ExtensionRunBudget,
   type ExtensionThreadVisibility,
   type ExtensionToolCatalogEpoch
 } from '../contracts/threads.js'
+import type { DesignTaskProfile } from '../contracts/design-task-profile.js'
 import {
   DEFAULT_APPROVAL_POLICY,
   DEFAULT_APPROVAL_REVIEWER,
@@ -22,6 +25,7 @@ import {
   type ApprovalReviewer,
   type SandboxMode
 } from '../contracts/policy.js'
+import { resolveThreadLockedTaskSurface } from './task-surface-lock.js'
 
 /**
  * Domain helper for thread records. The contract type is the source of
@@ -39,6 +43,8 @@ export function createThreadRecord(input: {
   knowledgeBases?: KnowledgeBaseMount[]
   model: string
   agentSurface?: ThreadAgentSurface
+  designProfile?: DesignTaskProfile
+  designCloneOperation?: DesignCloneOperation
   providerId?: string
   ownerExtensionId?: string
   ownerExtensionVersion?: string
@@ -60,6 +66,8 @@ export function createThreadRecord(input: {
   costBudgetWarningSent?: boolean
   relation?: ThreadRelation
   parentThreadId?: string
+  planBuildRunId?: string
+  planBuildAdmissionFrozen?: boolean
   forkedFromThreadId?: string
   forkedFromTitle?: string
   forkedAt?: string
@@ -81,6 +89,8 @@ export function createThreadRecord(input: {
     knowledgeBases: normalizeKnowledgeBaseMounts(input.knowledgeBases, input.workspace),
     model: input.model,
     ...(input.agentSurface ? { agentSurface: input.agentSurface } : {}),
+    ...(input.designProfile ? { designProfile: input.designProfile } : {}),
+    ...(input.designCloneOperation ? { designCloneOperation: input.designCloneOperation } : {}),
     ...(input.providerId ? { providerId: input.providerId } : {}),
     ...(input.ownerExtensionId ? { ownerExtensionId: input.ownerExtensionId } : {}),
     ...(input.ownerExtensionVersion ? { ownerExtensionVersion: input.ownerExtensionVersion } : {}),
@@ -102,6 +112,10 @@ export function createThreadRecord(input: {
     ...(input.costBudgetWarningSent !== undefined ? { costBudgetWarningSent: input.costBudgetWarningSent } : {}),
     relation: input.relation ?? 'primary',
     ...(input.parentThreadId ? { parentThreadId: input.parentThreadId } : {}),
+    ...(input.planBuildRunId ? { planBuildRunId: input.planBuildRunId } : {}),
+    ...(input.planBuildAdmissionFrozen !== undefined
+      ? { planBuildAdmissionFrozen: input.planBuildAdmissionFrozen }
+      : {}),
     ...(input.forkedFromThreadId ? { forkedFromThreadId: input.forkedFromThreadId } : {}),
     ...(input.forkedFromTitle ? { forkedFromTitle: input.forkedFromTitle } : {}),
     ...(input.forkedAt ? { forkedAt: input.forkedAt } : {}),
@@ -121,16 +135,8 @@ export function touchThread(thread: ThreadEntity, updatedAt?: string): ThreadEnt
 
 export function toThreadSummary(
   thread: ThreadEntity
-): Pick<
-  ThreadEntity,
-  'id' | 'title' | 'titleAuto' | 'summary' | 'workspace' | 'additionalWorkspaces' | 'knowledgeBases' | 'model' | 'agentSurface' | 'providerId' | 'agentId' | 'systemPrompt' | 'mode' | 'status' | 'approvalPolicy' | 'sandboxMode' | 'approvalReviewer' | 'modelRequestCaptureEnabled' | 'pinned' | 'createdAt' | 'updatedAt'
-  | 'ownerExtensionId' | 'ownerExtensionVersion' | 'accountId' | 'extensionVisibility'
-  | 'extensionProfile' | 'extensionBudget' | 'toolCatalogEpoch'
-  | 'costBudgetUsd' | 'costBudgetWarningSent'
-  | 'relation' | 'parentThreadId'
-  | 'forkedFromThreadId' | 'forkedFromTitle' | 'forkedAt' | 'forkedFromMessageCount' | 'forkedFromTurnCount'
-  | 'goal' | 'todos'
-> {
+): ThreadSummary {
+  const lockedTaskSurface = resolveThreadLockedTaskSurface(thread)
   return {
     id: thread.id,
     title: thread.title,
@@ -141,6 +147,9 @@ export function toThreadSummary(
     knowledgeBases: thread.knowledgeBases,
     model: thread.model,
     agentSurface: resolveThreadAgentSurface(thread),
+    ...(lockedTaskSurface ? { lockedTaskSurface } : {}),
+    ...(thread.designProfile ? { designProfile: thread.designProfile } : {}),
+    ...(thread.designCloneOperation ? { designCloneOperation: thread.designCloneOperation } : {}),
     ...(thread.providerId ? { providerId: thread.providerId } : {}),
     ...(thread.ownerExtensionId ? { ownerExtensionId: thread.ownerExtensionId } : {}),
     ...(thread.ownerExtensionVersion ? { ownerExtensionVersion: thread.ownerExtensionVersion } : {}),
@@ -162,6 +171,10 @@ export function toThreadSummary(
     ...(thread.costBudgetWarningSent !== undefined ? { costBudgetWarningSent: thread.costBudgetWarningSent } : {}),
     relation: thread.relation ?? 'primary',
     ...(thread.parentThreadId ? { parentThreadId: thread.parentThreadId } : {}),
+    ...(thread.planBuildRunId ? { planBuildRunId: thread.planBuildRunId } : {}),
+    ...(thread.planBuildAdmissionFrozen !== undefined
+      ? { planBuildAdmissionFrozen: thread.planBuildAdmissionFrozen }
+      : {}),
     ...(thread.forkedFromThreadId ? { forkedFromThreadId: thread.forkedFromThreadId } : {}),
     ...(thread.forkedFromTitle ? { forkedFromTitle: thread.forkedFromTitle } : {}),
     ...(thread.forkedAt ? { forkedAt: thread.forkedAt } : {}),

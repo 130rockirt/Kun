@@ -64,13 +64,17 @@ import {
   buildComposerFileContextPrompt,
   filterWorkspaceFileMentionSuggestions,
   formatComposerFileMentionToken,
+  formatComposerKnowledgeBaseMentionToken,
   getFileMentionAtCursor,
   hasComposerFileMentionToken,
   isFileWithinDirectory,
   removeComposerFileMentionToken,
+  replaceComposerMentionWithToken,
   replaceFileMentionInInput,
   type ComposerFileReference
 } from '../../lib/composer-file-references'
+import { FloatingComposerFileMentionMenu } from './FloatingComposerFileMentionMenu'
+import { filterKnowledgeBaseMentionSuggestions } from './use-composer-file-mentions'
 import { filesUnderDirectory } from '../../lib/workspace-file-index'
 import type { ModelProviderModelGroup } from '@shared/kun-gui-api'
 
@@ -103,6 +107,62 @@ const CODEX_PROVIDER_GROUP: ModelProviderModelGroup = {
 }
 
 describe('FloatingComposer file references', () => {
+  it('formats and inserts knowledge-base mentions without creating file paths', () => {
+    const token = formatComposerKnowledgeBaseMentionToken('Product "Docs" \\ 2026')
+    expect(token).toBe('@kb:"Product \\"Docs\\" \\\\ 2026"')
+    const mention = getFileMentionAtCursor('check @prod', 'check @prod'.length)
+    expect(mention).not.toBeNull()
+    expect(replaceComposerMentionWithToken('check @prod', mention!, token)).toEqual({
+      input: `check ${token} `,
+      cursor: `check ${token} `.length
+    })
+  })
+
+  it('filters mounted knowledge bases by name and carries index status', () => {
+    const mounts = [{
+      id: 'kb_docs',
+      root: '/private/product-docs',
+      name: 'Product Docs',
+      source: 'write-workspace' as const,
+      access: 'read-only' as const
+    }, {
+      id: 'kb_notes',
+      root: '/private/notes',
+      name: 'Team Notes',
+      source: 'write-workspace' as const,
+      access: 'read-only' as const
+    }]
+    expect(filterKnowledgeBaseMentionSuggestions(mounts, [{
+      id: 'kb_docs', state: 'ready', documentCount: 3, nodeCount: 12
+    }], 'product')).toEqual([{
+      kind: 'knowledge-base', id: 'kb_docs', name: 'Product Docs', status: 'ready'
+    }])
+  })
+
+  it('renders knowledge bases before file references without exposing mount roots', () => {
+    const knowledge = {
+      kind: 'knowledge-base' as const,
+      id: 'kb_docs',
+      name: 'Product Docs',
+      status: 'ready' as const
+    }
+    const html = renderToStaticMarkup(createElement(FloatingComposerFileMentionMenu, {
+      suggestions: [knowledge, {
+        kind: 'file-reference' as const,
+        reference: { path: '/repo/README.md', relativePath: 'README.md', name: 'README.md' }
+      }],
+      loading: false,
+      selectedIndex: 0,
+      highlighted: knowledge,
+      hasMountedKnowledgeBases: true,
+      onSelect: vi.fn()
+    }))
+    expect(html).toContain('Product Docs')
+    expect(html).toContain('@kb:&quot;Product Docs&quot;')
+    expect(html.indexOf('Product Docs')).toBeLessThan(html.indexOf('README.md'))
+    expect(html).not.toContain('/private/product-docs')
+  })
+
   it('captures file mention commit keys while the menu is active before candidates load', () => {
     expect(shouldCaptureFileMentionCommitKey({
       key: 'Enter',

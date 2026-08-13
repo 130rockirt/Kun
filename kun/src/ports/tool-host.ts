@@ -155,7 +155,7 @@ export type ToolHostContext = {
   /** Pending desktop checkpoint gate for the first workspace mutation. */
   workspaceCheckpointRequestId?: string
   orchestration?: 'direct' | 'graph'
-  messageSource?: 'background_shell' | 'background_subagent' | 'graph_runtime' | 'subagent_resume'
+  messageSource?: 'background_shell' | 'background_subagent' | 'graph_runtime' | 'subagent_resume' | 'design_continuation'
   /** Structured child identity bound to a one-click resume turn. */
   subagentResume?: SubagentResumeRequest
   /** Additional explicitly trusted workspace roots for this persisted thread. */

@@ -1,19 +1,10 @@
 import type {
-  CoreAttachmentContentResponseJson,
-  CoreAttachmentMetadataJson,
-  CoreAttachmentTextFallbackJson,
-  CoreMemoryDiagnosticsJson,
-  CoreMemoryRecordJson,
-  CoreMcpOAuthDiagnosticJson,
-  CoreRuntimeInfoJson,
-  CoreRuntimeSkillJson,
-  CoreRuntimeToolDiagnosticsJson
+  CoreAttachmentContentResponseJson, CoreAttachmentMetadataJson,
+  CoreAttachmentTextFallbackJson, CoreMemoryDiagnosticsJson,
+  CoreMemoryRecordJson, CoreMcpOAuthDiagnosticJson, CoreRuntimeInfoJson,
+  CoreRuntimeSkillJson, CoreRuntimeToolDiagnosticsJson
 } from './kun-contract'
-import type {
-  ApprovalPolicy,
-  ApprovalReviewer,
-  SandboxMode
-} from '@shared/app-settings'
+import type { ApprovalPolicy, ApprovalReviewer, SandboxMode } from '@shared/app-settings'
 import type { ComposerContextAttachment } from '@kun/extension-api'
 
 export type ToolItemKind = 'tool_call' | 'command_execution' | 'file_change'
@@ -148,20 +139,23 @@ export type RuntimeChildEventPayload = {
   seq?: number
   timestamp?: string
 }
-
 export type WebCitationSource = {
   sourceId?: string
   url?: string
   title?: string
   retrievedAt?: string
 }
-
 export type RuntimeDisclosureMetadata = {
   displayText?: string
+  /** Durable per-turn intent used by mixed Code/Design timeline consumers. */
+  agentSurface?: 'code' | 'write' | 'design'
   /** Persisted turn routing hint so edit/resend can rebuild live canvas context. */
   guiDesignCanvas?: boolean
   guiDesignMode?: boolean
-  messageSource?: 'background_shell' | 'background_subagent' | 'graph_runtime' | 'subagent_resume' // client-only rendering hint
+  designProfile?: import('./design-task-profile').DesignTaskProfileInput | import('./design-task-profile').DesignTaskProfile
+  designDocumentTarget?: import('./design-task-profile').DesignDocumentTarget
+  designImagePlacementTarget?: import('./design-task-profile').DesignImagePlacementTarget
+  messageSource?: 'background_shell' | 'background_subagent' | 'graph_runtime' | 'subagent_resume' | 'design_continuation' // client-only rendering hint
   turnId?: string
   workspaceCheckpointId?: string
   attachmentIds?: string[]
@@ -178,7 +172,6 @@ export type RuntimeDisclosureMetadata = {
   child?: RuntimeChildMetadata
   sources?: WebCitationSource[]
 }
-
 export type UserInputOption = {
   label: string
   description: string
@@ -201,12 +194,20 @@ export type UserInputAnswer = {
   labels?: string[]
   values?: string[]
 }
-
 export type NormalizedThread = {
   id: string
   title: string
   /** Durable product surface that owns this thread. Absent for legacy Code threads. */
   agentSurface?: 'code' | 'write' | 'design'
+  /** Immutable task mode derived from the first accepted turn. */
+  lockedTaskSurface?: 'code' | 'write' | 'design'
+  /** Immutable runtime-owned profile for a Design task. */
+  designProfile?: import('./design-task-profile').DesignTaskProfile
+  designCloneOperation?: {
+    operationId: string
+    kind: 'fork' | 'resume'
+    sourceId: string
+  }
   /** Whether the title is auto/provisional (true) vs user-set/locked (false); absent = legacy. */
   titleAuto?: boolean
   updatedAt: string
@@ -229,12 +230,12 @@ export type NormalizedThread = {
   archived?: boolean
   pinned?: boolean
   preview?: string
-  /** Whole-conversation summary produced by the summarize route; shown as the list subtitle. */
-  summary?: string
+  summary?: string // Whole-conversation summary shown as the list subtitle.
   latestTurnId?: string
   latestTurnStatus?: string
   relation?: 'primary' | 'fork' | 'side'
   parentThreadId?: string
+  planBuildRunId?: string // Host lifecycle linkage for an isolated plan fork.
   forkedFromThreadId?: string
   forkedFromTitle?: string
   forkedAt?: string
@@ -243,7 +244,6 @@ export type NormalizedThread = {
   goal?: ThreadGoal | null
   todos?: ThreadTodoList | null
 }
-
 export type KnowledgeBaseMount = {
   id: string
   root: string
@@ -317,9 +317,9 @@ export type ThreadListOptions = {
   search?: string
   includeArchived?: boolean
   archivedOnly?: boolean
+  includeSide?: boolean
   summary?: boolean
 }
-
 export type ToolBlock = {
   kind: 'tool'
   id: string

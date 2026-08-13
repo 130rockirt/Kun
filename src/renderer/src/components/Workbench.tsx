@@ -3,8 +3,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useChatStore } from '../store/chat-store'
 import type { RightPanelMode } from './chat/WorkbenchTopBar'
-import { WorkbenchLeftSidebar } from './workbench/WorkbenchLeftSidebar'
-import { WorkbenchStageRouter } from './workbench/WorkbenchStageRouter'
 import { useWorkbenchComposerCapabilities } from './workbench/useWorkbenchComposerCapabilities'
 import { useWorkbenchFileTreeController } from './workbench/useWorkbenchFileTreeController'
 import { useWorkbenchSddThreadController } from './workbench/useWorkbenchSddThreadController'
@@ -12,16 +10,10 @@ import { useWorkbenchSddTurnController } from './workbench/useWorkbenchSddTurnCo
 import { useWorkbenchComposerSubmitController } from './workbench/useWorkbenchComposerSubmitController'
 import { useWorkbenchNavigationController } from './workbench/useWorkbenchNavigationController'
 import { useWorkbenchDesignRuntime } from './workbench/useWorkbenchDesignRuntime'
-import { useWorkbenchRuntimeMetadata } from './workbench/useWorkbenchRuntimeMetadata'
 import { useWorkbenchExecutionSettings } from './workbench/useWorkbenchExecutionSettings'
 import { useWorkbenchKeyboardShortcuts } from './workbench/useWorkbenchKeyboardShortcuts'
-import { useWorkbenchChatComposerProps } from './workbench/useWorkbenchChatComposerProps'
-import { buildWorkbenchRightPanelSharedProps } from './workbench/useWorkbenchRightPanelSharedProps'
 import { useWorkbenchChatStoreState } from './workbench/useWorkbenchChatStoreState'
-import { useWorkbenchRuntimeBanners } from './workbench/useWorkbenchRuntimeBanners'
-import { useWorkbenchRightPanelElement } from './workbench/useWorkbenchRightPanelElement'
 import { useWorkbenchDerivedState } from './workbench/useWorkbenchDerivedState'
-import { useWorkbenchPlanPanelRuntime } from './workbench/useWorkbenchPlanPanelRuntime'
 import { useWorkbenchWriteAssistantRuntime } from './workbench/useWorkbenchWriteAssistantRuntime'
 import { useWorkbenchUiRuntime } from './workbench/useWorkbenchUiRuntime'
 import { useWorkbenchAttachmentRuntime } from './workbench/useWorkbenchAttachmentRuntime'
@@ -34,23 +26,18 @@ import { useWorkbenchRightTools } from './workbench/useWorkbenchRightTools'
 import { useWorkbenchGraphChildRuntime } from './workbench/useWorkbenchGraphChildRuntime'
 import { useWorkbenchDevPreviewContexts } from './workbench/useWorkbenchDevPreviewContexts'
 import { useWorkbenchShellRuntime } from './workbench/useWorkbenchShellRuntime'
+import { useWorkbenchTaskRuntime } from './workbench/useWorkbenchTaskRuntime'
 import { WorkbenchContent } from './workbench/WorkbenchContent'
-import { WorkbenchImageAnnotationHost } from './workbench/WorkbenchImageAnnotationHost'
-import { AgentBrowserFloatingPreview } from './AgentBrowserFloatingPreview'
 import { isWriteThreadId } from '../write/write-thread-registry'
 import { useSddDraftStore } from '../sdd/sdd-draft-store'
 import { sddDraftRefForThreadId } from '../sdd/sdd-chat-transcript'
 import { resolveLinkedSddDraft } from '../sdd/sdd-linked-draft'
-import {
-  releaseSddAssistantThread,
-} from '../sdd/sdd-thread-registry'
+import { releaseSddAssistantThread } from '../sdd/sdd-thread-registry'
 import { useWorkbenchLayout } from './workbench-layout'
 import { useWorkbenchPlanController } from './workbench-plan-controller'
 import { useGuiPlanStore } from '../plan/plan-store'
 import { normalizeWorkspaceRoot, workspaceRootScopeKey } from '../lib/workspace-path'
-import {
-  relativeWorkspacePath,
-} from '../lib/composer-file-references'
+import { relativeWorkspacePath } from '../lib/composer-file-references'
 import { useDesignWorkspaceStore } from '../design/design-workspace-store'
 import { useCodeCanvasDesignSurface } from '../design/code-canvas-design-surface'
 import { requestCodeCanvasPanelOpen } from '../lib/code-canvas-panel-event'
@@ -82,9 +69,7 @@ import {
 } from '../extensions/contribution-load-coordinator'
 import {
   extensionWorkbenchClient,
-  ExtensionWorkbenchClientError,
-  type ExtensionManagementEntry,
-  type ExtensionManagementVersion
+  ExtensionWorkbenchClientError
 } from '../extensions/extension-workbench-client'
 import { resolveActiveExtensionWorkspaceRoot } from '../extensions/active-extension-workspace'
 import {
@@ -103,7 +88,6 @@ import {
   workbenchContributionRegistry,
   type ExtensionRightRailViewEntry
 } from '../extensions/contribution-registry'
-import { getSlashQuery } from './chat/floating-composer-commands'
 import { useGraphStore } from '../graph/graph-store'
 import { useGraphParentObserver } from '../graph/use-graph-parent-observer'
 import { graphNodeLiveness } from '../graph/graph-liveness'
@@ -113,18 +97,10 @@ import { MAX_COMPOSER_CONTEXT_ATTACHMENTS } from '@kun/extension-api'
 import type { DevPreviewContextDraft } from './DevBrowserPanel'
 import { createDevPreviewComposerContextAttachment } from '../lib/dev-preview-composer-context'
 
-const FILE_TREE_SIDEBAR_WIDTH = 320
 const extensionSurfaceLayoutStorage = {
   getItem: readBrowserStorageItem,
   setItem: writeBrowserStorageItem,
   removeItem: removeBrowserStorageItem
-}
-
-function selectedExtensionVersion(
-  entry: ExtensionManagementEntry
-): ExtensionManagementVersion | undefined {
-  if (entry.useDevelopment) return entry.development
-  return entry.versions.find((version) => version.version === entry.selectedVersion)
 }
 
 export function Workbench(): ReactElement {
@@ -207,6 +183,28 @@ export function Workbench(): ReactElement {
   const [useWorktreePool, setUseWorktreePool] = useState(false)
   const [worktreeBranch, setWorktreeBranch] = useState('')
   const [connectPhoneSidebarOpen, setConnectPhoneSidebarOpen] = useState(false)
+  const taskActiveSkillWorkspace = threads.find(
+    (thread) => thread.id === activeThreadId
+  )?.workspace || workspaceRoot || ''
+  const {
+    runtimeInfo,
+    runtimeSkills,
+    taskSurface,
+    taskSurfaceLocked,
+    taskSurfaceTransitioning,
+    designTaskProfile,
+    designProfileLocked,
+    lockedDesignProfile,
+    onTaskSurfaceChange,
+    onDesignTaskProfileChange,
+    ensureDesignThread,
+    rollbackProvisionalThread
+  } = useWorkbenchTaskRuntime({
+    activeThreadId, threads, workspaceRoot, activeSkillWorkspace: taskActiveSkillWorkspace,
+    createThread, deleteThread, setComposerMode, setComposerOrchestration,
+    composerMode, composerOrchestration,
+    runtimeConnection, composerInput: input
+  })
   const designDocuments = useDesignWorkspaceStore((s) => s.documents)
   const { focusModeEnabled, runtimeLogPath, toggleTheme, uiModeCameosEnabled, updateFocusMode } =
     useWorkbenchUiRuntime()
@@ -239,6 +237,7 @@ export function Workbench(): ReactElement {
     handleDesignHtmlElementAsContext
   } = useWorkbenchDesignRuntime({
     route,
+    designTaskActive: taskSurface === 'design',
     composerPickList,
     composerModelGroups,
     setInput
@@ -268,7 +267,6 @@ export function Workbench(): ReactElement {
   }, [runtimeConnection])
 
   const stageInsetClass = 'ds-stage-inset'
-
   const prevThreadId = useRef<string | null>(null)
   const inputRef = useRef('')
   const {
@@ -286,11 +284,6 @@ export function Workbench(): ReactElement {
     sideConversations,
     threads,
     workspaceRoot
-  })
-  const { runtimeInfo, runtimeSkills } = useWorkbenchRuntimeMetadata({
-    activeSkillWorkspace,
-    runtimeConnection,
-    skillMenuOpen: getSlashQuery(input) !== null
   })
   const {
     activateRightPanelTab, beginLeftResize, beginRightResize, beginTerminalResize, closeRightPanelTab,
@@ -314,6 +307,7 @@ export function Workbench(): ReactElement {
     extensionAttachmentContextMenus, extensionCommands, extensionComposerActions,
     extensionContributionSnapshotReady, extensionHostContextMenus, extensionLeftSidebarItems,
     extensionMessageActions, extensionMessageContextMenus, extensionResultPreviews,
+    messageContributionsForSurface,
     extensionRightPanelItems, extensionRightRailItems, extensionTopBarActions,
     extensionSurfaceItems,
     openExtensionSurface, openManagedExtensionView, selectRightRailExtension,
@@ -323,6 +317,7 @@ export function Workbench(): ReactElement {
     t,
     language: i18n.language,
     route,
+    taskSurface,
     extensionWorkspaceRoot,
     extensionContributionLoadContext,
     extensionContributionLoadContextRef,
@@ -425,7 +420,6 @@ export function Workbench(): ReactElement {
     worktreeBranch,
     navigationLocked: designDrawingCreationSubmitting
   })
-
   const showDevPreviewCard =
     route === 'chat' &&
     latestDevPreviewUrl !== null
@@ -438,7 +432,9 @@ export function Workbench(): ReactElement {
     openWorkspaceFileTreeTab,
     toggleCodeRightWorkspace
   } = useWorkbenchRightTools({
-    input, inputRef, prevThreadId, activeThreadId, activeGuiPlan, sidePanel,
+    input, inputRef, prevThreadId, activeThreadId,
+    activeThreadDesignDocumentId: lockedDesignProfile?.documentTarget.documentId,
+    activeGuiPlan, sidePanel,
     currentSideConversations, designWorkspaceRoot, workspaceRoot, fileTreeWorkspaceRoot,
     filePreviewTarget, codeRightTabs, openSideConversationDraft, selectSideConversation,
     setSidePanelOpen, openFileTreeSidePanel, openDesignFileTreeSidePanel, openRightPanelTab,
@@ -459,7 +455,6 @@ export function Workbench(): ReactElement {
     composerModelGroups,
     runtimeInfo
   })
-
   const {
     addComposerImageBase64,
     attachmentUploadBusy,
@@ -482,6 +477,7 @@ export function Workbench(): ReactElement {
     modelUnsupportedMessage: t('composerAttachmentModelUnsupported'),
     rightPanelMode,
     route,
+    taskSurface,
     runtimeConnection,
     runtimeInfo,
     selectedModelSupportsImageInput,
@@ -525,14 +521,20 @@ export function Workbench(): ReactElement {
     composerAttachments,
     composerModelGroups,
     composerReasoningEffort,
-    designComposerReasoningEffort,
+    composerModel,
+    composerProviderId,
     composerFastMode,
     createThread,
     designContextSuppressedIds,
     designHtmlElementContext,
     designWorkspaceRoot,
     clearDesignHistory,
-    ensureDesignThreadForWorkspace,
+    ensureDesignThreadForWorkspace: ensureDesignThread,
+    rollbackProvisionalThread,
+    designTaskProfileSelection: taskSurface === 'design' ? designTaskProfile : undefined,
+    lockedDesignProfile,
+    imageGenerationAvailable: runtimeInfo?.capabilities.imageGen?.available === true,
+    imageGenerationReason: runtimeInfo?.capabilities.imageGen?.reason,
     getAttachmentScope,
     clearActiveThreadSelection,
     openDesign,
@@ -564,10 +566,10 @@ export function Workbench(): ReactElement {
     startNewSddAssistantConversation: startNewSddThreadConversation
   })
 
-  const { handleSend, sendWritePrompt } = useWorkbenchComposerSubmitController({
+  const { handleSend: handleCodeSend, sendWritePrompt } = useWorkbenchComposerSubmitController({
     activeClawChannelId, activeClawChannelModel: activeClawChannel?.model,
     activeClawChannelProviderId: activeClawChannel?.providerId,
-    activeSddDraft: Boolean(activeSddDraft), activeThreadId, attachmentUploadEnabled,
+    activeSddDraft: Boolean(activeSddDraft), activeThreadId, taskSurface, attachmentUploadEnabled,
     buildCodeCanvasOutboundPrompt, clearComposerAttachments, removeComposerAttachments, clearComposerFileReferences,
     composerAttachments, composerFileReferences, composerMode, composerModel, composerProviderId,
     composerModelGroups, composerReasoningEffort, composerFastMode, getAttachmentScope,
@@ -576,6 +578,13 @@ export function Workbench(): ReactElement {
     setAttachmentUploadError, setClawChannelModel, setError, setInput, threads, workspaceRoot,
     appendLocalClawTurn
   })
+  const handleSend = useCallback((): void => {
+    if (route === 'chat' && !activeSddDraft && taskSurface === 'design') {
+      void sendDesignPrompt(input)
+      return
+    }
+    handleCodeSend()
+  }, [activeSddDraft, handleCodeSend, input, route, sendDesignPrompt, taskSurface])
 
   const {
     closeRightPanel, exploreSddRequirementInDesign, openCodeMode, openPluginsView, openExtensionsView, openScheduleView,
@@ -586,7 +595,7 @@ export function Workbench(): ReactElement {
     activeSddDraft: Boolean(activeSddDraft), activeThreadId, pluginHostRoute, rightPanelMode, route,
     runtimeConnection, sddDraftContent, threads, useWorktreePool, workspaceRoot, worktreeBranch,
     clearFilePreviewTargets, createConversation, createThread, createWriteThread, dismissActiveSddDraft,
-    ensureWriteThreadForWorkspace, findSddDraftForSidebarThread, openClaw, openCode, openDesign,
+    ensureWriteThreadForWorkspace, findSddDraftForSidebarThread, openClaw, openCode,
     openPlugins, openSchedule, openWorkflow, openWrite,
     selectThread, setConnectPhoneSidebarOpen, setDesignAssistantOpen, setFilePreviewTarget, setInput,
     setRightPanelMode, setRoute, setUseWorktreePool, setWriteAssistantOpen
@@ -606,6 +615,8 @@ export function Workbench(): ReactElement {
     rightPanel, rightPanelSharedProps, writeRuntimeBanner
   } = useWorkbenchShellRuntime({
     input, setInput, composerMode, setComposerMode, composerOrchestration, graphEnabled,
+    taskSurface, taskSurfaceLocked, taskSurfaceTransitioning, designTaskProfile, designProfileLocked, onTaskSurfaceChange,
+    onDesignTaskProfileChange,
     setComposerOrchestration, openComposerGraph, openComposerGraphChild, busy,
     currentTurnOrchestration, route, runtimeConnection, activeThreadId, activeClawChannelId,
     activeClawChannel, composerModel, composerProviderId, composerPickList, composerModelGroups,
@@ -622,6 +633,7 @@ export function Workbench(): ReactElement {
     interrupt, handleGuiPlanCommand, useWorktreePool, worktreeBranch, setWorktreeBranch,
     setUseWorktreePool, createThread, activeSkillWorkspace, reviewActiveThread,
     updateComposerExecutionSettings, spawnSideConversation, openSideConversationDraft,
+    startNewSddRequirement,
     blocks, liveReasoning, liveAssistant, probeRuntime, runtimeStatus, runtimeLogPath,
     error, runtimeErrorDetail, stageInsetClass, t, rightPanelMode, closeRightPanelTab,
     closeRightPanel, buildGuiPlan, verifyGuiPlan, replanChangedRequirements, setRightPanelMode,
@@ -646,7 +658,9 @@ export function Workbench(): ReactElement {
     previewWorkspaceFileFromSidebar, addWorkspaceReferenceFromSidebar,
     openDesignDocumentInWhiteboard, extensionRightRailItems, extensionRightPanelItems,
     openRightPanelTab, activateRightPanelTab, closeCodeRightTool, toggleFileTreeSidePanel,
-    setError, canvasDocumentKey, canvasDocument, sendCodeCanvasPrompt
+    setError, canvasDocumentKey, canvasDocument, sendCodeCanvasPrompt,
+    implementDesignInCode, selectCanvasShape, handleDesignHtmlElementAsContext,
+    handleDesignRuntimeQualityFindings, handleDesignQualityRepairRequest
   })
   return <WorkbenchContent context={{
     shellRef, extensionHostContextMenus, activeExtensionCenterView, route, setWorkspaceContextMenu,
@@ -654,7 +668,7 @@ export function Workbench(): ReactElement {
     connectPhoneSidebarOpen, activeExtensionLeftSidebar, extensionWorkspaceRoot,
     selectExtensionSurface, runtimeConnection, threadSearch, showArchivedThreads, focusModeEnabled,
     updateFocusMode, setThreadSearch, openThread, renameThread, pinThread, archiveThread,
-    deleteThread, deleteDrawing, startNewChat, startNewChatInWorkspace, startNewSddRequirement,
+    deleteThread, deleteDrawing, startNewChat, startNewChatInWorkspace,
     openSettings, openPluginsView, openExtensionsView, toggleTheme, toggleConnectPhone,
     openCodeMode, openWriteMode, openDesignMode, openScheduleView, openWorkflowView,
     startNewConversation, beginLeftResize, toggleLeftSidebar, busy, implementDesignInCode,
@@ -676,6 +690,7 @@ export function Workbench(): ReactElement {
     linkedSddDraft, openLinkedSddDraft, extensionTopBarActions, extensionComposerActions,
     extensionMessageActions, extensionMessageContextMenus, extensionAttachmentContextMenus,
     extensionCommands, extensionResultPreviews, extensionSurfaceItems, openExtensionSurface,
+    messageContributionsForSurface,
     openCodeRightTool, currentSideRunningCount, extensionRightRailItems, selectRightRailExtension,
     imageAnnotationHost, planOverlay, openManagedExtensionView, activeExtensionAuxiliaryPanel,
     workspaceContextMenu, activeGuiPlan

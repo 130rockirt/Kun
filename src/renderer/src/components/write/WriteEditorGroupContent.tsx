@@ -1,5 +1,9 @@
 import { useMemo, useRef, type MutableRefObject, type ReactElement, type RefObject } from 'react'
 import type { WriteInlineCompletionSettingsV1 } from '@shared/app-settings'
+import type {
+  WorkspacePresentationViewReference,
+  WorkspacePresentationViewSource
+} from '@shared/office-document'
 import { useTranslation } from 'react-i18next'
 import type {
   WriteDocumentSession,
@@ -34,7 +38,7 @@ type Props = {
   editorPaneRef?: RefObject<HTMLDivElement | null>
   onFocusModeChange: (active: boolean) => void
   onFocus: () => void
-  onAskAssistant: () => void
+  onAskAssistant: (prompt: string) => void
   onCreateDraft: () => void
   onPickWorkspace: () => void
   onRefreshWorkspace: () => void
@@ -44,6 +48,10 @@ type Props = {
   onSaveShortcut: () => void
   onImagePasteSaved: () => void
   onImagePasteError: (message: string) => void
+  onPresentationViewChange: (
+    view: WorkspacePresentationViewReference | null,
+    source: WorkspacePresentationViewSource
+  ) => void
   onReviewStateChange: (active: boolean) => void
   onboarding?: boolean
   workspaceLoading?: boolean
@@ -77,6 +85,7 @@ export function WriteEditorGroupContent({
   onSaveShortcut,
   onImagePasteSaved,
   onImagePasteError,
+  onPresentationViewChange,
   onReviewStateChange,
   onboarding,
   workspaceLoading
@@ -157,6 +166,7 @@ export function WriteEditorGroupContent({
         inlineCompletion={inlineCompletion}
         inlineCompletionApiReady={inlineCompletionApiReady}
         recentEdits={stableRecentEdits}
+        focused={focused}
         editorPaneRef={resolvedEditorPaneRef}
         previewPaneRef={previewPaneRef}
         onAskAssistant={onAskAssistant}
@@ -169,6 +179,7 @@ export function WriteEditorGroupContent({
         onSaveShortcut={onSaveShortcut}
         onImagePasteSaved={onImagePasteSaved}
         onImagePasteError={onImagePasteError}
+        onPresentationViewChange={onPresentationViewChange}
       />
     </div>
   )

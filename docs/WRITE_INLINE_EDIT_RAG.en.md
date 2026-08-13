@@ -1,6 +1,6 @@
-# Use BM25 + keyword RAG to do Write text editing: an exploration and implementation
+# Use BM25 + keyword RAG for Work text editing: an exploration and implementation
 
-Text completion in Write has proven one thing: writing scenarios don’t necessarily require heavy vector libraries. As long as it can retrieve terms, facts, and style fragments from the same writing space with low latency, the FIM model can more reliably catch the current paragraph.
+Text completion in Work has proven one thing: writing scenarios don’t necessarily require heavy vector libraries. As long as it can retrieve terms, facts, and style fragments from the same Work workspace with low latency, the FIM model can more reliably catch the current paragraph.
 
 The question explored this time is more specific: **Can text editing also use BM25 + keyword RAG? ** For example, the user selects a noun and asks AI to replace other nouns with the same name in this paragraph. It is not a traditional ghost text completion, but an in-place replacement of an existing text.
 
@@ -46,9 +46,9 @@ This works well for editing tasks, as editors are often more afraid of "flying" 
 
 ## Design trade-offs
 
-This time, the existing Write completion retrieval service is reused:
+This time, the existing Work completion retrieval service is reused:
 
-- Continue scanning Markdown/text files in the current writing space.
+- Continue scanning Markdown/text files in the current Work workspace.
 - Continue to use Chinese and English tokens + Chinese 2 to 4 character n-grams.
 - Continue weighting title, path, phrase hits with BM25 score.
 - The file currently being edited is still excluded from the search results to avoid repeatedly feeding the original text back to the model.
@@ -122,7 +122,7 @@ Recent local edits in this file. Treat these as intent signals...
 
 [1] 2s ago; source=user; range=20-32
 Deleted: DeepSeek GUI
-Inserted: Write mode
+Inserted: Work mode
 Around: Earlier term: [[edit]] should be consistent.
 
 ```
@@ -137,7 +137,7 @@ So there is a heuristic in this implementation:
 - The selection does not span empty lines.
 - then the editing scope extends to the natural segment between the nearest blank line, heading, code fence, or separator line.
 
-In this way, the user only needs to select a word and enter "Change Alpha to Write mode". The model will get the `original` of the entire paragraph and return the replacement of the entire paragraph.
+In this way, the user only needs to select a word and enter "Change Alpha to Work mode". The model will get the `original` of the entire paragraph and return the replacement of the entire paragraph.
 
 ## Failure protection
 
@@ -147,7 +147,7 @@ Editing in place is riskier than ghost text, so several layers of protection are
 - Multiple selections are not supported at the moment to avoid errors when merging multiple non-consecutive ranges.
 - When the model returns empty text, only delete class directives are allowed to be applied.
 - After the request returns, it will be checked whether the original editing range is still the same as when the request was made; if the user has already changed this section, the application will be rejected.
-- Write's original autosave mechanism is still used after application, and the editor state is not bypassed.
+- Work's original autosave mechanism is still used after application, and the editor state is not bypassed.
 
 ## Implementation files
 
@@ -158,7 +158,7 @@ Major new additions and changes:
 - `src/renderer/src/write/inline-edit.ts`: Expand the selection section, construct the payload, and apply replacement.
 - `src/renderer/src/write/recent-edits.ts`: Logging, filtering and prompt payload conversion of recent edit contexts.
 - `src/renderer/src/write/term-propagation.ts`: Term case/rename propagation in the same paragraph.
-- `src/renderer/src/components/write/WriteWorkspaceView.tsx`: The selected text floating layer supports two paths: "AI Editing" and "Send to Writing Assistant".
+- `src/renderer/src/components/write/WriteWorkspaceView.tsx`: The selected-text floating layer supports two paths: "AI Editing" and "Send to Work Assistant"; the component name retains the internal `Write` compatibility identifier.
 - `src/main/ipc/app-ipc-schemas.ts`, `src/preload/index.ts`, `src/shared/kun-gui-api.ts`: the existing `write:inline-completion` IPC accepts `mode: "edit"` plus `editCandidate` and recent edits.
 
 Test coverage:

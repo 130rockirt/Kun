@@ -444,13 +444,23 @@ html[data-theme='dark'] .cm-write-md-code-block-html > pre span {
 
 .write-assistant-panel .ds-chat-column-inset {
   max-width: none;
-  padding-inline: clamp(1.45rem, 4.2vw, 2.35rem);
-  padding-top: 1.25rem;
-  padding-bottom: 1.35rem;
+  padding-inline: clamp(1.1rem, 3vw, 1.6rem);
+  padding-top: 1rem;
+  padding-bottom: 1rem;
 }
 
 .write-assistant-panel .ds-user-message-bubble {
-  max-width: min(86%, 520px);
+  max-width: min(94%, 520px);
+}
+
+.write-assistant-panel .ds-user-message-footer {
+  min-height: 1.75rem;
+}
+
+.write-assistant-panel [data-work-meta-row='true'] {
+  padding-block: 0.45rem;
+  font-size: 12.5px;
+  line-height: 1.25rem;
 }
 
 .write-assistant-panel .ds-chat-answer {

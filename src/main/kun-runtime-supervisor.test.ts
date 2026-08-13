@@ -494,4 +494,19 @@ describe('KunRuntimeSupervisor', () => {
     expect(h.statuses.map((status) => status.state)).toEqual(['restarting', 'running'])
     expect(h.statuses[0]).toMatchObject({ attempt: 1 })
   })
+
+  it('lets shutdown wait until an in-flight settings apply leaves the lifecycle lane', async () => {
+    const h = harness()
+    const applyGate = createGate()
+    h.supervisor.enqueueSettingsApply(() => applyGate.promise, vi.fn())
+
+    let settled = false
+    const waiting = h.supervisor.waitForIdle().then(() => { settled = true })
+    await Promise.resolve()
+    expect(settled).toBe(false)
+
+    applyGate.release()
+    await waiting
+    expect(settled).toBe(true)
+  })
 })

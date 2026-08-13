@@ -5,6 +5,7 @@ import {
   ClearThreadTodosResponse,
   DeleteThreadResponse,
   ForkThreadRequest,
+  SetPlanBuildAdmissionFenceRequest,
   ListThreadsResponse,
   SetThreadGoalRequest,
   SetThreadTodosRequest,
@@ -374,6 +375,34 @@ export async function forkThread(
         { code: 'not_found', message: error.message },
         404
       )
+    }
+    if (error instanceof Error && /Design task|Design document target|Design fork|Design clone|plan build run id/i.test(error.message)) {
+      return jsonResponse({ code: 'conflict', message: error.message }, 409)
+    }
+    throw error
+  }
+}
+
+export async function setPlanBuildAdmissionFence(
+  service: ThreadService,
+  threadId: string,
+  request: Request
+): Promise<JsonResponse> {
+  const body = await readJsonBody(request)
+  if (!body.ok) return body.response
+  const parsed = SetPlanBuildAdmissionFenceRequest.safeParse(body.value)
+  if (!parsed.success) {
+    return validationError('invalid plan-build admission fence body', parsed.error.issues)
+  }
+  try {
+    const thread = await service.setPlanBuildAdmissionFence(threadId, parsed.data)
+    return jsonResponse(ThreadSchema.parse(projectPublicThreadRecord(thread)))
+  } catch (error) {
+    if (error instanceof Error && /not found/i.test(error.message)) {
+      return jsonResponse({ code: 'not_found', message: error.message }, 404)
+    }
+    if (error instanceof Error && /plan-build|plan build|not idle|workspace changed/i.test(error.message)) {
+      return jsonResponse({ code: 'conflict', message: error.message }, 409)
     }
     throw error
   }

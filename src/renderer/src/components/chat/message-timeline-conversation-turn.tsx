@@ -216,7 +216,7 @@ export function ConversationTurn({
   }
 
   return (
-    <div className="flex min-w-0 flex-col gap-4">
+    <div className={`flex min-w-0 flex-col ${compactCards ? 'gap-2.5' : 'gap-4'}`}>
       {turn.user ? (
         <MessageBubble block={turn.user} allowThreadActions={allowMainThreadActions} />
       ) : null}
@@ -320,6 +320,7 @@ export function ConversationTurn({
       {planResult ? (
         <ReviewPlanCard
           title={planResult.title?.trim() || planDisplayNameFromRelativePath(planResult.relativePath)}
+          planId={planResult.planId}
           relativePath={planResult.relativePath}
           busy={planActionsBusy === true}
           graphEnabled={graphEnabled}

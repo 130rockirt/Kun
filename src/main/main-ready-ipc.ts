@@ -51,9 +51,6 @@ import {
 } from './ipc/register-extension-ipc-handlers'
 import { createExtensionWorkbenchEnvironment } from './extensions/extension-workbench-environment'
 import { registerBrowserUseIpc } from './browser-use/register-browser-use-ipc'
-import {
-  updateBrowserUseHostSettings
-} from './browser-use/browser-use-host'
 import { updateComputerUseHostSettings } from './computer-use/computer-use-host'
 import { browserUseCleanupForRuntimeRequest } from './browser-use/thread-lifecycle'
 import { StorageRelocationController } from './storage-relocation/controller'
@@ -173,7 +170,6 @@ export function registerMainIpc(services: MainServices): void {
       ) {
         configureLogger({ enabled: saved.log.enabled, retentionDays: saved.log.retentionDays })
       }
-      updateBrowserUseHostSettings(saved)
       updateComputerUseHostSettings(saved)
       if (previous.guiUpdate.channel !== saved.guiUpdate.channel && mainState.guiUpdaterModulePromise) {
         void mainState.guiUpdaterModulePromise.then((module) => module.setGuiUpdateChannel(saved.guiUpdate.channel))
@@ -277,6 +273,7 @@ export function registerMainIpc(services: MainServices): void {
 
     registerAppIpcHandlers({
       store: mainState.store,
+      userDataPath: productionSettingsUserDataPath,
       withRegistryCredentials,
       getMainWindow: () => mainState.mainWindow,
       applySettingsPatch,

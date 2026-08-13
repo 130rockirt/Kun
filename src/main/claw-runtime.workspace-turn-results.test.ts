@@ -170,7 +170,6 @@ function mutableSettingsStore(initialSettings: AppSettingsV1): {
   }
   return { current: () => currentSettings, store }
 }
-
 describe('ClawRuntime', () => {
   it('repairs legacy Feishu conversation workspaces created from an empty channel root', () => {
     const settings = buildSettings()

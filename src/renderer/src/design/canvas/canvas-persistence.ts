@@ -451,6 +451,14 @@ export function parseCanvasDocument(raw: string): CanvasDocument | null {
         .map(parseOperationJournalEntry)
         .filter((entry): entry is DesignOperationJournalEntry => Boolean(entry))
     : undefined
+  const rendererReplayKeys = Array.isArray(parsed.rendererReplayKeys)
+    ? parsed.rendererReplayKeys
+        .filter((key): key is string => typeof key === 'string' && Boolean(key.trim()))
+        .slice(-4096)
+    : undefined
+  const rendererReplayWatermarkTurnId = typeof parsed.rendererReplayWatermarkTurnId === 'string'
+    ? parsed.rendererReplayWatermarkTurnId.trim().slice(0, 256)
+    : ''
   const codeBindings = Array.isArray(parsed.codeBindings)
     ? parsed.codeBindings.map(parseCodeBinding).filter((binding): binding is DesignCodeBinding => Boolean(binding))
     : undefined
@@ -464,6 +472,8 @@ export function parseCanvasDocument(raw: string): CanvasDocument | null {
     motion,
     ...(graph ? { graph } : {}),
     ...(operationJournal && operationJournal.length > 0 ? { operationJournal } : {}),
+    ...(rendererReplayKeys && rendererReplayKeys.length > 0 ? { rendererReplayKeys } : {}),
+    ...(rendererReplayWatermarkTurnId ? { rendererReplayWatermarkTurnId } : {}),
     ...(codeBindings && codeBindings.length > 0 ? { codeBindings } : {})
   }
 }

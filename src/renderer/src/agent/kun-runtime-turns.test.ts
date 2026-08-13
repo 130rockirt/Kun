@@ -157,6 +157,30 @@ describe('KunRuntimeProvider', () => {
     )
   })
 
+  it('posts Design continuation metadata for runtime-auditable progress turns', async () => {
+    const runtimeRequest = vi.fn(async () => ({
+      ok: true,
+      status: 202,
+      body: JSON.stringify({ threadId: 'thr_1', turnId: 'turn_logo', userMessageItemId: 'item_logo' })
+    }))
+    installDsGui({ runtimeRequest })
+
+    await new KunRuntimeProvider().sendUserMessage('thr_1', 'internal logo prompt', {
+      messageSource: 'design_continuation'
+    })
+
+    expect(runtimeRequest).toHaveBeenCalledWith(
+      '/v1/threads/thr_1/turns',
+      'POST',
+      JSON.stringify({
+        prompt: 'internal logo prompt',
+        clientSurface: 'gui',
+        ...DEFAULT_EXECUTION_SETTINGS,
+        messageSource: 'design_continuation'
+      })
+    )
+  })
+
   it('posts per-turn provider ids with Kun turn requests when provided', async () => {
     const runtimeRequest = vi.fn(async () => ({
       ok: true,

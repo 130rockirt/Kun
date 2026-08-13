@@ -1,11 +1,9 @@
-import type { AgentProvider } from '../agent/types'
 import { rendererRuntimeClient } from '../agent/runtime-client'
 import i18n from '../i18n'
 import { describeRuntimeError, formatRuntimeError, getRuntimeErrorCode } from '../lib/format-runtime-error'
 import { shouldAutoTitleThread } from '../lib/thread-title'
 import { normalizeWorkspaceRoot } from '../lib/workspace-path'
 import { buildClawRuntimePrompt, buildCodeRuntimePrompt } from '@shared/app-settings'
-import type { ChatState, QueuedUserMessage, WriteAssistantMessageContext } from './chat-store-types'
 import { saveQueuedMessagesForThread } from './queued-message-persistence'
 import { currentTurnStartGeneration } from './turn-start-fence'
 import {
@@ -27,57 +25,19 @@ import {
   shouldOpenSettingsForError
 } from './chat-store-runtime'
 import { ensureRuntimeProviderForSend, subscribeThreadEventsWithRecovery } from './chat-store-thread-action-helpers'
-import type { ComposerContextAttachment } from '@kun/extension-api'
+import { readDesignThreadRegistry } from '../design/design-thread-registry'
 import {
   createWorkspaceCheckpointRequestId,
   localConversationErrorBlock,
   pendingQueuedMessage,
   startingQueuedSubmission,
+  settleRuntimeTurnAdmission,
   threadActionSharedState,
   turnAdmissionOutcomeMayBeUnknown,
   upsertQueuedSubmission,
-  withoutConsumedComposerContexts,
-  type StoreActionContext,
-  type ThreadActionRuntime
+  withoutConsumedComposerContexts
 } from './chat-store-thread-actions-support'
-
-type PreparedThreadSend = {
-  context: StoreActionContext
-  runtime: ThreadActionRuntime
-  provider: AgentProvider
-  trimmedText: string
-  mode: Parameters<ChatState['sendMessage']>[1]
-  overrides: Parameters<ChatState['sendMessage']>[2]
-  queued: QueuedUserMessage | undefined
-  clientRequestId: string
-  expectedThreadId: string
-  requestedAgentSurface: QueuedUserMessage['agentSurface']
-  expectedThreadStillActive: () => boolean
-  writeContext: WriteAssistantMessageContext | undefined
-  now: number
-  userBlockId: string
-  attachmentIds: string[]
-  attachments: NonNullable<QueuedUserMessage['attachments']>
-  fileReferences: NonNullable<QueuedUserMessage['fileReferences']>
-  composerContexts: ComposerContextAttachment[]
-  activeThreadId: string | null
-  displayText: string
-  userDisplayText: string | undefined
-  generatedTitle: string
-  shouldAutoRenameForRoute: boolean
-  shouldRenameThreadAfterSend: boolean
-  composerModel: string
-  composerProviderId: string
-  composerAccountId: string
-  reasoningEffort: string | undefined
-  serviceTier: QueuedUserMessage['serviceTier']
-  guiDesignCanvas: boolean
-  guiDesignMode: boolean
-  persona: string
-  orchestration: NonNullable<QueuedUserMessage['orchestration']>
-  userModelChip: string | undefined
-  submittedMessageForQueue: QueuedUserMessage
-}
+import type { PreparedThreadSend } from './chat-store-thread-send-direct-types'
 
 export async function performPreparedThreadSend(input: PreparedThreadSend): Promise<boolean> {
   let {
@@ -95,6 +55,10 @@ export async function performPreparedThreadSend(input: PreparedThreadSend): Prom
     clientRequestId,
     expectedThreadId,
     requestedAgentSurface,
+    designProfile,
+    designDocumentTarget,
+    designImagePlacementTarget,
+    messageSource,
     expectedThreadStillActive,
     writeContext,
     now,
@@ -134,8 +98,7 @@ export async function performPreparedThreadSend(input: PreparedThreadSend): Prom
     const previousTurnReasoningLastAtByUserId = get().turnReasoningLastAtByUserId
     const previousQueuedMessages = get().queuedMessages
     resetBusyRecoveryAttempts()
-    // Any thread-detail request that started before this send is now stale. It
-    // must not replace the optimistic user block or the live turn state.
+    // Fence stale detail hydration before publishing the optimistic turn.
     runtime.threadSelectionGeneration += 1
     set((s) => ({
       busy: true,
@@ -147,12 +110,18 @@ export async function performPreparedThreadSend(input: PreparedThreadSend): Prom
           createdAt: new Date(now).toISOString(),
           text: displayText,
           ...(userModelChip ? { modelLabel: userModelChip } : {}),
-          ...(userDisplayText || guiDesignCanvas || guiDesignMode || attachmentIds.length || attachments.length || fileReferences.length || composerContexts.length
+          ...((requestedAgentSurface || writeContext || guiDesignMode) || userDisplayText || messageSource || guiDesignCanvas || designProfile || designDocumentTarget || designImagePlacementTarget || attachmentIds.length || attachments.length || fileReferences.length || composerContexts.length
             ? {
                 meta: {
+                  agentSurface: requestedAgentSurface ??
+                    (writeContext ? 'write' : guiDesignMode ? 'design' : 'code'),
                   ...(userDisplayText ? { displayText: userDisplayText } : {}),
+                  ...(messageSource ? { messageSource } : {}),
                   ...(guiDesignCanvas ? { guiDesignCanvas: true } : {}),
                   ...(guiDesignMode ? { guiDesignMode: true } : {}),
+                  ...(designProfile ? { designProfile } : {}),
+                  ...(designDocumentTarget ? { designDocumentTarget } : {}),
+                  ...(designImagePlacementTarget ? { designImagePlacementTarget } : {}),
                   ...(attachmentIds.length ? { attachmentIds } : {}),
                   ...(attachments.length ? { attachments } : {}),
                   ...(fileReferences.length ? { fileReferences } : {}),
@@ -202,7 +171,12 @@ export async function performPreparedThreadSend(input: PreparedThreadSend): Prom
           get(),
           p,
           workspaceRoot,
-          (thread) => isCodeThread(thread, get().clawChannels)
+          (thread) => isCodeThread(
+            thread,
+            get().clawChannels,
+            undefined,
+            readDesignThreadRegistry()
+          )
         )
         const reusableThread = reusableThreadId
           ? get().threads.find((thread) => thread.id === reusableThreadId) ?? null
@@ -215,11 +189,12 @@ export async function performPreparedThreadSend(input: PreparedThreadSend): Prom
             ? await p.createThread({
                 workspace: workspaceRoot,
                 title: generatedTitle,
-                // Provisional first-message title; let the backend LLM titler upgrade it.
                 titleAuto: true,
                 ...(composerModel ? { model: composerModel } : {}),
                 ...(composerProviderId ? { providerId: composerProviderId } : {}),
                 ...(composerAccountId ? { accountId: composerAccountId } : {}),
+                // Design is turn intent; workbench thread ownership stays Code.
+                agentSurface: requestedAgentSurface === 'write' ? 'write' : 'code',
                 mode: mode ?? 'agent'
               })
             : null
@@ -370,7 +345,12 @@ export async function performPreparedThreadSend(input: PreparedThreadSend): Prom
         startingQueuedSubmission(get().queuedMessages, submittedMessageForQueue)
       )
       const sendGeneration = currentTurnStartGeneration()
-      const { turnId, userMessageItemId } = await p.sendUserMessage(activeThreadId, runtimeText, {
+      const {
+        turnId,
+        userMessageItemId,
+        threadAgentSurface: acceptedThreadAgentSurface,
+        designProfile: acceptedDesignProfile
+      } = await p.sendUserMessage(activeThreadId, runtimeText, {
         clientRequestId,
         mode,
         orchestration,
@@ -384,10 +364,14 @@ export async function performPreparedThreadSend(input: PreparedThreadSend): Prom
         ...((queued?.subagentResume ?? overrides?.subagentResume)
           ? { subagentResume: queued?.subagentResume ?? overrides?.subagentResume }
           : {}),
+        ...(messageSource ? { messageSource } : {}),
         ...(runtimeDisplayText ? { displayText: runtimeDisplayText } : {}),
         ...((queued?.guiPlan ?? overrides?.guiPlan) ? { guiPlan: queued?.guiPlan ?? overrides?.guiPlan } : {}),
         ...(guiDesignCanvas ? { guiDesignCanvas: true } : {}),
         ...(guiDesignMode ? { guiDesignMode: true } : {}),
+        ...(designProfile ? { designProfile } : {}),
+        ...(designDocumentTarget ? { designDocumentTarget } : {}),
+        ...(designImagePlacementTarget ? { designImagePlacementTarget } : {}),
         ...(persona ? { persona } : {}),
         ...((queued?.guiDesignArtifact ?? overrides?.guiDesignArtifact)
           ? { guiDesignArtifact: queued?.guiDesignArtifact ?? overrides?.guiDesignArtifact }
@@ -398,6 +382,20 @@ export async function performPreparedThreadSend(input: PreparedThreadSend): Prom
         ...(composerContexts.length ? { composerContexts } : {})
       })
       runtimeTurnAccepted = true
+      if (submittedMessageForQueue.waitForRuntimeAdmission) settleRuntimeTurnAdmission(clientRequestId, true)
+      set((state) => ({
+        threads: state.threads.map((thread) => thread.id === activeThreadId
+          ? {
+              ...thread,
+              latestTurnId: turnId,
+              latestTurnStatus: 'running',
+              ...(acceptedThreadAgentSurface
+                ? { agentSurface: acceptedThreadAgentSurface }
+                : {}),
+              ...(acceptedDesignProfile ? { designProfile: acceptedDesignProfile } : {})
+            }
+          : thread)
+      }))
       if (!queued) saveQueuedMessagesForThread(activeThreadId, get().queuedMessages)
       if (currentTurnStartGeneration() !== sendGeneration) {
         // Stop was pressed while the POST was still pending. The accepted turn
@@ -617,6 +615,9 @@ export async function performPreparedThreadSend(input: PreparedThreadSend): Prom
         }))
         runtime.persistActiveQueuedMessages()
         const recovered = await get().recoverActiveTurn()
+        if (recovered && submittedMessageForQueue.waitForRuntimeAdmission) {
+          settleRuntimeTurnAdmission(clientRequestId, true)
+        }
         if (!recovered && get().activeThreadId === activeThreadId) {
           set((state) => ({
             queuedMessages: state.queuedMessages.map((message) =>
@@ -632,6 +633,7 @@ export async function performPreparedThreadSend(input: PreparedThreadSend): Prom
         return true
       }
       const view = describeRuntimeError(e)
+      if (submittedMessageForQueue.waitForRuntimeAdmission) settleRuntimeTurnAdmission(clientRequestId, false)
       set((state) => ({
         blocks: runtimeTurnAccepted
           ? state.blocks
@@ -640,7 +642,9 @@ export async function performPreparedThreadSend(input: PreparedThreadSend): Prom
         busy: false,
         currentTurnId: null,
         currentTurnOrchestration: null,
-        queuedMessages: previousQueuedMessages,
+        queuedMessages: submittedMessageForQueue.waitForRuntimeAdmission
+          ? previousQueuedMessages.filter((message) => message.id !== submittedMessageForQueue.id)
+          : previousQueuedMessages,
         ...(shouldOpenSettingsForError(e)
           ? { route: 'settings' as const, settingsSection: 'agents' as const }
           : {})

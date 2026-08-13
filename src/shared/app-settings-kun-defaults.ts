@@ -210,6 +210,7 @@ export function defaultKunRuntimeSettings(
     browserUse: defaultKunBrowserUseSettings(),
     quality: defaultKunQualitySettings(),
     graph: defaultKunGraphSettings(),
+    planExecution: { useWorktreeByDefault: true },
     lab: defaultKunLabSettings()
   }
 }

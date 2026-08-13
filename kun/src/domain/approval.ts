@@ -220,6 +220,7 @@ function inferApprovalActionKind(
   if (input.toolKind === 'file_change' || input.exactFileTargets?.length) {
     return 'file'
   }
+  if (effects.guiAutomation && effects.externalWrite) return 'external-effect'
   if (effects.externalWrite) return 'file'
   if (input.providerKind === 'mcp') return 'mcp'
   if (effects.network || input.providerKind === 'web') return 'network'

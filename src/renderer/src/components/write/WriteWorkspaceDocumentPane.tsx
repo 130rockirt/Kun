@@ -15,7 +15,11 @@ import { WriteWorkspaceStart } from './WriteWorkspaceStart'
 import { WriteImagePreview } from './WriteImagePreview'
 import { WritePdfViewer } from './WritePdfViewer'
 import { WorkspaceOfficePreview } from '../WorkspaceOfficePreview'
-import type { WorkspaceOfficePreviewSuccess } from '@shared/office-document'
+import type {
+  WorkspaceOfficePreviewSuccess,
+  WorkspacePresentationViewReference,
+  WorkspacePresentationViewSource
+} from '@shared/office-document'
 import { writeSelectionFromOffice } from '../../write/write-office-selection'
 import {
   isWriteFocusModeFormControl,
@@ -63,7 +67,7 @@ type Props = {
   recentEdits: WriteRecentEdit[]
   editorPaneRef: RefObject<HTMLDivElement | null>
   previewPaneRef: RefObject<HTMLDivElement | null>
-  onAskAssistant: () => void
+  onAskAssistant: (prompt: string) => void
   onCreateDraft: () => void
   onPickWorkspace: () => void
   onRefreshWorkspace: () => void
@@ -73,7 +77,12 @@ type Props = {
   onSaveShortcut: () => void
   onImagePasteSaved: () => void
   onImagePasteError: (message: string) => void
+  onPresentationViewChange: (
+    view: WorkspacePresentationViewReference | null,
+    source: WorkspacePresentationViewSource
+  ) => void
   onMarkdownReviewStateChange?: (active: boolean) => void
+  focused: boolean
   focusMode: boolean
   onFocusModeChange: (active: boolean) => void
   onboarding?: boolean
@@ -131,7 +140,9 @@ export function WriteWorkspaceDocumentPane({
   onSaveShortcut,
   onImagePasteSaved,
   onImagePasteError,
+  onPresentationViewChange,
   onMarkdownReviewStateChange,
+  focused,
   focusMode,
   onFocusModeChange,
   onboarding = false,
@@ -231,6 +242,8 @@ export function WriteWorkspaceDocumentPane({
           loading={officeLoading || officeAgentEditing}
           refreshError={officeRefreshError}
           onSelectionChange={handleOfficeSelection}
+          onPresentationViewChange={onPresentationViewChange}
+          presentationKeyboardActive={focused}
         />
       </div>
     )

@@ -1,8 +1,18 @@
 import { describe, expect, it } from 'vitest'
 import type { ChatBlock } from '../../agent/types'
-import { groupTurns, sameTurnContent, stableTurnKey } from './message-timeline-turns'
+import { groupTurns, sameTurnContent, stableTurnKey, turnTaskSurface } from './message-timeline-turns'
 
 describe('message timeline turns', () => {
+  it('keeps mixed timeline extension context scoped to each durable turn', () => {
+    expect(turnTaskSurface({
+      user: { kind: 'user', id: 'code', text: 'code', meta: { agentSurface: 'code' } },
+      blocks: []
+    })).toBe('code')
+    expect(turnTaskSurface({
+      user: { kind: 'user', id: 'design', text: 'design', meta: { agentSurface: 'design' } },
+      blocks: []
+    })).toBe('design')
+  })
   it('uses stable ids for user and assistant-only turns', () => {
     const blocks: ChatBlock[] = [
       { kind: 'assistant', id: 'assistant_intro', text: 'Welcome' },
@@ -140,6 +150,31 @@ describe('message timeline turns', () => {
     expect(turns[0]?.blocks.map((block) => block.id)).toEqual([
       'graph_runtime_1',
       'milestone_1'
+    ])
+  })
+
+  it('keeps Design continuation turns auditable without assigning a user bubble', () => {
+    const blocks: ChatBlock[] = [
+      { kind: 'user', id: 'user_brief', turnId: 'turn_spec', text: 'Design a store' },
+      { kind: 'assistant', id: 'assistant_spec', turnId: 'turn_spec', text: 'Brief ready' },
+      {
+        kind: 'user',
+        id: 'user_logo_internal',
+        turnId: 'turn_logo',
+        text: 'Internal logo prompt',
+        meta: { messageSource: 'design_continuation' }
+      },
+      { kind: 'assistant', id: 'assistant_logo', turnId: 'turn_logo', text: 'Logo ready' }
+    ]
+
+    const turns = groupTurns(blocks)
+
+    expect(turns).toHaveLength(2)
+    expect(turns[0]?.user?.id).toBe('user_brief')
+    expect(turns[1]?.user).toBeUndefined()
+    expect(turns[1]?.blocks.map((block) => block.id)).toEqual([
+      'user_logo_internal',
+      'assistant_logo'
     ])
   })
 

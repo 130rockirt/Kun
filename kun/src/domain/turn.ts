@@ -18,6 +18,10 @@ import type { GraphOrchestrationStrategy } from '../contracts/graph.js'
 import type { ThreadMode } from '../contracts/threads.js'
 import type { TurnItem, UserMessageSource } from '../contracts/items.js'
 import type { ComposerContextAttachmentJson } from '../contracts/composer-context.js'
+import type {
+  DesignDocumentTarget,
+  DesignTaskProfile
+} from '../contracts/design-task-profile.js'
 
 export type TurnEntity = Turn
 
@@ -26,6 +30,7 @@ export function createTurnRecord(input: {
   threadId: string
   clientRequestId?: string
   clientRequestFingerprint?: string
+  admissionPending?: boolean
   prompt: string
   messageSource?: UserMessageSource
   subagentResume?: SubagentResumeRequest
@@ -45,6 +50,8 @@ export function createTurnRecord(input: {
   guiDesignCanvas?: boolean
   guiDesignMode?: boolean
   agentSurface?: 'code' | 'write' | 'design'
+  designProfile?: DesignTaskProfile
+  designDocumentTarget?: DesignDocumentTarget
   /** Turn-scoped persona text; stored so replay reconstructs the same request. */
   persona?: string
   guiDesignArtifact?: GuiDesignArtifactContextJson
@@ -71,6 +78,7 @@ export function createTurnRecord(input: {
     ...(input.clientRequestFingerprint
       ? { clientRequestFingerprint: input.clientRequestFingerprint }
       : {}),
+    ...(input.admissionPending ? { admissionPending: true as const } : {}),
     status: input.status ?? 'queued',
     prompt: input.prompt,
     ...(input.messageSource ? { messageSource: input.messageSource } : {}),
@@ -98,6 +106,8 @@ export function createTurnRecord(input: {
     ...(input.guiDesignCanvas ? { guiDesignCanvas: true } : {}),
     ...(input.guiDesignMode ? { guiDesignMode: true } : {}),
     ...(input.agentSurface ? { agentSurface: input.agentSurface } : {}),
+    ...(input.designProfile ? { designProfile: input.designProfile } : {}),
+    ...(input.designDocumentTarget ? { designDocumentTarget: input.designDocumentTarget } : {}),
     ...(input.persona?.trim() ? { persona: input.persona.trim() } : {}),
     ...(input.guiDesignArtifact ? { guiDesignArtifact: input.guiDesignArtifact } : {}),
     ...(input.mode ? { mode: input.mode } : {}),

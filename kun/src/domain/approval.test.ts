@@ -208,7 +208,7 @@ describe('approval action envelopes', () => {
       },
       effects: {
         network: true,
-        externalWrite: false,
+        externalWrite: true,
         processExecution: false,
         guiAutomation: true
       },
@@ -216,6 +216,7 @@ describe('approval action envelopes', () => {
       reason: 'browser interaction requires explicit approval'
     })
 
+    expect(action.kind).toBe('external-effect')
     expect(action.targets).toEqual(expect.arrayContaining([
       {
         kind: 'url',

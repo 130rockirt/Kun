@@ -66,6 +66,30 @@ describe('bounded composer context API', () => {
     }).success).toBe(false)
   })
 
+  it('accepts path-free first-party workspace view positions', () => {
+    const viewAttachment = {
+      ...request,
+      id: 'office-view-position',
+      title: 'deck.pptx',
+      summary: 'Current view · Slide 3 of 9',
+      reference: {
+        kind: 'office-view-position',
+        schemaVersion: 1,
+        sourceName: 'deck.pptx',
+        sourceFormat: 'pptx',
+        sourceSha256: 'a'.repeat(64),
+        location: { kind: 'presentation', slide: 3, slideCount: 9 }
+      },
+      attachmentId: `workspace-view-context:${'e'.repeat(64)}`,
+      provenance: { source: 'workspace-view', workspaceId: 'f'.repeat(64) }
+    } as const
+    expect(ComposerContextAttachmentSchema.parse(viewAttachment)).toEqual(viewAttachment)
+    expect(ComposerContextAttachmentSchema.safeParse({
+      ...viewAttachment,
+      reference: { ...viewAttachment.reference, filePath: '/private/deck.pptx' }
+    }).success).toBe(false)
+  })
+
   it('rejects absolute paths, path fields, excessive depth, and oversized references', () => {
     expect(ComposerContextAttachmentRequestSchema.safeParse({
       ...request,

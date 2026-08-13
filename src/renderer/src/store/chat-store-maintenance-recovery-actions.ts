@@ -432,9 +432,11 @@ export function createMaintenanceRecoveryActions(
     const attachments = (targetBlock.meta?.attachments ?? []).filter((attachment) =>
       attachment.id.trim().length > 0
     )
+    const composerContexts = targetBlock.meta?.composerContexts ?? []
     const attachmentOverrides = {
       ...(attachmentIds.length ? { attachmentIds } : {}),
-      ...(attachments.length ? { attachments } : {})
+      ...(attachments.length ? { attachments } : {}),
+      ...(composerContexts.length ? { composerContexts } : {})
     }
 
     const droppedUserIds = state.blocks
@@ -489,7 +491,7 @@ export function createMaintenanceRecoveryActions(
           guiDesignCanvas: true,
           ...attachmentOverrides
         })
-      } else if (attachmentIds.length > 0) {
+      } else if (attachmentIds.length > 0 || composerContexts.length > 0) {
         await get().sendMessage(trimmed, undefined, attachmentOverrides)
       } else {
         await get().sendMessage(trimmed)

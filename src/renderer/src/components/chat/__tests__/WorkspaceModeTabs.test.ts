@@ -1,5 +1,6 @@
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { act, create, type ReactTestRenderer } from 'react-test-renderer'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import i18n from '../../../i18n'
 import { WorkspaceModeTabs } from '../WorkspaceModeTabs'
@@ -13,98 +14,113 @@ describe('WorkspaceModeTabs', () => {
     return {
       activeView,
       onCodeOpen: vi.fn(),
-      onWriteOpen: vi.fn(),
-      onDesignOpen: vi.fn()
+      onWriteOpen: vi.fn()
     }
   }
 
-  it('renders three top-level mode tab buttons', () => {
+  function renderInteractive(activeView: 'chat' | 'workflow' | 'write' | 'design' = 'chat') {
+    const componentProps = props(activeView)
+    let renderer!: ReactTestRenderer
+    act(() => {
+      renderer = create(createElement(WorkspaceModeTabs, componentProps))
+    })
+    return { componentProps, renderer }
+  }
+
+  it('renders one compact Code/Work menu trigger instead of segmented tabs', () => {
     const html = renderToStaticMarkup(createElement(WorkspaceModeTabs, props()))
 
-    expect(html).toContain('Code')
-    expect(html).toContain('Write')
-    expect(html).toContain('Design')
-    expect(html).not.toContain('Loop')
-    expect(html.match(/role="tab"/g)?.length).toBe(3)
+    expect(html).toContain('data-workspace-mode-trigger="true"')
+    expect(html).toContain('data-workspace-mode="chat"')
+    expect(html).toContain('aria-haspopup="menu"')
+    expect(html).toContain('aria-expanded="false"')
+    expect(html).toContain('border-transparent')
+    expect(html).toContain('bg-transparent')
+    expect(html).toContain('hover:bg-[var(--ds-sidebar-field-bg)]')
+    expect(html).not.toContain('border-[var(--ds-sidebar-row-ring)]')
+    expect(html).not.toContain('role="tablist"')
+    expect(html).not.toContain('role="tab"')
+    expect(html).not.toContain('data-workspace-mode="design"')
   })
 
-  it('uses horizontal row layout not vertical column', () => {
-    const html = renderToStaticMarkup(
-      createElement(WorkspaceModeTabs, props())
-    )
+  it('opens an overlaid menu with Code and Work descriptions', () => {
+    const { renderer } = renderInteractive()
+    const trigger = renderer.root.findByProps({ 'data-workspace-mode-trigger': true })
 
-    // Container should have flex-row, not flex-col
-    expect(html).toContain('flex-row')
-    expect(html).not.toContain('flex-col')
+    act(() => trigger.props.onClick())
+
+    const options = renderer.root.findAllByProps({ role: 'menuitemradio' })
+    expect(options).toHaveLength(2)
+    expect(options.map((option) => option.props['data-workspace-mode'])).toEqual(['write', 'chat'])
+    expect(renderer.root.findAllByProps({ role: 'menu' })).toHaveLength(1)
+    const rendered = JSON.stringify(renderer.toJSON())
+    expect(rendered).toContain('Build, debug, and ship')
+    expect(rendered).toContain('Write, organize, and handle everyday tasks')
+    act(() => renderer.unmount())
   })
 
-  it('buttons use flex-1 for equal width instead of w-full', () => {
-    const html = renderToStaticMarkup(
-      createElement(WorkspaceModeTabs, props())
-    )
+  it('marks the current mode and invokes only the newly selected mode callback', () => {
+    const { componentProps, renderer } = renderInteractive()
+    const trigger = renderer.root.findByProps({ 'data-workspace-mode-trigger': true })
+    act(() => trigger.props.onClick())
 
-    const flex1Matches = html.match(/flex-1/g)
-    expect(flex1Matches?.length).toBe(3)
+    const options = renderer.root.findAllByProps({ role: 'menuitemradio' })
+    expect(options[0]?.props['aria-checked']).toBe(false)
+    expect(options[1]?.props['aria-checked']).toBe(true)
+
+    act(() => options[0]?.props.onClick())
+
+    expect(componentProps.onWriteOpen).toHaveBeenCalledOnce()
+    expect(componentProps.onCodeOpen).not.toHaveBeenCalled()
+    expect(renderer.root.findAllByProps({ role: 'menu' })).toHaveLength(0)
+    act(() => renderer.unmount())
   })
 
-  it('marks active button with aria-selected true', () => {
-    for (const activeView of ['chat', 'write', 'design'] as const) {
+  it('opens with arrow keys for keyboard navigation', () => {
+    const { renderer } = renderInteractive()
+    const trigger = renderer.root.findByProps({ 'data-workspace-mode-trigger': true })
+    const preventDefault = vi.fn()
+
+    act(() => trigger.props.onKeyDown({ key: 'ArrowDown', preventDefault }))
+
+    expect(preventDefault).toHaveBeenCalledOnce()
+    expect(renderer.root.findAllByProps({ role: 'menuitemradio' })).toHaveLength(2)
+    act(() => renderer.unmount())
+  })
+
+  it('uses Work as the trigger value in the Work workspace', () => {
+    const html = renderToStaticMarkup(createElement(WorkspaceModeTabs, props('write')))
+
+    expect(html).toContain('data-workspace-mode="write"')
+    expect(html).toContain('title="Work"')
+  })
+
+  it('projects legacy Design and subordinate Code views through Code', () => {
+    for (const activeView of ['design', 'workflow'] as const) {
       const html = renderToStaticMarkup(createElement(WorkspaceModeTabs, props(activeView)))
-      expect(html.match(/aria-selected="true"/g)?.length).toBe(1)
-      expect(html.match(/aria-selected="false"/g)?.length).toBe(2)
+      expect(html).toContain('data-workspace-mode="chat"')
+      expect(html).not.toContain('data-workspace-mode="design"')
     }
   })
 
-  it('does not mark a top tab active while the moved Loop view is active', () => {
-    const html = renderToStaticMarkup(createElement(WorkspaceModeTabs, props('workflow')))
-
-    expect(html).not.toContain('aria-selected="true"')
-    expect(html.match(/aria-selected="false"/g)?.length).toBe(3)
-  })
-
-  it('uses all-or-icon labels instead of truncating tab text', () => {
-    const html = renderToStaticMarkup(
-      createElement(WorkspaceModeTabs, props())
-    )
+  it('keeps the trigger label visible in narrow sidebars', () => {
+    const html = renderToStaticMarkup(createElement(WorkspaceModeTabs, props()))
 
     expect(html).toContain('workspace-mode-tab-label')
-    expect(html).not.toContain('truncate')
-  })
-
-  it('preserves min-w-0 on buttons for flex sizing', () => {
-    const html = renderToStaticMarkup(
-      createElement(WorkspaceModeTabs, props())
-    )
-
     expect(html).toContain('min-w-0')
+    expect(html).not.toContain('flex-1')
   })
 
-  it('renders role="tablist" container with descriptive aria-label', () => {
-    const html = renderToStaticMarkup(
-      createElement(WorkspaceModeTabs, props())
-    )
-
-    expect(html).toContain('role="tablist"')
-    expect(html).toContain('Code / Write / Design')
-  })
-
-  it('does not render secondary switches in the sidebar mode tabs', () => {
-    const html = renderToStaticMarkup(
-      createElement(WorkspaceModeTabs, props())
-    )
-
-    expect(html).not.toContain('role="switch"')
-    expect(html.match(/role="tab"/g)?.length).toBe(3)
-  })
-
-  it('can lock all workspace navigation while a scoped submission is being prepared', () => {
+  it('exposes a descriptive label and locks mode navigation when requested', () => {
     const html = renderToStaticMarkup(createElement(WorkspaceModeTabs, {
       ...props('design'),
       disabled: true,
       disabledReason: 'Preparing the drawing'
     }))
 
-    expect(html.match(/disabled=""/g)?.length).toBe(3)
-    expect(html.match(/title="Preparing the drawing"/g)?.length).toBe(3)
+    expect(html).toContain(`aria-label="${i18n.t('code')} / ${i18n.t('workspaceModeWorkLabel')}"`)
+    expect(html).toContain('disabled=""')
+    expect(html).toContain('title="Preparing the drawing"')
+    expect(html).not.toContain('role="menu"')
   })
 })

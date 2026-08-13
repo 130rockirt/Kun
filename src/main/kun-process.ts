@@ -505,9 +505,7 @@ async function prepareKunLaunch(
   const pptToolchainDirectory = app.isPackaged
     ? join(process.resourcesPath, 'ppt-toolchain')
     : resolve(root, 'resources', 'ppt-toolchain')
-  const browserUseBridge = runtime.browserUse.enabled
-    ? await prepareBrowserUseHostForKunLaunch()
-    : undefined
+  const browserUseBridge = await prepareBrowserUseHostForKunLaunch(settings)
   const computerUseBridge = runtime.computerUse.enabled
     ? await prepareComputerUseHostForKunLaunch()
     : undefined

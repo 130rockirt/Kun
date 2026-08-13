@@ -10,7 +10,7 @@ agent 切换都不再是产品表面。
 Graph 编排、自进化项目 Agent、恢复与治理仍运行在同一个 Kun 边界内，完整设计与
 运维说明见 [`docs/graph-mode.md`](./graph-mode.md)。
 
-Write 工作区可以按线程挂载为 Code 的只读、无向量结构知识库。索引、工具、权限边界
+Work 工作区可以按线程挂载为 Code 的只读、无向量结构知识库。索引、工具、权限边界
 与检索流程见 [`docs/knowledge-bases.md`](./knowledge-bases.md)。知识库挂载不会扩大
 普通文件工具或 sandbox 的可写根。
 
@@ -34,7 +34,7 @@ Write 工作区可以按线程挂载为 Code 的只读、无向量结构知识�
 
 ```text
 Renderer (React + Zustand)
-  Code / Design / Write / Connect phone UI
+  Code（含 Design 任务）/ Work / Connect phone UI
         |
         | window.kunGui.runtimeRequest(path, method, body)
         | window.kunGui.startSse(threadId, sinceSeq)
@@ -139,7 +139,7 @@ body），也可按精确 ID 显式选择，并出现在设置页与工作台右
 屏蔽 model/provider/reasoning 覆盖，并阻止嵌套 `delegate_task` /
 `generate_subagent`。
 
-Subagent 目录按产品 surface 分层。`shared` 是 Code、Write、Design 强制继承的
+Subagent 目录按产品 surface 分层。`shared` 是 Code、Work、Design 强制继承的
 基础池，其余 profile 可以属于一个或多个 `code` / `write` / `design` surface；
 空 surface 列表表示不参与派发。Renderer 在每个 turn 持久化 `agentSurface`，旧 turn
 缺失时按 Code 兼容。自动 BM25、LLM Top-5 判断、生成器样例选择和显式 profile
@@ -152,7 +152,7 @@ Subagent 目录按产品 surface 分层。`shared` 是 Code、Write、Design 强
 shared 读取，保持升级前的全局可用语义。
 
 内置目录共 45 个角色，其中 8 个中文本地化核心角色标记为基础代理并默认启用；其余
-25 个 agent-skills 角色、6 个 Write 和 6 个 Design 专属角色默认不分配 surface。
+25 个 agent-skills 角色、6 个 Work 和 6 个 Design 专属角色默认不分配 surface。
 工作台可通过“扩展代理”总开关一次性启用这 37 个角色，或通过“仅保留基础代理”
 清空全部扩展角色的 surface 分配。
 
@@ -207,8 +207,8 @@ Renderer 只应展示 Kun。需要删除或保持删除的 UI 面包括：
 - 设置页 provider selector：Settings -> Agents 直接展示 Kun 配置，
   包含 binary path、port、autoStart、API key、base URL、runtime token、
   data dir、model、approval policy、sandbox mode、insecure。
-- 旧绘画/设计 starter：不恢复与当前 Design 模式并行的旧入口。核心工作区入口是
-  Code、Design、Write，连接手机和自动化仍走各自入口。
+- 旧绘画/设计 starter：不恢复独立 Design 工作区入口。核心工作区入口只有
+  Code、Work；Design 是 Code 工作台内的任务类型并使用右侧白板，连接手机和自动化仍走各自入口。
 
 ## Main / Preload 要拆的东西
 
@@ -262,21 +262,45 @@ Renderer 只应展示 Kun。需要删除或保持删除的 UI 面包括：
 - 连接手机（内部旧名 Claw）的历史 `agentThreadIds` 只折叠成
   `agentThreadIds.kun`，不保留 per-agent map。
 
-## Code / Design / Write / 连接手机如何走 Kun
+## Code / Design 任务 / Work / 连接手机如何走 Kun
 
 - Code：`KunRuntimeProvider` 负责 list/create thread、send turn、
   steer、interrupt、compact、approval、SSE 映射。Chat UI 不知道旧
-  provider。
-- Design：设计工作区创建/复用 Kun thread，设计稿、原型和设计流程图落在
-  `.kun-design/`，通过画布预览和版本记录迭代；确认后的设计可以发布
-  `DESIGN_SYSTEM.md`，再打开新的 Code thread 执行实现。
-- Write：写作助手和 inline completion 读取同一份 Kun API key /
-  base URL 配置。Write thread registry 只把写作线程识别为 Kun
+  provider。同一 Code-owned 会话可为每个下一回合选择 Code 或 Design；
+  admission 把意图固定在当前 turn/user item，不改变 thread ownership。首个被接纳的
+  Design 回合只锁定设计文档、产物介质、目标与风格 profile；后续 Code 回合仍然有效。
+- Design 任务：与 Code 任务共用工作台、会话列表、输入框、模型、权限和工作区控制；
+  设计稿、原型和设计流程图落在 `.kun-design/`，在右侧白板中预览和迭代。
+- Work：办公助手和 inline completion 读取同一份 Kun API key /
+  base URL 配置。内部 Write thread registry 只把办公线程识别为 Kun
   thread，不再区分旧运行时会话。
 - 连接手机：定时任务、飞书/Lark/微信、IM webhook 创建或复用 Kun thread。
   代码内部仍沿用 `claw` route / settings key / runtime 文件名，作为旧命名兼容。
   `threadId` / `localThreadId` 字段只作为旧 settings 兼容字段存在，真正
   当前映射写入 `agentThreadIds.kun`。
+
+## 计划构建 worktree 协调边界
+
+计划执行仍走单一 Kun runtime，但 Git 生命周期由 Electron main 的专用协调器负责：
+
+- Renderer 从 Plan 面板或内联 Review Plan 卡片选择 Direct / Graph 以及是否隔离，展示
+  预检和持久状态，不直接执行 Git 删除或合并命令。
+- Main 以原子记录持久化 run，捕获启动时的精确 source checkout、当前目标分支与 HEAD，
+  并在 `~/.kun/worktrees/<runId>/...` 下创建临时执行分支和 worktree。linked source
+  worktree 仍以它自身为回写 checkout，不替换为 primary worktree。
+- Kun 通过带 `planBuildRunId` 和 worktree workspace 的 `side` fork 执行原始计划上下文；
+  goal 在首个实现 turn admission 前创建。Graph 的 worker 隔离从属于该外层分支。
+- Renderer 只在执行 turn 成功、goal complete、无后续 running turn、无 approval / user-input
+  gate，且 Graph 根集成成功时请求 finalization；助手自然语言不能作为完成信号。
+- Main 在隔离 worktree 内提交和 rebase，再对捕获的源 checkout 执行 `merge --ff-only`。
+  目标移动、源分支切换、源目录变脏和冲突都会进入可恢复状态，不会自动 stash、切分支、
+  reset、clean 或强制覆盖。
+- 只有执行 head 已可从目标分支到达，或 run 被证明从未产生差异时，才先把执行 thread
+  workspace 重绑到源 checkout，再非强制删除 worktree、safe delete 分支并 prune。部分失败
+  持久化为 `cleanup_pending`；显式 discard 也必须先产出 recovery patch/checkpoint。
+
+该协调器不同于定时任务的可复用 worktree pool，也不替代 Graph worker 自己的隔离机制；
+三者不得共享破坏性 cleanup 语义。
 
 ## GUI HTTP 功能等价面
 
@@ -373,7 +397,7 @@ npm run build
 2. Code 新建会话，能创建 thread、发送消息、流式返回、审批/中断可用。
 3. Design 打开画布，能创建或迭代设计稿、预览/导出原型，并把设计交给新的
    Code thread 实现。
-4. Write 打开写作空间，inline completion 和选中文本助手能用同一个 API key。
+4. Work 打开工作空间，inline completion 和选中文本助手能用同一个 API key。
 5. 连接手机能保存设置、运行手动 task、把 thread id 写回 Kun mapping。
 6. Settings -> Agents 只看得到 Kun，没有 provider switch、runtime
    diagnostics、历史 provider 配置块。

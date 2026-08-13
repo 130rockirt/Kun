@@ -48,19 +48,29 @@ describe('WorkspaceOfficePreview', () => {
   ] as const) {
     it(`routes ${viewer} binary data to its browser renderer`, async () => {
       const result = preview(viewer)
+      const onPresentationViewChange = vi.fn()
       await act(async () => {
         renderer = create(createElement(WorkspaceOfficePreview, {
           result,
           loading: true,
-          refreshError: 'refresh failed'
+          refreshError: 'refresh failed',
+          onPresentationViewChange,
+          presentationKeyboardActive: false
         }))
       })
 
-      expect(renderer.root.find((node) => node.type === element).props).toMatchObject({
+      const renderedProps = renderer.root.find((node) => node.type === element).props
+      expect(renderedProps).toMatchObject({
         result,
         loading: true,
         refreshError: 'refresh failed'
       })
+      if (viewer === 'presentation') {
+        expect(renderedProps).toMatchObject({
+          keyboardActive: false,
+          onPresentationViewChange
+        })
+      }
     })
   }
 })

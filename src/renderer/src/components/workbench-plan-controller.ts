@@ -28,6 +28,12 @@ import type { RightPanelMode } from './chat/WorkbenchTopBar'
 import { BUILTIN_RIGHT_PANEL_IDS } from '../extensions/contribution-ids'
 import type { GuiPlanMessageContext, SendMessageOverrides } from '../store/chat-store-types'
 import { normalizeWorkspaceRoot } from '../lib/workspace-path'
+import {
+  planWorktreeContextKey,
+  planWorktreeHostPlanId,
+  usePlanWorktreeStore
+} from '../plan/plan-worktree-store'
+import { usePlanWorktreePreflight } from '../plan/use-plan-worktree-preflight'
 
 type PlanResultMatch = {
   blockId: string
@@ -173,6 +179,8 @@ export function useWorkbenchPlanController({
   onPlanBuildStarted
 }: WorkbenchPlanControllerOptions) {
   const activeGuiPlan = useGuiPlanStore((s) => s.activePlan)
+  const activeThreadId = useChatStore((s) => s.activeThreadId)
+  usePlanWorktreePreflight(activeGuiPlan, activeThreadId)
   const latestPlanBlock = useMemo(() => latestSuccessfulPlanBlock(blocks), [blocks])
   const planTurnInFlightThreadIdRef = useRef<string | null>(null)
   const lastLoadedPlanBlockIdRef = useRef<string | null>(null)
@@ -325,11 +333,75 @@ export function useWorkbenchPlanController({
       setError(t('graphModeDisabledHint'))
       return
     }
+    const isolation = usePlanWorktreeStore.getState().plans[plan.id]
+    const useWorktree = isolation?.useWorktree ?? true
+    if (useWorktree) {
+      const contextKey = planWorktreeContextKey({
+        planId: plan.id,
+        workspaceRoot: plan.workspaceRoot,
+        sourceThreadId: chatState.activeThreadId
+      })
+      if (!isolation?.initialized || isolation.preflight.status === 'loading') {
+        setError(t('planWorktreePreflightLoading'))
+        return
+      }
+      if (
+        isolation.preflight.status !== 'ready' ||
+        isolation.preflight.contextKey !== contextKey ||
+        !isolation.preflight.result.eligible
+      ) {
+        const message = isolation.preflight.status === 'ready'
+          ? isolation.preflight.result.message
+          : isolation.preflight.status === 'error'
+            ? isolation.preflight.message
+            : t('planWorktreePreflightRequired')
+        setError(message || t('planWorktreePreflightRequired'))
+        return
+      }
+      if (!chatState.activeThreadId) {
+        setError(t('planWorktreeSourceThreadRequired'))
+        return
+      }
+    }
     const saved = await savePlanContentToDisk(plan, snapshot.content)
     if (!saved) return
     setComposerMode('agent')
     const prompt = buildPlanBuildPrompt(plan.relativePath, snapshot.content, orchestration)
     const labelKey = orchestration === 'graph' ? 'planBuildGraph' : 'planBuildDirect'
+    if (useWorktree) {
+      const operationId = usePlanWorktreeStore.getState().beginBuild(plan.id)
+      if (!operationId) {
+        setError(t('planWorktreeBuildAlreadyStarting'))
+        return
+      }
+      const currentIsolation = usePlanWorktreeStore.getState().plans[plan.id]
+      const result = await useChatStore.getState().startIsolatedPlanBuild({
+        operationId,
+        planId: planWorktreeHostPlanId(plan.id),
+        planRelativePath: plan.relativePath,
+        planTitle: plan.featureName,
+        sourceThreadId: chatState.activeThreadId!,
+        sourceWorkspaceRoot: plan.workspaceRoot,
+        orchestration,
+        prompt,
+        displayText: `${t(labelKey)}: ${plan.relativePath}`,
+        goalObjective: `Implement and validate the authoritative embedded plan "${plan.featureName}" in the isolated plan worktree.`,
+        ...(currentIsolation?.branchPrefix ? { branchPrefix: currentIsolation.branchPrefix } : {})
+      })
+      if (!result.ok) {
+        usePlanWorktreeStore.getState().failBuild(
+          plan.id,
+          operationId,
+          result.message,
+          result.run
+        )
+        setError(result.message)
+        return
+      }
+      usePlanWorktreeStore.getState().finishBuild(plan.id, operationId, result.run)
+      await onPlanBuildStarted?.(plan)
+      return
+    }
     const sent = await sendMessage(prompt, 'agent', {
       displayText: `${t(labelKey)}: ${plan.relativePath}`,
       orchestration

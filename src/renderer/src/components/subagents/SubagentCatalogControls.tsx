@@ -215,7 +215,7 @@ export function surfaceLabel(t: TFunction<'common'>, surface: SurfaceTab): strin
   const fallbacks: Record<SurfaceTab, string> = {
     shared: 'Base',
     code: 'Code',
-    write: 'Write',
+    write: 'Work',
     design: 'Design'
   }
   return t(`subagentsPanel.surface.${surface}`, fallbacks[surface])
@@ -318,7 +318,7 @@ export function ExtensionAgentsControl({
             {t('subagentsPanel.extensionAgents.title', 'Extension agents')}
           </div>
           <div className="mt-0.5 text-[10.5px] text-ds-muted">
-            {t('subagentsPanel.extensionAgents.description', 'Write and Design specialists · {{count}}', { count })}
+            {t('subagentsPanel.extensionAgents.description', 'Work and Design specialists · {{count}}', { count })}
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-2">

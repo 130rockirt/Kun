@@ -87,4 +87,16 @@ describe('createToolDiscoveryContext', () => {
 
     expect(context.awaitUserInput).toBeUndefined()
   })
+
+  it('keeps Design UI continuation metadata out of tool policy', () => {
+    const context = createToolDiscoveryContext({
+      ...turnContextInput(new AbortController().signal),
+      messageSource: 'design_continuation'
+    }, {
+      memoryEnabled: false,
+      interactiveToolBridge: { awaitUserInput: async () => ({ status: 'cancelled' }) }
+    })
+
+    expect(context.messageSource).toBeUndefined()
+  })
 })

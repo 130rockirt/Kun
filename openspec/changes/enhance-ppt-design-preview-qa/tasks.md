@@ -23,6 +23,8 @@
 - [x] 4.2 Add the 16-item IntersectionObserver thumbnail cap, static safe clones, current-slide synchronization, and placeholders
 - [x] 4.3 Add keyboard navigation, editable-focus exemptions, audience fullscreen, two-second controls, and complete cleanup
 - [x] 4.4 Cover long-deck bounds, source replacement, navigation, fullscreen, link hardening, and failure cleanup with renderer tests
+- [x] 4.5 Add source-preserving compatibility for singleton theme styles, stale part declarations, and incomplete background inheritance
+- [x] 4.6 Adapt single- and multi-slide preview chrome, thumbnail sizing, canvas centering, and fit-to-viewport zoom
 
 ## 5. Geometry QA Core
 
@@ -39,7 +41,7 @@
 
 ## 7. Final Verification and Delivery
 
-- [ ] 7.1 Run focused PPT/Office/renderer tests and `git diff --check`
+- [x] 7.1 Run focused PPT/Office/renderer tests and `git diff --check`
 - [ ] 7.2 Run `build:kun`, typecheck, full tests, build, lint, and file-line validation
 - [ ] 7.3 Merge the latest local `develop`, resolve conflicts manually, and repeat affected validation
 - [ ] 7.4 Fast-forward the feature branch into local `develop`, verify the final tree, and remove the worktree safely

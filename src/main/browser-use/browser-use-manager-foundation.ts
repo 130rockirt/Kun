@@ -1,14 +1,11 @@
 import { createHash, randomBytes } from 'node:crypto'
 import {
-  BrowserWindow,
   WebContentsView
 } from 'electron'
 import type {
   BrowserUseAuditEntry,
   BrowserUseActionConsentRequest,
   BrowserUseBudgetState,
-  BrowserUseDecisionInput,
-  BrowserUseMode,
   BrowserUseOriginConsentRequest,
   BrowserUseRect,
   BrowserUseViewState
@@ -16,44 +13,39 @@ import type {
 import type { KunBrowserUseSettingsV1 } from '../../shared/app-settings'
 import {
   BrowserUseToolResult,
-  type BrowserUseActionInput as BrowserUseAction,
-  type BrowserUseKunApprovalGrant,
   type BrowserUseKunApprovalMode,
-  type BrowserUseSnapshotNode,
   type BrowserUseToolResult as BrowserUseResult
 } from '../../../kun/src/contracts/browser-use.js'
 import {
   BrowserUseNetworkPolicyError,
   BrowserUsePolicyProxy,
-  browserUseProxyConfiguration,
   normalizeBrowserUseOrigin,
   sanitizeBrowserUseUrl
 } from './network-policy'
 import {
   ACTION_DECISION_TIMEOUT_MS,
-  BACKGROUND_VIEW_BOUNDS,
+  BrowserUseOperationAbortedError,
   MAX_AUDIT_ENTRIES,
   MOUNT_TIMEOUT_MS,
   ORIGIN_DECISION_TIMEOUT_MS,
-  PREPARED_ACTION_TTL_MS,
   attributesRecord,
+  assertBrowserUseOperationActive,
   auditDecision,
   axProperties,
   axString,
-  clamp,
   createBrowserUseView,
-  errorMessage,
-  isForbiddenCommitTarget,
+  isDisabledTarget,
   isNearViewport,
   isSensitiveTarget,
   isVisibleMount,
-  normalizeBounds,
   once,
   originOnly,
   pathOnly,
   randomToken,
   resultError,
+  resultOk,
   roundRect,
+  runSerializedBrowserUseOperation,
   safeOrigin,
   sanitizePageTitle,
   type AxNode,
@@ -88,8 +80,12 @@ export abstract class BrowserUseManagerFoundation {
   protected tabs(
     entry: BrowserSessionEntry,
     operation: 'list' | 'switch' | 'close',
-    tabId?: string
+    tabId: string | undefined,
+    signal: AbortSignal
   ): BrowserUseResult {
+    if (signal.aborted || entry.stopping) {
+      return resultError('aborted', 'Browser Use action was cancelled.', entry)
+    }
     if (operation === 'switch') {
       if (!tabId || !entry.tabs.has(tabId)) {
         return resultError('tab_not_found', 'The requested tab does not belong to this session.', entry)
@@ -132,31 +128,12 @@ export abstract class BrowserUseManagerFoundation {
     entry: BrowserSessionEntry,
     origin: string,
     rawUrl: string,
-    kunApprovalSource?: Exclude<BrowserUseKunApprovalMode, 'full-access'>
+    reviewerSource: BrowserUseKunApprovalMode | undefined,
+    signal: AbortSignal
   ): Promise<boolean> {
+    this.assertOperationActive(entry, signal)
     if (entry.grants.has(origin)) return true
     const settings = this.options.settings()
-    if (kunApprovalSource) {
-      if (
-        entry.mode === 'local-development' &&
-        entry.exactLocalOrigin &&
-        entry.exactLocalOrigin !== origin
-      ) {
-        return false
-      }
-      if (entry.mode === 'local-development') entry.exactLocalOrigin = origin
-      entry.grants.add(origin)
-      this.audit(entry, {
-        category: 'origin-consent',
-        action: `kun-${kunApprovalSource}-grant-origin`,
-        origin,
-        sanitizedPath: pathOnly(rawUrl),
-        decision: 'allowed',
-        outcome: 'success'
-      })
-      this.publish(entry)
-      return true
-    }
     if (settings.approvalMode === 'auto-safe' && entry.mode === 'public') {
       entry.grants.add(origin)
       this.audit(entry, {
@@ -164,6 +141,7 @@ export abstract class BrowserUseManagerFoundation {
         action: 'auto-grant-public-origin',
         origin,
         sanitizedPath: pathOnly(rawUrl),
+        ...(reviewerSource ? { reviewerSource } : {}),
         decision: 'allowed',
         outcome: 'success'
       })
@@ -171,7 +149,8 @@ export abstract class BrowserUseManagerFoundation {
       return true
     }
     if (entry.pendingOriginDecision) return false
-    if (!(await this.ensureSupervised(entry))) return false
+    if (!(await this.ensureSupervised(entry, signal))) return false
+    this.assertOperationActive(entry, signal)
     const request: BrowserUseOriginConsentRequest = {
       id: randomToken(),
       sessionId: entry.id,
@@ -181,10 +160,12 @@ export abstract class BrowserUseManagerFoundation {
       mode: entry.mode,
       createdAt: this.now().toISOString()
     }
+    const decisionPromise = this.awaitOriginDecision(entry, request)
     entry.pendingOrigin = request
     entry.lifecycle = 'waiting-origin-consent'
     this.publish(entry)
-    const decision = await this.awaitOriginDecision(entry, request)
+    const decision = await decisionPromise
+    this.assertOperationActive(entry, signal)
     entry.pendingOrigin = undefined
     entry.lifecycle = 'ready'
     if (decision === 'allow-once') {
@@ -202,6 +183,7 @@ export abstract class BrowserUseManagerFoundation {
       action: 'grant-origin',
       origin,
       sanitizedPath: pathOnly(rawUrl),
+      ...(reviewerSource ? { reviewerSource } : {}),
       decision: auditDecision(decision),
       outcome: decision === 'allow-once' ? 'success' : 'blocked'
     })
@@ -214,49 +196,31 @@ export abstract class BrowserUseManagerFoundation {
     rawUrl: string
   ): Promise<void> {
     if (entry.stopping || entry.pendingOriginDecision) return
-    let origin: string
-    try {
-      origin = normalizeBrowserUseOrigin(rawUrl, entry.mode)
-    } catch (error) {
-      this.audit(entry, {
-        category: 'network-policy',
-        action: 'navigation-blocked',
-        sanitizedPath: pathOnly(rawUrl),
-        outcome: 'blocked',
-        errorCode: error instanceof BrowserUseNetworkPolicyError ? error.code : 'invalid_url'
-      })
-      return
-    }
-    const route = entry.kunApprovalMode
-    const mode = route && route.turnId === entry.activeTurnId
-      ? route.mode
-      : undefined
-    // A grant authorizes exactly the explicit browser_use call whose arguments
-    // it signed. A later page-driven redirect, popup, or scripted navigation is
-    // a new action and must never reuse that capability. Agent-reviewed turns
-    // cannot open a user prompt behind the reviewer's back, so they fail closed.
-    if (mode !== 'user' && mode !== 'full-access') {
-      this.audit(entry, {
-        category: 'origin-consent',
-        action: route?.mode === 'agent'
-          ? 'agent-review-required'
-          : 'approval-route-required',
-        origin,
-        sanitizedPath: pathOnly(rawUrl),
-        decision: 'denied',
-        outcome: 'blocked',
-        errorCode: 'approval_required'
-      })
-      return
-    }
-    // Only a current-turn signed user/full route may enter Browser Main's own
-    // origin policy. Agent or unknown/stale routes fail closed.
-    if (await this.ensureOriginGrant(entry, origin, rawUrl)) {
-      const tab = this.activeTab(entry)
-      if (tab && !entry.stopping) {
-        await tab.view.webContents.loadURL(rawUrl).catch(() => undefined)
+    await this.withAbort(entry, undefined, async (signal) => {
+      let origin: string
+      try {
+        origin = normalizeBrowserUseOrigin(rawUrl, entry.mode)
+      } catch (error) {
+        this.assertOperationActive(entry, signal)
+        this.audit(entry, {
+          category: 'network-policy',
+          action: 'navigation-blocked',
+          sanitizedPath: pathOnly(rawUrl),
+          outcome: 'blocked',
+          errorCode: error instanceof BrowserUseNetworkPolicyError ? error.code : 'invalid_url'
+        })
+        return resultError('navigation_blocked', 'Browser Use blocked page navigation.', entry)
       }
-    }
+      if (!(await this.ensureOriginGrant(entry, origin, rawUrl, undefined, signal))) {
+        return resultError('origin_denied', 'The exact origin was not granted.', entry)
+      }
+      this.assertOperationActive(entry, signal)
+      const tab = this.activeTab(entry)
+      if (!tab) return resultError('tab_not_found', 'Browser Use has no active tab.', entry)
+      await tab.view.webContents.loadURL(rawUrl).catch(() => undefined)
+      this.assertOperationActive(entry, signal, tab)
+      return resultOk('opened', 'Opened the newly authorized origin.', entry, tab.id)
+    })
   }
 
   protected awaitOriginDecision(
@@ -308,28 +272,36 @@ export abstract class BrowserUseManagerFoundation {
   protected async liveTarget(
     entry: BrowserSessionEntry,
     tab: BrowserTab,
-    target: BrowserTarget
+    target: BrowserTarget,
+    signal: AbortSignal
   ): Promise<BrowserTarget | undefined> {
+    this.assertOperationActive(entry, signal, tab, target.documentGeneration)
     if (target.documentGeneration !== entry.documentGeneration) return undefined
     try {
       const description = await this.describeNode(tab, target.backendNodeId)
+      this.assertOperationActive(entry, signal, tab, target.documentGeneration)
       if (!description.node?.backendNodeId) return undefined
       const attributes = attributesRecord(description.node.attributes)
       const box = await this.boxForNode(tab, target.backendNodeId)
+      this.assertOperationActive(entry, signal, tab, target.documentGeneration)
       if (!box) return undefined
       const ax = await tab.view.webContents.debugger.sendCommand(
         'Accessibility.getPartialAXTree',
         { backendNodeId: target.backendNodeId, fetchRelatives: false }
       ) as { nodes?: AxNode[] }
+      this.assertOperationActive(entry, signal, tab, target.documentGeneration)
       const node = ax.nodes?.[0]
       const role = axString(node?.role).slice(0, 128)
       const name = axString(node?.name).slice(0, 512)
       const sensitive = isSensitiveTarget(role, name, description, attributes)
+      const disabled = isDisabledTarget(axProperties(node?.properties), attributes)
+      if (!isNearViewport(box, entry.mount?.bounds)) return undefined
       return {
         ...target,
         role,
         name,
         sensitive,
+        disabled,
         rect: box,
         fingerprint: this.fingerprint(entry, {
           tabId: tab.id,
@@ -338,11 +310,13 @@ export abstract class BrowserUseManagerFoundation {
           role,
           name,
           sensitive,
+          disabled,
           rect: box,
           attributes
         })
       }
-    } catch {
+    } catch (error) {
+      if (error instanceof BrowserUseOperationAbortedError) throw error
       return undefined
     }
   }
@@ -379,42 +353,6 @@ export abstract class BrowserUseManagerFoundation {
         height: roundRect(maxY - minY)
       }
     } catch {
-      return undefined
-    }
-  }
-
-  protected async highlightedPreview(
-    tab: BrowserTab,
-    backendNodeId: number
-  ): Promise<string | undefined> {
-    try {
-      await tab.view.webContents.debugger.sendCommand('Overlay.enable')
-      await tab.view.webContents.debugger.sendCommand('Overlay.highlightNode', {
-        backendNodeId,
-        highlightConfig: {
-          showInfo: true,
-          showStyles: false,
-          contentColor: { r: 53, g: 132, b: 228, a: 0.12 },
-          borderColor: { r: 53, g: 132, b: 228, a: 1 }
-        }
-      })
-      const image = await tab.view.webContents.capturePage()
-      await tab.view.webContents.debugger.sendCommand('Overlay.hideHighlight')
-      const size = image.getSize()
-      const scale = Math.min(1, 800 / Math.max(size.width, size.height, 1))
-      const bounded = scale < 1
-        ? image.resize({
-            width: Math.max(1, Math.round(size.width * scale)),
-            height: Math.max(1, Math.round(size.height * scale))
-          })
-        : image
-      return `data:image/png;base64,${bounded.toPNG().toString('base64')}`
-    } catch {
-      try {
-        await tab.view.webContents.debugger.sendCommand('Overlay.hideHighlight')
-      } catch {
-        // Preview failure must never weaken the action validation path.
-      }
       return undefined
     }
   }
@@ -488,7 +426,11 @@ export abstract class BrowserUseManagerFoundation {
     }
   }
 
-  protected async ensureSupervised(entry: BrowserSessionEntry): Promise<boolean> {
+  protected async ensureSupervised(
+    entry: BrowserSessionEntry,
+    signal: AbortSignal
+  ): Promise<boolean> {
+    this.assertOperationActive(entry, signal)
     if (isVisibleMount(entry.mount)) return true
     entry.lifecycle = 'mount-required'
     this.publish(entry)
@@ -500,6 +442,7 @@ export abstract class BrowserUseManagerFoundation {
         done()
       }, MOUNT_TIMEOUT_MS)
     })
+    this.assertOperationActive(entry, signal)
     return isVisibleMount(entry.mount)
   }
 
@@ -530,6 +473,19 @@ export abstract class BrowserUseManagerFoundation {
     entry.pendingAction = undefined
   }
 
+  protected invalidateTarget(entry: BrowserSessionEntry, ref: string): void {
+    entry.refs.delete(ref)
+    for (const [id, prepared] of entry.prepared) {
+      if (prepared.target.ref !== ref) continue
+      prepared.used = true
+      entry.prepared.delete(id)
+      if (entry.pendingAction?.id === id) {
+        entry.pendingActionDecision?.resolve('cancelled')
+        entry.pendingAction = undefined
+      }
+    }
+  }
+
   protected touch(entry: BrowserSessionEntry, settings: KunBrowserUseSettingsV1): void {
     entry.lastActivityAt = this.now().getTime()
     if (entry.idleTimer) clearTimeout(entry.idleTimer)
@@ -538,28 +494,97 @@ export abstract class BrowserUseManagerFoundation {
     }, settings.idleTimeoutMs)
   }
 
-  protected rememberKunApprovalMode(
-    entry: BrowserSessionEntry,
-    turnId: string,
-    mode: BrowserUseKunApprovalMode | undefined,
-    grant: BrowserUseKunApprovalGrant | undefined
-  ): void {
-    if (!mode || !grant || grant.source !== mode) return
-    entry.kunApprovalMode = { mode, turnId }
-  }
-
   protected async withAbort(
     entry: BrowserSessionEntry,
     signal: AbortSignal | undefined,
-    operation: () => Promise<BrowserUseResult>
+    operation: (signal: AbortSignal) => Promise<BrowserUseResult>
   ): Promise<BrowserUseResult> {
-    if (signal?.aborted) return resultError('aborted', 'Browser Use action was cancelled.', entry)
-    const onAbort = () => this.cancelPending(entry, 'cancelled')
-    signal?.addEventListener('abort', onAbort, { once: true })
+    if (signal?.aborted || entry.stopping) {
+      return resultError('aborted', 'Browser Use action was cancelled.', entry)
+    }
+    const controller = new AbortController()
+    const onExternalAbort = () => controller.abort(signal?.reason)
+    const onAbort = () => {
+      this.cancelPending(entry, 'cancelled')
+      this.stopOwnedPageWork(entry)
+      for (const waiter of entry.mountWaiters) waiter()
+      entry.mountWaiters.clear()
+    }
+    entry.activeOperations.add(controller)
+    signal?.addEventListener('abort', onExternalAbort, { once: true })
+    controller.signal.addEventListener('abort', onAbort, { once: true })
+    if (signal?.aborted || entry.stopping) {
+      controller.abort(signal?.reason ?? new Error('Browser Use session stopped.'))
+    }
+    let resolveAbort: ((result: BrowserUseResult) => void) | undefined
+    const aborted = new Promise<BrowserUseResult>((resolve) => {
+      resolveAbort = resolve
+      controller.signal.addEventListener('abort', () => {
+        resolve(resultError('aborted', 'Browser Use action was cancelled.', entry))
+      }, { once: true })
+    })
     try {
-      return await operation()
+      const operationResult = runSerializedBrowserUseOperation(
+        entry,
+        controller.signal,
+        () => this.assertOperationActive(entry, controller.signal),
+        operation
+      ).catch((error: unknown) => {
+        if (
+          controller.signal.aborted ||
+          error instanceof BrowserUseOperationAbortedError
+        ) {
+          return resultError('aborted', 'Browser Use action was cancelled.', entry)
+        }
+        throw error
+      })
+      const result = await Promise.race([operationResult, aborted])
+      return controller.signal.aborted
+        ? resultError('aborted', 'Browser Use action was cancelled.', entry)
+        : result
     } finally {
-      signal?.removeEventListener('abort', onAbort)
+      entry.activeOperations.delete(controller)
+      if (!controller.signal.aborted) {
+        resolveAbort?.(resultError('aborted', 'Browser Use action scope finished.', entry))
+      }
+      signal?.removeEventListener('abort', onExternalAbort)
+      controller.signal.removeEventListener('abort', onAbort)
+    }
+  }
+
+  protected assertOperationActive(
+    entry: BrowserSessionEntry,
+    signal: AbortSignal,
+    tab?: BrowserTab,
+    documentGeneration?: number
+  ): void {
+    assertBrowserUseOperationActive(
+      this.sessions.get(entry.threadId),
+      entry,
+      signal,
+      tab,
+      documentGeneration
+    )
+  }
+
+  protected cancelActiveOperations(entry: BrowserSessionEntry): void {
+    entry.agentInputDispatchActive = false
+    for (const controller of entry.activeOperations) controller.abort(new Error('Browser Use session stopped.'))
+    this.stopOwnedPageWork(entry)
+    for (const waiter of entry.mountWaiters) waiter()
+    entry.mountWaiters.clear()
+    this.cancelPending(entry, 'cancelled')
+  }
+  private stopOwnedPageWork(entry: BrowserSessionEntry): void {
+    for (const tab of entry.tabs.values()) {
+      if (!tab.view.webContents.isDestroyed()) {
+        try {
+          tab.view.webContents.stop()
+        } catch {
+          // Teardown remains fail-closed when Chromium is already exiting.
+        }
+      }
+      void tab.view.webContents.session.closeAllConnections().catch(() => undefined)
     }
   }
 

@@ -350,7 +350,9 @@
   "composerPdfAttachmentNoText": "이 PDF에는 추출 가능한 텍스트가 없으며 내장 OCR이 읽을 수 있는 텍스트를 감지할 수 없습니다. 더 선명한 스캔을 시도하거나 관련 페이지를 붙여넣으세요.",
   "composerAttachmentUnsupportedType": "여기에는 PNG, JPEG, WebP, PDF 파일만 첨부할 수 있습니다.",
   "composerRemoveAttachment": "첨부파일 삭제",
+  "composerMentionMenuTitle": "컨텍스트 멘션",
   "composerFileMentionMenuTitle": "파일 및 폴더",
+  "composerKnowledgeMentionEmpty": "마운트된 지식 베이스가 없습니다. 입력창 아래의 지식 베이스 선택기에서 추가하세요.",
   "composerFileMentionLoading": "파일 로드 중…",
   "composerFileMentionEmpty": "파일이나 폴더를 찾을 수 없습니다.",
   "composerRemoveFileReference": "참조 삭제",
@@ -616,5 +618,9 @@
   "slashCommandPlanActiveDescription": "계획 모드가 이미 활성화되어 있습니다.",
   "slashCommandResearchTitle": "심층 연구",
   "slashCommandResearchDescription": "소스 추적, 교차 확인 및 보고 가능한 출력을 통해 반복적인 연구 개요를 준비합니다.",
+  "knowledgeBaseDescription": "업무 공간을 이 작업의 읽기 전용 비벡터 구조 인덱스로 연결합니다.",
+  "knowledgeBaseOpenWrite": "업무에서 열기",
+  "knowledgeBaseEmpty": "아직 업무 공간이 없습니다.",
+  "knowledgeBaseAddDirectory": "업무 공간 추가 및 연결",
   "slashCommandResearchPrompt": "Run a deep research task.\n\nTopic:\n{{topic}}\n\nResearch protocol:\n1. Confirm the scope, time range, geography, and output format. Ask only questions that block useful research.\n2. Inventory the available search, browser, MCP, workspace, and paper tools. Prefer sources that need no extra setup. Use an authenticated browser session only when it is already available, and never expose credentials.\n3. Plan the research breadth and depth, run multiple targeted queries, and iterate from evidence gaps or contradictions.\n4. Keep an evidence ledger with the source title, URL or workspace path, publication or access date, and the claim it supports.\n5. Cross-check important claims with independent sources. Mark conflicts, uncertainty, and assumptions clearly.\n6. If ongoing monitoring is requested, propose a scheduled task instead of claiming that monitoring is already active.\n\nDeliver:\n- Executive summary\n- Findings grouped by research question\n- Comparison table where useful\n- Evidence and source table\n- Conflicts, gaps, and recommended follow-up searches\n- A report-ready Markdown outline; create PDF, slides, or media assets only when the required tools are available."
 }

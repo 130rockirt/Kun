@@ -185,7 +185,7 @@ export async function readWorkspaceImage(
     const ext = extensionFromName(targetPath).toLowerCase()
     const mimeType = WORKSPACE_IMAGE_MIME_BY_EXT.get(ext)
     if (!mimeType) {
-      return { ok: false, message: 'This image type is not supported in Write mode.' }
+      return { ok: false, message: 'This image type is not supported in Work.' }
     }
 
     const bytes = await readFile(targetPath)
@@ -214,7 +214,7 @@ export async function readWorkspacePdf(
       return { ok: false, message: 'Cannot preview a directory.' }
     }
     if (fileInfo.size > MAX_PDF_PREVIEW_BYTES) {
-      return { ok: false, message: 'This PDF is too large to preview in Write mode.' }
+      return { ok: false, message: 'This PDF is too large to preview in Work.' }
     }
 
     const ext = extensionFromName(targetPath).toLowerCase()

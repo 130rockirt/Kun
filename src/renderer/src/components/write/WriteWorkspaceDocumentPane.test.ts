@@ -1,6 +1,7 @@
 import { createElement, createRef } from 'react'
 import { act, create, type ReactTestRenderer } from 'react-test-renderer'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { WorkspaceOfficePreviewSuccess } from '@shared/office-document'
 import { WriteWorkspaceDocumentPane } from './WriteWorkspaceDocumentPane'
 
 vi.mock('react-i18next', () => {
@@ -13,6 +14,12 @@ vi.mock('./WriteMarkdownPreview', () => ({ WriteMarkdownPreview: () => null }))
 vi.mock('./WriteWorkspaceStart', () => ({ WriteWorkspaceStart: () => null }))
 vi.mock('./WriteImagePreview', () => ({ WriteImagePreview: () => null }))
 vi.mock('./WritePdfViewer', () => ({ WritePdfViewer: () => null }))
+vi.mock('../WorkspaceOfficePreview', () => ({
+  WorkspaceOfficePreview: (props: object) => createElement('div', {
+    ...props,
+    'data-office-preview-mock': 'true'
+  })
+}))
 
 const noop = (): void => undefined
 
@@ -82,6 +89,8 @@ function paneProps(focusMode: boolean, onFocusModeChange: (active: boolean) => v
     onSaveShortcut: noop,
     onImagePasteSaved: noop,
     onImagePasteError: noop,
+    onPresentationViewChange: noop,
+    focused: true,
     focusMode,
     onFocusModeChange
   }
@@ -169,5 +178,37 @@ describe('WriteWorkspaceDocumentPane focus mode', () => {
       defaultPrevented: false
     } as KeyboardEvent))
     expect(onFocusModeChange).toHaveBeenCalledWith(false)
+  })
+
+  it('passes presentation view reporting and keyboard focus to the Office preview', async () => {
+    const onPresentationViewChange = vi.fn()
+    const officePreview: WorkspaceOfficePreviewSuccess = {
+      ok: true,
+      path: '/repo/deck.pptx',
+      name: 'deck.pptx',
+      sourceFormat: 'pptx',
+      renderFormat: 'pptx',
+      viewer: 'presentation',
+      size: 3,
+      mtimeMs: 1,
+      sourceSha256: 'a'.repeat(64),
+      data: new Uint8Array([1, 2, 3])
+    }
+    await act(async () => {
+      renderer.update(createElement(WriteWorkspaceDocumentPane, {
+        ...paneProps(false, onFocusModeChange),
+        activeFilePath: officePreview.path,
+        activeFileIsOffice: true,
+        activeFileIsText: false,
+        officePreview,
+        focused: false,
+        onPresentationViewChange
+      }))
+    })
+
+    expect(renderer.root.findByProps({ 'data-office-preview-mock': 'true' }).props).toMatchObject({
+      onPresentationViewChange,
+      presentationKeyboardActive: false
+    })
   })
 })

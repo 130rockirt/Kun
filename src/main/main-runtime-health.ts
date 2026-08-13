@@ -123,6 +123,7 @@ export const runtimeSupervisor = new KunRuntimeSupervisor<AppSettingsV1>({
   },
   watchdogIntervalMs: RUNTIME_WATCHDOG_INTERVAL_MS
 })
+mainState.waitForRuntimeOperationsIdle = () => runtimeSupervisor.waitForIdle()
 
 export function publishRuntimeStatus(status: Omit<KunRuntimeStatus, 'at'>): void {
   runtimeSupervisor.publish(status)

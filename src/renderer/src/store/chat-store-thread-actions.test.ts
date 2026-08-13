@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ChatBlock, NormalizedThread, ThreadEventSink } from '../agent/types'
+import type { DesignTaskProfile } from '../agent/design-task-profile'
 import type { ChatState, ChatStoreGet, ChatStoreSet, GuiPlanMessageContext } from './chat-store-types'
 import { rendererRuntimeClient } from '../agent/runtime-client'
 import { graphRuntimeClient } from '../graph/graph-runtime-client'
@@ -8,15 +9,10 @@ import type { GraphRun } from '../graph/graph-types'
 import { useWriteWorkspaceStore } from '../write/write-workspace-store'
 import i18n from '../i18n'
 import type { BrowserStorageLike } from '../lib/browser-storage'
-import {
-  queuedMessagesForThread,
-  saveQueuedMessagesForThread
-} from './queued-message-persistence'
+import { queuedMessagesForThread, saveQueuedMessagesForThread } from './queued-message-persistence'
 import { clearThreadSnapshotCache, getThreadSnapshot } from './thread-snapshot-cache'
 
-const registryMock = vi.hoisted(() => ({
-  getProvider: vi.fn()
-}))
+const registryMock = vi.hoisted(() => ({ getProvider: vi.fn() }))
 
 vi.mock('../agent/registry', () => ({
   getProvider: registryMock.getProvider
@@ -150,7 +146,7 @@ describe('chat-store-thread-actions queued messages', () => {
     expect(state.error).toContain('no longer active')
   })
 
-  it('cancels a thread-bound Design send if the user leaves Design during setup', async () => {
+  it('cancels a thread-bound Design send if the active task changes during setup', async () => {
     const pendingSettings = deferredValue<{
       agents: { kun: { providerId: string; model: string } }
       codePromptPrefix: string
@@ -170,11 +166,22 @@ describe('chat-store-thread-actions queued messages', () => {
     })
     const { actions, state } = buildHarness()
     state.busy = false
-    state.route = 'design'
+    state.route = 'chat'
+    const designProfile = {
+      version: 1 as const,
+      documentTarget: { documentId: 'doc_home', boardArtifactId: 'board_home' },
+      outputMedium: 'html' as const,
+      target: 'web' as const,
+      preset: 'none' as const,
+      context: { tone: [] }
+    }
+    state.threads = [{ ...thread('thr_existing'), agentSurface: 'code' }]
 
     const sending = actions.sendMessage('draw the home page', 'agent', {
       agentSurface: 'design',
-      expectedThreadId: 'thr_existing'
+      expectedThreadId: 'thr_existing',
+      designProfile,
+      designDocumentTarget: designProfile.documentTarget
     })
     await vi.waitFor(() => {
       expect(state.blocks).toContainEqual(expect.objectContaining({
@@ -183,7 +190,8 @@ describe('chat-store-thread-actions queued messages', () => {
       }))
     })
 
-    state.route = 'chat'
+    state.activeThreadId = 'thr_code'
+    state.threads = [...state.threads, thread('thr_code')]
     pendingSettings.resolve({
       agents: { kun: { providerId: 'deepseek', model: 'deepseek-v4-pro' } },
       codePromptPrefix: '',
@@ -192,8 +200,9 @@ describe('chat-store-thread-actions queued messages', () => {
 
     await expect(sending).resolves.toBe(false)
     expect(sendUserMessage).not.toHaveBeenCalled()
-    expect(state.blocks).toEqual([])
-    expect(state.busy).toBe(false)
+    // The stale task no longer owns the active projection, so the send path
+    // must not overwrite the newer selection while rolling back its snapshot.
+    expect(state.activeThreadId).toBe('thr_code')
     expect(state.error).toContain('no longer active')
   })
 
@@ -219,11 +228,22 @@ describe('chat-store-thread-actions queued messages', () => {
     })
     const { actions, state } = buildHarness()
     state.busy = false
-    state.route = 'design'
+    state.route = 'chat'
+    const designProfile = {
+      version: 1 as const,
+      documentTarget: { documentId: 'doc_home', boardArtifactId: 'board_home' },
+      outputMedium: 'html' as const,
+      target: 'web' as const,
+      preset: 'none' as const,
+      context: { tone: [] }
+    }
+    state.threads = [{ ...thread('thr_existing'), agentSurface: 'code' }]
 
     const sending = actions.sendMessage('draw the home page', 'agent', {
       agentSurface: 'design',
-      expectedThreadId: 'thr_existing'
+      expectedThreadId: 'thr_existing',
+      designProfile,
+      designDocumentTarget: designProfile.documentTarget
     })
     await vi.waitFor(() => expect(sendUserMessage).toHaveBeenCalledOnce())
 
@@ -387,7 +407,9 @@ describe('chat-store-thread-actions queued messages', () => {
       blocks: ChatBlock[]
       latestSeq: number
       threadStatus: 'idle'
+      latestTurnId: string
       latestTurnStatus: 'completed'
+      designProfile: DesignTaskProfile
     }>()
     registryMock.getProvider.mockReturnValue({
       getThreadDetail: vi.fn(() => detail.promise),
@@ -408,7 +430,15 @@ describe('chat-store-thread-actions queued messages', () => {
       blocks: [{ kind: 'assistant', id: 'a-idle', text: 'already complete' }],
       latestSeq: 17,
       threadStatus: 'idle',
-      latestTurnStatus: 'completed'
+      latestTurnId: 'turn-idle-complete',
+      latestTurnStatus: 'completed',
+      designProfile: {
+        version: 1,
+        documentTarget: { documentId: 'doc-idle', boardArtifactId: 'board-idle' },
+        outputMedium: 'html', target: 'web', preset: 'none',
+        context: { tone: [] },
+        lockedAtTurnId: 'turn-idle-complete'
+      }
     })
     await selecting
 
@@ -416,7 +446,11 @@ describe('chat-store-thread-actions queued messages', () => {
     expect(state.busy).toBe(false)
     expect(state.threads.find((thread) => thread.id === 'thr_idle')).toMatchObject({
       status: 'idle',
-      latestTurnStatus: 'completed'
+      latestTurnId: 'turn-idle-complete',
+      latestTurnStatus: 'completed',
+      designProfile: expect.objectContaining({ documentTarget: {
+        documentId: 'doc-idle', boardArtifactId: 'board-idle'
+      } })
     })
   })
 
@@ -488,7 +522,7 @@ describe('chat-store-thread-actions queued messages', () => {
     expect(state.lastCodeThreadId).toBe('thr_code')
   })
 
-  it('does not overwrite Code session memory when selecting a Design thread', async () => {
+  it('does not record a standalone Design thread as Code-workbench memory', async () => {
     registryMock.getProvider.mockReturnValue({
       getThreadDetail: vi.fn(async () => ({ blocks: [], latestSeq: 0, threadStatus: 'idle' })),
       subscribeThreadEvents: vi.fn(async () => undefined)

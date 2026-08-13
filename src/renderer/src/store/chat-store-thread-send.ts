@@ -1,4 +1,5 @@
-import type { ChatBlock, ReviewTarget } from '../agent/types'
+import type { ChatBlock, NormalizedThread, ReviewTarget } from '../agent/types'
+import type { DesignDocumentTarget, DesignTaskProfileInput } from '../agent/design-task-profile'
 import { getProvider } from '../agent/registry'
 import { rendererRuntimeClient } from '../agent/runtime-client'
 import {
@@ -140,7 +141,9 @@ import {
 } from './chat-store-thread-action-helpers'
 import { GitCheckpointAvailabilityCache } from '../lib/git-checkpoint-availability'
 import { readDesignThreadRegistry } from '../design/design-thread-registry'
+import { isDesignThreadId } from '../design/design-thread-registry'
 import { readSddThreadRegistry } from '../sdd/sdd-thread-registry'
+import { isWorkspaceOfficeViewPositionAttachment } from '../lib/workspace-office-view-context'
 import {
   MAX_COMPOSER_CONTEXT_ATTACHMENTS,
   type ComposerContextAttachment
@@ -160,6 +163,8 @@ import {
   threadActionSharedState,
   turnAdmissionOutcomeMayBeUnknown,
   upsertQueuedSubmission,
+  waitForRuntimeTurnAdmission,
+  settleRuntimeTurnAdmission,
   withoutConsumedComposerContexts,
   type StoreActionContext,
   type ThreadActionRuntime
@@ -188,12 +193,51 @@ function routeComposerContexts(
 ): ComposerContextAttachment[] {
   if (route === 'chat') return mergeTurnComposerContexts(primary, pending)
   if (route === 'write') {
-    return primary.filter((context) =>
+    const currentView = primary.find(isWorkspaceOfficeViewPositionAttachment)
+    const pptContexts = primary.filter((context) =>
       'source' in context.provenance &&
       context.provenance.source === 'dev-preview' &&
       (context.reference.kind === 'ppt-review' || context.reference.kind === 'ppt-direction'))
+    return mergeTurnComposerContexts(currentView ? [currentView, ...pptContexts] : pptContexts, [])
   }
   return []
+}
+
+export const routeComposerContextsForTests = routeComposerContexts
+
+function sameDesignDocumentTarget(
+  left: DesignDocumentTarget | undefined,
+  right: DesignDocumentTarget | undefined
+): boolean {
+  return Boolean(
+    left && right &&
+    left.documentId === right.documentId &&
+    left.boardArtifactId === right.boardArtifactId
+  )
+}
+
+function designSubmissionMatchesCodeThread(
+  thread: NormalizedThread | null,
+  profile: DesignTaskProfileInput | undefined,
+  target: DesignDocumentTarget | undefined
+): boolean {
+  if (
+    !thread ||
+    thread.agentSurface === 'write' ||
+    thread.agentSurface === 'design' ||
+    isDesignThreadId(thread.id, readDesignThreadRegistry()) ||
+    !profile ||
+    !sameDesignDocumentTarget(profile.documentTarget, target)
+  ) return false
+  const locked = thread.designProfile
+  if (!locked) return true
+  return sameDesignDocumentTarget(locked.documentTarget, target) &&
+    locked.outputMedium === profile.outputMedium &&
+    locked.target === profile.target &&
+    locked.preset === profile.preset &&
+    locked.presetSource === profile.presetSource &&
+    JSON.stringify(locked.styleSnapshot ?? null) === JSON.stringify(profile.styleSnapshot ?? null) &&
+    JSON.stringify(locked.context) === JSON.stringify(profile.context)
 }
 
 export async function sendThreadMessage(
@@ -210,8 +254,14 @@ export async function sendThreadMessage(
     const clientRequestId = queued?.clientRequestId?.trim() ||
       overrides?.clientRequestId?.trim() ||
       createClientTurnRequestId()
+    const shouldWaitForRuntimeAdmission =
+      (queued?.waitForRuntimeAdmission ?? overrides?.waitForRuntimeAdmission) === true
     const expectedThreadId = (queued?.expectedThreadId ?? overrides?.expectedThreadId ?? '').trim()
     const requestedAgentSurface = queued?.agentSurface ?? overrides?.agentSurface
+    const designProfile = queued?.designProfile ?? overrides?.designProfile
+    const designDocumentTarget = queued?.designDocumentTarget ?? overrides?.designDocumentTarget
+    const designImagePlacementTarget = queued?.designImagePlacementTarget ?? overrides?.designImagePlacementTarget
+    const messageSource = queued?.messageSource ?? overrides?.messageSource
     const persona = resolveTurnPersona(
       get().composerPersonaEnabled,
       queued?.persona,
@@ -221,7 +271,17 @@ export async function sendThreadMessage(
       !expectedThreadId ||
       (
         get().activeThreadId === expectedThreadId &&
-        (requestedAgentSurface !== 'design' || get().route === 'design')
+        (
+          requestedAgentSurface !== 'design' ||
+          (
+            get().route === 'chat' &&
+            designSubmissionMatchesCodeThread(
+              get().threads.find((thread) => thread.id === expectedThreadId) ?? null,
+              designProfile,
+              designDocumentTarget
+            )
+          )
+        )
       )
     )
     let writeContext = queued?.writeContext ?? overrides?.writeContext
@@ -281,6 +341,9 @@ export async function sendThreadMessage(
       }
       if (!activeWriteContextIsValid()) return false
     }
+    const admissionPromise = !queued && shouldWaitForRuntimeAdmission
+      ? waitForRuntimeTurnAdmission(clientRequestId)
+      : null
     const hasPendingActiveTurn = threadHasPendingRuntimeWork(get().blocks)
     if (get().busy || hasPendingActiveTurn) {
       const state = get()
@@ -323,11 +386,11 @@ export async function sendThreadMessage(
         reference.relativePath.trim().length > 0 &&
         reference.name.trim().length > 0
       )
-      const composerContexts = queued?.composerContexts ?? routeComposerContexts(
-            state.route,
-            overrides?.composerContexts ?? [],
-            pendingComposerContexts(state)
-          )
+      const composerContexts = routeComposerContexts(
+        state.route,
+        queued?.composerContexts ?? overrides?.composerContexts ?? [],
+        queued ? [] : pendingComposerContexts(state)
+      )
       const orchestration = queued?.orchestration ?? overrides?.orchestration ??
         (mode === 'agent' && state.route === 'chat' && state.graphEnabled
           ? state.composerOrchestration
@@ -338,6 +401,7 @@ export async function sendThreadMessage(
           id: queued?.id ?? `q-${clientRequestId}`,
           text: trimmedText,
           clientRequestId,
+          ...(shouldWaitForRuntimeAdmission ? { waitForRuntimeAdmission: true } : {}),
           deliveryState: 'pending' as const,
           ...(displayText ? { displayText } : {}),
           ...(mode ? { mode } : {}),
@@ -349,12 +413,16 @@ export async function sendThreadMessage(
           ...(reasoningEffort ? { reasoningEffort } : {}),
           ...(serviceTier ? { serviceTier } : {}),
           ...(subagentResume ? { subagentResume } : {}),
+          ...(messageSource ? { messageSource } : {}),
           ...(expectedThreadId ? { expectedThreadId } : {}),
           ...((queued?.guiPlan ?? overrides?.guiPlan) ? { guiPlan: queued?.guiPlan ?? overrides?.guiPlan } : {}),
           ...((queued?.guiDesignCanvas ?? overrides?.guiDesignCanvas) ? { guiDesignCanvas: true } : {}),
           ...((queued?.guiDesignMode ?? overrides?.guiDesignMode) ? { guiDesignMode: true } : {}),
           ...(persona ? { persona } : {}),
           ...(requestedAgentSurface ? { agentSurface: requestedAgentSurface } : {}),
+          ...(designProfile ? { designProfile } : {}),
+          ...(designDocumentTarget ? { designDocumentTarget } : {}),
+          ...(designImagePlacementTarget ? { designImagePlacementTarget } : {}),
           ...((queued?.guiDesignArtifact ?? overrides?.guiDesignArtifact)
             ? { guiDesignArtifact: queued?.guiDesignArtifact ?? overrides?.guiDesignArtifact }
             : {}),
@@ -373,7 +441,7 @@ export async function sendThreadMessage(
       if (!get().busy && hasPendingActiveTurn) {
         void get().recoverActiveTurn()
       }
-      return true
+      return admissionPromise ?? true
     }
     const now = Date.now()
     const userBlockId = queued?.id ?? `u-${now}`
@@ -393,11 +461,11 @@ export async function sendThreadMessage(
         reference.name.trim().length > 0
       ) ??
       []
-    const composerContexts = queued?.composerContexts ?? routeComposerContexts(
-          get().route,
-          overrides?.composerContexts ?? [],
-          pendingComposerContexts(get())
-        )
+    const composerContexts = routeComposerContexts(
+      get().route,
+      queued?.composerContexts ?? overrides?.composerContexts ?? [],
+      queued ? [] : pendingComposerContexts(get())
+    )
     let activeThreadId = get().activeThreadId
     if (!expectedThreadStillActive()) {
       set({
@@ -448,6 +516,7 @@ export async function sendThreadMessage(
       id: queued?.id ?? `q-${clientRequestId}`,
       text: trimmedText,
       clientRequestId,
+      ...(shouldWaitForRuntimeAdmission ? { waitForRuntimeAdmission: true } : {}),
       ...(displayText ? { displayText } : {}),
       ...(mode ? { mode } : {}),
       orchestration,
@@ -458,11 +527,15 @@ export async function sendThreadMessage(
       ...(reasoningEffort ? { reasoningEffort } : {}),
       ...(serviceTier ? { serviceTier } : {}),
       ...(subagentResume ? { subagentResume } : {}),
+      ...(messageSource ? { messageSource } : {}),
       ...(expectedThreadId ? { expectedThreadId } : {}),
       ...((queued?.guiPlan ?? overrides?.guiPlan) ? { guiPlan: queued?.guiPlan ?? overrides?.guiPlan } : {}),
       ...(guiDesignCanvas ? { guiDesignCanvas: true } : {}),
       ...(guiDesignMode ? { guiDesignMode: true } : {}),
       ...(requestedAgentSurface ? { agentSurface: requestedAgentSurface } : {}),
+      ...(designProfile ? { designProfile } : {}),
+      ...(designDocumentTarget ? { designDocumentTarget } : {}),
+      ...(designImagePlacementTarget ? { designImagePlacementTarget } : {}),
       ...((queued?.guiDesignArtifact ?? overrides?.guiDesignArtifact)
         ? { guiDesignArtifact: queued?.guiDesignArtifact ?? overrides?.guiDesignArtifact }
         : {}),
@@ -472,7 +545,7 @@ export async function sendThreadMessage(
       ...(fileReferences.length ? { fileReferences } : {}),
       ...(composerContexts.length ? { composerContexts } : {})
     })
-    return performPreparedThreadSend({
+    const sent = await performPreparedThreadSend({
       context,
       runtime,
       provider: p,
@@ -483,6 +556,10 @@ export async function sendThreadMessage(
       clientRequestId,
       expectedThreadId,
       requestedAgentSurface,
+      designProfile,
+      designDocumentTarget,
+      designImagePlacementTarget,
+      messageSource,
       expectedThreadStillActive,
       writeContext,
       now,
@@ -509,6 +586,11 @@ export async function sendThreadMessage(
       userModelChip,
       submittedMessageForQueue
     })
+    if (!queued && admissionPromise) {
+      if (!sent) settleRuntimeTurnAdmission(clientRequestId, false)
+      return admissionPromise
+    }
+    return sent
 }
 
 export function resolveTurnPersona(

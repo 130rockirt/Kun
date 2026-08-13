@@ -193,7 +193,7 @@ describe('runtimeSettingsApplyMode', () => {
     expect(runtimeSettingsApplyMode(prev, next)).toBe('none')
   })
 
-  it('hot-applies model, provider, approval, media, MCP, project grants, memory, and subagent changes', () => {
+  it('hot-applies model, provider, approval, media, MCP, project grants, memory, subagent, and Browser Use changes', () => {
     const prev = settings()
     const withModel = {
       ...prev,
@@ -286,6 +286,29 @@ describe('runtimeSettingsApplyMode', () => {
         }
       }
     }
+    const withBrowserUseLimits = {
+      ...prev,
+      agents: {
+        kun: {
+          ...prev.agents.kun,
+          browserUse: {
+            ...prev.agents.kun.browserUse,
+            approvalMode: 'always-ask' as const,
+            maxTabs: 4,
+            idleTimeoutMs: 600_000
+          }
+        }
+      }
+    }
+    const withBrowserUseDisabled = {
+      ...prev,
+      agents: {
+        kun: {
+          ...prev.agents.kun,
+          browserUse: { ...prev.agents.kun.browserUse, enabled: false }
+        }
+      }
+    }
 
     expect(runtimeSettingsApplyMode(prev, withModel)).toBe('hot')
     expect(runtimeSettingsApplyMode(prev, withProviderKey)).toBe('hot')
@@ -297,6 +320,8 @@ describe('runtimeSettingsApplyMode', () => {
     expect(runtimeSettingsApplyMode(prev, withMemory)).toBe('hot')
     expect(runtimeSettingsApplyMode(prev, withTurnCapacity)).toBe('hot')
     expect(runtimeSettingsApplyMode(prev, withSubagents)).toBe('hot')
+    expect(runtimeSettingsApplyMode(prev, withBrowserUseLimits)).toBe('hot')
+    expect(runtimeSettingsApplyMode(prev, withBrowserUseDisabled)).toBe('hot')
   })
 
   it('hot-applies a non-default DeepSeek credential rotation while Codex is active', () => {
@@ -481,15 +506,6 @@ describe('runtimeSettingsApplyMode', () => {
         kun: {
           ...prev.agents.kun,
           storage: { ...prev.agents.kun.storage, backend: 'file' as const }
-        }
-      }
-    })).toBe('restart')
-    expect(runtimeSettingsApplyMode(prev, {
-      ...prev,
-      agents: {
-        kun: {
-          ...prev.agents.kun,
-          browserUse: { ...prev.agents.kun.browserUse, enabled: false }
         }
       }
     })).toBe('restart')

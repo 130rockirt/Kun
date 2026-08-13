@@ -14,6 +14,8 @@ import {
   type WriteOfficeDocumentContext
 } from '../../write/quoted-selection'
 import { writeDocumentKey } from '../../write/write-editor-layout'
+import { selectFocusedPresentationView } from '../../write/write-presentation-view-state'
+import { createWorkspaceOfficeViewPositionAttachment } from '../../lib/workspace-office-view-context'
 import {
   loadWriteOfficeSemanticContext,
   writeOfficeSemanticContextMatches
@@ -25,6 +27,8 @@ import { normalizeWorkspaceRoot } from '../../lib/workspace-path'
 import { buildComposerFileContextPrompt } from '../../lib/composer-file-references'
 import { resolveCodeCanvasComposerRoute } from '../../design/canvas/code-canvas'
 import { useCanvasSelectionStore } from '../../design/canvas/canvas-selection-store'
+import { planWorktreeComposerAccess } from '../../plan/plan-worktree-composer-access'
+import { usePlanWorktreeStore } from '../../plan/plan-worktree-store'
 import { activePptReviewComposerContexts } from './workbench-ppt-review-context'
 import { composerReasoningEffortRequestValue } from '../chat/FloatingComposerModelPicker'
 import { serviceTierForComposerSelection } from '../chat/composer-fast-mode'
@@ -47,6 +51,7 @@ export function useWorkbenchComposerSubmitController({
   activeClawChannelProviderId,
   activeSddDraft,
   activeThreadId,
+  taskSurface = 'code',
   attachmentUploadEnabled,
   buildCodeCanvasOutboundPrompt,
   clearComposerAttachments,
@@ -150,6 +155,8 @@ export function useWorkbenchComposerSubmitController({
       return
     }
     const writeState = useWriteWorkspaceStore.getState()
+    const activePresentationView = selectFocusedPresentationView(writeState)
+    const writePresentationView = activePresentationView ? { ...activePresentationView } : null
     const writeWorkspaceRoot = writeState.workspaceRoot || workspaceRoot
     const writeDocumentContext = captureWriteDocumentContext({
       ...writeState,
@@ -323,7 +330,11 @@ export function useWorkbenchComposerSubmitController({
         model,
         providerId
       )
+      const viewContexts = writePresentationView
+        ? [await createWorkspaceOfficeViewPositionAttachment({ workspaceRoot: writeWorkspaceRoot, view: writePresentationView })]
+        : []
       const pptReviewContexts = await activePptReviewComposerContexts(writeWorkspaceRoot, activeThreadId)
+      const composerContexts = [...viewContexts, ...pptReviewContexts]
       if (officeDocument && !writeOfficeSemanticContextMatches(officeDocument)) {
         restorePrompt()
         return
@@ -343,7 +354,7 @@ export function useWorkbenchComposerSubmitController({
           ...(serviceTier ? { serviceTier } : {}),
           ...(attachmentIds.length ? { attachmentIds } : {}),
           ...(publicAttachments.length ? { attachments: publicAttachments } : {}),
-          ...(pptReviewContexts.length ? { composerContexts: pptReviewContexts } : {}),
+          ...(composerContexts.length ? { composerContexts } : {}),
           writeContext: {
             workspaceRoot: writeWorkspaceRoot,
             activeFilePath: writeActiveFilePath,
@@ -400,6 +411,17 @@ export function useWorkbenchComposerSubmitController({
           )
         : undefined
       if (!v && attachmentIds.length === 0 && documentAttachments.length === 0 && fileReferences.length === 0) return
+      if (route === 'chat') {
+        const activeThread = threads.find((thread) => thread.id === activeThreadId)
+        const access = planWorktreeComposerAccess(
+          activeThread,
+          usePlanWorktreeStore.getState().plans
+        )
+        if (!access.writable) {
+          setError(access.reason ?? 'This isolated plan task is currently read-only.')
+          return
+        }
+      }
       if (attachmentIds.length > 0 && !attachmentUploadEnabled) {
         setAttachmentUploadError(t('composerAttachmentModelUnsupported'))
         return
@@ -463,6 +485,7 @@ export function useWorkbenchComposerSubmitController({
         clearComposerAttachments(attachmentScope)
         clearComposerFileReferences()
         void sendPlanTurn(prepared.text, {
+          agentSurface: taskSurface,
           ...(prepared.displayText ? { displayText: prepared.displayText } : {}),
           ...(reasoningEffort ? { reasoningEffort } : {}),
           ...(serviceTier ? { serviceTier } : {}),
@@ -607,6 +630,7 @@ export function useWorkbenchComposerSubmitController({
           )
         : ''
       void sendMessage(outboundText, composerMode === 'plan' ? 'plan' : 'agent', {
+        agentSurface: taskSurface,
         ...(outboundDisplay ? { displayText: outboundDisplay } : {}),
         ...(outboundGuiDesignCanvas ? { guiDesignCanvas: true } : {}),
         ...(persona ? { persona } : {}),
@@ -623,6 +647,7 @@ export function useWorkbenchComposerSubmitController({
     activeClawChannelModel,
     activeSddDraft,
     activeThreadId,
+    taskSurface,
     appendLocalClawTurn,
     attachmentUploadEnabled,
     buildCodeCanvasOutboundPrompt,

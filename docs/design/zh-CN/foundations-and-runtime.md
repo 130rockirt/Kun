@@ -46,7 +46,7 @@ human staying in the loop on every mutating call.
 | --- | --- |
 | **Code** | Bound to a local repo, drives the agent through tool calls, file changes, commands, and review. |
 | **Design** | Generates and iterates UI drafts, interactive HTML prototypes, design graphs, and a shared design system that can hand off to Code. |
-| **Write** | A long-form writing space: Markdown files, FIM completion, selection-scoped inline agent. |
+| **Work** | An office workspace for Markdown and other documents, with FIM completion and a selection-scoped inline agent. |
 | **Connect phone** | Background automation: Feishu / Lark channels, webhook / relay, scheduled tasks. Internal route and storage names still use `claw` for compatibility. |
 
 All product surfaces share the same Kun HTTP/SSE boundary, the same
@@ -59,7 +59,7 @@ settings (API key, base URL, model), and the same visual system.
 These six rules are not aspirations — they are how the product is
 already built. New screens must follow them, not re-interpret them.
 
-1. **One runtime, one boundary.** Code, Design, Write, and Connect phone all call
+1. **One runtime, one boundary.** Code (including Design tasks), Work, and Connect phone all call
    `kun serve` over `127.0.0.1:port`. The renderer never
    embeds an agent loop and never speaks a second protocol. This
    keeps upgrades and debugging boring.
@@ -274,12 +274,12 @@ Every screen in Kun follows the same macro-grammar:
   inside it must opt out with `.ds-no-drag`.
 - **Left sidebar**: workspace roots (Code) / channels (Connect phone,
   internal `claw`) /
-  spaces (Write). Collapsible, drag-resizable, 268 px default.
+  spaces (Work). Collapsible, drag-resizable, 268 px default.
 - **Center column**: the work surface — message timeline (Code /
-  Connect phone) or editor (Write). Never bleed into the sidebars.
+  Connect phone) or editor (Work). Never bleed into the sidebars.
 - **Right inspector**: optional, context-driven — Changes,
-  Todo, Browser, Plan, File, Write Assistant, and SDD Assistant.
-  Drag-resizable, 360 px default. The Write assistant and SDD
+  Todo, Browser, Plan, File, Work Assistant, and SDD Assistant.
+  Drag-resizable, 360 px default. The Work assistant and SDD
   assistant both use this slot.
 
 A new screen should fit into this grammar. If it can't, that is a
@@ -294,12 +294,12 @@ first.
   time.
 - Tone is direct, helpful, and slightly opinionated. First-person
   plural when describing the product ("we ship", "we ship Code,
-  Write, and Connect phone"), second person for the user. No emoji. No
+  Work, and Connect phone"), second person for the user. No emoji. No
   marketing language. Error messages are full sentences ending in
   punctuation; never a raw stack trace.
 - The product name is "Kun" (formerly "DeepSeek GUI"). The bundled
   runtime shares the name; say "Kun runtime" when the distinction matters.
-  The main workbenches are "Code" and "Write"; the phone/IM surface is
+  The main workbenches are "Code" and "Work"; the phone/IM surface is
   "Connect phone" in English and "连接手机" in zh copy. Internal code may
   still say `claw`, but production copy should not expose it as the product name.
 
@@ -342,7 +342,7 @@ If any box is unchecked, fix it before merging.
 ```text
 ┌─────────────────────────────────────────────────────────────┐
 │ Renderer (React 19 + Zustand 5)                             │
-│  AppShell  →  Workbench  →  (Code | Design | Write | Connect phone) UI│
+│  AppShell  →  Workbench  →  (Code with Design tasks | Work | Connect phone) UI│
 │       │                                                      │
 │       │ window.kunGui.runtimeRequest / startSse             │
 │       ▼                                                      │
@@ -376,7 +376,7 @@ Three lessons baked into this shape:
    spawns the child, forwards HTTP, and forwards SSE. It also
    owns GUI-only services (settings, updater, Connect phone runtime,
    workspace
-   files, external editors, and Write export/completion) that the
+   files, external editors, and Work export/completion) that the
    renderer can ask for.
 3. Kun **is** the agent. Loop, tool host, stores, model
    client, server — all in one process, behind one HTTP/SSE

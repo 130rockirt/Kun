@@ -5,6 +5,10 @@ import { useChatStore } from '../store/chat-store'
 import type { ChatState } from '../store/chat-store-types'
 import { createGuiPlanArtifact, useGuiPlanStore } from '../plan/plan-store'
 import {
+  resetPlanWorktreeStoreForTests,
+  usePlanWorktreeStore
+} from '../plan/plan-worktree-store'
+import {
   buildDraftGuiPlanTurnOverrides,
   buildGuiPlanTurnOverrides,
   resolveAssociatedGuiPlan,
@@ -92,6 +96,7 @@ describe('workbench plan build orchestration', () => {
   let renderer: ReactTestRenderer | null = null
 
   beforeEach(() => {
+    resetPlanWorktreeStoreForTests()
     useChatStore.setState({
       busy: false,
       runtimeConnection: 'ready',
@@ -114,6 +119,7 @@ describe('workbench plan build orchestration', () => {
       operationStatus: 'ready',
       error: null
     })
+    usePlanWorktreeStore.getState().initializePlan(plan.id, false)
   })
 
   afterEach(() => {

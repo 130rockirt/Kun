@@ -41,4 +41,13 @@ describe('resolveThreadAgentSurface', () => {
     expect(resolveThreadAgentSurface(legacyThreadWithSurfaces(['design', undefined]))).toBe('code')
     expect(resolveThreadAgentSurface(legacyThreadWithSurfaces([]))).toBe('code')
   })
+
+  it('projects the first accepted turn mode into thread summaries', () => {
+    const code = legacyThreadWithSurfaces(['code', 'design'])
+    const design = legacyThreadWithSurfaces(['design', 'code'])
+
+    expect(toThreadSummary(code).lockedTaskSurface).toBe('code')
+    expect(toThreadSummary(design).lockedTaskSurface).toBe('design')
+    expect(toThreadSummary(legacyThreadWithSurfaces([])).lockedTaskSurface).toBeUndefined()
+  })
 })

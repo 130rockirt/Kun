@@ -70,7 +70,7 @@ export type PreparedTurnContext = Readonly<{
   turnId: string
   workspace: string
   orchestration: 'direct' | 'graph'
-  messageSource?: 'background_shell' | 'background_subagent' | 'graph_runtime' | 'subagent_resume'
+  messageSource?: 'background_shell' | 'background_subagent' | 'graph_runtime' | 'subagent_resume' | 'design_continuation'
   subagentResume?: SubagentResumeRequest
   additionalWorkspaces?: readonly string[]
   knowledgeBases?: readonly KnowledgeBaseMount[]
@@ -113,7 +113,7 @@ export type ToolTurnContextInput = {
   workspace: string
   workspaceCheckpointRequestId?: string
   orchestration?: 'direct' | 'graph'
-  messageSource?: 'background_shell' | 'background_subagent' | 'graph_runtime' | 'subagent_resume'
+  messageSource?: 'background_shell' | 'background_subagent' | 'graph_runtime' | 'subagent_resume' | 'design_continuation'
   subagentResume?: SubagentResumeRequest
   additionalWorkspaces?: readonly string[]
   knowledgeBases?: readonly KnowledgeBaseMount[]

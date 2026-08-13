@@ -24,6 +24,30 @@ const RuntimeConfigApplyServeConfig = KunServeConfigSchema.omit({
   tokenEconomy: TokenEconomyConfigSchema.optional()
 })
 
+const BrowserUseHostBindingToken = z.string().regex(/^[A-Za-z0-9_-]{32,256}$/)
+
+export const BrowserUseHostBinding = z.object({
+  bridgeUrl: z.string().superRefine((value, context) => {
+    try {
+      const url = new URL(value)
+      if (
+        url.protocol !== 'http:' ||
+        url.hostname !== '127.0.0.1' ||
+        !url.port ||
+        url.username ||
+        url.password ||
+        url.pathname !== '/' ||
+        url.search ||
+        url.hash
+      ) context.addIssue({ code: 'custom', message: 'Browser Use host binding must use an exact loopback HTTP origin' })
+    } catch {
+      context.addIssue({ code: 'custom', message: 'Browser Use host binding URL is invalid' })
+    }
+  }),
+  bridgeToken: BrowserUseHostBindingToken,
+  approvalSigningKey: BrowserUseHostBindingToken
+}).strict()
+
 export const RuntimeConfigModelSelection = z.object({
   providerId: z.string().min(1).max(128),
   accountId: z.string().min(1).max(128).optional(),
@@ -42,9 +66,22 @@ export const RuntimeConfigApplyRequest = z
     capabilities: KunCapabilitiesConfig.optional(),
     hooks: HooksConfigSchema.optional(),
     quality: QualityConfigSchema.optional(),
-    lab: LabConfigSchema.optional()
+    lab: LabConfigSchema.optional(),
+    /** Ephemeral desktop authority. Never merged into or persisted with KunConfig. */
+    browserUseHostBinding: BrowserUseHostBinding.nullable().optional(),
+    /** Compare-and-revoke guard used when one desktop owner exits. */
+    browserUseHostBindingRevoke: BrowserUseHostBinding.optional()
   })
   .strict()
+  .superRefine((value, context) => {
+    if (value.browserUseHostBindingRevoke && value.browserUseHostBinding !== null) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['browserUseHostBindingRevoke'],
+        message: 'Browser Use binding revoke requires an explicit null replacement'
+      })
+    }
+  })
 
 export const RuntimeConfigApplyResponse = z.discriminatedUnion('ok', [
   z.object({ ok: z.literal(true) }).strict(),
@@ -59,3 +96,4 @@ export const RuntimeConfigApplyResponse = z.discriminatedUnion('ok', [
 
 export type RuntimeConfigApplyRequest = z.infer<typeof RuntimeConfigApplyRequest>
 export type RuntimeConfigApplyResponse = z.infer<typeof RuntimeConfigApplyResponse>
+export type BrowserUseHostBinding = z.infer<typeof BrowserUseHostBinding>

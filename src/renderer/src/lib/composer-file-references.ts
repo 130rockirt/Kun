@@ -154,6 +154,24 @@ export function formatComposerFileMentionToken(relativePath: string, isDirectory
   return `@"${path.replaceAll('"', '\\"')}"`
 }
 
+export function formatComposerKnowledgeBaseMentionToken(name: string): string {
+  const escaped = name.trim().replaceAll('\\', '\\\\').replaceAll('"', '\\"')
+  return `@kb:"${escaped}"`
+}
+
+export function replaceComposerMentionWithToken(
+  input: string,
+  mention: ComposerFileMention,
+  token: string
+): { input: string; cursor: number } {
+  const replacement = `${token}${input[mention.end] && /\s/u.test(input[mention.end] ?? '') ? '' : ' '}`
+  const nextInput = `${input.slice(0, mention.start)}${replacement}${input.slice(mention.end)}`
+  return {
+    input: nextInput,
+    cursor: mention.start + replacement.length
+  }
+}
+
 export function getFileMentionAtCursor(input: string, cursor: number): ComposerFileMention | null {
   const boundedCursor = Math.max(0, Math.min(cursor, input.length))
   const beforeCursor = input.slice(0, boundedCursor)
@@ -180,12 +198,7 @@ export function replaceFileMentionInInput(
     reference.relativePath,
     isComposerDirectoryReference(reference)
   )
-  const replacement = `${token}${input[mention.end] && /\s/u.test(input[mention.end] ?? '') ? '' : ' '}`
-  const nextInput = `${input.slice(0, mention.start)}${replacement}${input.slice(mention.end)}`
-  return {
-    input: nextInput,
-    cursor: mention.start + replacement.length
-  }
+  return replaceComposerMentionWithToken(input, mention, token)
 }
 
 // A character that can continue an unquoted mention token (path segment,

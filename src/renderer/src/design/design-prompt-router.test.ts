@@ -96,6 +96,28 @@ describe('design prompt router', () => {
     })
   })
 
+  it('forces a single turn when the selected output lane disallows multi-page generation', () => {
+    expect(routeDesignPrompt({
+      value: 'Design an operations app',
+      attachments: [],
+      attachmentUploadEnabled: true,
+      designState: state({ multiPageMode: true }),
+      selectedCount: 0,
+      imageOnlyDisplay: 'image display',
+      imageOnlyPrompt: 'image prompt',
+      allowMultiPage: false
+    })).toEqual({
+      kind: 'single-turn',
+      text: 'Design an operations app',
+      promptText: 'Design an operations app',
+      displayText: 'Design an operations app',
+      workspaceRoot: '/workspace',
+      attachments: [],
+      attachmentIds: [],
+      shouldClearInput: true
+    })
+  })
+
   it('routes active-page briefs to the multi-page lane when explicitly enabled', () => {
     expect(routeDesignPrompt({
       value: 'Design an operations app',

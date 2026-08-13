@@ -32,6 +32,7 @@ type WorkbenchAttachmentRuntimeOptions = {
   modelUnsupportedMessage: string
   rightPanelMode: RightPanelMode | null
   route: string
+  taskSurface?: 'code' | 'design'
   runtimeConnection: RuntimeConnectionStatus
   runtimeInfo: CoreRuntimeInfoJson | null
   selectedModelSupportsImageInput: boolean
@@ -48,6 +49,7 @@ export function useWorkbenchAttachmentRuntime({
   modelUnsupportedMessage,
   rightPanelMode,
   route,
+  taskSurface = 'code',
   runtimeConnection,
   runtimeInfo,
   selectedModelSupportsImageInput,
@@ -104,14 +106,17 @@ export function useWorkbenchAttachmentRuntime({
     const sddDraft = useSddDraftStore.getState().activeDraft
     if (rightPanelMode === BUILTIN_RIGHT_PANEL_IDS.sddAi && sddDraft?.workspaceRoot) return sddDraft.workspaceRoot
     const designWorkspace = useDesignWorkspaceStore.getState().workspaceRoot
-    if (route === 'design' && designWorkspace.trim()) return designWorkspace
+    if ((route === 'design' || taskSurface === 'design') && designWorkspace.trim()) {
+      return designWorkspace
+    }
     const writeWorkspace = useWriteWorkspaceStore.getState().workspaceRoot
     if (route === 'write' && writeWorkspace.trim()) return writeWorkspace
     return threads.find((thread) => thread.id === activeThreadId)?.workspace || workspaceRoot || undefined
-  }, [activeThreadId, rightPanelMode, route, threads, workspaceRoot])
+  }, [activeThreadId, rightPanelMode, route, taskSurface, threads, workspaceRoot])
 
   const { clearAutoAttachment: clearCanvasImageAutoAttachment } = useCanvasImageAutoAttachment({
-    route,
+    route: taskSurface === 'design' && route === 'chat' ? 'design' : route,
+    attachmentScope: composerAttachmentScope === 'chat' ? 'chat' : 'design',
     selectedIds: canvasSelectedIds,
     document: canvasDocument,
     workspaceRoot,
@@ -123,7 +128,9 @@ export function useWorkbenchAttachmentRuntime({
 
   const clearComposerAttachments = (scope = composerAttachmentScopeRef.current): void => {
     setComposerAttachmentsForScope(scope, [])
-    if (scope === 'design') clearCanvasImageAutoAttachment()
+    if (scope === 'design' || (scope === 'chat' && taskSurface === 'design')) {
+      clearCanvasImageAutoAttachment()
+    }
   }
 
   const removeComposerAttachments = (

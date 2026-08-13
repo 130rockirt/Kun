@@ -9,14 +9,18 @@ import {
 import {
   composerFileReferenceKey,
   filterWorkspaceFileMentionSuggestions,
+  formatComposerKnowledgeBaseMentionToken,
   getFileMentionAtCursor,
   hasComposerFileMentionToken,
   isComposerDirectoryReference,
   removeComposerFileMentionToken,
+  replaceComposerMentionWithToken,
   replaceFileMentionInInput,
   type ComposerFileMention,
   type ComposerFileReference
 } from '../../lib/composer-file-references'
+import type { KnowledgeBaseIndexStatus, KnowledgeBaseMount } from '../../agent/types'
+import { useChatStore } from '../../store/chat-store'
 import {
   loadWorkspaceFileIndex,
   loadWorkspaceMentionPathSuggestions,
@@ -36,6 +40,7 @@ type Options = {
   input: string
   setInput: (value: string) => void
   workspaceRoot: string
+  activeThreadId: string | null
   slashQuery: string | null
   menuBlocked: boolean
   references: ComposerFileReference[]
@@ -46,6 +51,49 @@ type Options = {
   onRemove?: (relativePath: string) => void
 }
 
+const EMPTY_KNOWLEDGE_BASE_MOUNTS: KnowledgeBaseMount[] = []
+const EMPTY_KNOWLEDGE_BASE_STATUSES: KnowledgeBaseIndexStatus[] = []
+
+export type ComposerKnowledgeBaseMentionSuggestion = {
+  kind: 'knowledge-base'
+  id: string
+  name: string
+  status?: KnowledgeBaseIndexStatus['state']
+}
+
+export type ComposerFileMentionSuggestion = {
+  kind: 'file-reference'
+  reference: ComposerFileReference
+}
+
+export type ComposerMentionSuggestion =
+  | ComposerKnowledgeBaseMentionSuggestion
+  | ComposerFileMentionSuggestion
+
+export function filterKnowledgeBaseMentionSuggestions(
+  mounts: readonly KnowledgeBaseMount[],
+  statuses: readonly KnowledgeBaseIndexStatus[],
+  query: string
+): ComposerKnowledgeBaseMentionSuggestion[] {
+  const normalizedQuery = query.trim().toLocaleLowerCase()
+  const statusById = new Map(statuses.map((status) => [status.id, status.state]))
+  return mounts
+    .filter((mount) => !normalizedQuery || mount.name.toLocaleLowerCase().includes(normalizedQuery))
+    .map((mount) => ({
+      kind: 'knowledge-base' as const,
+      id: mount.id,
+      name: mount.name,
+      status: statusById.get(mount.id)
+    }))
+    .sort((left, right) => left.name.localeCompare(right.name))
+}
+
+export function composerMentionSuggestionKey(suggestion: ComposerMentionSuggestion): string {
+  return suggestion.kind === 'knowledge-base'
+    ? `knowledge-base:${suggestion.id}`
+    : `file-reference:${composerFileReferenceKey(suggestion.reference)}`
+}
+
 /** Owns file-mention discovery, selection, token/reference synchronization, and keyboard capture. */
 export function useComposerFileMentions({
   enabled,
@@ -53,6 +101,7 @@ export function useComposerFileMentions({
   input,
   setInput,
   workspaceRoot,
+  activeThreadId,
   slashQuery,
   menuBlocked,
   references,
@@ -62,8 +111,16 @@ export function useComposerFileMentions({
   onAdd,
   onRemove
 }: Options) {
+  const activeThread = useChatStore((state) => activeThreadId
+    ? state.threads.find((thread) => thread.id === activeThreadId)
+    : undefined)
+  const knowledgeBaseStatusMap = useChatStore((state) => state.knowledgeBaseStatuses)
+  const knowledgeBases = activeThread?.knowledgeBases ?? EMPTY_KNOWLEDGE_BASE_MOUNTS
+  const knowledgeBaseStatuses = activeThreadId
+    ? knowledgeBaseStatusMap[activeThreadId] ?? EMPTY_KNOWLEDGE_BASE_STATUSES
+    : EMPTY_KNOWLEDGE_BASE_STATUSES
   const [cursor, setCursor] = useState(() => input.length)
-  const [suggestions, setSuggestions] = useState<ComposerFileReference[]>([])
+  const [suggestions, setSuggestions] = useState<ComposerMentionSuggestion[]>([])
   const [loading, setLoading] = useState(false)
   const [selectedIndex, setSelectedIndex] = useState(0)
   const [dismissedKey, setDismissedKey] = useState<string | null>(null)
@@ -90,6 +147,11 @@ export function useComposerFileMentions({
     }
     let cancelled = false
     const query = activeMention.query
+    const knowledgeSuggestions = filterKnowledgeBaseMentionSuggestions(
+      knowledgeBases,
+      knowledgeBaseStatuses,
+      query
+    )
     const timer = window.setTimeout(() => {
       setLoading(true)
       void Promise.all([
@@ -102,14 +164,13 @@ export function useComposerFileMentions({
             extraCandidates,
             [...index.directories, ...index.files]
           )
-          setSuggestions(filterWorkspaceFileMentionSuggestions(
-            mergeMentionCandidates(indexedCandidates, pathSuggestions),
-            query,
-            references
-          ))
+          const fileSuggestions = filterWorkspaceFileMentionSuggestions(
+            mergeMentionCandidates(indexedCandidates, pathSuggestions), query, references
+          ).map((reference) => ({ kind: 'file-reference' as const, reference }))
+          setSuggestions([...knowledgeSuggestions, ...fileSuggestions])
         })
         .catch(() => {
-          if (!cancelled) setSuggestions([])
+          if (!cancelled) setSuggestions(knowledgeSuggestions)
         })
         .finally(() => {
           if (!cancelled) setLoading(false)
@@ -119,7 +180,7 @@ export function useComposerFileMentions({
       cancelled = true
       window.clearTimeout(timer)
     }
-  }, [activeMention, extraCandidates, references, showMenu, workspaceRoot])
+  }, [activeMention, extraCandidates, knowledgeBaseStatuses, knowledgeBases, references, showMenu, workspaceRoot])
 
   useEffect(() => {
     const previous = presenceRef.current
@@ -150,11 +211,17 @@ export function useComposerFileMentions({
     setDismissedKey(null)
   }
 
-  const applyReference = (reference: ComposerFileReference | null): void => {
-    if (!reference || !activeMention) return
-    const next = replaceFileMentionInInput(input, activeMention, reference)
+  const applySuggestion = (suggestion: ComposerMentionSuggestion | null): void => {
+    if (!suggestion || !activeMention) return
+    const next = suggestion.kind === 'knowledge-base'
+      ? replaceComposerMentionWithToken(
+          input,
+          activeMention,
+          formatComposerKnowledgeBaseMentionToken(suggestion.name)
+        )
+      : replaceFileMentionInInput(input, activeMention, suggestion.reference)
     setInput(next.input)
-    onAdd?.(reference)
+    if (suggestion.kind === 'file-reference') onAdd?.(suggestion.reference)
     setDismissedKey(null)
     window.requestAnimationFrame(() => {
       const textarea = textareaRef.current
@@ -197,7 +264,7 @@ export function useComposerFileMentions({
     }
     if (shouldCaptureFileMentionCommitKey(event)) {
       event.preventDefault()
-      if (highlighted) applyReference(highlighted)
+      if (highlighted) applySuggestion(highlighted)
       return true
     }
     if (event.key === 'Escape') {
@@ -218,7 +285,8 @@ export function useComposerFileMentions({
     setCursor,
     syncCursor,
     updateInput,
-    applyReference,
+    applySuggestion,
+    hasMountedKnowledgeBases: knowledgeBases.length > 0,
     removeReference,
     handleKeyDown
   }

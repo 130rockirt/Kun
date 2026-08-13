@@ -367,10 +367,11 @@ export function UserMessageBubble({
   return (
     <div className="ds-user-message group relative">
       <UserAttachmentPreviews meta={block.meta} />
-      {showClawInboundCard && parsedClawPrompt ? (
-        <ClawInboundMessageCard display={parsedClawPrompt} text={displayText} />
-      ) : (
-        <div className="ds-user-message-bubble min-w-0">
+      <div className={showClawInboundCard ? 'contents' : 'ds-user-message-bubble min-w-0'}>
+        {showClawInboundCard && parsedClawPrompt ? (
+          <ClawInboundMessageCard display={parsedClawPrompt} text={displayText} />
+        ) : (
+          <>
           <div className="whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-left">
             {displayText}
           </div>
@@ -383,11 +384,16 @@ export function UserMessageBubble({
           ) : null}
           <UserFileReferenceChips meta={block.meta} />
           <RuntimeMetaChips meta={block.meta} align="right" hideAttachments />
-        </div>
-      )}
-      <div className="mt-2 flex min-w-0 items-center justify-between gap-3 text-ds-faint opacity-90 transition group-hover:opacity-100">
-        <ModelMetaTag label={block.modelLabel} className="flex-1 justify-start text-left" />
-        <div className="flex items-center justify-end gap-3">
+          </>
+        )}
+        <div
+          data-user-message-actions="inline"
+          className={`${showClawInboundCard ? 'mt-2' : 'ds-user-message-footer mt-2 border-t border-black/5 pt-1.5 dark:border-white/10'} flex min-w-0 items-center justify-between gap-3 text-ds-faint opacity-70 transition group-hover:opacity-100 group-focus-within:opacity-100`}
+        >
+          <div className="min-w-0 flex-1">
+            <ModelMetaTag label={block.modelLabel} className="justify-start text-left" />
+          </div>
+          <div className="flex items-center justify-end gap-1">
           <CopyFeedbackButton text={displayText} iconOnly />
           {canEdit ? (
             <button
@@ -401,6 +407,7 @@ export function UserMessageBubble({
               <PencilLine className="h-4 w-4" strokeWidth={1.8} />
             </button>
           ) : null}
+          </div>
         </div>
       </div>
     </div>

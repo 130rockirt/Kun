@@ -202,7 +202,7 @@ describe('chat-store-thread-actions queued messages', () => {
     expect(state.currentTurnUserId).toBe('user-original')
   })
 
-  it('keeps structured queued input when text-only guidance is ineligible', async () => {
+  it('guides queued image attachments through native steering without dropping metadata', async () => {
     const steerUserMessage = vi.fn(async () => undefined)
     registryMock.getProvider.mockReturnValue({ steerUserMessage })
     const { actions, state } = buildHarness()
@@ -215,11 +215,16 @@ describe('chat-store-thread-actions queued messages', () => {
       attachmentIds: ['attachment-1']
     }]
 
-    await expect(actions.guideQueuedMessage('q-attachment')).resolves.toBe(false)
+    await expect(actions.guideQueuedMessage('q-attachment')).resolves.toBe(true)
 
-    expect(steerUserMessage).not.toHaveBeenCalled()
-    expect(state.queuedMessages).toHaveLength(1)
-    expect(state.error).toBeTruthy()
+    expect(steerUserMessage).toHaveBeenCalledWith(
+      'thr_existing',
+      'turn_active',
+      'inspect this image',
+      { attachmentIds: ['attachment-1'] }
+    )
+    expect(state.queuedMessages).toHaveLength(0)
+    expect(state.error).toBeNull()
   })
 
   it('keeps queued input when the active turn rejects guidance', async () => {
@@ -306,6 +311,57 @@ describe('chat-store-thread-actions queued messages', () => {
         serviceTier: 'priority'
       })
     )
+  })
+
+  it('forwards and projects Design continuation turns as hidden user progress', async () => {
+    const provider = {
+      sendUserMessage: vi.fn(async () => ({
+        threadId: 'thr_existing',
+        turnId: 'turn_logo',
+        userMessageItemId: 'user_logo'
+      })),
+      subscribeThreadEvents: vi.fn(async () => undefined)
+    }
+    registryMock.getProvider.mockReturnValue(provider)
+    vi.stubGlobal('window', {
+      kunGui: {
+        getSettings: vi.fn(async () => ({
+          agents: { kun: { providerId: 'deepseek', model: 'deepseek-v4-pro' } },
+          codePromptPrefix: '',
+          chatWelcomeMessage: ''
+        })),
+        logError: vi.fn(async () => undefined)
+      }
+    })
+    const { actions, state } = buildHarness()
+    state.busy = false
+    const designProfile = {
+      version: 1 as const,
+      documentTarget: { documentId: 'doc_logo', boardArtifactId: 'board_logo' },
+      outputMedium: 'image' as const,
+      target: 'web' as const,
+      preset: 'none' as const,
+      context: { tone: [] }
+    }
+    state.threads = [{ ...thread('thr_existing'), agentSurface: 'code', status: 'idle' }]
+
+    await expect(actions.sendMessage('internal logo prompt', 'agent', {
+      expectedThreadId: 'thr_existing',
+      agentSurface: 'design',
+      designProfile,
+      designDocumentTarget: designProfile.documentTarget,
+      messageSource: 'design_continuation'
+    })).resolves.toBe(true)
+
+    expect(provider.sendUserMessage).toHaveBeenCalledWith(
+      'thr_existing',
+      'internal logo prompt',
+      expect.objectContaining({ messageSource: 'design_continuation' })
+    )
+    expect(state.blocks).toContainEqual(expect.objectContaining({
+      kind: 'user',
+      meta: expect.objectContaining({ messageSource: 'design_continuation' })
+    }))
   })
 
   it('starts a Git checkpoint without blocking turn admission', async () => {

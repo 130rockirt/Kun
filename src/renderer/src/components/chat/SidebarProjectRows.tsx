@@ -11,11 +11,13 @@ import {
   ChevronDown,
   ChevronRight,
   ClipboardList,
+  Code2,
   FolderPlus,
   GitBranch,
   Loader2,
   Pin,
   PinOff,
+  Palette,
   RotateCcw,
   Trash2
 } from 'lucide-react'
@@ -207,12 +209,15 @@ export function ThreadRow({
     ? t('sidebarThreadWorktree', { branch: worktreeRecord.branch || 'worktree' })
     : ''
   const updatedLabel = formatRelativeTime(thread.updatedAt, locale)
+  const isDesignTask = thread.agentSurface === 'design'
+  const taskTypeLabel = isDesignTask ? t('taskTypeDesign') : t('taskTypeCode')
   const ariaLabel = [
     thread.title,
     updatedLabel,
     pinned ? t('sidebarThreadPinned') : '',
     showRunning ? t('sidebarThreadRunning') : '',
     showUnreadDot ? t('sidebarThreadUnread') : '',
+    taskTypeLabel,
     worktreeLabel
   ].filter(Boolean).join(' - ')
 
@@ -289,6 +294,18 @@ export function ThreadRow({
       onMouseLeave={onPreviewClose}
     >
       <span className="flex min-w-0 flex-1 items-center gap-1.5">
+        <span
+          className={`inline-grid h-5 w-5 shrink-0 place-items-center rounded-md ${
+            isDesignTask ? 'bg-fuchsia-500/10 text-fuchsia-600 dark:text-fuchsia-300' : 'bg-accent/8 text-accent'
+          }`}
+          title={taskTypeLabel}
+          aria-label={taskTypeLabel}
+          data-thread-task-surface={isDesignTask ? 'design' : 'code'}
+        >
+          {isDesignTask
+            ? <Palette className="h-3 w-3" strokeWidth={1.9} />
+            : <Code2 className="h-3 w-3" strokeWidth={1.9} />}
+        </span>
         {pinned ? <Pin className="h-3.5 w-3.5 shrink-0 text-accent" strokeWidth={1.9} /> : null}
         {worktreeRecord ? (
           <span

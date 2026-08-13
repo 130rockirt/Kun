@@ -1,6 +1,6 @@
-import { lazy, Suspense, type ComponentProps, type ReactElement, type ReactNode } from 'react'
-import { WorkbenchDesignStage } from './WorkbenchDesignStage'
+import { lazy, Suspense, type ReactElement, type ReactNode } from 'react'
 import { WorkbenchConversationStage, type WorkbenchConversationStageProps } from './WorkbenchConversationStage'
+import { normalizeWorkbenchRoute } from './workbench-route'
 
 const PluginMarketplaceView = lazy(() =>
   import('../PluginMarketplaceView').then((module) => ({ default: module.PluginMarketplaceView }))
@@ -23,8 +23,6 @@ const ExtensionManagementCenter = lazy(() =>
   }))
 )
 
-type DesignStageProps = ComponentProps<typeof WorkbenchDesignStage>
-
 type WriteStageProps = {
   runtimeBanner: ReactNode
   leftSidebarCollapsed: boolean
@@ -41,7 +39,6 @@ export type WorkbenchStageRouterProps = {
   leftSidebarCollapsed: boolean
   onToggleLeftSidebar: () => void
   onOpenThread: (threadId: string) => void
-  design: DesignStageProps
   write: WriteStageProps
   conversation: WorkbenchConversationStageProps
   imageAnnotationHost: ReactNode
@@ -62,21 +59,21 @@ export function WorkbenchStageRouter({
   leftSidebarCollapsed,
   onToggleLeftSidebar,
   onOpenThread,
-  design,
   write,
   conversation,
   imageAnnotationHost,
   planOverlay,
   extensions
 }: WorkbenchStageRouterProps): ReactElement {
+  const normalizedRoute = normalizeWorkbenchRoute(route)
   return (
     <main
       className={`ds-drag ds-stage-surface relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden ${
-        route === 'plugins' ? 'px-0' : ''
+        normalizedRoute === 'plugins' ? 'px-0' : ''
       }`}
     >
       <div className="ds-stage-route-host relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-        {route === 'extensions' ? (
+        {normalizedRoute === 'extensions' ? (
           <Suspense fallback={<div className="h-full bg-ds-main" />}>
             <ExtensionManagementCenter
               key={extensions.workspaceRoot || '__global__'}
@@ -87,14 +84,14 @@ export function WorkbenchStageRouter({
               onOpenView={extensions.onOpenView}
             />
           </Suspense>
-        ) : route === 'plugins' ? (
+        ) : normalizedRoute === 'plugins' ? (
           <Suspense fallback={<div className="h-full bg-ds-main" />}>
             <PluginMarketplaceView
               leftSidebarCollapsed={leftSidebarCollapsed}
               onToggleLeftSidebar={onToggleLeftSidebar}
             />
           </Suspense>
-        ) : route === 'schedule' ? (
+        ) : normalizedRoute === 'schedule' ? (
           <Suspense fallback={<div className="h-full bg-ds-main" />}>
             <ScheduleTasksView
               leftSidebarCollapsed={leftSidebarCollapsed}
@@ -102,7 +99,7 @@ export function WorkbenchStageRouter({
               onOpenThread={onOpenThread}
             />
           </Suspense>
-        ) : route === 'workflow' ? (
+        ) : normalizedRoute === 'workflow' ? (
           <Suspense fallback={<div className="h-full bg-ds-main" />}>
             <WorkflowView
               leftSidebarCollapsed={leftSidebarCollapsed}
@@ -110,9 +107,7 @@ export function WorkbenchStageRouter({
               onOpenThread={onOpenThread}
             />
           </Suspense>
-        ) : route === 'design' ? (
-          <WorkbenchDesignStage {...design} />
-        ) : route === 'write' ? (
+        ) : normalizedRoute === 'write' ? (
           <Suspense fallback={<WorkbenchPaneFallback />}>
             {write.runtimeBanner}
             <div className="flex min-h-0 flex-1">
@@ -128,12 +123,12 @@ export function WorkbenchStageRouter({
             </div>
           </Suspense>
         ) : (
-          <WorkbenchConversationStage {...conversation} />
+          <WorkbenchConversationStage {...conversation} route={normalizedRoute} />
         )}
       </div>
       {imageAnnotationHost}
       {planOverlay}
-      {route === 'chat' ? (
+      {normalizedRoute === 'chat' ? (
         <Suspense fallback={null}>
           <WorkflowRunPanel enabled />
         </Suspense>

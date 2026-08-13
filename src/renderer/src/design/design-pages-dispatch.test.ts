@@ -49,7 +49,8 @@ describe('design pages dispatch', () => {
       resolveProviderId,
       reasoningEffort: 'medium',
       serviceTier: 'priority',
-      expectedThreadId: 'thr_design'
+      expectedThreadId: 'thr_design',
+      waitForRuntimeAdmission: true
     })
 
     expect(options).toMatchObject({
@@ -60,6 +61,7 @@ describe('design pages dispatch', () => {
       reasoningEffort: 'medium',
       serviceTier: 'priority',
       expectedThreadId: 'thr_design',
+      waitForRuntimeAdmission: true,
       generationPrompt: 'Use a product-grade design system.',
       designContext: { designTarget: 'web' }
     })
@@ -89,6 +91,38 @@ describe('design pages dispatch', () => {
     expect('generationPrompt' in options).toBe(false)
     expect('reasoningEffort' in options).toBe(false)
     expect(resolveProviderId).not.toHaveBeenCalled()
+  })
+
+  it('uses the shared composer selection for a Design task', () => {
+    const options = buildDesignPagesRunOptions({
+      brief: 'Design an ops app',
+      workspaceRoot: '/workspace',
+      sendMessage,
+      promptState,
+      model: 'shared-composer-model',
+      providerId: 'shared-provider',
+      resolveProviderId: () => 'fallback'
+    })
+
+    expect(options.model).toBe('shared-composer-model')
+    expect(options.providerId).toBe('shared-provider')
+  })
+
+  it('uses the immutable task profile instead of mutable Design settings', () => {
+    const options = buildDesignPagesRunOptions({
+      brief: 'Design an ops app', workspaceRoot: '/workspace', sendMessage, promptState,
+      resolveProviderId: () => 'deepseek',
+      designProfile: {
+        version: 1, documentTarget: { documentId: 'doc', boardArtifactId: 'board' },
+        outputMedium: 'html', target: 'app', preset: 'ios', presetSource: 'explicit',
+        context: { tone: ['calm'], density: 'compact' }
+      }
+    })
+
+    expect(options.designContext).toEqual({
+      designTarget: 'app', designSystemPreset: 'ios', tone: ['calm'], density: 'compact'
+    })
+    expect('generationPrompt' in options).toBe(false)
   })
 
   it('runs the injected multi-page runner with the built options', async () => {

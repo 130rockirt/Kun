@@ -3,7 +3,6 @@ import { useTranslation } from 'react-i18next'
 import type { NormalizedThread, RuntimeConnectionStatus } from '../../agent/types'
 import { getProvider } from '../../agent/registry'
 import { useChatStore, type AppRoute } from '../../store/chat-store'
-import { formatWorkspacePickerError } from '../../lib/format-workspace-picker-error'
 import { isConversationWorkspacePath, normalizeWorkspaceRoot } from '../../lib/workspace-path'
 import {
   buildSddDraftId,
@@ -374,16 +373,7 @@ export function useWorkbenchSddThreadController({
   }, [input, openSddAssistantPanel, setInput])
 
   const startNewSddRequirement = useCallback(async (): Promise<void> => {
-    const suggestedWorkspace = resolveSddRequirementWorkspace(codeThreads, activeThreadId, workspaceRoot)
-    let targetWorkspace = ''
-    try {
-      const picked = await window.kunGui.pickWorkspaceDirectory(suggestedWorkspace || undefined)
-      if (picked.canceled || !picked.path) return
-      targetWorkspace = normalizeWorkspaceRoot(picked.path)
-    } catch (error) {
-      setError(formatWorkspacePickerError(error))
-      return
-    }
+    const targetWorkspace = resolveSddRequirementWorkspace(codeThreads, activeThreadId, workspaceRoot)
     if (!targetWorkspace) {
       setError(t('workspaceRequiredToCreateThread'))
       return

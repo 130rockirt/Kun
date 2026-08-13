@@ -16,7 +16,13 @@ import { ThreadBusyDetailsSchema } from '../../contracts/errors.js'
 import { jsonResponse, type JsonResponse } from '../response.js'
 import { readJsonBody } from '../read-json-body.js'
 import { ERRORS } from './runtime-error.js'
-import { TurnCapacityError, TurnConflictError, type TurnService } from '../../services/turn-service.js'
+import {
+  DesignProfileLockedError,
+  TaskSurfaceLockedError,
+  TurnCapacityError,
+  TurnConflictError,
+  type TurnService
+} from '../../services/turn-service.js'
 import { ThreadExecutionBusyError } from '../../ports/thread-execution-lease.js'
 import { isPublicTurnItem } from '../../contracts/items.js'
 import type { ToolCancellationService } from '../../services/tool-cancellation-service.js'
@@ -59,6 +65,17 @@ export async function startTurn(
     }
     if (error instanceof TurnCapacityError) {
       return ERRORS.rateLimited(error.message, { maxConcurrentTurns: error.maxConcurrentTurns })
+    }
+    if (error instanceof TaskSurfaceLockedError) {
+      return ERRORS.taskSurfaceLocked(error.message, {
+        lockedSurface: error.lockedSurface,
+        requestedSurface: error.requestedSurface
+      })
+    }
+    if (error instanceof DesignProfileLockedError) {
+      return ERRORS.designProfileLocked(error.message, {
+        lockedAtTurnId: error.lockedAtTurnId
+      })
     }
     if (error instanceof TurnConflictError) return ERRORS.conflict(error.message)
     if (error instanceof Error && /not found/i.test(error.message)) {

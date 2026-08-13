@@ -360,6 +360,7 @@ export const mainState = {
   protectedCredentialSurface: null as ProtectedCredentialSurfaceController | null,
   bindExtensionMainWindow: undefined as ((window: BrowserWindow) => void) | undefined,
   shutdownDesktopResourceLeases: null as (() => Promise<void>) | null,
+  waitForRuntimeOperationsIdle: null as (() => Promise<void>) | null,
   terminalPtyController: null as TerminalPtyController | null,
   activeServiceManager: null as ServiceManagerConnection | null,
   runtimeDataRecoveryMigrationLock: null as CanonicalRuntimeMigrationLock | null,

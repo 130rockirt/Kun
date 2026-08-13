@@ -30,7 +30,7 @@ vi.mock('xlsx', () => ({
 }))
 
 import { fittedDocxPreviewZoom, WorkspaceDocxPreview } from './WorkspaceDocxPreview'
-import { WorkspacePptxPreview } from './WorkspacePptxPreview'
+import { fittedPptxPreviewZoom, WorkspacePptxPreview } from './WorkspacePptxPreview'
 import { MAX_MOUNTED_PPTX_THUMBNAILS } from './WorkspacePptxThumbnailRail'
 import {
   WorkspaceSpreadsheetPreview,
@@ -43,14 +43,10 @@ import {
 } from './workspace-office-external-link'
 import { selectionFromOfficeDom } from './workspace-office-selection'
 import { requestKnowledgeSourceNavigation } from '../lib/knowledge-source-navigation'
-
-type MockPptxPreviewer = {
-  host: HTMLElement
-  slideCount: number
-  preview: ReturnType<typeof vi.fn>
-  renderSingleSlide: ReturnType<typeof vi.fn>
-  destroy: ReturnType<typeof vi.fn>
-}
+import {
+  createMockPptxPreviewer,
+  type MockPptxPreviewer
+} from './workspace-office-renderers-test-support'
 
 let docxViewportWidth = 360
 
@@ -159,6 +155,21 @@ describe('browser Office renderers', () => {
     expect(fittedDocxPreviewZoom(608, 876)).toBe(0.69)
     expect(fittedDocxPreviewZoom(1_000, 876)).toBe(1)
     expect(fittedDocxPreviewZoom(0, 876)).toBe(1)
+    expect(fittedPptxPreviewZoom(700, 500)).toBe(0.67)
+    expect(fittedPptxPreviewZoom(1_200, 800)).toBe(1)
+  })
+
+  it('uses a distraction-free canvas for a single-slide PPTX', async () => {
+    pptxSlideCount = 1
+    await act(async () => {
+      renderer = create(createElement(WorkspacePptxPreview, {
+        result: preview('presentation'),
+        loading: false
+      }), { createNodeMock })
+      await flushPromises()
+    })
+    expect(renderer!.root.findAllByProps({ 'aria-label': 'Slide thumbnails' })).toHaveLength(0)
+    expect(renderer!.root.findAllByProps({ 'aria-label': 'Previous slide' })).toHaveLength(0)
   })
 
   it('renders DOCX safely, navigates pages, zooms, and retains old DOM after refresh failure', async () => {
@@ -646,39 +657,6 @@ function intersectionEntry(index: number, isIntersecting: boolean): Intersection
   const target = document.createElement('div')
   target.setAttribute('data-pptx-thumbnail-index', String(index))
   return { target, isIntersecting } as unknown as IntersectionObserverEntry
-}
-
-function createMockPptxPreviewer(
-  host: HTMLElement,
-  slideCount: number,
-  previewError?: Error
-): MockPptxPreviewer {
-  const wrapper = document.createElement('div')
-  wrapper.className = 'pptx-preview-wrapper'
-  host.append(wrapper)
-  const renderSlide = (slideIndex: number): void => {
-    wrapper.querySelector('.pptx-preview-slide-wrapper')?.remove()
-    const slide = document.createElement('div')
-    slide.className = `pptx-preview-slide-wrapper pptx-preview-slide-wrapper-${slideIndex}`
-    const anchor = document.createElement('a')
-    anchor.href = `https://example.test/slide-${slideIndex + 1}`
-    anchor.target = '_blank'
-    anchor.setAttribute('ping', 'https://example.test/ping')
-    anchor.textContent = `Slide ${slideIndex + 1}`
-    slide.append(anchor)
-    wrapper.append(slide)
-  }
-  const instance: MockPptxPreviewer = {
-    host,
-    slideCount,
-    preview: vi.fn(async () => {
-      if (previewError) throw previewError
-      renderSlide(0)
-    }),
-    renderSingleSlide: vi.fn(renderSlide),
-    destroy: vi.fn()
-  }
-  return instance
 }
 
 function encodeColumn(column: number): string {

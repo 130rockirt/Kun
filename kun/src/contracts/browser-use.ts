@@ -78,7 +78,7 @@ const BROWSER_USE_ACTION_FIELDS: Readonly<Record<BrowserUseActionName, {
   required: readonly string[]
   allowed: readonly string[]
 }>> = {
-  open: { required: ['action', 'url'], allowed: ['action', 'url'] },
+  open: { required: ['action', 'url'], allowed: ['action', 'url', 'newTab'] },
   snapshot: { required: ['action'], allowed: ['action'] },
   screenshot: { required: ['action'], allowed: ['action'] },
   click: { required: ['action', 'ref', 'expectedTarget'], allowed: ['action', 'ref', 'expectedTarget'] },
@@ -183,7 +183,8 @@ export function summarizeBrowserUseActionValidation(input: unknown): BrowserUseV
 export const BrowserUseActionInput = z.discriminatedUnion('action', [
   z.object({
     action: z.literal('open'),
-    url: BrowserUseTopLevelUrl
+    url: BrowserUseTopLevelUrl,
+    newTab: z.boolean().optional()
   }).strict(),
   z.object({
     action: z.literal('snapshot')
@@ -348,7 +349,7 @@ export function signBrowserUseKunApprovalGrant(
   signingKey: string
 ): BrowserUseKunApprovalGrant {
   const claims = BrowserUseKunApprovalGrantClaims.parse(input)
-  const key = normalizeBrowserUseApprovalSigningKey(signingKey)
+  const key = normalizeBrowserUseSigningKey(signingKey)
   if (!key) throw new Error('Browser Use approval signing key is unavailable')
   return BrowserUseKunApprovalGrant.parse({
     ...claims,
@@ -363,7 +364,7 @@ export function verifyBrowserUseKunApprovalGrant(
   signingKey: string
 ): boolean {
   const parsed = BrowserUseKunApprovalGrant.safeParse(input)
-  const key = normalizeBrowserUseApprovalSigningKey(signingKey)
+  const key = normalizeBrowserUseSigningKey(signingKey)
   if (!parsed.success || !key) return false
   const expected = createHmac('sha256', key)
     .update(browserUseApprovalGrantPayload(parsed.data))
@@ -389,7 +390,7 @@ function browserUseApprovalGrantPayload(
   ])
 }
 
-function normalizeBrowserUseApprovalSigningKey(value: string): string | undefined {
+function normalizeBrowserUseSigningKey(value: string): string | undefined {
   const normalized = value.trim()
   return /^[A-Za-z0-9_-]{32,512}$/.test(normalized)
     ? normalized
@@ -446,12 +447,152 @@ export const BrowserUseBridgeRequest = BrowserUseBridgeRequestBase.superRefine((
 })
 export type BrowserUseBridgeRequest = z.infer<typeof BrowserUseBridgeRequest>
 
-export const BrowserUseBridgeResponse = z.object({
+const BrowserUseBridgeProof = z.string().regex(/^[a-f0-9]{64}$/)
+
+export const BrowserUseEncryptedActionEnvelope = z.object({
+  contractVersion: z.literal(BROWSER_USE_BRIDGE_CONTRACT_VERSION),
+  iv: z.string().regex(/^[A-Za-z0-9_-]{16}$/),
+  ciphertext: z.string().regex(/^[A-Za-z0-9_-]+$/).min(1).max(60_000),
+  authTag: z.string().regex(/^[A-Za-z0-9_-]{22}$/)
+}).strict()
+export type BrowserUseEncryptedActionEnvelope = z.infer<
+  typeof BrowserUseEncryptedActionEnvelope
+>
+
+export const BrowserUseHostChallengeRequest = z.object({
+  contractVersion: z.literal(BROWSER_USE_BRIDGE_CONTRACT_VERSION),
+  nonce: z.string().uuid()
+}).strict()
+export type BrowserUseHostChallengeRequest = z.infer<
+  typeof BrowserUseHostChallengeRequest
+>
+
+export const BrowserUseHostChallengeResponse = z.object({
+  contractVersion: z.literal(BROWSER_USE_BRIDGE_CONTRACT_VERSION),
+  nonce: z.string().uuid(),
+  proof: BrowserUseBridgeProof
+}).strict()
+export type BrowserUseHostChallengeResponse = z.infer<
+  typeof BrowserUseHostChallengeResponse
+>
+
+const BrowserUseBridgeResponseClaims = z.object({
   contractVersion: z.literal(BROWSER_USE_BRIDGE_CONTRACT_VERSION),
   requestId: z.string().uuid(),
   result: BrowserUseToolResult
 }).strict()
+
+export const BrowserUseBridgeResponse = BrowserUseBridgeResponseClaims.extend({
+  responseMac: BrowserUseBridgeProof
+}).strict()
 export type BrowserUseBridgeResponse = z.infer<typeof BrowserUseBridgeResponse>
+
+const BROWSER_USE_HOST_CHALLENGE_DOMAIN = 'kun-browser-use-host-challenge-v1'
+const BROWSER_USE_BRIDGE_RESPONSE_DOMAIN = 'kun-browser-use-bridge-response-v1'
+
+/** Prove host possession before Kun discloses the bearer token or action body. */
+export function signBrowserUseHostChallenge(
+  input: BrowserUseHostChallengeRequest,
+  signingKey: string
+): BrowserUseHostChallengeResponse {
+  const challenge = BrowserUseHostChallengeRequest.parse(input)
+  return BrowserUseHostChallengeResponse.parse({
+    ...challenge,
+    proof: browserUseHmac(
+      signingKey,
+      JSON.stringify([
+        BROWSER_USE_HOST_CHALLENGE_DOMAIN,
+        challenge.contractVersion,
+        challenge.nonce
+      ])
+    )
+  })
+}
+
+export function verifyBrowserUseHostChallenge(
+  input: BrowserUseHostChallengeResponse,
+  signingKey: string
+): boolean {
+  const parsed = BrowserUseHostChallengeResponse.safeParse(input)
+  if (!parsed.success) return false
+  return verifyBrowserUseHmac(
+    parsed.data.proof,
+    signingKey,
+    JSON.stringify([
+      BROWSER_USE_HOST_CHALLENGE_DOMAIN,
+      parsed.data.contractVersion,
+      parsed.data.nonce
+    ])
+  )
+}
+
+/** Authenticate the complete action result so a reclaimed loopback port cannot forge success. */
+export function signBrowserUseBridgeResponse(
+  input: z.input<typeof BrowserUseBridgeResponseClaims>,
+  signingKey: string
+): BrowserUseBridgeResponse {
+  const response = BrowserUseBridgeResponseClaims.parse(input)
+  return BrowserUseBridgeResponse.parse({
+    ...response,
+    responseMac: browserUseHmac(
+      signingKey,
+      browserUseBridgeResponsePayload(response)
+    )
+  })
+}
+
+export function verifyBrowserUseBridgeResponse(
+  input: BrowserUseBridgeResponse,
+  signingKey: string
+): boolean {
+  const parsed = BrowserUseBridgeResponse.safeParse(input)
+  if (!parsed.success) return false
+  return verifyBrowserUseHmac(
+    parsed.data.responseMac,
+    signingKey,
+    browserUseBridgeResponsePayload(parsed.data)
+  )
+}
+
+function browserUseBridgeResponsePayload(
+  response: z.infer<typeof BrowserUseBridgeResponseClaims>
+): string {
+  return JSON.stringify([
+    BROWSER_USE_BRIDGE_RESPONSE_DOMAIN,
+    response.contractVersion,
+    response.requestId,
+    canonicalBrowserUseValue(response.result)
+  ])
+}
+
+function browserUseHmac(signingKey: string, payload: string): string {
+  const key = normalizeBrowserUseSigningKey(signingKey)
+  if (!key) throw new Error('Browser Use host signing key is unavailable')
+  return createHmac('sha256', key).update(payload).digest('hex')
+}
+
+function verifyBrowserUseHmac(
+  suppliedHex: string,
+  signingKey: string,
+  payload: string
+): boolean {
+  const key = normalizeBrowserUseSigningKey(signingKey)
+  if (!key || !/^[a-f0-9]{64}$/.test(suppliedHex)) return false
+  const expected = createHmac('sha256', key).update(payload).digest()
+  const supplied = Buffer.from(suppliedHex, 'hex')
+  return supplied.length === expected.length && timingSafeEqual(supplied, expected)
+}
+
+function canonicalBrowserUseValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalBrowserUseValue)
+  if (!value || typeof value !== 'object') return value
+  const source = value as Record<string, unknown>
+  const canonical: Record<string, unknown> = {}
+  for (const key of Object.keys(source).sort()) {
+    canonical[key] = canonicalBrowserUseValue(source[key])
+  }
+  return canonical
+}
 
 export function isBrowserUseApprovalBoundaryAction(action: BrowserUseActionInput): boolean {
   return action.action === 'open' ||

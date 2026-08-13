@@ -246,7 +246,7 @@ describe('AnimatedWorkLogo', () => {
       })
     )
 
-    expect(html).toMatch(/Processed|已处理|processed/)
+    expect(html).toMatch(/Processing|处理中|processing/)
     expect(html).toContain('1m 14s')
     expect(html).toContain('border-b')
     expect(html).not.toContain('ds-shiny-text')

@@ -190,24 +190,105 @@ async withThreadMutation<T>(this: TurnService, threadId: string, operation: () =
     return withThreadStoreMutation(this['deps'].threadStore, threadId, operation)
   },
 
-async markTurnAdmissionCompleted(this: TurnService, threadId: string, turnId: string): Promise<void> {
-    await this['withThreadMutation'](threadId, async () => {
+async markTurnAdmissionCompleted(this: TurnService,
+    threadId: string,
+    turnId: string,
+    locks: Partial<Pick<
+      ThreadRecord,
+      'agentSurface' | 'designProfile' | 'approvalPolicy' | 'sandboxMode' | 'approvalReviewer'
+    >>
+  ): Promise<ThreadRecord> {
+    return this['withThreadMutation'](threadId, async () => {
       const current = await this['deps'].threadStore.get(threadId)
       if (!current) throw new Error(`thread not found: ${threadId}`)
-      const completedAt = this['deps'].nowIso()
-      const turns = current.turns.map((turn) =>
-        turn.id === turnId && !turn.admissionCompletedAt
-          ? { ...turn, admissionCompletedAt: completedAt }
-          : turn
-      )
-      if (!turns.some((turn) => turn.id === turnId)) {
-        throw new Error(`turn not found: ${turnId}`)
+      const existing = current.turns.find((turn) => turn.id === turnId)
+      if (!existing) throw new Error(`turn not found: ${turnId}`)
+      if (existing.admissionCompletedAt && !existing.admissionPending) return current
+      if (!existing.admissionPending) {
+        throw new Error(`turn is not a pending admission: ${turnId}`)
       }
-      await this['deps'].threadStore.upsert({
+      if (existing.status !== 'queued' && existing.status !== 'running') {
+        throw new Error(`pending admission is already terminal: ${turnId}`)
+      }
+      const completedAt = this['deps'].nowIso()
+      const turns = current.turns.map((turn) => {
+        if (turn.id !== turnId) return turn
+        const { admissionPending: _pending, ...committed } = turn
+        return { ...committed, admissionCompletedAt: completedAt }
+      })
+      const next: ThreadRecord = {
         ...current,
+        ...(locks.agentSurface ? { agentSurface: locks.agentSurface } : {}),
+        ...(locks.designProfile ? { designProfile: locks.designProfile } : {}),
+        ...(locks.approvalPolicy ? { approvalPolicy: locks.approvalPolicy } : {}),
+        ...(locks.sandboxMode ? { sandboxMode: locks.sandboxMode } : {}),
+        ...(locks.approvalReviewer ? { approvalReviewer: locks.approvalReviewer } : {}),
         turns,
         updatedAt: completedAt
+      }
+      try {
+        return await this['deps'].threadStore.upsert(next)
+      } catch (error) {
+        // Some durable stores can report a transport/fsync error after their
+        // atomic rename already committed. Observe the boundary before
+        // declaring failure so the caller never rolls back an accepted turn.
+        const observed = await this['deps'].threadStore.get(threadId).catch(() => null)
+        const observedTurn = observed?.turns.find((turn) => turn.id === turnId)
+        if (observed && observedTurn?.admissionCompletedAt && !observedTurn.admissionPending) {
+          return observed
+        }
+        throw error
+      }
+    })
+  },
+
+async rollbackPendingAdmission(this: TurnService,
+    threadId: string,
+    turnId: string
+  ): Promise<boolean> {
+    return this['withThreadMutation'](threadId, async () => {
+      const current = await this['deps'].threadStore.get(threadId)
+      if (!current) return false
+      const pending = current.turns.find((turn) => turn.id === turnId)
+      const legacyProvisional = Boolean(
+        pending &&
+        !pending.admissionCompletedAt &&
+        current.designProfile?.lockedAtTurnId === turnId
+      )
+      if (!pending || (!pending.admissionPending && !legacyProvisional)) return false
+      const history = await rewriteItemHistoryWithRetry({
+        sessionStore: this['deps'].sessionStore,
+        threadId,
+        maxAttempts: 3,
+        build: (snapshot) => {
+          const items = snapshot.items.filter((item) => item.turnId !== turnId)
+          return {
+            changed: items.length !== snapshot.items.length,
+            items,
+            value: undefined
+          }
+        }
       })
+      if (history.status === 'closed' || history.status === 'conflict') return false
+      const turns = current.turns.filter((turn) => turn.id !== turnId)
+      const next: ThreadRecord = {
+        ...current,
+        status: threadStatusAfterTurnTransition(current.status, turns),
+        turns,
+        updatedAt: this['deps'].nowIso()
+      }
+      // Heal records written by the earlier provisional-lock implementation.
+      if (next.designProfile?.lockedAtTurnId === turnId) delete next.designProfile
+      if (
+        current.turns.length === 1 &&
+        !current.designProfile &&
+        pending.agentSurface &&
+        current.agentSurface === pending.agentSurface
+      ) {
+        delete next.agentSurface
+      }
+      await this['deps'].threadStore.upsert(next)
+      return true
     })
   },
 

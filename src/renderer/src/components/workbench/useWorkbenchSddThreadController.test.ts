@@ -1,10 +1,18 @@
-import { describe, expect, it } from 'vitest'
+import { createElement } from 'react'
+import { act, create, type ReactTestRenderer } from 'react-test-renderer'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { NormalizedThread } from '../../agent/types'
+import { useChatStore } from '../../store/chat-store'
 import {
   markSddAssistantThread,
   normalizeSddThreadRegistry
 } from '../../sdd/sdd-thread-registry'
-import { isRequirementSessionThread } from './useWorkbenchSddThreadController'
+import { useSddDraftStore } from '../../sdd/sdd-draft-store'
+import {
+  isRequirementSessionThread,
+  useWorkbenchSddThreadController,
+  type WorkbenchSddThreadController
+} from './useWorkbenchSddThreadController'
 
 const requirementThread: NormalizedThread = {
   id: 'thread-sdd-1',
@@ -51,5 +59,72 @@ describe('requirement sidebar thread classification', () => {
       requirementThread,
       releasedRegistry
     )).toBe(false)
+  })
+})
+
+let latestController: WorkbenchSddThreadController
+
+function ControllerHarness(): null {
+  latestController = useWorkbenchSddThreadController({
+    activeThreadId: 'thread-current',
+    codeThreads: [{ ...requirementThread, id: 'thread-current', workspace: '/workspace/current' }],
+    conversationWorkspaceRoot: '/workspace/conversations',
+    input: '',
+    rightPanelMode: null,
+    runtimeConnection: 'offline',
+    workspaceRoot: '/workspace/fallback',
+    selectThread: vi.fn(async () => undefined),
+    setComposerMode: vi.fn(),
+    setError: vi.fn(),
+    setInput: vi.fn(),
+    setRightPanelMode: vi.fn(),
+    setRightSidebarWidth: vi.fn(),
+    setRoute: vi.fn()
+  })
+  return null
+}
+
+describe('new requirement workspace', () => {
+  let renderer: ReactTestRenderer
+  const createWorkspaceFile = vi.fn(async (payload: { workspaceRoot: string; path: string }) => ({
+    ok: true as const,
+    path: `${payload.workspaceRoot}/${payload.path}`
+  }))
+  const pickWorkspaceDirectory = vi.fn()
+
+  beforeEach(async () => {
+    ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+    const storage = {
+      getItem: vi.fn(() => null),
+      setItem: vi.fn(),
+      removeItem: vi.fn()
+    }
+    vi.stubGlobal('window', {
+      kunGui: { createWorkspaceFile, pickWorkspaceDirectory },
+      localStorage: storage
+    })
+    useChatStore.setState({ activeThreadId: null, threads: [] })
+    useSddDraftStore.getState().clearActiveDraft()
+    await act(async () => {
+      renderer = create(createElement(ControllerHarness))
+    })
+  })
+
+  afterEach(() => {
+    renderer.unmount()
+    vi.restoreAllMocks()
+    vi.unstubAllGlobals()
+    useSddDraftStore.getState().clearActiveDraft()
+  })
+
+  it('creates in the current thread workspace without opening a directory picker', async () => {
+    await act(async () => {
+      await latestController.startNewSddRequirement()
+    })
+
+    expect(pickWorkspaceDirectory).not.toHaveBeenCalled()
+    expect(createWorkspaceFile).toHaveBeenCalledWith(expect.objectContaining({
+      workspaceRoot: '/workspace/current'
+    }))
   })
 })

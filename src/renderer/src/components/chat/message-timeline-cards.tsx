@@ -23,6 +23,7 @@ import { WritePromptOfficeDocumentCard } from './WritePromptOfficeDocumentCard'
  */
 export function ReviewPlanCard({
   title,
+  planId,
   relativePath,
   busy,
   graphEnabled,
@@ -30,6 +31,7 @@ export function ReviewPlanCard({
   onBuild
 }: {
   title: string
+  planId?: string
   relativePath: string
   busy: boolean
   graphEnabled: boolean
@@ -65,6 +67,7 @@ export function ReviewPlanCard({
           disabled={busy}
           graphEnabled={graphEnabled}
           variant="card"
+          planId={planId}
           onBuild={onBuild}
         />
       ) : null}
@@ -396,10 +399,10 @@ export function WorkMetaRow({
 }): ReactElement {
   const { t } = useTranslation('common')
 
-  const mainLabel = typeof durationMs === 'number'
-    ? `${t('processed')} ${formatDuration(durationMs)}`
-    : processing
-      ? t('processing')
+  const mainLabel = processing
+    ? `${t('processing')}${typeof durationMs === 'number' ? ` · ${formatDuration(durationMs)}` : ''}`
+    : typeof durationMs === 'number'
+      ? `${t('processed')} ${formatDuration(durationMs)}`
       : t('processSteps', { count: stepCount })
 
   const showThoughtSuffix =
@@ -437,7 +440,7 @@ export function WorkMetaRow({
 
   if (!collapsible) {
     return (
-      <div className="flex w-full max-w-full items-center gap-1.5 border-b border-ds-border-muted/70 py-2 text-left text-[15px] font-medium text-ds-muted">
+      <div data-work-meta-row="true" className="flex w-full max-w-full items-center gap-1.5 border-b border-ds-border-muted/70 py-2 text-left text-[15px] font-medium text-ds-muted">
         {content}
       </div>
     )
@@ -446,6 +449,7 @@ export function WorkMetaRow({
   return (
     <button
       type="button"
+      data-work-meta-row="true"
       onClick={onToggle}
       aria-expanded={expanded}
       className="group flex w-full max-w-full items-center gap-1.5 border-b border-ds-border-muted/70 py-2 text-left text-[15px] font-medium text-ds-muted transition hover:opacity-85"

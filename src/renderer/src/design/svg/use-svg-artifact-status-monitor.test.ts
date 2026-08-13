@@ -1,10 +1,13 @@
+import { createElement } from 'react'
+import { act, create, type ReactTestRenderer } from 'react-test-renderer'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { DesignArtifact, DesignDocument } from '../design-types'
 import { useDesignWorkspaceStore } from '../design-workspace-store'
 import { buildSvgArtifactSkeleton } from './svg-skeleton'
 import {
   startSvgArtifactStatusMonitor,
-  svgArtifactStatusForSource
+  svgArtifactStatusForSource,
+  useSvgArtifactStatusMonitor
 } from './use-svg-artifact-status-monitor'
 
 const now = '2026-07-10T00:00:00.000Z'
@@ -89,5 +92,27 @@ describe('SVG artifact background status', () => {
     stop()
     expect(offChanged).toHaveBeenCalledOnce()
     expect(unwatchWorkspaceFile).toHaveBeenCalledOnce()
+  })
+
+  it('does not read or persist SVG status for a read-only historical document', async () => {
+    ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+    const relativePath = '.kun-design/doc/motion/v1.svg'
+    const artifact: DesignArtifact = {
+      id: 'motion', kind: 'svg', title: 'Motion', relativePath,
+      createdAt: now, updatedAt: now, previewStatus: 'pending',
+      versions: [{ id: 'motion-v1', relativePath, createdAt: now, summary: '' }]
+    }
+    const readWorkspaceFile = vi.fn()
+    vi.stubGlobal('window', { kunGui: { readWorkspaceFile } })
+    const Harness = () => {
+      useSvgArtifactStatusMonitor('/workspace', [artifact], false)
+      return null
+    }
+    let renderer!: ReactTestRenderer
+    await act(async () => { renderer = create(createElement(Harness)) })
+
+    expect(readWorkspaceFile).not.toHaveBeenCalled()
+    await act(async () => renderer.unmount())
+    vi.unstubAllGlobals()
   })
 })

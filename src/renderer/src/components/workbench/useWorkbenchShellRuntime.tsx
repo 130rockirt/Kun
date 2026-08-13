@@ -23,6 +23,8 @@ export function useWorkbenchShellRuntime(context: Context): {
 } {
   const {
     input, setInput, composerMode, setComposerMode, composerOrchestration, graphEnabled,
+    taskSurface, taskSurfaceLocked, taskSurfaceTransitioning, designTaskProfile, designProfileLocked, onTaskSurfaceChange,
+    onDesignTaskProfileChange,
     setComposerOrchestration, openComposerGraph, openComposerGraphChild, busy,
     currentTurnOrchestration, route, runtimeConnection, activeThreadId, activeClawChannelId,
     activeClawChannel, composerModel, composerProviderId, composerPickList, composerModelGroups,
@@ -39,6 +41,7 @@ export function useWorkbenchShellRuntime(context: Context): {
     interrupt, handleGuiPlanCommand, useWorktreePool, worktreeBranch, setWorktreeBranch,
     setUseWorktreePool, createThread, activeSkillWorkspace, reviewActiveThread,
     updateComposerExecutionSettings, spawnSideConversation, openSideConversationDraft,
+    startNewSddRequirement,
     blocks, liveReasoning, liveAssistant, probeRuntime, runtimeStatus, runtimeLogPath,
     error, runtimeErrorDetail, stageInsetClass, t, rightPanelMode, closeRightPanelTab,
     closeRightPanel, buildGuiPlan, verifyGuiPlan, replanChangedRequirements, setRightPanelMode,
@@ -63,10 +66,29 @@ export function useWorkbenchShellRuntime(context: Context): {
     previewWorkspaceFileFromSidebar, addWorkspaceReferenceFromSidebar,
     openDesignDocumentInWhiteboard, extensionRightRailItems, extensionRightPanelItems,
     openRightPanelTab, activateRightPanelTab, closeCodeRightTool, toggleFileTreeSidePanel,
-    setError, canvasDocumentKey, canvasDocument, sendCodeCanvasPrompt
+    setError, canvasDocumentKey, canvasDocument, sendCodeCanvasPrompt,
+    implementDesignInCode, selectCanvasShape,
+    handleDesignHtmlElementAsContext, handleDesignRuntimeQualityFindings,
+    handleDesignQualityRepairRequest
   } = context
+  const mainComposerContextChips = taskSurface === 'design'
+    ? [...designContextChips, ...extensionComposerContextChips]
+    : extensionComposerContextChips
+  const removeMainComposerContext = (id: string): void => {
+    if (taskSurface === 'design' && designContextChips.some((chip: { id: string }) => chip.id === id)) {
+      removeDesignContextChip(id)
+    } else removeComposerContextWithLinkedImage(id)
+  }
   const chatComposerProps = useWorkbenchChatComposerProps({
     input, setInput, composerMode, setComposerMode, composerOrchestration, graphEnabled,
+    taskSurface, taskSurfaceLocked, taskSurfaceTransitioning, designTaskProfile, designProfileLocked, onTaskSurfaceChange,
+    onDesignTaskProfileChange,
+    imageGenerationEnabled: runtimeInfo
+      ? runtimeInfo.capabilities.imageGen?.enabled === true
+      : undefined,
+    imageGenerationAvailable: runtimeInfo?.capabilities.imageGen?.available === true,
+    imageGenerationReason: runtimeInfo?.capabilities.imageGen?.reason,
+    onConfigureImageGeneration: () => openSettings('imageGeneration'),
     setComposerOrchestration,
     openGraph: openComposerGraph,
     openGraphChild: openComposerGraphChild,
@@ -78,8 +100,8 @@ export function useWorkbenchShellRuntime(context: Context): {
     setComposerReasoningEffort, setComposerFastMode,
     setClawChannelModel, setComposerModel, openProvidersSettings: () => openSettings('providers'), handleSend,
     composerAttachments,
-    contextChips: extensionComposerContextChips,
-    removeContextChip: removeComposerContextWithLinkedImage,
+    contextChips: mainComposerContextChips,
+    removeContextChip: removeMainComposerContext,
     attachmentUploadEnabled, attachmentUploadBusy, attachmentUploadError,
     activeSddDraft: Boolean(activeSddDraft), composerFileReferences,
     extraFileMentionCandidates: designDocumentFileMentionCandidates, webAccessAvailable,
@@ -90,7 +112,7 @@ export function useWorkbenchShellRuntime(context: Context): {
     removeComposerFileReference, queuedMessages,
     removeQueuedMessage, guideQueuedMessage, interrupt, handleGuiPlanCommand, useWorktreePool, worktreeBranch, setWorktreeBranch,
     setUseWorktreePool, createThread, activeSkillWorkspace, reviewActiveThread, updateComposerExecutionSettings,
-    spawnSideConversation, openSideConversationDraft
+    spawnSideConversation, openSideConversationDraft, startNewSddRequirement
   })
   const rightPanelSharedProps = buildWorkbenchRightPanelSharedProps({
     input, setInput, mode: composerMode, setMode: setComposerMode, busy, runtimeConnection,
@@ -238,7 +260,28 @@ export function useWorkbenchShellRuntime(context: Context): {
       onAttachContext: attachDevPreviewContext,
       onDocumentChange: clearDevPreviewContexts
     },
-    canvas: { workspaceRoot: activeCodeCanvasWorkspace, activeThreadId },
+    canvas: {
+      workspaceRoot: activeCodeCanvasWorkspace,
+      activeThreadId,
+      busy,
+      onOpenAgentSettings: () => openSettings('design'),
+      onImplementDesign: implementDesignInCode,
+      onUseElementAsContext: handleDesignHtmlElementAsContext,
+      onScreenCreated: (shapeId, userPrompt, brief) => {
+        selectCanvasShape(shapeId)
+        void sendDesignPrompt(brief?.trim() || userPrompt || 'Design this screen', {
+          screenShapeId: shapeId
+        })
+      },
+      onSvgCreated: async (artifactId, shapeId, userPrompt, brief) => {
+        selectCanvasShape(shapeId)
+        return sendDesignPrompt(brief || userPrompt || 'Create this SVG motion design', {
+          svgArtifactId: artifactId
+        })
+      },
+      onRuntimeQualityFindings: handleDesignRuntimeQualityFindings,
+      onRequestQualityRepair: handleDesignQualityRepairRequest
+    },
     file: {
       target: filePreviewTarget,
       openTargets: openFilePreviewTargets,

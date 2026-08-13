@@ -2,7 +2,7 @@
 
 This article records the cache optimization design, implementation location, and implementation of the current Kun runtime.
 Statistical caliber and subsequent evolution direction. The goal is not to simply "get the cache numbers high" but to keep the GUI and
-the local agent's request prefix long-term stable, verifiable, and observable across Code, Design, Write, and Connect phone.
+the local agent's request prefix long-term stable, verifiable, and observable across Code (including Design tasks), Work, and Connect phone.
 
 ## Target
 
@@ -320,7 +320,7 @@ The GUI should not do:
 - Guess the cache hit rate formula
 - Temporarily correct usage statistics for display effect
 
-In this way, the Code / Design / Write / Connect phone entry points can share the same set of caching disciplines.
+In this way, Code (including Design tasks), Work, and Connect phone can share the same caching disciplines.
 
 ## Current referenced and unfinished items
 

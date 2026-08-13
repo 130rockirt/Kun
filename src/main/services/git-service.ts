@@ -38,12 +38,13 @@ export async function resolveGitCwd(workspaceRoot: string): Promise<string> {
 export async function runGit(
   cwd: string,
   args: string[],
-  timeout = 10_000
+  timeout = 10_000,
+  maxBuffer = 1024 * 1024
 ): Promise<{ stdout: string; stderr: string }> {
   const { stdout, stderr } = await execFileAsync('git', args, {
     cwd,
     timeout,
-    maxBuffer: 1024 * 1024,
+    maxBuffer,
     // Force a C locale so git emits English diagnostics. gitFailure() matches
     // messages like "not a git repository"; without this, a localized git
     // (e.g. zh_CN: "不是 Git 仓库") falls through to a generic `error` reason
@@ -332,8 +333,12 @@ export async function listGitBranchWorktrees(
 export async function removeGitBranchWorktree(params: {
   workspaceRoot: string
   worktreePath: string
+  protectedPlanWorktree?: boolean
 }): Promise<void> {
   const cwd = await resolveGitCwd(params.workspaceRoot)
   if (!cwd) throw new Error('No working directory selected.')
+  if (params.protectedPlanWorktree) {
+    throw new Error('Plan coordinator worktrees cannot be removed by the generic worktree action.')
+  }
   await runGit(cwd, ['worktree', 'remove', '--force', params.worktreePath], 30_000)
 }

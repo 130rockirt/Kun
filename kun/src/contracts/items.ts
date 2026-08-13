@@ -5,6 +5,11 @@ import {
   ComposerContextAttachmentSchema,
   MAX_COMPOSER_CONTEXT_ATTACHMENTS
 } from './composer-context.js'
+import {
+  DesignDocumentTargetSchema,
+  DesignImagePlacementTargetSchema,
+  DesignTaskProfileSchema
+} from './design-task-profile.js'
 
 /**
  * Conversation items returned as part of a thread or turn.
@@ -70,7 +75,8 @@ export const UserMessageSource = z.enum([
   'background_shell',
   'background_subagent',
   'graph_runtime',
-  'subagent_resume'
+  'subagent_resume',
+  'design_continuation'
 ])
 export type UserMessageSource = z.infer<typeof UserMessageSource>
 
@@ -82,7 +88,19 @@ export const UserTurnItem = TurnItemBase.extend({
   attachmentIds: z.array(z.string().min(1)).optional(),
   composerContexts: z.array(ComposerContextAttachmentSchema).max(MAX_COMPOSER_CONTEXT_ATTACHMENTS).optional(),
   fileReferences: z.array(UserFileReferenceSchema).optional(),
-  workspaceCheckpointId: z.string().min(1).optional()
+  workspaceCheckpointId: z.string().min(1).optional(),
+  /** Durable source workspace used to keep session-only Design resumes scoped. */
+  workspace: z.string().min(1).max(4096).optional(),
+  /** Durable thread ownership snapshot for session-only resume recovery. */
+  threadAgentSurface: z.enum(['code', 'write', 'design']).optional(),
+  /** Effective per-turn intent; distinct from durable thread ownership. */
+  agentSurface: z.enum(['code', 'write', 'design']).optional(),
+  /** Effective Design task contract retained with the queued user request. */
+  designProfile: DesignTaskProfileSchema.optional(),
+  /** Immutable canvas target used for live and replay routing. */
+  designDocumentTarget: DesignDocumentTargetSchema.optional(),
+  /** Frozen canvas placement intent for replaying an AI image after restart. */
+  designImagePlacementTarget: DesignImagePlacementTargetSchema.optional()
 })
 export type UserTurnItem = z.infer<typeof UserTurnItem>
 

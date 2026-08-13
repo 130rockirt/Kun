@@ -9,6 +9,7 @@ type Params = {
   inputRef: RefObject<string>
   prevThreadId: RefObject<string | null>
   activeThreadId: string | null
+  activeThreadDesignDocumentId?: string
   activeGuiPlan: unknown
   sidePanel: { open: boolean }
   currentSideConversations: Array<{ threadId: string }>
@@ -34,6 +35,7 @@ export function useWorkbenchRightTools({
   inputRef,
   prevThreadId,
   activeThreadId,
+  activeThreadDesignDocumentId,
   activeGuiPlan,
   sidePanel,
   currentSideConversations,
@@ -84,9 +86,13 @@ export function useWorkbenchRightTools({
   const openDesignDocumentInWhiteboard = useCallback((documentId: string): void => {
     const root = normalizeWorkspaceRoot(designWorkspaceRoot || workspaceRoot)
     if (!activeThreadId || !root) return
-    useCodeCanvasDesignSurface.getState().showDesignDocument(activeThreadId, root, documentId)
+    const canonicalDocumentId = activeThreadDesignDocumentId?.trim()
+    useCodeCanvasDesignSurface.getState().showDesignDocument(activeThreadId, root, documentId, {
+      readOnly: !canonicalDocumentId || canonicalDocumentId !== documentId,
+      ...(canonicalDocumentId ? { canonicalDocumentId } : {})
+    })
     requestCodeCanvasPanelOpen()
-  }, [activeThreadId, designWorkspaceRoot, workspaceRoot])
+  }, [activeThreadDesignDocumentId, activeThreadId, designWorkspaceRoot, workspaceRoot])
 
   const openCodeRightTool = useCallback((id: RightPanelContributionId): void => {
     if (id === BUILTIN_RIGHT_PANEL_IDS.terminal) {

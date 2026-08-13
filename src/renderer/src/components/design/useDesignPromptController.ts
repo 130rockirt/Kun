@@ -22,6 +22,17 @@ import {
 import { routeDesignPrompt } from '../../design/design-prompt-router'
 import type { DesignPromptSource } from '../../design/design-quality-repair-dispatch'
 import { useDesignWorkspaceStore } from '../../design/design-workspace-store'
+import { ensureDesignBoardArtifact } from '../../design/design-board'
+import {
+  buildDesignTaskProfileInput,
+  resolveDesignTaskProfileSelection,
+  type DesignTaskProfileSelection,
+  type ResolvedDesignTaskProfileSelection
+} from '../../design/design-task-profile-input'
+import type {
+  DesignDocumentTarget,
+  DesignTaskProfile
+} from '../../agent/design-task-profile'
 import { deriveDrawingTitleFromPrompt } from '../../design/design-drawing-title'
 import { removePersistedDesignDocument } from '../../design/design-document-persistence'
 import { designDocKey, readDesignThreadRegistry } from '../../design/design-thread-registry'
@@ -42,6 +53,8 @@ export type DesignPromptControllerOptions = {
   attachmentUploadEnabled: boolean
   composerReasoningEffort: ComposerReasoningEffort
   composerFastMode: boolean
+  composerModel?: string
+  composerProviderId?: string
   composerModelGroups: readonly ModelProviderModelGroup[]
   designContextSuppressedIds: ReadonlySet<string>
   designHtmlElementContext: DesignHtmlElementContext | null
@@ -55,6 +68,12 @@ export type DesignPromptControllerOptions = {
     docId: string,
     options?: ClearDesignHistoryOptions
   ) => Promise<ClearDesignHistoryResult>
+  /** Unified Code-workbench Design tasks are not written to the legacy registry. */
+  rollbackProvisionalThread?: (threadId: string) => Promise<boolean>
+  designTaskProfileSelection?: DesignTaskProfileSelection
+  lockedDesignProfile?: DesignTaskProfile | null
+  imageGenerationAvailable?: boolean
+  imageGenerationReason?: string
   sendMessage: DesignTurnSubmitSendMessage
   getAttachmentScope: () => ComposerAttachmentScope
   clearComposerAttachments: (scope?: ComposerAttachmentScope) => void
@@ -85,6 +104,8 @@ export function useDesignPromptController({
   attachmentUploadEnabled,
   composerReasoningEffort,
   composerFastMode,
+  composerModel,
+  composerProviderId,
   composerModelGroups,
   designContextSuppressedIds,
   designHtmlElementContext,
@@ -94,6 +115,11 @@ export function useDesignPromptController({
   setDesignAssistantOpen,
   ensureDesignThreadForWorkspace,
   clearDesignHistory,
+  rollbackProvisionalThread,
+  designTaskProfileSelection,
+  lockedDesignProfile,
+  imageGenerationAvailable,
+  imageGenerationReason,
   sendMessage,
   getAttachmentScope,
   clearComposerAttachments,
@@ -102,9 +128,8 @@ export function useDesignPromptController({
   const { t } = useTranslation()
 
   const currentDesignServiceTier = (): 'priority' | undefined => {
-    const state = useDesignWorkspaceStore.getState()
-    const model = state.assistantModel.trim()
-    const providerId = state.assistantProviderId.trim() ||
+    const model = composerModel?.trim() || ''
+    const providerId = composerProviderId?.trim() ||
       providerIdForComposerModel(composerModelGroups, model)
     return serviceTierForComposerSelection(
       composerFastMode,
@@ -114,9 +139,42 @@ export function useDesignPromptController({
     )
   }
 
+  const designProfileForTarget = (
+    target: DesignDocumentTarget,
+    selection: DesignTaskProfileSelection | undefined = designTaskProfileSelection
+  ) => {
+    if (!selection) return undefined
+    return buildDesignTaskProfileInput({
+      selection,
+      documentTarget: target,
+      designContext: useDesignWorkspaceStore.getState().designContext,
+      lockedProfile: lockedDesignProfile
+    })
+  }
+
+  const activateLockedDesignDocument = (): boolean => {
+    if (!lockedDesignProfile) return true
+    const documentId = lockedDesignProfile.documentTarget.documentId
+    const state = useDesignWorkspaceStore.getState()
+    const document = state.documents.find((candidate) => candidate.id === documentId)
+    const boardArtifactId = lockedDesignProfile.documentTarget.boardArtifactId
+    if (!document || !document.artifacts.some(
+      (artifact) => artifact.id === boardArtifactId && artifact.kind === 'canvas'
+    )) {
+      const message = 'The whiteboard bound to this Design task is unavailable.'
+      state.setFileError(message)
+      setError(message)
+      return false
+    }
+    if (state.activeDocumentId !== documentId) state.switchActiveDocument(documentId)
+    return useDesignWorkspaceStore.getState().activeDocumentId === documentId
+  }
+
   const prepareDrawingForFirstPrompt = (titleSource: string): PreparedDrawing | null => {
     const state = useDesignWorkspaceStore.getState()
+    const unlockedTaskNeedsOwnDrawing = Boolean(designTaskProfileSelection && !lockedDesignProfile)
     const shouldCreate =
+      unlockedTaskNeedsOwnDrawing ||
       state.drawingCreationOpen || state.documents.length === 0 || !state.activeDocumentId
     if (!shouldCreate) {
       return {
@@ -178,7 +236,14 @@ export function useDesignPromptController({
     const registeredThreadIds = readDesignThreadRegistry().workspaces[
       designDocKey(cleanupWorkspaceRoot, documentId)
     ]?.threadIds ?? []
-    if (threadId || registeredThreadIds.length > 0) {
+    if (threadId && rollbackProvisionalThread) {
+      try {
+        const removed = await rollbackProvisionalThread(threadId)
+        if (!removed) threadDeleteError = new Error('The provisional Design task could not be deleted.')
+      } catch (error) {
+        threadDeleteError = error
+      }
+    } else if (threadId || registeredThreadIds.length > 0) {
       try {
         const result = await clearDesignHistory(
           cleanupWorkspaceRoot,
@@ -239,7 +304,10 @@ export function useDesignPromptController({
     return true
   }
 
-  async function generateDesignPages(brief: string): Promise<boolean> {
+  async function generateDesignPages(
+    brief: string,
+    resolvedProfileSelection?: ResolvedDesignTaskProfileSelection
+  ): Promise<boolean> {
     const designState = useDesignWorkspaceStore.getState()
     const designWorkspaceRoot = designState.workspaceRoot || workspaceRoot
     if (!designWorkspaceRoot) {
@@ -271,6 +339,21 @@ export function useDesignPromptController({
         return false
       }
 
+      const boardArtifact = await ensureDesignBoardArtifact(designWorkspaceRoot, drawing.docId)
+      if (!boardArtifact) {
+        if (drawing.created) await rollbackFirstPromptDrawing(drawing, threadId)
+        setInput(brief)
+        return false
+      }
+      const designDocumentTarget = {
+        documentId: drawing.docId,
+        boardArtifactId: boardArtifact.id
+      }
+      const designProfile = designProfileForTarget(
+        designDocumentTarget,
+        resolvedProfileSelection
+      )
+
       let settleFirstSend: (sent: boolean) => void = () => undefined
       const firstSend = new Promise<boolean>((resolve) => {
         let settled = false
@@ -286,9 +369,14 @@ export function useDesignPromptController({
         sendMessage,
         promptState: useDesignWorkspaceStore.getState(),
         resolveProviderId: (model) => providerIdForComposerModel(composerModelGroups, model),
+        ...(composerModel ? { model: composerModel } : {}),
+        ...(composerProviderId ? { providerId: composerProviderId } : {}),
         reasoningEffort: composerReasoningEffortRequestValue(composerReasoningEffort),
         serviceTier: currentDesignServiceTier(),
         expectedThreadId: threadId,
+        ...(designProfile ? { designProfile } : {}),
+        designDocumentTarget,
+        ...(drawing.created ? { waitForRuntimeAdmission: true } : {}),
         labels: buildDesignPagesRunLabels(t),
         onFirstSendSettled: settleFirstSend
       }).catch((error) => {
@@ -322,7 +410,14 @@ export function useDesignPromptController({
 
   async function sendDesignPrompt(value: string, options: SendDesignPromptOptions = {}): Promise<boolean> {
     const source = options.source ?? 'user'
+    // A file-tree preview is never an implicit retarget. Existing Design tasks
+    // always return to their immutable whiteboard before routing or admission.
+    if (!activateLockedDesignDocument()) return false
     const initialDesignState = useDesignWorkspaceStore.getState()
+    if (designTaskProfileSelection?.outputMedium === 'image' && !imageGenerationAvailable) {
+      setError(imageGenerationReason || t('designImageGenerationUnavailable'))
+      return false
+    }
     if (initialDesignState.drawingHistoryMutation) return false
     const creatingDrawing =
       initialDesignState.drawingCreationOpen ||
@@ -343,7 +438,8 @@ export function useDesignPromptController({
       fallbackWorkspaceRoot: workspaceRoot,
       selectedCount: useCanvasSelectionStore.getState().selectedIds.size,
       imageOnlyDisplay: t('composerImageOnlyDisplay'),
-      imageOnlyPrompt: t('composerImageOnlyPrompt')
+      imageOnlyPrompt: t('composerImageOnlyPrompt'),
+      allowMultiPage: designTaskProfileSelection?.outputMedium !== 'image'
     })
     if (promptRoute.kind === 'ignore') return false
     if (promptRoute.kind === 'attachment-unsupported') {
@@ -354,9 +450,28 @@ export function useDesignPromptController({
       setError(t('workspaceRequiredToCreateThread'))
       return false
     }
+    let resolvedProfileSelection: ResolvedDesignTaskProfileSelection | undefined
+    if (designTaskProfileSelection) {
+      try {
+        resolvedProfileSelection = lockedDesignProfile
+          ? {
+              ...designTaskProfileSelection,
+              presetSource: lockedDesignProfile.presetSource ?? (
+                lockedDesignProfile.preset === 'none' ? 'none' : 'explicit'
+              )
+            }
+          : await resolveDesignTaskProfileSelection(
+              designTaskProfileSelection,
+              promptRoute.workspaceRoot
+            )
+      } catch (error) {
+        setError(error instanceof Error ? error.message : String(error))
+        return false
+      }
+    }
     setDesignAssistantOpen(true)
     if (promptRoute.kind === 'multi-page') {
-      const started = await generateDesignPages(promptRoute.brief)
+      const started = await generateDesignPages(promptRoute.brief, resolvedProfileSelection)
       if (started) setInput('')
       return started
     }
@@ -407,6 +522,8 @@ export function useDesignPromptController({
         source,
         sendMessage,
         resolveProviderId: (model) => providerIdForComposerModel(composerModelGroups, model),
+        ...(composerModel ? { model: composerModel } : {}),
+        ...(composerProviderId ? { providerId: composerProviderId } : {}),
         reasoningEffort: composerReasoningEffortRequestValue(composerReasoningEffort),
         serviceTier: currentDesignServiceTier(),
         expectedThreadId: threadId,
@@ -418,7 +535,14 @@ export function useDesignPromptController({
         htmlElementContext: drawing.created ? null : designHtmlElementContext,
         explicitScreenShapeId: options.screenShapeId,
         explicitSvgArtifactId: options.svgArtifactId,
-        clearAutoRepairScope: clearDesignAutoRepairScope
+        clearAutoRepairScope: clearDesignAutoRepairScope,
+        ...(drawing.created ? { waitForRuntimeAdmission: true } : {}),
+        ...(designTaskProfileSelection
+          ? {
+              designTaskProfileForTarget: (target: DesignDocumentTarget) =>
+                designProfileForTarget(target, resolvedProfileSelection)!
+            }
+          : {})
       })
       if (result.status === 'missing-board' || result.status === 'file-error') {
         if (drawing.created) await rollbackFirstPromptDrawing(drawing, threadId)

@@ -5,6 +5,7 @@ import type {
   CoreMemoryDiagnosticsJson,
   CoreMemoryRecordJson,
   CoreMcpOAuthDiagnosticJson,
+  CoreResumeSessionMetadataJson,
   CoreRuntimeInfoJson,
   CoreRuntimeSkillJson,
   CoreRuntimeToolDiagnosticsJson
@@ -16,6 +17,12 @@ import type {
   SandboxMode
 } from '@shared/app-settings'
 import type { ComposerContextAttachment } from '@kun/extension-api'
+import type {
+  DesignDocumentTarget,
+  DesignImagePlacementTarget,
+  DesignTaskProfile,
+  DesignTaskProfileInput
+} from './design-task-profile'
 
 import type {
   ApprovalRequestPayload,
@@ -70,7 +77,14 @@ export type ThreadEventSink = {
   onGoal(ev: { threadId: string; goal: ThreadGoal | null; cleared?: boolean; createdAt?: string }): void
   onTodos?(ev: { threadId: string; todos: ThreadTodoList | null; cleared?: boolean; createdAt?: string }): void
   /** Thread metadata changed out-of-band (e.g. the backend LLM titler upgraded the title). */
-  onThreadUpdated?(ev: { threadId: string; title?: string; titleAuto?: boolean; status?: string }): void
+  onThreadUpdated?(ev: {
+    threadId: string
+    title?: string
+    titleAuto?: boolean
+    status?: string
+    agentSurface?: 'code' | 'write' | 'design'
+    designProfile?: DesignTaskProfile
+  }): void
   onTurnComplete(status?: 'completed' | 'aborted'): void
   onError(err: Error, options?: ThreadErrorOptions): void
   /** Optional: cumulative usage update for the thread. */
@@ -118,6 +132,7 @@ export interface AgentProvider {
     payloadBytes?: number
     historyCursor?: string
     hasMoreHistory?: boolean
+    designProfile?: DesignTaskProfile
   }>
   getThreadState(threadId: string): Promise<{
     status: string
@@ -140,6 +155,7 @@ export interface AgentProvider {
       reasoningEffort?: string
       serviceTier?: 'priority'
       subagentResume?: { childId: string; expectedResumeCount: number }
+      messageSource?: 'design_continuation'
       displayText?: string
       guiPlan?: {
         operation: 'draft' | 'refine'
@@ -153,6 +169,9 @@ export interface AgentProvider {
       guiDesignMode?: boolean
       persona?: string
       agentSurface?: 'code' | 'write' | 'design'
+      designProfile?: DesignTaskProfileInput
+      designDocumentTarget?: DesignDocumentTarget
+      designImagePlacementTarget?: DesignImagePlacementTarget
       guiDesignArtifact?: {
         kind: 'svg'
         artifactId: string
@@ -164,7 +183,16 @@ export interface AgentProvider {
       fileReferences?: UserFileReference[]
       composerContexts?: ComposerContextAttachment[]
     }
-  ): Promise<{ turnId: string; threadId: string; userMessageItemId?: string }>
+  ): Promise<{
+    turnId: string
+    threadId: string
+    userMessageItemId?: string
+    agentSurface?: 'code' | 'write' | 'design'
+    /** Durable thread ownership; agentSurface above is only this turn's intent. */
+    threadAgentSurface?: 'code' | 'write' | 'design'
+    designProfile?: DesignTaskProfile
+    designDocumentTarget?: DesignDocumentTarget
+  }>
   rewindThread?(threadId: string, turnId: string): Promise<void>
   reviewThread?(
     threadId: string,
@@ -264,11 +292,27 @@ export interface AgentProvider {
   clearThreadTodos?(threadId: string): Promise<boolean>
   forkThread?(
     threadId: string,
-    options?: { relation?: 'primary' | 'fork' | 'side'; title?: string; turnId?: string }
+    options?: {
+      relation?: 'primary' | 'fork' | 'side'
+      title?: string
+      turnId?: string
+      workspace?: string
+      planBuildRunId?: string
+      planBuildAgentSurface?: 'code'
+      designDocumentTarget?: DesignDocumentTarget
+      designCloneOperationId?: string
+    }
   ): Promise<NormalizedThread>
+  getResumeSessionMetadata?(sessionId: string): Promise<CoreResumeSessionMetadataJson>
   resumeSession?(
     sessionId: string,
-    options?: { model?: string; mode?: string }
+    options?: {
+      model?: string
+      mode?: string
+      workspace?: string
+      designDocumentTarget?: DesignDocumentTarget
+      designCloneOperationId?: string
+    }
   ): Promise<{ threadId: string; sessionId: string }>
   subscribeThreadEvents(
     threadId: string,

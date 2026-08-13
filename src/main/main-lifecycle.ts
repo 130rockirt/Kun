@@ -47,13 +47,18 @@ import {
   ManagedRuntimeShutdownCoordinator
 } from './runtime/managed-runtime-shutdown-coordinator'
 import {
+  revokeManagedRuntimeBrowserUseBinding
+} from './runtime/browser-use-binding-revoke'
+import {
   ExtensionViewProtocolRegistry
 } from './extensions/extension-view-protocol-registry'
 import {
   installWebviewSecurityGuards
 } from './extensions/extension-webview-security'
 import {
-  stopBrowserUseHost
+  beginBrowserUseHostShutdown,
+  stopBrowserUseHost,
+  waitForBrowserUseHostLifecycle
 } from './browser-use/browser-use-host'
 import {
   stopComputerUseHost
@@ -146,6 +151,7 @@ export function syncCheckpointCleanupTimer(settings: AppSettingsV1): void {
 }
 
 export const runtimeShutdown = new ManagedRuntimeShutdownCoordinator(async () => {
+  const browserUseBinding = beginBrowserUseHostShutdown()
   mainState.terminalPtyController?.disposeAll()
   await mainState.shutdownDesktopResourceLeases?.()
   mainState.shutdownDesktopResourceLeases = null
@@ -157,6 +163,10 @@ export const runtimeShutdown = new ManagedRuntimeShutdownCoordinator(async () =>
   ])
   await stopWeixinBridgeRuntime()
   await shutdownLocalWhisperService()
+  await Promise.all([
+    waitForBrowserUseHostLifecycle(),
+    mainState.waitForRuntimeOperationsIdle?.() ?? Promise.resolve()
+  ])
   // The shared Kun service outlives ordinary GUI/TUI clients. Only an update
   // install must stop it so old application files can be replaced safely.
   if (runtimeShutdown.isUpdateInstallQuit || runtimeShutdown.isStorageRelocationQuit) {
@@ -171,6 +181,18 @@ export const runtimeShutdown = new ManagedRuntimeShutdownCoordinator(async () =>
         stopSharedRuntime(dataDir, fetch, { runtimeFlavor: 'production' }),
         stopSharedRuntime(dataDir, fetch, { runtimeFlavor: 'development' })
       ])
+    }
+  } else {
+    // The shared Kun daemon intentionally outlives an ordinary desktop client.
+    // Revoke its ephemeral Browser host authority before freeing the loopback
+    // port so a stale launch binding cannot survive a graceful GUI exit.
+    try {
+      const settings = await mainState.store.load()
+      await revokeManagedRuntimeBrowserUseBinding(settings, browserUseBinding)
+    } catch (error) {
+      logWarn('browser-use-shutdown', 'Kun Browser Use authority revoke failed closed', {
+        message: error instanceof Error ? error.message : String(error)
+      })
     }
   }
   await Promise.all([

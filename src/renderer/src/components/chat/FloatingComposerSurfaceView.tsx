@@ -13,53 +13,108 @@ export function FloatingComposerSurfaceView({
   const {
     FileText, FloatingComposerAgentPicker, FloatingComposerAttachments,
     FloatingComposerContextCapacity, FloatingComposerExecutionPicker, FloatingComposerModelPicker,
+    FloatingComposerTaskProfile,
     Folder, GitBranchPicker, ListTodo, Loader2, Mic, Plus, Send, Share2, Sparkles,
     Square, Target, VoiceRecordingStrip, WorkspaceProjectPicker, X, activeThreadGoal,
     activeThreadId, attachmentUploadEnabled, attachmentUploadError, attachments, busy,
     canChangeModel, canCompose, canEditComposer, canOpenComposerMenu, canOptimizePrompt,
     canToggleWorktreeMode, compact, composerFastMode, composerMenuButtonRef, composerMenuOpen,
     composerModel, composerModelGroups, composerPickList, composerProviderId,
-    composerReasoningEffort, contextChips, dictation, draft, effectiveWorkspaceRoot,
+    composerReasoningEffort, contextChips, designTaskProfile, designProfileLocked, dictation, draft, effectiveWorkspaceRoot,
     executionSettings, executionSettingsApplying, fileInputRef, fileMentions, fileReferences,
     goalInputMode, graphEnabled, graphPlanningNeedsCorrection, handleAttachmentInput,
     handleComposerDragOver, handleComposerDrop, handleComposerKeyDown, handleComposerMenuButtonClick,
     handleComposerPaste, handleComposerShellMouseDown, handlePlanToolbarClick, handlePrimaryAction,
     handlePromptOptimizationClick, hideModelPicker, input, isComposerDirectoryReference, mode,
-    modelControlVariant, modelPickerMode, onComposerFastModeChange, onComposerModelChange,
-    onComposerReasoningEffortChange, onConfigureProviders, onExecutionSettingsChange, onInterrupt,
+    imageGenerationEnabled, imageGenerationAvailable, imageGenerationReason, modelControlVariant, modelPickerMode, onComposerFastModeChange, onComposerModelChange,
+    onComposerReasoningEffortChange, onConfigureImageGeneration, onConfigureProviders, onDesignTaskProfileChange, onExecutionSettingsChange, onInterrupt,
     onComposerPersonaChange, codeAgentPresets, composerPersonaId, resolvedCodeAgentPresets, FloatingComposerPersonaPicker,
     onRemoveAttachment, onRemoveContextChip, onRemoveFileReference, onToggleWorktreeMode,
     onWorktreeBranchChange, openSettings, orchestration, placeholder, primaryActionDisabled,
     primaryActionLabel, primaryActionLoading, promptOptimizationBusy, promptOptimizationError,
-    promptOptimizationSettings, route, runningGraphTurn, setGoalInputMode, showComposerMenuButton,
-    showExecutionSettingsPicker, showProviderInModelLabel, showToolbarStartControls,
+    promptOptimizationSettings, route, runningGraphTurn, runtimeReady, setGoalInputMode, showComposerMenuButton,
+    showCodeExecutionControls, showExecutionSettingsPicker, showProviderInModelLabel, showToolbarStartControls,
     showVoiceDictation, showWorkspaceControls, side, stretchModelPicker, t, useWorktreePool,
+    taskSurface, taskSurfaceLocked, emptyTaskLayout, onTaskSurfaceChange, onNewRequirement,
     worktreeBranch
   } = context
   const documentQuoteAttached = contextChips.some((chip: { kind: string }) => chip.kind === 'document-quote')
   return (
     <>
+        {!compact && !emptyTaskLayout && taskSurface && designTaskProfile && (
+          !taskSurfaceLocked || taskSurface === 'design'
+        ) ? (
+          <div className="ds-composer-task-controls ds-no-drag flex min-h-9 min-w-0 flex-wrap items-center gap-2 px-3 pb-1">
+            <FloatingComposerTaskProfile
+              surface={taskSurface}
+              locked={taskSurfaceLocked === true}
+              profileLocked={designProfileLocked === true}
+              showSurfaceSelector={!taskSurfaceLocked}
+              disabled={!canCompose || busy}
+              profile={designTaskProfile}
+              imageGenerationEnabled={imageGenerationEnabled}
+              imageGenerationAvailable={imageGenerationAvailable === true}
+              imageGenerationReason={imageGenerationReason}
+              onSurfaceChange={onTaskSurfaceChange}
+              onProfileChange={onDesignTaskProfileChange}
+              onConfigureImageGeneration={onConfigureImageGeneration}
+            />
+          </div>
+        ) : null}
         {showWorkspaceControls ? (
           <div
-            className="ds-composer-workspace-controls ds-no-drag flex min-h-8 min-w-0 flex-wrap items-center gap-2 px-3 pb-1"
+            className="ds-composer-workspace-controls ds-no-drag flex min-h-9 min-w-0 flex-wrap items-center justify-between gap-2 px-3 pb-1"
             data-composer-workspace-controls
           >
-            <WorkspaceProjectPicker currentWorkspaceRoot={effectiveWorkspaceRoot} />
-            <KnowledgeBasePicker />
-            <GitBranchPicker
-              workspaceRoot={effectiveWorkspaceRoot}
-              useWorktreePool={useWorktreePool}
-              worktreeBranch={worktreeBranch}
-              onWorktreeBranchChange={onWorktreeBranchChange}
-              onToggleWorktreeMode={canToggleWorktreeMode ? onToggleWorktreeMode : undefined}
-            />
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
+              <WorkspaceProjectPicker currentWorkspaceRoot={effectiveWorkspaceRoot} />
+              <KnowledgeBasePicker />
+              <GitBranchPicker
+                workspaceRoot={effectiveWorkspaceRoot}
+                useWorktreePool={useWorktreePool}
+                worktreeBranch={worktreeBranch}
+                onWorktreeBranchChange={onWorktreeBranchChange}
+                onToggleWorktreeMode={canToggleWorktreeMode ? onToggleWorktreeMode : undefined}
+              />
+              {!compact && emptyTaskLayout && taskSurface === 'code' && onNewRequirement ? (
+                <button
+                  type="button"
+                  data-composer-new-requirement
+                  disabled={!runtimeReady || busy}
+                  onClick={onNewRequirement}
+                  className="ds-composer-new-requirement ds-no-drag inline-flex h-8 shrink-0 items-center rounded-lg px-2 text-[12.5px] font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-not-allowed disabled:opacity-45"
+                >
+                  {t('sddNewRequirement')}
+                </button>
+              ) : null}
+            </div>
+            {!compact && emptyTaskLayout && taskSurface === 'design' && designTaskProfile ? (
+              <FloatingComposerTaskProfile
+                surface="design"
+                locked={taskSurfaceLocked === true}
+                profileLocked={designProfileLocked === true}
+                showSurfaceSelector={false}
+                variant="summary"
+                disabled={!canCompose || busy}
+                profile={designTaskProfile}
+                imageGenerationEnabled={imageGenerationEnabled}
+                imageGenerationAvailable={imageGenerationAvailable === true}
+                imageGenerationReason={imageGenerationReason}
+                onProfileChange={onDesignTaskProfileChange}
+                onConfigureImageGeneration={onConfigureImageGeneration}
+              />
+            ) : null}
           </div>
         ) : null}
 
         <div
-          className={`ds-composer-shell ds-chat-composer ds-frosted ds-no-drag flex flex-col gap-1 px-3 pb-2 pt-2 transition ${
+          className={`ds-composer-shell ds-chat-composer ds-frosted ds-no-drag flex flex-col gap-1 transition ${
             draft.focused ? 'ds-chat-composer-focus' : ''
-          } ${compact ? 'rounded-[var(--ds-radius-card)] px-3 py-2 shadow-none' : ''}`}
+          } ${compact
+            ? 'rounded-[var(--ds-radius-card)] px-3 py-2 shadow-none'
+            : emptyTaskLayout
+              ? 'rounded-[18px] px-4 pb-2.5 pt-2.5 shadow-[0_10px_28px_rgba(20,47,95,0.07)]'
+              : 'px-3 pb-2 pt-2'}`}
           onMouseDown={handleComposerShellMouseDown}
           onPaste={handleComposerPaste}
           onDragOver={handleComposerDragOver}
@@ -73,7 +128,7 @@ export function FloatingComposerSurfaceView({
             rows={1}
             className={`ds-composer-textarea ds-no-drag block w-full min-w-0 resize-none break-words bg-transparent px-1 py-2.5 text-[15px] leading-[1.45] text-ds-ink placeholder:text-ds-faint focus:outline-none [overflow-wrap:anywhere] ${
               canEditComposer ? '' : 'opacity-80'
-            } ${compact ? 'text-[14px] py-2' : 'min-h-[40px]'}`}
+            } ${compact ? 'text-[14px] py-2' : emptyTaskLayout ? 'min-h-[64px]' : 'min-h-[40px]'}`}
             placeholder={documentQuoteAttached ? t('composerDocumentQuotePlaceholder') : placeholder}
             value={input}
             disabled={!canEditComposer}
@@ -174,7 +229,7 @@ export function FloatingComposerSurfaceView({
                     >
                       <Plus className="h-5 w-5" strokeWidth={1.8} />
                     </button>
-                    {mode === 'plan' ? (
+                    {showCodeExecutionControls && mode === 'plan' ? (
                       <button
                         type="button"
                         data-composer-plan-mode-badge
@@ -188,7 +243,7 @@ export function FloatingComposerSurfaceView({
                         <X className="h-3 w-3" strokeWidth={2} />
                       </button>
                     ) : null}
-                    {graphPlanningNeedsCorrection ? (
+                    {showCodeExecutionControls && graphPlanningNeedsCorrection ? (
                       <span
                         data-composer-graph-needs-correction
                         className="ds-composer-mode-badge inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-full bg-amber-500/10 px-2.5 text-[13px] font-medium text-amber-700 dark:text-amber-200"
@@ -212,7 +267,7 @@ export function FloatingComposerSurfaceView({
                           {t('graphModeRunning', { defaultValue: 'Running: Graph' })}
                         </span>
                       </span>
-                    ) : graphEnabled && !busy && mode === 'agent' && orchestration === 'graph' ? (
+                    ) : showCodeExecutionControls && graphEnabled && !busy && mode === 'agent' && orchestration === 'graph' ? (
                       <span
                         data-composer-graph-active
                         className="ds-composer-mode-badge inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-full bg-indigo-500/10 px-2.5 text-[13px] font-medium text-indigo-700 dark:text-indigo-200"
@@ -227,7 +282,7 @@ export function FloatingComposerSurfaceView({
                         </span>
                       </span>
                     ) : null}
-                    {goalInputMode ? (
+                    {showCodeExecutionControls && goalInputMode ? (
                       <button
                         type="button"
                         data-composer-goal-mode-badge
@@ -243,7 +298,7 @@ export function FloatingComposerSurfaceView({
                         <span className="ds-composer-mode-label">{t('slashCommandGoalTitle')}</span>
                         <X className="h-3 w-3" strokeWidth={2} />
                       </button>
-                    ) : activeThreadGoal?.status === 'active' ? (
+                    ) : showCodeExecutionControls && activeThreadGoal?.status === 'active' ? (
                       <span
                         className="ds-composer-mode-badge inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-full bg-ds-hover px-2.5 text-[13px] font-medium text-ds-muted"
                         title={t('slashCommandGoalTitle')}
@@ -410,8 +465,8 @@ export function FloatingComposerSurfaceView({
               )}
             </div>
           </div>
-          <FloatingComposerFooterView context={context} />
         </div>
+        <FloatingComposerFooterView context={context} />
     </>
   )
 }

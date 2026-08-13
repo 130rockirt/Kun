@@ -30,6 +30,7 @@ import {
   WorkbenchFileTreeSidePanel,
   type WorkbenchFileTreeSidePanelProps
 } from './WorkbenchFileTreeSidePanel'
+import { workbenchDividerClassName } from './workbench-divider'
 
 const ChangeInspector = lazy(() =>
   import('../ChangeInspector').then((module) => ({ default: module.ChangeInspector }))
@@ -174,7 +175,7 @@ export function WorkbenchRightPanel({
       <div
         role="separator"
         aria-orientation="vertical"
-        className="ds-workbench-divider ds-no-drag relative z-20 shrink-0 cursor-col-resize"
+        className={workbenchDividerClassName(route)}
         onPointerDown={onBeginResize}
       />
       <div className="ds-sidebar-surface h-full min-h-0 shrink-0" style={{ width }}>

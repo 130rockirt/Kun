@@ -178,14 +178,14 @@ export function isCodeSidebarThread(
 ): boolean {
   const workspace = normalizeWorkspaceRoot(thread.workspace)
   return Boolean(workspace) &&
-    thread.agentSurface !== 'design' &&
     thread.agentSurface !== 'write' &&
+    thread.agentSurface !== 'design' &&
+    !isDesignThreadId(thread.id, designRegistry) &&
     !isInternalTemporaryWorkspace(thread.workspace) &&
     !isInternalDeepSeekGuiWorkspace(thread.workspace) &&
     !isClawWorkspacePath(thread.workspace) &&
     !isClawThread(thread, clawChannels) &&
-    !isWriteAssistantThread(thread, writeRegistry) &&
-    !isDesignThreadId(thread.id, designRegistry)
+    !isWriteAssistantThread(thread, writeRegistry)
 }
 
 export function latestThread(threads: NormalizedThread[]): NormalizedThread | null {

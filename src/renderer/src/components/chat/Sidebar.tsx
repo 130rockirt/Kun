@@ -3,8 +3,6 @@ import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   Clock3,
-  FileQuestion,
-  Focus,
   LayoutGrid,
   Moon,
   Plus,
@@ -16,7 +14,6 @@ import {
 } from 'lucide-react'
 import type { NormalizedThread } from '../../agent/types'
 import { useChatStore, type SettingsRouteSection } from '../../store/chat-store'
-import { resolveSddRequirementWorkspace } from '../../sdd/sdd-draft-store'
 import type {
   ClawImChannelV1,
 } from '@shared/app-settings'
@@ -25,17 +22,16 @@ import {
 } from './SidebarClaw'
 import type { ClawImDialogMode } from './SidebarClawDialogHelpers'
 import { ClawAddImDialog } from './SidebarClawDialog'
-import { SidebarMascot } from './AnimatedWorkLogo'
 import { ConnectPhoneSidebarPanel } from './ConnectPhoneView'
 import { SidebarProjectsSection } from './SidebarProjectsSection'
 import { SidebarConversationsSection } from './SidebarConversationsSection'
 import { WorkspaceModeTabs } from './WorkspaceModeTabs'
-import { workspaceLabelFromPath } from '../../lib/workspace-label'
 import {
   SidebarCommandRow,
   SidebarFrame,
   SidebarIconButton
 } from '../sidebar/SidebarPrimitives'
+import { SidebarFocusModeControl } from '../sidebar/SidebarFocusModeControl'
 
 type Props = {
   threads: NormalizedThread[]
@@ -59,7 +55,6 @@ type Props = {
     workspaceRoot: string,
     options?: { forceNew?: boolean }
   ) => Promise<string | null>
-  onNewRequirement: () => void
   onOpenSettings: (section?: SettingsRouteSection) => void
   onOpenPlugins: () => void
   onOpenExtensions: () => void
@@ -69,7 +64,6 @@ type Props = {
   onToggleConnectPhone: () => void
   onCodeOpen: () => void
   onWriteOpen: () => void
-  onDesignOpen: () => void
   onScheduleOpen: () => void
   onWorkflowOpen: () => void
   onNewConversation: () => void
@@ -94,7 +88,6 @@ export function Sidebar({
   onRestoreThread,
   onNewChat,
   onNewChatInWorkspace,
-  onNewRequirement,
   onOpenSettings,
   onOpenPlugins,
   onOpenExtensions,
@@ -104,7 +97,6 @@ export function Sidebar({
   onToggleConnectPhone,
   onCodeOpen,
   onWriteOpen,
-  onDesignOpen,
   onScheduleOpen,
   onWorkflowOpen,
   onNewConversation
@@ -137,7 +129,6 @@ export function Sidebar({
   const deleteClawChannel = useChatStore((s) => s.deleteClawChannel)
   const resetClawChannelSession = useChatStore((s) => s.resetClawChannelSession)
   const [imDialogMode, setImDialogMode] = useState<ClawImDialogMode | null>(null)
-  const requirementWorkspace = resolveSddRequirementWorkspace(threads, activeThreadId, workspaceRoot)
 
   const activeClawChannel = useMemo(
     () => clawChannels.find((channel) => channel.id === activeClawChannelId) ?? clawChannels[0] ?? null,
@@ -150,21 +141,10 @@ export function Sidebar({
       title={t('appName')}
       footer={
         <div className="space-y-1">
-          <div className="ds-sidebar-focus-row flex min-h-[42px] items-center justify-center gap-2.5 pb-1">
-            {!focusModeEnabled ? (
-              <span className="ds-sidebar-mascot-slot flex h-[46px] w-[56px] shrink-0 items-center justify-center">
-                <SidebarMascot />
-              </span>
-            ) : null}
-            <FocusModeToggle
-              enabled={focusModeEnabled}
-              onToggle={() => onFocusModeChange(!focusModeEnabled)}
-              label={t('focusMode')}
-              status={focusModeEnabled ? t('switchOn') : t('switchOff')}
-              title={t('focusModeToggleTitle')}
-              ariaLabel={t('focusModeToggleLabel')}
-            />
-          </div>
+          <SidebarFocusModeControl
+            enabled={focusModeEnabled}
+            onChange={onFocusModeChange}
+          />
           <div className="flex items-center gap-1">
             <div className="min-w-0 flex-1">
               <SidebarCommandRow
@@ -202,36 +182,17 @@ export function Sidebar({
           activeView={activeView}
           onCodeOpen={onCodeOpen}
           onWriteOpen={onWriteOpen}
-          onDesignOpen={onDesignOpen}
         />
 
         {activeView !== 'claw' && activeView !== 'schedule' && activeView !== 'workflow' ? (
-          <>
-            <SidebarCommandRow
-              icon={<Plus className="h-4 w-4" strokeWidth={2} />}
-              label={t('newAgent')}
-              onClick={runtimeReady ? onNewChat : undefined}
-              disabled={!runtimeReady}
-              disabledHint={t('runtimeActionNeedsConnection')}
-              variant="accent"
-            />
-            <SidebarCommandRow
-              icon={<FileQuestion className="h-4 w-4" strokeWidth={1.9} />}
-              label={t('sddNewRequirement')}
-              onClick={runtimeReady ? onNewRequirement : undefined}
-              disabled={!runtimeReady}
-              disabledHint={t('runtimeActionNeedsConnection')}
-              variant="accent"
-              trailing={requirementWorkspace ? (
-                <span
-                  className="max-w-[92px] truncate text-[11.5px] text-ds-faint"
-                  title={requirementWorkspace}
-                >
-                  {workspaceLabelFromPath(requirementWorkspace)}
-                </span>
-              ) : null}
-            />
-          </>
+          <SidebarCommandRow
+            icon={<Plus className="h-4 w-4" strokeWidth={2} />}
+            label={t('newAgent')}
+            onClick={runtimeReady ? onNewChat : undefined}
+            disabled={!runtimeReady}
+            disabledHint={t('runtimeActionNeedsConnection')}
+            variant="accent"
+          />
         ) : null}
         <SidebarCommandRow
           icon={<LayoutGrid className="h-4 w-4" strokeWidth={1.75} />}
@@ -377,57 +338,5 @@ export function Sidebar({
       />
     ) : null}
     </>
-  )
-}
-
-function FocusModeToggle({
-  enabled,
-  onToggle,
-  label,
-  status,
-  title,
-  ariaLabel
-}: {
-  enabled: boolean
-  onToggle: () => void
-  label: string
-  status: string
-  title: string
-  ariaLabel: string
-}): ReactElement {
-  return (
-    <button
-      type="button"
-      data-cursor-spotlight-target
-      role="switch"
-      aria-checked={enabled}
-      aria-label={ariaLabel}
-      title={`${title} · ${status}`}
-      onClick={onToggle}
-      className={`ds-focus-mode-toggle group inline-flex h-8 w-[112px] shrink-0 items-center justify-between overflow-hidden rounded-[10px] border px-2.5 text-[12px] font-medium outline-none transition focus-visible:ring-2 focus-visible:ring-accent/25 ${
-        enabled
-          ? 'border-accent/35 bg-[var(--ds-sidebar-row-active)] text-[#1f1f1f] shadow-[0_1px_3px_rgba(20,47,95,0.07),inset_0_0_0_1px_var(--ds-sidebar-row-ring),inset_0_1px_0_rgba(255,255,255,0.72)] dark:text-white'
-          : 'border-[var(--ds-sidebar-divider)] bg-[var(--ds-sidebar-field-bg)] text-[#5c6675] shadow-[inset_0_1px_0_rgba(255,255,255,0.46)] hover:bg-[var(--ds-sidebar-row-hover)] hover:text-[#1f2733] dark:text-white/62 dark:shadow-none dark:hover:text-white'
-      }`}
-    >
-      <span className="flex min-w-0 items-center gap-1.5">
-        <Focus className="h-3.5 w-3.5 shrink-0" strokeWidth={1.8} aria-hidden="true" />
-        <span className="min-w-0 truncate">{label}</span>
-      </span>
-      <span
-        className={`ds-focus-mode-toggle-track relative h-4 w-7 shrink-0 rounded-full transition ${
-          enabled
-            ? 'bg-accent/80 shadow-[inset_0_0_0_1px_rgba(0,0,0,0.08)]'
-            : 'bg-slate-300/75 shadow-[inset_0_0_0_1px_rgba(100,116,139,0.16)] dark:bg-white/[0.14] dark:shadow-[inset_0_0_0_1px_rgba(255,255,255,0.06)]'
-        }`}
-        aria-hidden="true"
-      >
-        <span
-          className={`ds-focus-mode-toggle-thumb absolute left-0.5 top-0.5 h-3 w-3 rounded-full bg-white shadow-[0_1px_3px_rgba(20,47,95,0.24)] transition-transform ${
-            enabled ? 'translate-x-3' : 'translate-x-0'
-          }`}
-        />
-      </span>
-    </button>
   )
 }

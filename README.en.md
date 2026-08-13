@@ -2,10 +2,10 @@
   <img src="src/asset/img/kun.png" width="88" alt="Kun blue K logo">
 </p>
 
-<h1 align="center">Kun — A local-first AI agent workspace for coding, writing, design, research, and automation</h1>
+<h1 align="center">Kun — A local-first AI agent workspace for coding, office work, design, research, and automation</h1>
 
 <p align="center">
-  Bring coding, writing, design, research, and automation into one workspace.<br>
+  Bring coding, documents, design, research, and automation into Code and Work.<br>
   One shared runtime connects the desktop GUI and terminal TUI, so work stays visible, controllable, and traceable from clarification through delivery.
 </p>
 
@@ -32,7 +32,7 @@
 
 ## What is Kun?
 
-Kun is a local-first AI agent workspace for people who need to turn ideas into verifiable results. It brings Code, Write, Design, research, and automation into one product. The desktop GUI, terminal TUI, background work, and connected phone clients use the same `kun serve` runtime to share threads, plans, approvals, model connections, and task history.
+Kun is a local-first AI agent workspace for people who need to turn ideas into verifiable results. It has two top-level workspaces, Code and Work. Design tasks share Code's task list and use its right-side whiteboard. The desktop GUI, terminal TUI, background work, and connected phone clients use the same `kun serve` runtime to share threads, plans, approvals, model connections, and task history.
 
 Kun is not another chat box that only produces an answer. It keeps requirements, context, plans, file changes, tests, reviews, and delivery in one continuous workflow.
 
@@ -41,7 +41,7 @@ Kun is not another chat box that only produces an answer. It keeps requirements,
 | What you need to know | How Kun works |
 | --- | --- |
 | **Who it is for** | Developers, writers, designers, researchers, and individuals or teams who want AI to move recurring work forward. |
-| **What it does** | AI coding and code review, AI writing and document delivery, AI design and prototypes, PDF/image research, and multi-agent automation. |
+| **What it does** | AI coding and code review, Markdown editing and office-document work, AI design and prototypes, PDF/image research, and multi-agent automation. |
 | **How to use it** | Use the desktop GUI to see the whole task, or keep your hands on the keyboard with the terminal TUI. Both share the same runtime and work. |
 | **Complex work** | Use Direct mode for focused tasks. Use the experimental Agent Graph for cross-file, multi-stage work that benefits from delegation, supervision, and acceptance checks. |
 | **Model choice** | Kun is not tied to one model. It supports subscription sign-ins, Coding Plans, Token Plans, APIs, OpenAI/Anthropic-compatible services, and self-hosted models. |
@@ -79,8 +79,8 @@ The GUI and TUI automatically connect to the same local runtime. For servers or 
 | Workspace or scenario | What you bring | How Kun helps | What you deliver |
 | --- | --- | --- | --- |
 | **Code: AI coding and review** | A real codebase, bug, feature goal, or review task | Search code, edit files, run commands, manage Plans/Todos, inspect diffs and tests | Code changes, test results, implementation plans, review findings |
-| **Write: AI writing and documents** | An outline, source material, draft, or selected text | Draft, refine, organize sources, complete inline text, and edit in context | Markdown, HTML, PDF, DOCX, and editable PPTX |
-| **Design: AI design and prototypes** | Requirements, visual references, or an existing interface | Explore visual directions, create interactive prototypes, capture a design system, and hand off to Code | HTML prototypes, design canvas artifacts, flows, and `DESIGN_SYSTEM.md` |
+| **Work: documents and delivery** | Markdown/TXT, PDFs, images, and Word, Excel, or PowerPoint documents | Edit Markdown/TXT; preview, select, and quote PDF/Office content read-only; summarize documents, analyze spreadsheets, and generate documents or presentations | Markdown, HTML, PDF, DOCX, PPTX, analyses, and citations; existing Office files are not edited in place |
+| **Design tasks in Code** | Requirements, visual references, or an existing interface | Choose HTML design or AI image in the shared task, explore visual directions, create interactive prototypes, capture a design system, and iterate in the right-side whiteboard | HTML prototypes, images, design canvas artifacts, flows, and `DESIGN.md` |
 | **Research: multimodal work** | PDFs, images, web leads, or questions | Read material, collect evidence, organize conclusions, and preserve a reusable work context | Research notes, structured conclusions, proposals, and next tasks |
 | **Automate: tasks and Agent Graph** | A repeated process, schedule, or complex objective | Use Schedules, Loops, Hooks, MCP, Skills, and constrained subagents | Automation records, task state, evidence, and resumable execution history |
 
@@ -93,11 +93,11 @@ These interfaces are based on the current release and use fictional demo workspa
 </p>
 
 <p align="center">
-  <img src="./docs/assets/readme/write-workspace-demo.webp" alt="Current Kun Write workspace using demo data for the writing space, document canvas, writing assistant, and quick actions">
+  <img src="./docs/assets/readme/write-workspace-demo.webp" alt="Kun Work workspace using demo data for the Work space, Markdown editing, read-only document previews, Work assistant, and quick actions">
 </p>
 
 <p align="center">
-  <img src="./docs/assets/readme/design-workspace-demo.webp" alt="Current Kun Design workspace using demo data for the design canvas, design assets, and Agent work trace">
+  <img src="./docs/assets/readme/design-workspace-demo.webp" alt="A Design task in the Kun Code workspace using demo data for the right-side whiteboard, design assets, and Agent work trace">
 </p>
 
 <p align="center">
@@ -109,13 +109,13 @@ These interfaces are based on the current release and use fictional demo workspa
 Kun turns a conversation with AI into work you can check against the original goal:
 
 ```text
-Clarify → design / write / code → plan and execute → review and test → accept and deliver
+Clarify → design / work / code → plan and execute → review and test → accept and deliver
 ```
 
 | Stage | How Kun participates |
 | --- | --- |
 | **1. Clarify the requirement** | Create a requirement draft, use project context to surface questions, and define scope and acceptance criteria. |
-| **2. Explore the approach** | Build visual directions, prototypes, source material, and proposals in Design, Write, or Research. |
+| **2. Explore the approach** | Build visual directions, prototypes, source material, and proposals in a Code Design task, Work, or Research. |
 | **3. Make a plan** | Use `/plan` to turn the goal into executable steps aligned with the requirement and Todos. |
 | **4. Execute the work** | Agents search, edit, call tools, and run commands. Long work can continue, resume, or be delegated to subagents. |
 | **5. Return to acceptance** | Inspect diffs, tests, browser results, and `/review` findings against the original acceptance criteria. |
@@ -141,7 +141,7 @@ Direct mode is faster for questions and focused edits. Read the [Graph Mode guid
 | --- | --- |
 | **A real project workbench** | Local workspaces, file search and editing, terminal, browser, Git/Worktree, inline diffs, and a Changes panel. |
 | **Long-running work and context** | Plans, Todos, persistent goals, compaction, forks, archives, side questions, background shell work, and subagents. |
-| **Models and quota** | Manage subscriptions, plans, and APIs in one place; select models for the default agent, a thread, Design, Write, schedules, or subagents. |
+| **Models and quota** | Manage subscriptions, plans, and APIs in one place. Code and Design tasks share the thread model control, while Work, schedules, and subagents use the same provider profiles. |
 | **Agents and knowledge** | Agent Profiles, long-term memory, project `AGENTS.md`, Skills, MCP, and Extensions. |
 | **Automation and extensibility** | One-off or recurring Schedules, visual Loops, Hooks, a local runtime API, and installable or side-loadable `.kunx` extensions. |
 | **Multimodality and safety** | Image and PDF input, vision, media generation, sandboxes, tool approvals, Computer Use permissions, and sensitive-action confirmation. |
@@ -150,7 +150,7 @@ Direct mode is faster for questions and focused edits. Read the [Graph Mode guid
 
 | Real work problem | A regular chat box or disconnected tools | Kun's approach |
 | --- | --- | --- |
-| Move from an idea to a deliverable | Manually transfer context between chat, editors, documents, and terminals | Connect Code, Write, Design, Research, and automation in one workbench with resumable task history. |
+| Move from an idea to a deliverable | Manually transfer context between chat, editors, documents, and terminals | Connect Code, Design tasks, Work, Research, and automation in one product with resumable task history. |
 | Know whether an agent actually finished | Usually see only a final response | Keep the plan, file diff, tool output, tests, browser activity, and review evidence beside the task. |
 | Handle multi-stage work | Split and follow up manually | Use Direct for focused work and Agent Graph for dependencies, delegation, supervision, and acceptance. |
 | Choose a model and access method | Be limited to one product or configure each service separately | Use one provider entry for subscriptions, Coding Plans, Token Plans, APIs, compatible services, and self-hosted models. |
@@ -168,7 +168,7 @@ Model, media, and high-permission features depend on your release, operating sys
 
 ### What is Kun?
 
-Kun is a local-first AI agent workspace that uses one runtime for a desktop GUI, terminal TUI, coding, writing, design, research, and automation.
+Kun is a local-first AI agent workspace that uses one runtime for a desktop GUI, terminal TUI, coding, office documents, design, research, and automation.
 
 ### Who is Kun for?
 
@@ -176,7 +176,7 @@ Anyone who needs to move work from an idea to a real deliverable: developers, wr
 
 ### Is Kun only for AI coding?
 
-No. Code is one workspace. Kun also includes Write, Design, PDF/image research, Schedules, Loops, MCP, Skills, and Extensions.
+No. Kun has Code and Work as its top-level workspaces. Code can create fixed Code or Design tasks. Work supports Markdown editing plus read-only preview, quotation, and analysis for PDFs and Word, Excel, and PowerPoint documents. Kun also includes Schedules, Loops, MCP, Skills, and Extensions.
 
 ### Do I have to use DeepSeek?
 

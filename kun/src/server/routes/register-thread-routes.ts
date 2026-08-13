@@ -12,6 +12,7 @@ import {
   getThreadTimeline,
   listThreads,
   setThreadGoal,
+  setPlanBuildAdmissionFence,
   setThreadTodos,
   updateThread
 } from './threads.js'
@@ -31,7 +32,7 @@ import { startReview } from './review.js'
 import { buildEventStreamResponse, parseEventCursor } from './events.js'
 import { decideApproval } from './approvals.js'
 import { resolveUserInput } from './user-inputs.js'
-import { resumeSession } from './sessions.js'
+import { getResumeSessionMetadata, resumeSession } from './sessions.js'
 import { usageJsonResponse } from './usage.js'
 import { listProviderQuotas } from './provider-quotas.js'
 import { llmDebugRoundsResponse } from './debug-llm.js'
@@ -82,6 +83,12 @@ export function registerThreadRoutes(
   router.add('GET', '/v1/threads/:id/knowledge-bases', async (request, ctx) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
     return getThreadKnowledgeBases(runtime.knowledgeBaseService, ctx.params.id)
+  })
+  router.add('POST', '/v1/threads/:id/plan-build-admission-fence', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    const forwarded = await runtime.forwardThreadControl?.(request, ctx.params.id)
+    if (forwarded) return forwarded
+    return setPlanBuildAdmissionFence(runtime.threadService, ctx.params.id, request)
   })
   router.add('POST', '/v1/threads/:id/knowledge-bases/:knowledgeBaseId/reindex', async (request, ctx) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
@@ -289,6 +296,10 @@ export function registerThreadRoutes(
       gate: runtime.userInputGate,
       events: runtime.events
     })
+  })
+  router.add('GET', '/v1/sessions/:id/resume-metadata', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return getResumeSessionMetadata(runtime.threadService, ctx.params.id)
   })
   router.add('POST', '/v1/sessions/:id/resume-thread', async (request, ctx) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()

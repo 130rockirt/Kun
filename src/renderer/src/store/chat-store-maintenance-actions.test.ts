@@ -8,6 +8,7 @@ import type {
   SendMessageOverrides
 } from './chat-store-types'
 import type { BrowserStorageLike } from '../lib/browser-storage'
+import type { DesignTaskProfile } from '../agent/design-task-profile'
 import {
   emptyDesignThreadRegistry,
   isDesignThreadId,
@@ -16,6 +17,7 @@ import {
   saveDesignThreadRegistry
 } from '../design/design-thread-registry'
 import { clearDesignChatHistoryMutationsForTests } from '../design/design-chat-transcript'
+import { maintenanceTestGoal as goal } from './chat-store-maintenance-test-support'
 
 const registryMock = vi.hoisted(() => ({
   getProvider: vi.fn()
@@ -51,6 +53,9 @@ type Harness = {
     submitApprovalDecision: ReturnType<typeof vi.fn>
     forkThread: ReturnType<typeof vi.fn>
     rewindThread: ReturnType<typeof vi.fn>
+    listThreads: ReturnType<typeof vi.fn>
+    getResumeSessionMetadata: ReturnType<typeof vi.fn>
+    resumeSession: ReturnType<typeof vi.fn>
   }
   recoverActiveTurn: ReturnType<typeof vi.fn>
   refreshThreads: ReturnType<typeof vi.fn>
@@ -98,23 +103,6 @@ function thread(id: string, goal: ThreadGoal | null = null): NormalizedThread {
   }
 }
 
-function goal(
-  threadId: string,
-  objective = 'ship goal mode',
-  status: ThreadGoalStatus = 'active'
-): ThreadGoal {
-  return {
-    threadId,
-    objective,
-    status,
-    tokenBudget: null,
-    tokensUsed: 0,
-    timeUsedSeconds: 0,
-    createdAt: '2026-06-04T00:00:00.000Z',
-    updatedAt: '2026-06-04T00:01:00.000Z'
-  }
-}
-
 function buildHarness(options: {
   activeThreadId?: string | null
   createDesignThreadSucceeds?: boolean
@@ -146,9 +134,22 @@ function buildHarness(options: {
     interruptTurn: vi.fn(async () => undefined),
     submitApprovalDecision: vi.fn(async () => 'submitted' as const),
     rewindThread: vi.fn(async () => undefined),
+    listThreads: vi.fn(async () => state.threads),
+    getResumeSessionMetadata: vi.fn(async (sessionId: string) => ({
+      sessionId,
+      sourceAgentSurface: 'code' as const,
+      requiresIndependentDesignTarget: false
+    })),
+    resumeSession: vi.fn(async (sessionId: string) => ({
+      threadId: 'thr_resumed',
+      sessionId
+    })),
     forkThread: vi.fn(async (
       threadId: string,
-      options?: { turnId?: string }
+      options?: {
+        turnId?: string
+        designDocumentTarget?: { documentId: string; boardArtifactId: string }
+      }
     ) => ({
       ...thread('thr_forked'),
       title: 'Forked',
@@ -241,7 +242,6 @@ afterEach(() => {
   clearDesignChatHistoryMutationsForTests()
   vi.unstubAllGlobals()
 })
-
 describe('chat-store-maintenance-actions fork actions', () => {
   beforeEach(() => {
     registryMock.getProvider.mockReset()
@@ -261,6 +261,370 @@ describe('chat-store-maintenance-actions fork actions', () => {
     expect(refreshThreads).toHaveBeenCalledTimes(1)
     expect(selectThread).toHaveBeenCalledWith('thr_forked')
     expect(state.activeThreadId).toBe('thr_forked')
+  })
+
+  it('clones a locked Design document and sends the independent target to the fork', async () => {
+    const cleanup = vi.fn(async () => undefined)
+    const cloneDesignDocumentForFork = vi.fn(async () => ({
+      designDocumentTarget: { documentId: 'doc_fork', boardArtifactId: 'board_main' },
+      operationId: 'design-clone-fork-test',
+      cleanup
+    }))
+    const { actions, provider, refreshThreads, selectThread, state } = buildHarness({
+      maintenanceDependencies: { cloneDesignDocumentForFork }
+    })
+    const designProfile: DesignTaskProfile = {
+      version: 1,
+      documentTarget: { documentId: 'doc_source', boardArtifactId: 'board_main' },
+      outputMedium: 'html',
+      target: 'web',
+      preset: 'none',
+      context: { tone: [] },
+      lockedAtTurnId: 'turn_1'
+    }
+    state.threads = [{
+      ...thread('thr_existing'),
+      agentSurface: 'design',
+      designProfile
+    }]
+    state.blocks = []
+
+    await actions.forkActiveThread()
+
+    expect(cloneDesignDocumentForFork).toHaveBeenCalledWith({
+      workspaceRoot: '/workspace/deepseek-gui',
+      sourceTarget: designProfile.documentTarget,
+      operation: { kind: 'fork', sourceId: 'thr_existing', relation: 'fork' }
+    })
+    expect(provider.forkThread).toHaveBeenCalledWith('thr_existing', {
+      designDocumentTarget: { documentId: 'doc_fork', boardArtifactId: 'board_main' },
+      designCloneOperationId: 'design-clone-fork-test'
+    })
+    expect(cleanup).not.toHaveBeenCalled()
+    expect(refreshThreads).toHaveBeenCalledTimes(1)
+    expect(selectThread).toHaveBeenCalledWith('thr_forked')
+  })
+
+  it('rejects a historical Design fork before cloning the latest whiteboard', async () => {
+    const cloneDesignDocumentForFork = vi.fn()
+    const { actions, provider, state } = buildHarness({
+      maintenanceDependencies: { cloneDesignDocumentForFork }
+    })
+    state.threads = [{
+      ...thread('thr_existing'),
+      agentSurface: 'design',
+      designProfile: {
+        version: 1,
+        documentTarget: { documentId: 'doc_source', boardArtifactId: 'board_main' },
+        outputMedium: 'html',
+        target: 'web',
+        preset: 'none',
+        context: { tone: [] },
+        lockedAtTurnId: 'turn_1'
+      }
+    }]
+
+    await actions.forkThreadFromTurn('turn_1')
+
+    expect(state.error).toContain('historical whiteboard snapshots are unavailable')
+    expect(cloneDesignDocumentForFork).not.toHaveBeenCalled()
+    expect(provider.forkThread).not.toHaveBeenCalled()
+  })
+
+  it('cleans the cloned Design document when the runtime rejects the fork', async () => {
+    const cleanup = vi.fn(async () => undefined)
+    const cloneDesignDocumentForFork = vi.fn(async () => ({
+      designDocumentTarget: { documentId: 'doc_fork', boardArtifactId: 'board_main' },
+      cleanup
+    }))
+    const { actions, provider, refreshThreads, selectThread, state } = buildHarness({
+      maintenanceDependencies: { cloneDesignDocumentForFork }
+    })
+    state.threads = [{
+      ...thread('thr_existing'),
+      agentSurface: 'design',
+      designProfile: {
+        version: 1,
+        documentTarget: { documentId: 'doc_source', boardArtifactId: 'board_main' },
+        outputMedium: 'image',
+        target: 'app',
+        preset: 'ios',
+        context: { tone: ['calm'] },
+        lockedAtTurnId: 'turn_1'
+      }
+    }]
+    provider.forkThread.mockRejectedValueOnce(new Error('HTTP 409 fork rejected'))
+
+    await actions.forkActiveThread()
+
+    expect(cleanup).toHaveBeenCalledTimes(1)
+    expect(refreshThreads).not.toHaveBeenCalled()
+    expect(selectThread).not.toHaveBeenCalled()
+    expect(state.error).toContain('fork rejected')
+  })
+
+  it('retains and recovers a Design fork when the committed response is lost', async () => {
+    const cleanup = vi.fn(async () => undefined)
+    const commit = vi.fn(async () => undefined)
+    const clonedTarget = { documentId: 'doc_fork_recovered', boardArtifactId: 'board_main' }
+    const cloneDesignDocumentForFork = vi.fn(async () => ({
+      designDocumentTarget: clonedTarget, cleanup, commit
+    }))
+    const { actions, provider, selectThread, state } = buildHarness({
+      maintenanceDependencies: { cloneDesignDocumentForFork }
+    })
+    const designProfile: DesignTaskProfile = {
+      version: 1,
+      documentTarget: { documentId: 'doc_source', boardArtifactId: 'board_main' },
+      outputMedium: 'html', target: 'web', preset: 'none', context: { tone: [] },
+      lockedAtTurnId: 'turn_1'
+    }
+    state.threads = [{ ...thread('thr_existing'), agentSurface: 'code', designProfile }]
+    state.blocks = []
+    provider.forkThread.mockImplementationOnce(async () => {
+      state.threads.push({
+        ...thread('thr_fork_recovered'),
+        forkedFromThreadId: 'thr_existing',
+        designProfile: { ...designProfile, documentTarget: clonedTarget }
+      })
+      throw new Error('Failed to fetch after commit')
+    })
+
+    await actions.forkActiveThread()
+
+    expect(provider.listThreads).toHaveBeenCalledWith({
+      includeArchived: true, includeSide: true
+    })
+    expect(commit).toHaveBeenCalledOnce()
+    expect(cleanup).not.toHaveBeenCalled()
+    expect(selectThread).toHaveBeenCalledWith('thr_fork_recovered')
+  })
+
+  it('does not delete a Design clone when timeout lookup precedes a late commit', async () => {
+    const cleanup = vi.fn(async () => undefined)
+    const markRuntimeRequestStarted = vi.fn(async () => undefined)
+    const clonedTarget = { documentId: 'doc_fork_late', boardArtifactId: 'board_main' }
+    const cloneDesignDocumentForFork = vi.fn(async () => ({
+      designDocumentTarget: clonedTarget, cleanup, markRuntimeRequestStarted
+    }))
+    const { actions, provider, state } = buildHarness({
+      maintenanceDependencies: { cloneDesignDocumentForFork }
+    })
+    const designProfile: DesignTaskProfile = {
+      version: 1,
+      documentTarget: { documentId: 'doc_source', boardArtifactId: 'board_main' },
+      outputMedium: 'html', target: 'web', preset: 'none', context: { tone: [] },
+      lockedAtTurnId: 'turn_1'
+    }
+    state.threads = [{ ...thread('thr_existing'), agentSurface: 'code', designProfile }]
+    state.blocks = []
+    provider.forkThread.mockRejectedValueOnce(new Error('network timeout after request'))
+    provider.listThreads.mockResolvedValueOnce([])
+
+    await actions.forkActiveThread()
+    state.threads.push({
+      ...thread('thr_fork_late'),
+      designProfile: { ...designProfile, documentTarget: clonedTarget }
+    })
+
+    expect(markRuntimeRequestStarted).toHaveBeenCalledOnce()
+    expect(cleanup).not.toHaveBeenCalled()
+    expect(state.threads.some((candidate) =>
+      candidate.designProfile?.documentTarget.documentId === 'doc_fork_late'
+    )).toBe(true)
+  })
+})
+
+describe('chat-store-maintenance-actions Design resume', () => {
+  beforeEach(() => {
+    registryMock.getProvider.mockReset()
+  })
+
+  it('clones a locked document and supplies the independent target to resume', async () => {
+    const cleanup = vi.fn(async () => undefined)
+    const cloneDesignDocumentForResume = vi.fn(async () => ({
+      designDocumentTarget: { documentId: 'doc_resumed', boardArtifactId: 'board_main' },
+      operationId: 'design-clone-resume-test',
+      cleanup
+    }))
+    const { actions, provider, refreshThreads, selectThread, state } = buildHarness({
+      maintenanceDependencies: { cloneDesignDocumentForResume }
+    })
+    const designProfile: DesignTaskProfile = {
+      version: 1,
+      documentTarget: { documentId: 'doc_source', boardArtifactId: 'board_main' },
+      outputMedium: 'html',
+      target: 'app',
+      preset: 'ios',
+      presetSource: 'explicit',
+      context: { tone: ['precise'] },
+      lockedAtTurnId: 'turn_lock'
+    }
+    state.threads = [{
+      ...thread('thr_existing'),
+      agentSurface: 'design',
+      designProfile
+    }]
+
+    await expect(actions.resumeSessionIntoThread('thr_existing', {
+      model: 'deepseek-chat'
+    })).resolves.toBe('thr_resumed')
+
+    expect(cloneDesignDocumentForResume).toHaveBeenCalledWith({
+      workspaceRoot: '/workspace/deepseek-gui',
+      sourceTarget: designProfile.documentTarget,
+      operation: { kind: 'resume', sourceId: 'thr_existing', relation: 'resume' }
+    })
+    expect(provider.resumeSession).toHaveBeenCalledWith('thr_existing', {
+      model: 'deepseek-chat',
+      workspace: '/workspace/deepseek-gui',
+      designDocumentTarget: { documentId: 'doc_resumed', boardArtifactId: 'board_main' },
+      designCloneOperationId: 'design-clone-resume-test'
+    })
+    expect(cleanup).not.toHaveBeenCalled()
+    expect(refreshThreads).toHaveBeenCalledOnce()
+    expect(selectThread).toHaveBeenCalledWith('thr_resumed')
+  })
+
+  it('cleans the prepared resume clone when runtime admission fails', async () => {
+    const cleanup = vi.fn(async () => undefined)
+    const cloneDesignDocumentForResume = vi.fn(async () => ({
+      designDocumentTarget: { documentId: 'doc_resumed', boardArtifactId: 'board_main' },
+      cleanup
+    }))
+    const { actions, provider, state } = buildHarness({
+      maintenanceDependencies: { cloneDesignDocumentForResume }
+    })
+    state.threads = [{
+      ...thread('thr_existing'),
+      agentSurface: 'design',
+      designProfile: {
+        version: 1,
+        documentTarget: { documentId: 'doc_source', boardArtifactId: 'board_main' },
+        outputMedium: 'image',
+        target: 'web',
+        preset: 'none',
+        presetSource: 'none',
+        context: { tone: [] },
+        lockedAtTurnId: 'turn_lock'
+      }
+    }]
+    provider.resumeSession.mockRejectedValueOnce(new Error('HTTP 409 resume rejected'))
+
+    await expect(actions.resumeSessionIntoThread('thr_existing')).resolves.toBeNull()
+    expect(cleanup).toHaveBeenCalledOnce()
+    expect(state.error).toContain('resume rejected')
+  })
+
+  it('recovers a committed Design resume after its HTTP response is lost', async () => {
+    const cleanup = vi.fn(async () => undefined)
+    const commit = vi.fn(async () => undefined)
+    const clonedTarget = { documentId: 'doc_resumed_recovered', boardArtifactId: 'board_main' }
+    const cloneDesignDocumentForResume = vi.fn(async () => ({
+      designDocumentTarget: clonedTarget, cleanup, commit
+    }))
+    const { actions, provider, selectThread, state } = buildHarness({
+      maintenanceDependencies: { cloneDesignDocumentForResume }
+    })
+    const designProfile: DesignTaskProfile = {
+      version: 1,
+      documentTarget: { documentId: 'doc_source', boardArtifactId: 'board_main' },
+      outputMedium: 'html', target: 'web', preset: 'none', context: { tone: [] },
+      lockedAtTurnId: 'turn_source'
+    }
+    state.threads = [{ ...thread('thr_existing'), agentSurface: 'code', designProfile }]
+    provider.resumeSession.mockImplementationOnce(async () => {
+      state.threads.push({
+        ...thread('thr_resume_recovered'),
+        designProfile: { ...designProfile, documentTarget: clonedTarget }
+      })
+      throw new Error('network connection closed after commit')
+    })
+
+    await expect(actions.resumeSessionIntoThread('thr_existing'))
+      .resolves.toBe('thr_resume_recovered')
+
+    expect(commit).toHaveBeenCalledOnce()
+    expect(cleanup).not.toHaveBeenCalled()
+    expect(selectThread).toHaveBeenCalledWith('thr_resume_recovered')
+  })
+
+  it('uses session-only Design metadata to clone an independent resume target', async () => {
+    const cleanup = vi.fn(async () => undefined)
+    const cloneDesignDocumentForResume = vi.fn(async () => ({
+      designDocumentTarget: { documentId: 'doc_session_clone', boardArtifactId: 'board_session' },
+      operationId: 'design-clone-session-test',
+      cleanup
+    }))
+    const { actions, provider, state } = buildHarness({
+      activeThreadId: null,
+      maintenanceDependencies: { cloneDesignDocumentForResume }
+    })
+    state.threads = []
+    provider.getResumeSessionMetadata.mockResolvedValueOnce({
+      sessionId: 'session-only-design',
+      sourceAgentSurface: 'design',
+      workspace: '/workspace/session-only',
+      sourceDesignProfile: {
+        version: 1,
+        documentTarget: { documentId: 'doc_session', boardArtifactId: 'board_session' },
+        outputMedium: 'html',
+        target: 'web',
+        preset: 'none',
+        context: { tone: [] },
+        lockedAtTurnId: 'turn_session'
+      },
+      sourceDesignDocumentTarget: {
+        documentId: 'doc_session',
+        boardArtifactId: 'board_session'
+      },
+      requiresIndependentDesignTarget: true
+    })
+
+    await expect(actions.resumeSessionIntoThread('session-only-design'))
+      .resolves.toBe('thr_resumed')
+
+    expect(provider.getResumeSessionMetadata).toHaveBeenCalledWith('session-only-design')
+    expect(cloneDesignDocumentForResume).toHaveBeenCalledWith({
+      workspaceRoot: '/workspace/session-only',
+      sourceTarget: { documentId: 'doc_session', boardArtifactId: 'board_session' },
+      operation: { kind: 'resume', sourceId: 'session-only-design', relation: 'resume' }
+    })
+    expect(provider.resumeSession).toHaveBeenCalledWith('session-only-design', {
+      workspace: '/workspace/session-only',
+      designDocumentTarget: {
+        documentId: 'doc_session_clone',
+        boardArtifactId: 'board_session'
+      },
+      designCloneOperationId: 'design-clone-session-test'
+    })
+    expect(cleanup).not.toHaveBeenCalled()
+  })
+
+  it('fails closed when session-only Design metadata has no source workspace', async () => {
+    const cloneDesignDocumentForResume = vi.fn()
+    const { actions, provider, state } = buildHarness({
+      activeThreadId: null,
+      maintenanceDependencies: { cloneDesignDocumentForResume }
+    })
+    state.workspaceRoot = '/workspace/current-project'
+    state.threads = []
+    provider.getResumeSessionMetadata.mockResolvedValueOnce({
+      sessionId: 'session-design-missing-workspace',
+      sourceAgentSurface: 'code',
+      sourceDesignDocumentTarget: {
+        documentId: 'doc_session',
+        boardArtifactId: 'board_session'
+      },
+      requiresIndependentDesignTarget: true
+    })
+
+    await expect(actions.resumeSessionIntoThread('session-design-missing-workspace'))
+      .resolves.toBeNull()
+
+    expect(cloneDesignDocumentForResume).not.toHaveBeenCalled()
+    expect(provider.resumeSession).not.toHaveBeenCalled()
+    expect(state.error).toContain('source workspace is unavailable')
   })
 })
 

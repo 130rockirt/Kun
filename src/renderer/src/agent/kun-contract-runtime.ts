@@ -14,6 +14,11 @@ import type {
   CoreTurnStatus,
   CoreUserFileReferenceJson
 } from './kun-contract'
+import type {
+  DesignDocumentTarget,
+  DesignImagePlacementTarget,
+  DesignTaskProfile
+} from './design-task-profile'
 
 export type CoreRuntimeInfoJson = {
   host: string
@@ -219,6 +224,8 @@ export type CoreTurnJson = {
   guiDesignCanvas?: boolean
   guiDesignMode?: boolean
   agentSurface?: 'code' | 'write' | 'design'
+  designProfile?: DesignTaskProfile
+  designDocumentTarget?: DesignDocumentTarget
   error?: string
 }
 
@@ -235,7 +242,11 @@ export type CoreTurnItemJson = {
   displayText?: string
   guiDesignCanvas?: boolean
   guiDesignMode?: boolean
-  messageSource?: 'background_shell' | 'background_subagent' | 'graph_runtime' | 'subagent_resume'
+  agentSurface?: 'code' | 'write' | 'design'
+  designProfile?: DesignTaskProfile
+  designDocumentTarget?: DesignDocumentTarget
+  designImagePlacementTarget?: DesignImagePlacementTarget
+  messageSource?: 'background_shell' | 'background_subagent' | 'graph_runtime' | 'subagent_resume' | 'design_continuation'
   toolName?: string
   callId?: string
   cancelRequestedAt?: string
@@ -357,6 +368,10 @@ export type CoreStartTurnResponseJson = {
   threadId: string
   turnId: string
   userMessageItemId?: string
+  agentSurface?: 'code' | 'write' | 'design'
+  threadAgentSurface?: 'code' | 'write' | 'design'
+  designProfile?: DesignTaskProfile
+  designDocumentTarget?: DesignDocumentTarget
 }
 
 export type CoreCancelToolCallResponseJson = {
@@ -390,6 +405,15 @@ export type CoreResumeSessionResponseJson = {
   sessionId?: string
   message_count?: number
   summary?: string
+}
+
+export type CoreResumeSessionMetadataJson = {
+  sessionId: string
+  sourceAgentSurface: 'code' | 'write' | 'design'
+  workspace?: string
+  sourceDesignProfile?: DesignTaskProfile
+  sourceDesignDocumentTarget?: DesignDocumentTarget
+  requiresIndependentDesignTarget: boolean
 }
 
 /**
@@ -505,6 +529,10 @@ export type CoreRuntimeEventJson = {
   reasoningEffort?: 'auto' | 'off' | 'low' | 'medium' | 'high' | 'max'
   serviceTier?: 'priority'
   mode?: 'agent' | 'plan'
+  agentSurface?: 'code' | 'write' | 'design'
+  threadAgentSurface?: 'code' | 'write' | 'design'
+  designProfile?: DesignTaskProfile
+  designDocumentTarget?: DesignDocumentTarget
   /** thread_created / thread_updated: the thread's (possibly upgraded) title. */
   title?: string
   /** thread_created / thread_updated: whether that title is auto/provisional. */

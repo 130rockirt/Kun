@@ -12,7 +12,7 @@ import {
   workbenchSurfaceForRoute
 } from './content-script-planner'
 
-function contentScripts() {
+function contentScripts(surface: 'code' | 'design' = 'code') {
   const registry = new ContributionRegistry()
   registry.replaceExtensions(ExtensionWorkbenchSnapshotSchema.parse({
     schemaVersion: 1,
@@ -24,15 +24,15 @@ function contentScripts() {
       grantedPermissions: ['hostDom'],
       contributes: ExtensionContributionsSchema.parse({
         hostContentScripts: [{
-          id: 'decorate',
-          matches: ['workbench:code'],
+          id: `decorate-${surface}`,
+          matches: [`workbench:${surface}`],
           scripts: ['dist/content.js'],
           styles: ['dist/content.css']
         }]
       })
     }]
   }))
-  return registry.list('hostContentScripts', { 'workbench.code': true })
+  return registry.list('hostContentScripts', { [`workbench.${surface}`]: true })
 }
 
 describe('host content-script planning', () => {
@@ -66,6 +66,17 @@ describe('host content-script planning', () => {
     expect(workbenchSurfaceForRoute('extensions')).toBeNull()
     const managementPlan = buildHostContentScriptPlan({ contributions: contentScripts(), route: 'extensions' })
     expect(managementPlan.descriptors).toEqual([])
+  })
+
+  it('keeps the stable Design surface inside the shared Code route', () => {
+    expect(workbenchSurfaceForRoute('chat', 'design')).toBe('workbench:design')
+    const plan = buildHostContentScriptPlan({
+      contributions: contentScripts('design'),
+      route: 'chat',
+      taskSurface: 'design'
+    })
+    expect(plan.surface).toBe('workbench:design')
+    expect(plan.descriptors).toHaveLength(1)
   })
 
   it('never exposes settings or onboarding credential DOM to content scripts', () => {

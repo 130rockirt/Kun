@@ -6,7 +6,7 @@ import {
   UserInputQuestionSchema,
   UserMessageSource
 } from './items.js'
-import { ThreadGoalSchema, ThreadTodoListSchema } from './threads.js'
+import { ThreadAgentSurface, ThreadGoalSchema, ThreadTodoListSchema } from './threads.js'
 import { UsageSnapshotSchema } from './usage.js'
 import { RuntimeErrorSeverity } from './errors.js'
 import {
@@ -30,6 +30,10 @@ import {
   TurnServiceTierSchema
 } from './turns.js'
 import { MAX_TURN_ATTACHMENT_IDS } from './attachments.js'
+import {
+  DesignDocumentTargetSchema,
+  DesignTaskProfileSchema
+} from './design-task-profile.js'
 
 /**
  * Persisted runtime events. Every event has a per-thread `seq` so the
@@ -209,7 +213,9 @@ export const ThreadLifecycleEvent = RuntimeEventBase.extend({
   approvalPolicy: ApprovalPolicySchema.optional(),
   approvalReviewer: ApprovalReviewerSchema.optional(),
   sandboxMode: SandboxModeSchema.optional(),
-  modelRequestCaptureEnabled: z.boolean().optional()
+  modelRequestCaptureEnabled: z.boolean().optional(),
+  agentSurface: ThreadAgentSurface.optional(),
+  designProfile: DesignTaskProfileSchema.optional()
 })
 export type ThreadLifecycleEvent = z.infer<typeof ThreadLifecycleEvent>
 
@@ -239,7 +245,12 @@ export const TurnLifecycleEvent = RuntimeEventBase.extend({
   approvalPolicy: ApprovalPolicySchema.optional(),
   sandboxMode: SandboxModeSchema.optional(),
   approvalReviewer: ApprovalReviewerSchema.optional(),
-  mode: z.enum(['agent', 'plan']).optional()
+  mode: z.enum(['agent', 'plan']).optional(),
+  /** Durable thread ownership; `agentSurface` below is only the turn intent. */
+  threadAgentSurface: ThreadAgentSurface.optional(),
+  agentSurface: ThreadAgentSurface.optional(),
+  designProfile: DesignTaskProfileSchema.optional(),
+  designDocumentTarget: DesignDocumentTargetSchema.optional()
 })
 export type TurnLifecycleEvent = z.infer<typeof TurnLifecycleEvent>
 

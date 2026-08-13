@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import type { ThreadRecord, ThreadStatus } from '../contracts/threads.js'
+import type { ThreadAgentSurface, ThreadRecord, ThreadStatus } from '../contracts/threads.js'
 import { StartTurnRequest as StartTurnRequestSchema } from '../contracts/turns.js'
 import type {
   CompactRequest,
@@ -128,6 +128,23 @@ export type TurnServiceDeps = {
 
 export class TurnConflictError extends Error {}
 
+export class TaskSurfaceLockedError extends TurnConflictError {
+  constructor(
+    readonly lockedSurface: ThreadAgentSurface,
+    readonly requestedSurface: ThreadAgentSurface
+  ) {
+    super(`task surface is locked to ${lockedSurface}; received ${requestedSurface}`)
+    this.name = 'TaskSurfaceLockedError'
+  }
+}
+
+export class DesignProfileLockedError extends TurnConflictError {
+  constructor(readonly lockedAtTurnId: string) {
+    super('Design task profile is locked and does not match the submitted profile')
+    this.name = 'DesignProfileLockedError'
+  }
+}
+
 /**
  * The serve runtime has accepted as many active turns as it is configured to
  * execute. Unlike a per-thread conflict, callers may retry this on another
@@ -198,7 +215,12 @@ export class TurnService {
   }, requestFingerprint: string | undefined) => Promise<StartTurnResponse | null>
   declare private idempotentStartFromThread: (thread: ThreadRecord, request: StartTurnRequest, requestFingerprint: string | undefined) => StartTurnResponse | null
   declare private isRetryableFailedAdmission: (turn: Turn) => boolean
-  declare private idempotentStartFromTurn: (turn: Turn, request: StartTurnRequest, requestFingerprint: string | undefined) => StartTurnResponse | null
+  declare private idempotentStartFromTurn: (
+    turn: Turn,
+    request: StartTurnRequest,
+    requestFingerprint: string | undefined,
+    threadAgentSurface?: ThreadAgentSurface
+  ) => StartTurnResponse | null
   declare private resumeGraphTurnForSteering: (input: {
     threadId: string
     turnId: string
@@ -209,7 +231,15 @@ export class TurnService {
   declare private appendItem: (threadId: string, item: TurnItem) => Promise<void>
   declare private upsertThread: (threadId: string, mutator: (current: ThreadRecord) => ThreadRecord) => Promise<void>
   declare private withThreadMutation: <T>(threadId: string, operation: () => Promise<T>) => Promise<T>
-  declare private markTurnAdmissionCompleted: (threadId: string, turnId: string) => Promise<void>
+  declare private markTurnAdmissionCompleted: (
+    threadId: string,
+    turnId: string,
+    locks: Partial<Pick<
+      ThreadRecord,
+      'agentSurface' | 'designProfile' | 'approvalPolicy' | 'sandboxMode' | 'approvalReviewer'
+    >>
+  ) => Promise<ThreadRecord>
+  declare private rollbackPendingAdmission: (threadId: string, turnId: string) => Promise<boolean>
   declare private tryAdmitTurn: (turnId: string, threadId: string) => boolean
   declare private clearRuntimeTurnState: (threadId: string, turnId: string, options?: { abort?: boolean } ) => void
   declare private releaseRuntimeTurnExecution: (threadId: string, turnId: string, options?: { abort?: boolean } ) => void

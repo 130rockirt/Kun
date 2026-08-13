@@ -37,14 +37,16 @@ import {
   SidebarSectionHeader,
   SidebarTreeRow
 } from '../sidebar/SidebarPrimitives'
+import { SidebarFocusModeControl } from '../sidebar/SidebarFocusModeControl'
 import { WriteFileTree } from './WriteFileTree'
 
 type Props = {
   activeView: 'chat' | 'write' | 'claw' | 'schedule' | 'workflow'
   connectPhoneSidebarOpen: boolean
+  focusModeEnabled: boolean
   onCodeOpen: () => void
   onWriteOpen: () => void
-  onDesignOpen: () => void
+  onFocusModeChange: (enabled: boolean) => void
   onOpenSettings: (section?: SettingsRouteSection) => void
   onToggleConnectPhone: () => void
 }
@@ -60,9 +62,10 @@ type Translate = (key: string, opts?: Record<string, unknown>) => string
 export function WriteSidebar({
   activeView,
   connectPhoneSidebarOpen,
+  focusModeEnabled,
   onCodeOpen,
   onWriteOpen,
-  onDesignOpen,
+  onFocusModeChange,
   onOpenSettings,
   onToggleConnectPhone
 }: Props): ReactElement {
@@ -288,23 +291,29 @@ export function WriteSidebar({
     <SidebarFrame
       title={t('appName')}
       footer={
-        <div className="flex items-center gap-1">
-          <div className="min-w-0 flex-1">
-            <SidebarCommandRow
-              icon={<Settings className="h-4 w-4" strokeWidth={1.75} />}
-              label={t('settings')}
-              onClick={() => onOpenSettings('write')}
-              variant="footer"
-            />
+        <div className="space-y-1">
+          <SidebarFocusModeControl
+            enabled={focusModeEnabled}
+            onChange={onFocusModeChange}
+          />
+          <div className="flex items-center gap-1">
+            <div className="min-w-0 flex-1">
+              <SidebarCommandRow
+                icon={<Settings className="h-4 w-4" strokeWidth={1.75} />}
+                label={t('settings')}
+                onClick={() => onOpenSettings('write')}
+                variant="footer"
+              />
+            </div>
+            <SidebarIconButton
+              title={t('claw')}
+              ariaLabel={t('claw')}
+              onClick={onToggleConnectPhone}
+              active={connectPhoneSidebarOpen}
+            >
+              <Smartphone className="h-4 w-4" strokeWidth={1.75} />
+            </SidebarIconButton>
           </div>
-          <SidebarIconButton
-            title={t('claw')}
-            ariaLabel={t('claw')}
-            onClick={onToggleConnectPhone}
-            active={connectPhoneSidebarOpen}
-          >
-            <Smartphone className="h-4 w-4" strokeWidth={1.75} />
-          </SidebarIconButton>
         </div>
       }
     >
@@ -313,7 +322,6 @@ export function WriteSidebar({
           activeView={activeView}
           onCodeOpen={onCodeOpen}
           onWriteOpen={onWriteOpen}
-          onDesignOpen={onDesignOpen}
         />
         <SidebarCommandRow
           icon={<FilePlus2 className="h-4 w-4" strokeWidth={1.9} />}

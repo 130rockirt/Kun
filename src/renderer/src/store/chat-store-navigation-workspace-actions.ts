@@ -80,6 +80,8 @@ import {
   writeWorkspaceForThreadId
 } from '../write/write-thread-registry'
 import { useWriteWorkspaceStore } from '../write/write-workspace-store'
+import { pendingDesignDocumentClones } from '../design/design-document-clone-registry'
+import { reconcilePendingDesignDocumentClones } from '../design/design-document-fork'
 import {
   DESIGN_ASSISTANT_THREAD_TITLE,
   activeDesignThreadForWorkspace,
@@ -359,6 +361,17 @@ export function createNavigationWorkspaceActions(
       } catch {
         rawThreads = await p.listThreads()
       }
+      if (pendingDesignDocumentClones().length > 0) {
+        try {
+          const lifecycleThreads = await p.listThreads({
+            includeArchived: true,
+            includeSide: true
+          })
+          await reconcilePendingDesignDocumentClones({ threads: lifecycleThreads })
+        } catch {
+          // Keep durable markers until a complete runtime inventory is available.
+        }
+      }
       let threads = rawThreads.map((thread) => ({
         ...thread,
         workspace: normalizeWorkspaceRoot(thread.workspace)
@@ -465,14 +478,25 @@ export function createNavigationWorkspaceActions(
           activeId ? get().threads.find((thread) => thread.id === activeId) ?? null : null,
           sddThreadRegistry
         )
+      const activeThreadIsLegacyDesign = Boolean(
+        activeId && (
+          activeRawThread?.agentSurface === 'design' ||
+          isDesignThreadId(activeId, designRegistry)
+        )
+      )
       const activeThreadFilteredFromCodeSidebar =
         get().route === 'chat' &&
         activeId != null &&
         !activeThreadIsSdd &&
+        !activeThreadIsLegacyDesign &&
         threads.some((thread) => thread.id === activeId) &&
         !sidebarThreads.some((thread) => thread.id === activeId)
       const preservedSddActiveThread =
         activeThreadIsSdd && activeId
+          ? activeRawThread ?? get().threads.find((thread) => thread.id === activeId) ?? null
+          : null
+      const preservedLegacyDesignActiveThread =
+        activeThreadIsLegacyDesign && activeId
           ? activeRawThread ?? get().threads.find((thread) => thread.id === activeId) ?? null
           : null
       const pendingActiveThread =
@@ -489,6 +513,12 @@ export function createNavigationWorkspaceActions(
         !displayThreads.some((thread) => thread.id === preservedSddActiveThread.id)
       ) {
         displayThreads = [preservedSddActiveThread, ...displayThreads]
+      }
+      if (
+        preservedLegacyDesignActiveThread &&
+        !displayThreads.some((thread) => thread.id === preservedLegacyDesignActiveThread.id)
+      ) {
+        displayThreads = [preservedLegacyDesignActiveThread, ...displayThreads]
       }
       const writeWorkspaceRoots = await readWriteWorkspaceRoots()
       const writeRegistry = hydrateWriteThreadRegistry(
@@ -537,10 +567,8 @@ export function createNavigationWorkspaceActions(
         get().route === 'chat' &&
         activeThread != null &&
         (activeThread.agentSurface === 'write' ||
-          activeThread.agentSurface === 'design' ||
           isWriteAssistantThread(activeThread, writeRegistry) ||
           isClawThread(activeThread, get().clawChannels) ||
-          isDesignThreadId(activeThread.id, designRegistry) ||
           isInternalDeepSeekGuiWorkspace(activeThread.workspace))
       const shouldClearSelection =
         activeThreadId != null && !displayThreads.some((thread) => thread.id === activeThreadId)

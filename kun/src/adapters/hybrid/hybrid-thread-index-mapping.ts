@@ -49,14 +49,17 @@ export function rowFromIndexRecord(record: ThreadIndexRecord, paths: {
     forked_from_turn_count: thread.forkedFromTurnCount ?? null,
     goal_json: thread.goal ? JSON.stringify(thread.goal) : null,
     todos_json: thread.todos ? JSON.stringify(thread.todos) : null,
-    extension_metadata_json: thread.ownerExtensionId ? JSON.stringify({
+    extension_metadata_json: thread.ownerExtensionId || thread.planBuildRunId
+      || thread.planBuildAdmissionFrozen !== undefined ? JSON.stringify({
       ownerExtensionId: thread.ownerExtensionId,
       ownerExtensionVersion: thread.ownerExtensionVersion,
       accountId: thread.accountId,
       extensionVisibility: thread.extensionVisibility,
       extensionProfile: thread.extensionProfile,
       extensionBudget: thread.extensionBudget,
-      toolCatalogEpoch: thread.toolCatalogEpoch
+      toolCatalogEpoch: thread.toolCatalogEpoch,
+      planBuildRunId: thread.planBuildRunId,
+      planBuildAdmissionFrozen: thread.planBuildAdmissionFrozen
     }) : null,
     created_at: thread.createdAt, updated_at: thread.updatedAt,
     created_at_ms: isoToMillis(thread.createdAt), updated_at_ms: isoToMillis(thread.updatedAt),
@@ -92,7 +95,8 @@ export function summaryFromRow(row: ThreadRow): ThreadSummary {
 
 type ExtensionThreadMetadata = Pick<ThreadRecord,
   'ownerExtensionId' | 'ownerExtensionVersion' | 'accountId' | 'extensionVisibility'
-  | 'extensionProfile' | 'extensionBudget' | 'toolCatalogEpoch'>
+  | 'extensionProfile' | 'extensionBudget' | 'toolCatalogEpoch' | 'planBuildRunId'
+  | 'planBuildAdmissionFrozen'>
 
 export function filterThreadSummaries(summaries: ThreadSummary[], options: ThreadStoreListOptions): ThreadSummary[] {
   const query = options.search?.trim().toLowerCase()

@@ -1,6 +1,7 @@
 import { GUI_PLAN_CREATE_PLAN_TOOL_NAME } from '@shared/gui-plan'
 import type { ComposerContextAttachment } from '@kun/extension-api'
 import type { CoreTurnJson } from './kun-contract-runtime'
+import type { DesignTaskProfile } from './design-task-profile'
 
 export type CoreComposerContextAttachmentJson = ComposerContextAttachment
 
@@ -22,6 +23,14 @@ export type CoreThreadSummaryJson = {
   title: string
   /** Durable product surface that owns the thread. Absent for legacy Code threads. */
   agentSurface?: 'code' | 'write' | 'design'
+  /** Immutable Code/Design mode derived from the first accepted turn. */
+  lockedTaskSurface?: 'code' | 'write' | 'design'
+  designProfile?: DesignTaskProfile
+  designCloneOperation?: {
+    operationId: string
+    kind: 'fork' | 'resume'
+    sourceId: string
+  }
   /** Whether the title is auto/provisional (see ThreadSchema.titleAuto on the core). */
   titleAuto?: boolean
   /** Optional whole-conversation summary produced by the summarize route. */
@@ -47,6 +56,7 @@ export type CoreThreadSummaryJson = {
   systemPrompt?: string
   relation?: 'primary' | 'fork' | 'side'
   parentThreadId?: string
+  planBuildRunId?: string
   forkedFromThreadId?: string
   forkedFromTitle?: string
   forkedAt?: string

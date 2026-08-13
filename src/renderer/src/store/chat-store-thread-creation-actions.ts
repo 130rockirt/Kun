@@ -139,7 +139,7 @@ import {
   subscribeThreadEventsWithRecovery
 } from './chat-store-thread-action-helpers'
 import { GitCheckpointAvailabilityCache } from '../lib/git-checkpoint-availability'
-import { readDesignThreadRegistry } from '../design/design-thread-registry'
+import { isDesignThreadId, readDesignThreadRegistry } from '../design/design-thread-registry'
 import { readSddThreadRegistry } from '../sdd/sdd-thread-registry'
 import type { ComposerContextAttachment } from '@kun/extension-api'
 import { mergeChatBlocks } from '../agent/kun-mapper'
@@ -169,6 +169,7 @@ export function createThreadCreationActions(
   const { set, get, sseAbortRef } = context
   return {
   createThread: async (options = {}) => {
+    const activationAllowed = (): boolean => options.activationGuard?.() !== false
     if (get().runtimeConnection !== 'ready') {
       set({ error: i18n.t('common:runtimeActionNeedsConnection') })
       return null
@@ -192,10 +193,12 @@ export function createThreadCreationActions(
       const initialProviderId = personaProfile?.providerId?.trim() ||
         (personaProfile?.model?.trim() ? '' : runtime.providerId.trim())
       const initialSelectionSource = personaProfile ? 'user' as const : 'default' as const
+      const requestedAgentSurface = options.agentSurface ?? 'code'
 
       // 对话会话:不绑定项目文件夹,在 conversationWorkspaceRoot 下自动创建
       // 一个时间戳子目录作为工作目录(主进程负责实际建目录)。
       if (options.conversation) {
+        if (!activationAllowed()) return null
         if (typeof window.kunGui === 'undefined' || typeof window.kunGui.createConversationWorkspace !== 'function') {
           set({ error: i18n.t('common:workspacePickerUnavailable') })
           return null
@@ -211,6 +214,7 @@ export function createThreadCreationActions(
           workspace: created.path,
           title: getDefaultThreadTitle(),
           mode: 'agent',
+          agentSurface: 'code',
           ...(initialProviderId ? { providerId: initialProviderId } : {}),
           ...(initialModel ? { model: initialModel } : {}),
           ...(personaProfile ? {
@@ -226,12 +230,15 @@ export function createThreadCreationActions(
             initialSelectionSource
           )
         }
+        const activate = activationAllowed()
         set((s) => ({
-          activeThreadId: t.id,
+          ...(activate ? { activeThreadId: t.id } : {}),
           threads: s.threads.some((thread) => thread.id === t.id) ? s.threads : [t, ...s.threads]
         }))
-        await get().selectThread(t.id)
-        await get().refreshThreads()
+        if (activate) {
+          await get().selectThread(t.id)
+          await get().refreshThreads()
+        }
         return t.id
       }
 
@@ -250,6 +257,7 @@ export function createThreadCreationActions(
         await showWorkspaceMissingDialog(workspaceRoot)
         return null
       }
+      if (!activationAllowed()) return null
       const codeWorkspaceRoots = rememberCodeWorkspaceRoots(get().codeWorkspaceRoots, [workspaceRoot])
       set({ codeWorkspaceRoots })
       // Worktree pool mode always needs a fresh thread bound to a fresh pool
@@ -260,9 +268,13 @@ export function createThreadCreationActions(
             get(),
             p,
             workspaceRoot,
-            (thread) => isCodeThread(thread, get().clawChannels)
+            (thread) =>
+              isCodeThread(thread, get().clawChannels) &&
+              !isDesignThreadId(thread.id, readDesignThreadRegistry()) &&
+              (thread.agentSurface ?? 'code') === requestedAgentSurface
           )
       if (reusableThreadId) {
+        if (!activationAllowed()) return null
         if (initialModel) {
           rememberThreadComposerSelection(
             reusableThreadId,
@@ -326,6 +338,7 @@ export function createThreadCreationActions(
         workspace: workspaceRoot,
         title: getDefaultThreadTitle(),
         mode: 'agent',
+        agentSurface: requestedAgentSurface,
         ...(initialProviderId ? { providerId: initialProviderId } : {}),
         ...(initialModel ? { model: initialModel } : {}),
         ...(personaProfile ? {
@@ -344,15 +357,16 @@ export function createThreadCreationActions(
       // Register + activate optimistically before refreshing. A freshly created
       // Kun thread may not be listed until the first message is written.
       // Setting it active first lets refreshThreads preserve it in the sidebar.
+      const activate = activationAllowed()
       set((s) => ({
-        activeThreadId: t.id,
+        ...(activate ? { activeThreadId: t.id } : {}),
         codeWorkspaceRoots: rememberCodeWorkspaceRoots(
           s.codeWorkspaceRoots,
           [acquiredWorktree?.projectPath ?? workspaceRoot]
         ),
         threads: s.threads.some((thread) => thread.id === t.id) ? s.threads : [t, ...s.threads]
       }))
-      await get().selectThread(t.id)
+      if (activate) await get().selectThread(t.id)
       if (acquiredWorktree) {
         saveThreadWorktreeRegistry(
           markThreadWorktree(t.id, {
@@ -363,7 +377,7 @@ export function createThreadCreationActions(
           })
         )
       }
-      await get().refreshThreads()
+      if (activate) await get().refreshThreads()
       return t.id
     } catch (e) {
       set({
@@ -376,8 +390,12 @@ export function createThreadCreationActions(
     }
   },
 
-  createConversation: async () => {
-    await get().createThread({ conversation: true })
+  createConversation: async (options) => {
+    await get().createThread({
+      conversation: true,
+      agentSurface: 'code',
+      ...(options?.activationGuard ? { activationGuard: options.activationGuard } : {})
+    })
   },
 
   recoverActiveTurn: async () => {

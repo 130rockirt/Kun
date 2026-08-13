@@ -245,14 +245,28 @@ describe('chat-store-thread-actions queued messages', () => {
     })
     const { actions, state } = buildHarness()
     state.busy = false
-    state.route = 'design'
+    state.route = 'chat'
     const pendingRefresh = deferredValue<void>()
     state.refreshThreads = vi.fn(() => pendingRefresh.promise)
+    const designDocumentTarget = {
+      documentId: 'doc_architecture',
+      boardArtifactId: 'board_architecture'
+    }
+    const designProfile = {
+      version: 1 as const,
+      documentTarget: designDocumentTarget,
+      outputMedium: 'html' as const,
+      target: 'web' as const,
+      preset: 'none' as const,
+      context: { tone: [] }
+    }
 
     await expect(actions.sendMessage('draw an architecture map', 'agent', {
       displayText: 'Draw an architecture map',
       guiDesignCanvas: true,
       agentSurface: 'design',
+      designProfile,
+      designDocumentTarget,
       expectedThreadId: 'thr_existing',
       serviceTier: 'priority'
     })).resolves.toBe(true)
@@ -263,6 +277,8 @@ describe('chat-store-thread-actions queued messages', () => {
       expect.objectContaining({
         guiDesignCanvas: true,
         agentSurface: 'design',
+        designProfile,
+        designDocumentTarget,
         displayText: 'Draw an architecture map',
         serviceTier: 'priority'
       })

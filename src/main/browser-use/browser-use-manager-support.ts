@@ -17,7 +17,6 @@ import type { KunBrowserUseSettingsV1 } from '../../shared/app-settings'
 import {
   BrowserUseToolResult,
   type BrowserUseActionInput as BrowserUseAction,
-  type BrowserUseKunApprovalMode,
   type BrowserUseSnapshot,
   type BrowserUseSnapshotNode,
   type BrowserUseToolResult as BrowserUseResult
@@ -35,23 +34,14 @@ export const ACTION_DECISION_TIMEOUT_MS = 30_000
 export const MOUNT_TIMEOUT_MS = 15_000
 export const PREPARED_ACTION_TTL_MS = 30_000
 export const MAX_AUDIT_ENTRIES = 2_000
+export const MAX_BROWSER_USE_SESSIONS = 4
 export const BACKGROUND_VIEW_BOUNDS: Rectangle = {
   x: 0,
   y: 0,
   width: 1280,
   height: 800
 }
-export const MUTATION_EVENTS = new Set([
-  'DOM.attributeModified',
-  'DOM.attributeRemoved',
-  'DOM.characterDataModified',
-  'DOM.childNodeCountUpdated',
-  'DOM.childNodeInserted',
-  'DOM.childNodeRemoved',
-  'DOM.documentUpdated',
-  'DOM.shadowRootPopped',
-  'DOM.shadowRootPushed'
-])
+export const DOCUMENT_INVALIDATION_EVENTS = new Set(['DOM.documentUpdated'])
 export const INTERACTIVE_ROLES = new Set([
   'button',
   'checkbox',
@@ -70,9 +60,20 @@ export const INTERACTIVE_ROLES = new Set([
   'treeitem'
 ])
 export const SENSITIVE_AUTOCOMPLETE = /(?:^|\s)(?:cc-|current-password|new-password|one-time-code|webauthn|username|email)/i
-export const SENSITIVE_FIELD = /(?:pass(?:word|code)?|passwd|username|user.?name|e-?mail|api.?key|secret|access.?token|otp|one.?time|2fa|mfa|auth.?code|verification.?code|captcha|human.?verification|card.?number|credit.?card|cvv|cvc|security.?code|ssn|social.?security|file.?upload)/i
-export const SENSITIVE_COMMIT_ACTION = /(?:\bbuy now\b|\bpay now\b|\bpurchase\b|\bplace order\b|\bconfirm order\b|\bcheckout\b|\btransfer\b|\bsend money\b|\bwithdraw\b|\bsubscribe\b)/i
-
+export const SENSITIVE_FIELD = /(?:pass(?:word|code)?|passwd|username|user.?name|e-?mail|api.?key|secret|access.?token|otp|one.?time|2fa|mfa|auth.?code|verification.?code|captcha|human.?verification|card.?number|credit.?card|cvv|cvc|security.?code|ssn|social.?security|file.?upload|密码|口令|验证码|银行卡|信用卡|用户名|邮箱|パスワード|認証コード|カード番号|비밀번호|인증.?코드|카드.?번호)/i
+const EXTERNAL_EFFECT_PATTERNS = [
+  /\b(?:buy|pay|purchase|place order|confirm order|checkout|transfer|withdraw|send|submit|post|publish|delete|remove|confirm|save|apply|create|update|authorize|allow|grant|subscribe|unsubscribe|follow|book|reserve|bid|vote|sign[ -]?(?:in|up|out)|log[ -]?(?:in|out)|register|download|upload|change password|reset password|delete account|close account)\b/i,
+  /(?:购买|支付|付款|下单|结账|转账|汇款|提现|发送|提交|发布|删除|移除|注销|确认|保存|申请|创建|更新|授权|允许|订阅|取消订阅|关注|预订|预约|投票|登录|注册|退出登录|上传|下载)/,
+  /(?:ログイン|サインイン|登録|ログアウト|購入|支払|注文|決済|送信|提出|投稿|公開|削除|退会|確認|保存|申請|作成|更新|許可|承認|購読|予約|アップロード|ダウンロード)/i,
+  /(?:로그인|가입|로그아웃|구매|결제|주문|송금|출금|전송|제출|게시|발행|삭제|탈퇴|확인|저장|신청|생성|업데이트|허용|승인|구독|예약|업로드|다운로드)/i,
+  /\b(?:comprar|pagar|enviar|publicar|eliminar|borrar|confirmar|guardar|autorizar|suscribirse|acheter|payer|envoyer|publier|supprimer|confirmer|enregistrer|autoriser|kaufen|bezahlen|senden|veröffentlichen|löschen|bestätigen|speichern|разместить|купить|оплатить|отправить|удалить|подтвердить|сохранить)\b/i
+]
+const LOW_RISK_CONTROL_PATTERNS = [
+  /^(?:expand|collapse|show (?:more|less)|menu|open menu)$/i,
+  /^(?:展开|收起|显示更多|显示更少|菜单)$/,
+  /^(?:展開|折りたたむ|メニュー)$/,
+  /^(?:펼치기|접기|메뉴)$/
+]
 export type BrowserUseManagerOptions = {
   settings: () => KunBrowserUseSettingsV1
   now?: () => Date
@@ -106,6 +107,7 @@ export type BrowserTarget = {
   role: string
   name: string
   sensitive: boolean
+  disabled: boolean
   rect: BrowserUseRect
   fingerprint: string
 }
@@ -153,6 +155,7 @@ export type BrowserSessionEntry = {
   mountWaiters: Set<() => void>
   proxy?: BrowserUsePolicyProxy
   proxyUrl?: string
+  proxyStart?: Promise<void>
   exactLocalOrigin?: string
   grants: Set<string>
   tabs: Map<string, BrowserTab>
@@ -167,12 +170,10 @@ export type BrowserSessionEntry = {
   turnBudgets: Map<string, TurnBudget>
   activeTurnId?: string
   idleTimer?: ReturnType<typeof setTimeout>
+  activeOperations: Set<AbortController>
+  operationQueue: Promise<void>
   stopping: boolean
   agentInputDispatchActive: boolean
-  kunApprovalMode?: {
-    mode: BrowserUseKunApprovalMode
-    turnId: string
-  }
 }
 
 export type AxValue = {
@@ -275,6 +276,7 @@ export function normalizeBounds(
 export function isVisibleMount(mount: BrowserMount | undefined): boolean {
   return Boolean(
     mount?.visible &&
+    mount.supervisionActive &&
     !mount.window.isDestroyed() &&
     mount.bounds.width > 0 &&
     mount.bounds.height > 0
@@ -338,8 +340,33 @@ export function isSensitiveTarget(
   return SENSITIVE_FIELD.test(identity)
 }
 
-export function isForbiddenCommitTarget(name: string): boolean {
-  return SENSITIVE_COMMIT_ACTION.test(name)
+export function isForbiddenCommitTarget(name: string, role = ''): boolean {
+  const identity = `${role} ${name}`.trim()
+  return EXTERNAL_EFFECT_PATTERNS.some((pattern) => pattern.test(identity))
+}
+
+export function isLowRiskAutomaticAction(
+  action: Extract<BrowserUseAction, { action: 'click' | 'type' | 'select' | 'press' }>,
+  target: BrowserTarget
+): boolean {
+  if (target.sensitive || target.disabled || isForbiddenCommitTarget(target.name, target.role)) {
+    return false
+  }
+  if (action.action !== 'click') return false
+  const name = target.name.trim()
+  if (!name) return false
+  const role = target.role.toLowerCase()
+  if (role !== 'button' && role !== 'tab') return false
+  return LOW_RISK_CONTROL_PATTERNS.some((pattern) => pattern.test(name))
+}
+
+export function isDisabledTarget(
+  properties: ReadonlyMap<string, unknown>,
+  attributes: Readonly<Record<string, string>>
+): boolean {
+  return properties.get('disabled') === true ||
+    Object.prototype.hasOwnProperty.call(attributes, 'disabled') ||
+    attributes['aria-disabled']?.toLowerCase() === 'true'
 }
 
 export function axString(value: AxValue | undefined): string {
@@ -362,7 +389,13 @@ export function isNearViewport(rect: BrowserUseRect, bounds: Rectangle | undefin
     rect.y <= height + margin
 }
 
-export async function dispatchClick(tab: BrowserTab, x: number, y: number): Promise<void> {
+export async function dispatchClick(
+  tab: BrowserTab,
+  x: number,
+  y: number,
+  assertActive: () => void
+): Promise<void> {
+  assertActive()
   await tab.view.webContents.debugger.sendCommand('Input.dispatchMouseEvent', {
     type: 'mousePressed',
     x,
@@ -370,6 +403,7 @@ export async function dispatchClick(tab: BrowserTab, x: number, y: number): Prom
     button: 'left',
     clickCount: 1
   })
+  assertActive()
   await tab.view.webContents.debugger.sendCommand('Input.dispatchMouseEvent', {
     type: 'mouseReleased',
     x,
@@ -377,16 +411,86 @@ export async function dispatchClick(tab: BrowserTab, x: number, y: number): Prom
     button: 'left',
     clickCount: 1
   })
+  assertActive()
 }
 
-export async function dispatchKey(tab: BrowserTab, key: string): Promise<void> {
+export async function dispatchKey(
+  tab: BrowserTab,
+  key: string,
+  assertActive: () => void
+): Promise<void> {
+  assertActive()
   await tab.view.webContents.debugger.sendCommand('Input.dispatchKeyEvent', {
     type: 'keyDown',
     key
   })
+  assertActive()
   await tab.view.webContents.debugger.sendCommand('Input.dispatchKeyEvent', {
     type: 'keyUp',
     key
+  })
+  assertActive()
+}
+
+export class BrowserUseOperationAbortedError extends Error {
+  constructor() {
+    super('Browser Use operation was cancelled or invalidated.')
+    this.name = 'BrowserUseOperationAbortedError'
+  }
+}
+
+export function assertBrowserUseOperationActive(
+  currentEntry: BrowserSessionEntry | undefined,
+  entry: BrowserSessionEntry,
+  signal: AbortSignal,
+  tab?: BrowserTab,
+  documentGeneration?: number
+): void {
+  if (
+    signal.aborted ||
+    entry.stopping ||
+    currentEntry !== entry ||
+    (tab && (entry.tabs.get(tab.id) !== tab || entry.activeTabId !== tab.id)) ||
+    (documentGeneration !== undefined && entry.documentGeneration !== documentGeneration)
+  ) {
+    throw new BrowserUseOperationAbortedError()
+  }
+}
+
+export async function runSerializedBrowserUseOperation(
+  entry: BrowserSessionEntry,
+  signal: AbortSignal,
+  assertActive: () => void,
+  operation: (signal: AbortSignal) => Promise<BrowserUseResult>
+): Promise<BrowserUseResult> {
+  const previous = entry.operationQueue
+  let release: () => void = () => undefined
+  const ownTurn = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  entry.operationQueue = previous.catch(() => undefined).then(() => ownTurn)
+  try {
+    await waitForOperationTurn(previous, signal)
+    assertActive()
+    return await operation(signal)
+  } finally {
+    release()
+  }
+}
+
+async function waitForOperationTurn(previous: Promise<void>, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) throw new BrowserUseOperationAbortedError()
+  await new Promise<void>((resolve, reject) => {
+    const onAbort = () => {
+      signal.removeEventListener('abort', onAbort)
+      reject(new BrowserUseOperationAbortedError())
+    }
+    signal.addEventListener('abort', onAbort, { once: true })
+    void previous.catch(() => undefined).then(() => {
+      signal.removeEventListener('abort', onAbort)
+      if (signal.aborted) reject(new BrowserUseOperationAbortedError())
+      else resolve()
+    })
   })
 }
 

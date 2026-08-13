@@ -287,6 +287,11 @@ export type KunGraphSettingsPatchV1 = Partial<
   retention?: Partial<KunGraphRetentionSettingsV1>
 }
 
+export type KunPlanExecutionSettingsV1 = {
+  /** Run reviewed GUI plans in a host-managed isolated Git worktree by default. */
+  useWorktreeByDefault: boolean
+}
+
 export type KunRuntimeSettingsV1 = {
   binaryPath: string
   port: number
@@ -355,6 +360,8 @@ export type KunRuntimeSettingsV1 = {
   subagents?: KunSubagentsSettingsV1
   /** Host-owned Graph orchestration, project-agent routing, and learning policy. */
   graph: KunGraphSettingsV1
+  /** Host-owned defaults for executing reviewed GUI plans. */
+  planExecution: KunPlanExecutionSettingsV1
   /** Experimental Lab features (explore_agent toggle + model overrides). */
   lab: KunLabSettingsV1
   /** Global small-model slot. Title & Summary default to this. Empty = follow main model. */

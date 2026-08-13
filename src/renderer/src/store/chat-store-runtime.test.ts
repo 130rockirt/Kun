@@ -134,7 +134,7 @@ describe('code thread classification', () => {
     expect(isCodeThread(archived)).toBe(false)
   })
 
-  it('excludes registered design threads from Code-visible and active Code thread sets', () => {
+  it('keeps legacy registered Design threads out of the unified Code task list', () => {
     const designRegistry = markDesignThread(
       '/workspace/deepseek-gui',
       'login-screen',
@@ -147,29 +147,66 @@ describe('code thread classification', () => {
     expect(isCodeThread(design, [], undefined, designRegistry)).toBe(false)
   })
 
-  it.each(['design', 'write'] as const)(
-    'excludes durably classified %s threads without renderer registry data',
-    (agentSurface) => {
-      const ownedThread = makeThread({
-        id: `thr_${agentSurface}_durable`,
-        title: 'Renamed by the user',
-        agentSurface
-      })
+  it('keeps standalone Design threads out of the unified Code task list', () => {
+    const designTask = makeThread({
+      id: 'thr_design_durable',
+      title: 'Renamed by the user',
+      agentSurface: 'design'
+    })
 
-      expect(isCodeSidebarThread(
-        ownedThread,
-        [],
-        emptyWriteThreadRegistry(),
-        emptyDesignThreadRegistry()
-      )).toBe(false)
-      expect(isCodeThread(
-        ownedThread,
-        [],
-        emptyWriteThreadRegistry(),
-        emptyDesignThreadRegistry()
-      )).toBe(false)
-    }
-  )
+    expect(isCodeSidebarThread(
+      designTask,
+      [],
+      emptyWriteThreadRegistry(),
+      emptyDesignThreadRegistry()
+    )).toBe(false)
+    expect(isCodeThread(
+      designTask,
+      [],
+      emptyWriteThreadRegistry(),
+      emptyDesignThreadRegistry()
+    )).toBe(false)
+  })
+
+  it('includes Code-owned tasks that have an accepted Design profile', () => {
+    const designTask = makeThread({
+      id: 'thr_code_design',
+      agentSurface: 'code',
+      designProfile: {
+        version: 1,
+        documentTarget: { documentId: 'doc_1', boardArtifactId: 'board_1' },
+        outputMedium: 'html',
+        target: 'web',
+        preset: 'none',
+        context: { tone: [] },
+        lockedAtTurnId: 'turn_1'
+      }
+    })
+
+    expect(isCodeSidebarThread(designTask)).toBe(true)
+    expect(isCodeThread(designTask)).toBe(true)
+  })
+
+  it('excludes durably classified Work threads without renderer registry data', () => {
+    const writeThread = makeThread({
+      id: 'thr_write_durable',
+      title: 'Renamed by the user',
+      agentSurface: 'write'
+    })
+
+    expect(isCodeSidebarThread(
+      writeThread,
+      [],
+      emptyWriteThreadRegistry(),
+      emptyDesignThreadRegistry()
+    )).toBe(false)
+    expect(isCodeThread(
+      writeThread,
+      [],
+      emptyWriteThreadRegistry(),
+      emptyDesignThreadRegistry()
+    )).toBe(false)
+  })
 
   it('excludes leaked default write assistant threads even without registry data', () => {
     const writeAssistant = makeThread({

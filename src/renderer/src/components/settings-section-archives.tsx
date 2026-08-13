@@ -5,16 +5,34 @@ import type { NormalizedThread } from '../agent/types'
 import { confirmDialog } from '../lib/confirm-dialog'
 import { formatRelativeTime } from '../lib/format-relative-time'
 import { workspaceLabelFromPath } from '../lib/workspace-label'
+import { WRITE_ASSISTANT_THREAD_TITLE } from '../write/write-thread-registry'
 import { SettingsCard, SettingRow } from './settings-controls'
 
-export function filterArchivedThreads(threads: NormalizedThread[], query: string): NormalizedThread[] {
+export function archivedThreadDisplayTitle(
+  thread: NormalizedThread,
+  workAssistantLabel: string
+): string {
+  if (
+    thread.agentSurface === 'write' &&
+    thread.title.trim() === WRITE_ASSISTANT_THREAD_TITLE
+  ) {
+    return workAssistantLabel
+  }
+  return thread.title
+}
+
+export function filterArchivedThreads(
+  threads: NormalizedThread[],
+  query: string,
+  workAssistantLabel = ''
+): NormalizedThread[] {
   const normalizedQuery = query.trim().toLowerCase()
   return threads
     .filter((thread) => thread.archived === true)
     .filter((thread) => {
       if (!normalizedQuery) return true
       return [
-        thread.title,
+        workAssistantLabel ? archivedThreadDisplayTitle(thread, workAssistantLabel) : thread.title,
         thread.preview,
         thread.workspace,
         workspaceLabelFromPath(thread.workspace ?? ''),
@@ -53,6 +71,7 @@ export function ArchivedThreadsSettingsSection({ ctx }: { ctx: Record<string, an
 
   const [query, setQuery] = useState('')
   const [busyThreadIds, setBusyThreadIds] = useState<Record<string, boolean>>({})
+  const workAssistantLabel = tCommon('writeAssistant')
 
   useEffect(() => {
     if (!runtimeReady || typeof refreshThreads !== 'function') return
@@ -60,8 +79,8 @@ export function ArchivedThreadsSettingsSection({ ctx }: { ctx: Record<string, an
   }, [refreshThreads, runtimeReady])
 
   const archivedThreads = useMemo(
-    () => filterArchivedThreads(Array.isArray(threads) ? threads : [], query),
-    [query, threads]
+    () => filterArchivedThreads(Array.isArray(threads) ? threads : [], query, workAssistantLabel),
+    [query, threads, workAssistantLabel]
   )
   const groups = useMemo(() => groupArchivedThreads(archivedThreads), [archivedThreads])
   const totalArchived = (Array.isArray(threads) ? threads : []).filter((thread) => thread.archived === true).length
@@ -93,8 +112,9 @@ export function ArchivedThreadsSettingsSection({ ctx }: { ctx: Record<string, an
   }
 
   const removeThread = async (thread: NormalizedThread): Promise<void> => {
+    const displayTitle = archivedThreadDisplayTitle(thread, workAssistantLabel)
     const ok = await confirmDialog(
-      t('archivesDeleteConfirmTitle', { title: thread.title }),
+      t('archivesDeleteConfirmTitle', { title: displayTitle }),
       t('archivesDeleteConfirmDesc')
     )
     if (!ok) return
@@ -154,6 +174,7 @@ export function ArchivedThreadsSettingsSection({ ctx }: { ctx: Record<string, an
                     </div>
                     {items.map((thread) => {
                       const busy = busyThreadIds[thread.id] === true
+                      const displayTitle = archivedThreadDisplayTitle(thread, workAssistantLabel)
                       return (
                         <div
                           key={thread.id}
@@ -165,7 +186,7 @@ export function ArchivedThreadsSettingsSection({ ctx }: { ctx: Record<string, an
                             onClick={() => void openThread(thread.id)}
                           >
                             <div className="truncate text-[14px] font-semibold text-ds-ink">
-                              {thread.title || t('archivesUntitled')}
+                              {displayTitle || t('archivesUntitled')}
                             </div>
                             <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[12px] text-ds-faint">
                               <span>{formatRelativeTime(thread.updatedAt, locale)}</span>

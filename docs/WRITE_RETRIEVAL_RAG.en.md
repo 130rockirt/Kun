@@ -1,6 +1,6 @@
-# Write cross-text BM25 + keyword search RAG technical description
+# Work cross-text BM25 + keyword search RAG technical description
 
-This document describes cross-text retrieval enhancements in Write writing mode. Its goal is not to build a complete knowledge base, but to find relevant fragments from the current writing space with very low latency before text completion occurs, helping the model maintain terminology, fact and style continuity.
+This document describes cross-text retrieval enhancements for text-writing tasks in Work. Its goal is not to build a complete knowledge base, but to find relevant fragments from the current Work workspace with very low latency before text completion occurs, helping the model maintain terminology, fact and style continuity.
 
 ## Target
 
@@ -41,7 +41,7 @@ Core implementation:
 
 The retrieval service receives a `WriteInlineCompletionRequest`, focusing on these fields:
 
-- `workspaceRoot`: the root directory of the current Write writing space.
+- `workspaceRoot`: the root directory of the current Work workspace.
 - `currentFilePath`: The file currently being edited, this file will be excluded from the search results.
 - `prefix`: the text window in front of the cursor.
 - `context.currentLinePrefix`: The text before the cursor in the current line.

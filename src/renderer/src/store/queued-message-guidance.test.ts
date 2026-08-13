@@ -1,10 +1,41 @@
 import { describe, expect, it } from 'vitest'
 import {
   canGuideQueuedMessage,
-  queuedMessageGuidancePayload
+  queuedMessageGuidancePayload,
+  queuedMessageMatchesRunningTurn
 } from './queued-message-guidance'
 
 describe('canGuideQueuedMessage', () => {
+  it('requires queued and admitted turn surfaces to match in both directions', () => {
+    expect(queuedMessageMatchesRunningTurn(
+      { id: 'q-design', text: 'design', agentSurface: 'design' },
+      { agentSurface: 'code' }
+    )).toBe(false)
+    expect(queuedMessageMatchesRunningTurn(
+      { id: 'q-code', text: 'code', agentSurface: 'code' },
+      { agentSurface: 'design' }
+    )).toBe(false)
+  })
+
+  it('allows Design guidance only for the same frozen profile and target', () => {
+    const target = { documentId: 'doc_a', boardArtifactId: 'board_a' }
+    const profile = {
+      version: 1 as const, documentTarget: target, outputMedium: 'html' as const,
+      target: 'web' as const, preset: 'none' as const, context: { tone: [] }
+    }
+    const queued = {
+      id: 'q-design-same', text: 'refine', agentSurface: 'design' as const,
+      designProfile: profile, designDocumentTarget: target
+    }
+    expect(queuedMessageMatchesRunningTurn(queued, {
+      agentSurface: 'design', designProfile: profile, designDocumentTarget: target
+    })).toBe(true)
+    expect(queuedMessageMatchesRunningTurn(queued, {
+      agentSurface: 'design', designProfile: profile,
+      designDocumentTarget: { ...target, documentId: 'doc_b' }
+    })).toBe(false)
+  })
+
   it('allows plain text queued during a plan-mode turn', () => {
     expect(canGuideQueuedMessage({
       id: 'q-plan-text',

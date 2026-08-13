@@ -15,6 +15,7 @@ import { BrowserUseManagerInteractions } from './browser-use-manager-interaction
 import {
   abortableDelay,
   isInteractionAction,
+  MAX_BROWSER_USE_SESSIONS,
   normalizeBounds,
   resultError,
   resultOk
@@ -41,17 +42,31 @@ export class BrowserUseManager extends BrowserUseManagerInteractions {
     const action = parsed.data
     // Full access bypasses only Kun's reviewer. It is deliberately not a
     // substitute for Browser Main's origin/action consent policy.
-    const kunHostApprovalSource = kunApprovalGrant?.source === 'full-access'
-      ? undefined
-      : kunApprovalGrant?.source
+    const reviewerSource = kunApprovalMode && kunApprovalGrant?.source === kunApprovalMode
+      ? kunApprovalGrant.source
+      : undefined
     if (action.action === 'open') {
-      const entry = this.sessions.get(threadId) ?? this.createSession(threadId, settings)
+      const existing = this.sessions.get(threadId)
+      if (!existing && this.sessions.size >= MAX_BROWSER_USE_SESSIONS) {
+        return resultError(
+          'session_limit_reached',
+          `Browser Use concurrent session limit (${MAX_BROWSER_USE_SESSIONS}) reached.`
+        )
+      }
+      const entry = existing ?? this.createSession(threadId, settings)
       entry.activeTurnId = turnId
-      this.rememberKunApprovalMode(entry, turnId, kunApprovalMode, kunApprovalGrant)
+      this.touch(entry, settings)
       if (entry.stopping) {
         return resultError(
           'session_stopped',
           'This Browser Use session was stopped. Clear it before starting a new session.',
+          entry
+        )
+      }
+      if (entry.controlOwner === 'manual') {
+        return resultError(
+          'manual_control_active',
+          'The user currently has manual control. Wait until control is returned to Kun.',
           entry
         )
       }
@@ -60,7 +75,13 @@ export class BrowserUseManager extends BrowserUseManagerInteractions {
       return this.withAbort(
         entry,
         signal,
-        () => this.open(entry, action.url, kunHostApprovalSource)
+        (operationSignal) => this.open(
+          entry,
+          action.url,
+          action.newTab === true,
+          reviewerSource,
+          operationSignal
+        )
       )
     }
 
@@ -82,9 +103,6 @@ export class BrowserUseManager extends BrowserUseManagerInteractions {
     }
 
     const interaction = isInteractionAction(action)
-    if (interaction) {
-      this.rememberKunApprovalMode(entry, turnId, kunApprovalMode, kunApprovalGrant)
-    }
     const budgetError = this.consumeBudget(
       entry,
       turnId,
@@ -93,7 +111,7 @@ export class BrowserUseManager extends BrowserUseManagerInteractions {
     )
     if (budgetError) return budgetError
 
-    return this.withAbort(entry, signal, async () => {
+    return this.withAbort(entry, signal, async (operationSignal) => {
       if (entry.controlOwner === 'manual') {
         return resultError(
           'manual_control_active',
@@ -103,21 +121,21 @@ export class BrowserUseManager extends BrowserUseManagerInteractions {
       }
       switch (action.action) {
         case 'snapshot':
-          return this.snapshot(entry)
+          return this.snapshot(entry, operationSignal)
         case 'screenshot':
-          return this.screenshot(entry)
+          return this.screenshot(entry, operationSignal)
         case 'click':
         case 'type':
         case 'select':
         case 'press':
-          return this.interact(entry, action, kunHostApprovalSource)
+          return this.interact(entry, action, reviewerSource, operationSignal)
         case 'scroll':
-          return this.scroll(entry, action.direction, action.amount)
+          return this.scroll(entry, action.direction, action.amount, operationSignal)
         case 'wait':
-          await abortableDelay(action.milliseconds, signal)
+          await abortableDelay(action.milliseconds, operationSignal)
           return resultOk('waited', `Waited ${action.milliseconds}ms.`, entry)
         case 'tabs':
-          return this.tabs(entry, action.operation, action.tabId)
+          return this.tabs(entry, action.operation, action.tabId, operationSignal)
         default:
           return resultError('unsupported_action', 'Unsupported Browser Use action.', entry)
       }
@@ -188,7 +206,7 @@ export class BrowserUseManager extends BrowserUseManagerInteractions {
     entry.controlOwner = controlOwner
     entry.lifecycle = controlOwner === 'manual' ? 'manual-control' : 'ready'
     this.invalidateDocument(entry, 'control_handoff')
-    if (controlOwner === 'manual') this.cancelPending(entry, 'cancelled')
+    if (controlOwner === 'manual') this.cancelActiveOperations(entry)
     for (const tab of entry.tabs.values()) {
       tab.view.webContents.setIgnoreMenuShortcuts(controlOwner !== 'manual')
     }
@@ -225,7 +243,7 @@ export class BrowserUseManager extends BrowserUseManagerInteractions {
     const entry = this.requireSession(threadId)
     entry.lifecycle = 'stopped'
     entry.stopping = true
-    this.cancelPending(entry, 'cancelled')
+    this.cancelActiveOperations(entry)
     this.invalidateDocument(entry, 'stopped')
     this.audit(entry, {
       category: 'lifecycle',
@@ -241,7 +259,7 @@ export class BrowserUseManager extends BrowserUseManagerInteractions {
     if (!entry) return false
     this.sessions.delete(threadId)
     entry.stopping = true
-    this.cancelPending(entry, 'cancelled')
+    this.cancelActiveOperations(entry)
     const boundWindow = entry.mount?.window
     const rendererLost = entry.mount?.onRendererLost
     if (boundWindow && rendererLost) {
@@ -255,6 +273,7 @@ export class BrowserUseManager extends BrowserUseManagerInteractions {
       lifecycleWindow.removeListener?.('closed', rendererLost)
     }
     if (entry.idleTimer) clearTimeout(entry.idleTimer)
+    if (entry.proxyStart) await entry.proxyStart.catch(() => undefined)
     for (const tab of entry.tabs.values()) {
       this.detachView(entry, tab)
       const targetSession = tab.view.webContents.session
@@ -301,7 +320,7 @@ export class BrowserUseManager extends BrowserUseManagerInteractions {
     const entry = this.requireSession(threadId)
     const tab = this.requireActiveTab(entry)
     const history = tab.view.webContents.navigationHistory
-    this.cancelPending(entry, 'cancelled')
+    this.cancelActiveOperations(entry)
     this.invalidateDocument(entry, `user-${command}`)
     if (command === 'back' && history.canGoBack()) history.goBack()
     else if (command === 'forward' && history.canGoForward()) history.goForward()

@@ -8,7 +8,7 @@ import { ImageGenerationSettingsSection } from './settings-section-image-generat
 const labels: Record<string, string> = {
   back: 'Back',
   general: 'General',
-  write: 'Write',
+  write: 'Work',
   agents: 'AI assistant',
   mediaGeneration: 'Media generation',
   keyboardShortcuts: 'Keyboard shortcuts',
@@ -16,7 +16,7 @@ const labels: Record<string, string> = {
   settingsFooter: 'Settings',
   imageGen: 'Image generation',
   imageGenEnabled: 'Enable image generation',
-  imageGenEnabledDesc: 'Enables agent chats and Write infographics',
+  imageGenEnabledDesc: 'Enables agent chats and Work infographics',
   imageGenProvider: 'Image provider',
   imageGenProviderDesc: 'Choose image provider',
   imageGenProviderCustom: 'Custom image API',
@@ -82,7 +82,7 @@ describe('ImageGenerationSettingsSection', () => {
     }))
 
     expect(html).toContain('Image generation')
-    expect(html).toContain('Enables agent chats and Write infographics')
+    expect(html).toContain('Enables agent chats and Work infographics')
     expect(html).toContain('Prefer GPT Image or Gemini image models for design drafts and infographics')
     expect(html).toContain('Generation quality')
     expect(html).toContain('Quality hint independent from output resolution')
@@ -108,12 +108,12 @@ describe('ImageGenerationSettingsSection', () => {
       t
     }))
 
-    const writeIndex = html.indexOf('Write')
+    const workIndex = html.indexOf('Work')
     const mediaIndex = html.indexOf('Media generation')
     const imageIndex = html.indexOf('Image generation')
     const agentsIndex = html.indexOf('AI assistant')
-    expect(writeIndex).toBeGreaterThanOrEqual(0)
-    expect(mediaIndex).toBeGreaterThan(writeIndex)
+    expect(workIndex).toBeGreaterThanOrEqual(0)
+    expect(mediaIndex).toBeGreaterThan(workIndex)
     expect(imageIndex).toBe(-1)
     expect(agentsIndex).toBeGreaterThan(mediaIndex)
   })

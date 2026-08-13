@@ -7,9 +7,9 @@ time; neither client owns the runtime lifecycle or the canonical model
 configuration.
 
 Do not add a second live provider, provider switcher, runtime diagnostics panel,
-or legacy CodeWhale/Reasonix process path. Code, Design, Write, and Connect
-phone all enter the same Kun HTTP/SSE boundary. Connect phone still uses the
-internal `claw` name in code for compatibility.
+or legacy CodeWhale/Reasonix process path. Code (including Design tasks), Work,
+and Connect phone all enter the same Kun HTTP/SSE boundary. Connect phone still
+uses the internal `claw` name, and Work retains the internal `write` name, for compatibility.
 
 ## Client Surface Boundary
 
@@ -34,6 +34,22 @@ internal `claw` name in code for compatibility.
 4. Map the endpoint/event in `src/renderer/src/agent/kun-runtime.ts` and
    `src/renderer/src/agent/kun-mapper.ts`.
 5. Add settings only under `agents.kun`.
+
+## Isolated Plan-Build Boundary
+
+- Plan builds default to a host-managed Git worktree. Renderer owns the user
+  choice and lifecycle projection; Electron main owns preflight, durable run
+  records, Git reconciliation, target fast-forward, and proven cleanup.
+- Capture the exact launching checkout, checked-out branch, and HEAD. Never
+  substitute `main`, `master`, a remote default, or another worktree's branch.
+- Kun remains the only execution runtime. The plan build uses a linked `side`
+  thread bound to the outer worktree; Graph worker worktrees remain subordinate
+  and must integrate into that outer execution branch before root completion.
+- Automatic integration requires structured successful turn, goal, gate, and
+  Graph state. Assistant prose is never completion evidence.
+- Conflicts stay in the isolated worktree. Never switch, stash, reset, clean, or
+  force-update the captured source checkout. Cleanup requires ancestry or
+  unchanged-run proof and rebinds the execution thread before removing paths.
 
 ## Forbidden Paths
 
@@ -79,9 +95,14 @@ Manual smoke:
   hit after the stable prefix is warm.
 - Immutable prefix drift and malformed tool-call/tool-result history must be
   caught before a request reaches DeepSeek.
-- Design can open the canvas, create or iterate an artifact, preview/export it,
-  and hand the approved design to a fresh Code thread.
-- Write can open the workspace, request inline completion, and use selected-text
+- A Code-workbench conversation can choose Code or Design for every next turn;
+  accepted turns freeze their own surface while the Code-owned thread and
+  timeline remain stable. The first accepted Design turn locks only its
+  document/output/style profile, and later Code turns remain valid.
+- Direct and Graph plan builds can prepare an isolated worktree, retain conflict
+  recovery state, fast-forward the captured branch, rebind the execution
+  transcript, and remove only proven-safe temporary state.
+- Work can open the workspace, request inline completion, and use selected-text
   assistant actions.
 - Connect phone can save settings and run a manual task through a Kun thread.
 - Settings -> Agents shows only Kun.

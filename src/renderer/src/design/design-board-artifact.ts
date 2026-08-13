@@ -3,6 +3,7 @@ import { serializeCanvasDocument } from './canvas/canvas-persistence'
 import { createLinkedHtmlScreen } from './canvas/screen-lifecycle'
 import { writeDesignWorkspaceFile } from './design-persistence-coordinator'
 import { createDesignArtifactId, type DesignArtifact } from './design-types'
+import { normalizeDesignWorkspaceRoot } from './design-workspace-lifecycle'
 import { useDesignWorkspaceStore } from './design-workspace-store'
 
 export type CreateScreenFrameArtifactResult = {
@@ -24,24 +25,47 @@ export function findDesignBoardArtifact(
   )[0] ?? null
 }
 
-export async function ensureDesignBoardArtifact(
-  workspaceRoot: string
-): Promise<(DesignArtifact & { kind: 'canvas' }) | null> {
-  const trimmedRoot = workspaceRoot.trim()
-  if (!trimmedRoot) return null
+type DesignBoardArtifact = DesignArtifact & { kind: 'canvas' }
+const pendingDesignBoardArtifacts = new Map<string, Promise<DesignBoardArtifact | null>>()
 
+export async function ensureDesignBoardArtifact(
+  workspaceRoot: string,
+  expectedDocumentId?: string
+): Promise<DesignBoardArtifact | null> {
+  const normalizedRoot = normalizeDesignWorkspaceRoot(workspaceRoot)
+  if (!normalizedRoot) return null
+  const initial = useDesignWorkspaceStore.getState()
+  const documentId = expectedDocumentId?.trim() || initial.ensureActiveDocument()
+  if (!documentId || useDesignWorkspaceStore.getState().activeDocumentId !== documentId) return null
+  const key = `${normalizedRoot}\0${documentId}`
+  const pending = pendingDesignBoardArtifacts.get(key)
+  if (pending) return pending
+  const creation = createDesignBoardArtifact(normalizedRoot, documentId)
+  pendingDesignBoardArtifacts.set(key, creation)
+  try {
+    return await creation
+  } finally {
+    if (pendingDesignBoardArtifacts.get(key) === creation) pendingDesignBoardArtifacts.delete(key)
+  }
+}
+
+async function createDesignBoardArtifact(
+  workspaceRoot: string,
+  documentId: string
+): Promise<DesignBoardArtifact | null> {
   const store = useDesignWorkspaceStore.getState()
+  if (normalizeDesignWorkspaceRoot(store.workspaceRoot) !== workspaceRoot ||
+    store.activeDocumentId !== documentId) return null
   const existing = findDesignBoardArtifact(store.artifacts)
   if (existing) {
     if (store.activeArtifactId !== existing.id) store.setActiveArtifact(existing.id)
     return existing
   }
 
-  const docId = store.ensureActiveDocument()
   const createdAt = new Date().toISOString()
   const artifactId = createDesignArtifactId()
-  const relativePath = `.kun-design/${docId}/${artifactId}/canvas.json`
-  const artifact: DesignArtifact & { kind: 'canvas' } = {
+  const relativePath = `.kun-design/${documentId}/${artifactId}/canvas.json`
+  const artifact: DesignBoardArtifact = {
     id: artifactId,
     kind: 'canvas',
     title: 'Design board',
@@ -53,12 +77,14 @@ export async function ensureDesignBoardArtifact(
 
   const write = await writeDesignWorkspaceFile({
     path: relativePath,
-    workspaceRoot: trimmedRoot,
+    workspaceRoot,
     content: serializeCanvasDocument(createEmptyDocument())
   })
   if (!write.ok) return null
-
-  useDesignWorkspaceStore.getState().upsertArtifact(artifact)
+  const latest = useDesignWorkspaceStore.getState()
+  if (normalizeDesignWorkspaceRoot(latest.workspaceRoot) !== workspaceRoot ||
+    latest.activeDocumentId !== documentId) return null
+  latest.upsertArtifact(artifact)
   return artifact
 }
 

@@ -22,9 +22,7 @@ import {
   enrichThreadsWithForkInfo,
   forgetThreadFork,
   hydrateThreadForkRegistry,
-  markThreadFork,
-  readThreadForkRegistry,
-  saveThreadForkRegistry
+  readThreadForkRegistry
 } from '../lib/thread-fork-registry'
 import {
   forgetThreadWorktree,
@@ -125,8 +123,6 @@ import {
   clearWatchedCompletionNotification,
   finalizeTurnTiming,
   flushLiveBlocks,
-  forkedMessageCount,
-  forkedTurnCount,
   isCodeThread,
   latestThread,
   looksLikeActiveTurnError,
@@ -139,6 +135,10 @@ import {
   syncTurnCompletionPoll,
   watchTurnCompletionNotification
 } from './chat-store-runtime'
+import {
+  createForkActiveThreadWithOptions,
+  type CloneDesignDocumentForFork
+} from './chat-store-maintenance-fork-action'
 import {
   extractPlanTodos,
   mergePlanTodosForRenderer,
@@ -243,6 +243,8 @@ export type MaintenanceActionDependencies = {
   deleteDesignChatTranscriptForThread?: typeof deleteDesignChatTranscriptForThread
   persistDesignChatMetaForDoc?: typeof persistDesignChatMetaForDoc
   flushDesignPersistenceQueue?: typeof flushDesignPersistenceQueue
+  cloneDesignDocumentForFork?: CloneDesignDocumentForFork
+  cloneDesignDocumentForResume?: CloneDesignDocumentForFork
 }
 
 /**
@@ -275,53 +277,10 @@ export function createMaintenanceMetadataActions(
       dependencies.persistDesignChatMetaForDoc ?? persistDesignChatMetaForDoc
     const flushDesignPersistence =
       dependencies.flushDesignPersistenceQueue ?? flushDesignPersistenceQueue
-    const forkActiveThreadWithOptions = async (options: { turnId?: string } = {}): Promise<void> => {
-      const { activeThreadId, busy, blocks } = get()
-      if (!activeThreadId) return
-      if (busy) {
-        set({ error: i18n.t('common:threadActionBusy') })
-        return
-      }
-      if (get().runtimeConnection !== 'ready') {
-        set({ error: i18n.t('common:runtimeActionNeedsConnection') })
-        return
-      }
-      const p = getProvider()
-      if (typeof p.forkThread !== 'function') {
-        set({ error: i18n.t('common:runtimeFeatureUnsupported') })
-        return
-      }
-      const turnId = options.turnId?.trim()
-      try {
-        const parentThread =
-          get().threads.find((thread) => thread.id === activeThreadId) ?? {
-            id: activeThreadId,
-            title: activeThreadId.slice(0, 8)
-          }
-        const forked = await p.forkThread(activeThreadId, turnId ? { turnId } : undefined)
-        saveThreadForkRegistry(
-          markThreadFork(
-            forked.id,
-            parentThread,
-            {
-              createdAt: forked.forkedAt ?? new Date().toISOString(),
-              forkedFromMessageCount: forked.forkedFromMessageCount ?? forkedMessageCount(blocks),
-              forkedFromTurnCount: forked.forkedFromTurnCount ?? forkedTurnCount(blocks)
-            },
-            readThreadForkRegistry()
-          )
-        )
-        await get().refreshThreads()
-        await get().selectThread(forked.id)
-      } catch (e) {
-        set({
-          error: formatRuntimeError(e),
-          ...(shouldOpenSettingsForError(e)
-            ? { route: 'settings' as const, settingsSection: 'agents' as const }
-            : {})
-        })
-      }
-    }
+    const forkActiveThreadWithOptions = createForkActiveThreadWithOptions(
+      { set, get },
+      dependencies.cloneDesignDocumentForFork
+    )
   return {
   renameActiveThread: async (title) => {
     const { activeThreadId } = get()

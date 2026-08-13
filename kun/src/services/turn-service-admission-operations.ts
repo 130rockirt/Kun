@@ -42,7 +42,7 @@ import { reserveExtensionModelRequest } from '../loop/turn-budget-gate.js'
 import { makeGoalContextItem, makeUserItem, makeErrorItem } from '../domain/item.js'
 import { appendTurnItem, createTurnRecord, finishTurn, replaceTurnItem, startTurn as startTurnRecord } from '../domain/turn.js'
 import { finalizeTurnItems } from '../domain/turn-item-finalization.js'
-import { touchThread } from '../domain/thread.js'
+import { resolveThreadAgentSurface, touchThread } from '../domain/thread.js'
 import type { RuntimeEventRecorder } from './runtime-event-recorder.js'
 import type { UsageService } from './usage-service.js'
 import { createImmutablePrefix } from '../cache/immutable-prefix.js'
@@ -56,6 +56,7 @@ import {
   goalContextKey
 } from '../loop/continuation-instructions.js'
 import { type TurnService, type TurnServiceDeps, TurnConflictError, TurnCapacityError, type TerminalTurnStatus, type TurnSettlement, type GraphLeadSuspensionResult, type GraphLeadResumeResult, HOST_SHUTDOWN_TURN_SUSPENSION_CODE, hostShutdownTurnSuspensionReason, isHostShutdownTurnSuspension, DEFAULT_MAX_CONCURRENT_TURNS, fingerprintStartTurnRequest, canonicalizeFingerprintValue, isActiveTurn, terminalStatus, threadStatusFromTurns, threadStatusAfterTurnTransition, normalizeMaxConcurrentTurns, firstNonBlank, modelForManualCompaction } from './turn-service-core.js'
+import { resolveDesignTurnAdmission } from './turn-service-design-admission.js'
 
 export const turnServiceAdmissionOperations = {
 updateRuntimeConfig(this: TurnService,
@@ -88,6 +89,7 @@ async startTurn(this: TurnService, input: {
     const currentOwner = await this['deps'].executionLeases?.owner(input.threadId)
     if (currentOwner) throw new ThreadExecutionBusyError(currentOwner)
     let attemptedTurnId: string | undefined
+    let admissionAccepted = false
     try {
       const started = await this['withThreadMutation'](input.threadId, async () => {
         if (this['deps'].lifecycleFence?.isClosing(input.threadId)) {
@@ -103,12 +105,20 @@ async startTurn(this: TurnService, input: {
         if (thread.status === 'archived') {
           throw new TurnConflictError(`thread is archived: ${input.threadId}`)
         }
+        if (thread.planBuildAdmissionFrozen) {
+          throw new TurnConflictError(`plan-build thread admission is frozen: ${input.threadId}`)
+        }
         if (thread.turns.some((turn) => turn.status === 'queued' || turn.status === 'running')) {
           throw new TurnConflictError(`thread already has an active turn: ${input.threadId}`)
         }
         // Allocate only an in-memory id before admission. A rejected request
         // still has no turn record, item, or event to persist.
         const turnId = this['deps'].ids.next('turn')
+        const designAdmission = resolveDesignTurnAdmission({
+          thread,
+          request: input.request,
+          turnId
+        })
         if (!this['tryAdmitTurn'](turnId, input.threadId)) {
           throw new TurnCapacityError(this['maxConcurrentTurns'])
         }
@@ -170,6 +180,7 @@ async startTurn(this: TurnService, input: {
             threadId: input.threadId,
             clientRequestId: input.request.clientRequestId,
             clientRequestFingerprint: requestFingerprint,
+            admissionPending: true,
             prompt: input.request.prompt,
             messageSource: input.request.messageSource,
             subagentResume: input.request.subagentResume,
@@ -187,7 +198,9 @@ async startTurn(this: TurnService, input: {
             guiPlan: input.request.guiPlan,
             guiDesignCanvas: input.request.guiDesignCanvas,
             guiDesignMode: input.request.guiDesignMode,
-            agentSurface: input.request.agentSurface,
+            agentSurface: designAdmission.effectiveSurface,
+            designProfile: designAdmission.effectiveProfile,
+            designDocumentTarget: designAdmission.effectiveDocumentTarget,
             persona: input.request.persona,
             guiDesignArtifact: input.request.guiDesignArtifact,
             mode: input.request.mode,
@@ -211,32 +224,39 @@ async startTurn(this: TurnService, input: {
             attachmentIds,
             composerContexts,
             fileReferences: input.request.fileReferences ?? [],
-            workspaceCheckpointId: input.request.workspaceCheckpointId
+            workspaceCheckpointId: input.request.workspaceCheckpointId,
+            workspace: thread.workspace,
+            threadAgentSurface: designAdmission.locksSurface && designAdmission.effectiveSurface
+              ? designAdmission.effectiveSurface
+              : resolveThreadAgentSurface(thread),
+            agentSurface: designAdmission.effectiveSurface,
+            designProfile: designAdmission.effectiveProfile,
+            designDocumentTarget: designAdmission.effectiveDocumentTarget,
+            designImagePlacementTarget: input.request.designImagePlacementTarget
           })
           const controller = new AbortController()
           const startedTurn = startTurnRecord(appendTurnItem(turn, userItem))
+          const pendingThreadSurface = designAdmission.locksSurface
+            ? undefined
+            : thread.agentSurface
           const next = {
             ...touchThread(thread, this['deps'].nowIso()),
             status: 'running' as const,
-            ...(thread.agentSurface === undefined && thread.turns.length === 0 && input.request.agentSurface
-              ? { agentSurface: input.request.agentSurface }
-              : {}),
-            ...(input.request.approvalPolicy !== undefined
-              ? { approvalPolicy: input.request.approvalPolicy }
-              : {}),
-            ...(input.request.sandboxMode !== undefined
-              ? { sandboxMode: input.request.sandboxMode }
-              : {}),
-            ...(input.request.approvalReviewer !== undefined
-              ? { approvalReviewer: input.request.approvalReviewer }
-              : {}),
+            ...(pendingThreadSurface ? { agentSurface: pendingThreadSurface } : {}),
             turns: [...thread.turns, startedTurn]
           }
           await this['deps'].threadStore.upsert({ ...next, updatedAt: this['deps'].nowIso() })
           await this['deps'].sessionStore.appendItem(input.threadId, userItem)
           this['inflightTurns'].set(turnId, controller)
           this['deps'].inflight.begin({ id: turnId, kind: 'model', threadId: input.threadId, turnId })
-          return { kind: 'admitted' as const, turnId, userItem, turn: startedTurn }
+          return {
+            kind: 'admitted' as const,
+            turnId,
+            userItem,
+            turn: startedTurn,
+            designAdmission,
+            pendingThreadSurface
+          }
         } catch (error) {
           // A failed start has no loop to perform lifecycle cleanup. Release
           // its slot immediately; the outer catch best-effort marks any
@@ -246,20 +266,58 @@ async startTurn(this: TurnService, input: {
         }
       })
       if (started.kind === 'replay') return started.response
+      const committedThread = await this['markTurnAdmissionCompleted'](
+        input.threadId,
+        started.turnId,
+        {
+          ...(started.designAdmission.locksSurface && started.designAdmission.effectiveSurface
+            ? { agentSurface: started.designAdmission.effectiveSurface }
+            : started.pendingThreadSurface
+              ? { agentSurface: started.pendingThreadSurface }
+            : {}),
+          ...(started.designAdmission.locksProfile && started.designAdmission.effectiveProfile
+            ? { designProfile: started.designAdmission.effectiveProfile }
+            : {}),
+          ...(input.request.approvalPolicy !== undefined
+            ? { approvalPolicy: input.request.approvalPolicy }
+            : {}),
+          ...(input.request.sandboxMode !== undefined
+            ? { sandboxMode: input.request.sandboxMode }
+            : {}),
+          ...(input.request.approvalReviewer !== undefined
+            ? { approvalReviewer: input.request.approvalReviewer }
+            : {})
+        }
+      )
+      admissionAccepted = true
+      const committedTurn = committedThread.turns.find((turn) => turn.id === started.turnId)
+      if (!committedTurn) throw new Error(`turn not found after admission commit: ${started.turnId}`)
+      const threadAgentSurface = resolveThreadAgentSurface(committedThread)
       await this['deps'].events.record({
         kind: 'turn_started',
         threadId: input.threadId,
         turnId: started.turnId,
-        ...(started.turn.model ? { model: started.turn.model } : {}),
-        ...(started.turn.providerId ? { providerId: started.turn.providerId } : {}),
-        ...(started.turn.accountId ? { accountId: started.turn.accountId } : {}),
+        ...(committedTurn.model ? { model: committedTurn.model } : {}),
+        ...(committedTurn.providerId ? { providerId: committedTurn.providerId } : {}),
+        ...(committedTurn.accountId ? { accountId: committedTurn.accountId } : {}),
         ...(input.request.reasoningEffort ? { reasoningEffort: input.request.reasoningEffort } : {}),
         ...(input.request.serviceTier ? { serviceTier: input.request.serviceTier } : {}),
-        ...(started.turn.clientSurface ? { clientSurface: started.turn.clientSurface } : {}),
-        ...(started.turn.approvalPolicy ? { approvalPolicy: started.turn.approvalPolicy } : {}),
-        ...(started.turn.sandboxMode ? { sandboxMode: started.turn.sandboxMode } : {}),
-        ...(started.turn.approvalReviewer ? { approvalReviewer: started.turn.approvalReviewer } : {}),
-        ...(started.turn.mode ? { mode: started.turn.mode } : {})
+        ...(committedTurn.clientSurface ? { clientSurface: committedTurn.clientSurface } : {}),
+        ...(committedTurn.approvalPolicy ? { approvalPolicy: committedTurn.approvalPolicy } : {}),
+        ...(committedTurn.sandboxMode ? { sandboxMode: committedTurn.sandboxMode } : {}),
+        ...(committedTurn.approvalReviewer ? { approvalReviewer: committedTurn.approvalReviewer } : {}),
+        ...(committedTurn.mode ? { mode: committedTurn.mode } : {}),
+        threadAgentSurface,
+        ...(committedTurn.agentSurface ? { agentSurface: committedTurn.agentSurface } : {}),
+        ...(committedTurn.designProfile ? { designProfile: committedTurn.designProfile } : {}),
+        ...(committedTurn.designDocumentTarget
+          ? { designDocumentTarget: committedTurn.designDocumentTarget }
+          : {})
+      }).catch((error) => {
+        console.warn(
+          `[kun] turn_started event persistence failed after admission commit for ${started.turnId}: ` +
+          `${error instanceof Error ? error.message : String(error)}`
+        )
       })
       await this['deps'].events.record({
         kind: 'item_created',
@@ -267,20 +325,54 @@ async startTurn(this: TurnService, input: {
         turnId: started.turnId,
         itemId: started.userItem.id,
         item: started.userItem
+      }).catch((error) => {
+        console.warn(
+          `[kun] user item event persistence failed after admission commit for ${started.turnId}: ` +
+          `${error instanceof Error ? error.message : String(error)}`
+        )
       })
-      await this['markTurnAdmissionCompleted'](input.threadId, started.turnId)
       const response = {
         threadId: input.threadId,
         turnId: started.turnId,
-        userMessageItemId: started.userItem.id
+        userMessageItemId: started.userItem.id,
+        threadAgentSurface,
+        ...(committedTurn.agentSurface ? { agentSurface: committedTurn.agentSurface } : {}),
+        ...(committedTurn.designProfile ? { designProfile: committedTurn.designProfile } : {}),
+        ...(committedTurn.designDocumentTarget
+          ? { designDocumentTarget: committedTurn.designDocumentTarget }
+          : {})
       }
-      options.onAdmitted?.(response)
+      try {
+        options.onAdmitted?.(response)
+      } catch (error) {
+        console.warn(
+          `[kun] turn dispatch callback failed after admission commit for ${started.turnId}: ` +
+          `${error instanceof Error ? error.message : String(error)}`
+        )
+        void this.finishTurn({
+          threadId: input.threadId,
+          turnId: started.turnId,
+          status: 'failed',
+          error: 'The accepted turn could not be dispatched for execution.',
+          code: 'turn_dispatch_failed',
+          severity: 'error'
+        }).catch(() => undefined)
+      }
       return response
     } catch (error) {
-      if (attemptedTurnId) {
-        // This is deliberately outside the per-thread mutation callback: the
-        // latter must unwind before interruptTurn can take the same lock.
-        await this.interruptTurn({ threadId: input.threadId, turnId: attemptedTurnId }).catch(() => undefined)
+      if (attemptedTurnId && !admissionAccepted) {
+        const rolledBack = await this['rollbackPendingAdmission'](
+          input.threadId,
+          attemptedTurnId
+        ).catch(() => false)
+        if (!rolledBack) {
+          // Fall back to a terminal pending marker. Idempotency and first-Design
+          // resolution deliberately ignore this marker so a retry can proceed.
+          await this.interruptTurn({
+            threadId: input.threadId,
+            turnId: attemptedTurnId
+          }).catch(() => undefined)
+        }
       }
       throw error
     }
@@ -300,13 +392,25 @@ async findIdempotentStart(this: TurnService, input: {
     )
     if (!projectedTurn) return null
     if (projectedTurn.prompt) {
-      return this['idempotentStartFromTurn'](projectedTurn, input.request, requestFingerprint)
+      return this['idempotentStartFromTurn'](
+        projectedTurn,
+        input.request,
+        requestFingerprint,
+        projection ? resolveThreadAgentSurface(projection) : undefined
+      )
     }
     const hydrated = await this['deps'].threadStore.get(input.threadId)
     const turn = hydrated?.turns.find((candidate) =>
       candidate.clientRequestId === clientRequestId && !this['isRetryableFailedAdmission'](candidate)
     )
-    return turn ? this['idempotentStartFromTurn'](turn, input.request, requestFingerprint) : null
+    return turn
+      ? this['idempotentStartFromTurn'](
+          turn,
+          input.request,
+          requestFingerprint,
+          hydrated ? resolveThreadAgentSurface(hydrated) : undefined
+        )
+      : null
   },
 
 idempotentStartFromThread(this: TurnService,
@@ -319,7 +423,14 @@ idempotentStartFromThread(this: TurnService,
     const turn = thread.turns.find((candidate) =>
       candidate.clientRequestId === clientRequestId && !this['isRetryableFailedAdmission'](candidate)
     )
-    return turn ? this['idempotentStartFromTurn'](turn, request, requestFingerprint) : null
+    return turn
+      ? this['idempotentStartFromTurn'](
+          turn,
+          request,
+          requestFingerprint,
+          resolveThreadAgentSurface(thread)
+        )
+      : null
   },
 
 isRetryableFailedAdmission(this: TurnService, turn: Turn): boolean {
@@ -329,7 +440,8 @@ isRetryableFailedAdmission(this: TurnService, turn: Turn): boolean {
 idempotentStartFromTurn(this: TurnService,
     turn: Turn,
     request: StartTurnRequest,
-    requestFingerprint: string | undefined
+    requestFingerprint: string | undefined,
+    threadAgentSurface?: ThreadRecord['agentSurface']
   ): StartTurnResponse | null {
     const userItem = turn.items.find((item) => item.kind === 'user_message')
     const originalPrompt = userItem?.text || turn.prompt
@@ -347,7 +459,11 @@ idempotentStartFromTurn(this: TurnService,
     return {
       threadId: turn.threadId,
       turnId: turn.id,
-      userMessageItemId: userItem?.id ?? `item_${turn.id}_user`
+      userMessageItemId: userItem?.id ?? `item_${turn.id}_user`,
+      ...(threadAgentSurface ? { threadAgentSurface } : {}),
+      ...(turn.agentSurface ? { agentSurface: turn.agentSurface } : {}),
+      ...(turn.designProfile ? { designProfile: turn.designProfile } : {}),
+      ...(turn.designDocumentTarget ? { designDocumentTarget: turn.designDocumentTarget } : {})
     }
   },
 

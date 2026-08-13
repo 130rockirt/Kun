@@ -419,6 +419,47 @@ describe('chat-store-maintenance-actions rewind and resend', () => {
     })
   })
 
+  it('preserves historical composer contexts when editing and resending', async () => {
+    const prepareCodeCanvasResend = vi.fn(async () => null)
+    const { actions, sendMessage, state } = buildHarness({
+      maintenanceDependencies: { prepareCodeCanvasResend }
+    })
+    const composerContext = {
+      schemaVersion: 1 as const,
+      id: 'office-view-position',
+      title: 'deck.pptx',
+      summary: 'Current view · Slide 3 of 9',
+      reference: {
+        kind: 'office-view-position', schemaVersion: 1, sourceName: 'deck.pptx',
+        sourceFormat: 'pptx', sourceSha256: 'a'.repeat(64),
+        location: { kind: 'presentation', slide: 3, slideCount: 9 }
+      },
+      revision: 1,
+      generation: 0,
+      attachmentId: `workspace-view-context:${'b'.repeat(64)}`,
+      provenance: { source: 'workspace-view' as const, workspaceId: 'c'.repeat(64) }
+    }
+    Object.assign(state, {
+      route: 'write',
+      busy: false,
+      blocks: [{
+        kind: 'user', id: 'user_1', text: 'old prompt',
+        meta: { turnId: 'turn_1', composerContexts: [composerContext] }
+      }],
+      queuedMessages: [],
+      turnStartedAtByUserId: {},
+      turnDurationByUserId: {},
+      turnReasoningFirstAtByUserId: {},
+      turnReasoningLastAtByUserId: {}
+    })
+
+    await actions.rewindAndResend('user_1', 'Explain this slide again')
+
+    expect(sendMessage).toHaveBeenCalledWith('Explain this slide again', undefined, {
+      composerContexts: [composerContext]
+    })
+  })
+
   it('restores checkpoints against the thread workspace when resending under another global picker root', async () => {
     const previousWindow = globalThis.window
     const restoreGitCheckpoint = vi.fn(async () => ({

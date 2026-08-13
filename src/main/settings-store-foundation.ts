@@ -114,12 +114,13 @@ export const DEFAULT_CLAW_CHANNELS_ROOT = join(homedir(), '.kun', 'claw')
 
 export const DEFAULT_WRITE_WORKSPACE_ROOT_ABSOLUTE = expandHomePath(DEFAULT_WRITE_WORKSPACE_ROOT)
 
-export const WELCOME_MARKDOWN = `# Welcome to Write
+export const WELCOME_MARKDOWN = `# Welcome to Work
 
-This is your default writing workspace.
+This is your default Work space for Markdown and document tasks.
 
 - Create Markdown drafts from the sidebar.
-- Select text in the editor and ask the writing assistant about it.
+- Open PDF and Office files as read-only previews, then select or quote their content.
+- Ask the Work assistant to summarize documents, analyze content, or generate a new deliverable.
 - Switch between source, live, split, and preview modes from the top bar.
 `
 

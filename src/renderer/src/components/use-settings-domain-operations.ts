@@ -1,11 +1,15 @@
 import {
   type AppSettingsPatch
 } from '@shared/app-settings'
-import type { SkillRootListItem } from '@shared/kun-gui-api'
-import type { Dispatch, SetStateAction } from 'react'
-import { useCallback, useEffect } from 'react'
 import type {
-  CoreMemoryRecordJson
+  KunRuntimeSettingsSyncStatusPayload,
+  SkillRootListItem
+} from '@shared/kun-gui-api'
+import type { Dispatch, SetStateAction } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
+import type {
+  CoreMemoryRecordJson,
+  CoreRuntimeInfoJson
 } from '../agent/kun-contract'
 import { getProvider } from '../agent/registry'
 import { rendererRuntimeClient } from '../agent/runtime-client'
@@ -31,11 +35,12 @@ export const DEFAULT_PROJECT_CONFIG_TEXT = `${JSON.stringify({
 }, null, 2)}\n`
 
 export function useSettingsDomainOperations(scope: Record<string, any>): Record<string, any> {
-  const { t, reloadUiSettings, category, form, setForm, setSkillRootsLoading, setSkillNotice, setMcpConfigPath, mcpConfigText, setMcpConfigText, setMcpConfigExists, mcpLoading, setMcpLoading, mcpLoaded, setMcpLoaded, setMcpBusy, setMcpNotice, projectConfig, setProjectConfig, projectConfigText, setProjectConfigText, setProjectConfigLoading, setProjectConfigBusy, setProjectConfigNotice, runtimeInfo, setRuntimeInfo, toolDiagnostics, setToolDiagnostics, setMemoryDiagnostics, setRuntimeDiagnosticsBusy, runtimeDiagnosticsNotice, setRuntimeDiagnosticsNotice, persistedSettingsRef, agentsSectionRef, skillSectionRef, mcpSectionRef, permissionsSectionRef, compactHomePath, expandHomePath, activeProjectWorkspaceRoot, projectConfigGrantFingerprint } = scope
+  const { t, reloadUiSettings, category, form, setForm, setSkillRootsLoading, setSkillNotice, setMcpConfigPath, mcpConfigText, setMcpConfigText, setMcpConfigExists, mcpLoading, setMcpLoading, mcpLoaded, setMcpLoaded, setMcpBusy, setMcpNotice, projectConfig, setProjectConfig, projectConfigText, setProjectConfigText, setProjectConfigLoading, setProjectConfigBusy, setProjectConfigNotice, runtimeInfo, setRuntimeInfo, toolDiagnostics, setToolDiagnostics, setMemoryDiagnostics, runtimeDiagnosticsNotice, setRuntimeDiagnosticsBusy, setRuntimeDiagnosticsNotice, persistedSettingsRef, agentsSectionRef, skillSectionRef, mcpSectionRef, permissionsSectionRef, compactHomePath, expandHomePath, activeProjectWorkspaceRoot, projectConfigGrantFingerprint } = scope
   const update = scope.update as (partial: AppSettingsPatch) => void
   const setSkillRoots = scope.setSkillRoots as Dispatch<SetStateAction<SkillRootListItem[]>>
   const memoryRecords = scope.memoryRecords as CoreMemoryRecordJson[]
   const setMemoryRecords = scope.setMemoryRecords as Dispatch<SetStateAction<CoreMemoryRecordJson[]>>
+  const diagnosticsRequestSequence = useRef(0)
   const refreshSkillRoots = useCallback(async (): Promise<void> => {
     if (typeof window.kunGui?.listSkillRoots !== 'function') return
     setSkillRootsLoading(true)
@@ -240,11 +245,14 @@ export function useSettingsDomainOperations(scope: Record<string, any>): Record<
   }
 
   const refreshKunDiagnostics = useCallback(async (): Promise<void> => {
+    const requestSequence = diagnosticsRequestSequence.current + 1
+    diagnosticsRequestSequence.current = requestSequence
     const provider = getProvider()
     setRuntimeDiagnosticsBusy(true)
     setRuntimeDiagnosticsNotice(null)
     try {
       const loaded = await loadKunDiagnostics(provider, { listAllMemories: true })
+      if (requestSequence !== diagnosticsRequestSequence.current) return
       if (loaded.runtimeInfo !== undefined) setRuntimeInfo(loaded.runtimeInfo)
       if (loaded.toolDiagnostics !== undefined) setToolDiagnostics(loaded.toolDiagnostics)
       if (loaded.memoryRecords !== undefined) setMemoryRecords(loaded.memoryRecords)
@@ -255,19 +263,73 @@ export function useSettingsDomainOperations(scope: Record<string, any>): Record<
         })
       }
     } catch (error) {
+      if (requestSequence !== diagnosticsRequestSequence.current) return
       setRuntimeDiagnosticsNotice({
         tone: 'error',
         message: error instanceof Error ? error.message : String(error)
       })
     } finally {
-      setRuntimeDiagnosticsBusy(false)
+      if (requestSequence === diagnosticsRequestSequence.current) {
+        setRuntimeDiagnosticsBusy(false)
+      }
     }
   }, [])
 
   useEffect(() => {
-    if (category !== 'agents' && category !== 'memory') return
+    if (category !== 'agents' && category !== 'laboratory' && category !== 'memory') return
     void refreshKunDiagnostics()
   }, [category, refreshKunDiagnostics])
+
+  useEffect(() => {
+    if (category !== 'laboratory' || typeof window === 'undefined') return
+    let mounted = true
+    let latestGeneration = -1
+    let latestPhase: 'idle' | 'syncing' | 'terminal' | null = null
+
+    const invalidateBrowserUseCapability = (): void => {
+      // A diagnostics request that started before this generation can only
+      // describe the previous runtime configuration.
+      diagnosticsRequestSequence.current += 1
+      setRuntimeInfo((current: CoreRuntimeInfoJson | null) => {
+        if (!current?.capabilities.browserUse) return current
+        const capabilities = { ...current.capabilities }
+        delete capabilities.browserUse
+        return { ...current, capabilities }
+      })
+    }
+    const handleStatus = (next: KunRuntimeSettingsSyncStatusPayload): void => {
+      if (!mounted || next.generation < latestGeneration) return
+      const terminal = next.state === 'synced' || next.state === 'unavailable' || next.state === 'failed'
+      const phase = terminal ? 'terminal' : next.state === 'syncing' ? 'syncing' : 'idle'
+      if (next.generation > latestGeneration) {
+        latestGeneration = next.generation
+        latestPhase = null
+      }
+      // IPC subscription is installed before the status snapshot resolves.
+      // Ignore a delayed snapshot (or duplicate event) that would regress a
+      // terminal generation back to syncing.
+      if (latestPhase === 'terminal') return
+      if (latestPhase === phase) return
+      if (latestPhase === 'syncing' && phase === 'idle') return
+      latestPhase = phase
+      if (phase === 'syncing') {
+        invalidateBrowserUseCapability()
+      } else if (phase === 'terminal') {
+        void refreshKunDiagnostics()
+      }
+    }
+
+    const unsubscribe = typeof window.kunGui?.onRuntimeSettingsSyncStatus === 'function'
+      ? window.kunGui.onRuntimeSettingsSyncStatus(handleStatus)
+      : undefined
+    if (typeof window.kunGui?.getRuntimeSettingsSyncStatus === 'function') {
+      void window.kunGui.getRuntimeSettingsSyncStatus().then(handleStatus).catch(() => undefined)
+    }
+    return () => {
+      mounted = false
+      unsubscribe?.()
+    }
+  }, [category, refreshKunDiagnostics, setRuntimeInfo])
 
   const refreshMemoryDiagnostics = async (): Promise<void> => {
     const provider = getProvider()

@@ -1,4 +1,5 @@
 import type { QueuedUserMessage } from './chat-store-types'
+import type { RuntimeDisclosureMetadata } from '../agent/types'
 
 export type QueuedMessageGuidanceInput = {
   text: string
@@ -74,6 +75,34 @@ export function queuedMessageGuidancePayload(
 /** True when the steer contract can preserve the queued text and optional images. */
 export function canGuideQueuedMessage(message: QueuedUserMessage): boolean {
   return queuedMessageGuidancePayload(message) !== null
+}
+
+function effectiveSurface(
+  value: Pick<QueuedUserMessage, 'agentSurface' | 'guiDesignCanvas' | 'guiDesignMode'> |
+    Pick<RuntimeDisclosureMetadata, 'agentSurface' | 'guiDesignCanvas' | 'guiDesignMode' | 'designProfile'>
+): 'code' | 'write' | 'design' {
+  if (value.agentSurface) return value.agentSurface
+  if (value.guiDesignCanvas || value.guiDesignMode || ('designProfile' in value && value.designProfile)) {
+    return 'design'
+  }
+  return 'code'
+}
+
+function sameSnapshot(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left ?? null) === JSON.stringify(right ?? null)
+}
+
+/** A queued send can steer only the turn whose immutable routing snapshot it matches. */
+export function queuedMessageMatchesRunningTurn(
+  message: QueuedUserMessage,
+  running: RuntimeDisclosureMetadata | undefined
+): boolean {
+  const surface = effectiveSurface(message)
+  if (!running || surface !== effectiveSurface(running)) return false
+  if (surface !== 'design') return true
+  return sameSnapshot(message.designProfile, running.designProfile) &&
+    sameSnapshot(message.designDocumentTarget, running.designDocumentTarget) &&
+    sameSnapshot(message.designImagePlacementTarget, running.designImagePlacementTarget)
 }
 
 function normalizedAttachmentIds(values: readonly unknown[] | undefined): string[] | null {

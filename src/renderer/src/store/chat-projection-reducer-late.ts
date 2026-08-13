@@ -181,7 +181,10 @@ export function reduceLateChatProjection(
       const event = action.payload
       const title = event.title?.trim()
       const status = event.status?.trim()
-      if (!event.threadId || (!title && !status && event.titleAuto === undefined)) return {}
+      if (
+        !event.threadId ||
+        (!title && !status && event.titleAuto === undefined && !event.agentSurface && !event.designProfile)
+      ) return {}
       return {
         threads: state.threads.map((thread) =>
           thread.id === event.threadId
@@ -189,7 +192,9 @@ export function reduceLateChatProjection(
                 ...thread,
                 ...(title ? { title } : {}),
                 ...(status ? { status } : {}),
-                ...(event.titleAuto !== undefined ? { titleAuto: event.titleAuto } : {})
+                ...(event.titleAuto !== undefined ? { titleAuto: event.titleAuto } : {}),
+                ...(event.agentSurface ? { agentSurface: event.agentSurface } : {}),
+                ...(event.designProfile ? { designProfile: event.designProfile } : {})
               }
             : thread
         )

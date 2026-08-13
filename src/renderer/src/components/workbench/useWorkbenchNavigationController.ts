@@ -17,8 +17,14 @@ import {
   type DesignThreadRegistry
 } from '../../design/design-thread-registry'
 import { formatWorkspacePickerError } from '../../lib/format-workspace-picker-error'
+import { normalizeWorkspaceRoot } from '../../lib/workspace-path'
 import type { RightPanelMode } from '../chat/WorkbenchTopBar'
 import { BUILTIN_RIGHT_PANEL_IDS } from '../../extensions/contribution-ids'
+import {
+  workbenchTaskIntentScope,
+  writeWorkbenchTaskIntent,
+  DEFAULT_WORKBENCH_DESIGN_PROFILE
+} from './workbench-task-intent'
 
 export type WorkbenchSidebarView = 'chat' | 'write' | 'claw' | 'schedule' | 'workflow' | 'subagents'
 
@@ -47,7 +53,6 @@ export type UseWorkbenchNavigationControllerParams = {
   ) => Promise<SddDraft | null>
   openClaw: ChatState['openClaw']
   openCode: ChatState['openCode']
-  openDesign: ChatState['openDesign']
   openPlugins: ChatState['openPlugins']
   openSchedule: ChatState['openSchedule']
   openWorkflow: ChatState['openWorkflow']
@@ -93,6 +98,26 @@ export function isWorkbenchDesignThread(
   return thread?.agentSurface === 'design' || isDesignThreadId(threadId, registry)
 }
 
+export function designDocumentRefForWorkbenchThread(
+  threadId: string,
+  thread: NormalizedThread | null,
+  registry: DesignThreadRegistry = readDesignThreadRegistry()
+): { workspaceRoot: string; docId: string; boardArtifactId?: string } | null {
+  // Registry-owned threads belong to the legacy standalone Design workflow.
+  // Keep their existing document binding authoritative and never rewrite it
+  // from newer optional runtime metadata.
+  const legacyRef = designDocRefForThreadId(threadId, registry)
+  if (legacyRef) return legacyRef
+  if (!thread?.designProfile) return null
+
+  const workspaceRoot = normalizeWorkspaceRoot(thread.workspace)
+  const docId = thread.designProfile.documentTarget.documentId.trim()
+  const boardArtifactId = thread.designProfile.documentTarget.boardArtifactId.trim()
+  return workspaceRoot && docId && boardArtifactId
+    ? { workspaceRoot, docId, boardArtifactId }
+    : null
+}
+
 export function useWorkbenchNavigationController({
   activeSddDraft,
   activeThreadId,
@@ -114,7 +139,6 @@ export function useWorkbenchNavigationController({
   findSddDraftForSidebarThread,
   openClaw,
   openCode,
-  openDesign,
   openPlugins,
   openSchedule,
   openWorkflow,
@@ -130,9 +154,17 @@ export function useWorkbenchNavigationController({
   setWriteAssistantOpen
 }: UseWorkbenchNavigationControllerParams): WorkbenchNavigationController {
   const connectPhoneReturnRouteRef = useRef<ChatState['route']>('chat')
+  const navigationRequestRef = useRef(0)
+  const beginNavigation = useCallback((): number => ++navigationRequestRef.current, [])
+  const navigationIsCurrent = useCallback(
+    (requestId: number): boolean => navigationRequestRef.current === requestId,
+    []
+  )
 
   useEffect(() => {
-    if (route !== 'claw') connectPhoneReturnRouteRef.current = route
+    if (route !== 'claw') {
+      connectPhoneReturnRouteRef.current = route === 'design' ? 'chat' : route
+    }
   }, [route])
 
   const sidebarView: WorkbenchSidebarView = useMemo(() => {
@@ -144,28 +176,41 @@ export function useWorkbenchNavigationController({
   }, [pluginHostRoute, route])
 
   const openThread = useCallback((id: string): void => {
+    const requestId = beginNavigation()
+    const isCurrentRequest = (): boolean => navigationIsCurrent(requestId)
     setConnectPhoneSidebarOpen(false)
     void (async () => {
       const thread = threads.find((item) => item.id === id) ?? null
       const designRegistry = readDesignThreadRegistry()
       if (isWorkbenchDesignThread(id, thread, designRegistry)) {
-        const designRef = designDocRefForThreadId(id, designRegistry)
-        // Clicking a 设计稿 thread opens it in the Code whiteboard panel
-        // instead of switching to Design mode. Orphan threads without a
-        // registered drawing keep the previous Design-mode fallback.
+        const runtimeOrLegacyRef = designDocumentRefForWorkbenchThread(id, thread, designRegistry)
+        const cachedSurface = useCodeCanvasDesignSurface.getState().surface
+        const designRef = runtimeOrLegacyRef ?? (
+          cachedSurface?.threadId === id
+            ? {
+                workspaceRoot: cachedSurface.workspaceRoot,
+                docId: cachedSurface.documentId
+              }
+            : null
+        )
+
+        if (useSddDraftStore.getState().activeDraft) {
+          dismissActiveSddDraft({ closeAssistant: true })
+        }
+        setRoute('chat')
         if (designRef) {
           useCodeCanvasDesignSurface.getState().showDesignDocument(
             id,
             designRef.workspaceRoot,
             designRef.docId
           )
-          requestCodeCanvasPanelOpen()
-        } else {
-          openDesign()
         }
-        // A durable Design thread can outlive a renderer-local registry. In that
-        // orphan case we still route to Design, but do not attach it to an
-        // unrelated drawing. Registered threads can safely restore their owner.
+        // Even an unlocked Design task without a committed profile belongs to
+        // the Code workbench. Open the whiteboard now; its provisional binding
+        // can arrive on the first accepted turn without changing routes.
+        requestCodeCanvasPanelOpen()
+        await selectThread(id, { selectionGuard: isCurrentRequest })
+        if (!isCurrentRequest()) return
         if (!designRef) return
 
         const designStore = useDesignWorkspaceStore.getState()
@@ -175,13 +220,22 @@ export function useWorkbenchNavigationController({
         )) {
           await useDesignWorkspaceStore.getState().rehydrateArtifacts().catch(() => undefined)
         }
+        if (!isCurrentRequest()) return
         const restoredDesignStore = useDesignWorkspaceStore.getState()
-        if (!restoredDesignStore.documents.some((document) => document.id === designRef.docId)) return
-        restoredDesignStore.switchActiveDocument(designRef.docId)
-        await selectThread(id)
+        if (restoredDesignStore.documents.some((document) => document.id === designRef.docId)) {
+          restoredDesignStore.switchActiveDocument(designRef.docId)
+          const activeDesignStore = useDesignWorkspaceStore.getState()
+          if (
+            designRef.boardArtifactId &&
+            activeDesignStore.artifacts.some((artifact) => artifact.id === designRef.boardArtifactId)
+          ) {
+            activeDesignStore.setActiveArtifact(designRef.boardArtifactId)
+          }
+        }
         return
       }
       const sddDraft = await findSddDraftForSidebarThread(id, thread)
+      if (!isCurrentRequest()) return
       if (sddDraft) {
         // 点击“需求 AI”会话只打开该会话本身:登记草稿归属后精确选择点击的线程,
         // 不调用 openSddRequirementDraftFromHistory(),因此不会自动展开草稿编辑器。
@@ -189,18 +243,20 @@ export function useWorkbenchNavigationController({
         markSddAssistantThread(sddDraft, id)
         if (useSddDraftStore.getState().activeDraft) dismissActiveSddDraft({ closeAssistant: true })
         setRoute('chat')
-        await selectThread(id)
+        await selectThread(id, { selectionGuard: isCurrentRequest })
+        if (!isCurrentRequest()) return
         void useChatStore.getState().refreshThreads()
         return
       }
       if (useSddDraftStore.getState().activeDraft) dismissActiveSddDraft({ closeAssistant: true })
       setRoute('chat')
-      await selectThread(id)
+      await selectThread(id, { selectionGuard: isCurrentRequest })
     })()
   }, [
+    beginNavigation,
     dismissActiveSddDraft,
     findSddDraftForSidebarThread,
-    openDesign,
+    navigationIsCurrent,
     selectThread,
     setConnectPhoneSidebarOpen,
     setRoute,
@@ -208,15 +264,23 @@ export function useWorkbenchNavigationController({
   ])
 
   const startNewChat = useCallback((): void => {
+    const requestId = beginNavigation()
     if (activeSddDraft) dismissActiveSddDraft({ closeAssistant: true })
     setConnectPhoneSidebarOpen(false)
     setRoute('chat')
-    void createThread({ useWorktreePool, worktreeBranch })
+    void createThread({
+      useWorktreePool,
+      worktreeBranch,
+      agentSurface: 'code',
+      activationGuard: () => navigationIsCurrent(requestId)
+    })
     if (useWorktreePool) setUseWorktreePool(false)
   }, [
     activeSddDraft,
+    beginNavigation,
     createThread,
     dismissActiveSddDraft,
+    navigationIsCurrent,
     setConnectPhoneSidebarOpen,
     setRoute,
     setUseWorktreePool,
@@ -228,21 +292,26 @@ export function useWorkbenchNavigationController({
     targetWorkspaceRoot: string,
     options?: { forceNew?: boolean }
   ): Promise<string | null> => {
+    const requestId = beginNavigation()
     if (activeSddDraft) dismissActiveSddDraft({ closeAssistant: true })
     setConnectPhoneSidebarOpen(false)
     setRoute('chat')
     const threadId = await createThread({
       workspaceRoot: targetWorkspaceRoot,
       forceNew: options?.forceNew,
+      agentSurface: 'code',
       useWorktreePool,
-      worktreeBranch
+      worktreeBranch,
+      activationGuard: () => navigationIsCurrent(requestId)
     })
     if (useWorktreePool) setUseWorktreePool(false)
     return threadId
   }, [
     activeSddDraft,
+    beginNavigation,
     createThread,
     dismissActiveSddDraft,
+    navigationIsCurrent,
     setConnectPhoneSidebarOpen,
     setRoute,
     setUseWorktreePool,
@@ -251,50 +320,88 @@ export function useWorkbenchNavigationController({
   ])
 
   const startNewConversation = useCallback((): void => {
+    const requestId = beginNavigation()
     if (activeSddDraft) dismissActiveSddDraft({ closeAssistant: true })
     setConnectPhoneSidebarOpen(false)
     setRoute('chat')
-    void createConversation()
-  }, [activeSddDraft, createConversation, dismissActiveSddDraft, setConnectPhoneSidebarOpen, setRoute])
+    void createConversation({ activationGuard: () => navigationIsCurrent(requestId) })
+  }, [
+    activeSddDraft,
+    beginNavigation,
+    createConversation,
+    dismissActiveSddDraft,
+    navigationIsCurrent,
+    setConnectPhoneSidebarOpen,
+    setRoute
+  ])
 
   const openCodeMode = useCallback((): void => {
+    const requestId = beginNavigation()
     setConnectPhoneSidebarOpen(false)
-    void openCode()
-  }, [openCode, setConnectPhoneSidebarOpen])
+    void openCode({ activationGuard: () => navigationIsCurrent(requestId) })
+  }, [beginNavigation, navigationIsCurrent, openCode, setConnectPhoneSidebarOpen])
 
   const openWriteMode = useCallback((): void => {
+    const requestId = beginNavigation()
     setConnectPhoneSidebarOpen(false)
-    void openWrite()
-  }, [openWrite, setConnectPhoneSidebarOpen])
+    void openWrite({ activationGuard: () => navigationIsCurrent(requestId) })
+  }, [beginNavigation, navigationIsCurrent, openWrite, setConnectPhoneSidebarOpen])
 
   const exploreSddRequirementInDesign = useCallback((): void => {
+    const requestId = beginNavigation()
     const requirement = sddDraftContent.trim()
     dismissActiveSddDraft({ closeAssistant: true })
-    setInput(requirement)
-    openDesign()
-  }, [dismissActiveSddDraft, openDesign, sddDraftContent, setInput])
+    setRoute('chat')
+    void createThread({
+      workspaceRoot,
+      forceNew: true,
+      agentSurface: 'code',
+      activationGuard: () => navigationIsCurrent(requestId)
+    }).then((threadId) => {
+      if (!threadId || !navigationIsCurrent(requestId)) return
+      writeWorkbenchTaskIntent(workbenchTaskIntentScope(threadId, workspaceRoot), {
+        surface: 'design',
+        profile: DEFAULT_WORKBENCH_DESIGN_PROFILE
+      })
+      setInput(requirement)
+    })
+  }, [
+    beginNavigation,
+    createThread,
+    dismissActiveSddDraft,
+    navigationIsCurrent,
+    sddDraftContent,
+    setInput,
+    setRoute,
+    workspaceRoot
+  ])
 
   const openPluginsView = useCallback((): void => {
+    beginNavigation()
     setConnectPhoneSidebarOpen(false)
     openPlugins(sidebarView === 'claw' ? 'claw' : 'chat')
-  }, [openPlugins, setConnectPhoneSidebarOpen, sidebarView])
+  }, [beginNavigation, openPlugins, setConnectPhoneSidebarOpen, sidebarView])
 
   const openExtensionsView = useCallback((): void => {
+    beginNavigation()
     setConnectPhoneSidebarOpen(false)
     setRoute('extensions')
-  }, [setConnectPhoneSidebarOpen, setRoute])
+  }, [beginNavigation, setConnectPhoneSidebarOpen, setRoute])
 
   const openScheduleView = useCallback((): void => {
+    beginNavigation()
     setConnectPhoneSidebarOpen(false)
     openSchedule()
-  }, [openSchedule, setConnectPhoneSidebarOpen])
+  }, [beginNavigation, openSchedule, setConnectPhoneSidebarOpen])
 
   const openWorkflowView = useCallback((): void => {
+    beginNavigation()
     setConnectPhoneSidebarOpen(false)
     openWorkflow()
-  }, [openWorkflow, setConnectPhoneSidebarOpen])
+  }, [beginNavigation, openWorkflow, setConnectPhoneSidebarOpen])
 
   const toggleConnectPhone = useCallback((): void => {
+    const requestId = beginNavigation()
     // 打开 Connect Phone 不清空需求草稿:草稿内容与保存状态留在本地 store,
     // 返回原工作台后继续可见。
     if (route === 'claw') {
@@ -303,24 +410,29 @@ export function useWorkbenchNavigationController({
         connectPhoneReturnRouteRef.current === 'claw' ? 'chat' : connectPhoneReturnRouteRef.current
       if (returnRoute === 'chat') {
         // 利用 lastCodeThreadId 恢复离开前的 Code 会话(含需求 AI 会话)。
-        void openCode()
+        void openCode({ activationGuard: () => navigationIsCurrent(requestId) })
         return
       }
       if (returnRoute === 'write') {
-        void openWrite()
-        return
-      }
-      if (returnRoute === 'design') {
-        openDesign()
+        void openWrite({ activationGuard: () => navigationIsCurrent(requestId) })
         return
       }
       setRoute(returnRoute)
       return
     }
-    connectPhoneReturnRouteRef.current = route
+    connectPhoneReturnRouteRef.current = route === 'design' ? 'chat' : route
     openClaw()
     setConnectPhoneSidebarOpen(true)
-  }, [openClaw, openCode, openDesign, openWrite, route, setConnectPhoneSidebarOpen, setRoute])
+  }, [
+    beginNavigation,
+    navigationIsCurrent,
+    openClaw,
+    openCode,
+    openWrite,
+    route,
+    setConnectPhoneSidebarOpen,
+    setRoute
+  ])
 
   const closeRightPanel = useCallback((): void => {
     if (route === 'write') {

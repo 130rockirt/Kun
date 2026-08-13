@@ -85,9 +85,10 @@ function fakeHarness(settingsPatch: Partial<KunBrowserUseSettingsV1> = {}) {
   let currentUrl = ''
   let currentTitle = 'Example'
   let currentBox = [10, 10, 110, 10, 110, 50, 10, 50]
+  let targetDisabled = false
   let currentTarget = {
     role: 'button',
-    name: 'Continue',
+    name: 'Expand',
     localName: 'button',
     nodeName: 'BUTTON',
     attributes: ['type', 'button']
@@ -99,7 +100,10 @@ function fakeHarness(settingsPatch: Partial<KunBrowserUseSettingsV1> = {}) {
           backendDOMNodeId: 7,
           role: { value: currentTarget.role },
           name: { value: currentTarget.name },
-          properties: [{ name: 'focusable', value: { value: true } }]
+          properties: [
+            { name: 'focusable', value: { value: true } },
+            { name: 'disabled', value: { value: targetDisabled } }
+          ]
         }]
       }
     }
@@ -108,7 +112,8 @@ function fakeHarness(settingsPatch: Partial<KunBrowserUseSettingsV1> = {}) {
         nodes: [{
           backendDOMNodeId: 7,
           role: { value: currentTarget.role },
-          name: { value: currentTarget.name }
+          name: { value: currentTarget.name },
+          properties: [{ name: 'disabled', value: { value: targetDisabled } }]
         }]
       }
     }
@@ -127,6 +132,7 @@ function fakeHarness(settingsPatch: Partial<KunBrowserUseSettingsV1> = {}) {
     if (method === 'Runtime.callFunctionOn') return { result: { value: true } }
     return {}
   })
+  let resolveLoad: (() => void) | undefined
   const session = {
     setProxy: vi.fn(async () => undefined),
     setPermissionRequestHandler: vi.fn(),
@@ -171,6 +177,7 @@ function fakeHarness(settingsPatch: Partial<KunBrowserUseSettingsV1> = {}) {
       for (const listener of listeners.get('did-start-loading') ?? []) listener()
       for (const listener of listeners.get('did-stop-loading') ?? []) listener()
     }),
+    stop: vi.fn(),
     getURL: () => currentUrl,
     getTitle: () => currentTitle,
     capturePage: vi.fn(async () => image),
@@ -231,9 +238,25 @@ function fakeHarness(settingsPatch: Partial<KunBrowserUseSettingsV1> = {}) {
     setTitle: (title: string) => {
       currentTitle = title
     },
+    setDisabled: (disabled: boolean) => {
+      targetDisabled = disabled
+    },
     emitWebContents: (event: string, ...args: unknown[]) => {
       for (const listener of listeners.get(event) ?? []) listener(...args)
-    }
+    },
+    emitDebugger: (method: string) => {
+      for (const listener of debuggerListeners.get('message') ?? []) listener({}, method)
+    },
+    holdNextLoad: () => {
+      webContents.loadURL.mockImplementationOnce(async (url: string) => {
+        currentUrl = url
+        for (const listener of listeners.get('did-start-loading') ?? []) listener()
+        await new Promise<void>((resolve) => {
+          resolveLoad = resolve
+        })
+      })
+    },
+    finishLoad: () => resolveLoad?.()
   }
 }
 
@@ -271,77 +294,9 @@ async function openAuthorized(
 }
 
 describe('BrowserUseManager', () => {
-  it('retains Main re-origin consent in Full access', async () => {
-    const harness = fakeHarness({ approvalMode: 'always-ask' })
-    const open = {
-      action: 'open' as const,
-      url: 'https://example.com/start'
-    }
-    const pendingOpen = harness.manager.execute(
-      'thread-1',
-      'turn-1',
-      open,
-      undefined,
-      kunApprovalGrant(open, 'full-access'),
-      'full-access'
-    )
-    await vi.waitFor(() => {
-      expect(harness.states.at(-1)?.sessionId).toBeTruthy()
-    })
-    harness.manager.mount(
-      'thread-1',
-      harness.window as never,
-      { x: 10, y: 10, width: 800, height: 600 },
-      true
-    )
-    await vi.waitFor(() => {
-      expect(harness.manager.stateForThread('thread-1').pendingOriginConsent).toBeTruthy()
-    })
-    const initialRequest = harness.manager.stateForThread('thread-1').pendingOriginConsent!
-    harness.manager.decideOrigin({
-      threadId: 'thread-1',
-      requestId: initialRequest.id,
-      decision: 'allow-once'
-    })
-    await expect(pendingOpen).resolves.toMatchObject({ ok: true, code: 'opened' })
-    await harness.manager.execute(
-      'thread-1',
-      'turn-1',
-      { action: 'snapshot' },
-      undefined
-    )
-
-    const redirectEvent = { preventDefault: vi.fn() }
-    harness.emitWebContents(
-      'will-redirect',
-      redirectEvent,
-      'https://full-access.example/landing'
-    )
-    await vi.waitFor(() => {
-      expect(harness.manager.stateForThread('thread-1').pendingOriginConsent?.origin)
-        .toBe('https://full-access.example')
-    })
-    expect(harness.webContents.loadURL).not.toHaveBeenCalledWith(
-      'https://full-access.example/landing'
-    )
-    const redirectRequest = harness.manager.stateForThread('thread-1').pendingOriginConsent!
-    harness.manager.decideOrigin({
-      threadId: 'thread-1',
-      requestId: redirectRequest.id,
-      decision: 'allow-once'
-    })
-    await vi.waitFor(() => {
-      expect(harness.webContents.loadURL).toHaveBeenCalledWith(
-        'https://full-access.example/landing'
-      )
-    })
-
-    expect(redirectEvent.preventDefault).toHaveBeenCalledOnce()
-    expect(harness.manager.stateForThread('thread-1').pendingOriginConsent).toBeUndefined()
-  })
 
   it('redacts secret-like values from page titles before publishing state', async () => {
-    const harness = fakeHarness()
+    const harness = fakeHarness({ approvalMode: 'always-ask' })
     harness.setTitle('Dashboard token=top-secret api_live_1234567890')
     await openAuthorized(harness)
 
@@ -440,6 +395,36 @@ describe('BrowserUseManager', () => {
     )).resolves.toMatchObject({ ok: true, code: 'action_executed' })
   })
 
+  it('keeps an unchanged ref across an unrelated DOM mutation and live-revalidates it', async () => {
+    const harness = fakeHarness()
+    await openAuthorized(harness)
+    const snapshot = await harness.manager.execute('thread-1', 'turn-1', { action: 'snapshot' })
+    harness.emitDebugger('DOM.childNodeInserted')
+
+    await expect(harness.manager.execute(
+      'thread-1',
+      'turn-1',
+      clickAction(snapshot)
+    )).resolves.toMatchObject({ ok: true, code: 'action_executed' })
+    expect(harness.sendCommand).toHaveBeenCalledWith('Accessibility.getPartialAXTree', expect.anything())
+  })
+
+  it('aborts pending navigation on Stop and suppresses a late success', async () => {
+    const harness = fakeHarness()
+    harness.holdNextLoad()
+    const pending = harness.manager.execute(
+      'thread-1',
+      'turn-1',
+      { action: 'open', url: 'https://example.com/slow' }
+    )
+    await vi.waitFor(() => expect(harness.webContents.loadURL).toHaveBeenCalled())
+    harness.manager.stop('thread-1')
+    harness.finishLoad()
+
+    await expect(pending).resolves.toMatchObject({ ok: false, code: 'aborted' })
+    expect(harness.webContents.stop).toHaveBeenCalled()
+  })
+
   it('never auto-executes a transaction commit target', async () => {
     const harness = fakeHarness()
     harness.setTarget({
@@ -467,20 +452,70 @@ describe('BrowserUseManager', () => {
     )
   })
 
-  it('does not let a Kun grant bypass live target fingerprint validation', async () => {
-    const harness = fakeHarness({ approvalMode: 'always-ask' })
-    const open = {
-      action: 'open' as const,
-      url: 'https://example.com/start'
-    }
-    await harness.manager.execute(
+  it('rejects a target that becomes disabled after the snapshot', async () => {
+    const harness = fakeHarness()
+    await openAuthorized(harness)
+    const snapshot = await harness.manager.execute('thread-1', 'turn-1', { action: 'snapshot' })
+    harness.setDisabled(true)
+
+    await expect(harness.manager.execute(
       'thread-1',
       'turn-1',
-      open,
-      undefined,
-      kunApprovalGrant(open),
-      'agent'
+      clickAction(snapshot)
+    )).resolves.toMatchObject({ ok: false, code: 'stale_reference' })
+    expect(harness.sendCommand).not.toHaveBeenCalledWith(
+      'Input.dispatchMouseEvent',
+      expect.anything()
     )
+  })
+
+  it('reports select failure when the page does not accept the requested option', async () => {
+    const harness = fakeHarness({ approvalMode: 'always-ask' })
+    const fallbackSendCommand = harness.sendCommand.getMockImplementation()!
+    harness.sendCommand.mockImplementation(async (method: string, ...args: unknown[]) => {
+      if (
+        method === 'Runtime.callFunctionOn' &&
+        typeof (args[0] as { functionDeclaration?: unknown } | undefined)?.functionDeclaration === 'string' &&
+        String((args[0] as { functionDeclaration: string }).functionDeclaration)
+          .includes('HTMLSelectElement')
+      ) {
+        return { result: { value: false } }
+      }
+      return fallbackSendCommand(method)
+    })
+    harness.setTarget({
+      role: 'combobox',
+      name: 'Sort order',
+      localName: 'select',
+      nodeName: 'SELECT',
+      attributes: []
+    })
+    await openAuthorized(harness)
+    const snapshot = await harness.manager.execute('thread-1', 'turn-1', { action: 'snapshot' })
+    const expected = expectedTarget(snapshot)
+    const ref = snapshot.snapshot!.nodes.find((candidate) => candidate.ref)!.ref!
+    const pending = harness.manager.execute('thread-1', 'turn-1', {
+      action: 'select',
+      ref,
+      expectedTarget: expected,
+      value: 'newest'
+    })
+    await vi.waitFor(() => {
+      expect(harness.manager.stateForThread('thread-1').pendingActionConsent).toBeTruthy()
+    })
+    const request = harness.manager.stateForThread('thread-1').pendingActionConsent!
+    harness.manager.decideAction({
+      threadId: 'thread-1',
+      requestId: request.id,
+      decision: 'allow-once'
+    })
+
+    await expect(pending).resolves.toMatchObject({ ok: false, code: 'action_failed' })
+  })
+
+  it('does not let a Kun grant bypass live target fingerprint validation', async () => {
+    const harness = fakeHarness({ approvalMode: 'always-ask' })
+    await openAuthorized(harness, 'https://example.com/start')
     const snapshot = await harness.manager.execute(
       'thread-1',
       'turn-1',
@@ -514,18 +549,7 @@ describe('BrowserUseManager', () => {
     ['name', 'Different target']
   ] as const)('rejects a reviewer-visible expectedTarget %s substitution', async (field, value) => {
     const harness = fakeHarness({ approvalMode: 'always-ask' })
-    const open = {
-      action: 'open' as const,
-      url: 'https://example.com/start'
-    }
-    await harness.manager.execute(
-      'thread-1',
-      'turn-1',
-      open,
-      undefined,
-      kunApprovalGrant(open),
-      'agent'
-    )
+    await openAuthorized(harness, 'https://example.com/start')
     const snapshot = await harness.manager.execute(
       'thread-1',
       'turn-1',

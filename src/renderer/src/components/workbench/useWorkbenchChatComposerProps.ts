@@ -1,6 +1,15 @@
-import { useMemo, type Dispatch, type SetStateAction } from 'react'
+import { useEffect, useMemo, type Dispatch, type SetStateAction } from 'react'
 import type { QueuedUserMessage } from '../../store/chat-store-types'
-import { canGuideQueuedMessage } from '../../store/queued-message-guidance'
+import {
+  canGuideQueuedMessage,
+  queuedMessageMatchesRunningTurn
+} from '../../store/queued-message-guidance'
+import { useChatStore } from '../../store/chat-store'
+import {
+  hydratePlanWorktreeComposerRun,
+  planWorktreeComposerAccess
+} from '../../plan/plan-worktree-composer-access'
+import { usePlanWorktreeStore } from '../../plan/plan-worktree-store'
 import type { WorkbenchChatStageProps } from './WorkbenchChatStage'
 
 type ComposerProps = WorkbenchChatStageProps['composerProps']
@@ -10,6 +19,17 @@ type UseWorkbenchChatComposerPropsInput = {
   setInput: ComposerProps['setInput']
   composerMode: ComposerProps['mode']
   setComposerMode: ComposerProps['setMode']
+  taskSurface: NonNullable<ComposerProps['taskSurface']>
+  taskSurfaceLocked: boolean
+  taskSurfaceTransitioning: boolean
+  designTaskProfile: NonNullable<ComposerProps['designTaskProfile']>
+  designProfileLocked: boolean
+  imageGenerationEnabled?: boolean
+  imageGenerationAvailable: boolean
+  imageGenerationReason?: string
+  onTaskSurfaceChange: NonNullable<ComposerProps['onTaskSurfaceChange']>
+  onDesignTaskProfileChange: NonNullable<ComposerProps['onDesignTaskProfileChange']>
+  onConfigureImageGeneration: NonNullable<ComposerProps['onConfigureImageGeneration']>
   composerOrchestration: NonNullable<ComposerProps['orchestration']>
   graphEnabled: boolean
   setComposerOrchestration: NonNullable<ComposerProps['onOrchestrationChange']>
@@ -69,12 +89,17 @@ type UseWorkbenchChatComposerPropsInput = {
   worktreeBranch: string
   setWorktreeBranch: Dispatch<SetStateAction<string>>
   setUseWorktreePool: Dispatch<SetStateAction<boolean>>
-  createThread: (options: { workspaceRoot?: string; forceNew?: boolean }) => void | Promise<unknown>
+  createThread: (options: {
+    workspaceRoot?: string
+    forceNew?: boolean
+    agentSurface?: 'code'
+  }) => void | Promise<unknown>
   activeSkillWorkspace: string
   reviewActiveThread: NonNullable<ComposerProps['onReviewCommand']>
   updateComposerExecutionSettings: NonNullable<ComposerProps['onExecutionSettingsChange']>
   spawnSideConversation: (seedText: string) => void | Promise<unknown>
   openSideConversationDraft: () => void
+  startNewSddRequirement: NonNullable<ComposerProps['onNewRequirement']>
 }
 
 export function useWorkbenchChatComposerProps({
@@ -82,6 +107,17 @@ export function useWorkbenchChatComposerProps({
   setInput,
   composerMode,
   setComposerMode,
+  taskSurface,
+  taskSurfaceLocked,
+  taskSurfaceTransitioning,
+  designTaskProfile,
+  designProfileLocked,
+  imageGenerationEnabled,
+  imageGenerationAvailable,
+  imageGenerationReason,
+  onTaskSurfaceChange,
+  onDesignTaskProfileChange,
+  onConfigureImageGeneration,
   composerOrchestration,
   graphEnabled,
   setComposerOrchestration,
@@ -146,18 +182,61 @@ export function useWorkbenchChatComposerProps({
   reviewActiveThread,
   updateComposerExecutionSettings,
   spawnSideConversation,
-  openSideConversationDraft
+  openSideConversationDraft,
+  startNewSddRequirement
 }: UseWorkbenchChatComposerPropsInput): ComposerProps {
-  return useMemo(() => ({
+  const runningTurnMeta = useChatStore((state) => {
+    const runningUser = state.blocks.find((block) => block.kind === 'user' && (
+      block.id === state.currentTurnUserId || block.turnId === state.currentTurnId
+    ))
+    return runningUser?.kind === 'user' ? runningUser.meta : undefined
+  })
+  const activeThread = useChatStore((state) =>
+    state.threads.find((thread) => thread.id === activeThreadId))
+  const worktreePlans = usePlanWorktreeStore((state) => state.plans)
+  const upsertWorktreeRun = usePlanWorktreeStore((state) => state.upsertRun)
+  const worktreeComposerAccess = useMemo(
+    () => planWorktreeComposerAccess(activeThread, worktreePlans),
+    [activeThread, worktreePlans]
+  )
+  useEffect(() => {
+    let cancelled = false
+    void hydratePlanWorktreeComposerRun(
+      activeThread,
+      worktreePlans,
+      (runId) => window.kunGui.planWorktree.get({ runId }),
+      (run) => {
+        if (!cancelled) upsertWorktreeRun(run)
+      }
+    ).catch(() => undefined)
+    return () => { cancelled = true }
+  }, [activeThread, upsertWorktreeRun, worktreePlans])
+  return useMemo(() => {
+    const designTaskActive = route === 'chat' && !activeSddDraft && taskSurface === 'design'
+    return ({
     input,
     setInput,
-    mode: composerMode,
+    mode: designTaskActive ? 'agent' : composerMode,
     setMode: setComposerMode,
-    orchestration: composerOrchestration,
-    graphEnabled,
-    onOrchestrationChange: setComposerOrchestration,
-    onOpenGraph: openGraph,
-    onOpenGraphChild: openGraphChild,
+    taskSurface: route === 'chat' && !activeSddDraft ? taskSurface : undefined,
+    taskSurfaceLocked,
+    disabled: taskSurfaceTransitioning || !worktreeComposerAccess.writable,
+    disabledReason: worktreeComposerAccess.writable
+      ? undefined
+      : worktreeComposerAccess.reason,
+    designTaskProfile,
+    designProfileLocked,
+    ...(imageGenerationEnabled !== undefined ? { imageGenerationEnabled } : {}),
+    imageGenerationAvailable,
+    ...(imageGenerationReason ? { imageGenerationReason } : {}),
+    onTaskSurfaceChange,
+    onDesignTaskProfileChange,
+    onConfigureImageGeneration,
+    orchestration: designTaskActive ? 'direct' : composerOrchestration,
+    graphEnabled: designTaskActive ? false : graphEnabled,
+    onOrchestrationChange: designTaskActive ? undefined : setComposerOrchestration,
+    onOpenGraph: designTaskActive ? undefined : openGraph,
+    onOpenGraphChild: designTaskActive ? undefined : openGraphChild,
     busy,
     currentTurnOrchestration,
     runtimeReady,
@@ -214,27 +293,36 @@ export function useWorkbenchChatComposerProps({
       ...(message.displayText ? { displayText: message.displayText } : {}),
       ...(message.attachmentIds?.length ? { attachmentIds: message.attachmentIds } : {}),
       ...(message.attachments?.length ? { attachments: message.attachments } : {}),
-      guidanceEligible: canGuideQueuedMessage(message)
+      guidanceEligible: canGuideQueuedMessage(message) &&
+        queuedMessageMatchesRunningTurn(message, runningTurnMeta)
     })),
     onRemoveQueuedMessage: removeQueuedMessage,
     onGuideQueuedMessage: guideQueuedMessage,
     onInterrupt: (options) => void interrupt(options),
-    onPlanCommand: () => void handleGuiPlanCommand(),
+    onPlanCommand: designTaskActive ? undefined : () => void handleGuiPlanCommand(),
     useWorktreePool,
     worktreeBranch,
     onWorktreeBranchChange: setWorktreeBranch,
     onToggleWorktreeMode: () => setUseWorktreePool((value) => !value),
-    onNewCommand: () => void createThread({ workspaceRoot: activeSkillWorkspace, forceNew: true }),
+    onNewCommand: () => void createThread({
+      workspaceRoot: activeSkillWorkspace,
+      forceNew: true,
+      agentSurface: 'code'
+    }),
+    onNewRequirement:
+      route === 'chat' && !activeSddDraft && taskSurface === 'code'
+        ? () => void startNewSddRequirement()
+        : undefined,
     onReviewCommand: reviewActiveThread,
     onExecutionSettingsChange: updateComposerExecutionSettings,
     // Personas are Code-mode only: Write has its own agent presets, and SDD
     // drafts run a fixed prompt contract.
     composerPersonaId:
-      route === 'chat' && !activeSddDraft && composerPersonaEnabled ? composerPersonaId : undefined,
+      route === 'chat' && !activeSddDraft && taskSurface === 'code' && composerPersonaEnabled ? composerPersonaId : undefined,
     codeAgentPresets:
-      route === 'chat' && !activeSddDraft && composerPersonaEnabled ? codeAgentPresets : undefined,
+      route === 'chat' && !activeSddDraft && taskSurface === 'code' && composerPersonaEnabled ? codeAgentPresets : undefined,
     onComposerPersonaChange:
-      route === 'chat' && !activeSddDraft && composerPersonaEnabled
+      route === 'chat' && !activeSddDraft && taskSurface === 'code' && composerPersonaEnabled
         ? setComposerPersonaId
         : undefined,
     onBtwCommand: (seedText) => {
@@ -244,7 +332,8 @@ export function useWorkbenchChatComposerProps({
       }
       openSideConversationDraft()
     }
-  }), [
+  })
+  }, [
     activeClawChannelId,
     codeAgentPresets,
     composerPersonaId,
@@ -254,6 +343,19 @@ export function useWorkbenchChatComposerProps({
     activeSddDraft,
     activeSkillWorkspace,
     activeThreadId,
+    taskSurface,
+    taskSurfaceLocked,
+    designProfileLocked,
+    taskSurfaceTransitioning,
+    worktreeComposerAccess.writable,
+    worktreeComposerAccess.reason,
+    designTaskProfile,
+    imageGenerationEnabled,
+    imageGenerationAvailable,
+    imageGenerationReason,
+    onTaskSurfaceChange,
+    onDesignTaskProfileChange,
+    onConfigureImageGeneration,
     addComposerFileReference,
     attachmentUploadBusy,
     attachmentUploadEnabled,
@@ -297,6 +399,7 @@ export function useWorkbenchChatComposerProps({
     removeComposerFileReference,
     removeQueuedMessage,
     reviewActiveThread,
+    runningTurnMeta,
     route,
     runtimeReady,
     runtimeSkills,
@@ -310,6 +413,7 @@ export function useWorkbenchChatComposerProps({
     setUseWorktreePool,
     setWorktreeBranch,
     spawnSideConversation,
+    startNewSddRequirement,
     updateComposerExecutionSettings,
     useWorktreePool,
     webAccessAvailable,

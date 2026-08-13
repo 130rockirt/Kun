@@ -155,6 +155,27 @@ describe('executeOps execution', () => {
     })
   })
 
+  it('uses a persisted replay key to avoid duplicating renderer-applied shapes', () => {
+    const ops = [
+      { op: 'add', shape: { type: 'rect', name: 'Replay card', x: 0, y: 0, width: 80, height: 40 } }
+    ]
+    const first = executeOps(ops, 'durable-replay', { replayKey: 'thread\0turn\0doc\0tool' })
+    const second = executeOps(ops, 'durable-replay', { replayKey: 'thread\0turn\0doc\0tool' })
+
+    expect(second).toEqual(first)
+    expect(useCanvasShapeStore.getState().document.operationJournal).toHaveLength(1)
+    expect(useCanvasShapeStore.getState().document.rendererReplayKeys).toEqual([
+      'thread\0turn\0doc\0tool'
+    ])
+    const compacted = useCanvasShapeStore.getState().document
+    useCanvasShapeStore.getState().loadDocument({ ...compacted, operationJournal: [] })
+    expect(executeOps(ops, 'durable-replay', {
+      replayKey: 'thread\0turn\0doc\0tool'
+    }).affectedIds).toEqual([])
+    expect(useCanvasShapeStore.getState().document.objects[useCanvasShapeStore.getState().document.rootId]
+      .children).toHaveLength(1)
+  })
+
   it('add + update is one undo entry (atomic batch)', () => {
     const initial = useCanvasUndoStore.getState().undoStack.length
     const r = executeOps([

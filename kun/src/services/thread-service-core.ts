@@ -5,6 +5,7 @@ import type { SessionStore } from '../ports/session-store.js'
 import type { IdGenerator } from '../ports/id-generator.js'
 import type {
   CreateThreadRequest,
+  SetPlanBuildAdmissionFenceRequest,
   SetThreadGoalRequest,
   SetThreadTodosRequest,
   ThreadGoal,
@@ -18,7 +19,8 @@ import type {
   ThreadTodoList,
   ThreadTodoSource,
   ThreadTodoStatus,
-  ThreadSummary
+  ThreadSummary,
+  ResumeSessionMetadata
 } from '../contracts/threads.js'
 import type { ExtensionThreadMetadata } from '../contracts/threads.js'
 import type {
@@ -27,6 +29,7 @@ import type {
   SandboxMode
 } from '../contracts/policy.js'
 import type { Turn } from '../contracts/turns.js'
+import type { DesignDocumentTarget } from '../contracts/design-task-profile.js'
 import { isPublicTurnItem, type TurnItem } from '../contracts/items.js'
 import {
   createThreadRecord,
@@ -36,6 +39,9 @@ import {
 } from '../domain/thread.js'
 import type { AgentSession } from '../domain/session.js'
 import { repairModelHistoryItems } from '../domain/model-history-repair.js'
+import {
+  retargetDesignTaskProfile
+} from '../domain/design-task-profile.js'
 import type { RuntimeEventRecorder } from './runtime-event-recorder.js'
 import type { ThreadLifecycleFence } from './thread-lifecycle-fence.js'
 import { withFileMutationQueue } from '../adapters/tool/file-mutation-queue.js'
@@ -90,6 +96,11 @@ export type ForkThreadOptions = {
   turnId?: string
   beforeTurn?: boolean
   approvalReviewer?: ApprovalReviewer
+  workspace?: string
+  planBuildRunId?: string
+  planBuildAgentSurface?: 'code'
+  designDocumentTarget?: DesignDocumentTarget
+  designCloneOperationId?: string
 }
 
 export type ResumeSessionOptions = {
@@ -97,6 +108,8 @@ export type ResumeSessionOptions = {
   model?: string
   mode?: ThreadMode
   approvalReviewer?: ApprovalReviewer
+  designDocumentTarget?: DesignDocumentTarget
+  designCloneOperationId?: string
 }
 
 export type ResumeSessionResult = {
@@ -206,10 +219,15 @@ export interface ThreadService {
   syncTodosFromPlan(threadId: string, options: SyncPlanTodosOptions): Promise<ThreadTodoList>;
   delete(threadId: string): Promise<boolean>;
   fork(threadId: string, options?: ForkThreadOptions ): Promise<ThreadRecord>;
+  setPlanBuildAdmissionFence(
+    threadId: string,
+    request: SetPlanBuildAdmissionFenceRequest
+  ): Promise<ThreadRecord>;
   resumeSession(
     sessionId: string,
     options?: ResumeSessionOptions
   ): Promise<ResumeSessionResult>;
+  getResumeSessionMetadata(sessionId: string): Promise<ResumeSessionMetadata>;
   toSummary(thread: ThreadRecord): ThreadSummary;
 }
 
@@ -222,7 +240,12 @@ installServiceOperations(
 )
 
 
-export function cloneTurnForThread(turn: Turn, threadId: string, now: string): Turn {
+export function cloneTurnForThread(
+  turn: Turn,
+  threadId: string,
+  now: string,
+  designDocumentTarget?: DesignDocumentTarget
+): Turn {
   // ThreadRecord is a renderer-facing mirror. Older on-disk records can
   // predate the session-only goal-context boundary, so never carry an
   // internal item into the cloned mirror. `cloneSessionItemsForThread` below
@@ -230,7 +253,7 @@ export function cloneTurnForThread(turn: Turn, threadId: string, now: string): T
   const items = repairModelHistoryItems(
     turn.items
       .filter(isPublicTurnItem)
-      .map((item) => cloneItemForThread(item, threadId, now))
+      .map((item) => cloneItemForThread(item, threadId, now, designDocumentTarget))
   )
   const attachmentIds = turn.attachmentIds.length > 0
     ? turn.attachmentIds
@@ -241,7 +264,13 @@ export function cloneTurnForThread(turn: Turn, threadId: string, now: string): T
     status: turn.status === 'queued' || turn.status === 'running' ? 'completed' : turn.status,
     finishedAt: turn.finishedAt ?? now,
     attachmentIds,
-    items
+    items,
+    ...(designDocumentTarget && turn.designProfile
+      ? {
+          designProfile: retargetDesignTaskProfile(turn.designProfile, designDocumentTarget),
+          designDocumentTarget
+        }
+      : {})
   }
 }
 
@@ -428,13 +457,13 @@ export function cloneTurnForFork(
   turn: Turn,
   threadId: string,
   now: string,
-  options: { relation: ThreadRelation }
+  options: { relation: ThreadRelation; designDocumentTarget?: DesignDocumentTarget }
 ): Turn {
   const isInFlight = turn.status === 'queued' || turn.status === 'running'
   if (options.relation === 'side' && isInFlight) {
     const userPromptItem = turn.items.find((item) => item.kind === 'user_message')
     const userPromptItemCloned = userPromptItem
-      ? cloneItemForThread(userPromptItem, threadId, now)
+      ? cloneItemForThread(userPromptItem, threadId, now, options.designDocumentTarget)
       : undefined
     return {
       ...turn,
@@ -446,17 +475,35 @@ export function cloneTurnForFork(
         : attachmentIdsFromItems(userPromptItemCloned ? [userPromptItemCloned] : []),
       // Keep the user prompt; drop everything else to avoid carrying
       // half-streamed assistant/tool state into the side thread.
-      items: userPromptItemCloned ? [userPromptItemCloned] : []
+      items: userPromptItemCloned ? [userPromptItemCloned] : [],
+      ...(options.designDocumentTarget && turn.designProfile
+        ? {
+            designProfile: retargetDesignTaskProfile(turn.designProfile, options.designDocumentTarget),
+            designDocumentTarget: options.designDocumentTarget
+          }
+        : {})
     }
   }
-  return cloneTurnForThread(turn, threadId, now)
+  return cloneTurnForThread(turn, threadId, now, options.designDocumentTarget)
 }
 
-export function cloneItemForThread(item: TurnItem, threadId: string, now: string): TurnItem {
-  const cloned = {
+export function cloneItemForThread(
+  item: TurnItem,
+  threadId: string,
+  now: string,
+  designDocumentTarget?: DesignDocumentTarget
+): TurnItem {
+  let cloned = {
     ...item,
     threadId
   } as TurnItem
+  if (designDocumentTarget && cloned.kind === 'user_message' && cloned.designProfile) {
+    cloned = {
+      ...cloned,
+      designProfile: retargetDesignTaskProfile(cloned.designProfile, designDocumentTarget),
+      designDocumentTarget
+    }
+  }
   if (cloned.status === 'pending' || cloned.status === 'running') {
     if (cloned.kind === 'approval') {
       return { ...cloned, status: 'expired', finishedAt: cloned.finishedAt ?? now }
@@ -564,9 +611,10 @@ export function rebuildTurnsFromItems(input: {
     }]
   }
   return [...byTurn.entries()].map(([turnId, items]) => {
-    const prompt =
-      items.find((item): item is Extract<TurnItem, { kind: 'user_message' }> => item.kind === 'user_message')
-        ?.text ?? input.fallbackPrompt
+    const userItem = items.find(
+      (item): item is Extract<TurnItem, { kind: 'user_message' }> => item.kind === 'user_message'
+    )
+    const prompt = userItem?.text ?? input.fallbackPrompt
     return {
       id: turnId,
       threadId: input.threadId,
@@ -581,7 +629,14 @@ export function rebuildTurnsFromItems(input: {
       injectedInstructionSources: [],
       createdAt: items[0]?.createdAt ?? input.now,
       finishedAt: input.now,
-      items
+      items,
+      ...(userItem?.designProfile
+        ? {
+            agentSurface: 'design' as const,
+            designProfile: userItem.designProfile,
+            designDocumentTarget: userItem.designDocumentTarget ?? userItem.designProfile.documentTarget
+          }
+        : {})
     }
   })
 }

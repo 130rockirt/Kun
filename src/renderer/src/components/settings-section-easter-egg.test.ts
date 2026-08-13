@@ -36,7 +36,7 @@ const labels: Record<string, string> = {
   back: 'Back',
   general: 'General',
   providers: 'Providers',
-  write: 'Write',
+  write: 'Work',
   imageGen: 'Image generation',
   speechToText: 'Speech to text',
   agents: 'AI assistant',

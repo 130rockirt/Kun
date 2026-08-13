@@ -20,13 +20,15 @@ import {
 import { BrowserUseManagerFoundation } from './browser-use-manager-foundation'
 import {
   BACKGROUND_VIEW_BOUNDS,
+  BrowserUseOperationAbortedError,
   INTERACTIVE_ROLES,
-  MUTATION_EVENTS,
+  DOCUMENT_INVALIDATION_EVENTS,
   attributesRecord,
   axProperties,
   axString,
   errorMessage,
   isNearViewport,
+  isDisabledTarget,
   isSensitiveTarget,
   originOnly,
   pathOnly,
@@ -65,6 +67,8 @@ export abstract class BrowserUseManagerNavigation extends BrowserUseManagerFound
       refs: new Map(),
       prepared: new Map(),
       turnBudgets: new Map(),
+      activeOperations: new Set(),
+      operationQueue: Promise.resolve(),
       stopping: false,
       agentInputDispatchActive: false
     }
@@ -82,7 +86,9 @@ export abstract class BrowserUseManagerNavigation extends BrowserUseManagerFound
   protected async open(
     entry: BrowserSessionEntry,
     rawUrl: string,
-    kunApprovalSource?: Exclude<BrowserUseKunApprovalMode, 'full-access'>
+    newTab: boolean,
+    reviewerSource: BrowserUseKunApprovalMode | undefined,
+    signal: AbortSignal
   ): Promise<BrowserUseResult> {
     let origin: string
     try {
@@ -92,20 +98,42 @@ export abstract class BrowserUseManagerNavigation extends BrowserUseManagerFound
       return resultError(code, errorMessage(error), entry)
     }
 
-    if (!(await this.ensureOriginGrant(entry, origin, rawUrl, kunApprovalSource))) {
+    if (newTab && entry.tabs.size >= this.options.settings().maxTabs) {
+      return resultError('tab_limit_reached', 'Browser Use tab limit reached.', entry)
+    }
+    if (!(await this.ensureOriginGrant(entry, origin, rawUrl, reviewerSource, signal))) {
       return resultError('origin_denied', 'The exact origin was not granted for this session.', entry)
     }
+    if (signal.aborted || entry.stopping) {
+      return resultError('aborted', 'Browser Use navigation was cancelled.', entry)
+    }
+    const previousActive = this.activeTab(entry)
+    const previousLifecycle = entry.lifecycle
+    let openedTab: BrowserTab | undefined
     try {
-      await this.ensureProxy(entry)
-      const tab = await this.ensureTab(entry)
+      await this.ensureProxy(entry, signal)
+      if (signal.aborted || entry.stopping) {
+        return resultError('aborted', 'Browser Use navigation was cancelled.', entry)
+      }
+      const tab = await this.ensureTab(entry, newTab, signal)
+      openedTab = tab
+      this.assertOperationActive(entry, signal, tab)
       entry.lifecycle = 'loading'
       this.publish(entry)
       await tab.view.webContents.loadURL(rawUrl)
+      this.assertOperationActive(entry, signal, tab)
       return resultOk('opened', `Opened ${sanitizeBrowserUseUrl(rawUrl)}.`, entry)
     } catch (error) {
-      entry.lifecycle = 'error'
-      const tab = this.activeTab(entry)
-      if (tab) tab.error = errorMessage(error).slice(0, 1024)
+      if (
+        signal.aborted ||
+        entry.stopping ||
+        error instanceof BrowserUseOperationAbortedError
+      ) {
+        return resultError('aborted', 'Browser Use navigation was cancelled.', entry)
+      }
+      const restoredPreviousTab = newTab && previousActive && this.activeTab(entry) === previousActive
+      entry.lifecycle = restoredPreviousTab ? previousLifecycle : 'error'
+      if (openedTab) openedTab.error = errorMessage(error).slice(0, 1024)
       this.audit(entry, {
         category: 'execution',
         action: 'open',
@@ -119,28 +147,55 @@ export abstract class BrowserUseManagerNavigation extends BrowserUseManagerFound
     }
   }
 
-  protected async ensureProxy(entry: BrowserSessionEntry): Promise<void> {
+  protected async ensureProxy(
+    entry: BrowserSessionEntry,
+    signal: AbortSignal
+  ): Promise<void> {
     if (entry.proxy && entry.proxyUrl) return
-    const proxy = this.createProxy(
-      entry.mode,
-      entry.exactLocalOrigin,
-      (event) => this.audit(entry, {
-        category: 'network-policy',
-        action: 'network-request',
-        sanitizedPath: pathOnly(event.sanitizedUrl),
-        origin: originOnly(event.sanitizedUrl),
-        outcome: event.outcome === 'allowed' ? 'success' : 'blocked',
-        ...(event.code ? { errorCode: event.code } : {})
+    if (!entry.proxyStart) {
+      const proxy = this.createProxy(
+        entry.mode,
+        entry.exactLocalOrigin,
+        (event) => {
+          if (entry.stopping || this.sessions.get(entry.threadId) !== entry) return
+          this.audit(entry, {
+            category: 'network-policy',
+            action: 'network-request',
+            sanitizedPath: pathOnly(event.sanitizedUrl),
+            origin: originOnly(event.sanitizedUrl),
+            outcome: event.outcome === 'allowed' ? 'success' : 'blocked',
+            ...(event.code ? { errorCode: event.code } : {})
+          })
+        }
+      )
+      const pending = (async () => {
+        try {
+          const proxyUrl = await proxy.start()
+          this.assertOperationActive(entry, signal)
+          entry.proxy = proxy
+          entry.proxyUrl = proxyUrl
+        } catch (error) {
+          await proxy.stop().catch(() => undefined)
+          throw error
+        }
+      })()
+      const start = pending.finally(() => {
+        if (entry.proxyStart === start) entry.proxyStart = undefined
       })
-    )
-    const proxyUrl = await proxy.start()
-    entry.proxy = proxy
-    entry.proxyUrl = proxyUrl
+      entry.proxyStart = start
+    }
+    await entry.proxyStart
+    this.assertOperationActive(entry, signal)
   }
 
-  protected async ensureTab(entry: BrowserSessionEntry): Promise<BrowserTab> {
+  protected async ensureTab(
+    entry: BrowserSessionEntry,
+    createNew: boolean,
+    signal: AbortSignal
+  ): Promise<BrowserTab> {
     const active = this.activeTab(entry)
-    if (active) return active
+    if (active && !createNew) return active
+    this.assertOperationActive(entry, signal)
     const settings = this.options.settings()
     if (entry.tabs.size >= settings.maxTabs) {
       throw new Error('Browser Use tab limit reached.')
@@ -151,35 +206,67 @@ export abstract class BrowserUseManagerNavigation extends BrowserUseManagerFound
     view.setBounds(BACKGROUND_VIEW_BOUNDS)
     view.setVisible(false)
     const tab: BrowserTab = { id, view, loading: false }
-    entry.tabs.set(id, tab)
-    entry.activeTabId = id
-    await view.webContents.session.setProxy(browserUseProxyConfiguration(entry.proxyUrl))
-    hardenRemoteSession(view.webContents.session)
-    view.webContents.session.webRequest.onBeforeRequest(
-      { urls: ['<all_urls>'] },
-      (details, callback) => {
-        if (details.resourceType !== 'mainFrame') {
-          callback({ cancel: false })
-          return
+    let inserted = false
+    const previousActiveId = entry.activeTabId
+    try {
+      await view.webContents.session.setProxy(browserUseProxyConfiguration(entry.proxyUrl))
+      this.assertOperationActive(entry, signal)
+      hardenRemoteSession(view.webContents.session)
+      view.webContents.session.webRequest.onBeforeRequest(
+        { urls: ['<all_urls>'] },
+        (details, callback) => {
+          if (details.resourceType !== 'mainFrame') {
+            callback({ cancel: false })
+            return
+          }
+          const requestedOrigin = safeOrigin(details.url)
+          const cancel = !requestedOrigin || !entry.grants.has(requestedOrigin)
+          callback({ cancel })
+          if (cancel && requestedOrigin && !entry.stopping) {
+            void this.queueOriginNavigation(entry, details.url)
+          }
         }
-        const requestedOrigin = safeOrigin(details.url)
-        const cancel = !requestedOrigin || !entry.grants.has(requestedOrigin)
-        callback({ cancel })
-        if (cancel && requestedOrigin) void this.queueOriginNavigation(entry, details.url)
+      )
+      await this.hardenTab(entry, tab, signal)
+      this.assertOperationActive(entry, signal)
+
+      const previous = this.activeTab(entry)
+      entry.tabs.set(id, tab)
+      entry.activeTabId = id
+      inserted = true
+      if (previous) previous.view.setVisible(false)
+      if (entry.mount) this.attachView(entry, tab)
+      this.publish(entry)
+      return tab
+    } catch (error) {
+      if (inserted) {
+        this.detachView(entry, tab)
+        entry.tabs.delete(id)
+        entry.activeTabId = previousActiveId && entry.tabs.has(previousActiveId)
+          ? previousActiveId
+          : entry.tabs.keys().next().value
+        const restored = this.activeTab(entry)
+        if (restored) this.attachView(entry, restored)
       }
-    )
-    this.hardenTab(entry, tab)
-    if (entry.mount) this.attachView(entry, tab)
-    this.publish(entry)
-    return tab
+      if (!view.webContents.isDestroyed()) view.webContents.close()
+      throw error
+    }
   }
 
-  protected hardenTab(entry: BrowserSessionEntry, tab: BrowserTab): void {
+  protected async hardenTab(
+    entry: BrowserSessionEntry,
+    tab: BrowserTab,
+    signal: AbortSignal
+  ): Promise<void> {
     const guest = tab.view.webContents
+    const ownsTab = () => entry.tabs.get(tab.id) === tab && !entry.stopping
     guest.setAudioMuted(true)
     guest.setWindowOpenHandler(({ url }) => {
       const origin = safeOrigin(url)
-      if (origin && !entry.grants.has(origin)) void this.queueOriginNavigation(entry, url)
+      if (origin && !entry.grants.has(origin) && ownsTab()) {
+        void this.queueOriginNavigation(entry, url)
+      }
+      if (!ownsTab()) return { action: 'deny' }
       this.audit(entry, {
         category: 'network-policy',
         action: 'popup-blocked',
@@ -191,6 +278,10 @@ export abstract class BrowserUseManagerNavigation extends BrowserUseManagerFound
       return { action: 'deny' }
     })
     guest.on('will-navigate', (event, url) => {
+      if (!ownsTab()) {
+        event.preventDefault()
+        return
+      }
       const origin = safeOrigin(url)
       if (!origin || !entry.grants.has(origin)) {
         event.preventDefault()
@@ -198,6 +289,10 @@ export abstract class BrowserUseManagerNavigation extends BrowserUseManagerFound
       }
     })
     guest.on('will-redirect', (event, url) => {
+      if (!ownsTab()) {
+        event.preventDefault()
+        return
+      }
       const origin = safeOrigin(url)
       if (!origin || !entry.grants.has(origin)) {
         event.preventDefault()
@@ -215,33 +310,42 @@ export abstract class BrowserUseManagerNavigation extends BrowserUseManagerFound
       }
     })
     guest.on('did-start-navigation', (_event, _url, _isInPlace, isMainFrame) => {
-      if (isMainFrame) this.invalidateDocument(entry, 'navigation')
+      if (isMainFrame && ownsTab()) this.invalidateDocument(entry, 'navigation')
     })
     guest.on('did-start-loading', () => {
+      if (!ownsTab()) return
       tab.loading = true
       tab.error = undefined
-      entry.lifecycle = 'loading'
+      if (!entry.stopping) entry.lifecycle = 'loading'
       this.publish(entry)
     })
     guest.on('did-stop-loading', () => {
+      if (!ownsTab()) return
       tab.loading = false
-      entry.lifecycle = 'ready'
+      if (!entry.stopping) entry.lifecycle = 'ready'
       this.publish(entry)
     })
-    guest.on('did-navigate', () => this.publish(entry))
-    guest.on('did-navigate-in-page', () => this.publish(entry))
-    guest.on('page-title-updated', () => this.publish(entry))
+    guest.on('did-navigate', () => {
+      if (ownsTab()) this.publish(entry)
+    })
+    guest.on('did-navigate-in-page', () => {
+      if (ownsTab()) this.publish(entry)
+    })
+    guest.on('page-title-updated', () => {
+      if (ownsTab()) this.publish(entry)
+    })
     guest.on('did-fail-load', (_event, errorCode, errorDescription, _url, isMainFrame) => {
-      if (!isMainFrame || errorCode === -3) return
+      if (!ownsTab() || !isMainFrame || errorCode === -3) return
       tab.loading = false
       tab.error = errorDescription.slice(0, 1024)
       entry.lifecycle = 'error'
       this.publish(entry)
     })
     guest.on('render-process-gone', () => {
+      if (!ownsTab()) return
       tab.error = 'Browser page process exited.'
       entry.lifecycle = 'error'
-      this.cancelPending(entry, 'cancelled')
+      this.cancelActiveOperations(entry)
       this.invalidateDocument(entry, 'render-process-gone')
       this.audit(entry, {
         category: 'lifecycle',
@@ -257,39 +361,110 @@ export abstract class BrowserUseManagerNavigation extends BrowserUseManagerFound
     })
     try {
       guest.debugger.attach('1.3')
-      void guest.debugger.sendCommand('DOM.enable')
-      void guest.debugger.sendCommand('Accessibility.enable')
+      this.assertOperationActive(entry, signal)
+      await guest.debugger.sendCommand('DOM.enable')
+      this.assertOperationActive(entry, signal)
+      await guest.debugger.sendCommand('Accessibility.enable')
+      this.assertOperationActive(entry, signal)
       guest.debugger.on('message', (_event, method) => {
-        if (MUTATION_EVENTS.has(method)) this.invalidateDocument(entry, 'dom-mutation')
+        if (ownsTab() && DOCUMENT_INVALIDATION_EVENTS.has(method)) {
+          this.invalidateDocument(entry, 'document-updated')
+        }
       })
-    } catch {
-      tab.error = 'Structured browser observation is unavailable.'
-      entry.lifecycle = 'error'
+    } catch (error) {
+      if (error instanceof BrowserUseOperationAbortedError) throw error
+      throw new Error('Structured browser observation is unavailable.', { cause: error })
     }
   }
 
-  protected async snapshot(entry: BrowserSessionEntry): Promise<BrowserUseResult> {
+  protected async highlightedPreview(
+    entry: BrowserSessionEntry,
+    tab: BrowserTab,
+    backendNodeId: number,
+    signal: AbortSignal,
+    documentGeneration: number
+  ): Promise<string | undefined> {
+    try {
+      this.assertOperationActive(entry, signal, tab, documentGeneration)
+      await tab.view.webContents.debugger.sendCommand('Overlay.enable')
+      this.assertOperationActive(entry, signal, tab, documentGeneration)
+      await tab.view.webContents.debugger.sendCommand('Overlay.highlightNode', {
+        backendNodeId,
+        highlightConfig: {
+          showInfo: true,
+          showStyles: false,
+          contentColor: { r: 53, g: 132, b: 228, a: 0.12 },
+          borderColor: { r: 53, g: 132, b: 228, a: 1 }
+        }
+      })
+      this.assertOperationActive(entry, signal, tab, documentGeneration)
+      const image = await tab.view.webContents.capturePage()
+      this.assertOperationActive(entry, signal, tab, documentGeneration)
+      await tab.view.webContents.debugger.sendCommand('Overlay.hideHighlight')
+      this.assertOperationActive(entry, signal, tab, documentGeneration)
+      const size = image.getSize()
+      const scale = Math.min(1, 800 / Math.max(size.width, size.height, 1))
+      const bounded = scale < 1
+        ? image.resize({
+            width: Math.max(1, Math.round(size.width * scale)),
+            height: Math.max(1, Math.round(size.height * scale))
+          })
+        : image
+      return `data:image/png;base64,${bounded.toPNG().toString('base64')}`
+    } catch (error) {
+      try {
+        await tab.view.webContents.debugger.sendCommand('Overlay.hideHighlight')
+      } catch {
+        // Preview failure must never weaken the action validation path.
+      }
+      if (
+        error instanceof BrowserUseOperationAbortedError ||
+        signal.aborted ||
+        entry.stopping
+      ) {
+        throw new BrowserUseOperationAbortedError()
+      }
+      return undefined
+    }
+  }
+
+  protected async snapshot(
+    entry: BrowserSessionEntry,
+    signal: AbortSignal
+  ): Promise<BrowserUseResult> {
     const tab = this.requireActiveTab(entry)
     const settings = this.options.settings()
+    const documentGeneration = entry.documentGeneration
+    const nextRefs = new Map<string, BrowserTarget>()
     try {
+      this.assertOperationActive(entry, signal, tab, documentGeneration)
       await tab.view.webContents.debugger.sendCommand('DOM.getDocument', {
         depth: 1,
         pierce: true
       })
+      this.assertOperationActive(entry, signal, tab, documentGeneration)
       const response = await tab.view.webContents.debugger.sendCommand(
         'Accessibility.getFullAXTree',
         { depth: 8 }
       ) as { nodes?: AxNode[] }
+      this.assertOperationActive(entry, signal, tab, documentGeneration)
       const nodes: BrowserUseSnapshotNode[] = []
       let textChars = 0
       let truncated = false
-      entry.refs.clear()
       for (const axNode of response.nodes ?? []) {
+        this.assertOperationActive(entry, signal, tab, documentGeneration)
         if (nodes.length >= settings.maxSnapshotNodes) {
           truncated = true
           break
         }
-        const projected = await this.projectAxNode(entry, tab, axNode)
+        const projected = await this.projectAxNode(
+          entry,
+          tab,
+          axNode,
+          signal,
+          documentGeneration,
+          nextRefs
+        )
         if (!projected) continue
         const projectedChars = projected.role.length + projected.name.length + (projected.value?.length ?? 0)
         if (textChars + projectedChars > settings.maxSnapshotTextChars) {
@@ -299,17 +474,21 @@ export abstract class BrowserUseManagerNavigation extends BrowserUseManagerFound
         textChars += projectedChars
         nodes.push(projected)
       }
+      this.assertOperationActive(entry, signal, tab, documentGeneration)
+      const currentUrl = tab.view.webContents.getURL()
       const snapshot: BrowserUseSnapshot = {
         untrustedContent: true,
         sessionId: entry.id,
         tabId: tab.id,
-        origin: safeOrigin(tab.view.webContents.getURL()) ?? '',
-        sanitizedUrl: sanitizeBrowserUseUrl(tab.view.webContents.getURL()),
+        origin: safeOrigin(currentUrl) ?? '',
+        sanitizedUrl: sanitizeBrowserUseUrl(currentUrl),
         title: sanitizePageTitle(tab.view.webContents.getTitle()),
-        documentGeneration: entry.documentGeneration,
+        documentGeneration,
         truncated,
         nodes
       }
+      entry.refs.clear()
+      for (const [ref, target] of nextRefs) entry.refs.set(ref, target)
       this.audit(entry, {
         category: 'execution',
         action: 'snapshot',
@@ -328,6 +507,13 @@ export abstract class BrowserUseManagerNavigation extends BrowserUseManagerFound
         snapshot
       })
     } catch (error) {
+      if (
+        error instanceof BrowserUseOperationAbortedError ||
+        signal.aborted ||
+        entry.stopping
+      ) {
+        return resultError('aborted', 'Browser Use snapshot was cancelled.', entry, tab.id)
+      }
       return resultError('snapshot_failed', errorMessage(error), entry, tab.id)
     }
   }
@@ -335,45 +521,54 @@ export abstract class BrowserUseManagerNavigation extends BrowserUseManagerFound
   protected async projectAxNode(
     entry: BrowserSessionEntry,
     tab: BrowserTab,
-    axNode: AxNode
+    axNode: AxNode,
+    signal: AbortSignal,
+    documentGeneration: number,
+    nextRefs: Map<string, BrowserTarget>
   ): Promise<BrowserUseSnapshotNode | undefined> {
+    this.assertOperationActive(entry, signal, tab, documentGeneration)
     if (axNode.ignored || !axNode.backendDOMNodeId) return undefined
     const role = axString(axNode.role).slice(0, 128)
     const name = axString(axNode.name).slice(0, 512)
     if (!role && !name) return undefined
     const box = await this.boxForNode(tab, axNode.backendDOMNodeId)
+    this.assertOperationActive(entry, signal, tab, documentGeneration)
     if (!box || !isNearViewport(box, entry.mount?.bounds)) return undefined
     const description = await this.describeNode(tab, axNode.backendDOMNodeId)
+    this.assertOperationActive(entry, signal, tab, documentGeneration)
     const attributes = attributesRecord(description.node?.attributes)
     const sensitive = isSensitiveTarget(role, name, description, attributes)
     const properties = axProperties(axNode.properties)
+    const disabled = isDisabledTarget(properties, attributes)
     const interactive = INTERACTIVE_ROLES.has(role.toLowerCase()) ||
       properties.get('focusable') === true
     let ref: string | undefined
-    if (interactive && !sensitive) {
+    if (interactive && !sensitive && !disabled) {
       const targetRef = randomToken()
       ref = targetRef
       const target: BrowserTarget = {
         ref: targetRef,
         tabId: tab.id,
-        documentGeneration: entry.documentGeneration,
+        documentGeneration,
         backendNodeId: axNode.backendDOMNodeId,
         role,
         name,
         sensitive,
+        disabled,
         rect: box,
         fingerprint: this.fingerprint(entry, {
           tabId: tab.id,
-          documentGeneration: entry.documentGeneration,
+          documentGeneration,
           backendNodeId: axNode.backendDOMNodeId,
           role,
           name,
           sensitive,
+          disabled,
           rect: box,
           attributes
         })
       }
-      entry.refs.set(targetRef, target)
+      nextRefs.set(targetRef, target)
     }
     const rawValue = axString(axNode.value).slice(0, 512)
     return {
@@ -381,9 +576,7 @@ export abstract class BrowserUseManagerNavigation extends BrowserUseManagerFound
       role,
       name,
       ...(!sensitive && rawValue ? { value: rawValue } : {}),
-      ...(typeof properties.get('disabled') === 'boolean'
-        ? { disabled: properties.get('disabled') as boolean }
-        : {}),
+      ...(disabled ? { disabled: true } : {}),
       ...(typeof properties.get('checked') === 'boolean'
         ? { checked: properties.get('checked') as boolean }
         : {}),
@@ -398,10 +591,16 @@ export abstract class BrowserUseManagerNavigation extends BrowserUseManagerFound
     }
   }
 
-  protected async screenshot(entry: BrowserSessionEntry): Promise<BrowserUseResult> {
+  protected async screenshot(
+    entry: BrowserSessionEntry,
+    signal: AbortSignal
+  ): Promise<BrowserUseResult> {
     const tab = this.requireActiveTab(entry)
+    const documentGeneration = entry.documentGeneration
     try {
+      this.assertOperationActive(entry, signal, tab, documentGeneration)
       const image = await tab.view.webContents.capturePage()
+      this.assertOperationActive(entry, signal, tab, documentGeneration)
       const size = image.getSize()
       const max = this.options.settings().maxImageDimension
       const scale = Math.min(1, max / Math.max(size.width, size.height, 1))
@@ -423,6 +622,13 @@ export abstract class BrowserUseManagerNavigation extends BrowserUseManagerFound
         }
       })
     } catch (error) {
+      if (
+        error instanceof BrowserUseOperationAbortedError ||
+        signal.aborted ||
+        entry.stopping
+      ) {
+        return resultError('aborted', 'Browser Use screenshot was cancelled.', entry, tab.id)
+      }
       return resultError('screenshot_failed', errorMessage(error), entry, tab.id)
     }
   }

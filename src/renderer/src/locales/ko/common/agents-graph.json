@@ -31,7 +31,7 @@
     "surface": {
       "shared": "기본",
       "code": "Code",
-      "write": "쓰기",
+      "write": "업무",
       "design": "디자인"
     },
     "surfaceInherited": "기본에서 상속됨",

@@ -23,6 +23,8 @@ import {
 type ShapeState = {
   document: CanvasDocument
   documentKey: string | null
+  /** Increments only when a persisted/synthetic document is loaded or reset. */
+  documentLoadRevision: number
 
   loadDocument: (doc: CanvasDocument, documentKey?: string | null) => void
   resetDocument: () => void
@@ -50,6 +52,8 @@ type ShapeState = {
   applyPatches: (patches: ShapePatch[], direction: 'undo' | 'redo') => void
   applyChange: (change: CanvasChange, direction: 'undo' | 'redo') => void
   appendOperationJournalEntry: (entry: DesignOperationJournalEntry) => void
+  recordRendererReplayKey: (replayKey: string) => void
+  recordRendererReplayWatermark: (turnId: string) => void
   syncDomSourceBindings: (options: DomSourceBindingOptions) => void
   undo: () => void
   redo: () => void
@@ -175,6 +179,7 @@ function deepCloneShape(
 export const useCanvasShapeStore = create<ShapeState>((set, get) => ({
   document: createEmptyDocument(),
   documentKey: null,
+  documentLoadRevision: 0,
 
   loadDocument: (doc, documentKey = null) => {
     useCanvasUndoStore.getState().clear()
@@ -186,13 +191,21 @@ export const useCanvasShapeStore = create<ShapeState>((set, get) => ({
       useCanvasMotionStore.getState().reset()
     }
     const motion = pruneMotionDocument(doc.motion, doc)
-    set({ document: { ...doc, motion }, documentKey })
+    set((state) => ({
+      document: { ...doc, motion },
+      documentKey,
+      documentLoadRevision: state.documentLoadRevision + 1
+    }))
   },
 
   resetDocument: () => {
     useCanvasUndoStore.getState().clear()
     useCanvasMotionStore.getState().reset()
-    set({ document: createEmptyDocument(), documentKey: null })
+    set((state) => ({
+      document: createEmptyDocument(),
+      documentKey: null,
+      documentLoadRevision: state.documentLoadRevision + 1
+    }))
   },
 
   getShape: (id) => get().document.objects[id],
@@ -572,6 +585,34 @@ export const useCanvasShapeStore = create<ShapeState>((set, get) => ({
     set((s) => ({
       document: appendOperationJournalEntryToCanvasDocument(s.document, entry)
     }))
+  },
+
+  recordRendererReplayKey: (replayKey) => {
+    const key = replayKey.trim()
+    if (!key) return
+    set((state) => {
+      const existing = state.document.rendererReplayKeys ?? []
+      if (existing.includes(key)) return state
+      return {
+        document: {
+          ...state.document,
+          rendererReplayKeys: [...existing, key].slice(-4096)
+        }
+      }
+    })
+  },
+
+  recordRendererReplayWatermark: (turnId) => {
+    const normalized = turnId.trim().slice(0, 256)
+    if (!normalized) return
+    set((state) => state.document.rendererReplayWatermarkTurnId === normalized
+      ? state
+      : {
+          document: {
+            ...state.document,
+            rendererReplayWatermarkTurnId: normalized
+          }
+        })
   },
 
   syncDomSourceBindings: (options) => {

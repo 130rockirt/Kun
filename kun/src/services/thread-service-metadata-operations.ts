@@ -5,6 +5,7 @@ import type { SessionStore } from '../ports/session-store.js'
 import type { IdGenerator } from '../ports/id-generator.js'
 import type {
   CreateThreadRequest,
+  SetPlanBuildAdmissionFenceRequest,
   SetThreadGoalRequest,
   SetThreadTodosRequest,
   ThreadGoal,
@@ -98,6 +99,60 @@ async getMetadata(this: ThreadService, threadId: string): Promise<ThreadRecord |
       : this['threadStore'].get(threadId)
   },
 
+async setPlanBuildAdmissionFence(
+    this: ThreadService,
+    threadId: string,
+    request: SetPlanBuildAdmissionFenceRequest
+  ): Promise<ThreadRecord> {
+    const updated = await this['withThreadMutation'](threadId, async () => {
+      const current = await this['threadStore'].get(threadId)
+      if (!current) throw new Error(`thread not found: ${threadId}`)
+      if (current.relation !== 'side' || current.planBuildRunId !== request.planBuildRunId) {
+        throw new Error('thread is not owned by the requested plan-build run')
+      }
+      const expectedWorkspace = resolve(request.expectedWorkspace)
+      const requestedWorkspace = request.workspace ? resolve(request.workspace) : undefined
+      const replayedCommittedMove = requestedWorkspace !== undefined
+        && resolve(current.workspace) === requestedWorkspace
+        && current.planBuildAdmissionFrozen === request.frozen
+      if (resolve(current.workspace) !== expectedWorkspace && !replayedCommittedMove) {
+        throw new Error('plan-build execution workspace changed unexpectedly')
+      }
+      if (current.turns.some((turn) => turn.status === 'queued' || turn.status === 'running')) {
+        throw new Error('plan-build execution thread is not idle')
+      }
+      const workspace = requestedWorkspace ?? current.workspace
+      const next = touchThread({
+        ...current,
+        workspace,
+        additionalWorkspaces: (current.additionalWorkspaces ?? []).filter(
+          (entry) => resolve(entry) !== resolve(workspace)
+        ),
+        knowledgeBases: normalizeKnowledgeBaseMounts(current.knowledgeBases, workspace),
+        planBuildAdmissionFrozen: request.frozen
+      }, this['nowIso']())
+      await this['threadStore'].upsert(next)
+      return next
+    })
+    await this['events'].record({
+      kind: 'thread_updated',
+      threadId,
+      title: updated.title,
+      status: updated.status,
+      mode: updated.mode,
+      workspace: updated.workspace,
+      additionalWorkspaces: updated.additionalWorkspaces,
+      knowledgeBases: updated.knowledgeBases,
+      approvalPolicy: updated.approvalPolicy,
+      sandboxMode: updated.sandboxMode,
+      approvalReviewer: updated.approvalReviewer,
+      modelRequestCaptureEnabled: updated.modelRequestCaptureEnabled,
+      ...(updated.agentSurface ? { agentSurface: updated.agentSurface } : {}),
+      ...(updated.designProfile ? { designProfile: updated.designProfile } : {})
+    })
+    return updated
+  },
+
 async create(this: ThreadService,
     request: CreateThreadRequest,
     options: {
@@ -155,6 +210,8 @@ async create(this: ThreadService,
       kind: 'thread_created',
       threadId: thread.id,
       title: thread.title,
+      ...(thread.agentSurface ? { agentSurface: thread.agentSurface } : {}),
+      ...(thread.designProfile ? { designProfile: thread.designProfile } : {}),
       knowledgeBases: thread.knowledgeBases,
       approvalPolicy: thread.approvalPolicy,
       sandboxMode: thread.sandboxMode,
@@ -198,9 +255,9 @@ async update(this: ThreadService, threadId: string, patch: {
           standardPatch.additionalWorkspaces.map((entry) => entry.trim()).filter(Boolean)
         )].filter((entry) => entry !== (standardPatch.workspace ?? current.workspace))
       }
-      if (standardPatch.knowledgeBases !== undefined) {
+      if (standardPatch.knowledgeBases !== undefined || standardPatch.workspace !== undefined) {
         if (current.status === 'running') {
-          throw new Error('knowledge bases cannot be changed while the thread is running')
+          throw new Error('workspace and knowledge bases cannot be changed while the thread is running')
         }
       }
       if (standardPatch.knowledgeBases !== undefined || standardPatch.workspace !== undefined) {
@@ -251,7 +308,9 @@ async update(this: ThreadService, threadId: string, patch: {
       approvalPolicy: updated.approvalPolicy,
       sandboxMode: updated.sandboxMode,
       approvalReviewer: updated.approvalReviewer,
-      modelRequestCaptureEnabled: updated.modelRequestCaptureEnabled
+      modelRequestCaptureEnabled: updated.modelRequestCaptureEnabled,
+      ...(updated.agentSurface ? { agentSurface: updated.agentSurface } : {}),
+      ...(updated.designProfile ? { designProfile: updated.designProfile } : {})
     })
     await this['onStatusChanged']?.(threadId, updated.status)
     return updated

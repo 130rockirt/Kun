@@ -1,5 +1,6 @@
 import { useShallow } from 'zustand/react/shallow'
 import { useChatStore } from '../../store/chat-store'
+import { normalizeWorkbenchRoute } from './workbench-route'
 
 export function useWorkbenchChatStoreState() {
   return useChatStore(
@@ -21,7 +22,7 @@ export function useWorkbenchChatStoreState() {
       runtimeStatus: s.runtimeStatus,
       busy: s.busy,
       currentTurnOrchestration: s.currentTurnOrchestration,
-      route: s.route,
+      route: normalizeWorkbenchRoute(s.route) as typeof s.route,
       pluginHostRoute: s.pluginHostRoute,
       workspaceRoot: s.workspaceRoot,
       conversationWorkspaceRoot: s.conversationWorkspaceRoot,

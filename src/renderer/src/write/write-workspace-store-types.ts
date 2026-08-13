@@ -1,6 +1,9 @@
 import type { WriteAgentPresetV1, WriteInlineCompletionSettingsV1, WriteSelectionAssistSettingsV1 } from '@shared/app-settings'
 import type { WorkspaceEntry } from '@shared/workspace-file'
-import type { WorkspaceOfficePreviewSuccess } from '@shared/office-document'
+import type {
+  WorkspaceOfficePreviewSuccess,
+  WorkspacePresentationViewReference
+} from '@shared/office-document'
 import type { WriteEditorSelectionState } from '../components/write/WriteMarkdownEditor'
 import type { WriteQuotedSelection } from './quoted-selection'
 import type { WriteRecentEdit } from './recent-edits'
@@ -93,6 +96,7 @@ export type WriteWorkspaceState = {
   treeError: string | null
   documentsByPath: Record<string, WriteDocumentSession>
   editorLayout: WriteEditorLayoutV1
+  presentationViewByGroup: Partial<Record<WriteEditorGroupId, WorkspacePresentationViewReference>>
   activeFilePath: string | null
   activeFileKind: WriteActiveFileKind | null
   fileContent: string
@@ -153,6 +157,14 @@ export type WriteWorkspaceState = {
   setTabViewMode: (groupId: WriteEditorGroupId, path: string, mode: WritePreviewMode) => void
   setSplitOrientation: (orientation: Exclude<WriteEditorLayoutOrientation, 'single'>) => void
   setSplitRatio: (ratio: number) => void
+  setPresentationViewForGroup: (
+    groupId: WriteEditorGroupId,
+    view: WorkspacePresentationViewReference
+  ) => void
+  clearPresentationViewForGroup: (
+    groupId: WriteEditorGroupId,
+    source: Pick<WorkspacePresentationViewReference, 'path' | 'sourceSha256'>
+  ) => void
   setDocumentContent: (path: string, content: string) => void
   saveDocument: (
     workspaceRoot: string,

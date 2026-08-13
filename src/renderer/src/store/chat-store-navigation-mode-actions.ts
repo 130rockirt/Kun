@@ -85,7 +85,6 @@ import {
   activeDesignThreadForWorkspace,
   designDocKey,
   forgetDesignThread,
-  isDesignThreadId,
   markDesignThread,
   readDesignThreadRegistry,
   saveDesignThreadRegistry
@@ -152,7 +151,9 @@ export function createNavigationModeActions(
   { set, get, sseAbortRef }: StoreActionContext
 ): Pick<ChatState, 'openCode' | 'openDesign' | 'clearActiveThreadSelection' | 'openWrite' | 'ensureWriteThreadForWorkspace' | 'createWriteThread' | 'selectWriteThread' | 'ensureDesignThreadForWorkspace' | 'createDesignThread'> {
   return {
-  openCode: async () => {
+  openCode: async (options) => {
+    const activationAllowed = (): boolean => options?.activationGuard?.() !== false
+    if (!activationAllowed()) return
     const state = get()
     const designRegistry = readDesignThreadRegistry()
     const writeRegistry = readWriteThreadRegistry()
@@ -166,7 +167,7 @@ export function createNavigationModeActions(
       activeThread.archived !== true &&
       isCodeSidebarThread(activeThread, state.clawChannels, writeRegistry, designRegistry, sddRegistry)
     ) {
-      set({ route: 'chat' })
+      if (activationAllowed()) set({ route: 'chat' })
       return
     }
 
@@ -182,9 +183,12 @@ export function createNavigationModeActions(
       rememberedThread.archived !== true &&
       isCodeSidebarThread(rememberedThread, state.clawChannels, writeRegistry, designRegistry, sddRegistry)
 
+    if (!activationAllowed()) return
     set({ route: 'chat' })
     if (rememberedThread && rememberedIsCodeTarget && state.runtimeConnection === 'ready') {
-      await get().selectThread(rememberedThread.id)
+      await get().selectThread(rememberedThread.id, {
+        selectionGuard: activationAllowed
+      })
       return
     }
 
@@ -194,10 +198,11 @@ export function createNavigationModeActions(
       latestThread(codeThreads)
 
     if (target && state.runtimeConnection === 'ready') {
-      await get().selectThread(target.id)
+      await get().selectThread(target.id, { selectionGuard: activationAllowed })
       return
     }
 
+    if (!activationAllowed()) return
     sseAbortRef.current?.abort()
     sseAbortRef.current = null
     clearBusyWatchdog()
@@ -219,30 +224,9 @@ export function createNavigationModeActions(
   },
 
   openDesign: () => {
-    const state = get()
-    if (isDesignThreadId(state.activeThreadId)) {
-      set({ route: 'design' })
-      return
-    }
-
-    const nextWatch = { ...state.watchTurnCompletion }
-    if (state.activeThreadId && state.busy) {
-      nextWatch[state.activeThreadId] = true
-      watchTurnCompletionNotification(
-        state.activeThreadId,
-        Date.now(),
-        turnCompleteNotificationSource(state.activeThreadId, state)
-      )
-    }
-    sseAbortRef.current?.abort()
-    sseAbortRef.current = null
-    clearBusyWatchdog()
-    set({
-      ...clearedThreadSelection(),
-      route: 'design',
-      watchTurnCompletion: nextWatch
-    })
-    syncTurnCompletionPoll(set, get)
+    // Standalone Design is a legacy route. Preserve the selected conversation
+    // and expose it through the shared Code workbench instead.
+    set({ route: 'chat' })
   },
 
   clearActiveThreadSelection: () => {
@@ -267,10 +251,13 @@ export function createNavigationModeActions(
     syncTurnCompletionPoll(set, get)
   },
 
-  openWrite: async () => {
+  openWrite: async (options) => {
+    const activationAllowed = (): boolean => options?.activationGuard?.() !== false
+    if (!activationAllowed()) return
     const state = get()
     const selectedWorkspace = await readActiveWriteWorkspace(state.workspaceRoot)
     const writeWorkspaceRoots = await readWriteWorkspaceRoots()
+    if (!activationAllowed()) return
     const registry = hydrateWriteThreadRegistry(
       state.threads,
       selectedWorkspace ? [selectedWorkspace, ...writeWorkspaceRoots] : writeWorkspaceRoots,
@@ -286,7 +273,7 @@ export function createNavigationModeActions(
       selectedWorkspace &&
       writeThreadBelongsToWorkspace(activeThread, selectedWorkspace, registry)
     ) {
-      set({ route: 'write' })
+      if (activationAllowed()) set({ route: 'write' })
       return
     }
 
@@ -296,12 +283,14 @@ export function createNavigationModeActions(
       registry
     )
 
+    if (!activationAllowed()) return
     set({ route: 'write' })
     if (target && state.runtimeConnection === 'ready') {
-      await get().selectThread(target.id)
+      await get().selectThread(target.id, { selectionGuard: activationAllowed })
       return
     }
 
+    if (!activationAllowed()) return
     sseAbortRef.current?.abort()
     sseAbortRef.current = null
     clearBusyWatchdog()
@@ -454,12 +443,12 @@ export function createNavigationModeActions(
     // Reuse the active thread only when it is THIS 设计稿's registered thread (a
     // thread id belongs to exactly one (workspace, 设计稿) scope).
     if (activeThread && record && record.threadIds.includes(activeThread.id)) {
-      set({ route: 'design', error: null })
+      set({ route: 'chat', error: null })
       return activeThread.id
     }
     const existing = activeDesignThreadForWorkspace(targetWorkspace, targetDoc, state.threads, registry)
     if (existing) {
-      set({ route: 'design' })
+      set({ route: 'chat' })
       await get().selectThread(existing.id)
       return get().activeThreadId === existing.id ? existing.id : null
     }
@@ -555,7 +544,7 @@ export function createNavigationModeActions(
         ...(activate
           ? {
               ...clearedThreadSelection(),
-              route: 'design' as const,
+              route: 'chat' as const,
               activeThreadId: thread.id,
               activeThreadRelation: 'primary' as const
             }

@@ -1,6 +1,6 @@
 # Tiptap 富文本编辑器迁移记录
 
-状态：Phase 0–5 已完成。写作工作区、SDD 需求草稿、计划面板默认使用 Tiptap 富文本
+状态：Phase 0–5 已完成。Work 办公工作区、SDD 需求草稿、计划面板默认使用 Tiptap 富文本
 模式（`rich`），CodeMirror 保留为源码模式与保真门禁/大文件兜底。本文档记录技术
 验证结论与架构决策。
 
@@ -69,7 +69,7 @@ src/renderer/src/write/tiptap/
   自身序列化输出不再复审。
 - **外部回流**：agent 改盘上文件后，按顶层块 diff 做最小替换事务（meta 标记
   `writeRichExternalSyncMeta`），不进 undo 历史、不触发 onChange 回写。
-- **接入点**：写作工作区（模式菜单新增「富文本」，render-safety 大文件自动回落
+- **接入点**：Work 办公工作区（模式菜单新增「富文本」，render-safety 大文件自动回落
   源码模式）、SDD 草稿、计划面板。`readStoredPreviewMode` 默认 `'rich'`，
   用户显式选择的模式仍然尊重 localStorage。
 - **行内编辑**：rich 模式下 `submitInlineEdit` 用投影文本构建请求，经

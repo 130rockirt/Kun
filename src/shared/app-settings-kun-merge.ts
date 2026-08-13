@@ -302,6 +302,12 @@ export function mergeKunRuntimeSettings(
   const nextRoleReasoningSlots = mergeOptionalReasoningSlot(current, patch)
   const nextSubagents = mergeKunSubagentsSettings(current.subagents, patch?.subagents)
   const nextLab = mergeKunLabSettings(current.lab, patch?.lab)
+  const nextPlanExecution = {
+    useWorktreeByDefault:
+      patch?.planExecution?.useWorktreeByDefault
+      ?? current.planExecution?.useWorktreeByDefault
+      ?? true
+  }
   // Do not let the nested partial patch leak through the broad object spread;
   // `nextSubagents` below is the fully materialized authoritative value.
   // Primary `model` is handled separately: empty strings must not wipe the
@@ -310,6 +316,7 @@ export function mergeKunRuntimeSettings(
     subagents: _subagentsPatch,
     projectConfig: _projectConfigPatch,
     graph: _graphPatch,
+    planExecution: _planExecutionPatch,
     llmDebug: _llmDebugPatch,
     lab: _labPatch,
     model: _modelPatch,
@@ -318,6 +325,7 @@ export function mergeKunRuntimeSettings(
   void _subagentsPatch
   void _projectConfigPatch
   void _graphPatch
+  void _planExecutionPatch
   void _llmDebugPatch
   void _labPatch
   void _modelPatch
@@ -360,6 +368,7 @@ export function mergeKunRuntimeSettings(
     browserUse: nextBrowserUse,
     quality: nextQuality,
     graph: nextGraph,
+    planExecution: nextPlanExecution,
     lab: nextLab,
     ...(nextSubagents !== undefined ? { subagents: nextSubagents } : {})
   }

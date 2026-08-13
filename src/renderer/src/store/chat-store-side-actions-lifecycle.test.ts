@@ -29,6 +29,7 @@ class FakeProvider implements AgentProvider {
   cancelUserInputMock = vi.fn()
   refreshThreadsMock = vi.fn()
   closeSideMock = vi.fn()
+  forkFailure: Error | null = null
   getCapabilities() {
     return { interrupt: true, stream: true, approvals: true, attachFiles: false }
   }
@@ -55,6 +56,11 @@ class FakeProvider implements AgentProvider {
       reasoningEffort?: string
       serviceTier?: 'priority'
       attachmentIds?: string[]
+      guiDesignCanvas?: boolean
+      guiDesignMode?: boolean
+      agentSurface?: 'code' | 'write' | 'design'
+      designProfile?: import('../agent/design-task-profile').DesignTaskProfileInput
+      designDocumentTarget?: import('../agent/design-task-profile').DesignDocumentTarget
     }
   ) {
     this.sendMock(threadId, text, options)
@@ -73,9 +79,14 @@ class FakeProvider implements AgentProvider {
   async compactThread() {}
   async forkThread(
     threadId: string,
-    options?: { relation?: 'primary' | 'fork' | 'side'; title?: string }
+    options?: {
+      relation?: 'primary' | 'fork' | 'side'
+      title?: string
+      designDocumentTarget?: import('../agent/design-task-profile').DesignDocumentTarget
+    }
   ) {
     this.forkMock(threadId, options)
+    if (this.forkFailure) throw this.forkFailure
     return {
       id: `side_${threadId}`,
       title: options?.title ?? `${threadId} · side`,
@@ -88,7 +99,22 @@ class FakeProvider implements AgentProvider {
       parentThreadId: threadId,
       forkedFromThreadId: threadId,
       forkedFromTitle: 'Parent',
-      forkedAt: '2026-06-02T00:00:00.000Z'
+      forkedAt: '2026-06-02T00:00:00.000Z',
+      ...(options?.designDocumentTarget
+        ? {
+            agentSurface: 'design' as const,
+            designProfile: {
+              version: 1 as const,
+              documentTarget: options.designDocumentTarget,
+              outputMedium: 'html' as const,
+              target: 'app' as const,
+              preset: 'ios' as const,
+              presetSource: 'explicit' as const,
+              context: { tone: ['precise'] },
+              lockedAtTurnId: 'turn_lock'
+            }
+          }
+        : {})
     }
   }
   async resumeSession() {
@@ -117,7 +143,10 @@ class FakeProvider implements AgentProvider {
   }
 }
 
-function buildHarness(overrides: Partial<ChatState> = {}): Harness {
+function buildHarness(
+  overrides: Partial<ChatState> = {},
+  dependencies: Parameters<typeof createSideActions>[1] = {}
+): Harness {
   const state: ChatState = {
     route: 'chat',
     settingsReturnRoute: 'chat',
@@ -252,7 +281,7 @@ function buildHarness(overrides: Partial<ChatState> = {}): Harness {
     t: (key) => key,
     formatRuntimeError: (e) => (e instanceof Error ? e.message : String(e ?? '')),
     shouldOpenSettingsForError: () => false
-  })
+  }, dependencies)
   return { state, set, get, provider, actions }
 }
 
@@ -469,6 +498,116 @@ describe('chat-store-side-actions', () => {
     expect(provider.deleteMock).toHaveBeenCalledWith(id)
     expect(state.sideConversations[id]).toBeUndefined()
     expect(signal?.aborted).toBe(true)
+  })
+
+  it('clones Design metadata but starts side turns fail-closed as Code', async () => {
+    const cleanup = vi.fn(async () => undefined)
+    const cloneDesignDocument = vi.fn(async () => ({
+      designDocumentTarget: { documentId: 'doc_side_clone', boardArtifactId: 'board_source' },
+      operationId: 'design-clone-side-test',
+      cleanup
+    }))
+    const designProfile = {
+      version: 1 as const,
+      documentTarget: { documentId: 'doc_source', boardArtifactId: 'board_source' },
+      outputMedium: 'html' as const,
+      target: 'app' as const,
+      preset: 'ios' as const,
+      presetSource: 'explicit' as const,
+      context: { tone: ['precise'] },
+      lockedAtTurnId: 'turn_lock'
+    }
+    const { actions, state, provider } = buildHarness({
+      threads: [{
+        id: 'thr_main', title: 'Parent', updatedAt: '', model: 'deepseek-chat', mode: 'agent',
+        workspace: '/tmp', agentSurface: 'design', designProfile
+      }]
+    }, { cloneDesignDocument })
+
+    const id = await actions.spawnSideConversation('Refine the mobile layout')
+
+    expect(cloneDesignDocument).toHaveBeenCalledWith({
+      workspaceRoot: '/tmp', sourceTarget: designProfile.documentTarget,
+      operation: { kind: 'fork', sourceId: 'thr_main', relation: 'side' }
+    })
+    expect(provider.forkMock).toHaveBeenCalledWith('thr_main', expect.objectContaining({
+      relation: 'side',
+      designDocumentTarget: { documentId: 'doc_side_clone', boardArtifactId: 'board_source' },
+      designCloneOperationId: 'design-clone-side-test'
+    }))
+    expect(state.sideConversations[id!].designProfile?.documentTarget.documentId).toBe('doc_side_clone')
+    expect(provider.sendMock).toHaveBeenCalledWith(id, 'Refine the mobile layout', expect.objectContaining({
+      agentSurface: 'code'
+    }))
+    const sideOptions = provider.sendMock.mock.calls.at(-1)?.[2]
+    expect(sideOptions).not.toHaveProperty('guiDesignCanvas')
+    expect(sideOptions).not.toHaveProperty('guiDesignMode')
+    expect(sideOptions).not.toHaveProperty('designDocumentTarget')
+    expect(sideOptions).not.toHaveProperty('designProfile')
+    expect(cleanup).not.toHaveBeenCalled()
+  })
+
+  it('cleans a prepared Design side clone when runtime fork admission fails', async () => {
+    const cleanup = vi.fn(async () => undefined)
+    const cloneDesignDocument = vi.fn(async () => ({
+      designDocumentTarget: { documentId: 'doc_side_clone', boardArtifactId: 'board_source' },
+      cleanup
+    }))
+    const designProfile = {
+      version: 1 as const,
+      documentTarget: { documentId: 'doc_source', boardArtifactId: 'board_source' },
+      outputMedium: 'html' as const,
+      target: 'web' as const,
+      preset: 'none' as const,
+      presetSource: 'none' as const,
+      context: { tone: [] },
+      lockedAtTurnId: 'turn_lock'
+    }
+    const harness = buildHarness({
+      threads: [{
+        id: 'thr_main', title: 'Parent', updatedAt: '', model: 'deepseek-chat', mode: 'agent',
+        workspace: '/tmp', agentSurface: 'design', designProfile
+      }]
+    }, { cloneDesignDocument })
+    harness.provider.forkFailure = new Error('HTTP 409 fork rejected')
+
+    await expect(harness.actions.spawnSideConversation()).resolves.toBeNull()
+    expect(cleanup).toHaveBeenCalledOnce()
+    expect(harness.state.error).toContain('fork rejected')
+  })
+
+  it('recovers a committed Design side clone after its response is lost', async () => {
+    const cleanup = vi.fn(async () => undefined)
+    const commit = vi.fn(async () => undefined)
+    const clonedTarget = { documentId: 'doc_side_recovered', boardArtifactId: 'board_source' }
+    const cloneDesignDocument = vi.fn(async () => ({
+      designDocumentTarget: clonedTarget, cleanup, commit
+    }))
+    const designProfile = {
+      version: 1 as const,
+      documentTarget: { documentId: 'doc_source', boardArtifactId: 'board_source' },
+      outputMedium: 'html' as const, target: 'web' as const, preset: 'none' as const,
+      context: { tone: [] }, lockedAtTurnId: 'turn_lock'
+    }
+    const harness = buildHarness({
+      threads: [{
+        id: 'thr_main', title: 'Parent', updatedAt: '', model: 'deepseek-chat',
+        mode: 'agent', workspace: '/tmp', agentSurface: 'code', designProfile
+      }]
+    }, { cloneDesignDocument })
+    const recovered = {
+      id: 'side_recovered', title: 'Recovered side', updatedAt: '', model: 'deepseek-chat',
+      mode: 'agent' as const, workspace: '/tmp', status: 'idle', relation: 'side' as const,
+      parentThreadId: 'thr_main', agentSurface: 'code' as const,
+      designProfile: { ...designProfile, documentTarget: clonedTarget }
+    }
+    harness.provider.forkFailure = new Error('network response lost after commit')
+    vi.spyOn(harness.provider, 'listThreads').mockResolvedValueOnce([recovered])
+
+    await expect(harness.actions.spawnSideConversation()).resolves.toBe('side_recovered')
+    expect(commit).toHaveBeenCalledOnce()
+    expect(cleanup).not.toHaveBeenCalled()
+    expect(harness.state.sideConversations.side_recovered).toBeDefined()
   })
 
   it('side state survives a main-thread switch: closing/discarding the side does not change activeThreadId', async () => {

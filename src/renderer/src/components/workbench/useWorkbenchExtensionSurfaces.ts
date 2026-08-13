@@ -31,6 +31,7 @@ import {
 } from '../../extensions/contribution-registry'
 import { readBrowserStorageItem, removeBrowserStorageItem, writeBrowserStorageItem } from '../../lib/browser-storage'
 import type { useWorkbenchChatStoreState } from './useWorkbenchChatStoreState'
+import type { ComposerTaskSurface } from '../chat/FloatingComposerTaskProfile'
 
 type WorkbenchState = ReturnType<typeof useWorkbenchChatStoreState>
 const extensionSurfaceLayoutStorage = {
@@ -48,6 +49,7 @@ type Params = {
   t: (key: string, options?: Record<string, unknown>) => string
   language: string
   route: WorkbenchState['route']
+  taskSurface: ComposerTaskSurface
   extensionWorkspaceRoot: string
   extensionContributionLoadContext: ExtensionContributionLoadContext
   extensionContributionLoadContextRef: { current: ExtensionContributionLoadContext }
@@ -66,6 +68,7 @@ export function useWorkbenchExtensionSurfaces({
   t,
   language,
   route,
+  taskSurface,
   extensionWorkspaceRoot,
   extensionContributionLoadContext,
   extensionContributionLoadContextRef,
@@ -80,8 +83,8 @@ export function useWorkbenchExtensionSurfaces({
   closeRightPanelTab
 }: Params) {
   const contributionContext = useMemo(
-    () => workbenchContextForRoute(route, extensionWorkspaceRoot),
-    [extensionWorkspaceRoot, route]
+    () => workbenchContextForRoute(route, extensionWorkspaceRoot, {}, taskSurface),
+    [extensionWorkspaceRoot, route, taskSurface]
   )
   const contributionLoadState = useExtensionContributionLoadState()
   const extensionContributionSnapshotReady = isExtensionContributionSnapshotReady(
@@ -127,6 +130,18 @@ export function useWorkbenchExtensionSurfaces({
   const extensionResultPreviews = useWorkbenchContributions(
     'message.resultPreviews', contributionContext, extensionContributionSnapshotReady
   )
+  const messageContributionsForSurface = useCallback((surface: ComposerTaskSurface) => {
+    if (!extensionContributionSnapshotReady) return null
+    const context = workbenchContextForRoute(route, extensionWorkspaceRoot, {}, surface)
+    return {
+      actions: workbenchContributionRegistry.list('actions.message', context),
+      contextMenus: workbenchContributionRegistry.list('contextMenus', context)
+        .filter((item) => item.payload.location === 'message'),
+      attachmentContextMenus: workbenchContributionRegistry.list('contextMenus', context)
+        .filter((item) => item.payload.location === 'attachment'),
+      resultPreviews: workbenchContributionRegistry.list('message.resultPreviews', context)
+    }
+  }, [extensionContributionSnapshotReady, extensionWorkspaceRoot, route])
 
   const [activeExtensionSurfaceId, setActiveExtensionSurfaceId] = useState<string | null>(() =>
     readStoredExtensionSurfaceId(extensionSurfaceLayoutStorage))
@@ -282,6 +297,7 @@ export function useWorkbenchExtensionSurfaces({
     extensionAttachmentContextMenus, extensionCommands, extensionComposerActions,
     extensionContributionSnapshotReady, extensionHostContextMenus, extensionLeftSidebarItems,
     extensionMessageActions, extensionMessageContextMenus, extensionResultPreviews,
+    messageContributionsForSurface,
     extensionRightPanelItems, extensionRightRailItems, extensionTopBarActions,
     extensionSurfaceItems,
     openExtensionSurface, openManagedExtensionView, selectRightRailExtension,

@@ -31,7 +31,7 @@
     "surface": {
       "shared": "Базовые",
       "code": "Code",
-      "write": "Текст",
+      "write": "Работа",
       "design": "Дизайн"
     },
     "surfaceInherited": "Унаследовано из базовых",

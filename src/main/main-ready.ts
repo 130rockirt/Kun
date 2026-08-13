@@ -34,6 +34,7 @@ import { revealMainWindow } from './main-tray'
 import { resolveLogDirectory } from './main-paths'
 import { showStartupFailureWindow } from './startup-failure-window'
 import { sanitizeStartupFailureMessage } from './startup-failure-content'
+import { resolveManagedRuntimeStartupTarget } from './runtime/managed-runtime-startup-attach'
 
 export function startMainApp(): void {
   mainState.createWindow = createWindow
@@ -87,32 +88,36 @@ export function startMainApp(): void {
       console.warn('[kun-gui] prune logs:', err)
     })
 
-    if (managedKunHostCanAutoStart(initial)) {
-      setTimeout(() => {
-        void ensureRuntime(initial)
-          .then((current) => {
-            runtimeSupervisor.enqueueSettingsApply(async () => {
-              const startupSettings = mainState.settledRuntimeSettings ?? current
-              const applied = await applyManagedRuntimeSettingsHot(startupSettings, 'startup-settings')
-              if (applied === 'restart_required') {
-                logWarn(
-                  'startup-settings',
-                  'Kun attached successfully, but the configured default model could not be hot-applied.'
-                )
-              }
-            }, (error) => {
-              logWarn('startup-settings', 'Kun startup settings apply failed', {
-                message: error instanceof Error ? error.message : String(error)
-              })
-            }, 'startup-settings')
-          })
-          .catch((err) => {
-            console.warn('[kun-gui] failed to start, attach, or configure the shared Kun runtime:', err)
-          })
-      }, 1500)
-    } else {
-      void kunRuntimeAdapter.resolveConnection(initial)
-    }
+    setTimeout(() => {
+      void resolveManagedRuntimeStartupTarget(
+        initial,
+        managedKunHostCanAutoStart(initial),
+        {
+          ensure: ensureRuntime,
+          resolveExisting: (settings) => kunRuntimeAdapter.resolveConnection(settings)
+        }
+      )
+        .then((current) => {
+          if (!current) return
+          runtimeSupervisor.enqueueSettingsApply(async () => {
+            const startupSettings = mainState.settledRuntimeSettings ?? current
+            const applied = await applyManagedRuntimeSettingsHot(startupSettings, 'startup-settings')
+            if (applied === 'restart_required') {
+              logWarn(
+                'startup-settings',
+                'Kun attached successfully, but the configured default model could not be hot-applied.'
+              )
+            }
+          }, (error) => {
+            logWarn('startup-settings', 'Kun startup settings apply failed', {
+              message: error instanceof Error ? error.message : String(error)
+            })
+          }, 'startup-settings')
+        })
+        .catch((err) => {
+          console.warn('[kun-gui] failed to start, attach, or configure the shared Kun runtime:', err)
+        })
+    }, 1500)
 
     app.on('activate', () => {
       if (!mainState.mainWindow || mainState.mainWindow.isDestroyed()) createWindow()

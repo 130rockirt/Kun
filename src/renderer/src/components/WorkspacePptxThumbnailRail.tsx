@@ -113,7 +113,7 @@ export function WorkspacePptxThumbnailRail({
     <aside
       ref={railRef}
       aria-label="Slide thumbnails"
-      className="w-[196px] shrink-0 overflow-y-auto border-r border-ds-border-muted bg-ds-card/70 p-2"
+      className="w-[164px] shrink-0 overflow-y-auto border-r border-ds-border-muted bg-ds-card/55 p-2"
     >
       <div className="flex flex-col gap-2">
         {Array.from({ length: slideCount }, (_, index) => {
@@ -132,9 +132,9 @@ export function WorkspacePptxThumbnailRail({
               aria-current={active ? 'page' : undefined}
               data-pptx-thumbnail-index={index}
               data-thumbnail-state={thumbnail ? 'ready' : 'placeholder'}
-              className={`rounded-md border p-1 text-left transition ${
+              className={`rounded-lg border p-1.5 text-left transition ${
                 active
-                  ? 'border-ds-accent bg-ds-hover shadow-sm'
+                  ? 'border-ds-accent bg-ds-hover shadow-sm ring-1 ring-ds-accent/20'
                   : 'border-ds-border-muted bg-ds-card hover:border-ds-border'
               }`}
               onClick={() => onSelectSlide(slide)}
@@ -163,10 +163,34 @@ function StaticPptxThumbnail({ content }: { content: HTMLElement }): ReactElemen
     const mounted = content.cloneNode(true) as HTMLElement
     mounted.style.pointerEvents = 'none'
     mounted.style.margin = '0'
+    mounted.style.position = 'absolute'
+    const fitThumbnail = (): void => {
+      const sourceWidth = Number.parseFloat(mounted.style.width) || 160
+      const sourceHeight = Number.parseFloat(mounted.style.height) || 90
+      if (host.clientWidth <= 0 || host.clientHeight <= 0) return
+      const scale = Math.min(host.clientWidth / sourceWidth, host.clientHeight / sourceHeight)
+      mounted.style.left = `${(host.clientWidth - sourceWidth * scale) / 2}px`
+      mounted.style.top = `${(host.clientHeight - sourceHeight * scale) / 2}px`
+      mounted.style.transform = `scale(${scale})`
+      mounted.style.transformOrigin = 'top left'
+    }
     host.replaceChildren(mounted)
-    return () => host.replaceChildren()
+    fitThumbnail()
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', fitThumbnail)
+      return () => {
+        window.removeEventListener('resize', fitThumbnail)
+        host.replaceChildren()
+      }
+    }
+    const observer = new ResizeObserver(fitThumbnail)
+    observer.observe(host)
+    return () => {
+      observer.disconnect()
+      host.replaceChildren()
+    }
   }, [content])
-  return <div ref={hostRef} className="h-full w-full overflow-hidden [&_.pptx-preview-slide-wrapper]:!m-0" />
+  return <div ref={hostRef} className="relative h-full w-full overflow-hidden [&_.pptx-preview-slide-wrapper]:!m-0" />
 }
 
 function cloneStaticSlide(rendered: HTMLElement): HTMLElement {

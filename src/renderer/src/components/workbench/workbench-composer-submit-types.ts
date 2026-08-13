@@ -15,6 +15,7 @@ import type { RightPanelMode } from '../chat/WorkbenchTopBar'
 export type PlanTurnOverrides = Pick<
   SendMessageOverrides,
   | 'attachmentIds'
+  | 'agentSurface'
   | 'attachments'
   | 'displayText'
   | 'fileReferences'
@@ -33,6 +34,7 @@ export type UseWorkbenchComposerSubmitControllerParams = {
   activeClawChannelProviderId?: string
   activeSddDraft: boolean
   activeThreadId: string | null
+  taskSurface?: 'code' | 'design'
   attachmentUploadEnabled: boolean
   buildCodeCanvasOutboundPrompt: (input: CodeCanvasOutboundPromptInput) => Promise<string>
   clearComposerAttachments: (scope?: ComposerAttachmentScope) => void

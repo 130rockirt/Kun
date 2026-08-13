@@ -93,7 +93,8 @@ export function startSvgArtifactStatusMonitor(
  */
 export function useSvgArtifactStatusMonitor(
   workspaceRoot: string,
-  artifacts: readonly DesignArtifact[]
+  artifacts: readonly DesignArtifact[],
+  enabled = true
 ): void {
   const targets = useMemo(
     () => artifacts
@@ -109,7 +110,9 @@ export function useSvgArtifactStatusMonitor(
   targetsRef.current = targets
 
   useEffect(
-    () => startSvgArtifactStatusMonitor(workspaceRoot, targetsRef.current),
-    [targetKey, workspaceRoot]
+    () => enabled
+      ? startSvgArtifactStatusMonitor(workspaceRoot, targetsRef.current)
+      : undefined,
+    [enabled, targetKey, workspaceRoot]
   )
 }

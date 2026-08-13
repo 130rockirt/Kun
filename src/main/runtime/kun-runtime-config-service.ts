@@ -14,6 +14,7 @@ import {
 } from '../../../kun/src/config/kun-config.js'
 import {
   RuntimeConfigApplyRequest,
+  type BrowserUseHostBinding,
   type RuntimeConfigApplyRequest as RuntimeConfigApplyPayload
 } from '../../../kun/src/contracts/runtime-config.js'
 import { HooksConfigSchema } from '../../../kun/src/hooks/hook-config.js'
@@ -294,7 +295,8 @@ type KunRuntimeConfigSettings = Pick<KunRuntimeSettingsV1,
 /** Pure request projection for the serve runtime's hot-config endpoint. */
 export function buildManagedRuntimeHotApplyBody(
   settings: AppSettingsV1,
-  config: KunConfig
+  config: KunConfig,
+  browserUseHostBinding?: BrowserUseHostBinding | null
 ): RuntimeConfigApplyPayload {
   const runtime = resolveKunRuntimeSettings(settings)
   const serve = config.serve ?? {}
@@ -310,6 +312,7 @@ export function buildManagedRuntimeHotApplyBody(
   const defaultClientApiKey = resolveCodexOAuthApiKey(runtime.apiKey).apiKey
   return RuntimeConfigApplyRequest.parse({
     ...config,
+    ...(browserUseHostBinding !== undefined ? { browserUseHostBinding } : {}),
     serve: {
       ...hotServe,
       apiKey: defaultClientApiKey || runtime.apiKey,

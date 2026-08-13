@@ -37,6 +37,7 @@ import {
   kunUserInputPath,
   kunMemoryRecordPath,
   kunMcpOAuthServerPath,
+  kunSessionResumeMetadataPath,
   kunSessionResumePath,
   normalizeThreadMode,
   type KunThreadMode
@@ -59,6 +60,7 @@ import type {
   CoreMcpOAuthAuthorizeResponseJson,
   CoreMcpOAuthDiagnosticJson,
   CoreMcpOAuthDiagnosticsResponseJson,
+  CoreResumeSessionMetadataJson,
   CoreResumeSessionResponseJson,
   CoreRuntimeInfoJson,
   CoreRuntimeEventJson,
@@ -88,6 +90,7 @@ import {
 } from './kun-mapper'
 import { rendererRuntimeClient } from './runtime-client'
 import type { ComposerContextAttachment } from '@kun/extension-api'
+import type { DesignDocumentTarget } from './design-task-profile'
 
 const MAX_PENDING_SSE_DISPATCH_BATCHES = 32
 
@@ -343,12 +346,26 @@ export class KunRuntimeProviderServices {
 
   async forkThread(
     threadId: string,
-    options?: { relation?: 'primary' | 'fork' | 'side'; title?: string; turnId?: string }
+    options?: {
+      relation?: 'primary' | 'fork' | 'side'
+      title?: string
+      turnId?: string
+      workspace?: string
+      planBuildRunId?: string
+      planBuildAgentSurface?: 'code'
+      designDocumentTarget?: DesignDocumentTarget
+      designCloneOperationId?: string
+    }
   ): Promise<NormalizedThread> {
     const body: Record<string, unknown> = {}
     if (options?.relation) body.relation = options.relation
     if (options?.title) body.title = options.title
     if (options?.turnId) body.turnId = options.turnId
+    if (options?.workspace) body.workspace = options.workspace
+    if (options?.planBuildRunId) body.planBuildRunId = options.planBuildRunId
+    if (options?.planBuildAgentSurface) body.planBuildAgentSurface = options.planBuildAgentSurface
+    if (options?.designDocumentTarget) body.designDocumentTarget = options.designDocumentTarget
+    if (options?.designCloneOperationId) body.designCloneOperationId = options.designCloneOperationId
     const url = kunThreadForkPath(threadId)
     const response =
       Object.keys(body).length > 0
@@ -365,7 +382,13 @@ export class KunRuntimeProviderServices {
 
   async resumeSession(
     sessionId: string,
-    options?: { model?: string; mode?: KunThreadMode }
+    options?: {
+      model?: string
+      mode?: KunThreadMode
+      workspace?: string
+      designDocumentTarget?: DesignDocumentTarget
+      designCloneOperationId?: string
+    }
   ): Promise<{ threadId: string; sessionId: string }> {
     const settings = await rendererRuntimeClient.getSettings()
     const runtime = getKunRuntimeSettings(settings)
@@ -373,9 +396,11 @@ export class KunRuntimeProviderServices {
       kunSessionResumePath(sessionId),
       'POST',
       JSON.stringify({
-        workspace: settings.workspaceRoot || undefined,
+        workspace: (options?.workspace ?? settings.workspaceRoot) || undefined,
         model: options?.model?.trim() || runtime.model,
-        mode: options?.mode
+        mode: options?.mode,
+        designDocumentTarget: options?.designDocumentTarget,
+        designCloneOperationId: options?.designCloneOperationId
       })
     )
     if (!response.ok) {
@@ -393,6 +418,20 @@ export class KunRuntimeProviderServices {
       })
     }
     return { threadId, sessionId: body.session_id ?? body.sessionId ?? sessionId }
+  }
+
+  async getResumeSessionMetadata(sessionId: string): Promise<CoreResumeSessionMetadataJson> {
+    const response = await rendererRuntimeClient.runtimeRequest(
+      kunSessionResumeMetadataPath(sessionId),
+      'GET'
+    )
+    if (!response.ok) {
+      throw runtimeErrorToError(readRuntimeError(response.body, 'read resume session metadata failed'))
+    }
+    return readRuntimeJson<CoreResumeSessionMetadataJson>(
+      response.body,
+      'runtime returned invalid resume session metadata'
+    )
   }
 
   async subscribeThreadEvents(

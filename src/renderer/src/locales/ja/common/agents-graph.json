@@ -31,7 +31,7 @@
     "surface": {
       "shared": "基本",
       "code": "Code",
-      "write": "執筆",
+      "write": "ワーク",
       "design": "デザイン"
     },
     "surfaceInherited": "基本から継承",

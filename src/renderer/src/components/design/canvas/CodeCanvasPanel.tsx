@@ -1,8 +1,12 @@
-import { useCallback, useEffect, useMemo } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { PanelRightClose, Shapes } from 'lucide-react'
+import { Loader2, PanelRightClose, Shapes } from 'lucide-react'
 import { CanvasViewport } from './CanvasViewport'
 import { PropertiesPanel } from './PropertiesPanel'
+import {
+  DesignDocumentCanvasSurface,
+  type DesignDocumentCanvasSurfaceProps
+} from './DesignDocumentCanvasSurface'
 import { useApplyShapeOpsLive } from '../../../design/canvas/use-apply-shape-ops-live'
 import type { ExecuteOpsOptions } from '../../../design/canvas/shape-ops'
 import {
@@ -18,15 +22,29 @@ import {
 import { canvasDocumentKey } from '../../../design/canvas/canvas-persistence'
 import { useCodeCanvasDesignSurface } from '../../../design/code-canvas-design-surface'
 import { useDesignWorkspaceStore } from '../../../design/design-workspace-store'
-import { findDesignBoardArtifact, ensureDesignBoardArtifact } from '../../../design/design-board'
 import { normalizeDesignWorkspaceRoot } from '../../../design/design-workspace-lifecycle'
 import { displayDrawingTitle } from '../../../design/design-drawing-title'
+import { findDesignBoardArtifact } from '../../../design/design-board'
+import {
+  cloneDesignDocumentForFork,
+  type PreparedDesignDocumentFork
+} from '../../../design/design-document-fork'
 
 function cx(...parts: Array<string | false | null | undefined>): string {
   return parts.filter(Boolean).join(' ')
 }
 
-type Props = {
+type Props = Pick<
+  DesignDocumentCanvasSurfaceProps,
+  | 'busy'
+  | 'onOpenAgentSettings'
+  | 'onImplementDesign'
+  | 'onScreenCreated'
+  | 'onSvgCreated'
+  | 'onUseElementAsContext'
+  | 'onRuntimeQualityFindings'
+  | 'onRequestQualityRepair'
+> & {
   workspaceRoot: string
   activeThreadId: string | null
   onCollapse: () => void
@@ -55,41 +73,69 @@ export function codeCanvasPanelTitlebarClass(): string {
  * that document's design board — a whiteboard-style space with the same
  * zoom/pan/grid tooling — without leaving the chat route.
  */
-export function CodeCanvasPanel({ workspaceRoot, activeThreadId, onCollapse, className }: Props) {
+export function CodeCanvasPanel({
+  workspaceRoot,
+  activeThreadId,
+  onCollapse,
+  className,
+  busy,
+  onOpenAgentSettings,
+  onImplementDesign,
+  onScreenCreated,
+  onSvgCreated,
+  onUseElementAsContext,
+  onRuntimeQualityFindings,
+  onRequestQualityRepair
+}: Props) {
   const { t } = useTranslation('common')
   const surface = useCodeCanvasDesignSurface((s) => s.surface)
   const designDocuments = useDesignWorkspaceStore((s) => s.documents)
-  const designArtifacts = useDesignWorkspaceStore((s) => s.artifacts)
+  const [continuingHistorical, setContinuingHistorical] = useState(false)
+  const activationGenerationRef = useRef(0)
+  const activeThreadIdRef = useRef(activeThreadId)
+  activeThreadIdRef.current = activeThreadId
   const designMode = Boolean(
     surface &&
     surface.threadId === activeThreadId &&
-    normalizeDesignWorkspaceRoot(surface.workspaceRoot) === normalizeDesignWorkspaceRoot(workspaceRoot) &&
-    designDocuments.some((document) => document.id === surface.documentId)
+    normalizeDesignWorkspaceRoot(surface.workspaceRoot) === normalizeDesignWorkspaceRoot(workspaceRoot)
   )
-
-  // The design surface is transient: once the panel unmounts (tab close or
-  // collapse) the next manual whiteboard open returns to the thread canvas.
-  useEffect(() => {
-    return () => {
-      useCodeCanvasDesignSurface.getState().clearDesignSurface()
-    }
-  }, [])
 
   // Activate the requested 设计稿 so the design store projects its artifacts
   // (the board + linked HTML frames for that document).
   useEffect(() => {
     if (!designMode || !surface) return
+    const generation = ++activationGenerationRef.current
+    const restoreLatestSurface = (): void => {
+      const latest = useCodeCanvasDesignSurface.getState().surface
+      const expectedThreadId = generation === activationGenerationRef.current
+        ? activeThreadId
+        : activeThreadIdRef.current
+      if (latest?.threadId === expectedThreadId) {
+        const latestState = useDesignWorkspaceStore.getState()
+        if (latestState.documents.some((document) => document.id === latest.documentId)) {
+          latestState.switchActiveDocument(latest.documentId)
+        }
+      }
+    }
     const state = useDesignWorkspaceStore.getState()
+    if (
+      normalizeDesignWorkspaceRoot(state.workspaceRoot) !==
+      normalizeDesignWorkspaceRoot(surface.workspaceRoot)
+    ) {
+      state.setWorkspaceRoot(surface.workspaceRoot)
+      void useDesignWorkspaceStore.getState().loadDesignSettings().then(restoreLatestSurface)
+      return
+    }
     if (state.activeDocumentId !== surface.documentId) {
-      state.switchActiveDocument(surface.documentId)
+      if (state.documents.some((document) => document.id === surface.documentId)) {
+        state.switchActiveDocument(surface.documentId)
+      } else {
+        void state.rehydrateArtifacts().then(() => {
+          restoreLatestSurface()
+        })
+      }
     }
   }, [designMode, surface])
-
-  // Mirror the Design stage: make sure the board artifact exists.
-  useEffect(() => {
-    if (!designMode || !workspaceRoot) return
-    void ensureDesignBoardArtifact(workspaceRoot)
-  }, [designMode, workspaceRoot])
 
   const ready = Boolean(workspaceRoot && activeThreadId)
   const artifactId = activeThreadId ? codeCanvasArtifactId(activeThreadId) : ''
@@ -128,8 +174,64 @@ export function CodeCanvasPanel({ workspaceRoot, activeThreadId, onCollapse, cla
   const designDoc = designMode && surface
     ? designDocuments.find((document) => document.id === surface.documentId) ?? null
     : null
-  const designBoardArtifact = designMode ? findDesignBoardArtifact(designArtifacts) : null
   const designDocTitle = designDoc ? displayDrawingTitle(designDoc, t('designUntitledDrawing')) : ''
+  const returnToCanonicalDocument = useCallback(() => {
+    if (!surface?.canonicalDocumentId || !activeThreadId) return
+    useCodeCanvasDesignSurface.getState().showDesignDocument(
+      activeThreadId,
+      workspaceRoot,
+      surface.canonicalDocumentId,
+      { canonicalDocumentId: surface.canonicalDocumentId }
+    )
+  }, [activeThreadId, surface?.canonicalDocumentId, workspaceRoot])
+  const continueHistoricalDocument = useCallback(() => {
+    if (
+      continuingHistorical || !surface?.readOnly || surface.canonicalDocumentId ||
+      !activeThreadId || !designDoc
+    ) return
+    const board = findDesignBoardArtifact(designDoc.artifacts)
+    if (!board) {
+      useDesignWorkspaceStore.getState().setFileError('The preview does not have a whiteboard to continue.')
+      return
+    }
+    setContinuingHistorical(true)
+    void (async () => {
+      let prepared: PreparedDesignDocumentFork | null = null
+      try {
+        prepared = await cloneDesignDocumentForFork({
+          workspaceRoot,
+          sourceTarget: { documentId: designDoc.id, boardArtifactId: board.id },
+          operation: { kind: 'bind', sourceId: activeThreadId, relation: 'bind' }
+        })
+        await useDesignWorkspaceStore.getState().rehydrateArtifacts()
+        const target = prepared.designDocumentTarget
+        const state = useDesignWorkspaceStore.getState()
+        const cloned = state.documents.find((document) => document.id === target.documentId)
+        if (!cloned || !cloned.artifacts.some(
+          (artifact) => artifact.kind === 'canvas' && artifact.id === target.boardArtifactId
+        )) throw new Error('The cloned whiteboard could not be loaded.')
+        state.switchActiveDocument(target.documentId)
+        useCodeCanvasDesignSurface.getState().showDesignDocument(
+          activeThreadId,
+          workspaceRoot,
+          target.documentId,
+          {
+            canonicalDocumentId: target.documentId,
+            ...(prepared.operationId
+              ? { continuationOperationId: prepared.operationId }
+              : {})
+          }
+        )
+      } catch (error) {
+        if (prepared) await prepared.cleanup().catch(() => undefined)
+        useDesignWorkspaceStore.getState().setFileError(
+          error instanceof Error ? error.message : String(error)
+        )
+      } finally {
+        setContinuingHistorical(false)
+      }
+    })()
+  }, [activeThreadId, continuingHistorical, designDoc, surface, workspaceRoot])
 
   if (designMode) {
     return (
@@ -150,22 +252,50 @@ export function CodeCanvasPanel({ workspaceRoot, activeThreadId, onCollapse, cla
               <span className="min-w-0 truncate text-[12.5px] font-medium text-ds-ink">
                 {designDocTitle || t('rightPanelWhiteboard')}
               </span>
+              {surface?.readOnly ? (
+                <span className="shrink-0 rounded-full bg-ds-surface-subtle px-2 py-0.5 text-[10.5px] text-ds-muted">
+                  {t('designViewPreview')}
+                </span>
+              ) : null}
+              {surface?.readOnly && surface.canonicalDocumentId ? (
+                <button
+                  type="button"
+                  onClick={returnToCanonicalDocument}
+                  className="pointer-events-auto shrink-0 rounded-full px-2 py-1 text-[11px] font-medium text-accent hover:bg-ds-hover"
+                >
+                  {t('designReturnToTaskWhiteboard', { defaultValue: 'Return to task whiteboard' })}
+                </button>
+              ) : surface?.readOnly ? (
+                <button
+                  type="button"
+                  disabled={continuingHistorical}
+                  onClick={continueHistoricalDocument}
+                  className="pointer-events-auto inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-1 text-[11px] font-medium text-accent hover:bg-ds-hover disabled:opacity-50"
+                >
+                  {continuingHistorical ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+                  {t('designContinueInTask', { defaultValue: 'Continue in this task' })}
+                </button>
+              ) : null}
             </div>
           </div>
         </div>
 
         <div className="relative min-h-0 flex-1 overflow-hidden">
-          {designDoc && designBoardArtifact ? (
-            <>
-              <CanvasViewport
-                workspaceRoot={workspaceRoot}
-                artifactId={designBoardArtifact.id}
-                baseDir={`.kun-design/${designDoc.id}`}
-                surface="design"
-                syncHtmlScreens
-              />
-              <PropertiesPanel surface="design" />
-            </>
+          {designDoc ? (
+            <DesignDocumentCanvasSurface
+              workspaceRoot={workspaceRoot}
+              documentId={designDoc.id}
+              activeThreadId={activeThreadId}
+              readOnly={surface?.readOnly === true}
+              busy={busy}
+              onOpenAgentSettings={onOpenAgentSettings}
+              onImplementDesign={onImplementDesign}
+              onScreenCreated={onScreenCreated}
+              onSvgCreated={onSvgCreated}
+              onUseElementAsContext={onUseElementAsContext}
+              onRuntimeQualityFindings={onRuntimeQualityFindings}
+              onRequestQualityRepair={onRequestQualityRepair}
+            />
           ) : (
             <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
               <div className="rounded-full bg-ds-surface-subtle p-3 text-ds-faint dark:bg-white/6">

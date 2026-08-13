@@ -78,6 +78,17 @@ function clickAction(result: BrowserUseToolResult) {
   }
 }
 
+function typeAction(result: BrowserUseToolResult, text: string) {
+  const target = expectedTarget(result)
+  const node = result.snapshot!.nodes.find((candidate) => candidate.ref)!
+  return {
+    action: 'type' as const,
+    ref: node.ref!,
+    expectedTarget: target,
+    text
+  }
+}
+
 function fakeHarness(settingsPatch: Partial<KunBrowserUseSettingsV1> = {}) {
   const effectiveSettings = { ...settings, ...settingsPatch }
   const listeners = new Map<string, Array<(...args: unknown[]) => void>>()
@@ -92,7 +103,21 @@ function fakeHarness(settingsPatch: Partial<KunBrowserUseSettingsV1> = {}) {
     nodeName: 'BUTTON',
     attributes: ['type', 'button']
   }
-  const sendCommand = vi.fn(async (method: string) => {
+  let heldCommand: string | undefined
+  let heldFunctionNeedle: string | undefined
+  let releaseCommand: (() => void) | undefined
+  const sendCommand = vi.fn(async (method: string, params?: unknown) => {
+    if (
+      method === heldCommand &&
+      (!heldFunctionNeedle || String((params as { functionDeclaration?: string } | undefined)
+        ?.functionDeclaration).includes(heldFunctionNeedle))
+    ) {
+      heldCommand = undefined
+      heldFunctionNeedle = undefined
+      await new Promise<void>((resolve) => {
+        releaseCommand = resolve
+      })
+    }
     if (method === 'Accessibility.getFullAXTree') {
       return {
         nodes: [{
@@ -143,6 +168,8 @@ function fakeHarness(settingsPatch: Partial<KunBrowserUseSettingsV1> = {}) {
     resize: () => image,
     toPNG: () => Buffer.from('bounded-image')
   }
+  let holdCapture = false
+  let releaseCapture: (() => void) | undefined
   const webContents = {
     id: 77,
     session,
@@ -171,9 +198,18 @@ function fakeHarness(settingsPatch: Partial<KunBrowserUseSettingsV1> = {}) {
       for (const listener of listeners.get('did-start-loading') ?? []) listener()
       for (const listener of listeners.get('did-stop-loading') ?? []) listener()
     }),
+    stop: vi.fn(),
     getURL: () => currentUrl,
     getTitle: () => currentTitle,
-    capturePage: vi.fn(async () => image),
+    capturePage: vi.fn(async () => {
+      if (holdCapture) {
+        holdCapture = false
+        await new Promise<void>((resolve) => {
+          releaseCapture = resolve
+        })
+      }
+      return image
+    }),
     isDestroyed: () => false,
     close: vi.fn()
   }
@@ -233,7 +269,19 @@ function fakeHarness(settingsPatch: Partial<KunBrowserUseSettingsV1> = {}) {
     },
     emitWebContents: (event: string, ...args: unknown[]) => {
       for (const listener of listeners.get(event) ?? []) listener(...args)
-    }
+    },
+    holdNextCommand: (method: string) => {
+      heldCommand = method
+    },
+    holdNextFunction: (needle: string) => {
+      heldCommand = 'Runtime.callFunctionOn'
+      heldFunctionNeedle = needle
+    },
+    finishCommand: () => releaseCommand?.(),
+    holdNextCapture: () => {
+      holdCapture = true
+    },
+    finishCapture: () => releaseCapture?.()
   }
 }
 
@@ -365,5 +413,213 @@ describe('BrowserUseManager', () => {
       url: 'https://example.com/again'
     })).resolves.toMatchObject({ ok: false, code: 'session_stopped' })
     await expect(harness.manager.clear('thread-1')).resolves.toBe(true)
+  })
+
+  it('fails closed when the concurrent session cap is reached', async () => {
+    const harness = fakeHarness()
+    for (let index = 0; index < 4; index += 1) {
+      await expect(harness.manager.execute(
+        `thread-${index}`,
+        `turn-${index}`,
+        { action: 'open', url: `https://example.com/${index}` }
+      )).resolves.toMatchObject({ ok: true, code: 'opened' })
+    }
+    await expect(harness.manager.execute(
+      'thread-over-limit',
+      'turn-over-limit',
+      { action: 'open', url: 'https://example.com/limit' }
+    )).resolves.toMatchObject({ ok: false, code: 'session_limit_reached' })
+  })
+
+  it('creates explicit new tabs up to maxTabs and leaves existing tabs intact at the cap', async () => {
+    const harness = fakeHarness({ maxTabs: 2 })
+    await openAuthorized(harness)
+    await expect(harness.manager.execute(
+      'thread-1',
+      'turn-2',
+      { action: 'open', url: 'https://example.com/second', newTab: true }
+    )).resolves.toMatchObject({ ok: true, code: 'opened' })
+    expect(harness.manager.stateForThread('thread-1').tabs).toHaveLength(2)
+
+    await expect(harness.manager.execute(
+      'thread-1',
+      'turn-3',
+      { action: 'open', url: 'https://example.com/third', newTab: true }
+    )).resolves.toMatchObject({ ok: false, code: 'tab_limit_reached' })
+    expect(harness.manager.stateForThread('thread-1').tabs).toHaveLength(2)
+  })
+
+  it('does not repopulate refs or audit snapshot success after Stop', async () => {
+    const harness = fakeHarness()
+    await openAuthorized(harness)
+    harness.holdNextCommand('DOM.getBoxModel')
+    const pending = harness.manager.execute('thread-1', 'turn-2', { action: 'snapshot' })
+    await vi.waitFor(() => {
+      expect(harness.sendCommand).toHaveBeenCalledWith('DOM.getBoxModel', expect.anything())
+    })
+
+    harness.manager.stop('thread-1')
+    harness.finishCommand()
+    await expect(pending).resolves.toMatchObject({ ok: false, code: 'aborted' })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(harness.manager.auditSnapshot()).not.toContainEqual(expect.objectContaining({
+      category: 'execution',
+      action: 'snapshot',
+      outcome: 'success'
+    }))
+  })
+
+  it('aborts a held screenshot and a queued tab close without late tab mutation', async () => {
+    const harness = fakeHarness()
+    await openAuthorized(harness)
+    const tabId = harness.manager.stateForThread('thread-1').activeTabId!
+    harness.holdNextCapture()
+    const screenshot = harness.manager.execute('thread-1', 'turn-2', { action: 'screenshot' })
+    await vi.waitFor(() => expect(harness.webContents.capturePage).toHaveBeenCalled())
+    const closeTab = harness.manager.execute('thread-1', 'turn-2', {
+      action: 'tabs',
+      operation: 'close',
+      tabId
+    })
+
+    harness.manager.stop('thread-1')
+    harness.finishCapture()
+    await expect(screenshot).resolves.toMatchObject({ ok: false, code: 'aborted' })
+    await expect(closeTab).resolves.toMatchObject({ ok: false, code: 'aborted' })
+    expect(harness.manager.stateForThread('thread-1').tabs).toHaveLength(1)
+    expect(harness.webContents.close).not.toHaveBeenCalled()
+  })
+
+  it('clear cancels queued operations so none can revive the removed session', async () => {
+    const harness = fakeHarness()
+    await openAuthorized(harness)
+    harness.holdNextCapture()
+    const screenshot = harness.manager.execute('thread-1', 'turn-2', { action: 'screenshot' })
+    await vi.waitFor(() => expect(harness.webContents.capturePage).toHaveBeenCalled())
+    const queuedScroll = harness.manager.execute('thread-1', 'turn-2', {
+      action: 'scroll',
+      direction: 'down',
+      amount: 120
+    })
+
+    const clearing = harness.manager.clear('thread-1')
+    harness.finishCapture()
+    await expect(screenshot).resolves.toMatchObject({ ok: false, code: 'aborted' })
+    await expect(queuedScroll).resolves.toMatchObject({ ok: false, code: 'aborted' })
+    await expect(clearing).resolves.toBe(true)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(harness.sendCommand).not.toHaveBeenCalledWith(
+      'Input.dispatchMouseEvent',
+      expect.objectContaining({ type: 'mouseWheel' })
+    )
+    expect(harness.manager.stateForThread('thread-1').lifecycle).toBe('closed')
+  })
+
+  it('returns aborted when Stop interrupts an in-flight scroll command', async () => {
+    const harness = fakeHarness()
+    await openAuthorized(harness)
+    harness.holdNextCommand('Input.dispatchMouseEvent')
+    const pending = harness.manager.execute('thread-1', 'turn-2', {
+      action: 'scroll',
+      direction: 'down',
+      amount: 240
+    })
+    await vi.waitFor(() => {
+      expect(harness.sendCommand).toHaveBeenCalledWith(
+        'Input.dispatchMouseEvent',
+        expect.objectContaining({ type: 'mouseWheel' })
+      )
+    })
+
+    harness.manager.stop('thread-1')
+    harness.finishCommand()
+    await expect(pending).resolves.toMatchObject({ ok: false, code: 'aborted' })
+  })
+
+  it('does not insert text when Stop interrupts editable-target focus', async () => {
+    const harness = fakeHarness({ approvalMode: 'always-ask' })
+    harness.setTarget({
+      role: 'textbox',
+      name: 'Search',
+      localName: 'input',
+      nodeName: 'INPUT',
+      attributes: ['type', 'search']
+    })
+    await openAuthorized(harness)
+    const snapshot = await harness.manager.execute('thread-1', 'turn-1', { action: 'snapshot' })
+    const pending = harness.manager.execute(
+      'thread-1',
+      'turn-2',
+      typeAction(snapshot, 'must-not-be-inserted')
+    )
+    await vi.waitFor(() => {
+      expect(harness.manager.stateForThread('thread-1').pendingActionConsent).toBeTruthy()
+    })
+    harness.holdNextFunction('textTypes')
+    const request = harness.manager.stateForThread('thread-1').pendingActionConsent!
+    harness.manager.decideAction({
+      threadId: 'thread-1',
+      requestId: request.id,
+      decision: 'allow-once'
+    })
+    await vi.waitFor(() => {
+      expect(harness.sendCommand).toHaveBeenCalledWith(
+        'Runtime.callFunctionOn',
+        expect.objectContaining({ functionDeclaration: expect.stringContaining('textTypes') })
+      )
+    })
+
+    harness.manager.stop('thread-1')
+    harness.finishCommand()
+    await expect(pending).resolves.toMatchObject({ ok: false, code: 'aborted' })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(harness.sendCommand).not.toHaveBeenCalledWith('Input.dispatchMouseEvent', expect.anything())
+    expect(harness.sendCommand).not.toHaveBeenCalledWith('Input.insertText', expect.anything())
+    expect(harness.manager.auditSnapshot()).not.toContainEqual(expect.objectContaining({
+      category: 'execution',
+      action: 'type',
+      outcome: 'success'
+    }))
+  })
+
+  it('does not dispatch a late mouse release when Stop interrupts a click', async () => {
+    const harness = fakeHarness({ approvalMode: 'always-ask' })
+    await openAuthorized(harness)
+    const snapshot = await harness.manager.execute('thread-1', 'turn-1', { action: 'snapshot' })
+    const pending = harness.manager.execute('thread-1', 'turn-2', clickAction(snapshot))
+    await vi.waitFor(() => {
+      expect(harness.manager.stateForThread('thread-1').pendingActionConsent).toBeTruthy()
+    })
+    harness.holdNextCommand('Input.dispatchMouseEvent')
+    const request = harness.manager.stateForThread('thread-1').pendingActionConsent!
+    harness.manager.decideAction({
+      threadId: 'thread-1',
+      requestId: request.id,
+      decision: 'allow-once'
+    })
+    await vi.waitFor(() => {
+      expect(harness.sendCommand).toHaveBeenCalledWith(
+        'Input.dispatchMouseEvent',
+        expect.objectContaining({ type: 'mousePressed' })
+      )
+    })
+
+    harness.manager.stop('thread-1')
+    harness.finishCommand()
+    await expect(pending).resolves.toMatchObject({ ok: false, code: 'aborted' })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(harness.sendCommand).not.toHaveBeenCalledWith(
+      'Input.dispatchMouseEvent',
+      expect.objectContaining({ type: 'mouseReleased' })
+    )
+    expect(harness.manager.auditSnapshot()).not.toContainEqual(expect.objectContaining({
+      category: 'execution',
+      action: 'click',
+      outcome: 'success'
+    }))
   })
 })

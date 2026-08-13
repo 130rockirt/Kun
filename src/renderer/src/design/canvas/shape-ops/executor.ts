@@ -9,6 +9,7 @@ import {
   appendDesignOperationJournalEntry,
   shapeOpToDesignOperation
 } from '../../graph/design-operation-journal'
+import { canvasReplayOperationId, canvasReplayResult } from '../canvas-replay-receipt'
 
 function executeOne(
   op: ShapeOp,
@@ -29,6 +30,11 @@ export function executeOps(
   label = 'shape-ops',
   options?: ExecuteOpsOptions
 ): ExecuteResult {
+  const replayKey = options?.replayKey?.trim()
+  if (replayKey) {
+    const replayed = canvasReplayResult(useCanvasShapeStore.getState().document, replayKey)
+    if (replayed) return replayed
+  }
   const affectedIds = new Set<string>()
   const errors: OpError[] = []
 
@@ -47,6 +53,7 @@ export function executeOps(
   }
 
   if (validatedOps.length === 0) {
+    if (replayKey) useCanvasShapeStore.getState().recordRendererReplayKey(replayKey)
     return { ok: errors.length === 0, affectedIds: [], errors }
   }
 
@@ -62,14 +69,20 @@ export function executeOps(
     }
   })
 
+  const operations = validatedOps.map((op, index) => {
+    const operation = shapeOpToDesignOperation(op, label)
+    if (replayKey) operation.id = canvasReplayOperationId(replayKey, index)
+    return operation
+  })
   const journalEntry = appendDesignOperationJournalEntry({
     label,
     status: errors.length === 0 ? 'applied' : 'partial',
-    operations: validatedOps.map((op) => shapeOpToDesignOperation(op, label)),
+    operations,
     affectedIds: Array.from(affectedIds),
     errors: errors.map((error) => ({ ...error }))
   })
   useCanvasShapeStore.getState().appendOperationJournalEntry(journalEntry)
+  if (replayKey) useCanvasShapeStore.getState().recordRendererReplayKey(replayKey)
 
   return {
     ok: errors.length === 0,

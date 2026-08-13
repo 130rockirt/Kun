@@ -59,7 +59,7 @@ export function designAutoRepairPayloadKey(payload: DesignRuntimeQualityPayload)
 
 function isRepairRuntimeReady(state: DesignQualityRepairRuntimeState): boolean {
   return (
-    state.route === 'design' &&
+    (state.route === 'design' || state.route === 'chat') &&
     state.runtimeConnection === 'ready' &&
     !state.busy &&
     !state.pagesRunActive

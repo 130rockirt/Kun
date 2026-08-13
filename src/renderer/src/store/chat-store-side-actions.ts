@@ -37,8 +37,24 @@ import {
   teardownSideSubscription,
   type SideContext
 } from './chat-store-side-runtime'
+import {
+  cloneDesignDocumentForFork,
+  removeClonedDesignDocument,
+  type CloneDesignDocumentForForkInput,
+  type PreparedDesignDocumentFork
+} from '../design/design-document-fork'
+import { resolvePreparedDesignCloneAfterError } from './chat-store-design-clone-recovery'
 
-export function createSideActions(ctx: SideContext): Pick<
+type SideActionDependencies = {
+  cloneDesignDocument?: (
+    input: CloneDesignDocumentForForkInput
+  ) => Promise<PreparedDesignDocumentFork>
+}
+
+export function createSideActions(
+  ctx: SideContext,
+  dependencies: SideActionDependencies = {}
+): Pick<
   ChatState,
   | 'spawnSideConversation'
   | 'openSideConversationDraft'
@@ -93,17 +109,53 @@ export function createSideActions(ctx: SideContext): Pick<
       const parentThread = state.threads.find((thread) => thread.id === parentId)
       const title = defaultSideTitle(parentThread?.title ?? '', parentId)
       let forked
+      let preparedDesignFork: PreparedDesignDocumentFork | null = null
+      let forkCommitted = false
       try {
-        forked = await provider.forkThread(parentId, { relation: 'side', title })
-      } catch (e) {
-        ctx.set({
-          error: ctx.formatRuntimeError(e),
-          ...(ctx.shouldOpenSettingsForError(e)
-            ? { route: 'settings' as const, settingsSection: 'agents' as const }
+        if (parentThread?.designProfile) {
+          preparedDesignFork = await (
+            dependencies.cloneDesignDocument ?? cloneDesignDocumentForFork
+          )({
+            workspaceRoot: parentThread.workspace || state.workspaceRoot,
+            sourceTarget: parentThread.designProfile.documentTarget,
+            operation: { kind: 'fork', sourceId: parentId, relation: 'side' }
+          })
+        }
+        await preparedDesignFork?.markRuntimeRequestStarted?.()
+        forked = await provider.forkThread(parentId, {
+          relation: 'side',
+          title,
+          ...(preparedDesignFork
+            ? {
+                designDocumentTarget: preparedDesignFork.designDocumentTarget,
+                designCloneOperationId: preparedDesignFork.operationId
+              }
             : {})
         })
-        return null
+        forkCommitted = true
+        await preparedDesignFork?.commit?.()
+      } catch (e) {
+        if (!forkCommitted && preparedDesignFork) {
+          const outcome = await resolvePreparedDesignCloneAfterError(
+            provider, preparedDesignFork, e
+          )
+          if (outcome.kind === 'committed') {
+            forked = outcome.thread
+            forkCommitted = true
+            await preparedDesignFork.commit?.()
+          }
+        }
+        if (!forkCommitted) {
+          ctx.set({
+            error: ctx.formatRuntimeError(e),
+            ...(ctx.shouldOpenSettingsForError(e)
+              ? { route: 'settings' as const, settingsSection: 'agents' as const }
+              : {})
+          })
+          return null
+        }
       }
+      if (!forked) return null
       const now = new Date().toISOString()
       const inheritedAt = new Date().toISOString()
       const draftModel = options?.model?.trim() || defaultSideModel(state, parentId)
@@ -116,6 +168,10 @@ export function createSideActions(ctx: SideContext): Pick<
       const side: SideConversation = {
         threadId: forked.id,
         parentThreadId: parentId,
+        ...(forked.designProfile ? { designProfile: forked.designProfile } : {}),
+        ...(forked.designProfile
+          ? { designWorkspaceRoot: parentThread?.workspace || state.workspaceRoot }
+          : {}),
         title: forked.title ?? title,
         createdAt: now,
         inheritedAt,
@@ -188,6 +244,10 @@ export function createSideActions(ctx: SideContext): Pick<
           ...(accountId ? { accountId } : {}),
           ...(reasoningEffort ? { reasoningEffort } : {}),
           ...(serviceTier ? { serviceTier } : {}),
+          // Side conversations do not mount the full Design pipeline/canvas.
+          // Keep their next turn explicitly Code even when the fork retains a
+          // Design profile for later promotion or recovery.
+          agentSurface: 'code',
           ...(attachmentIds.length ? { attachmentIds } : {})
         })
         ctx.set((s) =>
@@ -412,6 +472,12 @@ export function createSideActions(ctx: SideContext): Pick<
         try {
           await provider.deleteThread(sideId)
           invalidateThreadSnapshot(sideId)
+          if (side.designProfile && side.designWorkspaceRoot) {
+            await removeClonedDesignDocument({
+              workspaceRoot: side.designWorkspaceRoot,
+              documentTarget: side.designProfile.documentTarget
+            })
+          }
         } catch (e) {
           ctx.set({
             error: ctx.formatRuntimeError(e),

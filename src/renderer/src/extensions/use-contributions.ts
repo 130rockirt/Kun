@@ -12,6 +12,7 @@ import {
   type ExtensionContributionLoadContext
 } from './contribution-load-coordinator'
 import { extensionWorkbenchClient } from './extension-workbench-client'
+import type { WorkbenchTaskSurface } from './content-script-planner'
 import type { WorkbenchContext } from './when-expression'
 
 export type ExtensionContributionLoadState =
@@ -109,13 +110,15 @@ export function isExtensionContributionSnapshotReady(
 export function workbenchContextForRoute(
   route: AppRoute,
   workspaceRoot: string,
-  extra: WorkbenchContext = {}
+  extra: WorkbenchContext = {},
+  taskSurface: WorkbenchTaskSurface = 'code'
 ): WorkbenchContext {
+  const mode = route === 'chat' ? taskSurface : route
   return {
     workspaceOpen: Boolean(workspaceRoot),
-    'workbench.mode': route === 'chat' ? 'code' : route,
-    'workbench.code': route === 'chat',
-    'workbench.design': route === 'design',
+    'workbench.mode': mode,
+    'workbench.code': route === 'chat' && taskSurface === 'code',
+    'workbench.design': route === 'design' || (route === 'chat' && taskSurface === 'design'),
     'workbench.write': route === 'write',
     'workbench.connect': route === 'claw',
     'workbench.settings': route === 'settings',

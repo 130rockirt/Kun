@@ -34,7 +34,9 @@ export function createToolDiscoveryContext(
     turnId: input.turnId,
     workspace: input.workspace,
     ...(input.orchestration ? { orchestration: input.orchestration } : {}),
-    ...(input.messageSource ? { messageSource: input.messageSource } : {}),
+    ...(input.messageSource && input.messageSource !== 'design_continuation'
+      ? { messageSource: input.messageSource }
+      : {}),
     ...(input.subagentResume ? { subagentResume: input.subagentResume } : {}),
     ...(input.additionalWorkspaces?.length ? { additionalWorkspaces: input.additionalWorkspaces } : {}),
     ...(input.knowledgeBases?.length ? { knowledgeBases: input.knowledgeBases } : {}),

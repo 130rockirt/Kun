@@ -377,7 +377,8 @@ describe('TurnService startTurn', () => {
       })).resolves.toEqual({
         threadId: legacyThreadId,
         turnId: legacyTurn.id,
-        userMessageItemId: legacyUserItem.id
+        userMessageItemId: legacyUserItem.id,
+        threadAgentSurface: 'code'
       })
       await expect(service.startTurn({
         threadId: legacyThreadId,

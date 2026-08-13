@@ -283,6 +283,12 @@ describe('worktree branch checkout — integration with real git', () => {
     if (!listed.ok) throw new Error('unreachable')
     expect(listed.worktrees.map((item) => item.path)).toContain(result.worktreePath)
 
+    await expect(removeGitBranchWorktree({
+      workspaceRoot: repoRoot,
+      worktreePath: result.worktreePath,
+      protectedPlanWorktree: true
+    })).rejects.toThrow('Plan coordinator worktrees cannot be removed')
+
     await removeGitBranchWorktree({
       workspaceRoot: repoRoot,
       worktreePath: result.worktreePath

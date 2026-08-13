@@ -341,7 +341,17 @@ export function mergeLoadedCanvasDocumentWithLiveChanges(
   if (live === initial) return loaded
   const liveRoot = live.objects[live.rootId]
   const motionMerge = mergeLoadedMotionWithLiveChanges(loaded.motion, live.motion, initial.motion)
-  if ((!liveRoot || liveRoot.children.length === 0) && !motionMerge.changed) return loaded
+  const rendererReplayKeys = [
+    ...new Set([
+      ...(loaded.rendererReplayKeys ?? []),
+      ...(live.rendererReplayKeys ?? [])
+    ])
+  ].slice(-4096)
+  const replayReceiptsChanged = rendererReplayKeys.some(
+    (key) => !loaded.rendererReplayKeys?.includes(key)
+  )
+  if ((!liveRoot || liveRoot.children.length === 0) &&
+    !motionMerge.changed && !replayReceiptsChanged) return loaded
 
   const next = cloneCanvasDocument(loaded)
   const nextRoot = next.objects[next.rootId]
@@ -349,6 +359,10 @@ export function mergeLoadedCanvasDocumentWithLiveChanges(
 
   let changed = motionMerge.changed
   if (motionMerge.changed) next.motion = motionMerge.motion
+  if (replayReceiptsChanged) {
+    next.rendererReplayKeys = rendererReplayKeys
+    changed = true
+  }
   const copyLiveSubtree = (id: string): void => {
     const liveShape = live.objects[id]
     if (!liveShape) return

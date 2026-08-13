@@ -69,7 +69,11 @@ describe('Kun runtime config service', () => {
           defaultThreadCaptureEnabled: true
         }
       }
-    }))
+    }), {
+      bridgeUrl: 'http://127.0.0.1:23456',
+      bridgeToken: 'b'.repeat(43),
+      approvalSigningKey: 's'.repeat(43)
+    })
 
     expect(body.serve).toMatchObject({
       apiKey: 'sk-test',
@@ -93,6 +97,11 @@ describe('Kun runtime config service', () => {
     expect(body.runtime?.llmDebug).toEqual({
       enabled: false,
       defaultThreadCaptureEnabled: true
+    })
+    expect(body.browserUseHostBinding).toEqual({
+      bridgeUrl: 'http://127.0.0.1:23456',
+      bridgeToken: 'b'.repeat(43),
+      approvalSigningKey: 's'.repeat(43)
     })
     expect(RuntimeConfigApplyRequest.safeParse(body).success).toBe(true)
 
@@ -125,6 +134,25 @@ describe('Kun runtime config service', () => {
     expect(applied.serve).not.toHaveProperty('runtimeToken')
     expect(applied.serve).not.toHaveProperty('insecure')
     expect(applied.serve).not.toHaveProperty('storage')
+    expect(applied.browserUseHostBinding).toEqual(body.browserUseHostBinding)
+  })
+
+  it('strictly rejects non-loopback or weak Browser Use host bindings', () => {
+    expect(RuntimeConfigApplyRequest.safeParse({
+      browserUseHostBinding: {
+        bridgeUrl: 'http://localhost:23456',
+        bridgeToken: 'b'.repeat(43),
+        approvalSigningKey: 's'.repeat(43)
+      }
+    }).success).toBe(false)
+    expect(RuntimeConfigApplyRequest.safeParse({
+      browserUseHostBinding: {
+        bridgeUrl: 'http://127.0.0.1:23456/path',
+        bridgeToken: 'short',
+        approvalSigningKey: 's'.repeat(43)
+      }
+    }).success).toBe(false)
+    expect(RuntimeConfigApplyRequest.safeParse({ browserUseHostBinding: null }).success).toBe(true)
   })
 
   it('does not let ordinary GUI hot apply overwrite the registry-owned shared default', () => {

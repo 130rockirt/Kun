@@ -8,6 +8,10 @@ import {
   DEFAULT_SANDBOX_MODE,
   SandboxModeSchema
 } from './policy.js'
+import {
+  DesignDocumentTargetSchema,
+  DesignTaskProfileSchema
+} from './design-task-profile.js'
 
 export const ThreadStatus = z.enum(['idle', 'running', 'archived', 'deleted'])
 export type ThreadStatus = z.infer<typeof ThreadStatus>
@@ -56,6 +60,17 @@ export type ThreadMode = z.infer<typeof ThreadMode>
 /** Product surface that owns a thread. Missing legacy values are resolved conservatively. */
 export const ThreadAgentSurface = z.enum(['code', 'write', 'design'])
 export type ThreadAgentSurface = z.infer<typeof ThreadAgentSurface>
+
+/** Recoverable source metadata required before cloning a persisted session. */
+export const ResumeSessionMetadataSchema = z.object({
+  sessionId: z.string().min(1),
+  sourceAgentSurface: ThreadAgentSurface,
+  workspace: z.string().min(1).optional(),
+  sourceDesignProfile: DesignTaskProfileSchema.optional(),
+  sourceDesignDocumentTarget: DesignDocumentTargetSchema.optional(),
+  requiresIndependentDesignTarget: z.boolean()
+})
+export type ResumeSessionMetadata = z.infer<typeof ResumeSessionMetadataSchema>
 
 export const MAX_THREAD_KNOWLEDGE_BASES = 8
 
@@ -254,6 +269,14 @@ export const ExtensionThreadMetadataSchema = z.object({
 })
 export type ExtensionThreadMetadata = z.infer<typeof ExtensionThreadMetadataSchema>
 
+export const DesignCloneOperationSchema = z.object({
+  operationId: z.string().trim().min(1).max(160)
+    .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/),
+  kind: z.enum(['fork', 'resume']),
+  sourceId: z.string().trim().min(1).max(256)
+}).strict()
+export type DesignCloneOperation = z.infer<typeof DesignCloneOperationSchema>
+
 export const ThreadSchema = z.object({
   id: z.string().min(1),
   title: z.string(),
@@ -277,6 +300,10 @@ export const ThreadSchema = z.object({
   model: z.string(),
   /** Durable product-surface ownership. Missing legacy values resolve from homogeneous turn history. */
   agentSurface: ThreadAgentSurface.optional(),
+  /** Immutable Design task contract. Missing on Code, Work, and legacy threads. */
+  designProfile: DesignTaskProfileSchema.optional(),
+  /** Idempotency audit record for a renderer-prepared independent Design clone. */
+  designCloneOperation: DesignCloneOperationSchema.optional(),
   /**
    * Optional provider id. When set, every turn on this thread routes its
    * model request to the matching per-provider client; absent → use the
@@ -319,6 +346,9 @@ export const ThreadSchema = z.object({
   costBudgetWarningSent: z.boolean().optional(),
   relation: ThreadRelation.default('primary'),
   parentThreadId: z.string().optional(),
+  planBuildRunId: z.string().trim().min(1).max(160).optional(),
+  /** Host-owned fence that blocks new turn admission during integration/cleanup. */
+  planBuildAdmissionFrozen: z.boolean().optional(),
   forkedFromThreadId: z.string().optional(),
   forkedFromTitle: z.string().optional(),
   forkedAt: z.string().optional(),
@@ -357,6 +387,8 @@ export const ThreadSummarySchema = ThreadSchema.pick({
   knowledgeBases: true,
   model: true,
   agentSurface: true,
+  designProfile: true,
+  designCloneOperation: true,
   providerId: true,
   ownerExtensionId: true,
   ownerExtensionVersion: true,
@@ -378,6 +410,8 @@ export const ThreadSummarySchema = ThreadSchema.pick({
   costBudgetWarningSent: true,
   relation: true,
   parentThreadId: true,
+  planBuildRunId: true,
+  planBuildAdmissionFrozen: true,
   forkedFromThreadId: true,
   forkedFromTitle: true,
   forkedAt: true,
@@ -387,6 +421,9 @@ export const ThreadSummarySchema = ThreadSchema.pick({
   todos: true,
   createdAt: true,
   updatedAt: true
+}).extend({
+  /** First accepted Code/Design mode, derived from durable turn history. */
+  lockedTaskSurface: ThreadAgentSurface.optional()
 })
 export type ThreadSummary = z.infer<typeof ThreadSummarySchema>
 
@@ -440,13 +477,60 @@ export const ForkThreadRequest = z
      * Compatibility echo only. A fork cannot replace the source reviewer;
      * ThreadService rejects any value that differs from the captured source.
      */
-    approvalReviewer: ApprovalReviewerSchema.optional()
+    approvalReviewer: ApprovalReviewerSchema.optional(),
+    /** Host-authorized workspace for an isolated GUI plan execution fork. */
+    workspace: z.string().trim().min(1).max(4096).optional(),
+    /** Bounded host lifecycle linkage; lifecycle truth remains in Electron main. */
+    planBuildRunId: z.string().trim().min(1).max(160)
+      .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/).optional(),
+    /** Explicitly strips mutable Design ownership from a Code plan executor. */
+    planBuildAgentSurface: z.literal('code').optional(),
+    /** Independently cloned board target prepared by the Design client before fork. */
+    designDocumentTarget: DesignDocumentTargetSchema.optional(),
+    /** Stable client operation used to retry the same Design clone/thread atomically. */
+    designCloneOperationId: z.string().trim().min(1).max(160)
+      .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/).optional()
   })
   .refine((value) => !value.beforeTurn || value.turnId !== undefined, {
     message: 'beforeTurn requires turnId'
   })
+  .refine((value) => !value.workspace || value.relation === 'side', {
+    message: 'workspace override requires a side fork'
+  })
+  .refine((value) => Boolean(value.workspace) === Boolean(value.planBuildRunId), {
+    message: 'workspace and planBuildRunId must be supplied together'
+  })
+  .refine((value) => Boolean(value.planBuildRunId) === Boolean(value.planBuildAgentSurface), {
+    message: 'planBuildRunId and planBuildAgentSurface must be supplied together'
+  })
+  .refine((value) => Boolean(value.designDocumentTarget) === Boolean(value.designCloneOperationId), {
+    message: 'designDocumentTarget and designCloneOperationId must be supplied together'
+  })
+  .refine((value) => !value.workspace || /^(?:\/|[A-Za-z]:[\\/]|\\\\)/.test(value.workspace), {
+    message: 'fork workspace must be absolute'
+  })
   .optional()
 export type ForkThreadRequest = z.infer<typeof ForkThreadRequest>
+
+export const SetPlanBuildAdmissionFenceRequest = z.object({
+  planBuildRunId: z.string().trim().min(1).max(160)
+    .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/),
+  expectedWorkspace: z.string().trim().min(1).max(4096),
+  frozen: z.boolean(),
+  workspace: z.string().trim().min(1).max(4096).optional()
+}).strict()
+  .refine((value) => /^(?:\/|[A-Za-z]:[\\/]|\\\\)/.test(value.expectedWorkspace), {
+    message: 'expected workspace must be absolute'
+  })
+  .refine((value) => !value.workspace || /^(?:\/|[A-Za-z]:[\\/]|\\\\)/.test(value.workspace), {
+    message: 'workspace must be absolute'
+  })
+  .refine((value) => !value.frozen || value.workspace === undefined, {
+    message: 'a frozen fence cannot rebind the workspace'
+  })
+export type SetPlanBuildAdmissionFenceRequest = z.infer<
+  typeof SetPlanBuildAdmissionFenceRequest
+>
 
 export const SetThreadGoalRequest = z
   .object({

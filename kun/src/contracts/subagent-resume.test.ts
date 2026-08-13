@@ -21,3 +21,14 @@ describe('subagent resume turn contract', () => {
     expect(StartTurnRequest.safeParse({ prompt: 'continue', subagentResume }).success).toBe(false)
   })
 })
+
+describe('Design continuation turn contract', () => {
+  it('accepts an auditable internal progress source without resume metadata', () => {
+    expect(StartTurnRequest.parse({
+      prompt: 'generate the pinned logo artifact',
+      messageSource: 'design_continuation'
+    })).toMatchObject({
+      messageSource: 'design_continuation'
+    })
+  })
+})

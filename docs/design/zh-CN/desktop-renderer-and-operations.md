@@ -6,13 +6,13 @@
 
 - **Main** (`src/main/`) — Node process. Owns the Kun
   child process, settings store, updater, Connect phone runtime,
-  file/git/editor helpers, Write services, IPC handlers, logger,
+  file/git/editor helpers, Work services (with internal `write` names), IPC handlers, logger,
   GUI updater, macOS/Windows code-signing glue.
 - **Preload** (`src/preload/`) — `contextBridge` surface.
   Exposes a typed `window.kunGui` API to the renderer. No Node
   access leaks into the renderer.
 - **Renderer** (`src/renderer/`) — Chromium process. React 19
-  SPA. Runs Code / Design / Write / Connect phone UIs.
+  SPA. Runs Code (including Design tasks) / Work / Connect phone UIs.
 
 ### 6.2 Module layout
 
@@ -45,7 +45,7 @@ src/
       locales/{zh,en}/              # i18n
       plan/                         # Plan-mode prompt, store, panel
       store/                        # Zustand chat store + actions
-      write/                        # Write-mode workspace, inline edit, RAG
+      write/                        # Work workspace, inline edit, RAG (internal path)
 ```
 
 ### 6.3 The kunGui API surface
@@ -65,7 +65,7 @@ on the system. It includes:
 - Terminal (`createTerminalSession`, `writeTerminalSession`,
   `resizeTerminalSession`, `closeTerminalSession`,
   `onTerminalData`, `onTerminalExit`).
-- Write-mode services (`exportWriteDocument`,
+- Work services (`exportWriteDocument`,
   `requestWriteInlineCompletion`,
   `listWriteInlineCompletionDebugEntries`,
   `clearWriteInlineCompletionDebugEntries`).
@@ -118,7 +118,7 @@ App
         │     ├── Center column
         │     │     ├── MessageTimeline  (Code / Connect phone)
         │     │     ├── DesignWorkspaceView (Design)
-        │     │     └── WriteWorkspaceView (Write)
+        │     │     └── WriteWorkspaceView (Work; internal component name)
         │     ├── Right inspector  (optional, 360 px)
         │     │     ├── ChangeInspector
         │     │     ├── TodoPanel
@@ -203,18 +203,18 @@ block kind has its own renderer:
 ### 7.5 Workbench routes, one store
 
 The store distinguishes the main workbench and entry routes through `route`
-(`chat`, `design`, `write`, `claw`, `plugins`, `schedule`, `workflow`) plus
-thread metadata. The Code / Design / Write mode switcher lives in the sidebar;
-Connect phone uses the legacy `claw` route internally. Switching does not change
-the runtime contract, only which renderer and local workflow state the store pulls in.
+(`chat`, legacy `design`, `write`, `claw`, `plugins`, `schedule`, `workflow`) plus
+thread metadata. The sidebar exposes Code / Work; Code and Design are immutable
+task types selected in the shared composer, with Design rendered in Code's right
+whiteboard. Connect phone uses the legacy `claw` route internally. Switching does
+not change the runtime contract, only which renderer and local workflow state the store pulls in.
 
 - **Code** — default mode, full agent flow, workspace roots,
   todo panel, changes inspector, plan panel, file preview, and dev browser.
-- **Design** — design-thread registry isolates design sessions from Code, Write,
-  and Connect phone sessions. Artifacts persist under `.kun-design/`, the canvas
-  previews interactive HTML prototypes and graph outputs, and approved designs can
-  publish `DESIGN_SYSTEM.md` before opening a fresh Code thread.
-- **Write** — write-thread registry isolates Write sessions
+- **Design task** — listed with Code tasks and uses the same timeline, composer,
+  model, permissions, and workspace controls. Artifacts persist under
+  `.kun-design/`; the right whiteboard previews interactive HTML and AI-image outputs.
+- **Work** — the internal write-thread registry isolates Work sessions
   from Code / Design / Connect phone sessions. Uses the same Kun but a
   separate `WRITE_ASSISTANT_THREAD_TITLE` namespace. Inline
   completion and selected-text agent go through dedicated
@@ -234,7 +234,7 @@ the runtime contract, only which renderer and local workflow state the store pul
 | Session list / workbench layout | `localStorage` | JSON | Renderer |
 | Design thread registry | `localStorage` | JSON | Renderer |
 | Design artifacts | workspace `.kun-design/` | HTML / PNG / JSON / Markdown | Renderer + Kun |
-| Write thread registry | `localStorage` | JSON | Renderer |
+| Work thread registry (internal `write` key) | `localStorage` | JSON | Renderer |
 | Connect phone channels | OS app-data dir | JSON | `JsonSettingsStore` |
 | Threads / turns / events | `~/.kun/data` | JSON + JSONL | Kun |
 | Usage counters | Kun data dir | JSON | Kun |
@@ -289,14 +289,14 @@ immutable prefix's pinned constraints. Soft threshold 16k
 tokens, hard threshold 24k tokens. The GUI renders the
 compaction block inline with a "show replaced" detail.
 
-### 9.4 Write-mode completion & RAG
+### 9.4 Work completion & RAG
 
 - **FIM short completion** — debounced 650 ms, max 96 tokens,
   min accept score 0.52. Used while typing.
 - **Inspirational long completion** — debounced 2.8 s, max
   256 tokens, min accept score 0.36. Used at sentence/paragraph
   boundaries.
-- **RAG** — write workspace Markdown files are indexed
+- **RAG** — Work workspace Markdown files are indexed
   on-demand with BM25 + keyword match; relevant snippets are
   injected as hidden Markdown comments.
 - **Selected-text inline agent** — selected text is captured
@@ -436,7 +436,7 @@ npm run build
 Manual smoke (full list in `docs/AGENTS.md`):
 
 - Code: create thread, stream reply, approve / deny, interrupt.
-- Write: open workspace, request inline completion, run
+- Work: open workspace, request inline completion, run
   selected-text agent.
 - Connect phone: save settings, run a manual task through a Kun
   thread.
@@ -464,7 +464,7 @@ If any check fails, the change is not ready.
 | Workbench | `src/renderer/src/components/Workbench.tsx` |
 | Chat store | `src/renderer/src/store/chat-store.ts` |
 | Connect phone runtime | `src/main/claw-runtime.ts` |
-| Write services | `src/main/services/write-*-service.ts` |
+| Work services | `src/main/services/write-*-service.ts` |
 | Workspace/editor services | `src/main/services/workspace-*.ts`, `src/main/services/workspace-editors.ts` |
 | Tokens / styles | `src/renderer/src/styles/*.css`, `src/renderer/src/index.css` |
 | Agent loop | `kun/src/loop/agent-loop.ts` |

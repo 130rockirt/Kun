@@ -1,0 +1,114 @@
+import type { ChatBlock, ToolBlock } from '../../agent/types'
+import { threadHasPendingRuntimeWork } from '../../store/chat-store-runtime-helpers'
+import {
+  applyCanvasOpBlocks,
+  extractCanvasOpBlocks,
+  setLastCanvasOpErrors,
+  type ApplyCanvasOpsSinceResult
+} from './apply-shape-ops'
+import {
+  ensureGeneratedImageOnCanvas,
+  replayDurableDesignCanvasTurns,
+  type CanvasDesignDocumentTarget
+} from './canvas-design-turn-replay'
+import { useCanvasSelectionStore } from './canvas-selection-store'
+import type { ExecuteOpsOptions, OpError } from './shape-ops'
+import { isDesignMotionRendererToolName } from './motion-ops'
+
+type IdleChatState = {
+  activeThreadId: string | null
+  currentTurnId: string | null
+  busy: boolean
+  blocks: ChatBlock[]
+}
+
+export function shouldReplayIdleCanvasToolBlock(block: ToolBlock): boolean {
+  return block.meta?.toolName === 'design_svg_create' ||
+    block.meta?.toolName === 'ppt_agent' ||
+    isDesignMotionRendererToolName(block.meta?.toolName)
+}
+
+export function replayIdleCanvasToolBlocks(
+  blocks: readonly ChatBlock[],
+  applyToolBlock: (block: ToolBlock) => void,
+  applySvgBlock: (block: ToolBlock) => void
+): void {
+  for (const block of blocks) {
+    if (block.kind !== 'tool' || !shouldReplayIdleCanvasToolBlock(block)) continue
+    if (isDesignMotionRendererToolName(block.meta?.toolName) || block.meta?.toolName === 'ppt_agent') {
+      applyToolBlock(block)
+    } else applySvgBlock(block)
+  }
+}
+
+export function applyDurableCanvasOpsSince(
+  text: string,
+  startIndex: number,
+  replayKey: string,
+  executeOptions?: ExecuteOpsOptions
+): ApplyCanvasOpsSinceResult {
+  const blocks = extractCanvasOpBlocks(text)
+  const affectedIds: string[] = []
+  const errors: OpError[] = []
+  for (let index = Math.max(0, startIndex); index < blocks.length; index += 1) {
+    const result = applyCanvasOpBlocks([blocks[index]], `replay:${replayKey}:${index}`, {
+      ...executeOptions,
+      replayKey: `${replayKey}:${index}`
+    })
+    affectedIds.push(...result.affectedIds)
+    errors.push(...result.errors)
+  }
+  return { affectedIds, errors, totalBlocks: blocks.length }
+}
+
+export function replayIdleDesignCanvas(options: {
+  state: IdleChatState
+  threadId?: string | null
+  target?: CanvasDesignDocumentTarget
+  ready: boolean
+  executeOptions?: ExecuteOpsOptions
+  errorKey?: string
+  affectedIds: Set<string>
+  errors: OpError[]
+  resetTurn: () => void
+  applyToolBlock: (
+    block: ToolBlock,
+    replay: { blocks: readonly ChatBlock[]; replayKey: string }
+  ) => void
+}): void {
+  const { state, threadId, target } = options
+  if (!target || !threadId || !options.ready) return
+  if (state.activeThreadId !== threadId) return
+  if (state.currentTurnId || state.busy || threadHasPendingRuntimeWork(state.blocks)) return
+  replayDurableDesignCanvasTurns({
+    threadId,
+    blocks: state.blocks,
+    target,
+    onTurnStart: options.resetTurn,
+    onAssistantText: (text, replayKey) => {
+      const result = applyDurableCanvasOpsSince(text, 0, replayKey, options.executeOptions)
+      result.affectedIds.forEach((id) => options.affectedIds.add(id))
+      options.errors.push(...result.errors)
+    },
+    onToolBlock: (block, blocks, replayKey) =>
+      options.applyToolBlock(block, { blocks, replayKey }),
+    onTurnComplete: (completion) => {
+      if (completion.primaryAiImage) {
+        for (const image of completion.generatedImages) {
+          const placed = ensureGeneratedImageOnCanvas(image.imageUrl, {
+            replayKey: completion.replayKeyForImage(image.completionIdentity),
+            ...(completion.placementTarget ? { target: completion.placementTarget } : {}),
+            preferredShapeIds: [...options.affectedIds]
+          })
+          if (placed) options.affectedIds.add(placed)
+        }
+      } else if (options.affectedIds.size === 0 && completion.legacyGeneratedImageUrl) {
+        const placed = ensureGeneratedImageOnCanvas(completion.legacyGeneratedImageUrl)
+        if (placed) options.affectedIds.add(placed)
+      }
+      const affectedIds = [...options.affectedIds]
+      if (affectedIds.length > 0) useCanvasSelectionStore.getState().select(affectedIds)
+      setLastCanvasOpErrors([...options.errors], options.errorKey)
+    }
+  })
+}

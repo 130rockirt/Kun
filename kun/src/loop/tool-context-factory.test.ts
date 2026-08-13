@@ -88,4 +88,19 @@ describe('createToolExecutionContext', () => {
 
     expect(context.awaitUserInput).toBeUndefined()
   })
+
+  it('keeps Design UI continuation metadata out of tool execution semantics', () => {
+    const context = createToolExecutionContext({
+      ...dispatchInput(new AbortController().signal),
+      messageSource: 'design_continuation'
+    }, {
+      memoryEnabled: false,
+      interactiveToolBridge: {
+        awaitApproval: async () => 'deny',
+        awaitUserInput: async () => ({ status: 'cancelled' })
+      }
+    })
+
+    expect(context.messageSource).toBeUndefined()
+  })
 })

@@ -162,7 +162,9 @@ function machineRuleSupportsEvidence(
 
 function evidenceContainsTerm(normalizedEvidence: string, term: string): boolean {
   const normalizedTerm = term.toLocaleLowerCase()
-  if (/[^\x00-\x7F]/u.test(normalizedTerm)) return normalizedEvidence.includes(normalizedTerm)
+  if ([...normalizedTerm].some((character) => character.codePointAt(0)! > 0x7f)) {
+    return normalizedEvidence.includes(normalizedTerm)
+  }
   const escaped = normalizedTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   return new RegExp(`(?<![\\p{L}\\p{N}_])${escaped}(?![\\p{L}\\p{N}_])`, 'iu')
     .test(normalizedEvidence)

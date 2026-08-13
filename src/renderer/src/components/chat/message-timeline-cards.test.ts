@@ -5,6 +5,10 @@ import type { ToolBlock } from '../../agent/types'
 import i18n from '../../i18n'
 import { PlanBuildActions } from '../plan/PlanBuildActions'
 import { ReviewPlanCard, TurnChangeSummary } from './message-timeline-cards'
+import {
+  resetPlanWorktreeStoreForTests,
+  usePlanWorktreeStore
+} from '../../plan/plan-worktree-store'
 
 function change(index: number): ToolBlock {
   const path = `src/file-${index}.ts`
@@ -85,6 +89,7 @@ describe('TurnChangeSummary', () => {
 describe('plan build actions', () => {
   beforeEach(async () => {
     await i18n.changeLanguage('en')
+    resetPlanWorktreeStoreForTests()
   })
 
   it('renders responsive Direct and Graph actions and reports the selected orchestration', async () => {
@@ -141,6 +146,52 @@ describe('plan build actions', () => {
     expect(actions.props.className).toContain('grid-cols-1')
     expect(direct.props.disabled).toBe(false)
     expect(graph).toHaveLength(0)
+
+    act(() => renderer!.unmount())
+  })
+
+  it('shares one isolation override between panel and inline card actions', async () => {
+    const store = usePlanWorktreeStore.getState()
+    store.initializePlan('plan-shared', true)
+    store.beginPreflight('plan-shared', 'context', 'request')
+    store.resolvePreflight('plan-shared', 'context', 'request', {
+      eligible: true,
+      sourceWorkspaceRoot: '/repo',
+      sourceCheckoutRoot: '/repo',
+      primaryRepositoryRoot: '/repo',
+      repositoryIdentity: '/repo/.git',
+      targetBranch: 'feature/source',
+      baseCommit: 'a'.repeat(40),
+      sourceIsLinkedWorktree: false,
+      checkedAt: '2026-08-12T00:00:00.000Z'
+    })
+    let renderer: ReactTestRenderer
+    await act(async () => {
+      renderer = create(createElement('div', null,
+        createElement(PlanBuildActions, {
+          disabled: false,
+          graphEnabled: true,
+          variant: 'panel',
+          planId: 'plan-shared',
+          onBuild: vi.fn()
+        }),
+        createElement(PlanBuildActions, {
+          disabled: false,
+          graphEnabled: true,
+          variant: 'card',
+          planId: 'plan-shared',
+          onBuild: vi.fn()
+        })
+      ))
+    })
+
+    const switches = renderer!.root.findAllByProps({ role: 'switch' })
+    expect(switches.map((item) => item.props['aria-checked'])).toEqual([true, true])
+    await act(async () => switches[0]!.props.onClick())
+    expect(renderer!.root.findAllByProps({ role: 'switch' })
+      .map((item) => item.props['aria-checked'])).toEqual([false, false])
+    expect(renderer!.root.findAllByProps({ 'data-plan-build-orchestration': 'direct' })
+      .every((item) => item.props.disabled === false)).toBe(true)
 
     act(() => renderer!.unmount())
   })

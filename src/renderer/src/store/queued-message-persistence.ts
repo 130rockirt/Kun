@@ -22,6 +22,26 @@ function normalizedString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
 }
 
+function normalizeDesignImagePlacementTarget(
+  value: unknown
+): QueuedUserMessage['designImagePlacementTarget'] | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const source = value as Record<string, unknown>
+  const shapeId = normalizedString(source.shapeId)
+  const expectedImageUrl = normalizedString(source.expectedImageUrl)
+  const expectedHolderKind = source.expectedHolderKind === 'explicit' ? 'explicit' as const
+    : source.expectedHolderKind === 'implicit-image' ? 'implicit-image' as const
+      : source.expectedHolderKind === 'implicit-frame' ? 'implicit-frame' as const
+        : source.expectedHolderKind === 'implicit-rect' ? 'implicit-rect' as const
+          : undefined
+  if (!shapeId || shapeId.length > 256 || expectedImageUrl.length > 8_192 ||
+    Boolean(expectedImageUrl) === Boolean(expectedHolderKind)) return undefined
+  return {
+    shapeId,
+    ...(expectedImageUrl ? { expectedImageUrl } : { expectedHolderKind })
+  }
+}
+
 function normalizeQueuedMessage(value: unknown): QueuedUserMessage | null {
   if (!value || typeof value !== 'object') return null
   const source = value as Record<string, unknown>
@@ -50,9 +70,19 @@ function normalizeQueuedMessage(value: unknown): QueuedUserMessage | null {
   }
   if (source.serviceTier === 'priority') normalized.serviceTier = 'priority'
   else delete normalized.serviceTier
+  if (source.messageSource === 'design_continuation') {
+    normalized.messageSource = 'design_continuation'
+  } else {
+    delete normalized.messageSource
+  }
   const clientRequestId = normalizedString(source.clientRequestId)
   if (clientRequestId) normalized.clientRequestId = clientRequestId
   else delete normalized.clientRequestId
+  if (source.waitForRuntimeAdmission === true) normalized.waitForRuntimeAdmission = true
+  else delete normalized.waitForRuntimeAdmission
+  const placementTarget = normalizeDesignImagePlacementTarget(source.designImagePlacementTarget)
+  if (placementTarget) normalized.designImagePlacementTarget = placementTarget
+  else delete normalized.designImagePlacementTarget
   const expectedThreadId = normalizedString(source.expectedThreadId)
   if (expectedThreadId) normalized.expectedThreadId = expectedThreadId
   else delete normalized.expectedThreadId

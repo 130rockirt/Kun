@@ -480,6 +480,9 @@ export const kunRuntimePatchSchema = z.object({
   summaryReasoningEffort: modelReasoningEffortSchema.optional(),
   codeReviewReasoningEffort: modelReasoningEffortSchema.optional(),
   graph: kunGraphPatchSchema.optional(),
+  planExecution: z.object({
+    useWorktreeByDefault: z.boolean().optional()
+  }).strict().optional(),
   subagents: subagentsPatchSchema.optional(),
   lab: kunLabPatchSchema.optional()
 }).strict()

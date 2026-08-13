@@ -53,6 +53,9 @@ import {
   ensureRuntime,
   resolveManagedKunLaunchSettings
 } from './main-runtime-startup'
+import {
+  reconcileBrowserUseHostForRuntime
+} from './browser-use/browser-use-host'
 
 export function publishRuntimeSettingsSyncStatus(
   status: Omit<KunRuntimeSettingsSyncStatusPayload, 'at'>
@@ -118,13 +121,18 @@ export function queueRuntimeSettingsApply(
 
   runtimeSupervisor.enqueueSettingsApply(
     async () => {
+      if (!runtimeSettingsIntents.isCurrent(generation)) return
       await prepare()
+      if (!runtimeSettingsIntents.isCurrent(generation)) return
       if (!shouldApply) return
       // Keep this operation's target fixed. The coordinator alone may replace
       // an adjacent, not-yet-started settings task; reading a process-global
       // "latest" snapshot here would apply a later setting across an
       // intervening ensure/restart barrier.
       const current = next
+      const applyStillCurrent = (): boolean =>
+        runtimeSettingsIntents.isCurrent(generation) &&
+        runtimeSupervisor.latestOr(current) === current
       const anchor = mainState.settledRuntimeSettings ?? prev
       const currentMode = runtimeSettingsApplyMode(anchor, current)
       if (currentMode === 'restart') {
@@ -136,11 +144,22 @@ export function queueRuntimeSettingsApply(
         )
         if (outcome.state !== 'failed') mainState.settledRuntimeSettings = current
         reportCurrent(outcome)
-      } else if (currentMode === 'hot') {
-        let result = await applyManagedRuntimeSettingsHot(current, 'settings-apply')
+      } else if (currentMode === 'hot' || kunRuntimeAdapter.isChildRunning()) {
+        let result = await applyManagedRuntimeSettingsHot(
+          current,
+          'settings-apply',
+          applyStillCurrent
+        )
+        if (result === 'superseded') return
         if (result === 'skipped' && managedKunHostCanAutoStart(current)) {
           await ensureKunRuntime(current)
-          result = await applyManagedRuntimeSettingsHot(current, 'settings-apply')
+          if (!applyStillCurrent()) return
+          result = await applyManagedRuntimeSettingsHot(
+            current,
+            'settings-apply',
+            applyStillCurrent
+          )
+          if (result === 'superseded') return
         }
         if (result === 'restart_required') {
           const outcome = await restartManagedRuntimeForSettingsChange(
@@ -301,7 +320,11 @@ function isFullSettingsSnapshotPatch(partial: AppSettingsPatch): boolean {
     partial.guiUpdate !== undefined
 }
 
-type ManagedRuntimeHotApplyResult = 'applied' | 'skipped' | 'restart_required'
+type ManagedRuntimeHotApplyResult =
+  | 'applied'
+  | 'skipped'
+  | 'superseded'
+  | 'restart_required'
 type ManagedRuntimeSettingsApplyOutcome = Pick<
   KunRuntimeSettingsSyncStatusPayload,
   'state' | 'message'
@@ -309,10 +332,12 @@ type ManagedRuntimeSettingsApplyOutcome = Pick<
 
 export async function applyManagedRuntimeSettingsHot(
   settings: AppSettingsV1,
-  source: string
+  source: string,
+  shouldApply: () => boolean = () => true
 ): Promise<ManagedRuntimeHotApplyResult> {
   mainState.assertCanonicalRuntimeMigrationReady()
   await waitForKunStartupSettled()
+  if (!shouldApply()) return 'superseded'
   const adapter = kunRuntimeAdapter
   if (!adapter.isChildRunning()) return 'skipped'
 
@@ -324,7 +349,24 @@ export async function applyManagedRuntimeSettingsHot(
       launch: getClawScheduleMcpLaunchConfig()
     }
   })
-  const body = buildManagedRuntimeHotApplyBody(settings, config)
+  if (!shouldApply()) return 'superseded'
+  const browserUseHost = await reconcileBrowserUseHostForRuntime(
+    settings,
+    shouldApply
+  )
+  if (!browserUseHost.current || !shouldApply()) return 'superseded'
+  const browserUseHostBinding = browserUseHost.binding
+  const body = buildManagedRuntimeHotApplyBody(
+    settings,
+    config,
+    browserUseHostBinding
+      ? {
+          bridgeUrl: browserUseHostBinding.url,
+          bridgeToken: browserUseHostBinding.token,
+          approvalSigningKey: browserUseHostBinding.approvalSigningKey
+        }
+      : null
+  )
 
   const headers = runtimeAuthHeaders(settings)
   headers.set('content-type', 'application/json')
@@ -334,10 +376,12 @@ export async function applyManagedRuntimeSettingsHot(
       {
         method: 'POST',
         headers,
-        body: JSON.stringify(body)
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(120_000)
       }
     )
     const text = await response.text()
+    if (!shouldApply()) return 'superseded'
     const outcome = classifyManagedRuntimeHotApplyResponse(response.status, response.ok, text)
     if (outcome.result === 'applied') {
       noteRuntimeHealthy(source, settings)
@@ -349,6 +393,7 @@ export async function applyManagedRuntimeSettingsHot(
     }
     throw new Error(outcome.message)
   } catch (error) {
+    if (!shouldApply()) return 'superseded'
     const message = error instanceof Error ? error.message : String(error)
     logWarn(source, `Kun hot config apply failed; falling back to restart: ${message}`)
     return 'restart_required'

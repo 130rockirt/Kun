@@ -65,10 +65,12 @@ export function useWorkbenchRuntimeMetadata(input: {
   const [runtimeInfo, setRuntimeInfo] = useState<CoreRuntimeInfoJson | null>(null)
   const [runtimeSkills, setRuntimeSkills] = useState<CoreRuntimeSkillJson[]>([])
   const skillMenuOpenRef = useRef(input.skillMenuOpen)
+  const runtimeInfoRequestSequenceRef = useRef(0)
 
   useEffect(() => {
     let cancelled = false
     const runtimeReady = input.runtimeConnection === 'ready'
+    const runtimeInfoRequestSequence = ++runtimeInfoRequestSequenceRef.current
     if (!runtimeReady) setRuntimeInfo(null)
     const provider = getProvider()
     void Promise.allSettled([
@@ -77,12 +79,19 @@ export function useWorkbenchRuntimeMetadata(input: {
     ])
       .then(([runtimeResult, skillsResult]) => {
         if (cancelled) return
-        setRuntimeInfo(runtimeResult.status === 'fulfilled' ? runtimeResult.value : null)
+        if (runtimeInfoRequestSequence === runtimeInfoRequestSequenceRef.current) {
+          setRuntimeInfo(runtimeResult.status === 'fulfilled' ? runtimeResult.value : null)
+        }
         setRuntimeSkills(skillsResult.status === 'fulfilled' ? skillsResult.value : [])
       })
       .catch(() => {
         if (!cancelled) {
-          if (!runtimeReady) setRuntimeInfo(null)
+          if (
+            !runtimeReady &&
+            runtimeInfoRequestSequence === runtimeInfoRequestSequenceRef.current
+          ) {
+            setRuntimeInfo(null)
+          }
           setRuntimeSkills([])
         }
       })
@@ -90,6 +99,58 @@ export function useWorkbenchRuntimeMetadata(input: {
       cancelled = true
     }
   }, [input.activeSkillWorkspace, input.runtimeConnection])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined
+    let cancelled = false
+    let latestGeneration = -1
+    let refreshedTerminalGeneration = -1
+    const reloadRuntimeInfo = async (): Promise<void> => {
+      if (input.runtimeConnection !== 'ready') return
+      const runtimeInfoRequestSequence = ++runtimeInfoRequestSequenceRef.current
+      const provider = getProvider()
+      try {
+        const next = provider.getRuntimeInfo ? await provider.getRuntimeInfo() : null
+        if (
+          !cancelled &&
+          runtimeInfoRequestSequence === runtimeInfoRequestSequenceRef.current
+        ) {
+          setRuntimeInfo(next)
+        }
+      } catch {
+        if (
+          !cancelled &&
+          runtimeInfoRequestSequence === runtimeInfoRequestSequenceRef.current
+        ) {
+          setRuntimeInfo(null)
+        }
+      }
+    }
+    const handleStatus = (status: {
+      state: string
+      generation: number
+    }): void => {
+      if (cancelled || status.generation < latestGeneration) return
+      if (status.generation > latestGeneration) latestGeneration = status.generation
+      const terminal =
+        status.state === 'synced' ||
+        status.state === 'unavailable' ||
+        status.state === 'failed'
+      if (!terminal || refreshedTerminalGeneration === status.generation) return
+      refreshedTerminalGeneration = status.generation
+      void reloadRuntimeInfo()
+    }
+    const unsubscribe = typeof window.kunGui?.onRuntimeSettingsSyncStatus === 'function'
+      ? window.kunGui.onRuntimeSettingsSyncStatus(handleStatus)
+      : undefined
+    if (typeof window.kunGui?.getRuntimeSettingsSyncStatus === 'function') {
+      void window.kunGui.getRuntimeSettingsSyncStatus().then(handleStatus).catch(() => undefined)
+    }
+    return () => {
+      cancelled = true
+      unsubscribe?.()
+    }
+  }, [input.runtimeConnection])
 
   useEffect(() => {
     const opened = skillMenuJustOpened(skillMenuOpenRef.current, input.skillMenuOpen)

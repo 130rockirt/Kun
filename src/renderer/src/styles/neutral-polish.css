@@ -64,6 +64,37 @@ html:not([data-ikun-mode='on']):not([data-retroma-mode='on']):not(
   min-height: 56px;
 }
 
+html:not([data-theme='dark']):not([data-ikun-mode='on']):not([data-retroma-mode='on']):not(
+    [data-ui-plugin-presentation='on']
+  )
+  .ds-chat-stage[data-empty-task-layout='true']
+  > .ds-ui-plugin-stage-content,
+html:not([data-theme='dark']):not([data-ikun-mode='on']):not([data-retroma-mode='on']):not(
+    [data-ui-plugin-presentation='on']
+  )
+  .ds-chat-stage[data-empty-task-layout='true']
+  .chat-topbar.ds-topbar-surface {
+  background: #fcfcfd;
+}
+
+html:not([data-theme='dark']):not([data-ikun-mode='on']):not([data-retroma-mode='on']):not(
+    [data-ui-plugin-presentation='on']
+  )
+  .ds-chat-stage[data-empty-task-layout='true']
+  > .ds-ui-plugin-stage-content::before {
+  content: '';
+  position: absolute;
+  inset: 56px 0 0;
+  z-index: -1;
+  background: radial-gradient(
+    ellipse 40% 34% at 50% 54%,
+    rgba(194, 218, 255, 0.33),
+    rgba(229, 239, 255, 0.13) 48%,
+    transparent 76%
+  );
+  pointer-events: none;
+}
+
 html:not([data-ikun-mode='on']):not([data-retroma-mode='on']):not(
     [data-ui-plugin-presentation='on']
   )
@@ -98,6 +129,41 @@ html:not([data-ikun-mode='on']):not([data-retroma-mode='on']):not(
   border-radius: var(--ds-radius-card);
   background: var(--ds-surface-elevated);
   box-shadow: none;
+}
+
+html:not([data-theme='dark']):not([data-ikun-mode='on']):not([data-retroma-mode='on']):not(
+    [data-ui-plugin-presentation='on']
+  )
+  .ds-chat-stage[data-empty-task-layout='true']
+  .ds-composer-shell.ds-chat-composer {
+  border-color: #e5e7eb;
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.985);
+  box-shadow:
+    0 16px 42px rgba(32, 55, 90, 0.09),
+    0 4px 12px rgba(32, 55, 90, 0.04);
+}
+
+html:not([data-theme='dark']):not([data-ikun-mode='on']):not([data-retroma-mode='on']):not(
+    [data-ui-plugin-presentation='on']
+  )
+  .ds-chat-stage[data-empty-task-layout='true']
+  .ds-design-profile-summary > summary {
+  border-color: #e7e9ee;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 5px 16px rgba(32, 55, 90, 0.055);
+}
+
+html:not([data-theme='dark']):not([data-ikun-mode='on']):not([data-retroma-mode='on']):not(
+    [data-ui-plugin-presentation='on']
+  )
+  .ds-chat-stage[data-empty-task-layout='true']
+  .ds-composer-shell.ds-chat-composer.ds-chat-composer-focus {
+  border-color: #cfd8f3;
+  box-shadow:
+    0 0 0 3px rgba(111, 139, 255, 0.08),
+    0 18px 46px rgba(32, 55, 90, 0.1),
+    0 4px 12px rgba(32, 55, 90, 0.04);
 }
 
 html:not([data-ikun-mode='on']):not([data-retroma-mode='on']):not(

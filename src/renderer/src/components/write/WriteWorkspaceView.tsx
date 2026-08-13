@@ -551,8 +551,8 @@ export function WriteWorkspaceView({
   )
 
   return (
-    <div className={`write-workspace-view ds-no-drag flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden px-3 sm:px-4 md:px-6 lg:px-8 ${documentFocusMode ? 'is-focus-mode' : ''}`}>
-      <div className={`min-h-0 min-w-0 flex-1 overflow-hidden pb-3 pt-3 ${writeFocusModeShellClassName(documentFocusMode)}`}>
+    <div className={`write-workspace-view ds-no-drag flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden ${documentFocusMode ? 'is-focus-mode' : ''}`}>
+      <div className={`min-h-0 min-w-0 flex-1 overflow-hidden ${writeFocusModeShellClassName(documentFocusMode)}`}>
         <WriteEditorGroups
           workspaceName={workspaceName}
           workspacePathLabel={workspacePathLabel}
@@ -568,7 +568,7 @@ export function WriteWorkspaceView({
           editorPaneRef={editorPaneRef}
           focusedToolbar={focusedToolbar}
           onboardingDecision={onboardingDecision}
-          onAskAssistant={() => setAssistantPrompt(t('writeStartAskAiPrompt'))}
+          onAskAssistant={setAssistantPrompt}
           onCreateDraft={() => void createDraftFile()}
           onPickWorkspace={() => void pickWriteWorkspace()}
         />

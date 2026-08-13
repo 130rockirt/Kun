@@ -1,27 +1,33 @@
-import type { ReactElement } from 'react'
+import { useEffect, useState, type ReactElement } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import {
   FolderOpen,
   FileText,
   ListTodo,
+  Loader2,
   MessageSquareQuote,
   Plus,
   X
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import type { AttachmentReference, RuntimeConnectionStatus, ChatBlock } from '../../agent/types'
+import { getProvider } from '../../agent/registry'
 import type { CoreRuntimeSkillJson } from '../../agent/kun-contract'
 import type { QueuedUserMessage } from '../../store/chat-store-types'
+import { threadSnapshotLooksRunning } from '../../store/chat-store-runtime-helpers'
 import type { ModelProviderModelGroup } from '@shared/kun-gui-api'
 import {
   useWriteWorkspaceStore,
   writeBasenameFromPath,
   writeRelativeToWorkspace
 } from '../../write/write-workspace-store'
+import { selectFocusedPresentationView } from '../../write/write-presentation-view-state'
 import { LazyMessageTimeline } from '../chat/LazyMessageTimeline'
 import { FloatingComposer } from '../chat/FloatingComposer'
 import type { ComposerReasoningEffort } from '../chat/FloatingComposerModelPicker'
+import { SubagentReturnBar } from '../chat/message-timeline-empty'
 import { WriteAssistantSparkleIcon } from './WriteAssistantIcons'
+import { WritePresentationViewChip } from './WritePresentationViewChip'
 
 type Props = {
   input: string
@@ -134,10 +140,66 @@ export function WriteAssistantPanel({
     ? writeRelativeToWorkspace(workspaceRoot, activeFilePath)
     : t('writeNoFileOpen')
   const activeFileName = activeFilePath ? writeBasenameFromPath(activeFilePath) : activeFileLabel
-  const canCreateConversation = runtimeConnection === 'ready' && !busy
-  const hasTimeline =
+  const presentationView = useWriteWorkspaceStore(selectFocusedPresentationView)
+  const [childThreadId, setChildThreadId] = useState<string | null>(null)
+  const [childBlocks, setChildBlocks] = useState<ChatBlock[]>([])
+  const [childStatus, setChildStatus] = useState<string | undefined>(undefined)
+  const [childLoading, setChildLoading] = useState(false)
+  const [childError, setChildError] = useState<string | null>(null)
+  const viewingChildThread = Boolean(childThreadId)
+  const canCreateConversation = runtimeConnection === 'ready' && !busy && !viewingChildThread
+  const hasParentTimeline =
     blocks.length > 0 || liveReasoning.trim().length > 0 || liveAssistant.trim().length > 0
   const selectionIsReadOnly = selection.sourceKind != null && selection.sourceKind !== 'text'
+
+  useEffect(() => {
+    setChildThreadId(null)
+    setChildBlocks([])
+    setChildStatus(undefined)
+    setChildError(null)
+  }, [activeFilePath, activeThreadId, workspaceRoot])
+
+  useEffect(() => {
+    if (!childThreadId) {
+      setChildBlocks([])
+      setChildStatus(undefined)
+      setChildError(null)
+      setChildLoading(false)
+      return
+    }
+    let cancelled = false
+    let pollTimer: ReturnType<typeof globalThis.setTimeout> | null = null
+    const load = async (): Promise<void> => {
+      if (!cancelled) setChildLoading(true)
+      try {
+        const detail = await getProvider().getThreadDetail(childThreadId)
+        if (cancelled) return
+        setChildBlocks(detail.blocks)
+        setChildStatus(detail.threadStatus)
+        setChildError(null)
+        if (threadSnapshotLooksRunning(
+          detail.blocks,
+          detail.threadStatus,
+          detail.latestTurnStatus
+        )) {
+          pollTimer = globalThis.setTimeout(load, 1500)
+        }
+      } catch (error) {
+        if (cancelled) return
+        setChildError(error instanceof Error ? error.message : String(error))
+        // A queued child can be announced before its side thread is durable.
+        // Keep retrying while this local viewer remains open.
+        pollTimer = globalThis.setTimeout(load, 1500)
+      } finally {
+        if (!cancelled) setChildLoading(false)
+      }
+    }
+    void load()
+    return () => {
+      cancelled = true
+      if (pollTimer !== null) globalThis.clearTimeout(pollTimer)
+    }
+  }, [childThreadId])
 
   const setAssistantPrompt = (prompt: string): void => {
     setInput(input.trim() ? `${input.trim()}\n\n${prompt}` : prompt)
@@ -149,6 +211,22 @@ export function WriteAssistantPanel({
     if (!input.trim()) {
       setInput(t(selectionIsReadOnly ? 'writeAssistantExplainPdfSelectionPrompt' : 'writeAssistantPolishSelectionPrompt'))
     }
+  }
+
+  const openChildThread = (threadId: string): void => {
+    const targetId = threadId.trim()
+    if (!targetId || targetId === childThreadId) return
+    setChildBlocks([])
+    setChildStatus(undefined)
+    setChildError(null)
+    setChildThreadId(targetId)
+  }
+
+  const closeChildThread = (): void => {
+    setChildThreadId(null)
+    setChildBlocks([])
+    setChildStatus(undefined)
+    setChildError(null)
   }
 
   return (
@@ -202,21 +280,71 @@ export function WriteAssistantPanel({
         </div>
       </div>
 
-      <div className="write-assistant-body ds-sidebar-surface-body min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
-        {hasTimeline ? (
-          <LazyMessageTimeline
-            blocks={blocks}
-            liveReasoning={liveReasoning}
-            live={liveAssistant}
-            activeThreadId={activeThreadId}
-            runtimeConnection={runtimeConnection}
-            onRetryConnection={onRetryConnection}
-            onOpenSettings={onOpenSettings}
-            onSelectSuggestion={(text) => setInput(text)}
-            compactCards
-          />
+      <div className="write-assistant-body ds-sidebar-surface-body flex min-h-0 flex-1 flex-col overflow-hidden">
+        {viewingChildThread ? (
+          <>
+            <div
+              className="ds-sidebar-surface-chrome shrink-0 border-b border-ds-border-muted/80 px-4 py-3 backdrop-blur-xl"
+              data-testid="write-subagent-session-header"
+            >
+              <div className="flex min-w-0 items-center gap-2">
+                <WriteAssistantSparkleIcon className="h-4 w-4 shrink-0 text-accent" />
+                <span className="min-w-0 flex-1 truncate text-[12.5px] font-semibold text-ds-ink">
+                  {t('subagentSessionBannerTitle')}
+                </span>
+                <span className="max-w-[45%] truncate text-[10.5px] text-ds-faint">
+                  {childLoading ? t('designRailChildLoading') : childStatus || childThreadId}
+                </span>
+              </div>
+              {childError ? (
+                <div className="mt-2 rounded-lg border border-red-200 bg-red-50/80 px-2.5 py-2 text-[12px] leading-5 text-red-700 dark:border-red-800/50 dark:bg-red-500/10 dark:text-red-200">
+                  {t('designRailChildError')}: {childError}
+                </div>
+              ) : null}
+            </div>
+            <div className="write-assistant-timeline flex min-h-0 flex-1 flex-col overflow-hidden">
+              {childLoading && childBlocks.length === 0 ? (
+                <div className="flex min-h-40 flex-1 items-center justify-center gap-2 text-[12.5px] font-medium text-ds-muted">
+                  <Loader2 className="h-4 w-4 animate-spin text-accent" strokeWidth={2} />
+                  {t('designRailChildLoading')}
+                </div>
+              ) : childBlocks.length > 0 ? (
+                <LazyMessageTimeline
+                  blocks={childBlocks}
+                  liveReasoning=""
+                  live=""
+                  activeThreadId={childThreadId}
+                  runtimeConnection={runtimeConnection}
+                  onRetryConnection={onRetryConnection}
+                  onOpenSettings={onOpenSettings}
+                  onSelectSuggestion={(text) => setInput(text)}
+                  onOpenChildThread={openChildThread}
+                  compactCards
+                />
+              ) : (
+                <div className="flex min-h-40 flex-1 items-center justify-center px-6 text-center text-[12.5px] leading-5 text-ds-muted">
+                  {t('designRailChildLoading')}
+                </div>
+              )}
+            </div>
+          </>
+        ) : hasParentTimeline ? (
+          <div className="write-assistant-timeline flex min-h-0 flex-1 flex-col overflow-hidden">
+            <LazyMessageTimeline
+              blocks={blocks}
+              liveReasoning={liveReasoning}
+              live={liveAssistant}
+              activeThreadId={activeThreadId}
+              runtimeConnection={runtimeConnection}
+              onRetryConnection={onRetryConnection}
+              onOpenSettings={onOpenSettings}
+              onSelectSuggestion={(text) => setInput(text)}
+              onOpenChildThread={openChildThread}
+              compactCards
+            />
+          </div>
         ) : (
-          <div className="flex min-h-full flex-col px-4 py-5">
+          <div className="flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden px-4 py-5">
             <div className="write-assistant-ready flex flex-col items-center px-3 pb-8 pt-12 text-center">
               <div className="flex h-12 w-12 items-center justify-center rounded-[16px] border border-accent/12 bg-accent/[0.07] text-accent shadow-[inset_0_1px_0_rgba(255,255,255,0.62)]">
                 <WriteAssistantSparkleIcon className="h-6 w-6" />
@@ -285,7 +413,10 @@ export function WriteAssistantPanel({
       </div>
 
       <div className="write-assistant-footer ds-sidebar-surface-chrome shrink-0 border-t border-ds-border-muted px-3 pb-3 pt-3">
-        {quotedSelections.length > 0 ? (
+        {!viewingChildThread && presentationView ? (
+          <WritePresentationViewChip view={presentationView} />
+        ) : null}
+        {!viewingChildThread && quotedSelections.length > 0 ? (
           <div className="mb-3 flex flex-col gap-1.5">
             {quotedSelections.map((quote) => (
               <div
@@ -316,44 +447,51 @@ export function WriteAssistantPanel({
             ))}
           </div>
         ) : null}
-        <FloatingComposer
-          variant="compact"
-          workspaceRootOverride={workspaceRoot}
-          input={input}
-          setInput={setInput}
-          mode={mode}
-          setMode={setMode}
-          busy={busy}
-          runtimeReady={runtimeConnection === 'ready'}
-          hasActiveThread={Boolean(activeThreadId)}
-          composerModel={composerModel}
-          composerProviderId={composerProviderId}
-          composerPickList={composerPickList}
-          composerModelGroups={composerModelGroups}
-          skillCommands={skillCommands}
-          disabledSkillIds={disabledSkillIds}
-          composerReasoningEffort={composerReasoningEffort}
-          composerFastMode={composerFastMode}
-          onComposerModelChange={setComposerModel}
-          onComposerReasoningEffortChange={setComposerReasoningEffort}
-          onComposerFastModeChange={setComposerFastMode}
-          modelPickerMode="combobox"
-          modelControlVariant="split"
-          showProviderInModelLabel
-          queuedMessages={queuedMessages}
-          onRemoveQueuedMessage={removeQueuedMessage}
-          onGuideQueuedMessage={guideQueuedMessage}
-          attachments={attachments}
-          attachmentUploadEnabled={attachmentUploadEnabled}
-          attachmentUploadBusy={attachmentUploadBusy}
-          attachmentUploadError={attachmentUploadError}
-          onPickAttachments={onPickAttachments}
-          onPasteClipboardImage={onPasteClipboardImage}
-          onRemoveAttachment={onRemoveAttachment}
-          onSend={onSend}
-          onInterrupt={onInterrupt}
-          onConfigureProviders={onConfigureProviders}
-        />
+        {viewingChildThread ? (
+          <SubagentReturnBar
+            parentTitle={t('writeAssistant')}
+            onBack={closeChildThread}
+          />
+        ) : (
+          <FloatingComposer
+            variant="compact"
+            workspaceRootOverride={workspaceRoot}
+            input={input}
+            setInput={setInput}
+            mode={mode}
+            setMode={setMode}
+            busy={busy}
+            runtimeReady={runtimeConnection === 'ready'}
+            hasActiveThread={Boolean(activeThreadId)}
+            composerModel={composerModel}
+            composerProviderId={composerProviderId}
+            composerPickList={composerPickList}
+            composerModelGroups={composerModelGroups}
+            skillCommands={skillCommands}
+            disabledSkillIds={disabledSkillIds}
+            composerReasoningEffort={composerReasoningEffort}
+            composerFastMode={composerFastMode}
+            onComposerModelChange={setComposerModel}
+            onComposerReasoningEffortChange={setComposerReasoningEffort}
+            onComposerFastModeChange={setComposerFastMode}
+            modelPickerMode="combobox"
+            modelControlVariant="split"
+            showProviderInModelLabel
+            queuedMessages={queuedMessages}
+            onRemoveQueuedMessage={removeQueuedMessage}
+            onGuideQueuedMessage={guideQueuedMessage}
+            attachments={attachments}
+            attachmentUploadEnabled={attachmentUploadEnabled}
+            attachmentUploadBusy={attachmentUploadBusy}
+            attachmentUploadError={attachmentUploadError}
+            onPickAttachments={onPickAttachments}
+            onPasteClipboardImage={onPasteClipboardImage}
+            onRemoveAttachment={onRemoveAttachment}
+            onSend={onSend}
+            onInterrupt={onInterrupt}
+            onConfigureProviders={onConfigureProviders}
+          />
+        )}
       </div>
     </aside>
   )

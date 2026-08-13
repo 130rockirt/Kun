@@ -246,11 +246,7 @@ describe('TurnService startTurn', () => {
       })).rejects.toThrow('append item failed')
 
       const failed = await threadStore.get('thr_start_failure_a')
-      expect(failed?.turns[0]).toMatchObject({
-        status: 'aborted',
-        clientRequestId: 'request_retry_after_failed_admission'
-      })
-      expect(failed?.turns[0]?.admissionCompletedAt).toBeUndefined()
+      expect(failed?.turns).toEqual([])
 
       const retried = await service.startTurn({
         threadId: 'thr_start_failure_a',
@@ -260,7 +256,7 @@ describe('TurnService startTurn', () => {
           clientRequestId: 'request_retry_after_failed_admission'
         }
       })
-      expect(retried.turnId).not.toBe(failed?.turns[0]?.id)
+      expect(retried.turnId).toBeTruthy()
       expect((await threadStore.get('thr_start_failure_a'))?.turns.at(-1)?.admissionCompletedAt)
         .toBe(nowIso())
       await service.interruptTurn({ threadId: 'thr_start_failure_a', turnId: retried.turnId })

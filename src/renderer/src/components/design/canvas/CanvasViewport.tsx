@@ -88,6 +88,7 @@ type Props = {
   /** Optional design-system directory. Defaults to baseDir; Code canvases use a per-thread dir. */
   designSystemBaseDir?: string
   surface?: 'design' | 'code'
+  readOnly?: boolean
   leftSidebarCollapsed?: boolean
   onToggleLeftSidebar?: () => void
   busy?: boolean
@@ -113,6 +114,7 @@ export function CanvasViewport({
   baseDir,
   designSystemBaseDir,
   surface = 'design',
+  readOnly = false,
   leftSidebarCollapsed,
   onToggleLeftSidebar,
   busy = false,
@@ -246,7 +248,8 @@ export function CanvasViewport({
     htmlFrameSyncEnabled,
     designArtifacts,
     designTarget,
-    designSystemPersistenceEnabled: surface === 'code'
+    designSystemPersistenceEnabled: surface === 'code',
+    persistenceEnabled: !readOnly
   })
   const selectedHtmlArtifactId = useMemo(() => {
     for (const id of selectedIds) {
@@ -455,14 +458,14 @@ export function CanvasViewport({
   }, [])
 
   useEffect(() => {
-    setCanvasPasteWorkspaceRoot(workspaceRoot || null)
+    setCanvasPasteWorkspaceRoot(readOnly ? null : workspaceRoot || null)
     const onKeyDown = (e: KeyboardEvent): void => {
-      if (designMotionPlaying) return
+      if (designMotionPlaying || readOnly) return
       if (!shouldHandleCanvasKeyboardEvent(surface, e.target, rootRef.current)) return
       handleCanvasKeyDown(e)
     }
     const onKeyUp = (e: KeyboardEvent): void => {
-      if (designMotionPlaying) return
+      if (designMotionPlaying || readOnly) return
       if (!shouldHandleCanvasKeyboardEvent(surface, e.target, rootRef.current)) return
       handleCanvasKeyUp(e)
     }
@@ -473,7 +476,7 @@ export function CanvasViewport({
       window.removeEventListener('keydown', onKeyDown)
       window.removeEventListener('keyup', onKeyUp)
     }
-  }, [designMotionPlaying, surface, workspaceRoot])
+  }, [designMotionPlaying, readOnly, surface, workspaceRoot])
 
   const viewBoxStr = `${vbox.x} ${vbox.y} ${vbox.width} ${vbox.height}`
   const cursor = activeTool === 'hand' ? 'grab' : tool.cursor
@@ -526,7 +529,7 @@ export function CanvasViewport({
           className="pointer-events-none absolute right-3 top-1/2 z-40 -translate-y-1/2"
           style={{ transform: `translateY(-50%) scale(${uiScale})`, transformOrigin: 'right center' }}
         >
-          <CanvasToolbar
+          {!readOnly ? <CanvasToolbar
             workspaceRoot={workspaceRoot}
             surface={surface}
             designTargetDisabled={busy || Boolean(pagesRun)}
@@ -538,7 +541,7 @@ export function CanvasViewport({
             onOpenAgentSettings={onOpenAgentSettings}
             onRequestCanvasCritique={requestCanvasCritique}
             onExportCanvas={surface === 'code' ? exportCanvas : undefined}
-          />
+          /> : null}
         </div>
         <div
           className="pointer-events-none absolute right-4 z-40 hidden lg:block"
@@ -567,8 +570,10 @@ export function CanvasViewport({
               : 0
           }}
         >
-          {surface === 'design' ? <DesignSystemInspector workspaceRoot={workspaceRoot} /> : null}
-          <AlignmentToolbar />
+          {surface === 'design' && !readOnly
+            ? <DesignSystemInspector workspaceRoot={workspaceRoot} />
+            : null}
+          {!readOnly ? <AlignmentToolbar /> : null}
           {shouldShowCanvasDocumentLoading(document) ? (
             <div className="absolute inset-0 flex items-center justify-center text-sm text-ds-faint">
               {t('designCanvasLoading')}
@@ -582,11 +587,11 @@ export function CanvasViewport({
               viewBox={viewBoxStr}
               xmlns="http://www.w3.org/2000/svg"
               style={{ cursor }}
-              onPointerDown={designMotionPlaying ? undefined : onPointerDown}
-              onPointerMove={designMotionPlaying ? undefined : onPointerMove}
-              onPointerUp={designMotionPlaying ? undefined : onPointerUp}
-              onPointerCancel={designMotionPlaying ? undefined : onPointerCancel}
-              onDoubleClick={designMotionPlaying ? undefined : onDoubleClick}
+              onPointerDown={designMotionPlaying || readOnly ? undefined : onPointerDown}
+              onPointerMove={designMotionPlaying || readOnly ? undefined : onPointerMove}
+              onPointerUp={designMotionPlaying || readOnly ? undefined : onPointerUp}
+              onPointerCancel={designMotionPlaying || readOnly ? undefined : onPointerCancel}
+              onDoubleClick={designMotionPlaying || readOnly ? undefined : onDoubleClick}
               onWheel={onWheel}
             >
               {gridVisible && <CanvasGrid zoom={zoom} />}
@@ -627,7 +632,7 @@ export function CanvasViewport({
               ) : null}
             </svg>
           )}
-          {selectedImageAnnotationAction ? (
+          {!readOnly && selectedImageAnnotationAction ? (
             <button
               type="button"
               className="ds-no-drag absolute z-30 flex items-center justify-center gap-1.5 rounded-full border border-accent/20 bg-white/95 px-3 text-[12px] font-medium text-accent shadow-[0_8px_24px_rgba(15,23,42,0.14)] backdrop-blur transition hover:bg-accent-soft hover:shadow-[0_10px_28px_rgba(15,23,42,0.18)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 dark:bg-[#1f2430]/95"
@@ -654,6 +659,7 @@ export function CanvasViewport({
             <>
               <HtmlFrameOverlay
                 workspaceRoot={workspaceRoot}
+                readOnly={readOnly}
                 interactiveId={interactiveHtmlFrameId}
                 editingId={editingHtmlFrameId}
                 onToggleInteractive={toggleHtmlFrameInteractive}
@@ -666,7 +672,7 @@ export function CanvasViewport({
             </>
           ) : null}
         </div>
-        {surface === 'design' ? <CanvasMotionDock /> : null}
+        {surface === 'design' && !readOnly ? <CanvasMotionDock /> : null}
         {designArtifactOverlaysEnabled ? (
           <PrototypePlayerOverlay
             open={prototypePlayerOpen}
@@ -675,7 +681,7 @@ export function CanvasViewport({
             initialArtifactId={initialPrototypeArtifactId}
             designTarget={designTarget}
             onClose={() => setPrototypePlayerOpen(false)}
-            onRequestMissingScreen={requestMissingPrototypeScreen}
+            onRequestMissingScreen={readOnly ? undefined : requestMissingPrototypeScreen}
           />
         ) : null}
       </div>

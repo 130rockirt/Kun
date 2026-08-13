@@ -17,6 +17,7 @@ import type {
   UserInputAnswer
 } from '../agent/types'
 import type { KunRuntimeStatusPayload } from '@shared/kun-gui-api'
+import type { PlanWorktreeRunRecord } from '@shared/plan-worktree'
 import type {
   AppLocale,
   ClawImAgentProfileV1,
@@ -34,12 +35,20 @@ import type {
   ExtensionComposerContextEvent,
   PendingComposerContextEvent
 } from '@shared/extension-ipc'
+import type {
+  DesignDocumentTarget,
+  DesignImagePlacementTarget,
+  DesignTaskProfile,
+  DesignTaskProfileInput
+} from '../agent/design-task-profile'
 
 export type QueuedUserMessage = {
   id: string
   text: string
   /** Stable idempotency key reused while this user submission is retried. */
   clientRequestId?: string
+  /** First Design document remains provisional until Kun accepts this queued turn. */
+  waitForRuntimeAdmission?: boolean
   /** Pending/paused items are visible; starting/in-flight items remain durable until the turn settles. */
   deliveryState?: 'pending' | 'paused' | 'starting' | 'in_flight'
   deliveryTurnId?: string
@@ -54,6 +63,7 @@ export type QueuedUserMessage = {
   reasoningEffort?: string
   serviceTier?: 'priority'
   subagentResume?: { childId: string; expectedResumeCount: number }
+  messageSource?: 'design_continuation'
   /** Renderer-only guard that prevents a scoped send from falling back to another thread. */
   expectedThreadId?: string
   attachmentIds?: string[]
@@ -80,6 +90,11 @@ export type QueuedUserMessage = {
   /** Turn-scoped persona text resolved from the composer preset. */
   persona?: string
   agentSurface?: 'code' | 'write' | 'design'
+  /** Frozen Design task profile used for admission, retry, and queue recovery. */
+  designProfile?: DesignTaskProfileInput
+  /** Turn-scoped writable document target; must match the profile target. */
+  designDocumentTarget?: DesignDocumentTarget
+  designImagePlacementTarget?: DesignImagePlacementTarget
   guiDesignArtifact?: GuiDesignArtifactMessageContext
   writeContext?: WriteAssistantMessageContext
 }
@@ -119,6 +134,8 @@ export type SendMessageOverrides = {
   queued?: QueuedUserMessage
   /** Optional stable idempotency key for callers that retry one logical submission. */
   clientRequestId?: string
+  /** Resolve the send only after Kun accepts it, including when it first enters the queue. */
+  waitForRuntimeAdmission?: boolean
   model?: string
   providerId?: string
   accountId?: string
@@ -127,6 +144,8 @@ export type SendMessageOverrides = {
   serviceTier?: 'priority'
   /** Structured one-click resume identity forwarded to Kun. */
   subagentResume?: { childId: string; expectedResumeCount: number }
+  /** Internal Design runner progress retained by Kun but hidden as a user bubble. */
+  messageSource?: 'design_continuation'
   /** Renderer-only guard that prevents Design/Write-style sends from changing thread identity. */
   expectedThreadId?: string
   displayText?: string
@@ -137,6 +156,9 @@ export type SendMessageOverrides = {
   /** Turn-scoped persona text resolved from the composer preset. */
   persona?: string
   agentSurface?: 'code' | 'write' | 'design'
+  designProfile?: DesignTaskProfileInput
+  designDocumentTarget?: DesignDocumentTarget
+  designImagePlacementTarget?: DesignImagePlacementTarget
   guiDesignArtifact?: GuiDesignArtifactMessageContext
   attachmentIds?: string[]
   attachments?: AttachmentReference[]
@@ -144,6 +166,29 @@ export type SendMessageOverrides = {
   composerContexts?: ComposerContextAttachment[]
   writeContext?: WriteAssistantMessageContext
 }
+
+export type IsolatedPlanBuildRequest = {
+  operationId: string
+  planId: string
+  planRelativePath: string
+  planTitle: string
+  sourceThreadId: string
+  sourceWorkspaceRoot: string
+  orchestration: 'direct' | 'graph'
+  prompt: string
+  displayText: string
+  goalObjective: string
+  branchPrefix?: string
+}
+
+export type IsolatedPlanBuildResult =
+  | { ok: true; run: PlanWorktreeRunRecord; executionThreadId: string }
+  | {
+      ok: false
+      message: string
+      run?: PlanWorktreeRunRecord
+      executionThreadId?: string
+    }
 
 export type ClearDesignHistoryOptions = {
   /** Create and bind one empty replacement thread after the old history is gone. */
@@ -209,6 +254,9 @@ export type PluginHostRoute = 'chat' | 'claw'
 export type SideConversation = {
   threadId: string
   parentThreadId: string
+  /** Retargeted immutable profile owned by this independently cloned branch. */
+  designProfile?: DesignTaskProfile
+  designWorkspaceRoot?: string
   title: string
   createdAt: string
   /** Timestamp the snapshot was taken from the parent. */
@@ -390,8 +438,8 @@ export type ChatState = {
   setComposerPersonaId: (presetId: string) => void
   loadComposerModels: () => Promise<void>
   setRoute: (r: AppRoute) => void
-  openWrite: () => Promise<void>
-  openCode: () => Promise<void>
+  openWrite: (options?: { activationGuard?: () => boolean }) => Promise<void>
+  openCode: (options?: { activationGuard?: () => boolean }) => Promise<void>
   ensureWriteThreadForWorkspace: (workspaceRoot?: string, activeFilePath?: string) => Promise<string | null>
   createWriteThread: (workspaceRoot?: string, activeFilePath?: string) => Promise<string | null>
   ensureDesignThreadForWorkspace: (workspaceRoot?: string, docId?: string) => Promise<string | null>
@@ -451,6 +499,10 @@ export type ChatState = {
   createThread: (options?: {
     workspaceRoot?: string
     forceNew?: boolean
+    /** Durable ownership for renderer-created Code-workbench threads. */
+    agentSurface?: 'code' | 'design'
+    /** Prevent a completed async creation from overriding newer navigation. */
+    activationGuard?: () => boolean
     /** When true, checkout the selected branch into an isolated worktree. */
     useWorktreePool?: boolean
     worktreeBranch?: string
@@ -466,8 +518,11 @@ export type ChatState = {
      */
     conversation?: boolean
   }) => Promise<string | null>
-  createConversation: () => Promise<void>
-  selectThread: (id: string) => Promise<void>
+  createConversation: (options?: { activationGuard?: () => boolean }) => Promise<void>
+  selectThread: (id: string, options?: {
+    /** Ignore this selection when a newer renderer navigation intent wins. */
+    selectionGuard?: () => boolean
+  }) => Promise<void>
   loadEarlierThreadHistory: () => Promise<boolean>
   /**
    * 打开 SSE 订阅一条 thread(不预先拉 getThreadDetail)。
@@ -478,6 +533,7 @@ export type ChatState = {
   subscribeThreadEventsLive: (threadId: string) => Promise<void>
   recoverActiveTurn: () => Promise<boolean>
   sendMessage: (text: string, mode?: string, overrides?: SendMessageOverrides) => Promise<boolean>
+  startIsolatedPlanBuild: (input: IsolatedPlanBuildRequest) => Promise<IsolatedPlanBuildResult>
   reviewActiveThread: (target: ReviewTarget) => Promise<boolean>
   drainQueuedMessages: () => Promise<void>
   removeQueuedMessage: (id: string) => void

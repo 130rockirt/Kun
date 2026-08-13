@@ -13,6 +13,11 @@ import {
   type PreparedCodeCanvasResend
 } from '../design/canvas/code-canvas-resend'
 import {
+  cloneDesignDocumentForFork,
+  type CloneDesignDocumentForForkInput,
+  type PreparedDesignDocumentFork
+} from '../design/design-document-fork'
+import {
   deriveThreadTitleFromPrompt,
   getDefaultThreadTitle,
   shouldAutoTitleThread
@@ -37,6 +42,7 @@ import {
 } from './queued-message-persistence'
 import { invalidateThreadSnapshot } from './thread-snapshot-cache'
 import { invalidatePendingTurnStarts } from './turn-start-fence'
+import { resolvePreparedDesignCloneAfterError } from './chat-store-design-clone-recovery'
 
 /**
  * Release the worktree pool slot owned by a thread when the task completes
@@ -243,6 +249,9 @@ export type MaintenanceActionDependencies = {
   deleteDesignChatTranscriptForThread?: typeof deleteDesignChatTranscriptForThread
   persistDesignChatMetaForDoc?: typeof persistDesignChatMetaForDoc
   flushDesignPersistenceQueue?: typeof flushDesignPersistenceQueue
+  cloneDesignDocumentForResume?: (
+    input: CloneDesignDocumentForForkInput
+  ) => Promise<PreparedDesignDocumentFork>
 }
 
 /**
@@ -335,12 +344,69 @@ export function createMaintenanceSessionActions(
       set({ error: i18n.t('common:runtimeFeatureUnsupported') })
       return null
     }
+    let preparedDesignResume: PreparedDesignDocumentFork | null = null
+    let resumeCommitted = false
     try {
-      const result = await p.resumeSession(id, options)
+      const state = get()
+      let sourceThread = state.threads.find((thread) => thread.id === id)
+      if (!sourceThread) {
+        sourceThread = (await p.listThreads({
+          includeArchived: true,
+          includeSide: true,
+          search: id,
+          limit: 50
+        })).find((thread) => thread.id === id)
+      }
+      const resumeMetadata = !sourceThread && typeof p.getResumeSessionMetadata === 'function'
+        ? await p.getResumeSessionMetadata(id)
+        : null
+      const sourceTarget = sourceThread?.designProfile?.documentTarget ??
+        resumeMetadata?.sourceDesignDocumentTarget ??
+        resumeMetadata?.sourceDesignProfile?.documentTarget
+      const sourceWorkspace = sourceThread?.workspace || resumeMetadata?.workspace
+      if (sourceTarget) {
+        if (!sourceWorkspace) {
+          throw new Error('Design session source workspace is unavailable; resume was not attempted')
+        }
+        preparedDesignResume = await (
+          dependencies.cloneDesignDocumentForResume ?? cloneDesignDocumentForFork
+        )({
+          workspaceRoot: sourceWorkspace,
+          sourceTarget,
+          operation: { kind: 'resume', sourceId: id, relation: 'resume' }
+        })
+      }
+      await preparedDesignResume?.markRuntimeRequestStarted?.()
+      const result = await p.resumeSession(id, {
+        ...options,
+        ...(sourceWorkspace || state.workspaceRoot
+          ? { workspace: sourceWorkspace || state.workspaceRoot }
+          : {}),
+        ...(preparedDesignResume
+          ? {
+              designDocumentTarget: preparedDesignResume.designDocumentTarget,
+              designCloneOperationId: preparedDesignResume.operationId
+            }
+          : {})
+      })
+      resumeCommitted = true
+      await preparedDesignResume?.commit?.()
       await get().refreshThreads()
       await get().selectThread(result.threadId)
       return result.threadId
     } catch (e) {
+      if (!resumeCommitted && preparedDesignResume) {
+        const outcome = await resolvePreparedDesignCloneAfterError(
+          getProvider(), preparedDesignResume, e
+        )
+        if (outcome.kind === 'committed') {
+          resumeCommitted = true
+          await preparedDesignResume.commit?.()
+          await get().refreshThreads()
+          await get().selectThread(outcome.thread.id)
+          return outcome.thread.id
+        }
+      }
       set({
         error: formatRuntimeError(e),
         ...(shouldOpenSettingsForError(e)

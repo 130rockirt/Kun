@@ -17,6 +17,7 @@ import type { WriteWorkspaceState } from './write-workspace-store-types'
 import { createWriteSettingsActions } from './write-workspace-settings-actions'
 import { createWriteFileActions } from './write-workspace-file-actions'
 import { createWriteEditorGroupActions } from './write-editor-group-actions'
+import { createWritePresentationViewActions } from './write-presentation-view-state'
 import { writeDocumentKey } from './write-editor-layout'
 import { writeBrowserStorageItem } from '../lib/browser-storage'
 import {
@@ -79,6 +80,7 @@ function cancelExternalSyncAnimation(): void {
 
 export const useWriteWorkspaceStore = create<WriteWorkspaceState>((set, get) => {
   const editorGroupActions = createWriteEditorGroupActions(set, get)
+  const presentationViewActions = createWritePresentationViewActions(set, get)
   return ({
   defaultWorkspaceRoot: '',
   workspaceRoots: [],
@@ -122,6 +124,7 @@ export const useWriteWorkspaceStore = create<WriteWorkspaceState>((set, get) => 
     cancelExternalSyncAnimation
   }),
   ...editorGroupActions,
+  ...presentationViewActions,
 
   setFileContent: (content) => {
     cancelExternalSyncAnimation()

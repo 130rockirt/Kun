@@ -143,6 +143,7 @@ function fakeHarness(settingsPatch: Partial<KunBrowserUseSettingsV1> = {}) {
     resize: () => image,
     toPNG: () => Buffer.from('bounded-image')
   }
+  let resolveLoad: (() => void) | undefined
   const webContents = {
     id: 77,
     session,
@@ -171,6 +172,7 @@ function fakeHarness(settingsPatch: Partial<KunBrowserUseSettingsV1> = {}) {
       for (const listener of listeners.get('did-start-loading') ?? []) listener()
       for (const listener of listeners.get('did-stop-loading') ?? []) listener()
     }),
+    stop: vi.fn(),
     getURL: () => currentUrl,
     getTitle: () => currentTitle,
     capturePage: vi.fn(async () => image),
@@ -233,8 +235,32 @@ function fakeHarness(settingsPatch: Partial<KunBrowserUseSettingsV1> = {}) {
     },
     emitWebContents: (event: string, ...args: unknown[]) => {
       for (const listener of listeners.get(event) ?? []) listener(...args)
-    }
+    },
+    holdNextLoad: () => {
+      webContents.loadURL.mockImplementationOnce(async (url: string) => {
+        currentUrl = url
+        for (const listener of listeners.get('did-start-loading') ?? []) listener()
+        await new Promise<void>((resolve) => {
+          resolveLoad = resolve
+        })
+      })
+    },
+    finishLoad: () => resolveLoad?.()
   }
+}
+
+async function waitForCallCount(mock: { mock: { calls: unknown[][] } }, count: number): Promise<void> {
+  await vi.waitFor(() => {
+    expect(mock.mock.calls).toHaveLength(count)
+  })
+}
+
+async function expectNoAdditionalCall(
+  mock: { mock: { calls: unknown[][] } },
+  count: number
+): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  expect(mock.mock.calls).toHaveLength(count)
 }
 
 async function openAuthorized(
@@ -306,24 +332,7 @@ describe('BrowserUseManager', () => {
 
   it('stops a cross-origin redirect and asks for a new exact-origin decision', async () => {
     const harness = fakeHarness({ approvalMode: 'always-ask' })
-    const open = {
-      action: 'open' as const,
-      url: 'https://example.com/start?secret=redacted'
-    }
-    await expect(harness.manager.execute(
-      'thread-1',
-      'turn-1',
-      open,
-      undefined,
-      kunApprovalGrant(open, 'user'),
-      'user'
-    )).resolves.toMatchObject({ ok: true, code: 'opened' })
-    harness.manager.mount(
-      'thread-1',
-      harness.window as never,
-      { x: 10, y: 10, width: 800, height: 600 },
-      true
-    )
+    await openAuthorized(harness)
     const redirectEvent = { preventDefault: vi.fn() }
     harness.emitWebContents(
       'will-redirect',
@@ -375,7 +384,7 @@ describe('BrowserUseManager', () => {
     await expect(pending).resolves.toMatchObject({ ok: true, code: 'opened' })
   })
 
-  it('uses an agent Kun grant without exposing ordinary origin/action consent controls', async () => {
+  it('does not let an agent Kun grant replace Main origin or action consent', async () => {
     const harness = fakeHarness({
       mode: 'local-development',
       approvalMode: 'always-ask'
@@ -384,15 +393,31 @@ describe('BrowserUseManager', () => {
       action: 'open' as const,
       url: 'http://127.0.0.1:4173/app'
     }
-    await expect(harness.manager.execute(
+    const pendingOpen = harness.manager.execute(
       'thread-1',
       'turn-1',
       open,
       undefined,
       kunApprovalGrant(open),
       'agent'
-    )).resolves.toMatchObject({ ok: true, code: 'opened' })
-    expect(harness.manager.stateForThread('thread-1').pendingOriginConsent).toBeUndefined()
+    )
+    await vi.waitFor(() => expect(harness.states.at(-1)?.sessionId).toBeTruthy())
+    harness.manager.mount(
+      'thread-1',
+      harness.window as never,
+      { x: 10, y: 10, width: 800, height: 600 },
+      true
+    )
+    await vi.waitFor(() => {
+      expect(harness.manager.stateForThread('thread-1').pendingOriginConsent).toBeTruthy()
+    })
+    const originRequest = harness.manager.stateForThread('thread-1').pendingOriginConsent!
+    harness.manager.decideOrigin({
+      threadId: 'thread-1',
+      requestId: originRequest.id,
+      decision: 'allow-once'
+    })
+    await expect(pendingOpen).resolves.toMatchObject({ ok: true, code: 'opened' })
 
     const snapshot = await harness.manager.execute(
       'thread-1',
@@ -400,22 +425,29 @@ describe('BrowserUseManager', () => {
       { action: 'snapshot' }
     )
     const click = clickAction(snapshot)
-    await expect(harness.manager.execute(
+    const pendingClick = harness.manager.execute(
       'thread-1',
       'turn-1',
       click,
       undefined,
       kunApprovalGrant(click),
       'agent'
-    )).resolves.toMatchObject({ ok: true, code: 'action_executed' })
-
-    const state = harness.manager.stateForThread('thread-1')
-    expect(state.pendingOriginConsent).toBeUndefined()
-    expect(state.pendingActionConsent).toBeUndefined()
-    expect(harness.sendCommand).toHaveBeenCalledWith(
-      'Input.dispatchMouseEvent',
-      expect.objectContaining({ type: 'mousePressed' })
     )
+    await vi.waitFor(() => {
+      expect(harness.manager.stateForThread('thread-1').pendingActionConsent).toBeTruthy()
+    })
+    const actionRequest = harness.manager.stateForThread('thread-1').pendingActionConsent!
+    harness.manager.decideAction({
+      threadId: 'thread-1',
+      requestId: actionRequest.id,
+      decision: 'allow-once'
+    })
+    await expect(pendingClick).resolves.toMatchObject({ ok: true, code: 'action_executed' })
+
+    expect(harness.manager.auditSnapshot()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ category: 'origin-consent', reviewerSource: 'agent' }),
+      expect.objectContaining({ category: 'action-consent', reviewerSource: 'agent' })
+    ]))
   })
 
   it('retains Main origin and action consent in Full access', async () => {
@@ -484,162 +516,76 @@ describe('BrowserUseManager', () => {
     await expect(pendingClick).resolves.toMatchObject({ ok: true, code: 'action_executed' })
   })
 
-  it('does not reuse a Kun-approved call for page-driven re-origin navigation', async () => {
-    const harness = fakeHarness({ approvalMode: 'always-ask' })
-    const open = {
-      action: 'open' as const,
-      url: 'https://example.com/start'
-    }
-    await harness.manager.execute(
+  it('serializes same-session opens and starts the policy proxy only once', async () => {
+    const harness = fakeHarness()
+    harness.holdNextLoad()
+    const first = harness.manager.execute(
       'thread-1',
       'turn-1',
-      open,
-      undefined,
-      kunApprovalGrant(open),
-      'agent'
+      { action: 'open', url: 'https://example.com/first' }
     )
+    await waitForCallCount(harness.webContents.loadURL, 1)
 
-    const redirectEvent = { preventDefault: vi.fn() }
-    harness.emitWebContents(
-      'will-redirect',
-      redirectEvent,
-      'https://other.example/landing?token=secret'
-    )
-
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    expect(redirectEvent.preventDefault).toHaveBeenCalledOnce()
-    expect(harness.webContents.loadURL).not.toHaveBeenCalledWith(
-      'https://other.example/landing?token=secret'
-    )
-    expect(harness.manager.stateForThread('thread-1').pendingOriginConsent).toBeUndefined()
-    expect(harness.manager.auditSnapshot()).toContainEqual(expect.objectContaining({
-      category: 'origin-consent',
-      action: 'agent-review-required',
-      origin: 'https://other.example',
-      decision: 'denied',
-      outcome: 'blocked'
-    }))
-  })
-
-  it('does not let an unsigned observation replace a signed agent route', async () => {
-    const harness = fakeHarness({ approvalMode: 'always-ask' })
-    const open = {
-      action: 'open' as const,
-      url: 'https://example.com/start'
-    }
-    await harness.manager.execute(
-      'thread-1',
-      'turn-1',
-      open,
-      undefined,
-      kunApprovalGrant(open),
-      'agent'
-    )
-    await harness.manager.execute(
-      'thread-1',
-      'turn-1',
-      { action: 'snapshot' },
-      undefined,
-      undefined,
-      'full-access'
-    )
-
-    const redirectEvent = { preventDefault: vi.fn() }
-    harness.emitWebContents(
-      'will-redirect',
-      redirectEvent,
-      'https://mode-injection.example/landing'
-    )
-    await new Promise((resolve) => setTimeout(resolve, 0))
-
-    expect(redirectEvent.preventDefault).toHaveBeenCalledOnce()
-    expect(harness.webContents.loadURL).not.toHaveBeenCalledWith(
-      'https://mode-injection.example/landing'
-    )
-    expect(harness.manager.stateForThread('thread-1').pendingOriginConsent).toBeUndefined()
-    expect(harness.manager.auditSnapshot()).toContainEqual(expect.objectContaining({
-      category: 'origin-consent',
-      action: 'agent-review-required',
-      origin: 'https://mode-injection.example',
-      outcome: 'blocked'
-    }))
-  })
-
-  it('keeps exact local re-origin validation after a Kun grant', async () => {
-    const harness = fakeHarness({
-      mode: 'local-development',
-      approvalMode: 'always-ask'
-    })
-    const open = {
-      action: 'open' as const,
-      url: 'http://127.0.0.1:4173/app'
-    }
-    await harness.manager.execute(
-      'thread-1',
-      'turn-1',
-      open,
-      undefined,
-      kunApprovalGrant(open),
-      'agent'
-    )
-
-    const redirectEvent = { preventDefault: vi.fn() }
-    harness.emitWebContents(
-      'will-redirect',
-      redirectEvent,
-      'http://127.0.0.1:4174/other'
-    )
-    await new Promise((resolve) => setTimeout(resolve, 0))
-
-    expect(redirectEvent.preventDefault).toHaveBeenCalledOnce()
-    expect(harness.webContents.loadURL).not.toHaveBeenCalledWith(
-      'http://127.0.0.1:4174/other'
-    )
-    expect(harness.manager.stateForThread('thread-1').pendingOriginConsent).toBeUndefined()
-  })
-
-  it('fails closed instead of surfacing manual origin controls for agent-reviewed turns', async () => {
-    const harness = fakeHarness({ approvalMode: 'always-ask' })
-    const open = {
-      action: 'open' as const,
-      url: 'https://example.com/start'
-    }
-    await harness.manager.execute(
-      'thread-1',
-      'turn-1',
-      open,
-      undefined,
-      kunApprovalGrant(open),
-      'agent'
-    )
-    await harness.manager.execute(
+    const second = harness.manager.execute(
       'thread-1',
       'turn-2',
-      { action: 'snapshot' },
-      undefined,
-      undefined,
-      'agent'
+      { action: 'open', url: 'https://example.com/second' }
     )
+    await expectNoAdditionalCall(harness.webContents.loadURL, 1)
+    harness.finishLoad()
 
-    const redirectEvent = { preventDefault: vi.fn() }
-    harness.emitWebContents(
-      'will-redirect',
-      redirectEvent,
-      'https://unreviewed.example/landing'
-    )
-    await new Promise((resolve) => setTimeout(resolve, 0))
+    await expect(first).resolves.toMatchObject({ ok: true, code: 'opened' })
+    await expect(second).resolves.toMatchObject({ ok: true, code: 'opened' })
+    expect(harness.proxy.start).toHaveBeenCalledOnce()
+    expect(harness.webContents.loadURL).toHaveBeenCalledTimes(2)
+  })
 
-    expect(redirectEvent.preventDefault).toHaveBeenCalledOnce()
-    expect(harness.webContents.loadURL).not.toHaveBeenCalledWith(
-      'https://unreviewed.example/landing'
-    )
-    expect(harness.manager.stateForThread('thread-1').pendingOriginConsent).toBeUndefined()
-    expect(harness.manager.auditSnapshot()).toContainEqual(expect.objectContaining({
-      category: 'origin-consent',
-      action: 'agent-review-required',
-      origin: 'https://unreviewed.example',
-      outcome: 'blocked'
-    }))
+  it('does not publish a tab when proxy assignment fails and retries with a fresh setup', async () => {
+    const harness = fakeHarness()
+    harness.webContents.session.setProxy.mockRejectedValueOnce(new Error('proxy rejected'))
+
+    await expect(harness.manager.execute(
+      'thread-1',
+      'turn-1',
+      { action: 'open', url: 'https://example.com/first' }
+    )).resolves.toMatchObject({ ok: false, code: 'navigation_failed' })
+    expect(harness.manager.stateForThread('thread-1').tabs).toHaveLength(0)
+    expect(harness.webContents.loadURL).not.toHaveBeenCalled()
+    expect(harness.webContents.close).toHaveBeenCalledOnce()
+
+    await expect(harness.manager.execute(
+      'thread-1',
+      'turn-2',
+      { action: 'open', url: 'https://example.com/retry' }
+    )).resolves.toMatchObject({ ok: true, code: 'opened' })
+    expect(harness.webContents.session.setProxy).toHaveBeenCalledTimes(2)
+    expect(harness.manager.stateForThread('thread-1').tabs).toHaveLength(1)
+  })
+
+  it('closes a tab whose structured hardening fails without replacing the active tab', async () => {
+    const harness = fakeHarness({ maxTabs: 2 })
+    await openAuthorized(harness)
+    const before = harness.manager.stateForThread('thread-1')
+    harness.webContents.debugger.attach.mockImplementationOnce(() => {
+      throw new Error('debugger unavailable')
+    })
+
+    await expect(harness.manager.execute(
+      'thread-1',
+      'turn-2',
+      { action: 'open', url: 'https://example.com/second', newTab: true }
+    )).resolves.toMatchObject({ ok: false, code: 'navigation_failed' })
+
+    const after = harness.manager.stateForThread('thread-1')
+    expect(after.lifecycle).toBe(before.lifecycle)
+    expect(after.tabs).toHaveLength(1)
+    expect(after.activeTabId).toBe(before.activeTabId)
+    expect(after.tabs[0]).toMatchObject({
+      id: before.tabs[0]?.id,
+      origin: before.tabs[0]?.origin,
+      active: true
+    })
+    expect(harness.webContents.close).toHaveBeenCalledOnce()
   })
 
 })

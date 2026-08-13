@@ -202,6 +202,8 @@ describe('canvas-persistence round-trip', () => {
         ]
       }
     ]
+    doc.rendererReplayKeys = ['thread\0turn\0document\0assistant:0']
+    doc.rendererReplayWatermarkTurnId = 'turn_materialized'
     doc.codeBindings = [
       {
         id: 'binding_1',
@@ -230,6 +232,8 @@ describe('canvas-persistence round-trip', () => {
       status: 'applied',
       affectedIds: [rect.id]
     })
+    expect(reloaded?.rendererReplayKeys).toEqual(['thread\0turn\0document\0assistant:0'])
+    expect(reloaded?.rendererReplayWatermarkTurnId).toBe('turn_materialized')
     expect(reloaded?.codeBindings?.[0]).toMatchObject({
       id: 'binding_1',
       designObjectId: rect.id,

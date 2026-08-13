@@ -1,13 +1,13 @@
-# Write workspace knowledge bases
+# Work workspace knowledge bases
 
-Kun can mount a Write workspace on an individual Code thread as a read-only
+Kun can mount a Work workspace on an individual Code thread as a read-only
 knowledge base. The feature uses a PageIndex-inspired structural index rather
 than embeddings or a vector database. Indexes are derived local data and can be
 rebuilt at any time.
 
 ## Product model
 
-- Write workspaces remain the source of truth. Mounting does not copy or move
+- Work workspaces remain the source of truth. Mounting does not copy or move
   their documents.
 - Mounts belong to a thread and are copied when that thread is forked.
 - A mount stores a stable id, absolute root, display name,
@@ -59,7 +59,7 @@ The generated graph contains:
 
 Node ids are deterministic hashes of structural source locations. A source
 fingerprint is calculated from the bounded scan metadata. The index is stored
-under Kun's data directory in `knowledge-indexes/`, never in the Write
+under Kun's data directory in `knowledge-indexes/`, never in the Work
 workspace. Status is one of `pending`, `indexing`, `ready`, `stale`,
 `unavailable`, or `error`. Concurrent requests for the same root share one
 in-flight build.
@@ -74,7 +74,7 @@ returns stale/unavailable instead of cached text and schedules a rebuild.
 ## Retrieval flow
 
 ```text
-User mounts Write workspace on Code thread
+User mounts Work workspace on Code thread
   -> bounded canonical-path scan
   -> directory/document/section/page/slide/worksheet/range graph
   -> knowledge_catalog(query?)
@@ -110,12 +110,27 @@ Renderer routes:
 - `POST /v1/threads/{id}/knowledge-bases/{knowledgeBaseId}/reindex`
 - `PATCH /v1/threads/{id}` with `knowledgeBases`
 
-The Code composer picker is sourced from Write workspaces. It can add a new
-directory to Write and mount it in one operation, shows index freshness, and
-can switch to the matching Write workspace for source inspection.
+The Code composer picker is sourced from Work workspaces. It can add a new
+directory to Work and mount it in one operation, shows index freshness, and
+can switch to the matching Work workspace for source inspection.
 Office status additionally reports usable, unavailable, and truncated document
 counts, per-format totals, and bounded actionable diagnostics. Office evidence
-cards open the cited source in the existing read-only Write preview.
+cards open the cited source in the existing read-only Work preview.
+
+The Code composer `@` menu also lists knowledge bases already mounted on the
+active thread, in a separate group before workspace files and directories.
+Selecting one inserts an explicit `@kb:"Name"` token in the user request. The
+token is ordinary prompt text, so drafts, queued messages, retries, history,
+and exports preserve it without a second persisted reference contract. Kun's
+existing dynamic turn context maps the name to the authorized mount id and the
+agent retrieves evidence through `knowledge_catalog`, `knowledge_browse`, and
+`knowledge_read`.
+
+The `@` menu does not mount new Work workspaces. Users add or remove mounts with
+the knowledge-base picker while the thread is idle, then mention those mounts
+in a request. A mention never becomes a file reference, never eagerly expands
+knowledge documents into the prompt, and never grants generic file or sandbox
+access to the knowledge root.
 
 ## Security invariants
 

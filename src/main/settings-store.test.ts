@@ -276,7 +276,7 @@ describe('JsonSettingsStore', () => {
       expect((await stat(loaded.write.defaultWorkspaceRoot)).isDirectory()).toBe(true)
       expect((await stat(loaded.conversationWorkspaceRoot)).isDirectory()).toBe(true)
       expect(await readFile(join(loaded.write.defaultWorkspaceRoot, 'welcome.md'), 'utf8'))
-        .toContain('Welcome to Write')
+        .toContain('Welcome to Work')
     })
   })
 

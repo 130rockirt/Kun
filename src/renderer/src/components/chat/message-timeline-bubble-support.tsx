@@ -1,9 +1,14 @@
 import { useEffect, useRef, useState, type ReactElement } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Check, Copy, Download, Loader2 } from 'lucide-react'
+import { Check, Copy, Download, Loader2, Presentation } from 'lucide-react'
 import type { ChatBlock, RuntimeDisclosureMetadata, UserInputAnswer } from '../../agent/types'
 import type { WriteExportFormat } from '@shared/write-export'
+import { ComposerContextAttachmentSchema } from '@kun/extension-api'
 import { useChatStore } from '../../store/chat-store'
+import {
+  readWorkspaceOfficeViewPosition,
+  type WorkspaceOfficeViewPosition
+} from '../../lib/workspace-office-view-context'
 import { answerDisplayValues, answersByQuestionId } from './user-input-panel-logic'
 import { InjectedMemoryMetaChip } from './injected-memory-meta-chip'
 import {
@@ -34,6 +39,8 @@ export function metaComposerContextLabels(meta: Record<string, unknown> | undefi
   return value.flatMap((entry) => {
     if (!entry || typeof entry !== 'object') return []
     const record = entry as Record<string, unknown>
+    const parsed = ComposerContextAttachmentSchema.safeParse(entry)
+    if (parsed.success && readWorkspaceOfficeViewPosition(parsed.data)) return []
     const title = typeof record.title === 'string' ? record.title.trim() : ''
     const provenance = record.provenance && typeof record.provenance === 'object'
       ? record.provenance as Record<string, unknown>
@@ -42,6 +49,19 @@ export function metaComposerContextLabels(meta: Record<string, unknown> | undefi
       ? provenance.extensionId.trim()
       : ''
     return title ? [`${title}${extensionId ? ` (${extensionId})` : ''}`] : []
+  })
+}
+
+export function metaOfficeViewPositions(
+  meta: Record<string, unknown> | undefined
+): WorkspaceOfficeViewPosition[] {
+  const value = meta?.composerContexts
+  if (!Array.isArray(value)) return []
+  return value.flatMap((entry) => {
+    const parsed = ComposerContextAttachmentSchema.safeParse(entry)
+    if (!parsed.success) return []
+    const position = readWorkspaceOfficeViewPosition(parsed.data)
+    return position ? [position] : []
   })
 }
 
@@ -62,6 +82,7 @@ export function RuntimeMetaChips({
   const injectedMemoryIds = hideTurnDisclosure ? [] : metaStringArray(meta, 'injectedMemoryIds')
   const injectedInstructionSources = hideTurnDisclosure ? [] : metaInstructionSources(meta)
   const composerContextLabels = hideTurnDisclosure ? [] : metaComposerContextLabels(meta)
+  const officeViewPositions = hideTurnDisclosure ? [] : metaOfficeViewPositions(meta)
   const sources = metaSources(meta)
   const child = meta?.child && typeof meta.child === 'object' ? meta.child as Record<string, unknown> : null
   const childLabel =
@@ -78,6 +99,7 @@ export function RuntimeMetaChips({
     injectedMemoryIds.length === 0 &&
     injectedInstructionSources.length === 0 &&
     composerContextLabels.length === 0 &&
+    officeViewPositions.length === 0 &&
     sources.length === 0 &&
     !childLabel
   ) {
@@ -109,6 +131,28 @@ export function RuntimeMetaChips({
           {t('toolExtensionContexts')} {composerContextLabels.length}
         </span>
       ) : null}
+      {officeViewPositions.map((position) => (
+        <span
+          key={`${position.sourceSha256}-${position.slide}`}
+          data-office-view-position
+          className={chipClass}
+          title={`${position.sourceName} · ${t('writeAssistantSlidePosition', {
+            slide: position.slide,
+            slideCount: position.slideCount
+          })}`}
+        >
+          <Presentation className="h-3 w-3 shrink-0 text-accent" strokeWidth={1.8} />
+          <span>{t('writeAssistantCurrentView')}</span>
+          <span>·</span>
+          <span className="max-w-36 truncate text-ds-muted">{position.sourceName}</span>
+          <span>
+            · {t('writeAssistantSlidePosition', {
+              slide: position.slide,
+              slideCount: position.slideCount
+            })}
+          </span>
+        </span>
+      ))}
       {childLabel ? (
         <span className={chipClass} title={childLabel}>
           {t('toolChildAgent')} <span className="max-w-28 truncate font-mono text-ds-muted">{childLabel}</span>

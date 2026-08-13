@@ -212,6 +212,37 @@ export const threadActionSharedState = {
   checkpointGitAvailability: new GitCheckpointAvailabilityCache()
 }
 
+type RuntimeAdmissionWaiter = {
+  promise: Promise<boolean>
+  settle: (accepted: boolean) => void
+}
+
+const runtimeAdmissionWaiters = new Map<string, RuntimeAdmissionWaiter>()
+
+export function waitForRuntimeTurnAdmission(clientRequestId: string): Promise<boolean> {
+  const existing = runtimeAdmissionWaiters.get(clientRequestId)
+  if (existing) return existing.promise
+  let settle!: (accepted: boolean) => void
+  const promise = new Promise<boolean>((resolve) => { settle = resolve })
+  runtimeAdmissionWaiters.set(clientRequestId, { promise, settle })
+  return promise
+}
+
+export function hasRuntimeTurnAdmissionWaiter(clientRequestId: string | undefined): boolean {
+  return Boolean(clientRequestId && runtimeAdmissionWaiters.has(clientRequestId))
+}
+
+export function settleRuntimeTurnAdmission(
+  clientRequestId: string | undefined,
+  accepted: boolean
+): void {
+  if (!clientRequestId) return
+  const waiter = runtimeAdmissionWaiters.get(clientRequestId)
+  if (!waiter) return
+  runtimeAdmissionWaiters.delete(clientRequestId)
+  waiter.settle(accepted)
+}
+
 export function createWorkspaceCheckpointRequestId(): string {
   const random = globalThis.crypto?.randomUUID?.() ??
     `${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`
@@ -225,7 +256,31 @@ export function createClientTurnRequestId(): string {
 }
 
 export function pendingQueuedMessage(message: QueuedUserMessage): QueuedUserMessage {
-  const pending = { ...message, deliveryState: 'pending' as const }
+  const pending = {
+    ...message,
+    deliveryState: 'pending' as const,
+    ...(message.designProfile
+      ? {
+          designProfile: {
+            ...message.designProfile,
+            documentTarget: { ...message.designProfile.documentTarget },
+            ...(message.designProfile.styleSnapshot
+              ? { styleSnapshot: { ...message.designProfile.styleSnapshot } }
+              : {}),
+            context: {
+              ...message.designProfile.context,
+              tone: [...message.designProfile.context.tone]
+            }
+          }
+        }
+      : {}),
+    ...(message.designDocumentTarget
+      ? { designDocumentTarget: { ...message.designDocumentTarget } }
+      : {}),
+    ...(message.designImagePlacementTarget
+      ? { designImagePlacementTarget: { ...message.designImagePlacementTarget } }
+      : {})
+  }
   delete pending.deliveryTurnId
   delete pending.deliveryUserMessageItemId
   return pending

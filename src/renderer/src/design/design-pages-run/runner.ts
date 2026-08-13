@@ -39,7 +39,27 @@ import { useDesignSystemStore } from "../canvas/design-system-store"
 import { PROJECT_DESIGN_MD_PATH } from '../design-md/design-md-paths'
 import { parseProjectDesignMdWithOfficialLint } from '../design-md/design-md-adapter'
 import type { RunDesignPagesDeps } from './orchestration-support'
-import { PAGE_TIMEOUT_MS, PARALLEL_PAGES_TIMEOUT_MS, PLAN_TIMEOUT_MS, assistantTextForLastTurn, beginDesignPagesRun, buildDirectionName, createFoundationCard, delay, finishDesignPagesRun, formatPageFlowLines, formatPageProductBriefLines, runTurn, syncParallelPageStates, waitForTurnComplete, writeWorkspaceTextFile } from './orchestration-support'
+import {
+  PAGE_TIMEOUT_MS,
+  PARALLEL_PAGES_TIMEOUT_MS,
+  PLAN_TIMEOUT_MS,
+  assistantTextForLastTurn,
+  beginDesignPagesRun,
+  buildDirectionName,
+  captureDesignPagesRunIdentity,
+  createFoundationCard,
+  delay,
+  designPagesRunArtifacts,
+  designPagesRunCanStartTurn,
+  designPagesRunIdentityMatches,
+  finishDesignPagesRun,
+  formatPageFlowLines,
+  formatPageProductBriefLines,
+  runTurn,
+  syncParallelPageStates,
+  waitForTurnComplete,
+  writeWorkspaceTextFile
+} from './orchestration-support'
 
 /**
  * Stitch-style multi-page run. A project design system is discovered from the
@@ -54,6 +74,11 @@ export async function runDesignPages(deps: RunDesignPagesDeps): Promise<void> {
     deps.onFirstSendSettled?.(sent)
   }
   const signal = { cancelled: false }
+  const identity = captureDesignPagesRunIdentity(deps)
+  if (!identity) {
+    settleFirstSend(false)
+    return
+  }
   if (!beginDesignPagesRun(signal)) {
     settleFirstSend(false)
     return
@@ -61,20 +86,30 @@ export async function runDesignPages(deps: RunDesignPagesDeps): Promise<void> {
   const store = useDesignWorkspaceStore.getState()
   store.setFileError(null)
   const withFoundation = deps.foundation !== false
+  const contextMatches = (): boolean => designPagesRunIdentityMatches(identity)
+  const fail = (message: string): void => {
+    if (contextMatches()) useDesignWorkspaceStore.getState().setFileError(message)
+  }
 
-  const overrides = (display: string): SendMessageOverrides => ({
+  const overrides = (display: string, continuation = false): SendMessageOverrides => ({
     displayText: display,
+    ...(continuation ? { messageSource: 'design_continuation' as const } : {}),
     agentSurface: 'design',
     ...(deps.model ? { model: deps.model } : {}),
     ...(deps.providerId ? { providerId: deps.providerId } : {}),
     ...(deps.reasoningEffort ? { reasoningEffort: deps.reasoningEffort } : {}),
     ...(deps.serviceTier ? { serviceTier: deps.serviceTier } : {}),
-    ...(deps.expectedThreadId ? { expectedThreadId: deps.expectedThreadId } : {})
+    ...(deps.expectedThreadId ? { expectedThreadId: deps.expectedThreadId } : {}),
+    ...(deps.designProfile ? { designProfile: deps.designProfile } : {}),
+    ...(deps.designDocumentTarget
+      ? { designDocumentTarget: deps.designDocumentTarget }
+      : {}),
+    ...(!continuation && deps.waitForRuntimeAdmission ? { waitForRuntimeAdmission: true } : {})
   })
 
   try {
-    // Capture the active 设计稿 once so every generated artifact lands in the same one.
-    const docId = store.ensureActiveDocument()
+    if (!contextMatches()) return
+    const docId = identity.documentId
     const foundationBuiltIds = new Set<string>()
     let designMdRef: string | undefined
     let designSystemRef: string | undefined
@@ -91,7 +126,8 @@ export async function runDesignPages(deps: RunDesignPagesDeps): Promise<void> {
       })
       const designMdPath = designSpecPath(docId)
       await writeWorkspaceTextFile(deps.workspaceRoot, designMdPath, buildDesignSpecStub(deps.brief))
-      const existingPages = buildHtmlSiblingManifest(store.artifacts, null)
+      if (!contextMatches()) return
+      const existingPages = buildHtmlSiblingManifest(designPagesRunArtifacts(identity), null)
       const specPrompt = buildDesignSpecPrompt({
         brief: deps.brief,
         workspaceRoot: deps.workspaceRoot,
@@ -109,23 +145,26 @@ export async function runDesignPages(deps: RunDesignPagesDeps): Promise<void> {
         overrides: overrides(specDisplay),
         signal,
         timeoutMs: PLAN_TIMEOUT_MS,
-        onSendSettled: settleFirstSend
+        onSendSettled: settleFirstSend,
+        beforeSend: deps.onFirstSendStarting,
+        identity
       })
-      if (status === 'cancelled') return
+      if (status === 'cancelled' || status === 'context-changed') return
       if (status === 'send-failed') {
-        store.setFileError('Could not start the design-brief turn.')
+        fail('Could not start the design-brief turn.')
         return
       }
       if (status === 'timeout') {
-        store.setFileError('The design-brief step timed out.')
+        fail('The design-brief step timed out.')
         return
       }
       await delay(300) // let the final assistant block settle before we read it
-      plan = parsePagesPlan(assistantTextForLastTurn(), { max: DESIGN_PAGES_MAX })
+      if (!contextMatches()) return
+      plan = parsePagesPlan(assistantTextForLastTurn(identity), { max: DESIGN_PAGES_MAX })
       designMdRef = designMdPath
     } else {
       store.setPagesRun({ phase: 'planning', total: 0, done: 0, title: '' })
-      const existingPages = buildHtmlSiblingManifest(store.artifacts, null)
+      const existingPages = buildHtmlSiblingManifest(designPagesRunArtifacts(identity), null)
       const planPrompt = buildDesignPlanPrompt({
         brief: deps.brief,
         workspaceRoot: deps.workspaceRoot,
@@ -139,19 +178,22 @@ export async function runDesignPages(deps: RunDesignPagesDeps): Promise<void> {
         overrides: overrides(planDisplay),
         signal,
         timeoutMs: PLAN_TIMEOUT_MS,
-        onSendSettled: settleFirstSend
+        onSendSettled: settleFirstSend,
+        beforeSend: deps.onFirstSendStarting,
+        identity
       })
-      if (status === 'cancelled') return
+      if (status === 'cancelled' || status === 'context-changed') return
       if (status === 'send-failed') {
-        store.setFileError('Could not start the multi-page planning turn.')
+        fail('Could not start the multi-page planning turn.')
         return
       }
       if (status === 'timeout') {
-        store.setFileError('The page-planning step timed out.')
+        fail('The page-planning step timed out.')
         return
       }
       await delay(300)
-      plan = parsePagesPlan(assistantTextForLastTurn(), { max: DESIGN_PAGES_MAX })
+      if (!contextMatches()) return
+      plan = parsePagesPlan(assistantTextForLastTurn(identity), { max: DESIGN_PAGES_MAX })
     }
     if (plan.length === 0) {
       // The planner produced nothing parseable — degrade to a single page.
@@ -161,17 +203,18 @@ export async function runDesignPages(deps: RunDesignPagesDeps): Promise<void> {
     // 2) Foundation assets. The design system is a project-level structured
     // file, not an agent-generated HTML artifact. Reuse it when it already exists.
     if (withFoundation) {
-      if (signal.cancelled) return
+      if (signal.cancelled || !contextMatches()) return
       const structuredSystem = await window.kunGui?.readWorkspaceFile?.({
         path: PROJECT_DESIGN_MD_PATH,
         workspaceRoot: deps.workspaceRoot
       }).catch(() => null)
+      if (!contextMatches()) return
       if (structuredSystem?.ok && (await parseProjectDesignMdWithOfficialLint(structuredSystem.content, { truncated: structuredSystem.truncated })).ok) {
         designSystemRef = PROJECT_DESIGN_MD_PATH
       }
 
-      if (signal.cancelled) return
-      const existingLogo = findFoundationArtifact(useDesignWorkspaceStore.getState().artifacts, 'logo')
+      if (signal.cancelled || !contextMatches()) return
+      const existingLogo = findFoundationArtifact(designPagesRunArtifacts(identity), 'logo')
       if (existingLogo) {
         foundationBuiltIds.add(existingLogo.id)
       } else {
@@ -186,10 +229,11 @@ export async function runDesignPages(deps: RunDesignPagesDeps): Promise<void> {
           docId,
           workspaceRoot: deps.workspaceRoot,
           role: 'logo',
-          title: deps.labels?.logoTitle?.() ?? 'Logo'
+          title: deps.labels?.logoTitle?.() ?? 'Logo',
+          identity
         })
         if (!card) {
-          store.setFileError('Design preview setup failed for the logo.')
+          fail('Design preview setup failed for the logo.')
           return
         }
         const logoPrompt = buildDesignLogoPrompt({
@@ -203,18 +247,19 @@ export async function runDesignPages(deps: RunDesignPagesDeps): Promise<void> {
         const status = await runTurn({
           sendMessage: deps.sendMessage,
           prompt: logoPrompt,
-          overrides: overrides(deps.labels?.logoDisplay?.() ?? 'Design the brand logo'),
+          overrides: overrides(deps.labels?.logoDisplay?.() ?? 'Design the brand logo', true),
           signal,
           timeoutMs: PAGE_TIMEOUT_MS,
-          artifactId: card.id
+          artifactId: card.id,
+          identity
         })
-        if (status === 'cancelled') return
+        if (status === 'cancelled' || status === 'context-changed') return
         if (status === 'send-failed') {
-          store.setFileError('Could not start the logo turn.')
+          fail('Could not start the logo turn.')
           return
         }
         if (status === 'timeout') {
-          store.setFileError('The logo step timed out.')
+          fail('The logo step timed out.')
           return
         }
         foundationBuiltIds.add(card.id)
@@ -223,7 +268,8 @@ export async function runDesignPages(deps: RunDesignPagesDeps): Promise<void> {
 
     // 3) Create a skeleton card per page up front so they all appear immediately.
     // baseIndex already accounts for any foundation cards added above.
-    const baseIndex = useDesignWorkspaceStore.getState().artifacts.length
+    if (!contextMatches()) return
+    const baseIndex = designPagesRunArtifacts(identity).length
     const planTitles = plan.map((p) => `"${p.title}"`).join(', ')
     const directionCreatedAt = new Date().toISOString()
     const direction: DesignDirection = {
@@ -253,7 +299,7 @@ export async function runDesignPages(deps: RunDesignPagesDeps): Promise<void> {
     }))
     const created: Array<ParallelDesignPageJob & { entry: DesignPagePlanEntry }> = []
     for (const page of pageDrafts) {
-      if (signal.cancelled) return
+      if (signal.cancelled || !contextMatches()) return
       const entry = page.entry
       const prototypeLinks = buildPrototypeLinksForPage(entry, page.relativePath, plannedPages)
       useDesignWorkspaceStore.getState().upsertArtifact({
@@ -277,9 +323,14 @@ export async function runDesignPages(deps: RunDesignPagesDeps): Promise<void> {
         direction,
         ...(prototypeLinks.length > 0 ? { prototypeLinks } : {})
       })
+      if (
+        !contextMatches() ||
+        !designPagesRunArtifacts(identity).some((artifact) => artifact.id === page.id)
+      ) return
       const prep = await prepareDesignPreviewFile(deps.workspaceRoot, page.relativePath)
+      if (!contextMatches()) return
       if (!prep.ok) {
-        store.setFileError(`Design preview setup failed: ${prep.message}`)
+        fail(`Design preview setup failed: ${prep.message}`)
         return
       }
       created.push({
@@ -303,9 +354,8 @@ export async function runDesignPages(deps: RunDesignPagesDeps): Promise<void> {
     })
     const foundationBlock = foundationLines.length > 0 ? `${foundationLines.join('\n')}\n\n` : ''
     const createdIds = new Set(created.map((page) => page.artifactId))
-    const readable = useDesignWorkspaceStore
-      .getState()
-      .artifacts.filter((a) => foundationBuiltIds.has(a.id) || createdIds.has(a.id))
+    const readable = designPagesRunArtifacts(identity)
+      .filter((a) => foundationBuiltIds.has(a.id) || createdIds.has(a.id))
     const jobs: ParallelDesignPageJob[] = created.map((page, i) => {
       const projectContext =
         created.length > 1
@@ -326,6 +376,7 @@ export async function runDesignPages(deps: RunDesignPagesDeps): Promise<void> {
     })
 
     if (jobs.length > 0) {
+      if (!contextMatches()) return
       useDesignWorkspaceStore.getState().setParallelPageStates(
         jobs.map((job) => ({ artifactId: job.artifactId, status: 'queued' }))
       )
@@ -339,7 +390,7 @@ export async function runDesignPages(deps: RunDesignPagesDeps): Promise<void> {
 
       const toolArtifactIds = new Map<string, string>()
       const unsubscribe = useChatStore.subscribe(() => {
-        syncParallelPageStates(jobs, toolArtifactIds)
+        syncParallelPageStates(jobs, toolArtifactIds, identity)
       })
       const prompt = buildParallelDesignPagesPrompt({
         workspaceRoot: deps.workspaceRoot,
@@ -349,21 +400,27 @@ export async function runDesignPages(deps: RunDesignPagesDeps): Promise<void> {
         ...(deps.designContext ? { designContext: deps.designContext } : {})
       })
       let sent = false
-      let status: 'complete' | 'timeout' | 'cancelled' = 'complete'
+      let status: 'complete' | 'timeout' | 'cancelled' | 'context-changed' = 'complete'
       try {
-        sent = await deps.sendMessage(prompt, 'agent', overrides(`Design ${jobs.length} pages in parallel`))
-        if (sent) status = await waitForTurnComplete(signal, PARALLEL_PAGES_TIMEOUT_MS)
+        if (!designPagesRunCanStartTurn(identity)) return
+        sent = await deps.sendMessage(
+          prompt,
+          'agent',
+          overrides(`Design ${jobs.length} pages in parallel`, true)
+        )
+        if (sent) status = await waitForTurnComplete(signal, PARALLEL_PAGES_TIMEOUT_MS, identity)
       } finally {
         unsubscribe()
       }
       if (!sent) {
-        store.setFileError('Could not start the parallel page generation turn.')
+        fail('Could not start the parallel page generation turn.')
         return
       }
-      const finalStates = syncParallelPageStates(jobs, toolArtifactIds)
-      if (status === 'cancelled') return
+      if (status === 'cancelled' || status === 'context-changed') return
+      const finalStates = syncParallelPageStates(jobs, toolArtifactIds, identity)
+      if (!finalStates) return
       if (status === 'timeout') {
-        store.setFileError('Parallel page generation timed out.')
+        fail('Parallel page generation timed out.')
         return
       }
       for (const job of jobs) {
@@ -378,34 +435,34 @@ export async function runDesignPages(deps: RunDesignPagesDeps): Promise<void> {
         const names = failed
           .map((state) => jobs.find((job) => job.artifactId === state.artifactId)?.title ?? state.artifactId)
           .join(', ')
-        store.setFileError(`Parallel page generation failed for: ${names}`)
+        fail(`Parallel page generation failed for: ${names}`)
       }
     }
 
     // Land on the primary (first) page so the canvas focuses something finished.
-    if (created.length > 0) {
+    if (created.length > 0 && contextMatches()) {
       useDesignWorkspaceStore.getState().setActiveArtifact(created[0].artifactId)
     }
 
-    if (!signal.cancelled) {
+    if (!signal.cancelled && contextMatches()) {
       const state = useDesignWorkspaceStore.getState()
-      const activeDoc = state.documents.find((doc) => doc.id === state.activeDocumentId)
+      const targetDoc = state.documents.find((doc) => doc.id === identity.documentId)
       await writeWorkspaceTextFile(
         deps.workspaceRoot,
         STITCH_DESIGN_MD_PATH,
         buildStitchDesignMarkdown({
-          title: activeDoc?.title,
+          title: targetDoc?.title,
           brief: deps.brief,
           ...(deps.designContext ? { designContext: deps.designContext } : {}),
           designSystem: useDesignSystemStore.getState().system,
           designSystemMdPath: designSystemRef ?? PROJECT_DESIGN_MD_PATH,
           ...(designMdRef ? { projectBriefPath: designMdRef } : {}),
-          artifacts: state.artifacts
+          artifacts: targetDoc?.artifacts ?? []
         })
       )
     }
   } catch (error) {
-    store.setFileError(error instanceof Error ? error.message : String(error))
+    fail(error instanceof Error ? error.message : String(error))
   } finally {
     settleFirstSend(false)
     finishDesignPagesRun(signal)

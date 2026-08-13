@@ -35,6 +35,10 @@ describe('queued-message-persistence', () => {
         clientRequestId: 'turn_client_1',
         deliveryState: 'pending',
         serviceTier: 'priority',
+        messageSource: 'design_continuation',
+        designImagePlacementTarget: {
+          shapeId: 'hero_holder', expectedHolderKind: 'implicit-rect'
+        },
         fileReferences: [{
           path: '/workspace/src/App.tsx',
           relativePath: 'src/App.tsx',
@@ -53,6 +57,10 @@ describe('queued-message-persistence', () => {
         clientRequestId: 'turn_client_1',
         deliveryState: 'pending',
         serviceTier: 'priority',
+        messageSource: 'design_continuation',
+        designImagePlacementTarget: {
+          shapeId: 'hero_holder', expectedHolderKind: 'implicit-rect'
+        },
         fileReferences: [expect.objectContaining({ relativePath: 'src/App.tsx' })]
       })
     ])

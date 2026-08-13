@@ -141,6 +141,7 @@ function hasMotionTargetAncestor(
 
 type Props = {
   workspaceRoot: string
+  readOnly?: boolean
   interactiveId: string | null
   editingId: string | null
   onToggleInteractive: (shapeId: string) => void
@@ -152,6 +153,7 @@ type Props = {
 
 export function HtmlFrameOverlay({
   workspaceRoot,
+  readOnly = false,
   interactiveId,
   editingId,
   onToggleInteractive,
@@ -231,10 +233,10 @@ export function HtmlFrameOverlay({
               zIndex={paintIndexById.get(shape.id) ?? 1}
               zoom={zoom}
               active={active}
-              interactive={interactiveId === shape.id}
-              panning={panning}
-              editing={editingId === shape.id}
-              onDoubleClick={onToggleInteractive}
+              interactive={!readOnly && interactiveId === shape.id}
+              panning={panning || readOnly}
+              editing={!readOnly && editingId === shape.id}
+              onDoubleClick={readOnly ? () => undefined : onToggleInteractive}
             />
           )
         }
@@ -251,14 +253,14 @@ export function HtmlFrameOverlay({
             zIndex={paintIndexById.get(shape.id) ?? 1}
             zoom={zoom}
             active={active}
-            interactive={interactiveId === shape.id}
-            panning={panning}
-            editing={editingId === shape.id}
-            onDoubleClick={onToggleInteractive}
-            onToggleModify={onToggleModify}
-            onUseElementAsContext={onUseElementAsContext}
-            onRuntimeQualityFindings={onRuntimeQualityFindings}
-            onRequestQualityRepair={onRequestQualityRepair}
+            interactive={!readOnly && interactiveId === shape.id}
+            panning={panning || readOnly}
+            editing={!readOnly && editingId === shape.id}
+            onDoubleClick={readOnly ? () => undefined : onToggleInteractive}
+            onToggleModify={readOnly ? () => undefined : onToggleModify}
+            onUseElementAsContext={readOnly ? undefined : onUseElementAsContext}
+            onRuntimeQualityFindings={readOnly ? undefined : onRuntimeQualityFindings}
+            onRequestQualityRepair={readOnly ? undefined : onRequestQualityRepair}
           />
         )
       })}

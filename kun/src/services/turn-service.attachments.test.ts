@@ -23,6 +23,7 @@ import type { GraphPlanningLifecycle, StartTurnRequest } from '../contracts/turn
 import { RuntimeEventRecorder } from './runtime-event-recorder.js'
 import {
   DEFAULT_MAX_CONCURRENT_TURNS,
+  TaskSurfaceLockedError,
   TurnCapacityError,
   TurnConflictError,
   TurnService
@@ -339,12 +340,12 @@ describe('TurnService startTurn', () => {
         model: 'test-model'
       })
       await threadStore.upsert(empty)
-      const designTurn = await service.startTurn({
+      const codeTurn = await service.startTurn({
         threadId: empty.id,
-        request: { prompt: 'draw a page', model: 'test-model', agentSurface: 'design' }
+        request: { prompt: 'inspect the project', model: 'test-model', agentSurface: 'code' }
       })
-      expect((await threadStore.get(empty.id))?.agentSurface).toBe('design')
-      await service.interruptTurn({ threadId: empty.id, turnId: designTurn.turnId })
+      expect((await threadStore.get(empty.id))?.agentSurface).toBe('code')
+      await service.interruptTurn({ threadId: empty.id, turnId: codeTurn.turnId })
 
       const existing = createThreadRecord({
         id: 'thr_existing_legacy',
@@ -361,13 +362,12 @@ describe('TurnService startTurn', () => {
           model: existing.model
         }), 'completed', nowIso())]
       })
-      const laterDesignTurn = await service.startTurn({
+      await expect(service.startTurn({
         threadId: existing.id,
         request: { prompt: 'misdirected design request', model: 'test-model', agentSurface: 'design' }
-      })
+      })).rejects.toBeInstanceOf(TaskSurfaceLockedError)
       expect((await threadStore.get(existing.id))?.agentSurface).toBeUndefined()
       expect((await threadStore.list()).find((thread) => thread.id === existing.id)?.agentSurface).toBe('code')
-      await service.interruptTurn({ threadId: existing.id, turnId: laterDesignTurn.turnId })
     })
 
   it('binds submitted attachments to the final thread before persisting the turn', async () => {

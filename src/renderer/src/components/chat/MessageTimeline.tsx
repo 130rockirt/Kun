@@ -2,21 +2,18 @@ import type { ReactElement } from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { GitCommitHorizontal, Hash } from 'lucide-react'
-import type { ChatBlock, RuntimeConnectionStatus, ToolBlock } from '../../agent/types'
+import type { ToolBlock } from '../../agent/types'
 import { useChatStore } from '../../store/chat-store'
 import { threadHasPendingRuntimeWork } from '../../store/chat-store-runtime-helpers'
 import { useTimelineStores } from './use-timeline-stores'
 import { useTimelineScroll } from './use-timeline-scroll'
 import { MessageTimelineEmptyHero, ThreadForkBanner, ThreadForkPoint } from './message-timeline-empty'
-import type { OpenChildThreadHandler } from './SubagentCallCard'
-import { groupTurns, stableTurnKey, type Turn } from './message-timeline-turns'
+import { groupTurns, stableTurnKey, turnTaskSurface, type Turn } from './message-timeline-turns'
 import { InjectedMemoryLookupProvider } from './injected-memory-lookup'
 import {
   TimelineFilePreviewWorkspaceProvider,
   timelineFilePreviewWorkspaceRoot
 } from './timeline-file-preview-workspace'
-import type { JsonValue } from '@kun/extension-api'
-import type { RegisteredContribution } from '../../extensions/contribution-registry'
 import {
   DeclarativeActionBar,
   canOpenHostContextMenuForTarget,
@@ -24,7 +21,7 @@ import {
   DeclarativeResultPreviews
 } from '../../extensions/ControlledContributionSurfaces'
 import { resolveActiveExtensionWorkspaceRoot } from '../../extensions/active-extension-workspace'
-import type { PlanBuildOrchestration } from '../../plan/plan-build'
+import type { JsonValue } from '@kun/extension-api'
 import { selectGraphPlanningCorrectionDraft, useGraphStore } from '../../graph/graph-store'
 import {
   TimelineJumpPreviewTitle,
@@ -41,6 +38,7 @@ import {
   turnResponsePreview
 } from './message-timeline-jump-preview'
 import { MemoMessageTurn } from './message-timeline-conversation-turn'
+import type { MessageTimelineProps } from './message-timeline-props'
 
 export {
   TimelineJumpPreviewTitle,
@@ -78,44 +76,7 @@ export function timelineTurnIsProcessing(input: {
   return (input.busy && input.isLatestTurn) || input.turnPending || input.hasLiveStream
 }
 
-type Props = {
-  blocks: ChatBlock[]
-  liveReasoning: string
-  live: string
-  activeThreadId: string | null
-  runtimeConnection: RuntimeConnectionStatus
-  runtimeError?: string | null
-  onRetryConnection: () => void
-  onOpenSettings: () => void
-  onSelectSuggestion?: (prompt: string) => void
-  focusModeEnabled?: boolean
-  devPreviewCard?: ReactElement | null
-  /** Disables the inline Review Plan card's Build action while a turn runs. */
-  planActionsBusy?: boolean
-  /** Whether Graph can be selected for a new plan build turn. */
-  graphEnabled?: boolean
-  /** Runs the active plan (Build button on the inline Review Plan card). */
-  onBuildPlan?: (orchestration: PlanBuildOrchestration) => void
-  /** Opens/focuses the Plan panel (Open button on the inline card). */
-  onOpenPlan?: () => void
-  /** Opens the current workspace changes panel from a turn summary. */
-  onOpenChanges?: () => void
-  /** Starts a review of the current workspace changes from a turn summary. */
-  onReviewChanges?: () => void
-  reviewChangesDisabled?: boolean
-  compactCards?: boolean
-  onOpenChildThread?: OpenChildThreadHandler
-  onComponentPrototypePrompt?: (prompt: string) => void
-  extensionMessageActions?: readonly RegisteredContribution<'actions.message'>[]
-  extensionContextMenus?: readonly RegisteredContribution<'contextMenus'>[]
-  extensionAttachmentContextMenus?: readonly RegisteredContribution<'contextMenus'>[]
-  extensionCommands?: readonly RegisteredContribution<'commands'>[]
-  extensionResultPreviews?: readonly RegisteredContribution<'message.resultPreviews'>[]
-  onExtensionCommand?: (commandId: string, context: JsonValue) => void | Promise<unknown>
-}
-
 const TURN_PAGE_SIZE = 18
-
 export function MessageTimeline({
   blocks,
   liveReasoning,
@@ -126,6 +87,7 @@ export function MessageTimeline({
   onRetryConnection,
   onOpenSettings,
   onSelectSuggestion,
+  taskSurfaceControl,
   focusModeEnabled = false,
   devPreviewCard,
   planActionsBusy,
@@ -143,8 +105,9 @@ export function MessageTimeline({
   extensionAttachmentContextMenus = [],
   extensionCommands = [],
   extensionResultPreviews = [],
+  messageContributionsForSurface,
   onExtensionCommand
-}: Props): ReactElement {
+}: MessageTimelineProps): ReactElement {
   const { t } = useTranslation('common')
   const threadLoadingId = useChatStore((state) => state.threadLoadingId)
   const cancelToolCall = useChatStore((state) => state.cancelToolCall)
@@ -457,7 +420,7 @@ export function MessageTimeline({
           ) : null}
         </div>
       ) : null}
-      <div className={`ds-message-timeline-content ds-chat-column-inset ds-chat-content-max-width mx-auto flex w-full min-w-0 flex-col gap-8 pt-8 ${
+      <div className={`ds-message-timeline-content ds-chat-column-inset ds-chat-content-max-width mx-auto flex w-full min-w-0 flex-col ${compactCards ? 'gap-5' : 'gap-8'} pt-8 ${
         timelineBottomPaddingClass()
       }`}>
         {activeThreadId && threadLoadingId === activeThreadId ? (
@@ -481,6 +444,7 @@ export function MessageTimeline({
             onRetry={onRetryConnection}
             onOpenSettings={onOpenSettings}
             onSelectSuggestion={onSelectSuggestion}
+            taskSurfaceControl={taskSurfaceControl}
             focusModeEnabled={focusModeEnabled}
           />
         ) : null}
@@ -522,6 +486,11 @@ export function MessageTimeline({
               ? Math.max(0, reasoningLast - reasoningFirst)
               : undefined
           const turnPending = threadHasPendingRuntimeWork(turn.blocks)
+          const turnContributions = messageContributionsForSurface?.(turnTaskSurface(turn))
+          const turnMessageActions = turnContributions?.actions ?? extensionMessageActions
+          const turnContextMenus = turnContributions?.contextMenus ?? extensionContextMenus
+          const turnAttachmentMenus = turnContributions?.attachmentContextMenus ?? extensionAttachmentContextMenus
+          const turnResultPreviews = turnContributions?.resultPreviews ?? extensionResultPreviews
           const isLatestTurn = index === visibleTurns.length - 1
           const hasLiveStream = isLatestTurn && !!(liveReasoning.trim() || live.trim())
           const turnIsProcessing = timelineTurnIsProcessing({
@@ -558,8 +527,8 @@ export function MessageTimeline({
                   (!attachment && !canOpenHostContextMenuForTarget(event.target))
                 ) return
                 const contributions = attachment
-                  ? extensionAttachmentContextMenus
-                  : extensionContextMenus
+                  ? turnAttachmentMenus
+                  : turnContextMenus
                 if (contributions.length === 0) return
                 event.preventDefault()
                 event.stopPropagation()
@@ -567,6 +536,7 @@ export function MessageTimeline({
                   position: { x: event.clientX, y: event.clientY },
                   context: {
                     surface: attachment ? 'attachment' : 'message',
+                    taskSurface: turnTaskSurface(turn),
                     threadId: activeThreadId,
                     turnId: turn.user?.turnId ?? null,
                     messageId: turn.user?.id ?? null,
@@ -599,10 +569,10 @@ export function MessageTimeline({
                 viewportRef={containerRef}
                 compactCards={compactCards}
               />
-              {!turnIsProcessing && extensionMessageActions.length && onExtensionCommand ? (
+              {!turnIsProcessing && turnMessageActions.length && onExtensionCommand ? (
                 <div className="mt-1 flex justify-end">
                   <DeclarativeActionBar
-                    contributions={extensionMessageActions}
+                    contributions={turnMessageActions}
                     context={{
                       surface: 'message',
                       threadId: activeThreadId,
@@ -614,9 +584,9 @@ export function MessageTimeline({
                   />
                 </div>
               ) : null}
-              {!turnIsProcessing && extensionResultPreviews.length ? (
+              {!turnIsProcessing && turnResultPreviews.length ? (
                 <DeclarativeResultPreviews
-                  contributions={extensionResultPreviews}
+                  contributions={turnResultPreviews}
                   sources={resultPreviewSourcesForTurn(turn)}
                   threadId={activeThreadId}
                   turnId={turn.user?.turnId}
@@ -682,8 +652,15 @@ export function MessageTimeline({
             typeof messageContextMenu.context === 'object' &&
             !Array.isArray(messageContextMenu.context) &&
             messageContextMenu.context.surface === 'attachment'
-            ? extensionAttachmentContextMenus
-            : extensionContextMenus}
+            ? messageContributionsForSurface?.(
+                messageContextMenu.context.taskSurface === 'design' ? 'design' : 'code'
+              )?.attachmentContextMenus ?? extensionAttachmentContextMenus
+            : messageContextMenu?.context && typeof messageContextMenu.context === 'object' &&
+                !Array.isArray(messageContextMenu.context)
+              ? messageContributionsForSurface?.(
+                  messageContextMenu.context.taskSurface === 'design' ? 'design' : 'code'
+                )?.contextMenus ?? extensionContextMenus
+              : extensionContextMenus}
           commands={extensionCommands}
           context={messageContextMenu?.context ?? null}
           position={messageContextMenu?.position ?? null}

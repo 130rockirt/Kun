@@ -29,6 +29,7 @@ class FakeProvider implements AgentProvider {
   cancelUserInputMock = vi.fn()
   refreshThreadsMock = vi.fn()
   closeSideMock = vi.fn()
+  forkFailure: Error | null = null
   getCapabilities() {
     return { interrupt: true, stream: true, approvals: true, attachFiles: false }
   }
@@ -55,6 +56,11 @@ class FakeProvider implements AgentProvider {
       reasoningEffort?: string
       serviceTier?: 'priority'
       attachmentIds?: string[]
+      guiDesignCanvas?: boolean
+      guiDesignMode?: boolean
+      agentSurface?: 'code' | 'write' | 'design'
+      designProfile?: import('../agent/design-task-profile').DesignTaskProfileInput
+      designDocumentTarget?: import('../agent/design-task-profile').DesignDocumentTarget
     }
   ) {
     this.sendMock(threadId, text, options)
@@ -73,9 +79,14 @@ class FakeProvider implements AgentProvider {
   async compactThread() {}
   async forkThread(
     threadId: string,
-    options?: { relation?: 'primary' | 'fork' | 'side'; title?: string }
+    options?: {
+      relation?: 'primary' | 'fork' | 'side'
+      title?: string
+      designDocumentTarget?: import('../agent/design-task-profile').DesignDocumentTarget
+    }
   ) {
     this.forkMock(threadId, options)
+    if (this.forkFailure) throw this.forkFailure
     return {
       id: `side_${threadId}`,
       title: options?.title ?? `${threadId} · side`,
@@ -88,7 +99,22 @@ class FakeProvider implements AgentProvider {
       parentThreadId: threadId,
       forkedFromThreadId: threadId,
       forkedFromTitle: 'Parent',
-      forkedAt: '2026-06-02T00:00:00.000Z'
+      forkedAt: '2026-06-02T00:00:00.000Z',
+      ...(options?.designDocumentTarget
+        ? {
+            agentSurface: 'design' as const,
+            designProfile: {
+              version: 1 as const,
+              documentTarget: options.designDocumentTarget,
+              outputMedium: 'html' as const,
+              target: 'app' as const,
+              preset: 'ios' as const,
+              presetSource: 'explicit' as const,
+              context: { tone: ['precise'] },
+              lockedAtTurnId: 'turn_lock'
+            }
+          }
+        : {})
     }
   }
   async resumeSession() {
@@ -117,7 +143,10 @@ class FakeProvider implements AgentProvider {
   }
 }
 
-function buildHarness(overrides: Partial<ChatState> = {}): Harness {
+function buildHarness(
+  overrides: Partial<ChatState> = {},
+  dependencies: Parameters<typeof createSideActions>[1] = {}
+): Harness {
   const state: ChatState = {
     route: 'chat',
     settingsReturnRoute: 'chat',
@@ -252,7 +281,7 @@ function buildHarness(overrides: Partial<ChatState> = {}): Harness {
     t: (key) => key,
     formatRuntimeError: (e) => (e instanceof Error ? e.message : String(e ?? '')),
     shouldOpenSettingsForError: () => false
-  })
+  }, dependencies)
   return { state, set, get, provider, actions }
 }
 

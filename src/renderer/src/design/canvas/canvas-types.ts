@@ -293,6 +293,10 @@ export type CanvasDocument = {
   motion?: CanvasMotionDocument
   graph?: CanvasDocumentGraphMetadata
   operationJournal?: DesignOperationJournalEntry[]
+  /** Durable renderer receipts for idempotent chat/tool replay after journal compaction. */
+  rendererReplayKeys?: string[]
+  /** Last completed Design turn fully materialized into this document. */
+  rendererReplayWatermarkTurnId?: string
   codeBindings?: DesignCodeBinding[]
 }
 

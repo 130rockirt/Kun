@@ -142,6 +142,26 @@ export type WorkspaceOfficeSelection = {
   formulas?: string[]
 }
 
+/**
+ * Transient, renderer-owned presentation viewport identity. The absolute path
+ * is retained only for local workspace/source validation and must not be sent
+ * to the model-facing composer context.
+ */
+export type WorkspacePresentationViewReference = {
+  kind: 'presentation'
+  path: string
+  sourceName: string
+  sourceFormat: Extract<OfficeDocumentPreviewFormat, 'ppt' | 'pptx'>
+  sourceSha256: string
+  slide: number
+  slideCount: number
+}
+
+export type WorkspacePresentationViewSource = Pick<
+  WorkspacePresentationViewReference,
+  'path' | 'sourceSha256'
+>
+
 export type WorkspaceOfficeSemanticTarget = WorkspaceOfficePreviewTarget
 
 export type WorkspaceOfficeSemanticSuccess = {

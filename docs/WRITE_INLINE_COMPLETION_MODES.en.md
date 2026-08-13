@@ -1,6 +1,6 @@
-# Write technical description of short completion and inspired long completion
+# Work short-completion and inspired long-completion technical description
 
-This document describes the dual-mode text completion scheme in Write writing mode. It splits the original single-path ghost text into two writing intentions: short completion in a flow state, and long completion with inspiration when you pause and think.
+This document describes Work's dual-mode completion scheme for text-writing tasks. It splits the original single-path ghost text into two writing intentions: short completion in a flow state, and long completion with inspiration when you pause and think.
 
 ## Why should we split it into two sets?
 

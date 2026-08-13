@@ -77,6 +77,7 @@ export function LaboratorySettingsSection({ ctx }: { ctx: Record<string, any> })
       <SettingsTabs<LaboratorySettingsPanel>
         baseId="laboratory-settings"
         ariaLabel={t('agentsQuickLaboratory')}
+        contentSized
         items={[
           { id: 'persona', label: t('labComposerPersonaTitle'), icon: UserRound },
           { id: 'computer', label: t('computerUseTitle'), icon: Monitor },
@@ -128,6 +129,7 @@ export function LaboratorySettingsSection({ ctx }: { ctx: Record<string, any> })
         <BrowserUseSettingsPanel
           t={t}
           value={browserUse}
+          capability={runtimeInfo?.capabilities?.browserUse}
           selectControlClass={selectControlClass}
           onChange={updateBrowserUse}
         />

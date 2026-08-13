@@ -486,7 +486,7 @@ pre {
 /*
  * The shared MessageTimeline inset is tuned for the wide main chat, where it
  * collapses to a 0.75rem minimum in a narrow side panel. Give the requirement
- * AI conversation the same breathing room as the Write assistant panel so the
+ * AI conversation the same breathing room as the Work assistant panel so the
  * messages are not squeezed against both edges.
  */
 .sdd-assistant-panel .ds-chat-column-inset {

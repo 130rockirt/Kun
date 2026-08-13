@@ -327,7 +327,7 @@ async function extractPdfText(
 export async function readWritePdfText(payload: WorkspaceFileTarget): Promise<WritePdfTextResult> {
   try {
     const targetPath = await resolveOpenTargetPath(payload.path, payload.workspaceRoot)
-    return readLocalPdfTextByPath(targetPath, 'This PDF is too large to parse in Write mode.')
+    return readLocalPdfTextByPath(targetPath, 'This PDF is too large to parse in Work.')
   } catch (error) {
     return {
       ok: false,

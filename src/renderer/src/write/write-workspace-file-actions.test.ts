@@ -72,6 +72,8 @@ function makeBaseState(): WriteWorkspaceState {
     setTabViewMode: () => undefined,
     setSplitOrientation: () => undefined,
     setSplitRatio: () => undefined,
+    setPresentationViewForGroup: () => undefined,
+    clearPresentationViewForGroup: () => undefined,
     setDocumentContent: () => undefined,
     saveDocument: async () => true,
     saveAllDocuments: async () => true,

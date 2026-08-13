@@ -168,7 +168,8 @@ export function createThreadSelectionActions(
 ): Pick<ChatState, 'selectThread' | 'loadEarlierThreadHistory' | 'subscribeThreadEventsLive'> {
   const { set, get, sseAbortRef } = context
   return {
-  selectThread: async (id) => {
+  selectThread: async (id, options) => {
+    if (options?.selectionGuard?.() === false) return
     if (get().runtimeConnection !== 'ready') {
       set({ error: i18n.t('common:runtimeActionNeedsConnection') })
       return
@@ -178,6 +179,7 @@ export function createThreadSelectionActions(
     const prevId = previousState.activeThreadId
     const prevBusy = previousState.busy
     const selectionStillCurrent = (): boolean => {
+      if (options?.selectionGuard?.() === false) return false
       if (selectionGeneration !== runtime.threadSelectionGeneration) return false
       return get().activeThreadId === id
     }
@@ -321,6 +323,7 @@ export function createThreadSelectionActions(
         relation: threadRelation,
         parentThreadId: threadParentId,
         model: threadModel,
+        designProfile: threadDesignProfile,
         goal,
         todos,
         payloadBytes,
@@ -349,9 +352,9 @@ export function createThreadSelectionActions(
         ? latestUserMessageId ?? findLatestUserBlockId(blocks)
         : null
       const threadSnap = get().threads.find((thread) => thread.id === id) ?? null
-      // Code 工作台返回记忆:记录最近一次在 chat 路由选中的 Code/需求 AI 会话,
-      // 供从设置、Write/Design 或 Connect Phone 返回时恢复。Write/Design/Claw
-      // 会话以及已归档会话不写入记忆。
+      // Code 工作台返回记忆：记录最近一次选中的 Code 或 Design 任务，
+      // 供从设置、Work 或 Connect Phone 返回时恢复。Work/Claw 会话以及
+      // 已归档会话不写入记忆。
       const remembersCodeThread = threadSnap != null &&
         threadSnap.archived !== true &&
         isCodeSidebarThread(
@@ -404,7 +407,9 @@ export function createThreadSelectionActions(
           ? {
               ...thread,
               status: thread.archived ? thread.status : (busy ? 'running' : 'idle'),
-              ...(latestTurnStatus ? { latestTurnStatus } : {})
+              ...(latestTurnId ? { latestTurnId } : {}),
+              ...(latestTurnStatus ? { latestTurnStatus } : {}),
+              ...(threadDesignProfile ? { designProfile: threadDesignProfile } : {})
             }
           : thread),
         ...(remembersCodeThread ? { lastCodeThreadId: id } : {}),

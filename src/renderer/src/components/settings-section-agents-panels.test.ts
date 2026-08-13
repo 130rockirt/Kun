@@ -171,6 +171,9 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
       'laboratory-settings-panel-explore',
       'laboratory-settings-panel-ppt'
     ])
+    expect(laboratoryTabs.every((tab) => tab.props.className.includes('min-w-max'))).toBe(true)
+    expect(laboratoryTabs.flatMap((tab) => tab.findAllByType('span'))
+      .every((label) => !label.props.className.includes('truncate'))).toBe(true)
 
     const laboratoryPanels = renderer.root
       .findAllByProps({ role: 'tabpanel' })
@@ -178,6 +181,34 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
     expect(laboratoryPanels).toHaveLength(6)
     expect(laboratoryPanels.map((panel) => panel.props.hidden))
       .toEqual([false, true, true, true, true, true])
+  })
+
+  it('passes the runtime Browser Use capability into its settings panel', () => {
+    let renderer!: ReactTestRenderer
+    act(() => {
+      renderer = createRenderer(createElement(LaboratorySettingsSection, {
+        ctx: {
+          ...baseCtx(),
+          runtimeInfo: {
+            capabilities: {
+              browserUse: {
+                status: 'interaction-required',
+                enabled: true,
+                available: false,
+                reason: 'visible GUI is required'
+              }
+            }
+          }
+        }
+      }))
+    })
+
+    const browserTab = renderer.root.findByProps({ id: 'laboratory-settings-tab-browser' })
+    act(() => browserTab.props.onClick())
+    const browserPanel = renderer.root.findByProps({ id: 'laboratory-settings-panel-browser' })
+    expect(instanceText(browserPanel)).toContain(
+      'browserUseRuntimeStatusInteractionRequired: visible GUI is required'
+    )
   })
 
   it('updates the composer persona experiment from the laboratory switch', () => {

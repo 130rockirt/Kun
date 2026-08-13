@@ -24,8 +24,8 @@ export function FloatingComposerStackView({
     onGuideQueuedMessage, onOpenGraph, onOpenGraphChild, onPickAttachments, onRemoveQueuedMessage,
     orchestration, pendingUserInputBlock, queuedMessages, reorderQueuedMessage,
     returnQueuedMessageToComposer, runtimeReady, setActiveThreadGoalStatus, setGoalFromComposerInput,
-    setGoalPanelOpen, setInput, showGoalFloater, showGraphMenuOption, showGraphProgress,
-    showTodoProgress, slashCommandMenu, slashQuery, t, userInput
+    setGoalPanelOpen, setInput, showGoalFloater, showGoalMenuOption, showGraphMenuOption,
+    showGraphProgress, showPlanMenuOption, showTodoProgress, slashCommandMenu, slashQuery, t, userInput
   } = context
   return (
     <>
@@ -182,8 +182,9 @@ export function FloatingComposerStackView({
                 <div className="my-1 h-px bg-ds-border-muted/70" />
               </>
             ) : null}
-            <button
+            {showPlanMenuOption ? <button
               type="button"
+              data-composer-plan-menu-item
               disabled={!canTogglePlanMode}
               onClick={handlePlanToolbarClick}
               className="ds-no-drag flex h-8 w-full items-center gap-2 px-3 text-left transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent disabled:hover:text-ds-muted"
@@ -205,7 +206,7 @@ export function FloatingComposerStackView({
                   } shadow-[0_1px_4px_rgba(20,47,95,0.28)]`}
                 />
               </span>
-            </button>
+            </button> : null}
             {showGraphMenuOption ? (
               <button
                 type="button"
@@ -256,7 +257,7 @@ export function FloatingComposerStackView({
                 </span>
               </button>
             ) : null}
-            <button
+            {showGoalMenuOption ? <button
               type="button"
               data-composer-goal-menu-item
               disabled={!canOpenGoalPanel}
@@ -280,7 +281,7 @@ export function FloatingComposerStackView({
                   } shadow-[0_1px_4px_rgba(20,47,95,0.28)]`}
                 />
               </span>
-            </button>
+            </button> : null}
           </div>
         ) : null}
 
@@ -299,11 +300,12 @@ export function FloatingComposerStackView({
             loading={fileMentions.loading}
             selectedIndex={fileMentions.selectedIndex}
             highlighted={fileMentions.highlighted}
-            onSelect={fileMentions.applyReference}
+            hasMountedKnowledgeBases={fileMentions.hasMountedKnowledgeBases}
+            onSelect={fileMentions.applySuggestion}
           />
         ) : null}
 
-        {goalPanelOpen && slashQuery == null && !pendingUserInputBlock ? (
+        {showGoalMenuOption && goalPanelOpen && slashQuery == null && !pendingUserInputBlock ? (
           <div
             ref={goalPanelRef}
             className="absolute inset-x-2 bottom-full z-30 mb-3 overflow-hidden rounded-[26px] border border-ds-border bg-white p-3 shadow-[0_18px_52px_rgba(20,47,95,0.14)] backdrop-blur-xl dark:bg-ds-card"

@@ -9,6 +9,13 @@ export type Turn = {
   blocks: ChatBlock[]
 }
 
+/** Resolve historical turn intent from its durable user-item projection. */
+export function turnTaskSurface(turn: Turn): 'code' | 'design' {
+  const meta = turn.user?.meta
+  if (meta?.agentSurface === 'design' || meta?.designProfile || meta?.guiDesignMode) return 'design'
+  return 'code'
+}
+
 export function isBackgroundShellNoticeBlock(block: ChatBlock): boolean {
   return block.kind === 'user' && isBackgroundShellNoticeUserMessage(block)
 }
@@ -21,11 +28,16 @@ export function isGraphRuntimeNoticeBlock(block: ChatBlock): boolean {
   return block.kind === 'user' && block.meta?.messageSource === 'graph_runtime'
 }
 
+export function isDesignContinuationBlock(block: ChatBlock): boolean {
+  return block.kind === 'user' && block.meta?.messageSource === 'design_continuation'
+}
+
 export function isBackgroundNoticeBlock(block: ChatBlock): boolean {
   return (
     isBackgroundShellNoticeBlock(block) ||
     isBackgroundSubagentNoticeBlock(block) ||
-    isGraphRuntimeNoticeBlock(block)
+    isGraphRuntimeNoticeBlock(block) ||
+    isDesignContinuationBlock(block)
   )
 }
 

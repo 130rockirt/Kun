@@ -41,6 +41,9 @@ describe('app-ipc-schemas settings', () => {
             maxLines: 30000,
             maxBytes: 1048576
           },
+          planExecution: {
+            useWorktreeByDefault: false
+          },
           subagents: {
             useExistingAgents: false,
             maxParallel: 256,
@@ -84,6 +87,7 @@ describe('app-ipc-schemas settings', () => {
     expect(payload.agents?.kun?.tokenEconomy?.historyHygiene?.maxToolResultTokens).toBe(4000)
     expect(payload.agents?.kun?.toolOutputLimits?.maxLines).toBe(30000)
     expect(payload.agents?.kun?.toolOutputLimits?.maxBytes).toBe(1048576)
+    expect(payload.agents?.kun?.planExecution?.useWorktreeByDefault).toBe(false)
     expect(payload.agents?.kun?.subagents).toEqual({
       useExistingAgents: false,
       maxParallel: 256
@@ -100,6 +104,15 @@ describe('app-ipc-schemas settings', () => {
       subagentTurnComplete: true
     })
     expect(payload.disabledSkillIds).toEqual(['test-skill-08'])
+  })
+
+  it('rejects invalid plan execution settings', () => {
+    expect(() => settingsPatchSchema.parse({
+      agents: { kun: { planExecution: { useWorktreeByDefault: 'yes' } } }
+    })).toThrow()
+    expect(() => settingsPatchSchema.parse({
+      agents: { kun: { planExecution: { unknown: true } } }
+    })).toThrow()
   })
 
   it('rejects low local service ports', () => {

@@ -53,6 +53,7 @@ import {
   MAX_COMPOSER_CONTEXT_ATTACHMENTS,
   type ComposerContextAttachment
 } from '@kun/extension-api'
+import { cloneDesignDocumentTarget, cloneDesignTaskProfile } from './design-task-profile'
 
 export function buildQuery(options: Record<string, string | number | boolean | undefined>): string {
   const params = new URLSearchParams()
@@ -70,6 +71,13 @@ export function threadFromCore(thread: CoreThreadSummaryJson): NormalizedThread 
     id: thread.id,
     title: thread.title?.trim() || thread.id.slice(0, 8),
     ...(thread.agentSurface ? { agentSurface: thread.agentSurface } : {}),
+    ...(thread.lockedTaskSurface ? { lockedTaskSurface: thread.lockedTaskSurface } : {}),
+    ...(thread.designProfile
+      ? { designProfile: cloneDesignTaskProfile(thread.designProfile) }
+      : {}),
+    ...(thread.designCloneOperation
+      ? { designCloneOperation: { ...thread.designCloneOperation } }
+      : {}),
     ...(thread.titleAuto !== undefined ? { titleAuto: thread.titleAuto } : {}),
     ...(thread.summary?.trim() ? { summary: thread.summary.trim() } : {}),
     updatedAt: thread.updatedAt,
@@ -89,6 +97,7 @@ export function threadFromCore(thread: CoreThreadSummaryJson): NormalizedThread 
     ...(thread.systemPrompt ? { systemPrompt: thread.systemPrompt } : {}),
     relation: thread.relation,
     parentThreadId: thread.parentThreadId,
+    planBuildRunId: thread.planBuildRunId,
     forkedFromThreadId: thread.forkedFromThreadId,
     forkedFromTitle: thread.forkedFromTitle,
     forkedAt: thread.forkedAt,
@@ -460,12 +469,23 @@ export function applyRuntimeDisclosureMeta(
   }
   if (item.role === 'user' && item.guiDesignCanvas === true) meta.guiDesignCanvas = true
   if (item.role === 'user' && item.guiDesignMode === true) meta.guiDesignMode = true
+  if (item.role === 'user' && item.agentSurface) meta.agentSurface = item.agentSurface
+  if (item.role === 'user' && item.designProfile) {
+    meta.designProfile = cloneDesignTaskProfile(item.designProfile)
+  }
+  if (item.role === 'user' && item.designDocumentTarget) {
+    meta.designDocumentTarget = cloneDesignDocumentTarget(item.designDocumentTarget)
+  }
+  if (item.role === 'user' && item.designImagePlacementTarget) {
+    meta.designImagePlacementTarget = { ...item.designImagePlacementTarget }
+  }
   applyClientUserMessageSourceMeta(meta, item.text ?? '')
   if (
     item.messageSource === 'background_shell' ||
     item.messageSource === 'background_subagent' ||
     item.messageSource === 'graph_runtime' ||
-    item.messageSource === 'subagent_resume'
+    item.messageSource === 'subagent_resume' ||
+    item.messageSource === 'design_continuation'
   ) {
     meta.messageSource = item.messageSource
   }

@@ -51,6 +51,7 @@ import {
   modelRequestCaptureDefaultEnabled,
   tokenEconomyConfigForOptions
 } from './runtime-factory-config.js'
+import { stageBrowserUseHostBinding } from './runtime-browser-use-binding.js'
 import {
   buildModelClientRouterInput,
   hydrateLegacyCredentialOptions,
@@ -316,6 +317,7 @@ export function createRuntimeConfigController(
 	      }),
 	      SkillRuntime.create(nextOptions.capabilities?.skills)
 	    ])
+	    const stagedBrowserUseBinding = stageBrowserUseHostBinding(request)
 	    let stagedGenerationCommitted = false
 	    try {
 	    const nextInstructionRuntime = new InstructionRuntime(
@@ -637,6 +639,7 @@ export function createRuntimeConfigController(
     agent.loopOptions = loopOptions
     agent.loop = loop
 	    stagedGenerationCommitted = true
+	    stagedBrowserUseBinding.commit()
 	    if (graphChanged) {
 	      await graphRuntime.reconfigureBackgroundServices().catch((error) => {
 	        console.warn('[kun] Graph background-service reconcile failed after config apply:', error)
@@ -669,6 +672,7 @@ export function createRuntimeConfigController(
 	        message: error instanceof Error ? error.message : String(error)
 	      }
 	    } finally {
+	      stagedBrowserUseBinding.rollback()
 	      if (!stagedGenerationCommitted) {
 	        await nextMcpProviders.close().catch(() => undefined)
 	      }

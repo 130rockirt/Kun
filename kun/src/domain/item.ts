@@ -8,6 +8,11 @@ import type { ReviewOutput, ReviewTarget } from '../contracts/review.js'
 import type { UserInputQuestion } from '../ports/user-input-gate.js'
 import type { ComposerContextAttachmentJson } from '../contracts/composer-context.js'
 import { projectToolArgumentsForPersistence } from './tool-argument-envelope.js'
+import type {
+  DesignDocumentTarget,
+  DesignImagePlacementTarget,
+  DesignTaskProfile
+} from '../contracts/design-task-profile.js'
 
 export type ItemEntity = TurnItem
 
@@ -22,6 +27,12 @@ export function makeUserItem(input: {
   composerContexts?: ComposerContextAttachmentJson[]
   fileReferences?: Array<{ path: string; relativePath: string; name: string; kind?: 'file' | 'directory' }>
   workspaceCheckpointId?: string
+  workspace?: string
+  threadAgentSurface?: 'code' | 'write' | 'design'
+  agentSurface?: 'code' | 'write' | 'design'
+  designProfile?: DesignTaskProfile
+  designDocumentTarget?: DesignDocumentTarget
+  designImagePlacementTarget?: DesignImagePlacementTarget
 }): TurnItem {
   const attachmentIds = input.attachmentIds?.filter((id) => id.trim().length > 0)
   const fileReferences = input.fileReferences
@@ -48,7 +59,15 @@ export function makeUserItem(input: {
     ...(attachmentIds?.length ? { attachmentIds } : {}),
     ...(input.composerContexts?.length ? { composerContexts: input.composerContexts } : {}),
     ...(fileReferences?.length ? { fileReferences } : {}),
-    ...(input.workspaceCheckpointId ? { workspaceCheckpointId: input.workspaceCheckpointId } : {})
+    ...(input.workspaceCheckpointId ? { workspaceCheckpointId: input.workspaceCheckpointId } : {}),
+    ...(input.workspace ? { workspace: input.workspace } : {}),
+    ...(input.threadAgentSurface ? { threadAgentSurface: input.threadAgentSurface } : {}),
+    ...(input.agentSurface ? { agentSurface: input.agentSurface } : {}),
+    ...(input.designProfile ? { designProfile: input.designProfile } : {}),
+    ...(input.designDocumentTarget ? { designDocumentTarget: input.designDocumentTarget } : {}),
+    ...(input.designImagePlacementTarget
+      ? { designImagePlacementTarget: input.designImagePlacementTarget }
+      : {})
   }
 }
 

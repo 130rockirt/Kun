@@ -80,4 +80,19 @@ describe('ThreadService knowledge-base persistence', () => {
       }]
     })).rejects.toThrow(/while the thread is running/i)
   })
+
+  it('rejects workspace rebinding while a thread is running', async () => {
+    const harness = createHarness()
+    const thread = await harness.service.create({
+      workspace: codeRoot,
+      title: 'Running worktree task',
+      model: 'test',
+      mode: 'agent'
+    })
+    await harness.threadStore.upsert({ ...thread, status: 'running' })
+
+    await expect(harness.service.update(thread.id, {
+      workspace: resolve('fixtures/integrated-workspace')
+    })).rejects.toThrow(/while the thread is running/i)
+  })
 })

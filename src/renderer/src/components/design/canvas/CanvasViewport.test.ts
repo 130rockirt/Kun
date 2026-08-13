@@ -295,6 +295,16 @@ describe('CanvasViewport surface behavior', () => {
     expect(merged.objects[merged.rootId]?.children).toEqual([persisted.id, screen.id])
   })
 
+  it('keeps durable replay receipts when the initial disk load resolves late', () => {
+    const initial = createEmptyDocument()
+    const loaded = { ...createEmptyDocument(), rendererReplayKeys: ['persisted-receipt'] }
+    const live = { ...createEmptyDocument(), rendererReplayKeys: ['live-receipt'] }
+
+    const merged = mergeLoadedCanvasDocumentWithLiveChanges(loaded, live, initial)
+
+    expect(merged.rendererReplayKeys).toEqual(['persisted-receipt', 'live-receipt'])
+  })
+
   it('keeps a live html-frame upgrade over a stale loaded plain frame with the same id', () => {
     const initial = createEmptyDocument()
     const loaded = createEmptyDocument()

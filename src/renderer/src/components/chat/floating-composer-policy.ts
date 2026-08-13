@@ -10,6 +10,10 @@ import type { QueuedComposerMessage } from './FloatingComposerQueuedMessages'
 import type { ComposerExecutionSettings } from './FloatingComposerExecutionPicker'
 import type { ComposerReasoningEffort } from './FloatingComposerModelPicker'
 import type { PendingUserInputBlock, ResolveUserInput } from './use-composer-user-input'
+import type {
+  ComposerTaskSurface,
+  DesignTaskComposerProfile
+} from './FloatingComposerTaskProfile'
 
 export function shouldShowVoiceDictation(
   speechToText: KunSpeechToTextSettingsV1 | null | undefined,
@@ -60,6 +64,12 @@ export function shouldShowUsageHistory({
 }): boolean {
   return !compact && route === 'chat' && runtimeReady
 }
+
+export function codeExecutionControlsAvailable(
+  taskSurface: ComposerTaskSurface | undefined
+): boolean {
+  return taskSurface !== 'design'
+}
 export type { DesignComposerContext } from '../../design/design-composer-context'
 
 export type FloatingComposerProps = {
@@ -75,6 +85,19 @@ export type FloatingComposerProps = {
   setInput: (v: string) => void
   mode: 'plan' | 'agent'
   setMode: (m: 'plan' | 'agent') => void
+  /** Next-turn intent. Undefined hides the control on compact/non-Code surfaces. */
+  taskSurface?: ComposerTaskSurface
+  taskSurfaceLocked?: boolean
+  /** Gives an empty conversation a larger composer and moves its intent selector into the hero. */
+  emptyTaskLayout?: boolean
+  designTaskProfile?: DesignTaskComposerProfile
+  designProfileLocked?: boolean
+  imageGenerationEnabled?: boolean
+  imageGenerationAvailable?: boolean
+  imageGenerationReason?: string
+  onTaskSurfaceChange?: (surface: ComposerTaskSurface) => void
+  onDesignTaskProfileChange?: (patch: Partial<DesignTaskComposerProfile>) => void
+  onConfigureImageGeneration?: () => void
   orchestration?: 'direct' | 'graph'
   graphEnabled?: boolean
   onOrchestrationChange?: (mode: 'direct' | 'graph') => void
@@ -87,6 +110,8 @@ export type FloatingComposerProps = {
   ) => void
   /** Hard-disable editing and submission for an external destructive operation. */
   disabled?: boolean
+  /** Visible explanation when an external lifecycle makes the composer read-only. */
+  disabledReason?: string
   busy: boolean
   currentTurnOrchestration?: 'direct' | 'graph' | null
   runtimeReady: boolean
@@ -150,6 +175,8 @@ export type FloatingComposerProps = {
   onInterrupt: (options?: { discard?: boolean }) => void
   onPlanCommand?: () => void
   onNewCommand?: () => void
+  /** Starts a new structured requirement from the empty Code home. */
+  onNewRequirement?: () => void
   /** Worktree parallel mode toggle (single-use per new conversation). */
   useWorktreePool?: boolean
   worktreeBranch?: string

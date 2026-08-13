@@ -227,10 +227,10 @@ describe('createChildAgentExecutor', () => {
         attachmentIds: [],
         composerContexts: [],
         fileReferences: [],
-        agentSurface: 'design'
+        agentSurface: 'write'
       },
       controlPrompt: 'HOST PPT CONTROL: revise previews',
-      agentSurface: 'design',
+      agentSurface: 'write',
       security: {
         sandboxRoot: '/tmp/workspace',
         instructionsEnabled: false,
@@ -241,7 +241,7 @@ describe('createChildAgentExecutor', () => {
 
     const childThread = await threadStore.get('child_history')
     expect(childThread?.turns).toHaveLength(2)
-    expect(childThread?.turns.map((turn) => turn.agentSurface)).toEqual(['write', 'design'])
+    expect(childThread?.turns.map((turn) => turn.agentSurface)).toEqual(['write', 'write'])
     const userMessages = childThread?.turns.flatMap((turn) =>
       turn.items.filter((item) => item.kind === 'user_message')) ?? []
     expect(userMessages.map((item) => item.text)).toEqual([initialPrompt, continuedPrompt])

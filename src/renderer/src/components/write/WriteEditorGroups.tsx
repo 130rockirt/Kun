@@ -33,11 +33,10 @@ type Props = {
   editorPaneRef: RefObject<HTMLDivElement | null>
   focusedToolbar: ReactElement
   onboardingDecision: string
-  onAskAssistant: () => void
+  onAskAssistant: (prompt: string) => void
   onCreateDraft: () => void
   onPickWorkspace: () => void
 }
-
 export function WriteEditorGroups({
   workspaceName,
   workspacePathLabel,
@@ -78,6 +77,8 @@ export function WriteEditorGroups({
     setDocumentContent,
     saveDocument,
     setSelection,
+    setPresentationViewForGroup,
+    clearPresentationViewForGroup,
     recordRecentEdits,
     refreshWorkspace,
     setFileError,
@@ -103,6 +104,8 @@ export function WriteEditorGroups({
     setDocumentContent: state.setDocumentContent,
     saveDocument: state.saveDocument,
     setSelection: state.setSelection,
+    setPresentationViewForGroup: state.setPresentationViewForGroup,
+    clearPresentationViewForGroup: state.clearPresentationViewForGroup,
     recordRecentEdits: state.recordRecentEdits,
     refreshWorkspace: state.refreshWorkspace,
     setFileError: state.setFileError,
@@ -168,7 +171,7 @@ export function WriteEditorGroups({
   return (
     <div
       ref={hostRef}
-      className="write-editor-groups relative flex h-full min-h-0 min-w-0 overflow-hidden rounded-[18px]"
+      className="write-editor-groups relative flex h-full min-h-0 min-w-0 overflow-hidden"
       data-orientation={splitActive ? editorLayout.orientation : 'single'}
     >
       {editorLayout.groups.map((group, index) => {
@@ -213,7 +216,7 @@ export function WriteEditorGroups({
               }
               onToggleAssistant={() => setAssistantOpen(!assistantOpen)}
             />
-            {focused ? focusedToolbar : null}
+            {focused && document?.kind !== 'image' ? focusedToolbar : null}
             <WriteEditorGroupContent
               document={document}
               requestedPath={path}
@@ -244,6 +247,10 @@ export function WriteEditorGroups({
               onSelectionChange={(selection) => {
                 if (!focused) focusEditorGroup(group.id)
                 setSelection(selection)
+              }}
+              onPresentationViewChange={(view, source) => {
+                if (view) setPresentationViewForGroup(group.id, view)
+                else clearPresentationViewForGroup(group.id, source)
               }}
               onSaveShortcut={() => {
                 if (path) void saveDocument(workspaceRoot, path, { resolveExternalConflict: 'keep-local' })

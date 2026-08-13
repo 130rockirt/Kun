@@ -369,7 +369,7 @@ describe('chat-store navigation workspace selection', () => {
     expect(harness.state.lastCodeThreadId).toBeNull()
   })
 
-  it('openDesign does not keep a code thread active in Design mode', () => {
+  it('openDesign keeps the Code timeline and routes into its shared workbench', () => {
     const harness = buildHarness()
     harness.state.activeThreadId = 'thr_code'
     harness.state.route = 'chat'
@@ -388,11 +388,11 @@ describe('chat-store navigation workspace selection', () => {
 
     harness.actions.openDesign()
 
-    expect(harness.state.route).toBe('design')
-    expect(harness.state.activeThreadId).toBeNull()
-    expect(harness.state.blocks).toEqual([])
-    expect(harness.state.busy).toBe(false)
-    expect(harness.state.watchTurnCompletion).toEqual({ thr_code: true })
+    expect(harness.state.route).toBe('chat')
+    expect(harness.state.activeThreadId).toBe('thr_code')
+    expect(harness.state.blocks).toHaveLength(2)
+    expect(harness.state.busy).toBe(true)
+    expect(harness.state.watchTurnCompletion).toEqual({})
     expect(harness.selectThread).not.toHaveBeenCalled()
   })
 

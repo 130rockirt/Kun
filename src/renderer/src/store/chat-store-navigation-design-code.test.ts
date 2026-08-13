@@ -232,7 +232,7 @@ describe('chat-store navigation workspace selection', () => {
       systemPrompt: 'Design with Codex.'
     }))
     expect(harness.state.activeThreadId).toBe('thr_design_new')
-    expect(harness.state.route).toBe('design')
+    expect(harness.state.route).toBe('chat')
     expect(harness.state.blocks).toEqual([])
     expect(harness.state.busy).toBe(false)
     expect(harness.selectThread).not.toHaveBeenCalled()
@@ -242,7 +242,7 @@ describe('chat-store navigation workspace selection', () => {
     ]?.activeThreadId).toBe('thr_design_new')
   })
 
-  it('openCode does not keep a registered design thread active in Code mode', async () => {
+  it('openCode leaves a registered legacy Design deep link for the latest Code task', async () => {
     const storage = new MemoryStorage()
     saveDesignThreadRegistry(
       markDesignThread(
@@ -275,10 +275,12 @@ describe('chat-store navigation workspace selection', () => {
     await harness.actions.openCode()
 
     expect(harness.state.route).toBe('chat')
-    expect(harness.selectThread).toHaveBeenCalledWith('thr_code')
+    expect(harness.selectThread).toHaveBeenCalledWith('thr_code', {
+      selectionGuard: expect.any(Function)
+    })
   })
 
-  it('openCode does not keep a durably classified Design thread active without a registry', async () => {
+  it('openCode leaves a standalone Design deep link for the latest Code task', async () => {
     const harness = buildHarness()
     harness.state.activeThreadId = 'thr_design_durable'
     harness.state.workspaceRoot = '/Users/zxy/project'
@@ -302,10 +304,12 @@ describe('chat-store navigation workspace selection', () => {
     await harness.actions.openCode()
 
     expect(harness.state.route).toBe('chat')
-    expect(harness.selectThread).toHaveBeenCalledWith('thr_code')
+    expect(harness.selectThread).toHaveBeenCalledWith('thr_code', {
+      selectionGuard: expect.any(Function)
+    })
   })
 
-  it('openCode does not keep a legacy design assistant thread active in Code mode', async () => {
+  it('openCode leaves a legacy design assistant deep link for a Code task', async () => {
     const storage = new MemoryStorage()
     storage.setItem(
       'kun.design-assistant.threadRegistry.v1',
@@ -333,7 +337,9 @@ describe('chat-store navigation workspace selection', () => {
     await harness.actions.openCode()
 
     expect(harness.state.route).toBe('chat')
-    expect(harness.selectThread).toHaveBeenCalledWith('thr_code')
+    expect(harness.selectThread).toHaveBeenCalledWith('thr_code', {
+      selectionGuard: expect.any(Function)
+    })
   })
 
   it('openCode clears an internal design workspace thread when no Code thread is available', async () => {
@@ -383,7 +389,9 @@ describe('chat-store navigation workspace selection', () => {
     await harness.actions.openCode()
 
     expect(harness.state.route).toBe('chat')
-    expect(harness.selectThread).toHaveBeenCalledWith('thr_older')
+    expect(harness.selectThread).toHaveBeenCalledWith('thr_older', {
+      selectionGuard: expect.any(Function)
+    })
   })
 
   it('openCode restores a requirement AI session as the Code return target', async () => {
@@ -415,7 +423,9 @@ describe('chat-store navigation workspace selection', () => {
     await harness.actions.openCode()
 
     expect(harness.state.route).toBe('chat')
-    expect(harness.selectThread).toHaveBeenCalledWith('thr_sdd')
+    expect(harness.selectThread).toHaveBeenCalledWith('thr_sdd', {
+      selectionGuard: expect.any(Function)
+    })
   })
 
   it('openCode falls back to the newest Code thread when the remembered one is archived', async () => {
@@ -441,7 +451,9 @@ describe('chat-store navigation workspace selection', () => {
     await harness.actions.openCode()
 
     expect(harness.state.route).toBe('chat')
-    expect(harness.selectThread).toHaveBeenCalledWith('thr_newer')
+    expect(harness.selectThread).toHaveBeenCalledWith('thr_newer', {
+      selectionGuard: expect.any(Function)
+    })
   })
 
   it('openCode falls back to a Code thread when the remembered thread no longer exists', async () => {
@@ -459,7 +471,9 @@ describe('chat-store navigation workspace selection', () => {
     await harness.actions.openCode()
 
     expect(harness.state.route).toBe('chat')
-    expect(harness.selectThread).toHaveBeenCalledWith('thr_only')
+    expect(harness.selectThread).toHaveBeenCalledWith('thr_only', {
+      selectionGuard: expect.any(Function)
+    })
   })
 
 })

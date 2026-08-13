@@ -426,6 +426,7 @@ export function PlanPanel({
             disabled={!canUseAgent}
             graphEnabled={graphEnabled}
             variant="panel"
+            planId={activePlan!.id}
             onBuild={onBuildPlan}
           />
         </div>

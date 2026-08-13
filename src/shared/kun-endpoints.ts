@@ -313,6 +313,11 @@ export function kunSessionResumePath(sessionId: string): string {
   return `/v1/sessions/${encodeURIComponent(sessionId)}/resume-thread`
 }
 
+export const KUN_SESSION_RESUME_METADATA_TEMPLATE = '/v1/sessions/{id}/resume-metadata'
+export function kunSessionResumeMetadataPath(sessionId: string): string {
+  return `/v1/sessions/${encodeURIComponent(sessionId)}/resume-metadata`
+}
+
 export const KUN_USAGE_PATH = '/v1/usage'
 export const KUN_USAGE_TEMPLATE = '/v1/usage'
 

@@ -90,6 +90,12 @@ import { rendererRuntimeClient } from './runtime-client'
 import type { ComposerContextAttachment } from '@kun/extension-api'
 import { KunRuntimeThreadServices } from './kun-runtime-thread-services'
 import { readRuntimeError, readRuntimeJson } from './kun-runtime-services'
+import type {
+  DesignDocumentTarget,
+  DesignImagePlacementTarget,
+  DesignTaskProfile,
+  DesignTaskProfileInput
+} from './design-task-profile'
 
 function normalizeApprovalPolicy(value: string | undefined): NormalizedThread['approvalPolicy'] {
   switch (value) {
@@ -198,7 +204,8 @@ export class KunRuntimeProvider extends KunRuntimeThreadServices implements Agen
       limit: options.limit,
       search: options.search,
       include_archived: options.includeArchived,
-      archived_only: options.archivedOnly
+      archived_only: options.archivedOnly,
+      include: options.includeSide ? 'side' : undefined
     })
     const response = await rendererRuntimeClient.runtimeRequest(`/v1/threads${query}`, 'GET')
     if (!response.ok) {
@@ -297,6 +304,7 @@ export class KunRuntimeProvider extends KunRuntimeThreadServices implements Agen
     payloadBytes?: number
     historyCursor?: string
     hasMoreHistory?: boolean
+    designProfile?: DesignTaskProfile
   }> {
     let response = await rendererRuntimeClient.runtimeRequest(
       kunThreadTimelinePath(threadId, {
@@ -335,6 +343,8 @@ export class KunRuntimeProvider extends KunRuntimeThreadServices implements Agen
         instructionInjectionBytes: turn.instructionInjectionBytes,
         guiDesignCanvas: turn.guiDesignCanvas,
         guiDesignMode: turn.guiDesignMode,
+        designProfile: item.designProfile ?? turn.designProfile,
+        designDocumentTarget: item.designDocumentTarget ?? turn.designDocumentTarget,
         workspaceCheckpointId: item.workspaceCheckpointId ?? turn.workspaceCheckpointId
       }))
     )
@@ -391,7 +401,8 @@ export class KunRuntimeProvider extends KunRuntimeThreadServices implements Agen
       todos: thread.todos ? todosFromCore(thread.todos) : null,
       payloadBytes: response.body.length,
       ...(thread.timeline?.nextCursor ? { historyCursor: thread.timeline.nextCursor } : {}),
-      hasMoreHistory: thread.timeline?.hasMore === true
+      hasMoreHistory: thread.timeline?.hasMore === true,
+      ...(thread.designProfile ? { designProfile: thread.designProfile } : {})
     }
   }
 
@@ -438,6 +449,7 @@ export class KunRuntimeProvider extends KunRuntimeThreadServices implements Agen
       reasoningEffort?: string
       serviceTier?: 'priority'
       subagentResume?: { childId: string; expectedResumeCount: number }
+      messageSource?: 'design_continuation'
       displayText?: string
       guiPlan?: {
         operation: 'draft' | 'refine'
@@ -451,6 +463,9 @@ export class KunRuntimeProvider extends KunRuntimeThreadServices implements Agen
       guiDesignMode?: boolean
       persona?: string
       agentSurface?: 'code' | 'write' | 'design'
+      designProfile?: DesignTaskProfileInput
+      designDocumentTarget?: DesignDocumentTarget
+      designImagePlacementTarget?: DesignImagePlacementTarget
       guiDesignArtifact?: {
         kind: 'svg'
         artifactId: string
@@ -462,7 +477,15 @@ export class KunRuntimeProvider extends KunRuntimeThreadServices implements Agen
       fileReferences?: Array<{ path: string; relativePath: string; name: string; kind?: 'file' | 'directory' }>
       composerContexts?: ComposerContextAttachment[]
     }
-  ): Promise<{ turnId: string; threadId: string; userMessageItemId?: string }> {
+  ): Promise<{
+    turnId: string
+    threadId: string
+    userMessageItemId?: string
+    agentSurface?: 'code' | 'write' | 'design'
+    threadAgentSurface?: 'code' | 'write' | 'design'
+    designProfile?: DesignTaskProfile
+    designDocumentTarget?: DesignDocumentTarget
+  }> {
     const settings = await rendererRuntimeClient.getSettings()
     const runtime = getKunRuntimeSettings(settings)
     const mode = options?.mode
@@ -489,6 +512,8 @@ export class KunRuntimeProvider extends KunRuntimeThreadServices implements Agen
     if (options?.subagentResume) {
       body.subagentResume = options.subagentResume
       body.messageSource = 'subagent_resume'
+    } else if (options?.messageSource === 'design_continuation') {
+      body.messageSource = options.messageSource
     }
     if (options?.reasoningEffort?.trim()) {
       body.reasoningEffort = options.reasoningEffort.trim()
@@ -524,6 +549,15 @@ export class KunRuntimeProvider extends KunRuntimeThreadServices implements Agen
     if (options?.agentSurface) {
       body.agentSurface = options.agentSurface
     }
+    if (options?.designProfile) {
+      body.designProfile = options.designProfile
+    }
+    if (options?.designDocumentTarget) {
+      body.designDocumentTarget = options.designDocumentTarget
+    }
+    if (options?.designImagePlacementTarget) {
+      body.designImagePlacementTarget = options.designImagePlacementTarget
+    }
     if (options?.guiDesignArtifact) {
       body.guiDesignArtifact = options.guiDesignArtifact
     }
@@ -557,7 +591,15 @@ export class KunRuntimeProvider extends KunRuntimeThreadServices implements Agen
     return {
       threadId: parsed.threadId,
       turnId: parsed.turnId,
-      userMessageItemId: parsed.userMessageItemId
+      userMessageItemId: parsed.userMessageItemId,
+      ...(parsed.agentSurface ? { agentSurface: parsed.agentSurface } : {}),
+      ...(parsed.threadAgentSurface
+        ? { threadAgentSurface: parsed.threadAgentSurface }
+        : {}),
+      ...(parsed.designProfile ? { designProfile: parsed.designProfile } : {}),
+      ...(parsed.designDocumentTarget
+        ? { designDocumentTarget: parsed.designDocumentTarget }
+        : {})
     }
   }
 

@@ -204,6 +204,52 @@ describe('FloatingComposer workspace controls visibility', () => {
     expect(html.slice(controlsIndex, composerIndex)).toContain('ds-git-branch-picker')
     expect(composerIndex).toBeGreaterThan(controlsIndex)
   })
+
+  it('places the text-only new requirement action after the branch in empty Code mode', () => {
+    useChatStore.setState({
+      activeThreadId: null,
+      activeThreadGoal: null,
+      activeThreadTodos: null,
+      blocks: [],
+      route: 'chat',
+      workspaceRoot: '/Users/test/code/acme-project',
+      threads: []
+    })
+
+    const renderComposer = (taskSurface: 'code' | 'design'): string =>
+      renderToStaticMarkup(createElement(FloatingComposer, {
+        input: '',
+        setInput: () => undefined,
+        mode: 'agent',
+        setMode: () => undefined,
+        taskSurface,
+        emptyTaskLayout: true,
+        busy: false,
+        runtimeReady: true,
+        hasActiveThread: false,
+        composerModel: 'test-model',
+        composerPickList: ['test-model'],
+        onComposerModelChange: () => undefined,
+        queuedMessages: [],
+        onRemoveQueuedMessage: () => undefined,
+        onSend: () => undefined,
+        onInterrupt: () => undefined,
+        onNewRequirement: () => undefined
+      }))
+
+    const codeHtml = renderComposer('code')
+    const controls = codeHtml.slice(
+      codeHtml.indexOf('data-composer-workspace-controls'),
+      codeHtml.indexOf('ds-composer-shell')
+    )
+    expect(controls).toContain('data-composer-new-requirement')
+    expect(controls).toContain('New requirement')
+    expect(controls.indexOf('ds-composer-new-requirement'))
+      .toBeGreaterThan(controls.indexOf('ds-git-branch-picker'))
+    expect(controls).not.toMatch(/ds-composer-new-requirement[^>]*><svg/)
+
+    expect(renderComposer('design')).not.toContain('data-composer-new-requirement')
+  })
 })
 
 describe('FloatingComposer Graph entry', () => {

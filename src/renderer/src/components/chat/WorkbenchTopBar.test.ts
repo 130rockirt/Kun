@@ -68,6 +68,24 @@ describe('WorkbenchTopActions', () => {
     expect(restartAllKunProcesses).toHaveBeenCalledOnce()
     act(() => renderer.unmount())
   })
+
+  it('keeps the running badge left of the right-aligned top actions', async () => {
+    const nodeFs = 'node:fs/promises'
+    const { readFile } = await import(/* @vite-ignore */ nodeFs)
+    const [stageSource, shellCss] = await Promise.all([
+      readFile(new URL('../workbench/WorkbenchChatStage.tsx', import.meta.url), 'utf8'),
+      readFile(new URL('../../styles/base-shell/session-sidebar-shell.css', import.meta.url), 'utf8')
+    ])
+    const actionsStart = stageSource.indexOf('<div className="chat-topbar-actions')
+    const actionsEnd = stageSource.indexOf('</div>', actionsStart)
+    const actionsSource = stageSource.slice(actionsStart, actionsEnd)
+    const topActionsCss = shellCss.match(/\.ds-workbench-top-actions\s*\{([^}]*)\}/)?.[1] ?? ''
+
+    expect(actionsSource.indexOf("{t('running')}")).toBeLessThan(
+      actionsSource.indexOf('<WorkbenchTopActions')
+    )
+    expect(topActionsCss).not.toContain('margin-right')
+  })
 })
 
 describe('WorkbenchSideRail', () => {

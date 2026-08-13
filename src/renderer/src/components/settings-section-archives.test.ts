@@ -3,7 +3,11 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type { NormalizedThread } from '../agent/types'
 import { SettingsSidebar } from './SettingsSidebar'
-import { ArchivedThreadsSettingsSection, filterArchivedThreads } from './settings-section-archives'
+import {
+  ArchivedThreadsSettingsSection,
+  archivedThreadDisplayTitle,
+  filterArchivedThreads
+} from './settings-section-archives'
 
 function thread(overrides: Partial<NormalizedThread> & Pick<NormalizedThread, 'id'>): NormalizedThread {
   return {
@@ -28,7 +32,7 @@ const labels: Record<string, string> = {
   settingsGroupSystem: 'System',
   general: 'General',
   providers: 'Providers',
-  write: 'Write',
+  write: 'Work',
   agents: 'AI assistant',
   subagents: 'Subagents',
   archives: 'Archived chats',
@@ -57,6 +61,18 @@ function t(key: string, options?: Record<string, unknown>): string {
 }
 
 describe('ArchivedThreadsSettingsSection', () => {
+  it('maps the stable Write Assistant title to the Work product label', () => {
+    const archivedWriteThread = {
+      ...thread({ id: 'write-thread', archived: true }),
+      agentSurface: 'write',
+      title: 'Write Assistant'
+    } satisfies NormalizedThread
+
+    expect(archivedThreadDisplayTitle(archivedWriteThread, 'Work assistant')).toBe('Work assistant')
+    expect(filterArchivedThreads([archivedWriteThread], 'Work assistant', 'Work assistant'))
+      .toEqual([archivedWriteThread])
+  })
+
   it('filters archived threads by title, preview, workspace, and model', () => {
     const archived = thread({
       id: 'archived',

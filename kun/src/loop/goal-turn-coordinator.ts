@@ -219,6 +219,14 @@ export class GoalTurnCoordinator {
           prompt: GOAL_RESUME_PROMPT,
           mode: 'agent',
           ...(lastTurn ? { clientSurface: resolveTurnClientSurface(lastTurn) } : {}),
+          ...(lastTurn?.agentSurface ? { agentSurface: lastTurn.agentSurface } : {}),
+          ...(lastTurn?.agentSurface === 'design'
+            ? {
+                messageSource: 'design_continuation' as const,
+                ...(lastTurn.guiDesignCanvas ? { guiDesignCanvas: true } : {}),
+                ...(lastTurn.guiDesignMode ? { guiDesignMode: true } : {})
+              }
+            : {}),
           ...(lastTurn?.disableUserInput ? { disableUserInput: true } : {})
         }
       })

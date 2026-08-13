@@ -116,7 +116,7 @@ describe('FloatingComposerFooterView', () => {
   it('defines the planned container-query reductions without wrapping the footer', async () => {
     const css = await readStylesheetBundle(new URL('../../styles/base-shell.css', import.meta.url))
 
-    expect(css).toMatch(/\.ds-composer-footer\s*\{[^}]*height:\s*3\.25rem[^}]*overflow:\s*hidden/s)
+    expect(css).toMatch(/\.ds-composer-footer\s*\{[^}]*height:\s*2\.5rem[^}]*border-top:\s*0/s)
     expect(css).toMatch(/@container \(max-width: 760px\)[\s\S]*?\.ds-composer-footer-hint/s)
     expect(css).toMatch(/@container \(max-width: 640px\)[\s\S]*?\.ds-composer-usage-label/s)
     expect(css).toMatch(/@container \(max-width: 560px\)[\s\S]*?\.ds-composer-usage-ttft/s)
