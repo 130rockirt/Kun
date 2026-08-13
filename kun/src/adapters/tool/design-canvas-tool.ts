@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import {
   DESIGN_UPDATE_SHAPES_MAX_OPS,
+  designCanvasReceiptKey,
   designShapeMutationBudgetError,
   designToolError,
   designToolOutput,
@@ -188,7 +189,7 @@ export function createDesignCanvasTool(): LocalTool {
       required: ['action'],
       additionalProperties: true
     },
-    execute: async (args) => {
+    execute: async (args, context) => {
       const normalized = normalizeDesignCanvasArgs(args)
       if (!normalized.ok) {
         return {
@@ -203,14 +204,28 @@ export function createDesignCanvasTool(): LocalTool {
         const budgetError = designShapeMutationBudgetError(args, normalized.ops)
         if (budgetError) return designToolError(budgetError)
       }
-      return {
-        output: {
-          ok: true,
-          action: normalized.action,
-          ops: normalized.ops,
-          message: normalized.message
+      // Renderer-executed mutations return an `accepted` placeholder with a
+      // receipt key instead of claiming verified success. `create_board` is
+      // renderer-free and stays synchronous.
+      if (normalized.ops.length === 0) {
+        return {
+          output: {
+            ok: true,
+            action: normalized.action,
+            ops: normalized.ops,
+            message: normalized.message
+          }
         }
       }
+      return designToolOutput(DESIGN_CANVAS_TOOL_NAME, normalized.action, normalized.ops, {
+        status: 'accepted',
+        receiptKey: designCanvasReceiptKey(
+          context?.threadId,
+          context?.turnId,
+          context?.activeToolCallId,
+          normalized.ops
+        )
+      })
     }
   })
 }
@@ -269,13 +284,21 @@ export function createDesignCreateScreenTool(): LocalTool {
       },
       additionalProperties: false
     },
-    execute: async (args) => {
+    execute: async (args, context) => {
       const screens = normalizeScreenSpecs(args)
       if (!screens.ok) return designToolError(screens.error)
       const ops = screens.specs.length === 1
         ? [{ op: 'add-screen', ...screens.specs[0] }]
         : [{ op: 'add-screens', specs: screens.specs }]
-      return designToolOutput(DESIGN_CREATE_SCREEN_TOOL_NAME, 'create_screen', ops)
+      return designToolOutput(DESIGN_CREATE_SCREEN_TOOL_NAME, 'create_screen', ops, {
+        status: 'accepted',
+        receiptKey: designCanvasReceiptKey(
+          context?.threadId,
+          context?.turnId,
+          context?.activeToolCallId,
+          ops
+        )
+      })
     }
   })
 }
@@ -313,12 +336,20 @@ export function createDesignUpdateShapesTool(): LocalTool {
       },
       additionalProperties: true
     },
-    execute: async (args) => {
+    execute: async (args, context) => {
       const ops = normalizeDesignUpdateShapeOps(args)
       if (!ops) return designToolError('design_update_shapes requires ops as an object or array')
       const budgetError = designShapeMutationBudgetError(args, ops)
       if (budgetError) return designToolError(budgetError)
-      return designToolOutput(DESIGN_UPDATE_SHAPES_TOOL_NAME, 'update_shapes', ops)
+      return designToolOutput(DESIGN_UPDATE_SHAPES_TOOL_NAME, 'update_shapes', ops, {
+        status: 'accepted',
+        receiptKey: designCanvasReceiptKey(
+          context?.threadId,
+          context?.turnId,
+          context?.activeToolCallId,
+          ops
+        )
+      })
     }
   })
 }

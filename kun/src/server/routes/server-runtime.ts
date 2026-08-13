@@ -11,6 +11,7 @@ import type { UserInputGate } from '../../ports/user-input-gate.js'
 import type { WorkspaceInspector } from '../../ports/workspace-inspector.js'
 import type { ToolHost, ToolProviderPolicy } from '../../ports/tool-host.js'
 import type { RuntimeEventRecorder } from '../../services/runtime-event-recorder.js'
+import type { CanvasReceiptRegistry } from '../../services/canvas-receipt-registry.js'
 import type { LlmDebugRecorder } from '../../services/llm-debug-recorder.js'
 import type { RuntimeInfoResponse } from '../../contracts/runtime-info.js'
 import type {
@@ -175,6 +176,8 @@ export type ServerRuntime = {
   eventStreamRegistry?: ThreadEventStreamRegistry
   /** Optional troubleshooting buffer of the most recent LLM rounds (in-memory). */
   llmDebug?: LlmDebugRecorder
+  /** Two-phase design canvas tool receipts (renderer application confirmation). */
+  canvasReceipts?: CanvasReceiptRegistry
   /**
    * Cheap non-sensitive live counters for stall/heartbeat diagnostics.
    * Must never touch the filesystem or await persistence.

@@ -84,6 +84,7 @@ export const RuntimeEventKind = z.enum([
   'context_snapshot',
   'usage',
   'error',
+  'canvas_receipt',
   'heartbeat'
 ])
 export type RuntimeEventKind = z.infer<typeof RuntimeEventKind>
@@ -523,6 +524,16 @@ export const HeartbeatEvent = RuntimeEventBase.extend({
 })
 export type HeartbeatEvent = z.infer<typeof HeartbeatEvent>
 
+export const CanvasReceiptEvent = RuntimeEventBase.extend({
+  kind: z.literal('canvas_receipt'),
+  itemId: z.string().min(1),
+  receiptKey: z.string().min(1),
+  status: z.enum(['applied', 'failed']),
+  errorCount: z.number().int().min(0).optional(),
+  affectedCount: z.number().int().min(0).optional()
+})
+export type CanvasReceiptEvent = z.infer<typeof CanvasReceiptEvent>
+
 export const RuntimeEvent = z.discriminatedUnion('kind', [
   ItemEvent,
   ThreadLifecycleEvent,
@@ -550,6 +561,7 @@ export const RuntimeEvent = z.discriminatedUnion('kind', [
   ContextSnapshotEvent,
   UsageEvent,
   ErrorEvent,
+  CanvasReceiptEvent,
   HeartbeatEvent
 ])
 export type RuntimeEvent = z.infer<typeof RuntimeEvent>

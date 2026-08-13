@@ -188,7 +188,8 @@ export abstract class AgentLoopBase {
       suppressToolCalls: (input, reason) => this.toolCallDispatcher.suppressAll(input, reason),
       rememberFailure: (turnId, failure) => this.rememberTurnFailure(turnId, failure),
       hasTurnMadeProgress: (turnId) => this.goalTurns.hasMadeProgress(turnId),
-      suppressGoalResume: (turnId) => this.goalTurns.suppressResume(turnId)
+      suppressGoalResume: (turnId) => this.goalTurns.suppressResume(turnId),
+      ...(opts.receipts ? { receipts: opts.receipts } : {})
     })
     this.turnContextResolver = new TurnContextResolver({
       toolHost: opts.toolHost,

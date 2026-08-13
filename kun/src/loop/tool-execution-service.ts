@@ -9,6 +9,10 @@ import {
   TOOL_CANCELLED_BY_USER_CODE,
   ToolCancellationRegistry
 } from './tool-cancellation-registry.js'
+import {
+  isPendingReceiptOutput,
+  type CanvasReceiptRegistry
+} from '../services/canvas-receipt-registry.js'
 import { prepareBrowserUseToolResultForPersistence } from './tool-result-image.js'
 
 export type PlanWrittenCallback = (input: {
@@ -31,6 +35,8 @@ export type ToolExecutionServiceDeps = {
     checkpointRequestId: string,
     signal: AbortSignal
   ) => Promise<string | null>
+  /** Design-tool renderer receipt registry; finalizes accepted results. */
+  receipts?: CanvasReceiptRegistry
 }
 
 export type ToolExecutionInput = {
@@ -155,8 +161,33 @@ export class ToolExecutionService {
       threadId,
       prepareBrowserUseToolResultForPersistence(result.item)
     )
+    await this.registerPendingDesignReceipt(threadId, turnId, call, result)
     await this.afterResultPersisted(threadId, turnId, call, result)
     await this.deps.turns.compactItemHistory(threadId)
+  }
+
+  /**
+   * When a design tool returns an `accepted` placeholder with a receiptKey,
+   * register it so the loop can finalize the result once the renderer applies
+   * the operations (or time out to an explicit `unverified` state).
+   */
+  private async registerPendingDesignReceipt(
+    threadId: string,
+    turnId: string,
+    call: ToolCallLike,
+    result: ToolHostResult
+  ): Promise<void> {
+    if (!this.deps.receipts || result.item.kind !== 'tool_result') return
+    const output = result.item.output
+    if (!isPendingReceiptOutput(output)) return
+    this.deps.receipts.register({
+      receiptKey: output.receiptKey,
+      threadId,
+      turnId,
+      call,
+      itemId: result.item.id,
+      acceptedOutput: output as Record<string, unknown>
+    })
   }
 
   async persistSuppressed(input: {

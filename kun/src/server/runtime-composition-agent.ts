@@ -33,6 +33,7 @@ import {
   cursorSdkProviderIdsForOptions
 } from './runtime-factory-model.js'
 import { resumeInterruptedGraphPlanning } from './runtime-graph-lifecycle.js'
+import { CanvasReceiptRegistry } from '../services/canvas-receipt-registry.js'
 
 export async function createRuntimeAgentComposition(
   registryComposition: ReturnType<typeof createRuntimeRegistry>
@@ -251,6 +252,11 @@ export async function createRuntimeAgentComposition(
       memoryStore: services.memoryStore
     }))
   }
+	  const canvasReceipts = new CanvasReceiptRegistry({
+	    turns: turnService,
+	    events,
+	    nowIso
+	  })
 	  let loopOptions: AgentLoopOptions = {
 	    threadStore,
 	    sessionStore,
@@ -270,6 +276,7 @@ export async function createRuntimeAgentComposition(
     prefix,
     ids,
     nowIso,
+	    receipts: canvasReceipts,
 	    modelCapabilities,
 		    skillRuntime: services.skillRuntime,
 		    instructionRuntime: services.instructionRuntime,
@@ -384,6 +391,7 @@ export async function createRuntimeAgentComposition(
     registryComposition,
     toolHost,
     extensionTools,
+    canvasReceipts,
     buildMainDelegatedRuntime,
     sdkRuntime,
     activeRuntimeRuns,

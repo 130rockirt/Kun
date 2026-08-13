@@ -10,6 +10,7 @@ import type { UserInputGate } from '../ports/user-input-gate.js'
 import type { UsageService } from '../services/usage-service.js'
 import type { TurnService } from '../services/turn-service.js'
 import type { RuntimeEventRecorder } from '../services/runtime-event-recorder.js'
+import type { CanvasReceiptRegistry } from '../services/canvas-receipt-registry.js'
 import type { IdGenerator } from '../ports/id-generator.js'
 import type { ImmutablePrefix } from '../cache/immutable-prefix.js'
 import type { ContextCompactor } from './context-compactor.js'
@@ -62,6 +63,8 @@ export type AgentLoopOptions = {
   contextCompaction?: ContextCompactionConfig
   /** Internal-LLM role model routing (smallModel slot + title/summary/codeReview overrides). */
   roles?: RolesConfig
+  /** Renderer receipt registry for two-phase design canvas tools. */
+  receipts?: CanvasReceiptRegistry
   toolStorm?: ToolStormBreakerOptions & { enabled?: boolean }
   turnLimits?: TurnLimitsConfig
   /** Internal retrieval-child marker propagated into discovery and execution contexts. */

@@ -13,6 +13,7 @@ import type { ModelRoundOutcome } from './turn-execution-types.js'
 import { RoundOutcomeRecoveryPhase } from './round-outcome-recovery-phase.js'
 import {
   GRAPH_CREATE_RUN_TOOL_NAME,
+  CANVAS_RECEIPT_TIMEOUT_MS,
   type RoundOutcomeInput
 } from './round-outcome-state.js'
 
@@ -220,6 +221,16 @@ export class RoundOutcomeCoordinator extends RoundOutcomeRecoveryPhase {
     }
     await this.updatePostToolFailureRecoveryAfterDispatch(input, dispatchableToolCalls)
     this.toolSuppressionRecoveryStepsByTurn.delete(input.turnId)
+    if (this.deps.receipts) {
+      // Two-phase design tools: block the next model request until the
+      // renderer confirms the canvas applied (or the timeout finalizes the
+      // result as `unverified`). The model then sees the real outcome.
+      await this.deps.receipts.awaitTurnReceipts(
+        input.threadId,
+        input.turnId,
+        CANVAS_RECEIPT_TIMEOUT_MS
+      )
+    }
     if (input.prepared.dedicatedSvgTurn && completedToolCalls.some((call) =>
       call.toolName === DESIGN_SVG_EDIT_TOOL_NAME ||
       call.toolName === DESIGN_SVG_ANIMATE_TOOL_NAME ||

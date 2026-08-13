@@ -8,24 +8,21 @@ import { useCanvasShapeStore } from './canvas-shape-store'
 import type { ExecuteOpsOptions, OpError } from './shape-ops'
 import { useDesignAssistantStore } from '../design-assistant-store'
 import { useDesignWorkspaceStore } from '../design-workspace-store'
-import {
-  projectPptCanvasBundle,
-  resolvePptCanvasProjection,
-  type PptCanvasProjectionOptions
-} from './ppt-canvas-projection'
+import { sendCanvasTurnReceipt } from './canvas-receipt-sender'
 import {
   applySvgArtifactToolBlock,
-  shouldApplyDesignCanvasToolBlock,
   type SvgArtifactRequestHandler
 } from './svg-artifact-tool-replay'
-import { designSystemToolRevisionError, persistAppliedDesignSystemTool } from './design-system-tool-replay'
 import { dispatchCanvasExportToolBlock, type CanvasAgentExportRequestHandler } from './canvas-export-tool-replay'
+import { isDesignMotionRendererToolName } from './motion-ops'
 import {
-  executeMotionOps,
-  extractMotionOpsFromValue,
-  isDesignMotionRendererToolName
-} from './motion-ops'
-import { rewriteGeneratedImageUrlsForTurn, type GeneratedImageFallbackTarget } from './canvas-generated-image-replay'
+  applyCanvasToolBlock
+} from './apply-canvas-tool-block'
+import type { GeneratedImageFallbackTarget } from './canvas-generated-image-replay'
+import type {
+  PptCanvasProjectionOpenRequest,
+  PptCanvasProjectionOptions
+} from './ppt-canvas-projection'
 import {
   activeCanvasTurnMatchesDesignTarget,
   activeCanvasTurnMatchesThread,
@@ -280,123 +277,33 @@ export function useApplyShapeOpsLive(
       block: ToolBlock,
       replay?: { blocks: readonly ChatBlock[]; replayKey: string; turnId: string }
     ): void => {
-      if (appliedToolBlockIds.has(block.id)) return
-      const detail = block.detail?.trim()
-      if (!detail) return
-      let parsed: unknown
-      try {
-        parsed = JSON.parse(detail)
-      } catch {
-        return
-      }
-      const pptCanvasProjection = resolvePptCanvasProjection(
-        typeof block.meta?.toolName === 'string' ? block.meta.toolName : undefined,
-        parsed,
+      const framedRef = { value: framedThisTurn }
+      applyCanvasToolBlock(block, replay, {
+        targetThreadId,
+        executeOptions,
         pptProjectionWorkflowId,
-        pptProjectionChildId
-      )
-      if (!pptCanvasProjection && !shouldApplyDesignCanvasToolBlock(block)) return
-      if (pptCanvasProjection) {
-        if (pptCanvasProjection.kind === 'filtered') {
-          appliedToolBlockIds.add(block.id)
-          return
-        }
-        appliedToolBlockIds.add(block.id)
-        if (projectPptCanvasBundle({
-          blockId: block.id,
-          projection: pptCanvasProjection,
-          targetThreadId,
-          executeOptions,
-          affectedThisTurn,
-          errorsThisTurn,
-          onOpenRequested: onPptProjectionOpenRequestedRef.current
-        })) framedThisTurn = true
-        return
-      }
-      const chatState = useChatStore.getState()
-      parsed = rewriteGeneratedImageUrlsForTurn(
-        parsed,
-        replay?.blocks ?? blocksForActiveCanvasTurn({
-            activeThreadId: chatState.activeThreadId,
-            currentTurnId: chatState.currentTurnId,
-            currentTurnUserId: chatState.currentTurnUserId,
-            blocks: chatState.blocks
-          })
-      )
-      if (dispatchCanvasExportToolBlock(block, parsed, appliedToolBlockIds, onCanvasExportRequested)) return
-      if (isDesignMotionRendererToolName(block.meta?.toolName)) {
-        const motionOps = extractMotionOpsFromValue(parsed)
-        const { affectedIds, errors } = executeMotionOps(
-          motionOps,
-          `tool:${block.id}`,
-          { replayKey: block.id }
-        )
-        // Mark even invalid/rejected renderer output as consumed. Otherwise a
-        // remount in the same turn would repeatedly surface the same bounded
-        // error; successfully applied batches also have a durable journal guard.
-        appliedToolBlockIds.add(block.id)
-        if (errors.length > 0) errorsThisTurn.push(...errors)
-        if (affectedIds.length === 0) return
-        for (const id of affectedIds) affectedThisTurn.add(id)
-        useCanvasSelectionStore.getState().select(
-          [...affectedThisTurn].filter((id) => Boolean(useCanvasShapeStore.getState().document.objects[id]))
-        )
-        if (!framedThisTurn) {
-          framedThisTurn = true
-          useDesignAssistantStore.getState().markAiAffected(affectedIds)
-        } else {
-          useDesignAssistantStore.setState({
-            lastAiAffectedIds: affectedIds,
-            lastAiActionAt: Date.now()
-          })
-        }
-        return
-      }
-      if (block.meta?.toolName === 'design_svg_create') {
-        // A dedicated SVG turn must start only after the canvas turn becomes
-        // idle. Otherwise sendMessage puts it into a process-global transient
-        // queue that is discarded on thread switches. Stable-id results are
-        // also replayed below after remount/restart when the artifact is absent
-        // or still pending without a corresponding follow-up user turn.
-        const sourceTurnId = replay?.turnId || chatState.currentTurnId || block.turnId || ''
-        if (sourceTurnId) {
-          svgSourceTurnIds.set(block.id, sourceTurnId)
-          ensureReplayBarrier(sourceTurnId)?.pendingSvgBlockIds.add(block.id)
-        }
-        if (chatState.currentTurnId) pendingSvgToolBlocks.set(block.id, block)
-        else void applySvgToolBlock(block, true, sourceTurnId)
-        return
-      }
-      const revisionError = designSystemToolRevisionError(block.meta?.toolName, parsed)
-      if (revisionError) {
-        appliedToolBlockIds.add(block.id)
-        errorsThisTurn.push(revisionError)
-        return
-      }
-      const blocks = extractCanvasOpBlocksFromValue(parsed)
-      if (blocks.length === 0) {
-        return
-      }
-      const { affectedIds, errors } = applyCanvasOpBlocks(
-        blocks,
-        `tool:${block.id}`,
-        replay ? { ...executeOptions, replayKey: replay.replayKey } : executeOptions
-      )
-      appliedToolBlockIds.add(block.id)
-      if (errors.length > 0) errorsThisTurn.push(...errors)
-      persistAppliedDesignSystemTool(block.meta?.toolName, errors)
-      if (affectedIds.length === 0) return
-      for (const id of affectedIds) affectedThisTurn.add(id)
-      useCanvasSelectionStore.getState().select([...affectedThisTurn])
-      if (!framedThisTurn) {
-        framedThisTurn = true
-        useDesignAssistantStore.getState().markAiAffected(affectedIds)
-      } else {
-        useDesignAssistantStore.setState({
-          lastAiAffectedIds: affectedIds,
-          lastAiActionAt: Date.now()
-        })
-      }
+        pptProjectionChildId,
+        onPptProjectionOpenRequested: onPptProjectionOpenRequestedRef.current,
+        onCanvasExportRequested,
+        onSvgArtifactRequested: onSvgArtifactRequestedRef.current,
+        appliedToolBlockIds,
+        processingSvgToolBlockIds,
+        pendingSvgToolBlocks,
+        svgSourceTurnIds,
+        svgRetryCounts,
+        replayBarriers,
+        affectedThisTurn,
+        errorsThisTurn,
+        framedThisTurn: framedRef,
+        ensureReplayBarrier,
+        scheduleSvgDrain,
+        commitReadyWatermarks,
+        markFailedSvgForRetry,
+        applySvgToolBlock
+      })
+      // The extracted executor mutates framedThisTurn through the ref; sync
+      // the closure copy back so later camera logic sees the updated value.
+      framedThisTurn = framedRef.value
     }
 
     const scheduleStreaming = (): void => {
@@ -561,6 +468,17 @@ export function useApplyShapeOpsLive(
       if (all.length > 0) {
         useCanvasSelectionStore.getState().select(all)
         useDesignAssistantStore.getState().markAiAffected(all)
+      }
+      // Two-phase design tool receipt: tell the Kun loop whether the renderer
+      // applied this turn's canvas operations. The loop finalizes the accepted
+      // tool result accordingly (or falls back to `unverified` on timeout).
+      if (replayThreadId && completedTurnId) {
+        sendCanvasTurnReceipt({
+          threadId: replayThreadId,
+          turnId: completedTurnId,
+          affectedIds: all,
+          errors: errorsThisTurn
+        })
       }
       // Hand this turn's op errors to the next canvas turn so the agent can fix
       // them. Always set (even []) so a clean turn clears stale errors.

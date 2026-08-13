@@ -33,6 +33,7 @@ import { startReview } from './review.js'
 import { buildEventStreamResponse, parseEventCursor } from './events.js'
 import { decideApproval } from './approvals.js'
 import { resolveUserInput } from './user-inputs.js'
+import { receiveCanvasReceipt } from './canvas-receipts.js'
 import { getResumeSessionMetadata, resumeSession } from './sessions.js'
 import { usageJsonResponse } from './usage.js'
 import { listProviderQuotas } from './provider-quotas.js'
@@ -302,6 +303,15 @@ export function registerThreadRoutes(
       request,
       gate: runtime.userInputGate,
       events: runtime.events
+    })
+  })
+  router.add('POST', '/v1/threads/:id/canvas-receipts', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    if (!runtime.canvasReceipts) return ERRORS.unavailable('canvas receipt registry is not available')
+    return receiveCanvasReceipt({
+      receiptKey: ctx.params.id,
+      request,
+      receipts: runtime.canvasReceipts
     })
   })
   router.add('GET', '/v1/sessions/:id/resume-metadata', async (request, ctx) => {

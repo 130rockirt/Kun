@@ -85,6 +85,7 @@ export function createServerRuntimeComposition(
   const {
     toolHost,
     extensionTools,
+    canvasReceipts,
     activeRuntimeRuns,
     runAgentTurn,
     runReview,
@@ -124,6 +125,7 @@ export function createServerRuntimeComposition(
     events,
     eventStreamRegistry,
     llmDebug,
+    canvasReceipts,
     liveCounters: () => ({
       inflight: inflight.size(),
       activeCaptures: llmDebug?.activeCaptureCount ?? 0
