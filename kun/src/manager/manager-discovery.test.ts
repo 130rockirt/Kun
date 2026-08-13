@@ -39,11 +39,30 @@ function input() {
 
 describe('manager discovery', () => {
   it('creates a versioned protocol record', () => {
-    expect(createManagerDiscoveryRecord({ ...input(), instanceId: 'manager-a' })).toMatchObject({
+    expect(createManagerDiscoveryRecord({
+      ...input(),
+      instanceId: 'manager-a',
+      buildId: 'b'.repeat(64)
+    })).toMatchObject({
       version: 1,
       protocolVersion: 1,
-      instanceId: 'manager-a'
+      instanceId: 'manager-a',
+      buildId: 'b'.repeat(64)
     })
+  })
+
+  it('keeps a legacy discovery record without build identity readable', async () => {
+    const controlDir = await root()
+    await writeFile(managerDiscoveryPath(controlDir), JSON.stringify({
+      ...input(),
+      version: 1,
+      protocolVersion: 1,
+      instanceId: 'legacy-manager'
+    }), 'utf8')
+
+    const legacy = await readManagerDiscovery(controlDir)
+    expect(legacy).toMatchObject({ instanceId: 'legacy-manager' })
+    expect(legacy).not.toHaveProperty('buildId')
   })
 
   it('publishes an owner-only discovery record', async () => {

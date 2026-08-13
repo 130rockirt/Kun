@@ -29,6 +29,7 @@ import {
   workCanvasPptSelectionState,
   workCanvasPptWorkflowGate
 } from '../../design/canvas/work-canvas'
+import { useWorkWhiteboardRenameLive } from './use-work-whiteboard-rename-live'
 
 export type WorkWhiteboardSurfaceProps = {
   workspaceRoot: string
@@ -51,6 +52,8 @@ export type WorkWhiteboardSurfaceProps = {
 type ReviewAction = {
   labelKey: string
   prompt: string
+  fallbackLabelKey?: string
+  fallbackPrompt?: string
   icon: typeof Sparkles
   primary?: boolean
 }
@@ -63,6 +66,8 @@ const REVIEW_ACTIONS: Partial<Record<WorkWhiteboardPhase, ReviewAction[]>> = {
   }, {
     labelKey: 'workWhiteboardAdoptDirection',
     prompt: '采用此白板中当前选中的视觉方向，并继续生成逐页演示稿。',
+    fallbackLabelKey: 'workWhiteboardAdoptRecommendedDirection',
+    fallbackPrompt: '采用当前 PPT 工作流的推荐视觉方向，并继续生成逐页演示稿。',
     icon: Check,
     primary: true
   }],
@@ -190,17 +195,21 @@ function WorkWhiteboardActions({
       {actions.map((action) => {
         const Icon = action.icon
         const isApproveAction = action.labelKey === 'workWhiteboardApproveExport'
-        const missingDirection = action.labelKey === 'workWhiteboardAdoptDirection' && !hasSelectedDirection
+        const usesDirectionFallback = action.labelKey === 'workWhiteboardAdoptDirection' && !hasSelectedDirection
         const missingSlides = action.labelKey === 'workWhiteboardModifySlides' && !hasSelectedSlides
         const approvalBlocked = isApproveAction && (!approvalReady || approveBlocked)
-        const disabled = approvalBlocked || missingDirection || missingSlides
+        const disabled = approvalBlocked || missingSlides
         const disabledTitle = isApproveAction && !approvalReady
           ? t('workWhiteboardCanvasLoadingHint')
           : isApproveAction && approveBlocked
             ? t('workWhiteboardQaBlockingHint')
-          : missingDirection
-            ? t('workWhiteboardSelectDirectionHint')
-            : missingSlides ? t('workWhiteboardSelectSlidesHint') : undefined
+          : missingSlides ? t('workWhiteboardSelectSlidesHint') : undefined
+        const labelKey = usesDirectionFallback && action.fallbackLabelKey
+          ? action.fallbackLabelKey
+          : action.labelKey
+        const prompt = usesDirectionFallback && action.fallbackPrompt
+          ? action.fallbackPrompt
+          : action.prompt
         return (
           <button
             key={action.labelKey}
@@ -214,11 +223,11 @@ function WorkWhiteboardActions({
             disabled={disabled}
             title={disabledTitle}
             onClick={() => {
-              if (!disabled) onRequestAssistant(action.prompt)
+              if (!disabled) onRequestAssistant(prompt)
             }}
           >
             <Icon className="h-3.5 w-3.5 shrink-0" strokeWidth={1.9} />
-            <span className="truncate">{t(action.labelKey)}</span>
+            <span className="truncate">{t(labelKey)}</span>
           </button>
         )
       })}
@@ -237,6 +246,7 @@ function MountedWorkWhiteboard(props: WorkWhiteboardSurfaceProps): ReactElement 
   const documentKey = useCanvasShapeStore((state) => state.documentKey)
   const selectedIds = useCanvasSelectionStore((state) => state.selectedIds)
   const [canvasDocumentLoaded, setCanvasDocumentLoaded] = useState(false)
+  useWorkWhiteboardRenameLive({ boardId: props.boardId, threadId: props.activeThreadId })
   const activeDocument = documentKey === identity.documentKey
   const approveBlocked = activeDocument && workCanvasHasBlockingQaNotes(document, props.workflowId)
   const approvalReady = canvasDocumentLoaded && activeDocument

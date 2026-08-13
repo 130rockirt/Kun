@@ -357,10 +357,21 @@ export function createNavigationWorkspaceActions(
         // Omitting `limit` is intentional: migrated and long-lived profiles
         // must expose the complete inventory instead of silently hiding older
         // conversations after an arbitrary client-side cutoff.
-        rawThreads = await p.listThreads({ includeArchived: true })
+        rawThreads = await p.listThreads({
+          includeArchived: true,
+          includeSide: true
+        })
       } catch {
         rawThreads = await p.listThreads()
       }
+      // Managed plan builds execute in a linked `side` thread, but that
+      // thread is the user's primary progress surface while the isolated run
+      // is active. Keep those durable plan-build conversations in the main
+      // inventory; ordinary subagent/side conversations remain projected by
+      // their dedicated UI and must not leak into the Code sidebar.
+      rawThreads = rawThreads.filter((thread) =>
+        thread.relation !== 'side' || Boolean(thread.planBuildRunId?.trim())
+      )
       if (pendingDesignDocumentClones().length > 0) {
         try {
           const lifecycleThreads = await p.listThreads({

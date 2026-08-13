@@ -65,6 +65,10 @@ function designTargetFromUserBlock(block: ChatBlock | undefined): CanvasDesignDo
   return documentId && boardArtifactId ? { documentId, boardArtifactId } : null
 }
 
+export function userBlockHasDesignDocumentTarget(block: ChatBlock | undefined): boolean {
+  return Boolean(designTargetFromUserBlock(block))
+}
+
 function isPrimaryAiImageTurn(blocks: readonly ChatBlock[]): boolean {
   const user = blocks.find((block) => block.kind === 'user')
   if (user?.kind !== 'user') return false
@@ -125,10 +129,11 @@ function designCanvasTurnId(
 
 export function activeCanvasTurnMatchesDesignTarget(
   state: Pick<CanvasTurnReplayState, 'currentTurnUserId' | 'blocks'>,
-  target?: CanvasDesignDocumentTarget
+  target?: CanvasDesignDocumentTarget,
+  unboundTargetPolicy: 'any' | 'untargeted' = 'any'
 ): boolean {
-  if (!target) return true
   const submittedTarget = designTargetFromUserBlock(activeUserBlock(state))
+  if (!target) return unboundTargetPolicy === 'any' || !submittedTarget
   return Boolean(submittedTarget && sameDesignTarget(submittedTarget, target))
 }
 
@@ -153,10 +158,15 @@ export function replayActiveCanvasTurn(
   applyToolBlock: (block: ToolBlock, replay?: CanvasDesignReplayContext) => void,
   processStreaming: () => void,
   targetThreadId?: string | null,
-  designDocumentTarget?: CanvasDesignDocumentTarget
+  designDocumentTarget?: CanvasDesignDocumentTarget,
+  unboundTargetPolicy: 'any' | 'untargeted' = 'any'
 ): void {
   if (!activeCanvasTurnMatchesThread(state, targetThreadId)) return
-  if (!activeCanvasTurnMatchesDesignTarget(state, designDocumentTarget)) return
+  if (!activeCanvasTurnMatchesDesignTarget(
+    state,
+    designDocumentTarget,
+    unboundTargetPolicy
+  )) return
   if (!state.currentTurnId) return
   for (const block of blocksForActiveCanvasTurn(state)) {
     if (block.kind !== 'tool') continue
@@ -314,6 +324,10 @@ export function codeCanvasReplayContextForActiveTurn(
   if (!threadId) return null
   const user = activeUserBlock(state)
   if (!user || user.kind !== 'user') return null
+  // A turn with an immutable Design document target belongs exclusively to
+  // that full Design host. Giving it a Code replay key would let a transient
+  // lightweight canvas consume the result while the Design surface hydrates.
+  if (designTargetFromUserBlock(user)) return null
   const start = state.blocks.indexOf(user)
   if (start < 0) return null
   let end = start + 1

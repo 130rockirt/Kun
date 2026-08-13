@@ -338,6 +338,7 @@ describe('ThreadRow', () => {
     const actionsHtml = html.slice(rowButtonEnd)
 
     expect(rowButtonHtml.indexOf('aria-label="Worktree feature/layout-fix"')).toBeGreaterThan(-1)
+    expect(rowButtonHtml).toContain('feature/layout-fix</span>')
     expect(rowButtonHtml.lastIndexOf('Very long archived worktree thread title')).toBeGreaterThan(-1)
     expect(rowButtonHtml.indexOf('aria-label="Worktree feature/layout-fix"')).toBeLessThan(
       rowButtonHtml.lastIndexOf('Very long archived worktree thread title')

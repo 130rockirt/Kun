@@ -29,6 +29,8 @@ import {
   kunThreadRewindPath,
   kunThreadTodosPath,
   kunThreadInterruptPath,
+  kunThreadKnowledgeBaseReindexPath,
+  kunThreadKnowledgeBasesPath,
   kunThreadToolCancelPath,
   kunThreadPath,
   kunThreadStatePath,
@@ -248,7 +250,7 @@ export class KunRuntimeThreadServices extends KunRuntimeProviderServices {
     statuses: KnowledgeBaseIndexStatus[]
   }> {
     const response = await rendererRuntimeClient.runtimeRequest(
-      `${kunThreadPath(threadId)}/knowledge-bases`,
+      kunThreadKnowledgeBasesPath(threadId),
       'GET'
     )
     if (!response.ok) {
@@ -262,7 +264,7 @@ export class KunRuntimeThreadServices extends KunRuntimeProviderServices {
     knowledgeBaseId: string
   ): Promise<KnowledgeBaseIndexStatus> {
     const response = await rendererRuntimeClient.runtimeRequest(
-      `${kunThreadPath(threadId)}/knowledge-bases/${encodeURIComponent(knowledgeBaseId)}/reindex`,
+      kunThreadKnowledgeBaseReindexPath(threadId, knowledgeBaseId),
       'POST'
     )
     if (!response.ok) {

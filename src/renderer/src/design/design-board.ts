@@ -37,6 +37,7 @@ export {
   createScreenFrameArtifact,
   ensureDesignBoardArtifact,
   findDesignBoardArtifact,
+  findDesignBoardArtifactById,
   type CreateScreenFrameArtifactResult
 } from './design-board-artifact'
 

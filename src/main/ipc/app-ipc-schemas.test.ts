@@ -322,6 +322,27 @@ describe('app-ipc-schemas runtime', () => {
     })).toThrow(/runtime request path is not allowed/)
   })
 
+  it('accepts only the modeled knowledge-base status and reindex operations', () => {
+    expect(runtimeRequestPayloadSchema.parse({
+      path: '/v1/threads/thr%2Fone/knowledge-bases',
+      method: 'GET'
+    }).path).toBe('/v1/threads/thr%2Fone/knowledge-bases')
+    expect(runtimeRequestPayloadSchema.parse({
+      path: '/v1/threads/thr_1/knowledge-bases/kb%2Fdocs/reindex',
+      method: 'POST'
+    }).path).toBe('/v1/threads/thr_1/knowledge-bases/kb%2Fdocs/reindex')
+
+    for (const payload of [
+      { path: '/v1/threads/thr_1/knowledge-bases', method: 'PATCH', body: '{}' },
+      { path: '/v1/threads/thr_1/knowledge-bases/kb_docs/reindex', method: 'GET' },
+      { path: '/v1/threads/thr_1/knowledge-bases/kb_docs/delete', method: 'POST' }
+    ] as const) {
+      expect(() => runtimeRequestPayloadSchema.parse(payload)).toThrow(
+        /runtime request path is not allowed/
+      )
+    }
+  })
+
   it('accepts the Kun delegation profiles endpoint', () => {
     expect(runtimeRequestPayloadSchema.parse({
       path: '/v1/delegation/profiles',

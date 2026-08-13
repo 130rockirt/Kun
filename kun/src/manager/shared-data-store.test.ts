@@ -80,6 +80,60 @@ describe('manager shared data store', () => {
     await store.close()
   })
 
+  it('persists the current workspace-view composer context contract', async () => {
+    const store = await dataStore()
+    const thread = createThreadRecord({
+      id: 'thread-workspace-view-context',
+      title: 'Workspace view context',
+      workspace: '/tmp/workspace',
+      model: 'test-model'
+    })
+    const composerContext = {
+      schemaVersion: 1 as const,
+      id: 'workspace-tree',
+      title: 'Workspace tree',
+      summary: 'Selected workspace view',
+      reference: { view: 'tree' },
+      revision: 1,
+      generation: 1,
+      attachmentId: `workspace-view-context:${'a'.repeat(64)}`,
+      provenance: {
+        source: 'workspace-view' as const,
+        workspaceId: 'b'.repeat(64)
+      }
+    }
+    const turn = createTurnRecord({
+      id: 'turn-workspace-view-context',
+      threadId: thread.id,
+      prompt: 'Use the workspace view',
+      composerContexts: [composerContext]
+    })
+    const userItem = {
+      id: 'item-workspace-view-context',
+      turnId: turn.id,
+      threadId: thread.id,
+      role: 'user' as const,
+      status: 'completed' as const,
+      createdAt: '2026-08-14T00:00:00.000Z',
+      kind: 'user_message' as const,
+      text: 'Use the workspace view',
+      composerContexts: [composerContext]
+    }
+
+    await store.executeThread('upsert', {
+      thread: { ...thread, turns: [{ ...turn, items: [userItem] }] }
+    })
+    await store.executeSession('appendItem', { threadId: thread.id, item: userItem })
+
+    await expect(store.executeThread('get', { threadId: thread.id })).resolves.toMatchObject({
+      turns: [{ composerContexts: [composerContext] }]
+    })
+    await expect(store.executeSession('loadItems', { threadId: thread.id })).resolves.toEqual([
+      expect.objectContaining({ composerContexts: [composerContext] })
+    ])
+    await store.close()
+  })
+
   it('rejects unknown loadItemPage options through the strict manager schema', async () => {
     const store = await dataStore()
     await expect(store.executeSession('loadItemPage', {

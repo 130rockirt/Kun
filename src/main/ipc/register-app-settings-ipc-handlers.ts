@@ -515,11 +515,11 @@ export function registerAppSettingsIpcHandlers(options: RegisterAppIpcHandlersOp
       type: 'warning',
       title: chinese ? '重启 Kun 服务' : 'Restart Kun service',
       message: chinese
-        ? '停止当前 Kun 服务并启动新的服务？'
-        : 'Stop the current Kun service and start a new one?',
+        ? '停止当前用户的所有 Kun 服务并启动新服务？'
+        : 'Stop all Kun services owned by the current user and start a new one?',
       detail: chinese
-        ? '仅当前 Kun serve 会被替换。正在运行的任务和待审批操作会中断；桌面应用、Service Manager、另一个运行时和对话记录不会删除。'
-        : 'Only the current Kun serve will be replaced. Active tasks and pending approvals will be interrupted; the desktop app, Service Manager, other runtime flavor, and conversations are preserved.',
+        ? '当前用户的所有 Kun serve 历史进程都会被停止。正在运行的任务和待审批操作会中断；桌面应用、Service Manager、设置和对话记录会保留。'
+        : 'All historical Kun serve processes owned by the current user will be stopped. Active tasks and pending approvals will be interrupted; the desktop app, Service Manager, settings, and conversations are preserved.',
       buttons: chinese ? ['重启服务', '取消'] : ['Restart service', 'Cancel'],
       defaultId: 1,
       cancelId: 1,
@@ -531,15 +531,15 @@ export function registerAppSettingsIpcHandlers(options: RegisterAppIpcHandlersOp
       await restartKunServe()
       return { accepted: true }
     } catch (error) {
-      logError('runtime-restart-serve', 'Failed to restart the current Kun serve', {
+      logError('runtime-restart-serve', 'Failed to clear historical Kun serves and restart Kun', {
         message: error instanceof Error ? error.message : String(error)
       })
       await showMainWindowMessageBox(parent, {
         type: 'error',
         title: chinese ? 'Kun 重启失败' : 'Kun restart failed',
         message: chinese
-          ? '未能替换当前 Kun 服务。'
-          : 'Kun could not replace the current service.',
+          ? '未能清理历史 Kun 服务并完成重启。'
+          : 'Kun could not clear historical services and finish restarting.',
         detail: chinese
           ? '请查看日志后重试；应用和数据未被删除。'
           : 'Check the logs and retry. The app and its data were not removed.',

@@ -520,6 +520,11 @@ export class ModelStepService extends ModelStepPreparationService {
       signal,
       request,
       maxToolCallsPerStep,
+      // A retrieval model can occasionally emit one extra parallel call.
+      // Preserve the bounded accepted batch instead of failing the whole child.
+      ...(toolContext.fastContext
+        ? { toolCallOverflowBehavior: 'truncate' as const }
+        : {}),
       streamToolMetadata,
       ...(this.deps.toolArgumentRepair?.maxStringBytes !== undefined
         ? { maxToolArgumentStringBytes: this.deps.toolArgumentRepair.maxStringBytes }

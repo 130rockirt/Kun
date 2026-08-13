@@ -2,6 +2,8 @@ import type { ReactElement } from 'react'
 import { FileText, FolderOpen } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import type { ToolBlock } from '../../agent/types'
+import { formatRuntimeError } from '../../lib/format-runtime-error'
+import { workspaceRootIdentityKey } from '../../lib/workspace-path'
 import { useChatStore } from '../../store/chat-store'
 import { useWriteWorkspaceStore } from '../../write/write-workspace-store'
 import {
@@ -27,6 +29,7 @@ export function KnowledgeEvidenceDetail({ block }: { block: ToolBlock }): ReactE
     state.threads.find((thread) => thread.id === state.activeThreadId)
   )
   const openWrite = useChatStore((state) => state.openWrite)
+  const setError = useChatStore((state) => state.setError)
   const evidence = parseKnowledgeEvidence(block)
 
   const openSource = async (item: KnowledgeEvidenceItem): Promise<void> => {
@@ -34,11 +37,22 @@ export function KnowledgeEvidenceDetail({ block }: { block: ToolBlock }): ReactE
     if (!mount) return
     const absolutePath = knowledgeEvidenceSourcePath(mount.root, item.relativePath)
     if (!absolutePath) return
-    const write = useWriteWorkspaceStore.getState()
-    await write.selectWriteWorkspace(mount.root)
-    await openWrite()
-    requestKnowledgeSourceNavigation({ filePath: absolutePath, location: item.location })
-    await useWriteWorkspaceStore.getState().openFile(mount.root, absolutePath)
+    try {
+      await useWriteWorkspaceStore.getState().selectWriteWorkspace(mount.root)
+      const write = useWriteWorkspaceStore.getState()
+      if (
+        write.settingsError ||
+        workspaceRootIdentityKey(write.workspaceRoot) !== workspaceRootIdentityKey(mount.root)
+      ) {
+        setError(write.settingsError || 'The knowledge source workspace could not be opened.')
+        return
+      }
+      await openWrite()
+      requestKnowledgeSourceNavigation({ filePath: absolutePath, location: item.location })
+      await write.openFile(mount.root, absolutePath)
+    } catch (error) {
+      setError(formatRuntimeError(error))
+    }
   }
 
   return (

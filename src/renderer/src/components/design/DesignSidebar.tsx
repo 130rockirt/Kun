@@ -584,7 +584,7 @@ export function DesignSidebar({
           </div>
         }
       >
-        <div className="ds-no-drag flex flex-col px-1">
+        <div className="workspace-mode-controls ds-no-drag flex flex-col px-1">
           <WorkspaceModeTabs
             activeView="design"
             onCodeOpen={onCodeOpen}

@@ -69,6 +69,32 @@ export type CanvasToolBlockApplyContext = {
     allowLegacy?: boolean,
     sourceTurnId?: string
   ) => Promise<void>
+  sendToolReceipt?: (input: {
+    receiptKey: string
+    turnId: string
+    affectedIds: readonly string[]
+    errors: readonly OpError[]
+  }) => void
+}
+
+function receiptKeyFromResult(value: unknown): string | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const key = (value as Record<string, unknown>).receiptKey
+  return typeof key === 'string' && key.trim() ? key.trim() : null
+}
+
+function sendToolReceipt(
+  block: ToolBlock,
+  parsed: unknown,
+  replay: { turnId: string } | undefined,
+  ctx: CanvasToolBlockApplyContext,
+  affectedIds: readonly string[],
+  errors: readonly OpError[]
+): void {
+  const receiptKey = receiptKeyFromResult(parsed)
+  const turnId = replay?.turnId || block.turnId?.trim() || useChatStore.getState().currentTurnId
+  if (!receiptKey || !turnId) return
+  ctx.sendToolReceipt?.({ receiptKey, turnId, affectedIds, errors })
 }
 
 export function applyCanvasToolBlock(
@@ -132,6 +158,7 @@ export function applyCanvasToolBlock(
     // error; successfully applied batches also have a durable journal guard.
     ctx.appliedToolBlockIds.add(block.id)
     if (errors.length > 0) ctx.errorsThisTurn.push(...errors)
+    sendToolReceipt(block, parsed, replay, ctx, affectedIds, errors)
     if (affectedIds.length === 0) return
     for (const id of affectedIds) ctx.affectedThisTurn.add(id)
     useCanvasSelectionStore.getState().select(
@@ -167,10 +194,13 @@ export function applyCanvasToolBlock(
   if (revisionError) {
     ctx.appliedToolBlockIds.add(block.id)
     ctx.errorsThisTurn.push(revisionError)
+    sendToolReceipt(block, parsed, replay, ctx, [], [revisionError])
     return
   }
   const blocks = extractCanvasOpBlocksFromValue(parsed)
   if (blocks.length === 0) {
+    ctx.appliedToolBlockIds.add(block.id)
+    sendToolReceipt(block, parsed, replay, ctx, [], [])
     return
   }
   const { affectedIds, errors } = applyCanvasOpBlocks(
@@ -180,6 +210,7 @@ export function applyCanvasToolBlock(
   )
   ctx.appliedToolBlockIds.add(block.id)
   if (errors.length > 0) ctx.errorsThisTurn.push(...errors)
+  sendToolReceipt(block, parsed, replay, ctx, affectedIds, errors)
   persistAppliedDesignSystemTool(block.meta?.toolName, errors)
   if (affectedIds.length === 0) return
   for (const id of affectedIds) ctx.affectedThisTurn.add(id)

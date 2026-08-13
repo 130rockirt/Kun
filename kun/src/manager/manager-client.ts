@@ -37,11 +37,9 @@ import {
 import { sameCanonicalPath } from './canonical-path.js'
 import { KUN_MANAGER_CAPABILITIES } from './service-manager.js'
 import { withRuntimeDataDirAncillaryWriter } from '../server/runtime-data-dir-lease.js'
-
 const START_TIMEOUT_MS = 30_000
 const POLL_MS = 100
 const LEGACY_HANDOVER_TIMEOUT_MS = 5 * 60_000
-
 const ManagerHealthSchema = z.object({
   status: z.literal('ok'),
   service: z.literal('kun-service-manager'),
@@ -50,9 +48,9 @@ const ManagerHealthSchema = z.object({
   pid: z.number().int().positive(),
   startedAt: z.string().datetime(),
   serviceVersion: z.string(),
+  buildId: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   capabilities: z.array(z.string())
 })
-
 export type ServiceManagerConnection = {
   discovery: ManagerDiscoveryRecord
 }
@@ -199,6 +197,7 @@ export async function resolveServiceManager(
       health.pid !== discovery.pid ||
       health.startedAt !== discovery.startedAt ||
       health.serviceVersion !== discovery.serviceVersion ||
+      health.buildId !== discovery.buildId ||
       !KUN_MANAGER_CAPABILITIES.every((capability) => health.capabilities.includes(capability))
     ) return null
     return { discovery }
@@ -213,6 +212,7 @@ export async function ensureServiceManager(input: {
   fetch?: typeof fetch
   timeoutMs?: number
   allowDevelopmentBootstrap?: boolean
+  buildId?: string
   dataDir: string
   settingsPath?: string
   launch?: {
@@ -289,6 +289,7 @@ export async function ensureServiceManager(input: {
           KUN_MANAGER_CONTROL_DIR: controlDir,
           KUN_MANAGER_TOKEN: managerToken,
           KUN_MANAGER_INSTANCE_ID: instanceId,
+          ...(input.buildId ? { KUN_RUNTIME_BUILD_ID: input.buildId } : {}),
           KUN_MANAGER_DATA_DIR: input.dataDir,
           KUN_MANAGER_SETTINGS_PATH: settingsPath,
           KUN_MANAGER_LOG_PATH: logPath

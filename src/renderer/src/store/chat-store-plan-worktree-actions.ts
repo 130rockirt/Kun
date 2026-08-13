@@ -125,6 +125,7 @@ export function createPlanWorktreeActions(
       // create a second implementation turn for the same plan-build run.
       if (run.executionTurnId) {
         await get().refreshThreads()
+        await get().openCode()
         await get().selectThread(linkedThreadId)
         set({ error: null })
         return { ok: true, run, executionThreadId: linkedThreadId }
@@ -136,6 +137,7 @@ export function createPlanWorktreeActions(
       run = await api.resumeAdmission({ runId: run.runId })
       if (!run.executionTurnId) throw new Error('Kun did not durably admit the execution turn.')
       await get().refreshThreads()
+      await get().openCode()
       await get().selectThread(linkedThreadId)
       set({ error: null })
       return { ok: true, run, executionThreadId: linkedThreadId }

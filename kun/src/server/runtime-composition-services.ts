@@ -58,6 +58,7 @@ import {
   createPersistentMemoryStore,
   seedUsageCarryover
 } from './runtime-factory-storage.js'
+import { createRuntimeBackgroundMaintenance } from './runtime-background-maintenance.js'
 
 export async function createRuntimeServices(
   model: Awaited<ReturnType<typeof createRuntimeModelComposition>>
@@ -101,8 +102,7 @@ export async function createRuntimeServices(
       oauthStorageDir: join(core.activeOptions.dataDir, 'mcp-oauth'),
       ...(oauthEncryptor ? { oauthEncryptor } : {})
     }),
-    SkillRuntime.create(skillsConfigForRuntime(core.activeOptions)),
-    seedUsageCarryover({ threadStore, sessionStore, usageService })
+    SkillRuntime.create(skillsConfigForRuntime(core.activeOptions))
   ])
   let instructionRuntime = new InstructionRuntime(core.activeOptions.capabilities?.instructions)
   const migrationMaintenance = new ScopedMigrationMaintenanceLock()
@@ -243,20 +243,13 @@ export async function createRuntimeServices(
 	      new Date(now - 24 * 60 * 60 * 1_000).toISOString()
 	    )
 	  }
-	  await pruneUnsentAttachments(attachmentStore)
-	  let attachmentPruneRunning = false
-	  const attachmentPruneTimer = setInterval(() => {
-	    if (attachmentPruneRunning) return
-	    attachmentPruneRunning = true
-	    void pruneUnsentAttachments(attachmentStore)
-	      .catch((error) => {
-	        console.warn('[kun] expired attachment lease pruning failed:', error)
-	      })
-	      .finally(() => {
-	        attachmentPruneRunning = false
-	      })
-	  }, 60 * 60 * 1_000)
-	  attachmentPruneTimer.unref()
+  const backgroundMaintenance = createRuntimeBackgroundMaintenance({
+    seedUsage: () => seedUsageCarryover({ threadStore, sessionStore, usageService }),
+    pruneAttachments: () => pruneUnsentAttachments(attachmentStore),
+    onError: (task, error) => {
+      console.warn(`[kun] background ${task} failed:`, error)
+    }
+  })
   let memoryStore = createPersistentMemoryStore(core.activeOptions, nowIso)
   const officeCliRunner = createConfiguredOfficeCliRunner({
     binaryPath: process.env.KUN_OFFICECLI_BINARY,
@@ -437,7 +430,7 @@ export async function createRuntimeServices(
     withBackgroundShellTools,
     reviewService,
     pruneUnsentAttachments,
-    attachmentPruneTimer,
+    backgroundMaintenance,
     migrationService,
     migrationImportService,
     knowledgeBaseService,

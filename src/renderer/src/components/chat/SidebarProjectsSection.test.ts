@@ -212,6 +212,42 @@ describe('SidebarProjectsSection collapse memory', () => {
 })
 
 describe('SidebarProjectsSection groups', () => {
+  it('reconciles linked worktrees into the primary project after Git discovery', async () => {
+    const projectPath = '/Users/zxy/codeproject/ds_project/DeepSeek-GUI'
+    const worktreePath = '/Users/zxy/codeproject/ds_project/DeepSeek-GUI.worktrees/kun-tui'
+    const storage = createSidebarTestStorage()
+    const getGitBranches = vi.fn(async (workspacePath: string) => ({
+      ok: true as const,
+      repositoryRoot: workspacePath,
+      primaryRepositoryRoot: projectPath,
+      currentBranch: workspacePath === worktreePath ? 'codex/kun-tui' : 'develop',
+      branches: [],
+      dirtyCount: 0
+    }))
+    vi.stubGlobal('localStorage', storage)
+    vi.stubGlobal('window', { kunGui: { getGitBranches } })
+    let renderer: ReactTestRenderer | null = null
+    try {
+      await act(async () => {
+        renderer = createRenderer(createElement(SidebarProjectsSection, sidebarProjectProps({
+          threads: [thread({ id: 'thread-kun-tui', workspace: worktreePath })],
+          workspaceRoot: worktreePath,
+          workspaceRoots: [projectPath, worktreePath]
+        })))
+        await Promise.resolve()
+      })
+
+      const workspaceTitles = renderer!.root.findAll((node) =>
+        node.type === 'div' && (node.props.title === projectPath || node.props.title === worktreePath)
+      ).map((node) => node.props.title)
+      expect(workspaceTitles).toEqual([projectPath])
+      expect(JSON.stringify(renderer!.toJSON())).toContain('codex/kun-tui')
+    } finally {
+      ;(renderer as ReactTestRenderer | null)?.unmount()
+      vi.unstubAllGlobals()
+    }
+  })
+
   it('keeps remembered code workspaces visible even when the runtime lists only one workspace', () => {
     const groups = buildSidebarWorkspaceGroups({
       threads: [thread({ id: 'reasonix-current', workspace: '/Users/zxy/project-a' })],
@@ -320,6 +356,44 @@ describe('SidebarProjectsSection groups', () => {
 
     expect(groups.map(([workspace]) => workspace)).toEqual([projectPath])
     expect(groups[0]?.[1].map((item) => item.id)).toEqual(['thread-worktree'])
+  })
+
+  it('uses the source project as the selected group for a UUID plan worktree', () => {
+    const projectPath = '/Users/zxy/codeproject/ds_project/DeepSeek-GUI'
+    const worktreePath = '/Users/zxy/.kun/worktrees/1b33f677-9bdf-435f-921e-125d029c1064/DeepSeek-GUI'
+    const groups = buildSidebarWorkspaceGroups({
+      threads: [thread({ id: 'thread-plan-worktree', workspace: worktreePath })],
+      searchQuery: '',
+      showArchived: false,
+      workspaceRoot: worktreePath,
+      conversationRoot: '',
+      workspaceRoots: [projectPath, worktreePath]
+    })
+
+    expect(groups).toEqual([[projectPath, [expect.objectContaining({ id: 'thread-plan-worktree' })]]])
+  })
+
+  it('groups a linked worktree outside the Kun directory from discovered Git metadata', () => {
+    const projectPath = '/Users/zxy/codeproject/ds_project/DeepSeek-GUI'
+    const worktreePath = '/Users/zxy/codeproject/ds_project/DeepSeek-GUI.worktrees/kun-tui'
+    const groups = buildSidebarWorkspaceGroups({
+      threads: [thread({ id: 'thread-kun-tui', workspace: worktreePath })],
+      searchQuery: '',
+      showArchived: false,
+      workspaceRoot: worktreePath,
+      conversationRoot: '',
+      workspaceRoots: [projectPath, worktreePath],
+      threadWorktrees: {
+        [`git:${worktreePath.toLowerCase()}`]: {
+          projectPath,
+          worktreePath,
+          branch: 'codex/kun-tui'
+        }
+      }
+    })
+
+    expect(groups.map(([workspace]) => workspace)).toEqual([projectPath])
+    expect(groups[0]?.[1].map((item) => item.id)).toEqual(['thread-kun-tui'])
   })
 
   it('shows worktree threads under their source project instead of a separate worktree project', () => {

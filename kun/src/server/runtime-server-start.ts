@@ -109,6 +109,7 @@ export async function startKunServe(
     ]).catch(() => undefined)
     throw error
   }
+  runtime.startBackgroundMaintenance?.()
   // Background sweep after listen: settle turns orphaned by a crash so
   // clients stop spinning on them, without delaying readiness. Then resume
   // goals that were interrupted mid-run so an active goal doesn't sit "in

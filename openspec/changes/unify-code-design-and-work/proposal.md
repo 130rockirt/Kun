@@ -5,7 +5,7 @@ Kun currently presents Code, Write, and Design as separate top-level workspaces 
 ## What Changes
 
 - Replace the top-level `Code | Write | Design` navigation with `Code | Work`; keep the stable internal `write` route, settings, extension, IPC, and persistence identifiers.
-- Turn Design into a conversation mode inside the Code workbench. Users choose Code or Design for each turn of a Code conversation; only the Design document, output medium, target, and style snapshot lock with the first accepted Design turn.
+- Turn Design into a conversation mode inside the Code workbench. Users choose Code or Design for each turn of a mode-neutral conversation; the conversation list does not assign a Code/Design logo, and only the Design document, output medium, target, and style snapshot lock with the first accepted Design turn.
 - Bind every Code conversation that uses Design to one durable Design document rendered by Code's right-side whiteboard, while preserving the full HTML, SVG, motion, image, multi-screen, and design-system pipeline.
 - Add Design-only composer controls for output medium (`HTML` or `AI image`), target (`Web` or `App`), and Kun's existing design-system presets. The complete profile is locked with the task's first accepted Design turn while the Code/Design surface selection remains per-turn.
 - Make HTML the default interactive output. AI-image tasks produce raster assets on the whiteboard and never silently fall back to HTML; HTML tasks may still use generated images as supporting assets.

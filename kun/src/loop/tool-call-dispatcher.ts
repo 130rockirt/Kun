@@ -3,7 +3,10 @@ import type { ToolDispatchInput, ToolDispatchOutcome } from './turn-execution-ty
 import { collectParallelToolDispatchCandidates } from './tool-dispatch-policy.js'
 import type { ToolStormBreaker } from './tool-storm-breaker.js'
 import type { ToolExecutionService } from './tool-execution-service.js'
-import { withFastContextSourceToolSlot } from './fast-context-source-semaphore.js'
+import {
+  FAST_CONTEXT_SOURCE_TOOL_CAPACITY,
+  withFastContextSourceToolSlot
+} from './fast-context-source-semaphore.js'
 
 export type ToolCallDispatcherInput = {
   dispatch: ToolDispatchInput
@@ -65,7 +68,9 @@ export class ToolCallDispatcher {
         policy: {
           approvalPolicy: dispatch.approvalPolicy,
           toolProviderKinds: dispatch.toolProviderKinds,
-          ...(input.context.fastContext ? { maxParallelReadOnly: 8 } : {})
+          ...(input.context.fastContext
+            ? { maxParallelReadOnly: FAST_CONTEXT_SOURCE_TOOL_CAPACITY }
+            : {})
         }
       })
       if (!parallelCandidates) {
@@ -102,7 +107,10 @@ export class ToolCallDispatcher {
           threadId: dispatch.threadId,
           turnId: dispatch.turnId,
           call: entry,
-          context: contextForSourceCalls(input.context, batch)
+          context: contextForSourceCalls(
+            input.context,
+            input.context.fastContext ? dispatch.calls : batch
+          )
         }))
       )
       executedAny = true

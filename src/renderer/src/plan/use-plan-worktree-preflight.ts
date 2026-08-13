@@ -46,27 +46,17 @@ export function usePlanWorktreePreflight(
       const kun = getKunRuntimeSettings(settings)
       usePlanWorktreeStore.getState().initializePlan(
         plan.id,
-        kun.planExecution?.useWorktreeByDefault ?? true,
+        kun.planExecution?.useWorktreeByDefault ?? false,
         settings.gitBranchPrefix || DEFAULT_GIT_BRANCH_PREFIX
       )
-    }).catch((error) => {
+    }).catch(() => {
       if (cancelled) return
-      // The normalized product default is enabled even when settings cannot
-      // be loaded. Preflight remains fail-closed and will explain host errors.
+      // Keep current-workspace execution as the product default when settings
+      // cannot be loaded; isolation can still be enabled explicitly afterward.
       usePlanWorktreeStore.getState().initializePlan(
         plan.id,
-        true,
+        false,
         DEFAULT_GIT_BRANCH_PREFIX
-      )
-      usePlanWorktreeStore.getState().rejectPreflight(
-        plan.id,
-        planWorktreeContextKey({
-          planId: plan.id,
-          workspaceRoot: plan.workspaceRoot,
-          sourceThreadId
-        }),
-        'settings-load',
-        error instanceof Error ? error.message : String(error)
       )
     })
     return () => { cancelled = true }

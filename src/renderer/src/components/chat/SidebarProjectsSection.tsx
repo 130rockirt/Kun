@@ -129,6 +129,7 @@ import {
 import { createSidebarProjectWorkspaceActions } from './sidebar-project-workspace-actions'
 import type { SidebarProjectExpansionStage } from './sidebar-project-expansion'
 import { SidebarProjectsContent } from './SidebarProjectsContent'
+import { discoverSidebarWorktrees } from './sidebar-worktree-discovery'
 export {
   buildSidebarDraftWorkspacePaths,
   buildSidebarThreadMoveTargets,
@@ -228,11 +229,52 @@ export function SidebarProjectsSection({
   const [threadOrderDropTarget, setThreadOrderDropTarget] = useState<ThreadOrderDropTarget | null>(null)
   const [dragOverWorkspace, setDragOverWorkspace] = useState<string | null>(null)
   const [folderDropTarget, setFolderDropTarget] = useState<FolderDropTarget | null>(null)
-  const [threadWorktrees, setThreadWorktrees] = useState<SidebarThreadWorktrees>(() => readThreadWorktreeRegistry().worktrees)
+  const [registeredThreadWorktrees, setRegisteredThreadWorktrees] = useState<SidebarThreadWorktrees>(
+    () => readThreadWorktreeRegistry().worktrees
+  )
+  const [discoveredThreadWorktrees, setDiscoveredThreadWorktrees] = useState<SidebarThreadWorktrees>({})
 
   useEffect(() => {
-    setThreadWorktrees(readThreadWorktreeRegistry().worktrees)
+    setRegisteredThreadWorktrees(readThreadWorktreeRegistry().worktrees)
   }, [activeThreadId, threads, workspaceRoots])
+
+  const worktreeDiscoveryKey = useMemo(() => {
+    const pathsByIdentity = new Map<string, string>()
+    for (const path of [
+      workspaceRoot,
+      ...workspaceRoots,
+      ...threads.map((thread) => thread.workspace ?? '')
+    ]) {
+      const key = workspaceRootIdentityKey(path)
+      if (key && !pathsByIdentity.has(key)) pathsByIdentity.set(key, path)
+    }
+    return JSON.stringify(
+      [...pathsByIdentity.entries()]
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([, path]) => path)
+    )
+  }, [threads, workspaceRoot, workspaceRoots])
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.kunGui?.getGitBranches !== 'function') return
+    let cancelled = false
+    setDiscoveredThreadWorktrees({})
+    const workspacePaths = JSON.parse(worktreeDiscoveryKey) as string[]
+    void discoverSidebarWorktrees(
+      workspacePaths,
+      (workspacePath) => window.kunGui.getGitBranches(workspacePath)
+    ).then((records) => {
+      if (!cancelled) setDiscoveredThreadWorktrees(records)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [worktreeDiscoveryKey])
+
+  const threadWorktrees = useMemo(() => ({
+    ...discoveredThreadWorktrees,
+    ...registeredThreadWorktrees
+  }), [discoveredThreadWorktrees, registeredThreadWorktrees])
 
   const sidebarThreadActivityContext = {
     activeThreadId,

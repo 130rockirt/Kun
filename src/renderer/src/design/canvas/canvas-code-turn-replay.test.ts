@@ -12,6 +12,36 @@ function tool(id: string): ToolBlock {
 }
 
 describe('durable Code canvas tool replay', () => {
+  it('does not replay a Design-targeted turn into the Code whiteboard', () => {
+    const targeted = tool('tool-design-targeted')
+    const blocks: ChatBlock[] = [
+      {
+        kind: 'user', id: 'user-design', turnId: 'turn-design', text: 'Draw it',
+        meta: {
+          designDocumentTarget: {
+            documentId: 'doc-design',
+            boardArtifactId: 'board-design'
+          }
+        }
+      },
+      targeted
+    ]
+    const onToolBlock = vi.fn()
+    const onTurnComplete = vi.fn()
+
+    replayDurableCodeCanvasToolBlocks({
+      threadId: 'thread-code',
+      blocks,
+      document: createEmptyDocument(),
+      onTurnStart: vi.fn(),
+      onToolBlock,
+      onTurnComplete
+    })
+
+    expect(onToolBlock).not.toHaveBeenCalled()
+    expect(onTurnComplete).not.toHaveBeenCalled()
+  })
+
   it('resumes after a legacy journaled result within the same turn', () => {
     const alreadyApplied = tool('tool-applied')
     const missed = tool('tool-missed')

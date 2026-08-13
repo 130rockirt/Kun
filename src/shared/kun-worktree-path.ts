@@ -1,6 +1,9 @@
 /**
- * Path helpers for Kun-managed conversation worktrees created by git-service
- * under `<worktreeRoot>/<4-hex-id>/<repo-basename>`.
+ * Path helpers for Kun-managed conversation worktrees created by the branch
+ * and isolated-plan services under `<worktreeRoot>/<worktree-id>/<repo-basename>`.
+ *
+ * Interactive branch worktrees use a short 4-hex id, while isolated plan
+ * builds use a UUID run id. Both layouts share the same managed root.
  */
 
 export type KunBranchWorktreeLayout = {
@@ -15,15 +18,17 @@ function normalizePathForMatch(path: string): string {
 export function parseKunBranchWorktreeLayout(path: string): KunBranchWorktreeLayout | null {
   const normalized = normalizePathForMatch(path.trim())
   if (!normalized) return null
-  const match = normalized.match(/\/([0-9a-f]{4})\/([^/]+)$/i)
+  const match = normalized.match(
+    /\/([0-9a-f]{4}|[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12})\/([^/]+)$/i
+  )
   if (!match) return null
   const poolId = match[1] ?? ''
   const repoName = match[2] ?? ''
   if (!poolId || !repoName) return null
   const prefix = normalized.slice(0, -(poolId.length + repoName.length + 2))
-  // Branch worktrees are created by git-service's resolveBranchWorktreeRoot under
-  // the default Kun worktree root `~/.kun/worktrees`, i.e.
-  // `<home>/.kun/worktrees/<4-hex-id>/<repo-basename>`. Anchor on that exact
+  // Managed worktrees are created under the default Kun worktree root
+  // `~/.kun/worktrees`, i.e.
+  // `<home>/.kun/worktrees/<worktree-id>/<repo-basename>`. Anchor on that exact
   // `.kun/worktrees` root so an unrelated user project that merely happens to sit
   // under some other `worktrees/<hex>/<name>` directory (e.g.
   // `/work/worktrees/2024/app`) is not misclassified and hidden as a Kun

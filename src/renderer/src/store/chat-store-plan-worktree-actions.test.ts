@@ -77,6 +77,7 @@ describe('isolated plan build renderer transaction', () => {
         workspace: '/repo'
       }],
       refreshThreads: vi.fn(async () => { order.push('refresh') }),
+      openCode: vi.fn(async () => { order.push('open-code') }),
       selectThread: vi.fn(async (threadId: string) => {
         order.push('select')
         state.activeThreadId = threadId
@@ -127,6 +128,7 @@ describe('isolated plan build renderer transaction', () => {
       'reconcile',
       'resume-admission',
       'refresh',
+      'open-code',
       'select'
     ])
     expect(api.prepare).toHaveBeenCalledWith(expect.objectContaining({
@@ -186,7 +188,7 @@ describe('isolated plan build renderer transaction', () => {
       executionThreadId: 'thread-recovered',
       run: { executionTurnId: 'turn-recovered' }
     })
-    expect(order).toEqual(['prepare', 'reconcile', 'refresh', 'select'])
+    expect(order).toEqual(['prepare', 'reconcile', 'refresh', 'open-code', 'select'])
     expect(api.resumeAdmission).not.toHaveBeenCalled()
     expect(state.sendMessage).not.toHaveBeenCalled()
   })

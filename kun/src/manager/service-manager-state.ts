@@ -359,6 +359,7 @@ export async function startServiceManager(input: {
   port?: number
   instanceId: string
   startedAt: string
+  buildId?: string
   logPath?: string
   state?: ServiceManagerState
   dataDir: string
@@ -430,6 +431,7 @@ export async function startServiceManager(input: {
       managerToken: input.managerToken,
       instanceId: input.instanceId,
       startedAt: input.startedAt,
+      ...(input.buildId ? { buildId: input.buildId } : {}),
       state,
       sharedData,
       documents,
@@ -449,6 +451,7 @@ export async function startServiceManager(input: {
       baseUrl: `http://${server.host}:${server.port}`,
       managerToken: input.managerToken,
       serviceVersion: KUN_VERSION,
+      ...(input.buildId ? { buildId: input.buildId } : {}),
       dataDir: input.dataDir,
       settingsPath: input.settingsPath,
       ...(input.logPath ? { logPath: input.logPath } : {})

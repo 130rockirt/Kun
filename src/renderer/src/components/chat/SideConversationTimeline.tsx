@@ -4,7 +4,7 @@ import { MessageCircleMore } from 'lucide-react'
 import type { SideConversation } from '../../store/chat-store-types'
 import { threadHasPendingRuntimeWork } from '../../store/chat-store-runtime-helpers'
 import { ConversationTurn } from './MessageTimeline'
-import { groupTurns, stableTurnKey } from './message-timeline-turns'
+import { activeTimelineTurnIndex, groupTurns, stableTurnKey } from './message-timeline-turns'
 import { InjectedMemoryLookupProvider } from './injected-memory-lookup'
 import { TimelineFilePreviewWorkspaceProvider } from './timeline-file-preview-workspace'
 
@@ -52,6 +52,14 @@ export function SideConversationTimeline({
   const viewportRef = useRef<HTMLDivElement | null>(null)
   const endRef = useRef<HTMLDivElement | null>(null)
   const turns = useMemo(() => groupTurns(side.blocks), [side.blocks])
+  const activeTurnIndex = useMemo(
+    () => activeTimelineTurnIndex(
+      turns,
+      side.liveReasoningTurnId ?? side.liveAssistantTurnId ?? side.turnId,
+      side.userItemId
+    ),
+    [side.liveAssistantTurnId, side.liveReasoningTurnId, side.turnId, side.userItemId, turns]
+  )
   const scrollKey = [
     side.blocks.length,
     side.liveReasoning.length,
@@ -69,7 +77,10 @@ export function SideConversationTimeline({
     side.blocks.length > 0 || Boolean(side.liveReasoning.trim() || side.liveAssistant.trim())
 
   return (
-    <TimelineFilePreviewWorkspaceProvider workspaceRoot={workspaceRoot}>
+    <TimelineFilePreviewWorkspaceProvider
+      workspaceRoot={workspaceRoot}
+      threadId={side.threadId}
+    >
       <InjectedMemoryLookupProvider workspaceRoot={workspaceRoot}>
         <div
           ref={viewportRef}
@@ -85,18 +96,18 @@ export function SideConversationTimeline({
             ) : null}
 
             {turns.map((turn, index) => {
-              const isLatest = index === turns.length - 1
+              const isActive = index === activeTurnIndex
               const turnPending = threadHasPendingRuntimeWork(turn.blocks)
               const hasLiveStream =
-                isLatest && Boolean(side.liveReasoning.trim() || side.liveAssistant.trim())
-              const isProcessing = (side.busy && isLatest) || turnPending || hasLiveStream
+                isActive && Boolean(side.liveReasoning.trim() || side.liveAssistant.trim())
+              const isProcessing = (side.busy && isActive) || turnPending || hasLiveStream
               return (
                 <ConversationTurn
                   key={stableTurnKey(turn, index)}
                   turn={turn}
                   isProcessing={isProcessing}
-                  liveReasoning={isLatest ? side.liveReasoning : ''}
-                  live={isLatest ? side.liveAssistant : ''}
+                  liveReasoning={isActive ? side.liveReasoning : ''}
+                  live={isActive ? side.liveAssistant : ''}
                   filePreviewWorkspaceRoot={workspaceRoot}
                   viewportRef={viewportRef}
                   compactCards

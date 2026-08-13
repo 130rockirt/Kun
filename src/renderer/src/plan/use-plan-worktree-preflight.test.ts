@@ -1,7 +1,13 @@
 import { createElement } from 'react'
 import { act, create, type ReactTestRenderer } from 'react-test-renderer'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import {
+  defaultKunRuntimeSettings,
+  normalizeAppSettings,
+  type AppSettingsV1
+} from '@shared/app-settings'
 import type { PlanWorktreePreflightResult, PlanWorktreeRunRecord } from '@shared/plan-worktree'
+import { rendererRuntimeClient } from '../agent/runtime-client'
 import { createGuiPlanArtifact } from './plan-store'
 import {
   planWorktreeHostPlanId,
@@ -48,8 +54,50 @@ function recoveredRun(planId: string): PlanWorktreeRunRecord {
 
 describe('plan worktree preflight hook', () => {
   afterEach(() => {
+    rendererRuntimeClient.invalidateSettings()
     resetPlanWorktreeStoreForTests()
     vi.unstubAllGlobals()
+  })
+
+  it('keeps isolation off when legacy settings omit the preference', async () => {
+    const preflight = vi.fn()
+    const legacyKun = defaultKunRuntimeSettings() as Partial<ReturnType<typeof defaultKunRuntimeSettings>>
+    delete legacyKun.planExecution
+    const settings = normalizeAppSettings({
+      version: 1,
+      agents: { kun: legacyKun }
+    } as unknown as AppSettingsV1)
+    vi.stubGlobal('window', {
+      kunGui: {
+        getSettings: vi.fn(async () => settings),
+        planWorktree: {
+          preflight,
+          list: vi.fn(async () => [])
+        }
+      }
+    })
+    const plan = createGuiPlanArtifact({
+      workspaceRoot: '/repo',
+      threadId: 'thread-a',
+      relativePath: '.kunsdd/plan/demo.md',
+      sourceRequest: 'Demo'
+    })
+    let renderer: ReactTestRenderer
+    function Harness(): null {
+      usePlanWorktreePreflight(plan, 'thread-a')
+      return null
+    }
+    await act(async () => {
+      renderer = create(createElement(Harness))
+    })
+
+    expect(usePlanWorktreeStore.getState().plans[plan.id]).toMatchObject({
+      initialized: true,
+      useWorktree: false,
+      preflight: { status: 'idle' }
+    })
+    expect(preflight).not.toHaveBeenCalled()
+    act(() => renderer!.unmount())
   })
 
   it('ignores the older response after the source thread context changes', async () => {

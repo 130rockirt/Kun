@@ -73,6 +73,7 @@ export function useWorkbenchTaskSurface(input: {
       : null
   ), [input.activeThreadId, input.threads])
   const lockedProfile = activeThread?.designProfile
+  const cachedDesignSurface = useCodeCanvasDesignSurface((state) => state.surface)
   const taskSurfaceLocked = workbenchTaskSurfaceIsLocked(activeThread)
   const draftScope = workbenchTaskIntentScope(activeThread?.id ?? null, draftWorkspace)
   const draft = useWorkbenchTaskIntent(draftScope, draftWorkspace)
@@ -133,7 +134,19 @@ export function useWorkbenchTaskSurface(input: {
   // document target (or a legacy registry binding). This is deliberately
   // independent of the next-turn surface so Code turns keep the Design
   // whiteboard visible and referenceable.
-  const threadHasDesignDocument = Boolean(restoreDesignDocumentId)
+  const activeThreadWorkspace = normalizeWorkspaceRoot(
+    activeThread?.workspace || input.workspaceRoot
+  )
+  const hasProvisionalDesignDocument = Boolean(
+    input.activeThreadId &&
+    cachedDesignSurface?.threadId === input.activeThreadId &&
+    (cachedDesignSurface.surfaceKind ?? 'kun-design') === 'kun-design' &&
+    normalizeWorkspaceRoot(cachedDesignSurface.workspaceRoot) === activeThreadWorkspace
+  )
+  const threadHasDesignDocument = Boolean(
+    restoreDesignDocumentId || hasProvisionalDesignDocument ||
+    (pendingDesignThreadIntent && input.activeThreadId)
+  )
   const unresolvedLegacyDesignTaskId = legacyDesignThread && !legacyDesignRef
     ? activeThread?.id ?? ''
     : ''
@@ -342,10 +355,17 @@ export function useWorkbenchTaskSurface(input: {
     if (!threadId) return null
     const shouldOpenPanel = ensuredDesignTaskIdRef.current !== threadId
     ensuredDesignTaskIdRef.current = threadId
-    useCodeCanvasDesignSurface.getState().showDesignDocument(threadId, workspaceRoot, documentId)
+    useCodeCanvasDesignSurface.getState().showDesignDocument(
+      threadId,
+      workspaceRoot,
+      documentId,
+      // A locked task pins its board so the panel resolves the exact
+      // whiteboard instead of the most recently updated one.
+      { boardArtifactId: lockedProfile?.documentTarget.boardArtifactId }
+    )
     if (shouldOpenPanel) requestCodeCanvasPanelOpen()
     return threadId
-  }, [effectiveDraft.profile, input])
+  }, [effectiveDraft.profile, input, lockedProfile])
 
   const rollbackProvisionalThread = useCallback(async (threadId: string): Promise<boolean> => {
     if (!provisionalDesignThreadIdsRef.current.has(threadId)) return true

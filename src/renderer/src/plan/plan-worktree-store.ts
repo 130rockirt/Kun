@@ -69,7 +69,7 @@ function emptyPlanState(): PlanWorktreePlanState {
   return {
     initialized: false,
     recoveryChecked: false,
-    useWorktree: true,
+    useWorktree: false,
     preflight: { status: 'idle', contextKey: '' },
     building: false
   }

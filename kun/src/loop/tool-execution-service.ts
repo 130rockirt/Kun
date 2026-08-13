@@ -157,11 +157,13 @@ export class ToolExecutionService {
       status: result.item.kind === 'tool_result' && result.item.isError ? 'failed' : 'completed',
       finishedAt: this.deps.nowIso()
     } as Partial<TurnItem>)
+    // Register before publishing the result. Otherwise the renderer can receive
+    // the SSE item and POST its receipt before this process knows the key.
+    await this.registerPendingDesignReceipt(threadId, turnId, call, result)
     await this.deps.turns.applyItem(
       threadId,
       prepareBrowserUseToolResultForPersistence(result.item)
     )
-    await this.registerPendingDesignReceipt(threadId, turnId, call, result)
     await this.afterResultPersisted(threadId, turnId, call, result)
     await this.deps.turns.compactItemHistory(threadId)
   }

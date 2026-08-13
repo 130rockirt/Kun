@@ -10,6 +10,12 @@ import { useCanvasShapeStore } from './canvas-shape-store'
 import { createDefaultShape, createEmptyDocument } from './canvas-types'
 import { useApplyShapeOpsLive } from './use-apply-shape-ops-live'
 
+const mocks = vi.hoisted(() => ({ sendReceipt: vi.fn() }))
+
+vi.mock('./canvas-receipt-sender', () => ({
+  sendCanvasTurnReceipt: (...args: unknown[]) => mocks.sendReceipt(...args)
+}))
+
 const threadId = 'thread-work'
 const documentKey = canvasDocumentKey('/work', 'board-1', WORK_WHITEBOARD_DIR)
 
@@ -48,6 +54,7 @@ function completedTextUpdateTurn(): ChatBlock[] {
 
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+  mocks.sendReceipt.mockClear()
   const document = createEmptyDocument()
   const label = createDefaultShape('text', 40, 40)
   label.id = 'label-service'
@@ -96,6 +103,46 @@ describe('useApplyShapeOpsLive Work replay', () => {
       renderer = create(createElement(WorkReplayHarness))
     })
     expect(label()?.textContent).toBe('Business Rules')
+
+    await act(async () => renderer?.unmount())
+  })
+
+  it('applies existing text and acknowledges its tool before the turn ends', async () => {
+    useChatStore.setState({
+      currentTurnId: 'turn-translate',
+      currentTurnUserId: 'user-translate',
+      busy: true,
+      blocks: completedTextUpdateTurn().map((block) => block.kind === 'tool'
+        ? {
+            ...block,
+            detail: JSON.stringify({
+              ok: true,
+              tool: 'design_update_shapes',
+              action: 'update_shapes',
+              status: 'accepted',
+              receiptKey: 'design-receipt-text',
+              ops: [{
+                op: 'update', id: 'label-service',
+                patch: { textContent: 'Business Rules' }
+              }]
+            })
+          }
+        : block)
+    })
+
+    let renderer: ReturnType<typeof create> | undefined
+    await act(async () => { renderer = create(createElement(WorkReplayHarness)) })
+
+    expect(useCanvasShapeStore.getState().document.objects['label-service']?.textContent)
+      .toBe('Business Rules')
+    expect(useChatStore.getState().currentTurnId).toBe('turn-translate')
+    expect(mocks.sendReceipt).toHaveBeenCalledWith({
+      threadId: 'thread-work',
+      turnId: 'turn-translate',
+      receiptKey: 'design-receipt-text',
+      affectedIds: ['label-service'],
+      errors: []
+    })
 
     await act(async () => renderer?.unmount())
   })

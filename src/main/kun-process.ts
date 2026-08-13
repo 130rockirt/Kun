@@ -173,9 +173,12 @@ export async function handoffExistingKunServiceManagerForDataDir(
     stop?: typeof stopSharedRuntime
     shutdown?: () => Promise<void>
     waitForExit?: (pid: number, timeoutMs: number) => Promise<boolean>
+    /** Replace the Manager even when canonical paths already match. */
+    force?: boolean
   } = {}
 ): Promise<void> {
   if (
+    !overrides.force &&
     sameCanonicalPath(existing.discovery.dataDir, dataDir) &&
     sameCanonicalPath(existing.discovery.settingsPath, settingsPath)
   ) return
@@ -216,11 +219,14 @@ export async function handoffExistingKunServiceManagerForDataDir(
 
 async function handoffMismatchedKunServiceManager(
   dataDir: string,
-  settingsPath: string
+  settingsPath: string,
+  expectedBuildId: string | undefined
 ): Promise<void> {
   const existing = await resolveServiceManager()
   if (!existing) return
-  await handoffExistingKunServiceManagerForDataDir(existing, dataDir, settingsPath)
+  await handoffExistingKunServiceManagerForDataDir(existing, dataDir, settingsPath, {
+    force: Boolean(expectedBuildId) && existing.discovery.buildId !== expectedBuildId
+  })
 }
 
 export async function ensureKunServiceManager(input: {
@@ -229,7 +235,6 @@ export async function ensureKunServiceManager(input: {
 }): Promise<ServiceManagerConnection> {
   serviceManagerSettingsPath = input.settingsPath
   const dataDir = input.dataDir ?? defaultKunDataDir()
-  await handoffMismatchedKunServiceManager(dataDir, input.settingsPath)
   const resolution = resolveKunExecutable(appRoot(), '')
   const serveEntry = resolution.args[0]
   if (!serveEntry || !existsSync(serveEntry)) {
@@ -237,6 +242,8 @@ export async function ensureKunServiceManager(input: {
       `Kun Service Manager build is missing next to ${serveEntry || 'the bundled runtime entry'}. Run \`npm run build:kun\` first.`
     )
   }
+  const buildId = await resolveKunRuntimeBuildId(resolution)
+  await handoffMismatchedKunServiceManager(dataDir, input.settingsPath, buildId)
   const managerEntry = join(dirname(serveEntry), '..', 'manager', 'manager-entry.js')
   const flavor = resolveCliRuntimeFlavor({ env: process.env })
   const manager = await ensureServiceManager({
@@ -246,6 +253,7 @@ export async function ensureKunServiceManager(input: {
       env: process.env,
       isPackaged: app.isPackaged
     }),
+    ...(buildId ? { buildId } : {}),
     dataDir,
     settingsPath: input.settingsPath,
     launch: {

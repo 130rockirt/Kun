@@ -64,17 +64,22 @@ class ReadForeverModel implements ModelClient {
   }
 }
 
-class TooManyToolsModel implements ModelClient {
+class OverflowThenConcludeModel implements ModelClient {
   readonly provider = 'test'
   readonly model = 'too-many-tools-model'
   requests = 0
 
   async *stream(): AsyncIterable<ModelStreamChunk> {
     this.requests += 1
-    for (let index = 0; index < 9; index += 1) {
-      yield { kind: 'tool_call_complete', callId: `read_${index}`, toolName: 'read', arguments: { path: 'src/target.ts', task_indexes: [1] } }
+    if (this.requests === 1) {
+      for (let index = 0; index < 9; index += 1) {
+        yield { kind: 'tool_call_complete', callId: `read_${index}`, toolName: 'read', arguments: { path: 'src/target.ts', task_indexes: [1] } }
+      }
+      yield { kind: 'completed', stopReason: 'tool_calls' }
+      return
     }
-    yield { kind: 'completed', stopReason: 'tool_calls' }
+    yield { kind: 'assistant_text_delta', text: 'Task 1: source found after bounded reads.' }
+    yield { kind: 'completed', stopReason: 'stop' }
   }
 }
 
@@ -137,15 +142,19 @@ describe('Fast Context child executor', () => {
     expect(reads).toBe(3)
   })
 
-  it('rejects the ninth tool call in a model step', async () => {
-    const model = new TooManyToolsModel()
+  it('truncates tool-call overflow and continues with the accepted batch', async () => {
+    const model = new OverflowThenConcludeModel()
+    let reads = 0
     const executor = createChildAgentExecutor({
-      model, toolHost: new LocalToolHost({ tools: [sourceTool('grep'), sourceTool('glob'), sourceTool('read')] }),
+      model, toolHost: new LocalToolHost({ tools: [sourceTool('grep'), sourceTool('glob'), sourceTool('read', () => { reads += 1 })] }),
       prefix: createImmutablePrefix({ systemPrompt: 'test' }), defaultModel: model.model
     })
 
-    await expect(executor(fastContextInput(model.model))).rejects.toMatchObject({ name: 'ChildResultExecutionError' })
-    expect(model.requests).toBe(1)
+    await expect(executor(fastContextInput(model.model))).resolves.toMatchObject({
+      summary: 'Task 1: source found after bounded reads.'
+    })
+    expect(model.requests).toBe(2)
+    expect(reads).toBe(8)
   })
 
   it('confines full-access Fast Context source calls to the captured workspace', async () => {

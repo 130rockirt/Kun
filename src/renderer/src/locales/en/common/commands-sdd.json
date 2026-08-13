@@ -86,7 +86,7 @@
   "rightPanelCollapse": "Collapse right sidebar",
   "editorPickerTitle": "Choose default editor",
   "restartKunServe": "Restart Kun",
-  "restartKunServeTooltip": "Replace the current Kun service",
+  "restartKunServeTooltip": "Restart Kun and clear historical services",
   "restartKunServeRestarting": "Restarting…",
   "editorPickerTitleWithEditor": "Default editor: {{editor}}",
   "editorPickerMenuTitle": "Open files with",

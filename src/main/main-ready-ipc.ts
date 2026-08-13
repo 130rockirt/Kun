@@ -92,7 +92,11 @@ import {
   runtimeRequestOnLease,
   validateRuntimeSettingsForApply
 } from './main-runtime-settings'
-import { ensureRuntime, replaceKunServe, restartRuntime } from './main-runtime-startup'
+import {
+  ensureRuntime,
+  restartAllKunServeProcesses,
+  restartRuntime
+} from './main-runtime-startup'
 import {
   destroyTrayQuotaPopover,
   notifyTrayQuotaRefresh,
@@ -308,7 +312,7 @@ export function registerMainIpc(services: MainServices): void {
       },
       restartKunServe: async () => {
         const settings = await mainState.store.load()
-        await replaceKunServe(settings)
+        await restartAllKunServeProcesses(settings)
       },
       fetchUpstreamModels: fetchModels,
       getClawRuntime: () => mainState.clawRuntime,

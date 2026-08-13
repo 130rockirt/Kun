@@ -3,7 +3,7 @@ import type { DesignArtifact } from '../../../design/design-types'
 import type { DesignHtmlElementContext } from '../../../design/design-composer-context'
 import type { DesignRuntimeQualityPayload } from '../../../design/design-html-quality'
 import { useDesignWorkspaceStore } from '../../../design/design-workspace-store'
-import { findDesignBoardArtifact, ensureDesignBoardArtifact } from '../../../design/design-board'
+import { findDesignBoardArtifact, findDesignBoardArtifactById, ensureDesignBoardArtifact } from '../../../design/design-board'
 import { setScreenCreationFactory } from '../../../design/canvas/screen-artifact-bridge'
 import { createLinkedHtmlScreen } from '../../../design/canvas/screen-lifecycle'
 import { createLinkedSvgArtifact } from '../../../design/canvas/svg-artifact-lifecycle'
@@ -22,6 +22,8 @@ export type DesignDocumentCanvasSurfaceProps = {
   workspaceRoot: string
   documentId: string | null
   activeThreadId: string | null
+  /** Board pinned by a locked task target; never falls back to another board. */
+  boardArtifactId?: string
   readOnly?: boolean
   leftSidebarCollapsed?: boolean
   onToggleLeftSidebar?: () => void
@@ -49,6 +51,7 @@ export function DesignDocumentCanvasSurface({
   workspaceRoot,
   documentId,
   activeThreadId,
+  boardArtifactId,
   readOnly = false,
   leftSidebarCollapsed = false,
   onToggleLeftSidebar = () => undefined,
@@ -65,7 +68,11 @@ export function DesignDocumentCanvasSurface({
   const activeDocumentId = useDesignWorkspaceStore((state) => state.activeDocumentId)
   const artifacts = useDesignWorkspaceStore((state) =>
     state.documents.find((document) => document.id === documentId)?.artifacts ?? [])
-  const boardArtifact = findDesignBoardArtifact(artifacts)
+  const requestedBoardArtifactId = boardArtifactId?.trim()
+  const boardArtifact = requestedBoardArtifactId
+    ? findDesignBoardArtifactById(artifacts, requestedBoardArtifactId)
+    : findDesignBoardArtifact(artifacts)
+  const lockedBoardMissing = Boolean(requestedBoardArtifactId && !boardArtifact)
   const documentIsActive = Boolean(documentId && activeDocumentId === documentId)
   const baseDir = documentId ? `.kun-design/${documentId}` : undefined
   const liveOpsErrorKey = canvasOpErrorKey(workspaceRoot, documentId, boardArtifact?.id)
@@ -76,8 +83,12 @@ export function DesignDocumentCanvasSurface({
 
   useEffect(() => {
     if (!workspaceRoot || !settingsLoaded || !documentId || !documentIsActive || readOnly) return
+    // A locked target is resolved by id and never auto-created or switched:
+    // creating/reusing the most recently updated board would silently retarget
+    // the task away from the whiteboard it is pinned to.
+    if (requestedBoardArtifactId) return
     void ensureDesignBoardArtifact(workspaceRoot, documentId)
-  }, [documentId, documentIsActive, readOnly, settingsLoaded, workspaceRoot, artifacts.length])
+  }, [documentId, documentIsActive, readOnly, requestedBoardArtifactId, settingsLoaded, workspaceRoot, artifacts.length])
 
   useEffect(() => {
     if (!boardArtifact || !documentId || !documentIsActive || readOnly) return
@@ -171,7 +182,9 @@ export function DesignDocumentCanvasSurface({
   if (!boardArtifact || !documentIsActive) {
     return (
       <div className="ds-stage-design-canvas relative flex min-h-0 min-w-0 flex-1 items-center justify-center overflow-hidden bg-ds-main text-sm text-ds-faint">
-        Loading design board...
+        {lockedBoardMissing
+          ? 'The whiteboard bound to this Design task is unavailable.'
+          : 'Loading design board...'}
       </div>
     )
   }

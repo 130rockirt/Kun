@@ -90,7 +90,7 @@ export class KnowledgeBaseService {
       throw new KnowledgeBaseError('knowledge bases cannot be reindexed while the thread is running', 'busy')
     }
     const mount = this.requireMount(thread, mountId)
-    const index = await this.ensureIndex(mount, true)
+    const index = await this.ensureIndex(mount, { force: true })
     return this.readyStatus(mount, index)
   }
 
@@ -163,7 +163,7 @@ export class KnowledgeBaseService {
     if (nodeIds.length === 0 || nodeIds.length > MAX_READ_NODES) {
       throw new KnowledgeBaseError(`knowledge_read accepts 1-${MAX_READ_NODES} node ids`, 'invalid')
     }
-    const { mount, index } = await this.indexForThread(threadId, mountId)
+    const { mount, index } = await this.indexForThread(threadId, mountId, true)
     const nodes = [...new Set(nodeIds)].map((id) => {
       const value = index.nodes[id]
       if (!value?.relativePath || !value.location) {
@@ -205,16 +205,29 @@ export class KnowledgeBaseService {
     }
   }
 
-  private async indexForThread(threadId: string, mountId: string) {
+  private async indexForThread(
+    threadId: string,
+    mountId: string,
+    verifyFreshness = false
+  ) {
     const thread = await this.requireThread(threadId)
     const mount = this.requireMount(thread, mountId)
-    return { mount, index: await this.ensureIndex(mount) }
+    return { mount, index: await this.ensureIndex(mount, { verifyFreshness }) }
   }
 
-  private async ensureIndex(mount: KnowledgeBaseMount, force = false): Promise<StoredKnowledgeIndex> {
+  private async ensureIndex(
+    mount: KnowledgeBaseMount,
+    options: { force?: boolean; verifyFreshness?: boolean } = {}
+  ): Promise<StoredKnowledgeIndex> {
+    const force = options.force === true
     const key = mountKey(mount)
     const cached = this.indexCache.get(key)
-    if (!force && cached && Date.now() - cached.checkedAt < INDEX_CACHE_TTL_MS) {
+    if (
+      !force &&
+      !options.verifyFreshness &&
+      cached &&
+      Date.now() - cached.checkedAt < INDEX_CACHE_TTL_MS
+    ) {
       return cached.index
     }
     const existing = this.inFlight.get(key)
@@ -278,7 +291,7 @@ export class KnowledgeBaseService {
   }
 
   private schedule(mount: KnowledgeBaseMount, force = false): void {
-    void this.ensureIndex(mount, force).catch(() => undefined)
+    void this.ensureIndex(mount, { force }).catch(() => undefined)
   }
 
   private statusFor(mount: KnowledgeBaseMount): KnowledgeBaseIndexStatus {

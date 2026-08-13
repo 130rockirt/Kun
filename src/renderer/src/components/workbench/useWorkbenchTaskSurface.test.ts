@@ -410,6 +410,7 @@ describe('workbench task mode', () => {
     })
 
     expect(runtime!.taskSurface).toBe('design')
+    expect(runtime!.threadHasDesignDocument).toBe(true)
     expect(useDesignWorkspaceStore.getState().activeDocumentId).toBe(provisionalDocument.id)
 
     await act(async () => {
@@ -421,6 +422,7 @@ describe('workbench task mode', () => {
       '/workspace'
     ).surface).toBe('design')
     expect(runtime!.taskSurface).toBe('design')
+    expect(runtime!.threadHasDesignDocument).toBe(true)
     await act(async () => renderer.unmount())
   })
 

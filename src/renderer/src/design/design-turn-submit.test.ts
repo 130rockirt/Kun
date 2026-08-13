@@ -369,4 +369,92 @@ describe('submitDesignTurn', () => {
     expect(ensureBoardArtifact).toHaveBeenCalledWith('/workspace', designState.activeDocumentId)
     expect(sendMessage).not.toHaveBeenCalled()
   })
+
+  it('targets the locked board id even when another board was updated more recently', async () => {
+    const olderBoard: DesignArtifact & { kind: 'canvas' } = {
+      ...boardArtifact,
+      id: 'board-locked',
+      updatedAt: '2026-07-01T00:00:00.000Z',
+      createdAt: '2026-07-01T00:00:00.000Z'
+    }
+    const newerBoard: DesignArtifact & { kind: 'canvas' } = {
+      ...boardArtifact,
+      id: 'board-newest',
+      updatedAt: '2026-07-03T00:00:00.000Z'
+    }
+    const designState = makeDesignState({ artifacts: [olderBoard, newerBoard] })
+    const sendMessage = vi.fn(async () => true)
+    const resolveTarget = vi.fn(async () => resolvedTarget())
+    const prepareTurnFiles = vi.fn(async () => ({ ok: true as const, notesWritten: false }))
+    const buildPromptPayload = vi.fn(async () => ({ prompt: 'DESIGN PROMPT', promptState: designState }))
+    const designTaskProfileForTarget = vi.fn((documentTarget: {
+      documentId: string
+      boardArtifactId: string
+    }) => ({
+      version: 1 as const,
+      documentTarget,
+      outputMedium: 'html' as const,
+      target: 'web' as const,
+      preset: 'none' as const,
+      context: { tone: [] }
+    }))
+
+    const result = await submitDesignTurn({
+      promptText: 'Refine the locked board',
+      displayText: 'Refine the locked board',
+      workspaceRoot: '/workspace',
+      source: 'user',
+      sendMessage,
+      resolveProviderId: () => '',
+      boardArtifactId: 'board-locked',
+      designTaskProfileForTarget,
+      getDesignState: () => designState,
+      getCanvasShapeState: () => ({ document: createEmptyDocument() }) as never,
+      getCanvasSelectionState: () => ({ selectedIds: new Set<string>() }) as never,
+      getCanvasViewportState: () => ({ vbox: { x: 0, y: 0, width: 1200, height: 800 } }) as never,
+      getDesignSystemState: () => ({ system: createEmptyDesignSystem() }) as never,
+      getDesignTokensState: () => ({ byArtifact: {} }) as never,
+      resolveTarget,
+      prepareTurnFiles,
+      buildPromptPayload
+    })
+
+    expect(result).toEqual({ status: 'sent', target: 'canvas', clearAttachments: false })
+    expect(resolveTarget).toHaveBeenCalledWith(expect.objectContaining({
+      boardArtifact: expect.objectContaining({ id: 'board-locked' })
+    }))
+    expect(designTaskProfileForTarget).toHaveBeenCalledWith({
+      documentId: 'doc',
+      boardArtifactId: 'board-locked'
+    })
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.any(String),
+      'agent',
+      expect.objectContaining({
+        designDocumentTarget: { documentId: 'doc', boardArtifactId: 'board-locked' }
+      })
+    )
+  })
+
+  it('returns missing-board when the locked board id is absent instead of switching boards', async () => {
+    const designState = makeDesignState() // only "board" exists, the locked id does not
+    const sendMessage = vi.fn(async () => true)
+    const ensureBoardArtifact = vi.fn(async () => null)
+
+    const result = await submitDesignTurn({
+      promptText: 'Refine the locked board',
+      displayText: 'Refine the locked board',
+      workspaceRoot: '/workspace',
+      source: 'user',
+      sendMessage,
+      resolveProviderId: () => '',
+      boardArtifactId: 'board-locked-missing',
+      getDesignState: () => designState,
+      ensureBoardArtifact
+    })
+
+    expect(result).toEqual({ status: 'missing-board' })
+    expect(ensureBoardArtifact).not.toHaveBeenCalled()
+    expect(sendMessage).not.toHaveBeenCalled()
+  })
 })

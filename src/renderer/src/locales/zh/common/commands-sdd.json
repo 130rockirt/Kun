@@ -86,7 +86,7 @@
   "rightPanelCollapse": "收起右侧栏",
   "editorPickerTitle": "选择默认编辑器",
   "restartKunServe": "重启 Kun",
-  "restartKunServeTooltip": "替换当前 Kun 服务",
+  "restartKunServeTooltip": "清理历史服务并重启 Kun",
   "restartKunServeRestarting": "重启中…",
   "editorPickerTitleWithEditor": "默认编辑器：{{editor}}",
   "editorPickerMenuTitle": "打开文件使用",

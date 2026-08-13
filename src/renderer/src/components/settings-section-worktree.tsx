@@ -116,7 +116,7 @@ export function WorktreeSettingsSection({ ctx }: { ctx: Record<string, any> }): 
         description={t('planWorktreeDefaultDesc')}
         control={
           <Toggle
-            checked={ctx.kun?.planExecution?.useWorktreeByDefault ?? true}
+            checked={ctx.kun?.planExecution?.useWorktreeByDefault ?? false}
             ariaLabel={t('planWorktreeDefaultTitle')}
             onChange={(useWorktreeByDefault) => ctx.updateKun({
               planExecution: { useWorktreeByDefault }

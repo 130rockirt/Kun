@@ -270,7 +270,7 @@ describe('Design task admission and fork', () => {
     })).rejects.toBeInstanceOf(DesignProfileLockedError)
   })
 
-  it('locks a Code-owned thread to the first accepted task mode', async () => {
+  it('keeps Code ownership while accepting Code -> Design -> Code -> Design turns', async () => {
     const state = harness()
     const thread = createThreadRecord({
       id: 'thr_mixed_surface', title: 'Unified workbench',
@@ -285,14 +285,26 @@ describe('Design task admission and fork', () => {
     await state.turns.finishTurn({ threadId: thread.id, turnId: firstCode.turnId, status: 'completed' })
 
     const submitted = profile()
-    await expect(state.turns.startTurn({
+    const firstDesign = await state.turns.startTurn({
       threadId: thread.id,
       request: {
         prompt: 'Design UI', agentSurface: 'design',
         designProfile: submitted, designDocumentTarget: submitted.documentTarget
       }
-    })).rejects.toBeInstanceOf(TaskSurfaceLockedError)
-    expect((await state.threadStore.get(thread.id))?.designProfile).toBeUndefined()
+    })
+    expect(firstDesign).toMatchObject({
+      agentSurface: 'design',
+      threadAgentSurface: 'code',
+      designProfile: submitted,
+      designDocumentTarget: submitted.documentTarget
+    })
+    await state.turns.finishTurn({
+      threadId: thread.id,
+      turnId: firstDesign.turnId,
+      status: 'completed'
+    })
+    const lockedProfile = (await state.threadStore.get(thread.id))?.designProfile
+    expect(lockedProfile).toMatchObject(submitted)
 
     const secondCode = await state.turns.startTurn({
       threadId: thread.id,
@@ -301,7 +313,25 @@ describe('Design task admission and fork', () => {
     expect(secondCode).toMatchObject({ agentSurface: 'code', threadAgentSurface: 'code' })
     expect((await state.threadStore.get(thread.id))?.turns.at(-1)?.designProfile).toBeUndefined()
     await state.turns.finishTurn({ threadId: thread.id, turnId: secondCode.turnId, status: 'completed' })
-    expect((await state.threadStore.get(thread.id))?.agentSurface).toBe('code')
+
+    const secondDesign = await state.turns.startTurn({
+      threadId: thread.id,
+      request: { prompt: 'Refine the Design', agentSurface: 'design' }
+    })
+    expect(secondDesign).toMatchObject({
+      agentSurface: 'design',
+      threadAgentSurface: 'code',
+      designProfile: lockedProfile,
+      designDocumentTarget: submitted.documentTarget
+    })
+    await state.turns.finishTurn({
+      threadId: thread.id,
+      turnId: secondDesign.turnId,
+      status: 'completed'
+    })
+    const persisted = await state.threadStore.get(thread.id)
+    expect(persisted?.agentSurface).toBe('code')
+    expect(persisted?.designProfile).toEqual(lockedProfile)
   })
 
   it('rolls back task/profile locks when durable admission fails', async () => {

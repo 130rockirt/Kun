@@ -233,6 +233,23 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
     })).toBe(true)
   })
 
+  it('does not attach busy state to a trailing orphan when the active turn is known', () => {
+    expect(timelineTurnIsProcessing({
+      busy: true,
+      isLatestTurn: true,
+      isActiveTurn: false,
+      turnPending: false,
+      hasLiveStream: false
+    })).toBe(false)
+    expect(timelineTurnIsProcessing({
+      busy: true,
+      isLatestTurn: false,
+      isActiveTurn: true,
+      turnPending: false,
+      hasLiveStream: false
+    })).toBe(true)
+  })
+
   it('keeps the fallback running animation visible between process events', () => {
     const turn = {
       user: {

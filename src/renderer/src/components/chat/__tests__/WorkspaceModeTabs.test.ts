@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { act, create, type ReactTestRenderer } from 'react-test-renderer'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import i18n from '../../../i18n'
+import { readStylesheetBundle } from '../../../testing/stylesheet-bundle'
 import { WorkspaceModeTabs } from '../WorkspaceModeTabs'
 
 describe('WorkspaceModeTabs', () => {
@@ -57,6 +58,26 @@ describe('WorkspaceModeTabs', () => {
     expect(rendered).toContain('Build, debug, and ship')
     expect(rendered).toContain('Write, organize, and handle everyday tasks')
     act(() => renderer.unmount())
+  })
+
+  it('keeps each sidebar mode control above the sections rendered after it', async () => {
+    const nodeFs = 'node:fs/promises'
+    const { readFile } = await import(/* @vite-ignore */ nodeFs)
+    const sidebarSources = await Promise.all([
+      new URL('../Sidebar.tsx', import.meta.url),
+      new URL('../../write/WriteSidebar.tsx', import.meta.url),
+      new URL('../../design/DesignSidebar.tsx', import.meta.url)
+    ].map((url) => readFile(url, 'utf8')))
+    const surfaces = await readStylesheetBundle(
+      new URL('../../../styles/surfaces-write.css', import.meta.url)
+    )
+
+    for (const source of sidebarSources) {
+      expect(source).toContain('className="workspace-mode-controls ')
+    }
+    expect(surfaces).toMatch(
+      /\.ds-sidebar-shell > \.workspace-mode-controls\s*\{[^}]*z-index:\s*2;/s
+    )
   })
 
   it('marks the current mode and invokes only the newly selected mode callback', () => {

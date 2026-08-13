@@ -3,10 +3,14 @@ import { ModelStreamCollector } from './model-stream-collector.js'
 
 function collector(options: {
   maxToolCallsPerStep?: number
+  toolCallOverflowBehavior?: 'fail' | 'truncate'
   allocateRuntimeCallId?: (providerCallId: string) => string
 } = {}): ModelStreamCollector {
   return new ModelStreamCollector({
     maxToolCallsPerStep: options.maxToolCallsPerStep ?? 2,
+    ...(options.toolCallOverflowBehavior
+      ? { toolCallOverflowBehavior: options.toolCallOverflowBehavior }
+      : {}),
     allocateRuntimeCallId: options.allocateRuntimeCallId ?? ((providerCallId) => providerCallId),
     toolMetadata: new Map([
       ['edit', { providerId: 'builtin', toolKind: 'file_change' as const }]
@@ -126,6 +130,18 @@ describe('ModelStreamCollector', () => {
         message: 'model response exceeded 1 tool calls'
       }
     })
+    expect(stream.snapshot().toolCalls.map((call) => call.callId)).toEqual(['call_1'])
+  })
+
+  it('can truncate excess tool calls while retaining the accepted batch', () => {
+    const stream = collector({ maxToolCallsPerStep: 1, toolCallOverflowBehavior: 'truncate' })
+    stream.reduce({ kind: 'tool_call_complete', callId: 'call_1', toolName: 'edit', arguments: {} })
+    const truncated = stream.reduce({
+      kind: 'tool_call_complete', callId: 'call_2', toolName: 'edit', arguments: {}
+    })
+
+    expect(truncated).toEqual({ intents: [] })
+    expect(stream.truncatedToolCallCount).toBe(1)
     expect(stream.snapshot().toolCalls.map((call) => call.callId)).toEqual(['call_1'])
   })
 

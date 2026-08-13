@@ -10,6 +10,7 @@ import {
 import { useTranslation } from 'react-i18next'
 import type { KnowledgeBaseIndexStatus, KnowledgeBaseMount } from '../../agent/types'
 import { rendererRuntimeClient } from '../../agent/runtime-client'
+import { formatRuntimeError } from '../../lib/format-runtime-error'
 import { workspaceLabelFromPath } from '../../lib/workspace-label'
 import { normalizeWorkspaceRoot, workspaceRootIdentityKey } from '../../lib/workspace-path'
 import { useChatStore } from '../../store/chat-store'
@@ -64,6 +65,7 @@ export function KnowledgeBasePicker(): ReactElement {
   const refresh = useChatStore((state) => state.refreshThreadKnowledgeBases)
   const reindex = useChatStore((state) => state.reindexThreadKnowledgeBase)
   const openWrite = useChatStore((state) => state.openWrite)
+  const setError = useChatStore((state) => state.setError)
   const [open, setOpen] = useState(false)
   const [roots, setRoots] = useState<string[]>([])
   const [actingId, setActingId] = useState<string | null>(null)
@@ -89,15 +91,23 @@ export function KnowledgeBasePicker(): ReactElement {
 
   useEffect(() => {
     if (!open) return
+    let cancelled = false
     void rendererRuntimeClient.getSettings({ forceRefresh: true }).then((settings) => {
-      setRoots(compactRoots([
+      if (cancelled) return
+      setRoots((current) => compactRoots([
         settings.write.defaultWorkspaceRoot,
         settings.write.activeWorkspaceRoot,
-        ...settings.write.workspaces
+        ...settings.write.workspaces,
+        ...current
       ]))
+    }).catch((error: unknown) => {
+      if (!cancelled) setError(formatRuntimeError(error))
     })
     void refresh()
-  }, [activeThreadId, open, refresh])
+    return () => {
+      cancelled = true
+    }
+  }, [activeThreadId, open, refresh, setError])
 
   useEffect(() => {
     if (!open || mounts.length === 0) return
@@ -120,6 +130,8 @@ export function KnowledgeBasePicker(): ReactElement {
         activeThreadId,
         exists ? mounts.filter((candidate) => candidate.id !== mount.id) : [...mounts, mount]
       )
+    } catch (error) {
+      setError(formatRuntimeError(error))
     } finally {
       setActingId(null)
     }
@@ -127,25 +139,47 @@ export function KnowledgeBasePicker(): ReactElement {
 
   const addDirectory = async (): Promise<void> => {
     if (!activeThreadId || !canChange) return
-    const picked = await window.kunGui.pickWorkspaceDirectory(activeThread?.workspace)
-    if (picked.canceled || !picked.path) return
-    setActingId('add')
     try {
+      const picked = await window.kunGui.pickWorkspaceDirectory(activeThread?.workspace)
+      if (picked.canceled || !picked.path) return
+      setActingId('add')
       await useWriteWorkspaceStore.getState().addWriteWorkspace(picked.path)
       const normalized = normalizeWorkspaceRoot(picked.path)
+      const writeState = useWriteWorkspaceStore.getState()
+      const configured = writeState.workspaceRoots.some((root) =>
+        workspaceRootIdentityKey(root) === workspaceRootIdentityKey(normalized)
+      )
+      if (writeState.settingsError || !configured) {
+        setError(writeState.settingsError || 'The selected Work workspace could not be added.')
+        return
+      }
       setRoots((current) => compactRoots([normalized, ...current]))
       if (!mounts.some((mount) => workspaceRootIdentityKey(mount.root) === workspaceRootIdentityKey(normalized))) {
         await setMounts(activeThreadId, [...mounts, buildKnowledgeBaseMount(normalized)])
       }
+    } catch (error) {
+      setError(formatRuntimeError(error))
     } finally {
       setActingId(null)
     }
   }
 
   const openInWrite = async (root: string): Promise<void> => {
-    await useWriteWorkspaceStore.getState().selectWriteWorkspace(root)
-    setOpen(false)
-    await openWrite()
+    try {
+      await useWriteWorkspaceStore.getState().selectWriteWorkspace(root)
+      const writeState = useWriteWorkspaceStore.getState()
+      if (
+        writeState.settingsError ||
+        workspaceRootIdentityKey(writeState.workspaceRoot) !== workspaceRootIdentityKey(root)
+      ) {
+        setError(writeState.settingsError || 'The selected Work workspace could not be opened.')
+        return
+      }
+      setOpen(false)
+      await openWrite()
+    } catch (error) {
+      setError(formatRuntimeError(error))
+    }
   }
 
   return (

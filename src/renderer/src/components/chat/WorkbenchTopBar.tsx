@@ -406,7 +406,7 @@ export function WorkbenchTopActions({
         type="button"
         onClick={() => void restartKunServe()}
         disabled={restartingKunServe || !restartKunServeAvailable}
-        className="ds-topbar-action-button inline-flex h-8 shrink-0 items-center gap-1.5 rounded-xl border border-amber-200/75 bg-white/70 px-2.5 text-[11.5px] font-semibold text-ds-muted shadow-[0_1px_2px_rgba(15,23,42,0.04),inset_0_1px_0_rgba(255,255,255,0.72)] backdrop-blur-sm transition hover:border-amber-300/90 hover:bg-amber-50/90 hover:text-ds-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400/25 disabled:cursor-not-allowed disabled:opacity-50 dark:border-amber-800/55 dark:bg-amber-950/15 dark:text-ds-muted dark:shadow-none dark:hover:border-amber-700/80 dark:hover:bg-amber-950/35 dark:hover:text-amber-100"
+        className="ds-topbar-action-button inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--ds-radius-control)] border border-amber-200/75 bg-white/70 text-amber-600/85 shadow-[0_1px_2px_rgba(15,23,42,0.04),inset_0_1px_0_rgba(255,255,255,0.72)] backdrop-blur-sm transition hover:border-amber-300/90 hover:bg-amber-50/90 hover:text-amber-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400/25 disabled:cursor-not-allowed disabled:opacity-50 dark:border-amber-800/55 dark:bg-amber-950/15 dark:text-amber-400/85 dark:shadow-none dark:hover:border-amber-700/80 dark:hover:bg-amber-950/35 dark:hover:text-amber-300"
         data-tooltip={restartingKunServe
           ? t('restartKunServeRestarting')
           : restartKunServeError || t('restartKunServeTooltip')}
@@ -415,15 +415,10 @@ export function WorkbenchTopActions({
           : t('restartKunServe')}
       >
         {restartingKunServe ? (
-          <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-600/80" strokeWidth={2} />
+          <Loader2 className="h-4 w-4 animate-spin" strokeWidth={2} />
         ) : (
-          <RefreshCw className="h-3.5 w-3.5 text-amber-600/80" strokeWidth={1.85} />
+          <RefreshCw className="h-4 w-4" strokeWidth={1.85} />
         )}
-        <span>{restartingKunServe ? t('restartKunServeRestarting') : t('restartKunServe')}</span>
-        <span
-          aria-hidden="true"
-          className={`h-1.5 w-1.5 rounded-full bg-amber-500 ${restartingKunServe ? 'animate-pulse' : ''}`}
-        />
       </button>
     </div>
   )

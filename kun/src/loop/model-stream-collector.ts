@@ -13,6 +13,8 @@ export type ModelStreamToolMetadata = {
 
 export type ModelStreamCollectorConfig = {
   maxToolCallsPerStep: number
+  /** Fast Context keeps the accepted batch useful when a model overshoots its bounded retrieval budget. */
+  toolCallOverflowBehavior?: 'fail' | 'truncate'
   toolMetadata: ReadonlyMap<string, ModelStreamToolMetadata>
   /**
    * Provider call ids are not trusted as execution identity. Normalize each id
@@ -66,6 +68,7 @@ export class ModelStreamCollector {
   private readonly textAccumulator = new StreamTextAccumulator()
   private readonly reasoningAccumulator = new StreamTextAccumulator()
   private readonly toolCalls: ToolCallLike[] = []
+  private truncatedToolCalls = 0
   private stopReason: ModelStreamStopReason = 'stop'
 
   constructor(private readonly config: ModelStreamCollectorConfig) {}
@@ -141,6 +144,10 @@ export class ModelStreamCollector {
     return this.toolCalls.length
   }
 
+  get truncatedToolCallCount(): number {
+    return this.truncatedToolCalls
+  }
+
   snapshot(): ModelStreamSnapshot {
     return {
       text: this.textAccumulator.value,
@@ -154,6 +161,10 @@ export class ModelStreamCollector {
     chunk: Extract<ModelStreamChunk, { kind: 'tool_call_complete' }>
   ): ModelStreamReduction {
     if (this.toolCalls.length >= this.config.maxToolCallsPerStep) {
+      if (this.config.toolCallOverflowBehavior === 'truncate') {
+        this.truncatedToolCalls += 1
+        return { intents: [] }
+      }
       return {
         intents: [],
         terminal: {

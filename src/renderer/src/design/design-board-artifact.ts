@@ -25,6 +25,21 @@ export function findDesignBoardArtifact(
   )[0] ?? null
 }
 
+/**
+ * Resolve the exact canvas artifact pinned by a locked task target. Unlike
+ * {@link findDesignBoardArtifact} this never falls back to another board, so a
+ * multi-board document keeps showing and editing the board the task locked.
+ */
+export function findDesignBoardArtifactById(
+  artifacts: readonly DesignArtifact[],
+  boardArtifactId: string
+): (DesignArtifact & { kind: 'canvas' }) | null {
+  if (!boardArtifactId) return null
+  return artifacts.find((artifact): artifact is DesignArtifact & { kind: 'canvas' } =>
+    artifact.kind === 'canvas' && artifact.id === boardArtifactId
+  ) ?? null
+}
+
 type DesignBoardArtifact = DesignArtifact & { kind: 'canvas' }
 const pendingDesignBoardArtifacts = new Map<string, Promise<DesignBoardArtifact | null>>()
 

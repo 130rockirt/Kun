@@ -10,6 +10,7 @@ import {
   waitForKunStartupSettled
 } from './kun-process'
 import { killStaleKunOnPort } from './kun-process-ports'
+import { clearHistoricalKunServeProcesses } from './runtime/kun-serve-process-cleanup'
 import { managedKunHostCanAutoStart } from './managed-runtime-startup-policy'
 import { logWarn } from './logger'
 import {
@@ -204,6 +205,37 @@ export async function replaceKunServe(settings: AppSettingsV1): Promise<void> {
   }
   return runtimeSupervisor.replace(
     () => replaceKunServeOnce(requested)
+  )
+}
+
+/**
+ * User-confirmed broad restart. Stop the current discovered owner through the
+ * authenticated replacement path, then clear any remaining current-user
+ * historical `kun serve` processes before electing one fresh runtime.
+ *
+ * This is intentionally separate from updater/startup replacement so those
+ * lifecycle paths do not interrupt another flavor or data-directory owner.
+ */
+export async function restartAllKunServeProcesses(
+  settings: AppSettingsV1
+): Promise<void> {
+  const requested = runtimeSupervisor.latestOr(settings)
+  if (!managedKunHostCanAutoStart(requested)) {
+    runtimeSupervisor.setManagedRuntimeExpected(false)
+  }
+  return runtimeSupervisor.replace(
+    () => restartAllKunServeProcessesOnce(requested)
+  )
+}
+
+async function restartAllKunServeProcessesOnce(settings: AppSettingsV1): Promise<void> {
+  await restartRuntimeAfterStopping(
+    settings,
+    async () => {
+      await kunRuntimeAdapter.stopSharedForReplacementAndWait(settings)
+      await clearHistoricalKunServeProcesses()
+    },
+    (launchSettings) => kunRuntimeAdapter.ensureReplacementRunning(launchSettings)
   )
 }
 

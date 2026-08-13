@@ -18,6 +18,17 @@ const harness = vi.hoisted(() => {
   const noteRuntimeHealthy = vi.fn()
   const waitForKunStartupSettled = vi.fn(async () => undefined)
   const killStaleKunOnPort = vi.fn(async () => false)
+  const clearHistoricalKunServeProcesses = vi.fn(async (): Promise<{
+    matchedPids: number[]
+    terminatedPids: number[]
+    alreadyExitedPids: number[]
+    failedPids: number[]
+  }> => ({
+    matchedPids: [],
+    terminatedPids: [],
+    alreadyExitedPids: [],
+    failedPids: []
+  }))
   const mainState = {
     assertCanonicalRuntimeMigrationReady: vi.fn()
   }
@@ -30,6 +41,7 @@ const harness = vi.hoisted(() => {
   }
 
   return {
+    clearHistoricalKunServeProcesses,
     ensureReplacementRunning,
     ensureRunning,
     killStaleKunOnPort,
@@ -64,6 +76,9 @@ vi.mock('./kun-process', () => ({
 vi.mock('./kun-process-ports', () => ({
   killStaleKunOnPort: harness.killStaleKunOnPort
 }))
+vi.mock('./runtime/kun-serve-process-cleanup', () => ({
+  clearHistoricalKunServeProcesses: harness.clearHistoricalKunServeProcesses
+}))
 vi.mock('./managed-runtime-startup-policy', () => ({
   managedKunHostCanAutoStart: (settings: AppSettingsV1) => settings.agents.kun.autoStart
 }))
@@ -84,7 +99,8 @@ vi.mock('./main-runtime-health', () => ({
 import {
   ensureKunServeFreshOnStartup,
   reconcileBundledRuntimeAfterInstall,
-  replaceKunServe
+  replaceKunServe,
+  restartAllKunServeProcesses
 } from './main-runtime-startup'
 
 function settings(): AppSettingsV1 {
@@ -114,6 +130,13 @@ beforeEach(() => {
   harness.waitForKunStartupSettled.mockClear()
   harness.killStaleKunOnPort.mockReset()
   harness.killStaleKunOnPort.mockResolvedValue(false)
+  harness.clearHistoricalKunServeProcesses.mockReset()
+  harness.clearHistoricalKunServeProcesses.mockResolvedValue({
+    matchedPids: [],
+    terminatedPids: [],
+    alreadyExitedPids: [],
+    failedPids: []
+  })
   harness.mainState.assertCanonicalRuntimeMigrationReady.mockClear()
   harness.runtimeSupervisor.restart.mockClear()
   harness.runtimeSupervisor.replace.mockClear()
@@ -147,6 +170,45 @@ describe('explicit Kun serve replacement', () => {
     expect(harness.stopSharedForReplacementAndWait).toHaveBeenCalledWith(current)
     expect(harness.ensureReplacementRunning).toHaveBeenCalledWith(current)
     expect(harness.ensureRunning).not.toHaveBeenCalled()
+  })
+
+  it('clears all historical serves after stopping the current owner and before launching', async () => {
+    const order: string[] = []
+    harness.stopSharedForReplacementAndWait.mockImplementationOnce(async () => {
+      order.push('stop-current')
+    })
+    harness.clearHistoricalKunServeProcesses.mockImplementationOnce(async () => {
+      order.push('clear-history')
+      return {
+        matchedPids: [101],
+        terminatedPids: [101],
+        alreadyExitedPids: [],
+        failedPids: []
+      }
+    })
+    harness.ensureReplacementRunning.mockImplementationOnce(async () => {
+      order.push('launch-replacement')
+    })
+    const current = settings()
+
+    await expect(restartAllKunServeProcesses(current)).resolves.toBeUndefined()
+
+    expect(order).toEqual(['stop-current', 'clear-history', 'launch-replacement'])
+    expect(harness.waitForHealthy).toHaveBeenCalledWith(current, 20_000)
+    expect(harness.probeRuntimeApi).toHaveBeenCalledWith(current)
+  })
+
+  it('does not launch a replacement when historical cleanup fails', async () => {
+    harness.clearHistoricalKunServeProcesses.mockRejectedValueOnce(
+      new Error('historical process 101 remained alive')
+    )
+    const current = settings()
+
+    await expect(restartAllKunServeProcesses(current)).rejects.toThrow(/101 remained alive/)
+
+    expect(harness.stopSharedForReplacementAndWait).toHaveBeenCalledWith(current)
+    expect(harness.ensureReplacementRunning).not.toHaveBeenCalled()
+    expect(harness.waitForHealthy).not.toHaveBeenCalled()
   })
 })
 

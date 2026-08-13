@@ -114,3 +114,18 @@
 - [x] 12.9 Add focused regressions for admission, error codes, queue governance, renderer state split, whiteboard lifecycle, replay, and focus layout; then run targeted tests, typecheck, build, lint, file-line gate, strict OpenSpec validation, and diff checks.
 
   - Evidence (2026-08-13): strict OpenSpec validation passed for `unify-code-design-and-work`. Focused renderer suites passed 39/39 tests across workbench task surface, sidebar mixed badge, image-generation progress, shared runtime-error codes, and queue governance; Kun admission suites passed 12/12 tests including the new `design_profile_locked` and Code-with-profile conflict cases; the previously failing store admission/guidance/classification suites were updated to per-turn semantics and pass 60/60. The renderer TypeScript project passes cleanly; the only remaining error is the pre-existing `settings-section-model-routes-support.tsx` DOM-versus-React `KeyboardEvent` baseline documented in section 11. Every changed file is at or below the 700-line gate; `git diff --check` passes; lint retained only pre-existing warnings outside this change.
+
+## 13. Mode-Neutral Conversation Presentation
+
+- [x] 13.1 Remove conversation-level Code/Design icons and Design artifact badges while preserving the single shared task list, per-turn composer selector, and Design document restoration.
+- [x] 13.2 Add focused sidebar regressions, replace the stale Kun session-lock expectation with a Code→Design→Code→Design same-thread regression, and run targeted tests, renderer typecheck, the file-line gate, strict OpenSpec validation, and diff checks.
+
+  - Evidence (2026-08-14): focused sidebar and renderer per-turn task-surface suites passed 19/19 tests; focused Kun admission/profile suites passed 21/21 tests; renderer and Kun TypeScript plus changed-file ESLint passed; strict OpenSpec validation and `git diff --check` passed. Every file changed by this correction is below 700 lines. The repository-wide file-line gate was run and reported only two files outside this correction: `useWorkbenchComposerSubmitController.ts` at 705 lines and `chat-store-thread-send-direct.ts` at 701 lines.
+
+## 14. First Design Whiteboard Delivery Race
+
+- [x] 14.1 Keep the full Design host active from provisional intent through profile hydration, including a board-scoped cached surface.
+- [x] 14.2 Prevent live and durable Code-canvas replay from consuming turns that carry an immutable Design document target.
+- [x] 14.3 Add focused regressions and run renderer typecheck, build, lint, the file-line gate, strict OpenSpec validation, and diff checks.
+
+  - Evidence (2026-08-14): 7 focused renderer files passed 55/55 tests across provisional Design activation, host-target isolation, live/durable replay, and Code whiteboard delivery. The production build, changed-file ESLint, strict OpenSpec validation, and `git diff --check` passed. Renderer typecheck was run and reported only existing worktree errors outside this correction in `settings-section-model-routes-support.tsx` and `canvas-receipt-sender.test.ts`; the repository-wide file-line gate likewise reported only the separately modified `design-task-profile.test.ts` and `useWorkbenchComposerSubmitController.ts`.

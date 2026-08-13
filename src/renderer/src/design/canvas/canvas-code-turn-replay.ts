@@ -1,6 +1,9 @@
 import type { ChatBlock, ToolBlock } from '../../agent/types'
 import type { CanvasDocument } from './canvas-types'
-import { codeCanvasReplayKey } from './canvas-design-turn-replay'
+import {
+  codeCanvasReplayKey,
+  userBlockHasDesignDocumentTarget
+} from './canvas-design-turn-replay'
 
 export type DurableCodeCanvasTurn = {
   userBlockId: string
@@ -24,6 +27,13 @@ export function durableCodeCanvasTurns(blocks: readonly ChatBlock[]): DurableCod
     if (user.kind !== 'user') continue
     let end = index + 1
     while (end < blocks.length && blocks[end].kind !== 'user') end += 1
+    // Code and Design turns share one conversation, but their canvas hosts do
+    // not share persistence. Never replay an explicitly targeted Design turn
+    // into the lightweight per-thread Code whiteboard.
+    if (userBlockHasDesignDocumentTarget(user)) {
+      index = end - 1
+      continue
+    }
     const turnBlocks = blocks.slice(index, end)
     turns.push({
       userBlockId: user.id,

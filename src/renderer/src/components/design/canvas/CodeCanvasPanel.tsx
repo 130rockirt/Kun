@@ -90,6 +90,12 @@ export function resolveCodeCanvasDesignSurface(options: {
 }): Exclude<CodeCanvasDesignSurface, null> | null {
   const { surface, workspaceRoot, activeThreadId, designTaskActive } = options
   if (!activeThreadId) return null
+  const requestedDocumentId = options.designDocumentId?.trim()
+  const browsingCanonicalDocument = Boolean(
+    surface?.readOnly &&
+    requestedDocumentId &&
+    surface.canonicalDocumentId === requestedDocumentId
+  )
   // Compare the complete whiteboard host target so a mode switch can never
   // remount a different (possibly blank) canvas under the same thread. When
   // the caller has no authoritative bound document (e.g. browsing a prototype
@@ -99,11 +105,14 @@ export function resolveCodeCanvasDesignSurface(options: {
     (surface.surfaceKind ?? 'kun-design') === 'kun-design' &&
     normalizeDesignWorkspaceRoot(surface.workspaceRoot) ===
       normalizeDesignWorkspaceRoot(workspaceRoot) &&
-    (options.designDocumentId === undefined ||
-      surface.documentId === options.designDocumentId) &&
-    (surface.boardArtifactId ?? undefined) === (options.boardArtifactId?.trim() || undefined)
+    (!requestedDocumentId ||
+      surface.documentId === requestedDocumentId ||
+      browsingCanonicalDocument) &&
+    (browsingCanonicalDocument ||
+      !options.boardArtifactId?.trim() ||
+      surface.boardArtifactId === options.boardArtifactId.trim())
   ) return surface
-  const documentId = options.designDocumentId?.trim()
+  const documentId = requestedDocumentId
   return designTaskActive && documentId
     ? {
         surfaceKind: 'kun-design',
@@ -180,12 +189,23 @@ export function CodeCanvasPanel({
       cached?.threadId !== target.threadId ||
       cached.documentId !== target.documentId ||
       normalizeDesignWorkspaceRoot(cached.workspaceRoot) !==
-        normalizeDesignWorkspaceRoot(target.workspaceRoot)
+        normalizeDesignWorkspaceRoot(target.workspaceRoot) ||
+      (cached.boardArtifactId ?? undefined) !== (target.boardArtifactId ?? undefined)
     ) {
       useCodeCanvasDesignSurface.getState().showDesignDocument(
         target.threadId,
         target.workspaceRoot,
-        target.documentId
+        target.documentId,
+        {
+          ...(target.boardArtifactId ? { boardArtifactId: target.boardArtifactId } : {}),
+          ...(target.readOnly ? { readOnly: true } : {}),
+          ...(target.canonicalDocumentId
+            ? { canonicalDocumentId: target.canonicalDocumentId }
+            : {}),
+          ...(target.continuationOperationId
+            ? { continuationOperationId: target.continuationOperationId }
+            : {})
+        }
       )
     }
     const generation = ++activationGenerationRef.current
@@ -399,6 +419,7 @@ export function CodeCanvasPanel({
               workspaceRoot={workspaceRoot}
               documentId={designDoc.id}
               activeThreadId={activeThreadId}
+              boardArtifactId={activeDesignSurface?.boardArtifactId}
               readOnly={activeDesignSurface?.readOnly === true}
               busy={busy}
               onOpenAgentSettings={onOpenAgentSettings}

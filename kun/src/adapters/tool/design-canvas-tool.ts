@@ -33,6 +33,7 @@ export const DESIGN_SYSTEM_TOOL_NAME = 'design_system'
 export const DESIGN_SYSTEM_TEMPLATE_TOOL_NAME = DESIGN_SYSTEM_TOOL_NAME
 export const DESIGN_VALIDATE_TOOL_NAME = 'design_validate'
 export const DESIGN_SVG_CREATE_TOOL_NAME = 'design_svg_create'
+export const WORK_RENAME_WHITEBOARD_TOOL_NAME = 'work_rename_whiteboard'
 
 export const DESIGN_CANVAS_MUTATION_TOOL_NAMES = [
   DESIGN_CANVAS_TOOL_NAME,
@@ -42,7 +43,8 @@ export const DESIGN_CANVAS_MUTATION_TOOL_NAMES = [
   DESIGN_EXPORT_CANVAS_TOOL_NAME,
   DESIGN_SYSTEM_TEMPLATE_TOOL_NAME,
   DESIGN_VALIDATE_TOOL_NAME,
-  DESIGN_SVG_CREATE_TOOL_NAME
+  DESIGN_SVG_CREATE_TOOL_NAME,
+  WORK_RENAME_WHITEBOARD_TOOL_NAME
 ] as const
 
 
@@ -74,8 +76,51 @@ export function buildDesignCanvasLocalTools(): LocalTool[] {
     createDesignExportCanvasTool(),
     createDesignSystemTemplateTool(),
     createDesignValidateTool(),
-    createDesignSvgCreateTool()
+    createDesignSvgCreateTool(),
+    createWorkRenameWhiteboardTool()
   ]
+}
+
+export function createWorkRenameWhiteboardTool(): LocalTool {
+  return LocalToolHost.defineTool({
+    name: WORK_RENAME_WHITEBOARD_TOOL_NAME,
+    description: [
+      'Rename the active Work whiteboard and its bound Work conversation.',
+      'Use this when the user asks to rename, retitle, or change the name of the current Work whiteboard; do not use shape text operations for the board title.'
+    ].join(' '),
+    toolKind: 'tool_call',
+    policy: 'auto',
+    shouldAdvertise: (context) =>
+      context.guiDesignCanvas === true && context.agentSurface === 'write',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        title: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 160,
+          description: 'The complete new title for the active Work whiteboard.'
+        }
+      },
+      required: ['title'],
+      additionalProperties: false
+    },
+    execute: async (args, context) => {
+      const title = stringArg(args.title)?.slice(0, 160)
+      if (!title) return designToolError('work_rename_whiteboard requires a non-empty title')
+      const receiptSeed = [{ op: 'rename-work-whiteboard', title }]
+      return designToolOutput(WORK_RENAME_WHITEBOARD_TOOL_NAME, 'rename_whiteboard', [], {
+        title,
+        status: 'accepted',
+        receiptKey: designCanvasReceiptKey(
+          context?.threadId,
+          context?.turnId,
+          context?.activeToolCallId,
+          receiptSeed
+        )
+      })
+    }
+  })
 }
 
 export function createDesignSvgCreateTool(): LocalTool {

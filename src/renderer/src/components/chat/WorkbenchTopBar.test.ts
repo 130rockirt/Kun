@@ -29,9 +29,9 @@ describe('WorkbenchTopActions', () => {
       })
     )
 
-    expect(html).toContain(`data-tooltip="Replace the current Kun service"`)
+    expect(html).toContain(`data-tooltip="Restart Kun and clear historical services"`)
     expect(html).toContain(`aria-label="Restart Kun"`)
-    expect(html).toContain('rounded-full bg-amber-500')
+    expect(html).not.toContain('rounded-full bg-amber-500')
     expect(html).toContain(`data-tooltip="Choose default editor"`)
     expect(html).toContain(`aria-label="Choose default editor"`)
     expect(html).toContain(`data-tooltip="Terminal"`)
@@ -66,6 +66,68 @@ describe('WorkbenchTopActions', () => {
     })
 
     expect(restartKunServe).toHaveBeenCalledOnce()
+    act(() => renderer.unmount())
+  })
+
+  it('renders one compact icon without visible restart text or a status dot', async () => {
+    vi.stubGlobal('window', { kunGui: { restartKunServe: vi.fn() } })
+    let renderer!: ReturnType<typeof createRenderer>
+    await act(async () => {
+      renderer = createRenderer(createElement(WorkbenchTopActions, {}))
+    })
+
+    const button = renderer.root.findByProps({ 'aria-label': 'Restart Kun' })
+    expect(button.props.className).toContain('h-8 w-8')
+    expect(button.findAllByType('span')).toHaveLength(0)
+    expect(button.findAllByType('svg')).toHaveLength(1)
+    act(() => renderer.unmount())
+  })
+
+  it('keeps the icon-only control disabled with a busy accessible label while restarting', async () => {
+    let finish!: (value: { accepted: boolean }) => void
+    const restartKunServe = vi.fn(() => new Promise<{ accepted: boolean }>((resolve) => {
+      finish = resolve
+    }))
+    vi.stubGlobal('window', { kunGui: { restartKunServe } })
+    let renderer!: ReturnType<typeof createRenderer>
+    await act(async () => {
+      renderer = createRenderer(createElement(WorkbenchTopActions, {}))
+    })
+
+    await act(async () => {
+      renderer.root.findByProps({ 'aria-label': 'Restart Kun' }).props.onClick()
+      await Promise.resolve()
+    })
+    const busyButton = renderer.root.findByProps({ 'aria-label': 'Restarting…' })
+    expect(busyButton.props.disabled).toBe(true)
+    expect(busyButton.findAllByType('span')).toHaveLength(0)
+    expect(busyButton.findAllByType('svg')).toHaveLength(1)
+
+    await act(async () => {
+      finish({ accepted: true })
+      await Promise.resolve()
+    })
+    act(() => renderer.unmount())
+  })
+
+  it('shows a restart error in the tooltip without adding visible text', async () => {
+    vi.stubGlobal('window', {
+      kunGui: {
+        restartKunServe: vi.fn(async () => ({ accepted: true, error: 'cleanup failed' }))
+      }
+    })
+    let renderer!: ReturnType<typeof createRenderer>
+    await act(async () => {
+      renderer = createRenderer(createElement(WorkbenchTopActions, {}))
+    })
+    await act(async () => {
+      renderer.root.findByProps({ 'aria-label': 'Restart Kun' }).props.onClick()
+      await Promise.resolve()
+    })
+
+    const button = renderer.root.findByProps({ 'aria-label': 'Restart Kun' })
+    expect(button.props['data-tooltip']).toBe('cleanup failed')
+    expect(button.findAllByType('span')).toHaveLength(0)
     act(() => renderer.unmount())
   })
 

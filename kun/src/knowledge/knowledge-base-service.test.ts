@@ -11,6 +11,7 @@ import { createThreadRecord, normalizeKnowledgeBaseMounts } from '../domain/thre
 import { KnowledgeBaseError, KnowledgeBaseService } from './knowledge-base-service.js'
 import { KnowledgeOfficeExtractorRegistry } from './knowledge-office-extractor.js'
 import { buildKnowledgeLocalTools } from './knowledge-tools.js'
+import type { StoredKnowledgeIndex } from './knowledge-types.js'
 
 const roots: string[] = []
 
@@ -61,6 +62,49 @@ describe('knowledge-base service and tools', () => {
     expect(status.statuses[0]?.state).toBe('stale')
     await service.reindex(thread.id, mount.id)
   })
+
+  it('refreshes Markdown, text, and PDF evidence changed inside the index cache window', async () => {
+    const root = await tempRoot('kun-kb-fresh-read-')
+    const dataDir = await tempRoot('kun-kb-fresh-data-')
+    await writeFile(join(root, 'guide.md'), '# Guide\n\nOriginal Markdown evidence.\n')
+    await writeFile(join(root, 'notes.txt'), 'Original text evidence.\n')
+    await writeFile(join(root, 'brief.pdf'), createSimpleTextPdf('Original PDF evidence.'))
+    const mount = {
+      id: 'kb_fresh', root, name: 'Fresh sources',
+      source: 'write-workspace', access: 'read-only'
+    } as const
+    const thread = createThreadRecord({
+      id: 'thr_fresh', title: 'Fresh reads', workspace: await tempRoot('kun-fresh-code-'),
+      model: 'test', knowledgeBases: [mount]
+    })
+    const service = new KnowledgeBaseService({
+      dataDir,
+      threadStore: { get: async () => thread }
+    })
+
+    await service.catalog(thread.id)
+    const rootView = await service.browse(thread.id, mount.id)
+    const nodeIds: string[] = []
+    for (const relativePath of ['guide.md', 'notes.txt', 'brief.pdf']) {
+      const document = rootView.children.find((node) => node.relativePath === relativePath)
+      expect(document, relativePath).toBeTruthy()
+      const documentView = await service.browse(thread.id, mount.id, document!.id)
+      expect(documentView.children[0], relativePath).toBeTruthy()
+      nodeIds.push(documentView.children[0]!.id)
+    }
+
+    await writeFile(join(root, 'guide.md'), '# Guide\n\nUpdated Markdown evidence is current.\n')
+    await writeFile(join(root, 'notes.txt'), 'Updated text evidence is current.\n')
+    await writeFile(join(root, 'brief.pdf'), createSimpleTextPdf('Updated PDF evidence is current.'))
+
+    const result = await service.read(thread.id, mount.id, nodeIds)
+    expect(result.evidence.map((item) => item.text)).toEqual([
+      expect.stringContaining('Updated Markdown evidence is current.'),
+      expect.stringContaining('Updated text evidence is current.'),
+      expect.stringContaining('Updated PDF evidence is current.')
+    ])
+    expect(result.evidence.map((item) => item.text).join('\n')).not.toContain('Original')
+  }, 15_000)
 
   it('authorizes only mounted ids, exposes no path arguments, and advertises only with mounts', async () => {
     const root = await tempRoot('kun-kb-tools-')
@@ -139,13 +183,25 @@ describe('knowledge-base service and tools', () => {
     await service.reindex(thread.id, mount.id)
     expect(calls).toBe(1)
     extractedText = '# Summary\n\nUpdated Office evidence.'
-    await writeMinimalDocx(path, 'second')
-    await expect(service.read(thread.id, mount.id, [range.id])).rejects.toMatchObject({
-      code: 'unavailable'
-    } satisfies Partial<KnowledgeBaseError>)
+    await writeMinimalDocx(path, 'other')
+    const key = createHash('sha256').update(root).digest('hex')
+    const internals = service as unknown as {
+      indexCache: Map<string, { index: StoredKnowledgeIndex }>
+      inFlight: Map<string, Promise<StoredKnowledgeIndex>>
+    }
+    const cachedIndex = internals.indexCache.get(key)?.index
+    expect(cachedIndex).toBeTruthy()
+    internals.inFlight.set(key, Promise.resolve(cachedIndex!))
+    try {
+      await expect(service.read(thread.id, mount.id, [range.id])).rejects.toMatchObject({
+        code: 'unavailable'
+      } satisfies Partial<KnowledgeBaseError>)
+    } finally {
+      internals.inFlight.delete(key)
+    }
     await service.reindex(thread.id, mount.id)
-    expect(calls).toBe(2)
     const updatedEvidence = await service.read(thread.id, mount.id, [range.id])
+    expect(calls).toBe(2)
     expect(updatedEvidence.evidence[0]?.text).toBe('Updated Office evidence.')
 
     const artifactMounts = await readdir(join(dataDir, 'knowledge-artifacts'))
@@ -222,9 +278,39 @@ async function writeMinimalDocx(path: string, marker: string): Promise<void> {
   zip.addBuffer(Buffer.from(
     '<?xml version="1.0"?><Types><Override ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>'
   ), '[Content_Types].xml')
-  zip.addBuffer(Buffer.from(marker), 'word/document.xml')
+  zip.addBuffer(Buffer.from(marker), 'word/document.xml', { compress: false })
   const output = createWriteStream(path)
   zip.outputStream.pipe(output)
   zip.end()
   await finished(output)
+}
+
+function createSimpleTextPdf(text: string): Buffer {
+  const escaped = text.replaceAll('\\', '\\\\').replaceAll('(', '\\(').replaceAll(')', '\\)')
+  const stream = `BT /F1 18 Tf 72 720 Td (${escaped}) Tj ET`
+  const objects = [
+    '1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n',
+    '2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n',
+    [
+      '3 0 obj',
+      '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792]',
+      '/Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>',
+      'endobj\n'
+    ].join('\n'),
+    '4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n',
+    `5 0 obj\n<< /Length ${Buffer.byteLength(stream, 'ascii')} >>\nstream\n${stream}\nendstream\nendobj\n`
+  ]
+  let pdf = '%PDF-1.4\n'
+  const offsets = [0]
+  for (const object of objects) {
+    offsets.push(Buffer.byteLength(pdf, 'ascii'))
+    pdf += object
+  }
+  const xrefOffset = Buffer.byteLength(pdf, 'ascii')
+  pdf += 'xref\n0 6\n0000000000 65535 f \n'
+  for (const offset of offsets.slice(1)) {
+    pdf += `${String(offset).padStart(10, '0')} 00000 n \n`
+  }
+  pdf += `trailer\n<< /Root 1 0 R /Size 6 >>\nstartxref\n${xrefOffset}\n%%EOF\n`
+  return Buffer.from(pdf, 'ascii')
 }

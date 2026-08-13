@@ -11,6 +11,7 @@ import {
 import { extensionWorkbenchClient } from '../../extensions/extension-workbench-client'
 import { resolveCommandOpenView } from '../../extensions/ExtensionWorkbenchSurfaces'
 import { normalizeWorkbenchRoute } from './workbench-route'
+import { shouldShowSideSessionReturnBar } from './workbench-side-session-mode'
 import { PlanWorktreeGlobalRecovery } from '../../plan/PlanWorktreeGlobalRecovery'
 
 type Context = Record<string, any>
@@ -45,6 +46,7 @@ export function WorkbenchContent({ context }: { context: Context }): ReactElemen
     openManagedExtensionView, activeExtensionAuxiliaryPanel, workspaceContextMenu, activeGuiPlan
   } = context
   const normalizedRoute = normalizeWorkbenchRoute(route)
+  const activeConversationThread = threads.find((thread: any) => thread.id === activeThreadId)
   return (
     <div
       ref={shellRef}
@@ -178,9 +180,13 @@ export function WorkbenchContent({ context }: { context: Context }): ReactElemen
             devPreviewUrl: latestDevPreviewUrl,
             devPreviewOpened: rightPanelMode === BUILTIN_RIGHT_PANEL_IDS.browser,
             returnParentTitle: threads.find((thread: any) => thread.id === activeThreadParentId)?.title?.trim() ?? '',
-            showReturnBar: activeThreadRelation === 'side' && Boolean(activeThreadParentId),
+            showReturnBar: shouldShowSideSessionReturnBar({
+              thread: activeConversationThread,
+              relation: activeThreadRelation,
+              parentThreadId: activeThreadParentId
+            }),
             returnBarVariant: (
-              threads.find((thread: any) => thread.id === activeThreadId)?.agentId === 'explore'
+              activeConversationThread?.agentId === 'explore'
                 ? 'explore'
                 : 'subagent'
             ) as 'explore' | 'subagent',

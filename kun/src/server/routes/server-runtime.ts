@@ -282,6 +282,8 @@ export type ServerRuntime = {
   managerProtocolVersion?: number
   activeTurnCount?(): number
   requestShutdown?(instanceId: string): Promise<boolean>
+  /** Starts non-critical historical scans only after the HTTP server is live. */
+  startBackgroundMaintenance?(): void
   /** Forward active-turn controls to the flavor that currently owns the lease. */
   forwardThreadControl?(request: Request, threadId: string): Promise<Response | null>
   forwardControlById?(

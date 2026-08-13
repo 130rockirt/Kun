@@ -12,7 +12,11 @@ import {
   queuedMessagesForThread,
   saveQueuedMessagesForThread
 } from './queued-message-persistence'
-import { clearThreadSnapshotCache, getThreadSnapshot } from './thread-snapshot-cache'
+import {
+  clearThreadSnapshotCache,
+  getThreadSnapshot,
+  snapshotThreadProjection
+} from './thread-snapshot-cache'
 
 const registryMock = vi.hoisted(() => ({
   getProvider: vi.fn()
@@ -311,6 +315,79 @@ describe('chat-store-thread-actions queued messages', () => {
         serviceTier: 'priority'
       })
     )
+  })
+
+  it('keeps a late Code admission out of Work and invalidates the parked Code snapshot', async () => {
+    const pendingSend = deferredValue<{
+      threadId: string
+      turnId: string
+      userMessageItemId: string
+    }>()
+    const subscribeThreadEvents = vi.fn(async () => undefined)
+    const sendUserMessage = vi.fn(() => pendingSend.promise)
+    const getThreadDetail = vi.fn(async () => ({
+      blocks: [
+        { kind: 'user' as const, id: 'user_code', turnId: 'turn_code', text: 'inspect the Code thread' },
+        { kind: 'reasoning' as const, id: 'reasoning_code', turnId: 'turn_code', text: 'Inspecting' }
+      ],
+      latestSeq: 8,
+      threadStatus: 'running' as const,
+      latestTurnId: 'turn_code',
+      latestTurnStatus: 'running',
+      latestUserMessageId: 'user_code'
+    }))
+    registryMock.getProvider.mockReturnValue({ sendUserMessage, subscribeThreadEvents, getThreadDetail })
+    vi.stubGlobal('window', {
+      kunGui: {
+        getSettings: vi.fn(async () => ({
+          agents: { kun: { providerId: 'deepseek', model: 'deepseek-v4-pro' } },
+          codePromptPrefix: '',
+          chatWelcomeMessage: ''
+        })),
+        workspaceDirectoryExists: vi.fn(async () => true),
+        logError: vi.fn(async () => undefined)
+      }
+    })
+    const { actions, state } = buildHarness()
+    state.busy = false
+    state.composerPickList = []
+    state.composerModelGroups = []
+    state.threads = [{ ...thread('thr_existing'), status: 'idle' }]
+
+    const sending = actions.sendMessage('inspect the Code thread', 'agent')
+    await vi.waitFor(() => expect(sendUserMessage).toHaveBeenCalledOnce())
+    snapshotThreadProjection(state)
+    expect(getThreadSnapshot('thr_existing')).not.toBeNull()
+
+    state.activeThreadId = 'thr_work'
+    state.blocks = [{ kind: 'user', id: 'work-user', text: 'Work question' }]
+    state.busy = false
+    state.currentTurnId = null
+    state.currentTurnUserId = null
+    state.threads = [...state.threads, { ...thread('thr_work'), status: 'idle' }]
+    pendingSend.resolve({
+      threadId: 'thr_existing',
+      turnId: 'turn_code',
+      userMessageItemId: 'user_code'
+    })
+
+    await expect(sending).resolves.toBe(true)
+    expect(state.activeThreadId).toBe('thr_work')
+    expect(state.blocks).toEqual([{ kind: 'user', id: 'work-user', text: 'Work question' }])
+    expect(state.busy).toBe(false)
+    expect(state.currentTurnId).toBeNull()
+    expect(getThreadSnapshot('thr_existing')).toBeNull()
+    expect(subscribeThreadEvents).not.toHaveBeenCalled()
+
+    await actions.selectThread('thr_existing')
+    expect(getThreadDetail).toHaveBeenCalledWith('thr_existing')
+    expect(state.blocks).toEqual([
+      expect.objectContaining({ id: 'user_code', turnId: 'turn_code' }),
+      expect.objectContaining({ id: 'reasoning_code', turnId: 'turn_code' })
+    ])
+    expect(state.busy).toBe(true)
+    expect(state.currentTurnId).toBe('turn_code')
+    expect(state.currentTurnUserId).toBe('user_code')
   })
 
   it('forwards and projects Design continuation turns as hidden user progress', async () => {

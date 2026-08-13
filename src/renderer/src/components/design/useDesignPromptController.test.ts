@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useDesignWorkspaceStore } from '../../design/design-workspace-store'
+import { useCodeCanvasDesignSurface } from '../../design/code-canvas-design-surface'
 import type { DesignDocument } from '../../design/design-types'
 import { submitDesignTurn } from '../../design/design-turn-submit'
 import { useDesignPromptController } from './useDesignPromptController'
@@ -22,6 +23,7 @@ vi.mock('../../design/design-turn-submit', () => ({ submitDesignTurn: vi.fn() })
 describe('useDesignPromptController', () => {
   beforeEach(() => {
     vi.mocked(submitDesignTurn).mockReset()
+    useCodeCanvasDesignSurface.getState().clearDesignSurface()
     useDesignWorkspaceStore.setState({
       workspaceRoot: '/workspace',
       activeDocumentId: 'doc',
@@ -266,5 +268,61 @@ describe('useDesignPromptController', () => {
     await expect(sending).resolves.toBe(false)
     expect(useDesignWorkspaceStore.getState().documents).toEqual([existing])
     expect(rollbackProvisionalThread).toHaveBeenCalledWith('thread-existing-empty')
+  })
+
+  it('restores the code whiteboard surface after a failed first Design send', async () => {
+    // Existing Code conversation: no Design documents yet, no cached surface.
+    useDesignWorkspaceStore.setState({
+      workspaceRoot: '/workspace', documents: [], activeDocumentId: null,
+      artifacts: [], activeArtifactId: null, drawingCreationOpen: false,
+      drawingCreationReturnDocumentId: null, drawingCreationDocumentId: null,
+      drawingCreationSubmitting: false, drawingHistoryMutation: null,
+      designIntentMode: 'generate', multiPageMode: false, pagesRun: null
+    })
+    vi.stubGlobal('window', {
+      kunGui: {
+        createWorkspaceDirectory: vi.fn(async () => ({ ok: true })),
+        writeWorkspaceFile: vi.fn(async () => ({ ok: true })),
+        readWorkspaceFile: vi.fn(async () => ({ ok: false })),
+        deleteWorkspaceEntry: vi.fn(async () => ({ ok: true }))
+      }
+    })
+    expect(useCodeCanvasDesignSurface.getState().surface).toBeNull()
+    const ensureDesignThreadForWorkspace = vi.fn(async (root: string, docId: string) => {
+      // Mirrors useWorkbenchTaskSurface.ensureDesignThread: binds the surface
+      // to the existing Code thread before the first Design turn is sent.
+      useCodeCanvasDesignSurface.getState().showDesignDocument('thread-code', root, docId)
+      return 'thread-code'
+    })
+    vi.mocked(submitDesignTurn).mockImplementation(async (options) => {
+      const sent = await options.sendMessage('runtime prompt', 'agent', {
+        waitForRuntimeAdmission: true
+      })
+      return sent
+        ? { status: 'sent', target: 'canvas', clearAttachments: false }
+        : { status: 'send-failed', target: 'canvas' }
+    })
+    const controller = useDesignPromptController({
+      route: 'chat', runtimeConnection: 'ready', busy: false, workspaceRoot: '/workspace',
+      composerAttachments: [], attachmentUploadEnabled: true, composerReasoningEffort: 'auto',
+      composerFastMode: false, composerModelGroups: [], designContextSuppressedIds: new Set(),
+      designHtmlElementContext: null, setInput: vi.fn(), setAttachmentUploadError: vi.fn(),
+      setError: vi.fn(), setDesignAssistantOpen: vi.fn(), ensureDesignThreadForWorkspace,
+      clearDesignHistory: vi.fn(async () => ({
+        cleared: true, deletedThreadIds: [], retainedThreadIds: [], recreatedThreadId: null
+      })),
+      rollbackProvisionalThread: vi.fn(async () => true),
+      designTaskProfileSelection: { outputMedium: 'image', target: 'web', preset: 'none' },
+      lockedDesignProfile: null, imageGenerationAvailable: true,
+      sendMessage: vi.fn(async () => false), getAttachmentScope: () => 'chat',
+      clearComposerAttachments: vi.fn(), clearHtmlElementContext: vi.fn()
+    })
+
+    await expect(controller.sendDesignPrompt('Create a hero')).resolves.toBe(false)
+    // The provisional target was written during thread ensure, then atomically
+    // restored (cleared) once the temporary document was deleted: the Code
+    // panel must not stay mounted on a deleted Design document.
+    expect(useCodeCanvasDesignSurface.getState().surface).toBeNull()
+    expect(useDesignWorkspaceStore.getState().documents).toEqual([])
   })
 })

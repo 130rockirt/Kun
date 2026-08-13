@@ -49,6 +49,7 @@ describe('CodeCanvasPanel', () => {
       designTaskActive: true,
       designDocumentId: 'doc-bound'
     })).toEqual({
+      surfaceKind: 'kun-design',
       threadId: 'design-thread',
       workspaceRoot: '/workspace',
       documentId: 'doc-bound'
@@ -69,6 +70,23 @@ describe('CodeCanvasPanel', () => {
       designTaskActive: true,
       designDocumentId: 'doc-bound'
     })?.documentId).toBe('doc-browsed')
+  })
+
+  it('keeps a provisional Design board before the profile target hydrates', () => {
+    expect(resolveCodeCanvasDesignSurface({
+      surface: {
+        threadId: 'design-thread',
+        workspaceRoot: '/workspace',
+        documentId: 'doc-provisional',
+        boardArtifactId: 'board-provisional'
+      },
+      workspaceRoot: '/workspace',
+      activeThreadId: 'design-thread',
+      designTaskActive: false
+    })).toMatchObject({
+      documentId: 'doc-provisional',
+      boardArtifactId: 'board-provisional'
+    })
   })
 
   it('rehydrates when the active id is set before the document list arrives', () => {

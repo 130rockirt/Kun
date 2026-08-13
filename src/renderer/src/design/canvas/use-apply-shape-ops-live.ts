@@ -124,6 +124,7 @@ export function useApplyShapeOpsLive(
   useEffect(() => {
     if (!enabled) return
     const activeDesignTarget = designDocumentTargetRef.current
+    const unboundTargetPolicy = durableReplaySurface === 'code' ? 'untargeted' : 'any'
     // Per-turn streaming state. Lives in the subscription closure so it survives
     // across deltas without triggering React re-renders on every token.
     let appliedCount = 0
@@ -299,7 +300,12 @@ export function useApplyShapeOpsLive(
         scheduleSvgDrain,
         commitReadyWatermarks,
         markFailedSvgForRetry,
-        applySvgToolBlock
+        applySvgToolBlock,
+        sendToolReceipt: ({ receiptKey, turnId, affectedIds, errors }) => {
+          const threadId = targetThreadId ?? useChatStore.getState().activeThreadId
+          if (!threadId) return
+          sendCanvasTurnReceipt({ threadId, turnId, receiptKey, affectedIds, errors })
+        }
       })
       // The extracted executor mutates framedThisTurn through the ref; sync
       // the closure copy back so later camera logic sees the updated value.
@@ -538,7 +544,12 @@ export function useApplyShapeOpsLive(
     // host owns the expected document; document-sync will replay after it loads.
     if (canvasDocumentReady()) {
       replayActiveCanvasTurn(
-        initialState, applyToolBlock, processStreaming, targetThreadId, activeDesignTarget
+        initialState,
+        applyToolBlock,
+        processStreaming,
+        targetThreadId,
+        activeDesignTarget,
+        unboundTargetPolicy
       )
       replayIdle(initialState)
     }
@@ -549,7 +560,11 @@ export function useApplyShapeOpsLive(
       const turnEnded = Boolean(prev.currentTurnId) && !state.currentTurnId
       const replayState = canvasReplayStateForStoreUpdate(state, prev)
       if (replayState.currentTurnId &&
-        !activeCanvasTurnMatchesDesignTarget(replayState, activeDesignTarget)) return
+        !activeCanvasTurnMatchesDesignTarget(
+          replayState,
+          activeDesignTarget,
+          unboundTargetPolicy
+        )) return
       if (!canvasDocumentReady()) return
       if (turnStarted) {
         resetTurn()
@@ -589,7 +604,12 @@ export function useApplyShapeOpsLive(
       const chatState = useChatStore.getState()
       if (chatState.currentTurnId) {
         replayActiveCanvasTurn(
-          chatState, applyToolBlock, processStreaming, targetThreadId, activeDesignTarget
+          chatState,
+          applyToolBlock,
+          processStreaming,
+          targetThreadId,
+          activeDesignTarget,
+          unboundTargetPolicy
         )
       } else replayIdle(chatState)
     })

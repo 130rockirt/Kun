@@ -10,7 +10,7 @@ describe('worktree settings', () => {
     vi.unstubAllGlobals()
   })
 
-  it('projects and updates the persisted default plan isolation preference', async () => {
+  it('defaults plan isolation off and persists an explicit opt-in', async () => {
     const updateKun = vi.fn()
     vi.stubGlobal('window', {
       kunGui: {
@@ -34,7 +34,7 @@ describe('worktree settings', () => {
             workspaceRoot: '/repo',
             gitBranchPrefix: 'codex/'
           },
-          kun: { planExecution: { useWorktreeByDefault: false } },
+          kun: {},
           update: vi.fn(),
           updateKun,
           threads: [],

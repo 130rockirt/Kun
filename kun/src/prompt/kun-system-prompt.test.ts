@@ -218,6 +218,9 @@ describe('buildToolPreferenceInstruction', () => {
     ])
 
     expect(instruction).toContain('phase="awaiting_review"')
+    expect(instruction).toContain('phase="awaiting_direction"')
+    expect(instruction).toContain('preview surface, not a required input surface')
+    expect(instruction).toContain('one direction name/number')
     expect(instruction).toContain('action="revise_previews"|"retry_failed"')
     expect(instruction).toContain('action="approve_and_build"')
     expect(instruction).toContain('same PPT child')
@@ -227,6 +230,21 @@ describe('buildToolPreferenceInstruction', () => {
     expect(instruction).not.toContain('deliverable, reviewContext')
     expect(instruction).toContain('Never replay boardSpec')
     expect(instruction).not.toContain('in a single call')
+  })
+
+  it('uses one conversation user-input choice to resume PPT direction selection', () => {
+    const instruction = buildToolPreferenceInstruction([
+      { name: 'ppt_agent', description: 'Run the PPT agent' },
+      { name: 'user_input', description: 'Ask the user' }
+    ])
+
+    expect(instruction).toContain('`user_input`')
+    expect(instruction).toContain('exactly one single-choice question')
+    expect(instruction).toContain('ppt_direction:<workflowId>:<childId>')
+    expect(instruction).toContain('label each option `1. <name>`')
+    expect(instruction).toContain('in the same turn')
+    expect(instruction).toContain('never invent or pass a direction id')
+    expect(instruction).not.toContain('reply in the normal conversation')
   })
 
   it('explains only exact-profile and automatic routes in existing-profile mode', () => {

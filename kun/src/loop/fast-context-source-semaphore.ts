@@ -1,6 +1,6 @@
 import type { ToolHostContext } from '../ports/tool-host.js'
 
-export const FAST_CONTEXT_SOURCE_TOOL_CAPACITY = 8
+export const FAST_CONTEXT_SOURCE_TOOL_CAPACITY = 4
 const FAST_CONTEXT_SOURCE_TOOL_NAMES = new Set(['grep', 'glob', 'read'])
 
 type Waiter = {

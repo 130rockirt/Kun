@@ -40,6 +40,8 @@ type PendingReceipt = {
   acceptedOutput: Record<string, unknown>
   resolve: (payload: CanvasReceiptPayload | null) => void
   settled: boolean
+  waiting: boolean
+  fulfilling: boolean
 }
 
 export class CanvasReceiptRegistry {
@@ -69,7 +71,9 @@ export class CanvasReceiptRegistry {
       itemId: input.itemId,
       acceptedOutput: input.acceptedOutput,
       resolve: () => undefined,
-      settled: false
+      settled: false,
+      waiting: false,
+      fulfilling: false
     })
   }
 
@@ -85,18 +89,18 @@ export class CanvasReceiptRegistry {
     nowMs: () => number = Date.now
   ): Promise<void> {
     const entries = [...this.pending.values()].filter(
-      (entry) => entry.threadId === threadId && entry.turnId === turnId && !entry.settled
+      (entry) =>
+        entry.threadId === threadId && entry.turnId === turnId &&
+        !entry.settled
     )
     if (entries.length === 0) return
     await Promise.all(entries.map((entry) => this.awaitOne(entry, timeoutMs, nowMs)))
   }
 
   /**
-   * Called by the HTTP receipt route with a TURN-level receipt. The renderer
-   * cannot reliably reconstruct the per-call receipt key (call ids are not
-   * surfaced in tool blocks), so the loop matches on threadId+turnId and
-   * finalizes every pending design tool result of that turn with the same
-   * payload. Idempotent: a second receipt for a settled turn is ignored.
+   * Backward-compatible TURN-level receipt. New renderer calls use
+   * fulfillForTurn with the receipt key so every tool is acknowledged as soon
+   * as its own result is applied.
    */
   async fulfillTurn(
     threadId: string,
@@ -104,12 +108,53 @@ export class CanvasReceiptRegistry {
     payload: CanvasReceiptPayload
   ): Promise<boolean> {
     const entries = [...this.pending.values()].filter(
-      (entry) => entry.threadId === threadId && entry.turnId === turnId && !entry.settled
+      (entry) =>
+        entry.threadId === threadId && entry.turnId === turnId &&
+        !entry.settled && !entry.fulfilling
     )
     if (entries.length === 0) return false
     for (const entry of entries) {
-      entry.settled = true
-      entry.resolve(payload)
+      await this.fulfillEntry(entry, payload)
+    }
+    return true
+  }
+
+  /**
+   * Per-key fulfillment for callers that do not have turn ownership metadata.
+   * Idempotent: a second receipt for the same key is ignored.
+   */
+  async fulfill(receiptKey: string, payload: CanvasReceiptPayload): Promise<boolean> {
+    const entry = this.pending.get(receiptKey)
+    if (!entry || entry.settled || entry.fulfilling) return false
+    return this.fulfillEntry(entry, payload)
+  }
+
+  /** Fulfill one renderer call without allowing a receipt to cross turn boundaries. */
+  async fulfillForTurn(
+    receiptKey: string,
+    threadId: string,
+    turnId: string,
+    payload: CanvasReceiptPayload
+  ): Promise<boolean> {
+    const entry = this.pending.get(receiptKey)
+    if (
+      !entry ||
+      entry.settled ||
+      entry.fulfilling ||
+      entry.threadId !== threadId ||
+      entry.turnId !== turnId
+    ) return false
+    return this.fulfillEntry(entry, payload)
+  }
+
+  private async fulfillEntry(
+    entry: PendingReceipt,
+    payload: CanvasReceiptPayload
+  ): Promise<boolean> {
+    entry.fulfilling = true
+    try {
+      // Record while the entry is still awaitable. This prevents the loop from
+      // observing `settled` and advancing before the accepted item is replaced.
       await this.deps.events.record({
         kind: 'canvas_receipt',
         threadId: entry.threadId,
@@ -120,30 +165,19 @@ export class CanvasReceiptRegistry {
         ...(payload.errors?.length ? { errorCount: payload.errors.length } : {}),
         ...(payload.affectedIds?.length ? { affectedCount: payload.affectedIds.length } : {})
       })
+      entry.settled = true
+      entry.resolve(payload)
+      // Renderer blocks can apply and acknowledge an operation immediately
+      // after the tool-result SSE item is published. If the loop has not yet
+      // entered awaitTurnReceipts, finalize here so the early receipt is not
+      // stranded behind an unset resolver.
+      if (!entry.waiting && this.pending.get(entry.receiptKey) === entry) {
+        await this.finalize(entry, payload)
+      }
+      return true
+    } finally {
+      entry.fulfilling = false
     }
-    return true
-  }
-
-  /**
-   * Per-key fulfillment, kept for diagnostics and future call-level receipts.
-   * Idempotent: a second receipt for the same key is ignored.
-   */
-  async fulfill(receiptKey: string, payload: CanvasReceiptPayload): Promise<boolean> {
-    const entry = this.pending.get(receiptKey)
-    if (!entry || entry.settled) return false
-    entry.settled = true
-    entry.resolve(payload)
-    await this.deps.events.record({
-      kind: 'canvas_receipt',
-      threadId: entry.threadId,
-      turnId: entry.turnId,
-      itemId: entry.itemId,
-      receiptKey,
-      status: payload.status,
-      ...(payload.errors?.length ? { errorCount: payload.errors.length } : {}),
-      ...(payload.affectedIds?.length ? { affectedCount: payload.affectedIds.length } : {})
-    })
-    return true
   }
 
   /** Count of pending (unfulfilled) receipts for diagnostics. */
@@ -156,24 +190,29 @@ export class CanvasReceiptRegistry {
     timeoutMs: number,
     nowMs: () => number
   ): Promise<void> {
-    const payload = await new Promise<CanvasReceiptPayload | null>((resolve) => {
-      let timer: ReturnType<typeof setTimeout> | undefined
-      entry.resolve = (value) => {
-        if (timer) clearTimeout(timer)
-        resolve(value)
-      }
-      timer = setTimeout(() => {
-        if (entry.settled) return
-        entry.settled = true
-        entry.resolve = () => undefined
-        resolve(null)
-      }, Math.max(1, timeoutMs))
-      if (typeof (timer as { unref?: () => void }).unref === 'function') {
-        ;(timer as { unref: () => void }).unref()
-      }
-    })
-    void nowMs
-    await this.finalize(entry, payload)
+    entry.waiting = true
+    try {
+      const payload = await new Promise<CanvasReceiptPayload | null>((resolve) => {
+        let timer: ReturnType<typeof setTimeout> | undefined
+        entry.resolve = (value) => {
+          if (timer) clearTimeout(timer)
+          resolve(value)
+        }
+        timer = setTimeout(() => {
+          if (entry.settled) return
+          entry.settled = true
+          entry.resolve = () => undefined
+          resolve(null)
+        }, Math.max(1, timeoutMs))
+        if (typeof (timer as { unref?: () => void }).unref === 'function') {
+          ;(timer as { unref: () => void }).unref()
+        }
+      })
+      void nowMs
+      await this.finalize(entry, payload)
+    } finally {
+      entry.waiting = false
+    }
   }
 
   private async finalize(entry: PendingReceipt, payload: CanvasReceiptPayload | null): Promise<void> {

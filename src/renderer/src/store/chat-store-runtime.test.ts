@@ -246,6 +246,20 @@ describe('code thread classification', () => {
     expect(isCodeThread(designWorkspaceThread)).toBe(false)
   })
 
+  it('shows managed plan-build execution threads from the isolated worktree', () => {
+    const executionThread = makeThread({
+      id: 'thr_plan_execution',
+      title: 'Isolated plan execution',
+      workspace: '/Users/zxy/.kun/worktrees/run-1/deepseek-gui',
+      relation: 'side',
+      parentThreadId: 'thr_plan_source',
+      planBuildRunId: 'run-1'
+    })
+
+    expect(isCodeSidebarThread(executionThread)).toBe(true)
+    expect(isCodeThread(executionThread)).toBe(true)
+  })
+
   it('shows a requirement thread in the project sidebar immediately without classifying it as Code', () => {
     const requirement = makeThread({
       id: 'thr_requirement',

@@ -50,6 +50,21 @@ export function groupTurns(blocks: ChatBlock[]): Turn[] {
     const turnId = block.turnId?.trim() || (
       block.kind === 'user' ? block.meta?.turnId?.trim() : undefined
     )
+    if (
+      block.kind === 'user' &&
+      (isBackgroundShellNoticeBlock(block) || isBackgroundSubagentNoticeBlock(block))
+    ) {
+      let turn = turnId ? turnsById.get(turnId) : undefined
+      if (!turn) turn = current ?? undefined
+      if (!turn) {
+        turn = { ...(turnId ? { turnId } : {}), blocks: [] }
+        turns.push(turn)
+      }
+      if (turnId && !turnsById.has(turnId)) turnsById.set(turnId, turn)
+      turn.blocks.push(block)
+      current = turn
+      continue
+    }
     if (turnId) {
       let turn = turnsById.get(turnId)
       if (!turn) {
@@ -83,6 +98,25 @@ export function groupTurns(blocks: ChatBlock[]): Turn[] {
   }
 
   return turns
+}
+
+/** Bind live state to its durable runtime turn instead of assuming the last UI turn owns it. */
+export function activeTimelineTurnIndex(
+  turns: readonly Turn[],
+  currentTurnId?: string | null,
+  currentTurnUserId?: string | null
+): number {
+  const normalizedTurnId = currentTurnId?.trim()
+  if (normalizedTurnId) {
+    const index = turns.findIndex((turn) => turn.turnId === normalizedTurnId)
+    if (index >= 0) return index
+  }
+  const normalizedUserId = currentTurnUserId?.trim()
+  if (normalizedUserId) {
+    const index = turns.findIndex((turn) => turn.user?.id === normalizedUserId)
+    if (index >= 0) return index
+  }
+  return turns.length - 1
 }
 
 export function stableTurnKey(turn: Turn, fallbackIndex: number): string {

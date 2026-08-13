@@ -15,7 +15,8 @@ import { SubagentReturnBar } from '../chat/message-timeline-empty'
 import { WriteAssistantPanel } from './WriteAssistantPanel'
 
 const provider = vi.hoisted(() => ({
-  getThreadDetail: vi.fn()
+  getThreadDetail: vi.fn(),
+  getAttachmentContent: vi.fn()
 }))
 
 vi.mock('../../agent/registry', () => ({
@@ -57,6 +58,21 @@ function panelProps(overrides: Partial<PanelProps> = {}): PanelProps {
   }
 }
 
+function timelineNodeMock() {
+  return {
+    style: {},
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    scrollIntoView: vi.fn(),
+    scrollBy: vi.fn(),
+    scrollHeight: 900,
+    scrollTop: 0,
+    clientHeight: 900,
+    clientWidth: 640,
+    scrollWidth: 640
+  }
+}
+
 describe('WriteAssistantPanel subagent session', () => {
   const originalSelectThread = useChatStore.getState().selectThread
 
@@ -64,6 +80,7 @@ describe('WriteAssistantPanel subagent session', () => {
     ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
     await i18n.changeLanguage('en')
     provider.getThreadDetail.mockReset()
+    provider.getAttachmentContent.mockReset()
     useChatStore.setState({
       activeThreadId: 'write-parent',
       activeThreadRelation: 'primary',
@@ -83,6 +100,8 @@ describe('WriteAssistantPanel subagent session', () => {
       removeEventListener: vi.fn(),
       requestAnimationFrame: vi.fn(() => 1),
       cancelAnimationFrame: vi.fn(),
+      setTimeout,
+      clearTimeout,
       setInterval,
       clearInterval,
       innerHeight: 900,
@@ -103,6 +122,25 @@ describe('WriteAssistantPanel subagent session', () => {
   it('opens the child transcript locally and returns without replacing the Work parent thread', async () => {
     const childBlocks: ChatBlock[] = [
       { kind: 'user', id: 'child-user', text: 'Summarize the presentation' },
+      {
+        kind: 'tool',
+        id: 'child-image-tool',
+        summary: 'generate_image',
+        status: 'success',
+        meta: {
+          toolName: 'generate_image',
+          generatedFiles: [{
+            name: 'work-child.png',
+            relativePath: '.kun/images/work-child.png',
+            mimeType: 'image/png'
+          }],
+          attachments: [{
+            id: 'att_work_child',
+            name: 'work-child.png',
+            mimeType: 'image/png'
+          }]
+        }
+      },
       { kind: 'assistant', id: 'child-answer', text: 'Child transcript' }
     ]
     provider.getThreadDetail.mockResolvedValue({
@@ -112,11 +150,22 @@ describe('WriteAssistantPanel subagent session', () => {
       relation: 'side',
       parentThreadId: 'write-parent'
     })
+    provider.getAttachmentContent.mockResolvedValue({
+      attachment: {
+        id: 'att_work_child',
+        kind: 'image',
+        name: 'work-child.png',
+        mimeType: 'image/png'
+      },
+      dataBase64: 'Y2hpbGQ='
+    })
 
     let renderer: ReactTestRenderer | undefined
     try {
       await act(async () => {
-        renderer = create(createElement(WriteAssistantPanel, panelProps()))
+        renderer = create(createElement(WriteAssistantPanel, panelProps()), {
+          createNodeMock: timelineNodeMock
+        })
       })
 
       const parentTimeline = renderer!.root.findByType(LazyMessageTimeline)
@@ -140,6 +189,13 @@ describe('WriteAssistantPanel subagent session', () => {
       })).toHaveLength(1)
       expect(useChatStore.getState().activeThreadId).toBe('write-parent')
       expect(useChatStore.getState().selectThread).not.toHaveBeenCalled()
+      await vi.waitFor(() => {
+        expect(provider.getAttachmentContent).toHaveBeenCalledWith('att_work_child', {
+          threadId: 'write-child',
+          workspace: '/workspace'
+        })
+        expect(renderer!.root.findAllByType('img')).toHaveLength(1)
+      })
 
       const returnBar = renderer!.root.findByType(SubagentReturnBar)
       await act(async () => {

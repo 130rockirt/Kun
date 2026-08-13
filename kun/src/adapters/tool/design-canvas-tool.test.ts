@@ -7,6 +7,7 @@ import {
   createDesignSystemTemplateTool,
   createDesignUpdateShapesTool,
   createDesignValidateTool,
+  createWorkRenameWhiteboardTool,
   DESIGN_CANVAS_TOOL_NAME,
   DESIGN_CREATE_SCREEN_TOOL_NAME,
   DESIGN_EXPORT_CANVAS_TOOL_NAME,
@@ -14,7 +15,8 @@ import {
   DESIGN_SYSTEM_TEMPLATE_TOOL_NAME,
   DESIGN_UPDATE_SHAPES_MAX_OPS,
   DESIGN_UPDATE_SHAPES_TOOL_NAME,
-  DESIGN_VALIDATE_TOOL_NAME
+  DESIGN_VALIDATE_TOOL_NAME,
+  WORK_RENAME_WHITEBOARD_TOOL_NAME
 } from './design-canvas-tool.js'
 import type { ToolHostContext } from '../../ports/tool-host.js'
 import { LocalToolHost } from './local-tool-host.js'
@@ -97,6 +99,28 @@ describe('design_canvas tool', () => {
 })
 
 describe('dedicated design tools', () => {
+  it('advertises a first-class whiteboard rename only on Work canvas turns', async () => {
+    const tool = createWorkRenameWhiteboardTool()
+    const workContext = { ...context(true), agentSurface: 'write' as const }
+    expect(tool.name).toBe(WORK_RENAME_WHITEBOARD_TOOL_NAME)
+    expect(tool.shouldAdvertise?.(workContext)).toBe(true)
+    expect(tool.shouldAdvertise?.({ ...workContext, guiDesignCanvas: undefined })).toBe(false)
+    expect(tool.shouldAdvertise?.({ ...workContext, agentSurface: 'code' })).toBe(false)
+    expect(tool.shouldAdvertise?.({ ...workContext, agentSurface: 'design' })).toBe(false)
+
+    const result = await tool.execute({ title: 'Service architecture' }, workContext)
+    expect(result.isError).toBeUndefined()
+    expect(result.output).toMatchObject({
+      ok: true,
+      tool: WORK_RENAME_WHITEBOARD_TOOL_NAME,
+      action: 'rename_whiteboard',
+      title: 'Service architecture',
+      status: 'accepted',
+      receiptKey: expect.stringMatching(/^design-receipt-[a-f0-9]{32}$/),
+      ops: []
+    })
+  })
+
   it('queues a deterministic renderer-backed whiteboard image export only in Code canvas turns', async () => {
     const tool = createDesignExportCanvasTool()
     expect(tool.name).toBe(DESIGN_EXPORT_CANVAS_TOOL_NAME)

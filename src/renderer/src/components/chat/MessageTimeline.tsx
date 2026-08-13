@@ -8,7 +8,13 @@ import { threadHasPendingRuntimeWork } from '../../store/chat-store-runtime-help
 import { useTimelineStores } from './use-timeline-stores'
 import { useTimelineScroll } from './use-timeline-scroll'
 import { MessageTimelineEmptyHero, ThreadForkBanner, ThreadForkPoint } from './message-timeline-empty'
-import { groupTurns, stableTurnKey, turnTaskSurface, type Turn } from './message-timeline-turns'
+import {
+  activeTimelineTurnIndex,
+  groupTurns,
+  stableTurnKey,
+  turnTaskSurface,
+  type Turn
+} from './message-timeline-turns'
 import { InjectedMemoryLookupProvider } from './injected-memory-lookup'
 import {
   TimelineFilePreviewWorkspaceProvider,
@@ -62,6 +68,7 @@ export { summarizeToolBlock } from './message-timeline-process'
 export function timelineTurnIsProcessing(input: {
   busy: boolean
   isLatestTurn: boolean
+  isActiveTurn?: boolean
   turnPending: boolean
   hasLiveStream: boolean
   turnId?: string
@@ -73,7 +80,9 @@ export function timelineTurnIsProcessing(input: {
   ) {
     return false
   }
-  return (input.busy && input.isLatestTurn) || input.turnPending || input.hasLiveStream
+  return (input.busy && (input.isActiveTurn ?? input.isLatestTurn)) ||
+    input.turnPending ||
+    input.hasLiveStream
 }
 
 const TURN_PAGE_SIZE = 18
@@ -126,6 +135,7 @@ export function MessageTimeline({
     threadHasMoreHistory,
     threadHistoryLoading,
     loadEarlierThreadHistory,
+    currentTurnId,
     currentTurnUserId,
     turnStartedAtByUserId,
     turnDurationByUserId,
@@ -200,6 +210,10 @@ export function MessageTimeline({
   const visibleTurns = useMemo(
     () => (hiddenTurnCount > 0 ? turns.slice(hiddenTurnCount) : turns),
     [hiddenTurnCount, turns]
+  )
+  const activeTurnIndex = useMemo(
+    () => activeTimelineTurnIndex(visibleTurns, currentTurnId, currentTurnUserId),
+    [currentTurnId, currentTurnUserId, visibleTurns]
   )
   const graphPlanningPaused = Boolean(
     graphPlanningCorrectionTurnId &&
@@ -350,7 +364,10 @@ export function MessageTimeline({
     : -1
 
   return (
-    <TimelineFilePreviewWorkspaceProvider workspaceRoot={filePreviewWorkspaceRoot}>
+    <TimelineFilePreviewWorkspaceProvider
+      workspaceRoot={filePreviewWorkspaceRoot}
+      threadId={activeThreadId}
+    >
     <InjectedMemoryLookupProvider workspaceRoot={workspaceRoot}>
     <div ref={containerRef} className="ds-no-drag relative flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden">
       {visibleTurnAnchors.length > 2 && jumpRailLayout ? (
@@ -492,10 +509,12 @@ export function MessageTimeline({
           const turnAttachmentMenus = turnContributions?.attachmentContextMenus ?? extensionAttachmentContextMenus
           const turnResultPreviews = turnContributions?.resultPreviews ?? extensionResultPreviews
           const isLatestTurn = index === visibleTurns.length - 1
-          const hasLiveStream = isLatestTurn && !!(liveReasoning.trim() || live.trim())
+          const isActiveTurn = index === activeTurnIndex
+          const hasLiveStream = isActiveTurn && !!(liveReasoning.trim() || live.trim())
           const turnIsProcessing = timelineTurnIsProcessing({
             busy,
             isLatestTurn,
+            isActiveTurn,
             turnPending,
             hasLiveStream,
             turnId: turn.turnId,
@@ -550,8 +569,8 @@ export function MessageTimeline({
               <MemoMessageTurn
                 turn={turn}
                 isProcessing={turnIsProcessing}
-                liveReasoning={isLatestTurn ? liveReasoning : ''}
-                live={isLatestTurn ? live : ''}
+                liveReasoning={isActiveTurn ? liveReasoning : ''}
+                live={isActiveTurn ? live : ''}
                 durationMs={durationMs}
                 reasoningDurationMs={reasoningDurationMs}
                 devPreviewCard={isLatestTurn ? devPreviewCard : null}

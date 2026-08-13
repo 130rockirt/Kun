@@ -25,6 +25,7 @@ import {
   shouldOpenSettingsForError
 } from './chat-store-runtime'
 import { ensureRuntimeProviderForSend, subscribeThreadEventsWithRecovery } from './chat-store-thread-action-helpers'
+import { settleAcceptedTurnAfterNavigation } from './chat-store-thread-send-navigation'
 import { readDesignThreadRegistry } from '../design/design-thread-registry'
 import {
   createWorkspaceCheckpointRequestId,
@@ -70,7 +71,6 @@ export async function performPreparedThreadSend(input: PreparedThreadSend): Prom
     overrides,
     queued,
     clientRequestId,
-    expectedThreadId,
     requestedAgentSurface,
     designProfile,
     designDocumentTarget,
@@ -414,24 +414,25 @@ export async function performPreparedThreadSend(input: PreparedThreadSend): Prom
             }
           : thread)
       }))
-      if (!queued) saveQueuedMessagesForThread(activeThreadId, get().queuedMessages)
       if (currentTurnStartGeneration() !== sendGeneration) {
         // Stop was pressed while the POST was still pending. The accepted turn
         // is real, but must not revive this renderer projection or its queue.
         void p.interruptTurn(activeThreadId, turnId, { discard: false }).catch(() => undefined)
         return true
       }
-      // The runtime accepted this scoped turn, but the user may have switched
-      // threads while the provider request was in flight. Leave the accepted
-      // turn on its original thread and let persistence/reload surface it later;
-      // never project its busy state, blocks, or SSE into the newly active view.
-      if (expectedThreadId && get().activeThreadId !== activeThreadId) {
-        if (userMessageItemId && userModelChip) {
-          rememberTurnModel(activeThreadId, userMessageItemId, userModelChip)
-        }
+      if (get().activeThreadId !== activeThreadId) {
+        settleAcceptedTurnAfterNavigation({
+          threadId: activeThreadId,
+          turnId,
+          ...(userMessageItemId ? { userMessageItemId } : {}),
+          ...(userModelChip ? { modelLabel: userModelChip } : {}),
+          queued,
+          previousQueuedMessages
+        })
         void get().refreshThreads()
         return true
       }
+      if (!queued) saveQueuedMessagesForThread(activeThreadId, get().queuedMessages)
       if (queued) {
         set((state) => ({
           queuedMessages: state.queuedMessages.map((message) => message.id === queued.id

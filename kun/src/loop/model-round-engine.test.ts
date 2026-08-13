@@ -171,6 +171,7 @@ function harness(values: readonly ModelStreamChunk[]) {
     setStream: (next: () => AsyncIterable<ModelStreamChunk>) => { streamFactory = next },
     run: (options: {
       maxToolCallsPerStep?: number
+      toolCallOverflowBehavior?: 'fail' | 'truncate'
       onRouteSelected?: (route: NonNullable<ModelStreamChunk['route']>) => Promise<void>
     } = {}) => engine.run({
       threadId: 'thread_1',
@@ -186,6 +187,9 @@ function harness(values: readonly ModelStreamChunk[]) {
         abortSignal: controller.signal
       },
       maxToolCallsPerStep: options.maxToolCallsPerStep ?? 1,
+      ...(options.toolCallOverflowBehavior
+        ? { toolCallOverflowBehavior: options.toolCallOverflowBehavior }
+        : {}),
       streamToolMetadata: new Map([['read', { providerId: 'builtin' }]]),
       cacheSignature: {
         model: 'model_1', providerId: 'builtin', endpointFormat: 'openai', prefixFingerprint: 'prefix',
@@ -417,6 +421,24 @@ describe('ModelRoundEngine', () => {
       'item_tool_turn_1_call_shared',
       'item_tool_turn_1_call_tool_1'
     ])
+  })
+
+  it('returns the accepted tool batch when configured to truncate overflow', async () => {
+    const test = harness([
+      { kind: 'tool_call_complete', callId: 'call_kept', toolName: 'read', arguments: { path: 'a.ts' } },
+      { kind: 'tool_call_complete', callId: 'call_truncated', toolName: 'read', arguments: { path: 'b.ts' } },
+      { kind: 'completed', stopReason: 'tool_calls' }
+    ])
+
+    await expect(test.run({
+      maxToolCallsPerStep: 1,
+      toolCallOverflowBehavior: 'truncate'
+    })).resolves.toMatchObject({
+      kind: 'tool_calls',
+      snapshot: { toolCalls: [{ callId: 'call_kept' }] }
+    })
+    expect(test.appliedItems.filter((item) => item.kind === 'tool_call')).toHaveLength(1)
+    expect(test.trace).not.toContain('limit')
   })
 
   it('coalesces provider-sized deltas without changing event order or final text', async () => {

@@ -30,11 +30,13 @@ const FAST_CONTEXT_LABEL = 'Fast Context retrieval'
 const FAST_CONTEXT_SYSTEM_PROMPT = [
   'You are Kun’s budgeted repository retrieval agent.',
   'You may only use grep, glob, and read. Do not use shell, web, repo maps, skills, mutation, or delegation.',
+  'Emit no more than four source tool calls in one model round; continue a larger investigation in the next retrieval round.',
   'Keep source inspection narrow and return concise task conclusions with file-and-line evidence.'
 ].join(' ')
 const FAST_CONTEXT_PROMPT_PREAMBLE = [
   'You are Kun’s budgeted repository retrieval agent.',
   'Use only grep, glob, and read. Use rounds 1-3 to locate candidates, target those paths, and read small relevant ranges.',
+  'Emit no more than four source tool calls in one model round. Continue remaining independent lookups in the next retrieval round.',
   'Round 4 is final synthesis only: do not call a tool during that round.',
   'Do not use shell, web, repo maps, skills, or any mutation. Do not dump raw tool output.',
   'Finish with concise sections headed “Task 1:”, “Task 2:”, and so on. State uncertainty when source evidence is incomplete.'
@@ -42,7 +44,7 @@ const FAST_CONTEXT_PROMPT_PREAMBLE = [
 
 const FAST_CONTEXT_DESCRIPTION = [
   'Run a Fast Context repository retrieval before broad code exploration. Submit 1-4 scoped tasks together; one budgeted child investigates them as a single retrieval run.',
-  'The child can only use grep, glob, and read, has at most four model steps and eight source calls per step, and returns compact file-and-line evidence instead of raw search output.',
+  'The child can only use grep, glob, and read, has at most four model steps, executes at most four source calls concurrently, and returns compact file-and-line evidence instead of raw search output.',
   'Use a later fast_context call for questions that depend on this evidence. 即使后续需要修改文件，也必须先调用 fast_context；复杂问题请在一个批次中提交 2-4 个互不重叠的任务。'
 ].join(' ')
 
@@ -284,6 +286,7 @@ function fastContextPrompt(tasks: readonly FastContextTask[]): string {
   return [
     'Investigate this batch as one Fast Context retrieval run.',
     'Use rounds 1-3 only for retrieval: locate candidate files, grep only candidate paths, then read necessary local ranges.',
+    'Emit no more than four grep, glob, or read calls in one model round. Continue any remaining lookup in the next retrieval round.',
     'Round 4 is final synthesis only. Do not call a tool in round 4; write the task conclusions instead.',
     `Every grep, glob, and read call must include a non-empty task_indexes array of 1-based task numbers (1-${tasks.length}); include every task supported by shared evidence.`,
     'Use the minimum source calls needed. Do not request broad recursive scans after candidates are known.',

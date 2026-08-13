@@ -232,6 +232,20 @@ export function kunThreadTimelinePath(
   return `${kunThreadPath(threadId)}/timeline${query ? `?${query}` : ''}`
 }
 
+export const KUN_THREAD_KNOWLEDGE_BASES_TEMPLATE = '/v1/threads/{id}/knowledge-bases'
+export function kunThreadKnowledgeBasesPath(threadId: string): string {
+  return `${kunThreadPath(threadId)}/knowledge-bases`
+}
+
+export const KUN_THREAD_KNOWLEDGE_BASE_REINDEX_TEMPLATE =
+  '/v1/threads/{id}/knowledge-bases/{id}/reindex'
+export function kunThreadKnowledgeBaseReindexPath(
+  threadId: string,
+  knowledgeBaseId: string
+): string {
+  return `${kunThreadKnowledgeBasesPath(threadId)}/${encodeURIComponent(knowledgeBaseId)}/reindex`
+}
+
 export const KUN_THREAD_FORK_TEMPLATE = '/v1/threads/{id}/fork'
 export function kunThreadForkPath(threadId: string): string {
   return `${kunThreadPath(threadId)}/fork`

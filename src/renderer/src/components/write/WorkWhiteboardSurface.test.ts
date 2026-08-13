@@ -193,7 +193,7 @@ describe('WorkWhiteboardSurface', () => {
     expect(onRequestAssistant).toHaveBeenCalledOnce()
   })
 
-  it('requires an active-workflow selection for selection-based review actions', async () => {
+  it('keeps direction confirmation in chat when no whiteboard card is selected', async () => {
     const onRequestAssistant = vi.fn()
     const view = await render(createElement(WorkWhiteboardSurface, {
       ...baseProps, phase: 'directions', writable: true, onRequestAssistant
@@ -202,8 +202,12 @@ describe('WorkWhiteboardSurface', () => {
       'data-work-whiteboard-action': 'workWhiteboardAdoptDirection'
     })
 
-    expect(adopt.props.disabled).toBe(true)
-    expect(adopt.props.title).toContain('Select a direction card')
+    expect(adopt.props.disabled).toBe(false)
+    expect(adopt.findByType('span').children).toContain('Use recommended direction and continue')
+    act(() => adopt.props.onClick())
+    expect(onRequestAssistant).toHaveBeenCalledWith(
+      '采用当前 PPT 工作流的推荐视觉方向，并继续生成逐页演示稿。'
+    )
   })
 
   it('opens the exported PPTX through the existing Work file preview path', async () => {

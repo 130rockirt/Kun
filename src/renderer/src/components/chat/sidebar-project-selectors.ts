@@ -156,7 +156,9 @@ export function sidebarWorkspacePathForThread(
   worktrees: SidebarThreadWorktrees = {},
   candidateProjectPaths: readonly string[] = []
 ): string {
-  const worktreeProjectPath = workspacePathForWorktreeRecord(worktrees[thread.id])
+  const worktreeProjectPath = workspacePathForWorktreeRecord(
+    worktreeRecordForSidebarThread(thread, worktrees)
+  )
   if (worktreeProjectPath) return worktreeProjectPath
   const workspace = thread.workspace ?? ''
   const resolved = resolveProjectWorkspacePath(workspace, {
@@ -214,10 +216,14 @@ export function buildSidebarWorkspaceGroups(options: {
   threadWorktrees?: SidebarThreadWorktrees
 }): SidebarWorkspaceGroup[] {
   const map = new Map<string, { workspacePath: string; threads: NormalizedThread[] }>()
-  const selectedWorkspace = normalizeWorkspaceRoot(options.workspaceRoot)
-  const selectedWorkspaceKey = workspaceRootIdentityKey(selectedWorkspace)
   const query = options.searchQuery.trim().toLowerCase()
   const candidateProjectPaths = sidebarWorkspaceResolutionCandidates(options)
+  const selectedWorkspace = sidebarWorkspacePathForRememberedRoot(
+    options.workspaceRoot,
+    options.threadWorktrees,
+    candidateProjectPaths
+  )
+  const selectedWorkspaceKey = workspaceRootIdentityKey(selectedWorkspace)
 
   const upsertWorkspace = (workspacePath: string, threads: NormalizedThread[] = []): void => {
     const normalized = normalizeWorkspaceRoot(workspacePath)
@@ -290,8 +296,12 @@ export function buildSidebarDraftWorkspacePaths(options: {
   threadWorktrees?: SidebarThreadWorktrees
 }): string[] {
   const map = new Map<string, string>()
-  const selectedWorkspace = normalizeWorkspaceRoot(options.workspaceRoot)
   const candidateProjectPaths = sidebarWorkspaceResolutionCandidates(options)
+  const selectedWorkspace = sidebarWorkspacePathForRememberedRoot(
+    options.workspaceRoot,
+    options.threadWorktrees,
+    candidateProjectPaths
+  )
   const upsertWorkspace = (workspacePath: string): void => {
     const normalized = normalizeWorkspaceRoot(workspacePath)
     if (!isSidebarProjectWorkspacePath(normalized)) return

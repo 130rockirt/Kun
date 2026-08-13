@@ -40,6 +40,7 @@ import {
   pptProviderChildSecurity,
   resolvePptProviderSource,
   scopePptDirectionContext,
+  scopePptDirectionInputAnswer,
   scopePptReviewContext,
   stringValue,
   type PptProviderDirectionContext,
@@ -47,6 +48,10 @@ import {
   type PptProviderSourceEnvelope
 } from './ppt-agent-provider-support.js'
 import { resolvePptRetryState } from './ppt-agent-retry-state.js'
+import {
+  resolvePptPromptDirectionSelection,
+  resolvePptUserInputDirectionSelection
+} from './ppt-agent-direction-prompt.js'
 
 export const PPT_AGENT_TOOL_NAME = 'ppt_agent' as const
 export const PPT_AGENT_PROVIDER_ID = 'ppt-agent' as const
@@ -235,6 +240,8 @@ export function buildPptAgentToolProvider(
             if (!scopedDirection.ok) {
               return { output: { phase: 'source_unavailable', error: scopedDirection.error }, isError: true }
             }
+            const directionInputAnswer = scopePptDirectionInputAnswer(
+              source.value.directionInputAnswers, action, childId, workflowId)
             const scopedReview = retryingDirection || (retry?.stage === 'review' && !retry.hasReviewBundle)
               ? { ok: true as const, value: undefined }
               : scopePptReviewContext(source.value.reviewContexts, action, childId, workflowId)
@@ -251,22 +258,8 @@ export function buildPptAgentToolProvider(
               candidateFingerprint: string
             }> | undefined
             let directionSlidesFingerprint: string | undefined
+            let resolvedDirectionSelection: Array<{ directionId: string; revision: number }> | undefined
             if (directionContextAction || (retryingDirection && retry?.hasDirectionBundle)) {
-              const selectedDirectionCount = scopedDirection.value?.directions.length ?? 0
-              const acceptedDirection = selectedDirectionCount === 0
-                ? explicitlyAcceptsRecommendedDirection(source.value.prompt)
-                : explicitlyAcceptsSelectedDirection(source.value.prompt)
-              if (action === 'select_direction' && !acceptedDirection) {
-                return {
-                  output: {
-                    phase: 'source_unavailable',
-                    error: selectedDirectionCount === 0
-                      ? 'PPT source unavailable: select a direction card or explicitly accept the recommended direction'
-                      : 'PPT source unavailable: explicitly adopt the selected direction before promotion'
-                  },
-                  isError: true
-                }
-              }
               const identity = await validatePersistedPptDirectionIdentity(
                 runtime,
                 context.threadId,
@@ -280,6 +273,47 @@ export function buildPptAgentToolProvider(
               persistedPreviewMode = identity.previewMode
               directionAuthority = identity.authority
               directionSlidesFingerprint = identity.bundle.slidesFingerprint
+              if (action === 'select_direction') {
+                const selection = directionInputAnswer
+                  ? resolvePptUserInputDirectionSelection({
+                      answer: directionInputAnswer.answer,
+                      directions: identity.bundle.directions
+                    })
+                  : resolvePptPromptDirectionSelection({
+                      prompt: source.value.prompt,
+                      directions: identity.bundle.directions,
+                      structuredSelection: scopedDirection.value?.directions
+                    })
+                if (!selection.ok) {
+                  const selectedDirectionCount = scopedDirection.value?.directions.length ?? 0
+                  const message = directionInputAnswer
+                    ? selection.reason === 'ambiguous'
+                      ? 'PPT source unavailable: the user-input direction answer is ambiguous'
+                      : 'PPT source unavailable: the user-input answer does not match a persisted direction'
+                    : selectedDirectionCount > 0
+                    ? 'PPT source unavailable: explicitly adopt the selected direction before promotion'
+                    : selection.reason === 'ambiguous'
+                      ? 'PPT source unavailable: direction reply is ambiguous; name exactly one direction'
+                      : selection.reason === 'direction_required'
+                        ? 'PPT source unavailable: reply with one direction name or number, or explicitly accept the recommended direction'
+                        : 'PPT source unavailable: explicitly accept a direction by name or number, or accept the recommended direction'
+                  return { output: { phase: 'source_unavailable', error: message }, isError: true }
+                }
+                const structuredSelection = scopedDirection.value?.directions[0]
+                if (structuredSelection && (
+                  structuredSelection.directionId !== selection.selection.directionId ||
+                  structuredSelection.revision !== selection.selection.revision
+                )) {
+                  return {
+                    output: {
+                      phase: 'source_unavailable',
+                      error: 'PPT source unavailable: user input conflicts with the selected whiteboard direction'
+                    },
+                    isError: true
+                  }
+                }
+                resolvedDirectionSelection = [selection.selection]
+              }
             } else if (action !== 'start' && !retryingDirection && !(retry?.stage === 'review' && !retry.hasReviewBundle)) {
               if (!scopedReview.value) {
                 return { output: { phase: 'source_unavailable', error: 'PPT source unavailable: review context is required' }, isError: true }
@@ -370,7 +404,7 @@ export function buildPptAgentToolProvider(
                 ? {
                     directionContext: {
                       childId,
-                      directions: scopedDirection.value?.directions ?? [],
+                      directions: resolvedDirectionSelection ?? scopedDirection.value?.directions ?? [],
                       authority: directionAuthority?.map((direction) => ({
                         directionId: direction.directionId,
                         revision: direction.revision,
@@ -605,28 +639,4 @@ function formatPptChildError(contractError: string, childError: string | undefin
   if (!contractError) return detail || fallback
   if (!detail || detail === contractError) return contractError
   return `${contractError}. Child error: ${detail}`
-}
-
-function explicitlyAcceptsRecommendedDirection(prompt: string): boolean {
-  if (/\?/.test(prompt) || /[？吗呢]\s*$/.test(prompt)) return false
-  if (
-    /\b(?:do not|don't|never|refuse(?:d)? to|might|maybe|may|not|no)\b.{0,24}\b(?:accept|adopt|use|choose|go with|proceed with|recommended|recommendation)\b/i.test(prompt) ||
-    /(?:不要|不接受|不采用|别|不要按|拒绝|可能|也许|暂不).{0,12}(?:推荐|建议).{0,8}(?:方向|方案|风格)?/i.test(prompt)
-  ) return false
-  const normalized = prompt.trim()
-  return /^(?:please\s+)?(?:accept|adopt|use|choose|go with|proceed with)\b.{0,24}\b(?:the )?(?:recommended|recommendation)(?:\s+(?:direction|style|concept|option))?\b[\s.!]*$/i.test(normalized) ||
-    /^(?:请)?(?:采用|接受|选择|使用|按).{0,12}(?:推荐|建议).{0,8}(?:方向|方案|风格)?[。！!\s]*$/i.test(normalized)
-}
-
-function explicitlyAcceptsSelectedDirection(prompt: string): boolean {
-  if (rejectsDirectionAcceptance(prompt)) return false
-  const normalized = prompt.trim()
-  return /^(?:please\s+)?(?:accept|adopt|use|choose|go with|proceed with)\b.{0,28}\b(?:this(?:\s+selected)?|that(?:\s+selected)?|the selected|my selected|whiteboard)\s+(?:direction|style|concept|direction choice|card)\b[\s.!]*$/i.test(normalized) ||
-    /^(?:请)?(?:采用|接受|选择|使用|按).{0,12}(?:这个|该|已选|选中|白板中的?)(?:方向|方案|风格|卡片)[。！!\s]*$/i.test(normalized)
-}
-
-function rejectsDirectionAcceptance(prompt: string): boolean {
-  return /\?/.test(prompt) || /[？吗呢]\s*$/.test(prompt) ||
-    /\b(?:do not|don't|never|refuse(?:d)? to|might|maybe|may|not|no)\b.{0,32}\b(?:accept|adopt|use|choose|go with|proceed with|direction|style|concept|recommended|recommendation)\b/i.test(prompt) ||
-    /(?:不要|不接受|不采用|别|不要按|拒绝|可能|也许|暂不).{0,16}(?:方向|方案|风格|卡片|推荐|建议)/i.test(prompt)
 }

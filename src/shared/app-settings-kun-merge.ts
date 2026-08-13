@@ -307,7 +307,7 @@ export function mergeKunRuntimeSettings(
     useWorktreeByDefault:
       patch?.planExecution?.useWorktreeByDefault
       ?? current.planExecution?.useWorktreeByDefault
-      ?? true
+      ?? false
   }
   // Do not let the nested partial patch leak through the broad object spread;
   // `nextSubagents` below is the fully materialized authoritative value.

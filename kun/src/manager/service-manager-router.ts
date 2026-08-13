@@ -57,6 +57,7 @@ export function buildServiceManagerRouter(input: {
   managerToken: string
   instanceId: string
   startedAt: string
+  buildId?: string
   state: ServiceManagerState
   sharedData?: ManagerSharedDataStore
   documents?: RevisionedDocumentStore
@@ -78,6 +79,7 @@ export function buildServiceManagerRouter(input: {
     pid: process.pid,
     startedAt: input.startedAt,
     serviceVersion: KUN_VERSION,
+    ...(input.buildId ? { buildId: input.buildId } : {}),
     capabilities
   }))
   router.add('GET', '/v1/manager/status', (request) => authorized(request, input.managerToken, () =>
@@ -87,6 +89,7 @@ export function buildServiceManagerRouter(input: {
       pid: process.pid,
       startedAt: input.startedAt,
       serviceVersion: KUN_VERSION,
+      ...(input.buildId ? { buildId: input.buildId } : {}),
       capabilities,
       slots: input.state.snapshot()
     })))

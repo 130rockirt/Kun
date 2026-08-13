@@ -72,10 +72,12 @@ export async function seedUsageCarryover(input: {
     }
   }
   const threadSummaries = await input.threadStore.list()
-  await Promise.all(threadSummaries.map(async (thread) => {
-    const latestUsage = await findLatestUsageEvent(input.sessionStore, thread.id)
-    if (latestUsage) input.usageService.seedThread(thread.id, latestUsage.usage)
-  }))
+  for (let offset = 0; offset < threadSummaries.length; offset += 8) {
+    await Promise.all(threadSummaries.slice(offset, offset + 8).map(async (thread) => {
+      const latestUsage = await findLatestUsageEvent(input.sessionStore, thread.id)
+      if (latestUsage) input.usageService.seedThread(thread.id, latestUsage.usage)
+    }))
+  }
 }
 
 export function createPersistentMemoryStore(

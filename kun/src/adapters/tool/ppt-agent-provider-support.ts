@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { ModelReasoningEffort, type SubagentProfileConfig } from '../../contracts/capabilities.js'
-import type { UserTurnItem } from '../../contracts/items.js'
+import type { TurnItem, UserTurnItem } from '../../contracts/items.js'
 import type { TurnService } from '../../services/turn-service.js'
 import { ChildSourceEnvelope, type ChildSecuritySnapshot } from '../../delegation/delegation-runtime.js'
 import { PPT_AGENT_PROFILE } from '../../delegation/builtin-profiles.js'
@@ -38,9 +38,16 @@ export type PptProviderDirectionContext = {
   directions: Array<{ directionId: string; revision: number }>
 }
 
+export type PptProviderDirectionInputAnswer = {
+  workflowId: string
+  childId: string
+  answer: string
+}
+
 export type PptProviderSourceEnvelope = z.infer<typeof ChildSourceEnvelope> & {
   reviewContexts: PptProviderReviewContext[]
   directionContexts: PptProviderDirectionContext[]
+  directionInputAnswers: PptProviderDirectionInputAnswer[]
 }
 
 type Resolution<T> = { ok: true; value: T } | { ok: false; error: string }
@@ -78,6 +85,7 @@ export async function resolvePptProviderSource(
   const composerContexts = userItem.composerContexts ?? turn.composerContexts ?? []
   const reviewContexts: PptProviderReviewContext[] = []
   const directionContexts: PptProviderDirectionContext[] = []
+  const directionInputAnswers = pptDirectionInputAnswers(turn.items)
   for (const composerContext of composerContexts) {
     if (!('source' in composerContext.provenance) || composerContext.provenance.source !== 'dev-preview') continue
     if (composerContext.reference.kind === 'ppt-review') {
@@ -100,7 +108,7 @@ export async function resolvePptProviderSource(
     agentSurface: turn.agentSurface ?? context.agentSurface
   })
   return source.success
-    ? { ok: true, value: { ...source.data, reviewContexts, directionContexts } }
+    ? { ok: true, value: { ...source.data, reviewContexts, directionContexts, directionInputAnswers } }
     : fail('PPT source unavailable: active turn source is invalid')
 }
 
@@ -141,6 +149,45 @@ export function scopePptDirectionContext(
   if (matching.length === 1) return { ok: true, value: matching[0] }
   if (matching.length > 1) return fail(`PPT source unavailable: duplicate direction context for workflow ${workflowId}`)
   return { ok: true, value: undefined }
+}
+
+export function scopePptDirectionInputAnswer(
+  answers: readonly PptProviderDirectionInputAnswer[],
+  action: PptAgentAction,
+  childId: string,
+  workflowId: string
+): PptProviderDirectionInputAnswer | undefined {
+  if (action !== 'select_direction') return undefined
+  for (let index = answers.length - 1; index >= 0; index -= 1) {
+    const answer = answers[index]
+    if (answer.childId === childId && answer.workflowId === workflowId) return answer
+  }
+  return undefined
+}
+
+function pptDirectionInputAnswers(
+  items: readonly TurnItem[]
+): PptProviderDirectionInputAnswer[] {
+  const out: PptProviderDirectionInputAnswer[] = []
+  for (const item of items) {
+    if (item.kind !== 'user_input') continue
+    const input = item
+    if (input.status !== 'submitted') continue
+    for (const answer of input.answers ?? []) {
+      if (!input.questions.some((question) => question.id === answer.id)) continue
+      const identity = parsePptDirectionInputQuestionId(answer.id)
+      const value = answer.value.trim() || answer.label.trim()
+      if (identity && value) out.push({ ...identity, answer: value })
+    }
+  }
+  return out
+}
+
+function parsePptDirectionInputQuestionId(
+  value: string
+): Pick<PptProviderDirectionInputAnswer, 'workflowId' | 'childId'> | null {
+  const match = value.match(/^ppt_direction:([^:]+):([^:]+)$/)
+  return match ? { workflowId: match[1], childId: match[2] } : null
 }
 
 export async function emitPptLifecycleUpdate(

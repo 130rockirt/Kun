@@ -367,7 +367,7 @@ export function WriteSidebar({
         </div>
       }
     >
-      <div className="ds-no-drag flex flex-col px-0.5">
+      <div className="workspace-mode-controls ds-no-drag flex flex-col px-0.5">
         <WorkspaceModeTabs
           activeView={activeView}
           onCodeOpen={onCodeOpen}

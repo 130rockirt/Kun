@@ -136,6 +136,7 @@ describe('fast_context Fast Context provider', () => {
     expect(received?.prompt).toContain('Task 1: Scope 1')
     expect(received?.prompt).toContain('Task 2: Scope 2')
     expect(received?.prompt).toContain('Round 4 is final synthesis only')
+    expect(received?.prompt).toContain('no more than four')
     expect(received?.prompt).toContain('Do not call a tool in round 4')
     expect(received?.prompt).toContain('task_indexes array')
     expect(received?.systemPrompt).toContain('only use grep, glob, and read')

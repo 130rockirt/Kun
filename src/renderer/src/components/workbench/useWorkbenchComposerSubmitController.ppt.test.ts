@@ -109,7 +109,7 @@ function activatePptReviewCanvas(): void {
   })
 }
 
-function activatePptDirectionCanvas(): void {
+function activatePptDirectionCanvas(selectDirection = true): void {
   const document = createEmptyDocument()
   const directions = ['editorial', 'signal', 'warm'].map((directionId, index) => ({
     ...createDefaultShape('frame', index * 504, 0),
@@ -129,7 +129,7 @@ function activatePptDirectionCanvas(): void {
       ])
     }
   })
-  useCanvasSelectionStore.getState().select(['direction-signal'])
+  if (selectDirection) useCanvasSelectionStore.getState().select(['direction-signal'])
 }
 
 function activateWorkPptWhiteboard(workflowId = 'workflow-a'): void {
@@ -271,6 +271,27 @@ describe('useWorkbenchComposerSubmitController PPT context', () => {
     ))?.reference).toEqual({
       kind: 'ppt-direction', schemaVersion: 1, workflowId: 'workflow-a', childId: 'child-a',
       directions: [{ directionId: 'signal', revision: 2 }]
+    })
+  })
+
+  it('lets Work confirm a numbered direction in chat without selecting the whiteboard', async () => {
+    activatePptDirectionCanvas(false)
+    activateWorkPptWhiteboard()
+    const sendMessage = vi.fn(async () => true)
+    const controller = useWorkbenchComposerSubmitController(controllerParams({
+      input: '采用第 3 个方向，继续生成逐页预览。', sendMessage
+    }))
+
+    controller.sendWritePrompt('采用第 3 个方向，继续生成逐页预览。')
+
+    await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledOnce())
+    const [prompt, , options] = sendMessage.mock.calls[0] as unknown as Parameters<ControllerParams['sendMessage']>
+    expect(prompt).toBe('采用第 3 个方向，继续生成逐页预览。')
+    expect(options?.composerContexts?.find((context) => (
+      context.reference.kind === 'ppt-direction'
+    ))?.reference).toEqual({
+      kind: 'ppt-direction', schemaVersion: 1, workflowId: 'workflow-a', childId: 'child-a',
+      directions: []
     })
   })
 

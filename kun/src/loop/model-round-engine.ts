@@ -46,6 +46,7 @@ export type ModelRoundEngineInput = {
   signal: AbortSignal
   request: ModelRequest
   maxToolCallsPerStep: number
+  toolCallOverflowBehavior?: 'fail' | 'truncate'
   streamToolMetadata: ReadonlyMap<string, ModelStreamToolMetadata>
   maxToolArgumentStringBytes?: number
   cacheSignature: CacheRequestSignature
@@ -107,6 +108,9 @@ export class ModelRoundEngine {
     const allocateRuntimeCallId = this.runtimeCallIdAllocator(input)
     const collector = new ModelStreamCollector({
       maxToolCallsPerStep: input.maxToolCallsPerStep,
+      ...(input.toolCallOverflowBehavior
+        ? { toolCallOverflowBehavior: input.toolCallOverflowBehavior }
+        : {}),
       toolMetadata: input.streamToolMetadata,
       allocateRuntimeCallId,
       ...(input.maxToolArgumentStringBytes !== undefined
@@ -440,6 +444,9 @@ export class ModelRoundEngine {
     await this.deps.recordPipelineStage(input.threadId, input.turnId, 'response_received', {
       stopReason: snapshot.stopReason,
       toolCallCount: snapshot.toolCalls.length,
+      ...(collector.truncatedToolCallCount > 0
+        ? { truncatedToolCallCount: collector.truncatedToolCallCount }
+        : {}),
       textBytes: Buffer.byteLength(snapshot.text, 'utf8'),
       reasoningBytes: Buffer.byteLength(snapshot.reasoning, 'utf8')
     })

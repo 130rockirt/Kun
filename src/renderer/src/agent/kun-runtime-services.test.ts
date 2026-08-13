@@ -450,6 +450,81 @@ describe('KunRuntimeProvider', () => {
     )
   })
 
+  it('uses the shared knowledge-base paths for mount, status, and reindex operations', async () => {
+    const mount = {
+      id: 'kb/docs',
+      root: '/tmp/knowledge docs',
+      name: 'Knowledge docs',
+      source: 'write-workspace' as const,
+      access: 'read-only' as const
+    }
+    const runtimeRequest = vi.fn(async (path: string, method?: string) => {
+      if (method === 'PATCH') {
+        return {
+          ok: true,
+          status: 200,
+          body: JSON.stringify({
+            id: 'thr/one',
+            title: 'Knowledge task',
+            workspace: '/tmp/workspace',
+            model: 'deepseek-chat',
+            mode: 'agent',
+            status: 'idle',
+            knowledgeBases: [mount],
+            createdAt: 't0',
+            updatedAt: 't1'
+          })
+        }
+      }
+      if (method === 'GET') {
+        return {
+          ok: true,
+          status: 200,
+          body: JSON.stringify({
+            mounts: [mount],
+            statuses: [{ id: mount.id, state: 'ready', documentCount: 1, nodeCount: 3 }]
+          })
+        }
+      }
+      return {
+        ok: true,
+        status: 200,
+        body: JSON.stringify({ id: mount.id, state: 'ready', documentCount: 1, nodeCount: 3 })
+      }
+    })
+    installDsGui({ runtimeRequest })
+    const provider = new KunRuntimeProvider()
+
+    await expect(provider.updateThreadKnowledgeBases('thr/one', [mount])).resolves.toMatchObject({
+      id: 'thr/one',
+      knowledgeBases: [mount]
+    })
+    await expect(provider.getThreadKnowledgeBases('thr/one')).resolves.toMatchObject({
+      statuses: [{ id: mount.id, state: 'ready' }]
+    })
+    await expect(provider.reindexThreadKnowledgeBase('thr/one', mount.id)).resolves.toMatchObject({
+      id: mount.id,
+      state: 'ready'
+    })
+
+    expect(runtimeRequest).toHaveBeenNthCalledWith(
+      1,
+      '/v1/threads/thr%2Fone',
+      'PATCH',
+      JSON.stringify({ knowledgeBases: [mount] })
+    )
+    expect(runtimeRequest).toHaveBeenNthCalledWith(
+      2,
+      '/v1/threads/thr%2Fone/knowledge-bases',
+      'GET'
+    )
+    expect(runtimeRequest).toHaveBeenNthCalledWith(
+      3,
+      '/v1/threads/thr%2Fone/knowledge-bases/kb%2Fdocs/reindex',
+      'POST'
+    )
+  })
+
   it('resumes a session through the Kun HTTP runtime', async () => {
     const runtimeRequest = vi.fn(async () => ({
       ok: true,

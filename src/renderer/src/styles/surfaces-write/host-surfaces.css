@@ -405,6 +405,11 @@
   z-index: 1;
 }
 
+/* Keep the mode menu above later sidebar sections in this stacking context. */
+.ds-sidebar-shell > .workspace-mode-controls {
+  z-index: 2;
+}
+
 .ds-sidebar-surface,
 .ds-sidebar-surface-body {
   background: var(--ds-sidebar-surface-bg);

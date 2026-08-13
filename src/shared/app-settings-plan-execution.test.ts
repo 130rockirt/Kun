@@ -7,8 +7,8 @@ import {
 } from './app-settings'
 
 describe('Kun plan execution settings', () => {
-  it('defaults isolated worktree builds on for new and legacy settings', () => {
-    expect(defaultKunRuntimeSettings().planExecution.useWorktreeByDefault).toBe(true)
+  it('defaults isolated worktree builds off for new and legacy settings', () => {
+    expect(defaultKunRuntimeSettings().planExecution.useWorktreeByDefault).toBe(false)
 
     const legacy = defaultKunRuntimeSettings() as Partial<ReturnType<typeof defaultKunRuntimeSettings>>
     delete legacy.planExecution
@@ -17,7 +17,7 @@ describe('Kun plan execution settings', () => {
       agents: { kun: legacy }
     } as unknown as AppSettingsV1)
 
-    expect(normalized.agents.kun.planExecution).toEqual({ useWorktreeByDefault: true })
+    expect(normalized.agents.kun.planExecution).toEqual({ useWorktreeByDefault: false })
   })
 
   it('round-trips explicit off and on patches', () => {

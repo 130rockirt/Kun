@@ -27,7 +27,7 @@ The redesign must preserve one Kun runtime, stable extension and persisted `writ
 
 New conversations created from the Code workbench always persist `thread.agentSurface: 'code'`; `write` remains owned by Work and legacy standalone Design records may retain `thread.agentSurface: 'design'`. Every turn of a Code conversation may select Code or Design, persisted per turn. Code turns send `agentSurface: 'code'`; Design turns send `agentSurface: 'design'` plus the Design flags and document target. Admission must not retag an explicitly Code-owned thread when it accepts a Design turn.
 
-This preserves one task list and one timeline while still allowing the runtime to select the correct instructions, subagents, and tools. Each turn's surface and optional Design profile become durable runtime authority for reload, queue recovery, extension routing, and audit. Design uses Agent/Direct.
+This preserves one task list and one timeline while still allowing the runtime to select the correct instructions, subagents, and tools. Each turn's surface and optional Design profile become durable runtime authority for reload, queue recovery, extension routing, and audit. Conversation rows stay visually mode-neutral: they do not render a Code/Design identity icon or an artifact badge, because the composer selection describes the next turn rather than the whole conversation. Design uses Agent/Direct.
 
 ### Lock a structured Design profile at first accepted turn
 
@@ -45,7 +45,7 @@ Every Design canvas mutation is scoped by thread, turn, document, and board arti
 
 Project-owned legacy conversations identified by `agentSurface: 'design'` or the persisted Design thread registry remain first-class entries in the Code task list. Their existing registry document binding is authoritative, so selecting the owning conversation restores its original writable `.kun-design` document through the same full canvas surface used by Code-owned Design tasks. This changes presentation and navigation only: no thread ownership, profile, registry, or artifact data is migrated or duplicated.
 
-One task classifier is shared by the list, icon, navigation, return-memory, and canvas restoration paths. For Code-owned conversations the optional Design profile drives the Design artifact badge and whiteboard document binding, while `lockedTaskSurface` remains a legacy-only signal for `agentSurface: 'write'`/`'design'` records. If a Design task target is still hydrating, the right panel stays in the Design loading state instead of mounting the lightweight Code canvas.
+One task classifier is shared by list eligibility, navigation, return-memory, and canvas restoration paths. It is not used to assign a conversation-level Code/Design logo. For Code-owned conversations the optional Design profile drives only the whiteboard document binding, while `lockedTaskSurface` remains a legacy-only signal for `agentSurface: 'write'`/`'design'` records. If a Design task target is still hydrating, the right panel stays in the Design loading state instead of mounting the lightweight Code canvas.
 
 ### Treat HTML and AI image as primary output lanes
 

@@ -4,6 +4,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { z } from 'zod'
 import { atomicWriteFile } from '../adapters/file/atomic-write.js'
+import { RuntimeBuildIdSchema } from '../contracts/runtime-info.js'
 
 export const KUN_MANAGER_PROTOCOL_VERSION = 1 as const
 export const KUN_MANAGER_DISCOVERY_VERSION = 1 as const
@@ -25,6 +26,8 @@ export const ManagerDiscoveryRecordSchema = z.object({
   baseUrl: z.string().url().max(2_048),
   managerToken: z.string().min(1).max(16_384),
   serviceVersion: z.string().min(1).max(128),
+  /** Optional so a new desktop can authenticate and hand off a legacy Manager. */
+  buildId: RuntimeBuildIdSchema.optional(),
   dataDir: z.string().min(1).max(4_096),
   settingsPath: z.string().min(1).max(4_096),
   logPath: z.string().min(1).max(4_096).optional()

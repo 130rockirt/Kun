@@ -14,6 +14,8 @@ import {
 } from '../chat/FloatingComposerModelPicker'
 import { serviceTierForComposerSelection } from '../chat/composer-fast-mode'
 import { useCanvasSelectionStore } from '../../design/canvas/canvas-selection-store'
+import { useCodeCanvasDesignSurface } from '../../design/code-canvas-design-surface'
+import type { CodeCanvasDesignSurface } from '../../design/code-canvas-design-surface'
 import type { DesignHtmlElementContext } from '../../design/design-composer-context'
 import {
   buildDesignPagesRunLabels,
@@ -93,6 +95,24 @@ type PreparedDrawing = {
   workspaceRoot: string
   fallbackDocuments: readonly DesignDocument[]
   fallbackActiveDocumentId: string | null
+}
+
+/**
+ * After a provisional Design document was deleted, drop or restore the cached
+ * Code-whiteboard target that still points at it. Without this the cache keeps
+ * the panel mounted on a deleted document ("Loading design board...") for the
+ * whole thread lifetime and across reloads, because the thread-scoped surface
+ * is treated as a valid Design target by the workbench.
+ */
+function restoreCodeCanvasDesignSurfaceAfterRollback(
+  documentId: string,
+  threadId: string | null,
+  previousSurface: CodeCanvasDesignSurface | undefined
+): void {
+  const surface = useCodeCanvasDesignSurface.getState().surface
+  if (!surface || surface.documentId !== documentId) return
+  if (threadId && surface.threadId !== threadId) return
+  useCodeCanvasDesignSurface.getState().restoreDesignSurface(previousSurface ?? null)
 }
 
 export function useDesignPromptController({
@@ -228,7 +248,8 @@ export function useDesignPromptController({
 
   const rollbackFirstPromptDrawing = async (
     drawing: PreparedDrawing,
-    threadId?: string | null
+    threadId?: string | null,
+    previousSurface?: CodeCanvasDesignSurface
   ): Promise<boolean> => {
     let threadDeleteError: unknown = null
     const documentId = drawing.docId
@@ -301,6 +322,9 @@ export function useDesignPromptController({
       setError(message)
       return false
     }
+    // The document is gone, so a cached target that still points at it is
+    // stale: restore the pre-send surface (or clear it) atomically.
+    restoreCodeCanvasDesignSurfaceAfterRollback(documentId, threadId ?? null, previousSurface)
     return true
   }
 
@@ -316,13 +340,17 @@ export function useDesignPromptController({
     }
     let drawing: ReturnType<typeof prepareDrawingForFirstPrompt> = null
     let provisionalThreadId: string | null = null
+    // Captured before ensureDesignThreadForWorkspace writes a provisional
+    // thread-scoped target; restored if this first send fails.
+    let previousSurface: CodeCanvasDesignSurface | undefined = null
     try {
       drawing = prepareDrawingForFirstPrompt(brief)
       if (!drawing) return false
+      previousSurface = useCodeCanvasDesignSurface.getState().surface
       const threadId = await ensureDesignThreadForWorkspace(designWorkspaceRoot, drawing.docId)
       provisionalThreadId = drawing.created ? threadId : null
       if (!threadId) {
-        if (drawing.created) await rollbackFirstPromptDrawing(drawing)
+        if (drawing.created) await rollbackFirstPromptDrawing(drawing, undefined, previousSurface)
         setInput(brief)
         return false
       }
@@ -332,7 +360,7 @@ export function useDesignPromptController({
         currentState.activeDocumentId !== drawing.docId
       ) {
         const message = 'Design turn was cancelled because the active workspace or drawing changed.'
-        if (drawing.created) await rollbackFirstPromptDrawing(drawing, threadId)
+        if (drawing.created) await rollbackFirstPromptDrawing(drawing, threadId, previousSurface)
         currentState.setFileError(message)
         setError(message)
         setInput(brief)
@@ -341,7 +369,7 @@ export function useDesignPromptController({
 
       const boardArtifact = await ensureDesignBoardArtifact(designWorkspaceRoot, drawing.docId)
       if (!boardArtifact) {
-        if (drawing.created) await rollbackFirstPromptDrawing(drawing, threadId)
+        if (drawing.created) await rollbackFirstPromptDrawing(drawing, threadId, previousSurface)
         setInput(brief)
         return false
       }
@@ -388,7 +416,7 @@ export function useDesignPromptController({
 
       const firstSendSucceeded = await firstSend
       if (!firstSendSucceeded) {
-        if (drawing.created) await rollbackFirstPromptDrawing(drawing, threadId)
+        if (drawing.created) await rollbackFirstPromptDrawing(drawing, threadId, previousSurface)
         setInput(brief)
         return false
       }
@@ -398,7 +426,7 @@ export function useDesignPromptController({
       return true
     } catch (error) {
       if (drawing?.created) {
-        await rollbackFirstPromptDrawing(drawing, provisionalThreadId)
+        await rollbackFirstPromptDrawing(drawing, provisionalThreadId, previousSurface)
       }
       const message = error instanceof Error ? error.message : String(error)
       useDesignWorkspaceStore.getState().setFileError(message)
@@ -486,6 +514,9 @@ export function useDesignPromptController({
     let provisionalDrawingId: string | null = null
     let provisionalThreadId: string | null = null
     let provisionalDrawing: PreparedDrawing | null = null
+    // Captured before ensureDesignThreadForWorkspace writes a provisional
+    // thread-scoped target; restored if this first send fails.
+    let previousSurface: CodeCanvasDesignSurface | undefined = null
     try {
       // The drawing title comes from the user's raw description. Attachment-only
       // creation intentionally falls back to the localized untitled placeholder.
@@ -498,10 +529,11 @@ export function useDesignPromptController({
       }
       const dispatchState = useDesignWorkspaceStore.getState()
       const dispatchWorkspaceRoot = dispatchState.workspaceRoot || designWorkspaceRoot
+      previousSurface = useCodeCanvasDesignSurface.getState().surface
       const threadId = await ensureDesignThreadForWorkspace(designWorkspaceRoot, docId)
       provisionalThreadId = drawing.created ? threadId : null
       if (!threadId) {
-        if (drawing.created) await rollbackFirstPromptDrawing(drawing)
+        if (drawing.created) await rollbackFirstPromptDrawing(drawing, undefined, previousSurface)
         return false
       }
       const currentState = useDesignWorkspaceStore.getState()
@@ -510,7 +542,7 @@ export function useDesignPromptController({
         currentState.activeDocumentId !== docId
       ) {
         const message = 'Design turn was cancelled because the active workspace or drawing changed.'
-        if (drawing.created) await rollbackFirstPromptDrawing(drawing, threadId)
+        if (drawing.created) await rollbackFirstPromptDrawing(drawing, threadId, previousSurface)
         currentState.setFileError(message)
         setError(message)
         return false
@@ -527,6 +559,11 @@ export function useDesignPromptController({
         reasoningEffort: composerReasoningEffortRequestValue(composerReasoningEffort),
         serviceTier: currentDesignServiceTier(),
         expectedThreadId: threadId,
+        // A locked task pins its board; submit resolves by id instead of
+        // re-selecting the most recently updated canvas artifact.
+        ...(lockedDesignProfile
+          ? { boardArtifactId: lockedDesignProfile.documentTarget.boardArtifactId }
+          : {}),
         attachmentIds,
         attachments,
         // A launcher submission starts from an empty canvas. Do not leak a
@@ -545,7 +582,7 @@ export function useDesignPromptController({
           : {})
       })
       if (result.status === 'missing-board' || result.status === 'file-error') {
-        if (drawing.created) await rollbackFirstPromptDrawing(drawing, threadId)
+        if (drawing.created) await rollbackFirstPromptDrawing(drawing, threadId, previousSurface)
         return false
       }
       if (result.status === 'sent') {
@@ -562,12 +599,12 @@ export function useDesignPromptController({
         }
         return true
       }
-      if (drawing.created) await rollbackFirstPromptDrawing(drawing, threadId)
+      if (drawing.created) await rollbackFirstPromptDrawing(drawing, threadId, previousSurface)
       return false
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       if (provisionalDrawingId && provisionalDrawing) {
-        await rollbackFirstPromptDrawing(provisionalDrawing, provisionalThreadId)
+        await rollbackFirstPromptDrawing(provisionalDrawing, provisionalThreadId, previousSurface)
       }
       useDesignWorkspaceStore.getState().setFileError(message)
       setError(message)

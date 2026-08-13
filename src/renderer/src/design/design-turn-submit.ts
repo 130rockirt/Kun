@@ -8,11 +8,13 @@ import { resolveGeneratedImagePlacementTarget } from './canvas/canvas-generated-
 import { useDesignSystemStore } from './canvas/design-system-store'
 import {
   ensureDesignBoardArtifact,
-  findDesignBoardArtifact
+  findDesignBoardArtifact,
+  findDesignBoardArtifactById
 } from './design-board'
 import type { DesignHtmlElementContext } from './design-composer-context'
 import { useProjectDesignSystemStore } from './canvas/project-design-system-store'
 import type { DesignPromptSource } from './design-quality-repair-dispatch'
+import type { DesignArtifact } from './design-types'
 import {
   buildDesignTurnSendOverrides,
   type DesignTurnPromptState
@@ -91,6 +93,12 @@ export type SubmitDesignTurnOptions = SubmitDesignTurnDeps & {
   explicitSvgArtifactId?: string | null
   clearAutoRepairScope?: (scopeKey: string) => void
   designTaskProfileForTarget?: (target: DesignDocumentTarget) => DesignTaskProfileInput
+  /**
+   * Board pinned by a locked task target. When present the board is resolved by
+   * id and a missing board is reported instead of re-selecting the most
+   * recently updated canvas artifact.
+   */
+  boardArtifactId?: string
   waitForRuntimeAdmission?: boolean
   /** Called after local preparation but immediately before the runtime request. */
   onBeforeSend?: () => void | Promise<void>
@@ -114,12 +122,14 @@ export async function submitDesignTurn(
   const initialDesignState = getDesignState()
   const turnContext = {
     workspaceRoot: initialDesignState.workspaceRoot || options.workspaceRoot,
-    documentId: initialDesignState.activeDocumentId
+    documentId: initialDesignState.activeDocumentId,
+    boardArtifactId: options.boardArtifactId
   }
   const fail = (message: string): SubmitDesignTurnResult => {
     getDesignState().setFileError(message)
     return { status: 'file-error', message }
   }
+  let boardArtifact: (DesignArtifact & { kind: 'canvas' }) | null = null
   const contextMatches = (boardId?: string): boolean => {
     const state = getDesignState()
     if (
@@ -129,15 +139,25 @@ export async function submitDesignTurn(
     ) {
       return false
     }
-    return !boardId || findDesignBoardArtifact(state.artifacts)?.id === boardId
+    if (!boardId) return true
+    // A locked board compares against the resolved target id; an unlocked
+    // target re-selects the current board so a board swap during the async
+    // ensure step is still detected.
+    if (turnContext.boardArtifactId) return boardArtifact?.id === boardId
+    return findDesignBoardArtifact(state.artifacts)?.id === boardId
   }
   const contextError = 'Design turn was cancelled because the active workspace or drawing changed.'
   if (!turnContext.documentId || !contextMatches()) return fail(contextError)
 
   let latestDesignState = initialDesignState
-  let boardArtifact = findDesignBoardArtifact(latestDesignState.artifacts)
+  boardArtifact = turnContext.boardArtifactId
+    ? findDesignBoardArtifactById(latestDesignState.artifacts, turnContext.boardArtifactId)
+    : findDesignBoardArtifact(latestDesignState.artifacts)
   try {
     if (!boardArtifact) {
+      // A locked board that no longer exists must fail loudly instead of
+      // silently retargeting the task to a different whiteboard.
+      if (turnContext.boardArtifactId) return { status: 'missing-board' }
       boardArtifact = await ensureBoard(options.workspaceRoot, turnContext.documentId)
       if (!contextMatches(boardArtifact?.id)) return fail(contextError)
       latestDesignState = getDesignState()

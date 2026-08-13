@@ -235,6 +235,47 @@ describe('replayActiveCanvasTurn', () => {
     expect(processStreaming).not.toHaveBeenCalled()
   })
 
+  it('does not replay a Design-targeted turn into an unbound Code whiteboard', () => {
+    const toolBlock: ToolBlock = {
+      kind: 'tool',
+      id: 'tool-design-targeted',
+      summary: 'canvas op',
+      status: 'success',
+      meta: { toolName: 'design_update_shapes' },
+      detail: '{"ops":[]}'
+    }
+    const applyToolBlock = vi.fn()
+    const processStreaming = vi.fn()
+
+    replayActiveCanvasTurn(
+      {
+        activeThreadId: 'thread-code',
+        currentTurnId: 'turn-design',
+        currentTurnUserId: 'user-design',
+        blocks: [
+          {
+            kind: 'user', id: 'user-design', text: 'draw it',
+            meta: {
+              designDocumentTarget: {
+                documentId: 'doc-design',
+                boardArtifactId: 'board-design'
+              }
+            }
+          },
+          toolBlock
+        ] satisfies ChatBlock[]
+      },
+      applyToolBlock,
+      processStreaming,
+      'thread-code',
+      undefined,
+      'untargeted'
+    )
+
+    expect(applyToolBlock).not.toHaveBeenCalled()
+    expect(processStreaming).not.toHaveBeenCalled()
+  })
+
   it('can replay tool blocks that arrive in the same update that clears the turn id', () => {
     const toolBlock: ToolBlock = {
       kind: 'tool',

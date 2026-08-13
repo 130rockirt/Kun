@@ -48,40 +48,19 @@ function renderThread(overrides: Partial<NormalizedThread>): string {
   }))
 }
 
-describe('ThreadRow task surface icon', () => {
-  it('renders a single Design icon for legacy Design ownership', () => {
-    const html = renderThread({ agentSurface: 'design' })
+describe('ThreadRow mode-neutral presentation', () => {
+  it.each([
+    ['legacy Design ownership', { agentSurface: 'design' }],
+    ['mixed Code and Design turns', { agentSurface: 'code', designProfile }],
+    ['a stale locked task surface', { agentSurface: 'code', lockedTaskSurface: 'design' }],
+    ['Code ownership', { agentSurface: 'code', lockedTaskSurface: 'code' }]
+  ] satisfies Array<[string, Partial<NormalizedThread>]>)('does not render a mode logo for %s', (_label, overrides) => {
+    const html = renderThread(overrides)
 
-    expect(html).toContain('data-thread-task-surface="design"')
-    expect(html).toContain('taskTypeDesign')
+    expect(html).not.toContain('data-thread-task-surface')
+    expect(html).not.toContain('lucide-code-2')
+    expect(html).not.toContain('lucide-palette')
     expect(html).not.toContain('taskTypeCode')
-  })
-
-  it('renders the Code icon with a Design artifact badge for a mixed Code conversation', () => {
-    const html = renderThread({ agentSurface: 'code', designProfile })
-
-    expect(html).toContain('data-thread-task-surface="code"')
-    expect(html).toContain('taskTypeCode')
-    // The badge glyph renders on top of the Code icon without replacing it.
-    expect(html).toContain('lucide-palette')
-    expect(html).not.toContain('data-thread-task-surface="design"')
-  })
-
-  it('ignores a stale legacy lockedTaskSurface on a Code-owned conversation', () => {
-    const html = renderThread({ agentSurface: 'code', lockedTaskSurface: 'design' })
-
-    expect(html).toContain('data-thread-task-surface="code"')
-    expect(html).toContain('taskTypeCode')
-    expect(html).not.toContain('taskTypeDesign')
-  })
-
-  it('preserves the Code icon and label for Code conversations', () => {
-    const html = renderThread({
-      agentSurface: 'code', lockedTaskSurface: 'code', designProfile
-    })
-
-    expect(html).toContain('data-thread-task-surface="code"')
-    expect(html).toContain('taskTypeCode')
     expect(html).not.toContain('taskTypeDesign')
   })
 })

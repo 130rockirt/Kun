@@ -3,7 +3,10 @@ import type { AttachmentReference, GeneratedFileReference } from '../../agent/ty
 import { getProvider } from '../../agent/registry'
 import { useChatStore } from '../../store/chat-store'
 import { readGeneratedWorkspaceImagePreview } from './generated-media-preview'
-import { useTimelineFilePreviewWorkspaceRoot } from './timeline-file-preview-workspace'
+import {
+  useTimelineFilePreviewThreadId,
+  useTimelineFilePreviewWorkspaceRoot
+} from './timeline-file-preview-workspace'
 import {
   attachmentPreviewFailureStateForScope,
   attachmentPreviewLoader,
@@ -162,9 +165,11 @@ export function mergeMediaReferences(
   return media
 }
 
-export type MediaPreviewRequest =
-  | { key: string; id: string; mode: 'attachment' }
-  | { key: string; path: string; mode: 'workspace-image' }
+export type MediaPreviewRequest = {
+  key: string
+  id?: string
+  path?: string
+}
 
 export type GeneratedMediaScrollAvailability = {
   canScrollBackward: boolean
@@ -212,9 +217,11 @@ export function useMediaPreviews(
   resolvedPreviews: Record<string, AttachmentPreview>
   failedPreviewIds: Record<string, true>
 } {
-  const activeThreadId = useChatStore((s) => s.activeThreadId)
+  const globalActiveThreadId = useChatStore((s) => s.activeThreadId)
   const globalWorkspaceRoot = useChatStore((s) => s.workspaceRoot)
+  const timelineThreadId = useTimelineFilePreviewThreadId()
   const timelineWorkspaceRoot = useTimelineFilePreviewWorkspaceRoot()
+  const activeThreadId = timelineThreadId || globalActiveThreadId
   const workspaceRoot = timelineWorkspaceRoot || globalWorkspaceRoot
   const scopeKey = JSON.stringify([activeThreadId ?? '', workspaceRoot])
   const [previewFailures, setPreviewFailures] = useState<AttachmentPreviewFailureState>(() => ({
@@ -227,29 +234,43 @@ export function useMediaPreviews(
       : {},
     [previewFailures, scopeKey]
   )
-  const [resolvedPreviews, setResolvedPreviews] = useState<Record<string, AttachmentPreview>>({})
+  const [previewState, setPreviewState] = useState<{
+    scopeKey: string
+    resolvedPreviews: Record<string, AttachmentPreview>
+  }>(() => ({ scopeKey, resolvedPreviews: {} }))
+  const resolvedPreviews = useMemo(
+    () => previewState.scopeKey === scopeKey
+      ? previewState.resolvedPreviews
+      : {},
+    [previewState, scopeKey]
+  )
   const previewRequests = useMemo(
     () =>
       media
         .map((item) => {
           const key = mediaKey(item)
           if (item.previewUrl || resolvedPreviews[key] || failedPreviewIds[key]) return null
-          if (item.id && !item.artifactId && (mediaIsImage(item) || mediaIsVideo(item) || !item.mimeType)) {
-            return { key, id: item.id, mode: 'attachment' } satisfies MediaPreviewRequest
-          }
+          const id = item.id && !item.artifactId && (
+            mediaIsImage(item) || mediaIsVideo(item) || !item.mimeType
+          )
+            ? item.id
+            : undefined
           const path = mediaIsImage(item) ? mediaPath(item) : undefined
-          if (path) return { key, path, mode: 'workspace-image' } satisfies MediaPreviewRequest
-          return null
+          if (!id && !path) return null
+          return {
+            key,
+            ...(id ? { id } : {}),
+            ...(path ? { path } : {})
+          } satisfies MediaPreviewRequest
         })
         .filter(isMediaPreviewRequest),
     [failedPreviewIds, media, resolvedPreviews]
   )
   const missingPreviewKey = previewRequests
-    .map((request) =>
-      request.mode === 'attachment'
-        ? `attachment:${request.id}`
-        : `workspace-image:${request.path}`
-    )
+    .map((request) => [
+      request.id ? `attachment:${request.id}` : '',
+      request.path ? `workspace-image:${request.path}` : ''
+    ].filter(Boolean).join('|'))
     .join('\n')
 
   useEffect(() => {
@@ -258,8 +279,8 @@ export function useMediaPreviews(
     let cancelled = false
     void Promise.all(
       previewRequests.map(async (request) => {
-        try {
-          if (request.mode === 'attachment' && request.id && typeof provider.getAttachmentContent === 'function') {
+        if (request.id && typeof provider.getAttachmentContent === 'function') {
+          try {
             const attachmentId = request.id
             const getAttachmentContent = provider.getAttachmentContent.bind(provider)
             const scope = {
@@ -280,12 +301,17 @@ export function useMediaPreviews(
               key: request.key,
               preview
             }
+          } catch {
+            // Generated images also carry a workspace path. Continue to that
+            // safe, workspace-bounded source before declaring the tile failed.
           }
-          if (request.mode === 'workspace-image' && request.path && typeof window.kunGui?.readWorkspaceImage === 'function') {
+        }
+        if (request.path && typeof window.kunGui?.readWorkspaceImage === 'function') {
+          try {
             const imagePath = request.path
             const readImage = window.kunGui.readWorkspaceImage
             const preview = await attachmentPreviewLoader.load(
-              JSON.stringify(['workspace-image', imagePath, workspaceRoot]),
+              JSON.stringify(['workspace-image', imagePath, activeThreadId ?? '', workspaceRoot]),
               async () => {
                 const resolved = await readGeneratedWorkspaceImagePreview({
                   path: imagePath,
@@ -297,22 +323,25 @@ export function useMediaPreviews(
               }
             )
             if (preview.previewUrl) return { key: request.key, preview }
+          } catch {
+            // The failed state is recorded below only after every available
+            // preview source has been exhausted.
           }
-          return { key: request.key, failed: true as const }
-        } catch {
-          return { key: request.key, failed: true as const }
         }
+        return { key: request.key, failed: true as const }
       })
     ).then((results) => {
       if (cancelled) return
-      setResolvedPreviews((current) => {
-        const next = { ...current }
+      setPreviewState((current) => {
+        const next = current.scopeKey === scopeKey
+          ? { ...current.resolvedPreviews }
+          : {}
         for (const result of results) {
           if ('preview' in result && result.preview?.previewUrl) {
             next[result.key] = result.preview
           }
         }
-        return next
+        return { scopeKey, resolvedPreviews: next }
       })
       setPreviewFailures((current) => {
         const scoped = attachmentPreviewFailureStateForScope(current, scopeKey)

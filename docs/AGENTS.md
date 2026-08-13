@@ -45,6 +45,10 @@ uses the internal `claw` name, and Work retains the internal `write` name, for c
 - Kun remains the only execution runtime. The plan build uses a linked `side`
   thread bound to the outer worktree; Graph worker worktrees remain subordinate
   and must integrate into that outer execution branch before root completion.
+- The linked plan-build thread is presented as the continuing main conversation:
+  it inherits the source history, keeps the composer available while execution
+  remains admissible, and sends follow-up input into the isolated workspace.
+  Ordinary subagent `side` threads keep their dedicated process presentation.
 - Automatic integration requires structured successful turn, goal, gate, and
   Graph state. Assistant prose is never completion evidence.
 - Conflicts stay in the isolated worktree. Never switch, stash, reset, clean, or

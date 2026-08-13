@@ -24,6 +24,16 @@ The Code right workspace SHALL mount the bound Design document with the existing
 - **WHEN** a Design conversation is active before its document target finishes hydrating
 - **THEN** the right whiteboard renders a Design loading state and never falls back to the lightweight Code canvas
 
+#### Scenario: First Design turn activates a new conversation
+- **WHEN** the new Code-owned conversation becomes active before its provisional Design document and profile finish binding
+- **THEN** the right whiteboard stays on the provisional full Design surface or its Design loading state
+- **AND** the lightweight Code canvas does not mount during that binding window
+
+#### Scenario: Canvas tool output is isolated by host target
+- **WHEN** a renderer-owned canvas tool result carries a Design document and board target
+- **THEN** only that full Design whiteboard may apply or durably replay the result
+- **AND** a transient or later-mounted lightweight Code canvas ignores the targeted result
+
 ### Requirement: HTML and AI image are distinct primary lanes
 HTML SHALL be the default primary medium; AI-image tasks SHALL generate raster assets on the whiteboard and SHALL NOT silently create HTML screens.
 

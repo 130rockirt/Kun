@@ -71,6 +71,44 @@ afterEach(() => {
 })
 
 describe('useApplyShapeOpsLive Code replay', () => {
+  it('leaves a Design-targeted result for the bound Design whiteboard', async () => {
+    const designBlocks: ChatBlock[] = [
+      {
+        kind: 'user', id: 'user-design-image', turnId: 'turn-design-image',
+        text: 'Put the generated image on the Design whiteboard.',
+        meta: {
+          designDocumentTarget: {
+            documentId: 'doc-design',
+            boardArtifactId: 'board-design'
+          }
+        }
+      },
+      {
+        ...blocks[1],
+        id: 'tool-design-image',
+        turnId: 'turn-design-image'
+      }
+    ]
+    useCanvasShapeStore.getState().loadDocument(createEmptyDocument(), documentKey)
+    useChatStore.setState({
+      activeThreadId: threadId,
+      currentTurnId: null,
+      currentTurnUserId: null,
+      busy: false,
+      blocks: designBlocks,
+      liveAssistant: ''
+    })
+
+    let renderer: ReturnType<typeof create> | undefined
+    await act(async () => { renderer = create(createElement(CodeReplayHarness)) })
+
+    expect(Object.values(useCanvasShapeStore.getState().document.objects)
+      .filter((shape) => shape.type === 'image')).toHaveLength(0)
+    expect(useCanvasShapeStore.getState().document.rendererReplayKeys ?? []).toEqual([])
+
+    await act(async () => renderer?.unmount())
+  })
+
   it('delivers a completed result after the matching Code canvas becomes ready once', async () => {
     useCanvasShapeStore.getState().loadDocument(createEmptyDocument(), null)
     useChatStore.setState({

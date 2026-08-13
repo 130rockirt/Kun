@@ -1,24 +1,25 @@
 ## ADDED Requirements
 
-### Requirement: Code workbench owns Code and Design conversations
-The application SHALL expose Code and Work as the only top-level workspace modes. Code and Design conversations SHALL remain in one task list while an empty conversation can select its task mode.
+### Requirement: Code workbench owns mode-neutral conversations
+The application SHALL expose Code and Work as the only top-level workspace modes. Conversations containing Code turns, Design turns, or both SHALL remain in one task list, and the composer SHALL select Code or Design for the next turn without assigning that mode to the conversation row.
 
 #### Scenario: Shared task list
 - **WHEN** a Code conversation contains Code turns, Design turns, or both
 - **THEN** it appears once in the Code workbench list without navigating to a standalone Design route
 
-#### Scenario: Shared task list identifies Design conversations
+#### Scenario: Shared task list stays mode-neutral
 - **WHEN** a Code-owned conversation has a locked Design profile
-- **THEN** the task list renders the Code icon with a Design artifact badge instead of a single Design icon
+- **THEN** the task list renders the conversation once without a Code icon, Design icon, or Design artifact badge
+- **AND** the profile continues to restore its bound Design document independently of the next-turn mode
 
 #### Scenario: Legacy Design conversation remains visible
 - **WHEN** a project-owned conversation is identified by `agentSurface: 'design'` or the persisted Design thread registry
-- **THEN** it appears once in the Code workbench task list with the Design icon and accessible Design label
+- **THEN** it appears once in the Code workbench task list without a conversation-level Code/Design marker
 - **AND** its runtime ownership and persisted Design document binding are not rewritten
 
 #### Scenario: Returning to a Design conversation
 - **WHEN** the user selects a Design conversation, reloads the workbench, or returns from another workspace mode
-- **THEN** the conversation remains an eligible Code-workbench return target and restores its Design task identity
+- **THEN** the conversation remains an eligible Code-workbench return target and restores its bound Design document without labeling the whole conversation as Design
 
 #### Scenario: Code whiteboard receives completed renderer tool results
 - **WHEN** a canvas tool result completes before the Code whiteboard document finishes loading
@@ -48,9 +49,10 @@ The composer SHALL allow Code or Design selection for every turn of a Code conve
 - **WHEN** a conversation that already locked a Design profile selects Design again
 - **THEN** the composer reuses the locked document, output medium, target, and style without re-locking or changing them
 
-#### Scenario: Mixed conversation identity
+#### Scenario: Mixed conversation presentation
 - **WHEN** a Code conversation contains both Code and Design turns
-- **THEN** the task list renders the Code icon with a Design artifact badge instead of deciding identity from the first turn
+- **THEN** the task list does not derive or render a conversation-level Code/Design identity from any turn
+- **AND** the composer continues to show and control the mode for the next turn
 
 #### Scenario: Whiteboard binding follows the document
 - **WHEN** a Code turn is selected after a Design turn

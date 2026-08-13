@@ -11,18 +11,15 @@ import {
   ChevronDown,
   ChevronRight,
   ClipboardList,
-  Code2,
   FolderPlus,
   GitBranch,
   Loader2,
   Pin,
   PinOff,
-  Palette,
   RotateCcw,
   Trash2
 } from 'lucide-react'
 import type { NormalizedThread } from '../../agent/types'
-import { isDesignWorkbenchThread, isLegacyDesignWorkbenchThread } from '../../design/design-task-classification'
 import { formatRelativeTime } from '../../lib/format-relative-time'
 import type { SddDraftHistoryItem } from '../../sdd/sdd-draft-history'
 import type { SddDraft } from '../../sdd/sdd-draft-store'
@@ -206,24 +203,17 @@ export function ThreadRow({
   const showUnreadDot = showUnread && !showRunning
   const archived = thread.archived === true
   const pinned = thread.pinned === true
+  const worktreeBranch = worktreeRecord?.branch?.trim() || 'worktree'
   const worktreeLabel = worktreeRecord
-    ? t('sidebarThreadWorktree', { branch: worktreeRecord.branch || 'worktree' })
+    ? t('sidebarThreadWorktree', { branch: worktreeBranch })
     : ''
   const updatedLabel = formatRelativeTime(thread.updatedAt, locale)
-  const isDesignTask = isDesignWorkbenchThread(thread.id, thread)
-  const isLegacyDesignTask = isLegacyDesignWorkbenchThread(thread.id, thread)
-  // Mixed Code conversations keep the Code identity with a Design artifact
-  // badge; only legacy standalone Design tasks render a single Design icon.
-  const taskTypeLabel = isDesignTask
-    ? isLegacyDesignTask ? t('taskTypeDesign') : t('taskTypeCode')
-    : t('taskTypeCode')
   const ariaLabel = [
     thread.title,
     updatedLabel,
     pinned ? t('sidebarThreadPinned') : '',
     showRunning ? t('sidebarThreadRunning') : '',
     showUnreadDot ? t('sidebarThreadUnread') : '',
-    taskTypeLabel,
     worktreeLabel
   ].filter(Boolean).join(' - ')
 
@@ -300,32 +290,15 @@ export function ThreadRow({
       onMouseLeave={onPreviewClose}
     >
       <span className="flex min-w-0 flex-1 items-center gap-1.5">
-        <span
-          className={`relative inline-grid h-5 w-5 shrink-0 place-items-center rounded-md ${
-            isDesignTask ? 'bg-fuchsia-500/10 text-fuchsia-600 dark:text-fuchsia-300' : 'bg-accent/8 text-accent'
-          }`}
-          title={taskTypeLabel}
-          aria-label={taskTypeLabel}
-          data-thread-task-surface={isLegacyDesignTask ? 'design' : 'code'}
-        >
-          {isDesignTask && isLegacyDesignTask
-            ? <Palette className="h-3 w-3" strokeWidth={1.9} />
-            : <Code2 className="h-3 w-3" strokeWidth={1.9} />}
-          {isDesignTask && !isLegacyDesignTask ? (
-            <Palette
-              className="absolute -bottom-1 -right-1 h-2.5 w-2.5 rounded-full bg-[#f8fafc] p-px text-fuchsia-600 dark:bg-[#111318] dark:text-fuchsia-300"
-              strokeWidth={2.4}
-            />
-          ) : null}
-        </span>
         {pinned ? <Pin className="h-3.5 w-3.5 shrink-0 text-accent" strokeWidth={1.9} /> : null}
         {worktreeRecord ? (
           <span
-            className="inline-grid h-5 w-5 shrink-0 place-items-center rounded-full border border-ds-border-muted bg-ds-card/80 text-ds-muted"
+            className="flex min-w-0 max-w-[42%] shrink items-center gap-1 rounded-md border border-ds-border-muted bg-ds-card/80 px-1.5 py-0.5 text-[10.5px] leading-4 text-ds-muted"
             title={worktreeLabel}
             aria-label={worktreeLabel}
           >
-            <GitBranch className="h-3 w-3" strokeWidth={1.8} />
+            <GitBranch className="h-3 w-3 shrink-0" strokeWidth={1.8} />
+            <span className="truncate">{worktreeBranch}</span>
           </span>
         ) : null}
         <span className={`min-w-0 flex-1 truncate text-[13.5px] leading-5 ${

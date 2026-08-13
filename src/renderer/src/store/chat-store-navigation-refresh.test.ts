@@ -369,6 +369,71 @@ describe('chat-store navigation workspace selection', () => {
     expect(harness.state.lastCodeThreadId).toBeNull()
   })
 
+  it('keeps managed plan-build side threads in the main conversation inventory', async () => {
+    const source = thread({
+      id: 'thr_source',
+      title: 'Source conversation',
+      workspace: '/Users/zxy/project'
+    })
+    const execution = {
+      ...thread({
+        id: 'thr_execution',
+        title: 'Isolated plan execution',
+        workspace: '/Users/zxy/.kun/worktrees/run-1/project',
+        status: 'running'
+      }),
+      relation: 'side' as const,
+      parentThreadId: source.id,
+      planBuildRunId: 'run-1'
+    }
+    const ordinarySide = {
+      ...thread({
+        id: 'thr_subagent',
+        title: 'Subagent',
+        workspace: '/Users/zxy/project'
+      }),
+      relation: 'side' as const,
+      parentThreadId: source.id
+    }
+    const provider = {
+      listThreads: vi.fn(async () => [source, execution, ordinarySide]),
+      getThreadDetail: vi.fn(async () => ({
+        blocks: [{ kind: 'user' as const, id: 'u', text: 'Implement the plan' }]
+      })),
+      getThreadState: vi.fn(async () => ({
+        status: 'running',
+        latestTurnId: 'turn_execution',
+        latestTurnStatus: 'running'
+      }))
+    }
+    registryMock.getProvider.mockReturnValue(provider)
+    vi.stubGlobal('window', {
+      localStorage: new MemoryStorage(),
+      kunGui: {
+        getSettings: vi.fn(async () => ({
+          write: { defaultWorkspaceRoot: '', activeWorkspaceRoot: '', workspaces: [] }
+        }))
+      }
+    })
+    const harness = buildHarness()
+    harness.state.activeThreadId = execution.id
+    harness.state.activeThreadRelation = 'side'
+    harness.state.threads = [source, execution]
+    harness.state.watchTurnCompletion = {}
+
+    await harness.actions.refreshThreads()
+
+    expect(provider.listThreads).toHaveBeenCalledWith({
+      includeArchived: true,
+      includeSide: true
+    })
+    expect(harness.state.threads.map((item) => item.id)).toEqual([
+      source.id,
+      execution.id
+    ])
+    expect(harness.state.activeThreadId).toBe(execution.id)
+  })
+
   it('openDesign keeps the Code timeline and routes into its shared workbench', () => {
     const harness = buildHarness()
     harness.state.activeThreadId = 'thr_code'

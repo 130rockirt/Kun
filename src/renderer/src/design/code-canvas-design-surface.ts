@@ -50,6 +50,13 @@ type CodeCanvasDesignSurfaceState = {
     }
   ) => void
   clearDesignSurface: () => void
+  /**
+   * Atomically restore a previously captured target after a failed Design
+   * send deleted its provisional document. `null` clears the cache so the
+   * Code whiteboard falls back to the thread canvas instead of permanently
+   * mounting a deleted Design document.
+   */
+  restoreDesignSurface: (previous: CodeCanvasDesignSurface) => void
 }
 
 const CODE_CANVAS_DESIGN_SURFACE_KEY = 'kun.codeCanvas.designSurface.v2'
@@ -99,5 +106,14 @@ export const useCodeCanvasDesignSurface = create<CodeCanvasDesignSurfaceState>((
   clearDesignSurface: () => {
     removeBrowserStorageItem(CODE_CANVAS_DESIGN_SURFACE_KEY)
     set({ surface: null })
+  },
+  restoreDesignSurface: (previous) => {
+    if (!previous) {
+      removeBrowserStorageItem(CODE_CANVAS_DESIGN_SURFACE_KEY)
+      set({ surface: null })
+      return
+    }
+    writeBrowserStorageItem(CODE_CANVAS_DESIGN_SURFACE_KEY, JSON.stringify(previous))
+    set({ surface: previous })
   }
 }))

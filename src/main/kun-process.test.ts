@@ -286,6 +286,68 @@ describe('Manager-owned Main data plane', () => {
     expect(shutdown).toHaveBeenCalledOnce()
     expect(waitForExit).toHaveBeenCalledWith(12345, 15_000)
   })
+
+  it('replaces a mismatched Manager build even when canonical paths already match', async () => {
+    const module = await import('./kun-process')
+    const oldManager = {
+      discovery: {
+        instanceId: 'manager-old-build',
+        pid: 12346,
+        baseUrl: 'http://127.0.0.1:17773',
+        managerToken: 'manager-old-token',
+        dataDir: '/tmp/runtime-data',
+        settingsPath: '/tmp/kun-settings.json'
+      }
+    } as Parameters<typeof module.handoffExistingKunServiceManagerForDataDir>[0]
+    const inspect = vi.fn(async () => null)
+    const stop = vi.fn(async () => true)
+    const shutdown = vi.fn(async () => undefined)
+    const waitForExit = vi.fn(async () => true)
+
+    await module.handoffExistingKunServiceManagerForDataDir(
+      oldManager,
+      '/tmp/runtime-data',
+      '/tmp/kun-settings.json',
+      {
+        inspect: inspect as never,
+        stop: stop as never,
+        shutdown,
+        waitForExit,
+        force: true
+      }
+    )
+
+    expect(inspect).toHaveBeenCalledTimes(2)
+    expect(stop).toHaveBeenCalledTimes(2)
+    expect(shutdown).toHaveBeenCalledOnce()
+    expect(waitForExit).toHaveBeenCalledWith(12346, 15_000)
+  })
+
+  it('reuses a matching Manager when canonical paths already match', async () => {
+    const module = await import('./kun-process')
+    const manager = {
+      discovery: {
+        instanceId: 'manager-current-build',
+        pid: 12347,
+        baseUrl: 'http://127.0.0.1:17774',
+        managerToken: 'manager-current-token',
+        dataDir: '/tmp/runtime-data',
+        settingsPath: '/tmp/kun-settings.json'
+      }
+    } as Parameters<typeof module.handoffExistingKunServiceManagerForDataDir>[0]
+    const inspect = vi.fn(async () => null)
+    const shutdown = vi.fn(async () => undefined)
+
+    await module.handoffExistingKunServiceManagerForDataDir(
+      manager,
+      '/tmp/runtime-data',
+      '/tmp/kun-settings.json',
+      { inspect: inspect as never, shutdown }
+    )
+
+    expect(inspect).not.toHaveBeenCalled()
+    expect(shutdown).not.toHaveBeenCalled()
+  })
 })
 
 describe('startKunChild', () => {

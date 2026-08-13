@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import type { ChatBlock } from '../../agent/types'
-import { groupTurns, sameTurnContent, stableTurnKey, turnTaskSurface } from './message-timeline-turns'
+import {
+  activeTimelineTurnIndex,
+  groupTurns,
+  sameTurnContent,
+  stableTurnKey,
+  turnTaskSurface
+} from './message-timeline-turns'
 
 describe('message timeline turns', () => {
   it('keeps mixed timeline extension context scoped to each durable turn', () => {
@@ -58,6 +64,41 @@ describe('message timeline turns', () => {
     expect(turns).toHaveLength(1)
     expect(turns[0]?.user?.id).toBe('user_1')
     expect(turns[0]?.blocks.map((block) => block.id)).toEqual(['assistant_1', 'notice_1', 'assistant_2'])
+  })
+
+  it('aliases a transient background turn id to the active visible turn', () => {
+    const blocks: ChatBlock[] = [
+      { kind: 'user', id: 'user_1', turnId: 'turn_main', text: 'Run build in background' },
+      { kind: 'assistant', id: 'assistant_1', turnId: 'turn_main', text: 'Started.' },
+      {
+        kind: 'user',
+        id: 'notice_1',
+        turnId: 'turn_background',
+        text: '<background_shell_completed><session_id>abcd1234</session_id><command>npm run build</command><exit_code>0</exit_code><output_preview>ok</output_preview><hint>read output</hint></background_shell_completed>'
+      },
+      { kind: 'reasoning', id: 'reasoning_1', turnId: 'turn_background', text: 'Checking.' }
+    ]
+
+    const turns = groupTurns(blocks)
+
+    expect(turns).toHaveLength(1)
+    expect(turns[0]?.turnId).toBe('turn_main')
+    expect(turns[0]?.blocks.map((block) => block.id)).toEqual([
+      'assistant_1',
+      'notice_1',
+      'reasoning_1'
+    ])
+  })
+
+  it('binds live state to the durable active turn before a trailing orphan turn', () => {
+    const turns = groupTurns([
+      { kind: 'user', id: 'user_1', turnId: 'turn_active', text: 'Implement the plan' },
+      { kind: 'assistant', id: 'assistant_1', turnId: 'turn_active', text: 'Working.' },
+      { kind: 'assistant', id: 'orphan_1', turnId: 'turn_orphan', text: '' }
+    ])
+
+    expect(activeTimelineTurnIndex(turns, 'turn_active', 'user_1')).toBe(0)
+    expect(activeTimelineTurnIndex(turns, 'missing', 'missing')).toBe(1)
   })
 
   it('detects background shell notices from client-inferred xml text', () => {

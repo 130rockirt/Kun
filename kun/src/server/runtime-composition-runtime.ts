@@ -76,7 +76,7 @@ export function createServerRuntimeComposition(
     toolCancellationService,
     supplyChainTrust,
     reviewService,
-    attachmentPruneTimer,
+    backgroundMaintenance,
     migrationService,
     migrationImportService,
     knowledgeBaseService
@@ -130,6 +130,7 @@ export function createServerRuntimeComposition(
       inflight: inflight.size(),
       activeCaptures: llmDebug?.activeCaptureCount ?? 0
     }),
+    startBackgroundMaintenance: () => backgroundMaintenance.start(),
     approvalGate,
 	    userInputGate,
 	    workspaceInspector,
@@ -374,7 +375,7 @@ export function createServerRuntimeComposition(
           try {
             agent.shuttingDown = true
             executionLeases?.shutdown()
-            clearInterval(attachmentPruneTimer)
+	        backgroundMaintenance.stop()
 	          await shutdownGraphExecutionForHost({
 	            graphRuntime,
 	            turnService

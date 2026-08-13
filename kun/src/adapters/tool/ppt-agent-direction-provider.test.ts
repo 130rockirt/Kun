@@ -180,6 +180,7 @@ function fakeRuntime(): FakeRuntime {
 function sourceReader(input: {
   workflowId: () => string
   directions?: (turnId: string) => Array<{ workflowId: string; childId: string; directions: Array<{ directionId: string; revision: number }> }>
+  directionInputAnswer?: (turnId: string) => { workflowId: string; childId: string; answer: string } | undefined
   prompt?: (turnId: string) => string
 }): PptAgentTurnReader {
   return {
@@ -200,12 +201,46 @@ function sourceReader(input: {
         attachmentId: `dev-preview-context:${String(index + 1).repeat(64).slice(0, 64)}`,
         provenance: { source: 'dev-preview' as const, workspaceId: 'a'.repeat(64) }
       }))
+      const directionInputAnswer = input.directionInputAnswer?.(turnId)
+      const directionQuestionId = directionInputAnswer
+        ? `ppt_direction:${directionInputAnswer.workflowId}:${directionInputAnswer.childId}`
+        : undefined
       return TurnSchema.parse({
         id: turnId, threadId, status: 'running', prompt, agentSurface: 'design', composerContexts,
-        items: [{
-          id: `item_${turnId}`, turnId, threadId, kind: 'user_message', role: 'user', status: 'completed',
-          text: prompt, composerContexts, createdAt: '2026-08-12T00:00:00.000Z'
-        }],
+        items: [
+          {
+            id: `item_${turnId}`, turnId, threadId, kind: 'user_message', role: 'user', status: 'completed',
+            text: prompt, composerContexts, createdAt: '2026-08-12T00:00:00.000Z'
+          },
+          ...(directionInputAnswer && directionQuestionId
+            ? [{
+                id: `input_${turnId}`,
+                turnId,
+                threadId,
+                kind: 'user_input' as const,
+                role: 'tool' as const,
+                status: 'submitted' as const,
+                inputId: `ppt_input_${turnId}`,
+                prompt: 'Choose one visual direction',
+                questions: [{
+                  header: 'PPT direction',
+                  id: directionQuestionId,
+                  question: 'Which direction should the PPT agent use?',
+                  options: [1, 2, 3].map((index) => ({
+                    label: `${index}. Direction ${index}`,
+                    description: `Distinct visual direction ${index}`
+                  })),
+                  selectionMode: 'single' as const
+                }],
+                answers: [{
+                  id: directionQuestionId,
+                  label: directionInputAnswer.answer,
+                  value: directionInputAnswer.answer
+                }],
+                createdAt: '2026-08-12T00:00:00.000Z'
+              }]
+            : [])
+        ],
         createdAt: '2026-08-12T00:00:00.000Z'
       })
     }
@@ -436,6 +471,62 @@ describe('ppt_agent visual direction lifecycle', () => {
       })
       expect(fake.calls).toHaveLength(1)
     }
+  })
+
+  it('resolves a direction number from the conversation without a canvas selection', async () => {
+    const fake = fakeRuntime()
+    let activeWorkflow = ''
+    const ppt = tool(fake, sourceReader({
+      workflowId: () => activeWorkflow,
+      prompt: (turnId) => turnId === 'turn_start'
+        ? 'Create a new Kun launch presentation.'
+        : '采用第 3 个方向，继续生成逐页预览。'
+    }))
+    const started = await ppt.execute({}, baseContext)
+    activeWorkflow = (started.output as { workflowId: string }).workflowId
+
+    await expect(ppt.execute({
+      action: 'select_direction', childId, workflowId: activeWorkflow
+    }, { ...baseContext, turnId: 'turn_select_by_text' })).resolves.toMatchObject({
+      isError: false,
+      output: { phase: 'awaiting_review' }
+    })
+    expect(fake.calls[1]?.pptWorkflowScope).toMatchObject({
+      action: 'select_direction',
+      directionContext: {
+        childId,
+        directions: [{ directionId: 'direction-3', revision: 1 }]
+      }
+    })
+  })
+
+  it('resumes the same PPT child from a submitted user-input answer in the active turn', async () => {
+    const fake = fakeRuntime()
+    let activeWorkflow = ''
+    const ppt = tool(fake, sourceReader({
+      workflowId: () => activeWorkflow,
+      prompt: () => 'Create a new Kun launch presentation.',
+      directionInputAnswer: (turnId) => turnId === 'turn_interactive'
+        ? { workflowId: activeWorkflow, childId, answer: '3. Direction 3' }
+        : undefined
+    }))
+    const started = await ppt.execute({}, baseContext)
+    activeWorkflow = (started.output as { workflowId: string }).workflowId
+
+    await expect(ppt.execute({
+      action: 'select_direction', childId, workflowId: activeWorkflow
+    }, { ...baseContext, turnId: 'turn_interactive' })).resolves.toMatchObject({
+      isError: false,
+      output: { phase: 'awaiting_review', reviewBundle: { workflowId: activeWorkflow } }
+    })
+    expect(fake.calls[1]?.parentTurnId).toBe('turn_interactive')
+    expect(fake.calls[1]?.pptWorkflowScope).toMatchObject({
+      action: 'select_direction',
+      directionContext: {
+        childId,
+        directions: [{ directionId: 'direction-3', revision: 1 }]
+      }
+    })
   })
 
   it('rejects mixed valid and foreign direction contexts before resuming the child', async () => {

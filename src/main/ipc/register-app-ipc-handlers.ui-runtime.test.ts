@@ -320,7 +320,7 @@ describe('registerAppIpcHandlers UI plugins and runtime', () => {
     expect(restartRuntime).toHaveBeenCalledTimes(1)
   })
 
-  it('restarts only the current Kun serve after trusted confirmation', async () => {
+  it('restarts all current-user Kun serves only after trusted confirmation', async () => {
     const mainFrame = { processId: 10, routingId: 20 }
     const contents = { id: 7, mainFrame }
     const mainWindow = { isDestroyed: () => false, webContents: contents }
@@ -353,7 +353,7 @@ describe('registerAppIpcHandlers UI plugins and runtime', () => {
         type: 'warning',
         defaultId: 1,
         cancelId: 1,
-        detail: expect.stringContaining('Service Manager')
+        detail: expect.stringContaining('All historical Kun serve processes')
       })
     )
   })

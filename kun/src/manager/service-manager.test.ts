@@ -53,6 +53,7 @@ describe('service manager control plane', () => {
       managerToken: 'manager-secret',
       instanceId: 'manager-a',
       startedAt: '2026-08-01T00:00:00.000Z',
+      buildId: 'b'.repeat(64),
       state: new ServiceManagerState()
     })
     const response = await dispatchRequest(router, new Request('http://127.0.0.1/health'))
@@ -63,6 +64,7 @@ describe('service manager control plane', () => {
       service: 'kun-service-manager',
       protocolVersion: 1,
       instanceId: 'manager-a',
+      buildId: 'b'.repeat(64),
       capabilities: expect.arrayContaining(['item-page-v1'])
     })
     expect(text).not.toContain('manager-secret')
