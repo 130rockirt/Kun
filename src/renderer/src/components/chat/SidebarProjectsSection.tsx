@@ -128,7 +128,7 @@ import {
 } from './sidebar-project-drag-actions'
 import { createSidebarProjectWorkspaceActions } from './sidebar-project-workspace-actions'
 import type { SidebarProjectExpansionStage } from './sidebar-project-expansion'
-import { SidebarProjectsContent } from './SidebarProjectsContent'
+import { SidebarProjectsContent, type SidebarThreadListStatus } from './SidebarProjectsContent'
 import { discoverSidebarWorktrees } from './sidebar-worktree-discovery'
 export {
   buildSidebarDraftWorkspacePaths,
@@ -150,6 +150,11 @@ type SidebarProjectsSectionProps = {
   activeView: 'chat' | 'write' | 'claw'
   activeThreadId: string | null
   runtimeReady: boolean
+  threadListStatus: SidebarThreadListStatus
+  threadListError: string | null
+  onRetryThreads: () => void
+  onLoadMoreThreads: (workspacePath: string) => void
+  threadListCursorByWorkspace: Record<string, { nextCursor?: string; hasMore: boolean; total?: number }>
   searchQuery: string
   showArchived: boolean
   workspaceRoot: string
@@ -187,6 +192,11 @@ export function SidebarProjectsSection({
   activeView,
   activeThreadId,
   runtimeReady,
+  threadListStatus,
+  threadListError,
+  onRetryThreads,
+  onLoadMoreThreads,
+  threadListCursorByWorkspace,
   searchQuery,
   showArchived,
   workspaceRoot,
@@ -615,6 +625,7 @@ export function SidebarProjectsSection({
   return <SidebarProjectsContent {...{
     t, runtimeReady, workspaceRoot, searchQuery, showArchived, allGroupsCollapsed, searchVisible,
     busy, activeView, activeThreadId, locale, displayGroups, sidebarCollapse, sidebarOrder,
+    threadListStatus, threadListError, onRetryThreads, onLoadMoreThreads, threadListCursorByWorkspace,
     sidebarFolders, expandedWorkspaces, deletingThreadIds, draggingWorkspacePath, draggingThreadId,
     workspaceOrderDropTarget, threadOrderDropTarget, dragOverWorkspace, folderDropTarget,
     threadWorktrees, sidebarThreadActivityContext, threadContextMenu, workspaceContextMenu,

@@ -8,7 +8,7 @@ import type {
   SessionLatestUsageSnapshot,
   SessionUsageRecord
 } from '../ports/session-store.js'
-import type { ThreadStore, ThreadStoreListOptions } from '../ports/thread-store.js'
+import type { ThreadStore, ThreadStoreListOptions, ThreadStoreListPage } from '../ports/thread-store.js'
 import type { ThreadRecord, ThreadSummary } from '../contracts/threads.js'
 
 /**
@@ -149,6 +149,21 @@ export class LifecycleFencedThreadStore implements ThreadStore {
 
   list(options?: ThreadStoreListOptions): Promise<ThreadSummary[]> {
     return this.raw.list(options)
+  }
+
+  async listPage(options?: ThreadStoreListOptions): Promise<ThreadStoreListPage> {
+    const rawListPage = (this.raw as ThreadStore & {
+      listPage?: (opts?: ThreadStoreListOptions) => Promise<ThreadStoreListPage>
+    }).listPage
+    if (typeof rawListPage === 'function') return rawListPage(options)
+    const threads = await this.raw.list(options)
+    const pageSize = typeof options?.limit === 'number' ? Math.max(1, Math.floor(options.limit)) : threads.length
+    const page = threads.slice(0, pageSize)
+    return {
+      threads: page,
+      hasMore: threads.length > pageSize,
+      ...(options?.cursor ? {} : { total: threads.length })
+    }
   }
 
   get(threadId: string): Promise<ThreadRecord | null> {

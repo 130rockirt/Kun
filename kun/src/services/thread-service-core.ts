@@ -1,6 +1,6 @@
 import { readFile, realpath, writeFile } from 'node:fs/promises'
 import { isAbsolute, relative, resolve } from 'node:path'
-import type { ThreadStore, ThreadStoreListOptions } from '../ports/thread-store.js'
+import type { ThreadStore, ThreadStoreListOptions, ThreadStoreListPage } from '../ports/thread-store.js'
 import type { SessionStore } from '../ports/session-store.js'
 import type { IdGenerator } from '../ports/id-generator.js'
 import type {
@@ -89,7 +89,10 @@ export type ThreadServiceOptions = {
   ) => Promise<void> | void
 }
 
-export type ListThreadsOptions = ThreadStoreListOptions
+export type ListThreadsOptions = ThreadStoreListOptions & {
+  /** Return the lean sidebar projection (omits heavy metadata blobs). */
+  lean?: boolean
+}
 
 export type ForkThreadOptions = {
   relation?: ThreadRelation
@@ -176,6 +179,8 @@ export interface ThreadService {
     modelRequestCaptureEnabled: boolean
   }): void;
   list(options?: ListThreadsOptions ): Promise<ThreadSummary[]>;
+  /** Paginated listing with keyset cursor. Falls back to `list` when the backing store cannot paginate. */
+  listPage(options?: ListThreadsOptions): Promise<ThreadStoreListPage>;
   get(threadId: string): Promise<ThreadRecord | null>;
   getMetadata(threadId: string): Promise<ThreadRecord | null>;
   create(

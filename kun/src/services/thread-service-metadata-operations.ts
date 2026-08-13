@@ -1,6 +1,6 @@
 import { readFile, realpath, writeFile } from 'node:fs/promises'
 import { isAbsolute, relative, resolve } from 'node:path'
-import type { ThreadStore, ThreadStoreListOptions } from '../ports/thread-store.js'
+import type { ThreadStore, ThreadStoreListOptions, ThreadStoreListPage } from '../ports/thread-store.js'
 import type { SessionStore } from '../ports/session-store.js'
 import type { IdGenerator } from '../ports/id-generator.js'
 import type {
@@ -85,6 +85,44 @@ async list(this: ThreadService, options: ListThreadsOptions = {}): Promise<Threa
       threads = threads.filter((thread) => matchesThreadSearch(thread, query))
     }
     return typeof options.limit === 'number' ? threads.slice(0, options.limit) : threads
+  },
+
+async listPage(this: ThreadService, options: ListThreadsOptions = {}): Promise<ThreadStoreListPage> {
+    // The backing store is responsible for keyset pagination when it supports
+    // it. When it does not (in-memory or legacy stores), fall back to a
+    // page slice of the full filtered listing so the response contract still
+    // holds (hasMore + total) without breaking existing consumers.
+    const store = this['threadStore']
+    const storeListPage = (store as ThreadStore & {
+      listPage?: (opts?: ListThreadsOptions) => Promise<ThreadStoreListPage>
+    }).listPage
+    if (typeof storeListPage === 'function' && (options.cursor || options.workspace || options.limit != null)) {
+      return storeListPage(options)
+    }
+    const query = options.search?.trim().toLowerCase()
+    let threads = await store.list({
+      ...options,
+      ...(options.limit != null ? {} : { limit: undefined })
+    })
+    if (options.archivedOnly) {
+      threads = threads.filter((thread) => thread.status === 'archived')
+    } else if (!options.includeArchived) {
+      threads = threads.filter((thread) => thread.status !== 'archived' && thread.status !== 'deleted')
+    }
+    if (!options.includeSide) {
+      threads = threads.filter((thread) => (thread.relation ?? 'primary') !== 'side')
+    }
+    if (query) {
+      threads = threads.filter((thread) => matchesThreadSearch(thread, query))
+    }
+    const total = threads.length
+    const pageSize = options.limit ?? total
+    const page = threads.slice(0, pageSize)
+    return {
+      threads: page,
+      hasMore: page.length < total,
+      ...(options.cursor ? {} : { total })
+    }
   },
 
 async get(this: ThreadService, threadId: string): Promise<ThreadRecord | null> {

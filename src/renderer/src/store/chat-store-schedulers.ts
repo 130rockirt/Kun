@@ -1,6 +1,9 @@
 import type { ChatState, ChatStoreGet, ChatStoreSet } from './chat-store-types'
 
 let startupRuntimeProbeTimer: ReturnType<typeof setTimeout> | null = null
+// Guards against duplicate startup probes: the immediate probe runs first and
+// the 900ms fallback must not race it while it is still in flight.
+let startupRuntimeProbeInFlight = false
 let busyWatchdogTimer: ReturnType<typeof setTimeout> | null = null
 let busyRecoveryAttempts = 0
 let turnCompletionPollTimer: ReturnType<typeof setInterval> | null = null
@@ -61,9 +64,32 @@ export function scheduleStartupRuntimeProbe(get: ChatStoreGet): void {
   if (startupRuntimeProbeTimer) {
     clearTimeout(startupRuntimeProbeTimer)
   }
+  if (startupRuntimeProbeInFlight) return
+  // Probe immediately when the runtime is already up so the sidebar gets its
+  // thread inventory as fast as possible instead of waiting a fixed 900ms.
+  startupRuntimeProbeInFlight = true
+  void (async () => {
+    try {
+      await get().probeRuntime('user')
+    } finally {
+      startupRuntimeProbeInFlight = false
+    }
+  })()
+  // Keep a fallback probe for the case where the runtime is still cold-starting
+  // (e.g. `kun serve` booting) and the immediate probe raced it. It only fires
+  // when the runtime did not reach `ready` yet and no other probe is running.
   startupRuntimeProbeTimer = setTimeout(() => {
     startupRuntimeProbeTimer = null
-    void get().probeRuntime('user')
+    if (startupRuntimeProbeInFlight) return
+    if (get().runtimeConnection === 'ready') return
+    startupRuntimeProbeInFlight = true
+    void (async () => {
+      try {
+        await get().probeRuntime('user')
+      } finally {
+        startupRuntimeProbeInFlight = false
+      }
+    })()
   }, 900)
 }
 

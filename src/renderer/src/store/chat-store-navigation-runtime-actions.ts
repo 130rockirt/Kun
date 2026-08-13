@@ -101,6 +101,7 @@ import {
   scheduleStartupRuntimeProbe,
   stopTurnCompletionPoll
 } from './chat-store-schedulers'
+import { cacheEntriesToThreads, loadThreadListCache } from './thread-list-cache'
 import {
   armBusyWatchdog,
   buildFollowupMessageFromUserInput,
@@ -154,7 +155,15 @@ export function createNavigationRuntimeActions(
   return {
   probeRuntime: async (mode = 'user', options) => {
     const prev = get().runtimeConnection
-    if (mode === 'user') set({ runtimeConnection: 'checking' })
+    if (mode === 'user') {
+      set((s) => ({
+        runtimeConnection: 'checking',
+        // While the runtime probe is in flight the thread inventory is
+        // unknown; mark it loading so the sidebar never flashes the empty
+        // state during the startup window.
+        ...(s.threads.length === 0 ? { threadListStatus: 'loading' as const } : {})
+      }))
+    }
     try {
       if (typeof window.kunGui === 'undefined') {
         throw new Error(
@@ -186,6 +195,8 @@ export function createNavigationRuntimeActions(
           runtimeConnection: 'offline',
           error: msg,
           runtimeErrorDetail: detail,
+          threadListStatus: 'error',
+          threadListError: msg,
           ...(needsSettings
             ? { route: 'settings' as const, settingsSection: 'agents' as const }
             : {})
@@ -196,6 +207,8 @@ export function createNavigationRuntimeActions(
           runtimeConnection: 'offline',
           error: msg,
           runtimeErrorDetail: detail,
+          threadListStatus: 'error',
+          threadListError: msg,
           ...(needsSettings
             ? { route: 'settings' as const, settingsSection: 'agents' as const }
             : {})
@@ -332,6 +345,19 @@ export function createNavigationRuntimeActions(
           runtimeErrorDetail: needsInitialSetup ? null : get().runtimeErrorDetail
         })
         if (needsInitialSetup) return
+        // First-paint placeholder: hydrate the sidebar from the local summary
+        // cache immediately so it never shows an empty state while the runtime
+        // probe + first inventory refresh are still in flight. The status stays
+        // `refreshing` (never `ready`) until the authoritative refresh commits.
+        if (get().threads.length === 0) {
+          const cached = loadThreadListCache()
+          if (cached.length > 0) {
+            set((s) => ({
+              ...(s.threads.length === 0 ? { threads: cacheEntriesToThreads(cached) } : {}),
+              threadListStatus: s.threads.length === 0 ? 'refreshing' : s.threadListStatus
+            }))
+          }
+        }
         scheduleStartupRuntimeProbe(get)
       } catch (e) {
         set({

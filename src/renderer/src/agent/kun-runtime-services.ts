@@ -4,7 +4,6 @@ import type {
   NormalizedThread,
   ReviewTarget,
   ThreadEventSink,
-  ThreadListOptions,
   ThreadUsageSnapshot,
   UserInputAnswer
 } from './types'
