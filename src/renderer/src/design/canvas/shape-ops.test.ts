@@ -4,6 +4,7 @@ import { useCanvasShapeStore } from './canvas-shape-store'
 import { useCanvasUndoStore } from './canvas-undo-store'
 import { useCanvasSelectionStore } from './canvas-selection-store'
 import { createDefaultShape, createEmptyDocument, createSvgFrameShape } from './canvas-types'
+import { canvasReplayResult } from './canvas-replay-receipt'
 
 beforeEach(() => {
   useCanvasShapeStore.getState().loadDocument(createEmptyDocument())
@@ -22,6 +23,23 @@ describe('executeOps validation', () => {
     const result = executeOps([{ op: 'add', shape: {} }])
     expect(result.ok).toBe(false)
     expect(result.errors[0].code).toBe('INVALID_OP')
+  })
+
+  it('persists INVALID_OP diagnostics for a replay key so remounts re-see the failure', () => {
+    const key = 'thread0\0turn0\0doc0\0board0:replay-batch'
+    const result = executeOps([{ op: 'noSuchOp' }], 'replay:key:0', { replayKey: key })
+    expect(result.ok).toBe(false)
+    expect(result.errors[0].code).toBe('INVALID_OP')
+
+    // A replay of the same key must return the failure, not a clean success.
+    const replayed = canvasReplayResult(useCanvasShapeStore.getState().document, key)
+    expect(replayed).not.toBeNull()
+    expect(replayed?.ok).toBe(false)
+    expect(replayed?.errors[0].code).toBe('INVALID_OP')
+
+    // The persisted journal entry is durable across a fresh document load.
+    const journal = useCanvasShapeStore.getState().document.operationJournal ?? []
+    expect(journal.some((entry) => entry.errors.length > 0 && entry.operations.length === 1)).toBe(true)
   })
 })
 

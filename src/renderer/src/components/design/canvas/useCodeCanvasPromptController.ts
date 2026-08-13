@@ -6,7 +6,11 @@ import {
   type ComposerReasoningEffort
 } from '../../chat/FloatingComposerModelPicker'
 import type { SendMessageOverrides } from '../../../store/chat-store-types'
-import { takeLastCanvasOpErrors } from '../../../design/canvas/apply-shape-ops'
+import {
+  peekLastCanvasOpErrors,
+  consumeLastCanvasOpErrors
+} from '../../../design/canvas/apply-shape-ops'
+import { codeCanvasErrorKey } from '../../../design/canvas/code-canvas'
 import { useCanvasSelectionStore } from '../../../design/canvas/canvas-selection-store'
 import { useCanvasShapeStore } from '../../../design/canvas/canvas-shape-store'
 import { useCanvasViewportStore } from '../../../design/canvas/canvas-viewport-store'
@@ -61,7 +65,7 @@ export function useCodeCanvasPromptController({
       selectedIds: useCanvasSelectionStore.getState().selectedIds,
       viewBox: useCanvasViewportStore.getState().vbox,
       designContext: useDesignWorkspaceStore.getState().designContext,
-      takeLastErrors: takeLastCanvasOpErrors
+      peekLastErrors: peekLastCanvasOpErrors
     })
   }
 
@@ -80,10 +84,13 @@ export function useCodeCanvasPromptController({
       canvasBrief: text
     })
     const reasoningEffort = composerReasoningEffortRequestValue(composerReasoningEffort)
-    await sendMessage(outboundText, 'agent', buildCodeCanvasSendOverrides({
+    const admitted = await sendMessage(outboundText, 'agent', buildCodeCanvasSendOverrides({
       ...(options?.displayText ? { displayText: options.displayText } : {}),
       ...(reasoningEffort ? { reasoningEffort } : {})
     }))
+    if (admitted && activeThreadId) {
+      consumeLastCanvasOpErrors(codeCanvasErrorKey(activeThreadId))
+    }
   }
 
   return {

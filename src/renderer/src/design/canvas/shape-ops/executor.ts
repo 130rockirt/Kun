@@ -9,6 +9,7 @@ import {
   appendDesignOperationJournalEntry,
   shapeOpToDesignOperation
 } from '../../graph/design-operation-journal'
+import type { DesignOperation } from '../../graph/design-graph-types'
 import { canvasReplayOperationId, canvasReplayResult } from '../canvas-replay-receipt'
 
 function executeOne(
@@ -53,6 +54,28 @@ export function executeOps(
   }
 
   if (validatedOps.length === 0) {
+    if (replayKey && errors.length > 0) {
+      // Persist the failure so `canvasReplayResult` can return the INVALID_OP
+      // diagnostics after a remount/restart. A bare replay key without a
+      // journal entry would otherwise be interpreted as a clean success.
+      const operation: DesignOperation = {
+        id: canvasReplayOperationId(replayKey, 0),
+        type: 'legacy_shape_op',
+        label,
+        source: 'agent',
+        createdAt: new Date().toISOString(),
+        targetIds: [],
+        payload: rawOps
+      }
+      const journalEntry = appendDesignOperationJournalEntry({
+        label,
+        status: 'partial',
+        operations: [operation],
+        affectedIds: [],
+        errors: errors.map((error) => ({ ...error }))
+      })
+      useCanvasShapeStore.getState().appendOperationJournalEntry(journalEntry)
+    }
     if (replayKey) useCanvasShapeStore.getState().recordRendererReplayKey(replayKey)
     return { ok: errors.length === 0, affectedIds: [], errors }
   }

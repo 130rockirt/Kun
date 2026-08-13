@@ -10,7 +10,9 @@ import {
   extractSvgArtifactCreateSpecsFromValue,
   isDesignCanvasToolName,
   setLastCanvasOpErrors,
-  takeLastCanvasOpErrors
+  takeLastCanvasOpErrors,
+  peekLastCanvasOpErrors,
+  consumeLastCanvasOpErrors
 } from './apply-shape-ops'
 import { useCanvasShapeStore } from './canvas-shape-store'
 import { useCanvasUndoStore } from './canvas-undo-store'
@@ -41,6 +43,23 @@ describe('last-canvas-op-errors stash (agent self-correction bridge)', () => {
     // Taking docA must not have drained docB.
     expect(takeLastCanvasOpErrors('docB')).toEqual([{ code: 'PARENT_NOT_FOUND', message: 'doc B' }])
     expect(takeLastCanvasOpErrors('docA')).toEqual([])
+  })
+
+  it('peek leaves the stash intact so a failed admission can retry', () => {
+    setLastCanvasOpErrors([{ code: 'SHAPE_NOT_FOUND', message: 'No shape "x"' }], 'peekKey')
+    expect(peekLastCanvasOpErrors('peekKey')).toEqual([{ code: 'SHAPE_NOT_FOUND', message: 'No shape "x"' }])
+    // Still present after peek.
+    expect(peekLastCanvasOpErrors('peekKey')).toEqual([{ code: 'SHAPE_NOT_FOUND', message: 'No shape "x"' }])
+    consumeLastCanvasOpErrors('peekKey')
+    expect(peekLastCanvasOpErrors('peekKey')).toEqual([])
+  })
+
+  it('consume clears only the addressed bucket', () => {
+    setLastCanvasOpErrors([{ code: 'INVALID_OP', message: 'a' }], 'k1')
+    setLastCanvasOpErrors([{ code: 'SHAPE_NOT_FOUND', message: 'b' }], 'k2')
+    expect(consumeLastCanvasOpErrors('k1')).toEqual([{ code: 'INVALID_OP', message: 'a' }])
+    expect(peekLastCanvasOpErrors('k1')).toEqual([])
+    expect(peekLastCanvasOpErrors('k2')).toEqual([{ code: 'SHAPE_NOT_FOUND', message: 'b' }])
   })
 })
 

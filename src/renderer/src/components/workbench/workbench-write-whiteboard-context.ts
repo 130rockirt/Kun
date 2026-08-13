@@ -6,7 +6,10 @@ import { activePptReviewComposerContexts } from './workbench-ppt-review-context'
 import { useCanvasShapeStore } from '../../design/canvas/canvas-shape-store'
 import { useCanvasSelectionStore } from '../../design/canvas/canvas-selection-store'
 import { useCanvasViewportStore } from '../../design/canvas/canvas-viewport-store'
-import { buildWorkCanvasReferenceContext } from '../../design/canvas/work-canvas-outbound'
+import {
+  buildWorkCanvasReferenceContext,
+  workCanvasReferenceIntent
+} from '../../design/canvas/work-canvas-outbound'
 import { useDesignWorkspaceStore } from '../../design/design-workspace-store'
 
 export function activeWorkWhiteboard(state: WriteWorkspaceState): WorkWhiteboard | null {
@@ -34,7 +37,8 @@ export function workWhiteboardSnapshotMatches(
 export async function activeWorkWhiteboardComposerContexts(
   workspaceRoot: string,
   board: WorkWhiteboard | null,
-  fallbackThreadId: string | null
+  fallbackThreadId: string | null,
+  userPrompt?: string
 ) {
   if (!board) return []
   const canvas = useCanvasShapeStore.getState()
@@ -46,7 +50,8 @@ export async function activeWorkWhiteboardComposerContexts(
     currentDocumentKey: canvas.documentKey,
     selectedIds: useCanvasSelectionStore.getState().selectedIds,
     viewBox: useCanvasViewportStore.getState().vbox,
-    designContext: useDesignWorkspaceStore.getState().designContext
+    designContext: useDesignWorkspaceStore.getState().designContext,
+    intent: workCanvasReferenceIntent(userPrompt ?? '')
   })
   if (!board.workflowId) return [whiteboard]
   const ppt = await activePptReviewComposerContexts(

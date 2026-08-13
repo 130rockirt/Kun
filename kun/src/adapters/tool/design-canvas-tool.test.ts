@@ -286,6 +286,11 @@ describe('dedicated design tools', () => {
       ops: [op],
       message: expect.stringContaining('does not verify that the canvas applied')
     })
+    // Two-phase receipt: the result is accepted, not verified, and carries a
+    // deterministic receipt key the renderer confirms.
+    expect(result.output).toMatchObject({ status: 'accepted' })
+    expect(typeof (result.output as { receiptKey?: unknown }).receiptKey).toBe('string')
+    expect((result.output as { receiptKey: string }).receiptKey).toMatch(/^design-receipt-[a-f0-9]{32}$/)
   })
 
   it('enforces design_update_shapes operation and structural budgets', async () => {
@@ -377,6 +382,57 @@ describe('dedicated design tools', () => {
         { op: 'update', id: 'label_1', patch: { textContent: 'Business Rules' } },
         { op: 'add', shape: { type: 'text', textContent: 'API Router' } }
       ]
+    })
+  })
+
+  it('normalizes a top-level update op without patch into patch.textContent', async () => {
+    const tool = createDesignUpdateShapesTool()
+    const result = await tool.execute(
+      { op: 'update', id: 'label-1', text: 'Business Rules' },
+      context()
+    )
+
+    expect(result.isError).toBeUndefined()
+    expect(result.output).toMatchObject({
+      ok: true,
+      tool: DESIGN_UPDATE_SHAPES_TOOL_NAME,
+      ops: [{ op: 'update', id: 'label-1', patch: { textContent: 'Business Rules' } }]
+    })
+    expect(JSON.stringify(result.output)).not.toContain('"text"')
+  })
+
+  it('removes text aliases even when canonical textContent is present', async () => {
+    const tool = createDesignUpdateShapesTool()
+    const result = await tool.execute({
+      ops: [
+        { op: 'update', id: 'label-2', patch: { text: 'a', textContent: 'b' } },
+        { op: 'update', id: 'label-3', text: 'loose', textContent: 'canonical' }
+      ]
+    }, context())
+
+    expect(result.isError).toBeUndefined()
+    expect(result.output).toMatchObject({
+      ok: true,
+      ops: [
+        { op: 'update', id: 'label-2', patch: { textContent: 'b' } },
+        { op: 'update', id: 'label-3', patch: { textContent: 'canonical' } }
+      ]
+    })
+    expect(JSON.stringify(result.output)).not.toContain('"text"')
+    expect(JSON.stringify(result.output)).not.toContain('"content"')
+  })
+
+  it('leaves an update op without any patchable field untouched', async () => {
+    const tool = createDesignUpdateShapesTool()
+    const result = await tool.execute(
+      { op: 'update', id: 'label-4' },
+      context()
+    )
+
+    expect(result.isError).toBeUndefined()
+    expect(result.output).toMatchObject({
+      ok: true,
+      ops: [{ op: 'update', id: 'label-4' }]
     })
   })
 

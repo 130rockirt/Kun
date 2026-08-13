@@ -57,6 +57,19 @@ export function takeLastCanvasOpErrors(key: string = DEFAULT_ERROR_KEY): OpError
   return errors
 }
 
+/** Read the stashed errors without clearing them. Used while composing a
+ * turn so a later admission failure does not lose the diagnostics. */
+export function peekLastCanvasOpErrors(key: string = DEFAULT_ERROR_KEY): OpError[] {
+  return _lastCanvasOpErrors.get(key) ?? []
+}
+
+/** Clear and return the stashed errors, only after the turn is admitted. */
+export function consumeLastCanvasOpErrors(key: string = DEFAULT_ERROR_KEY): OpError[] {
+  const errors = _lastCanvasOpErrors.get(key) ?? []
+  _lastCanvasOpErrors.delete(key)
+  return errors
+}
+
 /**
  * Extract every `shapeops` fenced code block from a markdown-ish string.
  * Tolerates leading/trailing whitespace inside the fence and json/array shapes.

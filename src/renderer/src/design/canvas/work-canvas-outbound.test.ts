@@ -2,7 +2,10 @@ import { describe, expect, it, vi } from 'vitest'
 import { ComposerContextAttachmentSchema } from '@kun/extension-api'
 import type { CanvasSnapshot } from './canvas-snapshot'
 import { createEmptyDocument } from './canvas-types'
-import { buildWorkCanvasReferenceContext } from './work-canvas-outbound'
+import {
+  buildWorkCanvasReferenceContext,
+  workCanvasReferenceIntent
+} from './work-canvas-outbound'
 import { snapshotWorkCanvasForPrompt } from './work-canvas'
 
 const snapshot: CanvasSnapshot = {
@@ -12,6 +15,24 @@ const snapshot: CanvasSnapshot = {
     x: 0, y: 0, w: 480, h: 318, parentName: null, selected: true
   }]
 }
+
+describe('workCanvasReferenceIntent', () => {
+  it('defaults to focused when the prompt is unknown or empty', () => {
+    expect(workCanvasReferenceIntent('')).toBe('default')
+    expect(workCanvasReferenceIntent('把 CTA 按钮改成蓝色')).toBe('default')
+  })
+
+  it('expands to whole-board for translation/review/export prompts', () => {
+    expect(workCanvasReferenceIntent('把整个白板翻译成英文')).toBe('whole-board')
+    expect(workCanvasReferenceIntent('Review the full board and list risks')).toBe('whole-board')
+    expect(workCanvasReferenceIntent('导出全部文字内容')).toBe('whole-board')
+  })
+
+  it('uses a small cap for new-board requests', () => {
+    expect(workCanvasReferenceIntent('新建一个登录流程架构图')).toBe('new-board')
+    expect(workCanvasReferenceIntent('create a diagram of the auth flow')).toBe('new-board')
+  })
+})
 
 describe('Work canvas outbound prompt', () => {
   it('emits bounded whiteboard state as a composer reference', async () => {
@@ -94,31 +115,92 @@ describe('Work canvas outbound prompt', () => {
       .toBeLessThanOrEqual(16 * 1_024)
   })
 
-  it('prioritizes visible text and exposes the canonical textContent field', async () => {
-    const shapes = [
-      ...Array.from({ length: 64 }, (_, index) => ({
-        id: `rect-${index}`, name: `Rect ${index}`, type: 'rect' as const,
-        x: index, y: index, w: 20, h: 20, parentName: null, inView: true
-      })),
-      {
-        id: 'label-last', name: 'Service label', type: 'text' as const,
-        x: 20, y: 20, w: 200, h: 40, parentName: null,
-        inView: true, textContent: '业务规则'
-      }
-    ]
+  it('omitted count equals shapeCount minus included (no double counting)', async () => {
+    // The snapshot layer already truncated 236 of 300 shapes (omitted: 64
+    // describes THAT truncation). The reference must not add snapshot.omitted
+    // again on top of shapeCount - included.
+    const shapes = Array.from({ length: 64 }, (_, index) => ({
+      id: `shape-${index}`, name: `Shape ${index}`, type: 'rect' as const,
+      x: index, y: index, w: 10, h: 10, parentName: null
+    }))
     const context = await buildWorkCanvasReferenceContext({
       workspaceRoot: '/work',
-      boardId: 'board-text',
+      boardId: 'board-omitted',
       boardRevision: 1,
       currentDocument: createEmptyDocument(),
       selectedIds: new Set(),
       viewBox: { x: 0, y: 0, width: 1200, height: 800 },
       designContext: { designTarget: 'web' },
-      snapshotForPrompt: async () => ({ shapeCount: shapes.length, shapes }),
+      intent: 'whole-board',
+      snapshotForPrompt: async () => ({
+        shapeCount: 300, shapes, omitted: 236
+      }),
       takeLastErrors: () => []
     })
 
-    expect(JSON.stringify(context.reference)).toContain('"textContent":"业务规则"')
-    expect(JSON.stringify(context.reference)).not.toContain('"text":"业务规则"')
+    const snapshotRef = context.reference.snapshot as {
+      shapeCount: number
+      includedShapeCount: number
+      omittedShapeCount: number
+    }
+    expect(snapshotRef.shapeCount).toBe(300)
+    expect(snapshotRef.includedShapeCount).toBeGreaterThan(0)
+    expect(snapshotRef.includedShapeCount).toBeLessThanOrEqual(64)
+    // The fix: omitted is exactly shapeCount - included. The old code added
+    // snapshot.omitted again, which could exceed the total shape count.
+    expect(snapshotRef.omittedShapeCount).toBe(snapshotRef.shapeCount - snapshotRef.includedShapeCount)
+    expect(snapshotRef.omittedShapeCount).toBeLessThan(300)
+    expect(snapshotRef.omittedShapeCount).toBeLessThanOrEqual(snapshotRef.shapeCount)
+  })
+
+  it('scales the shape cap by intent (focused < whole-board)', async () => {
+    const shapes = Array.from({ length: 40 }, (_, index) => ({
+      id: `shape-${index}`, name: `Shape ${index}`, type: 'rect' as const,
+      x: index, y: index, w: 10, h: 10, parentName: null
+    }))
+    const base = {
+      workspaceRoot: '/work',
+      boardId: 'board-intent',
+      boardRevision: 1,
+      currentDocument: createEmptyDocument(),
+      selectedIds: new Set<string>(),
+      viewBox: { x: 0, y: 0, width: 1200, height: 800 },
+      designContext: { designTarget: 'web' } as const,
+      snapshotForPrompt: async () => ({ shapeCount: shapes.length, shapes }),
+      takeLastErrors: () => []
+    }
+
+    const focused = await buildWorkCanvasReferenceContext({ ...base, intent: 'default' })
+    const whole = await buildWorkCanvasReferenceContext({ ...base, intent: 'whole-board' })
+    const newBoard = await buildWorkCanvasReferenceContext({ ...base, intent: 'new-board' })
+    const focusedIncluded = (focused.reference.snapshot as { includedShapeCount: number }).includedShapeCount
+    const wholeIncluded = (whole.reference.snapshot as { includedShapeCount: number }).includedShapeCount
+    const newIncluded = (newBoard.reference.snapshot as { includedShapeCount: number }).includedShapeCount
+    expect(focusedIncluded).toBeLessThanOrEqual(18)
+    expect(wholeIncluded).toBe(40)
+    expect(newIncluded).toBeLessThanOrEqual(8)
+  })
+
+  it('peek (non-destructive) keeps errors visible to the next send after a failure', async () => {
+    const peekLastErrors = vi.fn(() => [{
+      code: 'SHAPE_NOT_FOUND' as const,
+      message: 'Missing slide'
+    }])
+    const context = await buildWorkCanvasReferenceContext({
+      workspaceRoot: '/work',
+      boardId: 'board-peek',
+      boardRevision: 1,
+      currentDocument: createEmptyDocument(),
+      selectedIds: new Set(),
+      viewBox: { x: 0, y: 0, width: 1200, height: 800 },
+      designContext: { designTarget: 'web' },
+      snapshotForPrompt: async () => snapshot,
+      peekLastErrors
+    })
+
+    expect(context.reference.previousErrors).toEqual([{ code: 'SHAPE_NOT_FOUND', message: 'Missing slide' }])
+    expect(peekLastErrors).toHaveBeenCalledWith('work-canvas:board-peek')
+    // Peeking must not clear the bucket: the next send still sees the errors.
+    expect(peekLastErrors).toHaveBeenCalledTimes(1)
   })
 })

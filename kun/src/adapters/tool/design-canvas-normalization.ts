@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { validateStructuredArgumentBudget } from './structured-argument-budget.js'
 
 type DesignCanvasAction = 'create_board' | 'add_screen' | 'update_shapes'
@@ -247,6 +248,21 @@ export function normalizeArrangeOp(args: Record<string, unknown>):
   return { ok: false, error: 'operation must be align, distribute, stack, grid, or responsive_reflow' }
 }
 
+/**
+ * Deterministic receipt key shared between the Kun tool result and the
+ * renderer's application receipt. The renderer recomputes the same seed
+ * (threadId/turnId/callId + canonical ops JSON) and POSTs it back.
+ */
+export function designCanvasReceiptKey(
+  threadId: string | undefined,
+  turnId: string | undefined,
+  callId: string | undefined,
+  ops: unknown[]
+): string {
+  const seed = [threadId ?? '', turnId ?? '', callId ?? '', JSON.stringify(ops)].join('\u0000')
+  return `design-receipt-${createHash('sha256').update(seed).digest('hex').slice(0, 32)}`
+}
+
 export function designToolOutput(tool: string, action: string, ops: unknown[], extra: Record<string, unknown> = {}): { output: Record<string, unknown> } {
   return {
     output: {
@@ -297,8 +313,18 @@ function normalizeOps(value: unknown): unknown[] | null {
 
 function normalizeShapeOpAliases(value: unknown): unknown {
   if (!isRecord(value)) return value
-  if (value.op === 'update' && isRecord(value.patch)) {
-    return { ...value, patch: normalizeShapeTextAliases(value.patch) }
+  if (value.op === 'update') {
+    if (isRecord(value.patch)) {
+      return { ...value, patch: normalizeShapeTextAliases(value.patch) }
+    }
+    // A loose top-level update such as {op:'update', id:'x', text:'English'}
+    // has no patch. Reuse the loose-patch normalization so `text`/`content`
+    // aliases become `patch.textContent` instead of leaking as unknown fields.
+    const id = stringArg(value.id)
+    if (!id) return value
+    const patch = normalizeLooseShapePatch(value)
+    if (Object.keys(patch).length === 0) return value
+    return { op: 'update', id, patch }
   }
   if (value.op === 'add' && isRecord(value.shape)) {
     return { ...value, shape: normalizeShapeTextAliases(value.shape) }
@@ -307,14 +333,16 @@ function normalizeShapeOpAliases(value: unknown): unknown {
 }
 
 function normalizeShapeTextAliases(value: Record<string, unknown>): Record<string, unknown> {
-  if (typeof value.textContent === 'string') return value
-  const text = typeof value.text === 'string'
-    ? value.text
-    : typeof value.content === 'string' ? value.content : undefined
-  if (text === undefined) return value
-  const normalized: Record<string, unknown> = { ...value, textContent: text }
+  const normalized: Record<string, unknown> = { ...value }
+  const hasCanonical = typeof normalized.textContent === 'string'
+  const fallbackText = typeof normalized.text === 'string'
+    ? normalized.text
+    : typeof normalized.content === 'string' ? normalized.content : undefined
+  // `textContent` is canonical. Always drop the loose aliases so a strict
+  // renderer schema never rejects a leftover `text`/`content` field.
   delete normalized.text
   delete normalized.content
+  if (!hasCanonical && fallbackText !== undefined) normalized.textContent = fallbackText
   return normalized
 }
 

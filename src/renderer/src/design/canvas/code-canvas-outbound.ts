@@ -1,6 +1,6 @@
 import { defaultFrameSizeForDesignTarget, type DesignContext } from '../design-context'
 import { buildCodeCanvasTurnPrompt } from '../design-turn-prompt'
-import { takeLastCanvasOpErrors } from './apply-shape-ops'
+import { peekLastCanvasOpErrors } from './apply-shape-ops'
 import type { CanvasSnapshot } from './canvas-snapshot'
 import type { CanvasDocument, ViewBox } from './canvas-types'
 import {
@@ -15,6 +15,7 @@ export type CodeCanvasOutboundDeps = {
   snapshotForPrompt?: typeof snapshotCodeCanvasForPrompt
   loadDesignSystemForPrompt?: typeof loadCodeCanvasDesignSystemForPrompt
   takeLastErrors?: (key: string) => OpError[]
+  peekLastErrors?: (key: string) => OpError[]
 }
 
 export type BuildCodeCanvasOutboundTextOptions = CodeCanvasOutboundDeps & {
@@ -64,7 +65,7 @@ export async function buildCodeCanvasOutboundText(
   const canvasFeedbackKey = options.threadId ? codeCanvasErrorKey(options.threadId) : undefined
   const canvasDesignSystem = await readCodeCanvasDesignSystem(options)
   const previousOpErrors = canvasFeedbackKey
-    ? (options.takeLastErrors ?? takeLastCanvasOpErrors)(canvasFeedbackKey)
+    ? (options.peekLastErrors ?? options.takeLastErrors ?? peekLastCanvasOpErrors)(canvasFeedbackKey)
     : undefined
   const canvasPrompt = buildCodeCanvasTurnPrompt({
     workspaceRoot: options.workspaceRoot,

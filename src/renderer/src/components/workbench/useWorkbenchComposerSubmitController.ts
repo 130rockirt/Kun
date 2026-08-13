@@ -23,6 +23,7 @@ import { normalizeWorkspaceRoot } from '../../lib/workspace-path'
 import { buildComposerFileContextPrompt } from '../../lib/composer-file-references'
 import { resolveCodeCanvasComposerRoute } from '../../design/canvas/code-canvas'
 import { useCanvasSelectionStore } from '../../design/canvas/canvas-selection-store'
+import { consumeLastCanvasOpErrors } from '../../design/canvas/apply-shape-ops'
 import { planWorktreeComposerAccess } from '../../plan/plan-worktree-composer-access'
 import { usePlanWorktreeStore } from '../../plan/plan-worktree-store'
 import { activePptReviewComposerContexts } from './workbench-ppt-review-context'
@@ -319,7 +320,8 @@ export function useWorkbenchComposerSubmitController({
         const whiteboardContexts = await activeWorkWhiteboardComposerContexts(
           writeWorkspaceRoot,
           activeWhiteboard,
-          activeThreadId
+          activeThreadId,
+          v
         )
         const referenceContexts = await createWriteTurnReferenceAttachments({
           workspaceRoot: writeWorkspaceRoot,
@@ -382,6 +384,9 @@ export function useWorkbenchComposerSubmitController({
         const latest = useWriteWorkspaceStore.getState()
         quotedSelections.forEach((selection) => latest.removeQuotedSelection(selection.id))
         if (attachmentIds.length > 0) removeComposerAttachments(attachmentIds, attachmentScope)
+        // Only after the turn is admitted can the previous canvas-op errors be
+        // treated as consumed; a rejected/aborted send must keep them visible.
+        if (activeWhiteboard) consumeLastCanvasOpErrors(`work-canvas:${activeWhiteboard.id}`)
       } else {
         restorePrompt()
       }

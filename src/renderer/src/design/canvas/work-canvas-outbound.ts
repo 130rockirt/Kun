@@ -9,7 +9,9 @@ import {
   normalizeDesignTarget,
   type DesignContext
 } from '../design-context'
-import { takeLastCanvasOpErrors } from './apply-shape-ops'
+import {
+  peekLastCanvasOpErrors
+} from './apply-shape-ops'
 import type {
   CanvasPlacementRect,
   CanvasSnapshot,
@@ -23,11 +25,26 @@ import {
 } from './work-canvas'
 
 const MAX_REFERENCE_SHAPES = 64
+const MAX_REFERENCE_SHAPES_FOCUSED = 18
+const MAX_REFERENCE_SHAPES_NEW_BOARD = 8
 const MAX_REFERENCE_POINTS = 2
+
+export type WorkCanvasReferenceIntent = 'default' | 'whole-board' | 'new-board'
+
+export function workCanvasReferenceIntent(text: string): WorkCanvasReferenceIntent {
+  const normalized = text.trim().toLowerCase()
+  if (!normalized) return 'default'
+  const wholeBoard = /(全部|所有|整个|全量|整份|翻译|审查|审阅|导出|总结|translate|review|export|summar)/.test(normalized)
+  if (wholeBoard) return 'whole-board'
+  const newBoard = /(新建|创建|新架构|画一个|架构图|流程图|草图|create|new|diagram|architecture|sketch)/.test(normalized)
+  if (newBoard) return 'new-board'
+  return 'default'
+}
 
 export type WorkCanvasOutboundDeps = {
   snapshotForPrompt?: typeof snapshotWorkCanvasForPrompt
   takeLastErrors?: (key: string) => OpError[]
+  peekLastErrors?: (key: string) => OpError[]
 }
 
 export type BuildWorkCanvasReferenceContextOptions = WorkCanvasOutboundDeps & {
@@ -39,6 +56,7 @@ export type BuildWorkCanvasReferenceContextOptions = WorkCanvasOutboundDeps & {
   selectedIds: ReadonlySet<string>
   viewBox: ViewBox
   designContext: DesignContext
+  intent?: WorkCanvasReferenceIntent
 }
 
 async function readSnapshot(
@@ -151,7 +169,7 @@ function compactSnapshot(
   return {
     shapeCount: snapshot.shapeCount,
     includedShapeCount: shapes.length,
-    omittedShapeCount: Math.max(0, snapshot.shapeCount - shapes.length) + (snapshot.omitted ?? 0),
+    omittedShapeCount: Math.max(0, snapshot.shapeCount - shapes.length),
     shapes,
     ...(placement ? { placement } : {})
   }
@@ -196,8 +214,10 @@ function boundedWhiteboardReference(input: {
   designTarget: string
   snapshot: CanvasSnapshot | undefined
   errors: readonly OpError[]
+  shapeLimit?: number
 }): JsonObject {
-  for (let shapeLimit = MAX_REFERENCE_SHAPES; shapeLimit >= 0; shapeLimit -= 1) {
+  const start = input.shapeLimit ?? MAX_REFERENCE_SHAPES_FOCUSED
+  for (let shapeLimit = start; shapeLimit >= 0; shapeLimit -= 1) {
     const reference: JsonObject = {
       kind: 'work-reference-whiteboard',
       schemaVersion: 1,
@@ -220,12 +240,20 @@ export async function buildWorkCanvasReferenceContext(
 ): Promise<ComposerContextAttachment> {
   const identity = resolveWorkCanvasIdentity(options.workspaceRoot, options.boardId)
   const snapshot = await readSnapshot(options)
-  const errors = (options.takeLastErrors ?? takeLastCanvasOpErrors)(identity.errorKey)
+  const errors = (options.peekLastErrors ?? options.takeLastErrors ?? peekLastCanvasOpErrors)(identity.errorKey)
+  const intent = options.intent ?? workCanvasReferenceIntent(options.workspaceRoot)
+  const shapeLimit =
+    intent === 'whole-board'
+      ? MAX_REFERENCE_SHAPES
+      : intent === 'new-board'
+        ? MAX_REFERENCE_SHAPES_NEW_BOARD
+        : MAX_REFERENCE_SHAPES_FOCUSED
   const reference = boundedWhiteboardReference({
     boardId: identity.boardId,
     designTarget: normalizeDesignTarget(options.designContext.designTarget),
     snapshot,
-    errors
+    errors,
+    shapeLimit
   })
   const workspaceId = await sha256Hex(options.workspaceRoot.trim() || '__default__')
   const referenceId = await sha256Hex(JSON.stringify({ workspaceId, reference }))
