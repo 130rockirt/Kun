@@ -29,7 +29,7 @@ describe('parseDelegateDetail', () => {
     })
   })
 
-  it('reads explore_agent title and query from the tool payload', () => {
+  it('reads fast_context title and query from the tool payload', () => {
     expect(parseDelegateDetail(JSON.stringify({
       childId: 'child_explore',
       status: 'running',

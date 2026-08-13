@@ -99,7 +99,7 @@ const PPT_AGENT_DESCRIPTION = [
  * reuses the whole subagent runtime (child thread, events,
  * approval inheritance, SubagentCallCard rendering) while keeping the
  * delegate_task router untouched. Lab disable is enforced live via
- * `shouldAdvertise` (and an execute backstop), mirroring explore_agent.
+ * `shouldAdvertise` (and an execute backstop), mirroring fast_context.
  */
 export function buildPptAgentToolProvider(
   runtime: DelegationRuntime | undefined,

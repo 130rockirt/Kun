@@ -33,7 +33,7 @@ import {
   LaboratorySettingsSection,
   modelProvidersSettingsPatch
 } from './settings-section-agents'
-import { ExploreAgentSettingsPanel } from './settings-section-lab-explore'
+import { FastContextSettingsPanel } from './settings-section-lab-fast-context'
 import { PptAgentSettingsPanel } from './settings-section-lab-ppt'
 import { ProviderModelsManager } from './settings-section-provider-models'
 import {
@@ -57,7 +57,7 @@ const labels: Record<string, string> = {
   labComposerPersonaEnabledDesc: 'Composer persona description',
   labExploreTitle: 'Explore agent',
   labExploreDescription: 'Exploration tool description',
-  labExploreEnabled: 'Enable explore_agent',
+  labExploreEnabled: 'Enable fast_context',
   labExploreEnabledDesc: 'Enable description',
   labExploreModelMode: 'Model policy',
   labExploreModelModeDesc: 'Model policy description',
@@ -687,5 +687,5 @@ export async function clickProviderTab(renderer: ReactTestRenderer, label: strin
   await act(async () => tab!.props.onClick())
 }
 
-export { AgentsSettingsSection, DEFAULT_MODEL_PROVIDER_ID, ExploreAgentSettingsPanel, LaboratorySettingsSection, PptAgentSettingsPanel, ProviderModelsManager, ProvidersSettingsSection, act, afterEach, antigravityProviderCatalogPatch, beforeEach, createElement, createRenderer, defaultKunRuntimeSettings, defaultModelProviderSettings, describe, enqueueSharedModelMutation, expect, getModelProviderPreset, it, modelProviderPresetAccountProfile, modelProviderPresetProfile, modelProviderTokenPlanProfile, modelProvidersSettingsPatch, renderToStaticMarkup, resetSharedProviderMutationCoordinatorForTests, sharedProviderMutationCoordinator, useChatStore, vi }
+export { AgentsSettingsSection, DEFAULT_MODEL_PROVIDER_ID, FastContextSettingsPanel, LaboratorySettingsSection, PptAgentSettingsPanel, ProviderModelsManager, ProvidersSettingsSection, act, afterEach, antigravityProviderCatalogPatch, beforeEach, createElement, createRenderer, defaultKunRuntimeSettings, defaultModelProviderSettings, describe, enqueueSharedModelMutation, expect, getModelProviderPreset, it, modelProviderPresetAccountProfile, modelProviderPresetProfile, modelProviderTokenPlanProfile, modelProvidersSettingsPatch, renderToStaticMarkup, resetSharedProviderMutationCoordinatorForTests, sharedProviderMutationCoordinator, useChatStore, vi }
 export type { AntigravitySubscriptionModelCatalog, ClaudeSubscriptionProbeResult, CursorSubscriptionModel, KunLabSettingsV1, ModelProviderModelGroup, ModelProviderModelProfileV1, ModelProviderProbeResult, ModelProviderProfileV1, ModelsDevCatalogResult, ReactTestInstance, ReactTestRenderer }

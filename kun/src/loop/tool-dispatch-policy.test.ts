@@ -41,15 +41,15 @@ describe('tool dispatch policy', () => {
   it('keeps native multi-call delegation for delegate_task only', () => {
     const delegated = policy('auto', {
       delegate_task: 'delegation',
-      explore_agent: 'delegation'
+      fast_context: 'delegation'
     })
 
     expect(classifyToolDispatchLane(call('delegate_task'), delegated)).toBe('delegation')
-    expect(classifyToolDispatchLane(call('explore_agent'), delegated)).toBe('serial')
+    expect(classifyToolDispatchLane(call('fast_context'), delegated)).toBe('serial')
     expect(isParallelDelegationCall(call('delegate_task'), delegated)).toBe(true)
-    expect(isParallelDelegationCall(call('explore_agent'), delegated)).toBe(false)
+    expect(isParallelDelegationCall(call('fast_context'), delegated)).toBe(false)
     expect(isParallelDelegationCall(call('delegate_task'), policy('auto', { delegate_task: 'built-in' }))).toBe(false)
-    expect(isParallelDelegationCall(call('explore_agent'), policy('auto', { explore_agent: 'built-in' }))).toBe(false)
+    expect(isParallelDelegationCall(call('fast_context'), policy('auto', { fast_context: 'built-in' }))).toBe(false)
   })
 
   it.each(['always', 'untrusted', 'never'] as const)(
@@ -58,11 +58,11 @@ describe('tool dispatch policy', () => {
       const current = policy(approvalPolicy, {
         read: 'built-in',
         delegate_task: 'delegation',
-        explore_agent: 'delegation'
+        fast_context: 'delegation'
       })
       expect(classifyToolDispatchLane(call('read'), current)).toBe('serial')
       expect(classifyToolDispatchLane(call('delegate_task'), current)).toBe('serial')
-      expect(classifyToolDispatchLane(call('explore_agent'), current)).toBe('serial')
+      expect(classifyToolDispatchLane(call('fast_context'), current)).toBe('serial')
       expect(isParallelSafeToolCall(call('read'), current)).toBe(false)
     }
   )
@@ -97,16 +97,16 @@ describe('tool dispatch policy', () => {
     expect(collectParallelToolDispatchCandidates({ calls, startIndex: 9, policy: current })).toBeNull()
   })
 
-  it('does not batch explore_agent calls outside their internal task batch', () => {
+  it('does not batch fast_context calls outside their internal task batch', () => {
     const current = policy('auto', {
-      explore_agent: 'delegation',
+      fast_context: 'delegation',
       delegate_task: 'delegation',
       read: 'built-in'
     })
     const calls = [
-      call('explore_agent', 'explore_1'),
-      call('explore_agent', 'explore_2'),
-      call('explore_agent', 'explore_3'),
+      call('fast_context', 'explore_1'),
+      call('fast_context', 'explore_2'),
+      call('fast_context', 'explore_3'),
       call('read', 'read_1')
     ]
 
@@ -116,14 +116,14 @@ describe('tool dispatch policy', () => {
       .toEqual({ lane: 'read_only', calls: calls.slice(3) })
   })
 
-  it('stops delegate_task batches at an explore_agent boundary', () => {
+  it('stops delegate_task batches at an fast_context boundary', () => {
     const current = policy('auto', {
-      explore_agent: 'delegation',
+      fast_context: 'delegation',
       delegate_task: 'delegation'
     })
     const calls = [
       call('delegate_task', 'delegate_1'),
-      call('explore_agent', 'explore_1'),
+      call('fast_context', 'explore_1'),
       call('delegate_task', 'delegate_2')
     ]
 

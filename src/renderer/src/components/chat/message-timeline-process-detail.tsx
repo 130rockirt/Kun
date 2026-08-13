@@ -263,7 +263,7 @@ export function summarizeToolBlock(
     return summarizeBackgroundShellToolBlock(block, t)
   }
 
-  if (toolName === 'explore_agent') {
+  if (toolName === 'fast_context' || toolName === 'explore_agent') {
     const payload = parseToolBlockPayload(block)
     const title =
       (typeof payload.title === 'string' && payload.title.trim() ? payload.title.trim() : undefined) ||

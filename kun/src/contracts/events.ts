@@ -133,7 +133,10 @@ const RuntimeEventBase = z.object({
     childLabel: z.string().optional(),
     childStatus: z.enum(['queued', 'running', 'completed', 'failed', 'aborted']),
     childSeq: z.number().int().nonnegative(),
-    childLauncher: z.enum(['delegate_task', 'explore_agent', 'ppt_agent', 'component_design', 'graph']).optional(),
+    childLauncher: z.preprocess(
+      (value) => (value === 'explore_agent' ? 'fast_context' : value),
+      z.enum(['delegate_task', 'fast_context', 'ppt_agent', 'component_design', 'graph'])
+    ).optional(),
     childTerminationReason: z.enum(['user_stop', 'manual_stop', 'runtime_restart', 'child_error']).optional(),
     resumable: z.boolean().optional(),
     resumeCount: z.number().int().nonnegative().optional(),

@@ -292,14 +292,14 @@ describe('SubagentCallCard route metadata', () => {
     expect(onOpenChildThread).toHaveBeenCalledWith('child_renderer')
   })
 
-  it('prefers explore title and live activity on a running explore_agent card', async () => {
+  it('prefers explore title and live activity on a running fast_context card', async () => {
     await act(async () => {
       renderer = create(createElement(SubagentCallCard, {
         block: {
           kind: 'tool',
           id: 'tool_explore_live',
           createdAt: '2026-08-07T00:00:00.000Z',
-          summary: 'explore_agent',
+          summary: 'fast_context',
           status: 'running',
           toolKind: 'tool_call',
           detail: JSON.stringify({
@@ -310,7 +310,7 @@ describe('SubagentCallCard route metadata', () => {
             profile: 'explore'
           }),
           meta: {
-            toolName: 'explore_agent',
+            toolName: 'fast_context',
             child: {
               parentThreadId: 'thread_parent',
               parentTurnId: 'turn_parent',
@@ -337,7 +337,7 @@ describe('SubagentCallCard route metadata', () => {
     expect(instanceText(renderer!.root)).toContain('Explore')
     expect(instanceText(renderer!.root)).toContain('Voice transcription flow')
     expect(instanceText(renderer!.root)).toContain('Reading tool timeline UI · read')
-    expect(instanceText(renderer!.root)).not.toContain('explore_agent')
+    expect(instanceText(renderer!.root)).not.toContain('fast_context')
     expect(instanceText(renderer!.root)).not.toContain('Not recorded')
     const card = renderer!.root.findByProps({ 'data-testid': 'subagent-call-card' })
     expect(card.props['data-activity-label']).toBe('Reading tool timeline UI · read')
@@ -359,7 +359,7 @@ describe('SubagentCallCard route metadata', () => {
           kind: 'tool',
           id: 'tool_explore_done',
           createdAt: '2026-08-07T00:00:00.000Z',
-          summary: 'explore_agent',
+          summary: 'fast_context',
           status: 'success',
           toolKind: 'tool_call',
           detail: JSON.stringify({
@@ -373,7 +373,7 @@ describe('SubagentCallCard route metadata', () => {
             toolInvocations: 5
           }),
           meta: {
-            toolName: 'explore_agent',
+            toolName: 'fast_context',
             child: {
               parentThreadId: 'thread_parent',
               parentTurnId: 'turn_parent',
@@ -421,7 +421,7 @@ describe('SubagentCallCard route metadata', () => {
           kind: 'tool',
           id: 'tool_explore_legacy',
           createdAt: '2026-08-07T00:00:00.000Z',
-          summary: 'explore_agent',
+          summary: 'fast_context',
           status: 'success',
           toolKind: 'tool_call',
           detail: JSON.stringify({
@@ -430,7 +430,7 @@ describe('SubagentCallCard route metadata', () => {
             summary: 'Located save-tokens rendering in FloatingComposer.tsx',
             toolInvocations: 5
           }),
-          meta: { toolName: 'explore_agent' }
+          meta: { toolName: 'fast_context' }
         }
       }))
     })
@@ -438,7 +438,7 @@ describe('SubagentCallCard route metadata', () => {
     const text = instanceText(renderer!.root)
     expect(text).toContain('Explore')
     expect(text).toContain('Located save-tokens rendering in FloatingComposer.tsx')
-    expect(text).not.toMatch(/(^|[^a-z_])explore_agent([^a-z_]|$)/i)
+    expect(text).not.toMatch(/(^|[^a-z_])fast_context([^a-z_]|$)/i)
     expect(text).toContain('Repository Explorer')
     expect(text).not.toContain('Not recorded')
   })
@@ -450,7 +450,7 @@ describe('SubagentCallCard route metadata', () => {
           kind: 'tool',
           id: 'tool_explore_stale',
           createdAt: '2026-08-07T00:00:00.000Z',
-          summary: 'explore_agent',
+          summary: 'fast_context',
           status: 'success',
           toolKind: 'tool_call',
           detail: JSON.stringify({
@@ -460,7 +460,7 @@ describe('SubagentCallCard route metadata', () => {
             toolInvocations: 4
           }),
           meta: {
-            toolName: 'explore_agent',
+            toolName: 'fast_context',
             child: {
               parentThreadId: 'thread_parent',
               parentTurnId: 'turn_parent',
@@ -574,7 +574,7 @@ function exploreChildBlock(input: {
     kind: 'tool',
     id: input.id,
     createdAt: '2026-08-07T00:00:00.000Z',
-    summary: 'explore_agent',
+    summary: 'fast_context',
     status: 'success',
     toolKind: 'tool_call',
     detail: JSON.stringify({
@@ -587,7 +587,7 @@ function exploreChildBlock(input: {
       toolInvocations: 3
     }),
     meta: {
-      toolName: 'explore_agent',
+      toolName: 'fast_context',
       child: {
         parentThreadId: 'thread_parent',
         parentTurnId: 'turn_parent',
@@ -609,7 +609,7 @@ function exploreBatchBlock(): ToolBlock {
     id: 'tool_explore_batch',
     turnId: 'turn_parent',
     createdAt: '2026-08-07T00:00:00.000Z',
-    summary: 'explore_agent',
+    summary: 'fast_context',
     status: 'running',
     toolKind: 'tool_call',
     detail: JSON.stringify({
@@ -656,7 +656,7 @@ function exploreBatchBlock(): ToolBlock {
         }
       ]
     }),
-    meta: { toolName: 'explore_agent' }
+    meta: { toolName: 'fast_context' }
   }
 }
 

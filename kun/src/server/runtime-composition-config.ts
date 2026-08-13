@@ -35,7 +35,7 @@ import {
   DEFAULT_QUALITY_CONFIG,
   buildBuiltinHooks,
   mergeBuiltinSubagentProfiles,
-  buildExploreAgentToolProvider,
+  buildFastContextToolProvider,
   buildPptAgentToolProvider,
   type RuntimeConfigApplyRequest,
   type RuntimeConfigApplyResponse,
@@ -441,9 +441,9 @@ export function createRuntimeConfigController(
 	        tools: [taskGraphTool]
 	      },
 	      ...buildDelegationToolProviders(nextDelegationRuntime, subagentRouter),
-	      ...buildExploreAgentToolProvider(
+	      ...buildFastContextToolProvider(
 	        nextDelegationRuntime,
-	        () => activeOptions.lab?.exploreAgent
+	        () => activeOptions.lab?.fastContext
 	      ),
 	      ...buildPptAgentToolProvider(
 	        nextDelegationRuntime,

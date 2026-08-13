@@ -1,6 +1,6 @@
 import type { ChatBlock, ToolBlock } from '../../agent/types'
 import { blockHasPendingRuntimeWork } from './message-timeline-turns'
-import { isExploreToolBlock } from './explore-card-copy'
+import { isFastContextToolBlock } from './fast-context-card-copy'
 import { describeProcessBlock, getProcessDetail } from './message-timeline-process-detail'
 
 export type ProcessSection = {
@@ -21,6 +21,7 @@ export function isSubagentBlock(block: ChatBlock): boolean {
   return (
     toolName === 'delegate_task' ||
     toolName === 'generate_subagent' ||
+    toolName === 'fast_context' ||
     toolName === 'explore_agent' ||
     toolName === 'ppt_agent'
   )
@@ -46,7 +47,7 @@ export function subagentParentTurnId(block: ChatBlock): string {
 }
 
 export function isExploreSubagentBlock(block: ChatBlock): boolean {
-  return block.kind === 'tool' && isExploreToolBlock(block)
+  return block.kind === 'tool' && isFastContextToolBlock(block)
 }
 
 export function sectionHasExploreBlock(section: ProcessSection): boolean {

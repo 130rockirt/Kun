@@ -199,12 +199,12 @@ describe('MessageTimeline tool summaries', () => {
     expect(find).toBe('Find *.ts · /tmp/src')
   })
 
-  it('summarizes explore_agent with its short UI title', () => {
+  it('summarizes fast_context with its short UI title', () => {
     expect(
       summarizeToolBlock(
         toolBlock({
-          summary: 'explore_agent',
-          meta: { toolName: 'explore_agent' },
+          summary: 'fast_context',
+          meta: { toolName: 'fast_context' },
           detail: JSON.stringify({
             title: 'Voice transcription flow',
             query: 'Trace speech transcription wiring'
@@ -386,13 +386,13 @@ describe('MessageTimeline tool summaries', () => {
     ])
   })
 
-  it('keeps sibling explore_agent calls as independent subagent sections', () => {
+  it('keeps sibling fast_context calls as independent subagent sections', () => {
     const sections = groupProcessSections([
       toolBlock({
         id: 'explore_1',
         summary: 'explore packaging',
         meta: {
-          toolName: 'explore_agent',
+          toolName: 'fast_context',
           child: {
             parentThreadId: 'thread_parent',
             parentTurnId: 'turn_1',
@@ -406,7 +406,7 @@ describe('MessageTimeline tool summaries', () => {
         id: 'explore_2',
         summary: 'explore workflow',
         meta: {
-          toolName: 'explore_agent',
+          toolName: 'fast_context',
           child: {
             parentThreadId: 'thread_parent',
             parentTurnId: 'turn_1',
@@ -420,7 +420,7 @@ describe('MessageTimeline tool summaries', () => {
         id: 'explore_3',
         summary: 'explore runtime',
         meta: {
-          toolName: 'explore_agent',
+          toolName: 'fast_context',
           child: {
             parentThreadId: 'thread_parent',
             parentTurnId: 'turn_1',

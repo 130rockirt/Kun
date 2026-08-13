@@ -157,7 +157,7 @@ export function childLifecycleToolEventFromRuntimeEvent(event: CoreRuntimeEventJ
       detached: child.detached === true,
       resumable: child.resumable === true,
       resumeCount: child.resumeCount ?? 0,
-      launcher: child.childLauncher,
+      launcher: (child.childLauncher as string | undefined) === 'explore_agent' ? 'fast_context' : child.childLauncher,
       terminationReason: child.childTerminationReason,
       parentTurnId: child.parentTurnId
     }),

@@ -88,7 +88,7 @@ export const GENERAL_PROFILE: SubagentProfileConfig = {
 }
 
 /**
- * Fast read-only explorer: finds files, greps for keywords and answers
+ * Fast Context read-only retriever: finds files, greps for keywords and answers
  * questions about the codebase. Never edits (toolPolicy `readOnly`).
  */
 export const EXPLORE_PROFILE: SubagentProfileConfig = {
@@ -96,9 +96,9 @@ export const EXPLORE_PROFILE: SubagentProfileConfig = {
   toolPolicy: 'readOnly',
   skillsEnabled: false,
   blockedTools: ['delegate_task', 'generate_subagent', 'load_skill'],
-  description: '只读探索代理:快速查找文件、搜索关键字、回答关于代码库的问题,不修改任何文件。',
+  description: 'Fast Context 只读检索:快速查找文件、搜索关键字、回答关于代码库的问题,不修改任何文件。',
   systemPrompt: [
-    '你是 Kun 内置的「探索代理」(Explore),一个快速的只读代码库代理。',
+    '你是 Kun 内置的 Fast Context 检索代理,一个快速的只读代码库代理。',
     '你只读取/搜索/列目录,绝不修改任何文件。',
     '当需要按模式快速查找文件、搜索代码关键字、或回答关于代码库的问题时使用你。',
     '高效定位相关位置,返回结论(文件:行 + 简要说明),不做与任务无关的展开。'

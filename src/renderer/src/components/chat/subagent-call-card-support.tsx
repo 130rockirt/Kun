@@ -24,18 +24,18 @@ export const KNOWN_POSE_IDS = new Set([
   'summary'
 ])
 
-/** Parsed shape of the `delegate_task` / `explore_agent` tool `detail` JSON (all optional). */
+/** Parsed shape of the `delegate_task` / `fast_context` tool `detail` JSON (all optional). */
 export type DelegateDetail = {
   /** The child thread id — always present in the tool result, unlike `meta.child`. */
   childId?: string
   parentThreadId?: string
   parentTurnId?: string
   status?: 'queued' | 'running' | 'completed' | 'failed' | 'aborted'
-  launcher?: 'delegate_task' | 'explore_agent' | 'ppt_agent' | 'component_design' | 'graph'
+  launcher?: 'delegate_task' | 'fast_context' | 'ppt_agent' | 'component_design' | 'graph'
   terminationReason?: 'user_stop' | 'manual_stop' | 'runtime_restart' | 'child_error'
   resumable?: boolean
   resumeCount?: number
-  /** Short UI title from explore_agent (or early lifecycle updates). */
+  /** Short UI title from fast_context (or early lifecycle updates). */
   title?: string
   /** Narrow explore query from the initial tool arguments payload. */
   query?: string
@@ -115,6 +115,12 @@ export function parseDelegateDetail(detail: string | undefined): DelegateDetail 
       : undefined
   const num = (v: unknown): number | undefined =>
     typeof v === 'number' && Number.isFinite(v) ? v : undefined
+  const launcher = (v: unknown): DelegateDetail['launcher'] =>
+    v === 'delegate_task' || v === 'ppt_agent' || v === 'component_design' || v === 'graph' || v === 'fast_context'
+      ? v
+      : v === 'explore_agent'
+        ? 'fast_context'
+        : undefined
   const evidencePack = parseFastContextEvidencePack(detail)
   const singleTask = evidencePack?.tasks.length === 1 ? evidencePack.tasks[0] : undefined
   const resultRef = recordValue(obj.resultRef) ?? recordValue(child?.resultRef)
@@ -126,13 +132,7 @@ export function parseDelegateDetail(detail: string | undefined): DelegateDetail 
     parentThreadId: str(obj.parentThreadId) ?? str(child?.parentThreadId),
     parentTurnId: str(obj.parentTurnId) ?? str(child?.parentTurnId),
     status: status(obj.status) ?? status(child?.status),
-    launcher: obj.launcher === 'delegate_task' || obj.launcher === 'explore_agent' ||
-      obj.launcher === 'ppt_agent' || obj.launcher === 'component_design' || obj.launcher === 'graph'
-      ? obj.launcher
-      : child?.launcher === 'delegate_task' || child?.launcher === 'explore_agent' ||
-          child?.launcher === 'ppt_agent' || child?.launcher === 'component_design' || child?.launcher === 'graph'
-        ? child.launcher
-      : undefined,
+    launcher: launcher(obj.launcher) ?? launcher(child?.launcher),
     terminationReason: obj.terminationReason === 'user_stop' || obj.terminationReason === 'manual_stop' ||
       obj.terminationReason === 'runtime_restart' || obj.terminationReason === 'child_error'
       ? obj.terminationReason
@@ -339,6 +339,12 @@ export function readChildMeta(block: ChatBlock): ChildMeta {
   if (!child) return {}
   const str = (v: unknown): string | undefined =>
     typeof v === 'string' && v.trim() ? v.trim() : undefined
+  const launcher = (v: unknown): DelegateDetail['launcher'] =>
+    v === 'delegate_task' || v === 'ppt_agent' || v === 'component_design' || v === 'graph' || v === 'fast_context'
+      ? v
+      : v === 'explore_agent'
+        ? 'fast_context'
+        : undefined
   return {
     childId: str(child.childId),
     childLabel: str(child.childLabel),
@@ -347,10 +353,7 @@ export function readChildMeta(block: ChatBlock): ChildMeta {
     childModel: str(child.childModel),
     childStatus: str(child.childStatus),
     childSeq: typeof child.childSeq === 'number' ? child.childSeq : undefined,
-    childLauncher: child.childLauncher === 'delegate_task' || child.childLauncher === 'explore_agent' ||
-      child.childLauncher === 'ppt_agent' || child.childLauncher === 'component_design' || child.childLauncher === 'graph'
-      ? child.childLauncher
-      : undefined,
+    childLauncher: launcher(child.childLauncher),
     childTerminationReason: child.childTerminationReason === 'user_stop' || child.childTerminationReason === 'manual_stop' ||
       child.childTerminationReason === 'runtime_restart' || child.childTerminationReason === 'child_error'
       ? child.childTerminationReason

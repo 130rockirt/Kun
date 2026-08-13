@@ -79,13 +79,16 @@ export const ChildResultRef = z.object({
 }).strict()
 export type ChildResultRef = z.infer<typeof ChildResultRef>
 
-export const ChildRunLauncher = z.enum([
-  'delegate_task',
-  'explore_agent',
-  'ppt_agent',
-  'component_design',
-  'graph'
-])
+export const ChildRunLauncher = z.preprocess(
+  (value) => (value === 'explore_agent' ? 'fast_context' : value),
+  z.enum([
+    'delegate_task',
+    'fast_context',
+    'ppt_agent',
+    'component_design',
+    'graph'
+  ])
+)
 export type ChildRunLauncher = z.infer<typeof ChildRunLauncher>
 
 export const ChildPptWorkflow = z.object({
@@ -117,7 +120,7 @@ export const ChildRunTerminationReason = z.enum([
 export type ChildRunTerminationReason = z.infer<typeof ChildRunTerminationReason>
 
 export function isGenericChildLauncher(launcher: ChildRunLauncher | undefined): boolean {
-  return launcher === 'delegate_task' || launcher === 'explore_agent'
+  return launcher === 'delegate_task' || launcher === 'fast_context'
 }
 
 /** Fast Context results are evidence snapshots, not resumable work sessions. */
@@ -377,7 +380,7 @@ export type ChildRunExecutor = (input: {
   /** Effective Codex service tier for this child's model requests ('fast' = priority). */
   serviceTier?: 'priority'
   returnFormat?: ChildReturnFormat
-  /** Strict budgeted retrieval mode used only by explore_agent. */
+  /** Strict budgeted retrieval mode used only by fast_context. */
   fastContext?: boolean
   /** Original task grouping used to build the structured evidence pack. */
   fastContextTasks?: readonly FastContextTask[]

@@ -1,6 +1,6 @@
 import type { ToolBlock } from '../../agent/types'
 
-const BARE_TOOL_NAMES = /^(delegate_task|explore_agent|generate_subagent)$/i
+const BARE_TOOL_NAMES = /^(delegate_task|fast_context|explore_agent|generate_subagent)$/i
 
 export function isBareSubagentToolName(text: string | undefined | null): boolean {
   const value = text?.trim() ?? ''
@@ -20,9 +20,9 @@ function readDetailString(detail: string | undefined, key: string): string | und
   }
 }
 
-export function isExploreToolBlock(block: ToolBlock): boolean {
+export function isFastContextToolBlock(block: ToolBlock): boolean {
   const toolName = typeof block.meta?.toolName === 'string' ? block.meta.toolName.trim() : ''
-  if (toolName === 'explore_agent') return true
+  if (toolName === 'fast_context' || toolName === 'explore_agent') return true
   if (readDetailString(block.detail, 'profile') === 'explore') return true
   const child = block.meta?.child
   if (child && typeof child === 'object' && !Array.isArray(child)) {
@@ -40,7 +40,7 @@ export function firstUsefulLine(text: string | undefined, max = 48): string | un
   return `${oneLine.slice(0, Math.max(1, max - 1)).trimEnd()}…`
 }
 
-export function resolveExploreTaskTitle(input: {
+export function resolveFastContextTaskTitle(input: {
   childLabel?: string
   title?: string
   query?: string

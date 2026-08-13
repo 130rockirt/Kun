@@ -252,7 +252,7 @@ describe('runtime factory usage carryover', () => {
       expect((await listTools()).map((tool) => tool.name)).not.toEqual(expect.arrayContaining([
         'delegate_task',
         'list_subagent_profiles',
-        'explore_agent',
+        'fast_context',
         'ppt_agent'
       ]))
 
@@ -265,7 +265,7 @@ describe('runtime factory usage carryover', () => {
       expect((await listTools()).map((tool) => tool.name)).toEqual(expect.arrayContaining([
         'delegate_task',
         'list_subagent_profiles',
-        'explore_agent',
+        'fast_context',
         'ppt_agent'
       ]))
     } finally {
@@ -273,7 +273,7 @@ describe('runtime factory usage carryover', () => {
     }
   })
 
-  it('keeps explore_agent advertised across Lab hot-apply toggles', async () => {
+  it('keeps fast_context advertised across Lab hot-apply toggles', async () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'kun-runtime-explore-lab-'))
     tempDirs.push(dataDir)
     const runtime = await createKunServeRuntime({
@@ -289,7 +289,7 @@ describe('runtime factory usage carryover', () => {
       tokenEconomyMode: false,
       insecure: false,
       storage: { backend: 'file' },
-      lab: { exploreAgent: { enabled: true, fast: false }, pptAgent: { enabled: true, fast: false, imageFirst: true } },
+      lab: { fastContext: { enabled: true, fast: false }, pptAgent: { enabled: true, fast: false, imageFirst: true } },
       capabilities: KunCapabilitiesConfig.parse({
         subagents: { enabled: true }
       })
@@ -309,15 +309,15 @@ describe('runtime factory usage carryover', () => {
         abortSignal: new AbortController().signal,
         awaitApproval: async () => 'allow'
       })
-      return tools.some((tool) => tool.name === 'explore_agent')
+      return tools.some((tool) => tool.name === 'fast_context')
     }
 
     try {
       const diagnostics = await runtime.toolDiagnostics?.()
-      expect(diagnostics?.providers.some((provider) => provider.id === 'explore-agent')).toBe(true)
+      expect(diagnostics?.providers.some((provider) => provider.id === 'fast-context')).toBe(true)
       expect(await listExplore()).toBe(true)
 
-      // Any hot-apply previously dropped explore_agent from the rebuilt registry.
+      // Any hot-apply previously dropped fast_context from the rebuilt registry.
       expect(await runtime.applyConfig({
         capabilities: KunCapabilitiesConfig.parse({
           subagents: { enabled: true },
@@ -327,12 +327,12 @@ describe('runtime factory usage carryover', () => {
       expect(await listExplore()).toBe(true)
 
       expect(await runtime.applyConfig({
-        lab: { exploreAgent: { enabled: false, fast: false }, pptAgent: { enabled: true, fast: false, imageFirst: true } }
+        lab: { fastContext: { enabled: false, fast: false }, pptAgent: { enabled: true, fast: false, imageFirst: true } }
       })).toEqual({ ok: true })
       expect(await listExplore()).toBe(false)
 
       expect(await runtime.applyConfig({
-        lab: { exploreAgent: { enabled: true, fast: false }, pptAgent: { enabled: true, fast: false, imageFirst: true } }
+        lab: { fastContext: { enabled: true, fast: false }, pptAgent: { enabled: true, fast: false, imageFirst: true } }
       })).toEqual({ ok: true })
       expect(await listExplore()).toBe(true)
     } finally {
@@ -356,7 +356,7 @@ describe('runtime factory usage carryover', () => {
       tokenEconomyMode: false,
       insecure: false,
       storage: { backend: 'file' },
-      lab: { exploreAgent: { enabled: true, fast: false }, pptAgent: { enabled: true, fast: false, imageFirst: true } },
+      lab: { fastContext: { enabled: true, fast: false }, pptAgent: { enabled: true, fast: false, imageFirst: true } },
       capabilities: KunCapabilitiesConfig.parse({
         subagents: { enabled: true }
       })
@@ -394,12 +394,12 @@ describe('runtime factory usage carryover', () => {
       expect(await listPpt()).toBe(true)
 
       expect(await runtime.applyConfig({
-        lab: { exploreAgent: { enabled: true, fast: false }, pptAgent: { enabled: false, fast: false, imageFirst: true } }
+        lab: { fastContext: { enabled: true, fast: false }, pptAgent: { enabled: false, fast: false, imageFirst: true } }
       })).toEqual({ ok: true })
       expect(await listPpt()).toBe(false)
 
       expect(await runtime.applyConfig({
-        lab: { exploreAgent: { enabled: true, fast: false }, pptAgent: { enabled: true, fast: false, imageFirst: true } }
+        lab: { fastContext: { enabled: true, fast: false }, pptAgent: { enabled: true, fast: false, imageFirst: true } }
       })).toEqual({ ok: true })
       expect(await listPpt()).toBe(true)
     } finally {

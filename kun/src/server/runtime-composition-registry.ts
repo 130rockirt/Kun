@@ -13,7 +13,7 @@ import {
   buildRuntimeCapabilityManifest,
   DEFAULT_APPROVAL_REVIEWER,
   mergeBuiltinSubagentProfiles,
-  buildExploreAgentToolProvider,
+  buildFastContextToolProvider,
   buildPptAgentToolProvider,
   DelegationRuntime,
   FileDelegationStore,
@@ -334,9 +334,9 @@ export function createRuntimeRegistry(
       tools: [taskGraphTool]
     },
     ...buildDelegationToolProviders(delegationRuntime, subagentRouter),
-    ...buildExploreAgentToolProvider(
+    ...buildFastContextToolProvider(
       delegationRuntime,
-      () => core.activeOptions.lab?.exploreAgent
+      () => core.activeOptions.lab?.fastContext
     ),
     ...buildPptAgentToolProvider(
       delegationRuntime,

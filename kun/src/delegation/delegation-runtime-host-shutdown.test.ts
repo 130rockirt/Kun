@@ -37,7 +37,7 @@ describe('DelegationRuntime host shutdown classification', () => {
         parentThreadId: 'parent_thread',
         parentTurnId: 'parent_turn',
         prompt: 'inspect the repository',
-        launcher: 'explore_agent',
+        launcher: 'fast_context',
         signal: parent.signal
       })
       await executionStarted.promise

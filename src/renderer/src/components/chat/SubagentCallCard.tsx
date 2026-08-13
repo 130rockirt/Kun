@@ -17,9 +17,9 @@ import { FastContextEvidenceDetail, FastContextEvidencePill } from './FastContex
 import {
   firstUsefulLine,
   isBareSubagentToolName,
-  isExploreToolBlock,
-  resolveExploreTaskTitle
-} from './explore-card-copy'
+  isFastContextToolBlock,
+  resolveFastContextTaskTitle
+} from './fast-context-card-copy'
 import {
   formatChildActivityLabel,
   readChildActivityFromBlock
@@ -97,16 +97,16 @@ export function SubagentCallCard({
   const generated = detail.generated === true || (child.childProfile?.startsWith('generated:') ?? false)
   const animate = !reducedMotion && onScreen && status === 'running'
   const launcher = child.childLauncher || detail.launcher
-  const isExplore = launcher === 'explore_agent' || (
-    block.kind === 'tool' && isExploreToolBlock(block as ToolBlock)
+  const isFastContext = launcher === 'fast_context' || (launcher as string | undefined) === 'explore_agent' || (
+    block.kind === 'tool' && isFastContextToolBlock(block as ToolBlock)
   )
 
   // Profile id: prefer the live `childProfile` from the runtime metadata (set on
   // the first queued/running event) so the agent type shows immediately; the
   // result-JSON `profile` only arrives after the child completes.
-  const profileId = child.childProfile || detail.profile || (isExplore ? 'explore' : undefined)
+  const profileId = child.childProfile || detail.profile || (isFastContext ? 'explore' : undefined)
   // Pose key: profile → childLabel → block toolName → 'custom'.
-  const poseId = profileId || (isExplore ? 'explore' : undefined) || child.childLabel || child.childId || 'custom'
+  const poseId = profileId || (isFastContext ? 'explore' : undefined) || child.childLabel || child.childId || 'custom'
   const isKnownPose = KNOWN_POSE_IDS.has(poseId)
   const hue = isKnownPose ? null : hashHue(poseId)
 
@@ -120,12 +120,12 @@ export function SubagentCallCard({
     profileId && BUILTIN_AGENT_CATALOG_BY_ID[profileId]
       ? t(`subagentsPanel.role.${profileId}.name`, BUILTIN_AGENT_CATALOG_BY_ID[profileId]!.name)
       : undefined
-  const exploreAgentName = t(
+  const fastContextName = t(
     'subagentsPanel.role.explore.name',
     exploreCatalog?.name ?? 'Repository Explorer'
   )
-  const agentName = isExplore
-    ? (localizedBuiltinName || recordedAgentName || exploreAgentName)
+  const agentName = isFastContext
+    ? (localizedBuiltinName || recordedAgentName || fastContextName)
     : (
       localizedBuiltinName ||
       recordedAgentName ||
@@ -135,12 +135,12 @@ export function SubagentCallCard({
       profileId?.trim() ||
       t('subagentNotRecorded', { defaultValue: 'Not recorded' })
     )
-  const agentIdentity = isExplore
+  const agentIdentity = isFastContext
     ? agentName
     : (profileId && agentName !== profileId ? `${agentName} (${profileId})` : agentName)
   const model = (child.childModel || detail.model || '').trim() || undefined
-  const taskTitle = isExplore
-    ? resolveExploreTaskTitle({
+  const taskTitle = isFastContext
+    ? resolveFastContextTaskTitle({
       childLabel: child.childLabel,
       title: detail.title,
       query: detail.query,
@@ -160,7 +160,7 @@ export function SubagentCallCard({
   const childId = child.childId || detail.childId
   // Short subtitle only — keep CTA on the explicit process button, not in truncated text.
   const taskLine = activityLine || (
-    isExplore && isTerminal(status)
+    isFastContext && isTerminal(status)
       ? (firstUsefulLine(detail.summary, 96) || firstUsefulLine(detail.query, 96) || undefined)
       : (
         detail.summary?.trim() ||
@@ -252,7 +252,7 @@ export function SubagentCallCard({
       style={{ ['--ds-subagent-stagger' as string]: staggerDelay }}
       aria-label={`${taskTitle} · ${agentIdentity}${model ? ` · ${model}` : ''} · ${subagentStatusText(status, t)}`}
       data-testid="subagent-call-card"
-      data-explore={isExplore ? 'true' : 'false'}
+      data-explore={isFastContext ? 'true' : 'false'}
       data-activity-label={activityLine ?? ''}
       data-conclusion-expanded={expanded ? 'true' : 'false'}
     >
@@ -279,8 +279,8 @@ export function SubagentCallCard({
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-2">
-            {isExplore ? <ExploreKindBadge t={t} /> : null}
-            {isExplore ? <FastContextEvidencePill pack={evidencePack} status={status} t={t} /> : null}
+            {isFastContext ? <ExploreKindBadge t={t} /> : null}
+            {isFastContext ? <FastContextEvidencePill pack={evidencePack} status={status} t={t} /> : null}
             <span className="truncate text-[14px] font-semibold text-ds-ink" title={taskTitle}>{taskTitle}</span>
             {generated ? <GeneratedPill t={t} /> : null}
             {detached ? <BackgroundPill t={t} /> : null}
@@ -380,18 +380,18 @@ export function SubagentCallCard({
             }}
             className="flex h-7 shrink-0 items-center gap-1 rounded-md bg-accent/10 px-2 text-[11px] font-semibold text-accent transition hover:bg-accent/15"
             aria-label={
-              isExplore
+              isFastContext
                 ? t('exploreViewProcess', { defaultValue: 'View explore process' })
                 : t('subagentOpenSession')
             }
             title={
-              isExplore
+              isFastContext
                 ? t('exploreViewProcess', { defaultValue: 'View explore process' })
                 : t('subagentOpenSession')
             }
             data-testid="explore-open-process-button"
           >
-            {isExplore
+            {isFastContext
               ? t('exploreViewProcessShort', { defaultValue: 'Open' })
               : t('subagentOpenSessionShort', { defaultValue: 'Open' })}
             <ChevronRight className="h-3.5 w-3.5" strokeWidth={2} />
@@ -420,7 +420,7 @@ export function SubagentCallCard({
               {detail.error}
             </pre>
           ) : detail.summary?.trim() ? (
-            isExplore ? (
+            isFastContext ? (
               <div className="max-h-[360px] overflow-y-auto text-[14px] leading-6 text-ds-ink">
                 <AssistantMarkdown
                   text={detail.summary}
@@ -496,11 +496,11 @@ function splitTaskLine(block: ToolBlock): string | undefined {
   const raw = block.summary?.trim()
   if (!raw) return undefined
   const stripped = raw
-    .replace(/^(delegate_task|explore_agent|generate_subagent)\s*:\s*/i, '')
+    .replace(/^(delegate_task|fast_context|explore_agent|generate_subagent)\s*:\s*/i, '')
     .trim()
   if (!stripped || stripped.length > 160) return undefined
   // Bare tool name (no task text yet, e.g. while running) — nothing useful.
-  if (/^(delegate_task|explore_agent|generate_subagent)$/i.test(stripped)) return undefined
+  if (/^(delegate_task|fast_context|explore_agent|generate_subagent)$/i.test(stripped)) return undefined
   return stripped
 }
 
@@ -549,7 +549,7 @@ export function SubagentGroup({
   if (sorted.length === 0) return null
 
   const allExplore = sorted.every(
-    (b) => b.kind === 'tool' && isExploreToolBlock(b as ToolBlock)
+    (b) => b.kind === 'tool' && isFastContextToolBlock(b as ToolBlock)
   )
 
   // N=1, or an all-explore cluster: full independent cards (no swarm shell).
@@ -651,7 +651,7 @@ export function SubagentGroup({
 }
 
 function expandExploreBatchBlock(block: ChatBlock): ChatBlock[] {
-  if (block.kind !== 'tool' || !isExploreToolBlock(block as ToolBlock)) return [block]
+  if (block.kind !== 'tool' || !isFastContextToolBlock(block as ToolBlock)) return [block]
   const tool = block as ToolBlock
   const children = parseExploreBatchChildren(tool.detail)
   if (children.length === 0) return [block]
@@ -672,7 +672,7 @@ function expandExploreBatchBlock(block: ChatBlock): ChatBlock[] {
     }),
     meta: {
       ...tool.meta,
-      toolName: 'explore_agent',
+      toolName: 'fast_context',
       child: {
         childId: child.childId,
         childLabel: child.title,

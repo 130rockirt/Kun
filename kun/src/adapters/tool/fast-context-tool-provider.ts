@@ -12,10 +12,10 @@ import type { ToolExecutionUpdate, ToolHostContext } from '../../ports/tool-host
 import type { CapabilityToolProvider } from './capability-registry.js'
 import { LocalToolHost } from './local-tool-host.js'
 
-export const EXPLORE_AGENT_TOOL_NAME = 'explore_agent' as const
-export const EXPLORE_AGENT_PROVIDER_ID = 'explore-agent' as const
+export const FAST_CONTEXT_TOOL_NAME = 'fast_context' as const
+export const FAST_CONTEXT_PROVIDER_ID = 'fast-context' as const
 
-export type ExploreAgentToolConfig = {
+export type FastContextToolConfig = {
   enabled?: boolean
   model?: string
   providerId?: string
@@ -24,7 +24,7 @@ export type ExploreAgentToolConfig = {
 }
 
 /** Fast Context's managed source-tool boundary. */
-export const EXPLORE_AGENT_ALLOWED_TOOLS = ['grep', 'glob', 'read'] as const
+export const FAST_CONTEXT_ALLOWED_TOOLS = ['grep', 'glob', 'read'] as const
 
 const FAST_CONTEXT_LABEL = 'Fast Context retrieval'
 const FAST_CONTEXT_SYSTEM_PROMPT = [
@@ -32,7 +32,7 @@ const FAST_CONTEXT_SYSTEM_PROMPT = [
   'You may only use grep, glob, and read. Do not use shell, web, repo maps, skills, mutation, or delegation.',
   'Keep source inspection narrow and return concise task conclusions with file-and-line evidence.'
 ].join(' ')
-const EXPLORE_AGENT_PROMPT_PREAMBLE = [
+const FAST_CONTEXT_PROMPT_PREAMBLE = [
   'You are Kun’s budgeted repository retrieval agent.',
   'Use only grep, glob, and read. Use rounds 1-3 to locate candidates, target those paths, and read small relevant ranges.',
   'Round 4 is final synthesis only: do not call a tool during that round.',
@@ -40,30 +40,30 @@ const EXPLORE_AGENT_PROMPT_PREAMBLE = [
   'Finish with concise sections headed “Task 1:”, “Task 2:”, and so on. State uncertainty when source evidence is incomplete.'
 ].join(' ')
 
-const EXPLORE_AGENT_DESCRIPTION = [
+const FAST_CONTEXT_DESCRIPTION = [
   'Run a Fast Context repository retrieval before broad code exploration. Submit 1-4 scoped tasks together; one budgeted child investigates them as a single retrieval run.',
   'The child can only use grep, glob, and read, has at most four model steps and eight source calls per step, and returns compact file-and-line evidence instead of raw search output.',
-  'Use a later explore_agent call for questions that depend on this evidence. 即使后续需要修改文件，也必须先调用 explore_agent；复杂问题请在一个批次中提交 2-4 个互不重叠的任务。'
+  'Use a later fast_context call for questions that depend on this evidence. 即使后续需要修改文件，也必须先调用 fast_context；复杂问题请在一个批次中提交 2-4 个互不重叠的任务。'
 ].join(' ')
 
 /**
  * First-class budgeted repository retriever. `tasks` remains a 1-4 item API,
  * but all tasks share one child and one global source-tool budget.
  */
-export function buildExploreAgentToolProvider(
+export function buildFastContextToolProvider(
   runtime: DelegationRuntime | undefined,
-  config: () => ExploreAgentToolConfig | undefined
+  config: () => FastContextToolConfig | undefined
 ): CapabilityToolProvider[] {
   if (!runtime?.enabled()) return []
   const shouldAdvertise = (_context: ToolHostContext): boolean => config()?.enabled !== false
   return [{
-    id: EXPLORE_AGENT_PROVIDER_ID,
+    id: FAST_CONTEXT_PROVIDER_ID,
     kind: 'delegation',
     enabled: true,
     available: true,
     tools: [LocalToolHost.defineTool({
-      name: EXPLORE_AGENT_TOOL_NAME,
-      description: EXPLORE_AGENT_DESCRIPTION,
+      name: FAST_CONTEXT_TOOL_NAME,
+      description: FAST_CONTEXT_DESCRIPTION,
       inputSchema: {
         type: 'object',
         properties: {
@@ -87,7 +87,7 @@ export function buildExploreAgentToolProvider(
       shouldAdvertise,
       execute: async (args, context, onUpdate) => {
         const cfg = config()
-        if (cfg?.enabled === false) return { output: { error: 'explore_agent is disabled in Lab settings' }, isError: true }
+        if (cfg?.enabled === false) return { output: { error: 'fast_context is disabled in Lab settings' }, isError: true }
         const parsed = parseExploreTasks(args.tasks)
         if ('error' in parsed) return { output: { error: parsed.error }, isError: true }
         // The model never chooses a sandbox root. It may only retrieve inside
@@ -99,11 +99,11 @@ export function buildExploreAgentToolProvider(
           const record = await runtime.runChild({
             parentThreadId: context.threadId,
             parentTurnId: context.turnId,
-            launcher: 'explore_agent',
+            launcher: 'fast_context',
             label: FAST_CONTEXT_LABEL,
             prompt: fastContextPrompt(parsed.tasks),
             workspace,
-            inlineProfile: buildExploreInlineProfile(cfg ?? {}),
+            inlineProfile: buildFastContextInlineProfile(cfg ?? {}),
             agentSurface: context.agentSurface ?? 'code',
             inheritSessionDefaults: true,
             ...(cfg?.fast === true ? { serviceTier: 'priority' as const } : {}),
@@ -146,7 +146,7 @@ type FastContextOutput = {
   childId?: string
   label: string
   title: string
-  launcher: 'explore_agent'
+  launcher: 'fast_context'
   profile: 'explore'
   profileName: string
   model?: string
@@ -167,7 +167,7 @@ type FastContextOutput = {
     model?: string
     parentThreadId?: string
     parentTurnId?: string
-    launcher: 'explore_agent'
+    launcher: 'fast_context'
   }
 }
 
@@ -198,14 +198,14 @@ class FastContextRunState {
       model: this.model,
       parentThreadId: record?.parentThreadId,
       parentTurnId: record?.parentTurnId,
-      launcher: 'explore_agent' as const
+      launcher: 'fast_context' as const
     })
     return compact({
       status: this.status,
       childId: this.childId,
       label: FAST_CONTEXT_LABEL,
       title: FAST_CONTEXT_LABEL,
-      launcher: 'explore_agent' as const,
+      launcher: 'fast_context' as const,
       profile: 'explore' as const,
       profileName: this.profileName,
       model: this.model,
@@ -262,7 +262,7 @@ class FastContextRunState {
   }
 }
 
-function buildExploreInlineProfile(cfg: ExploreAgentToolConfig): { id: string; profile: SubagentProfileConfig; source: 'builtin' } {
+function buildFastContextInlineProfile(cfg: FastContextToolConfig): { id: string; profile: SubagentProfileConfig; source: 'builtin' } {
   const model = cfg.model?.trim()
   const providerId = cfg.providerId?.trim()
   const reasoningEffort = ModelReasoningEffort.safeParse(cfg.reasoningEffort).success ? cfg.reasoningEffort : undefined
@@ -270,10 +270,10 @@ function buildExploreInlineProfile(cfg: ExploreAgentToolConfig): { id: string; p
     id: 'explore', source: 'builtin',
     profile: {
       mode: 'subagent', toolPolicy: 'readOnly', skillsEnabled: false,
-      allowedTools: [...EXPLORE_AGENT_ALLOWED_TOOLS],
+      allowedTools: [...FAST_CONTEXT_ALLOWED_TOOLS],
       blockedTools: ['delegate_task', 'generate_subagent', 'load_skill'],
       systemPrompt: FAST_CONTEXT_SYSTEM_PROMPT,
-      promptPreamble: EXPLORE_AGENT_PROMPT_PREAMBLE,
+      promptPreamble: FAST_CONTEXT_PROMPT_PREAMBLE,
       ...(model && providerId ? { model, providerId } : {}),
       ...(reasoningEffort ? { reasoningEffort } : {})
     }

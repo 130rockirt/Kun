@@ -53,11 +53,11 @@ function compatibleReasoningEffort(
 }
 
 /**
- * Lab → 探索代理 panel. Configures the first-class `explore_agent` tool:
+ * Lab → Fast Context panel. Configures the first-class `fast_context` tool:
  * a master switch plus an optional model/provider/reasoning/fast override.
  * Empty model + providerId means "follow the main session model".
  */
-export function ExploreAgentSettingsPanel({
+export function FastContextSettingsPanel({
   t,
   value,
   modelProviders,
@@ -74,7 +74,7 @@ export function ExploreAgentSettingsPanel({
   selectControlClass: string
   onChange: (patch: KunLabSettingsPatchV1) => void
 }): ReactElement {
-  const agent = value.exploreAgent
+  const agent = value.fastContext
   const fixed = Boolean(agent.model?.trim() && agent.providerId?.trim())
   const providerId = fixed ? agent.providerId : leadProviderId
   const provider = modelProviders.find((candidate) => candidate.id === providerId) ?? modelProviders[0]
@@ -95,7 +95,7 @@ export function ExploreAgentSettingsPanel({
           control={
             <Toggle
               checked={agent.enabled}
-              onChange={(enabled) => onChange({ exploreAgent: { enabled } })}
+              onChange={(enabled) => onChange({ fastContext: { enabled } })}
             />
           }
         />
@@ -111,7 +111,7 @@ export function ExploreAgentSettingsPanel({
                   onChange={(event) => {
                     if (event.target.value === 'inherit') {
                       onChange({
-                        exploreAgent: {
+                        fastContext: {
                           model: '',
                           providerId: '',
                           reasoningEffort: undefined,
@@ -125,7 +125,7 @@ export function ExploreAgentSettingsPanel({
                       ? leadModel
                       : provider?.models?.[0] ?? leadModel
                     onChange({
-                      exploreAgent: {
+                      fastContext: {
                         model,
                         providerId,
                         reasoningEffort: undefined,
@@ -157,7 +157,7 @@ export function ExploreAgentSettingsPanel({
                           ? model
                           : nextProvider?.models?.[0] ?? model
                         onChange({
-                          exploreAgent: {
+                          fastContext: {
                             model: nextModel,
                             providerId: nextProviderId,
                             reasoningEffort: compatibleReasoningEffort(
@@ -183,7 +183,7 @@ export function ExploreAgentSettingsPanel({
                       onChange={(nextModel) => {
                         const trimmed = nextModel.trim()
                         onChange({
-                          exploreAgent: {
+                          fastContext: {
                             model: trimmed || model,
                             providerId: provider?.id ?? providerId,
                             reasoningEffort: compatibleReasoningEffort(
@@ -209,7 +209,7 @@ export function ExploreAgentSettingsPanel({
                     className={selectControlClass}
                     value={agent.reasoningEffort ?? ''}
                     onChange={(event) => onChange({
-                      exploreAgent: {
+                      fastContext: {
                         reasoningEffort: event.target.value
                           ? event.target.value as ModelReasoningEffort
                           : undefined
@@ -234,7 +234,7 @@ export function ExploreAgentSettingsPanel({
                   <Toggle
                     checked={agent.fast === true && fastSupported}
                     disabled={!fastSupported}
-                    onChange={(fast) => onChange({ exploreAgent: { fast } })}
+                    onChange={(fast) => onChange({ fastContext: { fast } })}
                   />
                 }
               />

@@ -2,56 +2,57 @@ import { describe, expect, it } from 'vitest'
 import type { ToolBlock } from '../../agent/types'
 import {
   isBareSubagentToolName,
-  isExploreToolBlock,
-  resolveExploreTaskTitle
-} from './explore-card-copy'
+  isFastContextToolBlock,
+  resolveFastContextTaskTitle
+} from './fast-context-card-copy'
 
-describe('explore-card-copy', () => {
+describe('fast-context-card-copy', () => {
   it('rejects bare tool names as titles', () => {
+    expect(isBareSubagentToolName('fast_context')).toBe(true)
     expect(isBareSubagentToolName('explore_agent')).toBe(true)
     expect(isBareSubagentToolName('delegate_task')).toBe(true)
     expect(isBareSubagentToolName('Voice transcription flow')).toBe(false)
   })
 
-  it('detects explore tool blocks by tool name or profile', () => {
+  it('detects fast context tool blocks by tool name or profile', () => {
     const byName: ToolBlock = {
       kind: 'tool',
       id: 't1',
       createdAt: '2026-08-07T00:00:00.000Z',
-      summary: 'explore_agent',
+      summary: 'fast_context',
       status: 'running',
       toolKind: 'tool_call',
-      meta: { toolName: 'explore_agent' }
+      meta: { toolName: 'fast_context' }
     }
-    expect(isExploreToolBlock(byName)).toBe(true)
+    expect(isFastContextToolBlock(byName)).toBe(true)
 
     const byProfile: ToolBlock = {
       ...byName,
       meta: { toolName: 'delegate_task' },
       detail: JSON.stringify({ profile: 'explore', title: 'Find tokens' })
     }
-    expect(isExploreToolBlock(byProfile)).toBe(true)
+    expect(isFastContextToolBlock(byProfile)).toBe(true)
   })
 
-  it('resolves a human title and never falls back to explore_agent', () => {
-    expect(resolveExploreTaskTitle({
-      blockSummary: 'explore_agent',
-      fallback: 'Explore task'
-    })).toBe('Explore task')
+  it('resolves a human title and never falls back to fast_context', () => {
+    expect(resolveFastContextTaskTitle({
+      blockSummary: 'fast_context',
+      fallback: 'Fast Context task'
+    })).toBe('Fast Context task')
 
-    expect(resolveExploreTaskTitle({
+    expect(resolveFastContextTaskTitle({
       childLabel: undefined,
       title: undefined,
       query: 'Locate where save tokens is rendered',
       summary: 'found FloatingComposer.tsx',
-      blockSummary: 'explore_agent',
-      fallback: 'Explore task'
+      blockSummary: 'fast_context',
+      fallback: 'Fast Context task'
     })).toBe('Locate where save tokens is rendered')
 
-    expect(resolveExploreTaskTitle({
+    expect(resolveFastContextTaskTitle({
       title: 'Token save label',
       query: 'longer query text',
-      fallback: 'Explore task'
+      fallback: 'Fast Context task'
     })).toBe('Token save label')
   })
 })

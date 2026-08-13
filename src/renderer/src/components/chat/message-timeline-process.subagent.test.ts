@@ -3,15 +3,15 @@ import type { ChatBlock } from '../../agent/types'
 import { isSubagentBlock } from './message-timeline-process'
 
 describe('isSubagentBlock', () => {
-  it('recognizes explore_agent even before child metadata arrives', () => {
+  it('recognizes fast_context even before child metadata arrives', () => {
     const block: ChatBlock = {
       kind: 'tool',
       id: 'tool_explore',
       createdAt: '2026-08-07T00:00:00.000Z',
-      summary: 'explore_agent',
+      summary: 'fast_context',
       status: 'running',
       toolKind: 'tool_call',
-      meta: { toolName: 'explore_agent' }
+      meta: { toolName: 'fast_context' }
     }
     expect(isSubagentBlock(block)).toBe(true)
   })

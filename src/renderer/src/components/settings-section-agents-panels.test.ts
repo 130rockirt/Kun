@@ -1,6 +1,6 @@
 import {
   AgentsSettingsSection,
-  ExploreAgentSettingsPanel,
+  FastContextSettingsPanel,
   LaboratorySettingsSection,
   PptAgentSettingsPanel,
   act,
@@ -231,9 +231,9 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
     expect(update).toHaveBeenCalledWith({ codeAgentPersonaEnabled: false })
   })
 
-  it('renders the explore_agent lab panel and gates fast mode on Codex priority models', () => {
+  it('renders the fast_context lab panel and gates fast mode on Codex priority models', () => {
     const renderPanel = (value: KunLabSettingsV1) => renderToStaticMarkup(createElement(
-      ExploreAgentSettingsPanel,
+      FastContextSettingsPanel,
       {
         t,
         value,
@@ -246,15 +246,15 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
     ))
 
     const followMain = renderPanel({
-      exploreAgent: { enabled: true, model: '', providerId: '', fast: false },
+      fastContext: { enabled: true, model: '', providerId: '', fast: false },
       pptAgent: { enabled: true, model: '', providerId: '', fast: false, imageFirst: true }
     })
-    expect(followMain).toContain('Enable explore_agent')
+    expect(followMain).toContain('Enable fast_context')
     expect(followMain).toContain('Follow main model')
     expect(followMain).not.toContain('Codex Fast mode')
 
     const fixed = renderPanel({
-      exploreAgent: { enabled: true, model: 'deepseek-v4-pro', providerId: 'deepseek', fast: false },
+      fastContext: { enabled: true, model: 'deepseek-v4-pro', providerId: 'deepseek', fast: false },
       pptAgent: { enabled: true, model: '', providerId: '', fast: false, imageFirst: true }
     })
     expect(fixed).toContain('Use fixed model')
@@ -262,7 +262,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
     expect(fixed).toContain('Codex Fast mode')
 
     const disabled = renderPanel({
-      exploreAgent: { enabled: false, model: '', providerId: '', fast: false },
+      fastContext: { enabled: false, model: '', providerId: '', fast: false },
       pptAgent: { enabled: true, model: '', providerId: '', fast: false, imageFirst: true }
     })
     expect(disabled).not.toContain('Follow main model')
@@ -283,7 +283,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
     ))
 
     const followMain = renderPanel({
-      exploreAgent: { enabled: true, model: '', providerId: '', fast: false },
+      fastContext: { enabled: true, model: '', providerId: '', fast: false },
       pptAgent: { enabled: true, model: '', providerId: '', fast: false, imageFirst: true }
     })
     expect(followMain).toContain('Enable ppt_agent')
@@ -291,7 +291,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
     expect(followMain).not.toContain('Codex Fast mode')
 
     const fixed = renderPanel({
-      exploreAgent: { enabled: true, model: '', providerId: '', fast: false },
+      fastContext: { enabled: true, model: '', providerId: '', fast: false },
       pptAgent: { enabled: true, model: 'deepseek-v4-pro', providerId: 'deepseek', fast: false, imageFirst: true }
     })
     expect(fixed).toContain('Use fixed model')
@@ -299,7 +299,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
     expect(fixed).toContain('Codex Fast mode')
 
     const disabled = renderPanel({
-      exploreAgent: { enabled: true, model: '', providerId: '', fast: false },
+      fastContext: { enabled: true, model: '', providerId: '', fast: false },
       pptAgent: { enabled: false, model: '', providerId: '', fast: false, imageFirst: true }
     })
     expect(disabled).not.toContain('Follow main model')
@@ -333,9 +333,9 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
     const mount = async (): Promise<ReactTestRenderer> => {
       let renderer: ReactTestRenderer
       await act(async () => {
-        renderer = createRenderer(createElement(ExploreAgentSettingsPanel, {
+        renderer = createRenderer(createElement(FastContextSettingsPanel, {
           t,
-          value: { exploreAgent: { enabled: true, model: 'gpt-5.4', providerId: 'codex-2', fast: true }, pptAgent: { enabled: true, model: '', providerId: '', fast: false, imageFirst: true } },
+          value: { fastContext: { enabled: true, model: 'gpt-5.4', providerId: 'codex-2', fast: true }, pptAgent: { enabled: true, model: '', providerId: '', fast: false, imageFirst: true } },
           modelProviders,
           leadProviderId: 'codex-2',
           leadModel: 'gpt-5.4',

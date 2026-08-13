@@ -95,7 +95,7 @@ function fastContextBlock(status: 'running' | 'completed'): ToolBlock {
     id: 'tool_fast_context',
     turnId: 'turn_parent',
     createdAt: '2026-08-13T00:00:00.000Z',
-    summary: 'explore_agent',
+    summary: 'fast_context',
     status: status === 'completed' ? 'success' : 'running',
     toolKind: 'tool_call',
     detail: JSON.stringify({
@@ -132,7 +132,7 @@ function fastContextBlock(status: 'running' | 'completed'): ToolBlock {
         uncertainties: []
       }
     }),
-    meta: { toolName: 'explore_agent' }
+    meta: { toolName: 'fast_context' }
   }
 }
 

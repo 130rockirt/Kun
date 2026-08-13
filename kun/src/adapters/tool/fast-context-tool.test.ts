@@ -19,11 +19,11 @@ import {
 import type { FastContextTask } from '../../delegation/fast-context-evidence.js'
 import { SubagentsCapabilityConfig } from '../../contracts/capabilities.js'
 import {
-  EXPLORE_AGENT_ALLOWED_TOOLS,
-  EXPLORE_AGENT_PROVIDER_ID,
-  EXPLORE_AGENT_TOOL_NAME,
-  buildExploreAgentToolProvider
-} from './explore-agent-tool-provider.js'
+  FAST_CONTEXT_ALLOWED_TOOLS,
+  FAST_CONTEXT_PROVIDER_ID,
+  FAST_CONTEXT_TOOL_NAME,
+  buildFastContextToolProvider
+} from './fast-context-tool-provider.js'
 
 function makeRuntime(dir: string, executor: ChildRunExecutor): DelegationRuntime {
   const nowIso = () => '2026-08-13T00:00:00.000Z'
@@ -66,16 +66,16 @@ function evidencePack(input: readonly FastContextTask[]) {
   }
 }
 
-describe('explore_agent Fast Context provider', () => {
+describe('fast_context Fast Context provider', () => {
   let dir: string | undefined
   afterEach(async () => { if (dir) await rm(dir, { recursive: true, force: true }) })
 
   it('retains the Lab gate and 1-4 task schema while advertising only Fast Context semantics', async () => {
-    dir = await mkdtemp(join(tmpdir(), 'explore-agent-tool-'))
+    dir = await mkdtemp(join(tmpdir(), 'fast-context-tool-'))
     const runtime = makeRuntime(dir, async () => ({ summary: 'ok' }))
-    const provider = buildExploreAgentToolProvider(runtime, () => ({ enabled: true }))[0]
-    expect(provider.id).toBe(EXPLORE_AGENT_PROVIDER_ID)
-    expect(provider.tools[0]?.name).toBe(EXPLORE_AGENT_TOOL_NAME)
+    const provider = buildFastContextToolProvider(runtime, () => ({ enabled: true }))[0]
+    expect(provider.id).toBe(FAST_CONTEXT_PROVIDER_ID)
+    expect(provider.tools[0]?.name).toBe(FAST_CONTEXT_TOOL_NAME)
     expect(provider.tools[0]?.sideEffect).toBe('read-only')
     expect(provider.tools[0]?.shouldAdvertise?.(baseContext)).toBe(true)
     expect(provider.tools[0]?.description).toContain('one budgeted child')
@@ -83,15 +83,15 @@ describe('explore_agent Fast Context provider', () => {
       properties: { tasks: { type: 'array', minItems: 1, maxItems: 4, items: { required: ['title', 'query'] } } }, required: ['tasks']
     })
     expect((provider.tools[0]?.inputSchema as { properties?: Record<string, unknown> }).properties).not.toHaveProperty('workspace')
-    const disabled = buildExploreAgentToolProvider(runtime, () => ({ enabled: false }))[0]?.tools[0]
+    const disabled = buildFastContextToolProvider(runtime, () => ({ enabled: false }))[0]?.tools[0]
     expect(disabled?.shouldAdvertise?.(baseContext)).toBe(false)
   })
 
   it('rejects malformed batches before allocating a child', async () => {
-    dir = await mkdtemp(join(tmpdir(), 'explore-agent-tool-'))
+    dir = await mkdtemp(join(tmpdir(), 'fast-context-tool-'))
     let runs = 0
     const runtime = makeRuntime(dir, async () => { runs += 1; return { summary: 'ok' } })
-    const tool = buildExploreAgentToolProvider(runtime, () => ({ enabled: true }))[0]!.tools[0]!
+    const tool = buildFastContextToolProvider(runtime, () => ({ enabled: true }))[0]!.tools[0]!
     for (const args of [{}, { tasks: [] }, { tasks: Array.from({ length: 5 }, () => ({ title: 'x', query: 'x' })) }, { tasks: [{ title: 'x' }] }]) {
       const result = await tool.execute(args, baseContext)
       expect(result.isError).toBe(true)
@@ -100,7 +100,7 @@ describe('explore_agent Fast Context provider', () => {
   })
 
   it('merges every task into one strict Fast Context child and returns only its compact evidence pack', async () => {
-    dir = await mkdtemp(join(tmpdir(), 'explore-agent-tool-'))
+    dir = await mkdtemp(join(tmpdir(), 'fast-context-tool-'))
     let received: Record<string, unknown> | undefined
     let runs = 0
     const runtime = makeRuntime(dir, async (input) => {
@@ -108,14 +108,14 @@ describe('explore_agent Fast Context provider', () => {
       received = { ...input, signal: undefined }
       return { summary: 'Task 1: first\nTask 2: second', toolInvocations: 3, evidencePack: evidencePack(input.fastContextTasks ?? []) }
     })
-    const tool = buildExploreAgentToolProvider(runtime, () => ({ enabled: true }))[0]!.tools[0]!
+    const tool = buildFastContextToolProvider(runtime, () => ({ enabled: true }))[0]!.tools[0]!
     const updates: Record<string, unknown>[] = []
     const result = await tool.execute({ tasks: tasks(), workspace: '/' }, baseContext, async (update) => { updates.push(update.output as Record<string, unknown>) })
 
     expect(runs).toBe(1)
     expect(result.isError).toBeFalsy()
     expect(result.output).toMatchObject({
-      status: 'completed', label: 'Fast Context retrieval', title: 'Fast Context retrieval', launcher: 'explore_agent',
+      status: 'completed', label: 'Fast Context retrieval', title: 'Fast Context retrieval', launcher: 'fast_context',
       profile: 'explore', child: { status: 'completed', profile: 'explore' },
       evidencePack: { version: 1, tasks: [{ index: 0, title: 'Scope 1' }, { index: 1, title: 'Scope 2' }] }
     })
@@ -143,13 +143,13 @@ describe('explore_agent Fast Context provider', () => {
   })
 
   it('starts exactly one retrieval child for every accepted batch size', async () => {
-    dir = await mkdtemp(join(tmpdir(), 'explore-agent-tool-'))
+    dir = await mkdtemp(join(tmpdir(), 'fast-context-tool-'))
     const childTaskCounts: number[] = []
     const runtime = makeRuntime(dir, async (input) => {
       childTaskCounts.push(input.fastContextTasks?.length ?? 0)
       return { summary: 'done', evidencePack: evidencePack(input.fastContextTasks ?? []) }
     })
-    const tool = buildExploreAgentToolProvider(runtime, () => ({ enabled: true }))[0]!.tools[0]!
+    const tool = buildFastContextToolProvider(runtime, () => ({ enabled: true }))[0]!.tools[0]!
 
     for (const count of [1, 2, 3, 4]) {
       await expect(tool.execute({ tasks: tasks(count) }, baseContext)).resolves.toMatchObject({ isError: false })
@@ -158,13 +158,13 @@ describe('explore_agent Fast Context provider', () => {
   })
 
   it('preserves Lab model, provider, reasoning, and priority overrides on the one child', async () => {
-    dir = await mkdtemp(join(tmpdir(), 'explore-agent-tool-'))
+    dir = await mkdtemp(join(tmpdir(), 'fast-context-tool-'))
     let received: Record<string, unknown> | undefined
     const runtime = makeRuntime(dir, async (input) => {
       received = { ...input, signal: undefined }
       return { summary: 'done', evidencePack: evidencePack(input.fastContextTasks ?? []) }
     })
-    const tool = buildExploreAgentToolProvider(runtime, () => ({ enabled: true, model: 'gpt-5.4', providerId: 'codex', reasoningEffort: 'medium', fast: true }))[0]!.tools[0]!
+    const tool = buildFastContextToolProvider(runtime, () => ({ enabled: true, model: 'gpt-5.4', providerId: 'codex', reasoningEffort: 'medium', fast: true }))[0]!.tools[0]!
     await tool.execute({ tasks: tasks(1) }, baseContext)
     expect(received).toMatchObject({
       model: 'gpt-5.4', providerId: 'codex', reasoningEffort: 'medium', serviceTier: 'priority',
@@ -174,13 +174,13 @@ describe('explore_agent Fast Context provider', () => {
   })
 
   it('projects one aborted child with grouped uncertainties instead of a synthetic failed task batch', async () => {
-    dir = await mkdtemp(join(tmpdir(), 'explore-agent-tool-'))
+    dir = await mkdtemp(join(tmpdir(), 'fast-context-tool-'))
     const controller = new AbortController()
     const runtime = makeRuntime(dir, async (input) => {
       await new Promise<void>((_resolve, reject) => input.signal.addEventListener('abort', () => reject(new Error('cancelled')), { once: true }))
       return { summary: 'unreachable' }
     })
-    const tool = buildExploreAgentToolProvider(runtime, () => ({ enabled: true }))[0]!.tools[0]!
+    const tool = buildFastContextToolProvider(runtime, () => ({ enabled: true }))[0]!.tools[0]!
     const pending = tool.execute({ tasks: tasks(3) }, { ...baseContext, abortSignal: controller.signal })
     controller.abort()
     const result = await pending
@@ -189,9 +189,9 @@ describe('explore_agent Fast Context provider', () => {
   })
 
   it('keeps mutation, shell, web, map, and delegation tools outside the child boundary', () => {
-    expect(EXPLORE_AGENT_ALLOWED_TOOLS).toEqual(['grep', 'glob', 'read'])
+    expect(FAST_CONTEXT_ALLOWED_TOOLS).toEqual(['grep', 'glob', 'read'])
     for (const forbidden of ['bash', 'web_search', 'web_fetch', 'repo_map', 'find', 'ls', 'write', 'edit', 'delegate_task']) {
-      expect(EXPLORE_AGENT_ALLOWED_TOOLS).not.toContain(forbidden)
+      expect(FAST_CONTEXT_ALLOWED_TOOLS).not.toContain(forbidden)
     }
   })
 })

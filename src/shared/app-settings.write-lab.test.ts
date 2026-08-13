@@ -120,9 +120,9 @@ describe('write agent presets', () => {
 })
 
 describe('lab settings', () => {
-  it('defaults explore_agent to enabled with follow-main model and no fast', () => {
+  it('defaults fast_context to enabled with follow-main model and no fast', () => {
     const lab = defaultKunRuntimeSettings().lab
-    expect(lab.exploreAgent).toEqual({
+    expect(lab.fastContext).toEqual({
       enabled: true,
       model: '',
       providerId: '',
@@ -130,7 +130,7 @@ describe('lab settings', () => {
     })
   })
 
-  it('mirrors exploreAgent for lab.pptAgent defaults and merging', () => {
+  it('mirrors fastContext for lab.pptAgent defaults and merging', () => {
     const lab = defaultKunRuntimeSettings().lab
     expect(lab.pptAgent).toEqual({
       enabled: true,
@@ -203,12 +203,12 @@ describe('lab settings', () => {
     const current = defaultKunRuntimeSettings()
     const next = mergeKunRuntimeSettings(current, {
       lab: {
-        exploreAgent: {
+        fastContext: {
           enabled: false
         }
       }
     })
-    expect(next.lab.exploreAgent).toEqual({
+    expect(next.lab.fastContext).toEqual({
       enabled: false,
       model: '',
       providerId: '',
@@ -217,7 +217,7 @@ describe('lab settings', () => {
 
     const configured = mergeKunRuntimeSettings(current, {
       lab: {
-        exploreAgent: {
+        fastContext: {
           model: 'gpt-5.4',
           providerId: 'codex-2',
           reasoningEffort: 'medium',
@@ -225,7 +225,7 @@ describe('lab settings', () => {
         }
       }
     })
-    expect(configured.lab.exploreAgent).toEqual({
+    expect(configured.lab.fastContext).toEqual({
       enabled: true,
       model: 'gpt-5.4',
       providerId: 'codex-2',
@@ -237,33 +237,33 @@ describe('lab settings', () => {
   it('drops a half-configured model override (follow-main fallback)', () => {
     const next = mergeKunRuntimeSettings(defaultKunRuntimeSettings(), {
       lab: {
-        exploreAgent: {
+        fastContext: {
           model: 'gpt-5.4',
           providerId: ''
         }
       }
     })
-    expect(next.lab.exploreAgent.model).toBe('')
-    expect(next.lab.exploreAgent.providerId).toBe('')
+    expect(next.lab.fastContext.model).toBe('')
+    expect(next.lab.fastContext.providerId).toBe('')
   })
 
   it('ignores an invalid reasoning effort value', () => {
     const next = mergeKunRuntimeSettings(defaultKunRuntimeSettings(), {
       lab: {
-        exploreAgent: {
+        fastContext: {
           model: 'gpt-5.4',
           providerId: 'codex-2',
           reasoningEffort: 'bogus' as never
         }
       }
     })
-    expect(next.lab.exploreAgent.reasoningEffort).toBeUndefined()
+    expect(next.lab.fastContext.reasoningEffort).toBeUndefined()
   })
 
   it('normalizes a persisted lab section through the full settings envelope', () => {
     const runtime = mergeKunRuntimeSettings(defaultKunRuntimeSettings(), {
       lab: {
-        exploreAgent: {
+        fastContext: {
           model: 'deepseek-v4-flash',
           providerId: 'deepseek',
           fast: true
@@ -273,7 +273,7 @@ describe('lab settings', () => {
     const normalized = normalizeAppSettings({
       ...settings(),
       agents: { kun: runtime }
-    }).agents.kun.lab.exploreAgent
+    }).agents.kun.lab.fastContext
     expect(normalized).toEqual({
       enabled: true,
       model: 'deepseek-v4-flash',

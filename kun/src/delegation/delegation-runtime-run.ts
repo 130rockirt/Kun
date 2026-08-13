@@ -108,7 +108,7 @@ export class DelegationRuntimeRun extends DelegationRuntimeBase {
      * When true, the child falls back to the parent session's model route,
      * reasoning effort, and service tier wherever the profile does not
      * configure an explicit override (explicit tool overrides still win).
-     * Used by first-class tools such as `explore_agent`; delegate_task
+     * Used by first-class tools such as `fast_context`; delegate_task
      * keeps its existing precedence semantics when this is unset.
      */
     inheritSessionDefaults?: boolean
@@ -269,7 +269,7 @@ export class DelegationRuntimeRun extends DelegationRuntimeBase {
     const resolvedBlockedSkills = profile?.blockedSkills
     const resolvedSkillsEnabled = profile?.skillsEnabled ?? true
     const promptPreamble = profile?.promptPreamble
-    // Default-inherit tools (e.g. explore_agent) follow the parent session's
+    // Default-inherit tools (e.g. fast_context) follow the parent session's
     // reasoning strength unless the profile configures an explicit depth;
     // reusable delegate_task profiles keep their existing 'off'-style default.
     const resolvedReasoningEffort = ephemeralAgentInheritsSessionSelection
@@ -344,7 +344,7 @@ export class DelegationRuntimeRun extends DelegationRuntimeBase {
           ...record,
           status: 'aborted',
           terminationReason: 'manual_stop',
-          resumable: input.fastContext !== true && (input.launcher === 'delegate_task' || input.launcher === 'explore_agent'),
+          resumable: input.fastContext !== true && (input.launcher === 'delegate_task' || input.launcher === 'fast_context'),
           error: 'child run aborted before detached execution started',
           updatedAt: this.now()
         })

@@ -172,7 +172,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
         renderer = createRenderer(createElement(PptAgentSettingsPanel, {
           t,
           value: {
-            exploreAgent: { enabled: true, model: '', providerId: '', fast: false },
+            fastContext: { enabled: true, model: '', providerId: '', fast: false },
             pptAgent: {
               enabled: true,
               model: 'gpt-5.4',

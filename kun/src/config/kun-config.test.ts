@@ -170,6 +170,6 @@ describe('LabPptAgentConfigSchema', () => {
   it('defaults pptAgent inside LabConfigSchema', () => {
     const lab = LabConfigSchema.parse({})
     expect(lab.pptAgent).toEqual({ enabled: true, fast: false, imageFirst: true })
-    expect(lab.exploreAgent).toEqual({ enabled: true, fast: false })
+    expect(lab.fastContext).toEqual({ enabled: true, fast: false })
   })
 })

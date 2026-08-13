@@ -72,7 +72,7 @@
         "desc": "全工具 · 多步骤任务,可改文件"
       },
       "explore": {
-        "name": "探索代理",
+        "name": "Fast Context",
         "desc": "只读 · 查找文件、搜索代码"
       },
       "component-designer": {

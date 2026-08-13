@@ -269,10 +269,10 @@ export function toolAction(item: Extract<TurnItem, { kind: 'tool_call' }>): { ve
   if (name === 'delegate_task') {
     return { verb: 'Delegate', subject: value('label', 'prompt') || item.summary || '' }
   }
-  if (name === 'explore_agent') {
+  if (name === 'fast_context' || name === 'explore_agent') {
     const count = Array.isArray(args.tasks) ? args.tasks.length : 0
     return {
-      verb: 'Explore',
+      verb: 'Fast Context',
       subject: count > 0 ? `${count} task${count === 1 ? '' : 's'}` : item.summary || ''
     }
   }

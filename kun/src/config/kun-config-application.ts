@@ -276,13 +276,13 @@ export const RolesConfigSchema = z
 export type RolesConfig = z.infer<typeof RolesConfigSchema>
 
 /**
- * Lab (experimental) features. `exploreAgent` turns the first-class
- * `explore_agent` tool on/off and optionally overrides the child model route
+ * Lab (experimental) features. `fastContext` turns the first-class
+ * `fast_context` tool on/off and optionally overrides the child model route
  * (empty model+providerId = follow the main session). `fast` maps to the
  * Codex serviceTier `priority` and only takes effect for Codex models that
  * advertise priority support.
  */
-export const LabExploreAgentConfigSchema = z
+export const LabFastContextConfigSchema = z
   .object({
     enabled: z.boolean().default(true),
     model: z.string().min(1).optional(),
@@ -298,13 +298,13 @@ export const LabExploreAgentConfigSchema = z
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: hasModel ? ['providerId'] : ['model'],
-      message: 'exploreAgent model and providerId must be configured together'
+      message: 'fastContext model and providerId must be configured together'
     })
   })
-export type LabExploreAgentConfig = z.infer<typeof LabExploreAgentConfigSchema>
+export type LabFastContextConfig = z.infer<typeof LabFastContextConfigSchema>
 
 /**
- * Lab `ppt_agent` tool: same shape as exploreAgent (enabled + optional child
+ * Lab `ppt_agent` tool: same shape as fastContext (enabled + optional child
  * model route + fast). The PPT child also inherits the main session unless
  * model and providerId are configured as a pair.
  */
@@ -332,7 +332,7 @@ export type LabPptAgentConfig = z.infer<typeof LabPptAgentConfigSchema>
 
 export const LabConfigSchema = z
   .object({
-    exploreAgent: LabExploreAgentConfigSchema.default({
+    fastContext: LabFastContextConfigSchema.default({
       enabled: true,
       fast: false
     }),

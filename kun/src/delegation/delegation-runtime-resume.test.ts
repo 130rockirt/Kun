@@ -368,7 +368,7 @@ describe('DelegationRuntime resume handling', () => {
         parentTurnId: 'turn-2',
         prompt: 'continue',
         expectedResumeCount: 0,
-        expectedLaunchers: ['delegate_task', 'explore_agent'],
+        expectedLaunchers: ['delegate_task', 'fast_context'],
         requireResumable: true,
         signal: new AbortController().signal
       })
@@ -401,7 +401,7 @@ describe('DelegationRuntime resume handling', () => {
       const store = new FileDelegationStore(dir)
       await store.upsert(ChildRunRecord.parse({
         id: 'child_fast_context', parentThreadId: 'parent', parentTurnId: 'turn-1',
-        launcher: 'explore_agent', fastContext: true,
+        launcher: 'fast_context', fastContext: true,
         fastContextTasks: [{ title: 'Auth', query: 'Find createSession.' }],
         prompt: 'retrieve auth', workspace: '/workspace', profile: 'explore',
         profileSnapshot: { mode: 'subagent', toolPolicy: 'readOnly', allowedTools: ['grep', 'glob', 'read'] },
@@ -413,7 +413,7 @@ describe('DelegationRuntime resume handling', () => {
       const runtime = new DelegationRuntime({ config: subagentConfig(), store, executor: async () => ({ summary: 'must not run' }) })
       await expect(runtime.resumeChild({
         childId: 'child_fast_context', parentThreadId: 'parent', parentTurnId: 'turn-2',
-        prompt: 'leak child summary', expectedLaunchers: ['explore_agent'], requireResumable: true,
+        prompt: 'leak child summary', expectedLaunchers: ['fast_context'], requireResumable: true,
         signal: new AbortController().signal
       })).rejects.toThrow('Fast Context retrieval children cannot be resumed')
       await expect(runtime.resumableParentThreadIds()).resolves.toEqual([])
@@ -441,7 +441,7 @@ describe('DelegationRuntime resume handling', () => {
         ...base,
         id: 'child_generic_restart',
         parentThreadId: 'parent_generic',
-        launcher: 'explore_agent',
+        launcher: 'fast_context',
         detached: true
       }))
       await store.upsert(ChildRunRecord.parse({
@@ -465,7 +465,7 @@ describe('DelegationRuntime resume handling', () => {
         parentThreadId: 'parent_graph',
         parentTurnId: 'turn-2',
         prompt: 'generic resume must not own Graph',
-        expectedLaunchers: ['delegate_task', 'explore_agent'],
+        expectedLaunchers: ['delegate_task', 'fast_context'],
         requireResumable: true,
         signal: new AbortController().signal
       })).rejects.toThrow('is owned by graph')

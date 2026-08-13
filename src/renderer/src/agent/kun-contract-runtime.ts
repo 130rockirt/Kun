@@ -161,7 +161,7 @@ export type CoreChildRuntimeMetadataJson = {
   childLabel?: string
   childStatus: 'queued' | 'running' | 'completed' | 'failed' | 'aborted'
   childSeq: number
-  childLauncher?: 'delegate_task' | 'explore_agent' | 'ppt_agent' | 'component_design' | 'graph'
+  childLauncher?: 'delegate_task' | 'fast_context' | 'ppt_agent' | 'component_design' | 'graph'
   childTerminationReason?: 'user_stop' | 'manual_stop' | 'runtime_restart' | 'child_error'
   resumable?: boolean
   resumeCount?: number

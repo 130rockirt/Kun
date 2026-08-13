@@ -33,7 +33,7 @@ import {
   ComputerUseSettingsPanel
 } from './settings-section-agent-panels'
 import { GraphModeSettingsPanel } from './settings-section-graph-panel'
-import { ExploreAgentSettingsPanel } from './settings-section-lab-explore'
+import { FastContextSettingsPanel } from './settings-section-lab-fast-context'
 import { ComposerPersonaSettingsPanel } from './settings-section-lab-persona'
 import { PptAgentSettingsPanel } from './settings-section-lab-ppt'
 
@@ -158,7 +158,7 @@ export function LaboratorySettingsSection({ ctx }: { ctx: Record<string, any> })
         active={activePanel === 'explore'}
         className="[&>div]:mt-0"
       >
-        <ExploreAgentSettingsPanel
+        <FastContextSettingsPanel
           t={t}
           value={lab}
           modelProviders={modelProviders}

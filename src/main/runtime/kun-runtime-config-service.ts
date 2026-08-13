@@ -238,7 +238,7 @@ export async function syncGuiManagedKunConfig(
 
 function labConfigForRuntime(lab: KunLabSettingsV1 | undefined): KunConfig['lab'] {
   return {
-    exploreAgent: labAgentConfigForRuntime(lab?.exploreAgent),
+    fastContext: labAgentConfigForRuntime(lab?.fastContext),
     pptAgent: {
       ...labAgentConfigForRuntime(lab?.pptAgent),
       imageFirst: lab?.pptAgent?.imageFirst !== false
@@ -246,7 +246,7 @@ function labConfigForRuntime(lab: KunLabSettingsV1 | undefined): KunConfig['lab'
   }
 }
 
-/** Shared Lab agent runtime config (exploreAgent / pptAgent). */
+/** Shared Lab agent runtime config (fastContext / pptAgent). */
 function labAgentConfigForRuntime(
   agent: { enabled: boolean; model: string; providerId: string; reasoningEffort?: string; fast: boolean } | undefined
 ): { enabled: boolean; fast: boolean; model?: string; providerId?: string; reasoningEffort?: ModelReasoningEffort } {

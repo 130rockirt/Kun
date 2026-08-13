@@ -163,7 +163,7 @@ export class DelegationRuntime extends DelegationRuntimeRun {
     const previous = await this.options.store.get(input.childId)
     if (!previous) throw new Error(`child run ${input.childId} was not found`)
     if (previous.fastContext === true) {
-      throw new Error('Fast Context retrieval children cannot be resumed; start a new explore_agent retrieval.')
+      throw new Error('Fast Context retrieval children cannot be resumed; start a new fast_context retrieval.')
     }
     if (previous.parentThreadId !== input.parentThreadId) {
       throw new Error(`child run ${input.childId} does not belong to this parent thread`)

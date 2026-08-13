@@ -58,7 +58,7 @@ const LEGACY_KUN_GUI_TOOLS = new Set([
 ])
 const LEGACY_KUN_RUNTIME_TOOLS = new Set([
   'web_search', 'web_fetch', 'load_skill', 'memory_create', 'memory_update',
-  'memory_delete', 'delegate_task', 'explore_agent', 'generate_image', 'generate_speech',
+  'memory_delete', 'delegate_task', 'fast_context', 'generate_image', 'generate_speech',
   'generate_music', 'generate_video'
 ])
 
