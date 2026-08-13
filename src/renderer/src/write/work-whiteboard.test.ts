@@ -4,8 +4,10 @@ import { clearDesignPersistenceCoordinatorForTests } from '../design/design-pers
 import { useWriteWorkspaceStore } from './write-workspace-store'
 import { initialState } from './write-workspace-store-helpers'
 import {
+  WORK_WHITEBOARD_DIR,
   WORK_WHITEBOARD_INDEX,
   parseWorkWhiteboardRegistry,
+  parseWorkWhiteboardRegistryResult,
   serializeWorkWhiteboardRegistry
 } from './work-whiteboard'
 
@@ -16,19 +18,43 @@ class MemoryStorage {
   removeItem(key: string): void { this.values.delete(key) }
 }
 
-const writeWorkspaceFile = vi.fn(async (payload: { path: string }) => ({
+const files = new Map<string, string>()
+const directories = new Set<string>()
+const savedAt = '2026-08-13T00:00:00.000Z'
+
+const writeWorkspaceFile = vi.fn(async ({ path, content }: { path: string; content: string }) => {
+  files.set(path, content)
+  return { ok: true as const, path, savedAt }
+})
+const createWorkspaceDirectory = vi.fn(async ({ path }: { path: string }) => {
+  if (directories.has(path)) return { ok: false as const, message: 'Directory already exists.' }
+  directories.add(path)
+  return { ok: true as const, path, createdAt: savedAt }
+})
+const createWorkspaceFile = vi.fn(async ({ path, content }: { path: string; content?: string }) => {
+  if (!directories.has(WORK_WHITEBOARD_DIR) || files.has(path)) {
+    return { ok: false as const, message: 'File already exists.' }
+  }
+  files.set(path, content ?? '')
+  return { ok: true as const, path, createdAt: savedAt }
+})
+const deleteWorkspaceEntry = vi.fn(async ({ path }: { path: string }) => {
+  for (const filePath of files.keys()) {
+    if (filePath === path || filePath.startsWith(`${path}/`)) files.delete(filePath)
+  }
+  return { ok: true as const, path, deletedAt: savedAt }
+})
+const readWorkspaceFile = vi.fn(async ({ path }: { path: string }): Promise<WorkspaceFileReadResult> => {
+  const content = files.get(path)
+  if (content === undefined) return { ok: false, message: 'missing' }
+  return { ok: true, path: `/work/${path}`, content, size: content.length, mtimeMs: 1, truncated: false }
+})
+const listWorkspaceDirectory = vi.fn(async () => ({
   ok: true as const,
-  path: payload.path,
-  savedAt: '2026-08-13T00:00:00.000Z'
-}))
-const deleteWorkspaceEntry = vi.fn(async (payload: { path: string }) => ({
-  ok: true as const,
-  path: payload.path,
-  deletedAt: '2026-08-13T00:00:00.000Z'
-}))
-const readWorkspaceFile = vi.fn(async (): Promise<WorkspaceFileReadResult> => ({
-  ok: false,
-  message: 'missing'
+  root: '/work',
+  entries: directories.has(WORK_WHITEBOARD_DIR)
+    ? [{ name: WORK_WHITEBOARD_DIR, path: `/work/${WORK_WHITEBOARD_DIR}`, type: 'directory' as const, ext: '' }]
+    : []
 }))
 
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
@@ -39,14 +65,30 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
   return { promise, resolve }
 }
 
+function seedRegistry(boards: Record<string, Parameters<typeof serializeWorkWhiteboardRegistry>[0][string]>): void {
+  directories.add(WORK_WHITEBOARD_DIR)
+  files.set(WORK_WHITEBOARD_INDEX, serializeWorkWhiteboardRegistry(boards))
+}
+
 beforeEach(() => {
+  files.clear()
+  directories.clear()
   writeWorkspaceFile.mockClear()
+  createWorkspaceDirectory.mockClear()
+  createWorkspaceFile.mockClear()
   deleteWorkspaceEntry.mockClear()
-  readWorkspaceFile.mockReset()
-  readWorkspaceFile.mockResolvedValue({ ok: false, message: 'missing' })
+  readWorkspaceFile.mockClear()
+  listWorkspaceDirectory.mockClear()
   vi.stubGlobal('window', {
     localStorage: new MemoryStorage(),
-    kunGui: { readWorkspaceFile, writeWorkspaceFile, deleteWorkspaceEntry }
+    kunGui: {
+      readWorkspaceFile,
+      listWorkspaceDirectory,
+      writeWorkspaceFile,
+      createWorkspaceDirectory,
+      createWorkspaceFile,
+      deleteWorkspaceEntry
+    }
   })
   useWriteWorkspaceStore.setState({
     ...initialState(),
@@ -80,18 +122,11 @@ describe('Work whiteboard registry', () => {
       ]
     })
 
-    expect(parseWorkWhiteboardRegistry(content, '/work')).toEqual({
-      'board-safe': expect.objectContaining({
-        id: 'board-safe',
-        workspaceRoot: '/work',
-        threadId: 'thread-1',
-        phase: 'review',
-        revision: 2
-      })
-    })
+    expect(parseWorkWhiteboardRegistry(content, '/work')).toEqual({})
+    expect(parseWorkWhiteboardRegistryResult(content, '/work').valid).toBe(false)
   })
 
-  it('loads a workspace registry and preserves stable serialization order', async () => {
+  it('loads a valid workspace registry from .kun-whiteboards and preserves stable serialization order', async () => {
     const later = {
       id: 'board-later', title: 'Later', workspaceRoot: '/work', threadId: null,
       phase: 'blank' as const, revision: 0,
@@ -104,43 +139,87 @@ describe('Work whiteboard registry', () => {
       createdAt: '2026-08-13T00:00:00.000Z',
       updatedAt: '2026-08-13T00:00:00.000Z'
     }
-    const content = serializeWorkWhiteboardRegistry({
-      [later.id]: later,
-      [earlier.id]: earlier
-    })
-    readWorkspaceFile.mockResolvedValue({
-      ok: true,
-      path: '/work/.kun-write/whiteboards/index.json',
-      content,
-      size: content.length,
-      mtimeMs: 1,
-      truncated: false
-    })
+    const content = serializeWorkWhiteboardRegistry({ [later.id]: later, [earlier.id]: earlier })
+    directories.add(WORK_WHITEBOARD_DIR)
+    files.set(WORK_WHITEBOARD_INDEX, content)
 
     await useWriteWorkspaceStore.getState().loadWhiteboards('/work')
 
-    expect(readWorkspaceFile).toHaveBeenCalledWith({
-      workspaceRoot: '/work',
-      path: WORK_WHITEBOARD_INDEX
-    })
-    expect(Object.keys(useWriteWorkspaceStore.getState().whiteboards)).toEqual([
-      'board-earlier',
-      'board-later'
-    ])
+    expect(readWorkspaceFile).toHaveBeenCalledWith({ workspaceRoot: '/work', path: WORK_WHITEBOARD_INDEX })
+    expect(Object.keys(useWriteWorkspaceStore.getState().whiteboards)).toEqual(['board-earlier', 'board-later'])
     expect(content.indexOf('board-earlier')).toBeLessThan(content.indexOf('board-later'))
   })
 
+  it('does not read legacy .kun-write whiteboards when the new store is absent', async () => {
+    files.set('.kun-write/whiteboards/index.json', serializeWorkWhiteboardRegistry({
+      legacy: {
+        id: 'legacy', title: 'Old board', workspaceRoot: '/work', threadId: null,
+        phase: 'blank', revision: 0, createdAt: savedAt, updatedAt: savedAt
+      }
+    }))
+
+    await useWriteWorkspaceStore.getState().loadWhiteboards('/work')
+
+    expect(useWriteWorkspaceStore.getState().whiteboards).toEqual({})
+    expect(readWorkspaceFile.mock.calls.map(([payload]) => payload.path)).toEqual([WORK_WHITEBOARD_INDEX])
+  })
+
+  it('creates the new store exclusively before writing its first registry', async () => {
+    const board = await useWriteWorkspaceStore.getState().createWhiteboard('/work', { title: 'First board' })
+
+    expect(board).not.toBeNull()
+    expect(createWorkspaceDirectory).toHaveBeenCalledWith({ workspaceRoot: '/work', path: WORK_WHITEBOARD_DIR })
+    expect(createWorkspaceFile).toHaveBeenCalledWith(expect.objectContaining({
+      workspaceRoot: '/work', path: WORK_WHITEBOARD_INDEX
+    }))
+    expect(writeWorkspaceFile).not.toHaveBeenCalled()
+    expect(parseWorkWhiteboardRegistry(files.get(WORK_WHITEBOARD_INDEX)!, '/work')[board!.id]).toMatchObject({
+      title: 'First board'
+    })
+  })
+
+  it('updates an existing valid registry without trying to claim its directory again', async () => {
+    seedRegistry({})
+
+    const board = await useWriteWorkspaceStore.getState().createWhiteboard('/work', { title: 'Second board' })
+
+    expect(board).not.toBeNull()
+    expect(writeWorkspaceFile).toHaveBeenCalledWith(expect.objectContaining({
+      workspaceRoot: '/work', path: WORK_WHITEBOARD_INDEX
+    }))
+    expect(createWorkspaceDirectory).not.toHaveBeenCalled()
+    expect(createWorkspaceFile).not.toHaveBeenCalled()
+  })
+
+  it('refuses an existing directory without a valid registry without writing into it', async () => {
+    directories.add(WORK_WHITEBOARD_DIR)
+
+    await expect(useWriteWorkspaceStore.getState().createWhiteboard('/work', { title: 'Blocked' })).resolves.toBeNull()
+
+    expect(createWorkspaceDirectory).not.toHaveBeenCalled()
+    expect(createWorkspaceFile).not.toHaveBeenCalled()
+    expect(writeWorkspaceFile).not.toHaveBeenCalled()
+    expect(useWriteWorkspaceStore.getState().fileError).toContain('.kun-whiteboards')
+  })
+
+  it('refuses a malformed existing registry without overwriting it', async () => {
+    directories.add(WORK_WHITEBOARD_DIR)
+    files.set(WORK_WHITEBOARD_INDEX, '{not json')
+
+    await expect(useWriteWorkspaceStore.getState().createWhiteboard('/work', { title: 'Blocked' })).resolves.toBeNull()
+
+    expect(files.get(WORK_WHITEBOARD_INDEX)).toBe('{not json')
+    expect(createWorkspaceDirectory).not.toHaveBeenCalled()
+    expect(createWorkspaceFile).not.toHaveBeenCalled()
+    expect(writeWorkspaceFile).not.toHaveBeenCalled()
+  })
+
   it('does not apply a whiteboard create after the active workspace changes', async () => {
-    const pendingWrite = deferred<{
-      ok: true
-      path: string
-      savedAt: string
-    }>()
+    seedRegistry({})
+    const pendingWrite = deferred<{ ok: true; path: string; savedAt: string }>()
     writeWorkspaceFile.mockImplementationOnce(() => pendingWrite.promise)
 
-    const creating = useWriteWorkspaceStore.getState().createWhiteboard('/work', {
-      title: 'Stale board'
-    })
+    const creating = useWriteWorkspaceStore.getState().createWhiteboard('/work', { title: 'Stale board' })
     await vi.waitFor(() => expect(writeWorkspaceFile).toHaveBeenCalledTimes(1))
 
     useWriteWorkspaceStore.setState({
@@ -148,11 +227,7 @@ describe('Work whiteboard registry', () => {
       workspaceRoot: '/other-workspace',
       rootDirectory: '/other-workspace'
     })
-    pendingWrite.resolve({
-      ok: true,
-      path: WORK_WHITEBOARD_INDEX,
-      savedAt: '2026-08-13T00:00:00.000Z'
-    })
+    pendingWrite.resolve({ ok: true, path: WORK_WHITEBOARD_INDEX, savedAt })
 
     await expect(creating).resolves.toBeNull()
     const state = useWriteWorkspaceStore.getState()
@@ -163,8 +238,7 @@ describe('Work whiteboard registry', () => {
 
   it('creates, updates, binds, and deletes a board without a pseudo file session', async () => {
     const board = await useWriteWorkspaceStore.getState().createWhiteboard('/work', {
-      title: 'Presentation review',
-      sourcePath: '/work/source.md'
+      title: 'Presentation review', sourcePath: '/work/source.md'
     })
     expect(board).not.toBeNull()
     if (!board) return
@@ -187,12 +261,8 @@ describe('Work whiteboard registry', () => {
 
     state = useWriteWorkspaceStore.getState()
     expect(state.whiteboards[board.id]).toMatchObject({
-      title: 'Q3 review',
-      threadId: 'thread-1',
-      phase: 'complete',
-      outputPath: '/work/q3.pptx',
-      childId: 'child-1',
-      revision: 4
+      title: 'Q3 review', threadId: 'thread-1', phase: 'complete',
+      outputPath: '/work/q3.pptx', childId: 'child-1', revision: 4
     })
 
     await expect(state.deleteWhiteboard(board.id)).resolves.toBe(true)
@@ -201,8 +271,7 @@ describe('Work whiteboard registry', () => {
     expect(state.editorLayout.groups[0].tabs).toEqual([])
     expect(state.activeWhiteboardId).toBeNull()
     expect(deleteWorkspaceEntry).toHaveBeenCalledWith({
-      workspaceRoot: '/work',
-      path: `.kun-write/whiteboards/${board.id}`
+      workspaceRoot: '/work', path: `${WORK_WHITEBOARD_DIR}/${board.id}`
     })
   })
 
@@ -229,10 +298,7 @@ describe('Work whiteboard registry', () => {
     })).resolves.toBeNull()
 
     expect(useWriteWorkspaceStore.getState().whiteboards[board.id]).toMatchObject({
-      threadId: 'thread-original',
-      phase: 'review',
-      childId: 'child-a',
-      revision: 4
+      threadId: 'thread-original', phase: 'review', childId: 'child-a', revision: 4
     })
   })
 })

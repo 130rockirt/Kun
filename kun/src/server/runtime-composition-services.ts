@@ -9,6 +9,7 @@ import {
   buildDesignMotionLocalTools,
   buildDesignSvgLocalTools,
   buildPptAgentLocalTools,
+  PPT_AGENT_LOCAL_PROVIDER_ID,
   LocalToolHost,
   buildDefaultLocalTools,
   createReadArtifactTool,
@@ -333,7 +334,7 @@ export async function createRuntimeServices(
     ]
   }
   const pptAgentProvider = {
-    id: 'ppt-agent',
+    id: PPT_AGENT_LOCAL_PROVIDER_ID,
     kind: 'built-in' as const,
     enabled: true,
     available: true,

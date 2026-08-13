@@ -454,12 +454,12 @@ describe('persistCanvasDocument debounce', () => {
     }))
     vi.stubGlobal('window', { kunGui: { writeWorkspaceFile } })
 
-    persistCanvasDocument('/workspace', 'deleted-board', createEmptyDocument(), '.kun-write/whiteboards')
+    persistCanvasDocument('/workspace', 'deleted-board', createEmptyDocument(), '.kun-whiteboards')
     vi.advanceTimersByTime(600)
     expect(writeWorkspaceFile).toHaveBeenCalledOnce()
 
     let cancelled = false
-    const cancel = cancelPendingCanvasDocument('/workspace', 'deleted-board', '.kun-write/whiteboards')
+    const cancel = cancelPendingCanvasDocument('/workspace', 'deleted-board', '.kun-whiteboards')
       .then(() => { cancelled = true })
     await Promise.resolve()
     expect(cancelled).toBe(false)
@@ -468,7 +468,7 @@ describe('persistCanvasDocument debounce', () => {
     await cancel
 
     // A late store subscription for the unmounted board must be a no-op too.
-    persistCanvasDocument('/workspace', 'deleted-board', createEmptyDocument(), '.kun-write/whiteboards')
+    persistCanvasDocument('/workspace', 'deleted-board', createEmptyDocument(), '.kun-whiteboards')
     vi.advanceTimersByTime(600)
     expect(writeWorkspaceFile).toHaveBeenCalledOnce()
   })

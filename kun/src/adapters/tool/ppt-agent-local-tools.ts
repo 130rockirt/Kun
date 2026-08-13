@@ -51,6 +51,10 @@ import {
 
 export const PPT_GENERATE_PREVIEWS_TOOL_NAME = 'ppt_generate_previews'
 export const PPT_CREATE_REVIEW_BUNDLE_TOOL_NAME = 'ppt_create_review_bundle'
+// The top-level delegation entry point owns the `ppt-agent` provider ID.
+// Local PPT workflow tools are included in the child/base registry as well,
+// so they need a separate provider identity when both registries are composed.
+export const PPT_AGENT_LOCAL_PROVIDER_ID = 'ppt-agent-local' as const
 export { PPT_EXPORT_TOOL_NAME }
 export { PPT_READ_GUIDE_TOOL_NAME, PPT_SUBMIT_DESIGN_PLAN_TOOL_NAME }
 export { PPT_READ_REVIEW_CONTEXT_TOOL_NAME }

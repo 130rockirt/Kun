@@ -280,7 +280,8 @@ export function filterWriteEntries(entries: WorkspaceEntry[]): WorkspaceEntry[] 
   return entries.filter((entry) => {
     if (!isWriteWorkspaceEntry(entry)) return false
     const name = entry.path.replaceAll('\\', '/').split('/').filter(Boolean).at(-1) ?? ''
-    return name !== '.kun-write' && name !== '.kun-canvas' && name !== '.kun-design'
+    return name !== '.kun-write' && name !== '.kun-canvas' && name !== '.kun-design' &&
+      name !== '.kun-whiteboards'
   })
 }
 

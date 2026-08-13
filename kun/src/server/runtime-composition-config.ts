@@ -6,6 +6,7 @@ import {
   buildGoalLocalTools,
   buildTodoLocalTools,
   buildPptAgentLocalTools,
+  PPT_AGENT_LOCAL_PROVIDER_ID,
   buildDefaultLocalTools,
   createReadArtifactTool,
   buildMcpToolProviders,
@@ -347,7 +348,7 @@ export function createRuntimeConfigController(
 	    const nextComputerUseProviders = await buildComputerUseToolProviders(nextOptions.capabilities?.computerUse)
 	    const nextBrowserUseProviders = buildBrowserUseToolProviders(nextOptions.capabilities?.browserUse)
     const nextPptAgentProvider = {
-      id: 'ppt-agent',
+      id: PPT_AGENT_LOCAL_PROVIDER_ID,
       kind: 'built-in' as const,
 	      enabled: true,
       available: true,

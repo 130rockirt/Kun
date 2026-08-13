@@ -19,13 +19,26 @@ import {
 } from './write-editor-layout'
 import { cancelPendingCanvasDocument } from '../design/canvas/canvas-persistence'
 
-export const WORK_WHITEBOARD_DIR = '.kun-write/whiteboards'
+export const WORK_WHITEBOARD_DIR = '.kun-whiteboards'
 export const WORK_WHITEBOARD_INDEX = `${WORK_WHITEBOARD_DIR}/index.json`
 
 type WorkWhiteboardRegistryV1 = {
   version: 1
   whiteboards: WorkWhiteboard[]
 }
+
+type WorkWhiteboardRegistryParseResult = {
+  valid: boolean
+  whiteboards: Record<string, WorkWhiteboard>
+}
+
+type WorkWhiteboardRegistryLoadResult =
+  | { kind: 'valid'; whiteboards: Record<string, WorkWhiteboard> }
+  | { kind: 'missing' | 'invalid' | 'unavailable' }
+
+type WorkWhiteboardRegistryPersistResult =
+  | { ok: true }
+  | { ok: false; message: string }
 
 function normalizeBoard(value: unknown, workspaceRoot: string): WorkWhiteboard | null {
   if (!value || typeof value !== 'object') return null
@@ -70,17 +83,31 @@ export function boardIdFromWriteTabKey(key: string | null | undefined): string |
   return key?.startsWith('whiteboard:') ? key.slice('whiteboard:'.length).trim() || null : null
 }
 
-export function parseWorkWhiteboardRegistry(content: string, workspaceRoot: string): Record<string, WorkWhiteboard> {
+export function parseWorkWhiteboardRegistryResult(
+  content: string,
+  workspaceRoot: string
+): WorkWhiteboardRegistryParseResult {
   try {
     const parsed = JSON.parse(content) as Partial<WorkWhiteboardRegistryV1>
-    if (parsed.version !== 1 || !Array.isArray(parsed.whiteboards)) return {}
-    return Object.fromEntries(parsed.whiteboards
-      .map((board) => normalizeBoard(board, workspaceRoot))
-      .filter((board): board is WorkWhiteboard => Boolean(board))
-      .map((board) => [board.id, board]))
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) ||
+      parsed.version !== 1 || !Array.isArray(parsed.whiteboards)) {
+      return { valid: false, whiteboards: {} }
+    }
+    const boards = parsed.whiteboards.map((board) => normalizeBoard(board, workspaceRoot))
+    if (boards.some((board) => !board)) return { valid: false, whiteboards: {} }
+    const normalizedBoards = boards as WorkWhiteboard[]
+    const whiteboards = Object.fromEntries(normalizedBoards.map((board) => [board.id, board]))
+    return {
+      valid: Object.keys(whiteboards).length === normalizedBoards.length,
+      whiteboards
+    }
   } catch {
-    return {}
+    return { valid: false, whiteboards: {} }
   }
+}
+
+export function parseWorkWhiteboardRegistry(content: string, workspaceRoot: string): Record<string, WorkWhiteboard> {
+  return parseWorkWhiteboardRegistryResult(content, workspaceRoot).whiteboards
 }
 
 export function serializeWorkWhiteboardRegistry(boards: Record<string, WorkWhiteboard>): string {
@@ -91,13 +118,78 @@ export function serializeWorkWhiteboardRegistry(boards: Record<string, WorkWhite
   return `${JSON.stringify(registry, null, 2)}\n`
 }
 
-async function persistRegistry(workspaceRoot: string, boards: Record<string, WorkWhiteboard>): Promise<boolean> {
-  const result = await writeDesignWorkspaceFile({
-    workspaceRoot,
-    path: WORK_WHITEBOARD_INDEX,
-    content: serializeWorkWhiteboardRegistry(boards)
-  })
-  return result.ok
+function whiteboardStorageMessage(kind: 'invalid' | 'unavailable'): string {
+  return i18n.t(kind === 'invalid'
+    ? 'common:writeWhiteboardStorageConflict'
+    : 'common:writeWhiteboardStorageUnavailable')
+}
+
+async function whiteboardDirectoryStatus(
+  workspaceRoot: string
+): Promise<'missing' | 'present' | 'unavailable'> {
+  try {
+    const result = await window.kunGui.listWorkspaceDirectory({ workspaceRoot })
+    if (!result.ok) return 'unavailable'
+    return result.entries.some((entry) => entry.name === WORK_WHITEBOARD_DIR)
+      ? 'present'
+      : 'missing'
+  } catch {
+    return 'unavailable'
+  }
+}
+
+async function loadRegistry(
+  workspaceRoot: string
+): Promise<WorkWhiteboardRegistryLoadResult> {
+  try {
+    const result = await window.kunGui.readWorkspaceFile({
+      workspaceRoot,
+      path: WORK_WHITEBOARD_INDEX
+    })
+    if (result.ok) {
+      const parsed = parseWorkWhiteboardRegistryResult(result.content, workspaceRoot)
+      return parsed.valid ? { kind: 'valid', whiteboards: parsed.whiteboards } : { kind: 'invalid' }
+    }
+  } catch {
+    // The root listing below distinguishes an uninitialized directory from an
+    // existing directory whose index cannot be read or parsed.
+  }
+  const directoryStatus = await whiteboardDirectoryStatus(workspaceRoot)
+  if (directoryStatus === 'missing') return { kind: 'missing' }
+  return { kind: directoryStatus === 'present' ? 'invalid' : 'unavailable' }
+}
+
+async function persistRegistry(
+  workspaceRoot: string,
+  boards: Record<string, WorkWhiteboard>
+): Promise<WorkWhiteboardRegistryPersistResult> {
+  const content = serializeWorkWhiteboardRegistry(boards)
+  const current = await loadRegistry(workspaceRoot)
+  if (current.kind === 'valid') {
+    const result = await writeDesignWorkspaceFile({ workspaceRoot, path: WORK_WHITEBOARD_INDEX, content })
+    return result.ok ? { ok: true } : { ok: false, message: i18n.t('common:writeWhiteboardSaveFailed') }
+  }
+  if (current.kind !== 'missing') {
+    return { ok: false, message: whiteboardStorageMessage(current.kind) }
+  }
+
+  try {
+    const directory = await window.kunGui.createWorkspaceDirectory({
+      workspaceRoot,
+      path: WORK_WHITEBOARD_DIR
+    })
+    if (!directory.ok) return { ok: false, message: whiteboardStorageMessage('invalid') }
+    const registry = await window.kunGui.createWorkspaceFile({
+      workspaceRoot,
+      path: WORK_WHITEBOARD_INDEX,
+      content
+    })
+    return registry.ok
+      ? { ok: true }
+      : { ok: false, message: whiteboardStorageMessage('invalid') }
+  } catch {
+    return { ok: false, message: whiteboardStorageMessage('unavailable') }
+  }
 }
 
 function workspaceIsCurrent(get: WriteWorkspaceGet, workspaceRoot: string): boolean {
@@ -146,14 +238,14 @@ export function createWorkWhiteboardActions(set: WriteWorkspaceSet, get: WriteWo
     const workspaceRoot = normalizePath(state.workspaceRoot)
     if (!workspaceRoot || !board || !boardBelongsToWorkspace(board, workspaceRoot)) return false
     const whiteboards = { ...state.whiteboards, [boardId]: update(board) }
-    const ok = await persistRegistry(workspaceRoot, whiteboards)
+    const persisted = await persistRegistry(workspaceRoot, whiteboards)
     if (!workspaceIsCurrent(get, workspaceRoot)) return false
-    if (!ok) {
-      set({ fileError: i18n.t('common:writeWhiteboardSaveFailed') })
+    if (!persisted.ok) {
+      set({ fileError: persisted.message })
       return false
     }
     set({ whiteboards })
-    return ok
+    return true
   }
 
   return {
@@ -161,18 +253,15 @@ export function createWorkWhiteboardActions(set: WriteWorkspaceSet, get: WriteWo
       const normalizedWorkspaceRoot = normalizePath(workspaceRoot)
       if (!normalizedWorkspaceRoot || !workspaceIsCurrent(get, normalizedWorkspaceRoot)) return
       set({ whiteboardsLoading: true })
-      let whiteboards: Record<string, WorkWhiteboard> = {}
-      try {
-        const result = await window.kunGui.readWorkspaceFile({
-          workspaceRoot: normalizedWorkspaceRoot,
-          path: WORK_WHITEBOARD_INDEX
-        })
-        if (result.ok) whiteboards = parseWorkWhiteboardRegistry(result.content, normalizedWorkspaceRoot)
-      } catch {
-        // A missing registry is the expected first-run state.
-      }
+      const registry = await loadRegistry(normalizedWorkspaceRoot)
       if (workspaceIsCurrent(get, normalizedWorkspaceRoot)) {
-        set({ whiteboards, whiteboardsLoading: false })
+        set({
+          whiteboards: registry.kind === 'valid' ? registry.whiteboards : {},
+          whiteboardsLoading: false,
+          ...(registry.kind === 'invalid' || registry.kind === 'unavailable'
+            ? { fileError: whiteboardStorageMessage(registry.kind) }
+            : {})
+        })
       }
     },
 
@@ -196,8 +285,8 @@ export function createWorkWhiteboardActions(set: WriteWorkspaceSet, get: WriteWo
       const whiteboards = { ...get().whiteboards, [board.id]: board }
       const persisted = await persistRegistry(normalizedWorkspaceRoot, whiteboards)
       if (!workspaceIsCurrent(get, normalizedWorkspaceRoot)) return null
-      if (!persisted) {
-        set({ fileError: i18n.t('common:writeWhiteboardCreateFailed') })
+      if (!persisted.ok) {
+        set({ fileError: persisted.message })
         return null
       }
       set({ whiteboards })
@@ -311,7 +400,11 @@ export function createWorkWhiteboardActions(set: WriteWorkspaceSet, get: WriteWo
       if (!workspaceRoot || !board || !boardBelongsToWorkspace(board, workspaceRoot)) return false
       const whiteboards = { ...state.whiteboards }
       delete whiteboards[boardId]
-      if (!await persistRegistry(workspaceRoot, whiteboards)) return false
+      const persisted = await persistRegistry(workspaceRoot, whiteboards)
+      if (!persisted.ok) {
+        set({ fileError: persisted.message })
+        return false
+      }
       await cancelPendingCanvasDocument(workspaceRoot, boardId, WORK_WHITEBOARD_DIR)
       await deleteDesignWorkspaceEntry({
         workspaceRoot,

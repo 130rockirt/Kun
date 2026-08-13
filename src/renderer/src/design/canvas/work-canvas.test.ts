@@ -38,9 +38,9 @@ describe('Work canvas identity and snapshot isolation', () => {
       workspaceRoot: '/work',
       boardId: 'board-1',
       artifactId: 'board-1',
-      baseDir: '.kun-write/whiteboards',
-      designSystemBaseDir: '.kun-write/whiteboards/board-1',
-      documentKey: canvasDocumentKey('/work', 'board-1', '.kun-write/whiteboards'),
+      baseDir: '.kun-whiteboards',
+      designSystemBaseDir: '.kun-whiteboards/board-1',
+      documentKey: canvasDocumentKey('/work', 'board-1', '.kun-whiteboards'),
       errorKey: 'work-canvas:board-1'
     })
   })
@@ -76,7 +76,7 @@ describe('Work canvas identity and snapshot isolation', () => {
     })
 
     expect(loadDocument).toHaveBeenCalledWith(
-      '/work', 'board-1', '.kun-write/whiteboards'
+      '/work', 'board-1', '.kun-whiteboards'
     )
     expect(snapshot?.shapes).toEqual([
       expect.objectContaining({ name: 'Persisted work board' })

@@ -47,6 +47,7 @@ describe('write workspace entry filtering', () => {
     const entries = [
       { name: '.kun-write', path: '/work/.kun-write', type: 'directory' as const, ext: '' },
       { name: '.kun-canvas', path: '/work/.kun-canvas', type: 'directory' as const, ext: '' },
+      { name: '.kun-whiteboards', path: '/work/.kun-whiteboards', type: 'directory' as const, ext: '' },
       { name: 'notes', path: '/work/notes', type: 'directory' as const, ext: '' },
       { name: 'draft.md', path: '/work/draft.md', type: 'file' as const, ext: '.md' }
     ]

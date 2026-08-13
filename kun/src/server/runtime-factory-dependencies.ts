@@ -68,7 +68,10 @@ export { buildDesignCanvasLocalTools } from '../adapters/tool/design-canvas-tool
 export { buildPptBoardLocalTools } from '../adapters/tool/ppt-board-tool.js'
 export { buildDesignMotionLocalTools } from '../adapters/tool/design-motion-tool.js'
 export { buildDesignSvgLocalTools } from '../adapters/tool/design-svg-tool.js'
-export { buildPptAgentLocalTools } from '../adapters/tool/ppt-agent-local-tools.js'
+export {
+  buildPptAgentLocalTools,
+  PPT_AGENT_LOCAL_PROVIDER_ID
+} from '../adapters/tool/ppt-agent-local-tools.js'
 export { LocalToolHost, buildDefaultLocalTools } from '../adapters/tool/local-tool-host.js'
 export { ExtensionToolRegistry } from '../adapters/tool/extension-tool-provider.js'
 export { shutdownAllLspSessions } from '../adapters/tool/lsp-client.js'

@@ -12,7 +12,6 @@ import {
   Plus,
   RefreshCw,
   Settings,
-  Shapes,
   Smartphone,
   Trash2
 } from 'lucide-react'
@@ -80,11 +79,11 @@ export function WriteSidebar({
   const addClawChannel = useChatStore((s) => s.addClawChannel)
   const deleteClawChannel = useChatStore((s) => s.deleteClawChannel)
   const ensureWriteThreadForWorkspace = useChatStore((s) => s.ensureWriteThreadForWorkspace)
-  const createWriteThread = useChatStore((s) => s.createWriteThread)
   const renameThread = useChatStore((s) => s.renameThread)
   const runtimeConnection = useChatStore((s) => s.runtimeConnection)
   const [entryDialog, setEntryDialog] = useState<EntryDialog | null>(null)
   const [collapsedWorkspaces, setCollapsedWorkspaces] = useState<Record<string, boolean>>({})
+  const [collapsedWhiteboardFolders, setCollapsedWhiteboardFolders] = useState<Record<string, boolean>>({})
   const [revealError, setRevealError] = useState<string | null>(null)
   const [whiteboardMenuId, setWhiteboardMenuId] = useState<string | null>(null)
   const revealErrorTimerRef = useRef<number | null>(null)
@@ -311,9 +310,7 @@ export function WriteSidebar({
       await pickWriteWorkspace()
       return
     }
-    const title = t('writeUntitledWhiteboard')
-    const threadId = runtimeConnection === 'ready' ? await createWriteThread(workspaceRoot, undefined, title) : null
-    await createWhiteboard(workspaceRoot, { title, threadId: threadId ?? undefined })
+    await createWhiteboard(workspaceRoot, { title: t('writeUntitledWhiteboard') })
   }
 
   const selectWorkspaceAndThread = async (workspacePath: string): Promise<void> => {
@@ -383,11 +380,6 @@ export function WriteSidebar({
           variant="accent"
         />
         <SidebarCommandRow
-          icon={<Shapes className="h-4 w-4 text-accent" strokeWidth={1.8} />}
-          label={t('writeCreateWhiteboard', { defaultValue: 'New whiteboard' })}
-          onClick={() => void createWorkWhiteboard()}
-        />
-        <SidebarCommandRow
           icon={<FolderOpen className="h-4 w-4" strokeWidth={1.75} />}
           label={t('writeAddWorkspace')}
           onClick={() => void pickWriteWorkspace()}
@@ -408,25 +400,6 @@ export function WriteSidebar({
         />
       ) : (
       <div className="ds-no-drag flex min-h-0 flex-1 flex-col">
-        <WorkWhiteboardSidebarSection
-          whiteboards={Object.values(whiteboards)}
-          activeWhiteboardId={activeWhiteboardId}
-          openMenuId={whiteboardMenuId}
-          label={t('writeWhiteboards', { defaultValue: 'Whiteboards' })}
-          moreActionsLabel={t('writeMoreActions')}
-          renameLabel={t('writeRenameEntry')}
-          deleteLabel={t('writeEntryDialogDelete')}
-          onOpen={openWhiteboard}
-          onToggleMenu={(boardId) => setWhiteboardMenuId((current) => current === boardId ? null : boardId)}
-          onRename={(board) => {
-            setWhiteboardMenuId(null)
-            setEntryDialog({ kind: 'rename-whiteboard', board, value: board.title })
-          }}
-          onDelete={(board) => {
-            setWhiteboardMenuId(null)
-            setEntryDialog({ kind: 'delete-whiteboard', board })
-          }}
-        />
         <SidebarSectionHeader
           label={t('writeSpaces')}
           actions={
@@ -556,6 +529,32 @@ export function WriteSidebar({
                         {workspacePath === defaultWorkspaceRoot ? t('writeDefaultSpace') : workspacePath}
                       </span>
                     </div>
+                    <WorkWhiteboardSidebarSection
+                      whiteboards={Object.values(whiteboards)}
+                      activeWhiteboardId={activeWhiteboardId}
+                      expanded={collapsedWhiteboardFolders[workspacePath] !== true}
+                      openMenuId={whiteboardMenuId}
+                      label={t('writeWhiteboards', { defaultValue: 'Whiteboards' })}
+                      createLabel={t('writeCreateWhiteboard', { defaultValue: 'New whiteboard' })}
+                      moreActionsLabel={t('writeMoreActions')}
+                      renameLabel={t('writeRenameEntry')}
+                      deleteLabel={t('writeEntryDialogDelete')}
+                      onToggle={() => setCollapsedWhiteboardFolders((current) => ({
+                        ...current,
+                        [workspacePath]: current[workspacePath] !== true
+                      }))}
+                      onCreate={() => void createWorkWhiteboard()}
+                      onOpen={openWhiteboard}
+                      onToggleMenu={(boardId) => setWhiteboardMenuId((current) => current === boardId ? null : boardId)}
+                      onRename={(board) => {
+                        setWhiteboardMenuId(null)
+                        setEntryDialog({ kind: 'rename-whiteboard', board, value: board.title })
+                      }}
+                      onDelete={(board) => {
+                        setWhiteboardMenuId(null)
+                        setEntryDialog({ kind: 'delete-whiteboard', board })
+                      }}
+                    />
                     <WriteFileTree
                       rootDirectory={root}
                       entriesByDir={entriesByDir}

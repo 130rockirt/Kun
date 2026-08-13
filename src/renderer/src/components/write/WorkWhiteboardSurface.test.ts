@@ -79,7 +79,7 @@ async function render(element: ReturnType<typeof createElement>): Promise<ReactT
 
 function markCanvasDocumentLoaded(view: ReactTestRenderer, boardId = 'board-1'): void {
   const canvas = view.root.findByProps({ 'data-mock-canvas': boardId })
-  const expectedKey = canvasDocumentKey('/work', boardId, '.kun-write/whiteboards')
+  const expectedKey = canvasDocumentKey('/work', boardId, '.kun-whiteboards')
   act(() => {
     if (useCanvasShapeStore.getState().documentKey !== expectedKey) {
       useCanvasShapeStore.getState().loadDocument(createEmptyDocument(), expectedKey)
@@ -109,13 +109,13 @@ describe('WorkWhiteboardSurface', () => {
 
     expect(view.root.findByProps({ 'data-mock-canvas': 'board-1' }).props).toMatchObject({
       'data-mock-surface': 'work',
-      'data-mock-base-dir': '.kun-write/whiteboards'
+      'data-mock-base-dir': '.kun-whiteboards'
     })
     expect(view.root.findByProps({ 'data-mock-properties': 'work' })).toBeTruthy()
     expect(mocks.applyLive).toHaveBeenCalledWith(
       true, undefined, expect.objectContaining({ lintFeedbackKey: 'work-canvas:board-1' }),
       'work-canvas:board-1', 'thread-1', undefined, undefined, undefined,
-      canvasDocumentKey('/work', 'board-1', '.kun-write/whiteboards'),
+      canvasDocumentKey('/work', 'board-1', '.kun-whiteboards'),
       expect.objectContaining({ workflowId: 'workflow-1' }),
       'work'
     )
@@ -156,7 +156,7 @@ describe('WorkWhiteboardSurface', () => {
     document.objects[document.rootId]!.children.push(note.id)
     useCanvasShapeStore.getState().loadDocument(
       document,
-      canvasDocumentKey('/work', 'board-1', '.kun-write/whiteboards')
+      canvasDocumentKey('/work', 'board-1', '.kun-whiteboards')
     )
 
     const view = await render(createElement(WorkWhiteboardSurface, {
