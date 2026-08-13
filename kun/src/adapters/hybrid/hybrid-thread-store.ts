@@ -7,7 +7,7 @@ import {
   type ThreadSummary
 } from '../../contracts/threads.js'
 import type { RuntimeEvent } from '../../contracts/events.js'
-import type { ThreadStore, ThreadStoreListOptions } from '../../ports/thread-store.js'
+import type { ThreadStore, ThreadStoreListOptions, ThreadStoreListPage } from '../../ports/thread-store.js'
 import type { SessionLatestUsageSnapshot, SessionUsageRecord } from '../../ports/session-store.js'
 import { legacyWorkThreadTitleMatches, resolveThreadAgentSurface, toThreadSummary } from '../../domain/thread.js'
 import { assertSafeThreadId, isSafeThreadId } from '../../contracts/thread-id.js'
@@ -16,12 +16,12 @@ import { stripThreadItemBodies, type ThreadMetadataLine } from './hybrid-thread-
 import { HybridThreadDocumentRepository } from './hybrid-thread-documents.js'
 import {
   filterThreadSummaries,
-  summaryFromRow,
   type ThreadIndexRecord,
   type ThreadRow
 } from './hybrid-thread-index-mapping.js'
 import { requiresLegacyWorkThreadHydration } from './hybrid-thread-legacy-surface.js'
 import { HybridThreadIndexRepository } from './hybrid-thread-index.js'
+import { hybridThreadStoreListPage, summariesFromRows } from './hybrid-thread-list-page.js'
 import { HybridThreadBackfillCoordinator } from './hybrid-thread-backfill.js'
 import {
   METADATA_COMPACT_MIN_BYTES,
@@ -105,21 +105,18 @@ export class HybridThreadStore implements ThreadStore {
     await this.backfill?.waitForIndex()
     if (this.db) {
       try {
-        const rows = this.queryThreadRows(options)
-        const summaries: ThreadSummary[] = []
-        for (const row of rows) {
-          if (await this.rowHasReadableJsonl(row)) {
-            summaries.push(summaryFromRow(await this.ensureRowAgentSurface(row)))
-          } else {
-            this.deleteIndexRow(row.id)
-          }
-        }
-        return summaries
+        return summariesFromRows(this, this.queryThreadRows(options))
       } catch (error) {
         warnSqlite('list', error)
       }
     }
     return filterThreadSummaries(await this.listFromFilesystem(), options)
+  }
+
+  async listPage(options: ThreadStoreListOptions = {}): Promise<ThreadStoreListPage> {
+    await this.ready()
+    await this.backfill?.waitForIndex()
+    return hybridThreadStoreListPage(this, options)
   }
 
   async get(threadId: string): Promise<ThreadRecord | null> {

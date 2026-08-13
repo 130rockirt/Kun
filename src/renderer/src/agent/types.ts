@@ -313,12 +313,8 @@ export type ThreadTodoList = {
 export type RuntimeConnectionStatus = 'idle' | 'checking' | 'ready' | 'offline'
 
 export type ThreadListOptions = {
-  limit?: number
-  search?: string
-  includeArchived?: boolean
-  archivedOnly?: boolean
-  includeSide?: boolean
-  summary?: boolean
+  limit?: number; search?: string; includeArchived?: boolean; archivedOnly?: boolean
+  includeSide?: boolean; summary?: boolean; cursor?: string; workspace?: string; lean?: boolean
 }
 export type ToolBlock = {
   kind: 'tool'

@@ -4,10 +4,10 @@ import type {
   NormalizedThread,
   ReviewTarget,
   ThreadEventSink,
-  ThreadListOptions,
   ThreadUsageSnapshot,
   UserInputAnswer
 } from './types'
+import type { ThreadListOptions, ThreadListPage } from './provider-types'
 import { getKunRuntimeSettings } from '@shared/app-settings-kun-defaults'
 import {
   KUN_ATTACHMENT_DIAGNOSTICS_PATH,
@@ -200,22 +200,40 @@ export class KunRuntimeProvider extends KunRuntimeThreadServices implements Agen
   }
 
   async listThreads(options: ThreadListOptions = {}): Promise<NormalizedThread[]> {
+    const page = await this.listThreadsPage(options)
+    return page.threads
+  }
+
+  async listThreadsPage(options: ThreadListOptions = {}): Promise<ThreadListPage> {
     const query = buildQuery({
       limit: options.limit,
       search: options.search,
       include_archived: options.includeArchived,
       archived_only: options.archivedOnly,
-      include: options.includeSide ? 'side' : undefined
+      include: options.includeSide ? 'side' : undefined,
+      cursor: options.cursor,
+      workspace: options.workspace,
+      lean: options.lean === true ? '1' : undefined
     })
     const response = await rendererRuntimeClient.runtimeRequest(`/v1/threads${query}`, 'GET')
     if (!response.ok) {
       throw runtimeErrorToError(readRuntimeError(response.body, 'failed to list threads'))
     }
-    const body = readRuntimeJson<{ threads: CoreThreadSummaryJson[] }>(
+    const body = readRuntimeJson<{
+      threads: CoreThreadSummaryJson[]
+      nextCursor?: string
+      hasMore?: boolean
+      total?: number
+    }>(
       response.body,
       'runtime returned an invalid thread list response'
     )
-    return body.threads.map(threadFromCore)
+    return {
+      threads: body.threads.map(threadFromCore),
+      nextCursor: body.nextCursor,
+      hasMore: body.hasMore === true,
+      total: body.total
+    }
   }
 
   async createThread(input: {

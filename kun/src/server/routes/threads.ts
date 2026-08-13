@@ -8,6 +8,8 @@ import {
   ForkThreadRequest,
   SetPlanBuildAdmissionFenceRequest,
   ListThreadsResponse,
+  ThreadListSummarySchema,
+  ThreadSummarySchema,
   SetThreadGoalRequest,
   SetThreadTodosRequest,
   ThreadGoalResponse,
@@ -70,7 +72,13 @@ const ListThreadsQuery = z.object({
    * the only opt-in category is `side` (side conversations are hidden
    * from the default listing).
    */
-  include: z.string().optional()
+  include: z.string().optional(),
+  /** Opaque keyset cursor for the next page of results. */
+  cursor: z.string().optional(),
+  /** Filter by workspace root path. */
+  workspace: z.string().optional(),
+  /** Return the lean sidebar projection (omits heavy metadata blobs). */
+  lean: BooleanQuery.optional()
 })
 
 export async function listThreads(
@@ -79,8 +87,16 @@ export async function listThreads(
 ): Promise<JsonResponse> {
   const parsed = parseListThreadsOptions(request)
   if (!parsed.ok) return parsed.response
-  const threads = await service.list(parsed.options)
-  const payload: ListThreadsResponse = { threads }
+  const page = await service.listPage(parsed.options)
+  const threads = parsed.options.lean
+    ? page.threads.map((thread) => ThreadListSummarySchema.parse(thread))
+    : page.threads
+  const payload: ListThreadsResponse = {
+    threads,
+    ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
+    ...(page.hasMore ? { hasMore: page.hasMore } : {}),
+    ...(page.total != null ? { total: page.total } : {})
+  }
   return jsonResponse(payload)
 }
 
@@ -607,7 +623,10 @@ function parseListThreadsOptions(
       search: parsed.data.search,
       includeArchived: parsed.data.include_archived,
       archivedOnly: parsed.data.archived_only,
-      includeSide
+      includeSide,
+      cursor: parsed.data.cursor,
+      workspace: parsed.data.workspace,
+      lean: parsed.data.lean === true
     }
   }
 }

@@ -459,6 +459,14 @@ export const ThreadSummarySchema = ThreadSchemaBase.pick({
 })
 export type ThreadSummary = z.infer<typeof ThreadSummarySchema>
 
+/** Lean sidebar listing projection (omits heavy metadata blobs the list never reads). */
+export const ThreadListSummarySchema = ThreadSummarySchema.omit({
+  additionalWorkspaces: true, knowledgeBases: true, ownerExtensionId: true, ownerExtensionVersion: true, accountId: true,
+  extensionVisibility: true, extensionProfile: true, extensionBudget: true, toolCatalogEpoch: true, costBudgetUsd: true,
+  costBudgetWarningSent: true, planBuildAdmissionFingerprint: true, planBuildAdmissionCapabilityHash: true, planBuildAdmissionFrozen: true
+})
+export type ThreadListSummary = z.infer<typeof ThreadListSummarySchema>
+
 export const CreateThreadRequest = z.object({
   title: z.string().optional(),
   /** Marks the provided title as an auto/provisional title (see ThreadSchema.titleAuto). */
@@ -675,7 +683,10 @@ export const UpdateThreadRequest = z
 export type UpdateThreadRequest = z.infer<typeof UpdateThreadRequest>
 
 export const ListThreadsResponse = z.object({
-  threads: z.array(ThreadSummarySchema)
+  threads: z.array(ThreadSummarySchema),
+  nextCursor: z.string().optional(),
+  hasMore: z.boolean().optional(),
+  total: z.number().int().nonnegative().optional()
 })
 export type ListThreadsResponse = z.infer<typeof ListThreadsResponse>
 

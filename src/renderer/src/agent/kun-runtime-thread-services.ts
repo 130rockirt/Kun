@@ -6,7 +6,6 @@ import type {
   KnowledgeBaseIndexStatus,
   ReviewTarget,
   ThreadEventSink,
-  ThreadListOptions,
   ThreadUsageSnapshot,
   UserInputAnswer
 } from './types'

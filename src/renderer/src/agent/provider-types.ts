@@ -45,7 +45,6 @@ import type {
   ThreadErrorOptions,
   ThreadGoal,
   ThreadGoalStatus,
-  ThreadListOptions,
   ThreadTodoList,
   ThreadTodoSource,
   ThreadTodoStatus,
@@ -57,6 +56,27 @@ import type {
   UserInputStatusPayload,
   UserMessageEventPayload
 } from './types'
+
+export type ThreadListOptions = {
+  limit?: number
+  search?: string
+  includeArchived?: boolean
+  archivedOnly?: boolean
+  includeSide?: boolean
+  summary?: boolean
+  cursor?: string
+  workspace?: string
+  lean?: boolean
+}
+
+/** Paginated sidebar thread listing result. */
+export type ThreadListPage = {
+  threads: NormalizedThread[]
+  nextCursor?: string
+  hasMore: boolean
+  total?: number
+}
+
 export type ThreadEventSink = {
   /** The HTTP/SSE stream is established, even when no replay or live event is pending. */
   onConnected?(): void
@@ -112,6 +132,8 @@ export interface AgentProvider {
   }
   connect(): Promise<void>
   listThreads(options?: ThreadListOptions): Promise<NormalizedThread[]>
+  /** Optional paginated listing used by the sidebar "show more" flow. */
+  listThreadsPage?(options?: ThreadListOptions): Promise<ThreadListPage>
   createThread(input: { workspace?: string; title?: string; titleAuto?: boolean; mode?: string; agentSurface?: 'code' | 'write' | 'design'; agentId?: string; providerId?: string; accountId?: string; model?: string; systemPrompt?: string }): Promise<NormalizedThread>
   getThreadDetail(threadId: string, options?: { before?: string }): Promise<{
     blocks: ChatBlock[]
