@@ -3,9 +3,11 @@ import type { ThreadAgentSurface, ThreadRecord } from '../contracts/threads.js'
 type LockableThread = Pick<ThreadRecord, 'agentSurface' | 'designProfile' | 'turns'>
 
 /**
- * Derive the immutable conversation mode from durable admission history.
- * Thread agentSurface is workbench ownership, so an empty Code-owned thread
- * remains selectable until its first accepted turn.
+ * Derive the legacy immutable conversation mode from durable admission
+ * history. Code-owned workbench threads never have a session-level task
+ * surface lock: each turn selects Code or Design independently, and only the
+ * optional Design profile is durable. Work and legacy standalone Design
+ * records keep their persisted surface.
  */
 export function resolveThreadLockedTaskSurface(
   thread: LockableThread
@@ -25,8 +27,14 @@ export function resolveThreadLockedTaskSurface(
     ? undefined
     : thread.agentSurface
 
+  // Legacy standalone surfaces remain locked to their persisted ownership.
   if (ownerSurface === 'write' || ownerSurface === 'design') return ownerSurface
+  // Code-owned conversations select Code or Design per turn; there is no
+  // session-level task surface lock for them.
+  if (ownerSurface === 'code') return undefined
 
+  // No explicit ownership metadata: preserve the legacy derivation for
+  // records that predate explicit Code/Design ownership.
   const firstAcceptedTurn = thread.turns.find((turn) => (
     !turn.admissionPending && !(provisionalProfile && turn.id === profileTurnId)
   ))

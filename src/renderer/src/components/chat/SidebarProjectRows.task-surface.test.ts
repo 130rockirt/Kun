@@ -49,16 +49,30 @@ function renderThread(overrides: Partial<NormalizedThread>): string {
 }
 
 describe('ThreadRow task surface icon', () => {
-  it.each([
-    ['durable locked task surface', { agentSurface: 'code', lockedTaskSurface: 'design' }],
-    ['durable Design profile', { agentSurface: 'code', designProfile }],
-    ['legacy Design ownership', { agentSurface: 'design' }]
-  ] as const)('identifies Design from %s', (_name, thread) => {
-    const html = renderThread(thread)
+  it('renders a single Design icon for legacy Design ownership', () => {
+    const html = renderThread({ agentSurface: 'design' })
 
     expect(html).toContain('data-thread-task-surface="design"')
     expect(html).toContain('taskTypeDesign')
     expect(html).not.toContain('taskTypeCode')
+  })
+
+  it('renders the Code icon with a Design artifact badge for a mixed Code conversation', () => {
+    const html = renderThread({ agentSurface: 'code', designProfile })
+
+    expect(html).toContain('data-thread-task-surface="code"')
+    expect(html).toContain('taskTypeCode')
+    // The badge glyph renders on top of the Code icon without replacing it.
+    expect(html).toContain('lucide-palette')
+    expect(html).not.toContain('data-thread-task-surface="design"')
+  })
+
+  it('ignores a stale legacy lockedTaskSurface on a Code-owned conversation', () => {
+    const html = renderThread({ agentSurface: 'code', lockedTaskSurface: 'design' })
+
+    expect(html).toContain('data-thread-task-surface="code"')
+    expect(html).toContain('taskTypeCode')
+    expect(html).not.toContain('taskTypeDesign')
   })
 
   it('preserves the Code icon and label for Code conversations', () => {

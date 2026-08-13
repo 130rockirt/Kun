@@ -46,6 +46,40 @@ The renderer SHALL idempotently place successful primary AI-image results by fil
 - **WHEN** the same successful image tool result is observed again after reconnect
 - **THEN** the renderer recognizes its completion identity and does not insert a duplicate image
 
+### Requirement: Whiteboard surfaces generation progress and failure
+The renderer SHALL represent an in-flight AI-image generation with a persistent placeholder, replace it in place on success, and render an actionable error state on failure or abort.
+
+#### Scenario: Generation starts a placeholder
+- **WHEN** an image tool enters pending on a bound Design document
+- **THEN** the whiteboard creates a generating placeholder at the recommended slot and persists it through reload and replay
+
+#### Scenario: Success replaces the placeholder
+- **WHEN** the pending image tool completes
+- **THEN** the placeholder is replaced in place by the generated image without duplicating it
+
+#### Scenario: Failure or abort is actionable
+- **WHEN** the pending image tool fails or the turn is aborted before completion
+- **THEN** the placeholder becomes an error state showing the reason, elapsed time, and a retry action, and never returns to blank
+
+#### Scenario: Delivery wording tracks completion
+- **WHEN** the assistant says an image will be placed on the whiteboard
+- **THEN** the delivery status stays in progress until the tool reports success, then becomes delivered
+
+### Requirement: Whiteboard supports focus and generation-aware layout
+The Code right whiteboard SHALL open on generation start, fit content after the first successful placement, and provide a focus/full-width presentation with a minimum usable width.
+
+#### Scenario: Auto-open on generation
+- **WHEN** an image generation begins for a bound Design document
+- **THEN** the whiteboard opens automatically
+
+#### Scenario: First fit-to-content
+- **WHEN** the first successful image is placed
+- **THEN** the viewport performs one fit-to-content
+
+#### Scenario: Focus and full width
+- **WHEN** the user activates focus or full-width mode
+- **THEN** the whiteboard expands to a usable minimum width without changing the bound document or canvas state
+
 ### Requirement: Image capability failures do not alter task intent
 The composer SHALL use runtime image-generation diagnostics as the authority for AI-image availability and SHALL never switch a locked Design conversation to HTML because the provider is unavailable.
 

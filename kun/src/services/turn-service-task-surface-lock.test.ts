@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { DesignTaskProfileInput } from '../contracts/design-task-profile.js'
 import { createThreadRecord } from '../domain/thread.js'
 import { createTurnRecord } from '../domain/turn.js'
-import { TaskSurfaceLockedError } from './turn-service-core.js'
+import { DesignProfileLockedError, TaskSurfaceLockedError, TurnConflictError } from './turn-service-core.js'
 import { legacyThreadCanClaimWrite, resolveDesignTurnAdmission } from './turn-service-design-admission.js'
 
 const profile: DesignTaskProfileInput = {
@@ -43,7 +43,7 @@ describe('turn task-surface lock', () => {
     })
   })
 
-  it('rejects Design after the first accepted Code turn', () => {
+  it('allows Design after the first accepted Code turn', () => {
     const thread = codeWorkbench()
     thread.turns.push({
       ...createTurnRecord({
@@ -56,7 +56,7 @@ describe('turn task-surface lock', () => {
       admissionCompletedAt: '2026-08-12T12:00:00.000Z'
     })
 
-    expect(() => resolveDesignTurnAdmission({
+    const admission = resolveDesignTurnAdmission({
       thread,
       request: {
         prompt: 'Switch to Design',
@@ -64,11 +64,13 @@ describe('turn task-surface lock', () => {
         designProfile: profile,
         designDocumentTarget: profile.documentTarget
       },
-      turnId: 'turn_rejected'
-    })).toThrow(TaskSurfaceLockedError)
+      turnId: 'turn_design'
+    })
+
+    expect(admission).toMatchObject({ effectiveSurface: 'design', locksProfile: true })
   })
 
-  it('keeps the first accepted mode authoritative for migrated mixed history', () => {
+  it('allows per-turn Code and Design selection for migrated mixed history', () => {
     const thread = codeWorkbench()
     thread.turns.push({
       ...createTurnRecord({
@@ -88,7 +90,7 @@ describe('turn task-surface lock', () => {
       turnId: 'turn_code_continue'
     })).toMatchObject({ effectiveSurface: 'code', locksProfile: false })
 
-    expect(() => resolveDesignTurnAdmission({
+    expect(resolveDesignTurnAdmission({
       thread,
       request: {
         prompt: 'Continue Design',
@@ -96,8 +98,12 @@ describe('turn task-surface lock', () => {
         designProfile: profile,
         designDocumentTarget: profile.documentTarget
       },
-      turnId: 'turn_rejected'
-    })).toThrow(TaskSurfaceLockedError)
+      turnId: 'turn_design_continue'
+    })).toMatchObject({
+      effectiveSurface: 'design',
+      locksProfile: false,
+      effectiveProfile: expect.objectContaining({ documentTarget: profile.documentTarget })
+    })
   })
 
   it('ignores a failed provisional Design profile when choosing the first mode', () => {
@@ -118,6 +124,50 @@ describe('turn task-surface lock', () => {
       request: { prompt: 'Start in Code', agentSurface: 'code' },
       turnId: 'turn_code'
     })).toMatchObject({ effectiveSurface: 'code', locksProfile: false })
+  })
+
+  it('rejects a mismatched Design profile with design_profile_locked', () => {
+    const thread = codeWorkbench()
+    thread.designProfile = { ...profile, lockedAtTurnId: 'turn_design_1' }
+
+    expect(() => resolveDesignTurnAdmission({
+      thread,
+      request: {
+        prompt: 'Continue Design differently',
+        agentSurface: 'design',
+        designProfile: { ...profile, outputMedium: 'image' },
+        designDocumentTarget: profile.documentTarget
+      },
+      turnId: 'turn_design_2'
+    })).toThrow(DesignProfileLockedError)
+  })
+
+  it('rejects a Code turn that carries a Design profile or document target', () => {
+    const thread = codeWorkbench()
+    thread.turns.push({
+      ...createTurnRecord({
+        id: 'turn_design',
+        threadId: thread.id,
+        prompt: 'Design',
+        model: thread.model,
+        agentSurface: 'design',
+        designProfile: { ...profile, lockedAtTurnId: 'turn_design' },
+        designDocumentTarget: profile.documentTarget
+      }),
+      admissionCompletedAt: '2026-08-12T12:00:00.000Z'
+    })
+    thread.designProfile = { ...profile, lockedAtTurnId: 'turn_design' }
+
+    expect(() => resolveDesignTurnAdmission({
+      thread,
+      request: {
+        prompt: 'Back to code with a profile',
+        agentSurface: 'code',
+        designProfile: profile,
+        designDocumentTarget: profile.documentTarget
+      },
+      turnId: 'turn_code_with_profile'
+    })).toThrow(TurnConflictError)
   })
 
   it('does not let a title collision or ordinary legacy Code history claim Work', () => {

@@ -38,10 +38,7 @@ describe('Design workbench task classification', () => {
     )).toBe(true)
   })
 
-  it('recognizes Code-owned locked and profiled Design tasks', () => {
-    expect(isDesignWorkbenchThread('locked-design', thread({
-      id: 'locked-design', agentSurface: 'code', lockedTaskSurface: 'design'
-    }), emptyDesignThreadRegistry())).toBe(true)
+  it('recognizes a locked Design profile on a Code-owned task', () => {
     expect(isDesignWorkbenchThread('profiled-design', thread({
       id: 'profiled-design', agentSurface: 'code', designProfile: {
         version: 1,
@@ -53,9 +50,14 @@ describe('Design workbench task classification', () => {
         lockedAtTurnId: 'turn-1'
       }
     }), emptyDesignThreadRegistry())).toBe(true)
+    // A stale legacy lockedTaskSurface signal never classifies a Code-owned
+    // conversation; only the Design profile drives its Design capability.
+    expect(isDesignWorkbenchThread('locked-design', thread({
+      id: 'locked-design', agentSurface: 'code', lockedTaskSurface: 'design'
+    }), emptyDesignThreadRegistry())).toBe(false)
   })
 
-  it('honors an explicit Code lock over optional profile metadata', () => {
+  it('keeps a Code-owned conversation Design-capable through its profile', () => {
     expect(isDesignWorkbenchThread('code-task', thread({
       id: 'code-task',
       agentSurface: 'code',
@@ -69,6 +71,6 @@ describe('Design workbench task classification', () => {
         context: { tone: [] },
         lockedAtTurnId: 'turn-1'
       }
-    }), emptyDesignThreadRegistry())).toBe(false)
+    }), emptyDesignThreadRegistry())).toBe(true)
   })
 })

@@ -272,11 +272,16 @@ export function createThreadQueueActions(
       set({ error: 'This isolated plan task is read-only in its current lifecycle state.' })
       return false
     }
-    if (message.deliveryState === 'paused') {
+    if (message.deliveryState === 'paused' || message.deliveryState === 'failed') {
       if (state.busy) return false
       set((current) => ({
         queuedMessages: current.queuedMessages.map((candidate) => candidate.id === id
-          ? { ...candidate, deliveryState: 'pending' as const }
+          ? {
+              ...candidate,
+              deliveryState: 'pending' as const,
+              errorCode: undefined,
+              errorMessage: undefined
+            }
           : candidate)
       }))
       runtime.persistActiveQueuedMessages()
@@ -296,14 +301,24 @@ export function createThreadQueueActions(
     const runningUser = state.blocks.find((block) => block.kind === 'user' && (
       block.id === state.currentTurnUserId || block.turnId === state.currentTurnId
     ))
-    const activeThread = state.threads.find((thread) => thread.id === state.activeThreadId)
     const runningRouting = runningUser?.kind === 'user' && runningUser.meta
       ? runningUser.meta
-      : {
-          agentSurface: activeThread?.lockedTaskSurface ?? activeThread?.agentSurface,
-          designProfile: activeThread?.designProfile,
-          designDocumentTarget: activeThread?.designProfile?.documentTarget
-        }
+      : (() => {
+          // The running turn's durable meta is unavailable (e.g. a legacy or
+          // test fixture state). The queued message's own frozen per-turn
+          // snapshot is the only routing identity left for the same thread.
+          const surface: 'write' | 'design' | 'code' =
+            message.agentSurface === 'write' || message.agentSurface === 'design'
+              ? message.agentSurface
+              : message.guiDesignCanvas || message.guiDesignMode
+                ? 'design'
+                : 'code'
+          return {
+            agentSurface: surface,
+            designProfile: message.designProfile,
+            designDocumentTarget: message.designDocumentTarget
+          }
+        })()
     if (!queuedMessageMatchesRunningTurn(
       message,
       runningRouting

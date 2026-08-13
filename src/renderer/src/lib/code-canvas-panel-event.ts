@@ -1,4 +1,5 @@
 export const CODE_CANVAS_OPEN_REQUEST_EVENT = 'kun:code-canvas-open-request'
+export const CODE_CANVAS_FOCUS_REQUEST_EVENT = 'kun:code-canvas-focus-request'
 
 export type PptCanvasOpenReason = 'ppt-direction' | 'ppt-review'
 
@@ -38,6 +39,16 @@ export function requestCodeCanvasPanelOpen(
   detail: Omit<CodeCanvasOpenRequestDetail, 'target'> = {}
 ): void {
   requestCanvasOpen({ target: 'code', ...detail })
+}
+
+/**
+ * Request the right whiteboard to expand to a focused, full-width presentation.
+ * Presentation-only: the host widens the panel and never touches the bound
+ * document, canvas state, or task/profile selection.
+ */
+export function requestCodeCanvasPanelFocus(): void {
+  if (typeof window === 'undefined' || typeof window.dispatchEvent !== 'function') return
+  window.dispatchEvent(new CustomEvent(CODE_CANVAS_FOCUS_REQUEST_EVENT))
 }
 
 export function requestWorkCanvasOpen(

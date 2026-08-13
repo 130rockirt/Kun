@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: Design profile is a durable optional contract on a Code thread
-Kun SHALL persist at most one locked Design profile per Code-workbench conversation containing its document binding, board target, output medium, Web/App target, resolved style snapshot, full bounded design-context snapshot, and lock turn identity. Once locked, only Design turns remain valid in that conversation.
+Kun SHALL persist at most one locked Design profile per Code-workbench conversation containing its document binding, board target, output medium, Web/App target, resolved style snapshot, full bounded design-context snapshot, and lock turn identity. Once locked, only Design turns may carry or change the profile; Code turns remain valid without a profile and re-entering Design reuses the locked profile.
 
 #### Scenario: First profile lock
 - **WHEN** the first valid Design turn supplies a profile to a Code-owned thread with no locked profile
@@ -16,8 +16,8 @@ Kun SHALL persist at most one locked Design profile per Code-workbench conversat
 - **THEN** Kun rejects it with `design_profile_locked` and leaves the existing profile unchanged
 
 #### Scenario: Code turn after profile lock
-- **WHEN** a conversation with a locked Design profile submits a Code turn
-- **THEN** Kun rejects it with `task_surface_locked` and preserves the locked profile
+- **WHEN** a conversation with a locked Design profile submits a Code turn without a Design profile or document target
+- **THEN** Kun accepts the Code turn and preserves the locked profile
 
 ### Requirement: Design profile is snapshotted on each Design turn
 Every Design turn and its user item SHALL record the effective profile and document target needed for audit, replay, and canvas routing.

@@ -49,10 +49,14 @@ export type QueuedUserMessage = {
   clientRequestId?: string
   /** First Design document remains provisional until Kun accepts this queued turn. */
   waitForRuntimeAdmission?: boolean
-  /** Pending/paused items are visible; starting/in-flight items remain durable until the turn settles. */
-  deliveryState?: 'pending' | 'paused' | 'starting' | 'in_flight'
+  /** Pending/paused items are visible; starting/in-flight items remain durable until the turn settles; failed items are terminal until retried or deleted. */
+  deliveryState?: 'pending' | 'paused' | 'starting' | 'in_flight' | 'failed'
   deliveryTurnId?: string
   deliveryUserMessageItemId?: string
+  /** Structured code of a terminal deterministic rejection (e.g. `task_surface_locked`). */
+  errorCode?: string
+  /** Localized summary of a terminal rejection for inline retry UI. */
+  errorMessage?: string
   displayText?: string
   mode?: string
   orchestration?: 'direct' | 'graph'

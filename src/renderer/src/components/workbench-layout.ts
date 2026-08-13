@@ -6,6 +6,7 @@ import { removeBrowserStorageItem } from '../lib/browser-storage'
 import { WORKSPACE_FILE_PREVIEW_EVENT, type WorkspaceFilePreviewDetail } from '../lib/workspace-file-preview'
 import {
   CODE_CANVAS_OPEN_REQUEST_EVENT,
+  CODE_CANVAS_FOCUS_REQUEST_EVENT,
   canvasOpenRequestDetail
 } from '../lib/code-canvas-panel-event'
 import {
@@ -232,6 +233,18 @@ export function useWorkbenchLayout({
     window.addEventListener(CODE_CANVAS_OPEN_REQUEST_EVENT, onCanvasOpenRequest)
     return () => window.removeEventListener(CODE_CANVAS_OPEN_REQUEST_EVENT, onCanvasOpenRequest)
   }, [ensureInitialCodePanelWidth])
+
+  useEffect(() => {
+    const onCanvasFocusRequest = (): void => {
+      // Presentation-only: widen to a focused full-width presentation without
+      // touching the bound document or canvas state.
+      setCodeRightTabs((current) => openCodeRightTab(current, BUILTIN_RIGHT_PANEL_IDS.canvas))
+      const focusedWidth = Math.min(1280, Math.max(720, Math.round(window.innerWidth * 0.62)))
+      setRightSidebarWidth((width) => Math.max(width, focusedWidth))
+    }
+    window.addEventListener(CODE_CANVAS_FOCUS_REQUEST_EVENT, onCanvasFocusRequest)
+    return () => window.removeEventListener(CODE_CANVAS_FOCUS_REQUEST_EVENT, onCanvasFocusRequest)
+  }, [])
 
   useEffect(() => {
     if (previewThreadId.current === activeThreadId) return

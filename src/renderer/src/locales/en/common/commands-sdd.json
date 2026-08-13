@@ -1,6 +1,5 @@
 {
-  "slashCommandAgentTitle": "Return to default mode",
-  "slashCommandAgentDescription": "Turn off plan mode and go back to the default agent flow.",
+  "slashCommandAgentTitle": "Return to default mode",   "slashCommandAgentDescription": "Turn off plan mode and go back to the default agent flow.",
   "slashCommandGoalTitle": "Goal",
   "slashCommandGoalDescription": "Set or manage the long-running goal for this thread.",
   "slashCommandReviewTitle": "Code review",
@@ -397,6 +396,7 @@
   "runtimeFeatureUnsupported": "The connected runtime does not support this action yet.",
   "runtimeActiveTurn": "A turn is already running in this thread.",
   "runtimeThreadBusyQueued": "The current task is still running. Your message is queued; wait for it to finish, or stop the active task.",
+  "runtimeTaskSurfaceLocked": "This conversation is locked to a legacy task surface; Code turns cannot run here. Start a new conversation to switch modes.", "runtimeDesignProfileLocked": "This Design document, output medium, target, or style is locked by the first Design turn. Start a new conversation to change the Design profile.",
   "sidebarOfflineHint": "Connect the runtime first to create and continue threads.",
   "sidebarEmptyTitle": "No threads yet",
   "sidebarEmptySub": "Start your first task from the action above.",

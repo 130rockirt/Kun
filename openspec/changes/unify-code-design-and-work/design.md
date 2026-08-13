@@ -9,7 +9,7 @@ The redesign must preserve one Kun runtime, stable extension and persisted `writ
 **Goals:**
 
 - Present Code and Work as the two top-level workspaces.
-- Choose Code or Design before the first message from one Code-workbench composer, then keep that mode fixed for the conversation.
+- Choose Code or Design per turn from one Code-workbench composer, locking only the Design document, output medium, target, and style snapshot.
 - Run full Design HTML/SVG/motion/image behavior in Code's right whiteboard without a second conversation surface.
 - Persist and validate a Design task's document, output medium, target, and style snapshot across reload, queue recovery, replay, and fork.
 - Keep all internal `write` contracts compatible while changing user-facing product language to Work.
@@ -23,15 +23,15 @@ The redesign must preserve one Kun runtime, stable extension and persisted `writ
 
 ## Decisions
 
-### Keep workbench ownership separate from the locked task mode
+### Keep workbench ownership separate from the per-turn task surface
 
-New conversations created from the Code workbench always persist `thread.agentSurface: 'code'`; `write` remains owned by Work and legacy standalone Design records may retain `thread.agentSurface: 'design'`. Before the first message, the composer stores a per-thread draft mode. The first accepted Code or Design turn locks the task mode. Code turns send `agentSurface: 'code'`; Design turns send `agentSurface: 'design'` plus the Design flags and document target. Admission must not retag an explicitly Code-owned thread when it accepts a Design turn.
+New conversations created from the Code workbench always persist `thread.agentSurface: 'code'`; `write` remains owned by Work and legacy standalone Design records may retain `thread.agentSurface: 'design'`. Every turn of a Code conversation may select Code or Design, persisted per turn. Code turns send `agentSurface: 'code'`; Design turns send `agentSurface: 'design'` plus the Design flags and document target. Admission must not retag an explicitly Code-owned thread when it accepts a Design turn.
 
-This preserves one task list and one timeline while still allowing the runtime to select the correct instructions, subagents, and tools. The draft mode is renderer state until submission; after admission, the first turn surface and optional Design profile become durable runtime authority for reload, queue recovery, extension routing, and audit. Later turns requesting the other mode fail with `task_surface_locked`. Design uses Agent/Direct.
+This preserves one task list and one timeline while still allowing the runtime to select the correct instructions, subagents, and tools. Each turn's surface and optional Design profile become durable runtime authority for reload, queue recovery, extension routing, and audit. Design uses Agent/Direct.
 
 ### Lock a structured Design profile at first accepted turn
 
-Kun gains a strict `DesignTaskProfile` contract containing the Design document id, board artifact id, output medium, Web/App target, selected preset, and a bounded snapshot of the full design context. A Code-workbench thread has no locked profile until its first accepted Design turn. That turn atomically stores the profile and `lockedAtTurnId`; subsequent Design turns must match it or fail with `design_profile_locked`. A Design conversation cannot later submit Code turns, and a Code conversation cannot later submit Design turns.
+Kun gains a strict `DesignTaskProfile` contract containing the Design document id, board artifact id, output medium, Web/App target, selected preset, and a bounded snapshot of the full design context. A Code-workbench thread has no locked profile until its first accepted Design turn. That turn atomically stores the profile and `lockedAtTurnId`; subsequent Design turns must match it or fail with `design_profile_locked`. Later Code turns are accepted without a profile, and a later Design turn reuses the locked profile.
 
 The accepted turn and user item also retain the submitted profile/document target so queue recovery and canvas replay never re-read mutable global settings. Renderer local storage is only a pre-send draft/cache, not the authority. Fork copies the locked profile and clones the bound Design document before the fork is activated.
 
@@ -45,7 +45,7 @@ Every Design canvas mutation is scoped by thread, turn, document, and board arti
 
 Project-owned legacy conversations identified by `agentSurface: 'design'` or the persisted Design thread registry remain first-class entries in the Code task list. Their existing registry document binding is authoritative, so selecting the owning conversation restores its original writable `.kun-design` document through the same full canvas surface used by Code-owned Design tasks. This changes presentation and navigation only: no thread ownership, profile, registry, or artifact data is migrated or duplicated.
 
-One task classifier is shared by the list, icon, navigation, return-memory, and canvas restoration paths. Durable `lockedTaskSurface` takes precedence over an optional profile for Code-owned conversations, while explicit legacy ownership remains Design. If a Design task target is still hydrating, the right panel stays in the Design loading state instead of mounting the lightweight Code canvas.
+One task classifier is shared by the list, icon, navigation, return-memory, and canvas restoration paths. For Code-owned conversations the optional Design profile drives the Design artifact badge and whiteboard document binding, while `lockedTaskSurface` remains a legacy-only signal for `agentSurface: 'write'`/`'design'` records. If a Design task target is still hydrating, the right panel stays in the Design loading state instead of mounting the lightweight Code canvas.
 
 ### Treat HTML and AI image as primary output lanes
 

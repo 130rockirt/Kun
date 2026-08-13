@@ -17,11 +17,17 @@ import {
  *
  * The last target survives panel collapse and renderer reload. A locked runtime
  * Design profile remains authoritative and reasserts this cache on thread load.
+ * `surfaceKind` disambiguates the three whiteboard hosts (lightweight code
+ * canvas, full `.kun-design` document, central Work whiteboard) and
+ * `boardArtifactId` pins the board within a multi-board document, so a mode
+ * switch can never remount an unrelated blank canvas.
  */
 export type CodeCanvasDesignSurface = {
+  surfaceKind?: 'kun-canvas' | 'kun-design' | 'kun-whiteboards'
   threadId: string
   workspaceRoot: string
   documentId: string
+  boardArtifactId?: string
   /** Browsing a non-canonical drawing never changes the task's writable target. */
   readOnly?: boolean
   canonicalDocumentId?: string
@@ -36,6 +42,8 @@ type CodeCanvasDesignSurfaceState = {
     workspaceRoot: string,
     documentId: string,
     options?: {
+      surfaceKind?: 'kun-canvas' | 'kun-design' | 'kun-whiteboards'
+      boardArtifactId?: string
       readOnly?: boolean
       canonicalDocumentId?: string
       continuationOperationId?: string
@@ -54,11 +62,14 @@ function readPersistedSurface(): CodeCanvasDesignSurface {
     const threadId = parsed.threadId?.trim() ?? ''
     const workspaceRoot = parsed.workspaceRoot?.trim() ?? ''
     const documentId = parsed.documentId?.trim() ?? ''
+    const boardArtifactId = parsed.boardArtifactId?.trim() ?? ''
     const canonicalDocumentId = parsed.canonicalDocumentId?.trim() ?? ''
     const continuationOperationId = parsed.continuationOperationId?.trim() ?? ''
     return threadId && workspaceRoot && documentId
       ? {
           threadId, workspaceRoot, documentId,
+          surfaceKind: parsed.surfaceKind ?? 'kun-design',
+          ...(boardArtifactId ? { boardArtifactId } : {}),
           ...(parsed.readOnly === true ? { readOnly: true } : {}),
           ...(canonicalDocumentId ? { canonicalDocumentId } : {}),
           ...(continuationOperationId ? { continuationOperationId } : {})
@@ -74,6 +85,8 @@ export const useCodeCanvasDesignSurface = create<CodeCanvasDesignSurfaceState>((
   showDesignDocument: (threadId, workspaceRoot, documentId, options) => {
     const surface = {
       threadId, workspaceRoot, documentId,
+      surfaceKind: options?.surfaceKind ?? 'kun-design',
+      ...(options?.boardArtifactId ? { boardArtifactId: options.boardArtifactId } : {}),
       ...(options?.readOnly ? { readOnly: true } : {}),
       ...(options?.canonicalDocumentId ? { canonicalDocumentId: options.canonicalDocumentId } : {}),
       ...(options?.continuationOperationId

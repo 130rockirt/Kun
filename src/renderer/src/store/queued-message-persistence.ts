@@ -2,7 +2,7 @@ import { browserStorage, type BrowserStorageLike } from '../lib/browser-storage'
 import type { ChatBlock } from '../agent/types'
 import type { QueuedUserMessage } from './chat-store-types'
 
-export type QueuedMessageDeliveryState = 'pending' | 'paused' | 'starting' | 'in_flight'
+export type QueuedMessageDeliveryState = 'pending' | 'paused' | 'starting' | 'in_flight' | 'failed'
 
 export type QueuedMessageRegistry = {
   version: 1
@@ -74,7 +74,7 @@ function normalizeQueuedMessage(value: unknown): QueuedUserMessage | null {
   if (hasWriteContext && !writeContext) return null
 
   const deliveryState: QueuedMessageDeliveryState =
-    source.deliveryState === 'paused' || source.deliveryState === 'starting' || source.deliveryState === 'in_flight'
+    source.deliveryState === 'paused' || source.deliveryState === 'starting' || source.deliveryState === 'in_flight' || source.deliveryState === 'failed'
     ? source.deliveryState
     : 'pending'
   const deliveryTurnId = normalizedString(source.deliveryTurnId)
@@ -260,6 +260,15 @@ export function reconcileQueuedMessages(
   const reconciled: QueuedUserMessage[] = []
   for (const message of messages) {
     const state = message.deliveryState ?? 'pending'
+    // A terminal failure stays failed across reconciliation; only an explicit
+    // user retry or removal moves it.
+    if (state === 'failed') {
+      reconciled.push({
+        ...message,
+        deliveryState: 'failed'
+      })
+      continue
+    }
     if (state === 'pending' || state === 'paused') {
       if (
         message.deliveryState === state &&

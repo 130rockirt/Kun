@@ -8,8 +8,8 @@ The application SHALL expose Code and Work as the only top-level workspace modes
 - **THEN** it appears once in the Code workbench list without navigating to a standalone Design route
 
 #### Scenario: Shared task list identifies Design conversations
-- **WHEN** a Code-owned conversation is locked to Design through its task surface or Design profile
-- **THEN** the task list renders the Design icon and accessible Design label instead of the Code icon
+- **WHEN** a Code-owned conversation has a locked Design profile
+- **THEN** the task list renders the Code icon with a Design artifact badge instead of a single Design icon
 
 #### Scenario: Legacy Design conversation remains visible
 - **WHEN** a project-owned conversation is identified by `agentSurface: 'design'` or the persisted Design thread registry
@@ -29,19 +29,35 @@ The application SHALL expose Code and Work as the only top-level workspace modes
 - **WHEN** the user views the workspace-mode selector
 - **THEN** it contains Code and Work and does not contain a standalone Design tab
 
-### Requirement: Code and Design are locked conversation modes
-The composer SHALL allow Code or Design selection only before the first accepted turn. The first accepted turn SHALL lock the conversation to that mode, the selector SHALL disappear, and Kun admission SHALL reject later mode changes.
+### Requirement: Code and Design are per-turn task surfaces
+The composer SHALL allow Code or Design selection for every turn of a Code conversation. The first accepted Design turn SHALL lock the Design document, output medium, target, and style snapshot, but the Code/Design surface selection SHALL remain available for later turns.
 
 #### Scenario: Select before the first message
 - **WHEN** an empty conversation has no accepted turn
 - **THEN** the user can switch between Code and Design without creating, replacing, deleting, or retagging the thread
 
-#### Scenario: Mode is locked after acceptance
-- **WHEN** the first Code or Design turn is accepted
-- **THEN** the selector is removed, reload restores the accepted mode without showing a mode button, and a request for the other mode fails with `task_surface_locked`
+#### Scenario: Select every turn
+- **WHEN** a Code conversation has accepted turns
+- **THEN** the composer still offers Code and Design selection for each new turn
+
+#### Scenario: Code turn after a Design turn
+- **WHEN** a conversation with a locked Design profile submits a Code turn
+- **THEN** the Code turn is accepted without carrying a Design profile or document target and without failing with `task_surface_locked`
+
+#### Scenario: Re-enter Design reuses the profile
+- **WHEN** a conversation that already locked a Design profile selects Design again
+- **THEN** the composer reuses the locked document, output medium, target, and style without re-locking or changing them
+
+#### Scenario: Mixed conversation identity
+- **WHEN** a Code conversation contains both Code and Design turns
+- **THEN** the task list renders the Code icon with a Design artifact badge instead of deciding identity from the first turn
+
+#### Scenario: Whiteboard binding follows the document
+- **WHEN** a Code turn is selected after a Design turn
+- **THEN** the bound Design document stays mounted and referenceable, driven only by `designProfile.documentTarget`, not the next-turn selection
 
 #### Scenario: Admission failure preserves selection
-- **WHEN** local validation or runtime admission rejects the first turn
+- **WHEN** local validation or runtime admission rejects a turn
 - **THEN** the draft and selector remain editable and no committed empty Design document is left behind
 
 #### Scenario: First Design send activates a new conversation
@@ -56,7 +72,7 @@ The composer SHALL allow Code or Design selection only before the first accepted
 Design turns SHALL use the Design agent/tool surface with direct Agent execution while retaining the shared task timeline, model selection, permissions, and workspace controls. The Design composer SHALL NOT expose Plan mode, Graph orchestration, or pursue-goal controls and commands.
 
 #### Scenario: Design task submission
-- **WHEN** the user sends any later message in a Design conversation
+- **WHEN** the user sends a Design turn in a Code conversation
 - **THEN** it targets the same thread and Design document with Design tools and does not create a separate assistant thread
 
 #### Scenario: Shared model selection
@@ -64,7 +80,7 @@ Design turns SHALL use the Design agent/tool surface with direct Agent execution
 - **THEN** the same composer model control used by Code updates the conversation without consulting a separate Design-model setting
 
 #### Scenario: Design execution controls
-- **WHEN** Design is selected for an empty conversation or restored as its locked mode
+- **WHEN** Design is selected for a turn
 - **THEN** Plan mode, Graph orchestration, and pursue-goal entries are absent and the submission remains Agent with direct orchestration
 
 ### Requirement: Empty task experience is intent-aware
