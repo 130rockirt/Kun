@@ -4,6 +4,64 @@ import type { ServerRuntime } from './server-runtime.js'
 import { usageJsonResponse } from './usage.js'
 
 describe('usageJsonResponse', () => {
+  it('returns persisted latest cache telemetry when reopening a thread', async () => {
+    const usage = {
+      ...emptyUsageSnapshot(),
+      promptTokens: 1_000,
+      completionTokens: 20,
+      totalTokens: 1_020,
+      cachedTokens: 900,
+      cacheHitTokens: 900,
+      cacheMissTokens: 100,
+      cacheHitRate: 0.9,
+      turns: 1
+    }
+    const loadUsageRecords = vi.fn(async () => [{
+      threadId: 'thread-1',
+      model: 'fixture-model',
+      completedAt: '2026-08-09T00:00:00.000Z',
+      usage
+    }])
+    const runtime = runtimeFixture({
+      get: vi.fn(async () => ({ id: 'thread-1', model: 'fixture-model', updatedAt: '2026-08-09T00:00:00.000Z' })),
+      list: vi.fn(async () => []),
+      loadUsageRecords
+    })
+
+    const response = await usageJsonResponse(request('thread'), runtime)
+    const body = JSON.parse(response.body) as { buckets: Array<Record<string, unknown>> }
+
+    expect(response.status).toBe(200)
+    expect(loadUsageRecords).toHaveBeenCalledWith({ threadId: 'thread-1' })
+    expect(body.buckets).toContainEqual(expect.objectContaining({
+      thread_id: 'thread-1',
+      cache_hit_rate: 0.9,
+      last_turn_cache_hit_rate: 0.9,
+      cached_tokens: 900,
+      cache_miss_tokens: 100
+    }))
+  })
+
+  it('keeps cache telemetry unknown when persisted usage does not report it', async () => {
+    const runtime = runtimeFixture({
+      get: vi.fn(async () => ({ id: 'thread-1', model: 'fixture-model', updatedAt: '2026-08-09T00:00:00.000Z' })),
+      list: vi.fn(async () => []),
+      loadUsageRecords: vi.fn(async () => [{
+        threadId: 'thread-1',
+        completedAt: '2026-08-09T00:00:00.000Z',
+        usage: { ...emptyUsageSnapshot(), promptTokens: 100, totalTokens: 100, turns: 1 }
+      }])
+    })
+
+    const response = await usageJsonResponse(request('thread'), runtime)
+    const body = JSON.parse(response.body) as { buckets: Array<Record<string, unknown>> }
+
+    expect(body.buckets[0]).toMatchObject({
+      cache_hit_rate: null,
+      last_turn_cache_hit_rate: null
+    })
+  })
+
   it('coalesces concurrent all-thread usage record loads', async () => {
     let release!: () => void
     const gate = new Promise<void>((resolve) => { release = resolve })
@@ -85,13 +143,12 @@ describe('usageJsonResponse', () => {
   })
 })
 
-function request(groupBy: 'day' | 'model', from: string, to: string): Request {
-  const params = new URLSearchParams({
-    group_by: groupBy,
-    from,
-    to,
-    timezone: 'UTC'
-  })
+function request(groupBy: 'thread' | 'day' | 'model', from?: string, to?: string): Request {
+  const params = new URLSearchParams({ group_by: groupBy })
+  if (groupBy === 'thread') params.set('thread_id', 'thread-1')
+  if (from) params.set('from', from)
+  if (to) params.set('to', to)
+  if (groupBy !== 'thread') params.set('timezone', 'UTC')
   return new Request(`http://kun.local/v1/usage?${params.toString()}`)
 }
 

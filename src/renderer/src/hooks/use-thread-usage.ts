@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { parseUsageResponse } from './usage-response'
 
+const THREAD_USAGE_RETRY_DELAYS_MS = [250, 750] as const
+
 export type ThreadUsageSummary = {
   inputTokens: number
   outputTokens: number
@@ -9,7 +11,11 @@ export type ThreadUsageSummary = {
   cacheMissTokens: number
   /** Thread-cumulative cache hit rate (dragged down by the cold first turn). */
   cacheHitRate: number | null
-  /** Cache hit rate of the most recent turn; preferred for the usage chip. */
+  /**
+   * Cache hit rate of the most recent turn. A valid zero means the provider
+   * reported a miss; when telemetry is absent, the footer falls back to the
+   * thread-cumulative rate instead of hiding persisted cache usage.
+   */
   lastTurnCacheHitRate: number | null
   lastTurnCacheableHitRate?: number | null
   lastTurnTotalInputHitRate?: number | null
@@ -104,9 +110,9 @@ export function primaryCacheHitRate(
   usage: Pick<ThreadUsageSummary, 'cacheHitRate' | 'lastTurnCacheHitRate'>
 ): number | null {
   const latestRate = usage.lastTurnCacheHitRate
-  return latestRate != null && Number.isFinite(latestRate) && latestRate > 0
-    ? latestRate
-    : null
+  if (latestRate != null && Number.isFinite(latestRate)) return latestRate
+  const cumulativeRate = usage.cacheHitRate
+  return cumulativeRate != null && Number.isFinite(cumulativeRate) ? cumulativeRate : null
 }
 
 /**
@@ -243,6 +249,7 @@ export function useThreadUsageState(
 
   useEffect(() => {
     let cancelled = false
+    let retryTimer: ReturnType<typeof setTimeout> | undefined
     const nextThreadId = threadId ?? null
     const threadChanged = activeThreadRef.current !== nextThreadId
     activeThreadRef.current = nextThreadId
@@ -252,24 +259,40 @@ export function useThreadUsageState(
     }
     setState((current) => threadChanged
       ? { usage: null, loading: true, loaded: false }
-      : { ...current, loading: true })
-    void loadThreadUsage(threadId)
-      .then((usage) => {
-        if (!cancelled) {
-          setState((current) => ({
-            usage: retainPendingThreadUsage(current.usage, usage),
-            loading: false,
-            loaded: true
-          }))
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setState((current) => ({ ...current, loading: false, loaded: true }))
-        }
-      })
+      : { ...current, loading: true, loaded: false })
+
+    const load = (attempt: number): void => {
+      void loadThreadUsage(threadId)
+        .then((usage) => {
+          if (cancelled) return
+          if (usage) {
+            setState((current) => ({
+              usage: retainPendingThreadUsage(current.usage, usage),
+              loading: false,
+              loaded: true
+            }))
+            return
+          }
+          retryOrFinish(attempt)
+        })
+        .catch(() => {
+          if (!cancelled) retryOrFinish(attempt)
+        })
+    }
+
+    const retryOrFinish = (attempt: number): void => {
+      const delay = THREAD_USAGE_RETRY_DELAYS_MS[attempt]
+      if (delay === undefined) {
+        setState((current) => ({ ...current, loading: false, loaded: true }))
+        return
+      }
+      retryTimer = setTimeout(() => load(attempt + 1), delay)
+    }
+
+    load(0)
     return () => {
       cancelled = true
+      if (retryTimer !== undefined) clearTimeout(retryTimer)
     }
   }, [enabled, refreshKey, threadId])
 
