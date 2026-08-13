@@ -3,6 +3,10 @@ import { makeToolResultItem } from '../domain/item.js'
 import type { ToolCallLike, ToolHostContext, ToolHostResult } from '../ports/tool-host.js'
 import type { ToolDispatchInput } from './turn-execution-types.js'
 import { ToolCallDispatcher } from './tool-call-dispatcher.js'
+import {
+  FastContextSourceSemaphore,
+  fastContextSourceToolSemaphoreSnapshot
+} from './fast-context-source-semaphore.js'
 
 const context = {
   threadId: 'thread_1',
@@ -48,6 +52,7 @@ function dispatchInput(calls: ToolCallLike[]): ToolDispatchInput {
     toolProviderKinds: new Map([
       ['read', 'built-in'],
       ['grep', 'built-in'],
+      ['glob', 'built-in'],
       ['delegate_task', 'delegation']
     ]),
     approvalPolicy: 'auto',
@@ -152,5 +157,62 @@ describe('ToolCallDispatcher', () => {
     })).resolves.toBe('all_suppressed')
 
     expect(persistSuppressed).toHaveBeenCalledTimes(2)
+  })
+
+  it('shares eight source slots across concurrent Fast Context dispatchers', async () => {
+    let active = 0
+    let maximum = 0
+    let resolveFirstEight: () => void = () => undefined
+    const firstEight = new Promise<void>((resolve) => { resolveFirstEight = resolve })
+    let release: () => void = () => undefined
+    const held = new Promise<void>((resolve) => { release = resolve })
+    const toolExecution = {
+      executeSafely: async (input: { call: ToolCallLike }) => {
+        active += 1
+        maximum = Math.max(maximum, active)
+        if (active === 8) resolveFirstEight()
+        try {
+          await held
+          return resultFor(input.call)
+        } finally {
+          active -= 1
+        }
+      },
+      persistResult: async () => undefined,
+      persistSuppressed: async () => undefined
+    }
+    const dispatcher = new ToolCallDispatcher(toolExecution as never)
+    const fastContext = { ...context, fastContext: true }
+    const first = dispatcher.dispatch({
+      dispatch: dispatchInput(Array.from({ length: 8 }, (_, index) => call('read', `first_${index}`))), context: fastContext
+    })
+    const second = dispatcher.dispatch({
+      dispatch: dispatchInput(Array.from({ length: 8 }, (_, index) => call('grep', `second_${index}`))), context: fastContext
+    })
+
+    await firstEight
+    expect(maximum).toBe(8)
+    expect(fastContextSourceToolSemaphoreSnapshot()).toMatchObject({ active: 8, capacity: 8 })
+    release()
+    await expect(Promise.all([first, second])).resolves.toEqual(['continue', 'continue'])
+    expect(fastContextSourceToolSemaphoreSnapshot()).toMatchObject({ active: 0, waiting: 0 })
+  })
+
+  it('releases Fast Context source permits after errors and queued cancellation', async () => {
+    const semaphore = new FastContextSourceSemaphore(1)
+    await expect(semaphore.run(new AbortController().signal, async () => {
+      throw new Error('source failure')
+    })).rejects.toThrow('source failure')
+    expect(semaphore.snapshot()).toEqual({ active: 0, waiting: 0, capacity: 1 })
+
+    const holder = new AbortController()
+    const release = await semaphore.acquire(holder.signal)
+    const queued = new AbortController()
+    const waiting = semaphore.acquire(queued.signal)
+    queued.abort()
+    await expect(waiting).rejects.toThrow('aborted while queued')
+    release()
+    await expect(semaphore.run(new AbortController().signal, async () => 'released')).resolves.toBe('released')
+    expect(semaphore.snapshot()).toEqual({ active: 0, waiting: 0, capacity: 1 })
   })
 })

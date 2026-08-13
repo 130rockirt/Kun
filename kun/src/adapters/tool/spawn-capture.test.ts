@@ -12,4 +12,14 @@ describe('spawnCapture output bounds', () => {
     expect(result.outputTruncated).toBe(true)
     expect(Buffer.byteLength(result.stdout) + Buffer.byteLength(result.stderr)).toBeLessThanOrEqual(4096)
   })
+
+  it('terminates a helper when its configured timeout expires', async () => {
+    const result = await spawnCapture(
+      process.execPath,
+      ['-e', 'setTimeout(() => process.exit(0), 3_000)'],
+      { cwd: process.cwd(), timeoutMs: 100 }
+    )
+
+    expect(result.timedOut).toBe(true)
+  })
 })

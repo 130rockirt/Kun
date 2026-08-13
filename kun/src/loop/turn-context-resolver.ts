@@ -90,6 +90,8 @@ export type TurnContextResolverDeps = {
   blockedToolNames?: readonly string[]
   blockedSkillIds?: readonly string[]
   runtimeDataDir?: string
+  fastContext?: boolean
+  fastContextTaskCount?: number
 }
 
 /**
@@ -204,6 +206,8 @@ export class TurnContextResolver {
       ...(this.deps.blockedToolNames ? { blockedToolNames: this.deps.blockedToolNames } : {}),
       ...(this.deps.blockedSkillIds ? { blockedSkillIds: this.deps.blockedSkillIds } : {}),
       ...(this.deps.runtimeDataDir ? { runtimeDataDir: this.deps.runtimeDataDir } : {}),
+      ...(this.deps.fastContext ? { fastContext: true } : {}),
+      ...(this.deps.fastContextTaskCount ? { fastContextTaskCount: this.deps.fastContextTaskCount } : {}),
       interactiveToolBridge: this.deps.interactiveToolBridge
     })
     const tools = await this.deps.toolHost.listTools(toolDiscoveryContext)

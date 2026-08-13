@@ -399,9 +399,10 @@ export class SkillRuntime {
       if (!unique.has(skill.id)) unique.set(skill.id, skill)
     }
     const combined = [...unique.values()].sort((a, b) => a.id.localeCompare(b.id))
+    const globallyFiltered = filterBlockedSkills(combined, this.config.disabledIds)
     return projectConfig?.status === 'valid'
-      ? filterBlockedSkills(combined, projectConfig.skills.disabledIds)
-      : combined
+      ? filterBlockedSkills(globallyFiltered, projectConfig.skills.disabledIds)
+      : globallyFiltered
   }
 
   private async loadWorkspaceSkills(

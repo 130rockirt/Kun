@@ -136,6 +136,10 @@ export class DelegationRuntimeRun extends DelegationRuntimeBase {
     /** Forward GUI design-canvas scope into the child turn when present. */
     guiDesignCanvas?: boolean
     returnFormat?: ChildReturnFormat
+    /** Strict budgeted source-only retrieval mode used by Fast Context. */
+    fastContext?: boolean
+    /** Original task grouping retained in the child record and evidence pack. */
+    fastContextTasks?: readonly import('./fast-context-evidence.js').FastContextTask[]
     /**
      * When true, runChild returns the queued ChildRunRecord immediately and
      * continues execution in the background. The detached run gets its own
@@ -310,6 +314,8 @@ export class DelegationRuntimeRun extends DelegationRuntimeBase {
       ...(input.sandboxMode ? { sandboxMode: input.sandboxMode } : {}),
       approvalReviewer,
       returnFormat,
+      ...(input.fastContext === true ? { fastContext: true } : {}),
+      ...(input.fastContextTasks?.length ? { fastContextTasks: [...input.fastContextTasks] } : {}),
       ...(input.detach ? { detached: true } : {}),
       ...(input.launcher ? { launcher: input.launcher } : {}),
       ...(input.pptWorkflowScope
@@ -338,7 +344,7 @@ export class DelegationRuntimeRun extends DelegationRuntimeBase {
           ...record,
           status: 'aborted',
           terminationReason: 'manual_stop',
-          resumable: input.launcher === 'delegate_task' || input.launcher === 'explore_agent',
+          resumable: input.fastContext !== true && (input.launcher === 'delegate_task' || input.launcher === 'explore_agent'),
           error: 'child run aborted before detached execution started',
           updatedAt: this.now()
         })
@@ -386,6 +392,8 @@ export class DelegationRuntimeRun extends DelegationRuntimeBase {
         resolvedReasoningEffort,
         resolvedServiceTier,
         returnFormat,
+        fastContext: input.fastContext === true,
+        fastContextTasks: input.fastContextTasks,
         workspace,
         security,
         onRunning: input.onRunning,
@@ -455,6 +463,8 @@ export class DelegationRuntimeRun extends DelegationRuntimeBase {
       resolvedReasoningEffort,
       resolvedServiceTier,
       returnFormat,
+      fastContext: input.fastContext === true,
+      fastContextTasks: input.fastContextTasks,
       workspace,
       security,
       onRunning: input.onRunning,

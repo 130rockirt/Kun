@@ -243,15 +243,6 @@ export function createAgentSdkToolRuntimeDeps(
       if (toolName.startsWith('mcp__kun__')) return { allow: true }
       const thread = await deps.threadStore.get(threadId)
       const turn = thread?.turns.find((candidate) => candidate.id === turnId)
-      if (thread && turn && toolName === 'Bash') {
-        const activeSkillIds = await resolveActiveSkillIds(thread, turn)
-        if (activeSkillIds.includes('ppt-master')) {
-          return {
-            allow: false,
-            message: 'Bash is unavailable while PPT Master is active; use ppt_master_run for managed presentation steps.'
-          }
-        }
-      }
       const approvalPolicy =
         turn?.approvalPolicy ?? thread?.approvalPolicy ?? deps.defaultApprovalPolicy
       if (approvalPolicy === 'never') {

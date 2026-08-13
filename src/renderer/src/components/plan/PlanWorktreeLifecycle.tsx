@@ -208,7 +208,7 @@ export function PlanWorktreeLifecycle({
           {run.status !== 'completed' && run.status !== 'cancelled' ? (
             <RecoveryButton label={t('planWorktreeOpenWorktree')} onClick={openWorktree} />
           ) : null}
-          {run.status === 'needs_attention' ? (
+          {run.status === 'needs_attention' && run.completionVerifiedAt ? (
             <RecoveryButton
               label={t('planWorktreeRetryIntegration')}
               disabled={Boolean(busyAction)}

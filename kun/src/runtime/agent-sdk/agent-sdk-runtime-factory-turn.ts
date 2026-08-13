@@ -206,10 +206,8 @@ export function createAgentSdkTurnRuntimeDeps(
         if (!rawToken.trim()) throw new AgentSdkCredentialUnavailableError()
       }
       const token = normalizeClaudeOAuthToken(rawToken)
-      // Resolve skills before listing bridgeable tools. Some managed tools
-      // (notably PPT Master) are deliberately advertised only for an active
-      // skill, and the SDK must see the same per-turn catalog as the native
-      // Kun loop.
+      // Resolve skills before listing bridgeable tools so the SDK sees the
+      // same per-turn catalog as the native Kun loop.
       const skillResolution = deps.skillRuntime
         ? await deps.skillRuntime.resolveTurn({
             prompt: userText,

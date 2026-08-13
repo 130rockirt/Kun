@@ -189,7 +189,7 @@ describe('tool presentation inference', () => {
       status: 'completed',
       createdAt: '2024-01-01T00:00:00.000Z',
       kind: 'tool_result',
-      toolName: 'ppt_master_run',
+      toolName: 'ppt_agent',
       toolKind: 'file_change',
       callId: 'call_ppt',
       output: {

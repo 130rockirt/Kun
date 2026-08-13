@@ -13,6 +13,7 @@ import {
 } from '../subagents/SubagentLiveness'
 import { AssistantMarkdown } from './AssistantMarkdown'
 import { ExplorePeekPopover } from './ExplorePeekPopover'
+import { FastContextEvidenceDetail, FastContextEvidencePill } from './FastContextEvidenceDetail'
 import {
   firstUsefulLine,
   isBareSubagentToolName,
@@ -35,6 +36,7 @@ import {
   isTerminal,
   parseDelegateDetail,
   parseExploreBatchChildren,
+  parseFastContextEvidencePack,
   readChildMeta,
   resolveStatus,
   subagentStatusText,
@@ -80,6 +82,10 @@ export function SubagentCallCard({
   const child = readChildMeta(block)
   const detail = useMemo(
     () => parseDelegateDetail(block.kind === 'tool' ? (block as ToolBlock).detail : undefined),
+    [block]
+  )
+  const evidencePack = useMemo(
+    () => parseFastContextEvidencePack(block.kind === 'tool' ? (block as ToolBlock).detail : undefined),
     [block]
   )
   const activity = useMemo(() => readChildActivityFromBlock(block), [block])
@@ -171,7 +177,7 @@ export function SubagentCallCard({
     tickNow
   )
 
-  const hasBody = Boolean(detail.summary?.trim() || detail.error?.trim())
+  const hasBody = Boolean(detail.summary?.trim() || detail.error?.trim() || evidencePack)
   const [conclusionExpanded, setConclusionExpanded] = useState(false)
   const [peekOpen, setPeekOpen] = useState(false)
   const [resuming, setResuming] = useState(false)
@@ -274,6 +280,7 @@ export function SubagentCallCard({
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-2">
             {isExplore ? <ExploreKindBadge t={t} /> : null}
+            {isExplore ? <FastContextEvidencePill pack={evidencePack} status={status} t={t} /> : null}
             <span className="truncate text-[14px] font-semibold text-ds-ink" title={taskTitle}>{taskTitle}</span>
             {generated ? <GeneratedPill t={t} /> : null}
             {detached ? <BackgroundPill t={t} /> : null}
@@ -427,6 +434,7 @@ export function SubagentCallCard({
               </p>
             )
           ) : null}
+          <FastContextEvidenceDetail pack={evidencePack} t={t} />
 
           <div className="mt-3 flex flex-wrap items-center gap-1.5">
             {detail.profile ? <MetaChip title={detail.profile}>{detail.profile}</MetaChip> : null}

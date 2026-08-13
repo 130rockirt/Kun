@@ -8,9 +8,6 @@ import {
   randomBytes
 } from 'node:crypto'
 import {
-  homedir
-} from 'node:os'
-import {
   join
 } from 'node:path'
 import {
@@ -38,9 +35,6 @@ import {
   NativeDialogCoordinator
 } from '../native-dialog-coordinator'
 import {
-  resolveModelProviderProxyUrl
-} from '../../shared/app-settings'
-import {
   expandHomePath,
   openPathWithShell
 } from '../services/workspace-service'
@@ -48,35 +42,17 @@ import {
   importGithubSkillsToRoot
 } from '../services/github-skill-import-service'
 import {
-  ensurePptMaster
-} from '../services/ppt-master-service'
-import {
   saveGuiSkillPackage
 } from '../services/skill-save-service'
 import {
-  comparableSkillRootPath,
   listGuiSkillRoots,
-  listGuiSkills,
-  normalizeSkillRootPath
+  listGuiSkills
 } from '../services/skill-service'
-import type { AppSettingsV1 } from '../../shared/app-settings'
 import type { RegisterAppIpcHandlersOptions } from './app-ipc-handler-options'
 import { parseIpcPayload, pathExists } from './app-ipc-handler-utils'
 
-function isManagedPptMasterSkillRootDisabled(settings: AppSettingsV1): boolean {
-  const target = comparableSkillRootPath(join(homedir(), '.kun', 'skills'))
-  const disabledDirectories = [
-    ...settings.claw.skills.disabledDirs,
-    ...settings.schedule.skills.disabledDirs
-  ]
-  return disabledDirectories.some((entry) =>
-    entry.trim().toLowerCase() === 'global-deepseek' ||
-    comparableSkillRootPath(normalizeSkillRootPath(entry)) === target
-  )
-}
-
 export function registerAppWorkspaceIpcHandlers(options: RegisterAppIpcHandlersOptions): void {
-  const { store, getMainWindow, restartKunServe } = options
+  const { store, getMainWindow } = options
   const nativeDialogs = options.nativeDialogs ?? new NativeDialogCoordinator()
   const showMainWindowMessageBox = (
     parent: BrowserWindow,
@@ -246,33 +222,6 @@ export function registerAppWorkspaceIpcHandlers(options: RegisterAppIpcHandlersO
   ipcMain.handle('skill:import-github', async (_, payload: unknown) => {
     const request = parseIpcPayload('skill:import-github', skillGithubImportPayloadSchema, payload)
     return importGithubSkillsToRoot(request)
-  })
-
-  ipcMain.handle('ppt-master:ensure', async () => {
-    const settings = await store.load()
-    if (isManagedPptMasterSkillRootDisabled(settings)) {
-      return {
-        ok: false as const,
-        message: 'PPT Master uses ~/.kun/skills, which is disabled in Settings → Agents → Skills. Enable that skill directory, then try again.'
-      }
-    }
-    const result = await ensurePptMaster({
-      kunHomeDir: join(homedir(), '.kun'),
-      proxyUrl: resolveModelProviderProxyUrl(settings)
-    })
-    if (!result.ok) return result
-    try {
-      // SkillRuntime discovers both skill entries and local tools only at
-      // construction time. Reload even after a repair-only ensure: a prior
-      // dependency install may have failed after the venv was created.
-      await restartKunServe()
-      return result
-    } catch (error) {
-      return {
-        ok: false as const,
-        message: `PPT Master installed, but Kun could not restart: ${error instanceof Error ? error.message : String(error)}`
-      }
-    }
   })
 
   ipcMain.handle('skill:list', async (_, payload: unknown) => {

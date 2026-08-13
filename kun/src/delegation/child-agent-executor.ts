@@ -54,6 +54,8 @@ import {
   childResultSource,
   materializeChildResult
 } from './child-result-materializer.js'
+import { buildFastContextEvidencePack } from './fast-context-evidence.js'
+import { createFastContextToolHost } from './fast-context-tool-host.js'
 
 export type ChildDelegatedRuntimeFactory = (input: {
   threads: ThreadService
@@ -126,6 +128,16 @@ export type ChildAgentExecutorOptions = {
 
 export function createChildAgentExecutor(options: ChildAgentExecutorOptions): ChildRunExecutor {
   return async (input) => {
+    const fastContextTaskCount = input.fastContextTasks?.length ?? 1
+    const toolHost = input.fastContext
+      ? createFastContextToolHost(options.toolHost, fastContextTaskCount)
+      : options.toolHost
+    // Fast Context source calls are always confined to a parent-minted read
+    // scope. This remains true when the parent itself chose full access: an
+    // omitted scope means the captured workspace only, never the host.
+    const allowedReadPaths = input.fastContext
+      ? input.security?.allowedReadPaths ?? ['.']
+      : input.security?.allowedReadPaths
     const blockedSkillIds = unique([
       ...(input.security?.blockedSkillIds ?? []),
       ...(input.blockedSkills ?? [])
@@ -183,6 +195,7 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
     // intersected last, so a child can only lose capabilities.
     const forcedAllowedToolNames = intersectDefinedLists(
       input.toolPolicy === 'readOnly' ? SUBAGENT_READ_ONLY_TOOL_NAMES : undefined,
+      input.fastContext ? ['grep', 'glob', 'read'] : undefined,
       input.allowedTools,
       input.security?.allowedToolNames
     )
@@ -220,7 +233,10 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
     const sandboxMode = input.sandboxMode ?? options.sandboxMode
     const approvalReviewer =
       input.approvalReviewer ?? options.approvalReviewer ?? DEFAULT_APPROVAL_REVIEWER
-    const delegatedRuntime = options.createDelegatedRuntime?.({
+    // Provider-native SDKs own separate shell/search tool catalogs. Fast
+    // Context deliberately stays in Kun's managed loop so its exact source
+    // tool allow-list, semaphore, and result bounds cannot be bypassed.
+    const delegatedRuntime = input.fastContext ? undefined : options.createDelegatedRuntime?.({
       threads,
       turns,
       sessionStore,
@@ -236,8 +252,8 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
       ...(input.security?.allowedSkillIds
         ? { allowedSkillIds: input.security.allowedSkillIds }
         : {}),
-      ...(input.security?.allowedReadPaths
-        ? { allowedReadPaths: input.security.allowedReadPaths }
+      ...(allowedReadPaths
+        ? { allowedReadPaths }
         : {}),
       ...(input.security?.allowedWritePaths
         ? { allowedWritePaths: input.security.allowedWritePaths }
@@ -260,7 +276,7 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
       ...(options.approvalReview ? { approvalReview: options.approvalReview } : {}),
       userInputGate: new InMemoryUserInputGate(),
       model: options.model,
-      toolHost: options.toolHost,
+      toolHost,
       ...(delegatedRuntime ? { sdkRuntime: delegatedRuntime } : {}),
       usage,
       events,
@@ -274,8 +290,8 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
       ...(forcedAllowedToolNames ? { forcedAllowedToolNames } : {}),
       ...(input.security?.allowedProviderIds ? { allowedProviderIds: input.security.allowedProviderIds } : {}),
       ...(input.security?.allowedSkillIds ? { allowedSkillIds: input.security.allowedSkillIds } : {}),
-      ...(input.security?.allowedReadPaths
-        ? { allowedReadPaths: input.security.allowedReadPaths }
+      ...(allowedReadPaths
+        ? { allowedReadPaths }
         : {}),
       ...(input.security?.allowedWritePaths
         ? { allowedWritePaths: input.security.allowedWritePaths }
@@ -288,11 +304,15 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
       ...(blockedProviderIds.length ? { blockedProviderIds } : {}),
       ...(blockedSkillIds.length ? { blockedSkillIds } : {}),
       ...(options.modelCapabilities ? { modelCapabilities: options.modelCapabilities } : {}),
-      ...(input.skillsEnabled !== false && options.skillRuntime ? { skillRuntime: options.skillRuntime } : {}),
-      ...(options.instructionRuntime && input.security?.instructionsEnabled !== false
+      ...(input.fastContext !== true && input.skillsEnabled !== false && options.skillRuntime
+        ? { skillRuntime: options.skillRuntime }
+        : {}),
+      ...(input.fastContext !== true && options.instructionRuntime && input.security?.instructionsEnabled !== false
         ? { instructionRuntime: options.instructionRuntime }
         : {}),
-      ...(options.memoryStore && input.security?.memoryEnabled !== false ? { memoryStore: options.memoryStore } : {}),
+      ...(input.fastContext !== true && options.memoryStore && input.security?.memoryEnabled !== false
+        ? { memoryStore: options.memoryStore }
+        : {}),
       ...(attachmentStore ? { attachmentStore } : {}),
       ...(options.artifactStore ? { artifactStore: options.artifactStore } : {}),
       ...(options.contextCompaction ? { contextCompaction: options.contextCompaction } : {}),
@@ -301,6 +321,13 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
       // parent/user cancellation reaches its signal. Do not inherit the
       // generic AgentLoop wall-clock deadline.
       disableWallTimeLimit: true,
+      ...(input.fastContext
+        ? {
+            fastContext: true,
+            fastContextTaskCount,
+            turnLimits: { maxSteps: 4, maxToolCallsPerStep: 8 }
+          }
+        : {}),
       ...(options.runtime?.toolStorm ? { toolStorm: options.runtime.toolStorm } : {}),
       ...(options.runtime?.toolArgumentRepair ? { toolArgumentRepair: options.runtime.toolArgumentRepair } : {})
     })
@@ -429,11 +456,21 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
     const reviewBundle = childReviewBundle(items, started.turnId)
     const directionBundle = childDirectionBundle(items, started.turnId)
     const deckArtifact = childDeckArtifact(items, started.turnId)
+    const evidencePack = input.fastContext && input.fastContextTasks?.length
+      ? buildFastContextEvidencePack({
+          tasks: input.fastContextTasks,
+          items,
+          turnId: started.turnId,
+          summary: result.summary,
+          ...(status === 'completed' ? {} : { failure: `Retrieval child ${status}.` })
+        })
+      : undefined
     const structuredResult = {
       ...result,
       ...(directionBundle !== undefined ? { directionBundle } : {}),
       ...(reviewBundle !== undefined ? { reviewBundle } : {}),
-      ...(deckArtifact !== undefined ? { deckArtifact } : {})
+      ...(deckArtifact !== undefined ? { deckArtifact } : {}),
+      ...(evidencePack ? { evidencePack } : {})
     }
     // Only a FATAL error fails the child. Recoverable tool errors — a tool
     // rejected by the child's read-only policy, or a tool that crashed — are
@@ -472,6 +509,7 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
       ...(reviewBundle !== undefined ? { reviewBundle } : {}),
       ...(deckArtifact !== undefined ? { deckArtifact } : {}),
       ...(evidence ? { evidence } : {}),
+      ...(evidencePack ? { evidencePack } : {}),
       usage: usage.forThread(thread.id),
       toolInvocations,
       // Only a stable role system prompt changes the immutable prefix.

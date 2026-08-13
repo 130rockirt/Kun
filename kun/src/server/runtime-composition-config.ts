@@ -5,7 +5,6 @@ import {
   CapabilityRegistry,
   buildGoalLocalTools,
   buildTodoLocalTools,
-  buildPptMasterLocalTools,
   buildPptAgentLocalTools,
   buildDefaultLocalTools,
   createReadArtifactTool,
@@ -49,6 +48,7 @@ import {
   llmDebugCaptureEnabled,
   mergeRuntimeConfigApplyOptions,
   modelRequestCaptureDefaultEnabled,
+  skillsConfigForRuntime,
   tokenEconomyConfigForOptions
 } from './runtime-factory-config.js'
 import { stageBrowserUseHostBinding } from './runtime-browser-use-binding.js'
@@ -315,7 +315,7 @@ export function createRuntimeConfigController(
 	        oauthStorageDir: join(activeOptions.dataDir, 'mcp-oauth'),
 	        ...(nextOAuthEncryptor ? { oauthEncryptor: nextOAuthEncryptor } : {})
 	      }),
-	      SkillRuntime.create(nextOptions.capabilities?.skills)
+      SkillRuntime.create(skillsConfigForRuntime(nextOptions))
 	    ])
 	    const stagedBrowserUseBinding = stageBrowserUseHostBinding(request)
 	    let stagedGenerationCommitted = false
@@ -346,14 +346,13 @@ export function createRuntimeConfigController(
 	    })
 	    const nextComputerUseProviders = await buildComputerUseToolProviders(nextOptions.capabilities?.computerUse)
 	    const nextBrowserUseProviders = buildBrowserUseToolProviders(nextOptions.capabilities?.browserUse)
-	    const nextPptMasterProvider = {
-	      id: 'ppt-master',
-	      kind: 'skill' as const,
+    const nextPptAgentProvider = {
+      id: 'ppt-agent',
+      kind: 'built-in' as const,
 	      enabled: true,
-	      available: true,
-	      tools: [
-	        ...buildPptMasterLocalTools(),
-	        ...buildPptAgentLocalTools({
+      available: true,
+      tools: [
+        ...buildPptAgentLocalTools({
 	          enabled: () => nextOptions.lab?.pptAgent?.enabled !== false,
 	          toolchainDirectory: () => process.env.KUN_PPT_TOOLCHAIN_DIR,
 	          governanceDirectory: () => join(nextOptions.dataDir, 'ppt-governance'),
@@ -411,7 +410,7 @@ export function createRuntimeConfigController(
 	      ...nextMusicGenProviders.providers,
 	      ...nextVideoGenProviders.providers,
 	      ...nextOfficeCliProviders,
-	      nextPptMasterProvider,
+      nextPptAgentProvider,
 	      designCanvasProvider
 	    ]
 	    const nextChildRegistry = new CapabilityRegistry(nextBaseToolProviders)

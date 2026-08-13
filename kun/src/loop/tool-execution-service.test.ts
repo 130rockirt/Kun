@@ -206,25 +206,6 @@ describe('ToolExecutionService', () => {
     )
   })
 
-  it('directs rejected PPT tools through managed skill recovery without shell fallback', async () => {
-    const { service } = makeService({
-      execute: async () => { throw new Error('tool ppt_master_run is not advertised in this turn context') }
-    })
-
-    const result = await service.executeSafely({
-      threadId: 'thread_1',
-      turnId: 'turn_1',
-      call: { ...call, toolName: 'ppt_master_run' },
-      context
-    })
-    const output = result.item.kind === 'tool_result' ? JSON.stringify(result.item.output) : ''
-
-    expect(output).toContain('load_skill')
-    expect(output).toContain('ppt-master')
-    expect(output).toContain('Never run PPT Master scripts through')
-    expect(output).toContain('direct Python')
-  })
-
   it('persists a successful plan result before notifying the plan callback', async () => {
     let lifecycle: string[] = []
     const setup = makeService({

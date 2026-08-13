@@ -98,6 +98,9 @@ export function buildPlanBuildPrompt(
     normalizedPlan
       ? 'The verbatim Markdown embedded below is the authoritative implementation plan.'
       : 'Treat that Markdown file as the source of truth for the implementation.',
+    normalizedPlan
+      ? 'The plan file may not be materialized in an isolated worktree. Execute the embedded Markdown even if that file path is absent.'
+      : '',
     orchestration === 'graph'
       ? 'The GUI plan file may be absent from isolated executor worktrees. Build the Graph directly from the embedded plan, make every executor objective self-contained, and do not create a snapshot node whose job is to reread this GUI-only plan path.'
       : '',

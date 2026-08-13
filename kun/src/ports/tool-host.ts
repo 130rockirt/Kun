@@ -194,6 +194,14 @@ export type ToolHostContext = {
    * in the session log or exposed in a tool schema.
    */
   sourceResultBudgetTokens?: number
+  /**
+   * Internal marker for the budgeted Fast Context retrieval child. It is set
+   * by AgentLoop context factories only; ordinary agent tool semantics remain
+   * unchanged.
+   */
+  fastContext?: boolean
+  /** Number of grouped Fast Context tasks; source calls carry task_indexes for durable attribution. */
+  fastContextTaskCount?: number
   /** Active model provider id selected for this turn. Child agents inherit this routing unless a profile overrides it. */
   modelProviderId?: string
   /** Frozen model/provider/account route used by automatic approval review. */

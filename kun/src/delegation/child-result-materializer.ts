@@ -4,6 +4,10 @@ import { ContextEstimator } from '../loop/context-estimator.js'
 import type { ChildResultRef } from './delegation-runtime-contracts.js'
 import { PptReviewBundleV1 } from '../ppt/ppt-review-manifest.js'
 import { PptDirectionBundleV1 } from '../ppt/ppt-direction-workflow.js'
+import {
+  FastContextEvidencePackSchema,
+  type FastContextEvidencePack
+} from './fast-context-evidence.js'
 
 export const CHILD_RESULT_MAX_BYTES = 50 * 1_024
 export const CHILD_RESULT_MAX_LINES = 2_000
@@ -21,6 +25,7 @@ export type MaterializedChildResult = {
   directionBundle?: unknown
   reviewBundle?: unknown
   deckArtifact?: unknown
+  evidencePack?: FastContextEvidencePack
 }
 
 export class ChildResultExecutionError extends Error {
@@ -39,6 +44,7 @@ export class ChildResultExecutionError extends Error {
 function validatedFailureResult(result: MaterializedChildResult): MaterializedChildResult {
   const direction = PptDirectionBundleV1.safeParse(result.directionBundle)
   const review = PptReviewBundleV1.safeParse(result.reviewBundle)
+  const evidencePack = FastContextEvidencePackSchema.safeParse(result.evidencePack)
   return {
     summary: result.summary,
     ...(result.summaryTruncated !== undefined ? { summaryTruncated: result.summaryTruncated } : {}),
@@ -46,7 +52,8 @@ function validatedFailureResult(result: MaterializedChildResult): MaterializedCh
     ...(result.resultUnavailableReason ? { resultUnavailableReason: result.resultUnavailableReason } : {}),
     ...(direction.success ? { directionBundle: direction.data } : {}),
     ...(review.success ? { reviewBundle: review.data } : {}),
-    ...(isValidatedDeckArtifact(result.deckArtifact) ? { deckArtifact: result.deckArtifact } : {})
+    ...(isValidatedDeckArtifact(result.deckArtifact) ? { deckArtifact: result.deckArtifact } : {}),
+    ...(evidencePack.success ? { evidencePack: evidencePack.data } : {})
   }
 }
 

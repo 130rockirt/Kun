@@ -207,7 +207,9 @@ export abstract class AgentLoopBase {
       ...(opts.blockedProviderIds ? { blockedProviderIds: opts.blockedProviderIds } : {}),
       ...(opts.blockedToolNames ? { blockedToolNames: opts.blockedToolNames } : {}),
       ...(opts.blockedSkillIds ? { blockedSkillIds: opts.blockedSkillIds } : {}),
-      ...(opts.runtimeDataDir ? { runtimeDataDir: opts.runtimeDataDir } : {})
+      ...(opts.runtimeDataDir ? { runtimeDataDir: opts.runtimeDataDir } : {}),
+      ...(opts.fastContext ? { fastContext: true } : {}),
+      ...(opts.fastContextTaskCount ? { fastContextTaskCount: opts.fastContextTaskCount } : {})
     })
     const modelStepDeps: ModelStepServiceDeps = {
       threadStore: opts.threadStore,
@@ -364,6 +366,8 @@ export abstract class AgentLoopBase {
       ...(this.opts.blockedSkillIds ? { blockedSkillIds: this.opts.blockedSkillIds } : {}),
       ...(this.opts.runtimeDataDir ? { runtimeDataDir: this.opts.runtimeDataDir } : {}),
       ...(this.opts.artifactStore ? { artifactStore: this.opts.artifactStore } : {}),
+      ...(this.opts.fastContext ? { fastContext: true } : {}),
+      ...(this.opts.fastContextTaskCount ? { fastContextTaskCount: this.opts.fastContextTaskCount } : {}),
       interactiveToolBridge: this.interactiveToolBridge
     })
     const thread = await this.opts.threadStore.get(input.threadId)

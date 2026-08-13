@@ -20,9 +20,14 @@ export const DEFAULT_GREP_MAX_CONTEXT_LINES = 20
 export const DEFAULT_GREP_MAX_MATCHES = 1_000
 /** Fast Context is deliberately much smaller than normal source-tool pages. */
 export const FAST_CONTEXT_GREP_MAX_MATCHES = 30
+export const FAST_CONTEXT_GLOB_MAX_MATCHES = 100
 export const FAST_CONTEXT_GREP_MAX_TEXT_CHARACTERS = 300
 export const FAST_CONTEXT_READ_MAX_LINES = 200
 export const FAST_CONTEXT_SEARCH_MAX_OUTPUT_BYTES = 512 * 1024
+/** Read input is capped too, so line paging never scans a giant file. */
+export const FAST_CONTEXT_READ_MAX_FILE_BYTES = FAST_CONTEXT_SEARCH_MAX_OUTPUT_BYTES
+/** Reserve ample space for JSON escaping and read metadata around content. */
+export const FAST_CONTEXT_READ_MAX_CONTENT_BYTES = 64 * 1024
 export const FAST_CONTEXT_SEARCH_TIMEOUT_MS = 8_000
 /** Basenames excluded from Fast Context recursive source discovery. */
 export const FAST_CONTEXT_EXCLUDED_DIRECTORY_NAMES = [
@@ -86,6 +91,8 @@ export type GrepMatch = {
   line: number
   column: number
   text: string
+  /** True when Fast Context clipped the matching text to its hard ceiling. */
+  text_truncated?: boolean
   context_before?: string[]
   context_after?: string[]
 }
@@ -272,7 +279,11 @@ export type ToolsOptions = BuiltinLocalToolsOptions
  * hosts from applying these limits to ordinary agent source tools.
  */
 export const FAST_CONTEXT_SOURCE_TOOL_OPTIONS = {
-  read: { maxLines: FAST_CONTEXT_READ_MAX_LINES },
+  read: {
+    maxLines: FAST_CONTEXT_READ_MAX_LINES,
+    maxBytes: FAST_CONTEXT_READ_MAX_CONTENT_BYTES,
+    maxFileBytes: FAST_CONTEXT_READ_MAX_FILE_BYTES
+  },
   grep: { fastContext: {} },
   glob: { fastContext: {} },
   find: { fastContext: {} }
@@ -329,6 +340,12 @@ export interface FindLocalToolOperations {
   glob?: (
     input: { pattern: string; path: string; limit: number }
   ) => Promise<Array<{ path: string; relative_path: string }>>
+  /** Test/composition seam for fd/rg source command execution. */
+  spawnCapture?: (
+    file: string,
+    args: string[],
+    options: { cwd: string; signal?: AbortSignal; maxOutputBytes?: number; timeoutMs?: number }
+  ) => Promise<{ stdout: string; stderr: string; exitCode: number | null; outputTruncated: boolean; timedOut: boolean }>
 }
 
 export interface LsLocalToolOperations {

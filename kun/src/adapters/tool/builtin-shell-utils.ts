@@ -526,6 +526,8 @@ export type CursorSdkRipgrepResolverOptions = {
 export type RipgrepExecutableResolverOptions = CursorSdkRipgrepResolverOptions & {
   candidates?: string[]
   lookup?: SpawnSyncLike
+  /** Disable only for bounded callers that must not depend on PATH. */
+  allowPathFallback?: boolean
 }
 
 const cursorSdkRipgrepCache = new Map<string, string | null>()
@@ -586,6 +588,7 @@ export function resolveCursorSdkRipgrep(options: CursorSdkRipgrepResolverOptions
 export function resolveRipgrepExecutable(options: RipgrepExecutableResolverOptions = {}): string | null {
   const bundled = resolveCursorSdkRipgrep(options)
   if (bundled) return bundled
+  if (options.allowPathFallback === false) return null
   return resolveExecutable(
     options.candidates ?? ['rg'],
     options.platform,

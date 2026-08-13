@@ -262,12 +262,34 @@ export function WriteWorkspaceToolbar({
               type="button"
               onClick={onToggleInlineCompletion}
               disabled={!activeFileIsText || readOnly}
-              className={`${toolbarIconButtonClass(inlineCompletionEnabled)} disabled:cursor-not-allowed disabled:opacity-40`}
+              data-inline-completion-state={inlineCompletionEnabled ? 'on' : 'off'}
+              className={`inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border px-2 text-[12px] font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/45 disabled:cursor-not-allowed disabled:opacity-40 ${
+                inlineCompletionEnabled
+                  ? 'border-accent bg-accent text-white shadow-[0_2px_8px_rgba(79,70,229,0.28)]'
+                  : 'border-ds-border-muted bg-white/80 text-ds-muted hover:border-ds-border hover:bg-ds-hover hover:text-ds-ink dark:bg-white/[0.06]'
+              }`}
               title={`${t(inlineCompletionEnabled ? 'writeInlineCompletionOn' : 'writeInlineCompletionOff')} · ${t('writeInlineCompletionShortcut')}`}
               aria-label={t(inlineCompletionEnabled ? 'writeInlineCompletionOn' : 'writeInlineCompletionOff')}
               aria-pressed={inlineCompletionEnabled}
             >
               <WandSparkles className="h-4 w-4" strokeWidth={1.85} />
+              <span className="hidden xl:inline">{t('writeInlineCompletionToggle')}</span>
+              <span
+                aria-hidden="true"
+                className={`relative inline-flex h-4 w-7 shrink-0 rounded-full border transition-colors ${
+                  inlineCompletionEnabled
+                    ? 'border-white/50 bg-white/20'
+                    : 'border-slate-300 bg-slate-200 dark:border-white/20 dark:bg-white/15'
+                }`}
+              >
+                <span
+                  className={`absolute top-0.5 h-3 w-3 rounded-full shadow-sm transition-transform ${
+                    inlineCompletionEnabled
+                      ? 'translate-x-3 bg-white'
+                      : 'translate-x-0.5 bg-slate-500 dark:bg-slate-300'
+                  }`}
+                />
+              </span>
             </button>
             <button
               type="button"

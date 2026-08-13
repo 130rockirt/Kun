@@ -183,7 +183,7 @@ export function buildToolPreferenceInstruction(
       'Use `explore_agent` as the first tool for any repository or project exploration: file lookup, code or keyword search, symbol and call-path tracing, architecture or behavior inspection, and context gathering before a change. This applies even to simple lookups and to tasks that will later modify files.'
     )
     bullets.push(
-      '`explore_agent` runs a dedicated read-oriented child and never edits files; after it returns, the parent agent remains responsible for edits and final verification.'
+      '`explore_agent` runs one budgeted repository retrieval child restricted to grep, glob, and read, and never edits files; after it returns, the parent agent remains responsible for edits and final verification.'
     )
     if (directInspectionTools.length > 0) {
       bullets.push(
@@ -191,7 +191,7 @@ export function buildToolPreferenceInstruction(
       )
     }
     bullets.push(
-      'For a complex investigation, make one `explore_agent` call with 2-4 non-overlapping tasks so the child runs can proceed in parallel. Put any investigation that depends on this evidence in a later batch.'
+      'For a complex investigation, make one `explore_agent` call with 2-4 non-overlapping tasks. They share one bounded retrieval child and compact evidence pack; put any investigation that depends on this evidence in a later batch.'
     )
     if (names.has('delegate_task')) {
       bullets.push(

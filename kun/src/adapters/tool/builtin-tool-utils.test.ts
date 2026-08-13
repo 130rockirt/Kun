@@ -264,6 +264,21 @@ describe('Cursor SDK ripgrep resolution', () => {
     })).toBe('/usr/local/bin/rg')
   })
 
+  it('can require the packaged binary and safely fall back to a scan instead of PATH', () => {
+    const lookupPath = vi.fn(lookup({ 'which rg': '/usr/local/bin/rg\n' }))
+    expect(resolveRipgrepExecutable({
+      platform: 'linux',
+      arch: 'x64',
+      candidates: ['rg'],
+      allowPathFallback: false,
+      resolvePackage: () => { throw new Error('optional package unavailable') },
+      lookup: lookupPath,
+      fileExists: () => false,
+      responds: () => true
+    })).toBeNull()
+    expect(lookupPath).not.toHaveBeenCalled()
+  })
+
   it('does not claim a package for unsupported Cursor SDK targets', () => {
     expect(cursorSdkRipgrepPackageName('win32', 'arm64')).toBeNull()
     expect(cursorSdkRipgrepPackageName('freebsd', 'x64')).toBeNull()

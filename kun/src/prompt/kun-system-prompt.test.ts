@@ -213,7 +213,7 @@ describe('buildToolPreferenceInstruction', () => {
 
   it('describes the stateful image-first PPT review loop without the legacy one-call board path', () => {
     const instruction = buildToolPreferenceInstruction([
-      { name: 'ppt_agent', description: 'Run PPT Master' },
+      { name: 'ppt_agent', description: 'Run the PPT agent' },
       { name: 'ppt_to_board', description: 'Lay out a PPTD deck' }
     ])
 

@@ -234,7 +234,6 @@ const api = {
     ipcRenderer.invoke('skill:save-file', { rootPath, skillName, content, manifestContent }),
   importSkillsFromGitHub: (rootPath, url) =>
     ipcRenderer.invoke('skill:import-github', { rootPath, url }),
-  ensurePptMaster: () => ipcRenderer.invoke('ppt-master:ensure'),
   openSkillRoot: (rootPath) =>
     ipcRenderer.invoke('skill:open-root', rootPath),
   listUiPlugins: () =>

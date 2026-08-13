@@ -454,7 +454,7 @@ async function resumeChild(
       ...(resume.expectedResumeCount !== undefined
         ? { expectedResumeCount: resume.expectedResumeCount }
         : {}),
-      expectedLaunchers: ['delegate_task', 'explore_agent'],
+      expectedLaunchers: ['delegate_task'],
       requireResumable: true,
       security: childSecurity(context),
       signal: context.abortSignal,

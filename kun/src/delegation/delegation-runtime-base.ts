@@ -47,7 +47,7 @@ import { withManagerDataMutex } from '../manager/data-mutex.js'
 import {
   ChildRunRecord,
   FileDelegationStore,
-  isGenericChildLauncher,
+  isResumableChildRun,
   profileAvailableOnSurface,
   type ChildRunAggregate,
   type ChildRunExecutor,
@@ -466,6 +466,8 @@ export abstract class DelegationRuntimeBase {
     resolvedReasoningEffort: string | undefined
     resolvedServiceTier: 'priority' | undefined
     returnFormat: ChildReturnFormat
+    fastContext: boolean
+    fastContextTasks: readonly import('./fast-context-evidence.js').FastContextTask[] | undefined
     workspace: string | undefined
     security: ChildSecuritySnapshot | undefined
     onRunning: ((childId: string, profile?: string, metadata?: ChildRunLifecycleMetadata) => Promise<void> | void) | undefined
@@ -488,7 +490,7 @@ export abstract class DelegationRuntimeBase {
         ...current,
         status: abort.terminationReason === 'runtime_restart' ? 'failed' : 'aborted',
         terminationReason: abort.terminationReason,
-        resumable: isGenericChildLauncher(current.launcher),
+        resumable: isResumableChildRun(current),
         error: abort.error.slice(0, CHILD_RESULT_PREVIEW_CHARS),
         updatedAt: this.now()
       }))
@@ -548,6 +550,8 @@ export abstract class DelegationRuntimeBase {
           ...(args.resolvedReasoningEffort ? { reasoningEffort: args.resolvedReasoningEffort } : {}),
           ...(args.resolvedServiceTier ? { serviceTier: args.resolvedServiceTier } : {}),
           returnFormat: args.returnFormat,
+          ...(args.fastContext ? { fastContext: true } : {}),
+          ...(args.fastContextTasks?.length ? { fastContextTasks: args.fastContextTasks } : {}),
           signal
       }))
       const finishedAt = this.now()
@@ -574,6 +578,7 @@ export abstract class DelegationRuntimeBase {
           ? args.parentTurnId
           : current.deckArtifactParentTurnId,
         evidence: result.evidence,
+        evidencePack: result.evidencePack,
         // ChildRunExecutor reports cumulative usage for the persistent side
         // thread, so adding it would double-count turns completed before resume.
         usage: result.usage ?? current.usage,
@@ -603,7 +608,7 @@ export abstract class DelegationRuntimeBase {
         ...current,
         status: runtimeRestart ? 'failed' : args.signal.aborted ? 'aborted' : 'failed',
         terminationReason: args.signal.aborted || runtimeRestart ? abort.terminationReason : 'child_error',
-        resumable: args.signal.aborted && isGenericChildLauncher(current.launcher),
+        resumable: args.signal.aborted && isResumableChildRun(current),
         ...(childResult ? {
           summary: childResult.summary,
           summaryTruncated: childResult.summaryTruncated,
@@ -622,6 +627,7 @@ export abstract class DelegationRuntimeBase {
           deckArtifact: childResult.deckArtifact,
           deckArtifactParentTurnId: args.parentTurnId
         } : {}),
+        ...(childResult?.evidencePack !== undefined ? { evidencePack: childResult.evidencePack } : {}),
         error: abort.error.slice(0, CHILD_RESULT_PREVIEW_CHARS),
         durationMs: (current.durationMs ?? 0) + elapsedMs(startedAt, finishedAt),
         updatedAt: finishedAt

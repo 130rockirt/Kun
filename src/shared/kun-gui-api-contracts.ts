@@ -134,7 +134,6 @@ import type {
   ConversationExportPayload,
   ConversationExportResult
 } from './conversation-export'
-import type { PptMasterEnsureResult } from './ppt-master'
 import type { DesignExportPayload, DesignExportResult } from './design-export'
 import type {
   MemoryMarkdownExportSavePayload,
@@ -271,8 +270,6 @@ export type SkillRootListItem = {
 export type SkillRootListResult =
   | { ok: true; roots: SkillRootListItem[] }
   | { ok: false; message: string }
-
-export type { PptMasterEnsureResult } from './ppt-master'
 
 export type UiPluginListIpcResult = { plugins: UiPluginListItem[] }
 

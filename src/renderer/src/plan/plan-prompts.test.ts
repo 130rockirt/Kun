@@ -72,6 +72,7 @@ describe('plan-prompts', () => {
     expect(prompt).toContain('.deepseekgui/plan/add-auth.md')
     expect(prompt).toContain('authoritative implementation plan')
     expect(prompt).toContain('# Add auth')
+    expect(prompt).toContain('may not be materialized in an isolated worktree')
     expect(prompt).toContain('make every executor objective self-contained')
     expect(prompt).toContain('do not create a snapshot node')
     expect(prompt).toContain('orchestration selected for this turn')

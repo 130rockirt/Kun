@@ -41,9 +41,7 @@ afterEach(() => {
 })
 
 describe('Write presentation action', () => {
-  it('routes a new request to ppt_agent without bootstrapping the legacy installer', async () => {
-    const ensurePptMaster = vi.fn()
-    vi.stubGlobal('window', { kunGui: { ensurePptMaster } })
+  it('routes a new request to ppt_agent', async () => {
     useWriteWorkspaceStore.setState({
       workspaceRoot: '/workspace',
       activeFilePath: '/workspace/brief.md'
@@ -55,12 +53,9 @@ describe('Write presentation action', () => {
     await actions.generatePresentation()
 
     expect(flushSave).toHaveBeenCalledOnce()
-    expect(ensurePptMaster).not.toHaveBeenCalled()
     expect(onSubmitPrompt).toHaveBeenCalledOnce()
     const prompt = onSubmitPrompt.mock.calls[0][0]
     expect(prompt).toContain('`ppt_agent`（start）')
     expect(prompt).toContain('唯一内容来源 Markdown：/workspace/brief.md')
-    expect(prompt).not.toContain('$ppt-master')
-    expect(prompt).not.toContain('ppt_master_')
   })
 })

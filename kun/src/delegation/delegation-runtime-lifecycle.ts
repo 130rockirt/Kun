@@ -41,7 +41,7 @@ import {
   ChildRunRecord,
   ChildSourceEnvelope,
   ChildSecuritySnapshot,
-  isGenericChildLauncher,
+  isResumableChildRun,
   type ChildReturnFormat,
   type ChildRunExecutor,
   type ChildRunLauncher,
@@ -162,6 +162,9 @@ export class DelegationRuntime extends DelegationRuntimeRun {
   }): Promise<ChildRunRecord> {
     const previous = await this.options.store.get(input.childId)
     if (!previous) throw new Error(`child run ${input.childId} was not found`)
+    if (previous.fastContext === true) {
+      throw new Error('Fast Context retrieval children cannot be resumed; start a new explore_agent retrieval.')
+    }
     if (previous.parentThreadId !== input.parentThreadId) {
       throw new Error(`child run ${input.childId} does not belong to this parent thread`)
     }
@@ -276,6 +279,8 @@ export class DelegationRuntime extends DelegationRuntimeRun {
         resolvedReasoningEffort: record.reasoningEffort,
         resolvedServiceTier: record.serviceTier,
         returnFormat: record.returnFormat,
+        fastContext: record.fastContext === true,
+        fastContextTasks: record.fastContextTasks,
         workspace,
         security,
         onRunning: input.onRunning,
@@ -380,7 +385,7 @@ export class DelegationRuntime extends DelegationRuntimeRun {
         ...record,
         status: 'failed',
         terminationReason: 'runtime_restart',
-        resumable: isGenericChildLauncher(record.launcher),
+        resumable: isResumableChildRun(record),
         error: record.error ?? 'Subagent run was interrupted by a runtime restart.',
         updatedAt: this.now()
       })
@@ -400,7 +405,7 @@ export class DelegationRuntime extends DelegationRuntimeRun {
     const records = await this.options.store.list()
     return [...new Set(
       records
-        .filter((record) => record.resumable === true && isGenericChildLauncher(record.launcher))
+        .filter((record) => record.resumable === true && isResumableChildRun(record))
         .map((record) => record.parentThreadId)
     )]
   }

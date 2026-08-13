@@ -461,9 +461,12 @@ export abstract class ModelStepPreparationService {
           tool.name === 'user_input' ||
           tool.sideEffect === 'read-only')
       : effectiveToolSpecs
+    // Fast Context reserves its fourth and final model step for synthesis so
+    // a retrieval loop cannot spend the whole four-step budget on tools.
+    const fastContextFinalSynthesis = toolContext.fastContext === true && stepIndex >= 3
     const requestToolSpecs = hardRequiredToolName
       ? planningToolSpecs.filter((tool) => tool.name === hardRequiredToolName)
-      : forceFinalAnswerRecovery
+      : forceFinalAnswerRecovery || fastContextFinalSynthesis
         ? []
         : planningToolSpecs
     const promptCachePhase = resolvePromptCachePhase({
@@ -681,6 +684,7 @@ export abstract class ModelStepPreparationService {
       hardRequiredToolName,
       softRequiredToolName,
       forceToolSuppressionFinalAnswerRecovery,
+      fastContextFinalSynthesis,
       requestToolSpecs,
       promptCachePhase,
       svgCompletion,

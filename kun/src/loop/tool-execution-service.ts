@@ -251,9 +251,7 @@ export class ToolExecutionService {
           }
           const message = error instanceof Error ? error.message : String(error)
           const planActive = input.context.threadMode === 'plan' || Boolean(input.context.guiPlan)
-          const guidance = input.call.toolName.startsWith('ppt_master_')
-            ? 'PPT Master is not active in this turn. Call `load_skill` once with `skill_id: "ppt-master"`, then retry the managed PPT tool on the next model step after the tool catalog refreshes. If it remains unavailable, stop and report the problem. Never run PPT Master scripts through `bash`, `background_shell`, or direct Python.'
-            : planActive
+          const guidance = planActive
             ? `\`${input.call.toolName}\` is not available in Plan mode. Continue with advertised read-only tools or \`generate_image\` when the user requests an image. Call \`create_plan\` and put a COMPLETE implementation plan in its \`markdown\` argument — concrete steps, the files to create with their intended contents, and how to verify. Do NOT copy this message into the plan; write the actual plan. If the request is still ambiguous, ask the user a clarifying question and wait instead.`
             : 'Use only tools advertised in the current turn context.'
           await this.deps.events.record({

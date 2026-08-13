@@ -43,6 +43,12 @@ import { BUILTIN_AGENT_CATALOG_BY_ID } from './builtin-agent-catalog.js'
 import { resolveTurnClientSurface } from '../loop/turn-context-resolver.js'
 import { AtomicJsonFile, isManagerAtomicJsonPath } from '../extensions/atomic-json.js'
 import { withManagerDataMutex } from '../manager/data-mutex.js'
+import {
+  FastContextEvidencePackSchema,
+  FastContextTaskSchema,
+  type FastContextEvidencePack,
+  type FastContextTask
+} from './fast-context-evidence.js'
 
 const ChildRunUsage = z.object({
   promptTokens: z.number().int().nonnegative().default(0),
@@ -112,6 +118,11 @@ export type ChildRunTerminationReason = z.infer<typeof ChildRunTerminationReason
 
 export function isGenericChildLauncher(launcher: ChildRunLauncher | undefined): boolean {
   return launcher === 'delegate_task' || launcher === 'explore_agent'
+}
+
+/** Fast Context results are evidence snapshots, not resumable work sessions. */
+export function isResumableChildRun(input: Pick<ChildRunRecord, 'launcher' | 'fastContext'>): boolean {
+  return input.fastContext !== true && isGenericChildLauncher(input.launcher)
 }
 
 /**
@@ -243,6 +254,10 @@ export const ChildRunRecord = z.object({
   detached: z.boolean().optional(),
   /** First-class caller that owns recovery policy for this child. */
   launcher: ChildRunLauncher.optional(),
+  /** Budgeted source-only retrieval child; never runs a provider-native SDK loop. */
+  fastContext: z.literal(true).optional(),
+  /** Original grouped retrieval requests, retained for evidence and resume projection. */
+  fastContextTasks: z.array(FastContextTaskSchema).min(1).max(4).optional(),
   /** Durable host-owned PPT phase identity, including attempts that fail before producing a bundle. */
   pptWorkflow: ChildPptWorkflow.optional(),
   status: z.enum(['queued', 'running', 'completed', 'failed', 'aborted']),
@@ -270,6 +285,8 @@ export const ChildRunRecord = z.object({
   /** Parent turn that produced deckArtifact. */
   deckArtifactParentTurnId: z.string().min(1).optional(),
   evidence: z.array(z.string().min(1).max(2_000)).max(32).optional(),
+  /** Compact structured evidence returned to the parent instead of raw child history. */
+  evidencePack: FastContextEvidencePackSchema.optional(),
   tokenBudget: z.number().int().positive().optional(),
   /** Legacy persisted field. New child runs do not use wall-clock budgets. */
   timeBudgetMs: z.number().int().positive().optional(),
@@ -360,6 +377,10 @@ export type ChildRunExecutor = (input: {
   /** Effective Codex service tier for this child's model requests ('fast' = priority). */
   serviceTier?: 'priority'
   returnFormat?: ChildReturnFormat
+  /** Strict budgeted retrieval mode used only by explore_agent. */
+  fastContext?: boolean
+  /** Original task grouping used to build the structured evidence pack. */
+  fastContextTasks?: readonly FastContextTask[]
   signal: AbortSignal
 }) => Promise<{
   summary: string
@@ -374,6 +395,7 @@ export type ChildRunExecutor = (input: {
   directionBundle?: unknown
   deckArtifact?: unknown
   evidence?: string[]
+  evidencePack?: FastContextEvidencePack
 }>
 
 export type ChildRunAggregate = {

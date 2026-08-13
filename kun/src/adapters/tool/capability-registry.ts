@@ -43,10 +43,6 @@ const PLAN_MODE_ALLOWED_TOOL_NAMES = new Set([
   'request_user_input'
 ])
 
-const MANAGED_SKILL_BLOCKED_TOOL_NAMES: Readonly<Record<string, ReadonlySet<string>>> = {
-  'ppt-master': new Set(['bash', 'background_shell'])
-}
-
 export class CapabilityRegistry {
   private readonly providers = new Map<string, CapabilityToolProvider>()
   private readonly tools = new Map<string, CapabilityToolRecord>()
@@ -201,9 +197,6 @@ export class CapabilityRegistry {
       return false
     }
     if (context?.blockedToolNames?.includes(toolName)) return false
-    for (const skillId of context?.activeSkillIds ?? []) {
-      if (MANAGED_SKILL_BLOCKED_TOOL_NAMES[skillId]?.has(toolName)) return false
-    }
     const allowed = context?.allowedToolNames
     return !allowed || allowed.includes(toolName)
   }

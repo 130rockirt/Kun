@@ -81,7 +81,8 @@ describe('plan worktree lifecycle recovery actions', () => {
   it('offers conflict containment and integration recovery without hiding the retained worktree', async () => {
     const text = await renderRun(record('needs_attention', {
       attentionReason: 'rebase_conflict',
-      attentionMessage: 'Resolve conflicts in the isolated worktree.'
+      attentionMessage: 'Resolve conflicts in the isolated worktree.',
+      completionVerifiedAt: '2026-08-12T00:01:00.000Z'
     }))
     expect(text).toContain('Open source plan')
     expect(text).toContain('Open conversation')
@@ -146,5 +147,14 @@ describe('plan worktree lifecycle recovery actions', () => {
       orchestration: 'direct'
     })
     expect(usePlanWorktreeStore.getState().plans[run.planId]?.useWorktree).toBe(false)
+  })
+
+  it('does not offer integration retry before structured completion is verified', async () => {
+    const text = await renderRun(record('needs_attention', {
+      executionThreadId: undefined,
+      executionTurnId: undefined,
+      attentionReason: 'thread_attach_failed'
+    }))
+    expect(text).not.toContain('Retry integration')
   })
 })

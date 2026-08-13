@@ -64,6 +64,10 @@ export type AgentLoopOptions = {
   roles?: RolesConfig
   toolStorm?: ToolStormBreakerOptions & { enabled?: boolean }
   turnLimits?: TurnLimitsConfig
+  /** Internal retrieval-child marker propagated into discovery and execution contexts. */
+  fastContext?: boolean
+  /** Grouped Fast Context task count used to require explicit source attribution. */
+  fastContextTaskCount?: number
   /**
    * Disable only the wall-clock deadline for this loop. Delegated child
    * agents use this so they run until completion or explicit cancellation;

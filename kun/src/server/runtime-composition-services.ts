@@ -8,7 +8,6 @@ import {
   buildPptBoardLocalTools,
   buildDesignMotionLocalTools,
   buildDesignSvgLocalTools,
-  buildPptMasterLocalTools,
   buildPptAgentLocalTools,
   LocalToolHost,
   buildDefaultLocalTools,
@@ -50,6 +49,7 @@ import type { createRuntimeModelComposition } from './runtime-composition-model.
 import type { KunServeRuntimeOptions } from './runtime-factory-types.js'
 import {
   builtinToolOptionsForOptions,
+  skillsConfigForRuntime,
   toolOutputLimitsForOptions
 } from './runtime-factory-config.js'
 import {
@@ -100,7 +100,7 @@ export async function createRuntimeServices(
       oauthStorageDir: join(core.activeOptions.dataDir, 'mcp-oauth'),
       ...(oauthEncryptor ? { oauthEncryptor } : {})
     }),
-    SkillRuntime.create(core.activeOptions.capabilities?.skills),
+    SkillRuntime.create(skillsConfigForRuntime(core.activeOptions)),
     seedUsageCarryover({ threadStore, sessionStore, usageService })
   ])
   let instructionRuntime = new InstructionRuntime(core.activeOptions.capabilities?.instructions)
@@ -332,9 +332,9 @@ export async function createRuntimeServices(
       ...buildPptBoardLocalTools()
     ]
   }
-  const pptMasterProvider = {
-    id: 'ppt-master',
-    kind: 'skill' as const,
+  const pptAgentProvider = {
+    id: 'ppt-agent',
+    kind: 'built-in' as const,
     enabled: true,
     available: true,
     effects: {
@@ -344,7 +344,6 @@ export async function createRuntimeServices(
       guiAutomation: false
     },
     tools: [
-      ...buildPptMasterLocalTools(),
       ...buildPptAgentLocalTools({
         enabled: () => core.activeOptions.lab?.pptAgent?.enabled !== false,
         toolchainDirectory: () => process.env.KUN_PPT_TOOLCHAIN_DIR,
@@ -401,7 +400,7 @@ export async function createRuntimeServices(
     ...musicGenProviders.providers,
     ...videoGenProviders.providers,
     ...officeCliProviders,
-    pptMasterProvider,
+    pptAgentProvider,
     designCanvasProvider,
     // NOTE: computer_use is intentionally NOT in baseToolProviders — host
     // control must not be delegable to subagents. browser_use follows the

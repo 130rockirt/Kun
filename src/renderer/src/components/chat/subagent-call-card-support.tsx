@@ -144,7 +144,7 @@ export function parseDelegateDetail(detail: string | undefined): DelegateDetail 
       ? obj.resumable
       : typeof child?.resumable === 'boolean' ? child.resumable : undefined,
     resumeCount: num(obj.resumeCount) ?? num(child?.resumeCount),
-    title: str(obj.title) ?? str(child?.title) ?? singleTask?.title,
+    title: str(obj.title) ?? str(obj.label) ?? str(child?.title) ?? str(child?.label) ?? singleTask?.title,
     query: str(obj.query) ?? str(child?.query) ?? singleTask?.query,
     summary: str(obj.summary) ?? str(child?.summary),
     summaryTruncated: obj.summaryTruncated === true || child?.summaryTruncated === true,
@@ -196,9 +196,10 @@ export function parseFastContextEvidencePack(detail: string | undefined): FastCo
 
 function parseFastContextEvidenceTask(value: unknown): FastContextEvidenceTask | undefined {
   const rawTask = recordValue(value)
-  const index = rawTask?.index
-  const title = boundedString(rawTask?.title, 160)
-  const query = boundedString(rawTask?.query, 800)
+  if (!rawTask) return undefined
+  const index = rawTask.index
+  const title = boundedString(rawTask.title, 160)
+  const query = boundedString(rawTask.query, 800)
   if (!Number.isInteger(index) || (index as number) < 0 || (index as number) > 3 || !title || !query) return undefined
   const evidence = Array.isArray(rawTask.evidence)
     ? rawTask.evidence.flatMap((item) => {

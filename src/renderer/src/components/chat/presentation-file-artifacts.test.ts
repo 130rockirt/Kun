@@ -37,7 +37,7 @@ describe('presentation file artifacts', () => {
       {
         kind: 'tool',
         id: 'ppt',
-        summary: 'ppt_master_run',
+        summary: 'ppt_agent',
         status: 'success',
         toolKind: 'file_change',
         filePath: '/workspace/presentations/brief.pptx',
@@ -65,7 +65,7 @@ describe('presentation file artifacts', () => {
       {
         kind: 'tool',
         id: 'failed',
-        summary: 'ppt_master_run',
+        summary: 'ppt_agent',
         status: 'error',
         toolKind: 'file_change',
         filePath: 'presentations/failed.pptx'
@@ -220,7 +220,7 @@ describe('presentation file artifacts', () => {
     const blocks: ChatBlock[] = [{
       kind: 'tool',
       id: 'ppt',
-      summary: 'ppt_master_run',
+      summary: 'ppt_agent',
       status: 'success',
       toolKind: 'file_change',
       filePath: 'presentations/brief.pptx'

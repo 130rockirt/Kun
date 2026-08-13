@@ -35,28 +35,6 @@ function context(
   }
 }
 
-describe('CapabilityRegistry managed skill policy', () => {
-  it('blocks generic shell tools only while PPT Master is active', () => {
-    const registry = CapabilityRegistry.fromLocalTools([
-      tool('read'),
-      tool('bash'),
-      tool('background_shell'),
-      tool('ppt_master_run')
-    ])
-
-    expect(registry.listTools(context([])).map((spec) => spec.name)).toEqual([
-      'read', 'bash', 'background_shell', 'ppt_master_run'
-    ])
-    expect(registry.listTools(context(['ppt-master'])).map((spec) => spec.name)).toEqual([
-      'read', 'ppt_master_run'
-    ])
-    expect(() => registry.resolveTool('bash', context(['ppt-master'])))
-      .toThrow('tool bash is not advertised by active tool policy')
-    expect(() => registry.resolveTool('background_shell', context(['ppt-master'])))
-      .toThrow('tool background_shell is not advertised by active tool policy')
-  })
-})
-
 describe('CapabilityRegistry Graph orchestration policy', () => {
   const providers = () => [
     {

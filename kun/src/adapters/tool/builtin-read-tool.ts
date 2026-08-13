@@ -2,11 +2,18 @@ import { createReadStream } from 'node:fs'
 import { createInterface } from 'node:readline'
 import { LocalToolHost, type LocalTool } from './local-tool-host.js'
 import { formatSize } from './truncate.js'
-import { DEFAULT_READ_MAX_FILE_BYTES, type ReadLocalToolOptions } from './builtin-tool-types.js'
+import {
+  DEFAULT_READ_MAX_FILE_BYTES,
+  FAST_CONTEXT_READ_MAX_CONTENT_BYTES,
+  FAST_CONTEXT_READ_MAX_FILE_BYTES,
+  FAST_CONTEXT_READ_MAX_LINES,
+  type ReadLocalToolOptions
+} from './builtin-tool-types.js'
 import { defaultReadLocalToolOperations } from './builtin-tool-operations.js'
 import {
   formatDimensionNote,
   getReadClassification,
+  isFastContextExcludedWorkspacePath,
   isBinaryBuffer,
   normalizePositiveInteger,
   resolveWorkspacePath,
@@ -60,9 +67,25 @@ export function createReadLocalTool(options: ReadLocalToolOptions = {}): LocalTo
           isError: true
         }
       }
-      const { absolutePath, relativePath } = await resolveWorkspacePath(rawPath, context)
+      const { workspaceRoot, absolutePath, relativePath } = await resolveWorkspacePath(rawPath, context)
+      const fastContext = context.fastContext === true
+      if (fastContext && isFastContextExcludedWorkspacePath(workspaceRoot, absolutePath)) {
+        return {
+          output: {
+            code: 'fast_context_path_excluded',
+            error: 'Fast Context does not read dependency, build, cache, or VCS paths',
+            path: absolutePath,
+            relative_path: relativePath,
+            fast_context: true
+          },
+          isError: true
+        }
+      }
       const fileStat = await statOp(absolutePath)
       const fileSize = typeof fileStat.size === 'bigint' ? Number(fileStat.size) : fileStat.size
+      const effectiveMaxFileBytes = fastContext
+        ? Math.min(maxFileBytes ?? FAST_CONTEXT_READ_MAX_FILE_BYTES, FAST_CONTEXT_READ_MAX_FILE_BYTES)
+        : maxFileBytes
       const revision = `${String(fileStat.size)}:${String(fileStat.mtimeMs)}`
       const expectedRevision = typeof args.expected_revision === 'string' ? args.expected_revision : undefined
       if (expectedRevision && expectedRevision !== revision) {
@@ -78,36 +101,44 @@ export function createReadLocalTool(options: ReadLocalToolOptions = {}): LocalTo
           isError: true
         }
       }
-      if (maxFileBytes !== undefined && typeof fileStat.size === 'number' && fileStat.size > maxFileBytes) {
+      if (effectiveMaxFileBytes !== undefined && fileSize > effectiveMaxFileBytes) {
         return {
           output: {
-            code: 'file_too_large',
-            error: `refusing to read ${formatSize(fileStat.size)} file (maximum ${formatSize(maxFileBytes)})`,
+            code: fastContext ? 'fast_context_file_too_large' : 'file_too_large',
+            error: `refusing to read ${formatSize(fileSize)} file (maximum ${formatSize(effectiveMaxFileBytes)})`,
             path: absolutePath,
             relative_path: relativePath,
-            byte_size: fileStat.size,
-            max_file_bytes: maxFileBytes,
-            hint: 'Use grep, a narrower file, or a byte-limited command after explicit approval.'
+            byte_size: fileSize,
+            max_file_bytes: effectiveMaxFileBytes,
+            hint: fastContext
+              ? 'Use bounded grep evidence or a smaller candidate file in Fast Context.'
+              : 'Use grep, a narrower file, or a byte-limited command after explicit approval.',
+            ...(fastContext ? { fast_context: true } : {})
           },
           isError: true
         }
       }
-      if (!options.operations?.readFile && fileSize > DEFAULT_READ_MAX_FILE_BYTES) {
-        return readLargeTextPage({ absolutePath, relativePath, classification: getReadClassification(absolutePath, context.workspace), args, context, revision, byteSize: fileSize, maxLines: options.maxLines, maxBytes: options.maxBytes })
+      // Fast Context has already rejected files over its fixed 512 KiB input
+      // ceiling. It must never stream a giant file solely to count its lines.
+      if (!fastContext && !options.operations?.readFile && fileSize > DEFAULT_READ_MAX_FILE_BYTES) {
+        return readLargeTextPage({ absolutePath, relativePath, classification: getReadClassification(absolutePath, context.workspace), args, context, revision, byteSize: fileSize, maxLines: fastContextLineLimit(options.maxLines, context.fastContext), maxBytes: options.maxBytes })
       }
       const fileBuffer = await readFileOp(absolutePath)
       // A file can grow between stat() and readFile(). Never continue to
       // transform or base64-encode an unexpectedly large buffer.
-      if (maxFileBytes !== undefined && fileBuffer.length > maxFileBytes) {
+      if (effectiveMaxFileBytes !== undefined && fileBuffer.length > effectiveMaxFileBytes) {
         return {
           output: {
-            code: 'file_too_large',
-            error: `refusing to read ${formatSize(fileBuffer.length)} file (maximum ${formatSize(maxFileBytes)})`,
+            code: fastContext ? 'fast_context_file_too_large' : 'file_too_large',
+            error: `refusing to read ${formatSize(fileBuffer.length)} file (maximum ${formatSize(effectiveMaxFileBytes)})`,
             path: absolutePath,
             relative_path: relativePath,
             byte_size: fileBuffer.length,
-            max_file_bytes: maxFileBytes,
-            hint: 'Use grep, a narrower file, or a byte-limited command after explicit approval.'
+            max_file_bytes: effectiveMaxFileBytes,
+            hint: fastContext
+              ? 'Use bounded grep evidence or a smaller candidate file in Fast Context.'
+              : 'Use grep, a narrower file, or a byte-limited command after explicit approval.',
+            ...(fastContext ? { fast_context: true } : {})
           },
           isError: true
         }
@@ -115,6 +146,23 @@ export function createReadLocalTool(options: ReadLocalToolOptions = {}): LocalTo
       const classification = getReadClassification(absolutePath, context.workspace)
       const image = detectImageMimeTypeOp(fileBuffer)
       if (image) {
+        if (fastContext) {
+          return {
+            output: {
+              path: absolutePath,
+              relative_path: relativePath,
+              kind: 'image',
+              mime_type: image.mimeType,
+              width: image.width ?? null,
+              height: image.height ?? null,
+              byte_size: fileBuffer.length,
+              data_omitted: true,
+              note: `Fast Context omits image bytes [${image.mimeType}].`,
+              classification: classification ?? null,
+              fast_context: true
+            }
+          }
+        }
         if (autoResizeImages && resizeImageOp) {
           const resized = await resizeImageOp(fileBuffer, image.mimeType)
           if (!resized) {
@@ -167,6 +215,19 @@ export function createReadLocalTool(options: ReadLocalToolOptions = {}): LocalTo
         }
       }
       if (isBinaryBuffer(fileBuffer)) {
+        if (fastContext) {
+          return {
+            output: {
+              code: 'fast_context_binary_omitted',
+              error: 'Fast Context reads text only and does not return binary bytes',
+              path: absolutePath,
+              relative_path: relativePath,
+              byte_size: fileBuffer.length,
+              fast_context: true
+            },
+            isError: true
+          }
+        }
         return { output: { error: 'read only supports text files in Kun serve mode', path: absolutePath }, isError: true }
       }
       const text = fileBuffer.toString('utf8').replace(/\r\n/g, '\n')
@@ -175,14 +236,8 @@ export function createReadLocalTool(options: ReadLocalToolOptions = {}): LocalTo
       const requestedLimit = typeof args.limit === 'number' && Number.isFinite(args.limit)
         ? Math.max(1, Math.floor(args.limit))
         : Number.MAX_SAFE_INTEGER
-      const lineLimit = Math.min(requestedLimit, options.maxLines ?? Number.MAX_SAFE_INTEGER)
-      const byteBudget = Math.max(
-        512,
-        Math.min(
-          options.maxBytes ?? Number.MAX_SAFE_INTEGER,
-          Math.floor((context.sourceResultBudgetTokens ?? 128_000) * 3)
-        )
-      )
+      const lineLimit = Math.min(requestedLimit, fastContextLineLimit(options.maxLines, context.fastContext))
+      const byteBudget = readByteBudget(options.maxBytes, context.sourceResultBudgetTokens, fastContext)
       const lines: string[] = []
       let shownBytes = 0
       let firstLineExceedsLimit = false
@@ -221,7 +276,13 @@ export function createReadLocalTool(options: ReadLocalToolOptions = {}): LocalTo
           has_more: hasMore,
           next_offset: hasMore ? endLine + 1 : null,
           truncation_by: truncationBy,
-          first_line_exceeds_limit: firstLineExceedsLimit
+          first_line_exceeds_limit: firstLineExceedsLimit,
+          ...(fastContext
+            ? {
+                fast_context: true,
+                output_byte_limit: FAST_CONTEXT_READ_MAX_CONTENT_BYTES
+              }
+            : {})
         }
       }
     })
@@ -236,7 +297,7 @@ async function readLargeTextPage(input: {
   relativePath: string
   classification: ReturnType<typeof getReadClassification>
   args: Record<string, unknown>
-  context: { sourceResultBudgetTokens?: number; abortSignal: AbortSignal }
+  context: { sourceResultBudgetTokens?: number; abortSignal: AbortSignal; fastContext?: boolean }
   revision: string
   byteSize: number
   maxLines?: number
@@ -245,7 +306,7 @@ async function readLargeTextPage(input: {
   const offset = Math.max(1, normalizePositiveInteger(input.args.offset, 1))
   const requestedLimit = typeof input.args.limit === 'number' && Number.isFinite(input.args.limit)
     ? Math.max(1, Math.floor(input.args.limit)) : Number.MAX_SAFE_INTEGER
-  const lineLimit = Math.min(requestedLimit, input.maxLines ?? Number.MAX_SAFE_INTEGER)
+  const lineLimit = Math.min(requestedLimit, fastContextLineLimit(input.maxLines, input.context.fastContext))
   const byteBudget = Math.max(512, Math.min(input.maxBytes ?? Number.MAX_SAFE_INTEGER, Math.floor((input.context.sourceResultBudgetTokens ?? 128_000) * 3)))
   const lines: string[] = []
   let totalLines = 0
@@ -303,4 +364,24 @@ async function readLargeTextPage(input: {
       first_line_exceeds_limit: firstLineExceedsLimit
     }
   }
+}
+
+function fastContextLineLimit(maxLines: number | undefined, fastContext: boolean | undefined): number {
+  return Math.min(maxLines ?? Number.MAX_SAFE_INTEGER, fastContext ? FAST_CONTEXT_READ_MAX_LINES : Number.MAX_SAFE_INTEGER)
+}
+
+function readByteBudget(
+  configuredMaxBytes: number | undefined,
+  sourceResultBudgetTokens: number | undefined,
+  fastContext: boolean
+): number {
+  const modelBudget = Math.floor((sourceResultBudgetTokens ?? 128_000) * 3)
+  return Math.max(
+    512,
+    Math.min(
+      configuredMaxBytes ?? Number.MAX_SAFE_INTEGER,
+      modelBudget,
+      fastContext ? FAST_CONTEXT_READ_MAX_CONTENT_BYTES : Number.MAX_SAFE_INTEGER
+    )
+  )
 }

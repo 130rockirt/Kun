@@ -395,6 +395,33 @@ describe('DelegationRuntime resume handling', () => {
     }
   })
 
+  it('never resumes a persisted Fast Context child, even when an old record says resumable', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'kun-fast-context-no-resume-'))
+    try {
+      const store = new FileDelegationStore(dir)
+      await store.upsert(ChildRunRecord.parse({
+        id: 'child_fast_context', parentThreadId: 'parent', parentTurnId: 'turn-1',
+        launcher: 'explore_agent', fastContext: true,
+        fastContextTasks: [{ title: 'Auth', query: 'Find createSession.' }],
+        prompt: 'retrieve auth', workspace: '/workspace', profile: 'explore',
+        profileSnapshot: { mode: 'subagent', toolPolicy: 'readOnly', allowedTools: ['grep', 'glob', 'read'] },
+        security: { sandboxRoot: '/workspace', memoryEnabled: false },
+        status: 'aborted', terminationReason: 'manual_stop', resumable: true, resumeCount: 0,
+        usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+        createdAt: '2026-08-11T00:00:00.000Z', updatedAt: '2026-08-11T00:00:01.000Z'
+      }))
+      const runtime = new DelegationRuntime({ config: subagentConfig(), store, executor: async () => ({ summary: 'must not run' }) })
+      await expect(runtime.resumeChild({
+        childId: 'child_fast_context', parentThreadId: 'parent', parentTurnId: 'turn-2',
+        prompt: 'leak child summary', expectedLaunchers: ['explore_agent'], requireResumable: true,
+        signal: new AbortController().signal
+      })).rejects.toThrow('Fast Context retrieval children cannot be resumed')
+      await expect(runtime.resumableParentThreadIds()).resolves.toEqual([])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
   it('marks only generic orphaned children resumable after restart', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'kun-delegation-restart-resume-'))
     try {

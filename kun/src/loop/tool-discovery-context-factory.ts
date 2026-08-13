@@ -14,6 +14,8 @@ export type ToolDiscoveryContextFactoryDeps = {
   blockedToolNames?: readonly string[]
   blockedSkillIds?: readonly string[]
   runtimeDataDir?: string
+  fastContext?: boolean
+  fastContextTaskCount?: number
   interactiveToolBridge: Pick<InteractiveToolBridge, 'awaitUserInput'>
 }
 
@@ -70,6 +72,8 @@ export function createToolDiscoveryContext(
     approvalReviewer: input.approvalReviewer,
     sandboxMode: input.sandboxMode,
     ...(deps.runtimeDataDir ? { runtimeDataDir: deps.runtimeDataDir } : {}),
+    ...(deps.fastContext ? { fastContext: true } : {}),
+    ...(deps.fastContextTaskCount ? { fastContextTaskCount: deps.fastContextTaskCount } : {}),
     abortSignal: input.signal,
     // A tool schema lookup is not tool execution. Retain the existing inert
     // approval callback so a provider cannot create a real approval request

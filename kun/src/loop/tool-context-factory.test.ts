@@ -40,6 +40,8 @@ describe('createToolExecutionContext', () => {
       blockedToolNames: ['blocked_tool'],
       blockedSkillIds: ['blocked_skill'],
       runtimeDataDir: '/runtime',
+      fastContext: true,
+      fastContextTaskCount: 2,
       interactiveToolBridge: { awaitApproval, awaitUserInput }
     })
     const approval = createApprovalRequest({
@@ -63,7 +65,9 @@ describe('createToolExecutionContext', () => {
       sandboxMode: 'workspace-write',
       blockedProviderIds: ['mcp:blocked'],
       blockedToolNames: ['blocked_tool'],
-      blockedSkillIds: ['blocked_skill']
+      blockedSkillIds: ['blocked_skill'],
+      fastContext: true,
+      fastContextTaskCount: 2
     })
     expect(awaitApproval).toHaveBeenCalledWith(expect.objectContaining({
       approval,

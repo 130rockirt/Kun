@@ -23,7 +23,5 @@ describe('write presentation helpers', () => {
     expect(prompt).toContain('若当前回合没有提供 `ppt_agent`')
     expect(prompt).toContain('不要改用旧版 PPT 技能、通用子代理')
     expect(prompt).toContain('不要修改、重命名或移动来源 Markdown')
-    expect(prompt).not.toContain('$ppt-master')
-    expect(prompt).not.toContain('ppt_master_')
   })
 })

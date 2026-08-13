@@ -41,6 +41,8 @@ describe('createToolDiscoveryContext', () => {
       blockedToolNames: ['blocked_tool'],
       blockedSkillIds: ['blocked_skill'],
       runtimeDataDir: '/runtime',
+      fastContext: true,
+      fastContextTaskCount: 2,
       interactiveToolBridge: { awaitUserInput }
     })
     const approval = createApprovalRequest({
@@ -65,7 +67,9 @@ describe('createToolDiscoveryContext', () => {
       sandboxMode: 'workspace-write',
       blockedProviderIds: ['mcp:blocked'],
       blockedToolNames: ['blocked_tool'],
-      blockedSkillIds: ['blocked_skill']
+      blockedSkillIds: ['blocked_skill'],
+      fastContext: true,
+      fastContextTaskCount: 2
     })
     // Discovery intentionally does not inherit execution-only routing or
     // artifact persistence capabilities.

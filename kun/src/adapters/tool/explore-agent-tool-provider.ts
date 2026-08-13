@@ -1,5 +1,9 @@
 import type { DelegationRuntime } from '../../delegation/delegation-runtime.js'
-import { EXPLORE_PROFILE } from '../../delegation/builtin-profiles.js'
+import {
+  buildFastContextEvidencePack,
+  type FastContextEvidencePack,
+  type FastContextTask
+} from '../../delegation/fast-context-evidence.js'
 import {
   ModelReasoningEffort,
   type SubagentProfileConfig
@@ -19,426 +23,256 @@ export type ExploreAgentToolConfig = {
   fast?: boolean
 }
 
-/**
- * First-class exploration tool allow-list. Full bash plus read-only search /
- * inspection tools and the web helpers. Deliberately excludes mutation and
- * delegation tools (write/edit/delete/delegate_task/...) so the child can
- * investigate freely but never modify the workspace.
- */
-export const EXPLORE_AGENT_ALLOWED_TOOLS = [
-  'bash',
-  'read',
-  'grep',
-  'glob',
-  'ls',
-  'repo_map',
-  'find',
-  'web_fetch',
-  'web_search'
-] as const
+/** Fast Context's managed source-tool boundary. */
+export const EXPLORE_AGENT_ALLOWED_TOOLS = ['grep', 'glob', 'read'] as const
 
+const FAST_CONTEXT_LABEL = 'Fast Context retrieval'
+const FAST_CONTEXT_SYSTEM_PROMPT = [
+  'You are Kun’s budgeted repository retrieval agent.',
+  'You may only use grep, glob, and read. Do not use shell, web, repo maps, skills, mutation, or delegation.',
+  'Keep source inspection narrow and return concise task conclusions with file-and-line evidence.'
+].join(' ')
 const EXPLORE_AGENT_PROMPT_PREAMBLE = [
-  '你是 Kun 的只读探索代理。',
-  '只查找文件、搜索关键字、列目录、读取内容并返回结论（文件:行 + 简要说明），',
-  '绝不修改任何文件或外部状态，也不要执行会改动工作区的命令。'
-].join('')
+  'You are Kun’s budgeted repository retrieval agent.',
+  'Use only grep, glob, and read. Use rounds 1-3 to locate candidates, target those paths, and read small relevant ranges.',
+  'Round 4 is final synthesis only: do not call a tool during that round.',
+  'Do not use shell, web, repo maps, skills, or any mutation. Do not dump raw tool output.',
+  'Finish with concise sections headed “Task 1:”, “Task 2:”, and so on. State uncertainty when source evidence is incomplete.'
+].join(' ')
 
 const EXPLORE_AGENT_DESCRIPTION = [
-  'Use this first for any repository or project exploration: locating files or symbols, searching code or keywords, tracing call paths or dependencies, understanding architecture or behavior, or gathering context before a change.',
-  'Submit one batch containing 2-4 non-overlapping tasks for a complex investigation (for example API wiring, UI, and tests). Each task needs a short distinct title plus a narrow, self-contained query that states what evidence to return.',
-  'Tasks in one batch run concurrently when policy and global capacity allow. If an investigation depends on evidence from this batch, submit it in a later explore_agent batch.',
-  '即使后续需要修改文件，也必须先调用 explore_agent；它优先于主代理直接使用 read/grep/glob/ls/repo_map/find/bash，复杂问题应在一个批次中提交 2-4 个独立调查任务。',
-  'Only use direct inspection tools for narrow follow-up verification after this tool returns, or when explore_agent is unavailable or fails.',
-  '它可以运行 bash 与只读探索工具（read/grep/glob/ls/repo_map/find/web_fetch/web_search），但始终不会修改文件。'
+  'Run a Fast Context repository retrieval before broad code exploration. Submit 1-4 scoped tasks together; one budgeted child investigates them as a single retrieval run.',
+  'The child can only use grep, glob, and read, has at most four model steps and eight source calls per step, and returns compact file-and-line evidence instead of raw search output.',
+  'Use a later explore_agent call for questions that depend on this evidence. 即使后续需要修改文件，也必须先调用 explore_agent；复杂问题请在一个批次中提交 2-4 个互不重叠的任务。'
 ].join(' ')
 
 /**
- * First-class `explore_agent` tool: the main agent delegates a scoped
- * exploration query to a read-oriented child that may use full bash plus the
- * exploration allow-list. It reuses the whole subagent runtime (child thread,
- * events, approval inheritance, SubagentCallCard rendering) while keeping the
- * delegate_task router untouched. Lab disable is enforced live via
- * `shouldAdvertise` (and an execute backstop) so hot-applied settings can
- * hide or restore the tool without rebuilding the provider away.
+ * First-class budgeted repository retriever. `tasks` remains a 1-4 item API,
+ * but all tasks share one child and one global source-tool budget.
  */
 export function buildExploreAgentToolProvider(
   runtime: DelegationRuntime | undefined,
   config: () => ExploreAgentToolConfig | undefined
 ): CapabilityToolProvider[] {
   if (!runtime?.enabled()) return []
-  const shouldAdvertise = (_context: ToolHostContext): boolean =>
-    config()?.enabled !== false
-  return [
-    {
-      id: EXPLORE_AGENT_PROVIDER_ID,
-      kind: 'delegation',
-      enabled: true,
-      available: true,
-      tools: [
-        LocalToolHost.defineTool({
-          name: EXPLORE_AGENT_TOOL_NAME,
-          description: EXPLORE_AGENT_DESCRIPTION,
-          inputSchema: {
-            type: 'object',
-            properties: {
-              tasks: {
-                type: 'array',
-                minItems: 1,
-                maxItems: 4,
-                description: 'One wave of 1-4 independent exploration tasks. Use 2-4 non-overlapping tasks for complex investigations and a later batch for dependent follow-ups.',
-                items: {
-                  type: 'object',
-                  properties: {
-                    title: {
-                      type: 'string',
-                      minLength: 1,
-                      description: 'Distinct short UI title for this exploration task.'
-                    },
-                    query: {
-                      type: 'string',
-                      minLength: 1,
-                      description: 'Narrow, self-contained investigation request, including the file:line evidence or concise conclusion to return.'
-                    }
-                  },
-                  required: ['title', 'query'],
-                  additionalProperties: false
-                }
+  const shouldAdvertise = (_context: ToolHostContext): boolean => config()?.enabled !== false
+  return [{
+    id: EXPLORE_AGENT_PROVIDER_ID,
+    kind: 'delegation',
+    enabled: true,
+    available: true,
+    tools: [LocalToolHost.defineTool({
+      name: EXPLORE_AGENT_TOOL_NAME,
+      description: EXPLORE_AGENT_DESCRIPTION,
+      inputSchema: {
+        type: 'object',
+        properties: {
+          tasks: {
+            type: 'array', minItems: 1, maxItems: 4,
+            description: 'One Fast Context wave of 1-4 scoped retrieval tasks. Dependent questions belong in a later wave.',
+            items: {
+              type: 'object',
+              properties: {
+                title: { type: 'string', minLength: 1, description: 'Short task title.' },
+                query: { type: 'string', minLength: 1, description: 'Scoped repository question and expected evidence.' }
               },
-              workspace: {
-                type: 'string',
-                description: 'Optional workspace root to explore. Defaults to the parent turn workspace.'
-              }
-            },
-            required: ['tasks'],
-            additionalProperties: false
-          },
-          policy: 'auto',
-          sideEffect: 'read-only',
-          shouldAdvertise,
-          execute: async (args, context, onUpdate) => {
-            const cfg = config()
-            if (cfg?.enabled === false) {
-              return {
-                output: { error: 'explore_agent is disabled in Lab settings' },
-                isError: true
-              }
+              required: ['title', 'query'], additionalProperties: false
             }
-            const parsedTasks = parseExploreTasks(args.tasks)
-            if ('error' in parsedTasks) {
-              return { output: { error: parsedTasks.error }, isError: true }
-            }
-            const workspace = stringValue(args.workspace) || context.workspace
-            const resolvedCfg = cfg ?? {}
-            const inlineProfile = buildExploreInlineProfile(resolvedCfg)
-            const batch = new ExploreBatchState(parsedTasks.tasks, onUpdate)
-            await batch.emit()
-            const runTask = async (task: ExploreTask, index: number): Promise<void> => {
-              try {
-                const record = await runtime.runChild({
-                  parentThreadId: context.threadId,
-                  parentTurnId: context.turnId,
-                  launcher: 'explore_agent',
-                  label: task.title,
-                  prompt: task.query,
-                  workspace,
-                  inlineProfile,
-                  agentSurface: context.agentSurface ?? 'code',
-                  // Follow the parent session's model/provider/reasoning/service
-                  // tier unless the Lab settings configure an explicit override.
-                  inheritSessionDefaults: true,
-                  ...(resolvedCfg.fast === true ? { serviceTier: 'priority' as const } : {}),
-                  ...(context.serviceTier ? { inheritedServiceTier: context.serviceTier } : {}),
-                  ...(context.actingModelRoute?.model
-                    ? { inheritedModel: context.actingModelRoute.model }
-                    : context.model?.id?.trim()
-                      ? { inheritedModel: context.model.id.trim() }
-                      : {}),
-                  ...(context.actingModelRoute?.providerId
-                    ? { inheritedProviderId: context.actingModelRoute.providerId }
-                    : context.modelProviderId?.trim()
-                      ? { inheritedProviderId: context.modelProviderId.trim() }
-                      : {}),
-                  ...(context.actingModelRoute?.accountId
-                    ? { inheritedAccountId: context.actingModelRoute.accountId }
-                    : {}),
-                  ...(context.reasoningEffort?.trim()
-                    ? { inheritedReasoningEffort: context.reasoningEffort.trim() }
-                    : {}),
-                  security: {
-                    sandboxRoot: workspace,
-                    ...(context.allowedProviderIds
-                      ? { allowedProviderIds: [...context.allowedProviderIds] }
-                      : {}),
-                    ...(context.allowedToolNames
-                      ? { allowedToolNames: [...context.allowedToolNames] }
-                      : {}),
-                    ...(context.allowedSkillIds
-                      ? { allowedSkillIds: [...context.allowedSkillIds] }
-                      : {}),
-                    ...(context.allowedReadPaths
-                      ? { allowedReadPaths: [...context.allowedReadPaths] }
-                      : {}),
-                    ...(context.allowedWritePaths
-                      ? { allowedWritePaths: [...context.allowedWritePaths] }
-                      : {}),
-                    ...(context.allowedArtifactIds
-                      ? { allowedArtifactIds: [...context.allowedArtifactIds] }
-                      : {}),
-                    ...(context.blockedProviderIds
-                      ? { blockedProviderIds: [...context.blockedProviderIds] }
-                      : {}),
-                    ...(context.blockedToolNames
-                      ? { blockedToolNames: [...context.blockedToolNames] }
-                      : {}),
-                    ...(context.blockedSkillIds
-                      ? { blockedSkillIds: [...context.blockedSkillIds] }
-                      : {}),
-                    memoryEnabled: context.memoryPolicy?.enabled === true
-                  },
-                  approvalPolicy: context.approvalPolicy,
-                  ...(context.sandboxMode ? { sandboxMode: context.sandboxMode } : {}),
-                  approvalReviewer: context.approvalReviewer ?? 'user',
-                  ...(context.clientSurface ? { clientSurface: context.clientSurface } : {}),
-                  returnFormat: 'summary',
-                  onQueued: async (childId, _profile, metadata) => {
-                    await batch.update(index, {
-                      childId,
-                      status: 'queued',
-                      profileName: metadata?.profileName?.trim() || 'Repository Explorer',
-                      model: resolveExploreModel(metadata?.model, context)
-                    })
-                  },
-                  onRunning: async (childId, _profile, metadata) => {
-                    await batch.update(index, {
-                      childId,
-                      status: 'running',
-                      profileName: metadata?.profileName?.trim() || 'Repository Explorer',
-                      model: resolveExploreModel(metadata?.model, context)
-                    })
-                  },
-                  signal: context.abortSignal
-                })
-                const failed = record.status === 'failed' || record.status === 'aborted'
-                await batch.update(index, {
-                  childId: record.id,
-                  status: record.status,
-                  summary: record.summary,
-                  error: failed ? record.error ?? record.status : undefined,
-                  model: resolveExploreModel(record.model, context),
-                  profileName: record.profileSnapshot?.name?.trim() || 'Repository Explorer',
-                  toolInvocations: record.toolInvocations,
-                  durationMs: record.durationMs,
-                  usage: record.usage,
-                  parentThreadId: record.parentThreadId,
-                  parentTurnId: record.parentTurnId,
-                  launcher: 'explore_agent',
-                  terminationReason: record.terminationReason,
-                  resumable: record.resumable === true,
-                  resumeCount: record.resumeCount ?? 0,
-                  summaryTruncated: record.summaryTruncated,
-                  resultRef: record.resultRef,
-                  resultUnavailableReason: record.resultUnavailableReason
-                })
-              } catch (error) {
-                await batch.update(index, {
-                  status: context.abortSignal.aborted ? 'aborted' : 'failed',
-                  error: errorMessage(error)
-                })
-              }
-            }
-            if (requiresSerialExploreBatch(context.approvalPolicy)) {
-              for (const [index, task] of parsedTasks.tasks.entries()) {
-                if (context.abortSignal.aborted) {
-                  await batch.abortRemaining(index)
-                  break
-                }
-                await Promise.allSettled([runTask(task, index)])
-              }
-            } else {
-              await Promise.allSettled(parsedTasks.tasks.map(runTask))
-            }
-            const output = batch.output()
-            return { output, isError: output.status === 'failed' }
           }
-        })
-      ]
-    }
-  ]
+        },
+        required: ['tasks'], additionalProperties: false
+      },
+      policy: 'auto',
+      sideEffect: 'read-only',
+      shouldAdvertise,
+      execute: async (args, context, onUpdate) => {
+        const cfg = config()
+        if (cfg?.enabled === false) return { output: { error: 'explore_agent is disabled in Lab settings' }, isError: true }
+        const parsed = parseExploreTasks(args.tasks)
+        if ('error' in parsed) return { output: { error: parsed.error }, isError: true }
+        // The model never chooses a sandbox root. It may only retrieve inside
+        // the immutable workspace captured by the parent tool context.
+        const workspace = context.workspace
+        const state = new FastContextRunState(parsed.tasks, onUpdate)
+        await state.emit()
+        try {
+          const record = await runtime.runChild({
+            parentThreadId: context.threadId,
+            parentTurnId: context.turnId,
+            launcher: 'explore_agent',
+            label: FAST_CONTEXT_LABEL,
+            prompt: fastContextPrompt(parsed.tasks),
+            workspace,
+            inlineProfile: buildExploreInlineProfile(cfg ?? {}),
+            agentSurface: context.agentSurface ?? 'code',
+            inheritSessionDefaults: true,
+            ...(cfg?.fast === true ? { serviceTier: 'priority' as const } : {}),
+            ...(context.serviceTier ? { inheritedServiceTier: context.serviceTier } : {}),
+            ...inheritedModelRoute(context),
+            ...(context.reasoningEffort?.trim() ? { inheritedReasoningEffort: context.reasoningEffort.trim() } : {}),
+            security: securitySnapshot(workspace, context),
+            approvalPolicy: context.approvalPolicy,
+            ...(context.sandboxMode ? { sandboxMode: context.sandboxMode } : {}),
+            approvalReviewer: context.approvalReviewer ?? 'user',
+            ...(context.clientSurface ? { clientSurface: context.clientSurface } : {}),
+            returnFormat: 'summary',
+            fastContext: true,
+            fastContextTasks: parsed.tasks,
+            onQueued: async (childId, _profile, metadata) => state.update({
+              childId, status: 'queued', model: resolveExploreModel(metadata?.model, context),
+              profileName: metadata?.profileName?.trim() || 'Repository Explorer'
+            }),
+            onRunning: async (childId, _profile, metadata) => state.update({
+              childId, status: 'running', model: resolveExploreModel(metadata?.model, context),
+              profileName: metadata?.profileName?.trim() || 'Repository Explorer'
+            }),
+            signal: context.abortSignal
+          })
+          await state.finish(record, context)
+        } catch (error) {
+          await state.fail(context.abortSignal.aborted ? 'aborted' : 'failed', errorMessage(error))
+        }
+        const output = state.output()
+        return { output, isError: output.status === 'failed' || output.status === 'aborted' }
+      }
+    })]
+  }]
 }
 
-type ExploreTask = { title: string; query: string }
-type ExploreChildStatus = 'queued' | 'running' | 'completed' | 'failed' | 'aborted'
-type ExploreBatchStatus = 'running' | 'completed' | 'partial' | 'failed'
+type ExploreStatus = 'queued' | 'running' | 'completed' | 'failed' | 'aborted'
 
-type ExploreChildOutput = ExploreTask & {
-  index: number
+type FastContextOutput = {
+  status: ExploreStatus
   childId?: string
-  status: ExploreChildStatus
-  summary?: string
-  error?: string
-  model?: string
+  label: string
+  title: string
+  launcher: 'explore_agent'
   profile: 'explore'
   profileName: string
+  model?: string
+  error?: string
   toolInvocations?: number
   durationMs?: number
-  usage?: object
   parentThreadId?: string
   parentTurnId?: string
-  launcher?: 'explore_agent'
   terminationReason?: 'user_stop' | 'manual_stop' | 'runtime_restart' | 'child_error'
   resumable?: boolean
   resumeCount?: number
-  summaryTruncated?: boolean
-  resultRef?: {
-    artifactId: string
-    byteSize: number
-    lineCount: number
-    mimeType: 'text/markdown'
+  evidencePack: FastContextEvidencePack
+  child: {
+    childId?: string
+    status: ExploreStatus
+    profile: 'explore'
+    profileName: string
+    model?: string
+    parentThreadId?: string
+    parentTurnId?: string
+    launcher: 'explore_agent'
   }
-  resultUnavailableReason?: string
 }
 
-type ExploreBatchOutput = {
-  status: ExploreBatchStatus
-  total: number
-  completed: number
-  failed: number
-  children: ExploreChildOutput[]
-}
-
-class ExploreBatchState {
-  private readonly children: ExploreChildOutput[]
+class FastContextRunState {
+  private status: ExploreStatus = 'queued'
+  private childId: string | undefined
+  private model: string | undefined
+  private profileName = 'Repository Explorer'
+  private record: Awaited<ReturnType<DelegationRuntime['runChild']>> | undefined
+  private error: string | undefined
+  private pack: FastContextEvidencePack
   private emission = Promise.resolve()
 
   constructor(
-    tasks: ExploreTask[],
+    private readonly tasks: FastContextTask[],
     private readonly onUpdate: ((update: ToolExecutionUpdate) => Promise<void> | void) | undefined
   ) {
-    this.children = tasks.map((task, index) => ({
-      index,
-      ...task,
-      status: 'queued',
-      profile: 'explore',
-      profileName: 'Repository Explorer'
-    }))
+    this.pack = emptyEvidencePack(tasks)
   }
 
-  output(): ExploreBatchOutput {
-    const children = this.children.map((child) => ({ ...child }))
-    const completed = children.filter((child) => child.status === 'completed').length
-    const failed = children.filter((child) =>
-      child.status === 'failed' || child.status === 'aborted'
-    ).length
-    const terminal = completed + failed
-    const status: ExploreBatchStatus = terminal < children.length
-      ? 'running'
-      : completed === children.length
-        ? 'completed'
-        : completed > 0
-          ? 'partial'
-          : 'failed'
-    return { status, total: children.length, completed, failed, children }
+  output(): FastContextOutput {
+    const record = this.record
+    const child = compact({
+      childId: this.childId,
+      status: this.status,
+      profile: 'explore' as const,
+      profileName: this.profileName,
+      model: this.model,
+      parentThreadId: record?.parentThreadId,
+      parentTurnId: record?.parentTurnId,
+      launcher: 'explore_agent' as const
+    })
+    return compact({
+      status: this.status,
+      childId: this.childId,
+      label: FAST_CONTEXT_LABEL,
+      title: FAST_CONTEXT_LABEL,
+      launcher: 'explore_agent' as const,
+      profile: 'explore' as const,
+      profileName: this.profileName,
+      model: this.model,
+      error: this.error,
+      toolInvocations: record?.toolInvocations,
+      durationMs: record?.durationMs,
+      parentThreadId: record?.parentThreadId,
+      parentTurnId: record?.parentTurnId,
+      terminationReason: record?.terminationReason,
+      resumable: record?.resumable,
+      resumeCount: record?.resumeCount,
+      evidencePack: this.pack,
+      child
+    })
   }
 
   async emit(): Promise<void> {
     if (!this.onUpdate) return
     const snapshot = this.output()
-    this.emission = this.emission.then(async () => {
-      await this.onUpdate?.({ output: snapshot, isError: false })
-    })
+    this.emission = this.emission.then(async () => this.onUpdate?.({ output: snapshot, isError: false }))
     await this.emission
   }
 
-  async update(index: number, patch: Partial<ExploreChildOutput>): Promise<void> {
-    const current = this.children[index]
-    if (!current || !canAdvanceExploreStatus(current.status, patch.status)) return
-    this.children[index] = compactExploreChild({ ...current, ...patch })
+  async update(patch: { childId?: string; status?: ExploreStatus; model?: string; profileName?: string }): Promise<void> {
+    if (patch.childId) this.childId = patch.childId
+    if (patch.status && statusRank(patch.status) >= statusRank(this.status)) this.status = patch.status
+    if (patch.model) this.model = patch.model
+    if (patch.profileName) this.profileName = patch.profileName
     await this.emit()
   }
 
-  async abortRemaining(startIndex: number): Promise<void> {
-    for (let index = startIndex; index < this.children.length; index += 1) {
-      await this.update(index, {
-        status: 'aborted',
-        error: 'parent turn aborted before child started'
-      })
-    }
+  async finish(record: Awaited<ReturnType<DelegationRuntime['runChild']>>, context: ToolHostContext): Promise<void> {
+    this.record = record
+    this.childId = record.id
+    this.status = record.status
+    this.model = resolveExploreModel(record.model, context)
+    this.profileName = record.profileSnapshot?.name?.trim() || this.profileName
+    this.error = record.status === 'failed' || record.status === 'aborted' ? record.error ?? record.status : undefined
+    this.pack = record.evidencePack ?? buildFastContextEvidencePack({
+      tasks: this.tasks,
+      items: [],
+      turnId: '',
+      summary: record.summary,
+      ...(this.error ? { failure: this.error } : {})
+    })
+    await this.emit()
+  }
+
+  async fail(status: 'failed' | 'aborted', error: string): Promise<void> {
+    this.status = status
+    this.error = error
+    this.pack = buildFastContextEvidencePack({ tasks: this.tasks, items: [], turnId: '', failure: error })
+    await this.emit()
   }
 }
 
-function canAdvanceExploreStatus(
-  current: ExploreChildStatus,
-  next: ExploreChildStatus | undefined
-): boolean {
-  if (!next) return true
-  const rank: Record<ExploreChildStatus, number> = {
-    queued: 0,
-    running: 1,
-    completed: 2,
-    failed: 2,
-    aborted: 2
-  }
-  return rank[next] >= rank[current] && rank[current] < 2
-}
-
-function compactExploreChild(child: ExploreChildOutput): ExploreChildOutput {
-  return Object.fromEntries(
-    Object.entries(child).filter(([, value]) => value !== undefined)
-  ) as ExploreChildOutput
-}
-
-function parseExploreTasks(value: unknown): { tasks: ExploreTask[] } | { error: string } {
-  if (!Array.isArray(value)) return { error: 'tasks must be an array with 1-4 items' }
-  if (value.length < 1) return { error: 'tasks must contain at least 1 item' }
-  if (value.length > 4) return { error: 'tasks must contain at most 4 items' }
-  const tasks: ExploreTask[] = []
-  for (const [index, candidate] of value.entries()) {
-    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) {
-      return { error: `tasks[${index}] must be an object` }
-    }
-    const task = candidate as Record<string, unknown>
-    const title = stringValue(task.title)
-    const query = stringValue(task.query)
-    if (!title) return { error: `tasks[${index}].title is required` }
-    if (!query) return { error: `tasks[${index}].query is required` }
-    tasks.push({ title, query })
-  }
-  return { tasks }
-}
-
-function requiresSerialExploreBatch(approvalPolicy: ToolHostContext['approvalPolicy']): boolean {
-  return approvalPolicy === 'always' || approvalPolicy === 'untrusted' || approvalPolicy === 'never'
-}
-
-function resolveExploreModel(model: string | undefined, context: ToolHostContext): string | undefined {
-  return model?.trim() ||
-    context.actingModelRoute?.model?.trim() ||
-    context.model?.id?.trim() ||
-    undefined
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
-}
-
-function buildExploreInlineProfile(
-  cfg: ExploreAgentToolConfig
-): { id: string; profile: SubagentProfileConfig; source: 'builtin' } {
+function buildExploreInlineProfile(cfg: ExploreAgentToolConfig): { id: string; profile: SubagentProfileConfig; source: 'builtin' } {
   const model = cfg.model?.trim()
   const providerId = cfg.providerId?.trim()
-  const reasoningEffort = ModelReasoningEffort.safeParse(cfg.reasoningEffort).success
-    ? cfg.reasoningEffort
-    : undefined
+  const reasoningEffort = ModelReasoningEffort.safeParse(cfg.reasoningEffort).success ? cfg.reasoningEffort : undefined
   return {
-    id: 'explore',
-    source: 'builtin',
+    id: 'explore', source: 'builtin',
     profile: {
-      mode: 'subagent',
-      toolPolicy: 'inherit',
-      skillsEnabled: false,
+      mode: 'subagent', toolPolicy: 'readOnly', skillsEnabled: false,
       allowedTools: [...EXPLORE_AGENT_ALLOWED_TOOLS],
       blockedTools: ['delegate_task', 'generate_subagent', 'load_skill'],
-      systemPrompt: EXPLORE_PROFILE.systemPrompt,
+      systemPrompt: FAST_CONTEXT_SYSTEM_PROMPT,
       promptPreamble: EXPLORE_AGENT_PROMPT_PREAMBLE,
       ...(model && providerId ? { model, providerId } : {}),
       ...(reasoningEffort ? { reasoningEffort } : {})
@@ -446,6 +280,82 @@ function buildExploreInlineProfile(
   }
 }
 
+function fastContextPrompt(tasks: readonly FastContextTask[]): string {
+  return [
+    'Investigate this batch as one Fast Context retrieval run.',
+    'Use rounds 1-3 only for retrieval: locate candidate files, grep only candidate paths, then read necessary local ranges.',
+    'Round 4 is final synthesis only. Do not call a tool in round 4; write the task conclusions instead.',
+    `Every grep, glob, and read call must include a non-empty task_indexes array of 1-based task numbers (1-${tasks.length}); include every task supported by shared evidence.`,
+    'Use the minimum source calls needed. Do not request broad recursive scans after candidates are known.',
+    'Your final response must contain one concise `Task N:` conclusion for every task, with uncertainty where evidence is missing.',
+    ...tasks.map((task, index) => `Task ${index + 1}: ${task.title}\n${task.query}`)
+  ].join('\n\n')
+}
+
+function securitySnapshot(workspace: string, context: ToolHostContext) {
+  return {
+    sandboxRoot: workspace,
+    ...(context.allowedProviderIds ? { allowedProviderIds: [...context.allowedProviderIds] } : {}),
+    ...(context.allowedToolNames ? { allowedToolNames: [...context.allowedToolNames] } : {}),
+    ...(context.allowedSkillIds ? { allowedSkillIds: [...context.allowedSkillIds] } : {}),
+    // A Fast Context child never inherits full-access filesystem reach. An
+    // explicit read scope remains a parent upper bound; otherwise `.` pins
+    // every source tool to the captured workspace root.
+    allowedReadPaths: context.allowedReadPaths ? [...context.allowedReadPaths] : ['.'],
+    ...(context.allowedWritePaths ? { allowedWritePaths: [...context.allowedWritePaths] } : {}),
+    ...(context.allowedArtifactIds ? { allowedArtifactIds: [...context.allowedArtifactIds] } : {}),
+    ...(context.blockedProviderIds ? { blockedProviderIds: [...context.blockedProviderIds] } : {}),
+    ...(context.blockedToolNames ? { blockedToolNames: [...context.blockedToolNames] } : {}),
+    ...(context.blockedSkillIds ? { blockedSkillIds: [...context.blockedSkillIds] } : {}),
+    memoryEnabled: false
+  }
+}
+
+function inheritedModelRoute(context: ToolHostContext) {
+  return {
+    ...(context.actingModelRoute?.model ? { inheritedModel: context.actingModelRoute.model } : context.model?.id?.trim() ? { inheritedModel: context.model.id.trim() } : {}),
+    ...(context.actingModelRoute?.providerId ? { inheritedProviderId: context.actingModelRoute.providerId } : context.modelProviderId?.trim() ? { inheritedProviderId: context.modelProviderId.trim() } : {}),
+    ...(context.actingModelRoute?.accountId ? { inheritedAccountId: context.actingModelRoute.accountId } : {})
+  }
+}
+
+function emptyEvidencePack(tasks: readonly FastContextTask[]): FastContextEvidencePack {
+  return buildFastContextEvidencePack({ tasks, items: [], turnId: '' })
+}
+
+function parseExploreTasks(value: unknown): { tasks: FastContextTask[] } | { error: string } {
+  if (!Array.isArray(value)) return { error: 'tasks must be an array with 1-4 items' }
+  if (value.length < 1) return { error: 'tasks must contain at least 1 item' }
+  if (value.length > 4) return { error: 'tasks must contain at most 4 items' }
+  const tasks: FastContextTask[] = []
+  for (const [index, candidate] of value.entries()) {
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return { error: `tasks[${index}] must be an object` }
+    const task = candidate as Record<string, unknown>
+    const title = stringValue(task.title)
+    const query = stringValue(task.query)
+    if (!title) return { error: `tasks[${index}].title is required` }
+    if (!query) return { error: `tasks[${index}].query is required` }
+    tasks.push({ title: title.slice(0, 240), query: query.slice(0, 4_000) })
+  }
+  return { tasks }
+}
+
+function statusRank(status: ExploreStatus): number {
+  return status === 'queued' ? 0 : status === 'running' ? 1 : 2
+}
+
+function resolveExploreModel(model: string | undefined, context: ToolHostContext): string | undefined {
+  return model?.trim() || context.actingModelRoute?.model?.trim() || context.model?.id?.trim() || undefined
+}
+
+function compact<T extends object>(value: T): T {
+  return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined)) as T
+}
+
 function stringValue(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
+}
+
+function errorMessage(error: unknown): string {
+  return (error instanceof Error ? error.message : String(error)).replace(/\s+/g, ' ').slice(0, 500)
 }

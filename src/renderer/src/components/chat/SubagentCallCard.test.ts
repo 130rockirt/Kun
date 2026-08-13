@@ -154,7 +154,7 @@ describe('SubagentCallCard route metadata', () => {
             title: 'Product launch deck',
             summary: 'Created the PPT deck and exported it.',
             profile: 'ppt',
-            profileName: 'PPT Master',
+            profileName: 'PPT Agent',
             model: 'deepseek-v4-pro',
             toolInvocations: 4
           }),

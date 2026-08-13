@@ -149,3 +149,18 @@ export function builtinToolOptionsForOptions(options: KunServeRuntimeOptions) {
     bash: outputLimits
   }
 }
+
+/**
+ * PPT Master was a host-managed Skill. Keep an old package on disk inert after
+ * the first-class PPT agent replaced it, without deleting user data.
+ */
+export function skillsConfigForRuntime(
+  options: Pick<KunServeRuntimeOptions, 'capabilities'>
+): NonNullable<KunServeRuntimeOptions['capabilities']>['skills'] | undefined {
+  const skills = options.capabilities?.skills
+  if (!skills) return undefined
+  return {
+    ...skills,
+    disabledIds: [...new Set([...skills.disabledIds, 'ppt-master'])]
+  }
+}

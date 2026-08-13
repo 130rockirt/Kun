@@ -12,7 +12,7 @@ import type {
   ResizedImageResult,
   TruncateMode
 } from './builtin-tool-types.js'
-import { COMPACT_RESOURCE_FILE_NAMES } from './builtin-tool-types.js'
+import { COMPACT_RESOURCE_FILE_NAMES, FAST_CONTEXT_EXCLUDED_DIRECTORY_NAMES } from './builtin-tool-types.js'
 import {
   isPathInsideOrEqual,
   resolveExistingWorkspaceRoot,
@@ -95,6 +95,19 @@ export async function resolveWorkspacePath(
   ))
   const resolvedRoots = [primaryRoot, ...additionalRoots.filter((entry) => entry !== null)]
   const resolvedAbsolute = await resolvePathThroughSymlinks(lexicalAbsolutePath)
+  // A lexical allow-list alone is insufficient: `src/link` can look in scope
+  // while its physical target points at another workspace directory. Resolve
+  // both the requested target and the delegated scopes before authorizing a
+  // read, just as delegated writes validate their physical scopes.
+  if (delegatedPathBoundary) {
+    const physicalReadScopes = delegatedPhysicalReadScopes(
+      primaryRoot,
+      context.allowedReadPaths ?? []
+    )
+    if (!physicalReadScopes.some((scope) => isPathInsideOrEqual(scope, resolvedAbsolute))) {
+      throw new Error(`path resolves outside the delegated child read scopes: ${inputPath}`)
+    }
+  }
   const matchingRoot = resolvedRoots.find((candidate) => isPathInsideOrEqual(candidate.physicalRoot, resolvedAbsolute))
   const isInsideWorkspace = Boolean(matchingRoot)
   const isApprovedExternalPath = !options.enforceWorkspaceBoundary &&
@@ -112,6 +125,29 @@ export async function resolveWorkspacePath(
     absolutePath: isApprovedExternalPath ? resolvedAbsolute : lexicalAbsolutePath,
     relativePath: normalizeToolPath(relative(matchingRoot?.lexicalRoot ?? root, lexicalAbsolutePath) || '.')
   }
+}
+
+function delegatedPhysicalReadScopes(
+  workspace: { lexicalRoot: string; physicalRoot: string },
+  scopes: readonly string[]
+): string[] {
+  return scopes.flatMap((scope) => {
+    const lexicalScope = isAbsolute(scope)
+      ? resolve(scope)
+      : resolve(workspace.lexicalRoot, scope)
+    if (!isPathInsideOrEqual(workspace.lexicalRoot, lexicalScope)) return undefined
+    // Do not follow a symlink in the allowed scope itself. The scope grants a
+    // lexical subtree (for example `src`), so its physical counterpart is
+    // the same relative subtree under the physical workspace root. Otherwise
+    // a `src -> private` link could expand the granted scope.
+    const physicalScope = resolve(
+      workspace.physicalRoot,
+      relative(workspace.lexicalRoot, lexicalScope)
+    )
+    return isPathInsideOrEqual(workspace.physicalRoot, physicalScope)
+      ? physicalScope
+      : undefined
+  }).filter((scope): scope is string => Boolean(scope))
 }
 
 export function isBinaryBuffer(buffer: Buffer): boolean {
@@ -227,17 +263,26 @@ export function describeKind(mode: TruncateMode): string {
   return mode === 'head' ? 'first' : 'last'
 }
 
-export async function collectPaths(root: string, options: { includeDirectories?: boolean; limit: number }): Promise<string[]> {
+export async function collectPaths(root: string, options: {
+  includeDirectories?: boolean
+  limit: number
+  /** Optional traversal guard for bounded callers such as Fast Context. */
+  shouldSkipDirectory?: (path: string) => boolean
+  signal?: AbortSignal
+}): Promise<string[]> {
   const results: string[] = []
   const queue: string[] = [root]
   while (queue.length > 0 && results.length < options.limit) {
+    if (options.signal?.aborted) throw new Error('command aborted')
     const current = queue.shift()
     if (!current) break
     const entries = await readdir(current, { withFileTypes: true })
     entries.sort((a, b) => a.name.localeCompare(b.name))
     for (const entry of entries) {
+      if (options.signal?.aborted) throw new Error('command aborted')
       const next = join(current, entry.name)
       if (entry.isDirectory()) {
+        if (options.shouldSkipDirectory?.(next)) continue
         if (options.includeDirectories) results.push(next)
         queue.push(next)
       } else {
@@ -345,6 +390,18 @@ export function globToRegExp(pattern: string): RegExp {
 
 export function normalizeToolPath(value: string): string {
   return value.replace(/\\/g, '/').split(sep).join('/')
+}
+
+/** Shared Fast Context guard for read, glob, and grep workspace paths. */
+export function isFastContextExcludedRelativePath(value: string): boolean {
+  const excluded = new Set<string>(FAST_CONTEXT_EXCLUDED_DIRECTORY_NAMES)
+  return normalizeToolPath(value)
+    .split('/')
+    .some((component) => excluded.has(component.toLowerCase()))
+}
+
+export function isFastContextExcludedWorkspacePath(workspace: string, targetPath: string): boolean {
+  return isFastContextExcludedRelativePath(relative(workspace, targetPath) || '.')
 }
 
 export function parseEditInstructions(args: Record<string, unknown>): EditInstruction[] {
