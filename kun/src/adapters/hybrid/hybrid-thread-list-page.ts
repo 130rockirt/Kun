@@ -1,7 +1,7 @@
 import type { ThreadStoreListOptions, ThreadStoreListPage } from '../../ports/thread-store.js'
 import type { ThreadSummary } from '../../contracts/threads.js'
 import type { ThreadRow } from './hybrid-thread-index-mapping.js'
-import { encodeKeysetCursor } from './hybrid-thread-index.js'
+import { decodeKeysetCursor, encodeKeysetCursor } from './hybrid-thread-index.js'
 import { filterThreadSummaries, summaryFromRow } from './hybrid-thread-index-mapping.js'
 import { warnSqlite } from './hybrid-thread-support.js'
 
@@ -78,10 +78,19 @@ export async function hybridThreadStoreListPage(
       warnSqlite('listPage', error)
     }
   }
-  return pageFromSummaries(
-    filterThreadSummaries(await source.listFromFilesystem(), options),
-    options
+  const cursor = decodeKeysetCursor(options.cursor)
+  let summaries = filterThreadSummaries(
+    await source.listFromFilesystem(),
+    { ...options, limit: undefined }
   )
+  if (cursor) {
+    summaries = summaries.filter((thread) => {
+      const updatedAtMs = Number.isFinite(Date.parse(thread.updatedAt)) ? Date.parse(thread.updatedAt) : 0
+      return updatedAtMs < cursor.updatedAtMs ||
+        (updatedAtMs === cursor.updatedAtMs && thread.id < cursor.id)
+    })
+  }
+  return pageFromSummaries(summaries, options)
 }
 
 /** Structural assertion from the store to the pagination access surface. */

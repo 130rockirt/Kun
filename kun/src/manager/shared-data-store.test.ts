@@ -37,6 +37,53 @@ describe('manager shared data store', () => {
     await store.close()
   })
 
+  it('serves stable workspace pages through the manager thread data plane', async () => {
+    const store = await dataStore()
+    for (const [index, createdAt] of [
+      '2026-08-14T00:00:01.000Z',
+      '2026-08-14T00:00:02.000Z',
+      '2026-08-14T00:00:03.000Z'
+    ].entries()) {
+      const thread = createThreadRecord({
+        id: `thread-page-${index + 1}`,
+        title: `Page ${index + 1}`,
+        workspace: '/tmp/page-workspace',
+        model: 'test-model',
+        createdAt
+      })
+      await store.executeThread('upsert', { thread })
+    }
+
+    const first = await store.executeThread('listPage', {
+      workspace: '/tmp/page-workspace',
+      limit: 2,
+      includeArchived: true,
+      includeSide: true
+    }) as {
+      threads: Array<{ id: string }>
+      nextCursor?: string
+      hasMore: boolean
+      total?: number
+    }
+    expect(first.threads.map((thread) => thread.id)).toEqual(['thread-page-3', 'thread-page-2'])
+    expect(first).toMatchObject({ hasMore: true, total: 3 })
+    expect(first.nextCursor).toBeTruthy()
+
+    const second = await store.executeThread('listPage', {
+      workspace: '/tmp/page-workspace',
+      limit: 2,
+      cursor: first.nextCursor,
+      includeArchived: true,
+      includeSide: true
+    }) as { threads: Array<{ id: string }>; hasMore: boolean; total?: number }
+    expect(second.threads.map((thread) => thread.id)).toEqual(['thread-page-1'])
+    expect(second).toMatchObject({ hasMore: false })
+    expect(second.total).toBeUndefined()
+
+    await expect(store.executeThread('list', { lean: true })).rejects.toThrow()
+    await store.close()
+  })
+
   it('forwards the timeline anchor option through the manager page read', async () => {
     const store = await dataStore()
     const threadId = 'thread-anchor-manager'

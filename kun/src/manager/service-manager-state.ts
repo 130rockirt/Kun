@@ -52,7 +52,7 @@ export const KUN_MANAGER_CAPABILITIES = [
 ] as const
 
 export const ThreadStoreOperationSchema = z.enum([
-  'list', 'get', 'getMetadata', 'touch', 'upsert', 'delete'
+  'list', 'listPage', 'get', 'getMetadata', 'touch', 'upsert', 'delete'
 ])
 export const SessionStoreOperationSchema = z.enum([
   'appendEvent', 'appendItem', 'rewriteItems', 'loadItemSnapshot',

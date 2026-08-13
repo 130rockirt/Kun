@@ -15,7 +15,7 @@ export class HybridThreadIndexRepository {
 
   query(options: ThreadStoreListOptions): ThreadRow[] {
     const { where, params } = this.buildWhere(options)
-    const cursor = decodeCursor(options.cursor)
+    const cursor = decodeKeysetCursor(options.cursor)
     if (cursor) {
       where.push('(updated_at_ms < @cursorMs OR (updated_at_ms = @cursorMs AND id < @cursorId))')
       params.cursorMs = cursor.updatedAtMs
@@ -133,7 +133,7 @@ export function encodeKeysetCursor(updatedAt: string, id: string): string {
   return Buffer.from(JSON.stringify([updatedAtMs, id])).toString('base64url')
 }
 
-function decodeCursor(cursor: string | undefined): KeysetCursor | null {
+export function decodeKeysetCursor(cursor: string | undefined): KeysetCursor | null {
   if (!cursor) return null
   try {
     const parsed = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as unknown

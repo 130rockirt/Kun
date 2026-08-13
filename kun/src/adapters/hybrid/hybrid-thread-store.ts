@@ -97,6 +97,8 @@ export class HybridThreadStore implements ThreadStore {
     await this.backfill?.wait()
   }
 
+  private hasDb(): boolean { return this.db !== null }
+
   async list(options: ThreadStoreListOptions = {}): Promise<ThreadSummary[]> {
     await this.ready()
     // Missing or intentionally discarded SQLite indexes are rebuilt from the

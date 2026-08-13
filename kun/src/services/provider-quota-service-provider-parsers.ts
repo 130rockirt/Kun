@@ -77,7 +77,12 @@ export function parseZaiQuota(payload: unknown): {
   const metrics = limits.flatMap((item, index) => {
     if (!isRecord(item)) return []
     const type = stringValue(item.type)
-    if (type !== 'TOKENS_LIMIT' && type !== 'TIME_LIMIT') return []
+    const isTokenLimit = type === 'TOKENS_LIMIT'
+    const isCreditLimit = type === 'CREDIT_LIMIT'
+    if (!isTokenLimit && !isCreditLimit && type !== 'TIME_LIMIT') {
+      const fallback = zaiPercentageMetric(item, index, type)
+      return fallback ? [fallback] : []
+    }
     const limit = numberValue(item.usage)
     const explicitUsed = numberValue(item.currentValue)
     const remaining = numberValue(item.remaining)
@@ -93,20 +98,23 @@ export function parseZaiQuota(payload: unknown): {
         ? Math.max(0, rawUsed)
         : Math.max(0, Math.min(limit, rawUsed))
     const percentage = numberValue(item.percentage)
+    const derivedPercentage = percentageFields(used, limit)
     const resetsAt = epochToIso(item.nextResetTime)
     const windowLabel = quotaWindowLabel(item.number, item.unit)
     return [{
       id: `${type.toLowerCase()}-${index}`,
-      label: type === 'TOKENS_LIMIT'
+      label: isTokenLimit
         ? `${windowLabel ? `${windowLabel} ` : ''}token quota`
-        : `${windowLabel ? `${windowLabel} ` : ''}request quota`,
-      unit: type === 'TOKENS_LIMIT' ? 'tokens' : 'requests',
+        : isCreditLimit
+          ? `${windowLabel ? `${windowLabel} ` : ''}credit quota`
+          : `${windowLabel ? `${windowLabel} ` : ''}request quota`,
+      unit: isTokenLimit ? 'tokens' : isCreditLimit ? 'credits' : 'requests',
       ...(used === undefined ? {} : { used }),
       ...(limit === undefined ? {} : { limit }),
       ...(remaining === undefined ? {} : { remaining }),
-      ...(percentage === undefined
-        ? percentageFields(used, limit)
-        : { usedPercent: clampPercentage(percentage) }),
+      ...(derivedPercentage.usedPercent === undefined
+        ? percentage === undefined ? {} : { usedPercent: clampPercentage(percentage) }
+        : derivedPercentage),
       ...(resetsAt ? { resetsAt } : {})
     }]
   })
@@ -114,8 +122,35 @@ export function parseZaiQuota(payload: unknown): {
   const summary = stringValue(data.planName) ||
     stringValue(data.plan) ||
     stringValue(data.plan_type) ||
-    stringValue(data.packageName)
+    stringValue(data.packageName) ||
+    stringValue(data.level)
   return { metrics, ...(summary ? { summary } : {}) }
+}
+
+function zaiPercentageMetric(
+  item: Record<string, unknown>,
+  index: number,
+  type: string
+): ProviderQuotaMetric | null {
+  const percentage = numberValue(item.percentage)
+  if (percentage === undefined) return null
+  const idType = type
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 220) || 'quota'
+  const words = type.toLowerCase().replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim()
+  const typeLabel = words ? `${words[0].toUpperCase()}${words.slice(1)}` : ''
+  const labelSuffix = /\bquota\b/i.test(typeLabel) ? '' : ' quota'
+  const label = typeLabel
+    ? `${typeLabel.slice(0, 512 - labelSuffix.length)}${labelSuffix}`
+    : `Quota ${index + 1}`
+  return {
+    id: `${idType}-${index}`,
+    label,
+    unit: 'percent',
+    usedPercent: clampPercentage(percentage)
+  }
 }
 
 export function parseMiniMaxQuota(payload: unknown): {

@@ -54,12 +54,22 @@ import type {
   SessionStore,
   SessionUsageRecord
 } from '../ports/session-store.js'
-import type { ThreadStore, ThreadStoreListOptions } from '../ports/thread-store.js'
+import type { ThreadStoreListOptions } from '../ports/thread-store.js'
 import { atomicWriteFile } from '../adapters/file/atomic-write.js'
 import { RevisionConflictError } from './revisioned-document-store.js'
 import { buildPublicItemHistoryPage } from '../services/item-history-page.js'
 
 export const ThreadIdSchema = z.string().min(1).max(256)
+
+export const ThreadStoreListOptionsSchema: z.ZodType<ThreadStoreListOptions> = z.object({
+  limit: z.number().int().positive().optional(),
+  search: z.string().optional(),
+  includeArchived: z.boolean().optional(),
+  archivedOnly: z.boolean().optional(),
+  includeSide: z.boolean().optional(),
+  cursor: z.string().min(1).optional(),
+  workspace: z.string().optional()
+}).strict()
 
 export function finishedTurnStatus(status: string): FinishedTurnStatus | null {
   return status === 'completed' || status === 'failed' || status === 'aborted' ? status : null
@@ -85,6 +95,7 @@ export const AgentSessionSchema = z.object({
 
 export type ManagerThreadStoreOperation =
   | 'list'
+  | 'listPage'
   | 'get'
   | 'getMetadata'
   | 'touch'

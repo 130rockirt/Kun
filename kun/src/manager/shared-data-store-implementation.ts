@@ -54,7 +54,7 @@ import type {
   SessionStore,
   SessionUsageRecord
 } from '../ports/session-store.js'
-import type { ThreadStore, ThreadStoreListOptions } from '../ports/thread-store.js'
+import type { ThreadStore } from '../ports/thread-store.js'
 import { atomicWriteFile } from '../adapters/file/atomic-write.js'
 import { RevisionConflictError } from './revisioned-document-store.js'
 import { buildPublicItemHistoryPage } from '../services/item-history-page.js'
@@ -63,6 +63,7 @@ import { ManagerSharedDataStoreCore } from './shared-data-store-core.js'
 import {
   AgentSessionSchema,
   ThreadIdSchema,
+  ThreadStoreListOptionsSchema,
   attachmentScopeRequest,
   isSessionMutation,
   isThreadMutation,
@@ -106,14 +107,14 @@ export class ManagerSharedDataStore extends ManagerSharedDataStoreCore {
   ): Promise<unknown> {
     switch (operation) {
       case 'list': {
-        const options = z.object({
-          limit: z.number().int().positive().optional(),
-          search: z.string().optional(),
-          includeArchived: z.boolean().optional(),
-          archivedOnly: z.boolean().optional(),
-          includeSide: z.boolean().optional()
-        }).strict().parse(value ?? {}) as ThreadStoreListOptions
+        const options = ThreadStoreListOptionsSchema.parse(value ?? {})
         return this.threadStore.list(options)
+      }
+      case 'listPage': {
+        const options = ThreadStoreListOptionsSchema.parse(value ?? {})
+        const listPage = this.threadStore.listPage
+        if (!listPage) throw new Error('Manager thread store does not support paginated listing')
+        return listPage.call(this.threadStore, options)
       }
       case 'get': {
         const { threadId } = parseThreadId(value)

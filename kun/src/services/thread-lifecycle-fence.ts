@@ -152,10 +152,8 @@ export class LifecycleFencedThreadStore implements ThreadStore {
   }
 
   async listPage(options?: ThreadStoreListOptions): Promise<ThreadStoreListPage> {
-    const rawListPage = (this.raw as ThreadStore & {
-      listPage?: (opts?: ThreadStoreListOptions) => Promise<ThreadStoreListPage>
-    }).listPage
-    if (typeof rawListPage === 'function') return rawListPage(options)
+    const rawListPage = this.raw.listPage
+    if (typeof rawListPage === 'function') return rawListPage.call(this.raw, options)
     const threads = await this.raw.list(options)
     const pageSize = typeof options?.limit === 'number' ? Math.max(1, Math.floor(options.limit)) : threads.length
     const page = threads.slice(0, pageSize)

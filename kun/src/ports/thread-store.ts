@@ -31,6 +31,8 @@ export type ThreadStoreListPage = {
  */
 export interface ThreadStore {
   list(options?: ThreadStoreListOptions): Promise<ThreadSummary[]>
+  /** Read a stable keyset page when the backing store supports pagination. */
+  listPage?(options?: ThreadStoreListOptions): Promise<ThreadStoreListPage>
   get(threadId: string): Promise<ThreadRecord | null>
   /** Read the durable Thread/Turn projection without hydrating item history. */
   getMetadata?(threadId: string): Promise<ThreadRecord | null>

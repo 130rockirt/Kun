@@ -108,6 +108,7 @@ export function filterThreadSummaries(summaries: ThreadSummary[], options: Threa
     : options.includeArchived ? summaries
       : summaries.filter((thread) => thread.status !== 'archived' && thread.status !== 'deleted')
   if (!options.includeSide) out = out.filter((thread) => (thread.relation ?? 'primary') !== 'side')
+  if (options.workspace) out = out.filter((thread) => thread.workspace === options.workspace)
   if (query) out = out.filter((thread) => searchTextForThread(thread).includes(query))
   return typeof options.limit === 'number' ? out.slice(0, options.limit) : out
 }

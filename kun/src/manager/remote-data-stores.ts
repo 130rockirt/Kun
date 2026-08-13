@@ -57,7 +57,11 @@ import type {
   SessionStore,
   SessionUsageRecord
 } from '../ports/session-store.js'
-import type { ThreadStore, ThreadStoreListOptions } from '../ports/thread-store.js'
+import type {
+  ThreadStore,
+  ThreadStoreListOptions,
+  ThreadStoreListPage
+} from '../ports/thread-store.js'
 import { requestManagerJson, type ServiceManagerConnection } from './manager-client.js'
 
 const ResultSchema = z.object({ result: z.unknown() }).strict()
@@ -87,6 +91,12 @@ const ItemPageSchema = z.object({
   hasMore: z.boolean(),
   itemBytes: z.number().int().nonnegative()
 })
+const ThreadStoreListPageSchema: z.ZodType<ThreadStoreListPage> = z.object({
+  threads: z.array(ThreadSummarySchema),
+  nextCursor: z.string().optional(),
+  hasMore: z.boolean(),
+  total: z.number().int().nonnegative().optional()
+}).strict()
 const UsageRecordSchema = z.object({
   threadId: z.string(),
   turnId: z.string().optional(),
@@ -170,6 +180,10 @@ export class ManagerRemoteThreadStore implements ThreadStore {
 
   async list(options: ThreadStoreListOptions = {}) {
     return ThreadSummarySchema.array().parse(await this.call('list', options))
+  }
+
+  async listPage(options: ThreadStoreListOptions = {}) {
+    return ThreadStoreListPageSchema.parse(await this.call('listPage', options))
   }
 
   async get(threadId: string) {

@@ -1,6 +1,6 @@
 import { readFile, realpath, writeFile } from 'node:fs/promises'
 import { isAbsolute, relative, resolve } from 'node:path'
-import type { ThreadStore, ThreadStoreListOptions, ThreadStoreListPage } from '../ports/thread-store.js'
+import type { ThreadStoreListOptions, ThreadStoreListPage } from '../ports/thread-store.js'
 import type { SessionStore } from '../ports/session-store.js'
 import type { IdGenerator } from '../ports/id-generator.js'
 import type {
@@ -57,6 +57,12 @@ import {
 } from '../shared/todos.js'
 import { type ThreadService, type ThreadServiceOptions, type ListThreadsOptions, type ForkThreadOptions, type ResumeSessionOptions, type ResumeSessionResult, type SyncPlanTodosOptions, cloneTurnForThread, normalizeTodoItems, preserveToolTodoSources, normalizeTodoStatus, normalizeTodoSource, findExistingTodoForRaw, sameTodoSource, uniqueTodoId, cloneTodoListForThread, resolveWorkspaceRelativePath, cloneTurnForFork, cloneItemForThread, cloneSessionItemsForThread, matchesThreadSearch, threadStatusFromTurns, rebuildTurnsFromItems, attachmentIdsFromItems, toSessionSnapshot } from './thread-service-core.js'
 
+function toThreadStoreListOptions(options: ListThreadsOptions): ThreadStoreListOptions {
+  const storeOptions: ListThreadsOptions = { ...options }
+  delete storeOptions.lean
+  return storeOptions
+}
+
 export const threadServiceMetadataOperations = {
 updateRuntimeDefaults(this: ThreadService, input: {
     approvalPolicy: ApprovalPolicy
@@ -72,7 +78,7 @@ updateRuntimeDefaults(this: ThreadService, input: {
 
 async list(this: ThreadService, options: ListThreadsOptions = {}): Promise<ThreadSummary[]> {
     const query = options.search?.trim().toLowerCase()
-    let threads = await this['threadStore'].list(options)
+    let threads = await this['threadStore'].list(toThreadStoreListOptions(options))
     if (options.archivedOnly) {
       threads = threads.filter((thread) => thread.status === 'archived')
     } else if (!options.includeArchived) {
@@ -93,15 +99,14 @@ async listPage(this: ThreadService, options: ListThreadsOptions = {}): Promise<T
     // page slice of the full filtered listing so the response contract still
     // holds (hasMore + total) without breaking existing consumers.
     const store = this['threadStore']
-    const storeListPage = (store as ThreadStore & {
-      listPage?: (opts?: ListThreadsOptions) => Promise<ThreadStoreListPage>
-    }).listPage
+    const storeListPage = store.listPage
+    const storeOptions = toThreadStoreListOptions(options)
     if (typeof storeListPage === 'function' && (options.cursor || options.workspace || options.limit != null)) {
-      return storeListPage(options)
+      return storeListPage.call(store, storeOptions)
     }
     const query = options.search?.trim().toLowerCase()
     let threads = await store.list({
-      ...options,
+      ...storeOptions,
       ...(options.limit != null ? {} : { limit: undefined })
     })
     if (options.archivedOnly) {

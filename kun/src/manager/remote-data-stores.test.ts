@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { createThreadRecord } from '../domain/thread.js'
+import { createThreadRecord, toThreadSummary } from '../domain/thread.js'
 import type { ServiceManagerConnection } from './manager-client.js'
 import {
   ManagerRemoteThreadStore,
@@ -56,6 +56,49 @@ describe('resolveManagerDataRequestTimeoutMs', () => {
 })
 
 describe('ManagerRemoteThreadStore legacy read compatibility', () => {
+  it('forwards workspace keyset pages through the dedicated manager operation', async () => {
+    const thread = createThreadRecord({
+      id: 'thr_page_remote',
+      title: 'Remote page',
+      workspace: '/tmp/remote-page',
+      model: 'test-model'
+    })
+    let requestUrl = ''
+    let requestBody = ''
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      requestUrl = String(input)
+      requestBody = String(init?.body ?? '')
+      return new Response(JSON.stringify({
+        result: {
+          threads: [toThreadSummary(thread)],
+          hasMore: false,
+          total: 1
+        }
+      }), { status: 200, headers: { 'content-type': 'application/json' } })
+    }))
+    const store = new ManagerRemoteThreadStore(managerConnection())
+
+    await expect(store.listPage({
+      workspace: thread.workspace,
+      limit: 25,
+      cursor: 'opaque-cursor',
+      includeArchived: true,
+      includeSide: true
+    })).resolves.toMatchObject({
+      threads: [{ id: thread.id }],
+      hasMore: false,
+      total: 1
+    })
+    expect(requestUrl).toContain('/v1/data/thread/listPage')
+    expect(JSON.parse(requestBody)).toEqual({
+      workspace: thread.workspace,
+      limit: 25,
+      cursor: 'opaque-cursor',
+      includeArchived: true,
+      includeSide: true
+    })
+  })
+
   it('preserves a half-bound plan-build thread on full and metadata reads', async () => {
     const thread = legacyHalfBoundThread()
     stubManagerResult(thread)
