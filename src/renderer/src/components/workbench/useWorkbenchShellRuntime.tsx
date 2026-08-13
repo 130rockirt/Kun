@@ -24,7 +24,7 @@ export function useWorkbenchShellRuntime(context: Context): {
   const {
     input, setInput, composerMode, setComposerMode, composerOrchestration, graphEnabled,
     taskSurface, taskSurfaceLocked, taskSurfaceTransitioning, designTaskProfile, designProfileLocked,
-    lockedDesignProfile, onTaskSurfaceChange,
+    threadHasDesignDocument, lockedDesignProfile, onTaskSurfaceChange,
     onDesignTaskProfileChange,
     setComposerOrchestration, openComposerGraph, openComposerGraphChild, busy,
     currentTurnOrchestration, route, runtimeConnection, activeThreadId, activeClawChannelId,
@@ -265,7 +265,11 @@ export function useWorkbenchShellRuntime(context: Context): {
       workspaceRoot: activeCodeCanvasWorkspace,
       activeThreadId,
       designDocumentId: lockedDesignProfile?.documentTarget.documentId,
-      designTaskActive: taskSurface === 'design',
+      boardArtifactId: lockedDesignProfile?.documentTarget.boardArtifactId,
+      // The full Design surface stays mounted whenever the thread owns a
+      // Design document, independent of the next-turn Code/Design selection.
+      designTaskActive: threadHasDesignDocument,
+      onRequestImageRegenerate: (prompt) => void sendDesignPrompt(prompt),
       busy,
       onOpenAgentSettings: () => openSettings('design'),
       onImplementDesign: implementDesignInCode,

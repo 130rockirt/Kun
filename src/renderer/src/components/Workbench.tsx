@@ -177,6 +177,7 @@ export function Workbench(): ReactElement {
     taskSurfaceTransitioning,
     designTaskProfile,
     designProfileLocked,
+    threadHasDesignDocument,
     lockedDesignProfile,
     onTaskSurfaceChange,
     onDesignTaskProfileChange,
@@ -599,7 +600,7 @@ export function Workbench(): ReactElement {
   } = useWorkbenchShellRuntime({
     input, setInput, composerMode, setComposerMode, composerOrchestration, graphEnabled,
     taskSurface, taskSurfaceLocked, taskSurfaceTransitioning, designTaskProfile, designProfileLocked,
-    lockedDesignProfile, onTaskSurfaceChange, onDesignTaskProfileChange,
+    threadHasDesignDocument, lockedDesignProfile, onTaskSurfaceChange, onDesignTaskProfileChange,
     setComposerOrchestration, openComposerGraph, openComposerGraphChild, busy,
     currentTurnOrchestration, route, runtimeConnection, activeThreadId, activeClawChannelId,
     activeClawChannel, composerModel, composerProviderId, composerPickList, composerModelGroups,

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  isDeterministicKunRejection,
   isKnownKunErrorCode,
   parseRuntimeErrorBody,
   parseThreadBusyDetails,
@@ -64,5 +65,39 @@ describe('runtime error parsing', () => {
       expiresAt: '2026-08-09T10:00:30.000Z'
     })
     expect(JSON.stringify(parsed)).not.toContain('ownerInstanceId')
+  })
+
+  it('recognizes the task-surface and design-profile lock codes', () => {
+    const surfaceLocked = parseRuntimeErrorBody(
+      JSON.stringify({
+        code: 'task_surface_locked',
+        message: 'task surface is locked to write'
+      }),
+      'fallback'
+    )
+    const profileLocked = parseRuntimeErrorBody(
+      JSON.stringify({
+        code: 'design_profile_locked',
+        message: 'Design task profile is locked'
+      }),
+      'fallback'
+    )
+
+    expect(surfaceLocked.code).toBe('task_surface_locked')
+    expect(profileLocked.code).toBe('design_profile_locked')
+    expect(isKnownKunErrorCode(surfaceLocked.code)).toBe(true)
+    expect(isKnownKunErrorCode(profileLocked.code)).toBe(true)
+  })
+
+  it('classifies deterministic client rejections from retryable outcomes', () => {
+    expect(isDeterministicKunRejection('task_surface_locked')).toBe(true)
+    expect(isDeterministicKunRejection('design_profile_locked')).toBe(true)
+    expect(isDeterministicKunRejection('validation_error')).toBe(true)
+    expect(isDeterministicKunRejection('conflict')).toBe(true)
+    expect(isDeterministicKunRejection('not_found')).toBe(true)
+    // Unknown, offline, and internal outcomes may succeed on a retry.
+    expect(isDeterministicKunRejection('unknown')).toBe(false)
+    expect(isDeterministicKunRejection('runtime_offline')).toBe(false)
+    expect(isDeterministicKunRejection('internal_error')).toBe(false)
   })
 })

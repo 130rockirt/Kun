@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Loader2, PanelRightClose, Shapes } from 'lucide-react'
+import { Loader2, Maximize2, PanelRightClose, Shapes } from 'lucide-react'
+import {
+  useCanvasImageGenerationProgress,
+  failedImageGenerationEntries,
+  useImageGenerationProgressStore
+} from '../../../design/canvas/canvas-image-generation-progress'
+import { requestCodeCanvasPanelFocus } from '../../../lib/code-canvas-panel-event'
+import { zoomCanvasToContent } from '../../../design/canvas/canvas-focus'
 import { CanvasViewport } from './CanvasViewport'
 import { PropertiesPanel } from './PropertiesPanel'
 import {
@@ -52,6 +59,10 @@ type Props = Pick<
   activeThreadId: string | null
   /** Authoritative bound Design document; keeps the panel off the empty Code canvas during hydration. */
   designDocumentId?: string
+  /** Board within a multi-board Design document; completes the whiteboard host target. */
+  boardArtifactId?: string
+  /** Re-drive a failed image placeholder's original brief through the design sender. */
+  onRequestImageRegenerate?: (prompt: string) => void
   /** Keeps a classified Design task on the full Design surface while its target hydrates. */
   designTaskActive?: boolean
   onCollapse: () => void
@@ -75,17 +86,34 @@ export function resolveCodeCanvasDesignSurface(options: {
   activeThreadId: string | null
   designTaskActive: boolean
   designDocumentId?: string
+  boardArtifactId?: string
 }): Exclude<CodeCanvasDesignSurface, null> | null {
   const { surface, workspaceRoot, activeThreadId, designTaskActive } = options
   if (!activeThreadId) return null
+  // Compare the complete whiteboard host target so a mode switch can never
+  // remount a different (possibly blank) canvas under the same thread. When
+  // the caller has no authoritative bound document (e.g. browsing a prototype
+  // card without a locked profile), the thread-scoped surface is kept as-is.
   if (
     surface?.threadId === activeThreadId &&
+    (surface.surfaceKind ?? 'kun-design') === 'kun-design' &&
     normalizeDesignWorkspaceRoot(surface.workspaceRoot) ===
-      normalizeDesignWorkspaceRoot(workspaceRoot)
+      normalizeDesignWorkspaceRoot(workspaceRoot) &&
+    (options.designDocumentId === undefined ||
+      surface.documentId === options.designDocumentId) &&
+    (surface.boardArtifactId ?? undefined) === (options.boardArtifactId?.trim() || undefined)
   ) return surface
   const documentId = options.designDocumentId?.trim()
   return designTaskActive && documentId
-    ? { threadId: activeThreadId, workspaceRoot, documentId }
+    ? {
+        surfaceKind: 'kun-design',
+        threadId: activeThreadId,
+        workspaceRoot,
+        documentId,
+        ...(options.boardArtifactId?.trim()
+          ? { boardArtifactId: options.boardArtifactId.trim() }
+          : {})
+      }
     : null
 }
 
@@ -111,6 +139,8 @@ export function CodeCanvasPanel({
   workspaceRoot,
   activeThreadId,
   designDocumentId,
+  boardArtifactId,
+  onRequestImageRegenerate,
   designTaskActive = false,
   onCollapse,
   className,
@@ -135,8 +165,9 @@ export function CodeCanvasPanel({
     workspaceRoot,
     activeThreadId,
     designTaskActive,
-    designDocumentId
-  }), [activeThreadId, designDocumentId, designTaskActive, surface, workspaceRoot])
+    designDocumentId,
+    boardArtifactId
+  }), [activeThreadId, boardArtifactId, designDocumentId, designTaskActive, surface, workspaceRoot])
   const designMode = Boolean(activeDesignSurface) || Boolean(designTaskActive && activeThreadId)
 
   // Activate the requested 设计稿 so the design store projects its artifacts
@@ -235,6 +266,13 @@ export function CodeCanvasPanel({
     undefined,
     'code'
   )
+  useCanvasImageGenerationProgress(Boolean(activeDesignSurface), {
+    onRetry: (prompt) => {
+      if (prompt.trim()) onRequestImageRegenerate?.(prompt.trim())
+    },
+    onFirstSuccess: () => zoomCanvasToContent(48)
+  })
+  const failedGenerations = failedImageGenerationEntries()
 
   const designDoc = activeDesignSurface
     ? designDocuments.find((document) => document.id === activeDesignSurface.documentId) ?? null
@@ -313,6 +351,15 @@ export function CodeCanvasPanel({
             >
               <PanelRightClose className="h-4 w-4" strokeWidth={1.85} />
             </button>
+            <button
+              type="button"
+              onClick={requestCodeCanvasPanelFocus}
+              className="ds-sidebar-toggle-button shrink-0"
+              aria-label={t('designWhiteboardFocus', { defaultValue: 'Focus whiteboard' })}
+              title={t('designWhiteboardFocus', { defaultValue: 'Focus whiteboard' })}
+            >
+              <Maximize2 className="h-4 w-4" strokeWidth={1.85} />
+            </button>
             <div className="flex min-w-0 items-center gap-1.5 pl-1 pr-2">
               <Shapes className="h-4 w-4 shrink-0 text-accent" strokeWidth={1.8} />
               <span className="min-w-0 truncate text-[12.5px] font-medium text-ds-ink">
@@ -372,6 +419,41 @@ export function CodeCanvasPanel({
               </div>
             </div>
           )}
+          {failedGenerations.length > 0 ? (
+            <div className="pointer-events-none absolute bottom-3 left-3 z-40 flex max-w-[calc(100%-24px)] flex-col gap-1.5">
+              {failedGenerations.map((entry) => (
+                <div
+                  key={entry.toolCallId}
+                  className="pointer-events-auto flex max-w-full items-center gap-2 rounded-xl border border-red-500/30 bg-white/95 px-3 py-2 text-[12px] text-ds-ink shadow-lg backdrop-blur dark:bg-[#1b1d24]/95"
+                >
+                  <span className="min-w-0 flex-1 truncate">
+                    {t('designImageGenerationFailed', {
+                      defaultValue: 'Image generation failed',
+                      seconds: Math.max(1, Math.round((entry.elapsedMs ?? 0) / 1000))
+                    })}
+                  </span>
+                  {entry.prompt ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        useImageGenerationProgressStore.getState().replaceEntries(
+                          Object.fromEntries(
+                            Object.entries(useImageGenerationProgressStore.getState().entries)
+                              .filter(([id]) => id !== entry.toolCallId)
+                          )
+                        )
+                        onRequestImageRegenerate?.(entry.prompt ?? '')
+                      }}
+                      className="shrink-0 rounded-full bg-accent px-2.5 py-1 text-[11px] font-medium text-white hover:opacity-90"
+                      title={entry.prompt}
+                    >
+                      {t('designImageGenerationRetry', { defaultValue: 'Retry' })}
+                    </button>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          ) : null}
         </div>
       </aside>
     )

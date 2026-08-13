@@ -67,12 +67,14 @@ describe('workbench thread navigation surface', () => {
     )).toBe(false)
   })
 
-  it('identifies Code-owned Design tasks from their durable mode', () => {
+  it('identifies Code-owned Design tasks from their locked profile', () => {
+    // A stale legacy lockedTaskSurface never classifies a Code-owned
+    // conversation; only the locked Design profile does.
     expect(isWorkbenchDesignThread(
       'thr_design',
       { ...thread('code'), lockedTaskSurface: 'design' },
       emptyDesignThreadRegistry()
-    )).toBe(true)
+    )).toBe(false)
     expect(isWorkbenchDesignThread(
       'thr_design',
       { ...thread('code'), lockedTaskSurface: 'code', designProfile: {
@@ -85,7 +87,7 @@ describe('workbench thread navigation surface', () => {
         lockedAtTurnId: 'turn-1'
       } },
       emptyDesignThreadRegistry()
-    )).toBe(false)
+    )).toBe(true)
   })
 
   it('resolves the runtime profile document for a Code-owned Design turn', () => {
@@ -281,6 +283,7 @@ describe('workbench navigation controller Design tasks', () => {
     expect(props.setRoute).toHaveBeenCalledWith('chat')
     expectSelected(props.selectThread, designTask.id)
     expect(useCodeCanvasDesignSurface.getState().surface).toEqual({
+      surfaceKind: 'kun-design',
       threadId: designTask.id,
       workspaceRoot: '/workspace/project',
       documentId: 'runtime-document'
@@ -322,6 +325,7 @@ describe('workbench navigation controller Design tasks', () => {
     expect(props.setRoute).toHaveBeenCalledWith('chat')
     expectSelected(props.selectThread, 'thr_design')
     expect(useCodeCanvasDesignSurface.getState().surface).toEqual({
+      surfaceKind: 'kun-design',
       threadId: 'thr_design',
       workspaceRoot: '/workspace/project',
       documentId: 'legacy-document'
@@ -362,6 +366,7 @@ describe('workbench navigation controller Design tasks', () => {
 
     expectSelected(props.selectThread, 'thr_design')
     expect(useCodeCanvasDesignSurface.getState().surface).toEqual({
+      surfaceKind: 'kun-design',
       threadId: 'thr_design',
       workspaceRoot: '/workspace/project',
       documentId: 'legacy-default'

@@ -74,10 +74,12 @@ function currentBodyZoom(): number {
 export type QueuedComposerMessage = {
   id: string
   text: string
-  deliveryState?: 'pending' | 'paused' | 'starting' | 'in_flight'
+  deliveryState?: 'pending' | 'paused' | 'starting' | 'in_flight' | 'failed'
   deliveryTurnId?: string
   deliveryUserMessageItemId?: string
   displayText?: string
+  errorCode?: string
+  errorMessage?: string
   guidanceEligible?: boolean
   mode?: string
   attachmentIds?: readonly string[]

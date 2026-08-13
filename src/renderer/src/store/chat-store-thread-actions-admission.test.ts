@@ -584,7 +584,7 @@ describe('chat-store-thread-actions queued messages', () => {
     state.busy = false
     state.recoverActiveTurn = vi.fn(async () => false)
 
-    await expect(actions.sendMessage('retry safely', 'agent')).resolves.toBe(true)
+    await expect(actions.sendMessage('retry safely', 'agent')).resolves.toBe(false)
 
     const requestId = sendUserMessage.mock.calls[0]![2]?.clientRequestId
     expect(requestId).toMatch(/^turn_/)

@@ -17,7 +17,6 @@ import {
   readDesignThreadRegistry
 } from '../../design/design-thread-registry'
 import {
-  isDesignWorkbenchThread,
   isLegacyDesignWorkbenchThread
 } from '../../design/design-task-classification'
 import {
@@ -42,12 +41,12 @@ export function workbenchTaskSurfaceIsLocked(
     'agentSurface' | 'designProfile' | 'latestTurnId' | 'lockedTaskSurface'
   > | null
 ): boolean {
-  return Boolean(
-    thread?.lockedTaskSurface ||
-    thread?.latestTurnId ||
-    thread?.designProfile ||
-    thread?.agentSurface === 'design'
-  )
+  if (!thread) return false
+  // Only legacy standalone surfaces lock the task mode. Code-owned workbench
+  // conversations always select Code or Design per turn; the optional Design
+  // profile is a document/output lock, not a surface lock, and any stale
+  // `lockedTaskSurface` signal on a Code-owned thread is ignored.
+  return thread.agentSurface === 'write' || thread.agentSurface === 'design'
 }
 
 export function useWorkbenchTaskSurface(input: {
@@ -91,21 +90,19 @@ export function useWorkbenchTaskSurface(input: {
   const designRegistry = readDesignThreadRegistry()
   const legacyDesignThread = Boolean(activeThread &&
     isLegacyDesignWorkbenchThread(activeThread.id, activeThread, designRegistry))
-  const durableDesignThread = Boolean(activeThread &&
-    isDesignWorkbenchThread(activeThread.id, activeThread, designRegistry))
-  const taskSurface: ComposerTaskSurface = durableDesignThread
+  // Next-turn surface: legacy standalone Design stays Design; Code-owned
+  // conversations follow the per-thread draft, fall back to Design when a
+  // locked profile exists, and default to Code otherwise. The selector stays
+  // available because taskSurfaceLocked is false for Code-owned threads.
+  const taskSurface: ComposerTaskSurface = legacyDesignThread
     ? 'design'
-    : activeThread?.lockedTaskSurface === 'code'
-      ? 'code'
-      : lockedProfile
+    : hasPersistedDraft
+      ? effectiveDraft.surface
+      : pendingDesignThreadIntent
         ? 'design'
-        : activeThread?.latestTurnId
-          ? 'code'
-          : hasPersistedDraft
-            ? effectiveDraft.surface
-            : pendingDesignThreadIntent
-              ? 'design'
-              : 'code'
+        : lockedProfile
+          ? 'design'
+          : 'code'
   const profile: DesignTaskComposerProfile = lockedProfile
       ? {
         outputMedium: lockedProfile.outputMedium,
@@ -132,6 +129,11 @@ export function useWorkbenchTaskSurface(input: {
   const restoreDesignWorkspace = normalizeWorkspaceRoot(
     legacyDesignRef?.workspaceRoot || activeThread?.workspace || input.workspaceRoot
   )
+  // The whiteboard mounts the Design document whenever the thread has a locked
+  // document target (or a legacy registry binding). This is deliberately
+  // independent of the next-turn surface so Code turns keep the Design
+  // whiteboard visible and referenceable.
+  const threadHasDesignDocument = Boolean(restoreDesignDocumentId)
   const unresolvedLegacyDesignTaskId = legacyDesignThread && !legacyDesignRef
     ? activeThread?.id ?? ''
     : ''
@@ -141,19 +143,25 @@ export function useWorkbenchTaskSurface(input: {
   }, [taskSurface])
 
   useEffect(() => {
-    if (taskSurface !== 'design' || !restoreDesignTaskId || !restoreDesignDocumentId) return
+    // The Design document binding is independent of the next-turn surface:
+    // once a thread owns a Design document, it stays mounted (and
+    // referenceable) even while the composer sends a Code turn.
+    if (!threadHasDesignDocument || !restoreDesignTaskId || !restoreDesignDocumentId) return
     const surface = useCodeCanvasDesignSurface.getState().surface
+    const boardArtifactId = lockedProfile?.documentTarget.boardArtifactId
     if (
       surface?.threadId === restoreDesignTaskId &&
       surface.documentId === restoreDesignDocumentId &&
+      (surface.boardArtifactId ?? undefined) === (boardArtifactId || undefined) &&
       surface.readOnly !== true
     ) return
     useCodeCanvasDesignSurface.getState().showDesignDocument(
       restoreDesignTaskId,
       restoreDesignWorkspace,
-      restoreDesignDocumentId
+      restoreDesignDocumentId,
+      { boardArtifactId }
     )
-  }, [restoreDesignDocumentId, restoreDesignTaskId, restoreDesignWorkspace, taskSurface])
+  }, [restoreDesignDocumentId, restoreDesignTaskId, restoreDesignWorkspace, threadHasDesignDocument, lockedProfile])
 
   useEffect(() => {
     if (!unresolvedLegacyDesignTaskId || !restoreDesignWorkspace) return
@@ -202,7 +210,8 @@ export function useWorkbenchTaskSurface(input: {
     useCodeCanvasDesignSurface.getState().showDesignDocument(
       restoreDesignTaskId,
       workspace,
-      restoreDesignDocumentId
+      restoreDesignDocumentId,
+      { boardArtifactId: profileToRestore?.documentTarget.boardArtifactId }
     )
     const store = useDesignWorkspaceStore.getState()
     const restoreDesignExecutionContext = (): void => {
@@ -360,6 +369,7 @@ export function useWorkbenchTaskSurface(input: {
     taskSurfaceTransitioning: legacyDesignThread,
     taskSurfaceLocked,
     designProfileLocked,
+    threadHasDesignDocument,
     designTaskProfile: profile,
     lockedDesignProfile: lockedProfile,
     onTaskSurfaceChange: onSurfaceChange,

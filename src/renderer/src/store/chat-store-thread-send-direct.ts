@@ -28,8 +28,11 @@ import { ensureRuntimeProviderForSend, subscribeThreadEventsWithRecovery } from 
 import { readDesignThreadRegistry } from '../design/design-thread-registry'
 import {
   createWorkspaceCheckpointRequestId,
+  failQueuedSubmission,
   localConversationErrorBlock,
-  pendingQueuedMessage,
+  resetQueuedSubmission,
+  resetUnknownOutcomeAttempts,
+  scheduleUnknownOutcomeRetry,
   startingQueuedSubmission,
   settleRuntimeTurnAdmission,
   threadActionSharedState,
@@ -638,16 +641,34 @@ export async function performPreparedThreadSend(input: PreparedThreadSend): Prom
         if (recovered && submittedMessageForQueue.waitForRuntimeAdmission) {
           settleRuntimeTurnAdmission(clientRequestId, true)
         }
+        const retryKey = clientRequestId ?? submittedMessageForQueue.id
         if (!recovered && get().activeThreadId === activeThreadId) {
+          const scheduled = scheduleUnknownOutcomeRetry(retryKey)
+          if (scheduled.retryable) {
+            set((state) => ({
+              queuedMessages: resetQueuedSubmission(state.queuedMessages, submittedMessageForQueue.id),
+              error: view.summary
+            }))
+            runtime.persistActiveQueuedMessages()
+            // Backoff before the next attempt so the drain loop cannot re-drive
+            // the identical unknown failure immediately.
+            globalThis.setTimeout(() => {
+              if (!get().busy) void get().drainQueuedMessages()
+            }, scheduled.delayMs)
+            await get().refreshThreads()
+            return false
+          }
           set((state) => ({
-            queuedMessages: state.queuedMessages.map((message) =>
-              message.id === submittedMessageForQueue.id
-                ? pendingQueuedMessage(message)
-                : message
+            queuedMessages: failQueuedSubmission(
+              state.queuedMessages,
+              submittedMessageForQueue.id,
+              view
             ),
             error: view.summary
           }))
           runtime.persistActiveQueuedMessages()
+        } else if (recovered) {
+          resetUnknownOutcomeAttempts(retryKey)
         }
         await get().refreshThreads()
         return true
@@ -662,9 +683,11 @@ export async function performPreparedThreadSend(input: PreparedThreadSend): Prom
         busy: false,
         currentTurnId: null,
         currentTurnOrchestration: null,
-        queuedMessages: submittedMessageForQueue.waitForRuntimeAdmission
-          ? previousQueuedMessages.filter((message) => message.id !== submittedMessageForQueue.id)
-          : previousQueuedMessages,
+        queuedMessages: failQueuedSubmission(
+          previousQueuedMessages,
+          submittedMessageForQueue.id,
+          view
+        ),
         ...(shouldOpenSettingsForError(e)
           ? { route: 'settings' as const, settingsSection: 'agents' as const }
           : {})

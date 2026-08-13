@@ -10,6 +10,7 @@ import i18n from '../i18n'
 import { applyTheme, applyUiFontScale } from '../lib/apply-theme'
 import { formatWorkspacePickerError } from '../lib/format-workspace-picker-error'
 import { describeRuntimeError, formatRuntimeError, getRuntimeErrorCode } from '../lib/format-runtime-error'
+import { isDeterministicKunRejection } from '@shared/runtime-error'
 import {
   deriveThreadTitleFromPrompt,
   getDefaultThreadTitle,
@@ -314,24 +315,91 @@ export function startingQueuedSubmission(
     : message)
 }
 
+/** Mark one queued submission terminal with the structured rejection view. */
+export function failQueuedSubmission(
+  messages: readonly QueuedUserMessage[],
+  id: string,
+  view: { code?: string; message?: string }
+): QueuedUserMessage[] {
+  return messages.map((message) =>
+    message.id === id
+      ? {
+          ...message,
+          deliveryState: 'failed' as const,
+          ...(view.code ? { errorCode: view.code } : {}),
+          ...(view.message ? { errorMessage: view.message } : {})
+        }
+      : message
+  )
+}
+
+/** Return one queued submission to pending so a scheduled retry can re-drive it. */
+export function resetQueuedSubmission(
+  messages: readonly QueuedUserMessage[],
+  id: string
+): QueuedUserMessage[] {
+  return messages.map((message) =>
+    message.id === id ? pendingQueuedMessage(message) : message
+  )
+}
+
 export function turnAdmissionOutcomeMayBeUnknown(error: unknown): boolean {
   const code = getRuntimeErrorCode(error)
-  if (code) return code === 'unknown' || code === 'runtime_offline' || code === 'internal_error'
+  if (code) {
+    // Deterministic client rejections have a known outcome: retrying the
+    // identical request cannot succeed. Fail them once instead of recovering.
+    if (isDeterministicKunRejection(code)) return false
+    return code === 'unknown' || code === 'runtime_offline' || code === 'internal_error'
+  }
   const message = error instanceof Error ? error.message : String(error ?? '')
   // A renderer-side 4xx response is a definitive rejection, even when a
   // legacy endpoint did not supply a structured code.
   return !/\bHTTP\s+4\d\d\b/i.test(message)
 }
 
+const MAX_UNKNOWN_OUTCOME_ATTEMPTS = 5
+const UNKNOWN_OUTCOME_BACKOFF_MS = [1_000, 2_000, 4_000, 8_000, 16_000]
+const unknownOutcomeAttempts = new Map<string, { count: number; nextAttemptAt: number }>()
+
+/**
+ * Backoff/circuit breaker for unknown send outcomes. Each failed attempt
+ * schedules the next one with exponential delay; after the cap the submission
+ * is terminal (`failed`) and only an explicit user retry can re-drive it.
+ */
+export function scheduleUnknownOutcomeRetry(key: string): { retryable: boolean; delayMs: number } {
+  const entry = unknownOutcomeAttempts.get(key) ?? { count: 0, nextAttemptAt: 0 }
+  if (entry.count >= MAX_UNKNOWN_OUTCOME_ATTEMPTS) {
+    return { retryable: false, delayMs: 0 }
+  }
+  const delayMs = UNKNOWN_OUTCOME_BACKOFF_MS[Math.min(
+    entry.count,
+    UNKNOWN_OUTCOME_BACKOFF_MS.length - 1
+  )]
+  unknownOutcomeAttempts.set(key, {
+    count: entry.count + 1,
+    nextAttemptAt: Date.now() + delayMs
+  })
+  return { retryable: true, delayMs }
+}
+
+export function resetUnknownOutcomeAttempts(key: string): void {
+  unknownOutcomeAttempts.delete(key)
+}
+
 export function localConversationErrorBlock(error: unknown, id: string): Extract<ChatBlock, { kind: 'system' }> {
   const view = describeRuntimeError(error)
+  // The localized summary is the primary text; the raw (often English) runtime
+  // message stays in `detail` so it never lands in a global banner unlocalized.
+  const detail = view.message && view.message !== view.summary
+    ? `${view.message}${view.detail ? `\n\n${view.detail}` : ''}`
+    : view.detail
   return {
     kind: 'system',
     id,
     createdAt: new Date().toISOString(),
-    text: view.message,
+    text: view.summary,
     ...(view.code ? { code: view.code } : {}),
-    ...(view.detail ? { detail: view.detail } : {}),
+    ...(detail ? { detail } : {}),
     severity: 'error',
     runtimeError: true
   }

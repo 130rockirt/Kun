@@ -74,16 +74,19 @@ describe('workbench task mode', () => {
     vi.unstubAllGlobals()
   })
 
-  it('locks the task mode after the first accepted turn', () => {
+  it('locks only legacy standalone surfaces and the Design profile', () => {
     expect(workbenchDesignProfileIsLocked(null)).toBe(false)
     expect(workbenchDesignProfileIsLocked({})).toBe(false)
     expect(workbenchDesignProfileIsLocked({ designProfile: profile })).toBe(true)
     expect(workbenchTaskSurfaceIsLocked(null)).toBe(false)
     expect(workbenchTaskSurfaceIsLocked({ agentSurface: 'code' })).toBe(false)
     expect(workbenchTaskSurfaceIsLocked({ agentSurface: 'design' })).toBe(true)
-    expect(workbenchTaskSurfaceIsLocked({ latestTurnId: 'turn_1' })).toBe(true)
-    expect(workbenchTaskSurfaceIsLocked({ designProfile: profile })).toBe(true)
-    expect(workbenchTaskSurfaceIsLocked({ lockedTaskSurface: 'code' })).toBe(true)
+    expect(workbenchTaskSurfaceIsLocked({ agentSurface: 'write' })).toBe(true)
+    // Code-owned conversations are never surface-locked: turns select Code or
+    // Design per turn, so a profile or latest turn alone must not freeze them.
+    expect(workbenchTaskSurfaceIsLocked({ latestTurnId: 'turn_1' })).toBe(false)
+    expect(workbenchTaskSurfaceIsLocked({ designProfile: profile })).toBe(false)
+    expect(workbenchTaskSurfaceIsLocked({ lockedTaskSurface: 'code' })).toBe(false)
   })
 
   it('does not inherit an empty-workspace Design draft into an existing thread', () => {
@@ -186,7 +189,7 @@ describe('workbench task mode', () => {
     await act(async () => renderer.unmount())
   })
 
-  it('does not rewrite a locked Design draft before profile detail hydration', async () => {
+  it('keeps an unlocked Design surface when the profile draft has not been accepted', async () => {
     const lockedThread = codeThread({ id: 'thread-summary', lockedTaskSurface: 'design' })
     const scope = workbenchTaskIntentScope(lockedThread.id, '/workspace')
     writeWorkbenchTaskIntent(scope, {
@@ -211,13 +214,17 @@ describe('workbench task mode', () => {
     let renderer!: ReactTestRenderer
     await act(async () => { renderer = create(createElement(Harness)) })
 
-    expect(runtime!.taskSurfaceLocked).toBe(true)
-    expect(runtime!.designTaskProfile.outputMedium).toBe('image')
-    expect(readWorkbenchTaskIntent(scope, '/workspace').profile.outputMedium).toBe('image')
+    // A Code-owned thread is never surface-locked; the draft decides the next turn.
+    expect(runtime!.taskSurfaceLocked).toBe(false)
+    expect(runtime!.taskSurface).toBe('design')
+    // Image generation is disabled and the profile is still unlocked, so the
+    // unlocked AI-image draft falls back to HTML exactly like an empty thread.
+    expect(runtime!.designTaskProfile.outputMedium).toBe('html')
+    expect(readWorkbenchTaskIntent(scope, '/workspace').profile.outputMedium).toBe('html')
     await act(async () => renderer.unmount())
   })
 
-  it('keeps an accepted Code thread locked to Code', async () => {
+  it('allows a Code-owned thread to switch to Design per turn', async () => {
     const thread = codeThread({ latestTurnId: 'turn-existing' })
     const createThread = vi.fn(async () => 'unexpected')
     const deleteThread = vi.fn(async () => undefined)
@@ -241,17 +248,17 @@ describe('workbench task mode', () => {
     await act(async () => { renderer = create(createElement(Harness)) })
 
     act(() => runtime!.onTaskSurfaceChange('design'))
-    expect(runtime!.taskSurface).toBe('code')
-    expect(runtime!.taskSurfaceLocked).toBe(true)
+    expect(runtime!.taskSurface).toBe('design')
+    expect(runtime!.taskSurfaceLocked).toBe(false)
     expect(runtime!.taskSurfaceTransitioning).toBe(false)
-    expect(setComposerMode).not.toHaveBeenCalled()
-    expect(setComposerOrchestration).not.toHaveBeenCalled()
+    expect(setComposerMode).toHaveBeenCalledWith('agent')
+    expect(setComposerOrchestration).toHaveBeenCalledWith('direct')
     expect(createThread).not.toHaveBeenCalled()
     expect(deleteThread).not.toHaveBeenCalled()
     await act(async () => renderer.unmount())
   })
 
-  it('hides the selector from a summary-locked Code thread before detail hydration', async () => {
+  it('keeps the Code/Design selector available on a Code thread after turns', async () => {
     const thread = codeThread({ lockedTaskSurface: 'code' })
     let runtime: ReturnType<typeof useWorkbenchTaskSurface> | null = null
     const Harness = () => {
@@ -271,7 +278,7 @@ describe('workbench task mode', () => {
     await act(async () => { renderer = create(createElement(Harness)) })
 
     expect(runtime!.taskSurface).toBe('code')
-    expect(runtime!.taskSurfaceLocked).toBe(true)
+    expect(runtime!.taskSurfaceLocked).toBe(false)
     await act(async () => renderer.unmount())
   })
 
@@ -481,11 +488,13 @@ describe('workbench task mode', () => {
     await act(async () => { renderer = create(createElement(Harness, { thread: lockedThread })) })
     expect(dispatch).toHaveBeenCalledTimes(1)
     expect(runtime!.taskSurface).toBe('design')
-    expect(runtime!.taskSurfaceLocked).toBe(true)
+    // Code-owned threads keep the per-turn selector even with a locked profile.
+    expect(runtime!.taskSurfaceLocked).toBe(false)
     expect(runtime!.designProfileLocked).toBe(true)
+    expect(runtime!.threadHasDesignDocument).toBe(true)
 
     act(() => runtime!.onTaskSurfaceChange('code'))
-    expect(runtime!.taskSurface).toBe('design')
+    expect(runtime!.taskSurface).toBe('code')
     expect(runtime!.designTaskProfile).toEqual({
       outputMedium: profile.outputMedium,
       target: profile.target,
@@ -524,6 +533,7 @@ describe('workbench task mode', () => {
     expect(runtime!.taskSurface).toBe('design')
     expect(runtime!.taskSurfaceTransitioning).toBe(true)
     expect(useCodeCanvasDesignSurface.getState().surface).toEqual({
+      surfaceKind: 'kun-design',
       threadId: legacy.id,
       workspaceRoot: '/workspace',
       documentId: 'legacy-document'
@@ -574,6 +584,7 @@ describe('workbench task mode', () => {
     await act(async () => { renderer = create(createElement(Harness)) })
 
     expect(useCodeCanvasDesignSurface.getState().surface).toEqual({
+      surfaceKind: 'kun-design',
       threadId: legacy.id,
       workspaceRoot: '/workspace',
       documentId: 'migrated-default'

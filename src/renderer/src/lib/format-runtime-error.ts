@@ -124,6 +124,14 @@ function localizedRuntimeSummary(code: string | null, text: string): string | nu
     return i18n.t('common:runtimeActiveTurn')
   }
 
+  if (code === 'task_surface_locked') {
+    return i18n.t('common:runtimeTaskSurfaceLocked')
+  }
+
+  if (code === 'design_profile_locked') {
+    return i18n.t('common:runtimeDesignProfileLocked')
+  }
+
   if (code === 'runtime_binary_not_installed') {
     return i18n.t('common:runtimeBinaryNotInstalled')
   }

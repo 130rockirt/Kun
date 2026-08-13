@@ -22,7 +22,7 @@ import {
   Trash2
 } from 'lucide-react'
 import type { NormalizedThread } from '../../agent/types'
-import { isDesignWorkbenchThread } from '../../design/design-task-classification'
+import { isDesignWorkbenchThread, isLegacyDesignWorkbenchThread } from '../../design/design-task-classification'
 import { formatRelativeTime } from '../../lib/format-relative-time'
 import type { SddDraftHistoryItem } from '../../sdd/sdd-draft-history'
 import type { SddDraft } from '../../sdd/sdd-draft-store'
@@ -211,7 +211,12 @@ export function ThreadRow({
     : ''
   const updatedLabel = formatRelativeTime(thread.updatedAt, locale)
   const isDesignTask = isDesignWorkbenchThread(thread.id, thread)
-  const taskTypeLabel = isDesignTask ? t('taskTypeDesign') : t('taskTypeCode')
+  const isLegacyDesignTask = isLegacyDesignWorkbenchThread(thread.id, thread)
+  // Mixed Code conversations keep the Code identity with a Design artifact
+  // badge; only legacy standalone Design tasks render a single Design icon.
+  const taskTypeLabel = isDesignTask
+    ? isLegacyDesignTask ? t('taskTypeDesign') : t('taskTypeCode')
+    : t('taskTypeCode')
   const ariaLabel = [
     thread.title,
     updatedLabel,
@@ -296,16 +301,22 @@ export function ThreadRow({
     >
       <span className="flex min-w-0 flex-1 items-center gap-1.5">
         <span
-          className={`inline-grid h-5 w-5 shrink-0 place-items-center rounded-md ${
+          className={`relative inline-grid h-5 w-5 shrink-0 place-items-center rounded-md ${
             isDesignTask ? 'bg-fuchsia-500/10 text-fuchsia-600 dark:text-fuchsia-300' : 'bg-accent/8 text-accent'
           }`}
           title={taskTypeLabel}
           aria-label={taskTypeLabel}
-          data-thread-task-surface={isDesignTask ? 'design' : 'code'}
+          data-thread-task-surface={isLegacyDesignTask ? 'design' : 'code'}
         >
-          {isDesignTask
+          {isDesignTask && isLegacyDesignTask
             ? <Palette className="h-3 w-3" strokeWidth={1.9} />
             : <Code2 className="h-3 w-3" strokeWidth={1.9} />}
+          {isDesignTask && !isLegacyDesignTask ? (
+            <Palette
+              className="absolute -bottom-1 -right-1 h-2.5 w-2.5 rounded-full bg-[#f8fafc] p-px text-fuchsia-600 dark:bg-[#111318] dark:text-fuchsia-300"
+              strokeWidth={2.4}
+            />
+          ) : null}
         </span>
         {pinned ? <Pin className="h-3.5 w-3.5 shrink-0 text-accent" strokeWidth={1.9} /> : null}
         {worktreeRecord ? (
