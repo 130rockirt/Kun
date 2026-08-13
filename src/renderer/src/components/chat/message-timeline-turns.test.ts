@@ -178,6 +178,39 @@ describe('message timeline turns', () => {
     ])
   })
 
+  it('merges an admitted optimistic user block with durable blocks from the same turn', () => {
+    const blocks: ChatBlock[] = [
+      {
+        kind: 'user',
+        id: 'user_optimistic',
+        text: 'Inspect the request',
+        meta: { turnId: 'turn_1' }
+      },
+      {
+        kind: 'reasoning',
+        id: 'reasoning_1',
+        turnId: 'turn_1',
+        text: 'Inspecting the request'
+      },
+      {
+        kind: 'assistant',
+        id: 'assistant_1',
+        turnId: 'turn_1',
+        text: 'Inspection complete'
+      }
+    ]
+
+    const turns = groupTurns(blocks)
+
+    expect(turns).toHaveLength(1)
+    expect(turns[0]?.turnId).toBe('turn_1')
+    expect(turns[0]?.user?.id).toBe('user_optimistic')
+    expect(turns[0]?.blocks.map((block) => block.id)).toEqual([
+      'reasoning_1',
+      'assistant_1'
+    ])
+  })
+
   it('routes a delayed tool update back to its owning turn by turnId', () => {
     const blocks: ChatBlock[] = [
       { kind: 'user', id: 'user_1', turnId: 'turn_1', text: 'First' },

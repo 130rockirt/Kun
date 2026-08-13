@@ -23,7 +23,8 @@ export function useWorkbenchShellRuntime(context: Context): {
 } {
   const {
     input, setInput, composerMode, setComposerMode, composerOrchestration, graphEnabled,
-    taskSurface, taskSurfaceLocked, taskSurfaceTransitioning, designTaskProfile, designProfileLocked, onTaskSurfaceChange,
+    taskSurface, taskSurfaceLocked, taskSurfaceTransitioning, designTaskProfile, designProfileLocked,
+    lockedDesignProfile, onTaskSurfaceChange,
     onDesignTaskProfileChange,
     setComposerOrchestration, openComposerGraph, openComposerGraphChild, busy,
     currentTurnOrchestration, route, runtimeConnection, activeThreadId, activeClawChannelId,
@@ -263,6 +264,7 @@ export function useWorkbenchShellRuntime(context: Context): {
     canvas: {
       workspaceRoot: activeCodeCanvasWorkspace,
       activeThreadId,
+      designDocumentId: lockedDesignProfile?.documentTarget.documentId,
       designTaskActive: taskSurface === 'design',
       busy,
       onOpenAgentSettings: () => openSettings('design'),

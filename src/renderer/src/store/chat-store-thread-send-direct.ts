@@ -465,10 +465,7 @@ export async function performPreparedThreadSend(input: PreparedThreadSend): Prom
             block.kind === 'user' && block.id === userMessageItemId
               ? {
                   ...block,
-                  meta: {
-                    ...(block.meta ?? {}),
-                    turnId
-                  }
+                  turnId
                 }
               : block
           ),
@@ -503,6 +500,14 @@ export async function performPreparedThreadSend(input: PreparedThreadSend): Prom
             delete next[userBlockId]
             return next
           })()
+        }))
+      } else {
+        set((s) => ({
+          blocks: s.blocks.map((block) =>
+            block.kind === 'user' && block.id === userBlockId
+              ? { ...block, turnId }
+              : block
+          )
         }))
       }
       if (channel && typeof window.kunGui?.mirrorClawChannelMessage === 'function') {

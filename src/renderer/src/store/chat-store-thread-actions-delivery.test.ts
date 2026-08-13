@@ -284,6 +284,7 @@ describe('chat-store-thread-actions queued messages', () => {
       })
     )
     expect(state.blocks.find((block) => block.kind === 'user')).toMatchObject({
+      turnId: 'turn_1',
       text: 'Draw an architecture map',
       meta: {
         displayText: 'Draw an architecture map',

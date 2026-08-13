@@ -47,7 +47,9 @@ export function groupTurns(blocks: ChatBlock[]): Turn[] {
   let current: Turn | null = null
 
   for (const block of blocks) {
-    const turnId = block.turnId?.trim()
+    const turnId = block.turnId?.trim() || (
+      block.kind === 'user' ? block.meta?.turnId?.trim() : undefined
+    )
     if (turnId) {
       let turn = turnsById.get(turnId)
       if (!turn) {

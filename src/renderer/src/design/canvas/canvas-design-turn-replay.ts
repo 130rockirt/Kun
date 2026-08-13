@@ -410,6 +410,10 @@ export function ensureGeneratedImageOnCanvas(imageUrl: string, options?: {
     }
     return shapeId
   }
+  const preferredImage = (options?.preferredShapeIds ?? [])
+    .map((id) => shapeStore.document.objects[id])
+    .find((shape) => shape?.type === 'image' && shape.imageUrl === imageUrl)
+  if (preferredImage) return recordReceipt(preferredImage.id)
   const existing = options?.replayKey ? undefined : Object.values(shapeStore.document.objects)
     .find((shape) => shape?.type === 'image' && shape.imageUrl === imageUrl)
   if (existing) return recordReceipt(existing.id)

@@ -103,6 +103,7 @@ type WorkbenchRightPanelElementOptions = Pick<
     CanvasPanelProps,
     | 'workspaceRoot'
     | 'activeThreadId'
+    | 'designDocumentId'
     | 'designTaskActive'
     | 'busy'
     | 'onOpenAgentSettings'

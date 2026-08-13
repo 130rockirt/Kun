@@ -20,7 +20,10 @@ import {
   type CanvasAgentExportRequest
 } from '../../../design/canvas/canvas-export'
 import { canvasDocumentKey } from '../../../design/canvas/canvas-persistence'
-import { useCodeCanvasDesignSurface } from '../../../design/code-canvas-design-surface'
+import {
+  useCodeCanvasDesignSurface,
+  type CodeCanvasDesignSurface
+} from '../../../design/code-canvas-design-surface'
 import { useDesignWorkspaceStore } from '../../../design/design-workspace-store'
 import { normalizeDesignWorkspaceRoot } from '../../../design/design-workspace-lifecycle'
 import { displayDrawingTitle } from '../../../design/design-drawing-title'
@@ -47,6 +50,8 @@ type Props = Pick<
 > & {
   workspaceRoot: string
   activeThreadId: string | null
+  /** Authoritative bound Design document; keeps the panel off the empty Code canvas during hydration. */
+  designDocumentId?: string
   /** Keeps a classified Design task on the full Design surface while its target hydrates. */
   designTaskActive?: boolean
   onCollapse: () => void
@@ -64,6 +69,33 @@ export function codeCanvasPanelTitlebarClass(): string {
   return 'pointer-events-auto flex h-10 max-w-[calc(100%-72px)] min-w-0 items-center gap-1.5 rounded-full border border-ds-border bg-white/82 px-1.5 shadow-[0_16px_42px_rgba(20,47,95,0.13)] backdrop-blur-2xl dark:bg-ds-card/84 dark:shadow-none'
 }
 
+export function resolveCodeCanvasDesignSurface(options: {
+  surface: CodeCanvasDesignSurface
+  workspaceRoot: string
+  activeThreadId: string | null
+  designTaskActive: boolean
+  designDocumentId?: string
+}): Exclude<CodeCanvasDesignSurface, null> | null {
+  const { surface, workspaceRoot, activeThreadId, designTaskActive } = options
+  if (!activeThreadId) return null
+  if (
+    surface?.threadId === activeThreadId &&
+    normalizeDesignWorkspaceRoot(surface.workspaceRoot) ===
+      normalizeDesignWorkspaceRoot(workspaceRoot)
+  ) return surface
+  const documentId = options.designDocumentId?.trim()
+  return designTaskActive && documentId
+    ? { threadId: activeThreadId, workspaceRoot, documentId }
+    : null
+}
+
+export function shouldRehydrateCodeCanvasDesignDocument(
+  documents: readonly { id: string }[],
+  documentId: string
+): boolean {
+  return !documents.some((document) => document.id === documentId)
+}
+
 /**
  * Hosts the reusable {@link CanvasViewport} as a code-workspace right panel.
  * By default the canvas is per-thread (`code-<threadId>`), persisted under
@@ -78,6 +110,7 @@ export function codeCanvasPanelTitlebarClass(): string {
 export function CodeCanvasPanel({
   workspaceRoot,
   activeThreadId,
+  designDocumentId,
   designTaskActive = false,
   onCollapse,
   className,
@@ -97,50 +130,73 @@ export function CodeCanvasPanel({
   const activationGenerationRef = useRef(0)
   const activeThreadIdRef = useRef(activeThreadId)
   activeThreadIdRef.current = activeThreadId
-  const matchingDesignSurface = Boolean(
-    surface &&
-    surface.threadId === activeThreadId &&
-    normalizeDesignWorkspaceRoot(surface.workspaceRoot) === normalizeDesignWorkspaceRoot(workspaceRoot)
-  )
-  const designMode = matchingDesignSurface || Boolean(designTaskActive && activeThreadId)
-  const activeDesignSurface = matchingDesignSurface ? surface : null
+  const activeDesignSurface = useMemo(() => resolveCodeCanvasDesignSurface({
+    surface,
+    workspaceRoot,
+    activeThreadId,
+    designTaskActive,
+    designDocumentId
+  }), [activeThreadId, designDocumentId, designTaskActive, surface, workspaceRoot])
+  const designMode = Boolean(activeDesignSurface) || Boolean(designTaskActive && activeThreadId)
 
   // Activate the requested 设计稿 so the design store projects its artifacts
   // (the board + linked HTML frames for that document).
   useEffect(() => {
-    if (!matchingDesignSurface || !surface) return
+    if (!activeDesignSurface) return
+    const target = activeDesignSurface
+    const cached = useCodeCanvasDesignSurface.getState().surface
+    if (
+      cached?.threadId !== target.threadId ||
+      cached.documentId !== target.documentId ||
+      normalizeDesignWorkspaceRoot(cached.workspaceRoot) !==
+        normalizeDesignWorkspaceRoot(target.workspaceRoot)
+    ) {
+      useCodeCanvasDesignSurface.getState().showDesignDocument(
+        target.threadId,
+        target.workspaceRoot,
+        target.documentId
+      )
+    }
     const generation = ++activationGenerationRef.current
     const restoreLatestSurface = (): void => {
       const latest = useCodeCanvasDesignSurface.getState().surface
       const expectedThreadId = generation === activationGenerationRef.current
         ? activeThreadId
         : activeThreadIdRef.current
-      if (latest?.threadId === expectedThreadId) {
+      const resolved = latest?.threadId === expectedThreadId &&
+        latest.documentId === target.documentId &&
+        normalizeDesignWorkspaceRoot(latest.workspaceRoot) ===
+          normalizeDesignWorkspaceRoot(target.workspaceRoot)
+        ? latest
+        : generation === activationGenerationRef.current
+          ? target
+          : null
+      if (resolved) {
         const latestState = useDesignWorkspaceStore.getState()
-        if (latestState.documents.some((document) => document.id === latest.documentId)) {
-          latestState.switchActiveDocument(latest.documentId)
+        if (latestState.documents.some((document) => document.id === resolved.documentId)) {
+          latestState.switchActiveDocument(resolved.documentId)
         }
       }
     }
     const state = useDesignWorkspaceStore.getState()
     if (
       normalizeDesignWorkspaceRoot(state.workspaceRoot) !==
-      normalizeDesignWorkspaceRoot(surface.workspaceRoot)
+      normalizeDesignWorkspaceRoot(target.workspaceRoot)
     ) {
-      state.setWorkspaceRoot(surface.workspaceRoot)
+      state.setWorkspaceRoot(target.workspaceRoot)
       void useDesignWorkspaceStore.getState().loadDesignSettings().then(restoreLatestSurface)
       return
     }
-    if (state.activeDocumentId !== surface.documentId) {
-      if (state.documents.some((document) => document.id === surface.documentId)) {
-        state.switchActiveDocument(surface.documentId)
-      } else {
-        void state.rehydrateArtifacts().then(() => {
-          restoreLatestSurface()
-        })
-      }
+    const hasTargetDocument = !shouldRehydrateCodeCanvasDesignDocument(
+      state.documents,
+      target.documentId
+    )
+    if (state.activeDocumentId !== target.documentId && hasTargetDocument) {
+      state.switchActiveDocument(target.documentId)
+    } else if (!hasTargetDocument) {
+      void state.rehydrateArtifacts().then(restoreLatestSurface)
     }
-  }, [activeThreadId, matchingDesignSurface, surface])
+  }, [activeDesignSurface, activeThreadId])
 
   const ready = Boolean(workspaceRoot && activeThreadId)
   const artifactId = activeThreadId ? codeCanvasArtifactId(activeThreadId) : ''

@@ -161,6 +161,22 @@ describe('generated Design image canvas placement', () => {
     })
   })
 
+  it('reuses an image added by ShapeOps before recording the generated-image receipt', () => {
+    const imageUrl = '/workspace/.kun/images/tool-placed.png'
+    const toolPlaced = createDefaultShape('image', 12, 24)
+    toolPlaced.imageUrl = imageUrl
+    useCanvasShapeStore.getState().addShape(toolPlaced)
+
+    const placedId = ensureGeneratedImageOnCanvas(imageUrl, {
+      replayKey: 'thread\0turn\0doc\0board\0image:completion-tool',
+      preferredShapeIds: [toolPlaced.id]
+    })
+
+    expect(placedId).toBe(toolPlaced.id)
+    expect(Object.values(useCanvasShapeStore.getState().document.objects)
+      .filter((shape) => shape.type === 'image')).toHaveLength(1)
+  })
+
   it('uses a durable completion receipt and does not resurrect a deleted placement', () => {
     useCanvasShapeStore.getState().resetDocument()
     const replayKey = 'thread\0turn\0doc\0board\0image:completion-1'
