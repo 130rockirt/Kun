@@ -87,22 +87,22 @@ describe('FloatingComposerFooterView', () => {
     expect(html).not.toContain('ds-composer-usage-cost')
   })
 
-  it('omits cache when latest-request telemetry is unavailable instead of using cumulative usage', () => {
+  it('falls back to cumulative cache telemetry when latest-request telemetry is unavailable', () => {
     const html = renderFooter({
       threadUsage: usageSummary({ lastTurnCacheHitRate: null, cacheHitRate: 0.81 })
     })
 
-    expect(html).not.toContain('ds-composer-usage-cache')
-    expect(html).not.toContain('81% cache')
+    expect(html).toContain('ds-composer-usage-cache')
+    expect(html).toContain('81% cache')
   })
 
-  it('omits cache when the latest-request cache hit rate is zero', () => {
+  it('renders a zero cache rate instead of treating it as unavailable', () => {
     const html = renderFooter({
       threadUsage: usageSummary({ lastTurnCacheHitRate: 0, cacheHitRate: 0.81 })
     })
 
-    expect(html).not.toContain('ds-composer-usage-cache')
-    expect(html).not.toContain('0% cache')
+    expect(html).toContain('ds-composer-usage-cache')
+    expect(html).toContain('0% cache')
     expect(html).not.toContain('81% cache')
   })
 
