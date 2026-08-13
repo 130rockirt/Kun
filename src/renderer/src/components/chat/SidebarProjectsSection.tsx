@@ -127,6 +127,7 @@ import {
   type WorkspaceOrderDropTarget
 } from './sidebar-project-drag-actions'
 import { createSidebarProjectWorkspaceActions } from './sidebar-project-workspace-actions'
+import type { SidebarProjectExpansionStage } from './sidebar-project-expansion'
 import { SidebarProjectsContent } from './SidebarProjectsContent'
 export {
   buildSidebarDraftWorkspacePaths,
@@ -209,7 +210,7 @@ export function SidebarProjectsSection({
   const [sidebarCollapse, setSidebarCollapse] = useState<SidebarCollapseRegistry>(
     () => readSidebarCollapseRegistry()
   )
-  const [expandedWorkspaces, setExpandedWorkspaces] = useState<Record<string, boolean>>({})
+  const [expandedWorkspaces, setExpandedWorkspaces] = useState<Record<string, SidebarProjectExpansionStage>>({})
   const [deletingThreadIds, setDeletingThreadIds] = useState<Record<string, boolean>>({})
   const [searchOpen, setSearchOpen] = useState(false)
   const [threadContextMenu, setThreadContextMenu] = useState<ThreadContextMenuState | null>(null)

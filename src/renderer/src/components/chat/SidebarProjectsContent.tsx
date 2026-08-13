@@ -57,6 +57,12 @@ import type {
   ThreadOrderDropTarget,
   WorkspaceOrderDropTarget
 } from './sidebar-project-drag-actions'
+import {
+  nextSidebarProjectExpansionStage,
+  sidebarProjectHasVisibleThreadOverflow,
+  sidebarProjectVisibleThreadCount,
+  type SidebarProjectExpansionStage
+} from './sidebar-project-expansion'
 
 type T = (key: string, options?: Record<string, unknown>) => string
 
@@ -67,7 +73,7 @@ export type SidebarProjectsContentProps = {
   activeView: 'chat' | 'write' | 'claw'; activeThreadId: string | null; locale: string
   displayGroups: SidebarWorkspaceGroup[]
   sidebarCollapse: SidebarCollapseRegistry; sidebarOrder: SidebarOrderRegistry; sidebarFolders: SidebarFolderRegistry
-  expandedWorkspaces: Record<string, boolean>; deletingThreadIds: Record<string, boolean>
+  expandedWorkspaces: Record<string, SidebarProjectExpansionStage>; deletingThreadIds: Record<string, boolean>
   draggingWorkspacePath: string | null; draggingThreadId: string | null
   workspaceOrderDropTarget: WorkspaceOrderDropTarget | null
   threadOrderDropTarget: ThreadOrderDropTarget | null; dragOverWorkspace: string | null
@@ -78,7 +84,7 @@ export type SidebarProjectsContentProps = {
   renameThreadDialog: RenameThreadDialogState | null; moveThreadDialog: MoveThreadDialogState | null
   folderDialog: SidebarFolderDialogState | null
   setSearchOpen: Dispatch<SetStateAction<boolean>>
-  setExpandedWorkspaces: Dispatch<SetStateAction<Record<string, boolean>>>
+  setExpandedWorkspaces: Dispatch<SetStateAction<Record<string, SidebarProjectExpansionStage>>>
   setThreadContextMenu: Dispatch<SetStateAction<ThreadContextMenuState | null>>
   setWorkspaceContextMenu: Dispatch<SetStateAction<WorkspaceContextMenuState | null>>
   setFolderContextMenu: Dispatch<SetStateAction<FolderContextMenuState | null>>
@@ -284,11 +290,16 @@ export function SidebarProjectsContent(props: SidebarProjectsContentProps): Reac
             return sidebarChildFolders(workspaceFolders, folder.id).some(visibleFolder)
           }
           const rootFolders = sidebarChildFolders(workspaceFolders, null).filter(visibleFolder)
-          const workspaceExpanded = expandedWorkspaces[workspacePath] === true
-          const hasOverflow = rootThreads.length > 5
-          const visibleThreads = workspaceExpanded
-            ? rootThreads
-            : rootThreads.slice(0, 5)
+          const expansionStage = expandedWorkspaces[workspacePath] ?? 0
+          const visibleThreadCount = sidebarProjectVisibleThreadCount(
+            rootThreads.length,
+            expansionStage
+          )
+          const hasVisibleThreadOverflow = sidebarProjectHasVisibleThreadOverflow(
+            rootThreads.length,
+            expansionStage
+          )
+          const visibleThreads = rootThreads.slice(0, visibleThreadCount)
           return (
             <div
               key={workspacePath}
@@ -486,23 +497,26 @@ export function SidebarProjectsContent(props: SidebarProjectsContentProps): Reac
                       ) : null}
                     </div>
                   ) : visibleThreads.map((thread) => renderThreadRow(thread, workspacePath, null))}
-                  {hasOverflow ? (
+                  {rootThreads.length > 5 ? (
                     <button
                       type="button"
                       data-cursor-spotlight-target
                       onClick={() =>
                         setExpandedWorkspaces((current) => ({
                           ...current,
-                          [workspacePath]: !workspaceExpanded
+                          [workspacePath]: nextSidebarProjectExpansionStage(
+                            rootThreads.length,
+                            current[workspacePath] ?? 0
+                          )
                         }))
                       }
                       className="ml-1 mt-1 rounded-md px-2.5 py-1.5 text-[12.5px] text-ds-faint transition hover:bg-[var(--ds-sidebar-row-hover)] hover:text-ds-ink"
                     >
-                      {workspaceExpanded
-                        ? t('sidebarWorkspaceShowLess')
-                        : t('sidebarWorkspaceShowMore', {
-                            count: rootThreads.length - 5
-                          })}
+                      {hasVisibleThreadOverflow
+                        ? t('sidebarWorkspaceShowMore', {
+                            count: rootThreads.length - visibleThreadCount
+                          })
+                        : t('sidebarWorkspaceShowLess')}
                     </button>
                   ) : null}
                 </div>
