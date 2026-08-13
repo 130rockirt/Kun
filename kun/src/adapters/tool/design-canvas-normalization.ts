@@ -43,7 +43,7 @@ export function normalizeDesignCanvasArgs(args: Record<string, unknown>):
       ok: true,
       action,
       ops: [op],
-      message: `Queued screen "${String(op.name)}" for the design canvas.`
+      message: `Accepted screen "${String(op.name)}" for renderer application; this result does not verify that the canvas applied it.`
     }
   }
   const ops = normalizeOps(args.ops)
@@ -54,7 +54,7 @@ export function normalizeDesignCanvasArgs(args: Record<string, unknown>):
     ok: true,
     action,
     ops,
-    message: `Queued ${ops.length} shape operation${ops.length === 1 ? '' : 's'} for the design canvas.`
+    message: `Accepted ${ops.length} shape operation${ops.length === 1 ? '' : 's'} for renderer application; this result does not verify that the canvas applied them.`
   }
 }
 
@@ -66,7 +66,7 @@ export function normalizeDesignUpdateShapeOps(args: Record<string, unknown>): un
     args.operations
   )
   if (explicitOps) return explicitOps
-  if (typeof args.op === 'string' && args.op.trim()) return [args]
+  if (typeof args.op === 'string' && args.op.trim()) return [normalizeShapeOpAliases(args)]
   const update = normalizeLooseUpdateShapeOp(args)
   return update ? [update] : null
 }
@@ -122,7 +122,7 @@ function normalizeLooseShapePatch(source: Record<string, unknown>): Record<strin
     const normalizedKey =
       key === 'image_url' || key === 'relative_path' || key === 'relativePath'
         ? 'imageUrl'
-        : key === 'text_content'
+        : key === 'text_content' || key === 'text' || key === 'content'
           ? 'textContent'
           : key
     patch[normalizedKey] = value
@@ -255,7 +255,7 @@ export function designToolOutput(tool: string, action: string, ops: unknown[], e
       action,
       ...extra,
       ops,
-      message: `Queued ${ops.length} design operation${ops.length === 1 ? '' : 's'} for the design canvas.`
+      message: `Accepted ${ops.length} design operation${ops.length === 1 ? '' : 's'} for renderer application; this result does not verify that the canvas applied them.`
     }
   }
 }
@@ -290,9 +290,32 @@ export function oneOf<const T extends readonly string[]>(value: unknown, values:
 }
 
 function normalizeOps(value: unknown): unknown[] | null {
-  if (Array.isArray(value)) return value
-  if (value && typeof value === 'object') return [value]
+  if (Array.isArray(value)) return value.map(normalizeShapeOpAliases)
+  if (value && typeof value === 'object') return [normalizeShapeOpAliases(value)]
   return null
+}
+
+function normalizeShapeOpAliases(value: unknown): unknown {
+  if (!isRecord(value)) return value
+  if (value.op === 'update' && isRecord(value.patch)) {
+    return { ...value, patch: normalizeShapeTextAliases(value.patch) }
+  }
+  if (value.op === 'add' && isRecord(value.shape)) {
+    return { ...value, shape: normalizeShapeTextAliases(value.shape) }
+  }
+  return value
+}
+
+function normalizeShapeTextAliases(value: Record<string, unknown>): Record<string, unknown> {
+  if (typeof value.textContent === 'string') return value
+  const text = typeof value.text === 'string'
+    ? value.text
+    : typeof value.content === 'string' ? value.content : undefined
+  if (text === undefined) return value
+  const normalized: Record<string, unknown> = { ...value, textContent: text }
+  delete normalized.text
+  delete normalized.content
+  return normalized
 }
 
 function copyOptionalFields(

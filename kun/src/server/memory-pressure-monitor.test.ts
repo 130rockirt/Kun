@@ -43,9 +43,9 @@ function makeDeps(overrides: Partial<MemoryPressureMonitorDeps> = {}): MemoryPre
 }
 
 describe('startMemoryPressureMonitor', () => {
-  it('uses the 3 GiB warning and 5 GiB critical defaults', () => {
-    expect(DEFAULT_MEMORY_PRESSURE_WARN_RSS_BYTES).toBe(3 * 1024 ** 3)
-    expect(DEFAULT_MEMORY_PRESSURE_CRITICAL_RSS_BYTES).toBe(5 * 1024 ** 3)
+  it('uses the 6 GiB warning and 10 GiB critical defaults', () => {
+    expect(DEFAULT_MEMORY_PRESSURE_WARN_RSS_BYTES).toBe(6 * 1024 ** 3)
+    expect(DEFAULT_MEMORY_PRESSURE_CRITICAL_RSS_BYTES).toBe(10 * 1024 ** 3)
   })
 
   it('compacts idle thread histories when RSS crosses the warning watermark', async () => {

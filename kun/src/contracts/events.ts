@@ -336,7 +336,9 @@ export const ModelRequestRetryEvent = RuntimeEventBase.extend({
   attempt: z.number().int().positive(),
   maxAttempts: z.number().int().positive(),
   delayMs: z.number().int().nonnegative(),
-  reason: z.enum(['network', 'stream_transport', 'context_overflow']).optional()
+  reason: z.enum(['network', 'stream_transport', 'context_overflow']).optional(),
+  /** Sanitized upstream failure retained so a retry row can expose details. */
+  failureSummary: z.string().min(1).max(1_024).optional()
 })
 export type ModelRequestRetryEvent = z.infer<typeof ModelRequestRetryEvent>
 

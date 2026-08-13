@@ -405,7 +405,8 @@ describe('thread event sink runtime errors', () => {
       attempt: 2,
       maxAttempts: 5,
       delayMs: 6000,
-      retryReason: 'network'
+      retryReason: 'network',
+      failureSummary: 'upstream TLS handshake failed'
     })
 
     const networkRetry = getState().blocks.find(
@@ -415,6 +416,7 @@ describe('thread event sink runtime errors', () => {
     expect(networkRetryText).toContain('Model provider connection failed')
     expect(networkRetryText).toContain('2')
     expect(networkRetryText).toContain('5')
+    expect(networkRetry?.kind === 'system' ? networkRetry.detail : '').toBe('upstream TLS handshake failed')
   })
 
   it('adds runtime error events to the timeline with details', () => {

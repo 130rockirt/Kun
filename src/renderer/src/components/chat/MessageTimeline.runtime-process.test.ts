@@ -618,6 +618,30 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
     expect(html).not.toContain('full provider body only visible in the expanded error detail')
   })
 
+  it('keeps a retry concise while exposing its provider failure through the status expander', () => {
+    const retry: ChatBlock = {
+      kind: 'system',
+      id: 'retry_1',
+      text: 'Model provider connection failed; retrying 2/5.',
+      detail: 'TLS handshake failed: certificate verify failed'
+    }
+
+    const html = renderToStaticMarkup(
+      createElement(ProcessSectionRow, {
+        section: { id: 'execution-retry', kind: 'execution', blocks: [retry] },
+        processing: true,
+        singleReasoningSection: false,
+        workspaceRoot: '/tmp/project',
+        viewportRef: { current: null }
+      })
+    )
+
+    expect(html).toContain('provider connection failed; retrying 2/5.')
+    expect(html).toContain('aria-expanded="false"')
+    expect(html).toContain('role="button"')
+    expect(html).not.toContain('TLS handshake failed: certificate verify failed')
+  })
+
   it('renders a durable runtime failure inline with expandable technical detail', () => {
     const html = renderToStaticMarkup(
       createElement(TimelineRuntimeError, {

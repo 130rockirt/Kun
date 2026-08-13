@@ -22,7 +22,7 @@ import {
   snapshotWorkCanvasForPrompt
 } from './work-canvas'
 
-const MAX_REFERENCE_SHAPES = 18
+const MAX_REFERENCE_SHAPES = 64
 const MAX_REFERENCE_POINTS = 2
 
 export type WorkCanvasOutboundDeps = {
@@ -92,7 +92,7 @@ function compactShape(shape: CanvasSnapshotShape): JsonObject {
   if (shape.selected) result.selected = true
   if (shape.inView) result.inView = true
   if (shape.nearSelection) result.nearSelection = true
-  if (shape.textContent) result.text = compactText(shape.textContent, 320)
+  if (shape.textContent) result.textContent = compactText(shape.textContent, 320)
   if (shape.imageUrl) result.imageUrl = compactText(shape.imageUrl, 360)
   if (shape.fill) result.fill = shape.fill
   if (shape.gradient) result.gradient = compactText(shape.gradient, 160)
@@ -117,7 +117,9 @@ function compactSnapshot(
   if (!snapshot) {
     return { shapeCount: 0, includedShapeCount: 0, omittedShapeCount: 0, shapes: [] }
   }
-  const shapes = snapshot.shapes.slice(0, shapeLimit).map(compactShape)
+  const shapes = prioritizedReferenceShapes(snapshot.shapes)
+    .slice(0, shapeLimit)
+    .map(compactShape)
   const placement = snapshot.placement
     ? {
         empty: snapshot.placement.empty,
@@ -153,6 +155,25 @@ function compactSnapshot(
     shapes,
     ...(placement ? { placement } : {})
   }
+}
+
+function referenceShapePriority(shape: CanvasSnapshotShape): number {
+  if (shape.selected) return 0
+  if (shape.nearSelection) return 1
+  if (shape.inView && shape.textContent) return 2
+  if (shape.inView) return 3
+  if (shape.textContent) return 4
+  return 5
+}
+
+function prioritizedReferenceShapes(shapes: readonly CanvasSnapshotShape[]): CanvasSnapshotShape[] {
+  return shapes
+    .map((shape, index) => ({ shape, index }))
+    .sort((left, right) =>
+      referenceShapePriority(left.shape) - referenceShapePriority(right.shape) ||
+      left.index - right.index
+    )
+    .map((entry) => entry.shape)
 }
 
 function compactErrors(errors: readonly OpError[]): JsonObject[] {

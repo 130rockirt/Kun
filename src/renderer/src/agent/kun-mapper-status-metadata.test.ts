@@ -186,7 +186,8 @@ describe('streaming runtime status events', () => {
         status: 429,
         attempt: 1,
         maxAttempts: 3,
-        delayMs: 3000
+        delayMs: 3000,
+        failureSummary: 'Rate limit reached for this provider account.'
       },
       sink,
       async () => undefined
@@ -200,7 +201,8 @@ describe('streaming runtime status events', () => {
       status: 429,
       attempt: 1,
       maxAttempts: 3,
-      delayMs: 3000
+      delayMs: 3000,
+      failureSummary: 'Rate limit reached for this provider account.'
     })
 
     captured = null

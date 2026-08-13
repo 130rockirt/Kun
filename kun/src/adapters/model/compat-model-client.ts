@@ -3,6 +3,8 @@ import { goalContextTexts } from '../../contracts/items.js'
 import { startLlmDebugRoundIfEnabled, type LlmDebugRound } from '../../services/llm-debug-recorder.js'
 import { exponentialRetryDelayMs, normalizeModelRequestRetryConfig, retryDelayMs, sleepWithAbort } from './compat-retry-policy.js'
 import { CompatModelStreamingClient } from './compat-model-client-stream.js'
+import { summarizeModelRetryFailure } from './model-retry-failure-summary.js'
+import { summarizeHttpErrorBody } from './compat-http-diagnostics.js'
 import type { ChatCompletionResponse, CompatModelClientConfig, CompatPostResult } from './compat-model-types.js'
 import {
   buildChatCompletionsUrl,
@@ -145,12 +147,14 @@ export class CompatModelClient extends CompatModelStreamingClient implements Mod
         ) break
         const nextAttempt = transportRetryAttempt + 1
         const delayMs = exponentialRetryDelayMs(retry.initialDelayMs, transportRetryAttempt)
+        const failureSummary = summarizeModelRetryFailure(result.message, [credentials.apiKey])
         yield {
           kind: 'retrying',
           attempt: nextAttempt,
           maxAttempts: retry.maxAttempts,
           delayMs,
-          reason: 'network'
+          reason: 'network',
+          ...(failureSummary ? { failureSummary } : {})
         }
         const aborted = await sleepWithAbort(delayMs, request.abortSignal)
         if (aborted || request.abortSignal.aborted) {
@@ -190,13 +194,17 @@ export class CompatModelClient extends CompatModelStreamingClient implements Mod
       ) break
       const delayMs = retryDelayMs(result.response, retry.initialDelayMs, transportRetryAttempt)
       const status = result.response.status
-      await result.response.body?.cancel().catch(() => {})
+      const errorBody = await readLimitedResponseText(result.response, maxErrorBodyBytes)
+      const failureSummary = errorBody.exceeded
+        ? `model error response exceeded ${maxErrorBodyBytes} bytes`
+        : summarizeModelRetryFailure(summarizeHttpErrorBody(errorBody.text), [credentials.apiKey])
       yield {
         kind: 'retrying',
         status,
         attempt: transportRetryAttempt + 1,
         maxAttempts: retry.maxAttempts,
-        delayMs
+        delayMs,
+        ...(failureSummary ? { failureSummary } : {})
       }
       const aborted = await sleepWithAbort(delayMs, request.abortSignal)
       if (aborted || request.abortSignal.aborted) {
@@ -207,7 +215,12 @@ export class CompatModelClient extends CompatModelStreamingClient implements Mod
       result = await post(body, 'transport_retry')
     }
     if (result.kind === 'error') {
-      yield { kind: 'error', message: result.message, failure: result.failure }
+      yield {
+        kind: 'error',
+        message: result.message,
+        ...(result.code ? { code: result.code } : {}),
+        failure: result.failure
+      }
       return
     }
     let response = result.response
@@ -233,7 +246,12 @@ export class CompatModelClient extends CompatModelStreamingClient implements Mod
       if (retryBody) {
         const fallbackResult = await post(retryBody, 'stream_options_fallback')
         if (fallbackResult.kind === 'error') {
-          yield { kind: 'error', message: fallbackResult.message, failure: fallbackResult.failure }
+          yield {
+            kind: 'error',
+            message: fallbackResult.message,
+            ...(fallbackResult.code ? { code: fallbackResult.code } : {}),
+            failure: fallbackResult.failure
+          }
           return
         }
         response = fallbackResult.response
@@ -275,7 +293,8 @@ export class CompatModelClient extends CompatModelStreamingClient implements Mod
             post: () => post(retryBody, 'transport_retry'),
             url,
             maxErrorBodyBytes,
-            streamLimits: modelStreamLimits
+            streamLimits: modelStreamLimits,
+            knownSecrets: [credentials.apiKey]
           })
           return
         }
@@ -360,7 +379,8 @@ export class CompatModelClient extends CompatModelStreamingClient implements Mod
       post: () => post(body, 'transport_retry'),
       url,
       maxErrorBodyBytes,
-      streamLimits: modelStreamLimits
+      streamLimits: modelStreamLimits,
+      knownSecrets: [credentials.apiKey]
     })
   }
 

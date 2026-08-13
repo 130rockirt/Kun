@@ -60,6 +60,9 @@ export {
 } from './app-settings-provider-profiles'
 export {
   defaultNetworkProxySettings,
+  isLocalModelProxyPort,
+  localModelProxyPort,
+  localModelProxyUrl,
   normalizeImageGenerationProtocol,
   normalizeModelProviderId,
   normalizeMusicGenerationProtocol,

@@ -2,12 +2,14 @@ import { createElement } from 'react'
 import { act, create, type ReactTestRenderer } from 'react-test-renderer'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useChatStore } from '../store/chat-store'
-import type { ChatState } from '../store/chat-store-types'
+import type { ChatState, IsolatedPlanBuildResult } from '../store/chat-store-types'
 import { createGuiPlanArtifact, useGuiPlanStore } from '../plan/plan-store'
 import {
+  planWorktreeContextKey,
   resetPlanWorktreeStoreForTests,
   usePlanWorktreeStore
 } from '../plan/plan-worktree-store'
+import type { PlanWorktreeRunRecord } from '@shared/plan-worktree'
 import {
   buildDraftGuiPlanTurnOverrides,
   buildGuiPlanTurnOverrides,
@@ -229,6 +231,107 @@ describe('workbench plan build orchestration', () => {
       }
     )
     expect(useChatStore.getState().composerOrchestration).toBe('direct')
+  })
+
+  it('falls back to the embedded current-workspace prompt before any isolated thread binds', async () => {
+    const writeWorkspaceFile = vi.fn(async () => ({
+      ok: true as const,
+      path: '/Users/codex/app/.kunsdd/plan/checkout.md',
+      savedAt: '2026-07-29T00:00:00.000Z'
+    }))
+    vi.stubGlobal('window', { kunGui: { writeWorkspaceFile } })
+    const plan = useGuiPlanStore.getState().activePlan!
+    const operationId = 'plan-build-fallback'
+    const failedRun: PlanWorktreeRunRecord = {
+      version: 1,
+      runId: 'run-fallback',
+      operationId,
+      planId: 'gui-plan-fallback',
+      planRelativePath: plan.relativePath,
+      planTitle: plan.featureName,
+      goalObjective: 'Implement the plan',
+      sourceThreadId: 'thread-current',
+      orchestration: 'direct',
+      sourceWorkspaceRoot: plan.workspaceRoot,
+      sourceCheckoutRoot: plan.workspaceRoot,
+      primaryRepositoryRoot: plan.workspaceRoot,
+      repositoryIdentity: '/Users/codex/app/.git',
+      targetBranch: 'feature/current',
+      baseCommit: 'a'.repeat(40),
+      executionBranch: 'codex/fallback',
+      worktreePath: '/Users/codex/.kun/worktrees/run-fallback/app',
+      status: 'needs_attention',
+      attentionReason: 'thread_attach_failed',
+      attentionMessage: 'Kun did not persist the durable plan-build admission binding.',
+      cleanup: {
+        threadRebound: false,
+        worktreeRemoved: false,
+        branchDeleted: false,
+        metadataPruned: false
+      },
+      createdAt: '2026-08-13T00:00:00.000Z',
+      updatedAt: '2026-08-13T00:00:00.000Z'
+    }
+    const isolatedFailure: IsolatedPlanBuildResult = {
+      ok: false,
+      message: failedRun.attentionMessage!,
+      run: failedRun
+    }
+    useChatStore.setState({
+      activeThreadId: 'thread-current',
+      startIsolatedPlanBuild: vi.fn(async () => isolatedFailure)
+    })
+    usePlanWorktreeStore.setState({
+      plans: {
+        [plan.id]: {
+          initialized: true,
+          recoveryChecked: true,
+          useWorktree: true,
+          building: false,
+          preflight: {
+            status: 'ready',
+            contextKey: planWorktreeContextKey({
+              planId: plan.id,
+              workspaceRoot: plan.workspaceRoot,
+              sourceThreadId: 'thread-current'
+            }),
+            requestId: 'preflight-fallback',
+            result: {
+              eligible: true,
+              sourceWorkspaceRoot: plan.workspaceRoot,
+              sourceIsLinkedWorktree: false,
+              checkedAt: '2026-08-13T00:00:00.000Z',
+              sourceCheckoutRoot: plan.workspaceRoot,
+              primaryRepositoryRoot: plan.workspaceRoot,
+              repositoryIdentity: '/Users/codex/app/.git',
+              targetBranch: 'feature/current',
+              baseCommit: 'a'.repeat(40)
+            }
+          }
+        }
+      }
+    })
+    const sendMessage = vi.fn(async () => true)
+    const setError = vi.fn()
+    const controller = controllerHarness({ sendMessage, setError })
+
+    await act(async () => {
+      await controller.buildGuiPlan('direct')
+    })
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.stringContaining('<implementation_plan'),
+      'agent',
+      {
+        displayText: 'planBuildDirect: .kunsdd/plan/checkout.md',
+        orchestration: 'direct'
+      }
+    )
+    expect(usePlanWorktreeStore.getState().plans[plan.id]).toMatchObject({
+      useWorktree: false,
+      run: failedRun
+    })
+    expect(setError).toHaveBeenCalledWith('planWorktreeCurrentWorkspaceWarning')
   })
 
   it('does not save or send a Graph build when Graph is disabled', async () => {

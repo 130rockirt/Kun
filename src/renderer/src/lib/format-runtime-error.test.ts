@@ -48,6 +48,18 @@ describe('format runtime error', () => {
     expect(formatRuntimeError(error)).not.toBe(i18n.t('common:runtimeFetchFailed'))
   })
 
+  it('explains when no supplier response was received and keeps the network cause in details', () => {
+    const view = describeRuntimeError(new Error(JSON.stringify({
+      code: 'model_provider_unreachable',
+      message: 'model provider did not return a response from https://api.luna.example/v1/chat/completions: fetch failed → getaddrinfo ENOTFOUND api.luna.example',
+      severity: 'error'
+    })))
+
+    expect(view.summary).toBe(i18n.t('common:runtimeModelProviderNoResponse'))
+    expect(view.message).toBe(view.summary)
+    expect(view.detail).toContain('getaddrinfo ENOTFOUND api.luna.example')
+  })
+
   it('routes fixed-sampling provider errors to Agents settings for recovery', () => {
     const view = describeRuntimeError(new Error(JSON.stringify({
       code: 'http_400',

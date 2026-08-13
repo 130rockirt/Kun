@@ -7,6 +7,7 @@ import {
   type LlmDebugSink
 } from '../../services/llm-debug-recorder.js'
 import { createProxyFetch } from './proxy-fetch.js'
+import { summarizeModelRetryFailure } from './model-retry-failure-summary.js'
 import {
   GeminiCliApiHttpError,
   buildGeminiCliCodeAssistRequest,
@@ -203,12 +204,14 @@ export class GeminiCliApiModelClient implements ModelClient {
           this.retry.initialDelayMs,
           transportRetryAttempt
         )
+        const failureSummary = summarizeModelRetryFailure(result.error, [accessToken])
         yield {
           kind: 'retrying',
           attempt: nextAttempt,
           maxAttempts: this.retry.maxAttempts,
           delayMs,
-          reason: 'network'
+          reason: 'network',
+          ...(failureSummary ? { failureSummary } : {})
         }
         const aborted = await sleepWithAbort(delayMs, request.abortSignal)
         if (aborted || request.abortSignal.aborted) {
@@ -258,13 +261,15 @@ export class GeminiCliApiModelClient implements ModelClient {
         this.retry.initialDelayMs,
         transportRetryAttempt
       )
-      await result.response.body?.cancel().catch(() => {})
+      const providerError = await readGeminiError(result.response)
+      const failureSummary = summarizeModelRetryFailure(providerError.message, [accessToken])
       yield {
         kind: 'retrying',
         status,
         attempt: transportRetryAttempt + 1,
         maxAttempts: this.retry.maxAttempts,
-        delayMs
+        delayMs,
+        ...(failureSummary ? { failureSummary } : {})
       }
       const aborted = await sleepWithAbort(delayMs, request.abortSignal)
       if (aborted || request.abortSignal.aborted) {

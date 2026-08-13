@@ -83,7 +83,14 @@ describe('CompatModelClient transient gateway retry', () => {
     )
 
     expect(calls).toBe(2)
-    expect(chunks).toContainEqual({ kind: 'retrying', status: 502, attempt: 1, maxAttempts: 1, delayMs: 0 })
+    expect(chunks).toContainEqual(expect.objectContaining({
+      kind: 'retrying',
+      status: 502,
+      attempt: 1,
+      maxAttempts: 1,
+      delayMs: 0,
+      failureSummary: 'provider returned an HTML response (502)'
+    }))
     expect(chunks.some((c) => c.kind === 'assistant_text_delta')).toBe(true)
     expect(chunks.at(-1)).toEqual({ kind: 'completed', stopReason: 'stop' })
     expect(chunks.some((c) => c.kind === 'error')).toBe(false)
@@ -131,6 +138,24 @@ describe('CompatModelClient transient gateway retry', () => {
     expect(error && error.kind === 'error' ? error.message.length : 0).toBeLessThan(240)
   })
 
+  it('redacts credentials from retry details persisted for the conversation', async () => {
+    const credential = 'sk-abcdefghijklmnop'
+    const fetchImpl = (async () => new Response(
+      JSON.stringify({ error: `provider rejected api_key=${credential}` }),
+      { status: 503, headers: { 'content-type': 'application/json' } }
+    )) as unknown as typeof fetch
+
+    const chunks = await drain(
+      client(fetchImpl, { maxAttempts: 1, initialDelayMs: 0, httpStatusCodes: [503] })
+        .stream(request())
+    )
+    const retry = chunks.find((chunk) => chunk.kind === 'retrying')
+    const detail = retry?.kind === 'retrying' ? retry.failureSummary : undefined
+
+    expect(detail).toContain('<redacted>')
+    expect(detail).not.toContain(credential)
+  })
+
   it('stops retrying when the request is aborted during backoff', async () => {
     const controller = new AbortController()
     let calls = 0
@@ -168,20 +193,22 @@ describe('CompatModelClient network retry', () => {
 
     expect(calls).toBe(6)
     expect(retries).toHaveLength(5)
-    expect(retries[0]).toEqual({
+    expect(retries[0]).toEqual(expect.objectContaining({
       kind: 'retrying',
       attempt: 1,
       maxAttempts: 5,
       delayMs: 0,
-      reason: 'network'
-    })
-    expect(retries.at(-1)).toEqual({
+      reason: 'network',
+      failureSummary: expect.stringContaining('model provider did not return a response')
+    }))
+    expect(retries.at(-1)).toEqual(expect.objectContaining({
       kind: 'retrying',
       attempt: 5,
       maxAttempts: 5,
       delayMs: 0,
-      reason: 'network'
-    })
+      reason: 'network',
+      failureSummary: expect.stringContaining('model provider did not return a response')
+    }))
     expect(chunks.at(-1)).toEqual({ kind: 'completed', stopReason: 'stop' })
     expect(chunks.some((chunk) => chunk.kind === 'error')).toBe(false)
   })
@@ -201,7 +228,8 @@ describe('CompatModelClient network retry', () => {
     expect(chunks.filter((chunk) => chunk.kind === 'retrying')).toHaveLength(5)
     expect(chunks.at(-1)).toMatchObject({
       kind: 'error',
-      message: 'model request failed: fetch failed',
+      code: 'model_provider_unreachable',
+      message: expect.stringContaining('model provider did not return a response'),
       failure: { category: 'network', failoverAllowed: true }
     })
   })
@@ -221,17 +249,36 @@ describe('CompatModelClient network retry', () => {
     )
 
     expect(calls).toBe(1)
-    expect(chunks).toContainEqual({
+    expect(chunks).toContainEqual(expect.objectContaining({
       kind: 'retrying',
       attempt: 1,
       maxAttempts: 5,
       delayMs: expect.any(Number),
-      reason: 'network'
-    })
+      reason: 'network',
+      failureSummary: expect.stringContaining('model provider did not return a response')
+    }))
     expect(chunks.at(-1)).toMatchObject({
       kind: 'error',
       message: 'request was aborted during retry backoff'
     })
+  })
+
+  it('preserves the concrete network cause when the provider never responds', async () => {
+    const fetchImpl = (async () => {
+      const cause = Object.assign(new Error('getaddrinfo ENOTFOUND api.luna.example'), {
+        code: 'ENOTFOUND'
+      })
+      throw Object.assign(new TypeError('fetch failed'), { cause })
+    }) as unknown as typeof fetch
+
+    const chunks = await drain(
+      client(fetchImpl, { maxAttempts: 1, initialDelayMs: 0 }).stream(request())
+    )
+    const retry = chunks.find((chunk) => chunk.kind === 'retrying')
+    const detail = retry?.kind === 'retrying' ? retry.failureSummary : ''
+
+    expect(detail).toContain('model provider did not return a response')
+    expect(detail).toContain('getaddrinfo ENOTFOUND api.luna.example')
   })
 })
 
@@ -269,14 +316,15 @@ describe('CompatModelClient interrupted stream retry', () => {
     expect(chunks.filter((chunk) => chunk.kind === 'assistant_reasoning_delta')).toEqual([
       { kind: 'assistant_reasoning_delta', text: 'plan' }
     ])
-    expect(chunks).toContainEqual({
+    expect(chunks).toContainEqual(expect.objectContaining({
       kind: 'retrying',
       status: 200,
       attempt: 1,
       maxAttempts: 1,
       delayMs: 0,
-      reason: 'stream_transport'
-    })
+      reason: 'stream_transport',
+      failureSummary: expect.any(String)
+    }))
     expect(chunks).toContainEqual({ kind: 'assistant_text_delta', text: 'done' })
     expect(chunks.at(-1)).toEqual({ kind: 'completed', stopReason: 'stop' })
     expect(chunks.some((chunk) => chunk.kind === 'error')).toBe(false)

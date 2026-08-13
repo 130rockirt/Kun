@@ -116,7 +116,8 @@ describe('WorkWhiteboardSurface', () => {
       true, undefined, expect.objectContaining({ lintFeedbackKey: 'work-canvas:board-1' }),
       'work-canvas:board-1', 'thread-1', undefined, undefined, undefined,
       canvasDocumentKey('/work', 'board-1', '.kun-write/whiteboards'),
-      expect.objectContaining({ workflowId: 'workflow-1' })
+      expect.objectContaining({ workflowId: 'workflow-1' }),
+      'work'
     )
   })
 

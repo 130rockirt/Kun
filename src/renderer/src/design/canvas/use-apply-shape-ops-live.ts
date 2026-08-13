@@ -112,7 +112,7 @@ export function useApplyShapeOpsLive(
   designDocumentTarget?: CanvasDesignDocumentTarget,
   expectedCanvasDocumentKey?: string,
   pptProjection?: PptCanvasProjectionOptions,
-  durableReplaySurface?: 'code'
+  durableReplaySurface?: 'code' | 'work'
 ): void {
   const onScreenCreatedRef = useRef(onScreenCreated)
   onScreenCreatedRef.current = onScreenCreated
@@ -565,7 +565,7 @@ export function useApplyShapeOpsLive(
       // Hand this turn's op errors to the next canvas turn so the agent can fix
       // them. Always set (even []) so a clean turn clears stale errors.
       setLastCanvasOpErrors([...errorsThisTurn], errorKey)
-      if (completedTurnId && replayThreadId && (activeDesignTarget || durableReplaySurface === 'code')) {
+      if (completedTurnId && replayThreadId && (activeDesignTarget || durableReplaySurface)) {
         const barrier = ensureReplayBarrier(completedTurnId)
         if (activeDesignTarget) {
           enqueueTurnScreens({
@@ -583,7 +583,7 @@ export function useApplyShapeOpsLive(
 
     const replayIdle = (state: ReturnType<typeof useChatStore.getState>): void => {
       if (!activeDesignTarget) {
-        if (durableReplaySurface === 'code') replayIdleCodeCanvas({
+        if (durableReplaySurface) replayIdleCodeCanvas({
             state, threadId: targetThreadId, ready: canvasDocumentReady(), errorKey,
             affectedIds: affectedThisTurn, errors: errorsThisTurn, resetTurn, applyToolBlock
           })

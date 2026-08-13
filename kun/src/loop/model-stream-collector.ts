@@ -33,6 +33,7 @@ export type ModelStreamIntent =
       maxAttempts: number
       delayMs: number
       reason?: 'network' | 'stream_transport'
+      failureSummary?: string
     }
   | {
       kind: 'tool_call_ready'
@@ -89,7 +90,8 @@ export class ModelStreamCollector {
             attempt: chunk.attempt,
             maxAttempts: chunk.maxAttempts,
             delayMs: chunk.delayMs,
-            ...(chunk.reason ? { reason: chunk.reason } : {})
+            ...(chunk.reason ? { reason: chunk.reason } : {}),
+            ...(chunk.failureSummary ? { failureSummary: chunk.failureSummary } : {})
           }]
         }
       case 'tool_call_complete':

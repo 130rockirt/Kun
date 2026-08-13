@@ -1,6 +1,8 @@
 import {
   DEFAULT_MODEL_PROVIDER_ID,
-  normalizeProxyUrl,
+  isLocalModelProxyPort,
+  localModelProxyPort,
+  localModelProxyUrl,
   type ModelProviderProfileV1
 } from '@shared/app-settings'
 import {
@@ -57,7 +59,8 @@ export function ProvidersSettingsView({ view }: { view: Record<string, any> }): 
   const activeProvider = view.activeProvider as ModelProviderProfileV1 | undefined
   const planProviders = view.planProviders as ModelProviderProfileV1[]
   const apiProviders = view.apiProviders as ModelProviderProfileV1[]
-  const providerProxyInvalid = providerProxy.enabled === true && !normalizeProxyUrl(providerProxy.url)
+  const providerProxyPort = localModelProxyPort(providerProxy.url)
+  const providerProxyInvalid = providerProxy.enabled === true && !isLocalModelProxyPort(providerProxyPort)
   return (
     <>
       {providerSetupNeedsApiKey ? (
@@ -344,11 +347,14 @@ export function ProvidersSettingsView({ view }: { view: Record<string, any> }): 
             <input
               className={`${textInputClass} ${providerProxyInvalid ? 'border-red-400/70 focus:border-red-500/70 focus:ring-red-500/15' : ''}`}
               placeholder={t('proxyUrlPlaceholder')}
-              value={providerProxy.url}
+              value={providerProxyPort}
+              inputMode="numeric"
+              pattern="[0-9]*"
               spellCheck={false}
+              aria-label={t('proxyUrl')}
               aria-invalid={providerProxyInvalid}
               aria-describedby={providerProxyInvalid ? 'provider-proxy-url-error' : undefined}
-              onChange={(e) => updateProviderProxy({ url: e.target.value })}
+              onChange={(e) => updateProviderProxy({ url: localModelProxyUrl(e.target.value) })}
             />
             {providerProxyInvalid ? (
               <div className="md:col-start-2" id="provider-proxy-url-error">

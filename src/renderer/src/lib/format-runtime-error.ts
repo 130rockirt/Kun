@@ -45,6 +45,7 @@ function runtimeErrorCode(payload: RuntimeErrorPayload | null, raw: string): str
   const fromError = typeof payload?.error === 'string' ? payload.error.trim() : ''
   if (fromError) return fromError.toLowerCase()
   const lowered = stripIpcPrefix(payloadMessage(payload) || raw).toLowerCase()
+  if (lowered.includes('model provider did not return a response')) return 'model_provider_unreachable'
   if (lowered.includes('model request failed:')) return 'model_request_failed'
   if (lowered.includes('fetch failed')) return 'fetch_failed'
   if (lowered.includes('runtime unhealthy')) return 'runtime_unhealthy'
@@ -82,6 +83,10 @@ function detailString(value: unknown): string {
 
 function localizedRuntimeSummary(code: string | null, text: string): string | null {
   const lowered = text.toLowerCase()
+
+  if (code === 'model_provider_unreachable') {
+    return i18n.t('common:runtimeModelProviderNoResponse')
+  }
 
   if (code === 'model_request_failed' || lowered.includes('model request failed:')) {
     return i18n.t('common:runtimeModelRequestFailed')
@@ -154,7 +159,9 @@ export function describeRuntimeError(error: unknown): RuntimeErrorView {
   const summary = localizedRuntimeSummary(errorCode, redactedText) ||
     redactedText ||
     i18n.t('common:runtimeRequestFailed')
-  const message = errorCode === 'thread_busy' ? summary : redactedText || summary
+  const message = errorCode === 'thread_busy' || errorCode === 'model_provider_unreachable'
+    ? summary
+    : redactedText || summary
   const details: string[] = []
   if (errorCode) details.push(`Code: ${errorCode}`)
   const hideBusyOwnerDetails = errorCode === 'thread_busy'
@@ -164,7 +171,9 @@ export function describeRuntimeError(error: unknown): RuntimeErrorView {
     redactedText &&
     (redactedText !== summary || Boolean(errorCode) || Boolean(payload?.severity) || payload?.details !== undefined)
   ) {
-    details.push(`Message:\n${redactedText}`)
+    details.push(errorCode === 'model_provider_unreachable'
+      ? i18n.t('common:runtimeModelProviderNoResponseDetail', { cause: redactedText })
+      : `Message:\n${redactedText}`)
   }
   const payloadDetails = hideBusyOwnerDetails ? '' : detailString(payload?.details)
   if (payloadDetails) details.push(`Details:\n${payloadDetails}`)

@@ -273,6 +273,8 @@ describe('dedicated design tools', () => {
     const tool = createDesignUpdateShapesTool()
     expect(tool.name).toBe(DESIGN_UPDATE_SHAPES_TOOL_NAME)
     expect(JSON.stringify(tool.inputSchema)).toContain('direct top-level ShapeOp')
+    expect(JSON.stringify(tool.inputSchema)).toContain('patch \\"textContent\\"')
+    expect(JSON.stringify(tool.inputSchema)).toContain('never \\"text\\" or \\"content\\"')
     expect(tool.description).toContain('inspect the current canvas snapshot first')
     expect(tool.description).toContain('20-50')
     expect(JSON.stringify(tool.inputSchema)).toContain(`"maxItems":${DESIGN_UPDATE_SHAPES_MAX_OPS}`)
@@ -281,7 +283,8 @@ describe('dedicated design tools', () => {
     expect(result.output).toMatchObject({
       ok: true,
       tool: DESIGN_UPDATE_SHAPES_TOOL_NAME,
-      ops: [op]
+      ops: [op],
+      message: expect.stringContaining('does not verify that the canvas applied')
     })
   })
 
@@ -355,6 +358,24 @@ describe('dedicated design tools', () => {
           id: 'slot_1',
           patch: { imageUrl: '.deepseekgui-images/img-slot.png' }
         }
+      ]
+    })
+  })
+
+  it('canonicalizes common visible-text aliases before queueing renderer ops', async () => {
+    const tool = createDesignUpdateShapesTool()
+    const result = await tool.execute({
+      ops: [
+        { op: 'update', id: 'label_1', patch: { text: 'Business Rules' } },
+        { op: 'add', shape: { type: 'text', content: 'API Router' } }
+      ]
+    }, context())
+
+    expect(result.output).toMatchObject({
+      ok: true,
+      ops: [
+        { op: 'update', id: 'label_1', patch: { textContent: 'Business Rules' } },
+        { op: 'add', shape: { type: 'text', textContent: 'API Router' } }
       ]
     })
   })

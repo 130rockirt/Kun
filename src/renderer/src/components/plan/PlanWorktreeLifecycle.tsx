@@ -66,6 +66,7 @@ export function PlanWorktreeLifecycle({
   const run = storedRun ?? runRecord
   const buildError = usePlanWorktreeStore((state) => state.plans[planId]?.buildError)
   const upsertRun = usePlanWorktreeStore((state) => state.upsertRun)
+  const setUseWorktree = usePlanWorktreeStore((state) => state.setUseWorktree)
   const [busyAction, setBusyAction] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   usePlanWorktreeCompletion(run)
@@ -136,6 +137,22 @@ export function PlanWorktreeLifecycle({
       runId: run.runId,
       confirmedDiscard: true
     }))
+  }
+
+  const buildInCurrentWorkspace = async (): Promise<PlanWorktreeRunRecord> => {
+    if (!run?.executionPrompt) throw new Error('This plan build has no durable execution prompt.')
+    await useChatStore.getState().openCode()
+    await useChatStore.getState().selectThread(run.sourceThreadId)
+    if (useChatStore.getState().activeThreadId !== run.sourceThreadId) {
+      throw new Error('The source plan conversation could not be opened.')
+    }
+    const started = await useChatStore.getState().sendMessage(run.executionPrompt, 'agent', {
+      displayText: run.executionDisplayText ?? t('planWorktreeCurrentWorkspaceWarning'),
+      orchestration: run.orchestration
+    })
+    if (!started) throw new Error('The current-workspace plan execution could not be started.')
+    setUseWorktree(planId, false)
+    return run
   }
 
   return (
@@ -227,15 +244,24 @@ export function PlanWorktreeLifecycle({
             <RecoveryButton label={t('planWorktreeRetain')} onClick={openWorktree} />
           ) : null}
           {!run.executionThreadId && (run.status === 'executing' || run.status === 'needs_attention') ? (
-            <RecoveryButton
-              label={t('planWorktreeCancelSafely')}
-              disabled={Boolean(busyAction)}
-              onClick={() => void act('safe-cancel', () =>
-                window.kunGui.planWorktree.safeCancel({
-                  runId: run.runId,
-                  confirmedDiscard: false
-                }))}
-            />
+            <>
+              {run.executionPrompt ? (
+                <RecoveryButton
+                  label={t('planWorktreeCurrentWorkspaceWarning')}
+                  disabled={Boolean(busyAction)}
+                  onClick={() => void act('current-workspace', buildInCurrentWorkspace)}
+                />
+              ) : null}
+              <RecoveryButton
+                label={t('planWorktreeCancelSafely')}
+                disabled={Boolean(busyAction)}
+                onClick={() => void act('safe-cancel', () =>
+                  window.kunGui.planWorktree.safeCancel({
+                    runId: run.runId,
+                    confirmedDiscard: false
+                  }))}
+              />
+            </>
           ) : null}
           {run.status === 'needs_attention' ? (
             <RecoveryButton

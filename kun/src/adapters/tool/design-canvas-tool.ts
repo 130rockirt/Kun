@@ -14,6 +14,10 @@ import {
   safeCanvasExportStem,
   stringArg
 } from './design-canvas-normalization.js'
+import {
+  DESIGN_SHAPE_OP_INPUT_SCHEMA,
+  DESIGN_SHAPE_OP_TOOL_CONTRACT
+} from './design-shape-op-tool-contract.js'
 import { LocalToolHost, type LocalTool } from './local-tool-host.js'
 
 export { DESIGN_UPDATE_SHAPES_MAX_OPS } from './design-canvas-normalization.js'
@@ -174,11 +178,10 @@ export function createDesignCanvasTool(): LocalTool {
           description: DEVICE_PRESET_DESCRIPTION
         },
         ops: {
-          description:
-            'For update_shapes: a ShapeOp object or array of at most 100 ShapeOps. Prefer batches of 20-50 related operations and continue larger work in subsequent calls. ShapeOps are validated and applied by the renderer.',
+          description: `For update_shapes: a ShapeOp object or array of at most 100 ShapeOps. Prefer batches of 20-50 related operations and continue larger work in subsequent calls. ${DESIGN_SHAPE_OP_TOOL_CONTRACT}`,
           anyOf: [
-            { type: 'object', additionalProperties: true },
-            { type: 'array', maxItems: DESIGN_UPDATE_SHAPES_MAX_OPS, items: { type: 'object', additionalProperties: true } }
+            DESIGN_SHAPE_OP_INPUT_SCHEMA,
+            { type: 'array', maxItems: DESIGN_UPDATE_SHAPES_MAX_OPS, items: DESIGN_SHAPE_OP_INPUT_SCHEMA }
           ]
         }
       },
@@ -292,19 +295,19 @@ export function createDesignUpdateShapesTool(): LocalTool {
       type: 'object',
       properties: {
         ops: {
-          description:
-            'Preferred: a ShapeOp object or array of ShapeOps. The renderer validates and applies each op atomically. If omitted, a direct top-level ShapeOp is also accepted.',
+          description: `Preferred: a ShapeOp object or array of ShapeOps. The renderer validates and applies each op atomically. If omitted, a direct top-level ShapeOp is also accepted. ${DESIGN_SHAPE_OP_TOOL_CONTRACT}`,
           anyOf: [
-            { type: 'object', additionalProperties: true },
+            DESIGN_SHAPE_OP_INPUT_SCHEMA,
             {
               type: 'array',
               maxItems: DESIGN_UPDATE_SHAPES_MAX_OPS,
-              items: { type: 'object', additionalProperties: true }
+              items: DESIGN_SHAPE_OP_INPUT_SCHEMA
             }
           ]
         },
         op: {
           type: 'string',
+          enum: [...DESIGN_SHAPE_OP_INPUT_SCHEMA.properties.op.enum],
           description: 'Direct ShapeOp fallback. Prefer wrapping it in ops.'
         }
       },

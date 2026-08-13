@@ -46,6 +46,8 @@ export type ModelStreamChunk = (
       maxAttempts: number
       delayMs: number
       reason?: 'network' | 'stream_transport'
+      /** Safe, concise provider diagnostic displayed from the retry status. */
+      failureSummary?: string
     }
   | { kind: 'image_generation_complete'; imageBase64: string; mimeType: string }
   | { kind: 'usage'; usage: UsageSnapshot }

@@ -260,6 +260,8 @@
   "runtimeActionNeedsConnection": "请先连接运行时后再使用 AI。",
   "runtimeFetchFailed": "无法连接到 Kun。请确认 `kun serve` 已启动，或在设置中开启自动启动。",
   "runtimeModelRequestFailed": "Kun 无法连接到模型供应商。请检查网络、代理设置以及供应商配置（Base URL、Endpoint format）。",
+  "runtimeModelProviderNoResponse": "模型供应商没有返回响应。展开详情可查看连接失败的具体原因。",
+  "runtimeModelProviderNoResponseDetail": "供应商没有返回可解析的错误内容；请求在网络层失败。底层原因：\n{{cause}}",
   "runtimeBinaryNotInstalled": "未找到 Kun 可执行文件。请在项目目录运行 npm install 以下载 CLI，或在设置中填写 Kun 二进制路径。",
   "runtimeMissingApiKey": "尚未配置 DeepSeek API Key。请先打开设置填写，然后 GUI 才能自动启动本地运行时。",
   "runtimeAutoStartDisabled": "Kun 当前未启动。请在设置中开启自动启动，或手动执行 `kun serve`。",

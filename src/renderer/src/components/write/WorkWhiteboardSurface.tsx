@@ -275,7 +275,8 @@ function MountedWorkWhiteboard(props: WorkWhiteboardSurfaceProps): ReactElement 
       workflowId: workCanvasPptWorkflowGate(props.boardId, props.workflowId),
       childId: props.childId,
       onOpenRequested: props.onPptProjectionOpenRequested
-    }
+    },
+    'work'
   )
 
   return (

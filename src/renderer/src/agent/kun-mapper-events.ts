@@ -268,6 +268,9 @@ export function runtimeStatusFromEvent(event: CoreRuntimeEventJson): RuntimeStat
       attempt: typeof event.attempt === 'number' ? event.attempt : undefined,
       maxAttempts: typeof event.maxAttempts === 'number' ? event.maxAttempts : undefined,
       delayMs: typeof event.delayMs === 'number' ? event.delayMs : undefined,
+      failureSummary: typeof event.failureSummary === 'string' && event.failureSummary.trim()
+        ? redactSecretText(event.failureSummary.trim())
+        : undefined,
       retryReason: event.reason === 'network' ||
         event.reason === 'stream_transport' ||
         event.reason === 'context_overflow'

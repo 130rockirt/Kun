@@ -101,7 +101,9 @@ Kun 的缓存命中率要按 provider 原生 usage 字段优先计算和优化�
 - Work turn 按 `agentSurface: write` 追加稳定的 Work mode system instruction；Renderer
   持久化的用户正文只保留用户原话。当前资源、精确选区、检索/Office 摘录和白板快照
   通过有界 `composerContexts` 引用随 turn 传入，不再把工作区、工具手册或画布规则拼进
-  可见 user message。
+  可见 user message。稳定的 ShapeOp 字段契约属于 canvas tool schema；Work 白板引用优先
+  保留选中对象和可见文字，并使用 renderer 的规范 `textContent` 字段。Renderer 对已完成
+  Work turn 的 canvas tool result 做 keyed durable replay，覆盖画布加载与 turn 结束竞态。
 - 自动压缩同时考虑输入压力和请求总预算：压缩触发不仅比较历史/请求输入与
   soft/hard 输入阈值，还会把为模型输出保留的预算（`maxOutputTokens`）计入
   `input + output` 总预算，并与发送前硬上限（上下文窗口的 85% 或模型

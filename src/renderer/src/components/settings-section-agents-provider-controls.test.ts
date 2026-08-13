@@ -483,7 +483,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
       expect(findButton(renderer, 'Test connection').props.disabled).toBe(true)
     })
 
-    it('keeps the global proxy editor open and preserves incomplete input across rerenders', async () => {
+    it('keeps the local proxy port editor open and preserves invalid input across rerenders', async () => {
       const update = vi.fn()
       const provider = {
         ...defaultModelProviderSettings(),
@@ -496,21 +496,26 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
       await act(async () => details.props.onToggle({ currentTarget: { open: true } }))
       expect(renderer.root.findByType('details').props.open).toBe(true)
 
-      const proxyInput = renderer.root.findByProps({ placeholder: 'http://127.0.0.1:7890' })
-      await act(async () => proxyInput.props.onChange({ target: { value: 'http:' } }))
+      const proxyInput = renderer.root.findByProps({ placeholder: 'e.g. 10808' })
+      await act(async () => proxyInput.props.onChange({ target: { value: '10808' } }))
       expect(update).toHaveBeenLastCalledWith({
-        provider: { proxy: { enabled: true, url: 'http:' } }
+        provider: { proxy: { enabled: true, url: 'http://127.0.0.1:10808' } }
+      })
+
+      await act(async () => proxyInput.props.onChange({ target: { value: '65536' } }))
+      expect(update).toHaveBeenLastCalledWith({
+        provider: { proxy: { enabled: true, url: 'http://127.0.0.1:65536' } }
       })
 
       await act(async () => {
         renderer.update(createElement(ProvidersSettingsSection, {
-          ctx: { ...ctx, provider: { ...provider, proxy: { enabled: true, url: 'http:' } } }
+          ctx: { ...ctx, provider: { ...provider, proxy: { enabled: true, url: 'http://127.0.0.1:65536' } } }
         }))
       })
       details = renderer.root.findByType('details')
       expect(details.props.open).toBe(true)
-      expect(renderer.root.findByProps({ placeholder: 'http://127.0.0.1:7890' }).props.value)
-        .toBe('http:')
+      expect(renderer.root.findByProps({ placeholder: 'e.g. 10808' }).props.value)
+        .toBe('65536')
       expect(renderer.root.findByProps({ id: 'provider-proxy-url-error' })).toBeTruthy()
     })
   })

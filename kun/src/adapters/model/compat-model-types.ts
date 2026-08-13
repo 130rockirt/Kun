@@ -89,5 +89,6 @@ export type CompatPostResult =
   | {
       kind: 'error'
       message: string
+      code?: string
       failure: import('../../contracts/model-route-pool.js').ModelFailureMetadata
     }

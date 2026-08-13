@@ -407,7 +407,8 @@ describe('GeminiCliApiModelClient', () => {
         status: 429,
         attempt: 1,
         maxAttempts: 1,
-        delayMs: 0
+        delayMs: 0,
+        failureSummary: 'Gemini CLI API request failed (RESOURCE_EXHAUSTED): You have exhausted your capacity. Your quota will reset after 0s.'
       },
       { kind: 'assistant_text_delta', text: 'recovered' },
       { kind: 'completed', stopReason: 'stop' }
@@ -448,7 +449,8 @@ describe('GeminiCliApiModelClient', () => {
         attempt: 1,
         maxAttempts: 1,
         delayMs: 0,
-        reason: 'network'
+        reason: 'network',
+        failureSummary: 'Gemini CLI API request failed: fetch failed'
       },
       { kind: 'assistant_text_delta', text: 'recovered' },
       { kind: 'completed', stopReason: 'stop' }

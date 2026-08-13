@@ -89,8 +89,36 @@ describe('Work canvas outbound prompt', () => {
     expect(context.reference.snapshot).toMatchObject({ shapeCount: 180 })
     const included = (context.reference.snapshot as { includedShapeCount?: number }).includedShapeCount
     expect(included).toBeGreaterThan(0)
-    expect(included).toBeLessThanOrEqual(18)
+    expect(included).toBeLessThanOrEqual(64)
     expect(new TextEncoder().encode(JSON.stringify(context.reference)).byteLength)
       .toBeLessThanOrEqual(16 * 1_024)
+  })
+
+  it('prioritizes visible text and exposes the canonical textContent field', async () => {
+    const shapes = [
+      ...Array.from({ length: 64 }, (_, index) => ({
+        id: `rect-${index}`, name: `Rect ${index}`, type: 'rect' as const,
+        x: index, y: index, w: 20, h: 20, parentName: null, inView: true
+      })),
+      {
+        id: 'label-last', name: 'Service label', type: 'text' as const,
+        x: 20, y: 20, w: 200, h: 40, parentName: null,
+        inView: true, textContent: '业务规则'
+      }
+    ]
+    const context = await buildWorkCanvasReferenceContext({
+      workspaceRoot: '/work',
+      boardId: 'board-text',
+      boardRevision: 1,
+      currentDocument: createEmptyDocument(),
+      selectedIds: new Set(),
+      viewBox: { x: 0, y: 0, width: 1200, height: 800 },
+      designContext: { designTarget: 'web' },
+      snapshotForPrompt: async () => ({ shapeCount: shapes.length, shapes }),
+      takeLastErrors: () => []
+    })
+
+    expect(JSON.stringify(context.reference)).toContain('"textContent":"业务规则"')
+    expect(JSON.stringify(context.reference)).not.toContain('"text":"业务规则"')
   })
 })

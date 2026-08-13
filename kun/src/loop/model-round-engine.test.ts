@@ -431,7 +431,14 @@ describe('ModelRoundEngine', () => {
         kind: 'assistant_text_delta',
         text: value
       })),
-      { kind: 'retrying', status: 429, attempt: 1, maxAttempts: 2, delayMs: 10 },
+      {
+        kind: 'retrying',
+        status: 429,
+        attempt: 1,
+        maxAttempts: 2,
+        delayMs: 10,
+        failureSummary: 'Provider rate limit resets shortly.'
+      },
       { kind: 'completed', stopReason: 'stop' }
     ])
 
@@ -455,6 +462,10 @@ describe('ModelRoundEngine', () => {
       'assistant_text_delta',
       'model_request_retry'
     ])
+    expect(test.recordedEvents.at(-1)).toMatchObject({
+      kind: 'model_request_retry',
+      failureSummary: 'Provider rate limit resets shortly.'
+    })
     expect(test.appliedItems.map((item) => [item.kind, 'text' in item ? item.text : ''])).toEqual([
       ['assistant_reasoning', reasoning],
       ['assistant_text', text]

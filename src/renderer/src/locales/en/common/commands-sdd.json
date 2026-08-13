@@ -260,6 +260,8 @@
   "runtimeActionNeedsConnection": "Connect to the runtime before using AI actions.",
   "runtimeFetchFailed": "Could not reach Kun. Make sure `kun serve` is running, or enable auto-start in Settings.",
   "runtimeModelRequestFailed": "Kun could not reach the model provider. Check your network, proxy settings, and provider configuration (Base URL, Endpoint format).",
+  "runtimeModelProviderNoResponse": "The model provider did not return a response. Expand details to see the connection failure.",
+  "runtimeModelProviderNoResponseDetail": "The provider did not return a readable error; the request failed in transit. Underlying cause:\n{{cause}}",
   "runtimeBinaryNotInstalled": "The Kun CLI was not found. Run `npm install` in the project folder to fetch it, or set the binary path in Settings.",
   "runtimeMissingApiKey": "DeepSeek API Key is missing. Open Settings and add it before the GUI can start the local runtime.",
   "runtimeAutoStartDisabled": "Kun is offline. Enable automatic startup in Settings, or start `kun serve` manually.",

@@ -36,6 +36,9 @@ import {
   listModelProviderModelIds,
   modelSupportsImageInput,
   defaultDesignSettings,
+  isLocalModelProxyPort,
+  localModelProxyPort,
+  localModelProxyUrl,
   normalizeModelProviderSettings,
   projectExecutableModelRoutePools,
   resolveModelRouteTargetReference,
@@ -80,6 +83,21 @@ describe('model provider settings', () => {
     const state = settings()
     state.provider.proxy = provider.proxy
     expect(resolveModelProviderProxyUrl(state)).toBe('socks5://127.0.0.1:1080')
+  })
+
+  it('converts a local model proxy port into the transport URL', () => {
+    expect(localModelProxyUrl('10808')).toBe('http://127.0.0.1:10808')
+    expect(localModelProxyPort('http://127.0.0.1:10808')).toBe('10808')
+    expect(localModelProxyPort('http://127.0.0.1:10808/')).toBe('10808')
+    expect(isLocalModelProxyPort('10808')).toBe(true)
+    expect(isLocalModelProxyPort('0')).toBe(false)
+    expect(isLocalModelProxyPort('65536')).toBe(false)
+    expect(localModelProxyPort('socks5://127.0.0.1:10808')).toBe('10808')
+    expect(localModelProxyPort('socks5://proxy.example:10808')).toBe('')
+
+    const state = settings()
+    state.provider.proxy = { enabled: true, url: localModelProxyUrl('10808') }
+    expect(resolveModelProviderProxyUrl(state)).toBe('http://127.0.0.1:10808/')
   })
 
   it('keeps the raw proxy URL in storage but refuses to apply invalid protocols', () => {

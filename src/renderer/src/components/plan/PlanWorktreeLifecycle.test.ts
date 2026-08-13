@@ -3,7 +3,11 @@ import { act, create, type ReactTestRenderer } from 'react-test-renderer'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { PlanWorktreeRunRecord } from '@shared/plan-worktree'
 import i18n from '../../i18n'
-import { resetPlanWorktreeStoreForTests } from '../../plan/plan-worktree-store'
+import {
+  resetPlanWorktreeStoreForTests,
+  usePlanWorktreeStore
+} from '../../plan/plan-worktree-store'
+import { useChatStore } from '../../store/chat-store'
 import { PlanWorktreeLifecycle } from './PlanWorktreeLifecycle'
 
 function record(
@@ -92,9 +96,11 @@ describe('plan worktree lifecycle recovery actions', () => {
   it('offers safe cancellation before a fork exists and cleanup retry after integration', async () => {
     let text = await renderRun(record('executing', {
       executionThreadId: undefined,
-      executionTurnId: undefined
+      executionTurnId: undefined,
+      executionPrompt: 'Execute the embedded plan in this workspace.'
     }))
     expect(text).toContain('Cancel if unchanged')
+    expect(text).toContain('Build in the current workspace')
     act(() => renderer!.unmount())
     renderer = null
     text = await renderRun(record('cleanup_pending', {
@@ -108,5 +114,37 @@ describe('plan worktree lifecycle recovery actions', () => {
     expect(text).toContain('Resume execution')
     expect(text).not.toContain('Continue implementation')
     expect(text).not.toContain('Open conversation')
+  })
+
+  it('runs the durable prompt in the source workspace when no execution thread bound', async () => {
+    const openCode = vi.fn(async () => undefined)
+    const selectThread = vi.fn(async () => {
+      useChatStore.setState({ activeThreadId: 'thread-source' })
+    })
+    const sendMessage = vi.fn(async () => true)
+    useChatStore.setState({ openCode, selectThread, sendMessage, activeThreadId: null })
+    const run = record('needs_attention', {
+      executionThreadId: undefined,
+      executionTurnId: undefined,
+      executionPrompt: 'Execute the embedded plan in this workspace.',
+      executionDisplayText: 'Build Demo'
+    })
+    await renderRun(run)
+    const button = renderer!.root.findAllByType('button').find((candidate) =>
+      candidate.children.includes('Build in the current workspace')
+    )
+    if (!button) throw new Error('Current-workspace fallback button is missing.')
+
+    await act(async () => {
+      button.props.onClick()
+    })
+
+    expect(openCode).toHaveBeenCalledOnce()
+    expect(selectThread).toHaveBeenCalledWith('thread-source')
+    expect(sendMessage).toHaveBeenCalledWith(run.executionPrompt, 'agent', {
+      displayText: 'Build Demo',
+      orchestration: 'direct'
+    })
+    expect(usePlanWorktreeStore.getState().plans[run.planId]?.useWorktree).toBe(false)
   })
 })

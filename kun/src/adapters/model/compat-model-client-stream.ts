@@ -39,7 +39,8 @@ import {
   buildCompatRequestHeaders,
   classifyCompatHttpError,
   compatHttpFailureLog,
-  redactUrlForLog
+  redactUrlForLog,
+  summarizeHttpErrorBody
 } from './compat-http-diagnostics.js'
 import type { CompatChatMessage } from './compat-request-codecs.js'
 import { projectCompatMessages } from './compat-message-projector.js'
@@ -61,6 +62,7 @@ import {
 import { decodeCompatNonStreamingResponse } from './compat-non-streaming-decoder.js'
 import { CompatModelClientBase } from './compat-model-client-base.js'
 import { IncrementalSseFrameBuffer } from './incremental-sse-frame-buffer.js'
+import { summarizeModelRetryFailure } from './model-retry-failure-summary.js'
 import type { ChatCompletionResponse, CompatPostResult, ModelStopReason, StreamPayloadResult } from './compat-model-types.js'
 import {
   enforceNonStreamingLimits,
@@ -89,6 +91,7 @@ export class CompatModelStreamingClient extends CompatModelClientBase {
     url: string
     maxErrorBodyBytes: number
     streamLimits: ModelStreamLimits
+    knownSecrets: readonly string[]
   }): AsyncIterable<ModelStreamChunk> {
     let response = input.response
     let usedRetryAttempts = input.usedRetryAttempts
@@ -153,13 +156,15 @@ export class CompatModelStreamingClient extends CompatModelClientBase {
 
       const nextAttempt = usedRetryAttempts + 1
       const delayMs = retryDelayMs(response, input.retry.initialDelayMs, usedRetryAttempts)
+      const failureSummary = summarizeModelRetryFailure(recoverableError.message, input.knownSecrets)
       yield {
         kind: 'retrying',
         status: response.status,
         attempt: nextAttempt,
         maxAttempts: maxRetryAttempts,
         delayMs,
-        reason: 'stream_transport'
+        reason: 'stream_transport',
+        ...(failureSummary ? { failureSummary } : {})
       }
       const aborted = await sleepWithAbort(delayMs, input.request.abortSignal)
       if (aborted || input.request.abortSignal.aborted) {
@@ -179,6 +184,7 @@ export class CompatModelStreamingClient extends CompatModelClientBase {
             yield {
               kind: 'error',
               message: `${retried.message} (all ${maxRetryAttempts} configured stream retries were exhausted)`,
+              ...(retried.code ? { code: retried.code } : {}),
               failure: retried.failure
             }
             return
@@ -188,12 +194,14 @@ export class CompatModelStreamingClient extends CompatModelClientBase {
             input.retry.initialDelayMs,
             usedRetryAttempts
           )
+          const failureSummary = summarizeModelRetryFailure(retried.message, input.knownSecrets)
           yield {
             kind: 'retrying',
             attempt: networkRetryAttempt,
             maxAttempts: maxRetryAttempts,
             delayMs: networkDelayMs,
-            reason: 'network'
+            reason: 'network',
+            ...(failureSummary ? { failureSummary } : {})
           }
           const networkRetryAborted = await sleepWithAbort(
             networkDelayMs,
@@ -216,13 +224,17 @@ export class CompatModelStreamingClient extends CompatModelClientBase {
           const httpRetryAttempt = usedRetryAttempts + 1
           const httpDelayMs = retryDelayMs(response, input.retry.initialDelayMs, usedRetryAttempts)
           const status = response.status
-          await response.body?.cancel().catch(() => {})
+          const errorBody = await readLimitedResponseText(response, input.maxErrorBodyBytes)
+          const failureSummary = errorBody.exceeded
+            ? `model error response exceeded ${input.maxErrorBodyBytes} bytes`
+            : summarizeModelRetryFailure(summarizeHttpErrorBody(errorBody.text), input.knownSecrets)
           yield {
             kind: 'retrying',
             status,
             attempt: httpRetryAttempt,
             maxAttempts: maxRetryAttempts,
-            delayMs: httpDelayMs
+            delayMs: httpDelayMs,
+            ...(failureSummary ? { failureSummary } : {})
           }
           const httpRetryAborted = await sleepWithAbort(httpDelayMs, input.request.abortSignal)
           if (httpRetryAborted || input.request.abortSignal.aborted) {

@@ -395,6 +395,27 @@ export function useWorkbenchPlanController({
           result.message,
           result.run
         )
+        // A failed prepare that never attached an execution thread cannot
+        // have admitted the implementation turn. Continue with the exact
+        // embedded plan on the source thread so a broken worktree runtime
+        // does not make plan execution unavailable. Once a thread is bound,
+        // keep failing closed: its admission may have succeeded even if a
+        // response was lost, and a source-workspace retry could duplicate it.
+        if (
+          result.run && !result.run.executionThreadId &&
+          useChatStore.getState().activeThreadId === chatState.activeThreadId
+        ) {
+          usePlanWorktreeStore.getState().setUseWorktree(plan.id, false)
+          const sent = await sendMessage(prompt, 'agent', {
+            displayText: `${t(labelKey)}: ${plan.relativePath}`,
+            orchestration
+          })
+          if (sent) {
+            setError(t('planWorktreeCurrentWorkspaceWarning'))
+            await onPlanBuildStarted?.(plan)
+            return
+          }
+        }
         setError(result.message)
         return
       }

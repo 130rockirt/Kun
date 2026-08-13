@@ -399,6 +399,50 @@ export function defaultNetworkProxySettings(): NetworkProxySettingsV1 {
   }
 }
 
+const LOCAL_MODEL_PROXY_HOST = '127.0.0.1'
+const LOCAL_MODEL_PROXY_PORT = /^\d{1,5}$/
+
+/**
+ * Extract the port used by the local HTTP proxy editor. The persisted setting
+ * remains a URL so every request path can keep using the existing transport
+ * contract, while the UI only exposes the local port users need to enter.
+ */
+export function localModelProxyPort(value: unknown): string {
+  const raw = typeof value === 'string' ? value.trim() : ''
+  if (!raw) return ''
+  // Preserve incomplete and out-of-range local ports in the editor. They are
+  // rejected by `isLocalModelProxyPort` before any request is sent, but must
+  // remain visible so the user can correct them.
+  const localPortInput = /^(?:https?|socks4a?|socks5h?):\/\/(?:127\.0\.0\.1|localhost|\[::1\]):([^/?#]*)(?:\/)?$/i.exec(raw)
+  if (localPortInput) return localPortInput[1] ?? ''
+  try {
+    const parsed = new URL(raw)
+    if (
+      !['127.0.0.1', 'localhost', '::1'].includes(parsed.hostname) ||
+      parsed.username || parsed.password || parsed.search || parsed.hash ||
+      (parsed.pathname && parsed.pathname !== '/')
+    ) {
+      return ''
+    }
+    // URL intentionally elides the default HTTP(S) port (80/443), so retain
+    // an explicitly entered port from the raw setting when that happens.
+    return parsed.port || /:(\d+)\/?$/.exec(raw)?.[1] || ''
+  } catch {
+    return ''
+  }
+}
+
+export function isLocalModelProxyPort(value: unknown): boolean {
+  const port = typeof value === 'string' ? value.trim() : ''
+  return LOCAL_MODEL_PROXY_PORT.test(port) && Number(port) >= 1 && Number(port) <= 65_535
+}
+
+/** Build the proxy URL consumed by model discovery and the Kun runtime. */
+export function localModelProxyUrl(port: unknown): string {
+  const value = typeof port === 'string' ? port.trim() : ''
+  return value ? `http://${LOCAL_MODEL_PROXY_HOST}:${value}` : ''
+}
+
 export function normalizeNetworkProxySettings(
   input: Partial<NetworkProxySettingsV1> | undefined
 ): NetworkProxySettingsV1 {

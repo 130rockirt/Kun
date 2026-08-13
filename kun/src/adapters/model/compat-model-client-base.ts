@@ -167,7 +167,7 @@ export class CompatModelClientBase {
       if (traceRecord) {
         ignoreModelTraceFailure(() => traceSink?.captureHttpError(traceRecord, error))
       }
-      const message = error instanceof Error ? error.message : String(error)
+      const message = describeTransportFailure(error)
       // Only blame the proxy for genuine transport failures. A user-initiated
       // abort (turn cancelled, idle-timeout watchdog) also surfaces here as an
       // AbortError but has nothing to do with the proxy — don't send the user
@@ -179,7 +179,8 @@ export class CompatModelClientBase {
       const timeout = /timeout|timed out/i.test(message)
       return {
         kind: 'error',
-        message: `model request failed: ${message}${proxyHint}`,
+        code: 'model_provider_unreachable',
+        message: `model provider did not return a response from ${redactUrlForLog(url)}: ${message}${proxyHint}`,
         failure: { category: timeout ? 'timeout' : 'network', failoverAllowed: !aborted }
       }
     }
@@ -313,4 +314,23 @@ export class CompatModelClientBase {
   protected parseToolArguments(raw: string): Record<string, unknown> {
     return repairToolArguments(raw).arguments
   }
+}
+
+/**
+ * Native fetch intentionally exposes a terse "fetch failed" wrapper. Keep
+ * the underlying cause when available so a connection failure explains why
+ * the provider never responded (DNS, TLS, timeout, and similar cases).
+ */
+function describeTransportFailure(error: unknown): string {
+  const messages: string[] = []
+  let current: unknown = error
+  for (let depth = 0; current && depth < 4; depth += 1) {
+    const candidate = current as { message?: unknown; cause?: unknown; code?: unknown }
+    const message = typeof candidate.message === 'string' ? candidate.message.trim() : ''
+    const code = typeof candidate.code === 'string' ? candidate.code.trim() : ''
+    const detail = [message, code && !message.includes(code) ? `(${code})` : ''].filter(Boolean).join(' ')
+    if (detail && !messages.includes(detail)) messages.push(detail)
+    current = candidate.cause
+  }
+  return messages.join(' → ').slice(0, 1_024) || 'unknown transport failure'
 }
