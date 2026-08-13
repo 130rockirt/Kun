@@ -11,7 +11,7 @@ import type { NormalizedThread } from '../../agent/types'
 import { workspaceLabelFromPath } from '../../lib/workspace-label'
 import { workspaceRootIdentityKey } from '../../lib/workspace-path'
 import { SidebarIconButton, SidebarSearchField, SidebarTreeRow } from '../sidebar/SidebarPrimitives'
-import { SidebarEmpty, ThreadRow } from './SidebarProjectRows'
+import { SidebarEmpty, SidebarThreadSkeleton, ThreadRow } from './SidebarProjectRows'
 import {
   FolderContextMenu,
   MoveThreadDialog,
@@ -66,10 +66,16 @@ import {
 
 type T = (key: string, options?: Record<string, unknown>) => string
 
+export type SidebarThreadListStatus = 'idle' | 'loading' | 'ready' | 'refreshing' | 'error'
+
 export type SidebarProjectsContentProps = {
   t: T
   runtimeReady: boolean; workspaceRoot: string; searchQuery: string; showArchived: boolean
   allGroupsCollapsed: boolean; searchVisible: boolean; busy: boolean
+  threadListStatus: SidebarThreadListStatus; threadListError: string | null
+  onRetryThreads: () => void
+  onLoadMoreThreads: (workspacePath: string) => void
+  threadListCursorByWorkspace: Record<string, { nextCursor?: string; hasMore: boolean; total?: number }>
   activeView: 'chat' | 'write' | 'claw'; activeThreadId: string | null; locale: string
   displayGroups: SidebarWorkspaceGroup[]
   sidebarCollapse: SidebarCollapseRegistry; sidebarOrder: SidebarOrderRegistry; sidebarFolders: SidebarFolderRegistry
@@ -139,6 +145,8 @@ export function SidebarProjectsContent(props: SidebarProjectsContentProps): Reac
   const {
     t, runtimeReady, workspaceRoot, searchQuery, showArchived, allGroupsCollapsed, searchVisible,
     busy, activeView, activeThreadId, locale, displayGroups, sidebarCollapse, sidebarOrder,
+    threadListStatus, threadListError, onRetryThreads, onLoadMoreThreads,
+    threadListCursorByWorkspace,
     sidebarFolders, expandedWorkspaces, deletingThreadIds, draggingWorkspacePath, draggingThreadId,
     workspaceOrderDropTarget, threadOrderDropTarget, dragOverWorkspace, folderDropTarget,
     threadWorktrees, sidebarThreadActivityContext, threadContextMenu, workspaceContextMenu,
@@ -250,12 +258,31 @@ export function SidebarProjectsContent(props: SidebarProjectsContentProps): Reac
 
       <div className="min-h-0 flex-1 overflow-y-auto px-1 pb-2 pt-0.5">
         {displayGroups.length === 0 ? (
-          <SidebarEmpty
-            runtimeReady={runtimeReady}
-            hasWorkspace={!!workspaceRoot}
-            onPickWorkspace={onPickWorkspace}
-            t={t}
-          />
+          threadListStatus === 'error' ? (
+            <div className="mx-2 mt-2 rounded-lg px-2 py-2">
+              <p className="text-[13px] leading-5 text-ds-faint">{t('sidebarWorkspaceLoadError')}</p>
+              {threadListError ? (
+                <p className="mt-0.5 text-[12px] leading-4 text-ds-faint/80">{threadListError}</p>
+              ) : null}
+              <button
+                type="button"
+                data-cursor-spotlight-target
+                onClick={onRetryThreads}
+                className="mt-2 rounded-md px-2 py-1 text-[12px] font-medium text-ds-muted transition hover:bg-[var(--ds-sidebar-row-hover)] hover:text-ds-ink"
+              >
+                {t('retryConnection')}
+              </button>
+            </div>
+          ) : threadListStatus === 'loading' || threadListStatus === 'idle' ? (
+            <SidebarThreadSkeleton />
+          ) : (
+            <SidebarEmpty
+              runtimeReady={runtimeReady}
+              hasWorkspace={!!workspaceRoot}
+              onPickWorkspace={onPickWorkspace}
+              t={t}
+            />
+          )
         ) : null}
 
         {displayGroups.map(([workspacePath, list]) => {
@@ -477,31 +504,52 @@ export function SidebarProjectsContent(props: SidebarProjectsContentProps): Reac
                     return renderFolder(folder)
                   })}
                   {rootThreads.length === 0 && rootFolders.length === 0 ? (
-                    <div className="flex items-center justify-between gap-2 px-2.5 py-1.5">
-                      <div className="text-[12.5px] leading-5 text-ds-faint">
-                        {searchQuery.trim()
-                          ? t('sidebarSearchEmpty')
-                          : showArchived
-                            ? t('sidebarArchiveEmpty')
-                            : t('sidebarWorkspaceEmpty')}
+                    threadListStatus === 'ready' ? (
+                      <div className="flex items-center justify-between gap-2 px-2.5 py-1.5">
+                        <div className="text-[12.5px] leading-5 text-ds-faint">
+                          {searchQuery.trim()
+                            ? t('sidebarSearchEmpty')
+                            : showArchived
+                              ? t('sidebarArchiveEmpty')
+                              : t('sidebarWorkspaceEmpty')}
+                        </div>
+                        {!showArchived && !searchQuery.trim() ? (
+                          <button
+                            type="button"
+                            data-cursor-spotlight-target
+                            onClick={() => onCreateThreadInWorkspace(workspacePath)}
+                            className="shrink-0 rounded-md px-2 py-1 text-[12px] font-medium text-ds-faint transition hover:bg-[var(--ds-sidebar-row-hover)] hover:text-ds-ink"
+                          >
+                            {t('sidebarWorkspaceNewThread')}
+                          </button>
+                        ) : null}
                       </div>
-                      {!showArchived && !searchQuery.trim() ? (
+                    ) : threadListStatus === 'error' ? (
+                      <div className="px-2.5 py-1.5">
+                        <p className="text-[12.5px] leading-5 text-ds-faint">{t('sidebarWorkspaceLoadError')}</p>
                         <button
                           type="button"
                           data-cursor-spotlight-target
-                          onClick={() => onCreateThreadInWorkspace(workspacePath)}
-                          className="shrink-0 rounded-md px-2 py-1 text-[12px] font-medium text-ds-faint transition hover:bg-[var(--ds-sidebar-row-hover)] hover:text-ds-ink"
+                          onClick={onRetryThreads}
+                          className="mt-1 rounded-md px-2 py-1 text-[12px] font-medium text-ds-faint transition hover:bg-[var(--ds-sidebar-row-hover)] hover:text-ds-ink"
                         >
-                          {t('sidebarWorkspaceNewThread')}
+                          {t('retryConnection')}
                         </button>
-                      ) : null}
-                    </div>
+                      </div>
+                    ) : (
+                      <SidebarThreadSkeleton />
+                    )
                   ) : visibleThreads.map((thread) => renderThreadRow(thread, workspacePath, null))}
                   {rootThreads.length > 5 ? (
                     <button
                       type="button"
                       data-cursor-spotlight-target
-                      onClick={() =>
+                      onClick={() => {
+                        const workspaceCursor = threadListCursorByWorkspace[workspacePath]
+                        if (workspaceCursor?.hasMore === true) {
+                          onLoadMoreThreads(workspacePath)
+                          return
+                        }
                         setExpandedWorkspaces((current) => ({
                           ...current,
                           [workspacePath]: nextSidebarProjectExpansionStage(
@@ -509,12 +557,15 @@ export function SidebarProjectsContent(props: SidebarProjectsContentProps): Reac
                             current[workspacePath] ?? 0
                           )
                         }))
-                      }
+                      }}
                       className="ml-1 mt-1 rounded-md px-2.5 py-1.5 text-[12.5px] text-ds-faint transition hover:bg-[var(--ds-sidebar-row-hover)] hover:text-ds-ink"
                     >
                       {hasVisibleThreadOverflow
                         ? t('sidebarWorkspaceShowMore', {
-                            count: rootThreads.length - visibleThreadCount
+                            count: Math.max(
+                              rootThreads.length - visibleThreadCount,
+                              (threadListCursorByWorkspace[workspacePath]?.total ?? rootThreads.length) - rootThreads.length
+                            )
                           })
                         : t('sidebarWorkspaceShowLess')}
                     </button>

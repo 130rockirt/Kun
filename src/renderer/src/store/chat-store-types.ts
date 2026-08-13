@@ -326,6 +326,18 @@ export type ChatState = {
   runtimeStatus: KunRuntimeStatusPayload | null
   codeWorkspaceRoots: string[]
   threads: NormalizedThread[]
+  /**
+   * Sidebar thread inventory lifecycle. Guards the "no conversations yet"
+   * empty state: the sidebar must never render the empty state while the
+   * first inventory request is still in flight or failed.
+   */
+  threadListStatus: 'idle' | 'loading' | 'ready' | 'refreshing' | 'error'
+  threadListError: string | null
+  /**
+   * Per-workspace pagination state for the sidebar thread list. Each workspace
+   * loads its most recent page first and appends older pages on "show more".
+   */
+  threadListCursorByWorkspace: Record<string, { nextCursor?: string; hasMore: boolean; total?: number }>
   knowledgeBaseStatuses: Record<string, KnowledgeBaseIndexStatus[]>
   threadSearch: string
   showArchivedThreads: boolean
@@ -502,6 +514,8 @@ export type ChatState = {
   clearWorkspace: () => Promise<void>
   deleteWorkspace: (workspacePath: string) => Promise<void>
   refreshThreads: () => Promise<void>
+  /** Append the next older page of threads for a workspace ("show more"). */
+  loadMoreThreads: (workspacePath: string) => Promise<void>
   setThreadKnowledgeBases: (threadId: string, mounts: KnowledgeBaseMount[]) => Promise<boolean>
   refreshThreadKnowledgeBases: (threadId?: string) => Promise<void>
   reindexThreadKnowledgeBase: (threadId: string, knowledgeBaseId: string) => Promise<boolean>

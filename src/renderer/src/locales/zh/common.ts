@@ -7,6 +7,7 @@ import sddMcp from './common/sdd-mcp.json'
 import agentsGraph from './common/agents-graph.json'
 import codePersonas from './common/code-personas.json'
 import workWhiteboard from './common/work-whiteboard.json'
+import sidebar from './common/sidebar.json'
 
 const common = {
   ...shellWorkflow,
@@ -18,6 +19,7 @@ const common = {
   ...agentsGraph,
   ...codePersonas,
   ...workWhiteboard,
+  ...sidebar,
 }
 
 export default common

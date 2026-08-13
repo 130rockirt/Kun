@@ -117,6 +117,11 @@ export function Sidebar({
   const workspaceRoot = useChatStore((s) => s.workspaceRoot)
   const conversationWorkspaceRoot = useChatStore((s) => s.conversationWorkspaceRoot)
   const codeWorkspaceRoots = useChatStore((s) => s.codeWorkspaceRoots)
+  const threadListStatus = useChatStore((s) => s.threadListStatus)
+  const threadListError = useChatStore((s) => s.threadListError)
+  const threadListCursorByWorkspace = useChatStore((s) => s.threadListCursorByWorkspace)
+  const refreshThreads = useChatStore((s) => s.refreshThreads)
+  const loadMoreThreads = useChatStore((s) => s.loadMoreThreads)
   const chooseWorkspace = useChatStore((s) => s.chooseWorkspace)
   const deleteWorkspace = useChatStore((s) => s.deleteWorkspace)
   const busy = useChatStore((s) => s.busy)
@@ -255,6 +260,11 @@ export function Sidebar({
           activeView="chat"
           activeThreadId={activeThreadId}
           runtimeReady={runtimeReady}
+          threadListStatus={threadListStatus}
+          threadListError={threadListError}
+          onRetryThreads={() => void refreshThreads()}
+          onLoadMoreThreads={(workspacePath) => void loadMoreThreads(workspacePath)}
+          threadListCursorByWorkspace={threadListCursorByWorkspace}
           searchQuery={threadSearch}
           showArchived={showArchivedThreads}
           workspaceRoot={workspaceRoot}
@@ -283,6 +293,11 @@ export function Sidebar({
         activeView={activeView === 'write' ? 'write' : 'chat'}
         activeThreadId={activeThreadId}
         runtimeReady={runtimeReady}
+        threadListStatus={threadListStatus}
+        threadListError={threadListError}
+        onRetryThreads={() => void refreshThreads()}
+        onLoadMoreThreads={(workspacePath) => void loadMoreThreads(workspacePath)}
+        threadListCursorByWorkspace={threadListCursorByWorkspace}
         searchQuery={threadSearch}
         showArchived={showArchivedThreads}
         workspaceRoot={workspaceRoot}

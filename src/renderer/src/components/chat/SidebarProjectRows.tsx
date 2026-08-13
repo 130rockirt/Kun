@@ -403,3 +403,29 @@ export function SidebarEmpty({
     </div>
   )
 }
+
+/**
+ * Skeleton placeholder rows shown while the first thread inventory is still
+ * loading. Uses a calm pulse so it reads as "loading", never as "no threads".
+ */
+export function SidebarThreadSkeleton(): ReactElement {
+  return (
+    <div
+      aria-hidden="true"
+      className="mx-1 mt-1 space-y-1"
+    >
+      {[0, 1, 2, 3].map((row) => (
+        <div
+          key={row}
+          className="flex h-[34px] items-center gap-2 rounded-md px-2"
+        >
+          <div className="h-4 w-4 shrink-0 rounded-[5px] bg-ds-card/80 motion-safe:animate-pulse" />
+          <div className="min-w-0 flex-1 space-y-1.5">
+            <div className="h-2.5 w-3/4 rounded-full bg-ds-card/80 motion-safe:animate-pulse" />
+            <div className="h-2 w-1/2 rounded-full bg-ds-card/60 motion-safe:animate-pulse" />
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}

@@ -103,6 +103,8 @@ import {
   scheduleStartupRuntimeProbe,
   stopTurnCompletionPoll
 } from './chat-store-schedulers'
+import { saveThreadListCache } from './thread-list-cache'
+import { loadMoreThreads as loadMoreThreadsAction, buildWorkspaceCursorByWorkspace } from './chat-store-thread-pagination'
 import {
   armBusyWatchdog,
   buildFollowupMessageFromUserInput,
@@ -152,8 +154,9 @@ let trayActionUnsubscribe: (() => void) | null = null
 
 export function createNavigationWorkspaceActions(
   { set, get, sseAbortRef }: StoreActionContext
-): Pick<ChatState, 'chooseWorkspace' | 'selectWorkspaceRoot' | 'clearWorkspace' | 'deleteWorkspace' | 'refreshThreads' | 'setThreadSearch' | 'setShowArchivedThreads'> {
+): Pick<ChatState, 'chooseWorkspace' | 'selectWorkspaceRoot' | 'clearWorkspace' | 'deleteWorkspace' | 'refreshThreads' | 'loadMoreThreads' | 'setThreadSearch' | 'setShowArchivedThreads'> {
   return {
+  loadMoreThreads: (workspacePath) => loadMoreThreadsAction(workspacePath, set, get),
   chooseWorkspace: async ({ createThreadAfter = false, selectThreadAfter = true } = {}) => {
     try {
       const wasWriteRoute = get().route === 'write'
@@ -349,15 +352,35 @@ export function createNavigationWorkspaceActions(
 
   refreshThreads: async () => {
     if (get().runtimeConnection !== 'ready') return
+    // Surface loading/refreshing before the first inventory lands. A
+    // background refresh must keep the previous list visible (never clears
+    // `threads` early), so the sidebar only shows skeletons when there is
+    // nothing to show yet.
+    set((s) => ({
+      threadListStatus: s.threads.length === 0 ? 'loading' : 'refreshing',
+      threadListError: null
+    }))
     const refreshGeneration = ++refreshThreadsGeneration
     try {
       const p = getProvider()
       let rawThreads: NormalizedThread[]
+      let listPageMeta: { nextCursor?: string; hasMore: boolean; total?: number } | null = null
       try {
-        // Omitting `limit` is intentional: migrated and long-lived profiles
-        // must expose the complete inventory instead of silently hiding older
-        // conversations after an arbitrary client-side cutoff.
-        rawThreads = await p.listThreads({ includeArchived: true })
+        if (typeof p.listThreadsPage === 'function') {
+          // Full calibration page: no limit so the complete inventory stays in
+          // memory for registry reconciliation; the page contract still returns
+          // total + cursor metadata used to drive "show more" when a future
+          // per-workspace first-page mode is enabled.
+          const page = await p.listThreadsPage({
+            includeArchived: true,
+            lean: true
+          })
+          rawThreads = page.threads
+          listPageMeta = { nextCursor: page.nextCursor, hasMore: page.hasMore, total: page.total }
+        } else {
+          // Older runtime without cursor support.
+          rawThreads = await p.listThreads({ includeArchived: true })
+        }
       } catch {
         rawThreads = await p.listThreads()
       }
@@ -630,11 +653,22 @@ export function createNavigationWorkspaceActions(
           codeWorkspaceRoots,
           watchTurnCompletion: w,
           unreadThreadIds: u,
+          threadListStatus: 'ready',
+          threadListError: null,
+          ...(listPageMeta
+            ? {
+                threadListCursorByWorkspace: buildWorkspaceCursorByWorkspace(displayThreads, listPageMeta)
+              }
+            : {}),
           ...(staleCodeThreadMemory ? { lastCodeThreadId: null } : {}),
           ...(shouldClearSelection ? clearedThreadSelection() : {})
         }
       })
       syncTurnCompletionPoll(set, get)
+      // Persist a lean summary cache after each successful refresh so the next
+      // startup can paint the sidebar from local storage before the runtime
+      // inventory arrives.
+      saveThreadListCache(displayThreads)
       if (activeThreadIsManagedInCodeRoute) {
         await get().openCode()
       }
@@ -643,6 +677,8 @@ export function createNavigationWorkspaceActions(
       set({
         runtimeConnection: 'offline',
         error: formatRuntimeError(e),
+        threadListStatus: 'error',
+        threadListError: formatRuntimeError(e),
         ...(shouldOpenSettingsForError(e)
           ? { route: 'settings' as const, settingsSection: 'agents' as const }
           : {})
