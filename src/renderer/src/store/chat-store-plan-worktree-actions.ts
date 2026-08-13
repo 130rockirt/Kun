@@ -80,6 +80,17 @@ export function createPlanWorktreeActions(
         ...(input.branchPrefix ? { branchPrefix: input.branchPrefix } : {})
       })
       // Main creates and binds the execution fork before prepare resolves.
+      // A needs_attention prepare is Main's durable failure verdict: the
+      // record carries the first failure (attentionMessage). Reconciling here
+      // would only re-project the recovered thread and hide that original
+      // error, so surface it immediately.
+      if (!run.executionThreadId && run.status === 'needs_attention') {
+        throw new Error(
+          run.attentionMessage
+            || run.attentionReason
+            || 'The isolated plan-build preparation failed.'
+        )
+      }
       // Reconcile recovers a response-loss replay without exposing a renderer
       // fallback that could start a foreign first turn.
       run = await api.reconcile({ runId: run.runId })

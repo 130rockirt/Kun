@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import {
+  BackfillPlanBuildAdmissionBindingRequest,
   CreateThreadRequest,
   ClearThreadGoalResponse,
   ClearThreadTodosResponse,
@@ -12,6 +13,7 @@ import {
   ThreadGoalResponse,
   ThreadRuntimeStateSchema,
   ThreadSchema,
+  ThreadSchemaReadable,
   ThreadTimelineResponseSchema,
   ThreadTodosResponse,
   THREAD_TIMELINE_MAX_ITEM_BYTES,
@@ -164,7 +166,7 @@ export async function getThread(
     ? pendingApprovals.map((request) => request.id)
     : undefined
   return jsonResponse({
-    ...ThreadSchema.parse(hydratedThread),
+    ...ThreadSchemaReadable.parse(hydratedThread),
     latestSeq,
     pendingUserInputIds,
     ...(pendingApprovalIds ? { pendingApprovalIds } : {})
@@ -291,7 +293,7 @@ export async function getThreadTimeline(
     : undefined
 
   return jsonResponse(ThreadTimelineResponseSchema.parse({
-    ...ThreadSchema.parse(projectTimelineThread(pageThread)),
+    ...ThreadSchemaReadable.parse(projectTimelineThread(pageThread)),
     latestSeq,
     latestTurn: latestTurnMetadata,
     pendingUserInputIds,
@@ -402,6 +404,31 @@ export async function setPlanBuildAdmissionFence(
       return jsonResponse({ code: 'not_found', message: error.message }, 404)
     }
     if (error instanceof Error && /plan-build|plan build|not idle|workspace changed/i.test(error.message)) {
+      return jsonResponse({ code: 'conflict', message: error.message }, 409)
+    }
+    throw error
+  }
+}
+
+export async function backfillPlanBuildAdmissionBinding(
+  service: ThreadService,
+  threadId: string,
+  request: Request
+): Promise<JsonResponse> {
+  const body = await readJsonBody(request)
+  if (!body.ok) return body.response
+  const parsed = BackfillPlanBuildAdmissionBindingRequest.safeParse(body.value)
+  if (!parsed.success) {
+    return validationError('invalid plan-build admission binding backfill body', parsed.error.issues)
+  }
+  try {
+    const thread = await service.backfillPlanBuildAdmissionBinding(threadId, parsed.data)
+    return jsonResponse(ThreadSchema.parse(projectPublicThreadRecord(thread)))
+  } catch (error) {
+    if (error instanceof Error && /not found/i.test(error.message)) {
+      return jsonResponse({ code: 'not_found', message: error.message }, 404)
+    }
+    if (error instanceof Error && /plan-build|plan build|workspace changed|fork boundary|durable goal|build turn|cancel/i.test(error.message)) {
       return jsonResponse({ code: 'conflict', message: error.message }, 409)
     }
     throw error

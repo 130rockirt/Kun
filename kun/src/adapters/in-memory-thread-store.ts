@@ -1,6 +1,7 @@
 import type { ThreadStore, ThreadStoreListOptions } from '../ports/thread-store.js'
 import {
   ThreadSchema,
+  ThreadSchemaReadable,
   type ThreadRecord,
   type ThreadSummary
 } from '../contracts/threads.js'
@@ -24,9 +25,21 @@ export class InMemoryThreadStore implements ThreadStore {
   }
 
   async upsert(thread: ThreadRecord): Promise<ThreadRecord> {
-    const normalized = ThreadSchema.parse(thread)
-    this.threads.set(normalized.id, normalized)
-    return normalized
+    const strict = ThreadSchema.safeParse(thread)
+    if (strict.success) {
+      this.threads.set(strict.data.id, strict.data)
+      return strict.data
+    }
+    // Legacy half-bound plan-build records are tolerated for read/repair
+    // paths exactly like the file and hybrid stores: a test (or a migration
+    // import) may need to seed the pre-fix malformed shape to exercise the
+    // CAS backfill flow. New writes still fail via the service-layer callers.
+    const readable = ThreadSchemaReadable.safeParse(thread)
+    if (readable.success) {
+      this.threads.set(readable.data.id, readable.data)
+      return readable.data
+    }
+    throw strict.error
   }
 
   async delete(threadId: string): Promise<boolean> {

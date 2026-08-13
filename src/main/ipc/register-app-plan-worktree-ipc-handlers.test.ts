@@ -91,6 +91,9 @@ describe('plan worktree IPC handlers', () => {
     let forked = false
     let forkBody: Record<string, unknown> | undefined
     const runtimeRequest = vi.fn(async (path: string, method = 'GET', body?: string) => {
+      if (path === '/v1/runtime/info') {
+        return { ok: true, status: 200, body: JSON.stringify({ capabilities: { planBuildAdmissionBindingV1: true } }) }
+      }
       if (path.startsWith('/v1/threads?')) {
         return {
           ok: true,
@@ -248,6 +251,9 @@ describe('plan worktree IPC handlers', () => {
     let goalPosts = 0
     let turnPosts = 0
     const runtimeRequest = vi.fn(async (path: string, method = 'GET') => {
+      if (path === '/v1/runtime/info') {
+        return { ok: true, status: 200, body: JSON.stringify({ capabilities: { planBuildAdmissionBindingV1: true } }) }
+      }
       if (method === 'POST' && path.endsWith('/goal')) {
         goalPosts += 1
         goalStatus = 'active'
@@ -274,7 +280,10 @@ describe('plan worktree IPC handlers', () => {
         })
       }
     })
-    registerAppIpcHandlers(registerOptions({ userDataPath, runtimeRequest }))
+    registerAppIpcHandlers(registerOptions({ userDataPath, runtimeRequest, acquireRuntimeRequestLease: async () => ({
+      runtimeToken: 'runtime-auth-token',
+      request: runtimeRequest as never
+    }) }))
 
     const resume = handlers.get('plan-worktree:resume-admission')!
     const [first, second] = await Promise.all([
@@ -295,6 +304,9 @@ describe('plan worktree IPC handlers', () => {
     await store.save(record)
     let runtimeReady = false
     const runtimeRequest = vi.fn(async (path: string) => {
+      if (path === '/v1/runtime/info') {
+        return { ok: true, status: 200, body: JSON.stringify({ capabilities: { planBuildAdmissionBindingV1: true } }) }
+      }
       if (!runtimeReady) return { ok: false, status: 503, body: '' }
       if (path.startsWith('/v1/threads?')) {
         return {

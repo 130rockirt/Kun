@@ -22,6 +22,7 @@ import {
   expectedKunRuntimeBuildId,
   getRuntimeAuthToken,
   kunRuntimeAdapter,
+  readPlanBuildAdmissionBindingCapability,
   resolveRuntimeRequestTimeoutMs,
   runtimeAuthHeaders,
   runtimeRequestViaHost,
@@ -569,22 +570,30 @@ describe('kunRuntimeAdapter.isChildRunning dead-PID recovery', () => {
     expect(kunRuntimeAdapter.getBaseUrl(settingsForPort(18788))).toBe('http://127.0.0.1:18788')
   })
 
-  it('keeps reporting running while the cached discovery PID is alive', () => {
-    setResolvedKunRuntimeConnectionForTests({
-      version: 2,
-      instanceId: 'live-shared-runtime',
-      pid: process.pid,
-      startedAt: '2026-08-07T00:00:00.000Z',
-      host: '127.0.0.1',
-      port: 44793,
-      baseUrl: 'http://127.0.0.1:44793',
-      runtimeToken: 'live-token',
-      insecure: false,
-      serviceVersion: '0.0.0-test',
-      launchMode: 'shared'
+  it('reads the plan-build admission binding capability from runtime info', async () => {
+    const capabilities = buildRuntimeCapabilityManifest({
+      model: modelCapabilitiesForModel('fixture')
     })
+    const port = await listen((_req, res) => {
+      res.setHeader('Content-Type', 'application/json')
+      res.end(JSON.stringify({ capabilities }))
+    })
+    const settings = settingsForPort(port)
+    await expect(readPlanBuildAdmissionBindingCapability(settings, async () => undefined))
+      .resolves.toBe(true)
+  })
 
-    expect(kunRuntimeAdapter.isChildRunning()).toBe(true)
-    expect(kunRuntimeAdapter.getBaseUrl(settingsForPort(18788))).toBe('http://127.0.0.1:44793')
+  it('rejects runtime info without the plan-build admission binding flag', async () => {
+    const capabilities = buildRuntimeCapabilityManifest({
+      model: modelCapabilitiesForModel('fixture')
+    })
+    delete (capabilities as { planBuildAdmissionBindingV1?: boolean }).planBuildAdmissionBindingV1
+    const port = await listen((_req, res) => {
+      res.setHeader('Content-Type', 'application/json')
+      res.end(JSON.stringify({ capabilities }))
+    })
+    const settings = settingsForPort(port)
+    await expect(readPlanBuildAdmissionBindingCapability(settings, async () => undefined))
+      .resolves.toBe(false)
   })
 })

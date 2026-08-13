@@ -41,6 +41,7 @@ import type { RuntimeEventRecorder } from './runtime-event-recorder.js'
 import type { ThreadLifecycleFence } from './thread-lifecycle-fence.js'
 import { withFileMutationQueue } from '../adapters/tool/file-mutation-queue.js'
 import { withThreadStoreMutation } from './thread-mutation-coordinator.js'
+import { withManagerDataMutex } from '../manager/data-mutex.js'
 import { DEFAULT_KUN_MODEL } from '../config/kun-config.js'
 import { isGuiPlanRelativePath } from '../shared/gui-plan.js'
 import {
@@ -111,16 +112,18 @@ async fork(this: ThreadService, threadId: string, options: ForkThreadOptions = {
     const internalOptions = options as InternalForkThreadOptions
     if (options.planBuildRunId && !internalOptions[PLAN_BUILD_FORK_COMMIT]) {
       const forkId = planBuildForkThreadId(options.planBuildRunId)
-      return withThreadStoreMutation(this['threadStore'], forkId, async () => {
-        const existing = await this['threadStore'].get(forkId)
-        if (existing) {
-          return validateExistingPlanBuildFork(existing, threadId, options)
-        }
-        return this.fork(threadId, {
-          ...options,
-          [PLAN_BUILD_FORK_COMMIT]: forkId
-        } as InternalForkThreadOptions)
-      })
+      return withManagerDataMutex(`thread:${forkId}`, () =>
+        withThreadStoreMutation(this['threadStore'], forkId, async () => {
+          const existing = await this['threadStore'].get(forkId)
+          if (existing) {
+            return validateExistingPlanBuildFork(existing, threadId, options)
+          }
+          return this.fork(threadId, {
+            ...options,
+            [PLAN_BUILD_FORK_COMMIT]: forkId
+          } as InternalForkThreadOptions)
+        })
+      )
     }
     if (options.designCloneOperationId && !internalOptions[DESIGN_CLONE_COMMIT]) {
       const source = await this['threadStore'].get(threadId)

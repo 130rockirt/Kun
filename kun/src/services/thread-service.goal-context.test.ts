@@ -393,4 +393,62 @@ describe('ThreadService goal context persistence', () => {
       ])
     }
   })
+
+  it('backfills a durable admission binding onto a pristine legacy plan fork', async () => {
+    const harness = createHarness()
+    const source = await seedGoalContextThread(harness)
+    const legacy = createThreadRecord({
+      id: 'thr_legacy_backfill',
+      title: 'Legacy backfill',
+      workspace: '/tmp/backfill-worktree',
+      model: 'm',
+      relation: 'side',
+      parentThreadId: 'thr_source',
+      planBuildRunId: 'run-backfill',
+      forkedFromTurnCount: 0
+    })
+    await harness.threadStore.upsert(legacy)
+
+    const backfilled = await harness.service.backfillPlanBuildAdmissionBinding('thr_legacy_backfill', {
+      planBuildRunId: 'run-backfill',
+      expectedWorkspace: '/tmp/backfill-worktree',
+      planBuildAdmissionFingerprint: planBuildAdmissionFingerprint,
+      planBuildAdmissionCapability: planBuildAdmissionCapability
+    })
+    expect(backfilled).toMatchObject({
+      planBuildRunId: 'run-backfill',
+      planBuildAdmissionFingerprint: planBuildAdmissionFingerprint,
+      planBuildAdmissionCapabilityHash: expect.stringMatching(/^[a-f0-9]{64}$/)
+    })
+
+    // A second backfill is rejected because the binding now exists.
+    await expect(harness.service.backfillPlanBuildAdmissionBinding('thr_legacy_backfill', {
+      planBuildRunId: 'run-backfill',
+      expectedWorkspace: '/tmp/backfill-worktree',
+      planBuildAdmissionFingerprint: planBuildAdmissionFingerprint,
+      planBuildAdmissionCapability: planBuildAdmissionCapability
+    })).rejects.toThrow('already has a durable admission binding')
+  })
+
+  it('rejects backfill once a goal already exists on a legacy thread', async () => {
+    const harness = createHarness()
+    await harness.threadStore.upsert(createThreadRecord({
+      id: 'thr_legacy_goal',
+      title: 'Legacy goal',
+      workspace: '/tmp/goal-worktree',
+      model: 'm',
+      relation: 'side',
+      parentThreadId: 'thr_source',
+      planBuildRunId: 'run-backfill-goal',
+      forkedFromTurnCount: 0
+    }))
+    await harness.service.setGoal('thr_legacy_goal', { objective: 'already running' })
+
+    await expect(harness.service.backfillPlanBuildAdmissionBinding('thr_legacy_goal', {
+      planBuildRunId: 'run-backfill-goal',
+      expectedWorkspace: '/tmp/goal-worktree',
+      planBuildAdmissionFingerprint: planBuildAdmissionFingerprint,
+      planBuildAdmissionCapability: planBuildAdmissionCapability
+    })).rejects.toThrow('durable goal')
+  })
 })

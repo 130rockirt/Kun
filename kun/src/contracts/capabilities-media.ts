@@ -277,7 +277,13 @@ export const RuntimeCapabilityManifest = z
     browserUse: RuntimeCapabilityState.extend({
       mode: BrowserUseMode,
       approvalMode: BrowserUseApprovalMode
-    }).strict()
+    }).strict(),
+    /**
+     * Host-owned handshake flag for the deterministic plan-build admission
+     * binding protocol. When false/absent the Electron main process must
+     * refuse to create a plan-worktree rather than fork a half-bound thread.
+     */
+    planBuildAdmissionBindingV1: z.boolean().optional()
   })
   .strict()
 export type RuntimeCapabilityManifest = z.infer<typeof RuntimeCapabilityManifest>
@@ -516,7 +522,8 @@ export function buildRuntimeCapabilityManifest(input: {
       ),
       mode: config.browserUse.mode,
       approvalMode: config.browserUse.approvalMode
-    }
+    },
+    planBuildAdmissionBindingV1: true
   })
 }
 

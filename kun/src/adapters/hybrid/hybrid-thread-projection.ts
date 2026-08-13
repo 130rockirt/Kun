@@ -1,5 +1,5 @@
 import type { ThreadRecord } from '../../contracts/threads.js'
-import { ThreadSchema } from '../../contracts/threads.js'
+import { ThreadSchemaReadable } from '../../contracts/threads.js'
 import { isPublicTurnItem, type TurnItem } from '../../contracts/items.js'
 import type { Turn } from '../../contracts/turns.js'
 
@@ -91,7 +91,7 @@ function collectTurnMetadata(entries: ThreadMetadataLine[], threadId: string): M
   const recovered = new Map<string, RecoveredTurnMetadata>()
   for (const entry of entries) {
     if (entry?.kind !== 'thread_metadata' || entry.thread?.id !== threadId) continue
-    const parsed = ThreadSchema.safeParse(entry.thread)
+    const parsed = ThreadSchemaReadable.safeParse(entry.thread)
     if (!parsed.success) continue
     for (const turn of parsed.data.turns) {
       const current = recovered.get(turn.id) ?? { attachmentIds: [] }

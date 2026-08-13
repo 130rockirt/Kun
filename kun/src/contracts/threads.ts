@@ -277,7 +277,7 @@ export const DesignCloneOperationSchema = z.object({
 }).strict()
 export type DesignCloneOperation = z.infer<typeof DesignCloneOperationSchema>
 
-export const ThreadSchema = z.object({
+export const ThreadSchemaBase = z.object({
   id: z.string().min(1),
   title: z.string(),
   /**
@@ -370,9 +370,35 @@ export const ThreadSchema = z.object({
   updatedAt: z.string(),
   turns: z.array(TurnSchema).default([])
 })
+/**
+ * Persistence schema: rejects half-bound plan-build records (e.g. a thread
+ * with `planBuildRunId` but a lost admission binding) so a cross-runtime write
+ * can never silently produce that malformed state again. Every store upsert
+ * parses through this schema.
+ */
+export const ThreadSchema = ThreadSchemaBase.superRefine((value, ctx) => {
+    const runId = Boolean(value.planBuildRunId)
+    const fingerprint = Boolean(value.planBuildAdmissionFingerprint)
+    const capabilityHash = Boolean(value.planBuildAdmissionCapabilityHash)
+    if (runId !== fingerprint || runId !== capabilityHash) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['planBuildRunId'],
+        message:
+          'planBuildRunId, planBuildAdmissionFingerprint and planBuildAdmissionCapabilityHash must be supplied together'
+      })
+    }
+  })
+/**
+ * Read-side tolerance: legacy records that lost the binding before this
+ * invariant existed must still load so Main can classify them (recovery link
+ * rejects them) and repair them through the CAS backfill endpoint or cancel.
+ * New writes never pass through this schema.
+ */
+export const ThreadSchemaReadable = ThreadSchemaBase
 export type ThreadRecord = z.infer<typeof ThreadSchema>
 
-export const ThreadTimelineResponseSchema = ThreadSchema.extend({
+export const ThreadTimelineResponseSchema = ThreadSchemaReadable.extend({
   latestSeq: z.number().int().nonnegative(),
   latestTurn: TurnSchema.omit({ items: true }).nullable(),
   pendingUserInputIds: z.array(z.string()),
@@ -381,7 +407,7 @@ export const ThreadTimelineResponseSchema = ThreadSchema.extend({
 })
 export type ThreadTimelineResponse = z.infer<typeof ThreadTimelineResponseSchema>
 
-export const ThreadSummarySchema = ThreadSchema.pick({
+export const ThreadSummarySchema = ThreadSchemaBase.pick({
   id: true,
   title: true,
   titleAuto: true,
@@ -547,6 +573,10 @@ export const SetPlanBuildAdmissionFenceRequest = z.object({
 export type SetPlanBuildAdmissionFenceRequest = z.infer<
   typeof SetPlanBuildAdmissionFenceRequest
 >
+
+export {
+  BackfillPlanBuildAdmissionBindingRequest
+} from './plan-build-admission-binding.js'
 
 export const SetThreadGoalRequest = z
   .object({

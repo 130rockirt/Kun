@@ -4,6 +4,7 @@ import type { ThreadStore, ThreadStoreListOptions } from '../ports/thread-store.
 import type { SessionStore } from '../ports/session-store.js'
 import type { IdGenerator } from '../ports/id-generator.js'
 import type {
+  BackfillPlanBuildAdmissionBindingRequest,
   CreateThreadRequest,
   SetPlanBuildAdmissionFenceRequest,
   SetThreadGoalRequest,
@@ -42,6 +43,8 @@ import type { RuntimeEventRecorder } from './runtime-event-recorder.js'
 import type { ThreadLifecycleFence } from './thread-lifecycle-fence.js'
 import { withFileMutationQueue } from '../adapters/tool/file-mutation-queue.js'
 import { withThreadStoreMutation } from './thread-mutation-coordinator.js'
+import { withManagerDataMutex } from '../manager/data-mutex.js'
+import { hashPlanBuildAdmissionCapability } from './turn-service-core.js'
 import { DEFAULT_KUN_MODEL } from '../config/kun-config.js'
 import { isGuiPlanRelativePath } from '../shared/gui-plan.js'
 import {
@@ -149,6 +152,67 @@ async setPlanBuildAdmissionFence(
       modelRequestCaptureEnabled: updated.modelRequestCaptureEnabled,
       ...(updated.agentSurface ? { agentSurface: updated.agentSurface } : {}),
       ...(updated.designProfile ? { designProfile: updated.designProfile } : {})
+    })
+    return updated
+  },
+
+/**
+   * CAS backfill of a legacy plan-build thread that lost its admission
+   * binding during a cross-runtime write. Only succeeds when the thread is
+   * still pristine: correct identity/workspace, no post-fork turn, no goal,
+   * and idle. Main additionally verifies the worktree git state before
+   * calling this endpoint.
+   */
+async backfillPlanBuildAdmissionBinding(
+    this: ThreadService,
+    threadId: string,
+    request: BackfillPlanBuildAdmissionBindingRequest
+  ): Promise<ThreadRecord> {
+    const updated = await withManagerDataMutex(`thread:${threadId}`, () =>
+      this['withThreadMutation'](threadId, async () => {
+        const current = await this['threadStore'].get(threadId)
+        if (!current) throw new Error(`thread not found: ${threadId}`)
+        if (current.relation !== 'side' || current.planBuildRunId !== request.planBuildRunId) {
+          throw new Error('thread is not owned by the requested plan-build run')
+        }
+        if (current.planBuildAdmissionFingerprint || current.planBuildAdmissionCapabilityHash) {
+          throw new Error('plan-build thread already has a durable admission binding')
+        }
+        if (resolve(current.workspace) !== resolve(request.expectedWorkspace)) {
+          throw new Error('plan-build execution workspace changed unexpectedly')
+        }
+        const boundary = current.forkedFromTurnCount
+        if (boundary === undefined || boundary > current.turns.length) {
+          throw new Error('plan-build thread has no valid fork boundary')
+        }
+        if (current.turns.length !== boundary) {
+          throw new Error('plan-build thread already executed a build turn; cancel the run instead')
+        }
+        if (current.goal) {
+          throw new Error('plan-build thread already has a durable goal; cancel the run instead')
+        }
+        if (current.turns.some((turn) => turn.status === 'queued' || turn.status === 'running')) {
+          throw new Error('plan-build execution thread is not idle')
+        }
+        const next = touchThread({
+          ...current,
+          planBuildAdmissionFingerprint: request.planBuildAdmissionFingerprint,
+          planBuildAdmissionCapabilityHash: hashPlanBuildAdmissionCapability(
+            request.planBuildAdmissionCapability
+          )
+        }, this['nowIso']())
+        await this['threadStore'].upsert(next)
+        return next
+      })
+    )
+    await this['events'].record({
+      kind: 'thread_updated',
+      threadId,
+      title: updated.title,
+      status: updated.status,
+      mode: updated.mode,
+      workspace: updated.workspace,
+      ...(updated.agentSurface ? { agentSurface: updated.agentSurface } : {})
     })
     return updated
   },

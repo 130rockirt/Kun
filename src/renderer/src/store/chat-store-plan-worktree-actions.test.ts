@@ -190,4 +190,27 @@ describe('isolated plan build renderer transaction', () => {
     expect(api.resumeAdmission).not.toHaveBeenCalled()
     expect(state.sendMessage).not.toHaveBeenCalled()
   })
+
+  it('surfaces the first prepare failure instead of letting reconcile override it', async () => {
+    api.prepare.mockImplementationOnce(async () => {
+      order.push('prepare')
+      return {
+        ...runRecord(),
+        executionThreadId: undefined,
+        status: 'needs_attention',
+        attentionReason: 'thread_attach_failed',
+        attentionMessage: 'Kun did not persist the durable plan-build admission binding.'
+      }
+    })
+
+    const result = await actions().startIsolatedPlanBuild(request())
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.message).toContain('did not persist the durable plan-build admission binding')
+    }
+    expect(order).toEqual(['prepare'])
+    expect(api.reconcile).not.toHaveBeenCalled()
+    expect(api.resumeAdmission).not.toHaveBeenCalled()
+  })
 })

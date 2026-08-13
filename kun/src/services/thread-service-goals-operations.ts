@@ -39,6 +39,7 @@ import type { RuntimeEventRecorder } from './runtime-event-recorder.js'
 import type { ThreadLifecycleFence } from './thread-lifecycle-fence.js'
 import { withFileMutationQueue } from '../adapters/tool/file-mutation-queue.js'
 import { withThreadStoreMutation } from './thread-mutation-coordinator.js'
+import { withManagerDataMutex } from '../manager/data-mutex.js'
 import { DEFAULT_KUN_MODEL } from '../config/kun-config.js'
 import { isGuiPlanRelativePath } from '../shared/gui-plan.js'
 import {
@@ -59,7 +60,8 @@ async getGoal(this: ThreadService, threadId: string): Promise<ThreadGoal | null>
   },
 
 async setGoal(this: ThreadService, threadId: string, request: SetThreadGoalRequest): Promise<ThreadGoal> {
-    const goal = await this['withThreadMutation'](threadId, async () => {
+    const goal = await withManagerDataMutex(`thread:${threadId}`, () =>
+      this['withThreadMutation'](threadId, async () => {
       const current = await this['threadStore'].get(threadId)
       if (!current) throw new Error(`thread not found: ${threadId}`)
       if (!current.goal && !request.objective) {
@@ -89,6 +91,7 @@ async setGoal(this: ThreadService, threadId: string, request: SetThreadGoalReque
       await this['threadStore'].upsert(touchThread({ ...current, goal: next }, now))
       return next
     })
+    )
     await this['events'].record({
       kind: 'goal_updated',
       threadId,

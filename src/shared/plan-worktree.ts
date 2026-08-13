@@ -84,7 +84,8 @@ export const PlanWorktreeAttentionReasonSchema = z.enum([
   'cleanup_failed',
   'unique_work_retained',
   'external_state_changed',
-  'record_unreadable'
+  'record_unreadable',
+  'runtime_unsupported'
 ])
 export type PlanWorktreeAttentionReason = z.infer<typeof PlanWorktreeAttentionReasonSchema>
 

@@ -20,7 +20,8 @@ import type {
   ThreadTodoSource,
   ThreadTodoStatus,
   ThreadSummary,
-  ResumeSessionMetadata
+  ResumeSessionMetadata,
+  BackfillPlanBuildAdmissionBindingRequest
 } from '../contracts/threads.js'
 import type { ExtensionThreadMetadata } from '../contracts/threads.js'
 import type {
@@ -224,6 +225,10 @@ export interface ThreadService {
   setPlanBuildAdmissionFence(
     threadId: string,
     request: SetPlanBuildAdmissionFenceRequest
+  ): Promise<ThreadRecord>;
+  backfillPlanBuildAdmissionBinding(
+    threadId: string,
+    request: BackfillPlanBuildAdmissionBindingRequest
   ): Promise<ThreadRecord>;
   resumeSession(
     sessionId: string,

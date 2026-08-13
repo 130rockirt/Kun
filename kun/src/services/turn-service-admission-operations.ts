@@ -48,6 +48,7 @@ import type { UsageService } from './usage-service.js'
 import { createImmutablePrefix } from '../cache/immutable-prefix.js'
 import { rewriteItemHistoryWithRetry } from './history-commit-coordinator.js'
 import { withThreadStoreMutation } from './thread-mutation-coordinator.js'
+import { withManagerDataMutex } from '../manager/data-mutex.js'
 import type { ThreadLifecycleFence } from './thread-lifecycle-fence.js'
 import { ThreadItemProjectionService } from './thread-item-projection.js'
 import { ComposerContextAttachmentSchema } from '../contracts/composer-context.js'
@@ -100,7 +101,8 @@ async startTurn(this: TurnService, input: {
     let attemptedTurnId: string | undefined
     let admissionAccepted = false
     try {
-      const started = await this['withThreadMutation'](input.threadId, async () => {
+      const started = await withManagerDataMutex(`thread:${input.threadId}`, () =>
+        this['withThreadMutation'](input.threadId, async () => {
         if (this['deps'].lifecycleFence?.isClosing(input.threadId)) {
           throw new TurnConflictError(`thread is being deleted: ${input.threadId}`)
         }
@@ -283,6 +285,7 @@ async startTurn(this: TurnService, input: {
           throw error
         }
       })
+      )
       if (started.kind === 'replay') return started.response
       const committedThread = await this['markTurnAdmissionCompleted'](
         input.threadId,
