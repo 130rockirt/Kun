@@ -61,9 +61,12 @@ export function visualWorkflowInstruction(
   parentThreadId: string,
   projectDir: string,
   hasReviewContext: boolean,
-  directionRequired = false
+  directionRequired = false,
+  retryStage?: 'direction' | 'review',
+  retryHasBundle = false
 ): string {
-  if (action === 'start') {
+  const restartsIncompleteStage = action === 'retry_failed' && Boolean(retryStage) && !retryHasBundle
+  if (action === 'start' || restartsIncompleteStage) {
     const guideReads = [
       `Use workflowId=${JSON.stringify(workflowId)} and projectDir=${JSON.stringify(projectDir)} for every governed PPT tool call.`,
       `Read the complete category index with ppt_read_guide(workflowId=${JSON.stringify(workflowId)}, projectDir=${JSON.stringify(projectDir)}, path="slides_categories.md"), then read exactly one complete supported slides_categories/*.md guide.`
@@ -91,6 +94,13 @@ export function visualWorkflowInstruction(
       governance,
       `Import any required .kun/images assets with ppt_import_asset, build the editable PPTD project under ${projectDir}, then call ppt_generate_previews with workflowId=${JSON.stringify(workflowId)}, parentThreadId=${JSON.stringify(parentThreadId)}, and input=${JSON.stringify(projectDir)}.`,
       'Return its reviewBundle and stop at awaiting_review. Never call ppt_export before approve_and_build.'
+    ].join(' ')
+  }
+  if (action === 'retry_failed' && retryStage === 'direction') {
+    return [
+      `PPT DIRECTION RETRY: workflow=${workflowId}; projectDir=${projectDir}.`,
+      'The prior direction attempt failed after the workflow was established. Regenerate all three persisted visual directions with their stable directionIds and unchanged slide content.',
+      `Call ppt_create_direction_bundle with the complete slide plan and all three revised candidates, return directionBundle, and stop at awaiting_direction.`
     ].join(' ')
   }
   if (action === 'revise_directions') {

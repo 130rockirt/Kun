@@ -72,6 +72,7 @@ export abstract class RoundOutcomeState {
   protected readonly svgCompletionRecoveryStepsByTurn = new Map<string, number>()
   protected readonly graphCreateRunRecoveryByTurn = new Map<string, GraphCreateRunRecoveryState>()
   protected readonly graphPlanNoToolRecoveryByTurn = new Map<string, number>()
+  protected readonly pptNoToolRecoveryByTurn = new Map<string, number>()
   protected readonly postToolFailureRecoveryStepsByTurn = new Map<string, number>()
 
   constructor(protected readonly deps: RoundOutcomeCoordinatorDeps) {}
@@ -116,6 +117,7 @@ export abstract class RoundOutcomeState {
     this.svgCompletionRecoveryStepsByTurn.delete(turnId)
     this.graphCreateRunRecoveryByTurn.delete(turnId)
     this.graphPlanNoToolRecoveryByTurn.delete(turnId)
+    this.pptNoToolRecoveryByTurn.delete(turnId)
     this.postToolFailureRecoveryStepsByTurn.delete(turnId)
   }
 }

@@ -29,6 +29,7 @@ import {
 import type { EventBus } from '../ports/event-bus.js'
 import type { ThreadStore } from '../ports/thread-store.js'
 import type { TurnService } from '../services/turn-service.js'
+import type { PptWorkflowScope } from '../ports/tool-host.js'
 import { loadWorkspaceAgentProfiles } from './workspace-agents.js'
 import type { SubagentRoutingDocument } from './subagent-router.js'
 import { BUILTIN_SUBAGENT_PROFILES } from './builtin-profiles.js'
@@ -44,6 +45,27 @@ import {
   type ChildRunLifecycleMetadata,
   type ChildReturnFormat
 } from './delegation-runtime-contracts.js'
+
+export function childPptWorkflowSnapshot(scope: PptWorkflowScope): {
+  workflowId: string
+  stage: 'direction' | 'review' | 'build'
+  previewMode: 'image-first' | 'editable'
+  directionGate?: NonNullable<PptWorkflowScope['directionGate']>
+} {
+  const stage = scope.stage ?? (
+    scope.action === 'approve_and_build'
+      ? 'build'
+      : scope.action === 'revise_directions' || scope.directionGate?.required === true
+        ? 'direction'
+        : 'review'
+  )
+  return {
+    workflowId: scope.workflowId,
+    stage,
+    previewMode: scope.previewMode,
+    ...(scope.directionGate ? { directionGate: scope.directionGate } : {})
+  }
+}
 
 
 export function resolveChildModelSelection(input: {
@@ -434,8 +456,14 @@ export function persistedPptWorkflowIdentityError(
   reviewBundle: unknown,
   directionBundle: unknown,
   childId: string,
-  workflowId: string
+  workflowId: string,
+  persistedWorkflowId?: string
 ): string {
+  if (persistedWorkflowId) {
+    return persistedWorkflowId === workflowId
+      ? ''
+      : `child run ${childId} does not own PPT workflow ${workflowId}`
+  }
   const bundles = [reviewBundle, directionBundle].filter((value) =>
     value !== undefined && value !== null)
   if (bundles.length === 0) return `child run ${childId} has no persisted PPT workflow`

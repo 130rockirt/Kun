@@ -82,6 +82,26 @@ export const ChildRunLauncher = z.enum([
 ])
 export type ChildRunLauncher = z.infer<typeof ChildRunLauncher>
 
+export const ChildPptWorkflow = z.object({
+  workflowId: z.string().min(1),
+  stage: z.enum(['direction', 'review', 'build']),
+  previewMode: z.enum(['image-first', 'editable']),
+  directionGate: z.object({
+    required: z.boolean(),
+    reason: z.enum([
+      'existing-presentation',
+      'explicit-skip',
+      'work-document',
+      'design-reference',
+      'complete-visual-system',
+      'underspecified-new-deck'
+    ]),
+    basis: z.string().trim().min(1).max(240),
+    sourceHash: z.string().regex(/^[a-f0-9]{64}$/)
+  }).strict().optional()
+}).strict()
+export type ChildPptWorkflow = z.infer<typeof ChildPptWorkflow>
+
 export const ChildRunTerminationReason = z.enum([
   'user_stop',
   'manual_stop',
@@ -223,6 +243,8 @@ export const ChildRunRecord = z.object({
   detached: z.boolean().optional(),
   /** First-class caller that owns recovery policy for this child. */
   launcher: ChildRunLauncher.optional(),
+  /** Durable host-owned PPT phase identity, including attempts that fail before producing a bundle. */
+  pptWorkflow: ChildPptWorkflow.optional(),
   status: z.enum(['queued', 'running', 'completed', 'failed', 'aborted']),
   /** Why the latest attempt ended; cleared when another attempt starts. */
   terminationReason: ChildRunTerminationReason.optional(),

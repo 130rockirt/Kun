@@ -151,7 +151,7 @@ function createDirectionBundleTool(
     },
     execute: async (args, context) => withToolBoundary(async () => {
       if (options.enabled?.() === false) return disabledResult()
-      const scope = assertPptWorkflowBinding({ context, actions: ['start', 'revise_directions'] })
+      const scope = assertPptWorkflowBinding({ context, actions: ['start', 'revise_directions', 'retry_failed'] })
       const workflowId = stringArg(args.workflowId)
       const parentThreadId = stringArg(args.parentThreadId)
       const projectArg = stringArg(args.projectDir)
@@ -217,7 +217,9 @@ function createDirectionBundleTool(
       })))
       return withFileMutationQueue(reviewManifestPath(project.projectDir), async () => {
         const existing = await readPptReviewManifest(project.projectDir)
-        if (scope.action === 'revise_directions') {
+        const revisesExistingDirections = scope.action === 'revise_directions' ||
+          (scope.action === 'retry_failed' && existing !== undefined)
+        if (revisesExistingDirections) {
           const authorityError = directionAuthorityError(existing, scope)
           if (authorityError) return errorResult(authorityError)
           const previewError = existing
@@ -233,7 +235,7 @@ function createDirectionBundleTool(
             return errorResult('direction revision must preserve the stable slide ids, titles, and content')
           }
         }
-        const directionAction = scope.action === 'start' ? 'start' : 'revise_directions'
+        const directionAction = revisesExistingDirections ? 'revise_directions' : 'start'
         const candidates = mergeDirectionCandidates({
           action: directionAction,
           workflowId,

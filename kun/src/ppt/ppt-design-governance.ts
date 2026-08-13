@@ -56,6 +56,7 @@ const PptPersistedDirectionGate = z.object({
   reason: z.enum([
     'existing-presentation',
     'explicit-skip',
+    'work-document',
     'design-reference',
     'complete-visual-system',
     'underspecified-new-deck'

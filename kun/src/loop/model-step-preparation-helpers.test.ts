@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { makeToolResultItem } from '../domain/item.js'
 import {
   pptSourceReadToolGate,
+  pptWorkflowCompletionToolGate,
   requiredWorkflowToolGate,
   subagentResumeToolGate
 } from './model-step-preparation-helpers.js'
@@ -75,5 +76,36 @@ describe('pptSourceReadToolGate', () => {
     })
 
     expect(pptSourceReadToolGate(scope, [result], 'turn_ppt')).toEqual({})
+  })
+})
+
+describe('pptWorkflowCompletionToolGate', () => {
+  const base = {
+    action: 'start' as const,
+    workflowId: 'ppt_workflow',
+    projectDir: '.kun/ppt/ppt_workflow',
+    parentThreadId: 'thread_parent',
+    previewMode: 'image-first' as const
+  }
+
+  it('keeps each PPT stage active until its structured completion tool succeeds', () => {
+    expect(pptWorkflowCompletionToolGate({ ...base, stage: 'direction' }, [], 'turn_ppt'))
+      .toEqual({ expectedToolName: 'ppt_create_direction_bundle' })
+    expect(pptWorkflowCompletionToolGate({ ...base, stage: 'review' }, [], 'turn_ppt'))
+      .toEqual({ expectedToolName: 'ppt_create_review_bundle' })
+    expect(pptWorkflowCompletionToolGate({
+      ...base, stage: 'review', previewMode: 'editable'
+    }, [], 'turn_ppt')).toEqual({ expectedToolName: 'ppt_generate_previews' })
+    expect(pptWorkflowCompletionToolGate({ ...base, stage: 'build' }, [], 'turn_ppt'))
+      .toEqual({ expectedToolName: 'ppt_export' })
+  })
+
+  it('releases the stage after a successful structured completion result', () => {
+    const result = makeToolResultItem({
+      id: 'result_review', threadId: 'thread_child', turnId: 'turn_ppt',
+      callId: 'call_review', toolName: 'ppt_create_review_bundle', output: {}, isError: false
+    })
+    expect(pptWorkflowCompletionToolGate({ ...base, stage: 'review' }, [result], 'turn_ppt'))
+      .toEqual({})
   })
 })

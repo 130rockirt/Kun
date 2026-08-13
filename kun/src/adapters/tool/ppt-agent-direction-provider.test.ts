@@ -87,6 +87,7 @@ function reviewBundle(workflowId: string) {
 type FakeRuntime = {
   runtime: DelegationRuntime
   calls: Array<Record<string, unknown>>
+  omitInitialDirection: () => void
   omitFreshRevision: () => void
   failWithFreshRevision: () => void
 }
@@ -95,6 +96,7 @@ function fakeRuntime(): FakeRuntime {
   const calls: Array<Record<string, unknown>> = []
   let record: Record<string, unknown> | undefined
   let omitRevision = false
+  let omitInitial = false
   let failRevision = false
   const runtime = {
     enabled: () => true,
@@ -104,18 +106,39 @@ function fakeRuntime(): FakeRuntime {
     }),
     runChild: async (input: Record<string, unknown>) => {
       calls.push(input)
-      const scope = input.pptWorkflowScope as { workflowId: string }
+      const scope = input.pptWorkflowScope as {
+        workflowId: string
+        stage: 'direction'
+        previewMode: 'image-first'
+        directionGate: Record<string, unknown>
+      }
       const bundle = directionBundle(scope.workflowId)
       record = {
-        id: childId, parentTurnId: input.parentTurnId, status: 'completed', summary: 'directions ready', directionBundle: bundle,
-        directionBundleParentTurnId: input.parentTurnId,
+        id: childId, parentThreadId: 'parent', parentTurnId: input.parentTurnId,
+        launcher: 'ppt_agent', profile: 'ppt', status: 'completed', summary: 'directions ready',
+        pptWorkflow: {
+          workflowId: scope.workflowId,
+          stage: scope.stage,
+          previewMode: scope.previewMode,
+          directionGate: scope.directionGate
+        },
+        ...(!omitInitial ? {
+          directionBundle: bundle,
+          directionBundleParentTurnId: input.parentTurnId
+        } : {}),
         usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 }
       }
       return record
     },
     resumeChild: async (input: Record<string, unknown>) => {
       calls.push(input)
-      const scope = input.pptWorkflowScope as { action: string; workflowId: string }
+      const scope = input.pptWorkflowScope as {
+        action: string
+        workflowId: string
+        stage: 'direction' | 'review'
+        previewMode: 'image-first'
+        directionGate?: Record<string, unknown>
+      }
       if (scope.action === 'select_direction') {
         record = {
           ...record,
@@ -133,12 +156,22 @@ function fakeRuntime(): FakeRuntime {
       } else {
         record = { ...record, id: childId, parentTurnId: input.parentTurnId, status: 'completed', summary: 'forgot bundle' }
       }
+      record = {
+        ...record,
+        pptWorkflow: {
+          workflowId: scope.workflowId,
+          stage: scope.stage,
+          previewMode: scope.previewMode,
+          ...(scope.directionGate ? { directionGate: scope.directionGate } : {})
+        }
+      }
       return record
     }
   } as unknown as DelegationRuntime
   return {
     runtime,
     calls,
+    omitInitialDirection: () => { omitInitial = true },
     omitFreshRevision: () => { omitRevision = true },
     failWithFreshRevision: () => { failRevision = true }
   }
@@ -244,6 +277,33 @@ describe('ppt_agent visual direction lifecycle', () => {
       output: { error: expect.stringContaining('PPT child completed without the required visual direction bundle') }
     })
     expect((result.output as { error: string }).error).toContain('image provider request timed out')
+  })
+
+  it('retries an initial direction failure without requiring review context', async () => {
+    const fake = fakeRuntime()
+    fake.omitInitialDirection()
+    let workflowId = ''
+    const ppt = tool(fake, sourceReader({ workflowId: () => workflowId }))
+    const started = await ppt.execute({}, baseContext)
+    workflowId = (started.output as { workflowId: string }).workflowId
+    expect(started).toMatchObject({
+      isError: true,
+      output: { phase: 'failed_recoverable', error: expect.stringContaining('visual direction bundle') }
+    })
+
+    const retried = await ppt.execute({
+      action: 'retry_failed', childId, workflowId
+    }, { ...baseContext, turnId: 'turn_retry' })
+
+    expect(retried).toMatchObject({
+      isError: false,
+      output: { phase: 'awaiting_direction', directionBundle: { workflowId } }
+    })
+    expect(fake.calls[1]?.pptWorkflowScope).toMatchObject({
+      action: 'retry_failed',
+      stage: 'direction',
+      directionGate: { required: true }
+    })
   })
 
   it('validates one selected card, strips it from child source, and resumes into slide review', async () => {

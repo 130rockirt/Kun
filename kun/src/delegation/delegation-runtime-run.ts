@@ -58,6 +58,7 @@ import {
 } from './delegation-runtime-base.js'
 import {
   addChildUsage,
+  childPptWorkflowSnapshot,
   childActivityFromEvent,
   childContractError,
   childLifecycleMetadata,
@@ -311,6 +312,9 @@ export class DelegationRuntimeRun extends DelegationRuntimeBase {
       returnFormat,
       ...(input.detach ? { detached: true } : {}),
       ...(input.launcher ? { launcher: input.launcher } : {}),
+      ...(input.pptWorkflowScope
+        ? { pptWorkflow: childPptWorkflowSnapshot(input.pptWorkflowScope) }
+        : {}),
       status: 'queued',
       resumable: false,
       childSeq: this.nextChildSeq(id),

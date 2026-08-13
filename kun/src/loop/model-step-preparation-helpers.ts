@@ -66,13 +66,31 @@ export function pptSourceReadToolGate(
 ): { requiredToolName?: 'read'; instruction?: string } {
   if (
     !scope?.sourceReadRequired ||
-    scope.action !== 'start' ||
+    (scope.action !== 'start' && scope.action !== 'retry_failed') ||
     hasToolResult(items, turnId, 'read')
   ) return {}
   return {
     requiredToolName: 'read',
     instruction: 'This Work PPT request has a declared Markdown source. Call `read` on that source file first. Do not plan slides, generate images, or answer in prose before reading it.'
   }
+}
+
+export function pptWorkflowCompletionToolGate(
+  scope: PptWorkflowScope | undefined,
+  items: readonly TurnItem[],
+  turnId: string
+): { expectedToolName?: string } {
+  if (!scope?.stage) return {}
+  const expectedToolName = scope.stage === 'direction'
+    ? 'ppt_create_direction_bundle'
+    : scope.stage === 'build'
+      ? 'ppt_export'
+      : scope.previewMode === 'image-first'
+        ? 'ppt_create_review_bundle'
+        : 'ppt_generate_previews'
+  return hasSuccessfulToolResult(items, turnId, expectedToolName)
+    ? {}
+    : { expectedToolName }
 }
 
 export function requiredWorkflowToolGate(

@@ -44,8 +44,7 @@ import {
 import { readWorkbenchComposerFileContextEntries } from './workbench-composer-file-context'
 import { mirrorWorkbenchClawCommand } from './workbench-claw-message-mirror'
 import { restoreWorkbenchWritePrompt } from './workbench-write-prompt-state'
-import { activeWriteResourceReference } from './workbench-write-resource-context'
-import { workbenchWriteSourceReference } from './workbench-write-source-reference'
+import { workbenchWriteSourceContext } from './workbench-write-source-reference'
 export type { WorkbenchComposerSubmitController } from './workbench-composer-submit-types'
 import {
   listClawComposerModelOptions,
@@ -162,10 +161,12 @@ export function useWorkbenchComposerSubmitController({
       workspaceRoot: writeWorkspaceRoot
     })
     const writeActiveFilePath = writeState.activeFilePath
-    const activeWriteFileReference = workbenchWriteSourceReference(writeWorkspaceRoot, writeActiveFilePath)
     const writeActiveDocument = writeActiveFilePath
       ? writeState.documentsByPath[writeDocumentKey(writeActiveFilePath)]
       : undefined
+    const writeSource = workbenchWriteSourceContext(
+      writeWorkspaceRoot, writeActiveFilePath, writeState.activeFileKind,
+      writeActiveDocument?.officePreview?.sourceFormat)
     const writeDocumentEpoch = writeState.documentEpoch
     const writeContentRevision = writeState.contentRevision
     const quotedSelections = writeState.quotedSelections.map((selection) => ({
@@ -322,10 +323,7 @@ export function useWorkbenchComposerSubmitController({
         )
         const referenceContexts = await createWriteTurnReferenceAttachments({
           workspaceRoot: writeWorkspaceRoot,
-          activeResource: activeWriteResourceReference(
-            writeWorkspaceRoot, writeActiveFilePath, writeState.activeFileKind,
-            writeActiveDocument?.officePreview?.sourceFormat
-          ),
+          activeResource: writeSource.activeResource,
           selections: quotedSelections,
           retrieval,
           officeDocument,
@@ -366,7 +364,7 @@ export function useWorkbenchComposerSubmitController({
           ...(attachmentIds.length ? { attachmentIds } : {}),
           ...(publicAttachments.length ? { attachments: publicAttachments } : {}),
           ...(composerContexts.length ? { composerContexts } : {}),
-          ...(activeWriteFileReference ? { fileReferences: [activeWriteFileReference] } : {}),
+          ...(writeSource.fileReference ? { fileReferences: [writeSource.fileReference] } : {}),
           ...(activeWhiteboard ? { guiDesignCanvas: true } : {}),
           ...(agentPersona ? { persona: agentPersona } : {}),
           writeContext: {

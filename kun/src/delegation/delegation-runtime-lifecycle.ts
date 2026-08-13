@@ -53,6 +53,7 @@ import { childResultOwnerIds } from './child-result-materializer.js'
 import {
   addChildUsage,
   abortChildForUser,
+  childPptWorkflowSnapshot,
   childActivityFromEvent,
   childContractError,
   childLifecycleMetadata,
@@ -191,7 +192,8 @@ export class DelegationRuntime extends DelegationRuntimeRun {
         previous.reviewBundle,
         previous.directionBundle,
         previous.id,
-        input.expectedWorkflowId
+        input.expectedWorkflowId,
+        previous.pptWorkflow?.workflowId
       )
       if (workflowIdentityError) throw new Error(workflowIdentityError)
     }
@@ -220,6 +222,9 @@ export class DelegationRuntime extends DelegationRuntimeRun {
       status: 'queued',
       terminationReason: undefined,
       resumable: false,
+      ...(input.pptWorkflowScope
+        ? { pptWorkflow: childPptWorkflowSnapshot(input.pptWorkflowScope) }
+        : {}),
       summary: undefined,
       evidence: undefined,
       error: undefined,

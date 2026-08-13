@@ -68,6 +68,7 @@ import {
   buildExtensionProfileInstruction,
   buildToolCatalogDriftMessage,
   hasSuccessfulToolResult,
+  pptWorkflowCompletionToolGate,
   kunContextBlock,
   modelHistoryRoutesByTurnId,
   prefixVolatilityStageDetails,
@@ -406,11 +407,18 @@ export abstract class ModelStepPreparationService {
         : undefined
     )
     const hardRequiredToolName = workflowGate.requiredToolName
+    const pptCompletionToolName = pptWorkflowCompletionToolGate(
+      toolContext.pptWorkflowScope,
+      historyItems,
+      turnId
+    ).expectedToolName
     // Plan creation is deliberately a soft completion condition. A Plan turn
     // may investigate, ask for user input, or stop on a genuine clarification
     // before its prose is materialized through create_plan.
     const softRequiredToolName =
-      turn.orchestration === 'graph' &&
+      pptCompletionToolName && toolSpecs.some((tool) => tool.name === pptCompletionToolName)
+        ? pptCompletionToolName
+        : turn.orchestration === 'graph' &&
       !graphCreateSatisfied &&
       toolSpecs.some((tool) => tool.name === GRAPH_DEFINE_PLAN_TOOL_NAME)
         ? GRAPH_DEFINE_PLAN_TOOL_NAME

@@ -113,6 +113,8 @@ export type KunActionApprovalGrant = {
  */
 export type PptWorkflowScope = Readonly<{
   action: 'start' | 'select_direction' | 'revise_directions' | 'revise_previews' | 'retry_failed' | 'approve_and_build'
+  /** Structured output the active child attempt must produce before stopping. */
+  stage?: 'direction' | 'review' | 'build'
   workflowId: string
   projectDir: string
   parentThreadId: string
@@ -121,7 +123,7 @@ export type PptWorkflowScope = Readonly<{
   sourceReadRequired?: boolean
   directionGate?: Readonly<{
     required: boolean
-    reason: 'existing-presentation' | 'explicit-skip' | 'design-reference' | 'complete-visual-system' | 'underspecified-new-deck'
+    reason: 'existing-presentation' | 'explicit-skip' | 'work-document' | 'design-reference' | 'complete-visual-system' | 'underspecified-new-deck'
     basis: string
     sourceHash: string
   }>

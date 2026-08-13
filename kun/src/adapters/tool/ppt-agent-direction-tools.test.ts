@@ -222,6 +222,25 @@ describe('PPT direction tools', () => {
     expect(manifest).not.toHaveProperty('governance')
   })
 
+  it('lets retry_failed establish the direction bundle when the first attempt produced none', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-ppt-directions-retry-'))
+    roots.push(root)
+    await prepare(root)
+    const create = tools().find((candidate) => candidate.name === PPT_CREATE_DIRECTION_BUNDLE_TOOL_NAME)!
+    const result = await create.execute({
+      workflowId,
+      parentThreadId: 'parent',
+      projectDir,
+      deckTitle: 'Architecture decision',
+      pageCount: 3,
+      slides,
+      directions: [directionInput(1), directionInput(2, true), directionInput(3)]
+    }, context(root, { action: 'retry_failed', stage: 'direction' }))
+
+    expect(result.isError).not.toBe(true)
+    expect(result).toMatchObject({ output: { directionBundle: { workflowId } } })
+  })
+
   it('uses the recommendation only for selection, while an unselected revision targets all directions', async () => {
     const root = await mkdtemp(join(tmpdir(), 'kun-ppt-direction-fallback-'))
     roots.push(root)

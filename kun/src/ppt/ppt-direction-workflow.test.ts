@@ -82,6 +82,26 @@ describe('PPT visual direction gate', () => {
   })
 
   it.each([
+    '帮我给这个文档写个PPT',
+    '把当前文档做成演示文稿',
+    'Create a presentation from this document'
+  ])('lets Work convert its active Markdown with an automatic visual system: %s', (prompt) => {
+    const input = {
+      prompt,
+      agentSurface: 'write' as const,
+      fileReferences: [{ name: 'brief.md', relativePath: 'brief.md' }]
+    }
+    expect(classifyPptDirectionGate(input)).toMatchObject({
+      required: false,
+      reason: 'work-document'
+    })
+    expect(classifyPptDirectionGate({ ...input, agentSurface: 'code' })).toMatchObject({
+      required: true,
+      reason: 'underspecified-new-deck'
+    })
+  })
+
+  it.each([
     'Create a process optimization project update presentation.',
     'Create a software update presentation.',
     'Recommend fonts, palette, layout, and imagery for a launch deck.',

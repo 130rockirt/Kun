@@ -2,187 +2,22 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { InMemoryApprovalGate } from '../in-memory-approval-gate.js'
-import { InMemoryEventBus } from '../in-memory-event-bus.js'
-import { InMemorySessionStore } from '../in-memory-session-store.js'
-import { InMemoryThreadStore } from '../in-memory-thread-store.js'
-import { createImmutablePrefix } from '../../cache/immutable-prefix.js'
-import { ContextCompactor } from '../../loop/context-compactor.js'
-import { InflightTracker } from '../../loop/inflight-tracker.js'
-import { SteeringQueue } from '../../loop/steering-queue.js'
-import { SequentialIdGenerator } from '../../ports/id-generator.js'
-import { RuntimeEventRecorder } from '../../services/runtime-event-recorder.js'
-import { TurnService } from '../../services/turn-service.js'
-import {
-  DelegationRuntime,
-  FileDelegationStore,
-  type ChildRunExecutor
-} from '../../delegation/delegation-runtime.js'
-import { SubagentsCapabilityConfig } from '../../contracts/capabilities.js'
-import { TurnSchema, type Turn } from '../../contracts/turns.js'
 import {
   PPT_AGENT_ALLOWED_TOOLS,
   PPT_AGENT_PROVIDER_ID,
   PPT_AGENT_TOOL_NAME,
-  type PptAgentToolConfig,
-  type PptAgentTurnReader,
   buildPptAgentToolProvider
 } from './ppt-agent-tool-provider.js'
 import { CapabilityRegistry } from './capability-registry.js'
 import { LocalToolHost } from './local-tool-host.js'
-function makeRuntime(dir: string, executor: ChildRunExecutor): DelegationRuntime {
-  const nowIso = () => '2026-07-08T00:00:00.000Z'
-  const threadStore = new InMemoryThreadStore()
-  const sessionStore = new InMemorySessionStore()
-  const eventBus = new InMemoryEventBus()
-  const events = new RuntimeEventRecorder({
-    eventBus,
-    sessionStore,
-    allocateSeq: (threadId) => eventBus.allocateSeq(threadId),
-    nowIso
-  })
-  const turns = new TurnService({
-    threadStore,
-    sessionStore,
-    events,
-    inflight: new InflightTracker(),
-    steering: new SteeringQueue(),
-    compactor: new ContextCompactor(),
-    ids: new SequentialIdGenerator(),
-    nowIso
-  })
-  return new DelegationRuntime({
-    config: SubagentsCapabilityConfig.parse({
-      enabled: true,
-      maxParallel: 1,
-      profiles: { general: { mode: 'subagent', toolPolicy: 'inherit' } }
-    }),
-    store: new FileDelegationStore(dir),
-    events,
-    threadStore,
-    turns,
-    nowIso,
-    executor
-  })
-}
-const baseContext = {
-  threadId: 'thr_main',
-  turnId: 'turn_main',
-  workspace: '/workspace',
-  agentSurface: 'code' as const,
-  clientSurface: 'gui' as const,
-  approvalPolicy: 'auto' as const,
-  approvalReviewer: 'user' as const,
-  awaitApproval: async () => 'allow' as const,
-  model: {
-    id: 'main-model',
-    inputModalities: ['text'] as ('text' | 'image')[],
-    outputModalities: ['text'] as ('text' | 'image')[],
-    supportsToolCalling: true,
-    messageParts: ['text'] as ('text' | 'image_url' | 'input_image')[],
-    contextWindowTokens: 128_000
-  },
-  actingModelRoute: { model: 'main-model', providerId: 'deepseek' },
-  reasoningEffort: 'high',
-  serviceTier: 'priority' as const,
-  abortSignal: new AbortController().signal
-}
-type SourceReaderOptions = {
-  prompt?: (turnId: string) => string
-  review?: (turnId: string) => Array<{
-    workflowId: string
-    childId: string
-    slides?: Array<{ slideId: string; revision: number; annotations?: string[] }>
-  }>
-  attachmentIds?: string[]
-  fileReferences?: Array<{ path: string; relativePath: string; name: string; kind?: 'file' | 'directory' }>
-  surface?: 'code' | 'write' | 'design'
-  steeringPrompt?: string
-  missing?: boolean
-}
-function makeSourceReader(options: SourceReaderOptions = {}): PptAgentTurnReader {
-  return {
-    getTurn: async (threadId, turnId): Promise<Turn | null> => {
-      if (options.missing) return null
-      const prompt = options.prompt?.(turnId) ?? `exact user request for ${turnId}; skip direction options and directly generate`
-      const composerContexts = (options.review?.(turnId) ?? []).map((review, index) => ({
-        schemaVersion: 1 as const,
-        id: `preview-ppt-review-${String(index + 1).padStart(24, '0')}`,
-        title: 'PPT review',
-        summary: 'Structured PPT review selection',
-        reference: {
-          kind: 'ppt-review',
-          schemaVersion: 1,
-          workflowId: review.workflowId,
-          childId: review.childId,
-          slides: review.slides ?? [{ slideId: 'slide-1', revision: 1 }]
-        },
-        revision: 1,
-        generation: 1,
-        attachmentId: `dev-preview-context:${String(index + 1).repeat(64).slice(0, 64)}`,
-        provenance: {
-          source: 'dev-preview' as const,
-          workspaceId: 'a'.repeat(64)
-        }
-      }))
-      const userItem = {
-        id: `item_${turnId}_user`, turnId, threadId, kind: 'user_message', role: 'user',
-        status: 'completed', text: prompt, displayText: prompt,
-        attachmentIds: options.attachmentIds ?? [], composerContexts,
-        fileReferences: options.fileReferences ?? [], createdAt: '2026-07-08T00:00:00.000Z'
-      }
-      return TurnSchema.parse({
-        id: turnId,
-        threadId,
-        status: 'running',
-        prompt,
-        attachmentIds: options.attachmentIds ?? [],
-        composerContexts,
-        agentSurface: options.surface ?? 'code',
-        items: options.steeringPrompt
-          ? [userItem, { ...userItem, id: `${userItem.id}_steering`,
-              text: options.steeringPrompt, displayText: options.steeringPrompt }]
-          : [userItem],
-        createdAt: '2026-07-08T00:00:00.000Z'
-      })
-    }
-  }
-}
-
-function makeTool(
-  runtime: DelegationRuntime,
-  config: () => PptAgentToolConfig | undefined,
-  turns: PptAgentTurnReader = makeSourceReader()
-) {
-  return buildPptAgentToolProvider(runtime, config, turns)[0].tools[0]
-}
-
-function reviewBundle(childId: string, workflowId = 'ppt_workflow', previewMode = 'image-first') {
-  return {
-    workflowId,
-    childId,
-    manifestPath: `.kun/ppt/${workflowId}/.kun-ppt-review/manifest.json`,
-    previewMode,
-    deckTitle: 'Launch deck',
-    styleFingerprint: 'style-1',
-    designGovernance: { policyVersion: '1.0.0', policyHash: 'b'.repeat(64), category: 'business-plan', categoryGuide: 'slides_categories/business_plan.md', planFingerprint: 'a'.repeat(64), planRevision: 1 },
-    phase: 'awaiting_review',
-    slides: [{
-      slideId: 'slide-1',
-      index: 0,
-      title: 'Opening',
-      previewPath: '.kun/images/opening.png',
-      revision: 1,
-      status: 'ready'
-    }]
-  }
-}
-
-function governedWorkflowId(input: { controlPrompt?: string }): string {
-  const workflowId = /workflowId=([^;\s]+)/.exec(input.controlPrompt ?? '')?.[1]
-  if (!workflowId) throw new Error('missing governed workflow id in child control prompt')
-  return workflowId
-}
+import {
+  governedPptWorkflowId as governedWorkflowId,
+  makePptSourceReader as makeSourceReader,
+  makePptTestRuntime as makeRuntime,
+  makePptTool as makeTool,
+  pptReviewBundle as reviewBundle,
+  pptTestContext as baseContext
+} from './ppt-agent-tool-test-support.js'
 
 describe('ppt_agent tool provider', () => {
   let dir: string
@@ -306,7 +141,7 @@ describe('ppt_agent tool provider', () => {
       received = { ...input, signal: undefined }
       return originalRunChild(input)
     }) as typeof runtime.runChild
-    const exactPrompt = '帮我给 Kun 写一个介绍的 PPT，直接生成，不需要方向选择'
+    const exactPrompt = '帮我给这个文档写个 PPT'
     const fileReferences = [{
       path: '/workspace/brief.md',
       relativePath: 'brief.md',
@@ -377,6 +212,12 @@ describe('ppt_agent tool provider', () => {
       attachmentIds: ['att_111111111111111111111111'],
       fileReferences,
       agentSurface: 'write'
+    })
+    expect(received?.pptWorkflowScope).toMatchObject({
+      action: 'start',
+      stage: 'review',
+      sourceReadRequired: true,
+      directionGate: { required: false, reason: 'work-document' }
     })
     expect(String(received?.controlPrompt)).toContain('IMAGE-FIRST FALLBACK')
     expect(String(received?.controlPrompt)).toContain('ppt_generate_previews')
@@ -479,14 +320,15 @@ describe('ppt_agent tool provider', () => {
     const calls: Array<Record<string, unknown>> = []
     const runtime = makeRuntime(dir, async (input) => {
       calls.push({ ...input, signal: undefined })
-      if (!input.resumeChild) return { summary: 'review ready', reviewBundle: reviewBundle(input.childId) }
+      const workflowId = governedWorkflowId(input)
+      if (!input.resumeChild) return { summary: 'review ready', reviewBundle: reviewBundle(input.childId, workflowId) }
       return {
         summary: 'deck exported',
         deckArtifact: {
           output: 'presentations/deck.pptx',
           absolutePath: '/workspace/presentations/deck.pptx',
-          workflowId: 'ppt_workflow',
-          projectDir: '.kun/ppt/ppt_workflow',
+          workflowId,
+          projectDir: `.kun/ppt/${workflowId}`,
           planFingerprint: 'a'.repeat(64),
           slides: 1,
           editableSlides: 1,
@@ -495,11 +337,12 @@ describe('ppt_agent tool provider', () => {
       }
     })
     let activeChildId = ''
+    let activeWorkflowId = ''
     const sourceReader = makeSourceReader({
       prompt: (turnId) => turnId === 'turn-approved' ? '同意，生成 PPTX' : '创建一个 deck，直接生成，不需要方向选择',
       review: (turnId) => turnId === 'turn_main' || !activeChildId
         ? []
-        : [{ workflowId: 'ppt_workflow', childId: activeChildId }]
+        : [{ workflowId: activeWorkflowId, childId: activeChildId }]
     })
     const tool = makeTool(runtime, () => ({
       enabled: true,
@@ -508,6 +351,7 @@ describe('ppt_agent tool provider', () => {
     }), sourceReader)
     const started = await tool.execute({ title: 'Review deck' }, baseContext)
     const childId = (started.output as { childId: string }).childId
+    activeWorkflowId = (started.output as { workflowId: string }).workflowId
     activeChildId = childId
 
     await expect(tool.execute({
@@ -523,7 +367,7 @@ describe('ppt_agent tool provider', () => {
     const approved = await tool.execute({
       action: 'approve_and_build',
       childId,
-      workflowId: 'ppt_workflow',
+      workflowId: activeWorkflowId,
       title: 'Build deck'
     }, { ...baseContext, turnId: 'turn-approved' })
     expect(approved).toMatchObject({
@@ -550,9 +394,13 @@ describe('ppt_agent tool provider', () => {
     const runtime = makeRuntime(dir, async (input) => {
       call += 1
       if (call === 2) return { summary: 'forgot the bundle' }
-      return { summary: 'review ready', reviewBundle: reviewBundle(input.childId) }
+      return {
+        summary: 'review ready',
+        reviewBundle: reviewBundle(input.childId, governedWorkflowId(input))
+      }
     })
     let activeChildId = ''
+    let activeWorkflowId = ''
     const tool = makeTool(runtime, () => ({
       enabled: true,
       imageFirst: true,
@@ -560,15 +408,16 @@ describe('ppt_agent tool provider', () => {
     }), makeSourceReader({
       review: (turnId) => turnId === 'turn_main' || !activeChildId
         ? []
-        : [{ workflowId: 'ppt_workflow', childId: activeChildId }]
+        : [{ workflowId: activeWorkflowId, childId: activeChildId }]
     }))
     const started = await tool.execute({ title: 'Review deck' }, baseContext)
     const childId = (started.output as { childId: string }).childId
+    activeWorkflowId = (started.output as { workflowId: string }).workflowId
     activeChildId = childId
     const revision = await tool.execute({
       action: 'revise_previews',
       childId,
-      workflowId: 'ppt_workflow',
+      workflowId: activeWorkflowId,
       title: 'Revise deck'
     }, { ...baseContext, turnId: 'turn-revise' })
     expect(revision).toMatchObject({
@@ -580,11 +429,45 @@ describe('ppt_agent tool provider', () => {
     await expect(tool.execute({
       action: 'retry_failed',
       childId,
-      workflowId: 'ppt_workflow',
+      workflowId: activeWorkflowId,
       title: 'Retry deck'
     }, { ...baseContext, turnId: 'turn-retry' })).resolves.toMatchObject({
       isError: false,
-      output: { phase: 'awaiting_review', reviewBundle: { workflowId: 'ppt_workflow' } }
+      output: { phase: 'awaiting_review', reviewBundle: { workflowId: activeWorkflowId } }
+    })
+  })
+
+  it('retries an initial review failure before any review context exists', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'ppt-agent-tool-'))
+    let calls = 0
+    const runtime = makeRuntime(dir, async (input) => {
+      calls += 1
+      return calls === 1
+        ? { summary: 'stopped before review bundle' }
+        : { summary: 'review ready', reviewBundle: reviewBundle(input.childId, governedWorkflowId(input)) }
+    })
+    const tool = makeTool(runtime, () => ({
+      enabled: true,
+      imageFirst: true,
+      imageGenAvailable: true
+    }), makeSourceReader({
+      prompt: (turnId) => turnId === 'turn_main'
+        ? '创建一个发布会介绍 PPT，直接生成，不需要方向选择'
+        : '重试刚才失败的 PPT 子流程'
+    }))
+    const started = await tool.execute({ title: 'Review deck' }, baseContext)
+    const childId = (started.output as { childId: string }).childId
+    const workflowId = (started.output as { workflowId: string }).workflowId
+    expect(started).toMatchObject({
+      isError: true,
+      output: { phase: 'failed_recoverable', error: expect.stringContaining('visual review bundle') }
+    })
+
+    await expect(tool.execute({
+      action: 'retry_failed', childId, workflowId, title: 'Retry deck'
+    }, { ...baseContext, turnId: 'turn-retry-initial' })).resolves.toMatchObject({
+      isError: false,
+      output: { phase: 'awaiting_review', reviewBundle: { workflowId } }
     })
   })
 

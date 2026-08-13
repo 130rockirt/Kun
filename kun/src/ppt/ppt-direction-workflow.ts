@@ -10,6 +10,7 @@ export const PptWorkspaceRelativePath = z.string().min(1).refine(isPortableWorks
 export const PptDirectionGateReason = z.enum([
   'existing-presentation',
   'explicit-skip',
+  'work-document',
   'design-reference',
   'complete-visual-system',
   'underspecified-new-deck'
@@ -203,6 +204,7 @@ export function classifyPptDirectionGate(input: {
   prompt: string
   fileReferences?: ReadonlyArray<{ name: string; relativePath: string }>
   attachmentIds?: readonly string[]
+  agentSurface?: 'code' | 'write' | 'design'
 }): PptDirectionGateDecision {
   const prompt = input.prompt.trim()
   const sourceHash = fingerprint({
@@ -215,6 +217,18 @@ export function classifyPptDirectionGate(input: {
   })
   const files = (input.fileReferences ?? []).map((file) => `${file.name} ${file.relativePath}`).join(' ')
   const combined = `${prompt}\n${files}`
+  const workMarkdownSource = input.agentSurface === 'write' && /\.(?:md|markdown)\b/i.test(files)
+  const workDocumentDeckRequest = workMarkdownSource && (
+    /\b(?:presentation|deck|slides?)\b/i.test(prompt) &&
+      /\b(?:this|current|active|the)\s+(?:document|file|markdown|draft)\b/i.test(prompt) ||
+    /(?:这个|该|当前|这份|本)(?:文档|文件|Markdown|稿件).{0,24}(?:PPT|演示文稿|幻灯片)|(?:把|将|给).{0,12}(?:这个|该|当前|这份|本)?(?:文档|文件|Markdown|稿件).{0,24}(?:做成|制成|写成|生成|制作|写个|做个)?.{0,8}(?:PPT|演示文稿|幻灯片)/i.test(prompt)
+  )
+  if (workDocumentDeckRequest) return {
+    required: false,
+    reason: 'work-document',
+    basis: 'A Work request converts the active Markdown document and delegates the visual system automatically.',
+    sourceHash
+  }
   const explicitlyCreatesDeck =
     /^\s*(?:please\s+)?(?:create|make|build|prepare|draft|design)\b.{0,32}\b(?:deck|presentation|slides?)\b/i.test(prompt) ||
     /^\s*(?:请|帮我|麻烦)?\s*(?:新建|创建|制作|做|生成|设计).{0,24}(?:PPT|演示文稿|幻灯片)/i.test(prompt)

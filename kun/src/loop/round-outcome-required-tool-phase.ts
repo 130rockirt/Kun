@@ -32,6 +32,13 @@ export abstract class RoundOutcomeRequiredToolPhase extends RoundOutcomeState {
     input: RoundOutcomeInput,
     assistantText: string
   ): Promise<ModelRoundOutcome> {
+    if (isPptWorkflowCompletionTool(input.softRequiredToolName)) {
+      const attempts = this.pptNoToolRecoveryByTurn.get(input.turnId) ?? 0
+      if (attempts === 0) {
+        this.pptNoToolRecoveryByTurn.set(input.turnId, 1)
+        return 'continue'
+      }
+    }
     if (input.softRequiredToolName === GRAPH_DEFINE_PLAN_TOOL_NAME) {
       if (assistantText.trim() && isPlanClarifyingQuestion(assistantText)) return 'stop'
       const attempts = this.graphPlanNoToolRecoveryByTurn.get(input.turnId) ?? 0
@@ -108,7 +115,9 @@ export abstract class RoundOutcomeRequiredToolPhase extends RoundOutcomeState {
       return 'continue'
     }
 
-    const message = `Model did not call the expected \`${input.softRequiredToolName}\` tool for this Plan-mode turn.`
+    const message = isPptWorkflowCompletionTool(input.softRequiredToolName)
+      ? `PPT child did not call the expected \`${input.softRequiredToolName}\` completion tool.`
+      : `Model did not call the expected \`${input.softRequiredToolName}\` tool for this Plan-mode turn.`
     await this.deps.events.record({
       kind: 'error',
       threadId: input.threadId,
@@ -321,6 +330,13 @@ export abstract class RoundOutcomeRequiredToolPhase extends RoundOutcomeState {
       ...(failureSummary ? { failureSummary } : {})
     })
   }
+}
+
+function isPptWorkflowCompletionTool(toolName: string | undefined): boolean {
+  return toolName === 'ppt_create_direction_bundle' ||
+    toolName === 'ppt_create_review_bundle' ||
+    toolName === 'ppt_generate_previews' ||
+    toolName === 'ppt_export'
 }
 
 export function graphCreateRunResultRetryable(output: unknown): boolean {

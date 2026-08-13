@@ -46,6 +46,7 @@ import {
   type PptProviderReviewContext,
   type PptProviderSourceEnvelope
 } from './ppt-agent-provider-support.js'
+import { resolvePptRetryState } from './ppt-agent-retry-state.js'
 
 export const PPT_AGENT_TOOL_NAME = 'ppt_agent' as const
 export const PPT_AGENT_PROVIDER_ID = 'ppt-agent' as const
@@ -191,14 +192,33 @@ export function buildPptAgentToolProvider(
             if (action !== 'start' && (!childId || !workflowId)) {
               return { output: { error: 'childId and workflowId are required for PPT review follow-ups' }, isError: true }
             }
-            const directionAction = action === 'select_direction' || action === 'revise_directions'
+            const retryState = action === 'retry_failed'
+              ? await resolvePptRetryState({
+                  runtime,
+                  parentThreadId: context.threadId,
+                  childId,
+                  workflowId
+                })
+              : undefined
+            if (retryState && !retryState.ok) {
+              return { output: { phase: 'source_unavailable', error: retryState.error }, isError: true }
+            }
+            const retry = retryState?.ok ? retryState.value : undefined
+            const retryingDirection = retry?.stage === 'direction'
+            const retryingInitialStage = Boolean(retry && (
+              retry.stage === 'direction' ? !retry.hasDirectionBundle : !retry.hasReviewBundle
+            ))
+            const directionContextAction = action === 'select_direction' || action === 'revise_directions'
             const directionGate = action === 'start'
               ? classifyPptDirectionGate({
                   prompt: source.value.prompt,
                   fileReferences: source.value.fileReferences,
-                  attachmentIds: source.value.attachmentIds
+                  attachmentIds: source.value.attachmentIds,
+                  agentSurface: source.value.agentSurface
                 })
-              : undefined
+              : retryingDirection
+                ? retry?.directionGate
+                : undefined
             if (directionGate?.required && resolvedCfg.imageGenAvailable !== true) {
               return {
                 output: {
@@ -215,7 +235,9 @@ export function buildPptAgentToolProvider(
             if (!scopedDirection.ok) {
               return { output: { phase: 'source_unavailable', error: scopedDirection.error }, isError: true }
             }
-            const scopedReview = scopePptReviewContext(source.value.reviewContexts, action, childId, workflowId)
+            const scopedReview = retryingDirection || (retry?.stage === 'review' && !retry.hasReviewBundle)
+              ? { ok: true as const, value: undefined }
+              : scopePptReviewContext(source.value.reviewContexts, action, childId, workflowId)
             if (!scopedReview.ok) {
               return { output: { phase: 'source_unavailable', error: scopedReview.error }, isError: true }
             }
@@ -229,7 +251,7 @@ export function buildPptAgentToolProvider(
               candidateFingerprint: string
             }> | undefined
             let directionSlidesFingerprint: string | undefined
-            if (directionAction) {
+            if (directionContextAction || (retryingDirection && retry?.hasDirectionBundle)) {
               const selectedDirectionCount = scopedDirection.value?.directions.length ?? 0
               const acceptedDirection = selectedDirectionCount === 0
                 ? explicitlyAcceptsRecommendedDirection(source.value.prompt)
@@ -258,7 +280,7 @@ export function buildPptAgentToolProvider(
               persistedPreviewMode = identity.previewMode
               directionAuthority = identity.authority
               directionSlidesFingerprint = identity.bundle.slidesFingerprint
-            } else if (action !== 'start') {
+            } else if (action !== 'start' && !retryingDirection && !(retry?.stage === 'review' && !retry.hasReviewBundle)) {
               if (!scopedReview.value) {
                 return { output: { phase: 'source_unavailable', error: 'PPT source unavailable: review context is required' }, isError: true }
               }
@@ -282,7 +304,7 @@ export function buildPptAgentToolProvider(
               persistedPreviewMode = identity.previewMode
               persistedPlanFingerprint = identity.planFingerprint
             }
-            const previewMode = persistedPreviewMode ?? initialPptPreviewMode(resolvedCfg)
+            const previewMode = persistedPreviewMode ?? retry?.previewMode ?? initialPptPreviewMode(resolvedCfg)
             if (
               action !== 'start' &&
               action !== 'approve_and_build' &&
@@ -317,24 +339,34 @@ export function buildPptAgentToolProvider(
               context.threadId,
               projectDir,
               scopedReview.value !== undefined,
-              directionGate?.required === true
+              directionGate?.required === true || retryingDirection,
+              retry?.stage,
+              retry?.stage === 'direction' ? retry.hasDirectionBundle : retry?.hasReviewBundle
             )
             const executionBlockedTools = blocksPptExport(action)
               ? ['ppt_export']
               : undefined
+            const workflowStage = retry?.stage ?? (
+              action === 'approve_and_build'
+                ? 'build'
+                : directionGate?.required === true || action === 'revise_directions'
+                  ? 'direction'
+                  : 'review'
+            )
             const pptWorkflowScope = {
               action,
+              stage: workflowStage,
               workflowId,
               projectDir,
               parentThreadId: context.threadId,
               previewMode,
-              ...(action === 'start' &&
+              ...((action === 'start' || retryingInitialStage) &&
               source.value.agentSurface === 'write' &&
               source.value.fileReferences.some((file) => /\.(?:md|markdown)$/i.test(file.name))
                 ? { sourceReadRequired: true }
                 : {}),
               ...(directionGate ? { directionGate } : {}),
-              ...(directionAction
+              ...(directionContextAction || (retryingDirection && retry?.hasDirectionBundle)
                 ? {
                     directionContext: {
                       childId,
@@ -472,7 +504,7 @@ export function buildPptAgentToolProvider(
                   metadata
                 })
               })
-            const directionExpected = (action === 'start' && directionGate?.required === true) || action === 'revise_directions'
+            const directionExpected = workflowStage === 'direction'
             const freshReviewBundle = record.reviewBundleParentTurnId === context.turnId
               ? record.reviewBundle
               : undefined
