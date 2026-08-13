@@ -309,6 +309,8 @@ export async function readItemPageFromJsonl(
   const latestWindow = createItemPageWindow()
   const beforeWindow = createItemPageWindow()
   let beforeFound = options.before === undefined
+  const anchor = { item: null as TurnItem | null }
+  const anchorTurnId = options.before ? undefined : options.anchorTurnId?.trim()
   let remainder = ''
 
   const acceptLine = (line: string): void => {
@@ -330,6 +332,14 @@ export async function readItemPageFromJsonl(
       seenIds.add(item.id)
       if (isPublicTurnItem(item)) {
         appendPageWindowItem(latestWindow, safeItem, maxItems, maxBytes)
+        if (
+          anchorTurnId &&
+          !anchor.item &&
+          item.kind === 'user_message' &&
+          item.turnId === anchorTurnId
+        ) {
+          anchor.item = safeItem
+        }
       }
       if (!beforeFound && item.id === options.before) {
         beforeFound = true
@@ -345,6 +355,9 @@ export async function readItemPageFromJsonl(
     if (isPublicTurnItem(item)) {
       updatePageWindowItem(latestWindow, safeItem, maxItems, maxBytes)
       updatePageWindowItem(beforeWindow, safeItem, maxItems, maxBytes)
+      if (anchor.item && item.id === anchor.item.id) {
+        anchor.item = safeItem
+      }
     }
   }
 
@@ -375,15 +388,33 @@ export async function readItemPageFromJsonl(
   }
 
   const selectedWindow = options.before && beforeFound ? beforeWindow : latestWindow
+  const windowItems = selectedWindow.ids.flatMap((id) => {
+    const item = selectedWindow.items.get(id)
+    return item ? [item] : []
+  })
+  // The anchor is only materialized when the running turn's opening user
+  // message was trimmed out of the rolling window; the helper re-locates it
+  // by turn and re-applies the item/byte budget.
+  const anchorCandidateId = anchor.item?.id
+  const anchoredPage = Boolean(
+    !options.before &&
+    anchorCandidateId !== undefined &&
+    !selectedWindow.items.has(anchorCandidateId)
+  )
   const page = buildPublicItemHistoryPage(
-    selectedWindow.ids.flatMap((id) => {
-      const item = selectedWindow.items.get(id)
-      return item ? [item] : []
-    }),
-    { maxItems, maxBytes }
+    anchoredPage ? [anchor.item!, ...windowItems] : windowItems,
+    {
+      ...(anchoredPage ? { anchorTurnId: anchorTurnId! } : {}),
+      maxItems,
+      maxBytes
+    }
   )
   if (selectedWindow.droppedBefore && page.items[0]) {
-    return { ...page, nextCursor: page.items[0].id, hasMore: true }
+    // On an anchored page the cursor stays at the retained continuous window
+    // so the next older page covers the anchor and the gap between it and
+    // the window.
+    const cursor = anchoredPage && page.items.length > 1 ? page.items[1] : page.items[0]
+    return { ...page, nextCursor: cursor.id, hasMore: true }
   }
   return page
 }

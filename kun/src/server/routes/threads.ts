@@ -236,25 +236,26 @@ export async function getThreadTimeline(
   // Freeze the replay floor before reading the item projection. Any event
   // appended afterwards is replayed by SSE from this sequence.
   const latestSeq = await sessionStore.highestSeq(threadId)
-  const pageOptions = {
-    ...(parsedQuery.data.before ? { before: parsedQuery.data.before } : {}),
-    maxItems: parsedQuery.data.limit,
-    maxBytes: THREAD_TIMELINE_MAX_ITEM_BYTES
-  }
-  const [thread, page] = await Promise.all([
-    loadThreadMetadata(service, threadId),
-    sessionStore.loadItemPage
-      ? sessionStore.loadItemPage(threadId, pageOptions)
-      : sessionStore.loadItems(threadId).then((items) =>
-          buildPublicItemHistoryPage(items, pageOptions)
-        )
-  ])
+  const thread = await loadThreadMetadata(service, threadId)
   if (!thread) {
     return jsonResponse(
       { code: 'not_found', message: `thread not found: ${threadId}` },
       404
     )
   }
+  // The newest page keeps the active turn's opening user message anchored so
+  // a long running turn cannot push the visible request onto an older page
+  // that the renderer refuses to page back into while it is busy.
+  const latestTurnId = thread.turns.at(-1)?.id
+  const pageOptions = {
+    ...(parsedQuery.data.before ? { before: parsedQuery.data.before } : {}),
+    ...(!parsedQuery.data.before && latestTurnId ? { anchorTurnId: latestTurnId } : {}),
+    maxItems: parsedQuery.data.limit,
+    maxBytes: THREAD_TIMELINE_MAX_ITEM_BYTES
+  }
+  const page = sessionStore.loadItemPage
+    ? await sessionStore.loadItemPage(threadId, pageOptions)
+    : buildPublicItemHistoryPage(await sessionStore.loadItems(threadId), pageOptions)
 
   const pendingApprovals = approvalGate?.pending(threadId) ?? []
   let sessionItems = await healSessionItemsForFinishedTurns(
@@ -267,7 +268,10 @@ export async function getThreadTimeline(
   if (!parsedQuery.data.before) {
     sessionItems = mergePendingApprovalItems(sessionItems, pendingApprovals)
   }
+  // Re-apply the anchor after healing/merging so a newly materialized gate
+  // item cannot push the active turn's user message back off the page.
   const bounded = buildPublicItemHistoryPage(sessionItems, {
+    ...(!parsedQuery.data.before && latestTurnId ? { anchorTurnId: latestTurnId } : {}),
     maxItems: parsedQuery.data.limit,
     maxBytes: THREAD_TIMELINE_MAX_ITEM_BYTES
   })

@@ -44,9 +44,18 @@ export type ItemHistoryCompactionResult = {
  * A bounded chronological window from the durable item projection. `before`
  * is the stable id of the first item in the previously returned page and is
  * treated as an exclusive cursor.
+ *
+ * `anchorTurnId` is only honored on the newest page (no `before`): when the
+ * turn's first real `user_message` falls outside the bounded window (a long
+ * running turn produced more process items than the page budget), the page
+ * keeps that user message pinned in front so the active request stays
+ * visible. The cursor still points at the retained continuous window so
+ * older pages cover the items between the anchor and the window without
+ * gaps.
  */
 export type ItemHistoryPageOptions = {
   before?: string
+  anchorTurnId?: string
   maxItems: number
   maxBytes: number
 }

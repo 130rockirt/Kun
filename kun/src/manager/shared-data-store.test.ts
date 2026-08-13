@@ -37,6 +37,58 @@ describe('manager shared data store', () => {
     await store.close()
   })
 
+  it('forwards the timeline anchor option through the manager page read', async () => {
+    const store = await dataStore()
+    const threadId = 'thread-anchor-manager'
+    const turnId = 'turn-anchor-manager'
+    await store.executeSession('appendItem', {
+      threadId,
+      item: {
+        id: 'user_active',
+        turnId,
+        threadId,
+        role: 'user',
+        status: 'completed',
+        createdAt: 't0',
+        kind: 'user_message',
+        text: 'fix the pipeline'
+      }
+    })
+    for (let index = 0; index < 9; index += 1) {
+      await store.executeSession('appendItem', {
+        threadId,
+        item: {
+          id: `process_${index}`,
+          turnId,
+          threadId,
+          role: 'assistant',
+          status: 'completed',
+          createdAt: `t${index + 1}`,
+          kind: 'assistant_text',
+          text: `process ${index}`
+        }
+      })
+    }
+    const page = await store.executeSession('loadItemPage', {
+      threadId,
+      options: { anchorTurnId: turnId, maxItems: 5, maxBytes: 4 * 1024 * 1024 }
+    }) as { items: Array<{ id: string }>; hasMore: boolean; nextCursor?: string }
+    expect(page.items.map((item) => item.id)).toEqual([
+      'user_active', 'process_5', 'process_6', 'process_7', 'process_8'
+    ])
+    expect(page).toMatchObject({ hasMore: true, nextCursor: 'process_5' })
+    await store.close()
+  })
+
+  it('rejects unknown loadItemPage options through the strict manager schema', async () => {
+    const store = await dataStore()
+    await expect(store.executeSession('loadItemPage', {
+      threadId: 'thread-strict',
+      options: { before: 'x', maxItems: 5, maxBytes: 64, unexpectedKey: true }
+    })).rejects.toThrow()
+    await store.close()
+  })
+
   it('allocates unique monotonic event sequences across concurrent runtime clients', async () => {
     const store = await dataStore()
     const threadId = 'thread-sequences'

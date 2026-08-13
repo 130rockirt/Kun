@@ -481,6 +481,7 @@ export class ManagerSharedDataStore extends ManagerSharedDataStoreCore {
           threadId: ThreadIdSchema,
           options: z.object({
             before: z.string().min(1).max(256).optional(),
+            anchorTurnId: z.string().min(1).max(256).optional(),
             maxItems: z.number().int().positive().max(1_000),
             maxBytes: z.number().int().positive().max(16 * 1024 * 1024)
           }).strict()

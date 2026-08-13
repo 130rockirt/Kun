@@ -18,7 +18,7 @@ export function buildPublicItemHistoryPage(
   const endExclusive = cursorIndex >= 0 ? cursorIndex : publicItems.length
   const selected: TurnItem[] = []
   let itemBytes = 0
-  let earliestIndex = endExclusive
+  let windowStartIndex = endExclusive
 
   for (let index = endExclusive - 1; index >= 0 && selected.length < maxItems; index -= 1) {
     const item = timelineSafeItem(publicItems[index]!, maxBytes)
@@ -26,14 +26,54 @@ export function buildPublicItemHistoryPage(
     if (selected.length > 0 && itemBytes + bytes > maxBytes) break
     selected.push(item)
     itemBytes += bytes
-    earliestIndex = index
+    windowStartIndex = index
   }
 
   selected.reverse()
-  const hasMore = earliestIndex > 0
+
+  // A running turn can emit more process items than the page budget. Without
+  // an anchor its opening user message would land on an older page while the
+  // renderer refuses to page back during a busy turn, hiding the active
+  // request. Keep the first real user_message of the anchor turn pinned in
+  // front and trim the continuous window from the oldest side so the page
+  // still honors the item/byte budget.
+  let anchorIndex = -1
+  if (!options.before && options.anchorTurnId) {
+    anchorIndex = publicItems.findIndex(
+      (item) => item.turnId === options.anchorTurnId && item.kind === 'user_message'
+    )
+    if (anchorIndex >= 0 && anchorIndex < windowStartIndex) {
+      const anchorItem = timelineSafeItem(publicItems[anchorIndex]!, maxBytes)
+      const anchorBytes = serializedBytes(anchorItem)
+      while (
+        selected.length > 0 &&
+        (selected.length + 1 > maxItems || itemBytes + anchorBytes > maxBytes)
+      ) {
+        const dropped = selected.shift()!
+        itemBytes -= serializedBytes(dropped)
+        windowStartIndex += 1
+      }
+      selected.unshift(anchorItem)
+      itemBytes += anchorBytes
+    } else {
+      anchorIndex = -1
+    }
+  }
+
+  // The cursor is the boundary item of the retained continuous window (the
+  // anchor's own position only when the window was fully trimmed), so the
+  // next older page covers the anchor and any items between it and the
+  // window. The renderer deduplicates by item id, so the anchor is never
+  // duplicated in the merged transcript.
+  const anchored = anchorIndex >= 0
+  const cursorItem = anchored && selected.length > 1 ? selected[1] : selected[0]
+  const boundaryIndex = anchored && selected.length > 1
+    ? windowStartIndex
+    : (anchored ? anchorIndex : windowStartIndex)
+  const hasMore = boundaryIndex > 0
   return {
     items: selected,
-    ...(hasMore && selected[0] ? { nextCursor: selected[0].id } : {}),
+    ...(hasMore && cursorItem ? { nextCursor: cursorItem.id } : {}),
     hasMore,
     itemBytes
   }

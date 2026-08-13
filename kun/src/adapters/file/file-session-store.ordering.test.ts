@@ -2,7 +2,7 @@ import { appendFile, mkdtemp, readFile, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { makeAssistantTextItem, makeToolCallItem, makeToolResultItem } from '../../domain/item.js'
+import { makeAssistantTextItem, makeToolCallItem, makeToolResultItem, makeUserItem } from '../../domain/item.js'
 import { FileSessionStore } from './file-session-store.js'
 
 const roots: string[] = []
@@ -205,6 +205,51 @@ describe('FileSessionStore item ordering', () => {
       'assistant_2', 'assistant_3', 'assistant_4', 'assistant_5', 'assistant_6'
     ])
     expect(older.items[2]).toMatchObject({ text: 'answer 4 updated' })
+    expect(store.itemCacheStats()).toMatchObject({ entries: 0, bytes: 0 })
+  })
+
+  it('pins the running turn user message on the newest JSONL page', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-session-anchor-'))
+    roots.push(root)
+    const store = new FileSessionStore({ dataDir: root })
+    const threadId = 'thread_anchor'
+    const turnId = 'turn_running'
+    await store.appendItem(threadId, makeUserItem({
+      id: 'user_active', threadId, turnId, text: 'fix the pipeline'
+    }))
+    for (let index = 0; index < 349; index += 1) {
+      await store.appendItem(threadId, makeAssistantTextItem({
+        id: `process_${String(index).padStart(3, '0')}`,
+        threadId,
+        turnId,
+        text: `process ${index}`,
+        status: 'completed'
+      }))
+    }
+    store.clearThreadMemory(threadId)
+
+    const latest = await store.loadItemPage(threadId, {
+      anchorTurnId: turnId,
+      maxItems: 300,
+      maxBytes: 4 * 1024 * 1024
+    })
+    expect(latest.items).toHaveLength(300)
+    expect(latest.items[0]).toMatchObject({ id: 'user_active', kind: 'user_message' })
+    expect(latest.items.at(-1)?.id).toBe('process_348')
+    // The cursor stays at the retained continuous window so the next older
+    // page covers the anchor and the 50 trimmed process items.
+    expect(latest).toMatchObject({ hasMore: true, nextCursor: 'process_050' })
+
+    const older = await store.loadItemPage(threadId, {
+      before: latest.nextCursor,
+      maxItems: 300,
+      maxBytes: 4 * 1024 * 1024
+    })
+    expect(older.items.map((item) => item.id)).toEqual([
+      'user_active',
+      ...Array.from({ length: 50 }, (_, index) => `process_${String(index).padStart(3, '0')}`)
+    ])
+    expect(older).toMatchObject({ hasMore: false })
     expect(store.itemCacheStats()).toMatchObject({ entries: 0, bytes: 0 })
   })
 

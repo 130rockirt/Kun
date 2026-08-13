@@ -383,7 +383,19 @@ export class KunRuntimeProvider extends KunRuntimeThreadServices implements Agen
       }
     }
     const latestTurn = thread.latestTurn ?? turns.at(-1)
-    const latestUserMessageId = [...items].reverse().find((item) => item.kind === 'user_message')?.id
+    const latestTurnId = latestTurn?.id
+    // Prefer the active turn's opening user message: a long running turn may
+    // push its own prompt to the front of the page (timeline anchor) while
+    // later background/steering user items are appended after it. The anchor
+    // keeps the real request visible; the reverse scan is the legacy fallback
+    // for older runtimes that did not anchor the page.
+    const latestUserMessageId = latestTurnId
+      ? items.find(
+          (item) => item.turnId === latestTurnId && item.kind === 'user_message'
+        )?.id
+      : undefined
+    const resolvedLatestUserMessageId =
+      latestUserMessageId ?? [...items].reverse().find((item) => item.kind === 'user_message')?.id
     return {
       blocks,
       latestSeq: thread.latestSeq ?? 0,
@@ -393,7 +405,7 @@ export class KunRuntimeProvider extends KunRuntimeThreadServices implements Agen
       latestTurnOrchestration: latestTurn
         ? latestTurn.orchestration === 'graph' ? 'graph' : 'direct'
         : undefined,
-      latestUserMessageId,
+      latestUserMessageId: resolvedLatestUserMessageId,
       relation: thread.relation,
       ...(thread.parentThreadId ? { parentThreadId: thread.parentThreadId } : {}),
       ...(typeof thread.model === 'string' && thread.model.trim() ? { model: thread.model.trim() } : {}),

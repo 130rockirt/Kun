@@ -164,12 +164,13 @@ describe('getThreadState', () => {
 })
 
 describe('getThreadTimeline', () => {
-  it('returns at most 300 latest items and pages older items by cursor', async () => {
+  it('keeps the latest turn user message anchored inside the 300-item newest page', async () => {
     const record = createThreadRecord({
-      id: 'thr_timeline', title: 'Timeline', workspace: '/tmp', model: 'deepseek-chat'
+      id: 'thr_timeline', title: 'Timeline', workspace: '/tmp', model: 'deepseek-chat',
+      status: 'running'
     })
     const turn = createTurnRecord({
-      id: 'turn_timeline', threadId: record.id, prompt: 'history', status: 'completed'
+      id: 'turn_timeline', threadId: record.id, prompt: 'history', status: 'running'
     })
     record.turns = [turn]
     const store = new InMemorySessionStore()
@@ -190,12 +191,14 @@ describe('getThreadTimeline', () => {
       store
     )
     const latestBody = JSON.parse(latest.body)
+    // The page stays bounded at 300 items but pins the active turn's opening
+    // user message in front even though 350 process items would push it off.
     expect(latestBody.timeline).toMatchObject({
       itemCount: 300,
       hasMore: true,
-      nextCursor: 'item_050'
+      nextCursor: 'item_051'
     })
-    expect(latestBody.turns[0].items[0].id).toBe('item_050')
+    expect(latestBody.turns[0].items[0].id).toBe('item_000')
     expect(latestBody.turns[0].items.at(-1).id).toBe('item_349')
 
     const older = await getThreadTimeline(
@@ -207,9 +210,52 @@ describe('getThreadTimeline', () => {
       store
     )
     const olderBody = JSON.parse(older.body)
-    expect(olderBody.timeline).toMatchObject({ itemCount: 50, hasMore: false })
+    // The cursor points at the retained window start, so the older page
+    // covers the anchor plus everything between it and the window (51 items).
+    expect(olderBody.timeline).toMatchObject({ itemCount: 51, hasMore: false })
     expect(olderBody.turns[0].items[0].id).toBe('item_000')
-    expect(olderBody.turns[0].items.at(-1).id).toBe('item_049')
+    expect(olderBody.turns[0].items.at(-1).id).toBe('item_050')
+
+    const mergedIds = [
+      ...olderBody.turns[0].items.map((item: { id: string }) => item.id),
+      ...latestBody.turns[0].items.map((item: { id: string }) => item.id)
+    ]
+    expect(new Set(mergedIds).size).toBe(350)
+  })
+
+  it('does not anchor an older page requested by cursor', async () => {
+    const record = createThreadRecord({
+      id: 'thr_timeline_older', title: 'Timeline older', workspace: '/tmp', model: 'm'
+    })
+    const turn = createTurnRecord({
+      id: 'turn_older', threadId: record.id, prompt: 'history', status: 'completed'
+    })
+    record.turns = [turn]
+    const store = new InMemorySessionStore()
+    for (let index = 0; index < 350; index += 1) {
+      await store.appendItem(record.id, makeUserItem({
+        id: `item_${String(index).padStart(3, '0')}`,
+        threadId: record.id,
+        turnId: turn.id,
+        text: `message ${index}`
+      }))
+    }
+    const service = { get: async () => record } as unknown as ThreadService
+
+    const older = await getThreadTimeline(
+      service,
+      record.id,
+      new Request(
+        `http://kun.local/v1/threads/${record.id}/timeline?before=item_051&limit=300`
+      ),
+      store
+    )
+    const olderBody = JSON.parse(older.body)
+    // Older pages are immutable history: no anchor re-materialization, and
+    // the cursor request simply returns items strictly before the cursor.
+    expect(olderBody.timeline).toMatchObject({ itemCount: 51, hasMore: false })
+    expect(olderBody.turns[0].items[0].id).toBe('item_000')
+    expect(olderBody.turns[0].items.at(-1).id).toBe('item_050')
   })
 
   it('freezes the SSE replay floor before reading the timeline page', async () => {
