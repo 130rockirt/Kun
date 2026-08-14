@@ -13,12 +13,14 @@ export type RequestHistoryHygieneOptions = {
   maxArrayItems?: number
   /**
    * Cumulative token budget for ALL tool results combined across the
-   * sent history. Tool results are kept in full from newest to oldest
-   * until this budget is consumed; older results beyond the budget are
-   * collapsed to a one-line digest. This bounds total context growth
-   * regardless of how many tool calls a long session accumulates, which
-   * is what prevents runaway growth (e.g. a session ballooning to
-   * millions of tokens of stale tool output).
+   * sent history. Checkpoints sit at whole multiples of this budget:
+   * while the raw cumulative total stays within one multiple, nothing
+   * is collapsed; each time the total crosses the next multiple, one
+   * batch of the oldest results is collapsed to a one-line digest in a
+   * single step, so the model-facing projection is append-only between
+   * checkpoint advances (prefix-cache friendly) while total context
+   * growth stays bounded regardless of how many tool calls a long
+   * session accumulates.
    */
   maxCumulativeToolResultTokens?: number
   /**
@@ -154,19 +156,26 @@ function isAtomicSourcePage(toolName: string, output: unknown): boolean {
 
 /**
  * Enforce a combined token budget across all tool results in the sent
- * history. The most recent `keepRecentToolResults` results are always
- * kept verbatim; remaining results are kept newest-first until the
- * cumulative budget is exhausted, after which older results are
- * collapsed to a single-line digest. This bounds total context growth
- * no matter how many tool calls accumulate over a long session.
+ * history using cache-stable checkpoints. Raw cumulative prefix sums are
+ * computed oldest -> newest over all in-scope tool results; checkpoint
+ * boundaries sit at whole multiples of the high watermark. The active
+ * boundary is the largest multiple strictly below the cumulative total,
+ * so it is a step function of the persisted history alone: appending a
+ * result cannot move the boundary — and therefore cannot change the
+ * collapse set or any already-sent item — until the total crosses the
+ * next multiple of the budget. Each crossing collapses one batch of the
+ * oldest results (a single intentional prefix-cache reset) instead of
+ * sliding the cutoff on every request. The most recent
+ * `keepRecentToolResults` results and forwarded images are always kept
+ * verbatim.
  */
 function applyCumulativeToolResultBudget(
   items: TurnItem[],
   limits: Required<RequestHistoryHygieneOptions>,
   scope: RequestHistoryHygieneScope
 ): TurnItem[] {
-  const budget = limits.maxCumulativeToolResultTokens
-  if (budget <= 0) return items
+  const highWatermark = limits.maxCumulativeToolResultTokens
+  if (highWatermark <= 0) return items
 
   const toolResultIndexes: number[] = []
   for (let index = 0; index < items.length; index += 1) {
@@ -176,31 +185,44 @@ function applyCumulativeToolResultBudget(
   }
   if (toolResultIndexes.length === 0) return items
 
-  const alwaysKeep = new Set(toolResultIndexes.slice(-limits.keepRecentToolResults))
-  let used = 0
-  const collapse = new Set<number>()
-  // Walk newest -> oldest so recent context is preserved first.
-  for (let cursor = toolResultIndexes.length - 1; cursor >= 0; cursor -= 1) {
-    const index = toolResultIndexes[cursor]
+  // Forwarded images are never digested (that would drop the screenshot)
+  // and are charged a flat vision-token cost rather than their base64
+  // length, which would otherwise be hundreds of thousands of "tokens".
+  type Entry = { index: number; cost: number; image: boolean }
+  const entries: Entry[] = []
+  let total = 0
+  for (const index of toolResultIndexes) {
     const item = items[index]
     if (item.kind !== 'tool_result') continue
-    // Forwarded images are never digested (that would drop the screenshot)
-    // and are charged a flat vision-token cost rather than their base64
-    // length, which would otherwise be hundreds of thousands of "tokens".
-    if (isModelVisibleImageOutput(item.output)) {
-      used += IMAGE_TOOL_RESULT_TOKEN_ESTIMATE
-      continue
-    }
-    const cost = estimateTokens(stringifyOutput(item.output))
-    if (alwaysKeep.has(index)) {
-      used += cost
-      continue
-    }
-    if (used + cost <= budget) {
-      used += cost
-      continue
-    }
-    collapse.add(index)
+    const image = isModelVisibleImageOutput(item.output)
+    const cost = image ? IMAGE_TOOL_RESULT_TOKEN_ESTIMATE : estimateTokens(stringifyOutput(item.output))
+    total += cost
+    entries.push({ index, cost, image })
+  }
+  if (entries.length === 0) return items
+
+  // Cache-stable checkpoint stride in estimated tokens. The raw cumulative
+  // total must exceed a whole multiple of the high watermark before any
+  // collapse happens, and each further multiple crossed collapses one more
+  // batch of the oldest results. The stride is derived, not configurable:
+  // checkpoints sit exactly at k * maxCumulativeToolResultTokens.
+  const stride = Math.max(1, highWatermark)
+  // The active checkpoint boundary is the largest multiple of `stride`
+  // strictly below the raw cumulative total. It depends only on the
+  // persisted history: appending a result cannot move it until the total
+  // crosses the next multiple, which is exactly the hysteresis that keeps
+  // the projection append-only between checkpoint advances.
+  const boundary = stride * Math.floor((total - 1) / stride)
+  if (boundary <= 0) return items
+
+  const alwaysKeep = new Set(toolResultIndexes.slice(-limits.keepRecentToolResults))
+  const collapse = new Set<number>()
+  let cumulative = 0
+  for (const entry of entries) {
+    cumulative += entry.cost
+    if (cumulative > boundary) break
+    if (alwaysKeep.has(entry.index) || entry.image) continue
+    collapse.add(entry.index)
   }
   if (collapse.size === 0) return items
 
@@ -253,6 +275,10 @@ function clipInline(text: string, max: number): string {
 }
 
 function normalizeOptions(options: RequestHistoryHygieneOptions): Required<RequestHistoryHygieneOptions> {
+  const normalizedHighWatermark = Math.max(
+    0,
+    Math.floor(options.maxCumulativeToolResultTokens ?? DEFAULT_MAX_CUMULATIVE_TOOL_RESULT_TOKENS)
+  )
   return {
     maxToolResultLines: Math.max(1, Math.floor(options.maxToolResultLines ?? DEFAULT_MAX_TOOL_RESULT_LINES)),
     maxToolResultBytes: Math.max(512, Math.floor(options.maxToolResultBytes ?? DEFAULT_MAX_TOOL_RESULT_BYTES)),
@@ -262,10 +288,7 @@ function normalizeOptions(options: RequestHistoryHygieneOptions): Required<Reque
     maxToolArgumentStringTokens:
       Math.max(128, Math.floor(options.maxToolArgumentStringTokens ?? DEFAULT_MAX_TOOL_ARGUMENT_STRING_TOKENS)),
     maxArrayItems: Math.max(1, Math.floor(options.maxArrayItems ?? DEFAULT_MAX_ARRAY_ITEMS)),
-    maxCumulativeToolResultTokens: Math.max(
-      0,
-      Math.floor(options.maxCumulativeToolResultTokens ?? DEFAULT_MAX_CUMULATIVE_TOOL_RESULT_TOKENS)
-    ),
+    maxCumulativeToolResultTokens: normalizedHighWatermark,
     keepRecentToolResults: Math.max(
       0,
       Math.floor(options.keepRecentToolResults ?? DEFAULT_KEEP_RECENT_TOOL_RESULTS)

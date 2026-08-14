@@ -86,6 +86,103 @@ describe('applyRequestHistoryHygiene cumulative tool-result budget', () => {
     expect(outputs[0]).not.toBe(big)
   })
 
+  it('keeps the projection append-only when a new tool result is appended (issue #1154)', () => {
+    // Each result is ~250 tokens; H=600. Totals: 750 -> 1000, both within
+    // the same checkpoint interval (boundary 600), so the [a,b,c]
+    // projection must not change when d is appended.
+    const big = 'x'.repeat(1000)
+    const options = {
+      maxCumulativeToolResultTokens: 600,
+      keepRecentToolResults: 1,
+      maxToolResultTokens: 100_000,
+      maxToolResultBytes: 10_000_000,
+      maxToolResultLines: 100_000
+    }
+    const before = applyRequestHistoryHygiene([toolResult('a', big), toolResult('b', big), toolResult('c', big)], options)
+    const after = applyRequestHistoryHygiene(
+      [toolResult('a', big), toolResult('b', big), toolResult('c', big), toolResult('d', big)],
+      options
+    )
+    expect(after.slice(0, before.length)).toEqual(before)
+  })
+
+  it('advances the checkpoint in one batch and then stays append-only again', () => {
+    // Each result ~250 tokens, H=600. [a,b,c,d] totals 1000 (boundary 600);
+    // appending e totals 1250, crossing the 1200 boundary — that append may
+    // rewrite the prefix once (intentional cache reset). The following
+    // append (f, total 1500, boundary still 1200) must be append-only again.
+    const big = 'x'.repeat(1000)
+    const options = {
+      maxCumulativeToolResultTokens: 600,
+      keepRecentToolResults: 1,
+      maxToolResultTokens: 100_000,
+      maxToolResultBytes: 10_000_000,
+      maxToolResultLines: 100_000
+    }
+    const afterE = applyRequestHistoryHygiene(
+      [toolResult('a', big), toolResult('b', big), toolResult('c', big), toolResult('d', big), toolResult('e', big)],
+      options
+    )
+    const afterF = applyRequestHistoryHygiene(
+      [toolResult('a', big), toolResult('b', big), toolResult('c', big), toolResult('d', big), toolResult('e', big), toolResult('f', big)],
+      options
+    )
+    expect(afterF.slice(0, afterE.length)).toEqual(afterE)
+    // The crossing collapsed a batch: with boundary 1200, prefix sums
+    // a=250, b=500, c=750, d=1000 are all <= 1200, so a-d are digests and
+    // only the always-kept newest items remain full.
+    const digestCount = afterE.filter((item) => item.kind === 'tool_result' && typeof item.output === 'string' && item.output.includes('cache hygiene')).length
+    expect(digestCount).toBe(4)
+  })
+
+  it('keeps the projection append-only across a long replay with 40+ results', () => {
+    // 42 x ~250-token results, H=600: totals run 250..10500, crossing
+    // boundaries at 600, 1200, ..., 10200 (17 advances). Between advances
+    // the per-item projection must not change.
+    const big = 'x'.repeat(1000)
+    const options = {
+      maxCumulativeToolResultTokens: 600,
+      keepRecentToolResults: 1,
+      maxToolResultTokens: 100_000,
+      maxToolResultBytes: 10_000_000,
+      maxToolResultLines: 100_000
+    }
+    let changes = 0
+    let prev: TurnItem[] = []
+    for (let count = 1; count <= 42; count += 1) {
+      const items = Array.from({ length: count }, (_, i) => toolResult(`r${i}`, big))
+      const out = applyRequestHistoryHygiene(items, options)
+      if (prev.length > 0 && JSON.stringify(out.slice(0, prev.length)) !== JSON.stringify(prev)) changes += 1
+      prev = out
+    }
+    // Totals 250..10500 cross boundaries at 600, 1200, ..., 10200 — 17
+    // crossings, far below the 41 appends.
+    expect(changes).toBeLessThanOrEqual(17)
+    // Bounded context: the kept-full token estimate never exceeds one
+    // stride beyond the budget plus one crossing item.
+    const finalOut = prev
+    const fullCosts = finalOut
+      .filter((item) => item.kind === 'tool_result' && item.output === big)
+      .length * 250
+    expect(fullCosts).toBeLessThanOrEqual(600 + 250)
+  })
+
+  it('is deterministic across repeated invocations', () => {
+    const big = 'x'.repeat(1000)
+    const items = [toolResult('a', big), toolResult('b', big), toolResult('c', big), toolResult('d', big), toolResult('e', big)]
+    const options = {
+      maxCumulativeToolResultTokens: 600,
+      keepRecentToolResults: 1,
+      maxToolResultTokens: 100_000,
+      maxToolResultBytes: 10_000_000,
+      maxToolResultLines: 100_000
+    }
+    const first = applyRequestHistoryHygiene(items, options)
+    const second = applyRequestHistoryHygiene(items, options)
+    expect(second).toEqual(first)
+    expect(first.some((item) => item.kind === 'tool_result' && typeof item.output === 'string' && item.output.includes('cache hygiene'))).toBe(true)
+  })
+
   it('keeps everything when under budget', () => {
     const small = 'hello world'
     const items = [toolResult('a', small), toolResult('b', small)]
