@@ -135,6 +135,18 @@ describe('ManagedRuntimeOperationCoordinator', () => {
     expect(secondEnsureOperation).toHaveBeenCalledOnce()
   })
 
+  it('keeps explicit replacements separate from normal restarts', async () => {
+    const coordinator = new ManagedRuntimeOperationCoordinator<string>()
+    const trace: string[] = []
+    const restart = coordinator.restart(async () => { trace.push('restart') })
+    const replacement = coordinator.replace(async () => { trace.push('replace') })
+    const sharedReplacement = coordinator.replace(async () => { trace.push('unexpected') })
+
+    expect(sharedReplacement).toBe(replacement)
+    await Promise.all([restart, replacement, sharedReplacement])
+    expect(trace).toEqual(['restart', 'replace'])
+  })
+
   it('coalesces only adjacent settings applies that have not started', async () => {
     const coordinator = new ManagedRuntimeOperationCoordinator<{ value: number }>()
     const ensureGate = createGate()

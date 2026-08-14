@@ -1,0 +1,292 @@
+{
+  "subagentsPanel": {
+    "configModel": "настроить модель",
+    "delegatable": "Делегируемый · можно использовать в чате",
+    "system": "Система · внутренняя",
+    "global": "Глобальный · общий",
+    "newSubagent": "Новый субагент",
+    "delegatableCount": "Делегируемых ролей: {{count}}",
+    "configuredCount": "Настроено: {{count}}",
+    "showingCount": "Показано {{visible}} из {{total}}",
+    "policySummary": "Очередь и параллелизм",
+    "search": "Поиск субагентов",
+    "searchPlaceholder": "Поиск по названию, возможностям или сценарию",
+    "clearSearch": "Очистить поиск",
+    "toggleCategory": "Развернуть или свернуть категорию {{category}}",
+    "batchModel": "Пакетная модель",
+    "mixedModels": "Разные модели",
+    "mixedConfiguration": "Разные конфигурации",
+    "categoryConfiguration": "Конфигурация категории по умолчанию",
+    "categoryConfigurationDesc": "Применить одинаковые значения по умолчанию ко всем агентам в этой категории",
+    "resetCategoryConfiguration": "Сбросить значения по умолчанию",
+    "effectiveModel": "Действующая модель",
+    "batchModelAria": "Задать одну модель для {{count}} агентов в {{category}}",
+    "reasoning": "Глубина рассуждения",
+    "mixedReasoning": "Разные уровни",
+    "batchReasoningAria": "Задать одну глубину рассуждения для {{count}} агентов в {{category}}",
+    "capabilities": "Возможности",
+    "emptyTitle": "Подходящие субагенты не найдены",
+    "emptySearch": "Попробуйте другое название, возможность или сценарий.",
+    "emptyCategory": "Выберите другую категорию для просмотра.",
+    "surface": {
+      "shared": "Базовые",
+      "code": "Code",
+      "write": "Работа",
+      "design": "Дизайн"
+    },
+    "surfaceInherited": "Унаследовано из базовых",
+    "surfaceAssigned": "Доступно в этом режиме",
+    "surfaceUnassigned": "Недоступно в этом режиме",
+    "pagination": "Страницы Agent",
+    "pageSummary": "Страница {{page}} из {{pages}} · {{count}} Agent",
+    "previousPage": "Предыдущая страница",
+    "nextPage": "Следующая страница",
+    "extensionAgents": {
+      "title": "Дополнительные агенты",
+      "description": "Агенты вне базового набора · {{count}}",
+      "enabled": "Включены",
+      "disabled": "Выключены",
+      "toggle": "Переключить дополнительных агентов",
+      "keepBaseOnly": "Оставить только базовые",
+      "enableExtensions": "Включить дополнительных",
+      "baseAlwaysAvailable": "Базовые агенты доступны всегда"
+    },
+    "category": {
+      "all": "Все",
+      "baseAgent": "Базовые агенты",
+      "development": "Разработка",
+      "review": "Проверка",
+      "quality": "Качество",
+      "planning": "Планирование",
+      "operations": "Эксплуатация",
+      "research": "Исследования",
+      "custom": "Пользовательские"
+    },
+    "smallModel": {
+      "name": "Маленькая модель",
+      "desc": "По умолчанию для заголовка и сводки"
+    },
+    "role": {
+      "general": {
+        "name": "Общий",
+        "desc": "Полный набор инструментов · многоэтапная работа"
+      },
+      "explore": {
+        "name": "Исследуйте",
+        "desc": "Только для чтения · поиск и поиск кода"
+      },
+      "component-designer": {
+        "name": "Component Designer",
+        "desc": "Focused interactive component prototype"
+      },
+      "design-reviewer": {
+        "name": "Обзор дизайна",
+        "desc": "рецензент дизайна · только для чтения"
+      },
+      "over-engineering-reviewer": {
+        "name": "Чрезмерно инженерный обзор",
+        "desc": "рецензент-переинжиниринг · только для чтения"
+      },
+      "code-reviewer": {
+        "name": "Рецензент кода",
+        "desc": "Проверка по пяти направлениям · только чтение"
+      },
+      "test-engineer": {
+        "name": "Инженер по тестированию",
+        "desc": "Стратегия тестирования · может писать и запускать тесты"
+      },
+      "security-auditor": {
+        "name": "Аудитор безопасности",
+        "desc": "Угрозы и риски OWASP · только чтение"
+      },
+      "web-performance-auditor": {
+        "name": "Аудитор веб-производительности",
+        "desc": "Core Web Vitals · на основе данных"
+      },
+      "api-and-interface-design": {
+        "name": "API & Interface Architect",
+        "desc": "Stable public contracts · compatibility and validation"
+      },
+      "browser-testing-with-devtools": {
+        "name": "Web QA Planner",
+        "desc": "Browser and accessibility verification plans · read-only"
+      },
+      "ci-cd-and-automation": {
+        "name": "CI/CD Engineer",
+        "desc": "Pipelines, quality gates, and rollback-safe releases"
+      },
+      "code-review-and-quality": {
+        "name": "Code Quality Reviewer",
+        "desc": "Multi-axis correctness and architecture review · read-only"
+      },
+      "code-simplification": {
+        "name": "Code Simplification Engineer",
+        "desc": "Reduce complexity · preserve behavior"
+      },
+      "context-engineering": {
+        "name": "Context Engineer",
+        "desc": "Minimal authoritative context pack · read-only"
+      },
+      "debugging-and-error-recovery": {
+        "name": "Root Cause Debugger",
+        "desc": "Reproduce, localize, fix, and regression-test"
+      },
+      "deprecation-and-migration": {
+        "name": "Migration Engineer",
+        "desc": "Staged compatibility, data migration, and rollback"
+      },
+      "documentation-and-adrs": {
+        "name": "Documentation & ADR Engineer",
+        "desc": "Architecture decisions, guides, and API docs"
+      },
+      "doubt-driven-development": {
+        "name": "Doubt-Driven Reviewer",
+        "desc": "Challenge assumptions and designs · read-only"
+      },
+      "frontend-ui-engineering": {
+        "name": "Frontend UI Engineer",
+        "desc": "Accessible, responsive, product-quality interfaces"
+      },
+      "git-workflow-and-versioning": {
+        "name": "Git Workflow Engineer",
+        "desc": "Branches, atomic commits, and history safety"
+      },
+      "idea-refine": {
+        "name": "Idea Refinement Partner",
+        "desc": "Compare options, MVP bounds, and validation · read-only"
+      },
+      "incremental-implementation": {
+        "name": "Incremental Implementation Engineer",
+        "desc": "Thin, buildable, continuously verified slices"
+      },
+      "interview-me": {
+        "name": "Requirements Interviewer",
+        "desc": "Find gaps and high-information questions · read-only"
+      },
+      "observability-and-instrumentation": {
+        "name": "Observability Engineer",
+        "desc": "Logs, metrics, traces, and actionable alerts"
+      },
+      "performance-optimization": {
+        "name": "Performance Engineer",
+        "desc": "Measure bottlenecks and prove before/after impact"
+      },
+      "planning-and-task-breakdown": {
+        "name": "Implementation Planner",
+        "desc": "Dependency-aware, acceptance-driven tasks · read-only"
+      },
+      "security-and-hardening": {
+        "name": "Security Hardening Engineer",
+        "desc": "Threat-model and implement scoped security fixes"
+      },
+      "shipping-and-launch": {
+        "name": "Release Readiness Engineer",
+        "desc": "Go/no-go, rollout, and rollback plans · read-only"
+      },
+      "source-driven-development": {
+        "name": "Source-Driven Researcher",
+        "desc": "Ground guidance in version-matched sources · read-only"
+      },
+      "spec-driven-development": {
+        "name": "Specification Engineer",
+        "desc": "Scenarios, interfaces, and acceptance criteria · read-only"
+      },
+      "test-driven-development": {
+        "name": "TDD Engineer",
+        "desc": "Red-green-refactor with behavior-focused proof"
+      },
+      "using-agent-skills": {
+        "name": "Engineering Workflow Advisor",
+        "desc": "Map work to the smallest suitable agent sequence · read-only"
+      },
+      "write-outline-architect": {
+        "name": "Outline Architect",
+        "desc": "Structure, arguments, and narrative progression · read-only"
+      },
+      "write-draft-author": {
+        "name": "Draft Author",
+        "desc": "Long-form drafts and focused section writing"
+      },
+      "write-developmental-editor": {
+        "name": "Developmental Editor",
+        "desc": "Improve logic, structure, pacing, and clarity"
+      },
+      "write-copy-editor": {
+        "name": "Copy Editor",
+        "desc": "Polish tone, terminology, and grammar"
+      },
+      "write-fact-checker": {
+        "name": "Fact Checker",
+        "desc": "Verify claims, figures, and uncertainty · read-only"
+      },
+      "write-citation-researcher": {
+        "name": "Citation Researcher",
+        "desc": "Authoritative sources and traceable citations · read-only"
+      },
+      "design-product-planner": {
+        "name": "Product Design Planner",
+        "desc": "Direction, goals, flows, and tradeoffs · read-only"
+      },
+      "design-ux-researcher": {
+        "name": "UX Researcher",
+        "desc": "User journeys and usability research · read-only"
+      },
+      "design-screen-designer": {
+        "name": "Screen Designer",
+        "desc": "Complete responsive screens and interaction states"
+      },
+      "design-system-architect": {
+        "name": "Design System Architect",
+        "desc": "Semantic tokens, components, and variant constraints"
+      },
+      "design-code-binder": {
+        "name": "Design Code Binder",
+        "desc": "Map design nodes to routes and source files"
+      },
+      "design-handoff-specialist": {
+        "name": "Design Handoff Specialist",
+        "desc": "DESIGN.md, implementation notes, and handoff assets"
+      },
+      "compaction": {
+        "name": "Уплотнение",
+        "desc": "Настраиваемый · по умолчанию используется основная модель"
+      },
+      "codeReview": {
+        "name": "Обзор кода",
+        "desc": "Изолированный запуск только для чтения · настраивается"
+      },
+      "plan": {
+        "name": "Режим планирования",
+        "desc": "Планирование превращается · по умолчанию используется модель разговора"
+      },
+      "title": {
+        "name": "Название",
+        "desc": "LLM · по умолчанию выбрана маленькая модель"
+      },
+      "summary": {
+        "name": "Резюме",
+        "desc": "LLM · по умолчанию выбрана маленькая модель"
+      }
+    },
+    "builtin": "Встроенный",
+    "customTag": "Пользовательский",
+    "workspaceFile": "Определён в {{path}}",
+    "workspaceReadOnly": "Редактируйте эту роль в .kun/agents/*.md"
+  },
+  "summarizeSession": "Подвести итог",
+  "summarizing": "Обобщение",
+  "summarizeFailed": "Не удалось подвести итоги этого разговора.",
+  "name": "Имя",
+  "description": "Описание",
+  "color": "Цвет",
+  "mode": "Режим",
+  "writeFocusModeEnter": "Войдите в режим фокусировки",
+  "writeFocusModeExit": "Выйти из режима фокусировки",
+  "writeFocusModeShortcut": "⌘/Ctrl + Shift + F",
+  "writeShowLineNumbers": "Показать номера строк",
+  "writeHideLineNumbers": "Скрыть номера строк",
+  "writeEnableLineWrapping": "Включить перенос строк",
+  "writeDisableLineWrapping": "Отключить перенос строк",
+  "systemPrompt": "Системная подсказка",
+  "toolPolicy": "Доступ к инструментам"
+}

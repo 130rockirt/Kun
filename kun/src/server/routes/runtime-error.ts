@@ -23,6 +23,18 @@ export const ERRORS = {
     errorResponse({ code: 'attachment_validation_failed', message, details: issues }, 400),
   conflict: (message: string) =>
     errorResponse({ code: 'conflict', message }, 409),
+  taskSurfaceLocked: (message: string, details?: unknown) =>
+    errorResponse({
+      code: 'task_surface_locked',
+      message,
+      ...(details !== undefined ? { details } : {})
+    }, 409),
+  designProfileLocked: (message: string, details?: unknown) =>
+    errorResponse({
+      code: 'design_profile_locked',
+      message,
+      ...(details !== undefined ? { details } : {})
+    }, 409),
   rateLimited: (message: string, details?: unknown) =>
     errorResponse({
       code: 'rate_limited',

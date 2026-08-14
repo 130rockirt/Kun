@@ -84,7 +84,7 @@
     "@google/gemini-cli": "0.53.0",
     "@kun/extension-api": "file:../packages/extension-api",
     "@kun/provider-catalog": "file:../packages/provider-catalog",
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/client": "^2.0.0",
     "@xmldom/xmldom": "^0.9.10",
     "ajv": "^8.20.0",
     "better-sqlite3": "^12.10.0",
@@ -93,15 +93,18 @@
     "highlight.js": "^11.11.1",
     "ipaddr.js": "^2.4.0",
     "jimp": "^1.6.0",
+    "pdfjs-dist": "^5.4.394",
     "proxy-agent": "^8.0.2",
     "safe-regex2": "5.1.1",
     "semver": "^7.8.5",
     "typescript": "5.9.3",
     "typescript-language-server": "5.3.0",
     "undici": "^7.29.0",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
     "yauzl": "^3.4.0",
     "yazl": "^3.3.1",
-    "zod": "^4.4.3"
+    "zod": "^4.4.3",
+    "yaml": "^2.9.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",

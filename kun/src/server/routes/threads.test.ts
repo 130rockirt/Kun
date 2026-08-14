@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { forkThread, getThread, getThreadState, updateThread } from './threads.js'
+import { forkThread, getThread, getThreadState, getThreadTimeline, updateThread } from './threads.js'
 import { buildRouter } from './index.js'
 import type { ServerRuntime } from './server-runtime.js'
 import { createThreadRecord } from '../../domain/thread.js'
@@ -10,6 +10,7 @@ import { InMemoryApprovalGate } from '../../adapters/in-memory-approval-gate.js'
 import { InMemoryUserInputGate } from '../../adapters/in-memory-user-input-gate.js'
 import type { ThreadService } from '../../services/thread-service.js'
 import type { JsonResponse } from '../response.js'
+import { InMemorySessionStore } from '../../adapters/in-memory-session-store.js'
 
 function serviceWith(threadId: string): ThreadService {
   const record = createThreadRecord({
@@ -159,6 +160,180 @@ describe('getThreadState', () => {
 
     expect(response.status).toBe(404)
     expect(JSON.parse(response.body)).toMatchObject({ code: 'not_found' })
+  })
+})
+
+describe('getThreadTimeline', () => {
+  it('keeps the latest turn user message anchored inside the 300-item newest page', async () => {
+    const record = createThreadRecord({
+      id: 'thr_timeline', title: 'Timeline', workspace: '/tmp', model: 'deepseek-chat',
+      status: 'running'
+    })
+    const turn = createTurnRecord({
+      id: 'turn_timeline', threadId: record.id, prompt: 'history', status: 'running'
+    })
+    record.turns = [turn]
+    const store = new InMemorySessionStore()
+    for (let index = 0; index < 350; index += 1) {
+      await store.appendItem(record.id, makeUserItem({
+        id: `item_${String(index).padStart(3, '0')}`,
+        threadId: record.id,
+        turnId: turn.id,
+        text: `message ${index}`
+      }))
+    }
+    const service = { get: async () => record } as unknown as ThreadService
+
+    const latest = await getThreadTimeline(
+      service,
+      record.id,
+      new Request(`http://kun.local/v1/threads/${record.id}/timeline`),
+      store
+    )
+    const latestBody = JSON.parse(latest.body)
+    // The page stays bounded at 300 items but pins the active turn's opening
+    // user message in front even though 350 process items would push it off.
+    expect(latestBody.timeline).toMatchObject({
+      itemCount: 300,
+      hasMore: true,
+      nextCursor: 'item_051'
+    })
+    expect(latestBody.turns[0].items[0].id).toBe('item_000')
+    expect(latestBody.turns[0].items.at(-1).id).toBe('item_349')
+
+    const older = await getThreadTimeline(
+      service,
+      record.id,
+      new Request(
+        `http://kun.local/v1/threads/${record.id}/timeline?before=${latestBody.timeline.nextCursor}`
+      ),
+      store
+    )
+    const olderBody = JSON.parse(older.body)
+    // The cursor points at the retained window start, so the older page
+    // covers the anchor plus everything between it and the window (51 items).
+    expect(olderBody.timeline).toMatchObject({ itemCount: 51, hasMore: false })
+    expect(olderBody.turns[0].items[0].id).toBe('item_000')
+    expect(olderBody.turns[0].items.at(-1).id).toBe('item_050')
+
+    const mergedIds = [
+      ...olderBody.turns[0].items.map((item: { id: string }) => item.id),
+      ...latestBody.turns[0].items.map((item: { id: string }) => item.id)
+    ]
+    expect(new Set(mergedIds).size).toBe(350)
+  })
+
+  it('does not anchor an older page requested by cursor', async () => {
+    const record = createThreadRecord({
+      id: 'thr_timeline_older', title: 'Timeline older', workspace: '/tmp', model: 'm'
+    })
+    const turn = createTurnRecord({
+      id: 'turn_older', threadId: record.id, prompt: 'history', status: 'completed'
+    })
+    record.turns = [turn]
+    const store = new InMemorySessionStore()
+    for (let index = 0; index < 350; index += 1) {
+      await store.appendItem(record.id, makeUserItem({
+        id: `item_${String(index).padStart(3, '0')}`,
+        threadId: record.id,
+        turnId: turn.id,
+        text: `message ${index}`
+      }))
+    }
+    const service = { get: async () => record } as unknown as ThreadService
+
+    const older = await getThreadTimeline(
+      service,
+      record.id,
+      new Request(
+        `http://kun.local/v1/threads/${record.id}/timeline?before=item_051&limit=300`
+      ),
+      store
+    )
+    const olderBody = JSON.parse(older.body)
+    // Older pages are immutable history: no anchor re-materialization, and
+    // the cursor request simply returns items strictly before the cursor.
+    expect(olderBody.timeline).toMatchObject({ itemCount: 51, hasMore: false })
+    expect(olderBody.turns[0].items[0].id).toBe('item_000')
+    expect(olderBody.turns[0].items.at(-1).id).toBe('item_050')
+  })
+
+  it('freezes the SSE replay floor before reading the timeline page', async () => {
+    const record = createThreadRecord({
+      id: 'thr_timeline_boundary', title: 'Boundary', workspace: '/tmp', model: 'm'
+    })
+    const order: string[] = []
+    const response = await getThreadTimeline(
+      { get: vi.fn(async () => { order.push('thread'); return record }) } as unknown as ThreadService,
+      record.id,
+      new Request(`http://kun.local/v1/threads/${record.id}/timeline`),
+      {
+        highestSeq: vi.fn(async () => { order.push('event-boundary'); return 41 }),
+        loadItemPage: vi.fn(async () => {
+          order.push('items')
+          return { items: [], hasMore: false, itemBytes: 0 }
+        })
+      } as never
+    )
+
+    expect(order).toEqual(['event-boundary', 'thread', 'items'])
+    expect(JSON.parse(response.body).latestSeq).toBe(41)
+  })
+
+  it('never persists a renderer-only truncated preview while healing timeline status', async () => {
+    const record = createThreadRecord({
+      id: 'thr_timeline_preview', title: 'Preview', workspace: '/tmp', model: 'm'
+    })
+    const turn = createTurnRecord({
+      id: 'turn_timeline_preview',
+      threadId: record.id,
+      prompt: `large prompt ${'p'.repeat(5 * 1024 * 1024)}`,
+      status: 'completed'
+    })
+    record.turns = [turn]
+    const canonicalItem = {
+      id: 'item_large_result',
+      turnId: turn.id,
+      threadId: record.id,
+      role: 'tool' as const,
+      status: 'running' as const,
+      createdAt: '2026-08-09T00:00:00.000Z',
+      kind: 'tool_result' as const,
+      toolName: 'bash',
+      callId: 'call_large',
+      toolKind: 'command_execution' as const,
+      output: { blob: 'x'.repeat(5 * 1024 * 1024) },
+      isError: false
+    }
+    const updateItem = vi.fn()
+    const response = await getThreadTimeline(
+      { get: vi.fn(async () => record) } as unknown as ThreadService,
+      record.id,
+      new Request(`http://kun.local/v1/threads/${record.id}/timeline`),
+      {
+        highestSeq: vi.fn(async () => 5),
+        loadItemPage: vi.fn(async () => ({
+          items: [canonicalItem],
+          hasMore: false,
+          itemBytes: 5 * 1024 * 1024
+        })),
+        updateItem
+      } as never
+    )
+
+    expect(response.status).toBe(200)
+    expect(Buffer.byteLength(response.body, 'utf-8')).toBeLessThan(4 * 1024 * 1024)
+    expect(response.body).not.toContain('large prompt')
+    expect(JSON.parse(response.body).turns[0].items[0]).toMatchObject({
+      id: canonicalItem.id,
+      status: 'completed',
+      output: { __timelineTruncated: true }
+    })
+    expect(updateItem).toHaveBeenCalledWith(record.id, canonicalItem.id, {
+      status: 'completed',
+      finishedAt: expect.any(String)
+    })
+    expect(canonicalItem.output.blob).toHaveLength(5 * 1024 * 1024)
   })
 })
 

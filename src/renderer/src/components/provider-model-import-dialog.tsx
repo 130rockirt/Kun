@@ -2,6 +2,7 @@ import { useMemo, useState, type ReactElement } from 'react'
 import { AlertTriangle, Check, Info, Search, X } from 'lucide-react'
 import type { ModelProviderProfileV1 } from '@shared/app-settings'
 import type {
+  ModelsDevCatalogMetadataIssue,
   ModelsDevCatalogResult,
   ProviderModelCatalogSource
 } from '@shared/kun-gui-api'
@@ -95,6 +96,10 @@ export function ProviderModelImportDialog({
     () => entries.reduce((count, entry) => count + (entry.alreadyExists ? 1 : 0), 0),
     [entries]
   )
+  const metadataIssueCount = useMemo(
+    () => entries.reduce((count, entry) => count + (entry.catalog?.metadataIssues?.length ?? 0), 0),
+    [entries]
+  )
 
   const toggleOne = (key: string): void => {
     setSelected((previous) => {
@@ -170,6 +175,11 @@ export function ProviderModelImportDialog({
           {providerError ? (
             <ImportNotice tone="warning" icon={<AlertTriangle className="h-3.5 w-3.5" />}>
               {t('providerModelImportProviderWarning', { message: providerError })}
+            </ImportNotice>
+          ) : null}
+          {metadataIssueCount > 0 ? (
+            <ImportNotice tone="warning" icon={<AlertTriangle className="h-3.5 w-3.5" />}>
+              {t('providerModelImportMetadataIgnored', { count: metadataIssueCount })}
             </ImportNotice>
           ) : null}
           {catalogResult.status === 'error' ? (
@@ -315,6 +325,9 @@ export function ProviderModelImportDialog({
                           {entry.alreadyExists ? (
                             <ModelBadge tone="warning">{t('providerModelImportAlreadyAdded')}</ModelBadge>
                           ) : null}
+                          {entry.catalog?.metadataIssues?.length ? (
+                            <ModelBadge tone="warning">{t('providerModelImportMetadataIssueBadge')}</ModelBadge>
+                          ) : null}
                           {entry.catalog?.contextWindowTokens ? (
                             <ModelBadge>{t('providerModelImportContextBadge', {
                               value: describeContextWindowTokens(entry.catalog.contextWindowTokens)
@@ -337,6 +350,11 @@ export function ProviderModelImportDialog({
                             <ModelBadge tone="accent">{t('providerModelImportReasoningBadge')}</ModelBadge>
                           ) : null}
                         </span>
+                        {entry.catalog?.metadataIssues?.map((issue) => (
+                          <span key={issue.field} className="text-[11px] leading-4 text-amber-700 dark:text-amber-300">
+                            {metadataIssueMessage(t, issue)}
+                          </span>
+                        ))}
                       </span>
                     </label>
                   </li>
@@ -393,6 +411,16 @@ export function ProviderModelImportDialog({
       </section>
     </div>
   )
+}
+
+function metadataIssueMessage(t: Translate, issue: ModelsDevCatalogMetadataIssue): string {
+  return t('providerModelImportMetadataIssueDetail', {
+    field: t(issue.field === 'maxOutputTokens'
+      ? 'providerModelFieldMaxOutput'
+      : 'providerModelFieldContextWindow'),
+    value: issue.rawValue.toLocaleString(),
+    max: issue.maxAllowed.toLocaleString()
+  })
 }
 
 function ImportNotice({

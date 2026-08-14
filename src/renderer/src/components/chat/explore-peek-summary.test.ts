@@ -48,7 +48,7 @@ describe('readChildActivityFromBlock', () => {
       status: 'running',
       toolKind: 'tool_call',
       meta: {
-        toolName: 'explore_agent',
+        toolName: 'fast_context',
         child: {
           childId: 'child_1',
           parentThreadId: 'thr_parent',

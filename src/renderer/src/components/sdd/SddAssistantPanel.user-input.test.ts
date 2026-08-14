@@ -210,7 +210,7 @@ describe('SddAssistantPanel structured user input', () => {
       expect(renderer!.root.findAllByType(FloatingComposer)).toHaveLength(0)
       const returnBar = renderer!.root.findByType(SubagentReturnBar)
       expect(returnBar.props.parentTitle).toBe('Requirement AI parent')
-      expect(textContent(returnBar)).toContain('Back to parent')
+      expect(textContent(returnBar)).toContain('Back to main chat')
 
       await act(async () => {
         returnBar.props.onBack()

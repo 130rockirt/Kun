@@ -6,9 +6,9 @@ import type {
   ModelProviderProfileV1
 } from '@shared/app-settings'
 import {
-  MODEL_REASONING_EFFORTS,
-  modelProviderModelProfile
+  MODEL_REASONING_EFFORTS
 } from '@shared/app-settings'
+import { modelProviderModelProfile } from '@shared/app-settings-provider-core'
 import {
   InlineNoticeView,
   ModelSelect,

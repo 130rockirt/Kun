@@ -5,6 +5,11 @@ import {
   ComposerContextAttachmentSchema,
   MAX_COMPOSER_CONTEXT_ATTACHMENTS
 } from './composer-context.js'
+import {
+  DesignDocumentTargetSchema,
+  DesignImagePlacementTargetSchema,
+  DesignTaskProfileSchema
+} from './design-task-profile.js'
 
 /**
  * Conversation items returned as part of a thread or turn.
@@ -69,7 +74,9 @@ export type UserFileReference = z.infer<typeof UserFileReferenceSchema>
 export const UserMessageSource = z.enum([
   'background_shell',
   'background_subagent',
-  'graph_runtime'
+  'graph_runtime',
+  'subagent_resume',
+  'design_continuation'
 ])
 export type UserMessageSource = z.infer<typeof UserMessageSource>
 
@@ -81,7 +88,19 @@ export const UserTurnItem = TurnItemBase.extend({
   attachmentIds: z.array(z.string().min(1)).optional(),
   composerContexts: z.array(ComposerContextAttachmentSchema).max(MAX_COMPOSER_CONTEXT_ATTACHMENTS).optional(),
   fileReferences: z.array(UserFileReferenceSchema).optional(),
-  workspaceCheckpointId: z.string().min(1).optional()
+  workspaceCheckpointId: z.string().min(1).optional(),
+  /** Durable source workspace used to keep session-only Design resumes scoped. */
+  workspace: z.string().min(1).max(4096).optional(),
+  /** Durable thread ownership snapshot for session-only resume recovery. */
+  threadAgentSurface: z.enum(['code', 'write', 'design']).optional(),
+  /** Effective per-turn intent; distinct from durable thread ownership. */
+  agentSurface: z.enum(['code', 'write', 'design']).optional(),
+  /** Effective Design task contract retained with the queued user request. */
+  designProfile: DesignTaskProfileSchema.optional(),
+  /** Immutable canvas target used for live and replay routing. */
+  designDocumentTarget: DesignDocumentTargetSchema.optional(),
+  /** Frozen canvas placement intent for replaying an AI image after restart. */
+  designImagePlacementTarget: DesignImagePlacementTargetSchema.optional()
 })
 export type UserTurnItem = z.infer<typeof UserTurnItem>
 
@@ -105,6 +124,72 @@ export const GoalContextTurnItem = TurnItemBase.extend({
   text: z.string()
 })
 export type GoalContextTurnItem = z.infer<typeof GoalContextTurnItem>
+
+export const ModelContextAuthority = z.enum([
+  'runtime',
+  'user',
+  'workspace',
+  'skill',
+  'extension',
+  'reference'
+])
+export type ModelContextAuthority = z.infer<typeof ModelContextAuthority>
+
+export const ModelContextBlockState = z.object({
+  key: z.string().min(1),
+  kind: z.string().min(1),
+  authority: ModelContextAuthority,
+  state: z.enum(['active', 'inactive']),
+  digest: z.string().min(1).optional()
+}).strict()
+export type ModelContextBlockState = z.infer<typeof ModelContextBlockState>
+
+/**
+ * Exact, private model-visible context appended before a model dispatch.
+ * The rendered text is persisted so a restart never regenerates already-sent
+ * time, persona, mode, workspace, Skill, or recovery bytes differently.
+ */
+export const ModelContextTurnItem = TurnItemBase.extend({
+  kind: z.literal('model_context'),
+  role: z.literal('system'),
+  status: z.literal('completed'),
+  formatVersion: z.literal(1),
+  stepIndex: z.number().int().nonnegative(),
+  contentDigest: z.string().min(1),
+  blocks: z.array(ModelContextBlockState),
+  text: z.string().min(1)
+})
+export type ModelContextTurnItem = z.infer<typeof ModelContextTurnItem>
+
+export const INTERNAL_RUNTIME_CONTEXT_MAX_CHARS = 32_768
+
+/** Private host input projected into request-only context for its owning turn. */
+export const RuntimeContextSourceTurnItem = TurnItemBase.extend({
+  kind: z.literal('runtime_context_source'),
+  role: z.literal('system'),
+  status: z.literal('completed'),
+  contextKind: z.literal('host-control'),
+  content: z.string().trim().min(1).max(INTERNAL_RUNTIME_CONTEXT_MAX_CHARS)
+})
+export type RuntimeContextSourceTurnItem = z.infer<typeof RuntimeContextSourceTurnItem>
+
+/**
+ * Durable, model-visible checkpoint written when a turn is interrupted by a
+ * runtime restart or host shutdown. It records what the task was doing (first
+ * user request, last assistant progress, recently completed tool calls) so an
+ * auto-resumed turn can pick up where the work stopped instead of asking the
+ * user to repeat themselves. Like goal context it is canonical session
+ * history, never renderer content.
+ */
+export const InterruptionNoteTurnItem = TurnItemBase.extend({
+  kind: z.literal('interruption_note'),
+  role: z.literal('system'),
+  status: z.literal('completed'),
+  /** Stable id of the interrupted turn this note describes. */
+  sourceTurnId: z.string().min(1),
+  text: z.string()
+})
+export type InterruptionNoteTurnItem = z.infer<typeof InterruptionNoteTurnItem>
 
 export const AssistantTextTurnItem = TurnItemBase.extend({
   kind: z.literal('assistant_text'),
@@ -228,6 +313,9 @@ export type ErrorTurnItem = z.infer<typeof ErrorTurnItem>
 export const TurnItem = z.discriminatedUnion('kind', [
   UserTurnItem,
   GoalContextTurnItem,
+  ModelContextTurnItem,
+  RuntimeContextSourceTurnItem,
+  InterruptionNoteTurnItem,
   AssistantTextTurnItem,
   AssistantReasoningTurnItem,
   ToolCallTurnItem,
@@ -244,10 +332,18 @@ export type TurnItemKind = TurnItem['kind']
 
 /** Internal history records must never be projected through public thread APIs. */
 export function isPublicTurnItem(item: TurnItem): boolean {
-  return item.kind !== 'goal_context'
+  return item.kind !== 'goal_context' && item.kind !== 'model_context' &&
+    item.kind !== 'runtime_context_source' && item.kind !== 'interruption_note'
 }
 
-/** Exact private strings to remove from any diagnostic request capture. */
+/**
+ * Exact private strings to remove from any diagnostic request capture. Covers
+ * all internal record kinds: active-goal instructions, append-only model
+ * context, and interruption checkpoints must not leak into debug traces.
+ */
 export function goalContextTexts(items: readonly TurnItem[]): string[] {
-  return [...new Set(items.flatMap((item) => item.kind === 'goal_context' ? [item.text] : []))]
+  return [...new Set(items.flatMap((item) =>
+    item.kind === 'goal_context' || item.kind === 'model_context' ||
+      item.kind === 'interruption_note' ? [item.text] : []
+  ))]
 }

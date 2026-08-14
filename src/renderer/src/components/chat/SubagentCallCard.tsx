@@ -1,343 +1,59 @@
-import type { ReactElement } from 'react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
 import { useTranslation } from 'react-i18next'
-import type { TFunction } from 'i18next'
-import { Check, ChevronDown, ChevronRight, Eye, Hourglass, Loader2 } from 'lucide-react'
+import { Check, ChevronDown, ChevronRight, Eye, Hourglass, Loader2, RotateCcw } from 'lucide-react'
 import type { ChatBlock, ToolBlock } from '../../agent/types'
 import { useChatStore } from '../../store/chat-store'
+import { BUILTIN_AGENT_CATALOG_BY_ID } from '../../../../../kun/src/delegation/builtin-agent-catalog'
 import { AgentKun } from '../subagents/AgentKun'
 import {
-  isTerminalSubagentStatus,
   SubagentLiveAvatar as AvatarDisc,
   SubagentLivenessLane as LaneHairline,
-  type SubagentLivenessStatus,
   useSubagentElapsed,
   useSubagentReducedMotion
 } from '../subagents/SubagentLiveness'
-import { BUILTIN_AGENT_CATALOG_BY_ID } from '../../../../../kun/src/delegation/builtin-agent-catalog'
 import { AssistantMarkdown } from './AssistantMarkdown'
 import { ExplorePeekPopover } from './ExplorePeekPopover'
+import { FastContextEvidenceDetail, FastContextEvidencePill } from './FastContextEvidenceDetail'
 import {
   firstUsefulLine,
   isBareSubagentToolName,
-  isExploreToolBlock,
-  resolveExploreTaskTitle
-} from './explore-card-copy'
+  isFastContextToolBlock,
+  resolveFastContextTaskTitle
+} from './fast-context-card-copy'
 import {
   formatChildActivityLabel,
   readChildActivityFromBlock
 } from './explore-peek-summary'
+import {
+  AgentModelMetadata,
+  BackgroundPill,
+  ExploreKindBadge,
+  GeneratedPill,
+  KNOWN_POSE_IDS,
+  MetaChip,
+  StatusPill,
+  hashHue,
+  isTerminal,
+  parseDelegateDetail,
+  parseExploreBatchChildren,
+  parseFastContextEvidencePack,
+  readChildMeta,
+  resolveStatus,
+  subagentStatusText,
+  subagentResumeRequestId,
+  useOnScreen,
+  type OpenChildThreadHandler
+} from './subagent-call-card-support'
+import { SubagentStopControl } from './SubagentStopControl'
 
-/**
- * "Kun Crew" — the subagent (`delegate_task`) visualization for the chat
- * timeline. A single delegation renders as one {@link SubagentCallCard}; sibling
- * delegations of one turn coalesce under a {@link SwarmHeader} (only N >= 2).
- *
- * Three independent visual channels: AgentKun **pose** = role, **motion** =
- * liveness, **disc ring + status dot** = status. Bound only to fields that
- * exist today (`block.meta.child` + guarded parse of the tool `detail` JSON);
- * every read degrades gracefully so a contract change never blanks the card.
- */
+export { parseDelegateDetail } from './subagent-call-card-support'
+export type { OpenChildThreadHandler } from './subagent-call-card-support'
 
-type CardStatus = SubagentLivenessStatus
-export type OpenChildThreadHandler = (threadId: string) => void
-
-const KNOWN_POSE_IDS = new Set([
-  'general',
-  'explore',
-  'design-reviewer',
-  'over-engineering-reviewer',
-  'code-reviewer',
-  'test-engineer',
-  'security-auditor',
-  'web-performance-auditor',
-  'code-review',
-  'compaction',
-  'title',
-  'summary'
-])
-
-/** Parsed shape of the `delegate_task` / `explore_agent` tool `detail` JSON (all optional). */
-type DelegateDetail = {
-  /** The child thread id — always present in the tool result, unlike `meta.child`. */
-  childId?: string
-  status?: 'queued' | 'running' | 'completed' | 'failed' | 'aborted'
-  /** Short UI title from explore_agent (or early lifecycle updates). */
-  title?: string
-  /** Narrow explore query from the initial tool arguments payload. */
-  query?: string
-  summary?: string
-  error?: string
-  profile?: string
-  profileName?: string
-  model?: string
-  toolPolicy?: string
-  toolInvocations?: number
-  durationMs?: number
-  queuedMs?: number
-  totalTokens?: number
-  detached?: boolean
-  generated?: boolean
-  generatedAgentName?: string
-}
-
-export function parseDelegateDetail(detail: string | undefined): DelegateDetail {
-  if (!detail || !detail.trim()) return {}
-  let raw: unknown
-  try {
-    raw = JSON.parse(detail)
-  } catch {
-    return {}
-  }
-  if (!raw || typeof raw !== 'object') return {}
-  const obj = raw as Record<string, unknown>
-  const usage = obj.usage && typeof obj.usage === 'object' ? (obj.usage as Record<string, unknown>) : undefined
-  const routing = obj.routing && typeof obj.routing === 'object' ? (obj.routing as Record<string, unknown>) : undefined
-  const generatedAgent = obj.generatedAgent && typeof obj.generatedAgent === 'object'
-    ? (obj.generatedAgent as Record<string, unknown>)
-    : undefined
-  const routingAgent = routing?.agent && typeof routing.agent === 'object'
-    ? (routing.agent as Record<string, unknown>)
-    : undefined
-  const str = (v: unknown): string | undefined =>
-    typeof v === 'string' && v.trim() ? v.trim() : undefined
-  const status = (v: unknown): DelegateDetail['status'] =>
-    v === 'queued' || v === 'running' || v === 'completed' || v === 'failed' || v === 'aborted'
-      ? v
-      : undefined
-  const num = (v: unknown): number | undefined =>
-    typeof v === 'number' && Number.isFinite(v) ? v : undefined
-  return {
-    childId: str(obj.childId),
-    status: status(obj.status),
-    title: str(obj.title),
-    query: str(obj.query),
-    summary: str(obj.summary),
-    error: str(obj.error),
-    profile: str(obj.profile),
-    profileName: str(obj.profileName),
-    model: str(obj.model),
-    toolPolicy: str(obj.toolPolicy),
-    toolInvocations: num(obj.toolInvocations),
-    durationMs: num(obj.durationMs),
-    queuedMs: num(obj.queuedMs),
-    totalTokens: usage ? num(usage.totalTokens) : undefined,
-    detached: obj.detached === true,
-    generated: routing?.selectedKind === 'generated' || str(obj.profile)?.startsWith('generated:') === true,
-    generatedAgentName: str(generatedAgent?.name) ?? str(routingAgent?.name)
-  }
-}
-
-type ChildMeta = {
-  childId?: string
-  childLabel?: string
-  childProfile?: string
-  childProfileName?: string
-  childModel?: string
-  childStatus?: string
-  childSeq?: number
-  parentTurnId?: string
-  toolInvocations?: number
-  durationMs?: number
-  queuedMs?: number
-  totalTokens?: number
-  detached?: boolean
-}
-
-function readChildMeta(block: ChatBlock): ChildMeta {
-  const meta =
-    block.kind === 'tool' || block.kind === 'approval' || block.kind === 'user'
-      ? block.meta
-      : undefined
-  const child = meta?.child && typeof meta.child === 'object' ? (meta.child as Record<string, unknown>) : null
-  if (!child) return {}
-  const str = (v: unknown): string | undefined =>
-    typeof v === 'string' && v.trim() ? v.trim() : undefined
-  return {
-    childId: str(child.childId),
-    childLabel: str(child.childLabel),
-    childProfile: str(child.childProfile),
-    childProfileName: str(child.childProfileName),
-    childModel: str(child.childModel),
-    childStatus: str(child.childStatus),
-    childSeq: typeof child.childSeq === 'number' ? child.childSeq : undefined,
-    parentTurnId: str(child.parentTurnId),
-    toolInvocations: typeof child.toolInvocations === 'number' ? child.toolInvocations : undefined,
-    durationMs: typeof child.durationMs === 'number' ? child.durationMs : undefined,
-    queuedMs: typeof child.queuedMs === 'number' ? child.queuedMs : undefined,
-    totalTokens: typeof child.totalTokens === 'number' ? child.totalTokens : undefined,
-    detached: child.detached === true
-  }
-}
-
-/**
- * Map the child run + block status to one of five card states. `childStatus`
- * (when present) wins; otherwise fall back to `block.status`.
- */
-function resolveStatus(block: ChatBlock, child: ChildMeta, detail?: DelegateDetail): CardStatus {
-  const detached = child.detached === true || detail?.detached === true
-  const cs = child.childStatus
-  if (detached) {
-    if (cs === 'completed') return 'done'
-    if (cs === 'failed' || cs === 'aborted') return 'failed'
-    if (cs === 'queued' || cs === 'running') return 'running'
-    if (detail?.status === 'completed') return 'done'
-    if (detail?.status === 'failed' || detail?.status === 'aborted') return 'failed'
-    if (detail?.status === 'queued' || detail?.status === 'running') return 'running'
-  }
-  if (cs === 'queued') return 'queued'
-  if (cs === 'running') return 'running'
-  if (cs === 'completed') return 'done'
-  if (cs === 'failed' || cs === 'aborted') return 'failed'
-  // Pending approval surfaced as an approval block alongside the child.
-  if (block.kind === 'approval' && block.status === 'pending') return 'awaiting-permission'
-  const blockStatus =
-    'status' in block && typeof block.status === 'string' ? block.status : undefined
-  if (blockStatus === 'running') return 'running'
-  if (blockStatus === 'error') return 'failed'
-  if (blockStatus === 'success') return 'done'
-  return 'running'
-}
-
-function isTerminal(status: CardStatus): boolean {
-  return isTerminalSubagentStatus(status)
-}
-
-/** Deterministic hue from a string, so same-pose custom agents differ. */
-function hashHue(input: string): number {
-  let h = 0
-  for (let i = 0; i < input.length; i += 1) {
-    h = (h * 31 + input.charCodeAt(i)) | 0
-  }
-  return Math.abs(h) % 360
-}
-
-/** Freeze animation when the card scrolls out of the viewport. */
-function useOnScreen(ref: React.RefObject<Element | null>): boolean {
-  const [onScreen, setOnScreen] = useState(true)
-  useEffect(() => {
-    const el = ref.current
-    if (!el || typeof IntersectionObserver === 'undefined') return
-    const io = new IntersectionObserver((entries) => {
-      const entry = entries[0]
-      if (entry) setOnScreen(entry.isIntersecting)
-    })
-    io.observe(el)
-    return () => io.disconnect()
-  }, [ref])
-  return onScreen
-}
-
-function StatusPill({ status, t }: { status: CardStatus; t: (k: string) => string }): ReactElement | null {
-  const base = 'whitespace-nowrap rounded-full px-2 py-[2px] text-[10.5px] font-semibold'
-  switch (status) {
-    case 'queued':
-      return <span className={`${base} bg-ds-card-muted text-ds-muted`}>{t('subagentStatusQueued')}</span>
-    case 'running':
-      return <span className={`${base} bg-accent/10 text-accent`}>{t('subagentStatusRunning')}</span>
-    case 'done':
-      return (
-        <span className={`${base} text-ds-success bg-ds-success-soft`}>{t('subagentStatusDone')}</span>
-      )
-    case 'failed':
-      return (
-        <span className={`${base} text-ds-danger bg-ds-danger-soft`}>{t('subagentStatusFailed')}</span>
-      )
-    case 'awaiting-permission':
-      return (
-        <span className={`${base} bg-amber-500/10 text-amber-600 dark:text-amber-300`}>
-          {t('subagentStatusAwaiting')}
-        </span>
-      )
-    default:
-      return null
-  }
-}
-
-function BackgroundPill({ t }: { t: (k: string) => string }): ReactElement {
-  return (
-    <span className="whitespace-nowrap rounded-full bg-sky-500/10 px-2 py-[2px] text-[10.5px] font-semibold text-sky-600 dark:text-sky-300">
-      {t('subagentDetachedBadge')}
-    </span>
-  )
-}
-
-function GeneratedPill({ t }: { t: TFunction<'common'> }): ReactElement {
-  return (
-    <span className="whitespace-nowrap rounded-full bg-violet-500/10 px-2 py-[2px] text-[10.5px] font-semibold text-violet-600 dark:text-violet-300">
-      {t('subagentGeneratedBadge', { defaultValue: 'Generated' })}
-    </span>
-  )
-}
-
-function ExploreKindBadge({ t }: { t: TFunction<'common'> }): ReactElement {
-  return (
-    <span
-      data-testid="explore-kind-badge"
-      className="shrink-0 rounded-full bg-emerald-500/12 px-2 py-[2px] text-[10.5px] font-semibold text-emerald-700 dark:text-emerald-300"
-    >
-      {t('exploreKindBadge', { defaultValue: 'Explore' })}
-    </span>
-  )
-}
-
-function MetaChip({ children, title }: { children: React.ReactNode; title?: string }): ReactElement {
-  return (
-    <span
-      className="rounded-[7px] border border-ds-border-muted bg-ds-card-muted/45 px-2 py-[3px] text-[10.5px] text-ds-muted"
-      title={title}
-    >
-      {children}
-    </span>
-  )
-}
-
-function AgentModelMetadata({
-  agentIdentity,
-  profileId,
-  model,
-  compact,
-  t
-}: {
-  agentIdentity: string
-  profileId?: string
-  /** When omitted/empty, the model chips are hidden (never show "Not recorded"). */
-  model?: string
-  compact: boolean
-  t: TFunction<'common'>
-}): ReactElement {
-  const labelClass = 'shrink-0 rounded-[5px] bg-ds-card-muted/70 px-1.5 py-0.5 font-semibold text-ds-faint'
-  const valueClass = 'min-w-0 truncate rounded-[5px] bg-ds-card-muted/45 px-1.5 py-0.5 text-ds-muted'
-  const modelValue = model?.trim() || ''
-  return (
-    <div
-      data-testid="subagent-route-metadata"
-      data-agent-id={profileId ?? ''}
-      data-model={modelValue}
-      className="mt-1 flex min-w-0 items-center gap-1 overflow-hidden text-[10.5px] leading-4"
-    >
-      <span className={labelClass}>{t('subagentAgentLabel', { defaultValue: 'Agent' })}</span>
-      <span
-        className={`${valueClass} ${compact ? 'max-w-[180px]' : 'max-w-[240px]'}`}
-        title={agentIdentity}
-      >
-        {agentIdentity}
-      </span>
-      {modelValue ? (
-        <>
-          <span className="shrink-0 text-ds-faint">·</span>
-          <span className={labelClass}>{t('subagentModelLabel', { defaultValue: 'Model' })}</span>
-          <span
-            className={`${valueClass} ${compact ? 'max-w-[130px]' : 'max-w-[180px]'} font-mono`}
-            title={modelValue}
-          >
-            {modelValue}
-          </span>
-        </>
-      ) : null}
-    </div>
-  )
-}
+const SUBAGENT_RESUME_PROMPT = [
+  'Continue the interrupted delegated task in the existing child session.',
+  'Review its history and current workspace state, avoid repeating completed work,',
+  'and finish the original delegated task or report a concrete blocker.'
+].join(' ')
 
 export function SubagentCallCard({
   block,
@@ -357,6 +73,8 @@ export function SubagentCallCard({
 }): ReactElement | null {
   const { t } = useTranslation('common')
   const selectThread = useChatStore((s) => s.selectThread)
+  const sendMessage = useChatStore((s) => s.sendMessage)
+  const parentBusy = useChatStore((s) => s.busy)
   const reducedMotion = useSubagentReducedMotion()
   const ref = useRef<HTMLElement | null>(null)
   const onScreen = useOnScreen(ref)
@@ -366,19 +84,29 @@ export function SubagentCallCard({
     () => parseDelegateDetail(block.kind === 'tool' ? (block as ToolBlock).detail : undefined),
     [block]
   )
+  const evidencePack = useMemo(
+    () => parseFastContextEvidencePack(block.kind === 'tool' ? (block as ToolBlock).detail : undefined),
+    [block]
+  )
   const activity = useMemo(() => readChildActivityFromBlock(block), [block])
   const status = resolveStatus(block, child, detail)
   const detached = child.detached === true || detail.detached === true
+  const resultRef = child.resultRef ?? detail.resultRef
+  const resultExternalized = Boolean(resultRef)
+  const resultUnavailableReason = child.resultUnavailableReason ?? detail.resultUnavailableReason
   const generated = detail.generated === true || (child.childProfile?.startsWith('generated:') ?? false)
   const animate = !reducedMotion && onScreen && status === 'running'
-  const isExplore = block.kind === 'tool' && isExploreToolBlock(block as ToolBlock)
+  const launcher = child.childLauncher || detail.launcher
+  const isFastContext = launcher === 'fast_context' || (launcher as string | undefined) === 'explore_agent' || (
+    block.kind === 'tool' && isFastContextToolBlock(block as ToolBlock)
+  )
 
   // Profile id: prefer the live `childProfile` from the runtime metadata (set on
   // the first queued/running event) so the agent type shows immediately; the
   // result-JSON `profile` only arrives after the child completes.
-  const profileId = child.childProfile || detail.profile || (isExplore ? 'explore' : undefined)
+  const profileId = child.childProfile || detail.profile || (isFastContext ? 'explore' : undefined)
   // Pose key: profile → childLabel → block toolName → 'custom'.
-  const poseId = profileId || (isExplore ? 'explore' : undefined) || child.childLabel || child.childId || 'custom'
+  const poseId = profileId || (isFastContext ? 'explore' : undefined) || child.childLabel || child.childId || 'custom'
   const isKnownPose = KNOWN_POSE_IDS.has(poseId)
   const hue = isKnownPose ? null : hashHue(poseId)
 
@@ -392,12 +120,12 @@ export function SubagentCallCard({
     profileId && BUILTIN_AGENT_CATALOG_BY_ID[profileId]
       ? t(`subagentsPanel.role.${profileId}.name`, BUILTIN_AGENT_CATALOG_BY_ID[profileId]!.name)
       : undefined
-  const exploreAgentName = t(
+  const fastContextName = t(
     'subagentsPanel.role.explore.name',
     exploreCatalog?.name ?? 'Repository Explorer'
   )
-  const agentName = isExplore
-    ? (localizedBuiltinName || recordedAgentName || exploreAgentName)
+  const agentName = isFastContext
+    ? (localizedBuiltinName || recordedAgentName || fastContextName)
     : (
       localizedBuiltinName ||
       recordedAgentName ||
@@ -407,12 +135,12 @@ export function SubagentCallCard({
       profileId?.trim() ||
       t('subagentNotRecorded', { defaultValue: 'Not recorded' })
     )
-  const agentIdentity = isExplore
+  const agentIdentity = isFastContext
     ? agentName
     : (profileId && agentName !== profileId ? `${agentName} (${profileId})` : agentName)
   const model = (child.childModel || detail.model || '').trim() || undefined
-  const taskTitle = isExplore
-    ? resolveExploreTaskTitle({
+  const taskTitle = isFastContext
+    ? resolveFastContextTaskTitle({
       childLabel: child.childLabel,
       title: detail.title,
       query: detail.query,
@@ -432,7 +160,7 @@ export function SubagentCallCard({
   const childId = child.childId || detail.childId
   // Short subtitle only — keep CTA on the explicit process button, not in truncated text.
   const taskLine = activityLine || (
-    isExplore && isTerminal(status)
+    isFastContext && isTerminal(status)
       ? (firstUsefulLine(detail.summary, 96) || firstUsefulLine(detail.query, 96) || undefined)
       : (
         detail.summary?.trim() ||
@@ -449,12 +177,36 @@ export function SubagentCallCard({
     tickNow
   )
 
-  const hasBody = Boolean(detail.summary?.trim() || detail.error?.trim())
-  // Completed explore conclusions default open so the full text is readable.
-  const exploreConclusionDefaultOpen = isExplore && isTerminal(status) && hasBody
-  const [userToggled, setUserToggled] = useState<boolean | null>(null)
+  const hasBody = Boolean(detail.summary?.trim() || detail.error?.trim() || evidencePack)
+  const [conclusionExpanded, setConclusionExpanded] = useState(false)
   const [peekOpen, setPeekOpen] = useState(false)
-  const expanded = hasBody && !peekOpen && (userToggled ?? exploreConclusionDefaultOpen)
+  const [resuming, setResuming] = useState(false)
+  const resumeObservedBusy = useRef(false)
+  const expanded = hasBody && !peekOpen && conclusionExpanded
+  const resumeCount = child.resumeCount ?? detail.resumeCount ?? 0
+  const attemptParentTurnId = child.parentTurnId || detail.parentTurnId
+  const canResume = Boolean(
+    childId &&
+    (status === 'failed' || status === 'stopped') &&
+    (child.resumable ?? detail.resumable) === true &&
+    (!attemptParentTurnId || !block.turnId || attemptParentTurnId === block.turnId)
+  )
+
+  useEffect(() => {
+    if (!canResume) setResuming(false)
+  }, [canResume])
+  useEffect(() => {
+    if (!resuming) {
+      resumeObservedBusy.current = false
+      return
+    }
+    if (parentBusy) {
+      resumeObservedBusy.current = true
+    } else if (resumeObservedBusy.current) {
+      resumeObservedBusy.current = false
+      setResuming(false)
+    }
+  }, [parentBusy, resuming])
 
   const canJump = Boolean(childId)
   const openChild = (): void => {
@@ -468,7 +220,21 @@ export function SubagentCallCard({
   }
   const toggleConclusion = (): void => {
     if (!hasBody) return
-    setUserToggled(!(userToggled ?? exploreConclusionDefaultOpen))
+    setConclusionExpanded((value) => !value)
+  }
+  const resumeChild = async (): Promise<void> => {
+    if (!canResume || !childId || resuming || parentBusy || !sendMessage) return
+    setResuming(true)
+    const accepted = await sendMessage(SUBAGENT_RESUME_PROMPT, 'agent', {
+      clientRequestId: subagentResumeRequestId(childId, resumeCount),
+      ...(child.parentThreadId || detail.parentThreadId
+        ? { expectedThreadId: child.parentThreadId || detail.parentThreadId }
+        : {}),
+      displayText: t('subagentResumeDisplayText', { defaultValue: 'Continue interrupted subagent' }),
+      orchestration: 'direct',
+      subagentResume: { childId, expectedResumeCount: resumeCount }
+    }).catch(() => false)
+    if (!accepted) setResuming(false)
   }
 
   // Stagger sweep/pulse per child so a swarm reads as independent.
@@ -484,9 +250,9 @@ export function SubagentCallCard({
       ref={ref as React.RefObject<HTMLElement>}
       className={`${shellClass}${failBorder}`}
       style={{ ['--ds-subagent-stagger' as string]: staggerDelay }}
-      aria-label={`${taskTitle} · ${agentIdentity}${model ? ` · ${model}` : ''} · ${pillText(status, t)}`}
+      aria-label={`${taskTitle} · ${agentIdentity}${model ? ` · ${model}` : ''} · ${subagentStatusText(status, t)}`}
       data-testid="subagent-call-card"
-      data-explore={isExplore ? 'true' : 'false'}
+      data-explore={isFastContext ? 'true' : 'false'}
       data-activity-label={activityLine ?? ''}
       data-conclusion-expanded={expanded ? 'true' : 'false'}
     >
@@ -508,13 +274,25 @@ export function SubagentCallCard({
           hasBody ? 'cursor-pointer transition hover:bg-ds-hover/30' : ''
         }`}
       >
-        <AvatarDisc poseId={poseId} status={status} hue={hue} compact={compact} animate={animate} />
+        <span className="ds-subagent-focus-decoration contents">
+          <AvatarDisc poseId={poseId} status={status} hue={hue} compact={compact} animate={animate} />
+        </span>
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-2">
-            {isExplore ? <ExploreKindBadge t={t} /> : null}
+            {isFastContext ? <ExploreKindBadge t={t} /> : null}
+            {isFastContext ? <FastContextEvidencePill pack={evidencePack} status={status} t={t} /> : null}
             <span className="truncate text-[14px] font-semibold text-ds-ink" title={taskTitle}>{taskTitle}</span>
             {generated ? <GeneratedPill t={t} /> : null}
             {detached ? <BackgroundPill t={t} /> : null}
+            {resultExternalized ? (
+              <span
+                className="whitespace-nowrap rounded-full bg-amber-500/10 px-2 py-[2px] text-[10.5px] font-semibold text-amber-700 dark:text-amber-300"
+                title={resultRef?.artifactId}
+                data-testid="subagent-result-externalized"
+              >
+                {t('subagentResultExternalized', { defaultValue: 'Externalized' })}
+              </span>
+            ) : null}
             {!compact || !inGroup ? <StatusPill status={status} t={t} /> : null}
           </div>
           <AgentModelMetadata
@@ -551,6 +329,32 @@ export function SubagentCallCard({
                   : ''}
           </span>
         </span>
+        {canResume ? (
+          <button
+            type="button"
+            disabled={resuming || parentBusy}
+            onClick={(e) => {
+              e.stopPropagation()
+              void resumeChild()
+            }}
+            className="flex h-7 shrink-0 items-center gap-1 rounded-md bg-emerald-500/10 px-2 text-[11px] font-semibold text-emerald-700 transition hover:bg-emerald-500/15 disabled:cursor-not-allowed disabled:opacity-50 dark:text-emerald-300"
+            aria-label={t('subagentResumeAction', { defaultValue: 'Continue subagent' })}
+            title={t('subagentResumeAction', { defaultValue: 'Continue subagent' })}
+            data-testid="subagent-resume-button"
+          >
+            {resuming ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={2} />
+            ) : (
+              <RotateCcw className="h-3.5 w-3.5" strokeWidth={2} />
+            )}
+            <span>{t('subagentResumeShort', { defaultValue: 'Continue' })}</span>
+          </button>
+        ) : null}
+        <SubagentStopControl
+          childId={childId}
+          active={status === 'queued' || status === 'running' || status === 'awaiting-permission'}
+          t={t}
+        />
         {childId ? (
           <button
             type="button"
@@ -576,18 +380,18 @@ export function SubagentCallCard({
             }}
             className="flex h-7 shrink-0 items-center gap-1 rounded-md bg-accent/10 px-2 text-[11px] font-semibold text-accent transition hover:bg-accent/15"
             aria-label={
-              isExplore
+              isFastContext
                 ? t('exploreViewProcess', { defaultValue: 'View explore process' })
                 : t('subagentOpenSession')
             }
             title={
-              isExplore
+              isFastContext
                 ? t('exploreViewProcess', { defaultValue: 'View explore process' })
                 : t('subagentOpenSession')
             }
             data-testid="explore-open-process-button"
           >
-            {isExplore
+            {isFastContext
               ? t('exploreViewProcessShort', { defaultValue: 'Open' })
               : t('subagentOpenSessionShort', { defaultValue: 'Open' })}
             <ChevronRight className="h-3.5 w-3.5" strokeWidth={2} />
@@ -616,7 +420,7 @@ export function SubagentCallCard({
               {detail.error}
             </pre>
           ) : detail.summary?.trim() ? (
-            isExplore ? (
+            isFastContext ? (
               <div className="max-h-[360px] overflow-y-auto text-[14px] leading-6 text-ds-ink">
                 <AssistantMarkdown
                   text={detail.summary}
@@ -630,6 +434,7 @@ export function SubagentCallCard({
               </p>
             )
           ) : null}
+          <FastContextEvidenceDetail pack={evidencePack} t={t} />
 
           <div className="mt-3 flex flex-wrap items-center gap-1.5">
             {detail.profile ? <MetaChip title={detail.profile}>{detail.profile}</MetaChip> : null}
@@ -639,6 +444,20 @@ export function SubagentCallCard({
             {detail.toolPolicy ? (
               <MetaChip>
                 {detail.toolPolicy === 'readOnly' ? t('subagentPolicyReadOnly') : t('subagentPolicyFull')}
+              </MetaChip>
+            ) : null}
+            {resultRef ? (
+              <MetaChip title={resultRef.artifactId}>
+                {t('subagentResultSize', {
+                  defaultValue: '{{lines}} lines · {{bytes}} bytes',
+                  lines: resultRef.lineCount,
+                  bytes: resultRef.byteSize
+                })}
+              </MetaChip>
+            ) : null}
+            {resultUnavailableReason ? (
+              <MetaChip title={resultUnavailableReason}>
+                {t('subagentResultUnavailable', { defaultValue: 'Full result unavailable' })}
               </MetaChip>
             ) : null}
           </div>
@@ -652,7 +471,7 @@ export function SubagentCallCard({
           childId={childId}
           title={taskTitle}
           elapsedLabel={elapsed}
-          statusLabel={pillText(status, t)}
+          statusLabel={subagentStatusText(status, t)}
           activity={activity}
           summary={detail.summary}
           onClose={() => setPeekOpen(false)}
@@ -670,23 +489,6 @@ export function SubagentCallCard({
   )
 }
 
-function pillText(status: CardStatus, t: (k: string) => string): string {
-  switch (status) {
-    case 'queued':
-      return t('subagentStatusQueued')
-    case 'running':
-      return t('subagentStatusRunning')
-    case 'done':
-      return t('subagentStatusDone')
-    case 'failed':
-      return t('subagentStatusFailed')
-    case 'awaiting-permission':
-      return t('subagentStatusAwaiting')
-    default:
-      return ''
-  }
-}
-
 /** Best-effort task one-liner from a generic delegate/explore summary string. */
 function splitTaskLine(block: ToolBlock): string | undefined {
   const detail = parseDelegateDetail(block.detail)
@@ -694,11 +496,11 @@ function splitTaskLine(block: ToolBlock): string | undefined {
   const raw = block.summary?.trim()
   if (!raw) return undefined
   const stripped = raw
-    .replace(/^(delegate_task|explore_agent|generate_subagent)\s*:\s*/i, '')
+    .replace(/^(delegate_task|fast_context|explore_agent|generate_subagent)\s*:\s*/i, '')
     .trim()
   if (!stripped || stripped.length > 160) return undefined
   // Bare tool name (no task text yet, e.g. while running) — nothing useful.
-  if (/^(delegate_task|explore_agent|generate_subagent)$/i.test(stripped)) return undefined
+  if (/^(delegate_task|fast_context|explore_agent|generate_subagent)$/i.test(stripped)) return undefined
   return stripped
 }
 
@@ -719,7 +521,8 @@ export function SubagentGroup({
   const reducedMotion = useSubagentReducedMotion()
   const [tickNow, setTickNow] = useState(() => Date.now())
 
-  const sorted = [...blocks].sort((a, b) => {
+  const expandedBlocks = blocks.flatMap(expandExploreBatchBlock)
+  const sorted = [...expandedBlocks].sort((a, b) => {
     const sa = readChildMeta(a).childSeq ?? 0
     const sb = readChildMeta(b).childSeq ?? 0
     return sa - sb
@@ -739,14 +542,14 @@ export function SubagentGroup({
   useEffect(() => {
     if (!anyRunning) return
     setTickNow(Date.now())
-    const id = window.setInterval(() => setTickNow(Date.now()), 1000)
-    return () => window.clearInterval(id)
+    const id = globalThis.setInterval(() => setTickNow(Date.now()), 1000)
+    return () => globalThis.clearInterval(id)
   }, [anyRunning])
 
   if (sorted.length === 0) return null
 
   const allExplore = sorted.every(
-    (b) => b.kind === 'tool' && isExploreToolBlock(b as ToolBlock)
+    (b) => b.kind === 'tool' && isFastContextToolBlock(b as ToolBlock)
   )
 
   // N=1, or an all-explore cluster: full independent cards (no swarm shell).
@@ -801,7 +604,7 @@ export function SubagentGroup({
             <span className="font-normal text-ds-muted"> · {summaryParts.join(' · ')}</span>
           ) : null}
         </span>
-        <span className="flex shrink-0">
+        <span className="ds-subagent-focus-decoration flex shrink-0">
           {clusterPoses.map((pose, i) => (
             <span
               key={`${pose}-${i}`}
@@ -845,4 +648,44 @@ export function SubagentGroup({
       ) : null}
     </section>
   )
+}
+
+function expandExploreBatchBlock(block: ChatBlock): ChatBlock[] {
+  if (block.kind !== 'tool' || !isFastContextToolBlock(block as ToolBlock)) return [block]
+  const tool = block as ToolBlock
+  const children = parseExploreBatchChildren(tool.detail)
+  if (children.length === 0) return [block]
+  return children.map((child) => ({
+    ...tool,
+    id: `${tool.id}:explore:${child.index}`,
+    summary: child.title,
+    status: child.status === 'completed'
+      ? 'success'
+      : child.status === 'failed' || child.status === 'aborted'
+        ? 'error'
+        : 'running',
+    detail: JSON.stringify({
+      ...child,
+      ...(typeof child.totalTokens === 'number'
+        ? { usage: { totalTokens: child.totalTokens } }
+        : {})
+    }),
+    meta: {
+      ...tool.meta,
+      toolName: 'fast_context',
+      child: {
+        childId: child.childId,
+        childLabel: child.title,
+        childProfile: 'explore',
+        childProfileName: child.profileName,
+        childModel: child.model,
+        childStatus: child.status,
+        childSeq: child.index,
+        parentTurnId: tool.turnId,
+        toolInvocations: child.toolInvocations,
+        durationMs: child.durationMs,
+        totalTokens: child.totalTokens
+      }
+    }
+  }))
 }

@@ -54,7 +54,6 @@ describe('component designer profile', () => {
       enabled: true,
       useExistingAgents: true,
       maxParallel: 3,
-      maxChildRuns: 12,
       defaultToolPolicy: 'inherit',
       profiles: {}
     })

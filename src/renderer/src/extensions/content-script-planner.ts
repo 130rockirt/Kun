@@ -7,6 +7,7 @@ import {
 } from './contribution-registry'
 
 export type WorkbenchSurfaceToken = Exclude<HostSurfaceMatcher, 'workbench:*'>
+export type WorkbenchTaskSurface = 'code' | 'design'
 
 export type ProtectedSurfaceKind =
   | 'extension-install'
@@ -66,8 +67,11 @@ const UNSUPPORTED_DOM_WARNING =
 const CONTENT_SCRIPT_CSP =
   "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
 
-export function workbenchSurfaceForRoute(route: AppRoute): WorkbenchSurfaceToken | null {
-  if (route === 'chat') return 'workbench:code'
+export function workbenchSurfaceForRoute(
+  route: AppRoute,
+  taskSurface: WorkbenchTaskSurface = 'code'
+): WorkbenchSurfaceToken | null {
+  if (route === 'chat') return taskSurface === 'design' ? 'workbench:design' : 'workbench:code'
   if (route === 'design') return 'workbench:design'
   if (route === 'write') return 'workbench:write'
   if (route === 'claw') return 'workbench:connect'
@@ -114,13 +118,15 @@ function matchesSurface(matches: readonly HostSurfaceMatcher[], surface: Workben
 export function buildHostContentScriptPlan({
   contributions,
   route,
+  taskSurface,
   protectedSurface
 }: {
   contributions: readonly RegisteredContribution<'hostContentScripts'>[]
   route: AppRoute
+  taskSurface?: WorkbenchTaskSurface
   protectedSurface?: ProtectedSurfaceKind
 }): HostContentScriptPlan {
-  const surface = workbenchSurfaceForRoute(route)
+  const surface = workbenchSurfaceForRoute(route, taskSurface)
   const descriptors: HostContentScriptInjectionDescriptor[] = []
   const diagnostics: HostContentScriptDiagnostic[] = []
   const usedWorlds = new Map<number, string>()

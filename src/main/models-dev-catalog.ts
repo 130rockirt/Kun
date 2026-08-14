@@ -1,9 +1,12 @@
 import {
+  MAX_MODEL_CONTEXT_WINDOW_TOKENS,
+  MAX_MODEL_OUTPUT_TOKENS,
   resolveModelProviderProxyUrl,
   type AppSettingsV1
 } from '../shared/app-settings'
 import type {
   ModelsDevCatalogMatchMode,
+  ModelsDevCatalogMetadataIssue,
   ModelsDevCatalogModel,
   ModelsDevCatalogModality,
   ModelsDevCatalogRequest,
@@ -517,8 +520,19 @@ function sanitizeModel(fallbackId: string, value: unknown): ModelsDevCatalogMode
   const limit = isRecord(value.limit) ? value.limit : {}
   const reasoning = typeof value.reasoning === 'boolean' ? value.reasoning : undefined
   const toolCalling = typeof value.tool_call === 'boolean' ? value.tool_call : undefined
-  const contextWindowTokens = positiveSafeInteger(limit.context)
-  const maxOutputTokens = positiveSafeInteger(limit.output)
+  const metadataIssues: ModelsDevCatalogMetadataIssue[] = []
+  const contextWindowTokens = boundedCatalogLimit(
+    limit.context,
+    'contextWindowTokens',
+    MAX_MODEL_CONTEXT_WINDOW_TOKENS,
+    metadataIssues
+  )
+  const maxOutputTokens = boundedCatalogLimit(
+    limit.output,
+    'maxOutputTokens',
+    MAX_MODEL_OUTPUT_TOKENS,
+    metadataIssues
+  )
   return {
     id,
     ...(name ? { name } : {}),
@@ -528,7 +542,8 @@ function sanitizeModel(fallbackId: string, value: unknown): ModelsDevCatalogMode
     ...(reasoning !== undefined ? { reasoning } : {}),
     ...(toolCalling !== undefined ? { toolCalling } : {}),
     ...(contextWindowTokens ? { contextWindowTokens } : {}),
-    ...(maxOutputTokens ? { maxOutputTokens } : {})
+    ...(maxOutputTokens ? { maxOutputTokens } : {}),
+    ...(metadataIssues.length ? { metadataIssues } : {})
   }
 }
 
@@ -543,10 +558,16 @@ function sanitizeModalities(value: unknown): ModelsDevCatalogModality[] {
   return out
 }
 
-function positiveSafeInteger(value: unknown): number | undefined {
-  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
-    ? value
-    : undefined
+function boundedCatalogLimit(
+  value: unknown,
+  field: ModelsDevCatalogMetadataIssue['field'],
+  maxAllowed: number,
+  issues: ModelsDevCatalogMetadataIssue[]
+): number | undefined {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value)) return undefined
+  if (value > 0 && value <= maxAllowed) return value
+  issues.push({ field, code: 'out_of_range', rawValue: value, maxAllowed })
+  return undefined
 }
 
 function boundedString(value: unknown, maxLength: number): string | undefined {

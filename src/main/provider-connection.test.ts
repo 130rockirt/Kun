@@ -1,7 +1,23 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AppSettingsV1 } from '../shared/app-settings'
 import { CHATGPT_SUBSCRIPTION_MODEL_IDS, GROK_SUBSCRIPTION_MODEL_IDS } from '../shared/app-settings'
-import { parseModelIds, probeModelProvider, providerProbeHeaders } from './provider-connection'
+import {
+  describeProviderProbeError,
+  parseModelIds,
+  probeModelProvider,
+  providerProbeHeaders,
+  resolveElectronSystemProxyUrl
+} from './provider-connection'
+
+const electronResolveProxy = vi.hoisted(() => vi.fn())
+vi.mock('electron', () => ({
+  session: { defaultSession: { resolveProxy: electronResolveProxy } }
+}))
+
+beforeEach(() => {
+  electronResolveProxy.mockReset()
+  electronResolveProxy.mockResolvedValue('DIRECT')
+})
 
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -29,6 +45,82 @@ describe('providerProbeHeaders', () => {
       Accept: 'application/json',
       'anthropic-version': '2023-06-01'
     })
+  })
+})
+
+describe('provider probe network transport', () => {
+  it('uses the same Node transport as the model runtime when no proxy is configured', async () => {
+    const nodeFetch = vi.fn(async () => new Response(JSON.stringify({
+      data: [{ id: 'openai/gpt-5.4' }]
+    }), { status: 200 }))
+    vi.stubGlobal('fetch', nodeFetch)
+
+    await expect(probeModelProvider({
+      baseUrl: 'https://zenmux.ai/api/v1',
+      apiKey: 'sk-ai-v1-test',
+      endpointFormat: 'chat_completions'
+    })).resolves.toMatchObject({ ok: true, modelIds: ['openai/gpt-5.4'] })
+
+    expect(nodeFetch).toHaveBeenCalledWith(
+      'https://zenmux.ai/api/v1/models',
+      expect.objectContaining({ method: 'GET' })
+    )
+  })
+
+  it('surfaces the Node root cause when the runtime transport fails', async () => {
+    const dns = Object.assign(new Error('getaddrinfo ENOTFOUND zenmux.ai'), { code: 'ENOTFOUND' })
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      throw new TypeError('fetch failed', { cause: dns })
+    }))
+
+    const result = await probeModelProvider({
+      baseUrl: 'https://zenmux.ai/api/v1',
+      apiKey: 'sk-ai-v1-test',
+      endpointFormat: 'chat_completions'
+    })
+    expect(result).toMatchObject({ ok: false })
+    if (!result.ok) {
+      expect(result.message).toContain('getaddrinfo ENOTFOUND zenmux.ai')
+    }
+  })
+
+  it('suggests the resolved system proxy when it can reach the provider', async () => {
+    electronResolveProxy.mockResolvedValue('PROXY 127.0.0.1:10808; DIRECT')
+    const fetcher = vi.fn(async (_url: string | URL, _init: RequestInit | undefined, proxyUrl: string) => {
+      if (!proxyUrl) throw Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' })
+      return new Response(JSON.stringify({ data: [{ id: 'openai/gpt-5.4' }] }), { status: 200 })
+    })
+
+    const result = await probeModelProvider({
+      baseUrl: 'https://zenmux.ai/api/v1',
+      apiKey: 'sk-ai-v1-test',
+      endpointFormat: 'chat_completions'
+    }, undefined, fetcher)
+
+    expect(result).toMatchObject({
+      ok: false,
+      suggestedProxyUrl: 'http://127.0.0.1:10808/'
+    })
+    expect(fetcher).toHaveBeenLastCalledWith(
+      'https://zenmux.ai/api/v1/models',
+      expect.objectContaining({ method: 'GET' }),
+      'http://127.0.0.1:10808/'
+    )
+  })
+
+  it('parses SOCKS system proxy rules and ignores DIRECT fallbacks', async () => {
+    electronResolveProxy.mockResolvedValue('SOCKS5 127.0.0.1:7891; DIRECT')
+    await expect(resolveElectronSystemProxyUrl('https://zenmux.ai/api/v1/models'))
+      .resolves.toBe('socks5://127.0.0.1:7891')
+  })
+
+  it('formats nested network causes without leaking a bare fetch failed message', () => {
+    const tls = Object.assign(new Error('self-signed certificate'), {
+      code: 'DEPTH_ZERO_SELF_SIGNED_CERT'
+    })
+    expect(describeProviderProbeError(new TypeError('fetch failed', { cause: tls }))).toBe(
+      'fetch failed: self-signed certificate (DEPTH_ZERO_SELF_SIGNED_CERT)'
+    )
   })
 })
 
@@ -167,6 +259,45 @@ describe('probeModelProvider', () => {
     )
   })
 
+  it('discovers provider/model ids for both ZenMux credential families', async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({
+        object: 'list',
+        data: [
+          { id: 'openai/gpt-5.4' },
+          { id: 'anthropic/claude-sonnet-4.6' }
+        ]
+      }), { status: 200 })
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    for (const apiKey of ['sk-ai-v1-api', 'sk-ss-v1-plan']) {
+      await expect(probeModelProvider({
+        baseUrl: 'https://zenmux.ai/api/v1',
+        apiKey,
+        endpointFormat: 'chat_completions'
+      })).resolves.toMatchObject({
+        ok: true,
+        modelIds: ['openai/gpt-5.4', 'anthropic/claude-sonnet-4.6']
+      })
+    }
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    for (const [index, apiKey] of ['sk-ai-v1-api', 'sk-ss-v1-plan'].entries()) {
+      expect(fetchMock).toHaveBeenNthCalledWith(
+        index + 1,
+        'https://zenmux.ai/api/v1/models',
+        expect.objectContaining({
+          method: 'GET',
+          headers: {
+            Accept: 'application/json',
+            Authorization: `Bearer ${apiKey}`
+          }
+        })
+      )
+    }
+  })
+
   it('parses top-level arrays and provider-specific models envelopes without changing wire IDs', () => {
     expect(parseModelIds(JSON.stringify([
       { id: 'MiniMaxAI/MiniMax-M3' },
@@ -225,7 +356,11 @@ describe('probeModelProvider', () => {
       endpointFormat: 'responses'
     })
 
-    expect(result).toEqual({ ok: false, message: 'socket hang up' })
+    expect(result).toMatchObject({ ok: false })
+    if (!result.ok) {
+      expect(result.message).toContain('Request to https://api.example.com/v1/models failed')
+      expect(result.message).toContain('socket hang up')
+    }
   })
 
   it('identifies a broken configured proxy when direct connectivity works', async () => {

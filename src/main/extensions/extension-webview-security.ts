@@ -7,6 +7,7 @@ import {
   type ExtensionExternalWebviewRecord,
   type ExtensionViewSessionRecord
 } from './extension-view-sessions'
+import { DEV_PREVIEW_PARTITION } from '../../shared/dev-preview-capture'
 
 type WebviewSecurityOptions = {
   app: Pick<App, 'on'>
@@ -59,7 +60,8 @@ export function installWebviewSecurityGuards(options: WebviewSecurityOptions): v
         return
       }
 
-      if (!options.isAllowedDevPreviewUrl(src) && !options.isAuthorizedPrototypeFileUrl(src)) {
+      const isDevPreview = options.isAllowedDevPreviewUrl(src)
+      if (!isDevPreview && !options.isAuthorizedPrototypeFileUrl(src)) {
         event.preventDefault()
         return
       }
@@ -70,6 +72,10 @@ export function installWebviewSecurityGuards(options: WebviewSecurityOptions): v
       webPreferences.sandbox = true
       webPreferences.webSecurity = true
       webPreferences.allowRunningInsecureContent = false
+      if (isDevPreview) {
+        webPreferences.partition = DEV_PREVIEW_PARTITION
+        ;(params as Record<string, unknown>).partition = DEV_PREVIEW_PARTITION
+      }
     })
 
     contents.on('did-attach-webview', (_event, guest) => {

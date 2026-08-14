@@ -5,6 +5,10 @@ import type { ToolBlock } from '../../agent/types'
 import i18n from '../../i18n'
 import { PlanBuildActions } from '../plan/PlanBuildActions'
 import { ReviewPlanCard, TurnChangeSummary } from './message-timeline-cards'
+import {
+  resetPlanWorktreePreferenceStoreForTests,
+  usePlanWorktreePreferenceStore
+} from '../../plan/plan-worktree-preference-store'
 
 function change(index: number): ToolBlock {
   const path = `src/file-${index}.ts`
@@ -85,9 +89,10 @@ describe('TurnChangeSummary', () => {
 describe('plan build actions', () => {
   beforeEach(async () => {
     await i18n.changeLanguage('en')
+    resetPlanWorktreePreferenceStoreForTests()
   })
 
-  it('renders responsive Direct and Graph actions and reports the selected orchestration', async () => {
+  it('selects a rounded card build mode before starting the requested orchestration', async () => {
     const onBuild = vi.fn()
     let renderer: ReactTestRenderer
 
@@ -104,21 +109,37 @@ describe('plan build actions', () => {
 
     const card = renderer!.root.findByProps({ 'data-review-plan-card': true })
     const actions = renderer!.root.findByProps({ 'data-plan-build-actions-variant': 'card' })
-    expect(card.props.className).toContain('flex-wrap')
+    const start = renderer!.root.findByProps({ 'data-plan-build-start': true })
+    expect(card.props.className).toContain('rounded-[26px]')
+    expect(card.props.className).toContain('flex-col')
     expect(actions.props.className).toContain('flex-wrap')
 
     const direct = renderer!.root.findByProps({ 'data-plan-build-orchestration': 'direct' })
     const graph = renderer!.root.findByProps({ 'data-plan-build-orchestration': 'graph' })
     expect(direct.props.disabled).toBe(false)
     expect(graph.props.disabled).toBe(false)
-    expect(direct.props['aria-label']).toBe('Direct build')
-    expect(graph.props['aria-label']).toBe('Graph build')
+    expect(direct.props['aria-pressed']).toBe(true)
+    expect(graph.props['aria-pressed']).toBe(false)
+    expect(start.props.disabled).toBe(false)
+    expect(JSON.stringify(renderer!.toJSON())).toContain('Plan ready')
+    expect(JSON.stringify(renderer!.toJSON())).toContain('Start build')
 
     await act(async () => {
-      direct.props.onClick()
       graph.props.onClick()
     })
-    expect(onBuild.mock.calls).toEqual([['direct'], ['graph']])
+    expect(renderer!.root.findByProps({ 'data-plan-build-orchestration': 'direct' })
+      .props['aria-pressed']).toBe(false)
+    expect(renderer!.root.findByProps({ 'data-plan-build-orchestration': 'graph' })
+      .props['aria-pressed']).toBe(true)
+
+    await act(async () => {
+      renderer!.root.findByProps({ 'data-plan-build-start': true }).props.onClick()
+      renderer!.root.findByProps({ 'data-plan-build-orchestration': 'direct' }).props.onClick()
+    })
+    await act(async () => {
+      renderer!.root.findByProps({ 'data-plan-build-start': true }).props.onClick()
+    })
+    expect(onBuild.mock.calls).toEqual([['graph'], ['direct']])
 
     act(() => renderer!.unmount())
   })
@@ -141,6 +162,78 @@ describe('plan build actions', () => {
     expect(actions.props.className).toContain('grid-cols-1')
     expect(direct.props.disabled).toBe(false)
     expect(graph).toHaveLength(0)
+
+    act(() => renderer!.unmount())
+  })
+
+  it('hides isolated-worktree controls while the Laboratory experiment is off', async () => {
+    usePlanWorktreePreferenceStore.getState().initializePlan('plan-disabled', false, 'codex/')
+    let renderer: ReactTestRenderer
+
+    await act(async () => {
+      renderer = create(createElement(PlanBuildActions, {
+        disabled: false,
+        graphEnabled: true,
+        variant: 'panel',
+        planId: 'plan-disabled',
+        onBuild: vi.fn()
+      }))
+    })
+
+    expect(renderer!.root.findAllByProps({ role: 'switch' })).toHaveLength(0)
+    expect(renderer!.root.findByProps({
+      'data-plan-build-orchestration': 'direct'
+    }).props.disabled).toBe(false)
+    act(() => renderer!.unmount())
+  })
+
+  it('shares one isolation override between panel and inline card actions', async () => {
+    const store = usePlanWorktreePreferenceStore.getState()
+    store.initializePlan('plan-shared', true, 'codex/')
+    let renderer: ReactTestRenderer
+    await act(async () => {
+      renderer = create(createElement('div', null,
+        createElement(PlanBuildActions, {
+          disabled: false,
+          graphEnabled: true,
+          variant: 'panel',
+          planId: 'plan-shared',
+          onBuild: vi.fn()
+        }),
+        createElement(PlanBuildActions, {
+          disabled: false,
+          graphEnabled: true,
+          variant: 'card',
+          planId: 'plan-shared',
+          onBuild: vi.fn()
+        })
+      ))
+    })
+
+    const switches = renderer!.root.findAllByProps({ role: 'switch' })
+    expect(switches.map((item) => item.props['aria-checked'])).toEqual([true, true])
+    await act(async () => switches[0]!.props.onClick())
+    expect(renderer!.root.findAllByProps({ role: 'switch' })
+      .map((item) => item.props['aria-checked'])).toEqual([false, false])
+    expect(renderer!.root.findAllByProps({ 'data-plan-build-orchestration': 'direct' })
+      .every((item) => item.props.disabled === false)).toBe(true)
+
+    const cardGraph = renderer!.root.findAllByProps({
+      'data-plan-build-orchestration': 'graph'
+    })[1]!
+    await act(async () => cardGraph.props.onClick())
+    const graphSwitches = renderer!.root.findAllByProps({ role: 'switch' })
+    expect(graphSwitches[0]!.props.disabled).toBe(false)
+    expect(graphSwitches[1]!.props.disabled).toBe(true)
+    expect(JSON.stringify(renderer!.toJSON())).toContain(
+      'Prompt-managed worktrees are available for Direct builds only'
+    )
+    await act(async () => renderer!.root.findAllByProps({
+      'data-plan-build-orchestration': 'direct'
+    })[1]!.props.onClick())
+    expect(renderer!.root.findAllByProps({ role: 'switch' })[1]!.props.disabled).toBe(false)
+    expect(renderer!.root.findAllByProps({ role: 'switch' })
+      .map((item) => item.props['aria-checked'])).toEqual([false, false])
 
     act(() => renderer!.unmount())
   })

@@ -101,6 +101,13 @@ type HarnessProps = {
 }
 
 let latestController: ReturnType<typeof useWorkbenchFileTreeController>
+let windowEventListeners: Map<string, Set<(event: Event) => void>>
+
+function emitWindowEvent(type: string, detail: unknown): void {
+  for (const listener of windowEventListeners.get(type) ?? []) {
+    listener({ detail } as unknown as Event)
+  }
+}
 
 function ControllerHarness({ activeThreadId, rightPanelMode, onSetRightPanelMode }: HarnessProps) {
   const [filePreviewTarget, setFilePreviewTarget] = useState<WorkspaceFileTarget | null>(null)
@@ -126,9 +133,20 @@ describe('useWorkbenchFileTreeController thread transitions', () => {
   beforeEach(async () => {
     ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
     storage = new MemoryStorage()
+    windowEventListeners = new Map()
     vi.stubGlobal('window', {
       kunGui: { platform: 'linux' },
-      localStorage: storage
+      localStorage: storage,
+      addEventListener: (type: string, listener: EventListenerOrEventListenerObject) => {
+        const callback = typeof listener === 'function' ? listener : listener.handleEvent
+        const callbacks = windowEventListeners.get(type) ?? new Set<(event: Event) => void>()
+        callbacks.add(callback)
+        windowEventListeners.set(type, callbacks)
+      },
+      removeEventListener: (type: string, listener: EventListenerOrEventListenerObject) => {
+        const callback = typeof listener === 'function' ? listener : listener.handleEvent
+        windowEventListeners.get(type)?.delete(callback)
+      }
     })
     setRightPanelMode = vi.fn<(mode: RightPanelMode) => void>()
     await act(async () => {
@@ -256,5 +274,84 @@ describe('useWorkbenchFileTreeController thread transitions', () => {
     })
     expect(latestController.openFilePreviewTargets).toEqual([])
     expect(setRightPanelMode).toHaveBeenCalledWith(null)
+  })
+
+  it('focuses only the first Office file in a turn and respects later user tab selection', async () => {
+    await act(async () => {
+      emitWindowEvent('kun:live-office-preview', {
+        path: 'reports/first.docx',
+        workspaceRoot: '/repo',
+        turnId: 'turn-office-1',
+        phase: 'editing'
+      })
+    })
+    expect(latestController.openFilePreviewTargets).toEqual([
+      { path: 'reports/first.docx', workspaceRoot: '/repo' }
+    ])
+    expect(setRightPanelMode).toHaveBeenCalledWith(BUILTIN_RIGHT_PANEL_IDS.file)
+
+    setRightPanelMode.mockClear()
+    await act(async () => {
+      emitWindowEvent('kun:live-office-preview', {
+        path: 'reports/second.xlsx',
+        workspaceRoot: '/repo',
+        turnId: 'turn-office-1',
+        phase: 'committed'
+      })
+    })
+    expect(latestController.openFilePreviewTargets).toEqual([
+      { path: 'reports/first.docx', workspaceRoot: '/repo' },
+      { path: 'reports/second.xlsx', workspaceRoot: '/repo' }
+    ])
+    expect(setRightPanelMode).not.toHaveBeenCalled()
+
+    await act(async () => latestController.openWorkspaceFilePreviewTarget(targets[0]))
+    setRightPanelMode.mockClear()
+    await act(async () => {
+      emitWindowEvent('kun:live-office-preview', {
+        path: 'reports/third.pptx',
+        workspaceRoot: '/repo',
+        turnId: 'turn-office-1',
+        phase: 'committed'
+      })
+    })
+    expect(latestController.openFilePreviewTargets).toEqual([
+      { path: 'reports/first.docx', workspaceRoot: '/repo' },
+      { path: 'reports/second.xlsx', workspaceRoot: '/repo' },
+      targets[0],
+      { path: 'reports/third.pptx', workspaceRoot: '/repo' }
+    ])
+    expect(setRightPanelMode).not.toHaveBeenCalled()
+
+    await act(async () => {
+      emitWindowEvent('kun:live-office-preview', {
+        path: 'reports/new-turn.docx',
+        workspaceRoot: '/repo',
+        turnId: 'turn-office-2',
+        phase: 'editing'
+      })
+    })
+    expect(setRightPanelMode).toHaveBeenCalledWith(BUILTIN_RIGHT_PANEL_IDS.file)
+  })
+
+  it('deduplicates relative Office calls and absolute Office edit results', async () => {
+    await act(async () => {
+      emitWindowEvent('kun:live-office-preview', {
+        path: 'reports/brief.docx',
+        workspaceRoot: '/repo',
+        turnId: 'turn-office-path',
+        phase: 'editing'
+      })
+      emitWindowEvent('kun:live-office-preview', {
+        path: '/repo/reports/brief.docx',
+        workspaceRoot: '/repo',
+        turnId: 'turn-office-path',
+        phase: 'committed'
+      })
+    })
+
+    expect(latestController.openFilePreviewTargets).toEqual([
+      { path: 'reports/brief.docx', workspaceRoot: '/repo' }
+    ])
   })
 })

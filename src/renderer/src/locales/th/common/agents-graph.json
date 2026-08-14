@@ -1,0 +1,292 @@
+{
+  "subagentsPanel": {
+    "configModel": "กำหนดค่าโมเดล",
+    "delegatable": "มอบหมายได้ · ใช้งานได้ในการแชท",
+    "system": "ระบบ · ภายใน",
+    "global": "ทั่วโลก · แบ่งปันแล้ว",
+    "newSubagent": "ตัวแทนย่อยใหม่",
+    "delegatableCount": "บทบาทที่มอบหมายได้ {{count}} รายการ",
+    "configuredCount": "ตั้งค่าแล้ว {{count}}",
+    "showingCount": "แสดง {{visible}} จาก {{total}}",
+    "policySummary": "คิวและการทำงานพร้อมกัน",
+    "search": "ค้นหาตัวแทนย่อย",
+    "searchPlaceholder": "ค้นหาชื่อ ความสามารถ หรือสถานการณ์",
+    "clearSearch": "ล้างการค้นหา",
+    "toggleCategory": "เปิดหรือปิดหมวดหมู่ {{category}}",
+    "batchModel": "ตั้งโมเดลเป็นชุด",
+    "mixedModels": "หลายโมเดล",
+    "mixedConfiguration": "หลายการตั้งค่า",
+    "categoryConfiguration": "การตั้งค่าเริ่มต้นของหมวดหมู่",
+    "categoryConfigurationDesc": "ใช้ค่าเริ่มต้นเดียวกันกับเอเจนต์ทั้งหมดในหมวดนี้",
+    "resetCategoryConfiguration": "รีเซ็ตเป็นค่าเริ่มต้น",
+    "effectiveModel": "โมเดลที่ใช้จริง",
+    "batchModelAria": "ตั้งโมเดลเดียวกันให้เอเจนต์ {{count}} ตัวใน {{category}}",
+    "reasoning": "ความเข้มของการคิด",
+    "mixedReasoning": "หลายระดับการคิด",
+    "batchReasoningAria": "ตั้งความเข้มการคิดเดียวกันให้เอเจนต์ {{count}} ตัวใน {{category}}",
+    "capabilities": "ความสามารถ",
+    "emptyTitle": "ไม่พบตัวแทนย่อยที่ตรงกัน",
+    "emptySearch": "ลองใช้ชื่อ ความสามารถ หรือสถานการณ์อื่น",
+    "emptyCategory": "เลือกหมวดหมู่อื่นเพื่อเรียกดูต่อ",
+    "surface": {
+      "shared": "พื้นฐาน",
+      "code": "Code",
+      "write": "งาน",
+      "design": "ออกแบบ"
+    },
+    "surfaceInherited": "สืบทอดจากพื้นฐาน",
+    "surfaceAssigned": "ใช้ได้ในโหมดนี้",
+    "surfaceUnassigned": "ใช้ไม่ได้ในโหมดนี้",
+    "pagination": "หน้า Agent",
+    "pageSummary": "หน้า {{page}} จาก {{pages}} · {{count}} Agent",
+    "previousPage": "หน้าก่อนหน้า",
+    "nextPage": "หน้าถัดไป",
+    "extensionAgents": {
+      "title": "Agent ส่วนขยาย",
+      "description": "Agent นอกชุดพื้นฐาน · {{count}}",
+      "enabled": "เปิดใช้",
+      "disabled": "ปิดใช้",
+      "toggle": "สลับ Agent ส่วนขยาย",
+      "keepBaseOnly": "คงไว้เฉพาะ Agent พื้นฐาน",
+      "enableExtensions": "เปิดใช้ Agent ส่วนขยาย",
+      "baseAlwaysAvailable": "Agent พื้นฐานพร้อมใช้งานเสมอ"
+    },
+    "category": {
+      "all": "ทั้งหมด",
+      "baseAgent": "Agent พื้นฐาน",
+      "development": "พัฒนา",
+      "review": "ตรวจสอบ",
+      "quality": "คุณภาพ",
+      "planning": "วางแผน",
+      "operations": "ปฏิบัติการ",
+      "research": "วิจัย",
+      "custom": "กำหนดเอง"
+    },
+    "smallModel": {
+      "name": "รุ่นเล็ก",
+      "desc": "ค่าเริ่มต้นสำหรับชื่อเรื่องและข้อมูลสรุป"
+    },
+    "role": {
+      "general": {
+        "name": "ทั่วไป",
+        "desc": "เครื่องมือครบครัน · งานหลายขั้นตอน"
+      },
+      "explore": {
+        "name": "สำรวจ",
+        "desc": "อ่านอย่างเดียว · ค้นหาและค้นหาโค้ด"
+      },
+      "component-designer": {
+        "name": "Component Designer",
+        "desc": "Focused interactive component prototype"
+      },
+      "design-reviewer": {
+        "name": "ทบทวนการออกแบบ",
+        "desc": "ผู้ตรวจสอบการออกแบบ · อ่านอย่างเดียว"
+      },
+      "over-engineering-reviewer": {
+        "name": "การทบทวนทางวิศวกรรมมากเกินไป",
+        "desc": "ผู้ตรวจสอบทางวิศวกรรมมากเกินไป · อ่านอย่างเดียว"
+      },
+      "code-reviewer": {
+        "name": "ผู้ตรวจสอบโค้ด",
+        "desc": "ตรวจสอบห้ามิติ · อ่านอย่างเดียว"
+      },
+      "test-engineer": {
+        "name": "วิศวกรทดสอบ",
+        "desc": "กลยุทธ์การทดสอบ · เขียนและรันการทดสอบได้"
+      },
+      "security-auditor": {
+        "name": "ผู้ตรวจสอบความปลอดภัย",
+        "desc": "ภัยคุกคามและความเสี่ยง OWASP · อ่านอย่างเดียว"
+      },
+      "web-performance-auditor": {
+        "name": "ผู้ตรวจสอบประสิทธิภาพเว็บ",
+        "desc": "Core Web Vitals · อิงหลักฐาน"
+      },
+      "api-and-interface-design": {
+        "name": "API & Interface Architect",
+        "desc": "Stable public contracts · compatibility and validation"
+      },
+      "browser-testing-with-devtools": {
+        "name": "Web QA Planner",
+        "desc": "Browser and accessibility verification plans · read-only"
+      },
+      "ci-cd-and-automation": {
+        "name": "CI/CD Engineer",
+        "desc": "Pipelines, quality gates, and rollback-safe releases"
+      },
+      "code-review-and-quality": {
+        "name": "Code Quality Reviewer",
+        "desc": "Multi-axis correctness and architecture review · read-only"
+      },
+      "code-simplification": {
+        "name": "Code Simplification Engineer",
+        "desc": "Reduce complexity · preserve behavior"
+      },
+      "context-engineering": {
+        "name": "Context Engineer",
+        "desc": "Minimal authoritative context pack · read-only"
+      },
+      "debugging-and-error-recovery": {
+        "name": "Root Cause Debugger",
+        "desc": "Reproduce, localize, fix, and regression-test"
+      },
+      "deprecation-and-migration": {
+        "name": "Migration Engineer",
+        "desc": "Staged compatibility, data migration, and rollback"
+      },
+      "documentation-and-adrs": {
+        "name": "Documentation & ADR Engineer",
+        "desc": "Architecture decisions, guides, and API docs"
+      },
+      "doubt-driven-development": {
+        "name": "Doubt-Driven Reviewer",
+        "desc": "Challenge assumptions and designs · read-only"
+      },
+      "frontend-ui-engineering": {
+        "name": "Frontend UI Engineer",
+        "desc": "Accessible, responsive, product-quality interfaces"
+      },
+      "git-workflow-and-versioning": {
+        "name": "Git Workflow Engineer",
+        "desc": "Branches, atomic commits, and history safety"
+      },
+      "idea-refine": {
+        "name": "Idea Refinement Partner",
+        "desc": "Compare options, MVP bounds, and validation · read-only"
+      },
+      "incremental-implementation": {
+        "name": "Incremental Implementation Engineer",
+        "desc": "Thin, buildable, continuously verified slices"
+      },
+      "interview-me": {
+        "name": "Requirements Interviewer",
+        "desc": "Find gaps and high-information questions · read-only"
+      },
+      "observability-and-instrumentation": {
+        "name": "Observability Engineer",
+        "desc": "Logs, metrics, traces, and actionable alerts"
+      },
+      "performance-optimization": {
+        "name": "Performance Engineer",
+        "desc": "Measure bottlenecks and prove before/after impact"
+      },
+      "planning-and-task-breakdown": {
+        "name": "Implementation Planner",
+        "desc": "Dependency-aware, acceptance-driven tasks · read-only"
+      },
+      "security-and-hardening": {
+        "name": "Security Hardening Engineer",
+        "desc": "Threat-model and implement scoped security fixes"
+      },
+      "shipping-and-launch": {
+        "name": "Release Readiness Engineer",
+        "desc": "Go/no-go, rollout, and rollback plans · read-only"
+      },
+      "source-driven-development": {
+        "name": "Source-Driven Researcher",
+        "desc": "Ground guidance in version-matched sources · read-only"
+      },
+      "spec-driven-development": {
+        "name": "Specification Engineer",
+        "desc": "Scenarios, interfaces, and acceptance criteria · read-only"
+      },
+      "test-driven-development": {
+        "name": "TDD Engineer",
+        "desc": "Red-green-refactor with behavior-focused proof"
+      },
+      "using-agent-skills": {
+        "name": "Engineering Workflow Advisor",
+        "desc": "Map work to the smallest suitable agent sequence · read-only"
+      },
+      "write-outline-architect": {
+        "name": "Outline Architect",
+        "desc": "Structure, arguments, and narrative progression · read-only"
+      },
+      "write-draft-author": {
+        "name": "Draft Author",
+        "desc": "Long-form drafts and focused section writing"
+      },
+      "write-developmental-editor": {
+        "name": "Developmental Editor",
+        "desc": "Improve logic, structure, pacing, and clarity"
+      },
+      "write-copy-editor": {
+        "name": "Copy Editor",
+        "desc": "Polish tone, terminology, and grammar"
+      },
+      "write-fact-checker": {
+        "name": "Fact Checker",
+        "desc": "Verify claims, figures, and uncertainty · read-only"
+      },
+      "write-citation-researcher": {
+        "name": "Citation Researcher",
+        "desc": "Authoritative sources and traceable citations · read-only"
+      },
+      "design-product-planner": {
+        "name": "Product Design Planner",
+        "desc": "Direction, goals, flows, and tradeoffs · read-only"
+      },
+      "design-ux-researcher": {
+        "name": "UX Researcher",
+        "desc": "User journeys and usability research · read-only"
+      },
+      "design-screen-designer": {
+        "name": "Screen Designer",
+        "desc": "Complete responsive screens and interaction states"
+      },
+      "design-system-architect": {
+        "name": "Design System Architect",
+        "desc": "Semantic tokens, components, and variant constraints"
+      },
+      "design-code-binder": {
+        "name": "Design Code Binder",
+        "desc": "Map design nodes to routes and source files"
+      },
+      "design-handoff-specialist": {
+        "name": "Design Handoff Specialist",
+        "desc": "DESIGN.md, implementation notes, and handoff assets"
+      },
+      "compaction": {
+        "name": "การบดอัด",
+        "desc": "กำหนดค่าได้ · ค่าเริ่มต้นเป็นรุ่นหลัก"
+      },
+      "codeReview": {
+        "name": "ตรวจสอบรหัส",
+        "desc": "แยกการทำงานอ่านอย่างเดียว · กำหนดค่าได้"
+      },
+      "plan": {
+        "name": "โหมดแผน",
+        "desc": "การวางแผนผลัดกัน · ค่าเริ่มต้นเป็นรูปแบบการสนทนา"
+      },
+      "title": {
+        "name": "ชื่อเรื่อง",
+        "desc": "LLM · มีค่าเริ่มต้นเป็นโมเดลขนาดเล็ก"
+      },
+      "summary": {
+        "name": "สรุป",
+        "desc": "LLM · มีค่าเริ่มต้นเป็นโมเดลขนาดเล็ก"
+      }
+    },
+    "builtin": "บิวท์อิน",
+    "customTag": "กำหนดเอง",
+    "workspaceFile": "กำหนดใน {{path}}",
+    "workspaceReadOnly": "แก้ไขบทบาทนี้ใน .kun/agents/*.md"
+  },
+  "summarizeSession": "สรุป",
+  "summarizing": "กำลังสรุป...",
+  "summarizeFailed": "ไม่สามารถสรุปการสนทนานี้ได้",
+  "name": "ชื่อ",
+  "description": "คำอธิบาย",
+  "color": "สี",
+  "mode": "โหมด",
+  "writeFocusModeEnter": "เข้าสู่โหมดโฟกัส",
+  "writeFocusModeExit": "ออกจากโหมดโฟกัส",
+  "writeFocusModeShortcut": "⌘/Ctrl + Shift + F",
+  "writeShowLineNumbers": "แสดงหมายเลขบรรทัด",
+  "writeHideLineNumbers": "ซ่อนหมายเลขบรรทัด",
+  "writeEnableLineWrapping": "เปิดใช้งานการตัดบรรทัด",
+  "writeDisableLineWrapping": "ปิดการใช้งานการตัดบรรทัด",
+  "systemPrompt": "พร้อมท์ระบบ",
+  "toolPolicy": "การเข้าถึงเครื่องมือ"
+}

@@ -1,6 +1,6 @@
 import { useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import { threadSnapshotLooksRunning } from '../../store/chat-store-runtime-helpers'
+import { threadLooksRunning } from '../../store/chat-store-runtime-helpers'
 import { useChatStore } from '../../store/chat-store'
 import { confirmDialog } from '../../lib/confirm-dialog'
 import { displayDrawingTitle } from '../../design/design-drawing-title'
@@ -19,12 +19,7 @@ function registeredDrawingIsRunning(workspaceRoot: string, documentId: string): 
   if (!record) return false
   return record.threadIds.some((threadId) => {
     const thread = state.threads.find((candidate) => candidate.id === threadId)
-    return Boolean(
-      thread && (
-        threadSnapshotLooksRunning([], thread.status) ||
-        threadSnapshotLooksRunning([], thread.latestTurnStatus)
-      )
-    )
+    return Boolean(thread && threadLooksRunning(thread))
   })
 }
 

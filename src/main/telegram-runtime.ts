@@ -2,132 +2,51 @@ import { createHash } from 'node:crypto'
 import { mkdir, readFile, realpath, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
-import { net } from 'electron'
-import type { AppSettingsV1, ClawImChannelV1 } from '../shared/app-settings'
-import type { ClawImTelegramConnectErrorCode } from '../shared/kun-gui-api'
-import type { JsonSettingsStore } from './settings-store'
+import {
+  resolveClawImTelegramProxyUrl,
+  validateClawImTelegramProxy,
+  type AppSettingsV1,
+  type ClawImChannelV1,
+  type ClawImTelegramProxyV1
+} from '../shared/app-settings'
+import {
+  BACKOFF_JITTER_MS,
+  inferImageExtension,
+  isGroupChat,
+  MAX_BACKOFF_MS,
+  MAX_DOWNLOAD_BYTES,
+  MIN_BACKOFF_MS,
+  parseAllowedChatIds,
+  POLL_HTTP_TIMEOUT_MS,
+  POLL_TIMEOUT_SECONDS,
+  sanitizeTelegramTransportError,
+  senderDisplayName,
+  sleep,
+  splitForTelegram,
+  TELEGRAM_API_BASE,
+  telegramFetch,
+  type TelegramApiResponse,
+  type TelegramBotInfo,
+  type TelegramFile,
+  type TelegramInboundPayload,
+  type TelegramLogFn,
+  type TelegramMessage,
+  type TelegramRuntimeDeps,
+  type TelegramUpdate,
+  type TelegramVerifyResult
+} from './telegram-runtime-support'
 
-/**
- * Telegram Bot API long-polling runtime for the Claw IM subsystem.
- *
- * One {@link TelegramChannel} is created per enabled `provider: 'telegram'`
- * channel. Each channel owns a `getUpdates` long-poll loop (25 s timeout),
- * filters group/channel traffic, and forwards private-chat messages to the
- * {@link ClawRuntime} via the `onInbound` callback. Outbound replies are sent
- * through {@link sendMessage} using HTML parse mode.
- *
- * No npm Telegram dependency: all calls use Electron's network stack against
- * `https://api.telegram.org/bot{token}/...`, mirroring the approach used by
- * Talkcody's Rust gateway while preserving desktop proxy behavior.
- */
+export {
+  parseAllowedChatIds,
+  sanitizeTelegramTransportError
+} from './telegram-runtime-support'
+export type {
+  TelegramInboundPayload,
+  TelegramLogFn,
+  TelegramRuntimeDeps,
+  TelegramVerifyResult
+} from './telegram-runtime-support'
 
-const TELEGRAM_API_BASE = 'https://api.telegram.org'
-const POLL_TIMEOUT_SECONDS = 25
-const POLL_HTTP_TIMEOUT_MS = (POLL_TIMEOUT_SECONDS + 10) * 1000
-const MAX_MESSAGE_LENGTH = 4096
-const MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024 // 20 MB
-const MIN_BACKOFF_MS = 1500
-const MAX_BACKOFF_MS = 30_000
-const BACKOFF_JITTER_MS = 250
-
-/** Telegram chat types that represent multi-party conversations. */
-const GROUP_CHAT_TYPES = new Set(['group', 'supergroup', 'channel'])
-
-function telegramFetch(input: string, init?: RequestInit): Promise<Response> {
-  return typeof net.fetch === 'function'
-    ? net.fetch(input, init)
-    : fetch(input, init)
-}
-
-export type TelegramLogFn = (category: string, message: string, detail?: unknown) => void
-
-/**
- * Normalized inbound payload handed to {@link ClawRuntime.handleTelegramUpdate}.
- * Image messages carry a downloaded `localFilePath`; the agent runtime picks
- * it up via the same contract as Feishu/WeChat attachments.
- */
-export type TelegramInboundPayload = {
-  channelId: string
-  chatId: string
-  messageId: string
-  senderId: string
-  senderName: string
-  /** Text to forward to the agent (message text + image caption). */
-  text: string
-  /** Downloaded image path, if the message was a photo and download succeeded. */
-  localFilePath?: string
-  /** The Telegram update_id, for deduplication and offset tracking. */
-  updateId: number
-}
-
-export type TelegramRuntimeDeps = {
-  store: JsonSettingsStore
-  logError: TelegramLogFn
-  onInbound: (payload: TelegramInboundPayload) => void | Promise<void>
-}
-
-type TelegramChat = {
-  id: number
-  type?: string
-  first_name?: string
-  last_name?: string
-  username?: string
-  title?: string
-}
-
-type TelegramUser = {
-  id: number
-  is_bot?: boolean
-  first_name?: string
-  last_name?: string
-  username?: string
-}
-
-type TelegramMessage = {
-  message_id: number
-  date?: number
-  chat: TelegramChat
-  from?: TelegramUser
-  text?: string
-  caption?: string
-  photo?: Array<{ file_id: string; file_size?: number; width?: number; height?: number }>
-  document?: { file_id: string; file_size?: number; file_name?: string }
-}
-
-type TelegramUpdate = {
-  update_id: number
-  message?: TelegramMessage
-  edited_message?: TelegramMessage
-  channel_post?: TelegramMessage
-}
-
-type TelegramApiResponse<T> = {
-  ok: boolean
-  result?: T
-  description?: string
-  error_code?: number
-  parameters?: { retry_after?: number; migrate_to_chat_id?: number }
-}
-
-type TelegramFile = {
-  file_id: string
-  file_unique_id?: string
-  file_size?: number
-  file_path?: string
-}
-
-type TelegramBotInfo = {
-  id: number
-  username: string
-  first_name?: string
-  can_join_groups?: boolean
-}
-
-export type TelegramVerifyResult =
-  | { ok: true; botId: number; botUsername: string; botFirstName: string }
-  | { ok: false; code: ClawImTelegramConnectErrorCode; message: string }
-
-/** A single bot connection with its own poll loop and offset state. */
 class TelegramChannel {
   private abort: AbortController | null = null
   private running = false
@@ -140,6 +59,7 @@ class TelegramChannel {
     private readonly channelId: string,
     private readonly token: string,
     private readonly allowedChatIds: ReadonlySet<number>,
+    private readonly proxyUrl: string,
     private readonly deps: { logError: TelegramLogFn; onInbound: (payload: TelegramInboundPayload) => void | Promise<void> }
   ) {}
 
@@ -155,7 +75,7 @@ class TelegramChannel {
       if (!this.running) return
       this.deps.logError('claw-telegram', 'Telegram poll loop stopped unexpectedly.', {
         channelId: this.channelId,
-        message: error instanceof Error ? error.message : String(error)
+        message: sanitizeTelegramTransportError(error)
       })
     })
     this.pollTask = task
@@ -224,13 +144,13 @@ class TelegramChannel {
         method: 'POST',
         body: form,
         signal: this.abort?.signal
-      })
+      }, this.proxyUrl)
       const data = (await res.json().catch(() => null)) as TelegramApiResponse<{ message_id: number }> | null
       if (!data) return { ok: false, message: `HTTP ${res.status}: empty body` }
       if (!data.ok) return { ok: false, message: data.description || `HTTP ${res.status}` }
       return { ok: true, messageId: data.result?.message_id }
     } catch (error) {
-      return { ok: false, message: error instanceof Error ? error.message : String(error) }
+      return { ok: false, message: sanitizeTelegramTransportError(error) }
     }
   }
 
@@ -313,7 +233,7 @@ class TelegramChannel {
       this.deps.logError('claw-telegram', 'Inbound handler threw for a Telegram update.', {
         channelId: this.channelId,
         chatId: payload.chatId,
-        message: error instanceof Error ? error.message : String(error)
+        message: sanitizeTelegramTransportError(error)
       })
     })
     this.inboundTasks.add(task)
@@ -364,7 +284,7 @@ class TelegramChannel {
       const signal = this.abort
         ? AbortSignal.any([this.abort.signal, timeoutSignal])
         : timeoutSignal
-      const res = await telegramFetch(downloadUrl, { signal })
+      const res = await telegramFetch(downloadUrl, { signal }, this.proxyUrl)
       if (!res.ok) {
         this.deps.logError('claw-telegram', 'Telegram file download returned a non-OK status.', {
           channelId: this.channelId,
@@ -394,7 +314,7 @@ class TelegramChannel {
       this.deps.logError('claw-telegram', 'Failed to download an inbound Telegram photo.', {
         channelId: this.channelId,
         chatId,
-        message: error instanceof Error ? error.message : String(error)
+        message: sanitizeTelegramTransportError(error)
       })
       return undefined
     }
@@ -418,7 +338,7 @@ class TelegramChannel {
     this.consecutiveErrors += 1
     this.deps.logError('claw-telegram', 'Telegram poll loop caught an exception.', {
       channelId: this.channelId,
-      message: error instanceof Error ? error.message : String(error)
+      message: sanitizeTelegramTransportError(error)
     })
     await sleep(this.nextBackoff(), this.abort?.signal)
   }
@@ -442,7 +362,7 @@ class TelegramChannel {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
         signal: signal ?? this.abort?.signal
-      })
+      }, this.proxyUrl)
       const data = (await res.json().catch(() => null)) as TelegramApiResponse<T> | null
       if (!data) {
         return { ok: false, message: `HTTP ${res.status}: empty body` }
@@ -461,7 +381,7 @@ class TelegramChannel {
         // Aborted during shutdown — not a real error.
         return { ok: false, message: 'aborted' }
       }
-      return { ok: false, message: error instanceof Error ? error.message : String(error) }
+      return { ok: false, message: sanitizeTelegramTransportError(error) }
     }
   }
 }
@@ -484,7 +404,10 @@ export type TelegramRuntime = {
  * so the IPC handler can validate user input before a channel is ever written
  * to the settings store.
  */
-export async function verifyTelegramBotToken(botToken: string): Promise<TelegramVerifyResult> {
+export async function verifyTelegramBotToken(
+  botToken: string,
+  proxy: ClawImTelegramProxyV1 = { enabled: false, url: '' }
+): Promise<TelegramVerifyResult> {
   const token = botToken.trim()
   if (!token || !/^\d+:[A-Za-z0-9_-]{30,}$/.test(token)) {
     return {
@@ -493,9 +416,18 @@ export async function verifyTelegramBotToken(botToken: string): Promise<Telegram
       message: 'Invalid token format. Expected "<numeric-id>:<35+ chars>".'
     }
   }
+  const proxyValidation = validateClawImTelegramProxy(proxy)
+  if (!proxyValidation.ok) {
+    return {
+      ok: false,
+      code: 'invalid_proxy',
+      message: proxyValidation.message
+    }
+  }
+  const proxyUrl = proxyValidation.proxy.enabled ? proxyValidation.proxy.url : ''
   const url = `${TELEGRAM_API_BASE}/bot${token}/getMe`
   try {
-    const res = await telegramFetch(url, { signal: AbortSignal.timeout(15_000) })
+    const res = await telegramFetch(url, { signal: AbortSignal.timeout(15_000) }, proxyUrl)
     const data = (await res.json().catch(() => null)) as TelegramApiResponse<TelegramBotInfo> | null
     if (!data || !data.ok || !data.result) {
       return {
@@ -514,7 +446,7 @@ export async function verifyTelegramBotToken(botToken: string): Promise<Telegram
     return {
       ok: false,
       code: 'network',
-      message: error instanceof Error ? error.message : String(error)
+      message: sanitizeTelegramTransportError(error)
     }
   }
 }
@@ -527,9 +459,19 @@ export function createTelegramRuntime(deps: TelegramRuntimeDeps): TelegramRuntim
   let stopped = false
   let stopPromise: Promise<void> | null = null
 
-  function resolveTargets(settings: AppSettingsV1): Array<{ channel: ClawImChannelV1; token: string; allowed: Set<number> }> {
+  function resolveTargets(settings: AppSettingsV1): Array<{
+    channel: ClawImChannelV1
+    token: string
+    allowed: Set<number>
+    proxyUrl: string
+  }> {
     if (!settings.claw.enabled || !settings.claw.im.enabled) return []
-    const targets: Array<{ channel: ClawImChannelV1; token: string; allowed: Set<number> }> = []
+    const targets: Array<{
+      channel: ClawImChannelV1
+      token: string
+      allowed: Set<number>
+      proxyUrl: string
+    }> = []
     for (const channel of settings.claw.channels) {
       if (!channel.enabled || channel.provider !== 'telegram') continue
       const credential = channel.platformCredential
@@ -539,15 +481,26 @@ export function createTelegramRuntime(deps: TelegramRuntimeDeps): TelegramRuntim
       targets.push({
         channel,
         token,
-        allowed: parseAllowedChatIds(credential.allowedChatIds)
+        allowed: parseAllowedChatIds(credential.allowedChatIds),
+        proxyUrl: resolveClawImTelegramProxyUrl(credential.proxy)
       })
     }
     return targets
   }
 
-  function buildKey(channel: ClawImChannelV1, token: string, allowed: Set<number>): string {
+  function buildKey(
+    channel: ClawImChannelV1,
+    token: string,
+    allowed: Set<number>,
+    proxyUrl: string
+  ): string {
     const sortedAllowed = [...allowed].sort((a, b) => a - b).join(',')
-    return `${channel.id}|${token}|${sortedAllowed}`
+    const routeFingerprint = createHash('sha256')
+      .update(token)
+      .update('\0')
+      .update(proxyUrl)
+      .digest('hex')
+    return `${channel.id}|${routeFingerprint}|${sortedAllowed}`
   }
 
   async function closeChannel(channelId: string): Promise<void> {
@@ -561,7 +514,7 @@ export function createTelegramRuntime(deps: TelegramRuntimeDeps): TelegramRuntim
   function trackSyncTask(task: Promise<void>): void {
     const tracked = task.catch((error) => {
       deps.logError('claw-telegram', 'Failed to reconcile Telegram channels.', {
-        message: error instanceof Error ? error.message : String(error)
+        message: sanitizeTelegramTransportError(error)
       })
     })
     syncTasks.add(tracked)
@@ -584,7 +537,7 @@ export function createTelegramRuntime(deps: TelegramRuntimeDeps): TelegramRuntim
 
     for (const target of targets) {
       if (stopped || version !== syncVersion) return
-      const nextKey = buildKey(target.channel, target.token, target.allowed)
+      const nextKey = buildKey(target.channel, target.token, target.allowed, target.proxyUrl)
       const currentKey = channelKeys.get(target.channel.id)
       if (channels.has(target.channel.id) && currentKey === nextKey) continue
       if (channels.has(target.channel.id)) {
@@ -595,6 +548,7 @@ export function createTelegramRuntime(deps: TelegramRuntimeDeps): TelegramRuntim
         target.channel.id,
         target.token,
         target.allowed,
+        target.proxyUrl,
         {
           logError: deps.logError,
           onInbound: (payload) => deps.onInbound(payload)
@@ -611,7 +565,7 @@ export function createTelegramRuntime(deps: TelegramRuntimeDeps): TelegramRuntim
       } catch (error) {
         deps.logError('claw-telegram', 'Failed to start a Telegram channel.', {
           channelId: target.channel.id,
-          message: error instanceof Error ? error.message : String(error)
+          message: sanitizeTelegramTransportError(error)
         })
       }
     }
@@ -683,74 +637,3 @@ export function createTelegramRuntime(deps: TelegramRuntimeDeps): TelegramRuntim
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function isGroupChat(chat: TelegramChat): boolean {
-  if (chat.id < 0) return true
-  return typeof chat.type === 'string' && GROUP_CHAT_TYPES.has(chat.type)
-}
-
-function senderDisplayName(user: TelegramUser | undefined): string {
-  if (!user) return ''
-  const first = (user.first_name ?? '').trim()
-  const last = (user.last_name ?? '').trim()
-  const full = `${first} ${last}`.trim()
-  return full || (user.username ?? '').trim()
-}
-
-/**
- * Parses a comma-separated allowlist of Telegram chat ids. Duplicates and
- * non-numeric entries are dropped. An empty result means "allow all private
- * chats" (group chats are already rejected upstream).
- */
-export function parseAllowedChatIds(raw: string): Set<number> {
-  const set = new Set<number>()
-  if (typeof raw !== 'string') return set
-  for (const part of raw.split(/[\s,]+/)) {
-    const trimmed = part.trim()
-    if (!trimmed) continue
-    const id = Number(trimmed)
-    if (!Number.isFinite(id) || id <= 0) continue
-    set.add(id)
-  }
-  return set
-}
-
-function inferImageExtension(filePath: string): string {
-  const ext = filePath.split('.').pop()?.toLowerCase() ?? ''
-  if (ext === 'jpg' || ext === 'jpeg' || ext === 'png' || ext === 'gif' || ext === 'webp') return ext
-  return 'jpg'
-}
-
-/**
- * Splits text into chunks that fit Telegram's 4096-char limit, preferring
- * paragraph then line breaks so replies stay readable.
- */
-function splitForTelegram(text: string): string[] {
-  if (text.length <= MAX_MESSAGE_LENGTH) return [text]
-  const chunks: string[] = []
-  let remaining = text
-  while (remaining.length > MAX_MESSAGE_LENGTH) {
-    let cut = remaining.lastIndexOf('\n\n', MAX_MESSAGE_LENGTH)
-    if (cut <= 0) cut = remaining.lastIndexOf('\n', MAX_MESSAGE_LENGTH)
-    if (cut <= 0) cut = remaining.lastIndexOf('. ', MAX_MESSAGE_LENGTH)
-    if (cut <= 0) cut = MAX_MESSAGE_LENGTH
-    chunks.push(remaining.slice(0, cut).trimEnd())
-    remaining = remaining.slice(cut).trimStart()
-  }
-  if (remaining) chunks.push(remaining)
-  return chunks
-}
-
-function sleep(ms: number, signal?: AbortSignal): Promise<void> {
-  if (signal?.aborted) return Promise.resolve()
-  return new Promise((resolve) => {
-    const timer = setTimeout(finish, ms)
-    const onAbort = (): void => finish()
-    function finish(): void {
-      clearTimeout(timer)
-      signal?.removeEventListener('abort', onAbort)
-      resolve()
-    }
-    signal?.addEventListener('abort', onAbort, { once: true })
-  })
-}

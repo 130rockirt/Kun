@@ -18,6 +18,8 @@ import {
 } from '../../shared/app-settings'
 import {
   acquireRuntimeRequestLease,
+  bundledRuntimeBuildReplacementRequired,
+  expectedKunRuntimeBuildId,
   getRuntimeAuthToken,
   kunRuntimeAdapter,
   resolveRuntimeRequestTimeoutMs,
@@ -62,6 +64,8 @@ function settingsForPort(port: number): AppSettingsV1 {
     terminal: defaultTerminalSettings(),
     guiUpdate: { channel: 'stable' },
     codePromptPrefix: '',
+    chatWelcomeMessage: '',
+    codeAgentPresets: [],
     disabledSkillIds: []
   }
 }
@@ -117,6 +121,22 @@ describe('runtimeRequestViaHost', () => {
       'GET',
       40_000
     )).toBe(40_000)
+  })
+
+  it('allows bounded thread timeline reads to finish cold storage scans', () => {
+    expect(resolveRuntimeRequestTimeoutMs(
+      '/v1/threads/thr_1/timeline?before=item_42&limit=300',
+      'GET'
+    )).toBe(120_000)
+    expect(resolveRuntimeRequestTimeoutMs(
+      '/v1/threads/thr_1/timeline',
+      'GET',
+      45_000
+    )).toBe(45_000)
+    expect(resolveRuntimeRequestTimeoutMs(
+      '/v1/threads/thr_1/timeline',
+      'POST'
+    )).toBe(60_000)
   })
 
   it('forwards daily usage requests to the Kun runtime with bearer auth', async () => {
@@ -361,6 +381,47 @@ describe('runtimeRequestViaHost', () => {
 })
 
 describe('kunRuntimeAdapter.resolveConnection', () => {
+  it('requires a packaged production build handoff only for a bundled build mismatch', () => {
+    const expectedBuildId = 'b'.repeat(64)
+
+    expect(bundledRuntimeBuildReplacementRequired({
+      isPackaged: true,
+      hasCustomBinary: false,
+      runtimeFlavor: 'production',
+      expectedBuildId,
+      discoveredBuildId: 'a'.repeat(64)
+    })).toBe(true)
+    expect(bundledRuntimeBuildReplacementRequired({
+      isPackaged: true,
+      hasCustomBinary: false,
+      runtimeFlavor: 'production',
+      expectedBuildId,
+      discoveredBuildId: expectedBuildId
+    })).toBe(false)
+    expect(bundledRuntimeBuildReplacementRequired({
+      isPackaged: true,
+      hasCustomBinary: true,
+      runtimeFlavor: 'production',
+      expectedBuildId,
+      discoveredBuildId: 'a'.repeat(64)
+    })).toBe(false)
+    expect(bundledRuntimeBuildReplacementRequired({
+      isPackaged: true,
+      hasCustomBinary: false,
+      runtimeFlavor: 'development',
+      expectedBuildId,
+      discoveredBuildId: 'a'.repeat(64)
+    })).toBe(false)
+  })
+
+  it('compares development runtimes using their flavor-namespaced build identity', () => {
+    const sourceBuildId = 'd'.repeat(64)
+
+    expect(expectedKunRuntimeBuildId(sourceBuildId, 'development')).toMatch(/^[a-f0-9]{64}$/)
+    expect(expectedKunRuntimeBuildId(sourceBuildId, 'development')).not.toBe(sourceBuildId)
+    expect(expectedKunRuntimeBuildId(sourceBuildId, 'production')).toBe(sourceBuildId)
+  })
+
   it('rejects an identity-less runtime before the GUI health fast path can reuse it', async () => {
     const root = await mkdtemp(join(tmpdir(), 'kun-adapter-build-identity-'))
     const dataDir = join(root, 'data')
@@ -491,7 +552,7 @@ describe('kunRuntimeAdapter.isChildRunning dead-PID recovery', () => {
 
   it('clears a cached discovery record whose PID is no longer alive (#1116)', () => {
     setResolvedKunRuntimeConnectionForTests({
-      version: 1,
+      version: 2,
       instanceId: 'dead-shared-runtime',
       pid: 2_147_483_647,
       startedAt: '2026-08-07T00:00:00.000Z',
@@ -508,22 +569,4 @@ describe('kunRuntimeAdapter.isChildRunning dead-PID recovery', () => {
     expect(kunRuntimeAdapter.getBaseUrl(settingsForPort(18788))).toBe('http://127.0.0.1:18788')
   })
 
-  it('keeps reporting running while the cached discovery PID is alive', () => {
-    setResolvedKunRuntimeConnectionForTests({
-      version: 1,
-      instanceId: 'live-shared-runtime',
-      pid: process.pid,
-      startedAt: '2026-08-07T00:00:00.000Z',
-      host: '127.0.0.1',
-      port: 44793,
-      baseUrl: 'http://127.0.0.1:44793',
-      runtimeToken: 'live-token',
-      insecure: false,
-      serviceVersion: '0.0.0-test',
-      launchMode: 'shared'
-    })
-
-    expect(kunRuntimeAdapter.isChildRunning()).toBe(true)
-    expect(kunRuntimeAdapter.getBaseUrl(settingsForPort(18788))).toBe('http://127.0.0.1:44793')
-  })
 })

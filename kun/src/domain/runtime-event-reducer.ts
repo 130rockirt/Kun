@@ -484,12 +484,18 @@ function appendDelta(existing: TurnItem, delta: TurnItem, deltaOffset?: number):
 }
 
 function mergeAssistantDelta(existing: string, fragment: string, offset?: number): string {
+  if (!fragment) return existing
+  // Cumulative snapshots and exact full-text redelivery must replace/extend,
+  // never fail-open into Answer×N persistence.
+  if (existing === fragment || existing.startsWith(fragment)) return existing
+  if (fragment.startsWith(existing)) return fragment
   if (offset === undefined || !Number.isSafeInteger(offset) || offset < 0 || offset > existing.length) {
     return `${existing}${fragment}`
   }
   const overlapLength = Math.min(existing.length - offset, fragment.length)
   if (existing.slice(offset, offset + overlapLength) !== fragment.slice(0, overlapLength)) {
-    return `${existing}${fragment}`
+    if (existing.includes(fragment)) return existing
+    return offset === existing.length ? `${existing}${fragment}` : existing
   }
   return `${existing}${fragment.slice(overlapLength)}`
 }

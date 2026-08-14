@@ -14,17 +14,40 @@ export class HybridThreadIndexRepository {
   ) {}
 
   query(options: ThreadStoreListOptions): ThreadRow[] {
+    const { where, params } = this.buildWhere(options)
+    const cursor = decodeKeysetCursor(options.cursor)
+    if (cursor) {
+      where.push('(updated_at_ms < @cursorMs OR (updated_at_ms = @cursorMs AND id < @cursorId))')
+      params.cursorMs = cursor.updatedAtMs
+      params.cursorId = cursor.id
+    }
+    const limit = typeof options.limit === 'number' ? Math.max(1, Math.floor(options.limit)) : undefined
+    if (limit !== undefined) params.limit = limit
+    return this.db.prepare(`SELECT * FROM threads ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+      ORDER BY updated_at_ms DESC, id DESC ${limit !== undefined ? 'LIMIT @limit' : ''}`).all(params) as ThreadRow[]
+  }
+
+  count(options: ThreadStoreListOptions): number {
+    const { where, params } = this.buildWhere(options)
+    const row = this.db.prepare(
+      `SELECT COUNT(*) AS total FROM threads ${where.length ? `WHERE ${where.join(' AND ')}` : ''}`
+    ).get(params) as { total: number } | undefined
+    return row?.total ?? 0
+  }
+
+  private buildWhere(options: ThreadStoreListOptions): {
+    where: string[]
+    params: Record<string, unknown>
+  } {
     const where: string[] = []
     const params: Record<string, unknown> = {}
     if (options.archivedOnly) { where.push('status = @archivedStatus'); params.archivedStatus = 'archived' }
     else if (!options.includeArchived) where.push("status NOT IN ('archived', 'deleted')")
     if (!options.includeSide) where.push("relation != 'side'")
+    if (options.workspace) { where.push('workspace = @workspace'); params.workspace = options.workspace }
     const search = options.search?.trim().toLowerCase()
     if (search) { where.push("search_text LIKE @search ESCAPE '\\'"); params.search = `%${escapeLike(search)}%` }
-    const limit = typeof options.limit === 'number' ? Math.max(1, Math.floor(options.limit)) : undefined
-    if (limit !== undefined) params.limit = limit
-    return this.db.prepare(`SELECT * FROM threads ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
-      ORDER BY updated_at_ms DESC, id DESC ${limit !== undefined ? 'LIMIT @limit' : ''}`).all(params) as ThreadRow[]
+    return { where, params }
   }
 
   find(threadId: string): ThreadRow | null {
@@ -98,3 +121,27 @@ export class HybridThreadIndexRepository {
 }
 
 function escapeLike(value: string): string { return value.replace(/[%_]/g, (match) => `\\${match}`) }
+
+type KeysetCursor = { updatedAtMs: number; id: string }
+
+/**
+ * Cursor encoding: base64url of `JSON.stringify([updatedAtMs, id])`. The id
+ * tiebreaker keeps the key unique for the `(updated_at_ms DESC, id DESC)` sort.
+ */
+export function encodeKeysetCursor(updatedAt: string, id: string): string {
+  const updatedAtMs = Number.isFinite(Date.parse(updatedAt)) ? Date.parse(updatedAt) : 0
+  return Buffer.from(JSON.stringify([updatedAtMs, id])).toString('base64url')
+}
+
+export function decodeKeysetCursor(cursor: string | undefined): KeysetCursor | null {
+  if (!cursor) return null
+  try {
+    const parsed = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as unknown
+    if (!Array.isArray(parsed) || parsed.length !== 2) return null
+    const [updatedAtMs, id] = parsed as [unknown, unknown]
+    if (typeof updatedAtMs !== 'number' || typeof id !== 'string' || !id) return null
+    return { updatedAtMs, id }
+  } catch {
+    return null
+  }
+}

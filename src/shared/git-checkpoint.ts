@@ -9,7 +9,14 @@ export type GitCheckpointCreateResult =
     }
   | {
       ok: false
-      reason: 'no_workspace' | 'not_git_repo' | 'git_unavailable' | 'conflict' | 'disabled' | 'error'
+      reason:
+        | 'no_workspace'
+        | 'not_git_repo'
+        | 'git_unavailable'
+        | 'conflict'
+        | 'disabled'
+        | 'quota_exceeded'
+        | 'error'
       message: string
     }
 
@@ -31,8 +38,10 @@ export type GitCheckpointRestoreResult =
         | 'git_unavailable'
         | 'not_found'
         | 'conflict'
-        // Rescue-snapshot failures reuse the create-checkpoint reasons, which include 'disabled'.
+        // Rescue-snapshot failures reuse the create-checkpoint reasons, which
+        // include 'disabled' and 'quota_exceeded' (rescue skipped by quota).
         | 'disabled'
+        | 'quota_exceeded'
         | 'partial'
         | 'error'
       message: string

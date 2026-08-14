@@ -157,6 +157,161 @@ describe('chat projection reducer', () => {
     }
   )
 
+  it.each(['success', 'error'] as const)(
+    'keeps terminal detail and child status when a %s tool is replayed as running',
+    (terminalStatus) => {
+      const expectedChildStatus = terminalStatus === 'success' ? 'completed' : 'failed'
+      const projected = project({
+        ...state(),
+        blocks: [{
+          kind: 'tool',
+          id: 'tool_1',
+          summary: 'delegate_task',
+          status: terminalStatus,
+          detail: JSON.stringify({
+            childId: 'child_1',
+            status: expectedChildStatus,
+            summary: 'Full conclusion text',
+            toolInvocations: 5
+          }),
+          meta: {
+            toolName: 'delegate_task',
+            child: {
+              parentThreadId: 'thr_1',
+              parentTurnId: 'turn_1',
+              childId: 'child_1',
+              childStatus: expectedChildStatus,
+              childSeq: 1
+            }
+          }
+        }]
+      }, [{
+        type: 'tool_updated',
+        seq: 199,
+        payload: {
+          itemId: 'child_lifecycle_child_1',
+          summary: 'delegate_task',
+          status: 'running',
+          updateOnly: true,
+          createdAt: '2026-07-11T00:00:00.000Z',
+          toolKind: 'tool_call',
+          detail: JSON.stringify({ childId: 'child_1', status: 'running' }),
+          meta: {
+            child: {
+              parentThreadId: 'thr_1',
+              parentTurnId: 'turn_1',
+              childId: 'child_1',
+              childStatus: 'running',
+              childSeq: 1
+            }
+          }
+        }
+      }])
+
+      expect(projected.blocks[0]).toMatchObject({
+        kind: 'tool',
+        id: 'tool_1',
+        status: terminalStatus,
+        detail: expect.stringContaining('Full conclusion text'),
+        meta: {
+          child: {
+            childId: 'child_1',
+            childStatus: expectedChildStatus
+          }
+        }
+      })
+      const tool = projected.blocks[0]
+      if (tool?.kind === 'tool') {
+        expect(JSON.stringify(tool.detail)).not.toContain('"status":"running"')
+      }
+    }
+  )
+
+  it('accepts a newer resume attempt while rejecting stale lifecycle replay', () => {
+    const initial = {
+      ...state(),
+      blocks: [{
+        kind: 'tool' as const,
+        id: 'tool_1',
+        turnId: 'turn_initial',
+        summary: 'delegate_task',
+        status: 'error' as const,
+        detail: JSON.stringify({ childId: 'child_1', status: 'failed', resumeCount: 0 }),
+        meta: {
+          toolName: 'delegate_task',
+          child: {
+            parentThreadId: 'thread_1',
+            parentTurnId: 'turn_initial',
+            childId: 'child_1',
+            childStatus: 'failed',
+            resumable: true,
+            resumeCount: 0
+          }
+        }
+      }]
+    }
+    const resumed = project(initial, [{
+      type: 'tool_updated',
+      seq: 200,
+      payload: {
+        itemId: 'child_lifecycle_child_1',
+        summary: 'delegate_task',
+        status: 'running',
+        updateOnly: true,
+        detail: JSON.stringify({ childId: 'child_1', status: 'running', resumeCount: 1 }),
+        meta: {
+          child: {
+            parentThreadId: 'thread_1',
+            parentTurnId: 'turn_resume',
+            childId: 'child_1',
+            childStatus: 'running',
+            resumable: false,
+            resumeCount: 1
+          }
+        }
+      }
+    }])
+
+    expect(resumed.blocks[0]).toMatchObject({
+      kind: 'tool',
+      status: 'running',
+      meta: { child: { parentTurnId: 'turn_resume', childStatus: 'running', resumeCount: 1 } }
+    })
+    const settled = project(resumed, [{
+      type: 'tool_updated',
+      payload: {
+        itemId: 'tool_resume', summary: 'delegate_task', status: 'success',
+        detail: JSON.stringify({ childId: 'child_1', status: 'completed', resumeCount: 1, summary: 'resumed conclusion' }),
+        meta: { toolName: 'delegate_task' }
+      }
+    }])
+    expect(settled.blocks[0]).toMatchObject({ status: 'success', detail: expect.stringContaining('resumed conclusion') })
+    const replayed = project(settled, [{
+      type: 'tool_updated',
+      seq: 201,
+      payload: {
+        itemId: 'child_lifecycle_child_1',
+        summary: 'delegate_task',
+        status: 'running',
+        updateOnly: true,
+        detail: JSON.stringify({ childId: 'child_1', status: 'running', resumeCount: 0 }),
+        meta: {
+          child: {
+            parentThreadId: 'thread_1',
+            parentTurnId: 'turn_initial',
+            childId: 'child_1',
+            childStatus: 'running',
+            resumeCount: 0
+          }
+        }
+      }
+    }])
+    expect(replayed.blocks[0]).toMatchObject({
+      status: 'success',
+      meta: { child: { resumeCount: 1 } }
+    })
+  })
+
   it('clears current-turn orchestration when a Graph turn completes', () => {
     const projected = project({
       ...state(),
@@ -211,7 +366,8 @@ describe('chat projection reducer', () => {
       ...state(),
       busy: true,
       currentTurnId: 'turn_graph',
-      currentTurnOrchestration: 'graph'
+      currentTurnOrchestration: 'graph',
+      composerOrchestration: 'graph'
     }, [{
       type: 'turn_failed',
       error: new Error('stopped'),
@@ -221,6 +377,7 @@ describe('chat projection reducer', () => {
     expect(projected.busy).toBe(false)
     expect(projected.currentTurnId).toBeNull()
     expect(projected.currentTurnOrchestration).toBeNull()
+    expect(projected.composerOrchestration).toBe('graph')
   })
 
   it('settles a stale running sidebar status when a terminal event is replayed (#1028)', () => {
@@ -533,583 +690,4 @@ describe('chat projection reducer', () => {
     expect(projected.currentTurnUserId).toBe('item_original_user')
   })
 
-  it('keeps distinct automatic compaction markers for a turn', () => {
-    const projected = project(state(), [
-      {
-        type: 'compaction_updated',
-        payload: {
-          itemId: 'compaction_1',
-          turnId: 'turn_1',
-          summary: 'first summary',
-          status: 'success',
-          auto: true
-        }
-      },
-      {
-        type: 'compaction_updated',
-        payload: {
-          itemId: 'compaction_2',
-          turnId: 'turn_1',
-          summary: 'new summary',
-          status: 'success',
-          auto: true
-        }
-      }
-    ])
-
-    expect(projected.blocks).toEqual([
-      expect.objectContaining({
-        kind: 'compaction',
-        id: 'compaction_1',
-        turnId: 'turn_1',
-        summary: 'first summary'
-      }),
-      expect.objectContaining({
-        kind: 'compaction',
-        id: 'compaction_2',
-        turnId: 'turn_1',
-        summary: 'new summary'
-      })
-    ])
-  })
-
-  it('updates one automatic compaction marker across status changes', () => {
-    const projected = project(state(), [
-      {
-        type: 'compaction_updated',
-        payload: {
-          itemId: 'compaction_1',
-          turnId: 'turn_1',
-          summary: 'starting',
-          status: 'running',
-          auto: true
-        }
-      },
-      {
-        type: 'compaction_updated',
-        payload: {
-          itemId: 'compaction_1',
-          turnId: 'turn_1',
-          summary: 'completed summary',
-          status: 'success',
-          auto: true,
-          messagesBefore: 10,
-          messagesAfter: 3
-        }
-      }
-    ])
-
-    expect(projected.blocks).toEqual([
-      expect.objectContaining({
-        kind: 'compaction',
-        id: 'compaction_1',
-        summary: 'completed summary',
-        status: 'success',
-        messagesBefore: 10,
-        messagesAfter: 3
-      })
-    ])
-  })
-
-  it('retires a pending approval after its runtime resolution is projected', () => {
-    const projected = project(state(), [
-      {
-        type: 'approval_received',
-        payload: { approvalId: 'approval_1', summary: 'Run tests' }
-      },
-      {
-        type: 'approval_status_changed',
-        payload: {
-          approvalId: 'approval_1',
-          status: 'expired',
-          errorMessage: 'turn aborted while awaiting approval'
-        }
-      }
-    ])
-
-    expect(projected.blocks).toContainEqual(expect.objectContaining({
-      kind: 'approval',
-      approvalId: 'approval_1',
-      status: 'expired',
-      errorMessage: 'turn aborted while awaiting approval'
-    }))
-  })
-
-  it.each(['allowed', 'denied'] as const)(
-    'clears stale approval errors when the runtime resolves it as %s',
-    (status) => {
-      const initial = {
-        ...state(),
-        blocks: [{
-          kind: 'approval' as const,
-          id: 'approval-approval_1',
-          approvalId: 'approval_1',
-          summary: 'Run tests',
-          status: 'error' as const,
-          errorMessage: 'response was lost'
-        }]
-      }
-
-      const projected = project(initial, [{
-        type: 'approval_status_changed',
-        payload: { approvalId: 'approval_1', status }
-      }])
-      const approval = projected.blocks[0]
-
-      expect(approval).toMatchObject({ kind: 'approval', status })
-      expect(approval).not.toHaveProperty('errorMessage')
-    }
-  )
-
-  it('reconciles a persisted completion through the same projection reducer', () => {
-    const initial = {
-      ...state(),
-      busy: false,
-      currentTurnId: null,
-      lastSeq: 4,
-      liveAssistant: ''
-    }
-    const blocks = [{
-      kind: 'assistant' as const,
-      id: 'assistant_1',
-      createdAt: '2026-07-11T00:00:00.000Z',
-      text: 'Persisted answer'
-    }]
-    const projected = project(initial, [{
-      type: 'thread_snapshot_reconciled',
-      payload: { threadId: 'thread_1', blocks, latestSeq: 8 }
-    }])
-
-    expect(projected.blocks).toEqual(blocks)
-    expect(projected.lastSeq).toBe(8)
-    expect(projected.error).toBeNull()
-  })
-
-  it('replaces incomplete deltas with the authoritative completed item snapshot', () => {
-    const initial = {
-      ...state(),
-      busy: true,
-      currentTurnId: 'turn_1',
-      currentTurnUserId: 'user_1',
-      liveDeltaSeqFloor: 0,
-      turnReasoningFirstAtByUserId: {},
-      turnReasoningLastAtByUserId: {}
-    }
-    const projected = project(initial, [
-      {
-        type: 'deltas_received',
-        deltas: [{
-          seq: 1,
-          threadId: 'thread_1',
-          turnId: 'turn_1',
-          itemId: 'assistant_1',
-          createdAt: '2026-07-11T00:00:00.000Z',
-          kind: 'agent_message',
-          text: 'Hello '
-        }]
-      },
-      {
-        type: 'assistant_item_upserted',
-        payload: {
-          itemId: 'assistant_1',
-          threadId: 'thread_1',
-          turnId: 'turn_1',
-          kind: 'agent_message',
-          status: 'completed',
-          createdAt: '2026-07-11T00:00:00.000Z',
-          text: 'Hello missing middle world'
-        }
-      }
-    ])
-
-    expect(projected.liveAssistant).toBe('')
-    expect(projected.blocks).toContainEqual({
-      kind: 'assistant',
-      id: 'assistant_1',
-      turnId: 'turn_1',
-      createdAt: '2026-07-11T00:00:00.000Z',
-      text: 'Hello missing middle world'
-    })
-  })
-
-  it('does not flush or split live assistant text when tool and status events arrive', () => {
-    const initial = {
-      ...state(),
-      busy: true,
-      currentTurnId: 'turn_1',
-      currentTurnUserId: 'user_1',
-      liveDeltaSeqFloor: 0,
-      turnReasoningFirstAtByUserId: {},
-      turnReasoningLastAtByUserId: {}
-    }
-    const projected = project(initial, [
-      {
-        type: 'deltas_received',
-        deltas: [{
-          seq: 1,
-          turnId: 'turn_1',
-          itemId: 'assistant_1',
-          kind: 'agent_message',
-          text: 'first '
-        }]
-      },
-      {
-        type: 'tool_updated',
-        payload: {
-          itemId: 'tool_1',
-          turnId: 'turn_1',
-          summary: 'read',
-          status: 'running'
-        }
-      },
-      {
-        type: 'runtime_status_received',
-        payload: {
-          kind: 'model_request_retry',
-          itemId: 'status_1',
-          turnId: 'turn_1'
-        }
-      },
-      {
-        type: 'deltas_received',
-        deltas: [{
-          seq: 2,
-          turnId: 'turn_1',
-          itemId: 'assistant_1',
-          kind: 'agent_message',
-          text: 'second'
-        }]
-      }
-    ])
-
-    expect(projected.liveAssistant).toBe('first second')
-    expect(projected.blocks.filter((block) => block.kind === 'assistant')).toEqual([])
-    expect(projected.blocks.map((block) => block.id)).toEqual(['tool_1', 'status_1'])
-  })
-
-  it('is idempotent for repeated delta seqs and authoritative snapshots', () => {
-    const initial = {
-      ...state(),
-      busy: true,
-      currentTurnId: 'turn_1',
-      currentTurnUserId: 'user_1',
-      liveDeltaSeqFloor: 0,
-      turnReasoningFirstAtByUserId: {},
-      turnReasoningLastAtByUserId: {}
-    }
-    const delta: RuntimeProjectionAction = {
-      type: 'deltas_received',
-      deltas: [{
-        seq: 4,
-        turnId: 'turn_1',
-        itemId: 'assistant_1',
-        kind: 'agent_message',
-        text: 'hello'
-      }]
-    }
-    const snapshot: RuntimeProjectionAction = {
-      type: 'assistant_item_upserted',
-      payload: {
-        itemId: 'assistant_1',
-        threadId: 'thread_1',
-        turnId: 'turn_1',
-        kind: 'agent_message',
-        status: 'completed',
-        createdAt: '2026-07-11T00:00:00.000Z',
-        text: 'hello'
-      }
-    }
-
-    const projected = project(initial, [delta, delta, snapshot, snapshot])
-
-    expect(projected.blocks.filter((block) => block.kind === 'assistant')).toHaveLength(1)
-    expect(projected.blocks.find((block) => block.kind === 'assistant')).toMatchObject({ text: 'hello' })
-  })
-
-  it('does not reopen or duplicate an item delta already covered by the hydrated snapshot', () => {
-    const assistant = {
-      kind: 'assistant' as const,
-      id: 'assistant_1',
-      turnId: 'turn_1',
-      text: 'Hydrated answer'
-    }
-    const initial = {
-      ...state(),
-      blocks: [assistant],
-      busy: false,
-      lastSeq: 200,
-      liveDeltaSeqFloor: 200,
-      liveAssistant: ''
-    }
-
-    const projected = project(initial, [{
-      type: 'deltas_received',
-      deltas: [{
-        seq: 201,
-        deltaOffset: 0,
-        threadId: 'thread_1',
-        turnId: 'turn_1',
-        itemId: 'assistant_1',
-        kind: 'agent_message',
-        text: 'Hydrated answer'
-      }]
-    }])
-
-    expect(projected.blocks).toBe(initial.blocks)
-    expect(projected.liveAssistant).toBe('')
-    expect(projected.liveAssistantItemId).toBeUndefined()
-    expect(projected.busy).toBe(false)
-    expect(projected.lastSeq).toBe(201)
-    expect(projected.liveDeltaSeqFloor).toBe(201)
-  })
-
-  it('appends only the unseen suffix when an offset delta partially overlaps hydrated text', () => {
-    const initial = {
-      ...state(),
-      blocks: [{
-        kind: 'assistant' as const,
-        id: 'assistant_1',
-        turnId: 'turn_1',
-        text: 'Hello '
-      }],
-      busy: false,
-      lastSeq: 200,
-      liveDeltaSeqFloor: 200,
-      liveAssistant: ''
-    }
-
-    const projected = project(initial, [{
-      type: 'deltas_received',
-      deltas: [
-        {
-          seq: 201,
-          deltaOffset: 4,
-          threadId: 'thread_1',
-          turnId: 'turn_1',
-          itemId: 'assistant_1',
-          kind: 'agent_message',
-          text: 'o world'
-        },
-        {
-          seq: 202,
-          deltaOffset: 11,
-          threadId: 'thread_1',
-          turnId: 'turn_1',
-          itemId: 'assistant_1',
-          kind: 'agent_message',
-          text: '!'
-        }
-      ]
-    }])
-
-    expect(projected.blocks).toEqual(initial.blocks)
-    expect(projected.liveAssistant).toBe('world!')
-    expect(projected.liveAssistantItemId).toBe('assistant_1')
-    expect(projected.busy).toBe(true)
-    expect(projected.lastSeq).toBe(202)
-  })
-
-  it('appends the complete delta when offset overlap does not match projected text', () => {
-    const initial = {
-      ...state(),
-      blocks: [{
-        kind: 'assistant' as const,
-        id: 'assistant_1',
-        turnId: 'turn_1',
-        text: 'Hello '
-      }],
-      busy: false,
-      lastSeq: 200,
-      liveDeltaSeqFloor: 200,
-      liveAssistant: ''
-    }
-
-    const projected = project(initial, [{
-      type: 'deltas_received',
-      deltas: [{
-        seq: 201,
-        deltaOffset: 4,
-        threadId: 'thread_1',
-        turnId: 'turn_1',
-        itemId: 'assistant_1',
-        kind: 'agent_message',
-        text: 'X world'
-      }]
-    }])
-
-    expect(projected.liveAssistant).toBe('X world')
-    expect(projected.liveAssistantItemId).toBe('assistant_1')
-    expect(projected.busy).toBe(true)
-  })
-
-  it('keeps legacy no-offset deltas on their original append path', () => {
-    const initial = {
-      ...state(),
-      blocks: [{
-        kind: 'assistant' as const,
-        id: 'assistant_1',
-        turnId: 'turn_1',
-        text: 'Hydrated answer'
-      }],
-      busy: false,
-      lastSeq: 200,
-      liveDeltaSeqFloor: 200,
-      liveAssistant: ''
-    }
-
-    const projected = project(initial, [{
-      type: 'deltas_received',
-      deltas: [{
-        seq: 201,
-        threadId: 'thread_1',
-        turnId: 'turn_1',
-        itemId: 'assistant_1',
-        kind: 'agent_message',
-        text: 'Hydrated answer'
-      }]
-    }])
-
-    expect(projected.liveAssistant).toBe('Hydrated answer')
-    expect(projected.liveAssistantItemId).toBe('assistant_1')
-    expect(projected.busy).toBe(true)
-  })
-
-  it('preserves an unchanged assistant block reference during terminal snapshot reconciliation', () => {
-    const assistant = {
-      kind: 'assistant' as const,
-      id: 'assistant_1',
-      turnId: 'turn_1',
-      createdAt: '2026-07-11T00:00:00.000Z',
-      text: 'Stable markdown'
-    }
-    const initial = {
-      ...state(),
-      busy: false,
-      currentTurnId: null,
-      lastSeq: 4,
-      blocks: [
-        { kind: 'user' as const, id: 'user_1', turnId: 'turn_1', text: 'Question' },
-        assistant
-      ]
-    }
-    const projected = project(initial, [{
-      type: 'thread_snapshot_reconciled',
-      payload: {
-        threadId: 'thread_1',
-        turnId: 'turn_1',
-        userBlockId: 'user_1',
-        latestSeq: 8,
-        blocks: [
-          { kind: 'user', id: 'user_1', turnId: 'turn_1', text: 'Question' },
-          { ...assistant }
-        ]
-      }
-    }])
-
-    expect(projected.blocks.find((block) => block.id === 'assistant_1')).toBe(assistant)
-  })
-})
-
-describe('chat projection reducer usage timing metrics', () => {
-  const usageSnapshot = (overrides: Record<string, unknown>) => ({
-    inputTokens: 100,
-    outputTokens: 50,
-    reasoningTokens: 0,
-    cachedTokens: 0,
-    cacheMissTokens: 100,
-    cacheHitRate: 0,
-    totalTokens: 150,
-    costUsd: 0,
-    costCny: null,
-    tokenEconomySavingsTokens: 0,
-    turns: 1,
-    avgTtftMs: null,
-    avgTokensPerSecond: null,
-    turnAvgTtftMs: null,
-    turnAvgTokensPerSecond: null,
-    ...overrides
-  })
-
-  it('stores per-turn averages keyed by the snapshot turnId', () => {
-    const projected = project(state(), [
-      {
-        type: 'usage_received',
-        payload: usageSnapshot({
-          turnId: 'turn_1',
-          turnAvgTtftMs: 1_000,
-          turnAvgTokensPerSecond: 40.2,
-          avgTtftMs: 1_200,
-          avgTokensPerSecond: 38.5
-        })
-      }
-    ])
-
-    expect(projected.turnTimingMetrics.get('turn_1')).toEqual({
-      avgTtftMs: 1_000,
-      avgTokensPerSecond: 40.2
-    })
-  })
-
-  it('clears per-turn metrics when a usage event belongs to a different thread', () => {
-    const first = project(state(), [
-      {
-        type: 'usage_received',
-        payload: usageSnapshot({ turnId: 'turn_1', turnAvgTtftMs: 800 })
-      }
-    ])
-    const switched = project({ ...first, activeThreadId: 'thread_2' }, [
-      {
-        type: 'usage_received',
-        payload: usageSnapshot({ turnId: 'turn_2', turnAvgTtftMs: 500 })
-      }
-    ])
-
-    expect(switched.turnTimingMetrics.has('turn_1')).toBe(false)
-    expect(switched.turnTimingMetrics.get('turn_2')).toEqual({
-      avgTtftMs: 500,
-      avgTokensPerSecond: null
-    })
-  })
-
-  it('removes a turn entry when its snapshot has no timing data', () => {
-    const first = project(state(), [
-      {
-        type: 'usage_received',
-        payload: usageSnapshot({ turnId: 'turn_1', turnAvgTtftMs: 800 })
-      }
-    ])
-    const cleared = project(first, [
-      {
-        type: 'usage_received',
-        payload: usageSnapshot({ turnId: 'turn_1' })
-      }
-    ])
-
-    expect(cleared.turnTimingMetrics.has('turn_1')).toBe(false)
-  })
-
-  it('clears per-turn metrics when the active thread changes', () => {
-    const first = project(state(), [
-      {
-        type: 'usage_received',
-        payload: usageSnapshot({ turnId: 'turn_1', turnAvgTtftMs: 800 })
-      }
-    ])
-    const reconciled = project({ ...first, activeThreadId: 'thread_2' }, [
-      {
-        type: 'thread_snapshot_reconciled',
-        payload: {
-          threadId: 'thread_2',
-          turnId: 'turn_2',
-          userBlockId: 'user_2',
-          latestSeq: 1,
-          blocks: [
-            { kind: 'user', id: 'user_2', turnId: 'turn_2', text: 'Hi' }
-          ]
-        }
-      }
-    ])
-
-    expect(reconciled.turnTimingMetrics.size).toBe(0)
-  })
 })

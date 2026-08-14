@@ -150,6 +150,7 @@ export const BrowserUseAuditEntrySchema = z.object({
   origin: z.string().max(2048).optional(),
   sanitizedPath: z.string().max(2048).optional(),
   risk: BrowserUseRiskSchema.optional(),
+  reviewerSource: z.enum(['user', 'agent', 'full-access']).optional(),
   decision: z.enum(['allowed', 'denied', 'expired', 'cancelled']).optional(),
   outcome: z.enum(['success', 'blocked', 'error', 'aborted']),
   targetLabel: z.string().max(256).optional(),

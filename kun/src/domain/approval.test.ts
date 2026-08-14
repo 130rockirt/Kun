@@ -7,6 +7,21 @@ import {
 } from './approval.js'
 
 describe('approval action envelopes', () => {
+  it('omits unresolved raw tool arguments from review and durable approval data', () => {
+    const raw = '{"plan":{"title":"private-approval-marker"'
+    const action = createApprovalActionEnvelope({
+      toolName: 'graph_define_plan',
+      providerId: 'builtin',
+      toolKind: 'tool_call',
+      arguments: { __raw: raw },
+      workspace: '/workspace',
+      reason: 'approval policy requires review'
+    })
+
+    expect(action.arguments).toEqual({})
+    expect(JSON.stringify(action)).not.toContain('private-approval-marker')
+  })
+
   it('captures trusted effects and exact targets while redacting credentials', () => {
     const action = createApprovalActionEnvelope({
       toolName: 'mcp_call_tool',
@@ -193,7 +208,7 @@ describe('approval action envelopes', () => {
       },
       effects: {
         network: true,
-        externalWrite: false,
+        externalWrite: true,
         processExecution: false,
         guiAutomation: true
       },
@@ -201,6 +216,7 @@ describe('approval action envelopes', () => {
       reason: 'browser interaction requires explicit approval'
     })
 
+    expect(action.kind).toBe('external-effect')
     expect(action.targets).toEqual(expect.arrayContaining([
       {
         kind: 'url',

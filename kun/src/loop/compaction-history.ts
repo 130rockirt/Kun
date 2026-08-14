@@ -20,42 +20,48 @@ export function insertCompactionIntoVisibleHistory(input: {
     return replaceOrAppendItem(input.visibleItems, input.summaryItem)
   }
 
-  // Goal context is internal model history. `ContextCompactor` intentionally
-  // positions it immediately after the new summary, but the public transcript
-  // insertion path otherwise preserves folded items before that summary. Do
-  // not let the internal record choose the insertion point: doing so would
-  // leave folded visible items after the summary and replay them again.
-  const goalContexts = uniqueGoalContexts([
+  // Internal model records (goal context and interruption checkpoints) are
+  // durable model history. `ContextCompactor` intentionally positions them
+  // immediately after the new summary, but the public transcript insertion
+  // path otherwise preserves folded items before that summary. Do not let
+  // internal records choose the insertion point: doing so would leave folded
+  // visible items after the summary and replay them again.
+  const internalRecords = uniqueInternalRecords([
     ...input.compactedItems,
     ...input.visibleItems
   ])
   const tailIds = new Set(
     input.compactedItems
       .slice(summaryIndex + 1)
-      .filter((item) => item.kind !== 'goal_context')
+      .filter((item) => !isInternalRecord(item))
       .map((item) => item.id)
   )
   const withoutSummary = input.visibleItems.filter(
-    (item) => item.id !== input.summaryItem.id && item.kind !== 'goal_context'
+    (item) => item.id !== input.summaryItem.id && !isInternalRecord(item)
   )
-  if (tailIds.size === 0) return [...withoutSummary, input.summaryItem, ...goalContexts]
+  if (tailIds.size === 0) return [...withoutSummary, input.summaryItem, ...internalRecords]
 
   const insertIndex = withoutSummary.findIndex((item) => tailIds.has(item.id))
-  if (insertIndex < 0) return [...withoutSummary, input.summaryItem, ...goalContexts]
+  if (insertIndex < 0) return [...withoutSummary, input.summaryItem, ...internalRecords]
 
   return [
     ...withoutSummary.slice(0, insertIndex),
     input.summaryItem,
-    ...goalContexts,
+    ...internalRecords,
     ...withoutSummary.slice(insertIndex)
   ]
 }
 
-function uniqueGoalContexts(items: readonly TurnItem[]): TurnItem[] {
+function isInternalRecord(item: TurnItem): boolean {
+  return item.kind === 'goal_context' || item.kind === 'model_context' ||
+    item.kind === 'runtime_context_source' || item.kind === 'interruption_note'
+}
+
+function uniqueInternalRecords(items: readonly TurnItem[]): TurnItem[] {
   const seen = new Set<string>()
   const contexts: TurnItem[] = []
   for (const item of items) {
-    if (item.kind !== 'goal_context' || seen.has(item.id)) continue
+    if (!isInternalRecord(item) || seen.has(item.id)) continue
     seen.add(item.id)
     contexts.push(item)
   }

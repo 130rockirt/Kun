@@ -1,0 +1,12 @@
+{
+  "codeAgentPresets": "Персоны",
+  "codeAgentPresetsDesc": "Повторно используемые стили работы агента Code. Выбранная персона отправляется с каждым сообщением и влияет только на тон и стиль работы — она не предоставляет инструменты и не меняет разрешения.",
+  "codeAgentPresetNamePlaceholder": "Название персоны",
+  "codeAgentPersonaPlaceholder": "Как должен вести себя агент, когда выбрана эта персона?",
+  "codeAgentPresetRemove": "Удалить персону",
+  "codeAgentPresetAdd": "Добавить персону",
+  "codeAgentIconPickerTitle": "Выберите значок",
+  "codeAgentIconSearchPlaceholder": "Поиск значков…",
+  "codeAgentIconPickerEmpty": "Подходящих значков нет",
+  "codeAgentIconPickerMore": "Показано {{shown}} из {{total}} — продолжайте ввод, чтобы сузить поиск"
+}

@@ -141,6 +141,24 @@ export const TextStyleSpecSchema = z
   })
   .strict()
 
+const PptReviewRefSchema = z.object({
+  workflowId: z.string().min(1),
+  childId: z.string().min(1),
+  slideId: z.string().min(1),
+  revision: z.number().int().nonnegative(),
+  parentThreadId: z.string().min(1).optional(),
+  role: z.enum(['slide-frame', 'preview-image', 'annotation'])
+}).strict()
+
+const PptDirectionRefSchema = z.object({
+  workflowId: z.string().min(1),
+  childId: z.string().min(1),
+  directionId: z.string().min(1),
+  revision: z.number().int().positive(),
+  parentThreadId: z.string().min(1).optional(),
+  role: z.enum(['direction-card', 'preview-image', 'summary'])
+}).strict()
+
 const PartialShapeSchema = z
   .object({
     type: ShapeTypeSchema,
@@ -162,6 +180,8 @@ const PartialShapeSchema = z
     textAlign: z.enum(['left', 'center', 'right']).optional(),
     lineHeight: z.number().positive().optional(),
     imageUrl: z.string().optional(),
+    pptReviewRef: PptReviewRefSchema.optional(),
+    pptDirectionRef: PptDirectionRefSchema.optional(),
     aiImageHolder: z.boolean().optional(),
     clipContent: z.boolean().optional(),
     points: z.array(PointSchema).optional(),
@@ -196,6 +216,8 @@ const PatchSchema = z
     textAlign: z.enum(['left', 'center', 'right']).optional(),
     lineHeight: z.number().positive().optional(),
     imageUrl: z.string().optional(),
+    pptReviewRef: PptReviewRefSchema.optional(),
+    pptDirectionRef: PptDirectionRefSchema.optional(),
     aiImageHolder: z.boolean().optional(),
     clipContent: z.boolean().optional(),
     points: z.array(PointSchema).optional(),
@@ -496,6 +518,8 @@ export type ExecuteResult = {
 }
 
 export type ExecuteOpsOptions = {
+  /** Durable identity used to make renderer replay idempotent after remount/reload. */
+  replayKey?: string
   /** Select ids before the undo group closes so redo restores the post-op selection. */
   selectAfter?: (affectedIds: string[]) => string[]
   /** One-shot lint findings key, used to keep Code sidebar feedback separate from Design mode. */

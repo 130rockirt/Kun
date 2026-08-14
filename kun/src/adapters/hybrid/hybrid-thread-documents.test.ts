@@ -15,6 +15,40 @@ afterEach(async () => {
 })
 
 describe('HybridThreadDocumentRepository cache budget', () => {
+  it('redacts the prompt but retains the durable request fingerprint in metadata', () => {
+    const thread = {
+      ...createThreadRecord({
+        id: 'thread_admission_projection',
+        title: 'Admission projection',
+        workspace: '/tmp/workspace',
+        model: 'test',
+        planBuildAdmissionFingerprint: 'b'.repeat(64),
+        planBuildAdmissionCapabilityHash: 'c'.repeat(64)
+      }),
+      turns: [createTurnRecord({
+        id: 'turn_admission_projection',
+        threadId: 'thread_admission_projection',
+        prompt: 'Durable plan-build prompt',
+        clientRequestId: 'plan-build:run-1',
+        clientRequestFingerprint: 'a'.repeat(64),
+        status: 'completed'
+      })]
+    }
+
+    const projection = stripThreadItemBodies(thread)
+    expect(projection).toMatchObject({
+      planBuildAdmissionFingerprint: 'b'.repeat(64),
+      planBuildAdmissionCapabilityHash: 'c'.repeat(64)
+    })
+    expect(projection.turns).toEqual([
+      expect.objectContaining({
+        prompt: '',
+        clientRequestId: 'plan-build:run-1',
+        clientRequestFingerprint: 'a'.repeat(64)
+      })
+    ])
+  })
+
   it('hydrates an oversized record without retaining it', async () => {
     const root = await mkdtemp(join(tmpdir(), 'kun-thread-cache-budget-'))
     roots.push(root)

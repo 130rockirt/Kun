@@ -41,6 +41,33 @@ export type ItemHistoryCompactionResult = {
 }
 
 /**
+ * A bounded chronological window from the durable item projection. `before`
+ * is the stable id of the first item in the previously returned page and is
+ * treated as an exclusive cursor.
+ *
+ * `anchorTurnId` is only honored on the newest page (no `before`): when the
+ * turn's first real `user_message` falls outside the bounded window (a long
+ * running turn produced more process items than the page budget), the page
+ * keeps that user message pinned in front so the active request stays
+ * visible. The cursor still points at the retained continuous window so
+ * older pages cover the items between the anchor and the window without
+ * gaps.
+ */
+export type ItemHistoryPageOptions = {
+  before?: string
+  anchorTurnId?: string
+  maxItems: number
+  maxBytes: number
+}
+
+export type ItemHistoryPage = {
+  items: TurnItem[]
+  nextCursor?: string
+  hasMore: boolean
+  itemBytes: number
+}
+
+/**
  * Port for persisted per-thread activity.
  *
  * The store keeps three streams: the ordered runtime event log
@@ -82,6 +109,15 @@ export interface SessionStore {
     threadId: string,
     options?: { force?: boolean }
   ): Promise<ItemHistoryCompactionResult>
+  /**
+   * Queue a coalesced background item-history compaction. Live turns should
+   * prefer this over awaiting `compactItems` so lease heartbeats stay responsive.
+   */
+  scheduleItemHistoryCompaction?(threadId: string): void
+  /** Queue a coalesced background usage-event compaction for oversized logs. */
+  scheduleUsageEventCompaction?(threadId: string): void
+  /** Flush pending scheduled compaction for one thread or the whole store. */
+  flushScheduledCompaction?(threadId?: string): Promise<void>
   loadEventsSince(threadId: string, sinceSeq: number): Promise<RuntimeEvent[]>
   /**
    * Optional cross-process live feed. The normal EventBus remains the fast
@@ -103,6 +139,8 @@ export interface SessionStore {
     options?: { maxRecordBytes?: number }
   ): AsyncIterable<RuntimeEvent>
   loadItems(threadId: string): Promise<TurnItem[]>
+  /** Optional bounded history read used by renderer timeline hydration. */
+  loadItemPage?(threadId: string, options: ItemHistoryPageOptions): Promise<ItemHistoryPage>
   loadSession(threadId: string): Promise<AgentSession | null>
   upsertSession(session: AgentSession): Promise<void>
   /** Highest known per-thread `seq`. Returns 0 when no events have been recorded. */

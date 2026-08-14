@@ -26,7 +26,10 @@ schema.allOf = [
       permissions.map((permission) => permissionCondition({ contribution }, permission))
   )
 ]
-const output = `${JSON.stringify(schema, null, 2)}\n`
+// The schema is generated, consumed by machines, and published as a standalone
+// artifact. Keep its canonical representation compact so authored module size
+// checks remain meaningful without splitting one JSON document.
+const output = `${JSON.stringify(schema)}\n`
 
 if (process.argv.includes('--check')) {
   const current = await readFile(outputPath, 'utf8').catch(() => '')

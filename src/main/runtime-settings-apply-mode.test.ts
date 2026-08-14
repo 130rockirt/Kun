@@ -48,6 +48,8 @@ function settings(): AppSettingsV1 {
     terminal: defaultTerminalSettings(),
     guiUpdate: { channel: 'stable' },
     codePromptPrefix: '',
+    chatWelcomeMessage: '',
+    codeAgentPresets: [],
     disabledSkillIds: []
   }
 }
@@ -181,12 +183,17 @@ function updateProvider(
 describe('runtimeSettingsApplyMode', () => {
   it('ignores UI-only settings', () => {
     const prev = settings()
-    const next = { ...prev, uiFontScale: 0.9, theme: 'dark' as const }
+    const next = {
+      ...prev,
+      uiFontScale: 0.9,
+      theme: 'dark' as const,
+      codeAgentPersonaEnabled: false
+    }
 
     expect(runtimeSettingsApplyMode(prev, next)).toBe('none')
   })
 
-  it('hot-applies model, provider, approval, media, MCP, project grants, memory, and subagent changes', () => {
+  it('hot-applies model, provider, approval, media, MCP, project grants, memory, subagent, and Browser Use changes', () => {
     const prev = settings()
     const withModel = {
       ...prev,
@@ -268,7 +275,6 @@ describe('runtimeSettingsApplyMode', () => {
           subagents: {
             enabled: true,
             maxParallel: 5,
-            maxChildRuns: 20,
             profiles: [{
               id: 'researcher',
               enabled: true,
@@ -277,6 +283,29 @@ describe('runtimeSettingsApplyMode', () => {
               toolPolicy: 'readOnly' as const
             }]
           }
+        }
+      }
+    }
+    const withBrowserUseLimits = {
+      ...prev,
+      agents: {
+        kun: {
+          ...prev.agents.kun,
+          browserUse: {
+            ...prev.agents.kun.browserUse,
+            approvalMode: 'always-ask' as const,
+            maxTabs: 4,
+            idleTimeoutMs: 600_000
+          }
+        }
+      }
+    }
+    const withBrowserUseDisabled = {
+      ...prev,
+      agents: {
+        kun: {
+          ...prev.agents.kun,
+          browserUse: { ...prev.agents.kun.browserUse, enabled: false }
         }
       }
     }
@@ -291,6 +320,8 @@ describe('runtimeSettingsApplyMode', () => {
     expect(runtimeSettingsApplyMode(prev, withMemory)).toBe('hot')
     expect(runtimeSettingsApplyMode(prev, withTurnCapacity)).toBe('hot')
     expect(runtimeSettingsApplyMode(prev, withSubagents)).toBe('hot')
+    expect(runtimeSettingsApplyMode(prev, withBrowserUseLimits)).toBe('hot')
+    expect(runtimeSettingsApplyMode(prev, withBrowserUseDisabled)).toBe('hot')
   })
 
   it('hot-applies a non-default DeepSeek credential rotation while Codex is active', () => {
@@ -475,15 +506,6 @@ describe('runtimeSettingsApplyMode', () => {
         kun: {
           ...prev.agents.kun,
           storage: { ...prev.agents.kun.storage, backend: 'file' as const }
-        }
-      }
-    })).toBe('restart')
-    expect(runtimeSettingsApplyMode(prev, {
-      ...prev,
-      agents: {
-        kun: {
-          ...prev.agents.kun,
-          browserUse: { ...prev.agents.kun.browserUse, enabled: false }
         }
       }
     })).toBe('restart')

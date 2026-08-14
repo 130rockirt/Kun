@@ -6,6 +6,9 @@ export type CacheRequestSignature = {
   endpointFormat: string
   prefixFingerprint: string
   toolCatalogFingerprint: string
+  partitionHash?: string
+  partitionPhase?: string
+  unavailableAttachmentCount?: number
   activeSkillIds: string[]
 }
 
@@ -16,6 +19,8 @@ export type CacheMissReason =
   | 'endpoint_changed'
   | 'stable_prefix_changed'
   | 'tool_catalog_changed'
+  | 'cache_partition_changed'
+  | 'attachment_history_unavailable'
   | 'skills_changed'
   | 'cache_ttl_unknown'
   | 'provider_cache_miss'
@@ -55,10 +60,22 @@ export function diagnoseCacheUsage(input: {
       reasons.push('tool_catalog_changed')
       suggestions.push('The available tool catalog changed. Keep MCP and Skill tools stable within a thread.')
     }
+    if (
+      input.previous.partitionHash &&
+      input.current.partitionHash &&
+      input.previous.partitionHash !== input.current.partitionHash
+    ) {
+      reasons.push('cache_partition_changed')
+      suggestions.push('The request moved to a different mode or tool phase; returning to the prior phase reuses its cache namespace.')
+    }
     if (!sameStrings(input.previous.activeSkillIds, input.current.activeSkillIds)) {
       reasons.push('skills_changed')
       suggestions.push('The active Skill set changed. Reuse a stable Skill set for cache-sensitive turns.')
     }
+  }
+  if ((input.current.unavailableAttachmentCount ?? 0) > 0) {
+    reasons.push('attachment_history_unavailable')
+    suggestions.push('One or more retained attachments were unavailable, so replay continued with deterministic placeholders.')
   }
   if (!hasProviderMetrics) {
     reasons.push('provider_metrics_unavailable')

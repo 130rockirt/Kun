@@ -3,6 +3,7 @@ import { makeToolResultItem } from '../domain/item.js'
 import type { TurnItem } from '../contracts/items.js'
 import type { ToolHost, ToolHostContext, ToolHostResult } from '../ports/tool-host.js'
 import type { RuntimeEventRecorder } from '../services/runtime-event-recorder.js'
+import type { CanvasReceiptRegistry } from '../services/canvas-receipt-registry.js'
 import type { TurnService } from '../services/turn-service.js'
 import { InflightTracker } from './inflight-tracker.js'
 import { ToolCancellationRegistry } from './tool-cancellation-registry.js'
@@ -29,6 +30,7 @@ function makeService(input: {
   onPlanWritten?: () => Promise<void>
   awaitWorkspaceCheckpoint?: (requestId: string, signal: AbortSignal) => Promise<string | null>
   toolCancellation?: ToolCancellationRegistry
+  receipts?: CanvasReceiptRegistry
 } = {}) {
   const lifecycle: string[] = []
   const events: Array<Record<string, unknown>> = []
@@ -60,7 +62,8 @@ function makeService(input: {
       ? { awaitWorkspaceCheckpoint: input.awaitWorkspaceCheckpoint }
       : {}),
     ...(input.onPlanWritten ? { onPlanWritten: input.onPlanWritten } : {}),
-    ...(input.toolCancellation ? { toolCancellation: input.toolCancellation } : {})
+    ...(input.toolCancellation ? { toolCancellation: input.toolCancellation } : {}),
+    ...(input.receipts ? { receipts: input.receipts } : {})
   })
   return { service, lifecycle, events, turns }
 }
@@ -206,25 +209,6 @@ describe('ToolExecutionService', () => {
     )
   })
 
-  it('directs rejected PPT tools through managed skill recovery without shell fallback', async () => {
-    const { service } = makeService({
-      execute: async () => { throw new Error('tool ppt_master_run is not advertised in this turn context') }
-    })
-
-    const result = await service.executeSafely({
-      threadId: 'thread_1',
-      turnId: 'turn_1',
-      call: { ...call, toolName: 'ppt_master_run' },
-      context
-    })
-    const output = result.item.kind === 'tool_result' ? JSON.stringify(result.item.output) : ''
-
-    expect(output).toContain('load_skill')
-    expect(output).toContain('ppt-master')
-    expect(output).toContain('Never run PPT Master scripts through')
-    expect(output).toContain('direct Python')
-  })
-
   it('persists a successful plan result before notifying the plan callback', async () => {
     let lifecycle: string[] = []
     const setup = makeService({
@@ -246,6 +230,29 @@ describe('ToolExecutionService', () => {
     }, result)
 
     expect(lifecycle).toEqual(['update', 'apply', 'plan', 'compact'])
+  })
+
+  it('registers a renderer receipt before publishing its accepted result', async () => {
+    const register = vi.fn()
+    const setup = makeService({
+      receipts: { register } as unknown as CanvasReceiptRegistry
+    })
+    const result: ToolHostResult = {
+      item: makeToolResultItem({
+        id: 'item_call_design', threadId: 'thread_1', turnId: 'turn_1',
+        callId: 'call_design', toolName: 'design_update_shapes',
+        output: { status: 'accepted', receiptKey: 'design-receipt-order', ops: [] }
+      }),
+      approved: true
+    }
+
+    await setup.service.persistResult('thread_1', 'turn_1', {
+      callId: 'call_design', toolName: 'design_update_shapes', arguments: {}
+    }, result)
+
+    expect(register).toHaveBeenCalledOnce()
+    expect(register.mock.invocationCallOrder[0])
+      .toBeLessThan(vi.mocked(setup.turns.applyItem).mock.invocationCallOrder[0]!)
   })
 
   it('persists storm suppression as a failed result and public event', async () => {

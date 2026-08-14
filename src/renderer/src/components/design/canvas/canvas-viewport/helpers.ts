@@ -13,6 +13,11 @@ import type { CanvasDocument, CanvasTool, Rect, ViewBox } from '../../../../desi
 import { embeddedArtifactOf, isHtmlFrame, shapeBounds, shapeGeometry } from '../../../../design/canvas/canvas-types'
 import type { CanvasMotionDocument } from '../../../../design/motion/canvas-motion-types'
 import { createEmptyMotionDocument } from '../../../../design/motion/model'
+import type { CanvasSurface } from '../../../../design/canvas/canvas-surface'
+import {
+  isDesignCanvasSurface,
+  isDiagramCanvasSurface
+} from '../../../../design/canvas/canvas-surface'
 
 const CANVAS_VIEWPORT_STORAGE_PREFIX = 'kun.design.canvasViewport'
 const IMAGE_ANNOTATION_ACTION_WIDTH = 112
@@ -20,26 +25,26 @@ const IMAGE_ANNOTATION_ACTION_HEIGHT = 30
 const IMAGE_ANNOTATION_ACTION_GAP = 10
 const IMAGE_ANNOTATION_ACTION_MARGIN = 8
 
-export function shouldRenderDesignArtifactOverlays(surface: 'design' | 'code'): boolean {
-  return surface === 'design'
+export function shouldRenderDesignArtifactOverlays(surface: CanvasSurface): boolean {
+  return isDesignCanvasSurface(surface)
 }
 
-export function shouldRenderCanvasMinimap(surface: 'design' | 'code'): boolean {
-  return surface === 'design'
+export function shouldRenderCanvasMinimap(surface: CanvasSurface): boolean {
+  return isDesignCanvasSurface(surface)
 }
 
 export function shouldSyncCanvasHtmlFrames(
-  surface: 'design' | 'code',
+  surface: CanvasSurface,
   syncHtmlScreens: boolean
 ): boolean {
-  return surface === 'design' && syncHtmlScreens
+  return isDesignCanvasSurface(surface) && syncHtmlScreens
 }
 
 export function shouldOpenImageAnnotation(
-  surface: 'design' | 'code',
+  surface: CanvasSurface,
   shape: CanvasDocument['objects'][string] | undefined
 ): boolean {
-  return (surface === 'design' || surface === 'code') && shape?.type === 'image' && Boolean(shape.imageUrl)
+  return Boolean(surface && shape?.type === 'image' && shape.imageUrl)
 }
 
 export type SelectedImageAnnotationAction = {
@@ -57,7 +62,7 @@ function clamp(value: number, min: number, max: number): number {
 }
 
 export function resolveSelectedImageAnnotationAction(
-  surface: 'design' | 'code',
+  surface: CanvasSurface,
   doc: CanvasDocument,
   selectedIds: ReadonlySet<string>,
   viewport: {
@@ -123,7 +128,7 @@ export function resolveSelectedImageAnnotationAction(
 }
 
 export function shouldToggleHtmlFrameInteractiveOnDoubleClick(
-  surface: 'design' | 'code',
+  surface: CanvasSurface,
   shape: CanvasDocument['objects'][string] | undefined
 ): boolean {
   return shouldRenderDesignArtifactOverlays(surface) && Boolean(shape && isHtmlFrame(shape))
@@ -146,7 +151,7 @@ function targetInside(root: HTMLElement | null, target: unknown): boolean {
 }
 
 export function shouldHandleCanvasKeyboardEvent(
-  surface: 'design' | 'code',
+  surface: CanvasSurface,
   eventTarget: EventTarget | null,
   root: HTMLElement | null,
   activeElement?: Element | null
@@ -155,9 +160,19 @@ export function shouldHandleCanvasKeyboardEvent(
   if (eventElement && typeof eventElement.closest === 'function' && eventElement.closest('[data-motion-timeline]')) {
     return false
   }
-  if (surface === 'design') return true
+  if (isDesignCanvasSurface(surface)) return true
   const active = activeElement ?? (typeof document !== 'undefined' ? document.activeElement : null)
   return targetInside(root, eventTarget) || targetInside(root, active)
+}
+
+export function shouldHandleCanvasKeyboardRelease(
+  key: string,
+  surface: CanvasSurface,
+  eventTarget: EventTarget | null,
+  root: HTMLElement | null,
+  activeElement?: Element | null
+): boolean {
+  return key === ' ' || shouldHandleCanvasKeyboardEvent(surface, eventTarget, root, activeElement)
 }
 
 export function canvasViewportStorageKey(workspaceRoot: string, artifactId: string, baseDir?: string): string {
@@ -205,6 +220,19 @@ export function writeStoredCanvasViewport(key: string, vbox: ViewBox): void {
   } catch {
     // Ignore private-mode/quota failures; view persistence is best-effort.
   }
+}
+
+/**
+ * A persisted camera is only useful when it still exposes some document
+ * content. Design boards can be rebound while their async document load is in
+ * flight; restoring an older, empty-space camera after that load makes a
+ * healthy whiteboard look completely blank.
+ */
+export function canvasViewportShowsContent(vbox: ViewBox, bounds: Rect): boolean {
+  return (
+    Math.max(vbox.x, bounds.x) < Math.min(vbox.x + vbox.width, bounds.x + bounds.width) &&
+    Math.max(vbox.y, bounds.y) < Math.min(vbox.y + vbox.height, bounds.y + bounds.height)
+  )
 }
 
 export function boundsForShapeIds(doc: CanvasDocument, ids: readonly string[]): Rect | null {
@@ -341,7 +369,17 @@ export function mergeLoadedCanvasDocumentWithLiveChanges(
   if (live === initial) return loaded
   const liveRoot = live.objects[live.rootId]
   const motionMerge = mergeLoadedMotionWithLiveChanges(loaded.motion, live.motion, initial.motion)
-  if ((!liveRoot || liveRoot.children.length === 0) && !motionMerge.changed) return loaded
+  const rendererReplayKeys = [
+    ...new Set([
+      ...(loaded.rendererReplayKeys ?? []),
+      ...(live.rendererReplayKeys ?? [])
+    ])
+  ].slice(-4096)
+  const replayReceiptsChanged = rendererReplayKeys.some(
+    (key) => !loaded.rendererReplayKeys?.includes(key)
+  )
+  if ((!liveRoot || liveRoot.children.length === 0) &&
+    !motionMerge.changed && !replayReceiptsChanged) return loaded
 
   const next = cloneCanvasDocument(loaded)
   const nextRoot = next.objects[next.rootId]
@@ -349,6 +387,10 @@ export function mergeLoadedCanvasDocumentWithLiveChanges(
 
   let changed = motionMerge.changed
   if (motionMerge.changed) next.motion = motionMerge.motion
+  if (replayReceiptsChanged) {
+    next.rendererReplayKeys = rendererReplayKeys
+    changed = true
+  }
   const copyLiveSubtree = (id: string): void => {
     const liveShape = live.objects[id]
     if (!liveShape) return
@@ -388,9 +430,18 @@ const toolFactories: Record<CanvasTool, () => CanvasToolHandler> = {
   hand: createHandTool
 }
 
-export function createCanvasTool(tool: CanvasTool, surface: 'design' | 'code'): CanvasToolHandler {
-  if (tool === 'image') return createAiImageTool({ openAssistant: surface === 'design' })
-  if (surface === 'code') {
+export function createCanvasTool(
+  tool: CanvasTool,
+  surface: CanvasSurface,
+  options: { onRequestAssistant?: () => void } = {}
+): CanvasToolHandler {
+  if (tool === 'image') {
+    return createAiImageTool({
+      openAssistant: isDesignCanvasSurface(surface),
+      onRequestAssistant: options.onRequestAssistant
+    })
+  }
+  if (isDiagramCanvasSurface(surface)) {
     switch (tool) {
       case 'rect': return createRectTool('diagram')
       case 'ellipse': return createEllipseTool('diagram')

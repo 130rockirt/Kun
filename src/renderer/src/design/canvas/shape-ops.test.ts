@@ -4,6 +4,7 @@ import { useCanvasShapeStore } from './canvas-shape-store'
 import { useCanvasUndoStore } from './canvas-undo-store'
 import { useCanvasSelectionStore } from './canvas-selection-store'
 import { createDefaultShape, createEmptyDocument, createSvgFrameShape } from './canvas-types'
+import { canvasReplayResult } from './canvas-replay-receipt'
 
 beforeEach(() => {
   useCanvasShapeStore.getState().loadDocument(createEmptyDocument())
@@ -22,6 +23,23 @@ describe('executeOps validation', () => {
     const result = executeOps([{ op: 'add', shape: {} }])
     expect(result.ok).toBe(false)
     expect(result.errors[0].code).toBe('INVALID_OP')
+  })
+
+  it('persists INVALID_OP diagnostics for a replay key so remounts re-see the failure', () => {
+    const key = 'thread0\0turn0\0doc0\0board0:replay-batch'
+    const result = executeOps([{ op: 'noSuchOp' }], 'replay:key:0', { replayKey: key })
+    expect(result.ok).toBe(false)
+    expect(result.errors[0].code).toBe('INVALID_OP')
+
+    // A replay of the same key must return the failure, not a clean success.
+    const replayed = canvasReplayResult(useCanvasShapeStore.getState().document, key)
+    expect(replayed).not.toBeNull()
+    expect(replayed?.ok).toBe(false)
+    expect(replayed?.errors[0].code).toBe('INVALID_OP')
+
+    // The persisted journal entry is durable across a fresh document load.
+    const journal = useCanvasShapeStore.getState().document.operationJournal ?? []
+    expect(journal.some((entry) => entry.errors.length > 0 && entry.operations.length === 1)).toBe(true)
   })
 })
 
@@ -153,6 +171,27 @@ describe('executeOps execution', () => {
       type: 'create_shape',
       source: 'agent'
     })
+  })
+
+  it('uses a persisted replay key to avoid duplicating renderer-applied shapes', () => {
+    const ops = [
+      { op: 'add', shape: { type: 'rect', name: 'Replay card', x: 0, y: 0, width: 80, height: 40 } }
+    ]
+    const first = executeOps(ops, 'durable-replay', { replayKey: 'thread\0turn\0doc\0tool' })
+    const second = executeOps(ops, 'durable-replay', { replayKey: 'thread\0turn\0doc\0tool' })
+
+    expect(second).toEqual(first)
+    expect(useCanvasShapeStore.getState().document.operationJournal).toHaveLength(1)
+    expect(useCanvasShapeStore.getState().document.rendererReplayKeys).toEqual([
+      'thread\0turn\0doc\0tool'
+    ])
+    const compacted = useCanvasShapeStore.getState().document
+    useCanvasShapeStore.getState().loadDocument({ ...compacted, operationJournal: [] })
+    expect(executeOps(ops, 'durable-replay', {
+      replayKey: 'thread\0turn\0doc\0tool'
+    }).affectedIds).toEqual([])
+    expect(useCanvasShapeStore.getState().document.objects[useCanvasShapeStore.getState().document.rootId]
+      .children).toHaveLength(1)
   })
 
   it('add + update is one undo entry (atomic batch)', () => {
@@ -396,6 +435,24 @@ describe('group / ungroup ops', () => {
     expect(useCanvasShapeStore.getState().document.objects[svg.id].parentId).toBe(
       useCanvasShapeStore.getState().document.rootId
     )
+  })
+
+  it('reports an invalid ShapeOp instead of creating a parent cycle', () => {
+    const store = useCanvasShapeStore.getState()
+    const frame = createDefaultShape('frame', 0, 0)
+    const group = createDefaultShape('group', 20, 20)
+    store.addShape(frame)
+    store.addShape(group, frame.id)
+    useCanvasUndoStore.getState().clear()
+
+    const result = executeOps([{ op: 'reparent', id: frame.id, newParentId: group.id }])
+
+    expect(result.ok).toBe(false)
+    expect(result.errors[0]).toMatchObject({ code: 'INVALID_OP' })
+    expect(useCanvasShapeStore.getState().document.objects[frame.id].parentId).toBe(
+      useCanvasShapeStore.getState().document.rootId
+    )
+    expect(useCanvasUndoStore.getState().undoStack).toHaveLength(0)
   })
 
   it('groups shapes, wrapping them in a group sized to their bounds', () => {

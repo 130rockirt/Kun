@@ -35,7 +35,7 @@ Each record includes:
 - start, time-to-headers, finish, duration, transport/capture errors, and truncation metadata;
 - the semantic text, reasoning, tool calls, usage, stop reason, or error decoded by Kun.
 
-Coverage includes model requests routed through `CompatModelClient`, Gemini CLI Code Assist, Claude Agent SDK, Cursor SDK, and Antigravity CLI. Renderer requests, tool traffic, MCP traffic, Write inline completion, scheduled-task detection, and other Electron services are not captured. An empty Agent Perspective panel does not mean that no non-model network traffic occurred.
+Coverage includes model requests routed through `CompatModelClient`, Gemini CLI Code Assist, Claude Agent SDK, Cursor SDK, and Antigravity CLI. Renderer requests, tool traffic, MCP traffic, Work inline completion, scheduled-task detection, and other Electron services are not captured. An empty Agent Perspective panel does not mean that no non-model network traffic occurred.
 
 The recorder never retries, rewrites, replays, or blocks a provider request because capture failed. It serializes each request body once, observes a cloned response, and isolates recorder failures from the agent-visible result.
 

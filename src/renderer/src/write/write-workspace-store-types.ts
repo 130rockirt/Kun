@@ -1,12 +1,102 @@
 import type { WriteAgentPresetV1, WriteInlineCompletionSettingsV1, WriteSelectionAssistSettingsV1 } from '@shared/app-settings'
 import type { WorkspaceEntry } from '@shared/workspace-file'
+import type {
+  WorkspaceOfficePreviewSuccess,
+  WorkspacePresentationViewReference
+} from '@shared/office-document'
 import type { WriteEditorSelectionState } from '../components/write/WriteMarkdownEditor'
 import type { WriteQuotedSelection } from './quoted-selection'
 import type { WriteRecentEdit } from './recent-edits'
 
-export type WritePreviewMode = 'rich' | 'source' | 'live' | 'split' | 'preview'
+export type WritePreviewMode = 'rich' | 'source' | 'live' | 'preview'
 export type WriteSaveStatus = 'saved' | 'dirty' | 'saving' | 'error'
-export type WriteActiveFileKind = 'text' | 'image' | 'pdf'
+export type WriteActiveFileKind = 'text' | 'code' | 'image' | 'pdf' | 'office'
+export type WriteEditorGroupId = 'primary' | 'secondary'
+export type WriteEditorLayoutOrientation = 'single' | 'horizontal' | 'vertical'
+
+export type WriteEditorTab = {
+  kind?: 'file'
+  path: string
+  viewMode: WritePreviewMode
+  cursorOffset?: number
+  scrollTop?: number
+}
+
+export type WriteWhiteboardTab = {
+  kind: 'whiteboard'
+  boardId: string
+  viewMode: 'rich'
+}
+
+export type WriteEditorItem = WriteEditorTab | WriteWhiteboardTab
+
+export type WriteEditorGroup = {
+  id: WriteEditorGroupId
+  tabs: WriteEditorItem[]
+  activePath: string | null
+}
+
+export type WorkWhiteboardPhase = 'blank' | 'directions' | 'review' | 'complete'
+
+export type WorkWhiteboard = {
+  id: string
+  /** The whiteboard's own canonical display title. */
+  title: string
+  workspaceRoot: string
+  threadId: string | null
+  sourcePath?: string
+  workflowId?: string
+  childId?: string
+  outputPath?: string
+  phase: WorkWhiteboardPhase
+  revision: number
+  createdAt: string
+  updatedAt: string
+}
+
+export type WriteEditorLayoutV1 = {
+  version: 1
+  orientation: WriteEditorLayoutOrientation
+  ratio: number
+  focusedGroupId: WriteEditorGroupId
+  groups: WriteEditorGroup[]
+}
+
+export type WriteDocumentSession = {
+  path: string
+  kind: WriteActiveFileKind
+  fileContent: string
+  imageDataUrl: string
+  imageMimeType: string
+  pdfDataBase64: string
+  pdfMimeType: string
+  pdfMtimeMs: number
+  officePreview: WorkspaceOfficePreviewSuccess | null
+  officeLoading: boolean
+  officeRefreshError: string | null
+  officeAgentEditing: boolean
+  officeSemanticText: string
+  officeSemanticSha256: string
+  officeSemanticTruncated: boolean
+  fileSize: number
+  fileTruncated: boolean
+  fileError: string | null
+  fileLoading: boolean
+  saveStatus: WriteSaveStatus
+  documentEpoch: number
+  contentRevision: number
+  persistedContent: string
+  pendingAgentReview: {
+    workspaceRoot: string
+    filePath: string
+    documentEpoch: number
+    nextContent: string
+  } | null
+  reviewActive: boolean
+  selection: WriteEditorSelectionState
+  quotedSelections: WriteQuotedSelection[]
+  recentEdits: WriteRecentEdit[]
+}
 
 export type WriteWorkspaceState = {
   defaultWorkspaceRoot: string
@@ -31,8 +121,14 @@ export type WriteWorkspaceState = {
   expandedDirs: Set<string>
   loadingDirs: Record<string, boolean>
   treeError: string | null
+  documentsByPath: Record<string, WriteDocumentSession>
+  whiteboards: Record<string, WorkWhiteboard>
+  whiteboardsLoading: boolean
+  editorLayout: WriteEditorLayoutV1
+  presentationViewByGroup: Partial<Record<WriteEditorGroupId, WorkspacePresentationViewReference>>
   activeFilePath: string | null
   activeFileKind: WriteActiveFileKind | null
+  activeWhiteboardId: string | null
   fileContent: string
   imageDataUrl: string
   imageMimeType: string
@@ -77,7 +173,62 @@ export type WriteWorkspaceState = {
   loadDirectory: (workspaceRoot: string, path?: string) => Promise<string | null>
   toggleDirectory: (workspaceRoot: string, path: string) => Promise<void>
   refreshWorkspace: (workspaceRoot: string) => Promise<void>
-  openFile: (workspaceRoot: string, path: string) => Promise<void>
+  openFile: (
+    workspaceRoot: string,
+    path: string,
+    options?: { groupId?: WriteEditorGroupId; viewMode?: WritePreviewMode }
+  ) => Promise<void>
+  loadWhiteboards: (workspaceRoot: string) => Promise<void>
+  createWhiteboard: (workspaceRoot: string, options: {
+    title: string
+    groupId?: WriteEditorGroupId
+    sourcePath?: string
+    threadId?: string
+    workflowId?: string
+    childId?: string
+  }) => Promise<WorkWhiteboard | null>
+  openWhiteboard: (boardId: string, groupId?: WriteEditorGroupId) => void
+  findOrCreatePptWhiteboard: (input: {
+    workspaceRoot: string
+    threadId: string
+    workflowId: string
+    title: string
+    childId?: string
+    sourcePath?: string
+  }) => Promise<WorkWhiteboard | null>
+  renameWhiteboard: (boardId: string, title: string) => Promise<boolean>
+  deleteWhiteboard: (boardId: string) => Promise<boolean>
+  bindWhiteboardThread: (boardId: string, threadId: string) => Promise<boolean>
+  updateWhiteboardPptState: (boardId: string, patch: {
+    phase?: WorkWhiteboardPhase
+    outputPath?: string
+    childId?: string
+    revision?: number
+  }) => Promise<boolean>
+  activateTab: (groupId: WriteEditorGroupId, path: string) => void
+  closeTab: (groupId: WriteEditorGroupId, path: string, force?: boolean) => Promise<boolean>
+  moveTab: (path: string, fromGroupId: WriteEditorGroupId, toGroupId: WriteEditorGroupId, index?: number) => void
+  focusEditorGroup: (groupId: WriteEditorGroupId) => void
+  splitEditorGroup: (orientation: Exclude<WriteEditorLayoutOrientation, 'single'>, path?: string) => void
+  closeEditorGroup: (groupId: WriteEditorGroupId) => void
+  setTabViewMode: (groupId: WriteEditorGroupId, path: string, mode: WritePreviewMode) => void
+  setSplitOrientation: (orientation: Exclude<WriteEditorLayoutOrientation, 'single'>) => void
+  setSplitRatio: (ratio: number) => void
+  setPresentationViewForGroup: (
+    groupId: WriteEditorGroupId,
+    view: WorkspacePresentationViewReference
+  ) => void
+  clearPresentationViewForGroup: (
+    groupId: WriteEditorGroupId,
+    source: Pick<WorkspacePresentationViewReference, 'path' | 'sourceSha256'>
+  ) => void
+  setDocumentContent: (path: string, content: string) => void
+  saveDocument: (
+    workspaceRoot: string,
+    path: string,
+    options?: { resolveExternalConflict?: 'keep-local' }
+  ) => Promise<boolean>
+  saveAllDocuments: (workspaceRoot: string) => Promise<boolean>
   setFileContent: (content: string) => void
   syncActiveFileFromDisk: (
     workspaceRoot: string,

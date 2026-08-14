@@ -17,6 +17,8 @@ export type CanvasClipboardNode = {
 
 export type CanvasShapeClipboard = {
   kind: 'copy' | 'cut'
+  sourceWorkspaceRoot?: string
+  sourceDocumentKey?: string | null
   roots: Array<{
     originalParentId: string | null
     node: CanvasClipboardNode
@@ -58,7 +60,9 @@ function editableRootSelection(doc: CanvasDocument): string[] {
 function canPasteIntoParent(doc: CanvasDocument, id: string | null): boolean {
   if (!id) return false
   if (id === doc.rootId) return true
-  if (!doc.objects[id]) return false
+  const parent = doc.objects[id]
+  if (!parent || (parent.type !== 'frame' && parent.type !== 'group')) return false
+  if (embeddedArtifactOf(parent)) return false
   return (
     isShapeEffectivelyVisible(doc.objects, id) &&
     isShapeEffectivelyUnlocked(doc.objects, id)
@@ -113,6 +117,7 @@ function addPastedNode(
   }
 
   useCanvasShapeStore.getState().addShape(shape, parentId)
+  if (!useCanvasShapeStore.getState().document.objects[id]) return null
 
   for (const child of node.children) {
     addPastedNode(child, id, offset, preserveArtifactLinks)
@@ -121,7 +126,10 @@ function addPastedNode(
   return id
 }
 
-export function copyCanvasSelectionToClipboard(): boolean {
+export function copyCanvasSelectionToClipboard(options: {
+  workspaceRoot?: string
+  documentKey?: string | null
+} = {}): boolean {
   const doc = useCanvasShapeStore.getState().document
   const roots = editableRootSelection(doc)
   if (roots.length === 0) return false
@@ -133,16 +141,24 @@ export function copyCanvasSelectionToClipboard(): boolean {
   })
   if (payloadRoots.length === 0) return false
 
-  shapeClipboard = { kind: 'copy', roots: payloadRoots }
+  shapeClipboard = {
+    kind: 'copy',
+    roots: payloadRoots,
+    ...(options.workspaceRoot ? { sourceWorkspaceRoot: options.workspaceRoot } : {}),
+    ...(options.documentKey !== undefined ? { sourceDocumentKey: options.documentKey } : {})
+  }
   pasteCount = 0
   return true
 }
 
-export function cutCanvasSelectionToClipboard(): boolean {
+export function cutCanvasSelectionToClipboard(options: {
+  workspaceRoot?: string
+  documentKey?: string | null
+} = {}): boolean {
   const doc = useCanvasShapeStore.getState().document
   const roots = editableRootSelection(doc)
   if (roots.length === 0) return false
-  if (!copyCanvasSelectionToClipboard()) return false
+  if (!copyCanvasSelectionToClipboard(options)) return false
   if (shapeClipboard) shapeClipboard = { ...shapeClipboard, kind: 'cut' }
 
   useCanvasUndoStore.getState().withGroup('cut-shapes', () => {
@@ -155,19 +171,35 @@ export function cutCanvasSelectionToClipboard(): boolean {
   return true
 }
 
-export function pasteCanvasShapeClipboard(): string[] {
+export function pasteCanvasShapeClipboard(options: {
+  workspaceRoot?: string
+  documentKey?: string | null
+} = {}): string[] {
   if (!shapeClipboard || shapeClipboard.roots.length === 0) return []
+  if (
+    shapeClipboard.sourceWorkspaceRoot &&
+    options.workspaceRoot &&
+    shapeClipboard.sourceWorkspaceRoot !== options.workspaceRoot
+  ) return []
 
   const pastedRootIds: string[] = []
   const selectionBefore = Array.from(useCanvasSelectionStore.getState().selectedIds)
   pasteCount += 1
   const offset = pasteCount * PASTE_OFFSET
-  const preserveArtifactLinks = shapeClipboard.kind === 'cut'
+  const sameDocument =
+    shapeClipboard.sourceDocumentKey === undefined ||
+    options.documentKey === undefined ||
+    shapeClipboard.sourceDocumentKey === options.documentKey
+  const preserveArtifactLinks = shapeClipboard.kind === 'cut' && (
+    sameDocument
+  )
 
   useCanvasUndoStore.getState().withGroup('paste-shapes', () => {
     const doc = useCanvasShapeStore.getState().document
     for (const root of shapeClipboard?.roots ?? []) {
-      const parentId = targetParentId(doc, root.originalParentId)
+      const parentId = sameDocument
+        ? targetParentId(doc, root.originalParentId)
+        : doc.rootId
       const pastedId = addPastedNode(root.node, parentId, offset, preserveArtifactLinks)
       if (pastedId) pastedRootIds.push(pastedId)
     }

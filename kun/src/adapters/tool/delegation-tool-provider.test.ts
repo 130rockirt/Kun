@@ -21,6 +21,8 @@ describe('delegate_task observability output', () => {
     expect(properties).not.toHaveProperty('model')
     expect(properties).not.toHaveProperty('providerId')
     expect(properties).toHaveProperty('profile')
+    expect(properties).toHaveProperty('resumeChildId')
+    expect(properties).toHaveProperty('expectedResumeCount')
     expect(properties).not.toHaveProperty('custom_agent')
     expect(delegateTool?.inputSchema.required).toEqual(['prompt'])
 
@@ -35,7 +37,7 @@ describe('delegate_task observability output', () => {
     expect(customTools.map((tool) => tool.name)).toEqual(['delegate_task', 'list_subagent_profiles'])
     expect(customModeProperties).not.toHaveProperty('profile')
     expect(customModeProperties?.custom_agent?.description).toContain('always inherits the current turn model/provider/reasoning strength')
-    expect(customTool?.inputSchema.required).toEqual(['prompt', 'custom_agent'])
+    expect(customTool?.inputSchema.required).toEqual(['prompt'])
     const customProperties = (customModeProperties?.custom_agent as { properties?: Record<string, unknown> })?.properties
     expect(customProperties).not.toHaveProperty('reasoning_effort')
   })
@@ -301,6 +303,75 @@ describe('delegate_task observability output', () => {
     const childInput = runChild.mock.calls[0]?.[0]
     expect(childInput).not.toHaveProperty('model')
     expect(childInput).not.toHaveProperty('providerId')
+  })
+
+  it('resumes the exact structured child without routing or creating another child', async () => {
+    const runChild = vi.fn()
+    const resumeChild = vi.fn(async () => ({
+      id: 'child_resume',
+      parentThreadId: 'thread_parent',
+      parentTurnId: 'turn_parent',
+      launcher: 'delegate_task' as const,
+      prompt: 'Continue',
+      profile: 'general',
+      profileSnapshot: { name: 'General Agent' },
+      security: { sandboxRoot: '/workspace', memoryEnabled: false },
+      approvalReviewer: 'user' as const,
+      status: 'completed' as const,
+      resumable: false,
+      resumeCount: 2,
+      summary: 'Finished after resume.',
+      usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+      returnFormat: 'summary' as const,
+      createdAt: '2026-08-11T00:00:00.000Z',
+      updatedAt: '2026-08-11T00:00:01.000Z'
+    }))
+    const runtime = {
+      enabled: () => true,
+      useExistingAgents: false,
+      defaultToolPolicy: 'inherit',
+      runChild,
+      resumeChild
+    } as unknown as DelegationRuntime
+    const tool = buildDelegationToolProviders(runtime)[0]!.tools[0]!
+    const resumeContext = {
+      ...context(),
+      subagentResume: { childId: 'child_resume', expectedResumeCount: 1 }
+    }
+
+    const result = await tool.execute({
+      prompt: 'model supplied text is replaced for the one-click path',
+      resumeChildId: 'child_resume',
+      expectedResumeCount: 1
+    }, resumeContext)
+
+    expect(result).toMatchObject({
+      isError: false,
+      output: {
+        childId: 'child_resume',
+        parentThreadId: 'thread_parent',
+        parentTurnId: 'turn_parent',
+        resumeCount: 2,
+        resumable: false
+      }
+    })
+    expect(runChild).not.toHaveBeenCalled()
+    expect(resumeChild).toHaveBeenCalledWith(expect.objectContaining({
+      childId: 'child_resume',
+      parentThreadId: 'thread_parent',
+      parentTurnId: 'turn_parent',
+      expectedResumeCount: 1,
+      expectedLaunchers: ['delegate_task'],
+      requireResumable: true,
+      prompt: expect.stringContaining('persisted child session')
+    }))
+
+    await expect(tool.execute({
+      prompt: 'wrong child',
+      resumeChildId: 'child_other',
+      expectedResumeCount: 1
+    }, resumeContext)).resolves.toMatchObject({ isError: true })
+    expect(resumeChild).toHaveBeenCalledTimes(1)
   })
 
   it('rejects custom arguments in existing-profile mode and stale arguments that cross custom-only mode', async () => {

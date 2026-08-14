@@ -1,0 +1,12 @@
+{
+  "codeAgentPresets": "Personas",
+  "codeAgentPresetsDesc": "Reusable stances for the Code agent. The selected persona is sent with each message and guides tone and working style only — it never grants tools or changes permissions.",
+  "codeAgentPresetNamePlaceholder": "Persona name",
+  "codeAgentPersonaPlaceholder": "How should the agent behave when this persona is selected?",
+  "codeAgentPresetRemove": "Remove persona",
+  "codeAgentPresetAdd": "Add persona",
+  "codeAgentIconPickerTitle": "Choose an icon",
+  "codeAgentIconSearchPlaceholder": "Search icons…",
+  "codeAgentIconPickerEmpty": "No icons match",
+  "codeAgentIconPickerMore": "Showing {{shown}} of {{total}} — keep typing to narrow"
+}

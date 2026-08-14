@@ -19,6 +19,8 @@ export const DEFAULT_MAX_STEERING_BYTES_PER_TURN = 64 * 1024
 
 export class SteeringQueue {
   private readonly buffers = new Map<string, SteeringBuffer>()
+  /** Attachment ids already drained but retained for cumulative turn admission checks. */
+  private readonly drainedAttachments = new Map<string, Set<string>>()
   private readonly sealedTurns = new Set<string>()
   private readonly maxEntriesPerTurn: number
   private readonly maxBytesPerTurn: number
@@ -45,7 +47,8 @@ export class SteeringQueue {
     const normalized: SteeringEntry = {
       text,
       ...(entry.displayText?.trim() ? { displayText: entry.displayText.trim() } : {}),
-      ...(entry.messageSource ? { messageSource: entry.messageSource } : {})
+      ...(entry.messageSource ? { messageSource: entry.messageSource } : {}),
+      ...(entry.attachmentIds?.length ? { attachmentIds: [...entry.attachmentIds] } : {})
     }
     const bytes = steeringEntryBytes(normalized)
     const buffer = this.buffers.get(turnId)
@@ -73,7 +76,12 @@ export class SteeringQueue {
   drain(turnId: string): SteeringEntry[] {
     const buffer = this.buffers.get(turnId)
     if (!buffer?.entries.length) return []
-    const out = buffer.entries.map((entry) => ({ ...entry }))
+    const drained = this.drainedAttachments.get(turnId) ?? new Set<string>()
+    for (const entry of buffer.entries) {
+      for (const attachmentId of entry.attachmentIds ?? []) drained.add(attachmentId)
+    }
+    if (drained.size > 0) this.drainedAttachments.set(turnId, drained)
+    const out = buffer.entries.map(copySteeringEntry)
     this.buffers.delete(turnId)
     return out
   }
@@ -83,7 +91,12 @@ export class SteeringQueue {
    * show pending steering in a "pending injection" indicator.
    */
   peek(turnId: string): SteeringEntry[] {
-    return (this.buffers.get(turnId)?.entries ?? []).map((entry) => ({ ...entry }))
+    return (this.buffers.get(turnId)?.entries ?? []).map(copySteeringEntry)
+  }
+
+  /** Attachment ids drained earlier in this turn and not yet cleared at settlement. */
+  drainedAttachmentIds(turnId: string): string[] {
+    return [...(this.drainedAttachments.get(turnId) ?? [])]
   }
 
   /** Atomically replace the pending queue after validating the same bounds as enqueue. */
@@ -95,7 +108,8 @@ export class SteeringQueue {
       return [{
         text,
         ...(entry.displayText?.trim() ? { displayText: entry.displayText.trim() } : {}),
-        ...(entry.messageSource ? { messageSource: entry.messageSource } : {})
+        ...(entry.messageSource ? { messageSource: entry.messageSource } : {}),
+        ...(entry.attachmentIds?.length ? { attachmentIds: [...entry.attachmentIds] } : {})
       }]
     })
     const bytes = normalized.reduce((total, entry) => total + steeringEntryBytes(entry), 0)
@@ -127,6 +141,7 @@ export class SteeringQueue {
 
   clear(turnId: string): void {
     this.buffers.delete(turnId)
+    this.drainedAttachments.delete(turnId)
     this.sealedTurns.delete(turnId)
   }
 }
@@ -137,5 +152,17 @@ function normalizeLimit(value: number | undefined, fallback: number): number {
 }
 
 function steeringEntryBytes(entry: SteeringEntry): number {
-  return Buffer.byteLength(entry.text, 'utf8') + Buffer.byteLength(entry.displayText ?? '', 'utf8')
+  return Buffer.byteLength(entry.text, 'utf8') +
+    Buffer.byteLength(entry.displayText ?? '', 'utf8') +
+    (entry.attachmentIds ?? []).reduce(
+      (bytes, id) => bytes + Buffer.byteLength(id, 'utf8'),
+      0
+    )
+}
+
+function copySteeringEntry(entry: SteeringEntry): SteeringEntry {
+  return {
+    ...entry,
+    ...(entry.attachmentIds ? { attachmentIds: [...entry.attachmentIds] } : {})
+  }
 }

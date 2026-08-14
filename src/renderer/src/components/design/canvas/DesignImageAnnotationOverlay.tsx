@@ -1,6 +1,9 @@
 import type { ReactElement } from 'react'
 import type { CanvasDocument } from '../../../design/canvas/canvas-types'
-import { isCodeCanvasDocumentKey } from '../../../design/canvas/image-annotation-dispatch'
+import {
+  isCodeCanvasDocumentKey,
+  isDesignCanvasDocumentKey
+} from '../../../design/canvas/image-annotation-dispatch'
 import {
   ImageAnnotationEditor,
   type ImageAnnotationResult
@@ -29,7 +32,14 @@ export function resolveImageAnnotationOverlayModel(
   const isCodeCanvasAnnotation = options.canvasDocumentKey
     ? isCodeCanvasDocumentKey(options.canvasDocumentKey)
     : options.route === 'chat'
-  if (options.route !== 'design' && !(options.route === 'chat' && isCodeCanvasAnnotation)) return null
+  // The production Design whiteboard is embedded in the chat workbench. Its
+  // document key lives under `.kun-design`, while the adjacent Code whiteboard
+  // lives under `.kun-canvas`; both are valid chat-route annotation targets.
+  const isEmbeddedDesignAnnotation = isDesignCanvasDocumentKey(options.canvasDocumentKey)
+  if (
+    options.route !== 'design' &&
+    !(options.route === 'chat' && (isCodeCanvasAnnotation || isEmbeddedDesignAnnotation))
+  ) return null
   if (options.route === 'chat' && options.activeSddDraft) return null
   const annotatingShape = options.annotatingShapeId
     ? options.canvasDocument.objects[options.annotatingShapeId]

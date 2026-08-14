@@ -42,9 +42,8 @@ const DEFAULT_WRITE_ASSISTANT_MODEL = DEFAULT_KUN_MODEL
 
 export function readStoredPreviewMode(): WritePreviewMode {
   const raw = readBrowserStorageItem(WRITE_PREVIEW_MODE_KEY)
-  return raw === 'rich' || raw === 'source' || raw === 'live' || raw === 'split' || raw === 'preview'
-    ? raw
-    : 'rich'
+  if (raw === 'split') return 'source'
+  return raw === 'rich' || raw === 'source' || raw === 'live' || raw === 'preview' ? raw : 'rich'
 }
 
 export function readStoredAssistantOpen(): boolean {
@@ -278,7 +277,12 @@ export function imageMimeTypeFromPath(path: string): string {
 }
 
 export function filterWriteEntries(entries: WorkspaceEntry[]): WorkspaceEntry[] {
-  return entries.filter(isWriteWorkspaceEntry)
+  return entries.filter((entry) => {
+    if (!isWriteWorkspaceEntry(entry)) return false
+    const name = entry.path.replaceAll('\\', '/').split('/').filter(Boolean).at(-1) ?? ''
+    return name !== '.kun-write' && name !== '.kun-canvas' && name !== '.kun-design' &&
+      name !== '.kun-whiteboards'
+  })
 }
 
 export function initialState(): Pick<
@@ -289,8 +293,14 @@ export function initialState(): Pick<
   | 'expandedDirs'
   | 'loadingDirs'
   | 'treeError'
+  | 'documentsByPath'
+  | 'whiteboards'
+  | 'whiteboardsLoading'
+  | 'editorLayout'
+  | 'presentationViewByGroup'
   | 'activeFilePath'
   | 'activeFileKind'
+  | 'activeWhiteboardId'
   | 'fileContent'
   | 'imageDataUrl'
   | 'imageMimeType'
@@ -318,8 +328,20 @@ export function initialState(): Pick<
     expandedDirs: new Set(),
     loadingDirs: {},
     treeError: null,
+    documentsByPath: {},
+    whiteboards: {},
+    whiteboardsLoading: false,
+    presentationViewByGroup: {},
+    editorLayout: {
+      version: 1,
+      orientation: 'single',
+      ratio: 0.5,
+      focusedGroupId: 'primary',
+      groups: [{ id: 'primary', tabs: [], activePath: null }]
+    },
     activeFilePath: null,
     activeFileKind: null,
+    activeWhiteboardId: null,
     fileContent: '',
     imageDataUrl: '',
     imageMimeType: '',

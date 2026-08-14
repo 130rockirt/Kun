@@ -1,0 +1,184 @@
+import { createElement, type ReactElement } from 'react'
+import { act, create, type ReactTestRenderer } from 'react-test-renderer'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { createWriteDocumentSession, emptyWriteEditorLayout } from '../../write/write-editor-layout'
+import { useWriteWorkspaceStore } from '../../write/write-workspace-store'
+import { useWriteEditorGroupFileWatches } from './use-write-editor-group-file-watches'
+
+function WatchHarness(): ReactElement {
+  const workspaceRoot = useWriteWorkspaceStore((state) => state.workspaceRoot)
+  const editorLayout = useWriteWorkspaceStore((state) => state.editorLayout)
+  useWriteEditorGroupFileWatches({ workspaceRoot, editorLayout })
+  return createElement('div')
+}
+
+async function flushPromises(): Promise<void> {
+  await Promise.resolve()
+  await Promise.resolve()
+  await Promise.resolve()
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+  useWriteWorkspaceStore.setState({
+    workspaceRoot: '',
+    documentsByPath: {},
+    editorLayout: emptyWriteEditorLayout()
+  })
+})
+
+describe('useWriteEditorGroupFileWatches', () => {
+  it('creates only one watcher when both visible groups show the same file', async () => {
+    const watchWorkspaceFile = vi.fn(async () => ({
+      ok: true as const,
+      watchId: 'watch-1',
+      path: '/work/shared.md',
+      content: 'shared',
+      size: 6,
+      truncated: false,
+      startedAt: '2026-08-12T00:00:00.000Z'
+    }))
+    const unwatchWorkspaceFile = vi.fn(async () => true)
+    vi.stubGlobal('window', {
+      kunGui: {
+        watchWorkspaceFile,
+        unwatchWorkspaceFile,
+        onWorkspaceFileChanged: vi.fn(() => vi.fn())
+      }
+    })
+    vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+    const document = createWriteDocumentSession({
+      path: '/work/shared.md',
+      kind: 'text',
+      fileContent: 'shared'
+    })
+    useWriteWorkspaceStore.setState({
+      workspaceRoot: '/work',
+      documentsByPath: { '/work/shared.md': document },
+      editorLayout: {
+        version: 1,
+        orientation: 'horizontal',
+        ratio: 0.5,
+        focusedGroupId: 'primary',
+        groups: [
+          {
+            id: 'primary',
+            tabs: [{ path: '/work/shared.md', viewMode: 'live' }],
+            activePath: '/work/shared.md'
+          },
+          {
+            id: 'secondary',
+            tabs: [{ path: '/work/shared.md', viewMode: 'preview' }],
+            activePath: '/work/shared.md'
+          }
+        ]
+      }
+    })
+
+    let renderer!: ReactTestRenderer
+    await act(async () => {
+      renderer = create(createElement(WatchHarness))
+      await flushPromises()
+    })
+
+    expect(watchWorkspaceFile).toHaveBeenCalledTimes(1)
+    expect(watchWorkspaceFile).toHaveBeenCalledWith({
+      workspaceRoot: '/work',
+      path: '/work/shared.md'
+    })
+
+    await act(async () => {
+      renderer.unmount()
+      await flushPromises()
+    })
+    expect(unwatchWorkspaceFile).toHaveBeenCalledWith('watch-1')
+  })
+
+  it('refreshes a read-only code document from text watch snapshots', async () => {
+    let onChanged: ((payload: {
+      watchId: string
+      ok: true
+      path: string
+      content: string
+      size: number
+      truncated: boolean
+    }) => void) | undefined
+    const watchWorkspaceFile = vi.fn(async () => ({
+      ok: true as const,
+      watchId: 'watch-code',
+      path: '/work/app.ts',
+      content: 'const baseline = true\n',
+      size: 22,
+      truncated: false,
+      startedAt: '2026-08-13T00:00:00.000Z'
+    }))
+    vi.stubGlobal('window', {
+      kunGui: {
+        watchWorkspaceFile,
+        unwatchWorkspaceFile: vi.fn(async () => true),
+        onWorkspaceFileChanged: vi.fn((listener: typeof onChanged) => {
+          onChanged = listener
+          return vi.fn()
+        })
+      }
+    })
+    vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+    const document = createWriteDocumentSession({
+      path: '/work/app.ts',
+      kind: 'code',
+      fileContent: 'const initial = true\n',
+      persistedContent: 'const initial = true\n'
+    })
+    useWriteWorkspaceStore.setState({
+      workspaceRoot: '/work',
+      documentsByPath: { '/work/app.ts': document },
+      editorLayout: {
+        version: 1,
+        orientation: 'single',
+        ratio: 0.5,
+        focusedGroupId: 'primary',
+        groups: [{
+          id: 'primary',
+          tabs: [{ path: '/work/app.ts', viewMode: 'source' }],
+          activePath: '/work/app.ts'
+        }]
+      }
+    })
+
+    let renderer!: ReactTestRenderer
+    await act(async () => {
+      renderer = create(createElement(WatchHarness))
+      await flushPromises()
+    })
+
+    expect(useWriteWorkspaceStore.getState().documentsByPath['/work/app.ts']).toMatchObject({
+      kind: 'code',
+      fileContent: 'const baseline = true\n',
+      persistedContent: 'const baseline = true\n',
+      saveStatus: 'saved'
+    })
+
+    await act(async () => {
+      onChanged?.({
+        watchId: 'watch-code',
+        ok: true,
+        path: '/work/app.ts',
+        content: 'const refreshed = true\n',
+        size: 23,
+        truncated: false
+      })
+      await flushPromises()
+    })
+
+    expect(useWriteWorkspaceStore.getState().documentsByPath['/work/app.ts']).toMatchObject({
+      kind: 'code',
+      fileContent: 'const refreshed = true\n',
+      persistedContent: 'const refreshed = true\n',
+      fileSize: 23,
+      fileTruncated: false,
+      saveStatus: 'saved'
+    })
+
+    await act(async () => renderer.unmount())
+  })
+})

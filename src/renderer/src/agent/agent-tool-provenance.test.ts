@@ -44,7 +44,7 @@ describe('Agent Perspective tool provenance', () => {
     expect(resolveToolProvenance('browser_use', undefined)).toMatchObject({
       source: 'kun', category: 'kun-gui', inferred: true
     })
-    expect(resolveToolProvenance('explore_agent', undefined)).toMatchObject({
+    expect(resolveToolProvenance('fast_context', undefined)).toMatchObject({
       source: 'kun', category: 'kun-runtime', inferred: true
     })
     expect(resolveToolProvenance('mcp_filesystem_read', undefined)).toMatchObject({

@@ -1,7 +1,7 @@
 export function writeFocusModeShellClassName(active: boolean): string {
   return active
     ? 'write-document-shell write-focus-mode-shell ds-no-drag ds-titlebar-fixed-overlay fixed inset-x-0 bottom-0 top-0 z-[60] overflow-hidden bg-white p-3 dark:bg-ds-canvas sm:p-6'
-    : 'write-document-shell min-w-0 flex-1 overflow-hidden rounded-2xl border border-ds-border-muted bg-ds-card/92 shadow-[0_12px_32px_rgba(20,47,95,0.04)] backdrop-blur-xl'
+    : 'write-document-shell min-w-0 flex-1 overflow-hidden bg-ds-card pb-3 sm:pb-4'
 }
 
 /** Keep Write-owned floating feedback above the z-60 focus shell and below dialogs. */

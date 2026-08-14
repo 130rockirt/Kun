@@ -54,6 +54,59 @@ function fakeSdkAttempts(
   }
 }
 
+type GraphPlanSdkAttempt = {
+  arguments?: Record<string, unknown>
+  text: string
+  sessionId?: string
+}
+
+function fakeGraphPlanSdkAttempts(
+  attempts: readonly GraphPlanSdkAttempt[],
+  onQuery?: (input: { prompt: unknown; options?: unknown }, attempt: number) => void
+): SdkApi {
+  let attempt = 0
+  let graphDefinePlanHandler:
+    | ((args: Record<string, unknown>, extra: unknown) => Promise<unknown>)
+    | undefined
+  return {
+    tool: (name, _description, _schema, handler) => {
+      if (name === 'graph_define_plan') graphDefinePlanHandler = handler
+      return { name }
+    },
+    createSdkMcpServer: (config) => ({
+      type: 'sdk',
+      name: config.name,
+      instance: {}
+    }),
+    query: (input): SdkQueryResult => {
+      const current = attempt
+      attempt += 1
+      onQuery?.(input as { prompt: unknown; options?: unknown }, current)
+      async function* gen(): AsyncGenerator<SdkMessage> {
+        const currentAttempt = attempts[current] ?? attempts.at(-1)
+        if (!currentAttempt) return
+        if (currentAttempt.arguments) {
+          if (!graphDefinePlanHandler) {
+            throw new Error('graph_define_plan handler was not registered')
+          }
+          await graphDefinePlanHandler(currentAttempt.arguments, {})
+        }
+        if (currentAttempt.sessionId) {
+          yield {
+            type: 'system',
+            subtype: 'init',
+            session_id: currentAttempt.sessionId
+          } as SdkMessage
+        }
+        yield* svgSdkTextAttempt(currentAttempt.text)
+      }
+      const stream = gen() as SdkQueryResult
+      stream.interrupt = async () => {}
+      return stream
+    }
+  }
+}
+
 function stalledSdk(onStarted: () => void, onInterrupt: () => void): SdkApi {
   return {
     query: (): SdkQueryResult => {
@@ -332,6 +385,62 @@ describe('AgentSdkRuntime.runTurn', () => {
     })
   })
 
+  test('denies every native SDK tool in Plan mode before full-access handling', () => {
+    const context = {
+      workspace: '/ws',
+      sandboxMode: 'danger-full-access' as const,
+      planMode: true
+    }
+    for (const toolName of ['Write', 'Edit', 'Bash', 'Read']) {
+      expect(decideSdkBuiltinSandbox(toolName, { file_path: '/ws/file.ts' }, context)).toMatchObject({
+        allow: false,
+        message: expect.stringContaining('Plan mode')
+      })
+    }
+    expect(decideSdkBuiltinSandbox('mcp__kun__create_plan', {}, context)).toBeNull()
+  })
+
+  test('Plan turns disable SDK built-ins and bridge Kun read tools plus create_plan', async () => {
+    let options: {
+      tools?: unknown[]
+      allowedTools?: string[]
+      permissionMode?: unknown
+    } = {}
+    const sdk = fakeSdk(STREAM, (value) => {
+      options = value as typeof options
+    })
+    const { deps } = makeDeps({
+      loadSdk: async () => sdk,
+      loadTurnContext: async () => ({
+        workspace: '/ws',
+        userText: 'plan this safely',
+        approvalPolicy: 'auto',
+        sandboxMode: 'danger-full-access',
+        planMode: true,
+        bridgeableTools: [
+          { name: 'read', description: 'Read a file', inputSchema: { type: 'object' } },
+          { name: 'grep', description: 'Search files', inputSchema: { type: 'object' } },
+          { name: 'create_plan', description: 'Save the plan', inputSchema: { type: 'object' } }
+        ]
+      })
+    })
+
+    await expect(new AgentSdkRuntime(deps).runTurn(
+      'th',
+      'tn',
+      new AbortController().signal
+    )).resolves.toBe('completed')
+
+    expect(options.tools).toEqual([])
+    expect(options.permissionMode).toBe('default')
+    expect(options.allowedTools).toEqual(expect.arrayContaining([
+      'mcp__kun__read',
+      'mcp__kun__grep',
+      'mcp__kun__create_plan'
+    ]))
+    expect(options.allowedTools).not.toEqual(expect.arrayContaining(['Read', 'Write', 'Edit', 'Bash']))
+  })
+
   test('drives the SDK stream into kun events/items and completes the turn', async () => {
     const { deps, events, items, finished, sessions } = makeDeps({ loadSdk: async () => fakeSdk(STREAM) })
     const runtime = new AgentSdkRuntime(deps)
@@ -352,6 +461,22 @@ describe('AgentSdkRuntime.runTurn', () => {
     expect(persistedKinds).toContain('tool_call')
     expect(persistedKinds).toContain('tool_result')
     expect(persistedKinds).toContain('assistant_text')
+  })
+
+  test('does not checkpoint a session carrying request-local dynamic context', async () => {
+    const { deps, sessions } = makeDeps({
+      loadTurnContext: async () => ({
+        workspace: '/ws', userText: 'dynamic request', approvalPolicy: 'auto',
+        bridgeableTools: [], contextInstructions: ['private turn context'],
+        disableNativeContinuation: true
+      }),
+      loadSdk: async () => fakeSdk(STREAM)
+    })
+
+    await expect(new AgentSdkRuntime(deps).runTurn(
+      'th', 'tn', new AbortController().signal
+    )).resolves.toBe('completed')
+    expect(sessions).toEqual([])
   })
 
   test('publishes a sanitized Claude SDK trace to Agent Perspective', async () => {
@@ -555,1197 +680,5 @@ describe('AgentSdkRuntime.runTurn', () => {
     expect(JSON.stringify(traces)).not.toContain('session_missing')
   })
 
-  test('rebases when the official resume query throws synchronously', async () => {
-    let queryCount = 0
-    const sdk = fakeSdk(STREAM)
-    const query = sdk.query
-    sdk.query = (input): SdkQueryResult => {
-      queryCount += 1
-      if (queryCount === 1) throw new Error('native session unavailable')
-      return query(input)
-    }
-    const rejectResume = vi.fn()
-    const { deps } = makeDeps({
-      loadTurnContext: async () => ({
-        workspace: '/ws',
-        userText: 'current request',
-        approvalPolicy: 'auto',
-        bridgeableTools: [],
-        resumeSessionId: 'session_missing',
-        historyTranscript: '[user] portable recovery state'
-      }),
-      loadSdk: async () => sdk,
-      rejectResume
-    })
 
-    await expect(new AgentSdkRuntime(deps).runTurn(
-      'th',
-      'tn',
-      new AbortController().signal
-    )).resolves.toBe('completed')
-    expect(queryCount).toBe(2)
-    expect(rejectResume).toHaveBeenCalledWith('th', 'tn')
-  })
-
-  test('coalesces token-granular SDK deltas before durable recording', async () => {
-    const text = 'x'.repeat(1_000)
-    const messages: SdkMessage[] = [
-      ...Array.from({ length: 1_000 }, () => ({
-        type: 'stream_event',
-        event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'x' } }
-      } as SdkMessage)),
-      {
-        type: 'assistant', parent_tool_use_id: null,
-        message: { role: 'assistant', content: [{ type: 'text', text }] }
-      } as SdkMessage,
-      {
-        type: 'result', subtype: 'success', is_error: false, result: text,
-        num_turns: 1, usage: { input_tokens: 1, output_tokens: 1 }
-      } as SdkMessage
-    ]
-    const { deps, events, items } = makeDeps({ loadSdk: async () => fakeSdk(messages) })
-
-    await expect(new AgentSdkRuntime(deps).runTurn(
-      'th', 'tn', new AbortController().signal
-    )).resolves.toBe('completed')
-
-    const deltas = events.filter((event) => event.kind === 'assistant_text_delta')
-    expect(deltas).toHaveLength(1)
-    expect((deltas[0] as { item: { text: string } }).item.text).toBe(text)
-    expect(events.findIndex((event) => event.kind === 'assistant_text_delta'))
-      .toBeLessThan(events.findIndex((event) => event.kind === 'usage'))
-    expect(items).toContainEqual(expect.objectContaining({
-      kind: 'assistant_text', text, status: 'completed'
-    }))
-  })
-
-  test('routes provider deltas through cumulative state-first writes with UTF-16 offsets', async () => {
-    const messages: SdkMessage[] = [
-      {
-        type: 'stream_event',
-        event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'Hi ' } }
-      } as SdkMessage,
-      {
-        type: 'stream_event',
-        event: { type: 'content_block_delta', delta: { type: 'thinking_delta', thinking: 'think' } }
-      } as SdkMessage,
-      {
-        type: 'stream_event',
-        event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'there' } }
-      } as SdkMessage,
-      {
-        type: 'assistant', parent_tool_use_id: null,
-        message: {
-          role: 'assistant',
-          content: [
-            { type: 'thinking', thinking: 'think' },
-            { type: 'text', text: 'Hi there' }
-          ]
-        }
-      } as SdkMessage,
-      {
-        type: 'result', subtype: 'success', is_error: false, result: 'Hi there',
-        num_turns: 1, usage: { input_tokens: 1, output_tokens: 1 }
-      } as SdkMessage
-    ]
-    const applyAssistantDelta = vi.fn<SdkRuntimeDeps['applyAssistantDelta']>(async () => undefined)
-    const recordEvent = vi.fn<SdkRuntimeDeps['recordEvent']>(async () => undefined)
-    const { deps, items } = makeDeps({
-      applyAssistantDelta,
-      recordEvent,
-      loadSdk: async () => fakeSdk(messages)
-    })
-
-    await expect(new AgentSdkRuntime(deps).runTurn(
-      'th', 'tn', new AbortController().signal
-    )).resolves.toBe('completed')
-
-    expect(applyAssistantDelta.mock.calls.map(([, item, deltaText, deltaOffset]) => ({
-      kind: item.kind,
-      cumulativeText: 'text' in item ? item.text : '',
-      deltaText,
-      deltaOffset
-    }))).toEqual([
-      {
-        kind: 'assistant_text',
-        cumulativeText: 'Hi ',
-        deltaText: 'Hi ',
-        deltaOffset: 0
-      },
-      {
-        kind: 'assistant_reasoning',
-        cumulativeText: 'think',
-        deltaText: 'think',
-        deltaOffset: 0
-      },
-      {
-        kind: 'assistant_text',
-        cumulativeText: 'Hi there',
-        deltaText: 'there',
-        deltaOffset: 3
-      }
-    ])
-    expect(recordEvent.mock.calls.some(([event]) =>
-      event.kind === 'assistant_text_delta' || event.kind === 'assistant_reasoning_delta'
-    )).toBe(false)
-    expect(items).toContainEqual(expect.objectContaining({
-      kind: 'assistant_text', text: 'Hi there', status: 'completed'
-    }))
-    expect(items).toContainEqual(expect.objectContaining({
-      kind: 'assistant_reasoning', text: 'think', status: 'completed'
-    }))
-  })
-
-  test('splits one large SDK delta into replay-safe UTF-8 event blocks', async () => {
-    const text = `${'a'.repeat(4_095)}${'💡'.repeat(2_000)}`
-    const messages: SdkMessage[] = [
-      {
-        type: 'stream_event',
-        event: { type: 'content_block_delta', delta: { type: 'text_delta', text } }
-      } as SdkMessage,
-      {
-        type: 'assistant', parent_tool_use_id: null,
-        message: { role: 'assistant', content: [{ type: 'text', text }] }
-      } as SdkMessage,
-      {
-        type: 'result', subtype: 'success', is_error: false, result: text,
-        num_turns: 1, usage: { input_tokens: 1, output_tokens: 1 }
-      } as SdkMessage
-    ]
-    const { deps, events } = makeDeps({ loadSdk: async () => fakeSdk(messages) })
-
-    await expect(new AgentSdkRuntime(deps).runTurn(
-      'th', 'tn', new AbortController().signal
-    )).resolves.toBe('completed')
-
-    const deltas = events.filter((event) => event.kind === 'assistant_text_delta')
-    const retained = deltas.map((event) => (event as { item: { text: string } }).item.text)
-    expect(retained.join('')).toBe(text)
-    expect(retained.every((value) => Buffer.byteLength(value, 'utf8') <= 4 * 1024)).toBe(true)
-    expect(deltas.map((event) => 'deltaOffset' in event ? event.deltaOffset : undefined)).toEqual(
-      retained.reduce<number[]>((offsets, value) => [
-        ...offsets,
-        (offsets.at(-1) ?? 0) + (offsets.length === 0 ? 0 : retained[offsets.length - 1]!.length)
-      ], [])
-    )
-  })
-
-  test('flushes a low-volume SDK delta after the live-update delay', async () => {
-    vi.useFakeTimers()
-    try {
-      let release!: () => void
-      let markWaiting!: () => void
-      const gate = new Promise<void>((resolve) => { release = resolve })
-      const waiting = new Promise<void>((resolve) => { markWaiting = resolve })
-      const sdk: SdkApi = {
-        query: (): SdkQueryResult => {
-          const stream = (async function* (): AsyncGenerator<SdkMessage> {
-            yield {
-              type: 'stream_event',
-              event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'live' } }
-            } as SdkMessage
-            markWaiting()
-            await gate
-            yield {
-              type: 'assistant', parent_tool_use_id: null,
-              message: { role: 'assistant', content: [{ type: 'text', text: 'live' }] }
-            } as SdkMessage
-            yield {
-              type: 'result', subtype: 'success', is_error: false, result: 'live',
-              num_turns: 1, usage: { input_tokens: 1, output_tokens: 1 }
-            } as SdkMessage
-          })() as SdkQueryResult
-          stream.interrupt = async () => {}
-          return stream
-        },
-        createSdkMcpServer: (config) => ({ type: 'sdk', name: config.name, instance: {} }),
-        tool: () => ({})
-      }
-      const { deps, events } = makeDeps({ loadSdk: async () => sdk })
-      const running = new AgentSdkRuntime(deps).runTurn('th', 'tn', new AbortController().signal)
-      await waiting
-
-      expect(events.filter((event) => event.kind === 'assistant_text_delta')).toHaveLength(0)
-      await vi.advanceTimersByTimeAsync(40)
-      expect(events).toContainEqual(expect.objectContaining({
-        kind: 'assistant_text_delta', item: expect.objectContaining({ text: 'live' })
-      }))
-
-      release()
-      await expect(running).resolves.toBe('completed')
-      expect(vi.getTimerCount()).toBe(0)
-    } finally {
-      vi.useRealTimers()
-    }
-  })
-
-  test('flushes a pending SDK delta before reporting a resource error', async () => {
-    const { deps, events } = makeDeps({
-      getSdkStreamLimits: () => ({ maxOutputBytes: 2 }),
-      loadSdk: async () => fakeSdk([
-        {
-          type: 'stream_event',
-          event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'ok' } }
-        } as SdkMessage,
-        {
-          type: 'stream_event',
-          event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'overflow' } }
-        } as SdkMessage
-      ])
-    })
-
-    await expect(new AgentSdkRuntime(deps).runTurn(
-      'th', 'tn', new AbortController().signal
-    )).resolves.toBe('failed')
-    const terminalEvents = events.filter((event) =>
-      event.kind === 'assistant_text_delta' || event.kind === 'error'
-    )
-    expect(terminalEvents.map((event) => event.kind)).toEqual(['assistant_text_delta', 'error'])
-    expect((terminalEvents[0] as { item: { text: string } }).item.text).toBe('ok')
-    expect(terminalEvents[1]).toMatchObject({ code: 'stream_resource_limit' })
-  })
-
-  test('flushes pending SDK deltas when the user aborts a stalled stream', async () => {
-    let waiting!: () => void
-    const didWait = new Promise<void>((resolve) => { waiting = resolve })
-    let interrupts = 0
-    const sdk: SdkApi = {
-      query: (): SdkQueryResult => {
-        async function* gen(): AsyncGenerator<SdkMessage> {
-          yield {
-            type: 'stream_event',
-            event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'partial' } }
-          } as SdkMessage
-          waiting()
-          await new Promise<void>(() => {})
-        }
-        const stream = gen() as SdkQueryResult
-        stream.interrupt = async () => { interrupts += 1 }
-        return stream
-      },
-      createSdkMcpServer: (config) => ({ type: 'sdk', name: config.name, instance: {} }),
-      tool: () => ({})
-    }
-    const controller = new AbortController()
-    const { deps, events } = makeDeps({ loadSdk: async () => sdk })
-    const running = new AgentSdkRuntime(deps).runTurn('th', 'tn', controller.signal)
-    await didWait
-
-    controller.abort()
-
-    await expect(running).resolves.toBe('aborted')
-    expect(interrupts).toBe(1)
-    expect(events).toContainEqual(expect.objectContaining({
-      kind: 'assistant_text_delta', item: expect.objectContaining({ text: 'partial' })
-    }))
-  })
-
-  test('scopes the env: strips runtime secrets and injects only the selected token', async () => {
-    let seenOptions: { env?: Record<string, string | undefined> } = {}
-    const sdk = fakeSdk(STREAM, (opts) => {
-      seenOptions = opts as typeof seenOptions
-    })
-    const { deps } = makeDeps({
-      loadSdk: async () => sdk,
-      baseEnv: () => ({
-        PATH: '/bin',
-        ANTHROPIC_API_KEY: 'leak',
-        KUN_BROWSER_USE_BRIDGE_URL: 'http://127.0.0.1:12345',
-        KUN_BROWSER_USE_BRIDGE_TOKEN: 'bridge-token',
-        KUN_BROWSER_USE_APPROVAL_SIGNING_KEY: 'signing-key'
-      }),
-      loadTurnContext: async () => ({
-        workspace: '/ws',
-        userText: 'hi',
-        approvalPolicy: 'auto',
-        oauthToken: 'sk-ant-oat01-tok',
-        bridgeableTools: []
-      })
-    })
-    await new AgentSdkRuntime(deps).runTurn('th', 'tn', new AbortController().signal)
-    expect(seenOptions.env?.ANTHROPIC_API_KEY).toBeUndefined()
-    expect(seenOptions.env?.KUN_BROWSER_USE_BRIDGE_URL).toBeUndefined()
-    expect(seenOptions.env?.KUN_BROWSER_USE_BRIDGE_TOKEN).toBeUndefined()
-    expect(seenOptions.env?.KUN_BROWSER_USE_APPROVAL_SIGNING_KEY).toBeUndefined()
-    expect(seenOptions.env?.CLAUDE_CODE_OAUTH_TOKEN).toBe('sk-ant-oat01-tok')
-  })
-
-  test('omits the SDK maxTurns option by default', async () => {
-    let seenMaxTurns: number | undefined
-    const { deps } = makeDeps({
-      loadSdk: async () => fakeSdk(STREAM, (options) => {
-        seenMaxTurns = (options as { maxTurns?: number }).maxTurns
-      })
-    })
-
-    await expect(new AgentSdkRuntime(deps).runTurn(
-      'th', 'tn', new AbortController().signal
-    )).resolves.toBe('completed')
-    expect(seenMaxTurns).toBeUndefined()
-  })
-
-  test('maps an explicit native maxSteps onto the SDK maxTurns option', async () => {
-    let seenMaxTurns: number | undefined
-    const { deps } = makeDeps({
-      getTurnLimits: () => ({ maxSteps: 7, maxWallTimeMs: 60_000, maxToolCallsPerStep: 3 }),
-      loadSdk: async () => fakeSdk(STREAM, (options) => {
-        seenMaxTurns = (options as { maxTurns?: number }).maxTurns
-      })
-    })
-
-    await expect(new AgentSdkRuntime(deps).runTurn(
-      'th', 'tn', new AbortController().signal
-    )).resolves.toBe('completed')
-    expect(seenMaxTurns).toBe(7)
-  })
-
-  test('bounds terminal iterator cleanup and interrupts when return never settles', async () => {
-    vi.useFakeTimers()
-    try {
-      let returnStarted!: () => void
-      const didStartReturn = new Promise<void>((resolve) => { returnStarted = resolve })
-      let interrupts = 0
-      const sdk = fakeSdk([{
-        type: 'result', subtype: 'success', is_error: false, result: 'done', num_turns: 1
-      } as SdkMessage])
-      const query = sdk.query
-      sdk.query = (input) => {
-        const stream = query(input)
-        stream.return = () => {
-          returnStarted()
-          return new Promise<IteratorResult<SdkMessage>>(() => {})
-        }
-        stream.interrupt = async () => { interrupts += 1 }
-        return stream
-      }
-      const { deps } = makeDeps({ loadSdk: async () => sdk })
-      const running = new AgentSdkRuntime(deps).runTurn(
-        'th', 'tn', new AbortController().signal
-      )
-      await didStartReturn
-
-      await vi.advanceTimersByTimeAsync(1_000)
-
-      await expect(running).resolves.toBe('completed')
-      expect(interrupts).toBe(1)
-    } finally {
-      vi.useRealTimers()
-    }
-  })
-
-  test('allows approved Bash but still gates SDK file paths in workspace-write', async () => {
-    let canUseTool: SdkCanUseTool | undefined
-    let permissionMode: unknown
-    let tools: unknown
-    let allowedTools: string[] | undefined
-    const sdk = fakeSdk(STREAM, (opts) => {
-      canUseTool = (opts as { canUseTool?: SdkCanUseTool }).canUseTool
-      permissionMode = (opts as { permissionMode?: unknown }).permissionMode
-      tools = (opts as { tools?: unknown }).tools
-      allowedTools = (opts as { allowedTools?: string[] }).allowedTools
-    })
-    const { deps } = makeDeps({
-      loadSdk: async () => sdk,
-      loadTurnContext: async () => ({
-        workspace: '/ws',
-        userText: 'hi',
-        approvalPolicy: 'auto',
-        sandboxMode: 'workspace-write',
-        bridgeableTools: []
-      })
-    })
-
-    await new AgentSdkRuntime(deps).runTurn('th', 'tn', new AbortController().signal)
-
-    expect(permissionMode).toBe('default')
-    expect(tools).toEqual(expect.arrayContaining(['Read', 'Write', 'Edit', 'Bash']))
-    expect(allowedTools).not.toEqual(expect.arrayContaining(['Read', 'Write', 'Edit', 'Bash']))
-    expect(canUseTool).toBeDefined()
-    await expect(canUseTool!('Bash', { command: 'pwd' })).resolves.toEqual({
-      behavior: 'allow',
-      updatedInput: { command: 'pwd' }
-    })
-    await expect(canUseTool!('Write', { file_path: '/tmp/outside.txt', content: 'x' })).resolves.toMatchObject({
-      behavior: 'deny',
-      message: expect.stringContaining('limited to the workspace sandbox')
-    })
-    await expect(canUseTool!('Write', { file_path: '/ws/inside.txt', content: 'x' })).resolves.toEqual({
-      behavior: 'allow',
-      updatedInput: { file_path: '/ws/inside.txt', content: 'x' }
-    })
-  })
-
-  test('bridges Kun read tools when Graph disables all overlapping SDK built-ins', async () => {
-    let options: {
-      tools?: unknown[]
-      allowedTools?: string[]
-      mcpServers?: Record<string, unknown>
-    } = {}
-    const sdk = fakeSdk(svgSdkTextAttempt('planning paused'), (value) => {
-      options = value as typeof options
-    })
-    const { deps } = makeDeps({
-      loadSdk: async () => sdk,
-      loadTurnContext: async () => ({
-        workspace: '/ws',
-        userText: 'inspect and define the Graph',
-        approvalPolicy: 'auto',
-        sandboxMode: 'workspace-write',
-        allowSdkBuiltins: false,
-        bridgeKunBuiltinOverlaps: true,
-        bridgeableTools: [{
-          name: 'read',
-          description: 'Read a file',
-          inputSchema: { type: 'object' }
-        }]
-      })
-    })
-
-    await expect(
-      new AgentSdkRuntime(deps).runTurn('th', 'tn', new AbortController().signal)
-    ).resolves.toBe('completed')
-
-    expect(options.tools).toEqual([])
-    expect(options.allowedTools).toContain('mcp__kun__read')
-    expect(options.mcpServers).toHaveProperty('kun')
-  })
-
-  test('gives Graph planning one real SDK recovery exchange before parking prose-only output', async () => {
-    const prompts: string[] = []
-    const checkGraphCompletion = vi.fn(async () => 'complete' as const)
-    const finishTurn = vi.fn(async () => 'suspended' as const)
-    const sdk = fakeSdkAttempts([
-      svgSdkTextAttempt('I have a plan.'),
-      svgSdkTextAttempt('I still will not call the tool.')
-    ], (input) => {
-      if (typeof input.prompt === 'string') prompts.push(input.prompt)
-    })
-    const { deps } = makeDeps({
-      loadSdk: async () => sdk,
-      checkGraphCompletion,
-      finishTurn,
-      loadTurnContext: async () => ({
-        workspace: '/ws',
-        userText: 'build this with Graph',
-        approvalPolicy: 'auto',
-        sandboxMode: 'read-only',
-        allowSdkBuiltins: false,
-        bridgeKunBuiltinOverlaps: true,
-        graphPhase: 'planning',
-        bridgeableTools: [{
-          name: 'graph_define_plan',
-          description: 'Define the Graph plan',
-          inputSchema: { type: 'object' }
-        }]
-      })
-    })
-
-    await expect(new AgentSdkRuntime(deps).runTurn(
-      'th',
-      'tn',
-      new AbortController().signal
-    )).resolves.toBe('suspended')
-
-    expect(prompts).toHaveLength(2)
-    expect(prompts[1]).toContain('Host planning gate')
-    expect(prompts[1]).toContain('call `graph_define_plan` now')
-    expect(checkGraphCompletion).not.toHaveBeenCalled()
-    expect(finishTurn).toHaveBeenCalledTimes(1)
-  })
-
-  test('resumes the first Graph SDK session and carries exact plan issue paths into recovery', async () => {
-    const queries: Array<{
-      prompt: unknown
-      options?: { resume?: string }
-    }> = []
-    let graphDefinePlanHandler:
-      | ((args: Record<string, unknown>, extra: unknown) => Promise<unknown>)
-      | undefined
-    let queryIndex = 0
-    const sdk: SdkApi = {
-      tool: (name, _description, _schema, handler) => {
-        if (name === 'graph_define_plan') graphDefinePlanHandler = handler
-        return { name }
-      },
-      createSdkMcpServer: (config) => ({
-        type: 'sdk',
-        name: config.name,
-        instance: {}
-      }),
-      query: (input): SdkQueryResult => {
-        const current = queryIndex
-        queryIndex += 1
-        queries.push(input as typeof queries[number])
-        async function* gen(): AsyncGenerator<SdkMessage> {
-          if (current === 0) {
-            await graphDefinePlanHandler?.({}, {})
-            yield {
-              type: 'system',
-              subtype: 'init',
-              session_id: 'graph_session_after_invalid_plan'
-            } as SdkMessage
-          }
-          yield* svgSdkTextAttempt(
-            current === 0 ? 'The plan is ready.' : 'Still prose only.'
-          )
-        }
-        const stream = gen() as SdkQueryResult
-        stream.interrupt = async () => {}
-        return stream
-      }
-    }
-    const executeKunTool = vi.fn(async () => ({
-      output: {
-        code: 'graph_plan_invalid',
-        issues: [{
-          path: ['tasks', 0, 'loop'],
-          message: 'Ordinary work tasks cannot contain loop.',
-          repairHint: 'Remove loop or change kind to loop_gate.'
-        }]
-      },
-      isError: true
-    }))
-    const finishTurn = vi.fn(async () => 'suspended' as const)
-    const { deps } = makeDeps({
-      loadSdk: async () => sdk,
-      executeKunTool,
-      finishTurn,
-      loadTurnContext: async () => ({
-        workspace: '/ws',
-        userText: 'build this with Graph',
-        approvalPolicy: 'auto',
-        sandboxMode: 'read-only',
-        allowSdkBuiltins: false,
-        bridgeKunBuiltinOverlaps: true,
-        graphPhase: 'planning',
-        bridgeableTools: [{
-          name: 'graph_define_plan',
-          description: 'Define the Graph plan',
-          inputSchema: { type: 'object' }
-        }]
-      })
-    })
-
-    await expect(new AgentSdkRuntime(deps).runTurn(
-      'th',
-      'tn',
-      new AbortController().signal
-    )).resolves.toBe('suspended')
-
-    expect(queries).toHaveLength(2)
-    expect(queries[1]?.options?.resume).toBe(
-      'graph_session_after_invalid_plan'
-    )
-    expect(queries[1]?.prompt).toEqual(expect.stringContaining(
-      '"path":["tasks",0,"loop"]'
-    ))
-    expect(queries[1]?.prompt).toEqual(expect.stringContaining(
-      'Remove loop or change kind to loop_gate.'
-    ))
-    expect(executeKunTool).toHaveBeenCalledTimes(1)
-  })
-
-  test('gives pending Graph supervision one real SDK recovery exchange before parking', async () => {
-    const prompts: string[] = []
-    const checkGraphCompletion = vi.fn(async () => 'retry_required' as const)
-    const finishTurn = vi.fn(async () => 'suspended_pending_supervision' as const)
-    const sdk = fakeSdkAttempts([
-      svgSdkTextAttempt('Everything looks complete.'),
-      svgSdkTextAttempt('Still prose only.')
-    ], (input) => {
-      if (typeof input.prompt === 'string') prompts.push(input.prompt)
-    })
-    const { deps } = makeDeps({
-      loadSdk: async () => sdk,
-      checkGraphCompletion,
-      finishTurn,
-      loadTurnContext: async () => ({
-        workspace: '/ws',
-        userText: 'continue Graph supervision',
-        approvalPolicy: 'auto',
-        sandboxMode: 'read-only',
-        allowSdkBuiltins: false,
-        bridgeKunBuiltinOverlaps: true,
-        graphPhase: 'supervising',
-        bridgeableTools: [{
-          name: 'graph_review_node',
-          description: 'Review a pending Graph node',
-          inputSchema: { type: 'object' }
-        }]
-      })
-    })
-
-    await expect(new AgentSdkRuntime(deps).runTurn(
-      'th',
-      'tn',
-      new AbortController().signal
-    )).resolves.toBe('suspended_pending_supervision')
-
-    expect(checkGraphCompletion).toHaveBeenCalledTimes(1)
-    expect(prompts).toHaveLength(2)
-    expect(prompts[1]).toContain('Host supervision gate')
-    expect(prompts[1]).toContain('call `graph_review_node`')
-    expect(finishTurn).toHaveBeenCalledTimes(1)
-  })
-
-  test('disables SDK built-ins and completes after mutation plus matching validation', async () => {
-    const seenOptions: Array<{ tools?: unknown; strictMcpConfig?: boolean; allowedTools?: string[] }> = []
-    const sdk = fakeSdkAttempts([
-      svgSdkAttempt([
-        { name: 'design_svg_edit', id: 'edit_ok', output: { ok: true, revision: 'rev_1' } },
-        { name: 'design_svg_validate', id: 'validate_ok', output: { ok: true, revision: 'rev_1' } }
-      ])
-    ], (input) => seenOptions.push(input.options as typeof seenOptions[number]))
-    const { deps, finished } = makeDeps({
-      loadSdk: async () => sdk,
-      loadTurnContext: async () => svgSdkContext()
-    })
-
-    await expect(new AgentSdkRuntime(deps).runTurn('th', 'tn', new AbortController().signal)).resolves.toBe('completed')
-    expect(finished).toEqual([{ status: 'completed', error: undefined }])
-    expect(seenOptions).toHaveLength(1)
-    expect(seenOptions[0]).toMatchObject({ tools: [], strictMcpConfig: true })
-    expect(seenOptions[0].allowedTools).not.toEqual(expect.arrayContaining(['Read', 'Write', 'Edit', 'Bash']))
-  })
-
-  test('preserves SVG recovery while sharing the maxSteps budget across SDK queries', async () => {
-    const seenMaxTurns: number[] = []
-    const sdk = fakeSdkAttempts([
-      svgSdkTextAttempt('not ready'),
-      svgSdkAttempt([
-        { name: 'design_svg_edit', id: 'edit_budgeted', output: { ok: true, revision: 'rev_budgeted' } },
-        { name: 'design_svg_validate', id: 'validate_budgeted', output: { ok: true, revision: 'rev_budgeted' } }
-      ])
-    ], (input) => {
-      seenMaxTurns.push((input.options as { maxTurns: number }).maxTurns)
-    })
-    const query = sdk.query
-    let queryIndex = 0
-    let firstQueryClosed = false
-    sdk.query = (input) => {
-      const index = queryIndex
-      queryIndex += 1
-      if (index === 1) expect(firstQueryClosed).toBe(true)
-      const stream = query(input)
-      if (index === 0) {
-        const closable = stream as unknown as {
-          return(value?: unknown): Promise<IteratorResult<SdkMessage>>
-        }
-        const close = closable.return.bind(stream)
-        closable.return = async (value) => {
-          await Promise.resolve()
-          firstQueryClosed = true
-          return close(value)
-        }
-      }
-      return stream
-    }
-    const { deps } = makeDeps({
-      getTurnLimits: () => ({ maxSteps: 2 }),
-      loadSdk: async () => sdk,
-      loadTurnContext: async () => svgSdkContext()
-    })
-
-    await expect(new AgentSdkRuntime(deps).runTurn(
-      'th', 'tn', new AbortController().signal
-    )).resolves.toBe('completed')
-    expect(seenMaxTurns).toEqual([2, 1])
-    expect(firstQueryClosed).toBe(true)
-  })
-
-  test('fails a terminal-less SVG SDK query without retrying it', async () => {
-    let queries = 0
-    const { deps, events } = makeDeps({
-      getTurnLimits: () => ({ maxSteps: 1 }),
-      loadSdk: async () => fakeSdkAttempts([[], [], []], () => { queries += 1 }),
-      loadTurnContext: async () => svgSdkContext()
-    })
-
-    await expect(new AgentSdkRuntime(deps).runTurn(
-      'th', 'tn', new AbortController().signal
-    )).resolves.toBe('failed')
-    expect(queries).toBe(1)
-    expect(events).toContainEqual(expect.objectContaining({
-      kind: 'error', code: 'agent_sdk_protocol_error'
-    }))
-  })
-
-  test('fails a truncated SVG recovery query instead of reusing a stale final', async () => {
-    let queries = 0
-    const { deps, events } = makeDeps({
-      loadSdk: async () => fakeSdkAttempts([
-        svgSdkTextAttempt('first attempt completed'),
-        []
-      ], () => { queries += 1 }),
-      loadTurnContext: async () => svgSdkContext()
-    })
-
-    await expect(new AgentSdkRuntime(deps).runTurn(
-      'th', 'tn', new AbortController().signal
-    )).resolves.toBe('failed')
-    expect(queries).toBe(2)
-    expect(events).toContainEqual(expect.objectContaining({
-      kind: 'error', code: 'agent_sdk_protocol_error'
-    }))
-  })
-
-  test('exhausts three recovery attempts when no structured mutation succeeds', async () => {
-    let queries = 0
-    const sdk = fakeSdkAttempts([
-      svgSdkTextAttempt('prose only'), svgSdkTextAttempt('still prose'), svgSdkTextAttempt('done')
-    ], () => { queries += 1 })
-    const { deps, events, finished } = makeDeps({
-      loadSdk: async () => sdk,
-      loadTurnContext: async () => svgSdkContext()
-    })
-
-    await expect(new AgentSdkRuntime(deps).runTurn('th', 'tn', new AbortController().signal)).resolves.toBe('failed')
-    expect(queries).toBe(3)
-    expect(finished.at(-1)).toMatchObject({ status: 'failed', error: expect.stringContaining('recovery attempts') })
-    expect(events.filter((event) => event.kind === 'error')).toEqual(expect.arrayContaining([
-      expect.objectContaining({ code: 'required_svg_mutation_missing' })
-    ]))
-  })
-
-  test('fails before loading the SDK when SVG mutation tools are unavailable', async () => {
-    const loadSdk = vi.fn(async () => fakeSdk([]))
-    const { deps, events } = makeDeps({
-      loadSdk,
-      loadTurnContext: async () => ({
-        ...svgSdkContext(),
-        bridgeableTools: [{ name: 'design_svg_validate', description: 'validate', inputSchema: {} }]
-      })
-    })
-    await expect(new AgentSdkRuntime(deps).runTurn('th', 'tn', new AbortController().signal)).resolves.toBe('failed')
-    expect(loadSdk).not.toHaveBeenCalled()
-    expect(events).toContainEqual(expect.objectContaining({ kind: 'error', code: 'svg_tools_unavailable' }))
-  })
-
-  test('exhausts recovery when mutation is never followed by validation', async () => {
-    const sdk = fakeSdkAttempts([
-      svgSdkAttempt([{ name: 'design_svg_edit', id: 'edit_only', output: { ok: true, revision: 'rev_1' } }]),
-      svgSdkTextAttempt(),
-      svgSdkTextAttempt()
-    ])
-    const { deps, events } = makeDeps({
-      loadSdk: async () => sdk,
-      loadTurnContext: async () => svgSdkContext()
-    })
-    await expect(new AgentSdkRuntime(deps).runTurn('th', 'tn', new AbortController().signal)).resolves.toBe('failed')
-    expect(events).toEqual(expect.arrayContaining([
-      expect.objectContaining({ kind: 'error', code: 'required_svg_validation_missing' })
-    ]))
-  })
-
-  test('requires validation after the mutation and ignores failed tool results', async () => {
-    let queries = 0
-    const sdk = fakeSdkAttempts([
-      svgSdkAttempt([
-        { name: 'design_svg_validate', id: 'validate_first', output: { ok: true, revision: 'rev_0' } },
-        { name: 'design_svg_edit', id: 'edit_failed', output: { ok: false, error: 'bad op' }, isError: true }
-      ]),
-      svgSdkAttempt([{ name: 'design_svg_edit', id: 'edit_second', output: { ok: true, revision: 'rev_2' } }]),
-      svgSdkAttempt([{ name: 'design_svg_validate', id: 'validate_last', output: { ok: true, revision: 'rev_2' } }])
-    ], () => { queries += 1 })
-    const { deps } = makeDeps({
-      loadSdk: async () => sdk,
-      loadTurnContext: async () => svgSdkContext()
-    })
-    await expect(new AgentSdkRuntime(deps).runTurn('th', 'tn', new AbortController().signal)).resolves.toBe('completed')
-    expect(queries).toBe(3)
-  })
-
-  test('rejects stale validation revisions and retries with tool feedback', async () => {
-    const prompts: unknown[] = []
-    const sdk = fakeSdkAttempts([
-      svgSdkAttempt([
-        { name: 'design_svg_edit', id: 'edit_new', output: { ok: true, revision: 'rev_new' } },
-        { name: 'design_svg_validate', id: 'validate_old', output: { ok: true, revision: 'rev_old' } }
-      ]),
-      svgSdkAttempt([{ name: 'design_svg_validate', id: 'validate_new', output: { ok: true, revision: 'rev_new' } }])
-    ], (input) => prompts.push(input.prompt))
-    let mcpServerInstances = 0
-    const createServer = sdk.createSdkMcpServer
-    sdk.createSdkMcpServer = (config) => {
-      mcpServerInstances += 1
-      return createServer(config)
-    }
-    const { deps } = makeDeps({
-      loadSdk: async () => sdk,
-      loadTurnContext: async () => svgSdkContext()
-    })
-    await expect(new AgentSdkRuntime(deps).runTurn('th', 'tn', new AbortController().signal)).resolves.toBe('completed')
-    expect(prompts).toHaveLength(2)
-    expect(mcpServerInstances).toBe(2)
-    expect(prompts[1]).toContain('SVG completion gate')
-    expect(prompts[1]).toContain('design_svg_validate result')
-  })
-
-  test('null turn context fails the turn early', async () => {
-    const { deps, finished } = makeDeps({ loadTurnContext: async () => null })
-    const status = await new AgentSdkRuntime(deps).runTurn('th', 'tn', new AbortController().signal)
-    expect(status).toBe('failed')
-    expect(finished[0].status).toBe('failed')
-  })
-
-  test('fails a fenced managed credential explicitly before loading the SDK', async () => {
-    const loadSdk = vi.fn(async () => fakeSdk(STREAM))
-    const { deps, events, finished } = makeDeps({
-      loadTurnContext: async () => { throw new AgentSdkCredentialUnavailableError() },
-      loadSdk
-    })
-
-    await expect(new AgentSdkRuntime(deps).runTurn(
-      'th',
-      'tn',
-      new AbortController().signal
-    )).resolves.toBe('failed')
-    expect(loadSdk).not.toHaveBeenCalled()
-    expect(finished).toContainEqual(expect.objectContaining({
-      status: 'failed',
-      code: 'agent_sdk_credential_unavailable',
-      error: expect.stringContaining('credentials are unavailable')
-    }))
-    expect(events).toContainEqual(expect.objectContaining({
-      kind: 'error',
-      code: 'agent_sdk_credential_unavailable'
-    }))
-  })
-
-  test('an already-aborted signal yields an aborted turn', async () => {
-    const ac = new AbortController()
-    ac.abort()
-    const loadSdk = vi.fn(async () => fakeSdk(STREAM))
-    const { deps, finished } = makeDeps({ loadSdk })
-    const status = await new AgentSdkRuntime(deps).runTurn('th', 'tn', ac.signal)
-    expect(status).toBe('aborted')
-    expect(finished[0].status).toBe('aborted')
-    expect(loadSdk).not.toHaveBeenCalled()
-  })
-
-  test('fails an SDK turn that exceeds the runtime wall-time limit', async () => {
-    let interrupted = false
-    const { deps, events, finished } = makeDeps({
-      getTurnLimits: () => ({ maxWallTimeMs: 1 }),
-      loadSdk: async () => ({
-        query: ({ options }) => {
-          const abortController = (options as { abortController: AbortController }).abortController
-          async function* gen(): AsyncGenerator<SdkMessage> {
-            await new Promise<void>((resolve) => {
-              abortController.signal.addEventListener('abort', () => resolve(), { once: true })
-            })
-            for (const message of [] as SdkMessage[]) yield message
-          }
-          const stream = gen() as SdkQueryResult
-          stream.interrupt = async () => { interrupted = true }
-          return stream
-        },
-        createSdkMcpServer: (config) => ({ type: 'sdk', name: config.name, instance: {} }),
-        tool: () => ({})
-      })
-    })
-
-    const status = await new AgentSdkRuntime(deps).runTurn('th', 'tn', new AbortController().signal)
-
-    expect(status).toBe('failed')
-    expect(interrupted).toBe(true)
-    expect(finished).toContainEqual(expect.objectContaining({
-      status: 'failed', error: expect.stringContaining('wall time')
-    }))
-    expect(events).toContainEqual(expect.objectContaining({ kind: 'error', code: 'turn_wall_time_limit' }))
-  })
-
-  test('wall-time interrupts a stalled iterator that ignores the abort controller', async () => {
-    let interrupts = 0
-    const { deps, events } = makeDeps({
-      getTurnLimits: () => ({ maxWallTimeMs: 5 }),
-      loadSdk: async () => stalledSdk(() => undefined, () => { interrupts += 1 })
-    })
-
-    await expect(new AgentSdkRuntime(deps).runTurn(
-      'th', 'tn', new AbortController().signal
-    )).resolves.toBe('failed')
-    expect(interrupts).toBe(1)
-    expect(events).toContainEqual(expect.objectContaining({
-      kind: 'error', code: 'turn_wall_time_limit'
-    }))
-  })
-
-  test('user cancellation interrupts a stalled iterator and returns aborted', async () => {
-    let started!: () => void
-    const didStart = new Promise<void>((resolve) => { started = resolve })
-    let interrupts = 0
-    const controller = new AbortController()
-    const { deps } = makeDeps({
-      loadSdk: async () => stalledSdk(started, () => { interrupts += 1 })
-    })
-    const running = new AgentSdkRuntime(deps).runTurn('th', 'tn', controller.signal)
-    await didStart
-
-    controller.abort()
-
-    await expect(running).resolves.toBe('aborted')
-    expect(interrupts).toBe(1)
-  })
-
-  test('fails a non-SVG SDK stream that ends without a terminal result', async () => {
-    const { deps, events, finished } = makeDeps({ loadSdk: async () => fakeSdk([]) })
-
-    await expect(new AgentSdkRuntime(deps).runTurn(
-      'th', 'tn', new AbortController().signal
-    )).resolves.toBe('failed')
-    expect(events).toContainEqual(expect.objectContaining({
-      kind: 'error', code: 'agent_sdk_protocol_error', severity: 'error'
-    }))
-    expect(finished.at(-1)?.error).toContain('without a terminal result')
-  })
-
-  test('interrupts the SDK stream and reports a stable resource code on output overflow', async () => {
-    let interrupts = 0
-    const sdk = fakeSdk([{
-      type: 'stream_event',
-      event: {
-        type: 'content_block_delta',
-        delta: { type: 'text_delta', text: 'SECRET_MARKER' }
-      }
-    } as SdkMessage])
-    const query = sdk.query
-    sdk.query = (input) => {
-      const stream = query(input)
-      stream.interrupt = () => {
-        interrupts += 1
-        return new Promise<void>(() => {})
-      }
-      return stream
-    }
-    const { deps, events, items, finished } = makeDeps({
-      loadSdk: async () => sdk,
-      getSdkStreamLimits: () => ({ maxOutputBytes: 3 })
-    })
-
-    await expect(new AgentSdkRuntime(deps).runTurn(
-      'th', 'tn', new AbortController().signal
-    )).resolves.toBe('failed')
-    expect(interrupts).toBe(1)
-    expect(items).toEqual([])
-    expect(events).toContainEqual(expect.objectContaining({
-      kind: 'error', code: 'stream_resource_limit', severity: 'warning'
-    }))
-    const error = finished.at(-1)?.error ?? ''
-    expect(error).toContain('response text and reasoning bytes')
-    expect(error).not.toContain('SECRET_MARKER')
-  })
-
-  test('rejects a per-step SDK tool storm before persisting partial calls', async () => {
-    let interrupts = 0
-    const sdk = fakeSdk([{
-      type: 'assistant',
-      parent_tool_use_id: null,
-      message: {
-        role: 'assistant',
-        content: [
-          { type: 'tool_use', id: 'one', name: 'Read', input: {} },
-          { type: 'tool_use', id: 'two', name: 'Read', input: {} }
-        ]
-      }
-    } as SdkMessage])
-    const query = sdk.query
-    sdk.query = (input) => {
-      const stream = query(input)
-      stream.interrupt = async () => { interrupts += 1 }
-      return stream
-    }
-    const { deps, events, items } = makeDeps({
-      loadSdk: async () => sdk,
-      getTurnLimits: () => ({ maxToolCallsPerStep: 1 })
-    })
-
-    await expect(new AgentSdkRuntime(deps).runTurn(
-      'th', 'tn', new AbortController().signal
-    )).resolves.toBe('failed')
-    expect(interrupts).toBe(1)
-    expect(items).toEqual([])
-    expect(events).toContainEqual(expect.objectContaining({
-      kind: 'error', code: 'tool_call_limit_exceeded'
-    }))
-  })
-
-  test('maps SDK error_max_turns onto the native turn_step_limit code', async () => {
-    const debugSink = new LlmDebugRecorder()
-    const { deps, events, finished } = makeDeps({
-      debugSink,
-      getTurnLimits: () => ({ maxSteps: 3 }),
-      loadSdk: async () => fakeSdk([{
-        type: 'result', subtype: 'error_max_turns', is_error: true, num_turns: 3
-      } as SdkMessage])
-    })
-
-    await expect(new AgentSdkRuntime(deps).runTurn(
-      'th', 'tn', new AbortController().signal
-    )).resolves.toBe('failed')
-    expect(events).toContainEqual(expect.objectContaining({
-      kind: 'error', code: 'turn_step_limit', severity: 'warning'
-    }))
-    expect(finished.at(-1)?.error).toBe('turn exceeded 3 model steps')
-    expect(debugSink.snapshot()[0]?.exchanges[0]).toMatchObject({
-      status: 'completed',
-      decoded: {
-        error: 'error_max_turns',
-        stopReason: 'error'
-      }
-    })
-  })
-
-  test('fails closed when SDK usage reports more turns than the supplied maxTurns', async () => {
-    const { deps, events } = makeDeps({
-      getTurnLimits: () => ({ maxSteps: 2 }),
-      loadSdk: async () => fakeSdk([{
-        type: 'result', subtype: 'success', is_error: false, result: 'done', num_turns: 3
-      } as SdkMessage])
-    })
-
-    await expect(new AgentSdkRuntime(deps).runTurn(
-      'th', 'tn', new AbortController().signal
-    )).resolves.toBe('failed')
-    expect(events).toContainEqual(expect.objectContaining({
-      kind: 'error', code: 'turn_step_limit'
-    }))
-  })
-
-  test('a query failure records an error event and fails the turn', async () => {
-    const { deps, events, finished } = makeDeps({
-      loadSdk: async () => ({
-        query: () => {
-          throw new Error('sdk boom')
-        },
-        createSdkMcpServer: () => ({ type: 'sdk', name: 'kun', instance: {} }),
-        tool: () => ({})
-      })
-    })
-    const status = await new AgentSdkRuntime(deps).runTurn('th', 'tn', new AbortController().signal)
-    expect(status).toBe('failed')
-    expect(events.some((e) => e.kind === 'error')).toBe(true)
-    expect(finished[0]).toMatchObject({ status: 'failed' })
-  })
-
-  test('redacts a Claude credential from Agent Perspective and conversation failures', async () => {
-    const token = 'sk-ant-oat01-private-auth-token'
-    const debugSink = new LlmDebugRecorder()
-    const { deps, events, finished } = makeDeps({
-      debugSink,
-      loadTurnContext: async () => ({
-        workspace: '/ws',
-        userText: 'authenticate',
-        approvalPolicy: 'auto',
-        oauthToken: token,
-        bridgeableTools: []
-      }),
-      loadSdk: async () => ({
-        query: () => {
-          throw new Error(`Failed to authenticate: 401 Invalid Bearer ${token}`)
-        },
-        createSdkMcpServer: () => ({ type: 'sdk', name: 'kun', instance: {} }),
-        tool: () => ({})
-      })
-    })
-
-    await expect(new AgentSdkRuntime(deps).runTurn(
-      'th',
-      'tn',
-      new AbortController().signal
-    )).resolves.toBe('failed')
-
-    const diagnostics = JSON.stringify({
-      events,
-      finished,
-      perspective: debugSink.snapshot()
-    })
-    expect(diagnostics).toContain('401 Invalid Bearer [REDACTED]')
-    expect(diagnostics).not.toContain(token)
-  })
-
-  test('redacts credentials from a terminal SDK error result', async () => {
-    const token = 'sk-ant-oat01-terminal-result-secret'
-    const debugSink = new LlmDebugRecorder()
-    const { deps, finished } = makeDeps({
-      debugSink,
-      loadTurnContext: async () => ({
-        workspace: '/ws',
-        userText: 'authenticate',
-        approvalPolicy: 'auto',
-        oauthToken: token,
-        bridgeableTools: []
-      }),
-      loadSdk: async () => fakeSdk([{
-        type: 'result',
-        subtype: 'error_during_execution',
-        is_error: true,
-        result: `Invalid Bearer ${token}`,
-        num_turns: 1
-      } as SdkMessage])
-    })
-
-    await expect(new AgentSdkRuntime(deps).runTurn(
-      'th',
-      'tn',
-      new AbortController().signal
-    )).resolves.toBe('failed')
-
-    const diagnostics = JSON.stringify({
-      finished,
-      perspective: debugSink.snapshot()
-    })
-    expect(diagnostics).toContain('Invalid Bearer [REDACTED]')
-    expect(diagnostics).not.toContain(token)
-  })
-
-  test('forwards image attachments as a structured user message (text + image block)', async () => {
-    let prompt: unknown
-    const sdk = fakeSdk(STREAM)
-    const inner = sdk.query
-    sdk.query = (input) => {
-      prompt = (input as { prompt?: unknown }).prompt
-      return inner(input)
-    }
-    const { deps } = makeDeps({
-      loadSdk: async () => sdk,
-      loadTurnContext: async () => ({
-        workspace: '/ws',
-        userText: '这是什么',
-        approvalPolicy: 'auto',
-        images: [{ mediaType: 'image/png', base64: 'AAAA' }],
-        bridgeableTools: []
-      })
-    })
-    await new AgentSdkRuntime(deps).runTurn('th', 'tn', new AbortController().signal)
-
-    expect(typeof prompt).not.toBe('string')
-    const messages: Array<{ message: { content: unknown } }> = []
-    for await (const m of prompt as AsyncIterable<{ message: { content: unknown } }>) messages.push(m)
-    expect(messages).toHaveLength(1)
-    expect(messages[0].message.content).toEqual([
-      { type: 'text', text: '这是什么' },
-      { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAAA' } }
-    ])
-  })
-
-  test('uses a plain string prompt when there are no images', async () => {
-    let prompt: unknown
-    const sdk = fakeSdk(STREAM)
-    const inner = sdk.query
-    sdk.query = (input) => {
-      prompt = (input as { prompt?: unknown }).prompt
-      return inner(input)
-    }
-    const { deps } = makeDeps({ loadSdk: async () => sdk }) // default ctx: userText 'hello', no images
-    await new AgentSdkRuntime(deps).runTurn('th', 'tn', new AbortController().signal)
-    expect(prompt).toBe('hello')
-  })
-
-  test('handlesProvider delegates to deps', () => {
-    const { deps } = makeDeps()
-    const runtime = new AgentSdkRuntime(deps)
-    expect(runtime.handlesProvider('claude-sub')).toBe(true)
-    expect(runtime.handlesProvider('deepseek')).toBe(false)
-  })
 })

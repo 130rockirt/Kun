@@ -3,6 +3,7 @@ import { createDefaultShape, isArtifactFrame, shapeBounds, type DevicePreset } f
 import { useCanvasShapeStore, withDescendants } from '../canvas-shape-store'
 import { useCanvasViewportStore } from '../canvas-viewport-store'
 import { centerRectInViewport, layoutRectsInViewport, placeRectInViewportAvoiding } from '../canvas-placement'
+import { currentCanvasOccupiedRects } from '../canvas-occupied-regions'
 import { collectiveBounds } from '../canvas-align'
 import { lintDesignSystem, setLastLintFindings } from '../design-lint'
 import { applyDesignSystemTemplateOp, type DesignSystemTemplateOp } from '../design-system-template'
@@ -16,7 +17,6 @@ import {
   createScreenLikeShape,
   defaultScreenDevicePreset,
   findShape,
-  htmlFrameRects,
   mergeAutoLayout,
   rebindThemeOnSubtree,
   recolorSubtree,
@@ -51,7 +51,7 @@ export function executeAdvancedShapeOp(
           height: spec.height ?? base.height
         }
       })
-      const occupiedRects = htmlFrameRects()
+      const occupiedRects = currentCanvasOccupiedRects()
       const vbox = useCanvasViewportStore.getState().vbox
       const hasExplicitPlacements = specs.some(({ spec }) => spec.x !== undefined || spec.y !== undefined)
       const targetFrameId = !allowPlainFrame && specs.length === 1 ? selectedReusableScreenTargetFrameId() : null

@@ -3,6 +3,10 @@ import type { ToolDispatchInput, ToolDispatchOutcome } from './turn-execution-ty
 import { collectParallelToolDispatchCandidates } from './tool-dispatch-policy.js'
 import type { ToolStormBreaker } from './tool-storm-breaker.js'
 import type { ToolExecutionService } from './tool-execution-service.js'
+import {
+  FAST_CONTEXT_SOURCE_TOOL_CAPACITY,
+  withFastContextSourceToolSlot
+} from './fast-context-source-semaphore.js'
 
 export type ToolCallDispatcherInput = {
   dispatch: ToolDispatchInput
@@ -63,12 +67,15 @@ export class ToolCallDispatcher {
         startIndex: index,
         policy: {
           approvalPolicy: dispatch.approvalPolicy,
-          toolProviderKinds: dispatch.toolProviderKinds
+          toolProviderKinds: dispatch.toolProviderKinds,
+          ...(input.context.fastContext
+            ? { maxParallelReadOnly: FAST_CONTEXT_SOURCE_TOOL_CAPACITY }
+            : {})
         }
       })
       if (!parallelCandidates) {
         const context = contextForSourceCalls(input.context, [call])
-        const result = await this.toolExecution.executeSafely({
+        const result = await executeWithFastContextSlot(this.toolExecution, {
           threadId: dispatch.threadId,
           turnId: dispatch.turnId,
           call,
@@ -96,11 +103,14 @@ export class ToolCallDispatcher {
       }
 
       const settled = await Promise.allSettled(
-        batch.map((entry) => this.toolExecution.executeSafely({
+        batch.map((entry) => executeWithFastContextSlot(this.toolExecution, {
           threadId: dispatch.threadId,
           turnId: dispatch.turnId,
           call: entry,
-          context: contextForSourceCalls(input.context, batch)
+          context: contextForSourceCalls(
+            input.context,
+            input.context.fastContext ? dispatch.calls : batch
+          )
         }))
       )
       executedAny = true
@@ -125,6 +135,17 @@ export class ToolCallDispatcher {
 
     return executedAny ? 'continue' : 'all_suppressed'
   }
+}
+
+function executeWithFastContextSlot(
+  toolExecution: Pick<ToolExecutionService, 'executeSafely'>,
+  input: Parameters<ToolExecutionService['executeSafely']>[0]
+) {
+  return withFastContextSourceToolSlot({
+    context: input.context,
+    toolName: input.call.toolName,
+    work: () => toolExecution.executeSafely(input)
+  })
 }
 
 const SOURCE_TOOL_NAMES = new Set(['read', 'grep', 'glob', 'find'])

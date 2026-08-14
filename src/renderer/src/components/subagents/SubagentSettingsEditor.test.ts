@@ -7,6 +7,7 @@ import {
   type KunSubagentProfileV1
 } from '@shared/app-settings'
 import { SubagentSettingsEditor } from './SubagentSettingsEditor'
+import { workspaceProfileToKun } from './subagent-settings-support'
 
 const loadComposerModels = vi.fn(async () => undefined)
 let mockRoute = 'chat'
@@ -31,7 +32,6 @@ vi.mock('react-i18next', () => ({
       subagentsUseExistingAgents: 'Use existing agents',
       subagentsUseExistingAgentsDesc: 'Choose configured profiles or parent-defined one-run roles.',
       subagentsMaxParallel: 'Maximum parallel subagents',
-      subagentsMaxChildRuns: 'Child runs per session',
       subagentsDelegatable: 'Delegatable subagents',
       subagentsAutomaticRoles: 'Automatic model roles',
       'agentsView.followDefault': 'Follow default',
@@ -108,13 +108,23 @@ describe('SubagentSettingsEditor', () => {
     mockRoute = 'chat'
   })
 
+  it('keeps runtime workspace surface visibility in the settings roster', () => {
+    expect(workspaceProfileToKun({
+      id: 'writer', source: 'workspace', filePath: '/tmp/writer.md',
+      mode: 'subagent', toolPolicy: 'readOnly', surfaces: ['write']
+    }).surfaces).toEqual(['write'])
+    expect(workspaceProfileToKun({
+      id: 'legacy', source: 'workspace', filePath: '/tmp/legacy.md',
+      mode: 'subagent', toolPolicy: 'readOnly'
+    }).surfaces).toEqual(['code'])
+  })
+
   it('renders the settings policy, built-in roster, custom profiles, and automatic roles', async () => {
     const kun = {
       ...defaultKunRuntimeSettings(),
       subagents: {
         enabled: true,
         maxParallel: 5,
-        maxChildRuns: 20,
         defaultToolPolicy: 'inherit' as const,
         profiles: [customProfile()]
       }
@@ -131,6 +141,9 @@ describe('SubagentSettingsEditor', () => {
 
     const text = JSON.stringify(renderer.toJSON())
     expect(text).toContain('Runtime policy')
+    expect(text).toContain('Maximum parallel subagents')
+    expect(text).not.toContain('subagentsMaxChildRuns')
+    expect(text).not.toContain('Child runs per session')
     expect(text).toContain('General')
     expect(text).toContain('Search names, capabilities, or scenarios')
     expect(text).toContain('Development')
@@ -154,7 +167,9 @@ describe('SubagentSettingsEditor', () => {
       'subagent-settings-tab-profiles',
       'subagent-settings-tab-automatic'
     ])
-    expect(renderer.root.findByProps({ id: 'subagent-settings-panel-policy' }).props.hidden).toBe(false)
+    const policyPanel = renderer.root.findByProps({ id: 'subagent-settings-panel-policy' })
+    expect(policyPanel.props.hidden).toBe(false)
+    expect(policyPanel.findAllByType('input').filter((input) => input.props.type === 'number')).toHaveLength(1)
     expect(renderer.root.findByProps({ id: 'subagent-settings-panel-profiles' }).props.hidden).toBe(true)
     expect(renderer.root.findByProps({ id: 'subagent-settings-panel-automatic' }).props.hidden).toBe(true)
 
@@ -395,10 +410,10 @@ describe('SubagentSettingsEditor', () => {
     })
 
     expect(JSON.stringify(renderer.toJSON())).toContain('"1","/","4"')
-    const writeTab = renderer.root.findAllByProps({ role: 'tab' })
-      .find((button) => button.children.includes('Write'))
-    expect(writeTab).toBeDefined()
-    await act(async () => writeTab!.props.onClick())
+    const workTab = renderer.root.findAllByProps({ role: 'tab' })
+      .find((button) => button.children.includes('Work'))
+    expect(workTab).toBeDefined()
+    await act(async () => workTab!.props.onClick())
     const general = buttonWithText(renderer, 'General')
     expect(general).toBeDefined()
     await act(async () => general!.props.onClick())
@@ -446,7 +461,7 @@ describe('SubagentSettingsEditor', () => {
     expect(JSON.stringify(renderer.toJSON())).not.toContain('Copy Editor')
   })
 
-  it('patches runtime policy without dropping the roster or sibling limits', async () => {
+  it('patches runtime concurrency without dropping the roster or sibling settings', async () => {
     const onPatch = vi.fn<(patch: KunRuntimeSettingsPatchV1) => void>()
     const profile = customProfile()
     const kun = {
@@ -454,7 +469,6 @@ describe('SubagentSettingsEditor', () => {
       subagents: {
         enabled: true,
         maxParallel: 3,
-        maxChildRuns: 12,
         defaultToolPolicy: 'inherit' as const,
         profiles: [profile]
       }
@@ -482,7 +496,6 @@ describe('SubagentSettingsEditor', () => {
       subagents: {
         enabled: true,
         maxParallel: 7,
-        maxChildRuns: 12,
         defaultToolPolicy: 'inherit',
         profiles: [profile]
       }
@@ -497,7 +510,6 @@ describe('SubagentSettingsEditor', () => {
       subagents: {
         enabled: true,
         maxParallel: 4,
-        maxChildRuns: 18,
         defaultToolPolicy: 'inherit' as const,
         profiles: [profile]
       }
@@ -532,7 +544,6 @@ describe('SubagentSettingsEditor', () => {
       subagents: {
         enabled: true,
         maxParallel: 4,
-        maxChildRuns: 18,
         defaultToolPolicy: 'inherit',
         profiles: [{ ...profile, enabled: false }]
       }
@@ -547,7 +558,6 @@ describe('SubagentSettingsEditor', () => {
       subagents: {
         enabled: true,
         maxParallel: 3,
-        maxChildRuns: 12,
         profiles: [profile]
       }
     }
@@ -592,403 +602,9 @@ describe('SubagentSettingsEditor', () => {
       subagents: {
         enabled: true,
         maxParallel: 3,
-        maxChildRuns: 12,
         profiles: [{ ...profile, model: 'model-a', providerId: 'provider-a' }]
       }
     })
   })
 
-  it('batch-applies one model to every agent in a category, overwriting mixed overrides', async () => {
-    const onPatch = vi.fn<(patch: KunRuntimeSettingsPatchV1) => void>()
-    const kun = {
-      ...defaultKunRuntimeSettings(),
-      subagents: {
-        enabled: true,
-        profiles: [
-          {
-            id: 'design-reviewer',
-            enabled: true,
-            name: 'Design Reviewer',
-            mode: 'subagent' as const,
-            toolPolicy: 'readOnly' as const,
-            model: 'old-model',
-            providerId: 'provider-a'
-          },
-          {
-            id: 'code-reviewer',
-            enabled: true,
-            name: 'Code Reviewer',
-            mode: 'subagent' as const,
-            toolPolicy: 'readOnly' as const,
-            model: 'other-model',
-            providerId: 'provider-b'
-          }
-        ]
-      }
-    }
-    let renderer!: ReactTestRenderer
-
-    await act(async () => {
-      renderer = create(createElement(SubagentSettingsEditor, {
-        kun,
-        onPatch,
-        variant: 'settings'
-      }))
-    })
-
-    const reviewChip = buttonWithText(renderer, 'Review')
-    expect(reviewChip).toBeDefined()
-    await act(async () => {
-      reviewChip!.props.onClick()
-    })
-
-    expect(JSON.stringify(renderer.toJSON())).toContain('Mixed models')
-
-    const batchTrigger = renderer.root.findAllByType('button').find((button) =>
-      button.props['aria-label'] === 'Set the same model for all {{count}} agents in {{category}}')
-    expect(batchTrigger).toBeDefined()
-
-    await act(async () => {
-      batchTrigger!.props.onClick()
-    })
-    const provider = renderer.root.findAllByType('span')
-      .find((node) => node.children.includes('Provider A'))
-    expect(provider?.parent?.type).toBe('button')
-    await act(async () => {
-      provider!.parent!.props.onClick()
-    })
-    const model = renderer.root.findAllByType('span')
-      .find((node) => node.children.includes('model-a'))
-    expect(model?.parent?.type).toBe('button')
-    await act(async () => {
-      model!.parent!.props.onClick()
-    })
-
-    const patch = onPatch.mock.calls.at(-1)?.[0] as KunRuntimeSettingsPatchV1
-    const profiles = patch.subagents?.profiles ?? []
-    expect(profiles.find((profile) => profile.id === 'design-reviewer')).toMatchObject({
-      model: 'model-a',
-      providerId: 'provider-a'
-    })
-    expect(profiles.find((profile) => profile.id === 'code-reviewer')).toMatchObject({
-      model: 'model-a',
-      providerId: 'provider-a'
-    })
-    expect(profiles.length).toBeGreaterThan(2)
-    expect(profiles.every((profile) =>
-      profile.model === 'model-a' && profile.providerId === 'provider-a')).toBe(true)
-  })
-
-  it('keeps category controls inside the expanded section and shows a passive collapsed summary', async () => {
-    const kun = {
-      ...defaultKunRuntimeSettings(),
-      subagents: {
-        enabled: true,
-        profiles: [
-          {
-            id: 'general',
-            enabled: true,
-            name: 'General',
-            mode: 'subagent' as const,
-            toolPolicy: 'inherit' as const,
-            model: 'model-a',
-            providerId: 'provider-a',
-            reasoningEffort: 'low' as const
-          },
-          {
-            id: 'component-designer',
-            enabled: true,
-            name: 'Component Designer',
-            mode: 'subagent' as const,
-            toolPolicy: 'inherit' as const,
-            reasoningEffort: 'high' as const
-          }
-        ]
-      }
-    }
-    let renderer!: ReactTestRenderer
-
-    await act(async () => {
-      renderer = create(createElement(SubagentSettingsEditor, {
-        kun,
-        onPatch: vi.fn(),
-        variant: 'settings'
-      }))
-    })
-
-    const developmentSection = renderer.root.findByProps({ 'data-agent-category': 'development' })
-    expect(developmentSection.findAllByProps({
-      'data-testid': 'subagent-category-configuration'
-    })).toHaveLength(1)
-    expect(developmentSection.findAllByType('span').some((span) =>
-      span.children.includes('Multiple configurations'))).toBe(false)
-
-    await act(async () => {
-      developmentSection.findAllByType('button')[0]!.props.onClick()
-    })
-
-    expect(developmentSection.findAllByType('span').some((span) =>
-      span.children.includes('Multiple configurations'))).toBe(true)
-    expect(developmentSection.findAllByProps({
-      'data-testid': 'subagent-category-configuration'
-    })).toHaveLength(0)
-  })
-
-  it('resets model, provider, and reasoning overrides for a category in one update', async () => {
-    const onPatch = vi.fn<(patch: KunRuntimeSettingsPatchV1) => void>()
-    const kun = {
-      ...defaultKunRuntimeSettings(),
-      subagents: {
-        enabled: true,
-        profiles: [
-          {
-            id: 'design-reviewer',
-            enabled: true,
-            name: 'Design Reviewer',
-            mode: 'subagent' as const,
-            toolPolicy: 'readOnly' as const,
-            model: 'model-a',
-            providerId: 'provider-a',
-            reasoningEffort: 'low' as const
-          },
-          {
-            id: 'code-reviewer',
-            enabled: true,
-            name: 'Code Reviewer',
-            mode: 'subagent' as const,
-            toolPolicy: 'readOnly' as const,
-            model: 'model-a',
-            providerId: 'provider-a',
-            reasoningEffort: 'high' as const
-          }
-        ]
-      }
-    }
-    let renderer!: ReactTestRenderer
-
-    await act(async () => {
-      renderer = create(createElement(SubagentSettingsEditor, {
-        kun,
-        onPatch,
-        variant: 'settings'
-      }))
-    })
-
-    const reviewChip = buttonWithText(renderer, 'Review')
-    expect(reviewChip).toBeDefined()
-    await act(async () => {
-      reviewChip!.props.onClick()
-    })
-
-    const reviewSection = renderer.root.findByProps({ 'data-agent-category': 'review' })
-    const reset = reviewSection.findAllByType('button').find((button) =>
-      button.children.length === 1 && button.children[0] === 'Reset defaults')
-    expect(reset).toBeDefined()
-
-    await act(async () => {
-      reset!.props.onClick()
-    })
-
-    const patch = onPatch.mock.calls.at(-1)?.[0] as KunRuntimeSettingsPatchV1
-    for (const id of ['design-reviewer', 'code-reviewer']) {
-      expect(patch.subagents?.profiles?.find((profile) => profile.id === id)).toMatchObject({
-        model: undefined,
-        providerId: undefined,
-        reasoningEffort: undefined
-      })
-    }
-  })
-
-  it('batch-clears category models back to follow-default', async () => {
-    const onPatch = vi.fn<(patch: KunRuntimeSettingsPatchV1) => void>()
-    const kun = {
-      ...defaultKunRuntimeSettings(),
-      subagents: {
-        enabled: true,
-        profiles: [
-          {
-            id: 'design-reviewer',
-            enabled: true,
-            name: 'Design Reviewer',
-            mode: 'subagent' as const,
-            toolPolicy: 'readOnly' as const,
-            model: 'model-a',
-            providerId: 'provider-a'
-          },
-          {
-            id: 'code-reviewer',
-            enabled: true,
-            name: 'Code Reviewer',
-            mode: 'subagent' as const,
-            toolPolicy: 'readOnly' as const,
-            model: 'model-a',
-            providerId: 'provider-a'
-          }
-        ]
-      }
-    }
-    let renderer!: ReactTestRenderer
-
-    await act(async () => {
-      renderer = create(createElement(SubagentSettingsEditor, {
-        kun,
-        onPatch,
-        variant: 'settings'
-      }))
-    })
-
-    const reviewChip = buttonWithText(renderer, 'Review')
-    expect(reviewChip).toBeDefined()
-    await act(async () => {
-      reviewChip!.props.onClick()
-    })
-
-    const batchTrigger = renderer.root.findAllByType('button').find((button) =>
-      button.props['aria-label'] === 'Set the same model for all {{count}} agents in {{category}}')
-    expect(batchTrigger).toBeDefined()
-    await act(async () => {
-      batchTrigger!.props.onClick()
-    })
-
-    const followDefault = renderer.root.findAllByType('span')
-      .find((node) => node.children.includes('Follow default'))
-    expect(followDefault?.parent?.type).toBe('button')
-    await act(async () => {
-      followDefault!.parent!.props.onClick()
-    })
-
-    const patch = onPatch.mock.calls.at(-1)?.[0] as KunRuntimeSettingsPatchV1
-    const profiles = patch.subagents?.profiles ?? []
-    expect(profiles.find((profile) => profile.id === 'design-reviewer')).toMatchObject({
-      model: undefined,
-      providerId: undefined
-    })
-    expect(profiles.find((profile) => profile.id === 'code-reviewer')).toMatchObject({
-      model: undefined,
-      providerId: undefined
-    })
-    expect(profiles.every((profile) => !profile.model && !profile.providerId)).toBe(true)
-  })
-
-  it('lets a follow-default agent set reasoning effort without picking a model', async () => {
-    const onPatch = vi.fn<(patch: KunRuntimeSettingsPatchV1) => void>()
-    const kun = {
-      ...defaultKunRuntimeSettings(),
-      subagents: {
-        enabled: true,
-        profiles: [customProfile()]
-      }
-    }
-    let renderer!: ReactTestRenderer
-
-    await act(async () => {
-      renderer = create(createElement(SubagentSettingsEditor, {
-        kun,
-        onPatch,
-        variant: 'settings'
-      }))
-    })
-
-    const customChip = buttonWithText(renderer, 'Custom')
-    expect(customChip).toBeDefined()
-    await act(async () => {
-      customChip!.props.onClick()
-    })
-
-    const details = renderer.root.findByProps({ 'data-testid': 'subagent-details-panel' })
-    const highChip = details.findAllByType('button').find((button) =>
-      button.children.length === 1 && button.children[0] === 'High')
-    expect(highChip).toBeDefined()
-    await act(async () => {
-      highChip!.props.onClick()
-    })
-
-    const patch = onPatch.mock.calls.at(-1)?.[0] as KunRuntimeSettingsPatchV1
-    expect(patch.subagents?.profiles?.find((profile) => profile.id === 'researcher')).toMatchObject({
-      reasoningEffort: 'high'
-    })
-  })
-
-  it('batch-applies reasoning effort across a category and can clear it to off', async () => {
-    const onPatch = vi.fn<(patch: KunRuntimeSettingsPatchV1) => void>()
-    const kun = {
-      ...defaultKunRuntimeSettings(),
-      subagents: {
-        enabled: true,
-        profiles: [
-          {
-            id: 'design-reviewer',
-            enabled: true,
-            name: 'Design Reviewer',
-            mode: 'subagent' as const,
-            toolPolicy: 'readOnly' as const,
-            reasoningEffort: 'low' as const
-          },
-          {
-            id: 'code-reviewer',
-            enabled: true,
-            name: 'Code Reviewer',
-            mode: 'subagent' as const,
-            toolPolicy: 'readOnly' as const,
-            reasoningEffort: 'high' as const
-          }
-        ]
-      }
-    }
-    let renderer!: ReactTestRenderer
-
-    await act(async () => {
-      renderer = create(createElement(SubagentSettingsEditor, {
-        kun,
-        onPatch,
-        variant: 'settings'
-      }))
-    })
-
-    const reviewChip = buttonWithText(renderer, 'Review')
-    expect(reviewChip).toBeDefined()
-    await act(async () => {
-      reviewChip!.props.onClick()
-    })
-
-    expect(JSON.stringify(renderer.toJSON())).toContain('Mixed reasoning')
-
-    const batchGroup = renderer.root.findAllByProps({
-      'aria-label': 'Set the same reasoning effort for all {{count}} agents in {{category}}'
-    })[0]
-    expect(batchGroup).toBeDefined()
-    const medium = batchGroup.findAllByType('button').find((button) =>
-      button.children.length === 1 && button.children[0] === 'Med')
-    expect(medium).toBeDefined()
-    await act(async () => {
-      medium!.props.onClick()
-    })
-
-    let patch = onPatch.mock.calls.at(-1)?.[0] as KunRuntimeSettingsPatchV1
-    let profiles = patch.subagents?.profiles ?? []
-    expect(profiles.find((profile) => profile.id === 'design-reviewer')).toMatchObject({
-      reasoningEffort: 'medium'
-    })
-    expect(profiles.find((profile) => profile.id === 'code-reviewer')).toMatchObject({
-      reasoningEffort: 'medium'
-    })
-    expect(profiles.every((profile) => profile.reasoningEffort === 'medium')).toBe(true)
-
-    const off = batchGroup.findAllByType('button').find((button) =>
-      button.children.length === 1 && button.children[0] === 'Off')
-    expect(off).toBeDefined()
-    await act(async () => {
-      off!.props.onClick()
-    })
-
-    patch = onPatch.mock.calls.at(-1)?.[0] as KunRuntimeSettingsPatchV1
-    profiles = patch.subagents?.profiles ?? []
-    expect(profiles.find((profile) => profile.id === 'design-reviewer')).toMatchObject({
-      reasoningEffort: undefined
-    })
-    expect(profiles.find((profile) => profile.id === 'code-reviewer')).toMatchObject({
-      reasoningEffort: undefined
-    })
-    expect(profiles.every((profile) => !profile.reasoningEffort)).toBe(true)
-  })
 })

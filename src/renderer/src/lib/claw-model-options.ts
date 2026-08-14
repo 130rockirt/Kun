@@ -1,8 +1,8 @@
 import {
   DEFAULT_CLAW_MODEL,
-  listModelProviderModelIds,
   type AppSettingsV1
 } from '@shared/app-settings'
+import { listModelProviderModelIds } from '@shared/app-settings-provider-core'
 
 export function mergeClawModelOptions(
   modelIds: readonly string[],

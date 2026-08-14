@@ -9,6 +9,7 @@ import {
   defaultProductionSettingsPath
 } from './manager-discovery.js'
 import { startServiceManager } from './service-manager.js'
+import { RuntimeBuildIdSchema } from '../contracts/runtime-info.js'
 
 export const KUN_MANAGER_READY_PREFIX = 'KUN_MANAGER_READY '
 
@@ -30,11 +31,13 @@ export async function main(): Promise<number> {
   const startedAt = new Date().toISOString()
   const dataDir = process.env.KUN_MANAGER_DATA_DIR?.trim() || join(homedir(), '.kun', 'data')
   const settingsPath = process.env.KUN_MANAGER_SETTINGS_PATH?.trim() || defaultProductionSettingsPath()
+  const buildId = RuntimeBuildIdSchema.safeParse(process.env.KUN_RUNTIME_BUILD_ID?.trim())
   const handle = await startServiceManager({
     controlDir,
     managerToken,
     instanceId,
     startedAt,
+    ...(buildId.success ? { buildId: buildId.data } : {}),
     dataDir,
     settingsPath,
     ...(process.env.KUN_MANAGER_LOG_PATH?.trim()

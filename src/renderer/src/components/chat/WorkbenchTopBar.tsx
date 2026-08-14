@@ -100,6 +100,10 @@ export function WorkbenchTopActions({
   const [failedIconIds, setFailedIconIds] = useState<Set<string>>(() => new Set())
   const [guiUpdateState, setGuiUpdateState] = useState<GuiUpdateState>({ status: 'idle' })
   const [applyingGuiUpdate, setApplyingGuiUpdate] = useState(false)
+  const [restartingKunServe, setRestartingKunServe] = useState(false)
+  const [restartKunServeError, setRestartKunServeError] = useState('')
+  const restartKunServeAvailable =
+    typeof window !== 'undefined' && typeof window.kunGui?.restartKunServe === 'function'
   const editorMenuRef = useRef<HTMLDivElement>(null)
   const selectedEditor = useMemo(
     () => editors.find((editor) => editor.id === selectedEditorId) ?? editors[0],
@@ -275,6 +279,24 @@ export function WorkbenchTopActions({
     }
   }
 
+  const restartKunServe = async (): Promise<void> => {
+    if (restartingKunServe || !restartKunServeAvailable) return
+    setRestartKunServeError('')
+    setRestartingKunServe(true)
+    try {
+      const result = await window.kunGui.restartKunServe()
+      if (result.error) setRestartKunServeError(result.error)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      setRestartKunServeError(message)
+      if (typeof window.kunGui?.logError === 'function') {
+        await window.kunGui.logError('runtime-restart-serve', 'Top bar Kun service restart failed', { message })
+      }
+    } finally {
+      setRestartingKunServe(false)
+    }
+  }
+
   const renderGuiUpdateIcon = (): ReactElement => {
     if (guiUpdateState.status === 'downloading' || guiUpdateState.status === 'installing' || applyingGuiUpdate) {
       return <Loader2 className="h-4 w-4 animate-spin" strokeWidth={2} />
@@ -379,6 +401,25 @@ export function WorkbenchTopActions({
           <PanelRight className={TOPBAR_ICON_CLASS} strokeWidth={1.75} />
         </button>
       ) : null}
+
+      <button
+        type="button"
+        onClick={() => void restartKunServe()}
+        disabled={restartingKunServe || !restartKunServeAvailable}
+        className="ds-topbar-action-button inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--ds-radius-control)] border border-amber-200/75 bg-white/70 text-amber-600/85 shadow-[0_1px_2px_rgba(15,23,42,0.04),inset_0_1px_0_rgba(255,255,255,0.72)] backdrop-blur-sm transition hover:border-amber-300/90 hover:bg-amber-50/90 hover:text-amber-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400/25 disabled:cursor-not-allowed disabled:opacity-50 dark:border-amber-800/55 dark:bg-amber-950/15 dark:text-amber-400/85 dark:shadow-none dark:hover:border-amber-700/80 dark:hover:bg-amber-950/35 dark:hover:text-amber-300"
+        data-tooltip={restartingKunServe
+          ? t('restartKunServeRestarting')
+          : restartKunServeError || t('restartKunServeTooltip')}
+        aria-label={restartingKunServe
+          ? t('restartKunServeRestarting')
+          : t('restartKunServe')}
+      >
+        {restartingKunServe ? (
+          <Loader2 className="h-4 w-4 animate-spin" strokeWidth={2} />
+        ) : (
+          <RefreshCw className="h-4 w-4" strokeWidth={1.85} />
+        )}
+      </button>
     </div>
   )
 }

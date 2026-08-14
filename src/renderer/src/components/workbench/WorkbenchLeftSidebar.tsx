@@ -1,10 +1,11 @@
 import { Suspense, type ComponentProps, type PointerEventHandler, type ReactElement } from 'react'
 import type { SettingsRouteSection } from '../../store/chat-store'
-import { DesignSidebar } from '../design/DesignSidebar'
 import { Sidebar } from '../chat/Sidebar'
 import { WriteSidebar } from '../write/WriteSidebar'
 import type { RegisteredContribution } from '../../extensions/contribution-registry'
 import { ExtensionViewOutlet } from '../../extensions/ControlledContributionSurfaces'
+import { normalizeWorkbenchRoute } from './workbench-route'
+import { workbenchDividerClassName } from './workbench-divider'
 
 type CodeSidebarProps = ComponentProps<typeof Sidebar>
 
@@ -31,11 +32,9 @@ export type WorkbenchLeftSidebarProps = {
   onPinThread: CodeSidebarProps['onPinThread']
   onArchiveThread: CodeSidebarProps['onArchiveThread']
   onDeleteThread: CodeSidebarProps['onDeleteThread']
-  onDeleteDrawing: (documentId: string) => void | Promise<void>
   onRestoreThread: CodeSidebarProps['onRestoreThread']
   onNewChat: CodeSidebarProps['onNewChat']
   onNewChatInWorkspace: CodeSidebarProps['onNewChatInWorkspace']
-  onNewRequirement: CodeSidebarProps['onNewRequirement']
   onOpenSettings: (section?: SettingsRouteSection) => void
   onOpenPlugins: CodeSidebarProps['onOpenPlugins']
   onOpenExtensions: CodeSidebarProps['onOpenExtensions']
@@ -43,7 +42,6 @@ export type WorkbenchLeftSidebarProps = {
   onToggleConnectPhone: CodeSidebarProps['onToggleConnectPhone']
   onCodeOpen: CodeSidebarProps['onCodeOpen']
   onWriteOpen: CodeSidebarProps['onWriteOpen']
-  onDesignOpen: CodeSidebarProps['onDesignOpen']
   onScheduleOpen: CodeSidebarProps['onScheduleOpen']
   onWorkflowOpen: CodeSidebarProps['onWorkflowOpen']
   onNewConversation: CodeSidebarProps['onNewConversation']
@@ -77,11 +75,9 @@ export function WorkbenchLeftSidebar({
   onPinThread,
   onArchiveThread,
   onDeleteThread,
-  onDeleteDrawing,
   onRestoreThread,
   onNewChat,
   onNewChatInWorkspace,
-  onNewRequirement,
   onOpenSettings,
   onOpenPlugins,
   onOpenExtensions,
@@ -89,13 +85,13 @@ export function WorkbenchLeftSidebar({
   onToggleConnectPhone,
   onCodeOpen,
   onWriteOpen,
-  onDesignOpen,
   onScheduleOpen,
   onWorkflowOpen,
   onNewConversation,
   onBeginResize
 }: WorkbenchLeftSidebarProps): ReactElement | null {
   if (collapsed) return null
+  const normalizedRoute = normalizeWorkbenchRoute(route)
   return (
     <>
       <div className="min-h-0 shrink-0" style={{ width }}>
@@ -105,23 +101,15 @@ export function WorkbenchLeftSidebar({
             workspaceRoot={workspaceRoot}
             onClose={onCloseExtensionView}
           />
-        ) : route === 'design' ? (
-          <DesignSidebar
-            onCodeOpen={onCodeOpen}
-            onWriteOpen={onWriteOpen}
-            onDesignOpen={onDesignOpen}
-            onOpenSettings={onOpenSettings}
-            onToggleTheme={onToggleTheme}
-            onDeleteDrawing={onDeleteDrawing}
-          />
-        ) : route === 'write' ? (
+        ) : normalizedRoute === 'write' ? (
           <Suspense fallback={<SidebarFallback />}>
             <WriteSidebar
               activeView="write"
               connectPhoneSidebarOpen={connectPhoneSidebarOpen}
+              focusModeEnabled={focusModeEnabled}
               onCodeOpen={onCodeOpen}
               onWriteOpen={onWriteOpen}
-              onDesignOpen={onDesignOpen}
+              onFocusModeChange={onFocusModeChange}
               onOpenSettings={onOpenSettings}
               onToggleConnectPhone={onToggleConnectPhone}
             />
@@ -146,7 +134,6 @@ export function WorkbenchLeftSidebar({
             onRestoreThread={onRestoreThread}
             onNewChat={onNewChat}
             onNewChatInWorkspace={onNewChatInWorkspace}
-            onNewRequirement={onNewRequirement}
             onOpenSettings={onOpenSettings}
             onOpenPlugins={onOpenPlugins}
             onOpenExtensions={onOpenExtensions}
@@ -156,7 +143,6 @@ export function WorkbenchLeftSidebar({
             onToggleConnectPhone={onToggleConnectPhone}
             onCodeOpen={onCodeOpen}
             onWriteOpen={onWriteOpen}
-            onDesignOpen={onDesignOpen}
             onScheduleOpen={onScheduleOpen}
             onWorkflowOpen={onWorkflowOpen}
             onNewConversation={onNewConversation}
@@ -166,7 +152,7 @@ export function WorkbenchLeftSidebar({
       <div
         role="separator"
         aria-orientation="vertical"
-        className="ds-workbench-divider ds-no-drag relative z-20 shrink-0 cursor-col-resize"
+        className={workbenchDividerClassName(normalizedRoute)}
         onPointerDown={onBeginResize}
       />
     </>

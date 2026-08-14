@@ -1,4 +1,4 @@
-# Write 文本编辑的 Recent Edits 意图上下文
+# Work 文本编辑的 Recent Edits 意图上下文
 
 这份文档说明本轮新增的“最近编辑上下文”能力。它解决的问题是：用户刚刚做过一串编辑后，再选中一段文字让 AI 编辑时，模型应该知道“上一秒发生了什么”，从而更好地理解“继续这样改”“同样替换”“保持这个风格”这类弱指令。
 
@@ -8,11 +8,11 @@
 
 - `prefix / suffix`：可编辑范围前后的 provider 上下文。
 - `original`：当前要替换的选区或段落。
-- BM25 + 关键词 RAG：从写作空间其他文件召回术语、事实和风格片段。
+- BM25 + 关键词 RAG：从工作空间其他文件召回术语、事实和风格片段。
 
 这些上下文能解释“当前段落是什么”，但不能解释“用户刚刚在怎么改”。例如：
 
-1. 用户手动把第一处 `DeepSeek GUI` 改成 `Write mode`。
+1. 用户手动把第一处 `DeepSeek GUI` 改成 `Work mode`。
 2. 用户又选中同一段里的另一个词，输入“继续这样改”。
 
 没有 recent edits 时，模型只能猜“这样”指什么。新增能力会把最近编辑作为意图信号注入 prompt。
@@ -93,7 +93,7 @@ Recent local edits in this file. Treat these as intent signals...
 
 [1] 2s ago; source=user; range=20-32
 Deleted: DeepSeek GUI
-Inserted: Write mode
+Inserted: Work mode
 Around: Earlier term: [[edit]] should be consistent.
 
 Original edit scope:
@@ -109,7 +109,7 @@ Original edit scope:
 
 ## 排障看板
 
-为了定位“模型为什么没按预期编辑/补全”，设置页的 Write 模式区域新增了 AI 写作调用日志弹窗。inline edit 和 inline completion 都复用 `write:inline-completion` 调用；编辑请求会以 `mode: "edit"` 记录在主进程内存中，用户可以刷新查看最近记录，也可以一键清空。
+为了定位“模型为什么没按预期编辑/补全”，设置页的 Work 区域新增了 AI 写作调用日志弹窗。inline edit 和 inline completion 都复用 `write:inline-completion` 调用；编辑请求会以 `mode: "edit"` 记录在主进程内存中，用户可以刷新查看最近记录，也可以一键清空。
 
 文本编辑记录展示：
 

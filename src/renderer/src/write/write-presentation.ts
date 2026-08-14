@@ -9,14 +9,14 @@ function deckNameFromPath(value: string): string {
   return safe || 'presentation'
 }
 
-/** PPT Master v1 intentionally accepts only plain Markdown, not MDX. */
+/** The native PPT workflow intentionally accepts only plain Markdown, not MDX. */
 export function isPresentationMarkdownPath(path: string | null | undefined): boolean {
   return Boolean(path && /\.(?:md|markdown)$/i.test(path.trim()))
 }
 
 /**
- * Explicitly activates the managed wrapper and preserves the source-file
- * contract even if the broader Write context later changes.
+ * Routes a new Write request to the dedicated native PPTX child while keeping
+ * the source-file contract visible in the exact user turn.
  */
 export function buildWritePresentationPrompt(input: {
   workspaceRoot: string
@@ -24,15 +24,14 @@ export function buildWritePresentationPrompt(input: {
 }): string {
   const deckName = deckNameFromPath(input.sourcePath)
   return [
-    '$ppt-master',
-    '请使用 PPT Master 把当前 Markdown 制作为原生可编辑的 PPTX。',
+    '请调用专用的 `ppt_agent`（start）把当前 Markdown 制作为原生可编辑的 PPTX。',
     '',
-    `唯一来源 Markdown：${input.sourcePath}`,
+    `唯一内容来源 Markdown：${input.sourcePath}`,
     `工作区：${input.workspaceRoot}`,
-    `PPT 项目目录：.kun-presentations/${deckName}`,
     `最终文件：presentations/${deckName}.pptx`,
     '',
-    '先读取 Markdown 并给出幻灯片大纲、建议页数、受众和视觉方向；再调用 ppt_master_confirm_design 展示原生确认卡。只有我在确认卡中选择“Generate PPT”后，才能继续生成，并把返回的 approval_token 传给每次 ppt_master_run 调用。',
-    '不要修改、重命名或移动来源 Markdown；导入项目时必须复制来源。确认后使用 ppt_master_run 依次初始化、导入、检查、整理并导出。'
+    '这是 Work 一键生成：请跳过视觉方向选择，根据内容和演示设计规范自动确定结构与视觉方案，先生成完整预览供评审，获得批准后再导出 PPTX。',
+    '若当前回合没有提供 `ppt_agent`，请明确告知该功能未启用；不要改用旧版 PPT 技能、通用子代理或其他生成路径。',
+    '不要修改、重命名或移动来源 Markdown。'
   ].join('\n')
 }

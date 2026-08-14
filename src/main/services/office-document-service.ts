@@ -3,25 +3,48 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { pathToFileURL } from 'node:url'
 import { app, BrowserWindow } from 'electron'
 import sharp from 'sharp'
-import yauzl from 'yauzl'
 import {
   MAX_RUNTIME_DOCUMENT_SOURCE_BYTES,
   MAX_RUNTIME_DOCUMENT_TEXT_CHARS,
+  isLegacyOfficeDocumentFormat,
   officeDocumentFormatFromName,
-  officeDocumentMimeType,
+  officeDocumentPreviewSrcDoc,
+  officeDocumentPreviewFormatFromName,
+  officeDocumentPreviewMimeType,
+  type LegacyOfficeDocumentFormat,
+  type OfficeDocumentReadFailure,
+  type OfficeDocumentReadSuccess,
   type LocalOfficeDocumentReadResult,
   type LocalOfficeDocumentTarget,
   type OfficeDocumentFormat,
+  type OfficeDocumentPreviewFormat,
   type OfficeDocumentVisualPreview
 } from '../../shared/office-document'
+import {
+  extractOfficeDocumentSheetNames,
+  isSafeOfficeDocumentDataImage,
+  sanitizeOfficeDocumentHtml,
+  selectOfficeDocumentSheet
+} from './office-document-html'
+import {
+  convertLegacyOfficeDocument,
+  OfficeDocumentConversionError,
+  type LegacyOfficeDocumentConversion,
+  type LegacyOfficeDocumentConversionDependencies
+} from './office-document-legacy'
+import {
+  createOfficeDocumentSnapshot,
+  type OfficeDocumentSnapshot
+} from './office-document-snapshot'
+import { assertOoxmlPackageType } from './office-document-ooxml'
 
 const OFFICECLI_TIMEOUT_MS = 60_000
 const OFFICECLI_MAX_OUTPUT_BYTES = 2 * 1024 * 1024
 const OFFICECLI_MAX_CONCURRENCY = 2
 const OFFICECLI_VERSION = '1.0.141'
-const OOXML_CONTENT_TYPES_MAX_BYTES = 256 * 1024
 // The runtime's default preview/fallback limit is measured in Base64
 // characters. 384 KiB encodes to exactly 512 KiB, so keep the binary side at
 // or below that decoded ceiling.
@@ -36,28 +59,58 @@ type OfficeCliResult = {
   exitCode: number
 }
 
-type OfficeDocumentServiceDependencies = {
+type OfficePreviewSelection = { page?: number; sheetIndex?: number }
+
+type OfficeDocumentSemanticReadResult =
+  | OfficeDocumentReadSuccess<OfficeDocumentPreviewFormat>
+  | OfficeDocumentReadFailure
+
+export type OfficeDocumentServiceDependencies = {
   binaryPath?: string
   runOfficeCli?: (args: string[]) => Promise<OfficeCliResult>
   renderHtml?: (html: string) => Promise<OfficeDocumentVisualPreview>
   signal?: AbortSignal
-}
-
-const EXPECTED_MAIN_CONTENT_TYPE: Record<OfficeDocumentFormat, string> = {
-  docx: 'wordprocessingml.document.main+xml',
-  xlsx: 'spreadsheetml.sheet.main+xml',
-  pptx: 'presentationml.presentation.main+xml'
-}
+  convertLegacyDocument?: (
+    sourcePath: string,
+    sourceFormat: LegacyOfficeDocumentFormat,
+    dependencies: LegacyOfficeDocumentConversionDependencies
+  ) => Promise<LegacyOfficeDocumentConversion>
+} & Pick<
+  LegacyOfficeDocumentConversionDependencies,
+  'resolveLibreOfficeBinary' | 'runLibreOffice' | 'temporaryDirectory'
+>
 
 export async function readLocalOfficeDocument(
   target: LocalOfficeDocumentTarget,
   dependencies: OfficeDocumentServiceDependencies = {}
 ): Promise<LocalOfficeDocumentReadResult> {
+  // Keep the pre-existing local attachment reader scoped to modern OOXML. The
+  // workspace route opts into legacy conversion below without widening uploads.
+  const result = await readOfficeDocument(target, dependencies, false)
+  return result as LocalOfficeDocumentReadResult
+}
+
+async function readOfficeDocument(
+  target: LocalOfficeDocumentTarget,
+  dependencies: OfficeDocumentServiceDependencies,
+  allowLegacy: boolean,
+  previewSelection: OfficePreviewSelection = {}
+): Promise<OfficeDocumentSemanticReadResult> {
+  let conversion: LegacyOfficeDocumentConversion | undefined
+  let sourceSnapshot: OfficeDocumentSnapshot | undefined
   try {
     const filePath = target.path.trim()
-    const format = officeDocumentFormatFromName(filePath)
-    if (!filePath || !format) {
-      return { ok: false, code: 'unsupported_type', message: 'Expected a .docx, .xlsx, or .pptx file.' }
+    const sourceFormat = allowLegacy
+      ? officeDocumentPreviewFormatFromName(filePath)
+      : officeDocumentFormatFromName(filePath)
+    if (!filePath || !sourceFormat) {
+      return {
+        ok: false,
+        code: 'unsupported_type',
+        message: allowLegacy
+          ? 'Expected a .doc, .docx, .xls, .xlsx, .ppt, or .pptx file.'
+          : 'Expected a .docx, .xlsx, or .pptx file.'
+      }
     }
     const fileStat = await stat(filePath)
     if (!fileStat.isFile()) {
@@ -73,9 +126,29 @@ export async function readLocalOfficeDocument(
         message: `Office document exceeds the ${MAX_RUNTIME_DOCUMENT_SOURCE_BYTES} byte attachment limit.`
       }
     }
-    await assertOoxmlPackageType(filePath, format)
     const source = await readFile(filePath)
     const sourceSha256 = createHash('sha256').update(source).digest('hex')
+    sourceSnapshot = await createOfficeDocumentSnapshot(source, sourceFormat)
+    let renderPath = sourceSnapshot.path
+    let renderFormat: OfficeDocumentFormat
+    if (isLegacyOfficeDocumentFormat(sourceFormat)) {
+      const legacyDependencies: LegacyOfficeDocumentConversionDependencies = {
+        resolveLibreOfficeBinary: dependencies.resolveLibreOfficeBinary,
+        runLibreOffice: dependencies.runLibreOffice,
+        temporaryDirectory: dependencies.temporaryDirectory,
+        signal: dependencies.signal
+      }
+      conversion = await (dependencies.convertLegacyDocument ?? convertLegacyOfficeDocument)(
+        renderPath,
+        sourceFormat,
+        legacyDependencies
+      )
+      renderPath = conversion.path
+      renderFormat = conversion.format
+    } else {
+      renderFormat = sourceFormat
+    }
+    await assertOoxmlPackageType(renderPath, renderFormat)
     const run = dependencies.runOfficeCli ??
       ((args) => runOfficeCli(
         dependencies.binaryPath || 'officecli',
@@ -83,7 +156,7 @@ export async function readLocalOfficeDocument(
         dependencies.signal
       ))
 
-    const validation = await run(['validate', filePath, '--json'])
+    const validation = await run(['validate', renderPath, '--json'])
     let validationWarning: string | undefined
     if (validation.exitCode !== 0) {
       if (!isBenignOoxmlSchemaFailure(validation)) {
@@ -95,7 +168,7 @@ export async function readLocalOfficeDocument(
       validationWarning = summarizeOfficeCliFailure(validation, 'Office document validation warning')
     }
 
-    const semanticArgs = semanticViewArgs(filePath, format)
+    const semanticArgs = semanticViewArgs(renderPath, renderFormat)
     const semantic = await run(semanticArgs)
     assertOfficeCliSuccess(semantic, 'Office document text extraction failed')
     const rawText = semantic.stdout.trim()
@@ -105,45 +178,86 @@ export async function readLocalOfficeDocument(
       ? rawText.slice(0, MAX_RUNTIME_DOCUMENT_TEXT_CHARS)
       : rawText
 
-    const statsResult = await run(['view', filePath, 'stats', '--json']).catch(() => null)
+    const statsResult = await run(['view', renderPath, 'stats', '--json']).catch(() => null)
     const pageCount = statsResult?.exitCode === 0
-      ? extractPageCount(statsResult.stdout, format)
+      ? extractPageCount(statsResult.stdout, renderFormat)
       : undefined
+
+    const selectedPage = renderFormat !== 'xlsx' && previewSelection.page
+      ? pageCount ? Math.min(pageCount, previewSelection.page) : previewSelection.page
+      : undefined
+    let sanitizedHtml: string | undefined
+    let sheetNames: string[] | undefined
+    let selectedSheetIndex: number | undefined
+    let htmlPreviewFailure: string | undefined
+    try {
+      const htmlResult = await run(officeHtmlViewArgs(renderPath, renderFormat, selectedPage))
+      assertOfficeCliSuccess(htmlResult, 'Office document HTML preview failed')
+      sanitizedHtml = sanitizeOfficeDocumentHtml(htmlResult.stdout)
+      if (renderFormat === 'xlsx') {
+        sheetNames = extractOfficeDocumentSheetNames(sanitizedHtml)
+        if (previewSelection.sheetIndex !== undefined && sheetNames.length > 0) {
+          selectedSheetIndex = Math.max(0, Math.min(previewSelection.sheetIndex, sheetNames.length - 1))
+          sanitizedHtml = selectOfficeDocumentSheet(sanitizedHtml, selectedSheetIndex)
+        }
+      }
+    } catch (error) {
+      htmlPreviewFailure = boundedErrorMessage(error)
+    }
 
     let visualPreview: OfficeDocumentVisualPreview | undefined
     let previewUnavailableReason: string | undefined
     try {
       visualPreview = dependencies.renderHtml
         ? undefined
-        : await readCachedOfficePreview(sourceSha256)
-      if (!visualPreview) {
-        const htmlResult = await run(['view', filePath, 'html'])
-        assertOfficeCliSuccess(htmlResult, 'Office document HTML preview failed')
-        visualPreview = await (dependencies.renderHtml ?? renderOfficeHtmlPreview)(htmlResult.stdout)
-        if (!dependencies.renderHtml) await writeCachedOfficePreview(sourceSha256, visualPreview)
+        : await readCachedOfficePreview(sourceSha256, selectedPage, selectedSheetIndex)
+      if (!visualPreview && sanitizedHtml) {
+        visualPreview = await (dependencies.renderHtml ?? renderOfficeHtmlPreview)(sanitizedHtml)
+        if (!dependencies.renderHtml) {
+          await writeCachedOfficePreview(sourceSha256, visualPreview, selectedPage, selectedSheetIndex)
+        }
       }
     } catch (error) {
       previewUnavailableReason = boundedErrorMessage(error)
+    }
+    if (!visualPreview && htmlPreviewFailure && !previewUnavailableReason) {
+      previewUnavailableReason = htmlPreviewFailure
     }
 
     return {
       ok: true,
       path: filePath,
       name: basename(filePath),
-      format,
-      mimeType: officeDocumentMimeType(format),
+      format: sourceFormat,
+      mimeType: officeDocumentPreviewMimeType(sourceFormat),
       size: fileStat.size,
       mtimeMs: fileStat.mtimeMs,
       sourceSha256,
       documentText,
       ...(pageCount ? { pageCount } : {}),
+      ...(sheetNames?.length ? { sheetNames } : {}),
+      ...(selectedPage || selectedSheetIndex !== undefined
+        ? { previewSelection: {
+            ...(selectedPage ? { page: selectedPage } : {}),
+            ...(selectedSheetIndex !== undefined ? { sheetIndex: selectedSheetIndex } : {})
+          } }
+        : {}),
       truncated,
+      ...(sanitizedHtml ? { sanitizedHtml } : {}),
       ...(visualPreview ? { visualPreview } : {}),
       ...(previewUnavailableReason ? { previewUnavailableReason } : {}),
+      ...(conversion ? { convertedFromLegacy: true as const } : {}),
       ...(validationWarning ? { validationWarning } : {})
     }
   } catch (error) {
-    return { ok: false, code: 'office_document_failed', message: boundedErrorMessage(error) }
+    return {
+      ok: false,
+      code: error instanceof OfficeDocumentConversionError ? error.code : 'office_document_failed',
+      message: boundedErrorMessage(error)
+    }
+  } finally {
+    await conversion?.cleanup().catch(() => undefined)
+    await sourceSnapshot?.cleanup().catch(() => undefined)
   }
 }
 
@@ -151,6 +265,34 @@ function semanticViewArgs(filePath: string, format: OfficeDocumentFormat): strin
   if (format === 'docx') return ['view', filePath, 'annotated']
   if (format === 'xlsx') return ['view', filePath, 'text', '--max-lines', '4000']
   return ['view', filePath, 'outline']
+}
+
+export async function extractOfficeDocumentSemanticText(
+  filePath: string,
+  format: OfficeDocumentFormat,
+  options: {
+    binaryPath: string
+    signal?: AbortSignal
+    runOfficeCli?: (args: string[]) => Promise<OfficeCliResult>
+  }
+): Promise<string> {
+  const result = options.runOfficeCli
+    ? await options.runOfficeCli(semanticViewArgs(filePath, format))
+    : await runOfficeCli(options.binaryPath, semanticViewArgs(filePath, format), options.signal)
+  assertOfficeCliSuccess(result, 'Office document text extraction failed')
+  const text = result.stdout.trim()
+  if (!text) throw new Error('OfficeCLI returned no semantic document content.')
+  return text
+}
+
+function officeHtmlViewArgs(
+  filePath: string,
+  format: OfficeDocumentFormat,
+  page?: number
+): string[] {
+  const args = ['view', filePath, 'html']
+  if (!page || format === 'xlsx') return args
+  return [...args, '--page', String(page)]
 }
 
 function assertOfficeCliSuccess(result: OfficeCliResult, fallback: string): void {
@@ -312,8 +454,10 @@ export async function renderOfficeHtmlPreview(html: string): Promise<OfficeDocum
   const previewRoot = join(tmpdir(), 'kun-office-preview')
   const previewId = randomUUID()
   const htmlPath = join(previewRoot, `${previewId}.html`)
+  const sanitizedHtml = officeDocumentPreviewSrcDoc(sanitizeOfficeDocumentHtml(html))
   await mkdir(previewRoot, { recursive: true, mode: 0o700 })
-  await writeFile(htmlPath, html, { encoding: 'utf8', mode: 0o600 })
+  await writeFile(htmlPath, sanitizedHtml, { encoding: 'utf8', mode: 0o600 })
+  const previewUrl = pathToFileURL(htmlPath).toString()
   const previewWindow = new BrowserWindow({
     show: false,
     width: 1280,
@@ -333,7 +477,8 @@ export async function renderOfficeHtmlPreview(html: string): Promise<OfficeDocum
       callback(false)
     })
     previewWindow.webContents.session.webRequest.onBeforeRequest((details, callback) => {
-      const allowed = details.url.startsWith('file:') || details.url.startsWith('data:') || details.url === 'about:blank'
+      const allowed = details.url === previewUrl ||
+        (details.resourceType === 'image' && isSafeOfficeDocumentDataImage(details.url))
       callback({ cancel: !allowed })
     })
     await previewWindow.loadFile(htmlPath)
@@ -386,9 +531,11 @@ async function encodePreviewWithinLimit(
 }
 
 async function readCachedOfficePreview(
-  sourceSha256: string
+  sourceSha256: string,
+  page?: number,
+  sheetIndex?: number
 ): Promise<OfficeDocumentVisualPreview | undefined> {
-  const cachePath = officePreviewCachePath(sourceSha256)
+  const cachePath = officePreviewCachePath(sourceSha256, page, sheetIndex)
   try {
     const parsed = JSON.parse(await readFile(cachePath, 'utf8')) as OfficeDocumentVisualPreview
     if (
@@ -409,9 +556,11 @@ async function readCachedOfficePreview(
 
 async function writeCachedOfficePreview(
   sourceSha256: string,
-  preview: OfficeDocumentVisualPreview
+  preview: OfficeDocumentVisualPreview,
+  page?: number,
+  sheetIndex?: number
 ): Promise<void> {
-  const cachePath = officePreviewCachePath(sourceSha256)
+  const cachePath = officePreviewCachePath(sourceSha256, page, sheetIndex)
   const temporaryPath = `${cachePath}.${randomUUID()}.tmp`
   try {
     await mkdir(join(app.getPath('userData'), 'cache', 'office-preview'), {
@@ -425,68 +574,16 @@ async function writeCachedOfficePreview(
   }
 }
 
-function officePreviewCachePath(sourceSha256: string): string {
+function officePreviewCachePath(sourceSha256: string, page?: number, sheetIndex?: number): string {
+  const selection = page || sheetIndex !== undefined
+    ? `-p${page ?? 0}-s${sheetIndex ?? 0}`
+    : ''
   return join(
     app.getPath('userData'),
     'cache',
     'office-preview',
-    `${sourceSha256}-${OFFICECLI_VERSION}.json`
+    `${sourceSha256}${selection}-${OFFICECLI_VERSION}.json`
   )
-}
-
-async function assertOoxmlPackageType(filePath: string, format: OfficeDocumentFormat): Promise<void> {
-  const contentTypes = await readOoxmlContentTypes(filePath)
-  if (!contentTypes.includes(EXPECTED_MAIN_CONTENT_TYPE[format])) {
-    throw new Error(`File content does not match the .${format} OOXML format.`)
-  }
-}
-
-async function readOoxmlContentTypes(filePath: string): Promise<string> {
-  return new Promise<string>((resolve, reject) => {
-    yauzl.open(filePath, { lazyEntries: true, autoClose: true }, (openError, zip) => {
-      if (openError || !zip) {
-        reject(openError ?? new Error('Could not open OOXML package.'))
-        return
-      }
-      let settled = false
-      const finish = (callback: () => void): void => {
-        if (settled) return
-        settled = true
-        callback()
-      }
-      zip.once('error', (error) => finish(() => reject(error)))
-      zip.once('end', () => finish(() => reject(new Error('OOXML package is missing [Content_Types].xml.'))))
-      zip.on('entry', (entry) => {
-        if (entry.fileName !== '[Content_Types].xml') {
-          zip.readEntry()
-          return
-        }
-        if (entry.uncompressedSize > OOXML_CONTENT_TYPES_MAX_BYTES) {
-          finish(() => reject(new Error('OOXML content types manifest is unexpectedly large.')))
-          return
-        }
-        zip.openReadStream(entry, (streamError, stream) => {
-          if (streamError || !stream) {
-            finish(() => reject(streamError ?? new Error('Could not read OOXML content types.')))
-            return
-          }
-          const chunks: Buffer[] = []
-          let total = 0
-          stream.on('data', (chunk: Buffer) => {
-            total += chunk.length
-            if (total > OOXML_CONTENT_TYPES_MAX_BYTES) {
-              stream.destroy(new Error('OOXML content types manifest exceeds the read limit.'))
-              return
-            }
-            chunks.push(chunk)
-          })
-          stream.once('error', (error) => finish(() => reject(error)))
-          stream.once('end', () => finish(() => resolve(Buffer.concat(chunks).toString('utf8'))))
-        })
-      })
-      zip.readEntry()
-    })
-  })
 }
 
 function extractPageCount(raw: string, format: OfficeDocumentFormat): number | undefined {

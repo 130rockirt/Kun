@@ -6,6 +6,7 @@ import {
   GeminiCodeAssistModelClient,
   mapGeminiCodeAssistModel
 } from './gemini-code-assist-model-client.js'
+import { makeModelContextItem } from '../../domain/item.js'
 
 const createdAt = '2026-07-23T00:00:00.000Z'
 
@@ -76,6 +77,22 @@ describe('GeminiCodeAssistModelClient', () => {
         session_id: 'thread-one'
       }
     })
+  })
+
+  it('keeps private model context in chronological contents instead of systemInstruction', () => {
+    const capsule = makeModelContextItem({
+      id: 'context', threadId: 'thread-one', turnId: 'turn-history', stepIndex: 0,
+      contentDigest: 'digest', blocks: [], text: 'Dynamic persona capsule', createdAt
+    })
+    const body = buildGeminiCodeAssistRequest({
+      request: request({ prefix: [...request().prefix, capsule] }),
+      model: 'gemini-3.1-pro-preview',
+      projectId: 'project-one'
+    }) as { request: { systemInstruction?: unknown; contents: unknown[] } }
+    expect(JSON.stringify(body.request.systemInstruction)).not.toContain('Dynamic persona capsule')
+    expect(JSON.stringify(body.request.contents)).toContain('Dynamic persona capsule')
+    expect(JSON.stringify(body.request.contents).indexOf('Hello Gemini'))
+      .toBeLessThan(JSON.stringify(body.request.contents).indexOf('Dynamic persona capsule'))
   })
 
   it('emits SSE fragments as they arrive instead of buffering the whole response', async () => {

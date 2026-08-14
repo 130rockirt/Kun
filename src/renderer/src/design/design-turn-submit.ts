@@ -4,14 +4,17 @@ import { canvasOpErrorKey, takeLastCanvasOpErrors } from './canvas/apply-shape-o
 import { useCanvasSelectionStore } from './canvas/canvas-selection-store'
 import { useCanvasShapeStore } from './canvas/canvas-shape-store'
 import { useCanvasViewportStore } from './canvas/canvas-viewport-store'
+import { resolveGeneratedImagePlacementTarget } from './canvas/canvas-generated-image-replay'
 import { useDesignSystemStore } from './canvas/design-system-store'
 import {
   ensureDesignBoardArtifact,
-  findDesignBoardArtifact
+  findDesignBoardArtifact,
+  findDesignBoardArtifactById
 } from './design-board'
 import type { DesignHtmlElementContext } from './design-composer-context'
 import { useProjectDesignSystemStore } from './canvas/project-design-system-store'
 import type { DesignPromptSource } from './design-quality-repair-dispatch'
+import type { DesignArtifact } from './design-types'
 import {
   buildDesignTurnSendOverrides,
   type DesignTurnPromptState
@@ -33,6 +36,14 @@ import {
 import { useDesignTokensStore } from './design-tokens-store'
 import { useDesignWorkspaceStore } from './design-workspace-store'
 import type { DesignWorkspaceState } from './design-workspace-store-types'
+import type {
+  DesignDocumentTarget,
+  DesignTaskProfileInput
+} from '../agent/design-task-profile'
+import {
+  applyDesignTaskProfileContract,
+  designContextFromTaskProfile
+} from './design-task-profile-input'
 
 export type DesignTurnSubmitSendMessage = (
   text: string,
@@ -69,6 +80,8 @@ export type SubmitDesignTurnOptions = SubmitDesignTurnDeps & {
   source: DesignPromptSource
   sendMessage: DesignTurnSubmitSendMessage
   resolveProviderId: (model: string) => string
+  model?: string
+  providerId?: string
   reasoningEffort?: string
   serviceTier?: 'priority'
   expectedThreadId?: string
@@ -79,6 +92,16 @@ export type SubmitDesignTurnOptions = SubmitDesignTurnDeps & {
   explicitScreenShapeId?: string | null
   explicitSvgArtifactId?: string | null
   clearAutoRepairScope?: (scopeKey: string) => void
+  designTaskProfileForTarget?: (target: DesignDocumentTarget) => DesignTaskProfileInput
+  /**
+   * Board pinned by a locked task target. When present the board is resolved by
+   * id and a missing board is reported instead of re-selecting the most
+   * recently updated canvas artifact.
+   */
+  boardArtifactId?: string
+  waitForRuntimeAdmission?: boolean
+  /** Called after local preparation but immediately before the runtime request. */
+  onBeforeSend?: () => void | Promise<void>
 }
 
 export async function submitDesignTurn(
@@ -99,12 +122,14 @@ export async function submitDesignTurn(
   const initialDesignState = getDesignState()
   const turnContext = {
     workspaceRoot: initialDesignState.workspaceRoot || options.workspaceRoot,
-    documentId: initialDesignState.activeDocumentId
+    documentId: initialDesignState.activeDocumentId,
+    boardArtifactId: options.boardArtifactId
   }
   const fail = (message: string): SubmitDesignTurnResult => {
     getDesignState().setFileError(message)
     return { status: 'file-error', message }
   }
+  let boardArtifact: (DesignArtifact & { kind: 'canvas' }) | null = null
   const contextMatches = (boardId?: string): boolean => {
     const state = getDesignState()
     if (
@@ -114,16 +139,26 @@ export async function submitDesignTurn(
     ) {
       return false
     }
-    return !boardId || findDesignBoardArtifact(state.artifacts)?.id === boardId
+    if (!boardId) return true
+    // A locked board compares against the resolved target id; an unlocked
+    // target re-selects the current board so a board swap during the async
+    // ensure step is still detected.
+    if (turnContext.boardArtifactId) return boardArtifact?.id === boardId
+    return findDesignBoardArtifact(state.artifacts)?.id === boardId
   }
   const contextError = 'Design turn was cancelled because the active workspace or drawing changed.'
   if (!turnContext.documentId || !contextMatches()) return fail(contextError)
 
   let latestDesignState = initialDesignState
-  let boardArtifact = findDesignBoardArtifact(latestDesignState.artifacts)
+  boardArtifact = turnContext.boardArtifactId
+    ? findDesignBoardArtifactById(latestDesignState.artifacts, turnContext.boardArtifactId)
+    : findDesignBoardArtifact(latestDesignState.artifacts)
   try {
     if (!boardArtifact) {
-      boardArtifact = await ensureBoard(options.workspaceRoot)
+      // A locked board that no longer exists must fail loudly instead of
+      // silently retargeting the task to a different whiteboard.
+      if (turnContext.boardArtifactId) return { status: 'missing-board' }
+      boardArtifact = await ensureBoard(options.workspaceRoot, turnContext.documentId)
       if (!contextMatches(boardArtifact?.id)) return fail(contextError)
       latestDesignState = getDesignState()
     }
@@ -131,17 +166,35 @@ export async function submitDesignTurn(
     return fail(error instanceof Error ? error.message : String(error))
   }
   if (!boardArtifact) return { status: 'missing-board' }
+  const designDocumentTarget = {
+    documentId: turnContext.documentId,
+    boardArtifactId: boardArtifact.id
+  }
+  const designProfile = options.designTaskProfileForTarget?.(designDocumentTarget)
+  const turnDesignContext = designProfile
+    ? designContextFromTaskProfile(designProfile)
+    : latestDesignState.designContext
+  const targetWorkspaceState = designProfile
+    ? { ...latestDesignState, designContext: turnDesignContext }
+    : latestDesignState
   if (latestDesignState.activeArtifactId !== boardArtifact.id) {
     getDesignState().setActiveArtifact(boardArtifact.id)
   }
 
   const canvasDoc = getCanvasShapeState().document
   const selectedShapeIds = getCanvasSelectionState().selectedIds
+  const designImagePlacementTarget = designProfile?.outputMedium === 'image'
+    ? resolveGeneratedImagePlacementTarget({
+        document: canvasDoc,
+        selectedIds: selectedShapeIds,
+        userText: options.displayText || options.promptText
+      })
+    : null
   let resolvedTarget: ResolvedDesignTurnTarget
   try {
     resolvedTarget = await resolveTarget({
       promptText: options.promptText,
-      workspaceState: latestDesignState,
+      workspaceState: targetWorkspaceState,
       boardArtifact,
       canvasDocument: canvasDoc,
       selectedShapeIds,
@@ -179,7 +232,7 @@ export async function submitDesignTurn(
       promptText: options.promptText,
       resolvedTarget,
       artifacts: getDesignState().artifacts,
-      designContext: latestDesignState.designContext
+      designContext: turnDesignContext
     })
   } catch (error) {
     return failAfterResolve(error instanceof Error ? error.message : String(error))
@@ -189,7 +242,16 @@ export async function submitDesignTurn(
     return failAfterResolve(turnFiles.message)
   }
 
-  const promptState = getDesignState()
+  const livePromptState = getDesignState()
+  const promptState = designProfile
+    ? {
+        ...livePromptState,
+        designContext: turnDesignContext,
+        // This mutable workspace preference is intentionally not allowed to
+        // restyle an already profiled task.
+        generationPrompt: ''
+      }
+    : livePromptState
   const projectDesignMd = useProjectDesignSystemStore.getState()
   const canvasErrorKey = canvasOpErrorKey(options.workspaceRoot, promptState.activeDocumentId, boardArtifact.id)
   let promptPayload: DesignTurnPromptPayload
@@ -224,17 +286,25 @@ export async function submitDesignTurn(
   if (!contextMatches(boardArtifact.id)) return failAfterResolve(contextError)
   let sent: boolean
   try {
+    await options.onBeforeSend?.()
     sent = await options.sendMessage(
-      promptPayload.prompt,
+      designProfile
+        ? applyDesignTaskProfileContract(promptPayload.prompt, designProfile)
+        : promptPayload.prompt,
       'agent',
       buildDesignTurnSendOverrides({
         displayText: options.displayText,
         promptState: promptState as DesignTurnPromptState,
         resolveProviderId: options.resolveProviderId,
+        ...(options.model ? { model: options.model } : {}),
+        ...(options.providerId ? { providerId: options.providerId } : {}),
         ...(options.reasoningEffort ? { reasoningEffort: options.reasoningEffort } : {}),
         ...(options.serviceTier ? { serviceTier: options.serviceTier } : {}),
         ...(options.expectedThreadId ? { expectedThreadId: options.expectedThreadId } : {}),
         target: resolvedTarget.target,
+        ...(designProfile ? { designProfile, designDocumentTarget } : {}),
+        ...(designImagePlacementTarget ? { designImagePlacementTarget } : {}),
+        ...(options.waitForRuntimeAdmission ? { waitForRuntimeAdmission: true } : {}),
         attachmentIds: options.attachmentIds ?? [],
         attachments: options.attachments ?? [],
         ...(resolvedTarget.svgArtifactId ? {

@@ -26,7 +26,11 @@ import {
   runtimeMatchesExpectedBuild,
   stopSharedRuntime
 } from '../../../kun/src/cli/shared-runtime.js'
-import { resolveCliRuntimeFlavor } from '../../../kun/src/cli/runtime-flavor.js'
+import { stopSharedRuntimeForReplacement } from './kun-serve-replacement'
+import {
+  resolveCliRuntimeFlavor,
+  runtimeBuildIdForFlavor
+} from '../../../kun/src/cli/runtime-flavor.js'
 import { sameCanonicalPath } from '../../../kun/src/manager/canonical-path.js'
 
 const KUN_RUNTIME_ID = 'kun' as const
@@ -55,6 +59,15 @@ export const kunRuntimeAdapter = {
 
   ensureRunning(settings: AppSettingsV1): Promise<void> {
     return ensureResolvedKunRuntime(settings)
+  },
+
+  /**
+   * Start a fresh current-flavor owner after an explicit replacement. This
+   * bypasses normal active-turn reuse and verifies the bundled build before
+   * returning, so an updater cannot silently reconnect to an older serve.
+   */
+  ensureReplacementRunning(settings: AppSettingsV1): Promise<void> {
+    return ensureReplacementKunRuntime(settings)
   },
 
   /**
@@ -95,6 +108,45 @@ export const kunRuntimeAdapter = {
     await stopKunChildAndWait()
   },
 
+  /**
+   * Explicitly remove the current shared serve before a user-confirmed restart
+   * or an application-file update. Unlike ordinary health recovery, this may
+   * use a narrowly verified termination fallback when graceful shutdown fails.
+   */
+  async stopSharedForReplacementAndWait(settings: AppSettingsV1): Promise<void> {
+    const dataDir = expandDataDir(getKunRuntimeSettings(settings).dataDir)
+    await stopSharedRuntimeForReplacement(dataDir, fetch, sharedRuntimeScope(dataDir))
+    resolvedConnection = null
+    await stopKunChildAndWait()
+  },
+
+  /**
+   * A packaged production app owns the bundled build after an install/update.
+   * Custom binaries and development runtimes retain their normal attach policy.
+   */
+  async requiresBundledBuildReplacement(settings: AppSettingsV1): Promise<boolean> {
+    const runtime = getKunRuntimeSettings(settings)
+    const dataDir = expandDataDir(runtime.dataDir)
+    const runtimeFlavor = resolveCliRuntimeFlavor({ env: process.env })
+    const expectedBuildId = expectedKunRuntimeBuildId(
+      await resolveKunRuntimeBuildId(resolveKunExecutable(appRoot(), runtime.binaryPath)),
+      runtimeFlavor
+    )
+    const inspected = await inspectSharedRuntime(
+      dataDir,
+      fetch,
+      sharedRuntimeScope(dataDir, runtimeFlavor)
+    ).catch(() => null)
+    if (!inspected) return false
+    return bundledRuntimeBuildReplacementRequired({
+      isPackaged: app.isPackaged,
+      hasCustomBinary: Boolean(runtime.binaryPath.trim()),
+      runtimeFlavor,
+      expectedBuildId,
+      discoveredBuildId: inspected.discovery.buildId
+    })
+  },
+
   reclaimPort(port: number): Promise<{ ok: true } | { ok: false; message: string }> {
     return reclaimKunPort(port)
   },
@@ -130,13 +182,47 @@ async function ensureResolvedKunRuntime(settings: AppSettingsV1): Promise<void> 
   resolvedConnection = connection?.discovery ?? null
 }
 
+async function ensureReplacementKunRuntime(settings: AppSettingsV1): Promise<void> {
+  const connection = await startKunSharedRuntime(settings, { forceReplace: true })
+  resolvedConnection = connection?.discovery ?? null
+}
+
+export function expectedKunRuntimeBuildId(
+  sourceBuildId: string | undefined,
+  runtimeFlavor: ReturnType<typeof resolveCliRuntimeFlavor>
+): string | undefined {
+  return runtimeBuildIdForFlavor(sourceBuildId, runtimeFlavor)
+}
+
+export function bundledRuntimeBuildReplacementRequired(input: {
+  isPackaged: boolean
+  hasCustomBinary: boolean
+  runtimeFlavor: ReturnType<typeof resolveCliRuntimeFlavor>
+  expectedBuildId: string | undefined
+  discoveredBuildId: string | undefined
+}): boolean {
+  return input.isPackaged &&
+    !input.hasCustomBinary &&
+    input.runtimeFlavor === 'production' &&
+    Boolean(input.expectedBuildId) &&
+    input.discoveredBuildId !== input.expectedBuildId
+}
+
 async function refreshResolvedKunRuntime(settings: AppSettingsV1): Promise<boolean> {
   const runtime = getKunRuntimeSettings(settings)
   const dataDir = expandDataDir(runtime.dataDir)
-  const expectedBuildId = await resolveKunRuntimeBuildId(
+  const runtimeFlavor = resolveCliRuntimeFlavor({ env: process.env })
+  const sourceBuildId = await resolveKunRuntimeBuildId(
     resolveKunExecutable(runtime.binaryPath.trim() ? '' : appRoot(), runtime.binaryPath)
   )
-  const inspected = await inspectSharedRuntime(dataDir, fetch, sharedRuntimeScope(dataDir))
+  // Shared runtimes namespace development build identities by flavor. Compare
+  // against the same identity that `ensureSharedRuntime` publishes.
+  const expectedBuildId = expectedKunRuntimeBuildId(sourceBuildId, runtimeFlavor)
+  const inspected = await inspectSharedRuntime(
+    dataDir,
+    fetch,
+    sharedRuntimeScope(dataDir, runtimeFlavor)
+  )
     .catch(() => null)
   if (!inspected) {
     resolvedConnection = null
@@ -158,11 +244,13 @@ async function refreshResolvedKunRuntime(settings: AppSettingsV1): Promise<boole
   return true
 }
 
-function sharedRuntimeScope(dataDir: string): {
+function sharedRuntimeScope(
+  dataDir: string,
+  runtimeFlavor = resolveCliRuntimeFlavor({ env: process.env })
+): {
   runtimeFlavor: ReturnType<typeof resolveCliRuntimeFlavor>
   manager?: NonNullable<ReturnType<typeof getKunServiceManagerBinding>>
 } {
-  const runtimeFlavor = resolveCliRuntimeFlavor({ env: process.env })
   const manager = getKunServiceManagerBinding()
   return {
     runtimeFlavor,
@@ -215,8 +303,15 @@ export type RuntimeRequestLease = Readonly<{
 
 const DEFAULT_RUNTIME_GET_TIMEOUT_MS = 15_000
 const DEFAULT_RUNTIME_POST_TIMEOUT_MS = 60_000
+const THREAD_TIMELINE_GET_TIMEOUT_MS = 120_000
 const MODEL_CONNECTION_EVENTS_TIMEOUT_MARGIN_MS = 5_000
 const MAX_MODEL_CONNECTION_EVENTS_WAIT_MS = 120_000
+
+function isThreadTimelinePath(pathNorm: string): boolean {
+  const queryIndex = pathNorm.indexOf('?')
+  const pathname = queryIndex >= 0 ? pathNorm.slice(0, queryIndex) : pathNorm
+  return /^\/v1\/threads\/[^/]+\/timeline$/u.test(pathname)
+}
 
 export function resolveRuntimeRequestTimeoutMs(
   pathNorm: string,
@@ -227,6 +322,9 @@ export function resolveRuntimeRequestTimeoutMs(
   const fallback = method === 'POST'
     ? DEFAULT_RUNTIME_POST_TIMEOUT_MS
     : DEFAULT_RUNTIME_GET_TIMEOUT_MS
+  if (method === 'GET' && isThreadTimelinePath(pathNorm)) {
+    return THREAD_TIMELINE_GET_TIMEOUT_MS
+  }
   if (method !== 'GET' || !pathNorm.startsWith('/v1/model-connections/events?')) {
     return fallback
   }

@@ -34,7 +34,8 @@ describe('MessageTimeline empty hero routing', () => {
     const html = renderHero()
 
     expect(html).toContain('What would you like to do with Kun today?')
-    expect(html).toContain('Open a terminal and run kun to use the TUI.')
+    expect(html).toContain('Start with an idea, build it with code, or explore a design.')
+    expect(html).toContain('data-task-surface-selector="hero"')
     expect(html).not.toContain('ds-initial-usage-heatmap')
     expect(html).not.toContain('Expand calendar')
   })
@@ -42,7 +43,7 @@ describe('MessageTimeline empty hero routing', () => {
   it('routes offline, missing-workspace, and Claw states to their dedicated heroes', () => {
     const offlineHtml = renderHero({ ready: false })
     expect(offlineHtml).toContain('Kun is waking the local agent')
-    expect(offlineHtml).toContain('ds-runtime-wake-hero')
+    expect(offlineHtml).toContain('data-runtime-home-status="true"')
     expect(offlineHtml).not.toContain('ds-kun-state-')
     const workspaceHtml = renderHero({ hasWorkspace: false })
     expect(workspaceHtml).toContain('Choose working directory')

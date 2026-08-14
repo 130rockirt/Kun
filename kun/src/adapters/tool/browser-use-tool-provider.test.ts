@@ -96,6 +96,7 @@ describe('buildBrowserUseToolProviders', () => {
       toolKind: 'tool_call',
       effects: {
         network: true,
+        externalWrite: true,
         guiAutomation: true
       }
     })
@@ -181,7 +182,7 @@ describe('buildBrowserUseToolProviders', () => {
         attemptedAction: 'open',
         allowedActions: expect.arrayContaining(['open', 'snapshot']),
         requiredFields: ['action', 'url'],
-        allowedFields: ['action', 'url'],
+        allowedFields: ['action', 'url', 'newTab'],
         issueCodes: expect.arrayContaining(['invalid_field', 'unexpected_field']),
         issuePaths: ['url'],
         guidance: expect.stringContaining('open')
@@ -327,8 +328,10 @@ describe('buildBrowserUseToolProviders', () => {
         toolName: 'browser_use',
         action: expect.objectContaining({
           arguments: action,
+          kind: 'external-effect',
           effects: expect.objectContaining({
             network: true,
+            externalWrite: true,
             guiAutomation: true
           })
         })

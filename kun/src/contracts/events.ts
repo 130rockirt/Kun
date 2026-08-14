@@ -6,7 +6,7 @@ import {
   UserInputQuestionSchema,
   UserMessageSource
 } from './items.js'
-import { ThreadGoalSchema, ThreadTodoListSchema } from './threads.js'
+import { ThreadAgentSurface, ThreadGoalSchema, ThreadTodoListSchema } from './threads.js'
 import { UsageSnapshotSchema } from './usage.js'
 import { RuntimeErrorSeverity } from './errors.js'
 import {
@@ -29,6 +29,11 @@ import {
   TurnReasoningEffortSchema,
   TurnServiceTierSchema
 } from './turns.js'
+import { MAX_TURN_ATTACHMENT_IDS } from './attachments.js'
+import {
+  DesignDocumentTargetSchema,
+  DesignTaskProfileSchema
+} from './design-task-profile.js'
 
 /**
  * Persisted runtime events. Every event has a per-thread `seq` so the
@@ -79,6 +84,7 @@ export const RuntimeEventKind = z.enum([
   'context_snapshot',
   'usage',
   'error',
+  'canvas_receipt',
   'heartbeat'
 ])
 export type RuntimeEventKind = z.infer<typeof RuntimeEventKind>
@@ -128,6 +134,13 @@ const RuntimeEventBase = z.object({
     childLabel: z.string().optional(),
     childStatus: z.enum(['queued', 'running', 'completed', 'failed', 'aborted']),
     childSeq: z.number().int().nonnegative(),
+    childLauncher: z.preprocess(
+      (value) => (value === 'explore_agent' ? 'fast_context' : value),
+      z.enum(['delegate_task', 'fast_context', 'ppt_agent', 'component_design', 'graph'])
+    ).optional(),
+    childTerminationReason: z.enum(['user_stop', 'manual_stop', 'runtime_restart', 'child_error']).optional(),
+    resumable: z.boolean().optional(),
+    resumeCount: z.number().int().nonnegative().optional(),
     detached: z.boolean().optional(),
     // Observability metrics carried alongside the child lifecycle event so
     // the GUI can show prefix reuse, tool fan-out, timing, and cost per
@@ -142,6 +155,14 @@ const RuntimeEventBase = z.object({
     toolInvocations: z.number().int().nonnegative().optional(),
     durationMs: z.number().int().nonnegative().optional(),
     queuedMs: z.number().int().nonnegative().optional(),
+    summaryTruncated: z.boolean().optional(),
+    resultRef: z.object({
+      artifactId: z.string().min(1),
+      byteSize: z.number().int().nonnegative(),
+      lineCount: z.number().int().nonnegative(),
+      mimeType: z.literal('text/markdown')
+    }).strict().optional(),
+    resultUnavailableReason: z.string().min(1).max(500).optional(),
     totalTokens: z.number().int().nonnegative().optional(),
     cacheHitRate: z.number().min(0).max(1).nullable().optional(),
     costUsd: z.number().nonnegative().optional(),
@@ -186,10 +207,19 @@ export const ThreadLifecycleEvent = RuntimeEventBase.extend({
   mode: z.enum(['agent', 'plan']).optional(),
   workspace: z.string().optional(),
   additionalWorkspaces: z.array(z.string()).optional(),
+  knowledgeBases: z.array(z.object({
+    id: z.string(),
+    root: z.string(),
+    name: z.string(),
+    source: z.literal('write-workspace'),
+    access: z.literal('read-only')
+  })).optional(),
   approvalPolicy: ApprovalPolicySchema.optional(),
   approvalReviewer: ApprovalReviewerSchema.optional(),
   sandboxMode: SandboxModeSchema.optional(),
-  modelRequestCaptureEnabled: z.boolean().optional()
+  modelRequestCaptureEnabled: z.boolean().optional(),
+  agentSurface: ThreadAgentSurface.optional(),
+  designProfile: DesignTaskProfileSchema.optional()
 })
 export type ThreadLifecycleEvent = z.infer<typeof ThreadLifecycleEvent>
 
@@ -205,6 +235,7 @@ export const TurnLifecycleEvent = RuntimeEventBase.extend({
   text: z.string().optional(),
   displayText: z.string().optional(),
   messageSource: UserMessageSource.optional(),
+  attachmentIds: z.array(z.string().min(1)).max(MAX_TURN_ATTACHMENT_IDS).optional(),
   message: z.string().optional(),
   code: z.string().optional(),
   details: z.unknown().optional(),
@@ -218,7 +249,12 @@ export const TurnLifecycleEvent = RuntimeEventBase.extend({
   approvalPolicy: ApprovalPolicySchema.optional(),
   sandboxMode: SandboxModeSchema.optional(),
   approvalReviewer: ApprovalReviewerSchema.optional(),
-  mode: z.enum(['agent', 'plan']).optional()
+  mode: z.enum(['agent', 'plan']).optional(),
+  /** Durable thread ownership; `agentSurface` below is only the turn intent. */
+  threadAgentSurface: ThreadAgentSurface.optional(),
+  agentSurface: ThreadAgentSurface.optional(),
+  designProfile: DesignTaskProfileSchema.optional(),
+  designDocumentTarget: DesignDocumentTargetSchema.optional()
 })
 export type TurnLifecycleEvent = z.infer<typeof TurnLifecycleEvent>
 
@@ -304,7 +340,9 @@ export const ModelRequestRetryEvent = RuntimeEventBase.extend({
   attempt: z.number().int().positive(),
   maxAttempts: z.number().int().positive(),
   delayMs: z.number().int().nonnegative(),
-  reason: z.enum(['network', 'stream_transport']).optional()
+  reason: z.enum(['network', 'stream_transport', 'context_overflow']).optional(),
+  /** Sanitized upstream failure retained so a retry row can expose details. */
+  failureSummary: z.string().min(1).max(1_024).optional()
 })
 export type ModelRequestRetryEvent = z.infer<typeof ModelRequestRetryEvent>
 
@@ -486,6 +524,16 @@ export const HeartbeatEvent = RuntimeEventBase.extend({
 })
 export type HeartbeatEvent = z.infer<typeof HeartbeatEvent>
 
+export const CanvasReceiptEvent = RuntimeEventBase.extend({
+  kind: z.literal('canvas_receipt'),
+  itemId: z.string().min(1),
+  receiptKey: z.string().min(1),
+  status: z.enum(['applied', 'failed']),
+  errorCount: z.number().int().min(0).optional(),
+  affectedCount: z.number().int().min(0).optional()
+})
+export type CanvasReceiptEvent = z.infer<typeof CanvasReceiptEvent>
+
 export const RuntimeEvent = z.discriminatedUnion('kind', [
   ItemEvent,
   ThreadLifecycleEvent,
@@ -513,6 +561,7 @@ export const RuntimeEvent = z.discriminatedUnion('kind', [
   ContextSnapshotEvent,
   UsageEvent,
   ErrorEvent,
+  CanvasReceiptEvent,
   HeartbeatEvent
 ])
 export type RuntimeEvent = z.infer<typeof RuntimeEvent>

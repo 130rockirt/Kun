@@ -8,7 +8,7 @@ import type {
   SessionLatestUsageSnapshot,
   SessionUsageRecord
 } from '../ports/session-store.js'
-import type { ThreadStore, ThreadStoreListOptions } from '../ports/thread-store.js'
+import type { ThreadStore, ThreadStoreListOptions, ThreadStoreListPage } from '../ports/thread-store.js'
 import type { ThreadRecord, ThreadSummary } from '../contracts/threads.js'
 
 /**
@@ -151,6 +151,19 @@ export class LifecycleFencedThreadStore implements ThreadStore {
     return this.raw.list(options)
   }
 
+  async listPage(options?: ThreadStoreListOptions): Promise<ThreadStoreListPage> {
+    const rawListPage = this.raw.listPage
+    if (typeof rawListPage === 'function') return rawListPage.call(this.raw, options)
+    const threads = await this.raw.list(options)
+    const pageSize = typeof options?.limit === 'number' ? Math.max(1, Math.floor(options.limit)) : threads.length
+    const page = threads.slice(0, pageSize)
+    return {
+      threads: page,
+      hasMore: threads.length > pageSize,
+      ...(options?.cursor ? {} : { total: threads.length })
+    }
+  }
+
   get(threadId: string): Promise<ThreadRecord | null> {
     return this.raw.get(threadId)
   }
@@ -208,6 +221,10 @@ export class LifecycleFencedSessionStore implements SessionStore {
   readonly loadUsageRecords?: (options?: { threadId?: string }) => Promise<SessionUsageRecord[]>
   readonly loadLatestUsageSnapshots?: (options?: { threadIds?: string[] }) => Promise<SessionLatestUsageSnapshot[]>
   readonly compactItems?: SessionStore['compactItems']
+  readonly scheduleItemHistoryCompaction?: SessionStore['scheduleItemHistoryCompaction']
+  readonly scheduleUsageEventCompaction?: SessionStore['scheduleUsageEventCompaction']
+  readonly flushScheduledCompaction?: SessionStore['flushScheduledCompaction']
+  readonly loadItemPage?: SessionStore['loadItemPage']
 
   constructor(
     readonly raw: SessionStore,
@@ -241,6 +258,21 @@ export class LifecycleFencedSessionStore implements SessionStore {
           afterBytes: 0,
           itemCount: 0
         }, () => raw.compactItems!(threadId, options))
+    }
+    if (raw.scheduleItemHistoryCompaction) {
+      this.scheduleItemHistoryCompaction = (threadId) =>
+        raw.scheduleItemHistoryCompaction!(threadId)
+    }
+    if (raw.scheduleUsageEventCompaction) {
+      this.scheduleUsageEventCompaction = (threadId) =>
+        raw.scheduleUsageEventCompaction!(threadId)
+    }
+    if (raw.flushScheduledCompaction) {
+      this.flushScheduledCompaction = (threadId) =>
+        raw.flushScheduledCompaction!(threadId)
+    }
+    if (raw.loadItemPage) {
+      this.loadItemPage = (threadId, options) => raw.loadItemPage!(threadId, options)
     }
   }
 

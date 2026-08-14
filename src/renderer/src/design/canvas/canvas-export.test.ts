@@ -3,7 +3,10 @@ import { createDefaultShape, createEmptyDocument } from './canvas-types'
 import {
   bytesToBase64,
   canvasExportBounds,
+  canvasExportPortalFrameNames,
+  canvasPortalExportError,
   canvasRasterScale,
+  exportCanvasToWorkspace,
   extractCanvasAgentExportRequest,
   resolveCanvasExportImageSources
 } from './canvas-export'
@@ -22,6 +25,56 @@ describe('canvas export bounds', () => {
 
   it('does not export an empty board', () => {
     expect(canvasExportBounds(createEmptyDocument())).toBeNull()
+  })
+
+  it('identifies rendered HTML/SVG portals but ignores descendants of hidden parents', () => {
+    const document = createEmptyDocument()
+    const portal = createDefaultShape('frame', 0, 0)
+    portal.name = 'Checkout prototype'
+    portal.htmlArtifactId = 'checkout-html'
+    const svgPortal = createDefaultShape('frame', 200, 0)
+    svgPortal.name = 'Logo prototype'
+    svgPortal.embeddedArtifact = { id: 'logo-svg', kind: 'svg' }
+    const hiddenParent = createDefaultShape('frame', 400, 0)
+    hiddenParent.visible = false
+    const hiddenPortal = createDefaultShape('frame', 410, 10)
+    hiddenPortal.name = 'Hidden prototype'
+    hiddenPortal.htmlArtifactId = 'hidden-html'
+    hiddenPortal.parentId = hiddenParent.id
+    hiddenParent.children.push(hiddenPortal.id)
+    document.objects[portal.id] = { ...portal, parentId: document.rootId }
+    document.objects[svgPortal.id] = { ...svgPortal, parentId: document.rootId }
+    document.objects[hiddenParent.id] = { ...hiddenParent, parentId: document.rootId }
+    document.objects[hiddenPortal.id] = hiddenPortal
+    document.objects[document.rootId]!.children.push(portal.id, svgPortal.id, hiddenParent.id)
+
+    expect(canvasExportPortalFrameNames(document)).toEqual([
+      'Checkout prototype',
+      'Logo prototype'
+    ])
+    expect(canvasPortalExportError(document, 'agent')).toContain(
+      'Export the prototype source as HTML or PDF instead'
+    )
+  })
+
+  it('rejects agent export before silently omitting a rendered prototype preview', async () => {
+    const document = createEmptyDocument()
+    const portal = createDefaultShape('frame', 0, 0)
+    portal.embeddedArtifact = { id: 'prototype-svg', kind: 'svg' }
+    document.objects[portal.id] = { ...portal, parentId: document.rootId }
+    document.objects[document.rootId]!.children.push(portal.id)
+
+    await expect(exportCanvasToWorkspace({
+      sourceSvg: {} as SVGSVGElement,
+      document,
+      request: {
+        format: 'svg',
+        fileName: 'prototype-board.svg',
+        relativePath: '.deepseekgui-images/prototype-board.svg'
+      },
+      workspaceRoot: '/workspace',
+      rejectPortalPreviews: true
+    })).rejects.toThrow('cannot capture live HTML/SVG prototype previews')
   })
 
   it('keeps normal diagrams at 2x and caps huge raster exports below the IPC byte ceiling', () => {

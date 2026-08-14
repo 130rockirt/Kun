@@ -37,6 +37,8 @@ const CLIFF_DROP = 0.4
  * prefix) is reported ahead of a generic provider miss.
  */
 const REASON_PRIORITY: readonly CacheMissReason[] = [
+  'cache_partition_changed',
+  'attachment_history_unavailable',
   'stable_prefix_changed',
   'tool_catalog_changed',
   'skills_changed',
@@ -56,6 +58,8 @@ const REASON_TEXT: Record<CacheMissReason, string> = {
   endpoint_changed: 'the endpoint format changed, which starts a new provider cache',
   stable_prefix_changed: 'the stable system prefix changed and invalidated the cached prefix',
   tool_catalog_changed: 'the tool catalog changed (MCP/Skill tools), which invalidated the cached prefix',
+  cache_partition_changed: 'the request switched to a different mode or tool cache partition',
+  attachment_history_unavailable: 'a retained attachment was unavailable and changed the replay boundary',
   skills_changed: 'the active Skill set changed, which invalidated the cached prefix',
   cache_ttl_unknown: 'the provider cache TTL likely expired before this turn',
   provider_cache_miss: 'the provider reported a full cache miss for this turn',

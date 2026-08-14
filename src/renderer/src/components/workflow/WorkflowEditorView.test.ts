@@ -11,7 +11,10 @@ describe('WorkflowEditorView', () => {
     const nodeFs = 'node:fs/promises'
     const { readFile } = await import(/* @vite-ignore */ nodeFs)
     const css = await readFile(new URL('../../styles/workflow-canvas.css', import.meta.url), 'utf8')
-    const source = await readFile(new URL('./WorkflowEditorView.tsx', import.meta.url), 'utf8')
+    const [source, paletteSource] = await Promise.all([
+      readFile(new URL('./WorkflowEditorView.tsx', import.meta.url), 'utf8'),
+      readFile(new URL('./WorkflowEditorPalette.tsx', import.meta.url), 'utf8')
+    ])
 
     expect(WORKFLOW_EDITOR_HEADER_CLASS).toContain('workflow-editor-header')
     expect(WORKFLOW_EDITOR_HEADER_CLASS).toContain('ds-drag')
@@ -32,12 +35,12 @@ describe('WorkflowEditorView', () => {
     expect(css).toContain('padding-bottom: 0.5rem')
     expect(css).toContain(`:root[data-platform='darwin'] .${WORKFLOW_EDITOR_HEADER_SIDEBAR_COLLAPSED_CLASS}`)
     expect(css).toContain('var(--ds-collapsed-sidebar-titlebar-extra-inset)')
-    expect(source).toContain('className={WORKFLOW_EDITOR_SIDEBAR_CLASS}')
-    expect(source).toContain('className={WORKFLOW_EDITOR_BACK_BUTTON_CLASS}')
+    expect(paletteSource).toContain('className={WORKFLOW_EDITOR_SIDEBAR_CLASS}')
+    expect(paletteSource).toContain('className={WORKFLOW_EDITOR_BACK_BUTTON_CLASS}')
     expect(source).toContain('className="workflow-editor-overlay')
     expect(source).toContain('className="workflow-editor-canvas-shell')
     expect(source).toContain('className="workflow-editor-inspector')
-    expect(source.indexOf('className={WORKFLOW_EDITOR_SIDEBAR_CLASS}')).toBeLessThan(
+    expect(source.indexOf('<WorkflowEditorPalette')).toBeLessThan(
       source.indexOf('className={`${WORKFLOW_EDITOR_HEADER_CLASS}')
     )
   })

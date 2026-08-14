@@ -1,9 +1,16 @@
 import { createElement } from 'react'
 import { act, create, type ReactTestRenderer } from 'react-test-renderer'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { defaultKunRuntimeSettings, normalizeAppSettings } from '@shared/app-settings'
+import type { AppSettingsV1 } from '@shared/app-settings'
 import { useChatStore } from '../store/chat-store'
 import type { ChatState } from '../store/chat-store-types'
 import { createGuiPlanArtifact, useGuiPlanStore } from '../plan/plan-store'
+import {
+  resetPlanWorktreePreferenceStoreForTests,
+  usePlanWorktreePreferenceStore
+} from '../plan/plan-worktree-preference-store'
+import { rendererRuntimeClient } from '../agent/runtime-client'
 import {
   buildDraftGuiPlanTurnOverrides,
   buildGuiPlanTurnOverrides,
@@ -92,12 +99,16 @@ describe('workbench plan build orchestration', () => {
   let renderer: ReactTestRenderer | null = null
 
   beforeEach(() => {
+    rendererRuntimeClient.invalidateSettings()
+    resetPlanWorktreePreferenceStoreForTests()
     useChatStore.setState({
+      activeThreadId: 'thread-current',
       busy: false,
       runtimeConnection: 'ready',
       graphEnabled: true,
       composerOrchestration: 'direct',
-      route: 'chat'
+      route: 'chat',
+      workspaceRoot: '/Users/codex/app'
     })
     const plan = createGuiPlanArtifact({
       workspaceRoot: '/Users/codex/app',
@@ -114,11 +125,13 @@ describe('workbench plan build orchestration', () => {
       operationStatus: 'ready',
       error: null
     })
+    usePlanWorktreePreferenceStore.getState().initializePlan(plan.id, false, 'codex/')
   })
 
   afterEach(() => {
     act(() => renderer?.unmount())
     renderer = null
+    rendererRuntimeClient.invalidateSettings()
     vi.unstubAllGlobals()
   })
 
@@ -127,6 +140,13 @@ describe('workbench plan build orchestration', () => {
     setComposerMode?: ChatState['setComposerMode']
     setError?: ChatState['setError']
   }): ReturnType<typeof useWorkbenchPlanController> {
+    const kunGui = (window as unknown as { kunGui: Record<string, unknown> }).kunGui
+    if (!kunGui.getSettings) {
+      kunGui.getSettings = vi.fn(async () => normalizeAppSettings({
+        version: 1,
+        agents: { kun: defaultKunRuntimeSettings() }
+      } as AppSettingsV1))
+    }
     let controller: ReturnType<typeof useWorkbenchPlanController> | null = null
     const setComposerMode = options.setComposerMode ?? vi.fn()
     const setError = options.setError ?? vi.fn()
@@ -197,17 +217,27 @@ describe('workbench plan build orchestration', () => {
   })
 
   it('sends an explicit Graph build without selecting Graph for later messages', async () => {
+    const getGitBranches = vi.fn()
     vi.stubGlobal('window', {
       kunGui: {
         writeWorkspaceFile: vi.fn(async () => ({
           ok: true as const,
           path: '/Users/codex/app/.kunsdd/plan/checkout.md',
           savedAt: '2026-07-29T00:00:00.000Z'
-        }))
+        })),
+        getGitBranches
+      }
+    })
+    const plan = useGuiPlanStore.getState().activePlan!
+    usePlanWorktreePreferenceStore.setState({
+      plans: {
+        [plan.id]: {
+          initialized: true, featureEnabled: true, usePromptWorktree: true, branchPrefix: 'codex/'
+        }
       }
     })
     useChatStore.setState({ composerOrchestration: 'direct' })
-    const sendMessage = vi.fn(async () => true)
+    const sendMessage = vi.fn<ChatState['sendMessage']>(async () => true)
     const controller = controllerHarness({ sendMessage })
 
     await act(async () => {
@@ -222,7 +252,134 @@ describe('workbench plan build orchestration', () => {
         orchestration: 'graph'
       }
     )
+    expect(sendMessage.mock.calls[0]?.[0]).not.toContain('<prompt_managed_worktree_protocol>')
+    expect(getGitBranches).not.toHaveBeenCalled()
     expect(useChatStore.getState().composerOrchestration).toBe('direct')
+  })
+
+  it('discovers the branch after saving and sends the worktree protocol to the same task', async () => {
+    const callOrder: string[] = []
+    const writeWorkspaceFile = vi.fn(async () => {
+      callOrder.push('save')
+      return {
+        ok: true as const,
+        path: '/Users/codex/app/.kunsdd/plan/checkout.md', savedAt: '2026-08-14T00:00:00.000Z'
+      }
+    })
+    const plan = useGuiPlanStore.getState().activePlan!
+    usePlanWorktreePreferenceStore.setState({
+      plans: {
+        [plan.id]: {
+          initialized: true,
+          featureEnabled: true,
+          usePromptWorktree: true,
+          branchPrefix: 'kun/'
+        }
+      }
+    })
+    const getGitBranches = vi.fn(async () => {
+      callOrder.push('branch')
+      return {
+        ok: true as const,
+        repositoryRoot: '/Users/codex/app',
+        primaryRepositoryRoot: '/Users/codex/app',
+        currentBranch: 'feature/current',
+        branches: [],
+        dirtyCount: 3
+      }
+    })
+    vi.stubGlobal('window', { kunGui: { writeWorkspaceFile, getGitBranches } })
+    const sendMessage = vi.fn(async () => {
+      callOrder.push('send')
+      return true
+    })
+    const controller = controllerHarness({ sendMessage })
+    const originalPlan = useGuiPlanStore.getState().activePlan
+
+    await act(async () => {
+      await controller.buildGuiPlan('direct')
+    })
+
+    expect(callOrder).toEqual(['save', 'branch', 'send'])
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.stringMatching(/<prompt_managed_worktree_protocol>[\s\S]*"targetBranch": "feature\/current"[\s\S]*"sourceDirtyFileCount": 3[\s\S]*<implementation_plan/),
+      'agent',
+      {
+        displayText: 'planWorktreeBuildDisplay',
+        orchestration: 'direct'
+      }
+    )
+    expect(useChatStore.getState()).toMatchObject({
+      activeThreadId: 'thread-current',
+      workspaceRoot: '/Users/codex/app'
+    })
+    expect(useGuiPlanStore.getState().activePlan).toMatchObject({
+      id: originalPlan?.id,
+      workspaceRoot: originalPlan?.workspaceRoot,
+      relativePath: originalPlan?.relativePath,
+      threadId: originalPlan?.threadId
+    })
+  })
+
+  it.each([
+    ['non-Git workspace', { ok: false as const, reason: 'not_git_repo' as const, message: 'not a Git repository' }, 'not a Git repository'],
+    ['detached HEAD', {
+      ok: true as const,
+      repositoryRoot: '/Users/codex/app',
+      primaryRepositoryRoot: '/Users/codex/app',
+      currentBranch: null,
+      branches: [],
+      dirtyCount: 0
+    }, 'planWorktreeDetachedHead']
+  ])('does not send prompt worktree execution for %s', async (_label, branchResult, expectedError) => {
+    const writeWorkspaceFile = vi.fn(async () => ({
+      ok: true as const,
+      path: '/Users/codex/app/.kunsdd/plan/checkout.md', savedAt: '2026-08-14T00:00:00.000Z'
+    }))
+    const getGitBranches = vi.fn(async () => branchResult)
+    vi.stubGlobal('window', { kunGui: { writeWorkspaceFile, getGitBranches } })
+    const plan = useGuiPlanStore.getState().activePlan!
+    usePlanWorktreePreferenceStore.setState({
+      plans: {
+        [plan.id]: {
+          initialized: true, featureEnabled: true, usePromptWorktree: true, branchPrefix: 'codex/'
+        }
+      }
+    })
+    const sendMessage = vi.fn()
+    const setError = vi.fn()
+    const controller = controllerHarness({ sendMessage, setError })
+
+    await act(async () => controller.buildGuiPlan('direct'))
+
+    expect(writeWorkspaceFile).toHaveBeenCalledOnce()
+    expect(sendMessage).not.toHaveBeenCalled()
+    expect(setError).toHaveBeenCalledWith(expectedError)
+  })
+
+  it('does not send when branch discovery fails', async () => {
+    const writeWorkspaceFile = vi.fn(async () => ({
+      ok: true as const,
+      path: '/Users/codex/app/.kunsdd/plan/checkout.md', savedAt: '2026-08-14T00:00:00.000Z'
+    }))
+    const getGitBranches = vi.fn(async () => { throw new Error('git executable unavailable') })
+    vi.stubGlobal('window', { kunGui: { writeWorkspaceFile, getGitBranches } })
+    const plan = useGuiPlanStore.getState().activePlan!
+    usePlanWorktreePreferenceStore.setState({
+      plans: {
+        [plan.id]: {
+          initialized: true, featureEnabled: true, usePromptWorktree: true, branchPrefix: 'codex/'
+        }
+      }
+    })
+    const sendMessage = vi.fn()
+    const setError = vi.fn()
+    const controller = controllerHarness({ sendMessage, setError })
+
+    await act(async () => controller.buildGuiPlan('direct'))
+
+    expect(sendMessage).not.toHaveBeenCalled()
+    expect(setError).toHaveBeenCalledWith('git executable unavailable')
   })
 
   it('does not save or send a Graph build when Graph is disabled', async () => {
@@ -273,7 +430,16 @@ describe('workbench plan build orchestration', () => {
       ok: false as const,
       message: 'disk full'
     }))
-    vi.stubGlobal('window', { kunGui: { writeWorkspaceFile } })
+    const getGitBranches = vi.fn()
+    vi.stubGlobal('window', { kunGui: { writeWorkspaceFile, getGitBranches } })
+    const plan = useGuiPlanStore.getState().activePlan!
+    usePlanWorktreePreferenceStore.setState({
+      plans: {
+        [plan.id]: {
+          initialized: true, featureEnabled: true, usePromptWorktree: true, branchPrefix: 'codex/'
+        }
+      }
+    })
     const sendMessage = vi.fn()
     const setError = vi.fn()
     const offlineController = controllerHarness({ sendMessage, setError })
@@ -292,6 +458,7 @@ describe('workbench plan build orchestration', () => {
     })
 
     expect(writeWorkspaceFile).toHaveBeenCalledOnce()
+    expect(getGitBranches).not.toHaveBeenCalled()
     expect(sendMessage).not.toHaveBeenCalled()
     expect(useGuiPlanStore.getState()).toMatchObject({
       saveStatus: 'error',

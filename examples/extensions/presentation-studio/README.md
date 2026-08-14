@@ -30,8 +30,8 @@ atomicity remains a platform limitation.
   reapply the intended operations.
 - Export creates another `.kun-ppt.html` copy only after checking that its
   destination is absent or already identical. The API v1 cross-process race
-  limitation above still applies. Native PPTX/PDF conversion remains a
-  separate, future workflow; Kun's managed PPT Master flow is unchanged.
+  limitation above still applies. Native PPTX output is handled separately by
+  Kun's first-class PPT agent.
 
 ## Commands and Host messages
 
@@ -110,7 +110,7 @@ normal main-Agent calls compact while the saved model remains canonical.
 When an Agent turn finishes after a successful presentation write, Kun shows a
 deduplicated presentation file card below the final reply. The primary action
 uses the operating system's default file association: `.kun-ppt.html` normally
-opens in the default browser, while native `.ppt`/`.pptx` output from PPT Master
+opens in the default browser, while native `.ppt`/`.pptx` output from the PPT agent
 opens in WPS, PowerPoint, LibreOffice, or whichever compatible application the
 user configured. The card can also reveal the exact workspace file in the
 platform file manager. Before opening a standalone HTML deck, Kun verifies its

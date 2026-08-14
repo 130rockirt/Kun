@@ -1,0 +1,12 @@
+{
+  "codeAgentPresets": "บุคลิก",
+  "codeAgentPresetsDesc": "รูปแบบการทำงานที่ใช้ซ้ำได้สำหรับเอเจนต์ Code บุคลิกที่เลือกจะถูกส่งไปกับทุกข้อความและกำหนดเฉพาะน้ำเสียงกับวิธีทำงานเท่านั้น — ไม่ได้ให้เครื่องมือหรือเปลี่ยนสิทธิ์",
+  "codeAgentPresetNamePlaceholder": "ชื่อบุคลิก",
+  "codeAgentPersonaPlaceholder": "เอเจนต์ควรทำงานอย่างไรเมื่อเลือกบุคลิกนี้",
+  "codeAgentPresetRemove": "ลบบุคลิก",
+  "codeAgentPresetAdd": "เพิ่มบุคลิก",
+  "codeAgentIconPickerTitle": "เลือกไอคอน",
+  "codeAgentIconSearchPlaceholder": "ค้นหาไอคอน…",
+  "codeAgentIconPickerEmpty": "ไม่พบไอคอนที่ตรงกัน",
+  "codeAgentIconPickerMore": "แสดง {{shown}} จาก {{total}} — พิมพ์ต่อเพื่อจำกัดผลลัพธ์"
+}

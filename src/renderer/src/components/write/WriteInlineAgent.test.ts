@@ -1,4 +1,4 @@
-import { createRef, createElement } from 'react'
+import { createElement } from 'react'
 import { act, create, type ReactTestRenderer } from 'react-test-renderer'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { WriteInlineAgent } from './WriteInlineAgent'
@@ -14,6 +14,16 @@ vi.mock('react-i18next', () => ({
 }))
 
 describe('WriteInlineAgent', () => {
+  const action = {
+    left: 200,
+    width: 520,
+    anchorLeft: 300,
+    anchorRight: 500,
+    coordinateScale: 1,
+    anchorTop: 220,
+    anchorBottom: 260
+  }
+
   beforeEach(() => {
     vi.stubGlobal('window', {
       innerWidth: 1200,
@@ -27,83 +37,41 @@ describe('WriteInlineAgent', () => {
     vi.unstubAllGlobals()
   })
 
-  it('renders a spacious multiline composer for requirement and writing selections', async () => {
+  it('does not render a second AI composer beside the assistant sidebar', async () => {
     let renderer: ReactTestRenderer
     await act(async () => {
       renderer = create(createElement(WriteInlineAgent, {
-        action: {
-          left: 200,
-          width: 520,
-          anchorLeft: 300,
-          anchorRight: 500,
-          coordinateScale: 1,
-          anchorTop: 220,
-          anchorBottom: 260
-        },
-        value: 'Improve the selected paragraph',
-        inFlight: false,
-        textareaRef: createRef<HTMLTextAreaElement>(),
-        onValueChange: vi.fn(),
-        onSubmitPrompt: vi.fn(),
-        onApplyEdit: vi.fn()
+        action
       }))
     })
 
-    const textarea = renderer!.root.findByType('textarea')
-    expect(textarea.props.rows).toBe(4)
-    expect(textarea.props.placeholder).toBe('writeInlineAgentPlaceholder')
-    expect(renderer!.root.findByProps({ className: 'write-inline-agent-edit-title' }).children)
-      .toContain('writeInlineAgentAskAi')
-    expect(renderer!.root.findByProps({ className: 'write-inline-agent-selection-chip' }).children)
-      .toHaveLength(2)
+    expect(renderer!.root.findAllByType('textarea')).toHaveLength(0)
+    expect(renderer!.root.findAllByProps({ className: 'write-inline-agent-edit' })).toHaveLength(0)
   })
 
-  it('keeps Enter for new lines and uses Command/Ctrl + Enter for the primary action', async () => {
-    const onApplyEdit = vi.fn()
+  it('keeps quote and configured selection actions available', async () => {
+    const onQuoteSelection = vi.fn()
+    const onQuickAction = vi.fn()
+    const quickAction = {
+      id: 'polish',
+      label: 'Polish',
+      prompt: 'Polish the selection',
+      mode: 'edit' as const
+    }
     let renderer: ReactTestRenderer
     await act(async () => {
       renderer = create(createElement(WriteInlineAgent, {
-        action: {
-          left: 200,
-          width: 520,
-          anchorLeft: 300,
-          anchorRight: 500,
-          coordinateScale: 1,
-          anchorTop: 220,
-          anchorBottom: 260
-        },
-        value: 'Rewrite this',
-        inFlight: false,
-        textareaRef: createRef<HTMLTextAreaElement>(),
-        onValueChange: vi.fn(),
-        onSubmitPrompt: vi.fn(),
-        onApplyEdit
+        action,
+        onQuoteSelection,
+        quickActions: [quickAction],
+        onQuickAction
       }))
     })
 
-    const textarea = renderer!.root.findByType('textarea')
-    const plainPreventDefault = vi.fn()
-    textarea.props.onKeyDown({
-      key: 'Enter',
-      shiftKey: false,
-      metaKey: false,
-      ctrlKey: false,
-      nativeEvent: { isComposing: false },
-      preventDefault: plainPreventDefault
-    })
-    expect(plainPreventDefault).not.toHaveBeenCalled()
-    expect(onApplyEdit).not.toHaveBeenCalled()
+    renderer!.root.findByProps({ 'aria-label': 'writeSelectionQuote' }).props.onClick()
+    renderer!.root.findByProps({ 'aria-label': quickAction.label }).props.onClick()
 
-    const shortcutPreventDefault = vi.fn()
-    textarea.props.onKeyDown({
-      key: 'Enter',
-      shiftKey: false,
-      metaKey: true,
-      ctrlKey: false,
-      nativeEvent: { isComposing: false },
-      preventDefault: shortcutPreventDefault
-    })
-    expect(shortcutPreventDefault).toHaveBeenCalledOnce()
-    expect(onApplyEdit).toHaveBeenCalledWith('Rewrite this')
+    expect(onQuoteSelection).toHaveBeenCalledOnce()
+    expect(onQuickAction).toHaveBeenCalledWith(quickAction)
   })
 })

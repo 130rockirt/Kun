@@ -15,6 +15,7 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { pathToFileURL } from 'node:url'
 import { shellSpawnEnv } from './builtin-tool-utils.js'
+import { collectWorkspaceDiagnostics, normalizeDiagnosticReport } from './lsp-diagnostics.js'
 import { getLanguageServer, resolveServerCommand } from './lsp-servers.js'
 import { handleNotification } from './lsp-notifications.js'
 
@@ -622,28 +623,6 @@ export async function lspWorkspaceSymbol(session: LspSession, query: string): Pr
 type DiagnosticsFetchResult = {
   diagnostics: unknown[]
   source: 'publishDiagnostics-cache' | 'textDocument/diagnostic' | 'none'
-}
-
-function normalizeDiagnosticReport(result: unknown): unknown[] | null {
-  if (Array.isArray(result)) return result
-  if (!result || typeof result !== 'object') return null
-  const report = result as Record<string, unknown>
-  if (Array.isArray(report.items)) return report.items
-  return null
-}
-
-function collectWorkspaceDiagnostics(result: unknown, uri: string): unknown[] {
-  if (!result || typeof result !== 'object') return []
-  const report = result as Record<string, unknown>
-  const items = Array.isArray(report.items) ? report.items : []
-  for (const item of items) {
-    if (!item || typeof item !== 'object') continue
-    const entry = item as Record<string, unknown>
-    if (entry.uri !== uri) continue
-    const diagnostics = normalizeDiagnosticReport(entry.value)
-    if (diagnostics) return diagnostics
-  }
-  return []
 }
 
 export async function lspGetDiagnostics(

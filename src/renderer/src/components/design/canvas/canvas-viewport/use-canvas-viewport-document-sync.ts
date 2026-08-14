@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   buildDesignArtifactSyncKey,
   removedLinkedArtifactReferences,
@@ -11,6 +11,7 @@ import type { DesignArtifact } from '../../../../design/design-types'
 import type { CanvasDocument, Rect } from '../../../../design/canvas/canvas-types'
 import { createEmptyDocument } from '../../../../design/canvas/canvas-types'
 import {
+  canvasDocumentKey,
   loadCanvasDocument,
   persistCanvasDocument
 } from '../../../../design/canvas/canvas-persistence'
@@ -25,6 +26,7 @@ import { createEmptyDesignSystem } from '../../../../design/canvas/design-system
 import { useDesignWorkspaceStore } from '../../../../design/design-workspace-store'
 import {
   boundsForShapeIds,
+  canvasViewportShowsContent,
   mergeLoadedCanvasDocumentWithLiveChanges,
   readStoredCanvasViewport,
   resolveCanvasSelectionAfterDocumentSync,
@@ -43,6 +45,9 @@ type UseCanvasViewportDocumentSyncArgs = {
   designArtifacts: DesignArtifact[]
   designTarget?: DesignTarget
   designSystemPersistenceEnabled?: boolean
+  persistenceEnabled?: boolean
+  onDocumentLoadStateChange?: (loaded: boolean) => void
+  onError?: (message: string | null) => void
 }
 
 export const CANVAS_DOCUMENT_LOAD_TIMEOUT_MS = 4_000
@@ -113,18 +118,28 @@ export function useCanvasViewportDocumentSync({
   htmlFrameSyncEnabled,
   designArtifacts,
   designTarget,
-  designSystemPersistenceEnabled = true
+  designSystemPersistenceEnabled = true,
+  persistenceEnabled = true,
+  onDocumentLoadStateChange,
+  onError
 }: UseCanvasViewportDocumentSyncArgs): boolean {
   const [docLoaded, setDocLoaded] = useState(false)
+  // Cross-effect flag: artifact-frame sync must never persist while the
+  // authoritative board read has not landed (placeholder board is not truth).
+  const authoritativeLoadRef = useRef(false)
 
   useEffect(() => {
     if (!artifactId || !workspaceRoot) {
       setDocLoaded(false)
+      authoritativeLoadRef.current = false
+      onDocumentLoadStateChange?.(false)
       return
     }
 
     let cancelled = false
     let applyingDocumentLoad = false
+    let documentLoadSucceeded = false
+    let lateReadPending = false
     let viewFrame = 0
     let nodeSyncTimer: ReturnType<typeof setTimeout> | null = null
     const isCancelled = (): boolean => cancelled
@@ -132,6 +147,8 @@ export function useCanvasViewportDocumentSync({
       nodeSyncTimer = timer
     }
     setDocLoaded(false)
+    authoritativeLoadRef.current = false
+    onDocumentLoadStateChange?.(false)
 
     useCanvasSelectionStore.getState().clearSelection()
     useCanvasSelectionStore.getState().setMarquee(null)
@@ -141,63 +158,101 @@ export function useCanvasViewportDocumentSync({
     useCanvasViewportStore.getState().resetView()
     useCanvasUndoStore.getState().clear()
 
+    // Keep the raw request so a late (post-timeout) authoritative read can be
+    // adopted instead of leaving a reconstructed placeholder board as the
+    // writable document. The deadline wrapper only drives the 4s UI decision.
+    const loadRequest = loadCanvasDocument(workspaceRoot, artifactId, baseDir)
+    const applyLoadedDocument = (loaded: CanvasDocument | null, persistSync: boolean): void => {
+      const currentShapeState = useCanvasShapeStore.getState()
+      const liveDocument = currentShapeState.documentKey === documentKey
+        ? currentShapeState.document
+        : initialDocument
+      const authoritativeDocument = loaded ?? createEmptyDocument()
+      let doc = mergeLoadedCanvasDocumentWithLiveChanges(
+        authoritativeDocument,
+        liveDocument,
+        initialDocument
+      )
+      const liveChangesMerged = doc !== authoritativeDocument
+      let addedFrameIds: string[] = []
+      let artifactFramesChanged = false
+      if (htmlFrameSyncEnabled && persistenceEnabled) {
+        const synced = syncDesignArtifactsToBoardDocument(doc, useDesignWorkspaceStore.getState().artifacts)
+        doc = synced.document
+        addedFrameIds = synced.addedFrameIds
+        artifactFramesChanged =
+          synced.addedFrameIds.length > 0 ||
+          synced.updatedFrameIds.length > 0 ||
+          synced.removedFrameIds.length > 0
+      }
+      // Loading suppresses the normal shape-store persistence subscriber. If
+      // a tool or replay edited the temporary board while the authoritative
+      // read was pending, save the safely merged document now that the read
+      // has resolved; otherwise those visible edits disappear on restart.
+      if (persistenceEnabled && persistSync && (liveChangesMerged || artifactFramesChanged)) {
+        persistCanvasDocument(workspaceRoot, artifactId, doc, baseDir)
+      }
+      applyingDocumentLoad = true
+      useCanvasShapeStore.getState().loadDocument(doc, documentKey, { preserveUndo: true })
+      applyingDocumentLoad = false
+      const contentBounds = getCanvasDocumentContentBounds(doc)
+      const storedView = readStoredCanvasViewport(viewportStorageKey)
+      if (storedView && (!contentBounds || canvasViewportShowsContent(storedView, contentBounds))) {
+        useCanvasViewportStore.getState().setVbox(storedView)
+      } else if (addedFrameIds.length > 0) {
+        viewFrame = focusBoundsToFitLater(boundsForShapeIds(doc, addedFrameIds), isCancelled)
+      } else if (loaded || contentBounds) {
+        viewFrame = focusBoundsToFitLater(contentBounds, isCancelled)
+      }
+    }
+
     void (async () => {
       try {
-        const outcome = await loadCanvasDocumentWithinDeadline(
-          () => loadCanvasDocument(workspaceRoot, artifactId, baseDir)
-        )
+        const outcome = await loadCanvasDocumentWithinDeadline(() => loadRequest)
         if (cancelled) return
-        const loaded = outcome.document
-        const currentShapeState = useCanvasShapeStore.getState()
-        const liveDocument = currentShapeState.documentKey === documentKey
-          ? currentShapeState.document
-          : initialDocument
-        let doc = mergeLoadedCanvasDocumentWithLiveChanges(
-          loaded ?? createEmptyDocument(),
-          liveDocument,
-          initialDocument
-        )
-        let addedFrameIds: string[] = []
-        if (htmlFrameSyncEnabled) {
-          const synced = syncDesignArtifactsToBoardDocument(doc, useDesignWorkspaceStore.getState().artifacts)
-          doc = synced.document
-          addedFrameIds = synced.addedFrameIds
-          if (
-            outcome.status === 'resolved' &&
-            (synced.addedFrameIds.length > 0 || synced.updatedFrameIds.length > 0 || synced.removedFrameIds.length > 0)
-          ) {
-            persistCanvasDocument(workspaceRoot, artifactId, doc, baseDir)
-          }
-        }
-        applyingDocumentLoad = true
-        useCanvasShapeStore.getState().loadDocument(doc, documentKey)
-        applyingDocumentLoad = false
-        const storedView = readStoredCanvasViewport(viewportStorageKey)
-        if (storedView) {
-          useCanvasViewportStore.getState().setVbox(storedView)
-        } else if (addedFrameIds.length > 0) {
-          viewFrame = focusBoundsToFitLater(boundsForShapeIds(doc, addedFrameIds), isCancelled)
-        } else if (loaded) {
-          viewFrame = focusBoundsToFitLater(getCanvasDocumentContentBounds(doc), isCancelled)
-        }
+        applyLoadedDocument(outcome.document, outcome.status === 'resolved')
+        documentLoadSucceeded = outcome.status === 'resolved'
+        authoritativeLoadRef.current = documentLoadSucceeded
         if (outcome.status !== 'resolved') {
-          useDesignWorkspaceStore.getState().setFileError(
-            outcome.status === 'timeout'
-              ? 'Design board loading timed out; reconstructed the board from its artifacts.'
-              : 'Design board could not be loaded; reconstructed the board from its artifacts.'
-          )
+          // A timed-out or failed read must not turn the reconstructed board
+          // into the persisted source of truth. Keep the placeholder visible
+          // but non-persistable, and adopt the authoritative document when it
+          // eventually arrives.
+          const message = outcome.status === 'timeout'
+            ? 'Canvas loading timed out; the whiteboard is read-only until the board loads.'
+            : 'Canvas could not be loaded; the whiteboard is read-only until the board loads.'
+          if (onError) onError(message)
+          else useDesignWorkspaceStore.getState().setFileError(message)
+          lateReadPending = true
+          void loadRequest
+            .then((document) => {
+              if (cancelled || documentLoadSucceeded) return
+              applyLoadedDocument(document, true)
+              documentLoadSucceeded = true
+              authoritativeLoadRef.current = true
+              if (onError) onError(null)
+              else useDesignWorkspaceStore.getState().setFileError(null)
+              onDocumentLoadStateChange?.(true)
+            })
+            .catch(() => undefined)
+            .finally(() => {
+              lateReadPending = false
+            })
         }
       } catch (error) {
         if (cancelled) return
         applyingDocumentLoad = true
         useCanvasShapeStore.getState().loadDocument(initialDocument, documentKey)
         applyingDocumentLoad = false
-        useDesignWorkspaceStore.getState().setFileError(
-          error instanceof Error ? error.message : String(error)
-        )
+        const message = error instanceof Error ? error.message : String(error)
+        if (onError) onError(message)
+        else useDesignWorkspaceStore.getState().setFileError(message)
       } finally {
         applyingDocumentLoad = false
-        if (!cancelled) setDocLoaded(true)
+        if (!cancelled) {
+          setDocLoaded(true)
+          onDocumentLoadStateChange?.(documentLoadSucceeded)
+        }
       }
     })()
 
@@ -208,9 +263,15 @@ export function useCanvasViewportDocumentSync({
       })
     }
 
-    const unsubscribe = useCanvasShapeStore.subscribe((state, prev) => {
+    const unsubscribe = persistenceEnabled
+      ? useCanvasShapeStore.subscribe((state, prev) => {
       if (cancelled || applyingDocumentLoad) return
       if (state.document === prev.document) return
+      // Never persist before the authoritative board read landed: the
+      // placeholder/reconstructed board must not overwrite the real canvas.
+      // Also never write a document that belongs to a different artifact.
+      if (!documentLoadSucceeded) return
+      if (state.documentKey !== canvasDocumentKey(workspaceRoot, artifactId, baseDir)) return
       persistCanvasDocument(workspaceRoot, artifactId, state.document, baseDir)
       if (!htmlFrameSyncEnabled) return
 
@@ -245,11 +306,15 @@ export function useCanvasViewportDocumentSync({
         }
       }
       scheduleArtifactFrameNodeSync(state.document, nodeSyncTimer, setNodeSyncTimer, isCancelled)
-    })
+        })
+      : () => undefined
 
     const unsubscribeDesignSystem = useDesignSystemStore.subscribe((state, prev) => {
-      if (cancelled || !designSystemPersistenceEnabled) return
+      if (cancelled || !designSystemPersistenceEnabled || !persistenceEnabled) return
       if (state.system === prev.system) return
+      // While a timed-out canvas read is still pending, hold design-system
+      // writes so the placeholder board cannot entangle with a real load.
+      if (lateReadPending) return
       persistDesignSystem(workspaceRoot, state.system, resolvedDesignSystemBaseDir)
     })
 
@@ -260,7 +325,19 @@ export function useCanvasViewportDocumentSync({
       unsubscribe()
       unsubscribeDesignSystem()
     }
-  }, [workspaceRoot, artifactId, baseDir, designSystemPersistenceEnabled, documentKey, htmlFrameSyncEnabled, resolvedDesignSystemBaseDir, viewportStorageKey])
+  }, [
+    workspaceRoot,
+    artifactId,
+    baseDir,
+    designSystemPersistenceEnabled,
+    documentKey,
+    htmlFrameSyncEnabled,
+    onDocumentLoadStateChange,
+    onError,
+    persistenceEnabled,
+    resolvedDesignSystemBaseDir,
+    viewportStorageKey
+  ])
 
   const designArtifactSyncKey = useMemo(() => {
     if (!htmlFrameSyncEnabled) return ''
@@ -268,7 +345,11 @@ export function useCanvasViewportDocumentSync({
   }, [designArtifacts, designTarget, htmlFrameSyncEnabled])
 
   useEffect(() => {
-    if (!docLoaded || !htmlFrameSyncEnabled || !artifactId || !workspaceRoot) return
+    if (!persistenceEnabled || !docLoaded || !htmlFrameSyncEnabled || !artifactId || !workspaceRoot) return
+    // Never sync/persist artifact frames onto a placeholder board: the
+    // authoritative canvas read must land first or the sync would write the
+    // reconstructed (empty) document back over the real canvas.json.
+    if (!authoritativeLoadRef.current) return
     const current = useCanvasShapeStore.getState().document
     const synced = syncDesignArtifactsToBoardDocument(current, useDesignWorkspaceStore.getState().artifacts)
     if (
@@ -300,7 +381,7 @@ export function useCanvasViewportDocumentSync({
       const bounds = boundsForShapeIds(synced.document, synced.addedFrameIds)
       if (bounds) useCanvasViewportStore.getState().zoomToFit(bounds, 72, { maxZoom: 1, minZoom: 0.04 })
     }
-  }, [artifactId, baseDir, designArtifactSyncKey, docLoaded, documentKey, htmlFrameSyncEnabled, workspaceRoot])
+  }, [artifactId, baseDir, designArtifactSyncKey, docLoaded, documentKey, htmlFrameSyncEnabled, persistenceEnabled, workspaceRoot])
 
   useEffect(() => {
     if (!docLoaded || !artifactId || !workspaceRoot) return

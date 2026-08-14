@@ -87,6 +87,7 @@ export const KUN_DELEGATION_PROFILES_PATH = '/v1/delegation/profiles'
 export const KUN_DELEGATION_PROFILES_TEMPLATE = '/v1/delegation/profiles'
 export const KUN_DELEGATION_DIAGNOSTICS_PATH = '/v1/delegation/diagnostics'
 export const KUN_DELEGATION_DIAGNOSTICS_TEMPLATE = '/v1/delegation/diagnostics'
+export const KUN_DELEGATION_ABORT_TEMPLATE = '/v1/delegation/abort/{id}'
 export function kunDelegationProfilesPath(workspace?: string): string {
   if (!workspace?.trim()) return KUN_DELEGATION_PROFILES_PATH
   return `${KUN_DELEGATION_PROFILES_PATH}?workspace=${encodeURIComponent(workspace.trim())}`
@@ -94,6 +95,9 @@ export function kunDelegationProfilesPath(workspace?: string): string {
 export function kunDelegationDiagnosticsPath(parentThreadId?: string): string {
   if (!parentThreadId?.trim()) return KUN_DELEGATION_DIAGNOSTICS_PATH
   return `${KUN_DELEGATION_DIAGNOSTICS_PATH}?parent_thread_id=${encodeURIComponent(parentThreadId.trim())}`
+}
+export function kunDelegationAbortPath(childId: string): string {
+  return `/v1/delegation/abort/${encodeURIComponent(childId)}`
 }
 
 export const KUN_GRAPHS_PATH = '/v1/graphs'
@@ -216,6 +220,32 @@ export function kunThreadStatePath(threadId: string): string {
   return `${kunThreadPath(threadId)}/state`
 }
 
+export const KUN_THREAD_TIMELINE_TEMPLATE = '/v1/threads/{id}/timeline'
+export function kunThreadTimelinePath(
+  threadId: string,
+  options: { before?: string; limit?: number } = {}
+): string {
+  const params = new URLSearchParams()
+  if (options.before) params.set('before', options.before)
+  if (options.limit !== undefined) params.set('limit', String(options.limit))
+  const query = params.toString()
+  return `${kunThreadPath(threadId)}/timeline${query ? `?${query}` : ''}`
+}
+
+export const KUN_THREAD_KNOWLEDGE_BASES_TEMPLATE = '/v1/threads/{id}/knowledge-bases'
+export function kunThreadKnowledgeBasesPath(threadId: string): string {
+  return `${kunThreadPath(threadId)}/knowledge-bases`
+}
+
+export const KUN_THREAD_KNOWLEDGE_BASE_REINDEX_TEMPLATE =
+  '/v1/threads/{id}/knowledge-bases/{id}/reindex'
+export function kunThreadKnowledgeBaseReindexPath(
+  threadId: string,
+  knowledgeBaseId: string
+): string {
+  return `${kunThreadKnowledgeBasesPath(threadId)}/${encodeURIComponent(knowledgeBaseId)}/reindex`
+}
+
 export const KUN_THREAD_FORK_TEMPLATE = '/v1/threads/{id}/fork'
 export function kunThreadForkPath(threadId: string): string {
   return `${kunThreadPath(threadId)}/fork`
@@ -295,6 +325,11 @@ export function kunUserInputPath(inputId: string): string {
 export const KUN_SESSION_RESUME_TEMPLATE = '/v1/sessions/{id}/resume-thread'
 export function kunSessionResumePath(sessionId: string): string {
   return `/v1/sessions/${encodeURIComponent(sessionId)}/resume-thread`
+}
+
+export const KUN_SESSION_RESUME_METADATA_TEMPLATE = '/v1/sessions/{id}/resume-metadata'
+export function kunSessionResumeMetadataPath(sessionId: string): string {
+  return `/v1/sessions/${encodeURIComponent(sessionId)}/resume-metadata`
 }
 
 export const KUN_USAGE_PATH = '/v1/usage'

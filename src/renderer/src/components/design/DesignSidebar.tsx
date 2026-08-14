@@ -80,7 +80,6 @@ export function resolveDesignSidebarNavigationLocks(options: {
 type Props = {
   onCodeOpen: () => void
   onWriteOpen: () => void
-  onDesignOpen: () => void
   onOpenSettings: (section?: SettingsRouteSection) => void
   onToggleTheme: () => void
   onDeleteDrawing?: (documentId: string) => void | Promise<void>
@@ -103,7 +102,6 @@ type FolderDialogState = {
 export function DesignSidebar({
   onCodeOpen,
   onWriteOpen,
-  onDesignOpen,
   onOpenSettings,
   onToggleTheme,
   onDeleteDrawing
@@ -586,12 +584,11 @@ export function DesignSidebar({
           </div>
         }
       >
-        <div className="ds-no-drag flex flex-col px-1">
+        <div className="workspace-mode-controls ds-no-drag flex flex-col px-1">
           <WorkspaceModeTabs
             activeView="design"
             onCodeOpen={onCodeOpen}
             onWriteOpen={onWriteOpen}
-            onDesignOpen={onDesignOpen}
             disabled={modeSwitchLocked}
             disabledReason={t('designDrawingPreparing')}
           />

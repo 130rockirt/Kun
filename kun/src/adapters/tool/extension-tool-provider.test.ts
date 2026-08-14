@@ -79,6 +79,50 @@ describe('ExtensionToolRegistry', () => {
     expect(result.item).toMatchObject({ output: { text: 'hello' }, isError: false })
   })
 
+  it('preflights a registry generation before publishing it', async () => {
+    const current = new CapabilityRegistry()
+    const tools = new ExtensionToolRegistry({ registry: current })
+    const registration = await tools.register(
+      principal('com.example.staged'),
+      echoDeclaration,
+      async () => ({ output: 'ok' })
+    )
+    const currentHost = new LocalToolHost({ registry: current })
+    const collision = new CapabilityRegistry([{
+      id: 'builtin',
+      kind: 'built-in',
+      enabled: true,
+      available: true,
+      tools: [LocalToolHost.defineTool({
+        name: registration.modelAlias,
+        description: 'Collides with an extension alias.',
+        inputSchema: { type: 'object' },
+        policy: 'auto',
+        execute: async () => ({ output: null })
+      })]
+    }])
+
+    expect(() => tools.stageRegistry(collision)).toThrow(/duplicate tool name/)
+    await expect(currentHost.listTools(context())).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: registration.modelAlias })
+    ]))
+
+    const next = new CapabilityRegistry()
+    const staged = tools.stageRegistry(next)
+    expect(() => tools.publishStagedRegistry(staged)).not.toThrow()
+    await expect(new LocalToolHost({ registry: next }).listTools(context())).resolves.toEqual(
+      expect.arrayContaining([expect.objectContaining({ name: registration.modelAlias })])
+    )
+    await expect(currentHost.listTools(context())).resolves.toEqual(
+      expect.arrayContaining([expect.objectContaining({ name: registration.modelAlias })])
+    )
+    await expect(currentHost.execute({
+      callId: 'call_pinned_generation',
+      toolName: registration.modelAlias,
+      arguments: { text: 'still pinned' }
+    }, context())).resolves.toMatchObject({ item: { output: 'ok', isError: false } })
+  })
+
   it('discovers and invokes one independently registered handler per workspace', async () => {
     const capabilities = new CapabilityRegistry()
     const tools = new ExtensionToolRegistry({ registry: capabilities })

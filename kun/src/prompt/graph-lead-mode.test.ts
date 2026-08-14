@@ -46,6 +46,20 @@ describe('Graph Lead mode system contract', () => {
     )
     expect(GRAPH_LEAD_MODE_INSTRUCTION).toContain('GUI-only plan path')
     expect(GRAPH_LEAD_MODE_INSTRUCTION).toContain('pending condition source')
+    expect(GRAPH_LEAD_MODE_INSTRUCTION).toContain(
+      'top-level object contains only `plan`'
+    )
+    for (const forbiddenEnvelope of [
+      '`__raw`',
+      'a JSON string',
+      'a Markdown fenced block',
+      'an ordinary text response'
+    ]) {
+      expect(GRAPH_LEAD_MODE_INSTRUCTION).toContain(forbiddenEnvelope)
+    }
+    expect(GRAPH_LEAD_MODE_INSTRUCTION).toContain(
+      'do not copy the entire source plan into every task objective'
+    )
   })
 
   it('delegates mechanical fields to the host', () => {
@@ -78,14 +92,29 @@ describe('Graph Lead mode system contract', () => {
     )
   })
 
-  it('allows read-only explore_agent while forbidding ordinary delegate_task in planning', () => {
-    expect(GRAPH_LEAD_MODE_INSTRUCTION).toContain('Prefer `explore_agent` when it is advertised')
+  it('requires explicit full-workspace authority for command-running nodes', () => {
+    expect(GRAPH_LEAD_MODE_INSTRUCTION).toContain(
+      'Narrow `readScopes` or `writeScopes` remove tools such as `bash` and `background_shell`'
+    )
+    expect(GRAPH_LEAD_MODE_INSTRUCTION).toContain(
+      'Only when the user has authorized full-workspace access and command execution is genuinely necessary'
+    )
+    expect(GRAPH_LEAD_MODE_INSTRUCTION).toContain(
+      'set both `readScopes` and `writeScopes` to include `.`'
+    )
+    expect(GRAPH_LEAD_MODE_INSTRUCTION).toContain(
+      'never claim a command, build, test, or formatter ran when the executor did not have and use a command tool'
+    )
+  })
+
+  it('allows read-only fast_context while forbidding ordinary delegate_task in planning', () => {
+    expect(GRAPH_LEAD_MODE_INSTRUCTION).toContain('Prefer `fast_context` when it is advertised')
     expect(GRAPH_LEAD_MODE_INSTRUCTION).toContain('or use ordinary `delegate_task` during planning')
     expect(GRAPH_LEAD_MODE_INSTRUCTION).toContain(
       'Do not use ordinary `delegate_task` / reusable-profile delegation'
     )
     expect(GRAPH_LEAD_MODE_INSTRUCTION).toContain(
-      'Read-only `explore_agent` remains allowed for repository investigation'
+      'Read-only `fast_context` remains allowed for repository investigation'
     )
   })
 

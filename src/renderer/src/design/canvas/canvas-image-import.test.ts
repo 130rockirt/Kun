@@ -46,6 +46,16 @@ describe('computeImportedImagePlacement', () => {
       height: 220
     })
   })
+
+  it('avoids occupied virtual canvas regions', () => {
+    const rect = computeImportedImagePlacement(
+      { x: 0, y: 0, width: 800, height: 600 },
+      { width: 320, height: 220 },
+      [{ x: 240, y: 190, width: 320, height: 220 }]
+    )
+
+    expect(rect).toEqual({ x: 640, y: 190, width: 320, height: 220 })
+  })
 })
 
 describe('importWorkspaceImageToCanvas', () => {
@@ -274,5 +284,38 @@ describe('pasteClipboardImageToCanvas', () => {
     if (!result.ok) return
     const shape = useCanvasShapeStore.getState().document.objects[result.shapeId]
     expect(shape.name).toBe('Pasted Image')
+  })
+
+  it('does not insert into a different canvas when clipboard reading finishes late', async () => {
+    let resolveRead!: (value: {
+      ok: true
+      name: string
+      mimeType: string
+      dataBase64: string
+      byteSize: number
+    }) => void
+    const readClipboardImage = vi.fn(() => new Promise((resolve) => {
+      resolveRead = resolve
+    }))
+    vi.stubGlobal('window', { kunGui: { readClipboardImage } })
+    useCanvasShapeStore.getState().loadDocument(createEmptyDocument(), 'source-document')
+
+    const pending = pasteClipboardImageToCanvas({
+      vbox: { x: 0, y: 0, width: 800, height: 600 },
+      workspaceRoot: '/workspace',
+      expectedDocumentKey: 'source-document'
+    })
+    useCanvasShapeStore.getState().loadDocument(createEmptyDocument(), 'target-document')
+    resolveRead({
+      ok: true,
+      name: 'late-image',
+      mimeType: 'image/png',
+      dataBase64: 'AAAA',
+      byteSize: 3
+    })
+
+    await expect(pending).resolves.toEqual({ ok: false, reason: 'document-changed' })
+    expect(useCanvasShapeStore.getState().documentKey).toBe('target-document')
+    expect(useCanvasShapeStore.getState().getAllShapeIds()).toEqual([])
   })
 })

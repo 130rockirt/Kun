@@ -1,4 +1,5 @@
 import {
+  type ChildRunRecord,
   type ChildRoutingMetadata,
   type DelegationRuntime
 } from '../../delegation/delegation-runtime.js'
@@ -26,6 +27,11 @@ const DEFAULT_PROFILE_PAGE_LIMIT = 50
 const MAX_PROFILE_PAGE_LIMIT = 50
 const MAX_PROFILE_NAME_LENGTH = 256
 const MAX_PROFILE_DESCRIPTION_LENGTH = 1_000
+const STRUCTURED_SUBAGENT_RESUME_PROMPT = [
+  'Continue the interrupted delegated task in this persisted child session.',
+  'Review the existing child history and current workspace state, avoid repeating completed work,',
+  'and finish the original delegated task or report a concrete blocker.'
+].join(' ')
 
 export function buildDelegationToolProviders(
   runtime: DelegationRuntime | undefined,
@@ -56,17 +62,24 @@ export function buildDelegationToolProviders(
           properties: {
             label: { type: 'string', description: 'A distinct 2-4 word UI title for this child.' },
             prompt: { type: 'string', description: 'The task for the child agent.' },
+            resumeChildId: { type: 'string', description: 'Existing interrupted child id to continue instead of creating a new child.' },
+            expectedResumeCount: { type: 'integer', minimum: 0, description: 'Last observed resumeCount for stale/double-submit protection.' },
             ...modeProperties,
             detach: { type: 'boolean', description: 'Run in the background and return after the child is queued.' },
             returnFormat: { type: 'string', enum: ['summary', 'evidence'] }
           },
-          required: useExistingAgents ? ['prompt'] : ['prompt', 'custom_agent'],
+          required: ['prompt'],
           additionalProperties: false
         },
         policy: 'auto',
         execute: async (args, context, onUpdate) => {
           const common = parseCommonArgs(args, context)
           if (common instanceof Error) return toolError(common.message)
+          const resume = parseResumeArgs(args, context)
+          if (resume instanceof Error) return toolError(resume.message)
+          if (resume) {
+            return await resumeChild(runtime, common, resume, context, onUpdate)
+          }
           const requestedProfile = stringValue(args.profile)
           const customAgentSupplied = args.custom_agent !== undefined && args.custom_agent !== null
           let inlineProfile: InlineProfile | undefined
@@ -314,6 +327,7 @@ async function runChild(
   const record = await runtime.runChild({
     parentThreadId: context.threadId,
     parentTurnId: context.turnId,
+    launcher: 'delegate_task',
     prompt: common.prompt,
     workspace: common.workspace,
     ...(common.label ? { label: common.label } : {}),
@@ -322,19 +336,7 @@ async function runChild(
     ...(selection.routing ? { routing: selection.routing } : {}),
     agentSurface: context.agentSurface ?? 'code',
     ...(subagentTaskRequiresReadOnly(common.prompt) ? { toolPolicyCeiling: 'readOnly' as const } : {}),
-    security: {
-      sandboxRoot: context.workspace,
-      ...(context.allowedProviderIds ? { allowedProviderIds: [...context.allowedProviderIds] } : {}),
-      ...(context.allowedToolNames ? { allowedToolNames: [...context.allowedToolNames] } : {}),
-      ...(context.allowedSkillIds ? { allowedSkillIds: [...context.allowedSkillIds] } : {}),
-      ...(context.allowedReadPaths ? { allowedReadPaths: [...context.allowedReadPaths] } : {}),
-      ...(context.allowedWritePaths ? { allowedWritePaths: [...context.allowedWritePaths] } : {}),
-      ...(context.allowedArtifactIds ? { allowedArtifactIds: [...context.allowedArtifactIds] } : {}),
-      ...(context.blockedProviderIds ? { blockedProviderIds: [...context.blockedProviderIds] } : {}),
-      ...(context.blockedToolNames ? { blockedToolNames: [...context.blockedToolNames] } : {}),
-      ...(context.blockedSkillIds ? { blockedSkillIds: [...context.blockedSkillIds] } : {}),
-      memoryEnabled: context.memoryPolicy?.enabled === true
-    },
+    security: childSecurity(context),
     ...(common.inheritedModel ? { inheritedModel: common.inheritedModel } : {}),
     ...(common.inheritedProviderId ? { inheritedProviderId: common.inheritedProviderId } : {}),
     ...(common.inheritedAccountId ? { inheritedAccountId: common.inheritedAccountId } : {}),
@@ -378,12 +380,125 @@ async function runChild(
     }),
     signal: context.abortSignal
   })
+  return childToolResult(record)
+}
+
+type ResumeArgs = { childId: string; expectedResumeCount?: number }
+
+function parseResumeArgs(
+  args: Record<string, unknown>,
+  context: ToolHostContext
+): ResumeArgs | undefined | Error {
+  const childId = stringValue(args.resumeChildId)
+  const rawCount = args.expectedResumeCount
+  const expectedResumeCount = typeof rawCount === 'number' && Number.isInteger(rawCount) && rawCount >= 0
+    ? rawCount
+    : undefined
+  if (!childId) {
+    if (args.resumeChildId !== undefined) return new Error('resumeChildId must be a non-empty string')
+    if (rawCount !== undefined) return new Error('expectedResumeCount requires resumeChildId')
+    if (context.subagentResume) return new Error('this turn must resume the requested child instead of creating a new one')
+    return undefined
+  }
+  if (rawCount !== undefined && expectedResumeCount === undefined) {
+    return new Error('expectedResumeCount must be a non-negative integer')
+  }
+  const creationOnly = ['label', 'profile', 'custom_agent', 'detach', 'returnFormat']
+    .find((key) => args[key] !== undefined)
+  if (creationOnly) return new Error(`${creationOnly} is unavailable when resumeChildId is set`)
+  if (context.subagentResume) {
+    if (childId !== context.subagentResume.childId) {
+      return new Error(`this turn may only resume child ${context.subagentResume.childId}`)
+    }
+    if (expectedResumeCount !== context.subagentResume.expectedResumeCount) {
+      return new Error(`expectedResumeCount must be ${context.subagentResume.expectedResumeCount}`)
+    }
+  }
+  return {
+    childId,
+    ...(expectedResumeCount !== undefined ? { expectedResumeCount } : {})
+  }
+}
+
+async function resumeChild(
+  runtime: DelegationRuntime,
+  common: Exclude<ReturnType<typeof parseCommonArgs>, Error>,
+  resume: ResumeArgs,
+  context: ToolHostContext,
+  onUpdate: ((update: ToolExecutionUpdate) => Promise<void> | void) | undefined
+): Promise<{ output: Record<string, unknown>; isError: boolean }> {
+  try {
+    const emit = async (status: 'queued' | 'running', childId: string, profile?: string, metadata?: {
+      profileName?: string
+      model?: string
+      reasoningEffort?: string
+    }): Promise<void> => {
+      await onUpdate?.({
+        output: {
+          childId,
+          status,
+          detached: false,
+          ...(profile ? { profile } : {}),
+          ...(metadata?.profileName ? { profileName: metadata.profileName } : {}),
+          ...(metadata?.model ? { model: metadata.model } : {}),
+          ...(metadata?.reasoningEffort ? { reasoningEffort: metadata.reasoningEffort } : {})
+        },
+        isError: false
+      })
+    }
+    const record = await runtime.resumeChild({
+      childId: resume.childId,
+      parentThreadId: context.threadId,
+      parentTurnId: context.turnId,
+      prompt: context.subagentResume ? STRUCTURED_SUBAGENT_RESUME_PROMPT : common.prompt,
+      ...(resume.expectedResumeCount !== undefined
+        ? { expectedResumeCount: resume.expectedResumeCount }
+        : {}),
+      expectedLaunchers: ['delegate_task'],
+      requireResumable: true,
+      security: childSecurity(context),
+      signal: context.abortSignal,
+      onQueued: (childId, profile, metadata) => emit('queued', childId, profile, metadata),
+      onRunning: (childId, profile, metadata) => emit('running', childId, profile, metadata)
+    })
+    return childToolResult(record)
+  } catch (error) {
+    return toolError(error instanceof Error ? error.message : String(error))
+  }
+}
+
+function childSecurity(context: ToolHostContext) {
+  return {
+    sandboxRoot: context.workspace,
+    ...(context.allowedProviderIds ? { allowedProviderIds: [...context.allowedProviderIds] } : {}),
+    ...(context.allowedToolNames ? { allowedToolNames: [...context.allowedToolNames] } : {}),
+    ...(context.allowedSkillIds ? { allowedSkillIds: [...context.allowedSkillIds] } : {}),
+    ...(context.allowedReadPaths ? { allowedReadPaths: [...context.allowedReadPaths] } : {}),
+    ...(context.allowedWritePaths ? { allowedWritePaths: [...context.allowedWritePaths] } : {}),
+    ...(context.allowedArtifactIds ? { allowedArtifactIds: [...context.allowedArtifactIds] } : {}),
+    ...(context.blockedProviderIds ? { blockedProviderIds: [...context.blockedProviderIds] } : {}),
+    ...(context.blockedToolNames ? { blockedToolNames: [...context.blockedToolNames] } : {}),
+    ...(context.blockedSkillIds ? { blockedSkillIds: [...context.blockedSkillIds] } : {}),
+    memoryEnabled: context.memoryPolicy?.enabled === true
+  }
+}
+
+function childToolResult(record: ChildRunRecord): { output: Record<string, unknown>; isError: boolean } {
   return {
     output: {
       childId: record.id,
+      parentThreadId: record.parentThreadId,
+      parentTurnId: record.parentTurnId,
       status: record.status,
       detached: record.detached === true,
+      launcher: record.launcher,
+      terminationReason: record.terminationReason,
+      resumable: record.resumable === true,
+      resumeCount: record.resumeCount ?? 0,
       summary: record.summary,
+      summaryTruncated: record.summaryTruncated,
+      resultRef: record.resultRef,
+      resultUnavailableReason: record.resultUnavailableReason,
       error: record.error,
       evidence: record.evidence,
       usage: record.usage,

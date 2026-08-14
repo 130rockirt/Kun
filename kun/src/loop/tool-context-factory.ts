@@ -1,5 +1,5 @@
 import type { ArtifactStore } from '../artifacts/artifact-store.js'
-import type { ToolHostContext } from '../ports/tool-host.js'
+import type { PptWorkflowScope, ToolHostContext } from '../ports/tool-host.js'
 import type { ToolDispatchInput } from './turn-execution-types.js'
 import type { InteractiveToolBridge } from './interactive-tool-bridge.js'
 
@@ -10,11 +10,14 @@ export type ToolExecutionContextFactoryDeps = {
   allowedReadPaths?: readonly string[]
   allowedWritePaths?: readonly string[]
   allowedArtifactIds?: readonly string[]
+  pptWorkflowScope?: PptWorkflowScope
   blockedProviderIds?: readonly string[]
   blockedToolNames?: readonly string[]
   blockedSkillIds?: readonly string[]
   runtimeDataDir?: string
   artifactStore?: ArtifactStore
+  fastContext?: boolean
+  fastContextTaskCount?: number
   interactiveToolBridge: Pick<InteractiveToolBridge, 'awaitApproval' | 'awaitUserInput'>
 }
 
@@ -34,8 +37,12 @@ export function createToolExecutionContext(
       ? { workspaceCheckpointRequestId: input.workspaceCheckpointRequestId }
       : {}),
     ...(input.orchestration ? { orchestration: input.orchestration } : {}),
-    ...(input.messageSource ? { messageSource: input.messageSource } : {}),
+    ...(input.messageSource && input.messageSource !== 'design_continuation'
+      ? { messageSource: input.messageSource }
+      : {}),
+    ...(input.subagentResume ? { subagentResume: input.subagentResume } : {}),
     ...(input.additionalWorkspaces?.length ? { additionalWorkspaces: input.additionalWorkspaces } : {}),
+    ...(input.knowledgeBases?.length ? { knowledgeBases: input.knowledgeBases } : {}),
     clientSurface: input.clientSurface,
     threadMode: input.threadMode,
     ...(input.activePlanContext ? { guiPlan: input.activePlanContext } : {}),
@@ -65,6 +72,7 @@ export function createToolExecutionContext(
     ...(deps.allowedReadPaths ? { allowedReadPaths: deps.allowedReadPaths } : {}),
     ...(deps.allowedWritePaths ? { allowedWritePaths: deps.allowedWritePaths } : {}),
     ...(deps.allowedArtifactIds ? { allowedArtifactIds: deps.allowedArtifactIds } : {}),
+    ...(deps.pptWorkflowScope ? { pptWorkflowScope: deps.pptWorkflowScope } : {}),
     ...(deps.blockedProviderIds ? { blockedProviderIds: deps.blockedProviderIds } : {}),
     ...(deps.blockedToolNames ? { blockedToolNames: deps.blockedToolNames } : {}),
     ...(deps.blockedSkillIds ? { blockedSkillIds: deps.blockedSkillIds } : {}),
@@ -73,6 +81,8 @@ export function createToolExecutionContext(
     sandboxMode: input.sandboxMode,
     ...(deps.runtimeDataDir ? { runtimeDataDir: deps.runtimeDataDir } : {}),
     ...(deps.artifactStore ? { artifactStore: deps.artifactStore } : {}),
+    ...(deps.fastContext ? { fastContext: true } : {}),
+    ...(deps.fastContextTaskCount ? { fastContextTaskCount: deps.fastContextTaskCount } : {}),
     abortSignal: input.signal,
     awaitApproval: (approval) => deps.interactiveToolBridge.awaitApproval({
       approval,

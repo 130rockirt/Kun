@@ -1,11 +1,42 @@
+import { createElement, useEffect } from 'react'
+import { act, create } from 'react-test-renderer'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cumulativeCacheHitRate, formatCost, loadThreadUsage, primaryCacheHitRate } from './use-thread-usage'
+import {
+  cumulativeCacheHitRate,
+  formatCost,
+  loadThreadUsage,
+  primaryCacheHitRate,
+  retainPendingThreadUsage,
+  useThreadUsageState,
+  type ThreadUsageState,
+  type ThreadUsageSummary
+} from './use-thread-usage'
 
 type RuntimeRequest = (path: string, method?: string) => Promise<{ ok: boolean; status: number; body: string }>
 
 function threadUsagePath(threadId: string): string {
   const params = new URLSearchParams({ group_by: 'thread', thread_id: threadId })
   return `/v1/usage?${params.toString()}`
+}
+
+function usageSummary(overrides: Partial<ThreadUsageSummary> = {}): ThreadUsageSummary {
+  return {
+    inputTokens: 100,
+    outputTokens: 20,
+    reasoningTokens: 0,
+    cachedTokens: 80,
+    cacheMissTokens: 20,
+    cacheHitRate: 0.8,
+    lastTurnCacheHitRate: 0.8,
+    totalTokens: 120,
+    costUsd: null,
+    costCny: null,
+    tokenEconomySavingsTokens: 0,
+    turns: 1,
+    avgTtftMs: null,
+    avgTokensPerSecond: null,
+    ...overrides
+  }
 }
 
 function setRuntimeRequest(runtimeRequest: RuntimeRequest): void {
@@ -19,12 +50,60 @@ function setRuntimeRequest(runtimeRequest: RuntimeRequest): void {
   })
 }
 
+function ThreadUsageProbe({ onState }: { onState: (state: ThreadUsageState) => void }): null {
+  const state = useThreadUsageState('thr_retry', true, 'reload')
+  useEffect(() => onState(state), [onState, state])
+  return null
+}
+
 afterEach(() => {
+  vi.useRealTimers()
   vi.restoreAllMocks()
   Reflect.deleteProperty(globalThis, 'window')
 })
 
 describe('thread usage formatting', () => {
+  it('retries a transient usage request failure after reopening a thread', async () => {
+    vi.useFakeTimers()
+    const runtimeRequest = vi.fn<RuntimeRequest>()
+      .mockResolvedValueOnce({ ok: false, status: 503, body: '' })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        body: JSON.stringify({
+          buckets: [{
+            thread_id: 'thr_retry',
+            input_tokens: 100,
+            output_tokens: 20,
+            cached_tokens: 90,
+            cache_miss_tokens: 10,
+            cache_hit_rate: 0.9,
+            last_turn_cache_hit_rate: 0.9,
+            turns: 1
+          }]
+        })
+      })
+    setRuntimeRequest(runtimeRequest)
+    let latest: ThreadUsageState | undefined
+
+    await act(async () => {
+      create(createElement(ThreadUsageProbe, { onState: (state) => { latest = state } }))
+      await Promise.resolve()
+    })
+    expect(runtimeRequest).toHaveBeenCalledTimes(1)
+    expect(latest).toMatchObject({ loading: true, loaded: false })
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(250)
+    })
+
+    expect(runtimeRequest).toHaveBeenCalledTimes(2)
+    expect(latest).toMatchObject({
+      loading: false,
+      loaded: true,
+      usage: expect.objectContaining({ cacheHitRate: 0.9, lastTurnCacheHitRate: 0.9 })
+    })
+  })
   it('uses RMB for Chinese locales and USD for English locales', () => {
     expect(formatCost(0.125, 'zh', 0.88)).toBe('￥0.8800')
     expect(formatCost(0.125, 'zh-CN', 0.88)).toBe('￥0.8800')
@@ -34,15 +113,42 @@ describe('thread usage formatting', () => {
     expect(formatCost(0.00000001, 'en')).toBe('$<0.0001')
   })
 
-  it('prefers latest-turn cache hit rate for compact cache chips', () => {
+  it('prefers the latest LLM cache result, including zero, then falls back to cumulative usage', () => {
     expect(primaryCacheHitRate({ cacheHitRate: 0.4, lastTurnCacheHitRate: 0.95 })).toBe(0.95)
+    expect(primaryCacheHitRate({ cacheHitRate: 0.4, lastTurnCacheHitRate: 0 })).toBe(0)
     expect(primaryCacheHitRate({ cacheHitRate: 0.4, lastTurnCacheHitRate: null })).toBe(0.4)
     expect(primaryCacheHitRate({ cacheHitRate: null, lastTurnCacheHitRate: null })).toBeNull()
   })
 
+  it('retains the last confirmed cache result while refreshed telemetry is pending', () => {
+    const previous = usageSummary({
+      lastTurnCacheHitRate: 0.95,
+      lastTurnCacheableHitRate: 0.95,
+      cacheMissReasons: ['cold_request']
+    })
+    const pending = usageSummary({
+      inputTokens: 180,
+      lastTurnCacheHitRate: null,
+      lastTurnCacheableHitRate: null,
+      cacheMissReasons: []
+    })
+
+    expect(retainPendingThreadUsage(previous, pending)).toMatchObject({
+      inputTokens: 180,
+      lastTurnCacheHitRate: 0.95,
+      lastTurnCacheableHitRate: 0.95,
+      cacheMissReasons: ['cold_request']
+    })
+    expect(retainPendingThreadUsage(previous, usageSummary({ lastTurnCacheHitRate: 0.72 })))
+      .toMatchObject({ lastTurnCacheHitRate: 0.72 })
+    expect(retainPendingThreadUsage(previous, usageSummary({ lastTurnCacheHitRate: 0 })))
+      .toMatchObject({ lastTurnCacheHitRate: 0 })
+    expect(retainPendingThreadUsage(previous, null)).toBe(previous)
+  })
+
   it('derives the cumulative cache rate from tokens to match the overall usage panel (#654)', () => {
     // Last-turn rate could be 0 while the thread cumulative is non-zero — the
-    // chip must show the token-derived cumulative so it matches the overall panel.
+    // aggregate panel keeps using the token-derived cumulative value.
     expect(cumulativeCacheHitRate({ cachedTokens: 41, cacheMissTokens: 959, cacheHitRate: 0 })).toBeCloseTo(0.041, 3)
     // Falls back to the provided rate when there is no token telemetry.
     expect(cumulativeCacheHitRate({ cachedTokens: 0, cacheMissTokens: 0, cacheHitRate: 0.8 })).toBe(0.8)

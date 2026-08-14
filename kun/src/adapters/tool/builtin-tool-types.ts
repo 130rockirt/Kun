@@ -4,7 +4,10 @@ import type { LocalTool } from './local-tool-host.js'
 
 export type FsStats = NonNullable<Awaited<ReturnType<typeof stat>>>
 
-export const DEFAULT_BASH_TIMEOUT_SECONDS = 24 * 60 * 60
+/** Runtime-owned ceiling for synchronous foreground shell commands. */
+export const DEFAULT_BASH_TIMEOUT_SECONDS = 15 * 60
+/** Runtime-owned ceiling for explicitly detached shell commands. */
+export const DEFAULT_BACKGROUND_BASH_TIMEOUT_SECONDS = 24 * 60 * 60
 export const DEFAULT_SEARCH_LIMIT = 100
 export const DEFAULT_LIST_LIMIT = 500
 export const DEFAULT_FIND_LIMIT = 1000
@@ -15,6 +18,35 @@ export const DEFAULT_GREP_MAX_FILE_BYTES = 2 * 1024 * 1024
 export const DEFAULT_GREP_MAX_TOTAL_BYTES = 8 * 1024 * 1024
 export const DEFAULT_GREP_MAX_CONTEXT_LINES = 20
 export const DEFAULT_GREP_MAX_MATCHES = 1_000
+/** Fast Context is deliberately much smaller than normal source-tool pages. */
+export const FAST_CONTEXT_GREP_MAX_MATCHES = 30
+export const FAST_CONTEXT_GLOB_MAX_MATCHES = 100
+export const FAST_CONTEXT_GREP_MAX_TEXT_CHARACTERS = 300
+export const FAST_CONTEXT_READ_MAX_LINES = 200
+export const FAST_CONTEXT_SEARCH_MAX_OUTPUT_BYTES = 512 * 1024
+/** Read input is capped too, so line paging never scans a giant file. */
+export const FAST_CONTEXT_READ_MAX_FILE_BYTES = FAST_CONTEXT_SEARCH_MAX_OUTPUT_BYTES
+/** Reserve ample space for JSON escaping and read metadata around content. */
+export const FAST_CONTEXT_READ_MAX_CONTENT_BYTES = 64 * 1024
+export const FAST_CONTEXT_SEARCH_TIMEOUT_MS = 8_000
+/** Basenames excluded from Fast Context recursive source discovery. */
+export const FAST_CONTEXT_EXCLUDED_DIRECTORY_NAMES = [
+  '.git',
+  '.cache',
+  '.next',
+  '.turbo',
+  '.venv',
+  '.yarn',
+  '__pycache__',
+  'bower_components',
+  'build',
+  'coverage',
+  'dist',
+  'node_modules',
+  'out',
+  'target',
+  'vendor'
+] as const
 export const DEFAULT_IMAGE_MAX_DIMENSION = 2000
 export const DEFAULT_IMAGE_MAX_BASE64_BYTES = 4.5 * 1024 * 1024
 export const FD_EXECUTABLE_CANDIDATES = [
@@ -59,6 +91,8 @@ export type GrepMatch = {
   line: number
   column: number
   text: string
+  /** True when Fast Context clipped the matching text to its hard ceiling. */
+  text_truncated?: boolean
   context_before?: string[]
   context_after?: string[]
 }
@@ -138,6 +172,19 @@ export type ReadLocalToolOptions = {
   operations?: ReadLocalToolOperations
 }
 
+/**
+ * Optional host-side tuning for a Fast Context child. Every value can only
+ * make the hard Fast Context ceilings stricter; it cannot expand them.
+ */
+export type FastContextSearchOptions = {
+  maxMatches?: number
+  maxTextCharacters?: number
+  maxOutputBytes?: number
+  timeoutMs?: number
+  /** Extra directory basenames to skip in addition to the default exclusions. */
+  excludedDirectoryNames?: readonly string[]
+}
+
 export type BackgroundShellRecordInput = {
   id: string
   threadId: string
@@ -164,7 +211,12 @@ export type BackgroundShellHooks = {
 }
 
 export type BashLocalToolOptions = {
+  /** Foreground timeout. Also remains the compatibility fallback for background calls when explicitly configured. */
   defaultTimeoutSeconds?: number
+  /** Background timeout. Defaults to 24 hours independently of the foreground ceiling. */
+  defaultBackgroundTimeoutSeconds?: number
+  /** Test/composition seam; production defaults to one non-durable liveness update every 30 seconds. */
+  foregroundLivenessIntervalMs?: number
   maxLines?: number
   maxBytes?: number
   /** Process-wide cap for concurrently running detached shell sessions. */
@@ -192,6 +244,7 @@ export type GrepLocalToolOptions = {
   /** Total bytes grep may read itself while scanning/contextualizing results. */
   maxTotalBytes?: number
   rgExecutableCandidates?: string[]
+  fastContext?: FastContextSearchOptions
   operations?: GrepLocalToolOperations
 }
 
@@ -199,6 +252,7 @@ export type FindLocalToolOptions = {
   defaultLimit?: number
   fdExecutableCandidates?: string[]
   rgExecutableCandidates?: string[]
+  fastContext?: FastContextSearchOptions
   operations?: FindLocalToolOperations
 }
 
@@ -218,6 +272,22 @@ export type BuiltinLocalToolsOptions = {
   ls?: LsLocalToolOptions
 }
 export type ToolsOptions = BuiltinLocalToolsOptions
+
+/**
+ * Construction-time companion to the per-call `ToolHostContext.fastContext`
+ * marker. A dedicated child host can use this while the marker keeps shared
+ * hosts from applying these limits to ordinary agent source tools.
+ */
+export const FAST_CONTEXT_SOURCE_TOOL_OPTIONS = {
+  read: {
+    maxLines: FAST_CONTEXT_READ_MAX_LINES,
+    maxBytes: FAST_CONTEXT_READ_MAX_CONTENT_BYTES,
+    maxFileBytes: FAST_CONTEXT_READ_MAX_FILE_BYTES
+  },
+  grep: { fastContext: {} },
+  glob: { fastContext: {} },
+  find: { fastContext: {} }
+} satisfies Pick<BuiltinLocalToolsOptions, 'read' | 'grep' | 'glob' | 'find'>
 
 export interface ReadLocalToolOperations {
   stat?: (path: string) => Promise<FsStats>
@@ -270,6 +340,12 @@ export interface FindLocalToolOperations {
   glob?: (
     input: { pattern: string; path: string; limit: number }
   ) => Promise<Array<{ path: string; relative_path: string }>>
+  /** Test/composition seam for fd/rg source command execution. */
+  spawnCapture?: (
+    file: string,
+    args: string[],
+    options: { cwd: string; signal?: AbortSignal; maxOutputBytes?: number; timeoutMs?: number }
+  ) => Promise<{ stdout: string; stderr: string; exitCode: number | null; outputTruncated: boolean; timedOut: boolean }>
 }
 
 export interface LsLocalToolOperations {

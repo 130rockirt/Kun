@@ -8,10 +8,11 @@ import type { TurnItem } from '../contracts/items.js'
 import type { ModelCapabilityMetadata } from '../contracts/capabilities.js'
 import type {
   ActingTurnModelRoute,
+  SubagentResumeRequest,
   TurnClientSurface
 } from '../contracts/turns.js'
 import type { ArtifactStore } from '../artifacts/artifact-store.js'
-import type { ExtensionToolCatalogEpoch } from '../contracts/threads.js'
+import type { ExtensionToolCatalogEpoch, KnowledgeBaseMount } from '../contracts/threads.js'
 import type {
   UserInputRequest,
   UserInputResolution
@@ -104,6 +105,53 @@ export type KunActionApprovalGrant = {
   expiresAt: string
 }
 
+/**
+ * Host-minted capability for one managed PPT child execution. Models cannot
+ * supply or persist this scope; PPT-only tools require it at discovery and
+ * execution time so the main agent and unrelated children cannot bypass the
+ * dedicated workflow host.
+ */
+export type PptWorkflowScope = Readonly<{
+  action: 'start' | 'select_direction' | 'revise_directions' | 'revise_previews' | 'retry_failed' | 'approve_and_build'
+  /** Structured output the active child attempt must produce before stopping. */
+  stage?: 'direction' | 'review' | 'build'
+  workflowId: string
+  projectDir: string
+  parentThreadId: string
+  previewMode: 'image-first' | 'editable'
+  /** Work-originated source must be read before the child plans the deck. */
+  sourceReadRequired?: boolean
+  directionGate?: Readonly<{
+    required: boolean
+    reason: 'existing-presentation' | 'explicit-skip' | 'work-document' | 'design-reference' | 'complete-visual-system' | 'underspecified-new-deck'
+    basis: string
+    sourceHash: string
+  }>
+  directionContext?: Readonly<{
+    childId: string
+    directions: ReadonlyArray<{
+      directionId: string
+      revision: number
+    }>
+    authority: ReadonlyArray<{
+      directionId: string
+      revision: number
+      recommended: boolean
+      planFingerprint: string
+      candidateFingerprint: string
+    }>
+    slidesFingerprint: string
+  }>
+  reviewContext?: Readonly<{
+    childId: string
+    slides: ReadonlyArray<{
+      slideId: string
+      revision: number
+      annotations?: readonly string[]
+    }>
+  }>
+}>
+
 export type ToolHostContext = {
   threadId: string
   turnId: string
@@ -111,9 +159,13 @@ export type ToolHostContext = {
   /** Pending desktop checkpoint gate for the first workspace mutation. */
   workspaceCheckpointRequestId?: string
   orchestration?: 'direct' | 'graph'
-  messageSource?: 'background_shell' | 'background_subagent' | 'graph_runtime'
+  messageSource?: 'background_shell' | 'background_subagent' | 'graph_runtime' | 'subagent_resume' | 'design_continuation'
+  /** Structured child identity bound to a one-click resume turn. */
+  subagentResume?: SubagentResumeRequest
   /** Additional explicitly trusted workspace roots for this persisted thread. */
   additionalWorkspaces?: readonly string[]
+  /** User-mounted, read-only knowledge sources exposed only through knowledge tools. */
+  knowledgeBases?: readonly KnowledgeBaseMount[]
   /** Initiating client surface used to hide providers that require a desktop workbench. */
   clientSurface?: TurnClientSurface
   /**
@@ -142,6 +194,14 @@ export type ToolHostContext = {
    * in the session log or exposed in a tool schema.
    */
   sourceResultBudgetTokens?: number
+  /**
+   * Internal marker for the budgeted Fast Context retrieval child. It is set
+   * by AgentLoop context factories only; ordinary agent tool semantics remain
+   * unchanged.
+   */
+  fastContext?: boolean
+  /** Number of grouped Fast Context tasks; source calls carry task_indexes for durable attribution. */
+  fastContextTaskCount?: number
   /** Active model provider id selected for this turn. Child agents inherit this routing unless a profile overrides it. */
   modelProviderId?: string
   /** Frozen model/provider/account route used by automatic approval review. */
@@ -163,7 +223,6 @@ export type ToolHostContext = {
   delegationPolicy?: {
     enabled: boolean
     maxParallel?: number
-    maxChildRuns?: number
   }
   /** Optional provider allow-list. When set, other providers are not advertised or executed. */
   allowedProviderIds?: readonly string[]
@@ -196,6 +255,8 @@ export type ToolHostContext = {
   kunActionApprovalGrant?: Readonly<KunActionApprovalGrant>
   /** Host-injected active tool-call id. Callers cannot supply or persist it. */
   activeToolCallId?: string
+  /** Managed PPT authority injected only into the dedicated PPT child loop. */
+  pptWorkflowScope?: PptWorkflowScope
   /** Kun runtime data root; used to allow sandbox-safe reads of background shell output files. */
   runtimeDataDir?: string
   /** Store used to offload oversized tool results from model context. */

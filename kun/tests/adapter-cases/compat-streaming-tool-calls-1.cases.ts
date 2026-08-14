@@ -1,0 +1,357 @@
+import { describe, expect, it } from 'vitest'
+
+import { CompatModelClient, type ModelStreamLimits } from '../../src/adapters/model/compat-model-client.js'
+
+import {
+  ModelStreamResourceBudget,
+  ModelStreamResourceStateError,
+  TOOL_ARGUMENT_PART_COMPACTION_WINDOW,
+  type PendingToolCall
+} from '../../src/adapters/model/model-stream-resource-budget.js'
+
+import type { ModelCapabilityMetadata } from '../../src/contracts/capabilities.js'
+
+import type { ModelRequest, ModelStreamChunk } from '../../src/ports/model-client.js'
+
+type CapturedCall = { url: string; body: Record<string, unknown> }
+
+function sseResponse(
+  frames: string[],
+  options: { close?: boolean; onCancel?: (reason: unknown) => void } = {}
+): Response {
+  const encoder = new TextEncoder()
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const frame of frames) controller.enqueue(encoder.encode(frame))
+      if (options.close !== false) controller.close()
+    },
+    cancel(reason) {
+      options.onCancel?.(reason)
+    }
+  })
+  return new Response(stream, {
+    status: 200,
+    headers: { 'content-type': 'text/event-stream' }
+  })
+}
+
+function frame(payload: unknown): string {
+  return `data: ${JSON.stringify(payload)}\n\n`
+}
+
+function streamingFetch(
+  frames: string[],
+  calls: CapturedCall[] = [],
+  responseOptions: { close?: boolean; onCancel?: (reason: unknown) => void } = {}
+): typeof fetch {
+  return (async (url: string, init: { body: string }) => {
+    calls.push({ url: String(url), body: JSON.parse(init.body) as Record<string, unknown> })
+    return sseResponse(frames, responseOptions)
+  }) as unknown as typeof fetch
+}
+
+function capability(overrides: Partial<ModelCapabilityMetadata> = {}): (model: string) => ModelCapabilityMetadata {
+  return (model) => ({
+    id: model,
+    inputModalities: ['text'],
+    outputModalities: ['text'],
+    supportsToolCalling: true,
+    messageParts: ['text'],
+    ...overrides
+  })
+}
+
+function request(overrides: Partial<ModelRequest> = {}): ModelRequest {
+  return {
+    threadId: 't1',
+    turnId: 'u1',
+    model: 'test-model',
+    systemPrompt: 'You are a helpful assistant.',
+    prefix: [],
+    history: [],
+    tools: [{ name: 'edit', description: 'edit a file', inputSchema: { type: 'object' } }],
+    abortSignal: new AbortController().signal,
+    ...overrides
+  }
+}
+
+async function drain(iterable: AsyncIterable<ModelStreamChunk>): Promise<ModelStreamChunk[]> {
+  const chunks: ModelStreamChunk[] = []
+  for await (const chunk of iterable) chunks.push(chunk)
+  return chunks
+}
+
+function toolCallCompletes(
+  chunks: ModelStreamChunk[]
+): Extract<ModelStreamChunk, { kind: 'tool_call_complete' }>[] {
+  return chunks.filter(
+    (c): c is Extract<ModelStreamChunk, { kind: 'tool_call_complete' }> =>
+      c.kind === 'tool_call_complete'
+  )
+}
+
+function completed(chunks: ModelStreamChunk[]): Extract<ModelStreamChunk, { kind: 'completed' }> {
+  const last = chunks.at(-1)
+  if (!last || last.kind !== 'completed') throw new Error('stream did not end with completed')
+  return last
+}
+
+function expectResourceLimit(chunk: ModelStreamChunk | undefined, messagePrefix: string): void {
+  expect(chunk).toMatchObject({ kind: 'error', code: 'stream_resource_limit' })
+  if (!chunk || chunk.kind !== 'error') throw new Error('expected stream resource error')
+  expect(chunk.message).toMatch(new RegExp(`^${messagePrefix}`))
+  expect(chunk.message).toContain('responseBytes=')
+  expect(chunk.message).toContain('frames=')
+  expect(chunk.message).toContain('pendingToolCalls=')
+  expect(chunk.message).toContain('pendingArgumentBytes=')
+  expect(chunk.message).toContain('pendingArgumentFragments=')
+}
+
+function chatToolDelta(d: { index: number; id?: string; name?: string; args?: string }): string {
+  const fn: Record<string, unknown> = {}
+  if (d.name !== undefined) fn.name = d.name
+  if (d.args !== undefined) fn.arguments = d.args
+  const call: Record<string, unknown> = { index: d.index, function: fn }
+  if (d.id !== undefined) call.id = d.id
+  return frame({ choices: [{ index: 0, delta: { tool_calls: [call] } }] })
+}
+
+function chatFinish(reason: string): string {
+  return frame({ choices: [{ index: 0, delta: {}, finish_reason: reason }] })
+}
+
+function chatToolCallDeltas(): string[] {
+  return [
+    chatToolDelta({ index: 0, id: 'call_1', name: 'edit', args: '{"path":' }),
+    chatToolDelta({ index: 0, args: '"a.txt"}' })
+  ]
+}
+
+function makeClient(
+  fetchImpl: typeof fetch,
+  modelCapabilities?: (model: string) => ModelCapabilityMetadata,
+  streamLimits?: Partial<ModelStreamLimits>
+) {
+  return new CompatModelClient({
+    baseUrl: 'https://provider.example/v1/chat/completions',
+    apiKey: 'sk-test',
+    model: 'test-model',
+    endpointFormat: 'chat_completions',
+    fetchImpl,
+    ...(modelCapabilities ? { modelCapabilities } : {}),
+    ...(streamLimits ? { streamLimits } : {})
+  })
+}
+
+function makeResponsesClient(frames: string[]): CompatModelClient {
+  return new CompatModelClient({
+    baseUrl: 'https://provider.example/v1/responses',
+    apiKey: 'sk-test',
+    model: 'test-model',
+    endpointFormat: 'responses',
+    fetchImpl: streamingFetch(frames)
+  })
+}
+
+describe('CompatModelClient streaming tool-call finalization', () => {
+
+it('keeps done-only Responses text and reasoning without duplicating completed output', async () => {
+    const message = {
+      id: 'msg_1',
+      type: 'message',
+      content: [{ type: 'output_text', text: 'Done-only answer.' }]
+    }
+    const reasoning = {
+      id: 'reason_1',
+      type: 'reasoning',
+      summary: [{ type: 'summary_text', text: 'Done-only reasoning.' }]
+    }
+    const chunks = await drain(makeResponsesClient([
+      frame({ type: 'response.output_item.done', output_index: 0, item: message }),
+      frame({ type: 'response.output_item.done', output_index: 1, item: reasoning }),
+      frame({ type: 'response.completed', response: { status: 'completed', output: [message, reasoning] } })
+    ]).stream(request()))
+
+    expect(chunks.filter((chunk) => chunk.kind === 'assistant_text_delta')).toEqual([
+      { kind: 'assistant_text_delta', text: 'Done-only answer.' }
+    ])
+    expect(chunks.filter((chunk) => chunk.kind === 'assistant_reasoning_delta')).toEqual([
+      { kind: 'assistant_reasoning_delta', text: 'Done-only reasoning.' }
+    ])
+    expect(completed(chunks).stopReason).toBe('stop')
+  })
+
+it('keeps Responses text and a function call from the same response exactly once', async () => {
+    const message = {
+      id: 'msg_1',
+      type: 'message',
+      content: [{ type: 'output_text', text: 'Hello world.' }]
+    }
+    const call = {
+      id: 'call_1',
+      call_id: 'call_1',
+      type: 'function_call',
+      name: 'edit',
+      arguments: '{"path":"a.txt"}'
+    }
+    const chunks = await drain(makeResponsesClient([
+      frame({
+        type: 'response.output_text.delta',
+        output_index: 0,
+        content_index: 0,
+        delta: 'Hello '
+      }),
+      frame({ type: 'response.output_item.done', output_index: 0, item: message }),
+      frame({ type: 'response.output_item.done', output_index: 1, item: call }),
+      frame({ type: 'response.completed', response: { status: 'completed', output: [message, call] } })
+    ]).stream(request()))
+
+    expect(chunks.filter((chunk) => chunk.kind === 'assistant_text_delta')).toEqual([
+      { kind: 'assistant_text_delta', text: 'Hello ' },
+      { kind: 'assistant_text_delta', text: 'world.' }
+    ])
+    expect(toolCallCompletes(chunks)).toEqual([{
+      kind: 'tool_call_complete', callId: 'call_1', toolName: 'edit', arguments: { path: 'a.txt' }
+    }])
+    expect(completed(chunks).stopReason).toBe('tool_calls')
+  })
+
+it('deduplicates anonymous Responses deltas against identified completed output', async () => {
+    const message = {
+      id: 'msg_1',
+      type: 'message',
+      content: [{ type: 'output_text', text: 'Hello world.' }]
+    }
+    const chunks = await drain(makeResponsesClient([
+      frame({
+        type: 'response.output_text.delta',
+        content_index: 0,
+        delta: 'Hello '
+      }),
+      frame({
+        type: 'response.completed',
+        response: { status: 'completed', output: [message] }
+      })
+    ]).stream(request()))
+
+    expect(chunks.filter((chunk) => chunk.kind === 'assistant_text_delta')).toEqual([
+      { kind: 'assistant_text_delta', text: 'Hello ' },
+      { kind: 'assistant_text_delta', text: 'world.' }
+    ])
+    expect(completed(chunks).stopReason).toBe('stop')
+  })
+
+it('uses response.completed.output_text as a final Responses fallback', async () => {
+    const chunks = await drain(makeResponsesClient([
+      frame({ type: 'response.completed', response: { status: 'completed', output_text: 'Completed fallback.' } })
+    ]).stream(request()))
+    expect(chunks).toEqual([
+      { kind: 'assistant_text_delta', text: 'Completed fallback.' },
+      { kind: 'completed', stopReason: 'stop' }
+    ])
+  })
+
+it('accepts CRLF-delimited SSE frames', async () => {
+    const frames = [
+      `data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: 'hello' }, finish_reason: 'stop' }] })}\r\n\r\n`
+    ]
+    const chunks = await drain(makeClient(streamingFetch(frames)).stream(request()))
+    expect(chunks).toEqual(expect.arrayContaining([{ kind: 'assistant_text_delta', text: 'hello' }]))
+    expect(completed(chunks).stopReason).toBe('stop')
+  })
+
+it('reports malformed or truncated SSE instead of completing a partial response', async () => {
+    const malformed = await drain(makeClient(streamingFetch(['data: {bad-json}\n\n'])).stream(request()))
+    expect(malformed).toEqual([{ kind: 'error', message: 'model stream contained invalid SSE JSON', code: 'stream_invalid_frame' }])
+
+    const truncated = await drain(makeClient(streamingFetch([
+      frame({ choices: [{ index: 0, delta: { content: 'partial' } }] })
+    ])).stream(request()))
+    expect(truncated).toEqual([
+      { kind: 'assistant_text_delta', text: 'partial' },
+      expect.objectContaining({
+        kind: 'error',
+        message: expect.stringContaining('model stream ended before a terminal frame'),
+        code: 'stream_truncated'
+      })
+    ])
+  })
+
+it('emits a tool call when chat_completions ends with finish_reason "tool_calls" (no double emit)', async () => {
+    const frames = [...chatToolCallDeltas(), chatFinish('tool_calls'), 'data: [DONE]\n\n']
+    const chunks = await drain(makeClient(streamingFetch(frames)).stream(request()))
+    const calls = toolCallCompletes(chunks)
+    expect(calls).toHaveLength(1)
+    expect(calls[0].toolName).toBe('edit')
+    expect(calls[0].arguments).toEqual({ path: 'a.txt' })
+    expect(completed(chunks).stopReason).toBe('tool_calls')
+  })
+
+it('recovers a tool call the provider mislabeled as finish_reason "stop"', async () => {
+    // Regression: previously dropped silently because finishReason !== 'tool_calls'.
+    const frames = [...chatToolCallDeltas(), chatFinish('stop'), 'data: [DONE]\n\n']
+    const chunks = await drain(makeClient(streamingFetch(frames)).stream(request()))
+    const calls = toolCallCompletes(chunks)
+    expect(calls).toHaveLength(1)
+    expect(calls[0].arguments).toEqual({ path: 'a.txt' })
+    // A recovered call means it was really a tool-call turn.
+    expect(completed(chunks).stopReason).toBe('tool_calls')
+  })
+
+it('recovers a tool call when the stream ends with a bare [DONE] and no finish_reason', async () => {
+    const frames = [...chatToolCallDeltas(), 'data: [DONE]\n\n']
+    const chunks = await drain(makeClient(streamingFetch(frames)).stream(request()))
+    expect(toolCallCompletes(chunks)).toHaveLength(1)
+    expect(completed(chunks).stopReason).toBe('tool_calls')
+  })
+
+it('surfaces truncated arguments as __raw (instead of dropping) on finish_reason "length"', async () => {
+    // Only the first (incomplete) delta arrives, then the model hits its cap.
+    const frames = [
+      chatToolDelta({ index: 0, id: 'call_1', name: 'edit', args: '{"path":' }),
+      chatFinish('length'),
+      'data: [DONE]\n\n'
+    ]
+    const chunks = await drain(makeClient(streamingFetch(frames)).stream(request()))
+    const calls = toolCallCompletes(chunks)
+    expect(calls).toHaveLength(1)
+    expect(calls[0].arguments).toHaveProperty('__raw', '{"path":')
+    // Truncation stays visible as 'length' so the loop can warn the user.
+    expect(completed(chunks).stopReason).toBe('length')
+  })
+
+it('does not emit a tool call when no tool deltas were streamed', async () => {
+    const frames = [
+      frame({ choices: [{ index: 0, delta: { content: 'hello' } }] }),
+      chatFinish('stop'),
+      'data: [DONE]\n\n'
+    ]
+    const chunks = await drain(makeClient(streamingFetch(frames)).stream(request()))
+    expect(toolCallCompletes(chunks)).toHaveLength(0)
+    expect(completed(chunks).stopReason).toBe('stop')
+  })
+
+it('recovers an Anthropic Messages tool_use block cut off before content_block_stop', async () => {
+    const frames = [
+      frame({ type: 'message_start', message: { usage: { input_tokens: 10 } } }),
+      frame({ type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'toolu_1', name: 'edit' } }),
+      frame({ type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"path":"a.txt"}' } }),
+      // No content_block_stop — stream is cut off, then the message ends.
+      frame({ type: 'message_delta', delta: { stop_reason: 'max_tokens' } }),
+      frame({ type: 'message_stop' })
+    ]
+    const client = new CompatModelClient({
+      baseUrl: 'https://provider.example/anthropic',
+      apiKey: 'sk-test',
+      model: 'test-model',
+      endpointFormat: 'messages',
+      fetchImpl: streamingFetch(frames)
+    })
+    const chunks = await drain(client.stream(request()))
+    const calls = toolCallCompletes(chunks)
+    expect(calls).toHaveLength(1)
+    expect(calls[0].toolName).toBe('edit')
+    expect(calls[0].arguments).toEqual({ path: 'a.txt' })
+  })
+
+})

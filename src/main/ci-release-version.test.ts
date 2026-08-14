@@ -84,6 +84,36 @@ describe('CI release version computation', () => {
     })
   })
 
+  it('uses a package.json version newer than the latest tag as an explicit bump', () => {
+    expect(
+      releaseVersion.computeReleaseVersion({
+        allTags: ['v0.2.36', 'v0.2.37'],
+        headTags: [],
+        packageVersion: '0.3.0'
+      })
+    ).toMatchObject({
+      version: '0.3.0',
+      tag: 'v0.3.0',
+      previousTag: 'v0.2.37',
+      existingTag: false
+    })
+  })
+
+  it('still bumps the patch when package.json is not newer than the latest tag', () => {
+    expect(
+      releaseVersion.computeReleaseVersion({
+        allTags: ['v0.2.37'],
+        headTags: [],
+        packageVersion: '0.2.37'
+      })
+    ).toMatchObject({
+      version: '0.2.38',
+      tag: 'v0.2.38',
+      previousTag: 'v0.2.37',
+      existingTag: false
+    })
+  })
+
   it('returns null when there are no valid semver tags', () => {
     expect(releaseVersion.newestSemverTag(['v0.2.4.1', 'not-a-tag'])).toBeNull()
   })

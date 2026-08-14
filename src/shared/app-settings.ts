@@ -9,6 +9,7 @@ export * from './app-settings-schedule'
 export * from './app-settings-workflow'
 export * from './app-settings-claw'
 export * from './app-settings-write'
+export * from './app-settings-code-agents'
 export * from './app-settings-design'
 export * from './app-settings-terminal'
 export * from './app-settings-normalize'
@@ -16,3 +17,7 @@ export * from './app-settings-domain'
 export * from './browser-use'
 export * from './keyboard-shortcuts'
 export * from './model-provider-presets'
+export {
+  MAX_MODEL_CONTEXT_WINDOW_TOKENS,
+  MAX_MODEL_OUTPUT_TOKENS
+} from '../../kun/src/contracts/capabilities.js'

@@ -26,12 +26,18 @@ type WorkbenchDesignAgentRuntimeOptions = {
   composerAttachments: DesignPromptControllerOptions['composerAttachments']
   composerModelGroups: DesignPromptControllerOptions['composerModelGroups']
   composerReasoningEffort: CodeCanvasPromptControllerOptions['composerReasoningEffort']
-  designComposerReasoningEffort: DesignPromptControllerOptions['composerReasoningEffort']
   composerFastMode: DesignPromptControllerOptions['composerFastMode']
+  composerModel?: DesignPromptControllerOptions['composerModel']
+  composerProviderId?: DesignPromptControllerOptions['composerProviderId']
   designContextSuppressedIds: DesignPromptControllerOptions['designContextSuppressedIds']
   designHtmlElementContext: DesignPromptControllerOptions['designHtmlElementContext']
   designWorkspaceRoot: DesignThreadBindingOptions['designWorkspaceRoot']
   clearDesignHistory: DesignPromptControllerOptions['clearDesignHistory']
+  rollbackProvisionalThread?: DesignPromptControllerOptions['rollbackProvisionalThread']
+  designTaskProfileSelection?: DesignPromptControllerOptions['designTaskProfileSelection']
+  lockedDesignProfile?: DesignPromptControllerOptions['lockedDesignProfile']
+  imageGenerationAvailable?: DesignPromptControllerOptions['imageGenerationAvailable']
+  imageGenerationReason?: DesignPromptControllerOptions['imageGenerationReason']
   ensureDesignThreadForWorkspace: DesignPromptControllerOptions['ensureDesignThreadForWorkspace']
   getAttachmentScope: DesignPromptControllerOptions['getAttachmentScope']
   clearActiveThreadSelection: DesignThreadBindingOptions['clearActiveThreadSelection']
@@ -63,13 +69,19 @@ export function useWorkbenchDesignAgentRuntime({
   composerAttachments,
   composerModelGroups,
   composerReasoningEffort,
-  designComposerReasoningEffort,
   composerFastMode,
+  composerModel,
+  composerProviderId,
   createThread,
   designContextSuppressedIds,
   designHtmlElementContext,
   designWorkspaceRoot,
   clearDesignHistory,
+  rollbackProvisionalThread,
+  designTaskProfileSelection,
+  lockedDesignProfile,
+  imageGenerationAvailable,
+  imageGenerationReason,
   ensureDesignThreadForWorkspace,
   getAttachmentScope,
   clearActiveThreadSelection,
@@ -127,8 +139,10 @@ export function useWorkbenchDesignAgentRuntime({
     workspaceRoot,
     composerAttachments,
     attachmentUploadEnabled,
-    composerReasoningEffort: designComposerReasoningEffort,
+    composerReasoningEffort,
     composerFastMode,
+    composerModel,
+    composerProviderId,
     composerModelGroups,
     designContextSuppressedIds,
     designHtmlElementContext,
@@ -138,6 +152,11 @@ export function useWorkbenchDesignAgentRuntime({
     setDesignAssistantOpen,
     ensureDesignThreadForWorkspace,
     clearDesignHistory,
+    rollbackProvisionalThread,
+    designTaskProfileSelection,
+    lockedDesignProfile,
+    imageGenerationAvailable,
+    imageGenerationReason,
     sendMessage,
     getAttachmentScope,
     clearComposerAttachments,

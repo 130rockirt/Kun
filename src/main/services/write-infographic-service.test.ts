@@ -72,13 +72,13 @@ describe('write infographic service', () => {
     expect(result).toMatchObject({ ok: false, message: expect.stringContaining('not configured') })
   })
 
-  it('rejects documents outside the write workspace', async () => {
+  it('rejects documents outside the Work workspace', async () => {
     const result = await requestWriteInfographic(settingsWithImageGen(), {
       text: 'some text',
       filePath: '/tmp/elsewhere/doc.md',
       workspaceRoot: workspace
     }, { client: fakeClient() })
-    expect(result).toMatchObject({ ok: false, message: expect.stringContaining('inside the write workspace') })
+    expect(result).toMatchObject({ ok: false, message: expect.stringContaining('inside the Work workspace') })
   })
 
   it('saves the infographic into the workspace img folder and returns a markdown-ready path', async () => {

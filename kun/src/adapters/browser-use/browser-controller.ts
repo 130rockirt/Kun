@@ -1,23 +1,31 @@
 import { randomUUID } from 'node:crypto'
 import {
   BROWSER_USE_BRIDGE_CONTRACT_VERSION,
+  BrowserUseBridgeRequest,
   BrowserUseBridgeResponse,
-  KUN_BROWSER_USE_APPROVAL_SIGNING_KEY_ENV,
-  KUN_BROWSER_USE_BRIDGE_TOKEN_ENV,
-  KUN_BROWSER_USE_BRIDGE_URL_ENV,
+  BrowserUseHostChallengeResponse,
   signBrowserUseKunApprovalGrant,
+  verifyBrowserUseBridgeResponse,
+  verifyBrowserUseHostChallenge,
   type BrowserUseActionInput,
   type BrowserUseKunApprovalGrantDraft,
   type BrowserUseKunApprovalMode,
   type BrowserUseToolResult
 } from '../../contracts/browser-use.js'
+import { encryptBrowserUseActionEnvelope } from '../../contracts/browser-use-bridge-crypto.js'
 import type {
   BrowserController,
   BrowserControllerReadiness
 } from '../../ports/browser-controller.js'
+import {
+  currentBrowserUseHostAuthority,
+  fixedBrowserUseHostAuthority,
+  type BrowserUseHostAuthorityLease
+} from './browser-controller-authority.js'
 
 const DEFAULT_TIMEOUT_MS = 120_000
 const MAX_RESPONSE_BYTES = 16 * 1024 * 1024
+const MAX_CHALLENGE_RESPONSE_BYTES = 4 * 1024
 
 export type HostBridgeBrowserControllerOptions = {
   bridgeUrl?: string
@@ -38,29 +46,28 @@ export class BrowserControllerError extends Error {
 }
 
 export class HostBridgeBrowserController implements BrowserController {
-  private readonly bridgeUrl?: string
-  private readonly bridgeToken?: string
-  private readonly approvalSigningKey?: string
+  private readonly fixedAuthority?: BrowserUseHostAuthorityLease
   private readonly timeoutMs: number
   private readonly fetchImpl: typeof fetch
 
   constructor(options: HostBridgeBrowserControllerOptions = {}) {
-    const captured = captureManagedBridgeEnvironment()
-    this.bridgeUrl = normalizeBridgeUrl(
-      options.bridgeUrl ?? captured.bridgeUrl
-    )
-    this.bridgeToken = normalizeBridgeToken(
-      options.bridgeToken ?? captured.bridgeToken
-    )
-    this.approvalSigningKey = normalizeBridgeToken(
-      options.approvalSigningKey ?? captured.approvalSigningKey
-    )
+    if (
+      options.bridgeUrl !== undefined ||
+      options.bridgeToken !== undefined ||
+      options.approvalSigningKey !== undefined
+    ) {
+      this.fixedAuthority = fixedBrowserUseHostAuthority({
+        bridgeUrl: options.bridgeUrl,
+        bridgeToken: options.bridgeToken,
+        approvalSigningKey: options.approvalSigningKey
+      })
+    }
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
     this.fetchImpl = options.fetch ?? fetch
   }
 
   readiness(): BrowserControllerReadiness {
-    if (!this.bridgeUrl || !this.bridgeToken || !this.approvalSigningKey) {
+    if (!this.authority().binding) {
       return {
         available: false,
         interactionRequired: true,
@@ -78,51 +85,95 @@ export class HostBridgeBrowserController implements BrowserController {
     kunApprovalGrant?: BrowserUseKunApprovalGrantDraft
     signal: AbortSignal
   }): Promise<BrowserUseToolResult> {
-    const ready = this.readiness()
-    if (
-      !ready.available ||
-      !this.bridgeUrl ||
-      !this.bridgeToken ||
-      !this.approvalSigningKey
-    ) {
+    const authority = this.authority()
+    const binding = authority.binding
+    if (!binding) {
       throw new BrowserControllerError(
         'interaction_required',
-        ready.reason ?? 'Browser Use host is unavailable.'
+        'Browser Use requires the managed desktop host and a visible authenticated GUI.'
       )
     }
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), this.timeoutMs)
     const onAbort = () => controller.abort(input.signal.reason)
+    const onAuthorityRevoked = () => controller.abort(authority.signal.reason)
     input.signal.addEventListener('abort', onAbort, { once: true })
+    authority.signal.addEventListener('abort', onAuthorityRevoked, { once: true })
     const requestId = randomUUID()
     try {
-      const signedGrant = input.kunApprovalGrant
-        ? signBrowserUseKunApprovalGrant({
-            ...input.kunApprovalGrant,
-            threadId: input.threadId,
-            turnId: input.turnId
-          }, this.approvalSigningKey)
-        : undefined
-      const response = await this.fetchImpl(`${this.bridgeUrl}/v1/actions`, {
+      // addEventListener does not replay an abort that won the race immediately
+      // before registration. Re-read both owners before any network disclosure.
+      if (input.signal.aborted) onAbort()
+      if (authority.signal.aborted) onAuthorityRevoked()
+      controller.signal.throwIfAborted()
+      const challengeNonce = randomUUID()
+      const challengeResponse = await this.fetchImpl(`${binding.bridgeUrl}/v1/challenge`, {
         method: 'POST',
         headers: {
-          authorization: `Bearer ${this.bridgeToken}`,
           'content-type': 'application/json',
           accept: 'application/json'
         },
         body: JSON.stringify({
           contractVersion: BROWSER_USE_BRIDGE_CONTRACT_VERSION,
-          requestId,
-          threadId: input.threadId,
-          turnId: input.turnId,
-          action: input.action,
-          ...(input.kunApprovalMode
-            ? { kunApprovalMode: input.kunApprovalMode }
-            : {}),
-          ...(signedGrant
-            ? { kunApprovalGrant: signedGrant }
-            : {})
+          nonce: challengeNonce
         }),
+        redirect: 'error',
+        signal: controller.signal
+      })
+      if (!challengeResponse.ok) {
+        throw new BrowserControllerError(
+          'browser_host_identity_unverified',
+          `Browser Use host identity challenge failed (HTTP ${challengeResponse.status}).`
+        )
+      }
+      const challengeRaw = await readBoundedJsonResponse(
+        challengeResponse,
+        MAX_CHALLENGE_RESPONSE_BYTES
+      )
+      const challenge = BrowserUseHostChallengeResponse.safeParse(challengeRaw)
+      if (
+        !challenge.success ||
+        challenge.data.nonce !== challengeNonce ||
+        !verifyBrowserUseHostChallenge(challenge.data, binding.approvalSigningKey)
+      ) {
+        throw new BrowserControllerError(
+          'browser_host_identity_unverified',
+          'Browser Use host identity challenge returned an invalid proof.'
+        )
+      }
+
+      const signedGrant = input.kunApprovalGrant
+        ? signBrowserUseKunApprovalGrant({
+            ...input.kunApprovalGrant,
+            threadId: input.threadId,
+            turnId: input.turnId
+          }, binding.approvalSigningKey)
+        : undefined
+      const request = BrowserUseBridgeRequest.parse({
+        contractVersion: BROWSER_USE_BRIDGE_CONTRACT_VERSION,
+        requestId,
+        threadId: input.threadId,
+        turnId: input.turnId,
+        action: input.action,
+        ...(input.kunApprovalMode
+          ? { kunApprovalMode: input.kunApprovalMode }
+          : {}),
+        ...(signedGrant
+          ? { kunApprovalGrant: signedGrant }
+          : {})
+      })
+      const envelope = encryptBrowserUseActionEnvelope({
+        bridgeToken: binding.bridgeToken,
+        request
+      }, binding.approvalSigningKey)
+      controller.signal.throwIfAborted()
+      const response = await this.fetchImpl(`${binding.bridgeUrl}/v1/actions`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          accept: 'application/json'
+        },
+        body: JSON.stringify(envelope),
         redirect: 'error',
         signal: controller.signal
       })
@@ -132,31 +183,13 @@ export class HostBridgeBrowserController implements BrowserController {
           `Browser Use host rejected the request (HTTP ${response.status}).`
         )
       }
-      const declaredLength = Number(response.headers.get('content-length') ?? 0)
-      if (Number.isFinite(declaredLength) && declaredLength > MAX_RESPONSE_BYTES) {
-        throw new BrowserControllerError(
-          'browser_host_response_too_large',
-          'Browser Use host returned an oversized response.'
-        )
-      }
-      const bytes = new Uint8Array(await response.arrayBuffer())
-      if (bytes.byteLength > MAX_RESPONSE_BYTES) {
-        throw new BrowserControllerError(
-          'browser_host_response_too_large',
-          'Browser Use host returned an oversized response.'
-        )
-      }
-      let raw: unknown
-      try {
-        raw = JSON.parse(new TextDecoder().decode(bytes))
-      } catch {
-        throw new BrowserControllerError(
-          'browser_host_invalid_response',
-          'Browser Use host returned malformed JSON.'
-        )
-      }
+      const raw = await readBoundedJsonResponse(response, MAX_RESPONSE_BYTES)
       const parsed = BrowserUseBridgeResponse.safeParse(raw)
-      if (!parsed.success || parsed.data.requestId !== requestId) {
+      if (
+        !parsed.success ||
+        parsed.data.requestId !== requestId ||
+        !verifyBrowserUseBridgeResponse(parsed.data, binding.approvalSigningKey)
+      ) {
         throw new BrowserControllerError(
           'browser_host_invalid_response',
           'Browser Use host returned a mismatched or invalid response.'
@@ -164,82 +197,76 @@ export class HostBridgeBrowserController implements BrowserController {
       }
       return parsed.data.result
     } catch (error) {
-      if (error instanceof BrowserControllerError) throw error
       if (controller.signal.aborted) {
         throw new BrowserControllerError(
-          input.signal.aborted ? 'aborted' : 'browser_host_timeout',
+          input.signal.aborted
+            ? 'aborted'
+            : authority.signal.aborted
+              ? 'browser_host_authority_revoked'
+              : 'browser_host_timeout',
           input.signal.aborted
             ? 'Browser Use action was cancelled.'
+            : authority.signal.aborted
+              ? 'Browser Use host authority changed while the action was running.'
             : 'Browser Use host timed out.'
         )
       }
+      if (error instanceof BrowserControllerError) throw error
       throw new BrowserControllerError('browser_host_unavailable', safeErrorMessage(error))
     } finally {
       clearTimeout(timeout)
       input.signal.removeEventListener('abort', onAbort)
+      authority.signal.removeEventListener('abort', onAuthorityRevoked)
     }
   }
+
+  private authority(): BrowserUseHostAuthorityLease {
+    return this.fixedAuthority ?? currentBrowserUseHostAuthority()
+  }
 }
 
-function normalizeBridgeUrl(value: string | undefined): string | undefined {
-  if (!value) return undefined
+async function readBoundedJsonResponse(
+  response: Response,
+  maxBytes: number
+): Promise<unknown> {
+  const declaredLength = Number(response.headers.get('content-length') ?? 0)
+  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+    throw new BrowserControllerError(
+      'browser_host_response_too_large',
+      'Browser Use host returned an oversized response.'
+    )
+  }
+  if (!response.body) {
+    throw new BrowserControllerError(
+      'browser_host_invalid_response',
+      'Browser Use host returned an empty response.'
+    )
+  }
+
+  const reader = response.body.getReader()
+  const chunks: Uint8Array[] = []
+  let bytes = 0
+  for (;;) {
+    const next = await reader.read()
+    if (next.done) break
+    bytes += next.value.byteLength
+    if (bytes > maxBytes) {
+      await reader.cancel().catch(() => undefined)
+      throw new BrowserControllerError(
+        'browser_host_response_too_large',
+        'Browser Use host returned an oversized response.'
+      )
+    }
+    chunks.push(next.value)
+  }
   try {
-    const url = new URL(value)
-    if (
-      url.protocol !== 'http:' ||
-      url.hostname !== '127.0.0.1' ||
-      !url.port ||
-      url.username ||
-      url.password ||
-      url.pathname !== '/'
-    ) return undefined
-    return url.origin
+    return JSON.parse(Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)), bytes).toString('utf8'))
   } catch {
-    return undefined
+    throw new BrowserControllerError(
+      'browser_host_invalid_response',
+      'Browser Use host returned malformed JSON.'
+    )
   }
-}
-
-function normalizeBridgeToken(value: string | undefined): string | undefined {
-  const token = value?.trim() ?? ''
-  return /^[A-Za-z0-9_-]{32,256}$/.test(token) ? token : undefined
-}
-
-type CapturedManagedBridgeEnvironment = {
-  bridgeUrl?: string
-  bridgeToken?: string
-  approvalSigningKey?: string
-}
-
-let capturedManagedBridgeEnvironment: CapturedManagedBridgeEnvironment | undefined
-
-/**
- * Capture the desktop-only authority once, then remove it from process.env
- * before native provider SDKs spawn model-controlled children. The module
- * cache keeps hot-applied Browser Use provider rebuilds connected without
- * republishing either secret through the process environment.
- */
-function captureManagedBridgeEnvironment(): CapturedManagedBridgeEnvironment {
-  if (capturedManagedBridgeEnvironment) return capturedManagedBridgeEnvironment
-  const captured: CapturedManagedBridgeEnvironment = {
-    ...(process.env[KUN_BROWSER_USE_BRIDGE_URL_ENV]
-      ? { bridgeUrl: process.env[KUN_BROWSER_USE_BRIDGE_URL_ENV] }
-      : {}),
-    ...(process.env[KUN_BROWSER_USE_BRIDGE_TOKEN_ENV]
-      ? { bridgeToken: process.env[KUN_BROWSER_USE_BRIDGE_TOKEN_ENV] }
-      : {}),
-    ...(process.env[KUN_BROWSER_USE_APPROVAL_SIGNING_KEY_ENV]
-      ? {
-          approvalSigningKey:
-            process.env[KUN_BROWSER_USE_APPROVAL_SIGNING_KEY_ENV]
-        }
-      : {})
-  }
-  if (Object.keys(captured).length === 0) return captured
-  capturedManagedBridgeEnvironment = Object.freeze(captured)
-  delete process.env[KUN_BROWSER_USE_BRIDGE_URL_ENV]
-  delete process.env[KUN_BROWSER_USE_BRIDGE_TOKEN_ENV]
-  delete process.env[KUN_BROWSER_USE_APPROVAL_SIGNING_KEY_ENV]
-  return capturedManagedBridgeEnvironment
 }
 
 function safeErrorMessage(error: unknown): string {

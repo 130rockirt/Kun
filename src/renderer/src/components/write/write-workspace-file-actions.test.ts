@@ -1,0 +1,61 @@
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { useWriteWorkspaceStore } from '../../write/write-workspace-store'
+import { createWriteWorkspaceFileActions } from './write-workspace-file-actions'
+
+type ActionParams = Parameters<typeof createWriteWorkspaceFileActions>[0]
+
+function actionParams(overrides: Partial<ActionParams> = {}): ActionParams {
+  return {
+    t: ((key: string) => key) as ActionParams['t'],
+    workspaceReady: true,
+    workspaceRoot: '/workspace',
+    rootDirectory: '/workspace',
+    activeFilePath: '/workspace/brief.md',
+    activeFileIsText: true,
+    fileContent: '# Brief',
+    presentationEnabled: true,
+    presentationInFlight: false,
+    runtimeConnection: 'ready',
+    input: '',
+    setInput: vi.fn(),
+    onSubmitPrompt: vi.fn(),
+    saveTimerRef: { current: null },
+    addWriteWorkspace: vi.fn(async () => undefined),
+    createFile: vi.fn(async () => null),
+    flushSave: vi.fn(async () => true),
+    setAssistantOpen: vi.fn(),
+    setFileError: vi.fn(),
+    ensureWriteThreadForWorkspace: vi.fn(),
+    completeOnboarding: vi.fn(),
+    showExportNotice: vi.fn(),
+    setExportMenuOpen: vi.fn(),
+    setExportingFormat: vi.fn(),
+    setPresentationInFlight: vi.fn(),
+    ...overrides
+  }
+}
+
+afterEach(() => {
+  useWriteWorkspaceStore.getState().resetWorkspace()
+  vi.unstubAllGlobals()
+})
+
+describe('Write presentation action', () => {
+  it('routes a new request to ppt_agent', async () => {
+    useWriteWorkspaceStore.setState({
+      workspaceRoot: '/workspace',
+      activeFilePath: '/workspace/brief.md'
+    })
+    const flushSave = vi.fn(async () => true)
+    const onSubmitPrompt = vi.fn()
+    const actions = createWriteWorkspaceFileActions(actionParams({ flushSave, onSubmitPrompt }))
+
+    await actions.generatePresentation()
+
+    expect(flushSave).toHaveBeenCalledOnce()
+    expect(onSubmitPrompt).toHaveBeenCalledOnce()
+    const prompt = onSubmitPrompt.mock.calls[0][0]
+    expect(prompt).toContain('`ppt_agent`（start）')
+    expect(prompt).toContain('唯一内容来源 Markdown：/workspace/brief.md')
+  })
+})

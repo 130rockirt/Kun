@@ -22,6 +22,7 @@ export type DesignPromptRouterOptions = {
   selectedCount: number
   imageOnlyDisplay: string
   imageOnlyPrompt: string
+  allowMultiPage?: boolean
 }
 
 export type DesignPromptRoute =
@@ -61,7 +62,7 @@ export function routeDesignPrompt(options: DesignPromptRouterOptions): DesignPro
     attachmentCount: attachmentIds.length,
     pagesRunActive: Boolean(options.designState.pagesRun)
   })
-  if (multiPageGate.route === 'multi-page') {
+  if (options.allowMultiPage !== false && multiPageGate.route === 'multi-page') {
     return { kind: 'multi-page', brief: text, workspaceRoot }
   }
 

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   commitInspectorUpdate,
+  buildScreenModifyPrompt,
   nextInspectorOpenForSelection,
   propertiesPanelShellClass,
   propertiesPanelTriggerClass,
@@ -83,6 +84,10 @@ afterEach(() => {
 })
 
 describe('PropertiesPanel surface layout', () => {
+  it('seeds screen modification in the production composer', () => {
+    expect(buildScreenModifyPrompt('Checkout')).toContain('Modify the selected screen "Checkout"')
+  })
+
   it('uses a compact inspector shell on the code whiteboard', () => {
     const className = propertiesPanelShellClass('code')
 
@@ -94,6 +99,7 @@ describe('PropertiesPanel surface layout', () => {
     expect(className).toContain('rounded-[14px]')
     expect(className).not.toContain('right-[76px]')
     expect(className).not.toContain('w-[252px]')
+    expect(propertiesPanelShellClass('work')).toBe(className)
   })
 
   it('keeps the full canvas inspector shell on the design surface', () => {
@@ -109,11 +115,13 @@ describe('PropertiesPanel surface layout', () => {
 
   it('positions the collapsed inspector trigger for both whiteboards', () => {
     const codeClass = propertiesPanelTriggerClass('code')
+    const workClass = propertiesPanelTriggerClass('work')
     const designClass = propertiesPanelTriggerClass('design')
 
     expect(codeClass).toContain('right-[64px]')
     expect(codeClass).toContain('top-[60px]')
     expect(codeClass).toContain('rounded-full')
+    expect(workClass).toBe(codeClass)
     expect(designClass).toContain('right-[76px]')
     expect(designClass).toContain('top-[72px]')
     expect(designClass).toContain('rounded-full')
@@ -122,6 +130,7 @@ describe('PropertiesPanel surface layout', () => {
   it('shows image annotation actions on both design and code surfaces', () => {
     expect(shouldShowImageAnnotationAction('design', true)).toBe(true)
     expect(shouldShowImageAnnotationAction('code', true)).toBe(true)
+    expect(shouldShowImageAnnotationAction('work', true)).toBe(true)
     expect(shouldShowImageAnnotationAction('code', false)).toBe(false)
   })
 
@@ -180,6 +189,7 @@ describe('PropertiesPanel surface layout', () => {
 
   it('does not promote non-design inspector size edits', () => {
     expect(shouldPromoteHtmlFrameInspectorUpdateToManual('code', { width: 500 })).toBe(false)
+    expect(shouldPromoteHtmlFrameInspectorUpdateToManual('work', { width: 500 })).toBe(false)
     expect(shouldPromoteHtmlFrameInspectorUpdateToManual('design', { x: 20 })).toBe(false)
     expect(shouldPromoteHtmlFrameInspectorUpdateToManual('design', {
       devicePreset: 'mobile',

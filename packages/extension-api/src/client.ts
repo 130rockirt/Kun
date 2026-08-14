@@ -139,175 +139,33 @@ import {
   type ExtensionToolHandler
 } from './tools.js'
 
-const MAX_AGENT_REPLAY_EVENTS = 20_000
-const RegistrationResponseSchema = z.strictObject({ registrationId: z.string().min(1).max(256) })
-const SubscriptionResponseSchema = z.strictObject({
-  subscriptionId: z.string().min(1).max(256),
-  replay: z.array(AgentRunEventSchema).max(MAX_AGENT_REPLAY_EVENTS).default([])
-})
-const AgentEventNotificationSchema = z.strictObject({
-  subscriptionId: z.string().min(1).max(256),
-  event: AgentRunEventSchema
-})
-type PublicAgentRunEvent = z.infer<typeof AgentRunEventSchema>
-type AgentSubscriptionState = {
-  emitter: Emitter<PublicAgentRunEvent>
-  initialReplay: PublicAgentRunEvent[]
-  buffered: PublicAgentRunEvent[]
-  listenerCount: number
-  deliveringBuffered: boolean
-  lastDeliveredSequence: number
-}
-
-type JobSubscriptionState = {
-  emitter: Emitter<JobEvent>
-  snapshot: JobSnapshot
-  replayGap: boolean
-  cursor: string
-  complete: boolean
-  initialReplay: JobEvent[]
-  buffered: JobEvent[]
-  listenerCount: number
-  deliveringBuffered: boolean
-  lastDeliveredSequence: number
-}
-
-const MAX_BUFFERED_AGENT_EVENTS = 256
-const MAX_ORPHAN_AGENT_SUBSCRIPTIONS = 32
-const MAX_BUFFERED_JOB_EVENTS = 256
-const MAX_ORPHAN_JOB_SUBSCRIPTIONS = 32
-const StorageValueResponseSchema = z.strictObject({ found: z.boolean(), value: JsonValueSchema.optional() })
-const StorageDeleteResponseSchema = z.strictObject({ deleted: z.boolean() })
-const StringArraySchema = z.array(z.string())
-const OptionalStringResponseSchema = z.strictObject({ value: z.string().optional() })
-const SecretResponseSchema = z.strictObject({ secret: z.string() })
-
-const ProviderInvocationSchema = z.discriminatedUnion('operation', [
-  z.strictObject({ operation: z.literal('probe'), binding: ProviderBindingSchema }),
-  z.strictObject({ operation: z.literal('listModels'), binding: ProviderBindingSchema }),
-  z.strictObject({ operation: z.literal('stream'), request: ModelProviderRequestSchema }),
-  z.strictObject({ operation: z.literal('cancel'), requestId: z.string().min(1).max(256) }),
-  z.strictObject({ operation: z.literal('countTokens'), request: ModelProviderRequestSchema })
-])
-
-const ProviderStreamPayloadSchema = z.discriminatedUnion('kind', [
-  z.strictObject({
-    kind: z.literal('event'),
-    registrationId: z.string().min(1).max(256),
-    requestId: z.string().min(1).max(256),
-    event: ModelProviderStreamEventSchema
-  }),
-  z.strictObject({
-    kind: z.literal('end'),
-    registrationId: z.string().min(1).max(256),
-    requestId: z.string().min(1).max(256),
-    outcome: z.enum(['ended', 'failed'])
-  })
-])
-
-function toWire(value: unknown): JsonValue {
-  const serialized = JSON.stringify(value)
-  return JsonValueSchema.parse(serialized === undefined ? null : JSON.parse(serialized))
-}
-
-function cancellationFromContext(context: HostRequestContext): CancellationToken {
-  return {
-    get isCancellationRequested() {
-      return context.signal?.aborted ?? false
-    },
-    onCancellationRequested(listener) {
-      if (!context.signal) return toDisposable(() => undefined)
-      if (context.signal.aborted) listener()
-      context.signal.addEventListener('abort', listener, { once: true })
-      return toDisposable(() => context.signal?.removeEventListener('abort', listener))
-    }
-  }
-}
-
-function fallbackProviderStreamId(registrationId: string, requestId: string): string {
-  const normalized = `${registrationId}_${requestId}`
-    .replace(/[^a-zA-Z0-9_-]/g, '_')
-    .slice(0, 119)
-  return `p_${normalized || 'stream'}`
-}
-
-async function requestParsed<T>(
-  transport: HostTransport,
-  method: string,
-  params: unknown,
-  schema: z.ZodType<T>,
-  options?: HostRequestOptions
-): Promise<T> {
-  try {
-    return schema.parse(await transport.request(method, toWire(params), options))
-  } catch (error) {
-    if (error instanceof z.ZodError) {
-      throw new ExtensionApiError({
-        code: 'PROTOCOL_ERROR',
-        message: `Host returned an invalid ${method} response`,
-        operation: method,
-        retryable: false,
-        details: { issues: error.issues.map((issue) => ({ path: issue.path.join('.'), message: issue.message })) }
-      })
-    }
-    throw ExtensionApiError.from(error, method)
-  }
-}
-
-class ScopedStorageClient implements ScopedStorageApi {
-  constructor(
-    private readonly transport: HostTransport,
-    private readonly scope: 'global' | 'workspace'
-  ) {}
-
-  async get<T extends JsonValue = JsonValue>(key: string): Promise<T | undefined> {
-    const response = await requestParsed(
-      this.transport,
-      'storage.get',
-      { scope: this.scope, key },
-      StorageValueResponseSchema
-    )
-    return response.found ? (response.value as T) : undefined
-  }
-
-  async set(key: string, value: JsonValue): Promise<void> {
-    await this.transport.request('storage.set', toWire({ scope: this.scope, key, value }))
-  }
-
-  async delete(key: string): Promise<boolean> {
-    return (
-      await requestParsed(
-        this.transport,
-        'storage.delete',
-        { scope: this.scope, key },
-        StorageDeleteResponseSchema
-      )
-    ).deleted
-  }
-
-  keys(): Promise<string[]> {
-    return requestParsed(this.transport, 'storage.keys', { scope: this.scope }, StringArraySchema)
-  }
-}
-
-export interface ExtensionContext extends ActivationContextData {
-  readonly subscriptions: DisposableStore
-  readonly onDidError: Event<ExtensionApiError>
-  readonly commands: CommandsApi
-  readonly storage: StorageApi
-  readonly configuration: ConfigurationApi
-  readonly network: NetworkApi
-  readonly ui: UiApi
-  readonly agent: AgentApi
-  readonly threads: ThreadsApi
-  readonly tools: ToolsApi
-  readonly modelProviders: ModelProvidersApi
-  readonly authentication: AuthenticationApi
-  readonly media: MediaApi
-  readonly jobs: JobsApi
-  readonly workspace: WorkspaceApi
-  readonly workspaceContext?: WorkspaceContext
-}
+import {
+  AgentEventNotificationSchema,
+  RegistrationResponseSchema,
+  SecretResponseSchema,
+  SubscriptionResponseSchema,
+  appendBoundedAgentEvent,
+  appendBoundedJobEvent,
+  cancellationFromContext,
+  mergeAgentEvents,
+  mergeJobEvents,
+  requestParsed,
+  toWire,
+  updateJobSubscriptionState,
+  type AgentSubscriptionState,
+  type JobSubscriptionState,
+  type PublicAgentRunEvent,
+  MAX_ORPHAN_AGENT_SUBSCRIPTIONS,
+  MAX_ORPHAN_JOB_SUBSCRIPTIONS
+} from './client-internals.js'
+import {
+  createCommandsApi,
+  createConfigurationApi,
+  createNetworkApi,
+  createStorageApi,
+  createUiApi
+} from './client-ui-apis.js'
+import { registerProvider } from './client-provider-registration.js'
 
 export class ExtensionHostClient implements Disposable {
   readonly #disposables = new DisposableStore()
@@ -350,99 +208,17 @@ export class ExtensionHostClient implements Disposable {
       transport.onNotification((notification) => this.#handleNotification(notification.method, notification.params))
     )
 
-    this.commands = {
-      registerCommand: async (id, handler) => {
-        LocalIdSchema.parse(id)
-        const { registrationId } = await requestParsed(
-          transport,
-          'commands.register',
-          { id },
-          RegistrationResponseSchema
-        )
-        const localHandler = transport.registerHandler(`commands.invoke:${registrationId}`, async (params) =>
-          toWire(await handler(params))
-        )
-        return toDisposable(async () => {
-          localHandler.dispose()
-          await transport.request('commands.unregister', toWire({ registrationId }))
-        })
-      },
-      executeCommand: async (id, args) =>
-        JsonValueSchema.parse(await transport.request('commands.execute', toWire({ id, args }))) as never
-    }
-
-    this.storage = {
-      global: new ScopedStorageClient(transport, 'global'),
-      workspace: new ScopedStorageClient(transport, 'workspace')
-    }
-
-    this.configuration = {
-      onDidChange: this.#configuration.event,
-      get: async <T extends JsonValue = JsonValue>(sectionId: string, key: string) => {
-        const response = await requestParsed(
-          transport,
-          'configuration.get',
-          { sectionId, key },
-          StorageValueResponseSchema
-        )
-        return response.found ? response.value as T : undefined
-      },
-      update: async (sectionId, key, value) => {
-        await transport.request('configuration.update', toWire({ sectionId, key, value }))
-      },
-      keys: (sectionId) => requestParsed(
-        transport,
-        'configuration.keys',
-        { sectionId },
-        StringArraySchema
-      )
-    }
-
-    this.network = {
-      fetch: async (request, options) => {
-        const parsed = NetworkRequestSchema.parse(request)
-        try {
-          return NetworkResponseSchema.parse(await transport.request('network.fetch', toWire(parsed), options))
-        } catch (error) {
-          throw ExtensionApiError.from(error, 'network.fetch')
-        }
-      }
-    }
-
-    this.ui = {
+    this.commands = createCommandsApi(transport)
+    this.storage = createStorageApi(transport)
+    this.configuration = createConfigurationApi(transport, this.#configuration.event)
+    this.network = createNetworkApi(transport)
+    this.ui = createUiApi(transport, {
       onDidChangeTheme: this.#theme.event,
       onDidChangeLocale: this.#locale.event,
       onDidReceiveMessage: this.#messages.event,
-      onDidChangeProviderStatus: this.#providerStatus.event,
-      getTheme: () => requestParsed(transport, 'ui.getTheme', {}, ThemeSchema),
-      getLocale: () => requestParsed(transport, 'ui.getLocale', {}, LocaleSchema),
-      getViewState: async <T extends JsonValue = JsonValue>() => {
-        const response = await requestParsed(transport, 'ui.getViewState', {}, StorageValueResponseSchema)
-        return response.found ? (response.value as T) : undefined
-      },
-      setViewState: async (value) => {
-        await transport.request('ui.setViewState', toWire({ value }))
-      },
-      postMessage: async (message) => {
-        await transport.request('ui.postMessage', toWire(HostMessageSchema.parse(message)))
-      },
-      showNotification: async (options) =>
-        (
-          await requestParsed(
-            transport,
-            'ui.showNotification',
-            NotificationOptionsSchema.parse(options),
-            OptionalStringResponseSchema
-          )
-        ).value,
-      attachComposerContext: (request) =>
-        requestParsed(
-          transport,
-          'ui.attachComposerContext',
-          ComposerContextAttachmentRequestSchema.parse(request),
-          ComposerContextAttachmentSchema
-        )
-    }
+      onDidChangeProviderStatus: this.#providerStatus.event
+    })
+
 
     this.agent = {
       createRun: (request) =>
@@ -573,7 +349,7 @@ export class ExtensionHostClient implements Disposable {
 
     this.modelProviders = {
       registerProvider: async (declaration, adapter) =>
-        this.#registerProvider(ModelProviderDeclarationSchema.parse(declaration), adapter),
+        registerProvider(transport, ModelProviderDeclarationSchema.parse(declaration), adapter),
       getStatus: (providerId) =>
         requestParsed(transport, 'modelProviders.getStatus', { providerId }, ProviderStatusSchema)
     }
@@ -830,116 +606,6 @@ export class ExtensionHostClient implements Disposable {
     }
   }
 
-  async #registerProvider(
-    declaration: z.infer<typeof ModelProviderDeclarationSchema>,
-    adapter: ModelProviderAdapter
-  ): Promise<Disposable> {
-    const { registrationId } = await requestParsed(
-      this.transport,
-      'modelProviders.register',
-      declaration,
-      RegistrationResponseSchema
-    )
-    const localHandler = this.transport.registerHandler(
-      `modelProviders.invoke:${registrationId}`,
-      async (params, context) => {
-        const invocation = ProviderInvocationSchema.parse(params)
-        const operationContext = { cancellation: cancellationFromContext(context) }
-        switch (invocation.operation) {
-          case 'probe':
-            return toWire(
-              ProviderProbeResultSchema.parse(await adapter.probe(invocation.binding, operationContext))
-            )
-          case 'listModels':
-            return toWire(
-              z.array(ProviderModelSchema).parse(await adapter.listModels(invocation.binding, operationContext))
-            )
-          case 'stream':
-            {
-              if (this.transport.sendStream === undefined) {
-                for await (const event of adapter.stream(invocation.request, operationContext)) {
-                  await this.transport.notify(
-                    'modelProviders.streamEvent',
-                    toWire({ registrationId, event: ModelProviderStreamEventSchema.parse(event) })
-                  )
-                }
-                return { accepted: true }
-              }
-              const sendStream = this.transport.sendStream.bind(this.transport)
-              const streamId = context.requestId ?? fallbackProviderStreamId(
-                registrationId,
-                invocation.request.requestId
-              )
-              let terminalSent = false
-              try {
-                for await (const rawEvent of adapter.stream(invocation.request, operationContext)) {
-                  const event = ModelProviderStreamEventSchema.parse(rawEvent)
-                  const terminal = event.type === 'completed' || event.type === 'error'
-                  await sendStream(
-                    streamId,
-                    toWire(ProviderStreamPayloadSchema.parse({
-                      kind: 'event',
-                      registrationId,
-                      requestId: invocation.request.requestId,
-                      event
-                    })),
-                    terminal
-                  )
-                  if (terminal) {
-                    terminalSent = true
-                    break
-                  }
-                }
-                if (!terminalSent) {
-                  await sendStream(
-                    streamId,
-                    toWire(ProviderStreamPayloadSchema.parse({
-                      kind: 'end',
-                      registrationId,
-                      requestId: invocation.request.requestId,
-                      outcome: 'ended'
-                    })),
-                    true
-                  )
-                }
-              } catch (error) {
-                if (!terminalSent) {
-                  await sendStream(
-                    streamId,
-                    toWire(ProviderStreamPayloadSchema.parse({
-                      kind: 'end',
-                      registrationId,
-                      requestId: invocation.request.requestId,
-                      outcome: 'failed'
-                    })),
-                    true
-                  ).catch(() => undefined)
-                }
-                throw error
-              }
-            }
-            return { accepted: true }
-          case 'cancel':
-            await adapter.cancel(invocation.requestId)
-            return { accepted: true }
-          case 'countTokens':
-            if (!adapter.countTokens) {
-              throw new ExtensionApiError({
-                code: 'UNSUPPORTED_CAPABILITY',
-                message: 'Provider does not implement countTokens',
-                operation: 'modelProviders.countTokens',
-                retryable: false
-              })
-            }
-            return toWire({ count: await adapter.countTokens(invocation.request, operationContext) })
-        }
-      }
-    )
-    return toDisposable(async () => {
-      localHandler.dispose()
-      await this.transport.request('modelProviders.unregister', toWire({ registrationId }))
-    })
-  }
 
   #handleNotification(method: string, params: JsonValue | undefined): void {
     try {
@@ -1020,90 +686,5 @@ export class ExtensionHostClient implements Disposable {
     this.#orphanJobEvents.clear()
     await this.#disposables.dispose()
     await this.transport.dispose()
-  }
-}
-
-function appendBoundedAgentEvent(
-  events: PublicAgentRunEvent[],
-  event: PublicAgentRunEvent
-): void {
-  const existing = events.findIndex((candidate) => candidate.sequence === event.sequence)
-  if (existing >= 0) events[existing] = event
-  else events.push(event)
-  events.sort((left, right) => left.sequence - right.sequence)
-  if (events.length > MAX_BUFFERED_AGENT_EVENTS) {
-    events.splice(0, events.length - MAX_BUFFERED_AGENT_EVENTS)
-  }
-}
-
-function mergeAgentEvents(
-  replay: readonly PublicAgentRunEvent[],
-  live: readonly PublicAgentRunEvent[]
-): PublicAgentRunEvent[] {
-  const bySequence = new Map<number, PublicAgentRunEvent>()
-  for (const event of [...replay, ...live]) bySequence.set(event.sequence, event)
-  return [...bySequence.values()].sort((left, right) => left.sequence - right.sequence)
-}
-
-function appendBoundedJobEvent(events: JobEvent[], event: JobEvent): void {
-  const existing = events.findIndex((candidate) => candidate.sequence === event.sequence)
-  if (existing >= 0) events[existing] = event
-  else events.push(event)
-  events.sort((left, right) => left.sequence - right.sequence)
-  if (events.length > MAX_BUFFERED_JOB_EVENTS) {
-    events.splice(0, events.length - MAX_BUFFERED_JOB_EVENTS)
-  }
-}
-
-function mergeJobEvents(replay: readonly JobEvent[], live: readonly JobEvent[]): JobEvent[] {
-  const bySequence = new Map<number, JobEvent>()
-  for (const event of [...replay, ...live]) bySequence.set(event.sequence, event)
-  return [...bySequence.values()].sort((left, right) => left.sequence - right.sequence)
-}
-
-function updateJobSubscriptionState(state: JobSubscriptionState, event: JobEvent): void {
-  state.lastDeliveredSequence = event.sequence
-  state.cursor = event.cursor
-  state.snapshot = JobSnapshotSchema.parse({
-    ...state.snapshot,
-    state: event.state,
-    updatedAt: event.timestamp,
-    executionAttempt: event.executionAttempt,
-    latestCursor: event.cursor,
-    progress: event.progress ?? state.snapshot.progress,
-    result: event.result ?? state.snapshot.result,
-    error: event.error ?? state.snapshot.error,
-    terminalAt: ['completed', 'failed', 'cancelled', 'interrupted'].includes(event.state)
-      ? event.timestamp
-      : state.snapshot.terminalAt
-  })
-  state.complete = ['completed', 'failed', 'cancelled', 'interrupted'].includes(event.state)
-}
-
-export function createExtensionContext(
-  transport: HostTransport,
-  data: ActivationContextData,
-  client = new ExtensionHostClient(transport)
-): ExtensionContext {
-  const parsed = ActivationContextDataSchema.parse(data)
-  const subscriptions = new DisposableStore()
-  subscriptions.add(client)
-  return {
-    ...parsed,
-    subscriptions,
-    onDidError: client.onDidError,
-    commands: client.commands,
-    storage: client.storage,
-    configuration: client.configuration,
-    network: client.network,
-    ui: client.ui,
-    agent: client.agent,
-    threads: client.threads,
-    tools: client.tools,
-    modelProviders: client.modelProviders,
-    authentication: client.authentication,
-    media: client.media,
-    jobs: client.jobs,
-    workspace: client.workspace
   }
 }

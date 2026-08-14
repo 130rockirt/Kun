@@ -1,4 +1,4 @@
-import { dirname, isAbsolute, resolve } from 'node:path'
+import { dirname, isAbsolute, relative, resolve } from 'node:path'
 import type { BigIntStats } from 'node:fs'
 import { stat } from 'node:fs/promises'
 import {
@@ -248,6 +248,47 @@ export function assertCanWritePath(
 ): void {
   const decision = canWritePath(absolutePath, context)
   if (!decision.ok) throw new Error(decision.block.message)
+}
+
+/**
+ * Re-resolve a delegated write target through every existing link and require
+ * its physical location to remain under the physical counterpart of one of
+ * the host-minted write scopes. Callers re-run this inside their mutation
+ * queue so a lexical in-scope symlink cannot be redirected between discovery
+ * and execution. Existing hard-linked files are rejected because overwriting
+ * one would mutate every name for the inode, including names outside scope.
+ */
+export async function assertDelegatedWritePathPhysicalScope(
+  absolutePath: string,
+  context: Pick<
+    ToolHostContext,
+    'workspace' | 'additionalWorkspaces' | 'sandboxMode' | 'approvedExternalWriteTargets' | 'allowedWritePaths'
+  >
+): Promise<void> {
+  assertCanWritePath(absolutePath, context)
+  if (!context.allowedWritePaths) return
+  const workspace = await resolveExistingWorkspaceRoot(context.workspace)
+  const physicalTarget = await resolvePathThroughSymlinks(absolutePath)
+  const physicalScopes = context.allowedWritePaths.flatMap((scope) => {
+    const lexicalScope = isAbsolute(scope)
+      ? resolve(scope)
+      : resolve(workspace.lexicalRoot, scope)
+    if (!isPathInsideOrEqual(workspace.lexicalRoot, lexicalScope)) return []
+    const relativeScope = relative(workspace.lexicalRoot, lexicalScope)
+    return [resolve(workspace.physicalRoot, relativeScope)]
+  })
+  if (!physicalScopes.some((scope) => isPathInsideOrEqual(scope, physicalTarget))) {
+    throw new Error(`writing resolves outside the delegated child write scopes: ${absolutePath}`)
+  }
+  try {
+    const info = await stat(physicalTarget, { bigint: true })
+    if (info.isFile() && (info.ino === 0n || info.nlink !== 1n)) {
+      throw new Error(`delegated writes require a regular file with exactly one hard link: ${absolutePath}`)
+    }
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    if (code !== 'ENOENT' && code !== 'ENOTDIR') throw error
+  }
 }
 
 export function pathAllowedByScopes(

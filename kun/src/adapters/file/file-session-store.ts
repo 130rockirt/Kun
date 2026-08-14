@@ -1,8 +1,10 @@
-import { appendFile, mkdir, readFile, stat } from 'node:fs/promises'
+import { appendFile, mkdir, open, readFile, stat, type FileHandle } from 'node:fs/promises'
 import { createReadStream } from 'node:fs'
 import { performance } from 'node:perf_hooks'
 import { join, resolve } from 'node:path'
 import type {
+  ItemHistoryPage,
+  ItemHistoryPageOptions,
   ItemHistoryCompactionResult,
   ItemHistoryCommit,
   ItemHistorySnapshot,
@@ -12,13 +14,25 @@ import type { RuntimeEvent } from '../../contracts/events.js'
 import type { TurnItem } from '../../contracts/items.js'
 import { assertSafeThreadId, isSafeThreadId } from '../../contracts/thread-id.js'
 import type { AgentSession } from '../../domain/session.js'
-import { readJsonl } from './file-thread-store.js'
+import {
+  compactUsageEventsJsonlFile,
+  parseReplayEventRecord,
+  readItemPageFromJsonl,
+  readLatestItemsFromJsonl,
+  serializedBytes,
+  warnUsageCompaction
+} from './file-session-jsonl.js'
 import { atomicWriteFile } from './atomic-write.js'
 import { isPathBelowDirectory } from './path-containment.js'
+import {
+  buildPublicItemHistoryPage
+} from '../../services/item-history-page.js'
+import { SessionCompactionScheduler } from './session-compaction-scheduler.js'
+
+export { readLatestItemsFromJsonl } from './file-session-jsonl.js'
 
 const DEFAULT_USAGE_EVENT_COMPACTION_MAX_BYTES = 5 * 1024 * 1024
 const DEFAULT_USAGE_EVENT_RETENTION_DAYS = 365
-const MS_PER_DAY = 86_400_000
 /** Log a warning when a cold loadItems read blocks the loop for at least this long (#621). */
 const SLOW_LOAD_ITEMS_LOG_MS = 1_000
 
@@ -30,12 +44,11 @@ const SLOW_LOAD_ITEMS_LOG_MS = 1_000
 const ITEMS_CACHE_MAX_THREADS = 4
 const DEFAULT_ITEMS_CACHE_MAX_BYTES = 16 * 1024 * 1024
 const DEFAULT_ITEM_HISTORY_COMPACTION_MIN_BYTES = 4 * 1024 * 1024
-const DEFAULT_ITEM_HISTORY_MAX_RECORD_BYTES = 16 * 1024 * 1024
 const HIGHEST_SEQ_CACHE_MAX_THREADS = 256
 const ITEM_HISTORY_REVISION_MAX_THREADS = 512
-// A model tool argument may contain 1 MiB of raw JSON. Invalid JSON is kept in
-// a `__raw` string for safe tool failure, whose escaping can nearly double the
-// persisted item event. Keep replay finite while allowing that valid envelope.
+// A valid model tool argument may contain 1 MiB of JSON, whose escaping can
+// nearly double the persisted item event. Unresolved `__raw` strings are
+// summarized before persistence, while replay remains bounded for valid calls.
 export const DEFAULT_EVENT_REPLAY_MAX_RECORD_BYTES = 4 * 1024 * 1024
 
 /**
@@ -60,6 +73,7 @@ export class FileSessionStore implements SessionStore {
   private nextItemHistoryRevision = 0
   private readonly highestSeqCache = new Map<string, { seq: number; size: number; mtimeMs: number }>()
   private readonly writeQueues = new Map<string, Promise<unknown>>()
+  private readonly compactionScheduler: SessionCompactionScheduler
 
   constructor(options: {
     dataDir: string
@@ -70,6 +84,7 @@ export class FileSessionStore implements SessionStore {
     }
     itemsCacheMaxBytes?: number
     itemHistoryCompactionMinBytes?: number
+    compactionDelayMs?: number
   }) {
     this.dataDir = resolve(options.dataDir, 'threads')
     this.itemsCacheMaxBytes = Math.max(
@@ -93,6 +108,26 @@ export class FileSessionStore implements SessionStore {
       ),
       nowIso: options.usageEventCompaction?.nowIso ?? (() => new Date().toISOString())
     }
+    this.compactionScheduler = new SessionCompactionScheduler({
+      delayMs: options.compactionDelayMs,
+      run: async (threadId, kind) => {
+        if (kind === 'items') {
+          await this.compactItems(threadId)
+          return
+        }
+        await this.compactUsageEventsIfLarge(threadId)
+      },
+      onError: (threadId, kind, error) => {
+        if (kind === 'usage') {
+          warnUsageCompaction(threadId, error)
+          return
+        }
+        const message = error instanceof Error ? error.message : String(error)
+        console.warn(
+          `[kun] item history compaction skipped for ${threadId}; keeping source log: ${message}`
+        )
+      }
+    })
   }
 
   async appendEvent(threadId: string, event: RuntimeEvent): Promise<void> {
@@ -103,12 +138,10 @@ export class FileSessionStore implements SessionStore {
       await appendFile(path, `${JSON.stringify(event)}\n`, { encoding: 'utf-8', mode: 0o600 })
       const info = await stat(path)
       this.cacheHighestSeq(threadId, event.seq, info, { preserveHigher: true })
-      if (event.kind === 'usage') {
-        await this.compactUsageEventsIfLarge(threadId).catch((error) => {
-          warnUsageCompaction(threadId, error)
-        })
-      }
     })
+    // Never await usage compaction on the live append path — a multi-hundred-MB
+    // events.jsonl rewrite would starve lease heartbeats (#621 family).
+    if (event.kind === 'usage') this.scheduleUsageEventCompaction(threadId)
   }
 
   async appendItem(threadId: string, item: TurnItem): Promise<void> {
@@ -184,17 +217,82 @@ export class FileSessionStore implements SessionStore {
     options: { force?: boolean } = {}
   ): Promise<ItemHistoryCompactionResult> {
     assertSafeThreadId(threadId)
-    return this.withThreadWrite(threadId, () =>
-      this.compactItemsUnlocked(threadId, options)
-    )
+    const path = this.messagesPath(threadId)
+    const info = await stat(path).catch(() => null)
+    if (!info) {
+      return { compacted: false, beforeBytes: 0, afterBytes: 0, itemCount: 0 }
+    }
+    if (!options.force && info.size < this.itemHistoryCompactionMinBytes) {
+      return {
+        compacted: false,
+        beforeBytes: info.size,
+        afterBytes: info.size,
+        itemCount: this.itemsCache.get(threadId)?.length ?? 0
+      }
+    }
+    // Scan unlocked so appendItem/updateItem are not queued behind a 350MB parse.
+    const revisionBefore = this.itemHistoryRevision(threadId)
+    const parsed = await readLatestItemsFromJsonl(path, { rejectMalformed: true })
+    const contents = parsed.items.map((item) => JSON.stringify(item)).join('\n')
+    const output = contents ? `${contents}\n` : ''
+    const afterBytes = Buffer.byteLength(output, 'utf-8')
+    if (afterBytes >= info.size) {
+      this.cacheItems(threadId, parsed.items)
+      return {
+        compacted: false,
+        beforeBytes: info.size,
+        afterBytes: info.size,
+        itemCount: parsed.items.length
+      }
+    }
+    return this.withThreadWrite(threadId, async () => {
+      if (this.itemHistoryRevision(threadId) !== revisionBefore) {
+        // A concurrent append invalidated the snapshot; coalesce another pass.
+        this.scheduleItemHistoryCompaction(threadId)
+        return {
+          compacted: false,
+          beforeBytes: info.size,
+          afterBytes: info.size,
+          itemCount: parsed.items.length
+        }
+      }
+      await this.atomicWrite(path, output)
+      this.bumpItemsVersion(threadId)
+      this.cacheItems(threadId, parsed.items)
+      this.bumpItemHistoryRevision(threadId)
+      return {
+        compacted: true,
+        beforeBytes: info.size,
+        afterBytes,
+        itemCount: parsed.items.length
+      }
+    })
+  }
+
+  scheduleItemHistoryCompaction(threadId: string): void {
+    if (!isSafeThreadId(threadId)) return
+    this.compactionScheduler.schedule(threadId, 'items')
+  }
+
+  scheduleUsageEventCompaction(threadId: string): void {
+    if (!isSafeThreadId(threadId)) return
+    this.compactionScheduler.schedule(threadId, 'usage')
+  }
+
+  async flushScheduledCompaction(threadId?: string): Promise<void> {
+    await this.compactionScheduler.flush(threadId)
   }
 
   async loadEventsSince(threadId: string, sinceSeq: number): Promise<RuntimeEvent[]> {
     if (!isSafeThreadId(threadId)) return []
-    const all = await readJsonl<RuntimeEvent>(this.eventsPath(threadId))
-    return all
-      .filter((event) => event.seq > sinceSeq)
-      .sort((a, b) => a.seq - b.seq)
+    // Stream forward so callers that only need a tail never allocate the full
+    // append-only log. Sort remains for stores that historically emitted out of
+    // order; healthy writers already append in seq order.
+    const events: RuntimeEvent[] = []
+    for await (const event of this.iterateEventsSince(threadId, sinceSeq)) {
+      events.push(event)
+    }
+    return events.sort((a, b) => a.seq - b.seq)
   }
 
   async *iterateEventsSince(
@@ -242,6 +340,42 @@ export class FileSessionStore implements SessionStore {
     return this.withThreadWrite(threadId, () => this.loadItemsUnlocked(threadId))
   }
 
+  async loadItemPage(
+    threadId: string,
+    options: ItemHistoryPageOptions
+  ): Promise<ItemHistoryPage> {
+    if (!isSafeThreadId(threadId)) {
+      return { items: [], hasMore: false, itemBytes: 0 }
+    }
+    type PageSource =
+      | { kind: 'cached'; items: TurnItem[] }
+      | { kind: 'file'; handle: FileHandle; size: number }
+    const source = await this.withThreadWrite<PageSource | null>(threadId, async () => {
+      const cached = this.itemsCache.get(threadId)
+      if (cached) {
+        this.cacheItems(threadId, cached)
+        return { kind: 'cached', items: [...cached] }
+      }
+      let handle: FileHandle | undefined
+      try {
+        handle = await open(this.messagesPath(threadId), 'r')
+        const info = await handle.stat()
+        return { kind: 'file', handle, size: info.size }
+      } catch (error) {
+        await handle?.close().catch(() => undefined)
+        if ((error as { code?: string }).code === 'ENOENT') return null
+        throw error
+      }
+    })
+    if (!source) return { items: [], hasMore: false, itemBytes: 0 }
+    if (source.kind === 'cached') return buildPublicItemHistoryPage(source.items, options)
+    if (source.size <= 0) {
+      await source.handle.close()
+      return { items: [], hasMore: false, itemBytes: 0 }
+    }
+    return readItemPageFromJsonl(source.handle, source.size, options)
+  }
+
   private async loadItemsUnlocked(threadId: string): Promise<TurnItem[]> {
     const cached = this.itemsCache.get(threadId)
     if (cached) {
@@ -250,14 +384,8 @@ export class FileSessionStore implements SessionStore {
     }
     const info = await stat(this.messagesPath(threadId)).catch(() => null)
     if (info && info.size >= this.itemHistoryCompactionMinBytes) {
-      await this.compactItemsUnlocked(threadId).catch((error) => {
-        console.warn(
-          `[kun] item history compaction skipped for ${threadId}; keeping source log: ` +
-          `${error instanceof Error ? error.message : String(error)}`
-        )
-      })
-      const compactedCache = this.itemsCache.get(threadId)
-      if (compactedCache) return [...compactedCache]
+      // Defer rewrite; still return a cold deduped projection for this caller.
+      this.scheduleItemHistoryCompaction(threadId)
     }
     const startedAt = performance.now()
     const { items: ordered, rawCount } = await readLatestItemsFromJsonl(
@@ -307,13 +435,19 @@ export class FileSessionStore implements SessionStore {
       this.cacheHighestSeq(threadId, cached.seq, info)
       return cached.seq
     }
-    const events = await readJsonl<RuntimeEvent>(path)
-    const highest = events.reduce((max, event) => Math.max(max, event.seq), 0)
-    this.cacheHighestSeq(threadId, highest, await stat(path).catch(() => info))
+    let highest = 0
+    for await (const event of this.iterateEventsSince(threadId, -1)) {
+      highest = Math.max(highest, event.seq)
+    }
+    // Cache against the size captured before the streaming scan. If a writer
+    // appended concurrently, the next stat differs and forces another scan
+    // rather than pairing an old sequence with the new file size.
+    this.cacheHighestSeq(threadId, highest, info)
     return highest
   }
 
   async resetMemory(): Promise<void> {
+    await this.compactionScheduler.cancelPending().catch(() => undefined)
     this.itemsCache.clear()
     this.itemsCacheBytes.clear()
     this.itemsCacheVersion.clear()
@@ -439,47 +573,6 @@ export class FileSessionStore implements SessionStore {
     return total
   }
 
-  private async compactItemsUnlocked(
-    threadId: string,
-    options: { force?: boolean } = {}
-  ): Promise<ItemHistoryCompactionResult> {
-    const path = this.messagesPath(threadId)
-    const info = await stat(path).catch(() => null)
-    if (!info) {
-      return { compacted: false, beforeBytes: 0, afterBytes: 0, itemCount: 0 }
-    }
-    if (!options.force && info.size < this.itemHistoryCompactionMinBytes) {
-      return {
-        compacted: false,
-        beforeBytes: info.size,
-        afterBytes: info.size,
-        itemCount: this.itemsCache.get(threadId)?.length ?? 0
-      }
-    }
-    const parsed = await readLatestItemsFromJsonl(path, { rejectMalformed: true })
-    const contents = parsed.items.map((item) => JSON.stringify(item)).join('\n')
-    const output = contents ? `${contents}\n` : ''
-    const afterBytes = Buffer.byteLength(output, 'utf-8')
-    this.cacheItems(threadId, parsed.items)
-    if (afterBytes >= info.size) {
-      return {
-        compacted: false,
-        beforeBytes: info.size,
-        afterBytes: info.size,
-        itemCount: parsed.items.length
-      }
-    }
-    await this.atomicWrite(path, output)
-    this.bumpItemsVersion(threadId)
-    this.bumpItemHistoryRevision(threadId)
-    return {
-      compacted: true,
-      beforeBytes: info.size,
-      afterBytes,
-      itemCount: parsed.items.length
-    }
-  }
-
   private threadDir(threadId: string): string {
     assertSafeThreadId(threadId)
     const path = resolve(this.dataDir, threadId)
@@ -525,14 +618,15 @@ export class FileSessionStore implements SessionStore {
     const path = this.eventsPath(threadId)
     const info = await stat(path).catch(() => null)
     if (!info || info.size <= this.usageEventCompaction.maxBytes) return
-    const events = await readJsonl<RuntimeEvent>(path)
-    const compacted = compactUsageEvents(events, {
+    const compacted = await compactUsageEventsJsonlFile(path, {
       nowIso: this.usageEventCompaction.nowIso(),
-      retentionDays: this.usageEventCompaction.retentionDays
+      retentionDays: this.usageEventCompaction.retentionDays,
+      maxRecordBytes: DEFAULT_EVENT_REPLAY_MAX_RECORD_BYTES
     })
-    if (compacted.length >= events.length) return
-    const contents = compacted.map((event) => JSON.stringify(event)).join('\n')
-    await this.atomicWrite(path, contents ? `${contents}\n` : '')
+    if (!compacted) return
+    // Size/mtime changed; drop the stale high-water cache entry so the next
+    // highestSeq() rescans against the rewritten file.
+    this.highestSeqCache.delete(threadId)
   }
 
   /** Used by the loop during shutdown to verify the file actually exists. */
@@ -544,165 +638,4 @@ export class FileSessionStore implements SessionStore {
       return false
     }
   }
-}
-
-function compactUsageEvents(
-  events: RuntimeEvent[],
-  options: { nowIso: string; retentionDays: number }
-): RuntimeEvent[] {
-  const cutoffMs = Date.parse(options.nowIso) - options.retentionDays * MS_PER_DAY
-  if (!Number.isFinite(cutoffMs)) return events
-
-  let latestUsageIndex = -1
-  let latestBeforeCutoffIndex = -1
-  for (let index = 0; index < events.length; index += 1) {
-    const event = events[index]
-    if (event?.kind !== 'usage') continue
-    latestUsageIndex = index
-    const timestamp = Date.parse(event.timestamp)
-    if (Number.isFinite(timestamp) && timestamp < cutoffMs) {
-      latestBeforeCutoffIndex = index
-    }
-  }
-  if (latestUsageIndex < 0) return events
-
-  const keep = new Set<number>()
-  const latestUsageIndexByBucket = new Map<string, number>()
-  for (let index = 0; index < events.length; index += 1) {
-    const event = events[index]
-    if (event.kind !== 'usage') {
-      keep.add(index)
-      continue
-    }
-    if (!shouldRetainUsageEvent(event, index, {
-      cutoffMs,
-      latestUsageIndex,
-      latestBeforeCutoffIndex
-    })) {
-      continue
-    }
-    const bucket = usageCoalescingBucket(event)
-    const previous = latestUsageIndexByBucket.get(bucket)
-    if (previous !== undefined && previous !== latestBeforeCutoffIndex) {
-      keep.delete(previous)
-    }
-    keep.add(index)
-    latestUsageIndexByBucket.set(bucket, index)
-  }
-
-  return events.filter((_event, index) => keep.has(index))
-}
-
-function shouldRetainUsageEvent(
-  event: RuntimeEvent,
-  index: number,
-  options: { cutoffMs: number; latestUsageIndex: number; latestBeforeCutoffIndex: number }
-): boolean {
-  if (event.kind !== 'usage') return true
-  if (index === options.latestUsageIndex || index === options.latestBeforeCutoffIndex) return true
-  const timestamp = Date.parse(event.timestamp)
-  if (!Number.isFinite(timestamp)) return true
-  return timestamp >= options.cutoffMs
-}
-
-function usageCoalescingBucket(event: RuntimeEvent): string {
-  if (event.kind !== 'usage') return ''
-  const day = Number.isFinite(Date.parse(event.timestamp))
-    ? new Date(event.timestamp).toISOString().slice(0, 10)
-    : event.timestamp
-  return `${day}:${event.model ?? ''}`
-}
-
-function parseReplayEventRecord(line: string, maxRecordBytes: number): RuntimeEvent | null {
-  if (!line.trim()) return null
-  if (Buffer.byteLength(line, 'utf-8') > maxRecordBytes) {
-    throw new Error(`event replay record exceeds ${maxRecordBytes} bytes`)
-  }
-  try {
-    const value = JSON.parse(line) as unknown
-    if (!value || typeof value !== 'object') return null
-    const event = value as RuntimeEvent
-    return typeof event.seq === 'number' && Number.isFinite(event.seq) ? event : null
-  } catch {
-    // Keep the existing JSONL tolerance: one corrupt historical record must
-    // not poison replay of the rest of the thread.
-    return null
-  }
-}
-
-function warnUsageCompaction(threadId: string, error: unknown): void {
-  const message = error instanceof Error ? error.message : String(error)
-  console.warn(`[kun] usage event compaction failed for ${threadId}; keeping append-only log: ${message}`)
-}
-
-export async function readLatestItemsFromJsonl(
-  path: string,
-  options: {
-    maxRecordBytes?: number
-    rejectMalformed?: boolean
-  } = {}
-): Promise<{ items: TurnItem[]; rawCount: number; malformedCount: number }> {
-  const maxRecordBytes = Math.max(
-    1,
-    Math.floor(options.maxRecordBytes ?? DEFAULT_ITEM_HISTORY_MAX_RECORD_BYTES)
-  )
-  const latestById = new Map<string, TurnItem>()
-  const firstSeenIds: string[] = []
-  let remainder = ''
-  let rawCount = 0
-  let malformedCount = 0
-
-  const acceptLine = (line: string): void => {
-    if (!line.trim()) return
-    if (Buffer.byteLength(line, 'utf-8') > maxRecordBytes) {
-      throw new Error(`item history record exceeds ${maxRecordBytes} bytes`)
-    }
-    try {
-      const item = JSON.parse(line) as TurnItem
-      if (!item || typeof item !== 'object' || typeof item.id !== 'string' || !item.id) {
-        malformedCount += 1
-        return
-      }
-      rawCount += 1
-      if (!latestById.has(item.id)) firstSeenIds.push(item.id)
-      latestById.set(item.id, item)
-    } catch {
-      malformedCount += 1
-    }
-  }
-
-  try {
-    const stream = createReadStream(path, {
-      encoding: 'utf-8',
-      highWaterMark: Math.min(maxRecordBytes, 64 * 1024)
-    })
-    for await (const chunk of stream) {
-      remainder += typeof chunk === 'string' ? chunk : chunk.toString('utf-8')
-      let newline = remainder.indexOf('\n')
-      while (newline >= 0) {
-        acceptLine(remainder.slice(0, newline))
-        remainder = remainder.slice(newline + 1)
-        newline = remainder.indexOf('\n')
-      }
-      if (Buffer.byteLength(remainder, 'utf-8') > maxRecordBytes) {
-        throw new Error(`item history record exceeds ${maxRecordBytes} bytes`)
-      }
-    }
-    acceptLine(remainder)
-  } catch (error) {
-    if ((error as { code?: string }).code !== 'ENOENT') throw error
-  }
-
-  if (options.rejectMalformed && malformedCount > 0) {
-    throw new Error(`item history contains ${malformedCount} malformed record(s)`)
-  }
-  return {
-    items: firstSeenIds.map((id) => latestById.get(id)!),
-    rawCount,
-    malformedCount
-  }
-}
-
-function serializedBytes(value: unknown): number {
-  return Buffer.byteLength(JSON.stringify(value), 'utf-8')
 }

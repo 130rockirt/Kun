@@ -50,6 +50,8 @@ function settings(endpointFormat: ModelEndpointFormat): AppSettingsV1 {
     terminal: defaultTerminalSettings(),
     guiUpdate: { channel: 'stable' },
     codePromptPrefix: '',
+    chatWelcomeMessage: '',
+    codeAgentPresets: [],
     disabledSkillIds: []
   }
 }

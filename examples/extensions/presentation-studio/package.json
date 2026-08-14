@@ -5,6 +5,8 @@
   "license": "MIT",
   "type": "module",
   "scripts": {
+    "generate:manifest": "node scripts/generate-manifest.mjs",
+    "check:manifest": "node scripts/generate-manifest.mjs --check",
     "build": "npm run build:host && npm run build:webview",
     "build:host": "vite build --config vite.host.config.ts",
     "build:webview": "vite build",

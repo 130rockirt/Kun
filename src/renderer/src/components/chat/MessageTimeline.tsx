@@ -1,80 +1,75 @@
-import type { ReactElement, RefObject } from 'react'
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { ReactElement } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ChevronDown, CircleAlert, GitCommitHorizontal, Hash } from 'lucide-react'
-import type { ChatBlock, RuntimeChildActivity, RuntimeConnectionStatus, ToolBlock } from '../../agent/types'
-import { formatChildActivityLabel } from './explore-peek-summary'
+import { GitCommitHorizontal, Hash } from 'lucide-react'
+import type { ToolBlock } from '../../agent/types'
 import { useChatStore } from '../../store/chat-store'
 import { threadHasPendingRuntimeWork } from '../../store/chat-store-runtime-helpers'
 import { useTimelineStores } from './use-timeline-stores'
 import { useTimelineScroll } from './use-timeline-scroll'
-import { deriveTurnSections, type TurnRuntimeErrorBlock } from './derive-turn-sections'
 import { MessageTimelineEmptyHero, ThreadForkBanner, ThreadForkPoint } from './message-timeline-empty'
-import { GeneratedFilesPanel, MessageBubble } from './message-timeline-bubbles'
-import { PresentationFilesPanel } from './PresentationFilesPanel'
-import { presentationFileArtifactsForTurn } from './presentation-file-artifacts'
-import { ReviewPlanCard, ReviewSummaryCard, TurnChangeSummary, WorkMetaRow } from './message-timeline-cards'
 import {
-  ProcessSectionRow,
-  groupProcessSections,
-  summarizeProcessWork,
-  summarizeToolBlock
-} from './message-timeline-process'
-import { ComponentPrototypeCard } from './ComponentPrototypeCard'
-import type { OpenChildThreadHandler } from './SubagentCallCard'
-import {
-  AnimatedWorkLogo,
-  IKUN_WORK_LOGO_VARIANT_LABEL_KEYS,
-  WORK_LOGO_SWIM_MODE_LABEL_KEYS,
-  useIkunWorkLogoVariant,
-  useWorkLogoSwimMode,
-  type IkunWorkLogoVariant,
-  type WorkLogoSwimMode
-} from './AnimatedWorkLogo'
-import type { UiPluginLabelKey } from '@shared/ui-plugin'
-import { useUiPluginWorkLabel } from '../../store/ui-plugin-store'
-import {
+  activeTimelineTurnIndex,
   groupTurns,
-  isBackgroundShellNoticeBlock,
-  sameTurnContent,
-  splitThink,
   stableTurnKey,
+  turnTaskSurface,
   type Turn
 } from './message-timeline-turns'
-import { extractPlanMetadataFromBlock } from '../../plan/plan-tool'
 import { InjectedMemoryLookupProvider } from './injected-memory-lookup'
-import { planDisplayNameFromRelativePath } from '../../plan/plan-path'
 import {
   TimelineFilePreviewWorkspaceProvider,
   timelineFilePreviewWorkspaceRoot
 } from './timeline-file-preview-workspace'
 import {
-  RelativePathSchema,
-  ResultPreviewSourceSchema,
-  type JsonValue
-} from '@kun/extension-api'
-import type { RegisteredContribution } from '../../extensions/contribution-registry'
-import { boundedPlainText } from '../../extensions/safe-text'
-import {
   DeclarativeActionBar,
   canOpenHostContextMenuForTarget,
   DeclarativeContextMenuOverlay,
-  DeclarativeResultPreviews,
-  type ExtensionResultPreviewSource
+  DeclarativeResultPreviews
 } from '../../extensions/ControlledContributionSurfaces'
 import { resolveActiveExtensionWorkspaceRoot } from '../../extensions/active-extension-workspace'
-import { extractDiffFilePath, extractUnifiedDiffText } from '../../lib/diff-stats'
-import type { PlanBuildOrchestration } from '../../plan/plan-build'
+import type { JsonValue } from '@kun/extension-api'
+import { selectGraphPlanningCorrectionDraft, useGraphStore } from '../../graph/graph-store'
 import {
-  selectGraphPlanningCorrectionDraft,
-  useGraphStore
-} from '../../graph/graph-store'
+  TimelineJumpPreviewTitle,
+  activeTimelineTurnKey,
+  blockScrollStamp,
+  resultPreviewSourcesForTurn,
+  timelineBottomPaddingClass,
+  timelineJumpPreviewMetadata,
+  timelineJumpPreviewTop,
+  timelineJumpRailLeft,
+  timelineJumpRailPreviewLeft,
+  timelineJumpWaveDistance,
+  turnPreview,
+  turnResponsePreview
+} from './message-timeline-jump-preview'
+import { MemoMessageTurn } from './message-timeline-conversation-turn'
+import type { MessageTimelineProps } from './message-timeline-props'
+import { ThreadHydrationLoading } from './ThreadHydrationLoading'
+
+export {
+  TimelineJumpPreviewTitle,
+  TimelineRuntimeError,
+  activeTimelineTurnKey,
+  liveTurnProgressClass,
+  resultPreviewSourcesForTurn,
+  timelineBottomPaddingClass,
+  timelineJumpPreviewMetadata,
+  timelineJumpPreviewTop,
+  timelineJumpRailLeft,
+  timelineJumpRailPreviewLeft,
+  timelineJumpWaveDistance
+} from './message-timeline-jump-preview'
+export type { TimelineJumpPreviewMetadata } from './message-timeline-jump-preview'
+export { ConversationTurn } from './message-timeline-conversation-turn'
+export type { ConversationTurnProps } from './message-timeline-conversation-turn'
 
 export { summarizeToolBlock } from './message-timeline-process'
 
 export function timelineTurnIsProcessing(input: {
   busy: boolean
   isLatestTurn: boolean
+  isActiveTurn?: boolean
   turnPending: boolean
   hasLiveStream: boolean
   turnId?: string
@@ -86,319 +81,12 @@ export function timelineTurnIsProcessing(input: {
   ) {
     return false
   }
-  return (input.busy && input.isLatestTurn) || input.turnPending || input.hasLiveStream
-}
-
-type Props = {
-  blocks: ChatBlock[]
-  liveReasoning: string
-  live: string
-  activeThreadId: string | null
-  runtimeConnection: RuntimeConnectionStatus
-  runtimeError?: string | null
-  onRetryConnection: () => void
-  onOpenSettings: () => void
-  onSelectSuggestion?: (prompt: string) => void
-  focusModeEnabled?: boolean
-  devPreviewCard?: ReactElement | null
-  /** Disables the inline Review Plan card's Build action while a turn runs. */
-  planActionsBusy?: boolean
-  /** Whether Graph can be selected for a new plan build turn. */
-  graphEnabled?: boolean
-  /** Runs the active plan (Build button on the inline Review Plan card). */
-  onBuildPlan?: (orchestration: PlanBuildOrchestration) => void
-  /** Opens/focuses the Plan panel (Open button on the inline card). */
-  onOpenPlan?: () => void
-  /** Opens the current workspace changes panel from a turn summary. */
-  onOpenChanges?: () => void
-  /** Starts a review of the current workspace changes from a turn summary. */
-  onReviewChanges?: () => void
-  reviewChangesDisabled?: boolean
-  compactCards?: boolean
-  onOpenChildThread?: OpenChildThreadHandler
-  onComponentPrototypePrompt?: (prompt: string) => void
-  extensionMessageActions?: readonly RegisteredContribution<'actions.message'>[]
-  extensionContextMenus?: readonly RegisteredContribution<'contextMenus'>[]
-  extensionAttachmentContextMenus?: readonly RegisteredContribution<'contextMenus'>[]
-  extensionCommands?: readonly RegisteredContribution<'commands'>[]
-  extensionResultPreviews?: readonly RegisteredContribution<'message.resultPreviews'>[]
-  onExtensionCommand?: (commandId: string, context: JsonValue) => void | Promise<unknown>
+  return (input.busy && (input.isActiveTurn ?? input.isLatestTurn)) ||
+    input.turnPending ||
+    input.hasLiveStream
 }
 
 const TURN_PAGE_SIZE = 18
-const TIMELINE_JUMP_RAIL_FALLBACK_LEFT_PX = 16
-const TIMELINE_JUMP_RAIL_STAGE_INSET_PX = 16
-const TIMELINE_JUMP_RAIL_WIDTH_PX = 62
-const TIMELINE_JUMP_RAIL_PREVIEW_OFFSET_PX = 68
-const TIMELINE_JUMP_RAIL_PREVIEW_WIDTH_PX = 416
-const TIMELINE_JUMP_RAIL_PREVIEW_MARGIN_PX = 16
-const TIMELINE_JUMP_RAIL_PREVIEW_CONTAINER_GUTTER_PX = 88
-
-export function timelineBottomPaddingClass(): string {
-  return 'pb-10'
-}
-
-export function liveTurnProgressClass(): string {
-  return 'flex w-fit max-w-full items-center gap-2 py-0.5 text-[14px] font-medium text-ds-muted'
-}
-
-export function activeTimelineTurnKey(
-  positions: readonly { key: string; top: number }[],
-  threshold = 96
-): string | null {
-  if (positions.length === 0) return null
-  let active = positions[0].key
-  for (const position of positions) {
-    if (position.top > threshold) break
-    active = position.key
-  }
-  return active
-}
-
-export function timelineJumpRailLeft(containerWidth: number): number {
-  const stageLeft = Math.max(TIMELINE_JUMP_RAIL_FALLBACK_LEFT_PX, TIMELINE_JUMP_RAIL_STAGE_INSET_PX)
-  if (!Number.isFinite(containerWidth) || containerWidth <= 0) return stageLeft
-  const maxLeft = Math.max(0, containerWidth - TIMELINE_JUMP_RAIL_WIDTH_PX - TIMELINE_JUMP_RAIL_FALLBACK_LEFT_PX)
-  return Math.min(stageLeft, maxLeft)
-}
-
-export function timelineJumpRailPreviewLeft(
-  railLeft: number,
-  containerWidth: number
-): number {
-  const previewWidth = Math.min(
-    TIMELINE_JUMP_RAIL_PREVIEW_WIDTH_PX,
-    Math.max(0, containerWidth - TIMELINE_JUMP_RAIL_PREVIEW_CONTAINER_GUTTER_PX)
-  )
-  const minLeft = Math.max(TIMELINE_JUMP_RAIL_FALLBACK_LEFT_PX, TIMELINE_JUMP_RAIL_PREVIEW_MARGIN_PX)
-  const maxLeft = Math.max(minLeft, containerWidth - previewWidth - TIMELINE_JUMP_RAIL_PREVIEW_MARGIN_PX)
-  const preferredLeft = railLeft + TIMELINE_JUMP_RAIL_PREVIEW_OFFSET_PX
-  return Math.min(Math.max(preferredLeft, minLeft), maxLeft)
-}
-
-function blockScrollStamp(block: ChatBlock | undefined): string {
-  if (!block) return ''
-  switch (block.kind) {
-    case 'user':
-    case 'assistant':
-    case 'reasoning':
-    case 'system':
-      return `${block.id}:${block.kind}:${block.text.length}`
-    case 'tool':
-      return `${block.id}:${block.kind}:${block.status}:${block.summary.length}:${block.detail?.length ?? 0}`
-    case 'review':
-      return `${block.id}:${block.kind}:${block.status}:${block.reviewText?.length ?? 0}`
-    case 'approval':
-    case 'approval_review':
-    case 'user_input':
-    case 'compaction':
-      return `${block.id}:${block.kind}:${block.status}`
-    default:
-      return ''
-  }
-}
-
-function turnPreview(turn: Turn, fallback: string): string {
-  if (turn.user && isBackgroundShellNoticeBlock(turn.user)) {
-    const display = turn.user.meta?.displayText?.trim()
-    if (display) {
-      return display.length > 48 ? `${display.slice(0, 47).trimEnd()}...` : display
-    }
-  }
-  const text = turn.user?.text.trim() ?? ''
-  if (!text) return fallback
-  const oneLine = text.replace(/\s+/g, ' ')
-  return oneLine.length > 48 ? `${oneLine.slice(0, 47).trimEnd()}...` : oneLine
-}
-
-function turnResponsePreview(turn: Turn, fallback: string): string {
-  for (let index = turn.blocks.length - 1; index >= 0; index -= 1) {
-    const block = turn.blocks[index]
-    if (block.kind !== 'assistant') continue
-    const content = splitThink(block.text).content.trim()
-    if (content) return content.replace(/\s+/g, ' ')
-  }
-  return fallback
-}
-
-export type TimelineJumpPreviewMetadata = {
-  fileLabels: string[]
-  hasCommit: boolean
-}
-
-function timelineJumpPreviewFileLabel(filePath: string): string {
-  const normalized = filePath.trim().replace(/\\/g, '/').replace(/\/+$/, '')
-  return normalized.split('/').at(-1) ?? normalized
-}
-
-export function timelineJumpPreviewMetadata(turn: Turn): TimelineJumpPreviewMetadata {
-  const fileLabels: string[] = []
-  const seenFileLabels = new Set<string>()
-  let hasCommit = false
-
-  for (const block of turn.blocks) {
-    if (block.kind !== 'tool' || block.status !== 'success') continue
-
-    if (block.toolKind === 'file_change') {
-      const filePath = extractDiffFilePath(extractUnifiedDiffText(block.detail), block.filePath)
-      if (filePath) {
-        const label = timelineJumpPreviewFileLabel(filePath)
-        const key = label.toLocaleLowerCase()
-        if (label && !seenFileLabels.has(key)) {
-          seenFileLabels.add(key)
-          fileLabels.push(label)
-        }
-      }
-    }
-
-    const command = typeof block.meta?.command === 'string' ? block.meta.command : ''
-    if (/\bgit(?:\s+-C\s+(?:"[^"]*"|'[^']*'|\S+))?\s+commit\b/i.test(command)) {
-      hasCommit = true
-    }
-  }
-
-  return { fileLabels: fileLabels.slice(0, 32), hasCommit }
-}
-
-export function timelineJumpPreviewTop(
-  buttonTop: number,
-  buttonHeight: number,
-  railAnchorTop: number
-): number {
-  return buttonTop + buttonHeight / 2 - railAnchorTop
-}
-
-export function timelineJumpWaveDistance(index: number, hoveredIndex: number): number | null {
-  if (hoveredIndex < 0) return null
-  return Math.min(Math.abs(index - hoveredIndex), 3)
-}
-
-export function TimelineJumpPreviewTitle({
-  index,
-  title
-}: {
-  index: number
-  title: string
-}): ReactElement {
-  return (
-    <div className="timeline-jump-rail-preview-title">
-      <span className="timeline-jump-rail-preview-turn-index" aria-hidden="true">
-        {index}
-      </span>
-      <span className="timeline-jump-rail-preview-title-text">{title}</span>
-    </div>
-  )
-}
-
-export function resultPreviewSourcesForTurn(turn: Turn): ExtensionResultPreviewSource[] {
-  const sources: ExtensionResultPreviewSource[] = []
-  const seen = new Set<string>()
-  for (const block of turn.blocks) {
-    if (block.kind !== 'tool' || block.status !== 'success' || !block.meta) continue
-    const generatedFiles = block.meta.generatedFiles
-    if (!Array.isArray(generatedFiles)) continue
-    generatedFiles.slice(0, 32).forEach((input, index) => {
-      if (!input || typeof input !== 'object' || Array.isArray(input)) return
-      const file = input as Record<string, unknown>
-      const mimeType = typeof file.mimeType === 'string'
-        ? file.mimeType.trim().toLowerCase().split(';', 1)[0].slice(0, 128)
-        : ''
-      if (!mimeType) return
-      const artifactId = typeof file.artifactId === 'string' && /^[A-Za-z0-9_-]{16,512}$/.test(file.artifactId)
-        ? file.artifactId
-        : undefined
-      const mediaHandleId = typeof file.mediaHandleId === 'string' && /^[A-Za-z0-9_-]{16,512}$/.test(file.mediaHandleId)
-        ? file.mediaHandleId
-        : undefined
-      const availability = file.availability === 'available' || file.availability === 'unavailable'
-        ? file.availability
-        : undefined
-      const attachmentId = !artifactId && typeof file.id === 'string' && /^[A-Za-z0-9._:-]+$/.test(file.id)
-        ? file.id.slice(0, 256)
-        : undefined
-      const relativePathResult = RelativePathSchema.safeParse(file.relativePath)
-      const relativePath = relativePathResult.success ? relativePathResult.data : undefined
-      const boundedName = typeof file.name === 'string' ? boundedPlainText(file.name, 256).trim() : ''
-      const name = boundedName || undefined
-      const sourceId = `${block.id}:${artifactId || attachmentId || relativePath || name || index}`
-        .replace(/[^A-Za-z0-9._:/+-]/g, '_')
-        .slice(0, 512)
-      if (seen.has(sourceId)) return
-      const source = ResultPreviewSourceSchema.safeParse({
-        sourceId,
-        mimeType,
-        ...(name ? { name } : {}),
-        ...(attachmentId ? { attachmentId } : {}),
-        ...(artifactId ? { artifactId } : {}),
-        ...(mediaHandleId ? { mediaHandleId } : {}),
-        ...(availability ? { availability } : {}),
-        ...(relativePath ? { relativePath } : {}),
-        ...(typeof file.byteSize === 'number' && Number.isFinite(file.byteSize)
-          ? { byteSize: Math.min(Number.MAX_SAFE_INTEGER, Math.max(0, Math.trunc(file.byteSize))) }
-          : {}),
-        ...(typeof file.width === 'number' && Number.isFinite(file.width)
-          ? { width: Math.min(1_000_000, Math.max(0, Math.trunc(file.width))) }
-          : {}),
-        ...(typeof file.height === 'number' && Number.isFinite(file.height)
-          ? { height: Math.min(1_000_000, Math.max(0, Math.trunc(file.height))) }
-          : {})
-      })
-      if (!source.success) return
-      seen.add(sourceId)
-      sources.push(source.data)
-    })
-  }
-  return sources
-}
-
-/** Non-interactive runtime error rendered directly in the conversation flow. */
-export function TimelineRuntimeError({ block }: { block: TurnRuntimeErrorBlock }): ReactElement {
-  const { t } = useTranslation('common')
-  const message = block.text.trim() || block.detail?.trim() || block.code?.trim() || ''
-  const code = block.code?.trim() ?? ''
-  const detail = block.detail?.trim() ?? ''
-  const showCode = Boolean(code && !message.toLowerCase().includes(code.toLowerCase()))
-
-  return (
-    <div
-      role="alert"
-      data-testid="timeline-runtime-error"
-      className="flex min-w-0 items-start gap-3 border-l-2 border-orange-300/80 py-1 pl-4 dark:border-orange-700/70"
-    >
-      <CircleAlert
-        aria-hidden="true"
-        className="mt-1 h-4 w-4 shrink-0 text-orange-600 dark:text-orange-300"
-        strokeWidth={1.9}
-      />
-      <div className="min-w-0 flex-1">
-        <p className="whitespace-pre-wrap break-words font-mono text-[13.5px] leading-6 text-orange-900 dark:text-orange-100">
-          {message}
-        </p>
-        {showCode ? (
-          <p className="mt-1 font-mono text-[11.5px] leading-5 text-orange-700/75 dark:text-orange-300/75">
-            {code}
-          </p>
-        ) : null}
-        {detail ? (
-          <details className="group/error-detail mt-2">
-            <summary className="inline-flex cursor-pointer list-none items-center gap-1 text-[12px] font-medium text-orange-700/80 hover:text-orange-900 dark:text-orange-300/80 dark:hover:text-orange-100">
-              <ChevronDown
-                aria-hidden="true"
-                className="h-3.5 w-3.5 -rotate-90 transition-transform group-open/error-detail:rotate-0"
-                strokeWidth={1.9}
-              />
-              {t('runtimeErrorDetails')}
-            </summary>
-            <pre className="mt-2 max-h-52 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-orange-300/50 bg-orange-50/70 px-3 py-2 font-mono text-[11.5px] leading-5 text-orange-950 dark:border-orange-800/50 dark:bg-orange-950/30 dark:text-orange-100">
-              {detail}
-            </pre>
-          </details>
-        ) : null}
-      </div>
-    </div>
-  )
-}
-
 export function MessageTimeline({
   blocks,
   liveReasoning,
@@ -409,6 +97,7 @@ export function MessageTimeline({
   onRetryConnection,
   onOpenSettings,
   onSelectSuggestion,
+  taskSurfaceControl,
   focusModeEnabled = false,
   devPreviewCard,
   planActionsBusy,
@@ -426,8 +115,9 @@ export function MessageTimeline({
   extensionAttachmentContextMenus = [],
   extensionCommands = [],
   extensionResultPreviews = [],
+  messageContributionsForSurface,
   onExtensionCommand
-}: Props): ReactElement {
+}: MessageTimelineProps): ReactElement {
   const { t } = useTranslation('common')
   const threadLoadingId = useChatStore((state) => state.threadLoadingId)
   const cancelToolCall = useChatStore((state) => state.cancelToolCall)
@@ -443,6 +133,10 @@ export function MessageTimeline({
     chooseWorkspace,
     activeClawChannel,
     busy,
+    threadHasMoreHistory,
+    threadHistoryLoading,
+    loadEarlierThreadHistory,
+    currentTurnId,
     currentTurnUserId,
     turnStartedAtByUserId,
     turnDurationByUserId,
@@ -495,6 +189,7 @@ export function MessageTimeline({
   ].join(':')
   const {
     hiddenTurnCount,
+    hasEarlierTurns,
     loadEarlierTurns,
     collapseEarlierTurns
   } = useTimelineScroll({
@@ -504,6 +199,9 @@ export function MessageTimeline({
     pageSize: TURN_PAGE_SIZE,
     totalTurns: turns.length,
     busy,
+    hasRemoteHistory: threadHasMoreHistory,
+    remoteHistoryLoading: threadHistoryLoading,
+    loadRemoteHistory: loadEarlierThreadHistory,
     scrollDeps: {
       contentKey: scrollContentKey,
       streaming: Boolean(live.trim() || liveReasoning.trim()),
@@ -513,6 +211,10 @@ export function MessageTimeline({
   const visibleTurns = useMemo(
     () => (hiddenTurnCount > 0 ? turns.slice(hiddenTurnCount) : turns),
     [hiddenTurnCount, turns]
+  )
+  const activeTurnIndex = useMemo(
+    () => activeTimelineTurnIndex(visibleTurns, currentTurnId, currentTurnUserId),
+    [currentTurnId, currentTurnUserId, visibleTurns]
   )
   const graphPlanningPaused = Boolean(
     graphPlanningCorrectionTurnId &&
@@ -663,7 +365,10 @@ export function MessageTimeline({
     : -1
 
   return (
-    <TimelineFilePreviewWorkspaceProvider workspaceRoot={filePreviewWorkspaceRoot}>
+    <TimelineFilePreviewWorkspaceProvider
+      workspaceRoot={filePreviewWorkspaceRoot}
+      threadId={activeThreadId}
+    >
     <InjectedMemoryLookupProvider workspaceRoot={workspaceRoot}>
     <div ref={containerRef} className="ds-no-drag relative flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden">
       {visibleTurnAnchors.length > 2 && jumpRailLayout ? (
@@ -733,19 +438,11 @@ export function MessageTimeline({
           ) : null}
         </div>
       ) : null}
-      <div className={`ds-message-timeline-content ds-chat-column-inset ds-chat-content-max-width mx-auto flex w-full min-w-0 flex-col gap-8 pt-8 ${
+      <div className={`ds-message-timeline-content ds-chat-column-inset ds-chat-content-max-width mx-auto flex w-full min-w-0 flex-col ${compactCards ? 'gap-5' : 'gap-8'} pt-8 ${
         timelineBottomPaddingClass()
       }`}>
         {activeThreadId && threadLoadingId === activeThreadId ? (
-          <div
-            data-testid="thread-hydration-skeleton"
-            aria-busy="true"
-            className="flex flex-col gap-4 py-4"
-          >
-            <div className="h-5 w-32 animate-pulse rounded bg-ds-border/60" />
-            <div className="h-20 w-4/5 animate-pulse rounded-2xl bg-ds-border/40" />
-            <div className="ml-auto h-14 w-3/5 animate-pulse rounded-2xl bg-ds-border/30" />
-          </div>
+          <ThreadHydrationLoading />
         ) : !hasContent || !activeThreadId ? (
           <MessageTimelineEmptyHero
             route={heroRoute}
@@ -757,6 +454,7 @@ export function MessageTimeline({
             onRetry={onRetryConnection}
             onOpenSettings={onOpenSettings}
             onSelectSuggestion={onSelectSuggestion}
+            taskSurfaceControl={taskSurfaceControl}
             focusModeEnabled={focusModeEnabled}
           />
         ) : null}
@@ -765,14 +463,17 @@ export function MessageTimeline({
           <ThreadForkBanner parentTitle={forkedFromTitle} />
         ) : null}
 
-        {hiddenTurnCount > 0 && !busy ? (
+        {hasEarlierTurns && !busy ? (
           <div className="flex items-center justify-center">
             <button
               type="button"
+              disabled={threadHistoryLoading}
               onClick={() => loadEarlierTurns({ userInitiated: true })}
               className="ds-chip rounded-full px-4 py-2 text-[13px] font-medium text-ds-muted transition hover:text-ds-ink"
             >
-              {t('timelineShowEarlierTurns', { count: Math.min(hiddenTurnCount, TURN_PAGE_SIZE) })}
+              {t('timelineShowEarlierTurns', {
+                count: Math.min(hiddenTurnCount || TURN_PAGE_SIZE, TURN_PAGE_SIZE)
+              })}
             </button>
           </div>
         ) : null}
@@ -795,11 +496,18 @@ export function MessageTimeline({
               ? Math.max(0, reasoningLast - reasoningFirst)
               : undefined
           const turnPending = threadHasPendingRuntimeWork(turn.blocks)
+          const turnContributions = messageContributionsForSurface?.(turnTaskSurface(turn))
+          const turnMessageActions = turnContributions?.actions ?? extensionMessageActions
+          const turnContextMenus = turnContributions?.contextMenus ?? extensionContextMenus
+          const turnAttachmentMenus = turnContributions?.attachmentContextMenus ?? extensionAttachmentContextMenus
+          const turnResultPreviews = turnContributions?.resultPreviews ?? extensionResultPreviews
           const isLatestTurn = index === visibleTurns.length - 1
-          const hasLiveStream = isLatestTurn && !!(liveReasoning.trim() || live.trim())
+          const isActiveTurn = index === activeTurnIndex
+          const hasLiveStream = isActiveTurn && !!(liveReasoning.trim() || live.trim())
           const turnIsProcessing = timelineTurnIsProcessing({
             busy,
             isLatestTurn,
+            isActiveTurn,
             turnPending,
             hasLiveStream,
             turnId: turn.turnId,
@@ -831,8 +539,8 @@ export function MessageTimeline({
                   (!attachment && !canOpenHostContextMenuForTarget(event.target))
                 ) return
                 const contributions = attachment
-                  ? extensionAttachmentContextMenus
-                  : extensionContextMenus
+                  ? turnAttachmentMenus
+                  : turnContextMenus
                 if (contributions.length === 0) return
                 event.preventDefault()
                 event.stopPropagation()
@@ -840,6 +548,7 @@ export function MessageTimeline({
                   position: { x: event.clientX, y: event.clientY },
                   context: {
                     surface: attachment ? 'attachment' : 'message',
+                    taskSurface: turnTaskSurface(turn),
                     threadId: activeThreadId,
                     turnId: turn.user?.turnId ?? null,
                     messageId: turn.user?.id ?? null,
@@ -853,8 +562,8 @@ export function MessageTimeline({
               <MemoMessageTurn
                 turn={turn}
                 isProcessing={turnIsProcessing}
-                liveReasoning={isLatestTurn ? liveReasoning : ''}
-                live={isLatestTurn ? live : ''}
+                liveReasoning={isActiveTurn ? liveReasoning : ''}
+                live={isActiveTurn ? live : ''}
                 durationMs={durationMs}
                 reasoningDurationMs={reasoningDurationMs}
                 devPreviewCard={isLatestTurn ? devPreviewCard : null}
@@ -872,10 +581,10 @@ export function MessageTimeline({
                 viewportRef={containerRef}
                 compactCards={compactCards}
               />
-              {!turnIsProcessing && extensionMessageActions.length && onExtensionCommand ? (
+              {!turnIsProcessing && turnMessageActions.length && onExtensionCommand ? (
                 <div className="mt-1 flex justify-end">
                   <DeclarativeActionBar
-                    contributions={extensionMessageActions}
+                    contributions={turnMessageActions}
                     context={{
                       surface: 'message',
                       threadId: activeThreadId,
@@ -887,9 +596,9 @@ export function MessageTimeline({
                   />
                 </div>
               ) : null}
-              {!turnIsProcessing && extensionResultPreviews.length ? (
+              {!turnIsProcessing && turnResultPreviews.length ? (
                 <DeclarativeResultPreviews
-                  contributions={extensionResultPreviews}
+                  contributions={turnResultPreviews}
                   sources={resultPreviewSourcesForTurn(turn)}
                   threadId={activeThreadId}
                   turnId={turn.user?.turnId}
@@ -955,8 +664,15 @@ export function MessageTimeline({
             typeof messageContextMenu.context === 'object' &&
             !Array.isArray(messageContextMenu.context) &&
             messageContextMenu.context.surface === 'attachment'
-            ? extensionAttachmentContextMenus
-            : extensionContextMenus}
+            ? messageContributionsForSurface?.(
+                messageContextMenu.context.taskSurface === 'design' ? 'design' : 'code'
+              )?.attachmentContextMenus ?? extensionAttachmentContextMenus
+            : messageContextMenu?.context && typeof messageContextMenu.context === 'object' &&
+                !Array.isArray(messageContextMenu.context)
+              ? messageContributionsForSurface?.(
+                  messageContextMenu.context.taskSurface === 'design' ? 'design' : 'code'
+                )?.contextMenus ?? extensionContextMenus
+              : extensionContextMenus}
           commands={extensionCommands}
           context={messageContextMenu?.context ?? null}
           position={messageContextMenu?.position ?? null}
@@ -969,400 +685,3 @@ export function MessageTimeline({
     </TimelineFilePreviewWorkspaceProvider>
   )
 }
-
-export type ConversationTurnProps = {
-  turn: Turn
-  isProcessing: boolean
-  liveReasoning: string
-  live: string
-  durationMs?: number
-  reasoningDurationMs?: number
-  devPreviewCard?: ReactElement | null
-  planActionsBusy?: boolean
-  graphEnabled?: boolean
-  onBuildPlan?: (orchestration: PlanBuildOrchestration) => void
-  onOpenPlan?: () => void
-  onOpenChanges?: () => void
-  onReviewChanges?: () => void
-  reviewChangesDisabled?: boolean
-  onOpenChildThread?: OpenChildThreadHandler
-  onCancelToolCall?: (block: ToolBlock) => Promise<boolean>
-  onComponentPrototypePrompt?: (prompt: string) => void
-  filePreviewWorkspaceRoot: string
-  viewportRef: RefObject<HTMLDivElement | null>
-  compactCards?: boolean
-  /** Main-thread actions must stay disabled for isolated side conversations. */
-  allowMainThreadActions?: boolean
-}
-
-export function ConversationTurn({
-  turn,
-  isProcessing,
-  liveReasoning,
-  live,
-  durationMs,
-  reasoningDurationMs,
-  devPreviewCard,
-  planActionsBusy,
-  graphEnabled = false,
-  onBuildPlan,
-  onOpenPlan,
-  onOpenChanges,
-  onReviewChanges,
-  reviewChangesDisabled = false,
-  onOpenChildThread,
-  onCancelToolCall,
-  onComponentPrototypePrompt,
-  filePreviewWorkspaceRoot,
-  viewportRef,
-  compactCards = false,
-  allowMainThreadActions = true
-}: ConversationTurnProps): ReactElement {
-  const { t } = useTranslation('common')
-  const forkThreadFromTurn = useChatStore((s) => s.forkThreadFromTurn)
-  const rollbackWorkspaceToCheckpoint = useChatStore((s) => s.rollbackWorkspaceToCheckpoint)
-  const [forking, setForking] = useState(false)
-  const [rollingBackCheckpointId, setRollingBackCheckpointId] = useState<string | null>(null)
-  // Inline Review Plan card: surfaced under a turn that produced a
-  // successful `create_plan` result so the user can open/build the plan
-  // without leaving the conversation.
-  const planResult = useMemo(() => {
-    if (isProcessing) return null
-    for (let index = turn.blocks.length - 1; index >= 0; index -= 1) {
-      const block = turn.blocks[index]
-      if (block.kind !== 'tool' || block.status !== 'success') continue
-      const meta = extractPlanMetadataFromBlock(block)
-      if (meta) return meta
-    }
-    return null
-  }, [turn.blocks, isProcessing])
-  const { think: liveThink, content: liveContent } = splitThink(live)
-  const liveProcessText = [liveReasoning, liveThink].filter(Boolean).join('\n\n')
-  const [workExpandedOverride, setWorkExpandedOverride] = useState<boolean | null>(null)
-
-  const {
-    processBlocks,
-    assistantContentBlocks,
-    runtimeErrorBlocks,
-    componentPrototypeBlocks,
-    generatedFileBlocks,
-    turnFileChanges
-  } = useMemo(
-    () =>
-      deriveTurnSections({
-        turn,
-        isProcessing,
-        liveProcessText,
-        liveContent,
-        workspaceRoot: filePreviewWorkspaceRoot
-      }),
-    [turn, isProcessing, liveProcessText, liveContent, filePreviewWorkspaceRoot]
-  )
-  const presentationFiles = useMemo(
-    () => presentationFileArtifactsForTurn(
-      turn.blocks,
-      filePreviewWorkspaceRoot,
-      isProcessing,
-      typeof window === 'undefined' ? '' : window.kunGui?.platform ?? ''
-    ),
-    [turn.blocks, filePreviewWorkspaceRoot, isProcessing]
-  )
-  const workProcessBlocks = processBlocks
-  const workSummary = useMemo(
-    () => summarizeProcessWork(workProcessBlocks, t),
-    [t, workProcessBlocks]
-  )
-  const workExpanded = workExpandedOverride ?? false
-  const reviewBlocks = useMemo(
-    () => turn.blocks.filter((block) => block.kind === 'review'),
-    [turn.blocks]
-  )
-
-  const processSections = useMemo(
-    () => (isProcessing || workExpanded ? groupProcessSections(workProcessBlocks) : []),
-    [isProcessing, workProcessBlocks, workExpanded]
-  )
-  const reasoningSectionCount = useMemo(
-    () => processSections.filter((section) => section.kind === 'reasoning').length,
-    [processSections]
-  )
-  const forkTurnId =
-    turn.user?.turnId?.trim() ||
-    [...assistantContentBlocks].reverse().find((block) => block.turnId?.trim())?.turnId?.trim() ||
-    ''
-  const forkActionBlockId =
-    allowMainThreadActions && !isProcessing && forkTurnId
-      ? assistantContentBlocks[assistantContentBlocks.length - 1]?.id
-      : undefined
-  const rollbackCheckpointId = turn.user?.meta?.workspaceCheckpointId?.trim() ?? ''
-  const rollbackActionBlockId =
-    allowMainThreadActions && !isProcessing && rollbackCheckpointId
-      ? assistantContentBlocks[assistantContentBlocks.length - 1]?.id
-      : undefined
-
-  // During a live turn, assistant text, reasoning, and tools share one ordered
-  // process timeline. Once complete, that timeline folds by default and only
-  // the final assistant text remains outside it.
-
-  const hasProcess =
-    isProcessing ||
-    workProcessBlocks.length > 0 ||
-    (runtimeErrorBlocks.length > 0 && typeof durationMs === 'number')
-  const showLiveProgress = isProcessing
-  const liveToolBlock = useMemo(
-    () => [...workProcessBlocks].reverse().find(
-      (block): block is Extract<ChatBlock, { kind: 'tool' }> =>
-        block.kind === 'tool' && block.status === 'running'
-    ) ?? [...workProcessBlocks].reverse().find(
-      (block): block is Extract<ChatBlock, { kind: 'tool' }> =>
-        block.kind === 'tool'
-    ),
-    [workProcessBlocks]
-  )
-  const liveChildActivityLabel = useMemo(() => {
-    if (!liveToolBlock) return undefined
-    const child = liveToolBlock.meta?.child
-    if (!child || typeof child !== 'object' || Array.isArray(child)) return undefined
-    const activity = (child as {
-      activity?: { phase?: RuntimeChildActivity['phase']; label?: string; toolName?: string; startedAt?: string; updatedAt?: string }
-    }).activity
-    if (!activity?.label?.trim()) return undefined
-    return formatChildActivityLabel({
-      phase: activity.phase ?? 'tool',
-      label: activity.label.trim(),
-      ...(activity.toolName?.trim() ? { toolName: activity.toolName.trim() } : {}),
-      startedAt: activity.startedAt ?? '',
-      updatedAt: activity.updatedAt ?? ''
-    })
-  }, [liveToolBlock])
-  const showLiveThinking = Boolean(liveProcessText.trim()) && !liveChildActivityLabel && !liveToolBlock
-  const forkFromTurn = async (): Promise<void> => {
-    if (!allowMainThreadActions || !forkTurnId || forking) return
-    setForking(true)
-    try {
-      await forkThreadFromTurn(forkTurnId)
-    } finally {
-      setForking(false)
-    }
-  }
-  const rollbackWorkspace = async (checkpointId: string): Promise<void> => {
-    const targetCheckpointId = checkpointId.trim()
-    if (!allowMainThreadActions || !targetCheckpointId || rollingBackCheckpointId) return
-    setRollingBackCheckpointId(targetCheckpointId)
-    try {
-      await rollbackWorkspaceToCheckpoint(targetCheckpointId)
-    } finally {
-      setRollingBackCheckpointId(null)
-    }
-  }
-
-  return (
-    <div className="flex min-w-0 flex-col gap-4">
-      {turn.user ? (
-        <MessageBubble block={turn.user} allowThreadActions={allowMainThreadActions} />
-      ) : null}
-
-      {hasProcess ? (
-        <div className="flex flex-col gap-1 pb-2">
-          <WorkMetaRow
-            processing={isProcessing}
-            stepCount={workProcessBlocks.length}
-            durationMs={durationMs}
-            reasoningDurationMs={reasoningDurationMs}
-            summary={workSummary}
-            expanded={isProcessing || workExpanded}
-            collapsible={!isProcessing && workProcessBlocks.length > 0}
-            onToggle={() => setWorkExpandedOverride((value) => !(value ?? false))}
-          />
-          {processSections.length > 0 ? (
-            <div className="flex flex-col gap-1">
-              {processSections.map((section) => (
-                <ProcessSectionRow
-                  key={section.id}
-                  section={section}
-                  processing={isProcessing}
-                  reasoningDurationMs={reasoningDurationMs}
-                  singleReasoningSection={reasoningSectionCount === 1}
-                  workspaceRoot={filePreviewWorkspaceRoot}
-                  viewportRef={viewportRef}
-                  onOpenChildThread={onOpenChildThread}
-                  onCancelToolCall={onCancelToolCall}
-                  allowThreadActions={allowMainThreadActions}
-                />
-              ))}
-            </div>
-          ) : null}
-        </div>
-      ) : null}
-
-      {componentPrototypeBlocks.map((block) => (
-        <ComponentPrototypeCard
-          key={block.id}
-          block={block}
-          workspaceRoot={filePreviewWorkspaceRoot}
-          onPrompt={onComponentPrototypePrompt}
-        />
-      ))}
-
-      {assistantContentBlocks.map((block) => (
-        <MessageBubble
-          key={block.id}
-          block={block}
-          allowThreadActions={allowMainThreadActions}
-          forkAction={
-            block.id === forkActionBlockId
-              ? {
-                  busy: forking,
-                  onFork: () => {
-                    void forkFromTurn()
-                  }
-                }
-              : undefined
-          }
-          rollbackAction={
-            block.id === rollbackActionBlockId
-              ? {
-                  busy: rollingBackCheckpointId === rollbackCheckpointId,
-                  onRollback: () => {
-                    void rollbackWorkspace(rollbackCheckpointId)
-                  }
-                }
-              : undefined
-          }
-        />
-      ))}
-
-      {!isProcessing ? (
-        <GeneratedFilesPanel blocks={generatedFileBlocks} placement="turn" />
-      ) : null}
-
-      <PresentationFilesPanel files={presentationFiles} workspaceRoot={filePreviewWorkspaceRoot} />
-
-      {reviewBlocks.map((review) => (
-        <ReviewSummaryCard key={review.id} review={review} />
-      ))}
-
-      {runtimeErrorBlocks.map((block) => (
-        <TimelineRuntimeError key={block.id} block={block} />
-      ))}
-
-      {!isProcessing && devPreviewCard ? devPreviewCard : null}
-
-      {planResult ? (
-        <ReviewPlanCard
-          title={planResult.title?.trim() || planDisplayNameFromRelativePath(planResult.relativePath)}
-          relativePath={planResult.relativePath}
-          busy={planActionsBusy === true}
-          graphEnabled={graphEnabled}
-          onOpen={onOpenPlan}
-          onBuild={onBuildPlan}
-        />
-      ) : null}
-
-      {!isProcessing && turnFileChanges.length > 0 ? (
-        <TurnChangeSummary
-          changes={turnFileChanges}
-          viewportRef={viewportRef}
-          compact={compactCards}
-          onOpenChanges={allowMainThreadActions ? onOpenChanges : undefined}
-          onReviewChanges={allowMainThreadActions ? onReviewChanges : undefined}
-          reviewChangesDisabled={reviewChangesDisabled}
-        />
-      ) : null}
-
-      {showLiveProgress ? (
-        <LiveTurnProgressRow
-          tool={liveToolBlock}
-          thinking={showLiveThinking}
-          activityLabel={liveChildActivityLabel}
-        />
-      ) : null}
-    </div>
-  )
-}
-
-function LiveTurnProgressRow({
-  tool,
-  thinking,
-  activityLabel
-}: {
-  tool?: Extract<ChatBlock, { kind: 'tool' }>
-  thinking: boolean
-  activityLabel?: string
-}): ReactElement {
-  const { t, i18n } = useTranslation('common')
-  const swimMode = useWorkLogoSwimMode(true)
-  const ikunVariant = useIkunWorkLogoVariant(true)
-  // iKun 模式是全局 html 属性;进行行每个回合重新挂载,挂载时读取即可
-  const [ikunModeOn] = useState(
-    () =>
-      typeof document !== 'undefined' &&
-      document.documentElement.getAttribute('data-ikun-mode') === 'on'
-  )
-  const swimLabelKey = WORK_LOGO_SWIM_MODE_LABEL_KEYS[swimMode]
-  // UI 插件可声明自己的进行中文案(按泳姿键、按语言),未声明则用默认文案
-  const pluginLabel = useUiPluginWorkLabel(
-    swimLabelKey as UiPluginLabelKey,
-    i18n.language ?? 'zh'
-  )
-  const label = activityLabel
-    ? t('workingToolAction', { action: activityLabel })
-    : thinking
-      ? t('thinkingNow')
-      : tool
-        ? t('workingToolAction', { action: summarizeToolBlock(tool, t) })
-        : ikunModeOn
-          ? t(IKUN_WORK_LOGO_VARIANT_LABEL_KEYS[ikunVariant])
-          : pluginLabel ?? t(swimLabelKey)
-
-  return (
-    <LiveTurnActivityRow
-      label={label}
-      ikunVariant={ikunVariant}
-      swimMode={swimMode}
-    />
-  )
-}
-
-function LiveTurnActivityRow({
-  label,
-  ikunVariant,
-  swimMode
-}: {
-  label: string
-  ikunVariant?: IkunWorkLogoVariant
-  swimMode?: WorkLogoSwimMode
-}): ReactElement {
-  return (
-    <div className={liveTurnProgressClass()}>
-      <span className="ds-work-logo-slot ds-work-logo-slot-sm mr-0.5">
-        <AnimatedWorkLogo active ikunVariant={ikunVariant} mode={swimMode} phase="trail" size="sm" />
-      </span>
-      <span className="ds-shiny-text">{label}</span>
-    </div>
-  )
-}
-
-const MemoMessageTurn = memo(ConversationTurn, (prev, next) => (
-  sameTurnContent(prev.turn, next.turn) &&
-  prev.isProcessing === next.isProcessing &&
-  prev.liveReasoning === next.liveReasoning &&
-  prev.live === next.live &&
-  prev.durationMs === next.durationMs &&
-  prev.reasoningDurationMs === next.reasoningDurationMs &&
-  prev.devPreviewCard === next.devPreviewCard &&
-  prev.planActionsBusy === next.planActionsBusy &&
-  prev.graphEnabled === next.graphEnabled &&
-  prev.onBuildPlan === next.onBuildPlan &&
-  prev.onOpenPlan === next.onOpenPlan &&
-  prev.onOpenChanges === next.onOpenChanges &&
-  prev.onReviewChanges === next.onReviewChanges &&
-  prev.reviewChangesDisabled === next.reviewChangesDisabled &&
-  prev.onOpenChildThread === next.onOpenChildThread &&
-  prev.onCancelToolCall === next.onCancelToolCall &&
-  prev.onComponentPrototypePrompt === next.onComponentPrototypePrompt &&
-  prev.filePreviewWorkspaceRoot === next.filePreviewWorkspaceRoot &&
-  prev.compactCards === next.compactCards &&
-  prev.allowMainThreadActions === next.allowMainThreadActions &&
-  prev.viewportRef === next.viewportRef
-))

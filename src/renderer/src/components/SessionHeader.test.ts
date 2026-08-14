@@ -3,6 +3,7 @@ import { act, create as createRenderer, type ReactTestRenderer } from 'react-tes
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import i18n from '../i18n'
 import { useChatStore } from '../store/chat-store'
+import { readStylesheetBundle } from '../testing/stylesheet-bundle'
 import { SessionHeader } from './SessionHeader'
 
 const initialChatState = useChatStore.getState()
@@ -126,9 +127,7 @@ describe('SessionHeader', () => {
   })
 
   it('keeps a full-width themed divider and hides lower-priority breadcrumb text at narrow widths', async () => {
-    const nodeFs = 'node:fs/promises'
-    const { readFile } = await import(/* @vite-ignore */ nodeFs)
-    const css = await readFile(new URL('../styles/base-shell.css', import.meta.url), 'utf8')
+    const css = await readStylesheetBundle(new URL('../styles/base-shell.css', import.meta.url))
 
     expect(css).toContain('.chat-topbar.ds-topbar-surface {')
     expect(css).toContain('border-bottom: 1px solid color-mix(in srgb, var(--ds-border) 78%, transparent);')

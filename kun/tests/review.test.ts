@@ -11,6 +11,7 @@ import {
 } from '../src/contracts/index.js'
 import { parseReviewOutput, renderReviewOutput } from '../src/review/review-output.js'
 import { resolveReviewTargetPrompt } from '../src/review/git-review-target.js'
+import { KUN_REVIEW_PROMPT } from '../src/review/review-prompt.js'
 
 const execFileAsync = promisify(execFile)
 const temporaryDirectories: string[] = []
@@ -23,9 +24,11 @@ describe('review contracts', () => {
   it('accepts review start requests and persisted review items', () => {
     const request = StartReviewRequest.parse({
       target: { kind: 'baseBranch', branch: 'main' },
-      model: 'deepseek-chat'
+      model: 'deepseek-chat',
+      reasoningEffort: 'max'
     })
     expect(request.target).toEqual({ kind: 'baseBranch', branch: 'main' })
+    expect(request.reasoningEffort).toBe('max')
 
     const item = TurnItem.parse({
       id: 'item_review_1',
@@ -88,6 +91,21 @@ describe('review target prompt resolution', () => {
 
     expect(resolved.title).toBe('Custom code review')
     expect(resolved.prompt).toContain('Review src/auth.ts for regressions.')
+  })
+
+  it('lets the isolated reviewer gather a single-repository diff with read-only tools', async () => {
+    const workspace = await makeTemporaryDirectory('kun-review-single-repo-')
+    await initRepository(workspace)
+    await writeFile(join(workspace, 'changed.txt'), 'sensitive changed content\n', 'utf8')
+
+    const resolved = await resolveReviewTargetPrompt({
+      target: { kind: 'uncommittedChanges' },
+      workspace
+    })
+
+    expect(resolved.prompt).toContain('git_inspect')
+    expect(resolved.prompt).toContain('staged, unstaged, and untracked')
+    expect(resolved.prompt).not.toContain('sensitive changed content')
   })
 
   it('aggregates staged and unstaged changes from independent repositories under a non-git workspace', async () => {
@@ -175,9 +193,11 @@ describe('review target prompt resolution', () => {
 
   it('redacts credentials from repository remotes and keeps truncated UTF-8 valid', async () => {
     const workspace = await makeTemporaryDirectory('kun-review-remote-')
-    await initRepository(workspace)
-    await runGit(workspace, ['remote', 'add', 'origin', 'https://secret-token@example.test/acme/repo.git'])
-    await writeFile(join(workspace, '中文.txt'), '变更内容'.repeat(64), 'utf8')
+    const repository = join(workspace, 'module')
+    await mkdir(repository)
+    await initRepository(repository)
+    await runGit(repository, ['remote', 'add', 'origin', 'https://secret-token@example.test/acme/repo.git'])
+    await writeFile(join(repository, '中文.txt'), '变更内容'.repeat(64), 'utf8')
 
     const resolved = await resolveReviewTargetPrompt({
       target: { kind: 'uncommittedChanges' },
@@ -188,6 +208,13 @@ describe('review target prompt resolution', () => {
     expect(resolved.prompt).not.toContain('secret-token')
     expect(resolved.prompt).not.toContain('\uFFFD')
     expect(resolved.prompt).toContain('Review input truncated')
+  })
+})
+
+describe('review rubric', () => {
+  it('requires findings to overlap the reviewed diff and use tight ranges', () => {
+    expect(KUN_REVIEW_PROMPT).toContain('changed lines in the reviewed diff')
+    expect(KUN_REVIEW_PROMPT).toContain('normally no more than 5-10 lines')
   })
 })
 

@@ -8,6 +8,7 @@ import { buildMemoryToolProviders } from '../src/adapters/tool/memory-tool-provi
 import { KunCapabilitiesConfig, type MemoryCapabilityConfig } from '../src/contracts/capabilities.js'
 import { effectiveMemoryConfidence, FileMemoryStore } from '../src/memory/memory-store.js'
 import type { ModelClient, ModelRequest } from '../src/ports/model-client.js'
+import { modelRequestContextText } from '../src/loop/model-request-context.js'
 import { dispatchRequest } from '../src/server/http-server.js'
 import { bootstrapThread, makeHarness } from './loop-test-harness.js'
 import { buildHarness, readJson } from './http-server-test-harness.js'
@@ -235,7 +236,7 @@ describe('Memory store and recall', () => {
 
     await h.loop.runTurn(h.threadId, h.turnId)
 
-    expect(seenRequests.at(-1)?.contextInstructions?.join('\n')).toContain(memory.id)
+    expect(modelRequestContextText(seenRequests.at(-1)!)).toContain(memory.id)
     expect((await h.turns.getTurn(h.threadId, h.turnId))?.injectedMemoryIds).toEqual([memory.id])
     expect((await store.diagnostics()).lastInjectedIds).toEqual([memory.id])
 
@@ -243,7 +244,7 @@ describe('Memory store and recall', () => {
     const h2 = makeHarness(model, { memoryStore: store })
     await bootstrapThread(h2, { workspace: '/tmp/ws', request: { prompt: 'frontend pnpm setup?' } })
     await h2.loop.runTurn(h2.threadId, h2.turnId)
-    const finalInstructions = seenRequests.at(-1)?.contextInstructions?.join('\n') ?? ''
+    const finalInstructions = modelRequestContextText(seenRequests.at(-1)!)
     expect(finalInstructions).not.toContain(memory.id)
     expect(finalInstructions).toContain('Runtime context for this model request:')
   })
@@ -271,7 +272,7 @@ describe('Memory store and recall', () => {
       request: { prompt: 'What is the pnpm release command?' }
     })
     await sameProject.loop.runTurn(sameProject.threadId, sameProject.turnId)
-    expect(seenRequests.at(-1)?.contextInstructions?.join('\n')).toContain(memory.id)
+    expect(modelRequestContextText(seenRequests.at(-1)!)).toContain(memory.id)
 
     const otherProject = makeHarness(model, { memoryStore: store })
     await bootstrapThread(otherProject, {
@@ -279,7 +280,7 @@ describe('Memory store and recall', () => {
       request: { prompt: 'What is the pnpm release command?' }
     })
     await otherProject.loop.runTurn(otherProject.threadId, otherProject.turnId)
-    expect(seenRequests.at(-1)?.contextInstructions?.join('\n')).not.toContain(memory.id)
+    expect(modelRequestContextText(seenRequests.at(-1)!)).not.toContain(memory.id)
   })
 
   it('retrieves memories for CJK queries (regression: token-split-on-[^a-z0-9_])', async () => {

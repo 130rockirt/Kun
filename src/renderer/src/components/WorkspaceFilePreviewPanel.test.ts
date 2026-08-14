@@ -7,6 +7,7 @@ import {
   nextFilePreviewTargetForWheel,
   parsePreviewScrollPositions,
   rememberPreviewScrollPosition,
+  renderedDocxPreviewText,
   resolvedPreviewPathMatchesTarget,
   targetKey,
   WorkspaceFilePreviewPanel,
@@ -18,7 +19,8 @@ const { openWorkspacePathInEditor } = vi.hoisted(() => ({
 }))
 
 vi.mock('../lib/open-workspace-path', () => ({ openWorkspacePathInEditor }))
-vi.mock('react-i18next', () => {
+vi.mock('react-i18next', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('react-i18next')>()
   const labels: Record<string, string> = {
     filePreviewOpenFiles: 'Open files',
     filePreviewPinnedTab: 'Pinned tab',
@@ -40,7 +42,7 @@ vi.mock('react-i18next', () => {
     rightPanelCollapse: 'Collapse'
   }
   const t = (key: string) => labels[key] ?? key
-  return { useTranslation: () => ({ t }) }
+  return { ...actual, useTranslation: () => ({ t }) }
 })
 
 describe('HTML workspace preview', () => {
@@ -132,6 +134,12 @@ afterEach(() => {
 })
 
 describe('WorkspaceFilePreviewPanel toolbar', () => {
+  it('extracts rendered Word text for the shared copy action', () => {
+    const preview = { innerText: '  First line\nSecond line\u00a0  ' }
+    const container = { querySelector: () => preview }
+    expect(renderedDocxPreviewText(container as unknown as ParentNode)).toBe('First line\nSecond line')
+  })
+
   it('keeps reading as an icon control and omits the code-to-design action', () => {
     const html = renderToStaticMarkup(createElement(WorkspaceFilePreviewPanel, {
       target: { path: 'package.json' },

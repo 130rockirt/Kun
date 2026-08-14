@@ -7,6 +7,7 @@ import {
   createDesignSystemTemplateTool,
   createDesignUpdateShapesTool,
   createDesignValidateTool,
+  createWorkRenameWhiteboardTool,
   DESIGN_CANVAS_TOOL_NAME,
   DESIGN_CREATE_SCREEN_TOOL_NAME,
   DESIGN_EXPORT_CANVAS_TOOL_NAME,
@@ -14,7 +15,8 @@ import {
   DESIGN_SYSTEM_TEMPLATE_TOOL_NAME,
   DESIGN_UPDATE_SHAPES_MAX_OPS,
   DESIGN_UPDATE_SHAPES_TOOL_NAME,
-  DESIGN_VALIDATE_TOOL_NAME
+  DESIGN_VALIDATE_TOOL_NAME,
+  WORK_RENAME_WHITEBOARD_TOOL_NAME
 } from './design-canvas-tool.js'
 import type { ToolHostContext } from '../../ports/tool-host.js'
 import { LocalToolHost } from './local-tool-host.js'
@@ -97,6 +99,28 @@ describe('design_canvas tool', () => {
 })
 
 describe('dedicated design tools', () => {
+  it('advertises a first-class whiteboard rename only on Work canvas turns', async () => {
+    const tool = createWorkRenameWhiteboardTool()
+    const workContext = { ...context(true), agentSurface: 'write' as const }
+    expect(tool.name).toBe(WORK_RENAME_WHITEBOARD_TOOL_NAME)
+    expect(tool.shouldAdvertise?.(workContext)).toBe(true)
+    expect(tool.shouldAdvertise?.({ ...workContext, guiDesignCanvas: undefined })).toBe(false)
+    expect(tool.shouldAdvertise?.({ ...workContext, agentSurface: 'code' })).toBe(false)
+    expect(tool.shouldAdvertise?.({ ...workContext, agentSurface: 'design' })).toBe(false)
+
+    const result = await tool.execute({ title: 'Service architecture' }, workContext)
+    expect(result.isError).toBeUndefined()
+    expect(result.output).toMatchObject({
+      ok: true,
+      tool: WORK_RENAME_WHITEBOARD_TOOL_NAME,
+      action: 'rename_whiteboard',
+      title: 'Service architecture',
+      status: 'accepted',
+      receiptKey: expect.stringMatching(/^design-receipt-[a-f0-9]{32}$/),
+      ops: []
+    })
+  })
+
   it('queues a deterministic renderer-backed whiteboard image export only in Code canvas turns', async () => {
     const tool = createDesignExportCanvasTool()
     expect(tool.name).toBe(DESIGN_EXPORT_CANVAS_TOOL_NAME)
@@ -118,13 +142,11 @@ describe('dedicated design tools', () => {
         fileName: expect.stringMatching(/^kun-whiteboard-[a-f0-9]{12}\.png$/),
         relativePath: expect.stringMatching(/^\.deepseekgui-images\/kun-whiteboard-[a-f0-9]{12}\.png$/)
       },
-      generatedFiles: [{
-        name: expect.stringMatching(/\.png$/),
-        relativePath: expect.stringMatching(/^\.deepseekgui-images\/.+\.png$/),
-        mimeType: 'image/png'
-      }],
+      status: 'accepted',
+      receiptKey: expect.stringMatching(/^design-receipt-[a-f0-9]{32}$/),
       ops: []
     })
+    expect((result.output as { generatedFiles?: unknown }).generatedFiles).toBeUndefined()
 
     const replay = await tool.execute({ name: '支付架构图' }, context(true))
     expect((replay.output as { exportRequest: { relativePath: string } }).exportRequest.relativePath)
@@ -139,7 +161,8 @@ describe('dedicated design tools', () => {
         format: 'svg',
         fileName: expect.stringMatching(/^API-map-[a-f0-9]{12}\.svg$/)
       },
-      generatedFiles: [{ mimeType: 'image/svg+xml' }]
+      status: 'accepted',
+      receiptKey: expect.stringMatching(/^design-receipt-[a-f0-9]{32}$/)
     })
 
     const host = new LocalToolHost({ tools: [tool] })
@@ -158,7 +181,7 @@ describe('dedicated design tools', () => {
         format: 'svg',
         fileName: expect.stringMatching(/^API-map-[a-f0-9]{12}\.svg$/)
       },
-      generatedFiles: [{ mimeType: 'image/svg+xml' }]
+      status: 'accepted'
     })
 
     const explicit = await tool.execute({ format: 'png', name: 'API map.svg' }, context(true))
@@ -167,7 +190,7 @@ describe('dedicated design tools', () => {
         format: 'png',
         fileName: expect.stringMatching(/^API-map-[a-f0-9]{12}\.png$/)
       },
-      generatedFiles: [{ mimeType: 'image/png' }]
+      status: 'accepted'
     })
   })
 
@@ -188,10 +211,11 @@ describe('dedicated design tools', () => {
       output: {
         ok: true,
         action: 'export_canvas',
-        generatedFiles: [{
-          relativePath: expect.stringMatching(/^\.deepseekgui-images\/service-map-.+\.png$/),
-          mimeType: 'image/png'
-        }]
+        status: 'accepted',
+        receiptKey: expect.stringMatching(/^design-receipt-[a-f0-9]{32}$/),
+        exportRequest: {
+          relativePath: expect.stringMatching(/^\.deepseekgui-images\/service-map-.+\.png$/)
+        }
       }
     })
   })
@@ -273,6 +297,8 @@ describe('dedicated design tools', () => {
     const tool = createDesignUpdateShapesTool()
     expect(tool.name).toBe(DESIGN_UPDATE_SHAPES_TOOL_NAME)
     expect(JSON.stringify(tool.inputSchema)).toContain('direct top-level ShapeOp')
+    expect(JSON.stringify(tool.inputSchema)).toContain('patch \\"textContent\\"')
+    expect(JSON.stringify(tool.inputSchema)).toContain('never \\"text\\" or \\"content\\"')
     expect(tool.description).toContain('inspect the current canvas snapshot first')
     expect(tool.description).toContain('20-50')
     expect(JSON.stringify(tool.inputSchema)).toContain(`"maxItems":${DESIGN_UPDATE_SHAPES_MAX_OPS}`)
@@ -281,8 +307,14 @@ describe('dedicated design tools', () => {
     expect(result.output).toMatchObject({
       ok: true,
       tool: DESIGN_UPDATE_SHAPES_TOOL_NAME,
-      ops: [op]
+      ops: [op],
+      message: expect.stringContaining('does not verify that the canvas applied')
     })
+    // Two-phase receipt: the result is accepted, not verified, and carries a
+    // deterministic receipt key the renderer confirms.
+    expect(result.output).toMatchObject({ status: 'accepted' })
+    expect(typeof (result.output as { receiptKey?: unknown }).receiptKey).toBe('string')
+    expect((result.output as { receiptKey: string }).receiptKey).toMatch(/^design-receipt-[a-f0-9]{32}$/)
   })
 
   it('enforces design_update_shapes operation and structural budgets', async () => {
@@ -356,6 +388,75 @@ describe('dedicated design tools', () => {
           patch: { imageUrl: '.deepseekgui-images/img-slot.png' }
         }
       ]
+    })
+  })
+
+  it('canonicalizes common visible-text aliases before queueing renderer ops', async () => {
+    const tool = createDesignUpdateShapesTool()
+    const result = await tool.execute({
+      ops: [
+        { op: 'update', id: 'label_1', patch: { text: 'Business Rules' } },
+        { op: 'add', shape: { type: 'text', content: 'API Router' } }
+      ]
+    }, context())
+
+    expect(result.output).toMatchObject({
+      ok: true,
+      ops: [
+        { op: 'update', id: 'label_1', patch: { textContent: 'Business Rules' } },
+        { op: 'add', shape: { type: 'text', textContent: 'API Router' } }
+      ]
+    })
+  })
+
+  it('normalizes a top-level update op without patch into patch.textContent', async () => {
+    const tool = createDesignUpdateShapesTool()
+    const result = await tool.execute(
+      { op: 'update', id: 'label-1', text: 'Business Rules' },
+      context()
+    )
+
+    expect(result.isError).toBeUndefined()
+    expect(result.output).toMatchObject({
+      ok: true,
+      tool: DESIGN_UPDATE_SHAPES_TOOL_NAME,
+      ops: [{ op: 'update', id: 'label-1', patch: { textContent: 'Business Rules' } }]
+    })
+    expect(JSON.stringify(result.output)).not.toContain('"text"')
+  })
+
+  it('removes text aliases even when canonical textContent is present', async () => {
+    const tool = createDesignUpdateShapesTool()
+    const result = await tool.execute({
+      ops: [
+        { op: 'update', id: 'label-2', patch: { text: 'a', textContent: 'b' } },
+        { op: 'update', id: 'label-3', text: 'loose', textContent: 'canonical' }
+      ]
+    }, context())
+
+    expect(result.isError).toBeUndefined()
+    expect(result.output).toMatchObject({
+      ok: true,
+      ops: [
+        { op: 'update', id: 'label-2', patch: { textContent: 'b' } },
+        { op: 'update', id: 'label-3', patch: { textContent: 'canonical' } }
+      ]
+    })
+    expect(JSON.stringify(result.output)).not.toContain('"text"')
+    expect(JSON.stringify(result.output)).not.toContain('"content"')
+  })
+
+  it('leaves an update op without any patchable field untouched', async () => {
+    const tool = createDesignUpdateShapesTool()
+    const result = await tool.execute(
+      { op: 'update', id: 'label-4' },
+      context()
+    )
+
+    expect(result.isError).toBeUndefined()
+    expect(result.output).toMatchObject({
+      ok: true,
+      ops: [{ op: 'update', id: 'label-4' }]
     })
   })
 

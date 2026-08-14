@@ -1,154 +1,63 @@
-import { useCallback, type Dispatch, type SetStateAction } from 'react'
+import { useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import type { ModelProviderModelGroup } from '@shared/kun-gui-api'
-import {
-  isComposerChatModelId,
-  modelProfileSupportsTextChat
-} from '@shared/app-settings'
-import type { AttachmentReference, NormalizedThread } from '../../agent/types'
-import type { ChatState, SendMessageOverrides } from '../../store/chat-store-types'
 import { useChatStore } from '../../store/chat-store'
 import { providerIdForComposerModel } from '../../store/chat-store-helpers'
 import { parseClawCommand } from '@shared/claw-commands'
 import { useWriteWorkspaceStore } from '../../write/write-workspace-store'
-import {
-  captureWriteDocumentContext,
-  writeDocumentContextMatches
-} from '../../write/write-document-context'
+import { captureWriteDocumentContext, writeDocumentContextMatches } from '../../write/write-document-context'
 import type { WriteRetrievalContext } from '@shared/write-retrieval'
-import { composeWritePrompt } from '../../write/quoted-selection'
+import type { WriteOfficeDocumentContext } from '../../write/quoted-selection'
+import { writeDocumentKey } from '../../write/write-editor-layout'
+import { selectFocusedPresentationView } from '../../write/write-presentation-view-state'
+import { createWorkspaceOfficeViewPositionAttachment } from '../../lib/workspace-office-view-context'
+import {
+  loadWriteOfficeSemanticContext,
+  writeOfficeSemanticContextMatches
+} from '../../write/write-office-semantic-context'
 import { resolveWriteAgentPreset } from '../../write/agent-presets'
+import { createWriteTurnReferenceAttachments, mergeWriteComposerContexts } from '../../write/write-turn-reference-context'
+import { recoverWriteReferenceContextError } from '../../write/write-reference-context-error'
+import { resolveCodeAgentPersona } from '../chat/code-agent-presets'
 import { parseGuiPlanCommand } from '../../plan/plan-command'
 import { normalizeWorkspaceRoot } from '../../lib/workspace-path'
-import {
-  buildComposerFileContextPrompt,
-  isComposerDirectoryReference,
-  type ComposerFileContextEntry
-} from '../../lib/composer-file-references'
-import { loadWorkspaceDirectoryContextFiles } from '../../lib/workspace-file-index'
+import { buildComposerFileContextPrompt } from '../../lib/composer-file-references'
 import { resolveCodeCanvasComposerRoute } from '../../design/canvas/code-canvas'
 import { useCanvasSelectionStore } from '../../design/canvas/canvas-selection-store'
+import { consumeLastCanvasOpErrors } from '../../design/canvas/apply-shape-ops'
+import { activePptReviewComposerContexts } from './workbench-ppt-review-context'
 import {
-  composerReasoningEffortRequestValue,
-  type ComposerReasoningEffort
-} from '../chat/FloatingComposerModelPicker'
+  activeWorkWhiteboardForSend,
+  activeWorkWhiteboardComposerContexts,
+  workWhiteboardMessageFence,
+  workWhiteboardSnapshotMatches
+} from './workbench-write-whiteboard-context'
+import { composerReasoningEffortRequestValue } from '../chat/FloatingComposerModelPicker'
 import { serviceTierForComposerSelection } from '../chat/composer-fast-mode'
 import type { ComposerFileReference } from '../chat/FloatingComposer'
-import type { ComposerAttachmentScope } from '../workbench-composer-attachments'
-import type { RightPanelMode } from '../chat/WorkbenchTopBar'
 import { BUILTIN_RIGHT_PANEL_IDS } from '../../extensions/contribution-ids'
-import { officeDocumentFormatFromName } from '@shared/office-document'
-import type { CodeCanvasOutboundPromptInput } from '../design/canvas/useCodeCanvasPromptController'
 import {
-  COMPOSER_DIRECTORY_CONTEXT_MAX_FILES,
-  COMPOSER_FILE_CONTEXT_MAX_TOTAL_CHARS,
   buildComposerDocumentContextPrompt,
-  clipComposerFileContext,
-  composerToolReferencePlaceholder,
   composerReferencesToUserFileReferences,
   stripTransientAttachmentFields
 } from './workbench-composer-prompts'
-
-type PlanTurnOverrides = Pick<
-  SendMessageOverrides,
-  | 'attachmentIds'
-  | 'attachments'
-  | 'displayText'
-  | 'fileReferences'
-  | 'guiPlan'
-  | 'model'
-  | 'providerId'
-  | 'reasoningEffort'
-  | 'serviceTier'
-> & {
-  workspaceRoot?: string
-}
-
-type UseWorkbenchComposerSubmitControllerParams = {
-  activeClawChannelId: string
-  activeClawChannelModel?: string
-  activeClawChannelProviderId?: string
-  activeSddDraft: boolean
-  activeThreadId: string | null
-  attachmentUploadEnabled: boolean
-  buildCodeCanvasOutboundPrompt: (input: CodeCanvasOutboundPromptInput) => Promise<string>
-  clearComposerAttachments: (scope?: ComposerAttachmentScope) => void
-  removeComposerAttachments: (ids: readonly string[], scope?: ComposerAttachmentScope) => void
-  clearComposerFileReferences: () => void
-  composerAttachments: AttachmentReference[]
-  composerFileReferences: ComposerFileReference[]
-  composerMode: 'plan' | 'agent'
-  composerModel: string
-  composerProviderId: string
-  composerModelGroups: ModelProviderModelGroup[]
-  composerReasoningEffort: ComposerReasoningEffort
-  composerFastMode: boolean
-  getAttachmentScope: () => ComposerAttachmentScope
-  handleGuiPlanCommand: (request?: string) => void | Promise<void>
-  input: string
-  resetClawChannelSession: (channelId: string) => Promise<void>
-  rightPanelMode: RightPanelMode
-  route: ChatState['route']
-  selectClawChannel: (channelId: string) => Promise<void>
-  sendMessage: ChatState['sendMessage']
-  sendPlanTurn: (text: string, overrides?: PlanTurnOverrides) => Promise<boolean>
-  sendSddAssistantPrompt: (value: string) => Promise<void>
-  setAttachmentUploadError: (message: string | null) => void
-  setClawChannelModel: (channelId: string, model: string, providerId?: string) => Promise<void>
-  setError: (message: string | null) => void
-  setInput: Dispatch<SetStateAction<string>>
-  threads: NormalizedThread[]
-  workspaceRoot: string
-  appendLocalClawTurn: (userText: string, replyText: string) => void
-  clearWriteQuotedSelections?: () => void
-}
-
-type ClawComposerModelOption = {
-  providerId: string
-  model: string
-}
-
-function listClawComposerModelOptions(groups: readonly ModelProviderModelGroup[]): ClawComposerModelOption[] {
-  const seen = new Set<string>()
-  const options: ClawComposerModelOption[] = []
-  for (const group of groups) {
-    const providerId = group.providerId.trim()
-    if (!providerId) continue
-    for (const modelId of group.modelIds) {
-      const model = modelId.trim()
-      if (!model || !isComposerChatModelId(model)) continue
-      if (!modelProfileSupportsTextChat(group.modelProfiles?.[model])) continue
-      const key = `${providerId}\u0000${model}`
-      if (seen.has(key)) continue
-      seen.add(key)
-      options.push({ providerId, model })
-    }
-  }
-  return options
-}
-
-function resolveClawComposerModelByIndex(
-  groups: readonly ModelProviderModelGroup[],
-  value: string
-): ClawComposerModelOption | undefined {
-  const raw = value.trim()
-  if (!/^\d+$/.test(raw)) return undefined
-  const index = Number.parseInt(raw, 10)
-  if (!Number.isSafeInteger(index) || index < 1) return undefined
-  return listClawComposerModelOptions(groups)[index - 1]
-}
-
-export type WorkbenchComposerSubmitController = {
-  handleSend: () => void
-  sendWritePrompt: (value: string) => void
-}
-
+import { readWorkbenchComposerFileContextEntries } from './workbench-composer-file-context'
+import { mirrorWorkbenchClawCommand } from './workbench-claw-message-mirror'
+import { restoreWorkbenchWritePrompt } from './workbench-write-prompt-state'
+import { workbenchWriteSourceContext } from './workbench-write-source-reference'
+export type { WorkbenchComposerSubmitController } from './workbench-composer-submit-types'
+import {
+  listClawComposerModelOptions,
+  resolveClawComposerModelByIndex,
+  type UseWorkbenchComposerSubmitControllerParams,
+  type WorkbenchComposerSubmitController
+} from './workbench-composer-submit-types'
 export function useWorkbenchComposerSubmitController({
   activeClawChannelId,
   activeClawChannelModel,
   activeClawChannelProviderId,
   activeSddDraft,
   activeThreadId,
+  taskSurface = 'code',
   attachmentUploadEnabled,
   buildCodeCanvasOutboundPrompt,
   clearComposerAttachments,
@@ -181,22 +90,10 @@ export function useWorkbenchComposerSubmitController({
   appendLocalClawTurn
 }: UseWorkbenchComposerSubmitControllerParams): WorkbenchComposerSubmitController {
   const { t } = useTranslation('common')
-
-  const mirrorClawCommand = useCallback(async (userText: string, replyText: string): Promise<void> => {
-    if (!activeThreadId || typeof window.kunGui?.mirrorClawChannelMessage !== 'function') return
-    const userResult = await window.kunGui.mirrorClawChannelMessage(
-      activeThreadId,
-      userText,
-      'user'
-    )
-    if (!userResult.ok) return
-    await window.kunGui.mirrorClawChannelMessage(
-      activeThreadId,
-      replyText,
-      'assistant'
-    )
-  }, [activeThreadId])
-
+  const mirrorClawCommand = useCallback(
+    (userText: string, replyText: string) => mirrorWorkbenchClawCommand(activeThreadId, userText, replyText),
+    [activeThreadId]
+  )
   const clawHelpText = useCallback((): string =>
     [
       t('clawHelpTitle'),
@@ -230,95 +127,14 @@ export function useWorkbenchComposerSubmitController({
         : [t('clawModelListEmpty')])
     ].join('\n')
   }, [activeClawChannelModel, activeClawChannelProviderId, composerModelGroups, t])
-
   const readComposerFileContextEntries = useCallback(async (
     references: ComposerFileReference[],
     workspace: string
-  ): Promise<ComposerFileContextEntry[]> => {
-    const entries: ComposerFileContextEntry[] = []
-    const seen = new Set<string>()
-    let remainingChars = COMPOSER_FILE_CONTEXT_MAX_TOTAL_CHARS
-
-    const contextKey = (path: string): string =>
-      path.trim().replaceAll('\\', '/').replace(/\/+/g, '/').toLowerCase()
-
-    const appendFileEntry = async (
-      reference: ComposerFileReference,
-      strict: boolean
-    ): Promise<void> => {
-      if (remainingChars <= 0) return
-      const key = contextKey(reference.relativePath || reference.path)
-      if (seen.has(key)) return
-      const officeFormat = officeDocumentFormatFromName(reference.name || reference.path)
-      if (officeFormat) {
-        const content = composerToolReferencePlaceholder(reference, officeFormat)
-        const clipped = clipComposerFileContext(content, remainingChars, false)
-        remainingChars -= clipped.consumed
-        seen.add(key)
-        entries.push({
-          relativePath: reference.relativePath,
-          content: clipped.content,
-          ...(clipped.truncated ? { truncated: true } : {})
-        })
-        return
-      }
-      const result = await window.kunGui.readWorkspaceFile({
-        ...(reference.workspaceRoot === null
-          ? {}
-          : { workspaceRoot: reference.workspaceRoot || workspace }),
-        path: reference.workspaceRoot === null
-          ? reference.path
-          : (reference.relativePath || reference.path)
-      })
-      if (!result.ok) {
-        if (!strict) return
-        if (/binary|cannot be previewed|too large|only supports text/i.test(result.message)) {
-          const content = composerToolReferencePlaceholder(reference)
-          const clipped = clipComposerFileContext(content, remainingChars, false)
-          remainingChars -= clipped.consumed
-          seen.add(key)
-          entries.push({
-            relativePath: reference.relativePath,
-            content: clipped.content,
-            ...(clipped.truncated ? { truncated: true } : {})
-          })
-          return
-        }
-        throw new Error(t('composerFileReadFailed', {
-          path: reference.relativePath,
-          message: result.message
-        }))
-      }
-      seen.add(key)
-      const clipped = clipComposerFileContext(result.content, remainingChars, result.truncated)
-      remainingChars -= clipped.consumed
-      entries.push({
-        relativePath: reference.relativePath,
-        content: clipped.content,
-        ...(clipped.truncated ? { truncated: true } : {})
-      })
-    }
-
-    for (const reference of references) {
-      if (remainingChars <= 0) break
-      if (isComposerDirectoryReference(reference)) {
-        const directoryWorkspace = reference.workspaceRoot || workspace
-        const dirFiles = await loadWorkspaceDirectoryContextFiles(
-          directoryWorkspace,
-          reference.relativePath,
-          COMPOSER_DIRECTORY_CONTEXT_MAX_FILES
-        ).catch(() => [])
-        for (const file of dirFiles) {
-          if (remainingChars <= 0) break
-          await appendFileEntry({ ...file, workspaceRoot: directoryWorkspace }, false)
-        }
-        continue
-      }
-      await appendFileEntry(reference, true)
-    }
-    return entries
-  }, [t])
-
+  ) => readWorkbenchComposerFileContextEntries(
+    references,
+    workspace,
+    (key, options) => t(key, options)
+  ), [t])
   const sendWritePrompt = useCallback((value: string): void => {
     const v = value.trim()
     const attachmentScope = getAttachmentScope()
@@ -332,12 +148,24 @@ export function useWorkbenchComposerSubmitController({
       return
     }
     const writeState = useWriteWorkspaceStore.getState()
+    const activeWhiteboard = activeWorkWhiteboardForSend(writeState)
+    if (activeWhiteboard === undefined) {
+      setError(t('writeWhiteboardAssistantPreparing'))
+      return
+    }
+    const writePresentationView = selectFocusedPresentationView(writeState)
     const writeWorkspaceRoot = writeState.workspaceRoot || workspaceRoot
     const writeDocumentContext = captureWriteDocumentContext({
       ...writeState,
       workspaceRoot: writeWorkspaceRoot
     })
     const writeActiveFilePath = writeState.activeFilePath
+    const writeActiveDocument = writeActiveFilePath
+      ? writeState.documentsByPath[writeDocumentKey(writeActiveFilePath)]
+      : undefined
+    const writeSource = workbenchWriteSourceContext(
+      writeWorkspaceRoot, writeActiveFilePath, writeState.activeFileKind,
+      writeActiveDocument?.officePreview?.sourceFormat)
     const writeDocumentEpoch = writeState.documentEpoch
     const writeContentRevision = writeState.contentRevision
     const quotedSelections = writeState.quotedSelections.map((selection) => ({
@@ -350,21 +178,12 @@ export function useWorkbenchComposerSubmitController({
       if (writeDocumentContext) return writeDocumentContextMatches(latest, writeDocumentContext)
       return (
         normalizeWorkspaceRoot(latest.workspaceRoot || workspaceRoot) === normalizeWorkspaceRoot(writeWorkspaceRoot) &&
+        workWhiteboardSnapshotMatches(latest, activeWhiteboard) &&
         latest.activeFilePath === writeActiveFilePath &&
         latest.documentEpoch === writeDocumentEpoch
       )
     }
-    const restorePrompt = (): void => {
-      // The composer state is shared across routes. Never prepend a stale
-      // Write prompt to text the user has started composing in Chat/Design.
-      if (useChatStore.getState().route !== 'write') return
-      setInput((current) => {
-        if (!v) return current
-        if (!current) return v
-        if (current.trim() === v || current.startsWith(`${v}\n\n`)) return current
-        return `${v}\n\n${current}`
-      })
-    }
+    const restorePrompt = (): void => restoreWorkbenchWritePrompt(v, setInput)
     const writeDraftStillMatches = (): boolean => {
       const latest = useWriteWorkspaceStore.getState()
       return (
@@ -419,10 +238,33 @@ export function useWorkbenchComposerSubmitController({
         restorePrompt()
         return
       }
-      const retrievalQuery = [
-        ...quotedSelections.map((selection) => selection.text),
-        v
-      ].join('\n\n').trim()
+      let officeDocument: WriteOfficeDocumentContext | null = null
+      const hasOfficeQuote = quotedSelections.some((selection) => (
+        selection.sourceKind === 'word' ||
+        selection.sourceKind === 'presentation' ||
+        selection.sourceKind === 'spreadsheet'
+      ))
+      if (writeActiveDocument?.kind === 'office' && !hasOfficeQuote) {
+        const previewSha = writeActiveDocument.officePreview?.sourceSha256 ?? ''
+        const loaded = writeActiveFilePath && previewSha
+          ? await loadWriteOfficeSemanticContext({
+              path: writeActiveFilePath,
+              workspaceRoot: writeWorkspaceRoot,
+              expectedSha256: previewSha,
+              contextStillMatches: writeContextStillMatches
+            })
+          : { ok: false as const, stale: false, message: 'The Office preview is not ready.' }
+        if (!loaded.ok) {
+          if (loaded.message) {
+            useWriteWorkspaceStore.getState().setFileError(loaded.message)
+            setError(loaded.message)
+          }
+          restorePrompt()
+          return
+        }
+        officeDocument = loaded.context
+      }
+      const retrievalQuery = v.trim()
       let retrieval: WriteRetrievalContext | null = null
       if (retrievalQuery && typeof window.kunGui?.retrieveWriteContext === 'function') {
         try {
@@ -431,7 +273,7 @@ export function useWorkbenchComposerSubmitController({
             currentFilePath: writeActiveFilePath ?? undefined,
             query: retrievalQuery,
             maxSnippets: 4,
-            includeCurrentFile: true
+            includeCurrentFile: quotedSelections.length === 0
           })
           if (result.ok) retrieval = result.context
         } catch (error) {
@@ -451,20 +293,13 @@ export function useWorkbenchComposerSubmitController({
         restorePrompt()
         return
       }
-      const messageText = buildComposerDocumentContextPrompt(
-        v || (documentAttachments.length > 0 ? t('composerFileOnlyPrompt') : t('composerImageOnlyPrompt')),
-        documentAttachments
+      const messageText = v || (
+        documentAttachments.length > 0 ? t('composerFileOnlyPrompt') : t('composerImageOnlyPrompt')
       )
       const activeAgentPreset = writeState.agentPresets.find(
         (preset) => preset.id === writeState.assistantAgentPresetId
       )
       const agentPersona = activeAgentPreset ? resolveWriteAgentPreset(activeAgentPreset).persona : ''
-      const prompt = composeWritePrompt(messageText, quotedSelections, {
-        workspaceRoot: writeWorkspaceRoot,
-        activeFilePath: writeActiveFilePath,
-        retrieval,
-        ...(agentPersona ? { agentPersona } : {})
-      })
       const model = writeState.assistantModel.trim()
       const providerId =
         writeState.assistantProviderId.trim() || providerIdForComposerModel(composerModelGroups, model)
@@ -475,37 +310,88 @@ export function useWorkbenchComposerSubmitController({
         model,
         providerId
       )
-      const sent = await sendMessage(prompt, composerMode === 'plan' ? 'plan' : 'agent', {
-        ...(!v && documentAttachments.length > 0
-          ? { displayText: t('composerFileOnlyDisplay', { count: documentAttachments.length }) }
-          : !v && attachmentIds.length > 0
-            ? { displayText: t('composerImageOnlyDisplay') }
-            : {}),
-        ...(model ? { model } : {}),
-        ...(providerId ? { providerId } : {}),
-        ...(reasoningEffort ? { reasoningEffort } : {}),
-        ...(serviceTier ? { serviceTier } : {}),
-        ...(attachmentIds.length ? { attachmentIds } : {}),
-        ...(publicAttachments.length ? { attachments: publicAttachments } : {}),
-        writeContext: {
+      let composerContexts: ReturnType<typeof mergeWriteComposerContexts>
+      try {
+        const viewContexts = writePresentationView
+          ? [await createWorkspaceOfficeViewPositionAttachment({ workspaceRoot: writeWorkspaceRoot, view: writePresentationView })]
+          : []
+        const whiteboardContexts = await activeWorkWhiteboardComposerContexts(
+          writeWorkspaceRoot,
+          activeWhiteboard,
+          activeThreadId,
+          v
+        )
+        const referenceContexts = await createWriteTurnReferenceAttachments({
           workspaceRoot: writeWorkspaceRoot,
-          activeFilePath: writeActiveFilePath,
-          documentEpoch: writeDocumentEpoch,
-          contentRevision: writeContentRevision
+          activeResource: writeSource.activeResource,
+          selections: quotedSelections,
+          retrieval,
+          officeDocument,
+          query: v
+        })
+        const whiteboardReference = whiteboardContexts.filter((context) => (
+          context.reference.kind === 'work-reference-whiteboard'
+        ))
+        const pptReviewContexts = whiteboardContexts.filter((context) => (
+          context.reference.kind !== 'work-reference-whiteboard'
+        ))
+        composerContexts = mergeWriteComposerContexts(
+          [...whiteboardReference, ...referenceContexts],
+          viewContexts,
+          pptReviewContexts
+        )
+      } catch (error) {
+        recoverWriteReferenceContextError(error, setError, restorePrompt)
+        return
+      }
+      if (officeDocument && !writeOfficeSemanticContextMatches(officeDocument)) {
+        restorePrompt()
+        return
+      }
+      const sent = await sendMessage(
+        messageText,
+        writeActiveDocument?.kind === 'office' ? 'agent' : composerMode === 'plan' ? 'plan' : 'agent',
+        {
+          ...(!v && documentAttachments.length > 0
+            ? { displayText: t('composerFileOnlyDisplay', { count: documentAttachments.length }) }
+            : !v && attachmentIds.length > 0
+              ? { displayText: t('composerImageOnlyDisplay') }
+              : {}),
+          ...(model ? { model } : {}),
+          ...(providerId ? { providerId } : {}),
+          ...(reasoningEffort ? { reasoningEffort } : {}),
+          ...(serviceTier ? { serviceTier } : {}),
+          ...(attachmentIds.length ? { attachmentIds } : {}),
+          ...(publicAttachments.length ? { attachments: publicAttachments } : {}),
+          ...(composerContexts.length ? { composerContexts } : {}),
+          ...(writeSource.fileReference ? { fileReferences: [writeSource.fileReference] } : {}),
+          ...(activeWhiteboard ? { guiDesignCanvas: true } : {}),
+          ...(agentPersona ? { persona: agentPersona } : {}),
+          writeContext: {
+            workspaceRoot: writeWorkspaceRoot,
+            activeFilePath: writeActiveFilePath,
+            documentEpoch: writeDocumentEpoch,
+            contentRevision: writeContentRevision,
+            ...workWhiteboardMessageFence(activeWhiteboard)
+          }
         }
-      })
+      )
       if (sent) {
         // Consume only the captured ids. Quotes/attachments added while the
         // runtime starts remain in the composer, even if the active file moved.
         const latest = useWriteWorkspaceStore.getState()
         quotedSelections.forEach((selection) => latest.removeQuotedSelection(selection.id))
         if (attachmentIds.length > 0) removeComposerAttachments(attachmentIds, attachmentScope)
+        // Only after the turn is admitted can the previous canvas-op errors be
+        // treated as consumed; a rejected/aborted send must keep them visible.
+        if (activeWhiteboard) consumeLastCanvasOpErrors(`work-canvas:${activeWhiteboard.id}`)
       } else {
         restorePrompt()
       }
     })()
   }, [
     attachmentUploadEnabled,
+    activeThreadId,
     removeComposerAttachments,
     composerAttachments,
     composerMode,
@@ -515,11 +401,11 @@ export function useWorkbenchComposerSubmitController({
     getAttachmentScope,
     sendMessage,
     setAttachmentUploadError,
+    setError,
     setInput,
     t,
     workspaceRoot
   ])
-
   const handleSend = useCallback((): void => {
     void (async (): Promise<void> => {
       const v = input.trim()
@@ -603,6 +489,7 @@ export function useWorkbenchComposerSubmitController({
         clearComposerAttachments(attachmentScope)
         clearComposerFileReferences()
         void sendPlanTurn(prepared.text, {
+          agentSurface: taskSurface,
           ...(prepared.displayText ? { displayText: prepared.displayText } : {}),
           ...(reasoningEffort ? { reasoningEffort } : {}),
           ...(serviceTier ? { serviceTier } : {}),
@@ -736,14 +623,27 @@ export function useWorkbenchComposerSubmitController({
         outboundDisplay = codeCanvasRoute.displayText
         outboundGuiDesignCanvas = true
       }
+      const pptReviewContexts = route === 'chat'
+        ? await activePptReviewComposerContexts(workspaceRoot, activeThreadId)
+        : []
+      const chatState = useChatStore.getState()
+      const persona = chatState.composerPersonaEnabled
+        ? resolveCodeAgentPersona(
+            chatState.codeAgentPresets,
+            chatState.composerPersonaId
+          )
+        : ''
       void sendMessage(outboundText, composerMode === 'plan' ? 'plan' : 'agent', {
+        agentSurface: taskSurface,
         ...(outboundDisplay ? { displayText: outboundDisplay } : {}),
         ...(outboundGuiDesignCanvas ? { guiDesignCanvas: true } : {}),
+        ...(persona ? { persona } : {}),
         ...(reasoningEffort ? { reasoningEffort } : {}),
         ...(serviceTier ? { serviceTier } : {}),
         ...(attachmentIds.length ? { attachmentIds } : {}),
         ...(publicAttachments.length ? { attachments: publicAttachments } : {}),
-        ...(userFileReferences.length ? { fileReferences: userFileReferences } : {})
+        ...(userFileReferences.length ? { fileReferences: userFileReferences } : {}),
+        ...(pptReviewContexts.length ? { composerContexts: pptReviewContexts } : {})
       })
     })()
   }, [
@@ -751,6 +651,7 @@ export function useWorkbenchComposerSubmitController({
     activeClawChannelModel,
     activeSddDraft,
     activeThreadId,
+    taskSurface,
     appendLocalClawTurn,
     attachmentUploadEnabled,
     buildCodeCanvasOutboundPrompt,
@@ -787,6 +688,5 @@ export function useWorkbenchComposerSubmitController({
     threads,
     workspaceRoot
   ])
-
   return { handleSend, sendWritePrompt }
 }

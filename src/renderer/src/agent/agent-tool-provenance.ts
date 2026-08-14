@@ -58,9 +58,8 @@ const LEGACY_KUN_GUI_TOOLS = new Set([
 ])
 const LEGACY_KUN_RUNTIME_TOOLS = new Set([
   'web_search', 'web_fetch', 'load_skill', 'memory_create', 'memory_update',
-  'memory_delete', 'delegate_task', 'explore_agent', 'generate_image', 'generate_speech',
-  'generate_music', 'generate_video', 'ppt_master_run', 'ppt_master_read_guide',
-  'ppt_master_confirm_design'
+  'memory_delete', 'delegate_task', 'fast_context', 'generate_image', 'generate_speech',
+  'generate_music', 'generate_video'
 ])
 
 export function resolveToolProvenance(
@@ -147,7 +146,7 @@ function inferLegacyProvenance(toolName: string): ToolProvenance {
   if (LEGACY_KUN_CORE_TOOLS.has(toolName)) {
     return { source: 'kun', category: 'kun-core', inferred: true }
   }
-  if (LEGACY_KUN_GUI_TOOLS.has(toolName) || toolName.startsWith('design_')) {
+  if (LEGACY_KUN_GUI_TOOLS.has(toolName) || toolName.startsWith('design_') || toolName === 'ppt_to_board') {
     return { source: 'kun', category: 'kun-gui', inferred: true }
   }
   if (LEGACY_KUN_RUNTIME_TOOLS.has(toolName)) {

@@ -10,7 +10,6 @@ import {
   Loader2,
   Presentation,
   Save,
-  Sparkles,
   WandSparkles
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -28,15 +27,18 @@ import {
 } from './write-workspace-view-utils'
 
 type Props = {
+  embedded?: boolean
+  showSidebarToggle?: boolean
   activeFileIsImage: boolean
   activeFileIsPdf?: boolean
+  activeFileIsOffice?: boolean
+  activeFileIsCode?: boolean
   activeFileIsText: boolean
   activeFileLabel: string
   activeFileName: string
   activeFilePath: string
   documentStatsLabel: string | null
   inlineCompletionEnabled: boolean
-  assistantOpen: boolean
   exportInFlight: boolean
   exportMenuOpen: boolean
   exportMenuRef: RefObject<HTMLDivElement | null>
@@ -58,22 +60,24 @@ type Props = {
   saveLabel: string
   saveStatus: WriteSaveStatus
   reviewActive?: boolean
-  setAssistantOpen: (open: boolean) => void
   setExportMenuOpen: (open: boolean | ((open: boolean) => boolean)) => void
   setModeMenuOpen: (open: boolean | ((open: boolean) => boolean)) => void
   setPreviewMode: (mode: WritePreviewMode) => void
 }
 
 export function WriteWorkspaceToolbar({
+  embedded = false,
+  showSidebarToggle = true,
   activeFileIsImage,
   activeFileIsPdf = false,
+  activeFileIsOffice = false,
+  activeFileIsCode = false,
   activeFileIsText,
   activeFileLabel,
   activeFileName,
   activeFilePath,
   documentStatsLabel,
   inlineCompletionEnabled,
-  assistantOpen,
   exportInFlight,
   exportMenuOpen,
   exportMenuRef,
@@ -95,29 +99,32 @@ export function WriteWorkspaceToolbar({
   saveLabel,
   saveStatus,
   reviewActive = false,
-  setAssistantOpen,
   setExportMenuOpen,
   setModeMenuOpen,
   setPreviewMode
 }: Props): ReactElement {
   const { t } = useTranslation('common')
-  if (activeFileIsPdf) {
+  if (activeFileIsPdf || activeFileIsOffice || activeFileIsCode) {
     return (
-      <div className={`ds-stage-inset shrink-0 -mr-3 sm:-mr-4 md:-mr-6 lg:-mr-8 ${leftSidebarCollapsed ? 'ds-window-controls-safe-inset' : '-ml-3 sm:-ml-4 md:-ml-6 lg:-ml-8'}`}>
-        <header className="ds-topbar-surface write-pdf-topbar relative z-10 mt-3 flex min-h-[52px] w-full items-stretch overflow-visible rounded-[18px]">
+      <div className={embedded ? 'shrink-0' : `ds-stage-inset shrink-0 -mr-3 sm:-mr-4 md:-mr-6 lg:-mr-8 ${leftSidebarCollapsed ? 'ds-window-controls-safe-inset' : '-ml-3 sm:-ml-4 md:-ml-6 lg:-ml-8'}`}>
+        <header className={`ds-topbar-surface write-pdf-topbar relative z-10 flex min-h-[52px] w-full items-stretch overflow-visible ${embedded ? 'rounded-none border-x-0 border-t-0' : 'mt-3 rounded-[18px]'}`}>
           <div className="write-pdf-topbar-grid grid w-full min-w-0 items-center gap-2 px-3 py-2 sm:px-4 md:pl-5 md:pr-3">
             <div
               className={`flex min-w-0 items-center gap-2.5 ${
                 leftSidebarCollapsed ? 'ds-window-controls-collapsed-titlebar-inset' : ''
               }`}
             >
-              <SidebarTitlebarToggleButton
-                onClick={onToggleLeftSidebar}
-                title={leftSidebarCollapsed ? t('sidebarExpand') : t('sidebarCollapse')}
-                ariaLabel={leftSidebarCollapsed ? t('sidebarExpand') : t('sidebarCollapse')}
-              />
+              {showSidebarToggle ? (
+                <SidebarTitlebarToggleButton
+                  onClick={onToggleLeftSidebar}
+                  title={leftSidebarCollapsed ? t('sidebarExpand') : t('sidebarCollapse')}
+                  ariaLabel={leftSidebarCollapsed ? t('sidebarExpand') : t('sidebarCollapse')}
+                />
+              ) : null}
               <span className="write-pdf-topbar-file-icon">
-                <FileText className="h-4 w-4" strokeWidth={1.9} />
+                {activeFileIsCode
+                  ? <FileCode2 className="h-4 w-4" strokeWidth={1.9} />
+                  : <FileText className="h-4 w-4" strokeWidth={1.9} />}
               </span>
               <div className="min-w-0 flex-1 leading-none">
                 <div className="truncate text-[15px] font-semibold text-ds-ink">
@@ -131,22 +138,18 @@ export function WriteWorkspaceToolbar({
 
             <div className="write-pdf-topbar-status">
               <BookOpen className="h-4 w-4" strokeWidth={1.85} />
-              <span>{t('writePdfPreview')}</span>
+              <span>
+                {activeFileIsOffice
+                  ? t('writeOfficePreview')
+                  : activeFileIsCode
+                    ? t('writeModeSource')
+                    : t('writePdfPreview')}
+              </span>
               <span className="write-pdf-topbar-dot" aria-hidden="true" />
               <span>{t('writeReadOnly')}</span>
             </div>
 
-            <div className="write-pdf-topbar-actions">
-              <button
-                type="button"
-                onClick={() => setAssistantOpen(!assistantOpen)}
-                className={toolbarIconButtonClass(assistantOpen)}
-                title={t('writeToggleAssistant')}
-                aria-label={t('writeToggleAssistant')}
-              >
-                <Sparkles className="h-4 w-4" strokeWidth={1.85} />
-              </button>
-            </div>
+            <div className="write-pdf-topbar-actions" />
           </div>
         </header>
       </div>
@@ -154,19 +157,21 @@ export function WriteWorkspaceToolbar({
   }
 
   return (
-    <div className={`ds-stage-inset shrink-0 -mr-3 sm:-mr-4 md:-mr-6 lg:-mr-8 ${leftSidebarCollapsed ? 'ds-window-controls-safe-inset' : '-ml-3 sm:-ml-4 md:-ml-6 lg:-ml-8'}`}>
-      <header className="ds-topbar-surface relative z-10 mt-3 flex min-h-[56px] w-full items-stretch overflow-visible rounded-[18px]">
+    <div className={embedded ? 'shrink-0' : `ds-stage-inset shrink-0 -mr-3 sm:-mr-4 md:-mr-6 lg:-mr-8 ${leftSidebarCollapsed ? 'ds-window-controls-safe-inset' : '-ml-3 sm:-ml-4 md:-ml-6 lg:-ml-8'}`}>
+      <header className={`ds-topbar-surface relative z-10 flex min-h-[56px] w-full items-stretch overflow-visible ${embedded ? 'rounded-none border-x-0 border-t-0' : 'mt-3 rounded-[18px]'}`}>
         <div className="write-workspace-toolbar-grid grid w-full min-w-0 items-center gap-2 px-3 py-2 sm:px-4 md:pl-5 md:pr-2 lg:gap-4">
           <div
             className={`flex min-w-0 items-center gap-2.5 ${
               leftSidebarCollapsed ? 'ds-window-controls-collapsed-titlebar-inset' : ''
             }`}
           >
-            <SidebarTitlebarToggleButton
-              onClick={onToggleLeftSidebar}
-              title={leftSidebarCollapsed ? t('sidebarExpand') : t('sidebarCollapse')}
-              ariaLabel={leftSidebarCollapsed ? t('sidebarExpand') : t('sidebarCollapse')}
-            />
+            {showSidebarToggle ? (
+              <SidebarTitlebarToggleButton
+                onClick={onToggleLeftSidebar}
+                title={leftSidebarCollapsed ? t('sidebarExpand') : t('sidebarCollapse')}
+                ariaLabel={leftSidebarCollapsed ? t('sidebarExpand') : t('sidebarCollapse')}
+              />
+            ) : null}
             <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent/10 text-accent">
               <FilePenLine className="h-4 w-4" strokeWidth={1.9} />
             </span>
@@ -257,12 +262,34 @@ export function WriteWorkspaceToolbar({
               type="button"
               onClick={onToggleInlineCompletion}
               disabled={!activeFileIsText || readOnly}
-              className={`${toolbarIconButtonClass(inlineCompletionEnabled)} disabled:cursor-not-allowed disabled:opacity-40`}
+              data-inline-completion-state={inlineCompletionEnabled ? 'on' : 'off'}
+              className={`inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border px-2 text-[12px] font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/45 disabled:cursor-not-allowed disabled:opacity-40 ${
+                inlineCompletionEnabled
+                  ? 'border-accent bg-accent text-white shadow-[0_2px_8px_rgba(79,70,229,0.28)]'
+                  : 'border-ds-border-muted bg-white/80 text-ds-muted hover:border-ds-border hover:bg-ds-hover hover:text-ds-ink dark:bg-white/[0.06]'
+              }`}
               title={`${t(inlineCompletionEnabled ? 'writeInlineCompletionOn' : 'writeInlineCompletionOff')} · ${t('writeInlineCompletionShortcut')}`}
               aria-label={t(inlineCompletionEnabled ? 'writeInlineCompletionOn' : 'writeInlineCompletionOff')}
               aria-pressed={inlineCompletionEnabled}
             >
               <WandSparkles className="h-4 w-4" strokeWidth={1.85} />
+              <span className="hidden xl:inline">{t('writeInlineCompletionToggle')}</span>
+              <span
+                aria-hidden="true"
+                className={`relative inline-flex h-4 w-7 shrink-0 rounded-full border transition-colors ${
+                  inlineCompletionEnabled
+                    ? 'border-white/50 bg-white/20'
+                    : 'border-slate-300 bg-slate-200 dark:border-white/20 dark:bg-white/15'
+                }`}
+              >
+                <span
+                  className={`absolute top-0.5 h-3 w-3 rounded-full shadow-sm transition-transform ${
+                    inlineCompletionEnabled
+                      ? 'translate-x-3 bg-white'
+                      : 'translate-x-0.5 bg-slate-500 dark:bg-slate-300'
+                  }`}
+                />
+              </span>
             </button>
             <button
               type="button"
@@ -277,15 +304,6 @@ export function WriteWorkspaceToolbar({
               ) : (
                 <Presentation className="h-4 w-4" strokeWidth={1.85} />
               )}
-            </button>
-            <button
-              type="button"
-              onClick={() => setAssistantOpen(!assistantOpen)}
-              className={toolbarIconButtonClass(assistantOpen)}
-              title={t('writeToggleAssistant')}
-              aria-label={t('writeToggleAssistant')}
-            >
-              <Sparkles className="h-4 w-4" strokeWidth={1.85} />
             </button>
             <button
               type="button"

@@ -1,8 +1,24 @@
 import { describe, expect, it } from 'vitest'
 import type { ChatBlock } from '../../agent/types'
-import { groupTurns, sameTurnContent, stableTurnKey } from './message-timeline-turns'
+import {
+  activeTimelineTurnIndex,
+  groupTurns,
+  sameTurnContent,
+  stableTurnKey,
+  turnTaskSurface
+} from './message-timeline-turns'
 
 describe('message timeline turns', () => {
+  it('keeps mixed timeline extension context scoped to each durable turn', () => {
+    expect(turnTaskSurface({
+      user: { kind: 'user', id: 'code', text: 'code', meta: { agentSurface: 'code' } },
+      blocks: []
+    })).toBe('code')
+    expect(turnTaskSurface({
+      user: { kind: 'user', id: 'design', text: 'design', meta: { agentSurface: 'design' } },
+      blocks: []
+    })).toBe('design')
+  })
   it('uses stable ids for user and assistant-only turns', () => {
     const blocks: ChatBlock[] = [
       { kind: 'assistant', id: 'assistant_intro', text: 'Welcome' },
@@ -48,6 +64,41 @@ describe('message timeline turns', () => {
     expect(turns).toHaveLength(1)
     expect(turns[0]?.user?.id).toBe('user_1')
     expect(turns[0]?.blocks.map((block) => block.id)).toEqual(['assistant_1', 'notice_1', 'assistant_2'])
+  })
+
+  it('aliases a transient background turn id to the active visible turn', () => {
+    const blocks: ChatBlock[] = [
+      { kind: 'user', id: 'user_1', turnId: 'turn_main', text: 'Run build in background' },
+      { kind: 'assistant', id: 'assistant_1', turnId: 'turn_main', text: 'Started.' },
+      {
+        kind: 'user',
+        id: 'notice_1',
+        turnId: 'turn_background',
+        text: '<background_shell_completed><session_id>abcd1234</session_id><command>npm run build</command><exit_code>0</exit_code><output_preview>ok</output_preview><hint>read output</hint></background_shell_completed>'
+      },
+      { kind: 'reasoning', id: 'reasoning_1', turnId: 'turn_background', text: 'Checking.' }
+    ]
+
+    const turns = groupTurns(blocks)
+
+    expect(turns).toHaveLength(1)
+    expect(turns[0]?.turnId).toBe('turn_main')
+    expect(turns[0]?.blocks.map((block) => block.id)).toEqual([
+      'assistant_1',
+      'notice_1',
+      'reasoning_1'
+    ])
+  })
+
+  it('binds live state to the durable active turn before a trailing orphan turn', () => {
+    const turns = groupTurns([
+      { kind: 'user', id: 'user_1', turnId: 'turn_active', text: 'Implement the plan' },
+      { kind: 'assistant', id: 'assistant_1', turnId: 'turn_active', text: 'Working.' },
+      { kind: 'assistant', id: 'orphan_1', turnId: 'turn_orphan', text: '' }
+    ])
+
+    expect(activeTimelineTurnIndex(turns, 'turn_active', 'user_1')).toBe(0)
+    expect(activeTimelineTurnIndex(turns, 'missing', 'missing')).toBe(1)
   })
 
   it('detects background shell notices from client-inferred xml text', () => {
@@ -140,6 +191,64 @@ describe('message timeline turns', () => {
     expect(turns[0]?.blocks.map((block) => block.id)).toEqual([
       'graph_runtime_1',
       'milestone_1'
+    ])
+  })
+
+  it('keeps Design continuation turns auditable without assigning a user bubble', () => {
+    const blocks: ChatBlock[] = [
+      { kind: 'user', id: 'user_brief', turnId: 'turn_spec', text: 'Design a store' },
+      { kind: 'assistant', id: 'assistant_spec', turnId: 'turn_spec', text: 'Brief ready' },
+      {
+        kind: 'user',
+        id: 'user_logo_internal',
+        turnId: 'turn_logo',
+        text: 'Internal logo prompt',
+        meta: { messageSource: 'design_continuation' }
+      },
+      { kind: 'assistant', id: 'assistant_logo', turnId: 'turn_logo', text: 'Logo ready' }
+    ]
+
+    const turns = groupTurns(blocks)
+
+    expect(turns).toHaveLength(2)
+    expect(turns[0]?.user?.id).toBe('user_brief')
+    expect(turns[1]?.user).toBeUndefined()
+    expect(turns[1]?.blocks.map((block) => block.id)).toEqual([
+      'user_logo_internal',
+      'assistant_logo'
+    ])
+  })
+
+  it('merges an admitted optimistic user block with durable blocks from the same turn', () => {
+    const blocks: ChatBlock[] = [
+      {
+        kind: 'user',
+        id: 'user_optimistic',
+        text: 'Inspect the request',
+        meta: { turnId: 'turn_1' }
+      },
+      {
+        kind: 'reasoning',
+        id: 'reasoning_1',
+        turnId: 'turn_1',
+        text: 'Inspecting the request'
+      },
+      {
+        kind: 'assistant',
+        id: 'assistant_1',
+        turnId: 'turn_1',
+        text: 'Inspection complete'
+      }
+    ]
+
+    const turns = groupTurns(blocks)
+
+    expect(turns).toHaveLength(1)
+    expect(turns[0]?.turnId).toBe('turn_1')
+    expect(turns[0]?.user?.id).toBe('user_optimistic')
+    expect(turns[0]?.blocks.map((block) => block.id)).toEqual([
+      'reasoning_1',
+      'assistant_1'
     ])
   })
 

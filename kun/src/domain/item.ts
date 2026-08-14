@@ -1,11 +1,18 @@
 import type {
   ToolCallProviderMetadata,
+  ModelContextBlockState,
   TurnItem,
   UserMessageSource
 } from '../contracts/items.js'
 import type { ReviewOutput, ReviewTarget } from '../contracts/review.js'
 import type { UserInputQuestion } from '../ports/user-input-gate.js'
 import type { ComposerContextAttachmentJson } from '../contracts/composer-context.js'
+import { projectToolArgumentsForPersistence } from './tool-argument-envelope.js'
+import type {
+  DesignDocumentTarget,
+  DesignImagePlacementTarget,
+  DesignTaskProfile
+} from '../contracts/design-task-profile.js'
 
 export type ItemEntity = TurnItem
 
@@ -20,6 +27,12 @@ export function makeUserItem(input: {
   composerContexts?: ComposerContextAttachmentJson[]
   fileReferences?: Array<{ path: string; relativePath: string; name: string; kind?: 'file' | 'directory' }>
   workspaceCheckpointId?: string
+  workspace?: string
+  threadAgentSurface?: 'code' | 'write' | 'design'
+  agentSurface?: 'code' | 'write' | 'design'
+  designProfile?: DesignTaskProfile
+  designDocumentTarget?: DesignDocumentTarget
+  designImagePlacementTarget?: DesignImagePlacementTarget
 }): TurnItem {
   const attachmentIds = input.attachmentIds?.filter((id) => id.trim().length > 0)
   const fileReferences = input.fileReferences
@@ -46,7 +59,15 @@ export function makeUserItem(input: {
     ...(attachmentIds?.length ? { attachmentIds } : {}),
     ...(input.composerContexts?.length ? { composerContexts: input.composerContexts } : {}),
     ...(fileReferences?.length ? { fileReferences } : {}),
-    ...(input.workspaceCheckpointId ? { workspaceCheckpointId: input.workspaceCheckpointId } : {})
+    ...(input.workspaceCheckpointId ? { workspaceCheckpointId: input.workspaceCheckpointId } : {}),
+    ...(input.workspace ? { workspace: input.workspace } : {}),
+    ...(input.threadAgentSurface ? { threadAgentSurface: input.threadAgentSurface } : {}),
+    ...(input.agentSurface ? { agentSurface: input.agentSurface } : {}),
+    ...(input.designProfile ? { designProfile: input.designProfile } : {}),
+    ...(input.designDocumentTarget ? { designDocumentTarget: input.designDocumentTarget } : {}),
+    ...(input.designImagePlacementTarget
+      ? { designImagePlacementTarget: input.designImagePlacementTarget }
+      : {})
   }
 }
 
@@ -69,6 +90,57 @@ export function makeGoalContextItem(input: {
     finishedAt: createdAt,
     kind: 'goal_context',
     ...(input.goalKey ? { goalKey: input.goalKey } : {}),
+    text: input.text
+  }
+}
+
+export function makeModelContextItem(input: {
+  id: string
+  turnId: string
+  threadId: string
+  stepIndex: number
+  contentDigest: string
+  blocks: ModelContextBlockState[]
+  text: string
+  createdAt?: string
+}): TurnItem {
+  const createdAt = input.createdAt ?? new Date().toISOString()
+  return {
+    id: input.id,
+    turnId: input.turnId,
+    threadId: input.threadId,
+    role: 'system',
+    status: 'completed',
+    createdAt,
+    finishedAt: createdAt,
+    kind: 'model_context',
+    formatVersion: 1,
+    stepIndex: input.stepIndex,
+    contentDigest: input.contentDigest,
+    blocks: input.blocks.map((block) => ({ ...block })),
+    text: input.text
+  }
+}
+
+export function makeInterruptionNoteItem(input: {
+  id: string
+  turnId: string
+  threadId: string
+  sourceTurnId: string
+  text: string
+  createdAt?: string
+}): TurnItem {
+  const createdAt = input.createdAt ?? new Date().toISOString()
+  return {
+    id: input.id,
+    turnId: input.turnId,
+    threadId: input.threadId,
+    role: 'system',
+    status: 'completed',
+    createdAt,
+    finishedAt: createdAt,
+    kind: 'interruption_note',
+    sourceTurnId: input.sourceTurnId,
     text: input.text
   }
 }
@@ -125,6 +197,8 @@ export function makeToolCallItem(input: {
   summary?: string
   status?: 'pending' | 'running' | 'completed' | 'failed'
 }): TurnItem {
+  const projected = projectToolArgumentsForPersistence(input.arguments)
+  const summary = [input.summary, projected.rawSummary].filter(Boolean).join(' ') || undefined
   return {
     id: input.id,
     turnId: input.turnId,
@@ -136,9 +210,9 @@ export function makeToolCallItem(input: {
     toolName: input.toolName,
     callId: input.callId,
     toolKind: input.toolKind ?? 'tool_call',
-    arguments: input.arguments,
+    arguments: projected.arguments,
     ...(input.providerMetadata ? { providerMetadata: input.providerMetadata } : {}),
-    summary: input.summary
+    summary
   }
 }
 

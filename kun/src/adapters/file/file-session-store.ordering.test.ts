@@ -2,7 +2,7 @@ import { appendFile, mkdtemp, readFile, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { makeAssistantTextItem, makeToolCallItem, makeToolResultItem } from '../../domain/item.js'
+import { makeAssistantTextItem, makeToolCallItem, makeToolResultItem, makeUserItem } from '../../domain/item.js'
 import { FileSessionStore } from './file-session-store.js'
 
 const roots: string[] = []
@@ -165,5 +165,113 @@ describe('FileSessionStore item ordering', () => {
       bytes: 0,
       maxBytes: 1_024
     })
+  })
+
+  it('returns a bounded chronological item page from durable history', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-session-page-'))
+    roots.push(root)
+    const store = new FileSessionStore({ dataDir: root })
+    const threadId = 'thread_page'
+    for (let index = 0; index < 12; index += 1) {
+      await store.appendItem(threadId, makeAssistantTextItem({
+        id: `assistant_${index}`,
+        threadId,
+        turnId: `turn_${index}`,
+        text: `answer ${index}`,
+        status: 'completed'
+      }))
+    }
+    await store.appendItem(threadId, makeAssistantTextItem({
+      id: 'assistant_4',
+      threadId,
+      turnId: 'turn_4',
+      text: 'answer 4 updated',
+      status: 'completed'
+    }))
+    store.clearThreadMemory(threadId)
+
+    const latest = await store.loadItemPage(threadId, { maxItems: 5, maxBytes: 64 * 1024 })
+    expect(latest.items.map((item) => item.id)).toEqual([
+      'assistant_7', 'assistant_8', 'assistant_9', 'assistant_10', 'assistant_11'
+    ])
+    expect(latest).toMatchObject({ hasMore: true, nextCursor: 'assistant_7' })
+
+    const older = await store.loadItemPage(threadId, {
+      before: latest.nextCursor,
+      maxItems: 5,
+      maxBytes: 64 * 1024
+    })
+    expect(older.items.map((item) => item.id)).toEqual([
+      'assistant_2', 'assistant_3', 'assistant_4', 'assistant_5', 'assistant_6'
+    ])
+    expect(older.items[2]).toMatchObject({ text: 'answer 4 updated' })
+    expect(store.itemCacheStats()).toMatchObject({ entries: 0, bytes: 0 })
+  })
+
+  it('pins the running turn user message on the newest JSONL page', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-session-anchor-'))
+    roots.push(root)
+    const store = new FileSessionStore({ dataDir: root })
+    const threadId = 'thread_anchor'
+    const turnId = 'turn_running'
+    await store.appendItem(threadId, makeUserItem({
+      id: 'user_active', threadId, turnId, text: 'fix the pipeline'
+    }))
+    for (let index = 0; index < 349; index += 1) {
+      await store.appendItem(threadId, makeAssistantTextItem({
+        id: `process_${String(index).padStart(3, '0')}`,
+        threadId,
+        turnId,
+        text: `process ${index}`,
+        status: 'completed'
+      }))
+    }
+    store.clearThreadMemory(threadId)
+
+    const latest = await store.loadItemPage(threadId, {
+      anchorTurnId: turnId,
+      maxItems: 300,
+      maxBytes: 4 * 1024 * 1024
+    })
+    expect(latest.items).toHaveLength(300)
+    expect(latest.items[0]).toMatchObject({ id: 'user_active', kind: 'user_message' })
+    expect(latest.items.at(-1)?.id).toBe('process_348')
+    // The cursor stays at the retained continuous window so the next older
+    // page covers the anchor and the 50 trimmed process items.
+    expect(latest).toMatchObject({ hasMore: true, nextCursor: 'process_050' })
+
+    const older = await store.loadItemPage(threadId, {
+      before: latest.nextCursor,
+      maxItems: 300,
+      maxBytes: 4 * 1024 * 1024
+    })
+    expect(older.items.map((item) => item.id)).toEqual([
+      'user_active',
+      ...Array.from({ length: 50 }, (_, index) => `process_${String(index).padStart(3, '0')}`)
+    ])
+    expect(older).toMatchObject({ hasMore: false })
+    expect(store.itemCacheStats()).toMatchObject({ entries: 0, bytes: 0 })
+  })
+
+  it('streams a cold event high-water scan without loading an event array', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-session-highest-seq-'))
+    roots.push(root)
+    const store = new FileSessionStore({ dataDir: root })
+    const threadId = 'thread_highest_seq'
+    await store.appendItem(threadId, makeAssistantTextItem({
+      id: 'assistant_seed',
+      threadId,
+      turnId: 'turn_seed',
+      text: 'seed'
+    }))
+    const events = Array.from({ length: 2_000 }, (_, seq) => JSON.stringify({
+      seq,
+      timestamp: '2026-08-09T00:00:00.000Z',
+      threadId,
+      kind: 'heartbeat'
+    })).join('\n')
+    await appendFile(join(root, 'threads', threadId, 'events.jsonl'), `${events}\n`)
+
+    expect(await store.highestSeq(threadId)).toBe(1_999)
   })
 })

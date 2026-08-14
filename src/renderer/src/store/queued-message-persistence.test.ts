@@ -32,8 +32,13 @@ describe('queued-message-persistence', () => {
       {
         id: 'q-1',
         text: 'finish the first change',
+        clientRequestId: 'turn_client_1',
         deliveryState: 'pending',
         serviceTier: 'priority',
+        messageSource: 'design_continuation',
+        designImagePlacementTarget: {
+          shapeId: 'hero_holder', expectedHolderKind: 'implicit-rect'
+        },
         fileReferences: [{
           path: '/workspace/src/App.tsx',
           relativePath: 'src/App.tsx',
@@ -42,20 +47,46 @@ describe('queued-message-persistence', () => {
       }
     ], storage)
     saveQueuedMessagesForThread('thread-b', [
-      { id: 'q-2', text: 'review the result', deliveryState: 'pending' }
+      {
+        id: 'q-2',
+        text: 'review the result',
+        deliveryState: 'pending',
+        writeContext: {
+          workspaceRoot: '/workspace/deepseek-gui',
+          activeFilePath: '/workspace/deepseek-gui/draft.md',
+          documentEpoch: 4,
+          contentRevision: 2,
+          threadId: 'thread-b'
+        }
+      }
     ], storage)
 
     expect(queuedMessagesForThread('thread-a', storage)).toEqual([
       expect.objectContaining({
         id: 'q-1',
         text: 'finish the first change',
+        clientRequestId: 'turn_client_1',
         deliveryState: 'pending',
         serviceTier: 'priority',
+        messageSource: 'design_continuation',
+        designImagePlacementTarget: {
+          shapeId: 'hero_holder', expectedHolderKind: 'implicit-rect'
+        },
         fileReferences: [expect.objectContaining({ relativePath: 'src/App.tsx' })]
       })
     ])
     expect(queuedMessagesForThread('thread-b', storage)).toEqual([
-      expect.objectContaining({ id: 'q-2', deliveryState: 'pending' })
+      expect.objectContaining({
+        id: 'q-2',
+        deliveryState: 'pending',
+        writeContext: {
+          workspaceRoot: '/workspace/deepseek-gui',
+          activeFilePath: '/workspace/deepseek-gui/draft.md',
+          documentEpoch: 4,
+          contentRevision: 2,
+          threadId: 'thread-b'
+        }
+      })
     ])
   })
 
@@ -112,6 +143,21 @@ describe('queued-message-persistence', () => {
     }])
   })
 
+  it('keeps paused messages across persistence and idle/running reconciliation', () => {
+    const storage = new MemoryStorage()
+    const paused = [{ id: 'q-paused', text: 'send later', deliveryState: 'paused' as const }]
+    saveQueuedMessagesForThread('thread-a', paused, storage)
+
+    expect(queuedMessagesForThread('thread-a', storage)).toEqual(paused)
+    expect(reconcileQueuedMessages(paused, { busy: false, turnId: null })).toEqual(paused)
+    expect(reconcileQueuedMessages(paused, { busy: true, turnId: 'turn-live' })).toEqual(paused)
+  })
+
+  it('does not treat paused messages as automatically sendable', async () => {
+    const { isPendingQueuedMessage } = await import('./queued-message-persistence')
+    expect(isPendingQueuedMessage({ id: 'q-paused', text: 'send later', deliveryState: 'paused' })).toBe(false)
+  })
+
   it('forgets a deleted thread queue and ignores malformed storage', () => {
     const storage = new MemoryStorage()
     saveQueuedMessagesForThread('thread-a', [
@@ -121,6 +167,36 @@ describe('queued-message-persistence', () => {
     expect(readQueuedMessageRegistry(storage)).toEqual(emptyQueuedMessageRegistry())
 
     storage.setItem('kun.queuedMessages.v1', '{broken')
+    expect(readQueuedMessageRegistry(storage)).toEqual(emptyQueuedMessageRegistry())
+
+    storage.setItem('kun.queuedMessages.v1', JSON.stringify({
+      version: 1,
+      threads: {
+        'thread-a': {
+          messages: [{ id: 'q-bad', text: 'unsafe', writeContext: { threadId: 'thread-a' } }]
+        }
+      }
+    }))
+    expect(readQueuedMessageRegistry(storage)).toEqual(emptyQueuedMessageRegistry())
+
+    storage.setItem('kun.queuedMessages.v1', JSON.stringify({
+      version: 1,
+      threads: {
+        'thread-a': {
+          messages: [{
+            id: 'q-wrong-thread',
+            text: 'unsafe',
+            writeContext: {
+              workspaceRoot: '/workspace/deepseek-gui',
+              activeFilePath: '/workspace/deepseek-gui/draft.md',
+              documentEpoch: 4,
+              contentRevision: 2,
+              threadId: 'thread-b'
+            }
+          }]
+        }
+      }
+    }))
     expect(readQueuedMessageRegistry(storage)).toEqual(emptyQueuedMessageRegistry())
   })
 })

@@ -4,13 +4,9 @@ import {
   DEFAULT_SPEECH_TO_TEXT_PROTOCOL,
   DEFAULT_TEXT_TO_SPEECH_PROTOCOL,
   DEFAULT_VIDEO_GENERATION_PROTOCOL,
+  MAX_MODEL_CONTEXT_WINDOW_TOKENS,
+  MAX_MODEL_OUTPUT_TOKENS,
   MODEL_REASONING_EFFORTS,
-  isComposerChatModelId,
-  isImageGenerationModelId,
-  isMusicGenerationModelId,
-  isSpeechToTextModelId,
-  isTextToSpeechModelId,
-  isVideoGenerationModelId,
   type ModelEndpointFormat,
   type ModelProviderModelProfileV1,
   type ModelProviderProfileV1,
@@ -18,6 +14,14 @@ import {
   type ModelReasoningEffort,
   type ModelReasoningRequestProtocol
 } from '@shared/app-settings'
+import {
+  isComposerChatModelId,
+  isImageGenerationModelId,
+  isMusicGenerationModelId,
+  isSpeechToTextModelId,
+  isTextToSpeechModelId,
+  isVideoGenerationModelId
+} from '@shared/app-settings-provider-core'
 
 export type ProviderModelKind = 'chat' | 'image' | 'speech' | 'tts' | 'music' | 'video'
 
@@ -66,7 +70,9 @@ export type ProviderModelFormError =
   | { code: 'missingId' }
   | { code: 'duplicate'; kind: ProviderModelKind }
   | { code: 'invalidContextWindow' }
+  | { code: 'contextWindowTooLarge'; maximum: number }
   | { code: 'invalidMaxOutput' }
+  | { code: 'maxOutputTooLarge'; maximum: number }
   | { code: 'noReasoningEfforts' }
 
 export type ProviderModelListEntry = {
@@ -241,12 +247,22 @@ export function validateProviderModelForm(
     (!Number.isInteger(form.contextWindowTokens) || form.contextWindowTokens <= 0)
   ) {
     errors.push({ code: 'invalidContextWindow' })
+  } else if (
+    form.contextWindowTokens !== null &&
+    form.contextWindowTokens > MAX_MODEL_CONTEXT_WINDOW_TOKENS
+  ) {
+    errors.push({ code: 'contextWindowTooLarge', maximum: MAX_MODEL_CONTEXT_WINDOW_TOKENS })
   }
   if (
     form.maxOutputTokens !== null &&
     (!Number.isInteger(form.maxOutputTokens) || form.maxOutputTokens <= 0)
   ) {
     errors.push({ code: 'invalidMaxOutput' })
+  } else if (
+    form.maxOutputTokens !== null &&
+    form.maxOutputTokens > MAX_MODEL_OUTPUT_TOKENS
+  ) {
+    errors.push({ code: 'maxOutputTooLarge', maximum: MAX_MODEL_OUTPUT_TOKENS })
   }
   if (form.kind === 'chat' && form.reasoningEnabled && form.reasoningEfforts.length === 0) {
     errors.push({ code: 'noReasoningEfforts' })

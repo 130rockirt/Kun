@@ -12,10 +12,17 @@ import {
   SteerTurnRequest,
   TurnSchema
 } from '../../contracts/turns.js'
+import { ThreadBusyDetailsSchema } from '../../contracts/errors.js'
 import { jsonResponse, type JsonResponse } from '../response.js'
 import { readJsonBody } from '../read-json-body.js'
 import { ERRORS } from './runtime-error.js'
-import { TurnCapacityError, TurnConflictError, type TurnService } from '../../services/turn-service.js'
+import {
+  DesignProfileLockedError,
+  TaskSurfaceLockedError,
+  TurnCapacityError,
+  TurnConflictError,
+  type TurnService
+} from '../../services/turn-service.js'
 import { ThreadExecutionBusyError } from '../../ports/thread-execution-lease.js'
 import { isPublicTurnItem } from '../../contracts/items.js'
 import type { ToolCancellationService } from '../../services/tool-cancellation-service.js'
@@ -40,19 +47,35 @@ export async function startTurn(
     const response: StartTurnResponse = await turns.startTurn({
       threadId,
       request: parsed.data
-    })
-    onStarted?.(response)
+    }, { onAdmitted: onStarted })
     return jsonResponse(response, 202)
   } catch (error) {
     if (error instanceof ThreadExecutionBusyError) {
       return jsonResponse({
         code: 'thread_busy',
-        message: error.message,
-        details: { owner: error.owner }
+        message: 'thread already has an active turn',
+        details: ThreadBusyDetailsSchema.parse({
+          threadId: error.owner.threadId,
+          activeTurnId: error.owner.turnId,
+          ownerFlavor: error.owner.ownerFlavor,
+          acquiredAt: error.owner.acquiredAt,
+          expiresAt: error.owner.expiresAt
+        })
       }, 409)
     }
     if (error instanceof TurnCapacityError) {
       return ERRORS.rateLimited(error.message, { maxConcurrentTurns: error.maxConcurrentTurns })
+    }
+    if (error instanceof TaskSurfaceLockedError) {
+      return ERRORS.taskSurfaceLocked(error.message, {
+        lockedSurface: error.lockedSurface,
+        requestedSurface: error.requestedSurface
+      })
+    }
+    if (error instanceof DesignProfileLockedError) {
+      return ERRORS.designProfileLocked(error.message, {
+        lockedAtTurnId: error.lockedAtTurnId
+      })
     }
     if (error instanceof TurnConflictError) return ERRORS.conflict(error.message)
     if (error instanceof Error && /not found/i.test(error.message)) {
@@ -81,7 +104,10 @@ export async function steerTurn(
       turnId,
       text: parsed.data.text,
       ...(parsed.data.displayText ? { displayText: parsed.data.displayText } : {}),
-      ...(parsed.data.messageSource ? { messageSource: parsed.data.messageSource } : {})
+      ...(parsed.data.messageSource ? { messageSource: parsed.data.messageSource } : {}),
+      ...(parsed.data.attachmentIds?.length
+        ? { attachmentIds: parsed.data.attachmentIds }
+        : {})
     })
     onSteered?.({ threadId, turnId })
   } catch (error) {

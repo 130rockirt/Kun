@@ -33,6 +33,11 @@ const labels: Record<string, string> = {
   providerModelImportConfirm: 'Import {{count}}',
   providerModelImportApplyMetadata: 'Apply model metadata',
   providerModelImportMetadataUpdates: '{{count}} existing models can be updated',
+  providerModelImportMetadataIgnored: 'Ignored {{count}} out-of-range catalog fields; models remain importable.',
+  providerModelImportMetadataIssueBadge: 'Metadata ignored',
+  providerModelImportMetadataIssueDetail: '{{field}} {{value}} exceeds supported maximum {{max}}; field ignored.',
+  providerModelFieldContextWindow: 'Context window',
+  providerModelFieldMaxOutput: 'Max output',
   providerModelImportProviderWarning: 'Provider verification failed: {{message}}',
   providerModelImportCatalogError: 'Catalog unavailable: {{message}}',
   providerModelImportCatalogUnmapped: 'No exact catalog mapping.',
@@ -133,6 +138,30 @@ describe('ProviderModelImportDialog', () => {
     expect(html).toContain('Reasoning')
     expect(html).toContain('No tools')
     expect(html).toContain('Import 1')
+  })
+
+  it('shows ignored catalog metadata without removing the affected model', () => {
+    const html = render({
+      providerModelIds: ['qwen/qwen3.5-flash'],
+      catalogResult: catalog([{
+        id: 'qwen/qwen3.5-flash',
+        inputModalities: ['text', 'image'],
+        outputModalities: ['text'],
+        contextWindowTokens: 1_020_000,
+        toolCalling: true,
+        metadataIssues: [{
+          field: 'maxOutputTokens',
+          code: 'out_of_range',
+          rawValue: 1_020_000,
+          maxAllowed: 1_000_000
+        }]
+      }])
+    })
+
+    expect(html).toContain('qwen/qwen3.5-flash')
+    expect(html).toContain('Ignored 1 out-of-range catalog fields')
+    expect(html).toContain('Metadata ignored')
+    expect(html).toContain('Max output 1,020,000 exceeds supported maximum 1,000,000')
   })
 
   it('hides existing rows by default and does not preselect them', () => {

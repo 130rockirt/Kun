@@ -97,7 +97,7 @@ async function readReferenceImage(
   const absolutePath = isAbsolute(input) ? resolve(input) : resolve(workspaceRoot, input)
   const rel = relative(workspaceRoot, absolutePath)
   if (!rel || rel.startsWith('..') || isAbsolute(rel)) {
-    return { error: 'reference image must be inside the write workspace' }
+    return { error: 'reference image must be inside the Work workspace' }
   }
 
   let data: Buffer
@@ -139,7 +139,7 @@ export async function requestWriteInfographic(
   const filePath = resolve(request.filePath)
   const relativeToRoot = relative(workspaceRoot, filePath)
   if (!relativeToRoot || relativeToRoot.startsWith('..') || isAbsolute(relativeToRoot)) {
-    return { ok: false, message: 'document must be inside the write workspace' }
+    return { ok: false, message: 'document must be inside the Work workspace' }
   }
 
   const kind: WriteInfographicKind = request.kind ?? 'infographic'

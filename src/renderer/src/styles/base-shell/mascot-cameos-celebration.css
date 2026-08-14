@@ -1,0 +1,639 @@
+@keyframes ds-ikun-state-sway {
+  0%,
+  100% {
+    transform: rotate(-2deg);
+  }
+  50% {
+    transform: rotate(2deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ds-kun-state .ds-kun-state-figure,
+  .ds-kun-state .ds-ikun-state-figure {
+    animation: none;
+  }
+
+  .ds-work-logo,
+  .ds-kun-state {
+    transition: none;
+  }
+}
+
+.ds-runtime-wake-kun {
+  z-index: 2;
+  height: 46px;
+  width: 60px;
+}
+
+/* 侧边栏角落吉祥物:换姿态时弹性入场 */
+.ds-sidebar-mascot {
+  height: 46px;
+  width: 56px;
+  opacity: 0.92;
+  animation: ds-kun-mascot-pop 0.45s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@keyframes ds-kun-mascot-pop {
+  0% {
+    opacity: 0;
+    transform: translateY(5px) scale(0.7);
+  }
+  100% {
+    opacity: 0.92;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ds-sidebar-mascot {
+    animation: none;
+  }
+}
+
+/* ---------- iKun 出没:主会话两侧不定时冒出的坤鸡彩蛋(指针穿透) ---------- */
+
+.ds-ikun-cameo-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.ds-ikun-cameo {
+  position: absolute;
+  opacity: 0;
+  line-height: 0;
+  will-change: transform, opacity;
+}
+
+.ds-ikun-cameo-flip {
+  display: block;
+  height: 100%;
+}
+
+.ds-ikun-cameo .ds-ikun-cameo-figure {
+  display: block;
+  height: 100%;
+  width: auto;
+  object-fit: contain;
+  filter: drop-shadow(0 4px 10px rgba(249, 115, 22, 0.18));
+  pointer-events: none;
+  user-select: none;
+}
+
+/* 快攻横穿:沿底边跑过整个会话区;素材朝左,向右跑时整体镜像 */
+.ds-ikun-cameo-dash {
+  right: -90px;
+  bottom: 4px;
+  height: 52px;
+  --cameo-cross: calc(-100vw - 220px);
+  animation: ds-ikun-cameo-cross 5.2s linear forwards;
+}
+
+.ds-ikun-cameo-dash.is-left {
+  right: auto;
+  left: -90px;
+  --cameo-cross: calc(100vw + 220px);
+}
+
+.ds-ikun-cameo-dash.is-left .ds-ikun-cameo-flip {
+  transform: scaleX(-1);
+}
+
+.ds-ikun-cameo-dash .ds-ikun-cameo-figure {
+  animation: ds-ikun-cameo-gallop 0.42s ease-in-out infinite;
+  transform-origin: 50% 92%;
+}
+
+/* 对穿组合:第二只小一号,晚一拍从对面跑来 */
+.ds-ikun-cameo-dash.is-second {
+  bottom: 2px;
+  height: 40px;
+  animation-delay: 1.2s;
+}
+
+/* 探头偷看:从侧边探出半个身子挥手 */
+.ds-ikun-cameo-peek {
+  bottom: 22%;
+  left: -36px;
+  height: 64px;
+  --cameo-peek-shift: 32px;
+  animation: ds-ikun-cameo-peek 6.2s ease-in-out forwards;
+}
+
+.ds-ikun-cameo-peek.is-right {
+  right: -36px;
+  left: auto;
+  --cameo-peek-shift: -32px;
+}
+
+.ds-ikun-cameo-peek.is-right .ds-ikun-cameo-flip {
+  transform: scaleX(-1);
+}
+
+.ds-ikun-cameo-peek .ds-ikun-cameo-figure {
+  animation: ds-ikun-cameo-wiggle 1.3s ease-in-out infinite;
+  transform-origin: 50% 88%;
+}
+
+/* 奶茶歇脚:角落升起来坐一会儿 */
+.ds-ikun-cameo-boba {
+  bottom: 6px;
+  height: 64px;
+  animation: ds-ikun-cameo-rise 7.2s ease-in-out forwards;
+}
+
+.ds-ikun-cameo-boba.is-left {
+  left: 16px;
+}
+
+.ds-ikun-cameo-boba.is-right {
+  right: 16px;
+}
+
+.ds-ikun-cameo-boba .ds-ikun-cameo-figure {
+  animation: ds-ikun-cameo-sip 2.2s ease-in-out infinite;
+  transform-origin: 50% 90%;
+}
+
+/* 打盹:角落淡入睡一觉再溜走 */
+.ds-ikun-cameo-nap {
+  bottom: 6px;
+  height: 58px;
+  animation: ds-ikun-cameo-doze 8.2s ease-in-out forwards;
+}
+
+.ds-ikun-cameo-nap.is-left {
+  left: 18px;
+}
+
+.ds-ikun-cameo-nap.is-right {
+  right: 18px;
+}
+
+.ds-ikun-cameo-nap .ds-ikun-cameo-figure {
+  animation: ds-ikun-cameo-breathe 3s ease-in-out infinite;
+  transform-origin: 50% 100%;
+}
+
+@keyframes ds-ikun-cameo-cross {
+  0% {
+    opacity: 0;
+    transform: translateX(0);
+  }
+  5%,
+  92% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(var(--cameo-cross));
+  }
+}
+
+@keyframes ds-ikun-cameo-gallop {
+  0%,
+  100% {
+    transform: translateY(0) rotate(-3deg) scale(1.03, 0.96);
+  }
+  45% {
+    transform: translateY(-7px) rotate(-6deg) scale(0.97, 1.05);
+  }
+}
+
+@keyframes ds-ikun-cameo-peek {
+  0% {
+    opacity: 0;
+    transform: translateX(0) rotate(9deg);
+  }
+  12%,
+  82% {
+    opacity: 1;
+    transform: translateX(var(--cameo-peek-shift)) rotate(0deg);
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(0) rotate(10deg);
+  }
+}
+
+@keyframes ds-ikun-cameo-wiggle {
+  0%,
+  100% {
+    transform: rotate(-4deg);
+  }
+  50% {
+    transform: rotate(5deg);
+  }
+}
+
+@keyframes ds-ikun-cameo-rise {
+  0% {
+    opacity: 0;
+    transform: translateY(115%);
+  }
+  10%,
+  88% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(115%);
+  }
+}
+
+@keyframes ds-ikun-cameo-sip {
+  0%,
+  100% {
+    transform: rotate(-2deg);
+  }
+  40% {
+    transform: rotate(2.2deg);
+  }
+  62% {
+    transform: rotate(-3.4deg) translateY(-1.5px);
+  }
+}
+
+@keyframes ds-ikun-cameo-doze {
+  0% {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  10%,
+  86% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+@keyframes ds-ikun-cameo-breathe {
+  0%,
+  100% {
+    transform: scale(1, 1);
+  }
+  50% {
+    transform: scale(1.02, 1.05);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ds-ikun-cameo,
+  .ds-ikun-cameo .ds-ikun-cameo-figure {
+    animation: none;
+    opacity: 0;
+  }
+}
+
+/* ---------- 任务完成庆祝:回合结束随机来一段(双形象,iKun 模式自动换坤鸡) ---------- */
+
+.ds-kun-celebration-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.ds-kun-celebration {
+  position: absolute;
+  opacity: 0;
+  line-height: 0;
+  will-change: transform, opacity;
+}
+
+.ds-kun-celebration-figure-wrap {
+  position: relative;
+  display: block;
+  height: 100%;
+}
+
+.ds-kun-celebration-figure {
+  display: block;
+  height: 100%;
+  width: auto;
+  object-fit: contain;
+  filter: drop-shadow(0 6px 14px rgba(59, 130, 216, 0.22));
+  pointer-events: none;
+  user-select: none;
+}
+
+.ds-kun-celebration-figure.is-ikun {
+  display: none;
+  filter: drop-shadow(0 6px 14px rgba(249, 115, 22, 0.22));
+}
+
+[data-ikun-mode='on'] .ds-kun-celebration-figure.is-kun {
+  display: none;
+}
+
+[data-ikun-mode='on'] .ds-kun-celebration-figure.is-ikun {
+  display: block;
+}
+
+/* 跃起欢呼:底部中央蹦出来,双跳挥手 */
+.ds-kun-celebration-cheer {
+  bottom: 10px;
+  left: 50%;
+  height: 84px;
+  animation: ds-kun-celebrate-cheer 3.2s ease-in-out forwards;
+}
+
+/* 胜利冲浪 / 快攻冲刺:贴底横穿,彩屑一路跟着 */
+.ds-kun-celebration-lap {
+  right: -110px;
+  bottom: 6px;
+  height: 62px;
+  animation: ds-kun-celebrate-lap 3.6s linear forwards;
+}
+
+.ds-kun-celebration-lap .ds-kun-celebration-figure {
+  animation: ds-ikun-cameo-gallop 0.5s ease-in-out infinite;
+  transform-origin: 50% 92%;
+}
+
+/* 举杯庆功:右下角升起,举着贝壳/奶茶碰两下杯 */
+.ds-kun-celebration-toast {
+  right: 18px;
+  bottom: 8px;
+  height: 74px;
+  transform-origin: 50% 100%;
+  animation: ds-kun-celebrate-toast 3.4s ease-in-out forwards;
+}
+
+@keyframes ds-kun-celebrate-cheer {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, 100%);
+  }
+  14% {
+    opacity: 1;
+    transform: translate(-50%, -16%);
+  }
+  26% {
+    transform: translate(-50%, 4%);
+  }
+  38% {
+    transform: translate(-50%, -12%);
+  }
+  50%,
+  84% {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, 104%);
+  }
+}
+
+@keyframes ds-kun-celebrate-lap {
+  0% {
+    opacity: 0;
+    transform: translateX(0);
+  }
+  6%,
+  92% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(calc(-100vw - 260px));
+  }
+}
+
+@keyframes ds-kun-celebrate-toast {
+  0% {
+    opacity: 0;
+    transform: translateY(112%) rotate(0deg);
+  }
+  12% {
+    opacity: 1;
+    transform: translateY(0) rotate(0deg);
+  }
+  26% {
+    transform: translateY(-4px) rotate(-6deg);
+  }
+  38% {
+    transform: translateY(0) rotate(0deg);
+  }
+  52% {
+    transform: translateY(-4px) rotate(-6deg);
+  }
+  66%,
+  86% {
+    opacity: 1;
+    transform: translateY(0) rotate(0deg);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(112%) rotate(2deg);
+  }
+}
+
+/* 彩屑:吉祥物色板,向上炸开后飘散 */
+.ds-kun-confetti {
+  position: absolute;
+  top: 6%;
+  left: 50%;
+  width: 0;
+  height: 0;
+}
+
+.ds-kun-confetti i {
+  position: absolute;
+  width: 6px;
+  height: 9px;
+  border-radius: 2px;
+  opacity: 0;
+  animation: ds-kun-confetti-burst 1.6s ease-out forwards;
+  animation-delay: 0.4s;
+}
+
+.ds-kun-confetti i:nth-child(5n + 1) { background: #6ca2dd; }
+.ds-kun-confetti i:nth-child(5n + 2) { background: #f47464; }
+.ds-kun-confetti i:nth-child(5n + 3) { background: #f0c46e; }
+.ds-kun-confetti i:nth-child(5n + 4) { background: #85c1f1; }
+.ds-kun-confetti i:nth-child(5n + 5) { background: #fff2db; }
+
+.ds-kun-confetti i:nth-child(1) { --cx: -64px; --cy: -58px; --cr: -190deg; }
+.ds-kun-confetti i:nth-child(2) { --cx: -42px; --cy: -86px; --cr: 160deg; }
+.ds-kun-confetti i:nth-child(3) { --cx: -20px; --cy: -64px; --cr: -120deg; animation-delay: 0.5s; }
+.ds-kun-confetti i:nth-child(4) { --cx: -8px; --cy: -96px; --cr: 200deg; }
+.ds-kun-confetti i:nth-child(5) { --cx: 10px; --cy: -70px; --cr: -160deg; animation-delay: 0.48s; }
+.ds-kun-confetti i:nth-child(6) { --cx: 24px; --cy: -92px; --cr: 140deg; }
+.ds-kun-confetti i:nth-child(7) { --cx: 40px; --cy: -60px; --cr: -210deg; animation-delay: 0.52s; }
+.ds-kun-confetti i:nth-child(8) { --cx: 58px; --cy: -84px; --cr: 180deg; }
+.ds-kun-confetti i:nth-child(9) { --cx: 72px; --cy: -52px; --cr: -140deg; animation-delay: 0.46s; }
+.ds-kun-confetti i:nth-child(10) { --cx: 0px; --cy: -110px; --cr: 220deg; animation-delay: 0.56s; }
+
+@keyframes ds-kun-confetti-burst {
+  0% {
+    opacity: 0;
+    transform: translate(0, 0) rotate(0deg) scale(0.5);
+  }
+  14% {
+    opacity: 1;
+  }
+  70% {
+    opacity: 0.9;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(var(--cx), var(--cy)) rotate(var(--cr)) scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ds-kun-celebration,
+  .ds-kun-celebration .ds-kun-celebration-figure,
+  .ds-kun-confetti i {
+    animation: none;
+    opacity: 0;
+  }
+}
+
+/* iKun 模式开关上的坤鸡立绘:关闭时蹲灰度,打开点亮 */
+.ds-ikun-toggle-figure {
+  height: 16px;
+  width: 16px;
+  object-fit: contain;
+  filter: grayscale(1);
+  opacity: 0.6;
+  transition:
+    filter 0.25s ease,
+    opacity 0.25s ease,
+    transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.ds-ikun-toggle-figure.is-on {
+  filter: none;
+  opacity: 1;
+  transform: scale(1.12);
+}
+
+[data-theme='dark'] .ds-runtime-wake-shell {
+  background:
+    linear-gradient(180deg, rgba(27, 35, 56, 0.94), rgba(20, 27, 44, 0.9)),
+    linear-gradient(120deg, rgba(111, 176, 232, 0.12), transparent 42%, rgba(240, 196, 110, 0.08));
+  box-shadow:
+    0 24px 70px rgba(2, 6, 16, 0.36),
+    inset 0 1px 0 rgba(151, 192, 235, 0.08);
+}
+
+[data-theme='dark'] .ds-runtime-wake-composer {
+  box-shadow: 0 14px 34px rgba(2, 6, 16, 0.3);
+}
+
+[data-theme='dark'] .ds-runtime-wake-core {
+  box-shadow:
+    0 20px 54px rgba(111, 176, 232, 0.18),
+    0 8px 24px rgba(240, 196, 110, 0.1),
+    inset 0 1px 0 rgba(151, 192, 235, 0.09);
+}
+
+/* iKun 模式:hero 舞台的蓝绿点缀改为篮球橙 + 金黄 */
+[data-ikun-mode='on'] .ds-runtime-wake-shell {
+  background:
+    linear-gradient(180deg, rgba(255, 253, 246, 0.96), rgba(252, 246, 233, 0.9)),
+    linear-gradient(120deg, rgba(216, 115, 13, 0.08), transparent 42%, rgba(250, 204, 21, 0.12));
+  box-shadow:
+    0 24px 70px rgba(96, 64, 18, 0.1),
+    inset 0 1px 0 rgba(255, 255, 255, 0.85);
+}
+
+[data-ikun-mode='on'] .ds-runtime-wake-shell::before {
+  background: linear-gradient(
+    112deg,
+    transparent 0%,
+    transparent 34%,
+    rgba(216, 115, 13, 0.16) 45%,
+    rgba(242, 177, 61, 0.15) 53%,
+    transparent 66%,
+    transparent 100%
+  );
+}
+
+[data-ikun-mode='on'] .ds-runtime-wake-shell::after {
+  background-image:
+    linear-gradient(rgba(216, 115, 13, 0.08) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(242, 177, 61, 0.1) 1px, transparent 1px);
+}
+
+[data-ikun-mode='on'] .ds-runtime-wake-core {
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--ds-bg-canvas) 98%, transparent), color-mix(in srgb, var(--ds-bg-canvas) 84%, var(--ds-accent))),
+    linear-gradient(135deg, rgba(216, 115, 13, 0.18), rgba(250, 204, 21, 0.16));
+  box-shadow:
+    0 18px 46px rgba(216, 115, 13, 0.14),
+    0 8px 22px rgba(242, 177, 61, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.78);
+}
+
+[data-ikun-mode='on'] .ds-runtime-wake-ring::before {
+  background: conic-gradient(
+    from 0deg,
+    transparent 0 25%,
+    rgba(216, 115, 13, 0.58) 36%,
+    rgba(242, 177, 61, 0.55) 52%,
+    transparent 68% 100%
+  );
+}
+
+[data-theme='dark'][data-ikun-mode='on'] .ds-runtime-wake-shell {
+  background:
+    linear-gradient(180deg, rgba(39, 31, 23, 0.94), rgba(30, 24, 18, 0.9)),
+    linear-gradient(120deg, rgba(242, 177, 61, 0.12), transparent 42%, rgba(250, 204, 21, 0.08));
+  box-shadow:
+    0 24px 70px rgba(12, 7, 2, 0.36),
+    inset 0 1px 0 rgba(238, 198, 128, 0.08);
+}
+
+[data-theme='dark'][data-ikun-mode='on'] .ds-runtime-wake-core {
+  box-shadow:
+    0 20px 54px rgba(242, 177, 61, 0.18),
+    0 8px 24px rgba(250, 204, 21, 0.1),
+    inset 0 1px 0 rgba(238, 198, 128, 0.09);
+}
+
+@keyframes ds-runtime-wake-sweep {
+  0% {
+    transform: translateX(-100%);
+  }
+
+  62%,
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+@keyframes ds-runtime-wake-soft-pulse {
+  0%,
+  100% {
+    opacity: 0.58;
+  }
+
+  50% {
+    opacity: 1;
+  }
+}
+
+@keyframes ds-runtime-wake-thread {
+  0%,
+  100% {
+    opacity: 0.34;
+    transform: translateX(0);
+  }
+
+  50% {
+    opacity: 0.86;
+    transform: translateX(8px);
+  }
+}

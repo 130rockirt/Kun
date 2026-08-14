@@ -80,16 +80,17 @@ export type ApplySvgArtifactToolBlockOptions = {
 }
 
 export type ApplySvgArtifactToolBlockResult =
-  | { status: 'ignored' | 'deferred'; shapeIds: [] }
+  | { status: 'ignored' | 'processing' | 'deferred' | 'failed'; shapeIds: [] }
   | { status: 'applied'; shapeIds: string[] }
 
 export async function applySvgArtifactToolBlock(
   options: ApplySvgArtifactToolBlockOptions
 ): Promise<ApplySvgArtifactToolBlockResult> {
   const { block } = options
-  if (options.appliedBlockIds.has(block.id) || options.processingBlockIds.has(block.id)) {
+  if (options.appliedBlockIds.has(block.id)) {
     return { status: 'ignored', shapeIds: [] }
   }
+  if (options.processingBlockIds.has(block.id)) return { status: 'processing', shapeIds: [] }
   if (!shouldApplyDesignCanvasToolBlock(block) || block.meta?.toolName !== 'design_svg_create') {
     return { status: 'ignored', shapeIds: [] }
   }
@@ -139,8 +140,13 @@ export async function applySvgArtifactToolBlock(
     const prompt = userTextBeforeToolBlock(options.blocks, block.id)
     const shapeIds: string[] = []
     for (const spec of actionable) {
-      const created = await options.onRequest(spec, prompt)
-      if (!created) return { status: 'ignored', shapeIds: [] }
+      let created: SvgArtifactApplyResult
+      try {
+        created = await options.onRequest(spec, prompt)
+      } catch {
+        created = null
+      }
+      if (!created) return { status: 'failed', shapeIds: [] }
       shapeIds.push(created.shapeId)
     }
     return { status: 'applied', shapeIds }

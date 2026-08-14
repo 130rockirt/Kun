@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { DEFAULT_KUN_MODEL } from '@shared/app-settings'
 import {
   WRITE_ASSISTANT_MODEL_KEY,
+  filterWriteEntries,
   normalizeWriteAssistantModel,
   readStoredAssistantModel
 } from './write-workspace-store-helpers'
@@ -39,6 +40,23 @@ function restoreLocalStorage(): void {
 
 afterEach(() => {
   restoreLocalStorage()
+})
+
+describe('write workspace entry filtering', () => {
+  it('hides Kun-owned canvas directories while retaining user folders and documents', () => {
+    const entries = [
+      { name: '.kun-write', path: '/work/.kun-write', type: 'directory' as const, ext: '' },
+      { name: '.kun-canvas', path: '/work/.kun-canvas', type: 'directory' as const, ext: '' },
+      { name: '.kun-whiteboards', path: '/work/.kun-whiteboards', type: 'directory' as const, ext: '' },
+      { name: 'notes', path: '/work/notes', type: 'directory' as const, ext: '' },
+      { name: 'draft.md', path: '/work/draft.md', type: 'file' as const, ext: '.md' }
+    ]
+
+    expect(filterWriteEntries(entries).map((entry) => entry.name)).toEqual([
+      'notes',
+      'draft.md'
+    ])
+  })
 })
 
 describe('write workspace assistant model helpers', () => {

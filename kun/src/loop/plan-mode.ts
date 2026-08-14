@@ -3,6 +3,7 @@ import type { TurnItem } from '../contracts/items.js'
 import { CREATE_PLAN_TOOL_NAME } from '../adapters/tool/create-plan-tool.js'
 import { guiPlanWorkspaceMatches } from '../shared/gui-plan.js'
 import { VERIFY_CHANGES_TOOL_NAME } from '../adapters/tool/builtin-verify-tool.js'
+import { PLAN_MODE_ALLOWED_GENERATION_TOOL_NAMES } from '../adapters/tool/plan-mode-tool-policy.js'
 
 /**
  * Plan-mode guidance. Emitted as a second system message after the
@@ -12,9 +13,9 @@ import { VERIFY_CHANGES_TOOL_NAME } from '../adapters/tool/builtin-verify-tool.j
  */
 export const PLAN_MODE_INSTRUCTION = [
   'You are in Plan mode.',
-  'Investigate the task first using the available read-only tools: when `explore_agent` is available, prefer it for repository or project exploration (file lookup, code/keyword search, symbol and call-path tracing, architecture or behavior inspection); otherwise prefer `repo_map`, `read`, `grep`, `glob`, and `ls`. Use `git_inspect` for repository status, branches, history, revisions, diffs, and merge-base checks.',
-  'You may use `write` and `edit` only for Markdown (`.md`) working documents. The host rejects every other file mutation in this mode, including attempts through symlinks.',
-  'Do NOT run mutating shell commands or invoke tools with unknown/external side effects in this mode.',
+  'Investigate the task first using the available read-only tools: when `fast_context` is available, prefer it for repository or project exploration (file lookup, code/keyword search, symbol and call-path tracing, architecture or behavior inspection); otherwise prefer `repo_map`, `read`, `grep`, `glob`, and `ls`. Use `git_inspect` for repository status, branches, history, revisions, diffs, and merge-base checks.',
+  'Do NOT modify project files, apply edits, or run shell commands in this mode. The host permits read-only investigation, user clarification, saving the reserved plan through `create_plan`, and image generation through `generate_image`.',
+  'The `generate_image` tool is available in Plan mode just as it is in Agent mode. Use it whenever the user asks to create or iterate an image; its generated asset is saved under `.kun/images` and does not authorize any other project-file changes.',
   'If the request is ambiguous or hinges on a decision only the user can make, ask before planning: prefer the `user_input` tool to ask one concise round of clarifying questions (offer concrete options when there are any), then use the answer to write the plan in the same turn. If that tool is not available, end your turn with the question(s) in prose and wait for the answer. Either way, do NOT call `create_plan` until the ambiguity is resolved — a set of options the user still has to choose between is not a plan.',
   'When you understand the task well enough, call the `create_plan` tool to save a complete implementation plan as Markdown.',
   'For GUI-reserved plan turns, the host owns `operation`, `plan_id`, and `plan_relative_path`; provide the plan content and do not guess or invent routing metadata. For context-free Plan turns, omit `operation` to create a draft by default, or use `operation: "refine"` only when deliberately revising an explicitly targeted plan.',
@@ -24,9 +25,9 @@ export const PLAN_MODE_INSTRUCTION = [
   'After saving, give the user a short summary of the plan and what to review.'
 ].join('\n')
 
-/** Read-only and host-constrained tools allowed throughout a Plan-mode turn
- * before `create_plan` has been called. `write` and `edit` are advertised
- * here because the host independently limits them to resolved `.md` targets. */
+/** Read-only, generated-media, and host-constrained tools allowed throughout a Plan-mode turn
+ * before `create_plan` has been called. Project file mutation is intentionally
+ * absent; only the reserved plan and generated image artifacts may be saved. */
 const PLAN_READ_ONLY_TOOL_NAMES = new Set([
   'read',
   'ls',
@@ -35,8 +36,6 @@ const PLAN_READ_ONLY_TOOL_NAMES = new Set([
   'repo_map',
   'git_inspect',
   'lsp',
-  'write',
-  'edit',
   'web_search',
   'web_fetch'
 ])
@@ -53,10 +52,10 @@ const PLAN_INTERACTIVE_TOOL_NAMES = new Set(['user_input', 'request_user_input']
  * function so the behaviour can be unit-tested without spinning up the
  * full agent loop.
  *
- * - Not plan-active or plan already satisfied → pass through unchanged.
- * - Until the plan is saved: read-only/Markdown + interactive tools +
- *   create_plan remain available on every model step. Multi-step repository
- *   investigation must not lose Git/read access after the first tool call.
+ * - Not plan-active → pass through unchanged.
+ * - While plan-active: read-only, interactive, and image-generation tools
+ *   remain available; only an unsatisfied turn also exposes `create_plan`.
+ *   Project mutation never reappears after the plan is saved.
  */
 export function resolvePlanModeToolSpecs(
   toolSpecs: ModelToolSpec[],
@@ -69,15 +68,16 @@ export function resolvePlanModeToolSpecs(
     planToolName?: string
   }
 ): ModelToolSpec[] {
-  if (!options.planTurnActive || options.createPlanSatisfied) return toolSpecs
+  if (!options.planTurnActive) return toolSpecs
   const readOnly = options.readOnlyToolNames ?? PLAN_READ_ONLY_TOOL_NAMES
   const interactive = options.interactiveToolNames ?? PLAN_INTERACTIVE_TOOL_NAMES
   const planTool = options.planToolName ?? CREATE_PLAN_TOOL_NAME
   return toolSpecs.filter(
     (tool) =>
-      tool.name === planTool ||
+      (!options.createPlanSatisfied && tool.name === planTool) ||
       readOnly.has(tool.name) ||
       interactive.has(tool.name) ||
+      PLAN_MODE_ALLOWED_GENERATION_TOOL_NAMES.has(tool.name) ||
       tool.sideEffect === 'read-only'
   )
 }

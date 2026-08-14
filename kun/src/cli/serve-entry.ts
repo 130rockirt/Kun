@@ -80,6 +80,7 @@ async function serveMain(argv: readonly string[]): Promise<number> {
   const manager = await ensureServiceManager({
     flavor: runtimeFlavor,
     allowDevelopmentBootstrap,
+    ...(buildId ? { buildId } : {}),
     controlDir,
     dataDir: parsed.options.dataDir,
     ...(process.env.KUN_MANAGER_SETTINGS_PATH?.trim()

@@ -20,9 +20,12 @@ import { useChatStore } from '../../store/chat-store'
 import { clearWriteWorkspaceSaveQueueForTests } from '../../write/write-save-coordinator'
 import { useWriteWorkspaceStore } from '../../write/write-workspace-store'
 import { useWorkbenchComposerSubmitController } from './useWorkbenchComposerSubmitController'
+import {
+  activateTextFile,
+  controllerParams,
+  type ControllerParams
+} from './useWorkbenchComposerSubmitController.test-helpers'
 import type { ModelProviderModelGroup } from '@shared/kun-gui-api'
-
-type ControllerParams = Parameters<typeof useWorkbenchComposerSubmitController>[0]
 
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
   let resolve!: (value: T) => void
@@ -41,67 +44,6 @@ function inputHarness(initial: string): {
     value = typeof next === 'function' ? next(value) : next
   })
   return { getValue: () => value, setInput }
-}
-
-function controllerParams(overrides: Partial<ControllerParams> = {}): ControllerParams {
-  return {
-    activeClawChannelId: '',
-    activeSddDraft: false,
-    activeThreadId: 'thr_mapped',
-    attachmentUploadEnabled: true,
-    buildCodeCanvasOutboundPrompt: vi.fn(async () => ''),
-    clearComposerAttachments: vi.fn(),
-    removeComposerAttachments: vi.fn(),
-    clearComposerFileReferences: vi.fn(),
-    composerAttachments: [],
-    composerFileReferences: [],
-    composerMode: 'agent',
-    composerModel: '',
-    composerProviderId: '',
-    composerModelGroups: [],
-    composerReasoningEffort: 'auto',
-    composerFastMode: false,
-    getAttachmentScope: () => 'write',
-    handleGuiPlanCommand: vi.fn(),
-    input: 'keep this prompt',
-    resetClawChannelSession: vi.fn(async () => undefined),
-    rightPanelMode: null,
-    route: 'write',
-    selectClawChannel: vi.fn(async () => undefined),
-    sendMessage: vi.fn(async () => true),
-    sendPlanTurn: vi.fn(async () => false),
-    sendSddAssistantPrompt: vi.fn(async () => undefined),
-    setAttachmentUploadError: vi.fn(),
-    setClawChannelModel: vi.fn(async () => undefined),
-    setError: vi.fn(),
-    setInput: vi.fn(),
-    threads: [],
-    workspaceRoot: '/tmp/write',
-    appendLocalClawTurn: vi.fn(),
-    ...overrides
-  }
-}
-
-function activateTextFile(): void {
-  useWriteWorkspaceStore.setState({
-    workspaceRoot: '/tmp/write',
-    activeFilePath: '/tmp/write/draft.md',
-    activeFileKind: 'text',
-    fileContent: 'saved draft',
-    persistedContent: 'saved draft',
-    fileTruncated: false,
-    documentEpoch: 1,
-    contentRevision: 0,
-    saveStatus: 'saved',
-    fileError: null,
-    reviewActive: false,
-    pendingAgentReview: null,
-    quotedSelections: [],
-    agentPresets: [],
-    assistantAgentPresetId: '',
-    assistantModel: '',
-    assistantProviderId: ''
-  })
 }
 
 describe('useWorkbenchComposerSubmitController', () => {
@@ -137,7 +79,7 @@ describe('useWorkbenchComposerSubmitController', () => {
     vi.stubGlobal('window', { kunGui: { writeWorkspaceFile } })
     useWriteWorkspaceStore.getState().setFileContent('latest local draft')
     const input = inputHarness('revise it')
-    const sendMessage = vi.fn(async () => true)
+    const sendMessage = vi.fn(async (..._args: Parameters<ControllerParams['sendMessage']>) => true)
     const controller = useWorkbenchComposerSubmitController(controllerParams({
       input: 'revise it',
       sendMessage,
@@ -187,7 +129,7 @@ describe('useWorkbenchComposerSubmitController', () => {
     const olderSave = useWriteWorkspaceStore.getState().flushSave('/tmp/write')
     await vi.waitFor(() => expect(writeWorkspaceFile).toHaveBeenCalledTimes(1))
     useWriteWorkspaceStore.getState().setFileContent('saved draft')
-    const sendMessage = vi.fn(async () => true)
+    const sendMessage = vi.fn(async (..._args: Parameters<ControllerParams['sendMessage']>) => true)
     const controller = useWorkbenchComposerSubmitController(controllerParams({
       input: 'summarize the undo',
       sendMessage,

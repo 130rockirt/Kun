@@ -34,15 +34,15 @@ describe('Graph tool boundary', () => {
     }, { orchestration: 'direct' })).toBe(true)
   })
 
-  it('keeps Lab explore_agent available on Graph Lead turns', () => {
+  it('keeps Lab fast_context available on Graph Lead turns', () => {
     expect(isToolAllowedInOrchestration({
-      toolName: 'explore_agent',
-      providerId: 'explore-agent',
+      toolName: 'fast_context',
+      providerId: 'fast-context',
       providerKind: 'delegation'
     }, { orchestration: 'graph' })).toBe(true)
     expect(isToolAllowedInOrchestration({
-      toolName: 'explore_agent',
-      providerId: 'explore-agent',
+      toolName: 'fast_context',
+      providerId: 'fast-context',
       providerKind: 'delegation'
     }, { messageSource: 'graph_runtime' })).toBe(true)
   })
@@ -57,7 +57,7 @@ describe('Graph tool boundary', () => {
       'list_subagent_profiles',
       'task_graph',
       'design_component',
-      'explore_agent'
+      'fast_context'
     ])
 
     expect(names).toEqual(['read'])

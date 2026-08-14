@@ -15,6 +15,7 @@ import {
   resolveProjectWorkspacePath,
   shouldOmitFromCodeWorkspaceRoots
 } from '../../lib/worktree-project-path'
+import { threadLooksRunning } from '../../store/chat-store-runtime-helpers'
 import type { ThreadWorktreeRecord } from '../../lib/thread-worktree-registry'
 
 export type SidebarWorkspaceGroup = [workspacePath: string, threads: NormalizedThread[]]
@@ -29,6 +30,52 @@ const THREAD_PREVIEW_WIDTH = 320
 const THREAD_PREVIEW_MAX_HEIGHT = 220
 const THREAD_PREVIEW_GAP = 10
 const THREAD_PREVIEW_VIEWPORT_MARGIN = 12
+
+export type SidebarThreadActivity = 'unread' | 'running' | 'read'
+
+export type SidebarThreadActivityContext = {
+  activeThreadId: string | null
+  busy: boolean
+  watchTurnCompletion: Record<string, boolean>
+  unreadThreadIds: Record<string, boolean>
+}
+
+/**
+ * Classifies a sidebar row from transient renderer state without mutating the
+ * durable thread record. Running wins over unread during refresh races, so a
+ * live turn never appears as a completed notification.
+ */
+export function sidebarThreadActivity(
+  thread: NormalizedThread,
+  context: SidebarThreadActivityContext
+): SidebarThreadActivity {
+  const id = thread.id.trim()
+  const running =
+    threadLooksRunning(thread) ||
+    context.watchTurnCompletion[id] === true ||
+    (context.activeThreadId === id && context.busy)
+  if (running) return 'running'
+  if (context.activeThreadId !== id && context.unreadThreadIds[id] === true) return 'unread'
+  return 'read'
+}
+
+/** Keeps the caller's existing chronological/manual order within each state. */
+export function prioritizeSidebarThreadActivity(
+  threads: readonly NormalizedThread[],
+  context: SidebarThreadActivityContext
+): NormalizedThread[] {
+  const unread: NormalizedThread[] = []
+  const running: NormalizedThread[] = []
+  const read: NormalizedThread[] = []
+  for (const thread of threads) {
+    switch (sidebarThreadActivity(thread, context)) {
+      case 'unread': unread.push(thread); break
+      case 'running': running.push(thread); break
+      default: read.push(thread)
+    }
+  }
+  return [...unread, ...running, ...read]
+}
 
 export function resolveThreadPreviewPosition(
   anchor: ThreadPreviewAnchorRect,
@@ -109,7 +156,9 @@ export function sidebarWorkspacePathForThread(
   worktrees: SidebarThreadWorktrees = {},
   candidateProjectPaths: readonly string[] = []
 ): string {
-  const worktreeProjectPath = workspacePathForWorktreeRecord(worktrees[thread.id])
+  const worktreeProjectPath = workspacePathForWorktreeRecord(
+    worktreeRecordForSidebarThread(thread, worktrees)
+  )
   if (worktreeProjectPath) return worktreeProjectPath
   const workspace = thread.workspace ?? ''
   const resolved = resolveProjectWorkspacePath(workspace, {
@@ -167,10 +216,14 @@ export function buildSidebarWorkspaceGroups(options: {
   threadWorktrees?: SidebarThreadWorktrees
 }): SidebarWorkspaceGroup[] {
   const map = new Map<string, { workspacePath: string; threads: NormalizedThread[] }>()
-  const selectedWorkspace = normalizeWorkspaceRoot(options.workspaceRoot)
-  const selectedWorkspaceKey = workspaceRootIdentityKey(selectedWorkspace)
   const query = options.searchQuery.trim().toLowerCase()
   const candidateProjectPaths = sidebarWorkspaceResolutionCandidates(options)
+  const selectedWorkspace = sidebarWorkspacePathForRememberedRoot(
+    options.workspaceRoot,
+    options.threadWorktrees,
+    candidateProjectPaths
+  )
+  const selectedWorkspaceKey = workspaceRootIdentityKey(selectedWorkspace)
 
   const upsertWorkspace = (workspacePath: string, threads: NormalizedThread[] = []): void => {
     const normalized = normalizeWorkspaceRoot(workspacePath)
@@ -243,8 +296,12 @@ export function buildSidebarDraftWorkspacePaths(options: {
   threadWorktrees?: SidebarThreadWorktrees
 }): string[] {
   const map = new Map<string, string>()
-  const selectedWorkspace = normalizeWorkspaceRoot(options.workspaceRoot)
   const candidateProjectPaths = sidebarWorkspaceResolutionCandidates(options)
+  const selectedWorkspace = sidebarWorkspacePathForRememberedRoot(
+    options.workspaceRoot,
+    options.threadWorktrees,
+    candidateProjectPaths
+  )
   const upsertWorkspace = (workspacePath: string): void => {
     const normalized = normalizeWorkspaceRoot(workspacePath)
     if (!isSidebarProjectWorkspacePath(normalized)) return
@@ -284,7 +341,7 @@ export function isSidebarThreadMoveBlocked({
 }): boolean {
   const threadId = thread.id.trim()
   if (!threadId || deleting || worktreeRecord) return true
-  if (thread.status?.trim().toLowerCase() === 'running') return true
+  if (threadLooksRunning(thread)) return true
   if (watchTurnCompletion[threadId] === true) return true
   if (activeThreadId === threadId && busy) return true
   return false

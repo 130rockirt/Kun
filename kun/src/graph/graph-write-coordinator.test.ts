@@ -222,6 +222,63 @@ describe('FileGraphWriteCoordinator', () => {
     await expect(stat(first.workspaceRoot)).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
+  it('integrates beside disjoint user changes without altering their content or staging', async () => {
+    const { repository, coordinator } = await worktreeHarness()
+    await writeFile(join(repository, 'tests', 'b.txt'), 'user unstaged change\n')
+    await writeFile(join(repository, 'tests', 'staged.txt'), 'user staged file\n')
+    await writeFile(join(repository, 'tests', 'untracked.txt'), 'user untracked file\n')
+    await git(repository, ['add', 'tests/staged.txt'])
+    const claim = await coordinator.acquire({
+      runId: 'run_dirty_disjoint',
+      nodeId: 'node_src',
+      attemptId: 'attempt_dirty_disjoint',
+      workspaceRoot: repository,
+      scopes: ['src']
+    })
+    if (!claim.acquired) throw new Error('expected worktree claim')
+    await writeFile(join(claim.workspaceRoot, 'src', 'a.txt'), 'graph change\n')
+    await writeFile(join(claim.workspaceRoot, 'src', 'new.txt'), 'graph new file\n')
+
+    await expect(coordinator.integrate('attempt_dirty_disjoint')).resolves.toMatchObject({
+      outcome: 'applied'
+    })
+
+    expect(await readFile(join(repository, 'tests', 'b.txt'), 'utf8')).toBe('user unstaged change\n')
+    expect(await readFile(join(repository, 'tests', 'staged.txt'), 'utf8')).toBe('user staged file\n')
+    expect(await readFile(join(repository, 'tests', 'untracked.txt'), 'utf8')).toBe('user untracked file\n')
+    expect(await gitOutput(repository, ['diff', '--name-only'])).toBe('tests/b.txt\n')
+    expect(await gitOutput(repository, ['diff', '--cached', '--name-only'])).toBe([
+      'src/a.txt',
+      'src/new.txt',
+      'tests/staged.txt',
+      ''
+    ].join('\n'))
+    expect(await gitOutput(repository, ['ls-files', '--others', '--exclude-standard']))
+      .toBe('tests/untracked.txt\n')
+  })
+
+  it('still requires human resolution when user changes overlap the Graph patch', async () => {
+    const { repository, coordinator } = await worktreeHarness()
+    const claim = await coordinator.acquire({
+      runId: 'run_dirty_overlap',
+      nodeId: 'node_src',
+      attemptId: 'attempt_dirty_overlap',
+      workspaceRoot: repository,
+      scopes: ['src']
+    })
+    if (!claim.acquired) throw new Error('expected worktree claim')
+    await writeFile(join(claim.workspaceRoot, 'src', 'a.txt'), 'graph change\n')
+    await writeFile(join(repository, 'src', 'a.txt'), 'user overlapping change\n')
+
+    await expect(coordinator.integrate('attempt_dirty_overlap')).resolves.toMatchObject({
+      outcome: 'needs_human',
+      reason: expect.stringContaining('uncommitted changes overlapping Graph patch: src/a.txt')
+    })
+    expect(await readFile(join(repository, 'src', 'a.txt'), 'utf8'))
+      .toBe('user overlapping change\n')
+    expect(await gitOutput(repository, ['diff', '--cached', '--name-only'])).toBe('')
+  })
+
   it('allocates overlapping worktree writers into distinct isolated workspaces', async () => {
     const { repository, coordinator } = await worktreeHarness()
     const first = await coordinator.acquire({
@@ -386,4 +443,8 @@ async function worktreeHarness() {
 
 async function git(cwd: string, args: string[]): Promise<void> {
   await execFileAsync('git', ['-C', cwd, ...args], { encoding: 'utf8' })
+}
+
+async function gitOutput(cwd: string, args: string[]): Promise<string> {
+  return (await execFileAsync('git', ['-C', cwd, ...args], { encoding: 'utf8' })).stdout
 }

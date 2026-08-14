@@ -21,10 +21,12 @@ describe('BrowserUseSettingsPanel', () => {
       renderer = create(createElement(BrowserUseSettingsPanel, {
         t,
         value: defaultKunBrowserUseSettings(),
+        capability: { status: 'available' },
         selectControlClass: 'select',
         onChange
       }))
     })
+    expect(textContent(renderer.root)).toContain('browserUseRuntimeStatusAvailable')
     expect(textContent(renderer.root)).toContain('browserUseZeroTrustBody')
     const selects = renderer.root.findAllByType('select')
     expect(selects).toHaveLength(7)
@@ -47,6 +49,50 @@ describe('BrowserUseSettingsPanel', () => {
       }))
     })
     expect(renderer.root.findAllByType('select')).toHaveLength(0)
+  })
+
+  it('renders runtime capability state and preserves normalized custom limits', () => {
+    const t = (key: string): string => key
+    let renderer!: ReactTestRenderer
+    act(() => {
+      renderer = create(createElement(BrowserUseSettingsPanel, {
+        t,
+        value: {
+          ...defaultKunBrowserUseSettings(),
+          maxObservationActionsPerTurn: 17,
+          maxInteractionActionsPerTurn: 9,
+          idleTimeoutMs: 120_000
+        },
+        capability: {
+          status: 'interaction-required',
+          reason: 'visible GUI is required'
+        },
+        selectControlClass: 'select',
+        onChange: () => undefined
+      }))
+    })
+
+    expect(textContent(renderer.root)).toContain(
+      'browserUseRuntimeStatusInteractionRequired: visible GUI is required'
+    )
+    const selects = renderer.root.findAllByType('select')
+    expect(selects[3]?.findAllByType('option').map((option) => option.props.value)).toContain(17)
+    expect(selects[4]?.findAllByType('option').map((option) => option.props.value)).toContain(9)
+    expect(selects[6]?.findAllByType('option').map((option) => option.props.value)).toContain(120_000)
+    expect(textContent(renderer.root)).toContain('17 · browserUseSettingsCustom')
+
+    act(() => {
+      renderer.update(createElement(BrowserUseSettingsPanel, {
+        t,
+        value: defaultKunBrowserUseSettings(),
+        capability: { status: 'unavailable', reason: 'host bridge is absent' },
+        selectControlClass: 'select',
+        onChange: () => undefined
+      }))
+    })
+    expect(textContent(renderer.root)).toContain(
+      'browserUseRuntimeStatusUnavailable: host bridge is absent'
+    )
   })
 
   it('lets a tab panel own spacing instead of adding an outer top margin', () => {

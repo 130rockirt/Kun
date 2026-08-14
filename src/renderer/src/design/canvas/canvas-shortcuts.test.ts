@@ -1,5 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { createEmptyDocument, createHtmlFrameShape, createSvgFrameShape } from './canvas-types'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  createDefaultShape,
+  createEmptyDocument,
+  createHtmlFrameShape,
+  createSvgFrameShape
+} from './canvas-types'
 import { handleCanvasKeyDown, handleCanvasKeyUp } from './canvas-shortcuts'
 import { useCanvasSelectionStore } from './canvas-selection-store'
 import { useCanvasShapeStore } from './canvas-shape-store'
@@ -19,6 +24,10 @@ beforeEach(() => {
   useCanvasViewportStore.getState().setActiveTool('select')
   useCanvasMotionStore.getState().reset()
   clearCanvasShapeClipboard()
+})
+
+afterEach(() => {
+  vi.unstubAllGlobals()
 })
 
 it('Auto-key nudge animates only the selected root instead of its descendants', () => {
@@ -283,6 +292,92 @@ describe('canvas keyboard shortcuts', () => {
     expect(doc.objects[pastedFrameId]).toBeDefined()
     expect(doc.objects[pastedChildId]).toBeDefined()
     expect(Array.from(useCanvasSelectionStore.getState().selectedIds)).toEqual([pastedFrameId])
+  })
+
+  it('prefers a system clipboard image over stale copied shapes', async () => {
+    const rectId = addRect(0)
+    useCanvasSelectionStore.getState().select([rectId])
+    expect(handleCanvasKeyDown(eventFor('c', { metaKey: true }), {
+      workspaceRoot: '/workspace',
+      documentKey: null
+    })).toBe(true)
+    vi.stubGlobal('window', {
+      kunGui: {
+        readClipboardImage: vi.fn().mockResolvedValue({
+          ok: true,
+          name: 'system-image',
+          mimeType: 'image/png',
+          dataBase64: 'AAAA',
+          byteSize: 3
+        })
+      }
+    })
+
+    expect(handleCanvasKeyDown(eventFor('v', { metaKey: true }), {
+      workspaceRoot: '/workspace',
+      documentKey: null
+    })).toBe(true)
+    await vi.waitFor(() => {
+      const objects = Object.values(useCanvasShapeStore.getState().document.objects)
+      expect(objects.filter((shape) => shape.type === 'image')).toHaveLength(1)
+    })
+    const objects = Object.values(useCanvasShapeStore.getState().document.objects)
+    expect(objects.filter((shape) => shape.type === 'rect')).toHaveLength(1)
+  })
+
+  it('does not paste workspace-relative shape data into another workspace', () => {
+    const rectId = addRect(0)
+    useCanvasShapeStore.getState().updateShape(rectId, {
+      type: 'image',
+      imageUrl: '.deepseekgui-images/source.png'
+    })
+    useCanvasSelectionStore.getState().select([rectId])
+    handleCanvasKeyDown(eventFor('c', { metaKey: true }), {
+      workspaceRoot: '/workspace-a',
+      documentKey: 'source-document'
+    })
+
+    useCanvasShapeStore.getState().loadDocument(createEmptyDocument(), 'target-document')
+    handleCanvasKeyDown(eventFor('v', { metaKey: true }), {
+      workspaceRoot: '/workspace-b',
+      documentKey: 'target-document'
+    })
+
+    expect(useCanvasShapeStore.getState().getAllShapeIds()).toEqual([])
+  })
+
+  it('pastes cross-document shapes at the root even when a source parent id exists', () => {
+    const source = createEmptyDocument()
+    const sourceParent = createDefaultShape('frame', 0, 0)
+    sourceParent.id = 'shared-parent'
+    const child = createDefaultShape('rect', 20, 20)
+    child.parentId = sourceParent.id
+    sourceParent.children.push(child.id)
+    source.objects[sourceParent.id] = { ...sourceParent, parentId: source.rootId }
+    source.objects[child.id] = child
+    source.objects[source.rootId]!.children.push(sourceParent.id)
+    useCanvasShapeStore.getState().loadDocument(source, 'source-document')
+    useCanvasSelectionStore.getState().select([child.id])
+    handleCanvasKeyDown(eventFor('c', { metaKey: true }), {
+      workspaceRoot: '/workspace',
+      documentKey: 'source-document'
+    })
+
+    const target = createEmptyDocument()
+    const targetParent = createDefaultShape('frame', 0, 0)
+    targetParent.id = sourceParent.id
+    target.objects[targetParent.id] = { ...targetParent, parentId: target.rootId }
+    target.objects[target.rootId]!.children.push(targetParent.id)
+    useCanvasShapeStore.getState().loadDocument(target, 'target-document')
+    handleCanvasKeyDown(eventFor('v', { metaKey: true }), {
+      workspaceRoot: '/workspace',
+      documentKey: 'target-document'
+    })
+
+    const pasted = useCanvasShapeStore.getState().getAllShapeIds()
+      .map((id) => useCanvasShapeStore.getState().document.objects[id])
+      .find((shape) => shape?.name.includes('copy'))
+    expect(pasted?.parentId).toBe(target.rootId)
   })
 
   it('cmd+c/v pastes linked html frames as plain frames', () => {

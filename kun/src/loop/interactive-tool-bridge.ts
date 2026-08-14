@@ -13,6 +13,7 @@ import type {
 import type { RuntimeEventRecorder } from '../services/runtime-event-recorder.js'
 import type { TurnService } from '../services/turn-service.js'
 import { awaitAbortableGate } from '../services/interactive-gate.js'
+import { sessionEventExists } from '../adapters/session-event-query.js'
 
 export type InteractiveToolBridgeDeps = {
   approvalGate: ApprovalGate
@@ -212,7 +213,9 @@ export class InteractiveToolBridge {
       finishedAt: this.deps.nowIso(),
       ...(resolution.status === 'submitted' ? { answers: resolution.answers } : {})
     } as Partial<TurnItem>)
-    const alreadyRecorded = (await this.deps.sessionStore.loadEventsSince(input.threadId, 0)).some(
+    const alreadyRecorded = await sessionEventExists(
+      this.deps.sessionStore,
+      input.threadId,
       (event) => event.kind === 'user_input_resolved' && event.inputId === input.input.id
     )
     if (!alreadyRecorded) {

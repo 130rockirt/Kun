@@ -7,6 +7,7 @@ import type {
 import type { LocalTool } from './local-tool-host.js'
 import { isToolAdvertisedInSandbox } from './sandbox-policy.js'
 import { isToolAllowedInOrchestration } from '../../graph/graph-tool-boundary.js'
+import { PLAN_MODE_ALLOWED_GENERATION_TOOL_NAMES } from './plan-mode-tool-policy.js'
 
 export type CapabilityToolRecord = {
   provider: ToolProviderPolicy
@@ -37,16 +38,10 @@ const PLAN_MODE_ALLOWED_TOOL_NAMES = new Set([
   'repo_map',
   'git_inspect',
   'lsp',
-  'write',
-  'edit',
   'create_plan',
   'user_input',
   'request_user_input'
 ])
-
-const MANAGED_SKILL_BLOCKED_TOOL_NAMES: Readonly<Record<string, ReadonlySet<string>>> = {
-  'ppt-master': new Set(['bash', 'background_shell'])
-}
 
 export class CapabilityRegistry {
   private readonly providers = new Map<string, CapabilityToolProvider>()
@@ -196,14 +191,12 @@ export class CapabilityRegistry {
     if (
       isPlanModeContext(context) &&
       !PLAN_MODE_ALLOWED_TOOL_NAMES.has(toolName) &&
+      !PLAN_MODE_ALLOWED_GENERATION_TOOL_NAMES.has(toolName) &&
       tool.sideEffect !== 'read-only'
     ) {
       return false
     }
     if (context?.blockedToolNames?.includes(toolName)) return false
-    for (const skillId of context?.activeSkillIds ?? []) {
-      if (MANAGED_SKILL_BLOCKED_TOOL_NAMES[skillId]?.has(toolName)) return false
-    }
     const allowed = context?.allowedToolNames
     return !allowed || allowed.includes(toolName)
   }

@@ -35,28 +35,6 @@ function context(
   }
 }
 
-describe('CapabilityRegistry managed skill policy', () => {
-  it('blocks generic shell tools only while PPT Master is active', () => {
-    const registry = CapabilityRegistry.fromLocalTools([
-      tool('read'),
-      tool('bash'),
-      tool('background_shell'),
-      tool('ppt_master_run')
-    ])
-
-    expect(registry.listTools(context([])).map((spec) => spec.name)).toEqual([
-      'read', 'bash', 'background_shell', 'ppt_master_run'
-    ])
-    expect(registry.listTools(context(['ppt-master'])).map((spec) => spec.name)).toEqual([
-      'read', 'ppt_master_run'
-    ])
-    expect(() => registry.resolveTool('bash', context(['ppt-master'])))
-      .toThrow('tool bash is not advertised by active tool policy')
-    expect(() => registry.resolveTool('background_shell', context(['ppt-master'])))
-      .toThrow('tool background_shell is not advertised by active tool policy')
-  })
-})
-
 describe('CapabilityRegistry Graph orchestration policy', () => {
   const providers = () => [
     {
@@ -80,11 +58,11 @@ describe('CapabilityRegistry Graph orchestration policy', () => {
       tools: [tool('delegate_task'), tool('list_subagent_profiles', 'read-only')]
     },
     {
-      id: 'explore-agent',
+      id: 'fast-context',
       kind: 'delegation' as const,
       enabled: true,
       available: true,
-      tools: [tool('explore_agent', 'read-only')]
+      tools: [tool('fast_context', 'read-only')]
     }
   ]
 
@@ -98,9 +76,9 @@ describe('CapabilityRegistry Graph orchestration policy', () => {
         'read',
         'graph_create_run',
         'graph_control_run',
-        'explore_agent'
+        'fast_context'
       ])
-      expect(registry.resolveTool('explore_agent', current).provider.id).toBe('explore-agent')
+      expect(registry.resolveTool('fast_context', current).provider.id).toBe('fast-context')
       for (const name of [
         'delegate_task',
         'list_subagent_profiles',
@@ -125,7 +103,7 @@ describe('CapabilityRegistry Graph orchestration policy', () => {
       'graph_control_run',
       'delegate_task',
       'list_subagent_profiles',
-      'explore_agent'
+      'fast_context'
     ])
     expect(registry.resolveTool('delegate_task', direct).provider.kind).toBe('delegation')
     expect(registry.resolveTool('task_graph', direct).provider.id).toBe('builtin')
@@ -133,6 +111,28 @@ describe('CapabilityRegistry Graph orchestration policy', () => {
 })
 
 describe('CapabilityRegistry Plan mode policy', () => {
+  it('keeps image generation visible in Agent, Plan, and Graph modes on every workbench surface', () => {
+    const registry = new CapabilityRegistry([{
+      id: 'imageGen',
+      kind: 'image',
+      enabled: true,
+      available: true,
+      tools: [tool('generate_image')]
+    }])
+    const modes = [
+      context([], 'agent', 'direct'),
+      context([], 'plan', 'direct'),
+      context([], 'agent', 'graph')
+    ]
+
+    for (const modeContext of modes) {
+      for (const agentSurface of ['code', 'write', 'design'] as const) {
+        expect(registry.listTools({ ...modeContext, agentSurface }).map((spec) => spec.name))
+          .toEqual(['generate_image'])
+      }
+    }
+  })
+
   it('allows host-classified read-only tools and blocks unknown external tools', () => {
     const registry = new CapabilityRegistry([{
       id: 'mcp:test',
@@ -149,7 +149,33 @@ describe('CapabilityRegistry Plan mode policy', () => {
       .toThrow('tool mcp_test_mutate is not advertised by active tool policy')
   })
 
-  it('keeps read-only explore_agent visible in plan mode while hiding delegate_task', () => {
+  it('hides generic file mutation tools while retaining create_plan and user input', () => {
+    const registry = CapabilityRegistry.fromLocalTools([
+      tool('read', 'read-only'),
+      tool('write'),
+      tool('edit'),
+      tool('generate_image'),
+      tool('create_plan'),
+      tool('user_input'),
+      tool('request_user_input')
+    ])
+    const planContext = context([], 'plan')
+
+    expect(registry.listTools(planContext).map((spec) => spec.name)).toEqual([
+      'read',
+      'generate_image',
+      'create_plan',
+      'user_input',
+      'request_user_input'
+    ])
+    expect(registry.resolveTool('generate_image', planContext).provider.id).toBe('builtin')
+    for (const name of ['write', 'edit']) {
+      expect(() => registry.resolveTool(name, planContext))
+        .toThrow(`tool ${name} is not advertised by active tool policy`)
+    }
+  })
+
+  it('keeps read-only fast_context visible in plan mode while hiding delegate_task', () => {
     const registry = new CapabilityRegistry([
       {
         id: 'delegation',
@@ -159,18 +185,18 @@ describe('CapabilityRegistry Plan mode policy', () => {
         tools: [tool('delegate_task'), tool('list_subagent_profiles', 'read-only')]
       },
       {
-        id: 'explore-agent',
+        id: 'fast-context',
         kind: 'delegation',
         enabled: true,
         available: true,
-        tools: [tool('explore_agent', 'read-only')]
+        tools: [tool('fast_context', 'read-only')]
       }
     ])
     const planContext = context([], 'plan')
 
     expect(registry.listTools(planContext).map((spec) => spec.name)).toEqual([
       'list_subagent_profiles',
-      'explore_agent'
+      'fast_context'
     ])
     expect(() => registry.resolveTool('delegate_task', planContext))
       .toThrow('tool delegate_task is not advertised by active tool policy')

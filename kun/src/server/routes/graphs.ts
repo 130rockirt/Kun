@@ -450,6 +450,8 @@ export async function graphRunEvents(
 export async function readGraphArtifact(
   graphs: GraphControlService | undefined,
   artifacts: ArtifactStore | undefined,
+  resolveExternalized: ((runId: string, artifactId: string) =>
+    Promise<GraphRunV1['artifacts'][number] | undefined>) | undefined,
   runId: string,
   artifactId: string,
   request: Request
@@ -480,7 +482,8 @@ export async function readGraphArtifact(
   }
   try {
     const run = await graphs.get(runId)
-    const reference = run.artifacts.find((entry) => entry.artifactId === artifactId)
+    const reference = run.artifacts.find((entry) => entry.artifactId === artifactId) ??
+      await resolveExternalized?.(runId, artifactId)
     if (!reference) return ERRORS.notFound('Graph artifact not found')
     const meta = await artifacts.stat(artifactId)
     if (!meta) return ERRORS.notFound('Graph artifact content is unavailable')

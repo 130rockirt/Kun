@@ -84,7 +84,16 @@ export function writeSelectionStatesEqual(
   if (a === b) return true
   if (a.charCount !== b.charCount || a.text !== b.text) return false
   if (a.blockType !== b.blockType) return false
-  if (a.sourceKind !== b.sourceKind || a.pageStart !== b.pageStart || a.pageEnd !== b.pageEnd) return false
+  if (
+    a.sourceKind !== b.sourceKind ||
+    a.sourceFormat !== b.sourceFormat ||
+    a.pageStart !== b.pageStart ||
+    a.pageEnd !== b.pageEnd ||
+    a.slide !== b.slide ||
+    a.sheetName !== b.sheetName ||
+    a.cellRange !== b.cellRange ||
+    (a.formulas ?? []).join('\0') !== (b.formulas ?? []).join('\0')
+  ) return false
   if (!selectedImagesEqual(a.selectedImage, b.selectedImage)) return false
   if (a.ranges.length !== b.ranges.length) return false
   for (let index = 0; index < a.ranges.length; index += 1) {

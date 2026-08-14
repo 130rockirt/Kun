@@ -363,6 +363,59 @@ describe('ModelRoutesSettings', () => {
     await act(async () => { renderer!.unmount() })
   })
 
+  it('uses configured pools, not only executable pools, when checking runtime synchronization', async () => {
+    const draft = settings()
+    draft.routePools[1]!.enabled = false
+    vi.stubGlobal('window', {
+      kunGui: {
+        runtimeRequest: vi.fn(async () => ({
+          ok: true,
+          status: 200,
+          body: routeStatus(draft, [], draft.routePools.filter((pool) => pool.enabled), draft.routePools)
+        }))
+      }
+    })
+    let renderer!: ReactTestRenderer
+    await act(async () => {
+      renderer = createRenderer(createElement(ModelRoutesSettings, { settings: draft, onChange: () => undefined }))
+    })
+
+    expect(textContent(renderer.root)).toContain('Kun Runtime synced')
+    expect(textContent(renderer.root)).not.toContain('Waiting for Kun Runtime sync')
+    await act(async () => { renderer.unmount() })
+  })
+
+  it('keeps invalid alias and failover code drafts local until they pass validation', async () => {
+    const draft = settings()
+    const onChange = vi.fn()
+    vi.stubGlobal('window', {
+      kunGui: { runtimeRequest: vi.fn(async () => ({ ok: true, status: 200, body: routeStatus(draft) })) }
+    })
+    let renderer!: ReactTestRenderer
+    await act(async () => {
+      renderer = createRenderer(createElement(ModelRoutesSettings, { settings: draft, onChange }))
+    })
+
+    const alias = renderer.root.findByProps({ 'aria-label': 'Public model ID' })
+    await act(async () => {
+      alias.props.onFocus()
+      alias.props.onChange({ target: { value: 'code-auto' } })
+    })
+    await act(async () => { alias.props.onBlur() })
+    expect(onChange).not.toHaveBeenCalled()
+    expect(textContent(renderer.root)).toContain('already used by another route')
+
+    const codes = renderer.root.findByProps({ 'aria-label': 'Failover HTTP status codes' })
+    await act(async () => {
+      codes.props.onFocus()
+      codes.props.onChange({ target: { value: '429, 700' } })
+    })
+    await act(async () => { codes.props.onBlur() })
+    expect(onChange).not.toHaveBeenCalled()
+    expect(textContent(renderer.root)).toContain('HTTP status codes from 400 to 599')
+    await act(async () => { renderer.unmount() })
+  })
+
   it('shows synchronization failure only when the main process reports one', async () => {
     const draft = settings()
     vi.stubGlobal('window', {
@@ -460,8 +513,13 @@ describe('ModelRoutesSettings', () => {
   })
 })
 
-function routeStatus(draft: ModelProviderSettingsV1, tests: ReturnType<typeof testRecord>[] = [], pools = draft.routePools): string {
-  return JSON.stringify({ localGateway: { enabled: draft.localGateway.enabled }, pools, metrics: {}, events: [], tests })
+function routeStatus(
+  draft: ModelProviderSettingsV1,
+  tests: ReturnType<typeof testRecord>[] = [],
+  pools = draft.routePools,
+  configuredPools = pools
+): string {
+  return JSON.stringify({ localGateway: { enabled: draft.localGateway.enabled }, pools, configuredPools, metrics: {}, events: [], tests })
 }
 
 function testRecord(status: 'running' | 'succeeded') {

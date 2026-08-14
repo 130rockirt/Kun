@@ -303,6 +303,26 @@ describe('KunRuntimeSupervisor', () => {
     expect(h.statuses[0]).toMatchObject({ source: 'watchdog', attempt: 1 })
   })
 
+  it('keeps cold-start recovery armed after the first launch attempt fails', async () => {
+    const launch: { childRunning: boolean; ensureError?: Error } = {
+      childRunning: false,
+      ensureError: new Error('first launch failed')
+    }
+    const h = harness(launch)
+    h.supervisor.setManagedRuntimeExpected(true)
+
+    await h.supervisor.watchdogTick()
+
+    expect(h.supervisor.isManagedRuntimeExpected).toBe(true)
+    expect(h.statuses.at(-1)).toMatchObject({ state: 'failed', source: 'watchdog' })
+
+    delete launch.ensureError
+    await h.supervisor.watchdogTick()
+
+    expect(h.ensureRuntime).toHaveBeenCalledTimes(2)
+    expect(h.statuses.at(-1)).toMatchObject({ state: 'running', source: 'watchdog' })
+  })
+
   it('does not recover after an explicit stop clears the expectation', async () => {
     const h = harness({ childRunning: false })
     h.supervisor.setManagedRuntimeExpected(true)
@@ -473,5 +493,20 @@ describe('KunRuntimeSupervisor', () => {
     expect(h.ensureRuntime).toHaveBeenCalledOnce()
     expect(h.statuses.map((status) => status.state)).toEqual(['restarting', 'running'])
     expect(h.statuses[0]).toMatchObject({ attempt: 1 })
+  })
+
+  it('lets shutdown wait until an in-flight settings apply leaves the lifecycle lane', async () => {
+    const h = harness()
+    const applyGate = createGate()
+    h.supervisor.enqueueSettingsApply(() => applyGate.promise, vi.fn())
+
+    let settled = false
+    const waiting = h.supervisor.waitForIdle().then(() => { settled = true })
+    await Promise.resolve()
+    expect(settled).toBe(false)
+
+    applyGate.release()
+    await waiting
+    expect(settled).toBe(true)
   })
 })

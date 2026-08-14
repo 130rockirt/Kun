@@ -18,6 +18,7 @@ import {
   ThreadExecutionBusyError,
   type ThreadExecutionLeasePort
 } from '../ports/thread-execution-lease.js'
+import { GraphRunConflictError } from '../graph/graph-run-store.js'
 import { isLoopbackHost } from '../server/loopback-host.js'
 import {
   readRuntimeDiscovery,
@@ -36,11 +37,9 @@ import {
 import { sameCanonicalPath } from './canonical-path.js'
 import { KUN_MANAGER_CAPABILITIES } from './service-manager.js'
 import { withRuntimeDataDirAncillaryWriter } from '../server/runtime-data-dir-lease.js'
-
 const START_TIMEOUT_MS = 30_000
 const POLL_MS = 100
 const LEGACY_HANDOVER_TIMEOUT_MS = 5 * 60_000
-
 const ManagerHealthSchema = z.object({
   status: z.literal('ok'),
   service: z.literal('kun-service-manager'),
@@ -49,9 +48,9 @@ const ManagerHealthSchema = z.object({
   pid: z.number().int().positive(),
   startedAt: z.string().datetime(),
   serviceVersion: z.string(),
+  buildId: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   capabilities: z.array(z.string())
 })
-
 export type ServiceManagerConnection = {
   discovery: ManagerDiscoveryRecord
 }
@@ -198,6 +197,7 @@ export async function resolveServiceManager(
       health.pid !== discovery.pid ||
       health.startedAt !== discovery.startedAt ||
       health.serviceVersion !== discovery.serviceVersion ||
+      health.buildId !== discovery.buildId ||
       !KUN_MANAGER_CAPABILITIES.every((capability) => health.capabilities.includes(capability))
     ) return null
     return { discovery }
@@ -212,6 +212,7 @@ export async function ensureServiceManager(input: {
   fetch?: typeof fetch
   timeoutMs?: number
   allowDevelopmentBootstrap?: boolean
+  buildId?: string
   dataDir: string
   settingsPath?: string
   launch?: {
@@ -288,6 +289,7 @@ export async function ensureServiceManager(input: {
           KUN_MANAGER_CONTROL_DIR: controlDir,
           KUN_MANAGER_TOKEN: managerToken,
           KUN_MANAGER_INSTANCE_ID: instanceId,
+          ...(input.buildId ? { KUN_RUNTIME_BUILD_ID: input.buildId } : {}),
           KUN_MANAGER_DATA_DIR: input.dataDir,
           KUN_MANAGER_SETTINGS_PATH: settingsPath,
           KUN_MANAGER_LOG_PATH: logPath
@@ -669,67 +671,30 @@ export async function forwardRequestToExecutionOwner(input: {
   })
 }
 
+import {
+  delay,
+  processIsAlive,
+  requestManagerResponse,
+  requireManagerJson,
+  safeManagerUrl
+} from './manager-client-support.js'
+export {
+  defaultManagerControlDirForTests,
+  requestManagerResponse
+} from './manager-client-support.js'
+
 export async function requestManagerJson(
   manager: ServiceManagerConnection,
   path: string,
   options: { method?: string; body?: unknown; fetch?: typeof fetch; timeoutMs?: number }
 ): Promise<unknown> {
-  return requireManagerJson(await requestManagerResponse(manager, path, options))
-}
-
-export async function requestManagerResponse(
-  manager: ServiceManagerConnection,
-  path: string,
-  options: { method?: string; body?: unknown; fetch?: typeof fetch; timeoutMs?: number }
-): Promise<Response> {
-  const fetchImpl = options.fetch ?? fetch
-  return fetchImpl(`${manager.discovery.baseUrl}${path}`, {
-    method: options.method ?? 'GET',
-    headers: {
-      authorization: `Bearer ${manager.discovery.managerToken}`,
-      ...(options.body === undefined ? {} : { 'content-type': 'application/json' })
-    },
-    ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
-    signal: AbortSignal.timeout(options.timeoutMs ?? 5_000)
-  })
-}
-
-async function requireManagerJson(response: Response): Promise<unknown> {
-  if (!response.ok) {
-    const body = await response.text().catch(() => '')
-    throw new Error(`Kun Service Manager request failed with HTTP ${response.status}: ${body.slice(0, 1_024)}`)
+  const response = await requestManagerResponse(manager, path, options)
+  if (response.status === 409) {
+    const conflict = z.object({
+      code: z.literal('graph_run_conflict'),
+      message: z.string()
+    }).safeParse(await response.clone().json().catch(() => null))
+    if (conflict.success) throw new GraphRunConflictError(conflict.data.message)
   }
-  return response.json()
-}
-
-function safeManagerUrl(record: ManagerDiscoveryRecord): boolean {
-  try {
-    const url = new URL(record.baseUrl)
-    return url.protocol === 'http:' &&
-      isLoopbackHost(url.hostname) &&
-      isLoopbackHost(record.host) &&
-      Number(url.port || '80') === record.port &&
-      (url.pathname === '/' || url.pathname === '') &&
-      url.username === '' &&
-      url.password === ''
-  } catch {
-    return false
-  }
-}
-
-function processIsAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (error) {
-    return String((error as { code?: unknown })?.code ?? '') === 'EPERM'
-  }
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
-}
-
-export function defaultManagerControlDirForTests(home = homedir()): string {
-  return defaultKunControlDir(home)
+  return requireManagerJson(response)
 }

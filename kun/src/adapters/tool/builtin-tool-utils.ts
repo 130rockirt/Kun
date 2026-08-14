@@ -1,7 +1,5 @@
-import { existsSync } from 'node:fs'
 import { readFile, readdir, stat } from 'node:fs/promises'
-import { spawn, spawnSync, type ChildProcess, type SpawnOptions } from 'node:child_process'
-import { basename, dirname, isAbsolute, join, relative, resolve, sep, win32 } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import type { ToolHostContext } from '../../ports/tool-host.js'
 import { effectiveSandboxMode, pathAllowedByScopes } from './sandbox-policy.js'
 import { isBackgroundShellOutputPath } from '../../services/background-shell-output.js'
@@ -12,10 +10,9 @@ import type {
   ListEntry,
   ReadClassification,
   ResizedImageResult,
-  ShellConfig,
   TruncateMode
 } from './builtin-tool-types.js'
-import { COMPACT_RESOURCE_FILE_NAMES } from './builtin-tool-types.js'
+import { COMPACT_RESOURCE_FILE_NAMES, FAST_CONTEXT_EXCLUDED_DIRECTORY_NAMES } from './builtin-tool-types.js'
 import {
   isPathInsideOrEqual,
   resolveExistingWorkspaceRoot,
@@ -23,46 +20,9 @@ import {
   sameFilesystemPath,
   workspaceRoot
 } from './workspace-path.js'
-import {
-  resolveWindowsShellCandidates,
-  WINDOWS_POWERSHELL_COMMAND_ARGS,
-  windowsSystemRoot
-} from './windows-shell-resolver.js'
-
 export { workspaceRoot } from './workspace-path.js'
+export * from './builtin-shell-utils.js'
 
-type SpawnSyncLike = typeof spawnSync
-type SpawnLike = typeof spawn
-const POWERSHELL_UTF8_OUTPUT_PREAMBLE = [
-  '$OutputEncoding = [System.Text.UTF8Encoding]::new($false)',
-  '[Console]::OutputEncoding = $OutputEncoding',
-  'try { [Console]::InputEncoding = $OutputEncoding } catch {}'
-].join('; ')
-
-function lookupResults(
-  lookup: SpawnSyncLike,
-  command: string,
-  args: string[]
-): string[] {
-  try {
-    const result = lookup(command, args, { encoding: 'utf8' })
-    if (result.status !== 0) return []
-    return result.stdout
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean)
-  } catch {
-    return []
-  }
-}
-
-function firstLookupResult(
-  lookup: SpawnSyncLike,
-  command: string,
-  args: string[]
-): string {
-  return lookupResults(lookup, command, args)[0] ?? ''
-}
 
 export async function withToolBoundary(
   run: () => Promise<{ output: unknown; isError?: boolean }>
@@ -135,6 +95,19 @@ export async function resolveWorkspacePath(
   ))
   const resolvedRoots = [primaryRoot, ...additionalRoots.filter((entry) => entry !== null)]
   const resolvedAbsolute = await resolvePathThroughSymlinks(lexicalAbsolutePath)
+  // A lexical allow-list alone is insufficient: `src/link` can look in scope
+  // while its physical target points at another workspace directory. Resolve
+  // both the requested target and the delegated scopes before authorizing a
+  // read, just as delegated writes validate their physical scopes.
+  if (delegatedPathBoundary) {
+    const physicalReadScopes = delegatedPhysicalReadScopes(
+      primaryRoot,
+      context.allowedReadPaths ?? []
+    )
+    if (!physicalReadScopes.some((scope) => isPathInsideOrEqual(scope, resolvedAbsolute))) {
+      throw new Error(`path resolves outside the delegated child read scopes: ${inputPath}`)
+    }
+  }
   const matchingRoot = resolvedRoots.find((candidate) => isPathInsideOrEqual(candidate.physicalRoot, resolvedAbsolute))
   const isInsideWorkspace = Boolean(matchingRoot)
   const isApprovedExternalPath = !options.enforceWorkspaceBoundary &&
@@ -152,6 +125,29 @@ export async function resolveWorkspacePath(
     absolutePath: isApprovedExternalPath ? resolvedAbsolute : lexicalAbsolutePath,
     relativePath: normalizeToolPath(relative(matchingRoot?.lexicalRoot ?? root, lexicalAbsolutePath) || '.')
   }
+}
+
+function delegatedPhysicalReadScopes(
+  workspace: { lexicalRoot: string; physicalRoot: string },
+  scopes: readonly string[]
+): string[] {
+  return scopes.flatMap((scope) => {
+    const lexicalScope = isAbsolute(scope)
+      ? resolve(scope)
+      : resolve(workspace.lexicalRoot, scope)
+    if (!isPathInsideOrEqual(workspace.lexicalRoot, lexicalScope)) return undefined
+    // Do not follow a symlink in the allowed scope itself. The scope grants a
+    // lexical subtree (for example `src`), so its physical counterpart is
+    // the same relative subtree under the physical workspace root. Otherwise
+    // a `src -> private` link could expand the granted scope.
+    const physicalScope = resolve(
+      workspace.physicalRoot,
+      relative(workspace.lexicalRoot, lexicalScope)
+    )
+    return isPathInsideOrEqual(workspace.physicalRoot, physicalScope)
+      ? physicalScope
+      : undefined
+  }).filter((scope): scope is string => Boolean(scope))
 }
 
 export function isBinaryBuffer(buffer: Buffer): boolean {
@@ -267,568 +263,26 @@ export function describeKind(mode: TruncateMode): string {
   return mode === 'head' ? 'first' : 'last'
 }
 
-export type ShellRuntimeInfo = ShellConfig & {
-  name: string
-  syntax: string
-}
-
-export type ShellRuntimePlan = {
-  primary: ShellRuntimeInfo
-  candidates: readonly ShellRuntimeInfo[]
-}
-
-export type ShellRuntimePlanOptions = {
-  platform?: NodeJS.Platform
-  lookup?: SpawnSyncLike
-  fileExists?: (path: string) => boolean
-  env?: NodeJS.ProcessEnv
-}
-
-function pathExists(fileExists: (path: string) => boolean, candidate: string): boolean {
-  try {
-    return fileExists(candidate)
-  } catch {
-    return false
-  }
-}
-
-function uniqueShellConfigs(configs: ShellConfig[], platform: NodeJS.Platform): ShellConfig[] {
-  const seen = new Set<string>()
-  return configs.filter((config) => {
-    if (!config.shell.trim()) return false
-    const normalized = config.shell.replace(/[\\/]+$/, '')
-    const key = platform === 'win32' ? normalized.toLowerCase() : normalized
-    if (seen.has(key)) return false
-    seen.add(key)
-    return true
-  })
-}
-
-function runtimePlan(configs: ShellConfig[], platform: NodeJS.Platform): ShellRuntimePlan {
-  const candidates = uniqueShellConfigs(configs, platform).map((config) => shellRuntimeInfo(config))
-  const primary = candidates[0]
-  if (!primary) throw new Error('shell runtime plan requires at least one candidate')
-  return { primary, candidates }
-}
-
-export function shellRuntimePlan(options: ShellRuntimePlanOptions = {}): ShellRuntimePlan {
-  const platform = options.platform ?? process.platform
-
-  if (platform === 'win32') {
-    const resolverOptions = {
-      ...(options.lookup ? { lookup: options.lookup } : {}),
-      ...(options.fileExists ? { fileExists: options.fileExists } : {}),
-      ...(options.env ? { env: options.env } : {})
-    }
-    return runtimePlan(
-      resolveWindowsShellCandidates(resolverOptions)
-        .map((candidate) => ({ shell: candidate.file, args: [...candidate.commandArgs] })),
-      platform
-    )
-  }
-
-  const lookup = options.lookup ?? spawnSync
-  const fileExists = options.fileExists ?? existsSync
-  const configs: ShellConfig[] = []
-  if (pathExists(fileExists, '/bin/bash')) configs.push({ shell: '/bin/bash', args: ['-lc'] })
-  for (const shell of lookupResults(lookup, 'which', ['bash'])) configs.push({ shell, args: ['-lc'] })
-  configs.push({ shell: 'sh', args: ['-lc'] })
-  return runtimePlan(configs, platform)
-}
-
-export function shellConfig(
-  platform?: NodeJS.Platform,
-  lookup?: SpawnSyncLike,
-  fileExists?: (path: string) => boolean,
-  env?: NodeJS.ProcessEnv
-): ShellConfig {
-  const { shell, args } = shellRuntimePlan({
-    ...(platform ? { platform } : {}),
-    ...(lookup ? { lookup } : {}),
-    ...(fileExists ? { fileExists } : {}),
-    ...(env ? { env } : {})
-  }).primary
-  return { shell, args }
-}
-
-const SAFE_SHELL_ENV_KEYS = new Set([
-  'PATH',
-  'HOME',
-  'USER',
-  'LOGNAME',
-  'SHELL',
-  'TMPDIR',
-  'TMP',
-  'TEMP',
-  'LANG',
-  'TERM',
-  'COLORTERM',
-  'NO_COLOR',
-  'XDG_CACHE_HOME',
-  'XDG_CONFIG_HOME',
-  'XDG_DATA_HOME',
-  'XDG_RUNTIME_DIR'
-])
-
-const SAFE_WINDOWS_SHELL_ENV_KEYS = new Set([
-  'PATHEXT',
-  'SYSTEMROOT',
-  'WINDIR',
-  'COMSPEC',
-  'USERPROFILE',
-  'HOMEDRIVE',
-  'HOMEPATH',
-  'APPDATA',
-  'LOCALAPPDATA',
-  'PROGRAMDATA',
-  'PROGRAMFILES',
-  'PROGRAMFILES(X86)',
-  'USERNAME'
-])
-
-function copySafeShellEnvironment(
-  env: NodeJS.ProcessEnv,
-  platform: NodeJS.Platform
-): NodeJS.ProcessEnv {
-  const result: NodeJS.ProcessEnv = {}
-  for (const [key, value] of Object.entries(env)) {
-    if (value === undefined) continue
-    const normalized = platform === 'win32' ? key.toUpperCase() : key
-    const allowed = SAFE_SHELL_ENV_KEYS.has(normalized) ||
-      normalized.startsWith('LC_') ||
-      (platform === 'win32' && SAFE_WINDOWS_SHELL_ENV_KEYS.has(normalized))
-    if (allowed) result[key] = value
-  }
-  return result
-}
-
-// Environment for agent-controlled shell commands. It deliberately passes a
-// small execution allow-list instead of inheriting the runtime's environment:
-// the serve process holds its bearer token and model credentials, while a
-// shell, verifier, operation, hook, or SDK child must never be able to print
-// them into a tool result. On Windows, also guarantee the core system
-// directories are on PATH so built-in utilities (`where`, `findstr`,
-// `tasklist`, …) and PATH-resolved tools (`node`, `npm`, `python`) remain
-// reachable from inside the shell even when the app inherited a PATH without
-// System32. The directories are appended (never prepended), so the user's own
-// PATH entries keep their precedence.
-export function shellSpawnEnv(
-  env: NodeJS.ProcessEnv = process.env,
-  platform: NodeJS.Platform = process.platform
-): NodeJS.ProcessEnv {
-  const safeEnv = copySafeShellEnvironment(env, platform)
-  if (platform !== 'win32') return safeEnv
-  const systemRoot = windowsSystemRoot(safeEnv)
-  const required = [
-    win32.join(systemRoot, 'System32'),
-    systemRoot,
-    win32.join(systemRoot, 'System32', 'Wbem'),
-    win32.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0')
-  ]
-  // PATH casing varies on Windows (PATH vs Path); update the key as it exists.
-  const pathKey = Object.keys(safeEnv).find((key) => key.toLowerCase() === 'path') ?? 'Path'
-  const existing = (safeEnv[pathKey] ?? '').split(win32.delimiter).filter(Boolean)
-  const seen = new Set(existing.map((entry) => entry.toLowerCase().replace(/[\\/]+$/, '')))
-  const missing = required.filter((dir) => !seen.has(dir.toLowerCase()))
-  if (missing.length === 0) return safeEnv
-  return {
-    ...safeEnv,
-    [pathKey]: [...existing, ...missing].join(win32.delimiter)
-  }
-}
-
-export function shellDisplayName(shell: string): string {
-  const name = shell.replace(/\\/g, '/').split('/').pop()?.toLowerCase() ?? shell.toLowerCase()
-  if (name === 'cmd.exe') return 'cmd.exe'
-  return name.endsWith('.exe') ? name.slice(0, -4) : name
-}
-
-export function shellRuntimeInfo(config: ShellConfig = shellConfig()): ShellRuntimeInfo {
-  const name = shellDisplayName(config.shell)
-  return {
-    ...config,
-    name,
-    syntax: shellSyntaxHint(name)
-  }
-}
-
-export function shellCommandArgs(config: ShellConfig, command: string): string[] {
-  const name = shellDisplayName(config.shell)
-  if (name === 'pwsh' || name === 'powershell') {
-    const script = `${POWERSHELL_UTF8_OUTPUT_PREAMBLE}\n${command}`
-    return [...WINDOWS_POWERSHELL_COMMAND_ARGS, script]
-  }
-  return [...config.args, command]
-}
-
-export type ShellSpawnAttempt = {
-  shell: string
-  name: string
-  code?: string
-  errno?: string | number
-  syscall?: string
-}
-
-export class ShellSpawnError extends Error {
-  readonly attempts: readonly ShellSpawnAttempt[]
-  readonly code?: string
-  readonly errno?: string | number
-  readonly syscall?: string
-
-  constructor(attempts: readonly ShellSpawnAttempt[]) {
-    const copiedAttempts = attempts.map((attempt) => ({ ...attempt }))
-    const summary = copiedAttempts
-      .map((attempt) => `${attempt.name}: ${attempt.code ?? 'UNKNOWN'}`)
-      .join(', ')
-    super(`Failed to start shell${summary ? ` (${summary})` : ''}`)
-    this.name = 'ShellSpawnError'
-    this.attempts = copiedAttempts
-    const last = copiedAttempts.at(-1)
-    this.code = last?.code
-    this.errno = last?.errno
-    this.syscall = last?.syscall
-  }
-
-  toJSON(): {
-    name: string
-    message: string
-    code?: string
-    errno?: string | number
-    syscall?: string
-    attempts: readonly ShellSpawnAttempt[]
-  } {
-    return {
-      name: this.name,
-      message: this.message,
-      ...(this.code ? { code: this.code } : {}),
-      ...(this.errno !== undefined ? { errno: this.errno } : {}),
-      ...(this.syscall ? { syscall: this.syscall } : {}),
-      attempts: this.attempts
-    }
-  }
-}
-
-export type ShellCommandSpawnOptions = Omit<SpawnOptions, 'cwd' | 'env' | 'shell'> & {
-  cwd: string
-  env?: NodeJS.ProcessEnv
-}
-
-export type ShellCommandRunnerOptions = ShellRuntimePlanOptions & {
-  plan?: ShellRuntimePlan
-  spawnImpl?: SpawnLike
-}
-
-export type SpawnedShellCommand = {
-  child: ChildProcess
-  runtime: ShellRuntimeInfo
-}
-
-export type ShellCommandRunner = {
-  runtime: ShellRuntimeInfo
-  candidates: readonly ShellRuntimeInfo[]
-  spawn: (command: string, options: ShellCommandSpawnOptions) => Promise<SpawnedShellCommand>
-}
-
-function spawnAttempt(runtime: ShellRuntimeInfo, error: unknown): ShellSpawnAttempt {
-  const nodeError = error && typeof error === 'object' ? error as NodeJS.ErrnoException : undefined
-  return {
-    shell: runtime.shell,
-    name: runtime.name,
-    ...(typeof nodeError?.code === 'string' ? { code: nodeError.code } : {}),
-    ...(typeof nodeError?.errno === 'number' || typeof nodeError?.errno === 'string'
-      ? { errno: nodeError.errno }
-      : {}),
-    ...(typeof nodeError?.syscall === 'string' ? { syscall: nodeError.syscall } : {})
-  }
-}
-
-function waitForSpawn(child: ChildProcess): Promise<ChildProcess> {
-  return new Promise((resolvePromise, rejectPromise) => {
-    const cleanup = () => {
-      child.off('spawn', onSpawn)
-      child.off('error', onError)
-    }
-    const onSpawn = () => {
-      cleanup()
-      resolvePromise(child)
-    }
-    const onError = (error: Error) => {
-      cleanup()
-      rejectPromise(error)
-    }
-    child.once('spawn', onSpawn)
-    child.once('error', onError)
-  })
-}
-
-export function createShellCommandRunner(options: ShellCommandRunnerOptions = {}): ShellCommandRunner {
-  const platform = options.platform ?? process.platform
-  const env = options.env ?? process.env
-  const resolvedPlan = options.plan ?? shellRuntimePlan(options)
-  // Never replay one command under another syntax family after a launch
-  // failure. PowerShell, POSIX, and cmd parse the same text differently.
-  const candidates = uniqueShellConfigs(
-    [resolvedPlan.primary, ...resolvedPlan.candidates]
-      .filter((runtime) => runtime.syntax === resolvedPlan.primary.syntax),
-    platform
-  ).map((config) => shellRuntimeInfo(config))
-  const primary = candidates[0] ?? resolvedPlan.primary
-  const spawnImpl = options.spawnImpl ?? spawn
-
-  return {
-    runtime: primary,
-    candidates,
-    async spawn(command, spawnOptions) {
-      const attempts: ShellSpawnAttempt[] = []
-      const safeEnv = shellSpawnEnv(spawnOptions.env ?? env, platform)
-      const baseChildOptions: SpawnOptions = {
-        ...spawnOptions,
-        windowsHide: spawnOptions.windowsHide ?? true,
-        shell: false
-      }
-      for (const runtime of candidates) {
-        try {
-          const childOptions: SpawnOptions = {
-            ...baseChildOptions,
-            env: platform === 'win32' && runtime.name === 'bash'
-              ? { ...safeEnv, CHERE_INVOKING: '1' }
-              : safeEnv
-          }
-          const child = spawnImpl(runtime.shell, shellCommandArgs(runtime, command), childOptions)
-          await waitForSpawn(child)
-          return { child, runtime }
-        } catch (error) {
-          // An error before the spawn event means no process was created, so a
-          // same-syntax fallback cannot duplicate side effects.
-          attempts.push(spawnAttempt(runtime, error))
-        }
-      }
-      throw new ShellSpawnError(attempts)
-    }
-  }
-}
-
-// Factual environment block, not an instruction. Modeled on Codex's
-// <environment_context>: state the shell as a fact and let the model infer
-// the syntax, rather than issuing imperative "write PowerShell / do not assume
-// POSIX" directives that the model echoes back even on a bare greeting. The
-// `bash` tool's own description already covers session_id/poll/write/stop and
-// dev-server usage, so we don't repeat it here.
-export function shellRuntimeInstruction(config: ShellConfig = shellConfig()): string {
-  const shell = shellRuntimeInfo(config)
-  return [
-    '<shell_environment>',
-    `  <shell>${shell.name}</shell>`,
-    `  <path>${shell.shell}</path>`,
-    `  <syntax>${shell.syntax}</syntax>`,
-    '</shell_environment>'
-  ].join('\n')
-}
-
-// `close` can be held open by background grandchildren that inherit stdio.
-// Treat the shell's `exit` as command completion, then briefly flush output.
-export async function waitForSpawnExit(
-  child: ChildProcess,
-  options: { flushAfterExitMs?: number } = {}
-): Promise<number | null> {
-  const flushAfterExitMs = options.flushAfterExitMs ?? 50
-  let closeCode: number | null | undefined
-  let closeSeen = false
-
-  const exitCode = await new Promise<number | null>((resolvePromise, rejectPromise) => {
-    child.once('error', rejectPromise)
-    child.once('close', (code) => {
-      closeSeen = true
-      closeCode = code
-      resolvePromise(code)
-    })
-    child.once('exit', (code) => {
-      resolvePromise(code)
-    })
-  })
-
-  if (!closeSeen && flushAfterExitMs > 0) {
-    await new Promise<void>((resolvePromise) => {
-      const timer = setTimeout(resolvePromise, flushAfterExitMs)
-      child.once('close', (code) => {
-        closeSeen = true
-        closeCode = code
-        clearTimeout(timer)
-        resolvePromise()
-      })
-    })
-  }
-
-  if (!closeSeen) {
-    child.stdout?.destroy()
-    child.stderr?.destroy()
-  }
-
-  return closeCode ?? exitCode
-}
-
-export function terminateSpawnTree(
-  child: ChildProcess,
-  options: {
-    platform?: NodeJS.Platform
-    signal?: NodeJS.Signals
-    spawnImpl?: SpawnLike
-  } = {}
-): void {
-  const signal = options.signal ?? 'SIGTERM'
-  const pid = child.pid
-  if (!pid) {
-    child.kill(signal)
-    return
-  }
-
-  if ((options.platform ?? process.platform) === 'win32') {
-    try {
-      const taskkill = (options.spawnImpl ?? spawn)('taskkill', ['/pid', String(pid), '/T', '/F'], {
-        stdio: 'ignore',
-        windowsHide: true
-      })
-      taskkill.once('error', () => {
-        child.kill(signal)
-      })
-      taskkill.unref?.()
-      return
-    } catch {
-      child.kill(signal)
-      return
-    }
-  }
-
-  try {
-    process.kill(-pid, signal)
-    return
-  } catch {
-    child.kill(signal)
-  }
-}
-
-function shellSyntaxHint(name: string): string {
-  switch (name) {
-    case 'bash':
-    case 'sh':
-    case 'zsh':
-      return 'POSIX shell'
-    case 'pwsh':
-    case 'powershell':
-      return 'PowerShell'
-    case 'cmd.exe':
-      return 'cmd.exe batch'
-    default:
-      return `${name} shell`
-  }
-}
-
-export function resolveExecutable(
-  candidates: string[],
-  platform: NodeJS.Platform = process.platform,
-  lookup: SpawnSyncLike = spawnSync,
-  fileExists: (path: string) => boolean = existsSync,
-  responds: (candidate: string) => boolean = executableResponds
-): string | null {
-  const lookupCommand = platform === 'win32' ? 'where' : 'which'
-  for (const candidate of candidates) {
-    const isExplicitPath = candidate.includes('/') || candidate.includes('\\')
-    if (isExplicitPath && fileExists(candidate) && responds(candidate)) return candidate
-    if (!isExplicitPath) {
-      const resolved = firstLookupResult(lookup, lookupCommand, [candidate])
-      if (resolved && responds(resolved)) return resolved
-    }
-  }
-  return null
-}
-
-function executableResponds(candidate: string): boolean {
-  const probe = spawnSync(candidate, ['--version'], {
-    encoding: 'utf8',
-    stdio: 'ignore',
-    timeout: 1000
-  })
-  return !probe.error && probe.status === 0
-}
-
-/** Combined stdout/stderr ceiling for helper subprocesses such as rg and git. */
-export const DEFAULT_SPAWN_CAPTURE_MAX_BYTES = 1024 * 1024
-
-export async function spawnCapture(
-  file: string,
-  args: string[],
-  options: { cwd: string; signal?: AbortSignal; maxOutputBytes?: number }
-): Promise<{ stdout: string; stderr: string; exitCode: number | null; outputTruncated: boolean }> {
-  const maxOutputBytes = normalizePositiveInteger(options.maxOutputBytes, DEFAULT_SPAWN_CAPTURE_MAX_BYTES)
-  const child = spawn(file, args, {
-    cwd: options.cwd,
-    env: shellSpawnEnv(),
-    stdio: ['ignore', 'pipe', 'pipe'],
-    windowsHide: true
-  })
-  const stdout: Buffer[] = []
-  const stderr: Buffer[] = []
-  let outputBytes = 0
-  let outputTruncated = false
-  let outputTerminationRequested = false
-  let forceKillTimer: ReturnType<typeof setTimeout> | undefined
-  const stopForOutputLimit = () => {
-    if (outputTerminationRequested) return
-    outputTerminationRequested = true
-    terminateSpawnTree(child)
-    // A malicious helper can ignore SIGTERM. Escalate shortly afterward so a
-    // capped capture also releases its process and pipe resources.
-    forceKillTimer = setTimeout(() => terminateSpawnTree(child, { signal: 'SIGKILL' }), 250)
-    forceKillTimer.unref?.()
-  }
-  const appendOutput = (target: Buffer[], chunk: Buffer | string) => {
-    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
-    const remaining = Math.max(0, maxOutputBytes - outputBytes)
-    if (remaining > 0) {
-      const kept = buffer.subarray(0, Math.min(buffer.length, remaining))
-      target.push(kept)
-      outputBytes += kept.length
-    }
-    if (buffer.length > remaining) {
-      outputTruncated = true
-      stopForOutputLimit()
-    }
-  }
-  const onAbort = () => terminateSpawnTree(child)
-  options.signal?.addEventListener('abort', onAbort, { once: true })
-  child.stdout?.on('data', (chunk: Buffer | string) => {
-    appendOutput(stdout, chunk)
-  })
-  child.stderr?.on('data', (chunk: Buffer | string) => {
-    appendOutput(stderr, chunk)
-  })
-  const exitCode = await new Promise<number | null>((resolvePromise, rejectPromise) => {
-    child.once('error', rejectPromise)
-    child.once('close', (code) => resolvePromise(code))
-  }).finally(() => {
-    options.signal?.removeEventListener('abort', onAbort)
-    if (forceKillTimer) clearTimeout(forceKillTimer)
-  })
-  if (options.signal?.aborted) throw new Error('command aborted')
-  return {
-    stdout: Buffer.concat(stdout).toString('utf8'),
-    stderr: Buffer.concat(stderr).toString('utf8'),
-    exitCode,
-    outputTruncated
-  }
-}
-
-export async function collectPaths(root: string, options: { includeDirectories?: boolean; limit: number }): Promise<string[]> {
+export async function collectPaths(root: string, options: {
+  includeDirectories?: boolean
+  limit: number
+  /** Optional traversal guard for bounded callers such as Fast Context. */
+  shouldSkipDirectory?: (path: string) => boolean
+  signal?: AbortSignal
+}): Promise<string[]> {
   const results: string[] = []
   const queue: string[] = [root]
   while (queue.length > 0 && results.length < options.limit) {
+    if (options.signal?.aborted) throw new Error('command aborted')
     const current = queue.shift()
     if (!current) break
     const entries = await readdir(current, { withFileTypes: true })
     entries.sort((a, b) => a.name.localeCompare(b.name))
     for (const entry of entries) {
+      if (options.signal?.aborted) throw new Error('command aborted')
       const next = join(current, entry.name)
       if (entry.isDirectory()) {
+        if (options.shouldSkipDirectory?.(next)) continue
         if (options.includeDirectories) results.push(next)
         queue.push(next)
       } else {
@@ -917,9 +371,6 @@ export function compilePattern(pattern: string, literal: boolean): RegExp {
   return new RegExp(pattern, 'i')
 }
 
-export function normalizePositiveInteger(value: unknown, fallback: number): number {
-  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback
-}
 
 export function normalizeBoolean(value: unknown, fallback = false): boolean {
   return typeof value === 'boolean' ? value : fallback
@@ -939,6 +390,18 @@ export function globToRegExp(pattern: string): RegExp {
 
 export function normalizeToolPath(value: string): string {
   return value.replace(/\\/g, '/').split(sep).join('/')
+}
+
+/** Shared Fast Context guard for read, glob, and grep workspace paths. */
+export function isFastContextExcludedRelativePath(value: string): boolean {
+  const excluded = new Set<string>(FAST_CONTEXT_EXCLUDED_DIRECTORY_NAMES)
+  return normalizeToolPath(value)
+    .split('/')
+    .some((component) => excluded.has(component.toLowerCase()))
+}
+
+export function isFastContextExcludedWorkspacePath(workspace: string, targetPath: string): boolean {
+  return isFastContextExcludedRelativePath(relative(workspace, targetPath) || '.')
 }
 
 export function parseEditInstructions(args: Record<string, unknown>): EditInstruction[] {

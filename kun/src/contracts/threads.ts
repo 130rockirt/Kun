@@ -8,6 +8,10 @@ import {
   DEFAULT_SANDBOX_MODE,
   SandboxModeSchema
 } from './policy.js'
+import {
+  DesignDocumentTargetSchema,
+  DesignTaskProfileSchema
+} from './design-task-profile.js'
 
 export const ThreadStatus = z.enum(['idle', 'running', 'archived', 'deleted'])
 export type ThreadStatus = z.infer<typeof ThreadStatus>
@@ -30,6 +34,17 @@ export const ThreadRuntimeStateSchema = z.object({
 })
 export type ThreadRuntimeState = z.infer<typeof ThreadRuntimeStateSchema>
 
+export const THREAD_TIMELINE_MAX_ITEMS = 300
+export const THREAD_TIMELINE_MAX_ITEM_BYTES = 4 * 1024 * 1024
+
+export const ThreadTimelinePageSchema = z.object({
+  nextCursor: z.string().min(1).optional(),
+  hasMore: z.boolean(),
+  itemCount: z.number().int().nonnegative().max(THREAD_TIMELINE_MAX_ITEMS),
+  itemBytes: z.number().int().nonnegative().max(THREAD_TIMELINE_MAX_ITEM_BYTES)
+})
+export type ThreadTimelinePage = z.infer<typeof ThreadTimelinePageSchema>
+
 /**
  * The generic thread PATCH endpoint only owns the archival visibility
  * overlay. Execution and deletion states are controlled by TurnService and
@@ -45,6 +60,72 @@ export type ThreadMode = z.infer<typeof ThreadMode>
 /** Product surface that owns a thread. Missing legacy values are resolved conservatively. */
 export const ThreadAgentSurface = z.enum(['code', 'write', 'design'])
 export type ThreadAgentSurface = z.infer<typeof ThreadAgentSurface>
+
+/** Recoverable source metadata required before cloning a persisted session. */
+export const ResumeSessionMetadataSchema = z.object({
+  sessionId: z.string().min(1),
+  sourceAgentSurface: ThreadAgentSurface,
+  workspace: z.string().min(1).optional(),
+  sourceDesignProfile: DesignTaskProfileSchema.optional(),
+  sourceDesignDocumentTarget: DesignDocumentTargetSchema.optional(),
+  requiresIndependentDesignTarget: z.boolean()
+})
+export type ResumeSessionMetadata = z.infer<typeof ResumeSessionMetadataSchema>
+
+export const MAX_THREAD_KNOWLEDGE_BASES = 8
+
+export const KnowledgeBaseMountSchema = z.object({
+  id: z.string().trim().min(1).max(128),
+  root: z.string().trim().min(1).max(4_096),
+  name: z.string().trim().min(1).max(200),
+  source: z.literal('write-workspace'),
+  access: z.literal('read-only')
+}).strict()
+export type KnowledgeBaseMount = z.infer<typeof KnowledgeBaseMountSchema>
+
+export const KnowledgeBaseMountsSchema = z.array(KnowledgeBaseMountSchema)
+  .max(MAX_THREAD_KNOWLEDGE_BASES)
+  .superRefine((mounts, ctx) => {
+    const ids = new Set<string>()
+    const roots = new Set<string>()
+    mounts.forEach((mount, index) => {
+      const root = mount.root.replace(/[\\/]+$/, '').toLocaleLowerCase()
+      if (ids.has(mount.id)) {
+        ctx.addIssue({ code: 'custom', path: [index, 'id'], message: 'knowledge base ids must be unique' })
+      }
+      if (roots.has(root)) {
+        ctx.addIssue({ code: 'custom', path: [index, 'root'], message: 'knowledge base roots must be unique' })
+      }
+      ids.add(mount.id)
+      roots.add(root)
+    })
+  })
+
+export const KnowledgeBaseIndexStateSchema = z.enum([
+  'pending', 'indexing', 'ready', 'stale', 'unavailable', 'error'
+])
+export type KnowledgeBaseIndexState = z.infer<typeof KnowledgeBaseIndexStateSchema>
+
+export const KnowledgeBaseIndexStatusSchema = z.object({
+  id: z.string().min(1),
+  state: KnowledgeBaseIndexStateSchema,
+  documentCount: z.number().int().nonnegative(),
+  nodeCount: z.number().int().nonnegative(),
+  availableDocumentCount: z.number().int().nonnegative().optional(),
+  unavailableDocumentCount: z.number().int().nonnegative().optional(),
+  truncatedDocumentCount: z.number().int().nonnegative().optional(),
+  formatCounts: z.record(z.string(), z.number().int().nonnegative()).optional(),
+  diagnostics: z.array(z.string().max(500)).max(20).optional(),
+  lastIndexedAt: z.string().optional(),
+  error: z.string().max(1_000).optional()
+})
+export type KnowledgeBaseIndexStatus = z.infer<typeof KnowledgeBaseIndexStatusSchema>
+
+export const ThreadKnowledgeBasesResponseSchema = z.object({
+  mounts: KnowledgeBaseMountsSchema,
+  statuses: z.array(KnowledgeBaseIndexStatusSchema).max(MAX_THREAD_KNOWLEDGE_BASES)
+})
+export type ThreadKnowledgeBasesResponse = z.infer<typeof ThreadKnowledgeBasesResponseSchema>
 
 /**
  * Discriminator describing how a thread relates to its origin.
@@ -188,7 +269,15 @@ export const ExtensionThreadMetadataSchema = z.object({
 })
 export type ExtensionThreadMetadata = z.infer<typeof ExtensionThreadMetadataSchema>
 
-export const ThreadSchema = z.object({
+export const DesignCloneOperationSchema = z.object({
+  operationId: z.string().trim().min(1).max(160)
+    .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/),
+  kind: z.enum(['fork', 'resume']),
+  sourceId: z.string().trim().min(1).max(256)
+}).strict()
+export type DesignCloneOperation = z.infer<typeof DesignCloneOperationSchema>
+
+export const ThreadSchemaBase = z.object({
   id: z.string().min(1),
   title: z.string(),
   /**
@@ -207,9 +296,14 @@ export const ThreadSchema = z.object({
   summary: z.string().optional(),
   workspace: z.string(),
   additionalWorkspaces: z.array(z.string().min(1)).max(32).optional(),
+  knowledgeBases: KnowledgeBaseMountsSchema.optional(),
   model: z.string(),
   /** Durable product-surface ownership. Missing legacy values resolve from homogeneous turn history. */
   agentSurface: ThreadAgentSurface.optional(),
+  /** Immutable Design task contract. Missing on Code, Work, and legacy threads. */
+  designProfile: DesignTaskProfileSchema.optional(),
+  /** Idempotency audit record for a renderer-prepared independent Design clone. */
+  designCloneOperation: DesignCloneOperationSchema.optional(),
   /**
    * Optional provider id. When set, every turn on this thread routes its
    * model request to the matching per-provider client; absent → use the
@@ -252,6 +346,13 @@ export const ThreadSchema = z.object({
   costBudgetWarningSent: z.boolean().optional(),
   relation: ThreadRelation.default('primary'),
   parentThreadId: z.string().optional(),
+  planBuildRunId: z.string().trim().min(1).max(160).optional(),
+  /** Legacy plan-build metadata retained only for read compatibility. */
+  planBuildAdmissionFingerprint: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  /** Legacy plan-build metadata retained only for read compatibility. */
+  planBuildAdmissionCapabilityHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  /** Legacy inert fence value retained only for read compatibility. */
+  planBuildAdmissionFrozen: z.boolean().optional(),
   forkedFromThreadId: z.string().optional(),
   forkedFromTitle: z.string().optional(),
   forkedAt: z.string().optional(),
@@ -259,21 +360,42 @@ export const ThreadSchema = z.object({
   forkedFromTurnCount: z.number().int().nonnegative().optional(),
   goal: ThreadGoalSchema.optional(),
   todos: ThreadTodoListSchema.optional(),
+  /**
+   * ISO timestamp of the last time this thread was auto-resumed after a
+   * runtime restart. Used as a cooldown gate so a crash loop cannot burn
+   * model budget by auto-resuming the same thread on every boot.
+   */
+  lastAutoResumeAt: z.string().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
   turns: z.array(TurnSchema).default([])
 })
+/** Legacy plan-build fields are parsed and persisted as inert history metadata. */
+export const ThreadSchema = ThreadSchemaBase
+export const ThreadSchemaReadable = ThreadSchemaBase
 export type ThreadRecord = z.infer<typeof ThreadSchema>
 
-export const ThreadSummarySchema = ThreadSchema.pick({
+export const ThreadTimelineResponseSchema = ThreadSchemaReadable.extend({
+  latestSeq: z.number().int().nonnegative(),
+  latestTurn: TurnSchema.omit({ items: true }).nullable(),
+  pendingUserInputIds: z.array(z.string()),
+  pendingApprovalIds: z.array(z.string()).optional(),
+  timeline: ThreadTimelinePageSchema
+})
+export type ThreadTimelineResponse = z.infer<typeof ThreadTimelineResponseSchema>
+
+export const ThreadSummarySchema = ThreadSchemaBase.pick({
   id: true,
   title: true,
   titleAuto: true,
   summary: true,
   workspace: true,
   additionalWorkspaces: true,
+  knowledgeBases: true,
   model: true,
   agentSurface: true,
+  designProfile: true,
+  designCloneOperation: true,
   providerId: true,
   ownerExtensionId: true,
   ownerExtensionVersion: true,
@@ -295,6 +417,10 @@ export const ThreadSummarySchema = ThreadSchema.pick({
   costBudgetWarningSent: true,
   relation: true,
   parentThreadId: true,
+  planBuildRunId: true,
+  planBuildAdmissionFingerprint: true,
+  planBuildAdmissionCapabilityHash: true,
+  planBuildAdmissionFrozen: true,
   forkedFromThreadId: true,
   forkedFromTitle: true,
   forkedAt: true,
@@ -304,8 +430,19 @@ export const ThreadSummarySchema = ThreadSchema.pick({
   todos: true,
   createdAt: true,
   updatedAt: true
+}).extend({
+  /** First accepted Code/Design mode, derived from durable turn history. */
+  lockedTaskSurface: ThreadAgentSurface.optional()
 })
 export type ThreadSummary = z.infer<typeof ThreadSummarySchema>
+
+/** Lean sidebar listing projection (omits heavy metadata blobs the list never reads). */
+export const ThreadListSummarySchema = ThreadSummarySchema.omit({
+  additionalWorkspaces: true, knowledgeBases: true, ownerExtensionId: true, ownerExtensionVersion: true, accountId: true,
+  extensionVisibility: true, extensionProfile: true, extensionBudget: true, toolCatalogEpoch: true, costBudgetUsd: true,
+  costBudgetWarningSent: true, planBuildAdmissionFingerprint: true, planBuildAdmissionCapabilityHash: true, planBuildAdmissionFrozen: true
+})
+export type ThreadListSummary = z.infer<typeof ThreadListSummarySchema>
 
 export const CreateThreadRequest = z.object({
   title: z.string().optional(),
@@ -313,6 +450,7 @@ export const CreateThreadRequest = z.object({
   titleAuto: z.boolean().optional(),
   workspace: z.string().min(1),
   additionalWorkspaces: z.array(z.string().min(1)).max(32).optional(),
+  knowledgeBases: KnowledgeBaseMountsSchema.optional(),
   model: z.string().min(1),
   /** Durable product-surface ownership for renderer-created threads. */
   agentSurface: ThreadAgentSurface.optional(),
@@ -356,10 +494,18 @@ export const ForkThreadRequest = z
      * Compatibility echo only. A fork cannot replace the source reviewer;
      * ThreadService rejects any value that differs from the captured source.
      */
-    approvalReviewer: ApprovalReviewerSchema.optional()
+    approvalReviewer: ApprovalReviewerSchema.optional(),
+    /** Independently cloned board target prepared by the Design client before fork. */
+    designDocumentTarget: DesignDocumentTargetSchema.optional(),
+    /** Stable client operation used to retry the same Design clone/thread atomically. */
+    designCloneOperationId: z.string().trim().min(1).max(160)
+      .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/).optional()
   })
   .refine((value) => !value.beforeTurn || value.turnId !== undefined, {
     message: 'beforeTurn requires turnId'
+  })
+  .refine((value) => Boolean(value.designDocumentTarget) === Boolean(value.designCloneOperationId), {
+    message: 'designDocumentTarget and designCloneOperationId must be supplied together'
   })
   .optional()
 export type ForkThreadRequest = z.infer<typeof ForkThreadRequest>
@@ -427,6 +573,7 @@ export const UpdateThreadRequest = z
     titleAuto: z.boolean().optional(),
     workspace: z.string().min(1).optional(),
     additionalWorkspaces: z.array(z.string().min(1)).max(32).optional(),
+    knowledgeBases: KnowledgeBaseMountsSchema.optional(),
     mode: ThreadMode.optional(),
     status: ThreadUpdateStatus.optional(),
     approvalPolicy: ApprovalPolicySchema.optional(),
@@ -444,6 +591,7 @@ export const UpdateThreadRequest = z
       value.titleAuto !== undefined ||
       value.workspace !== undefined ||
       value.additionalWorkspaces !== undefined ||
+      value.knowledgeBases !== undefined ||
       value.mode !== undefined ||
       value.status !== undefined ||
       value.approvalPolicy !== undefined ||
@@ -459,7 +607,10 @@ export const UpdateThreadRequest = z
 export type UpdateThreadRequest = z.infer<typeof UpdateThreadRequest>
 
 export const ListThreadsResponse = z.object({
-  threads: z.array(ThreadSummarySchema)
+  threads: z.array(ThreadSummarySchema),
+  nextCursor: z.string().optional(),
+  hasMore: z.boolean().optional(),
+  total: z.number().int().nonnegative().optional()
 })
 export type ListThreadsResponse = z.infer<typeof ListThreadsResponse>
 

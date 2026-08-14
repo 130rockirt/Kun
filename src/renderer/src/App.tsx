@@ -16,8 +16,8 @@ function SharedModelConnectionsLifecycle(): null {
     if (typeof window.kunGui?.runtimeRequest !== 'function') return
     let disposed = false
     let revision = 0
-    let initialized = false
-    let timer: ReturnType<typeof window.setTimeout> | undefined
+    let modelCatalogLoaded = false
+    let timer: number | undefined
     const poll = async (): Promise<void> => {
       try {
         const previousRevision = revision
@@ -39,11 +39,11 @@ function SharedModelConnectionsLifecycle(): null {
         }
         if (!Number.isInteger(snapshot.revision)) throw new Error('invalid model connection revision')
         revision = Number(snapshot.revision)
-        const changed = !initialized || revision > previousRevision
-        initialized = true
+        const changed = !modelCatalogLoaded || revision > previousRevision
         if (!disposed && changed) {
           const state = useChatStore.getState()
           await state.loadComposerModels()
+          if (disposed) return
           if (
             !useChatStore.getState().activeThreadId &&
             typeof snapshot.defaultProviderId === 'string' &&
@@ -71,12 +71,14 @@ function SharedModelConnectionsLifecycle(): null {
               latest.setComposerModel('', '')
             }
           }
+          modelCatalogLoaded = true
         }
       } catch {
         // The runtime lifecycle has its own connection UI. Keep this watcher
-        // quiet and retry so a crash/replacement does not break the renderer.
+        // quiet and retry so a crash/replacement or a transient catalog read
+        // does not leave the composer permanently without configured models.
       } finally {
-        if (!disposed) timer = window.setTimeout(poll, revision === 0 ? 2_000 : 0)
+        if (!disposed) timer = window.setTimeout(poll, modelCatalogLoaded ? 0 : 2_000)
       }
     }
     void poll()

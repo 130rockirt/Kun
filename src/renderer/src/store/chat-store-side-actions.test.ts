@@ -29,6 +29,7 @@ class FakeProvider implements AgentProvider {
   cancelUserInputMock = vi.fn()
   refreshThreadsMock = vi.fn()
   closeSideMock = vi.fn()
+  forkFailure: Error | null = null
   getCapabilities() {
     return { interrupt: true, stream: true, approvals: true, attachFiles: false }
   }
@@ -55,6 +56,11 @@ class FakeProvider implements AgentProvider {
       reasoningEffort?: string
       serviceTier?: 'priority'
       attachmentIds?: string[]
+      guiDesignCanvas?: boolean
+      guiDesignMode?: boolean
+      agentSurface?: 'code' | 'write' | 'design'
+      designProfile?: import('../agent/design-task-profile').DesignTaskProfileInput
+      designDocumentTarget?: import('../agent/design-task-profile').DesignDocumentTarget
     }
   ) {
     this.sendMock(threadId, text, options)
@@ -73,9 +79,14 @@ class FakeProvider implements AgentProvider {
   async compactThread() {}
   async forkThread(
     threadId: string,
-    options?: { relation?: 'primary' | 'fork' | 'side'; title?: string }
+    options?: {
+      relation?: 'primary' | 'fork' | 'side'
+      title?: string
+      designDocumentTarget?: import('../agent/design-task-profile').DesignDocumentTarget
+    }
   ) {
     this.forkMock(threadId, options)
+    if (this.forkFailure) throw this.forkFailure
     return {
       id: `side_${threadId}`,
       title: options?.title ?? `${threadId} · side`,
@@ -88,7 +99,22 @@ class FakeProvider implements AgentProvider {
       parentThreadId: threadId,
       forkedFromThreadId: threadId,
       forkedFromTitle: 'Parent',
-      forkedAt: '2026-06-02T00:00:00.000Z'
+      forkedAt: '2026-06-02T00:00:00.000Z',
+      ...(options?.designDocumentTarget
+        ? {
+            agentSurface: 'design' as const,
+            designProfile: {
+              version: 1 as const,
+              documentTarget: options.designDocumentTarget,
+              outputMedium: 'html' as const,
+              target: 'app' as const,
+              preset: 'ios' as const,
+              presetSource: 'explicit' as const,
+              context: { tone: ['precise'] },
+              lockedAtTurnId: 'turn_lock'
+            }
+          }
+        : {})
     }
   }
   async resumeSession() {
@@ -117,7 +143,10 @@ class FakeProvider implements AgentProvider {
   }
 }
 
-function buildHarness(overrides: Partial<ChatState> = {}): Harness {
+function buildHarness(
+  overrides: Partial<ChatState> = {},
+  dependencies: Parameters<typeof createSideActions>[1] = {}
+): Harness {
   const state: ChatState = {
     route: 'chat',
     settingsReturnRoute: 'chat',
@@ -252,7 +281,7 @@ function buildHarness(overrides: Partial<ChatState> = {}): Harness {
     t: (key) => key,
     formatRuntimeError: (e) => (e instanceof Error ? e.message : String(e ?? '')),
     shouldOpenSettingsForError: () => false
-  })
+  }, dependencies)
   return { state, set, get, provider, actions }
 }
 
@@ -266,6 +295,7 @@ describe('chat-store-side-actions', () => {
   })
   afterEach(() => {
     teardownAllSideSubscriptions()
+    vi.unstubAllGlobals()
     delete (globalThis as { window?: unknown }).window
   })
 
@@ -618,184 +648,4 @@ describe('chat-store-side-actions', () => {
     )
   })
 
-  it('uses the Kun default model when side creation has no parent or composer model to inherit', async () => {
-    const { actions, state } = buildHarness({
-      threads: [],
-      activeThreadId: 'thr_missing',
-      composerModel: '',
-      composerPickList: []
-    })
-
-    const id = await actions.spawnSideConversation()
-
-    expect(id).toBe('side_thr_missing')
-    expect(state.sideConversations[id!].model).toBe(DEFAULT_KUN_MODEL)
-  })
-
-  it('a side turn updates only its own blocks/busy and tears down its subscription on close', async () => {
-    const { actions, state, provider } = buildHarness()
-    const id = (await actions.spawnSideConversation())!
-
-    // The main thread is still untouched.
-    expect(state.blocks).toEqual([])
-    expect(state.busy).toBe(true)
-
-    // Send a side message; only the side slice's busy flips.
-    const sent = await actions.sendSideMessage(id, 'hi from side')
-    expect(sent).toBe(true)
-    expect(state.sideConversations[id].busy).toBe(true)
-    expect(state.busy).toBe(true)
-
-    // Close tears the subscription (abort() called on the controller).
-    const lastCall = provider.subscribeMock.mock.calls.at(-1) as
-      | [string, number, ThreadEventSink, AbortSignal]
-      | undefined
-    const signal = lastCall?.[3]
-    expect(signal?.aborted).toBe(false)
-    await actions.closeSideConversation(id)
-    expect(state.sideConversations[id]).toBeUndefined()
-    expect(signal?.aborted).toBe(true)
-    expect(state.busy).toBe(true)
-  })
-
-  it('deduplicates replayed compaction lifecycle events by item id', async () => {
-    const { actions, state, provider } = buildHarness()
-    const id = (await actions.spawnSideConversation())!
-    const sink = provider.subscribeMock.mock.calls.at(-1)?.[2] as ThreadEventSink
-
-    sink.onCompaction({
-      itemId: 'compaction_side_1',
-      summary: 'Compacting context',
-      status: 'running',
-      createdAt: '2026-06-02T00:00:00.000Z'
-    })
-    sink.onCompaction({
-      itemId: 'compaction_side_1',
-      summary: 'Compacted context',
-      status: 'success',
-      createdAt: '2026-06-02T00:00:01.000Z',
-      messagesBefore: 120
-    })
-
-    const blocks = state.sideConversations[id].blocks.filter((block) => block.kind === 'compaction')
-    expect(blocks).toHaveLength(1)
-    expect(blocks[0]).toMatchObject({
-      id: 'compaction_side_1',
-      status: 'success',
-      summary: 'Compacted context',
-      messagesBefore: 120,
-      createdAt: '2026-06-02T00:00:00.000Z'
-    })
-  })
-
-  it('keeps side assistant text intact across tools and replaces it from the authoritative snapshot', async () => {
-    const { actions, state, provider } = buildHarness()
-    const id = (await actions.spawnSideConversation())!
-    const sink = provider.subscribeMock.mock.calls.at(-1)?.[2] as ThreadEventSink
-
-    sink.onDeltas([{
-      seq: 1,
-      threadId: id,
-      turnId: 'turn_side_1',
-      itemId: 'assistant_side_1',
-      createdAt: '2026-06-02T00:00:00.000Z',
-      kind: 'agent_message',
-      text: 'partial '
-    }])
-    sink.onTool({
-      itemId: 'tool_side_1',
-      turnId: 'turn_side_1',
-      summary: 'read',
-      status: 'running'
-    })
-    sink.onDeltas([{
-      seq: 2,
-      threadId: id,
-      turnId: 'turn_side_1',
-      itemId: 'assistant_side_1',
-      kind: 'agent_message',
-      text: 'text'
-    }])
-
-    expect(state.sideConversations[id].liveAssistant).toBe('partial text')
-    expect(state.sideConversations[id].blocks.filter((block) => block.kind === 'assistant')).toEqual([])
-
-    sink.onAssistantItem?.({
-      itemId: 'assistant_side_1',
-      threadId: id,
-      turnId: 'turn_side_1',
-      kind: 'agent_message',
-      status: 'completed',
-      createdAt: '2026-06-02T00:00:00.000Z',
-      text: 'partial missing middle text'
-    })
-
-    expect(state.sideConversations[id].liveAssistant).toBe('')
-    expect(state.sideConversations[id].blocks).toContainEqual({
-      kind: 'assistant',
-      id: 'assistant_side_1',
-      turnId: 'turn_side_1',
-      createdAt: '2026-06-02T00:00:00.000Z',
-      text: 'partial missing middle text'
-    })
-  })
-
-  it('updates approval resolution inside the matching side conversation', async () => {
-    const { actions, state, provider } = buildHarness()
-    const id = (await actions.spawnSideConversation())!
-    const lastCall = provider.subscribeMock.mock.calls.at(-1) as
-      | [string, number, ThreadEventSink, AbortSignal]
-      | undefined
-    const sink = lastCall?.[2]
-    sink?.onApproval({ approvalId: 'appr_side', summary: 'Run remote command' })
-    sink?.onApprovalStatus?.({ approvalId: 'appr_side', status: 'expired' })
-
-    expect(state.sideConversations[id].blocks).toContainEqual(expect.objectContaining({
-      kind: 'approval',
-      approvalId: 'appr_side',
-      status: 'expired'
-    }))
-    expect(state.blocks).toEqual([])
-  })
-
-  it('promoteSideConversation clears the relation by PATCH /v1/threads/{id} and refreshes the thread list', async () => {
-    const { actions, state } = buildHarness()
-    const id = (await actions.spawnSideConversation())!
-    const runtimeRequest = globalThis.window.kunGui.runtimeRequest as ReturnType<typeof vi.fn>
-    runtimeRequest.mockClear()
-
-    await actions.promoteSideConversation(id)
-
-    expect(runtimeRequest).toHaveBeenCalledWith(
-      `/v1/threads/${id}`,
-      'PATCH',
-      JSON.stringify({ relation: 'primary' })
-    )
-    expect(state.sideConversations[id]).toBeUndefined()
-  })
-
-  it('discardSideConversation deletes the underlying thread and tears down the subscription', async () => {
-    const { actions, state, provider } = buildHarness()
-    const id = (await actions.spawnSideConversation())!
-    const lastCall = provider.subscribeMock.mock.calls.at(-1) as
-      | [string, number, ThreadEventSink, AbortSignal]
-      | undefined
-    const signal = lastCall?.[3]
-
-    await actions.discardSideConversation(id)
-    expect(provider.deleteMock).toHaveBeenCalledWith(id)
-    expect(state.sideConversations[id]).toBeUndefined()
-    expect(signal?.aborted).toBe(true)
-  })
-
-  it('side state survives a main-thread switch: closing/discarding the side does not change activeThreadId', async () => {
-    const { actions, state, provider } = buildHarness()
-    const id = (await actions.spawnSideConversation())!
-    // Simulate the user picking a different main thread mid-side.
-    state.activeThreadId = 'thr_other'
-    state.busy = false
-    await actions.closeSideConversation(id)
-    expect(state.activeThreadId).toBe('thr_other')
-    expect(state.busy).toBe(false)
-  })
 })

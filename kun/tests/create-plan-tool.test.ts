@@ -79,7 +79,7 @@ describe('create_plan tool: advertisement', () => {
     expect(tools.map((t) => t.name)).toContain(CREATE_PLAN_TOOL_NAME)
   })
 
-  it('advertises read-only investigation plus Markdown editing in plan mode', async () => {
+  it('advertises only read-only investigation plus plan controls in plan mode', async () => {
     const host = new LocalToolHost({ tools: buildDefaultLocalTools() })
     const tools = await host.listTools(
       buildContext({
@@ -91,8 +91,6 @@ describe('create_plan tool: advertisement', () => {
 
     expect(names).toEqual([
       'read',
-      'edit',
-      'write',
       'grep',
       'glob',
       'ls',
@@ -103,7 +101,7 @@ describe('create_plan tool: advertisement', () => {
       'request_user_input',
       CREATE_PLAN_TOOL_NAME
     ])
-    expect(names).not.toEqual(expect.arrayContaining(['bash', 'verify_changes', 'echo']))
+    expect(names).not.toEqual(expect.arrayContaining(['write', 'edit', 'bash', 'verify_changes', 'echo']))
   })
 
   it('keeps the plan-mode tool catalog stable when no user-input gate is wired', async () => {
@@ -113,8 +111,6 @@ describe('create_plan tool: advertisement', () => {
 
     expect(names).toEqual([
       'read',
-      'edit',
-      'write',
       'grep',
       'glob',
       'ls',
@@ -325,33 +321,30 @@ describe('create_plan tool: execution safety', () => {
     expect(result.isError).toBe(true)
   })
 
-  it('allows Markdown writes and rejects non-Markdown file targets during plan mode', async () => {
+  it('rejects Markdown and source writes during plan mode', async () => {
     const workspace = await mkdtemp(join(tmpdir(), 'kun-plan-markdown-write-'))
     const host = new LocalToolHost({ tools: buildDefaultLocalTools() })
     const context = buildContext({ threadMode: 'plan', workspace })
 
     try {
-      const allowed = await host.execute(
+      await expect(host.execute(
         {
           callId: 'call_markdown',
           toolName: 'write',
           arguments: { path: 'notes.md', content: '# Notes\n' }
         },
         context
-      )
-      const blocked = await host.execute(
+      )).rejects.toThrow(/not advertised by active tool policy/)
+      await expect(host.execute(
         {
           callId: 'call_source',
           toolName: 'write',
           arguments: { path: 'src/app.ts', content: 'export const changed = true\n' }
         },
         context
-      )
+      )).rejects.toThrow(/not advertised by active tool policy/)
 
-      expect(allowed.item).toMatchObject({ kind: 'tool_result', isError: false })
-      expect(await readFile(join(workspace, 'notes.md'), 'utf8')).toBe('# Notes\n')
-      expect(blocked.item).toMatchObject({ kind: 'tool_result', isError: true })
-      expect(JSON.stringify(blocked.item)).toContain('plan_mode_write_blocked')
+      await expect(readFile(join(workspace, 'notes.md'), 'utf8')).rejects.toThrow()
       await expect(readFile(join(workspace, 'src/app.ts'), 'utf8')).rejects.toThrow()
       await expect(
         host.execute(
@@ -374,7 +367,7 @@ describe('create_plan tool: execution safety', () => {
       await writeFile(join(workspace, 'source.ts'), 'export const safe = true\n', 'utf8')
       await symlink('source.ts', join(workspace, 'notes.md'))
       const host = new LocalToolHost({ tools: buildDefaultLocalTools() })
-      const result = await host.execute(
+      await expect(host.execute(
         {
           callId: 'call_symlink',
           toolName: 'edit',
@@ -385,10 +378,8 @@ describe('create_plan tool: execution safety', () => {
           }
         },
         buildContext({ threadMode: 'plan', workspace })
-      )
+      )).rejects.toThrow(/not advertised by active tool policy/)
 
-      expect(result.item).toMatchObject({ kind: 'tool_result', isError: true })
-      expect(JSON.stringify(result.item)).toContain('plan_mode_write_blocked')
       expect(await readFile(join(workspace, 'source.ts'), 'utf8')).toContain('safe = true')
     } finally {
       await rm(workspace, { recursive: true, force: true })

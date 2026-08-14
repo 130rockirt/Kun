@@ -14,6 +14,7 @@ import { DiffView } from '../DiffView'
 import { formatDuration } from './message-timeline-tools'
 import type { PlanBuildOrchestration } from '../../plan/plan-build'
 import { PlanBuildActions } from '../plan/PlanBuildActions'
+import { WritePromptOfficeDocumentCard } from './WritePromptOfficeDocumentCard'
 
 /**
  * Inline "Review Plan" card rendered under a turn whose `create_plan`
@@ -22,6 +23,7 @@ import { PlanBuildActions } from '../plan/PlanBuildActions'
  */
 export function ReviewPlanCard({
   title,
+  planId,
   relativePath,
   busy,
   graphEnabled,
@@ -29,6 +31,7 @@ export function ReviewPlanCard({
   onBuild
 }: {
   title: string
+  planId?: string
   relativePath: string
   busy: boolean
   graphEnabled: boolean
@@ -40,30 +43,36 @@ export function ReviewPlanCard({
     <div
       data-review-plan-card
       title={relativePath}
-      className="flex min-h-[64px] w-full flex-wrap items-center gap-3 rounded-[18px] border border-ds-border-muted bg-white/[0.78] px-4 py-3 shadow-[0_12px_34px_rgba(20,47,95,0.07)] backdrop-blur-xl dark:border-white/[0.09] dark:bg-white/[0.045]"
+      className="flex w-full flex-col gap-5 rounded-[26px] border border-ds-border-muted/80 bg-ds-card/95 px-6 py-5 shadow-[0_16px_40px_rgba(20,47,95,0.055)] dark:border-white/[0.08] dark:bg-ds-card/90"
     >
-      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-accent/20 bg-accent/10 text-accent">
-        <ListTodo className="h-5 w-5" strokeWidth={1.9} />
+      <div className="flex min-w-0 flex-wrap items-center gap-4">
+        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-accent-soft/80 text-accent">
+          <ListTodo className="h-5 w-5" strokeWidth={1.8} />
+        </div>
+        <div className="min-w-[220px] flex-1">
+          <div className="text-[12.5px] font-medium text-accent">
+            {t('reviewPlanCardStatus')}
+          </div>
+          <div className="mt-0.5 break-words text-[15px] font-medium text-ds-ink">{title}</div>
+          <div className="mt-0.5 text-[12px] text-ds-muted">{t('reviewPlanCardHint')}</div>
+        </div>
+        {onOpen ? (
+          <button
+            type="button"
+            onClick={onOpen}
+            className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full bg-ds-card-muted/70 px-3.5 text-[12.5px] font-medium text-ds-ink transition hover:bg-ds-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
+          >
+            <FileEdit className="h-3.5 w-3.5" strokeWidth={1.8} />
+            {t('reviewPlanOpen')}
+          </button>
+        ) : null}
       </div>
-      <div className="min-w-0 flex-1">
-        <div className="truncate text-[14.5px] font-semibold text-ds-ink">{title}</div>
-        <div className="mt-0.5 truncate text-[12.5px] text-ds-muted">{t('reviewPlanCardHint')}</div>
-      </div>
-      {onOpen ? (
-        <button
-          type="button"
-          onClick={onOpen}
-          className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border border-ds-border bg-ds-card px-3 text-[13px] font-medium text-ds-ink transition hover:bg-ds-hover"
-        >
-          <FileEdit className="h-3.5 w-3.5" strokeWidth={1.9} />
-          {t('reviewPlanOpen')}
-        </button>
-      ) : null}
       {onBuild ? (
         <PlanBuildActions
           disabled={busy}
           graphEnabled={graphEnabled}
           variant="card"
+          planId={planId}
           onBuild={onBuild}
         />
       ) : null}
@@ -395,10 +404,10 @@ export function WorkMetaRow({
 }): ReactElement {
   const { t } = useTranslation('common')
 
-  const mainLabel = typeof durationMs === 'number'
-    ? `${t('processed')} ${formatDuration(durationMs)}`
-    : processing
-      ? t('processing')
+  const mainLabel = processing
+    ? `${t('processing')}${typeof durationMs === 'number' ? ` · ${formatDuration(durationMs)}` : ''}`
+    : typeof durationMs === 'number'
+      ? `${t('processed')} ${formatDuration(durationMs)}`
       : t('processSteps', { count: stepCount })
 
   const showThoughtSuffix =
@@ -436,7 +445,7 @@ export function WorkMetaRow({
 
   if (!collapsible) {
     return (
-      <div className="flex w-full max-w-full items-center gap-1.5 border-b border-ds-border-muted/70 py-2 text-left text-[15px] font-medium text-ds-muted">
+      <div data-work-meta-row="true" className="flex w-full max-w-full items-center gap-1.5 border-b border-ds-border-muted/70 py-2 text-left text-[15px] font-medium text-ds-muted">
         {content}
       </div>
     )
@@ -445,6 +454,7 @@ export function WorkMetaRow({
   return (
     <button
       type="button"
+      data-work-meta-row="true"
       onClick={onToggle}
       aria-expanded={expanded}
       className="group flex w-full max-w-full items-center gap-1.5 border-b border-ds-border-muted/70 py-2 text-left text-[15px] font-medium text-ds-muted transition hover:opacity-85"
@@ -490,6 +500,9 @@ function writePromptMetaSummary(
   }
   if (display.retrieval && display.retrieval.snippets.length > 0) {
     parts.push(t('writePromptRetrievalCount', { count: display.retrieval.snippets.length }))
+  }
+  if (display.officeDocument) {
+    parts.push(t('writePromptOfficeContext'))
   }
   if (display.context) {
     parts.push(t('writePromptContextShort'))
@@ -551,6 +564,10 @@ export function WritePromptMetaDisclosure({
             <WritePromptQuoteCard key={`${quote.sourceTitle}-${index}`} quote={quote} />
           ))}
 
+          {display.officeDocument ? (
+            <WritePromptOfficeDocumentCard document={display.officeDocument} />
+          ) : null}
+
           {display.retrieval && display.retrieval.snippets.length > 0 ? (
             <WritePromptRetrievalCard retrieval={display.retrieval} />
           ) : null}
@@ -572,7 +589,11 @@ function WritePromptQuoteCard({ quote }: { quote: WritePromptDisplayQuote }): Re
         ? t('writePromptReferencePage', { page: quote.pageStart })
         : t('writePromptReferencePages', { start: quote.pageStart, end: quote.pageEnd })
       : null
-  const rangeLabel = lineLabel ?? pageLabel
+  const slideLabel = quote.slide != null ? `Slide ${quote.slide}` : null
+  const cellLabel = quote.sheetName && quote.cellRange
+    ? `${quote.sheetName}!${quote.cellRange}`
+    : null
+  const rangeLabel = lineLabel ?? pageLabel ?? slideLabel ?? cellLabel
 
   return (
     <figure className="rounded-xl border border-accent/15 bg-accent/[0.055] px-3 py-2.5 text-left shadow-sm">

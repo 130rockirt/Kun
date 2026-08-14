@@ -1,18 +1,19 @@
 import { useEffect, useMemo, useState, type ReactElement } from 'react'
-import { Check, TriangleAlert } from 'lucide-react'
+import { Check, Square, TriangleAlert } from 'lucide-react'
 import { AgentKun } from './AgentKun'
 
 export type SubagentLivenessStatus =
   | 'queued'
   | 'running'
   | 'done'
+  | 'stopped'
   | 'failed'
   | 'awaiting-permission'
 
 const REDUCED_MOTION_QUERY = '(prefers-reduced-motion: reduce)'
 
 export function isTerminalSubagentStatus(status: SubagentLivenessStatus): boolean {
-  return status === 'done' || status === 'failed'
+  return status === 'done' || status === 'stopped' || status === 'failed'
 }
 
 export function useSubagentReducedMotion(): boolean {
@@ -65,6 +66,7 @@ const DISC_BG: Record<SubagentLivenessStatus, string> = {
   queued: 'radial-gradient(circle at 50% 36%,#fff 0%,#eef4fb 80%)',
   running: 'radial-gradient(circle at 50% 36%,#fff 0%,#e3eefb 82%)',
   done: 'radial-gradient(circle at 50% 36%,#fff 0%,#e4f5ee 82%)',
+  stopped: 'radial-gradient(circle at 50% 36%,#fff 0%,#edf0f4 82%)',
   failed: 'radial-gradient(circle at 50% 36%,#fff 0%,#fbe6e4 82%)',
   'awaiting-permission': 'radial-gradient(circle at 50% 36%,#fff 0%,#fbf0df 82%)'
 }
@@ -73,6 +75,7 @@ const DISC_RING: Record<SubagentLivenessStatus, string> = {
   queued: 'inset 0 0 0 1px rgba(188,214,245,0.7)',
   running: 'inset 0 0 0 1px var(--ds-accent, #3b82d8)',
   done: 'inset 0 0 0 1px #8fd9bf',
+  stopped: 'inset 0 0 0 1px #b7bec8',
   failed: 'inset 0 0 0 1px #efa8a2',
   'awaiting-permission': 'inset 0 0 0 1px #e8c486'
 }
@@ -90,6 +93,13 @@ function LivenessDot({ status }: { status: SubagentLivenessStatus }): ReactEleme
     return (
       <span className={`${ring} bg-red-500 dark:bg-red-400`}>
         <TriangleAlert className="h-2 w-2 text-white" strokeWidth={3} />
+      </span>
+    )
+  }
+  if (status === 'stopped') {
+    return (
+      <span className={`${ring} bg-slate-500 dark:bg-slate-400`}>
+        <Square className="h-1.5 w-1.5 fill-white text-white" strokeWidth={2.5} />
       </span>
     )
   }
@@ -116,7 +126,7 @@ export function SubagentLiveAvatar({
   const size = compact ? 'h-9 w-9' : 'h-11 w-11'
   const inner = compact ? 'h-[31px] w-[31px]' : 'h-9 w-9'
   const background =
-    hue !== null && status !== 'failed' && status !== 'done'
+    hue !== null && !isTerminalSubagentStatus(status)
       ? `radial-gradient(circle at 50% 36%,#fff 0%,hsl(${hue} 60% 94%) 82%)`
       : DISC_BG[status]
   return (
@@ -163,6 +173,13 @@ export function SubagentLivenessLane({
     return (
       <div className={base} aria-hidden>
         <span className="absolute inset-y-0 left-0 w-[62%] bg-red-500" />
+      </div>
+    )
+  }
+  if (status === 'stopped') {
+    return (
+      <div className={base} aria-hidden>
+        <span className="absolute inset-0 bg-slate-400 dark:bg-slate-500" />
       </div>
     )
   }

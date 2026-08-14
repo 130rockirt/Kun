@@ -1,10 +1,13 @@
 import {
   mergeComposerPickList,
   readStoredComposerFastMode,
+  readStoredComposerPersonaId,
   readStoredComposerMode
 } from './chat-store-helpers'
 import { defaultConversationWorkspaceRoot } from '../lib/workspace-path'
 import { readProtectedSurfaceRestore } from '../extensions/protected-surface-session'
+
+import { readUnreadCompletions } from './unread-completions'
 
 export function createInitialChatStoreState(workingDirectoryLabel: string) {
   const protectedSurfaceRestore = readProtectedSurfaceRestore()
@@ -22,10 +25,17 @@ export function createInitialChatStoreState(workingDirectoryLabel: string) {
     runtimeStatus: null,
     codeWorkspaceRoots: [],
     threads: [],
+    threadListStatus: 'idle' as const,
+    threadListError: null,
+    threadListCursorByWorkspace: {},
+    knowledgeBaseStatuses: {},
     threadSearch: '',
     showArchivedThreads: false,
     activeThreadId: null,
     threadLoadingId: null,
+    threadHistoryCursor: null,
+    threadHasMoreHistory: false,
+    threadHistoryLoading: false,
     lastCodeThreadId: null,
     activeThreadRelation: null,
     activeThreadParentId: null,
@@ -59,13 +69,16 @@ export function createInitialChatStoreState(workingDirectoryLabel: string) {
     composerReasoningEffort: 'max' as const,
     composerFastMode: readStoredComposerFastMode(),
     composerAgentId: '',
+    composerPersonaId: readStoredComposerPersonaId(),
+    composerPersonaEnabled: true,
     composerPickList: mergeComposerPickList(false, []),
     composerModelGroups: [],
     disabledSkillIds: [],
+    codeAgentPresets: [],
     queuedMessages: [],
     extensionComposerContexts: [],
     watchTurnCompletion: {},
-    unreadThreadIds: {},
+    unreadThreadIds: readUnreadCompletions(),
     sideConversations: {},
     sidePanel: { open: false, activeSideId: null },
     clawChannels: [],

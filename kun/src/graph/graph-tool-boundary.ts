@@ -1,8 +1,8 @@
 import type { ToolHostContext, ToolProviderKind } from '../ports/tool-host.js'
 
-/** Keep as literals to avoid a cycle with explore-agent-tool-provider → capability-registry. */
-const EXPLORE_AGENT_TOOL_NAME = 'explore_agent'
-const EXPLORE_AGENT_PROVIDER_ID = 'explore-agent'
+/** Keep as literals to avoid a cycle with fast-context-tool-provider → capability-registry. */
+const FAST_CONTEXT_TOOL_NAME = 'fast_context'
+const FAST_CONTEXT_PROVIDER_ID = 'fast-context'
 
 export const GRAPH_LEAD_TOOL_NAMES = [
   'graph_define_plan',
@@ -27,7 +27,7 @@ export const GRAPH_WORKER_REPORT_TOOL_NAME = 'report_to_parent' as const
  * Ordinary orchestration surfaces conflict with host-owned Graph scheduling.
  * Provider-kind filtering covers current and future delegation tools; exact
  * names cover legacy DAG state and built-in wrappers that can spawn a child.
- * Lab `explore_agent` is exempt from Lead listing (read-only investigation)
+ * Lab `fast_context` is exempt from Lead listing (read-only investigation)
  * but is still stripped from Worker assignment snapshots below.
  */
 export const GRAPH_INCOMPATIBLE_TOOL_NAMES = [
@@ -50,12 +50,12 @@ export function isGraphLeadContext(
     context?.messageSource === 'graph_runtime'
 }
 
-function isExploreAgentTool(input: {
+function isFastContextTool(input: {
   toolName: string
   providerId: string
 }): boolean {
-  return input.toolName === EXPLORE_AGENT_TOOL_NAME ||
-    input.providerId === EXPLORE_AGENT_PROVIDER_ID
+  return input.toolName === FAST_CONTEXT_TOOL_NAME ||
+    input.providerId === FAST_CONTEXT_PROVIDER_ID
 }
 
 export function isToolAllowedInOrchestration(
@@ -67,9 +67,9 @@ export function isToolAllowedInOrchestration(
   context: Pick<ToolHostContext, 'orchestration' | 'messageSource'> | undefined
 ): boolean {
   if (!isGraphLeadContext(context)) return true
-  // Read-only Lab explore stays available on Graph Lead turns so planning can
+  // Read-only Lab fast_context stays available on Graph Lead turns so planning can
   // gather repository facts without ordinary delegate_task / child fan-out.
-  if (isExploreAgentTool(input)) return true
+  if (isFastContextTool(input)) return true
   if (input.providerKind === 'delegation' || input.providerId === 'delegation') {
     return false
   }
@@ -83,7 +83,7 @@ export function isToolAllowedInOrchestration(
  */
 export function graphParentAuthorityToolNames(toolNames: readonly string[]): string[] {
   return [...new Set(toolNames.filter((name) =>
-    name !== EXPLORE_AGENT_TOOL_NAME &&
+    name !== FAST_CONTEXT_TOOL_NAME &&
     !INCOMPATIBLE_TOOL_NAMES.has(name) &&
     !LEAD_TOOL_NAMES.has(name) &&
     !WORKER_TOOL_NAMES.has(name) &&

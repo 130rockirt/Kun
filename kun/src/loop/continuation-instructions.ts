@@ -10,6 +10,43 @@ export function goalContinuationInstruction(goal: ThreadGoal | undefined): strin
 }
 
 /**
+ * Model-visible checkpoint text written when a turn is interrupted by a
+ * runtime restart or host shutdown. It lets an auto-resumed turn pick up
+ * where the work stopped instead of asking the user to repeat the request.
+ * The summary is deliberately compact (bounded parts) so it stays cheap in
+ * the cache prefix and survives compaction like goal context.
+ */
+export function buildInterruptionNoteText(input: {
+  /** First non-empty user request of the interrupted turn (fallback: turn prompt). */
+  userRequest: string
+  /** Last non-empty assistant text before the interruption. */
+  lastAssistantText?: string
+  /** Recently completed tool calls: toolName + bounded summary/arguments. */
+  recentToolCalls: Array<{ toolName: string; detail: string }>
+}): string {
+  const parts = [
+    'The task in this conversation was interrupted before it was finished (the runtime stopped or restarted).',
+    'Continue the original request below instead of asking the user to repeat it.',
+    'Review the conversation history, verify the current state, and pick up where the work left off.',
+    'If the requested end state is already achieved, verify it against the actual state and report completion.',
+    '',
+    '<original_request>',
+    escapeXmlText(input.userRequest),
+    '</original_request>'
+  ]
+  if (input.lastAssistantText?.trim()) {
+    parts.push('', 'Latest progress before the interruption:', '', escapeXmlText(input.lastAssistantText.trim()))
+  }
+  if (input.recentToolCalls.length > 0) {
+    parts.push('', 'Recently completed tool work:')
+    for (const call of input.recentToolCalls.slice(0, 8)) {
+      parts.push(`- ${escapeXmlText(call.toolName)}: ${escapeXmlText(call.detail)}`)
+    }
+  }
+  return parts.join('\n')
+}
+
+/**
  * Stable model history for an active goal. Runtime token/time accounting is
  * intentionally absent: it changes on every model step and belongs to the
  * host's budget gate, not a cache-sensitive prompt snapshot.
@@ -176,7 +213,7 @@ export function postToolFailureRecoveryInstruction(recoveryStep: number): string
   if (recoveryStep >= POST_TOOL_FAILURE_FINAL_ANSWER_RECOVERY_STEP) {
     return [
       'Tool failure final-answer recovery:',
-      '- A tool call failed earlier in this turn, and the previous responses only announced next steps without acting.',
+      '- A tool call failed earlier in this turn, and recovery has not produced a successful ordinary tool result.',
       '- Tool calling is disabled for this recovery request.',
       '- Inspect the completed tool results and provide a clear, non-empty final answer now.',
       '- Summarize what succeeded, what failed, and what the user needs to do next.'
@@ -184,7 +221,7 @@ export function postToolFailureRecoveryInstruction(recoveryStep: number): string
   }
   return [
     'Tool failure recovery:',
-    '- A tool call failed earlier in this turn, and the previous response ended with only a plan or progress announcement.',
+    '- A tool call failed earlier in this turn, and the task still has no successful ordinary tool result.',
     '- If the task is genuinely blocked or needs the user, state that clearly as your final answer now.',
     '- Otherwise inspect the failed tool result and either call an available tool to make concrete progress or provide a complete final answer.',
     '- Do not end with another status update or "next I will..." announcement.'
@@ -216,6 +253,8 @@ const POST_TOOL_FAILURE_QUESTION_OR_BLOCKER_PATTERNS: RegExp[] = [
 const POST_TOOL_FAILURE_COMMITMENT_PATTERNS: RegExp[] = [
   /接下来|下一步/,
   /我先|让我|我会|我将|我准备|我马上|稍后|接着|随后|再去/,
+  /我来(?:调查|排查|定位|检查|搜索|查找|读取|分析|追踪|梳理|确认|验证|看(?:看|一下)?)/,
+  /(?:^|[。！？；;\n])\s*先(?:调查|排查|定位|检查|搜索|查找|读取|分析|追踪|梳理|确认|验证|看(?:看|一下)?)/,
   /马上(开始|尝试|处理|检查|去)/,
   /继续(尝试|检查|排查|定位|处理|推进|完成|验证|搜索|调查|分析|跟进|确认|看)/,
   /i will|i'll|i am going to|i'm going to/i,

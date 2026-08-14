@@ -527,6 +527,43 @@ describe('Graph HTTP routes', () => {
     expect((testRuntime.graph as NonNullable<ServerRuntime['graph']>).artifacts.readRange)
       .toHaveBeenCalledWith('art_abcdef', { offset: 0, length: 3 })
 
+    const graph = testRuntime.graph as NonNullable<ServerRuntime['graph']>
+    expect(graph.store.events).not.toHaveBeenCalled()
+    const externalizedReference = {
+      version: 1 as const,
+      artifactId: 'art_1234567890abcdef',
+      contentHash: '1'.repeat(64),
+      mimeType: 'application/vnd.kun.graph-event+json',
+      byteLength: 3,
+      summary: 'externalized graph event',
+      visibility: 'run' as const,
+      retention: 'thread' as const,
+      createdAt: '2026-07-26T00:00:00.000Z'
+    }
+    vi.mocked(graph.control.get).mockResolvedValueOnce({
+      id: 'run_externalized', lastEventSeq: 1, supervisionObligations: [], artifacts: []
+    } as never)
+    vi.mocked(graph.store.events).mockResolvedValueOnce([{
+      version: 1, eventId: 'event_externalized', runId: 'run_externalized',
+      threadId: 'thread_1', graphSeq: 1, graphRevision: 1,
+      timestamp: '2026-07-26T00:00:00.000Z',
+      event: { type: 'payload_externalized', payload: {
+        originalType: 'run_created', summary: 'externalized', artifact: externalizedReference
+      } }
+    }])
+    vi.mocked(graph.artifacts.stat).mockResolvedValueOnce({
+      id: externalizedReference.artifactId, byteSize: 3, lineCount: 1,
+      mimeType: externalizedReference.mimeType, createdAt: externalizedReference.createdAt
+    })
+    vi.mocked(graph.artifacts.readRange).mockResolvedValueOnce('xyz')
+    const externalized = await dispatch(testRuntime, 'GET',
+      `/v1/graphs/run_externalized/artifacts/${externalizedReference.artifactId}`,
+      undefined, headers)
+    expect(externalized.status).toBe(200)
+    expect(JSON.parse(externalized.body)).toMatchObject({
+      reference: { artifactId: externalizedReference.artifactId }, content: 'xyz'
+    })
+
     const invalidRange = await dispatch(
       testRuntime,
       'GET',
@@ -545,7 +582,7 @@ describe('Graph HTTP routes', () => {
     )
     expect(missing.status).toBe(404)
     expect((testRuntime.graph as NonNullable<ServerRuntime['graph']>).artifacts.stat)
-      .toHaveBeenCalledTimes(1)
+      .toHaveBeenCalledTimes(2)
   })
 
   it('verifies canonical project identity and attributes lifecycle governance to the user', async () => {

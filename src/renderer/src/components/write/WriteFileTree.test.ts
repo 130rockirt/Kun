@@ -21,6 +21,7 @@ const entry: WorkspaceEntry = {
   type: 'file',
   ext: '.md'
 }
+const noop = (): void => undefined
 
 describe('WriteFileTree reveal action', () => {
   let renderer: ReactTestRenderer
@@ -65,5 +66,53 @@ describe('WriteFileTree reveal action', () => {
 
     expect(stopPropagation).toHaveBeenCalled()
     expect(onRevealEntry).toHaveBeenCalledWith(entry)
+  })
+
+  it('shows supported code files and opens them from the tree', async () => {
+    const codeEntry: WorkspaceEntry = {
+      name: 'main.ts',
+      path: '/repo/src/main.ts',
+      type: 'file',
+      ext: '.ts'
+    }
+    const archiveEntry: WorkspaceEntry = {
+      name: 'bundle.zip',
+      path: '/repo/bundle.zip',
+      type: 'file',
+      ext: '.zip'
+    }
+    const onSelectFile = vi.fn()
+
+    await act(async () => {
+      renderer.update(createElement(WriteFileTree, {
+        rootDirectory: '/repo',
+        entriesByDir: { '/repo': [codeEntry, archiveEntry] },
+        expandedDirs: new Set<string>(),
+        loadingDirs: {},
+        selectedFilePath: null,
+        error: null,
+        onToggleDir: noop,
+        onSelectFile,
+        onCreateFile: noop,
+        onCreateDirectory: noop,
+        onRenameEntry: noop,
+        onDeleteEntry: noop,
+        onRevealEntry,
+        onRefresh: noop,
+        showHeader: false,
+        showRootLabel: false
+      }))
+    })
+
+    const codeRows = renderer.root.findAll((node) =>
+      node.type === 'div' && node.props.title === 'src/main.ts'
+    )
+    const archiveRows = renderer.root.findAll((node) =>
+      node.type === 'div' && node.props.title === 'bundle.zip'
+    )
+    expect(codeRows).toHaveLength(1)
+    expect(archiveRows).toHaveLength(0)
+    await act(async () => codeRows[0].findAllByType('button')[0].props.onClick())
+    expect(onSelectFile).toHaveBeenCalledWith(codeEntry.path)
   })
 })

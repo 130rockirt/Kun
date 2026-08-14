@@ -23,6 +23,14 @@ import {
   workbenchContextForRoute
 } from './use-contributions'
 import { useActiveExtensionWorkspaceRoot } from './active-extension-workspace'
+import { normalizeWorkbenchRoute } from '../components/workbench/workbench-route'
+import {
+  useWorkbenchTaskIntent,
+  workbenchTaskIntentScope,
+  hasWorkbenchTaskIntent
+} from '../components/workbench/workbench-task-intent'
+import { normalizeWorkspaceRoot } from '../lib/workspace-path'
+import { isDesignThreadId, readDesignThreadRegistry } from '../design/design-thread-registry'
 
 /**
  * App-wide contribution discovery and Direct DOM lifecycle. Keeping this
@@ -32,8 +40,37 @@ import { useActiveExtensionWorkspaceRoot } from './active-extension-workspace'
  */
 export function ExtensionWorkbenchLifecycle(): ReactElement {
   const { i18n } = useTranslation()
-  const route = useChatStore((state) => state.route)
+  const route = useChatStore((state) => normalizeWorkbenchRoute(state.route) as typeof state.route)
+  const activeThreadId = useChatStore((state) => state.activeThreadId)
+  const activeThread = useChatStore((state) =>
+    state.threads.find((thread) => thread.id === state.activeThreadId) ?? null)
+  const runningTurnMeta = useChatStore((state) => {
+    if (!state.busy) return undefined
+    const user = state.blocks.find((block) => block.kind === 'user' && (
+      block.id === state.currentTurnUserId || block.turnId === state.currentTurnId
+    ))
+    return user?.kind === 'user' ? user.meta : undefined
+  })
   const extensionWorkspaceRoot = useActiveExtensionWorkspaceRoot()
+  const intentWorkspaceRoot = normalizeWorkspaceRoot(
+    activeThread?.workspace || extensionWorkspaceRoot
+  )
+  const intentScope = workbenchTaskIntentScope(activeThreadId, intentWorkspaceRoot)
+  const activeIntent = useWorkbenchTaskIntent(
+    intentScope,
+    intentWorkspaceRoot
+  )
+  const legacyDesignSurface = activeThread && (
+    activeThread.agentSurface === 'design' ||
+    isDesignThreadId(activeThread.id, readDesignThreadRegistry())
+  )
+  const runningSurface = runningTurnMeta?.agentSurface === 'design' ||
+    runningTurnMeta?.designProfile ? 'design' : runningTurnMeta?.agentSurface === 'code' ? 'code' : null
+  const activeTaskSurface = legacyDesignSurface
+    ? 'design'
+    : runningSurface ?? (hasWorkbenchTaskIntent(intentScope)
+        ? activeIntent.surface
+        : activeThread?.designProfile ? 'design' : 'code')
   const runtimeConnection = useChatStore((state) => state.runtimeConnection)
   const protectedSurface = useChatStore((state) => protectedSurfaceForWorkbench({
     route: state.route,
@@ -42,8 +79,8 @@ export function ExtensionWorkbenchLifecycle(): ReactElement {
   }))
   const loadComposerModels = useChatStore((state) => state.loadComposerModels)
   const context = useMemo(
-    () => workbenchContextForRoute(route, extensionWorkspaceRoot),
-    [extensionWorkspaceRoot, route]
+    () => workbenchContextForRoute(route, extensionWorkspaceRoot, {}, activeTaskSurface),
+    [activeTaskSurface, extensionWorkspaceRoot, route]
   )
   const contributionLoadState = useExtensionContributionBootstrap(
     extensionWorkspaceRoot,
@@ -69,8 +106,13 @@ export function ExtensionWorkbenchLifecycle(): ReactElement {
   const respondingNotifications = useRef(new Set<string>())
   const contentScriptSyncQueue = useRef<Promise<void>>(Promise.resolve())
   const plan = useMemo(
-    () => buildHostContentScriptPlan({ contributions: contentScripts, route, protectedSurface }),
-    [contentScripts, protectedSurface, route]
+    () => buildHostContentScriptPlan({
+      contributions: contentScripts,
+      route,
+      taskSurface: activeTaskSurface,
+      protectedSurface
+    }),
+    [activeTaskSurface, contentScripts, protectedSurface, route]
   )
 
   useEffect(() => {

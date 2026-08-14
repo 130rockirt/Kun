@@ -21,7 +21,7 @@ describe('mergeBuiltinSubagentProfiles', () => {
     expect(general.systemPrompt).toContain('通用代理')
     expect(general.description).toBeTruthy()
     // An un-overridden builtin is untouched.
-    expect(mergeBuiltinSubagentProfiles(config).profiles.explore!.systemPrompt).toContain('探索代理')
+    expect(mergeBuiltinSubagentProfiles(config).profiles.explore!.systemPrompt).toContain('Fast Context')
   })
 
   it('keeps user-only profiles alongside every builtin', () => {

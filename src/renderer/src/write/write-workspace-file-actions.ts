@@ -1,7 +1,14 @@
 import i18n from '../i18n'
-import { isWriteImageFilePath, isWritePdfFilePath, isWriteWorkspaceFilePath } from '@shared/write-text-file'
+import {
+  isWriteCodeFilePath,
+  isWriteImageFilePath,
+  isWriteOfficeFilePath,
+  isWritePdfFilePath,
+  isWriteWorkspaceFilePath
+} from '@shared/write-text-file'
 import { writePathToFileUrl } from '@shared/write-markdown-resource'
 import type { WriteWorkspaceGet, WriteWorkspaceSet, WriteWorkspaceState } from './write-workspace-store-types'
+import type { WriteEditorGroupId } from './write-workspace-store-types'
 import { nextWriteDocumentEpoch } from './write-document-context'
 import {
   emptySelection,
@@ -11,6 +18,7 @@ import {
   initialState,
   isMissingImageIpc,
   normalizePath,
+  pathsEqual,
   readRememberedActiveFile,
   rememberActiveFile,
   writeDirnameFromPath
@@ -20,6 +28,31 @@ import {
   moveWriteFileThreads,
   saveWriteThreadRegistry
 } from './write-thread-registry'
+import {
+  createWriteDocumentSession,
+  isWriteFileTab,
+  isWriteWhiteboardTab,
+  persistWriteEditorLayout,
+  projectFocusedDocument,
+  readWriteEditorLayout,
+  writeDocumentKey,
+  writeEditorItemKey,
+  writeWhiteboardIdFromTabKey
+} from './write-editor-layout'
+import { pathsUnderRenamedEntry } from './write-editor-group-actions'
+import {
+  finishRestoredWriteLayout,
+  formatWriteFileActionError,
+  openWriteDocumentState,
+  prepareActiveWriteFileForNavigation,
+  removeFailedRestoredWriteTab
+} from './write-workspace-file-action-helpers'
+import {
+  ensureMarkdownRenameExtension,
+  projectRenamedDocumentKind,
+  renamedWritingDocumentKind,
+  withoutLoadingDirs
+} from './write-workspace-path-kinds'
 
 type WriteFileActions = Pick<
   WriteWorkspaceState,
@@ -40,47 +73,6 @@ type WriteFileActionContext = {
   cancelExternalSyncAnimation: () => void
 }
 
-function formatActionError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
-}
-
-function extensionFromWritePath(path: string): string {
-  const normalized = path.replaceAll('\\', '/')
-  const slash = normalized.lastIndexOf('/')
-  const dot = normalized.lastIndexOf('.')
-  return dot > slash ? normalized.slice(dot) : ''
-}
-
-function ensureMarkdownRenameExtension(path: string, newName: string): string {
-  if (extensionFromWritePath(newName)) return newName
-  const currentExtension = extensionFromWritePath(path)
-  return /^(?:\.md|\.markdown|\.mdx)$/i.test(currentExtension)
-    ? `${newName}${currentExtension.toLowerCase()}`
-    : newName
-}
-
-function withoutLoadingDirs(
-  loadingDirs: Record<string, boolean>,
-  keys: Array<string | undefined>
-): Record<string, boolean> {
-  const next = { ...loadingDirs }
-  for (const key of keys) {
-    if (key) delete next[key]
-  }
-  return next
-}
-
-async function prepareActiveFileForNavigation(
-  get: WriteWorkspaceGet,
-  workspaceRoot: string
-): Promise<boolean> {
-  const state = get()
-  if (!state.activeFilePath || state.activeFileKind !== 'text') return true
-  if (state.autoSaveEnabled) return get().flushSave(workspaceRoot)
-  if (state.saveStatus !== 'dirty' && state.saveStatus !== 'error') return true
-  return window.confirm(i18n.t('common:writeDiscardUnsavedChangesConfirm'))
-}
-
 export function createWriteFileActions({
   set,
   get,
@@ -88,6 +80,7 @@ export function createWriteFileActions({
 }: WriteFileActionContext): WriteFileActions {
   let navigationGeneration = 0
   const directoryRequestGenerations = new Map<string, number>()
+  const fileRequestGenerations = new Map<WriteEditorGroupId, number>()
   const nextNavigationGeneration = (): number => {
     navigationGeneration += 1
     return navigationGeneration
@@ -102,6 +95,16 @@ export function createWriteFileActions({
     const activeRoot = normalizePath(get().workspaceRoot)
     return !activeRoot || activeRoot === normalizePath(workspaceRoot)
   }
+  const nextFileRequestGeneration = (groupId: WriteEditorGroupId): number => {
+    const generation = (fileRequestGenerations.get(groupId) ?? 0) + 1
+    fileRequestGenerations.set(groupId, generation)
+    return generation
+  }
+  const fileRequestIsCurrent = (
+    groupId: WriteEditorGroupId,
+    generation: number,
+    workspaceRoot: string
+  ): boolean => fileRequestGenerations.get(groupId) === generation && workspaceIsCurrent(workspaceRoot)
 
   return {
     initializeWorkspace: async (workspaceRoot) => {
@@ -121,7 +124,7 @@ export function createWriteFileActions({
         return
       }
       if (current.workspaceRoot && current.workspaceRoot !== normalized) {
-        const canLeaveCurrentFile = await prepareActiveFileForNavigation(get, current.workspaceRoot)
+        const canLeaveCurrentFile = await prepareActiveWriteFileForNavigation(get, current.workspaceRoot)
         if (!canLeaveCurrentFile || generation !== navigationGeneration) return
       }
 
@@ -134,9 +137,58 @@ export function createWriteFileActions({
       const root = await get().loadDirectory(normalized)
       if (!root || !navigationIsCurrent(generation, normalized)) return
       set((state) => ({ rootDirectory: root, expandedDirs: new Set([...state.expandedDirs, root]) }))
+      await get().loadWhiteboards(normalized)
+      if (!navigationIsCurrent(generation, normalized)) return
+      const restoredLayout = readWriteEditorLayout(normalized)
+      if (restoredLayout) {
+        set({ editorLayout: restoredLayout })
+        let validatedLayout = restoredLayout
+        const unavailableGroups = new Set<WriteEditorGroupId>()
+        for (const group of restoredLayout.groups) {
+          const candidates = [
+            ...group.tabs.filter((tab) => writeEditorItemKey(tab) === group.activePath),
+            ...group.tabs.filter((tab) => writeEditorItemKey(tab) !== group.activePath)
+          ]
+          if (candidates.length === 0) continue
+          let openedKey: string | null = null
+          for (const tab of candidates) {
+            const itemKey = writeEditorItemKey(tab)
+            if (isWriteWhiteboardTab(tab)) {
+              if (get().whiteboards[tab.boardId]) {
+                openedKey = itemKey
+                break
+              }
+              validatedLayout = removeFailedRestoredWriteTab(validatedLayout, group.id, itemKey)
+              continue
+            }
+            await get().openFile(normalized, tab.path, { groupId: group.id, viewMode: tab.viewMode })
+            if (!navigationIsCurrent(generation, normalized)) return
+            if (get().documentsByPath[writeDocumentKey(tab.path)]) {
+              openedKey = itemKey
+              break
+            }
+            validatedLayout = removeFailedRestoredWriteTab(validatedLayout, group.id, itemKey)
+          }
+          if (openedKey) {
+            validatedLayout = {
+              ...validatedLayout,
+              groups: validatedLayout.groups.map((candidate) => candidate.id === group.id
+                ? { ...candidate, activePath: openedKey }
+                : candidate)
+            }
+          } else {
+            unavailableGroups.add(group.id)
+          }
+        }
+        validatedLayout = finishRestoredWriteLayout(validatedLayout, unavailableGroups)
+        const documentsByPath = get().documentsByPath
+        persistWriteEditorLayout(normalized, validatedLayout)
+        set({ editorLayout: validatedLayout, ...projectFocusedDocument(validatedLayout, documentsByPath) })
+        return
+      }
       const remembered = readRememberedActiveFile(normalized)
       if (remembered.trim() && isWriteWorkspaceFilePath(remembered)) {
-        await get().openFile(normalized, remembered)
+        await get().openFile(normalized, remembered, { groupId: 'primary' })
       } else if (remembered.trim()) {
         rememberActiveFile(normalized, null)
       }
@@ -159,7 +211,7 @@ export function createWriteFileActions({
         if (!requestIsCurrent()) return null
         set((state) => ({
           loadingDirs: withoutLoadingDirs(state.loadingDirs, [targetKey, requestedRoot]),
-          treeError: formatActionError(error)
+          treeError: formatWriteFileActionError(error)
         }))
         return null
       }
@@ -222,8 +274,9 @@ export function createWriteFileActions({
       await Promise.all([...targets].map((dirPath) => get().loadDirectory(workspaceRoot, dirPath)))
     },
 
-    openFile: async (workspaceRoot, path) => {
-      const generation = nextNavigationGeneration()
+    openFile: async (workspaceRoot, path, options = {}) => {
+      const groupId = options.groupId ?? get().editorLayout.focusedGroupId
+      const generation = nextFileRequestGeneration(groupId)
       cancelExternalSyncAnimation()
       if (!isWriteWorkspaceFilePath(path)) {
         set({
@@ -232,135 +285,137 @@ export function createWriteFileActions({
         })
         return
       }
-      const canLeaveCurrentFile = await prepareActiveFileForNavigation(get, workspaceRoot)
-      if (!canLeaveCurrentFile || !navigationIsCurrent(generation, workspaceRoot)) return
+      if (!fileRequestIsCurrent(groupId, generation, workspaceRoot)) return
+      const viewMode = options.viewMode ?? 'rich'
+      const current = get()
+      if (
+        current.autoSaveEnabled &&
+        current.activeFilePath &&
+        current.activeFileKind === 'text' &&
+        !pathsEqual(current.activeFilePath, path) &&
+        current.saveStatus !== 'saved'
+      ) {
+        void current.saveDocument(workspaceRoot, current.activeFilePath)
+      }
+      const existing = get().documentsByPath[writeDocumentKey(path)]
+      if (existing) {
+        rememberActiveFile(workspaceRoot, existing.path)
+        set((state) => openWriteDocumentState(state, existing, groupId, viewMode))
+        return
+      }
       set({ fileLoading: true, fileError: null })
       try {
         if (isWriteImageFilePath(path)) {
           const result = await window.kunGui.readWorkspaceImage({ path, workspaceRoot })
-          if (!navigationIsCurrent(generation, workspaceRoot)) return
+          if (!fileRequestIsCurrent(groupId, generation, workspaceRoot)) return
           if (!result.ok) {
             set({ fileLoading: false, fileError: result.message })
             return
           }
           rememberActiveFile(workspaceRoot, result.path)
-          set((state) => ({
-            activeFilePath: result.path,
-            activeFileKind: 'image',
-            fileContent: '',
+          set((state) => openWriteDocumentState(state, createWriteDocumentSession({
+            path: result.path,
+            kind: 'image',
             imageDataUrl: result.dataUrl,
             imageMimeType: result.mimeType,
-            pdfDataBase64: '',
-            pdfMimeType: '',
-            pdfMtimeMs: 0,
             fileSize: result.size,
-            fileTruncated: false,
-            fileLoading: false,
-            fileError: null,
-            saveStatus: 'saved',
-            documentEpoch: nextWriteDocumentEpoch(state.documentEpoch),
-            contentRevision: 0,
-            persistedContent: '',
-            pendingAgentReview: null,
-            reviewActive: false,
-            selection: emptySelection(),
-            quotedSelections: [],
-            recentEdits: []
-          }))
+            documentEpoch: nextWriteDocumentEpoch(state.documentEpoch)
+          }), groupId, viewMode))
           return
         }
 
         if (isWritePdfFilePath(path)) {
           const result = await window.kunGui.readWorkspacePdf({ path, workspaceRoot })
-          if (!navigationIsCurrent(generation, workspaceRoot)) return
+          if (!fileRequestIsCurrent(groupId, generation, workspaceRoot)) return
           if (!result.ok) {
             set({ fileLoading: false, fileError: result.message })
             return
           }
           rememberActiveFile(workspaceRoot, result.path)
-          set((state) => ({
-            activeFilePath: result.path,
-            activeFileKind: 'pdf',
-            fileContent: '',
-            imageDataUrl: '',
-            imageMimeType: '',
+          set((state) => openWriteDocumentState(state, createWriteDocumentSession({
+            path: result.path,
+            kind: 'pdf',
             pdfDataBase64: result.dataBase64,
             pdfMimeType: result.mimeType,
             pdfMtimeMs: result.mtimeMs,
             fileSize: result.size,
-            fileTruncated: false,
-            fileLoading: false,
-            fileError: null,
-            saveStatus: 'saved',
-            documentEpoch: nextWriteDocumentEpoch(state.documentEpoch),
-            contentRevision: 0,
-            persistedContent: '',
-            pendingAgentReview: null,
-            reviewActive: false,
-            selection: emptySelection(),
-            quotedSelections: [],
-            recentEdits: []
-          }))
+            documentEpoch: nextWriteDocumentEpoch(state.documentEpoch)
+          }), groupId, viewMode))
+          return
+        }
+
+        if (isWriteOfficeFilePath(path)) {
+          const result = await window.kunGui.readWorkspaceOfficePreview({ path, workspaceRoot })
+          if (!fileRequestIsCurrent(groupId, generation, workspaceRoot)) return
+          if (!result.ok) {
+            rememberActiveFile(workspaceRoot, path)
+            set((state) => openWriteDocumentState(state, createWriteDocumentSession({
+              path,
+              kind: 'office',
+              officeRefreshError: result.message,
+              fileError: result.message,
+              documentEpoch: nextWriteDocumentEpoch(state.documentEpoch)
+            }), groupId, viewMode))
+            return
+          }
+          rememberActiveFile(workspaceRoot, result.path)
+          set((state) => openWriteDocumentState(state, createWriteDocumentSession({
+            path: result.path,
+            kind: 'office',
+            officePreview: result,
+            fileSize: result.size,
+            documentEpoch: nextWriteDocumentEpoch(state.documentEpoch)
+          }), groupId, viewMode))
+          return
+        }
+
+        if (isWriteCodeFilePath(path)) {
+          const result = await window.kunGui.readWorkspaceFile({ path, workspaceRoot })
+          if (!fileRequestIsCurrent(groupId, generation, workspaceRoot)) return
+          if (!result.ok) {
+            set({ fileLoading: false, fileError: result.message })
+            return
+          }
+          rememberActiveFile(workspaceRoot, result.path)
+        set((state) => openWriteDocumentState(state, createWriteDocumentSession({
+            path: result.path,
+            kind: 'code',
+            fileContent: result.content,
+            persistedContent: result.content,
+            fileSize: result.size,
+            fileTruncated: result.truncated,
+            documentEpoch: nextWriteDocumentEpoch(state.documentEpoch)
+          }), groupId, 'source'))
           return
         }
 
         const result = await window.kunGui.readWorkspaceFile({ path, workspaceRoot })
-        if (!navigationIsCurrent(generation, workspaceRoot)) return
+        if (!fileRequestIsCurrent(groupId, generation, workspaceRoot)) return
         if (!result.ok) {
           set({ fileLoading: false, fileError: result.message })
           return
         }
         rememberActiveFile(workspaceRoot, result.path)
-        set((state) => ({
-          activeFilePath: result.path,
-          activeFileKind: 'text',
+        set((state) => openWriteDocumentState(state, createWriteDocumentSession({
+          path: result.path,
+          kind: 'text',
           fileContent: result.content,
-          imageDataUrl: '',
-          imageMimeType: '',
-          pdfDataBase64: '',
-          pdfMimeType: '',
-          pdfMtimeMs: 0,
+          persistedContent: result.content,
           fileSize: result.size,
           fileTruncated: result.truncated,
-          fileLoading: false,
-          fileError: null,
-          saveStatus: 'saved',
-          documentEpoch: nextWriteDocumentEpoch(state.documentEpoch),
-          contentRevision: 0,
-          persistedContent: result.content,
-          pendingAgentReview: null,
-          reviewActive: false,
-          selection: emptySelection(),
-          quotedSelections: [],
-          recentEdits: []
-        }))
+          documentEpoch: nextWriteDocumentEpoch(state.documentEpoch)
+        }), groupId, viewMode))
       } catch (error) {
-        if (!navigationIsCurrent(generation, workspaceRoot)) return
+        if (!fileRequestIsCurrent(groupId, generation, workspaceRoot)) return
         if (isWriteImageFilePath(path) && isMissingImageIpc(error)) {
           rememberActiveFile(workspaceRoot, path)
-          set((state) => ({
-            activeFilePath: path,
-            activeFileKind: 'image',
-            fileContent: '',
+          set((state) => openWriteDocumentState(state, createWriteDocumentSession({
+            path,
+            kind: 'image',
             imageDataUrl: writePathToFileUrl(path),
             imageMimeType: imageMimeTypeFromPath(path),
-            pdfDataBase64: '',
-            pdfMimeType: '',
-            pdfMtimeMs: 0,
-            fileSize: 0,
-            fileTruncated: false,
-            fileLoading: false,
-            fileError: null,
-            saveStatus: 'saved',
-            documentEpoch: nextWriteDocumentEpoch(state.documentEpoch),
-            contentRevision: 0,
-            persistedContent: '',
-            pendingAgentReview: null,
-            reviewActive: false,
-            selection: emptySelection(),
-            quotedSelections: [],
-            recentEdits: []
-          }))
+            documentEpoch: nextWriteDocumentEpoch(state.documentEpoch)
+          }), groupId, viewMode))
           return
         }
         set({
@@ -377,7 +432,7 @@ export function createWriteFileActions({
       try {
         result = await window.kunGui.createWorkspaceFile({ workspaceRoot, path, content })
       } catch (error) {
-        if (workspaceIsCurrent(workspaceRoot)) set({ fileError: formatActionError(error) })
+        if (workspaceIsCurrent(workspaceRoot)) set({ fileError: formatWriteFileActionError(error) })
         return null
       }
       if (!workspaceIsCurrent(workspaceRoot)) return null
@@ -395,7 +450,7 @@ export function createWriteFileActions({
       try {
         result = await window.kunGui.createWorkspaceDirectory({ workspaceRoot, path })
       } catch (error) {
-        if (workspaceIsCurrent(workspaceRoot)) set({ fileError: formatActionError(error) })
+        if (workspaceIsCurrent(workspaceRoot)) set({ fileError: formatWriteFileActionError(error) })
         return null
       }
       if (!workspaceIsCurrent(workspaceRoot)) return null
@@ -415,15 +470,34 @@ export function createWriteFileActions({
     renameEntry: async (workspaceRoot, path, newName) => {
       cancelExternalSyncAnimation()
       const nextName = ensureMarkdownRenameExtension(path, newName.trim())
+      const plannedPath = `${writeDirnameFromPath(path)}/${nextName}`
+      const renamedDocument = get().documentsByPath[writeDocumentKey(path)]
+      const textToCodeRename = renamedDocument?.kind === 'text' && isWriteCodeFilePath(plannedPath)
+      if (textToCodeRename && renamedDocument.saveStatus !== 'saved') {
+        const saved = await get().saveDocument(workspaceRoot, path)
+        if (!saved || !workspaceIsCurrent(workspaceRoot)) return null
+      }
+      if (textToCodeRename) {
+        set((state) => projectRenamedDocumentKind(state, path, 'text', 'code'))
+      }
+      const renameLocked = textToCodeRename &&
+        get().documentsByPath[writeDocumentKey(path)]?.kind === 'code'
+      const restoreRenameLock = (): void => {
+        if (renameLocked && workspaceIsCurrent(workspaceRoot)) {
+          set((state) => projectRenamedDocumentKind(state, path, 'code', 'text'))
+        }
+      }
       let result: Awaited<ReturnType<typeof window.kunGui.renameWorkspaceEntry>>
       try {
         result = await window.kunGui.renameWorkspaceEntry({ workspaceRoot, path, newName: nextName })
       } catch (error) {
-        if (workspaceIsCurrent(workspaceRoot)) set({ fileError: formatActionError(error) })
+        restoreRenameLock()
+        if (workspaceIsCurrent(workspaceRoot)) set({ fileError: formatWriteFileActionError(error) })
         return null
       }
       if (!workspaceIsCurrent(workspaceRoot)) return null
       if (!result.ok) {
+        restoreRenameLock()
         set({ fileError: result.message })
         return null
       }
@@ -434,19 +508,6 @@ export function createWriteFileActions({
       ))
       const previousPrefix = `${normalizePath(result.previousPath)}/`
       set((state) => {
-        const nextActiveFilePath = state.activeFilePath === result.previousPath
-          ? result.path
-          : state.activeFilePath?.startsWith(previousPrefix)
-            ? `${result.path}/${state.activeFilePath.slice(previousPrefix.length)}`
-            : state.activeFilePath
-        const keepActiveFile = nextActiveFilePath ? isWriteWorkspaceFilePath(nextActiveFilePath) : false
-        const nextActiveFileKind = keepActiveFile && nextActiveFilePath
-          ? isWriteImageFilePath(nextActiveFilePath) ? 'image' : isWritePdfFilePath(nextActiveFilePath) ? 'pdf' : 'text'
-          : null
-        const activeDocumentChanged = nextActiveFilePath !== state.activeFilePath
-        const nextDocumentEpoch = activeDocumentChanged
-          ? nextWriteDocumentEpoch(state.documentEpoch)
-          : state.documentEpoch
         const expandedDirs = new Set<string>()
         for (const dirPath of state.expandedDirs) {
           if (dirPath === result.previousPath) {
@@ -457,31 +518,48 @@ export function createWriteFileActions({
             expandedDirs.add(dirPath)
           }
         }
+        const editorLayout = {
+          ...state.editorLayout,
+          groups: state.editorLayout.groups.map((group) => ({
+            ...group,
+            activePath: group.activePath && !writeWhiteboardIdFromTabKey(group.activePath)
+              ? pathsUnderRenamedEntry(group.activePath, result.previousPath, result.path)
+              : group.activePath,
+            tabs: group.tabs.map((tab) => isWriteFileTab(tab)
+              ? { ...tab, path: pathsUnderRenamedEntry(tab.path, result.previousPath, result.path) }
+              : tab)
+          }))
+        }
+        const documentsByPath: WriteWorkspaceState['documentsByPath'] = {}
+        for (const document of Object.values(state.documentsByPath)) {
+          const nextPath = pathsUnderRenamedEntry(document.path, result.previousPath, result.path)
+          const epoch = nextPath === document.path
+            ? document.documentEpoch
+            : nextWriteDocumentEpoch(document.documentEpoch)
+          const kind = renamedWritingDocumentKind(document.kind, nextPath)
+          const becameCode = kind === 'code' && (
+            document.kind === 'text' || (renameLocked && pathsEqual(document.path, result.previousPath))
+          )
+          documentsByPath[writeDocumentKey(nextPath)] = {
+            ...document,
+            path: nextPath,
+            kind,
+            documentEpoch: epoch,
+            saveStatus: becameCode ? 'saved' : document.saveStatus,
+            pendingAgentReview: becameCode
+              ? null
+              : document.pendingAgentReview
+              ? { ...document.pendingAgentReview, filePath: nextPath, documentEpoch: epoch }
+              : null,
+            reviewActive: becameCode ? false : document.reviewActive,
+            selection: becameCode ? emptySelection() : document.selection
+          }
+        }
+        persistWriteEditorLayout(workspaceRoot, editorLayout)
         return {
-          activeFilePath: keepActiveFile ? nextActiveFilePath ?? null : null,
-          activeFileKind: nextActiveFileKind,
-          fileContent: nextActiveFileKind === 'text' ? state.fileContent : '',
-          imageDataUrl: nextActiveFileKind === 'image' ? state.imageDataUrl : '',
-          imageMimeType: nextActiveFileKind === 'image' ? state.imageMimeType : '',
-          pdfDataBase64: nextActiveFileKind === 'pdf' ? state.pdfDataBase64 : '',
-          pdfMimeType: nextActiveFileKind === 'pdf' ? state.pdfMimeType : '',
-          pdfMtimeMs: nextActiveFileKind === 'pdf' ? state.pdfMtimeMs : 0,
-          fileSize: keepActiveFile ? state.fileSize : 0,
-          fileTruncated: keepActiveFile ? state.fileTruncated : false,
-          saveStatus: keepActiveFile ? state.saveStatus : 'saved',
-          documentEpoch: nextDocumentEpoch,
-          contentRevision: keepActiveFile ? state.contentRevision : 0,
-          persistedContent: nextActiveFileKind === 'text' ? state.persistedContent : '',
-          pendingAgentReview: state.pendingAgentReview && keepActiveFile && nextActiveFilePath
-            ? {
-                ...state.pendingAgentReview,
-                filePath: nextActiveFilePath,
-                documentEpoch: nextDocumentEpoch
-              }
-            : null,
-          reviewActive: keepActiveFile ? state.reviewActive : false,
-          selection: nextActiveFileKind === 'text' || nextActiveFileKind === 'pdf' ? state.selection : emptySelection(),
-          quotedSelections: nextActiveFileKind === 'text' || nextActiveFileKind === 'pdf' ? state.quotedSelections : [],
+          documentsByPath,
+          editorLayout,
+          ...projectFocusedDocument(editorLayout, documentsByPath),
           expandedDirs,
           entriesByDir: {},
           fileError: null
@@ -502,7 +580,7 @@ export function createWriteFileActions({
       try {
         result = await window.kunGui.deleteWorkspaceEntry({ workspaceRoot, path })
       } catch (error) {
-        if (workspaceIsCurrent(workspaceRoot)) set({ fileError: formatActionError(error) })
+        if (workspaceIsCurrent(workspaceRoot)) set({ fileError: formatWriteFileActionError(error) })
         return false
       }
       if (!workspaceIsCurrent(workspaceRoot)) return false
@@ -512,33 +590,6 @@ export function createWriteFileActions({
       }
       saveWriteThreadRegistry(forgetWriteFileThreads(workspaceRoot, result.path))
       const deletedPath = normalizePath(result.path)
-      const currentActiveFilePath = get().activeFilePath
-      const activePath = currentActiveFilePath ? normalizePath(currentActiveFilePath) : ''
-      if (activePath === deletedPath || activePath.startsWith(`${deletedPath}/`)) {
-        rememberActiveFile(workspaceRoot, null)
-        set((state) => ({
-          activeFilePath: null,
-          activeFileKind: null,
-          fileContent: '',
-          imageDataUrl: '',
-          imageMimeType: '',
-          pdfDataBase64: '',
-          pdfMimeType: '',
-          pdfMtimeMs: 0,
-          fileSize: 0,
-          fileTruncated: false,
-          fileError: null,
-          saveStatus: 'saved',
-          documentEpoch: nextWriteDocumentEpoch(state.documentEpoch),
-          contentRevision: 0,
-          persistedContent: '',
-          pendingAgentReview: null,
-          reviewActive: false,
-          selection: emptySelection(),
-          quotedSelections: [],
-          recentEdits: []
-        }))
-      }
       set((state) => {
         const expandedDirs = new Set<string>()
         for (const dirPath of state.expandedDirs) {
@@ -547,8 +598,36 @@ export function createWriteFileActions({
             expandedDirs.add(dirPath)
           }
         }
-        return { expandedDirs }
+        const removed = (candidate: string): boolean => {
+          const normalized = normalizePath(candidate)
+          return normalized === deletedPath || normalized.startsWith(`${deletedPath}/`)
+        }
+        const groups = state.editorLayout.groups.map((group) => {
+          const tabs = group.tabs.filter((tab) => !isWriteFileTab(tab) || !removed(tab.path))
+          return {
+            ...group,
+            tabs,
+            activePath: group.activePath && (
+              writeWhiteboardIdFromTabKey(group.activePath) || !removed(group.activePath)
+            )
+              ? group.activePath
+              : tabs[0] ? writeEditorItemKey(tabs[0]) : null
+          }
+        })
+        const editorLayout = { ...state.editorLayout, groups }
+        const documentsByPath = { ...state.documentsByPath }
+        for (const document of Object.values(documentsByPath)) {
+          if (removed(document.path)) delete documentsByPath[writeDocumentKey(document.path)]
+        }
+        persistWriteEditorLayout(workspaceRoot, editorLayout)
+        return {
+          expandedDirs,
+          documentsByPath,
+          editorLayout,
+          ...projectFocusedDocument(editorLayout, documentsByPath)
+        }
       })
+      rememberActiveFile(workspaceRoot, get().activeFilePath)
       await get().refreshWorkspace(workspaceRoot)
       return true
     }

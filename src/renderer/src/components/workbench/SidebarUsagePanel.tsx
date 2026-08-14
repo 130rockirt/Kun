@@ -8,10 +8,10 @@ import {
   usageTotalsFromBuckets
 } from '../chat/InitialSessionUsageHeatmap'
 import {
-  cumulativeCacheHitRate,
   formatCompactNumber,
   formatCost,
   formatPercent,
+  primaryCacheHitRate,
   useThreadUsageState
 } from '../../hooks/use-thread-usage'
 import {
@@ -106,6 +106,7 @@ export function SidebarUsagePanel({
       modelBuckets.reduce((sum, bucket) => sum + bucket.totalTokens, 0)
   )
   const currentUsage = threadState.usage
+  const currentCacheHitRate = currentUsage ? primaryCacheHitRate(currentUsage) : null
 
   return (
     <div
@@ -144,10 +145,12 @@ export function SidebarUsagePanel({
                     i18n.language
                   )
                 },
-                {
-                  label: t('usageQuotaMetricCache'),
-                  value: formatPercent(cumulativeCacheHitRate(currentUsage))
-                },
+                ...(currentCacheHitRate != null
+                  ? [{
+                      label: t('usageQuotaMetricCache'),
+                      value: formatPercent(currentCacheHitRate)
+                    }]
+                  : []),
                 {
                   label: t('usageQuotaMetricTurns'),
                   value: new Intl.NumberFormat(i18n.language).format(currentUsage.turns)

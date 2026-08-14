@@ -6,15 +6,7 @@ import { MessageTimelineEmptyHero } from './message-timeline-empty'
 
 type EmptyHeroProps = Parameters<typeof MessageTimelineEmptyHero>[0]
 
-/**
- * Tests for the "runtime offline" hero (`RuntimeWakeHero` inside
- * `MessageTimelineEmptyHero`). See issue #78 — when the user-reported port
- * conflict occurred, the hero only showed a vague "正在唤醒本地智能体" title
- * while the specific error lived in a faint detail paragraph below. Users
- * skimmed the title, thought the app was still loading, and never opened
- * Settings. The fix: when `runtimeError` is present, surface the localized
- * error in the title slot so the user sees the real cause immediately.
- */
+/** Runtime availability stays inside the ordinary home surface. */
 
 function renderEmptyHero(patch: Partial<EmptyHeroProps> = {}): string {
   return renderToStaticMarkup(
@@ -42,19 +34,55 @@ describe('MessageTimelineEmptyHero — chat init welcome', () => {
     await i18n.changeLanguage('en')
   })
 
-  it('renders only the minimal welcome copy for a ready workspace chat', () => {
+  it('renders the page-level task selector without starter actions', () => {
     const html = renderEmptyHero()
 
     expect(html).toContain('ds-chat-empty-hero')
+    expect(html).toContain('data-home-hero-content')
+    expect(html).toContain('min-h-[clamp(190px,23vh,240px)]')
+    expect(html).not.toContain('translate-y-')
     expect(html).toContain('What would you like to do with Kun today?')
-    expect(html).toContain('Open a terminal and run kun to use the TUI.')
-    expect(html).toContain('Settings in the bottom-left, then General → Desktop &amp; system → Terminal')
+    expect(html).toContain('Start with an idea, build it with code, or explore a design.')
     expect(html).not.toContain('ds-runtime-wake-stage')
     expect(html).not.toContain('ds-kun-state-')
     expect(html).not.toContain('ds-initial-usage-heatmap')
     expect(html).not.toContain('Expand calendar')
-    expect(html).not.toContain('Explain this project&#x27;s structure')
-    expect(html).not.toContain('<button')
+    expect(html).toContain('data-task-surface-selector="hero"')
+    expect(html).toContain('Code')
+    expect(html).toContain('Design')
+    expect(html).not.toContain('data-task-starters')
+    expect(html).not.toContain('Understand this codebase')
+    expect(html).not.toContain('Build a feature')
+    expect(html).not.toContain('Fix a bug')
+  })
+
+  it('switches the page-level selector to Design without rendering suggestion buttons', () => {
+    const html = renderEmptyHero({ taskSurfaceControl: { surface: 'design' } })
+
+    expect(html).toContain('aria-checked="true"')
+    expect(html).not.toContain('data-task-starters')
+    expect(html).not.toContain('Design a page')
+    expect(html).not.toContain('Recreate a screenshot')
+    expect(html).not.toContain('Create a diagram')
+    expect(html).not.toContain('Understand this codebase')
+  })
+
+  it('keeps the page-level intent selector outside the composer surface', () => {
+    const html = renderEmptyHero()
+
+    expect(html).toContain('data-task-surface-selector="hero"')
+    expect(html).not.toContain('ds-composer-shell')
+    expect(html).not.toContain('ds-composer-task-profile')
+  })
+
+  it('removes the page-level task selector after the conversation mode is locked', () => {
+    const html = renderEmptyHero({
+      taskSurfaceControl: { surface: 'code', locked: true }
+    })
+
+    expect(html).toContain('ds-chat-empty-hero')
+    expect(html).not.toContain('data-task-surface-selector')
+    expect(html).not.toContain('role="radiogroup"')
   })
 
   it('keeps the static welcome copy visible in focus mode without restoring the usage panel', () => {
@@ -62,21 +90,24 @@ describe('MessageTimelineEmptyHero — chat init welcome', () => {
 
     expect(html).toContain('ds-chat-empty-hero')
     expect(html).toContain('What would you like to do with Kun today?')
-    expect(html).toContain('Open a terminal and run kun to use the TUI.')
-    expect(html).toContain('Settings in the bottom-left, then General → Desktop &amp; system → Terminal')
-    expect(html).not.toContain('aria-hidden="true"')
+    expect(html).toContain('Start with an idea, build it with code, or explore a design.')
     expect(html).not.toContain('ds-kun-state-')
     expect(html).not.toContain('ds-initial-usage-heatmap')
   })
 })
 
-describe('MessageTimelineEmptyHero — runtime offline hero (issue #78)', () => {
+describe('MessageTimelineEmptyHero — runtime status on the chat home', () => {
   beforeEach(async () => {
     await i18n.changeLanguage('en')
   })
 
   it('uses the waking title when no runtime error is available', () => {
     const html = renderOfflineHero(null)
+    expect(html).toContain('ds-chat-empty-hero')
+    expect(html).toContain('What would you like to do with Kun today?')
+    expect(html).toContain('data-task-surface-selector="hero"')
+    expect(html).toContain('data-runtime-home-status')
+    expect(html).not.toContain('ds-runtime-wake-hero')
     expect(html).toContain('Kun is waking the local agent')
     expect(html).not.toContain('Cannot connect to the local runtime')
   })
@@ -84,6 +115,9 @@ describe('MessageTimelineEmptyHero — runtime offline hero (issue #78)', () => 
   it('switches to the error title and surfaces the localized error when a runtime error is provided', () => {
     const portConflict = i18n.t('common:runtimePortConflict')
     const html = renderOfflineHero(portConflict)
+    expect(html).toContain('What would you like to do with Kun today?')
+    expect(html).toContain('data-runtime-home-status')
+    expect(html).not.toContain('ds-runtime-wake-hero')
     // New error title should appear (so users see the failure immediately)
     expect(html).toContain('Cannot connect to the local runtime')
     // The old "waking" title must NOT appear — that's the bug we're fixing
@@ -122,15 +156,27 @@ describe('MessageTimelineEmptyHero — runtime offline hero (issue #78)', () => 
     expect(errored).not.toContain('ds-runtime-wake-caret')
     expect(errored).not.toContain('ds-kun-state-')
   })
+
+  it('keeps the channel-specific recovery hero on the Claw route', () => {
+    const html = renderEmptyHero({ route: 'claw', ready: false })
+
+    expect(html).toContain('ds-runtime-wake-hero')
+    expect(html).not.toContain('ds-chat-empty-hero')
+    expect(html).not.toContain('data-runtime-home-status')
+  })
 })
 
-describe('MessageTimelineEmptyHero — runtime offline hero (issue #78, zh-CN)', () => {
+describe('MessageTimelineEmptyHero — runtime status on the chat home (zh-CN)', () => {
   beforeEach(async () => {
     await i18n.changeLanguage('zh-CN')
   })
 
   it('uses 正在唤醒 title when no runtime error is available', () => {
     const html = renderOfflineHero(null)
+    expect(html).toContain('今天想和 Kun 一起做什么？')
+    expect(html).toContain('data-task-surface-selector="hero"')
+    expect(html).toContain('data-runtime-home-status')
+    expect(html).not.toContain('ds-runtime-wake-hero')
     expect(html).toContain('正在唤醒本地智能体')
     expect(html).not.toContain('无法连接到本地运行时')
   })
@@ -147,8 +193,7 @@ describe('MessageTimelineEmptyHero — runtime offline hero (issue #78, zh-CN)',
     const html = renderEmptyHero()
 
     expect(html).toContain('今天想和 Kun 一起做什么？')
-    expect(html).toContain('打开终端，输入 kun 即可使用 TUI。')
-    expect(html).toContain('左下角「设置」→「通用」→「桌面与系统」→「终端」')
+    expect(html).toContain('从一个想法开始，编码实现，或探索设计。')
     expect(html).not.toContain('ds-kun-state-')
     expect(html).not.toContain('ds-initial-usage-heatmap')
   })

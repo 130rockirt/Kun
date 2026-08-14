@@ -19,12 +19,28 @@ import {
   applyDomSourceBindingsToCanvasDocument,
   type DomSourceBindingOptions
 } from '../code-binding/dom-source-adapter'
+import {
+  canAcceptCanvasChildren,
+  collectDescendants,
+  hasValidReparentAncestry,
+  owningFrameIdForParent,
+  reorderCanvasChildren,
+  withDescendants
+} from './canvas-shape-tree'
+
+export { collectDescendants, withDescendants } from './canvas-shape-tree'
 
 type ShapeState = {
   document: CanvasDocument
   documentKey: string | null
+  /** Increments only when a persisted/synthetic document is loaded or reset. */
+  documentLoadRevision: number
 
-  loadDocument: (doc: CanvasDocument, documentKey?: string | null) => void
+  loadDocument: (
+    doc: CanvasDocument,
+    documentKey?: string | null,
+    options?: { preserveUndo?: boolean }
+  ) => void
   resetDocument: () => void
   getShape: (id: string) => CanvasShape | undefined
   getChildren: (parentId: string) => CanvasShape[]
@@ -34,7 +50,8 @@ type ShapeState = {
   updateShape: (id: string, patch: Partial<CanvasShape>, skipUndo?: boolean) => void
   deleteShape: (id: string, options?: { skipUndo?: boolean }) => void
   reorderShape: (id: string, newIndex: number) => void
-  reparentShape: (id: string, newParentId: string, index?: number) => void
+  /** Returns false when the requested parent would make the shape tree invalid. */
+  reparentShape: (id: string, newParentId: string, index?: number) => boolean
   duplicateShape: (id: string, options?: { skipUndo?: boolean }) => string | null
 
   setMotionDocument: (
@@ -50,6 +67,8 @@ type ShapeState = {
   applyPatches: (patches: ShapePatch[], direction: 'undo' | 'redo') => void
   applyChange: (change: CanvasChange, direction: 'undo' | 'redo') => void
   appendOperationJournalEntry: (entry: DesignOperationJournalEntry) => void
+  recordRendererReplayKey: (replayKey: string) => void
+  recordRendererReplayWatermark: (turnId: string) => void
   syncDomSourceBindings: (options: DomSourceBindingOptions) => void
   undo: () => void
   redo: () => void
@@ -70,34 +89,6 @@ function makeUniqueName(
   let n = 2
   while (siblings.includes(`${base} ${n}`)) n++
   return `${base} ${n}`
-}
-
-export function collectDescendants(objects: Record<string, CanvasShape>, id: string): string[] {
-  const shape = objects[id]
-  if (!shape) return []
-  const result: string[] = []
-  for (const childId of shape.children) {
-    result.push(childId)
-    result.push(...collectDescendants(objects, childId))
-  }
-  return result
-}
-
-/**
- * Expand a set of shape ids to include all their descendants (deduped).
- * Used by move/drag so dragging a frame carries its children — since children
- * store ABSOLUTE coords, they no longer follow the parent's transform for free.
- */
-export function withDescendants(
-  objects: Record<string, CanvasShape>,
-  ids: Iterable<string>
-): string[] {
-  const out = new Set<string>()
-  for (const id of ids) {
-    out.add(id)
-    for (const descendant of collectDescendants(objects, id)) out.add(descendant)
-  }
-  return [...out]
 }
 
 function applyShapePatches(
@@ -175,24 +166,35 @@ function deepCloneShape(
 export const useCanvasShapeStore = create<ShapeState>((set, get) => ({
   document: createEmptyDocument(),
   documentKey: null,
+  documentLoadRevision: 0,
 
-  loadDocument: (doc, documentKey = null) => {
-    useCanvasUndoStore.getState().clear()
-    // A same-key late disk load/merge is not a workspace switch; preserving
-    // transient authoring state avoids collapsing the dock while the current
-    // document is still settling. Null keys carry no identity, so treat them
-    // conservatively as a switch.
-    if (documentKey === null || documentKey !== get().documentKey) {
+  loadDocument: (doc, documentKey = null, options) => {
+    // Only the caller that merged a late disk load with live edits may retain
+    // undo. Other same-key replacements (notably artifact reconciliation) can
+    // remove shapes, so retaining patches there could resurrect stale portals.
+    const sameDocument = documentKey !== null && documentKey === get().documentKey
+    if (!sameDocument || !options?.preserveUndo) useCanvasUndoStore.getState().clear()
+    const isDocumentSwitch = !sameDocument
+    if (isDocumentSwitch) {
+      useCanvasUndoStore.getState().clear()
       useCanvasMotionStore.getState().reset()
     }
     const motion = pruneMotionDocument(doc.motion, doc)
-    set({ document: { ...doc, motion }, documentKey })
+    set((state) => ({
+      document: { ...doc, motion },
+      documentKey,
+      documentLoadRevision: state.documentLoadRevision + 1
+    }))
   },
 
   resetDocument: () => {
     useCanvasUndoStore.getState().clear()
     useCanvasMotionStore.getState().reset()
-    set({ document: createEmptyDocument(), documentKey: null })
+    set((state) => ({
+      document: createEmptyDocument(),
+      documentKey: null,
+      documentLoadRevision: state.documentLoadRevision + 1
+    }))
   },
 
   getShape: (id) => get().document.objects[id],
@@ -222,9 +224,7 @@ export const useCanvasShapeStore = create<ShapeState>((set, get) => ({
       // Make name unique among siblings so layers panel + AI naming stays unambiguous.
       const uniqueName = makeUniqueName(objects, pid, shape.name)
       const placed = { ...shape, name: uniqueName, parentId: pid }
-      if (parent.type === 'frame' && pid !== s.document.rootId) {
-        placed.frameId = pid
-      }
+      placed.frameId = owningFrameIdForParent(s.document, parent)
 
       objects[shape.id] = placed
       const children =
@@ -395,27 +395,7 @@ export const useCanvasShapeStore = create<ShapeState>((set, get) => ({
       if (!parent) return s
 
       const oldChildren = parent.children
-      const filtered = oldChildren.filter((c) => c !== id)
-      let ordered: string[]
-      if (shape.parentId === s.document.rootId) {
-        // Embedded HTML/SVG frames are DOM portals rendered above the base SVG
-        // scene. Keep their document order in a dedicated top portal layer so
-        // Canvas root order never promises a cross-layer z-order we cannot draw.
-        const normal = filtered.filter((childId) => !isArtifactFrame(s.document.objects[childId]))
-        const portals = filtered.filter((childId) => isArtifactFrame(s.document.objects[childId]))
-        if (isArtifactFrame(shape)) {
-          const index = Math.max(0, Math.min(portals.length, newIndex - normal.length))
-          portals.splice(index, 0, id)
-        } else {
-          const index = Math.max(0, Math.min(normal.length, newIndex))
-          normal.splice(index, 0, id)
-        }
-        ordered = [...normal, ...portals]
-      } else {
-        const clamped = Math.max(0, Math.min(filtered.length, newIndex))
-        filtered.splice(clamped, 0, id)
-        ordered = filtered
-      }
+      const ordered = reorderCanvasChildren(s.document, shape.parentId, id, newIndex)
 
       const objects = {
         ...s.document.objects,
@@ -439,33 +419,87 @@ export const useCanvasShapeStore = create<ShapeState>((set, get) => ({
   reparentShape: (id, newParentId, index) => {
     const patches: ShapePatch[] = []
     let motionPatch: MotionPatch | undefined
+    let accepted = false
     set((s) => {
       const shape = s.document.objects[id]
       if (!shape?.parentId) return s
       const oldParent = s.document.objects[shape.parentId]
       const newParent = s.document.objects[newParentId]
       if (!oldParent || !newParent) return s
-      if (id === newParentId) return s
-      if (isArtifactFrame(newParent)) return s
+      if (!canAcceptCanvasChildren(s.document, newParent)) return s
+      if (!hasValidReparentAncestry(s.document, id, newParentId)) return s
       if (isArtifactFrame(shape) && newParentId !== s.document.rootId) return s
+      accepted = true
+
+      if (shape.parentId === newParentId) {
+        // A same-parent reparent is either a no-op or an in-parent reorder. Work
+        // from a de-duplicated list so even a legacy malformed document is
+        // repaired instead of appending the id a second time.
+        const oldChildren = newParent.children
+        const currentIndex = oldChildren.indexOf(id)
+        const targetIndex = index === undefined
+          ? Math.max(0, currentIndex)
+          : index
+        const reordered = reorderCanvasChildren(s.document, newParentId, id, targetIndex)
+        if (
+          reordered.length === oldChildren.length &&
+          reordered.every((childId, childIndex) => childId === oldChildren[childIndex])
+        ) return s
+
+        const objects = {
+          ...s.document.objects,
+          [newParentId]: { ...newParent, children: reordered }
+        }
+        patches.push({
+          id: newParentId,
+          before: { children: oldChildren },
+          after: { children: reordered }
+        })
+        return { document: { ...s.document, objects } }
+      }
 
       const objects = { ...s.document.objects }
       const oldChildren = oldParent.children.filter((c) => c !== id)
       objects[shape.parentId] = { ...oldParent, children: oldChildren }
 
-      const newChildren = [...newParent.children]
-      const insertAt = index ?? newChildren.length
-      newChildren.splice(insertAt, 0, id)
+      const newChildren = reorderCanvasChildren(
+        s.document,
+        newParentId,
+        id,
+        index ?? newParent.children.length
+      )
       objects[newParentId] = { ...newParent, children: newChildren }
 
-      objects[id] = { ...shape, parentId: newParentId }
+      const subtreeIds = [id, ...collectDescendants(s.document.objects, id)]
+      const nextOwningFrameId = owningFrameIdForParent(s.document, newParent)
+      for (const subtreeId of subtreeIds) {
+        const subtreeShape = objects[subtreeId]
+        if (!subtreeShape) continue
+        const before: Partial<CanvasShape> = {}
+        const after: Partial<CanvasShape> = {}
+        if (subtreeId === id) {
+          before.parentId = shape.parentId
+          after.parentId = newParentId
+        }
+        // A nested frame owns itself; shapes below it keep that nested frame as
+        // their owner. Until one is encountered, every moved descendant adopts
+        // the destination frame (or null when moved back to the board root).
+        const parentId = subtreeId === id ? newParentId : subtreeShape.parentId
+        const subtreeParent = parentId ? objects[parentId] : undefined
+        const owningFrameId = subtreeParent
+          ? owningFrameIdForParent(s.document, subtreeParent)
+          : nextOwningFrameId
+        if (subtreeShape.frameId !== owningFrameId) {
+          before.frameId = subtreeShape.frameId
+          after.frameId = owningFrameId
+        }
+        if (Object.keys(after).length > 0) {
+          objects[subtreeId] = { ...subtreeShape, ...after }
+          patches.push({ id: subtreeId, before, after })
+        }
+      }
 
       patches.push(
-        {
-          id,
-          before: { parentId: shape.parentId },
-          after: { parentId: newParentId }
-        },
         {
           id: shape.parentId,
           before: { children: oldParent.children },
@@ -488,6 +522,7 @@ export const useCanvasShapeStore = create<ShapeState>((set, get) => ({
       return { document: { ...nextDocument, motion: afterMotion } }
     })
     useCanvasUndoStore.getState().pushChange({ patches, motionPatch, label: 'reparent-shape' })
+    return accepted
   },
 
   duplicateShape: (id, options) => {
@@ -572,6 +607,34 @@ export const useCanvasShapeStore = create<ShapeState>((set, get) => ({
     set((s) => ({
       document: appendOperationJournalEntryToCanvasDocument(s.document, entry)
     }))
+  },
+
+  recordRendererReplayKey: (replayKey) => {
+    const key = replayKey.trim()
+    if (!key) return
+    set((state) => {
+      const existing = state.document.rendererReplayKeys ?? []
+      if (existing.includes(key)) return state
+      return {
+        document: {
+          ...state.document,
+          rendererReplayKeys: [...existing, key].slice(-4096)
+        }
+      }
+    })
+  },
+
+  recordRendererReplayWatermark: (turnId) => {
+    const normalized = turnId.trim().slice(0, 256)
+    if (!normalized) return
+    set((state) => state.document.rendererReplayWatermarkTurnId === normalized
+      ? state
+      : {
+          document: {
+            ...state.document,
+            rendererReplayWatermarkTurnId: normalized
+          }
+        })
   },
 
   syncDomSourceBindings: (options) => {

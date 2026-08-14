@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { readStylesheetBundle } from '../../testing/stylesheet-bundle'
 
 describe('SddAssistantPanel scroll ownership', () => {
   it('lets the shared timeline own conversation scrolling without an animated ancestor', async () => {
@@ -6,7 +7,7 @@ describe('SddAssistantPanel scroll ownership', () => {
     const { readFile } = await import(/* @vite-ignore */ nodeFs)
     const [source, css] = await Promise.all([
       readFile(new URL('./SddAssistantPanel.tsx', import.meta.url), 'utf8'),
-      readFile(new URL('../../styles/base-shell.css', import.meta.url), 'utf8')
+      readStylesheetBundle(new URL('../../styles/base-shell.css', import.meta.url))
     ])
 
     expect(source).toContain(
@@ -45,7 +46,7 @@ describe('SddAssistantPanel scroll ownership', () => {
     const { readFile } = await import(/* @vite-ignore */ nodeFs)
     const [source, css] = await Promise.all([
       readFile(new URL('./SddAssistantPanel.tsx', import.meta.url), 'utf8'),
-      readFile(new URL('../../styles/base-shell.css', import.meta.url), 'utf8')
+      readStylesheetBundle(new URL('../../styles/base-shell.css', import.meta.url))
     ])
 
     expect(source).toContain('sdd-assistant-panel ds-sidebar-surface')

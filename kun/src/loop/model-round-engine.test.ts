@@ -171,6 +171,7 @@ function harness(values: readonly ModelStreamChunk[]) {
     setStream: (next: () => AsyncIterable<ModelStreamChunk>) => { streamFactory = next },
     run: (options: {
       maxToolCallsPerStep?: number
+      toolCallOverflowBehavior?: 'fail' | 'truncate'
       onRouteSelected?: (route: NonNullable<ModelStreamChunk['route']>) => Promise<void>
     } = {}) => engine.run({
       threadId: 'thread_1',
@@ -186,6 +187,9 @@ function harness(values: readonly ModelStreamChunk[]) {
         abortSignal: controller.signal
       },
       maxToolCallsPerStep: options.maxToolCallsPerStep ?? 1,
+      ...(options.toolCallOverflowBehavior
+        ? { toolCallOverflowBehavior: options.toolCallOverflowBehavior }
+        : {}),
       streamToolMetadata: new Map([['read', { providerId: 'builtin' }]]),
       cacheSignature: {
         model: 'model_1', providerId: 'builtin', endpointFormat: 'openai', prefixFingerprint: 'prefix',
@@ -364,6 +368,34 @@ describe('ModelRoundEngine', () => {
     expect(JSON.stringify(test.recordedEvents)).not.toContain('opaque-provider-signature')
   })
 
+  it('keeps unresolved raw arguments for execution but redacts persisted history and events', async () => {
+    const raw = '{"path":"private-round-marker"'
+    const test = harness([
+      {
+        kind: 'tool_call_complete',
+        callId: 'call_raw',
+        toolName: 'read',
+        arguments: { __raw: raw }
+      },
+      { kind: 'completed', stopReason: 'tool_calls' }
+    ])
+
+    const outcome = await test.run()
+
+    expect(outcome).toMatchObject({
+      kind: 'tool_calls',
+      snapshot: { toolCalls: [{ arguments: { __raw: raw } }] }
+    })
+    expect(test.appliedItems.find((item) => item.kind === 'tool_call')).toMatchObject({
+      arguments: {},
+      summary: expect.stringMatching(
+        new RegExp(`${Buffer.byteLength(raw, 'utf8')} UTF-8 bytes; sha256 [a-f0-9]{64}`)
+      )
+    })
+    expect(JSON.stringify(test.appliedItems)).not.toContain('private-round-marker')
+    expect(JSON.stringify(test.recordedEvents)).not.toContain('private-round-marker')
+  })
+
   it('allocates distinct runtime ids when one model step repeats a provider call id', async () => {
     const test = harness([
       { kind: 'tool_call_complete', callId: 'call_shared', toolName: 'read', arguments: { path: 'a.ts' } },
@@ -391,6 +423,24 @@ describe('ModelRoundEngine', () => {
     ])
   })
 
+  it('returns the accepted tool batch when configured to truncate overflow', async () => {
+    const test = harness([
+      { kind: 'tool_call_complete', callId: 'call_kept', toolName: 'read', arguments: { path: 'a.ts' } },
+      { kind: 'tool_call_complete', callId: 'call_truncated', toolName: 'read', arguments: { path: 'b.ts' } },
+      { kind: 'completed', stopReason: 'tool_calls' }
+    ])
+
+    await expect(test.run({
+      maxToolCallsPerStep: 1,
+      toolCallOverflowBehavior: 'truncate'
+    })).resolves.toMatchObject({
+      kind: 'tool_calls',
+      snapshot: { toolCalls: [{ callId: 'call_kept' }] }
+    })
+    expect(test.appliedItems.filter((item) => item.kind === 'tool_call')).toHaveLength(1)
+    expect(test.trace).not.toContain('limit')
+  })
+
   it('coalesces provider-sized deltas without changing event order or final text', async () => {
     const reasoning = 'r'.repeat(2_000)
     const text = 't'.repeat(2_000)
@@ -403,7 +453,14 @@ describe('ModelRoundEngine', () => {
         kind: 'assistant_text_delta',
         text: value
       })),
-      { kind: 'retrying', status: 429, attempt: 1, maxAttempts: 2, delayMs: 10 },
+      {
+        kind: 'retrying',
+        status: 429,
+        attempt: 1,
+        maxAttempts: 2,
+        delayMs: 10,
+        failureSummary: 'Provider rate limit resets shortly.'
+      },
       { kind: 'completed', stopReason: 'stop' }
     ])
 
@@ -427,6 +484,10 @@ describe('ModelRoundEngine', () => {
       'assistant_text_delta',
       'model_request_retry'
     ])
+    expect(test.recordedEvents.at(-1)).toMatchObject({
+      kind: 'model_request_retry',
+      failureSummary: 'Provider rate limit resets shortly.'
+    })
     expect(test.appliedItems.map((item) => [item.kind, 'text' in item ? item.text : ''])).toEqual([
       ['assistant_reasoning', reasoning],
       ['assistant_text', text]

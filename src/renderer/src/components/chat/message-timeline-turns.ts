@@ -9,6 +9,13 @@ export type Turn = {
   blocks: ChatBlock[]
 }
 
+/** Resolve historical turn intent from its durable user-item projection. */
+export function turnTaskSurface(turn: Turn): 'code' | 'design' {
+  const meta = turn.user?.meta
+  if (meta?.agentSurface === 'design' || meta?.designProfile || meta?.guiDesignMode) return 'design'
+  return 'code'
+}
+
 export function isBackgroundShellNoticeBlock(block: ChatBlock): boolean {
   return block.kind === 'user' && isBackgroundShellNoticeUserMessage(block)
 }
@@ -21,11 +28,16 @@ export function isGraphRuntimeNoticeBlock(block: ChatBlock): boolean {
   return block.kind === 'user' && block.meta?.messageSource === 'graph_runtime'
 }
 
+export function isDesignContinuationBlock(block: ChatBlock): boolean {
+  return block.kind === 'user' && block.meta?.messageSource === 'design_continuation'
+}
+
 export function isBackgroundNoticeBlock(block: ChatBlock): boolean {
   return (
     isBackgroundShellNoticeBlock(block) ||
     isBackgroundSubagentNoticeBlock(block) ||
-    isGraphRuntimeNoticeBlock(block)
+    isGraphRuntimeNoticeBlock(block) ||
+    isDesignContinuationBlock(block)
   )
 }
 
@@ -35,7 +47,24 @@ export function groupTurns(blocks: ChatBlock[]): Turn[] {
   let current: Turn | null = null
 
   for (const block of blocks) {
-    const turnId = block.turnId?.trim()
+    const turnId = block.turnId?.trim() || (
+      block.kind === 'user' ? block.meta?.turnId?.trim() : undefined
+    )
+    if (
+      block.kind === 'user' &&
+      (isBackgroundShellNoticeBlock(block) || isBackgroundSubagentNoticeBlock(block))
+    ) {
+      let turn = turnId ? turnsById.get(turnId) : undefined
+      if (!turn) turn = current ?? undefined
+      if (!turn) {
+        turn = { ...(turnId ? { turnId } : {}), blocks: [] }
+        turns.push(turn)
+      }
+      if (turnId && !turnsById.has(turnId)) turnsById.set(turnId, turn)
+      turn.blocks.push(block)
+      current = turn
+      continue
+    }
     if (turnId) {
       let turn = turnsById.get(turnId)
       if (!turn) {
@@ -69,6 +98,25 @@ export function groupTurns(blocks: ChatBlock[]): Turn[] {
   }
 
   return turns
+}
+
+/** Bind live state to its durable runtime turn instead of assuming the last UI turn owns it. */
+export function activeTimelineTurnIndex(
+  turns: readonly Turn[],
+  currentTurnId?: string | null,
+  currentTurnUserId?: string | null
+): number {
+  const normalizedTurnId = currentTurnId?.trim()
+  if (normalizedTurnId) {
+    const index = turns.findIndex((turn) => turn.turnId === normalizedTurnId)
+    if (index >= 0) return index
+  }
+  const normalizedUserId = currentTurnUserId?.trim()
+  if (normalizedUserId) {
+    const index = turns.findIndex((turn) => turn.user?.id === normalizedUserId)
+    if (index >= 0) return index
+  }
+  return turns.length - 1
 }
 
 export function stableTurnKey(turn: Turn, fallbackIndex: number): string {

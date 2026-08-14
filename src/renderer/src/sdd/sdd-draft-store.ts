@@ -1,6 +1,10 @@
 import { create } from 'zustand'
 import { buildSddDraftRelativePath, isSddDraftRelativePath, normalizeSddRelativePath } from '@shared/sdd'
 import { browserStorage } from '../lib/browser-storage'
+import {
+  normalizeWriteQuotedSelections,
+  type WriteQuotedSelection
+} from '../write/quoted-selection'
 
 export type SddDraftSaveStatus = 'saved' | 'dirty' | 'saving' | 'error'
 export type SddDraftOperationStatus = 'idle' | 'upgrading' | 'error'
@@ -49,6 +53,8 @@ export type SddDraftState = {
   saveStatus: SddDraftSaveStatus
   operationStatus: SddDraftOperationStatus
   error: string | null
+  /** Ephemeral references for the next Requirement AI turn; never persisted into the draft registry. */
+  assistantQuotedSelections: WriteQuotedSelection[]
   setActiveDraft: (
     draft: SddDraft,
     content: string,
@@ -63,6 +69,10 @@ export type SddDraftState = {
   setSaveStatus: (status: SddDraftSaveStatus, error?: string | null) => void
   markSaved: (content: string) => void
   setOperationStatus: (status: SddDraftOperationStatus, error?: string | null) => void
+  addAssistantQuotedSelection: (selection: WriteQuotedSelection) => void
+  removeAssistantQuotedSelection: (id: string) => void
+  removeAssistantQuotedSelections: (ids: readonly string[]) => void
+  clearAssistantQuotedSelections: () => void
   clearActiveDraft: () => void
 }
 
@@ -295,6 +305,7 @@ export const useSddDraftStore = create<SddDraftState>((set) => ({
   saveStatus: 'saved',
   operationStatus: 'idle',
   error: null,
+  assistantQuotedSelections: [],
 
   setActiveDraft: (draft, content, options = {}) => {
     const lastSavedContent = options.lastSavedContent ?? content
@@ -307,7 +318,8 @@ export const useSddDraftStore = create<SddDraftState>((set) => ({
       lastSavedContent,
       saveStatus,
       operationStatus: 'idle',
-      error: null
+      error: null,
+      assistantQuotedSelections: []
     })
   },
 
@@ -357,6 +369,26 @@ export const useSddDraftStore = create<SddDraftState>((set) => ({
 
   setOperationStatus: (status, error = null) => set({ operationStatus: status, error }),
 
+  addAssistantQuotedSelection: (selection) => set((state) => ({
+    assistantQuotedSelections: normalizeWriteQuotedSelections([
+      ...state.assistantQuotedSelections,
+      selection
+    ])
+  })),
+
+  removeAssistantQuotedSelection: (id) => set((state) => ({
+    assistantQuotedSelections: state.assistantQuotedSelections.filter((selection) => selection.id !== id)
+  })),
+
+  removeAssistantQuotedSelections: (ids) => set((state) => {
+    const removed = new Set(ids)
+    return removed.size === 0
+      ? {}
+      : { assistantQuotedSelections: state.assistantQuotedSelections.filter(({ id }) => !removed.has(id)) }
+  }),
+
+  clearAssistantQuotedSelections: () => set({ assistantQuotedSelections: [] }),
+
   clearActiveDraft: () =>
     set({
       activeDraft: null,
@@ -364,6 +396,7 @@ export const useSddDraftStore = create<SddDraftState>((set) => ({
       lastSavedContent: '',
       saveStatus: 'saved',
       operationStatus: 'idle',
-      error: null
+      error: null,
+      assistantQuotedSelections: []
     })
 }))

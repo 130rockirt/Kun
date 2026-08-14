@@ -1,0 +1,646 @@
+html[data-ui-plugin-presentation='on'] .ds-ui-plugin-character-layer {
+  z-index: 5;
+  display: flex;
+  inset:
+    4.75rem
+    clamp(0.75rem, 3cqw, 3rem)
+    var(--kun-ui-plugin-composer-safe-inset, 12rem)
+    clamp(0.75rem, 3cqw, 3rem);
+  align-items: center;
+  justify-content: flex-end;
+  opacity: var(--kun-ui-plugin-character-opacity, 1);
+  transform: translate(
+    var(--kun-ui-plugin-character-offset-x, 0%),
+    var(--kun-ui-plugin-character-offset-y, 0%)
+  );
+}
+
+html[data-ui-plugin-presentation='on'][data-ui-plugin-character-anchor='top-right']
+  .ds-ui-plugin-character-layer {
+  align-items: flex-start;
+}
+
+html[data-ui-plugin-presentation='on'][data-ui-plugin-character-anchor='bottom-right']
+  .ds-ui-plugin-character-layer {
+  align-items: flex-end;
+}
+
+.ds-ui-plugin-character {
+  display: block;
+  box-sizing: border-box;
+  scale: var(--kun-ui-plugin-character-user-scale, 1);
+  width: clamp(16rem, 28cqw, 27rem);
+  max-width: 58%;
+  max-height: 100%;
+  object-fit: contain;
+  object-position: right center;
+  transform-origin: 72% 62%;
+}
+
+html[data-ui-plugin-character-size='large'] .ds-ui-plugin-character {
+  width: clamp(21rem, 37cqw, 37rem);
+  max-width: 68%;
+}
+
+html[data-ui-plugin-character-size='hero'] .ds-ui-plugin-character {
+  width: clamp(27rem, 48cqw, 49rem);
+  max-width: 78%;
+}
+
+html[data-ui-plugin-character-motion='breathe'] .ds-ui-plugin-character {
+  animation: ds-ui-plugin-character-breathe 5.8s ease-in-out infinite alternate;
+}
+
+html[data-ui-plugin-character-motion='float'] .ds-ui-plugin-character {
+  animation: ds-ui-plugin-character-float 5.2s ease-in-out infinite;
+}
+
+/* Nine host-drawn frames let each portrait keep its own visual identity. */
+html[data-ui-plugin-character-frame='soft-card'] .ds-ui-plugin-character {
+  padding: 0.45rem;
+  border: 1px solid color-mix(in srgb, var(--ds-accent) 30%, white 70%);
+  border-radius: 2.4rem;
+  background: color-mix(in srgb, var(--kun-ui-plugin-host-surface-color) 68%, transparent);
+  box-shadow:
+    0 30px 80px color-mix(in srgb, var(--ds-accent) 18%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.72);
+}
+
+html[data-ui-plugin-character-frame='paper'] .ds-ui-plugin-character {
+  padding: 0.72rem;
+  border: 1px solid color-mix(in srgb, var(--ds-border-strong) 74%, #a57b45 26%);
+  border-radius: 1.1rem 2rem 1.25rem 1.8rem;
+  background: color-mix(in srgb, var(--kun-ui-plugin-host-surface-color) 82%, #f0d9a8 18%);
+  box-shadow:
+    10px 16px 0 color-mix(in srgb, var(--ds-accent) 8%, transparent),
+    0 28px 55px rgba(44, 31, 21, 0.18);
+}
+
+html[data-ui-plugin-character-frame='crystal'] .ds-ui-plugin-character {
+  padding: 0.55rem;
+  border: 2px solid color-mix(in srgb, var(--ds-accent) 32%, white 68%);
+  border-radius: 2.8rem 1rem 3.2rem 1.35rem;
+  background: linear-gradient(
+    145deg,
+    rgba(255, 255, 255, 0.62),
+    color-mix(in srgb, var(--ds-accent) 18%, transparent)
+  );
+  box-shadow:
+    0 0 0 7px color-mix(in srgb, var(--ds-accent) 7%, transparent),
+    0 35px 90px color-mix(in srgb, var(--ds-accent) 30%, transparent);
+}
+
+html[data-ui-plugin-character-frame='hologram'] .ds-ui-plugin-character {
+  padding: 0.38rem;
+  border: 1px solid color-mix(in srgb, var(--ds-accent) 52%, #81f8ff 48%);
+  border-radius: 1.5rem;
+  background: color-mix(in srgb, var(--kun-ui-plugin-host-bg-color) 62%, transparent);
+  box-shadow:
+    0 0 0 1px rgba(141, 247, 255, 0.4),
+    0 0 34px color-mix(in srgb, var(--ds-accent) 32%, transparent),
+    inset 0 0 28px rgba(115, 238, 255, 0.12);
+}
+
+html[data-ui-plugin-character-frame='backstage'] .ds-ui-plugin-character {
+  padding: 0.62rem;
+  border: 2px solid color-mix(in srgb, var(--ds-accent) 45%, #e7bd68 55%);
+  border-radius: 0.65rem 2.4rem 0.65rem 2.4rem;
+  background: color-mix(in srgb, var(--kun-ui-plugin-host-surface-color) 78%, #3d213a 22%);
+  box-shadow:
+    0 0 0 5px color-mix(in srgb, var(--ds-accent) 10%, transparent),
+    -18px 24px 58px rgba(33, 16, 37, 0.3);
+}
+
+html[data-ui-plugin-character-frame='portal'] .ds-ui-plugin-character {
+  padding: clamp(0.45rem, 0.8cqw, 0.85rem);
+  border: 3px double color-mix(in srgb, var(--ds-accent) 72%, white 28%);
+  border-radius: 46% 46% 42% 42% / 36% 36% 50% 50%;
+  background: radial-gradient(
+    ellipse at center,
+    color-mix(in srgb, var(--ds-accent) 7%, var(--kun-ui-plugin-host-surface-color)),
+    color-mix(in srgb, var(--kun-ui-plugin-host-bg-color) 82%, transparent)
+  );
+  box-shadow:
+    0 0 0 8px color-mix(in srgb, var(--ds-accent) 9%, transparent),
+    0 0 65px color-mix(in srgb, var(--ds-accent) 36%, transparent);
+}
+
+html[data-ui-plugin-character-frame='polaroid'] .ds-ui-plugin-character {
+  padding: 0.75rem 0.75rem clamp(2rem, 3.2cqw, 3.4rem);
+  border: 1px solid rgba(50, 55, 67, 0.13);
+  border-radius: 0.4rem;
+  background: #fffefa;
+  box-shadow:
+    -10px 20px 0 color-mix(in srgb, var(--ds-accent) 8%, transparent),
+    0 32px 65px rgba(26, 31, 42, 0.24);
+}
+
+html[data-ui-plugin-character-frame='ticket'] .ds-ui-plugin-character {
+  padding: 0.72rem;
+  border: 2px dashed color-mix(in srgb, var(--ds-accent) 52%, #9d7140 48%);
+  border-radius: 0.7rem 2.2rem 0.7rem 2.2rem;
+  background: color-mix(in srgb, var(--kun-ui-plugin-host-surface-color) 80%, #f1d89b 20%);
+  box-shadow:
+    0 0 0 6px color-mix(in srgb, var(--kun-ui-plugin-host-bg-color) 84%, transparent),
+    0 26px 64px rgba(44, 35, 20, 0.2);
+}
+
+html[data-ui-plugin-character-frame='seal'] .ds-ui-plugin-character {
+  padding: 0.72rem;
+  border: 3px double color-mix(in srgb, var(--ds-accent) 62%, #cf9a45 38%);
+  border-radius: 45% 45% 48% 48% / 38% 38% 52% 52%;
+  background: color-mix(in srgb, var(--kun-ui-plugin-host-surface-color) 78%, transparent);
+  box-shadow:
+    0 0 0 9px color-mix(in srgb, var(--ds-accent) 10%, transparent),
+    0 0 0 11px color-mix(in srgb, var(--ds-accent) 24%, transparent),
+    0 30px 70px color-mix(in srgb, var(--ds-accent) 26%, transparent);
+}
+
+.ds-ui-plugin-decor-layer::before,
+.ds-ui-plugin-decor-layer::after {
+  content: '';
+  position: absolute;
+  pointer-events: none;
+}
+
+html[data-ui-plugin-character-frame='soft-card'] .ds-ui-plugin-decor-layer::before {
+  inset: 8% -10% auto auto;
+  width: 52cqw;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--ds-accent) 24%, transparent),
+    transparent 68%
+  );
+}
+
+html[data-ui-plugin-character-frame='paper'] .ds-ui-plugin-decor-layer::before {
+  inset: 0;
+  opacity: 0.34;
+  background-image:
+    linear-gradient(color-mix(in srgb, var(--ds-accent) 9%, transparent) 1px, transparent 1px),
+    linear-gradient(90deg, color-mix(in srgb, var(--ds-accent) 9%, transparent) 1px, transparent 1px);
+  background-size: 28px 28px;
+}
+
+html[data-ui-plugin-character-frame='crystal'] .ds-ui-plugin-decor-layer::before,
+html[data-ui-plugin-character-frame='crystal'] .ds-ui-plugin-decor-layer::after {
+  width: 42cqw;
+  aspect-ratio: 1;
+  border: 1px solid color-mix(in srgb, var(--ds-accent) 24%, transparent);
+  transform: rotate(34deg);
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.15), transparent 55%);
+}
+
+html[data-ui-plugin-character-frame='crystal'] .ds-ui-plugin-decor-layer::before {
+  top: 4%;
+  right: -14%;
+}
+
+html[data-ui-plugin-character-frame='crystal'] .ds-ui-plugin-decor-layer::after {
+  right: 8%;
+  bottom: -28%;
+}
+
+html[data-ui-plugin-character-frame='hologram'] .ds-ui-plugin-decor-layer::before {
+  inset: 0;
+  opacity: 0.24;
+  background: repeating-linear-gradient(
+    180deg,
+    transparent 0 7px,
+    color-mix(in srgb, var(--ds-accent) 28%, #83f7ff 72%) 8px,
+    transparent 9px
+  );
+}
+
+html[data-ui-plugin-character-frame='hologram'] .ds-ui-plugin-decor-layer::after {
+  top: 8%;
+  right: 3%;
+  bottom: 5%;
+  width: min(44cqw, 42rem);
+  border: 1px solid color-mix(in srgb, var(--ds-accent) 30%, transparent);
+  border-radius: 2rem;
+  box-shadow: inset 0 0 48px color-mix(in srgb, var(--ds-accent) 13%, transparent);
+}
+
+html[data-ui-plugin-character-frame='backstage'] .ds-ui-plugin-decor-layer::before {
+  inset: -30% -2% auto auto;
+  width: 58cqw;
+  height: 110%;
+  opacity: 0.42;
+  background: conic-gradient(
+    from 205deg at 70% 0%,
+    transparent 0 18deg,
+    color-mix(in srgb, var(--ds-accent) 24%, #ffe3a2 76%) 24deg 29deg,
+    transparent 35deg 47deg,
+    color-mix(in srgb, var(--ds-accent) 20%, #ffe3a2 80%) 54deg 59deg,
+    transparent 65deg
+  );
+  filter: blur(10px);
+}
+
+html[data-ui-plugin-character-frame='portal'] .ds-ui-plugin-decor-layer::before,
+html[data-ui-plugin-character-frame='seal'] .ds-ui-plugin-decor-layer::before {
+  right: clamp(0.75rem, 3cqw, 3rem);
+  top: 50%;
+  width: clamp(20rem, 43cqw, 45rem);
+  aspect-ratio: 1;
+  border: 1px solid color-mix(in srgb, var(--ds-accent) 30%, transparent);
+  border-radius: 50%;
+  box-shadow:
+    0 0 0 2cqw color-mix(in srgb, var(--ds-accent) 5%, transparent),
+    0 0 0 5cqw color-mix(in srgb, var(--ds-accent) 4%, transparent),
+    0 0 7cqw color-mix(in srgb, var(--ds-accent) 24%, transparent);
+  transform: translateY(-50%);
+}
+
+html[data-ui-plugin-character-frame='polaroid'] .ds-ui-plugin-decor-layer::before,
+html[data-ui-plugin-character-frame='polaroid'] .ds-ui-plugin-decor-layer::after {
+  right: 4%;
+  width: clamp(9rem, 15cqw, 15rem);
+  aspect-ratio: 4 / 5;
+  border: 1px solid rgba(60, 64, 72, 0.08);
+  background: color-mix(in srgb, var(--kun-ui-plugin-host-surface-color) 82%, white 18%);
+  box-shadow: 0 18px 45px rgba(20, 27, 40, 0.12);
+}
+
+html[data-ui-plugin-character-frame='polaroid'] .ds-ui-plugin-decor-layer::before {
+  top: 8%;
+  transform: rotate(8deg);
+}
+
+html[data-ui-plugin-character-frame='polaroid'] .ds-ui-plugin-decor-layer::after {
+  bottom: calc(var(--kun-ui-plugin-composer-safe-inset, 12rem) + 7%);
+  right: 23%;
+  transform: rotate(-7deg);
+}
+
+html[data-ui-plugin-character-frame='ticket'] .ds-ui-plugin-decor-layer::before {
+  inset: 8% 3% 7% auto;
+  width: min(46cqw, 45rem);
+  border: 2px dashed color-mix(in srgb, var(--ds-accent) 22%, transparent);
+  border-radius: 2rem;
+}
+
+/* Readability layer: character anchors are all on the right, so the opposite
+ * scrim protects the left conversation column without whitening the portrait. */
+html[data-ui-plugin-presentation='on'][data-ui-plugin-readability-scrim='opposite-character']
+  .ds-ui-plugin-readability-scrim {
+  z-index: 2;
+  display: block;
+  background: linear-gradient(
+    90deg,
+    var(--kun-ui-plugin-host-bg-color) 0%,
+    color-mix(in srgb, var(--kun-ui-plugin-host-bg-color) 94%, transparent) 38%,
+    color-mix(in srgb, var(--kun-ui-plugin-host-bg-color) 72%, transparent) 56%,
+    transparent 78%
+  );
+}
+
+html[data-ui-plugin-presentation='on'][data-ui-plugin-readability-scrim='full']
+  .ds-ui-plugin-readability-scrim {
+  z-index: 2;
+  display: block;
+  background: color-mix(in srgb, var(--kun-ui-plugin-host-bg-color) 78%, transparent);
+}
+
+html[data-ui-plugin-readability-strength='soft'] .ds-ui-plugin-readability-scrim {
+  opacity: 0.54;
+}
+
+html[data-ui-plugin-readability-strength='medium'] .ds-ui-plugin-readability-scrim {
+  opacity: 0.74;
+}
+
+html[data-ui-plugin-readability-strength='strong'] .ds-ui-plugin-readability-scrim {
+  opacity: 0.92;
+}
+
+/* Reserve real conversation/composer width for large right-side portraits. */
+html[data-ui-plugin-content-reserve='narrow'] .ds-chat-stage {
+  --kun-ui-plugin-content-reserve: clamp(10rem, 20cqw, 17rem);
+  --kun-ui-plugin-content-shift: clamp(3rem, 7cqw, 6rem);
+  --ds-chat-side-rail-reserve: calc(5.25rem + var(--kun-ui-plugin-content-reserve));
+}
+
+html[data-ui-plugin-content-reserve='wide'] .ds-chat-stage {
+  --kun-ui-plugin-content-reserve: clamp(15rem, 28cqw, 25rem);
+  --kun-ui-plugin-content-shift: clamp(8rem, 15cqw, 14rem);
+  --ds-chat-side-rail-reserve: calc(5.25rem + var(--kun-ui-plugin-content-reserve));
+}
+
+html[data-ui-plugin-presentation='on'] .ds-message-timeline-content,
+html[data-ui-plugin-presentation='on'] .ds-floating-composer {
+  translate: calc(-1 * var(--kun-ui-plugin-content-shift, 0rem)) 0;
+}
+
+/* Fixed material recipes. Plugin manifests choose names, never CSS values. */
+html[data-ui-plugin-surface-sidebar='solid']
+  :is(.ds-sidebar-shell, .ds-settings-sidebar) {
+  background: var(--ds-sidebar-gradient);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+html[data-ui-plugin-surface-topbar='solid'] .ds-topbar-surface {
+  background: var(--ds-topbar-bg);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+html[data-ui-plugin-surface-composer='solid'] .ds-composer-shell.ds-chat-composer,
+html[data-ui-plugin-surface-cards='solid']
+  :is(.ds-card-soft, .ds-card-strong, .ds-card-muted, .ds-card-ghost, .ds-surface-soft, .ds-surface-strong) {
+  background: var(--ds-surface-elevated);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+html[data-ui-plugin-surface-sidebar='translucent']
+  :is(.ds-sidebar-shell, .ds-settings-sidebar),
+html[data-ui-plugin-surface-topbar='translucent'] .ds-topbar-surface,
+html[data-ui-plugin-surface-composer='translucent'] .ds-composer-shell.ds-chat-composer,
+html[data-ui-plugin-surface-cards='translucent']
+  :is(.ds-card-soft, .ds-card-strong, .ds-card-muted, .ds-card-ghost, .ds-surface-soft, .ds-surface-strong) {
+  background: color-mix(in srgb, var(--kun-ui-plugin-host-surface-color) 82%, transparent);
+  -webkit-backdrop-filter: blur(6px) saturate(1.04);
+  backdrop-filter: blur(6px) saturate(1.04);
+}
+
+html[data-ui-plugin-surface-sidebar='glass']
+  :is(.ds-sidebar-shell, .ds-settings-sidebar),
+html[data-ui-plugin-surface-topbar='glass'] .ds-topbar-surface,
+html[data-ui-plugin-surface-composer='glass'] .ds-composer-shell.ds-chat-composer,
+html[data-ui-plugin-surface-cards='glass']
+  :is(.ds-card-soft, .ds-card-strong, .ds-card-muted, .ds-card-ghost, .ds-surface-soft, .ds-surface-strong) {
+  border-color: color-mix(in srgb, var(--ds-border) 72%, white 28%);
+  background: color-mix(in srgb, var(--kun-ui-plugin-host-surface-color) 62%, transparent);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.38),
+    0 16px 42px color-mix(in srgb, var(--kun-ui-plugin-host-bg-color) 28%, transparent);
+  -webkit-backdrop-filter: blur(16px) saturate(1.16);
+  backdrop-filter: blur(16px) saturate(1.16);
+}
+
+html[data-ui-plugin-surface-sidebar='strong-glass']
+  :is(.ds-sidebar-shell, .ds-settings-sidebar),
+html[data-ui-plugin-surface-topbar='strong-glass'] .ds-topbar-surface,
+html[data-ui-plugin-surface-composer='strong-glass'] .ds-composer-shell.ds-chat-composer,
+html[data-ui-plugin-surface-cards='strong-glass']
+  :is(.ds-card-soft, .ds-card-strong, .ds-card-muted, .ds-card-ghost, .ds-surface-soft, .ds-surface-strong) {
+  border-color: color-mix(in srgb, var(--ds-border-strong) 66%, white 34%);
+  background: color-mix(in srgb, var(--kun-ui-plugin-host-surface-color) 74%, transparent);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.52),
+    0 22px 58px color-mix(in srgb, var(--kun-ui-plugin-host-bg-color) 36%, transparent);
+  -webkit-backdrop-filter: blur(26px) saturate(1.24);
+  backdrop-filter: blur(26px) saturate(1.24);
+}
+
+@keyframes ds-ui-plugin-character-breathe {
+  from {
+    transform: scale(0.988);
+  }
+  to {
+    transform: scale(1.012);
+  }
+}
+
+@keyframes ds-ui-plugin-character-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-0.7rem);
+  }
+}
+
+/* Declarative UI Plugin scene v1.6 ----------------------------------------
+ * Scene images are main-process validated raster data URLs rendered by fixed
+ * host markup. Layout, z-order, clipping and animation remain host-owned.
+ */
+
+.ds-ui-plugin-scene-stage-layer,
+.ds-ui-plugin-scene-visual-zone {
+  position: absolute;
+  display: none;
+  overflow: hidden;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+html[data-ui-plugin-scene='on'] .ds-ui-plugin-scene-stage-layer {
+  z-index: 1;
+  inset: 0;
+  display: block;
+}
+
+html[data-ui-plugin-scene='on'] .ds-ui-plugin-scene-visual-zone {
+  /* Keep every scene image below Kun's z-3 message/composer surface. The
+   * reserved side geometry still gives the character a clean visual zone,
+   * while an expanded Composer or transient content can never be painted
+   * underneath plugin artwork. */
+  z-index: 2;
+  display: block;
+  top: 4.75rem;
+  bottom: var(--kun-ui-plugin-composer-safe-inset, 12rem);
+  width: clamp(20rem, 38cqw, 40rem);
+  contain: layout paint;
+}
+
+html[data-ui-plugin-scene='on'] .ds-chat-stage {
+  /* Discard the v1.5 right-side reserve before applying the selected v1.6
+   * layout. Backdrop scenes use Kun's normal content width. */
+  --ds-chat-side-rail-reserve: 5.25rem;
+}
+
+html[data-ui-plugin-scene-layout='rail-right'] .ds-ui-plugin-scene-visual-zone {
+  right: clamp(0.75rem, 3cqw, 3rem);
+}
+
+html[data-ui-plugin-scene-layout='rail-left'] .ds-ui-plugin-scene-visual-zone {
+  left: clamp(0.75rem, 3cqw, 3rem);
+}
+
+html[data-ui-plugin-scene-layout='card-right'] .ds-ui-plugin-scene-visual-zone,
+html[data-ui-plugin-scene-layout='card-left'] .ds-ui-plugin-scene-visual-zone {
+  top: clamp(6.5rem, 12%, 9rem);
+  bottom: max(var(--kun-ui-plugin-composer-safe-inset, 12rem), 34%);
+  width: clamp(17rem, 31cqw, 32rem);
+  border-radius: 2rem;
+}
+
+html[data-ui-plugin-scene-layout='card-right'] .ds-ui-plugin-scene-visual-zone {
+  right: clamp(1rem, 5cqw, 5rem);
+}
+
+html[data-ui-plugin-scene-layout='card-left'] .ds-ui-plugin-scene-visual-zone {
+  left: clamp(1rem, 5cqw, 5rem);
+}
+
+html[data-ui-plugin-scene-layout='backdrop-right'] .ds-ui-plugin-scene-visual-zone,
+html[data-ui-plugin-scene-layout='backdrop-center'] .ds-ui-plugin-scene-visual-zone {
+  z-index: 1;
+  inset: 4.75rem 0 0;
+  width: auto;
+  contain: layout paint;
+}
+
+html[data-ui-plugin-scene-layout='backdrop-right'] .ds-ui-plugin-scene-character {
+  margin-left: auto;
+}
+
+/* v1.6 owns content placement; the v1.5 presentation remains only a fallback. */
+html[data-ui-plugin-scene='on'] .ds-message-timeline-content,
+html[data-ui-plugin-scene='on'] .ds-floating-composer {
+  translate: none;
+}
+
+html[data-ui-plugin-scene-layout='rail-right'] .ds-chat-stage,
+html[data-ui-plugin-scene-layout='rail-left'] .ds-chat-stage {
+  --kun-ui-plugin-scene-content-reserve: clamp(15rem, 30cqw, 27rem);
+  --kun-ui-plugin-scene-content-shift: clamp(8rem, 16cqw, 15rem);
+  --ds-chat-side-rail-reserve: calc(5.25rem + var(--kun-ui-plugin-scene-content-reserve));
+}
+
+html[data-ui-plugin-scene-layout='card-right'] .ds-chat-stage,
+html[data-ui-plugin-scene-layout='card-left'] .ds-chat-stage {
+  --kun-ui-plugin-scene-content-reserve: clamp(11rem, 23cqw, 20rem);
+  --kun-ui-plugin-scene-content-shift: clamp(5rem, 10cqw, 9rem);
+  --ds-chat-side-rail-reserve: calc(5.25rem + var(--kun-ui-plugin-scene-content-reserve));
+}
+
+html:is(
+    [data-ui-plugin-scene-layout='rail-right'],
+    [data-ui-plugin-scene-layout='card-right']
+  ) :is(.ds-message-timeline-content, .ds-floating-composer) {
+  translate: calc(-1 * var(--kun-ui-plugin-scene-content-shift)) 0;
+}
+
+html:is(
+    [data-ui-plugin-scene-layout='rail-left'],
+    [data-ui-plugin-scene-layout='card-left']
+  ) :is(.ds-message-timeline-content, .ds-floating-composer) {
+  translate: var(--kun-ui-plugin-scene-content-shift) 0;
+}
+
+html:is(
+    [data-ui-plugin-scene-layout='rail-left'],
+    [data-ui-plugin-scene-layout='card-left']
+  )[data-ui-plugin-readability-scrim='opposite-character']
+  .ds-ui-plugin-readability-scrim {
+  background: linear-gradient(
+    270deg,
+    var(--kun-ui-plugin-host-bg-color) 0%,
+    color-mix(in srgb, var(--kun-ui-plugin-host-bg-color) 94%, transparent) 38%,
+    color-mix(in srgb, var(--kun-ui-plugin-host-bg-color) 72%, transparent) 56%,
+    transparent 78%
+  );
+}
+
+.ds-ui-plugin-scene-artwork,
+.ds-ui-plugin-scene-character {
+  position: absolute;
+  display: block;
+  box-sizing: border-box;
+  max-width: none;
+  max-height: none;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.ds-ui-plugin-scene-artwork {
+  --kun-ui-plugin-scene-layer-x: 0%;
+  --kun-ui-plugin-scene-layer-y: 0%;
+  --kun-ui-plugin-scene-layer-opacity: 1;
+  z-index: 1;
+  width: 55%;
+  height: 55%;
+  opacity: var(--kun-ui-plugin-scene-layer-opacity);
+  object-fit: contain;
+  object-position: center;
+  /* translate percentages resolve against the artwork's own X/Y dimensions;
+   * unlike percentage margins this keeps offsetY independent of stage width. */
+  translate:
+    calc(var(--kun-ui-plugin-scene-anchor-translate-x, -50%) + var(--kun-ui-plugin-scene-layer-x))
+    calc(var(--kun-ui-plugin-scene-anchor-translate-y, -50%) + var(--kun-ui-plugin-scene-layer-y));
+  transform-origin: center;
+  mix-blend-mode: normal;
+}
+
+.ds-ui-plugin-scene-artwork-backdrop {
+  --kun-ui-plugin-scene-layer-x: var(--kun-ui-plugin-scene-backdrop-offset-x, 0%);
+  --kun-ui-plugin-scene-layer-y: var(--kun-ui-plugin-scene-backdrop-offset-y, 0%);
+  --kun-ui-plugin-scene-layer-opacity: var(--kun-ui-plugin-scene-backdrop-opacity, 1);
+}
+
+.ds-ui-plugin-scene-artwork-ambient {
+  --kun-ui-plugin-scene-layer-x: var(--kun-ui-plugin-scene-ambient-offset-x, 0%);
+  --kun-ui-plugin-scene-layer-y: var(--kun-ui-plugin-scene-ambient-offset-y, 0%);
+  --kun-ui-plugin-scene-layer-opacity: var(--kun-ui-plugin-scene-ambient-opacity, 1);
+  z-index: 2;
+}
+
+.ds-ui-plugin-scene-artwork-frame {
+  --kun-ui-plugin-scene-layer-x: var(--kun-ui-plugin-scene-frame-offset-x, 0%);
+  --kun-ui-plugin-scene-layer-y: var(--kun-ui-plugin-scene-frame-offset-y, 0%);
+  --kun-ui-plugin-scene-layer-opacity: var(--kun-ui-plugin-scene-frame-opacity, 1);
+  z-index: 3;
+}
+
+.ds-ui-plugin-scene-artwork-foreground {
+  --kun-ui-plugin-scene-layer-x: var(--kun-ui-plugin-scene-foreground-offset-x, 0%);
+  --kun-ui-plugin-scene-layer-y: var(--kun-ui-plugin-scene-foreground-offset-y, 0%);
+  --kun-ui-plugin-scene-layer-opacity: var(--kun-ui-plugin-scene-foreground-opacity, 1);
+  z-index: 4;
+}
+
+.ds-ui-plugin-scene-artwork-emblem {
+  --kun-ui-plugin-scene-layer-x: var(--kun-ui-plugin-scene-emblem-offset-x, 0%);
+  --kun-ui-plugin-scene-layer-y: var(--kun-ui-plugin-scene-emblem-offset-y, 0%);
+  --kun-ui-plugin-scene-layer-opacity: var(--kun-ui-plugin-scene-emblem-opacity, 1);
+  z-index: 5;
+}
+
+.ds-ui-plugin-scene-artwork[data-scene-size='small'] {
+  width: 34%;
+  height: 34%;
+}
+
+.ds-ui-plugin-scene-artwork[data-scene-size='medium'] {
+  width: 55%;
+  height: 55%;
+}
+
+.ds-ui-plugin-scene-artwork[data-scene-size='large'] {
+  width: 78%;
+  height: 78%;
+}
+
+.ds-ui-plugin-scene-artwork[data-scene-size='full'] {
+  width: 100%;
+  height: 100%;
+}
+
+.ds-ui-plugin-scene-artwork[data-scene-fit='cover'] {
+  object-fit: cover;
+}
+
+.ds-ui-plugin-scene-artwork[data-scene-blend='screen'] {
+  mix-blend-mode: screen;
+}
+
+.ds-ui-plugin-scene-artwork[data-scene-blend='soft-light'] {
+  mix-blend-mode: soft-light;
+}
+
+.ds-ui-plugin-scene-artwork[data-scene-anchor='top-left'] {
+  --kun-ui-plugin-scene-anchor-translate-x: 0%;
+  --kun-ui-plugin-scene-anchor-translate-y: 0%;
+  top: 0;
+  left: 0;
+}

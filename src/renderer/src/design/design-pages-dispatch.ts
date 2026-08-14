@@ -1,5 +1,10 @@
 import { runDesignPages, type RunDesignPagesDeps } from './design-pages-run'
 import type { DesignWorkspaceState } from './design-workspace-store-types'
+import type {
+  DesignDocumentTarget,
+  DesignTaskProfileInput
+} from '../agent/design-task-profile'
+import { designContextFromTaskProfile } from './design-task-profile-input'
 
 export type DesignPagesPromptState = Pick<
   DesignWorkspaceState,
@@ -21,11 +26,17 @@ export type DesignPagesDispatchOptions = {
   sendMessage: RunDesignPagesDeps['sendMessage']
   promptState: DesignPagesPromptState
   resolveProviderId: (model: string) => string
+  model?: string
+  providerId?: string
   labels?: RunDesignPagesDeps['labels']
   reasoningEffort?: string
   serviceTier?: 'priority'
   expectedThreadId?: string
+  designProfile?: DesignTaskProfileInput
+  designDocumentTarget?: DesignDocumentTarget
+  waitForRuntimeAdmission?: boolean
   onFirstSendSettled?: RunDesignPagesDeps['onFirstSendSettled']
+  onFirstSendStarting?: RunDesignPagesDeps['onFirstSendStarting']
   runPages?: DesignPagesRunInvoker
 }
 
@@ -55,14 +66,25 @@ export function buildDesignPagesRunOptions({
   sendMessage,
   promptState,
   resolveProviderId,
+  model: selectedModel,
+  providerId: selectedProviderId,
   labels,
   reasoningEffort,
   serviceTier,
   expectedThreadId,
-  onFirstSendSettled
+  designProfile,
+  designDocumentTarget,
+  waitForRuntimeAdmission,
+  onFirstSendSettled,
+  onFirstSendStarting
 }: DesignPagesDispatchOptions): RunDesignPagesDeps {
-  const model = promptState.assistantModel.trim()
-  const providerId = promptState.assistantProviderId.trim() || resolveProviderId(model)
+  const model = selectedModel?.trim() || promptState.assistantModel.trim()
+  const providerId = selectedProviderId?.trim() ||
+    promptState.assistantProviderId.trim() ||
+    resolveProviderId(model)
+  const designContext = designProfile
+    ? designContextFromTaskProfile(designProfile)
+    : promptState.designContext
   return {
     brief,
     workspaceRoot,
@@ -72,10 +94,16 @@ export function buildDesignPagesRunOptions({
     ...(reasoningEffort ? { reasoningEffort } : {}),
     ...(serviceTier ? { serviceTier } : {}),
     ...(expectedThreadId ? { expectedThreadId } : {}),
-    ...(promptState.generationPrompt ? { generationPrompt: promptState.generationPrompt } : {}),
-    designContext: promptState.designContext,
+    ...(designProfile ? { designProfile } : {}),
+    ...(designDocumentTarget ? { designDocumentTarget } : {}),
+    ...(waitForRuntimeAdmission ? { waitForRuntimeAdmission: true } : {}),
+    ...(!designProfile && promptState.generationPrompt
+      ? { generationPrompt: promptState.generationPrompt }
+      : {}),
+    designContext,
     ...(labels ? { labels } : {}),
-    ...(onFirstSendSettled ? { onFirstSendSettled } : {})
+    ...(onFirstSendSettled ? { onFirstSendSettled } : {}),
+    ...(onFirstSendStarting ? { onFirstSendStarting } : {})
   }
 }
 

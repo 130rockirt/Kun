@@ -18,6 +18,20 @@ describe('kun-worktree-path', () => {
     ).toBe('/Users/zxy/code/Kook-VoiceShop-Bot')
   })
 
+  it('recognizes UUID-scoped isolated plan worktrees', () => {
+    const path = '/Users/zxy/.kun/worktrees/1b33f677-9bdf-435f-921e-125d029c1064/DeepSeek-GUI'
+    expect(isKunBranchWorktreePath(path)).toBe(true)
+    expect(parseKunBranchWorktreeLayout(path)).toEqual({
+      poolId: '1b33f677-9bdf-435f-921e-125d029c1064',
+      repoName: 'DeepSeek-GUI'
+    })
+    expect(
+      resolveKunBranchWorktreeProjectPath(path, [
+        '/Users/zxy/codeproject/ds_project/DeepSeek-GUI'
+      ])
+    ).toBe('/Users/zxy/codeproject/ds_project/DeepSeek-GUI')
+  })
+
   it('only treats paths under the Kun worktree root (.kun/worktrees) as worktrees', () => {
     // A user project that merely sits under some other `worktrees/<hex>/<name>`
     // directory must NOT be misclassified as a Kun-managed worktree — otherwise

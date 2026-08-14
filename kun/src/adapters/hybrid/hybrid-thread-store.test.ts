@@ -1,0 +1,162 @@
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { HybridThreadStore } from './hybrid-thread-store.js'
+import type { UsageEvent } from '../../contracts/events.js'
+import type { UsageSnapshot } from '../../contracts/usage.js'
+import type { ThreadRecord } from '../../contracts/threads.js'
+import { makeUserItem } from '../../domain/item.js'
+import { createThreadRecord } from '../../domain/thread.js'
+import { appendTurnItem, createTurnRecord } from '../../domain/turn.js'
+import { stripThreadItemBodies } from './hybrid-thread-projection.js'
+
+const roots: string[] = []
+
+afterEach(async () => {
+  for (const root of roots.splice(0)) {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+async function createStore(): Promise<{ root: string; store: HybridThreadStore }> {
+  const root = await mkdtemp(join(tmpdir(), 'kun-hybrid-usage-'))
+  roots.push(root)
+  return { root, store: new HybridThreadStore({ dataDir: root }) }
+}
+
+function usageEvent(seq: number, usage: UsageSnapshot): UsageEvent {
+  return {
+    kind: 'usage',
+    threadId: 'thread-usage-1',
+    seq,
+    timestamp: `2026-08-08T00:00:${String(seq).padStart(2, '0')}.000Z`,
+    model: 'gpt-5.6-sol',
+    usage
+  }
+}
+
+describe('HybridThreadStore usage timing persistence', () => {
+  it('keeps cumulative TTFT/TPS averages after the differential fold', async () => {
+    const { store } = await createStore()
+    try {
+      await store.noteEvent(usageEvent(1, {
+        promptTokens: 100,
+        completionTokens: 20,
+        totalTokens: 120,
+        cacheHitRate: null,
+        turns: 1,
+        avgTtftMs: 800,
+        avgTokensPerSecond: 30
+      }))
+      await store.noteEvent(usageEvent(2, {
+        promptTokens: 300,
+        completionTokens: 80,
+        totalTokens: 380,
+        cacheHitRate: null,
+        turns: 2,
+        avgTtftMs: 1_000,
+        avgTokensPerSecond: 42.5
+      }))
+
+      const records = await store.loadUsageRecords({ threadId: 'thread-usage-1' })
+      // Two differential records: token counters are deltas, timing aggregates
+      // are the latest snapshot's cumulative values.
+      expect(records).toHaveLength(2)
+      expect(records[0].usage).toMatchObject({
+        promptTokens: 100,
+        completionTokens: 20,
+        avgTtftMs: 800,
+        avgTokensPerSecond: 30
+      })
+      expect(records[1].usage).toMatchObject({
+        promptTokens: 200,
+        completionTokens: 60,
+        avgTtftMs: 1_000,
+        avgTokensPerSecond: 42.5
+      })
+    } finally {
+      store.close()
+    }
+  })
+
+  it('defaults timing aggregates to null when snapshots omit them', async () => {
+    const { store } = await createStore()
+    try {
+      await store.noteEvent(usageEvent(1, {
+        promptTokens: 10,
+        completionTokens: 5,
+        totalTokens: 15,
+        cacheHitRate: null,
+        turns: 1
+      }))
+
+      const records = await store.loadUsageRecords({ threadId: 'thread-usage-1' })
+      expect(records).toHaveLength(1)
+      expect(records[0].usage.avgTtftMs).toBeUndefined()
+      expect(records[0].usage.avgTokensPerSecond).toBeUndefined()
+    } finally {
+      store.close()
+    }
+  })
+})
+
+describe('HybridThreadStore filesystem surface fallback', () => {
+  it('hydrates only legacy Work candidates before classifying summaries', async () => {
+    const { root, store } = await createStore()
+    const legacy = legacyWorkThread('thread_legacy_work', 'Write Assistant')
+    const code = legacyWorkThread('thread_code', 'Repository notes')
+    await Promise.all([writeThreadDocument(root, legacy), writeThreadDocument(root, code)])
+    await store.ready()
+    // Exercise the JSONL listing path regardless of whether this host has a
+    // usable better-sqlite3 native module.
+    store.close()
+    const fallback = store as unknown as {
+      readThreadFromDisk(threadId: string): Promise<ThreadRecord | null>
+    }
+    const fullRead = vi.spyOn(fallback, 'readThreadFromDisk')
+
+    try {
+      const summaries = await store.list({ includeArchived: true })
+      expect(summaries).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: legacy.id, agentSurface: 'write' }),
+        expect.objectContaining({ id: code.id, agentSurface: 'code' })
+      ]))
+      expect(fullRead).toHaveBeenCalledTimes(1)
+      expect(fullRead).toHaveBeenCalledWith(legacy.id)
+    } finally {
+      fullRead.mockRestore()
+      store.close()
+    }
+  })
+})
+
+function legacyWorkThread(id: string, title: string): ThreadRecord {
+  const turnId = `${id}_turn`
+  const prompt = '[写作上下文]\n交互约定: 需要更多信息时通常直接用普通文本向用户提问。仅当当前激活的专用工作流明确要求结构化确认（例如 PPT 视觉评审）时，调用该工作流提供的确认工具；其他写作任务不要滥用结构化交互。\n\n润色当前文件'
+  const item = makeUserItem({
+    id: `${id}_user`,
+    threadId: id,
+    turnId,
+    text: prompt
+  })
+  return {
+    ...createThreadRecord({ id, title, workspace: '/tmp/workspace', model: 'test-model' }),
+    turns: [appendTurnItem(createTurnRecord({
+      id: turnId, threadId: id, prompt, status: 'completed'
+    }), item)]
+  }
+}
+
+async function writeThreadDocument(root: string, thread: ThreadRecord): Promise<void> {
+  const dir = join(root, 'threads', thread.id)
+  await mkdir(dir, { recursive: true })
+  await Promise.all([
+    writeFile(join(dir, 'metadata.jsonl'), `${JSON.stringify({
+      kind: 'thread_metadata', version: 1, timestamp: thread.updatedAt,
+      thread: stripThreadItemBodies(thread)
+    })}\n`),
+    writeFile(join(dir, 'messages.jsonl'), thread.turns.flatMap((turn) => turn.items)
+      .map((item) => JSON.stringify(item)).join('\n').concat('\n'))
+  ])
+}

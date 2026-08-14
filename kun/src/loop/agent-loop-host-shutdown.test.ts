@@ -58,6 +58,69 @@ class ProseOnlyLeadModel implements ModelClient {
 }
 
 describe('AgentLoop host shutdown suspension', () => {
+  it('parks an active Direct turn for restart recovery instead of recording user cancellation', async () => {
+    const sessionStore = new InMemorySessionStore()
+    const threadStore = new InMemoryThreadStore()
+    const eventBus = new InMemoryEventBus()
+    const inflight = new InflightTracker()
+    const steering = new SteeringQueue()
+    const events = new RuntimeEventRecorder({
+      eventBus,
+      sessionStore,
+      allocateSeq: (threadId) => eventBus.allocateSeq(threadId),
+      nowIso: () => '2026-08-12T08:09:51.420Z'
+    })
+    const turns = new TurnService({
+      threadStore,
+      sessionStore,
+      events,
+      inflight,
+      steering,
+      compactor: new ContextCompactor(),
+      ids: new SequentialIdGenerator(),
+      nowIso: () => '2026-08-12T08:09:51.420Z'
+    })
+    const model = new ShutdownAwareModel()
+    const loop = new AgentLoop({
+      threadStore,
+      sessionStore,
+      approvalGate: { request: async () => 'allow' } as never,
+      userInputGate: {} as never,
+      model,
+      toolHost: new LocalToolHost({ tools: [] }),
+      usage: new UsageService(),
+      events,
+      turns,
+      inflight,
+      steering,
+      compactor: new ContextCompactor(),
+      prefix: createImmutablePrefix({ systemPrompt: 'test system prompt' }),
+      ids: new SequentialIdGenerator(),
+      nowIso: () => '2026-08-12T08:09:51.420Z'
+    })
+    const threadId = 'thread_shutdown_direct'
+    await threadStore.upsert(createThreadRecord({
+      id: threadId, title: 'Direct shutdown recovery', workspace: '/tmp/workspace', model: model.model
+    }))
+    const started = await turns.startTurn({
+      threadId,
+      request: { prompt: 'Finish this task.', model: model.model }
+    })
+    const run = loop.runTurn(threadId, started.turnId)
+    await expect(Promise.race([
+      model.waitForStart().then(() => 'started' as const),
+      new Promise<'start_timeout'>((resolve) => setTimeout(() => resolve('start_timeout'), 500))
+    ])).resolves.toBe('started')
+
+    await expect(turns.suspendActiveTurnsForShutdown()).resolves.toBe(1)
+    await expect(Promise.race([
+      run,
+      new Promise<'run_timeout'>((resolve) => setTimeout(() => resolve('run_timeout'), 500))
+    ])).resolves.toBe('suspended')
+    expect(await turns.getTurn(threadId, started.turnId)).toMatchObject({ status: 'running' })
+    expect(eventBus.snapshotSince(threadId, 0).some((event) => event.kind === 'turn_aborted')).toBe(false)
+  })
+
   it('parks an active Graph source turn instead of persisting user cancellation', async () => {
     const sessionStore = new InMemorySessionStore()
     const threadStore = new InMemoryThreadStore()

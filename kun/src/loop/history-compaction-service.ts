@@ -96,6 +96,8 @@ export class HistoryCompactionService {
      */
     allowModelSummary?: boolean
     reserveModelRequest?: () => Promise<{ allowed: boolean; reason?: string }>
+    /** Provider overflow recovery bypasses thresholds but still performs one bounded compaction. */
+    force?: { reason: string; keepRecent?: number }
   }): Promise<HistoryCompactionOutcome> {
     const pressure = this.deps.telemetry.consumePromptPressure(input.threadId, input.model)
     const thresholdModel = pressure?.model || input.model
@@ -106,7 +108,11 @@ export class HistoryCompactionService {
           tools: input.toolSpecs
         })
       : Math.max(0, Math.floor(input.requestOverheadTokens))
-    const plan = this.deps.compactor.planCompaction(input.items, {
+    const plan = input.force ? {
+      mode: 'force' as const,
+      keepRecent: Math.max(0, input.force.keepRecent ?? 1),
+      reason: input.force.reason
+    } : this.deps.compactor.planCompaction(input.items, {
       model: thresholdModel,
       providerId: input.providerId,
       promptTokens: pressure?.promptTokens,
@@ -151,7 +157,13 @@ export class HistoryCompactionService {
         const currentItems = repairModelHistoryItemsForModel(
           effectiveHistoryAfterLatestCompaction(snapshot.items)
         )
-        const currentPlan = attempt === 1
+        const currentPlan = input.force
+          ? {
+              mode: 'force' as const,
+              keepRecent: Math.max(0, input.force.keepRecent ?? 1),
+              reason: input.force.reason
+            }
+          : attempt === 1
           ? plan
           : this.deps.compactor.planCompaction(currentItems, {
               model: thresholdModel,

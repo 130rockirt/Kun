@@ -1,19 +1,10 @@
 import type {
-  CoreAttachmentContentResponseJson,
-  CoreAttachmentMetadataJson,
-  CoreAttachmentTextFallbackJson,
-  CoreMemoryDiagnosticsJson,
-  CoreMemoryRecordJson,
-  CoreMcpOAuthDiagnosticJson,
-  CoreRuntimeInfoJson,
-  CoreRuntimeSkillJson,
-  CoreRuntimeToolDiagnosticsJson
+  CoreAttachmentContentResponseJson, CoreAttachmentMetadataJson,
+  CoreAttachmentTextFallbackJson, CoreMemoryDiagnosticsJson,
+  CoreMemoryRecordJson, CoreMcpOAuthDiagnosticJson, CoreRuntimeInfoJson,
+  CoreRuntimeSkillJson, CoreRuntimeToolDiagnosticsJson
 } from './kun-contract'
-import type {
-  ApprovalPolicy,
-  ApprovalReviewer,
-  SandboxMode
-} from '@shared/app-settings'
+import type { ApprovalPolicy, ApprovalReviewer, SandboxMode } from '@shared/app-settings'
 import type { ComposerContextAttachment } from '@kun/extension-api'
 
 export type ToolItemKind = 'tool_call' | 'command_execution' | 'file_change'
@@ -116,12 +107,24 @@ export type RuntimeChildMetadata = {
   childToolPolicy?: 'readOnly' | 'inherit'
   childStatus: 'queued' | 'running' | 'completed' | 'failed' | 'aborted'
   childSeq: number
+  childLauncher?: 'delegate_task' | 'fast_context' | 'ppt_agent' | 'component_design' | 'graph'
+  childTerminationReason?: 'user_stop' | 'manual_stop' | 'runtime_restart' | 'child_error'
+  resumable?: boolean
+  resumeCount?: number
   detached?: boolean
   prefixReused?: boolean
   inheritedHistoryItems?: number
   toolInvocations?: number
   durationMs?: number
   queuedMs?: number
+  summaryTruncated?: boolean
+  resultRef?: {
+    artifactId: string
+    byteSize: number
+    lineCount: number
+    mimeType: 'text/markdown'
+  }
+  resultUnavailableReason?: string
   totalTokens?: number
   cacheHitRate?: number | null
   costUsd?: number
@@ -136,20 +139,23 @@ export type RuntimeChildEventPayload = {
   seq?: number
   timestamp?: string
 }
-
 export type WebCitationSource = {
   sourceId?: string
   url?: string
   title?: string
   retrievedAt?: string
 }
-
 export type RuntimeDisclosureMetadata = {
   displayText?: string
+  /** Durable per-turn intent used by mixed Code/Design timeline consumers. */
+  agentSurface?: 'code' | 'write' | 'design'
   /** Persisted turn routing hint so edit/resend can rebuild live canvas context. */
   guiDesignCanvas?: boolean
   guiDesignMode?: boolean
-  messageSource?: 'background_shell' | 'background_subagent' | 'graph_runtime' // client-only rendering hint; never sent to the runtime
+  designProfile?: import('./design-task-profile').DesignTaskProfileInput | import('./design-task-profile').DesignTaskProfile
+  designDocumentTarget?: import('./design-task-profile').DesignDocumentTarget
+  designImagePlacementTarget?: import('./design-task-profile').DesignImagePlacementTarget
+  messageSource?: 'background_shell' | 'background_subagent' | 'graph_runtime' | 'subagent_resume' | 'design_continuation' // client-only rendering hint
   turnId?: string
   workspaceCheckpointId?: string
   attachmentIds?: string[]
@@ -166,7 +172,6 @@ export type RuntimeDisclosureMetadata = {
   child?: RuntimeChildMetadata
   sources?: WebCitationSource[]
 }
-
 export type UserInputOption = {
   label: string
   description: string
@@ -189,18 +194,27 @@ export type UserInputAnswer = {
   labels?: string[]
   values?: string[]
 }
-
 export type NormalizedThread = {
   id: string
   title: string
   /** Durable product surface that owns this thread. Absent for legacy Code threads. */
   agentSurface?: 'code' | 'write' | 'design'
+  /** Immutable task mode derived from the first accepted turn. */
+  lockedTaskSurface?: 'code' | 'write' | 'design'
+  /** Immutable runtime-owned profile for a Design task. */
+  designProfile?: import('./design-task-profile').DesignTaskProfile
+  designCloneOperation?: {
+    operationId: string
+    kind: 'fork' | 'resume'
+    sourceId: string
+  }
   /** Whether the title is auto/provisional (true) vs user-set/locked (false); absent = legacy. */
   titleAuto?: boolean
   updatedAt: string
   model: string
   mode: string
   workspace?: string
+  knowledgeBases?: KnowledgeBaseMount[]
   status?: string
   approvalPolicy?: ApprovalPolicy
   sandboxMode?: SandboxMode
@@ -216,12 +230,13 @@ export type NormalizedThread = {
   archived?: boolean
   pinned?: boolean
   preview?: string
-  /** Whole-conversation summary produced by the summarize route; shown as the list subtitle. */
-  summary?: string
+  summary?: string // Whole-conversation summary shown as the list subtitle.
   latestTurnId?: string
   latestTurnStatus?: string
   relation?: 'primary' | 'fork' | 'side'
   parentThreadId?: string
+  /** Legacy plan-build linkage retained for read-only history compatibility. */
+  planBuildRunId?: string
   forkedFromThreadId?: string
   forkedFromTitle?: string
   forkedAt?: string
@@ -229,6 +244,27 @@ export type NormalizedThread = {
   forkedFromTurnCount?: number
   goal?: ThreadGoal | null
   todos?: ThreadTodoList | null
+}
+export type KnowledgeBaseMount = {
+  id: string
+  root: string
+  name: string
+  source: 'write-workspace'
+  access: 'read-only'
+}
+
+export type KnowledgeBaseIndexStatus = {
+  id: string
+  state: 'pending' | 'indexing' | 'ready' | 'stale' | 'unavailable' | 'error'
+  documentCount: number
+  nodeCount: number
+  availableDocumentCount?: number
+  unavailableDocumentCount?: number
+  truncatedDocumentCount?: number
+  formatCounts?: Record<string, number>
+  diagnostics?: string[]
+  lastIndexedAt?: string
+  error?: string
 }
 
 export type ThreadGoalStatus =
@@ -278,13 +314,9 @@ export type ThreadTodoList = {
 export type RuntimeConnectionStatus = 'idle' | 'checking' | 'ready' | 'offline'
 
 export type ThreadListOptions = {
-  limit?: number
-  search?: string
-  includeArchived?: boolean
-  archivedOnly?: boolean
-  summary?: boolean
+  limit?: number; search?: string; includeArchived?: boolean; archivedOnly?: boolean
+  includeSide?: boolean; summary?: boolean; cursor?: string; workspace?: string; lean?: boolean
 }
-
 export type ToolBlock = {
   kind: 'tool'
   id: string
@@ -493,7 +525,7 @@ export type RuntimeStatusEventPayload = {
   attempt?: number
   maxAttempts?: number
   delayMs?: number
-  retryReason?: 'network' | 'stream_transport'
+  retryReason?: 'network' | 'stream_transport' | 'context_overflow'
   changeKind?: 'additive' | 'breaking'
   toolName?: string
   callId?: string
@@ -662,223 +694,4 @@ export type DelegatedRuntimeState = {
   }
 }
 
-export type ThreadEventSink = {
-  /** The HTTP/SSE stream is established, even when no replay or live event is pending. */
-  onConnected?(): void
-  onSeq(seq: number): void
-  onDeltas(deltas: ThreadDeltaEvent[]): void
-  onAssistantItem?(item: AssistantItemSnapshotPayload): void
-  onUserMessage(ev: UserMessageEventPayload): void
-  onTool(ev: ToolEventPayload): void
-  onCompaction(ev: CompactionEventPayload): void
-  onReview?(ev: ReviewEventPayload): void
-  onApproval(req: ApprovalRequestPayload): void
-  onApprovalStatus?(ev: ApprovalStatusPayload): void
-  onApprovalReview?(ev: ApprovalReviewEventPayload): void
-  onUserInput(req: UserInputRequestPayload): void
-  onUserInputStatus(ev: UserInputStatusPayload): void
-  onRuntimeStatus?(ev: RuntimeStatusEventPayload): void
-  onRuntimeError?(ev: RuntimeErrorEventPayload): void
-  onGoal(ev: { threadId: string; goal: ThreadGoal | null; cleared?: boolean; createdAt?: string }): void
-  onTodos?(ev: { threadId: string; todos: ThreadTodoList | null; cleared?: boolean; createdAt?: string }): void
-  /** Thread metadata changed out-of-band (e.g. the backend LLM titler upgraded the title). */
-  onThreadUpdated?(ev: { threadId: string; title?: string; titleAuto?: boolean; status?: string }): void
-  onTurnComplete(status?: 'completed' | 'aborted'): void
-  onError(err: Error, options?: ThreadErrorOptions): void
-  /** Optional: cumulative usage update for the thread. */
-  onUsage?(usage: ThreadUsageSnapshot): void
-  /** Optional: request-local context accounting for the main agent. */
-  onContextSnapshot?(snapshot: RequestContextSnapshot): void
-  onDelegatedRuntimeState?(state: DelegatedRuntimeState): void
-  /** Safe child lifecycle/activity projected onto the parent thread. */
-  onChildRuntimeEvent?(event: RuntimeChildEventPayload): void
-  /** Raw versioned Graph envelope; the Graph projection owns validation/reconciliation. */
-  onGraphEvent?(event: unknown): void
-  /** Raw versioned Graph planning lifecycle; the Graph projection owns reconciliation. */
-  onGraphPlanningEvent?(event: unknown): void
-}
-
-export interface AgentProvider {
-  readonly id: 'kun'
-  readonly displayName: string
-  getCapabilities(): {
-    interrupt: boolean
-    stream: boolean
-    approvals: boolean
-    attachFiles: boolean
-    review?: boolean
-  }
-  connect(): Promise<void>
-  listThreads(options?: ThreadListOptions): Promise<NormalizedThread[]>
-  createThread(input: { workspace?: string; title?: string; titleAuto?: boolean; mode?: string; agentSurface?: 'code' | 'write' | 'design'; agentId?: string; providerId?: string; accountId?: string; model?: string; systemPrompt?: string }): Promise<NormalizedThread>
-  getThreadDetail(threadId: string): Promise<{
-    blocks: ChatBlock[]
-    latestSeq: number
-    threadStatus?: string
-    latestTurnId?: string
-    latestTurnStatus?: string
-    latestTurnOrchestration?: 'direct' | 'graph'
-    latestUserMessageId?: string
-    turnDurationByUserId?: Record<string, number>
-    usage?: ThreadUsageSnapshot
-    relation?: 'primary' | 'fork' | 'side'
-    parentThreadId?: string
-    model?: string
-    goal?: ThreadGoal | null
-    todos?: ThreadTodoList | null
-    /** Original detail response size, used only to bound renderer snapshots. */
-    payloadBytes?: number
-  }>
-  getThreadState(threadId: string): Promise<{
-    status: string
-    updatedAt: string
-    latestSeq: number
-    latestTurnId?: string
-    latestTurnStatus?: string
-    latestTurnOrchestration?: 'direct' | 'graph'
-  }>
-  sendUserMessage(
-    threadId: string,
-    text: string,
-    options?: {
-      mode?: string
-      orchestration?: 'direct' | 'graph'
-      model?: string
-      providerId?: string
-      accountId?: string
-      reasoningEffort?: string
-      serviceTier?: 'priority'
-      displayText?: string
-      guiPlan?: {
-        operation: 'draft' | 'refine'
-        workspaceRoot: string
-        relativePath: string
-        planId: string
-        sourceRequest?: string
-        title?: string
-      }
-      guiDesignCanvas?: boolean
-      guiDesignMode?: boolean
-      agentSurface?: 'code' | 'write' | 'design'
-      guiDesignArtifact?: {
-        kind: 'svg'
-        artifactId: string
-        relativePath: string
-      }
-      attachmentIds?: string[]
-      workspaceCheckpointId?: string
-      workspaceCheckpointRequestId?: string
-      fileReferences?: UserFileReference[]
-      composerContexts?: ComposerContextAttachment[]
-    }
-  ): Promise<{ turnId: string; threadId: string; userMessageItemId?: string }>
-  rewindThread?(threadId: string, turnId: string): Promise<void>
-  reviewThread?(
-    threadId: string,
-    target: ReviewTarget,
-    options?: { model?: string; providerId?: string; accountId?: string }
-  ): Promise<{ turnId: string; threadId: string; userMessageItemId?: string; reviewItemId?: string }>
-  getRuntimeInfo?(): Promise<CoreRuntimeInfoJson>
-  getToolDiagnostics?(): Promise<CoreRuntimeToolDiagnosticsJson>
-  getMcpOAuthDiagnostics?(): Promise<CoreMcpOAuthDiagnosticJson[]>
-  clearMcpOAuthCredentials?(serverId?: string): Promise<string[]>
-  authorizeMcpOAuthCredentials?(serverId: string): Promise<import('./kun-contract').CoreMcpOAuthAuthorizeResponseJson>
-  listSkills?(): Promise<CoreRuntimeSkillJson[]>
-  uploadAttachment?(input: {
-    name: string
-    mimeType?: string
-    dataBase64: string
-    documentText?: string
-    documentFormat?: 'pdf' | 'docx' | 'xlsx' | 'pptx' | 'text' | 'csv' | 'json' | 'xml'
-    sourceSha256?: string
-    pageCount?: number
-    localFilePath?: string
-    textFallback?: CoreAttachmentTextFallbackJson
-    visualPreview?: CoreAttachmentTextFallbackJson
-    threadId?: string
-    workspace?: string
-  }): Promise<CoreAttachmentMetadataJson>
-  getAttachmentContent?(
-    attachmentId: string,
-    options?: { threadId?: string; workspace?: string }
-  ): Promise<CoreAttachmentContentResponseJson>
-  listMemories?(options?: { workspace?: string; includeDeleted?: boolean; all?: boolean }): Promise<CoreMemoryRecordJson[]>
-  createMemory?(input: {
-    content: string
-    scope?: 'user' | 'workspace' | 'project'
-    workspace?: string
-    project?: string
-    tags?: string[]
-    confidence?: number
-  }): Promise<CoreMemoryRecordJson>
-  updateMemory?(
-    memoryId: string,
-    patch: { content?: string; tags?: string[]; confidence?: number; disabled?: boolean },
-    options?: { workspace?: string }
-  ): Promise<CoreMemoryRecordJson>
-  deleteMemory?(memoryId: string, options?: { workspace?: string }): Promise<CoreMemoryRecordJson>
-  getMemoryDiagnostics?(): Promise<CoreMemoryDiagnosticsJson>
-  steerUserMessage?(
-    threadId: string,
-    turnId: string,
-    text: string,
-    options?: { displayText?: string }
-  ): Promise<void>
-  interruptTurn(threadId: string, turnId: string, options?: { discard?: boolean }): Promise<void>
-  cancelToolCall?(
-    threadId: string,
-    turnId: string,
-    callId: string
-  ): Promise<{ status: 'cancellation_requested' | 'already_requested' }>
-  /**
-   * Rename a thread. `auto` marks the title as provisional/auto (true, e.g. the
-   * client first-message heuristic — the backend LLM titler may upgrade it) or
-   * user-set/locked (false). Omit to leave the title's auto flag unchanged.
-   */
-  renameThread(threadId: string, title: string, auto?: boolean): Promise<void>
-  updateThreadWorkspace?(threadId: string, workspace: string): Promise<void>
-  updateThreadPinned?(threadId: string, pinned: boolean): Promise<void>
-  archiveThread?(threadId: string, archived: boolean): Promise<void>
-  deleteThread(threadId: string): Promise<void>
-  compactThread?(threadId: string, reason?: string): Promise<{ replacedTokens: number } | void>
-  getThreadGoal?(threadId: string): Promise<ThreadGoal | null>
-  setThreadGoal?(
-    threadId: string,
-    patch: { objective?: string; status?: ThreadGoalStatus; tokenBudget?: number | null }
-  ): Promise<ThreadGoal>
-  clearThreadGoal?(threadId: string): Promise<boolean>
-  getThreadTodos?(threadId: string): Promise<ThreadTodoList | null>
-  setThreadTodos?(
-    threadId: string,
-    todos: Array<{
-      id?: string
-      content: string
-      status: ThreadTodoStatus
-      source?: ThreadTodoSource
-    }>
-  ): Promise<ThreadTodoList>
-  clearThreadTodos?(threadId: string): Promise<boolean>
-  forkThread?(
-    threadId: string,
-    options?: { relation?: 'primary' | 'fork' | 'side'; title?: string; turnId?: string }
-  ): Promise<NormalizedThread>
-  resumeSession?(
-    sessionId: string,
-    options?: { model?: string; mode?: string }
-  ): Promise<{ threadId: string; sessionId: string }>
-  subscribeThreadEvents(
-    threadId: string,
-    sinceSeq: number,
-    sink: ThreadEventSink,
-    signal: AbortSignal
-  ): Promise<void>
-  /** Protected Main-owned approval decision; raw renderer HTTP is forbidden. */
-  submitApprovalDecision?(
-    approvalId: string,
-    decision: 'allow' | 'deny',
-    userInitiated?: boolean
-  ): Promise<'submitted' | 'cancelled' | void>
-  /** Runtime HTTP compatibility path for request_user_input responses. */
-  submitUserInputResponse?(requestId: string, answers: UserInputAnswer[]): Promise<void>
-  cancelUserInput?(requestId: string): Promise<void>
-}
+export type { AgentProvider, ThreadEventSink } from './provider-types'

@@ -33,4 +33,21 @@ describe('TimelineRuntimeError', () => {
     expect(renderer.root.findByType('p').children.join('')).toBe(message)
     expect(renderer.root.findAllByType('button')).toHaveLength(0)
   })
+
+  it('explains a memory-pressure restart instead of exposing only its code', async () => {
+    await act(async () => {
+      renderer = create(createElement(TimelineRuntimeError, {
+        block: {
+          kind: 'system',
+          id: 'error_memory',
+          text: 'raw memory failure',
+          code: 'memory_pressure_critical',
+          severity: 'error',
+          runtimeError: true
+        }
+      }))
+    })
+
+    expect(renderer.root.findAllByType('p')[0]?.children.join('')).toContain('restarting')
+  })
 })

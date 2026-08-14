@@ -1,4 +1,4 @@
-# Write text editor's Recent Edits intent context
+# Work text editor's Recent Edits intent context
 
 This document explains the "recent edit context" capability added this round. The problem it solves is: after the user has just made a series of edits, and then selects a piece of text for AI to edit, the model should know "what happened in the last second", so as to better understand weak instructions such as "continue to change like this", "replace similarly" and "keep this style".
 
@@ -12,7 +12,7 @@ The previous version of inline edit already had three types of context:
 
 These contexts can explain "what the current paragraph is", but they cannot explain "how the user just changed it". For example:
 
-1. The user manually changes the first `DeepSeek GUI` to `Write mode`.
+1. The user manually changes the first `DeepSeek GUI` to `Work mode`.
 2. The user selects another word in the same paragraph and enters "Continue to change like this".
 
 Without recent edits, the model can only guess what "such" means. New ability to inject recent edits into the prompt as an intent signal.
@@ -95,7 +95,7 @@ Recent local edits in this file. Treat these as intent signals...
 
 [1] 2s ago; source=user; range=20-32
 Deleted: DeepSeek GUI
-Inserted: Write mode
+Inserted: Work mode
 Around: Earlier term: [[edit]] should be consistent.
 
 Original edit scope:
@@ -112,7 +112,7 @@ At the same time, the system constraints are clearly stated:
 
 ## Troubleshooting dashboard
 
-In order to locate "why the model is not edited/completed as expected", an AI writing call log pop-up window has been added to the Write mode area of the settings page. Inline edit and inline completion both call `write:inline-completion`; edit requests are recorded as `mode: "edit"` in the main process memory. The user can refresh and view recent records, or clear them with one click.
+In order to locate "why the model is not edited/completed as expected", an AI writing call log pop-up window has been added to the Work area of the settings page. Inline edit and inline completion both call `write:inline-completion`; edit requests are recorded as `mode: "edit"` in the main process memory. The user can refresh and view recent records, or clear them with one click.
 
 Text editing record display:
 

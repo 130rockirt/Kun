@@ -13,7 +13,9 @@ const labels: Record<string, string> = {
   browse: 'Browse',
   turnCompleteNotification: 'Reply completion notifications',
   mainAgentTurnCompleteNotification: 'Main agent completions',
-  subagentTurnCompleteNotification: 'Subagent completions'
+  subagentTurnCompleteNotification: 'Subagent completions',
+  desktopUseSystemTitleBar: 'Use system title bar',
+  desktopUseSystemTitleBarDesc: 'Let Linux draw the title bar. Restart Kun to apply.'
 }
 
 function t(key: string, values?: Record<string, unknown>): string {
@@ -38,6 +40,7 @@ function baseCtx(): Record<string, unknown> {
       appBehavior: {
         openAtLogin: false,
         startMinimized: false,
+        useSystemTitleBar: false,
         closeToTray: false,
         closeAction: 'ask'
       },
@@ -147,6 +150,18 @@ describe('GeneralSettingsSection workspace layout', () => {
     expect(html).toContain('legacyImportTitle')
     expect(html).toContain('gitCheckpointTitle')
     expect(html).toContain('logTitle')
+  })
+
+  it('shows the restart-scoped system title bar switch only on Linux', () => {
+    vi.stubGlobal('window', { kunGui: { platform: 'linux' } })
+    const linuxHtml = renderToStaticMarkup(createElement(GeneralSettingsSection, { ctx: baseCtx() }))
+
+    expect(linuxHtml).toContain('Use system title bar')
+    expect(linuxHtml).toContain('Restart Kun to apply')
+
+    vi.stubGlobal('window', { kunGui: { platform: 'win32' } })
+    const windowsHtml = renderToStaticMarkup(createElement(GeneralSettingsSection, { ctx: baseCtx() }))
+    expect(windowsHtml).not.toContain('Use system title bar')
   })
 
   it('shows disabled source controls beneath the disabled master notification switch', () => {

@@ -27,6 +27,7 @@ describe('design turn dispatch', () => {
       reasoningEffort: 'medium',
       serviceTier: 'priority',
       expectedThreadId: 'thr_design',
+      waitForRuntimeAdmission: true,
       target: 'canvas',
       attachmentIds: [attachment.id],
       attachments: [attachment]
@@ -40,6 +41,7 @@ describe('design turn dispatch', () => {
       reasoningEffort: 'medium',
       serviceTier: 'priority',
       expectedThreadId: 'thr_design',
+      waitForRuntimeAdmission: true,
       guiDesignCanvas: true,
       guiDesignMode: true,
       attachmentIds: [attachment.id],
@@ -67,6 +69,25 @@ describe('design turn dispatch', () => {
       providerId: 'openai'
     })
     expect(resolveProviderId).not.toHaveBeenCalled()
+  })
+
+  it('uses the shared composer selection instead of the legacy Design setting', () => {
+    const overrides = buildDesignTurnSendOverrides({
+      displayText: 'Refine home',
+      promptState: {
+        assistantModel: 'legacy-design-model',
+        assistantProviderId: 'legacy-provider'
+      },
+      model: 'shared-composer-model',
+      providerId: 'shared-provider',
+      resolveProviderId: () => 'fallback',
+      target: 'html'
+    })
+
+    expect(overrides).toMatchObject({
+      model: 'shared-composer-model',
+      providerId: 'shared-provider'
+    })
   })
 
   it('scopes a dedicated SVG turn to its reserved artifact without enabling ShapeOps', () => {

@@ -18,6 +18,15 @@ describe('window close behavior', () => {
     })).toBe('allow')
   })
 
+  it('prompts instead of hiding when tray initialization is unavailable', () => {
+    expect(resolveMainWindowCloseDecision({
+      closeAction: 'tray',
+      isQuitting: false,
+      isUpdateInstallQuitting: false,
+      trayAvailable: false
+    })).toBe('prompt')
+  })
+
   it('allows windows to close during ordinary app quits', () => {
     expect(resolveMainWindowCloseDecision({
       closeAction: 'tray',

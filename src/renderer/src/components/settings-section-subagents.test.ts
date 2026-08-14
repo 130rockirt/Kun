@@ -22,7 +22,7 @@ const labels: Record<string, string> = {
   back: 'Back',
   general: 'General',
   providers: 'Providers',
-  write: 'Write',
+  write: 'Work',
   design: 'Design',
   mediaGeneration: 'Media generation',
   speechToText: 'Speech to text',

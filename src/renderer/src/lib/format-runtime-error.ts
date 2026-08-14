@@ -45,6 +45,7 @@ function runtimeErrorCode(payload: RuntimeErrorPayload | null, raw: string): str
   const fromError = typeof payload?.error === 'string' ? payload.error.trim() : ''
   if (fromError) return fromError.toLowerCase()
   const lowered = stripIpcPrefix(payloadMessage(payload) || raw).toLowerCase()
+  if (lowered.includes('model provider did not return a response')) return 'model_provider_unreachable'
   if (lowered.includes('model request failed:')) return 'model_request_failed'
   if (lowered.includes('fetch failed')) return 'fetch_failed'
   if (lowered.includes('runtime unhealthy')) return 'runtime_unhealthy'
@@ -83,6 +84,10 @@ function detailString(value: unknown): string {
 function localizedRuntimeSummary(code: string | null, text: string): string | null {
   const lowered = text.toLowerCase()
 
+  if (code === 'model_provider_unreachable') {
+    return i18n.t('common:runtimeModelProviderNoResponse')
+  }
+
   if (code === 'model_request_failed' || lowered.includes('model request failed:')) {
     return i18n.t('common:runtimeModelRequestFailed')
   }
@@ -115,8 +120,16 @@ function localizedRuntimeSummary(code: string | null, text: string): string | nu
     return i18n.t('common:runtimeUnhealthy')
   }
 
-  if (code === 'turn_in_progress' || lowered.includes('active turn')) {
+  if (code === 'thread_busy' || code === 'turn_in_progress' || lowered.includes('active turn')) {
     return i18n.t('common:runtimeActiveTurn')
+  }
+
+  if (code === 'task_surface_locked') {
+    return i18n.t('common:runtimeTaskSurfaceLocked')
+  }
+
+  if (code === 'design_profile_locked') {
+    return i18n.t('common:runtimeDesignProfileLocked')
   }
 
   if (code === 'runtime_binary_not_installed') {
@@ -130,11 +143,18 @@ function localizedRuntimeSummary(code: string | null, text: string): string | nu
   return null
 }
 
-function shouldOpenAgentsSettings(code: string | null): boolean {
-  return code === 'missing_api_key' ||
+function shouldOpenAgentsSettings(code: string | null, text = ''): boolean {
+  if (
+    code === 'missing_api_key' ||
     code === 'runtime_offline' ||
     code === 'runtime_auth_required' ||
     code === 'runtime_port_conflict'
+  ) {
+    return true
+  }
+  // Fixed-sampling models (e.g. Kimi K3) reject temperature/top_p and can brick
+  // the local agent until the user changes the default model in Agents settings.
+  return /\b(temperature|top[_ ]?p|sampling)\b/i.test(text)
 }
 
 export function describeRuntimeError(error: unknown): RuntimeErrorView {
@@ -147,26 +167,33 @@ export function describeRuntimeError(error: unknown): RuntimeErrorView {
   const summary = localizedRuntimeSummary(errorCode, redactedText) ||
     redactedText ||
     i18n.t('common:runtimeRequestFailed')
+  const message = errorCode === 'thread_busy' || errorCode === 'model_provider_unreachable'
+    ? summary
+    : redactedText || summary
   const details: string[] = []
   if (errorCode) details.push(`Code: ${errorCode}`)
-  if (payload?.severity) details.push(`Severity: ${payload.severity}`)
+  const hideBusyOwnerDetails = errorCode === 'thread_busy'
+  if (!hideBusyOwnerDetails && payload?.severity) details.push(`Severity: ${payload.severity}`)
   if (
+    !hideBusyOwnerDetails &&
     redactedText &&
     (redactedText !== summary || Boolean(errorCode) || Boolean(payload?.severity) || payload?.details !== undefined)
   ) {
-    details.push(`Message:\n${redactedText}`)
+    details.push(errorCode === 'model_provider_unreachable'
+      ? i18n.t('common:runtimeModelProviderNoResponseDetail', { cause: redactedText })
+      : `Message:\n${redactedText}`)
   }
-  const payloadDetails = detailString(payload?.details)
+  const payloadDetails = hideBusyOwnerDetails ? '' : detailString(payload?.details)
   if (payloadDetails) details.push(`Details:\n${payloadDetails}`)
-  if (!payload && raw && raw !== redactedText) {
+  if (!hideBusyOwnerDetails && !payload && raw && raw !== redactedText) {
     details.push(`Raw:\n${redactSecretText(raw)}`)
   }
   return {
     summary,
-    message: redactedText || summary,
+    message,
     ...(details.length > 0 ? { detail: details.join('\n\n') } : {}),
     ...(errorCode ? { code: errorCode } : {}),
-    ...(shouldOpenAgentsSettings(errorCode) ? { settingsAction: 'agents' as const } : {})
+    ...(shouldOpenAgentsSettings(errorCode, redactedText) ? { settingsAction: 'agents' as const } : {})
   }
 }
 

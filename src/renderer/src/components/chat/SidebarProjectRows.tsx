@@ -203,8 +203,9 @@ export function ThreadRow({
   const showUnreadDot = showUnread && !showRunning
   const archived = thread.archived === true
   const pinned = thread.pinned === true
+  const worktreeBranch = worktreeRecord?.branch?.trim() || 'worktree'
   const worktreeLabel = worktreeRecord
-    ? t('sidebarThreadWorktree', { branch: worktreeRecord.branch || 'worktree' })
+    ? t('sidebarThreadWorktree', { branch: worktreeBranch })
     : ''
   const updatedLabel = formatRelativeTime(thread.updatedAt, locale)
   const ariaLabel = [
@@ -292,11 +293,12 @@ export function ThreadRow({
         {pinned ? <Pin className="h-3.5 w-3.5 shrink-0 text-accent" strokeWidth={1.9} /> : null}
         {worktreeRecord ? (
           <span
-            className="inline-grid h-5 w-5 shrink-0 place-items-center rounded-full border border-ds-border-muted bg-ds-card/80 text-ds-muted"
+            className="flex min-w-0 max-w-[42%] shrink items-center gap-1 rounded-md border border-ds-border-muted bg-ds-card/80 px-1.5 py-0.5 text-[10.5px] leading-4 text-ds-muted"
             title={worktreeLabel}
             aria-label={worktreeLabel}
           >
-            <GitBranch className="h-3 w-3" strokeWidth={1.8} />
+            <GitBranch className="h-3 w-3 shrink-0" strokeWidth={1.8} />
+            <span className="truncate">{worktreeBranch}</span>
           </span>
         ) : null}
         <span className={`min-w-0 flex-1 truncate text-[13.5px] leading-5 ${
@@ -371,6 +373,32 @@ export function SidebarEmpty({
       <p className="mt-1 text-[13px] leading-5 text-ds-faint">
         {runtimeReady ? t('sidebarEmptySub') : t('sidebarEmptySubOffline')}
       </p>
+    </div>
+  )
+}
+
+/**
+ * Skeleton placeholder rows shown while the first thread inventory is still
+ * loading. Uses a calm pulse so it reads as "loading", never as "no threads".
+ */
+export function SidebarThreadSkeleton(): ReactElement {
+  return (
+    <div
+      aria-hidden="true"
+      className="mx-1 mt-1 space-y-1"
+    >
+      {[0, 1, 2, 3].map((row) => (
+        <div
+          key={row}
+          className="flex h-[34px] items-center gap-2 rounded-md px-2"
+        >
+          <div className="h-4 w-4 shrink-0 rounded-[5px] bg-ds-card/80 motion-safe:animate-pulse" />
+          <div className="min-w-0 flex-1 space-y-1.5">
+            <div className="h-2.5 w-3/4 rounded-full bg-ds-card/80 motion-safe:animate-pulse" />
+            <div className="h-2 w-1/2 rounded-full bg-ds-card/60 motion-safe:animate-pulse" />
+          </div>
+        </div>
+      ))}
     </div>
   )
 }

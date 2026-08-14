@@ -1,4 +1,11 @@
 import type { McpServerConfig } from '../../contracts/capabilities.js'
+import type { ToolHostContext } from '../../ports/tool-host.js'
+
+export type McpCallOptions = {
+  signal?: AbortSignal
+  timeout?: number
+  context?: ToolHostContext
+}
 
 export type McpToolDescriptor = {
   name: string
@@ -58,14 +65,19 @@ export type McpClientLifecycleHandlers = {
 }
 
 export type McpClientLike = {
+  protocolEra?: 'legacy' | 'modern'
+  protocolVersion?: string
+  serverInfo?: { name: string; version: string; [key: string]: unknown }
+  serverCapabilities?: Record<string, unknown>
   listTools(options?: {
     cursor?: string
     signal?: AbortSignal
     timeout?: number
+    cacheMode?: 'use' | 'refresh' | 'bypass'
   }): Promise<{ tools: McpToolDescriptor[]; nextCursor?: string }>
   callTool(
     input: { name: string; arguments: Record<string, unknown> },
-    options?: { signal?: AbortSignal; timeout?: number }
+    options?: McpCallOptions
   ): Promise<unknown>
   listResources?(options?: {
     cursor?: string
@@ -74,7 +86,7 @@ export type McpClientLike = {
   }): Promise<{ resources: McpResourceDescriptor[]; nextCursor?: string }>
   readResource?(
     input: { uri: string },
-    options?: { signal?: AbortSignal; timeout?: number }
+    options?: McpCallOptions
   ): Promise<unknown>
   listResourceTemplates?(options?: {
     cursor?: string
@@ -88,7 +100,7 @@ export type McpClientLike = {
   }): Promise<{ prompts: McpPromptDescriptor[]; nextCursor?: string }>
   getPrompt?(
     input: { name: string; arguments?: Record<string, unknown> },
-    options?: { signal?: AbortSignal; timeout?: number }
+    options?: McpCallOptions
   ): Promise<unknown>
   close(): Promise<void>
   setLifecycleHandlers?(handlers: McpClientLifecycleHandlers): void
@@ -102,6 +114,10 @@ export type McpServerDiagnostic = {
   available: boolean
   status: 'disabled' | 'connected' | 'reconnecting' | 'error' | 'authorization_required'
   toolCount: number
+  protocolEra?: 'legacy' | 'modern'
+  protocolVersion?: string
+  serverInfo?: { name: string; version: string; [key: string]: unknown }
+  serverCapabilities?: Record<string, unknown>
   toolNames?: string[]
   catalogFingerprint?: string
   catalogDrift?: boolean

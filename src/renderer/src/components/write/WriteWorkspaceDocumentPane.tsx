@@ -1,4 +1,4 @@
-import { useEffect, type MutableRefObject, type ReactElement, type RefObject } from 'react'
+import { useCallback, useEffect, useRef, type MutableRefObject, type ReactElement, type RefObject } from 'react'
 import { Maximize2, Minimize2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import type { WriteInlineCompletionSettingsV1 } from '@shared/app-settings'
@@ -14,6 +14,14 @@ import { WriteMarkdownPreview } from './WriteMarkdownPreview'
 import { WriteWorkspaceStart } from './WriteWorkspaceStart'
 import { WriteImagePreview } from './WriteImagePreview'
 import { WritePdfViewer } from './WritePdfViewer'
+import { WorkspaceOfficePreview } from '../WorkspaceOfficePreview'
+import { WorkspaceCodePreview } from '../WorkspaceCodePreview'
+import type {
+  WorkspaceOfficePreviewSuccess,
+  WorkspacePresentationViewReference,
+  WorkspacePresentationViewSource
+} from '@shared/office-document'
+import { writeSelectionFromOffice } from '../../write/write-office-selection'
 import {
   isWriteFocusModeFormControl,
   isWriteFocusModeShortcut
@@ -24,6 +32,8 @@ type Props = {
   documentEpoch: number
   activeFileIsImage: boolean
   activeFileIsPdf: boolean
+  activeFileIsOffice?: boolean
+  activeFileIsCode?: boolean
   activeFileIsText: boolean
   fileLoading: boolean
   fileContent: string
@@ -32,6 +42,10 @@ type Props = {
   pdfDataBase64: string
   pdfMimeType: string
   pdfMtimeMs: number
+  officePreview?: WorkspaceOfficePreviewSuccess | null
+  officeLoading?: boolean
+  officeRefreshError?: string | null
+  officeAgentEditing?: boolean
   fileSize: number
   workspaceRoot: string
   workspaceName: string
@@ -55,8 +69,9 @@ type Props = {
   recentEdits: WriteRecentEdit[]
   editorPaneRef: RefObject<HTMLDivElement | null>
   previewPaneRef: RefObject<HTMLDivElement | null>
-  onAskAssistant: () => void
+  onAskAssistant: (prompt: string) => void
   onCreateDraft: () => void
+  onCreateWhiteboard?: () => void
   onPickWorkspace: () => void
   onRefreshWorkspace: () => void
   onContentChange: (content: string) => void
@@ -65,7 +80,12 @@ type Props = {
   onSaveShortcut: () => void
   onImagePasteSaved: () => void
   onImagePasteError: (message: string) => void
+  onPresentationViewChange: (
+    view: WorkspacePresentationViewReference | null,
+    source: WorkspacePresentationViewSource
+  ) => void
   onMarkdownReviewStateChange?: (active: boolean) => void
+  focused: boolean
   focusMode: boolean
   onFocusModeChange: (active: boolean) => void
   onboarding?: boolean
@@ -77,6 +97,8 @@ export function WriteWorkspaceDocumentPane({
   documentEpoch,
   activeFileIsImage,
   activeFileIsPdf,
+  activeFileIsOffice = false,
+  activeFileIsCode = false,
   activeFileIsText,
   fileLoading,
   fileContent,
@@ -85,6 +107,10 @@ export function WriteWorkspaceDocumentPane({
   pdfDataBase64,
   pdfMimeType: _pdfMimeType,
   pdfMtimeMs,
+  officePreview = null,
+  officeLoading = false,
+  officeRefreshError = null,
+  officeAgentEditing = false,
   fileSize,
   workspaceRoot,
   workspaceName,
@@ -110,6 +136,7 @@ export function WriteWorkspaceDocumentPane({
   previewPaneRef,
   onAskAssistant,
   onCreateDraft,
+  onCreateWhiteboard,
   onPickWorkspace,
   onRefreshWorkspace,
   onContentChange,
@@ -118,13 +145,20 @@ export function WriteWorkspaceDocumentPane({
   onSaveShortcut,
   onImagePasteSaved,
   onImagePasteError,
+  onPresentationViewChange,
   onMarkdownReviewStateChange,
+  focused,
   focusMode,
   onFocusModeChange,
   onboarding = false,
   workspaceLoading = false
 }: Props): ReactElement {
   const { t } = useTranslation('common')
+  const selectionCallbackRef = useRef(onSelectionChange)
+  selectionCallbackRef.current = onSelectionChange
+  const handleOfficeSelection = useCallback((next: import('@shared/office-document').WorkspaceOfficeSelection) => {
+    selectionCallbackRef.current(writeSelectionFromOffice(next))
+  }, [])
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent): void => {
@@ -164,6 +198,7 @@ export function WriteWorkspaceDocumentPane({
         error={workspaceError}
         onAskAssistant={onAskAssistant}
         onCreateDraft={onCreateDraft}
+        onCreateWhiteboard={onCreateWhiteboard}
         onPickWorkspace={onPickWorkspace}
         onRefreshWorkspace={onRefreshWorkspace}
         onboarding={onboarding}
@@ -202,6 +237,52 @@ export function WriteWorkspaceDocumentPane({
         viewerRef={editorPaneRef}
         onSelectionChange={onSelectionChange}
       />
+    )
+  }
+
+  if (activeFileIsOffice && officePreview) {
+    return (
+      <div ref={editorPaneRef} className="flex h-full min-h-0 min-w-0 flex-col">
+        <WorkspaceOfficePreview
+          result={officePreview}
+          loading={officeLoading || officeAgentEditing}
+          refreshError={officeRefreshError}
+          onSelectionChange={handleOfficeSelection}
+          onPresentationViewChange={onPresentationViewChange}
+          presentationKeyboardActive={focused}
+        />
+      </div>
+    )
+  }
+
+  if (activeFileIsOffice) {
+    return (
+      <div className="flex h-full min-h-[320px] items-center justify-center px-8 text-center text-[13px] leading-6 text-ds-muted">
+        {officeRefreshError ?? t('filePreviewLoading')}
+      </div>
+    )
+  }
+
+  if (activeFileIsCode) {
+    return (
+      <div className="flex h-full min-h-0 min-w-0 flex-col">
+        {renderSafety.notice !== 'none' ? (
+          <div className="shrink-0 border-b border-amber-200/80 bg-amber-50/90 px-5 py-3 text-[12.5px] leading-5 text-amber-900 dark:border-amber-800/60 dark:bg-amber-950/35 dark:text-amber-100 sm:px-6">
+            <div className="font-semibold">{fileGuardMessage}</div>
+            {fileGuardDetail ? (
+              <div className="mt-1 text-amber-800/90 dark:text-amber-100/90">{fileGuardDetail}</div>
+            ) : null}
+          </div>
+        ) : null}
+        <WorkspaceCodePreview
+          path={activeFilePath}
+          content={fileContent}
+          className="min-h-0 flex-1"
+          limitMessage={renderSafety.notice === 'none'
+            ? t('writeLargeFileTruncated')
+            : undefined}
+        />
+      </div>
     )
   }
 

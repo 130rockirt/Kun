@@ -178,6 +178,24 @@ export type CanvasEmbeddedArtifact = {
   versionId?: string
 }
 
+export type CanvasPptReviewRef = {
+  workflowId: string
+  childId: string
+  slideId: string
+  revision: number
+  parentThreadId?: string
+  role: 'slide-frame' | 'preview-image' | 'annotation'
+}
+
+export type CanvasPptDirectionRef = {
+  workflowId: string
+  childId: string
+  directionId: string
+  revision: number
+  parentThreadId?: string
+  role: 'direction-card' | 'preview-image' | 'summary'
+}
+
 export type CanvasShape = {
   id: string
   type: ShapeType
@@ -223,6 +241,10 @@ export type CanvasShape = {
   /** Named component variant applied to this instance root. */
   componentVariant?: string
   overrides?: Record<string, unknown>
+  /** Stable source identity for a PPT visual-review card on the whiteboard. */
+  pptReviewRef?: CanvasPptReviewRef
+  /** Stable source identity for a proposed PPT visual direction. */
+  pptDirectionRef?: CanvasPptDirectionRef
   textContent?: string
   fontSize?: number
   fontFamily?: string
@@ -271,6 +293,10 @@ export type CanvasDocument = {
   motion?: CanvasMotionDocument
   graph?: CanvasDocumentGraphMetadata
   operationJournal?: DesignOperationJournalEntry[]
+  /** Durable renderer receipts for idempotent chat/tool replay after journal compaction. */
+  rendererReplayKeys?: string[]
+  /** Last completed Design turn fully materialized into this document. */
+  rendererReplayWatermarkTurnId?: string
   codeBindings?: DesignCodeBinding[]
 }
 

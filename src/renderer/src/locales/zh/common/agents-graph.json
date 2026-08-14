@@ -1,0 +1,583 @@
+{
+  "subagentsPanel": {
+    "configModel": "配置模型",
+    "delegatable": "可委派 · 可在对话里用",
+    "system": "系统 · 内部用途",
+    "global": "全局 · 共享",
+    "newSubagent": "新建子代理",
+    "delegatableCount": "{{count}} 个可委派角色",
+    "configuredCount": "已配置 {{count}}",
+    "showingCount": "显示 {{visible}} / {{total}}",
+    "policySummary": "队列与并发",
+    "search": "搜索子代理",
+    "searchPlaceholder": "搜索名称、能力或场景",
+    "clearSearch": "清除搜索",
+    "toggleCategory": "展开或收起{{category}}分类",
+    "batchModel": "批量模型",
+    "mixedModels": "多种模型",
+    "mixedConfiguration": "多种配置",
+    "categoryConfiguration": "分类默认配置",
+    "categoryConfigurationDesc": "为该分类下的全部代理应用相同默认值",
+    "resetCategoryConfiguration": "恢复默认",
+    "effectiveModel": "生效模型",
+    "batchModelAria": "将{{category}}下{{count}}个代理设为同一模型",
+    "reasoning": "推理强度",
+    "mixedReasoning": "多种推理",
+    "batchReasoningAria": "将{{category}}下{{count}}个代理设为同一推理强度",
+    "capabilities": "能力标签",
+    "emptyTitle": "没有匹配的子代理",
+    "emptySearch": "试试其他名称、能力或使用场景。",
+    "emptyCategory": "选择其他分类继续浏览。",
+    "surface": {
+      "shared": "基础",
+      "code": "Code",
+      "write": "办公",
+      "design": "设计"
+    },
+    "surfaceInherited": "继承自基础池",
+    "surfaceAssigned": "当前模式可用",
+    "surfaceUnassigned": "当前模式不可用",
+    "pagination": "Agent 分页",
+    "pageSummary": "第 {{page}} / {{pages}} 页 · 共 {{count}} 个 Agent",
+    "previousPage": "上一页",
+    "nextPage": "下一页",
+    "extensionAgents": {
+      "title": "扩展代理",
+      "description": "基础代理以外的角色 · {{count}}",
+      "enabled": "已启用",
+      "disabled": "已关闭",
+      "toggle": "开关扩展代理",
+      "keepBaseOnly": "仅保留基础代理",
+      "enableExtensions": "启用扩展代理",
+      "baseAlwaysAvailable": "基础代理始终可用"
+    },
+    "category": {
+      "all": "全部",
+      "baseAgent": "基础代理",
+      "development": "开发",
+      "review": "审查",
+      "quality": "质量",
+      "planning": "规划",
+      "operations": "运维",
+      "research": "研究",
+      "custom": "自定义"
+    },
+    "smallModel": {
+      "name": "小模型",
+      "desc": "标题与摘要默认使用"
+    },
+    "role": {
+      "general": {
+        "name": "通用代理",
+        "desc": "全工具 · 多步骤任务,可改文件"
+      },
+      "explore": {
+        "name": "Fast Context",
+        "desc": "只读 · 查找文件、搜索代码"
+      },
+      "component-designer": {
+        "name": "组件设计师",
+        "desc": "聚焦交互组件原型"
+      },
+      "design-reviewer": {
+        "name": "设计审查",
+        "desc": "视觉层级与可访问性 · 只读"
+      },
+      "over-engineering-reviewer": {
+        "name": "过度设计审查",
+        "desc": "发现可删复杂度 · 只读"
+      },
+      "code-reviewer": {
+        "name": "代码审查专家",
+        "desc": "五维审查 · 只读"
+      },
+      "test-engineer": {
+        "name": "测试工程师",
+        "desc": "测试策略 · 可编写和运行测试"
+      },
+      "security-auditor": {
+        "name": "安全审计专家",
+        "desc": "威胁与 OWASP 风险 · 只读"
+      },
+      "web-performance-auditor": {
+        "name": "Web 性能审计专家",
+        "desc": "Core Web Vitals · 证据驱动"
+      },
+      "api-and-interface-design": {
+        "name": "API 与接口架构师",
+        "desc": "稳定公共契约 · 兼容与校验"
+      },
+      "browser-testing-with-devtools": {
+        "name": "Web QA 规划师",
+        "desc": "浏览器与无障碍验证计划 · 只读"
+      },
+      "ci-cd-and-automation": {
+        "name": "CI/CD 工程师",
+        "desc": "流水线、门禁与可回滚发布"
+      },
+      "code-review-and-quality": {
+        "name": "代码质量审查",
+        "desc": "正确性与架构多维审查 · 只读"
+      },
+      "code-simplification": {
+        "name": "代码简化工程师",
+        "desc": "降低复杂度 · 保持行为不变"
+      },
+      "context-engineering": {
+        "name": "上下文工程师",
+        "desc": "最小权威上下文包 · 只读"
+      },
+      "debugging-and-error-recovery": {
+        "name": "根因调试工程师",
+        "desc": "复现、定位、修复与回归验证"
+      },
+      "deprecation-and-migration": {
+        "name": "迁移工程师",
+        "desc": "分阶段兼容、数据迁移与回滚"
+      },
+      "documentation-and-adrs": {
+        "name": "文档与 ADR 工程师",
+        "desc": "架构决策、运维指南与 API 文档"
+      },
+      "doubt-driven-development": {
+        "name": "质疑驱动审查",
+        "desc": "挑战假设与设计 · 只读"
+      },
+      "frontend-ui-engineering": {
+        "name": "前端 UI 工程师",
+        "desc": "可访问、响应式、产品级界面"
+      },
+      "git-workflow-and-versioning": {
+        "name": "Git 工作流工程师",
+        "desc": "分支、原子提交与历史安全"
+      },
+      "idea-refine": {
+        "name": "创意打磨伙伴",
+        "desc": "方案比较、MVP 边界与验证 · 只读"
+      },
+      "incremental-implementation": {
+        "name": "增量实现工程师",
+        "desc": "薄切片、可构建、持续验证"
+      },
+      "interview-me": {
+        "name": "需求访谈官",
+        "desc": "找缺口并产出高信息问题 · 只读"
+      },
+      "observability-and-instrumentation": {
+        "name": "可观测性工程师",
+        "desc": "日志、指标、链路与告警"
+      },
+      "performance-optimization": {
+        "name": "性能优化工程师",
+        "desc": "测瓶颈、优化主成本并验证收益"
+      },
+      "planning-and-task-breakdown": {
+        "name": "实现规划师",
+        "desc": "依赖感知、可验收任务拆解 · 只读"
+      },
+      "security-and-hardening": {
+        "name": "安全加固工程师",
+        "desc": "威胁建模与范围化安全修复"
+      },
+      "shipping-and-launch": {
+        "name": "发布就绪工程师",
+        "desc": "上线决策、灰度与回滚计划 · 只读"
+      },
+      "source-driven-development": {
+        "name": "源码驱动研究员",
+        "desc": "对照权威版本来源指导实现 · 只读"
+      },
+      "spec-driven-development": {
+        "name": "规格工程师",
+        "desc": "场景、接口与验收标准 · 只读"
+      },
+      "test-driven-development": {
+        "name": "TDD 工程师",
+        "desc": "红绿重构 · 行为驱动回归证明"
+      },
+      "using-agent-skills": {
+        "name": "工程工作流顾问",
+        "desc": "映射最小合适代理序列 · 只读"
+      },
+      "write-outline-architect": {
+        "name": "大纲架构师",
+        "desc": "结构、论证与章节推进 · 只读"
+      },
+      "write-draft-author": {
+        "name": "初稿作者",
+        "desc": "长文初稿与聚焦段落写作"
+      },
+      "write-developmental-editor": {
+        "name": "发展编辑",
+        "desc": "提升逻辑、结构与可读性"
+      },
+      "write-copy-editor": {
+        "name": "文案润色编辑",
+        "desc": "语气、术语与语法一致性"
+      },
+      "write-fact-checker": {
+        "name": "事实核查员",
+        "desc": "核对主张、数据与不确定性 · 只读"
+      },
+      "write-citation-researcher": {
+        "name": "引文研究员",
+        "desc": "权威来源与可追溯引用 · 只读"
+      },
+      "design-product-planner": {
+        "name": "产品设计规划师",
+        "desc": "方向、目标、流程与取舍 · 只读"
+      },
+      "design-ux-researcher": {
+        "name": "UX 研究员",
+        "desc": "用户旅程与可用性研究 · 只读"
+      },
+      "design-screen-designer": {
+        "name": "页面设计师",
+        "desc": "完整响应式页面与交互状态"
+      },
+      "design-system-architect": {
+        "name": "设计系统架构师",
+        "desc": "语义令牌、组件与变体约束"
+      },
+      "design-code-binder": {
+        "name": "设计代码绑定师",
+        "desc": "设计节点到源码与路由映射"
+      },
+      "design-handoff-specialist": {
+        "name": "设计交付专家",
+        "desc": "DESIGN.md、实现说明与交付物"
+      },
+      "compaction": {
+        "name": "上下文压缩",
+        "desc": "可配置 · 默认跟随主模型"
+      },
+      "codeReview": {
+        "name": "代码审查",
+        "desc": "隔离只读跑 · 可配模型"
+      },
+      "plan": {
+        "name": "规划模式",
+        "desc": "规划回合 · 默认跟随对话模型"
+      },
+      "title": {
+        "name": "标题生成",
+        "desc": "LLM · 默认小模型"
+      },
+      "summary": {
+        "name": "摘要",
+        "desc": "LLM · 默认小模型"
+      }
+    },
+    "builtin": "内置",
+    "customTag": "自定义",
+    "workspaceFile": "定义于 {{path}}",
+    "workspaceReadOnly": "请在 .kun/agents/*.md 中编辑此角色"
+  },
+  "summarizeSession": "总结此会话",
+  "summarizing": "总结中…",
+  "summarizeFailed": "无法总结此会话",
+  "name": "名称",
+  "description": "描述",
+  "color": "颜色",
+  "mode": "模式",
+  "writeFocusModeEnter": "进入专注模式",
+  "writeFocusModeExit": "退出专注模式",
+  "writeFocusModeShortcut": "⌘/Ctrl + Shift + F",
+  "writeShowLineNumbers": "显示行号",
+  "writeHideLineNumbers": "隐藏行号",
+  "writeEnableLineWrapping": "开启自动换行",
+  "writeDisableLineWrapping": "关闭自动换行",
+  "systemPrompt": "系统提示词",
+  "toolPolicy": "工具权限",
+  "graphModeSelector": "编排模式",
+  "graphModeDirect": "直接",
+  "graphModeDirectHint": "由主代理直接执行任务",
+  "graphModeGraph": "Graph",
+  "graphModeGraphHint": "规划、委派、监督、验收并汇总",
+  "graphModeRunning": "当前运行：Graph",
+  "graphModeNextTurnGraph": "下个回合：Graph",
+  "graphModeNextTurnHint": "此开关只控制下个回合，不能改变当前正在运行的回合",
+  "graphModeDisabledHint": "请先在设置 → AI 助手中启用实验性 Graph 模式",
+  "graphPanelTitle": "Graph 模式",
+  "graphComposerPreview": "Graph 运行预览",
+  "graphComposerProgress": "{{status}} · 已验收 {{completed}} / {{total}} 个节点",
+  "graphComposerAria": "Graph 运行：{{status}}，已验收 {{completed}} / {{total}} 个节点。悬浮或聚焦可查看预览。",
+  "graphComposerPreviewSummary": "包含 {{phases}} 个阶段和 {{nodes}} 个节点的有向 Graph 预览",
+  "graphComposerOpenFull": "打开完整 Graph",
+  "graphComposerActiveAgents": "{{count}} 个活跃子代理",
+  "graphComposerNoActiveAgents": "暂无活跃子代理",
+  "graphComposerAssignedAgent": "派发给 {{agent}}",
+  "graphComposerNodeAria": "{{title}}，{{status}}，派发给 {{agent}}。打开节点详情。",
+  "graphCompletedAndRunning": "已验收 {{completed}}/{{total}} · {{running}} 个运行中",
+  "graphLiveness_working": "工作中",
+  "graphLiveness_active_review": "主代理评审中",
+  "graphLiveness_waiting_lead": "等待主代理评审",
+  "graphLiveness_retry_scheduled": "已安排主代理重试",
+  "graphLiveness_needs_attention": "需要处理",
+  "graphLiveness_reviewing": "Lead 审核中",
+  "graphLiveness_retrying": "正在准备重试",
+  "graphLiveness_waiting_dependency": "等待上游节点",
+  "graphLiveness_waiting_human": "等待人工输入",
+  "graphLiveness_queued": "排队中",
+  "graphLiveness_idle": "已就绪",
+  "graphLiveness_done": "已完成",
+  "graphLiveness_failed": "已失败",
+  "graphSupervision_waiting_for_lead": "等待原主代理处理",
+  "graphSupervision_active_review": "原主代理正在评审",
+  "graphSupervision_active_peer_review": "独立评审代理正在评审",
+  "graphSupervision_retry_scheduled": "已安排主代理唤醒重试",
+  "graphSupervision_needs_attention": "Graph 监督需要处理",
+  "graphSupervisionAction_review_required": "评审已提交的结果",
+  "graphSupervisionAction_repair_required": "决定如何修复结果",
+  "graphSupervisionAction_stall": "处理停滞的子代理",
+  "graphSupervisionAction_conflict": "处理 Graph 冲突",
+  "graphSupervisionAction_budget": "处理 Graph 预算状态",
+  "graphSupervisionAction_help": "处理子代理求助",
+  "graphSupervisionAction_recovery": "恢复 Graph 监督",
+  "graphSupervisionAction_completion": "完成并汇总 Graph 运行",
+  "graphSupervisionAction_user_steering": "应用用户引导",
+  "graphSupervisionAction_worker_report": "审查子代理报告",
+  "graphSupervisionAction_scheduler_error": "处理调度器错误",
+  "graphSupervisionRetries": "唤醒重试",
+  "graphSupervisionNoProgress": "无进展轮次",
+  "graphSupervisionLastWake": "上次唤醒",
+  "graphSupervisionNextWake": "下次唤醒",
+  "graphSupervisionWakeLead": "重新唤醒主代理",
+  "graphSupervisionWakeHint": "让原主代理立即处理此监督义务；不会创建替代主代理。",
+  "graphSupervisionWaking": "正在唤醒…",
+  "graphStillWaiting": "仍在等待模型/工具响应 · 最后活动 {{seconds}} 秒前",
+  "graphWaitingUpstream": "正在等待上游节点",
+  "graphTransitionReview": "正在工作 → 已提交 → 等待主代理评审",
+  "graphTransitionRepair": "{{reason}} → 准备第 {{attempt}} 次尝试",
+  "graphRepairReasonUnknown": "审核要求修订",
+  "graphViewLiveWork": "查看实时工作",
+  "graphCreatingChildSession": "正在创建子会话…",
+  "graphChildSessionUnavailable": "子会话尚未就绪；Graph 仍在后台运行",
+  "graphBreadcrumbMain": "主会话",
+  "graphBreadcrumbAttempt": "第 {{number}} 次尝试",
+  "graphObserver_connecting": "Graph 连接中",
+  "graphObserver_live": "Graph 实时同步",
+  "graphObserver_reconnecting": "Graph 重连中",
+  "graphObserver_stopped": "Graph 观察已暂停",
+  "graphReturnToGraph": "返回 Graph",
+  "graphPanelRun": "运行",
+  "graphPanelAgents": "项目子代理",
+  "graphPanelLearning": "学习",
+  "graphEmptyRunTitle": "此会话中还没有 Graph 运行",
+  "graphPlanningStatus_planning": "正在查看项目",
+  "graphPlanningStatus_validating": "正在校验任务计划",
+  "graphPlanningStatus_repairing": "计划需要修正一次",
+  "graphPlanningStatus_needs_correction": "计划需要你的补充",
+  "graphPlanningStatus_committing": "正在启动 Graph",
+  "graphPlanningStatus_committed": "Graph 已启动",
+  "graphPlanningStatus_cancelled": "Graph 规划已取消",
+  "graphPlanningStatus_host_error": "Graph 规划遇到系统错误",
+  "graphPlanningWorkingBody": "Lead 正在查看项目事实，并整理一份有边界、可执行的任务图。",
+  "graphPlanningCorrectionBody": "草稿已经保存。请查看下面的具体字段；需要时在对话中补充要求，然后继续规划。",
+  "graphPlanningTaskSummary": "草稿任务",
+  "graphPlanningContinue": "继续规划",
+  "graphPlanningCancel": "取消",
+  "graphEmptyRunBody": "请在设置中启用 Graph 模式，在输入区选择 Graph 后发送任务。",
+  "graphRunProgress": "修订 {{revision}} · 已验收 {{completed}}/{{total}} 个节点 · {{loops}} 次循环",
+  "graphProgressLabel": "Graph 已验收进度",
+  "graphStateCounts": "节点状态计数",
+  "graphCanvasLabel": "有向 Graph 运行图",
+  "graphCanvasHelp": "拖动节点 · 拖动空白处平移 · 滚轮缩放",
+  "graphCanvasTools": "Graph 画布工具",
+  "graphCanvasSelect": "选择并移动节点",
+  "graphCanvasPan": "平移画布",
+  "graphCanvasFit": "适配整个 Graph",
+  "graphCanvasPanHelp": "手形：拖动任意空白处平移 · 滚轮缩放",
+  "graphCanvasSelectHelp": "选择：拖动节点 · 双击打开详情 · 中键拖动画布",
+  "graphOpenInspector": "打开详情",
+  "graphCloseInspector": "关闭详情",
+  "graphInspectorRunOverview": "运行概览与控制",
+  "graphInspectorSections": "节点详情分区",
+  "graphInspectorOverview": "概览",
+  "graphInspectorExecution": "执行",
+  "graphInspectorEvidence": "证据",
+  "graphSelectRun": "选择 Graph 运行",
+  "graphMetricProgress": "已验收",
+  "graphRevisionShort": "修订 {{revision}}",
+  "graphMetricNodes": "节点",
+  "graphActiveAgents": "活跃子代理",
+  "graphMetricRunning": "执行中",
+  "graphMetricTotal": "累计",
+  "graphListFallback": "无障碍列表",
+  "graphTogglePhase": "切换阶段 {{phase}}（{{count}} 个节点）",
+  "graphSteerNodePlaceholder": "向选中节点发送指导…",
+  "graphSteerRunPlaceholder": "向本次运行发送指导…",
+  "graphSendSteering": "发送指导",
+  "graphResizeInspector": "调整 Graph 详情区宽度",
+  "graphNodeDetails": "选中节点详情",
+  "graphRunDetails": "Graph 运行详情",
+  "graphActionStart": "开始",
+  "graphActionPause": "暂停",
+  "graphActionResume": "继续",
+  "graphActionCancel": "取消",
+  "graphActionCleanup": "清理资源",
+  "graphActionExport": "导出",
+  "graphActionRestore": "恢复",
+  "graphActionDormant": "标记休眠",
+  "graphActionArchive": "归档",
+  "graphActionDelete": "删除",
+  "graphActionApprove": "批准",
+  "graphActionReject": "拒绝",
+  "graphActionStartProbation": "开始试用",
+  "graphActionPromote": "晋升",
+  "graphActionRollback": "回滚",
+  "graphActionRebind": "重新绑定",
+  "graphRiskLabel": "{{risk}}风险",
+  "graphRisk_low": "低",
+  "graphRisk_medium": "中",
+  "graphRisk_high": "高",
+  "graphRisk_critical": "关键",
+  "graphMetricAgent": "子代理",
+  "graphMetricProfile": "配置",
+  "graphMetricModel": "模型",
+  "graphMetricProvider": "提供方",
+  "graphMetricAttempt": "尝试",
+  "graphMetricTokens": "Tokens",
+  "graphMetricElapsed": "耗时",
+  "graphMetricSandbox": "沙箱",
+  "graphMetricChildSession": "子会话",
+  "graphPlannedAssignment": "计划子代理",
+  "graphDispatchState": "派发状态",
+  "graphDispatchNotStarted": "尚未派发",
+  "graphDispatchAdmitted": "已准入",
+  "graphDispatchChildCreated": "已创建子会话",
+  "graphDispatchAdmissionFailed": "准入失败",
+  "graphChildSessionPending": "尚未创建",
+  "graphRequestedProfile": "请求的配置",
+  "graphRoutingDecision": "路由决定",
+  "graphLatestTransitionReason": "最近状态原因",
+  "graphNodeTimeout": "节点时限",
+  "graphNodeAttemptsLimit": "最大尝试",
+  "graphInheritedValue": "继承",
+  "graphAssignmentPolicy": "冻结后的分配策略",
+  "graphReasoningLabel": "推理强度",
+  "graphApprovalLabel": "审批策略",
+  "graphToolPolicyLabel": "工具策略",
+  "graphNetworkLabel": "网络",
+  "graphWallTimeLabel": "时限",
+  "graphEnabledValue": "允许",
+  "graphDisabledValue": "禁止",
+  "graphAllowedTools": "允许的工具",
+  "graphBlockedTools": "禁用的工具",
+  "graphAllowedSkills": "允许的技能",
+  "graphBlockedSkills": "禁用的技能",
+  "graphAllowedMcp": "允许的 MCP 服务",
+  "graphBlockedMcp": "禁用的 MCP 服务",
+  "graphReadScopes": "读取范围",
+  "graphFrozenContext": "冻结后的执行上下文",
+  "graphWorkspaceRoot": "工作目录",
+  "graphCapturedAt": "冻结时间",
+  "graphSystemPrompt": "系统提示词",
+  "graphOpenChildSession": "打开子会话",
+  "graphOpenAttemptSession": "打开第 {{number}} 次尝试的子会话",
+  "graphRebindProfilePlaceholder": "已有配置 ID",
+  "graphAttemptHistory": "尝试历史（{{count}}）",
+  "graphTokenCount": "{{count}} tokens",
+  "graphDependencies": "依赖",
+  "graphWriteScopes": "写入范围",
+  "graphAcceptanceCriteria": "验收标准",
+  "graphRequiredResultFields": "必需结果字段",
+  "graphValidationIssues": "校验问题",
+  "graphWorktrees": "隔离工作树",
+  "graphChangedFiles": "变更文件",
+  "graphChecks": "检查结果",
+  "graphEvidenceLabel": "证据",
+  "graphRisksLabel": "风险",
+  "graphArtifacts": "产物",
+  "graphArtifactLoading": "正在加载受限产物预览…",
+  "graphArtifactPreview": "受限产物预览",
+  "graphArtifactNextPage": "下一页",
+  "graphMailbox": "消息箱",
+  "graphReviews": "评审",
+  "graphApproveResult": "批准结果",
+  "graphRejectResult": "拒绝结果",
+  "graphRetryNode": "重试节点",
+  "graphAttempts": "尝试",
+  "graphMessages": "消息",
+  "graphRevisionHistory": "修订历史（{{count}}）",
+  "graphRevisionSummary": "修订 {{revision}} · {{nodes}} 个节点 · {{edges}} 条边",
+  "graphRevisionDelta": "{{delta}} 个节点",
+  "graphOriginalPlan": "原始计划",
+  "graphLoopExplanation": "LoopGate 已继续 {{count}} 次。琥珀色虚线表示有界回环；每个回环都会退出或应用耗尽结果。",
+  "graphLatestCommunication": "最新通信",
+  "graphFinalSynthesis": "最终汇总",
+  "graphCleanupDisposition": "清理结果",
+  "graphPatchEditor": "应用带版本的 GraphPatch",
+  "graphPatchReason": "本次图修订的原因",
+  "graphPatchOperations": "输入一个操作或 JSON 操作数组",
+  "graphPatchInvalid": "请输入原因和有效的 GraphPatch 操作 JSON。",
+  "graphPatchApplying": "应用中…",
+  "graphApplyPatch": "应用补丁",
+  "graphRoutingExplanation": "路由会先检查权限、范围、工具、技能、MCP、网络与风险，再综合任务匹配度、已验证质量、可信度、新鲜度、效率、置信度、可用性和当前负载进行评分。",
+  "graphPortableProfiles": "可移植配置与合并",
+  "graphPortablePaste": "粘贴 kun.graph-agent-profile 导出内容…",
+  "graphImportCandidate": "作为候选项导入",
+  "graphPortableExportLabel": "可移植项目子代理导出",
+  "graphMergedProfileName": "合并后的配置名称",
+  "graphMergeSelected": "合并所选项（{{count}}）",
+  "graphNoAgentsTitle": "还没有持久化项目子代理",
+  "graphNoAgentsBody": "在跨会话的重复成功模式被学习并获批准前，Graph 会使用受约束的临时 Worker。",
+  "graphSelectForMerge": "选择 {{name}} 参与合并",
+  "graphEvidenceCount": "{{count}} 条证据",
+  "graphAliasesLabel": "别名",
+  "graphProfilePolicy": "配置策略与来源",
+  "graphScoreFit": "匹配",
+  "graphScoreQuality": "质量",
+  "graphScoreTrust": "可信",
+  "graphScoreFreshness": "新鲜",
+  "graphScoreEfficiency": "效率",
+  "graphScoreConfidence": "置信",
+  "graphScoreAvailability": "可用",
+  "graphScoreLoad": "负载",
+  "graphGovernanceHistory": "治理历史",
+  "graphAsyncConsolidation": "异步沉淀",
+  "graphAsyncConsolidationBody": "在不同会话中查找重复成功模式。",
+  "graphScanNow": "立即扫描",
+  "graphEpisodeCount": "{{count}} 个 Episode",
+  "graphNoCandidatesTitle": "暂无学习候选项",
+  "graphNoCandidatesBody": "只有积累足够多且独立验证成功的会话后，才会产生候选项。",
+  "graphProvenanceDraft": "来源与草案",
+  "graphEpisodesLabel": "Episodes",
+  "graphRequestedCapabilities": "申请：{{policy}} · {{tools}} 个工具 · {{skills}} 个技能 · {{mcp}} 个 MCP 服务 · {{scopes}} 个写入范围 · 网络 {{network}}",
+  "graphRollbackLabel": "回滚",
+  "graphYes": "允许",
+  "graphNo": "禁止",
+  "graphStatus_draft": "草案",
+  "graphStatus_validating": "校验中",
+  "graphStatus_ready": "就绪",
+  "graphStatus_running": "运行中",
+  "graphStatus_pausing": "暂停中",
+  "graphStatus_paused": "已暂停",
+  "graphStatus_awaiting_supervision": "等待监督",
+  "graphStatus_awaiting_human": "等待人工",
+  "graphStatus_completing": "收尾中",
+  "graphStatus_completed": "已完成",
+  "graphStatus_failed": "失败",
+  "graphStatus_cancelled": "已取消",
+  "graphStatus_pending": "待处理",
+  "graphStatus_blocked": "等待上游",
+  "graphStatus_queued": "排队中",
+  "graphStatus_submitted": "已提交",
+  "graphStatus_reviewing": "评审中",
+  "graphStatus_accepted": "已验收",
+  "graphStatus_repair_required": "需要修复",
+  "graphStatus_skipped": "已跳过",
+  "graphStatus_superseded": "已取代",
+  "graphStatus_candidate": "候选",
+  "graphStatus_probation": "试用中",
+  "graphStatus_trusted": "可信",
+  "graphStatus_dormant": "休眠",
+  "graphStatus_archived": "已归档",
+  "graphStatus_deleted": "已删除",
+  "graphStatus_approved": "已批准",
+  "graphStatus_rejected": "已拒绝",
+  "graphStatus_promoted": "已晋升",
+  "graphStatus_rolled_back": "已回滚",
+  "graphStatus_merged": "已合并",
+  "rightPanelGraph": "Graph"
+}

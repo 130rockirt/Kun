@@ -1,10 +1,24 @@
 import type { ReactElement } from 'react'
-import { FilePenLine, FilePlus2, FolderOpen, FolderPlus, ListTodo, RefreshCw, Sparkles } from 'lucide-react'
+import {
+  FilePenLine,
+  FilePlus2,
+  FileText,
+  FolderOpen,
+  FolderPlus,
+  ListTodo,
+  MessageSquareQuote,
+  Presentation,
+  RefreshCw,
+  Sparkles,
+  Shapes,
+  Table2
+} from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 export function WriteWorkspaceStart({
   onAskAssistant,
   onCreateDraft,
+  onCreateWhiteboard,
   onPickWorkspace,
   onRefreshWorkspace,
   workspaceName,
@@ -12,8 +26,9 @@ export function WriteWorkspaceStart({
   error,
   onboarding = false
 }: {
-  onAskAssistant: () => void
+  onAskAssistant: (prompt: string) => void
   onCreateDraft: () => void
+  onCreateWhiteboard?: () => void
   onPickWorkspace: () => void
   onRefreshWorkspace: () => void
   workspaceName: string
@@ -22,6 +37,12 @@ export function WriteWorkspaceStart({
   onboarding?: boolean
 }): ReactElement {
   const { t } = useTranslation('common')
+  const officeStarters = [
+    { label: t('writeStarterSummarize'), prompt: t('writeStarterSummarizePrompt'), icon: FileText },
+    { label: t('writeStarterPdf'), prompt: t('writeStarterPdfPrompt'), icon: MessageSquareQuote },
+    { label: t('writeStarterSpreadsheet'), prompt: t('writeStarterSpreadsheetPrompt'), icon: Table2 },
+    { label: t('writeStarterPresentation'), prompt: t('writeStarterPresentationPrompt'), icon: Presentation }
+  ]
   return (
     <div className="write-start-shell relative h-full min-h-[420px] overflow-auto rounded-[28px] bg-[linear-gradient(180deg,rgba(255,255,255,0.82),rgba(247,250,255,0.62))] px-5 py-5 dark:bg-[linear-gradient(180deg,rgba(255,255,255,0.07),rgba(255,255,255,0.025))] sm:px-8 sm:py-8">
       <div className="write-start-grid mx-auto grid min-h-full w-full max-w-6xl gap-6">
@@ -57,7 +78,7 @@ export function WriteWorkspaceStart({
             </button>
             <button
               type="button"
-              onClick={onboarding ? onCreateDraft : onAskAssistant}
+              onClick={onboarding ? onCreateDraft : () => onAskAssistant(t('writeStartAskAiPrompt'))}
               className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl border border-ds-border bg-white/70 px-5 text-[14px] font-semibold text-ds-ink shadow-sm transition hover:bg-white dark:bg-white/[0.055] dark:hover:bg-white/[0.08]"
             >
               {onboarding ? (
@@ -68,6 +89,32 @@ export function WriteWorkspaceStart({
               {t(onboarding ? 'writeOnboardingUseDefault' : 'writeStartAskAi')}
             </button>
           </div>
+
+          {!onboarding ? (
+            <div className="mt-4 grid grid-cols-2 gap-2" aria-label={t('writeStarterActionsLabel')}>
+              {onCreateWhiteboard ? (
+                <button
+                  type="button"
+                  onClick={onCreateWhiteboard}
+                  className="flex min-h-11 items-center gap-2 rounded-xl border border-accent/20 bg-accent/[0.055] px-3 py-2 text-left text-[12.5px] font-medium text-accent transition hover:bg-accent/10"
+                >
+                  <Shapes className="h-4 w-4 shrink-0" strokeWidth={1.9} />
+                  <span>{t('writeCreateWhiteboard', { defaultValue: 'New whiteboard' })}</span>
+                </button>
+              ) : null}
+              {officeStarters.map(({ label, prompt, icon: StarterIcon }) => (
+                <button
+                  key={label}
+                  type="button"
+                  onClick={() => onAskAssistant(prompt)}
+                  className="flex min-h-11 items-center gap-2 rounded-xl border border-ds-border-muted bg-white/55 px-3 py-2 text-left text-[12.5px] font-medium text-ds-muted transition hover:border-accent/25 hover:bg-white/80 hover:text-ds-ink dark:bg-white/[0.035] dark:hover:bg-white/[0.07]"
+                >
+                  <StarterIcon className="h-4 w-4 shrink-0 text-accent" strokeWidth={1.9} />
+                  <span>{label}</span>
+                </button>
+              ))}
+            </div>
+          ) : null}
 
           {onboarding ? (
             <p className="mt-4 rounded-2xl border border-accent/15 bg-accent/[0.06] px-4 py-3 text-[12.5px] leading-5 text-ds-muted">

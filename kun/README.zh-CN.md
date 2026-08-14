@@ -217,8 +217,7 @@ Kun 使用 JSON 配置文件管理运行时行为，避免重建后重配或硬�
     },
     "subagents": {
       "enabled": false,
-      "maxParallel": 2,
-      "maxChildRuns": 4
+      "maxParallel": 2
     },
     "attachments": {
       "enabled": false,
@@ -254,7 +253,7 @@ Kun 默认使用混合存储：`threads/{threadId}/messages.jsonl` 与 `events.j
 - `capabilities.skills` 扫描 `roots` 下的 `skill.json`，并在 `legacySkillMd` 为 `true` 时兼容 `SKILL.md`。
 - `capabilities.attachments` 将图片二进制从线程日志剥离，允许回合记录引用 `attachmentIds`。视觉模型直接接收图片部分，纯文本模型走受限文本 fallback。
 - `capabilities.memory` 在数据目录下持久化跨会话记忆，按作用域检索并注入上下文；也会公开 `memory_create`、`memory_update`、`memory_delete` 工具。
-- `capabilities.subagents` 通过 `maxParallel` 与 `maxChildRuns` 限制委派任务并发。
+- `capabilities.subagents` 暴露 `delegate_task`；`maxParallel` 只限制同时运行的子代理数，超出部分按 FIFO 排队。父对话没有累计 child run 数量上限；加载旧配置时仍接受 `maxChildRuns`，但该字段不再生效。
 
 Kun 内置 33 个固定、真正独立的 subagent profile：9 个原有通用/设计/专业角色，
 以及从 `addyosmani/agent-skills` 的 24 个工程工作流重新设计出的独立 agent。每个

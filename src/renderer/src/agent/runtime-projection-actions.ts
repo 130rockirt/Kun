@@ -60,6 +60,8 @@ type RuntimeProjectionActionPayload =
         blocks: ChatBlock[]
         latestSeq: number
         threadStatus?: string
+        latestTurnId?: string
+        latestTurnStatus?: string
         goal?: ThreadGoal | null
         todos?: ThreadTodoList | null
         turnId?: string | null

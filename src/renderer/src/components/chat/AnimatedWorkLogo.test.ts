@@ -3,6 +3,9 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { resolveUiPluginFigure } from '@shared/ui-plugin'
 import { useUiPluginStore } from '../../store/ui-plugin-store'
+import { readStylesheetBundle } from '../../testing/stylesheet-bundle'
+import enCommon from '../../locales/en/common'
+import zhCommon from '../../locales/zh/common'
 import {
   AnimatedWorkLogo,
   IKUN_CAMEO_DURATIONS_MS,
@@ -181,11 +184,9 @@ describe('AnimatedWorkLogo', () => {
     }
   })
 
-  it('maps every swim mode and ikun variant to a status label key in both locales', async () => {
-    const nodeFs = 'node:fs/promises'
-    const { readFile } = await import(/* @vite-ignore */ nodeFs)
-    const zh = JSON.parse(await readFile(new URL('../../locales/zh/common.json', import.meta.url), 'utf8'))
-    const en = JSON.parse(await readFile(new URL('../../locales/en/common.json', import.meta.url), 'utf8'))
+  it('maps every swim mode and ikun variant to a status label key in both locales', () => {
+    const zh = zhCommon as Record<string, unknown>
+    const en = enCommon as Record<string, unknown>
 
     for (const swimMode of WORK_LOGO_SWIM_MODES) {
       const labelKey = WORK_LOGO_SWIM_MODE_LABEL_KEYS[swimMode]
@@ -245,7 +246,7 @@ describe('AnimatedWorkLogo', () => {
       })
     )
 
-    expect(html).toMatch(/Processed|已处理|processed/)
+    expect(html).toMatch(/Processing|处理中|processing/)
     expect(html).toContain('1m 14s')
     expect(html).toContain('border-b')
     expect(html).not.toContain('ds-shiny-text')
@@ -268,9 +269,7 @@ describe('AnimatedWorkLogo', () => {
   })
 
   it('keeps the swim animation layers wired in CSS', async () => {
-    const nodeFs = 'node:fs/promises'
-    const { readFile } = await import(/* @vite-ignore */ nodeFs)
-    const baseShellCss = await readFile(new URL('../../styles/base-shell.css', import.meta.url), 'utf8')
+    const baseShellCss = await readStylesheetBundle(new URL('../../styles/base-shell.css', import.meta.url))
 
     for (const layer of [
       'gust',

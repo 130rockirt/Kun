@@ -1,6 +1,9 @@
 import type { ChatState, ChatStoreGet, ChatStoreSet } from './chat-store-types'
 
 let startupRuntimeProbeTimer: ReturnType<typeof setTimeout> | null = null
+// Guards against duplicate startup probes: the immediate probe runs first and
+// the 900ms fallback must not race it while it is still in flight.
+let startupRuntimeProbeInFlight = false
 let busyWatchdogTimer: ReturnType<typeof setTimeout> | null = null
 let busyRecoveryAttempts = 0
 let turnCompletionPollTimer: ReturnType<typeof setInterval> | null = null
@@ -13,14 +16,26 @@ type BusyWatchdogOptions = {
   busyTimeoutMessage: () => string
 }
 
+type ThreadCompletionState = {
+  status: string
+  latestTurnId?: string
+  latestTurnStatus?: string
+  completionWatchKey?: string
+}
+
 type TurnCompletionPollOptions = {
   loadThreadState: (
     state: ChatState,
     threadId: string
-  ) => Promise<{ status: string; latestTurnStatus?: string }>
-  threadLooksRunning: (threadStatus: string) => boolean
+  ) => Promise<ThreadCompletionState>
+  threadLooksRunning: (thread: ThreadCompletionState) => boolean
   onCompletedThreads: (
-    done: Array<{ id: string; latestTurnStatus?: string }>,
+    done: Array<{
+      id: string
+      latestTurnId?: string
+      latestTurnStatus?: string
+      completionWatchKey?: string
+    }>,
     state: ChatState,
     set: ChatStoreSet,
     get: ChatStoreGet
@@ -35,7 +50,13 @@ type TurnCompletionPollOptions = {
 }
 
 type CompletionPollOutcome =
-  | { kind: 'completed'; id: string; latestTurnStatus?: string }
+  | {
+      kind: 'completed'
+      id: string
+      latestTurnId?: string
+      latestTurnStatus?: string
+      completionWatchKey?: string
+    }
   | { kind: 'missing'; id: string }
   | null
 
@@ -43,9 +64,32 @@ export function scheduleStartupRuntimeProbe(get: ChatStoreGet): void {
   if (startupRuntimeProbeTimer) {
     clearTimeout(startupRuntimeProbeTimer)
   }
+  if (startupRuntimeProbeInFlight) return
+  // Probe immediately when the runtime is already up so the sidebar gets its
+  // thread inventory as fast as possible instead of waiting a fixed 900ms.
+  startupRuntimeProbeInFlight = true
+  void (async () => {
+    try {
+      await get().probeRuntime('user')
+    } finally {
+      startupRuntimeProbeInFlight = false
+    }
+  })()
+  // Keep a fallback probe for the case where the runtime is still cold-starting
+  // (e.g. `kun serve` booting) and the immediate probe raced it. It only fires
+  // when the runtime did not reach `ready` yet and no other probe is running.
   startupRuntimeProbeTimer = setTimeout(() => {
     startupRuntimeProbeTimer = null
-    void get().probeRuntime('user')
+    if (startupRuntimeProbeInFlight) return
+    if (get().runtimeConnection === 'ready') return
+    startupRuntimeProbeInFlight = true
+    void (async () => {
+      try {
+        await get().probeRuntime('user')
+      } finally {
+        startupRuntimeProbeInFlight = false
+      }
+    })()
   }, 900)
 }
 
@@ -138,9 +182,15 @@ async function pollTurnCompletionWatch(
   const outcomes: CompletionPollOutcome[] = await Promise.all(ids.map(async (threadId) => {
     try {
       const thread = await options.loadThreadState(state, threadId)
-      return options.threadLooksRunning(thread.status)
+      return options.threadLooksRunning(thread)
         ? null
-        : { kind: 'completed' as const, id: threadId, latestTurnStatus: thread.latestTurnStatus }
+        : {
+            kind: 'completed' as const,
+            id: threadId,
+            latestTurnId: thread.latestTurnId,
+            latestTurnStatus: thread.latestTurnStatus,
+            completionWatchKey: thread.completionWatchKey
+          }
     } catch (error) {
       return options.isMissingThreadError?.(error) ? { kind: 'missing' as const, id: threadId } : null
     }
@@ -148,7 +198,17 @@ async function pollTurnCompletionWatch(
   const completed = outcomes.filter((outcome): outcome is Extract<CompletionPollOutcome, { kind: 'completed' }> =>
     outcome?.kind === 'completed'
   )
-  const done = completed.map(({ id, latestTurnStatus }) => ({ id, latestTurnStatus }))
+  const done = completed.map(({
+    id,
+    latestTurnId,
+    latestTurnStatus,
+    completionWatchKey
+  }) => ({
+    id,
+    latestTurnId,
+    latestTurnStatus,
+    completionWatchKey
+  }))
   const missingIds = outcomes.flatMap((outcome) =>
     outcome?.kind === 'missing' ? [outcome.id] : []
   )

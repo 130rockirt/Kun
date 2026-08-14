@@ -2,6 +2,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type { UiPluginPresentation, UiPluginSceneV16 } from '@shared/ui-plugin'
+import { readStylesheetBundle } from '../../testing/stylesheet-bundle'
 import { UiPluginStagePresentation } from './UiPluginStagePresentation'
 
 const dedicatedCharacterChromeRecipes = [
@@ -108,6 +109,19 @@ describe('UiPluginStagePresentation', () => {
     expect(html).not.toContain('dangerouslySetInnerHTML')
   })
 
+  it('applies a normalized user scale to the legacy stage character', () => {
+    const html = renderToStaticMarkup(
+      createElement(UiPluginStagePresentation, {
+        portraitSrc: 'data:image/png;base64,AAAA',
+        presentation,
+        characterScale: 1.65
+      })
+    )
+
+    expect(html).toContain('--kun-ui-plugin-character-user-scale:1.65')
+    expect(html.match(/--kun-ui-plugin-character-user-scale/g)).toHaveLength(1)
+  })
+
   it('renders nothing unless both portrait and presentation are active', () => {
     expect(
       renderToStaticMarkup(
@@ -154,6 +168,26 @@ describe('UiPluginStagePresentation', () => {
     expect(html).not.toContain('dangerouslySetInnerHTML')
   })
 
+  it('applies the user scale only to the scene character and not scene artwork', () => {
+    const html = renderToStaticMarkup(
+      createElement(UiPluginStagePresentation, {
+        portraitSrc: 'data:image/png;base64,AAAA',
+        presentation,
+        scene,
+        characterScale: 0.75,
+        sceneAssets: {
+          assets: {
+            'scene/backdrop.webp': 'data:image/webp;base64,AAAA',
+            'scene/frame.png': 'data:image/png;base64,AAAA'
+          }
+        }
+      })
+    )
+
+    expect(html).toContain('--kun-ui-plugin-character-user-scale:0.75')
+    expect(html.match(/--kun-ui-plugin-character-user-scale/g)).toHaveLength(1)
+  })
+
   it('does not render a scene artwork path when Main did not return a safe raster data URL', () => {
     const html = renderToStaticMarkup(
       createElement(UiPluginStagePresentation, {
@@ -175,9 +209,7 @@ describe('UiPluginStagePresentation', () => {
   })
 
   it('uses host-owned color primitives when presentation tokens may be gradients', async () => {
-    const nodeFs = 'node:fs/promises'
-    const { readFile } = await import(/* @vite-ignore */ nodeFs)
-    const css = await readFile(new URL('../../styles/surfaces-write.css', import.meta.url), 'utf8')
+    const css = await readStylesheetBundle(new URL('../../styles/surfaces-write.css', import.meta.url))
     expect(css).toContain('--kun-ui-plugin-host-bg-color: var(--bg-app, #f3f5fc);')
     expect(css).toContain('--kun-ui-plugin-host-surface-color: var(--surface-2, #ffffff);')
     expect(css).toContain('var(--kun-ui-plugin-host-bg-color) 0%')
@@ -189,13 +221,13 @@ describe('UiPluginStagePresentation', () => {
     expect(css).toContain(".ds-chat-stage[data-terminal-open='true']")
     expect(css).toContain("[data-scene-motion='orbit']")
     expect(css).toContain('@keyframes ds-ui-plugin-scene-sway')
+    expect(css).toContain('scale: var(--kun-ui-plugin-character-user-scale, 1);')
+    expect(css).toContain('calc(-1 * var(--kun-ui-plugin-character-user-scale, 1))')
     expect(css).toContain('@media (prefers-reduced-motion: reduce)')
   })
 
   it('skins every application surface with each dedicated host-owned chrome recipe', async () => {
-    const nodeFs = 'node:fs/promises'
-    const { readFile } = await import(/* @vite-ignore */ nodeFs)
-    const css = await readFile(new URL('../../styles/surfaces-write.css', import.meta.url), 'utf8')
+    const css = await readStylesheetBundle(new URL('../../styles/surfaces-write.css', import.meta.url))
 
     for (const [index, recipe] of dedicatedCharacterChromeRecipes.entries()) {
       const recipeStartMarker =
@@ -248,10 +280,10 @@ describe('UiPluginStagePresentation', () => {
   it('keeps the Grand Line conversation card and composer status rail visually connected', async () => {
     const nodeFs = 'node:fs/promises'
     const { readFile } = await import(/* @vite-ignore */ nodeFs)
-    const [css, workbenchStage, sidebar, executionPicker] = await Promise.all([
-      readFile(new URL('../../styles/surfaces-write.css', import.meta.url), 'utf8'),
+    const [css, workbenchStage, sidebarFocusMode, executionPicker] = await Promise.all([
+      readStylesheetBundle(new URL('../../styles/surfaces-write.css', import.meta.url)),
       readFile(new URL('../workbench/WorkbenchChatStage.tsx', import.meta.url), 'utf8'),
-      readFile(new URL('./Sidebar.tsx', import.meta.url), 'utf8'),
+      readFile(new URL('../sidebar/SidebarFocusModeControl.tsx', import.meta.url), 'utf8'),
       readFile(new URL('./FloatingComposerExecutionPicker.tsx', import.meta.url), 'utf8')
     ])
 
@@ -291,9 +323,9 @@ describe('UiPluginStagePresentation', () => {
     expect(css).toContain(
       '.ds-message-timeline-content :is(.text-ds-ink, .text-ds-muted, .text-ds-faint)'
     )
-    expect(sidebar).toContain('ds-sidebar-focus-row')
-    expect(sidebar).toContain('ds-sidebar-mascot-slot')
-    expect(sidebar).toContain('ds-focus-mode-toggle-track')
+    expect(sidebarFocusMode).toContain('ds-sidebar-focus-row')
+    expect(sidebarFocusMode).toContain('ds-sidebar-mascot-slot')
+    expect(sidebarFocusMode).toContain('ds-focus-mode-toggle-track')
     expect(executionPicker).toContain('ds-composer-permission-menu')
     expect(executionPicker).toContain('ds-composer-permission-option')
     expect(executionPicker).toContain('data-permission-mode={mode}')

@@ -26,6 +26,8 @@ import {
 import type { ComponentPrototypeMetadata, ToolBlock } from '../../agent/types'
 import { useChatStore } from '../../store/chat-store'
 import { importComponentPrototypeToDesignCanvas } from '../../design/component-prototype-canvas-import'
+import { useCodeCanvasDesignSurface } from '../../design/code-canvas-design-surface'
+import { requestCodeCanvasPanelOpen } from '../../lib/code-canvas-panel-event'
 import { previewWorkspaceFile } from '../../lib/workspace-file-preview'
 import { DesignHtmlPreviewHost } from '../design/DesignHtmlPreviewHost'
 
@@ -314,7 +316,15 @@ export function ComponentPrototypeCard({
     setOpeningCanvas(true)
     void importComponentPrototypeToDesignCanvas({ workspaceRoot, prototype })
       .then((imported) => {
-        if (imported) useChatStore.getState().openDesign()
+        if (!imported) return
+        // Open the imported 设计稿 in the Code whiteboard panel instead of
+        // switching the whole workbench to Design mode. The surface is scoped
+        // to the active thread so the panel falls back to the thread canvas
+        // on any other thread.
+        const threadId = useChatStore.getState().activeThreadId
+        if (!threadId) return
+        useCodeCanvasDesignSurface.getState().showDesignDocument(threadId, workspaceRoot, imported.documentId)
+        requestCodeCanvasPanelOpen()
       })
       .finally(() => setOpeningCanvas(false))
   }

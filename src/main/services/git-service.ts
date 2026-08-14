@@ -38,12 +38,13 @@ export async function resolveGitCwd(workspaceRoot: string): Promise<string> {
 export async function runGit(
   cwd: string,
   args: string[],
-  timeout = 10_000
+  timeout = 10_000,
+  maxBuffer = 1024 * 1024
 ): Promise<{ stdout: string; stderr: string }> {
   const { stdout, stderr } = await execFileAsync('git', args, {
     cwd,
     timeout,
-    maxBuffer: 1024 * 1024,
+    maxBuffer,
     // Force a C locale so git emits English diagnostics. gitFailure() matches
     // messages like "not a git repository"; without this, a localized git
     // (e.g. zh_CN: "不是 Git 仓库") falls through to a generic `error` reason

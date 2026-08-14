@@ -165,15 +165,15 @@ my-plugin/
 
 ## 背景图层(backgrounds)
 
-`backgrounds` 按主题和区域组织。五个区域彼此独立;`write` / `design` 可省略,此时继续使用 `stage`:
+`backgrounds` 按主题和区域组织。五个内部区域彼此独立;`write` / `design` 是稳定兼容键，可省略，此时继续使用 `stage`:
 
 | 槽位 | 作用区域 | 默认透明度 |
 |---|---|---|
 | `app` | 整个工作台内容区的底层背景 | `0.22` |
 | `sidebar` | 左侧栏背景 | `0.18` |
 | `stage` | 主内容/会话舞台背景 | `0.32` |
-| `write` | 写作模式工作面 | `0.50` |
-| `design` | 设计模式制图工作面 | `0.50` |
+| `write` | Work 办公工作面（稳定内部键） | `0.50` |
+| `design` | Code 内 Design 白板（稳定内部键） | `0.50` |
 
 顶栏(`topbar`)不属于上述五个背景槽位,仍由主题 token `--ds-topbar-bg` 控制。
 

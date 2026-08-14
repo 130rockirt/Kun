@@ -67,6 +67,15 @@ describe('delegated Graph turn policy', () => {
     expect(delegatedGraphRecoveryInstruction('planning')).toContain(
       'call `graph_define_plan` now'
     )
+    expect(delegatedGraphRecoveryInstruction('planning')).toContain(
+      'structured top-level `{ plan: ... }` object'
+    )
+    expect(delegatedGraphRecoveryInstruction('planning')).toContain(
+      'Do not use `__raw`'
+    )
+    expect(delegatedGraphRecoveryInstruction('planning')).toContain(
+      'only once more with changed arguments'
+    )
     expect(delegatedGraphRecoveryInstruction('supervising')).toContain(
       'call `graph_review_node`'
     )

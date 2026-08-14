@@ -1,7 +1,8 @@
 import { contextBridge, ipcRenderer, webFrame, webUtils } from 'electron'
 import type { KunGuiApi } from '../shared/kun-gui-api'
-import type { AppEnvironmentInfo } from '../shared/app-environment'
+import { normalizeDesktopTitleBarMode } from '../shared/desktop-title-bar'
 import { registerExtensionContentScriptPreload } from './extension-content-script'
+import { parseAppEnvironment } from './app-environment'
 
 registerExtensionContentScriptPreload({ contextBridge, ipcRenderer, webFrame })
 
@@ -17,37 +18,20 @@ const appEnvironment = parseAppEnvironment(
   process.argv.find((arg) => arg.startsWith(APP_ENVIRONMENT_ARG))?.slice(APP_ENVIRONMENT_ARG.length)
 )
 
-function parseAppEnvironment(encoded: string | undefined): AppEnvironmentInfo {
-  if (encoded) {
-    try {
-      const parsed = JSON.parse(decodeURIComponent(encoded)) as Partial<AppEnvironmentInfo>
-      if (
-        (parsed.flavor === 'production' || parsed.flavor === 'development') &&
-        parsed.runtimeFlavor === parsed.flavor &&
-        typeof parsed.appName === 'string' &&
-        typeof parsed.appId === 'string' &&
-        typeof parsed.profilePath === 'string' &&
-        typeof parsed.isPackaged === 'boolean'
-      ) {
-        return Object.freeze(parsed as AppEnvironmentInfo)
-      }
-    } catch {
-      // Fall through to a safe production-shaped snapshot. Main always sends
-      // the argument; the fallback keeps isolated renderer tests compatible.
-    }
-  }
-  return Object.freeze({
-    flavor: 'production',
-    appName: 'Kun',
-    appId: 'com.xingyuzhong.deepseekgui',
-    runtimeFlavor: 'production',
-    profilePath: '',
-    isPackaged: false
-  })
-}
+const DESKTOP_TITLE_BAR_MODE_ARG = '--kun-desktop-title-bar-mode='
+const desktopTitleBarMode = normalizeDesktopTitleBarMode(
+  process.platform,
+  // Per-window additionalArguments are appended to argv, so prefer the last
+  // occurrence over any similarly named application launch argument.
+  [...process.argv]
+    .reverse()
+    .find((arg) => arg.startsWith(DESKTOP_TITLE_BAR_MODE_ARG))
+    ?.slice(DESKTOP_TITLE_BAR_MODE_ARG.length)
+)
 
 const api = {
   platform: process.platform,
+  desktopTitleBarMode,
   homeDir: homeDirFromArgs,
   appEnvironment,
   sharedClientState: {
@@ -175,18 +159,21 @@ const api = {
     ipcRenderer.invoke('runtime:settings-sync-status:get'),
   uploadRuntimeImageAttachment: (request) =>
     ipcRenderer.invoke('runtime:attachment:upload-image', request),
-  readLocalOfficeDocument: (options) =>
-    ipcRenderer.invoke('file:read-local-office-document', options),
+  captureDevPreviewRegion: (request) =>
+    ipcRenderer.invoke('dev-preview:capture-region', request),
+  readLocalOfficeDocument: (options) => ipcRenderer.invoke('file:read-local-office-document', options),
+  readWorkspaceOfficePreview: (options) => ipcRenderer.invoke('file:read-workspace-office-preview', options),
+  readWorkspaceOfficeSemantic: (options) => ipcRenderer.invoke('file:read-workspace-office-semantic', options),
   resolveKunApproval: (request) => ipcRenderer.invoke('approval:decide', request),
   restartRuntime: () => ipcRenderer.invoke('runtime:restart'),
+  restartKunServe: () => ipcRenderer.invoke('runtime:restart-serve'),
   fetchUpstreamModels: () => ipcRenderer.invoke('upstream:models'),
   probeModelProvider: (payload) => ipcRenderer.invoke('provider:probe', payload),
   listProviderQuotas: () => ipcRenderer.invoke('provider:quota:list'),
   fetchModelsDevCatalog: (payload) => ipcRenderer.invoke('provider:models-dev-catalog', payload),
   optimizePrompt: (payload) => ipcRenderer.invoke('prompt:optimize', payload),
   getClawStatus: () => ipcRenderer.invoke('claw:status'),
-  runClawTask: (taskId) =>
-    ipcRenderer.invoke('claw:task:run', taskId),
+  runClawTask: (taskId) => ipcRenderer.invoke('claw:task:run', taskId),
   getScheduleStatus: () => ipcRenderer.invoke('schedule:status'),
   runScheduleTask: (taskId) =>
     ipcRenderer.invoke('schedule:task:run', taskId),
@@ -207,8 +194,8 @@ const api = {
     ipcRenderer.invoke('claw:im-install:qrcode', { provider, isLark: options?.isLark }),
   pollClawImInstall: (provider, deviceCode) =>
     ipcRenderer.invoke('claw:im-install:poll', { provider, deviceCode }),
-  connectTelegramBot: (botToken, allowedChatIds) =>
-    ipcRenderer.invoke('claw:im-install:telegram-token', { botToken, allowedChatIds }),
+  connectTelegramBot: (botToken, allowedChatIds, proxy) =>
+    ipcRenderer.invoke('claw:im-install:telegram-token', { botToken, allowedChatIds, proxy }),
   startCodexAuth: () =>
     ipcRenderer.invoke('codex:auth:start'),
   pollCodexAuth: (deviceCode, userCode) =>
@@ -247,7 +234,6 @@ const api = {
     ipcRenderer.invoke('skill:save-file', { rootPath, skillName, content, manifestContent }),
   importSkillsFromGitHub: (rootPath, url) =>
     ipcRenderer.invoke('skill:import-github', { rootPath, url }),
-  ensurePptMaster: () => ipcRenderer.invoke('ppt-master:ensure'),
   openSkillRoot: (rootPath) =>
     ipcRenderer.invoke('skill:open-root', rootPath),
   listUiPlugins: () =>
@@ -543,6 +529,7 @@ const api = {
     return () => ipcRenderer.removeListener('browser-use:state', wrapped)
   },
   showTurnCompleteNotification: (payload) => ipcRenderer.invoke('notification:turn-complete', payload),
+  setAppBadgeCount: (count) => ipcRenderer.invoke('app:badge-count', count),
   getAppVersion: () => ipcRenderer.invoke('app:version'),
   getGuiUpdateState: () => ipcRenderer.invoke('gui:update-state'),
   checkGuiUpdate: (channel) =>

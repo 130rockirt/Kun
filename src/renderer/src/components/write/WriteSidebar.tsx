@@ -17,6 +17,7 @@ import {
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import type { WorkspaceEntry } from '@shared/workspace-file'
+import type { WorkWhiteboard } from '../../write/write-workspace-store'
 import { confirmDialog } from '../../lib/confirm-dialog'
 import { formatWorkspacePickerError } from '../../lib/format-workspace-picker-error'
 import { revealWorkspacePathInFileManager } from '../../lib/open-workspace-path'
@@ -28,6 +29,10 @@ import {
   writeJoinPath,
   writeRelativeToWorkspace
 } from '../../write/write-workspace-store'
+import { renameWorkWhiteboardSession } from '../../write/work-whiteboard-session-title'
+import { WorkWhiteboardTitleDialog } from './WorkWhiteboardTitleDialog'
+import { useWorkWhiteboardCreation } from './use-work-whiteboard-creation'
+import { WriteEntryDialog, type WriteEntryDialogKind } from './WriteEntryDialog'
 import { ConnectPhoneSidebarPanel } from '../chat/ConnectPhoneView'
 import { WorkspaceModeTabs } from '../chat/WorkspaceModeTabs'
 import {
@@ -37,32 +42,30 @@ import {
   SidebarSectionHeader,
   SidebarTreeRow
 } from '../sidebar/SidebarPrimitives'
+import { SidebarFocusModeControl } from '../sidebar/SidebarFocusModeControl'
 import { WriteFileTree } from './WriteFileTree'
+import { WorkWhiteboardSidebarSection } from './WorkWhiteboardSidebarSection'
 
 type Props = {
   activeView: 'chat' | 'write' | 'claw' | 'schedule' | 'workflow'
   connectPhoneSidebarOpen: boolean
+  focusModeEnabled: boolean
   onCodeOpen: () => void
   onWriteOpen: () => void
-  onDesignOpen: () => void
+  onFocusModeChange: (enabled: boolean) => void
   onOpenSettings: (section?: SettingsRouteSection) => void
   onToggleConnectPhone: () => void
 }
-
-type EntryDialog =
-  | { kind: 'create-file'; parentDirectory?: string; value: string }
-  | { kind: 'create-folder'; parentDirectory?: string; value: string }
-  | { kind: 'rename'; entry: WorkspaceEntry; value: string }
-  | { kind: 'delete'; entry: WorkspaceEntry }
 
 type Translate = (key: string, opts?: Record<string, unknown>) => string
 
 export function WriteSidebar({
   activeView,
   connectPhoneSidebarOpen,
+  focusModeEnabled,
   onCodeOpen,
   onWriteOpen,
-  onDesignOpen,
+  onFocusModeChange,
   onOpenSettings,
   onToggleConnectPhone
 }: Props): ReactElement {
@@ -71,10 +74,13 @@ export function WriteSidebar({
   const addClawChannel = useChatStore((s) => s.addClawChannel)
   const deleteClawChannel = useChatStore((s) => s.deleteClawChannel)
   const ensureWriteThreadForWorkspace = useChatStore((s) => s.ensureWriteThreadForWorkspace)
+  const renameThread = useChatStore((s) => s.renameThread)
   const runtimeConnection = useChatStore((s) => s.runtimeConnection)
-  const [entryDialog, setEntryDialog] = useState<EntryDialog | null>(null)
+  const [entryDialog, setEntryDialog] = useState<WriteEntryDialogKind | null>(null)
   const [collapsedWorkspaces, setCollapsedWorkspaces] = useState<Record<string, boolean>>({})
+  const [collapsedWhiteboardFolders, setCollapsedWhiteboardFolders] = useState<Record<string, boolean>>({})
   const [revealError, setRevealError] = useState<string | null>(null)
+  const [whiteboardMenuId, setWhiteboardMenuId] = useState<string | null>(null)
   const revealErrorTimerRef = useRef<number | null>(null)
   // Field-level subscription: the sidebar must not re-render on fileContent or
   // selection updates, which fire on every keystroke in the editor.
@@ -89,6 +95,8 @@ export function WriteSidebar({
     loadingDirs,
     treeError,
     activeFilePath,
+    activeWhiteboardId,
+    whiteboards,
     loadWriteSettings,
     selectWriteWorkspace,
     addWriteWorkspace,
@@ -100,7 +108,10 @@ export function WriteSidebar({
     renameEntry,
     deleteEntry,
     refreshWorkspace,
-    setFileError
+    setFileError,
+    openWhiteboard,
+    renameWhiteboard,
+    deleteWhiteboard
   } = useWriteWorkspaceStore(
     useShallow((s) => ({
       defaultWorkspaceRoot: s.defaultWorkspaceRoot,
@@ -113,6 +124,8 @@ export function WriteSidebar({
       loadingDirs: s.loadingDirs,
       treeError: s.treeError,
       activeFilePath: s.activeFilePath,
+      activeWhiteboardId: s.activeWhiteboardId,
+      whiteboards: s.whiteboards,
       loadWriteSettings: s.loadWriteSettings,
       selectWriteWorkspace: s.selectWriteWorkspace,
       addWriteWorkspace: s.addWriteWorkspace,
@@ -124,7 +137,10 @@ export function WriteSidebar({
       renameEntry: s.renameEntry,
       deleteEntry: s.deleteEntry,
       refreshWorkspace: s.refreshWorkspace,
-      setFileError: s.setFileError
+      setFileError: s.setFileError,
+      openWhiteboard: s.openWhiteboard,
+      renameWhiteboard: s.renameWhiteboard,
+      deleteWhiteboard: s.deleteWhiteboard
     }))
   )
 
@@ -215,6 +231,12 @@ export function WriteSidebar({
     event.preventDefault()
     if (!entryDialog) return
 
+    if (entryDialog.kind === 'delete-whiteboard') {
+      const ok = await deleteWhiteboard(entryDialog.board.id)
+      if (ok) setEntryDialog(null)
+      return
+    }
+
     if (entryDialog.kind === 'delete') {
       const ok = await deleteEntry(workspaceRoot, entryDialog.entry.path)
       if (ok) setEntryDialog(null)
@@ -223,6 +245,22 @@ export function WriteSidebar({
 
     const value = entryDialog.value.trim()
     if (!value) return
+
+    if (entryDialog.kind === 'rename-whiteboard') {
+      if (value === entryDialog.board.title) {
+        setEntryDialog(null)
+        return
+      }
+      if (await renameWorkWhiteboardSession({
+        board: entryDialog.board,
+        title: value,
+        renameSession: renameThread,
+        readSessionTitle: (threadId) => useChatStore.getState().threads
+          .find((thread) => thread.id === threadId)?.title ?? null,
+        renameWhiteboard
+      })) setEntryDialog(null)
+      return
+    }
 
     if (entryDialog.kind === 'rename') {
       if (value === entryDialog.entry.name) {
@@ -260,6 +298,19 @@ export function WriteSidebar({
     }
   }
 
+  const {
+    newWhiteboardDialogOpen,
+    creatingWhiteboard,
+    openNewWhiteboardDialog,
+    submitNewWhiteboardTitle,
+    closeNewWhiteboardDialog
+  } = useWorkWhiteboardCreation({
+    workspaceRoot,
+    onNeedWorkspace: pickWriteWorkspace
+  })
+
+  const createWorkWhiteboard = openNewWhiteboardDialog
+
   const selectWorkspaceAndThread = async (workspacePath: string): Promise<void> => {
     await selectWriteWorkspace(workspacePath)
     if (runtimeConnection === 'ready') void ensureWriteThreadForWorkspace(workspacePath)
@@ -288,32 +339,37 @@ export function WriteSidebar({
     <SidebarFrame
       title={t('appName')}
       footer={
-        <div className="flex items-center gap-1">
-          <div className="min-w-0 flex-1">
-            <SidebarCommandRow
-              icon={<Settings className="h-4 w-4" strokeWidth={1.75} />}
-              label={t('settings')}
-              onClick={() => onOpenSettings('write')}
-              variant="footer"
-            />
+        <div className="space-y-1">
+          <SidebarFocusModeControl
+            enabled={focusModeEnabled}
+            onChange={onFocusModeChange}
+          />
+          <div className="flex items-center gap-1">
+            <div className="min-w-0 flex-1">
+              <SidebarCommandRow
+                icon={<Settings className="h-4 w-4" strokeWidth={1.75} />}
+                label={t('settings')}
+                onClick={() => onOpenSettings('write')}
+                variant="footer"
+              />
+            </div>
+            <SidebarIconButton
+              title={t('claw')}
+              ariaLabel={t('claw')}
+              onClick={onToggleConnectPhone}
+              active={connectPhoneSidebarOpen}
+            >
+              <Smartphone className="h-4 w-4" strokeWidth={1.75} />
+            </SidebarIconButton>
           </div>
-          <SidebarIconButton
-            title={t('claw')}
-            ariaLabel={t('claw')}
-            onClick={onToggleConnectPhone}
-            active={connectPhoneSidebarOpen}
-          >
-            <Smartphone className="h-4 w-4" strokeWidth={1.75} />
-          </SidebarIconButton>
         </div>
       }
     >
-      <div className="ds-no-drag flex flex-col px-0.5">
+      <div className="workspace-mode-controls ds-no-drag flex flex-col px-0.5">
         <WorkspaceModeTabs
           activeView={activeView}
           onCodeOpen={onCodeOpen}
           onWriteOpen={onWriteOpen}
-          onDesignOpen={onDesignOpen}
         />
         <SidebarCommandRow
           icon={<FilePlus2 className="h-4 w-4" strokeWidth={1.9} />}
@@ -471,6 +527,32 @@ export function WriteSidebar({
                         {workspacePath === defaultWorkspaceRoot ? t('writeDefaultSpace') : workspacePath}
                       </span>
                     </div>
+                    <WorkWhiteboardSidebarSection
+                      whiteboards={Object.values(whiteboards)}
+                      activeWhiteboardId={activeWhiteboardId}
+                      expanded={collapsedWhiteboardFolders[workspacePath] !== true}
+                      openMenuId={whiteboardMenuId}
+                      label={t('writeWhiteboards', { defaultValue: 'Whiteboards' })}
+                      createLabel={t('writeCreateWhiteboard', { defaultValue: 'New whiteboard' })}
+                      moreActionsLabel={t('writeMoreActions')}
+                      renameLabel={t('writeRenameEntry')}
+                      deleteLabel={t('writeEntryDialogDelete')}
+                      onToggle={() => setCollapsedWhiteboardFolders((current) => ({
+                        ...current,
+                        [workspacePath]: current[workspacePath] !== true
+                      }))}
+                      onCreate={() => void createWorkWhiteboard()}
+                      onOpen={openWhiteboard}
+                      onToggleMenu={(boardId) => setWhiteboardMenuId((current) => current === boardId ? null : boardId)}
+                      onRename={(board) => {
+                        setWhiteboardMenuId(null)
+                        setEntryDialog({ kind: 'rename-whiteboard', board, value: board.title })
+                      }}
+                      onDelete={(board) => {
+                        setWhiteboardMenuId(null)
+                        setEntryDialog({ kind: 'delete-whiteboard', board })
+                      }}
+                    />
                     <WriteFileTree
                       rootDirectory={root}
                       entriesByDir={entriesByDir}
@@ -499,13 +581,22 @@ export function WriteSidebar({
       </div>
       )}
     </SidebarFrame>
+    {newWhiteboardDialogOpen ? (
+      <WorkWhiteboardTitleDialog
+        submitting={creatingWhiteboard}
+        onSubmit={(title) => { void submitNewWhiteboardTitle(title) }}
+        onClose={() => {
+          if (!creatingWhiteboard) closeNewWhiteboardDialog()
+        }}
+      />
+    ) : null}
     {entryDialog ? (
       <WriteEntryDialog
         dialog={entryDialog}
         onClose={() => setEntryDialog(null)}
         onValueChange={(value) =>
           setEntryDialog((current) => {
-            if (!current || current.kind === 'delete') return current
+            if (!current || current.kind === 'delete' || current.kind === 'delete-whiteboard') return current
             return { ...current, value }
           })
         }
@@ -514,89 +605,5 @@ export function WriteSidebar({
       />
     ) : null}
     </>
-  )
-}
-
-function entryDialogTitle(dialog: EntryDialog, t: Translate): string {
-  if (dialog.kind === 'create-file') return t('writeCreateFile')
-  if (dialog.kind === 'create-folder') return t('writeCreateFolder')
-  if (dialog.kind === 'rename') return t('writeRenameEntry')
-  return dialog.entry.type === 'directory' ? t('writeDeleteFolder') : t('writeDeleteFile')
-}
-
-function entryDialogSubmitLabel(dialog: EntryDialog, t: Translate): string {
-  if (dialog.kind === 'rename') return t('writeEntryDialogRename')
-  if (dialog.kind === 'delete') return t('writeEntryDialogDelete')
-  return t('writeEntryDialogCreate')
-}
-
-function entryDialogDescription(dialog: EntryDialog, t: Translate): string {
-  if (dialog.kind === 'delete') {
-    return dialog.entry.type === 'directory'
-      ? t('writeDeleteFolderConfirm', { name: dialog.entry.name })
-      : t('writeDeleteFileConfirm', { name: dialog.entry.name })
-  }
-  if (dialog.kind === 'rename') return t('writeRenameEntryPrompt')
-  if (dialog.kind === 'create-file') return t('writeCreateFilePrompt')
-  return t('writeCreateFolderPrompt')
-}
-
-function WriteEntryDialog({
-  dialog,
-  onClose,
-  onValueChange,
-  onSubmit,
-  t
-}: {
-  dialog: EntryDialog
-  onClose: () => void
-  onValueChange: (value: string) => void
-  onSubmit: (event: FormEvent<HTMLFormElement>) => void
-  t: Translate
-}): ReactElement {
-  const deleting = dialog.kind === 'delete'
-  return (
-    <div
-      className="ds-no-drag fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/18 px-4 backdrop-blur-[2px] dark:bg-black/35"
-      onMouseDown={onClose}
-    >
-      <form
-        onSubmit={onSubmit}
-        onMouseDown={(event) => event.stopPropagation()}
-        className="w-full max-w-sm rounded-[24px] border border-ds-border bg-ds-card p-5 shadow-[0_24px_72px_rgba(20,47,95,0.22)]"
-      >
-        <h2 className="text-[18px] font-semibold tracking-[-0.035em] text-ds-ink">
-          {entryDialogTitle(dialog, t)}
-        </h2>
-        <p className="mt-2 text-[13px] leading-6 text-ds-muted">
-          {entryDialogDescription(dialog, t)}
-        </p>
-        {!deleting ? (
-          <input
-            autoFocus
-            value={dialog.value}
-            onChange={(event) => onValueChange(event.target.value)}
-            className="mt-4 w-full rounded-xl border border-ds-border bg-ds-main/65 px-3 py-2 text-[14px] text-ds-ink outline-none transition focus:border-accent/40 focus:ring-1 focus:ring-accent/25"
-          />
-        ) : null}
-        <div className="mt-5 flex justify-end gap-2">
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[13px] font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
-          >
-            {t('writeEntryDialogCancel')}
-          </button>
-          <button
-            type="submit"
-            className={`rounded-xl px-3 py-2 text-[13px] font-semibold text-white transition hover:brightness-110 ${
-              deleting ? 'bg-red-500' : 'bg-accent'
-            }`}
-          >
-            {entryDialogSubmitLabel(dialog, t)}
-          </button>
-        </div>
-      </form>
-    </div>
   )
 }

@@ -9,6 +9,10 @@ import {
   TOOL_CANCELLED_BY_USER_CODE,
   ToolCancellationRegistry
 } from './tool-cancellation-registry.js'
+import {
+  isPendingReceiptOutput,
+  type CanvasReceiptRegistry
+} from '../services/canvas-receipt-registry.js'
 import { prepareBrowserUseToolResultForPersistence } from './tool-result-image.js'
 
 export type PlanWrittenCallback = (input: {
@@ -31,6 +35,8 @@ export type ToolExecutionServiceDeps = {
     checkpointRequestId: string,
     signal: AbortSignal
   ) => Promise<string | null>
+  /** Design-tool renderer receipt registry; finalizes accepted results. */
+  receipts?: CanvasReceiptRegistry
 }
 
 export type ToolExecutionInput = {
@@ -151,12 +157,39 @@ export class ToolExecutionService {
       status: result.item.kind === 'tool_result' && result.item.isError ? 'failed' : 'completed',
       finishedAt: this.deps.nowIso()
     } as Partial<TurnItem>)
+    // Register before publishing the result. Otherwise the renderer can receive
+    // the SSE item and POST its receipt before this process knows the key.
+    await this.registerPendingDesignReceipt(threadId, turnId, call, result)
     await this.deps.turns.applyItem(
       threadId,
       prepareBrowserUseToolResultForPersistence(result.item)
     )
     await this.afterResultPersisted(threadId, turnId, call, result)
     await this.deps.turns.compactItemHistory(threadId)
+  }
+
+  /**
+   * When a design tool returns an `accepted` placeholder with a receiptKey,
+   * register it so the loop can finalize the result once the renderer applies
+   * the operations (or time out to an explicit `unverified` state).
+   */
+  private async registerPendingDesignReceipt(
+    threadId: string,
+    turnId: string,
+    call: ToolCallLike,
+    result: ToolHostResult
+  ): Promise<void> {
+    if (!this.deps.receipts || result.item.kind !== 'tool_result') return
+    const output = result.item.output
+    if (!isPendingReceiptOutput(output)) return
+    this.deps.receipts.register({
+      receiptKey: output.receiptKey,
+      threadId,
+      turnId,
+      call,
+      itemId: result.item.id,
+      acceptedOutput: output as Record<string, unknown>
+    })
   }
 
   async persistSuppressed(input: {
@@ -251,10 +284,8 @@ export class ToolExecutionService {
           }
           const message = error instanceof Error ? error.message : String(error)
           const planActive = input.context.threadMode === 'plan' || Boolean(input.context.guiPlan)
-          const guidance = input.call.toolName.startsWith('ppt_master_')
-            ? 'PPT Master is not active in this turn. Call `load_skill` once with `skill_id: "ppt-master"`, then retry the managed PPT tool on the next model step after the tool catalog refreshes. If it remains unavailable, stop and report the problem. Never run PPT Master scripts through `bash`, `background_shell`, or direct Python.'
-            : planActive
-            ? `\`${input.call.toolName}\` is not available in Plan mode. Continue with advertised read-only tools, \`git_inspect\`, or \`write\`/\`edit\` for Markdown only. Call \`create_plan\` and put a COMPLETE implementation plan in its \`markdown\` argument — concrete steps, the files to create with their intended contents, and how to verify. Do NOT copy this message into the plan; write the actual plan. If the request is still ambiguous, ask the user a clarifying question and wait instead.`
+          const guidance = planActive
+            ? `\`${input.call.toolName}\` is not available in Plan mode. Continue with advertised read-only tools or \`generate_image\` when the user requests an image. Call \`create_plan\` and put a COMPLETE implementation plan in its \`markdown\` argument — concrete steps, the files to create with their intended contents, and how to verify. Do NOT copy this message into the plan; write the actual plan. If the request is still ambiguous, ask the user a clarifying question and wait instead.`
             : 'Use only tools advertised in the current turn context.'
           await this.deps.events.record({
             kind: 'error',

@@ -8,10 +8,10 @@ import {
 describe('provider catalog', () => {
   it('publishes every GUI base preset and Token Plan as stable entries', () => {
     const entries = providerCatalogEntries()
-    expect(PROVIDER_CATALOG).toHaveLength(23)
-    expect(entries).toHaveLength(27)
-    expect(entries.filter((entry) => entry.category === 'subscription')).toHaveLength(17)
-    expect(entries.filter((entry) => entry.category === 'api')).toHaveLength(10)
+    expect(PROVIDER_CATALOG).toHaveLength(24)
+    expect(entries).toHaveLength(29)
+    expect(entries.filter((entry) => entry.category === 'subscription')).toHaveLength(18)
+    expect(entries.filter((entry) => entry.category === 'api')).toHaveLength(11)
     expect(entries.map((entry) => entry.profileId)).toEqual(expect.arrayContaining([
       'gemini-subscription',
       'gemini-cli-subscription',
@@ -19,10 +19,47 @@ describe('provider catalog', () => {
       'ollama',
       'volcengine',
       'volcengine-agent-plan',
+      'zenmux',
+      'zenmux-token-plan',
       'xiaomi-token-plan',
       'minimax-token-plan',
       'aliyun-token-plan',
       'tencentcloud-token-plan'
+    ]))
+  })
+
+  it('publishes separate ZenMux pay-as-you-go and Builder Plan entries', () => {
+    expect(getProviderCatalogPreset('zenmux')).toMatchObject({
+      name: 'ZenMux API',
+      category: 'api',
+      authFlow: 'api-key',
+      authType: 'api-key',
+      baseUrl: 'https://zenmux.ai/api/v1',
+      endpointFormat: 'chat_completions',
+      models: [],
+      credentialUrl: 'https://zenmux.ai/platform/pay-as-you-go',
+      tokenPlan: {
+        displayName: 'ZenMux Builder Plan (Coding Plan)',
+        baseUrl: 'https://zenmux.ai/api/v1',
+        endpointFormat: 'chat_completions',
+        models: [],
+        credentialUrl: 'https://zenmux.ai/platform/subscription'
+      }
+    })
+    expect(providerCatalogEntries()).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        profileId: 'zenmux',
+        mode: 'api',
+        label: 'ZenMux API',
+        category: 'api'
+      }),
+      expect.objectContaining({
+        profileId: 'zenmux-token-plan',
+        mode: 'token-plan',
+        label: 'ZenMux Builder Plan (Coding Plan)',
+        name: 'ZenMux Builder Plan (Coding Plan)',
+        category: 'subscription'
+      })
     ]))
   })
 

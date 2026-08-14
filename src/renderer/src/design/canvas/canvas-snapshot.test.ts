@@ -200,6 +200,34 @@ describe('snapshotCanvas', () => {
     expect(snap.placement?.recommendedSlots).toHaveLength(3)
   })
 
+  it('reports virtual design-system projections as occupied placement regions', () => {
+    const snap = snapshotCanvas(createEmptyDocument(), new Set(), {
+      viewBox: { x: 0, y: 0, width: 1600, height: 1000 },
+      occupiedRegions: [{
+        id: 'project-design-system-board',
+        name: 'Project design-system board',
+        regionKind: 'design-system',
+        x: 160,
+        y: 100,
+        w: 1280,
+        h: 800
+      }]
+    })
+
+    expect(snap.placement?.empty).toBe(false)
+    expect(snap.placement?.occupiedFrames).toEqual([
+      expect.objectContaining({
+        id: 'project-design-system-board',
+        regionKind: 'design-system',
+        x: 160,
+        y: 100,
+        w: 1280,
+        h: 800
+      })
+    ])
+    expect(snap.placement?.recommendedSlots[0]).toMatchObject({ x: 1520, y: 100 })
+  })
+
   it('includes graph direction and recent operation summaries', () => {
     const doc = createEmptyDocument()
     const root = doc.objects[doc.rootId]

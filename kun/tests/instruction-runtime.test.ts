@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { KunCapabilitiesConfig } from '../src/contracts/capabilities.js'
 import { InstructionRuntime } from '../src/instructions/instruction-runtime.js'
 import type { ModelClient, ModelRequest } from '../src/ports/model-client.js'
+import { modelRequestContextText } from '../src/loop/model-request-context.js'
 import { bootstrapThread, makeHarness } from './loop-test-harness.js'
 
 describe('InstructionRuntime', () => {
@@ -142,7 +143,7 @@ describe('InstructionRuntime', () => {
 
     await h.loop.runTurn(h.threadId, h.turnId)
 
-    const instructions = seenRequest?.contextInstructions?.join('\n') ?? ''
+    const instructions = seenRequest ? modelRequestContextText(seenRequest) : ''
     expect(instructions).toContain('Global agent rule.')
     expect(instructions).toContain('Workspace agent rule.')
     expect(seenRequest?.systemPrompt).toBe(h.prefix.systemPrompt)

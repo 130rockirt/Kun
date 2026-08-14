@@ -12,7 +12,7 @@ import {
 } from '../contracts/policy.js'
 import type { InstructionRuntime, InstructionTurnResolution } from '../instructions/instruction-runtime.js'
 import type { MemoryStore } from '../memory/memory-store.js'
-import type { GuiPlanContext, ToolHost, ToolHostContext } from '../ports/tool-host.js'
+import type { GuiPlanContext, PptWorkflowScope, ToolHost, ToolHostContext } from '../ports/tool-host.js'
 import type { SkillRuntime, SkillTurnResolution } from '../skills/skill-runtime.js'
 import { SVG_ARTIFACT_ALLOWED_TOOL_NAMES } from './design-mode.js'
 import { InteractiveToolBridge } from './interactive-tool-bridge.js'
@@ -24,11 +24,16 @@ import {
   todoContinuationInstruction
 } from './continuation-instructions.js'
 import { isStalePlanContext } from './plan-mode.js'
-import { createToolDiscoveryContext } from './tool-discovery-context-factory.js'
+import {
+  createToolDiscoveryContext,
+  modelToolDiscoveryContexts
+} from './tool-discovery-context-factory.js'
 import type {
+  DiscoveredTool,
   PreparedTurnContext,
   ResolvedTurnAttachments
 } from './turn-execution-types.js'
+import { collectTurnAttachmentIds } from './turn-steering-attachments.js'
 
 const EMPTY_SKILL_RESOLUTION: SkillTurnResolution = {
   activeSkillIds: [],
@@ -84,10 +89,13 @@ export type TurnContextResolverDeps = {
   allowedReadPaths?: readonly string[]
   allowedWritePaths?: readonly string[]
   allowedArtifactIds?: readonly string[]
+  pptWorkflowScope?: PptWorkflowScope
   blockedProviderIds?: readonly string[]
   blockedToolNames?: readonly string[]
   blockedSkillIds?: readonly string[]
   runtimeDataDir?: string
+  fastContext?: boolean
+  fastContextTaskCount?: number
 }
 
 /**
@@ -115,7 +123,7 @@ export class TurnContextResolver {
     // I/O together so model dispatch pays the slowest branch, not their sum.
     const [attachments, skillResolution, instructionResolution, memories] = await Promise.all([
       this.deps.resolveAttachments({
-        attachmentIds: input.turn.attachmentIds ?? [],
+        attachmentIds: collectTurnAttachmentIds(input.turn),
         threadId: input.threadId,
         workspace,
         modelCapabilities: input.modelCapabilities
@@ -167,7 +175,9 @@ export class TurnContextResolver {
       workspace,
       orchestration: input.turn.orchestration,
       ...(input.turn.messageSource ? { messageSource: input.turn.messageSource } : {}),
+      ...(input.turn.subagentResume ? { subagentResume: input.turn.subagentResume } : {}),
       additionalWorkspaces: input.thread.additionalWorkspaces,
+      knowledgeBases: input.thread.knowledgeBases,
       clientSurface,
       threadMode: input.mode.effectiveMode,
       ...(input.mode.activePlanContext ? { activePlanContext: input.mode.activePlanContext } : {}),
@@ -195,20 +205,28 @@ export class TurnContextResolver {
       ...(this.deps.allowedReadPaths ? { allowedReadPaths: this.deps.allowedReadPaths } : {}),
       ...(this.deps.allowedWritePaths ? { allowedWritePaths: this.deps.allowedWritePaths } : {}),
       ...(this.deps.allowedArtifactIds ? { allowedArtifactIds: this.deps.allowedArtifactIds } : {}),
+      ...(this.deps.pptWorkflowScope ? { pptWorkflowScope: this.deps.pptWorkflowScope } : {}),
       ...(this.deps.blockedProviderIds ? { blockedProviderIds: this.deps.blockedProviderIds } : {}),
       ...(this.deps.blockedToolNames ? { blockedToolNames: this.deps.blockedToolNames } : {}),
       ...(this.deps.blockedSkillIds ? { blockedSkillIds: this.deps.blockedSkillIds } : {}),
       ...(this.deps.runtimeDataDir ? { runtimeDataDir: this.deps.runtimeDataDir } : {}),
+      ...(this.deps.fastContext ? { fastContext: true } : {}),
+      ...(this.deps.fastContextTaskCount ? { fastContextTaskCount: this.deps.fastContextTaskCount } : {}),
       interactiveToolBridge: this.deps.interactiveToolBridge
     })
-    const tools = await this.deps.toolHost.listTools(toolDiscoveryContext)
+    const tools = await listModelTools(
+      this.deps.toolHost,
+      modelToolDiscoveryContexts(toolDiscoveryContext)
+    )
     return {
       threadId: input.threadId,
       turnId: input.turnId,
       workspace,
       orchestration: input.turn.orchestration,
       ...(input.turn.messageSource ? { messageSource: input.turn.messageSource } : {}),
+      ...(input.turn.subagentResume ? { subagentResume: input.turn.subagentResume } : {}),
       additionalWorkspaces: input.thread.additionalWorkspaces,
+      knowledgeBases: input.thread.knowledgeBases,
       model: input.model,
       actingModelRoute: input.actingModelRoute,
       mode: input.mode.effectiveMode,
@@ -239,6 +257,19 @@ export class TurnContextResolver {
       tools
     }
   }
+}
+
+async function listModelTools(
+  toolHost: Pick<ToolHost, 'listTools'>,
+  contexts: readonly ToolHostContext[]
+): Promise<DiscoveredTool[]> {
+  const byName = new Map<string, DiscoveredTool>()
+  for (const context of contexts) {
+    for (const tool of await toolHost.listTools(context)) {
+      if (!byName.has(tool.name)) byName.set(tool.name, tool)
+    }
+  }
+  return [...byName.values()]
 }
 
 export function resolveTurnClientSurface(turn: Pick<

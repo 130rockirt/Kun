@@ -2,6 +2,11 @@ import type { ReactElement, ReactNode } from 'react'
 import { InlineNoticeView, SettingsCard, SettingRow, Toggle } from './settings-controls'
 import type { KunBrowserUseSettingsV1 } from '@shared/app-settings'
 
+type BrowserUseRuntimeCapability = {
+  status?: 'disabled' | 'available' | 'unavailable' | 'interaction-required'
+  reason?: string
+}
+
 type Translate = (key: string) => string
 
 export function ComputerUseSettingsPanel({
@@ -38,11 +43,13 @@ export function ComputerUseSettingsPanel({
 export function BrowserUseSettingsPanel({
   t,
   value,
+  capability,
   selectControlClass,
   onChange
 }: {
   t: Translate
   value: KunBrowserUseSettingsV1
+  capability?: BrowserUseRuntimeCapability
   selectControlClass: string
   onChange: (patch: Partial<KunBrowserUseSettingsV1>) => void
 }): ReactElement {
@@ -51,9 +58,11 @@ export function BrowserUseSettingsPanel({
     : value.maxSnapshotNodes >= 400
       ? 'detailed'
       : 'standard'
+  const runtimeStatus = browserUseRuntimeStatus(t, value.enabled, capability)
 
   return <SettingsCard title={t('browserUseSettingsTitle')}>
     <div className="space-y-3 px-3 py-4">
+      <InlineNoticeView notice={runtimeStatus} />
       <InlineNoticeView notice={{ tone: 'info', message: t('browserUseSettingsHint') }} />
       <div className="rounded-lg border border-emerald-400/30 bg-emerald-500/10 px-3 py-2 text-[12px] leading-5 text-emerald-800 dark:text-emerald-200">
         <div className="font-semibold">{t('browserUseZeroTrustTitle')}</div>
@@ -111,7 +120,11 @@ export function BrowserUseSettingsPanel({
             value={value.maxTabs}
             onChange={(event) => onChange({ maxTabs: Number(event.target.value) })}
           >
-            {[1, 2, 3].map((count) => <option key={count} value={count}>{count}</option>)}
+            {numberOptions([1, 2, 3], value.maxTabs).map((count) => (
+              <option key={count} value={count}>
+                {numberOptionLabel(t, count, [1, 2, 3])}
+              </option>
+            ))}
           </select>
         }
       />
@@ -126,7 +139,12 @@ export function BrowserUseSettingsPanel({
               maxObservationActionsPerTurn: Number(event.target.value)
             })}
           >
-            {[10, 20, 30, 50].map((count) => <option key={count} value={count}>{count}</option>)}
+            {numberOptions([10, 20, 30, 50], value.maxObservationActionsPerTurn)
+              .map((count) => (
+                <option key={count} value={count}>
+                  {numberOptionLabel(t, count, [10, 20, 30, 50])}
+                </option>
+              ))}
           </select>
         }
       />
@@ -141,7 +159,12 @@ export function BrowserUseSettingsPanel({
               maxInteractionActionsPerTurn: Number(event.target.value)
             })}
           >
-            {[4, 8, 12, 20].map((count) => <option key={count} value={count}>{count}</option>)}
+            {numberOptions([4, 8, 12, 20], value.maxInteractionActionsPerTurn)
+              .map((count) => (
+                <option key={count} value={count}>
+                  {numberOptionLabel(t, count, [4, 8, 12, 20])}
+                </option>
+              ))}
           </select>
         }
       />
@@ -176,15 +199,57 @@ export function BrowserUseSettingsPanel({
             value={value.idleTimeoutMs}
             onChange={(event) => onChange({ idleTimeoutMs: Number(event.target.value) })}
           >
-            <option value={60_000}>{t('browserUseSettingsOneMinute')}</option>
-            <option value={300_000}>{t('browserUseSettingsFiveMinutes')}</option>
-            <option value={900_000}>{t('browserUseSettingsFifteenMinutes')}</option>
-            <option value={1_800_000}>{t('browserUseSettingsThirtyMinutes')}</option>
+            {numberOptions([60_000, 300_000, 900_000, 1_800_000], value.idleTimeoutMs)
+              .map((duration) => (
+                <option key={duration} value={duration}>
+                  {idleTimeoutLabel(t, duration)}
+                </option>
+              ))}
           </select>
         }
       />
     </> : null}
   </SettingsCard>
+}
+
+function browserUseRuntimeStatus(
+  t: Translate,
+  enabled: boolean,
+  capability: BrowserUseRuntimeCapability | undefined
+): { tone: 'success' | 'error' | 'info'; message: string } {
+  const status = !enabled ? 'disabled' : capability?.status ?? 'unavailable'
+  const key = status === 'available'
+    ? 'browserUseRuntimeStatusAvailable'
+    : status === 'interaction-required'
+      ? 'browserUseRuntimeStatusInteractionRequired'
+      : status === 'disabled'
+        ? 'browserUseRuntimeStatusDisabled'
+        : 'browserUseRuntimeStatusUnavailable'
+  const reason = capability?.reason?.trim().slice(0, 240)
+  return {
+    tone: status === 'available' ? 'success' : status === 'unavailable' ? 'error' : 'info',
+    message: reason && status !== 'available' && status !== 'disabled'
+      ? `${t(key)}: ${reason}`
+      : t(key)
+  }
+}
+
+function numberOptions(presets: readonly number[], current: number): number[] {
+  return Array.from(new Set([...presets, current])).sort((left, right) => left - right)
+}
+
+function numberOptionLabel(t: Translate, value: number, presets: readonly number[]): string {
+  return presets.includes(value) ? String(value) : `${value} · ${t('browserUseSettingsCustom')}`
+}
+
+function idleTimeoutLabel(t: Translate, value: number): string {
+  const labels = new Map<number, string>([
+    [60_000, t('browserUseSettingsOneMinute')],
+    [300_000, t('browserUseSettingsFiveMinutes')],
+    [900_000, t('browserUseSettingsFifteenMinutes')],
+    [1_800_000, t('browserUseSettingsThirtyMinutes')]
+  ])
+  return labels.get(value) ?? `${value} ms · ${t('browserUseSettingsCustom')}`
 }
 
 export function DesignQualitySettingsPanel({

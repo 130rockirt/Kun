@@ -1,4 +1,8 @@
 import type { ToolCallLike } from '../ports/tool-host.js'
+import {
+  isUnresolvedRawToolArgumentsEnvelope,
+  normalizeRawToolArgumentsEnvelope
+} from '../domain/tool-argument-envelope.js'
 
 export type ToolCallArgumentRepairOptions = {
   toolName?: string
@@ -12,7 +16,7 @@ export type ToolCallArgumentRepairResult = {
 }
 
 const DEFAULT_MAX_STRING_BYTES = 512 * 1024
-const WRAPPER_KEYS = ['arguments', 'args', 'input', 'parameters', 'params', 'payload', '__raw']
+const WRAPPER_KEYS = ['arguments', 'args', 'input', 'parameters', 'params', 'payload']
 const TOOL_METADATA_KEYS = new Set([
   'tool',
   'toolName',
@@ -38,22 +42,30 @@ export function repairDispatchToolArguments(
   const notes: string[] = []
   let current = shallowCloneRecord(raw)
 
-  const flattened = flattenWrapper(current)
-  if (flattened) {
-    current = flattened.arguments
-    notes.push(flattened.note)
+  const normalizedRawEnvelope = normalizeRawToolArgumentsEnvelope(current)
+  if (normalizedRawEnvelope !== current) {
+    current = normalizedRawEnvelope
+    notes.push('flattened __raw wrapper')
   } else {
-    const scavenged = scavengeSingleJsonString(current)
-    if (scavenged) {
-      current = scavenged.arguments
-      notes.push(scavenged.note)
+    const flattened = flattenWrapper(current)
+    if (flattened) {
+      current = flattened.arguments
+      notes.push(flattened.note)
+    } else {
+      const scavenged = scavengeSingleJsonString(current)
+      if (scavenged) {
+        current = scavenged.arguments
+        notes.push(scavenged.note)
+      }
     }
   }
 
-  const truncated = truncateOversizedStrings(current, {
-    maxStringBytes: options.maxStringBytes ?? DEFAULT_MAX_STRING_BYTES,
-    preserveLongStrings: options.toolKind === 'file_change'
-  })
+  const truncated = isUnresolvedRawToolArgumentsEnvelope(current)
+    ? { value: current, changed: false, count: 0 }
+    : truncateOversizedStrings(current, {
+        maxStringBytes: options.maxStringBytes ?? DEFAULT_MAX_STRING_BYTES,
+        preserveLongStrings: options.toolKind === 'file_change'
+      })
   if (truncated.changed) {
     current = truncated.value
     notes.push(`truncated ${truncated.count} oversized argument string(s)`)
@@ -95,7 +107,7 @@ function scavengeSingleJsonString(
   const entries = Object.entries(raw)
   if (entries.length !== 1) return null
   const [key, value] = entries[0] ?? []
-  if (!key || typeof value !== 'string') return null
+  if (!key || key === '__raw' || typeof value !== 'string') return null
   const parsed = parseJsonishObject(value)
   if (!parsed) return null
   return {

@@ -137,21 +137,49 @@ describe('Graph scheduler supervision liveness', () => {
     await runtimeSupervisor.sweepObligations()
     await runtimeSupervisor.flush('run_harness')
     await harness.scheduler.resumeRun('run_harness')
-    await waitFor(async () => {
+    let finishReviewableOrCompleted: GraphRunV1
+    try {
+      finishReviewableOrCompleted = await waitFor(async () => {
+        const run = await harness.store.get('run_harness')
+        if (run?.status === 'completed') return run
+        const finish = run?.nodes.finish
+        const attempt = finish?.attempts.at(-1)
+        const obligation = attempt
+          ? run?.supervisionObligations.find((entry) =>
+              entry.kind === 'review_required' &&
+              entry.attemptIds.includes(attempt.id) &&
+              entry.state === 'pending')
+          : undefined
+        return finish?.status === 'reviewing' && obligation ? run : null
+      })
+    } catch (error) {
       const run = await harness.store.get('run_harness')
-      const finish = run?.nodes.finish
-      const attempt = finish?.attempts.at(-1)
-      const obligation = attempt
-        ? run?.supervisionObligations.find((entry) =>
-            entry.kind === 'review_required' &&
-            entry.attemptIds.includes(attempt.id) &&
-            entry.state === 'pending')
-        : undefined
-      return finish?.status === 'reviewing' && obligation ? run : null
-    })
-    await runtimeSupervisor.sweepObligations()
-    await runtimeSupervisor.flush('run_harness')
-    await harness.scheduler.resumeRun('run_harness')
+      const events = await harness.store.events('run_harness')
+      throw new Error(`${error instanceof Error ? error.message : String(error)}: ${JSON.stringify({
+        leadEpisodes,
+        status: run?.status,
+        lastEventSeq: run?.lastEventSeq,
+        nodes: run
+          ? Object.fromEntries(Object.entries(run.nodes).map(([id, node]) => [id, {
+              status: node.status,
+              attempts: node.attempts.map((attempt) => attempt.status)
+            }]))
+          : {},
+        obligations: run?.supervisionObligations.map((obligation) => ({
+          kind: obligation.kind,
+          state: obligation.state,
+          deliveryAttempts: obligation.deliveryAttempts,
+          consecutiveDeliveryFailures: obligation.consecutiveDeliveryFailures,
+          noProgressCount: obligation.noProgressCount
+        })),
+        recentEventTypes: events.slice(-20).map((event) => event.event.type)
+      })}`)
+    }
+    if (finishReviewableOrCompleted.status !== 'completed') {
+      await runtimeSupervisor.sweepObligations()
+      await runtimeSupervisor.flush('run_harness')
+      await harness.scheduler.resumeRun('run_harness')
+    }
     let completed: GraphRunV1
     try {
       completed = await waitFor(async () => {

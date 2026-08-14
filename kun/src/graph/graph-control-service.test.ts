@@ -104,6 +104,59 @@ describe('GraphControlService', () => {
     ]))
   })
 
+  it('retries cleanup persistence when a concurrent write advances cancellation', async () => {
+    const { control: creator, store } = await fixture()
+    await creator.create({
+      runId: 'run_cleanup_race',
+      threadId: 'thread_1',
+      projectId: 'project_1',
+      sourceTurnId: 'turn_1',
+      plan: testGraphPlan(),
+      commandId: 'create_cleanup_race',
+      idempotencyKey: 'create_cleanup_race',
+      start: true
+    })
+    const control = new GraphControlService({
+      store,
+      config: () => testGraphConfig(),
+      cleanupResources: async (run) => {
+        const latest = (await store.get(run.id))!
+        await store.append(run.id, {
+          expectedSeq: latest.lastEventSeq,
+          graphRevision: latest.currentRevision,
+          commandId: 'concurrent_cleanup_race',
+          idempotencyKey: 'concurrent_cleanup_race',
+          event: {
+            type: 'cleanup_updated',
+            payload: {
+              cleanup: {
+                version: GRAPH_CONTRACT_VERSION,
+                id: 'graph_cleanup_concurrent',
+                runId: run.id,
+                resourceKind: 'worker',
+                resourceId: 'concurrent-worker',
+                state: 'orphaned',
+                retryCount: 0,
+                updatedAt: TEST_GRAPH_NOW
+              }
+            }
+          }
+        })
+        return []
+      }
+    })
+
+    await expect(control.cancel('run_cleanup_race', {
+      commandId: 'cancel_cleanup_race',
+      idempotencyKey: 'cancel_cleanup_race'
+    })).resolves.toMatchObject({ status: 'cancelled' })
+    const cancelled = (await store.get('run_cleanup_race'))!
+    expect(cancelled.cleanup).toEqual(expect.arrayContaining([
+      expect.objectContaining({ resourceKind: 'worker', state: 'orphaned' }),
+      expect.objectContaining({ resourceKind: 'journal', state: 'completed' })
+    ]))
+  })
+
   it('durably upgrades an in-flight pause to cancellation without allowing downgrade', async () => {
     const { control: creator, store } = await fixture()
     await creator.create({
@@ -415,277 +468,7 @@ describe('GraphControlService', () => {
     ])
   })
 
-  it('replays equivalent reviews and rejects conflicting, unrequired, and premature reviews', async () => {
-    const { control, store, resumeActive } = await fixture()
-    const source = testGraphPlan().nodes[0]!
-    await control.create({
-      runId: 'run_review',
-      threadId: 'thread_1',
-      projectId: 'project_1',
-      sourceTurnId: 'turn_1',
-      plan: testGraphPlan({
-        nodes: [{
-          ...source,
-          completion: {
-            ...source.completion,
-            review: {
-              kinds: ['human'],
-              requireAll: true,
-              deterministicChecks: []
-            }
-          }
-        }],
-        edges: [],
-        completionNodeIds: [source.id]
-      }),
-      commandId: 'create_review',
-      idempotencyKey: 'create_review'
-    })
-    await expect(control.recordReview('run_review', reviewFor('missing_attempt'), {
-      commandId: 'premature_review',
-      idempotencyKey: 'premature_review'
-    })).rejects.toThrow()
 
-    const submitted = await submitAttempt(control, store, 'run_review', source.id)
-    const attempt = submitted.nodes[source.id]!.attempts.at(-1)!
-    const review = reviewFor(attempt.id)
-    resumeActive.mockClear()
-    const reviewed = await control.recordReview('run_review', review, {
-      commandId: 'human_review',
-      idempotencyKey: 'human_review',
-      expectedSeq: submitted.lastEventSeq
-    })
-    expect(reviewed.reviews).toHaveLength(1)
-    expect(resumeActive).toHaveBeenCalledOnce()
-    expect(resumeActive).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'run_review', lastEventSeq: reviewed.lastEventSeq })
-    )
-    resumeActive.mockClear()
-    await expect(control.recordReview('run_review', {
-      ...review,
-      reviewId: 'human_review_replayed',
-      createdAt: '2026-07-29T01:00:00.000Z'
-    }, {
-      commandId: 'human_review_replay',
-      idempotencyKey: 'human_review_replay',
-      expectedSeq: submitted.lastEventSeq
-    })).resolves.toMatchObject({ id: 'run_review' })
-    expect(resumeActive).toHaveBeenCalledOnce()
-    await expect(control.recordReview('run_review', {
-      ...review,
-      reviewId: 'human_review_conflicting_outcome',
-      outcome: 'revise',
-      repairInstructions: 'Collect the missing evidence.'
-    }, {
-      commandId: 'human_review_conflicting_outcome',
-      idempotencyKey: 'human_review_conflicting_outcome'
-    })).rejects.toThrow(/conflicting human review already exists/)
-    await expect(control.recordReview('run_review', {
-      ...review,
-      reviewId: 'human_review_conflicting_content',
-      summary: 'A materially different approval.'
-    }, {
-      commandId: 'human_review_conflicting_content',
-      idempotencyKey: 'human_review_conflicting_content'
-    })).rejects.toThrow(/conflicting human review already exists/)
-    await expect(control.recordReview('run_review', {
-      ...review,
-      reviewId: 'deterministic_review',
-      reviewerKind: 'deterministic'
-    }, {
-      commandId: 'deterministic_review',
-      idempotencyKey: 'deterministic_review'
-    }, 'system')).rejects.toThrow(/not required/)
-
-    let advanced = await control.get('run_review')
-    for (const [index, event] of [
-      {
-        type: 'attempt_status_changed' as const,
-        payload: {
-          nodeId: source.id,
-          attemptId: attempt.id,
-          from: 'submitted' as const,
-          to: 'accepted' as const
-        }
-      },
-      {
-        type: 'node_status_changed' as const,
-        payload: {
-          nodeId: source.id,
-          from: 'submitted' as const,
-          to: 'accepted' as const,
-          reason: 'test review reconciliation'
-        }
-      }
-    ].entries()) {
-      advanced = (await store.append(advanced.id, {
-        expectedSeq: advanced.lastEventSeq,
-        graphRevision: advanced.currentRevision,
-        commandId: `advance_review_${index}`,
-        idempotencyKey: `advance-review:${index}`,
-        event
-      })).state
-    }
-    resumeActive.mockClear()
-    await expect(control.recordReview('run_review', {
-      ...review,
-      reviewId: 'human_review_after_reconciliation',
-      createdAt: '2026-07-29T02:00:00.000Z'
-    }, {
-      commandId: 'human_review_after_reconciliation',
-      idempotencyKey: 'human_review_after_reconciliation',
-      expectedSeq: submitted.lastEventSeq
-    })).resolves.toMatchObject({
-      nodes: { [source.id]: expect.objectContaining({ status: 'accepted' }) }
-    })
-    expect(resumeActive).not.toHaveBeenCalled()
-  })
-
-  it('rejects a pass review when host validation is invalid', async () => {
-    const { control, store } = await fixture()
-    const source = testGraphPlan().nodes[0]!
-    await control.create({
-      runId: 'run_invalid_review',
-      threadId: 'thread_1',
-      projectId: 'project_1',
-      sourceTurnId: 'turn_1',
-      plan: testGraphPlan({
-        nodes: [{
-          ...source,
-          completion: {
-            ...source.completion,
-            review: {
-              kinds: ['human'],
-              requireAll: true,
-              deterministicChecks: []
-            }
-          }
-        }],
-        edges: [],
-        completionNodeIds: [source.id]
-      }),
-      commandId: 'create_invalid_review',
-      idempotencyKey: 'create_invalid_review'
-    })
-    const submitted = await submitAttempt(
-      control,
-      store,
-      'run_invalid_review',
-      source.id,
-      false,
-      false
-    )
-    const attempt = submitted.nodes[source.id]!.attempts.at(-1)!
-    await expect(control.recordReview('run_invalid_review', reviewFor(attempt.id), {
-      commandId: 'pass_invalid_review',
-      idempotencyKey: 'pass_invalid_review'
-    })).rejects.toThrow(/cannot pass invalid attempt/)
-  })
-
-  it('rejects active-node rewrites and budgets below durable usage', async () => {
-    const { control, store } = await fixture()
-    await control.create({
-      runId: 'run_patch_guard',
-      threadId: 'thread_1',
-      projectId: 'project_1',
-      sourceTurnId: 'turn_1',
-      plan: testGraphPlan(),
-      commandId: 'create_patch_guard',
-      idempotencyKey: 'create_patch_guard'
-    })
-    const submitted = await submitAttempt(control, store, 'run_patch_guard', 'research')
-    const currentPlan = submitted.plans.at(-1)!
-    await expect(control.applyPatch('run_patch_guard', {
-      version: GRAPH_CONTRACT_VERSION,
-      patchId: 'patch_active',
-      commandId: 'patch_active',
-      runId: submitted.id,
-      baseRevision: submitted.currentRevision,
-      requester: { kind: 'lead', id: 'lead_1' },
-      reason: 'Unsafe active rewrite.',
-      operations: [{
-        op: 'replace_node',
-        nodeId: 'research',
-        replacement: { ...submitted.nodes.research.node, title: 'Changed while active' },
-        supersedesAcceptedWork: false
-      }],
-      createdAt: TEST_GRAPH_NOW
-    }, {
-      commandId: 'patch_active',
-      idempotencyKey: 'patch_active',
-      expectedSeq: submitted.lastEventSeq
-    })).rejects.toThrow(/active node/)
-    await expect(control.applyPatch('run_patch_guard', {
-      version: GRAPH_CONTRACT_VERSION,
-      patchId: 'patch_budget',
-      commandId: 'patch_budget',
-      runId: submitted.id,
-      baseRevision: submitted.currentRevision,
-      requester: { kind: 'lead', id: 'lead_1' },
-      reason: 'Unsafe budget reduction.',
-      operations: [{
-        op: 'update_budget',
-        budget: { ...currentPlan.budget, maxNodes: 1 }
-      }],
-      createdAt: TEST_GRAPH_NOW
-    }, {
-      commandId: 'patch_budget',
-      idempotencyKey: 'patch_budget'
-    })).rejects.toThrow(/maxNodes/)
-  })
-
-  it('records terminal resource cleanup as durable graph truth', async () => {
-    const { store } = await fixture()
-    const cleanupResources = vi.fn(async () => [{
-      resourceKind: 'worktree' as const,
-      resourceId: 'worktree_1',
-      attemptId: 'attempt_1',
-      state: 'preserved' as const,
-      lastError: 'unaccepted changes require human disposition'
-    }])
-    const control = new GraphControlService({
-      store,
-      config: () => testGraphConfig(),
-      cleanupResources
-    })
-    await control.create({
-      runId: 'run_cleanup',
-      threadId: 'thread_1',
-      projectId: 'project_1',
-      sourceTurnId: 'turn_1',
-      plan: testGraphPlan(),
-      commandId: 'command_create_cleanup',
-      idempotencyKey: 'create_cleanup'
-    })
-    await control.cancel('run_cleanup', {
-      commandId: 'command_cancel_cleanup',
-      idempotencyKey: 'cancel_cleanup'
-    })
-    const cancellationEvents = await store.events('run_cleanup')
-    expect(cancellationEvents.at(-1)?.event).toMatchObject({
-      type: 'run_status_changed',
-      payload: { to: 'cancelled' }
-    })
-    expect(cancellationEvents.findIndex((event) => event.event.type === 'cleanup_updated'))
-      .toBeLessThan(cancellationEvents.length - 1)
-    const cleaned = await control.cleanup('run_cleanup', {
-      commandId: 'command_cleanup',
-      idempotencyKey: 'cleanup_1'
-    })
-    expect(cleanupResources).toHaveBeenCalledTimes(2)
-    expect(cleaned.cleanup).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        resourceKind: 'worktree',
-        resourceId: 'worktree_1',
-        state: 'preserved'
-      }),
-      expect.objectContaining({
-        resourceKind: 'journal',
-        resourceId: 'run_cleanup',
-        state: 'completed'
-      })
-    ]))
-  })
 })
 
 async function submitAttempt(

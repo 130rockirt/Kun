@@ -48,15 +48,18 @@ export type ModelRequestComposerInput = Readonly<{
   accountId?: string
   reasoningEffort?: string
   serviceTier?: 'priority'
+  promptCachePartition?: string
   immutablePrefix: ImmutablePrefix
   threadSystemPrompt?: string
   modeInstruction?: string
   contextInstructions: readonly string[]
+  redactedRequestValues?: readonly string[]
   history: readonly TurnItem[]
   historyRoutesByTurnId?: Readonly<Record<string, ModelHistoryRoute>>
   attachments: ResolvedTurnAttachments
   tools: readonly ModelToolSpec[]
   requiredToolName?: string
+  messageAttachments?: ModelRequest['messageAttachments']
   tokenEconomy?: TokenEconomyConfig
   signal: AbortSignal
 }>
@@ -88,6 +91,9 @@ export function composeModelRequest(input: ModelRequestComposerInput): ComposedM
     ...(input.contextInstructions.length
       ? { contextInstructions: [...input.contextInstructions] }
       : {}),
+    ...(input.redactedRequestValues?.length
+      ? { redactedRequestValues: [...input.redactedRequestValues] }
+      : {}),
     prefix: input.immutablePrefix.fewShots,
     history: capToolResultImages([...input.history], MAX_FORWARDED_TOOL_IMAGES),
     ...(input.historyRoutesByTurnId ? { historyRoutesByTurnId: input.historyRoutesByTurnId } : {}),
@@ -100,10 +106,16 @@ export function composeModelRequest(input: ModelRequestComposerInput): ComposedM
     ...(input.attachments.documents.length
       ? { attachmentDocuments: [...input.attachments.documents] }
       : {}),
+    ...(input.messageAttachments
+      ? { messageAttachments: input.messageAttachments }
+      : {}),
     tools: [...input.tools],
     ...(input.requiredToolName ? { requiredToolName: input.requiredToolName } : {}),
     ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}),
     ...(input.serviceTier ? { serviceTier: input.serviceTier } : {}),
+    ...(input.promptCachePartition
+      ? { promptCachePartition: input.promptCachePartition }
+      : {}),
     abortSignal: input.signal
   }
   const rawInputTokens = tokenEconomy.enabled

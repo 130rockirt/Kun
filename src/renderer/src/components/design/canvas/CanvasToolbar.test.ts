@@ -1,7 +1,7 @@
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { describe, expect, it } from 'vitest'
-import { useDesignWorkspaceStore } from '../../../design/design-workspace-store'
+import { act, create, type ReactTestRenderer } from 'react-test-renderer'
+import { describe, expect, it, vi } from 'vitest'
 import { CanvasToolbar } from './CanvasToolbar'
 
 describe('CanvasToolbar prototype playback', () => {
@@ -29,6 +29,22 @@ describe('CanvasToolbar prototype playback', () => {
     expect(html).not.toContain('aria-label="Play prototype"')
   })
 
+  it('uses the diagram toolset on the central Work whiteboard', () => {
+    const html = renderToStaticMarkup(
+      createElement(CanvasToolbar, {
+        workspaceRoot: '/workspace',
+        surface: 'work',
+        onExportCanvas: async () => {}
+      })
+    )
+
+    expect(html).toContain('aria-label="Select"')
+    expect(html).toContain('aria-label="AI image"')
+    expect(html).toContain('aria-label="Export whiteboard"')
+    expect(html).not.toContain('aria-label="Screen"')
+    expect(html).not.toContain('aria-label="Play prototype"')
+  })
+
   it('shows agent action seeds on the design canvas', () => {
     const html = renderToStaticMarkup(
       createElement(CanvasToolbar, {
@@ -39,7 +55,7 @@ describe('CanvasToolbar prototype playback', () => {
     expect(html).toContain('aria-label="Agent actions"')
   })
 
-  it('keeps the design canvas toolbar focused on screen workflow controls', () => {
+  it('keeps common tools compact while exposing the full drawing set in a menu', () => {
     const html = renderToStaticMarkup(
       createElement(CanvasToolbar, {
         workspaceRoot: '/workspace'
@@ -50,6 +66,8 @@ describe('CanvasToolbar prototype playback', () => {
     expect(html).toContain('aria-label="Screen"')
     expect(html).toContain('aria-label="Frame"')
     expect(html).toContain('aria-label="Hand"')
+    expect(html).toContain('aria-label="More drawing tools"')
+    expect(html).toContain('aria-label="Layers"')
     expect(html).toContain('aria-label="Upload files to canvas"')
     expect(html).not.toContain('aria-label="AI image slot"')
     expect(html).not.toContain('aria-label="Rectangle"')
@@ -89,14 +107,34 @@ describe('CanvasToolbar prototype playback', () => {
     expect(html).not.toContain('Create at least one screen before playing the prototype')
   })
 
-  it('labels the open design assistant button as a collapsible toggle', () => {
-    useDesignWorkspaceStore.setState({ canvasAssistantOpen: true, aiRailCollapsed: false })
-    const openHtml = renderToStaticMarkup(
-      createElement(CanvasToolbar, {
-        workspaceRoot: '/workspace'
-      })
-    )
-    expect(openHtml).toContain('aria-label="Collapse assistant"')
-    expect(openHtml).toContain('aria-pressed="true"')
+  it('routes the assistant action through the active composer callback', async () => {
+    const onRequestCanvasCritique = vi.fn()
+    let renderer!: ReactTestRenderer
+    await act(async () => {
+      renderer = create(
+        createElement(CanvasToolbar, {
+          workspaceRoot: '/workspace',
+          onRequestCanvasCritique
+        })
+      )
+    })
+    await act(async () => renderer.root.findByProps({ 'aria-label': 'Open design assistant' }).props.onClick())
+    expect(onRequestCanvasCritique).toHaveBeenCalledWith(expect.stringContaining('current canvas'))
+    await act(async () => renderer.unmount())
+  })
+
+  it('opens the full drawing tool menu and exposes every supported tool', async () => {
+    let renderer!: ReactTestRenderer
+    await act(async () => {
+      renderer = create(createElement(CanvasToolbar, { workspaceRoot: '/workspace' }))
+    })
+    await act(async () => renderer.root.findByProps({ 'aria-label': 'More drawing tools' }).props.onClick())
+    const menuLabels = renderer.root
+      .findAllByProps({ role: 'menuitemradio' })
+      .map((item) => item.findByType('span').children.join(''))
+    expect(menuLabels).toEqual(expect.arrayContaining([
+      'AI image slot', 'Rectangle', 'Ellipse', 'Text', 'Arrow', 'Line', 'Draw'
+    ]))
+    await act(async () => renderer.unmount())
   })
 })

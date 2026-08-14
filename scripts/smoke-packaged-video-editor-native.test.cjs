@@ -259,7 +259,10 @@ test('accepts only the exact non-empty release archive for byte-identical lifecy
 })
 
 test('source smoke covers the real packaged video editor lifecycle and media outcomes', async () => {
-  const source = await readFile(join(__dirname, 'smoke-packaged-video-editor-native.cjs'), 'utf8')
+  const source = (await Promise.all([
+    'smoke-packaged-video-editor-native.cjs',
+    'smoke-packaged-video-editor-native-support.cjs'
+  ].map((name) => readFile(join(__dirname, name), 'utf8')))).join('\n')
   for (const marker of [
     "'extension', 'validate'",
     "'extension', 'pack'",

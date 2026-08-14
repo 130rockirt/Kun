@@ -18,6 +18,7 @@ import {
 
 type UseWorkbenchDesignRuntimeInput = {
   route: string
+  designTaskActive?: boolean
   composerPickList: readonly string[]
   composerModelGroups: readonly ModelProviderModelGroup[]
   setInput: Dispatch<SetStateAction<string>>
@@ -25,6 +26,7 @@ type UseWorkbenchDesignRuntimeInput = {
 
 export function useWorkbenchDesignRuntime({
   route,
+  designTaskActive = false,
   composerPickList,
   composerModelGroups,
   setInput
@@ -37,17 +39,16 @@ export function useWorkbenchDesignRuntime({
   const designImplementTitle = useDesignWorkspaceStore((s) => s.implementTitle)
   const designActiveDocumentId = useDesignWorkspaceStore((s) => s.activeDocumentId)
   const designDocuments = useDesignWorkspaceStore((s) => s.documents)
-  const designDrawingCreationOpen = useDesignWorkspaceStore((s) => s.drawingCreationOpen)
   const designDrawingCreationSubmitting = useDesignWorkspaceStore((s) => s.drawingCreationSubmitting)
-  const cancelDrawingCreation = useDesignWorkspaceStore((s) => s.cancelDrawingCreation)
   const designAssistantModel = useDesignWorkspaceStore((s) => s.assistantModel)
   const designAssistantProviderId = useDesignWorkspaceStore((s) => s.assistantProviderId)
   const setDesignAssistantModel = useDesignWorkspaceStore((s) => s.setAssistantModel)
   const canvasDocument = useCanvasShapeStore((s) => s.document)
   const canvasDocumentKey = useCanvasShapeStore((s) => s.documentKey)
   const canvasSelectedIds = useCanvasSelectionStore((s) => s.selectedIds)
+  const designContextRoute = designTaskActive && route === 'chat' ? 'design' : route
   const contextState = useDesignComposerContextState({
-    route,
+    route: designContextRoute,
     canvasDocument,
     selectedIds: canvasSelectedIds,
     setInput
@@ -93,9 +94,6 @@ export function useWorkbenchDesignRuntime({
     ? displayDrawingTitle(activeDrawing, t('designUntitledDrawing'))
     : t('designUntitledDrawing')
 
-  useEffect(() => {
-    if (route !== 'design' && designDrawingCreationOpen) cancelDrawingCreation()
-  }, [cancelDrawingCreation, designDrawingCreationOpen, route])
   const selectCanvasShape = useCallback((shapeId: string): void => {
     useCanvasSelectionStore.getState().select([shapeId])
   }, [])
@@ -107,7 +105,6 @@ export function useWorkbenchDesignRuntime({
     designImplementOpen,
     designImplementTitle,
     designActiveDocumentId,
-    designDrawingCreationOpen,
     designDrawingCreationSubmitting,
     designDrawingTitle,
     designAssistantModel,

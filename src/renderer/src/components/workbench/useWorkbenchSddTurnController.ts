@@ -42,6 +42,8 @@ import { composeSddAssistantPrompt } from '../../sdd/sdd-assistant-prompt'
 import { frameworkById } from '../../sdd/pm-skill-frameworks'
 import { buildSddDraftToPlanPrompt } from '../../sdd/sdd-plan-prompt'
 import type { GuiPlanArtifact } from '../../plan/plan-store'
+import { createWriteTurnReferenceAttachments } from '../../write/write-turn-reference-context'
+import type { WriteQuotedSelection } from '../../write/quoted-selection'
 
 type PendingSddPlanTarget = {
   draft: SddDraft
@@ -172,6 +174,35 @@ export function buildSddAssistantModelOverrides(input: {
   }
 }
 
+export function createSddReferenceContexts(input: {
+  workspaceRoot: string
+  query: string
+  selections: readonly WriteQuotedSelection[]
+}) {
+  return createWriteTurnReferenceAttachments({
+    workspaceRoot: input.workspaceRoot,
+    selections: input.selections,
+    retrieval: null,
+    officeDocument: null,
+    query: input.query
+  })
+}
+
+export function resolveSddAssistantUserPrompt(
+  value: string,
+  referenceCount: number,
+  referenceOnlyPrompt: string
+): string {
+  return value.trim() || (referenceCount > 0 ? referenceOnlyPrompt.trim() : '')
+}
+
+export function isSddDraftStillActive(
+  activeDraft: Pick<SddDraft, 'id'> | null,
+  expectedDraft: Pick<SddDraft, 'id'>
+): boolean {
+  return activeDraft?.id === expectedDraft.id
+}
+
 export function useWorkbenchSddTurnController({
   activeGuiPlan,
   attachmentUploadEnabled,
@@ -286,8 +317,14 @@ export function useWorkbenchSddTurnController({
   }, [runtimeInfo?.capabilities.attachments, t])
 
   const sendSddAssistantPrompt = useCallback(async (value: string): Promise<void> => {
-    const v = value.trim()
-    const draft = useSddDraftStore.getState().activeDraft
+    const snapshot = useSddDraftStore.getState()
+    const draft = snapshot.activeDraft
+    const sentQuoteIds = snapshot.assistantQuotedSelections.map((selection) => selection.id)
+    const v = resolveSddAssistantUserPrompt(
+      value,
+      snapshot.assistantQuotedSelections.length,
+      t('writeAssistantPolishSelectionPrompt')
+    )
     const attachmentScope = getAttachmentScope()
     const attachments = composerAttachments
     const documentAttachments = attachments.filter((attachment) => attachment.kind === 'document')
@@ -300,7 +337,21 @@ export function useWorkbenchSddTurnController({
     }
     const threadId = await ensureSddAssistantThreadForDraft(draft)
     if (!threadId) return
-    const snapshot = useSddDraftStore.getState()
+    const afterThreadResolution = useSddDraftStore.getState()
+    if (!isSddDraftStillActive(afterThreadResolution.activeDraft, draft)) return
+    let composerContexts
+    try {
+      composerContexts = await createSddReferenceContexts({
+        workspaceRoot: draft.workspaceRoot,
+        selections: snapshot.assistantQuotedSelections,
+        query: v
+      })
+    } catch (error) {
+      setError(error instanceof Error ? error.message : String(error))
+      return
+    }
+    const beforeSend = useSddDraftStore.getState()
+    if (!isSddDraftStillActive(beforeSend.activeDraft, draft)) return
     void saveActiveSddDraftToDisk()
     const userPrompt = buildComposerDocumentContextPrompt(
       v || (documentAttachments.length > 0 ? t('composerFileOnlyPrompt') : t('composerImageOnlyPrompt')),
@@ -313,7 +364,7 @@ export function useWorkbenchSddTurnController({
         : null
     const prompt = composeSddAssistantPrompt({
       userPrompt,
-      draftMarkdown: snapshot.content,
+      draftMarkdown: beforeSend.content,
       draftRelativePath: draft.relativePath,
       workspaceRoot: draft.workspaceRoot,
       ...(frameworkId ? { frameworkIds: [frameworkId] } : {})
@@ -332,7 +383,8 @@ export function useWorkbenchSddTurnController({
         : t('composerImageOnlyDisplay')),
       ...modelOverrides,
       ...(attachmentIds.length ? { attachmentIds } : {}),
-      ...(publicAttachments.length ? { attachments: publicAttachments } : {})
+      ...(publicAttachments.length ? { attachments: publicAttachments } : {}),
+      ...(composerContexts.length ? { composerContexts } : {})
     })
     if (sent) {
       if (showSddAssistantThreadInSidebar(threadId)) {
@@ -340,6 +392,9 @@ export function useWorkbenchSddTurnController({
       }
       pendingSddFrameworkRef.current = null
       pendingSddFrameworkPromptRef.current = null
+      if (isSddDraftStillActive(useSddDraftStore.getState().activeDraft, draft)) {
+        useSddDraftStore.getState().removeAssistantQuotedSelections(sentQuoteIds)
+      }
       if (attachments.length > 0) clearComposerAttachments(attachmentScope)
     } else {
       setInput(v)

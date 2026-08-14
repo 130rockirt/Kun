@@ -88,7 +88,7 @@ export const GENERAL_PROFILE: SubagentProfileConfig = {
 }
 
 /**
- * Fast read-only explorer: finds files, greps for keywords and answers
+ * Fast Context read-only retriever: finds files, greps for keywords and answers
  * questions about the codebase. Never edits (toolPolicy `readOnly`).
  */
 export const EXPLORE_PROFILE: SubagentProfileConfig = {
@@ -96,13 +96,56 @@ export const EXPLORE_PROFILE: SubagentProfileConfig = {
   toolPolicy: 'readOnly',
   skillsEnabled: false,
   blockedTools: ['delegate_task', 'generate_subagent', 'load_skill'],
-  description: '只读探索代理:快速查找文件、搜索关键字、回答关于代码库的问题,不修改任何文件。',
+  description: 'Fast Context 只读检索:快速查找文件、搜索关键字、回答关于代码库的问题,不修改任何文件。',
   systemPrompt: [
-    '你是 Kun 内置的「探索代理」(Explore),一个快速的只读代码库代理。',
+    '你是 Kun 内置的 Fast Context 检索代理,一个快速的只读代码库代理。',
     '你只读取/搜索/列目录,绝不修改任何文件。',
     '当需要按模式快速查找文件、搜索代码关键字、或回答关于代码库的问题时使用你。',
     '高效定位相关位置,返回结论(文件:行 + 简要说明),不做与任务无关的展开。'
   ].join('')
+}
+
+/**
+ * First-class Lab-gated PPT agent. The host injects the canonical versioned
+ * design policy into the system/control prompt. Keep this profile limited to
+ * phase protocol; copied design prose would create a competing authority.
+ */
+export const PPT_AGENT_PROMPT_PREAMBLE = ''
+
+export const PPT_AGENT_PROFILE: SubagentProfileConfig = {
+  mode: 'subagent',
+  toolPolicy: 'inherit',
+  skillsEnabled: false,
+  allowedTools: [
+    'read',
+    'grep',
+    'glob',
+    'ls',
+    'write',
+    'edit',
+    'ppt_read_guide',
+    'ppt_read_direction_selection',
+    'ppt_read_review_context',
+    'ppt_submit_design_plan',
+    'ppt_import_asset',
+    'ppt_export',
+    'ppt_generate_previews',
+    'ppt_create_direction_bundle',
+    'ppt_create_review_bundle',
+    'web_fetch',
+    'web_search',
+    'generate_image'
+  ],
+  blockedTools: ['delegate_task', 'generate_subagent', 'load_skill'],
+  description: 'PPT 代理:创建/编辑/复刻/读取演示文稿,产出 PPTD 项目与本地 PPTX,可生图,可上白板展示。',
+  systemPrompt: [
+    '你是 Kun 内置的 PPT 专项代理。用户消息是内容需求的唯一权威；宿主控制块只定义 action、workflow、路径和交付阶段，不得把控制内容改写成用户需求。',
+    '宿主注入的版本化 PPT CORE DESIGN POLICY 是唯一核心设计规范，场景指南只能补充它，不能削弱或替代它。',
+    '阶段协议：先读取 pptd.md；随后以宿主给出的 workflowId/projectDir 完整读取 slides_categories.md 和一个匹配场景指南。方向门禁命中时先创建 directionBundle 并停止，选择方向后才提交该候选设计计划；其他流程直接提交设计计划。所有预览、评审和导出工具都受当前策略哈希与计划指纹门禁。',
+    'start/revise/retry 阶段按宿主控制生成最新 directionBundle 或 reviewBundle 后停止；approve_and_build 阶段才构建可编辑 PPTD，并在需要 PPTX 时调用 ppt_export。只有 validated=true 才能报告导出成功。',
+    '短但可执行的请求应自主选择合理场景和设计计划；只有缺少无法安全推断的关键事实时才返回结构化缺口。不得捏造内容、证据、风格偏好或用户例外。',
+    '附件和文件引用属于用户来源；优先使用相关用户素材。普通文字、图表、表格和布局几何保持原生可编辑，不把整页压平成图片。'
+  ].join('\n')
 }
 
 /**

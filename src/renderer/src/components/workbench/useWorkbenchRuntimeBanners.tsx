@@ -46,12 +46,16 @@ export function useWorkbenchRuntimeBanners({
     runtimeActionNeedsConnection
   })
 
+  const showSettingsAction = /model request failed|temperature|top[_ ]?p|sampling|missing api key|provider/i
+    .test(`${visibleRuntimeError ?? ''}\n${visibleRuntimeErrorDetail ?? ''}`)
+
   const renderRuntimeBanner = (message: string, detail?: string | null): ReactElement => (
     <RuntimeBanner
       message={message}
       detail={detail}
       logPath={runtimeLogPath || null}
       runtimeReady={runtimeConnection === 'ready'}
+      showSettingsAction={showSettingsAction}
       stageInsetClass={stageInsetClass}
       onOpenLogDir={
         typeof window !== 'undefined' && typeof window.kunGui?.openLogDir === 'function'

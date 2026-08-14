@@ -160,6 +160,26 @@ describe('sdd-draft-store', () => {
     expect(readRememberedSddDraft('/tmp/app')?.updatedAt).toBe('2026-01-02T03:04:05.000Z')
   })
 
+  it('removes only quote ids captured by a completed assistant turn', () => {
+    const captured = {
+      id: 'captured-quote', text: 'First reference', sourceTitle: 'requirement.md',
+      sourceFilePath: '/tmp/app/requirement.md', charCount: 15, createdAt: '2026-08-13T00:00:00.000Z'
+    }
+    const addedDuringSend = {
+      id: 'new-quote', text: 'Later reference', sourceTitle: 'requirement.md',
+      sourceFilePath: '/tmp/app/requirement.md', charCount: 15, createdAt: '2026-08-13T00:00:01.000Z'
+    }
+    useSddDraftStore.getState().addAssistantQuotedSelection(captured)
+    const capturedIds = useSddDraftStore.getState().assistantQuotedSelections.map(({ id }) => id)
+    useSddDraftStore.getState().addAssistantQuotedSelection(addedDuringSend)
+
+    useSddDraftStore.getState().removeAssistantQuotedSelections(capturedIds)
+
+    expect(useSddDraftStore.getState().assistantQuotedSelections).toMatchObject([{
+      id: 'new-quote', text: 'Later reference'
+    }])
+  })
+
   it('persists unsaved draft content for restart recovery', () => {
     const draft = createSddDraft({
       id: '123e4567-e89b-12d3-a456-426614174000',

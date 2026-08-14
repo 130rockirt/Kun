@@ -5,6 +5,7 @@ import type {
   Turn,
   TurnClientSurface,
   TurnReasoningEffort,
+  SubagentResumeRequest,
   TurnServiceTier,
   TurnStatus
 } from '../contracts/turns.js'
@@ -17,14 +18,22 @@ import type { GraphOrchestrationStrategy } from '../contracts/graph.js'
 import type { ThreadMode } from '../contracts/threads.js'
 import type { TurnItem, UserMessageSource } from '../contracts/items.js'
 import type { ComposerContextAttachmentJson } from '../contracts/composer-context.js'
+import type {
+  DesignDocumentTarget,
+  DesignTaskProfile
+} from '../contracts/design-task-profile.js'
 
 export type TurnEntity = Turn
 
 export function createTurnRecord(input: {
   id: string
   threadId: string
+  clientRequestId?: string
+  clientRequestFingerprint?: string
+  admissionPending?: boolean
   prompt: string
   messageSource?: UserMessageSource
+  subagentResume?: SubagentResumeRequest
   model?: string
   providerId?: string
   accountId?: string
@@ -41,6 +50,10 @@ export function createTurnRecord(input: {
   guiDesignCanvas?: boolean
   guiDesignMode?: boolean
   agentSurface?: 'code' | 'write' | 'design'
+  designProfile?: DesignTaskProfile
+  designDocumentTarget?: DesignDocumentTarget
+  /** Turn-scoped persona text; stored so replay reconstructs the same request. */
+  persona?: string
   guiDesignArtifact?: GuiDesignArtifactContextJson
   mode?: ThreadMode
   orchestration?: GraphOrchestrationStrategy
@@ -56,13 +69,20 @@ export function createTurnRecord(input: {
   const model = input.model?.trim()
   const providerId = input.providerId?.trim()
   const accountId = input.accountId?.trim()
+  const clientRequestId = input.clientRequestId?.trim()
   const reasoningEffort = normalizeReasoningEffort(input.reasoningEffort)
   return {
     id: input.id,
     threadId: input.threadId,
+    ...(clientRequestId ? { clientRequestId } : {}),
+    ...(input.clientRequestFingerprint
+      ? { clientRequestFingerprint: input.clientRequestFingerprint }
+      : {}),
+    ...(input.admissionPending ? { admissionPending: true as const } : {}),
     status: input.status ?? 'queued',
     prompt: input.prompt,
     ...(input.messageSource ? { messageSource: input.messageSource } : {}),
+    ...(input.subagentResume ? { subagentResume: { ...input.subagentResume } } : {}),
     orchestration: input.orchestration ?? 'direct',
     steering: [],
     items: [],
@@ -86,6 +106,9 @@ export function createTurnRecord(input: {
     ...(input.guiDesignCanvas ? { guiDesignCanvas: true } : {}),
     ...(input.guiDesignMode ? { guiDesignMode: true } : {}),
     ...(input.agentSurface ? { agentSurface: input.agentSurface } : {}),
+    ...(input.designProfile ? { designProfile: input.designProfile } : {}),
+    ...(input.designDocumentTarget ? { designDocumentTarget: input.designDocumentTarget } : {}),
+    ...(input.persona?.trim() ? { persona: input.persona.trim() } : {}),
     ...(input.guiDesignArtifact ? { guiDesignArtifact: input.guiDesignArtifact } : {}),
     ...(input.mode ? { mode: input.mode } : {}),
     ...(input.disableUserInput ? { disableUserInput: true } : {}),

@@ -57,6 +57,8 @@ function settings(workspaceRoot: string, nestedRoot = workspaceRoot): AppSetting
     terminal: defaultTerminalSettings(),
     guiUpdate: { channel: 'stable' },
     codePromptPrefix: 'portable prompt',
+    chatWelcomeMessage: '',
+    codeAgentPresets: [],
     disabledSkillIds: ['example']
   }
 }

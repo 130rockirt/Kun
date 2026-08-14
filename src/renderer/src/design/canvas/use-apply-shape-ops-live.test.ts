@@ -18,7 +18,7 @@ import {
 import { createDefaultShape, createEmptyDocument, createHtmlFrameShape } from './canvas-types'
 
 describe('replayActiveCanvasTurn', () => {
-  it('marks durable SVG and Motion results for idle remount replay', () => {
+  it('marks durable SVG, Motion, and PPT review results for idle remount replay', () => {
     const block = (toolName: string): ToolBlock => ({
       kind: 'tool',
       id: `tool-${toolName}`,
@@ -29,6 +29,7 @@ describe('replayActiveCanvasTurn', () => {
     })
     expect(shouldReplayIdleCanvasToolBlock(block('design_motion_upsert_keyframes'))).toBe(true)
     expect(shouldReplayIdleCanvasToolBlock(block('design_svg_create'))).toBe(true)
+    expect(shouldReplayIdleCanvasToolBlock(block('ppt_agent'))).toBe(true)
     expect(shouldReplayIdleCanvasToolBlock(block('design_update_shapes'))).toBe(false)
   })
 
@@ -234,6 +235,47 @@ describe('replayActiveCanvasTurn', () => {
     expect(processStreaming).not.toHaveBeenCalled()
   })
 
+  it('does not replay a Design-targeted turn into an unbound Code whiteboard', () => {
+    const toolBlock: ToolBlock = {
+      kind: 'tool',
+      id: 'tool-design-targeted',
+      summary: 'canvas op',
+      status: 'success',
+      meta: { toolName: 'design_update_shapes' },
+      detail: '{"ops":[]}'
+    }
+    const applyToolBlock = vi.fn()
+    const processStreaming = vi.fn()
+
+    replayActiveCanvasTurn(
+      {
+        activeThreadId: 'thread-code',
+        currentTurnId: 'turn-design',
+        currentTurnUserId: 'user-design',
+        blocks: [
+          {
+            kind: 'user', id: 'user-design', text: 'draw it',
+            meta: {
+              designDocumentTarget: {
+                documentId: 'doc-design',
+                boardArtifactId: 'board-design'
+              }
+            }
+          },
+          toolBlock
+        ] satisfies ChatBlock[]
+      },
+      applyToolBlock,
+      processStreaming,
+      'thread-code',
+      undefined,
+      'untargeted'
+    )
+
+    expect(applyToolBlock).not.toHaveBeenCalled()
+    expect(processStreaming).not.toHaveBeenCalled()
+  })
+
   it('can replay tool blocks that arrive in the same update that clears the turn id', () => {
     const toolBlock: ToolBlock = {
       kind: 'tool',
@@ -266,7 +308,11 @@ describe('replayActiveCanvasTurn', () => {
     expect(replayState.currentTurnId).toBe('turn-1')
     expect(replayState.currentTurnUserId).toBe('user-1')
     expect(applyToolBlock).toHaveBeenCalledTimes(1)
-    expect(applyToolBlock).toHaveBeenCalledWith(toolBlock)
+    expect(applyToolBlock).toHaveBeenCalledWith(toolBlock, {
+      blocks: replayState.blocks,
+      replayKey: 'thread-code\0turn-1\0code-canvas\0tool:tool-late',
+      turnId: 'turn-1'
+    })
     expect(processStreaming).toHaveBeenCalledTimes(1)
   })
 

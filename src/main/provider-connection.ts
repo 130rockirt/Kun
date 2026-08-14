@@ -1,3 +1,4 @@
+import { session } from 'electron'
 import {
   isCustomModelEndpointFormat,
   normalizeModelEndpointFormat,
@@ -18,6 +19,7 @@ import {
   isGrokOAuthCredentials,
   parseGrokCredentials
 } from './grok-auth'
+import { logWarn } from './logger'
 
 function isCodexBaseUrl(url: string): boolean {
   return hasExpectedHttpsHost(url, 'chatgpt.com') && new URL(url).pathname.startsWith('/backend-api/codex')
@@ -49,6 +51,17 @@ const ANTHROPIC_VERSION = '2023-06-01'
 
 type ProviderProbeFetch = typeof fetchWithOptionalProxy
 
+export async function fetchProviderProbe(
+  input: string | URL,
+  init: RequestInit | undefined,
+  proxyUrl: string
+): Promise<Response> {
+  // Keep the probe on the same transport as real model requests. Otherwise a
+  // Chromium/system-proxy success can hide that the Node-based Kun runtime is
+  // still unable to reach the provider.
+  return fetchWithOptionalProxy(input, init, proxyUrl)
+}
+
 export function providerProbeHeaders(
   endpointFormat: ModelEndpointFormat,
   apiKey: string
@@ -71,9 +84,10 @@ export function providerProbeHeaders(
 export async function probeModelProvider(
   request: ModelProviderProbeRequest,
   settings?: AppSettingsV1,
-  fetcher: ProviderProbeFetch = fetchWithOptionalProxy
+  fetcher: ProviderProbeFetch = fetchProviderProbe
 ): Promise<ModelProviderProbeResult> {
   const baseUrl = request.baseUrl.trim()
+  const proxyUrl = settings ? resolveModelProviderProxyUrl(settings) : ''
   if (!/^https?:\/\//i.test(baseUrl)) {
     return { ok: false, message: 'Base URL must start with http:// or https://.' }
   }
@@ -102,7 +116,7 @@ export async function probeModelProvider(
     if (!isGrokOAuthCredentials(rawKey)) {
       return { ok: false, message: 'Grok 订阅凭据格式无效，请重新登录。' }
     }
-    const fresh = await ensureFreshGrokCredentials(rawKey)
+    const fresh = await ensureFreshGrokCredentials(rawKey, { fetcher, proxyUrl })
     const creds = fresh.credentials ?? parseGrokCredentials(fresh.apiKey)
     if (!creds) {
       return { ok: false, message: 'Grok 订阅凭据已损坏，请重新登录。' }
@@ -121,7 +135,6 @@ export async function probeModelProvider(
   }
   const url = upstreamOpenAiModelsUrl(baseUrl)
   const startedAt = Date.now()
-  const proxyUrl = settings ? resolveModelProviderProxyUrl(settings) : ''
   let res: Response
   let text: string
   try {
@@ -137,10 +150,24 @@ export async function probeModelProvider(
     text = body.text
   } catch (e) {
     const message = providerProbeFailureMessage(e, url)
+    logWarn('provider-probe', 'Provider model discovery failed.', {
+      requestUrl: url,
+      usingConfiguredProxy: Boolean(proxyUrl),
+      message: describeProviderProbeError(e)
+    })
     if (proxyUrl && await directProviderReachable(url, endpointFormat, request.apiKey, fetcher)) {
       return {
         ok: false,
         message: `${message} The configured model-request proxy failed, but a direct connection reached the provider. Disable or update the proxy in Settings > Providers.`
+      }
+    }
+    if (!proxyUrl) {
+      const systemProxyUrl = await resolveElectronSystemProxyUrl(url)
+      if (
+        systemProxyUrl &&
+        await providerReachable(url, endpointFormat, request.apiKey, fetcher, systemProxyUrl)
+      ) {
+        return { ok: false, message, suggestedProxyUrl: systemProxyUrl }
       }
     }
     return { ok: false, message }
@@ -156,7 +183,37 @@ function providerProbeFailureMessage(error: unknown, url: string): string {
   if (error instanceof Error && error.name === 'TimeoutError') {
     return `Request to ${url} timed out after ${PROBE_TIMEOUT_MS / 1_000}s.`
   }
-  return error instanceof Error ? error.message : String(error)
+  return `Request to ${url} failed: ${describeProviderProbeError(error)}`
+}
+
+/** Flatten Node fetch causes and Chromium/Node AggregateErrors for actionable UI output. */
+export function describeProviderProbeError(error: unknown): string {
+  const pending: unknown[] = [error]
+  const parts: string[] = []
+  for (let depth = 0; depth < 10 && pending.length > 0; depth += 1) {
+    const current = pending.shift()
+    if (current instanceof AggregateError) {
+      const message = current.message.trim()
+      if (message) parts.push(message)
+      pending.unshift(...current.errors)
+      continue
+    }
+    if (!(current instanceof Error)) {
+      if (current != null) parts.push(String(current))
+      continue
+    }
+    const code = (current as { code?: unknown }).code
+    const codeText = typeof code === 'string' ? code : ''
+    const message = current.message.trim()
+    if (message) {
+      parts.push(codeText && !message.includes(codeText) ? `${message} (${codeText})` : message)
+    } else if (codeText) {
+      parts.push(codeText)
+    }
+    if (current.cause != null) pending.push(current.cause)
+  }
+  const unique = parts.filter((part, index) => parts.indexOf(part) === index)
+  return unique.join(': ') || 'unknown network error'
 }
 
 async function directProviderReachable(
@@ -165,17 +222,56 @@ async function directProviderReachable(
   apiKey: string,
   fetcher: ProviderProbeFetch
 ): Promise<boolean> {
+  return providerReachable(url, endpointFormat, apiKey, fetcher, '')
+}
+
+async function providerReachable(
+  url: string,
+  endpointFormat: ModelEndpointFormat,
+  apiKey: string,
+  fetcher: ProviderProbeFetch,
+  proxyUrl: string
+): Promise<boolean> {
   try {
     const response = await fetcher(url, {
       method: 'GET',
       headers: providerProbeHeaders(endpointFormat, apiKey),
       signal: AbortSignal.timeout(DIRECT_PROBE_TIMEOUT_MS)
-    }, '')
+    }, proxyUrl)
     await response.body?.cancel().catch(() => undefined)
     return true
   } catch {
     return false
   }
+}
+
+export async function resolveElectronSystemProxyUrl(url: string): Promise<string> {
+  try {
+    const rules = await session.defaultSession.resolveProxy(url)
+    for (const entry of rules.split(';')) {
+      const [kind = '', target = ''] = entry.trim().split(/\s+/, 2)
+      if (!target || kind.toUpperCase() === 'DIRECT') continue
+      const protocol = kind.toUpperCase() === 'HTTPS'
+        ? 'https:'
+        : kind.toUpperCase() === 'SOCKS' || kind.toUpperCase() === 'SOCKS5'
+          ? 'socks5:'
+          : kind.toUpperCase() === 'SOCKS4'
+            ? 'socks4:'
+            : kind.toUpperCase() === 'PROXY'
+              ? 'http:'
+              : ''
+      if (!protocol) continue
+      const candidate = new URL(`${protocol}//${target}`)
+      if (!candidate.hostname || !candidate.port) continue
+      return candidate.toString()
+    }
+  } catch (error) {
+    logWarn('provider-probe', 'Failed to resolve the desktop system proxy.', {
+      requestUrl: url,
+      message: describeProviderProbeError(error)
+    })
+  }
+  return ''
 }
 
 export function parseModelIds(body: string): string[] {

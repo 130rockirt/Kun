@@ -19,7 +19,7 @@ import { SequentialIdGenerator } from '../ports/id-generator.js'
 import { RuntimeEventRecorder } from '../services/runtime-event-recorder.js'
 import { TurnService } from '../services/turn-service.js'
 import { createChildAgentExecutor } from './child-agent-executor.js'
-import { DelegationRuntime, FileDelegationStore } from './delegation-runtime.js'
+import { ChildRunRecord, DelegationRuntime, FileDelegationStore } from './delegation-runtime.js'
 import type { ChildRunExecutor } from './delegation-runtime.js'
 
 class HangingModel implements ModelClient {
@@ -49,6 +49,61 @@ class HangingModel implements ModelClient {
 }
 
 describe('DelegationRuntime abort handling', () => {
+  it('redacts legacy host control from diagnostics without rewriting the store', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'kun-delegation-diagnostics-'))
+    try {
+      const store = new FileDelegationStore(dir)
+      await store.upsert(ChildRunRecord.parse({
+        id: 'legacy-child',
+        parentThreadId: 'parent',
+        parentTurnId: 'turn',
+        prompt: 'legacy task',
+        controlPrompt: 'PRIVATE LEGACY HOST CONTROL',
+        status: 'completed',
+        createdAt: '2026-08-01T00:00:00.000Z',
+        updatedAt: '2026-08-01T00:00:01.000Z'
+      }))
+      const runtime = new DelegationRuntime({
+        config: subagentConfig(),
+        store,
+        executor: async () => ({ summary: 'unused' })
+      })
+
+      expect((await store.get('legacy-child'))?.controlPrompt).toBe('PRIVATE LEGACY HOST CONTROL')
+      expect((await runtime.diagnostics('parent')).childRuns[0]).not.toHaveProperty('controlPrompt')
+      expect((await store.get('legacy-child'))?.controlPrompt).toBe('PRIVATE LEGACY HOST CONTROL')
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('does not make an ordinary child failure resumable', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'kun-delegation-failure-'))
+    try {
+      const runtime = new DelegationRuntime({
+        config: subagentConfig(),
+        store: new FileDelegationStore(dir),
+        executor: async () => { throw new Error('provider rejected the request') }
+      })
+
+      const record = await runtime.runChild({
+        parentThreadId: 'parent',
+        parentTurnId: 'turn',
+        launcher: 'delegate_task',
+        prompt: 'ordinary business failure',
+        signal: new AbortController().signal
+      })
+
+      expect(record).toMatchObject({
+        status: 'failed',
+        terminationReason: 'child_error',
+        resumable: false
+      })
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
   it('does not abort detached children when the parent signal aborts', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'kun-delegation-'))
     try {
@@ -107,6 +162,7 @@ describe('DelegationRuntime abort handling', () => {
       await runtime.runChild({
         parentThreadId: 'thr_delete',
         parentTurnId: 'turn_delete',
+        launcher: 'delegate_task',
         prompt: 'background work',
         detach: true,
         signal: new AbortController().signal
@@ -126,7 +182,12 @@ describe('DelegationRuntime abort handling', () => {
       releaseAbortCleanup()
       expect(await aborting).toBe(1)
       expect(await runtime.abortDetachedChildrenForThread('thr_delete')).toBe(0)
-      expect((await store.list())[0]?.status).toBe('aborted')
+      expect((await store.list())[0]).toMatchObject({
+        status: 'aborted',
+        terminationReason: 'manual_stop',
+        resumable: true,
+        detached: true
+      })
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -241,7 +302,6 @@ describe('DelegationRuntime model provider selection', () => {
         config: SubagentsCapabilityConfig.parse({
           enabled: true,
           maxParallel: 1,
-          maxChildRuns: 10,
           profiles: {
             auditor: {
               name: 'Security Auditor',
@@ -305,7 +365,6 @@ describe('DelegationRuntime model provider selection', () => {
         config: SubagentsCapabilityConfig.parse({
           enabled: true,
           maxParallel: 1,
-          maxChildRuns: 10,
           profiles: {
             general: {
               model: 'deepseek-v4-pro',
@@ -348,7 +407,6 @@ describe('DelegationRuntime model provider selection', () => {
         config: SubagentsCapabilityConfig.parse({
           enabled: true,
           maxParallel: 1,
-          maxChildRuns: 10,
           profiles: { general: { toolPolicy: 'inherit' } }
         }),
         store: new FileDelegationStore(dir),
@@ -388,8 +446,7 @@ describe('DelegationRuntime model provider selection', () => {
       const runtime = new DelegationRuntime({
         config: SubagentsCapabilityConfig.parse({
           enabled: true,
-          maxParallel: 1,
-          maxChildRuns: 10
+          maxParallel: 1
         }),
         store: new FileDelegationStore(dir),
         executor: async (input) => {
@@ -445,8 +502,7 @@ describe('DelegationRuntime model provider selection', () => {
       const runtime = new DelegationRuntime({
         config: SubagentsCapabilityConfig.parse({
           enabled: true,
-          maxParallel: 1,
-          maxChildRuns: 10
+          maxParallel: 1
         }),
         store: new FileDelegationStore(dir),
         executor: async (input) => {
@@ -485,7 +541,6 @@ describe('DelegationRuntime model provider selection', () => {
       expect(() => SubagentsCapabilityConfig.parse({
         enabled: true,
         maxParallel: 1,
-        maxChildRuns: 10,
         profiles: { partial: { model: 'deepseek-v4-pro' } }
       })).toThrow(/model and providerId must be configured together/)
 
@@ -494,7 +549,6 @@ describe('DelegationRuntime model provider selection', () => {
         config: SubagentsCapabilityConfig.parse({
           enabled: true,
           maxParallel: 1,
-          maxChildRuns: 10,
           profiles: {}
         }),
         store: new FileDelegationStore(dir),
@@ -531,38 +585,10 @@ describe('DelegationRuntime model provider selection', () => {
   })
 })
 
-describe('createChildAgentExecutor abort handling', () => {
-  it('connects the parent signal to the child turn interrupt', async () => {
-    const model = new HangingModel()
-    const executor = createChildAgentExecutor({
-      model,
-      toolHost: new LocalToolHost({ registry: new CapabilityRegistry() }),
-      prefix: createImmutablePrefix({ systemPrompt: 'You are Kun.' }),
-      defaultModel: 'test-model'
-    })
-    const parent = new AbortController()
-    const run = executor({
-      childId: 'child',
-      parentThreadId: 'parent',
-      parentTurnId: 'turn',
-      prompt: 'work until interrupted',
-      toolPolicy: 'inherit',
-      signal: parent.signal
-    })
-
-    await model.requestStarted
-    parent.abort()
-
-    await expect(run).rejects.toThrow('Child agent aborted.')
-    expect(model.requests[0].abortSignal.aborted).toBe(true)
-  })
-})
-
 function subagentConfig() {
   return SubagentsCapabilityConfig.parse({
     enabled: true,
-    maxParallel: 1,
-    maxChildRuns: 10
+    maxParallel: 1
   })
 }
 

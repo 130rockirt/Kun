@@ -43,6 +43,7 @@ import {
   recoverGraphLeadOwnership,
   recoverGraphPlanningCommits
 } from './graph-runtime-recovery.js'
+import { GraphRuntimeReconfigureRetry } from './graph-runtime-reconfigure-retry.js'
 
 export type GraphRuntimeStartOptions = {
   delegation: () => DelegationRuntime | undefined
@@ -83,6 +84,11 @@ export class GraphRuntimeComposition {
   private delegation?: GraphRuntimeStartOptions['delegation']
   private steerChildTurn?: GraphRuntimeStartOptions['steerTurn']
   private retentionTimer?: NodeJS.Timeout
+  private readonly backgroundReconfigureRetry = new GraphRuntimeReconfigureRetry(() => {
+    if (!this.backgroundServicesStopped) void this.queueBackgroundServiceReconfigure()
+  })
+  private backgroundReconfigureTask?: Promise<void>
+  private backgroundServicesStopped = false
 
   constructor(private readonly options: {
     dataDir: string
@@ -495,6 +501,7 @@ export class GraphRuntimeComposition {
   }
 
   async start(options: GraphRuntimeStartOptions): Promise<void> {
+    this.backgroundServicesStopped = false
     const nextId = (prefix: string): string => this.options.ids.next(prefix)
     this.delegation = options.delegation
     this.steerChildTurn = options.steerTurn
@@ -596,24 +603,29 @@ export class GraphRuntimeComposition {
     this.retentionTimer.unref?.()
   }
 
-  async reconfigureBackgroundServices(): Promise<void> {
-    this.supervisor?.reconfigure()
-    if (!this.options.config().enabled) {
-      const runs = await this.store.list()
-      for (const run of runs) {
-        if (run.status === 'completed' || run.status === 'failed' || run.status === 'cancelled') {
-          continue
-        }
-        await this.control.pause(run.id, {
-          commandId: this.options.ids.next('graph_disable'),
-          idempotencyKey: `disable:${run.id}:${run.lastEventSeq}`
-        })
-      }
-    }
-    await this.learning.reconfigure()
+  reconfigureBackgroundServices(): Promise<void> {
+    this.backgroundReconfigureRetry.reset()
+    return this.queueBackgroundServiceReconfigure()
   }
 
+  private queueBackgroundServiceReconfigure(): Promise<void> {
+    if (this.backgroundServicesStopped) return Promise.resolve()
+    const previous = this.backgroundReconfigureTask ?? Promise.resolve()
+    const task = previous.then(() => this.backgroundServicesStopped
+      ? undefined
+      : this.applyBackgroundServiceConfig()).catch((error) => {
+      this.warnBackgroundReconfigure('unexpected failure', error)
+      if (!this.backgroundServicesStopped) this.backgroundReconfigureRetry.schedule()
+    })
+    this.backgroundReconfigureTask = task
+    return task.then(() => {
+      if (this.backgroundReconfigureTask === task) this.backgroundReconfigureTask = undefined
+    })
+  }
   async stop(): Promise<void> {
+    this.backgroundServicesStopped = true
+    this.backgroundReconfigureRetry.reset()
+    await this.backgroundReconfigureTask?.catch(() => undefined)
     if (this.retentionTimer) clearInterval(this.retentionTimer)
     this.retentionTimer = undefined
     await this.supervisor?.stop()
@@ -635,7 +647,35 @@ export class GraphRuntimeComposition {
   private async runRetention(): Promise<void> {
     await this.retention.run()
   }
-
+  private async applyBackgroundServiceConfig(): Promise<void> {
+    let retry = false
+    try { this.supervisor?.reconfigure() } catch (error) { retry = this.warnBackgroundReconfigure('supervisor', error) }
+    if (!this.options.config().enabled) {
+      let runs: GraphRunV1[] = []
+      try { runs = await this.store.list() } catch (error) { retry = this.warnBackgroundReconfigure('run listing', error) }
+      for (const run of runs) {
+        if (this.backgroundServicesStopped) return
+        if (run.status === 'completed' || run.status === 'failed' || run.status === 'cancelled') continue
+        try {
+          await this.control.pause(run.id, {
+            commandId: this.options.ids.next('graph_disable'),
+            idempotencyKey: `disable:${run.id}:${run.lastEventSeq}`
+          })
+        } catch (error) {
+          retry = this.warnBackgroundReconfigure(`pause ${run.id}`, error)
+        }
+      }
+    }
+    if (this.backgroundServicesStopped) return
+    try { await this.learning.reconfigure() } catch (error) { retry = this.warnBackgroundReconfigure('learning', error) }
+    if (retry && !this.backgroundServicesStopped) this.backgroundReconfigureRetry.schedule()
+    else this.backgroundReconfigureRetry.reset()
+  }
+  private warnBackgroundReconfigure(scope: string, error: unknown): true {
+    console.warn(`[kun] Graph background service reconfigure ${scope} failed: ${
+      error instanceof Error ? error.message : String(error)}`)
+    return true
+  }
   private trackBackground(label: string, operation: Promise<unknown>): void {
     const tracked = operation.catch((error) => {
       console.warn(`[kun] ${label}: ${

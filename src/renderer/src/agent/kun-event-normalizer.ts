@@ -120,7 +120,19 @@ function normalizeKunRuntimeEventPayload(
       return action ? [action] : []
     }
     case 'turn_started': {
-      if (!event.child) return []
+      if (!event.child) {
+        if (!event.threadId || (!event.threadAgentSurface && !event.designProfile)) return []
+        return [{
+          type: 'thread_metadata_changed',
+          payload: {
+            threadId: event.threadId,
+            ...(event.threadAgentSurface
+              ? { agentSurface: event.threadAgentSurface }
+              : {}),
+            ...(event.designProfile ? { designProfile: event.designProfile } : {})
+          }
+        }]
+      }
       const tool = deps.childTool(event)
       return tool ? [{ type: 'tool_updated', payload: tool }] : []
     }
@@ -200,7 +212,9 @@ function normalizeKunRuntimeEventPayload(
           threadId: event.threadId ?? '',
           ...(event.title !== undefined ? { title: event.title } : {}),
           ...(event.titleAuto !== undefined ? { titleAuto: event.titleAuto } : {}),
-          ...(typeof event.status === 'string' ? { status: event.status } : {})
+          ...(typeof event.status === 'string' ? { status: event.status } : {}),
+          ...(event.agentSurface ? { agentSurface: event.agentSurface } : {}),
+          ...(event.designProfile ? { designProfile: event.designProfile } : {})
         }
       }]
     case 'turn_completed':

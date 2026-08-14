@@ -71,9 +71,13 @@ export class ContextEstimator {
     switch (item.kind) {
       case 'user_message':
       case 'goal_context':
+      case 'model_context':
+      case 'interruption_note':
       case 'assistant_text':
       case 'assistant_reasoning':
         return item.text
+      case 'runtime_context_source':
+        return item.content
       case 'tool_call':
         return `${item.toolName} ${JSON.stringify(item.arguments)}`
       case 'tool_result':

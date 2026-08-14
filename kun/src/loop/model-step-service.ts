@@ -11,7 +11,6 @@ import { makeErrorItem } from '../domain/item.js'
 import { repairModelHistoryItemsForModel } from '../domain/model-history-repair.js'
 import { memoryPreview } from '../shared/memory-preview.js'
 import type { IdGenerator } from '../ports/id-generator.js'
-import type { ModelClient, ModelToolSpec } from '../ports/model-client.js'
 import type { SessionStore } from '../ports/session-store.js'
 import type { ThreadStore } from '../ports/thread-store.js'
 import type { GuiPlanContext } from '../ports/tool-host.js'
@@ -32,6 +31,7 @@ import { buildToolPreferenceInstruction } from '../prompt/kun-system-prompt.js'
 import {
   buildClientSurfaceInstruction,
   buildKunTurnContextInstructions,
+  buildThreadProfileInstruction,
   type KunTurnContextAuthority,
   type KunTurnContextBlock
 } from '../prompt/kun-prompt-context.js'
@@ -60,6 +60,7 @@ import { memoryInstructions } from './memory-instructions.js'
 import { modelCapabilitiesForModel } from './model-context-profile.js'
 import type { ModelRoundEngine } from './model-round-engine.js'
 import { modelClientDiagnostics } from './model-client-diagnostics.js'
+import { recoverModelContextOverflow } from './model-context-overflow-recovery.js'
 import { composeModelRequest, effectiveOutputBudgetTokens } from './model-request-composer.js'
 import { estimateModelRequestInputTokenBreakdown } from './model-request-estimator.js'
 import type { ModelRoutingService } from './model-routing-service.js'
@@ -78,11 +79,6 @@ import {
   type RoundOutcomeCoordinator
 } from './round-outcome-coordinator.js'
 import { svgArtifactCompletionState } from './svg-artifact-completion.js'
-import {
-  rehydrateGeneratedImagesForForward,
-  rehydrateTransientBrowserUseOutputsForForward,
-  MAX_FORWARDED_GENERATED_IMAGES
-} from './tool-result-image.js'
 import {
   attachmentRequestPipelineDetails,
   imageGenerationReferenceInstructions,
@@ -106,583 +102,87 @@ import {
   shouldVerifyImmutablePrefix,
   verifyImmutablePrefix
 } from '../cache/immutable-prefix.js'
-import { buildToolCatalogFingerprint } from '../cache/tool-catalog-fingerprint.js'
+import { buildPromptCachePartition } from '../cache/prompt-cache-partition.js'
 import { rewriteItemHistoryWithRetry } from '../services/history-commit-coordinator.js'
 import { TurnToolCatalogFreezer } from './turn-tool-catalog.js'
+import { ModelStepPreparationService } from './model-step-preparation-service.js'
+import type { ModelStepServiceDeps } from './model-step-service-types.js'
+import { sameActingModelRoute } from './model-step-preparation-helpers.js'
+import { composeForwardedModelRequest } from './forwarded-model-request.js'
+export type { ModelStepServiceDeps } from './model-step-service-types.js'
+export { buildExtensionProfileInstruction } from './model-step-preparation-helpers.js'
 
-export type ModelStepServiceDeps = {
-  threadStore: ThreadStore
-  sessionStore: SessionStore
-  turns: Pick<TurnService, 'getTurn' | 'applyItem' | 'updateItem' | 'updateTurnMetadata' | 'ensureGoalContext'>
-  events: Pick<RuntimeEventRecorder, 'record'>
-  model: ModelClient
-  compactor: import('./context-compactor.js').ContextCompactor
-  prefix: ImmutablePrefix
-  ids: Pick<IdGenerator, 'next'>
-  nowIso: () => string
-  modelCapabilities?: (model: string, providerId?: string) => ModelCapabilityMetadata
-  activePlanContext?: GuiPlanContext
-  tokenEconomy?: TokenEconomyConfig
-  toolArgumentRepair?: { maxStringBytes?: number }
-  turnLimits?: TurnLimitsConfig
-  modelRouting: ModelRoutingService
-  budgetGate: TurnBudgetGate
-  goalTurns: Pick<GoalTurnCoordinator, 'suppressResume'>
-  threadItems: Pick<ThreadItemProjectionService, 'syncFromSession'>
-  turnContextResolver: TurnContextResolver
-  telemetry: Pick<LoopTelemetry, 'recordToolCatalogFingerprint'>
-  historyCompaction: HistoryCompactionService
-  turnAttachments: TurnAttachmentService
-  modelRoundEngine: ModelRoundEngine
-  roundOutcome: RoundOutcomeCoordinator
-  recordPipelineStage: (
-    threadId: string,
-    turnId: string,
-    stage: PipelineStage,
-    details?: Record<string, unknown>
-  ) => Promise<void>
-  recordToolCatalogDrift: (input: {
-    threadId: string
-    turnId: string
-    fingerprint: string
-    toolCount: number
-    toolNames: string[]
-    changeKind: 'additive' | 'breaking'
-    message: string
-  }) => Promise<void>
-  recordTokenEconomySavings: (input: {
-    threadId: string
-    turnId: string
-    model: string
-    rawInputTokens: number
-    sentInputTokens: number
-  }) => Promise<void>
-  rememberFailure: (turnId: string, failure: TurnExecutionFailure) => void
-  awaitWorkspaceCheckpoint?: (
-    checkpointRequestId: string,
-    signal: AbortSignal
-  ) => Promise<string | null>
-}
 
-export class ModelStepService {
-  private readonly turnToolCatalogs = new TurnToolCatalogFreezer()
+export class ModelStepService extends ModelStepPreparationService {
   private readonly workspaceCheckpointGates = new Map<string, Promise<void>>()
 
-  constructor(private readonly deps: ModelStepServiceDeps) {}
+  constructor(deps: ModelStepServiceDeps) {
+    super(deps)
+  }
 
   async run(
     threadId: string,
     turnId: string,
     signal: AbortSignal,
     stepIndex = 0,
-    maxToolCallsPerStep = normalizeTurnLimits(this.deps.turnLimits).maxToolCallsPerStep
+    maxToolCallsPerStep = normalizeTurnLimits(this.deps.turnLimits).maxToolCallsPerStep,
+    contextOverflowRetryAttempt = 0
   ): Promise<ModelRoundOutcome> {
-    if (shouldVerifyImmutablePrefix()) {
-      verifyImmutablePrefix(this.deps.prefix)
-    }
-    const [thread, turn] = await Promise.all([
-      this.deps.threadStore.get(threadId),
-      this.deps.turns.getTurn(threadId, turnId)
-    ])
-    // A delete/interrupt can win while a model step is waiting for its prior
-    // I/O. Do not fall back to empty workspace/default settings: that would
-    // let a stale continuation issue a new request or dispatch a tool after
-    // its owning thread/turn no longer exists.
-    if (signal.aborted || !thread || !turn) return 'aborted'
-    const modeContext = resolveTurnModeContext({
-      turn,
-      workspace: thread.workspace,
-      threadMode: thread.mode,
-      ...(this.deps.activePlanContext ? { fallbackPlanContext: this.deps.activePlanContext } : {})
-    })
-    const { dedicatedSvgTurn, activePlanContext } = modeContext
-    await this.deps.recordPipelineStage(threadId, turnId, 'input_received', { stepIndex })
-    const budgetGate = await this.deps.budgetGate.check(thread, threadId, turnId)
-    // A deadline, lease loss, or explicit interruption can win while an
-    // asynchronous budget check is settling. Do not materialize internal
-    // history (or perform any further model preparation) for that aborted
-    // execution merely because the persisted turn has not been finalized yet.
-    if (signal.aborted) return 'aborted'
-    if (budgetGate === 'blocked') {
-      // A cost-budget stop is a deliberate cap, not an interrupted goal turn:
-      // suppress goal auto-resume so it isn't relaunched straight back into
-      // the same exhausted budget.
-      this.deps.goalTurns.suppressResume(turnId)
-      if (this.deps.roundOutcome.toolSuppressionRecoverySteps(turnId) > 0) {
-        return this.deps.roundOutcome.failToolSuppressionRecovery(threadId, turnId)
-      }
-      if (dedicatedSvgTurn) {
-        const persistedCompletion = svgArtifactCompletionState(
-          await this.deps.sessionStore.loadItems(threadId),
-          turnId
-        )
-        if (persistedCompletion.validationAfterMutation) return 'stop'
-        this.deps.rememberFailure(turnId, {
-          error: 'Dedicated SVG artifact turn could not satisfy its completion gate before the budget was exhausted.',
-          code: 'svg_completion_budget_blocked',
-          severity: 'error'
-        })
-        return 'failed'
-      }
-      return 'stop'
-    }
-    const planTurnSuppressesGoalContext = !modeContext.dedicatedSvgTurn && !modeContext.planContextStale && (
-      modeContext.effectiveMode === 'plan' || Boolean(modeContext.activePlanContext)
-    )
-    if (!planTurnSuppressesGoalContext) {
-      await this.deps.turns.ensureGoalContext(threadId, turnId, signal)
-    }
-    if (signal.aborted) return 'aborted'
-    const loadedItems = await this.deps.sessionStore.loadItems(threadId)
-    // Heal (and possibly rewrite) on-disk history once per turn: within a
-    // turn the loop only appends well-formed items, and healing's deep
-    // change detection costs two full-history stringifies per call.
-    let historyItems: TurnItem[] = loadedItems
-    if (stepIndex === 0) {
-      const healing = await rewriteItemHistoryWithRetry({
-        sessionStore: this.deps.sessionStore,
-        threadId,
-        maxAttempts: 2,
-        build: (snapshot) => {
-          const healed = healLoadedHistoryItems(snapshot.items)
-          return { changed: healed.changed, items: healed.items, value: undefined }
-        }
-      })
-      if (healing.status === 'applied') {
-        await this.deps.threadItems.syncFromSession(threadId)
-        historyItems = healing.items
-      } else if (healing.status === 'unchanged') {
-        historyItems = healing.items
-      } else {
-        // A later step will retry persistence. Use a locally healed view now
-        // rather than letting one malformed legacy record poison this request.
-        historyItems = healLoadedHistoryItems(
-          await this.deps.sessionStore.loadItems(threadId)
-        ).items
-      }
-    }
-    // Keep historical goal records durable without replaying an instruction
-    // for a goal that has since paused, ended, been cleared, or been replaced.
-    // A plan turn intentionally suppresses goal continuation just as it did
-    // before goal context became canonical history.
-    const goalForHistory = planTurnSuppressesGoalContext
-      ? undefined
-      : (await this.deps.threadStore.get(threadId))?.goal
-    historyItems = filterGoalContextsForActiveGoal(historyItems, goalForHistory)
-    await this.deps.recordPipelineStage(
+    const preparation = await this.prepareModelStep(
       threadId,
       turnId,
-      'input_cached',
-      prefixVolatilityStageDetails(detectVolatilePrefixContent(this.deps.prefix))
+      signal,
+      stepIndex
     )
-    if (stepIndex > 0) {
-      const toolResultCount = historyItems.filter(
-        (item) => item.turnId === turnId && item.kind === 'tool_result'
-      ).length
-      await this.deps.events.record({
-        kind: 'tool_result_upload_wait',
-        threadId,
-        turnId,
-        status: 'waiting',
-        toolResultCount
-      })
-    }
-    const items = repairModelHistoryItemsForModel(
-      effectiveHistoryAfterLatestCompaction(historyItems)
-    )
-    const inheritedProviderAccount = resolveCoherentProviderAccount({
-      turnProviderId: turn.providerId,
-      turnAccountId: turn.accountId,
-      threadProviderId: thread.providerId,
-      threadAccountId: thread.accountId
-    })
-    const routeProviderId = turn.actingModelRoute?.providerId ?? inheritedProviderAccount.providerId
-    const routeAccountId = turn.actingModelRoute?.accountId ?? inheritedProviderAccount.accountId
-    const modelRoute = turn.actingModelRoute
-      ? {
-          model: turn.actingModelRoute.model,
-          ...(turn.reasoningEffort ? { reasoningEffort: turn.reasoningEffort } : {})
-        }
-      : await this.deps.modelRouting.resolve({
-          threadId,
-          turnId,
-          latestRequest: turn?.prompt ?? '',
-          items,
-          signal,
-          ...(routeProviderId ? { providerId: routeProviderId } : {}),
-          ...(routeAccountId ? { accountId: routeAccountId } : {}),
-          reasoningEffort: turn?.reasoningEffort,
-          candidates: [turn?.model, thread?.model, this.deps.model.model]
-        })
-    const actingModelRoute = turn.actingModelRoute ?? {
-      model: modelRoute.model,
-      ...(routeProviderId ? { providerId: routeProviderId } : {}),
-      ...(routeAccountId ? { accountId: routeAccountId } : {})
-    }
-    const historyRoutesByTurnId = modelHistoryRoutesByTurnId(thread, actingModelRoute, turnId)
-    const routeSelectionDeferred =
-      !turn.actingModelRoute &&
-      this.deps.model.selectsRouteTargetDuringStream?.({
-        model: modelRoute.model,
-        ...(routeProviderId ? { providerId: routeProviderId } : {})
-      }) === true
-    if (!turn.actingModelRoute && !routeSelectionDeferred) {
-      await this.deps.turns.updateTurnMetadata(threadId, turnId, { actingModelRoute })
-    }
-    const providerId = actingModelRoute.providerId
-    const accountId = actingModelRoute.accountId
-    await this.deps.recordPipelineStage(threadId, turnId, 'input_routed', {
-      model: modelRoute.model,
-      ...(modelRoute.reasoningEffort ? { reasoningEffort: modelRoute.reasoningEffort } : {})
-    })
-    const model = modelRoute.model
-    // `default` is the explicit turn pin for the runtime's implicit provider.
-    // Capability resolvers historically receive that provider as `undefined`;
-    // keep that contract while still sending the explicit alias to the model
-    // router so a later thread selection cannot take over this turn.
-    const capabilityProviderId = providerId?.trim().toLowerCase() === 'default'
-      ? undefined
-      : providerId
-    const modelCapabilities =
-      this.deps.modelCapabilities?.(model, capabilityProviderId) ?? modelCapabilitiesForModel(model)
-    const serviceTier =
-      turn?.serviceTier === 'priority' &&
-      modelCapabilities.serviceTiers?.includes('priority')
-        ? 'priority' as const
-        : undefined
-    const prepared = await this.deps.turnContextResolver.resolve({
-      threadId,
-      turnId,
+    if (typeof preparation === 'string') return preparation
+    const {
       thread,
       turn,
-      history: historyItems,
-      model,
+      dedicatedSvgTurn,
+      planTurnSuppressesGoalContext,
+      items,
+      routeAccountId,
+      modelRoute,
       actingModelRoute,
+      historyRoutesByTurnId,
+      routeSelectionDeferred,
+      providerId,
+      accountId,
+      model,
       modelCapabilities,
-      signal,
-      mode: modeContext,
-      goalNoToolRecoverySteps: this.deps.roundOutcome.goalNoToolRecoverySteps(turnId)
-    })
-    const {
-      mode: effectiveMode,
-      approvalPolicy,
-      sandboxMode,
+      serviceTier,
+      prepared,
       attachments,
+      toolContext,
       skillResolution,
-      instructionResolution,
-      memories,
-      activeGoalInstruction,
-      goalRecoveryInstruction,
-      activeTodoInstruction,
-      planTurnActive,
-      allowedToolNames,
-      userInputDisabled,
-      toolDiscoveryContext: toolContext,
-      tools: liveTools
-    } = prepared
-    const frozenToolCatalog = this.turnToolCatalogs.resolve(
-      threadId,
-      turnId,
-      [...liveTools],
-      toolCatalogPolicyScope(prepared)
-    )
-    const tools = frozenToolCatalog.tools
-    if (dedicatedSvgTurn) {
-      const toolNames = new Set(tools.map((tool) => tool.name))
-      const hasMutationTool = toolNames.has(DESIGN_SVG_EDIT_TOOL_NAME) || toolNames.has(DESIGN_SVG_ANIMATE_TOOL_NAME)
-      const hasValidationTool = toolNames.has(DESIGN_SVG_VALIDATE_TOOL_NAME)
-      const completionAlreadySatisfied = svgArtifactCompletionState(historyItems, turnId).validationAfterMutation
-      if (!completionAlreadySatisfied && (approvalPolicy === 'never' || !hasMutationTool || !hasValidationTool)) {
-        const message = approvalPolicy === 'never'
-          ? 'Dedicated SVG artifact turns require tool execution, but the current approval policy disables tools.'
-          : 'Dedicated SVG artifact tools are unavailable under the current plan, skill, or sandbox policy.'
-        this.deps.rememberFailure(turnId, { error: message, code: 'svg_tools_unavailable', severity: 'error' })
-        await this.deps.events.record({
-          kind: 'error', threadId, turnId, message, code: 'svg_tools_unavailable', severity: 'error'
-        })
-        await this.deps.turns.applyItem(threadId, makeErrorItem({
-          id: this.deps.ids.next('item_error'), turnId, threadId, message,
-          code: 'svg_tools_unavailable', severity: 'error'
-        }))
-        return 'failed'
-      }
-    }
-    const toolSpecs: ModelToolSpec[] = [...tools]
-    const toolProviderMetadata = new Map(
-      tools.map((tool) => [tool.name, { providerId: tool.providerId, providerKind: tool.providerKind }])
-    )
-    const streamToolMetadata = new Map(
-      tools.map((tool) => [tool.name, { providerId: tool.providerId, toolKind: tool.toolKind }])
-    )
-    const toolProviderKinds = new Map(
-      tools.map((tool) => [tool.name, tool.providerKind])
-    )
-    const toolCatalog = buildToolCatalogFingerprint(toolSpecs)
-    const previousTurnDrift = this.deps.telemetry.recordToolCatalogFingerprint({
-      threadId,
-      workspace: thread?.workspace ?? '',
-      mode: effectiveMode ?? 'agent',
-      model: modelCapabilities.id,
-      activeSkillIds: skillResolution.activeSkillIds,
-      allowedToolNames,
-      userInputDisabled,
-      guiDesignCanvas: turn?.guiDesignCanvas === true,
-      guiDesignMode: turn?.guiDesignMode === true,
-      guiDesignArtifact: turn?.guiDesignArtifact,
-      fingerprint: toolCatalog.fingerprint,
-      toolNames: toolCatalog.toolNames,
-      toolHashes: toolCatalog.toolHashes
+      toolProviderMetadata,
+      streamToolMetadata,
+      toolProviderKinds,
+      toolKinds,
+      hardRequiredToolName,
+      softRequiredToolName,
+      forceToolSuppressionFinalAnswerRecovery,
+      fastContextFinalSynthesis,
+      requestToolSpecs,
+      promptCachePhase,
+      svgCompletion,
+      contextInstructions,
+      redactedRequestValues,
+      skillContextInstructions,
+      modeInstruction
+    } = preparation
+    const clientDiagnostics = modelClientDiagnostics(this.deps.model, providerId)
+    const threadProfileInstruction = buildThreadProfileInstruction(thread.systemPrompt)
+    const promptCachePartition = buildPromptCachePartition({
+      model,
+      providerId,
+      endpointFormat: modelCapabilities.endpointFormat ?? clientDiagnostics.endpointFormat,
+      responsesMode: modelCapabilities.responsesMode,
+      phase: promptCachePhase,
+      immutablePrefixFingerprint: this.deps.prefix.fingerprint,
+      ...(threadProfileInstruction ? { threadProfileInstruction } : {}),
+      tools: requestToolSpecs
     })
-    const toolCatalogDrift = frozenToolCatalog.pendingDrift.kind !== 'none'
-      ? frozenToolCatalog.pendingDrift
-      : previousTurnDrift
-    const diagnosticCatalog = frozenToolCatalog.pendingCatalog ?? toolCatalog
-    const toolCatalogDriftMessage = toolCatalogDrift.kind !== 'none'
-      ? buildToolCatalogDriftMessage(
-          diagnosticCatalog,
-          toolCatalogDrift.kind,
-          frozenToolCatalog.pendingCatalog ? 'deferred' : 'applied'
-        )
-      : undefined
-    if (toolCatalogDrift.kind !== 'none' && toolCatalogDriftMessage) {
-      await this.deps.recordToolCatalogDrift({
-        threadId,
-        turnId,
-        fingerprint: diagnosticCatalog.fingerprint,
-        toolCount: diagnosticCatalog.toolCount,
-        toolNames: diagnosticCatalog.toolNames,
-        changeKind: toolCatalogDrift.kind,
-        message: toolCatalogDriftMessage
-      })
-    }
-    if (turn) {
-      await this.deps.turns.updateTurnMetadata(threadId, turnId, {
-        activeSkillIds: skillResolution.activeSkillIds,
-        skillInjectionBytes: skillResolution.injectedBytes,
-        injectedMemoryIds: memories.map((memory) => memory.id),
-        injectedMemorySummaries: memories.map((memory) => ({
-          id: memory.id,
-          content: memoryPreview(memory.content)
-        })),
-        injectedInstructionSources: instructionResolution.sources,
-        instructionInjectionBytes: instructionResolution.injectedBytes,
-        toolCatalogFingerprint: toolCatalog.fingerprint,
-        toolCatalogToolCount: toolCatalog.toolCount,
-        toolCatalogDrift: toolCatalogDrift.kind !== 'none'
-      })
-    }
-    const toolKinds = new Map(toolSpecs.map((tool) => [tool.name, tool.toolKind]))
-    const createPlanSatisfied = planTurnActive
-      ? hasSuccessfulCreatePlanResult(historyItems, turnId)
-      : false
-    const graphCreateSatisfied = turn.orchestration === 'graph'
-      ? turn.graphPlanningLifecycle?.state === 'committed' ||
-        hasSuccessfulToolResult(historyItems, turnId, GRAPH_DEFINE_PLAN_TOOL_NAME) ||
-        hasSuccessfulToolResult(historyItems, turnId, GRAPH_CREATE_RUN_TOOL_NAME)
-      : false
-    const svgCompletion = turn?.guiDesignArtifact?.kind === 'svg'
-      ? svgArtifactCompletionState(historyItems, turnId)
-      : null
-    const hardRequiredToolName =
-      svgCompletion?.mutationSucceeded &&
-            !svgCompletion.validationAfterMutation
-        ? DESIGN_SVG_VALIDATE_TOOL_NAME
-        : undefined
-    // Plan creation is deliberately a soft completion condition. A Plan turn
-    // may investigate, ask for user input, or stop on a genuine clarification
-    // before its prose is materialized through create_plan.
-    const softRequiredToolName =
-      turn.orchestration === 'graph' &&
-      !graphCreateSatisfied &&
-      toolSpecs.some((tool) => tool.name === GRAPH_DEFINE_PLAN_TOOL_NAME)
-        ? GRAPH_DEFINE_PLAN_TOOL_NAME
-        : planTurnActive &&
-      !createPlanSatisfied &&
-      toolSpecs.some((tool) => tool.name === CREATE_PLAN_TOOL_NAME)
-        ? CREATE_PLAN_TOOL_NAME
-        : undefined
-    const suggestVerification =
-      !planTurnActive &&
-      toolSpecs.some((tool) => tool.name === VERIFY_CHANGES_TOOL_NAME) &&
-      turnHasUnverifiedSourceChanges(historyItems, turnId)
-    const effectiveToolSpecs = resolvePlanModeToolSpecs(toolSpecs, {
-      planTurnActive,
-      createPlanSatisfied,
-      stepIndex
-    })
-    const emptyPostToolRecoveryStep = this.deps.roundOutcome.emptyPostToolRecoverySteps(turnId)
-    const forceEmptyPostToolFinalAnswerRecovery =
-      emptyPostToolRecoveryStep >= EMPTY_POST_TOOL_FINAL_ANSWER_RECOVERY_STEP
-    const toolSuppressionRecoveryStep =
-      this.deps.roundOutcome.toolSuppressionRecoverySteps(turnId)
-    const forceToolSuppressionFinalAnswerRecovery =
-      !hardRequiredToolName &&
-      !softRequiredToolName &&
-      !dedicatedSvgTurn &&
-      toolSuppressionRecoveryStep >= TOOL_SUPPRESSION_FINAL_ANSWER_RECOVERY_STEP
-    const postToolFailureRecoveryStep =
-      this.deps.roundOutcome.postToolFailureRecoverySteps(turnId)
-    const forcePostToolFailureFinalAnswerRecovery =
-      postToolFailureRecoveryStep >= POST_TOOL_FAILURE_FINAL_ANSWER_RECOVERY_STEP
-    const forceFinalAnswerRecovery =
-      forceEmptyPostToolFinalAnswerRecovery ||
-      forceToolSuppressionFinalAnswerRecovery ||
-      forcePostToolFailureFinalAnswerRecovery
-    const planningToolSpecs = turn.orchestration === 'graph' && !graphCreateSatisfied
-      ? effectiveToolSpecs.filter((tool) =>
-          tool.name === GRAPH_DEFINE_PLAN_TOOL_NAME ||
-          tool.name === 'request_user_input' ||
-          tool.name === 'user_input' ||
-          tool.sideEffect === 'read-only')
-      : effectiveToolSpecs
-    const requestToolSpecs = hardRequiredToolName
-      ? planningToolSpecs.filter((tool) => tool.name === hardRequiredToolName)
-      : forceFinalAnswerRecovery
-        ? []
-        : planningToolSpecs
-    if (hardRequiredToolName && (
-      requestToolSpecs.length !== 1 ||
-      requestToolSpecs[0]?.name !== hardRequiredToolName ||
-      !modelCapabilities.supportsToolCalling
-    )) {
-      return this.failRequiredToolConstraint({
-        threadId,
-        turnId,
-        code: modelCapabilities.supportsToolCalling
-          ? 'required_tool_unavailable'
-          : 'required_tool_unsupported',
-        message: modelCapabilities.supportsToolCalling
-          ? `The required tool \`${hardRequiredToolName}\` is unavailable for this turn.`
-          : `The selected model does not support the required tool \`${hardRequiredToolName}\`.`
-      })
-    }
-    const runtimeContextInstruction = shouldInjectInitialRuntimeContext({
-      stepIndex,
-      turnId,
-      historyItems
-    })
-      ? buildRuntimeContextInstruction({
-          workspace: thread?.workspace,
-          nowIso: this.deps.nowIso()
-        })
-      : null
-    const toolPreferenceInstruction = buildToolPreferenceInstruction(requestToolSpecs)
-    const contextBlocks: KunTurnContextBlock[] = [
-      kunContextBlock(
-        'client-surface',
-        'runtime',
-        buildClientSurfaceInstruction(prepared.clientSurface)
-      ),
-      ...(runtimeContextInstruction
-        ? [kunContextBlock('runtime-context', 'runtime', runtimeContextInstruction)]
-        : []),
-      ...(thread?.additionalWorkspaces?.length
-        ? [kunContextBlock(
-            'additional-workspaces',
-            'workspace',
-            `Additional workspace roots explicitly added by the user:\n${thread.additionalWorkspaces.map((path) => `- ${JSON.stringify(path)}`).join('\n')}`
-          )]
-        : []),
-      ...(thread.extensionProfile?.instructionOverlay?.trim()
-        ? [kunContextBlock(
-            'extension-profile',
-            'extension',
-            buildExtensionProfileInstruction(
-              thread.ownerExtensionId ?? 'unknown',
-              thread.extensionProfile.id,
-              thread.extensionProfile.instructionOverlay
-            )
-          )]
-        : []),
-      ...(instructionResolution.instruction
-        ? [kunContextBlock('agents-instructions', 'workspace', instructionResolution.instruction)]
-        : []),
-      ...(goalRecoveryInstruction && this.deps.roundOutcome.goalNoToolRecoverySteps(turnId) > 0
-        ? [kunContextBlock('goal-recovery', 'runtime', goalRecoveryInstruction)]
-        : []),
-      ...(activeTodoInstruction
-        ? [kunContextBlock('thread-todos', 'runtime', activeTodoInstruction)]
-        : []),
-      ...(emptyPostToolRecoveryStep > 0
-        ? [kunContextBlock(
-            'model-recovery',
-            'runtime',
-            emptyPostToolRecoveryInstruction(emptyPostToolRecoveryStep)
-          )]
-        : []),
-      ...(toolSuppressionRecoveryStep > 0
-        ? [kunContextBlock(
-            'tool-loop-recovery',
-            'runtime',
-            toolSuppressionRecoveryInstruction(
-              toolSuppressionRecoveryStep,
-              forceToolSuppressionFinalAnswerRecovery
-            )
-          )]
-        : []),
-      ...(postToolFailureRecoveryStep > 0
-        ? [kunContextBlock(
-            'tool-failure-recovery',
-            'runtime',
-            postToolFailureRecoveryInstruction(postToolFailureRecoveryStep)
-          )]
-        : []),
-      ...imageGenerationReferenceInstructions({
-        imageAttachments: attachments.imageAttachments,
-        textFallbacks: attachments.textFallbacks,
-        workspace: thread?.workspace ?? '',
-        tools: requestToolSpecs
-      }).map((content) => kunContextBlock('attachment-reference', 'reference', content)),
-      ...memoryInstructions(memories)
-        .map((content) => kunContextBlock('memory', 'user', content)),
-      ...(skillResolution.catalogInstruction
-        ? [kunContextBlock('skill-catalog', 'skill', skillResolution.catalogInstruction)]
-        : []),
-      ...skillResolution.instructions
-        .map((content) => kunContextBlock('skill-instruction', 'skill', content)),
-      ...(userInputDisabled
-        ? [kunContextBlock('user-input-capability', 'runtime', userInputUnavailableInstruction())]
-        : []),
-      ...(toolPreferenceInstruction
-        ? [kunContextBlock('tool-guidance', 'runtime', toolPreferenceInstruction)]
-        : []),
-      ...(this.deps.roundOutcome.graphPlanNoToolRecoverySteps(turnId) > 0 &&
-          !graphCreateSatisfied
-        ? [kunContextBlock(
-            'graph-plan-finalization',
-            'runtime',
-            `You inspected or described the plan but did not call \`${GRAPH_DEFINE_PLAN_TOOL_NAME}\`. ` +
-              'If no genuine user clarification is required, call it now using the advertised schema. ' +
-              'Do not replace the tool call with prose.'
-          )]
-        : []),
-      ...(requestToolSpecs.some((tool) => tool.name === 'bash')
-        ? [kunContextBlock('shell-runtime', 'runtime', shellRuntimeInstruction())]
-        : []),
-      ...(!forceFinalAnswerRecovery && suggestVerification
-        ? [kunContextBlock('verification', 'runtime', verificationSuggestionInstruction())]
-        : []),
-      ...(toolCatalogDriftMessage
-        ? [kunContextBlock('tool-catalog', 'runtime', toolCatalogDriftMessage)]
-        : [])
-    ]
-    const contextInstructions = buildKunTurnContextInstructions(contextBlocks)
-    const skillContextInstructions = buildKunTurnContextInstructions(
-      contextBlocks.filter((block) => block.authority === 'skill')
-    ).slice(1)
-    await this.deps.recordPipelineStage(threadId, turnId, 'input_remembered', {
-      memoryCount: memories.length,
-      contextInstructionCount: contextInstructions.length
-    })
-    const modeInstruction = [
-      ...(turn.orchestration === 'graph' ? [GRAPH_LEAD_MODE_INSTRUCTION] : []),
-      ...(planTurnActive ? [PLAN_MODE_INSTRUCTION] : []),
-      ...(turn.guiDesignArtifact?.kind === 'svg'
-        ? [SVG_ARTIFACT_MODE_INSTRUCTION]
-        : turn.guiDesignMode
-          ? [DESIGN_MODE_INSTRUCTION]
-          : [])
-    ].join('\n\n')
     // Automatic compaction must see every non-history part of the request that
     // will actually be sent. Building the same request with empty history gives
     // us an authoritative overhead estimate for system/thread prompts, dynamic
@@ -696,10 +196,12 @@ export class ModelStepService {
       ...(accountId ? { accountId } : {}),
       ...(modelRoute.reasoningEffort ? { reasoningEffort: modelRoute.reasoningEffort } : {}),
       ...(serviceTier ? { serviceTier } : {}),
+      promptCachePartition: promptCachePartition.hash,
       immutablePrefix: this.deps.prefix,
       ...(thread.systemPrompt !== undefined ? { threadSystemPrompt: thread.systemPrompt } : {}),
       ...(modeInstruction ? { modeInstruction } : {}),
       contextInstructions,
+      redactedRequestValues,
       history: [],
       historyRoutesByTurnId,
       attachments,
@@ -794,22 +296,28 @@ export class ModelStepService {
     let fallbackCompactionAttempted = false
     let fallbackCompactionApplied = false
     let replacedTokens = firstCompaction.replacedTokens
-    let composedRequest = await this.composeForwardedRequest({
+    let composedRequest = await composeForwardedModelRequest({
       history,
       threadId,
       thread,
       turnId,
       model,
+      modelCapabilities,
       providerId,
       accountId,
-      modelRoute,
+      reasoningEffort: modelRoute.reasoningEffort,
       serviceTier,
       modeInstruction,
       contextInstructions,
+      redactedRequestValues,
       historyRoutesByTurnId,
       requestToolSpecs,
       attachments,
       hardRequiredToolName,
+      promptCachePartition: promptCachePartition.hash,
+      immutablePrefix: this.deps.prefix,
+      tokenEconomy: this.deps.tokenEconomy,
+      turnAttachments: this.deps.turnAttachments,
       signal
     })
     if (signal.aborted) return 'aborted'
@@ -853,22 +361,28 @@ export class ModelStepService {
       history = await projectCompactedGoalHistory(fallbackCompaction.history)
       fallbackCompactionApplied = fallbackCompaction.compacted
       replacedTokens += fallbackCompaction.replacedTokens
-      composedRequest = await this.composeForwardedRequest({
+      composedRequest = await composeForwardedModelRequest({
         history,
         threadId,
         thread,
         turnId,
         model,
+        modelCapabilities,
         providerId,
         accountId,
-        modelRoute,
+        reasoningEffort: modelRoute.reasoningEffort,
         serviceTier,
         modeInstruction,
         contextInstructions,
+        redactedRequestValues,
         historyRoutesByTurnId,
         requestToolSpecs,
         attachments,
         hardRequiredToolName,
+        promptCachePartition: promptCachePartition.hash,
+        immutablePrefix: this.deps.prefix,
+        tokenEconomy: this.deps.tokenEconomy,
+        turnAttachments: this.deps.turnAttachments,
         signal
       })
       if (signal.aborted) return 'aborted'
@@ -977,15 +491,27 @@ export class ModelStepService {
         sentInputTokens
       })
     }
-    const clientDiagnostics = modelClientDiagnostics(this.deps.model, request.providerId)
+    const replayedMessageAttachments = Object.values(request.messageAttachments ?? {})
+    const replayedAttachmentCount = replayedMessageAttachments.reduce(
+      (count, entry) => count + entry.images.length + entry.textFallbacks.length + entry.documents.length,
+      0
+    )
+    const unavailableAttachmentCount = replayedMessageAttachments.reduce(
+      (count, entry) => count + entry.unavailable.length,
+      0
+    )
     const cacheSignature: CacheRequestSignature = {
       model: request.model,
       providerId: request.providerId?.trim() || clientDiagnostics.provider || 'default',
-      endpointFormat: clientDiagnostics.endpointFormat || 'unknown',
-      prefixFingerprint: this.deps.prefix.fingerprint,
-      toolCatalogFingerprint: toolCatalog.fingerprint,
+      endpointFormat: promptCachePartition.protocolVariant,
+      prefixFingerprint: promptCachePartition.stableInstructionFingerprint,
+      toolCatalogFingerprint: promptCachePartition.toolCatalogFingerprint,
+      partitionHash: promptCachePartition.hash,
+      partitionPhase: promptCachePartition.phase,
+      unavailableAttachmentCount,
       activeSkillIds: skillResolution.activeSkillIds
     }
+    const modelContextCount = request.history.filter((item) => item.kind === 'model_context').length
     let effectiveActingModelRoute: ActingTurnModelRoute = actingModelRoute
     let streamRouteResolved = false
     const streamed = await this.deps.modelRoundEngine.run({
@@ -994,6 +520,11 @@ export class ModelStepService {
       signal,
       request,
       maxToolCallsPerStep,
+      // A retrieval model can occasionally emit one extra parallel call.
+      // Preserve the bounded accepted batch instead of failing the whole child.
+      ...(toolContext.fastContext
+        ? { toolCallOverflowBehavior: 'truncate' as const }
+        : {}),
       streamToolMetadata,
       ...(this.deps.toolArgumentRepair?.maxStringBytes !== undefined
         ? { maxToolArgumentStringBytes: this.deps.toolArgumentRepair.maxStringBytes }
@@ -1004,6 +535,12 @@ export class ModelStepService {
         ...clientDiagnostics,
         historyItems: request.history.length,
         toolCount: request.tools.length,
+        promptCachePartition: promptCachePartition.hash,
+        promptCachePhase: promptCachePartition.phase,
+        modelContextCount,
+        replayedAttachmentMessageCount: replayedMessageAttachments.length,
+        replayedAttachmentCount,
+        unavailableAttachmentCount,
         ...(request.requiredToolName ? { requiredToolName: request.requiredToolName } : {}),
         ...attachmentRequestPipelineDetails({
           attachmentIds: turn?.attachmentIds ?? [],
@@ -1061,6 +598,18 @@ export class ModelStepService {
         return { markdown: `\n![generated image](${relativePath})\n` }
       }
     })
+    if (streamed.kind === 'context_overflow') {
+      return recoverModelContextOverflow({
+        deps: this.deps, streamed, history, model, providerId, accountId, serviceTier,
+        signal, threadId, turnId, clientSurface: prepared.clientSurface,
+        toolSpecs: requestToolSpecs, requestOverheadTokens, requestInputTokens: inputTokens,
+        outputBudgetTokens, requestHardCapTokens, retryAttempt: contextOverflowRetryAttempt,
+        retry: () => this.run(
+          threadId, turnId, signal, stepIndex, maxToolCallsPerStep,
+          contextOverflowRetryAttempt + 1
+        )
+      })
+    }
     if (routeSelectionDeferred && streamed.kind === 'tool_calls' && !streamRouteResolved) {
       const message = 'route pool emitted tool calls without resolving a concrete model target'
       this.deps.rememberFailure(turnId, {
@@ -1090,7 +639,9 @@ export class ModelStepService {
       ...(softRequiredToolName && !forceToolSuppressionFinalAnswerRecovery
         ? { softRequiredToolName }
         : {}),
-      ...(forceToolSuppressionFinalAnswerRecovery ? { toolCallsDisabled: true } : {}),
+      ...(forceToolSuppressionFinalAnswerRecovery || fastContextFinalSynthesis
+        ? { toolCallsDisabled: true }
+        : {}),
       turn,
       prepared: effectivePrepared,
       ...(effectiveActingModelRoute.providerId
@@ -1103,87 +654,6 @@ export class ModelStepService {
       toolProviderKinds,
       svgCompletion
     })
-  }
-
-  private async composeForwardedRequest(input: {
-    history: TurnItem[]
-    threadId: string
-    thread: import('../contracts/threads.js').ThreadRecord
-    turnId: string
-    model: string
-    providerId?: string
-    accountId?: string
-    modelRoute: { model: string; reasoningEffort?: string }
-    serviceTier?: 'priority'
-    modeInstruction?: string
-    contextInstructions: readonly string[]
-    historyRoutesByTurnId: Readonly<Record<string, import('../ports/model-client.js').ModelHistoryRoute>>
-    requestToolSpecs: readonly ModelToolSpec[]
-    attachments: import('./turn-execution-types.js').ResolvedTurnAttachments
-    hardRequiredToolName?: string
-    signal: AbortSignal
-  }): Promise<import('./model-request-composer.js').ComposedModelRequest> {
-    // Forward the just-generated image(s) back to a vision-capable model so it
-    // can self-review and regenerate if the result is off. Bytes come from the
-    // already-persisted attachment/file; the persisted tool output keeps NO
-    // base64 (only this transient request copy carries it).
-    const forwardHistory = await rehydrateGeneratedImagesForForward(
-      rehydrateTransientBrowserUseOutputsForForward(input.history),
-      (output) => this.deps.turnAttachments.resolveGeneratedImageForForward(
-        output,
-        input.threadId,
-        input.thread.workspace
-      ),
-      MAX_FORWARDED_GENERATED_IMAGES
-    )
-    return composeModelRequest({
-      threadId: input.thread.id,
-      turnId: input.turnId,
-      model: input.model,
-      ...(input.providerId ? { providerId: input.providerId } : {}),
-      ...(input.accountId ? { accountId: input.accountId } : {}),
-      ...(input.modelRoute.reasoningEffort ? { reasoningEffort: input.modelRoute.reasoningEffort } : {}),
-      ...(input.serviceTier ? { serviceTier: input.serviceTier } : {}),
-      immutablePrefix: this.deps.prefix,
-      ...(input.thread.systemPrompt !== undefined
-        ? { threadSystemPrompt: input.thread.systemPrompt }
-        : {}),
-      ...(input.modeInstruction ? { modeInstruction: input.modeInstruction } : {}),
-      contextInstructions: input.contextInstructions,
-      history: forwardHistory,
-      historyRoutesByTurnId: input.historyRoutesByTurnId,
-      attachments: input.attachments,
-      tools: input.requestToolSpecs,
-      ...(input.hardRequiredToolName ? { requiredToolName: input.hardRequiredToolName } : {}),
-      ...(this.deps.tokenEconomy ? { tokenEconomy: this.deps.tokenEconomy } : {}),
-      signal: input.signal
-    })
-  }
-
-  private async failRequiredToolConstraint(input: {
-    threadId: string
-    turnId: string
-    code: 'required_tool_unavailable' | 'required_tool_unsupported'
-    message: string
-  }): Promise<'failed'> {
-    this.deps.rememberFailure(input.turnId, { error: input.message, code: input.code, severity: 'error' })
-    await this.deps.events.record({
-      kind: 'error',
-      threadId: input.threadId,
-      turnId: input.turnId,
-      message: input.message,
-      code: input.code,
-      severity: 'error'
-    })
-    await this.deps.turns.applyItem(input.threadId, makeErrorItem({
-      id: this.deps.ids.next('item_error'),
-      threadId: input.threadId,
-      turnId: input.turnId,
-      message: input.message,
-      code: input.code,
-      severity: 'error'
-    }))
-    return 'failed'
   }
 
   private async ensureWorkspaceCheckpoint(
@@ -1209,121 +679,5 @@ export class ModelStepService {
       this.workspaceCheckpointGates.set(key, gate)
     }
     await gate
-  }
-}
-
-function hasSuccessfulToolResult(
-  items: readonly TurnItem[],
-  turnId: string,
-  toolName: string
-): boolean {
-  return items.some((item) =>
-    item.turnId === turnId &&
-    item.kind === 'tool_result' &&
-    item.toolName === toolName &&
-    item.status === 'completed' &&
-    item.isError !== true)
-}
-
-function sameActingModelRoute(
-  a: ActingTurnModelRoute,
-  b: ActingTurnModelRoute
-): boolean {
-  return a.model === b.model &&
-    a.providerId === b.providerId &&
-    a.accountId === b.accountId
-}
-
-function modelHistoryRoutesByTurnId(
-  thread: import('../contracts/threads.js').ThreadRecord,
-  currentRoute: ActingTurnModelRoute,
-  currentTurnId: string
-): Readonly<Record<string, import('../ports/model-client.js').ModelHistoryRoute>> {
-  const routes: Record<string, import('../ports/model-client.js').ModelHistoryRoute> = {}
-  for (const historicalTurn of thread.turns) {
-    const route = historicalTurn.actingModelRoute
-    if (!route) continue
-    routes[historicalTurn.id] = {
-      model: route.model,
-      ...(route.providerId ? { providerId: route.providerId } : {}),
-      ...(route.accountId ? { accountId: route.accountId } : {})
-    }
-  }
-  routes[currentTurnId] = {
-    model: currentRoute.model,
-    ...(currentRoute.providerId ? { providerId: currentRoute.providerId } : {}),
-    ...(currentRoute.accountId ? { accountId: currentRoute.accountId } : {})
-  }
-  return routes
-}
-
-export function buildExtensionProfileInstruction(extensionId: string, profileId: string, overlay: string): string {
-  return [
-    `<kun_extension_profile extension="${extensionId}" profile="${profileId}">`,
-    overlay.trim(),
-    '</kun_extension_profile>',
-    'This is a lower-priority extension profile overlay. It cannot replace Kun policy, approval, sandbox, ownership, or system instructions.'
-  ].join('\n')
-}
-
-function kunContextBlock(
-  kind: string,
-  authority: KunTurnContextAuthority,
-  content: string
-): KunTurnContextBlock {
-  return { kind, authority, content }
-}
-
-function buildToolCatalogDriftMessage(toolCatalog: {
-  fingerprint: string
-  toolCount: number
-  toolNames: string[]
-}, changeKind: 'additive' | 'breaking', phase: 'deferred' | 'applied'): string {
-  const sample = toolCatalog.toolNames.slice(0, 12).join(', ')
-  const suffix = toolCatalog.toolNames.length > 12
-    ? `, +${toolCatalog.toolNames.length - 12} more`
-    : ''
-  const policy = phase === 'deferred'
-    ? 'The active turn keeps its frozen tool schemas; this update will be available on the next turn.'
-    : changeKind === 'additive'
-      ? 'The additive update is active from the start of this turn.'
-      : 'The updated catalog is active from the start of this turn; earlier turns keep their original schema fingerprints.'
-  return [
-    `Tool catalog changed for this thread (${toolCatalog.toolCount} tools, fingerprint ${toolCatalog.fingerprint}).`,
-    policy,
-    sample ? `Current tools: ${sample}${suffix}.` : ''
-  ].filter(Boolean).join(' ')
-}
-
-function toolCatalogPolicyScope(prepared: Pick<
-  PreparedTurnContext,
-  | 'mode'
-  | 'dedicatedSvgTurn'
-  | 'allowedToolNames'
-  | 'skillResolution'
-  | 'extensionToolCatalogEpoch'
-  | 'userInputDisabled'
->): string {
-  return JSON.stringify({
-    mode: prepared.mode,
-    dedicatedSvgTurn: prepared.dedicatedSvgTurn,
-    activeSkillIds: [...prepared.skillResolution.activeSkillIds].sort(),
-    allowedToolNames: prepared.allowedToolNames ? [...prepared.allowedToolNames].sort() : [],
-    extensionToolCatalogEpoch: prepared.extensionToolCatalogEpoch?.fingerprint ?? null,
-    userInputDisabled: prepared.userInputDisabled
-  })
-}
-
-function prefixVolatilityStageDetails(
-  findings: PrefixVolatilityFinding[]
-): Record<string, unknown> | undefined {
-  if (findings.length === 0) return undefined
-  const kinds = [...new Set(findings.map((finding) => finding.kind))].sort()
-  const fields = [...new Set(findings.map((finding) => finding.field))].sort()
-  return {
-    prefixVolatileTokenCount: findings.length,
-    prefixVolatileTokenKinds: kinds,
-    prefixVolatileFields: fields,
-    noRegexDetector: true
   }
 }

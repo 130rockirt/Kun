@@ -68,7 +68,9 @@ const hookHarness = vi.hoisted(() => {
 const runtime = vi.hoisted(() => ({
   getRuntimeInfo: vi.fn(),
   listSkills: vi.fn(),
-  listLocalSkills: vi.fn()
+  listLocalSkills: vi.fn(),
+  getRuntimeSettingsSyncStatus: vi.fn(),
+  onRuntimeSettingsSyncStatus: vi.fn()
 }))
 
 vi.mock('react', () => ({
@@ -124,8 +126,16 @@ describe('useWorkbenchRuntimeMetadata', () => {
       skills: [baselineSkill],
       validationErrors: []
     })
+    runtime.getRuntimeSettingsSyncStatus.mockReset().mockResolvedValue({
+      state: 'idle', generation: 0, at: '2026-08-13T00:00:00.000Z'
+    })
+    runtime.onRuntimeSettingsSyncStatus.mockReset().mockReturnValue(() => undefined)
     vi.stubGlobal('window', {
-      kunGui: { listSkills: runtime.listLocalSkills }
+      kunGui: {
+        listSkills: runtime.listLocalSkills,
+        getRuntimeSettingsSyncStatus: runtime.getRuntimeSettingsSyncStatus,
+        onRuntimeSettingsSyncStatus: runtime.onRuntimeSettingsSyncStatus
+      }
     })
   })
 
@@ -168,5 +178,62 @@ describe('useWorkbenchRuntimeMetadata', () => {
     await Promise.resolve()
 
     expect(RuntimeMetadataHookProbe(false).runtimeSkills).toEqual([baselineSkill])
+  })
+
+  it('reloads runtime capabilities after hot settings synchronization completes', async () => {
+    const enabled = { capabilities: { imageGen: { enabled: true, available: true } } }
+    const disabled = { capabilities: { imageGen: { enabled: false, available: false } } }
+    runtime.getRuntimeInfo
+      .mockReset()
+      .mockResolvedValueOnce(enabled)
+      .mockResolvedValueOnce(disabled)
+    let handleStatus: ((status: { state: string; generation: number; at: string }) => void) | undefined
+    runtime.onRuntimeSettingsSyncStatus.mockImplementation((handler) => {
+      handleStatus = handler
+      return () => undefined
+    })
+
+    RuntimeMetadataHookProbe(false)
+    await vi.waitFor(() => expect(runtime.getRuntimeInfo).toHaveBeenCalledTimes(1))
+    await vi.waitFor(() => {
+      expect(RuntimeMetadataHookProbe(false).runtimeInfo).toBe(enabled)
+    })
+
+    handleStatus?.({ state: 'synced', generation: 1, at: '2026-08-13T00:00:01.000Z' })
+    await vi.waitFor(() => expect(runtime.getRuntimeInfo).toHaveBeenCalledTimes(2))
+    await vi.waitFor(() => {
+      expect(RuntimeMetadataHookProbe(false).runtimeInfo).toBe(disabled)
+    })
+  })
+
+  it('does not let an older runtime-info request overwrite a hot-sync refresh', async () => {
+    const enabled = { capabilities: { imageGen: { enabled: true, available: true } } }
+    const disabled = { capabilities: { imageGen: { enabled: false, available: false } } }
+    let resolveInitial!: (value: typeof enabled) => void
+    runtime.getRuntimeInfo
+      .mockReset()
+      .mockReturnValueOnce(new Promise((resolve) => {
+        resolveInitial = resolve
+      }))
+      .mockResolvedValueOnce(disabled)
+    let handleStatus: ((status: { state: string; generation: number; at: string }) => void) | undefined
+    runtime.onRuntimeSettingsSyncStatus.mockImplementation((handler) => {
+      handleStatus = handler
+      return () => undefined
+    })
+
+    RuntimeMetadataHookProbe(false)
+    await vi.waitFor(() => expect(runtime.getRuntimeInfo).toHaveBeenCalledTimes(1))
+    handleStatus?.({ state: 'synced', generation: 1, at: '2026-08-13T00:00:01.000Z' })
+    await vi.waitFor(() => expect(runtime.getRuntimeInfo).toHaveBeenCalledTimes(2))
+    await vi.waitFor(() => {
+      expect(RuntimeMetadataHookProbe(false).runtimeInfo).toBe(disabled)
+    })
+
+    resolveInitial(enabled)
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(RuntimeMetadataHookProbe(false).runtimeInfo).toBe(disabled)
   })
 })

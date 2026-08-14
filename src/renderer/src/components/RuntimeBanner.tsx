@@ -11,6 +11,7 @@ export function RuntimeBanner({
   onOpenSettings,
   onRetryConnection,
   runtimeReady,
+  showSettingsAction = false,
   stageInsetClass,
   t
 }: {
@@ -22,6 +23,8 @@ export function RuntimeBanner({
   onOpenSettings: () => void
   onRetryConnection: () => void
   runtimeReady: boolean
+  /** Keep a settings escape hatch for model/provider failures while runtime is still healthy. */
+  showSettingsAction?: boolean
   stageInsetClass: string
   t: (key: string) => string
 }): ReactElement {
@@ -81,22 +84,22 @@ export function RuntimeBanner({
                 </button>
               ) : null}
               {!runtimeReady ? (
-                <>
-                  <button
-                    type="button"
-                    className="rounded-lg border border-amber-300/70 bg-white px-3 py-1 text-[12px] font-medium text-amber-950 transition hover:bg-amber-100/80 dark:border-amber-700/60 dark:bg-amber-900/20 dark:text-amber-100 dark:hover:bg-amber-900/40"
-                    onClick={onRetryConnection}
-                  >
-                    {t('retryConnection')}
-                  </button>
-                  <button
-                    type="button"
-                    className="rounded-lg px-3 py-1 text-[12px] font-medium text-amber-900/80 transition hover:bg-amber-50/70 dark:text-amber-100 dark:hover:bg-amber-900/30"
-                    onClick={onOpenSettings}
-                  >
-                    {t('openSettings')}
-                  </button>
-                </>
+                <button
+                  type="button"
+                  className="rounded-lg border border-amber-300/70 bg-white px-3 py-1 text-[12px] font-medium text-amber-950 transition hover:bg-amber-100/80 dark:border-amber-700/60 dark:bg-amber-900/20 dark:text-amber-100 dark:hover:bg-amber-900/40"
+                  onClick={onRetryConnection}
+                >
+                  {t('retryConnection')}
+                </button>
+              ) : null}
+              {!runtimeReady || showSettingsAction ? (
+                <button
+                  type="button"
+                  className="rounded-lg px-3 py-1 text-[12px] font-medium text-amber-900/80 transition hover:bg-amber-50/70 dark:text-amber-100 dark:hover:bg-amber-900/30"
+                  onClick={onOpenSettings}
+                >
+                  {t('openSettings')}
+                </button>
               ) : null}
             </div>
           </div>

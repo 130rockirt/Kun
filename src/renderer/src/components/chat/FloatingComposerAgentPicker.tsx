@@ -4,19 +4,18 @@ import { Bot, ChevronDown } from 'lucide-react'
 import type { KunSubagentProfileV1 } from '@shared/app-settings'
 import { rendererRuntimeClient } from '../../agent/runtime-client'
 import { useChatStore } from '../../store/chat-store'
+import { primaryAgentAvailableOnSurface } from '../../lib/subagent-profile-surface'
 
 type Props = {
   /** When true, render only the icon. */
   compact?: boolean
   /** Disable selection (e.g. busy or non-chat route). */
   disabled?: boolean
+  /** Product surface that will own the newly created primary-agent thread. */
+  surface?: 'code' | 'write' | 'design'
 }
 
-function isAvailableForPrimary(profile: KunSubagentProfileV1): boolean {
-  return profile.enabled && (profile.mode === 'primary' || profile.mode === 'all')
-}
-
-export function FloatingComposerAgentPicker({ compact = false, disabled }: Props): ReactElement | null {
+export function FloatingComposerAgentPicker({ compact = false, disabled, surface = 'code' }: Props): ReactElement | null {
   const composerAgentId = useChatStore((s) => s.composerAgentId)
   const setComposerAgentId = useChatStore((s) => s.setComposerAgentId)
   const [agents, setAgents] = useState<KunSubagentProfileV1[]>([])
@@ -28,12 +27,12 @@ export function FloatingComposerAgentPicker({ compact = false, disabled }: Props
     try {
       const settings = await rendererRuntimeClient.getSettings({ forceRefresh: force })
       const profiles = settings.agents?.kun?.subagents?.profiles ?? []
-      setAgents(profiles.filter(isAvailableForPrimary))
+      setAgents(profiles.filter((profile) => primaryAgentAvailableOnSurface(profile, surface)))
       loadedRef.current = true
     } catch {
       /* swallow — picker just won't show entries */
     }
-  }, [])
+  }, [surface])
 
   useEffect(() => { void loadAgents() }, [loadAgents])
 
@@ -58,7 +57,7 @@ export function FloatingComposerAgentPicker({ compact = false, disabled }: Props
 
   // Don't render the picker when no primary-capable agent exists — it
   // would just be dead UI clutter.
-  if (agents.length === 0 && !composerAgentId) return null
+  if (agents.length === 0) return null
 
   const clearAgent = (): void => {
     setComposerAgentId('')

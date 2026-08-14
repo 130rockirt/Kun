@@ -174,4 +174,27 @@ describe('resolveWorkspacePath sandbox mode', () => {
       /outside the delegated child read scopes/
     )
   })
+
+  it('rejects a symlink that leaves a narrow delegated read scope', async () => {
+    await mkdir(join(workspace, 'src'), { recursive: true })
+    await mkdir(join(workspace, 'private'), { recursive: true })
+    await writeFile(join(workspace, 'private', 'secret.txt'), 'secret')
+    await symlink('../private', join(workspace, 'src', 'link'), directoryLinkType)
+
+    await expect(resolveWorkspacePath('src/link/secret.txt', {
+      ...fullAccessContext(workspace),
+      allowedReadPaths: ['src']
+    })).rejects.toThrow(/resolves outside the delegated child read scopes/)
+  })
+
+  it('does not let an allowed scope itself expand through a symlink', async () => {
+    await mkdir(join(workspace, 'private'), { recursive: true })
+    await writeFile(join(workspace, 'private', 'secret.txt'), 'secret')
+    await symlink('../private', join(workspace, 'src'), directoryLinkType)
+
+    await expect(resolveWorkspacePath('src/secret.txt', {
+      ...fullAccessContext(workspace),
+      allowedReadPaths: ['src']
+    })).rejects.toThrow(/resolves outside the delegated child read scopes/)
+  })
 })

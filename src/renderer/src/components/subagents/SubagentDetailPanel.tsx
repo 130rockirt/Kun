@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
-  getKunRuntimeSettings,
-  mergeKunRuntimeSettings,
   type KunRuntimeSettingsPatchV1,
   type KunRuntimeSettingsV1
 } from '@shared/app-settings'
+import { getKunRuntimeSettings } from '@shared/app-settings-kun-defaults'
+import { mergeKunRuntimeSettings } from '@shared/app-settings-kun-merge'
 import { rendererRuntimeClient } from '../../agent/runtime-client'
 import { emitRendererSettingsChanged } from '../../lib/keyboard-shortcut-settings'
 import { SubagentPanelHeader, SubagentSettingsEditor } from './SubagentSettingsEditor'

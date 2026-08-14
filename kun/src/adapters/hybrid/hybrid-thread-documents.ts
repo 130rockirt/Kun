@@ -1,7 +1,7 @@
 import { readFile, stat } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import type { ThreadRecord } from '../../contracts/threads.js'
-import { ThreadSchema } from '../../contracts/threads.js'
+import { ThreadSchema, ThreadSchemaReadable } from '../../contracts/threads.js'
 import type { TurnItem } from '../../contracts/items.js'
 import { readJsonl } from '../file/file-thread-store.js'
 import { readLatestItemsFromJsonl } from '../file/file-session-store.js'
@@ -71,7 +71,7 @@ export class HybridThreadDocumentRepository {
     for (let index = entries.length - 1; index >= 0; index -= 1) {
       const entry = entries[index]
       if (entry?.kind !== 'thread_metadata' || entry.thread?.id !== threadId) continue
-      const parsed = ThreadSchema.safeParse(entry.thread)
+      const parsed = ThreadSchemaReadable.safeParse(entry.thread)
       if (parsed.success) return normalizeThreadMetadata(parsed.data, entries.slice(0, index + 1))
     }
     return null
@@ -91,7 +91,7 @@ export class HybridThreadDocumentRepository {
 
   private async readLegacyThread(threadId: string): Promise<ThreadRecord | null> {
     try {
-      const parsed = ThreadSchema.safeParse(JSON.parse(await readFile(this.legacyThreadPath(threadId), 'utf-8')))
+      const parsed = ThreadSchemaReadable.safeParse(JSON.parse(await readFile(this.legacyThreadPath(threadId), 'utf-8')))
       return parsed.success ? parsed.data : null
     } catch { return null }
   }

@@ -58,6 +58,7 @@ export function applyPortableSettingsMigration(
     },
     ...(typeof value.gitBranchPrefix === 'string' ? { gitBranchPrefix: value.gitBranchPrefix } : {}),
     ...(typeof value.codePromptPrefix === 'string' ? { codePromptPrefix: value.codePromptPrefix } : {}),
+    ...(typeof value.chatWelcomeMessage === 'string' ? { chatWelcomeMessage: value.chatWelcomeMessage } : {}),
     ...(Array.isArray(value.disabledSkillIds)
       ? { disabledSkillIds: value.disabledSkillIds.filter((item): item is string => typeof item === 'string') }
       : {}),

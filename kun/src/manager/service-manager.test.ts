@@ -1,16 +1,27 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { DEFAULT_GRAPH_RUNTIME_CONFIG } from '../config/kun-config.js'
+import { GraphReducerError } from '../graph/graph-reducer.js'
+import { GraphRunConflictError } from '../graph/graph-run-store.js'
 import { dispatchRequest } from '../server/http-server.js'
+import { startNodeHttpServer } from '../server/node-http-server.js'
 import {
   ManagerRuntimeSlotBusyError,
+  requestManagerJson,
   registerRuntimeWithManager,
   type ServiceManagerConnection
 } from './manager-client.js'
+import { ManagerRemoteGraphRunStore } from './remote-data-stores.js'
+import type { ManagerSharedDataStore } from './shared-data-store.js'
 import {
   buildServiceManagerRouter,
   RuntimeSlotBusyError,
   ServiceManagerState,
   ThreadLeaseBusyError
 } from './service-manager.js'
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
 
 function registration(flavor: 'production' | 'development', instanceId = `${flavor}-runtime`) {
   return {
@@ -42,6 +53,7 @@ describe('service manager control plane', () => {
       managerToken: 'manager-secret',
       instanceId: 'manager-a',
       startedAt: '2026-08-01T00:00:00.000Z',
+      buildId: 'b'.repeat(64),
       state: new ServiceManagerState()
     })
     const response = await dispatchRequest(router, new Request('http://127.0.0.1/health'))
@@ -51,7 +63,9 @@ describe('service manager control plane', () => {
       status: 'ok',
       service: 'kun-service-manager',
       protocolVersion: 1,
-      instanceId: 'manager-a'
+      instanceId: 'manager-a',
+      buildId: 'b'.repeat(64),
+      capabilities: expect.arrayContaining(['item-page-v1'])
     })
     expect(text).not.toContain('manager-secret')
   })
@@ -160,6 +174,100 @@ describe('service manager control plane', () => {
       name: 'ManagerRuntimeSlotBusyError',
       owner: { instanceId: owner.instanceId }
     })
+  })
+
+  it('preserves GraphRunConflictError across the manager graph-store boundary', async () => {
+    const executeGraph = vi.fn().mockRejectedValue(new GraphRunConflictError('graph changed concurrently'))
+    const router = buildServiceManagerRouter({
+      managerToken: 'manager-secret',
+      instanceId: 'manager-a',
+      startedAt: '2026-08-01T00:00:00.000Z',
+      state: new ServiceManagerState(),
+      sharedData: { executeGraph } as unknown as ManagerSharedDataStore
+    })
+    const response = await dispatchRequest(router, request('/v1/data/graph/get', {
+      method: 'POST',
+      body: JSON.stringify({ config: DEFAULT_GRAPH_RUNTIME_CONFIG, value: { runId: 'run_1' } })
+    }))
+    expect(response.status).toBe(409)
+    await expect(response.json()).resolves.toEqual({
+      code: 'graph_run_conflict',
+      message: 'graph changed concurrently'
+    })
+
+    const manager: ServiceManagerConnection = {
+      discovery: {
+        version: 1,
+        protocolVersion: 1,
+        instanceId: 'manager-a',
+        pid: process.pid,
+        startedAt: '2026-08-01T00:00:00.000Z',
+        host: '127.0.0.1',
+        port: 18700,
+        baseUrl: 'http://127.0.0.1:18700',
+        managerToken: 'manager-secret',
+        serviceVersion: '0.1.0',
+        dataDir: '/tmp/kun-data',
+        settingsPath: '/tmp/kun-settings.json'
+      }
+    }
+    vi.stubGlobal('fetch', (async (url: string | URL | Request, init?: RequestInit) =>
+      dispatchRequest(router, new Request(url, init))) as typeof fetch)
+    const store = new ManagerRemoteGraphRunStore(manager, () => DEFAULT_GRAPH_RUNTIME_CONFIG)
+
+    const conflict = await store.get('run_1').catch((error: unknown) => error)
+    expect(conflict).toBeInstanceOf(GraphRunConflictError)
+    expect(conflict).toMatchObject({ message: 'graph changed concurrently' })
+  })
+
+  it('does not classify manager failures by GraphRunConflictError message', async () => {
+    const manager = {
+      discovery: {
+        baseUrl: 'http://127.0.0.1:18700',
+        managerToken: 'manager-secret'
+      }
+    } as ServiceManagerConnection
+    const error = await requestManagerJson(manager, '/v1/data/graph/get', {
+      method: 'POST',
+      fetch: (async () => new Response(JSON.stringify({
+        code: 'internal_error',
+        message: 'graph changed concurrently'
+      }), { status: 409 })) as typeof fetch
+    }).catch((failure: unknown) => failure)
+
+    expect(error).toBeInstanceOf(Error)
+    expect(error).not.toBeInstanceOf(GraphRunConflictError)
+  })
+
+  it('leaves GraphReducerError on the manager graph route as HTTP 500', async () => {
+    const executeGraph = vi.fn().mockRejectedValue(new GraphReducerError('invalid graph transition'))
+    const router = buildServiceManagerRouter({
+      managerToken: 'manager-secret',
+      instanceId: 'manager-a',
+      startedAt: '2026-08-01T00:00:00.000Z',
+      state: new ServiceManagerState(),
+      sharedData: { executeGraph } as unknown as ManagerSharedDataStore
+    })
+    const server = await startNodeHttpServer({ router, host: '127.0.0.1', port: 0 })
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    try {
+      const response = await fetch(`http://127.0.0.1:${server.port}/v1/data/graph/get`, {
+        method: 'POST',
+        headers: {
+          authorization: 'Bearer manager-secret',
+          'content-type': 'application/json'
+        },
+        body: JSON.stringify({ config: DEFAULT_GRAPH_RUNTIME_CONFIG, value: { runId: 'run_1' } })
+      })
+      expect(response.status).toBe(500)
+      await expect(response.json()).resolves.toEqual({
+        code: 'internal_error',
+        message: 'Internal server error.'
+      })
+    } finally {
+      consoleError.mockRestore()
+      await server.close()
+    }
   })
 
   it('rejects unauthenticated registration and stale heartbeats', async () => {

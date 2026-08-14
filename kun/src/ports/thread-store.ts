@@ -6,6 +6,22 @@ export type ThreadStoreListOptions = {
   includeArchived?: boolean
   archivedOnly?: boolean
   includeSide?: boolean
+  /** Opaque keyset cursor for stable pagination (base64 of `(updatedAt,id)`). */
+  cursor?: string
+  /** Filter by workspace root path. */
+  workspace?: string
+}
+
+/**
+ * Result of a paginated thread listing. `nextCursor` is present when more
+ * matching threads exist after this page; `total` is only populated on the
+ * first page (no cursor) for workspace counts.
+ */
+export type ThreadStoreListPage = {
+  threads: ThreadSummary[]
+  nextCursor?: string
+  hasMore: boolean
+  total?: number
 }
 
 /**
@@ -15,6 +31,8 @@ export type ThreadStoreListOptions = {
  */
 export interface ThreadStore {
   list(options?: ThreadStoreListOptions): Promise<ThreadSummary[]>
+  /** Read a stable keyset page when the backing store supports pagination. */
+  listPage?(options?: ThreadStoreListOptions): Promise<ThreadStoreListPage>
   get(threadId: string): Promise<ThreadRecord | null>
   /** Read the durable Thread/Turn projection without hydrating item history. */
   getMetadata?(threadId: string): Promise<ThreadRecord | null>

@@ -581,4 +581,78 @@ describe('provider quota response parsers', () => {
       expect.objectContaining({ id: 'rate-limit-0', usedPercent: 9.5 })
     ]))
   })
+
+  it('keeps usable Z.ai quota type variants visible', () => {
+    const result = parseZaiQuota({
+      code: 200,
+      success: true,
+      data: {
+        level: 'pro',
+        limits: [
+          { type: 'WEEKLY_TOKENS_LIMIT', percentage: 135, usage: 1_000 },
+          { percentage: -5 }
+        ]
+      }
+    })
+    expect(result).toEqual({
+      summary: 'pro',
+      metrics: [
+        {
+          id: 'weekly-tokens-limit-0',
+          label: 'Weekly tokens limit quota',
+          unit: 'percent',
+          usedPercent: 100
+        },
+        { id: 'quota-1', label: 'Quota 2', unit: 'percent', usedPercent: 0 }
+      ]
+    })
+    expect(() => parseZaiQuota({
+      code: 200,
+      success: true,
+      data: { limits: [] }
+    })).toThrow('Z.ai did not return a recognized quota limit.')
+    expect(() => parseZaiQuota({
+      code: 200,
+      success: true,
+      data: { limits: [{ type: 'FUTURE_LIMIT', percentage: 'unknown' }] }
+    })).toThrow('Z.ai did not return a recognized quota limit.')
+  })
+
+  it('normalizes credit-based Z.ai Coding Plan windows', () => {
+    const result = parseZaiQuota({
+      code: 200,
+      success: true,
+      data: {
+        level: 'lite',
+        limits: [
+          {
+            type: 'CREDIT_LIMIT', unit: 3, number: 5, usage: 2_000,
+            currentValue: 71, remaining: 1_929, percentage: 3,
+            nextResetTime: 1_786_073_946_574
+          },
+          {
+            type: 'CREDIT_LIMIT', unit: 6, number: 1, usage: 10_000,
+            currentValue: 71, remaining: 9_929, percentage: 1,
+            nextResetTime: 1_786_660_486_998
+          }
+        ]
+      }
+    })
+    expect(result).toMatchObject({
+      summary: 'lite',
+      metrics: [
+        {
+          id: 'credit_limit-0', label: '5-hour credit quota', unit: 'credits',
+          used: 71, limit: 2_000, remaining: 1_929, usedPercent: 3.55,
+          resetsAt: new Date(1_786_073_946_574).toISOString()
+        },
+        {
+          id: 'credit_limit-1', label: '1-week credit quota', unit: 'credits',
+          used: 71, limit: 10_000, remaining: 9_929,
+          resetsAt: new Date(1_786_660_486_998).toISOString()
+        }
+      ]
+    })
+    expect(result.metrics[1]?.usedPercent).toBeCloseTo(0.71, 8)
+  })
 })

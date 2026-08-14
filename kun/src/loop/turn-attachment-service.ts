@@ -7,9 +7,11 @@ import type { ModelCapabilityMetadata } from '../contracts/capabilities.js'
 import type {
   ModelDocumentAttachment,
   ModelInputAttachment,
+  ModelMessageAttachments,
   ModelTextAttachmentFallback,
   ModelToolSpec
 } from '../ports/model-client.js'
+import type { TurnItem } from '../contracts/items.js'
 import type { ToolResultImage } from './tool-result-image.js'
 import type { ResolvedTurnAttachments } from './turn-execution-types.js'
 
@@ -121,6 +123,58 @@ export class TurnAttachmentService {
     return { imageAttachments, textFallbacks, documents }
   }
 
+  async resolveHistoryAttachments(input: {
+    items: readonly TurnItem[]
+    threadId: string
+    workspace: string
+    modelCapabilities: ModelCapabilityMetadata
+  }): Promise<NonNullable<import('../ports/model-client.js').ModelRequest['messageAttachments']>> {
+    const users = input.items.filter(
+      (item): item is Extract<TurnItem, { kind: 'user_message' }> =>
+        item.kind === 'user_message' && Boolean(item.attachmentIds?.length)
+    )
+    const resolved = await Promise.all(users.map(async (item) => {
+      const attachmentIds = item.attachmentIds ?? []
+      const payload = await this.resolveMessageAttachments({
+        attachmentIds,
+        threadId: input.threadId,
+        workspace: input.workspace,
+        modelCapabilities: input.modelCapabilities
+      })
+      return [item.id, payload] as const
+    }))
+    return Object.fromEntries(resolved)
+  }
+
+  private async resolveMessageAttachments(input: {
+    attachmentIds: readonly string[]
+    threadId: string
+    workspace: string
+    modelCapabilities: ModelCapabilityMetadata
+  }): Promise<ModelMessageAttachments> {
+    try {
+      const attachments = await this.resolveTurnAttachments(input)
+      return orderedMessageAttachments(input.attachmentIds, attachments)
+    } catch {
+      // One missing historical blob must not suppress the other attachments
+      // from the same retained user message. Resolve each original ID in
+      // order and replace only the unavailable entry with a stable marker.
+      const payload: ModelMessageAttachments = {
+        images: [], textFallbacks: [], documents: [], unavailable: [], order: []
+      }
+      for (const id of input.attachmentIds) {
+        try {
+          const attachment = await this.resolveTurnAttachments({ ...input, attachmentIds: [id] })
+          appendResolvedAttachments(payload, attachment)
+        } catch {
+          payload.unavailable.push(unavailableAttachment(id))
+          payload.order?.push({ kind: 'unavailable', index: payload.unavailable.length - 1 })
+        }
+      }
+      return payload
+    }
+  }
+
   /**
    * Resolve generated-image bytes for one transient follow-up request. Prefer
    * the scoped attachment created by the tool, then safely degrade to its
@@ -180,6 +234,58 @@ export class TurnAttachmentService {
     return typeof this.attachmentStoreSource === 'function'
       ? this.attachmentStoreSource()
       : this.attachmentStoreSource
+  }
+}
+
+function orderedMessageAttachments(
+  attachmentIds: readonly string[],
+  attachments: ResolvedTurnAttachments
+): ModelMessageAttachments {
+  const payload: ModelMessageAttachments = {
+    images: [...attachments.imageAttachments],
+    textFallbacks: [...attachments.textFallbacks],
+    documents: [...attachments.documents],
+    unavailable: [],
+    order: []
+  }
+  for (const id of attachmentIds) {
+    payload.images.forEach((attachment, index) => {
+      if (attachment.id === id || attachment.id === `${id}_preview`) {
+        payload.order?.push({ kind: 'image', index })
+      }
+    })
+    payload.textFallbacks.forEach((attachment, index) => {
+      if (attachment.id === id) payload.order?.push({ kind: 'text_fallback', index })
+    })
+    payload.documents.forEach((attachment, index) => {
+      if (attachment.id === id) payload.order?.push({ kind: 'document', index })
+    })
+  }
+  return payload
+}
+
+function appendResolvedAttachments(
+  payload: ModelMessageAttachments,
+  attachments: ResolvedTurnAttachments
+): void {
+  for (const image of attachments.imageAttachments) {
+    payload.images.push(image)
+    payload.order?.push({ kind: 'image', index: payload.images.length - 1 })
+  }
+  for (const fallback of attachments.textFallbacks) {
+    payload.textFallbacks.push(fallback)
+    payload.order?.push({ kind: 'text_fallback', index: payload.textFallbacks.length - 1 })
+  }
+  for (const document of attachments.documents) {
+    payload.documents.push(document)
+    payload.order?.push({ kind: 'document', index: payload.documents.length - 1 })
+  }
+}
+
+function unavailableAttachment(id: string): import('../ports/model-client.js').ModelUnavailableAttachment {
+  return {
+    id,
+    text: `[Attachment unavailable]\nAttachmentId: ${id}\nThe retained attachment content could not be resolved. Do not infer its contents.\n[/Attachment unavailable]`
   }
 }
 

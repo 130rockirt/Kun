@@ -6,12 +6,18 @@ import {
   DeleteThreadResponse,
   ForkThreadRequest,
   ListThreadsResponse,
+  ThreadListSummarySchema,
+  ThreadSummarySchema,
   SetThreadGoalRequest,
   SetThreadTodosRequest,
   ThreadGoalResponse,
   ThreadRuntimeStateSchema,
   ThreadSchema,
+  ThreadSchemaReadable,
+  ThreadTimelineResponseSchema,
   ThreadTodosResponse,
+  THREAD_TIMELINE_MAX_ITEM_BYTES,
+  THREAD_TIMELINE_MAX_ITEMS,
   UpdateThreadRequest,
   type ThreadRecord
 } from '../../contracts/threads.js'
@@ -22,18 +28,21 @@ import type { RuntimeError } from './runtime-error.js'
 import type { SessionStore } from '../../ports/session-store.js'
 import type { UserInputGate } from '../../ports/user-input-gate.js'
 import type { ApprovalGate } from '../../ports/approval-gate.js'
-import type { Turn } from '../../contracts/turns.js'
 import {
   isPublicTurnItem,
-  type ApprovalTurnItem,
   type TurnItem
 } from '../../contracts/items.js'
-import type { ApprovalRequest } from '../../domain/approval.js'
-import { placeCompactionsChronologically } from '../../loop/compaction-history.js'
+import { buildPublicItemHistoryPage } from '../../services/item-history-page.js'
 import {
-  type FinishedTurnStatus,
-  finalizeOpenTurnItem
-} from '../../domain/turn-item-finalization.js'
+  healSessionItemsForFinishedTurns,
+  hydrateThreadItemsFromSession,
+  loadThreadMetadata,
+  mergePendingApprovalItems,
+  omitTurnItems,
+  projectPublicThreadRecord,
+  projectTimelineThread,
+  projectTimelineTurn
+} from './thread-projection.js'
 
 /**
  * Handlers for the thread CRUD endpoints. The handlers accept a
@@ -61,7 +70,13 @@ const ListThreadsQuery = z.object({
    * the only opt-in category is `side` (side conversations are hidden
    * from the default listing).
    */
-  include: z.string().optional()
+  include: z.string().optional(),
+  /** Opaque keyset cursor for the next page of results. */
+  cursor: z.string().optional(),
+  /** Filter by workspace root path. */
+  workspace: z.string().optional(),
+  /** Return the lean sidebar projection (omits heavy metadata blobs). */
+  lean: BooleanQuery.optional()
 })
 
 export async function listThreads(
@@ -70,8 +85,16 @@ export async function listThreads(
 ): Promise<JsonResponse> {
   const parsed = parseListThreadsOptions(request)
   if (!parsed.ok) return parsed.response
-  const threads = await service.list(parsed.options)
-  const payload: ListThreadsResponse = { threads }
+  const page = await service.listPage(parsed.options)
+  const threads = parsed.options.lean
+    ? page.threads.map((thread) => ThreadListSummarySchema.parse(thread))
+    : page.threads
+  const payload: ListThreadsResponse = {
+    threads,
+    ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
+    ...(page.hasMore ? { hasMore: page.hasMore } : {}),
+    ...(page.total != null ? { total: page.total } : {})
+  }
   return jsonResponse(payload)
 }
 
@@ -157,7 +180,7 @@ export async function getThread(
     ? pendingApprovals.map((request) => request.id)
     : undefined
   return jsonResponse({
-    ...ThreadSchema.parse(hydratedThread),
+    ...ThreadSchemaReadable.parse(hydratedThread),
     latestSeq,
     pendingUserInputIds,
     ...(pendingApprovalIds ? { pendingApprovalIds } : {})
@@ -197,148 +220,109 @@ export async function getThreadState(
   }))
 }
 
-function loadThreadMetadata(service: ThreadService, threadId: string): Promise<ThreadRecord | null> {
-  // Keep direct route-unit fakes and third-party ThreadService facades from
-  // needing a coordinated upgrade; production ThreadService always exposes
-  // getMetadata and takes the lightweight path.
-  return typeof service.getMetadata === 'function'
-    ? service.getMetadata(threadId)
-    : service.get(threadId)
-}
-
-function mergePendingApprovalItems(
-  sessionItems: TurnItem[],
-  pendingApprovals: readonly ApprovalRequest[]
-): TurnItem[] {
-  if (pendingApprovals.length === 0) return sessionItems
-  const byApprovalId = new Map(pendingApprovals.map((approval) => [approval.id, approval]))
-  const foundApprovalIds = new Set<string>()
-  const merged = sessionItems.map((item) => {
-    if (item.kind !== 'approval') return item
-    const approval = byApprovalId.get(item.approvalId)
-    if (!approval) return item
-    foundApprovalIds.add(approval.id)
-    return approvalItemFromRequest(approval, item)
-  })
-  const additions = pendingApprovals
-    .filter((approval) => !foundApprovalIds.has(approval.id))
-    .map((approval) => approvalItemFromRequest(approval))
-    .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id))
-
-  for (const item of additions) {
-    const firstLaterItem = merged.findIndex(
-      (candidate) => candidate.turnId === item.turnId && candidate.createdAt > item.createdAt
-    )
-    if (firstLaterItem >= 0) {
-      merged.splice(firstLaterItem, 0, item)
-      continue
-    }
-    const lastTurnItem = merged.reduce(
-      (index, candidate, candidateIndex) => candidate.turnId === item.turnId ? candidateIndex : index,
-      -1
-    )
-    if (lastTurnItem >= 0) merged.splice(lastTurnItem + 1, 0, item)
-    else merged.push(item)
-  }
-  return merged
-}
-
-function approvalItemFromRequest(
-  approval: ApprovalRequest,
-  existing?: ApprovalTurnItem
-): ApprovalTurnItem {
-  return {
-    id: existing?.id ?? `item_${approval.id}`,
-    turnId: approval.turnId,
-    threadId: approval.threadId,
-    role: 'tool',
-    createdAt: existing?.createdAt ?? approval.createdAt,
-    kind: 'approval',
-    approvalId: approval.id,
-    toolName: approval.toolName,
-    summary: approval.summary,
-    status: 'pending',
-    approvalReviewer: 'user'
-  }
-}
-
-async function healSessionItemsForFinishedTurns(
-  thread: ThreadRecord,
-  items: TurnItem[],
-  sessionStore: SessionStore
-): Promise<TurnItem[]> {
-  if (items.length === 0 || thread.turns.length === 0) return items
-  const finishedByTurnId = new Map<string, { status: FinishedTurnStatus; finishedAt?: string }>()
-  for (const turn of thread.turns) {
-    const status = finishedTurnStatus(turn.status)
-    if (!status) continue
-    finishedByTurnId.set(turn.id, { status, finishedAt: turn.finishedAt })
-  }
-  if (finishedByTurnId.size === 0) return items
-
-  const healedAt = new Date().toISOString()
-  const healedItems: TurnItem[] = []
-  const nextItems = items.map((item) => {
-    const finished = finishedByTurnId.get(item.turnId)
-    if (!finished) return item
-    const next = finalizeOpenTurnItem(item, finished.status, finished.finishedAt ?? healedAt)
-    if (next !== item) healedItems.push(next)
-    return next
-  })
-  if (healedItems.length === 0) return items
-
-  for (const item of healedItems) {
-    try {
-      await sessionStore.updateItem(thread.id, item.id, item)
-    } catch {
-      // Healing is best-effort; the response still uses the repaired view.
-    }
-  }
-  return nextItems
-}
-
-function finishedTurnStatus(status: Turn['status']): FinishedTurnStatus | null {
-  return status === 'completed' || status === 'failed' || status === 'aborted' ? status : null
-}
-
-function hydrateThreadItemsFromSession(thread: ThreadRecord, items: TurnItem[]): ThreadRecord {
-  if (thread.turns.length === 0) return thread
-  const itemsByTurn = new Map<string, TurnItem[]>()
-  for (const item of items) {
-    if (!isPublicTurnItem(item)) continue
-    const turnItems = itemsByTurn.get(item.turnId) ?? []
-    turnItems.push(item)
-    itemsByTurn.set(item.turnId, turnItems)
-  }
-  let changed = false
-  const turns = thread.turns.map((turn): Turn => {
-    const sessionTurnItems = itemsByTurn.get(turn.id)
-    if (sessionTurnItems) {
-      changed = true
-      return { ...turn, items: placeCompactionsChronologically(sessionTurnItems) }
-    }
-    const publicItems = turn.items.filter(isPublicTurnItem)
-    if (publicItems.length === turn.items.length) return turn
-    changed = true
-    return { ...turn, items: publicItems }
-  })
-  return changed ? { ...thread, turns } : thread
-}
-
 /**
- * Defense in depth for every HTTP endpoint that returns a ThreadRecord.
- * The durable SessionStore intentionally contains internal goal-context
- * items; an old or manually repaired ThreadRecord may contain one too.
+ * Return a bounded public history window for normal renderer hydration. The
+ * full-detail route remains available for compatibility clients.
  */
-function projectPublicThreadRecord(thread: ThreadRecord): ThreadRecord {
-  let changed = false
-  const turns = thread.turns.map((turn): Turn => {
-    const items = turn.items.filter(isPublicTurnItem)
-    if (items.length === turn.items.length) return turn
-    changed = true
-    return { ...turn, items }
+export async function getThreadTimeline(
+  service: ThreadService,
+  threadId: string,
+  request: Request,
+  sessionStore: SessionStore,
+  userInputGate?: UserInputGate,
+  approvalGate?: ApprovalGate
+): Promise<JsonResponse> {
+  const url = new URL(request.url)
+  const parsedQuery = z.object({
+    before: z.string().min(1).max(256).optional(),
+    limit: z.preprocess((value) => {
+      if (typeof value !== 'string' || value.trim() === '') return THREAD_TIMELINE_MAX_ITEMS
+      return Number(value)
+    }, z.number().int().positive().max(THREAD_TIMELINE_MAX_ITEMS))
+  }).safeParse({
+    before: url.searchParams.get('before') ?? undefined,
+    limit: url.searchParams.get('limit') ?? undefined
   })
-  return changed ? { ...thread, turns } : thread
+  if (!parsedQuery.success) {
+    return validationError('invalid thread timeline query', parsedQuery.error.issues)
+  }
+
+  // Freeze the replay floor before reading the item projection. Any event
+  // appended afterwards is replayed by SSE from this sequence.
+  const latestSeq = await sessionStore.highestSeq(threadId)
+  const thread = await loadThreadMetadata(service, threadId)
+  if (!thread) {
+    return jsonResponse(
+      { code: 'not_found', message: `thread not found: ${threadId}` },
+      404
+    )
+  }
+  // The newest page keeps the active turn's opening user message anchored so
+  // a long running turn cannot push the visible request onto an older page
+  // that the renderer refuses to page back into while it is busy.
+  const latestTurnId = thread.turns.at(-1)?.id
+  const pageOptions = {
+    ...(parsedQuery.data.before ? { before: parsedQuery.data.before } : {}),
+    ...(!parsedQuery.data.before && latestTurnId ? { anchorTurnId: latestTurnId } : {}),
+    maxItems: parsedQuery.data.limit,
+    maxBytes: THREAD_TIMELINE_MAX_ITEM_BYTES
+  }
+  const page = sessionStore.loadItemPage
+    ? await sessionStore.loadItemPage(threadId, pageOptions)
+    : buildPublicItemHistoryPage(await sessionStore.loadItems(threadId), pageOptions)
+
+  const pendingApprovals = approvalGate?.pending(threadId) ?? []
+  let sessionItems = await healSessionItemsForFinishedTurns(
+    thread,
+    page.items.filter(isPublicTurnItem),
+    sessionStore
+  )
+  // Only the newest page materializes live gates. Older pages are immutable
+  // history and must not repeat the current approval card.
+  if (!parsedQuery.data.before) {
+    sessionItems = mergePendingApprovalItems(sessionItems, pendingApprovals)
+  }
+  // Re-apply the anchor after healing/merging so a newly materialized gate
+  // item cannot push the active turn's user message back off the page.
+  const bounded = buildPublicItemHistoryPage(sessionItems, {
+    ...(!parsedQuery.data.before && latestTurnId ? { anchorTurnId: latestTurnId } : {}),
+    maxItems: parsedQuery.data.limit,
+    maxBytes: THREAD_TIMELINE_MAX_ITEM_BYTES
+  })
+  sessionItems = bounded.items
+  const turnIds = new Set(sessionItems.map((item) => item.turnId))
+  const pageThread = hydrateThreadItemsFromSession({
+    ...thread,
+    turns: thread.turns
+      .filter((turn) => turnIds.has(turn.id))
+      .map((turn) => ({ ...turn, items: [] }))
+  }, sessionItems)
+  const latestTurn = thread.turns.at(-1)
+  const latestTurnMetadata = latestTurn
+    ? omitTurnItems(projectTimelineTurn(latestTurn, []))
+    : null
+  const hasMore = page.hasMore || bounded.hasMore
+  const nextCursor = bounded.hasMore
+    ? bounded.nextCursor
+    : page.nextCursor
+  const pendingUserInputIds = userInputGate?.pending(threadId).map((value) => value.id) ?? []
+  const pendingApprovalIds = approvalGate
+    ? pendingApprovals.map((value) => value.id)
+    : undefined
+
+  return jsonResponse(ThreadTimelineResponseSchema.parse({
+    ...ThreadSchemaReadable.parse(projectTimelineThread(pageThread)),
+    latestSeq,
+    latestTurn: latestTurnMetadata,
+    pendingUserInputIds,
+    ...(pendingApprovalIds ? { pendingApprovalIds } : {}),
+    timeline: {
+      ...(hasMore && nextCursor ? { nextCursor } : {}),
+      hasMore,
+      itemCount: sessionItems.length,
+      itemBytes: bounded.itemBytes
+    }
+  }))
 }
 
 export async function updateThread(
@@ -361,6 +345,12 @@ export async function updateThread(
         { code: 'not_found', message: error.message },
         404
       )
+    }
+    if (error instanceof Error && /cannot be changed while the thread is running/i.test(error.message)) {
+      return jsonResponse({ code: 'conflict', message: error.message }, 409)
+    }
+    if (error instanceof Error && /knowledge base|absolute roots|overlap|primary workspace|unique/i.test(error.message)) {
+      return jsonResponse({ code: 'validation_error', message: error.message }, 400)
     }
     throw error
   }
@@ -405,6 +395,9 @@ export async function forkThread(
         { code: 'not_found', message: error.message },
         404
       )
+    }
+    if (error instanceof Error && /Design task|Design document target|Design fork|Design clone/i.test(error.message)) {
+      return jsonResponse({ code: 'conflict', message: error.message }, 409)
     }
     throw error
   }
@@ -578,7 +571,10 @@ function parseListThreadsOptions(
       search: parsed.data.search,
       includeArchived: parsed.data.include_archived,
       archivedOnly: parsed.data.archived_only,
-      includeSide
+      includeSide,
+      cursor: parsed.data.cursor,
+      workspace: parsed.data.workspace,
+      lean: parsed.data.lean === true
     }
   }
 }

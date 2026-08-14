@@ -3,10 +3,20 @@ import { useChatStore } from '../store/chat-store'
 import { useDesignWorkspaceStore } from './design-workspace-store'
 import { runDesignPages } from './design-pages-run'
 import type { ChatBlock } from '../agent/types'
-import type { DesignDocument } from './design-types'
+import type { DesignArtifact, DesignDocument } from './design-types'
 import type { SendMessageOverrides } from '../store/chat-store-types'
 
 const createdAt = '2026-06-28T00:00:00.000Z'
+
+const board: DesignArtifact = {
+  id: 'board',
+  kind: 'canvas',
+  title: 'Board',
+  relativePath: '.kun-design/doc/board/canvas.json',
+  createdAt,
+  updatedAt: createdAt,
+  versions: []
+}
 
 function pushRuntimeTurn(prompt: string, assistantBlocks: ChatBlock[]): void {
   const user: ChatBlock = {
@@ -42,7 +52,9 @@ describe('runDesignPages parallel fanout', () => {
     vi.stubGlobal('window', { kunGui: { writeWorkspaceFile } })
     writeWorkspaceFile.mockClear()
     useChatStore.setState({
+      activeThreadId: 'thr_design',
       blocks: [],
+      busy: false,
       currentTurnId: null,
       liveAssistant: '',
       liveReasoning: ''
@@ -53,15 +65,15 @@ describe('runDesignPages parallel fanout', () => {
       createdAt,
       updatedAt: createdAt,
       order: 0,
-      artifacts: [],
-      activeArtifactId: null
+      artifacts: [board],
+      activeArtifactId: board.id
     }
     useDesignWorkspaceStore.setState({
       workspaceRoot: '/workspace',
       documents: [doc],
       activeDocumentId: 'doc',
-      artifacts: [],
-      activeArtifactId: null,
+      artifacts: [board],
+      activeArtifactId: board.id,
       pagesRun: null,
       parallelPageStates: {},
       fileError: null
@@ -146,8 +158,9 @@ describe('runDesignPages parallel fanout', () => {
     expect(fanoutPrompt).toContain('Community feed')
     expect(fanoutPrompt).toMatch(/\\?"Community\\?" -> href `\.\.\/[a-z0-9_-]+\/v1\.html`/)
     expect(fanoutPrompt).toContain('prototype href: ../')
-    expect(useDesignWorkspaceStore.getState().artifacts).toHaveLength(2)
     const artifacts = useDesignWorkspaceStore.getState().artifacts
+      .filter((artifact) => artifact.kind === 'html')
+    expect(artifacts).toHaveLength(2)
     expect(new Set(artifacts.map((artifact) => artifact.direction?.id))).toHaveLength(1)
     expect(artifacts.every((artifact) => artifact.direction?.name === 'IKUN community')).toBe(true)
     expect(useDesignWorkspaceStore.getState().pagesRun).toBeNull()
@@ -183,14 +196,39 @@ describe('runDesignPages parallel fanout', () => {
     expect(onFirstSendSettled).toHaveBeenCalledTimes(1)
     expect(onFirstSendSettled).toHaveBeenCalledWith(false)
     expect(sendMessage).toHaveBeenCalledTimes(1)
-    expect(useDesignWorkspaceStore.getState().artifacts).toEqual([])
+    expect(useDesignWorkspaceStore.getState().artifacts).toEqual([board])
     expect(useDesignWorkspaceStore.getState().fileError).toBe(
       'Could not start the multi-page planning turn.'
     )
   })
 
+  it('does not queue a multi-page step behind an unrelated active turn', async () => {
+    useChatStore.setState({ busy: true, currentTurnId: 'turn_existing' })
+    const onFirstSendSettled = vi.fn()
+    const sendMessage = vi.fn(async () => true)
+
+    await runDesignPages({
+      brief: 'Queued project',
+      workspaceRoot: '/workspace',
+      sendMessage,
+      foundation: false,
+      expectedThreadId: 'thr_design',
+      designDocumentTarget: { documentId: 'doc', boardArtifactId: 'board' },
+      onFirstSendSettled
+    })
+
+    expect(sendMessage).not.toHaveBeenCalled()
+    expect(onFirstSendSettled).toHaveBeenCalledTimes(1)
+    expect(onFirstSendSettled).toHaveBeenCalledWith(false)
+    expect(useDesignWorkspaceStore.getState().artifacts).toEqual([board])
+  })
+
   it('pre-creates app-target page drafts with mobile preview proportions and prototype links', async () => {
-    const sendMessage = vi.fn(async (prompt: string) => {
+    const sendMessage = vi.fn(async (
+      prompt: string,
+      _mode?: string,
+      _overrides?: SendMessageOverrides
+    ) => {
       if (prompt.includes('PLAN a multi-page')) {
         pushRuntimeTurn(prompt, [
           {
@@ -238,11 +276,86 @@ describe('runDesignPages parallel fanout', () => {
     expect(fanoutPrompt).toContain('390x844 phone portrait')
 
     const artifacts = useDesignWorkspaceStore.getState().artifacts
+      .filter((artifact) => artifact.kind === 'html')
     expect(artifacts).toHaveLength(2)
     expect(artifacts.every((artifact) => artifact.node?.width === 300 && artifact.node.height === 640)).toBe(true)
     expect(artifacts.every((artifact) => artifact.prototypeLinks?.length === 1)).toBe(true)
     expect(artifacts.map((artifact) => artifact.prototypeLinks?.[0]?.href)).toEqual(
       expect.arrayContaining([expect.stringMatching(/\.\.\/.+\/v1\.html/)])
     )
+  })
+
+  it('fails closed when the user switches tasks during fanout without writing or completing the new drawing', async () => {
+    const boardB: DesignArtifact = {
+      ...board,
+      id: 'board_b',
+      relativePath: '.kun-design/doc_b/board_b/canvas.json'
+    }
+    const docB: DesignDocument = {
+      id: 'doc_b',
+      title: 'Other drawing',
+      createdAt,
+      updatedAt: createdAt,
+      order: 1,
+      artifacts: [boardB],
+      activeArtifactId: boardB.id
+    }
+    const sendMessage = vi.fn(async (
+      prompt: string,
+      _mode?: string,
+      _overrides?: SendMessageOverrides
+    ) => {
+      if (prompt.includes('PLAN a multi-page')) {
+        pushRuntimeTurn(prompt, [{
+          kind: 'assistant',
+          id: 'assistant_switch_plan',
+          text: '```pages\n[{"title":"A Home","brief":"Home page"},{"title":"A Shop","brief":"Shop page"}]\n```',
+          createdAt
+        }])
+        return true
+      }
+      const state = useDesignWorkspaceStore.getState()
+      useDesignWorkspaceStore.setState({
+        documents: [...state.documents, docB],
+        activeDocumentId: docB.id,
+        artifacts: docB.artifacts,
+        activeArtifactId: docB.activeArtifactId
+      })
+      useChatStore.setState({
+        activeThreadId: 'thr_other',
+        blocks: [],
+        currentTurnId: null,
+        liveAssistant: '',
+        liveReasoning: ''
+      })
+      return true
+    })
+
+    await runDesignPages({
+      brief: 'Pinned project A',
+      workspaceRoot: '/workspace',
+      sendMessage,
+      foundation: false,
+      expectedThreadId: 'thr_design',
+      designDocumentTarget: { documentId: 'doc', boardArtifactId: 'board' }
+    })
+
+    expect(sendMessage).toHaveBeenCalledTimes(2)
+    expect(sendMessage.mock.calls[0]?.[2]).not.toHaveProperty('messageSource')
+    expect(sendMessage.mock.calls[1]?.[2]).toEqual(expect.objectContaining({
+      expectedThreadId: 'thr_design',
+      designDocumentTarget: { documentId: 'doc', boardArtifactId: 'board' },
+      messageSource: 'design_continuation'
+    }))
+    const state = useDesignWorkspaceStore.getState()
+    const source = state.documents.find((document) => document.id === 'doc')
+    const other = state.documents.find((document) => document.id === 'doc_b')
+    expect(source?.artifacts.filter((artifact) => artifact.kind === 'html')).toHaveLength(2)
+    expect(other?.artifacts).toEqual([boardB])
+    expect(Object.values(state.parallelPageStates).every((page) => page.status === 'queued')).toBe(true)
+    expect(state.pagesRun).toBeNull()
+    expect(writeWorkspaceFile.mock.calls.some((call) => (
+      call[0] as { path?: string } | undefined
+    )?.path === '.kun-design/HANDOFF.md')).toBe(false)
   })
 })

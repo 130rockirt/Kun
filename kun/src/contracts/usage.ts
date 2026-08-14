@@ -130,7 +130,10 @@ export const ThreadUsageBucketSchema = DailyUsageCountersSchema.omit({
   last_turn_cacheable_hit_rate: z.number().min(0).max(1).nullable().default(null),
   last_turn_total_input_hit_rate: z.number().min(0).max(1).nullable().default(null),
   last_cache_miss_reasons: z.array(z.string()).default([]),
-  last_cache_suggestions: z.array(z.string()).default([])
+  last_cache_suggestions: z.array(z.string()).default([]),
+  /** Thread-cumulative model timing from the latest persisted usage snapshot. */
+  avg_ttft_ms: z.number().nonnegative().nullable().optional(),
+  avg_tokens_per_second: z.number().nonnegative().nullable().optional()
 })
 export type ThreadUsageBucket = z.infer<typeof ThreadUsageBucketSchema>
 

@@ -2,11 +2,17 @@ import { describe, expect, it } from 'vitest'
 import {
   BrowserUseActionInput,
   BrowserUseBridgeRequest,
+  BrowserUseBridgeResponse,
+  BrowserUseHostChallengeRequest,
   isBrowserUseStateAdvancingAction,
   redactBrowserUseActionForPersistence,
   redactBrowserUseUrl,
+  signBrowserUseBridgeResponse,
+  signBrowserUseHostChallenge,
   signBrowserUseKunApprovalGrant,
   summarizeBrowserUseActionValidation,
+  verifyBrowserUseBridgeResponse,
+  verifyBrowserUseHostChallenge,
   verifyBrowserUseKunApprovalGrant
 } from './browser-use.js'
 import { ToolOperationJournal } from '../reliability/operation-journal.js'
@@ -24,6 +30,11 @@ const expectedTarget = {
 describe('BrowserUseActionInput', () => {
   it('accepts only the stable bounded action catalog', () => {
     expect(BrowserUseActionInput.parse({ action: 'snapshot' })).toEqual({ action: 'snapshot' })
+    expect(BrowserUseActionInput.parse({
+      action: 'open',
+      url: 'https://example.com',
+      newTab: true
+    })).toEqual({ action: 'open', url: 'https://example.com', newTab: true })
     expect(BrowserUseActionInput.parse({
       action: 'type',
       ref: 'opaque-reference-1234',
@@ -133,6 +144,47 @@ describe('BrowserUseActionInput', () => {
       }
     }).success).toBe(false)
   })
+
+  it('strictly authenticates host challenges and complete bridge results', () => {
+    const signingKey = 's'.repeat(43)
+    const challenge = BrowserUseHostChallengeRequest.parse({
+      contractVersion: 2,
+      nonce: '00000000-0000-4000-8000-000000000001'
+    })
+    const proof = signBrowserUseHostChallenge(challenge, signingKey)
+    expect(verifyBrowserUseHostChallenge(proof, signingKey)).toBe(true)
+    expect(verifyBrowserUseHostChallenge({
+      ...proof,
+      nonce: '00000000-0000-4000-8000-000000000002'
+    }, signingKey)).toBe(false)
+
+    const response = signBrowserUseBridgeResponse({
+      contractVersion: 2,
+      requestId: '00000000-0000-4000-8000-000000000003',
+      result: { ok: true, code: 'snapshot', message: 'bounded' }
+    }, signingKey)
+    expect(BrowserUseBridgeResponse.safeParse(response).success).toBe(true)
+    expect(verifyBrowserUseBridgeResponse(response, signingKey)).toBe(true)
+    expect(verifyBrowserUseBridgeResponse({
+      ...response,
+      result: { ...response.result, message: 'forged success' }
+    }, signingKey)).toBe(false)
+    expect(BrowserUseBridgeResponse.safeParse({
+      ...response,
+      responseMac: undefined
+    }).success).toBe(false)
+    expect(BrowserUseHostChallengeRequest.safeParse({
+      ...challenge,
+      action: { action: 'snapshot' }
+    }).success).toBe(false)
+
+    const reordered = signBrowserUseBridgeResponse({
+      requestId: '00000000-0000-4000-8000-000000000003',
+      result: { message: 'bounded', code: 'snapshot', ok: true },
+      contractVersion: 2
+    }, signingKey)
+    expect(reordered.responseMac).toBe(response.responseMac)
+  })
 })
 
 describe('redactBrowserUseUrl', () => {
@@ -186,7 +238,7 @@ describe('redactBrowserUseUrl', () => {
     expect(summary).toMatchObject({
       attemptedAction: 'open',
       requiredFields: ['action', 'url'],
-      allowedFields: ['action', 'url'],
+      allowedFields: ['action', 'url', 'newTab'],
       issueCodes: expect.arrayContaining(['invalid_field', 'unexpected_field']),
       issuePaths: ['url']
     })

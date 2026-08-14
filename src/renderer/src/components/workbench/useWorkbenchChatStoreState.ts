@@ -1,5 +1,6 @@
 import { useShallow } from 'zustand/react/shallow'
 import { useChatStore } from '../../store/chat-store'
+import { normalizeWorkbenchRoute } from './workbench-route'
 
 export function useWorkbenchChatStoreState() {
   return useChatStore(
@@ -21,7 +22,7 @@ export function useWorkbenchChatStoreState() {
       runtimeStatus: s.runtimeStatus,
       busy: s.busy,
       currentTurnOrchestration: s.currentTurnOrchestration,
-      route: s.route,
+      route: normalizeWorkbenchRoute(s.route) as typeof s.route,
       pluginHostRoute: s.pluginHostRoute,
       workspaceRoot: s.workspaceRoot,
       conversationWorkspaceRoot: s.conversationWorkspaceRoot,
@@ -55,6 +56,9 @@ export function useWorkbenchChatStoreState() {
       extensionComposerContexts: s.extensionComposerContexts,
       attachExtensionComposerContext: s.attachExtensionComposerContext,
       removeExtensionComposerContext: s.removeExtensionComposerContext,
+      attachComposerContext: s.attachComposerContext,
+      removeComposerContext: s.removeComposerContext,
+      clearComposerContexts: s.clearComposerContexts,
       removeQueuedMessage: s.removeQueuedMessage,
       guideQueuedMessage: s.guideQueuedMessage,
       interrupt: s.interrupt,
@@ -65,6 +69,10 @@ export function useWorkbenchChatStoreState() {
       composerFastMode: s.composerFastMode,
       composerPickList: s.composerPickList,
       composerModelGroups: s.composerModelGroups,
+      composerPersonaId: s.composerPersonaId,
+      composerPersonaEnabled: s.composerPersonaEnabled,
+      codeAgentPresets: s.codeAgentPresets,
+      setComposerPersonaId: s.setComposerPersonaId,
       disabledSkillIds: s.disabledSkillIds,
       composerMode: s.composerMode,
       composerOrchestration: s.composerOrchestration,

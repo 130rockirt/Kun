@@ -13,7 +13,9 @@ export const DESIGN_CANVAS_TOOL_NAMES = new Set([
   'design_motion_set_timeline',
   'design_motion_upsert_keyframes',
   'design_motion_apply_preset',
-  'design_motion_delete'
+  'design_motion_delete',
+  // PPTD → whiteboard layout replayed by the main agent (verdict B).
+  'ppt_to_board'
 ])
 
 export function isDesignCanvasToolName(name: unknown): boolean {
@@ -50,6 +52,19 @@ export function setLastCanvasOpErrors(errors: OpError[], key: string = DEFAULT_E
 }
 
 export function takeLastCanvasOpErrors(key: string = DEFAULT_ERROR_KEY): OpError[] {
+  const errors = _lastCanvasOpErrors.get(key) ?? []
+  _lastCanvasOpErrors.delete(key)
+  return errors
+}
+
+/** Read the stashed errors without clearing them. Used while composing a
+ * turn so a later admission failure does not lose the diagnostics. */
+export function peekLastCanvasOpErrors(key: string = DEFAULT_ERROR_KEY): OpError[] {
+  return _lastCanvasOpErrors.get(key) ?? []
+}
+
+/** Clear and return the stashed errors, only after the turn is admitted. */
+export function consumeLastCanvasOpErrors(key: string = DEFAULT_ERROR_KEY): OpError[] {
   const errors = _lastCanvasOpErrors.get(key) ?? []
   _lastCanvasOpErrors.delete(key)
   return errors

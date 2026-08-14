@@ -26,6 +26,8 @@ import type { JsonValue } from '@kun/extension-api'
 import type { RegisteredContribution } from '../../extensions/contribution-registry'
 import { DeclarativeActionBar } from '../../extensions/ControlledContributionSurfaces'
 import type { PlanBuildOrchestration } from '../../plan/plan-build'
+import { useChatStore } from '../../store/chat-store'
+import { shouldUseEmptyTaskLayout } from './workbench-chat-layout'
 
 const TerminalPanel = lazy(() =>
   import('../terminal/TerminalPanel').then((module) => ({ default: module.TerminalPanel }))
@@ -82,11 +84,17 @@ export type WorkbenchChatStageProps = {
   extensionAttachmentContextMenus?: readonly RegisteredContribution<'contextMenus'>[]
   extensionCommands?: readonly RegisteredContribution<'commands'>[]
   extensionResultPreviews?: readonly RegisteredContribution<'message.resultPreviews'>[]
+  messageContributionsForSurface?: (surface: 'code' | 'design') => {
+    actions: readonly RegisteredContribution<'actions.message'>[]
+    contextMenus: readonly RegisteredContribution<'contextMenus'>[]
+    attachmentContextMenus: readonly RegisteredContribution<'contextMenus'>[]
+    resultPreviews: readonly RegisteredContribution<'message.resultPreviews'>[]
+  } | null
   onExtensionCommand?: (commandId: string, context: JsonValue) => void | Promise<unknown>
 }
 
 function WorkbenchPaneFallback(): ReactElement {
-  return <div className="h-full min-h-0 w-full bg-ds-main" aria-hidden />
+  return <div className="h-full min-h-0 w-full bg-white dark:bg-ds-main" aria-hidden />
 }
 
 export function WorkbenchChatStage({
@@ -138,14 +146,24 @@ export function WorkbenchChatStage({
   extensionAttachmentContextMenus = [],
   extensionCommands = [],
   extensionResultPreviews = [],
+  messageContributionsForSurface,
   onExtensionCommand
 }: WorkbenchChatStageProps): ReactElement {
   const { t } = useTranslation('common')
+  const threadLoadingId = useChatStore((state) => state.threadLoadingId)
   const effectiveConversationDropWorkspaceRoot = normalizeWorkspaceRoot(conversationDropWorkspaceRoot)
   const canComposeForConversationDrop =
     composerProps.fileReferenceEnabled === true &&
     composerProps.runtimeReady &&
     (composerProps.hasActiveThread || Boolean(effectiveConversationDropWorkspaceRoot))
+  const hasConversationContent = Boolean(blocks.length || liveAssistant || liveReasoning)
+  const emptyTaskLayout = shouldUseEmptyTaskLayout({
+    activeThreadId,
+    threadLoadingId,
+    hasConversationContent,
+    runtimeReady: runtimeConnection === 'ready',
+    hasWorkspace: Boolean(effectiveConversationDropWorkspaceRoot)
+  })
   const conversationFileDropOptions = {
     canPickAttachment:
       canComposeForConversationDrop &&
@@ -168,6 +186,7 @@ export function WorkbenchChatStage({
     <section
       className="ds-chat-stage ds-drag relative isolate flex min-h-0 min-w-0 flex-1 flex-col"
       data-terminal-open={terminalOpen ? 'true' : 'false'}
+      data-empty-task-layout={emptyTaskLayout ? 'true' : 'false'}
     >
       <ActiveUiPluginStagePresentation />
       <div
@@ -200,85 +219,108 @@ export function WorkbenchChatStage({
                   compact
                 />
               ) : null}
+              {busy ? (
+                <span className="inline-flex shrink-0 rounded-full bg-amber-500/16 px-2.5 py-1 text-[11.5px] font-semibold text-amber-950 dark:text-amber-100">
+                  {t('running')}
+                </span>
+              ) : null}
               <WorkbenchTopActions
                 terminalOpen={terminalOpen}
                 onToggleTerminal={onToggleTerminal}
                 rightWorkspaceExpanded={rightWorkspaceExpanded}
                 onToggleRightWorkspace={onToggleRightWorkspace}
               />
-              {busy ? (
-                <span className="inline-flex shrink-0 rounded-full bg-amber-500/16 px-2.5 py-1 text-[11.5px] font-semibold text-amber-950 dark:text-amber-100">
-                  {t('running')}
-                </span>
-              ) : null}
             </div>
           </div>
         </header>
         {graphChildContext ? (
           <GraphChildSessionBar context={graphChildContext} onBack={onBackToParent} />
         ) : null}
-        <ConversationFileDropZone
-          className="flex min-h-0 min-w-0 flex-1 flex-col"
-          options={conversationFileDropOptions}
+        <div
+          className={`ds-chat-main-stack relative flex min-h-0 min-w-0 flex-1 flex-col ${
+            emptyTaskLayout
+              ? 'justify-center overflow-y-auto pb-[clamp(4rem,12vh,8rem)]'
+              : ''
+          }`}
         >
-          <LazyMessageTimeline
-            fallback={<WorkbenchPaneFallback />}
-            blocks={blocks}
-            liveReasoning={liveReasoning}
-            live={liveAssistant}
-            activeThreadId={activeThreadId}
-            runtimeConnection={runtimeConnection}
-            runtimeError={runtimeError}
-            onRetryConnection={onRetryConnection}
-            onOpenSettings={onOpenSettings}
-            onSelectSuggestion={onSelectSuggestion}
-            focusModeEnabled={focusModeEnabled}
-            planActionsBusy={planActionsBusy}
-            graphEnabled={graphEnabled}
-            onBuildPlan={onBuildPlan}
-            onOpenPlan={onOpenPlan}
-            onOpenChanges={onOpenChanges}
-            onReviewChanges={onReviewChanges}
-            reviewChangesDisabled={reviewChangesDisabled}
-            onComponentPrototypePrompt={composerProps.setInput}
-            devPreviewCard={
-              devPreviewVisible && devPreviewUrl ? (
-                <DevPreviewLaunchCard
-                  url={devPreviewUrl}
-                  opened={devPreviewOpened}
-                  onOpen={onOpenDevPreview}
-                />
-              ) : null
-            }
-            extensionMessageActions={extensionMessageActions}
-            extensionContextMenus={extensionContextMenus}
-            extensionAttachmentContextMenus={extensionAttachmentContextMenus}
-            extensionCommands={extensionCommands}
-            extensionResultPreviews={extensionResultPreviews}
-            onExtensionCommand={onExtensionCommand}
-          />
-          {uiModeCameosEnabled && !focusModeEnabled ? <IkunCameoLayer /> : null}
-          {!focusModeEnabled ? <KunCelebrationLayer active={busy} suppressed={Boolean(runtimeError)} /> : null}
-        </ConversationFileDropZone>
-        <div className="ds-composer-dock ds-no-drag relative flex shrink-0 justify-center px-2 pb-3 pt-0 sm:px-4 md:px-6 lg:px-8">
-          {showReturnBar ? (
-            <SubagentReturnBar
-              parentTitle={returnParentTitle}
-              onBack={onBackToParent}
-              variant={returnBarVariant}
+          <ConversationFileDropZone
+            className={`flex min-h-0 min-w-0 flex-col ${emptyTaskLayout ? 'flex-none' : 'flex-1'}`}
+            options={conversationFileDropOptions}
+          >
+            <LazyMessageTimeline
+              fallback={<WorkbenchPaneFallback />}
+              blocks={blocks}
+              liveReasoning={liveReasoning}
+              live={liveAssistant}
+              activeThreadId={activeThreadId}
+              runtimeConnection={runtimeConnection}
+              runtimeError={runtimeError}
+              onRetryConnection={onRetryConnection}
+              onOpenSettings={onOpenSettings}
+              onSelectSuggestion={onSelectSuggestion}
+              taskSurfaceControl={composerProps.taskSurface ? {
+                surface: composerProps.taskSurface,
+                locked: composerProps.taskSurfaceLocked,
+                onChange: composerProps.onTaskSurfaceChange
+              } : undefined}
+              focusModeEnabled={focusModeEnabled}
+              planActionsBusy={planActionsBusy}
+              graphEnabled={graphEnabled}
+              onBuildPlan={onBuildPlan}
+              onOpenPlan={onOpenPlan}
+              onOpenChanges={onOpenChanges}
+              onReviewChanges={onReviewChanges}
+              reviewChangesDisabled={reviewChangesDisabled}
+              onComponentPrototypePrompt={composerProps.setInput}
+              devPreviewCard={
+                devPreviewVisible && devPreviewUrl ? (
+                  <DevPreviewLaunchCard
+                    url={devPreviewUrl}
+                    opened={devPreviewOpened}
+                    onOpen={onOpenDevPreview}
+                  />
+                ) : null
+              }
+              extensionMessageActions={extensionMessageActions}
+              extensionContextMenus={extensionContextMenus}
+              extensionAttachmentContextMenus={extensionAttachmentContextMenus}
+              extensionCommands={extensionCommands}
+              extensionResultPreviews={extensionResultPreviews}
+              messageContributionsForSurface={messageContributionsForSurface}
+              onExtensionCommand={onExtensionCommand}
             />
-          ) : (
-            <div className="flex w-full min-w-0 flex-col items-center gap-1">
-              {extensionComposerActions.length && onExtensionCommand ? (
-                <DeclarativeActionBar
-                  contributions={extensionComposerActions}
-                  context={{ surface: 'composer', threadId: activeThreadId }}
-                  onCommand={onExtensionCommand}
+            {uiModeCameosEnabled && !focusModeEnabled && !emptyTaskLayout ? <IkunCameoLayer /> : null}
+            {!focusModeEnabled ? <KunCelebrationLayer active={busy} suppressed={Boolean(runtimeError)} /> : null}
+          </ConversationFileDropZone>
+          <div
+            className={`ds-composer-dock ds-no-drag relative flex shrink-0 justify-center px-2 pt-0 sm:px-4 md:px-6 lg:px-8 ${
+              emptyTaskLayout ? 'pb-0' : 'pb-3'
+            }`}
+            data-primary-floating-composer
+            data-usage-history-boundary
+          >
+            {showReturnBar ? (
+              <SubagentReturnBar
+                parentTitle={returnParentTitle}
+                onBack={onBackToParent}
+                variant={returnBarVariant}
+              />
+            ) : (
+              <div className="flex w-full min-w-0 flex-col items-center gap-1">
+                {extensionComposerActions.length && onExtensionCommand ? (
+                  <DeclarativeActionBar
+                    contributions={extensionComposerActions}
+                    context={{ surface: 'composer', threadId: activeThreadId }}
+                    onCommand={onExtensionCommand}
+                  />
+                ) : null}
+                <FloatingComposer
+                  {...composerProps}
+                  emptyTaskLayout={emptyTaskLayout}
                 />
-              ) : null}
-              <FloatingComposer {...composerProps} />
-            </div>
-          )}
+              </div>
+            )}
+          </div>
         </div>
       </div>
       {terminalOpen ? (

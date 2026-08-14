@@ -83,10 +83,11 @@ export function buildToolPreferenceInstruction(
   const goalTools = presentNames(names, GOAL_TOOL_NAMES)
   const inputTools = presentNames(names, USER_INPUT_TOOL_NAMES)
   const memoryTools = presentNames(names, MEMORY_TOOL_NAMES)
-  const exploreAgentAvailable = names.has('explore_agent')
+  const fastContextAvailable = names.has('fast_context')
+  const pptAgentAvailable = names.has('ppt_agent')
   const bullets: string[] = []
 
-  if (inspectionTools.length > 0 && !exploreAgentAvailable) {
+  if (inspectionTools.length > 0 && !fastContextAvailable) {
     bullets.push(
       `Inspect relevant current state before changing it. Use ${formatToolNames(inspectionTools)} for the matching file, search, directory, repository, or symbol operation.`
     )
@@ -98,19 +99,19 @@ export function buildToolPreferenceInstruction(
     bullets.push(
       'Run independent inspection calls in parallel when their inputs do not depend on one another; keep dependent work sequential.'
     )
-  } else if (names.has('bash') && !exploreAgentAvailable) {
+  } else if (names.has('bash') && !fastContextAvailable) {
     bullets.push('Use `bash` for necessary shell and system operations, with commands scoped to the active workspace and task.')
   }
 
   if (mutationTools.length > 0) {
     if (names.has('edit')) {
-      bullets.push(exploreAgentAvailable
-        ? 'After `explore_agent` returns, use `edit` for focused changes to existing files; the parent agent owns all mutations.'
+      bullets.push(fastContextAvailable
+        ? 'After `fast_context` returns, use `edit` for focused changes to existing files; the parent agent owns all mutations.'
         : 'Use `edit` for focused changes to existing files after reading the relevant content.')
     }
     if (names.has('write')) {
-      bullets.push(exploreAgentAvailable
-        ? 'After `explore_agent` returns, use `write` only when creating or fully replacing a file is necessary; do not create files for explanation or one-off scratch work in the project.'
+      bullets.push(fastContextAvailable
+        ? 'After `fast_context` returns, use `write` only when creating or fully replacing a file is necessary; do not create files for explanation or one-off scratch work in the project.'
         : 'Use `write` only when creating or fully replacing a file is necessary; do not create files for explanation or one-off scratch work in the project.')
     }
     if (names.has('bash')) {
@@ -173,40 +174,69 @@ export function buildToolPreferenceInstruction(
     )
   }
 
-  if (exploreAgentAvailable) {
+  if (fastContextAvailable) {
     const directInspectionTools = [
       ...inspectionTools,
       ...(names.has('bash') ? ['bash'] : [])
     ]
     bullets.push(
-      'Use `explore_agent` as the first tool for any repository or project exploration: file lookup, code or keyword search, symbol and call-path tracing, architecture or behavior inspection, and context gathering before a change. This applies even to simple lookups and to tasks that will later modify files.'
+      'Use `fast_context` as the first tool for any repository or project exploration: file lookup, code or keyword search, symbol and call-path tracing, architecture or behavior inspection, and context gathering before a change. This applies even to simple lookups and to tasks that will later modify files.'
     )
     bullets.push(
-      '`explore_agent` runs a dedicated read-oriented child and never edits files; after it returns, the parent agent remains responsible for edits and final verification.'
+      '`fast_context` runs one budgeted repository retrieval child restricted to grep, glob, and read, and never edits files; after it returns, the parent agent remains responsible for edits and final verification.'
     )
     if (directInspectionTools.length > 0) {
       bullets.push(
-        `Only after \`explore_agent\` returns, or when it is unavailable or fails, use ${formatToolNames(directInspectionTools)} for narrow follow-up verification and unsupported-file fallback.`
+        `Only after \`fast_context\` returns, or when it is unavailable or fails, use ${formatToolNames(directInspectionTools)} for narrow follow-up verification and unsupported-file fallback.`
       )
     }
     bullets.push(
-      'Issue multiple `explore_agent` calls together when the exploration questions are independent; keep dependent investigation sequential.'
+      'For a complex investigation, make one `fast_context` call with 2-4 non-overlapping tasks. They share one bounded retrieval child and compact evidence pack; put any investigation that depends on this evidence in a later batch.'
     )
     if (names.has('delegate_task')) {
       bullets.push(
-        'Reserve `delegate_task` for broader child work that needs full tool access; use `explore_agent` for repository investigation.'
+        'Reserve `delegate_task` for broader child work that needs full tool access; use `fast_context` for repository investigation.'
       )
     }
   }
 
+  if (pptAgentAvailable) {
+    bullets.push(
+      'Use `ppt_agent(action="start", title="...")` for presentation/PPT tasks that require native PPTX or do not request another explicit presentation format. `title` is required on start: pass a short 2-6 word UI title (at most 160 characters) naming the task; it becomes the review whiteboard title and is never sent as presentation content. When the user explicitly asks for Presentation Studio or `.kun-ppt.html` and its direct extension tools are advertised, keep that HTML workflow separate. Apart from the title, pass only workflow control. Never rewrite, summarize, supplement, or invent the presentation request in tool arguments: the host forwards the exact active user turn and its attachments to the PPT child. Inspect the structured phase instead of assuming one call always returns a PPTX.'
+    )
+    bullets.push(
+      'When `ppt_agent` returns `phase="awaiting_review"`, the visual bundle is opened automatically on the parent whiteboard: stop final export, invite the user to review, and retain its childId/workflowId. For changes or failed pages, call `ppt_agent(action="revise_previews"|"retry_failed", childId, workflowId)`; after explicit approval, call `ppt_agent(action="approve_and_build", childId, workflowId)` so the same PPT child builds the editable deliverable. Review feedback is taken from the exact active turn and structured canvas context; do not copy it into tool arguments. Never replace an active review workflow with a new PPT child.'
+    )
+    const directionInputTool = names.has('user_input') ? '`user_input`' : names.has('request_user_input') ? '`request_user_input`' : ''
+    bullets.push(directionInputTool
+      ? `When \`ppt_agent\` returns \`phase="awaiting_direction"\`, the whiteboard is a preview surface, not a required input surface. Immediately ask through ${directionInputTool} with exactly one single-choice question whose id is \`ppt_direction:<workflowId>:<childId>\`. Preserve the returned direction order; label each option \`1. <name>\`, \`2. <name>\`, or \`3. <name>\`, mark the recommended option, and use its rationale as the description. After submission, call \`ppt_agent(action="select_direction", childId, workflowId)\` in the same turn; the host validates the answer against persisted candidates, so never invent or pass a direction id.`
+      : 'When `ppt_agent` returns `phase="awaiting_direction"`, the whiteboard is a preview surface, not a required input surface. The user may select a card or reply in the normal conversation with one direction name/number or acceptance of the recommendation. On that explicit confirmation, call `ppt_agent(action="select_direction", childId, workflowId)`; the host resolves the active turn against persisted candidates, so never invent or pass a direction id.')
+    if (names.has('delegate_task')) {
+      bullets.push(
+        'Reserve `delegate_task` for general child work; use `ppt_agent` for presentation tasks and verify the delivered deck (files + exported .pptx) in the parent turn.'
+      )
+    }
+  }
+
+  if (names.has('ppt_to_board')) {
+    bullets.push(
+      pptAgentAvailable
+        ? 'Use `ppt_to_board` only for a completed direct-mode/final PPTD deck that has no image-first reviewBundle and that the user asked to show. Never replay boardSpec or call `ppt_to_board` for `phase="awaiting_review"`; the structured review bundle is applied automatically.'
+        : 'In whiteboard / Design contexts, use `ppt_to_board` to lay a PPTD deck out on the canvas when the user asked to show a presentation (start at batch 0 and keep calling with batch+1 while `more` is true).'
+    )
+  }
+
   if (names.has('graph_define_plan')) {
     bullets.push(
-      exploreAgentAvailable
-        ? 'A durable Graph planning draft already exists. Use `explore_agent` to inspect relevant repository facts first, then use `graph_define_plan` with only task keys, objectives, dependencies, acceptance criteria, and repository-relative scopes. The host supplies every execution mechanic.'
-        : 'A durable Graph planning draft already exists. Inspect relevant repository facts with read-only tools, then use `graph_define_plan` with only task keys, objectives, dependencies, acceptance criteria, and repository-relative scopes. The host supplies every execution mechanic.'
+      fastContextAvailable
+        ? 'A durable Graph planning draft already exists. Use `fast_context` to inspect relevant repository facts first, then use `graph_define_plan` with only its advertised plan fields: a plan title plus task keys, kinds, titles, objectives, dependencies, acceptance criteria, and repository-relative scopes. The host supplies every execution mechanic.'
+        : 'A durable Graph planning draft already exists. Inspect relevant repository facts with read-only tools, then use `graph_define_plan` with only its advertised plan fields: a plan title plus task keys, kinds, titles, objectives, dependencies, acceptance criteria, and repository-relative scopes. The host supplies every execution mechanic.'
     )
     bullets.push(
       'You may make one changed correction from structured validation issues. Never repeat unchanged invalid plan arguments or claim a GraphRun exists before `graph_define_plan` returns committed.'
+    )
+    bullets.push(
+      'Call `graph_define_plan` with a structured top-level `{ plan: ... }` object. Never wrap the arguments in `__raw`, a JSON string, a Markdown code fence, or ordinary prose; keep large plans compact instead of repeating the full source plan in every objective.'
     )
   }
   if (names.has('graph_supervise_node')) {
@@ -232,16 +262,16 @@ export function buildToolPreferenceInstruction(
     const fallback = inspectionTools.length > 0
       ? ` Use ${formatToolNames(inspectionTools)} for unsupported files, narrow fallback checks, and verification.`
       : ''
-    bullets.push(exploreAgentAvailable
-      ? `Specialized source-code MCP tools are available: ${formatToolNames(sourceTools.map((tool) => tool.name))}. Start repository exploration with \`explore_agent\`; use a matching MCP tool only for narrow structural follow-up or when exploration fails.${fallback}`
+    bullets.push(fastContextAvailable
+      ? `Specialized source-code MCP tools are available: ${formatToolNames(sourceTools.map((tool) => tool.name))}. Start repository exploration with \`fast_context\`; use a matching MCP tool only for narrow structural follow-up or when exploration fails.${fallback}`
       : `Specialized source-code MCP tools are available: ${formatToolNames(sourceTools.map((tool) => tool.name))}. Prefer a matching one for structural source navigation before broad scans.${fallback}`)
   } else if (mcpTools.some((tool) => tool.name === 'mcp_search')) {
-    bullets.push(exploreAgentAvailable
-      ? 'Start repository exploration with `explore_agent`; use `mcp_search` only for a specialized external capability that the exploration child cannot provide.'
+    bullets.push(fastContextAvailable
+      ? 'Start repository exploration with `fast_context`; use `mcp_search` only for a specialized external capability that the exploration child cannot provide.'
       : 'Use `mcp_search` when the task may benefit from a specialized external capability not already advertised.')
   } else if (mcpTools.length > 0) {
-    bullets.push(exploreAgentAvailable
-      ? `Start repository exploration with \`explore_agent\`; use an advertised MCP tool only when its description directly matches a narrow follow-up task: ${formatToolNames(mcpTools.map((tool) => tool.name))}.`
+    bullets.push(fastContextAvailable
+      ? `Start repository exploration with \`fast_context\`; use an advertised MCP tool only when its description directly matches a narrow follow-up task: ${formatToolNames(mcpTools.map((tool) => tool.name))}.`
       : `Use an advertised MCP tool when its description directly matches the task: ${formatToolNames(mcpTools.map((tool) => tool.name))}.`)
   }
 

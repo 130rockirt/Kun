@@ -1,6 +1,6 @@
-# 用 BM25 + 关键词 RAG 做 Write 文本编辑：一次探索和落地
+# 用 BM25 + 关键词 RAG 做 Work 文本编辑：一次探索和落地
 
-Write 里的文本补全已经证明了一件事：写作场景不一定需要重型向量库。只要能在低延迟内从同一个写作空间里找回术语、事实和风格片段，FIM 模型就能更稳地接住当前段落。
+Work 里的文本补全已经证明了一件事：写作场景不一定需要重型向量库。只要能在低延迟内从同一个工作空间里找回术语、事实和风格片段，FIM 模型就能更稳地接住当前段落。
 
 这次探索的问题更具体：**文本编辑能不能也走 BM25 + 关键词 RAG？** 例如用户选中一个名词，让 AI 把这个段落里的其他同名词也替换掉。它不是传统 ghost text 补全，而是对一段已有文本做原地替换。
 
@@ -35,7 +35,7 @@ model returns = replacement for original edit scope
 BM25 + 关键词 RAG 不负责替模型“决定怎么改”，它负责给模型提供局部事实和写作约束：
 
 - 产品名、人物名、项目术语应该怎么写。
-- 同一写作空间里类似段落的语气和句式。
+- 同一工作空间里类似段落的语气和句式。
 - 某个概念在其他文档里的标准表述。
 - 用户选中短词时，哪些跨文档片段能解释这个词的上下文。
 
@@ -43,9 +43,9 @@ BM25 + 关键词 RAG 不负责替模型“决定怎么改”，它负责给模�
 
 ## 设计取舍
 
-这次实现复用现有 Write 补全的检索服务：
+这次实现复用现有 Work 补全的检索服务：
 
-- 继续扫描当前写作空间内的 Markdown / 文本文件。
+- 继续扫描当前工作空间内的 Markdown / 文本文件。
 - 继续用中英文 token + 中文 2 到 4 字 n-gram。
 - 继续用 BM25 分数加标题、路径、短语命中加权。
 - 当前正在编辑的文件仍从检索结果中排除，避免把原文重复喂回模型。
@@ -117,7 +117,7 @@ Recent local edits in this file. Treat these as intent signals...
 
 [1] 2s ago; source=user; range=20-32
 Deleted: DeepSeek GUI
-Inserted: Write mode
+Inserted: Work mode
 Around: Earlier term: [[edit]] should be consistent.
 ```
 
@@ -131,7 +131,7 @@ Around: Earlier term: [[edit]] should be consistent.
 - 选区没有跨空行。
 - 则编辑范围扩展到最近空行、标题、代码围栏或分隔线之间的自然段。
 
-这样用户只需要选中一个词，输入“把 Alpha 改成 Write mode”，模型拿到的是整个段落的 `original`，返回的也是整个段落 replacement。
+这样用户只需要选中一个词，输入“把 Alpha 改成 Work mode”，模型拿到的是整个段落的 `original`，返回的也是整个段落 replacement。
 
 ## 失败保护
 
@@ -141,7 +141,7 @@ Around: Earlier term: [[edit]] should be consistent.
 - 多选区暂不支持，避免把多个非连续范围合并出错。
 - 模型返回空文本时，只有删除类指令才允许应用。
 - 请求返回后会检查原编辑范围是否仍和发起请求时一致；如果用户已经改过这段，就拒绝应用。
-- 应用后仍走 Write 原有 autosave 机制，不绕过编辑器状态。
+- 应用后仍走 Work 原有 autosave 机制，不绕过编辑器状态。
 
 ## 落地文件
 
@@ -152,7 +152,7 @@ Around: Earlier term: [[edit]] should be consistent.
 - `src/renderer/src/write/inline-edit.ts`：选区扩段落、构造 payload、应用 replacement。
 - `src/renderer/src/write/recent-edits.ts`：最近编辑上下文的记录、筛选和 prompt payload 转换。
 - `src/renderer/src/write/term-propagation.ts`：同段术语大小写/重命名传播。
-- `src/renderer/src/components/write/WriteWorkspaceView.tsx`：选中文本浮层支持“AI 编辑”和“发送到写作助手”两条路径。
+- `src/renderer/src/components/write/WriteWorkspaceView.tsx`：选中文本浮层支持“AI 编辑”和“发送到办公助手”两条路径（组件名保留内部 `Write` 兼容标识）。
 - `src/main/ipc/app-ipc-schemas.ts`、`src/preload/index.ts`、`src/shared/kun-gui-api.ts`：复用 `write:inline-completion` IPC，通过 `mode: "edit"`、`editCandidate` 和 recent edits 承载 inline edit。
 
 测试覆盖：

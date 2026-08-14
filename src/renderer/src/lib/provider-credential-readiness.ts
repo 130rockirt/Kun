@@ -26,7 +26,8 @@ export function sharedModelConnectionHasUsableCredential(
 
 export function providerHasUsableCredential(
   provider: { id?: string; apiKey?: string } | null | undefined,
-  connection: Pick<SharedConnectionCredentialState, 'configured' | 'credentialStatus'> | undefined
+  connection: (Pick<SharedConnectionCredentialState, 'configured' | 'credentialStatus'> &
+    Partial<Pick<SharedConnectionCredentialState, 'id'>>) | undefined
 ): boolean {
   if (provider?.apiKey?.trim()) return true
   return sharedModelConnectionHasUsableCredential(connection)

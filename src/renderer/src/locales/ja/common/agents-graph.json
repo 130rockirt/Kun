@@ -1,0 +1,292 @@
+{
+  "subagentsPanel": {
+    "configModel": "モデルを構成する",
+    "delegatable": "委任可能・チャットで使用可能",
+    "system": "システム・内部",
+    "global": "グローバル・共有",
+    "newSubagent": "新しいサブエージェント",
+    "delegatableCount": "委任可能なロール {{count}} 個",
+    "configuredCount": "設定済み {{count}} 個",
+    "showingCount": "{{visible}} / {{total}} 件を表示",
+    "policySummary": "キューと同時実行",
+    "search": "サブエージェントを検索",
+    "searchPlaceholder": "名前、能力、ユースケースで検索",
+    "clearSearch": "検索をクリア",
+    "toggleCategory": "{{category}} カテゴリを開閉",
+    "batchModel": "一括モデル",
+    "mixedModels": "複数モデル",
+    "mixedConfiguration": "複数の設定",
+    "categoryConfiguration": "カテゴリのデフォルト設定",
+    "categoryConfigurationDesc": "このカテゴリのすべてのエージェントに同じデフォルトを適用します",
+    "resetCategoryConfiguration": "デフォルトに戻す",
+    "effectiveModel": "有効なモデル",
+    "batchModelAria": "{{category}} の {{count}} 個のエージェントを同じモデルに設定",
+    "reasoning": "推論強度",
+    "mixedReasoning": "複数の推論",
+    "batchReasoningAria": "{{category}} の {{count}} 個のエージェントを同じ推論強度に設定",
+    "capabilities": "能力",
+    "emptyTitle": "一致するサブエージェントがありません",
+    "emptySearch": "別の名前、能力、ユースケースをお試しください。",
+    "emptyCategory": "別のカテゴリを選択してください。",
+    "surface": {
+      "shared": "基本",
+      "code": "Code",
+      "write": "ワーク",
+      "design": "デザイン"
+    },
+    "surfaceInherited": "基本から継承",
+    "surfaceAssigned": "このモードで利用可能",
+    "surfaceUnassigned": "このモードでは利用不可",
+    "pagination": "Agent ページ",
+    "pageSummary": "{{page}} / {{pages}} ページ · {{count}} Agent",
+    "previousPage": "前のページ",
+    "nextPage": "次のページ",
+    "extensionAgents": {
+      "title": "拡張エージェント",
+      "description": "基本セット以外のエージェント · {{count}}",
+      "enabled": "有効",
+      "disabled": "無効",
+      "toggle": "拡張エージェントを切り替え",
+      "keepBaseOnly": "基本エージェントのみ",
+      "enableExtensions": "拡張エージェントを有効化",
+      "baseAlwaysAvailable": "基本エージェントは常に利用できます"
+    },
+    "category": {
+      "all": "すべて",
+      "baseAgent": "基本エージェント",
+      "development": "開発",
+      "review": "レビュー",
+      "quality": "品質",
+      "planning": "計画",
+      "operations": "運用",
+      "research": "調査",
+      "custom": "カスタム"
+    },
+    "smallModel": {
+      "name": "小型モデル",
+      "desc": "タイトルと概要のデフォルト"
+    },
+    "role": {
+      "general": {
+        "name": "一般",
+        "desc": "充実したツール・多段階作業"
+      },
+      "explore": {
+        "name": "探検する",
+        "desc": "読み取り専用 · コードの検索と検索"
+      },
+      "component-designer": {
+        "name": "Component Designer",
+        "desc": "Focused interactive component prototype"
+      },
+      "design-reviewer": {
+        "name": "デザインレビュー",
+        "desc": "デザインレビューア · 読み取り専用"
+      },
+      "over-engineering-reviewer": {
+        "name": "オーバーエンジニアリングのレビュー",
+        "desc": "オーバーエンジニアリングレビューアー · 読み取り専用"
+      },
+      "code-reviewer": {
+        "name": "コードレビュー担当",
+        "desc": "5 観点レビュー · 読み取り専用"
+      },
+      "test-engineer": {
+        "name": "テストエンジニア",
+        "desc": "テスト戦略 · テストの作成と実行が可能"
+      },
+      "security-auditor": {
+        "name": "セキュリティ監査担当",
+        "desc": "脅威と OWASP リスク · 読み取り専用"
+      },
+      "web-performance-auditor": {
+        "name": "Web パフォーマンス監査担当",
+        "desc": "Core Web Vitals · 証拠ベース"
+      },
+      "api-and-interface-design": {
+        "name": "API & Interface Architect",
+        "desc": "Stable public contracts · compatibility and validation"
+      },
+      "browser-testing-with-devtools": {
+        "name": "Web QA Planner",
+        "desc": "Browser and accessibility verification plans · read-only"
+      },
+      "ci-cd-and-automation": {
+        "name": "CI/CD Engineer",
+        "desc": "Pipelines, quality gates, and rollback-safe releases"
+      },
+      "code-review-and-quality": {
+        "name": "Code Quality Reviewer",
+        "desc": "Multi-axis correctness and architecture review · read-only"
+      },
+      "code-simplification": {
+        "name": "Code Simplification Engineer",
+        "desc": "Reduce complexity · preserve behavior"
+      },
+      "context-engineering": {
+        "name": "Context Engineer",
+        "desc": "Minimal authoritative context pack · read-only"
+      },
+      "debugging-and-error-recovery": {
+        "name": "Root Cause Debugger",
+        "desc": "Reproduce, localize, fix, and regression-test"
+      },
+      "deprecation-and-migration": {
+        "name": "Migration Engineer",
+        "desc": "Staged compatibility, data migration, and rollback"
+      },
+      "documentation-and-adrs": {
+        "name": "Documentation & ADR Engineer",
+        "desc": "Architecture decisions, guides, and API docs"
+      },
+      "doubt-driven-development": {
+        "name": "Doubt-Driven Reviewer",
+        "desc": "Challenge assumptions and designs · read-only"
+      },
+      "frontend-ui-engineering": {
+        "name": "Frontend UI Engineer",
+        "desc": "Accessible, responsive, product-quality interfaces"
+      },
+      "git-workflow-and-versioning": {
+        "name": "Git Workflow Engineer",
+        "desc": "Branches, atomic commits, and history safety"
+      },
+      "idea-refine": {
+        "name": "Idea Refinement Partner",
+        "desc": "Compare options, MVP bounds, and validation · read-only"
+      },
+      "incremental-implementation": {
+        "name": "Incremental Implementation Engineer",
+        "desc": "Thin, buildable, continuously verified slices"
+      },
+      "interview-me": {
+        "name": "Requirements Interviewer",
+        "desc": "Find gaps and high-information questions · read-only"
+      },
+      "observability-and-instrumentation": {
+        "name": "Observability Engineer",
+        "desc": "Logs, metrics, traces, and actionable alerts"
+      },
+      "performance-optimization": {
+        "name": "Performance Engineer",
+        "desc": "Measure bottlenecks and prove before/after impact"
+      },
+      "planning-and-task-breakdown": {
+        "name": "Implementation Planner",
+        "desc": "Dependency-aware, acceptance-driven tasks · read-only"
+      },
+      "security-and-hardening": {
+        "name": "Security Hardening Engineer",
+        "desc": "Threat-model and implement scoped security fixes"
+      },
+      "shipping-and-launch": {
+        "name": "Release Readiness Engineer",
+        "desc": "Go/no-go, rollout, and rollback plans · read-only"
+      },
+      "source-driven-development": {
+        "name": "Source-Driven Researcher",
+        "desc": "Ground guidance in version-matched sources · read-only"
+      },
+      "spec-driven-development": {
+        "name": "Specification Engineer",
+        "desc": "Scenarios, interfaces, and acceptance criteria · read-only"
+      },
+      "test-driven-development": {
+        "name": "TDD Engineer",
+        "desc": "Red-green-refactor with behavior-focused proof"
+      },
+      "using-agent-skills": {
+        "name": "Engineering Workflow Advisor",
+        "desc": "Map work to the smallest suitable agent sequence · read-only"
+      },
+      "write-outline-architect": {
+        "name": "Outline Architect",
+        "desc": "Structure, arguments, and narrative progression · read-only"
+      },
+      "write-draft-author": {
+        "name": "Draft Author",
+        "desc": "Long-form drafts and focused section writing"
+      },
+      "write-developmental-editor": {
+        "name": "Developmental Editor",
+        "desc": "Improve logic, structure, pacing, and clarity"
+      },
+      "write-copy-editor": {
+        "name": "Copy Editor",
+        "desc": "Polish tone, terminology, and grammar"
+      },
+      "write-fact-checker": {
+        "name": "Fact Checker",
+        "desc": "Verify claims, figures, and uncertainty · read-only"
+      },
+      "write-citation-researcher": {
+        "name": "Citation Researcher",
+        "desc": "Authoritative sources and traceable citations · read-only"
+      },
+      "design-product-planner": {
+        "name": "Product Design Planner",
+        "desc": "Direction, goals, flows, and tradeoffs · read-only"
+      },
+      "design-ux-researcher": {
+        "name": "UX Researcher",
+        "desc": "User journeys and usability research · read-only"
+      },
+      "design-screen-designer": {
+        "name": "Screen Designer",
+        "desc": "Complete responsive screens and interaction states"
+      },
+      "design-system-architect": {
+        "name": "Design System Architect",
+        "desc": "Semantic tokens, components, and variant constraints"
+      },
+      "design-code-binder": {
+        "name": "Design Code Binder",
+        "desc": "Map design nodes to routes and source files"
+      },
+      "design-handoff-specialist": {
+        "name": "Design Handoff Specialist",
+        "desc": "DESIGN.md, implementation notes, and handoff assets"
+      },
+      "compaction": {
+        "name": "圧縮",
+        "desc": "構成可能、デフォルトはメインモデル"
+      },
+      "codeReview": {
+        "name": "コードレビュー",
+        "desc": "分離された読み取り専用実行 · 構成可能"
+      },
+      "plan": {
+        "name": "プランモード",
+        "desc": "計画ターン · デフォルトの会話モデル"
+      },
+      "title": {
+        "name": "タイトル",
+        "desc": "LLM · デフォルトは小規模モデル"
+      },
+      "summary": {
+        "name": "概要",
+        "desc": "LLM · デフォルトは小規模モデル"
+      }
+    },
+    "builtin": "内蔵",
+    "customTag": "カスタム",
+    "workspaceFile": "{{path}} で定義",
+    "workspaceReadOnly": ".kun/agents/*.md でこのロールを編集してください"
+  },
+  "summarizeSession": "要約する",
+  "summarizing": "要約すると…",
+  "summarizeFailed": "この会話を要約できませんでした",
+  "name": "名前",
+  "description": "説明",
+  "color": "色",
+  "mode": "モード",
+  "writeFocusModeEnter": "フォーカスモードに入る",
+  "writeFocusModeExit": "フォーカスモードを終了する",
+  "writeFocusModeShortcut": "⌘/Ctrl + Shift + F",
+  "writeShowLineNumbers": "行番号を表示する",
+  "writeHideLineNumbers": "行番号を非表示にする",
+  "writeEnableLineWrapping": "行折り返しを有効にする",
+  "writeDisableLineWrapping": "行の折り返しを無効にする",
+  "systemPrompt": "システムプロンプト",
+  "toolPolicy": "ツールへのアクセス"
+}

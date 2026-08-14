@@ -32,16 +32,14 @@ export function WorktreeSettingsSection({ ctx }: { ctx: Record<string, any> }): 
   const [error, setError] = useState<string | null>(null)
 
   const refresh = useCallback(async (): Promise<void> => {
-    if (!projectPath) return
     setLoading(true)
     setError(null)
     try {
-      const next = await window.kunGui.listGitBranchWorktrees({
-        projectPath,
-        worktreeRoot
-      })
+      const next = projectPath
+        ? await window.kunGui.listGitBranchWorktrees({ projectPath, worktreeRoot })
+        : null
       setResult(next)
-      if (!next.ok) setError(next.message)
+      if (next && !next.ok) setError(next.message)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
       setResult(null)

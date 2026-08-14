@@ -89,6 +89,7 @@ export function graphSupervisionObligationForSignal(
     digest: input.digest.slice(0, 4_096),
     state: 'pending',
     deliveryAttempts: 0,
+    consecutiveDeliveryFailures: 0,
     noProgressCount: 0,
     lastProgressSeq: run.lastEventSeq,
     createdAt: nowIso,

@@ -2,7 +2,7 @@ import { browserStorage, type BrowserStorageLike } from '../lib/browser-storage'
 import type { ChatBlock } from '../agent/types'
 import type { QueuedUserMessage } from './chat-store-types'
 
-export type QueuedMessageDeliveryState = 'pending' | 'starting' | 'in_flight'
+export type QueuedMessageDeliveryState = 'pending' | 'paused' | 'starting' | 'in_flight' | 'failed'
 
 export type QueuedMessageRegistry = {
   version: 1
@@ -22,15 +22,59 @@ function normalizedString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
 }
 
+function normalizeDesignImagePlacementTarget(
+  value: unknown
+): QueuedUserMessage['designImagePlacementTarget'] | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const source = value as Record<string, unknown>
+  const shapeId = normalizedString(source.shapeId)
+  const expectedImageUrl = normalizedString(source.expectedImageUrl)
+  const expectedHolderKind = source.expectedHolderKind === 'explicit' ? 'explicit' as const
+    : source.expectedHolderKind === 'implicit-image' ? 'implicit-image' as const
+      : source.expectedHolderKind === 'implicit-frame' ? 'implicit-frame' as const
+        : source.expectedHolderKind === 'implicit-rect' ? 'implicit-rect' as const
+          : undefined
+  if (!shapeId || shapeId.length > 256 || expectedImageUrl.length > 8_192 ||
+    Boolean(expectedImageUrl) === Boolean(expectedHolderKind)) return undefined
+  return {
+    shapeId,
+    ...(expectedImageUrl ? { expectedImageUrl } : { expectedHolderKind })
+  }
+}
+
+function normalizeWriteContext(
+  value: unknown
+): QueuedUserMessage['writeContext'] | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const source = value as Record<string, unknown>
+  const workspaceRoot = normalizedString(source.workspaceRoot)
+  const activeFilePath = source.activeFilePath === null
+    ? null
+    : normalizedString(source.activeFilePath)
+  const documentEpoch = source.documentEpoch
+  const contentRevision = source.contentRevision
+  const threadId = normalizedString(source.threadId)
+  if (
+    !workspaceRoot || !threadId ||
+    (activeFilePath !== null && !activeFilePath) ||
+    typeof documentEpoch !== 'number' || !Number.isInteger(documentEpoch) || documentEpoch < 0 ||
+    typeof contentRevision !== 'number' || !Number.isInteger(contentRevision) || contentRevision < 0
+  ) return undefined
+  return { workspaceRoot, activeFilePath, documentEpoch, contentRevision, threadId }
+}
+
 function normalizeQueuedMessage(value: unknown): QueuedUserMessage | null {
   if (!value || typeof value !== 'object') return null
   const source = value as Record<string, unknown>
   const id = normalizedString(source.id)
   const text = normalizedString(source.text)
   if (!id || !text) return null
+  const hasWriteContext = source.writeContext !== undefined
+  const writeContext = normalizeWriteContext(source.writeContext)
+  if (hasWriteContext && !writeContext) return null
 
   const deliveryState: QueuedMessageDeliveryState =
-    source.deliveryState === 'starting' || source.deliveryState === 'in_flight'
+    source.deliveryState === 'paused' || source.deliveryState === 'starting' || source.deliveryState === 'in_flight' || source.deliveryState === 'failed'
     ? source.deliveryState
     : 'pending'
   const deliveryTurnId = normalizedString(source.deliveryTurnId)
@@ -50,9 +94,41 @@ function normalizeQueuedMessage(value: unknown): QueuedUserMessage | null {
   }
   if (source.serviceTier === 'priority') normalized.serviceTier = 'priority'
   else delete normalized.serviceTier
+  if (source.messageSource === 'design_continuation') {
+    normalized.messageSource = 'design_continuation'
+  } else {
+    delete normalized.messageSource
+  }
+  const clientRequestId = normalizedString(source.clientRequestId)
+  if (clientRequestId) normalized.clientRequestId = clientRequestId
+  else delete normalized.clientRequestId
+  if (source.waitForRuntimeAdmission === true) normalized.waitForRuntimeAdmission = true
+  else delete normalized.waitForRuntimeAdmission
+  if (writeContext) normalized.writeContext = writeContext
+  else delete normalized.writeContext
+  const placementTarget = normalizeDesignImagePlacementTarget(source.designImagePlacementTarget)
+  if (placementTarget) normalized.designImagePlacementTarget = placementTarget
+  else delete normalized.designImagePlacementTarget
   const expectedThreadId = normalizedString(source.expectedThreadId)
   if (expectedThreadId) normalized.expectedThreadId = expectedThreadId
   else delete normalized.expectedThreadId
+  const resume = source.subagentResume
+  if (resume && typeof resume === 'object' && !Array.isArray(resume)) {
+    const childId = normalizedString((resume as Record<string, unknown>).childId)
+    const expectedResumeCount = (resume as Record<string, unknown>).expectedResumeCount
+    if (
+      childId &&
+      typeof expectedResumeCount === 'number' &&
+      Number.isInteger(expectedResumeCount) &&
+      expectedResumeCount >= 0
+    ) {
+      normalized.subagentResume = { childId, expectedResumeCount }
+    } else {
+      delete normalized.subagentResume
+    }
+  } else {
+    delete normalized.subagentResume
+  }
   return normalized
 }
 
@@ -70,6 +146,9 @@ export function normalizeQueuedMessageRegistry(raw: unknown): QueuedMessageRegis
     const seenIds = new Set<string>()
     const messages = record.messages.flatMap((message) => {
       const normalized = normalizeQueuedMessage(message)
+      if (normalized?.writeContext && normalized.writeContext.threadId !== threadId) {
+        return []
+      }
       if (!normalized || seenIds.has(normalized.id)) return []
       seenIds.add(normalized.id)
       return [normalized]
@@ -181,18 +260,27 @@ export function reconcileQueuedMessages(
   const reconciled: QueuedUserMessage[] = []
   for (const message of messages) {
     const state = message.deliveryState ?? 'pending'
-    if (state === 'pending') {
+    // A terminal failure stays failed across reconciliation; only an explicit
+    // user retry or removal moves it.
+    if (state === 'failed') {
+      reconciled.push({
+        ...message,
+        deliveryState: 'failed'
+      })
+      continue
+    }
+    if (state === 'pending' || state === 'paused') {
       if (
-        message.deliveryState === 'pending' &&
+        message.deliveryState === state &&
         !message.deliveryTurnId &&
         !message.deliveryUserMessageItemId
       ) {
         reconciled.push(message)
       } else {
-        const pending = { ...message, deliveryState: 'pending' as const }
-        delete pending.deliveryTurnId
-        delete pending.deliveryUserMessageItemId
-        reconciled.push(pending)
+        const retained = { ...message, deliveryState: state }
+        delete retained.deliveryTurnId
+        delete retained.deliveryUserMessageItemId
+        reconciled.push(retained)
       }
       continue
     }

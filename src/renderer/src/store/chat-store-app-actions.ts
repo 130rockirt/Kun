@@ -10,6 +10,7 @@ import {
   composerModeForThread,
   composerReasoningEffortForSelection,
   persistComposerMode,
+  persistComposerPersonaId,
   persistComposerProviderId,
   providerIdForComposerModel,
   providerIdMatchesComposerModel,
@@ -61,6 +62,7 @@ export function createAppActions(options: CreateAppActionsOptions): Pick<
   | 'setComposerReasoningEffort'
   | 'setComposerFastMode'
   | 'setComposerAgentId'
+  | 'setComposerPersonaId'
   | 'loadComposerModels'
   | 'setRoute'
   | 'openWrite'
@@ -176,6 +178,12 @@ export function createAppActions(options: CreateAppActionsOptions): Pick<
 
     setComposerAgentId: (agentId) => {
       set({ composerAgentId: agentId.trim() })
+    },
+
+    setComposerPersonaId: (presetId) => {
+      const normalized = presetId.trim()
+      set({ composerPersonaId: normalized })
+      persistComposerPersonaId(normalized)
     },
 
     loadComposerModels: async () => {
@@ -329,7 +337,7 @@ export function createAppActions(options: CreateAppActionsOptions): Pick<
       return task
     },
 
-    setRoute: (route) => set({ route }),
+    setRoute: (route) => set({ route: route === 'design' ? 'chat' : route }),
 
     openWrite: async () => {
       set({ route: 'write' })
@@ -339,12 +347,14 @@ export function createAppActions(options: CreateAppActionsOptions): Pick<
       set((state) => ({
         route: 'settings',
         settingsSection: section,
-        settingsReturnRoute: state.route === 'settings' ? state.settingsReturnRoute : state.route
+        settingsReturnRoute: state.route === 'settings'
+          ? state.settingsReturnRoute === 'design' ? 'chat' : state.settingsReturnRoute
+          : state.route === 'design' ? 'chat' : state.route
       })),
 
     closeSettings: () =>
       set((state) => ({
-        route: state.settingsReturnRoute
+        route: state.settingsReturnRoute === 'design' ? 'chat' : state.settingsReturnRoute
       })),
 
     openPlugins: (host?: PluginHostRoute) =>
@@ -366,7 +376,7 @@ export function createAppActions(options: CreateAppActionsOptions): Pick<
       set({ route: 'workflow' })
     },
     openDesign: () => {
-      set({ route: 'design' })
+      set({ route: 'chat' })
     },
 
     openInitialSetup: (mode: InitialSetupMode = 'required') =>
@@ -396,6 +406,8 @@ export function createAppActions(options: CreateAppActionsOptions): Pick<
         workspaceLabel: workspaceLabelFromPath(workspaceRoot),
         conversationWorkspaceRoot: settings.conversationWorkspaceRoot || '',
         disabledSkillIds: settings.disabledSkillIds,
+        codeAgentPresets: settings.codeAgentPresets,
+        composerPersonaEnabled: settings.codeAgentPersonaEnabled !== false,
         graphEnabled: settings.agents.kun.graph?.enabled === true,
         composerOrchestration:
           settings.agents.kun.graph?.enabled === true && get().composerOrchestration === 'graph'

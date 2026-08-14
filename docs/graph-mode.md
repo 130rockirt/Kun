@@ -372,9 +372,9 @@ token/time 和 revision 信息，而不是简单拼接 worker 文本。
 
 Worktree capture 会 stage 全部新增、修改、删除和空文件，再生成相对 base
 revision 的 binary patch。集成前检查 changed files 均在冻结 scope 内，并执行
-stale/dirty/conflict 检查。安全 patch 幂等 apply；未知用户 dirty changes 或
-冲突进入 needs-human。未 accepted、conflict、orphaned 或唯一含未合并变更的
-worktree 永不自动删除。
+stale/dirty/conflict 检查。安全 patch 幂等 apply；不重叠的用户 dirty changes 会原样
+保留且不改变其暂存状态，只有与 Graph patch 路径重叠的未知 dirty changes 或冲突才进入
+needs-human。未 accepted、conflict、orphaned 或唯一含未合并变更的 worktree 永不自动删除。
 
 ## 11. 项目 Agent、路由与评级
 

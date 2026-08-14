@@ -1,0 +1,638 @@
+html[data-ui-plugin="lv-dongbin-cloud-sword"]
+  .workspace-mode-tab[aria-selected="true"] {
+  border-color: #dfbd70 !important;
+  background: linear-gradient(180deg, #32746a, #16473f) !important;
+  box-shadow:
+    inset 0 0 0 1px rgba(247, 224, 174, 0.16),
+    0 2px 5px rgba(4, 31, 28, 0.36) !important;
+}
+
+html[data-ui-plugin="lv-dongbin-cloud-sword"] .workspace-mode-tab svg {
+  color: #dfc17e !important;
+}
+
+html[data-ui-plugin="lv-dongbin-cloud-sword"] .ds-sidebar-section-header {
+  background: linear-gradient(90deg, rgba(47, 113, 107, 0.24), transparent 76%)
+    left bottom / 100% 1px no-repeat;
+}
+
+html[data-ui-plugin="lv-dongbin-cloud-sword"]
+  .ds-sidebar-section-header
+  > span {
+  color: #5f5847;
+}
+
+html[data-ui-plugin="lv-dongbin-cloud-sword"]
+  :is(.ds-sidebar-command-row, .ds-sidebar-tree-row) {
+  color: #293a35;
+}
+
+html[data-ui-plugin="lv-dongbin-cloud-sword"]
+  :is(.ds-sidebar-command-row, .ds-sidebar-tree-row):hover {
+  border-color: rgba(47, 113, 107, 0.32);
+  background: linear-gradient(
+    90deg,
+    rgba(47, 113, 107, 0.14),
+    rgba(246, 232, 201, 0.52)
+  );
+  box-shadow: inset 3px 0 #1c5b52;
+}
+
+html[data-ui-plugin="lv-dongbin-cloud-sword"]
+  :is(.ds-sidebar-command-row, .ds-sidebar-tree-row)[data-active="true"] {
+  border-color: #987033;
+  background:
+    linear-gradient(90deg, rgba(47, 113, 107, 0.18), transparent 18%),
+    linear-gradient(180deg, #f1e2bd, #d9bd83);
+  color: #193d37;
+  box-shadow:
+    inset 5px 0 #1b6157,
+    inset 0 0 0 1px rgba(255, 248, 224, 0.7),
+    0 3px 8px rgba(52, 39, 18, 0.2);
+}
+
+html[data-ui-plugin="lv-dongbin-cloud-sword"]
+  .ds-sidebar-tree-row[data-active="true"]::after {
+  border-color: #5f431b;
+  background: #c89c4c;
+}
+
+html[data-ui-plugin="lv-dongbin-cloud-sword"] .ds-sidebar-icon-button {
+  color: #37635b;
+}
+
+html[data-ui-plugin="lv-dongbin-cloud-sword"] .ds-sidebar-footer {
+  border-color: #b88b43;
+  background:
+    radial-gradient(
+      circle at 75% 26%,
+      transparent 0 2.1rem,
+      rgba(218, 190, 127, 0.07) 2.15rem 2.21rem,
+      transparent 2.27rem
+    ),
+    repeating-linear-gradient(
+      135deg,
+      rgba(214, 184, 119, 0.052) 0 2px,
+      transparent 2px 10px
+    ),
+    linear-gradient(180deg, #18473f, #0d342f 72%, #082722) !important;
+  color: #eee1bd;
+  box-shadow:
+    inset 0 0 0 1px rgba(228, 198, 137, 0.2),
+    inset 0 5px 0 rgba(6, 39, 34, 0.5),
+    0 0 0 2px rgba(11, 51, 45, 0.86),
+    0 4px 12px rgba(3, 27, 24, 0.34);
+}
+
+html[data-ui-plugin="lv-dongbin-cloud-sword"]
+  .ds-sidebar-footer
+  [role="switch"] {
+  border-color: #aa7d38 !important;
+  background:
+    radial-gradient(
+      circle at 78% 50%,
+      transparent 0 1.35rem,
+      rgba(50, 86, 76, 0.08) 1.4rem 1.45rem,
+      transparent 1.5rem
+    ),
+    linear-gradient(180deg, #f5e7c5, #d9bd83) !important;
+  color: #24433d !important;
+}
+
+html[data-ui-plugin="lv-dongbin-cloud-sword"]
+  .ds-sidebar-footer
+  [role="switch"]
+  > span:last-child {
+  background: linear-gradient(180deg, #2d766b, #174d45) !important;
+}
+
+html[data-ui-plugin="lv-dongbin-cloud-sword"]
+  .ds-sidebar-footer
+  :is(.ds-sidebar-command-row, .ds-sidebar-icon-button) {
+  color: #eee1bd !important;
+}
+
+html[data-ui-plugin="lv-dongbin-cloud-sword"]
+  :is(.session-header-compact, .chat-topbar-actions) {
+  color: #243731;
+}
+
+html[data-ui-plugin="lv-dongbin-cloud-sword"] .session-header-compact-meta {
+  color: #695f4d;
+}
+
+html[data-ui-plugin="lv-dongbin-cloud-sword"] .ds-message-timeline-content {
+  color: #253832;
+  font-size: 1rem;
+  font-weight: 480;
+  line-height: 1.7;
+}
+
+html[data-ui-plugin="lv-dongbin-cloud-sword"] .ds-chat-answer {
+  border-color: rgba(117, 84, 37, 0.48);
+  border-left-color: #276b61;
+  background:
+    radial-gradient(
+      circle at 93% 10%,
+      transparent 0 2.25rem,
+      rgba(47, 113, 107, 0.055) 2.3rem 2.38rem,
+      transparent 2.43rem
+    ),
+    repeating-linear-gradient(
+      0deg,
+      rgba(58, 62, 48, 0.032) 0 1px,
+      transparent 1px 1.65rem
+    ),
+    linear-gradient(
+      145deg,
+      rgba(251, 244, 224, 0.97),
+      rgba(231, 211, 169, 0.95)
+    );
+  color: #263a34;
+}
+
+html[data-ui-plugin="lv-dongbin-cloud-sword"] .ds-user-message-bubble {
+  border-color: rgba(139, 99, 40, 0.46);
+  background: linear-gradient(
+    145deg,
+    rgba(246, 231, 190, 0.98),
+    rgba(217, 189, 127, 0.96)
+  );
+  color: #263a34;
+}
+
+html[data-ui-plugin="lv-dongbin-cloud-sword"]
+  .ds-markdown
+  [data-streamdown="table"] {
+  --ds-table-head-bg: #1c5149;
+  background: rgba(244, 228, 195, 0.76);
+}
+
+html[data-ui-plugin="lv-dongbin-cloud-sword"] .ds-markdown th {
+  border-bottom-color: #ae843d;
+  background: linear-gradient(180deg, #2c6e64, #174a43) !important;
+  color: #f0dba8 !important;
+}
+
+html[data-ui-plugin="lv-dongbin-cloud-sword"] .ds-markdown td {
+  background: rgba(249, 239, 215, 0.5);
+  color: #293b36;
+}
+
+html[data-ui-plugin="lv-dongbin-cloud-sword"]
+  .ds-markdown
+  tbody
+  tr:nth-child(even)
+  td {
+  background: rgba(206, 188, 145, 0.3);
+}
+
+html[data-ui-plugin="lv-dongbin-cloud-sword"] .ds-workbench-side-rail {
+  position: relative;
+  width: 3rem;
+  gap: 0.45rem;
+  border-left: 4px solid #123b35 !important;
+  border-radius: 0.48rem 0 0 0.48rem;
+  background:
+    radial-gradient(
+      circle at 55% 12%,
+      rgba(76, 62, 34, 0.09) 0 1px,
+      transparent 2px
+    ),
+    repeating-linear-gradient(
+      0deg,
+      rgba(80, 64, 34, 0.035) 0 1px,
+      transparent 1px 1.45rem
+    ),
+    linear-gradient(90deg, #d4b878, #f3e5c5 18%, #e7d2a8 76%, #caa960) !important;
+  padding-block: 0.8rem;
+  box-shadow:
+    inset 2px 0 #b88b43,
+    inset 5px 0 rgba(255, 246, 218, 0.56),
+    -5px 0 14px rgba(4, 31, 28, 0.22);
+  backdrop-filter: none;
+}
+
+html[data-ui-plugin="lv-dongbin-cloud-sword"]
+  .ds-workbench-side-rail
+  .ds-side-rail-button {
+  width: 2rem;
+  height: 2rem;
+  border-color: transparent !important;
+  background: transparent !important;
+  color: #64563b !important;
+  box-shadow: none !important;
+}
+
+html[data-ui-plugin="lv-dongbin-cloud-sword"]
+  .ds-workbench-side-rail
+  .ds-side-rail-button[aria-pressed="true"] {
+  border-color: #c59849 !important;
+  background: linear-gradient(180deg, #2c6f65, #153f39) !important;
+  color: #efd596 !important;
+}
+
+html[data-ui-plugin="lv-dongbin-cloud-sword"]
+  .ds-composer-shell.ds-chat-composer {
+  border-color: #123b35 !important;
+  outline-color: #b88b43;
+  background:
+    radial-gradient(
+      circle at 51% 26%,
+      transparent 0 2.45rem,
+      rgba(47, 113, 107, 0.075) 2.5rem 2.56rem,
+      transparent 2.62rem
+    ),
+    linear-gradient(
+        33deg,
+        transparent 49.7%,
+        rgba(47, 113, 107, 0.05) 49.85% 50.15%,
+        transparent 50.3%
+      )
+      51% 26% / 7.2rem 7.2rem no-repeat,
+    linear-gradient(
+        123deg,
+        transparent 49.7%,
+        rgba(47, 113, 107, 0.05) 49.85% 50.15%,
+        transparent 50.3%
+      )
+      51% 26% / 7.2rem 7.2rem no-repeat,
+    repeating-linear-gradient(
+      0deg,
+      rgba(43, 69, 61, 0.05) 0 1px,
+      transparent 1px 1.48rem
+    ),
+    linear-gradient(
+      102deg,
+      rgba(250, 242, 220, 0.99),
+      rgba(232, 213, 174, 0.98)
+    ) !important;
+  box-shadow:
+    inset 0 0 0 2px rgba(255, 247, 222, 0.76),
+    inset 0 0 0 6px rgba(47, 113, 107, 0.13),
+    0 0 0 2px #b88b43,
+    0 0 0 5px rgba(18, 59, 53, 0.92),
+    0 14px 34px rgba(4, 31, 28, 0.3) !important;
+}
+
+html[data-ui-plugin="lv-dongbin-cloud-sword"] .ds-composer-textarea {
+  color: #244038;
+  caret-color: #a33a2b;
+}
+
+html[data-ui-plugin="lv-dongbin-cloud-sword"]
+  .ds-composer-textarea::placeholder {
+  color: rgba(48, 75, 67, 0.62);
+}
+
+html[data-ui-plugin="lv-dongbin-cloud-sword"] .ds-composer-toolbar {
+  border-top-color: rgba(126, 91, 40, 0.44);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(249, 237, 207, 0.5) 15% 85%,
+    transparent
+  );
+}
+
+html[data-ui-plugin="lv-dongbin-cloud-sword"]
+  :is(
+    .ds-composer-model-picker,
+    .ds-composer-model-picker > button,
+    .ds-composer-agent-picker > button
+  ) {
+  color: #24433c !important;
+}
+
+html[data-ui-plugin="lv-dongbin-cloud-sword"] .ds-composer-context {
+  color: #b88b43;
+}
+
+html[data-ui-plugin="lv-dongbin-cloud-sword"] .ds-composer-primary-action {
+  border-color: #17483f !important;
+  background:
+    radial-gradient(circle, #f5e8bd 0 18%, transparent 20%),
+    conic-gradient(from 45deg, #b88b43, #ead59a, #8e632a, #d6b66b, #b88b43) !important;
+  color: #17483f !important;
+}
+
+html[data-ui-plugin="lv-dongbin-cloud-sword"] .ds-composer-footer {
+  border-top-color: rgba(168, 121, 52, 0.5);
+  background: rgba(13, 52, 47, 0.24);
+  color: #e8d8ae;
+}
+
+html[data-ui-plugin="lv-dongbin-cloud-sword"]
+  .ds-composer-footer
+  .ds-composer-usage-context-savings {
+  color: #7ed0b3 !important;
+}
+
+html[data-ui-plugin="lv-dongbin-cloud-sword"]
+  .write-workspace-view
+  > .ds-stage-inset
+  .ds-topbar-surface {
+  border-color: #123b35;
+  outline-color: #b88b43;
+  background: linear-gradient(
+    102deg,
+    rgba(247, 236, 206, 0.97),
+    rgba(219, 196, 151, 0.96)
+  ) !important;
+}
+
+html[data-ui-plugin="lv-dongbin-cloud-sword"]
+  .write-workspace-view
+  .write-workspace-toolbar-modes,
+html[data-ui-plugin="lv-dongbin-cloud-sword"]
+  .design-workspace-view
+  .design-canvas-toolbar {
+  border-color: #b88b43 !important;
+  background: linear-gradient(180deg, #2a6b61, #123f39) !important;
+}
+
+html[data-ui-plugin="lv-dongbin-cloud-sword"]
+  .write-workspace-view
+  .write-workspace-toolbar-modes
+  button,
+html[data-ui-plugin="lv-dongbin-cloud-sword"]
+  .design-workspace-view
+  .design-canvas-toolbar
+  button {
+  color: #efd8a1 !important;
+}
+
+html[data-ui-plugin="lv-dongbin-cloud-sword"]
+  .write-workspace-view
+  .write-document-shell:not(.write-focus-mode-shell) {
+  border-color: #123b35;
+  outline-color: rgba(184, 139, 67, 0.9);
+  background:
+    repeating-linear-gradient(
+      0deg,
+      rgba(47, 74, 64, 0.035) 0 1px,
+      transparent 1px 1.55rem
+    ),
+    rgba(248, 236, 207, 0.87) !important;
+}
+
+html[data-ui-plugin="lv-dongbin-cloud-sword"]
+  :is(.write-assistant-panel, .design-ai-panel) {
+  border-left-color: #123b35 !important;
+  background: linear-gradient(105deg, #f5e6c6, #d8bd84) !important;
+  box-shadow:
+    inset 2px 0 #b88b43,
+    inset 5px 0 rgba(255, 245, 216, 0.54),
+    -5px 0 14px rgba(4, 31, 28, 0.22);
+}
+
+html[data-ui-plugin="lv-dongbin-cloud-sword"]
+  :is(.write-assistant-header, .design-ai-header) {
+  background: linear-gradient(
+    180deg,
+    rgba(249, 237, 208, 0.97),
+    rgba(220, 196, 150, 0.94)
+  ) !important;
+}
+
+html[data-ui-plugin="lv-dongbin-cloud-sword"]
+  .design-workspace-view
+  .ds-stage-design-canvas {
+  box-shadow:
+    inset 0 0 0 4px #123b35,
+    inset 0 0 0 6px #b88b43,
+    inset 0 0 0 8px rgba(242, 220, 171, 0.42),
+    0 10px 26px rgba(4, 31, 28, 0.25);
+}
+
+html[data-ui-plugin="lv-dongbin-cloud-sword"]
+  .design-workspace-view
+  .ds-stage-design-canvas-fill {
+  background-color: transparent !important;
+}
+
+html[data-ui-plugin="lv-dongbin-cloud-sword"]
+  .design-workspace-view
+  :is(.design-canvas-zoom-bar, .design-canvas-minimap) {
+  border-color: #aa7d38 !important;
+  background: linear-gradient(
+    180deg,
+    rgba(244, 231, 199, 0.97),
+    rgba(211, 184, 130, 0.97)
+  ) !important;
+  color: #244038;
+}
+
+html[data-theme="dark"][data-ui-plugin="lv-dongbin-cloud-sword"]
+  .ds-sidebar-shell {
+  background: transparent !important;
+  color: #f2e4c6;
+}
+
+html[data-theme="dark"][data-ui-plugin="lv-dongbin-cloud-sword"]
+  .ds-composer-shell.ds-chat-composer,
+html[data-theme="dark"][data-ui-plugin="lv-dongbin-cloud-sword"]
+  .write-workspace-view
+  .write-document-shell:not(.write-focus-mode-shell) {
+  background:
+    repeating-linear-gradient(
+      0deg,
+      rgba(222, 190, 122, 0.04) 0 1px,
+      transparent 1px 1.48rem
+    ),
+    linear-gradient(105deg, rgba(22, 66, 59, 0.97), rgba(7, 31, 29, 0.98)) !important;
+  color: #f1e1bd;
+}
+
+html[data-theme="dark"][data-ui-plugin="lv-dongbin-cloud-sword"]
+  :is(.write-assistant-panel, .design-ai-panel) {
+  background: linear-gradient(105deg, #16463f, #071f1d) !important;
+  color: #f1e1bd;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html[data-ui-plugin-scene-chrome-composer='nautical']
+    .ds-composer-primary-action:hover:not(:disabled) {
+    transform: none;
+  }
+}
+
+/* Grand Line Logbook ------------------------------------------------------
+ * A dedicated host recipe for the reference design. Unlike the older
+ * nautical recipe, this chrome uses a navy hull around the complete sidebar,
+ * keeps the mode switch dark in every state, and gives the composer a rigid
+ * double brass/navy logbook frame. The plugin artwork stays non-interactive. */
+html[data-ui-plugin-scene-chrome-sidebar='grand-line']
+  :is(.ds-sidebar-shell, .ds-settings-sidebar),
+html[data-ui-plugin-scene-chrome-topbar='grand-line'] .ds-topbar-surface,
+html[data-ui-plugin-scene-chrome-composer='grand-line']
+  .ds-composer-shell.ds-chat-composer,
+html[data-ui-plugin-scene-chrome-cards='grand-line']
+  :is(
+    .ds-card-soft,
+    .ds-card-strong,
+    .ds-card-muted,
+    .ds-card-ghost,
+    .ds-surface-soft,
+    .ds-surface-strong
+  ),
+html[data-ui-plugin-scene-chrome-cards='grand-line']
+  .ds-markdown
+  [data-streamdown='table-wrapper']
+  > div:last-child,
+html[data-ui-plugin-scene-chrome-cards='grand-line']
+  .ds-markdown
+  [data-streamdown='table'] {
+  --ds-table-head-bg: #f8edd3;
+  border-color: rgba(116, 74, 25, 0.5);
+  background:
+    radial-gradient(circle at 18% 13%, rgba(111, 70, 25, 0.08) 0 1px, transparent 2px),
+    repeating-linear-gradient(0deg, rgba(73, 52, 31, 0.035) 0 1px, transparent 1px 1.5rem),
+    linear-gradient(165deg, rgba(255, 246, 221, 0.96), rgba(231, 199, 142, 0.94));
+  background-size: 68px 68px, auto, auto;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 250, 232, 0.7),
+    0 12px 30px rgba(35, 24, 12, 0.12);
+}
+
+html[data-ui-plugin-scene-chrome-sidebar='grand-line'] .ds-sidebar-shell {
+  --ds-sidebar-row-active: rgba(218, 177, 102, 0.42);
+  --ds-sidebar-row-hover: rgba(16, 55, 79, 0.1);
+  --ds-sidebar-row-ring: rgba(107, 65, 20, 0.58);
+  --ds-sidebar-field-bg: rgba(255, 243, 210, 0.78);
+  --ds-sidebar-field-focus: rgba(255, 249, 229, 0.96);
+  --ds-sidebar-divider: rgba(95, 61, 24, 0.34);
+  box-sizing: border-box;
+  border: 7px solid #072b46;
+  border-radius: 1rem 0.35rem 0.35rem 1rem;
+  background:
+    radial-gradient(circle at 15% 11%, rgba(117, 74, 24, 0.13) 0 1px, transparent 2px),
+    radial-gradient(circle at 78% 58%, rgba(20, 61, 82, 0.08) 0 1px, transparent 2px),
+    repeating-linear-gradient(0deg, rgba(77, 54, 29, 0.035) 0 1px, transparent 1px 1.55rem),
+    linear-gradient(103deg, #fff0c9 0%, #f0d8a5 72%, #d6ae68 100%);
+  background-size: 72px 72px, 96px 96px, auto, auto;
+  box-shadow:
+    inset 0 0 0 2px #c89949,
+    inset 0 0 0 5px rgba(255, 239, 195, 0.54),
+    inset 0 0 30px rgba(87, 52, 15, 0.12),
+    7px 0 20px rgba(3, 27, 45, 0.24);
+  color: #1b3446;
+}
+
+html[data-ui-plugin='grand-line-logbook']
+  :is(
+    .ds-sidebar-shell,
+    .ds-chat-stage,
+    .ds-workbench-side-rail,
+    .ds-floating-composer,
+    .ds-topbar-surface
+  ) {
+  font-family: 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei',
+    -apple-system, BlinkMacSystemFont, sans-serif;
+  font-kerning: normal;
+  text-rendering: geometricPrecision;
+}
+
+html[data-ui-plugin='grand-line-logbook'] .ds-chat-stage {
+  box-shadow: inset 0 0 0 1px rgba(196, 147, 67, 0.54);
+}
+
+html[data-ui-plugin='grand-line-logbook']
+  .ds-ui-plugin-scene-artwork-ambient {
+  object-fit: fill;
+}
+
+/* Keep the 1920x1200 foreground proportional while making it own the full
+ * stage width and the actual bottom edge. A fixed 100% x 100% contain box
+ * centers the bitmap and exposes side gutters in wide windows or a bottom
+ * gutter in tall windows. Intrinsic-height sizing removes both failure modes. */
+html[data-ui-plugin='grand-line-logbook']
+  .ds-ui-plugin-scene-artwork-foreground {
+  width: 100%;
+  height: auto;
+  object-fit: contain;
+  object-position: center bottom;
+}
+
+html[data-ui-plugin-scene-chrome-sidebar='grand-line'] .ds-sidebar-shell::before {
+  background:
+    radial-gradient(circle at 74% 16%, transparent 0 38px, rgba(76, 55, 31, 0.1) 39px 40px, transparent 41px),
+    repeating-radial-gradient(circle at 74% 16%, transparent 0 17px, rgba(115, 75, 28, 0.05) 18px 19px, transparent 20px 30px),
+    linear-gradient(121deg, transparent 0 69%, rgba(89, 55, 19, 0.06) 69.2% 69.5%, transparent 69.7%);
+  opacity: 1;
+}
+
+html[data-ui-plugin-scene-chrome-sidebar='grand-line'] .ds-sidebar-titlebar-spacer {
+  border-bottom: 1px solid rgba(123, 78, 25, 0.28);
+  box-shadow: 0 1px rgba(255, 246, 216, 0.72);
+}
+
+html[data-ui-plugin-scene-chrome-sidebar='grand-line'] .workspace-mode-tabs {
+  border: 2px solid #c59849 !important;
+  border-radius: 0.62rem !important;
+  background: linear-gradient(180deg, #123f60, #062b47) !important;
+  padding: 0.18rem !important;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 225, 164, 0.2),
+    0 3px 8px rgba(3, 28, 47, 0.3) !important;
+}
+
+html[data-ui-plugin-scene-chrome-sidebar='grand-line'] .workspace-mode-tab,
+html[data-ui-plugin-scene-chrome-sidebar='grand-line']
+  .workspace-mode-tab[aria-selected='true'] {
+  border: 1px solid transparent !important;
+  background: linear-gradient(180deg, rgba(23, 70, 99, 0.94), rgba(6, 42, 70, 0.96)) !important;
+  color: #e8c476 !important;
+  text-shadow: 0 1px rgba(0, 0, 0, 0.3) !important;
+  box-shadow: none !important;
+}
+
+html[data-ui-plugin-scene-chrome-sidebar='grand-line']
+  .workspace-mode-tab[aria-selected='true'] {
+  border-color: #e3bd6b !important;
+  background: linear-gradient(180deg, #1d5376, #0a3453) !important;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 229, 174, 0.18),
+    0 2px 5px rgba(0, 20, 36, 0.36) !important;
+}
+
+html[data-ui-plugin-scene-chrome-sidebar='grand-line'] .workspace-mode-tab svg {
+  color: #e8c476 !important;
+}
+
+html[data-ui-plugin-scene-chrome-sidebar='grand-line'] .ds-sidebar-section-header {
+  background: linear-gradient(90deg, rgba(148, 95, 25, 0.32), transparent 76%) left bottom / 100% 1px no-repeat;
+}
+
+html[data-ui-plugin-scene-chrome-sidebar='grand-line'] .ds-sidebar-section-header > span {
+  color: #604c35;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+
+html[data-ui-plugin-scene-chrome-sidebar='grand-line']
+  :is(.ds-sidebar-command-row, .ds-sidebar-tree-row) {
+  position: relative;
+  min-height: 2.25rem;
+  border: 1px solid transparent;
+  border-radius: 0.32rem 0.72rem 0.72rem 0.32rem;
+  color: #243744;
+  font-size: 0.94rem;
+  font-weight: 560;
+  line-height: 1.35;
+  letter-spacing: 0;
+}
+
+html[data-ui-plugin-scene-chrome-sidebar='grand-line']
+  .ds-sidebar-tree-row > button {
+  min-height: 2.25rem;
+  padding-block: 0.48rem;
+  padding-inline: 0.72rem;
+}
+
+html[data-ui-plugin-scene-chrome-sidebar='grand-line']
+  :is(.ds-sidebar-command-row, .ds-sidebar-tree-row):hover {
+  border-color: rgba(145, 91, 24, 0.3);
+  background: linear-gradient(90deg, rgba(12, 52, 79, 0.1), rgba(255, 242, 208, 0.5));
+  box-shadow: inset 3px 0 #0a3858;
+}

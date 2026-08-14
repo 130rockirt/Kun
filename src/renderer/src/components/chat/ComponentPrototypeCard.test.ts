@@ -14,6 +14,8 @@ const actionMocks = vi.hoisted(() => ({
   readWorkspaceFile: vi.fn(),
   writeText: vi.fn(),
   openDesign: vi.fn(),
+  showDesignDocument: vi.fn(),
+  requestCodeCanvasPanelOpen: vi.fn(),
   importComponentPrototype: vi.fn()
 }))
 
@@ -25,11 +27,23 @@ vi.mock('../../lib/workspace-file-preview', () => ({
 }))
 
 vi.mock('../../store/chat-store', () => ({
-  useChatStore: { getState: () => ({ openDesign: actionMocks.openDesign }) }
+  useChatStore: {
+    getState: () => ({ openDesign: actionMocks.openDesign, activeThreadId: 'thr_test' })
+  }
 }))
 
 vi.mock('../../design/component-prototype-canvas-import', () => ({
   importComponentPrototypeToDesignCanvas: actionMocks.importComponentPrototype
+}))
+
+vi.mock('../../design/code-canvas-design-surface', () => ({
+  useCodeCanvasDesignSurface: {
+    getState: () => ({ showDesignDocument: actionMocks.showDesignDocument })
+  }
+}))
+
+vi.mock('../../lib/code-canvas-panel-event', () => ({
+  requestCodeCanvasPanelOpen: actionMocks.requestCodeCanvasPanelOpen
 }))
 
 vi.mock('../design/DesignHtmlPreviewHost', async () => {
@@ -189,6 +203,8 @@ describe('ComponentPrototypeCard interactions', () => {
     actionMocks.readWorkspaceFile.mockReset().mockResolvedValue({ ok: true, content: '<html></html>' })
     actionMocks.writeText.mockReset().mockResolvedValue(undefined)
     actionMocks.openDesign.mockReset()
+    actionMocks.showDesignDocument.mockReset()
+    actionMocks.requestCodeCanvasPanelOpen.mockReset()
     actionMocks.importComponentPrototype.mockReset().mockResolvedValue({
       artifactId: 'imported',
       relativePath: '.kun-design/doc/imported/v1.html',
@@ -368,7 +384,7 @@ describe('ComponentPrototypeCard interactions', () => {
     expect(renderer.toJSON()).toBeNull()
   })
 
-  it('opens the design canvas after a successful import and stays put when the import fails', async () => {
+  it('opens the imported design in the whiteboard panel instead of switching to Design mode', async () => {
     await act(async () => {
       openCanvasButton().props.onClick()
       await Promise.resolve()
@@ -377,15 +393,22 @@ describe('ComponentPrototypeCard interactions', () => {
       workspaceRoot: '/workspace',
       prototype: metadata
     })
-    expect(actionMocks.openDesign).toHaveBeenCalledTimes(1)
+    // The workbench must stay in the chat route; the design opens in the
+    // Code whiteboard panel scoped to the active thread.
+    expect(actionMocks.openDesign).not.toHaveBeenCalled()
+    expect(actionMocks.showDesignDocument).toHaveBeenCalledWith('thr_test', '/workspace', 'doc')
+    expect(actionMocks.requestCodeCanvasPanelOpen).toHaveBeenCalledTimes(1)
+  })
 
+  it('stays put when the import fails', async () => {
     actionMocks.importComponentPrototype.mockResolvedValueOnce(null)
-    actionMocks.openDesign.mockClear()
     await act(async () => {
       openCanvasButton().props.onClick()
       await Promise.resolve()
     })
     expect(actionMocks.openDesign).not.toHaveBeenCalled()
+    expect(actionMocks.showDesignDocument).not.toHaveBeenCalled()
+    expect(actionMocks.requestCodeCanvasPanelOpen).not.toHaveBeenCalled()
   })
 
   it('disables the open-in-canvas action while running or while an import is pending', async () => {
@@ -412,6 +435,8 @@ describe('ComponentPrototypeCard interactions', () => {
       await Promise.resolve()
     })
     expect(actionMocks.openDesign).not.toHaveBeenCalled()
+    expect(actionMocks.showDesignDocument).not.toHaveBeenCalled()
+    expect(actionMocks.requestCodeCanvasPanelOpen).not.toHaveBeenCalled()
   })
 
   it('hides the whole card when the preview host reports an error for a completed prototype', async () => {

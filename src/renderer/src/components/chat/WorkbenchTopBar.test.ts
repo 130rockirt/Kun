@@ -1,7 +1,7 @@
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { act, create as createRenderer } from 'react-test-renderer'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import i18n from '../../i18n'
 import { WorkbenchSideRail, WorkbenchTopActions } from './WorkbenchTopBar'
 import { ExtensionContributionsSchema } from '@kun/extension-api'
@@ -15,7 +15,11 @@ describe('WorkbenchTopActions', () => {
     await i18n.changeLanguage('en')
   })
 
-  it('renders editor, terminal, and right workspace actions for the top bar', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('renders restart, editor, terminal, and right workspace actions for the top bar', () => {
     const html = renderToStaticMarkup(
       createElement(WorkbenchTopActions, {
         terminalOpen: false,
@@ -25,6 +29,9 @@ describe('WorkbenchTopActions', () => {
       })
     )
 
+    expect(html).toContain(`data-tooltip="Restart Kun and clear historical services"`)
+    expect(html).toContain(`aria-label="Restart Kun"`)
+    expect(html).not.toContain('rounded-full bg-amber-500')
     expect(html).toContain(`data-tooltip="Choose default editor"`)
     expect(html).toContain(`aria-label="Choose default editor"`)
     expect(html).toContain(`data-tooltip="Terminal"`)
@@ -39,6 +46,107 @@ describe('WorkbenchTopActions', () => {
     expect(html.indexOf('data-tooltip="Terminal"')).toBeLessThan(
       html.indexOf('data-tooltip="Toggle right workspace"')
     )
+    expect(html.indexOf('data-tooltip="Toggle right workspace"')).toBeLessThan(
+      html.indexOf('aria-label="Restart Kun"')
+    )
+  })
+
+  it('routes the explicit serve restart through the preload bridge', async () => {
+    const restartKunServe = vi.fn(async () => ({ accepted: false }))
+    vi.stubGlobal('window', { kunGui: { restartKunServe } })
+    let renderer!: ReturnType<typeof createRenderer>
+
+    await act(async () => {
+      renderer = createRenderer(createElement(WorkbenchTopActions, {}))
+    })
+    const button = renderer.root.findByProps({ 'aria-label': 'Restart Kun' })
+    await act(async () => {
+      button.props.onClick()
+      await Promise.resolve()
+    })
+
+    expect(restartKunServe).toHaveBeenCalledOnce()
+    act(() => renderer.unmount())
+  })
+
+  it('renders one compact icon without visible restart text or a status dot', async () => {
+    vi.stubGlobal('window', { kunGui: { restartKunServe: vi.fn() } })
+    let renderer!: ReturnType<typeof createRenderer>
+    await act(async () => {
+      renderer = createRenderer(createElement(WorkbenchTopActions, {}))
+    })
+
+    const button = renderer.root.findByProps({ 'aria-label': 'Restart Kun' })
+    expect(button.props.className).toContain('h-8 w-8')
+    expect(button.findAllByType('span')).toHaveLength(0)
+    expect(button.findAllByType('svg')).toHaveLength(1)
+    act(() => renderer.unmount())
+  })
+
+  it('keeps the icon-only control disabled with a busy accessible label while restarting', async () => {
+    let finish!: (value: { accepted: boolean }) => void
+    const restartKunServe = vi.fn(() => new Promise<{ accepted: boolean }>((resolve) => {
+      finish = resolve
+    }))
+    vi.stubGlobal('window', { kunGui: { restartKunServe } })
+    let renderer!: ReturnType<typeof createRenderer>
+    await act(async () => {
+      renderer = createRenderer(createElement(WorkbenchTopActions, {}))
+    })
+
+    await act(async () => {
+      renderer.root.findByProps({ 'aria-label': 'Restart Kun' }).props.onClick()
+      await Promise.resolve()
+    })
+    const busyButton = renderer.root.findByProps({ 'aria-label': 'Restarting…' })
+    expect(busyButton.props.disabled).toBe(true)
+    expect(busyButton.findAllByType('span')).toHaveLength(0)
+    expect(busyButton.findAllByType('svg')).toHaveLength(1)
+
+    await act(async () => {
+      finish({ accepted: true })
+      await Promise.resolve()
+    })
+    act(() => renderer.unmount())
+  })
+
+  it('shows a restart error in the tooltip without adding visible text', async () => {
+    vi.stubGlobal('window', {
+      kunGui: {
+        restartKunServe: vi.fn(async () => ({ accepted: true, error: 'cleanup failed' }))
+      }
+    })
+    let renderer!: ReturnType<typeof createRenderer>
+    await act(async () => {
+      renderer = createRenderer(createElement(WorkbenchTopActions, {}))
+    })
+    await act(async () => {
+      renderer.root.findByProps({ 'aria-label': 'Restart Kun' }).props.onClick()
+      await Promise.resolve()
+    })
+
+    const button = renderer.root.findByProps({ 'aria-label': 'Restart Kun' })
+    expect(button.props['data-tooltip']).toBe('cleanup failed')
+    expect(button.findAllByType('span')).toHaveLength(0)
+    act(() => renderer.unmount())
+  })
+
+  it('keeps the running badge left of the right-aligned top actions', async () => {
+    const nodeFs = 'node:fs/promises'
+    const { readFile } = await import(/* @vite-ignore */ nodeFs)
+    const [stageSource, shellCss] = await Promise.all([
+      readFile(new URL('../workbench/WorkbenchChatStage.tsx', import.meta.url), 'utf8'),
+      readFile(new URL('../../styles/base-shell/session-sidebar-shell.css', import.meta.url), 'utf8')
+    ])
+    const actionsStart = stageSource.indexOf('<div className="chat-topbar-actions')
+    const actionsEnd = stageSource.indexOf('</div>', actionsStart)
+    const actionsSource = stageSource.slice(actionsStart, actionsEnd)
+    const topActionsCss = shellCss.match(/\.ds-workbench-top-actions\s*\{([^}]*)\}/)?.[1] ?? ''
+
+    expect(actionsSource.indexOf("{t('running')}")).toBeLessThan(
+      actionsSource.indexOf('<WorkbenchTopActions')
+    )
+    expect(topActionsCss).not.toContain('margin-right')
   })
 })
 

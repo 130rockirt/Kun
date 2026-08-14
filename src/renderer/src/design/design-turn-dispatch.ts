@@ -2,6 +2,11 @@ import type { AttachmentReference } from '../agent/types'
 import type { SendMessageOverrides } from '../store/chat-store-types'
 import type { DesignTurnTarget } from './design-turn-prompt'
 import type { DesignWorkspaceState } from './design-workspace-store-types'
+import type {
+  DesignDocumentTarget,
+  DesignImagePlacementTarget,
+  DesignTaskProfileInput
+} from '../agent/design-task-profile'
 
 export type DesignTurnPromptState = Pick<
   DesignWorkspaceState,
@@ -11,6 +16,8 @@ export type DesignTurnPromptState = Pick<
 export type DesignAssistantModelOptions = {
   promptState: DesignTurnPromptState
   resolveProviderId: (model: string) => string
+  model?: string
+  providerId?: string
   reasoningEffort?: string
   serviceTier?: 'priority'
   expectedThreadId?: string
@@ -26,6 +33,10 @@ export type DesignTurnSendOptions = DesignAssistantModelOptions & {
     artifactId: string
     relativePath: string
   }
+  designProfile?: DesignTaskProfileInput
+  designDocumentTarget?: DesignDocumentTarget
+  designImagePlacementTarget?: DesignImagePlacementTarget
+  waitForRuntimeAdmission?: boolean
 }
 
 export type CodeCanvasSendOptions = {
@@ -36,12 +47,16 @@ export type CodeCanvasSendOptions = {
 function buildAssistantModelOverrides({
   promptState,
   resolveProviderId,
+  model: selectedModel,
+  providerId: selectedProviderId,
   reasoningEffort,
   serviceTier,
   expectedThreadId
 }: DesignAssistantModelOptions): SendMessageOverrides {
-  const model = promptState.assistantModel.trim()
-  const providerId = promptState.assistantProviderId.trim() || resolveProviderId(model)
+  const model = selectedModel?.trim() || promptState.assistantModel.trim()
+  const providerId = selectedProviderId?.trim() ||
+    promptState.assistantProviderId.trim() ||
+    resolveProviderId(model)
   return {
     ...(model ? { model } : {}),
     ...(providerId ? { providerId } : {}),
@@ -58,6 +73,14 @@ export function buildDesignTurnSendOverrides(options: DesignTurnSendOptions): Se
     displayText: options.displayText,
     agentSurface: 'design',
     ...buildAssistantModelOverrides(options),
+    ...(options.designProfile ? { designProfile: options.designProfile } : {}),
+    ...(options.designDocumentTarget
+      ? { designDocumentTarget: options.designDocumentTarget }
+      : {}),
+    ...(options.designImagePlacementTarget
+      ? { designImagePlacementTarget: options.designImagePlacementTarget }
+      : {}),
+    ...(options.waitForRuntimeAdmission ? { waitForRuntimeAdmission: true } : {}),
     ...(options.target === 'canvas' ? { guiDesignCanvas: true, guiDesignMode: true } : {}),
     ...(options.target === 'svg' ? {
       guiDesignMode: true,

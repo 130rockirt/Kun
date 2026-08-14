@@ -192,6 +192,17 @@ export function mapCursorUsage(
 }
 
 /**
+ * Cursor may redeliver cumulative assistant/thinking snapshots. Emit only the
+ * unseen suffix so GUI append semantics never become Answer×N.
+ */
+export function cursorUnseenFragment(accumulated: string, incoming: string): string {
+  if (!incoming) return ''
+  if (accumulated === incoming || accumulated.startsWith(incoming)) return ''
+  if (incoming.startsWith(accumulated)) return incoming.slice(accumulated.length)
+  return incoming
+}
+
+/**
  * Pure, bounded projection of Cursor's public SDK stream onto Kun events.
  * Cursor executes its own built-in tools; the mapper only mirrors lifecycle
  * events and never redispatches them through Kun's tool host.
@@ -350,7 +361,9 @@ export class CursorSdkEventMapper {
     const events: RuntimeEventDraft[] = []
     for (const block of message.message.content) {
       if (block.type !== 'text' || !block.text) continue
-      const deltaOffset = this.appendText(block.text)
+      const fragment = cursorUnseenFragment(this.textParts.join(''), block.text)
+      if (!fragment) continue
+      const deltaOffset = this.appendText(fragment)
       this.textItemId ||= this.ctx.nextId('item_cursor_text')
       events.push({
         kind: 'assistant_text_delta',
@@ -362,7 +375,7 @@ export class CursorSdkEventMapper {
           id: this.textItemId,
           threadId: this.ctx.threadId,
           turnId: this.ctx.turnId,
-          text: block.text,
+          text: fragment,
           status: 'running'
         })
       })
@@ -372,7 +385,9 @@ export class CursorSdkEventMapper {
 
   private mapThinking(text: string): RuntimeEventDraft[] {
     if (!text) return []
-    const deltaOffset = this.appendReasoning(text)
+    const fragment = cursorUnseenFragment(this.reasoningParts.join(''), text)
+    if (!fragment) return []
+    const deltaOffset = this.appendReasoning(fragment)
     this.reasoningItemId ||= this.ctx.nextId('item_cursor_reasoning')
     return [{
       kind: 'assistant_reasoning_delta',
@@ -384,7 +399,7 @@ export class CursorSdkEventMapper {
         id: this.reasoningItemId,
         threadId: this.ctx.threadId,
         turnId: this.ctx.turnId,
-        text,
+        text: fragment,
         status: 'running'
       })
     }]

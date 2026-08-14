@@ -11,18 +11,8 @@ import {
   saveWriteThreadRegistry
 } from './write-thread-registry'
 import type { NormalizedThread } from '../agent/types'
-
-class MemoryStorage {
-  private values = new Map<string, string>()
-
-  getItem(key: string): string | null {
-    return this.values.get(key) ?? null
-  }
-
-  setItem(key: string, value: string): void {
-    this.values.set(key, value)
-  }
-}
+import { createWriteDocumentSession, persistWriteEditorLayout } from './write-editor-layout'
+import { MemoryStorage } from './write-workspace-file-actions-test-support'
 
 function writeThread(id: string, workspace: string): NormalizedThread {
   return {
@@ -73,6 +63,28 @@ function makeBaseState(): WriteWorkspaceState {
     toggleDirectory: async () => undefined,
     refreshWorkspace: async () => undefined,
     openFile: async () => undefined,
+    loadWhiteboards: async () => undefined,
+    createWhiteboard: async () => null,
+    openWhiteboard: () => undefined,
+    findOrCreatePptWhiteboard: async () => null,
+    renameWhiteboard: async () => false,
+    deleteWhiteboard: async () => false,
+    bindWhiteboardThread: async () => false,
+    updateWhiteboardPptState: async () => false,
+    activateTab: () => undefined,
+    closeTab: async () => true,
+    moveTab: () => undefined,
+    focusEditorGroup: () => undefined,
+    splitEditorGroup: () => undefined,
+    closeEditorGroup: () => undefined,
+    setTabViewMode: () => undefined,
+    setSplitOrientation: () => undefined,
+    setSplitRatio: () => undefined,
+    setPresentationViewForGroup: () => undefined,
+    clearPresentationViewForGroup: () => undefined,
+    setDocumentContent: () => undefined,
+    saveDocument: async () => true,
+    saveAllDocuments: async () => true,
     setFileContent: () => undefined,
     syncActiveFileFromDisk: async () => false,
     syncActiveImageFromDisk: async () => false,
@@ -128,6 +140,100 @@ afterEach(() => {
 })
 
 describe('write workspace file actions', () => {
+  it('opens Office files as shared read-only sessions in the requested group', async () => {
+    const result = {
+      ok: true as const,
+      path: '/tmp/write/deck.pptx',
+      name: 'deck.pptx',
+      sourceFormat: 'pptx' as const,
+      renderFormat: 'pptx' as const,
+      viewer: 'presentation' as const,
+      size: 500,
+      mtimeMs: 1,
+      sourceSha256: 'a'.repeat(64),
+      data: new Uint8Array([1, 2, 3])
+    }
+    const readWorkspaceOfficePreview = vi.fn(async () => result)
+    installDsGui({ readWorkspaceOfficePreview })
+    const { actions, get, set } = createHarness()
+    set({ workspaceRoot: '/tmp/write' })
+
+    await actions.openFile('/tmp/write', result.path)
+
+    expect(readWorkspaceOfficePreview).toHaveBeenCalledWith({
+      path: result.path,
+      workspaceRoot: '/tmp/write'
+    })
+    expect(get()).toMatchObject({
+      activeFilePath: result.path,
+      activeFileKind: 'office',
+      saveStatus: 'saved'
+    })
+    expect(get().documentsByPath[result.path]).toMatchObject({
+      kind: 'office',
+      officePreview: result,
+      officeSemanticText: ''
+    })
+  })
+
+  it('keeps normal multi-file navigation in one editor group', async () => {
+    installDsGui({
+      readWorkspaceFile: vi.fn(async ({ path }: { path: string }) => ({
+        ok: true as const,
+        path,
+        content: path,
+        size: path.length,
+        truncated: false as const
+      }))
+    })
+    const { actions, get, set } = createHarness()
+    set({ workspaceRoot: '/tmp/write' })
+
+    await actions.openFile('/tmp/write', '/tmp/write/a.md')
+    await actions.openFile('/tmp/write', '/tmp/write/b.md')
+
+    expect(get().editorLayout).toMatchObject({
+      orientation: 'single',
+      groups: [{
+        id: 'primary',
+        activePath: '/tmp/write/b.md',
+        tabs: [{ path: '/tmp/write/a.md' }, { path: '/tmp/write/b.md' }]
+      }]
+    })
+  })
+
+  it('collapses a restored split when its secondary file no longer exists', async () => {
+    const storage = new MemoryStorage()
+    vi.stubGlobal('window', {
+      localStorage: storage,
+      kunGui: {
+        listWorkspaceDirectory: vi.fn(async () => ({ ok: true as const, root: '/tmp/write', entries: [] })),
+        readWorkspaceFile: vi.fn(async ({ path }: { path: string }) => path.endsWith('/a.md')
+          ? { ok: true as const, path, content: 'a', size: 1, truncated: false as const }
+          : { ok: false as const, message: 'missing' })
+      }
+    })
+    persistWriteEditorLayout('/tmp/write', {
+      version: 1,
+      orientation: 'horizontal',
+      ratio: 0.5,
+      focusedGroupId: 'secondary',
+      groups: [
+        { id: 'primary', activePath: '/tmp/write/a.md', tabs: [{ path: '/tmp/write/a.md', viewMode: 'live' }] },
+        { id: 'secondary', activePath: '/tmp/write/missing.md', tabs: [{ path: '/tmp/write/missing.md', viewMode: 'preview' }] }
+      ]
+    })
+    const { actions, get } = createHarness()
+
+    await actions.initializeWorkspace('/tmp/write')
+
+    expect(get().editorLayout).toMatchObject({
+      orientation: 'single',
+      focusedGroupId: 'primary',
+      groups: [{ id: 'primary', activePath: '/tmp/write/a.md' }]
+    })
+  })
+
   it('refreshes an initialized workspace without resetting the active draft', async () => {
     const listWorkspaceDirectory = vi.fn(async () => ({
       ok: true as const,
@@ -246,8 +352,14 @@ describe('write workspace file actions', () => {
     expect(get().fileError).toBe('rename failed')
   })
 
-  it('keeps dirty content when auto-save is disabled and file navigation is cancelled', async () => {
-    const readWorkspaceFile = vi.fn()
+  it('keeps a dirty document session while opening another tab with auto-save disabled', async () => {
+    const readWorkspaceFile = vi.fn(async () => ({
+      ok: true as const,
+      path: '/tmp/write/next.md',
+      content: 'next content',
+      size: 12,
+      truncated: false
+    }))
     const confirm = vi.fn(() => false)
     vi.stubGlobal('window', {
       kunGui: { readWorkspaceFile },
@@ -257,26 +369,47 @@ describe('write workspace file actions', () => {
     const flushSave = vi.fn(async () => true)
     set({
       autoSaveEnabled: false,
+      workspaceRoot: '/tmp/write',
       activeFilePath: '/tmp/write/draft.md',
       activeFileKind: 'text',
       fileContent: 'unsaved draft',
+      persistedContent: 'saved draft',
       saveStatus: 'dirty',
+      documentsByPath: {
+        '/tmp/write/draft.md': createWriteDocumentSession({
+          path: '/tmp/write/draft.md',
+          kind: 'text',
+          fileContent: 'unsaved draft',
+          persistedContent: 'saved draft',
+          saveStatus: 'dirty'
+        })
+      },
+      editorLayout: {
+        version: 1,
+        orientation: 'single',
+        ratio: 0.5,
+        focusedGroupId: 'primary',
+        groups: [{ id: 'primary', tabs: [{ path: '/tmp/write/draft.md', viewMode: 'live' }], activePath: '/tmp/write/draft.md' }]
+      },
       flushSave
     })
 
     await actions.openFile('/tmp/write', '/tmp/write/next.md')
 
-    expect(confirm).toHaveBeenCalled()
+    expect(confirm).not.toHaveBeenCalled()
     expect(flushSave).not.toHaveBeenCalled()
-    expect(readWorkspaceFile).not.toHaveBeenCalled()
+    expect(readWorkspaceFile).toHaveBeenCalled()
     expect(get()).toMatchObject({
-      activeFilePath: '/tmp/write/draft.md',
+      activeFilePath: '/tmp/write/next.md',
+      fileContent: 'next content'
+    })
+    expect(get().documentsByPath['/tmp/write/draft.md']).toMatchObject({
       fileContent: 'unsaved draft',
       saveStatus: 'dirty'
     })
   })
 
-  it('opens another text file without saving dirty content when auto-save is disabled and discard is confirmed', async () => {
+  it('starts a background save while opening another tab with auto-save enabled', async () => {
     const readWorkspaceFile = vi.fn(async () => ({
       ok: true as const,
       path: '/tmp/write/next.md',
@@ -290,20 +423,38 @@ describe('write workspace file actions', () => {
       confirm
     })
     const { actions, get, set } = createHarness()
-    const flushSave = vi.fn(async () => true)
+    const saveDocument = vi.fn(async () => true)
     set({
-      autoSaveEnabled: false,
+      autoSaveEnabled: true,
+      workspaceRoot: '/tmp/write',
       activeFilePath: '/tmp/write/draft.md',
       activeFileKind: 'text',
       fileContent: 'unsaved draft',
+      persistedContent: 'saved draft',
       saveStatus: 'dirty',
-      flushSave
+      documentsByPath: {
+        '/tmp/write/draft.md': createWriteDocumentSession({
+          path: '/tmp/write/draft.md',
+          kind: 'text',
+          fileContent: 'unsaved draft',
+          persistedContent: 'saved draft',
+          saveStatus: 'dirty'
+        })
+      },
+      editorLayout: {
+        version: 1,
+        orientation: 'single',
+        ratio: 0.5,
+        focusedGroupId: 'primary',
+        groups: [{ id: 'primary', tabs: [{ path: '/tmp/write/draft.md', viewMode: 'live' }], activePath: '/tmp/write/draft.md' }]
+      },
+      saveDocument
     })
 
     await actions.openFile('/tmp/write', '/tmp/write/next.md')
 
-    expect(confirm).toHaveBeenCalled()
-    expect(flushSave).not.toHaveBeenCalled()
+    expect(confirm).not.toHaveBeenCalled()
+    expect(saveDocument).toHaveBeenCalledWith('/tmp/write', '/tmp/write/draft.md')
     expect(readWorkspaceFile).toHaveBeenCalledWith({
       workspaceRoot: '/tmp/write',
       path: '/tmp/write/next.md'
@@ -493,5 +644,57 @@ describe('write workspace file actions', () => {
       persistedContent: 'content B',
       saveStatus: 'saved'
     })
+  })
+
+  it('allows independent editor groups to finish concurrent file loads', async () => {
+    const first = deferred<{
+      ok: true
+      path: string
+      content: string
+      size: number
+      truncated: false
+    }>()
+    const second = deferred<{
+      ok: true
+      path: string
+      content: string
+      size: number
+      truncated: false
+    }>()
+    installDsGui({
+      readWorkspaceFile: vi.fn(({ path }: { path: string }) =>
+        path.endsWith('/a.md') ? first.promise : second.promise
+      )
+    })
+    const { actions, get, set } = createHarness()
+    set({
+      workspaceRoot: '/tmp/write',
+      editorLayout: {
+        version: 1,
+        orientation: 'horizontal',
+        ratio: 0.5,
+        focusedGroupId: 'primary',
+        groups: [
+          { id: 'primary', tabs: [], activePath: null },
+          { id: 'secondary', tabs: [], activePath: null }
+        ]
+      }
+    })
+
+    const openA = actions.openFile('/tmp/write', '/tmp/write/a.md', { groupId: 'primary' })
+    const openB = actions.openFile('/tmp/write', '/tmp/write/b.md', { groupId: 'secondary' })
+    second.resolve({ ok: true, path: '/tmp/write/b.md', content: 'content B', size: 9, truncated: false })
+    await openB
+    first.resolve({ ok: true, path: '/tmp/write/a.md', content: 'content A', size: 9, truncated: false })
+    await openA
+
+    expect(get().documentsByPath).toMatchObject({
+      '/tmp/write/a.md': { fileContent: 'content A' },
+      '/tmp/write/b.md': { fileContent: 'content B' }
+    })
+    expect(get().editorLayout.groups).toEqual([
+      expect.objectContaining({ id: 'primary', activePath: '/tmp/write/a.md' }),
+      expect.objectContaining({ id: 'secondary', activePath: '/tmp/write/b.md' })
+    ])
   })
 })

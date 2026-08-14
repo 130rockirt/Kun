@@ -6,12 +6,24 @@ import type { UsageSnapshot } from '../src/contracts/usage.js'
 import type { TurnItem } from '../src/contracts/items.js'
 
 const atomicWriteFileMock = vi.hoisted(() => vi.fn())
+const compactUsageEventsJsonlFileMock = vi.hoisted(() => vi.fn())
 
 vi.mock('../src/adapters/file/atomic-write.js', () => ({
   atomicWriteFile: atomicWriteFileMock
 }))
 
+vi.mock('../src/adapters/file/file-session-jsonl.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/adapters/file/file-session-jsonl.js')>()
+  compactUsageEventsJsonlFileMock.mockImplementation(actual.compactUsageEventsJsonlFile)
+  return {
+    ...actual,
+    compactUsageEventsJsonlFile: (...args: Parameters<typeof actual.compactUsageEventsJsonlFile>) =>
+      compactUsageEventsJsonlFileMock(...args)
+  }
+})
+
 const { FileSessionStore } = await import('../src/adapters/file/file-session-store.js')
+const jsonl = await import('../src/adapters/file/file-session-jsonl.js')
 
 describe('FileSessionStore', () => {
   let dataDir = ''
@@ -21,6 +33,8 @@ describe('FileSessionStore', () => {
     dataDir = await mkdtemp(join(tmpdir(), 'kun-session-'))
     atomicWriteFileMock.mockReset()
     atomicWriteFileMock.mockResolvedValue(undefined)
+    compactUsageEventsJsonlFileMock.mockReset()
+    compactUsageEventsJsonlFileMock.mockImplementation(jsonl.compactUsageEventsJsonlFile)
     warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
   })
 
@@ -32,6 +46,7 @@ describe('FileSessionStore', () => {
   it('keeps appended usage events when best-effort compaction fails', async () => {
     const sessionStore = new FileSessionStore({
       dataDir,
+      compactionDelayMs: 0,
       usageEventCompaction: {
         maxBytes: 1,
         retentionDays: 365,
@@ -65,7 +80,7 @@ describe('FileSessionStore', () => {
 
     const error = new Error('operation not permitted') as Error & { code: string }
     error.code = 'EPERM'
-    atomicWriteFileMock.mockRejectedValueOnce(error)
+    compactUsageEventsJsonlFileMock.mockRejectedValueOnce(error)
 
     await expect(sessionStore.appendEvent('thr_usage_compact', {
       kind: 'usage',
@@ -75,11 +90,58 @@ describe('FileSessionStore', () => {
       model: 'deepseek-chat',
       usage: usage(3)
     })).resolves.toBeUndefined()
+    await sessionStore.flushScheduledCompaction('thr_usage_compact')
 
     const events = await sessionStore.loadEventsSince('thr_usage_compact', 0)
     expect(events.map((event) => event.seq)).toEqual([1, 2, 3])
-    expect(atomicWriteFileMock).toHaveBeenCalledTimes(1)
+    expect(compactUsageEventsJsonlFileMock).toHaveBeenCalled()
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('usage event compaction failed'))
+  })
+
+  it('schedules item compaction without blocking cold loadItems', async () => {
+    const sessionStore = new FileSessionStore({
+      dataDir,
+      compactionDelayMs: 60_000,
+      itemHistoryCompactionMinBytes: 1
+    })
+    const threadId = 'thr_schedule_items'
+    for (let index = 0; index < 5; index += 1) {
+      await sessionStore.appendItem(threadId, {
+        id: 'item_1',
+        kind: 'assistant_text',
+        turnId: 'turn_1',
+        threadId,
+        role: 'assistant',
+        status: 'completed',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        text: `v${index}-${'x'.repeat(256)}`
+      })
+    }
+    sessionStore.clearThreadMemory(threadId)
+    const items = await sessionStore.loadItems(threadId)
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({ text: expect.stringContaining('v4-') })
+    // Debounced rewrite has not run yet; source still has multiple append lines.
+    const raw = await (await import('node:fs/promises')).readFile(
+      join(dataDir, 'threads', threadId, 'messages.jsonl'),
+      'utf8'
+    )
+    expect(raw.trim().split('\n').length).toBeGreaterThan(1)
+  })
+
+  it('loadEventsSince streams a high sinceSeq without requiring a full-array filter', async () => {
+    const sessionStore = new FileSessionStore({ dataDir })
+    const threadId = 'thr_stream_load'
+    for (let seq = 1; seq <= 40; seq += 1) {
+      await sessionStore.appendEvent(threadId, {
+        kind: 'heartbeat',
+        seq,
+        timestamp: `2026-01-01T00:00:${String(seq).padStart(2, '0')}.000Z`,
+        threadId
+      })
+    }
+    const events = await sessionStore.loadEventsSince(threadId, 35)
+    expect(events.map((event) => event.seq)).toEqual([36, 37, 38, 39, 40])
   })
 
   it('caches the event high-water mark until the event file changes', async () => {

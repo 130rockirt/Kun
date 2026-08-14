@@ -2,7 +2,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_KUN_CAPABILITIES_CONFIG } from '../contracts/capabilities.js'
-import { expandHomePath, readKunConfigFile, RuntimeTuningConfigSchema } from './kun-config.js'
+import { expandHomePath, LabConfigSchema, LabPptAgentConfigSchema, readKunConfigFile, RuntimeTuningConfigSchema } from './kun-config.js'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 
@@ -139,5 +139,37 @@ describe('readKunConfigFile provider compatibility', () => {
       expect(message).toContain('mystery')
       expect(message).toContain('kind')
     })
+  })
+})
+
+describe('LabPptAgentConfigSchema', () => {
+  it('defaults to enabled with follow-main model and no fast', () => {
+    const parsed = LabPptAgentConfigSchema.parse({})
+    expect(parsed).toEqual({ enabled: true, fast: false, imageFirst: true })
+  })
+
+  it('accepts a paired model override with reasoning effort', () => {
+    const parsed = LabPptAgentConfigSchema.parse({
+      enabled: true,
+      model: 'gpt-5.4',
+      providerId: 'codex-2',
+      reasoningEffort: 'high',
+      fast: true
+    })
+    expect(parsed.model).toBe('gpt-5.4')
+    expect(parsed.providerId).toBe('codex-2')
+    expect(parsed.reasoningEffort).toBe('high')
+    expect(parsed.fast).toBe(true)
+  })
+
+  it('rejects a half-configured model override', () => {
+    expect(LabPptAgentConfigSchema.safeParse({ model: 'gpt-5.4' }).success).toBe(false)
+    expect(LabPptAgentConfigSchema.safeParse({ providerId: 'codex-2' }).success).toBe(false)
+  })
+
+  it('defaults pptAgent inside LabConfigSchema', () => {
+    const lab = LabConfigSchema.parse({})
+    expect(lab.pptAgent).toEqual({ enabled: true, fast: false, imageFirst: true })
+    expect(lab.fastContext).toEqual({ enabled: true, fast: false })
   })
 })

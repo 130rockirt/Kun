@@ -118,6 +118,23 @@ describe('DelegatedSessionCoordinator', () => {
     })).resolves.toMatchObject({ resumed: false, rebaseReason: 'history_changed' })
   })
 
+  test('excludes private runtime context from delegated history identity', () => {
+    const publicItems = [user('turn_1', 'hello')]
+    const withPrivateSource: TurnItem[] = [
+      ...publicItems,
+      {
+        id: 'item-private', threadId: 'thread_1', turnId: 'turn_1',
+        role: 'system', kind: 'runtime_context_source', status: 'completed',
+        createdAt: '2026-01-01T00:00:00.000Z', contextKind: 'host-control',
+        content: 'private host control'
+      }
+    ]
+    expect(delegatedHistoryDigest(withPrivateSource)).toBe(
+      delegatedHistoryDigest(publicItems)
+    )
+    expect(priorItemsForDelegatedTurn(withPrivateSource, 'turn_2')).toEqual(publicItems)
+  })
+
   test('rebases a native session when this turn introduces goal context', async () => {
     const root = await mkdtemp(join(tmpdir(), 'kun-delegated-goal-rebase-'))
     const coordinator = new DelegatedSessionCoordinator(

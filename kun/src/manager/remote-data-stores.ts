@@ -30,7 +30,12 @@ import {
   type MemoryCreateRequest,
   type MemoryUpdateRequest
 } from '../contracts/memory.js'
-import { ThreadSchema, ThreadSummarySchema, type ThreadRecord } from '../contracts/threads.js'
+import {
+  ThreadSchema,
+  ThreadSchemaReadable,
+  ThreadSummarySchema,
+  type ThreadRecord
+} from '../contracts/threads.js'
 import type { AgentSession } from '../domain/session.js'
 import type { MemoryAccess, MemoryStore } from '../memory/memory-store.js'
 import type {
@@ -45,16 +50,23 @@ import type {
 import type {
   ItemHistoryCompactionResult,
   ItemHistoryCommit,
+  ItemHistoryPage,
+  ItemHistoryPageOptions,
   ItemHistorySnapshot,
   SessionLatestUsageSnapshot,
   SessionStore,
   SessionUsageRecord
 } from '../ports/session-store.js'
-import type { ThreadStore, ThreadStoreListOptions } from '../ports/thread-store.js'
+import type {
+  ThreadStore,
+  ThreadStoreListOptions,
+  ThreadStoreListPage
+} from '../ports/thread-store.js'
 import { requestManagerJson, type ServiceManagerConnection } from './manager-client.js'
 
 const ResultSchema = z.object({ result: z.unknown() }).strict()
 const MANAGER_DATA_REQUEST_TIMEOUT_MS = 30_000
+const MANAGER_TIMELINE_DATA_REQUEST_TIMEOUT_MS = 120_000
 const ItemSnapshotSchema = z.object({
   revision: z.number().int().nonnegative(),
   items: z.array(TurnItem)
@@ -73,6 +85,18 @@ const ItemCompactionSchema = z.object({
   afterBytes: z.number().int().nonnegative(),
   itemCount: z.number().int().nonnegative()
 })
+const ItemPageSchema = z.object({
+  items: z.array(TurnItem),
+  nextCursor: z.string().optional(),
+  hasMore: z.boolean(),
+  itemBytes: z.number().int().nonnegative()
+})
+const ThreadStoreListPageSchema: z.ZodType<ThreadStoreListPage> = z.object({
+  threads: z.array(ThreadSummarySchema),
+  nextCursor: z.string().optional(),
+  hasMore: z.boolean(),
+  total: z.number().int().nonnegative().optional()
+}).strict()
 const UsageRecordSchema = z.object({
   threadId: z.string(),
   turnId: z.string().optional(),
@@ -103,6 +127,8 @@ const ArtifactMetaSchema = z.object({
   origin: z.string().optional(),
   origins: z.array(z.string()).optional(),
   originHistoryComplete: z.literal(true).optional(),
+  retention: z.literal('linked').optional(),
+  linkedOwners: z.array(z.string()).optional(),
   createdAt: z.string()
 }).strict()
 const ArtifactSummarySchema = z.object({
@@ -156,12 +182,16 @@ export class ManagerRemoteThreadStore implements ThreadStore {
     return ThreadSummarySchema.array().parse(await this.call('list', options))
   }
 
+  async listPage(options: ThreadStoreListOptions = {}) {
+    return ThreadStoreListPageSchema.parse(await this.call('listPage', options))
+  }
+
   async get(threadId: string) {
-    return ThreadSchema.nullable().parse(await this.call('get', { threadId }))
+    return ThreadSchemaReadable.nullable().parse(await this.call('get', { threadId }))
   }
 
   async getMetadata(threadId: string) {
-    return ThreadSchema.nullable().parse(await this.call('getMetadata', { threadId }))
+    return ThreadSchemaReadable.nullable().parse(await this.call('getMetadata', { threadId }))
   }
 
   async touch(threadId: string, updatedAt: string) {
@@ -267,6 +297,13 @@ export class ManagerRemoteSessionStore implements SessionStore {
     return TurnItem.array().parse(await this.call('loadItems', { threadId }))
   }
 
+  async loadItemPage(
+    threadId: string,
+    options: ItemHistoryPageOptions
+  ): Promise<ItemHistoryPage> {
+    return ItemPageSchema.parse(await this.call('loadItemPage', { threadId, options }))
+  }
+
   async loadSession(threadId: string): Promise<AgentSession | null> {
     return AgentSessionSchema.nullable().parse(await this.call('loadSession', { threadId })) as AgentSession | null
   }
@@ -311,6 +348,13 @@ export class ManagerRemoteArtifactStore implements ArtifactStore {
 
   async put(input: PutArtifactInput): Promise<PutArtifactResult> {
     return PutArtifactResultSchema.parse(await this.call('put', { input })) as PutArtifactResult
+  }
+
+  async releaseOwner(ownerId: string): Promise<{ released: number; deleted: number }> {
+    return z.object({
+      released: z.number().int().nonnegative(),
+      deleted: z.number().int().nonnegative()
+    }).strict().parse(await this.call('releaseOwner', { ownerId }))
   }
 
   async delete(id: string): Promise<void> {
@@ -528,9 +572,22 @@ async function callManagerStore(
   const response = await requestManagerJson(manager, `/v1/data/${store}/${operation}`, {
     method: 'POST',
     body: value ?? {},
-    timeoutMs: MANAGER_DATA_REQUEST_TIMEOUT_MS
+    timeoutMs: resolveManagerDataRequestTimeoutMs(store, operation)
   })
   return ResultSchema.parse(response).result
+}
+
+export function resolveManagerDataRequestTimeoutMs(
+  store: 'thread' | 'session' | 'artifact' | 'memory' | 'graph' | 'attachment',
+  operation: string
+): number {
+  if (
+    store === 'session' &&
+    (operation === 'loadItemPage' || operation === 'highestSeq')
+  ) {
+    return MANAGER_TIMELINE_DATA_REQUEST_TIMEOUT_MS
+  }
+  return MANAGER_DATA_REQUEST_TIMEOUT_MS
 }
 
 function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {

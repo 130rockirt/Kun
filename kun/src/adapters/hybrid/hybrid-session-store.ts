@@ -4,6 +4,8 @@ import type { AgentSession } from '../../domain/session.js'
 import type {
   ItemHistoryCompactionResult,
   ItemHistoryCommit,
+  ItemHistoryPage,
+  ItemHistoryPageOptions,
   ItemHistorySnapshot,
   SessionLatestUsageSnapshot,
   SessionStore,
@@ -69,6 +71,18 @@ export class HybridSessionStore implements SessionStore {
     return this.delegate.compactItems(threadId, options)
   }
 
+  scheduleItemHistoryCompaction(threadId: string): void {
+    this.delegate.scheduleItemHistoryCompaction(threadId)
+  }
+
+  scheduleUsageEventCompaction(threadId: string): void {
+    this.delegate.scheduleUsageEventCompaction(threadId)
+  }
+
+  async flushScheduledCompaction(threadId?: string): Promise<void> {
+    await this.delegate.flushScheduledCompaction(threadId)
+  }
+
   async loadEventsSince(threadId: string, sinceSeq: number): Promise<RuntimeEvent[]> {
     return this.delegate.loadEventsSince(threadId, sinceSeq)
   }
@@ -83,6 +97,13 @@ export class HybridSessionStore implements SessionStore {
 
   async loadItems(threadId: string): Promise<TurnItem[]> {
     return this.delegate.loadItems(threadId)
+  }
+
+  async loadItemPage(
+    threadId: string,
+    options: ItemHistoryPageOptions
+  ): Promise<ItemHistoryPage> {
+    return this.delegate.loadItemPage(threadId, options)
   }
 
   async loadSession(threadId: string): Promise<AgentSession | null> {

@@ -1,6 +1,27 @@
 import { createHash } from 'node:crypto'
+import {
+  DESIGN_UPDATE_SHAPES_MAX_OPS,
+  designCanvasReceiptKey,
+  designShapeMutationBudgetError,
+  designToolError,
+  designToolOutput,
+  normalizeArrangeOp,
+  normalizeDesignCanvasArgs,
+  normalizeDesignUpdateShapeOps,
+  normalizeScreenSpecs,
+  normalizeStructuredDesignSystemOps,
+  numberArg,
+  oneOf,
+  safeCanvasExportStem,
+  stringArg
+} from './design-canvas-normalization.js'
+import {
+  DESIGN_SHAPE_OP_INPUT_SCHEMA,
+  DESIGN_SHAPE_OP_TOOL_CONTRACT
+} from './design-shape-op-tool-contract.js'
 import { LocalToolHost, type LocalTool } from './local-tool-host.js'
-import { validateStructuredArgumentBudget } from './structured-argument-budget.js'
+
+export { DESIGN_UPDATE_SHAPES_MAX_OPS } from './design-canvas-normalization.js'
 
 export const DESIGN_CANVAS_TOOL_NAME = 'design_canvas'
 export const DESIGN_CREATE_SCREEN_TOOL_NAME = 'design_create_screen'
@@ -12,6 +33,7 @@ export const DESIGN_SYSTEM_TOOL_NAME = 'design_system'
 export const DESIGN_SYSTEM_TEMPLATE_TOOL_NAME = DESIGN_SYSTEM_TOOL_NAME
 export const DESIGN_VALIDATE_TOOL_NAME = 'design_validate'
 export const DESIGN_SVG_CREATE_TOOL_NAME = 'design_svg_create'
+export const WORK_RENAME_WHITEBOARD_TOOL_NAME = 'work_rename_whiteboard'
 
 export const DESIGN_CANVAS_MUTATION_TOOL_NAMES = [
   DESIGN_CANVAS_TOOL_NAME,
@@ -21,27 +43,14 @@ export const DESIGN_CANVAS_MUTATION_TOOL_NAMES = [
   DESIGN_EXPORT_CANVAS_TOOL_NAME,
   DESIGN_SYSTEM_TEMPLATE_TOOL_NAME,
   DESIGN_VALIDATE_TOOL_NAME,
-  DESIGN_SVG_CREATE_TOOL_NAME
+  DESIGN_SVG_CREATE_TOOL_NAME,
+  WORK_RENAME_WHITEBOARD_TOOL_NAME
 ] as const
 
-type DesignCanvasAction = 'create_board' | 'add_screen' | 'update_shapes'
-type DesignScreenSpec = {
-  name: string
-  brief?: string
-  x?: number
-  y?: number
-  width?: number
-  height?: number
-  devicePreset?: 'mobile' | 'tablet' | 'desktop'
-}
 
 const SHOULD_ADVERTISE_DESIGN_TOOL = (context: { guiDesignCanvas?: boolean }) =>
   context.guiDesignCanvas === true
 
-export const DESIGN_UPDATE_SHAPES_MAX_OPS = 100
-const DESIGN_UPDATE_SHAPES_MAX_ARGUMENT_BYTES = 512 * 1024
-const DESIGN_UPDATE_SHAPES_MAX_NODES = 2_000
-const DESIGN_UPDATE_SHAPES_MAX_DEPTH = 32
 
 const finiteNumber = (value: unknown): number | undefined =>
   typeof value === 'number' && Number.isFinite(value) ? value : undefined
@@ -67,8 +76,51 @@ export function buildDesignCanvasLocalTools(): LocalTool[] {
     createDesignExportCanvasTool(),
     createDesignSystemTemplateTool(),
     createDesignValidateTool(),
-    createDesignSvgCreateTool()
+    createDesignSvgCreateTool(),
+    createWorkRenameWhiteboardTool()
   ]
+}
+
+export function createWorkRenameWhiteboardTool(): LocalTool {
+  return LocalToolHost.defineTool({
+    name: WORK_RENAME_WHITEBOARD_TOOL_NAME,
+    description: [
+      'Rename the active Work whiteboard and its bound Work conversation.',
+      'Use this when the user asks to rename, retitle, or change the name of the current Work whiteboard; do not use shape text operations for the board title.'
+    ].join(' '),
+    toolKind: 'tool_call',
+    policy: 'auto',
+    shouldAdvertise: (context) =>
+      context.guiDesignCanvas === true && context.agentSurface === 'write',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        title: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 160,
+          description: 'The complete new title for the active Work whiteboard.'
+        }
+      },
+      required: ['title'],
+      additionalProperties: false
+    },
+    execute: async (args, context) => {
+      const title = stringArg(args.title)?.slice(0, 160)
+      if (!title) return designToolError('work_rename_whiteboard requires a non-empty title')
+      const receiptSeed = [{ op: 'rename-work-whiteboard', title }]
+      return designToolOutput(WORK_RENAME_WHITEBOARD_TOOL_NAME, 'rename_whiteboard', [], {
+        title,
+        status: 'accepted',
+        receiptKey: designCanvasReceiptKey(
+          context?.threadId,
+          context?.turnId,
+          context?.activeToolCallId,
+          receiptSeed
+        )
+      })
+    }
+  })
 }
 
 export function createDesignSvgCreateTool(): LocalTool {
@@ -172,18 +224,17 @@ export function createDesignCanvasTool(): LocalTool {
           description: DEVICE_PRESET_DESCRIPTION
         },
         ops: {
-          description:
-            'For update_shapes: a ShapeOp object or array of at most 100 ShapeOps. Prefer batches of 20-50 related operations and continue larger work in subsequent calls. ShapeOps are validated and applied by the renderer.',
+          description: `For update_shapes: a ShapeOp object or array of at most 100 ShapeOps. Prefer batches of 20-50 related operations and continue larger work in subsequent calls. ${DESIGN_SHAPE_OP_TOOL_CONTRACT}`,
           anyOf: [
-            { type: 'object', additionalProperties: true },
-            { type: 'array', maxItems: DESIGN_UPDATE_SHAPES_MAX_OPS, items: { type: 'object', additionalProperties: true } }
+            DESIGN_SHAPE_OP_INPUT_SCHEMA,
+            { type: 'array', maxItems: DESIGN_UPDATE_SHAPES_MAX_OPS, items: DESIGN_SHAPE_OP_INPUT_SCHEMA }
           ]
         }
       },
       required: ['action'],
       additionalProperties: true
     },
-    execute: async (args) => {
+    execute: async (args, context) => {
       const normalized = normalizeDesignCanvasArgs(args)
       if (!normalized.ok) {
         return {
@@ -198,14 +249,28 @@ export function createDesignCanvasTool(): LocalTool {
         const budgetError = designShapeMutationBudgetError(args, normalized.ops)
         if (budgetError) return designToolError(budgetError)
       }
-      return {
-        output: {
-          ok: true,
-          action: normalized.action,
-          ops: normalized.ops,
-          message: normalized.message
+      // Renderer-executed mutations return an `accepted` placeholder with a
+      // receipt key instead of claiming verified success. `create_board` is
+      // renderer-free and stays synchronous.
+      if (normalized.ops.length === 0) {
+        return {
+          output: {
+            ok: true,
+            action: normalized.action,
+            ops: normalized.ops,
+            message: normalized.message
+          }
         }
       }
+      return designToolOutput(DESIGN_CANVAS_TOOL_NAME, normalized.action, normalized.ops, {
+        status: 'accepted',
+        receiptKey: designCanvasReceiptKey(
+          context?.threadId,
+          context?.turnId,
+          context?.activeToolCallId,
+          normalized.ops
+        )
+      })
     }
   })
 }
@@ -264,13 +329,21 @@ export function createDesignCreateScreenTool(): LocalTool {
       },
       additionalProperties: false
     },
-    execute: async (args) => {
+    execute: async (args, context) => {
       const screens = normalizeScreenSpecs(args)
       if (!screens.ok) return designToolError(screens.error)
       const ops = screens.specs.length === 1
         ? [{ op: 'add-screen', ...screens.specs[0] }]
         : [{ op: 'add-screens', specs: screens.specs }]
-      return designToolOutput(DESIGN_CREATE_SCREEN_TOOL_NAME, 'create_screen', ops)
+      return designToolOutput(DESIGN_CREATE_SCREEN_TOOL_NAME, 'create_screen', ops, {
+        status: 'accepted',
+        receiptKey: designCanvasReceiptKey(
+          context?.threadId,
+          context?.turnId,
+          context?.activeToolCallId,
+          ops
+        )
+      })
     }
   })
 }
@@ -290,30 +363,38 @@ export function createDesignUpdateShapesTool(): LocalTool {
       type: 'object',
       properties: {
         ops: {
-          description:
-            'Preferred: a ShapeOp object or array of ShapeOps. The renderer validates and applies each op atomically. If omitted, a direct top-level ShapeOp is also accepted.',
+          description: `Preferred: a ShapeOp object or array of ShapeOps. The renderer validates and applies each op atomically. If omitted, a direct top-level ShapeOp is also accepted. ${DESIGN_SHAPE_OP_TOOL_CONTRACT}`,
           anyOf: [
-            { type: 'object', additionalProperties: true },
+            DESIGN_SHAPE_OP_INPUT_SCHEMA,
             {
               type: 'array',
               maxItems: DESIGN_UPDATE_SHAPES_MAX_OPS,
-              items: { type: 'object', additionalProperties: true }
+              items: DESIGN_SHAPE_OP_INPUT_SCHEMA
             }
           ]
         },
         op: {
           type: 'string',
+          enum: [...DESIGN_SHAPE_OP_INPUT_SCHEMA.properties.op.enum],
           description: 'Direct ShapeOp fallback. Prefer wrapping it in ops.'
         }
       },
       additionalProperties: true
     },
-    execute: async (args) => {
+    execute: async (args, context) => {
       const ops = normalizeDesignUpdateShapeOps(args)
       if (!ops) return designToolError('design_update_shapes requires ops as an object or array')
       const budgetError = designShapeMutationBudgetError(args, ops)
       if (budgetError) return designToolError(budgetError)
-      return designToolOutput(DESIGN_UPDATE_SHAPES_TOOL_NAME, 'update_shapes', ops)
+      return designToolOutput(DESIGN_UPDATE_SHAPES_TOOL_NAME, 'update_shapes', ops, {
+        status: 'accepted',
+        receiptKey: designCanvasReceiptKey(
+          context?.threadId,
+          context?.turnId,
+          context?.activeToolCallId,
+          ops
+        )
+      })
     }
   })
 }
@@ -359,17 +440,23 @@ export function createDesignExportCanvasTool(): LocalTool {
         .slice(0, 12)
       const fileName = `${stem}-${suffix}.${format}`
       const relativePath = `.deepseekgui-images/${fileName}`
-      const mimeType = format === 'png' ? 'image/png' : 'image/svg+xml'
+      const exportRequest = { format, fileName, relativePath }
 
       return {
         output: {
           ok: true,
           tool: DESIGN_EXPORT_CANVAS_TOOL_NAME,
           action: 'export_canvas',
-          exportRequest: { format, fileName, relativePath },
-          generatedFiles: [{ name: fileName, relativePath, mimeType }],
+          exportRequest,
+          status: 'accepted',
+          receiptKey: designCanvasReceiptKey(
+            context.threadId,
+            context.turnId,
+            context.activeToolCallId,
+            [exportRequest]
+          ),
           ops: [],
-          message: `Queued the current whiteboard for ${format.toUpperCase()} export at ${relativePath}.`
+          message: `Accepted the current whiteboard for ${format.toUpperCase()} export at ${relativePath}; this result does not verify that the renderer wrote the file.`
         }
       }
     }
@@ -575,295 +662,4 @@ export function createDesignValidateTool(): LocalTool {
         }
       ])
   })
-}
-
-function normalizeDesignCanvasArgs(args: Record<string, unknown>):
-  | { ok: true; action: DesignCanvasAction; ops: unknown[]; message: string }
-  | { ok: false; error: string } {
-  const action = args.action
-  if (action !== 'create_board' && action !== 'add_screen' && action !== 'update_shapes') {
-    return { ok: false, error: 'action must be one of create_board, add_screen, or update_shapes' }
-  }
-  if (action === 'create_board') {
-    return {
-      ok: true,
-      action,
-      ops: [],
-      message: 'Design board is ready.'
-    }
-  }
-  if (action === 'add_screen') {
-    const op = copyOptionalFields(
-      {
-        op: 'add-screen',
-        name: typeof args.name === 'string' && args.name.trim() ? args.name.trim() : 'Screen'
-      },
-      args,
-      ['brief', 'x', 'y', 'width', 'height', 'devicePreset']
-    )
-    return {
-      ok: true,
-      action,
-      ops: [op],
-      message: `Queued screen "${String(op.name)}" for the design canvas.`
-    }
-  }
-  const ops = normalizeOps(args.ops)
-  if (!ops) {
-    return { ok: false, error: 'update_shapes requires ops as an object or array' }
-  }
-  return {
-    ok: true,
-    action,
-    ops,
-    message: `Queued ${ops.length} shape operation${ops.length === 1 ? '' : 's'} for the design canvas.`
-  }
-}
-
-function normalizeDesignUpdateShapeOps(args: Record<string, unknown>): unknown[] | null {
-  const explicitOps = firstNormalizedOps(
-    args.ops,
-    args.shapeOps,
-    args.shape_ops,
-    args.operations
-  )
-  if (explicitOps) return explicitOps
-  if (typeof args.op === 'string' && args.op.trim()) return [args]
-  const update = normalizeLooseUpdateShapeOp(args)
-  return update ? [update] : null
-}
-
-function designShapeMutationBudgetError(args: Record<string, unknown>, ops: unknown[]): string | null {
-  if (ops.length > DESIGN_UPDATE_SHAPES_MAX_OPS) {
-    return `design_update_shapes accepts at most ${DESIGN_UPDATE_SHAPES_MAX_OPS} operations; split the work into batches of 20-50`
-  }
-  const budget = validateStructuredArgumentBudget(args, {
-    label: 'design_update_shapes',
-    maxBytes: DESIGN_UPDATE_SHAPES_MAX_ARGUMENT_BYTES,
-    maxNodes: DESIGN_UPDATE_SHAPES_MAX_NODES,
-    maxDepth: DESIGN_UPDATE_SHAPES_MAX_DEPTH
-  })
-  return budget.ok ? null : budget.error
-}
-
-function firstNormalizedOps(...values: unknown[]): unknown[] | null {
-  for (const value of values) {
-    if (value === undefined) continue
-    const ops = normalizeOps(value)
-    if (ops) return ops
-  }
-  return null
-}
-
-function normalizeLooseUpdateShapeOp(args: Record<string, unknown>): Record<string, unknown> | null {
-  const id = stringArg(args.id) ?? stringArg(args.shapeId) ?? stringArg(args.shape_id)
-  if (!id) return null
-  const patchSource = isRecord(args.patch) ? args.patch : args
-  const patch = normalizeLooseShapePatch(patchSource)
-  if (Object.keys(patch).length === 0) return null
-  return { op: 'update', id, patch }
-}
-
-function normalizeLooseShapePatch(source: Record<string, unknown>): Record<string, unknown> {
-  const patch: Record<string, unknown> = {}
-  const skip = new Set([
-    'id',
-    'shapeId',
-    'shape_id',
-    'op',
-    'ops',
-    'shapeOps',
-    'shape_ops',
-    'operations',
-    'action',
-    'tool',
-    'patch'
-  ])
-  for (const [key, value] of Object.entries(source)) {
-    if (skip.has(key) || value === undefined) continue
-    const normalizedKey =
-      key === 'image_url' || key === 'relative_path' || key === 'relativePath'
-        ? 'imageUrl'
-        : key === 'text_content'
-          ? 'textContent'
-          : key
-    patch[normalizedKey] = value
-  }
-  return patch
-}
-
-function normalizeScreenSpecs(args: Record<string, unknown>):
-  | { ok: true; specs: DesignScreenSpec[] }
-  | { ok: false; error: string } {
-  if (Array.isArray(args.screens)) {
-    const specs = args.screens.map(normalizeScreenSpec).filter(Boolean) as DesignScreenSpec[]
-    if (specs.length === 0) return { ok: false, error: 'screens must contain at least one valid screen spec' }
-    return { ok: true, specs }
-  }
-  const spec = normalizeScreenSpec(args)
-  if (!spec) return { ok: false, error: 'name is required for design_create_screen' }
-  return { ok: true, specs: [spec] }
-}
-
-function normalizeScreenSpec(value: unknown): DesignScreenSpec | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
-  const source = value as Record<string, unknown>
-  const name = typeof source.name === 'string' && source.name.trim() ? source.name.trim() : ''
-  if (!name) return null
-  return copyOptionalFields({ name }, source, ['brief', 'x', 'y', 'width', 'height', 'devicePreset']) as DesignScreenSpec
-}
-
-function normalizeStructuredDesignSystemOps(args: Record<string, unknown>): Record<string, unknown>[] {
-  const ops: Record<string, unknown>[] = []
-  if (Array.isArray(args.tokens)) {
-    for (const token of args.tokens) {
-      if (!isRecord(token)) continue
-      const name = stringArg(token.name)
-      const kind = oneOf(token.kind, ['color', 'gradient', 'type', 'space', 'radius', 'shadow'])
-      if (name && kind && Object.hasOwn(token, 'value')) ops.push({ op: 'define-token', name, kind, value: token.value })
-    }
-  }
-  if (Array.isArray(args.captureComponents)) {
-    for (const item of args.captureComponents) {
-      if (!isRecord(item)) continue
-      const name = stringArg(item.name)
-      const fromId = stringArg(item.fromId)
-      if (!name || !fromId) continue
-      ops.push({
-        op: 'define-component',
-        name,
-        fromId,
-        slots: Array.isArray(item.slots) ? item.slots.filter(isRecord) : []
-      })
-    }
-  }
-  if (Array.isArray(args.variants)) {
-    for (const item of args.variants) {
-      if (!isRecord(item)) continue
-      const name = stringArg(item.component)
-      const key = stringArg(item.key)
-      if (!name || !key || !isRecord(item.selection) || !isRecord(item.overrides)) continue
-      ops.push({ op: 'set-component-variant', name, key, selection: item.selection, overrides: item.overrides })
-    }
-  }
-  if (Array.isArray(args.deleteTokenNames)) {
-    for (const name of args.deleteTokenNames) if (stringArg(name)) ops.push({ op: 'delete-token', name: stringArg(name) })
-  }
-  if (Array.isArray(args.deleteComponentNames)) {
-    for (const name of args.deleteComponentNames) if (stringArg(name)) ops.push({ op: 'delete-component', name: stringArg(name) })
-  }
-  return ops
-}
-
-function normalizeArrangeOp(args: Record<string, unknown>):
-  | { ok: true; op: Record<string, unknown> }
-  | { ok: false; error: string } {
-  const operation = args.operation
-  const ids = Array.isArray(args.ids) ? args.ids.filter((v): v is string => typeof v === 'string' && v.trim() !== '') : []
-  if (operation === 'align') {
-    const axis = oneOf(args.axis, ['left', 'h-center', 'right', 'top', 'v-center', 'bottom'])
-    if (ids.length < 2 || !axis) return { ok: false, error: 'align requires ids (2+) and axis' }
-    return { ok: true, op: { op: 'align', ids, axis } }
-  }
-  if (operation === 'distribute') {
-    const axis = oneOf(args.axis, ['horizontal', 'vertical'])
-    if (ids.length < 3 || !axis) return { ok: false, error: 'distribute requires ids (3+) and axis horizontal|vertical' }
-    return { ok: true, op: { op: 'distribute', ids, axis } }
-  }
-  if (operation === 'stack') {
-    const direction = oneOf(args.direction, ['horizontal', 'vertical'])
-    if (ids.length < 1 || !direction) return { ok: false, error: 'stack requires ids and direction' }
-    return {
-      ok: true,
-      op: {
-        op: 'stack',
-        ids,
-        direction,
-        ...(numberArg(args.gap) !== undefined ? { gap: numberArg(args.gap) } : {}),
-        ...(stringArg(args.name) ? { name: stringArg(args.name) } : {}),
-        ...(args.asFrame === true ? { asFrame: true } : {})
-      }
-    }
-  }
-  if (operation === 'grid') {
-    const id = stringArg(args.id)
-    const cols = numberArg(args.cols)
-    if (!id || !cols) return { ok: false, error: 'grid requires id and positive cols' }
-    return {
-      ok: true,
-      op: {
-        op: 'grid',
-        id,
-        cols,
-        ...(numberArg(args.rowGap) !== undefined ? { rowGap: numberArg(args.rowGap) } : {}),
-        ...(numberArg(args.colGap) !== undefined ? { colGap: numberArg(args.colGap) } : {})
-      }
-    }
-  }
-  if (operation === 'responsive_reflow') {
-    const frameId = stringArg(args.frameId) || stringArg(args.id)
-    const device = oneOf(args.device, ['mobile', 'tablet', 'desktop'])
-    if (!frameId || !device) return { ok: false, error: 'responsive_reflow requires frameId and device' }
-    return { ok: true, op: { op: 'responsive-reflow', frameId, device } }
-  }
-  return { ok: false, error: 'operation must be align, distribute, stack, grid, or responsive_reflow' }
-}
-
-function designToolOutput(tool: string, action: string, ops: unknown[], extra: Record<string, unknown> = {}): { output: Record<string, unknown> } {
-  return {
-    output: {
-      ok: true,
-      tool,
-      action,
-      ...extra,
-      ops,
-      message: `Queued ${ops.length} design operation${ops.length === 1 ? '' : 's'} for the design canvas.`
-    }
-  }
-}
-
-function designToolError(error: string): { output: Record<string, unknown>; isError: true } {
-  return { output: { ok: false, error }, isError: true }
-}
-
-function stringArg(value: unknown): string | undefined {
-  return typeof value === 'string' && value.trim() ? value.trim() : undefined
-}
-
-function safeCanvasExportStem(value: string): string {
-  const normalized = value
-    .normalize('NFKD')
-    .replace(/[^a-z0-9._-]+/gi, '-')
-    .replace(/^[._-]+|[._-]+$/g, '')
-    .slice(0, 64)
-  return normalized || 'kun-whiteboard'
-}
-
-function numberArg(value: unknown): number | undefined {
-  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
-}
-
-function oneOf<const T extends readonly string[]>(value: unknown, values: T): T[number] | undefined {
-  return typeof value === 'string' && values.includes(value) ? value as T[number] : undefined
-}
-
-function normalizeOps(value: unknown): unknown[] | null {
-  if (Array.isArray(value)) return value
-  if (value && typeof value === 'object') return [value]
-  return null
-}
-
-function copyOptionalFields(
-  target: Record<string, unknown>,
-  source: Record<string, unknown>,
-  keys: string[]
-): Record<string, unknown> {
-  for (const key of keys) {
-    if (source[key] !== undefined) target[key] = source[key]
-  }
-  return target
 }

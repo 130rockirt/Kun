@@ -159,6 +159,27 @@ describe('SettingsTabs', () => {
     expect(renderedPanels[1]?.props.className).toContain('hidden')
   })
 
+  it('can size tabs to readable labels while retaining horizontal scrolling', () => {
+    let renderer!: ReactTestRenderer
+    act(() => {
+      renderer = create(createElement(SettingsTabs<TabId>, {
+        items: ITEMS,
+        value: 'appearance',
+        onChange: () => undefined,
+        baseId: 'readable-settings',
+        ariaLabel: 'Readable settings sections',
+        contentSized: true
+      }))
+    })
+
+    const tablist = renderer.root.findByProps({ role: 'tablist' })
+    expect(tablist.props.className).toContain('auto-cols-max')
+    expect(tablist.props.className).toContain('overflow-x-auto')
+    expect(tabs(renderer).every((tab) => tab.props.className.includes('min-w-max'))).toBe(true)
+    expect(tabs(renderer).flatMap((tab) => tab.findAllByType('span'))
+      .every((label) => !label.props.className.includes('truncate'))).toBe(true)
+  })
+
   it('switches by click and Arrow, Home, and End keys while moving focus', () => {
     const onChange = vi.fn()
     const focusTargets = new Map<string, { focus: ReturnType<typeof vi.fn> }>()

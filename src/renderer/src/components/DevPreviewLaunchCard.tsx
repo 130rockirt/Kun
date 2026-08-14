@@ -26,7 +26,7 @@ export function DevPreviewLaunchCard({
           className="mt-1 flex min-w-0 items-center gap-1.5 text-[12.5px] text-ds-muted"
           title={url}
         >
-          <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-400 shadow-[0_0_0_3px_rgba(52,211,153,0.12)]" />
+          <Globe2 className="h-3 w-3 shrink-0 text-ds-faint" strokeWidth={1.7} />
           <span className="truncate">
             {t('devPreviewCardSubtitle')} · {formatDevPreviewUrlLabel(url)}
           </span>

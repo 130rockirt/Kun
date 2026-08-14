@@ -19,7 +19,8 @@ export async function startReview(
     target: StartReviewRequest['target'],
     model?: string,
     providerId?: string,
-    accountId?: string
+    accountId?: string,
+    reasoningEffort?: StartReviewRequest['reasoningEffort']
   ) => void
 ): Promise<JsonResponse | Response> {
   const body = await readJsonBody(request)
@@ -37,6 +38,8 @@ export async function startReview(
         displayText: title,
         model: parsed.data.model,
         providerId: parsed.data.providerId,
+        accountId: parsed.data.accountId,
+        reasoningEffort: parsed.data.reasoningEffort,
         mode: 'agent'
       }
     })
@@ -61,7 +64,8 @@ export async function startReview(
       parsed.data.target,
       parsed.data.model,
       parsed.data.providerId,
-      parsed.data.accountId
+      parsed.data.accountId,
+      parsed.data.reasoningEffort
     )
     return jsonResponse(response, 202)
   } catch (error) {

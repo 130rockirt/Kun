@@ -23,15 +23,24 @@ import {
 } from '../lib/workspace-path'
 import { shouldOmitFromCodeWorkspaceRoots } from '../lib/worktree-project-path'
 import { readBrowserStorageItem, writeBrowserStorageItem } from '../lib/browser-storage'
+import {
+  loadThreadComposerModeMap,
+  loadThreadComposerSelectionMap,
+  loadTurnModelMap,
+  normalizeTurnModelMap,
+  saveThreadComposerModeMap,
+  saveThreadComposerSelectionMap,
+  saveTurnModelMap
+} from './chat-store-helper-storage'
+
+export { normalizeTurnModelMap } from './chat-store-helper-storage'
 
 const COMPOSER_MODEL_STORAGE_KEY = 'kun.composerModel'
 const COMPOSER_PROVIDER_STORAGE_KEY = 'kun.composerProviderId'
+const COMPOSER_PERSONA_STORAGE_KEY = 'kun.composerPersonaId'
 const COMPOSER_REASONING_EFFORT_STORAGE_KEY = 'kun.composerReasoningEffortByModel.v1'
 const COMPOSER_FAST_MODE_STORAGE_KEY = 'kun.composerFastMode.v1'
-const THREAD_COMPOSER_SELECTION_STORAGE_KEY = 'kun.threadComposerSelection.v1'
-const THREAD_COMPOSER_MODE_STORAGE_KEY = 'kun.threadComposerMode.v1'
 const COMPOSER_MODE_STORAGE_KEY = 'kun.composerMode'
-const TURN_MODEL_STORAGE_KEY = 'kun.turnModelLabel'
 const CODE_WORKSPACE_ROOTS_STORAGE_KEY = 'kun.codeWorkspaceRoots.v1'
 export const MAX_CODE_WORKSPACE_ROOTS = 30
 export const MAX_THREAD_COMPOSER_SELECTIONS = 500
@@ -122,6 +131,19 @@ export function readStoredComposerFastMode(): boolean {
 
 export function persistComposerFastMode(enabled: boolean): void {
   writeBrowserStorageItem(COMPOSER_FAST_MODE_STORAGE_KEY, enabled ? 'true' : 'false')
+}
+
+/**
+ * The stored id is not validated against the preset catalog here: settings load
+ * after the store initializes, and a preset deleted while selected resolves to
+ * an empty persona at send time (`resolveCodeAgentPersona`).
+ */
+export function readStoredComposerPersonaId(): string {
+  return readBrowserStorageItem(COMPOSER_PERSONA_STORAGE_KEY)?.trim() ?? ''
+}
+
+export function persistComposerPersonaId(presetId: string): void {
+  writeBrowserStorageItem(COMPOSER_PERSONA_STORAGE_KEY, presetId.trim())
 }
 
 export function composerReasoningEffortForSelection(
@@ -637,65 +659,4 @@ export function hydrateBlockModelLabels(threadId: string, blocks: ChatBlock[]): 
 function defaultClawProviderLabel(provider: ClawImProvider): string {
   if (provider === 'weixin') return 'weixin agent'
   return 'feishu agent'
-}
-
-function loadTurnModelMap(): Record<string, string> {
-  try {
-    const raw = readBrowserStorageItem(TURN_MODEL_STORAGE_KEY)
-    if (!raw) return {}
-    return normalizeTurnModelMap(JSON.parse(raw))
-  } catch {
-    return {}
-  }
-}
-
-export function normalizeTurnModelMap(raw: unknown): Record<string, string> {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {}
-  const entries: Array<[string, string]> = []
-  for (const [rawKey, rawValue] of Object.entries(raw as Record<string, unknown>)) {
-    const key = rawKey.trim()
-    const value = typeof rawValue === 'string' ? rawValue.trim() : ''
-    if (!key || !key.includes('|') || !value) continue
-    entries.push([key, value])
-  }
-  const recent = entries.slice(-MAX_TURN_MODEL_LABELS)
-  return Object.fromEntries(recent)
-}
-
-function saveTurnModelMap(map: Record<string, string>): void {
-  writeBrowserStorageItem(TURN_MODEL_STORAGE_KEY, JSON.stringify(normalizeTurnModelMap(map)))
-}
-
-function loadThreadComposerSelectionMap(): Record<string, ThreadComposerSelection> {
-  try {
-    const raw = readBrowserStorageItem(THREAD_COMPOSER_SELECTION_STORAGE_KEY)
-    if (!raw) return {}
-    return normalizeThreadComposerSelectionMap(JSON.parse(raw))
-  } catch {
-    return {}
-  }
-}
-
-function saveThreadComposerSelectionMap(map: Record<string, ThreadComposerSelection>): void {
-  writeBrowserStorageItem(
-    THREAD_COMPOSER_SELECTION_STORAGE_KEY,
-    JSON.stringify(normalizeThreadComposerSelectionMap(map))
-  )
-}
-
-function loadThreadComposerModeMap(): Record<string, ComposerPlanMode> {
-  try {
-    const raw = readBrowserStorageItem(THREAD_COMPOSER_MODE_STORAGE_KEY)
-    if (!raw) return {}
-    return normalizeThreadComposerModeMap(JSON.parse(raw))
-  } catch {
-    return {}
-  }
-}
-
-function saveThreadComposerModeMap(map: Record<string, ComposerPlanMode>): void {
-  writeBrowserStorageItem(
-    THREAD_COMPOSER_MODE_STORAGE_KEY,
-    JSON.stringify(normalizeThreadComposerModeMap(map))
-  )
 }

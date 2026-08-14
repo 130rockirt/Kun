@@ -2,8 +2,12 @@ import { describe, expect, it } from 'vitest'
 import { LocalToolHost, requestUserInputTool } from '../src/adapters/tool/local-tool-host.js'
 import { emptyUsageSnapshot } from '../src/contracts/usage.js'
 import { makeUserItem } from '../src/domain/item.js'
+import { createThreadRecord } from '../src/domain/thread.js'
 import { ContextCompactor } from '../src/loop/context-compactor.js'
+import { projectCompatMessages } from '../src/adapters/model/compat-message-projector.js'
 import type { ModelRequest, ModelStreamChunk } from '../src/ports/model-client.js'
+import { TOKEN_ECONOMY_INSTRUCTION } from '../src/loop/token-economy.js'
+import { modelRequestContextText } from '../src/loop/model-request-context.js'
 import { decideApproval } from '../src/server/routes/approvals.js'
 import { bootstrapThread, makeHarness } from './loop-test-harness.js'
 import {
@@ -50,17 +54,18 @@ describe('AgentLoop transcript characterization', () => {
       model: 'transcript-model',
       reasoningEffort: 'high',
       tools: [],
-      history: [
+      history: expect.arrayContaining([
         expect.objectContaining({
           kind: 'user_message',
           role: 'user',
           status: 'completed',
           text: 'Assess the request.'
         })
-      ]
+      ])
     })
     expect(transcript.sessionItems).toEqual([
       expect.objectContaining({ kind: 'user_message', text: 'Assess the request.' }),
+      expect.objectContaining({ kind: 'model_context' }),
       expect.objectContaining({ kind: 'assistant_reasoning', text: 'First inspect the request.' }),
       expect.objectContaining({ kind: 'assistant_text', text: 'The request is healthy.' })
     ])
@@ -86,8 +91,169 @@ describe('AgentLoop transcript characterization', () => {
       turns: [expect.objectContaining({ status: 'completed' })]
     })
     expect(transcript.thread).toMatchObject({ id: 'thr_1', status: 'idle' })
+    expect(JSON.stringify(transcript.thread)).not.toContain('model_context')
     expect(transcript.turn).toMatchObject({ id: 'turn_1', status: 'completed' })
     expect(transcript.toolExecutionOrder).toEqual([])
+  })
+
+  it('injects host control only on its owning native turn', async () => {
+    const hostControl = 'Private PPT host control for turn one.'
+    const model = new ScriptedCapturingModel([
+      [{ kind: 'assistant_text_delta', text: 'first' }, { kind: 'completed', stopReason: 'stop' }],
+      [{ kind: 'assistant_text_delta', text: 'second' }, { kind: 'completed', stopReason: 'stop' }]
+    ])
+    const harness = makeHarness(model, {
+      tools: [],
+      compactor: new ContextCompactor({ softThreshold: 100_000, hardThreshold: 120_000 })
+    })
+    await harness.threadStore.upsert(createThreadRecord({
+      id: harness.threadId, title: 'native host control', workspace: '/tmp', model: 'fake'
+    }))
+    const first = await harness.turns.startTurn({
+      threadId: harness.threadId,
+      request: { prompt: 'first request' }
+    }, { runtimeContext: { kind: 'host-control', content: hostControl } })
+    await expect(harness.loop.runTurn(harness.threadId, first.turnId)).resolves.toBe('completed')
+    const second = await harness.turns.startTurn({
+      threadId: harness.threadId,
+      request: { prompt: 'second request' }
+    })
+    await expect(harness.loop.runTurn(harness.threadId, second.turnId)).resolves.toBe('completed')
+
+    expect(model.requests[0]?.contextInstructions?.join('\n')).toContain(hostControl)
+    expect(model.requests[0]?.redactedRequestValues).toEqual([hostControl])
+    expect(JSON.stringify(model.requests[0]?.history)).not.toContain(hostControl)
+    expect(model.requests[1]?.contextInstructions?.join('\n') ?? '').not.toContain(hostControl)
+    expect(model.requests[1]?.redactedRequestValues ?? []).toEqual([])
+    expect(JSON.stringify(model.requests[1]?.history)).not.toContain(hostControl)
+    expect(JSON.stringify(await harness.sessionStore.loadItems(harness.threadId)))
+      .toContain(hostControl)
+    expect((await harness.sessionStore.loadItems(harness.threadId))
+      .filter((item) => item.kind === 'model_context')
+      .some((item) => item.text.includes(hostControl))).toBe(false)
+  })
+
+  it('keeps consecutive token-economy wire messages append-only', async () => {
+    const model = new ScriptedCapturingModel([
+      [{ kind: 'assistant_text_delta', text: 'first' }, { kind: 'completed', stopReason: 'stop' }],
+      [{ kind: 'assistant_text_delta', text: 'second' }, { kind: 'completed', stopReason: 'stop' }]
+    ])
+    const harness = makeHarness(model, {
+      tools: [],
+      tokenEconomy: { enabled: true },
+      compactor: new ContextCompactor({ softThreshold: 100_000, hardThreshold: 120_000 })
+    })
+    await harness.threadStore.upsert(createThreadRecord({
+      id: harness.threadId, title: 'cache continuity', workspace: '/tmp', model: 'fake'
+    }))
+    const first = await harness.turns.startTurn({
+      threadId: harness.threadId,
+      request: { prompt: 'hi' }
+    })
+    await expect(harness.loop.runTurn(harness.threadId, first.turnId)).resolves.toBe('completed')
+    const second = await harness.turns.startTurn({
+      threadId: harness.threadId,
+      request: { prompt: 'hi' }
+    })
+    await expect(harness.loop.runTurn(harness.threadId, second.turnId)).resolves.toBe('completed')
+
+    const firstRequest = model.requests[0]
+    const secondRequest = model.requests[1]
+    expect(firstRequest).toBeDefined()
+    expect(secondRequest).toBeDefined()
+    if (!firstRequest || !secondRequest) return
+    const projectionOptions = { thinkingMode: false, supportsImages: false }
+    const firstMessages = projectCompatMessages(firstRequest, projectionOptions)
+    const secondMessages = projectCompatMessages(secondRequest, projectionOptions)
+
+    expect(secondMessages.slice(0, firstMessages.length)).toEqual(firstMessages)
+    expect(firstRequest.contextInstructions ?? []).toEqual([])
+    expect(secondRequest.contextInstructions ?? []).toEqual([])
+    const firstContexts = firstRequest.history.filter((item) => item.kind === 'model_context')
+    const secondContexts = secondRequest.history.filter((item) => item.kind === 'model_context')
+    expect(firstContexts).toHaveLength(1)
+    expect(firstContexts[0]?.kind === 'model_context' ? firstContexts[0].text : '')
+      .toContain(TOKEN_ECONOMY_INSTRUCTION)
+    expect(secondContexts).toHaveLength(2)
+    expect(secondContexts[1]?.kind === 'model_context' ? secondContexts[1].text : '')
+      .not.toContain(TOKEN_ECONOMY_INSTRUCTION)
+  })
+
+  it('keeps the cache prefix stable when a GUI thread switches from Code to Design', async () => {
+    const model = new ScriptedCapturingModel([
+      [{ kind: 'assistant_text_delta', text: 'code done' }, { kind: 'completed', stopReason: 'stop' }],
+      [{ kind: 'assistant_text_delta', text: 'design done' }, { kind: 'completed', stopReason: 'stop' }]
+    ])
+    const codeTool = LocalToolHost.defineTool({
+      name: 'code_only',
+      description: 'Code-only workbench tool.',
+      inputSchema: { type: 'object', properties: {} },
+      policy: 'auto',
+      shouldAdvertise: (context) => context.agentSurface === 'code',
+      execute: async () => ({ output: { ok: true } })
+    })
+    const designTool = LocalToolHost.defineTool({
+      name: 'design_only',
+      description: 'Design-only workbench tool.',
+      inputSchema: { type: 'object', properties: {} },
+      policy: 'auto',
+      shouldAdvertise: (context) =>
+        context.agentSurface === 'design' && context.guiDesignMode === true,
+      execute: async () => ({ output: { ok: true } })
+    })
+    const harness = makeHarness(model, {
+      tools: [designTool, codeTool],
+      compactor: new ContextCompactor({ softThreshold: 100_000, hardThreshold: 120_000 })
+    })
+    await harness.threadStore.upsert(createThreadRecord({
+      id: harness.threadId, title: 'mode switch cache', workspace: '/tmp', model: 'fake'
+    }))
+    const codeTurn = await harness.turns.startTurn({
+      threadId: harness.threadId,
+      request: { prompt: 'implement it', clientSurface: 'gui', agentSurface: 'code' }
+    })
+    await expect(harness.loop.runTurn(harness.threadId, codeTurn.turnId)).resolves.toBe('completed')
+    const designDocumentTarget = {
+      documentId: 'doc_mode_switch',
+      boardArtifactId: 'board_mode_switch'
+    }
+    const designTurn = await harness.turns.startTurn({
+      threadId: harness.threadId,
+      request: {
+        prompt: 'now design it',
+        clientSurface: 'gui',
+        agentSurface: 'design',
+        guiDesignCanvas: true,
+        guiDesignMode: true,
+        designProfile: {
+          version: 1,
+          documentTarget: designDocumentTarget,
+          outputMedium: 'html',
+          target: 'web',
+          preset: 'none',
+          context: { tone: [] }
+        },
+        designDocumentTarget
+      }
+    })
+    await expect(harness.loop.runTurn(harness.threadId, designTurn.turnId)).resolves.toBe('completed')
+
+    const [codeRequest, designRequest] = model.requests
+    expect(codeRequest).toBeDefined()
+    expect(designRequest).toBeDefined()
+    if (!codeRequest || !designRequest) return
+    expect(codeRequest.tools.map((tool) => tool.name)).toEqual(['code_only', 'design_only'])
+    expect(designRequest.tools).toEqual(codeRequest.tools)
+    expect(designRequest.systemPrompt).toBe(codeRequest.systemPrompt)
+    expect(designRequest.prefix).toEqual(codeRequest.prefix)
+    expect(designRequest.promptCachePartition).toBe(codeRequest.promptCachePartition)
+    expect(designRequest.modeInstruction).toBeUndefined()
+    expect(modelRequestContextText(designRequest)).toContain('Kun Design mode')
+
+    const projectionOptions = { thinkingMode: false, supportsImages: false }
+    const codeMessages = projectCompatMessages(codeRequest, projectionOptions)
+    const designMessages = projectCompatMessages(designRequest, projectionOptions)
+    expect(designMessages.slice(0, codeMessages.length)).toEqual(codeMessages)
   })
 
   it('replays a tool round-trip with request history and execution order intact', async () => {
@@ -142,8 +308,10 @@ describe('AgentLoop transcript characterization', () => {
     ])
     expect(transcript.modelRequests[1]?.history.map((item) => item.kind)).toEqual([
       'user_message',
+      'model_context',
       'tool_call',
-      'tool_result'
+      'tool_result',
+      'model_context'
     ])
     expect(transcript.toolExecutionOrder).toEqual([
       {
@@ -156,8 +324,10 @@ describe('AgentLoop transcript characterization', () => {
     ])
     expect(transcript.sessionItems.map((item) => item.kind)).toEqual([
       'user_message',
+      'model_context',
       'tool_call',
       'tool_result',
+      'model_context',
       'assistant_text'
     ])
     expect(transcript.events.map((event) => event.kind)).toEqual(expect.arrayContaining([

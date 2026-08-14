@@ -2,7 +2,6 @@ import type { TurnItem } from '../contracts/items.js'
 import type { ModelRequest, ModelToolSpec } from '../ports/model-client.js'
 import type { RequestHistoryHygieneOptions } from './request-history-hygiene.js'
 import { isModelVisibleImageOutput } from './tool-result-image.js'
-import { appendKunTurnContextBlock } from '../prompt/kun-prompt-context.js'
 
 export type TokenEconomyConfig = {
   enabled?: boolean
@@ -91,13 +90,6 @@ export function applyTokenEconomyToRequest(
   if (!economy.enabled) return request
   return {
     ...request,
-    contextInstructions: economy.conciseResponses
-      ? appendKunTurnContextBlock(request.contextInstructions ?? [], {
-          kind: 'token-economy',
-          authority: 'runtime',
-          content: TOKEN_ECONOMY_INSTRUCTION
-        })
-      : request.contextInstructions,
     tools: economy.compressToolDescriptions
       ? request.tools.map(compactToolSpec)
       : request.tools,

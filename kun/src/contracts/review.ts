@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { TurnReasoningEffortSchema } from './turn-reasoning.js'
 
 export const ReviewLineRangeSchema = z.object({
   start: z.number().int().positive(),
@@ -52,7 +53,8 @@ export const StartReviewRequest = z.object({
   target: ReviewTargetSchema,
   model: z.string().trim().min(1).optional(),
   providerId: z.string().trim().min(1).optional(),
-  accountId: z.string().trim().min(1).optional()
+  accountId: z.string().trim().min(1).optional(),
+  reasoningEffort: TurnReasoningEffortSchema.optional()
 })
 export type StartReviewRequest = z.infer<typeof StartReviewRequest>
 

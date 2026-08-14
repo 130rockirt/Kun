@@ -84,6 +84,31 @@ describe('SkillRuntime project config', () => {
     })
   })
 
+  it('applies runtime disabledIds to workspace-discovered Skills', async () => {
+    await writeSkill(join(workspace, '.kun', 'skills'), 'ppt-master', 'retired instructions')
+    await writeSkill(join(workspace, '.kun', 'skills'), 'available', 'available instructions')
+    await writeSkill(globalRoot, 'global', 'global instructions')
+    const config = KunCapabilitiesConfig.parse({
+      skills: {
+        enabled: true,
+        projectConfigEnabled: true,
+        roots: [],
+        workspaceRoots: [],
+        globalRoots: [globalRoot],
+        disabledIds: ['ppt-master']
+      }
+    })
+    const runtime = await SkillRuntime.create(config.skills)
+
+    await expect(runtime.availableSkillIdsForWorkspace(workspace)).resolves.toEqual([
+      'available',
+      'global'
+    ])
+    await expect(runtime.loadSkillById('ppt-master', workspace)).resolves.toMatchObject({
+      error: expect.stringContaining('unknown skill id')
+    })
+  })
+
   it('keeps global Skills when project-local Skills are disabled', async () => {
     await writeSkill(join(workspace, '.kun', 'skills'), 'local', 'local instructions')
     await writeSkill(globalRoot, 'global', 'global instructions')

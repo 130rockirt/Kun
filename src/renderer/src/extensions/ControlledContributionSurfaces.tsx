@@ -1,4 +1,4 @@
-import { Bell, FileSearch2, Puzzle, X } from 'lucide-react'
+import { Bell, FileSearch2, X } from 'lucide-react'
 import { useEffect, useRef, useState, type ReactElement, type ReactNode } from 'react'
 import {
   RESULT_PREVIEW_OPEN_CHANNEL,
@@ -10,42 +10,22 @@ import {
 } from '@kun/extension-api'
 import type { ExtensionWorkbenchNotification } from '@shared/extension-ipc'
 import {
-  extensionHostIconUrl,
   resolveContributionCommand,
   type RegisteredContribution
 } from './contribution-registry'
 import { ExtensionWebview } from './ExtensionWebview'
 import { ExtensionExternalBrowser } from './ExtensionExternalBrowser'
 import { boundedPlainText, isSecretLikeSettingKey } from './safe-text'
+import {
+  ContributionIcon,
+  isTrustedNotificationActivation,
+  plainText
+} from './ControlledContributionSupport'
 
 export { isSecretLikeSettingKey } from './safe-text'
-
-function plainText(value: string, max = 256): string {
-  return boundedPlainText(value, max)
-}
+export { isTrustedNotificationActivation } from './ControlledContributionSupport'
 
 const MAX_VISIBLE_EXTENSION_NOTIFICATIONS = 5
-
-export function isTrustedNotificationActivation(event: {
-  nativeEvent: { isTrusted: boolean }
-}): boolean {
-  return event.nativeEvent.isTrusted === true
-}
-
-function ContributionIcon({ contribution }: { contribution: RegisteredContribution }): ReactElement {
-  const icon = 'icon' in contribution.payload ? contribution.payload.icon : undefined
-  if (icon && contribution.owner.kind === 'extension') {
-    return (
-      <img
-        src={extensionHostIconUrl(contribution.owner.extensionId, icon)}
-        alt=""
-        aria-hidden="true"
-        className="h-4 w-4 shrink-0 object-contain"
-      />
-    )
-  }
-  return <Puzzle className="h-4 w-4 shrink-0" aria-hidden />
-}
 
 export function DeclarativeActionBar({
   contributions,

@@ -1,0 +1,120 @@
+import type { ModelProviderSettingsV1, ModelRoutePoolV1, ModelRouteStrategy } from '@shared/app-settings'
+import { resolveModelRouteTargetReference } from '@shared/app-settings-provider-core'
+import type { TFunction } from 'i18next'
+import { AlertTriangle, ChevronDown, ChevronUp, GripVertical, Plus, Trash2 } from 'lucide-react'
+import type { ReactElement } from 'react'
+import { Toggle } from './settings-controls'
+import { Field, compactInputClass, reorderTarget } from './settings-section-model-routes-support'
+
+type RouteMetrics = Record<string, { successes: number; failures: number; ewmaLatencyMs?: number; lastError?: string }>
+
+export function ModelRouteTargets({
+  settings,
+  pool,
+  metrics,
+  onUpdate,
+  t
+}: {
+  settings: ModelProviderSettingsV1
+  pool: ModelRoutePoolV1
+  metrics?: RouteMetrics
+  onUpdate: (patch: Partial<ModelRoutePoolV1>) => void
+  t: TFunction
+}): ReactElement {
+  const providers = settings.providers.filter((provider) => provider.models.length > 0)
+  const changeTarget = (targetId: string, patch: Partial<ModelRoutePoolV1['targets'][number]>): void => {
+    onUpdate({ targets: pool.targets.map((target) => target.id === targetId ? { ...target, ...patch } : target) })
+  }
+  const moveTarget = (source: number, destination: number): void => {
+    if (destination < 0 || destination >= pool.targets.length) return
+    const targets = [...pool.targets]
+    const [target] = targets.splice(source, 1)
+    targets.splice(destination, 0, target)
+    onUpdate({ targets })
+  }
+
+  return (
+    <section className="grid gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h3 className="text-[13px] font-semibold text-ds-ink">{t('modelRoutes.routeTargets')}</h3>
+          <p className="mt-1 text-[11px] text-ds-faint">{t('modelRoutes.routeTargetsHint')}</p>
+        </div>
+        <button
+          type="button"
+          disabled={providers.length === 0}
+          title={providers.length === 0 ? t('modelRoutes.addTargetUnavailable') : undefined}
+          onClick={() => {
+            const provider = providers[0]
+            if (!provider) return
+            onUpdate({ targets: [...pool.targets, {
+              id: `${pool.id}-target-${Date.now().toString(36)}`,
+              providerId: provider.id,
+              modelId: provider.models[0],
+              enabled: true,
+              weight: 1
+            }] })
+          }}
+          className="inline-flex items-center gap-1 rounded-full border border-ds-border px-3 py-1.5 text-[12px] text-ds-muted disabled:cursor-not-allowed disabled:opacity-45"
+        >
+          <Plus className="h-3.5 w-3.5" /> {t('modelRoutes.addTarget')}
+        </button>
+      </div>
+      {providers.length === 0 ? <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-700">{t('modelRoutes.addTargetUnavailable')}</p> : null}
+      <div className="grid gap-2">
+        {pool.targets.map((target, index) => {
+          const resolution = resolveModelRouteTargetReference(target, settings.providers)
+          const provider = resolution.provider
+          const metric = metrics?.[`${pool.id}:${target.id}`]
+          return (
+            <article
+              key={target.id}
+              onDragOver={(event) => event.preventDefault()}
+              onDrop={(event) => reorderTarget(event, index, pool, onUpdate)}
+              className={`rounded-xl border bg-ds-card p-3 ${resolution.status === 'valid' ? 'border-ds-border' : 'border-amber-300/80'}`}
+            >
+              <div className="grid items-start gap-3 md:grid-cols-[72px_minmax(0,1fr)_112px]">
+                <div className="flex items-center gap-1 pt-1">
+                  <button
+                    type="button"
+                    draggable
+                    title={t('modelRoutes.reorderTarget')}
+                    aria-label={t('modelRoutes.reorderTarget')}
+                    onDragStart={(event) => event.dataTransfer.setData('text/route-target-index', String(index))}
+                    className="cursor-grab rounded p-1 text-ds-faint hover:bg-ds-hover"
+                  ><GripVertical className="h-4 w-4" /></button>
+                  <span className="grid h-6 w-6 place-items-center rounded-full bg-ds-main text-[11px] text-ds-muted">{index + 1}</span>
+                  <div className="grid gap-0.5">
+                    <button type="button" disabled={index === 0} onClick={() => moveTarget(index, index - 1)} aria-label={t('modelRoutes.moveTargetUp')} className="text-ds-faint disabled:opacity-30"><ChevronUp className="h-3.5 w-3.5" /></button>
+                    <button type="button" disabled={index === pool.targets.length - 1} onClick={() => moveTarget(index, index + 1)} aria-label={t('modelRoutes.moveTargetDown')} className="text-ds-faint disabled:opacity-30"><ChevronDown className="h-3.5 w-3.5" /></button>
+                  </div>
+                </div>
+                <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+                  <Field label={t('modelRoutes.targetEnabled')}><Toggle checked={target.enabled} onChange={(enabled) => changeTarget(target.id, { enabled })} ariaLabel={t('modelRoutes.targetEnabled')} /></Field>
+                  <Field label={t('modelRoutes.targetProvider')}><select value={target.providerId} onChange={(event) => {
+                    const nextProvider = providers.find((candidate) => candidate.id === event.target.value)
+                    changeTarget(target.id, { providerId: event.target.value, modelId: nextProvider?.models[0] ?? '' })
+                  }} className={compactInputClass}>
+                    {resolution.status === 'provider-missing' ? <option value={target.providerId}>{t('modelRoutes.providerDeleted', { providerId: target.providerId })}</option> : null}
+                    {providers.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+                  </select></Field>
+                  <Field label={t('modelRoutes.targetModel')}><select value={target.modelId} onChange={(event) => changeTarget(target.id, { modelId: event.target.value })} className={compactInputClass}>
+                    {resolution.status !== 'valid' ? <option value={target.modelId}>{resolution.status === 'provider-missing' ? t('modelRoutes.originalModel', { modelId: target.modelId }) : t('modelRoutes.modelDeleted', { modelId: target.modelId })}</option> : null}
+                    {(provider?.models ?? []).map((model) => <option key={model} value={model}>{model}</option>)}
+                  </select></Field>
+                  <Field label={t('modelRoutes.targetWeight')}><input type="number" min={1} max={100} disabled={pool.strategy !== 'weighted-round-robin'} title={pool.strategy === 'weighted-round-robin' ? undefined : t('modelRoutes.weightInactive')} value={target.weight} onChange={(event) => changeTarget(target.id, { weight: Number(event.target.value) || 1 })} className={compactInputClass} /></Field>
+                </div>
+                <div className="flex items-start justify-between gap-2 pt-1 text-[11px] text-ds-muted">
+                  <div><span className="block text-ds-faint">{t('modelRoutes.targetHealth')}</span>{metric?.ewmaLatencyMs ? `${Math.round(metric.ewmaLatencyMs)} ms` : t('modelRoutes.notProbed')}<br /><span className="text-ds-faint">{metric ? t('modelRoutes.successCount', { successes: metric.successes, total: metric.successes + metric.failures }) : ''}</span></div>
+                  <button type="button" onClick={() => onUpdate({ targets: pool.targets.filter((item) => item.id !== target.id) })} aria-label={t('modelRoutes.deleteTarget')} className="rounded-full p-1.5 text-ds-faint hover:bg-red-50 hover:text-red-600"><Trash2 className="h-4 w-4" /></button>
+                </div>
+              </div>
+              {pool.strategy !== 'weighted-round-robin' ? <p className="mt-2 text-[10.5px] text-ds-faint">{t('modelRoutes.weightInactive')}</p> : null}
+              {resolution.status !== 'valid' ? <p className="mt-2 flex items-center gap-1.5 text-[11px] text-amber-700"><AlertTriangle className="h-3.5 w-3.5 shrink-0" />{resolution.status === 'provider-missing' ? t('modelRoutes.providerMissingWarning', { providerId: target.providerId }) : t('modelRoutes.modelMissingWarning', { modelId: target.modelId, providerId: target.providerId })}</p> : null}
+            </article>
+          )
+        })}
+      </div>
+    </section>
+  )
+}

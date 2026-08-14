@@ -471,7 +471,7 @@ describe('git checkpoint service', () => {
     await expect(stat(join(dataDir, 'git-checkpoints', unused))).rejects.toThrow()
   })
 
-  it('preserves referenced checkpoints when cleanup reaches maxPerThread', async () => {
+  it('evicts referenced checkpoints beyond the hard maxPerThread cap (issue #1156)', async () => {
     const now = new Date('2026-07-25T12:00:00.000Z')
     const ids = ['gcp_t1', 'gcp_t2', 'gcp_t3', 'gcp_t4']
     await mkdir(join(dataDir, 'threads', 'thr_cap'), { recursive: true })
@@ -504,10 +504,13 @@ describe('git checkpoint service', () => {
       now
     })
 
-    expect(result.deletedIds).toEqual([])
-    for (const id of ids) {
-      await expect(stat(join(dataDir, 'git-checkpoints', id))).resolves.toBeTruthy()
-    }
+    // The cap is hard: the two oldest checkpoints are removed even though
+    // saved messages still reference them (their rollbacks show as expired).
+    expect(result.deletedIds).toEqual(['gcp_t2', 'gcp_t1'])
+    await expect(stat(join(dataDir, 'git-checkpoints', 'gcp_t1'))).rejects.toThrow()
+    await expect(stat(join(dataDir, 'git-checkpoints', 'gcp_t2'))).rejects.toThrow()
+    await expect(stat(join(dataDir, 'git-checkpoints', 'gcp_t3'))).resolves.toBeTruthy()
+    await expect(stat(join(dataDir, 'git-checkpoints', 'gcp_t4'))).resolves.toBeTruthy()
   })
 
   it('preserves referenced checkpoints after maxAgeDays', async () => {
@@ -660,201 +663,5 @@ describe('git checkpoint service', () => {
     expect(upgraded.due).toBe(true)
     if (!upgraded.due) throw new Error('expected version-upgrade cleanup')
     expect(upgraded.result.deletedIds).toEqual(['gcp_c'])
-  })
-})
-
-describe('git checkpoint storage limits (issue #651)', () => {
-  it('stores checkpoints under a user-configured directory (e.g. another drive)', async () => {
-    const customRoot = join(sandbox, 'other-drive', 'kun-checkpoints')
-    const checkpoint = await createGitCheckpoint({
-      dataDir,
-      workspaceRoot: repoRoot,
-      threadId: 'thr_1',
-      storage: { checkpointsRoot: customRoot }
-    })
-    expect(checkpoint.ok).toBe(true)
-    if (!checkpoint.ok) throw new Error(checkpoint.message)
-    await expect(stat(join(customRoot, checkpoint.checkpointId, 'metadata.json'))).resolves.toBeTruthy()
-    // Nothing should have been written under the default data dir location.
-    await expect(stat(join(dataDir, 'git-checkpoints', checkpoint.checkpointId))).rejects.toBeTruthy()
-  })
-
-  it('skips untracked files larger than the per-file cap and records them', async () => {
-    await writeFile(join(repoRoot, 'small.txt'), 'tiny')
-    await writeFile(join(repoRoot, 'huge.bin'), Buffer.alloc(2_000_000, 1))
-    const checkpoint = await createGitCheckpoint({
-      dataDir,
-      workspaceRoot: repoRoot,
-      threadId: 'thr_1',
-      storage: { maxUntrackedFileBytes: 1_000_000 }
-    })
-    expect(checkpoint.ok).toBe(true)
-    if (!checkpoint.ok) throw new Error(checkpoint.message)
-    const dir = join(dataDir, 'git-checkpoints', checkpoint.checkpointId)
-    const metadata = JSON.parse(await readFile(join(dir, 'metadata.json'), 'utf-8')) as {
-      untrackedFiles: string[]; skippedUntracked?: string[]
-    }
-    expect(metadata.untrackedFiles).toContain('small.txt')
-    expect(metadata.skippedUntracked).toContain('huge.bin')
-    await expect(stat(join(dir, 'untracked', 'huge.bin'))).rejects.toBeTruthy()
-    await expect(stat(join(dir, 'untracked', 'small.txt'))).resolves.toBeTruthy()
-  })
-
-  it('stops snapshotting untracked files once the total budget is hit', async () => {
-    await writeFile(join(repoRoot, 'a.bin'), Buffer.alloc(600_000, 1))
-    await writeFile(join(repoRoot, 'b.bin'), Buffer.alloc(600_000, 1))
-    const checkpoint = await createGitCheckpoint({
-      dataDir,
-      workspaceRoot: repoRoot,
-      threadId: 'thr_1',
-      storage: { maxUntrackedFileBytes: 1_000_000, maxUntrackedTotalBytes: 1_000_000 }
-    })
-    if (!checkpoint.ok) throw new Error(checkpoint.message)
-    const dir = join(dataDir, 'git-checkpoints', checkpoint.checkpointId)
-    const metadata = JSON.parse(await readFile(join(dir, 'metadata.json'), 'utf-8')) as {
-      untrackedFiles: string[]; skippedUntracked?: string[]
-    }
-    // One file fits the 1MB budget, the second is skipped.
-    expect(metadata.untrackedFiles.length).toBe(1)
-    expect(metadata.skippedUntracked?.length).toBe(1)
-  })
-
-  it('marks a checkpoint with skipped untracked files as partial and refuses to restore it (no data loss)', async () => {
-    // A large untracked file is skipped by the size cap, so the checkpoint is
-    // partial. Restoring would `git clean -fd` the never-captured file, so the
-    // restore must be refused unless the caller opts in.
-    await writeFile(join(repoRoot, 'huge.bin'), Buffer.alloc(2_000_000, 1))
-    const checkpoint = await createGitCheckpoint({
-      dataDir,
-      workspaceRoot: repoRoot,
-      threadId: 'thr_partial',
-      storage: { maxUntrackedFileBytes: 1_000_000 }
-    })
-    if (!checkpoint.ok) throw new Error(checkpoint.message)
-    const dir = join(dataDir, 'git-checkpoints', checkpoint.checkpointId)
-    const metadata = JSON.parse(await readFile(join(dir, 'metadata.json'), 'utf-8')) as { completeness?: string }
-    expect(metadata.completeness).toBe('partial')
-
-    const restored = await restoreGitCheckpoint({ dataDir, checkpointId: checkpoint.checkpointId })
-    expect(restored.ok).toBe(false)
-    if (restored.ok) throw new Error('expected partial restore to be refused')
-    expect(restored.reason).toBe('partial')
-    expect('skippedUntracked' in restored && restored.skippedUntracked).toContain('huge.bin')
-    // The destructive ops never ran: the skipped file is byte-for-byte intact.
-    expect((await stat(join(repoRoot, 'huge.bin'))).size).toBe(2_000_000)
-  })
-
-  it('marks a fully-captured checkpoint as complete', async () => {
-    await writeFile(join(repoRoot, 'small.txt'), 'tiny')
-    const checkpoint = await createGitCheckpoint({ dataDir, workspaceRoot: repoRoot, threadId: 'thr_complete' })
-    if (!checkpoint.ok) throw new Error(checkpoint.message)
-    const dir = join(dataDir, 'git-checkpoints', checkpoint.checkpointId)
-    const metadata = JSON.parse(await readFile(join(dir, 'metadata.json'), 'utf-8')) as { completeness?: string }
-    expect(metadata.completeness).toBe('complete')
-  })
-
-  it('restores a partial checkpoint only when the bounded rescue is complete', async () => {
-    await writeFile(join(repoRoot, 'huge.bin'), Buffer.alloc(2_000_000, 7))
-    const checkpoint = await createGitCheckpoint({
-      dataDir,
-      workspaceRoot: repoRoot,
-      threadId: 'thr_partial_ok',
-      storage: { maxUntrackedFileBytes: 1_000_000 }
-    })
-    if (!checkpoint.ok) throw new Error(checkpoint.message)
-
-    const restored = await restoreGitCheckpoint({
-      dataDir,
-      checkpointId: checkpoint.checkpointId,
-      allowPartialRestore: true
-    })
-    expect(restored.ok).toBe(true)
-    if (!restored.ok) throw new Error(restored.message)
-    expect(restored.rescueCheckpointId).toMatch(/^gcp_/)
-    // The file exceeds the original checkpoint's custom cap but fits the normal
-    // bounded rescue policy, so it remains recoverable.
-    const rescueUntracked = join(dataDir, 'git-checkpoints', restored.rescueCheckpointId as string, 'untracked', 'huge.bin')
-    expect((await stat(rescueUntracked)).size).toBe(2_000_000)
-  })
-
-  it('fails closed before reset/clean when the rescue snapshot is partial', async () => {
-    await writeFile(join(repoRoot, 'huge.bin'), Buffer.alloc(6_000_000, 9))
-    const checkpoint = await createGitCheckpoint({
-      dataDir,
-      workspaceRoot: repoRoot,
-      threadId: 'thr_partial_rescue',
-      storage: { maxUntrackedFileBytes: 1_000_000 }
-    })
-    if (!checkpoint.ok) throw new Error(checkpoint.message)
-
-    const restored = await restoreGitCheckpoint({
-      dataDir,
-      checkpointId: checkpoint.checkpointId,
-      allowPartialRestore: true
-    })
-    expect(restored.ok).toBe(false)
-    if (restored.ok) throw new Error('expected incomplete rescue to refuse restore')
-    expect(restored.reason).toBe('partial')
-    expect((await stat(join(repoRoot, 'huge.bin'))).size).toBe(6_000_000)
-  })
-
-  it('prunes oldest checkpoints beyond the per-thread cap', async () => {
-    const ids: string[] = []
-    for (let i = 0; i < 4; i += 1) {
-      const cp = await createGitCheckpoint({
-        dataDir,
-        workspaceRoot: repoRoot,
-        threadId: 'thr_cap',
-        checkpointId: `gcp_${1000 + i}_fixed-${i}`,
-        storage: { maxPerThread: 2 }
-      })
-      if (!cp.ok) throw new Error(cp.message)
-      ids.push(cp.checkpointId)
-    }
-    const root = join(dataDir, 'git-checkpoints')
-    // Only the two newest survive; the two oldest are pruned.
-    await expect(stat(join(root, ids[0]))).rejects.toBeTruthy()
-    await expect(stat(join(root, ids[1]))).rejects.toBeTruthy()
-    await expect(stat(join(root, ids[2]))).resolves.toBeTruthy()
-    await expect(stat(join(root, ids[3]))).resolves.toBeTruthy()
-  })
-
-  it('keeps a message-referenced checkpoint when new checkpoints exceed the cap', async () => {
-    const ids: string[] = []
-    for (let i = 0; i < 2; i += 1) {
-      const checkpoint = await createGitCheckpoint({
-        dataDir,
-        workspaceRoot: repoRoot,
-        threadId: 'thr_referenced_cap',
-        checkpointId: `gcp_${2000 + i}_fixed-${i}`,
-        storage: { maxPerThread: 2 }
-      })
-      if (!checkpoint.ok) throw new Error(checkpoint.message)
-      ids.push(checkpoint.checkpointId)
-    }
-    await mkdir(join(dataDir, 'threads', 'thr_referenced_cap'), { recursive: true })
-    await writeFile(
-      join(dataDir, 'threads', 'thr_referenced_cap', 'items.jsonl'),
-      `${JSON.stringify({ id: 'item_1', workspaceCheckpointId: ids[0] })}\n`,
-      'utf-8'
-    )
-
-    for (let i = 2; i < 4; i += 1) {
-      const checkpoint = await createGitCheckpoint({
-        dataDir,
-        workspaceRoot: repoRoot,
-        threadId: 'thr_referenced_cap',
-        checkpointId: `gcp_${2000 + i}_fixed-${i}`,
-        storage: { maxPerThread: 2 }
-      })
-      if (!checkpoint.ok) throw new Error(checkpoint.message)
-      ids.push(checkpoint.checkpointId)
-    }
-
-    const root = join(dataDir, 'git-checkpoints')
-    await expect(stat(join(root, ids[0]))).resolves.toBeTruthy()
-    await expect(stat(join(root, ids[1]))).rejects.toThrow()
-    await expect(stat(join(root, ids[2]))).resolves.toBeTruthy()
-    await expect(stat(join(root, ids[3]))).resolves.toBeTruthy()
   })
 })

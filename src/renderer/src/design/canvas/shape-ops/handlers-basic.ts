@@ -4,6 +4,7 @@ import { useCanvasShapeStore, withDescendants } from '../canvas-shape-store'
 import { useCanvasSelectionStore } from '../canvas-selection-store'
 import { useCanvasViewportStore } from '../canvas-viewport-store'
 import { centerRectInViewport, placeRectInViewportAvoiding } from '../canvas-placement'
+import { currentCanvasOccupiedRects } from '../canvas-occupied-regions'
 import { alignShapes, collectiveBounds, distributeShapes, type AlignAxis, type DistributeAxis } from '../canvas-align'
 import { getScreenArtifactFactory, getScreenCreationFactory, setScreenBrief } from '../screen-artifact-bridge'
 import { selectedReusableScreenTargetFrameId } from '../screen-lifecycle'
@@ -17,7 +18,6 @@ import {
   defaultScreenDevicePreset,
   findShape,
   htmlFramePatchChangesSize,
-  htmlFrameRects,
   mergeAutoLayout,
   objectHasLayout,
   promoteHtmlFrameToManualNode,
@@ -184,7 +184,13 @@ export function executeBasicShapeOp(
         })
         return true
       }
-      store.reparentShape(op.id, op.newParentId, op.index)
+      if (!store.reparentShape(op.id, op.newParentId, op.index)) {
+        errors.push({
+          code: 'INVALID_OP',
+          message: `Cannot reparent "${op.id}" below "${op.newParentId}" because the target is not a valid container or would create a cycle.`
+        })
+        return true
+      }
       affectedIds.add(op.id)
       if (objectHasLayout(op.newParentId)) reflowFrame(op.newParentId, affectedIds)
       break
@@ -341,7 +347,7 @@ export function executeBasicShapeOp(
       const fallbackRect = placeRectInViewportAvoiding(
         { width, height },
         useCanvasViewportStore.getState().vbox,
-        htmlFrameRects()
+        currentCanvasOccupiedRects()
       )
       const x = targetFrame?.x ?? op.x ?? fallbackRect.x
       const y = targetFrame?.y ?? op.y ?? fallbackRect.y

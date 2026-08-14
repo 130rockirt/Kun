@@ -39,6 +39,57 @@ describe('bounded composer context API', () => {
     expect(isExtensionViewSafeMethod('ui.attachComposerContext')).toBe(true)
   })
 
+  it('accepts first-party Preview provenance without changing extension attachments', () => {
+    const previewAttachment = {
+      ...request,
+      attachmentId: `dev-preview-context:${'c'.repeat(64)}`,
+      provenance: { source: 'dev-preview', workspaceId: 'd'.repeat(64) }
+    } as const
+    expect(ComposerContextAttachmentSchema.parse(previewAttachment)).toEqual(previewAttachment)
+    expect(ComposerContextAttachmentSchema.parse(attachment)).toEqual(attachment)
+    expect(ComposerContextAttachmentSchema.safeParse({
+      ...previewAttachment,
+      attachmentId: `browser-context:${'c'.repeat(64)}`
+    }).success).toBe(false)
+  })
+
+  it('accepts first-party workspace document selections', () => {
+    const selectionAttachment = {
+      ...request,
+      attachmentId: `workspace-selection-context:${'e'.repeat(64)}`,
+      provenance: { source: 'workspace-selection', workspaceId: 'f'.repeat(64) }
+    } as const
+    expect(ComposerContextAttachmentSchema.parse(selectionAttachment)).toEqual(selectionAttachment)
+    expect(ComposerContextAttachmentSchema.safeParse({
+      ...selectionAttachment,
+      attachmentId: `document-context:${'e'.repeat(64)}`
+    }).success).toBe(false)
+  })
+
+  it('accepts path-free first-party workspace view positions', () => {
+    const viewAttachment = {
+      ...request,
+      id: 'office-view-position',
+      title: 'deck.pptx',
+      summary: 'Current view · Slide 3 of 9',
+      reference: {
+        kind: 'office-view-position',
+        schemaVersion: 1,
+        sourceName: 'deck.pptx',
+        sourceFormat: 'pptx',
+        sourceSha256: 'a'.repeat(64),
+        location: { kind: 'presentation', slide: 3, slideCount: 9 }
+      },
+      attachmentId: `workspace-view-context:${'e'.repeat(64)}`,
+      provenance: { source: 'workspace-view', workspaceId: 'f'.repeat(64) }
+    } as const
+    expect(ComposerContextAttachmentSchema.parse(viewAttachment)).toEqual(viewAttachment)
+    expect(ComposerContextAttachmentSchema.safeParse({
+      ...viewAttachment,
+      reference: { ...viewAttachment.reference, filePath: '/private/deck.pptx' }
+    }).success).toBe(false)
+  })
+
   it('rejects absolute paths, path fields, excessive depth, and oversized references', () => {
     expect(ComposerContextAttachmentRequestSchema.safeParse({
       ...request,

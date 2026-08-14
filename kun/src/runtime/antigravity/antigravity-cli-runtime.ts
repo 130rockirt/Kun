@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process'
+import { StringDecoder } from 'node:string_decoder'
 import type { ServeProviderConfig } from '../../config/kun-config.js'
 import type {
   ActingTurnModelRoute,
@@ -17,6 +18,7 @@ import type { TurnRunOutcome } from '../../loop/turn-execution-types.js'
 import type { SessionStore } from '../../ports/session-store.js'
 import type { ThreadStore } from '../../ports/thread-store.js'
 import { buildClientSurfaceInstruction } from '../../prompt/kun-prompt-context.js'
+import { projectTurnDynamicContext } from '../../prompt/turn-persona-context.js'
 import type {
   ModelRequestTraceDelegated,
   ModelRequestTraceRecord
@@ -224,11 +226,18 @@ export class AntigravityCliRuntime implements DelegatedTurnRuntime {
       : (await this.deps.threadStore.get(threadId))?.goal
     const goalContextKeyForHistory = goalContextKey(goalForHistory)
     items = filterGoalContextsForGoalKey(items, goalContextKeyForHistory)
+    const turnDynamicContext = projectTurnDynamicContext({
+      turnId,
+      persona: turn.persona,
+      items
+    })
+    items = [...turnDynamicContext.historyItems]
 
     const instructionBlocks = [
       this.deps.systemPrompt?.trim(),
       buildClientSurfaceInstruction(resolveTurnClientSurface(turn)),
-      thread.systemPrompt?.trim()
+      thread.systemPrompt?.trim(),
+      ...turnDynamicContext.instructions
     ].filter((value, index, all): value is string =>
       Boolean(value) && all.indexOf(value) === index
     )
@@ -370,7 +379,10 @@ export class AntigravityCliRuntime implements DelegatedTurnRuntime {
       provider: resolvedProviderId,
       model,
       prompt,
-      redactedRequestValues: goalContextTexts(items),
+      redactedRequestValues: [
+        ...goalContextTexts(items),
+        ...turnDynamicContext.privateValues
+      ],
       effort,
       planMode,
       approvalPolicy,
@@ -531,6 +543,9 @@ function runAntigravityProcess(input: {
     }
     let stdout = ''
     let stderr = ''
+    let stdoutBytes = 0
+    const stdoutDecoder = new StringDecoder('utf8')
+    const stderrDecoder = new StringDecoder('utf8')
     let settled = false
     let timedOut = false
     const terminate = (): void => {
@@ -556,17 +571,28 @@ function runAntigravityProcess(input: {
     if (input.signal.aborted) terminate()
     else input.signal.addEventListener('abort', onAbort, { once: true })
     child.stdout?.on('data', (chunk: Buffer | string) => {
-      stdout += chunk
-      if (Buffer.byteLength(stdout) > MAX_STDOUT_BYTES) {
+      if (settled) return
+      // Child-process streams may split one UTF-8 character across multiple
+      // data events. Decode incrementally so Chinese and other multibyte text
+      // survives those boundaries intact.
+      stdoutBytes += Buffer.byteLength(chunk)
+      if (stdoutBytes > MAX_STDOUT_BYTES) {
         terminate()
         done(new Error('Antigravity CLI response exceeded the output limit'))
+        return
       }
+      stdout += stdoutDecoder.write(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
     })
     child.stderr?.on('data', (chunk: Buffer | string) => {
-      stderr = `${stderr}${chunk}`.slice(-MAX_STDERR_BYTES)
+      if (settled) return
+      stderr = `${stderr}${stderrDecoder.write(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))}`
+        .slice(-MAX_STDERR_BYTES)
     })
     child.on('error', (error) => done(error))
     child.on('exit', (code) => {
+      if (settled) return
+      stdout += stdoutDecoder.end()
+      stderr = `${stderr}${stderrDecoder.end()}`.slice(-MAX_STDERR_BYTES)
       if (input.signal.aborted) {
         done(new Error('Antigravity CLI turn was aborted'))
       } else if (timedOut) {

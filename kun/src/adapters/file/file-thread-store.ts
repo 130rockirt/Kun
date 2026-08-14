@@ -3,6 +3,7 @@ import { join, resolve } from 'node:path'
 import type { ThreadStore, ThreadStoreListOptions } from '../../ports/thread-store.js'
 import {
   ThreadSchema,
+  ThreadSchemaReadable,
   type ThreadRecord,
   type ThreadSummary
 } from '../../contracts/threads.js'
@@ -40,7 +41,7 @@ export class FileThreadStore implements ThreadStore {
       try {
         const path = this.threadFilePath(threadId)
         const raw = await readFile(path, 'utf-8')
-        const thread = ThreadSchema.safeParse(JSON.parse(raw))
+        const thread = ThreadSchemaReadable.safeParse(JSON.parse(raw))
         if (thread.success) summaries.push(toThreadSummary(thread.data))
       } catch {
         // Skip broken entries rather than failing the whole list.
@@ -53,7 +54,7 @@ export class FileThreadStore implements ThreadStore {
     if (!isSafeThreadId(threadId)) return null
     try {
       const raw = await readFile(this.threadFilePath(threadId), 'utf-8')
-      const parsed = ThreadSchema.safeParse(JSON.parse(raw))
+      const parsed = ThreadSchemaReadable.safeParse(JSON.parse(raw))
       return parsed.success ? parsed.data : null
     } catch {
       return null

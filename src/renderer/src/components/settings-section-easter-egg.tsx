@@ -2,6 +2,11 @@ import type { ReactElement } from 'react'
 import { useEffect, useState } from 'react'
 import { BookOpen, FolderPlus, Palette, Trash2 } from 'lucide-react'
 import { UI_MODE_DEFAULT, UI_MODE_RETROMA } from '../lib/ui-mode'
+import {
+  UI_PLUGIN_CHARACTER_SCALE_MAX,
+  UI_PLUGIN_CHARACTER_SCALE_MIN,
+  UI_PLUGIN_CHARACTER_SCALE_STEP
+} from '../lib/ui-plugin-character-scale'
 import { useUiPluginStore } from '../store/ui-plugin-store'
 import kunBirdFigure from '../../../asset/img/kun_bird.png'
 import { SettingsCard, SettingRow } from './settings-controls'
@@ -122,13 +127,20 @@ export function EasterEggSettingsSection({ ctx }: { ctx: Record<string, any> }):
   const { t } = ctx
   const uiMode = useUiPluginStore((s) => s.uiMode)
   const installed = useUiPluginStore((s) => s.installed)
+  const activeRuntime = useUiPluginStore((s) => s.activeRuntime)
+  const characterScale = useUiPluginStore((s) => s.characterScale)
   const busy = useUiPluginStore((s) => s.busy)
   const lastError = useUiPluginStore((s) => s.lastError)
   const initUiPlugins = useUiPluginStore((s) => s.initUiPlugins)
   const activateUiMode = useUiPluginStore((s) => s.activateUiMode)
+  const setCharacterScale = useUiPluginStore((s) => s.setCharacterScale)
   const installUiPluginFromDialog = useUiPluginStore((s) => s.installUiPluginFromDialog)
   const removeUiPluginById = useUiPluginStore((s) => s.removeUiPluginById)
   const [installErrors, setInstallErrors] = useState<string[]>([])
+  const characterScalePercent = Math.round(characterScale * 100)
+  const hasResizableCharacter = Boolean(
+    activeRuntime?.manifest.presentation && activeRuntime.figures.portrait
+  )
 
   useEffect(() => {
     void initUiPlugins()
@@ -232,6 +244,61 @@ export function EasterEggSettingsSection({ ctx }: { ctx: Record<string, any> }):
           </div>
         }
       />
+      {hasResizableCharacter ? (
+        <SettingRow
+          title={t('uiPluginCharacterScale')}
+          description={t('uiPluginCharacterScaleDesc')}
+          control={
+            <div className="w-full min-w-0 md:max-w-md">
+              <div className="flex items-center gap-3">
+                <input
+                  type="range"
+                  min={UI_PLUGIN_CHARACTER_SCALE_MIN}
+                  max={UI_PLUGIN_CHARACTER_SCALE_MAX}
+                  step={UI_PLUGIN_CHARACTER_SCALE_STEP}
+                  value={characterScale}
+                  aria-label={t('uiPluginCharacterScale')}
+                  className="w-full accent-accent"
+                  onChange={(event) => setCharacterScale(Number(event.target.value))}
+                />
+                <div className="inline-flex shrink-0 items-center rounded-lg border border-ds-border bg-ds-card">
+                  <button
+                    type="button"
+                    disabled={characterScale <= UI_PLUGIN_CHARACTER_SCALE_MIN}
+                    aria-label={t('uiPluginCharacterScaleSmaller')}
+                    className="flex h-7 w-7 items-center justify-center rounded-l-lg text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-default disabled:opacity-40"
+                    onClick={() => setCharacterScale(characterScale - UI_PLUGIN_CHARACTER_SCALE_STEP)}
+                  >
+                    −
+                  </button>
+                  <div className="flex h-7 w-[3.75rem] items-center justify-center border-x border-ds-border tabular-nums">
+                    <input
+                      type="number"
+                      min={Math.round(UI_PLUGIN_CHARACTER_SCALE_MIN * 100)}
+                      max={Math.round(UI_PLUGIN_CHARACTER_SCALE_MAX * 100)}
+                      step={1}
+                      value={characterScalePercent}
+                      aria-label={t('uiPluginCharacterScale')}
+                      className="hide-number-spinner w-8 border-0 bg-transparent p-0 text-center text-[13px] font-medium text-ds-ink outline-none"
+                      onChange={(event) => setCharacterScale(Number(event.target.value) / 100)}
+                    />
+                    <span className="text-[11px] text-ds-faint">%</span>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={characterScale >= UI_PLUGIN_CHARACTER_SCALE_MAX}
+                    aria-label={t('uiPluginCharacterScaleLarger')}
+                    className="flex h-7 w-7 items-center justify-center rounded-r-lg text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-default disabled:opacity-40"
+                    onClick={() => setCharacterScale(characterScale + UI_PLUGIN_CHARACTER_SCALE_STEP)}
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
+            </div>
+          }
+        />
+      ) : null}
     </SettingsCard>
   )
 }

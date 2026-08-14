@@ -23,7 +23,6 @@ import type { WriteBlockType } from '../../write/block-type'
 import { createWriteRecentEdit } from '../../write/recent-edits'
 import { resolveWriteQuickActions, type ResolvedWriteQuickAction } from '../../write/quick-actions'
 import {
-  formatWriteQuotedSelectionForPrompt,
   quotedSelectionFromEditor
 } from '../../write/quoted-selection'
 import { parseImageMarkdownLine } from '../../write/selected-image'
@@ -50,244 +49,31 @@ import {
   type WriteNotice
 } from '../write/write-workspace-view-utils'
 import { SidebarTitlebarToggleButton } from '../sidebar/SidebarPrimitives'
+import type { WriteEditorSelectionState } from '../write/WriteMarkdownEditor'
 
-const SDD_AUTOSAVE_MS = 650
-const PROTOTYPE_POLL_INTERVAL_MS = 4_000
-const PROTOTYPE_POLL_TIMEOUT_MS = 5 * 60_000
+export { SddAssistantToggleButton } from './SddDraftEditorParts'
+import { SddDraftEditorContent } from './SddDraftEditorContent'
+import { createSddDraftGenerationController } from './sdd-draft-generation-controller'
+import {
+  PROTOTYPE_POLL_INTERVAL_MS,
+  PROTOTYPE_POLL_TIMEOUT_MS,
+  SDD_AUTOSAVE_MS,
+  designReferenceTextFromImage,
+  randomPrototypeFileName,
+  statusKey,
+  type Props
+} from './SddDraftEditorParts'
 
-function randomPrototypeFileName(): string {
-  const stamp = new Date().toISOString().replace(/\D/g, '').slice(0, 14)
-  const hex = Math.floor(Math.random() * 0xffff).toString(16).padStart(4, '0')
-  return `prototype-${stamp}-${hex}.html`
-}
-
-function firstMeaningfulDraftLine(markdown: string, fallback: string): string {
-  const line = markdown
-    .split(/\r?\n/)
-    .map((item) => item.replace(/^#{1,6}\s+/, '').trim())
-    .find(Boolean)
-  return (line || fallback).slice(0, 240)
-}
-
-function designReferenceTextFromImage(
-  image: WriteSelectedImage,
-  markdown: string,
-  fallbackPath: string
-): string {
-  return [
-    'Use the attached reference image as the primary visual basis for a refreshed high-fidelity UI design mockup.',
-    image.alt.trim() ? `Reference image label: ${image.alt.trim()}` : '',
-    `Requirement context: ${firstMeaningfulDraftLine(markdown, fallbackPath)}`,
-    'Preserve the visible information architecture and key UI elements, while improving polish, hierarchy, spacing, and component consistency.'
-  ].filter(Boolean).join('\n')
-}
-
-type Props = {
-  leftSidebarCollapsed: boolean
-  assistantOpen: boolean
-  onToggleLeftSidebar: () => void
-  onToggleAssistant: () => void
-  /** Quote-and-ask from the selection toolbar: opens the assistant panel with the prompt queued. */
-  onAssistantQuote: (prompt: string) => void
-  /** Dispatch a prototype-generation turn to the sidebar assistant (handles
-   * the vision-model gate and image attachment). Resolves false when nothing
-   * was sent (cancelled, busy plan, no thread). */
-  onPrototypeTurn: (payload: {
-    prompt: string
-    displayText: string
-    image?: { absolutePath: string; alt: string }
-  }) => Promise<boolean>
-  /** Open design mode seeded with this requirement (requirement → design). */
-  onExploreInDesign?: () => void
-  onNext: () => void
-  onClose: () => void
-  nextDisabled: boolean
-}
-
-function SddDesignContextBar({
-  designContext,
-  onChange
-}: {
-  designContext: SddDesignContext | undefined
-  onChange: (patch: Partial<SddDesignContext>) => void
-}): ReactElement {
-  const { t } = useTranslation('common')
-  const [open, setOpen] = useState(false)
-  const tone = designContext?.tone ?? []
-  const brandColor = designContext?.brandColor ?? ''
-  const isHexBrandColor = /^#[0-9a-fA-F]{6}$/.test(brandColor)
-  // The native color swatch can only represent 6-digit hex. When the user has
-  // typed a non-hex value (oklch/named), don't let the swatch silently clobber
-  // it — keep the text field as the source of truth for those.
-  const colorInputValue = isHexBrandColor ? brandColor : '#3b82d8'
-  const swatchEditable = brandColor === '' || isHexBrandColor
-  const toggleTone = (value: string): void => {
-    const next = tone.includes(value) ? tone.filter((item) => item !== value) : [...tone, value]
-    onChange({ tone: next })
+export function prepareSddAssistantSelection(input: {
+  prompt: string
+  selection: WriteEditorSelectionState
+  filePath: string
+  workspaceRoot: string
+}) {
+  return {
+    prompt: input.prompt.trim(),
+    selection: quotedSelectionFromEditor(input.selection, input.filePath, input.workspaceRoot)
   }
-  const summaryParts = [
-    designContext?.designType ? t(`sddDesignType_${designContext.designType}`) : null,
-    brandColor || null,
-    tone.length ? tone.join('·') : null
-  ].filter(Boolean) as string[]
-  const summary = summaryParts.length > 0 ? summaryParts.join(' · ') : t('sddDesignContextEmpty')
-  const chipClass = (active: boolean): string =>
-    `rounded-full border px-2.5 py-1 text-[12px] transition-colors ${
-      active
-        ? 'border-accent bg-accent/12 text-accent'
-        : 'border-ds-border-muted bg-ds-main/40 text-ds-muted hover:text-ds-ink'
-    }`
-  return (
-    <div className="mt-2 rounded-[14px] border border-ds-border-muted bg-ds-card/70">
-      <button
-        type="button"
-        onClick={() => setOpen((value) => !value)}
-        className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left"
-      >
-        <span className="flex items-center gap-1.5 text-[13px] font-medium text-ds-ink">
-          <Sparkles className="h-3.5 w-3.5 text-accent" />
-          {t('sddDesignContextTitle')}
-        </span>
-        <span className="min-w-0 flex-1 truncate text-right text-[12px] text-ds-faint">{summary}</span>
-      </button>
-      {open ? (
-        <div className="space-y-3 border-t border-ds-border-muted px-3 py-3">
-          <div>
-            <div className="mb-1.5 text-[12px] text-ds-muted">{t('sddDesignTypeLabel')}</div>
-            <div className="flex gap-2">
-              {(['brand', 'product'] as const).map((value) => (
-                <button
-                  key={value}
-                  type="button"
-                  onClick={() => onChange({ designType: value })}
-                  className={chipClass(designContext?.designType === value)}
-                >
-                  {t(`sddDesignType_${value}`)}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div>
-            <div className="mb-1.5 text-[12px] text-ds-muted">{t('sddDesignBrandColorLabel')}</div>
-            <div className="flex items-center gap-2">
-              <input
-                type="color"
-                aria-label={t('sddDesignBrandColorLabel')}
-                value={colorInputValue}
-                disabled={!swatchEditable}
-                onChange={(e) => {
-                  if (swatchEditable) onChange({ brandColor: e.target.value })
-                }}
-                className={`h-7 w-9 rounded border border-ds-border-muted bg-transparent ${
-                  swatchEditable ? 'cursor-pointer' : 'cursor-not-allowed opacity-40'
-                }`}
-              />
-              <input
-                type="text"
-                value={brandColor}
-                placeholder={t('sddDesignBrandColorPlaceholder')}
-                onChange={(e) => onChange({ brandColor: e.target.value })}
-                className="h-7 flex-1 rounded-lg border border-ds-border-muted bg-ds-main/40 px-2 text-[12px] text-ds-ink outline-none focus:border-accent"
-              />
-              {brandColor ? (
-                <button
-                  type="button"
-                  onClick={() => onChange({ brandColor: '' })}
-                  className="text-[12px] text-ds-faint hover:text-ds-ink"
-                >
-                  {t('clear')}
-                </button>
-              ) : null}
-            </div>
-          </div>
-          <div>
-            <div className="mb-1.5 text-[12px] text-ds-muted">{t('sddDesignToneLabel')}</div>
-            <div className="flex flex-wrap gap-1.5">
-              {SDD_DESIGN_TONE_OPTIONS.map((value) => (
-                <button
-                  key={value}
-                  type="button"
-                  onClick={() => toggleTone(value)}
-                  className={chipClass(tone.includes(value))}
-                >
-                  {value}
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-      ) : null}
-    </div>
-  )
-}
-
-function SddRequirementProgress({ content }: { content: string }): ReactElement | null {
-  const { t } = useTranslation('common')
-  const blocks = useMemo(() => parseSddRequirementBlocks(content), [content])
-  if (blocks.length === 0) return null
-
-  const counts = { verified: 0, done: 0, building: 0, planned: 0 }
-  for (const block of blocks) {
-    if (block.status === 'verified') counts.verified += 1
-    else if (block.status === 'done') counts.done += 1
-    else if (block.status === 'building') counts.building += 1
-    else if (block.status === 'planned') counts.planned += 1
-  }
-  const total = blocks.length
-  const implemented = counts.verified + counts.done
-
-  return (
-    <div className="sdd-req-progress shrink-0 px-1 pb-1 pt-2">
-      <span className="text-[12px] font-semibold text-ds-muted">{t('sddReqProgressLabel')}</span>
-      <div className="sdd-req-progress-track" role="progressbar" aria-valuemin={0} aria-valuemax={total} aria-valuenow={implemented}>
-        {(['verified', 'done', 'building', 'planned'] as const).map((key) =>
-          counts[key] > 0 ? (
-            <span
-              key={key}
-              className={`sdd-req-progress-seg-${key}`}
-              style={{ width: `${(counts[key] / total) * 100}%` }}
-            />
-          ) : null
-        )}
-      </div>
-      <span className="text-[12px] font-medium text-ds-faint">
-        {t('sddReqProgressSummary', { done: implemented, total })}
-      </span>
-    </div>
-  )
-}
-
-function statusKey(saveStatus: string, operationStatus: string): string {
-  if (operationStatus === 'upgrading') return 'sddStatusUpgrading'
-  if (operationStatus === 'error' || saveStatus === 'error') return 'sddStatusError'
-  if (saveStatus === 'saving') return 'sddStatusSaving'
-  if (saveStatus === 'dirty') return 'sddStatusDirty'
-  return 'sddStatusSaved'
-}
-
-export function SddAssistantToggleButton({
-  assistantOpen,
-  onToggleAssistant,
-  label
-}: {
-  assistantOpen: boolean
-  onToggleAssistant: () => void
-  label: string
-}): ReactElement {
-  return (
-    <button
-      type="button"
-      onClick={onToggleAssistant}
-      className={`ds-sidebar-toggle-button ${
-        assistantOpen ? 'border-ds-border-strong bg-white/70 text-ds-ink dark:bg-white/10' : ''
-      }`}
-      title={label}
-      aria-label={label}
-      aria-pressed={assistantOpen}
-    >
-      <Sparkles className="h-4 w-4" strokeWidth={1.85} />
-    </button>
-  )
 }
 
 export function SddDraftEditorView({
@@ -353,9 +139,7 @@ export function SddDraftEditorView({
   const editorPaneRef = useRef<HTMLDivElement | null>(null)
   const richHandleRef = useRef<WriteRichEditorHandle | null>(null)
   const markdownHandleRef = useRef<WriteMarkdownEditorHandle | null>(null)
-  const inlineAgentTextareaRef = useRef<HTMLTextAreaElement | null>(null)
   const noticeTimerRef = useRef<number | null>(null)
-  const [inlineAgentValue, setInlineAgentValue] = useState('')
   const [inlineEditInFlight, setInlineEditInFlight] = useState(false)
   const [pointerSelecting, setPointerSelecting] = useState(false)
   const [notice, setNotice] = useState<WriteNotice | null>(null)
@@ -393,12 +177,6 @@ export function SddDraftEditorView({
       window.removeEventListener('pointercancel', handleUp)
     }
   }, [])
-
-  // Reset the AI-edit draft whenever the selection changes; the menu input is
-  // always present and must not carry stale text over.
-  useEffect(() => {
-    setInlineAgentValue('')
-  }, [selection.charCount, selection.text])
 
   useEffect(() => {
     if (!notice) return
@@ -511,15 +289,19 @@ export function SddDraftEditorView({
   )
 
   const submitToAssistant = (prompt: string): void => {
-    const trimmed = prompt.trim()
-    if (!trimmed) return
-    const quoted = quotedSelectionFromEditor(selection, editorFilePath, draftWorkspaceRoot)
-    const fullPrompt = quoted
-      ? `${formatWriteQuotedSelectionForPrompt(quoted)}\n\n${trimmed}`
-      : trimmed
+    const prepared = prepareSddAssistantSelection({
+      prompt, selection, filePath: editorFilePath, workspaceRoot: draftWorkspaceRoot
+    })
+    if (!prepared.prompt) return
     setSelection({ text: '', ranges: [], charCount: 0 })
-    setInlineAgentValue('')
-    onAssistantQuote(fullPrompt)
+    onAssistantQuote(prepared.prompt, prepared.selection ?? undefined)
+  }
+
+  const quoteSelectionToAssistant = (): void => {
+    const quoted = quotedSelectionFromEditor(selection, editorFilePath, draftWorkspaceRoot)
+    if (!quoted) return
+    setSelection({ text: '', ranges: [], charCount: 0 })
+    onAssistantQuote('', quoted)
   }
 
   const runQuickAction = (quickAction: ResolvedWriteQuickAction): void => {
@@ -615,7 +397,6 @@ export function SddDraftEditorView({
           return
         }
         setSelection({ text: '', ranges: [], charCount: 0 })
-        setInlineAgentValue('')
         setOperationStatus('idle')
         setNotice({ tone: 'success', message: t('writeInlineEditApplied') })
         return
@@ -653,7 +434,6 @@ export function SddDraftEditorView({
       setContent(nextContent)
       if (inlineEditRecord) recordRecentEdits([inlineEditRecord])
       setSelection({ text: '', ranges: [], charCount: 0 })
-      setInlineAgentValue('')
       setOperationStatus('idle')
       setNotice({ tone: 'success', message: t('writeInlineEditApplied') })
     } catch (err) {
@@ -665,620 +445,71 @@ export function SddDraftEditorView({
     }
   }
 
-  /** Insert the animated pending token below the selection and clear it.
-   * Returns the resolution job, or null when the selection went stale. */
-  const insertPendingPlaceholder = (
-    kind: PendingInfographicKind,
-    altText: string,
-    actionLabel: string,
-    maxChars: number
-  ): { id: string; src: string; pendingMarkdown: string; altText: string; text: string } | null => {
-    const range = selection.ranges[0]
-    const richHandle = richHandleRef.current
-    const text = selection.text.trim().slice(0, maxChars)
-    const pending = beginPendingInfographic(kind)
-    const pendingMarkdown = buildPendingInfographicMarkdown(altText, pending.src)
-    const insertion = `\n\n${pendingMarkdown}\n`
-    if (richHandle) {
-      // Rich mode: insert at a projection offset so undo history and node
-      // structure stay intact.
-      const projection = richHandle.getProjectionText() ?? ''
-      const insertAt = lineEndAfter(projection, range.to)
-      const applied = richHandle.applyProjectedReplacement(
-        { from: insertAt, to: insertAt },
-        '',
-        insertion,
-        actionLabel
-      )
-      if (!applied) {
-        finishPendingInfographic(pending.id)
-        setOperationStatus('error', t('writeInlineEditChanged'))
-        return null
-      }
-    } else {
-      const latest = useSddDraftStore.getState()
-      if (
-        latest.activeDraft?.id !== draftId ||
-        latest.content.slice(range.from, range.to) !== range.text
-      ) {
-        finishPendingInfographic(pending.id)
-        setOperationStatus('error', t('writeInlineEditChanged'))
-        return null
-      }
-      const insertAt = lineEndAfter(latest.content, range.to)
-      setContent(latest.content.slice(0, insertAt) + insertion + latest.content.slice(insertAt))
-    }
-    setSelection({ text: '', ranges: [], charCount: 0 })
-    setOperationStatus('idle')
-    return { id: pending.id, src: pending.src, pendingMarkdown, altText, text }
-  }
-
-  // Inserts an animated placeholder right away and resolves it in the
-  // background, so generation never blocks the editor.
-  const generateImage = (kind: WriteInfographicKind): void => {
-    if (readOnly || !unitImageDir) return
-    if (selection.selectedImage && kind === 'design') {
-      void generateDesignDraftFromImage(selection.selectedImage)
-      return
-    }
-    if (selection.ranges.length !== 1 || !selection.text.trim()) {
-      setOperationStatus('error', t('writeInlineEditNoSelection'))
-      return
-    }
-    if (typeof window.kunGui?.generateWriteInfographic !== 'function') {
-      setOperationStatus('error', t('writeInfographicUnavailable'))
-      return
-    }
-    const job = insertPendingPlaceholder(
-      kind,
-      t(kind === 'design' ? 'writeDesignDraftAlt' : 'writeInfographicAlt'),
-      t(kind === 'design' ? 'writeDesignDraftGenerate' : 'writeInfographicGenerate'),
-      WRITE_INFOGRAPHIC_MAX_TEXT_CHARS
-    )
-    if (!job) return
-    void completeImageGeneration({ kind, ...job })
-  }
-
-  const generateDesignDraftFromImage = async (image: WriteSelectedImage): Promise<void> => {
-    if (readOnly || !unitImageDir) return
-    if (typeof window.kunGui?.generateWriteInfographic !== 'function') {
-      setOperationStatus('error', t('writeInfographicUnavailable'))
-      return
-    }
-    const absoluteImagePath = resolveWriteMarkdownResourcePath(image.src, editorFilePath)
-    if (!absoluteImagePath) {
-      setOperationStatus('error', t('writeHtmlEmbedMissing'))
-      return
-    }
-    const altText = t('writeDesignDraftAlt')
-    const pending = beginPendingInfographic('design')
-    const pendingMarkdown = buildPendingInfographicMarkdown(altText, pending.src)
-    const insertion = `\n\n${pendingMarkdown}\n`
-    const richHandle = richHandleRef.current
-    if (richHandle) {
-      if (!richHandle.insertMarkdownAfterImage(image.src, insertion)) {
-        finishPendingInfographic(pending.id)
-        setOperationStatus('error', t('writeInlineEditChanged'))
-        return
-      }
-    } else {
-      const latest = useSddDraftStore.getState()
-      const line = image.line
-      if (
-        latest.activeDraft?.id !== draftId ||
-        !line ||
-        parseImageMarkdownLine(latest.content.slice(line.from, line.to))?.src !== image.src
-      ) {
-        finishPendingInfographic(pending.id)
-        setOperationStatus('error', t('writeInlineEditChanged'))
-        return
-      }
-      setContent(latest.content.slice(0, line.to) + insertion + latest.content.slice(line.to))
-    }
-    setSelection({ text: '', ranges: [], charCount: 0 })
-    setOperationStatus('idle')
-    void completeImageGeneration({
-      kind: 'design',
-      id: pending.id,
-      src: pending.src,
-      pendingMarkdown,
-      altText,
-      text: designReferenceTextFromImage(image, content, activeDraft.relativePath),
-      referenceImagePath: absoluteImagePath
-    })
-  }
-
-  const generatePrototype = (): void => {
-    if (readOnly) return
-    if (selection.selectedImage) {
-      void generatePrototypeFromImage(selection.selectedImage)
-      return
-    }
-    if (selection.ranges.length !== 1 || !selection.text.trim()) {
-      setOperationStatus('error', t('writeInlineEditNoSelection'))
-      return
-    }
-    if (!unitProtoDir) return
-    const text = selection.text.trim().slice(0, WRITE_PROTOTYPE_MAX_TEXT_CHARS)
-    const fileName = randomPrototypeFileName()
-    const job = insertPendingPlaceholder(
-      'prototype',
-      t('writePrototypeAlt'),
-      t('writePrototypeGenerate'),
-      WRITE_PROTOTYPE_MAX_TEXT_CHARS
-    )
-    if (!job) return
-    void dispatchPrototypeTurn(job, fileName, {
-      prompt: buildSddPrototypeTurnPrompt({
-        mode: 'text',
-        text,
-        prototypeRelativePath: `${unitProtoDir}/${fileName}`,
-        workspaceRoot: draftWorkspaceRoot,
-        customPrompt: selectionAssist.prototypePrompt,
-        ...(activeDraft?.designContext ? { designContext: activeDraft.designContext } : {})
-      }),
-      displayText: t('writePrototypeGenerate')
-    })
-  }
-
-  const generatePrototypeFromImage = async (image: WriteSelectedImage): Promise<void> => {
-    if (readOnly || !unitProtoDir) return
-    const absoluteImagePath = resolveWriteMarkdownResourcePath(image.src, editorFilePath)
-    if (!absoluteImagePath) {
-      setOperationStatus('error', t('writeHtmlEmbedMissing'))
-      return
-    }
-    const fileName = randomPrototypeFileName()
-    const altText = t('writePrototypeAlt')
-    const pending = beginPendingInfographic('prototype')
-    const pendingMarkdown = buildPendingInfographicMarkdown(altText, pending.src)
-    const insertion = `\n\n${pendingMarkdown}\n`
-    const richHandle = richHandleRef.current
-    if (richHandle) {
-      if (!richHandle.insertMarkdownAfterImage(image.src, insertion)) {
-        finishPendingInfographic(pending.id)
-        setOperationStatus('error', t('writeInlineEditChanged'))
-        return
-      }
-    } else {
-      const latest = useSddDraftStore.getState()
-      const line = image.line
-      if (
-        latest.activeDraft?.id !== draftId ||
-        !line ||
-        parseImageMarkdownLine(latest.content.slice(line.from, line.to))?.src !== image.src
-      ) {
-        finishPendingInfographic(pending.id)
-        setOperationStatus('error', t('writeInlineEditChanged'))
-        return
-      }
-      setContent(latest.content.slice(0, line.to) + insertion + latest.content.slice(line.to))
-    }
-    setSelection({ text: '', ranges: [], charCount: 0 })
-    setOperationStatus('idle')
-    await dispatchPrototypeTurn(
-      { id: pending.id, src: pending.src, pendingMarkdown, altText, text: '' },
-      fileName,
-      {
-        prompt: buildSddPrototypeTurnPrompt({
-          mode: 'image',
-          prototypeRelativePath: `${unitProtoDir}/${fileName}`,
-          workspaceRoot: draftWorkspaceRoot,
-          customPrompt: selectionAssist.prototypePrompt,
-          ...(activeDraft?.designContext ? { designContext: activeDraft.designContext } : {})
-        }),
-        displayText: t('writePrototypeGenerate'),
-        image: { absolutePath: absoluteImagePath, alt: image.alt }
-      }
-    )
-  }
-
-  const dispatchPrototypeTurn = async (
-    job: { id: string; src: string; pendingMarkdown: string; altText: string; text: string },
-    fileName: string,
-    payload: { prompt: string; displayText: string; image?: { absolutePath: string; alt: string } }
-  ): Promise<void> => {
-    let sent = false
-    try {
-      sent = await onPrototypeTurn(payload)
-    } catch (err) {
-      setOperationStatus('error', t('writePrototypeFailed', {
-        message: err instanceof Error ? err.message : String(err)
-      }))
-    }
-    if (!sent) {
-      finishPendingInfographic(job.id)
-      void resolvePendingImage(job, null)
-      return
-    }
-    startPrototypePoll(job, fileName)
-  }
-
-  /** Watch for the agent-written prototype file and swap the placeholder.
-   * Polling (not busy-edges) so queued turns and thread switches stay safe;
-   * the closure captures the draft context and survives unmount. */
-  const startPrototypePoll = (
-    job: { id: string; src: string; pendingMarkdown: string; altText: string },
-    fileName: string
-  ): void => {
-    const prototypePath = `${unitProtoDir}/${fileName}`
-    // proto/ sits next to requirement.md inside the unit directory.
-    const replacementMarkdown = `![${job.altText}](proto/${fileName})`
-    const startedAt = Date.now()
-
-    const placeholderStillPresent = async (): Promise<boolean> => {
-      const latest = useSddDraftStore.getState()
-      if (latest.activeDraft?.id === draftId) {
-        return latest.content.includes(job.pendingMarkdown)
-      }
-      if (typeof window.kunGui?.readWorkspaceFile !== 'function') return true
-      try {
-        const file = await window.kunGui.readWorkspaceFile({
-          path: docAbsolutePath,
-          workspaceRoot: draftWorkspaceRoot
-        })
-        return !file.ok || file.content.includes(job.pendingMarkdown)
-      } catch {
-        return true
-      }
-    }
-
-    // The agent writes incrementally (skeleton first, then edits), so a
-    // closing </html> alone is not "done": require the content to also be
-    // stable across two consecutive ticks before swapping the placeholder.
-    let lastContent: string | null = null
-    const tick = async (): Promise<void> => {
-      try {
-        const file = await window.kunGui.readWorkspaceFile({
-          path: prototypePath,
-          workspaceRoot: draftWorkspaceRoot
-        })
-        if (file.ok && file.content.includes('</html>')) {
-          if (file.content === lastContent) {
-            finishPendingInfographic(job.id)
-            const applied = await resolvePendingImage(job, replacementMarkdown)
-            if (applied) setNotice({ tone: 'success', message: t('writePrototypeReady') })
-            return
-          }
-          lastContent = file.content
-        }
-      } catch {
-        // File not there yet (or transient IO failure) — keep waiting.
-      }
-      if (!(await placeholderStillPresent())) {
-        // The user deleted the placeholder: treat as cancelled.
-        finishPendingInfographic(job.id)
-        return
-      }
-      if (Date.now() - startedAt > PROTOTYPE_POLL_TIMEOUT_MS) {
-        finishPendingInfographic(job.id)
-        await resolvePendingImage(job, null)
-        setOperationStatus('error', t('writePrototypeTimeout'))
-        return
-      }
-      window.setTimeout(() => void tick(), PROTOTYPE_POLL_INTERVAL_MS)
-    }
-
-    window.setTimeout(() => void tick(), PROTOTYPE_POLL_INTERVAL_MS)
-  }
-
-  const completeImageGeneration = async (job: {
-    kind: WriteInfographicKind
-    id: string
-    src: string
-    pendingMarkdown: string
-    altText: string
-    text: string
-    referenceImagePath?: string
-  }): Promise<void> => {
-    let replacementMarkdown: string | null = null
-    let failureMessage: string | null = null
-    try {
-      const result = await window.kunGui.generateWriteInfographic({
-        text: job.text,
-        filePath: docAbsolutePath,
-        workspaceRoot: draftWorkspaceRoot,
-        ...(unitImageDir ? { imageDir: unitImageDir } : {}),
-        kind: job.kind,
-        ...(job.referenceImagePath ? { referenceImagePath: job.referenceImagePath } : {})
-      })
-      if (result.ok) {
-        replacementMarkdown = `![${job.altText}](${result.relativePath})`
-      } else {
-        failureMessage = result.message
-      }
-    } catch (err) {
-      failureMessage = err instanceof Error ? err.message : String(err)
-    } finally {
-      finishPendingInfographic(job.id)
-    }
-
-    const applied = await resolvePendingImage(job, replacementMarkdown)
-    if (failureMessage) {
-      setOperationStatus('error', t(
-        job.kind === 'design' ? 'writeDesignDraftFailed' : 'writeInfographicFailed',
-        { message: failureMessage }
-      ))
-    } else if (applied) {
-      setNotice({
-        tone: 'success',
-        message: t(job.kind === 'design' ? 'writeDesignDraftReady' : 'writeInfographicReady')
-      })
-    }
-  }
-
-  /** Swap the placeholder for the generated image — or remove it when
-   * `replacementMarkdown` is null. Returns false when the placeholder is
-   * gone (the user deleted it, which cancels the insertion). */
-  const resolvePendingImage = async (
-    job: { src: string; pendingMarkdown: string },
-    replacementMarkdown: string | null
-  ): Promise<boolean> => {
-    const latest = useSddDraftStore.getState()
-    if (latest.activeDraft?.id === draftId) {
-      // Node-level swap keeps the rich editor's undo history clean; the text
-      // fallback covers the source editor (no rich handle mounted).
-      const handle = richHandleRef.current
-      if (handle?.replaceImageBySrc(job.src, replacementMarkdown ?? '')) return true
-      const next = replacePendingInfographicInText(
-        latest.content,
-        job.pendingMarkdown,
-        replacementMarkdown
-      )
-      if (next === null) return false
-      setContent(next)
-      return true
-    }
-    // The draft was closed mid-generation; dismissing flushed it to disk with
-    // the placeholder inside, so patch it on disk.
-    if (
-      typeof window.kunGui?.readWorkspaceFile !== 'function' ||
-      typeof window.kunGui?.writeWorkspaceFile !== 'function'
-    ) {
-      return false
-    }
-    try {
-      const file = await window.kunGui.readWorkspaceFile({
-        path: docAbsolutePath,
-        workspaceRoot: draftWorkspaceRoot
-      })
-      if (!file.ok || file.truncated) return false
-      const next = replacePendingInfographicInText(
-        file.content,
-        job.pendingMarkdown,
-        replacementMarkdown
-      )
-      if (next === null) return false
-      const written = await window.kunGui.writeWorkspaceFile({
-        path: docAbsolutePath,
-        workspaceRoot: draftWorkspaceRoot,
-        content: next
-      })
-      return written.ok
-    } catch {
-      return false
-    }
-  }
-
+  const { generateImage, generatePrototype } = createSddDraftGenerationController({
+    readOnly,
+    unitImageDir,
+    unitProtoDir,
+    selection,
+    setSelection,
+    setOperationStatus,
+    t,
+    richHandleRef,
+    setContent,
+    draftId,
+    draftWorkspaceRoot,
+    editorFilePath,
+    docAbsolutePath,
+    content,
+    activeDraft,
+    prototypePrompt: selectionAssist.prototypePrompt,
+    onPrototypeTurn,
+    setNotice
+  })
   return (
-    <section className="sdd-draft-shell ds-no-drag flex min-h-0 min-w-0 flex-1 flex-col px-3 sm:px-4 md:px-6 lg:px-8">
-      <div className={`ds-stage-inset shrink-0 -mr-3 sm:-mr-4 md:-mr-6 lg:-mr-8 ${leftSidebarCollapsed ? 'ds-window-controls-safe-inset' : '-ml-3 sm:-ml-4 md:-ml-6 lg:-ml-8'}`}>
-        <header className="sdd-draft-topbar ds-topbar-surface relative z-10 mt-3 flex min-h-[56px] w-full items-stretch overflow-visible rounded-[18px]">
-          <div className="grid w-full min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-3 px-3 py-2 sm:px-4 md:pl-5 md:pr-2">
-            <div
-              className={`flex min-w-0 items-center gap-2.5 ${
-                leftSidebarCollapsed ? 'ds-window-controls-collapsed-titlebar-inset' : ''
-              }`}
-            >
-              {leftSidebarCollapsed ? (
-                <SidebarTitlebarToggleButton
-                  onClick={onToggleLeftSidebar}
-                  title={t('sidebarExpand')}
-                  ariaLabel={t('sidebarExpand')}
-                />
-              ) : null}
-              <span className="sdd-draft-file-icon flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent/10 text-accent">
-                <FileText className="h-4 w-4" strokeWidth={1.9} />
-              </span>
-              <div className="min-w-0 flex-1 leading-none">
-                <div className="truncate text-[15px] font-semibold text-ds-ink">
-                  {t('sddDraftTitle')}
-                </div>
-                <div className="mt-1.5 truncate text-[12px] text-ds-faint">
-                  {activeDraft.relativePath}
-                </div>
-              </div>
-            </div>
-
-            <div className="flex min-w-0 items-center justify-end gap-1.5">
-              <span
-                aria-live="polite"
-                className={`sdd-status-pill inline-flex min-w-[72px] items-center justify-center gap-1.5 rounded-lg px-2.5 py-1 text-[11.5px] font-semibold ${
-                  readOnly
-                    ? 'is-upgrading bg-sky-500/12 text-sky-700 dark:text-sky-300'
-                    : saveStatus === 'error'
-                      ? 'bg-red-500/12 text-red-600 dark:text-red-300'
-                      : saveStatus === 'dirty'
-                        ? 'bg-amber-500/12 text-amber-700 dark:text-amber-300'
-                        : 'bg-emerald-500/12 text-emerald-700 dark:text-emerald-300'
-                }`}
-              >
-                {readOnly || saveStatus === 'saving' ? (
-                  <Loader2 className="h-3 w-3 animate-spin" strokeWidth={2} />
-                ) : (
-                  <Save className="h-3 w-3" strokeWidth={1.8} />
-                )}
-                {statusLabel}
-              </span>
-              <button
-                type="button"
-                onClick={() => {
-                  if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current)
-                  void saveActiveSddDraftToDisk()
-                }}
-                disabled={readOnly || saveStatus === 'saved'}
-                className="ds-sidebar-toggle-button disabled:cursor-not-allowed disabled:opacity-45"
-                title={t('writeSaveFile')}
-                aria-label={t('writeSaveFile')}
-              >
-                <Save className="h-4 w-4" strokeWidth={1.85} />
-              </button>
-              <SddAssistantToggleButton
-                assistantOpen={assistantOpen}
-                onToggleAssistant={onToggleAssistant}
-                label={t('sddAssistant')}
-              />
-              {onExploreInDesign ? (
-                <button
-                  type="button"
-                  onClick={onExploreInDesign}
-                  disabled={readOnly}
-                  className="ds-sidebar-toggle-button disabled:cursor-not-allowed disabled:opacity-45"
-                  title={t('designExploreInDesign')}
-                  aria-label={t('designExploreInDesign')}
-                >
-                  <Palette className="h-4 w-4" strokeWidth={1.85} />
-                </button>
-              ) : null}
-              <button
-                type="button"
-                onClick={onNext}
-                disabled={nextDisabled || readOnly}
-                className="sdd-next-button inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-accent px-3 text-[13px] font-semibold text-white transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-45"
-              >
-                {readOnly ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={2} />
-                ) : (
-                  <ArrowRight className="h-3.5 w-3.5" strokeWidth={2} />
-                )}
-                {t('sddNextStep')}
-              </button>
-              <button
-                type="button"
-                onClick={onClose}
-                disabled={readOnly}
-                className="ds-sidebar-toggle-button disabled:cursor-not-allowed disabled:opacity-45"
-                title={t('close')}
-                aria-label={t('close')}
-              >
-                <X className="h-4 w-4" strokeWidth={1.9} />
-              </button>
-            </div>
-          </div>
-        </header>
-      </div>
-
-      <SddRequirementProgress content={content} />
-
-      <SddDesignContextBar designContext={activeDraft.designContext} onChange={updateDesignContext} />
-
-      <div ref={editorPaneRef} className="min-h-0 min-w-0 flex-1 overflow-hidden pb-3 pt-2">
-        <div
-          className={`sdd-editor-card relative h-full min-h-0 overflow-hidden rounded-[18px] border border-ds-border bg-ds-card/88 shadow-[0_20px_56px_rgba(20,47,95,0.06)] ${
-            upgrading ? 'is-upgrading' : ''
-          }`}
-        >
-          {upgrading ? <div className="sdd-editor-progress" /> : null}
-          <WriteRichEditor
-            value={content}
-            workspaceRoot={activeDraft.workspaceRoot}
-            filePath={editorFilePath}
-            imageDirectory={unitImageDir ?? undefined}
-            readOnly={readOnly}
-            requirementBadges
-            handleRef={richHandleRef}
-            completionModel={inlineCompletion.model}
-            completionEnabled={inlineCompletion.enabled && inlineCompletionApiReady}
-            completionDebounceMs={inlineCompletion.debounceMs}
-            completionMinAcceptScore={inlineCompletion.minAcceptScore}
-            completionLongEnabled={inlineCompletion.longCompletionEnabled}
-            completionLongDebounceMs={inlineCompletion.longDebounceMs}
-            completionLongMinAcceptScore={inlineCompletion.longMinAcceptScore}
-            recentEdits={recentEdits}
-            onChange={setContent}
-            onDocumentEdit={recordRecentEdits}
-            onSelectionChange={setSelection}
-            onSaveShortcut={() => {
-              if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current)
-              void saveActiveSddDraftToDisk()
-            }}
-            onImagePasteSaved={() => {
-              setOperationStatus('idle')
-            }}
-            onImagePasteError={(message) => setOperationStatus('error', message)}
-            fallback={
-              <WriteMarkdownEditor
-                value={content}
-                workspaceRoot={activeDraft.workspaceRoot}
-                filePath={editorFilePath}
-                imageDirectory={unitImageDir ?? undefined}
-                appearance="live"
-                livePreviewEnabled
-                readOnly={readOnly}
-                handleRef={markdownHandleRef}
-                completionModel={inlineCompletion.model}
-                completionEnabled={inlineCompletion.enabled && inlineCompletionApiReady}
-                completionDebounceMs={inlineCompletion.debounceMs}
-                completionMinAcceptScore={inlineCompletion.minAcceptScore}
-                completionLongEnabled={inlineCompletion.longCompletionEnabled}
-                completionLongDebounceMs={inlineCompletion.longDebounceMs}
-                completionLongMinAcceptScore={inlineCompletion.longMinAcceptScore}
-                recentEdits={recentEdits}
-                onChange={setContent}
-                onDocumentEdit={recordRecentEdits}
-                onSelectionChange={setSelection}
-                onSaveShortcut={() => {
-                  if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current)
-                  void saveActiveSddDraftToDisk()
-                }}
-                onImagePasteSaved={() => {
-                  setOperationStatus('idle')
-                }}
-                onImagePasteError={(message) => setOperationStatus('error', message)}
-              />
-            }
-          />
-        </div>
-      </div>
-
-      {selectionAction ? (
-        <WriteInlineAgent
-          action={selectionAction}
-          value={inlineAgentValue}
-          inFlight={inlineEditInFlight}
-          textareaRef={inlineAgentTextareaRef}
-          onValueChange={setInlineAgentValue}
-          onSubmitPrompt={submitToAssistant}
-          onApplyEdit={(value) => void submitInlineEdit(value)}
-          formattingEnabled={!readOnly}
-          onApplyFormat={applyInlineFormat}
-          blockType={selection.blockType}
-          onSetBlockType={applyBlockType}
-          quickActions={inlineQuickActions}
-          onQuickAction={runQuickAction}
-          infographicEnabled={imageGenReady && !readOnly}
-          onGenerateInfographic={() => generateImage('infographic')}
-          designDraftEnabled={imageGenReady && !readOnly}
-          onGenerateDesignDraft={() => generateImage('design')}
-          prototypeEnabled={prototypeReady && !readOnly}
-          onGeneratePrototype={generatePrototype}
-          imageMode={imageSelectionActive}
-        />
-      ) : null}
-
-      {error ? (
-        <div className="sdd-error-toast pointer-events-none fixed bottom-5 left-1/2 z-40 -translate-x-1/2 rounded-full border border-red-200/70 bg-red-50/92 px-4 py-2 text-[13px] text-red-700 shadow-[0_14px_32px_rgba(20,47,95,0.12)] dark:border-red-900/60 dark:bg-red-950/84 dark:text-red-200">
-          {error}
-        </div>
-      ) : null}
-      {notice ? (
-        <div
-          className="pointer-events-none fixed left-1/2 z-40 -translate-x-1/2 rounded-full border border-emerald-200/80 bg-emerald-50/92 px-4 py-2 text-[13px] text-emerald-700 shadow-[0_14px_32px_rgba(20,47,95,0.12)] dark:border-emerald-900/60 dark:bg-emerald-950/84 dark:text-emerald-200"
-          style={{ bottom: error ? 68 : 20 }}
-        >
-          {notice.message}
-        </div>
-      ) : null}
-    </section>
+    <SddDraftEditorContent
+      leftSidebarCollapsed={leftSidebarCollapsed}
+      assistantOpen={assistantOpen}
+      onToggleLeftSidebar={onToggleLeftSidebar}
+      onToggleAssistant={onToggleAssistant}
+      onExploreInDesign={onExploreInDesign}
+      onNext={onNext}
+      onClose={onClose}
+      nextDisabled={nextDisabled}
+      t={t}
+      activeDraft={activeDraft}
+      content={content}
+      saveStatus={saveStatus}
+      error={error}
+      notice={notice}
+      readOnly={readOnly}
+      upgrading={upgrading}
+      statusLabel={statusLabel}
+      saveTimerRef={saveTimerRef}
+      updateDesignContext={updateDesignContext}
+      editorPaneRef={editorPaneRef}
+      editorFilePath={editorFilePath}
+      unitImageDir={unitImageDir}
+      richHandleRef={richHandleRef}
+      markdownHandleRef={markdownHandleRef}
+      inlineCompletion={inlineCompletion}
+      inlineCompletionApiReady={inlineCompletionApiReady}
+      recentEdits={recentEdits}
+      setContent={setContent}
+      recordRecentEdits={recordRecentEdits}
+      setSelection={setSelection}
+      setOperationStatus={setOperationStatus}
+      selectionAction={selectionAction}
+      quoteSelectionToAssistant={quoteSelectionToAssistant}
+      applyInlineFormat={applyInlineFormat}
+      selection={selection}
+      applyBlockType={applyBlockType}
+      inlineQuickActions={inlineQuickActions}
+      runQuickAction={runQuickAction}
+      imageGenReady={imageGenReady}
+      generateImage={generateImage}
+      prototypeReady={prototypeReady}
+      generatePrototype={generatePrototype}
+      imageSelectionActive={imageSelectionActive}
+    />
   )
 }

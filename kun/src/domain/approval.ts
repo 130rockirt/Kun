@@ -13,6 +13,7 @@ import {
   redactBrowserUseUrl
 } from '../contracts/browser-use.js'
 import { utf8PrefixWithinBytes } from '../shared/utf8-text-blocks.js'
+import { projectToolArgumentsForPersistence } from './tool-argument-envelope.js'
 
 export type ApprovalStatus = 'pending' | 'allowed' | 'denied' | 'expired'
 
@@ -162,10 +163,10 @@ export function createApprovalActionEnvelope(
   // text. Review and durable audit receive only the canonical redacted shape;
   // execution authority remains bound separately to the untouched raw args.
   const reviewArguments = input.toolName === 'browser_use'
-    ? redactBrowserUseActionForPersistence(input.arguments)
+    ? redactBrowserUseActionForPersistence(input.arguments) as Record<string, unknown>
     : input.arguments
   const normalizedArguments = normalizeApprovalValue(
-    reviewArguments,
+    projectToolArgumentsForPersistence(reviewArguments).arguments,
     undefined,
     0,
     normalization
@@ -219,6 +220,7 @@ function inferApprovalActionKind(
   if (input.toolKind === 'file_change' || input.exactFileTargets?.length) {
     return 'file'
   }
+  if (effects.guiAutomation && effects.externalWrite) return 'external-effect'
   if (effects.externalWrite) return 'file'
   if (input.providerKind === 'mcp') return 'mcp'
   if (effects.network || input.providerKind === 'web') return 'network'

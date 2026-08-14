@@ -11,6 +11,8 @@ import type {
   ThreadTodoList,
   ThreadTodoStatus,
   ThreadUsageSnapshot,
+  KnowledgeBaseIndexStatus,
+  KnowledgeBaseMount,
   UserFileReference,
   UserInputAnswer
 } from '../agent/types'
@@ -23,19 +25,37 @@ import type {
   ClawImProvider,
   ClawImSettingsV1,
   ClawModel,
+  CodeAgentPresetV1,
   ModelReasoningEffort
 } from '@shared/app-settings'
 import type { ModelProviderModelGroup } from '@shared/kun-gui-api'
 import type { ComposerContextAttachment } from '@kun/extension-api'
-import type { ExtensionComposerContextEvent } from '@shared/extension-ipc'
+import type {
+  ExtensionComposerContextEvent,
+  PendingComposerContextEvent
+} from '@shared/extension-ipc'
+import type {
+  DesignDocumentTarget,
+  DesignImagePlacementTarget,
+  DesignTaskProfile,
+  DesignTaskProfileInput
+} from '../agent/design-task-profile'
 
 export type QueuedUserMessage = {
   id: string
   text: string
-  /** Pending items are visible; starting/in-flight items remain durable until the turn settles. */
-  deliveryState?: 'pending' | 'starting' | 'in_flight'
+  /** Stable idempotency key reused while this user submission is retried. */
+  clientRequestId?: string
+  /** First Design document remains provisional until Kun accepts this queued turn. */
+  waitForRuntimeAdmission?: boolean
+  /** Pending/paused items are visible; starting/in-flight items remain durable until the turn settles; failed items are terminal until retried or deleted. */
+  deliveryState?: 'pending' | 'paused' | 'starting' | 'in_flight' | 'failed'
   deliveryTurnId?: string
   deliveryUserMessageItemId?: string
+  /** Structured code of a terminal deterministic rejection (e.g. `task_surface_locked`). */
+  errorCode?: string
+  /** Localized summary of a terminal rejection for inline retry UI. */
+  errorMessage?: string
   displayText?: string
   mode?: string
   orchestration?: 'direct' | 'graph'
@@ -45,6 +65,8 @@ export type QueuedUserMessage = {
   modelLabel?: string
   reasoningEffort?: string
   serviceTier?: 'priority'
+  subagentResume?: { childId: string; expectedResumeCount: number }
+  messageSource?: 'design_continuation'
   /** Renderer-only guard that prevents a scoped send from falling back to another thread. */
   expectedThreadId?: string
   attachmentIds?: string[]
@@ -68,7 +90,14 @@ export type QueuedUserMessage = {
   guiDesignCanvas?: boolean
   /** True only for the product Design surface; Code whiteboards leave this unset. */
   guiDesignMode?: boolean
+  /** Turn-scoped persona text resolved from the composer preset. */
+  persona?: string
   agentSurface?: 'code' | 'write' | 'design'
+  /** Frozen Design task profile used for admission, retry, and queue recovery. */
+  designProfile?: DesignTaskProfileInput
+  /** Turn-scoped writable document target; must match the profile target. */
+  designDocumentTarget?: DesignDocumentTarget
+  designImagePlacementTarget?: DesignImagePlacementTarget
   guiDesignArtifact?: GuiDesignArtifactMessageContext
   writeContext?: WriteAssistantMessageContext
 }
@@ -100,18 +129,29 @@ export type WriteAssistantMessageContext = {
   activeFilePath: string | null
   documentEpoch: number
   contentRevision: number
+  /** Present for a first-class Work whiteboard send; fences async sends across board switches. */
+  whiteboardId?: string
+  whiteboardRevision?: number
   /** Filled after the first explicit ensure; queued sends keep this identity. */
   threadId?: string
 }
 
 export type SendMessageOverrides = {
   queued?: QueuedUserMessage
+  /** Optional stable idempotency key for callers that retry one logical submission. */
+  clientRequestId?: string
+  /** Resolve the send only after Kun accepts it, including when it first enters the queue. */
+  waitForRuntimeAdmission?: boolean
   model?: string
   providerId?: string
   accountId?: string
   modelLabel?: string
   reasoningEffort?: string
   serviceTier?: 'priority'
+  /** Structured one-click resume identity forwarded to Kun. */
+  subagentResume?: { childId: string; expectedResumeCount: number }
+  /** Internal Design runner progress retained by Kun but hidden as a user bubble. */
+  messageSource?: 'design_continuation'
   /** Renderer-only guard that prevents Design/Write-style sends from changing thread identity. */
   expectedThreadId?: string
   displayText?: string
@@ -119,7 +159,12 @@ export type SendMessageOverrides = {
   guiPlan?: GuiPlanMessageContext
   guiDesignCanvas?: boolean
   guiDesignMode?: boolean
+  /** Turn-scoped persona text resolved from the composer preset. */
+  persona?: string
   agentSurface?: 'code' | 'write' | 'design'
+  designProfile?: DesignTaskProfileInput
+  designDocumentTarget?: DesignDocumentTarget
+  designImagePlacementTarget?: DesignImagePlacementTarget
   guiDesignArtifact?: GuiDesignArtifactMessageContext
   attachmentIds?: string[]
   attachments?: AttachmentReference[]
@@ -192,6 +237,9 @@ export type PluginHostRoute = 'chat' | 'claw'
 export type SideConversation = {
   threadId: string
   parentThreadId: string
+  /** Retargeted immutable profile owned by this independently cloned branch. */
+  designProfile?: DesignTaskProfile
+  designWorkspaceRoot?: string
   title: string
   createdAt: string
   /** Timestamp the snapshot was taken from the parent. */
@@ -254,11 +302,28 @@ export type ChatState = {
   runtimeStatus: KunRuntimeStatusPayload | null
   codeWorkspaceRoots: string[]
   threads: NormalizedThread[]
+  /**
+   * Sidebar thread inventory lifecycle. Guards the "no conversations yet"
+   * empty state: the sidebar must never render the empty state while the
+   * first inventory request is still in flight or failed.
+   */
+  threadListStatus: 'idle' | 'loading' | 'ready' | 'refreshing' | 'error'
+  threadListError: string | null
+  /**
+   * Per-workspace pagination state for the sidebar thread list. Each workspace
+   * loads its most recent page first and appends older pages on "show more".
+   */
+  threadListCursorByWorkspace: Record<string, { nextCursor?: string; hasMore: boolean; total?: number }>
+  knowledgeBaseStatuses: Record<string, KnowledgeBaseIndexStatus[]>
   threadSearch: string
   showArchivedThreads: boolean
   activeThreadId: string | null
   /** Thread selected immediately but whose durable snapshot is still loading. */
   threadLoadingId: string | null
+  /** Opaque cursor for the next older durable timeline page. */
+  threadHistoryCursor: string | null
+  threadHasMoreHistory: boolean
+  threadHistoryLoading: boolean
   /** 最近一次在 Code 工作台(chat 路由)选中的会话,供从设置/其他工作区/Connect Phone 返回时恢复。 */
   lastCodeThreadId: string | null
   /** Relationship of the active thread (e.g. `side` for a subagent's own session). */
@@ -334,10 +399,19 @@ export type ChatState = {
    * thread / next-turn override. Empty = use the runtime default.
    */
   composerAgentId: string
+  /**
+   * Selected Code-persona preset id. Empty = no persona. Resolved to text and
+   * sent per turn, so switching it never rewrites earlier turns.
+   */
+  composerPersonaId: string
+  /** Whether the experimental composer persona picker and turn override are active. */
+  composerPersonaEnabled: boolean
+  /** Mirror of `AppSettingsV1.codeAgentPresets` for composer-side resolution. */
+  codeAgentPresets: CodeAgentPresetV1[]
   disabledSkillIds: string[]
   queuedMessages: QueuedUserMessage[]
-  /** Host-authenticated, workspace-scoped context awaiting one main-chat turn. */
-  extensionComposerContexts: ExtensionComposerContextEvent[]
+  /** Source-neutral, host-fenced context awaiting one main-chat turn. Legacy field name is persisted for compatibility. */
+  extensionComposerContexts: PendingComposerContextEvent[]
   watchTurnCompletion: Record<string, boolean>
   unreadThreadIds: Record<string, boolean>
   /**
@@ -356,12 +430,17 @@ export type ChatState = {
   setComposerReasoningEffort: (effort: ModelReasoningEffort) => void
   setComposerFastMode: (enabled: boolean) => void
   setComposerAgentId: (agentId: string) => void
+  setComposerPersonaId: (presetId: string) => void
   loadComposerModels: () => Promise<void>
   setRoute: (r: AppRoute) => void
-  openWrite: () => Promise<void>
-  openCode: () => Promise<void>
+  openWrite: (options?: { activationGuard?: () => boolean }) => Promise<void>
+  openCode: (options?: { activationGuard?: () => boolean }) => Promise<void>
   ensureWriteThreadForWorkspace: (workspaceRoot?: string, activeFilePath?: string) => Promise<string | null>
-  createWriteThread: (workspaceRoot?: string, activeFilePath?: string) => Promise<string | null>
+  createWriteThread: (
+    workspaceRoot?: string,
+    activeFilePath?: string,
+    options?: { title?: string; titleAuto?: boolean }
+  ) => Promise<string | null>
   ensureDesignThreadForWorkspace: (workspaceRoot?: string, docId?: string) => Promise<string | null>
   createDesignThread: (
     workspaceRoot?: string,
@@ -411,11 +490,20 @@ export type ChatState = {
   clearWorkspace: () => Promise<void>
   deleteWorkspace: (workspacePath: string) => Promise<void>
   refreshThreads: () => Promise<void>
+  /** Append the next older page of threads for a workspace ("show more"). */
+  loadMoreThreads: (workspacePath: string) => Promise<void>
+  setThreadKnowledgeBases: (threadId: string, mounts: KnowledgeBaseMount[]) => Promise<boolean>
+  refreshThreadKnowledgeBases: (threadId?: string) => Promise<void>
+  reindexThreadKnowledgeBase: (threadId: string, knowledgeBaseId: string) => Promise<boolean>
   setThreadSearch: (query: string) => void
   setShowArchivedThreads: (show: boolean) => void
   createThread: (options?: {
     workspaceRoot?: string
     forceNew?: boolean
+    /** Durable ownership for renderer-created Code-workbench threads. */
+    agentSurface?: 'code' | 'design'
+    /** Prevent a completed async creation from overriding newer navigation. */
+    activationGuard?: () => boolean
     /** When true, checkout the selected branch into an isolated worktree. */
     useWorktreePool?: boolean
     worktreeBranch?: string
@@ -431,8 +519,12 @@ export type ChatState = {
      */
     conversation?: boolean
   }) => Promise<string | null>
-  createConversation: () => Promise<void>
-  selectThread: (id: string) => Promise<void>
+  createConversation: (options?: { activationGuard?: () => boolean }) => Promise<void>
+  selectThread: (id: string, options?: {
+    /** Ignore this selection when a newer renderer navigation intent wins. */
+    selectionGuard?: () => boolean
+  }) => Promise<void>
+  loadEarlierThreadHistory: () => Promise<boolean>
   /**
    * 打开 SSE 订阅一条 thread(不预先拉 getThreadDetail)。
    * 用于:onClawChannelActivity 自动切到 bot thread,让流式 deltas 立即可见。
@@ -453,6 +545,9 @@ export type ChatState = {
   guideQueuedMessage: (id: string) => Promise<boolean>
   attachExtensionComposerContext: (event: ExtensionComposerContextEvent) => void
   removeExtensionComposerContext: (attachmentId: string) => void
+  attachComposerContext: (event: PendingComposerContextEvent) => void
+  removeComposerContext: (attachmentId: string) => void
+  clearComposerContexts: (filter?: { source?: 'dev-preview'; threadId?: string }) => void
   rewindAndResend: (userBlockId: string, newText: string) => Promise<void>
   rollbackWorkspaceToCheckpoint: (checkpointId: string) => Promise<void>
   interrupt: (options?: { discard?: boolean }) => Promise<void>

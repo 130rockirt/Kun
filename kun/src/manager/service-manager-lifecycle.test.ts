@@ -35,11 +35,15 @@ describe('Service Manager data-directory lease lifecycle', () => {
       managerToken: 'manager-token',
       instanceId: 'manager-instance',
       startedAt: '2026-08-05T00:00:00.000Z',
+      buildId: 'c'.repeat(64),
       dataDir: test.dataDir,
       settingsPath: test.settingsPath
     })
     let runtime: Awaited<ReturnType<typeof createKunServeRuntime>> | undefined
     try {
+      expect(manager.discovery.buildId).toBe('c'.repeat(64))
+      await expect(fetch(`${manager.discovery.baseUrl}/health`).then((response) => response.json()))
+        .resolves.toMatchObject({ buildId: 'c'.repeat(64) })
       runtime = await createKunServeRuntime({
         host: '127.0.0.1',
         port: 0,

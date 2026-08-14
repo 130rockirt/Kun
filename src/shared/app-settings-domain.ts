@@ -11,5 +11,8 @@ export const APP_SETTINGS_FIELD_OWNERS: { readonly [K in keyof AppSettingsV1]-?:
   workspaceRoot: 'core', conversationWorkspaceRoot: 'core', log: 'core', checkpointCleanup: 'core',
   gitBranchPrefix: 'core', notifications: 'core', appBehavior: 'core', keyboardShortcuts: 'keyboard',
   write: 'write', claw: 'claw', schedule: 'schedule', workflow: 'workflow', design: 'design',
-  guiUpdate: 'update', terminal: 'terminal', codePromptPrefix: 'core', disabledSkillIds: 'core'
+  guiUpdate: 'update', terminal: 'terminal', codePromptPrefix: 'core', chatWelcomeMessage: 'core',
+  codeAgentPersonaEnabled: 'core',
+  codeAgentPresets: 'core',
+  disabledSkillIds: 'core'
 }

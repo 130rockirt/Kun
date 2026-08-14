@@ -33,6 +33,7 @@ import {
   clearWriteRetrievalCache,
   retrieveWriteContext,
   retrieveWriteInlineCompletionContext,
+  setWriteRetrievalIndexTestHooks,
   tokenizeWriteRetrievalText
 } from './write-retrieval-service'
 
@@ -89,6 +90,7 @@ async function createTempWorkspace(): Promise<string> {
 }
 
 afterEach(async () => {
+  setWriteRetrievalIndexTestHooks({})
   clearWriteRetrievalCache()
   await Promise.all(tempRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })))
 })
@@ -190,6 +192,113 @@ describe('write retrieval service', () => {
       }
     })
     expect(result?.snippets[0].text).toContain('PDF BM25 关键词检索')
+  })
+
+  it('invalidates cached current-file snippets immediately after a save', async () => {
+    const workspaceRoot = await createTempWorkspace()
+    const draftPath = join(workspaceRoot, 'draft.md')
+    await writeFile(
+      draftPath,
+      '# Draft\n\noldsaveuniquemarker is the only cached statement in this document.',
+      'utf8'
+    )
+
+    const request = (query: string) => retrieveWriteContext({
+      workspaceRoot,
+      currentFilePath: draftPath,
+      query,
+      includeCurrentFile: true
+    })
+    expect((await request('oldsaveuniquemarker'))?.snippets[0]?.text)
+      .toContain('oldsaveuniquemarker')
+
+    await writeFile(
+      draftPath,
+      '# Draft\n\nnewsaveuniquemarker is the only current statement in this document.',
+      'utf8'
+    )
+
+    expect(await request('oldsaveuniquemarker')).toBeNull()
+    expect((await request('newsaveuniquemarker'))?.snippets[0]?.text)
+      .toContain('newsaveuniquemarker')
+  })
+
+  it('retries when the current file changes after its text is read', async () => {
+    const workspaceRoot = await createTempWorkspace()
+    const draftPath = join(workspaceRoot, 'draft.md')
+    await writeFile(
+      draftPath,
+      '# Draft\n\noldreadmarker is the only cached statement in this document.',
+      'utf8'
+    )
+    let saved = false
+    setWriteRetrievalIndexTestHooks({
+      afterFileRead: async (path) => {
+        if (path !== draftPath || saved) return
+        saved = true
+        await writeFile(
+          draftPath,
+          '# Draft\n\nnewreadmarker is the only current statement in this document.',
+          'utf8'
+        )
+      }
+    })
+
+    const result = await retrieveWriteContext({
+      workspaceRoot,
+      currentFilePath: draftPath,
+      query: 'newreadmarker',
+      includeCurrentFile: true
+    })
+
+    expect(result?.snippets[0]?.text).toContain('newreadmarker')
+    expect(JSON.stringify(result)).not.toContain('oldreadmarker')
+  })
+
+  it('revalidates a joined in-flight index after the current file is saved', async () => {
+    const workspaceRoot = await createTempWorkspace()
+    const draftPath = join(workspaceRoot, 'draft.md')
+    await writeFile(
+      draftPath,
+      '# Draft\n\noldflightmarker is the only cached statement in this document.',
+      'utf8'
+    )
+    let releaseBuild!: () => void
+    const buildPaused = new Promise<void>((resolve) => { releaseBuild = resolve })
+    let buildStarted!: () => void
+    const started = new Promise<void>((resolve) => { buildStarted = resolve })
+    let firstBuild = true
+    setWriteRetrievalIndexTestHooks({
+      beforeIndexReturn: async () => {
+        if (!firstBuild) return
+        firstBuild = false
+        buildStarted()
+        await buildPaused
+      }
+    })
+    const request = (query: string) => retrieveWriteContext({
+      workspaceRoot,
+      currentFilePath: draftPath,
+      query,
+      includeCurrentFile: true
+    })
+    const first = retrieveWriteContext({
+      workspaceRoot,
+      currentFilePath: draftPath,
+      query: 'oldflightmarker',
+      includeCurrentFile: false
+    })
+    await started
+    await writeFile(
+      draftPath,
+      '# Draft\n\nnewflightmarker is the only current statement in this document.',
+      'utf8'
+    )
+    const joined = request('newflightmarker')
+    releaseBuild()
+
+    expect((await joined)?.snippets[0]?.text).toContain('newflightmarker')
+    expect(await first).toBeNull()
   })
 
   it('evicts the least recently used workspace index at the cache limit', async () => {

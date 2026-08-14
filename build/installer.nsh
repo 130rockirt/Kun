@@ -5,7 +5,6 @@ Var /GLOBAL KunInstallerSecondarySourceDir
 Var /GLOBAL KunInstallerTargetDir
 Var /GLOBAL KunInstallerResultPath
 Var /GLOBAL KunInstallerResultHandle
-Var /GLOBAL KunInstallerJournalPath
 Var /GLOBAL KunInstallerMigrationPrepared
 Var /GLOBAL KunInstallerSnapshotMode
 Var /GLOBAL KunInstallerPrimarySourceStale
@@ -22,6 +21,7 @@ Var /GLOBAL KunInstallerCurrentUserShortcutName
 Var /GLOBAL KunInstallerCurrentUserMenuDirectory
 !endif
 Var /GLOBAL KunInstallerHelperPath
+Var /GLOBAL KunInstallerJournalPath
 Var /GLOBAL KunInstallerPowerShellPath
 Var /GLOBAL KunInstallerHelperExitCode
 Var /GLOBAL KunInstallerHelperOutput
@@ -62,6 +62,10 @@ Var /GLOBAL KunInstallerStopResult
   InitPluginsDir
   StrCpy $KunInstallerPowerShellPath "$SYSDIR\WindowsPowerShell\v1.0\powershell.exe"
   File /oname=$PLUGINSDIR\kun-windows-installer-migration.ps1 "${PROJECT_DIR}\build\windows-installer-migration.ps1"
+  File /oname=$PLUGINSDIR\windows-installer-migration-paths.ps1 "${PROJECT_DIR}\build\windows-installer-migration-paths.ps1"
+  File /oname=$PLUGINSDIR\windows-installer-migration-journal.ps1 "${PROJECT_DIR}\build\windows-installer-migration-journal.ps1"
+  File /oname=$PLUGINSDIR\windows-installer-migration-filesystem.ps1 "${PROJECT_DIR}\build\windows-installer-migration-filesystem.ps1"
+  File /oname=$PLUGINSDIR\windows-installer-migration-actions.ps1 "${PROJECT_DIR}\build\windows-installer-migration-actions.ps1"
   StrCpy $KunInstallerHelperPath "$PLUGINSDIR\kun-windows-installer-migration.ps1"
   StrCpy $KunInstallerResultPath "$PLUGINSDIR\kun-windows-installer-result.txt"
   System::Call 'kernel32::GetCurrentProcessId() i .r0'
@@ -113,6 +117,10 @@ Var /GLOBAL KunInstallerStopResult
     InitPluginsDir
     StrCpy $KunInstallerPowerShellPath "$SYSDIR\WindowsPowerShell\v1.0\powershell.exe"
     File /oname=$PLUGINSDIR\kun-windows-installer-migration.ps1 "${PROJECT_DIR}\build\windows-installer-migration.ps1"
+    File /oname=$PLUGINSDIR\windows-installer-migration-paths.ps1 "${PROJECT_DIR}\build\windows-installer-migration-paths.ps1"
+    File /oname=$PLUGINSDIR\windows-installer-migration-journal.ps1 "${PROJECT_DIR}\build\windows-installer-migration-journal.ps1"
+    File /oname=$PLUGINSDIR\windows-installer-migration-filesystem.ps1 "${PROJECT_DIR}\build\windows-installer-migration-filesystem.ps1"
+    File /oname=$PLUGINSDIR\windows-installer-migration-actions.ps1 "${PROJECT_DIR}\build\windows-installer-migration-actions.ps1"
     StrCpy $KunInstallerHelperPath "$PLUGINSDIR\kun-windows-installer-migration.ps1"
     System::Call 'kernel32::GetCurrentProcessId() i .r0'
     StrCpy $KunInstallerCurrentPid $0
@@ -245,6 +253,19 @@ Var /GLOBAL KunInstallerStopResult
   nsExec::ExecToLog `"$PowerShellPath" -NoProfile -ExecutionPolicy Bypass -Command "$$p=[Environment]::GetEnvironmentVariable('Path','User');$$parts=@($$p -split ';' | ? { $$_.Trim() -ne '' -and -not $$_.TrimEnd('\').Equals($$env:KUN_CLI_BIN.TrimEnd('\'),'OrdinalIgnoreCase') });[Environment]::SetEnvironmentVariable('Path',($$parts -join ';'),'User')"`
   Pop $0
   System::Call 'user32::SendMessageTimeout(i 0xffff, i 0x001A, i 0, t "Environment", i 2, i 5000, *i .r0)'
+  ${ifNot} ${isUpdated}
+    StrCpy $KunInstallerJournalPath "$APPDATA\KunInstallerRecovery\${APP_GUID}.json"
+    System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_SOURCE", "$INSTDIR").r0'
+    System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_SECONDARY_SOURCE", "").r0'
+    System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_TARGET", "$INSTDIR").r0'
+    System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_JOURNAL", "$KunInstallerJournalPath").r0'
+    System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_INSTALL_MODE", "$installMode").r0'
+    System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_APP_GUID", "${APP_GUID}").r0'
+    !insertmacro kunRunMigrationHelper CleanupJournal
+    ${if} $KunInstallerHelperExitCode != 0
+      DetailPrint "Kun preserved installer recovery state during uninstall: $KunInstallerHelperOutput"
+    ${endif}
+  ${endif}
 !macroend
 
 # installer.nsi inserts customHeader after common.nsh, multiUser.nsh, and the

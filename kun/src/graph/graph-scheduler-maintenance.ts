@@ -48,7 +48,7 @@ export async function enforceGraphBudgets(
   if (elapsedMs >= run.budget.limits.maxWallTimeMs || elapsedMs - run.budget.elapsedMs >= 1_000) {
     run = await options.updateBudget(run, { elapsedMs }, 'scheduler wall time accounting')
   }
-  if (run.budget.elapsedMs >= run.budget.limits.maxWallTimeMs || run.budget.artifactBytes >= run.budget.limits.maxArtifactBytes) {
+  if (run.budget.elapsedMs >= run.budget.limits.maxWallTimeMs || run.budget.artifactBytes > run.budget.limits.maxArtifactBytes) {
     return options.failForBudget(run, 'GraphRun hard budget exhausted')
   }
   const warningKinds = maxBudgetRatio(run) >= run.budget.limits.warningRatio ? budgetWarningKinds(run) : []

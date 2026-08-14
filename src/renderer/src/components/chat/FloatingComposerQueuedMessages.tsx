@@ -10,6 +10,7 @@ import {
 import {
   CornerDownRight,
   GripVertical,
+  ImageIcon,
   ListPlus,
   Loader2,
   MoreHorizontal,
@@ -19,6 +20,7 @@ import {
 import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import { queuedMessageGuidancePayload } from '../../store/queued-message-guidance'
+import { parseWritePromptForDisplay } from '../../write/quoted-selection'
 
 const QUEUED_MENU_WIDTH = 176
 const QUEUED_MENU_HEIGHT = 48
@@ -72,14 +74,16 @@ function currentBodyZoom(): number {
 export type QueuedComposerMessage = {
   id: string
   text: string
-  deliveryState?: 'pending' | 'starting' | 'in_flight'
+  deliveryState?: 'pending' | 'paused' | 'starting' | 'in_flight' | 'failed'
   deliveryTurnId?: string
   deliveryUserMessageItemId?: string
   displayText?: string
+  errorCode?: string
+  errorMessage?: string
   guidanceEligible?: boolean
   mode?: string
   attachmentIds?: readonly string[]
-  attachments?: readonly unknown[]
+  attachments?: readonly { name?: string; kind?: 'image' | 'document' }[]
   fileReferences?: readonly unknown[]
   composerContexts?: readonly unknown[]
   guiPlan?: unknown
@@ -89,7 +93,7 @@ export type QueuedComposerMessage = {
   writeContext?: unknown
 }
 
-/** True when the text-only steer contract can preserve the whole queued payload. */
+/** True when the steer contract can preserve the whole queued payload. */
 export function canGuideQueuedComposerMessage(message: QueuedComposerMessage): boolean {
   return queuedMessageGuidancePayload(message) !== null
 }
@@ -99,8 +103,20 @@ export function canEditQueuedComposerMessage(message: QueuedComposerMessage): bo
   return Boolean(
     message.guidanceEligible !== false &&
     message.mode !== 'plan' &&
+    !message.attachmentIds?.length &&
+    !message.attachments?.length &&
     canGuideQueuedComposerMessage(message)
   )
+}
+
+function queuedComposerMessageDisplayText(message: QueuedComposerMessage): string {
+  const displayText = message.displayText?.trim()
+  if (displayText) return displayText
+  if (message.writeContext) {
+    const userInput = parseWritePromptForDisplay(message.text)?.userInput.trim()
+    if (userInput) return userInput
+  }
+  return message.text
 }
 
 type Props = {
@@ -122,7 +138,7 @@ export function FloatingComposerQueuedMessages({
 }: Props): ReactElement | null {
   const { t } = useTranslation('common')
   const visibleMessages = messages.filter(
-    (message) => !message.deliveryState || message.deliveryState === 'pending'
+    (message) => !message.deliveryState || message.deliveryState === 'pending' || message.deliveryState === 'paused'
   )
   const rootRef = useRef<HTMLDivElement | null>(null)
   const menuRef = useRef<HTMLDivElement | null>(null)
@@ -295,15 +311,31 @@ export function FloatingComposerQueuedMessages({
           const guiding = guidingIds.has(message.id)
           const guidanceEligible =
             message.guidanceEligible !== false && canGuideQueuedComposerMessage(message)
-          const guideLabel = guidanceTarget === 'graph'
-            ? t('guideQueuedMessageGraph')
-            : t('guideQueuedMessage')
-          const guideTitle = guidanceEligible
-            ? guidanceTarget === 'graph'
-              ? t('guideQueuedMessageGraphHint')
-              : t('guideQueuedMessageHint')
-            : t('guideQueuedMessageTextOnly')
+          const paused = message.deliveryState === 'paused'
+          const guideLabel = paused
+            ? t('sendPausedQueuedMessage')
+            : guidanceTarget === 'graph'
+              ? t('guideQueuedMessageGraph')
+              : t('guideQueuedMessage')
+          const guideTitle = paused
+            ? t('sendPausedQueuedMessage')
+            : guidanceEligible
+              ? guidanceTarget === 'graph'
+                ? t('guideQueuedMessageGraphHint')
+                : t('guideQueuedMessageHint')
+              : t('guideQueuedMessageTextOnly')
           const editMessage = onEdit && canEditQueuedComposerMessage(message) ? onEdit : null
+          const imageAttachments = message.attachments?.filter(
+            (attachment) => attachment.kind !== 'document'
+          ) ?? []
+          const imageCount = imageAttachments.length > 0
+            ? imageAttachments.length
+            : message.attachments?.length
+              ? 0
+              : message.attachmentIds?.length ?? 0
+          const imageNames = imageAttachments
+            ?.map((attachment) => attachment.name?.trim())
+            .filter((name): name is string => Boolean(name)) ?? []
           const canReorder = Boolean(onReorder && visibleMessages.length > 1 && !guiding)
           const messageDropTarget = dropTarget?.id === message.id ? dropTarget : null
           return (
@@ -350,9 +382,25 @@ export function FloatingComposerQueuedMessages({
               )}
               <div className="min-w-0 flex-1">
                 <div className="truncate text-[14px] leading-5 text-ds-ink">
-                  {message.displayText ?? message.text}
+                  {queuedComposerMessageDisplayText(message)}
                 </div>
-                {guidanceTarget === 'graph' ? (
+                {imageCount > 0 ? (
+                  <div
+                    data-queued-message-images={imageCount}
+                    className="mt-0.5 flex min-w-0 items-center gap-1 text-[11px] leading-4 text-ds-faint"
+                    aria-label={`${t('composerImageOnlyDisplay')} (${imageCount})`}
+                    title={imageNames.join(', ') || undefined}
+                  >
+                    <ImageIcon className="h-3 w-3 shrink-0" strokeWidth={1.8} />
+                    <span>{imageCount}</span>
+                    {imageNames[0] ? <span className="truncate">{imageNames[0]}</span> : null}
+                  </div>
+                ) : null}
+                {paused ? (
+                  <div className="truncate text-[11px] leading-4 text-ds-faint">
+                    {t('queuedMessagePaused')}
+                  </div>
+                ) : guidanceTarget === 'graph' ? (
                   <div className="truncate text-[11px] leading-4 text-ds-faint">
                     {t('queuedMessageAfterGraph')}
                   </div>
@@ -362,7 +410,7 @@ export function FloatingComposerQueuedMessages({
                 <button
                   type="button"
                   onClick={() => void guide(message.id)}
-                  disabled={!guidanceEligible || guiding}
+                  disabled={(!guidanceEligible && !paused) || guiding}
                   className="ds-no-drag inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full px-2.5 text-[13px] font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent disabled:hover:text-ds-muted"
                   aria-label={guiding ? t('guideQueuedMessagePending') : guideLabel}
                   title={guiding ? t('guideQueuedMessagePending') : guideTitle}

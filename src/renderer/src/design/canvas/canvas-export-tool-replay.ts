@@ -6,6 +6,47 @@ import {
   type CanvasAgentExportRequestHandler,
   type CanvasAgentExportResult
 } from './canvas-export'
+import { sendCanvasTurnReceipt } from './canvas-receipt-sender'
+
+type CanvasExportReceiptContext = {
+  threadId?: string | null
+  turnId?: string | null
+}
+
+function receiptKeyFromExport(value: unknown): string | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const receiptKey = (value as Record<string, unknown>).receiptKey
+  return typeof receiptKey === 'string' && receiptKey.trim() ? receiptKey.trim() : undefined
+}
+
+function sendCanvasExportReceipt(
+  context: CanvasExportReceiptContext | undefined,
+  receiptKey: string | undefined,
+  result: CanvasAgentExportResult | null,
+  error?: string
+): void {
+  const threadId = context?.threadId?.trim()
+  const turnId = context?.turnId?.trim()
+  if (!threadId || !turnId || !receiptKey) return
+  sendCanvasTurnReceipt({
+    threadId,
+    turnId,
+    receiptKey,
+    affectedIds: [],
+    errors: error ? [{ code: 'CANVAS_EXPORT_FAILED', message: error }] : [],
+    ...(result
+      ? {
+          generatedFiles: [{
+            name: result.name,
+            relativePath: result.relativePath,
+            ...(result.absolutePath ? { absolutePath: result.absolutePath } : {}),
+            mimeType: result.mimeType,
+            byteSize: result.byteSize
+          }]
+        }
+      : {})
+  })
+}
 
 function publishCanvasExportResult(blockId: string, result: CanvasAgentExportResult): void {
   useChatStore.setState((state) => ({
@@ -46,25 +87,31 @@ export function dispatchCanvasExportToolBlock(
   block: ToolBlock,
   parsed: unknown,
   appliedBlockIds: Set<string>,
-  onRequest?: CanvasAgentExportRequestHandler
+  onRequest?: CanvasAgentExportRequestHandler,
+  receiptContext?: CanvasExportReceiptContext
 ): boolean {
   if (block.meta?.toolName !== 'design_export_canvas') return false
   if (appliedBlockIds.has(block.id)) return true
   appliedBlockIds.add(block.id)
   const request = extractCanvasAgentExportRequest(parsed)
+  const receiptKey = receiptKeyFromExport(parsed)
   if (!request || !onRequest) {
-    failCanvasExportToolBlock(
-      block.id,
-      request ? 'Whiteboard export is unavailable.' : 'Whiteboard export request is invalid.'
-    )
+    const message = request ? 'Whiteboard export is unavailable.' : 'Whiteboard export request is invalid.'
+    failCanvasExportToolBlock(block.id, message)
+    sendCanvasExportReceipt(receiptContext, receiptKey, null, message)
     return true
   }
   void Promise.resolve()
     .then(() => onRequest(request))
-    .then((result) => publishCanvasExportResult(block.id, result))
+    .then((result) => {
+      publishCanvasExportResult(block.id, result)
+      sendCanvasExportReceipt(receiptContext, receiptKey, result)
+    })
     .catch((error: unknown) => {
       const message = error instanceof Error ? error.message : String(error)
-      failCanvasExportToolBlock(block.id, `Whiteboard export failed: ${message}`)
+      const detail = `Whiteboard export failed: ${message}`
+      failCanvasExportToolBlock(block.id, detail)
+      sendCanvasExportReceipt(receiptContext, receiptKey, null, detail)
     })
   return true
 }

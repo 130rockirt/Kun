@@ -2,14 +2,23 @@ import { useState, type ReactElement } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   Bot,
+  CircleAlert,
   CornerUpLeft,
   GitBranch,
   GitFork,
   RefreshCw,
   Settings
 } from 'lucide-react'
-import type { ClawImChannelV1 } from '@shared/app-settings'
+import { resolveChatWelcomeTitle, type ClawImChannelV1 } from '@shared/app-settings'
+import { useChatWelcomeMessageSetting } from '../../lib/chat-welcome-message-settings'
 import { KunStateFigure } from './AnimatedWorkLogo'
+import { TaskSurfaceSelector, type ComposerTaskSurface } from './FloatingComposerTaskProfile'
+
+export type EmptyTaskSurfaceControl = {
+  surface: ComposerTaskSurface
+  locked?: boolean
+  onChange?: (surface: ComposerTaskSurface) => void
+}
 
 /**
  * Empty / hero states rendered by `MessageTimeline` when there is no
@@ -121,21 +130,113 @@ function RuntimeWakeHero({
   )
 }
 
-function ChatEmptyHero(): ReactElement {
+function RuntimeHomeStatus({
+  runtimeError,
+  onRetry,
+  onOpenSettings
+}: {
+  runtimeError?: string | null
+  onRetry: () => void
+  onOpenSettings: () => void
+}): ReactElement {
   const { t } = useTranslation('common')
+  const trimmedError = runtimeError?.trim() ?? ''
+  const hasError = trimmedError.length > 0
 
   return (
-    <div className="ds-chat-empty-hero ds-no-drag mx-auto flex min-h-[min(620px,calc(100dvh-220px))] w-full items-center justify-center px-6 py-10 text-center">
-      <div className="flex max-w-[720px] -translate-y-6 flex-col items-center sm:-translate-y-8">
+    <div
+      data-runtime-home-status
+      className="mt-4 flex max-w-[680px] flex-wrap items-center justify-center gap-x-3 gap-y-2 rounded-[18px] border border-ds-border-muted bg-ds-card/88 px-4 py-2.5 text-left shadow-[0_8px_24px_rgba(32,55,90,0.05)]"
+    >
+      <span className="flex min-w-0 items-center gap-2" role="status" aria-live="polite">
+        {hasError ? (
+          <CircleAlert className="h-4 w-4 shrink-0 text-amber-600" strokeWidth={1.8} />
+        ) : (
+          <RefreshCw className="h-4 w-4 shrink-0 animate-spin text-accent motion-reduce:animate-none" strokeWidth={1.8} />
+        )}
+        <span className="min-w-0">
+          <span className="block text-[12.5px] font-medium text-ds-ink">
+            {hasError ? t('runtimeErrorHeroTitle') : t('runtimeOfflineHeroTitle')}
+          </span>
+          {hasError ? (
+            <span className="block max-w-[460px] text-[11.5px] leading-5 text-ds-muted">
+              {trimmedError}
+            </span>
+          ) : null}
+        </span>
+      </span>
+      <span className="flex shrink-0 items-center gap-1.5">
+        <button
+          type="button"
+          className="rounded-full px-2.5 py-1 text-[12px] font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
+          onClick={onRetry}
+        >
+          {t('retryConnection')}
+        </button>
+        <button
+          type="button"
+          className="rounded-full px-2.5 py-1 text-[12px] font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
+          onClick={onOpenSettings}
+        >
+          {t('openSettings')}
+        </button>
+      </span>
+    </div>
+  )
+}
+
+function ChatEmptyHero({
+  taskSurface,
+  taskSurfaceLocked,
+  onTaskSurfaceChange,
+  runtimeReady,
+  runtimeError,
+  onRetry,
+  onOpenSettings
+}: {
+  taskSurface: ComposerTaskSurface
+  taskSurfaceLocked: boolean
+  onTaskSurfaceChange?: (surface: ComposerTaskSurface) => void
+  runtimeReady: boolean
+  runtimeError?: string | null
+  onRetry: () => void
+  onOpenSettings: () => void
+}): ReactElement {
+  const { t } = useTranslation('common')
+  const customWelcome = useChatWelcomeMessageSetting()
+  const title = resolveChatWelcomeTitle(customWelcome, t('emptyHeroTitle'))
+
+  return (
+    <div className="ds-chat-empty-hero ds-no-drag mx-auto flex min-h-[clamp(190px,23vh,240px)] w-full items-center justify-center px-6 pb-3 pt-6 text-center">
+      <div
+        data-home-hero-content
+        className="flex max-w-[720px] flex-col items-center"
+      >
         <h1
           id="chat-empty-hero-title"
           className="max-w-[620px] text-[24px] font-medium leading-tight tracking-[-0.025em] text-ds-ink sm:text-[28px]"
         >
-          {t('emptyHeroTitle')}
+          {title}
         </h1>
         <p className="mt-3 max-w-[680px] text-[13px] leading-6 text-ds-muted">
-          {t('emptyHeroSub')}
+          {t('unifiedTaskHeroSub')}
         </p>
+        {!taskSurfaceLocked ? <div className="mt-6">
+          <TaskSurfaceSelector
+            surface={taskSurface}
+            locked={false}
+            disabled={false}
+            onSurfaceChange={onTaskSurfaceChange}
+            prominent
+          />
+        </div> : null}
+        {!runtimeReady ? (
+          <RuntimeHomeStatus
+            runtimeError={runtimeError}
+            onRetry={onRetry}
+            onOpenSettings={onOpenSettings}
+          />
+        ) : null}
       </div>
     </div>
   )
@@ -150,7 +251,8 @@ export function MessageTimelineEmptyHero({
   onPickWorkspace,
   onRetry,
   onOpenSettings,
-  onSelectSuggestion
+  onSelectSuggestion,
+  taskSurfaceControl
 }: {
   route: 'chat' | 'claw'
   ready: boolean
@@ -161,11 +263,13 @@ export function MessageTimelineEmptyHero({
   onRetry: () => void
   onOpenSettings: () => void
   onSelectSuggestion?: (prompt: string) => void
+  taskSurfaceControl?: EmptyTaskSurfaceControl
   focusModeEnabled?: boolean
 }): ReactElement {
   const { t } = useTranslation('common')
+  const taskSurface = taskSurfaceControl?.surface ?? 'code'
 
-  if (!ready) {
+  if (!ready && route === 'claw') {
     return <RuntimeWakeHero runtimeError={runtimeError} onRetry={onRetry} onOpenSettings={onOpenSettings} />
   }
 
@@ -199,7 +303,17 @@ export function MessageTimelineEmptyHero({
     )
   }
 
-  return <ChatEmptyHero />
+  return (
+    <ChatEmptyHero
+      taskSurface={taskSurface}
+      taskSurfaceLocked={taskSurfaceControl?.locked === true}
+      onTaskSurfaceChange={taskSurfaceControl?.onChange}
+      runtimeReady={ready}
+      runtimeError={runtimeError}
+      onRetry={onRetry}
+      onOpenSettings={onOpenSettings}
+    />
+  )
 }
 
 export function ThreadForkBanner({ parentTitle }: { parentTitle: string }): ReactElement {

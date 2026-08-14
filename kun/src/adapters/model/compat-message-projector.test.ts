@@ -2,12 +2,14 @@ import { describe, expect, it } from 'vitest'
 import {
   makeAssistantReasoningItem,
   makeGoalContextItem,
+  makeModelContextItem,
   makeToolCallItem,
   makeToolResultItem,
   makeUserItem
 } from '../../domain/item.js'
 import type { ModelRequest } from '../../ports/model-client.js'
 import { projectCompatMessages } from './compat-message-projector.js'
+import { createCompatRequestCodecs } from './compat-request-builder.js'
 import { COMPAT_HISTORY_CONTEXT } from './compat-request-codecs.js'
 
 const composerContextFixture = {
@@ -94,6 +96,88 @@ describe('compat composer context projection', () => {
     ])
   })
 
+  it('keeps the stable prefix and history byte-identical when a persona changes', () => {
+    const requestFor = (personaBlock?: string): ModelRequest => ({
+      threadId: 'thread-persona',
+      turnId: 'turn-persona',
+      model: 'test-model',
+      systemPrompt: 'stable-system-prefix',
+      modeInstruction: 'mode-instruction',
+      prefix: [],
+      history: [makeUserItem({
+        id: 'item-persona',
+        threadId: 'thread-persona',
+        turnId: 'turn-persona',
+        text: 'user-history'
+      })],
+      ...(personaBlock ? { contextInstructions: ['turn-context-preamble', personaBlock] } : {}),
+      tools: [],
+      abortSignal: new AbortController().signal
+    })
+    const project = (personaBlock?: string): Array<[string, unknown]> =>
+      projectCompatMessages(requestFor(personaBlock), {
+        thinkingMode: false,
+        supportsImages: false
+      }).map((message) => [message.role, message.content])
+
+    const withoutPersona = project()
+    const withPersona = project('<kun_context_block kind="persona" authority="user">skeptic</kun_context_block>')
+
+    // Everything the provider caches — prefix, mode, and history — is untouched;
+    // the persona only appends after it. This is what makes switching cheap.
+    expect(withPersona.slice(0, withoutPersona.length)).toEqual(withoutPersona)
+    expect(withPersona[withPersona.length - 1]?.[1]).toContain('kind="persona"')
+  })
+
+  it('keeps request-local host control in Codex Responses input, not instructions', () => {
+    const request: ModelRequest = {
+      threadId: 'thread-codex-context',
+      turnId: 'turn-codex-context',
+      model: 'gpt-5.6',
+      systemPrompt: 'stable-system-prefix',
+      prefix: [],
+      history: [makeUserItem({
+        id: 'context-user',
+        threadId: 'thread-codex-context',
+        turnId: 'turn-codex-context',
+        text: 'Revise the selected slide.'
+      })],
+      contextInstructions: [
+        'turn-context-preamble',
+        '<kun_context_block kind="host-control">PRIVATE HOST CONTROL</kun_context_block>'
+      ],
+      promptCachePartition: 'stable-partition',
+      tools: [],
+      abortSignal: new AbortController().signal
+    }
+    const messages = projectCompatMessages(request, {
+      thinkingMode: false,
+      supportsImages: false
+    })
+    const dynamic = messages.filter((message) => (
+      String(message.content).includes('PRIVATE HOST CONTROL')
+    ))
+    expect(dynamic).toHaveLength(1)
+    expect(dynamic[0]?.[COMPAT_HISTORY_CONTEXT]).toBe(true)
+
+    const wire = createCompatRequestCodecs().build({
+      request,
+      model: request.model,
+      messages,
+      tools: [],
+      stream: false,
+      endpointFormat: 'responses',
+      baseUrl: 'https://api.openai.com/v1',
+      isCodex: true,
+      isCodexLite: false,
+      codexNativeImageGeneration: false
+    })
+    expect(wire.instructions).toBe('stable-system-prefix')
+    expect(JSON.stringify(wire.instructions)).not.toContain('PRIVATE HOST CONTROL')
+    expect(JSON.stringify(wire.input)).toContain('PRIVATE HOST CONTROL')
+    expect(wire.prompt_cache_key).toBe('thread-codex-context:stable-partition')
+  })
+
   it('projects durable goal context as history rather than a per-request instruction', () => {
     const request: ModelRequest = {
       threadId: 'thread-goal',
@@ -130,6 +214,85 @@ describe('compat composer context projection', () => {
       content: 'Goal objective stays in append-only history.'
     })
     expect(goal?.[COMPAT_HISTORY_CONTEXT]).toBe(true)
+  })
+
+  it('keeps prior wire history intact when a later turn selects another persona', () => {
+    const firstUser = makeUserItem({
+      id: 'persona-user-one', threadId: 'thread-personas', turnId: 'turn-one', text: 'First request'
+    })
+    const firstContext = makeModelContextItem({
+      id: 'persona-context-one', threadId: 'thread-personas', turnId: 'turn-one',
+      stepIndex: 0, contentDigest: 'first', createdAt: '2026-08-12T00:00:00.000Z',
+      blocks: [{ key: 'persona:user:0', kind: 'persona', authority: 'user', state: 'active', digest: 'one' }],
+      text: 'Persona one capsule'
+    })
+    const firstRequest: ModelRequest = {
+      threadId: 'thread-personas', turnId: 'turn-one', model: 'test-model',
+      systemPrompt: 'stable-system-prefix', prefix: [], history: [firstUser, firstContext],
+      tools: [], abortSignal: new AbortController().signal
+    }
+    const firstWire = projectCompatMessages(firstRequest, {
+      thinkingMode: false, supportsImages: false
+    })
+    const secondUser = makeUserItem({
+      id: 'persona-user-two', threadId: 'thread-personas', turnId: 'turn-two', text: 'Second request'
+    })
+    const secondContext = makeModelContextItem({
+      id: 'persona-context-two', threadId: 'thread-personas', turnId: 'turn-two',
+      stepIndex: 0, contentDigest: 'second', createdAt: '2026-08-12T00:01:00.000Z',
+      blocks: [{ key: 'persona:user:0', kind: 'persona', authority: 'user', state: 'active', digest: 'two' }],
+      text: 'Persona two capsule'
+    })
+    const secondWire = projectCompatMessages({
+      ...firstRequest,
+      turnId: 'turn-two',
+      history: [...firstRequest.history, secondUser, secondContext]
+    }, { thinkingMode: false, supportsImages: false })
+
+    expect(secondWire.slice(0, firstWire.length)).toEqual(firstWire)
+    expect(secondWire.slice(firstWire.length).map((message) => [message.role, message.content]))
+      .toEqual([
+        ['user', 'Second request'],
+        ['system', 'Persona two capsule']
+      ])
+    expect(secondWire.at(-1)?.[COMPAT_HISTORY_CONTEXT]).toBe(true)
+  })
+
+  it('replays images and documents on the user message that originally owned them', () => {
+    const first = makeUserItem({
+      id: 'attachment-user-one', threadId: 'thread-attachments', turnId: 'turn-one',
+      text: 'Inspect image', attachmentIds: ['image-one']
+    })
+    const second = makeUserItem({
+      id: 'attachment-user-two', threadId: 'thread-attachments', turnId: 'turn-two',
+      text: 'Inspect document', attachmentIds: ['document-two']
+    })
+    const messages = projectCompatMessages({
+      threadId: 'thread-attachments', turnId: 'turn-two', model: 'vision-model',
+      prefix: [], history: [first, second], tools: [],
+      messageAttachments: {
+        [first.id]: {
+          images: [{ id: 'image-one', name: 'one.png', mimeType: 'image/png', dataBase64: 'aW1hZ2U=' }],
+          textFallbacks: [], documents: [], unavailable: []
+        },
+        [second.id]: {
+          images: [], textFallbacks: [],
+          documents: [{
+            id: 'document-two', name: 'two.txt', mimeType: 'text/plain',
+            text: 'document body', byteSize: 13
+          }],
+          unavailable: []
+        }
+      },
+      abortSignal: new AbortController().signal
+    }, { thinkingMode: false, supportsImages: true })
+
+    expect(messages[0]?.content).toEqual([
+      { type: 'text', text: 'Inspect image' },
+      { type: 'image_url', image_url: { url: 'data:image/png;base64,aW1hZ2U=' } }
+    ])
+    expect(String(messages[1]?.content)).toContain('Inspect document')
+    expect(String(messages[1]?.content)).toContain('document body')
   })
 
   it('replays complete historical DeepSeek tool rounds only on the identical route', () => {

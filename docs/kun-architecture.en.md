@@ -3,7 +3,7 @@
 This document describes how the Kun desktop app should now be organized around one dedicated runtime,
 `Kun`, that serves the GUI through a single HTTP/SSE boundary.
 The conclusion is clear up front: the GUI keeps one agent with the only ID
-`kun`; Code, Design, Write, and Connect phone all flow through the same `kun serve`
+`kun`; Code (including Design tasks), Work, and Connect phone all flow through the same `kun serve`
 HTTP/SSE boundary.
 Historical runtimes, legacy painting/design starter entry points, runtime diagnostics panel,
 and agent switching are no longer shown as primary product surfaces.
@@ -17,7 +17,7 @@ operations guide.
 
 ```text
 Renderer (React + Zustand)
-  Code / Design / Write / Connect phone UI
+  Code (including Design tasks) / Work / Connect phone UI
         |
         | window.kunGui.runtimeRequest(path, method, body)
         | window.kunGui.startSse(threadId, sinceSeq)
@@ -131,8 +131,8 @@ kept removed:
   `binaryPath`, `port`, `autoStart`, `apiKey`, `baseUrl`, `runtimeToken`, `dataDir`,
   `model`, `approvalPolicy`, `sandboxMode`, `insecure`.
 - Legacy painting/design starter cards stay removed. The first-class workspace
-  entry points are Code, Design, and Write; Connect phone and automation keep
-  their own routes.
+  entry points are Code and Work; Design is a task type in the Code workbench
+  and uses its right whiteboard. Connect phone and automation keep their own routes.
 
 ## Main / preload responsibilities to remove
 
@@ -186,21 +186,52 @@ from old settings:
 - Legacy Connect phone fields (internally still named Claw) `agentThreadIds` are collapsed
   to `agentThreadIds.kun`; per-provider maps are not retained.
 
-## Code / Design / Write / Connect phone flows under Kun
+## Code / Design task / Work / Connect phone flows under Kun
 
 - Code: `KunRuntimeProvider` handles list/create thread, send turn,
   steer, interrupt, compact, approval, and SSE mapping.
   Chat UI does not directly know about old providers.
-- Design: the design workspace creates or reuses Kun threads, persists drafts,
-  prototypes, and design graphs under `.kun-design/`, iterates through the
-  canvas, and can publish `DESIGN_SYSTEM.md` before opening a fresh Code thread
-  to implement the approved design.
-- Write: writing assistant and inline completion share the same Kun API key/base URL.
-  Write thread registry identifies write threads as Kun threads only, with no legacy-runtime distinction.
+- Design task: shares the Code workbench task list, timeline, composer, model,
+  permissions, and workspace controls. Drafts and artifacts persist under
+  `.kun-design/` and render in the right whiteboard.
+- Work: the office assistant and inline completion share the same Kun API key/base URL.
+  The internal Write thread registry identifies Work threads as Kun threads only, with no legacy-runtime distinction.
 - Connect phone: scheduled tasks, Feishu/Lark/WeChat, and IM webhooks create or reuse Kun threads.
   The codebase still uses the internal `claw` route, settings key, and runtime file names for legacy-name compatibility.
   `threadId` / `localThreadId` remain only for legacy settings compatibility;
   canonical mapping is written to `agentThreadIds.kun`.
+
+## Plan-build worktree coordinator boundary
+
+Plan execution still uses the single Kun runtime, while a dedicated Electron
+main coordinator owns its Git lifecycle:
+
+- Renderer chooses Direct or Graph and the per-build isolation option in the
+  Plan surfaces. It projects preflight and durable run state but never receives
+  authority to merge or delete an arbitrary path.
+- Main atomically persists each run, captures the exact launching checkout,
+  checked-out target branch, and HEAD, then creates the execution branch and
+  worktree under `~/.kun/worktrees/<runId>/...`. A linked source worktree remains
+  the exact checkout updated later; the primary worktree is not substituted.
+- Kun executes a `side` fork carrying `planBuildRunId` and the worktree workspace.
+  Its goal is created before the first implementation turn is admitted. Graph
+  worker isolation remains subordinate to this outer execution branch.
+- Renderer requests finalization only after structured successful turn, complete
+  goal, no later running turn, no approval or user-input gate, and successful
+  Graph root integration. Assistant prose is never a completion signal.
+- Main commits and rebases inside the isolated worktree, then runs
+  `merge --ff-only` only in the captured source checkout. Target movement,
+  branch switches, dirtiness, and conflicts become recoverable states; the
+  coordinator never switches, stashes, resets, cleans, or force-updates source.
+- Cleanup first proves the execution head reachable from the target, or proves
+  the run unchanged. It rebinds the execution thread workspace to source before
+  non-force worktree removal, safe branch deletion, and pruning. Partial failure
+  persists as `cleanup_pending`; explicit discard still creates a recovery patch
+  or checkpoint first.
+
+This coordinator is distinct from the reusable scheduled-task worktree pool and
+does not replace Graph worker worktrees. Their destructive cleanup semantics
+must not be shared.
 
 ## Functional parity in GUI HTTP path
 
@@ -276,7 +307,7 @@ Manual smoke checks:
 2. Code can create a new session, send messages, stream output, and use approval/interruption.
 3. Design opens the canvas, can create or iterate a design artifact, preview/export
    the prototype, and hand the approved design to a fresh Code thread.
-4. Write opens writing space; inline completion and inline selected-text assistant share API key.
+4. Work opens its workspace; inline completion and inline selected-text assistant share the API key.
 5. Connect phone can save settings, run manual tasks, and write thread IDs back to Kun mapping.
 6. `Settings -> Agents` shows only Kun, with no provider switch, runtime diagnostics,
    or historical provider blocks.

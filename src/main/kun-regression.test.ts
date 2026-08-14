@@ -135,6 +135,8 @@ describe('Kun single-agent regression', () => {
       terminal: defaultTerminalSettings(),
       guiUpdate: { channel: 'stable' },
       codePromptPrefix: '',
+      chatWelcomeMessage: '',
+      codeAgentPresets: [],
       disabledSkillIds: []
     }
 

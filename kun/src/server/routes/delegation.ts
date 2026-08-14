@@ -60,8 +60,7 @@ export async function delegationProfiles(
 /**
  * POST /v1/delegation/abort/:childId
  *
- * Cancel a detached (background) child run. Synchronous runs are
- * unaffected — abort their parent turn instead.
+ * Stop one active child run without interrupting its parent or siblings.
  */
 export async function delegationAbort(
   runtime: DelegationRuntime | undefined,

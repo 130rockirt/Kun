@@ -1,6 +1,8 @@
 import { useCanvasSelectionStore } from './canvas-selection-store'
 import { useCanvasShapeStore } from './canvas-shape-store'
 import { createDefaultShape, type Rect, type ViewBox } from './canvas-types'
+import { currentCanvasOccupiedRects } from './canvas-occupied-regions'
+import { placeRectInViewportAvoiding } from './canvas-placement'
 import { useCanvasViewportStore } from './canvas-viewport-store'
 
 const FALLBACK_IMAGE_WIDTH = 320
@@ -17,7 +19,7 @@ export type ImportedImageDimensions = {
 
 export type CanvasImageImportResult =
   | { ok: true; shapeId: string }
-  | { ok: false; canceled?: boolean; message?: string }
+  | { ok: false; canceled?: boolean; reason?: 'no-image' | 'document-changed'; message?: string }
 
 function finitePositive(value: number | undefined): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0
@@ -29,7 +31,8 @@ function roundCanvasValue(value: number): number {
 
 export function computeImportedImagePlacement(
   vbox: ViewBox,
-  dimensions: ImportedImageDimensions = {}
+  dimensions: ImportedImageDimensions = {},
+  occupied: readonly Rect[] = []
 ): Rect {
   const sourceWidth = finitePositive(dimensions.width) ? dimensions.width : FALLBACK_IMAGE_WIDTH
   const sourceHeight = finitePositive(dimensions.height) ? dimensions.height : FALLBACK_IMAGE_HEIGHT
@@ -39,12 +42,15 @@ export function computeImportedImagePlacement(
   const width = Math.max(MIN_IMAGE_SIZE, roundCanvasValue(sourceWidth * scale))
   const height = Math.max(MIN_IMAGE_SIZE, roundCanvasValue(sourceHeight * scale))
 
-  return {
-    x: roundCanvasValue(vbox.x + vbox.width / 2 - width / 2),
-    y: roundCanvasValue(vbox.y + vbox.height / 2 - height / 2),
-    width,
-    height
+  if (occupied.length === 0) {
+    return {
+      x: roundCanvasValue(vbox.x + vbox.width / 2 - width / 2),
+      y: roundCanvasValue(vbox.y + vbox.height / 2 - height / 2),
+      width,
+      height
+    }
   }
+  return placeRectInViewportAvoiding({ width, height }, vbox, occupied)
 }
 
 /**
@@ -73,14 +79,19 @@ export async function pasteClipboardImageToCanvas(options: {
    */
   workspaceRoot?: string
   imageDirectory?: string
+  /** Captured when paste starts; prevents a late clipboard read from mutating another board. */
+  expectedDocumentKey?: string | null
 }): Promise<CanvasImageImportResult> {
+  const expectedDocumentKey = options.expectedDocumentKey !== undefined
+    ? options.expectedDocumentKey
+    : useCanvasShapeStore.getState().documentKey
   if (typeof window.kunGui?.readClipboardImage !== 'function') {
-    return { ok: false, message: 'Clipboard image reading is unavailable.' }
+    return { ok: false, reason: 'no-image', message: 'Clipboard image reading is unavailable.' }
   }
 
   const image = await window.kunGui.readClipboardImage()
   if (!image.ok) {
-    return { ok: false, message: image.message }
+    return { ok: false, reason: 'no-image', message: image.message }
   }
 
   // Prefer persisting to disk so shape.imageUrl is a workspace-relative path
@@ -112,10 +123,14 @@ export async function pasteClipboardImageToCanvas(options: {
   }
 
   const dataUrl = `data:${image.mimeType};base64,${image.dataBase64}`
+  if (useCanvasShapeStore.getState().documentKey !== expectedDocumentKey) {
+    return { ok: false, reason: 'document-changed' }
+  }
+
   const bounds = computeImportedImagePlacement(options.vbox, {
     width: image.width,
     height: image.height
-  })
+  }, currentCanvasOccupiedRects())
 
   const shape = createDefaultShape('image', bounds.x, bounds.y)
   shape.name = image.name || 'Pasted Image'
@@ -167,7 +182,7 @@ export async function importWorkspaceImageToCanvas(options: {
   const bounds = computeImportedImagePlacement(options.vbox, {
     width: picked.width,
     height: picked.height
-  })
+  }, currentCanvasOccupiedRects())
   const shape = createDefaultShape('image', bounds.x, bounds.y)
   shape.name = imageNameFromPath(imageUrl)
   shape.width = bounds.width

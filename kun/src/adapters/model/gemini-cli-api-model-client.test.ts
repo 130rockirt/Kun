@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { ModelRequest, ModelStreamChunk } from '../../ports/model-client.js'
-import { makeGoalContextItem, makeToolCallItem, makeToolResultItem } from '../../domain/item.js'
+import { makeGoalContextItem, makeModelContextItem, makeToolCallItem, makeToolResultItem } from '../../domain/item.js'
 import { LlmDebugRecorder } from '../../services/llm-debug-recorder.js'
 import { GRAPH_DEFINE_PLAN_INPUT_JSON_SCHEMA } from '../tool/graph-mode-tool-provider.js'
 import { GeminiCliOAuthSource, GEMINI_CLI_OAUTH_TOKEN_URL } from './gemini-cli-oauth.js'
@@ -52,6 +52,22 @@ function oauth(fetchImpl: typeof fetch): GeminiCliOAuthSource {
 }
 
 describe('GeminiCliApiModelClient', () => {
+  it('keeps private model context in chronological contents instead of systemInstruction', () => {
+    const capsule = makeModelContextItem({
+      id: 'context', threadId: 'thread-gemini', turnId: 'turn-gemini', stepIndex: 0,
+      contentDigest: 'digest', blocks: [], text: 'Dynamic persona capsule',
+      createdAt: '2026-01-01T00:00:01.000Z'
+    })
+    const input = request({ history: [...request().history, capsule] })
+    const built = buildGeminiCliCodeAssistRequest(input, input.model, 'project') as {
+      request: { systemInstruction?: unknown; contents: unknown[] }
+    }
+    expect(JSON.stringify(built.request.systemInstruction)).not.toContain('Dynamic persona capsule')
+    expect(JSON.stringify(built.request.contents)).toContain('Dynamic persona capsule')
+    expect(JSON.stringify(built.request.contents).indexOf('Say hello.'))
+      .toBeLessThan(JSON.stringify(built.request.contents).indexOf('Dynamic persona capsule'))
+  })
+
   it('preserves the minimal graph_define_plan schema in Gemini function declarations', () => {
     const input = request({
       tools: [{
@@ -391,7 +407,8 @@ describe('GeminiCliApiModelClient', () => {
         status: 429,
         attempt: 1,
         maxAttempts: 1,
-        delayMs: 0
+        delayMs: 0,
+        failureSummary: 'Gemini CLI API request failed (RESOURCE_EXHAUSTED): You have exhausted your capacity. Your quota will reset after 0s.'
       },
       { kind: 'assistant_text_delta', text: 'recovered' },
       { kind: 'completed', stopReason: 'stop' }
@@ -432,7 +449,8 @@ describe('GeminiCliApiModelClient', () => {
         attempt: 1,
         maxAttempts: 1,
         delayMs: 0,
-        reason: 'network'
+        reason: 'network',
+        failureSummary: 'Gemini CLI API request failed: fetch failed'
       },
       { kind: 'assistant_text_delta', text: 'recovered' },
       { kind: 'completed', stopReason: 'stop' }

@@ -13,13 +13,14 @@ import type { ComposerAttachmentUpdater } from '../workbench-composer-attachment
 
 export type CanvasImageAutoAttachmentOptions = {
   route: string
+  attachmentScope?: 'chat' | 'design'
   selectedIds: ReadonlySet<string>
   document: CanvasDocument
   workspaceRoot: string
   activeThreadId: string | null
   attachmentCapabilities?: ImageAttachmentUploadCapabilities
   setComposerAttachmentsForScope: (
-    scope: 'design',
+    scope: 'chat' | 'design',
     updater: ComposerAttachmentUpdater
   ) => void
   getActiveWorkspace: () => string | undefined
@@ -40,7 +41,8 @@ export function useCanvasImageAutoAttachment(
   const clearAutoAttachment = useCallback((): void => {
     const id = autoAttachmentIdRef.current
     if (id) {
-      dynamicRef.current.setComposerAttachmentsForScope('design', (cur: AttachmentReference[]) =>
+      const scope = dynamicRef.current.attachmentScope ?? 'design'
+      dynamicRef.current.setComposerAttachmentsForScope(scope, (cur: AttachmentReference[]) =>
         removeCanvasAutoAttachmentById(cur, id)
       )
       autoAttachmentIdRef.current = null
@@ -100,7 +102,8 @@ export function useCanvasImageAutoAttachment(
           uploaded: result.attachment,
           preview: result.preview
         })
-        dynamicRef.current.setComposerAttachmentsForScope('design', (cur) => [...cur, ref])
+        const scope = dynamicRef.current.attachmentScope ?? 'design'
+        dynamicRef.current.setComposerAttachmentsForScope(scope, (cur) => [...cur, ref])
         autoAttachmentIdRef.current = result.attachment.id
       } catch {
         // Keep canvas selection interactions quiet if an image cannot be uploaded.
@@ -110,7 +113,13 @@ export function useCanvasImageAutoAttachment(
     return () => {
       seqRef.current += 1
     }
-  }, [clearAutoAttachment, options.document, options.route, options.selectedIds])
+  }, [
+    clearAutoAttachment,
+    options.attachmentScope,
+    options.document,
+    options.route,
+    options.selectedIds
+  ])
 
   return { clearAutoAttachment }
 }

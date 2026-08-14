@@ -317,9 +317,31 @@ export class BrowserUsePolicyProxy {
       this.rejectResponse(response, 429, 'proxy_concurrency_exceeded')
       return
     }
+    const release = once(() => this.leave())
+    let upstream: ReturnType<typeof httpRequest> | undefined
+    const abortUpstream = (): void => {
+      if (upstream && !upstream.destroyed) upstream.destroy()
+    }
+    const abortDownstream = (): void => {
+      if (!response.destroyed) response.destroy()
+      abortUpstream()
+      release()
+    }
+    request.once('aborted', abortDownstream)
+    request.once('error', abortDownstream)
+    response.once('finish', release)
+    response.once('close', () => {
+      abortUpstream()
+      release()
+    })
+    response.once('error', abortDownstream)
     const rawUrl = request.url ?? ''
     try {
       const target = await resolveBrowserUseNetworkTarget(rawUrl, this.options)
+      if (request.destroyed || response.destroyed) {
+        release()
+        return
+      }
       if (target.url.protocol !== 'http:') {
         throw new BrowserUseNetworkPolicyError(
           'proxy_protocol_mismatch',
@@ -327,7 +349,8 @@ export class BrowserUsePolicyProxy {
         )
       }
       this.policyEvent('allowed', target.url.href)
-      const upstream = httpRequest({
+      let receivedUpstreamResponse = false
+      const upstreamRequest = httpRequest({
         host: target.addresses[0]!.address,
         family: target.addresses[0]!.family,
         port: target.port,
@@ -336,26 +359,39 @@ export class BrowserUsePolicyProxy {
         headers: outboundHeaders(request.headers, target.url.host),
         timeout: this.options.connectTimeoutMs ?? 10_000
       }, (upstreamResponse) => {
+        receivedUpstreamResponse = true
+        upstreamResponse.once('aborted', abortDownstream)
+        upstreamResponse.once('error', abortDownstream)
+        upstreamResponse.once('close', () => {
+          if (!upstreamResponse.complete) abortDownstream()
+        })
         response.writeHead(
           upstreamResponse.statusCode ?? 502,
           outboundHeaders(upstreamResponse.headers)
         )
         upstreamResponse.pipe(response)
       })
-      upstream.once('timeout', () => upstream.destroy(new Error('upstream timeout')))
-      upstream.once('error', () => {
+      upstream = upstreamRequest
+      upstreamRequest.once('timeout', () => {
+        upstreamRequest.destroy(new Error('upstream timeout'))
+      })
+      upstreamRequest.once('error', () => {
         if (!response.headersSent) this.rejectResponse(response, 502, 'proxy_upstream_failed')
         else response.destroy()
+        release()
       })
-      request.pipe(upstream)
-      response.once('close', () => {
-        upstream.destroy()
-        this.leave()
+      upstreamRequest.once('close', () => {
+        if (receivedUpstreamResponse) return
+        if (!response.headersSent && !response.destroyed) {
+          this.rejectResponse(response, 502, 'proxy_upstream_failed')
+        }
+        release()
       })
+      request.pipe(upstreamRequest)
     } catch (error) {
       this.policyEvent('blocked', rawUrl, policyErrorCode(error))
-      this.rejectResponse(response, 403, policyErrorCode(error))
-      this.leave()
+      if (!response.destroyed) this.rejectResponse(response, 403, policyErrorCode(error))
+      release()
     }
   }
 
@@ -368,22 +404,41 @@ export class BrowserUsePolicyProxy {
       client.end('HTTP/1.1 429 Too Many Requests\r\nConnection: close\r\n\r\n')
       return
     }
+    const release = once(() => this.leave())
+    let upstream: Socket | undefined
+    const closeUpstream = (): void => {
+      if (upstream && !upstream.destroyed) upstream.destroy()
+      release()
+    }
+    const closeClient = (): void => {
+      if (!client.destroyed) client.destroy()
+      release()
+    }
+    client.once('close', closeUpstream)
+    client.once('error', closeUpstream)
     const authority = request.url ?? ''
     try {
       const target = await resolveBrowserUseNetworkTarget(`https://${authority}`, this.options)
-      const upstream = await this.connectPinned(target)
+      if (client.destroyed) {
+        release()
+        return
+      }
+      upstream = await this.connectPinned(target)
+      if (client.destroyed) {
+        closeUpstream()
+        return
+      }
+      upstream.once('close', closeClient)
+      upstream.once('error', closeClient)
       this.policyEvent('allowed', target.url.href)
       client.write('HTTP/1.1 200 Connection Established\r\nProxy-Agent: Kun-Browser-Use\r\n\r\n')
       if (head.length) upstream.write(head)
       upstream.pipe(client)
       client.pipe(upstream)
-      const finish = once(() => this.leave())
-      upstream.once('close', finish)
-      client.once('close', finish)
     } catch (error) {
       this.policyEvent('blocked', `https://${authority}`, policyErrorCode(error))
       client.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n')
-      this.leave()
+      release()
     }
   }
 
@@ -396,16 +451,38 @@ export class BrowserUsePolicyProxy {
       client.destroy()
       return
     }
+    const release = once(() => this.leave())
+    let upstream: Socket | undefined
+    const closeUpstream = (): void => {
+      if (upstream && !upstream.destroyed) upstream.destroy()
+      release()
+    }
+    const closeClient = (): void => {
+      if (!client.destroyed) client.destroy()
+      release()
+    }
+    client.once('close', closeUpstream)
+    client.once('error', closeUpstream)
     const rawUrl = request.url ?? ''
     try {
       const target = await resolveBrowserUseNetworkTarget(rawUrl, this.options)
+      if (client.destroyed) {
+        release()
+        return
+      }
       if (target.url.protocol !== 'ws:') {
         throw new BrowserUseNetworkPolicyError(
           'proxy_protocol_mismatch',
           'Encrypted WebSockets must use CONNECT.'
         )
       }
-      const upstream = await this.connectPinned(target)
+      upstream = await this.connectPinned(target)
+      if (client.destroyed) {
+        closeUpstream()
+        return
+      }
+      upstream.once('close', closeClient)
+      upstream.once('error', closeClient)
       this.policyEvent('allowed', target.url.href)
       const headers = outboundHeaders(request.headers, target.url.host)
       headers.connection = 'Upgrade'
@@ -426,13 +503,10 @@ export class BrowserUsePolicyProxy {
       if (head.length) upstream.write(head)
       upstream.pipe(client)
       client.pipe(upstream)
-      const finish = once(() => this.leave())
-      upstream.once('close', finish)
-      client.once('close', finish)
     } catch (error) {
       this.policyEvent('blocked', rawUrl, policyErrorCode(error))
       client.destroy()
-      this.leave()
+      release()
     }
   }
 

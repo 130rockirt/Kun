@@ -160,9 +160,9 @@ describe('buildToolPreferenceInstruction', () => {
     expect(buildToolPreferenceInstruction([...tools].reverse())).toBe(instruction)
   })
 
-  it('makes explore_agent the first step for all repository investigation', () => {
+  it('makes fast_context the first step for all repository investigation', () => {
     const tools = [
-      { name: 'explore_agent', description: 'Explore the repository' },
+      { name: 'fast_context', description: 'Explore the repository' },
       { name: 'read', description: 'Read a file' },
       { name: 'grep', description: 'Search file contents' },
       { name: 'bash', description: 'Run a shell command' },
@@ -175,18 +175,19 @@ describe('buildToolPreferenceInstruction', () => {
     ]
     const instruction = buildToolPreferenceInstruction(tools)
 
-    expect(instruction).toContain('Use `explore_agent` as the first tool')
+    expect(instruction).toContain('Use `fast_context` as the first tool')
     expect(instruction).toContain('This applies even to simple lookups and to tasks that will later modify files')
-    expect(instruction).toContain('Only after `explore_agent` returns')
+    expect(instruction).toContain('Only after `fast_context` returns')
     expect(instruction).toContain('narrow follow-up')
     expect(instruction).toContain('parent agent remains responsible for edits')
-    expect(instruction).toContain('Issue multiple `explore_agent` calls together')
+    expect(instruction).toContain('one `fast_context` call with 2-4 non-overlapping tasks')
+    expect(instruction).toContain('in a later batch')
     expect(instruction).not.toContain('do not use it for tasks that require write access')
     expect(instruction).not.toContain('Prefer `read` over `bash`')
     expect(buildToolPreferenceInstruction([...tools].reverse())).toBe(instruction)
   })
 
-  it('keeps direct inspection guidance when explore_agent is unavailable', () => {
+  it('keeps direct inspection guidance when fast_context is unavailable', () => {
     const instruction = buildToolPreferenceInstruction([
       { name: 'read', description: 'Read a file' },
       { name: 'grep', description: 'Search file contents' },
@@ -195,7 +196,7 @@ describe('buildToolPreferenceInstruction', () => {
 
     expect(instruction).toContain('Inspect relevant current state before changing it')
     expect(instruction).toContain('Prefer `read`, `grep` over `bash`')
-    expect(instruction).not.toContain('explore_agent')
+    expect(instruction).not.toContain('fast_context')
   })
 
   it('adds bounded delegation guidance only when the child-agent tool is available', () => {
@@ -208,6 +209,44 @@ describe('buildToolPreferenceInstruction', () => {
     expect(instruction).toContain('parallel investigation of independent workstreams')
     expect(instruction).toContain('keep integration and final verification in the parent agent')
     expect(instruction).toContain('Do not delegate trivial work')
+  })
+
+  it('describes the stateful image-first PPT review loop without the legacy one-call board path', () => {
+    const instruction = buildToolPreferenceInstruction([
+      { name: 'ppt_agent', description: 'Run the PPT agent' },
+      { name: 'ppt_to_board', description: 'Lay out a PPTD deck' }
+    ])
+
+    expect(instruction).toContain('phase="awaiting_review"')
+    expect(instruction).toContain('phase="awaiting_direction"')
+    expect(instruction).toContain('ppt_agent(action="start", title="...")')
+    expect(instruction).toContain('`title` is required on start')
+    expect(instruction).toContain('preview surface, not a required input surface')
+    expect(instruction).toContain('one direction name/number')
+    expect(instruction).toContain('action="revise_previews"|"retry_failed"')
+    expect(instruction).toContain('action="approve_and_build"')
+    expect(instruction).toContain('same PPT child')
+    expect(instruction).toContain('exact active user turn')
+    expect(instruction).toContain('Never rewrite, summarize, supplement, or invent')
+    expect(instruction).toContain('`.kun-ppt.html`')
+    expect(instruction).not.toContain('deliverable, reviewContext')
+    expect(instruction).toContain('Never replay boardSpec')
+    expect(instruction).not.toContain('in a single call')
+  })
+
+  it('uses one conversation user-input choice to resume PPT direction selection', () => {
+    const instruction = buildToolPreferenceInstruction([
+      { name: 'ppt_agent', description: 'Run the PPT agent' },
+      { name: 'user_input', description: 'Ask the user' }
+    ])
+
+    expect(instruction).toContain('`user_input`')
+    expect(instruction).toContain('exactly one single-choice question')
+    expect(instruction).toContain('ppt_direction:<workflowId>:<childId>')
+    expect(instruction).toContain('label each option `1. <name>`')
+    expect(instruction).toContain('in the same turn')
+    expect(instruction).toContain('never invent or pass a direction id')
+    expect(instruction).not.toContain('reply in the normal conversation')
   })
 
   it('explains only exact-profile and automatic routes in existing-profile mode', () => {
@@ -274,9 +313,14 @@ describe('buildToolPreferenceInstruction', () => {
     ])
 
     expect(instruction).toContain('A durable Graph planning draft already exists')
+    expect(instruction).toContain('a plan title plus task keys, kinds, titles')
     expect(instruction).toContain('The host supplies every execution mechanic')
     expect(instruction).toContain('one changed correction')
     expect(instruction).toContain('before `graph_define_plan` returns committed')
+    expect(instruction).toContain('structured top-level `{ plan: ... }` object')
+    expect(instruction).toContain('Never wrap the arguments in `__raw`')
+    expect(instruction).toContain('a Markdown code fence')
+    expect(instruction).toContain('instead of repeating the full source plan')
     expect(instruction).toContain('inspect their bounded live sessions')
     expect(instruction).toContain('wait and recheck')
     expect(instruction).toContain('guide drift, missing evidence')

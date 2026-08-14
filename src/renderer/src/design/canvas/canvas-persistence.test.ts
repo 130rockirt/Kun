@@ -3,8 +3,10 @@ import {
   MAX_CANVAS_CHILDREN_PER_SHAPE,
   MAX_CANVAS_DOCUMENT_OBJECTS,
   MAX_CANVAS_GRAPH_DEPTH,
+  cancelPendingCanvasDocument,
   canvasDocumentKey,
   canvasDocPath,
+  clearCanvasDocumentPersistenceForTests,
   flushPendingCanvasDocuments,
   parseCanvasDocument,
   persistCanvasDocument,
@@ -53,6 +55,27 @@ describe('canvas-persistence round-trip', () => {
       height: 240
     })
     expect(parsed?.objects[frame.id]?.htmlArtifactId).toBeUndefined()
+  })
+
+  it('preserves PPT review and visual-direction identities across reload', () => {
+    const doc = createEmptyDocument()
+    const review = createDefaultShape('frame', 0, 0)
+    review.pptReviewRef = {
+      workflowId: 'workflow-a', childId: 'child-a', slideId: 'slide-1', revision: 2,
+      parentThreadId: 'thread-a', role: 'slide-frame'
+    }
+    const direction = createDefaultShape('image', 20, 20)
+    direction.pptDirectionRef = {
+      workflowId: 'workflow-a', childId: 'child-a', directionId: 'direction-b', revision: 3,
+      parentThreadId: 'thread-a', role: 'preview-image'
+    }
+    doc.objects[review.id] = { ...review, parentId: doc.rootId }
+    doc.objects[direction.id] = { ...direction, parentId: doc.rootId }
+    doc.objects[doc.rootId] = { ...doc.objects[doc.rootId], children: [review.id, direction.id] }
+
+    const parsed = parseCanvasDocument(serializeCanvasDocument(doc))!
+    expect(parsed.objects[review.id].pptReviewRef).toEqual(review.pptReviewRef)
+    expect(parsed.objects[direction.id].pptDirectionRef).toEqual(direction.pptDirectionRef)
   })
 
   it('does not invent htmlArtifactId for plain frames', () => {
@@ -181,6 +204,8 @@ describe('canvas-persistence round-trip', () => {
         ]
       }
     ]
+    doc.rendererReplayKeys = ['thread\0turn\0document\0assistant:0']
+    doc.rendererReplayWatermarkTurnId = 'turn_materialized'
     doc.codeBindings = [
       {
         id: 'binding_1',
@@ -209,6 +234,8 @@ describe('canvas-persistence round-trip', () => {
       status: 'applied',
       affectedIds: [rect.id]
     })
+    expect(reloaded?.rendererReplayKeys).toEqual(['thread\0turn\0document\0assistant:0'])
+    expect(reloaded?.rendererReplayWatermarkTurnId).toBe('turn_materialized')
     expect(reloaded?.codeBindings?.[0]).toMatchObject({
       id: 'binding_1',
       designObjectId: rect.id,
@@ -339,6 +366,7 @@ describe('canvas-persistence round-trip', () => {
 
 describe('persistCanvasDocument debounce', () => {
   afterEach(() => {
+    clearCanvasDocumentPersistenceForTests()
     vi.useRealTimers()
     vi.unstubAllGlobals()
   })
@@ -416,5 +444,32 @@ describe('persistCanvasDocument debounce', () => {
       workspaceRoot: '/workspace',
       content: serializeCanvasDocument(latestDoc)
     })
+  })
+
+  it('retires a deleted canvas so a queued or later stale save cannot recreate it', async () => {
+    vi.useFakeTimers()
+    let finishWrite: ((value: { ok: true }) => void) | undefined
+    const writeWorkspaceFile = vi.fn(() => new Promise<{ ok: true }>((resolve) => {
+      finishWrite = resolve
+    }))
+    vi.stubGlobal('window', { kunGui: { writeWorkspaceFile } })
+
+    persistCanvasDocument('/workspace', 'deleted-board', createEmptyDocument(), '.kun-whiteboards')
+    vi.advanceTimersByTime(600)
+    expect(writeWorkspaceFile).toHaveBeenCalledOnce()
+
+    let cancelled = false
+    const cancel = cancelPendingCanvasDocument('/workspace', 'deleted-board', '.kun-whiteboards')
+      .then(() => { cancelled = true })
+    await Promise.resolve()
+    expect(cancelled).toBe(false)
+
+    finishWrite?.({ ok: true })
+    await cancel
+
+    // A late store subscription for the unmounted board must be a no-op too.
+    persistCanvasDocument('/workspace', 'deleted-board', createEmptyDocument(), '.kun-whiteboards')
+    vi.advanceTimersByTime(600)
+    expect(writeWorkspaceFile).toHaveBeenCalledOnce()
   })
 })

@@ -14,6 +14,7 @@ import {
 } from '../../../kun/src/config/kun-config.js'
 import {
   RuntimeConfigApplyRequest,
+  type BrowserUseHostBinding,
   type RuntimeConfigApplyRequest as RuntimeConfigApplyPayload
 } from '../../../kun/src/contracts/runtime-config.js'
 import { HooksConfigSchema } from '../../../kun/src/hooks/hook-config.js'
@@ -41,6 +42,7 @@ import {
   resolveModelProviderProxyUrl,
   type AppSettingsV1,
   type KunLabSettingsV1,
+  type ModelReasoningEffort,
   type KunRuntimeSettingsV1
 } from '../../shared/app-settings'
 import { resolveCodexOAuthApiKey } from '../codex-auth'
@@ -235,25 +237,35 @@ export async function syncGuiManagedKunConfig(
 }
 
 function labConfigForRuntime(lab: KunLabSettingsV1 | undefined): KunConfig['lab'] {
-  const agent = lab?.exploreAgent
-  if (!agent) return { exploreAgent: { enabled: true, fast: false } }
+  return {
+    fastContext: labAgentConfigForRuntime(lab?.fastContext),
+    pptAgent: {
+      ...labAgentConfigForRuntime(lab?.pptAgent),
+      imageFirst: lab?.pptAgent?.imageFirst !== false
+    }
+  }
+}
+
+/** Shared Lab agent runtime config (fastContext / pptAgent). */
+function labAgentConfigForRuntime(
+  agent: { enabled: boolean; model: string; providerId: string; reasoningEffort?: string; fast: boolean } | undefined
+): { enabled: boolean; fast: boolean; model?: string; providerId?: string; reasoningEffort?: ModelReasoningEffort } {
+  if (!agent) return { enabled: true, fast: false }
   const model = agent.model?.trim()
   const providerId = agent.providerId?.trim()
   return {
-    exploreAgent: {
-      enabled: agent.enabled !== false,
-      ...(model && providerId
-        ? {
-            model,
-            providerId,
-            ...(typeof agent.reasoningEffort === 'string' &&
-            MODEL_REASONING_EFFORTS.includes(agent.reasoningEffort)
-              ? { reasoningEffort: agent.reasoningEffort }
-              : {})
-          }
-        : {}),
-      fast: agent.fast === true
-    }
+    enabled: agent.enabled !== false,
+    ...(model && providerId
+      ? {
+          model,
+          providerId,
+          ...(typeof agent.reasoningEffort === 'string' &&
+          MODEL_REASONING_EFFORTS.includes(agent.reasoningEffort as ModelReasoningEffort)
+            ? { reasoningEffort: agent.reasoningEffort as ModelReasoningEffort }
+            : {})
+        }
+      : {}),
+    fast: agent.fast === true
   }
 }
 
@@ -283,7 +295,8 @@ type KunRuntimeConfigSettings = Pick<KunRuntimeSettingsV1,
 /** Pure request projection for the serve runtime's hot-config endpoint. */
 export function buildManagedRuntimeHotApplyBody(
   settings: AppSettingsV1,
-  config: KunConfig
+  config: KunConfig,
+  browserUseHostBinding?: BrowserUseHostBinding | null
 ): RuntimeConfigApplyPayload {
   const runtime = resolveKunRuntimeSettings(settings)
   const serve = config.serve ?? {}
@@ -299,6 +312,7 @@ export function buildManagedRuntimeHotApplyBody(
   const defaultClientApiKey = resolveCodexOAuthApiKey(runtime.apiKey).apiKey
   return RuntimeConfigApplyRequest.parse({
     ...config,
+    ...(browserUseHostBinding !== undefined ? { browserUseHostBinding } : {}),
     serve: {
       ...hotServe,
       apiKey: defaultClientApiKey || runtime.apiKey,

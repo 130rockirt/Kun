@@ -20,8 +20,10 @@ import type {
 } from '../ports/tool-host.js'
 import type {
   ActingTurnModelRoute,
+  SubagentResumeRequest,
   TurnClientSurface
 } from '../contracts/turns.js'
+import type { KnowledgeBaseMount } from '../contracts/threads.js'
 
 /** Terminal status exposed by the public AgentLoop turn boundary. */
 export type TurnExecutionStatus = 'completed' | 'failed' | 'aborted'
@@ -68,8 +70,10 @@ export type PreparedTurnContext = Readonly<{
   turnId: string
   workspace: string
   orchestration: 'direct' | 'graph'
-  messageSource?: 'background_shell' | 'background_subagent' | 'graph_runtime'
+  messageSource?: 'background_shell' | 'background_subagent' | 'graph_runtime' | 'subagent_resume' | 'design_continuation'
+  subagentResume?: SubagentResumeRequest
   additionalWorkspaces?: readonly string[]
+  knowledgeBases?: readonly KnowledgeBaseMount[]
   clientSurface: TurnClientSurface
   model: string
   actingModelRoute?: ActingTurnModelRoute
@@ -109,8 +113,10 @@ export type ToolTurnContextInput = {
   workspace: string
   workspaceCheckpointRequestId?: string
   orchestration?: 'direct' | 'graph'
-  messageSource?: 'background_shell' | 'background_subagent' | 'graph_runtime'
+  messageSource?: 'background_shell' | 'background_subagent' | 'graph_runtime' | 'subagent_resume' | 'design_continuation'
+  subagentResume?: SubagentResumeRequest
   additionalWorkspaces?: readonly string[]
+  knowledgeBases?: readonly KnowledgeBaseMount[]
   clientSurface: TurnClientSurface
   threadMode?: 'agent' | 'plan'
   activePlanContext?: GuiPlanContext

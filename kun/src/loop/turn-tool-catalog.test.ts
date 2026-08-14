@@ -49,12 +49,12 @@ describe('TurnToolCatalogFreezer', () => {
     const activated = freezer.resolve(
       'thread-1',
       'turn-1',
-      [tool('load_skill'), tool('ppt_master_create')],
-      'skills:ppt-master'
+      [tool('load_skill'), tool('example_skill_run')],
+      'skills:example-skill'
     )
 
     expect(activated.pendingDrift.kind).toBe('none')
-    expect(activated.tools.map((entry) => entry.name)).toEqual(['load_skill', 'ppt_master_create'])
+    expect(activated.tools.map((entry) => entry.name)).toEqual(['load_skill', 'example_skill_run'])
   })
 })
 

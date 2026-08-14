@@ -1,5 +1,6 @@
 import type { ThreadService } from '../../services/thread-service.js'
 import type { TurnService } from '../../services/turn-service.js'
+import type { ThreadStore } from '../../ports/thread-store.js'
 import type { TurnRunOutcome } from '../../loop/turn-execution-types.js'
 import type { UsageService } from '../../services/usage-service.js'
 import type { ReviewService } from '../../services/review-service.js'
@@ -10,6 +11,7 @@ import type { UserInputGate } from '../../ports/user-input-gate.js'
 import type { WorkspaceInspector } from '../../ports/workspace-inspector.js'
 import type { ToolHost, ToolProviderPolicy } from '../../ports/tool-host.js'
 import type { RuntimeEventRecorder } from '../../services/runtime-event-recorder.js'
+import type { CanvasReceiptRegistry } from '../../services/canvas-receipt-registry.js'
 import type { LlmDebugRecorder } from '../../services/llm-debug-recorder.js'
 import type { RuntimeInfoResponse } from '../../contracts/runtime-info.js'
 import type {
@@ -95,6 +97,7 @@ import type { ModelConnectionOAuthService } from '../../services/model-connectio
 import type { OfficialProviderAuthService } from '../../services/official-provider-cli.js'
 import type { ProviderQuotaService } from '../../services/provider-quota-service.js'
 import type { ToolCancellationService } from '../../services/tool-cancellation-service.js'
+import type { KnowledgeBaseService } from '../../knowledge/knowledge-base-service.js'
 
 export type RuntimeToolDiagnostics = {
   providers: ToolProviderPolicy[]
@@ -173,6 +176,8 @@ export type ServerRuntime = {
   eventStreamRegistry?: ThreadEventStreamRegistry
   /** Optional troubleshooting buffer of the most recent LLM rounds (in-memory). */
   llmDebug?: LlmDebugRecorder
+  /** Two-phase design canvas tool receipts (renderer application confirmation). */
+  canvasReceipts?: CanvasReceiptRegistry
   /**
    * Cheap non-sensitive live counters for stall/heartbeat diagnostics.
    * Must never touch the filesystem or await persistence.
@@ -184,6 +189,7 @@ export type ServerRuntime = {
   toolHost?: ToolHost
   attachmentStore?: AttachmentStore
   memoryStore?: MemoryStore
+  knowledgeBaseService?: KnowledgeBaseService
   migrationService?: RuntimeMigrationService
   migrationImportService?: RuntimeMigrationImportService
   /**
@@ -223,6 +229,7 @@ export type ServerRuntime = {
   modelGateway?: {
     enabled(): boolean
     pools(): ModelRoutePoolConfig[]
+    configuredPools(): ModelRoutePoolConfig[]
     health: RoutePoolHealthStore
     tests: RoutePoolTestService
   }
@@ -245,6 +252,17 @@ export type ServerRuntime = {
    * of goals resumed. Optional so embedders without the agent loop can omit it.
    */
   resumeInterruptedGoals?(threadIds: readonly string[]): Promise<number>
+  /**
+   * Relaunch continuation turns for ordinary threads (no active goal) whose
+   * in-flight turn was just reconciled to `failed` after a runtime restart.
+   * Optional so embedders without the agent loop can omit it.
+   */
+  resumeInterruptedTurns?(threadIds: readonly string[]): Promise<number>
+  /**
+   * Canonical thread store, exposed for maintenance sweeps (e.g. the
+   * memory-pressure monitor compacting idle thread histories).
+   */
+  threadStore?: ThreadStore
   runReview?(input: {
     threadId: string
     turnId: string
@@ -253,6 +271,7 @@ export type ServerRuntime = {
     model?: string
     providerId?: string
     accountId?: string
+    reasoningEffort?: 'auto' | 'off' | 'low' | 'medium' | 'high' | 'max'
   }): Promise<'completed' | 'failed' | 'aborted'> | void
   runtimeToken: string
   insecure: boolean
@@ -263,6 +282,8 @@ export type ServerRuntime = {
   managerProtocolVersion?: number
   activeTurnCount?(): number
   requestShutdown?(instanceId: string): Promise<boolean>
+  /** Starts non-critical historical scans only after the HTTP server is live. */
+  startBackgroundMaintenance?(): void
   /** Forward active-turn controls to the flavor that currently owns the lease. */
   forwardThreadControl?(request: Request, threadId: string): Promise<Response | null>
   forwardControlById?(

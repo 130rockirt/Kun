@@ -158,6 +158,21 @@ describe('applySvgArtifactToolBlock', () => {
     expect(onRequest).toHaveBeenCalledTimes(1)
   })
 
+  it('reports same-instance in-flight work without treating it as completed', async () => {
+    const processingBlockIds = new Set([toolBlock.id])
+    await expect(applySvgArtifactToolBlock({
+      block: toolBlock,
+      allowLegacy: false,
+      busy: false,
+      blocks: blocks(),
+      artifacts: [],
+      appliedBlockIds: new Set(),
+      processingBlockIds,
+      onDefer: vi.fn(),
+      onRequest: vi.fn()
+    })).resolves.toEqual({ status: 'processing', shapeIds: [] })
+  })
+
   it('does not mark a failed follow-up applied and permits a later retry', async () => {
     const onRequest = vi.fn()
       .mockResolvedValueOnce(null)
@@ -174,11 +189,34 @@ describe('applySvgArtifactToolBlock', () => {
       onRequest
     })
 
-    await expect(applySvgArtifactToolBlock(makeOptions())).resolves.toEqual({ status: 'ignored', shapeIds: [] })
+    await expect(applySvgArtifactToolBlock(makeOptions())).resolves.toEqual({ status: 'failed', shapeIds: [] })
     await expect(applySvgArtifactToolBlock(makeOptions())).resolves.toEqual({
       status: 'applied',
       shapeIds: ['shape-retry']
     })
     expect(onRequest).toHaveBeenCalledTimes(2)
+  })
+
+  it('turns a rejected follow-up into a retryable failure', async () => {
+    const onRequest = vi.fn().mockRejectedValueOnce(new Error('thread switched'))
+      .mockResolvedValueOnce({ artifactId, shapeId: 'shape-after-remount' })
+    const makeOptions = () => ({
+      block: toolBlock,
+      allowLegacy: false,
+      busy: false,
+      blocks: blocks(),
+      artifacts: [] as DesignArtifact[],
+      appliedBlockIds: new Set<string>(),
+      processingBlockIds: new Set<string>(),
+      onDefer: vi.fn(),
+      onRequest
+    })
+
+    await expect(applySvgArtifactToolBlock(makeOptions())).resolves.toEqual({
+      status: 'failed', shapeIds: []
+    })
+    await expect(applySvgArtifactToolBlock(makeOptions())).resolves.toEqual({
+      status: 'applied', shapeIds: ['shape-after-remount']
+    })
   })
 })

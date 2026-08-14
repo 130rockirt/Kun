@@ -14,7 +14,6 @@ import type { DesignHtmlElementContext } from '../../../design/design-composer-c
 import { useDesignWorkspaceStore } from '../../../design/design-workspace-store'
 import type { DesignRuntimeQualityPayload } from '../../../design/design-html-quality'
 import { CanvasWorkspaceContext } from '../../../design/canvas/canvas-workspace-context'
-import { exportCanvasFromSvg, type CanvasExportFormat } from '../../../design/canvas/canvas-export'
 import {
   handleCanvasKeyDown,
   handleCanvasKeyUp,
@@ -25,8 +24,6 @@ import { hasPrototypePlayback, resolvePreferredPrototypeArtifactId } from '../..
 import { ShapeDispatcher } from './shapes/ShapeDispatcher'
 import { CanvasGrid } from './CanvasGrid'
 import { CanvasToolbar } from './CanvasToolbar'
-import { CanvasZoomBar } from './CanvasZoomBar'
-import { CanvasMinimap } from './CanvasMinimap'
 import { MotionSelectionOverlay } from './SelectionOverlay'
 import { PrototypePlayerOverlay } from './PrototypePlayerOverlay'
 import { AlignmentToolbar } from './AlignmentToolbar'
@@ -37,11 +34,11 @@ import {
   selectHtmlFramesForOverlay
 } from './HtmlFrameOverlay'
 import { htmlFrameOverlayCanMountAtZoom } from './html-frame/html-frame-helpers'
-import { SidebarTitlebarToggleButton } from '../../sidebar/SidebarPrimitives'
 import {
   canvasViewportStorageKey,
   createCanvasTool,
   shouldHandleCanvasKeyboardEvent,
+  shouldHandleCanvasKeyboardRelease,
   shouldOpenImageAnnotation,
   shouldRenderCanvasMinimap,
   shouldRenderDesignArtifactOverlays,
@@ -59,15 +56,25 @@ import { SvgFrameOverlay } from './SvgFrameOverlay'
 import type { CanvasDocument } from '../../../design/canvas/canvas-types'
 import { resolveOwningMotionFrameId } from '../../../design/motion'
 import { useCanvasMotionStore } from '../../../design/motion/canvas-motion-store'
+import type { CanvasSurface } from '../../../design/canvas/canvas-surface'
+import {
+  canvasSurfacePersistsDesignSystem,
+  isDesignCanvasSurface,
+  isDiagramCanvasSurface
+} from '../../../design/canvas/canvas-surface'
 import {
   projectCanvasMotionObjects,
   useCanvasMotionPreview
 } from '../../../design/motion/canvas-motion-preview'
 import { CanvasMotionDock } from './CanvasMotionDock'
+import { PrototypeFlowOverlay } from './PrototypeFlowOverlay'
+import { useCanvasViewportExports } from './canvas-viewport/canvas-viewport-export'
+import { CanvasViewportChrome } from './canvas-viewport/CanvasViewportChrome'
 
 export {
   resolveCanvasDesignSystemBaseDir,
   shouldHandleCanvasKeyboardEvent,
+  shouldHandleCanvasKeyboardRelease,
   shouldOpenImageAnnotation,
   resolveSelectedImageAnnotationAction,
   shouldRenderCanvasMinimap,
@@ -87,7 +94,8 @@ type Props = {
   baseDir?: string
   /** Optional design-system directory. Defaults to baseDir; Code canvases use a per-thread dir. */
   designSystemBaseDir?: string
-  surface?: 'design' | 'code'
+  surface?: CanvasSurface
+  readOnly?: boolean
   leftSidebarCollapsed?: boolean
   onToggleLeftSidebar?: () => void
   busy?: boolean
@@ -97,10 +105,14 @@ type Props = {
   onUseElementAsContext?: (context: DesignHtmlElementContext | null, promptSeed?: string) => void
   onRuntimeQualityFindings?: (payload: DesignRuntimeQualityPayload) => void
   onRequestQualityRepair?: (payload: DesignRuntimeQualityPayload) => void
+  onRequestAssistant?: () => void
+  /** Reports whether the current canvas document loaded safely for guarded actions. */
+  onDocumentLoadStateChange?: (loaded: boolean) => void
+  onError?: (message: string | null) => void
 }
 
-export function canvasViewportBackgroundFillClass(surface: 'design' | 'code'): string {
-  return surface === 'design' ? 'ds-stage-design-canvas-fill' : ''
+export function canvasViewportBackgroundFillClass(surface: CanvasSurface): string {
+  return isDesignCanvasSurface(surface) ? 'ds-stage-design-canvas-fill' : ''
 }
 
 export function shouldShowCanvasDocumentLoading(document: CanvasDocument): boolean {
@@ -113,6 +125,7 @@ export function CanvasViewport({
   baseDir,
   designSystemBaseDir,
   surface = 'design',
+  readOnly = false,
   leftSidebarCollapsed,
   onToggleLeftSidebar,
   busy = false,
@@ -120,7 +133,10 @@ export function CanvasViewport({
   syncHtmlScreens = false,
   onUseElementAsContext,
   onRuntimeQualityFindings,
-  onRequestQualityRepair
+  onRequestQualityRepair,
+  onRequestAssistant,
+  onDocumentLoadStateChange,
+  onError
 }: Props) {
   const { t } = useTranslation('common')
   const rootRef = useRef<HTMLDivElement>(null)
@@ -157,10 +173,10 @@ export function CanvasViewport({
   // viewport subscribe to the 60-Hz playhead just to position that button.
   const motionTimeMs = useCanvasMotionStore((s) => s.playing ? null : s.currentTimeMs)
   const motionGestureOverrides = useCanvasMotionStore((s) => s.gestureOverrides)
-  const designMotionOpen = surface === 'design' && motionOpen
+  const designMotionOpen = isDesignCanvasSurface(surface) && motionOpen
   const designMotionPlaying = designMotionOpen && motionPlaying
   const motionPreviewRefreshKey = `${[...selectedIds].sort().join(',')}:${vbox.x}:${vbox.y}:${vbox.width}:${vbox.height}:${designMotionOpen}`
-  useCanvasMotionPreview(rootRef, document, zoom, surface === 'design', motionPreviewRefreshKey)
+  useCanvasMotionPreview(rootRef, document, zoom, isDesignCanvasSurface(surface), motionPreviewRefreshKey)
 
   useEffect(() => {
     if (!designMotionOpen) return
@@ -223,9 +239,12 @@ export function CanvasViewport({
   const minimapEnabled = shouldRenderCanvasMinimap(surface)
   const htmlFrameSyncEnabled = shouldSyncCanvasHtmlFrames(surface, syncHtmlScreens)
   const resolvedDesignSystemBaseDir = resolveCanvasDesignSystemBaseDir(baseDir, designSystemBaseDir)
-  useProjectDesignSystemSync(workspaceRoot, surface === 'design')
+  useProjectDesignSystemSync(workspaceRoot, isDesignCanvasSurface(surface))
   const uiScale = useCanvasUiScale()
-  const tool = useMemo(() => createCanvasTool(activeTool, surface), [activeTool, surface])
+  const tool = useMemo(
+    () => createCanvasTool(activeTool, surface, { onRequestAssistant }),
+    [activeTool, onRequestAssistant, surface]
+  )
   const middlePanTool = useMemo(() => createHandTool(), [])
   const workspaceValue = useMemo(() => ({ workspaceRoot }), [workspaceRoot])
   const viewportStorageKey = useMemo(
@@ -246,7 +265,10 @@ export function CanvasViewport({
     htmlFrameSyncEnabled,
     designArtifacts,
     designTarget,
-    designSystemPersistenceEnabled: surface === 'code'
+    designSystemPersistenceEnabled: canvasSurfacePersistsDesignSystem(surface),
+    persistenceEnabled: !readOnly,
+    onDocumentLoadStateChange,
+    onError
   })
   const selectedHtmlArtifactId = useMemo(() => {
     for (const id of selectedIds) {
@@ -263,6 +285,13 @@ export function CanvasViewport({
     () => resolvePreferredPrototypeArtifactId(designArtifacts, selectedHtmlArtifactId, activeArtifactId),
     [activeArtifactId, designArtifacts, selectedHtmlArtifactId]
   )
+  const { exportCanvas, exportPrototype } = useCanvasViewportExports({
+    svgRef,
+    containerRef,
+    workspaceRoot,
+    designArtifacts,
+    initialPrototypeArtifactId
+  })
   const annotationDocument = useMemo(() => {
     if (!designMotionOpen || !motionFrameId || motionTimeMs === null) return document
     return {
@@ -306,7 +335,7 @@ export function CanvasViewport({
   }, [setContainerSize])
 
   useEffect(() => {
-    if (surface === 'code' && activeTool === 'screen') {
+    if (isDiagramCanvasSurface(surface) && activeTool === 'screen') {
       setActiveTool('select')
     }
   }, [activeTool, setActiveTool, surface])
@@ -348,13 +377,13 @@ export function CanvasViewport({
     (e: React.PointerEvent) => {
       if (e.button !== 0 && e.button !== 1) return
       e.preventDefault()
-      if (surface === 'code') rootRef.current?.focus({ preventScroll: true })
+      rootRef.current?.focus({ preventScroll: true })
       e.currentTarget.setPointerCapture(e.pointerId)
       const pointerTool = e.button === 1 ? middlePanTool : tool
       activePointerToolRef.current = pointerTool
       pointerTool.onPointerDown(makePointerEvent(e))
     },
-    [middlePanTool, tool, makePointerEvent, surface]
+    [middlePanTool, tool, makePointerEvent]
   )
 
   const onPointerMove = useCallback(
@@ -394,7 +423,7 @@ export function CanvasViewport({
       const canvas = screenToCanvas(e.clientX, e.clientY)
       const doc = useCanvasShapeStore.getState().document
       const motion = useCanvasMotionStore.getState()
-      const interactionDocument = surface === 'design' && motion.open && motion.activeFrameId
+      const interactionDocument = isDesignCanvasSurface(surface) && motion.open && motion.activeFrameId
         ? {
             ...doc,
             objects: projectCanvasMotionObjects(
@@ -455,15 +484,23 @@ export function CanvasViewport({
   }, [])
 
   useEffect(() => {
-    setCanvasPasteWorkspaceRoot(workspaceRoot || null)
+    setCanvasPasteWorkspaceRoot(readOnly ? null : workspaceRoot || null)
     const onKeyDown = (e: KeyboardEvent): void => {
-      if (designMotionPlaying) return
+      if (designMotionPlaying || readOnly) return
       if (!shouldHandleCanvasKeyboardEvent(surface, e.target, rootRef.current)) return
-      handleCanvasKeyDown(e)
+      handleCanvasKeyDown(e, {
+        workspaceRoot,
+        documentKey: useCanvasShapeStore.getState().documentKey
+      })
     }
     const onKeyUp = (e: KeyboardEvent): void => {
-      if (designMotionPlaying) return
-      if (!shouldHandleCanvasKeyboardEvent(surface, e.target, rootRef.current)) return
+      // Always release the temporary Hand even if focus moved off-canvas.
+      if (e.key === ' ') {
+        handleCanvasKeyUp(e)
+        return
+      }
+      if (designMotionPlaying || readOnly) return
+      if (!shouldHandleCanvasKeyboardRelease(e.key, surface, e.target, rootRef.current)) return
       handleCanvasKeyUp(e)
     }
     window.addEventListener('keydown', onKeyDown)
@@ -473,32 +510,16 @@ export function CanvasViewport({
       window.removeEventListener('keydown', onKeyDown)
       window.removeEventListener('keyup', onKeyUp)
     }
-  }, [designMotionPlaying, surface, workspaceRoot])
+  }, [designMotionPlaying, readOnly, surface, workspaceRoot])
 
   const viewBoxStr = `${vbox.x} ${vbox.y} ${vbox.width} ${vbox.height}`
   const cursor = activeTool === 'hand' ? 'grab' : tool.cursor
   const root = document.objects[document.rootId]
-  const exportCanvas = useCallback(async (format: CanvasExportFormat): Promise<void> => {
-    const sourceSvg = svgRef.current
-    if (!sourceSvg) throw new Error(t('canvasExportUnavailable'))
-    const backgroundColor = containerRef.current
-      ? getComputedStyle(containerRef.current).backgroundColor
-      : '#ffffff'
-    await exportCanvasFromSvg({
-      sourceSvg,
-      document: useCanvasShapeStore.getState().document,
-      format,
-      workspaceRoot,
-      filename: 'kun-whiteboard',
-      backgroundColor
-    })
-  }, [t, workspaceRoot])
-
   return (
     <CanvasWorkspaceContext.Provider value={workspaceValue}>
       <div
         ref={rootRef}
-        tabIndex={surface === 'code' ? -1 : undefined}
+        tabIndex={-1}
         className={`ds-no-drag relative h-full w-full overflow-hidden bg-[#f8fafc] text-[#1e1e1e] outline-none dark:bg-[#111318] dark:text-[#e9ecef] ${canvasViewportBackgroundFillClass(surface)}`}
         style={{
           '--canvas-motion-dock-height': '264px',
@@ -507,57 +528,35 @@ export function CanvasViewport({
             : '16px'
         } as React.CSSProperties}
       >
-        <div className="pointer-events-none absolute left-3 top-3 z-40 flex min-w-0 items-start">
-          <div
-            className={`pointer-events-auto flex min-w-0 items-center gap-2 ${
-              leftSidebarCollapsed ? 'ds-window-controls-safe-inset' : ''
-            }`}
-          >
-            {onToggleLeftSidebar ? (
-              <SidebarTitlebarToggleButton
-                onClick={onToggleLeftSidebar}
-                title={leftSidebarCollapsed ? t('sidebarExpand') : t('sidebarCollapse')}
-                ariaLabel={leftSidebarCollapsed ? t('sidebarExpand') : t('sidebarCollapse')}
-              />
-            ) : null}
-          </div>
-        </div>
-        <div
-          className="pointer-events-none absolute right-3 top-1/2 z-40 -translate-y-1/2"
-          style={{ transform: `translateY(-50%) scale(${uiScale})`, transformOrigin: 'right center' }}
+        <CanvasViewportChrome
+          leftSidebarCollapsed={leftSidebarCollapsed}
+          onToggleLeftSidebar={onToggleLeftSidebar}
+          sidebarExpandLabel={t('sidebarExpand')}
+          sidebarCollapseLabel={t('sidebarCollapse')}
+          minimapEnabled={minimapEnabled}
+          uiScale={uiScale}
         >
-          <CanvasToolbar
-            workspaceRoot={workspaceRoot}
-            surface={surface}
-            designTargetDisabled={busy || Boolean(pagesRun)}
-            prototypePlayable={prototypePlayable}
-            onOpenPrototypePlayer={() => {
-              useCanvasMotionStore.getState().setPlaying(false)
-              setPrototypePlayerOpen(true)
-            }}
-            onOpenAgentSettings={onOpenAgentSettings}
-            onRequestCanvasCritique={requestCanvasCritique}
-            onExportCanvas={surface === 'code' ? exportCanvas : undefined}
-          />
-        </div>
-        <div
-          className="pointer-events-none absolute right-4 z-40 hidden lg:block"
-          style={{ bottom: 'var(--canvas-bottom-ui-inset)', transform: `scale(${uiScale})`, transformOrigin: 'bottom right' }}
-        >
-          <div className="pointer-events-auto">
-            <CanvasZoomBar />
-          </div>
-        </div>
-        {minimapEnabled ? (
           <div
-            className="pointer-events-none absolute left-4 z-40 hidden md:block"
-            style={{ bottom: 'var(--canvas-bottom-ui-inset)', transform: `scale(${uiScale})`, transformOrigin: 'bottom left' }}
+            className="pointer-events-none absolute right-3 top-1/2 z-40 -translate-y-1/2"
+            style={{ transform: `translateY(-50%) scale(${uiScale})`, transformOrigin: 'right center' }}
           >
-            <div className="pointer-events-auto">
-              <CanvasMinimap />
-            </div>
+            {!readOnly ? <CanvasToolbar
+              workspaceRoot={workspaceRoot}
+              surface={surface}
+              designTargetDisabled={busy || Boolean(pagesRun)}
+              prototypePlayable={prototypePlayable}
+              onOpenPrototypePlayer={() => {
+                useCanvasMotionStore.getState().setPlaying(false)
+                setPrototypePlayerOpen(true)
+              }}
+              onOpenAgentSettings={onOpenAgentSettings}
+              onRequestCanvasCritique={requestCanvasCritique}
+              onExportCanvas={exportCanvas}
+              onExportPrototype={isDesignCanvasSurface(surface) ? exportPrototype : undefined}
+              onError={onError}
+            /> : null}
           </div>
-        ) : null}
+        </CanvasViewportChrome>
         <div
           ref={containerRef}
           className={`absolute inset-0 overflow-hidden bg-[#f8fafc] dark:bg-[#111318] ${canvasViewportBackgroundFillClass(surface)}`}
@@ -567,8 +566,10 @@ export function CanvasViewport({
               : 0
           }}
         >
-          {surface === 'design' ? <DesignSystemInspector workspaceRoot={workspaceRoot} /> : null}
-          <AlignmentToolbar />
+          {isDesignCanvasSurface(surface) && !readOnly
+            ? <DesignSystemInspector workspaceRoot={workspaceRoot} />
+            : null}
+          {!readOnly ? <AlignmentToolbar /> : null}
           {shouldShowCanvasDocumentLoading(document) ? (
             <div className="absolute inset-0 flex items-center justify-center text-sm text-ds-faint">
               {t('designCanvasLoading')}
@@ -582,17 +583,22 @@ export function CanvasViewport({
               viewBox={viewBoxStr}
               xmlns="http://www.w3.org/2000/svg"
               style={{ cursor }}
-              onPointerDown={designMotionPlaying ? undefined : onPointerDown}
-              onPointerMove={designMotionPlaying ? undefined : onPointerMove}
-              onPointerUp={designMotionPlaying ? undefined : onPointerUp}
-              onPointerCancel={designMotionPlaying ? undefined : onPointerCancel}
-              onDoubleClick={designMotionPlaying ? undefined : onDoubleClick}
+              onPointerDown={designMotionPlaying || readOnly ? undefined : onPointerDown}
+              onPointerMove={designMotionPlaying || readOnly ? undefined : onPointerMove}
+              onPointerUp={designMotionPlaying || readOnly ? undefined : onPointerUp}
+              onPointerCancel={designMotionPlaying || readOnly ? undefined : onPointerCancel}
+              onDoubleClick={designMotionPlaying || readOnly ? undefined : onDoubleClick}
               onWheel={onWheel}
             >
               {gridVisible && <CanvasGrid zoom={zoom} />}
 
-              {surface === 'design' ? (
-                <DesignSystemBoardOverlay workspaceRoot={workspaceRoot} document={document} viewBox={vbox} />
+              {isDesignCanvasSurface(surface) ? (
+                <DesignSystemBoardOverlay
+                  workspaceRoot={workspaceRoot}
+                  documentKey={documentKey}
+                  document={document}
+                  viewBox={vbox}
+                />
               ) : null}
 
               <g id="shape-layer">
@@ -607,6 +613,13 @@ export function CanvasViewport({
                     />
                   )
                 })}
+                {surface === 'design' ? (
+                  <PrototypeFlowOverlay
+                    artifacts={designArtifacts}
+                    objects={document.objects}
+                    zoom={zoom}
+                  />
+                ) : null}
               </g>
 
               {!designMotionPlaying ? (
@@ -627,7 +640,7 @@ export function CanvasViewport({
               ) : null}
             </svg>
           )}
-          {selectedImageAnnotationAction ? (
+          {!readOnly && selectedImageAnnotationAction ? (
             <button
               type="button"
               className="ds-no-drag absolute z-30 flex items-center justify-center gap-1.5 rounded-full border border-accent/20 bg-white/95 px-3 text-[12px] font-medium text-accent shadow-[0_8px_24px_rgba(15,23,42,0.14)] backdrop-blur transition hover:bg-accent-soft hover:shadow-[0_10px_28px_rgba(15,23,42,0.18)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 dark:bg-[#1f2430]/95"
@@ -654,6 +667,7 @@ export function CanvasViewport({
             <>
               <HtmlFrameOverlay
                 workspaceRoot={workspaceRoot}
+                readOnly={readOnly}
                 interactiveId={interactiveHtmlFrameId}
                 editingId={editingHtmlFrameId}
                 onToggleInteractive={toggleHtmlFrameInteractive}
@@ -666,7 +680,7 @@ export function CanvasViewport({
             </>
           ) : null}
         </div>
-        {surface === 'design' ? <CanvasMotionDock /> : null}
+        {isDesignCanvasSurface(surface) && !readOnly ? <CanvasMotionDock /> : null}
         {designArtifactOverlaysEnabled ? (
           <PrototypePlayerOverlay
             open={prototypePlayerOpen}
@@ -675,7 +689,7 @@ export function CanvasViewport({
             initialArtifactId={initialPrototypeArtifactId}
             designTarget={designTarget}
             onClose={() => setPrototypePlayerOpen(false)}
-            onRequestMissingScreen={requestMissingPrototypeScreen}
+            onRequestMissingScreen={readOnly ? undefined : requestMissingPrototypeScreen}
           />
         ) : null}
       </div>

@@ -19,7 +19,10 @@ export type KunErrorCode =
   | 'forbidden'
   | 'not_found'
   | 'conflict'
+  | 'task_surface_locked'
+  | 'design_profile_locked'
   | 'rate_limited'
+  | 'thread_busy'
   | 'turn_in_progress'
   | 'turn_not_running'
   | 'approval_not_pending'
@@ -51,13 +54,25 @@ export type RuntimeError = {
   details?: unknown
 }
 
+/** Safe subset of a Kun execution lease exposed to clients on `thread_busy`. */
+export type ThreadBusyDetails = {
+  threadId: string
+  activeTurnId: string
+  ownerFlavor: 'production' | 'development'
+  acquiredAt: string
+  expiresAt: string
+}
+
 const KNOWN_KUN_CODES: ReadonlySet<KunErrorCode> = new Set<KunErrorCode>([
   'validation_error',
   'unauthorized',
   'forbidden',
   'not_found',
   'conflict',
+  'task_surface_locked',
+  'design_profile_locked',
   'rate_limited',
+  'thread_busy',
   'turn_in_progress',
   'turn_not_running',
   'approval_not_pending',
@@ -157,4 +172,47 @@ export function isKnownKunErrorCode(value: unknown): value is KunErrorCode {
 
 export function isLegacyMainGuardCode(value: unknown): value is LegacyMainGuardCode {
   return typeof value === 'string' && (KNOWN_LEGACY_CODES as Set<string>).has(value)
+}
+
+const DETERMINISTIC_REJECTION_CODES: ReadonlySet<KunErrorCode> = new Set<KunErrorCode>([
+  'validation_error',
+  'unauthorized',
+  'forbidden',
+  'not_found',
+  'conflict',
+  'task_surface_locked',
+  'design_profile_locked',
+  'attachment_validation_failed'
+])
+
+/**
+ * A deterministic rejection is a structured client error whose outcome is
+ * already known: retrying the identical request cannot change the result
+ * without first changing the request or the environment. Queue recovery must
+ * fail these exactly once instead of treating them as an unknown network
+ * outcome and re-driving them.
+ */
+export function isDeterministicKunRejection(code: unknown): boolean {
+  return typeof code === 'string' && (DETERMINISTIC_REJECTION_CODES as Set<string>).has(code)
+}
+
+export function parseThreadBusyDetails(value: unknown): ThreadBusyDetails | null {
+  if (!value || typeof value !== 'object') return null
+  const details = value as Record<string, unknown>
+  if (
+    typeof details.threadId !== 'string' || !details.threadId ||
+    typeof details.activeTurnId !== 'string' || !details.activeTurnId ||
+    (details.ownerFlavor !== 'production' && details.ownerFlavor !== 'development') ||
+    typeof details.acquiredAt !== 'string' || !details.acquiredAt ||
+    typeof details.expiresAt !== 'string' || !details.expiresAt
+  ) {
+    return null
+  }
+  return {
+    threadId: details.threadId,
+    activeTurnId: details.activeTurnId,
+    ownerFlavor: details.ownerFlavor,
+    acquiredAt: details.acquiredAt,
+    expiresAt: details.expiresAt
+  }
 }

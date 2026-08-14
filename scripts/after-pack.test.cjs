@@ -33,7 +33,9 @@ const {
     validatePackedApplicationPayload,
     TESSERACT_NODE_LSTM_ALIASES,
     TESSERACT_LSTM_CORE_FILES,
-    BETTER_SQLITE_BUILD_PATHS
+    BETTER_SQLITE_BUILD_PATHS,
+    KUN_ROOT_HOISTED_DEPENDENCY_PATHS,
+    KUN_ROOT_HOISTED_VERSION_ANCHORS
   }
 } = require('./after-pack.cjs')
 
@@ -172,6 +174,15 @@ test('removes only regenerable or on-demand payload from packaged applications',
   writeFixture(
     join(modules, '@tesseract.js-data', 'eng', '4.0.0_best_int', 'eng.traineddata.gz')
   )
+  for (const relativePath of KUN_ROOT_HOISTED_DEPENDENCY_PATHS) {
+    writeFixture(join(modules, relativePath, 'package-fixture'))
+    writeFixture(join(kunModules, relativePath, 'duplicate-fixture'))
+  }
+  for (const packageName of KUN_ROOT_HOISTED_VERSION_ANCHORS) {
+    const relativeManifest = join(...packageName.split('/'), 'package.json')
+    writeFixture(join(modules, relativeManifest), JSON.stringify({ version: '1.0.0' }))
+    writeFixture(join(kunModules, relativeManifest), JSON.stringify({ version: '1.0.0' }))
+  }
 
   prunePackedApplicationPayload(context)
   assert.doesNotThrow(() => validatePackedApplicationPayload(context))
@@ -185,6 +196,10 @@ test('removes only regenerable or on-demand payload from packaged applications',
     assert.match(readFileSync(join(coreRoot, entry), 'utf8'), new RegExp(`require\\('${target}'\\)`))
   }
   assert.equal(existsSync(join(sqliteRoot, 'build', 'Release', 'better_sqlite3.node')), true)
+  for (const relativePath of KUN_ROOT_HOISTED_DEPENDENCY_PATHS) {
+    assert.equal(existsSync(join(modules, relativePath)), true)
+    assert.equal(existsSync(join(kunModules, relativePath)), false)
+  }
 
   writeFixture(join(claudePlatformRoot, 'claude'))
   assert.throws(

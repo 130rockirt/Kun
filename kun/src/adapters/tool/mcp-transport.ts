@@ -1,9 +1,13 @@
-import { Client } from '@modelcontextprotocol/sdk/client/index.js'
-import { UnauthorizedError, type OAuthClientProvider } from '@modelcontextprotocol/sdk/client/auth.js'
-import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js'
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
-import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
+import {
+  Client,
+  SSEClientTransport,
+  StreamableHTTPClientTransport,
+  UnauthorizedError,
+  type ClientOptions,
+  type OAuthClientProvider,
+  type Transport
+} from '@modelcontextprotocol/client'
+import { StdioClientTransport } from '@modelcontextprotocol/client/stdio'
 import type { McpServerConfig } from '../../contracts/capabilities.js'
 import { KUN_VERSION } from '../../version.js'
 import { resolveMcpServerCwd } from './mcp-naming.js'
@@ -12,6 +16,7 @@ import {
   createMcpOAuthProvider,
   defaultOpenExternal
 } from './mcp-oauth-provider.js'
+import { McpElicitationRuntime } from './mcp-elicitation.js'
 import { buildMcpStdioEnvironment, errorMessage } from './mcp-stdio-environment.js'
 import { redactSecretText } from '../../config/secret-redaction.js'
 import {
@@ -22,7 +27,7 @@ import {
 } from './mcp-types.js'
 
 type OAuthTransport = Transport & {
-  finishAuth?: (authorizationCode: string) => Promise<void>
+  finishAuth?: (callbackParams: URLSearchParams) => Promise<void>
 }
 
 const MCP_HEADER_ENV_REFERENCE = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g
@@ -58,7 +63,12 @@ export async function createSdkMcpClient(
   server: McpServerConfig,
   options: SdkMcpClientOptions = {}
 ): Promise<McpClientLike> {
-  const client = new Client({ name: `kun-${serverId}`, version: KUN_VERSION })
+  const client = new Client(
+    { name: `kun-${serverId}`, version: KUN_VERSION },
+    mcpClientOptions(server)
+  )
+  const elicitation = new McpElicitationRuntime(serverId, options.openExternal ?? defaultOpenExternal)
+  client.setRequestHandler('elicitation/create', async (request) => elicitation.handle(request.params))
   const sdk = client as SdkClientFacade
   // Observe transport-level failures explicitly (#639). The SDK routes a
   // dropped SSE stream / exhausted reconnect to `onerror`; with no handler it
@@ -99,8 +109,8 @@ export async function createSdkMcpClient(
       throw new McpAuthorizationRequiredError(serverId)
     }
     try {
-      const authorizationCode = await authProvider.waitForAuthorizationCode()
-      await transport.finishAuth(authorizationCode)
+      const callbackParams = await authProvider.waitForAuthorizationCallback()
+      await transport.finishAuth(callbackParams)
     } catch (authError) {
       await authProvider.recordAuthorizationError(errorMessage(authError)).catch(() => undefined)
       await client.close().catch(() => undefined)
@@ -111,16 +121,23 @@ export async function createSdkMcpClient(
   }
   return {
     listTools: (listOptions) => {
-      const params = listOptions?.cursor ? { cursor: listOptions.cursor } : undefined
+      const params = listOptions?.cursor !== undefined ? { cursor: listOptions.cursor } : undefined
       return client.listTools(params, {
         signal: listOptions?.signal,
-        timeout: listOptions?.timeout
+        timeout: listOptions?.timeout,
+        cacheMode: listOptions?.cacheMode
       })
     },
-    callTool: (input, callOptions) => client.callTool(input, undefined, callOptions),
+    callTool: (input, callOptions) => elicitation.run(
+      callOptions?.context,
+      () => client.callTool(input, {
+        signal: callOptions?.signal,
+        timeout: callOptions?.timeout
+      })
+    ),
     ...(sdk.listResources ? {
       listResources: async (listOptions) => {
-        const params = listOptions?.cursor ? { cursor: listOptions.cursor } : undefined
+        const params = listOptions?.cursor !== undefined ? { cursor: listOptions.cursor } : undefined
         return await sdk.listResources?.(params, {
           signal: listOptions?.signal,
           timeout: listOptions?.timeout
@@ -128,11 +145,17 @@ export async function createSdkMcpClient(
       }
     } : {}),
     ...(sdk.readResource ? {
-      readResource: async (input, callOptions) => await sdk.readResource?.(input, callOptions) as unknown
+      readResource: async (input, callOptions) => await elicitation.run(
+        callOptions?.context,
+        () => sdk.readResource?.(input, {
+          signal: callOptions?.signal,
+          timeout: callOptions?.timeout
+        }) as Promise<unknown>
+      )
     } : {}),
     ...(sdk.listResourceTemplates ? {
       listResourceTemplates: async (listOptions) => {
-        const params = listOptions?.cursor ? { cursor: listOptions.cursor } : undefined
+        const params = listOptions?.cursor !== undefined ? { cursor: listOptions.cursor } : undefined
         return await sdk.listResourceTemplates?.(params, {
           signal: listOptions?.signal,
           timeout: listOptions?.timeout
@@ -141,7 +164,7 @@ export async function createSdkMcpClient(
     } : {}),
     ...(sdk.listPrompts ? {
       listPrompts: async (listOptions) => {
-        const params = listOptions?.cursor ? { cursor: listOptions.cursor } : undefined
+        const params = listOptions?.cursor !== undefined ? { cursor: listOptions.cursor } : undefined
         return await sdk.listPrompts?.(params, {
           signal: listOptions?.signal,
           timeout: listOptions?.timeout
@@ -149,13 +172,39 @@ export async function createSdkMcpClient(
       }
     } : {}),
     ...(sdk.getPrompt ? {
-      getPrompt: async (input, callOptions) => await sdk.getPrompt?.(input, callOptions) as unknown
+      getPrompt: async (input, callOptions) => await elicitation.run(
+        callOptions?.context,
+        () => sdk.getPrompt?.(input, {
+          signal: callOptions?.signal,
+          timeout: callOptions?.timeout
+        }) as Promise<unknown>
+      )
     } : {}),
+    protocolEra: client.getProtocolEra(),
+    protocolVersion: client.getNegotiatedProtocolVersion(),
+    serverInfo: client.getServerVersion(),
+    serverCapabilities: client.getServerCapabilities(),
     close: () => client.close(),
     setLifecycleHandlers: (handlers) => {
       ;(client as { onerror?: (error: Error) => void }).onerror = handlers.onError
       ;(client as { onclose?: () => void }).onclose = handlers.onClose
     }
+  }
+}
+
+export function mcpClientOptions(server: McpServerConfig): ClientOptions {
+  return {
+    capabilities: { elicitation: { form: {}, url: {} } },
+    inputRequired: { maxRounds: 10 },
+    versionNegotiation: server.transport === 'sse'
+      ? { mode: 'legacy' }
+      : {
+          mode: 'auto',
+          probe: {
+            timeoutMs: Math.min(server.timeoutMs, 10_000),
+            maxRetries: 0
+          }
+        }
   }
 }
 

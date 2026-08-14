@@ -26,21 +26,36 @@ import { SteeringQueue } from '../loop/steering-queue.js'
 import type { TokenEconomyConfig } from '../loop/token-economy.js'
 import type { MemoryStore } from '../memory/memory-store.js'
 import type { ArtifactStore } from '../artifacts/artifact-store.js'
+import type { AttachmentStore } from '../attachments/attachment-store.js'
 import type { ModelClient } from '../ports/model-client.js'
 import { RandomIdGenerator } from '../ports/id-generator.js'
 import type { ApprovalGate } from '../ports/approval-gate.js'
 import type { ApprovalReviewPort } from '../ports/approval-review.js'
+import type { PptWorkflowScope } from '../ports/tool-host.js'
+import {
+  childDirectionBundle,
+  childDeckArtifact,
+  childReviewBundle
+} from './child-ppt-result-extraction.js'
 import type { SessionStore } from '../ports/session-store.js'
 import type { ThreadStore } from '../ports/thread-store.js'
 import type { ToolHost } from '../ports/tool-host.js'
+import { findSessionEvent } from '../adapters/session-event-query.js'
 import type { DelegatedTurnRuntime } from '../runtime/delegated-turn-runtime.js'
 import type { SkillRuntime } from '../skills/skill-runtime.js'
 import type { InstructionRuntime } from '../instructions/instruction-runtime.js'
 import { RuntimeEventRecorder } from '../services/runtime-event-recorder.js'
 import { ThreadService } from '../services/thread-service.js'
-import { TurnService } from '../services/turn-service.js'
+import { isHostShutdownTurnSuspension, TurnService } from '../services/turn-service.js'
 import { UsageService } from '../services/usage-service.js'
 import type { ChildRunExecutor } from './delegation-runtime.js'
+import {
+  ChildResultExecutionError,
+  childResultSource,
+  materializeChildResult
+} from './child-result-materializer.js'
+import { buildFastContextEvidencePack } from './fast-context-evidence.js'
+import { createFastContextToolHost } from './fast-context-tool-host.js'
 
 export type ChildDelegatedRuntimeFactory = (input: {
   threads: ThreadService
@@ -61,7 +76,9 @@ export type ChildDelegatedRuntimeFactory = (input: {
   blockedProviderIds?: readonly string[]
   blockedSkillIds?: readonly string[]
   skillsEnabled: boolean
+  instructionsEnabled: boolean
   memoryEnabled: boolean
+  pptWorkflowScope?: PptWorkflowScope
 }) => DelegatedTurnRuntime | undefined
 
 export type ChildAgentExecutorOptions = {
@@ -84,6 +101,7 @@ export type ChildAgentExecutorOptions = {
   skillRuntime?: SkillRuntime
   instructionRuntime?: InstructionRuntime
   memoryStore?: MemoryStore
+  attachmentStore?: () => AttachmentStore | undefined
   artifactStore?: ArtifactStore
   /** Runtime-owned approval channel shared with the HTTP decision endpoint. */
   approvalGate?: ApprovalGate
@@ -110,11 +128,22 @@ export type ChildAgentExecutorOptions = {
 
 export function createChildAgentExecutor(options: ChildAgentExecutorOptions): ChildRunExecutor {
   return async (input) => {
+    const fastContextTaskCount = input.fastContextTasks?.length ?? 1
+    const toolHost = input.fastContext
+      ? createFastContextToolHost(options.toolHost, fastContextTaskCount)
+      : options.toolHost
+    // Fast Context source calls are always confined to a parent-minted read
+    // scope. This remains true when the parent itself chose full access: an
+    // omitted scope means the captured workspace only, never the host.
+    const allowedReadPaths = input.fastContext
+      ? input.security?.allowedReadPaths ?? ['.']
+      : input.security?.allowedReadPaths
     const blockedSkillIds = unique([
       ...(input.security?.blockedSkillIds ?? []),
       ...(input.blockedSkills ?? [])
     ])
     const nowIso = options.nowIso ?? (() => new Date().toISOString())
+    const attachmentStore = options.attachmentStore?.()
     // Persist into the main runtime's stores + event bus when supplied, so the
     // child session is queryable and streams live; otherwise stay isolated in
     // throwaway in-memory stores (preserves test behavior). The recorder is
@@ -151,6 +180,7 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
       steering,
       compactor,
       ids,
+      ...(attachmentStore ? { attachmentStore: () => attachmentStore } : {}),
       nowIso
     })
     const threads = new ThreadService({
@@ -165,6 +195,7 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
     // intersected last, so a child can only lose capabilities.
     const forcedAllowedToolNames = intersectDefinedLists(
       input.toolPolicy === 'readOnly' ? SUBAGENT_READ_ONLY_TOOL_NAMES : undefined,
+      input.fastContext ? ['grep', 'glob', 'read'] : undefined,
       input.allowedTools,
       input.security?.allowedToolNames
     )
@@ -180,6 +211,14 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
     // conventions stay) on a distinct fingerprint, so same-agent calls still
     // hit the prompt cache; cross-agent reuse is intentionally given up.
     // omitBasePrompt replaces the base with the role prompt when present.
+    const source = input.source
+    if (source && source.prompt !== input.prompt) {
+      throw new Error('child source prompt must exactly match the delegated prompt')
+    }
+    if (source?.agentSurface && input.agentSurface && source.agentSurface !== input.agentSurface) {
+      throw new Error('child source surface must match the delegated surface')
+    }
+    const agentSurface = source?.agentSurface ?? input.agentSurface
     const rolePrompt = input.systemPrompt?.trim()
     const childPrefix = rolePrompt
       ? setSystemPrompt(
@@ -194,7 +233,10 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
     const sandboxMode = input.sandboxMode ?? options.sandboxMode
     const approvalReviewer =
       input.approvalReviewer ?? options.approvalReviewer ?? DEFAULT_APPROVAL_REVIEWER
-    const delegatedRuntime = options.createDelegatedRuntime?.({
+    // Provider-native SDKs own separate shell/search tool catalogs. Fast
+    // Context deliberately stays in Kun's managed loop so its exact source
+    // tool allow-list, semaphore, and result bounds cannot be bypassed.
+    const delegatedRuntime = input.fastContext ? undefined : options.createDelegatedRuntime?.({
       threads,
       turns,
       sessionStore,
@@ -210,8 +252,8 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
       ...(input.security?.allowedSkillIds
         ? { allowedSkillIds: input.security.allowedSkillIds }
         : {}),
-      ...(input.security?.allowedReadPaths
-        ? { allowedReadPaths: input.security.allowedReadPaths }
+      ...(allowedReadPaths
+        ? { allowedReadPaths }
         : {}),
       ...(input.security?.allowedWritePaths
         ? { allowedWritePaths: input.security.allowedWritePaths }
@@ -223,7 +265,9 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
       ...(blockedProviderIds.length ? { blockedProviderIds } : {}),
       ...(blockedSkillIds.length ? { blockedSkillIds } : {}),
       skillsEnabled: input.skillsEnabled !== false,
-      memoryEnabled: input.security?.memoryEnabled !== false
+      instructionsEnabled: input.security?.instructionsEnabled !== false,
+      memoryEnabled: input.security?.memoryEnabled !== false,
+      ...(input.pptWorkflowScope ? { pptWorkflowScope: input.pptWorkflowScope } : {})
     })
     const loop = new AgentLoop({
       threadStore,
@@ -232,7 +276,7 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
       ...(options.approvalReview ? { approvalReview: options.approvalReview } : {}),
       userInputGate: new InMemoryUserInputGate(),
       model: options.model,
-      toolHost: options.toolHost,
+      toolHost,
       ...(delegatedRuntime ? { sdkRuntime: delegatedRuntime } : {}),
       usage,
       events,
@@ -246,8 +290,8 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
       ...(forcedAllowedToolNames ? { forcedAllowedToolNames } : {}),
       ...(input.security?.allowedProviderIds ? { allowedProviderIds: input.security.allowedProviderIds } : {}),
       ...(input.security?.allowedSkillIds ? { allowedSkillIds: input.security.allowedSkillIds } : {}),
-      ...(input.security?.allowedReadPaths
-        ? { allowedReadPaths: input.security.allowedReadPaths }
+      ...(allowedReadPaths
+        ? { allowedReadPaths }
         : {}),
       ...(input.security?.allowedWritePaths
         ? { allowedWritePaths: input.security.allowedWritePaths }
@@ -255,13 +299,21 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
       ...(input.security?.allowedArtifactIds
         ? { allowedArtifactIds: input.security.allowedArtifactIds }
         : {}),
+      ...(input.pptWorkflowScope ? { pptWorkflowScope: input.pptWorkflowScope } : {}),
       ...(blockedToolNames.length ? { blockedToolNames } : {}),
       ...(blockedProviderIds.length ? { blockedProviderIds } : {}),
       ...(blockedSkillIds.length ? { blockedSkillIds } : {}),
       ...(options.modelCapabilities ? { modelCapabilities: options.modelCapabilities } : {}),
-      ...(input.skillsEnabled !== false && options.skillRuntime ? { skillRuntime: options.skillRuntime } : {}),
-      ...(options.instructionRuntime ? { instructionRuntime: options.instructionRuntime } : {}),
-      ...(options.memoryStore && input.security?.memoryEnabled !== false ? { memoryStore: options.memoryStore } : {}),
+      ...(input.fastContext !== true && input.skillsEnabled !== false && options.skillRuntime
+        ? { skillRuntime: options.skillRuntime }
+        : {}),
+      ...(input.fastContext !== true && options.instructionRuntime && input.security?.instructionsEnabled !== false
+        ? { instructionRuntime: options.instructionRuntime }
+        : {}),
+      ...(input.fastContext !== true && options.memoryStore && input.security?.memoryEnabled !== false
+        ? { memoryStore: options.memoryStore }
+        : {}),
+      ...(attachmentStore ? { attachmentStore } : {}),
       ...(options.artifactStore ? { artifactStore: options.artifactStore } : {}),
       ...(options.contextCompaction ? { contextCompaction: options.contextCompaction } : {}),
       ...(options.tokenEconomy ? { tokenEconomy: options.tokenEconomy } : {}),
@@ -269,39 +321,54 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
       // parent/user cancellation reaches its signal. Do not inherit the
       // generic AgentLoop wall-clock deadline.
       disableWallTimeLimit: true,
+      ...(input.fastContext
+        ? {
+            fastContext: true,
+            fastContextTaskCount,
+            turnLimits: { maxSteps: 4, maxToolCallsPerStep: 8 }
+          }
+        : {}),
       ...(options.runtime?.toolStorm ? { toolStorm: options.runtime.toolStorm } : {}),
       ...(options.runtime?.toolArgumentRepair ? { toolArgumentRepair: options.runtime.toolArgumentRepair } : {})
     })
 
     const title = childThreadTitle(input.childId, input.label, input.profile)
-    const thread = await threads.create({
-      title,
-      workspace: input.workspace?.trim() || '~',
-      model,
-      mode: 'agent',
-      approvalPolicy,
-      ...(sandboxMode ? { sandboxMode } : {}),
-      approvalReviewer,
-      // Route the child to the profile's provider. ThreadService threads
-      // providerId into every ModelRequest, and the executor's model is the
-      // MultiProviderModelClient, so this single field is all routing needs.
-      ...(input.providerId ? { providerId: input.providerId } : {}),
-      ...(input.accountId ? { accountId: input.accountId } : {}),
-      // Persist the resolved profile id so the GUI can label explore/side
-      // sessions (e.g. return-bar "viewing explore process").
-      ...(input.profile?.trim() ? { agentId: input.profile.trim() } : {})
-    }, {
-      id: input.childId,
-      title,
-      // Persist as a side branch of the parent: hidden from the default thread
-      // list, but loadable on demand so the user can open the subagent's own
-      // session from the parent's delegate_task card.
-      relation: 'side',
-      parentThreadId: input.parentThreadId
-    })
+    const thread = input.resumeChild
+      ? await threadStore.get(input.childId)
+      : await threads.create({
+        title,
+        workspace: input.workspace?.trim() || '~',
+        model,
+        mode: 'agent',
+        approvalPolicy,
+        ...(sandboxMode ? { sandboxMode } : {}),
+        approvalReviewer,
+        // Route the child to the profile's provider. ThreadService threads
+        // providerId into every ModelRequest, and the executor's model is the
+        // MultiProviderModelClient, so this single field is all routing needs.
+        ...(input.providerId ? { providerId: input.providerId } : {}),
+        ...(input.accountId ? { accountId: input.accountId } : {}),
+        // Persist the resolved profile id so the GUI can label explore/side
+        // sessions (e.g. return-bar "viewing explore process").
+        ...(input.profile?.trim() ? { agentId: input.profile.trim() } : {})
+      }, {
+        id: input.childId,
+        title,
+        // Persist as a side branch of the parent: hidden from the default thread
+        // list, but loadable on demand so the user can open the subagent's own
+        // session from the parent's delegate_task card.
+        relation: 'side',
+        parentThreadId: input.parentThreadId
+      })
+    if (!thread) throw new Error(`child thread ${input.childId} no longer exists`)
+    if (input.resumeChild && (thread.relation !== 'side' || thread.parentThreadId !== input.parentThreadId)) {
+      throw new Error(`child thread ${input.childId} is not a side thread of the expected parent`)
+    }
     // A profile preamble rides in the prompt body (not the system prompt) so
     // the cached stable prefix stays byte-identical to the main agent's.
-    const promptBase = input.promptPreamble?.trim()
+    const promptBase = source
+      ? source.prompt
+      : input.promptPreamble?.trim()
       ? `${input.promptPreamble.trim()}\n\n${input.prompt}`
       : input.prompt
     const prompt = input.returnFormat === 'evidence'
@@ -322,6 +389,10 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
       threadId: thread.id,
       request: {
         prompt,
+        ...(source?.displayText !== undefined ? { displayText: source.displayText } : {}),
+        ...(source?.attachmentIds.length ? { attachmentIds: source.attachmentIds } : {}),
+        ...(source?.composerContexts.length ? { composerContexts: source.composerContexts } : {}),
+        ...(source?.fileReferences.length ? { fileReferences: source.fileReferences } : {}),
         model,
         clientSurface: input.guiDesignCanvas ? 'gui' : input.clientSurface ?? 'api',
         ...(input.providerId ? { providerId: input.providerId } : {}),
@@ -333,12 +404,18 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
         reasoningEffort: normalizeRoleReasoningEffort(input.reasoningEffort),
         ...(input.serviceTier ? { serviceTier: input.serviceTier } : {}),
         ...(input.guiDesignCanvas ? { guiDesignCanvas: true } : {}),
+        ...(agentSurface ? { agentSurface } : {}),
         // Child runs have no independent interactive surface for structured prompts.
         disableUserInput: true
       }
+    }, {
+      ...(input.controlPrompt?.trim()
+        ? { runtimeContext: { kind: 'host-control', content: input.controlPrompt.trim() } }
+        : {})
     })
     const abortChild = (): void => {
       console.warn(`[kun] foreground subagent parent abort received child=${thread.id} turn=${started.turnId} parentThread=${input.parentThreadId} parentTurn=${input.parentTurnId}`)
+      if (isHostShutdownTurnSuspension(input.signal)) return
       void turns.interruptTurn({
         threadId: thread.id,
         turnId: started.turnId
@@ -351,7 +428,8 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
       console.warn(`[kun] foreground subagent abort bridge armed child=${thread.id} turn=${started.turnId} parentThread=${input.parentThreadId} parentTurn=${input.parentTurnId}`)
       input.signal.addEventListener('abort', abortChild, { once: true })
     }
-    let status: 'completed' | 'failed' | 'aborted'
+    let status: 'completed' | 'failed' | 'aborted' = input.signal.aborted ? 'aborted' : 'failed'
+    let executionError: unknown
     try {
       const outcome = await loop.runTurn(thread.id, started.turnId)
       if (
@@ -361,10 +439,46 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
         throw new Error(`non-Graph child turn suspended unexpectedly: ${started.turnId}`)
       }
       status = outcome
+    } catch (error) {
+      executionError = error
+      status = input.signal.aborted ? 'aborted' : 'failed'
     } finally {
       input.signal.removeEventListener('abort', abortChild)
     }
     console.warn(`[kun] foreground subagent turn settled child=${thread.id} turn=${started.turnId} status=${status}`)
+    const items = await sessionStore.loadItems(thread.id)
+    // Settlement snapshot for every terminal status: failed and aborted runs
+    // must still report the tokens they already burned (issue #1155).
+    const childUsage = usage.forThread(thread.id)
+    const toolInvocations = items.filter(
+      (item) => item.turnId === started.turnId && item.kind === 'tool_call'
+    ).length
+    const settlement = { usage: childUsage, toolInvocations }
+    const result = await materializeChildResult({
+      content: childResultSource(items, started.turnId, status),
+      childId: thread.id,
+      parentThreadId: input.parentThreadId,
+      ...(options.artifactStore ? { artifactStore: options.artifactStore } : {})
+    })
+    const reviewBundle = childReviewBundle(items, started.turnId)
+    const directionBundle = childDirectionBundle(items, started.turnId)
+    const deckArtifact = childDeckArtifact(items, started.turnId)
+    const evidencePack = input.fastContext && input.fastContextTasks?.length
+      ? buildFastContextEvidencePack({
+          tasks: input.fastContextTasks,
+          items,
+          turnId: started.turnId,
+          summary: result.summary,
+          ...(status === 'completed' ? {} : { failure: `Retrieval child ${status}.` })
+        })
+      : undefined
+    const structuredResult = {
+      ...result,
+      ...(directionBundle !== undefined ? { directionBundle } : {}),
+      ...(reviewBundle !== undefined ? { reviewBundle } : {}),
+      ...(deckArtifact !== undefined ? { deckArtifact } : {}),
+      ...(evidencePack ? { evidencePack } : {})
+    }
     // Only a FATAL error fails the child. Recoverable tool errors — a tool
     // rejected by the child's read-only policy, or a tool that crashed — are
     // recorded as `severity: 'warning'` error events but the loop hands the
@@ -372,39 +486,46 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
     // Treating those as fatal wrongly marked the whole subagent "failed" for a
     // single denied `bash` call. Genuine failures are caught by the `status`
     // check below; here we only honor non-warning (fatal) error events.
-    const runtimeError = (await sessionStore.loadEventsSince(thread.id, 0))
-      .find(
-        (event) =>
-          event.kind === 'error' &&
-          event.turnId === started.turnId &&
-          event.severity !== 'warning' &&
-          event.severity !== 'info'
-      )
+    const runtimeError = await findSessionEvent(
+      sessionStore,
+      thread.id,
+      (event) =>
+        event.kind === 'error' &&
+        event.turnId === started.turnId &&
+        event.severity !== 'warning' &&
+        event.severity !== 'info'
+    )
     if (runtimeError?.kind === 'error') {
-      throw new Error(runtimeError.message)
+      throw new ChildResultExecutionError(runtimeError.message, structuredResult, settlement)
     }
-    const items = await sessionStore.loadItems(thread.id)
-    const summary = summarizeChildTurn(items, started.turnId, status)
-    const toolInvocations = items.filter(
-      (item) => item.turnId === started.turnId && item.kind === 'tool_call'
-    ).length
+    if (executionError !== undefined) {
+      throw new ChildResultExecutionError(childExecutionErrorMessage(executionError), structuredResult, settlement)
+    }
     const evidence = input.returnFormat === 'evidence'
       ? childToolEvidence(items, started.turnId)
       : undefined
     if (status !== 'completed') {
-      throw new Error(summary || `child agent ${status}`)
+      throw new ChildResultExecutionError(result.summary || `child agent ${status}`, structuredResult, settlement)
     }
     return {
-      summary,
+      ...result,
+      ...(directionBundle !== undefined ? { directionBundle } : {}),
+      ...(reviewBundle !== undefined ? { reviewBundle } : {}),
+      ...(deckArtifact !== undefined ? { deckArtifact } : {}),
       ...(evidence ? { evidence } : {}),
-      usage: usage.forThread(thread.id),
+      ...(evidencePack ? { evidencePack } : {}),
+      usage: childUsage,
       toolInvocations,
-      // A role system prompt changes the immutable prefix fingerprint. Only a
-      // child with no role prompt can report exact main-prefix reuse.
+      // Only a stable role system prompt changes the immutable prefix.
+      // Host workflow control is private chronological model context.
       prefixReused: !input.systemPrompt?.trim(),
       inheritedHistoryItems: 0
     }
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 function childToolEvidence(items: readonly TurnItem[], turnId: string): string[] {
@@ -469,41 +590,6 @@ function childThreadTitle(childId: string, label?: string, profile?: string): st
   return `Child agent: ${suffix}`
 }
 
-function summarizeChildTurn(
-  items: readonly TurnItem[],
-  turnId: string,
-  status: 'completed' | 'failed' | 'aborted'
-): string {
-  const turnItems = items.filter((item) => item.turnId === turnId)
-  const assistantText = turnItems
-    .filter((item): item is Extract<TurnItem, { kind: 'assistant_text' }> => item.kind === 'assistant_text')
-    .map((item) => item.text.trim())
-    .filter(Boolean)
-    .join('\n\n')
-    .trim()
-  if (assistantText) return assistantText
-  const errors = turnItems
-    .filter((item): item is Extract<TurnItem, { kind: 'error' }> => item.kind === 'error')
-    .map((item) => item.message.trim())
-    .filter(Boolean)
-    .join('\n')
-    .trim()
-  if (errors) return errors
-  const toolResult = [...turnItems]
-    .reverse()
-    .find((item): item is Extract<TurnItem, { kind: 'tool_result' }> => item.kind === 'tool_result')
-  if (toolResult) return stringifySummary(toolResult.output)
-  return status === 'completed'
-    ? 'Child agent completed without a text response.'
-    : `Child agent ${status}.`
-}
-
-function stringifySummary(value: unknown): string {
-  if (typeof value === 'string') return value.trim()
-  if (value == null) return ''
-  try {
-    return JSON.stringify(value)
-  } catch {
-    return String(value)
-  }
+function childExecutionErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }
