@@ -75,8 +75,15 @@ function computeReleaseVersion({ allTags = [], headTags = [], packageVersion }) 
   }
 
   const latest = newestSemverTag(allTags)
-  const base = latest || parseSemverVersion(packageVersion)
-  const version = `${base.major}.${base.minor}.${base.patch + 1}`
+  const parsedPackageVersion = parseSemverVersion(packageVersion)
+  const base = latest || parsedPackageVersion
+  // A package.json version that is newer than every release tag is an
+  // explicit bump (e.g. 0.2.37 -> 0.3.0) and overrides the automatic patch
+  // bump, so minor/major releases can be declared next to the code change.
+  const explicitBump = latest !== null && compareSemver(parsedPackageVersion, latest) > 0
+  const version = explicitBump
+    ? parsedPackageVersion.version
+    : `${base.major}.${base.minor}.${base.patch + 1}`
   return {
     version,
     tag: `v${version}`,
