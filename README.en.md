@@ -27,12 +27,12 @@
 </p>
 
 <p align="center">
-  <img src="./docs/assets/readme/code-workspace-empty-demo.webp" alt="Current Kun Code workspace in an isolated demo workspace with no personal conversations" width="100%">
+  <img src="./docs/assets/readme/kun-hero-gui-tui-character-demo.jpg" alt="Kun GUI and TUI poster with fictional demo data, a mascot, the desktop Code interface, and the terminal TUI" width="100%">
 </p>
 
 ## What is Kun?
 
-Kun is a local-first workbench that moves AI from answering questions to finishing work. It brings Code, Design, Write, research, and automation to real workspaces: agents can read project context, make plans, use tools, change files, run checks, and keep the evidence next to the task.
+Kun is a local-first workbench that moves AI from answering questions to finishing work. It organizes real work into two primary modes: Code for shipping software, with a Design canvas available inside the same task; and Work for writing, organizing source material, analyzing documents, and producing presentations. Agents can read workspace context, make plans, use tools, change files, run checks, and keep the evidence next to the task.
 
 The desktop GUI is for seeing, reviewing, and controlling the work. The terminal TUI is for staying in a keyboard-first flow. Both connect to the same local `kun serve` runtime and share threads, goals, plans, approvals, and background work instead of creating disconnected histories.
 
@@ -40,31 +40,30 @@ The desktop GUI is for seeing, reviewing, and controlling the work. The terminal
 
 | Need | Kun provides |
 | --- | --- |
-| Deliver a code change | A Code workbench, project context, file editing, terminal, Git / Worktree, diffs, tests, and review. |
-| Move from a brief to a design | Design tasks inside the same Code thread, with prototypes, design systems, canvases, and Design → Code context. |
-| Work with documents and source material | A Write workspace for Markdown/TXT editing plus read-only preview, citation, and analysis of PDF, Word, Excel, and PowerPoint files. |
-| Delegate a complex outcome | Direct mode for focused tasks; experimental Agent Graph for dependencies, subagents, supervision, and acceptance. |
+| Build, debug, and ship software | Code mode provides project context, file editing, terminal, Git / Worktree, diffs, tests, and review. |
+| Move from a brief to an implementable design | Switch to the Design canvas inside the same Code task to develop prototypes, design systems, and Design → Code context. |
+| Write, organize, and handle everyday tasks | Work mode can edit Markdown, preview, quote, and analyze PDF / Office documents, analyze spreadsheets, and turn outlines into presentations; Office files remain read-only. |
 | Automate repeated work | Scheduled tasks, Loops, Hooks, MCP, Skills, and installable extensions. |
 | Choose how to connect a model | Subscriptions, plans, APIs, OpenAI / Anthropic-compatible services, and self-hosted models through Provider settings. |
 
 ## Current interface
 
-Every screenshot below was recaptured with an ephemeral, isolated app profile and an empty demo workspace. No real project, account data, personal settings, or conversation history is shown.
+Every screenshot below was recaptured through browser automation with an ephemeral, isolated app profile and demo workspace. No real project, account data, personal settings, or conversation history is shown.
+
+### Code: build, debug, and ship
+
+Code mode keeps the project, branch, Code / Design task entry points, and task composer in one workbench. Use it to read and change code, run terminals and tests, inspect diffs, and move into the Design canvas when the task needs a visual solution.
 
 <p align="center">
-  <img src="./docs/assets/readme/code-workspace-empty-demo.webp" alt="Current Code workspace with a fresh demo workspace, Code and Design task entry points, and the task composer">
+  <img src="./docs/assets/readme/code-mode-overview.webp" alt="Code mode overview with a demo project, Code and Design task entry points, branch context, and task composer">
 </p>
 
-<p align="center">
-  <img src="./docs/assets/readme/agent-graph-demo.webp" alt="Agent Graph visual workbench with demo task nodes, dependencies, execution state, and node details">
-</p>
+### Work: write, organize, and handle everyday tasks
+
+Work mode brings together a workspace file tree, task starters, and the Work assistant for document-oriented work. Draft Markdown, summarize or ask about documents, analyze spreadsheets, create presentations, or use a whiteboard to organize ideas.
 
 <p align="center">
-  <img src="./docs/assets/readme/extensions-demo.webp" alt="Extension management center with built-in extensions, permission state, diagnostics, and installation entry points">
-</p>
-
-<p align="center">
-  <img src="./docs/assets/readme/scheduled-tasks-demo.webp" alt="Scheduled tasks page with filters, task creation, and keep-awake controls">
+  <img src="./docs/assets/readme/work-mode-overview.webp" alt="Work mode overview with a demo file tree, document task starters, and the Work assistant">
 </p>
 
 ## From goal to acceptance
@@ -74,21 +73,11 @@ Clarify the goal → make a plan → execute and collaborate → inspect evidenc
 ```
 
 1. **State the goal and constraints.** The agent uses project context to surface scope, risks, and acceptance criteria.
-2. **Choose the right execution model.** Use Direct for focused tasks; use Agent Graph for cross-file, multi-stage work.
+2. **Execute the plan step by step.** Change files, use tools, and verify progress within the task scope; adjust the plan when the requirement changes.
 3. **Work in visible context.** Plans, Todos, tool calls, file changes, browser/terminal output, and approvals remain associated with the task.
 4. **Deliver with evidence.** Review diffs, tests, reviews, and artifacts; continue, fork, archive, or replan when the requirement changes.
 
 Requirements and plans can live in the project by default, which makes them versionable, reviewable, and easy to resume.
-
-## Agent Graph: reliable delegation for complex work
-
-Agent Graph is for work with clear dependencies and acceptance criteria. A Lead Agent builds the task graph, delegates bounded subagents, follows progress, requests evidence, and accepts important handoffs. It is not a second runtime and it does not expand permissions.
-
-- Subagents can use only the files, tools, network access, Skills, and MCP granted by the parent task.
-- A node hands work downstream only after real checks and explicit acceptance.
-- You can pause, resume, retry, revise, or stop a graph; historical activity is never presented as success.
-
-See the [Agent Graph guide](docs/graph-mode.en.md) for the model, boundaries, and recovery behavior.
 
 ## Local-first does not mean never connected
 
@@ -152,7 +141,6 @@ npm ci --registry=https://registry.npmmirror.com
 | Topic | Guide |
 | --- | --- |
 | TUI, commands, and runtime | [docs/kun-tui.en.md](docs/kun-tui.en.md) / [kun/README.md](kun/README.md) |
-| Agent Graph | [docs/graph-mode.en.md](docs/graph-mode.en.md) |
 | Design workflow | [docs/DESIGN_MODE.md](docs/DESIGN_MODE.md) |
 | Loops, MCP, and Skills | [docs/workflow-loop.en.md](docs/workflow-loop.en.md) / [docs/project-mcp-skills.md](docs/project-mcp-skills.md) |
 | Extension platform | [docs/extensions/README.en.md](docs/extensions/README.en.md) |
