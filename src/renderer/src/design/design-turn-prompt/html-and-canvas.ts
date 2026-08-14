@@ -477,7 +477,7 @@ export function buildCanvasTurnPrompt(options: DesignTurnOptions): string {
     '- For `design_create_screen`, prefer omitting `x`/`y` so the system chooses the current empty viewport slot. If you must set explicit coordinates, copy a `placement.recommendedSlots[...]` rect or align deliberately with `placement.occupiedFrames`; do not invent far-off, negative, or overlapping coordinates.',
     codeCanvasMode
       ? '- Do not draw a style-kit board unless the user explicitly asks for a visual diagram of the design system.'
-      : '- The project design-system board is a fixed file projection. Do not add, position, move, or recreate it with shape operations.',
+      : '- The project design-system board is a user-draggable file projection listed as a `design-system` occupied frame. Do not recreate or move it with shape operations; always keep new content outside its listed rect.',
     '- Refer to shapes by their `id` from the snapshot below. New shapes you add get auto-named uniquely per parent.',
     '- Prefer composing larger features as a frame containing children (use add for the frame, then add children with `parentId`); position each child within the frame’s absolute bounds.',
     '- Keep batches focused — one batch per logical change so undo granularity stays useful.',

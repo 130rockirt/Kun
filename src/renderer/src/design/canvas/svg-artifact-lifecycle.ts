@@ -7,6 +7,7 @@ import {
   type Rect
 } from './canvas-types'
 import { placeRectInViewportAvoiding } from './canvas-placement'
+import { currentCanvasOccupiedRects } from './canvas-occupied-regions'
 import { useCanvasSelectionStore } from './canvas-selection-store'
 import { useCanvasShapeStore } from './canvas-shape-store'
 import { useCanvasViewportStore } from './canvas-viewport-store'
@@ -61,13 +62,10 @@ function reusableTargetFrame(shape: CanvasShape | undefined): shape is CanvasSha
 function geometry(options: CreateLinkedSvgArtifactOptions): Rect {
   const width = Math.min(4096, Math.max(64, options.width ?? 640))
   const height = Math.min(4096, Math.max(64, options.height ?? 480))
-  const occupied = Object.values(useCanvasShapeStore.getState().document.objects)
-    .filter((shape) => shape.visible !== false && isArtifactFrame(shape))
-    .map(shapeBounds)
   const placed = placeRectInViewportAvoiding(
     { width, height },
     useCanvasViewportStore.getState().vbox,
-    occupied
+    currentCanvasOccupiedRects()
   )
   return { x: options.x ?? placed.x, y: options.y ?? placed.y, width, height }
 }

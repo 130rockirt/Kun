@@ -46,6 +46,16 @@ describe('computeImportedImagePlacement', () => {
       height: 220
     })
   })
+
+  it('avoids occupied virtual canvas regions', () => {
+    const rect = computeImportedImagePlacement(
+      { x: 0, y: 0, width: 800, height: 600 },
+      { width: 320, height: 220 },
+      [{ x: 240, y: 190, width: 320, height: 220 }]
+    )
+
+    expect(rect).toEqual({ x: 640, y: 190, width: 320, height: 220 })
+  })
 })
 
 describe('importWorkspaceImageToCanvas', () => {

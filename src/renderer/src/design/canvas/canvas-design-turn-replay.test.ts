@@ -10,8 +10,11 @@ import {
   replayDurableDesignCanvasTurns,
   toolBlockMatchesDesignTarget
 } from './canvas-design-turn-replay'
-import { createDefaultShape } from './canvas-types'
+import { createDefaultShape, createEmptyDocument } from './canvas-types'
 import { useCanvasViewportStore } from './canvas-viewport-store'
+import { parseProjectDesignMd } from '../design-md/design-md-adapter'
+import { useProjectDesignSystemStore } from './project-design-system-store'
+import { resetDesignSystemBoardLayoutForTests, setDesignSystemBoardRect } from './design-system-board-layout'
 
 const target = { documentId: 'doc_design', boardArtifactId: 'board_design' }
 
@@ -101,6 +104,8 @@ describe('generated Design image canvas placement', () => {
     useCanvasShapeStore.getState().resetDocument()
     useCanvasSelectionStore.getState().clearSelection()
     useCanvasViewportStore.getState().resetView()
+    resetDesignSystemBoardLayoutForTests()
+    useProjectDesignSystemStore.getState().setMissing()
   })
 
   it('centers a deterministic square in the viewport and is idempotent by image URL', () => {
@@ -138,6 +143,33 @@ describe('generated Design image canvas placement', () => {
     expect(placedId).toBe(placeholder.id)
     expect(images).toHaveLength(1)
     expect(images[0]?.imageUrl).toBe('/workspace/.kun/images/product.png')
+  })
+
+  it('places a new generated image outside the design-system board', () => {
+    const documentKey = '/workspace\0.kun-design/document/board/canvas.json'
+    useCanvasShapeStore.getState().loadDocument(createEmptyDocument(), documentKey)
+    useCanvasViewportStore.getState().setVbox({ x: 0, y: 0, width: 1600, height: 1000 })
+    useProjectDesignSystemStore.getState().activateWorkspace('/workspace')
+    useProjectDesignSystemStore.getState().setReady(parseProjectDesignMd(`---
+name: Placement test
+colors:
+  primary: '#3366ff'
+---
+# Design
+`).document!)
+    const board = { x: 160, y: 100, width: 1240, height: 700 }
+    setDesignSystemBoardRect(documentKey, board, { persist: false })
+
+    const placedId = ensureGeneratedImageOnCanvas('/workspace/.kun/images/clear.png')
+    const image = useCanvasShapeStore.getState().document.objects[placedId ?? '']!
+    const overlaps = !(
+      image.x + image.width <= board.x ||
+      board.x + board.width <= image.x ||
+      image.y + image.height <= board.y ||
+      board.y + board.height <= image.y
+    )
+
+    expect(overlaps).toBe(false)
   })
 
   it('fills a selected empty holder without changing its bounds', () => {

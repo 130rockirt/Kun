@@ -5,6 +5,8 @@ import {
   type GeneratedImageResult
 } from './canvas-generated-image-replay'
 import { canvasReplayResult } from './canvas-replay-receipt'
+import { currentCanvasOccupiedRects } from './canvas-occupied-regions'
+import { placeRectInViewportAvoiding } from './canvas-placement'
 import { useCanvasSelectionStore } from './canvas-selection-store'
 import { useCanvasShapeStore } from './canvas-shape-store'
 import { createDefaultShape, isImplicitImageSlot } from './canvas-types'
@@ -468,10 +470,15 @@ export function ensureGeneratedImageOnCanvas(imageUrl: string, options?: {
 
   const viewBox = useCanvasViewportStore.getState().vbox
   const size = Math.max(240, Math.min(640, viewBox.width * 0.62, viewBox.height * 0.72))
+  const placement = placeRectInViewportAvoiding(
+    { width: size, height: size },
+    viewBox,
+    currentCanvasOccupiedRects()
+  )
   const shape = createDefaultShape(
     'image',
-    viewBox.x + (viewBox.width - size) / 2,
-    viewBox.y + (viewBox.height - size) / 2
+    placement.x,
+    placement.y
   )
   shape.name = 'AI image'
   shape.width = size

@@ -1,6 +1,8 @@
 import type { CanvasDocument, CanvasShape, ViewBox } from '../canvas/canvas-types'
 import { isHtmlFrame } from '../canvas/canvas-types'
 import { snapshotCanvas, type CanvasSnapshot } from '../canvas/canvas-snapshot'
+import { designSystemBoardPlacementRegion } from '../canvas/canvas-occupied-regions'
+import { useCanvasShapeStore } from '../canvas/canvas-shape-store'
 import { defaultFrameSizeForDesignTarget } from '../design-context'
 import type { DesignWorkspaceState } from '../design-workspace-store-types'
 import type { DesignArtifact, DesignIntentMode } from '../design-types'
@@ -145,12 +147,18 @@ function snapshotForCanvasTurn(
   options: ResolveDesignTurnTargetOptions,
   selectedIds: ReadonlySet<string>
 ): CanvasSnapshot {
+  const designSystemRegion = designSystemBoardPlacementRegion(
+    options.canvasDocument,
+    useCanvasShapeStore.getState().documentKey,
+    options.viewBox
+  )
   return snapshotCanvas(options.canvasDocument, selectedIds, {
     maxShapes: 180,
     viewBox: options.viewBox,
     defaultScreenSize: defaultFrameSizeForDesignTarget(options.workspaceState.designContext.designTarget),
     projectId: options.boardArtifact.id,
-    artifacts: options.workspaceState.artifacts
+    artifacts: options.workspaceState.artifacts,
+    ...(designSystemRegion ? { occupiedRegions: [designSystemRegion] } : {})
   })
 }
 

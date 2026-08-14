@@ -593,7 +593,12 @@ export function CanvasViewport({
               {gridVisible && <CanvasGrid zoom={zoom} />}
 
               {isDesignCanvasSurface(surface) ? (
-                <DesignSystemBoardOverlay workspaceRoot={workspaceRoot} document={document} viewBox={vbox} />
+                <DesignSystemBoardOverlay
+                  workspaceRoot={workspaceRoot}
+                  documentKey={documentKey}
+                  document={document}
+                  viewBox={vbox}
+                />
               ) : null}
 
               <g id="shape-layer">

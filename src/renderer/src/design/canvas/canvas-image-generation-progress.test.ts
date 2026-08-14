@@ -6,6 +6,9 @@ import { useChatStore } from '../../store/chat-store'
 import { useCanvasShapeStore } from './canvas-shape-store'
 import { useCanvasViewportStore } from './canvas-viewport-store'
 import { createEmptyDocument } from './canvas-types'
+import { parseProjectDesignMd } from '../design-md/design-md-adapter'
+import { useProjectDesignSystemStore } from './project-design-system-store'
+import { resetDesignSystemBoardLayoutForTests, setDesignSystemBoardRect } from './design-system-board-layout'
 import {
   imageGenerationEntriesFromShapes,
   reconcileImageGenerationProgress,
@@ -40,6 +43,9 @@ beforeEach(() => {
     vbox: { x: -400, y: -300, width: 800, height: 600 }
   })
   useImageGenerationProgressStore.setState({ entries: {} })
+  resetDesignSystemBoardLayoutForTests()
+  useProjectDesignSystemStore.getState().activateWorkspace('/workspace')
+  useProjectDesignSystemStore.getState().setMissing()
 })
 
 describe('canvas image generation progress', () => {
@@ -67,6 +73,56 @@ describe('canvas image generation progress', () => {
     expect(shape.x + shape.width).toBeLessThanOrEqual(view.x + view.width)
     expect(shape.y + shape.height).toBeLessThanOrEqual(view.y + view.height)
     expect(view.width).toBe(800)
+  })
+
+  it('places a generating placeholder outside the design-system board', () => {
+    const documentKey = '/workspace\0.kun-design/document/board/canvas.json'
+    useCanvasShapeStore.getState().loadDocument(createEmptyDocument(), documentKey)
+    useCanvasViewportStore.getState().setVbox({ x: 0, y: 0, width: 1600, height: 1000 })
+    useProjectDesignSystemStore.getState().setReady(parseProjectDesignMd(`---
+name: Placement test
+colors:
+  primary: '#3366ff'
+---
+# Design
+`).document!)
+    const board = { x: 160, y: 100, width: 1240, height: 700 }
+    setDesignSystemBoardRect(documentKey, board, { persist: false })
+
+    const result = reconcileImageGenerationProgress([toolBlock('tool_img_clear', 'running')])
+    const holder = useCanvasShapeStore.getState().document.objects[result.entries.tool_img_clear!.shapeId]!
+    const overlaps = !(
+      holder.x + holder.width <= board.x ||
+      board.x + board.width <= holder.x ||
+      holder.y + holder.height <= board.y ||
+      board.y + board.height <= holder.y
+    )
+
+    expect(overlaps).toBe(false)
+  })
+
+  it('moves an existing running placeholder when the design-system board appears beneath it', () => {
+    const documentKey = '/workspace\0.kun-design/document/board/canvas.json'
+    useCanvasShapeStore.getState().loadDocument(createEmptyDocument(), documentKey)
+    useCanvasViewportStore.getState().setVbox({ x: 0, y: 0, width: 1600, height: 1000 })
+    const first = reconcileImageGenerationProgress([toolBlock('tool_img_reflow', 'running')])
+    useImageGenerationProgressStore.getState().replaceEntries(first.entries)
+    const shapeId = first.entries.tool_img_reflow!.shapeId
+    const initial = useCanvasShapeStore.getState().document.objects[shapeId]!
+    const board = { x: initial.x - 20, y: initial.y - 20, width: 1240, height: 700 }
+
+    useProjectDesignSystemStore.getState().setReady(parseProjectDesignMd(`---
+name: Reflow test
+colors:
+  primary: '#3366ff'
+---
+# Design
+`).document!)
+    setDesignSystemBoardRect(documentKey, board, { persist: false })
+    reconcileImageGenerationProgress([toolBlock('tool_img_reflow', 'running')])
+    const moved = useCanvasShapeStore.getState().document.objects[shapeId]!
+
+    expect({ x: moved.x, y: moved.y }).not.toEqual({ x: initial.x, y: initial.y })
   })
 
   it('removes the placeholder once the tool succeeds', () => {

@@ -1,6 +1,8 @@
 import { useCanvasSelectionStore } from './canvas-selection-store'
 import { useCanvasShapeStore } from './canvas-shape-store'
 import { createDefaultShape, type Rect, type ViewBox } from './canvas-types'
+import { currentCanvasOccupiedRects } from './canvas-occupied-regions'
+import { placeRectInViewportAvoiding } from './canvas-placement'
 import { useCanvasViewportStore } from './canvas-viewport-store'
 
 const FALLBACK_IMAGE_WIDTH = 320
@@ -29,7 +31,8 @@ function roundCanvasValue(value: number): number {
 
 export function computeImportedImagePlacement(
   vbox: ViewBox,
-  dimensions: ImportedImageDimensions = {}
+  dimensions: ImportedImageDimensions = {},
+  occupied: readonly Rect[] = []
 ): Rect {
   const sourceWidth = finitePositive(dimensions.width) ? dimensions.width : FALLBACK_IMAGE_WIDTH
   const sourceHeight = finitePositive(dimensions.height) ? dimensions.height : FALLBACK_IMAGE_HEIGHT
@@ -39,12 +42,15 @@ export function computeImportedImagePlacement(
   const width = Math.max(MIN_IMAGE_SIZE, roundCanvasValue(sourceWidth * scale))
   const height = Math.max(MIN_IMAGE_SIZE, roundCanvasValue(sourceHeight * scale))
 
-  return {
-    x: roundCanvasValue(vbox.x + vbox.width / 2 - width / 2),
-    y: roundCanvasValue(vbox.y + vbox.height / 2 - height / 2),
-    width,
-    height
+  if (occupied.length === 0) {
+    return {
+      x: roundCanvasValue(vbox.x + vbox.width / 2 - width / 2),
+      y: roundCanvasValue(vbox.y + vbox.height / 2 - height / 2),
+      width,
+      height
+    }
   }
+  return placeRectInViewportAvoiding({ width, height }, vbox, occupied)
 }
 
 /**
@@ -117,20 +123,20 @@ export async function pasteClipboardImageToCanvas(options: {
   }
 
   const dataUrl = `data:${image.mimeType};base64,${image.dataBase64}`
+  if (useCanvasShapeStore.getState().documentKey !== expectedDocumentKey) {
+    return { ok: false, reason: 'document-changed' }
+  }
+
   const bounds = computeImportedImagePlacement(options.vbox, {
     width: image.width,
     height: image.height
-  })
+  }, currentCanvasOccupiedRects())
 
   const shape = createDefaultShape('image', bounds.x, bounds.y)
   shape.name = image.name || 'Pasted Image'
   shape.width = bounds.width
   shape.height = bounds.height
   shape.imageUrl = persistedRelativePath ?? dataUrl
-
-  if (useCanvasShapeStore.getState().documentKey !== expectedDocumentKey) {
-    return { ok: false, reason: 'document-changed' }
-  }
 
   useCanvasShapeStore.getState().addShape(shape)
   useCanvasSelectionStore.getState().select([shape.id])
@@ -176,7 +182,7 @@ export async function importWorkspaceImageToCanvas(options: {
   const bounds = computeImportedImagePlacement(options.vbox, {
     width: picked.width,
     height: picked.height
-  })
+  }, currentCanvasOccupiedRects())
   const shape = createDefaultShape('image', bounds.x, bounds.y)
   shape.name = imageNameFromPath(imageUrl)
   shape.width = bounds.width

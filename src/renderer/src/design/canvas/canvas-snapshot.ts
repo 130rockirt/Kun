@@ -249,6 +249,7 @@ export type CanvasPlacementRect = {
 export type CanvasPlacementFrame = CanvasPlacementRect & {
   id: string
   name: string
+  regionKind?: 'design-system'
   artifactId?: string
   artifactKind?: 'html' | 'svg'
   htmlArtifactId?: string
@@ -284,6 +285,8 @@ export type SnapshotOptions = {
   defaultScreenSize?: { width: number; height: number }
   projectId?: string
   artifacts?: DesignArtifact[]
+  /** Non-shape projections (for example DESIGN.md) that still reserve canvas space. */
+  occupiedRegions?: CanvasPlacementFrame[]
 }
 
 function normalizeSnapshotScreenSize(size: SnapshotOptions['defaultScreenSize']): { width: number; height: number } {
@@ -397,7 +400,7 @@ export function snapshotCanvas(
       graph,
       ...(codeBindings ? { codeBindings } : {}),
       ...(motion ? { motion } : {}),
-      ...(viewBox ? { placement: buildPlacementGuide(doc, selectedIds, viewBox, defaultScreenSize) } : {}),
+      ...(viewBox ? { placement: buildPlacementGuide(doc, selectedIds, viewBox, defaultScreenSize, opts?.occupiedRegions) } : {}),
       omitted
     }
   }
@@ -407,7 +410,7 @@ export function snapshotCanvas(
     graph,
     ...(codeBindings ? { codeBindings } : {}),
     ...(motion ? { motion } : {}),
-    ...(viewBox ? { placement: buildPlacementGuide(doc, selectedIds, viewBox, defaultScreenSize) } : {})
+    ...(viewBox ? { placement: buildPlacementGuide(doc, selectedIds, viewBox, defaultScreenSize, opts?.occupiedRegions) } : {})
   }
 }
 
@@ -477,9 +480,10 @@ function buildPlacementGuide(
   doc: CanvasDocument,
   selectedIds: ReadonlySet<string> | undefined,
   viewBox: Rect,
-  defaultScreenSize: { width: number; height: number }
+  defaultScreenSize: { width: number; height: number },
+  occupiedRegions: readonly CanvasPlacementFrame[] = []
 ): CanvasPlacementGuide {
-  const occupiedFrames = Object.values(doc.objects)
+  const occupiedFrames = [...Object.values(doc.objects)
     .filter((shape): shape is CanvasShape => Boolean(shape) && shape.visible !== false && isArtifactFrame(shape))
     .map((shape) => {
       const reference = embeddedArtifactOf(shape)
@@ -490,7 +494,7 @@ function buildPlacementGuide(
         ...(reference?.kind === 'html' ? { htmlArtifactId: reference.id } : {}),
         ...compactRect(shapeGeometry(shape).selrect)
       }
-    })
+    }), ...occupiedRegions]
     .sort((a, b) => a.y - b.y || a.x - b.x || a.name.localeCompare(b.name))
   const occupiedRects = occupiedFrames.map(expandPlacementRect)
   const recommendedSlots: CanvasPlacementSlot[] = []

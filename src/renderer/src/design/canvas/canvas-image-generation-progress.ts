@@ -4,8 +4,12 @@ import type { ChatBlock, ToolBlock } from '../../agent/types'
 import { useChatStore } from '../../store/chat-store'
 import { requestCodeCanvasPanelOpen } from '../../lib/code-canvas-panel-event'
 import { focusViewportOnIds } from './canvas-focus'
+import { currentCanvasOccupiedRects } from './canvas-occupied-regions'
+import { placeRectInViewportAvoiding } from './canvas-placement'
 import { useCanvasShapeStore } from './canvas-shape-store'
 import { createDefaultShape } from './canvas-types'
+import { useCanvasViewportStore } from './canvas-viewport-store'
+import { useDesignSystemBoardLayoutStore } from './design-system-board-layout'
 
 /**
  * Renderer-side visibility for in-flight AI-image generation on a bound Design
@@ -71,14 +75,13 @@ function toolPromptFromDetail(detail: string | undefined): string | undefined {
 }
 
 function nextPlaceholderPosition(): { x: number; y: number } {
-  const { document } = useCanvasShapeStore.getState()
-  let count = 0
-  for (const shape of Object.values(document.objects)) {
-    if (shape.name.startsWith(GENERATING_MARKER) || shape.name.startsWith(FAILED_MARKER)) count += 1
-  }
-  // Stack below the top-left build area so placeholders never cover the first
-  // frame the agent draws.
-  return { x: 48 + count * 24, y: 48 + count * 24 }
+  const rect = placeRectInViewportAvoiding(
+    { width: 200, height: 140 },
+    useCanvasViewportStore.getState().vbox,
+    currentCanvasOccupiedRects(),
+    32
+  )
+  return { x: rect.x, y: rect.y }
 }
 
 function createPlaceholderShape(toolCallId: string): string {
@@ -108,6 +111,29 @@ function createPlaceholderShape(toolCallId: string): string {
   const placedId = placed?.id ?? shape.id
   focusViewportOnIds([placedId])
   return placedId
+}
+
+function rectsOverlap(a: { x: number; y: number; width: number; height: number }, b: { x: number; y: number; width: number; height: number }): boolean {
+  return !(
+    a.x + a.width <= b.x ||
+    b.x + b.width <= a.x ||
+    a.y + a.height <= b.y ||
+    b.y + b.height <= a.y
+  )
+}
+
+function movePlaceholderOutOfOccupiedRegions(shapeId: string): void {
+  const shape = useCanvasShapeStore.getState().document.objects[shapeId]
+  if (!shape) return
+  const occupied = currentCanvasOccupiedRects(new Set([shapeId]))
+  if (!occupied.some((rect) => rectsOverlap(shape, rect))) return
+  const placement = placeRectInViewportAvoiding(
+    { width: shape.width, height: shape.height },
+    useCanvasViewportStore.getState().vbox,
+    occupied,
+    32
+  )
+  useCanvasShapeStore.getState().updateShape(shapeId, { x: placement.x, y: placement.y }, true)
 }
 
 function markPlaceholderFailed(shapeId: string, toolCallId: string): void {
@@ -190,6 +216,7 @@ export function reconcileImageGenerationProgress(
     const shapeId = previous?.shapeId && useCanvasShapeStore.getState().document.objects[previous.shapeId]
       ? previous.shapeId
       : createPlaceholderShape(id)
+    movePlaceholderOutOfOccupiedRegions(shapeId)
     if (!previous && !opened) opened = true
     next[id] = {
       toolCallId: id,
@@ -287,9 +314,15 @@ export function useCanvasImageGenerationProgress(
       if (state.documentLoadRevision === previous.documentLoadRevision) return
       seedAndApply()
     })
+    const unsubscribeBoardLayout = useDesignSystemBoardLayoutStore.subscribe((state, previous) => {
+      if (!expectedCanvasDocumentKey) return
+      if (state.rects[expectedCanvasDocumentKey] === previous.rects[expectedCanvasDocumentKey]) return
+      apply()
+    })
     return () => {
       unsubscribeChat()
       unsubscribeCanvas()
+      unsubscribeBoardLayout()
       useImageGenerationProgressStore.setState({ entries: {} })
     }
   }, [enabled, expectedCanvasDocumentKey])

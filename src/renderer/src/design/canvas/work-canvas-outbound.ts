@@ -153,6 +153,7 @@ function compactSnapshot(
         occupiedFrames: snapshot.placement.occupiedFrames.slice(0, 12).map((frame) => ({
           id: compactText(frame.id, 128),
           name: compactText(frame.name, 128),
+          ...(frame.regionKind ? { regionKind: frame.regionKind } : {}),
           ...compactRect(frame)
         })),
         defaultFrame: {

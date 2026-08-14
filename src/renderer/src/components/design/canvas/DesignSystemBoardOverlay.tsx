@@ -1,6 +1,5 @@
-import { useMemo, useRef, type CSSProperties, type ReactElement } from 'react'
+import { useEffect, useMemo, useRef, type CSSProperties, type ReactElement } from 'react'
 import type { CanvasDocument, Rect, ViewBox } from '../../../design/canvas/canvas-types'
-import { getCanvasDocumentContentBounds } from '../../../design/canvas/canvas-placement'
 import { PROJECT_DESIGN_MD_PATH } from '../../../design/design-md/design-md-paths'
 import type { ProjectDesignMdSyncStatus } from '../../../design/design-md/design-md-types'
 import { useProjectDesignSystemStore } from '../../../design/canvas/project-design-system-store'
@@ -9,32 +8,45 @@ import {
   readableDesignMdTextColor
 } from '../../../design/design-md/design-md-specimen-model'
 import { parseProjectDesignMd } from '../../../design/design-md/design-md-adapter'
+import {
+  commitDesignSystemBoardRect,
+  defaultDesignSystemBoardRect,
+  setDesignSystemBoardRect,
+  storedDesignSystemBoardRect,
+  translateDesignSystemBoardRect,
+  useDesignSystemBoardLayoutStore
+} from '../../../design/canvas/design-system-board-layout'
 
-type Props = { workspaceRoot: string; document: CanvasDocument; viewBox: ViewBox }
-const BOARD_WIDTH = 1240
-const BOARD_HEIGHT = 700
+type Props = { workspaceRoot: string; documentKey: string; document: CanvasDocument; viewBox: ViewBox }
+type DragState = {
+  pointerId: number
+  clientX: number
+  clientY: number
+  origin: Rect
+  scaleX: number
+  scaleY: number
+}
 
 export function shouldRenderDesignSystemBoard(status: ProjectDesignMdSyncStatus): boolean {
   return status !== 'loading' && status !== 'missing'
 }
 
-function placement(document: CanvasDocument, viewBox: ViewBox): Rect {
-  const bounds = getCanvasDocumentContentBounds(document)
-  return bounds
-    ? { x: bounds.x - BOARD_WIDTH - 120, y: bounds.y, width: BOARD_WIDTH, height: BOARD_HEIGHT }
-    : { x: viewBox.x + 80, y: viewBox.y + 80, width: BOARD_WIDTH, height: BOARD_HEIGHT }
-}
-
-export function DesignSystemBoardOverlay({ workspaceRoot, document: canvasDocument, viewBox }: Props): ReactElement | null {
+export function DesignSystemBoardOverlay({ workspaceRoot, documentKey, document: canvasDocument, viewBox }: Props): ReactElement | null {
   const status = useProjectDesignSystemStore((state) => state.status)
   const design = useProjectDesignSystemStore((state) => state.document)
   const draft = useProjectDesignSystemStore((state) => state.draft)
   const diagnostics = useProjectDesignSystemStore((state) => state.diagnostics)
   const setInspectorOpen = useProjectDesignSystemStore((state) => state.setInspectorOpen)
-  const placementRef = useRef<{ root: string; rect: Rect } | null>(null)
-  if (!placementRef.current || placementRef.current.root !== workspaceRoot) {
-    placementRef.current = { root: workspaceRoot, rect: placement(canvasDocument, viewBox) }
-  }
+  const dragRef = useRef<DragState | null>(null)
+  const liveRect = useDesignSystemBoardLayoutStore((state) => state.rects[documentKey])
+  const initialRect = useMemo(
+    () => storedDesignSystemBoardRect(documentKey) ?? defaultDesignSystemBoardRect(canvasDocument, viewBox),
+    [canvasDocument, documentKey, viewBox]
+  )
+  const rect = liveRect ?? initialRect
+  useEffect(() => {
+    if (!liveRect) setDesignSystemBoardRect(documentKey, initialRect)
+  }, [documentKey, initialRect, liveRect])
   const draftParse = useMemo(() => draft?.content ? parseProjectDesignMd(draft.content) : null, [draft?.content])
   if (!design || !shouldRenderDesignSystemBoard(status)) return null
   const displayDesign = draftParse?.ok && draftParse.document ? draftParse.document : design
@@ -44,21 +56,62 @@ export function DesignSystemBoardOverlay({ workspaceRoot, document: canvasDocume
   const roles = model.palettes.filter((item) => item.featured).map((item) => item.name)
   const typography = model.typographyNames.slice(0, 3).map((name) => [name, displayDesign.typography[name]] as const)
   const { surface, onSurface, primary, secondary } = model
-  const rect = placementRef.current.rect
   const style = { '--ds-surface': surface, '--ds-on-surface': onSurface, '--ds-primary': primary, '--ds-secondary': secondary } as CSSProperties
+
+  const beginDrag = (event: React.PointerEvent<HTMLElement>): void => {
+    event.preventDefault()
+    event.stopPropagation()
+    const svg = event.currentTarget.closest('foreignObject')?.ownerSVGElement
+    const bounds = svg?.getBoundingClientRect()
+    if (!bounds || bounds.width <= 0 || bounds.height <= 0) return
+    event.currentTarget.setPointerCapture(event.pointerId)
+    dragRef.current = {
+      pointerId: event.pointerId,
+      clientX: event.clientX,
+      clientY: event.clientY,
+      origin: rect,
+      scaleX: viewBox.width / bounds.width,
+      scaleY: viewBox.height / bounds.height
+    }
+  }
+  const moveDrag = (event: React.PointerEvent<HTMLElement>): void => {
+    const drag = dragRef.current
+    if (!drag || drag.pointerId !== event.pointerId) return
+    event.preventDefault()
+    event.stopPropagation()
+    setDesignSystemBoardRect(documentKey, translateDesignSystemBoardRect(
+      drag.origin,
+      { x: event.clientX - drag.clientX, y: event.clientY - drag.clientY },
+      { x: drag.scaleX, y: drag.scaleY }
+    ), { persist: false })
+  }
+  const endDrag = (event: React.PointerEvent<HTMLElement>): void => {
+    if (dragRef.current?.pointerId !== event.pointerId) return
+    event.stopPropagation()
+    dragRef.current = null
+    commitDesignSystemBoardRect(documentKey)
+  }
 
   return (
     <foreignObject x={rect.x} y={rect.y} width={rect.width} height={rect.height}>
       <div
-        className="h-full w-full overflow-hidden rounded-[28px] border-[5px] border-indigo-500 bg-[var(--ds-surface)] p-5 text-[var(--ds-on-surface)] shadow-2xl"
+        className="h-full w-full cursor-grab touch-none select-none overflow-hidden rounded-[28px] border-[5px] border-indigo-500 bg-[var(--ds-surface)] p-5 text-[var(--ds-on-surface)] shadow-2xl active:cursor-grabbing"
         style={style}
         data-design-system-board
-        onPointerDown={(event) => event.stopPropagation()}
+        data-design-system-board-workspace={workspaceRoot}
+        title="拖动设计风格板；双击打开设置"
+        onPointerDown={beginDrag}
+        onPointerMove={moveDrag}
+        onPointerUp={endDrag}
+        onPointerCancel={endDrag}
         onDoubleClick={(event) => { event.stopPropagation(); setInspectorOpen(true) }}
       >
-        <header className="mb-4 flex items-center justify-between">
+        <header
+          className="mb-4 flex items-center justify-between"
+          data-design-system-board-drag-handle
+        >
           <div><div className="text-xl font-semibold">🎨 {displayDesign.name}</div><div className="mt-1 font-mono text-xs opacity-55">{PROJECT_DESIGN_MD_PATH}</div></div>
-          <div className="rounded-full bg-white/10 px-4 py-2 text-xs">{colorNames.length} colors · {Object.keys(displayDesign.typography).length} type styles</div>
+          <div className="flex items-center gap-2"><span className="text-xs opacity-45">⠿ 拖动</span><span className="rounded-full bg-white/10 px-4 py-2 text-xs">{colorNames.length} colors · {Object.keys(displayDesign.typography).length} type styles</span></div>
         </header>
         {status === 'invalid' ? <div className="mb-3 rounded-xl bg-red-500/15 px-4 py-2 text-xs text-red-200">DESIGN.md 当前无效，继续显示最近一次有效主题。{diagnostics[0]?.message}</div> : null}
         <div className="grid h-[590px] grid-cols-[260px_1fr] gap-4">

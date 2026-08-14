@@ -6,7 +6,6 @@ import { useDesignWorkspaceStore } from '../design-workspace-store'
 import {
   createHtmlFrameShape,
   isArtifactFrame,
-  isHtmlFrame,
   shapeBounds,
   type CanvasShape,
   type DevicePreset,
@@ -15,6 +14,7 @@ import {
 import { useCanvasSelectionStore } from './canvas-selection-store'
 import { useCanvasShapeStore } from './canvas-shape-store'
 import { placeRectInViewportAvoiding } from './canvas-placement'
+import { currentCanvasOccupiedRects } from './canvas-occupied-regions'
 import { useCanvasViewportStore } from './canvas-viewport-store'
 
 export type CreateLinkedHtmlScreenOptions = Partial<Rect> & {
@@ -76,12 +76,6 @@ function uniqueRootScreenTitle(title: string): string {
   return `${title} ${Date.now()}`
 }
 
-function occupiedHtmlFrameRects(): Rect[] {
-  return Object.values(useCanvasShapeStore.getState().document.objects)
-    .filter((shape): shape is CanvasShape => Boolean(shape) && shape.visible !== false && isHtmlFrame(shape))
-    .map(shapeBounds)
-}
-
 export function isReusableScreenTargetFrame(shape: CanvasShape | undefined): shape is CanvasShape {
   return Boolean(
     shape &&
@@ -115,7 +109,7 @@ export function resolveLinkedHtmlScreenGeometry(
   const autoRect = placeRectInViewportAvoiding(
     { width, height },
     useCanvasViewportStore.getState().vbox,
-    occupiedHtmlFrameRects()
+    currentCanvasOccupiedRects()
   )
   return {
     x: options.x ?? autoRect.x,
