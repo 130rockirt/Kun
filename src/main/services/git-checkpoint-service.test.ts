@@ -471,7 +471,7 @@ describe('git checkpoint service', () => {
     await expect(stat(join(dataDir, 'git-checkpoints', unused))).rejects.toThrow()
   })
 
-  it('preserves referenced checkpoints when cleanup reaches maxPerThread', async () => {
+  it('evicts referenced checkpoints beyond the hard maxPerThread cap (issue #1156)', async () => {
     const now = new Date('2026-07-25T12:00:00.000Z')
     const ids = ['gcp_t1', 'gcp_t2', 'gcp_t3', 'gcp_t4']
     await mkdir(join(dataDir, 'threads', 'thr_cap'), { recursive: true })
@@ -504,10 +504,13 @@ describe('git checkpoint service', () => {
       now
     })
 
-    expect(result.deletedIds).toEqual([])
-    for (const id of ids) {
-      await expect(stat(join(dataDir, 'git-checkpoints', id))).resolves.toBeTruthy()
-    }
+    // The cap is hard: the two oldest checkpoints are removed even though
+    // saved messages still reference them (their rollbacks show as expired).
+    expect(result.deletedIds).toEqual(['gcp_t2', 'gcp_t1'])
+    await expect(stat(join(dataDir, 'git-checkpoints', 'gcp_t1'))).rejects.toThrow()
+    await expect(stat(join(dataDir, 'git-checkpoints', 'gcp_t2'))).rejects.toThrow()
+    await expect(stat(join(dataDir, 'git-checkpoints', 'gcp_t3'))).resolves.toBeTruthy()
+    await expect(stat(join(dataDir, 'git-checkpoints', 'gcp_t4'))).resolves.toBeTruthy()
   })
 
   it('preserves referenced checkpoints after maxAgeDays', async () => {

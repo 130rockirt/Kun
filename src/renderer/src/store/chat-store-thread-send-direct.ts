@@ -26,9 +26,9 @@ import {
 } from './chat-store-runtime'
 import { ensureRuntimeProviderForSend, subscribeThreadEventsWithRecovery } from './chat-store-thread-action-helpers'
 import { settleAcceptedTurnAfterNavigation } from './chat-store-thread-send-navigation'
+import { startWorkspaceCheckpointSnapshot } from './chat-store-thread-send-checkpoint'
 import { readDesignThreadRegistry } from '../design/design-thread-registry'
 import {
-  createWorkspaceCheckpointRequestId,
   failQueuedSubmission,
   localConversationErrorBlock,
   resetQueuedSubmission,
@@ -279,49 +279,12 @@ export async function performPreparedThreadSend(input: PreparedThreadSend): Prom
         model: composerModel
       })
       const settings = await rendererRuntimeClient.getSettings()
-      let workspaceCheckpointRequestId: string | undefined
-      const checkpointThread = get().threads.find((thread) => thread.id === activeThreadId)
-      const checkpointWorkspaceRoot = normalizeWorkspaceRoot(checkpointThread?.workspace) || normalizeWorkspaceRoot(settings.workspaceRoot)
-      const checkpointWorkspaceKey = checkpointWorkspaceRoot.replaceAll('\\', '/').toLowerCase()
-      if (
-        settings.checkpointCleanup?.createEnabled &&
-        checkpointWorkspaceRoot &&
-        threadActionSharedState.checkpointGitAvailability.canAttempt(checkpointWorkspaceKey) &&
-        typeof window.kunGui.createGitCheckpoint === 'function'
-      ) {
-        workspaceCheckpointRequestId = createWorkspaceCheckpointRequestId()
-        const checkpoint = window.kunGui.createGitCheckpoint({
-          workspaceRoot: checkpointWorkspaceRoot,
-          threadId: activeThreadId,
-          checkpointId: workspaceCheckpointRequestId
-        }).catch((error) => ({
-          ok: false as const,
-          reason: 'error' as const,
-          message: error instanceof Error ? error.message : String(error)
-        }))
-        void checkpoint.then((result) => {
-          if (
-            result.ok ||
-            result.reason === 'not_git_repo' ||
-            result.reason === 'no_workspace' ||
-            result.reason === 'disabled'
-          ) return
-          if (result.reason === 'git_unavailable') {
-            threadActionSharedState.checkpointGitAvailability.markUnavailable(checkpointWorkspaceKey)
-          }
-          void window.kunGui.logError(
-            'git-checkpoint',
-            result.reason === 'git_unavailable'
-              ? 'Git checkpoint disabled for this workspace because Git was not found'
-              : 'Failed to create Git checkpoint',
-            {
-              message: result.message,
-              reason: result.reason,
-              workspaceRoot: checkpointWorkspaceRoot
-            }
-          ).catch(() => undefined)
-        })
-      }
+      const workspaceCheckpointRequestId = startWorkspaceCheckpointSnapshot({
+        settings,
+        threads: get().threads,
+        activeThreadId,
+        fallbackWorkspaceRoot: settings.workspaceRoot
+      })
       const runtimeText = runtimePromptForSurface({
         channel,
         requestedAgentSurface,

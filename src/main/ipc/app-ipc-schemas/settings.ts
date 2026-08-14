@@ -77,7 +77,11 @@ const checkpointCleanupPatchSchema = z.object({
   // Issue #651: user-configurable checkpoint storage directory (e.g. another
   // drive) + per-thread retention cap. Empty string clears the override.
   directory: z.string().max(4096).optional(),
-  maxPerThread: z.number().int().min(1).max(100).optional()
+  maxPerThread: z.number().int().min(1).max(100).optional(),
+  // Issue #1156: one-time createEnabled migration marker + global disk quota.
+  createEnabledResetAt: z.string().max(64).optional(),
+  maxTotalBytes: z.number().int().min(0).optional(),
+  minFreeDiskBytes: z.number().int().min(0).optional()
 }).strict()
 
 const notificationsPatchSchema = z.object({

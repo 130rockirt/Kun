@@ -17,6 +17,7 @@ import {
   collectReferencedCheckpointIds,
   pruneThreadCheckpoints
 } from './git-checkpoint-cleanup'
+import { ensureQuotaForCreate } from './git-checkpoint-quota'
 import {
   CHECKPOINT_GATE_DIRECTORY,
   DEFAULT_MAX_CHECKPOINTS_PER_THREAD,
@@ -101,6 +102,25 @@ export async function createGitCheckpointSnapshot(params: {
       return { ok: false, reason: 'no_workspace', message: 'No working directory selected.' }
     }
     await assertNoUnmerged(repositoryRoot)
+
+    // Global disk quota (issue #1156): per-thread caps alone cannot bound the
+    // store while referenced bundles are kept. Evict the oldest checkpoints
+    // (referenced or not) to make room; when the cap still cannot be met, skip
+    // creating this snapshot instead of growing past the quota.
+    const quotaDecision = await ensureQuotaForCreate({
+      root,
+      quota: {
+        ...(params.storage?.maxTotalBytes !== undefined ? { maxTotalBytes: params.storage.maxTotalBytes } : {}),
+        ...(params.storage?.minFreeDiskBytes !== undefined ? { minFreeDiskBytes: params.storage.minFreeDiskBytes } : {})
+      },
+      // Worst-case projection: a full HEAD bundle plus the untracked budget.
+      // A shared/deduplicated bundle layout (M2) shrinks this.
+      projectedNewBytes: 512 * 1_024 * 1_024 + maxTotalBytes,
+      protectIds: new Set([params.checkpointId])
+    })
+    if (!quotaDecision.allowed) {
+      return { ok: false, reason: 'quota_exceeded', message: quotaDecision.message }
+    }
 
     const checkpointId = params.checkpointId
     const dir = checkpointDir(root, checkpointId)

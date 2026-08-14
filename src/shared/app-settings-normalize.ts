@@ -3,6 +3,8 @@ import {
   CHECKPOINT_CLEANUP_INTERVAL_DAYS,
   DEFAULT_CHECKPOINT_CLEANUP_ENABLED,
   DEFAULT_CHECKPOINT_CLEANUP_INTERVAL_DAYS,
+  DEFAULT_CHECKPOINT_MAX_TOTAL_BYTES,
+  DEFAULT_CHECKPOINT_MIN_FREE_DISK_BYTES,
   DEFAULT_GIT_CHECKPOINT_CREATE_ENABLED,
   DEFAULT_CURSOR_SPOTLIGHT_COLOR,
   DEFAULT_GIT_BRANCH_PREFIX,
@@ -256,18 +258,32 @@ export function normalizeCheckpointCleanupIntervalDays(value: unknown): Checkpoi
 }
 
 export function normalizeCheckpointCleanupSettings(
-  settings?: Partial<CheckpointCleanupConfigV1>
+  settings?: Partial<CheckpointCleanupConfigV1>,
+  options?: { now?: Date }
 ): CheckpointCleanupConfigV1 {
   const intervalDays = normalizeCheckpointCleanupIntervalDays(settings?.intervalDays)
   const directory = typeof settings?.directory === 'string' ? settings.directory.trim() : ''
   const maxPerThread = typeof settings?.maxPerThread === 'number' && Number.isFinite(settings.maxPerThread)
     ? Math.max(1, Math.min(100, Math.floor(settings.maxPerThread)))
     : undefined
+  // One-time migration (issue #1156): installations that saved settings while
+  // checkpoint creation defaulted ON keep `createEnabled: true` forever even
+  // after the default flipped to off. We cannot tell an explicit opt-in from an
+  // inherited old default, so the stored flag is discarded exactly once (when
+  // the marker is missing) and the new off-by-default applies. Afterwards the
+  // marker is persisted and the user's toggle choice is always respected.
+  const hasResetMarker = typeof settings?.createEnabledResetAt === 'string' && settings.createEnabledResetAt.trim()
+  const createEnabled = hasResetMarker
+    ? (typeof settings?.createEnabled === 'boolean'
+      ? settings.createEnabled
+      : DEFAULT_GIT_CHECKPOINT_CREATE_ENABLED)
+    : DEFAULT_GIT_CHECKPOINT_CREATE_ENABLED
+  const normalizeBytes = (value: unknown, fallback: number): number =>
+    typeof value === 'number' && Number.isFinite(value) && value >= 0
+      ? Math.floor(value)
+      : fallback
   return {
-    createEnabled:
-      typeof settings?.createEnabled === 'boolean'
-        ? settings.createEnabled
-        : DEFAULT_GIT_CHECKPOINT_CREATE_ENABLED,
+    createEnabled,
     enabled: typeof settings?.enabled === 'boolean' ? settings.enabled : DEFAULT_CHECKPOINT_CLEANUP_ENABLED,
     intervalDays: CHECKPOINT_CLEANUP_INTERVAL_DAYS.includes(intervalDays)
       ? intervalDays
@@ -275,7 +291,18 @@ export function normalizeCheckpointCleanupSettings(
     // Only include the optional storage overrides when explicitly set so
     // existing settings snapshots (which omit them) stay byte-for-byte equal.
     ...(directory ? { directory } : {}),
-    ...(maxPerThread !== undefined ? { maxPerThread } : {})
+    ...(maxPerThread !== undefined ? { maxPerThread } : {}),
+    // Persist (and afterwards preserve) the one-time reset marker so it
+    // survives normalize round-trips and is never rewritten once set.
+    ...(hasResetMarker
+      ? { createEnabledResetAt: settings?.createEnabledResetAt }
+      : { createEnabledResetAt: (options?.now ?? new Date()).toISOString() }),
+    ...(settings?.maxTotalBytes !== undefined
+      ? { maxTotalBytes: normalizeBytes(settings.maxTotalBytes, DEFAULT_CHECKPOINT_MAX_TOTAL_BYTES) }
+      : {}),
+    ...(settings?.minFreeDiskBytes !== undefined
+      ? { minFreeDiskBytes: normalizeBytes(settings.minFreeDiskBytes, DEFAULT_CHECKPOINT_MIN_FREE_DISK_BYTES) }
+      : {})
   }
 }
 

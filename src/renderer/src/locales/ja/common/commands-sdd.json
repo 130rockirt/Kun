@@ -350,6 +350,7 @@
   "rollbackWorkspaceConfirmDetail": "これにより、ワークスペースで git replace --hard および git clean -fd が実行されます。このチェックポイント以降に追加されたコミットされていない編集、追跡されていないファイル、およびコミットは完全に失われます。チャットの会話はそのまま維持されます。",
   "rollbackWorkspacePartialConfirm": "このチェックポイントは部分的です — とにかく復元しますか?",
   "rollbackWorkspacePartialConfirmDetail": "追跡されていないファイルの中には、このチェックポイントでキャプチャするには大きすぎるため、保存されませんでした: {{files}}。復元するとそれらは削除されます。最初に完全な救助チェックポイントが取得されるので、それらを回復できます。続く？",
+  "rollbackWorkspaceExpired": "このロールバックポイントは期限切れです。保持上限またはストレージ容量によりチェックポイントが削除されたため、この応答をロールバックできません。",
   "sessionForked": "分岐したスレッド",
   "sessionForkedFrom": "{{title}} からフォークされました",
   "sessionForkedFromCompact": "from {{title}}",

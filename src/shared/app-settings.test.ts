@@ -174,7 +174,38 @@ describe('notification settings', () => {
 describe('Git checkpoint creation settings', () => {
   it('defaults creation off while preserving an explicit opt-in', () => {
     expect(normalizeCheckpointCleanupSettings().createEnabled).toBe(false)
-    expect(normalizeCheckpointCleanupSettings({ createEnabled: true }).createEnabled).toBe(true)
+    expect(
+      normalizeCheckpointCleanupSettings({
+        createEnabled: true,
+        createEnabledResetAt: '2026-08-14T00:00:00.000Z'
+      }).createEnabled
+    ).toBe(true)
+  })
+
+  it('resets a stored createEnabled=true exactly once via the migration marker (issue #1156)', () => {
+    const first = normalizeCheckpointCleanupSettings(
+      { createEnabled: true, enabled: true, intervalDays: 3 },
+      { now: new Date('2026-08-14T00:00:00.000Z') }
+    )
+    // Old installs inherited createEnabled=true from the former default; the
+    // stored flag is discarded once so the new off-by-default applies.
+    expect(first.createEnabled).toBe(false)
+    expect(first.createEnabledResetAt).toBe('2026-08-14T00:00:00.000Z')
+    // The marker is persisted, so a later explicit re-enable survives.
+    const reenabled = normalizeCheckpointCleanupSettings({
+      ...first,
+      createEnabled: true
+    })
+    expect(reenabled.createEnabled).toBe(true)
+    expect(reenabled.createEnabledResetAt).toBe('2026-08-14T00:00:00.000Z')
+  })
+
+  it('normalizes the checkpoint storage quota fields (issue #1156)', () => {
+    expect(normalizeCheckpointCleanupSettings().maxTotalBytes).toBeUndefined()
+    expect(normalizeCheckpointCleanupSettings({ maxTotalBytes: 1234.7 }).maxTotalBytes).toBe(1234)
+    // Invalid (negative/NaN) values fall back to the default cap rather than 0.
+    expect(normalizeCheckpointCleanupSettings({ maxTotalBytes: -5 }).maxTotalBytes).toBe(2 * 1024 * 1024 * 1024)
+    expect(normalizeCheckpointCleanupSettings({ minFreeDiskBytes: 2048 }).minFreeDiskBytes).toBe(2048)
   })
 })
 

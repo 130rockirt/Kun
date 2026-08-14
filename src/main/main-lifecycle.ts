@@ -37,6 +37,7 @@ import {
 import {
   cleanupUnusedGitCheckpointsIfDue
 } from './services/git-checkpoint-service'
+import { evictForQuota } from './services/git-checkpoint-quota'
 import {
   stopWeixinBridgeRuntime
 } from './weixin-bridge-runtime'
@@ -120,6 +121,23 @@ export async function runCheckpointCleanup(
     })
     if (!cleanup.due) return
     const { result } = cleanup
+    // Enforce the global disk quota (issue #1156): evict oldest checkpoints —
+    // referenced or not — until the store fits maxTotalBytes. This is what
+    // finally reclaims stores that grew to tens of GB before the hard caps.
+    if (checkpointsRoot) {
+      const quotaEviction = await evictForQuota({
+        root: checkpointsRoot,
+        ...(settings.checkpointCleanup.maxTotalBytes !== undefined
+          ? { maxTotalBytes: settings.checkpointCleanup.maxTotalBytes }
+          : {})
+      })
+      if (quotaEviction.deleted.length > 0) {
+        console.info(
+          `[kun-gui] git checkpoint quota eviction removed ${quotaEviction.deleted.length} checkpoint(s): ` +
+          `${quotaEviction.totalBytesBefore} -> ${quotaEviction.totalBytesAfter} bytes`
+        )
+      }
+    }
     console.info(
       `[kun-gui] git checkpoint cleanup reason=${reason} scanned=${result.scanned} deleted=${result.deleted} kept=${result.kept} failed=${result.failed}`
     )

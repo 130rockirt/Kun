@@ -255,11 +255,12 @@ export async function cleanupUnusedGitCheckpointsIfDue(params: {
 }
 
 /**
- * Keep at most `max` unreferenced checkpoints for a thread. Checkpoints still
- * referenced by saved messages are never pruned: they are user-visible rollback
- * targets, so the cap is intentionally soft when thread history needs them.
- * Oldest eligible checkpoints (by createdAt, falling back to the
- * `gcp_<ts>_` name) are removed first; `keepId` is always retained.
+ * Keep at most `max` checkpoints for a thread. This is a HARD cap (issue
+ * #1156): checkpoints beyond the newest `max` are removed even when still
+ * referenced by saved messages — otherwise an active thread pins every full
+ * bundle forever and the store grows without bound. Messages keep their
+ * `workspaceCheckpointId` reference; restoring a removed checkpoint surfaces
+ * an expired-rollback state instead. `keepId` is always retained.
  */
 export async function pruneThreadCheckpoints(
   root: string,
@@ -284,18 +285,19 @@ export async function pruneThreadCheckpoints(
     const order = Number.isFinite(createdMs) ? createdMs : checkpointNameTimestamp(entry.name)
     owned.push({ id: entry.name, order })
   }
-  // Newest first; keep the first `max` unreferenced entries. Referenced
-  // checkpoints and the just-created checkpoint are always protected.
+  // Newest first; the hard cap counts referenced checkpoints too, so an
+  // active thread cannot pin unbounded history. `keepId` (the snapshot a
+  // concurrent turn is waiting on) is always retained.
   owned.sort((a, b) => b.order - a.order)
   const deleted: string[] = []
-  const keepIdCountsTowardCap = Boolean(
-    keepId && !referencedIds.has(keepId) && owned.some(({ id }) => id === keepId)
-  )
-  let keptUnreferenced = keepIdCountsTowardCap ? 1 : 0
+  let kept = 0
   for (const { id } of owned) {
-    if (id === keepId || referencedIds.has(id)) continue
-    if (keptUnreferenced < max) {
-      keptUnreferenced += 1
+    if (id === keepId) {
+      kept += 1
+      continue
+    }
+    if (kept < max) {
+      kept += 1
       continue
     }
     try {
@@ -308,7 +310,11 @@ export async function pruneThreadCheckpoints(
   return { deleted }
 }
 
-/** Enforce the unreferenced checkpoint cap for every thread under `root`. */
+/**
+ * Enforce the hard checkpoint cap for every thread under `root`. Referenced
+ * checkpoints count toward the cap (issue #1156); `referencedIds` is accepted
+ * for call-site compatibility but no longer exempts entries from deletion.
+ */
 export async function pruneAllThreadCheckpoints(
   root: string,
   max: number,
@@ -335,11 +341,10 @@ export async function pruneAllThreadCheckpoints(
   const deleted: string[] = []
   for (const owned of byThread.values()) {
     owned.sort((a, b) => b.order - a.order)
-    let keptUnreferenced = 0
+    let kept = 0
     for (const { id } of owned) {
-      if (referencedIds.has(id)) continue
-      if (keptUnreferenced < max) {
-        keptUnreferenced += 1
+      if (kept < max) {
+        kept += 1
         continue
       }
       try {

@@ -332,6 +332,24 @@ export type CheckpointCleanupConfigV1 = {
    * (`<dataDir>/git-checkpoints`).
    */
   directory?: string
+  /**
+   * One-time migration marker (issue #1156). When absent, a previously stored
+   * `createEnabled: true` (persisted while creation used to default on) is
+   * discarded so the new off-by-default applies to existing installs too.
+   * Once written, the user's current choice is always respected.
+   */
+  createEnabledResetAt?: string
+  /**
+   * Hard cap for the total bytes consumed by checkpoint directories. Oldest
+   * checkpoints (referenced or not) are evicted first when the cap is exceeded;
+   * creation is skipped when the cap still cannot be met. Absent = default.
+   */
+  maxTotalBytes?: number
+  /**
+   * Skip checkpoint creation when the disk backing the checkpoints root has
+   * less free space than this. Absent = default.
+   */
+  minFreeDiskBytes?: number
   /** Keep at most this many checkpoints per thread (oldest pruned). Absent = default 5. */
   maxPerThread?: number
 }

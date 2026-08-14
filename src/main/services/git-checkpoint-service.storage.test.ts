@@ -194,7 +194,7 @@ describe('git checkpoint storage limits (issue #651)', () => {
     await expect(stat(join(root, ids[3]))).resolves.toBeTruthy()
   })
 
-  it('keeps a message-referenced checkpoint when new checkpoints exceed the cap', async () => {
+  it('keeps the newest message-referenced checkpoints within the hard cap (issue #1156)', async () => {
     const ids: string[] = []
     for (let i = 0; i < 2; i += 1) {
       const checkpoint = await createGitCheckpoint({
@@ -227,9 +227,49 @@ describe('git checkpoint storage limits (issue #651)', () => {
     }
 
     const root = join(dataDir, 'git-checkpoints')
-    await expect(stat(join(root, ids[0]))).resolves.toBeTruthy()
+    // Hard cap: only the two newest survive; the referenced-but-old ids[0]
+    // and unreferenced ids[1] are gone. Their rollbacks become expired.
+    await expect(stat(join(root, ids[0]))).rejects.toThrow()
     await expect(stat(join(root, ids[1]))).rejects.toThrow()
     await expect(stat(join(root, ids[2]))).resolves.toBeTruthy()
     await expect(stat(join(root, ids[3]))).resolves.toBeTruthy()
+  })
+
+  it('skips creation with quota_exceeded when the total cap cannot be met (issue #1156)', async () => {
+    const first = await createGitCheckpoint({
+      dataDir,
+      workspaceRoot: repoRoot,
+      threadId: 'thr_quota'
+    })
+    expect(first.ok).toBe(true)
+    if (!first.ok) throw new Error(first.message)
+    // A cap far below the projected full-bundle footprint: the next create
+    // must evict the oldest checkpoint to try to make room, then still refuse
+    // to write instead of growing past the quota.
+    const second = await createGitCheckpoint({
+      dataDir,
+      workspaceRoot: repoRoot,
+      threadId: 'thr_quota',
+      storage: { maxTotalBytes: 1024 * 1024 }
+    })
+    expect(second.ok).toBe(false)
+    if (second.ok) throw new Error('expected quota refusal')
+    expect(second.reason).toBe('quota_exceeded')
+    await expect(stat(join(dataDir, 'git-checkpoints', first.checkpointId))).rejects.toThrow()
+  })
+
+  it('restore reports not_found for a checkpoint evicted by retention (issue #1156)', async () => {
+    const checkpoint = await createGitCheckpoint({
+      dataDir,
+      workspaceRoot: repoRoot,
+      threadId: 'thr_expire',
+      checkpointId: 'gcp_3000_expiring'
+    })
+    if (!checkpoint.ok) throw new Error(checkpoint.message)
+    await rm(join(dataDir, 'git-checkpoints', checkpoint.checkpointId), { recursive: true, force: true })
+    const restored = await restoreGitCheckpoint({ dataDir, checkpointId: checkpoint.checkpointId })
+    expect(restored.ok).toBe(false)
+    if (restored.ok) throw new Error('expected not_found')
+    expect(restored.reason).toBe('not_found')
   })
 })

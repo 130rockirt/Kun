@@ -350,6 +350,7 @@
   "rollbackWorkspaceConfirmDetail": "यह आपके कार्यक्षेत्र में git रीसेट --हार्ड और git क्लीन -fd चलाएगा। इस चेकपॉइंट के बाद से जोड़ा गया कोई भी अप्रतिबद्ध संपादन, अनट्रैक की गई फ़ाइलें और कमिट स्थायी रूप से खो जाएंगे। चैट वार्तालाप यथावत रखा जाएगा.",
   "rollbackWorkspacePartialConfirm": "यह चेकपॉइंट आंशिक है - फिर भी पुनर्स्थापित करें?",
   "rollbackWorkspacePartialConfirmDetail": "Some untracked files were too large to capture in this checkpoint and are not stored in it: {{files}}. Restoring will delete them. A full rescue checkpoint will be taken first so you can recover them. Continue?",
+  "rollbackWorkspaceExpired": "This rollback point has expired: its checkpoint was removed by the retention cap or storage quota. Rolling back this response is no longer possible.",
   "sessionForked": "काँटेदार धागा",
   "sessionForkedFrom": "Forked from {{title}}",
   "sessionForkedFromCompact": "from {{title}}",

@@ -50,6 +50,10 @@ export type GitCheckpointStorageOptions = {
   maxUntrackedTotalBytes?: number
   /** Keep at most this many checkpoints per thread (newest first). Default 5. */
   maxPerThread?: number
+  /** Hard cap on total checkpoint bytes across threads. Default 2 GiB (issue #1156). */
+  maxTotalBytes?: number
+  /** Skip creation when the checkpoint disk has less free space. Default 1 GiB (issue #1156). */
+  minFreeDiskBytes?: number
 }
 
 export const DEFAULT_MAX_UNTRACKED_FILE_BYTES = 5 * 1_024 * 1_024

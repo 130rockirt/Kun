@@ -570,6 +570,13 @@ export function createMaintenanceRecoveryActions(
         }))
     }
     if (!restored.ok) {
+      // The checkpoint was evicted by the hard retention cap / disk quota
+      // (issue #1156). The message keeps its reference; surface the dedicated
+      // expired-rollback message instead of a raw error.
+      if (restored.reason === 'not_found') {
+        set({ error: i18n.t('common:rollbackWorkspaceExpired') })
+        return
+      }
       set({ error: restored.message })
       return
     }

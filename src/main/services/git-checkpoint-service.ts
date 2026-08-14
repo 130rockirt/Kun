@@ -16,3 +16,9 @@ export {
   failGitCheckpointGate
 } from './git-checkpoint-create'
 export { restoreGitCheckpoint } from './git-checkpoint-restore'
+export {
+  ensureQuotaForCreate,
+  evictForQuota,
+  checkpointsTotalBytes,
+  freeDiskBytes
+} from './git-checkpoint-quota'

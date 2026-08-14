@@ -71,10 +71,12 @@ export function registerAppGitIpcHandlers(options: RegisterAppIpcHandlersOptions
   // options: an optional directory override (e.g. another drive) and the
   // per-thread retention cap. Home-relative paths are expanded.
   const resolveCheckpointStorageOptions = (
-    cfg: { directory?: string; maxPerThread?: number }
+    cfg: { directory?: string, maxPerThread?: number, maxTotalBytes?: number, minFreeDiskBytes?: number }
   ): GitCheckpointStorageOptions => ({
     ...(cfg.directory?.trim() ? { checkpointsRoot: expandHomePath(cfg.directory.trim()) } : {}),
-    ...(cfg.maxPerThread !== undefined ? { maxPerThread: cfg.maxPerThread } : {})
+    ...(cfg.maxPerThread !== undefined ? { maxPerThread: cfg.maxPerThread } : {}),
+    ...(cfg.maxTotalBytes !== undefined ? { maxTotalBytes: cfg.maxTotalBytes } : {}),
+    ...(cfg.minFreeDiskBytes !== undefined ? { minFreeDiskBytes: cfg.minFreeDiskBytes } : {})
   })
   ipcMain.handle('git:branches', async (_, workspaceRoot: unknown) =>
     getGitBranches(parseIpcPayload('git:branches', workspaceRootSchema, workspaceRoot))

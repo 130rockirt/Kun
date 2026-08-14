@@ -3,7 +3,6 @@ import {
   APP_LOCALE_OPTIONS,
   CHAT_CONTENT_MAX_WIDTH_MAX,
   CHAT_CONTENT_MAX_WIDTH_MIN,
-  CHECKPOINT_CLEANUP_INTERVAL_DAYS,
   DEFAULT_CURSOR_SPOTLIGHT_COLOR,
   normalizeChatContentMaxWidth,
   normalizeUiFontScale,
@@ -30,6 +29,7 @@ import {
 import { GeneralConversationSettingsPanel } from './settings-section-general-conversation'
 import { GeneralDesktopSettingsPanel } from './settings-section-general-desktop'
 import { LegacySessionImportCard } from './settings-section-general-legacy-import'
+import { CheckpointSettingsPanel } from './settings-section-general-checkpoints'
 
 type Rgb = { r: number; g: number; b: number }
 type GeneralSettingsTab = 'appearance' | 'conversation' | 'directories' | 'desktop'
@@ -254,7 +254,6 @@ export function GeneralSettingsSection({ ctx }: { ctx: Record<string, any> }): R
   const desktopBehavior = form.appBehavior
   const closeAction = desktopBehavior.closeAction ?? (desktopBehavior.closeToTray ? 'tray' : 'ask')
   const closeActionOptions: WindowCloseAction[] = ['ask', 'tray', 'quit']
-  const checkpointCleanupIntervalOptions = Array.from(CHECKPOINT_CLEANUP_INTERVAL_DAYS)
   const fontScale = normalizeUiFontScale(form.uiFontScale)
   const fontScalePercent = Math.round(fontScale * 100)
   const setFontScale = (value: number): void => update({ uiFontScale: normalizeUiFontScale(value) })
@@ -570,94 +569,7 @@ export function GeneralSettingsSection({ ctx }: { ctx: Record<string, any> }): R
           active={directorySubTab === 'checkpoints'}
           className="mt-4"
         >
-          <SettingsCard
-            title={t('gitCheckpointTitle')}
-            description={t('checkpointCreateEnabledDesc')}
-            collapsible
-          >
-          <SettingRow
-            title={t('checkpointCreateEnabled')}
-            description={t('checkpointCreateEnabledDesc')}
-            control={
-              <Toggle
-                checked={form.checkpointCleanup.createEnabled}
-                onChange={(v) => update({ checkpointCleanup: { createEnabled: v } })}
-              />
-            }
-          />
-          <SettingRow
-            title={t('checkpointCleanupEnabled')}
-            description={t('checkpointCleanupEnabledDesc')}
-            control={
-              <Toggle
-                checked={form.checkpointCleanup.enabled}
-                onChange={(v) => update({ checkpointCleanup: { enabled: v } })}
-              />
-            }
-          />
-          <SettingRow
-            title={t('checkpointCleanupInterval')}
-            description={t('checkpointCleanupIntervalDesc')}
-            control={
-              <select
-                className={selectControlClass}
-                value={form.checkpointCleanup.intervalDays}
-                disabled={!form.checkpointCleanup.enabled}
-                onChange={(e) =>
-                  update({
-                    checkpointCleanup: {
-                      intervalDays: Number(e.target.value) as AppSettingsV1['checkpointCleanup']['intervalDays']
-                    }
-                  })
-                }
-              >
-                {checkpointCleanupIntervalOptions.map((days) => (
-                  <option key={days} value={days}>
-                    {t(`checkpointCleanupInterval${days}`)}
-                  </option>
-                ))}
-              </select>
-            }
-          />
-          <SettingRow
-            title={t('checkpointDirectory')}
-            description={t('checkpointDirectoryDesc')}
-            control={
-              <input
-                type="text"
-                className={selectControlClass}
-                placeholder={t('checkpointDirectoryPlaceholder')}
-                value={form.checkpointCleanup.directory ?? ''}
-                disabled={!form.checkpointCleanup.createEnabled}
-                onChange={(e) => update({ checkpointCleanup: { directory: e.target.value } })}
-              />
-            }
-          />
-          <SettingRow
-            title={t('checkpointMaxPerThread')}
-            description={t('checkpointMaxPerThreadDesc')}
-            control={
-              <input
-                type="number"
-                min={1}
-                max={100}
-                className={selectControlClass}
-                value={form.checkpointCleanup.maxPerThread ?? 5}
-                disabled={!form.checkpointCleanup.createEnabled}
-                onChange={(e) => {
-                  const n = Number(e.target.value)
-                  update({
-                    checkpointCleanup: {
-                      maxPerThread: Number.isFinite(n)
-                        ? Math.max(1, Math.min(100, Math.floor(n)))
-                        : 5
-                    }
-                  })
-                }}
-              />
-            }
-          />
-          </SettingsCard>
+          <CheckpointSettingsPanel t={t} form={form} update={update} selectControlClass={selectControlClass} />
         </SettingsTabPanel>
       </SettingsTabPanel>
 

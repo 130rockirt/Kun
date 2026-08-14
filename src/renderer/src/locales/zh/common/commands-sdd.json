@@ -356,6 +356,7 @@
   "rollbackWorkspaceConfirmDetail": "此操作将在您的工作区执行 git reset --hard 和 git clean -fd。所有未提交的修改、未跟踪的文件以及该检查点之后的提交都将被永久丢失。当前对话内容会保留不变。",
   "rollbackWorkspacePartialConfirm": "该检查点不完整，仍要回滚吗？",
   "rollbackWorkspacePartialConfirmDetail": "部分未跟踪文件过大，未被该检查点保存：{{files}}。回滚会删除它们。系统会先创建一个完整的救援检查点以便恢复。是否继续？",
+  "rollbackWorkspaceExpired": "该回滚点已过期：对应的检查点已被保留上限或存储配额清理，无法再回滚这条回答。",
   "sessionForked": "分叉会话",
   "sessionForkedFrom": "分叉自 {{title}}",
   "sessionForkedFromCompact": "来自 {{title}}",

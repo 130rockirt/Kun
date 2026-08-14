@@ -281,6 +281,12 @@ export const DEFAULT_CHECKPOINT_CLEANUP_ENABLED = true
 /** Keep Git checkpoint creation opt-in so storage does not grow unexpectedly. */
 export const DEFAULT_GIT_CHECKPOINT_CREATE_ENABLED = false
 
+/** Issue #1156: hard cap on total checkpoint bytes across all threads. */
+export const DEFAULT_CHECKPOINT_MAX_TOTAL_BYTES = 2 * 1_024 * 1_024 * 1_024
+
+/** Issue #1156: skip checkpoint creation below this much free disk space. */
+export const DEFAULT_CHECKPOINT_MIN_FREE_DISK_BYTES = 1 * 1_024 * 1_024 * 1_024
+
 export const DEFAULT_GIT_BRANCH_PREFIX = 'codex/'
 
 export const DEFAULT_CURSOR_SPOTLIGHT_COLOR = '#85c1f1'
