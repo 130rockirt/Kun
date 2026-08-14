@@ -17,7 +17,6 @@ import type {
   UserInputAnswer
 } from '../agent/types'
 import type { KunRuntimeStatusPayload } from '@shared/kun-gui-api'
-import type { PlanWorktreeRunRecord } from '@shared/plan-worktree'
 import type {
   AppLocale,
   ClawImAgentProfileV1,
@@ -173,29 +172,6 @@ export type SendMessageOverrides = {
   composerContexts?: ComposerContextAttachment[]
   writeContext?: WriteAssistantMessageContext
 }
-
-export type IsolatedPlanBuildRequest = {
-  operationId: string
-  planId: string
-  planRelativePath: string
-  planTitle: string
-  sourceThreadId: string
-  sourceWorkspaceRoot: string
-  orchestration: 'direct' | 'graph'
-  prompt: string
-  displayText: string
-  goalObjective: string
-  branchPrefix?: string
-}
-
-export type IsolatedPlanBuildResult =
-  | { ok: true; run: PlanWorktreeRunRecord; executionThreadId: string }
-  | {
-      ok: false
-      message: string
-      run?: PlanWorktreeRunRecord
-      executionThreadId?: string
-    }
 
 export type ClearDesignHistoryOptions = {
   /** Create and bind one empty replacement thread after the old history is gone. */
@@ -558,7 +534,6 @@ export type ChatState = {
   subscribeThreadEventsLive: (threadId: string) => Promise<void>
   recoverActiveTurn: () => Promise<boolean>
   sendMessage: (text: string, mode?: string, overrides?: SendMessageOverrides) => Promise<boolean>
-  startIsolatedPlanBuild: (input: IsolatedPlanBuildRequest) => Promise<IsolatedPlanBuildResult>
   reviewActiveThread: (target: ReviewTarget) => Promise<boolean>
   drainQueuedMessages: () => Promise<void>
   removeQueuedMessage: (id: string) => void

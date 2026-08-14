@@ -74,6 +74,4 @@ export type RegisterAppIpcHandlersOptions = {
   logInfo?: (category: string, message: string, detail?: unknown) => void
   nativeDialogs?: NativeDialogCoordinator
   workspacePreviewProtocols: WorkspacePreviewProtocolRegistry
-  /** Durable storage root for host-owned plan-worktree lifecycle records. */
-  userDataPath?: string
 }

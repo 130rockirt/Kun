@@ -77,7 +77,7 @@ describe('extension thread metadata', () => {
     expect(summaryFromRow(row)).toMatchObject(extensionMetadata)
   })
 
-  it('keeps a plan-build admission binding in public and indexed summaries', () => {
+  it('keeps inert legacy plan-build metadata in public and indexed summaries', () => {
     const thread = createThreadRecord({
       id: 'thr_plan_admission',
       title: 'Plan executor',

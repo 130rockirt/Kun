@@ -114,13 +114,14 @@ describe('ManagerRemoteThreadStore legacy read compatibility', () => {
     })
   })
 
-  it('keeps manager-backed upserts on the strict persistence schema', async () => {
+  it('allows legacy plan-build metadata to round-trip on ordinary upserts', async () => {
     const thread = legacyHalfBoundThread()
     stubManagerResult(thread)
     const store = new ManagerRemoteThreadStore(managerConnection())
 
-    await expect(store.upsert(thread)).rejects.toThrow(
-      /planBuildRunId, planBuildAdmissionFingerprint and planBuildAdmissionCapabilityHash/u
-    )
+    await expect(store.upsert(thread)).resolves.toMatchObject({
+      id: thread.id,
+      planBuildRunId: 'run-legacy-1'
+    })
   })
 })

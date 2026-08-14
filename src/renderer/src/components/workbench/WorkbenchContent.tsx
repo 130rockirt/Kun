@@ -12,7 +12,6 @@ import { extensionWorkbenchClient } from '../../extensions/extension-workbench-c
 import { resolveCommandOpenView } from '../../extensions/ExtensionWorkbenchSurfaces'
 import { normalizeWorkbenchRoute } from './workbench-route'
 import { shouldShowSideSessionReturnBar } from './workbench-side-session-mode'
-import { PlanWorktreeGlobalRecovery } from '../../plan/PlanWorktreeGlobalRecovery'
 
 type Context = Record<string, any>
 
@@ -76,7 +75,6 @@ export function WorkbenchContent({ context }: { context: Context }): ReactElemen
         })
       }}
     >
-      <PlanWorktreeGlobalRecovery runtimeReady={runtimeConnection === 'ready'} />
       <WorkbenchLeftSidebar
         collapsed={leftSidebarCollapsed || activeExtensionCenterView?.point === 'views.fullPage'}
         width={leftSidebarWidth}

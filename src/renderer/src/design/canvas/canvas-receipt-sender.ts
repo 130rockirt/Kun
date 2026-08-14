@@ -6,6 +6,14 @@ export type CanvasReceiptError = {
   suggestion?: string
 }
 
+export type CanvasReceiptGeneratedFile = {
+  name: string
+  relativePath: string
+  absolutePath?: string
+  mimeType: 'image/png' | 'image/svg+xml'
+  byteSize: number
+}
+
 /**
  * Two-phase design tool receipt: after a canvas turn is applied, tell the
  * Kun loop whether the renderer actually applied (or rejected) the design
@@ -21,11 +29,13 @@ export function sendCanvasTurnReceipt(input: {
   receiptKey?: string
   affectedIds: readonly string[]
   errors: readonly CanvasReceiptError[]
+  generatedFiles?: readonly CanvasReceiptGeneratedFile[]
 }): void {
   const { threadId, turnId } = input
   if (!threadId || !turnId) return
   const affectedIds = [...input.affectedIds]
   const errors = [...input.errors]
+  const generatedFiles = [...(input.generatedFiles ?? [])]
   // A keyed receipt also acknowledges valid no-op tools such as
   // design_create_board. Without it the loop would wait for the whole turn,
   // while the renderer's old turn-level receipt is only sent after that turn.
@@ -40,7 +50,8 @@ export function sendCanvasTurnReceipt(input: {
       ...(input.receiptKey ? { receiptKey: input.receiptKey } : {}),
       status: errors.length > 0 ? 'failed' : 'applied',
       ...(errors.length > 0 ? { errors } : {}),
-      ...(affectedIds.length > 0 ? { affectedIds } : {})
+      ...(affectedIds.length > 0 ? { affectedIds } : {}),
+      ...(generatedFiles.length > 0 ? { generatedFiles } : {})
     })
   ).catch(() => undefined)
 }

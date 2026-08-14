@@ -350,8 +350,6 @@ export class KunRuntimeProviderServices {
       title?: string
       turnId?: string
       workspace?: string
-      planBuildRunId?: string
-      planBuildAgentSurface?: 'code'
       designDocumentTarget?: DesignDocumentTarget
       designCloneOperationId?: string
     }
@@ -361,8 +359,6 @@ export class KunRuntimeProviderServices {
     if (options?.title) body.title = options.title
     if (options?.turnId) body.turnId = options.turnId
     if (options?.workspace) body.workspace = options.workspace
-    if (options?.planBuildRunId) body.planBuildRunId = options.planBuildRunId
-    if (options?.planBuildAgentSurface) body.planBuildAgentSurface = options.planBuildAgentSurface
     if (options?.designDocumentTarget) body.designDocumentTarget = options.designDocumentTarget
     if (options?.designCloneOperationId) body.designCloneOperationId = options.designCloneOperationId
     const url = kunThreadForkPath(threadId)

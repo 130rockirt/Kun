@@ -4,10 +4,7 @@ import { GitBranch, Loader2, RefreshCw, Trash2 } from 'lucide-react'
 import type { NormalizedThread } from '../agent/types'
 import type { GitBranchWorktreeRow, GitBranchWorktreesResult } from '@shared/git-branches'
 import { DEFAULT_GIT_BRANCH_PREFIX } from '@shared/app-settings'
-import type { PlanWorktreeRunRecord } from '@shared/plan-worktree'
 import { readThreadWorktreeRegistry } from '../lib/thread-worktree-registry'
-import { usePlanWorktreeStore } from '../plan/plan-worktree-store'
-import { PlanWorktreeLifecycle } from './plan/PlanWorktreeLifecycle'
 import { SettingsCard, SettingRow } from './settings-controls'
 
 type WorktreeDisplayRow = GitBranchWorktreeRow & {
@@ -30,7 +27,6 @@ export function WorktreeSettingsSection({ ctx }: { ctx: Record<string, any> }): 
     : undefined
   const projectPath = expandHomePath(String(ctx.form?.workspaceRoot || ctx.kun?.workspaceRoot || '')).trim()
   const [result, setResult] = useState<GitBranchWorktreesResult | null>(null)
-  const [planRuns, setPlanRuns] = useState<PlanWorktreeRunRecord[]>([])
   const [loading, setLoading] = useState(false)
   const [busyPath, setBusyPath] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -39,15 +35,10 @@ export function WorktreeSettingsSection({ ctx }: { ctx: Record<string, any> }): 
     setLoading(true)
     setError(null)
     try {
-      const [next, runs] = await Promise.all([
-        projectPath
-          ? window.kunGui.listGitBranchWorktrees({ projectPath, worktreeRoot })
-          : Promise.resolve(null),
-        window.kunGui.planWorktree.list({ includeCompleted: true })
-      ])
+      const next = projectPath
+        ? await window.kunGui.listGitBranchWorktrees({ projectPath, worktreeRoot })
+        : null
       setResult(next)
-      setPlanRuns(runs)
-      for (const run of runs) usePlanWorktreeStore.getState().upsertRun(run)
       if (next && !next.ok) setError(next.message)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
@@ -74,10 +65,6 @@ export function WorktreeSettingsSection({ ctx }: { ctx: Record<string, any> }): 
       }
     })
   }, [result, threads])
-  const managedPaths = useMemo(
-    () => new Set(planRuns.map((run) => run.worktreePath)),
-    [planRuns]
-  )
 
   const formatCreatedAt = (value: string): string => {
     if (!value) return ''
@@ -158,23 +145,10 @@ export function WorktreeSettingsSection({ ctx }: { ctx: Record<string, any> }): 
             ) : null}
 
             <div className="overflow-hidden rounded-lg border border-ds-border-muted bg-ds-main/35">
-              {planRuns.length > 0 ? (
-                <div className="flex flex-col gap-2 border-b border-ds-border-muted p-3">
-                  <div className="text-[12px] font-semibold text-ds-ink">
-                    {t('planWorktreeManagedRuns')}
-                  </div>
-                  {planRuns.map((run) => (
-                    <PlanWorktreeLifecycle key={run.runId} planId={run.planId} runRecord={run} />
-                  ))}
-                </div>
-              ) : null}
               {rows.length === 0 ? (
-                planRuns.length === 0 ? (
-                  <div className="px-3 py-4 text-[13px] text-ds-faint">{t('worktreeEmptyList')}</div>
-                ) : null
+                <div className="px-3 py-4 text-[13px] text-ds-faint">{t('worktreeEmptyList')}</div>
               ) : rows.map((row) => {
                 const displayPath = compactHomePath(row.path)
-                const managed = managedPaths.has(row.path)
                 return (
                   <div key={row.path} className="border-b border-ds-border-muted px-3 py-3 last:border-b-0">
                     <div className="flex items-start justify-between gap-3">
@@ -197,25 +171,19 @@ export function WorktreeSettingsSection({ ctx }: { ctx: Record<string, any> }): 
                           </span>
                         </div>
                       </div>
-                      {managed ? (
-                        <span className="shrink-0 rounded-full bg-accent/10 px-2 py-1 text-[11px] font-semibold text-accent">
-                          {t('planWorktreeManaged')}
-                        </span>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => void removeWorktree(row.path)}
-                          disabled={busyPath === row.path}
-                          className="inline-flex shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-[12px] font-medium text-red-600 transition hover:bg-red-500/10 disabled:opacity-45"
-                        >
-                          {busyPath === row.path ? (
-                            <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={1.8} />
-                          ) : (
-                            <Trash2 className="h-3.5 w-3.5" strokeWidth={1.8} />
-                          )}
-                          {t('worktreeRemove')}
-                        </button>
-                      )}
+                      <button
+                        type="button"
+                        onClick={() => void removeWorktree(row.path)}
+                        disabled={busyPath === row.path}
+                        className="inline-flex shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-[12px] font-medium text-red-600 transition hover:bg-red-500/10 disabled:opacity-45"
+                      >
+                        {busyPath === row.path ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={1.8} />
+                        ) : (
+                          <Trash2 className="h-3.5 w-3.5" strokeWidth={1.8} />
+                        )}
+                        {t('worktreeRemove')}
+                      </button>
                     </div>
                   </div>
                 )

@@ -10,8 +10,8 @@ const DRAFT_PLAN_INTRO = 'Kun is asking you to draft a GUI-owned implementation 
 const REFINE_PLAN_INTRO = 'Kun is asking you to revise an existing GUI-owned implementation plan.'
 const LEGACY_DRAFT_PLAN_INTRO = 'DeepSeek GUI is asking you to draft a GUI-owned implementation plan.'
 const LEGACY_REFINE_PLAN_INTRO = 'DeepSeek GUI is asking you to revise an existing GUI-owned implementation plan.'
-const BUILD_PLAN_INTRO = 'Please read and execute the GUI plan file at'
-const BUILD_GRAPH_PLAN_INTRO = 'Execute the GUI plan saved at'
+const BUILD_PLAN_INTRO = 'Please execute the GUI plan described in the structured context below.'
+const BUILD_GRAPH_PLAN_INTRO = 'Execute the GUI plan described in the structured context below using Graph orchestration.'
 const DRAFT_PLAN_DISPLAY_PREFIX = 'Create plan:'
 const REFINE_PLAN_DISPLAY_PREFIX = 'Revise plan:'
 const BUILD_PLAN_DISPLAY_PREFIX = 'Build plan:'
@@ -105,8 +105,11 @@ export function buildPlanBuildPrompt(
     : []
   return [
     orchestration === 'graph'
-      ? `${BUILD_GRAPH_PLAN_INTRO} \`${planRelativePath}\` using Graph orchestration.`
-      : `${BUILD_PLAN_INTRO} \`${planRelativePath}\` in this workspace.`,
+      ? BUILD_GRAPH_PLAN_INTRO
+      : BUILD_PLAN_INTRO,
+    '<plan_execution_context>',
+    jsonForPrompt({ planRelativePath }),
+    '</plan_execution_context>',
     ...worktreeProtocol,
     normalizedPlan
       ? 'The verbatim Markdown embedded below is the authoritative implementation plan.'
@@ -121,8 +124,8 @@ export function buildPlanBuildPrompt(
     ...(normalizedPlan
       ? [
           '',
-          `<implementation_plan path=${JSON.stringify(planRelativePath)}>`,
-          normalizedPlan,
+          '<implementation_plan encoding="json-string">',
+          jsonForPrompt(normalizedPlan),
           '</implementation_plan>'
         ]
       : [])
@@ -130,13 +133,13 @@ export function buildPlanBuildPrompt(
 }
 
 function buildPromptManagedWorktreeProtocol(input: PromptManagedPlanWorktree): string[] {
-  const context = JSON.stringify({
+  const context = jsonForPrompt({
     sourceRepositoryRoot: input.repositoryRoot,
     targetBranch: input.targetBranch,
     temporaryBranchPrefix: input.branchPrefix,
     sourceDirtyFileCount: input.dirtyCount,
     planTitle: input.planTitle
-  }, null, 2)
+  })
   return [
     '',
     '<prompt_managed_worktree_protocol>',
@@ -155,6 +158,13 @@ function buildPromptManagedWorktreeProtocol(input: PromptManagedPlanWorktree): s
     '9. If the plan produces no repository changes, the unchanged worktree and temporary branch may be removed safely without moving targetBranch.',
     '</prompt_managed_worktree_protocol>'
   ]
+}
+
+function jsonForPrompt(value: unknown): string {
+  return JSON.stringify(value, null, 2)
+    .replaceAll('<', '\\u003c')
+    .replaceAll('>', '\\u003e')
+    .replaceAll('&', '\\u0026')
 }
 
 export function isGuiPlanInternalPrompt(text: string): boolean {
@@ -209,7 +219,18 @@ export function formatGuiPlanPromptForDisplay(text: string): string | null {
     normalized.includes(BUILD_PLAN_INTRO) ||
     normalized.includes(BUILD_GRAPH_PLAN_INTRO)
   ) {
-    const path = normalized.match(/`([^`]+\.md)`/)?.[1]
+    const encodedContext = readSectionBetween(
+      normalized,
+      '<plan_execution_context>',
+      '</plan_execution_context>'
+    )
+    let path: string | undefined
+    try {
+      const parsed = JSON.parse(encodedContext) as { planRelativePath?: unknown }
+      path = typeof parsed.planRelativePath === 'string' ? parsed.planRelativePath : undefined
+    } catch {
+      path = normalized.match(/`([^`]+\.md)`/)?.[1]
+    }
     return path ? `Build plan: ${path}` : 'Build GUI plan'
   }
   return null

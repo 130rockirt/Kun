@@ -54,11 +54,7 @@ export async function loadMoreThreads(
       includeSide: true,
       lean: true
     })
-    // Filter out side conversations that are not durable plan-build surfaces,
-    // mirroring refreshThreads so pagination never leaks subagent sessions.
-    const filtered = page.threads.filter(
-      (thread) => thread.relation !== 'side' || Boolean(thread.planBuildRunId?.trim())
-    )
+    const filtered = page.threads.filter((thread) => thread.relation !== 'side')
     set((s) => ({
       threads: mergeThreadPages(s.threads, filtered),
       threadListCursorByWorkspace: {

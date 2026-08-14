@@ -6,9 +6,9 @@ import i18n from '../../i18n'
 import { PlanBuildActions } from '../plan/PlanBuildActions'
 import { ReviewPlanCard, TurnChangeSummary } from './message-timeline-cards'
 import {
-  resetPlanWorktreeStoreForTests,
-  usePlanWorktreeStore
-} from '../../plan/plan-worktree-store'
+  resetPlanWorktreePreferenceStoreForTests,
+  usePlanWorktreePreferenceStore
+} from '../../plan/plan-worktree-preference-store'
 
 function change(index: number): ToolBlock {
   const path = `src/file-${index}.ts`
@@ -89,7 +89,7 @@ describe('TurnChangeSummary', () => {
 describe('plan build actions', () => {
   beforeEach(async () => {
     await i18n.changeLanguage('en')
-    resetPlanWorktreeStoreForTests()
+    resetPlanWorktreePreferenceStoreForTests()
   })
 
   it('selects a rounded card build mode before starting the requested orchestration', async () => {
@@ -167,7 +167,7 @@ describe('plan build actions', () => {
   })
 
   it('hides isolated-worktree controls while the Laboratory experiment is off', async () => {
-    usePlanWorktreeStore.getState().initializePlan('plan-disabled', false)
+    usePlanWorktreePreferenceStore.getState().initializePlan('plan-disabled', false, 'codex/')
     let renderer: ReactTestRenderer
 
     await act(async () => {
@@ -188,20 +188,8 @@ describe('plan build actions', () => {
   })
 
   it('shares one isolation override between panel and inline card actions', async () => {
-    const store = usePlanWorktreeStore.getState()
-    store.initializePlan('plan-shared', true)
-    store.beginPreflight('plan-shared', 'context', 'request')
-    store.resolvePreflight('plan-shared', 'context', 'request', {
-      eligible: true,
-      sourceWorkspaceRoot: '/repo',
-      sourceCheckoutRoot: '/repo',
-      primaryRepositoryRoot: '/repo',
-      repositoryIdentity: '/repo/.git',
-      targetBranch: 'feature/source',
-      baseCommit: 'a'.repeat(40),
-      sourceIsLinkedWorktree: false,
-      checkedAt: '2026-08-12T00:00:00.000Z'
-    })
+    const store = usePlanWorktreePreferenceStore.getState()
+    store.initializePlan('plan-shared', true, 'codex/')
     let renderer: ReactTestRenderer
     await act(async () => {
       renderer = create(createElement('div', null,
@@ -229,6 +217,23 @@ describe('plan build actions', () => {
       .map((item) => item.props['aria-checked'])).toEqual([false, false])
     expect(renderer!.root.findAllByProps({ 'data-plan-build-orchestration': 'direct' })
       .every((item) => item.props.disabled === false)).toBe(true)
+
+    const cardGraph = renderer!.root.findAllByProps({
+      'data-plan-build-orchestration': 'graph'
+    })[1]!
+    await act(async () => cardGraph.props.onClick())
+    const graphSwitches = renderer!.root.findAllByProps({ role: 'switch' })
+    expect(graphSwitches[0]!.props.disabled).toBe(false)
+    expect(graphSwitches[1]!.props.disabled).toBe(true)
+    expect(JSON.stringify(renderer!.toJSON())).toContain(
+      'Prompt-managed worktrees are available for Direct builds only'
+    )
+    await act(async () => renderer!.root.findAllByProps({
+      'data-plan-build-orchestration': 'direct'
+    })[1]!.props.onClick())
+    expect(renderer!.root.findAllByProps({ role: 'switch' })[1]!.props.disabled).toBe(false)
+    expect(renderer!.root.findAllByProps({ role: 'switch' })
+      .map((item) => item.props['aria-checked'])).toEqual([false, false])
 
     act(() => renderer!.unmount())
   })

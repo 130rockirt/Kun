@@ -32,7 +32,6 @@ import type {
   WorktreeInfo,
   WorktreePoolStatus
 } from './worktree'
-import type { PlanWorktreeApi } from './plan-worktree'
 import type {
   GuiUpdateChannel,
   GuiUpdateDownloadResult,
@@ -504,7 +503,6 @@ export type KunGuiApi = ExtensionIpcApi & {
     projectPath: string
     worktreeRoot?: string
   }) => Promise<number | null>
-  planWorktree: PlanWorktreeApi
   listEditors: () => Promise<EditorListResult>
   openEditorPath: (options: OpenEditorPathOptions) => Promise<EditorOpenResult>
   listWorkspaceDirectory: (options: WorkspaceDirectoryTarget) => Promise<WorkspaceDirectoryListResult>

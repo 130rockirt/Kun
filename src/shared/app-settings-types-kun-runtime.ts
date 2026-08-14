@@ -130,7 +130,7 @@ export type KunLabPptAgentSettingsV1 = {
 
 /** Experimental gate for isolated GUI plan builds. */
 export type KunLabPlanWorktreeSettingsV1 = {
-  /** Expose and allow isolated plan-worktree execution. Default false. */
+  /** Expose prompt-managed Direct plan worktrees. Default false. */
   enabled: boolean
 }
 

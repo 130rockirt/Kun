@@ -235,7 +235,8 @@ export type NormalizedThread = {
   latestTurnStatus?: string
   relation?: 'primary' | 'fork' | 'side'
   parentThreadId?: string
-  planBuildRunId?: string // Host lifecycle linkage for an isolated plan fork.
+  /** Legacy plan-build linkage retained for read-only history compatibility. */
+  planBuildRunId?: string
   forkedFromThreadId?: string
   forkedFromTitle?: string
   forkedAt?: string

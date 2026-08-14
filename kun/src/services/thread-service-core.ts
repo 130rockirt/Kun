@@ -5,7 +5,6 @@ import type { SessionStore } from '../ports/session-store.js'
 import type { IdGenerator } from '../ports/id-generator.js'
 import type {
   CreateThreadRequest,
-  SetPlanBuildAdmissionFenceRequest,
   SetThreadGoalRequest,
   SetThreadTodosRequest,
   ThreadGoal,
@@ -20,8 +19,7 @@ import type {
   ThreadTodoSource,
   ThreadTodoStatus,
   ThreadSummary,
-  ResumeSessionMetadata,
-  BackfillPlanBuildAdmissionBindingRequest
+  ResumeSessionMetadata
 } from '../contracts/threads.js'
 import type { ExtensionThreadMetadata } from '../contracts/threads.js'
 import type {
@@ -100,11 +98,6 @@ export type ForkThreadOptions = {
   turnId?: string
   beforeTurn?: boolean
   approvalReviewer?: ApprovalReviewer
-  workspace?: string
-  planBuildRunId?: string
-  planBuildAgentSurface?: 'code'
-  planBuildAdmissionFingerprint?: string
-  planBuildAdmissionCapability?: string
   designDocumentTarget?: DesignDocumentTarget
   designCloneOperationId?: string
 }
@@ -227,14 +220,6 @@ export interface ThreadService {
   syncTodosFromPlan(threadId: string, options: SyncPlanTodosOptions): Promise<ThreadTodoList>;
   delete(threadId: string): Promise<boolean>;
   fork(threadId: string, options?: ForkThreadOptions ): Promise<ThreadRecord>;
-  setPlanBuildAdmissionFence(
-    threadId: string,
-    request: SetPlanBuildAdmissionFenceRequest
-  ): Promise<ThreadRecord>;
-  backfillPlanBuildAdmissionBinding(
-    threadId: string,
-    request: BackfillPlanBuildAdmissionBindingRequest
-  ): Promise<ThreadRecord>;
   resumeSession(
     sessionId: string,
     options?: ResumeSessionOptions

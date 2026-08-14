@@ -440,17 +440,23 @@ export function createDesignExportCanvasTool(): LocalTool {
         .slice(0, 12)
       const fileName = `${stem}-${suffix}.${format}`
       const relativePath = `.deepseekgui-images/${fileName}`
-      const mimeType = format === 'png' ? 'image/png' : 'image/svg+xml'
+      const exportRequest = { format, fileName, relativePath }
 
       return {
         output: {
           ok: true,
           tool: DESIGN_EXPORT_CANVAS_TOOL_NAME,
           action: 'export_canvas',
-          exportRequest: { format, fileName, relativePath },
-          generatedFiles: [{ name: fileName, relativePath, mimeType }],
+          exportRequest,
+          status: 'accepted',
+          receiptKey: designCanvasReceiptKey(
+            context.threadId,
+            context.turnId,
+            context.activeToolCallId,
+            [exportRequest]
+          ),
           ops: [],
-          message: `Queued the current whiteboard for ${format.toUpperCase()} export at ${relativePath}.`
+          message: `Accepted the current whiteboard for ${format.toUpperCase()} export at ${relativePath}; this result does not verify that the renderer wrote the file.`
         }
       }
     }

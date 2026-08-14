@@ -35,25 +35,32 @@ uses the internal `claw` name, and Work retains the internal `write` name, for c
    `src/renderer/src/agent/kun-mapper.ts`.
 5. Add settings only under `agents.kun`.
 
-## Isolated Plan-Build Boundary
+## Prompt-Managed Plan Worktrees
 
-- Plan builds default to a host-managed Git worktree. Renderer owns the user
-  choice and lifecycle projection; Electron main owns preflight, durable run
-  records, Git reconciliation, target fast-forward, and proven cleanup.
-- Capture the exact launching checkout, checked-out branch, and HEAD. Never
-  substitute `main`, `master`, a remote default, or another worktree's branch.
-- Kun remains the only execution runtime. The plan build uses a linked `side`
-  thread bound to the outer worktree; Graph worker worktrees remain subordinate
-  and must integrate into that outer execution branch before root completion.
-- The linked plan-build thread is presented as the continuing main conversation:
-  it inherits the source history, keeps the composer available while execution
-  remains admissible, and sends follow-up input into the isolated workspace.
-  Ordinary subagent `side` threads keep their dedicated process presentation.
-- Automatic integration requires structured successful turn, goal, gate, and
-  Graph state. Assistant prose is never completion evidence.
-- Conflicts stay in the isolated worktree. Never switch, stash, reset, clean, or
-  force-update the captured source checkout. Cleanup requires ancestry or
-  unchanged-run proof and rebinds the execution thread before removing paths.
+- `agents.kun.lab.planWorktree.enabled` gates this experiment and defaults to
+  false. It applies only to Direct plan builds; Graph keeps its normal current-
+  workspace flow and its own node isolation.
+- On execution, Renderer first saves the plan, then reads the exact local
+  repository root, checked-out branch, and dirty-file count through the generic
+  Git branch API. A non-Git workspace, unavailable Git, or detached HEAD blocks
+  the send with a concrete error.
+- Renderer injects a fixed Git lifecycle protocol and the authoritative plan
+  snapshot into the next user input on the current task. It does not fork or
+  select another task, change the task workspace, close the plan panel, create
+  a host run record, or monitor integration.
+- The Agent creates a uniquely named temporary branch/worktree, performs all
+  implementation and validation there, rebases when the target moved, uses
+  `merge --ff-only`, and cleans up only after ancestry or unchanged-work proof.
+- Uncommitted source-checkout changes remain exactly as-is and are excluded
+  from the worktree baseline. The Agent must never stash, reset, clean, switch,
+  commit, or otherwise manipulate them. If they block integration, preserve the
+  temporary worktree/branch and report the recovery details.
+- Repository paths, branch names, prefixes, titles, and plan Markdown are
+  structurally encoded inside the user input. None of this dynamic context may
+  enter the immutable system prefix, including when switching Code and Design.
+- Legacy `planBuildRunId` and admission fields may still be parsed from stored
+  history, but they are inert: they do not freeze input, recover a run, rebind a
+  workspace, or receive special task presentation.
 
 ## Forbidden Paths
 
@@ -103,9 +110,10 @@ Manual smoke:
   accepted turns freeze their own surface while the Code-owned thread and
   timeline remain stable. The first accepted Design turn locks only its
   document/output/style profile, and later Code turns remain valid.
-- Direct and Graph plan builds can prepare an isolated worktree, retain conflict
-  recovery state, fast-forward the captured branch, rebind the execution
-  transcript, and remove only proven-safe temporary state.
+- With the Lab experiment enabled, a Direct plan build sends the prompt-managed
+  worktree protocol on the same task, leaves dirty source files untouched, and
+  preserves unresolved worktree/branch state for manual recovery. Graph does
+  not receive that protocol.
 - Work can open the workspace, request inline completion, and use selected-text
   assistant actions.
 - Connect phone can save settings and run a manual task through a Kun thread.

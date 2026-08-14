@@ -12,17 +12,22 @@ Kun 桌面应用当前只有一个可运行的本地 Agent 运行时：仓库自
 4. 在 `src/renderer/src/agent/kun-runtime.ts` 与 `src/renderer/src/agent/kun-mapper.ts` 中完成端点与事件映射。
 5. 仅在 `agents.kun` 下新增设置项。
 
-## 隔离计划构建边界
+## 提示词管理的计划 Worktree 边界
 
-- 计划构建默认使用宿主托管的 Git worktree。Renderer 只负责用户选择与生命周期展示；
-  Electron main 负责预检、持久运行记录、Git 协调、目标分支快进与有证明的清理。
-- 必须捕获启动任务的精确 checkout、当前分支和 HEAD；不得替换成 `main`、`master`、
-  远端默认分支或其他 worktree 的分支。
-- Kun 仍是唯一执行运行时。构建使用绑定到外层 worktree 的关联 `side` 会话；Graph
-  worker worktree 必须先把结果合入该外层执行分支，根 Graph 才能完成。
-- 自动集成只接受结构化的回合、目标、gate 与 Graph 成功状态，不能解析助手文案猜测完成。
-- 冲突必须留在隔离 worktree；禁止切换、stash、reset、clean 或强制更新源 checkout。
-  清理前必须证明未变化或已合入，并先把执行会话重新绑定到源 checkout。
+- `agents.kun.lab.planWorktree.enabled` 是默认关闭的实验开关，仅适用于 Direct 计划构建；
+  Graph 保持当前工作区流程和自身节点隔离。
+- Renderer 点击执行时先保存计划，再用通用 Git 分支 API 读取精确仓库根、本地当前分支和
+  脏文件数。非 Git、Git 不可用或 detached HEAD 会阻止发送，脏工作区不会被阻止。
+- 应用只把固定 Git 生命周期协议和权威计划快照注入当前任务的下一条 user input，不创建
+  或切换任务、不改变 workspace、不关闭计划面板，也不持久化或监听宿主运行记录。
+- Agent 从目标分支的已提交 HEAD 创建唯一临时分支和 worktree，在其中实现、测试、提交、
+  必要时 rebase，并只用 `merge --ff-only` 合入。源 checkout 的未提交修改不进入基线，
+  且不得被 stash、reset、clean、切换或提交。
+- 只有证明临时提交已包含在目标分支后才能非强制清理。测试失败、冲突无法可靠解决或合入
+  受阻时必须保留 worktree 和分支并报告恢复信息。
+- 动态分支、路径、标题、脏文件数和 Markdown 经过结构化编码后只进入 user input；
+  Code / Design 切换也不得改变 immutable system prefix。
+- 旧 `planBuildRunId` 等字段仅作历史解析，不再触发恢复、输入冻结、workspace 重绑或特殊展示。
 
 ## 禁止路径
 
@@ -60,8 +65,8 @@ npm run build
 - 不可变前缀漂移与异常的 tool-call/tool-result 历史必须在请求下发 DeepSeek 前被拦截。
 - Code 可在同一会话中切换下一回合的 Code / Design 意图；Design 在共享时间线中创建、
   迭代、预览与导出设计稿。
-- Direct / Graph 计划构建可创建隔离 worktree、保留冲突恢复状态、快进捕获的目标分支、
-  重绑执行会话，并且只删除已证明安全的临时状态。
+- 开启实验后，Direct 计划构建在当前任务发送提示词 Worktree 协议，保持源目录脏文件原样，
+  并在失败时保留现场；Graph 不注入该协议。
 - Work 可以打开工作区、发起 inline 补全、使用选中文本助手动作。
 - 连接手机可以保存设置，并通过 Kun 会话执行手工任务。
 - 设置 -> Agent 仅显示 Kun。

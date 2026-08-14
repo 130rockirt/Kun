@@ -333,12 +333,8 @@ export async function listGitBranchWorktrees(
 export async function removeGitBranchWorktree(params: {
   workspaceRoot: string
   worktreePath: string
-  protectedPlanWorktree?: boolean
 }): Promise<void> {
   const cwd = await resolveGitCwd(params.workspaceRoot)
   if (!cwd) throw new Error('No working directory selected.')
-  if (params.protectedPlanWorktree) {
-    throw new Error('Plan coordinator worktrees cannot be removed by the generic worktree action.')
-  }
   await runGit(cwd, ['worktree', 'remove', '--force', params.worktreePath], 30_000)
 }

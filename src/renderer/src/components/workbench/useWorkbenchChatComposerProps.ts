@@ -1,15 +1,10 @@
-import { useEffect, useMemo, type Dispatch, type SetStateAction } from 'react'
+import { useMemo, type Dispatch, type SetStateAction } from 'react'
 import type { QueuedUserMessage } from '../../store/chat-store-types'
 import {
   canGuideQueuedMessage,
   queuedMessageMatchesRunningTurn
 } from '../../store/queued-message-guidance'
 import { useChatStore } from '../../store/chat-store'
-import {
-  hydratePlanWorktreeComposerRun,
-  planWorktreeComposerAccess
-} from '../../plan/plan-worktree-composer-access'
-import { usePlanWorktreeStore } from '../../plan/plan-worktree-store'
 import type { WorkbenchChatStageProps } from './WorkbenchChatStage'
 
 type ComposerProps = WorkbenchChatStageProps['composerProps']
@@ -191,27 +186,6 @@ export function useWorkbenchChatComposerProps({
     ))
     return runningUser?.kind === 'user' ? runningUser.meta : undefined
   })
-  const activeThread = useChatStore((state) =>
-    state.threads.find((thread) => thread.id === activeThreadId))
-  const worktreePlans = usePlanWorktreeStore((state) => state.plans)
-  const upsertWorktreeRun = usePlanWorktreeStore((state) => state.upsertRun)
-  const worktreeComposerAccess = useMemo(
-    () => planWorktreeComposerAccess(activeThread, worktreePlans, activeThreadId),
-    [activeThread, activeThreadId, worktreePlans]
-  )
-  useEffect(() => {
-    let cancelled = false
-    void hydratePlanWorktreeComposerRun(
-      activeThread,
-      worktreePlans,
-      (runId) => window.kunGui.planWorktree.get({ runId }),
-      (run) => {
-        if (!cancelled) upsertWorktreeRun(run)
-      },
-      activeThreadId
-    ).catch(() => undefined)
-    return () => { cancelled = true }
-  }, [activeThread, activeThreadId, upsertWorktreeRun, worktreePlans])
   return useMemo(() => {
     const designTaskActive = route === 'chat' && !activeSddDraft && taskSurface === 'design'
     return ({
@@ -221,10 +195,7 @@ export function useWorkbenchChatComposerProps({
     setMode: setComposerMode,
     taskSurface: route === 'chat' && !activeSddDraft ? taskSurface : undefined,
     taskSurfaceLocked,
-    disabled: taskSurfaceTransitioning || !worktreeComposerAccess.writable,
-    disabledReason: worktreeComposerAccess.writable
-      ? undefined
-      : worktreeComposerAccess.reason,
+    disabled: taskSurfaceTransitioning,
     designTaskProfile,
     designProfileLocked,
     ...(imageGenerationEnabled !== undefined ? { imageGenerationEnabled } : {}),
@@ -348,8 +319,6 @@ export function useWorkbenchChatComposerProps({
     taskSurfaceLocked,
     designProfileLocked,
     taskSurfaceTransitioning,
-    worktreeComposerAccess.writable,
-    worktreeComposerAccess.reason,
     designTaskProfile,
     imageGenerationEnabled,
     imageGenerationAvailable,

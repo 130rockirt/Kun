@@ -22,7 +22,6 @@ import {
   expectedKunRuntimeBuildId,
   getRuntimeAuthToken,
   kunRuntimeAdapter,
-  readPlanBuildAdmissionBindingCapability,
   resolveRuntimeRequestTimeoutMs,
   runtimeAuthHeaders,
   runtimeRequestViaHost,
@@ -570,30 +569,4 @@ describe('kunRuntimeAdapter.isChildRunning dead-PID recovery', () => {
     expect(kunRuntimeAdapter.getBaseUrl(settingsForPort(18788))).toBe('http://127.0.0.1:18788')
   })
 
-  it('reads the plan-build admission binding capability from runtime info', async () => {
-    const capabilities = buildRuntimeCapabilityManifest({
-      model: modelCapabilitiesForModel('fixture')
-    })
-    const port = await listen((_req, res) => {
-      res.setHeader('Content-Type', 'application/json')
-      res.end(JSON.stringify({ capabilities }))
-    })
-    const settings = settingsForPort(port)
-    await expect(readPlanBuildAdmissionBindingCapability(settings, async () => undefined))
-      .resolves.toBe(true)
-  })
-
-  it('rejects runtime info without the plan-build admission binding flag', async () => {
-    const capabilities = buildRuntimeCapabilityManifest({
-      model: modelCapabilitiesForModel('fixture')
-    })
-    delete (capabilities as { planBuildAdmissionBindingV1?: boolean }).planBuildAdmissionBindingV1
-    const port = await listen((_req, res) => {
-      res.setHeader('Content-Type', 'application/json')
-      res.end(JSON.stringify({ capabilities }))
-    })
-    const settings = settingsForPort(port)
-    await expect(readPlanBuildAdmissionBindingCapability(settings, async () => undefined))
-      .resolves.toBe(false)
-  })
 })

@@ -1,9 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { NormalizedThread } from '../../agent/types'
-import {
-  isManagedPlanBuildConversation,
-  shouldShowSideSessionReturnBar
-} from './workbench-side-session-mode'
+import { shouldShowSideSessionReturnBar } from './workbench-side-session-mode'
 
 function thread(patch: Partial<NormalizedThread> = {}): NormalizedThread {
   return {
@@ -28,18 +25,17 @@ describe('workbench side-session presentation', () => {
     })).toBe(true)
   })
 
-  it('presents a managed plan-build side thread as an interactive main conversation', () => {
+  it('treats a legacy plan-build side thread like an ordinary side conversation', () => {
     const execution = thread({
       workspace: '/Users/zxy/.kun/worktrees/run-1/project',
       planBuildRunId: 'run-1'
     })
 
-    expect(isManagedPlanBuildConversation(execution)).toBe(true)
     expect(shouldShowSideSessionReturnBar({
       thread: execution,
       relation: 'side',
       parentThreadId: 'thread-parent'
-    })).toBe(false)
+    })).toBe(true)
   })
 
   it('does not show the return bar without a side-thread parent', () => {

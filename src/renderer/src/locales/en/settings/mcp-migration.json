@@ -393,8 +393,6 @@
   "uiPluginCharacterScaleLarger": "Make character larger",
   "worktree": "Worktrees",
   "sectionWorktree": "Git worktrees",
-  "planWorktreeManagedRuns": "Managed plan builds",
-  "planWorktreeManaged": "Managed plan build",
   "gitBranchPrefix": "New branch prefix",
   "gitBranchPrefixDesc": "Prefix branch names created from the branch picker. Leave blank to create names exactly as entered.",
   "worktreeOverview": "Worktrees",

@@ -367,11 +367,6 @@ export function createNavigationWorkspaceActions(
       let listPageMeta: { nextCursor?: string; hasMore: boolean; total?: number } | null = null
       try {
         if (typeof p.listThreadsPage === 'function') {
-          // Full calibration page: no limit so the complete inventory stays in
-          // memory for registry reconciliation; the page contract still returns
-          // total + cursor metadata used to drive "show more" when a future
-          // per-workspace first-page mode is enabled. `includeSide` keeps the
-          // plan-build side inventory visible for the filter below.
           const page = await p.listThreadsPage({
             includeArchived: true,
             includeSide: true,
@@ -380,7 +375,6 @@ export function createNavigationWorkspaceActions(
           rawThreads = page.threads
           listPageMeta = { nextCursor: page.nextCursor, hasMore: page.hasMore, total: page.total }
         } else {
-          // Older runtime without cursor support.
           rawThreads = await p.listThreads({
             includeArchived: true,
             includeSide: true
@@ -389,14 +383,7 @@ export function createNavigationWorkspaceActions(
       } catch {
         rawThreads = await p.listThreads()
       }
-      // Managed plan builds execute in a linked `side` thread, but that
-      // thread is the user's primary progress surface while the isolated run
-      // is active. Keep those durable plan-build conversations in the main
-      // inventory; ordinary subagent/side conversations remain projected by
-      // their dedicated UI and must not leak into the Code sidebar.
-      rawThreads = rawThreads.filter((thread) =>
-        thread.relation !== 'side' || Boolean(thread.planBuildRunId?.trim())
-      )
+      rawThreads = rawThreads.filter((thread) => thread.relation !== 'side')
       if (pendingDesignDocumentClones().length > 0) {
         try {
           const lifecycleThreads = await p.listThreads({

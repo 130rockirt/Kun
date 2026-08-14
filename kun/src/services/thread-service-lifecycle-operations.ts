@@ -41,7 +41,6 @@ import type { RuntimeEventRecorder } from './runtime-event-recorder.js'
 import type { ThreadLifecycleFence } from './thread-lifecycle-fence.js'
 import { withFileMutationQueue } from '../adapters/tool/file-mutation-queue.js'
 import { withThreadStoreMutation } from './thread-mutation-coordinator.js'
-import { withManagerDataMutex } from '../manager/data-mutex.js'
 import { DEFAULT_KUN_MODEL } from '../config/kun-config.js'
 import { isGuiPlanRelativePath } from '../shared/gui-plan.js'
 import {
@@ -58,10 +57,8 @@ import {
   sameDesignDocumentTarget
 } from '../domain/design-task-profile.js'
 
-const PLAN_BUILD_FORK_COMMIT = Symbol('plan-build-fork-commit')
 const DESIGN_CLONE_COMMIT = Symbol('design-clone-commit')
 type InternalForkThreadOptions = ForkThreadOptions & {
-  [PLAN_BUILD_FORK_COMMIT]?: string
   [DESIGN_CLONE_COMMIT]?: string
 }
 type InternalResumeSessionOptions = ResumeSessionOptions & {
@@ -110,21 +107,6 @@ async delete(this: ThreadService, threadId: string): Promise<boolean> {
 
 async fork(this: ThreadService, threadId: string, options: ForkThreadOptions = {}): Promise<ThreadRecord> {
     const internalOptions = options as InternalForkThreadOptions
-    if (options.planBuildRunId && !internalOptions[PLAN_BUILD_FORK_COMMIT]) {
-      const forkId = planBuildForkThreadId(options.planBuildRunId)
-      return withManagerDataMutex(`thread:${forkId}`, () =>
-        withThreadStoreMutation(this['threadStore'], forkId, async () => {
-          const existing = await this['threadStore'].get(forkId)
-          if (existing) {
-            return validateExistingPlanBuildFork(existing, threadId, options)
-          }
-          return this.fork(threadId, {
-            ...options,
-            [PLAN_BUILD_FORK_COMMIT]: forkId
-          } as InternalForkThreadOptions)
-        })
-      )
-    }
     if (options.designCloneOperationId && !internalOptions[DESIGN_CLONE_COMMIT]) {
       const source = await this['threadStore'].get(threadId)
       if (!source) throw new Error(`thread not found: ${threadId}`)
@@ -148,18 +130,11 @@ async fork(this: ThreadService, threadId: string, options: ForkThreadOptions = {
     ) {
       throw new Error('fork approval reviewer must inherit the source thread')
     }
-    if (current.designProfile && !options.designDocumentTarget && !options.planBuildRunId) {
+    if (current.designProfile && !options.designDocumentTarget) {
       throw new Error('forking a Design task requires an independently cloned document target')
     }
     if (Boolean(options.designDocumentTarget) !== Boolean(options.designCloneOperationId)) {
       throw new Error('a Design clone target requires a stable clone operation id')
-    }
-    if (options.planBuildRunId && (
-      options.planBuildAgentSurface !== 'code'
-      || !options.planBuildAdmissionFingerprint?.trim()
-      || !options.planBuildAdmissionCapability?.trim()
-    )) {
-      throw new Error('plan build fork requires a durable admission binding')
     }
     if (!current.designProfile && options.designDocumentTarget) {
       throw new Error('a Design document target can only fork a locked Design task')
@@ -172,8 +147,7 @@ async fork(this: ThreadService, threadId: string, options: ForkThreadOptions = {
       throw new Error('a Design fork must use a different document target')
     }
     const now = this['nowIso']()
-    const forkId = internalOptions[PLAN_BUILD_FORK_COMMIT] ??
-      internalOptions[DESIGN_CLONE_COMMIT] ?? this['ids'].next('thr')
+    const forkId = internalOptions[DESIGN_CLONE_COMMIT] ?? this['ids'].next('thr')
     const relation: ThreadRelation = options.relation ?? 'fork'
     const targetTurnId = options.turnId?.trim()
     const targetTurnIndex = targetTurnId
@@ -212,16 +186,12 @@ async fork(this: ThreadService, threadId: string, options: ForkThreadOptions = {
     const fork = createThreadRecord({
       id: forkId,
       title: options.title?.trim() || defaultTitle,
-      workspace: options.planBuildRunId
-        ? resolve(options.workspace!.trim())
-        : options.workspace?.trim() || current.workspace,
-      // A plan-build fork is a security boundary: its isolated checkout is
-      // the only writable workspace inherited into the execution thread.
-      additionalWorkspaces: options.planBuildRunId ? [] : current.additionalWorkspaces,
+      workspace: current.workspace,
+      additionalWorkspaces: current.additionalWorkspaces,
       knowledgeBases: current.knowledgeBases,
       model: current.model,
-      agentSurface: options.planBuildRunId ? 'code' : resolveThreadAgentSurface(current),
-      ...(!options.planBuildRunId && current.designProfile && options.designDocumentTarget
+      agentSurface: resolveThreadAgentSurface(current),
+      ...(current.designProfile && options.designDocumentTarget
         ? {
             designProfile: retargetDesignTaskProfile(
               current.designProfile,
@@ -255,20 +225,8 @@ async fork(this: ThreadService, threadId: string, options: ForkThreadOptions = {
       sandboxMode: current.sandboxMode,
       approvalReviewer: current.approvalReviewer,
       modelRequestCaptureEnabled: this['defaultModelRequestCaptureEnabled'],
-      ...(options.planBuildRunId && current.costBudgetUsd !== undefined
-        ? { costBudgetUsd: current.costBudgetUsd }
-        : {}),
       relation,
       parentThreadId: current.id,
-      ...(options.planBuildRunId
-        ? {
-            planBuildRunId: options.planBuildRunId,
-            planBuildAdmissionFingerprint: options.planBuildAdmissionFingerprint!.trim(),
-            planBuildAdmissionCapabilityHash: hashPlanBuildAdmissionCapability(
-              options.planBuildAdmissionCapability!.trim()
-            )
-          }
-        : {}),
       forkedFromThreadId: current.id,
       forkedFromTitle: current.title,
       forkedAt: now,
@@ -555,15 +513,6 @@ function warnPostCommitFailure(operation: string, threadId: string, error: unkno
   )
 }
 
-function planBuildForkThreadId(planBuildRunId: string): string {
-  const digest = createHash('sha256').update(planBuildRunId).digest('hex').slice(0, 32)
-  return `thr_plan_${digest}`
-}
-
-function hashPlanBuildAdmissionCapability(capability: string): string {
-  return createHash('sha256').update(capability, 'utf8').digest('hex')
-}
-
 function designCloneThreadId(operationId: string): string {
   const digest = createHash('sha256').update(operationId).digest('hex').slice(0, 32)
   return `thr_design_${digest}`
@@ -599,32 +548,6 @@ function validateExistingDesignClone(
     ))
   if (!matches) {
     throw new Error(`Design clone operation is already committed to a different target: ${operationId}`)
-  }
-  return existing
-}
-
-function validateExistingPlanBuildFork(
-  existing: ThreadRecord,
-  sourceThreadId: string,
-  options: ForkThreadOptions
-): ThreadRecord {
-  const requestedWorkspace = resolve(options.workspace!.trim())
-  const requestedFingerprint = options.planBuildAdmissionFingerprint?.trim()
-  const requestedCapability = options.planBuildAdmissionCapability?.trim()
-  const matches = existing.planBuildRunId === options.planBuildRunId
-    && existing.relation === 'side'
-    && existing.parentThreadId === sourceThreadId
-    && existing.forkedFromThreadId === sourceThreadId
-    && resolve(existing.workspace) === requestedWorkspace
-    && resolveThreadAgentSurface(existing) === 'code'
-    && existing.planBuildAdmissionFingerprint === requestedFingerprint
-    && Boolean(requestedCapability)
-    && existing.planBuildAdmissionCapabilityHash === hashPlanBuildAdmissionCapability(requestedCapability ?? '')
-    && !existing.designProfile
-  if (!matches) {
-    throw new Error(
-      `plan build run id is already committed to a different source or workspace: ${options.planBuildRunId}`
-    )
   }
   return existing
 }

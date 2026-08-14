@@ -369,7 +369,7 @@ describe('chat-store navigation workspace selection', () => {
     expect(harness.state.lastCodeThreadId).toBeNull()
   })
 
-  it('keeps managed plan-build side threads in the main conversation inventory', async () => {
+  it('does not keep legacy plan-build side threads in the main conversation inventory', async () => {
     const source = thread({
       id: 'thr_source',
       title: 'Source conversation',
@@ -427,11 +427,13 @@ describe('chat-store navigation workspace selection', () => {
       includeArchived: true,
       includeSide: true
     })
+    // The currently open side thread remains visible through the ordinary
+    // active-thread preservation path; its legacy run id grants no special case.
     expect(harness.state.threads.map((item) => item.id)).toEqual([
-      source.id,
-      execution.id
+      execution.id,
+      source.id
     ])
-    expect(harness.state.activeThreadId).toBe(execution.id)
+    expect(harness.state.threads.some((item) => item.id === ordinarySide.id)).toBe(false)
   })
 
   it('openDesign keeps the Code timeline and routes into its shared workbench', () => {

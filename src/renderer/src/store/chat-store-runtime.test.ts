@@ -246,7 +246,7 @@ describe('code thread classification', () => {
     expect(isCodeThread(designWorkspaceThread)).toBe(false)
   })
 
-  it('shows managed plan-build execution threads from the isolated worktree', () => {
+  it('classifies legacy plan-build metadata the same as an ordinary thread', () => {
     const executionThread = makeThread({
       id: 'thr_plan_execution',
       title: 'Isolated plan execution',
@@ -256,8 +256,9 @@ describe('code thread classification', () => {
       planBuildRunId: 'run-1'
     })
 
-    expect(isCodeSidebarThread(executionThread)).toBe(true)
-    expect(isCodeThread(executionThread)).toBe(true)
+    const { planBuildRunId: _legacyRunId, ...ordinaryThread } = executionThread
+    expect(isCodeSidebarThread(executionThread)).toBe(isCodeSidebarThread(ordinaryThread))
+    expect(isCodeThread(executionThread)).toBe(isCodeThread(ordinaryThread))
   })
 
   it('shows a requirement thread in the project sidebar immediately without classifying it as Code', () => {

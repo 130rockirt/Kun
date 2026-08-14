@@ -22,6 +22,13 @@ export type CanvasReceiptPayload = {
   status: CanvasReceiptStatus
   errors?: Array<{ code: string; message: string; suggestion?: string }>
   affectedIds?: string[]
+  generatedFiles?: Array<{
+    name: string
+    relativePath: string
+    absolutePath?: string
+    mimeType: 'image/png' | 'image/svg+xml'
+    byteSize: number
+  }>
 }
 
 export type CanvasReceiptRegistryDeps = {
@@ -226,7 +233,8 @@ export class CanvasReceiptRegistry {
         status: payload.status,
         unverified: false,
         ...(payload.errors?.length ? { errors: payload.errors } : {}),
-        ...(payload.affectedIds?.length ? { affectedIds: payload.affectedIds } : {})
+        ...(payload.affectedIds?.length ? { affectedIds: payload.affectedIds } : {}),
+        ...(payload.generatedFiles?.length ? { generatedFiles: payload.generatedFiles } : {})
       }
       isError = payload.status === 'failed'
     } else {

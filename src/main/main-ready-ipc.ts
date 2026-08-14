@@ -275,7 +275,6 @@ export function registerMainIpc(services: MainServices): void {
 
     registerAppIpcHandlers({
       store: mainState.store,
-      userDataPath: productionSettingsUserDataPath,
       withRegistryCredentials,
       getMainWindow: () => mainState.mainWindow,
       applySettingsPatch,

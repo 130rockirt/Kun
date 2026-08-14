@@ -145,7 +145,16 @@ export function applyCanvasToolBlock(
         blocks: chatState.blocks
       })
   )
-  if (dispatchCanvasExportToolBlock(block, parsed, ctx.appliedToolBlockIds, ctx.onCanvasExportRequested)) return
+  if (dispatchCanvasExportToolBlock(
+    block,
+    parsed,
+    ctx.appliedToolBlockIds,
+    ctx.onCanvasExportRequested,
+    {
+      threadId: ctx.targetThreadId ?? chatState.activeThreadId,
+      turnId: replay?.turnId ?? block.turnId
+    }
+  )) return
   if (isDesignMotionRendererToolName(block.meta?.toolName)) {
     const motionOps = extractMotionOpsFromValue(parsed)
     const { affectedIds, errors } = executeMotionOps(

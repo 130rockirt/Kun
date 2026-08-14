@@ -310,23 +310,6 @@ const api = {
     ipcRenderer.invoke('worktree:cleanup', params),
   findAvailableWorktreePoolIndex: (params) =>
     ipcRenderer.invoke('worktree:find-available', params),
-  planWorktree: {
-    preflight: (input) => ipcRenderer.invoke('plan-worktree:preflight', input),
-    prepare: (input) => ipcRenderer.invoke('plan-worktree:prepare', input),
-    attachThread: (input) => ipcRenderer.invoke('plan-worktree:attach-thread', input),
-    list: (input = {}) => ipcRenderer.invoke('plan-worktree:list', input),
-    diagnostics: () => ipcRenderer.invoke('plan-worktree:diagnostics'),
-    get: (input) => ipcRenderer.invoke('plan-worktree:get', input),
-    reconcile: (input) => ipcRenderer.invoke('plan-worktree:reconcile', input),
-    resumeAdmission: (input) => ipcRenderer.invoke('plan-worktree:resume-admission', input),
-    finalize: (input) => ipcRenderer.invoke('plan-worktree:finalize', input),
-    retryIntegration: (input) => ipcRenderer.invoke('plan-worktree:retry-integration', input),
-    continueRebase: (input) => ipcRenderer.invoke('plan-worktree:continue-rebase', input),
-    abortRebase: (input) => ipcRenderer.invoke('plan-worktree:abort-rebase', input),
-    safeCancel: (input) => ipcRenderer.invoke('plan-worktree:safe-cancel', input),
-    cleanup: (input) => ipcRenderer.invoke('plan-worktree:cleanup', input),
-    discard: (input) => ipcRenderer.invoke('plan-worktree:discard', input)
-  },
   listEditors: () => ipcRenderer.invoke('editor:list'),
   openEditorPath: (options) =>
     ipcRenderer.invoke('editor:open-path', options),

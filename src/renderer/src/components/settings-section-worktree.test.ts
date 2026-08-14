@@ -2,11 +2,9 @@ import { createElement } from 'react'
 import { act, create, type ReactTestRenderer } from 'react-test-renderer'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { WorktreeSettingsSection } from './settings-section-worktree'
-import { resetPlanWorktreeStoreForTests } from '../plan/plan-worktree-store'
 
 describe('worktree settings', () => {
   afterEach(() => {
-    resetPlanWorktreeStoreForTests()
     vi.unstubAllGlobals()
   })
 
@@ -19,10 +17,7 @@ describe('worktree settings', () => {
           worktreeRoot: '/managed',
           mainBranch: 'feature/source',
           worktrees: []
-        })),
-        planWorktree: {
-          list: vi.fn(async () => [])
-        }
+        }))
       }
     })
     let renderer: ReactTestRenderer

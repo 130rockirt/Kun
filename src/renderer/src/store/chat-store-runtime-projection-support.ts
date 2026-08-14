@@ -179,11 +179,10 @@ export function isCodeSidebarThread(
 ): boolean {
   const workspace = normalizeWorkspaceRoot(thread.workspace)
   const designTask = isDesignWorkbenchThread(thread.id, thread, designRegistry)
-  const managedPlanBuild = Boolean(thread.planBuildRunId?.trim())
   return Boolean(workspace) &&
     thread.agentSurface !== 'write' &&
     (thread.agentSurface !== 'design' || designTask) &&
-    (managedPlanBuild || !isInternalTemporaryWorkspace(thread.workspace)) &&
+    !isInternalTemporaryWorkspace(thread.workspace) &&
     !isInternalDeepSeekGuiWorkspace(thread.workspace) &&
     !isClawWorkspacePath(thread.workspace) &&
     !isClawThread(thread, clawChannels) &&

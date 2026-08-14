@@ -319,8 +319,6 @@ export interface AgentProvider {
       title?: string
       turnId?: string
       workspace?: string
-      planBuildRunId?: string
-      planBuildAgentSurface?: 'code'
       designDocumentTarget?: DesignDocumentTarget
       designCloneOperationId?: string
     }

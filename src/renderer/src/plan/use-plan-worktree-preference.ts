@@ -43,14 +43,13 @@ export function usePlanWorktreePreference(
 
   useEffect(() => {
     if (!plan) return
+    if (usePlanWorktreePreferenceStore.getState().plans[plan.id]?.initialized) return
     let cancelled = false
     void rendererRuntimeClient.getSettings().then((settings) => {
       if (cancelled) return
       const values = settingsValues(settings)
       const store = usePlanWorktreePreferenceStore.getState()
-      if (store.plans[plan.id]?.initialized) {
-        store.syncSettings(values.featureEnabled, values.branchPrefix)
-      } else {
+      if (!store.plans[plan.id]?.initialized) {
         store.initializePlan(plan.id, values.featureEnabled, values.branchPrefix)
       }
     }).catch(() => {

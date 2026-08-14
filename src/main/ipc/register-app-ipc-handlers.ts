@@ -6,7 +6,6 @@ import { registerAppContentIpcHandlers } from './register-app-content-ipc-handle
 import { registerAppFileIpcHandlers } from './register-app-file-ipc-handlers'
 import { registerAppGitIpcHandlers } from './register-app-git-ipc-handlers'
 import { registerAppKunConfigIpcHandlers } from './register-app-kun-config-ipc-handlers'
-import { registerAppPlanWorktreeIpcHandlers } from './register-app-plan-worktree-ipc-handlers'
 import { registerAppRuntimeIpcHandlers } from './register-app-runtime-ipc-handlers'
 import { registerAppSettingsIpcHandlers } from './register-app-settings-ipc-handlers'
 import { registerAppUiPluginIpcHandlers } from './register-app-ui-plugin-ipc-handlers'
@@ -21,7 +20,6 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
   registerAppUiPluginIpcHandlers(options)
   registerAppKunConfigIpcHandlers(options)
   registerAppGitIpcHandlers(options)
-  registerAppPlanWorktreeIpcHandlers(options)
   registerAppFileIpcHandlers(options)
   registerAppContentIpcHandlers(options)
 }

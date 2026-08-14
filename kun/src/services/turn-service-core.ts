@@ -290,11 +290,6 @@ export function fingerprintStartTurnRequest(request: StartTurnRequest): string |
   return createHash('sha256').update(JSON.stringify(canonical), 'utf8').digest('hex')
 }
 
-/** Persist only this digest for a host-owned plan-build admission capability. */
-export function hashPlanBuildAdmissionCapability(capability: string): string {
-  return createHash('sha256').update(capability, 'utf8').digest('hex')
-}
-
 export function canonicalizeFingerprintValue(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonicalizeFingerprintValue)
   if (!value || typeof value !== 'object') return value

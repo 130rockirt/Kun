@@ -24,8 +24,6 @@ import { buildComposerFileContextPrompt } from '../../lib/composer-file-referenc
 import { resolveCodeCanvasComposerRoute } from '../../design/canvas/code-canvas'
 import { useCanvasSelectionStore } from '../../design/canvas/canvas-selection-store'
 import { consumeLastCanvasOpErrors } from '../../design/canvas/apply-shape-ops'
-import { planWorktreeComposerAccess } from '../../plan/plan-worktree-composer-access'
-import { usePlanWorktreeStore } from '../../plan/plan-worktree-store'
 import { activePptReviewComposerContexts } from './workbench-ppt-review-context'
 import {
   activeWorkWhiteboardForSend,
@@ -428,17 +426,6 @@ export function useWorkbenchComposerSubmitController({
           )
         : undefined
       if (!v && attachmentIds.length === 0 && documentAttachments.length === 0 && fileReferences.length === 0) return
-      if (route === 'chat') {
-        const activeThread = threads.find((thread) => thread.id === activeThreadId)
-        const access = planWorktreeComposerAccess(
-          activeThread,
-          usePlanWorktreeStore.getState().plans
-        )
-        if (!access.writable) {
-          setError(access.reason ?? 'This isolated plan task is currently read-only.')
-          return
-        }
-      }
       if (attachmentIds.length > 0 && !attachmentUploadEnabled) {
         setAttachmentUploadError(t('composerAttachmentModelUnsupported'))
         return

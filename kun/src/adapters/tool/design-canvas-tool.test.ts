@@ -142,13 +142,11 @@ describe('dedicated design tools', () => {
         fileName: expect.stringMatching(/^kun-whiteboard-[a-f0-9]{12}\.png$/),
         relativePath: expect.stringMatching(/^\.deepseekgui-images\/kun-whiteboard-[a-f0-9]{12}\.png$/)
       },
-      generatedFiles: [{
-        name: expect.stringMatching(/\.png$/),
-        relativePath: expect.stringMatching(/^\.deepseekgui-images\/.+\.png$/),
-        mimeType: 'image/png'
-      }],
+      status: 'accepted',
+      receiptKey: expect.stringMatching(/^design-receipt-[a-f0-9]{32}$/),
       ops: []
     })
+    expect((result.output as { generatedFiles?: unknown }).generatedFiles).toBeUndefined()
 
     const replay = await tool.execute({ name: '支付架构图' }, context(true))
     expect((replay.output as { exportRequest: { relativePath: string } }).exportRequest.relativePath)
@@ -163,7 +161,8 @@ describe('dedicated design tools', () => {
         format: 'svg',
         fileName: expect.stringMatching(/^API-map-[a-f0-9]{12}\.svg$/)
       },
-      generatedFiles: [{ mimeType: 'image/svg+xml' }]
+      status: 'accepted',
+      receiptKey: expect.stringMatching(/^design-receipt-[a-f0-9]{32}$/)
     })
 
     const host = new LocalToolHost({ tools: [tool] })
@@ -182,7 +181,7 @@ describe('dedicated design tools', () => {
         format: 'svg',
         fileName: expect.stringMatching(/^API-map-[a-f0-9]{12}\.svg$/)
       },
-      generatedFiles: [{ mimeType: 'image/svg+xml' }]
+      status: 'accepted'
     })
 
     const explicit = await tool.execute({ format: 'png', name: 'API map.svg' }, context(true))
@@ -191,7 +190,7 @@ describe('dedicated design tools', () => {
         format: 'png',
         fileName: expect.stringMatching(/^API-map-[a-f0-9]{12}\.png$/)
       },
-      generatedFiles: [{ mimeType: 'image/png' }]
+      status: 'accepted'
     })
   })
 
@@ -212,10 +211,11 @@ describe('dedicated design tools', () => {
       output: {
         ok: true,
         action: 'export_canvas',
-        generatedFiles: [{
-          relativePath: expect.stringMatching(/^\.deepseekgui-images\/service-map-.+\.png$/),
-          mimeType: 'image/png'
-        }]
+        status: 'accepted',
+        receiptKey: expect.stringMatching(/^design-receipt-[a-f0-9]{32}$/),
+        exportRequest: {
+          relativePath: expect.stringMatching(/^\.deepseekgui-images\/service-map-.+\.png$/)
+        }
       }
     })
   })

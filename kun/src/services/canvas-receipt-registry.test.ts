@@ -72,6 +72,50 @@ describe('CanvasReceiptRegistry', () => {
     expect(item.isError).toBe(true)
   })
 
+  it('persists generated files only after the renderer confirms the export', async () => {
+    const { registry, applied } = makeRegistry()
+    registry.register({
+      receiptKey: 'design-receipt-export',
+      threadId: 'thread_1',
+      turnId: 'turn_export',
+      call: { ...call, toolName: 'design_export_canvas' },
+      itemId: 'item_call_export',
+      acceptedOutput: {
+        ok: true,
+        status: 'accepted',
+        receiptKey: 'design-receipt-export',
+        exportRequest: { relativePath: '.deepseekgui-images/architecture.png' }
+      }
+    })
+    const wait = registry.awaitTurnReceipts('thread_1', 'turn_export', 45_000)
+    await registry.fulfillForTurn(
+      'design-receipt-export',
+      'thread_1',
+      'turn_export',
+      {
+        status: 'applied',
+        generatedFiles: [{
+          name: 'architecture.png',
+          relativePath: '.deepseekgui-images/architecture.png',
+          absolutePath: '/workspace/.deepseekgui-images/architecture.png',
+          mimeType: 'image/png',
+          byteSize: 128
+        }]
+      }
+    )
+    await wait
+
+    expect((applied[0] as { item: { output: unknown } }).item.output).toMatchObject({
+      ok: true,
+      status: 'applied',
+      generatedFiles: [{
+        relativePath: '.deepseekgui-images/architecture.png',
+        mimeType: 'image/png',
+        byteSize: 128
+      }]
+    })
+  })
+
   it('times out to an explicit unverified result (never ok:true)', async () => {
     const { registry, applied } = makeRegistry()
     registry.register({

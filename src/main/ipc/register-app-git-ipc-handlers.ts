@@ -58,7 +58,6 @@ import {
 } from '../services/workspace-service'
 import type { RegisterAppIpcHandlersOptions } from './app-ipc-handler-options'
 import { parseIpcPayload } from './app-ipc-handler-utils'
-import { PlanWorktreeRunStore } from '../services/plan-worktree-run-store'
 
 export function registerAppGitIpcHandlers(options: RegisterAppIpcHandlersOptions): void {
   const { store, runtimeRequest } = options
@@ -168,11 +167,7 @@ export function registerAppGitIpcHandlers(options: RegisterAppIpcHandlersOptions
   })
   ipcMain.handle('git:remove-branch-worktree', async (_, payload: unknown) => {
     const request = parseIpcPayload('git:remove-branch-worktree', gitWorktreeRemoveSchema, payload)
-    const protectedPlanWorktree = options.userDataPath
-      ? await new PlanWorktreeRunStore(options.userDataPath)
-        .protectsWorktreePath(request.worktreePath)
-      : false
-    return removeGitBranchWorktree({ ...request, protectedPlanWorktree })
+    return removeGitBranchWorktree(request)
   })
 
   // Worktree pool management

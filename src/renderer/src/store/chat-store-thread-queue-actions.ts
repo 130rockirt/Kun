@@ -101,8 +101,6 @@ import {
 } from '../write/write-thread-registry'
 import { useWriteWorkspaceStore } from '../write/write-workspace-store'
 import { useGraphStore } from '../graph/graph-store'
-import { planWorktreeComposerAccess } from '../plan/plan-worktree-composer-access'
-import { usePlanWorktreeStore } from '../plan/plan-worktree-store'
 import {
   clearBusyWatchdog,
   resetBusyRecoveryAttempts,
@@ -169,15 +167,6 @@ import {
   type ThreadActionRuntime
 } from './chat-store-thread-actions-support'
 
-function activeThreadAcceptsPlanWorktreeInput(state: ChatState): boolean {
-  const thread = state.threads.find((candidate) => candidate.id === state.activeThreadId)
-  return planWorktreeComposerAccess(
-    thread,
-    usePlanWorktreeStore.getState().plans,
-    state.activeThreadId
-  ).writable
-}
-
 export function createThreadQueueActions(
   context: StoreActionContext,
   runtime: ThreadActionRuntime
@@ -205,7 +194,6 @@ export function createThreadQueueActions(
         }
         const next = queuedMessages.find(isPendingQueuedMessage)
         if (!next || state.busy) return
-        if (!activeThreadAcceptsPlanWorktreeInput(state)) return
         if (
           next.waitForRuntimeAdmission &&
           !hasRuntimeTurnAdmissionWaiter(next.clientRequestId)
@@ -268,10 +256,6 @@ export function createThreadQueueActions(
     const state = get()
     const message = state.queuedMessages.find((candidate) => candidate.id === id)
     if (!message) return false
-    if (!activeThreadAcceptsPlanWorktreeInput(state)) {
-      set({ error: 'This isolated plan task is read-only in its current lifecycle state.' })
-      return false
-    }
     if (message.deliveryState === 'paused' || message.deliveryState === 'failed') {
       if (state.busy) return false
       set((current) => ({

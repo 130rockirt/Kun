@@ -397,33 +397,6 @@ export function runtimeRequestViaLease(
   return fetchRuntimeRequest(lease, pathNorm, method, init)
 }
 
-/**
- * Read-only probe for the deterministic plan-build admission binding
- * protocol. Older shared runtimes omit the capability flag and must be
- * rejected before a worktree is created, otherwise a fork can be routed to
- * a build that never persists the admission binding.
- */
-export async function readPlanBuildAdmissionBindingCapability(
-  settings: AppSettingsV1,
-  ensureRuntime: (settings: AppSettingsV1) => Promise<AppSettingsV1 | void>
-): Promise<boolean> {
-  const response = await runtimeRequestViaHost(
-    settings,
-    '/v1/runtime/info',
-    { method: 'GET' },
-    ensureRuntime
-  )
-  if (!response.ok) return false
-  try {
-    const payload = JSON.parse(response.body) as {
-      capabilities?: { planBuildAdmissionBindingV1?: unknown }
-    }
-    return payload.capabilities?.planBuildAdmissionBindingV1 === true
-  } catch {
-    return false
-  }
-}
-
 function snapshotRuntimeRequestLease(settings: AppSettingsV1): RuntimeRequestLease {
   const connection = resolvedConnection
   return Object.freeze({

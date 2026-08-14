@@ -347,11 +347,11 @@ export const ThreadSchemaBase = z.object({
   relation: ThreadRelation.default('primary'),
   parentThreadId: z.string().optional(),
   planBuildRunId: z.string().trim().min(1).max(160).optional(),
-  /** Canonical first-turn request hash bound when a managed plan fork is created. */
+  /** Legacy plan-build metadata retained only for read compatibility. */
   planBuildAdmissionFingerprint: z.string().regex(/^[a-f0-9]{64}$/).optional(),
-  /** SHA-256 digest of the one-time host capability; the raw capability is never persisted. */
+  /** Legacy plan-build metadata retained only for read compatibility. */
   planBuildAdmissionCapabilityHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
-  /** Host-owned fence that blocks new turn admission during integration/cleanup. */
+  /** Legacy inert fence value retained only for read compatibility. */
   planBuildAdmissionFrozen: z.boolean().optional(),
   forkedFromThreadId: z.string().optional(),
   forkedFromTitle: z.string().optional(),
@@ -370,31 +370,8 @@ export const ThreadSchemaBase = z.object({
   updatedAt: z.string(),
   turns: z.array(TurnSchema).default([])
 })
-/**
- * Persistence schema: rejects half-bound plan-build records (e.g. a thread
- * with `planBuildRunId` but a lost admission binding) so a cross-runtime write
- * can never silently produce that malformed state again. Every store upsert
- * parses through this schema.
- */
-export const ThreadSchema = ThreadSchemaBase.superRefine((value, ctx) => {
-    const runId = Boolean(value.planBuildRunId)
-    const fingerprint = Boolean(value.planBuildAdmissionFingerprint)
-    const capabilityHash = Boolean(value.planBuildAdmissionCapabilityHash)
-    if (runId !== fingerprint || runId !== capabilityHash) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['planBuildRunId'],
-        message:
-          'planBuildRunId, planBuildAdmissionFingerprint and planBuildAdmissionCapabilityHash must be supplied together'
-      })
-    }
-  })
-/**
- * Read-side tolerance: legacy records that lost the binding before this
- * invariant existed must still load so Main can classify them (recovery link
- * rejects them) and repair them through the CAS backfill endpoint or cancel.
- * New writes never pass through this schema.
- */
+/** Legacy plan-build fields are parsed and persisted as inert history metadata. */
+export const ThreadSchema = ThreadSchemaBase
 export const ThreadSchemaReadable = ThreadSchemaBase
 export type ThreadRecord = z.infer<typeof ThreadSchema>
 
@@ -518,17 +495,6 @@ export const ForkThreadRequest = z
      * ThreadService rejects any value that differs from the captured source.
      */
     approvalReviewer: ApprovalReviewerSchema.optional(),
-    /** Host-authorized workspace for an isolated GUI plan execution fork. */
-    workspace: z.string().trim().min(1).max(4096).optional(),
-    /** Bounded host lifecycle linkage; lifecycle truth remains in Electron main. */
-    planBuildRunId: z.string().trim().min(1).max(160)
-      .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/).optional(),
-    /** Explicitly strips mutable Design ownership from a Code plan executor. */
-    planBuildAgentSurface: z.literal('code').optional(),
-    /** Exact canonical StartTurnRequest fingerprint reserved for the first execution turn. */
-    planBuildAdmissionFingerprint: z.string().regex(/^[a-f0-9]{64}$/).optional(),
-    /** Opaque host capability. Kun persists only its SHA-256 digest. */
-    planBuildAdmissionCapability: z.string().trim().regex(/^[A-Za-z0-9_-]{43,128}$/).optional(),
     /** Independently cloned board target prepared by the Design client before fork. */
     designDocumentTarget: DesignDocumentTargetSchema.optional(),
     /** Stable client operation used to retry the same Design clone/thread atomically. */
@@ -538,53 +504,11 @@ export const ForkThreadRequest = z
   .refine((value) => !value.beforeTurn || value.turnId !== undefined, {
     message: 'beforeTurn requires turnId'
   })
-  .refine((value) => !value.workspace || value.relation === 'side', {
-    message: 'workspace override requires a side fork'
-  })
-  .refine((value) => Boolean(value.workspace) === Boolean(value.planBuildRunId), {
-    message: 'workspace and planBuildRunId must be supplied together'
-  })
-  .refine((value) => Boolean(value.planBuildRunId) === Boolean(value.planBuildAgentSurface), {
-    message: 'planBuildRunId and planBuildAgentSurface must be supplied together'
-  })
-  .refine((value) => Boolean(value.planBuildRunId) === Boolean(value.planBuildAdmissionFingerprint), {
-    message: 'planBuildRunId and planBuildAdmissionFingerprint must be supplied together'
-  })
-  .refine((value) => Boolean(value.planBuildRunId) === Boolean(value.planBuildAdmissionCapability), {
-    message: 'planBuildRunId and planBuildAdmissionCapability must be supplied together'
-  })
   .refine((value) => Boolean(value.designDocumentTarget) === Boolean(value.designCloneOperationId), {
     message: 'designDocumentTarget and designCloneOperationId must be supplied together'
   })
-  .refine((value) => !value.workspace || /^(?:\/|[A-Za-z]:[\\/]|\\\\)/.test(value.workspace), {
-    message: 'fork workspace must be absolute'
-  })
   .optional()
 export type ForkThreadRequest = z.infer<typeof ForkThreadRequest>
-
-export const SetPlanBuildAdmissionFenceRequest = z.object({
-  planBuildRunId: z.string().trim().min(1).max(160)
-    .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/),
-  expectedWorkspace: z.string().trim().min(1).max(4096),
-  frozen: z.boolean(),
-  workspace: z.string().trim().min(1).max(4096).optional()
-}).strict()
-  .refine((value) => /^(?:\/|[A-Za-z]:[\\/]|\\\\)/.test(value.expectedWorkspace), {
-    message: 'expected workspace must be absolute'
-  })
-  .refine((value) => !value.workspace || /^(?:\/|[A-Za-z]:[\\/]|\\\\)/.test(value.workspace), {
-    message: 'workspace must be absolute'
-  })
-  .refine((value) => !value.frozen || value.workspace === undefined, {
-    message: 'a frozen fence cannot rebind the workspace'
-  })
-export type SetPlanBuildAdmissionFenceRequest = z.infer<
-  typeof SetPlanBuildAdmissionFenceRequest
->
-
-export {
-  BackfillPlanBuildAdmissionBindingRequest
-} from './plan-build-admission-binding.js'
 
 export const SetThreadGoalRequest = z
   .object({

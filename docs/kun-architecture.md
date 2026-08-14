@@ -100,6 +100,8 @@ Kun 的缓存命中率要按 provider 原生 usage 字段优先计算和优化�
   也不得改写稳定系统前缀。
 - 普通 Code 与 Design 回合共享同一个 Agent 缓存分区和同一份工作台工具 schema 并集；
   模式规则、Design profile 与画布快照只作为 append-only `model_context` 追加在历史末尾。
+  Code / Design 模式切换不得改变 immutable prefix；计划 Worktree 的分支、路径、脏文件数和
+  Markdown 快照也只允许进入当次 user input。
   工具执行仍按当前回合的真实 surface / canvas 状态重新校验，所以稳定 schema 不会扩大执行权限。
   Plan、Graph 与专用 SVG 回合属于真实能力阶段，继续使用独立分区和受限工具目录。
 - Work turn 按 `agentSurface: write` 追加稳定的 Work mode system instruction；Renderer
@@ -291,28 +293,30 @@ Renderer 只应展示 Kun。需要删除或保持删除的 UI 面包括：
   `threadId` / `localThreadId` 字段只作为旧 settings 兼容字段存在，真正
   当前映射写入 `agentThreadIds.kun`。
 
-## 计划构建 worktree 协调边界
+## 计划构建 Worktree 提示词边界
 
-计划执行仍走单一 Kun runtime，但 Git 生命周期由 Electron main 的专用协调器负责：
+计划执行仍走单一 Kun runtime。实验开关
+`agents.kun.lab.planWorktree.enabled` 默认关闭；开启后，每个计划可以为 Direct 构建选择
+“提示词管理 Worktree”。Graph 明确不使用这层协议，继续走当前工作区和自身节点隔离。
 
-- Renderer 从 Plan 面板或内联 Review Plan 卡片选择 Direct / Graph 以及是否隔离，展示
-  预检和持久状态，不直接执行 Git 删除或合并命令。
-- Main 以原子记录持久化 run，捕获启动时的精确 source checkout、当前目标分支与 HEAD，
-  并在 `~/.kun/worktrees/<runId>/...` 下创建临时执行分支和 worktree。linked source
-  worktree 仍以它自身为回写 checkout，不替换为 primary worktree。
-- Kun 通过带 `planBuildRunId` 和 worktree workspace 的 `side` fork 执行原始计划上下文；
-  goal 在首个实现 turn admission 前创建。Graph 的 worker 隔离从属于该外层分支。
-- Renderer 只在执行 turn 成功、goal complete、无后续 running turn、无 approval / user-input
-  gate，且 Graph 根集成成功时请求 finalization；助手自然语言不能作为完成信号。
-- Main 在隔离 worktree 内提交和 rebase，再对捕获的源 checkout 执行 `merge --ff-only`。
-  目标移动、源分支切换、源目录变脏和冲突都会进入可恢复状态，不会自动 stash、切分支、
-  reset、clean 或强制覆盖。
-- 只有执行 head 已可从目标分支到达，或 run 被证明从未产生差异时，才先把执行 thread
-  workspace 重绑到源 checkout，再非强制删除 worktree、safe delete 分支并 prune。部分失败
-  持久化为 `cleanup_pending`；显式 discard 也必须先产出 recovery patch/checkpoint。
+- Renderer 点击执行时先保存计划，再通过通用 `getGitBranches(workspaceRoot)` 读取本地仓库根、
+  当前分支和脏文件数。非 Git、Git 不可用或 detached HEAD 会阻止发送；脏工作区不会被阻止。
+- 应用只构造固定协议，并把仓库、分支、分支前缀、脏文件数、计划标题和完整 Markdown 经过
+  JSON 结构化编码后放进下一条 user input。当前 thread、workspace、活动计划和计划页签都不变。
+- Agent 从点击时捕获的本地目标分支已提交 HEAD 创建唯一临时分支，在
+  `~/.kun/worktrees/plan-prompt/<unique>/<repo>` 创建 worktree，并显式在其中完成读取、编辑、
+  命令、测试和提交。源 checkout 的未提交修改不进入基线，也不得被 stash、reset、clean、
+  切换或提交。
+- 合入前若目标分支前进，Agent 在 worktree 内 rebase；只解决能够可靠判断并复测的冲突。
+  仅当源 checkout 仍位于目标分支且 Git 允许时，才执行 `git merge --ff-only`。
+- 只有证明临时提交已被目标分支包含后，才能非强制移除 worktree、用 `git branch -d` 删除
+  临时分支并 prune。测试失败、冲突不确定、源分支变化或脏文件阻塞合入时必须保留现场，
+  报告绝对路径、分支、Git 状态和下一步；无仓库改动时可以安全清理未变化现场。
 
-该协调器不同于定时任务的可复用 worktree pool，也不替代 Graph worker 自己的隔离机制；
-三者不得共享破坏性 cleanup 语义。
+Electron main 不再持久化计划运行记录、监听完成、自动合入、恢复或清理；Kun 也不再提供
+计划专用 fork/admission/fence。旧 `planBuildRunId` 等字段仅作历史解析，不能阻止普通输入。
+旧磁盘记录、worktree 和临时分支不会迁移删除，仍可通过通用 Git Worktrees 页面或 Git 命令处理。
+定时任务 worktree pool、通用分支 worktree 和 Graph 节点隔离保持独立。
 
 ## GUI HTTP 功能等价面
 

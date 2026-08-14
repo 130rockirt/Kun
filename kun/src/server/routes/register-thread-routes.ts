@@ -12,8 +12,6 @@ import {
   getThreadTimeline,
   listThreads,
   setThreadGoal,
-  setPlanBuildAdmissionFence,
-  backfillPlanBuildAdmissionBinding,
   setThreadTodos,
   updateThread
 } from './threads.js'
@@ -85,18 +83,6 @@ export function registerThreadRoutes(
   router.add('GET', '/v1/threads/:id/knowledge-bases', async (request, ctx) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
     return getThreadKnowledgeBases(runtime.knowledgeBaseService, ctx.params.id)
-  })
-  router.add('POST', '/v1/threads/:id/plan-build-admission-fence', async (request, ctx) => {
-    if (!authorize(request, runtime)) return ERRORS.unauthorized()
-    const forwarded = await runtime.forwardThreadControl?.(request, ctx.params.id)
-    if (forwarded) return forwarded
-    return setPlanBuildAdmissionFence(runtime.threadService, ctx.params.id, request)
-  })
-  router.add('POST', '/v1/threads/:id/plan-build-admission-binding', async (request, ctx) => {
-    if (!authorize(request, runtime)) return ERRORS.unauthorized()
-    const forwarded = await runtime.forwardThreadControl?.(request, ctx.params.id)
-    if (forwarded) return forwarded
-    return backfillPlanBuildAdmissionBinding(runtime.threadService, ctx.params.id, request)
   })
   router.add('POST', '/v1/threads/:id/knowledge-bases/:knowledgeBaseId/reindex', async (request, ctx) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()

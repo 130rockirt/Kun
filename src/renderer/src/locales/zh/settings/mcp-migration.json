@@ -393,8 +393,6 @@
   "uiPluginCharacterScaleLarger": "放大形象",
   "worktree": "工作树",
   "sectionWorktree": "Git 工作树",
-  "planWorktreeManagedRuns": "托管的计划构建",
-  "planWorktreeManaged": "托管计划构建",
   "gitBranchPrefix": "新分支前缀",
   "gitBranchPrefixDesc": "为分支选择器中新建的分支名添加前缀。留空则完全按输入的名称创建。",
   "worktreeOverview": "工作树",
